@@ -791,8 +791,8 @@ fn do_div_mod(lhs: &Decimal, rhs: &Decimal, frac_incr: u8, do_mod: bool) -> Opti
 }
 
 /// `do_mul` multiplies two decimals.
-fn do_mul(lhs: &Decimal, rhs: &Decimal) -> Res<Decimal> {
-    let (l_int_word_cnt, mut l_frac_word_cnt) = (
+let (l_int_word_cnt, mut l_frac_word_cnt) = (
+        fn do_mul(lhs: &Decimal, rhs: &Decimal) -> Res<Decimal> {
         i32::from(word_cnt!(lhs.int_cnt)),
         i32::from(word_cnt!(lhs.frac_cnt)),
     );
@@ -2364,7 +2364,7 @@ impl<'a, 'b> Rem<&'a Decimal> for &'b Decimal {
     type Output = Option<Res<Decimal>>;
     fn rem(self, rhs: &'a Decimal) -> Self::Output {
         let result_frac_cnt = cmp::max(self.result_frac_cnt, rhs.result_frac_cnt);
-        let mut res = do_div_mod_impl(self, rhs, 0, true);
+        let mut res = do_div_mod(self, rhs, 0, true);
         if let Some(ref mut dec) = res {
             dec.result_frac_cnt = result_frac_cnt;
         }
@@ -3545,11 +3545,10 @@ mod tests {
         for (frac_incr, lhs_str, rhs_str, div_exp, rem_exp) in cases {
             let lhs: Decimal = lhs_str.parse().unwrap();
             let rhs: Decimal = rhs_str.parse().unwrap();
-            let res =
-                super::do_div_mod(&lhs, &rhs, frac_incr, false).map(|d| d.unwrap().to_string());
+            let res = lhs.div(&rhs, frac_incr).map(|d| d.unwrap().to_string());
             assert_eq!(res, div_exp.map(|s| s.to_owned()));
 
-            let res =
+            let res = 
                 super::do_div_mod(&lhs, &rhs, frac_incr, true).map(|d| d.unwrap().to_string());
             assert_eq!(res, rem_exp.map(|s| s.to_owned()));
         }
