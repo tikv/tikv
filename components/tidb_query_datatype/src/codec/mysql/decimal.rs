@@ -594,12 +594,14 @@ fn do_div_mod_impl(
     let r_frac_cnt = word_cnt!(rhs.frac_cnt) * DIGITS_PER_WORD;
     let (r_idx, r_prec) = rhs.remove_leading_zeroes(rhs.int_cnt + r_frac_cnt);
     if r_prec == 0 {
+        /* short-circuit everything: rhs == 0 */
         return None;
     }
 
     let l_frac_cnt = word_cnt!(lhs.frac_cnt) * DIGITS_PER_WORD;
     let (l_idx, l_prec) = lhs.remove_leading_zeroes(lhs.int_cnt + l_frac_cnt);
     if l_prec == 0 {
+        /* short-circuit everything: lhs == 0 */
         return Some(Res::Ok(Decimal::zero()));
     }
 
