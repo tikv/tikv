@@ -1872,3 +1872,70 @@ fn test_gc_source_peers_forward_by_target_peer_after_merge() {
     cluster.must_empty_region_merged_records(right.get_id());
     cluster.must_empty_region_removed_records(right.get_id());
 }
+
+#[test_case(test_raftstore_v2::new_node_cluster)]
+fn test_gc_source_peers_forward_by_store_after_merge() {
+    let mut cluster = new_cluster(0, 3);
+    configure_for_merge(&mut cluster.cfg);
+    cluster.cfg.raft_store.gc_peer_check_interval = ReadableDuration::millis(500);
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+    cluster.run();
+
+    let region = cluster.get_region(b"k1");
+    cluster.must_split(&region, b"k2");
+    let left = cluster.get_region(b"k1");
+    let right = cluster.get_region(b"k3");
+
+    let left_peer_on_store1 = find_peer(&left, 1).unwrap().clone();
+    cluster.must_transfer_leader(left.get_id(), left_peer_on_store1);
+    let right_peer_on_store1 = find_peer(&right, 1).unwrap().clone();
+    cluster.must_transfer_leader(right.get_id(), right_peer_on_store1);
+    cluster.must_put(b"k1", b"v1");
+    cluster.must_put(b"k3", b"v3");
+    must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
+    must_get_equal(&cluster.get_engine(3), b"k3", b"v3");
+    // Drop GcPeerResponse.
+    cluster.add_recv_filter_on_node(
+        1,
+        Box::new(DropMessageFilter::new(Arc::new(|m| {
+            m.get_extra_msg().get_type() != ExtraMessageType::MsgGcPeerResponse
+        }))),
+    );
+
+    // So cluster becomes
+    //  left region: 1(leader) 2 | 3
+    // right region: 1(leader) 2 | 3
+    // | means isolation.
+
+    // Merge left to right and remove left peer on store 3.
+    pd_client.must_merge(left.get_id(), right.get_id());
+    let right_peer_on_store3 = find_peer(&right, 3).unwrap().clone();
+    pd_client.must_remove_peer(right.get_id(), right_peer_on_store3);
+    // Right region replica on store 3 must be removed.
+    cluster.must_region_not_exist(right.get_id(), 3);
+    let region_state = cluster.region_local_state(right.get_id(), 1);
+    assert!(
+        !region_state.get_merged_records().is_empty(),
+        "{:?}",
+        region_state
+    );
+    assert!(
+        !region_state.get_removed_records().is_empty(),
+        "{:?}",
+        region_state
+    );
+
+    // So cluster becomes
+    //  left region: merged
+    // right region: 1(leader) 2 | 3 (destroyed but not yet cleaned in removed
+    // records) | means isolation.
+
+    // Cluster filters and wait for gc peer ticks.
+    cluster.clear_recv_filter_on_node(1);
+    sleep_ms(3 * cluster.cfg.raft_store.gc_peer_check_interval.as_millis());
+
+    // Right region must clean up removed and merged records.
+    cluster.must_empty_region_merged_records(right.get_id());
+    cluster.must_empty_region_removed_records(right.get_id());
+}

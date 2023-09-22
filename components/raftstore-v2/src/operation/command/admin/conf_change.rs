@@ -604,8 +604,8 @@ impl<EK: KvEngine, R> Apply<EK, R> {
             "update gc peer";
             "index" => log_index,
             "updates" => ?updates,
-            "gc_peers" => ?removed_records,
-            "merged_peers" => ?merged_records
+            "removed_records" => ?removed_records,
+            "merged_records" => ?merged_records
         );
         removed_records.retain(|p| !updates.contains(&p.get_id()));
         merged_records.retain_mut(|r| {
