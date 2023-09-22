@@ -262,19 +262,10 @@ fn test_raw_query_stats_tmpl<F: KvFormat>() {
                     req.set_raw_get(get_req);
                     req
                 });
-                batch_commands(&ctx, &client, get_command, &start_key);
-                assert!(check_split_key(
-                    cluster,
-                    F::encode_raw_key_owned(start_key.clone(), None).into_encoded(),
-                    None
-                ));
-                if check_query_num_read(
-                    cluster,
-                    store_id,
-                    region_id,
-                    QueryKind::Get,
-                    (i + 1) * 1000,
-                ) {
+                if i == 0 {
+                    batch_commands(&ctx, &client, get_command, &start_key);
+                }
+                if check_query_num_read(cluster, store_id, region_id, QueryKind::Get, 1000) {
                     flag = true;
                     break;
                 }
@@ -284,14 +275,16 @@ fn test_raw_query_stats_tmpl<F: KvFormat>() {
     fail::cfg("mock_hotspot_threshold", "return(0)").unwrap();
     fail::cfg("mock_tick_interval", "return(0)").unwrap();
     fail::cfg("mock_collect_tick_interval", "return(0)").unwrap();
-    test_query_num::<F>(raw_get, true);
-    test_query_num::<F>(raw_batch_get, true);
-    test_query_num::<F>(raw_scan, true);
-    test_query_num::<F>(raw_batch_scan, true);
+    test_query_num::<F>(raw_get, true, true);
+    test_query_num::<F>(raw_batch_get, true, true);
+    test_query_num::<F>(raw_scan, true, true);
+    test_query_num::<F>(raw_batch_scan, true, true);
     if F::IS_TTL_ENABLED {
-        test_query_num::<F>(raw_get_key_ttl, true);
+        test_query_num::<F>(raw_get_key_ttl, true, true);
     }
-    test_query_num::<F>(raw_batch_get_command, true);
+    // requests may failed caused by `EpochNotMatch` after split when auto split is
+    // enabled, disable it.
+    test_query_num::<F>(raw_batch_get_command, true, false);
     test_raw_delete_query::<F>();
     fail::remove("mock_tick_interval");
     fail::remove("mock_hotspot_threshold");
@@ -385,19 +378,10 @@ fn test_txn_query_stats_tmpl<F: KvFormat>() {
                     req.set_get(get_req);
                     req
                 });
-                batch_commands(&ctx, &client, get_command, &start_key);
-                assert!(check_split_key(
-                    cluster,
-                    Key::from_raw(&start_key).as_encoded().to_vec(),
-                    None
-                ));
-                if check_query_num_read(
-                    cluster,
-                    store_id,
-                    region_id,
-                    QueryKind::Get,
-                    (i + 1) * 1000,
-                ) {
+                if i == 0 {
+                    batch_commands(&ctx, &client, get_command, &start_key);
+                }
+                if check_query_num_read(cluster, store_id, region_id, QueryKind::Get, 1000) {
                     flag = true;
                     break;
                 }
@@ -407,11 +391,13 @@ fn test_txn_query_stats_tmpl<F: KvFormat>() {
     fail::cfg("mock_hotspot_threshold", "return(0)").unwrap();
     fail::cfg("mock_tick_interval", "return(0)").unwrap();
     fail::cfg("mock_collect_tick_interval", "return(0)").unwrap();
-    test_query_num::<F>(get, false);
-    test_query_num::<F>(batch_get, false);
-    test_query_num::<F>(scan, false);
-    test_query_num::<F>(scan_lock, false);
-    test_query_num::<F>(batch_get_command, false);
+    test_query_num::<F>(get, false, true);
+    test_query_num::<F>(batch_get, false, true);
+    test_query_num::<F>(scan, false, true);
+    test_query_num::<F>(scan_lock, false, true);
+    // requests may failed caused by `EpochNotMatch` after split when auto split is
+    // enabled, disable it.
+    test_query_num::<F>(batch_get_command, false, false);
     test_txn_delete_query::<F>();
     test_pessimistic_lock();
     test_rollback();
@@ -572,15 +558,24 @@ pub fn test_rollback() {
     ));
 }
 
-fn test_query_num<F: KvFormat>(query: Box<Query>, is_raw_kv: bool) {
+fn test_query_num<F: KvFormat>(query: Box<Query>, is_raw_kv: bool, auto_split: bool) {
     let (mut cluster, client, mut ctx) = must_new_and_configure_cluster_and_kv_client(|cluster| {
         cluster.cfg.raft_store.pd_store_heartbeat_tick_interval = ReadableDuration::millis(50);
+<<<<<<< HEAD
         cluster.cfg.split.qps_threshold = 0;
+=======
+        if auto_split {
+            cluster.cfg.split.qps_threshold = Some(0);
+        } else {
+            cluster.cfg.split.qps_threshold = Some(1000000);
+        }
+>>>>>>> 6ff85fcc7a (tests: fix unstable test_query_stats test (#15657))
         cluster.cfg.split.split_balance_score = 2.0;
         cluster.cfg.split.split_contained_score = 2.0;
         cluster.cfg.split.detect_times = 1;
         cluster.cfg.split.sample_threshold = 0;
         cluster.cfg.storage.set_api_version(F::TAG);
+        cluster.cfg.server.enable_request_batch = false;
     });
     ctx.set_api_version(F::CLIENT_TAG);
 
@@ -762,4 +757,13 @@ fn batch_commands(
         }
     });
     rx.recv_timeout(Duration::from_secs(10)).unwrap();
+    sleep_ms(100);
+    // triage metrics flush
+    for _ in 0..10 {
+        let mut req = ScanRequest::default();
+        req.set_context(ctx.to_owned());
+        req.start_key = start_key.to_owned();
+        req.end_key = vec![];
+        client.kv_scan(&req).unwrap();
+    }
 }
