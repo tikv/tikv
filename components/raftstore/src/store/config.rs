@@ -138,6 +138,9 @@ pub struct Config {
     /// and try to alert monitoring systems, if there is any.
     pub abnormal_leader_missing_duration: ReadableDuration,
     pub peer_stale_state_check_interval: ReadableDuration,
+    /// Interval to check GC peers.
+    #[doc(hidden)]
+    pub gc_peer_check_interval: ReadableDuration,
 
     #[online_config(hidden)]
     pub leader_transfer_max_log_lag: u64,
@@ -458,6 +461,7 @@ impl Default for Config {
             check_leader_lease_interval: ReadableDuration::secs(0),
             renew_leader_lease_advance_duration: ReadableDuration::secs(0),
             report_region_buckets_tick_interval: ReadableDuration::secs(10),
+            gc_peer_check_interval: ReadableDuration::secs(60),
             max_snapshot_file_raw_size: ReadableSize::mb(100),
             unreachable_backoff: ReadableDuration::secs(10),
             // TODO: make its value reasonable
@@ -951,6 +955,9 @@ impl Config {
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["leader_transfer_max_log_lag"])
             .set(self.leader_transfer_max_log_lag as f64);
+        CONFIG_RAFTSTORE_GAUGE
+            .with_label_values(&["gc_peer_check_interval"])
+            .set(self.gc_peer_check_interval.as_secs_f64());
 
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["snap_apply_batch_size"])

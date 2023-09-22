@@ -306,9 +306,19 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         if msg.get_message().get_msg_type() == MessageType::MsgTransferLeader {
             self.on_transfer_leader_msg(ctx, msg.get_message(), msg.disk_usage)
         } else {
+<<<<<<< HEAD
+=======
+            // As this peer is already created, the empty split message is meaningless.
+            if is_empty_split_message(&msg) {
+                ctx.raft_metrics.message_dropped.stale_msg.inc();
+                return;
+            }
+
+            let msg_type = msg.get_message().get_msg_type();
+>>>>>>> 15d2c7dcd1 (raftstore-v2: fix incorrect GC peer requests to source peer after merge (#15643))
             // This can be a message that sent when it's still a follower. Nevertheleast,
             // it's meaningless to continue to handle the request as callbacks are cleared.
-            if msg.get_message().get_msg_type() == MessageType::MsgReadIndex
+            if msg_type == MessageType::MsgReadIndex
                 && self.is_leader()
                 && (msg.get_message().get_from() == raft::INVALID_ID
                     || msg.get_message().get_from() == self.peer_id())
@@ -316,6 +326,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 ctx.raft_metrics.message_dropped.stale_msg.inc();
                 return;
             }
+<<<<<<< HEAD
             if msg.get_message().get_msg_type() == MessageType::MsgReadIndex
                 && self.is_leader()
                 && self.on_step_read_index(ctx, msg.mut_message())
@@ -332,6 +343,21 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 
             if let Err(e) = self.raft_group_mut().step(msg.take_message()) {
                 error!(self.logger, "raft step error"; "err" => ?e);
+=======
+
+            if msg_type == MessageType::MsgReadIndex
+                && self.is_leader()
+                && self.on_step_read_index(ctx, msg.mut_message())
+            {
+                // Read index has respond in `on_step_read_index`,
+                // No need to step again.
+            } else if let Err(e) = self.raft_group_mut().step(msg.take_message()) {
+                error!(self.logger, "raft step error";
+                    "from_peer" => ?msg.get_from_peer(),
+                    "region_epoch" => ?msg.get_region_epoch(),
+                    "message_type" => ?msg_type,
+                    "err" => ?e);
+>>>>>>> 15d2c7dcd1 (raftstore-v2: fix incorrect GC peer requests to source peer after merge (#15643))
             } else {
                 let committed_index = self.raft_group().raft.raft_log.committed;
                 self.report_commit_log_duration(ctx, pre_committed_index, committed_index);

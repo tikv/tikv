@@ -2786,7 +2786,11 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
+<<<<<<< HEAD
 source = "git+https://github.com/pingcap/kvproto.git?branch=release-7.1#18d3a81835621d80f78a600da8334d7d0d7b51f2"
+=======
+source = "git+https://github.com/pingcap/kvproto.git#090f247be15c00a6000a4d23669ac3e95ea9fcd5"
+>>>>>>> 15d2c7dcd1 (raftstore-v2: fix incorrect GC peer requests to source peer after merge (#15643))
 dependencies = [
  "futures 0.3.15",
  "grpcio",
