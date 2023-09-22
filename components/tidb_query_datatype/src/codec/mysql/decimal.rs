@@ -791,6 +791,7 @@ fn do_div_mod_impl(
     Some(res)
 }
 
+#[allow(dead_code)]
 fn do_div_mod(lhs: &Decimal, rhs: &Decimal, frac_incr: u8, do_mod: bool) -> Option<Res<Decimal>> {
     do_div_mod_impl(lhs, rhs, frac_incr, do_mod, None)
 }
