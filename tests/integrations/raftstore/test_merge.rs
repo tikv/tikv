@@ -6,7 +6,7 @@ use api_version::{test_kv_format_impl, KvFormat};
 use engine_traits::{CF_LOCK, CF_WRITE};
 use kvproto::{
     raft_cmdpb::CmdType,
-    raft_serverpb::{PeerState, RaftMessage, RegionLocalState},
+    raft_serverpb::{ExtraMessageType, PeerState, RaftMessage, RegionLocalState},
 };
 use pd_client::PdClient;
 use raft::eraftpb::{ConfChangeType, MessageType};
@@ -1730,4 +1730,40 @@ fn test_prepare_merge_with_5_nodes_snapshot() {
     cluster.clear_send_filters();
     // Now leader should replicate more logs and figure out a safe index.
     pd_client.must_merge(left.get_id(), right.get_id());
+}
+
+#[test_case(test_raftstore_v2::new_node_cluster)]
+fn test_lost_one_extra_message_during_merge() {
+    let mut cluster = new_cluster(0, 3);
+    configure_for_merge(&mut cluster.cfg);
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+    cluster.run();
+
+    let region = cluster.get_region(b"k1");
+    cluster.must_split(&region, b"k2");
+    let left = cluster.get_region(b"k1");
+    let right = cluster.get_region(b"k3");
+
+    let left_peer_on_store1 = find_peer(&left, 1).unwrap().clone();
+    cluster.must_transfer_leader(left.get_id(), left_peer_on_store1);
+    let right_peer_on_store1 = find_peer(&right, 1).unwrap().clone();
+    cluster.must_transfer_leader(right.get_id(), right_peer_on_store1);
+    // Use DropMessageFilter to drop messages to store 3 without reporting error.
+    let lost = atomic::AtomicBool::new(false);
+    cluster.add_recv_filter_on_node(
+        3,
+        Box::new(DropMessageFilter::new(Arc::new(move |m| {
+            if m.get_extra_msg().get_type() == ExtraMessageType::MsgAvailabilityRequest {
+                lost.swap(true, atomic::Ordering::Relaxed)
+            } else {
+                true
+            }
+        }))),
+    );
+
+    // Merge left to right and remove left peer on store 3.
+    pd_client.must_merge(left.get_id(), right.get_id());
+    cluster.must_put(b"k6", b"v6");
+    must_get_equal(&cluster.get_engine(1), b"k6", b"v6");
 }

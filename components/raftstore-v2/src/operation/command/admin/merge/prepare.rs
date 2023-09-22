@@ -33,7 +33,7 @@ use collections::HashMap;
 use engine_traits::{Checkpointer, KvEngine, RaftEngine, RaftLogBatch, CF_LOCK};
 use futures::channel::oneshot;
 use kvproto::{
-    metapb::RegionEpoch,
+    metapb::{self, RegionEpoch},
     raft_cmdpb::{
         AdminCmdType, AdminRequest, AdminResponse, CmdType, PrepareMergeRequest, PutRequest,
         RaftCmdRequest, Request,
@@ -99,7 +99,8 @@ pub enum PrepareStatus {
     WaitForTrimStatus {
         start_time: Instant,
         // Peers that we are not sure if trimmed.
-        pending_peers: HashMap<u64, RegionEpoch>,
+        // Maps from peer_id to (region_id, region_epoch, peer).
+        pending_peers: HashMap<u64, (u64, RegionEpoch, metapb::Peer)>,
         // Only when all peers are trimmed, this proposal will be taken into the tablet flush
         // callback.
         req: Option<RaftCmdRequest>,
@@ -192,7 +193,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         // applied. No intermediate error.
         let pre_propose = if let Some(r) = self.already_checked_pessimistic_locks()? {
             r
-        } else if self.already_checked_trim_status(&req)? {
+        } else if self.already_checked_trim_status(store_ctx, &req)? {
             self.check_logs_before_prepare_merge(store_ctx)
                 .and_then(|r| self.check_pessimistic_locks(r, &mut req))
                 .map_err(|e| {
@@ -372,6 +373,31 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         })
     }
 
+    fn send_check_trim_status<T: Transport>(&mut self, store_ctx: &mut StoreContext<EK, ER, T>) {
+        let Some(merge_context) = self.merge_context() else {
+            return;
+        };
+        let Some(PrepareStatus::WaitForTrimStatus { pending_peers, .. }) =
+            merge_context.prepare_status.as_ref()
+        else {
+            return;
+        };
+
+        for (region_id, region_epoch, peer) in pending_peers.values() {
+            let mut msg = RaftMessage::default();
+            msg.set_region_id(*region_id);
+            msg.set_from_peer(self.peer().clone());
+            msg.set_to_peer(peer.clone());
+            msg.set_region_epoch(region_epoch.clone());
+            msg.mut_extra_msg()
+                .set_type(ExtraMessageType::MsgAvailabilityRequest);
+            msg.mut_extra_msg()
+                .mut_availability_context()
+                .set_from_region_id(self.region_id());
+            let _ = store_ctx.trans.send(msg);
+        }
+    }
+
     fn start_check_trim_status<T: Transport>(
         &mut self,
         store_ctx: &mut StoreContext<EK, ER, T>,
@@ -390,18 +416,14 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 if p.get_id() == self.peer_id() {
                     continue;
                 }
-                let mut msg = RaftMessage::default();
-                msg.set_region_id(region.get_id());
-                msg.set_from_peer(self.peer().clone());
-                msg.set_to_peer(p.clone());
-                msg.set_region_epoch(region.get_region_epoch().clone());
-                msg.mut_extra_msg()
-                    .set_type(ExtraMessageType::MsgAvailabilityRequest);
-                msg.mut_extra_msg()
-                    .mut_availability_context()
-                    .set_from_region_id(self.region_id());
-                store_ctx.trans.send(msg)?;
-                pending_peers.insert(p.get_id(), region.get_region_epoch().clone());
+                pending_peers.insert(
+                    p.get_id(),
+                    (
+                        region.get_id(),
+                        region.get_region_epoch().clone(),
+                        p.clone(),
+                    ),
+                );
             }
         }
 
@@ -420,6 +442,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             pending_peers,
             req: Some(mem::take(req)),
         });
+        self.send_check_trim_status(store_ctx);
         Err(Error::PendingPrepareMerge)
     }
 
@@ -441,7 +464,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             let from_region = resp.get_availability_context().get_from_region_id();
             let from_epoch = resp.get_availability_context().get_from_region_epoch();
             let trimmed = resp.get_availability_context().get_trimmed();
-            if let Some(epoch) = pending_peers.get(&from_peer)
+            if let Some((_, epoch, _)) = pending_peers.get(&from_peer)
                 && util::is_region_epoch_equal(from_epoch, epoch)
             {
                 if !trimmed {
@@ -494,7 +517,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         }
     }
 
-    fn already_checked_trim_status(&mut self, req: &RaftCmdRequest) -> Result<bool> {
+    fn already_checked_trim_status<T: Transport>(
+        &mut self,
+        store_ctx: &mut StoreContext<EK, ER, T>,
+        req: &RaftCmdRequest,
+    ) -> Result<bool> {
         let flushed = WriteBatchFlags::from_bits_truncate(req.get_header().get_flags())
             .contains(WriteBatchFlags::PRE_FLUSH_FINISHED);
         match self
@@ -507,6 +534,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 if pending_peers.is_empty() && flushed {
                     Ok(true)
                 } else {
+                    // Retry send_check_trim_status in case messages are dropped.
+                    self.send_check_trim_status(store_ctx);
                     Err(Error::PendingPrepareMerge)
                 }
             }
@@ -525,7 +554,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 }
             }
             // Shouldn't reach here after calling `already_checked_pessimistic_locks` first.
-            _ => unreachable!(),
+            _ => panic!(
+                "unexpected prepare status {}: {:?}",
+                SlogFormat(&self.logger),
+                self.merge_context().map(|c| c.prepare_status.as_ref())
+            ),
         }
     }
 
