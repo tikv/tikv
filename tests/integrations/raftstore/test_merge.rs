@@ -1777,11 +1777,10 @@ fn test_gc_peer_after_merge() {
         region_state
     );
     assert!(
-        region_state
+        !region_state
             .get_removed_records()
             .iter()
-            .find(|p| p.get_id() == right_peer_on_store3.get_id())
-            .is_none(),
+            .any(|p| p.get_id() == right_peer_on_store3.get_id()),
         "{:?}",
         region_state
     );
