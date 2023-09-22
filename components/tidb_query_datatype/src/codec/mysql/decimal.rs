@@ -3531,6 +3531,13 @@ mod tests {
                 Some("0.000000000"),
                 Some("-56"),
             ),
+            (
+                DEFAULT_DIV_FRAC_INCR,
+                "0",
+                "0.5",
+                Some("0.0000"),
+                Some("0.0"),
+            ),
         ];
 
         for (frac_incr, lhs_str, rhs_str, div_exp, rem_exp) in cases {
