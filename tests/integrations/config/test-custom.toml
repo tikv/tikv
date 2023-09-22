@@ -183,6 +183,7 @@ max-peer-down-duration = "12m"
 max-leader-missing-duration = "12h"
 abnormal-leader-missing-duration = "6h"
 peer-stale-state-check-interval = "2h"
+gc-peer-check-interval = "1d"
 leader-transfer-max-log-lag = 123
 snap-apply-batch-size = "12MB"
 snap-apply-copy-symlink = true
