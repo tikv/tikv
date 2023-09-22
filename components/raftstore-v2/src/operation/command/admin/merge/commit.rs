@@ -172,6 +172,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         &mut self,
         store_ctx: &mut StoreContext<EK, ER, T>,
     ) {
+        fail::fail_point!("on_schedule_merge", |_| {});
         fail::fail_point!(
             "ask_target_peer_to_commit_merge_2",
             self.region_id() == 2,

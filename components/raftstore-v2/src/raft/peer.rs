@@ -270,9 +270,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     }
 
     /// Set the region of a peer.
-    ///
-    /// This will update the region of the peer, caller must ensure the region
-    /// has been preserved in a durable device.
     pub fn set_region(
         &mut self,
         host: &CoprocessorHost<EK>,
