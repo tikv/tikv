@@ -83,6 +83,7 @@ use crate::{
             flow_controller::FlowController,
             latch::{Latches, Lock},
             sched_pool::{tls_collect_query, tls_collect_scan_details, SchedPool},
+            txn_status_cache::TxnStatusCache,
             Error, ErrorInner, ProcessResult,
         },
         types::StorageCallback,
@@ -293,6 +294,8 @@ struct TxnSchedulerInner<L: LockManager> {
     quota_limiter: Arc<QuotaLimiter>,
     resource_manager: Option<Arc<ResourceGroupManager>>,
     feature_gate: FeatureGate,
+
+    txn_status_cache: TxnStatusCache,
 }
 
 #[inline]
@@ -484,6 +487,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             quota_limiter,
             resource_manager,
             feature_gate,
+            txn_status_cache: TxnStatusCache::new(),
         });
 
         slow_log!(
@@ -1258,6 +1262,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                 statistics: &mut sched_details.stat,
                 async_apply_prewrite: self.inner.enable_async_apply_prewrite,
                 raw_ext,
+                txn_status_cache: &self.inner.txn_status_cache,
             };
             let begin_instant = Instant::now();
             let res = unsafe {

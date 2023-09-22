@@ -1002,6 +1002,7 @@ mod tests {
                 must_acquire_pessimistic_lock, must_acquire_pessimistic_lock_err, must_commit,
                 must_prewrite_put_err_impl, must_prewrite_put_impl, must_rollback,
             },
+            txn_status_cache::TxnStatusCache,
             Error, ErrorInner,
         },
         types::TxnStatus,
@@ -1647,6 +1648,7 @@ mod tests {
                     statistics: &mut Statistics::default(),
                     async_apply_prewrite: false,
                     raw_ext: None,
+                    txn_status_cache: &TxnStatusCache::new_for_test(),
                 }
             };
         }
@@ -1818,6 +1820,7 @@ mod tests {
                 statistics: &mut statistics,
                 async_apply_prewrite: case.async_apply_prewrite,
                 raw_ext: None,
+                txn_status_cache: &TxnStatusCache::new_for_test(),
             };
             let mut engine = TestEngineBuilder::new().build().unwrap();
             let snap = engine.snapshot(Default::default()).unwrap();
@@ -1928,6 +1931,7 @@ mod tests {
             statistics: &mut statistics,
             async_apply_prewrite: false,
             raw_ext: None,
+            txn_status_cache: &TxnStatusCache::new_for_test(),
         };
         let snap = engine.snapshot(Default::default()).unwrap();
         let result = cmd.cmd.process_write(snap, context).unwrap();
@@ -1956,6 +1960,7 @@ mod tests {
             statistics: &mut statistics,
             async_apply_prewrite: false,
             raw_ext: None,
+            txn_status_cache: &TxnStatusCache::new_for_test(),
         };
         let snap = engine.snapshot(Default::default()).unwrap();
         let result = cmd.cmd.process_write(snap, context).unwrap();
@@ -2039,6 +2044,7 @@ mod tests {
             statistics: &mut statistics,
             async_apply_prewrite: false,
             raw_ext: None,
+            txn_status_cache: &TxnStatusCache::new_for_test(),
         };
         let snap = engine.snapshot(Default::default()).unwrap();
         let result = cmd.cmd.process_write(snap, context).unwrap();
@@ -2071,6 +2077,7 @@ mod tests {
             statistics: &mut statistics,
             async_apply_prewrite: false,
             raw_ext: None,
+            txn_status_cache: &TxnStatusCache::new_for_test(),
         };
         let snap = engine.snapshot(Default::default()).unwrap();
         let result = cmd.cmd.process_write(snap, context).unwrap();
@@ -2341,6 +2348,7 @@ mod tests {
             statistics: &mut statistics,
             async_apply_prewrite: false,
             raw_ext: None,
+            txn_status_cache: &TxnStatusCache::new_for_test(),
         };
         let snap = engine.snapshot(Default::default()).unwrap();
         assert!(prewrite_cmd.cmd.process_write(snap, context).is_err());
@@ -2365,6 +2373,7 @@ mod tests {
             statistics: &mut statistics,
             async_apply_prewrite: false,
             raw_ext: None,
+            txn_status_cache: &TxnStatusCache::new_for_test(),
         };
         let snap = engine.snapshot(Default::default()).unwrap();
         assert!(prewrite_cmd.cmd.process_write(snap, context).is_err());
@@ -2571,6 +2580,7 @@ mod tests {
             statistics: &mut statistics,
             async_apply_prewrite: false,
             raw_ext: None,
+            txn_status_cache: &TxnStatusCache::new_for_test(),
         };
         let snap = engine.snapshot(Default::default()).unwrap();
         let res = prewrite_cmd.cmd.process_write(snap, context).unwrap();

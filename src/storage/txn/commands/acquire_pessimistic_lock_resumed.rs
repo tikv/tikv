@@ -239,6 +239,7 @@ mod tests {
         txn::{
             commands::pessimistic_rollback::tests::must_success as must_pessimistic_rollback,
             tests::{must_commit, must_pessimistic_locked, must_prewrite_put, must_rollback},
+            txn_status_cache::TxnStatusCache,
         },
         TestEngineBuilder,
     };
@@ -275,6 +276,7 @@ mod tests {
                     statistics: &mut Default::default(),
                     async_apply_prewrite: false,
                     raw_ext: None,
+                    txn_status_cache: &TxnStatusCache::new_for_test(),
                 },
             )
             .unwrap();

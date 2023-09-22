@@ -168,6 +168,7 @@ pub mod tests {
             commands::{pessimistic_rollback, WriteCommand, WriteContext},
             scheduler::DEFAULT_EXECUTION_DURATION_LIMIT,
             tests::*,
+            txn_status_cache::TxnStatusCache,
         },
         types::TxnStatus,
         ProcessResult, TestEngineBuilder,
@@ -211,6 +212,7 @@ pub mod tests {
                     statistics: &mut Default::default(),
                     async_apply_prewrite: false,
                     raw_ext: None,
+                    txn_status_cache: &TxnStatusCache::new_for_test(),
                 },
             )
             .unwrap();
@@ -259,6 +261,7 @@ pub mod tests {
                     statistics: &mut Default::default(),
                     async_apply_prewrite: false,
                     raw_ext: None,
+                    txn_status_cache: &TxnStatusCache::new_for_test(),
                 },
             )
             .map(|r| {

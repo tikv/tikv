@@ -437,11 +437,12 @@ where
     }
 }
 
-unsafe impl<K, V, T> Send for LruCache<K, V, T>
+unsafe impl<K, V, T, E> Send for LruCache<K, V, T, E>
 where
     K: Send,
     V: Send,
     T: Send + SizePolicy<K, V>,
+    E: Send + EvictPolicy<K, V>,
 {
 }
 

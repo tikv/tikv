@@ -235,7 +235,10 @@ pub mod tests {
         kv::TestEngineBuilder,
         lock_manager::MockLockManager,
         mvcc::tests::*,
-        txn::{commands::WriteCommand, scheduler::DEFAULT_EXECUTION_DURATION_LIMIT, tests::*},
+        txn::{
+            commands::WriteCommand, scheduler::DEFAULT_EXECUTION_DURATION_LIMIT, tests::*,
+            txn_status_cache::TxnStatusCache,
+        },
         Engine,
     };
 
@@ -265,6 +268,7 @@ pub mod tests {
                     statistics: &mut Default::default(),
                     async_apply_prewrite: false,
                     raw_ext: None,
+                    txn_status_cache: &TxnStatusCache::new_for_test(),
                 },
             )
             .unwrap();
@@ -303,6 +307,7 @@ pub mod tests {
                         statistics: &mut Default::default(),
                         async_apply_prewrite: false,
                         raw_ext: None,
+                        txn_status_cache: &TxnStatusCache::new_for_test(),
                     },
                 )
                 .unwrap();

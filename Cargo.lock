@@ -3253,7 +3253,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#ecdbf1f8c130089392a9bb5f86f7577deddfbed5"
+source = "git+https://github.com/MyonKeminta/kvproto?branch=m/prewrite-retry-fix-exp#a4f14d1b73c1a17636dde389efa4708539bc92bf"
 dependencies = [
  "futures 0.3.15",
  "grpcio",

@@ -58,7 +58,6 @@ pub mod raw;
 pub mod txn;
 
 mod read_pool;
-mod txn_status_cache;
 mod types;
 
 use std::{
@@ -3854,6 +3853,7 @@ mod tests {
                 commands,
                 commands::{AcquirePessimisticLock, Prewrite},
                 tests::must_rollback,
+                txn_status_cache::TxnStatusCache,
                 Error as TxnError, ErrorInner as TxnErrorInner,
             },
             types::{PessimisticLockKeyResult, PessimisticLockResults},
@@ -3885,6 +3885,7 @@ mod tests {
                     statistics: &mut Statistics::default(),
                     async_apply_prewrite: false,
                     raw_ext: None,
+                    txn_status_cache: &TxnStatusCache::new_for_test(),
                 },
             )
             .unwrap();

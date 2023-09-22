@@ -70,8 +70,7 @@ use crate::storage::{
     },
     metrics,
     mvcc::{Lock as MvccLock, MvccReader, ReleasedLock, SnapshotReader},
-    txn::{latch, ProcessResult, Result},
-    txn_status_cache::TxnStatusCache,
+    txn::{latch, txn_status_cache::TxnStatusCache, ProcessResult, Result},
     types::{
         MvccInfo, PessimisticLockParameters, PessimisticLockResults, PrewriteResult,
         SecondaryLocksStatus, StorageCallbackType, TxnStatus,
@@ -825,6 +824,7 @@ pub mod test_util {
             statistics,
             async_apply_prewrite: false,
             raw_ext: None,
+            txn_status_cache: &TxnStatusCache::new_for_test(),
         };
         let ret = cmd.cmd.process_write(snap, context)?;
         let res = match ret.pr {
@@ -985,6 +985,7 @@ pub mod test_util {
             statistics,
             async_apply_prewrite: false,
             raw_ext: None,
+            txn_status_cache: &TxnStatusCache::new_for_test(),
         };
 
         let ret = cmd.cmd.process_write(snap, context)?;
@@ -1010,6 +1011,7 @@ pub mod test_util {
             statistics,
             async_apply_prewrite: false,
             raw_ext: None,
+            txn_status_cache: &TxnStatusCache::new_for_test(),
         };
 
         let ret = cmd.cmd.process_write(snap, context)?;
