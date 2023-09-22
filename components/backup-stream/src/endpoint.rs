@@ -1,13 +1,14 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    collections::HashSet, fmt, marker::PhantomData, path::PathBuf, sync::Arc, time::Duration,
+    any::Any, collections::HashSet, fmt, marker::PhantomData, path::PathBuf, sync::Arc,
+    time::Duration,
 };
 
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::KvEngine;
 use error_code::ErrorCodeExt;
-use futures::FutureExt;
+use futures::{stream::AbortHandle, FutureExt};
 use kvproto::{
     brpb::{StreamBackupError, StreamBackupTaskInfo},
     metapb::Region,
@@ -61,10 +62,6 @@ const SLOW_EVENT_THRESHOLD: f64 = 120.0;
 /// CHECKPOINT_SAFEPOINT_TTL_IF_ERROR specifies the safe point TTL(24 hour) if
 /// task has fatal error.
 const CHECKPOINT_SAFEPOINT_TTL_IF_ERROR: u64 = 24;
-/// The timeout for tick updating the checkpoint.
-/// Generally, it would take ~100ms.
-/// 5s would be enough for it.
-const TICK_UPDATE_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub struct Endpoint<S, R, E, RT, PDC> {
     // Note: those fields are more like a shared context between components.
@@ -80,7 +77,8 @@ pub struct Endpoint<S, R, E, RT, PDC> {
     pub(crate) subs: SubscriptionTracer,
     pub(crate) concurrency_manager: ConcurrencyManager,
 
-    range_router: Router,
+    // Note: some of fields are public so test cases are able to access them.
+    pub range_router: Router,
     observer: BackupStreamObserver,
     pool: Runtime,
     initial_scan_memory_quota: PendingMemoryQuota,
@@ -91,6 +89,12 @@ pub struct Endpoint<S, R, E, RT, PDC> {
     // however probably it would be useful in the future.
     config: BackupStreamConfig,
     checkpoint_mgr: CheckpointManager,
+
+    // Runtime status:
+    /// The handle to abort last save storage safe point.
+    /// This is used for simulating an asynchronous background worker.
+    /// Each time we spawn a task, once time goes by, we abort that task.
+    pub abort_last_storage_save: Option<AbortHandle>,
 }
 
 impl<S, R, E, RT, PDC> Endpoint<S, R, E, RT, PDC>
@@ -188,6 +192,7 @@ where
             failover_time: None,
             config,
             checkpoint_mgr,
+            abort_last_storage_save: None,
         };
         ep.pool.spawn(ep.min_ts_worker());
         ep
@@ -852,15 +857,13 @@ where
         }
     }
 
-    fn on_update_global_checkpoint(&self, task: String) {
-        let _guard = self.pool.handle().enter();
-        let result = self.pool.block_on(tokio::time::timeout(
-            TICK_UPDATE_TIMEOUT,
-            self.update_global_checkpoint(task),
-        ));
-        if let Err(err) = result {
-            warn!("log backup update global checkpoint timed out"; "err" => %err)
+    fn on_update_global_checkpoint(&mut self, task: String) {
+        if let Some(handle) = self.abort_last_storage_save.take() {
+            handle.abort();
         }
+        let (fut, handle) = futures::future::abortable(self.update_global_checkpoint(task));
+        self.pool.spawn(fut);
+        self.abort_last_storage_save = Some(handle);
     }
 
     fn on_update_change_config(&mut self, cfg: BackupStreamConfig) {
@@ -897,7 +900,7 @@ where
                 self.on_update_change_config(cfg);
             }
             Task::Sync(cb, mut cond) => {
-                if cond(&self.range_router) {
+                if cond(self) {
                     cb()
                 } else {
                     let sched = self.scheduler.clone();
@@ -1118,7 +1121,9 @@ pub enum Task {
         // Run the closure if ...
         Box<dyn FnOnce() + Send>,
         // This returns `true`.
-        Box<dyn FnMut(&Router) -> bool + Send>,
+        // The argument should be `self`, but there are too many generic argument for `self`...
+        // So let the caller in test cases downcast this to the type they need manually...
+        Box<dyn FnMut(&mut dyn Any) -> bool + Send>,
     ),
     /// Mark the store as a failover store.
     /// This would prevent store from updating its checkpoint ts for a while.
