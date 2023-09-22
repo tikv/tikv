@@ -19,7 +19,7 @@ use tikv_util::{
     box_err, debug, info, memory::MemoryQuota, sys::thread::ThreadBuildWrapper, time::Instant,
     warn, worker::Scheduler,
 };
-use tokio::sync::mpsc::{channel, error::SendError, Receiver, Sender};
+use tokio::sync::mpsc::{channel, error::SendError, Receiver, Sender, WeakSender};
 use txn_types::TimeStamp;
 
 use crate::{
@@ -67,6 +67,11 @@ struct ScanCmd {
     region: Region,
     handle: ObserveHandle,
     last_checkpoint: TimeStamp,
+
+    // This channel will be used to send the result of the initial scanning.
+    // NOTE: perhaps we can make them an closure so it will be more flexible.
+    // but for now there isn't requirement of that.
+    feedback_channel: Sender<ObserveOp>,
     _work: Work,
 }
 
@@ -202,11 +207,7 @@ impl ScanCmd {
     }
 }
 
-async fn scan_executor_loop(
-    init: impl InitialScan,
-    mut cmds: Receiver<ScanCmd>,
-    self_channel: Sender<ObserveOp>,
-) {
+async fn scan_executor_loop(init: impl InitialScan, mut cmds: Receiver<ScanCmd>) {
     while let Some(cmd) = cmds.recv().await {
         debug!("handling initial scan request"; "region_id" => %cmd.region.get_id());
         metrics::PENDING_INITIAL_SCAN_LEN
@@ -222,25 +223,25 @@ async fn scan_executor_loop(
         }
 
         let init = init.clone();
-        let tx = self_channel.clone();
         tokio::task::spawn(async move {
             metrics::PENDING_INITIAL_SCAN_LEN
                 .with_label_values(&["executing"])
                 .inc();
             let res = cmd.exec_by(init).await;
-            tx.send(ObserveOp::NotifyStartObserveResult {
-                region: cmd.region,
-                handle: cmd.handle,
-                err: res.map_err(Box::new).err(),
-            })
-            .await
-            .map_err(|err| {
-                Error::Other(box_err!(
-                    "failed to send result, are we shutting down? {}",
-                    err
-                ))
-            })
-            .report_if_err("");
+            cmd.feedback_channel
+                .send(ObserveOp::NotifyStartObserveResult {
+                    region: cmd.region,
+                    handle: cmd.handle,
+                    err: res.map_err(Box::new).err(),
+                })
+                .await
+                .map_err(|err| {
+                    Error::Other(box_err!(
+                        "failed to send result, are we shutting down? {}",
+                        err
+                    ))
+                })
+                .report_if_err("");
             metrics::PENDING_INITIAL_SCAN_LEN
                 .with_label_values(&["executing"])
                 .dec();
@@ -252,13 +253,12 @@ async fn scan_executor_loop(
 fn spawn_executors(
     init: impl InitialScan + Send + Sync + 'static,
     number: usize,
-    self_channel: Sender<ObserveOp>,
 ) -> ScanPoolHandle {
     let (tx, rx) = tokio::sync::mpsc::channel(MESSAGE_BUFFER_SIZE);
     let pool = create_scan_pool(number);
     let handle = pool.handle().clone();
     handle.spawn(async move {
-        scan_executor_loop(init, rx, self_channel).await;
+        scan_executor_loop(init, rx).await;
         // The behavior of log backup is undefined while TiKV shutting down.
         // (Recording the logs doesn't require any local persisted information.)
         // So it is OK to make works in the pool fully asynchronous (i.e. We
@@ -304,7 +304,7 @@ pub struct RegionSubscriptionManager<S, R> {
     failure_count: HashMap<ObserveId, u8>,
     memory_manager: Arc<MemoryQuota>,
 
-    messenger: Sender<ObserveOp>,
+    messenger: WeakSender<ObserveOp>,
     scan_pool_handle: ScanPoolHandle,
     scans: Arc<CallbackWaitGroup>,
 }
@@ -349,14 +349,14 @@ where
         HChkLd: CdcHandle<E> + 'static,
     {
         let (tx, rx) = channel(MESSAGE_BUFFER_SIZE);
-        let scan_pool_handle = spawn_executors(initial_loader.clone(), scan_pool_size, tx.clone());
+        let scan_pool_handle = spawn_executors(initial_loader.clone(), scan_pool_size);
         let op = Self {
             regions,
             meta_cli,
             range_router: initial_loader.sink.clone(),
             scheduler: initial_loader.scheduler.clone(),
             subs: initial_loader.tracing,
-            messenger: tx.clone(),
+            messenger: tx.downgrade(),
             scan_pool_handle,
             scans: CallbackWaitGroup::new(),
             failure_count: HashMap::new(),
@@ -516,7 +516,14 @@ where
         region: Region,
         handle: Option<ObserveHandle>,
     ) {
-        let tx = self.messenger.clone();
+        let tx = self.messenger.upgrade();
+        if tx.is_none() {
+            warn!(
+                "log backup subscription manager: cannot upgrade self-sender, are we shutting down?"
+            );
+            return;
+        }
+        let tx = tx.unwrap();
         tokio::spawn(async move {
             tokio::time::sleep(after).await;
             let handle = handle.unwrap_or_else(|| ObserveHandle::new());
@@ -572,11 +579,9 @@ where
         match self.find_task_by_region(region) {
             None => {
                 warn!(
-                    "the region {:?} is register to no task but being observed (start_key = {}; end_key = {}; task_stat = {:?}): maybe stale, aborting",
-                    region,
-                    utils::redact(&region.get_start_key()),
-                    utils::redact(&region.get_end_key()),
-                    self.range_router
+                    "the region is register to no task but being observed: maybe stale, skipping";
+                    utils::slog_region(&region),
+                    "task_status" => ?self.range_router,
                 );
             }
 
@@ -596,20 +601,19 @@ where
     }
 
     async fn start_observe(&self, region: Region, handle: ObserveHandle) {
-        let schd = self.scheduler.clone();
         self.subs.add_pending_region(&region);
         let res = self.try_start_observe(&region, handle.clone()).await;
-        if let Err(ref err) = &res {
+        if let Err(err) = res {
             warn!("failed to start observe, would retry"; "err" => %err, utils::slog_region(&region));
+            try_send!(
+                self.scheduler,
+                Task::ModifyObserve(ObserveOp::NotifyStartObserveResult {
+                    region,
+                    handle,
+                    err: Some(Box::new(err)),
+                })
+            );
         }
-        try_send!(
-            schd,
-            Task::ModifyObserve(ObserveOp::NotifyStartObserveResult {
-                region,
-                handle,
-                err: res.map_err(Box::new).err(),
-            })
-        );
     }
 
     async fn retry_observe(&self, region: Region, handle: ObserveHandle) -> Result<bool> {
@@ -731,10 +735,19 @@ where
     ) {
         self.subs
             .register_region(region, handle.clone(), Some(last_checkpoint));
+        let feedback_channel = match self.messenger.upgrade() {
+            Some(ch) => ch,
+            None => {
+                warn!("log backup subscription manager is shutting down, aborting new scan."; 
+                    utils::slog_region(&region), "handle" => ?handle.id);
+                return;
+            }
+        };
         self.spawn_scan(ScanCmd {
             region: region.clone(),
             handle,
             last_checkpoint,
+            feedback_channel,
             _work: self.scans.clone().work(),
         })
         .await
@@ -776,7 +789,7 @@ mod test {
     use tikv::{config::BackupStreamConfig, storage::Statistics};
     use tikv_util::{
         memory::MemoryQuota,
-        worker::{dummy_future_scheduler, dummy_scheduler, ReceiverWrapper},
+        worker::{dummy_future_scheduler, dummy_scheduler, ReceiverWrapper, Scheduler},
     };
     use tokio::{sync::mpsc::Sender, task::JoinHandle};
     use txn_types::TimeStamp;
@@ -901,11 +914,40 @@ mod test {
 
     struct Suite {
         rt: tokio::runtime::Runtime,
+        bg_tasks: Vec<JoinHandle<()>>,
+        cancel: Arc<AtomicBool>,
 
-        events: Arc<Mutex<Vec<String>>>,
+        events: Arc<Mutex<Vec<ObserveEvent>>>,
         task_start_ts: TimeStamp,
-        handle: Sender<ObserveOp>,
+        handle: Option<Sender<ObserveOp>>,
         regions: RegionMem,
+    }
+
+    #[derive(Debug, Eq, PartialEq)]
+    enum ObserveEvent {
+        Start(u64),
+        Stop(u64),
+        StartResult(u64, bool),
+        HighMemUse(u64),
+    }
+
+    impl ObserveEvent {
+        fn of(op: &ObserveOp) -> Option<Self> {
+            match op {
+                ObserveOp::Start { region, handle } => Some(Self::Start(region.id)),
+                ObserveOp::Stop { region } => Some(Self::Stop(region.id)),
+                ObserveOp::NotifyStartObserveResult {
+                    region,
+                    handle,
+                    err,
+                } => Some(Self::StartResult(region.id, err.is_none())),
+                ObserveOp::HighMemUsageWarning {
+                    inconsistent_region_id,
+                } => Some(Self::HighMemUse(*inconsistent_region_id)),
+
+                _ => None,
+            }
+        }
     }
 
     #[derive(Clone, Default)]
@@ -931,8 +973,7 @@ mod test {
         fn new(init: impl InitialScan) -> Self {
             let task_name = "test";
             let task_start_ts = TimeStamp::new(42);
-            let pool = tokio::runtime::Builder::new_multi_thread()
-                .worker_threads(4)
+            let pool = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()
                 .unwrap();
@@ -967,55 +1008,74 @@ mod test {
                 regions: regions.clone(),
                 meta_cli,
                 range_router: Router(Arc::new(router)),
-                scheduler,
+                scheduler: scheduler.clone(),
                 subs,
                 failure_count: Default::default(),
                 memory_manager,
-                messenger: tx.clone(),
-                scan_pool_handle: spawn_executors(init, 2, tx.clone()),
+                messenger: tx.downgrade(),
+                scan_pool_handle: spawn_executors(init, 2),
                 scans: CallbackWaitGroup::new(),
             };
             let events = Arc::new(Mutex::new(vec![]));
             let ob_events = Arc::clone(&events);
             let (ob_tx, ob_rx) = tokio::sync::mpsc::channel(1);
-            pool.spawn(async move {
+            let mut bg_tasks = vec![];
+            bg_tasks.push(pool.spawn(async move {
                 while let Some(item) = rx.recv().await {
-                    ob_events.lock().unwrap().push(format!("{:?}", item));
+                    if let Some(record) = ObserveEvent::of(&item) {
+                        ob_events.lock().unwrap().push(record);
+                    }
                     ob_tx.send(item).await.unwrap();
                 }
-            });
+            }));
             let self_tx = tx.clone();
-            pool.spawn_blocking(move || {
-                while let Some(item) = output.recv() {
-                    match item {
-                        Task::ModifyObserve(ob) => tokio::runtime::Handle::current()
-                            .block_on(self_tx.send(ob))
-                            .unwrap(),
-                        Task::FatalError(select, err) => {
-                            panic!("Background handler received fatal error {err} for {select:?}!")
+            let canceled = Arc::new(AtomicBool::new(false));
+            let cancel = canceled.clone();
+            bg_tasks.push(pool.spawn_blocking(move || {
+                loop {
+                    match output.recv_timeout(Duration::from_millis(10)) {
+                        Ok(Some(item)) => match item {
+                            Task::ModifyObserve(ob) => tokio::runtime::Handle::current()
+                                .block_on(self_tx.send(dbg!(ob)))
+                                .unwrap(),
+                            Task::FatalError(select, err) => {
+                                panic!(
+                                    "Background handler received fatal error {err} for {select:?}!"
+                                )
+                            }
+                            _ => {}
+                        },
+                        Ok(None) => return,
+                        Err(_) => {
+                            if canceled.load(Ordering::SeqCst) {
+                                return;
+                            }
                         }
-                        _ => {}
                     }
                 }
-            });
-            pool.spawn(
+            }));
+            bg_tasks.push(pool.spawn(
                 subs_mgr.region_operator_loop::<KvTestEngine, CdcRaftRouter<MockRaftStoreRouter>>(
                     ob_rx,
                     BackupStreamResolver::Nop,
                 ),
-            );
+            ));
 
             Self {
                 rt: pool,
                 events,
                 regions,
-                handle: tx,
+                handle: Some(tx),
                 task_start_ts,
+                bg_tasks,
+                cancel,
             }
         }
 
         fn run(&self, op: ObserveOp) {
-            self.rt.block_on(self.handle.send(op)).unwrap()
+            self.rt
+                .block_on(self.handle.as_ref().unwrap().send(op))
+                .unwrap()
         }
 
         fn start_region(&self, region: Region) {
@@ -1054,47 +1114,88 @@ mod test {
             region
         }
 
+        fn wait_shutdown(&mut self) {
+            drop(self.handle.take());
+            self.cancel.store(true, Ordering::SeqCst);
+            self.rt
+                .block_on(futures::future::try_join_all(std::mem::take(
+                    &mut self.bg_tasks,
+                )))
+                .unwrap();
+        }
+
         #[track_caller]
         fn wait_initial_scan_all_finish(&self) {
-            let finished = Arc::new(AtomicBool::new(false));
-            let max_wait = Duration::from_secs(1);
-            let start = Instant::now();
-            while !finished.load(Ordering::SeqCst) {
-                if start.elapsed() > max_wait {
-                    panic!(
-                        "wait initial scan takes too long! events = {:?}",
-                        self.events
-                    );
+            self.rt.block_on(async move {
+                let max_wait = Duration::from_secs(1);
+                let start = Instant::now();
+                loop {
+                    let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+                    if start.elapsed() > max_wait {
+                        panic!(
+                            "wait initial scan takes too long! events = {:?}",
+                            self.events
+                        );
+                    }
+                    self.handle
+                        .as_ref()
+                        .unwrap()
+                        .send(ObserveOp::ResolveRegions {
+                            callback: Box::new(move |result| {
+                                if result.items.iter().all(|r| {
+                                    r.checkpoint_type != CheckpointType::StartTsOfInitialScan
+                                }) {
+                                    tx.try_send(true).unwrap();
+                                } else {
+                                    tx.try_send(false).unwrap();
+                                }
+                            }),
+                            min_ts: self.task_start_ts.next(),
+                        })
+                        .await
+                        .unwrap();
+                    if rx.recv().await.unwrap() {
+                        return;
+                    }
                 }
-                let finished = finished.clone();
-                self.run(ObserveOp::ResolveRegions {
-                    callback: Box::new(move |result| {
-                        if result
-                            .items
-                            .iter()
-                            .all(|r| r.checkpoint_type != CheckpointType::StartTsOfInitialScan)
-                        {
-                            finished.store(true, Ordering::SeqCst);
-                        }
-                    }),
-                    min_ts: self.task_start_ts.next(),
-                });
-                std::thread::sleep(Duration::from_millis(100));
-            }
+            })
+        }
+
+        fn advance_ms(&self, n: u64) {
+            self.rt
+                .block_on(tokio::time::advance(Duration::from_millis(n)))
         }
     }
 
     #[test]
-    fn test_oom() {
-        let suite = Suite::new(FuncInitialScan(|r, _, _| {
+    fn test_basic_retry() {
+        use ObserveEvent::*;
+        let failed = Arc::new(AtomicBool::new(false));
+        let mut suite = Suite::new(FuncInitialScan(move |r, _, _| {
             println!("{:?} is initial scanning!", utils::debug_region(&r));
+            if r.id != 1 || failed.load(Ordering::SeqCst) {
+                return Ok(Statistics::default());
+            }
+            failed.store(true, Ordering::SeqCst);
             Err(Error::OutOfQuota { region_id: r.id })
         }));
-        suite.run(ObserveOp::Start {
-            region: suite.region(1, 1, 1, b"a", b"b"),
-            handle: ObserveHandle::new(),
-        });
+        let _guard = suite.rt.enter();
+        tokio::time::pause();
+        suite.start_region(suite.region(1, 1, 1, b"a", b"b"));
+        suite.start_region(suite.region(2, 1, 1, b"b", b"c"));
+        suite.advance_ms(32000);
         suite.wait_initial_scan_all_finish();
-        println!("{:?}", suite.events);
+        suite.wait_shutdown();
+        assert_eq!(
+            &*suite.events.lock().unwrap(),
+            &[
+                Start(1),
+                Start(2),
+                StartResult(1, false),
+                Start(1),
+                StartResult(2, true),
+                StartResult(1, true)
+            ]
+        );
     }
 }
