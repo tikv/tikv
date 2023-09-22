@@ -172,6 +172,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         &mut self,
         store_ctx: &mut StoreContext<EK, ER, T>,
     ) {
+        fail::fail_point!("on_schedule_merge", |_| {});
         fail::fail_point!(
             "ask_target_peer_to_commit_merge_2",
             self.region_id() == 2,
@@ -198,7 +199,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 Ok(ents) => ents,
                 Err(e) => slog_panic!(
                     self.logger,
-                    "failed to get merge entires";
+                    "failed to get merge entries";
                     "err" => ?e,
                     "low" => low,
                     "commit" => state.get_commit()
@@ -541,9 +542,6 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
         state.set_state(PeerState::Normal);
         assert!(!state.has_merge_state());
         state.set_tablet_index(index);
-        let mut removed_records: Vec<_> = state.take_removed_records().into();
-        removed_records.append(&mut source_state.get_removed_records().into());
-        state.set_removed_records(removed_records.into());
         let mut merged_records: Vec<_> = state.take_merged_records().into();
         merged_records.append(&mut source_state.get_merged_records().into());
         state.set_merged_records(merged_records.into());
@@ -551,6 +549,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
         merged_record.set_source_region_id(source_region.get_id());
         merged_record.set_source_epoch(source_region.get_region_epoch().clone());
         merged_record.set_source_peers(source_region.get_peers().into());
+        merged_record.set_source_removed_records(source_state.get_removed_records().into());
         merged_record.set_target_region_id(region.get_id());
         merged_record.set_target_epoch(region.get_region_epoch().clone());
         merged_record.set_target_peers(region.get_peers().into());

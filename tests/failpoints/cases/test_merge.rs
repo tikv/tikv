@@ -22,14 +22,16 @@ use raft::eraftpb::MessageType;
 use raftstore::store::*;
 use raftstore_v2::router::PeerMsg;
 use test_raftstore::*;
+use test_raftstore_macro::test_case;
 use tikv::storage::{kv::SnapshotExt, Snapshot};
 use tikv_util::{config::*, future::block_on_timeout, time::Instant, HandyRwLock};
 use txn_types::{Key, LastChange, PessimisticLock};
 
 /// Test if merge is rollback as expected.
-#[test]
+#[test_case(test_raftstore::new_node_cluster)]
+#[test_case(test_raftstore_v2::new_node_cluster)]
 fn test_node_merge_rollback() {
-    let mut cluster = new_node_cluster(0, 3);
+    let mut cluster = new_cluster(0, 3);
     configure_for_merge(&mut cluster.cfg);
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_operator();
@@ -53,8 +55,15 @@ fn test_node_merge_rollback() {
     let schedule_merge_fp = "on_schedule_merge";
     fail::cfg(schedule_merge_fp, "return()").unwrap();
 
-    // The call is finished when prepare_merge is applied.
-    cluster.must_try_merge(region.get_id(), target_region.get_id());
+    let (tx, rx) = channel();
+    fail::cfg_callback("on_apply_res_prepare_merge", move || {
+        tx.send(()).unwrap();
+    })
+    .unwrap();
+
+    cluster.merge_region(region.get_id(), target_region.get_id(), Callback::None);
+    // PrepareMerge is applied.
+    rx.recv().unwrap();
 
     // Add a peer to trigger rollback.
     pd_client.must_add_peer(right.get_id(), new_peer(3, 5));
@@ -74,12 +83,7 @@ fn test_node_merge_rollback() {
     region.mut_region_epoch().set_version(4);
     for i in 1..3 {
         must_get_equal(&cluster.get_engine(i), b"k11", b"v11");
-        let state_key = keys::region_state_key(region.get_id());
-        let state: RegionLocalState = cluster
-            .get_engine(i)
-            .get_msg_cf(CF_RAFT, &state_key)
-            .unwrap()
-            .unwrap();
+        let state = cluster.region_local_state(region.get_id(), i);
         assert_eq!(state.get_state(), PeerState::Normal);
         assert_eq!(*state.get_region(), region);
     }
@@ -88,7 +92,10 @@ fn test_node_merge_rollback() {
     fail::cfg(schedule_merge_fp, "return()").unwrap();
 
     let target_region = pd_client.get_region(b"k3").unwrap();
-    cluster.must_try_merge(region.get_id(), target_region.get_id());
+    cluster.merge_region(region.get_id(), target_region.get_id(), Callback::None);
+    // PrepareMerge is applied.
+    rx.recv().unwrap();
+
     let mut region = pd_client.get_region(b"k1").unwrap();
 
     // Split to trigger rollback.
@@ -103,12 +110,7 @@ fn test_node_merge_rollback() {
     region.mut_region_epoch().set_version(6);
     for i in 1..3 {
         must_get_equal(&cluster.get_engine(i), b"k12", b"v12");
-        let state_key = keys::region_state_key(region.get_id());
-        let state: RegionLocalState = cluster
-            .get_engine(i)
-            .get_msg_cf(CF_RAFT, &state_key)
-            .unwrap()
-            .unwrap();
+        let state = cluster.region_local_state(region.get_id(), i);
         assert_eq!(state.get_state(), PeerState::Normal);
         assert_eq!(*state.get_region(), region);
     }

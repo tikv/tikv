@@ -3253,7 +3253,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#ecdbf1f8c130089392a9bb5f86f7577deddfbed5"
+source = "git+https://github.com/pingcap/kvproto.git#090f247be15c00a6000a4d23669ac3e95ea9fcd5"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
@@ -3388,7 +3388,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#fc38a5b427e6c9b351f835c641e2ee95b8ff8306"
+source = "git+https://github.com/tikv/rust-rocksdb.git#f04f4dd8eacc30e67c24bc2529a6d9c6edb85f8f"
 dependencies = [
  "bindgen 0.65.1",
  "bzip2-sys",
@@ -3407,7 +3407,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/tikv/rust-rocksdb.git#fc38a5b427e6c9b351f835c641e2ee95b8ff8306"
+source = "git+https://github.com/tikv/rust-rocksdb.git#f04f4dd8eacc30e67c24bc2529a6d9c6edb85f8f"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -3483,9 +3483,9 @@ dependencies = [
 
 [[package]]
 name = "lz4-sys"
-version = "1.9.2"
+version = "1.9.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dca79aa95d8b3226213ad454d328369853be3a1382d89532a854f4d69640acae"
+checksum = "57d27b317e207b10f69f5e75494119e391a96f48861ae870d1da6edac98ca900"
 dependencies = [
  "cc",
  "libc 0.2.146",
@@ -3924,6 +3924,17 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 1.0.103",
+]
+
+[[package]]
+name = "num-derive"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9e6a0fd4f737c707bd9086cc16c925f294943eb62eb71499e9fd4cf71f8b9f4e"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.18",
 ]
 
 [[package]]
@@ -4755,8 +4766,8 @@ dependencies = [
 
 [[package]]
 name = "raft-engine"
-version = "0.3.0"
-source = "git+https://github.com/tikv/raft-engine.git#de3ad04a2db9cdf795b1c82d7413b9b53bac92a8"
+version = "0.4.1"
+source = "git+https://github.com/tikv/raft-engine.git#fa56f891fdf0b1cb5b7849b7bee3c5dadbb96103"
 dependencies = [
  "byteorder",
  "crc32fast",
@@ -4772,7 +4783,7 @@ dependencies = [
  "lz4-sys",
  "memmap2 0.7.0",
  "nix 0.26.2",
- "num-derive",
+ "num-derive 0.4.0",
  "num-traits",
  "parking_lot 0.12.1",
  "prometheus",
@@ -4789,8 +4800,8 @@ dependencies = [
 
 [[package]]
 name = "raft-engine-ctl"
-version = "0.3.0"
-source = "git+https://github.com/tikv/raft-engine.git#de3ad04a2db9cdf795b1c82d7413b9b53bac92a8"
+version = "0.4.1"
+source = "git+https://github.com/tikv/raft-engine.git#fa56f891fdf0b1cb5b7849b7bee3c5dadbb96103"
 dependencies = [
  "clap 3.1.6",
  "env_logger 0.10.0",
@@ -5369,7 +5380,7 @@ dependencies = [
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#fc38a5b427e6c9b351f835c641e2ee95b8ff8306"
+source = "git+https://github.com/tikv/rust-rocksdb.git#f04f4dd8eacc30e67c24bc2529a6d9c6edb85f8f"
 dependencies = [
  "libc 0.2.146",
  "librocksdb_sys",
@@ -6880,7 +6891,7 @@ dependencies = [
  "match-template",
  "nom 7.1.0",
  "num 0.3.0",
- "num-derive",
+ "num-derive 0.3.0",
  "num-traits",
  "ordered-float",
  "protobuf",
