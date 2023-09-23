@@ -318,7 +318,7 @@ mod tests {
 
     use self::{deadlock::tests::*, metrics::*, waiter_manager::tests::*};
     use super::*;
-    use crate::storage::lock_manager::LockDigest;
+    use crate::{server::resolve::MockStoreAddrResolver, storage::lock_manager::LockDigest};
 
     fn start_lock_manager() -> LockManager {
         let mut coprocessor_host = CoprocessorHost::<KvTestEngine>::default();
@@ -336,7 +336,7 @@ mod tests {
             .start(
                 1,
                 Arc::new(MockPdClient {}),
-                MockResolver {},
+                MockStoreAddrResolver::default(),
                 Arc::new(SecurityManager::new(&SecurityConfig::default()).unwrap()),
                 &cfg,
             )
