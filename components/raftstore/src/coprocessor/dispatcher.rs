@@ -355,7 +355,7 @@ impl<E: KvEngine> CoprocessorHost<E> {
         registry.register_split_check_observer(100, BoxSplitCheckObserver::new(HalfCheckObserver));
         registry.register_split_check_observer(
             400,
-            BoxSplitCheckObserver::new(TableCheckObserver::default()),
+            BoxSplitCheckObserver::new(TableCheckObserver),
         );
         CoprocessorHost { registry, cfg }
     }
