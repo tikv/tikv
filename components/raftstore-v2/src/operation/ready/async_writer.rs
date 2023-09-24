@@ -131,7 +131,11 @@ impl<EK: KvEngine, ER: RaftEngine> AsyncWriter<EK, ER> {
         // There must be a match in `self.unpersisted_readies`.
         loop {
             let Some(v) = self.unpersisted_readies.pop_front() else {
-                panic!("{:?} ready number not found {}", logger.list(), ready_number);
+                panic!(
+                    "{:?} ready number not found {}",
+                    logger.list(),
+                    ready_number
+                );
             };
             has_snapshot |= v.has_snapshot;
             if v.number > ready_number {

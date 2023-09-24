@@ -200,7 +200,10 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
                 }
             }
             SnapState::Generated(ref s) => {
-                let SnapState::Generated(snap) = mem::replace(&mut *snap_state, SnapState::Relax) else { unreachable!() };
+                let SnapState::Generated(snap) = mem::replace(&mut *snap_state, SnapState::Relax)
+                else {
+                    unreachable!()
+                };
                 if self.validate_snap(&snap, request_index) {
                     return Ok(*snap);
                 }
@@ -284,9 +287,12 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
     pub fn cancel_generating_snap(&self, compact_to: Option<u64>) {
         let mut snap_state = self.snap_state_mut();
         let SnapState::Generating {
-           ref canceled,
-           ref index,
-        } = *snap_state else { return };
+            ref canceled,
+            ref index,
+        } = *snap_state
+        else {
+            return;
+        };
 
         if let Some(idx) = compact_to {
             let snap_index = index.load(Ordering::SeqCst);
@@ -318,7 +324,10 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
         let SnapState::Generating {
             ref canceled,
             ref index,
-         } = *snap_state else { return false };
+        } = *snap_state
+        else {
+            return false;
+        };
 
         if snap.get_metadata().get_index() < index.load(Ordering::SeqCst) {
             warn!(

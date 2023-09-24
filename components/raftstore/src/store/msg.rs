@@ -268,7 +268,9 @@ impl<S: Snapshot> ReadCallback for Callback<S> {
     }
 
     fn read_tracker(&self) -> Option<&TrackerToken> {
-        let Callback::Read { tracker, .. } = self else { return None; };
+        let Callback::Read { tracker, .. } = self else {
+            return None;
+        };
         Some(tracker)
     }
 }
@@ -288,13 +290,17 @@ impl<S: Snapshot> WriteCallback for Callback<S> {
 
     #[inline]
     fn write_trackers(&self) -> Option<&SmallVec<[TimeTracker; 4]>> {
-        let Callback::Write { trackers, .. } = self else { return None; };
+        let Callback::Write { trackers, .. } = self else {
+            return None;
+        };
         Some(trackers)
     }
 
     #[inline]
     fn write_trackers_mut(&mut self) -> Option<&mut SmallVec<[TimeTracker; 4]>> {
-        let Callback::Write { trackers, .. } = self else { return None; };
+        let Callback::Write { trackers, .. } = self else {
+            return None;
+        };
         Some(trackers)
     }
 
