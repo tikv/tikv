@@ -589,7 +589,7 @@ where
             advance_worker,
             scanner_pool,
             regions: HashMap::default(),
-            _phantom: PhantomData::default(),
+            _phantom: PhantomData,
         };
         ep.handle_advance_resolved_ts(leader_resolver);
         ep
@@ -791,7 +791,6 @@ where
 
     // Tracking or untracking locks with incoming commands that corresponding
     // observe id is valid.
-    #[allow(clippy::drop_ref)]
     fn handle_change_log(&mut self, cmd_batch: Vec<CmdBatch>) {
         let size = cmd_batch.iter().map(|b| b.size()).sum::<usize>();
         RTS_CHANNEL_PENDING_CMD_BYTES.sub(size as i64);
@@ -805,7 +804,6 @@ where
                 if observe_region.handle.id == observe_id {
                     let logs = ChangeLog::encode_change_log(region_id, batch);
                     if let Err(e) = observe_region.track_change_log(&logs) {
-                        drop(observe_region);
                         self.re_register_region(region_id, observe_id, e);
                     }
                 } else {
@@ -839,7 +837,7 @@ where
     }
 
     fn handle_advance_resolved_ts(&self, leader_resolver: LeadershipResolver) {
-        let regions = self.regions.keys().into_iter().copied().collect();
+        let regions = self.regions.keys().copied().collect();
         self.advance_worker.advance_ts_for_regions(
             regions,
             leader_resolver,

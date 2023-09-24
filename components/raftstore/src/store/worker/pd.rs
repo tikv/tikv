@@ -1593,10 +1593,7 @@ where
 
     fn handle_read_stats(&mut self, mut read_stats: ReadStats) {
         for (region_id, region_info) in read_stats.region_infos.iter_mut() {
-            let peer_stat = self
-                .region_peers
-                .entry(*region_id)
-                .or_insert_with(PeerStat::default);
+            let peer_stat = self.region_peers.entry(*region_id).or_default();
             peer_stat.read_bytes += region_info.flow.read_bytes as u64;
             peer_stat.read_keys += region_info.flow.read_keys as u64;
             self.store_stat.engine_total_bytes_read += region_info.flow.read_bytes as u64;
@@ -1622,10 +1619,7 @@ where
 
     fn handle_write_stats(&mut self, mut write_stats: WriteStats) {
         for (region_id, region_info) in write_stats.region_infos.iter_mut() {
-            let peer_stat = self
-                .region_peers
-                .entry(*region_id)
-                .or_insert_with(PeerStat::default);
+            let peer_stat = self.region_peers.entry(*region_id).or_default();
             peer_stat.query_stats.add_query_stats(&region_info.0);
             self.store_stat
                 .engine_total_query_num
@@ -2037,10 +2031,7 @@ where
                     cpu_usage,
                 ) = {
                     let region_id = hb_task.region.get_id();
-                    let peer_stat = self
-                        .region_peers
-                        .entry(region_id)
-                        .or_insert_with(PeerStat::default);
+                    let peer_stat = self.region_peers.entry(region_id).or_default();
                     peer_stat.approximate_size = approximate_size;
                     peer_stat.approximate_keys = approximate_keys;
 

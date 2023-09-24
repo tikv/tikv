@@ -141,7 +141,9 @@ impl<N: Fsm> FsmState<N> {
                 Ok(_) => return,
                 Err(Self::NOTIFYSTATE_DROP) => {
                     let ptr = self.data.swap(ptr::null_mut(), Ordering::AcqRel);
-                    unsafe { Box::from_raw(ptr) };
+                    unsafe {
+                        let _ = Box::from_raw(ptr);
+                    }
                     return;
                 }
                 Err(s) => s,
@@ -171,7 +173,9 @@ impl<N> Drop for FsmState<N> {
     fn drop(&mut self) {
         let ptr = self.data.swap(ptr::null_mut(), Ordering::SeqCst);
         if !ptr.is_null() {
-            unsafe { Box::from_raw(ptr) };
+            unsafe {
+                let _ = Box::from_raw(ptr);
+            }
         }
         self.state_cnt.fetch_sub(1, Ordering::Relaxed);
     }

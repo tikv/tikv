@@ -249,7 +249,7 @@ where
 {
     #[inline]
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        C::sort_compare(self.inner.as_ref(), other.inner.as_ref()).ok()
+        Some(self.cmp(other))
     }
 }
 

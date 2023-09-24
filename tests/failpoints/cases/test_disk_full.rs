@@ -35,7 +35,7 @@ fn get_fp(usage: DiskUsage, store_id: u64) -> String {
 
 // check the region new leader is elected.
 fn assert_region_leader_changed<T: Simulator>(
-    cluster: &mut Cluster<T>,
+    cluster: &Cluster<T>,
     region_id: u64,
     original_leader: u64,
 ) {
@@ -91,7 +91,7 @@ fn test_disk_full_leader_behaviors(usage: DiskUsage) {
     let new_last_index = cluster.raft_local_state(1, 1).last_index;
     assert_eq!(old_last_index, new_last_index);
 
-    assert_region_leader_changed(&mut cluster, 1, 1);
+    assert_region_leader_changed(&cluster, 1, 1);
     fail::remove(get_fp(usage, 1));
     cluster.must_transfer_leader(1, new_peer(1, 1));
     fail::cfg(get_fp(usage, 1), "return").unwrap();
@@ -199,7 +199,7 @@ fn test_disk_full_txn_behaviors(usage: DiskUsage) {
         DiskFullOpt::NotAllowedOnFull,
     );
     assert!(res.get_region_error().has_disk_full());
-    assert_region_leader_changed(&mut cluster, 1, 1);
+    assert_region_leader_changed(&cluster, 1, 1);
 
     fail::remove(get_fp(usage, 1));
     cluster.must_transfer_leader(1, new_peer(1, 1));
@@ -393,7 +393,7 @@ fn test_disk_full_followers_with_hibernate_regions() {
 
 // check the region new leader is elected.
 fn assert_region_merged<T: Simulator>(
-    cluster: &mut Cluster<T>,
+    cluster: &Cluster<T>,
     left_region_key: &[u8],
     right_region_key: &[u8],
 ) {

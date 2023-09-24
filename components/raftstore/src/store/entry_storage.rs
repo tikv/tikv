@@ -1310,14 +1310,14 @@ pub mod tests {
         // Test the initial data structure size.
         let (tx, rx) = mpsc::sync_channel(8);
         let mut cache = EntryCache::new_with_cb(move |c: i64| tx.send(c).unwrap());
-        assert_eq!(rx.try_recv().unwrap(), 896);
+        assert_eq!(rx.try_recv().unwrap(), 0);
 
         cache.append(
             0,
             0,
             &[new_padded_entry(101, 1, 1), new_padded_entry(102, 1, 2)],
         );
-        assert_eq!(rx.try_recv().unwrap(), 3);
+        assert_eq!(rx.try_recv().unwrap(), 419);
 
         cache.prepend(vec![new_padded_entry(100, 1, 1)]);
         assert_eq!(rx.try_recv().unwrap(), 1);
@@ -1343,7 +1343,7 @@ pub mod tests {
         // Test trace a dangle entry.
         let cached_entries = CachedEntries::new(vec![new_padded_entry(100, 1, 1)]);
         cache.trace_cached_entries(cached_entries);
-        assert_eq!(rx.try_recv().unwrap(), 1);
+        assert_eq!(rx.try_recv().unwrap(), 97);
 
         // Test trace an entry which is still in cache.
         let cached_entries = CachedEntries::new(vec![new_padded_entry(102, 3, 5)]);
@@ -1370,7 +1370,7 @@ pub mod tests {
         assert_eq!(rx.try_recv().unwrap(), -7);
 
         drop(cache);
-        assert_eq!(rx.try_recv().unwrap(), -896);
+        assert_eq!(rx.try_recv().unwrap(), -512);
     }
 
     #[test]

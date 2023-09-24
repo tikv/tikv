@@ -63,14 +63,14 @@ impl KeyEntry {
 
 impl PartialOrd for KeyEntry {
     fn partial_cmp(&self, rhs: &KeyEntry) -> Option<Ordering> {
-        // BinaryHeap is max heap, so we have to reverse order to get a min heap.
-        Some(self.key.cmp(&rhs.key).reverse())
+        Some(self.cmp(rhs))
     }
 }
 
 impl Ord for KeyEntry {
     fn cmp(&self, rhs: &KeyEntry) -> Ordering {
-        self.partial_cmp(rhs).unwrap()
+        // BinaryHeap is max heap, so we have to reverse order to get a min heap.
+        self.key.cmp(&rhs.key).reverse()
     }
 }
 
@@ -278,7 +278,7 @@ where
         region: &Region,
         bucket_ranges: &Vec<BucketRange>,
     ) {
-        for (mut bucket, bucket_range) in &mut buckets.iter_mut().zip(bucket_ranges) {
+        for (bucket, bucket_range) in &mut buckets.iter_mut().zip(bucket_ranges) {
             let mut bucket_region = region.clone();
             bucket_region.set_start_key(bucket_range.0.clone());
             bucket_region.set_end_key(bucket_range.1.clone());

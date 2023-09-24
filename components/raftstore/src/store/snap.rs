@@ -1281,7 +1281,7 @@ impl Write for Snapshot {
             }
 
             assert!(cf_file.size[self.cf_file_index] != 0);
-            let mut file_for_recving = cf_file
+            let file_for_recving = cf_file
                 .file_for_recving
                 .get_mut(self.cf_file_index)
                 .unwrap();

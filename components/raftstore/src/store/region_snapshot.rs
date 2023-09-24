@@ -414,7 +414,7 @@ mod tests {
             (b"a9".to_vec(), b"v9".to_vec()),
         ];
 
-        for &(ref k, ref v) in &base_data {
+        for (k, v) in &base_data {
             engines.kv.put(&data_key(k), v).unwrap();
         }
         let store = new_peer_storage(engines, &r);
@@ -458,11 +458,11 @@ mod tests {
         let mut data = vec![];
         {
             let db = &engines.kv;
-            for &(ref k, level) in &levels {
+            for (k, level) in &levels {
                 db.put(&data_key(k), k).unwrap();
                 db.flush_cfs(true).unwrap();
                 data.push((k.to_vec(), k.to_vec()));
-                db.compact_files_in_range(Some(&data_key(k)), Some(&data_key(k)), Some(level))
+                db.compact_files_in_range(Some(&data_key(k)), Some(&data_key(k)), Some(*level))
                     .unwrap();
             }
         }

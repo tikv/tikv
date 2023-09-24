@@ -72,10 +72,7 @@ where
         let approximate_keys = task.approximate_keys.unwrap_or_default();
         let region_id = task.region.get_id();
 
-        let peer_stat = self
-            .region_peers
-            .entry(region_id)
-            .or_insert_with(PeerStat::default);
+        let peer_stat = self.region_peers.entry(region_id).or_default();
         peer_stat.approximate_size = approximate_size;
         peer_stat.approximate_keys = approximate_keys;
 

@@ -628,7 +628,7 @@ impl<S: Snapshot> ScanPolicy<S> for LatestEntryPolicy {
 
 fn scan_latest_handle_lock<S: Snapshot, T>(
     current_user_key: Key,
-    cfg: &mut ScannerConfig<S>,
+    cfg: &ScannerConfig<S>,
     cursors: &mut Cursors<S>,
     statistics: &mut Statistics,
 ) -> Result<HandleRes<T>> {
@@ -1624,7 +1624,7 @@ mod latest_kv_tests {
         must_prewrite_put(&mut engine, b"k4", b"v41", b"k4", 3);
         must_commit(&mut engine, b"k4", 3, 7);
 
-        for start_ts in (10..30).into_iter().step_by(2) {
+        for start_ts in (10..30).step_by(2) {
             must_prewrite_lock(&mut engine, b"k1", b"k1", start_ts);
             must_commit(&mut engine, b"k1", start_ts, start_ts + 1);
             must_prewrite_lock(&mut engine, b"k3", b"k1", start_ts);

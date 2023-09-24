@@ -179,6 +179,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> ScannerPool<T, E> {
         self.workers.spawn(fut);
     }
 
+    #[allow(clippy::needless_pass_by_ref_mut)]
     async fn get_snapshot(
         task: &mut ScanTask,
         raft_router: T,

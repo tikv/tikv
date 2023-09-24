@@ -441,7 +441,7 @@ impl From<kvrpcpb::Mutation> for Mutation {
 
 /// `OldValue` is used by cdc to read the previous value associated with some
 /// key during the prewrite process.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Default, Clone, PartialEq)]
 pub enum OldValue {
     /// A real `OldValue`.
     Value { value: Value },
@@ -450,16 +450,11 @@ pub enum OldValue {
     /// `None` means we don't found a previous value.
     None,
     /// The user doesn't care about the previous value.
+    #[default]
     Unspecified,
     /// Not sure whether the old value exists or not. users can seek CF_WRITE to
     /// the give position to take a look.
     SeekWrite(Key),
-}
-
-impl Default for OldValue {
-    fn default() -> Self {
-        OldValue::Unspecified
-    }
 }
 
 impl OldValue {
