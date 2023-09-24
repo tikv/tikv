@@ -34,7 +34,7 @@ fn new_batch_split_region_request(
     req
 }
 
-fn must_split(region_id: u64, req: RaftCmdRequest, router: &mut TestRouter) {
+fn must_split(region_id: u64, req: RaftCmdRequest, router: &TestRouter) {
     let (msg, sub) = PeerMsg::raft_command(req);
     router.send(region_id, msg).unwrap();
     block_on(sub.result()).unwrap();
@@ -44,7 +44,7 @@ fn must_split(region_id: u64, req: RaftCmdRequest, router: &mut TestRouter) {
     thread::sleep(Duration::from_secs(1));
 }
 
-fn put(router: &mut TestRouter, region_id: u64, key: &[u8]) -> RaftCmdResponse {
+fn put(router: &TestRouter, region_id: u64, key: &[u8]) -> RaftCmdResponse {
     let mut req = router.new_request_for(region_id);
 
     let mut put_req = Request::default();
@@ -63,7 +63,7 @@ fn put(router: &mut TestRouter, region_id: u64, key: &[u8]) -> RaftCmdResponse {
 // Split the region according to the parameters
 // return the updated original region
 fn split_region(
-    router: &mut TestRouter,
+    router: &TestRouter,
     region: metapb::Region,
     peer: metapb::Peer,
     split_region_id: u64,
@@ -128,7 +128,7 @@ fn split_region(
 fn test_split() {
     let cluster = Cluster::default();
     let store_id = cluster.node(0).id();
-    let mut router = cluster.router(0);
+    let router = cluster.router(0);
     // let factory = cluster.node(0).tablet_factory();
 
     let region_id = 2;
@@ -140,7 +140,7 @@ fn test_split() {
     //   -> Region 2    ["", "k22"] peer(1, 3)
     //      Region 1000 ["k22", ""] peer(1, 10)
     let (left, right) = split_region(
-        &mut router,
+        &router,
         region,
         peer.clone(),
         1000,
@@ -155,7 +155,7 @@ fn test_split() {
     //   -> Region 2    ["", "k11"]    peer(1, 3)
     //      Region 1001 ["k11", "k22"] peer(1, 11)
     let _ = split_region(
-        &mut router,
+        &router,
         left,
         peer,
         1001,
@@ -170,7 +170,7 @@ fn test_split() {
     //   -> Region 1000 ["k22", "k33"] peer(1, 10)
     //      Region 1002 ["k33", ""]    peer(1, 12)
     let _ = split_region(
-        &mut router,
+        &router,
         right,
         new_peer(store_id, 10),
         1002,

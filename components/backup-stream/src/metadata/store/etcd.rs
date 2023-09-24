@@ -445,7 +445,7 @@ impl EtcdStore {
         let cond = Self::to_compare(txn.cond);
 
         let mut leases_needed = Self::collect_leases_needed(&txn.success);
-        leases_needed.extend(Self::collect_leases_needed(&txn.failure).into_iter());
+        leases_needed.extend(Self::collect_leases_needed(&txn.failure));
         let leases = Self::make_leases(cli, leases_needed).await?;
         let success = Self::to_txn(&mut txn.success.ops, &leases);
         let failure = Self::to_txn(&mut txn.failure.ops, &leases);

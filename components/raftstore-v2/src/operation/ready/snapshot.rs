@@ -61,9 +61,7 @@ impl PartialEq for SnapState {
         match (self, other) {
             (&SnapState::Relax, &SnapState::Relax)
             | (&SnapState::Generating { .. }, &SnapState::Generating { .. }) => true,
-            (&SnapState::Generated(ref snap1), &SnapState::Generated(ref snap2)) => {
-                *snap1 == *snap2
-            }
+            (SnapState::Generated(snap1), SnapState::Generated(snap2)) => *snap1 == *snap2,
             _ => false,
         }
     }

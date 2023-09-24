@@ -82,7 +82,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> ScannerPool<T, E> {
         Self {
             workers,
             raft_router,
-            _phantom: PhantomData::default(),
+            _phantom: PhantomData,
         }
     }
 
