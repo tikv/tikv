@@ -2592,9 +2592,134 @@ def RaftWaterfall() -> RowPanel:
 
 def RaftIO() -> RowPanel:
     layout = Layout(title="Raft IO")
+
+    def heatmap_panel_graph_panel_pairs(
+        heatmap_title: str,
+        heatmap_description: str,
+        graph_title: str,
+        graph_description: str,
+        yaxis_format: str,
+        metric: str,
+        label_selectors=[],
+    ):
+        return [
+            heatmap_panel(
+                title=heatmap_title,
+                description=heatmap_description,
+                yaxis=yaxis(format=yaxis_format),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            f"{metric}_bucket",
+                            label_selectors=label_selectors,
+                            by_labels=["le"],
+                        ),
+                    ),
+                ],
+            ),
+            graph_panel(
+                title=graph_title,
+                description=graph_description,
+                yaxes=yaxes(left_format=yaxis_format),
+                targets=[
+                    target(
+                        expr=expr_histogram_quantile(
+                            0.99,
+                            f"{metric}",
+                            label_selectors=label_selectors,
+                            by_labels=["instance"],
+                        ),
+                        legend_format="{{instance}}",
+                    ),
+                ],
+            ),
+        ]
+
+    layout.row(
+        heatmap_panel_graph_panel_pairs(
+            heatmap_title="Process ready duration",
+            heatmap_description="The time consumed for peer processes to be ready in Raft",
+            graph_title="99% Process ready duration per server",
+            graph_description="The time consumed for peer processes to be ready in Raft",
+            yaxis_format=UNITS.SECONDS,
+            metric="tikv_raftstore_raft_process_duration_secs",
+            label_selectors=['type="ready"'],
+        )
+    )
+    layout.row(
+        heatmap_panel_graph_panel_pairs(
+            heatmap_title="Store write loop duration",
+            heatmap_description="The time duration of store write loop when store-io-pool-size is not zero.",
+            graph_title="99% Store write loop duration per server",
+            graph_description="The time duration of store write loop on each TiKV instance when store-io-pool-size is not zero.",
+            yaxis_format=UNITS.SECONDS,
+            metric="tikv_raftstore_store_write_loop_duration_seconds",
+        )
+    )
+    layout.row(
+        heatmap_panel_graph_panel_pairs(
+            heatmap_title="Append log duration",
+            heatmap_description="The time consumed when Raft appends log",
+            graph_title="99% Commit log duration per server",
+            graph_description="The time consumed when Raft commits log on each TiKV instance",
+            yaxis_format=UNITS.SECONDS,
+            metric="tikv_raftstore_append_log_duration_seconds",
+        )
+    )
+    layout.row(
+        heatmap_panel_graph_panel_pairs(
+            heatmap_title="Commit log duration",
+            heatmap_description="The time consumed when Raft commits log",
+            graph_title="99% Commit log duration per server",
+            graph_description="The time consumed when Raft commits log on each TiKV instance",
+            yaxis_format=UNITS.SECONDS,
+            metric="tikv_raftstore_commit_log_duration_seconds",
+        )
+    )
+    layout.row(
+        heatmap_panel_graph_panel_pairs(
+            heatmap_title="Apply log duration",
+            heatmap_description="The time consumed when Raft applies log",
+            graph_title="99% Apply log duration per server",
+            graph_description="The time consumed for Raft to apply logs per TiKV instance",
+            yaxis_format=UNITS.SECONDS,
+            metric="tikv_raftstore_apply_log_duration_seconds",
+        )
+    )
     layout.row(
         [
-            # graph_panel()
+            graph_panel(
+                title="Store io task reschedule",
+                description="The throughput of disk write per IO type",
+                targets=[
+                    target(
+                        expr=expr_sum(
+                            "tikv_raftstore_io_reschedule_region_total",
+                        ),
+                        legend_format="rechedule-{{instance}}",
+                    ),
+                    target(
+                        expr=expr_sum(
+                            "tikv_raftstore_io_reschedule_pending_tasks_total",
+                        ),
+                        legend_format="pending-task-{{instance}}",
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="99% Write task block duration per server",
+                description="The time consumed when store write task block on each TiKV instance",
+                yaxes=yaxes(left_format=UNITS.SECONDS),
+                targets=[
+                    target(
+                        expr=expr_histogram_quantile(
+                            0.99,
+                            "tikv_raftstore_store_write_msg_block_wait_duration_seconds",
+                        ),
+                        legend_format="{{instance}}",
+                    ),
+                ],
+            ),
         ]
     )
     return layout.row_panel
