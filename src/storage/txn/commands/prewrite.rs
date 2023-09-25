@@ -748,6 +748,11 @@ impl<K: PrewriteKind> Prewriter<K> {
                 new_acquired_locks,
                 lock_guards,
                 response_policy: ResponsePolicy::OnApplied,
+                known_txn_status: if !one_pc_commit_ts.is_zero() {
+                    vec![(self.start_ts, one_pc_commit_ts)]
+                } else {
+                    vec![]
+                },
             }
         } else {
             // Skip write stage if some keys are locked.
@@ -768,6 +773,7 @@ impl<K: PrewriteKind> Prewriter<K> {
                 new_acquired_locks: vec![],
                 lock_guards: vec![],
                 response_policy: ResponsePolicy::OnApplied,
+                known_txn_status: vec![],
             }
         };
 

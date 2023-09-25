@@ -819,6 +819,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         pipelined: bool,
         async_apply_prewrite: bool,
         new_acquired_locks: Vec<kvrpcpb::LockInfo>,
+        known_txn_status: Vec<(TimeStamp, TimeStamp)>,
         tag: CommandKind,
         metadata: TaskMetadata<'_>,
         sched_details: &SchedulerDetails,
@@ -885,6 +886,13 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         }
 
         self.on_acquired_locks_finished(metadata, new_acquired_locks);
+
+        if !known_txn_status.is_empty() {
+            let now = std::time::SystemTime::now();
+            for (start_ts, commit_ts) in known_txn_status {
+                self.inner.txn_status_cache.insert(start_ts, commit_ts, now);
+            }
+        }
 
         if do_wake_up {
             let woken_up_resumable_lock_requests = tctx.woken_up_resumable_lock_requests;
@@ -1333,6 +1341,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             new_acquired_locks,
             lock_guards,
             response_policy,
+            known_txn_status,
         } = match deadline
             .check()
             .map_err(StorageError::from)
@@ -1411,6 +1420,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                 false,
                 false,
                 new_acquired_locks,
+                known_txn_status,
                 tag,
                 metadata,
                 sched_details,
@@ -1446,6 +1456,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                 false,
                 false,
                 new_acquired_locks,
+                known_txn_status,
                 tag,
                 metadata,
                 sched_details,
@@ -1641,6 +1652,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                         pipelined,
                         is_async_apply_prewrite,
                         new_acquired_locks,
+                        known_txn_status,
                         tag,
                         metadata,
                         sched_details,

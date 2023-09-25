@@ -1,9 +1,6 @@
 // Copyright 2023 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{
-    sync::Arc,
-    time::{SystemTime, UNIX_EPOCH},
-};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use crossbeam::utils::CachePadded;
 use parking_lot::RwLock;
@@ -12,8 +9,6 @@ use tikv_util::{
     lru::{CountTracker, GetTailKV, LruCache},
 };
 use txn_types::TimeStamp;
-
-use crate::storage::{lock_manager::WaitTimeout::Default, ProcessResult::TxnStatus};
 
 const TXN_STATUS_CACHE_BUCKETS: usize = 128;
 
@@ -136,6 +131,7 @@ mod tests {
                 (current_time_shift + 1).into(),
                 now + Duration::from_millis(current_time_shift),
             );
+            current_time_shift += 1;
         });
         test::black_box(&c);
     }
