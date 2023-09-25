@@ -178,6 +178,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             self.region_id() == 2,
             |_| {}
         );
+        fail::fail_point!(
+            "ask_target_peer_to_commit_merge_store_1",
+            store_ctx.store_id == 1,
+            |_| {}
+        );
         let state = self.applied_merge_state().unwrap();
         let target = state.get_target();
         let target_id = target.get_id();
@@ -347,6 +352,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                         return;
                     }
                 }
+                fail::fail_point!(
+                    "on_propose_commit_merge_fail_store_1",
+                    store_ctx.store_id == 1,
+                    |_| {}
+                );
                 let _ = store_ctx
                     .router
                     .force_send(source_id, PeerMsg::RejectCommitMerge { index });
