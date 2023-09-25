@@ -239,6 +239,10 @@ impl ResourceGroupManager {
         rg: &str,
         request_source: &str,
     ) -> Option<Arc<ResourceLimiter>> {
+        fail_point!("only_check_source_task_name", |name| {
+            assert_eq!(name.clone().unwrap(), request_source.to_string());
+            None
+        });
         if let Some(group) = self.resource_groups.get(rg) {
             if !group.fallback_default {
                 return group.get_resource_limiter(request_source);
