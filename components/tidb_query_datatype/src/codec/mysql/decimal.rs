@@ -3566,7 +3566,7 @@ mod tests {
         for (lhs_str, rhs_str, div_exp) in div_cases {
             let lhs: Decimal = lhs_str.parse().unwrap();
             let rhs: Decimal = rhs_str.parse().unwrap();
-            let res = (lhs / rhs).unwrap().map(|d| d.to_string());
+            let res = (&lhs / &rhs).unwrap().map(|d| d.to_string());
             assert_eq!(res, div_exp.map(|s| s.to_owned()))
         }
 
@@ -3574,7 +3574,7 @@ mod tests {
         for (lhs_str, rhs_str, rem_exp) in rem_cases {
             let lhs: Decimal = lhs_str.parse().unwrap();
             let rhs: Decimal = rhs_str.parse().unwrap();
-            let res = (lhs % rhs).unwrap().map(|d| d.to_string());
+            let res = (&lhs % &rhs).unwrap().map(|d| d.to_string());
             assert_eq!(res, rem_exp.map(|s| s.to_owned()))
         }
     }
