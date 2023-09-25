@@ -1696,7 +1696,7 @@ impl Decimal {
     fn div(&self, rhs: &Decimal, frac_incr: u8) -> Option<Res<Decimal>> {
         let result_frac_cnt =
             cmp::min(self.result_frac_cnt.saturating_add(frac_incr), MAX_FRACTION);
-            let mut res = do_div_mod_impl(self, rhs, frac_incr, false, Some(result_frac_cnt));
+        let mut res = do_div_mod_impl(self, rhs, frac_incr, false, Some(result_frac_cnt));
         if let Some(ref mut dec) = res {
             dec.result_frac_cnt = result_frac_cnt;
         }
