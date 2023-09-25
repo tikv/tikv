@@ -686,7 +686,7 @@ where
                                     tracker.metrics.read_index_propose_wait_nanos as f64
                                         / 1_000_000_000.0,
                                 );
-                            // snapshot may be hanlded by lease read in raftstore
+                            // snapshot may be handled by lease read in raftstore
                             if tracker.metrics.read_index_confirm_wait_nanos > 0 {
                                 ASYNC_REQUESTS_DURATIONS_VEC
                                     .snapshot_read_index_confirm

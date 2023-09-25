@@ -11,7 +11,7 @@ use test_raftstore::{
     new_learner_peer, new_peer, sleep_ms, Filter, FilterFactory, Simulator as S1,
 };
 use test_raftstore_v2::Simulator as S2;
-use tikv_util::{time::Instant, HandyRwLock};
+use tikv_util::{config::ReadableDuration, time::Instant, HandyRwLock};
 
 struct ForwardFactory {
     node_id: u64,
@@ -64,6 +64,7 @@ fn test_gc_peer_tiflash_engine() {
     let mut cluster_v1 = test_raftstore::new_node_cluster(1, 2);
     let mut cluster_v2 = test_raftstore_v2::new_node_cluster(1, 2);
     cluster_v1.cfg.raft_store.enable_v2_compatible_learner = true;
+    cluster_v2.cfg.raft_store.gc_peer_check_interval = ReadableDuration::millis(500);
     cluster_v1.pd_client.disable_default_operator();
     cluster_v2.pd_client.disable_default_operator();
     let r11 = cluster_v1.run_conf_change();
@@ -144,6 +145,7 @@ fn test_gc_peer_tiflash_engine() {
 fn test_gc_removed_peer() {
     let mut cluster = test_raftstore::new_node_cluster(1, 2);
     cluster.cfg.raft_store.enable_v2_compatible_learner = true;
+    cluster.cfg.raft_store.gc_peer_check_interval = ReadableDuration::millis(500);
     cluster.pd_client.disable_default_operator();
     let region_id = cluster.run_conf_change();
 
