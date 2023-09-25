@@ -110,7 +110,7 @@ const RAFT_ENGINE_MEMORY_LIMIT_RATE: f64 = 0.15;
 const WRITE_BUFFER_MEMORY_LIMIT_RATE: f64 = 0.2;
 // Too large will increase Raft Engine memory usage.
 const WRITE_BUFFER_MEMORY_LIMIT_MAX: u64 = ReadableSize::gb(8).0;
-const DEFAULT_LOCK_BUFFER_MEMORY_LIMIT: ReadableSize = ReadableSize::mb(32);
+const DEFAULT_LOCK_BUFFER_MEMORY_LIMIT: ReadableSize = ReadableSize::mb(128);
 
 /// Configs that actually took effect in the last run
 pub const LAST_CONFIG_FILE: &str = "last_tikv.toml";
@@ -1403,7 +1403,7 @@ impl DbConfig {
                 self.writecf.max_compactions.get_or_insert(1);
                 self.lockcf
                     .write_buffer_size
-                    .get_or_insert(ReadableSize::mb(4));
+                    .get_or_insert(ReadableSize::mb(32));
                 self.lockcf
                     .write_buffer_limit
                     .get_or_insert(DEFAULT_LOCK_BUFFER_MEMORY_LIMIT);
