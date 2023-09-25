@@ -439,3 +439,29 @@ impl<ER: RaftEngine> RecoverData for RecoveryService<ER> {
         self.threads.spawn_ok(send_task);
     }
 }
+
+#[cfg(test)]
+mod test {
+    use std::{sync::atomic::Ordering, time::Duration};
+
+    use super::RecoverRegionState;
+
+    #[test]
+    fn test_state() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .unwrap();
+        let (state, task) = RecoverRegionState::wrap_task(futures::future::pending());
+        let hnd = rt.spawn(task);
+        state.abort.abort();
+        rt.block_on(async { tokio::time::timeout(Duration::from_secs(10), hnd).await })
+            .unwrap()
+            .unwrap();
+
+        let (state, task) = RecoverRegionState::wrap_task(futures::future::ready(()));
+        assert_eq!(state.finished.load(Ordering::SeqCst), false);
+        rt.block_on(task);
+        assert_eq!(state.finished.load(Ordering::SeqCst), true);
+    }
+}
