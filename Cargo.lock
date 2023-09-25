@@ -3927,17 +3927,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "num-derive"
-version = "0.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9e6a0fd4f737c707bd9086cc16c925f294943eb62eb71499e9fd4cf71f8b9f4e"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.18",
-]
-
-[[package]]
 name = "num-format"
 version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4766,8 +4755,8 @@ dependencies = [
 
 [[package]]
 name = "raft-engine"
-version = "0.4.1"
-source = "git+https://github.com/tikv/raft-engine.git#fa56f891fdf0b1cb5b7849b7bee3c5dadbb96103"
+version = "0.3.0"
+source = "git+https://github.com/tikv/raft-engine.git#de3ad04a2db9cdf795b1c82d7413b9b53bac92a8"
 dependencies = [
  "byteorder",
  "crc32fast",
@@ -4783,7 +4772,7 @@ dependencies = [
  "lz4-sys",
  "memmap2 0.7.0",
  "nix 0.26.2",
- "num-derive 0.4.0",
+ "num-derive",
  "num-traits",
  "parking_lot 0.12.1",
  "prometheus",
@@ -4800,8 +4789,8 @@ dependencies = [
 
 [[package]]
 name = "raft-engine-ctl"
-version = "0.4.1"
-source = "git+https://github.com/tikv/raft-engine.git#fa56f891fdf0b1cb5b7849b7bee3c5dadbb96103"
+version = "0.3.0"
+source = "git+https://github.com/tikv/raft-engine.git#de3ad04a2db9cdf795b1c82d7413b9b53bac92a8"
 dependencies = [
  "clap 3.1.6",
  "env_logger 0.10.0",
@@ -6891,7 +6880,7 @@ dependencies = [
  "match-template",
  "nom 7.1.0",
  "num 0.3.0",
- "num-derive 0.3.0",
+ "num-derive",
  "num-traits",
  "ordered-float",
  "protobuf",
