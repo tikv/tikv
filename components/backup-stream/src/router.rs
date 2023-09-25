@@ -731,6 +731,7 @@ impl TempFileKey {
         }
     }
 
+    #[allow(deprecated)]
     fn format_date_time(ts: u64, t: FormatType) -> impl Display {
         use chrono::prelude::*;
         let millis = TimeStamp::physical(ts.into());

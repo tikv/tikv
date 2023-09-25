@@ -212,6 +212,7 @@ fn test_serde_custom_tikv_config() {
         max_leader_missing_duration: ReadableDuration::hours(12),
         abnormal_leader_missing_duration: ReadableDuration::hours(6),
         peer_stale_state_check_interval: ReadableDuration::hours(2),
+        gc_peer_check_interval: ReadableDuration::days(1),
         leader_transfer_max_log_lag: 123,
         snap_apply_batch_size: ReadableSize::mb(12),
         snap_apply_copy_symlink: true,
