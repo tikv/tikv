@@ -826,6 +826,7 @@ pub mod test_utils {
     use crate::storage::kv::RocksEngine as StorageRocksEngine;
 
     /// Do a global GC with the given safe point.
+    #[allow(clippy::needless_pass_by_ref_mut)]
     pub fn gc_by_compact(engine: &mut StorageRocksEngine, _: &[u8], safe_point: u64) {
         let engine = engine.get_rocksdb();
         // Put a new key-value pair to ensure compaction can be triggered correctly.

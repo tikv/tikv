@@ -239,6 +239,10 @@ impl ResourceGroupManager {
         rg: &str,
         request_source: &str,
     ) -> Option<Arc<ResourceLimiter>> {
+        fail_point!("only_check_source_task_name", |name| {
+            assert_eq!(name.clone().unwrap(), request_source.to_string());
+            None
+        });
         if let Some(group) = self.resource_groups.get(rg) {
             if !group.fallback_default {
                 return group.get_resource_limiter(request_source);
@@ -307,8 +311,8 @@ pub struct ResourceController {
     // 1. the priority factor is calculate based on read/write RU settings.
     // 2. for read request, we increase a constant virtual time delta at each `get_priority` call
     //    because the cost can't be calculated at start, so we only increase a constant delta and
-    //    increase the real cost after task is executed; but don't increase it at write because
-    //    the cost is known so we just pre-consume it.
+    //    increase the real cost after task is executed; but don't increase it at write because the
+    //    cost is known so we just pre-consume it.
     is_read: bool,
     // Track the maximum ru quota used to calculate the factor of each resource group.
     // factor = max_ru_quota / group_ru_quota * 10.0

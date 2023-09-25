@@ -57,6 +57,7 @@ fn test_write_buffer_manager() {
     }
 }
 
+#[rustfmt::skip]
 // The test mocks the senario before https://github.com/tikv/rocksdb/pull/347:
 // note: before rocksdb/pull/347, lock is called before on_memtable_sealed.
 // Case:

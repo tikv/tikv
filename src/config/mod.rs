@@ -1482,7 +1482,7 @@ impl DbConfig {
             opts.set_paranoid_checks(b);
         }
         if for_engine == EngineType::RaftKv {
-            opts.set_info_log(RocksdbLogger::default());
+            opts.set_info_log(RocksdbLogger);
         }
         opts.set_info_log_level(self.info_log_level.into());
         if self.titan.enabled {
@@ -1858,7 +1858,7 @@ impl RaftDbConfig {
         opts.set_max_log_file_size(self.info_log_max_size.0);
         opts.set_log_file_time_to_roll(self.info_log_roll_time.as_secs());
         opts.set_keep_log_file_num(self.info_log_keep_log_file_num);
-        opts.set_info_log(RaftDbLogger::default());
+        opts.set_info_log(RaftDbLogger);
         opts.set_info_log_level(self.info_log_level.into());
         opts.set_max_subcompactions(self.max_sub_compactions);
         opts.set_writable_file_max_buffer_size(self.writable_file_max_buffer_size.0 as i32);
@@ -2015,7 +2015,7 @@ impl<T: ConfigurableDb + Send + Sync> ConfigManager for DbConfigManger<T> {
         self.cfg.update(change.clone())?;
         let change_str = format!("{:?}", change);
         let mut change: Vec<(String, ConfigValue)> = change.into_iter().collect();
-        let cf_config = change.drain_filter(|(name, _)| name.ends_with("cf"));
+        let cf_config = change.extract_if(|(name, _)| name.ends_with("cf"));
         for (cf_name, cf_change) in cf_config {
             if let ConfigValue::Module(mut cf_change) = cf_change {
                 // defaultcf -> default
@@ -2031,6 +2031,15 @@ impl<T: ConfigurableDb + Send + Sync> ConfigManager for DbConfigManger<T> {
                         cf_change.insert(name, value);
                     }
                 }
+                if let Some(f) = cf_change.remove("write_buffer_limit") {
+                    if cf_name != CF_LOCK {
+                        return Err(
+                            "cf write buffer manager is only supportted for lock cf now".into()
+                        );
+                    }
+                    let size: ReadableSize = f.into();
+                    self.db.set_cf_flush_size(cf_name, size.0 as usize)?;
+                }
                 if !cf_change.is_empty() {
                     let cf_change = config_value_to_string(cf_change.into_iter().collect());
                     let cf_change_slice = config_to_slice(&cf_change);
@@ -2040,7 +2049,7 @@ impl<T: ConfigurableDb + Send + Sync> ConfigManager for DbConfigManger<T> {
         }
 
         if let Some(rate_bytes_config) = change
-            .drain_filter(|(name, _)| name == "rate_bytes_per_sec")
+            .extract_if(|(name, _)| name == "rate_bytes_per_sec")
             .next()
         {
             let rate_bytes_per_sec: ReadableSize = rate_bytes_config.1.into();
@@ -2049,7 +2058,7 @@ impl<T: ConfigurableDb + Send + Sync> ConfigManager for DbConfigManger<T> {
         }
 
         if let Some(rate_bytes_config) = change
-            .drain_filter(|(name, _)| name == "rate_limiter_auto_tuned")
+            .extract_if(|(name, _)| name == "rate_limiter_auto_tuned")
             .next()
         {
             let rate_limiter_auto_tuned: bool = rate_bytes_config.1.into();
@@ -2058,7 +2067,7 @@ impl<T: ConfigurableDb + Send + Sync> ConfigManager for DbConfigManger<T> {
         }
 
         if let Some(size) = change
-            .drain_filter(|(name, _)| name == "write_buffer_limit")
+            .extract_if(|(name, _)| name == "write_buffer_limit")
             .next()
         {
             let size: ReadableSize = size.1.into();
@@ -2066,14 +2075,14 @@ impl<T: ConfigurableDb + Send + Sync> ConfigManager for DbConfigManger<T> {
         }
 
         if let Some(f) = change
-            .drain_filter(|(name, _)| name == "write_buffer_flush_oldest_first")
+            .extract_if(|(name, _)| name == "write_buffer_flush_oldest_first")
             .next()
         {
             self.db.set_flush_oldest_first(f.1.into())?;
         }
 
         if let Some(background_jobs_config) = change
-            .drain_filter(|(name, _)| name == "max_background_jobs")
+            .extract_if(|(name, _)| name == "max_background_jobs")
             .next()
         {
             let max_background_jobs: i32 = background_jobs_config.1.into();
@@ -2081,7 +2090,7 @@ impl<T: ConfigurableDb + Send + Sync> ConfigManager for DbConfigManger<T> {
         }
 
         if let Some(background_subcompactions_config) = change
-            .drain_filter(|(name, _)| name == "max_sub_compactions")
+            .extract_if(|(name, _)| name == "max_sub_compactions")
             .next()
         {
             let max_subcompactions: u32 = background_subcompactions_config.1.into();
@@ -2090,7 +2099,7 @@ impl<T: ConfigurableDb + Send + Sync> ConfigManager for DbConfigManger<T> {
         }
 
         if let Some(background_flushes_config) = change
-            .drain_filter(|(name, _)| name == "max_background_flushes")
+            .extract_if(|(name, _)| name == "max_background_flushes")
             .next()
         {
             let max_background_flushes: i32 = background_flushes_config.1.into();
@@ -2824,6 +2833,7 @@ pub struct BackupStreamConfig {
     pub initial_scan_pending_memory_quota: ReadableSize,
     #[online_config(skip)]
     pub initial_scan_rate_limit: ReadableSize,
+    pub initial_scan_concurrency: usize,
 }
 
 impl BackupStreamConfig {
@@ -2850,6 +2860,9 @@ impl BackupStreamConfig {
                 self.min_ts_interval
             )
             .into());
+        }
+        if self.initial_scan_concurrency == 0 {
+            return Err("the `initial_scan_concurrency` shouldn't be zero".into());
         }
         Ok(())
     }
@@ -2878,6 +2891,7 @@ impl Default for BackupStreamConfig {
             file_size_limit,
             initial_scan_pending_memory_quota: ReadableSize(quota_size as _),
             initial_scan_rate_limit: ReadableSize::mb(60),
+            initial_scan_concurrency: 6,
             temp_file_memory_quota: cache_size,
         }
     }
@@ -3000,6 +3014,7 @@ pub struct ResolvedTsConfig {
     #[online_config(skip)]
     pub scan_lock_pool_size: usize,
     pub memory_quota: ReadableSize,
+    pub incremental_scan_concurrency: usize,
 }
 
 impl ResolvedTsConfig {
@@ -3021,6 +3036,7 @@ impl Default for ResolvedTsConfig {
             advance_ts_interval: ReadableDuration::secs(20),
             scan_lock_pool_size: 2,
             memory_quota: ReadableSize::mb(256),
+            incremental_scan_concurrency: 6,
         }
     }
 }
@@ -5165,6 +5181,7 @@ mod tests {
         cfg.rocksdb.defaultcf.block_cache_size = Some(ReadableSize::mb(8));
         cfg.rocksdb.rate_bytes_per_sec = ReadableSize::mb(64);
         cfg.rocksdb.rate_limiter_auto_tuned = false;
+        cfg.rocksdb.lockcf.write_buffer_limit = Some(ReadableSize::mb(1));
         cfg.validate().unwrap();
         let (storage, cfg_controller, ..) = new_engines::<ApiV1>(cfg);
         let db = storage.get_engine().get_rocksdb();
@@ -5206,6 +5223,34 @@ mod tests {
             .unwrap();
         let flush_size = db.get_db_options().get_flush_size().unwrap();
         assert_eq!(flush_size, ReadableSize::mb(10).0);
+
+        cfg_controller
+            .update_config("rocksdb.lockcf.write-buffer-limit", "22MB")
+            .unwrap();
+        let cf_opt = db.get_options_cf("lock").unwrap();
+        let flush_size = cf_opt.get_flush_size().unwrap();
+        assert_eq!(flush_size, ReadableSize::mb(22).0);
+
+        cfg_controller
+            .update_config("rocksdb.lockcf.write-buffer-size", "102MB")
+            .unwrap();
+        let cf_opt = db.get_options_cf("lock").unwrap();
+        let bsize = cf_opt.get_write_buffer_size();
+        assert_eq!(bsize, ReadableSize::mb(102).0);
+
+        cfg_controller
+            .update_config("rocksdb.writecf.write-buffer-size", "102MB")
+            .unwrap();
+        let cf_opt = db.get_options_cf("write").unwrap();
+        let bsize = cf_opt.get_write_buffer_size();
+        assert_eq!(bsize, ReadableSize::mb(102).0);
+
+        cfg_controller
+            .update_config("rocksdb.defaultcf.write-buffer-size", "102MB")
+            .unwrap();
+        let cf_opt = db.get_options_cf("default").unwrap();
+        let bsize = cf_opt.get_write_buffer_size();
+        assert_eq!(bsize, ReadableSize::mb(102).0);
 
         // update some configs on default cf
         let cf_opts = db.get_options_cf(CF_DEFAULT).unwrap();
