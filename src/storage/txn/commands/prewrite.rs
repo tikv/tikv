@@ -6,7 +6,7 @@
 //! protobuf), but handling of the commands is similar. We therefore have a
 //! single type (Prewriter) to handle both kinds of prewrite.
 
-use std::mem;
+use std::{mem, time::UNIX_EPOCH};
 
 use engine_traits::CF_WRITE;
 use kvproto::kvrpcpb::{
@@ -24,8 +24,9 @@ use crate::storage::{
     kv::WriteData,
     lock_manager::LockManager,
     mvcc::{
-        has_data_in_range, Error as MvccError, ErrorInner as MvccErrorInner, MvccTxn,
-        Result as MvccResult, SnapshotReader, TxnCommitRecord,
+        has_data_in_range, metrics::MVCC_PREWRITE_REQUEST_REJECT_COUNTER_VEC, Error as MvccError,
+        ErrorInner as MvccErrorInner, MvccTxn, Result as MvccResult, SnapshotReader,
+        TxnCommitRecord,
     },
     txn::{
         actions::prewrite::{prewrite, CommitKind, TransactionKind, TransactionProperties},
@@ -33,7 +34,7 @@ use crate::storage::{
             Command, CommandExt, ReleasedLocks, ResponsePolicy, TypedCommand, WriteCommand,
             WriteContext, WriteResult,
         },
-        Error, ErrorInner, Result,
+        txn_status_cache, Error, ErrorInner, Result,
     },
     types::PrewriteResult,
     Context, Error as StorageError, ProcessResult, Snapshot,
@@ -489,6 +490,30 @@ impl<K: PrewriteKind> Prewriter<K> {
         snapshot: impl Snapshot,
         mut context: WriteContext<'_, impl LockManager>,
     ) -> Result<WriteResult> {
+        // Reject requests to transaction that has already been committed. But only for
+        // requests from new versions that supports passing sending timestamp.
+        if self.ctx.send_timestamp != 0 {
+            let now = std::time::SystemTime::now();
+            let now_millis = now.duration_since(UNIX_EPOCH).unwrap().as_millis();
+            if now_millis
+                >= (self.ctx.send_timestamp + txn_status_cache::REQ_MAX_FLYING_TIME_MILLIS) as u128
+            {
+                MVCC_PREWRITE_REQUEST_REJECT_COUNTER_VEC
+                    .max_flying_time_exceeded
+                    .inc();
+                return Err(box_err!("request max_flying_time limit exceeded"));
+            }
+            if let Some(commit_ts) = context.txn_status_cache.get(self.start_ts) {
+                MVCC_PREWRITE_REQUEST_REJECT_COUNTER_VEC.committed.inc();
+                return Err(MvccError(Box::new(MvccErrorInner::Committed {
+                    start_ts: self.start_ts,
+                    commit_ts,
+                    key: vec![],
+                }))
+                .into());
+            }
+        }
+
         self.kind
             .can_skip_constraint_check(&mut self.mutations, &snapshot, &mut context)?;
         self.check_max_ts_synced(&snapshot)?;

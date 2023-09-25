@@ -6,13 +6,15 @@ use crossbeam::utils::CachePadded;
 use parking_lot::RwLock;
 use tikv_util::{
     lru,
-    lru::{CountTracker, GetTailKV, LruCache},
+    lru::{GetTailKV, LruCache},
 };
 use txn_types::TimeStamp;
 
-const TXN_STATUS_CACHE_BUCKETS: usize = 128;
+use crate::storage::metrics::SCHED_TXN_STATUS_CACHE_SIZE;
 
-const REQ_MAX_FLYING_TIME_MILLIS: u64 = 30000;
+const TXN_STATUS_CACHE_SLOTS: usize = 128;
+
+pub const REQ_MAX_FLYING_TIME_MILLIS: u64 = 30000;
 
 struct CacheEntry {
     commit_ts: TimeStamp,
@@ -47,61 +49,89 @@ impl lru::EvictPolicy<TimeStamp, CacheEntry> for TxnStatusCacheEvictPolicy {
     }
 }
 
+struct TxnStatusCacheSlot {
+    cache: LruCache<TimeStamp, CacheEntry, lru::CountTracker, TxnStatusCacheEvictPolicy>,
+    last_check_size: usize,
+    last_check_capacity: usize,
+}
+
 pub struct TxnStatusCache {
-    slots: Vec<
-        CachePadded<
-            RwLock<LruCache<TimeStamp, CacheEntry, lru::CountTracker, TxnStatusCacheEvictPolicy>>,
-        >,
-    >,
+    slots: Vec<CachePadded<RwLock<TxnStatusCacheSlot>>>,
 }
 
 unsafe impl Sync for TxnStatusCache {}
 
 impl TxnStatusCache {
     pub fn new() -> Self {
-        Self::with_buckets_and_time_limit(TXN_STATUS_CACHE_BUCKETS, REQ_MAX_FLYING_TIME_MILLIS)
+        Self::with_slots_and_time_limit(TXN_STATUS_CACHE_SLOTS, REQ_MAX_FLYING_TIME_MILLIS)
     }
 
     #[cfg(test)]
     pub fn new_for_test() -> Self {
-        Self::with_buckets_and_time_limit(16, REQ_MAX_FLYING_TIME_MILLIS)
+        Self::with_slots_and_time_limit(16, REQ_MAX_FLYING_TIME_MILLIS)
     }
 
-    pub fn with_buckets_and_time_limit(buckets: usize, limit_millis: u64) -> Self {
-        Self {
-            slots: (0..buckets)
+    pub fn with_slots_and_time_limit(slots: usize, limit_millis: u64) -> Self {
+        let mut initial_capacity = 0;
+        let res = Self {
+            slots: (0..slots)
                 .map(|_| {
-                    RwLock::new(LruCache::new(
-                        64,
+                    let cache = LruCache::new(
+                        16,
                         0,
-                        CountTracker::default(),
+                        lru::CountTracker::default(),
                         TxnStatusCacheEvictPolicy { limit_millis },
-                    ))
+                    );
+                    let capacity = cache.internal_mem_capacity();
+                    initial_capacity += capacity;
+                    RwLock::new(TxnStatusCacheSlot {
+                        cache,
+                        last_check_size: 0,
+                        last_check_capacity: capacity,
+                    })
                     .into()
                 })
                 .collect(),
-        }
+        };
+        SCHED_TXN_STATUS_CACHE_SIZE
+            .allocated
+            .set(initial_capacity as i64);
+        res
     }
 
     fn slot_index(start_ts: TimeStamp) -> usize {
-        fxhash::hash(&start_ts) % TXN_STATUS_CACHE_BUCKETS
+        fxhash::hash(&start_ts) % TXN_STATUS_CACHE_SLOTS
     }
 
     pub fn insert(&self, start_ts: TimeStamp, commit_ts: TimeStamp, now: SystemTime) {
         let mut slot = self.slots[Self::slot_index(start_ts)].write();
         let insert_time = now.duration_since(UNIX_EPOCH).unwrap().as_millis() as u64;
-        slot.insert_if_not_exist(
+        slot.cache.insert_if_not_exist(
             start_ts,
             CacheEntry {
                 commit_ts,
                 insert_time,
             },
         );
+        let size = slot.cache.size();
+        let capacity = slot.cache.internal_mem_capacity();
+        // Update statistics.
+        // CAUTION: Assuming that only one TxnStatusCache instance is in a TiKV process.
+        SCHED_TXN_STATUS_CACHE_SIZE
+            .used
+            .add(size as i64 - slot.last_check_size as i64);
+        SCHED_TXN_STATUS_CACHE_SIZE
+            .allocated
+            .add(capacity as i64 - slot.last_check_capacity as i64);
+        slot.last_check_size = size;
+        slot.last_check_capacity = capacity;
     }
 
     pub fn get(&self, start_ts: TimeStamp) -> Option<TimeStamp> {
         let slot = self.slots[Self::slot_index(start_ts)].read();
-        slot.get_no_promote(&start_ts).map(|entry| entry.commit_ts)
+        slot.cache
+            .get_no_promote(&start_ts)
+            .map(|entry| entry.commit_ts)
     }
 }
 
@@ -114,8 +144,7 @@ mod tests {
     use super::*;
 
     fn bench_insert_impl(b: &mut test::Bencher, init_size: usize) {
-        let c =
-            TxnStatusCache::with_buckets_and_time_limit(TXN_STATUS_CACHE_BUCKETS, init_size as u64);
+        let c = TxnStatusCache::with_slots_and_time_limit(TXN_STATUS_CACHE_SLOTS, init_size as u64);
         let now = SystemTime::now();
         for i in 1..=init_size {
             c.insert(
@@ -137,8 +166,8 @@ mod tests {
     }
 
     fn bench_get_impl(b: &mut test::Bencher, init_size: usize) {
-        let c = TxnStatusCache::with_buckets_and_time_limit(
-            TXN_STATUS_CACHE_BUCKETS,
+        let c = TxnStatusCache::with_slots_and_time_limit(
+            TXN_STATUS_CACHE_SLOTS,
             REQ_MAX_FLYING_TIME_MILLIS,
         );
         let now = SystemTime::now();

@@ -36,6 +36,11 @@ make_static_metric! {
         write_not_loaded_skip
     }
 
+    pub label_enum MvccPrewriteRequestRejectReason {
+        max_flying_time_exceeded,
+        committed,
+    }
+
     pub struct MvccConflictCounterVec: IntCounter {
         "type" => MvccConflictKind,
     }
@@ -50,6 +55,10 @@ make_static_metric! {
 
     pub struct MvccPrewriteAssertionPerfCounterVec: IntCounter {
         "type" => MvccPrewriteAssertionPerfKind,
+    }
+
+    pub struct MvccPrewriteRequestRejectCounterVec: IntCounter {
+        "type" => MvccPrewriteRequestRejectReason,
     }
 }
 
@@ -100,6 +109,15 @@ lazy_static! {
             MvccPrewriteAssertionPerfCounterVec,
             "tikv_storage_mvcc_prewrite_assertion_perf",
             "Counter of assertion operations in transactions",
+            &["type"]
+        )
+        .unwrap()
+    };
+    pub static ref MVCC_PREWRITE_REQUEST_REJECT_COUNTER_VEC: MvccPrewriteRequestRejectCounterVec = {
+        register_static_int_counter_vec!(
+            MvccPrewriteRequestRejectCounterVec,
+            "tikv_storage_mvcc_prewrite_request_reject_counter",
+            "Counter of rejected prewrite requests",
             &["type"]
         )
         .unwrap()

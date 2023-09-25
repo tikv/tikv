@@ -262,6 +262,10 @@ where
     pub fn capacity(&self) -> usize {
         self.capacity
     }
+    #[inline]
+    pub fn internal_mem_capacity(&self) -> usize {
+        self.map.capacity()
+    }
 }
 
 impl<K, V> LruCache<K, V>
