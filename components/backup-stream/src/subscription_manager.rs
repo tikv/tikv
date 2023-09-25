@@ -3,10 +3,8 @@
 use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use engine_traits::KvEngine;
-use error_code::ErrorCodeExt;
 use futures::FutureExt;
 use kvproto::metapb::Region;
-use pd_client::PdClient;
 use raft::StateRole;
 use raftstore::{
     coprocessor::{ObserveHandle, ObserveId, RegionInfoProvider},
@@ -800,6 +798,7 @@ mod test {
         errors::Error,
         metadata::{store::SlashEtcStore, MetadataClient, StreamTask},
         router::{Router, RouterInner},
+        subscription_manager::{OOM_BACKOFF_BASE, OOM_BACKOFF_JITTER_SECS},
         subscription_track::{CheckpointType, SubscriptionTracer},
         utils::{self, CallbackWaitGroup},
         BackupStreamResolver, ObserveOp, Task,
@@ -921,6 +920,7 @@ mod test {
         task_start_ts: TimeStamp,
         handle: Option<Sender<ObserveOp>>,
         regions: RegionMem,
+        subs: SubscriptionTracer,
     }
 
     #[derive(Debug, Eq, PartialEq)]
@@ -934,13 +934,11 @@ mod test {
     impl ObserveEvent {
         fn of(op: &ObserveOp) -> Option<Self> {
             match op {
-                ObserveOp::Start { region, handle } => Some(Self::Start(region.id)),
+                ObserveOp::Start { region, .. } => Some(Self::Start(region.id)),
                 ObserveOp::Stop { region } => Some(Self::Stop(region.id)),
-                ObserveOp::NotifyStartObserveResult {
-                    region,
-                    handle,
-                    err,
-                } => Some(Self::StartResult(region.id, err.is_none())),
+                ObserveOp::NotifyStartObserveResult { region, err, .. } => {
+                    Some(Self::StartResult(region.id, err.is_none()))
+                }
                 ObserveOp::HighMemUsageWarning {
                     inconsistent_region_id,
                 } => Some(Self::HighMemUse(*inconsistent_region_id)),
@@ -1009,7 +1007,7 @@ mod test {
                 meta_cli,
                 range_router: Router(Arc::new(router)),
                 scheduler: scheduler.clone(),
-                subs,
+                subs: subs.clone(),
                 failure_count: Default::default(),
                 memory_manager,
                 messenger: tx.downgrade(),
@@ -1069,6 +1067,7 @@ mod test {
                 task_start_ts,
                 bg_tasks,
                 cancel,
+                subs,
             }
         }
 
@@ -1195,6 +1194,47 @@ mod test {
                 Start(1),
                 StartResult(2, true),
                 StartResult(1, true)
+            ]
+        );
+    }
+
+    #[test]
+    fn test_on_high_mem() {
+        let mut suite = Suite::new(FuncInitialScan(|_, _, _| Ok(Statistics::default())));
+        let _guard = suite.rt.enter();
+        tokio::time::pause();
+        suite.start_region(suite.region(1, 1, 1, b"a", b"b"));
+        suite.start_region(suite.region(2, 1, 1, b"b", b"c"));
+        suite.advance_ms(0);
+        let mut rs = suite.subs.current_regions();
+        rs.sort();
+        assert_eq!(rs, [1, 2]);
+        suite.wait_initial_scan_all_finish();
+        suite.run(ObserveOp::HighMemUsageWarning {
+            inconsistent_region_id: 1,
+        });
+        suite.advance_ms(0);
+        assert_eq!(suite.subs.current_regions(), [2]);
+        suite.advance_ms(
+            (OOM_BACKOFF_BASE + Duration::from_secs(OOM_BACKOFF_JITTER_SECS + 1)).as_millis() as _,
+        );
+        suite.wait_initial_scan_all_finish();
+        suite.wait_shutdown();
+        let mut rs = suite.subs.current_regions();
+        rs.sort();
+        assert_eq!(rs, [1, 2]);
+
+        use ObserveEvent::*;
+        assert_eq!(
+            &*suite.events.lock().unwrap(),
+            &[
+                Start(1),
+                Start(2),
+                StartResult(1, true),
+                StartResult(2, true),
+                HighMemUse(1),
+                Start(1),
+                StartResult(1, true),
             ]
         );
     }
