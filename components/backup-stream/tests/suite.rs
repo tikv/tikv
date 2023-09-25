@@ -30,12 +30,7 @@ use kvproto::{
 };
 use pd_client::PdClient;
 use protobuf::parse_from_bytes;
-<<<<<<< HEAD
 use raftstore::RegionInfoAccessor;
-=======
-use raftstore::{router::CdcRaftRouter, RegionInfoAccessor};
-use resolved_ts::LeadershipResolver;
->>>>>>> 9b76ac97e1 (log-bakcup: make initial scan asynchronous (#15541))
 use tempdir::TempDir;
 use test_pd_client::TestPdClient;
 use test_raftstore::{new_server_cluster, Cluster, ServerCluster};
@@ -57,15 +52,6 @@ pub type TestEndpoint = Endpoint<
     ErrorStore<SlashEtcStore>,
     RegionInfoAccessor,
     engine_test::kv::KvTestEngine,
-<<<<<<< HEAD
-    SimulateTransport<
-        raftstore::router::ServerRaftStoreRouter<
-            engine_test::kv::KvTestEngine,
-            engine_test::raft::RaftTestEngine,
-        >,
-    >,
-=======
->>>>>>> 9b76ac97e1 (log-bakcup: make initial scan asynchronous (#15541))
     TestPdClient,
 >;
 

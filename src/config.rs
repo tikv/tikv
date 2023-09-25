@@ -2563,11 +2563,7 @@ impl Default for BackupStreamConfig {
             file_size_limit: ReadableSize::mb(256),
             initial_scan_pending_memory_quota: ReadableSize(quota_size as _),
             initial_scan_rate_limit: ReadableSize::mb(60),
-<<<<<<< HEAD:src/config.rs
-=======
             initial_scan_concurrency: 6,
-            temp_file_memory_quota: cache_size,
->>>>>>> 9b76ac97e1 (log-bakcup: make initial scan asynchronous (#15541)):src/config/mod.rs
         }
     }
 }

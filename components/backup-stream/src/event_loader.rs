@@ -5,15 +5,8 @@ use std::{marker::PhantomData, sync::Arc, time::Duration};
 use engine_traits::{KvEngine, CF_DEFAULT, CF_WRITE};
 use kvproto::{kvrpcpb::ExtraOp, metapb::Region, raft_cmdpb::CmdType};
 use raftstore::{
-<<<<<<< HEAD
-    coprocessor::{ObserveHandle, RegionInfoProvider},
-    router::RaftStoreRouter,
-    store::{fsm::ChangeObserver, Callback, SignificantMsg},
-=======
-    coprocessor::ObserveHandle,
-    router::CdcHandle,
-    store::{fsm::ChangeObserver, Callback},
->>>>>>> 9b76ac97e1 (log-bakcup: make initial scan asynchronous (#15541))
+    coprocessor::{ObserveHandle},
+    store::{fsm::ChangeObserver, Callback, SignificantMsg, SignificantRouter},
 };
 use tikv::storage::{
     kv::StatisticsSummary,
@@ -202,12 +195,7 @@ pub struct InitialDataLoader<E: KvEngine, H> {
 impl<E, H> InitialDataLoader<E, H>
 where
     E: KvEngine,
-<<<<<<< HEAD
-    R: RegionInfoProvider + Clone + 'static,
-    RT: RaftStoreRouter<E>,
-=======
-    H: CdcHandle<E> + Sync,
->>>>>>> 9b76ac97e1 (log-bakcup: make initial scan asynchronous (#15541))
+    H: SignificantRouter<E> + Sync,
 {
     pub fn new(
         sink: Router,
@@ -239,25 +227,27 @@ where
             tikv_util::future::paired_future_callback::<std::result::Result<_, Error>>();
 
         self.cdc_handle
-            .capture_change(
+            .significant_send(
                 region.get_id(),
-                region.get_region_epoch().clone(),
-                cmd,
-                Callback::read(Box::new(|snapshot| {
-                    if snapshot.response.get_header().has_error() {
-                        callback(Err(Error::RaftRequest(
-                            snapshot.response.get_header().get_error().clone(),
-                        )));
-                        return;
-                    }
-                    if let Some(snap) = snapshot.snapshot {
-                        callback(Ok(snap));
-                        return;
-                    }
-                    callback(Err(Error::Other(box_err!(
-                        "PROBABLY BUG: the response contains neither error nor snapshot"
-                    ))))
-                })),
+                SignificantMsg::CaptureChange {
+                    region_epoch: region.get_region_epoch().clone(),
+                    cmd,
+                    callback: Callback::read(Box::new(|snapshot| {
+                        if snapshot.response.get_header().has_error() {
+                            callback(Err(Error::RaftRequest(
+                                snapshot.response.get_header().get_error().clone(),
+                            )));
+                            return;
+                        }
+                        if let Some(snap) = snapshot.snapshot {
+                            callback(Ok(snap));
+                            return;
+                        }
+                        callback(Err(Error::Other(box_err!(
+                            "PROBABLY BUG: the response contains neither error nor snapshot"
+                        ))))
+                    })),
+                },
             )
             .context(format_args!(
                 "failed to register the observer to region {}",
@@ -322,11 +312,7 @@ where
                     if !can_retry {
                         break;
                     }
-<<<<<<< HEAD
-                    std::thread::sleep(Duration::from_millis(500));
-=======
                     tokio::time::sleep(Duration::from_secs(1)).await;
->>>>>>> 9b76ac97e1 (log-bakcup: make initial scan asynchronous (#15541))
                     continue;
                 }
             }
@@ -334,68 +320,6 @@ where
         Err(last_err.expect("BUG: max retry time exceed but no error"))
     }
 
-<<<<<<< HEAD
-    /// Start observe over some region.
-    /// This will register the region to the raftstore as observing,
-    /// and return the current snapshot of that region.
-    fn observe_over(&self, region: &Region, cmd: ChangeObserver) -> Result<impl Snapshot> {
-        // There are 2 ways for getting the initial snapshot of a region:
-        // - the BR method: use the interface in the RaftKv interface, read the
-        //   key-values directly.
-        // - the CDC method: use the raftstore message `SignificantMsg::CaptureChange`
-        //   to register the region to CDC observer and get a snapshot at the same time.
-        // Registering the observer to the raftstore is necessary because we should only
-        // listen events from leader. In CDC, the change observer is
-        // per-delegate(i.e. per-region), we can create the command per-region here too.
-
-        let (callback, fut) =
-            tikv_util::future::paired_future_callback::<std::result::Result<_, Error>>();
-        self.router
-            .significant_send(
-                region.id,
-                SignificantMsg::CaptureChange {
-                    cmd,
-                    region_epoch: region.get_region_epoch().clone(),
-                    callback: Callback::read(Box::new(|snapshot| {
-                        if snapshot.response.get_header().has_error() {
-                            callback(Err(Error::RaftRequest(
-                                snapshot.response.get_header().get_error().clone(),
-                            )));
-                            return;
-                        }
-                        if let Some(snap) = snapshot.snapshot {
-                            callback(Ok(snap));
-                            return;
-                        }
-                        callback(Err(Error::Other(box_err!(
-                            "PROBABLY BUG: the response contains neither error nor snapshot"
-                        ))))
-                    })),
-                },
-            )
-            .context(format_args!(
-                "failed to register the observer to region {}",
-                region.get_id()
-            ))?;
-        let snap = block_on(fut)
-            .map_err(|err| {
-                annotate!(
-                    err,
-                    "message 'CaptureChange' dropped for region {}",
-                    region.id
-                )
-            })
-            .flatten()
-            .context(format_args!(
-                "failed to get initial snapshot: failed to get the snapshot (region_id = {})",
-                region.get_id(),
-            ))?;
-        // Note: maybe warp the snapshot via `RegionSnapshot`?
-        Ok(snap)
-    }
-
-=======
->>>>>>> 9b76ac97e1 (log-bakcup: make initial scan asynchronous (#15541))
     fn with_resolver<T: 'static>(
         &self,
         region: &Region,

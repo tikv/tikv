@@ -1,27 +1,20 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-<<<<<<< HEAD
-    any::Any, collections::HashSet, fmt, marker::PhantomData, path::PathBuf, sync::Arc,
-=======
     any::Any,
     collections::HashSet,
     fmt,
     marker::PhantomData,
+    path::PathBuf,
     sync::{Arc, Mutex},
->>>>>>> 9b76ac97e1 (log-bakcup: make initial scan asynchronous (#15541))
     time::Duration,
 };
 
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::KvEngine;
 use error_code::ErrorCodeExt;
-<<<<<<< HEAD
-use futures::{stream::AbortHandle, FutureExt};
-use grpcio::Environment;
-=======
 use futures::{stream::AbortHandle, FutureExt, TryFutureExt};
->>>>>>> 9b76ac97e1 (log-bakcup: make initial scan asynchronous (#15541))
+use grpcio::Environment;
 use kvproto::{
     brpb::{StreamBackupError, StreamBackupTaskInfo},
     metapb::Region,
@@ -31,8 +24,7 @@ use pd_client::PdClient;
 use raft::StateRole;
 use raftstore::{
     coprocessor::{CmdBatch, ObserveHandle, RegionInfoProvider},
-    router::RaftStoreRouter,
-    store::RegionReadProgressRegistry,
+    store::{RegionReadProgressRegistry, SignificantRouter},
 };
 use resolved_ts::LeadershipResolver;
 use security::SecurityManager;
@@ -116,14 +108,10 @@ impl<S, R, E, PDC> Endpoint<S, R, E, PDC>
 where
     R: RegionInfoProvider + 'static + Clone,
     E: KvEngine,
-<<<<<<< HEAD
-    RT: RaftStoreRouter<E> + 'static,
-=======
->>>>>>> 9b76ac97e1 (log-bakcup: make initial scan asynchronous (#15541))
     PDC: PdClient + 'static,
     S: MetaStore + 'static,
 {
-    pub fn new<RT: CdcHandle<E> + 'static>(
+    pub fn new<RT: SignificantRouter<E> + 'static>(
         store_id: u64,
         store: S,
         config: BackupStreamConfig,
@@ -173,7 +161,6 @@ where
         let initial_scan_throughput_quota = Limiter::new(limit);
         info!("the endpoint of stream backup started"; "path" => %config.temp_path);
         let subs = SubscriptionTracer::default();
-<<<<<<< HEAD
         let leadership_resolver = LeadershipResolver::new(
             store_id,
             Arc::clone(&pd_client) as _,
@@ -182,10 +169,8 @@ where
             region_read_progress,
             Duration::from_secs(60),
         );
-=======
 
         let initial_scan_semaphore = Arc::new(Semaphore::new(config.initial_scan_concurrency));
->>>>>>> 9b76ac97e1 (log-bakcup: make initial scan asynchronous (#15541))
         let (region_operator, op_loop) = RegionSubscriptionManager::start(
             InitialDataLoader::new(
                 range_router.clone(),
@@ -238,10 +223,6 @@ where
     S: MetaStore + 'static,
     R: RegionInfoProvider + Clone + 'static,
     E: KvEngine,
-<<<<<<< HEAD
-    RT: RaftStoreRouter<E> + 'static,
-=======
->>>>>>> 9b76ac97e1 (log-bakcup: make initial scan asynchronous (#15541))
     PDC: PdClient + 'static,
 {
     fn get_meta_client(&self) -> MetadataClient<S> {
@@ -925,8 +906,9 @@ where
         self.abort_last_storage_save = Some(handle);
     }
 
-<<<<<<< HEAD
-=======
+    // FIXME: while picking #15541, v6.5.x doesn't support online config change.
+    // This stub was kept so once online config change has been picked, we can
+    #[allow(dead_code)]
     fn on_update_change_config(&mut self, cfg: BackupStreamConfig) {
         let concurrency_diff =
             cfg.initial_scan_concurrency as isize - self.config.initial_scan_concurrency as isize;
@@ -935,13 +917,11 @@ where
              "config" => ?cfg,
              "concurrency_diff" => concurrency_diff,
         );
-        self.range_router.udpate_config(&cfg);
         self.update_semaphore_capacity(&self.initial_scan_semaphore, concurrency_diff);
 
         self.config = cfg;
     }
 
->>>>>>> 9b76ac97e1 (log-bakcup: make initial scan asynchronous (#15541))
     /// Modify observe over some region.
     /// This would register the region to the RaftStore.
     pub fn on_modify_observe(&self, op: ObserveOp) {
@@ -1359,10 +1339,6 @@ where
     S: MetaStore + 'static,
     R: RegionInfoProvider + Clone + 'static,
     E: KvEngine,
-<<<<<<< HEAD
-    RT: RaftStoreRouter<E> + 'static,
-=======
->>>>>>> 9b76ac97e1 (log-bakcup: make initial scan asynchronous (#15541))
     PDC: PdClient + 'static,
 {
     type Task = Task;
@@ -1376,10 +1352,6 @@ where
 mod test {
     use engine_rocks::RocksEngine;
     use raftstore::coprocessor::region_info_accessor::MockRegionInfoProvider;
-<<<<<<< HEAD
-    use test_raftstore::MockRaftStoreRouter;
-=======
->>>>>>> 9b76ac97e1 (log-bakcup: make initial scan asynchronous (#15541))
     use tikv_util::worker::dummy_scheduler;
 
     use crate::{
@@ -1394,15 +1366,11 @@ mod test {
         cli.insert_task_with_range(&task, &[]).await.unwrap();
 
         fail::cfg("failed_to_get_tasks", "1*return").unwrap();
-<<<<<<< HEAD
-        Endpoint::<_, MockRegionInfoProvider, RocksEngine, MockRaftStoreRouter, MockPdClient>::start_and_watch_tasks(cli, sched).await.unwrap();
-=======
         Endpoint::<_, MockRegionInfoProvider, RocksEngine, MockPdClient>::start_and_watch_tasks(
             cli, sched,
         )
         .await
         .unwrap();
->>>>>>> 9b76ac97e1 (log-bakcup: make initial scan asynchronous (#15541))
         fail::remove("failed_to_get_tasks");
 
         let _t1 = rx.recv().unwrap();

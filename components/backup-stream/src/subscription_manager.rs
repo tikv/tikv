@@ -10,8 +10,7 @@ use pd_client::PdClient;
 use raft::StateRole;
 use raftstore::{
     coprocessor::{ObserveHandle, RegionInfoProvider},
-    router::RaftStoreRouter,
-    store::fsm::ChangeObserver,
+    store::{fsm::ChangeObserver, SignificantRouter},
 };
 use resolved_ts::LeadershipResolver;
 use tikv::storage::Statistics;
@@ -138,12 +137,7 @@ trait InitialScan: Clone + Sync + Send + 'static {
 impl<E, RT> InitialScan for InitialDataLoader<E, RT>
 where
     E: KvEngine,
-<<<<<<< HEAD
-    R: RegionInfoProvider + Clone + 'static,
-    RT: RaftStoreRouter<E>,
-=======
-    RT: CdcHandle<E> + Sync + 'static,
->>>>>>> 9b76ac97e1 (log-bakcup: make initial scan asynchronous (#15541))
+    RT: SignificantRouter<E> + Sync + Clone + 'static,
 {
     async fn do_initial_scan(
         &self,
@@ -257,30 +251,10 @@ fn spawn_executors(
 ) -> ScanPoolHandle {
     let (tx, rx) = tokio::sync::mpsc::channel(MESSAGE_BUFFER_SIZE);
     let pool = create_scan_pool(number);
-<<<<<<< HEAD
-    let stopped = Arc::new(AtomicBool::new(false));
-    for _ in 0..number {
-        let init = init.clone();
-        let rx = rx.clone();
-        let stopped = stopped.clone();
-        pool.spawn(move |_: &mut YatpHandle<'_>| {
-            tikv_alloc::add_thread_memory_accessor();
-            let _io_guard = file_system::WithIoType::new(file_system::IoType::Replication);
-            scan_executor_loop(init, rx, stopped);
-            tikv_alloc::remove_thread_memory_accessor();
-        })
-    }
-    ScanPoolHandle {
-        tx,
-        _pool: pool,
-        stopped,
-    }
-=======
     pool.spawn(async move {
         scan_executor_loop(init, rx).await;
     });
     ScanPoolHandle { tx, _pool: pool }
->>>>>>> 9b76ac97e1 (log-bakcup: make initial scan asynchronous (#15541))
 }
 
 struct ScanPoolHandle {
@@ -350,12 +324,10 @@ where
 /// Create a pool for doing initial scanning.
 fn create_scan_pool(num_threads: usize) -> ScanPool {
     tokio::runtime::Builder::new_multi_thread()
-        .with_sys_and_custom_hooks(
-            move || {
-                file_system::set_io_type(file_system::IoType::Replication);
-            },
-            || {},
-        )
+        .after_start_wrapper(move || {
+            file_system::set_io_type(file_system::IoType::Replication);
+        })
+        .before_stop_wrapper(|| {})
         .thread_name("log-backup-scan")
         .enable_time()
         .worker_threads(num_threads)
@@ -375,27 +347,18 @@ where
     ///
     /// a two-tuple, the first is the handle to the manager, the second is the
     /// operator loop future.
-    pub fn start<E, HInit, HChkLd>(
+    pub fn start<E, HInit>(
         initial_loader: InitialDataLoader<E, HInit>,
         regions: R,
         observer: BackupStreamObserver,
         meta_cli: MetadataClient<S>,
         pd_client: Arc<PDC>,
         scan_pool_size: usize,
-<<<<<<< HEAD
         leader_checker: LeadershipResolver,
     ) -> (Self, future![()])
     where
         E: KvEngine,
-        RT: RaftStoreRouter<E> + 'static,
-=======
-        resolver: BackupStreamResolver<HChkLd, E>,
-    ) -> (Self, future![()])
-    where
-        E: KvEngine,
-        HInit: CdcHandle<E> + Sync + 'static,
-        HChkLd: CdcHandle<E> + 'static,
->>>>>>> 9b76ac97e1 (log-bakcup: make initial scan asynchronous (#15541))
+        HInit: SignificantRouter<E> + Clone + Sync + 'static,
     {
         let (tx, rx) = channel(MESSAGE_BUFFER_SIZE);
         let scan_pool_handle = spawn_executors(initial_loader.clone(), scan_pool_size);
