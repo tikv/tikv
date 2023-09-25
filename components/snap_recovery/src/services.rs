@@ -2,8 +2,13 @@
 
 use std::{
     error::Error as StdError,
+    future::Future,
     result,
-    sync::mpsc::{sync_channel, SyncSender},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        mpsc::{sync_channel, SyncSender},
+        Arc, Mutex,
+    },
     thread::Builder,
     time::Instant,
 };
@@ -17,6 +22,7 @@ use engine_traits::{CfNamesExt, CfOptionsExt, Engines, Peekable, RaftEngine};
 use futures::{
     channel::mpsc,
     executor::{ThreadPool, ThreadPoolBuilder},
+    stream::{AbortHandle, Aborted},
     FutureExt, SinkExt, StreamExt,
 };
 use grpcio::{
@@ -65,6 +71,43 @@ pub struct RecoveryService<ER: RaftEngine> {
     engines: Engines<RocksEngine, ER>,
     router: RaftRouter<RocksEngine, ER>,
     threads: ThreadPool,
+
+    /// The handle to last call of recover region RPC.
+    ///
+    /// We need to make sure the execution of keeping leader exits before next
+    /// `RecoverRegion` rpc gets in. Or the previous call may stuck at keep
+    /// leader forever, once the second caller request the leader to be at
+    /// another store.
+    // NOTE: Perhaps it would be better to abort the procedure as soon as the client
+    // stream has been closed, but yet it seems there isn't such hook like
+    // `on_client_go` for us, and the current implementation only start
+    // work AFTER the client closes their sender part(!)
+    last_recovery_region_rpc: Arc<Mutex<Option<RecoverRegionState>>>,
+}
+
+struct RecoverRegionState {
+    start_at: Instant,
+    finished: Arc<AtomicBool>,
+    abort: AbortHandle,
+}
+
+impl RecoverRegionState {
+    /// Create the state by wrapping a execution of recover region.
+    fn wrap_task<F: Future<Output = ()>>(task: F) -> (Self, impl Future<Output = ()>) {
+        let finished = Arc::new(AtomicBool::new(false));
+        let (cancelable_task, abort) = futures::future::abortable(task);
+        let state = Self {
+            start_at: Instant::now(),
+            finished: Arc::clone(&finished),
+            abort,
+        };
+        (state, async move {
+            if let Err(Aborted) = cancelable_task.await {
+                warn!("Recover region aborted.");
+            }
+            finished.store(true, Ordering::SeqCst);
+        })
+    }
 }
 
 impl<ER: RaftEngine> RecoveryService<ER> {
@@ -99,6 +142,7 @@ impl<ER: RaftEngine> RecoveryService<ER> {
             engines,
             router,
             threads,
+            last_recovery_region_rpc: Arc::default(),
         }
     }
 
@@ -226,7 +270,7 @@ impl<ER: RaftEngine> RecoverData for RecoveryService<ER> {
         mut stream: RequestStream<RecoverRegionRequest>,
         sink: ClientStreamingSink<RecoverRegionResponse>,
     ) {
-        let raft_router = self.router.clone();
+        let mut raft_router = Mutex::new(self.router.clone());
         let store_id = self.get_store_id();
         info!("start to recover the region");
         let task = async move {
@@ -241,17 +285,15 @@ impl<ER: RaftEngine> RecoverData for RecoveryService<ER> {
                 }
             }
 
-            let mut lk = LeaderKeeper::new(raft_router.clone(), leaders.clone());
+            let mut lk = LeaderKeeper::new(&raft_router, leaders.clone());
             // We must use the tokio runtime here because there isn't a `block_in_place`
             // like thing in the futures executor. It simply panics when block
             // on the block_on context.
             // It is also impossible to directly `await` here, because that will make
             // borrowing to the raft router crosses the await point.
-            tokio::runtime::Builder::new_current_thread()
-                .build()
-                .expect("failed to build temporary tokio runtime.")
-                .block_on(lk.elect_and_wait_all_ready());
+            lk.elect_and_wait_all_ready().await;
             info!("all region leader assigned done"; "count" => %leaders.len());
+            drop(lk);
 
             let now = Instant::now();
             // wait apply to the last log
@@ -260,7 +302,7 @@ impl<ER: RaftEngine> RecoverData for RecoveryService<ER> {
                 let (tx, rx) = sync_channel(1);
                 REGION_EVENT_COUNTER.start_wait_leader_apply.inc();
                 let wait_apply = SnapshotRecoveryWaitApplySyncer::new(region_id, tx.clone());
-                if let Err(e) = raft_router.significant_send(
+                if let Err(e) = raft_router.get_mut().unwrap().significant_send(
                     region_id,
                     SignificantMsg::SnapshotRecoveryWaitApply(wait_apply.clone()),
                 ) {
@@ -277,6 +319,10 @@ impl<ER: RaftEngine> RecoverData for RecoveryService<ER> {
             for (rid, rx) in leaders.iter().zip(rx_apply) {
                 if let Some(rx) = rx {
                     CURRENT_WAIT_APPLY_LEADER.set(*rid as _);
+                    // FIXME: we cannot the former RPC when we get stuck at here.
+                    // Perhaps we need to make `SnapshotRecoveryWaitApplySyncer` be able to support
+                    // asynchronous channels. But for now, waiting seems won't cause live lock, so
+                    // we are keeping it unchanged.
                     match rx.recv() {
                         Ok(region_id) => {
                             debug!("leader apply to last log"; "region_id" => region_id);
@@ -304,6 +350,18 @@ impl<ER: RaftEngine> RecoverData for RecoveryService<ER> {
             let _ = sink.success(resp).await;
         };
 
+        let mut last_state_lock = self.last_recovery_region_rpc.lock().unwrap();
+        if let Some(last_state) = last_state_lock.take() {
+            info!("Another task enter, checking last task."; 
+                "finished" => ?last_state.finished, 
+                "start_before" => ?last_state.start_at.elapsed());
+            if !last_state.finished.load(Ordering::SeqCst) {
+                last_state.abort.abort();
+                warn!("Last task not finished, aborting it.");
+            }
+        }
+        let (state, task) = RecoverRegionState::wrap_task(task);
+        *last_state_lock = Some(state);
         self.threads.spawn_ok(task);
     }
 
