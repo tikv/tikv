@@ -1872,6 +1872,7 @@ impl Filter for MsgVoteFilter {
 //    AdminCmdType::CommitMerge and panic (due to compacted)
 #[test]
 fn test_restart_may_lose_merging_state() {
+    test_util::init_log_for_test();
     use test_raftstore_v2::*;
     let mut cluster = new_node_cluster(0, 2);
     configure_for_merge(&mut cluster.cfg);

@@ -32,7 +32,7 @@ use crate::{
     router::{StoreMsg, StoreTick},
 };
 
-pub struct BacktraceWrap(Backtrace);
+pub struct BacktraceWrap(pub Backtrace);
 
 impl fmt::Debug for BacktraceWrap {
     fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
