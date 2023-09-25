@@ -159,13 +159,13 @@ mod tests {
 
     #[bench]
     fn bench_insert_empty(b: &mut test::Bencher) {
-        // 32ns/iter
+        // 120ns/iter
         bench_insert_impl(b, 0);
     }
 
     #[bench]
     fn bench_insert_100000(b: &mut test::Bencher) {
-        // 31ns/iter
+        // 132ns/iter
         bench_insert_impl(b, 100000);
     }
 
