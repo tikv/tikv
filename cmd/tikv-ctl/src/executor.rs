@@ -1084,11 +1084,12 @@ where
     }
 
     fn get_mvcc_infos(&self, from: Vec<u8>, to: Vec<u8>, limit: u64) -> MvccInfoStream {
-        let iter = self
-            .scan_mvcc(&from, &to, limit)
-            .unwrap_or_else(|e| perror_and_exit("Debugger::scan_mvcc", e));
-        let stream = stream::iter(iter).map_err(|e| e.to_string());
-        Box::pin(stream)
+        // let iter = self
+        //     .scan_mvcc(&from, &to, limit)
+        //     .unwrap_or_else(|e| perror_and_exit("Debugger::scan_mvcc", e));
+        // let stream = stream::iter(iter).map_err(|e| e.to_string());
+        // Box::pin(stream)
+        unreachable!()
     }
 
     fn raw_scan_impl(&self, from_key: &[u8], end_key: &[u8], limit: usize, cf: &str) {
@@ -1355,11 +1356,12 @@ impl<ER: RaftEngine> DebugExecutor for DebuggerImplV2<ER> {
     }
 
     fn get_mvcc_infos(&self, from: Vec<u8>, to: Vec<u8>, limit: u64) -> MvccInfoStream {
-        let iter = self
-            .scan_mvcc(&from, &to, limit)
-            .unwrap_or_else(|e| perror_and_exit("Debugger::scan_mvcc", e));
-        let stream = stream::iter(iter).map_err(|e| e.to_string());
-        Box::pin(stream)
+        // let iter = self
+        //     .scan_mvcc(&from, &to, limit)
+        //     .unwrap_or_else(|e| perror_and_exit("Debugger::scan_mvcc", e));
+        // let stream = stream::iter(iter).map_err(|e| e.to_string());
+        // Box::pin(stream)
+        unreachable!()
     }
 
     fn raw_scan_impl(&self, _from_key: &[u8], _end_key: &[u8], _limit: usize, _cf: &str) {
