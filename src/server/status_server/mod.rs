@@ -13,7 +13,7 @@ use std::{
     task::{Context, Poll},
     time::{Duration, Instant},
 };
-
+use proc_maps::linux_maps::{get_process_maps, MapRange, Pid};
 use async_stream::stream;
 use collections::HashMap;
 use flate2::{write::GzEncoder, Compression};
@@ -347,18 +347,35 @@ where
             info!("resolve symbol for pcs: {}", body);
             let ctx = addr2line::Context::new(&object).unwrap();
 
+            let maps = get_process_maps(std::process::id() as Pid).unwrap();
+            
+
             for pc in body.split('+') {
-                let pc = u64::from_str_radix(pc.trim_start_matches("0x"), 16).unwrap_or(0);
+                let pc = usize::from_str_radix(pc.trim_start_matches("0x"), 16).unwrap_or(0);
                 if pc == 0 {
                     info!("invalid pc: {}", pc);
                     continue;
                 }
+
+                let mut addr = None;
+                for map in maps {
+                    let start = map.start();
+                    if (pc >= start) && (pc < (start + map.size())) {
+                        let addr = Some(pc - map.offset);
+                        break;
+                    }
+                }
+                let Some(addr) = addr else {
+                    info!("can't map pc: {}", pc);
+                    continue;
+                };
+
                 // Look up the function name for the address.
-                let f = ctx.find_frames(pc);
+                let f = ctx.find_frames(addr as u64);
                 let func = if let Some(func) = f.skip_all_loads().unwrap().next().unwrap() {
                     func.function
                 } else {
-                    info!("can't resolve: {:#x}", pc);
+                    info!("can't resolve mapped addr: {:#x}, pc: {:#x}", addr, pc);
                     continue;
                 };
 
@@ -1651,6 +1668,7 @@ mod tests {
 
     #[test]
     fn test_pprof_symbol_service() {
+        test_util::init_log_for_test();
         let _test_guard = TEST_PROFILE_MUTEX.lock().unwrap();
         let temp_dir = tempfile::TempDir::new().unwrap();
         let mut status_server = StatusServer::new(
@@ -1676,7 +1694,7 @@ mod tests {
         let req = Request::builder()
             .method(Method::POST)
             .uri(uri)
-            .body(Body::from("0x000055ffb1a948a1+0x000055ffb1fbbb46+0x000055ffb294cfdf+0x000055ffb2a4e952+0x000055ffb2b666df+0x000055ffb2b6755d+0x000055ffb2ec7052+0x000055ffb2ef13e3+0x000055ffb2fc0b00+0x000055ffb2fc1d54+0x000055ffb2fc4011+0x000055ffb2fc5080+0x000055ffb31e0925+0x000055ffb32661dd+0x000055ffb326a21d+0x000055ffb34c04c0+0x000055ffb34cb446+0x000055ffb36cd37f+0x000055ffb36f1cd4+0x000055ffb378004c+0x000055ffb37a13dc+0x000055ffb37a3fbc+0x000055ffb3941db5+0x000055ffb394abd5+0x000055ffb398cc1d+0x000055ffb398cf8d+0x000055ffb3a2e04c+0x000055ffb3a2f2f0+0x000055ffb3d3960c+0x000055ffb422166f+0x000055ffb459c8d6+0x000055ffb45ce7bc+0x000055ffb46b691d+0x000055ffb46d4a4d+0x000055ffb497f538+0x000055ffb510a14d+0x000055ffb510abb9+0x000055ffb510d827+0x000055ffb5116524+0x000055ffb513ac91+0x000055ffb52481da+0x000055ffb53fa82d+0x000055ffb53fd497+0x000055ffb5400795+0x000055ffb5404b4f+0x000055ffb54772b3+0x000055ffb5484bf0+0x000055ffb54851d0+0x00007f5fe05af132+0x00007f5fe07d960"))
+            .body(Body::from("0x0000000000b72b46+0x000055ffb1fbbb46+0x000055ffb294cfdf+0x000055ffb2a4e952+0x000055ffb2b666df+0x000055ffb2b6755d+0x000055ffb2ec7052+0x000055ffb2ef13e3+0x000055ffb2fc0b00+0x000055ffb2fc1d54+0x000055ffb2fc4011+0x000055ffb2fc5080+0x000055ffb31e0925+0x000055ffb32661dd+0x000055ffb326a21d+0x000055ffb34c04c0+0x000055ffb34cb446+0x000055ffb36cd37f+0x000055ffb36f1cd4+0x000055ffb378004c+0x000055ffb37a13dc+0x000055ffb37a3fbc+0x000055ffb3941db5+0x000055ffb394abd5+0x000055ffb398cc1d+0x000055ffb398cf8d+0x000055ffb3a2e04c+0x000055ffb3a2f2f0+0x000055ffb3d3960c+0x000055ffb422166f+0x000055ffb459c8d6+0x000055ffb45ce7bc+0x000055ffb46b691d+0x000055ffb46d4a4d+0x000055ffb497f538+0x000055ffb510a14d+0x000055ffb510abb9+0x000055ffb510d827+0x000055ffb5116524+0x000055ffb513ac91+0x000055ffb52481da+0x000055ffb53fa82d+0x000055ffb53fd497+0x000055ffb5400795+0x000055ffb5404b4f+0x000055ffb54772b3+0x000055ffb5484bf0+0x000055ffb54851d0+0x00007f5fe05af132+0x00007f5fe07d960"))
             .expect("request builder");
         let handle = status_server
             .thread_pool
