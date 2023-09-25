@@ -409,11 +409,12 @@ impl LeadershipResolver {
                 break;
             }
         }
-        let res = self.valid_regions.drain().collect();
+        let res: Vec<u64> = self.valid_regions.drain().collect();
         if res.len() != checking_regions.len() {
-            warn!("check leader returns valid regions different from checking regions";
-                  "valid_regions" => res.len(),
-                  "checking_regions" => checking_regions.len(),
+            warn!(
+                "check leader returns valid regions different from checking regions";
+                "valid_regions" => res.len(),
+                "checking_regions" => checking_regions.len(),
             );
         }
         res
