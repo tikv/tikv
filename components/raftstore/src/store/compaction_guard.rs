@@ -356,13 +356,8 @@ mod tests {
             current_next_level_size: 0,
             next_level_pos: 0,
             next_level_boundaries: (0..10)
-                .into_iter()
                 .map(|x| format!("bbb{:02}", x).into_bytes())
-                .chain(
-                    (0..100)
-                        .into_iter()
-                        .map(|x| format!("cccz{:03}", x).into_bytes()),
-                )
+                .chain((0..100).map(|x| format!("cccz{:03}", x).into_bytes()))
                 .collect(),
             next_level_size: [&[1 << 18; 99][..], &[1 << 28; 10][..]].concat(),
             max_compaction_size: 1 << 30, // 1GB
