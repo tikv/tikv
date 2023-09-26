@@ -375,18 +375,20 @@ where
                 let mut found = false;
                 while let Some(frame) = frames.next().unwrap() {
                     found = true;
-                    if let Some(func) = frame.function {
-                        let f = func.demangle().unwrap().as_ref();
-                         // should be "<hex address> <function name>"
-                        info!(
-                            "resolve: {:#x} {:#x} {}",
-                            addr,
-                            pc,
-                            f,
-                        );
-                        text.push_str(
-                            format!("{:#x} {}\n", pc, f).as_str()); // TODO: handle error
-                    }
+                    let f = if let Some(func) = frame.function {
+                        func.demangle().unwrap().into_owned()
+                    } else {
+                        "??".to_owned()
+                    };
+                    // should be "<hex address> <function name>"
+                    info!(
+                        "resolve: {:#x} {:#x} {}",
+                        addr,
+                        pc,
+                        f,
+                    );
+                    text.push_str(
+                        format!("{:#x} {}\n", pc, f).as_str()); // TODO: handle error
                 }; 
                 if !found {
                     info!("can't resolve mapped addr: {:#x}, pc: {:#x}", addr, pc);
