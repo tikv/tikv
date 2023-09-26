@@ -32,6 +32,7 @@ pub fn error_inc(type_: &str, err: &Error) {
         Error::BadFormat(..) => "bad_format",
         Error::Encryption(..) => "encryption",
         Error::CodecError(..) => "codec",
+        Error::Suspended { .. } => "suspended",
         _ => return,
     };
     IMPORTER_ERROR_VEC.with_label_values(&[type_, label]).inc();
@@ -128,7 +129,7 @@ pub enum Error {
     ResourceNotEnough(String),
 
     #[error("imports are suspended for {time_to_lease_expire:?}")]
-    Denied { time_to_lease_expire: Duration },
+    Suspended { time_to_lease_expire: Duration },
 }
 
 impl Error {
@@ -164,7 +165,7 @@ impl From<Error> for import_sstpb::Error {
                 err.set_store_error(import_err);
                 err.set_message(format!("{}", e));
             }
-            Error::Denied {
+            Error::Suspended {
                 time_to_lease_expire,
             } => {
                 let mut store_err = errorpb::Error::default();
@@ -211,7 +212,7 @@ impl ErrorCodeExt for Error {
             Error::IncompatibleApiVersion => error_code::sst_importer::INCOMPATIBLE_API_VERSION,
             Error::InvalidKeyMode { .. } => error_code::sst_importer::INVALID_KEY_MODE,
             Error::ResourceNotEnough(_) => error_code::sst_importer::RESOURCE_NOT_ENOUTH,
-            Error::Denied { .. } => error_code::sst_importer::DENIED,
+            Error::Suspended { .. } => error_code::sst_importer::SUSPENDED,
         }
     }
 }

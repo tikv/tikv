@@ -23,7 +23,7 @@ define_error_codes!(
     INCOMPATIBLE_API_VERSION => ("IncompatibleApiVersion", "", ""),
     INVALID_KEY_MODE => ("InvalidKeyMode", "", ""),
     RESOURCE_NOT_ENOUTH => ("ResourceNotEnough", "", ""),
-    DENIED => ("Denied",
+    SUSPENDED => ("Suspended",
         "this request has been suspended.",
         "Probably there are some export tools don't support exporting data inserted by `ingest`(say, snapshot backup). Check the user manual and stop them.")
 );

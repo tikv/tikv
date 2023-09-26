@@ -127,8 +127,4 @@ lazy_static! {
         &["type"],
         exponential_buckets(0.01, 4.0, 8).unwrap()
     ).unwrap();
-    pub static ref IMPORT_DENIED_REQUESTS: IntCounter = register_int_counter!(
-        "tikv_import_reject_requests_until",
-        "The requests has been rejected due to compatibility."
-    ).unwrap();
 }

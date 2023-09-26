@@ -638,8 +638,7 @@ impl<E: Engine> ImportSstService<E> {
         let now = TimeStamp::physical_now();
         let suspend_until = self.suspend_req_until.load(Ordering::SeqCst);
         if now < suspend_until {
-            IMPORT_DENIED_REQUESTS.inc();
-            Err(Error::Denied {
+            Err(Error::Suspended {
                 time_to_lease_expire: Duration::from_millis(suspend_until - now),
             })
         } else {
