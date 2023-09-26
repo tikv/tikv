@@ -3,6 +3,7 @@
 use futures::executor::block_on;
 use pd_client::PdClient;
 use raftstore_v2::router::{StoreMsg, StoreTick};
+use slog::PushFnValueSerializer;
 use tikv_util::config::ReadableDuration;
 
 use crate::cluster::{v2_default_config, Cluster};
@@ -48,4 +49,14 @@ fn test_fake_store_heartbeat() {
 
     fail::remove("mock_slowness_last_tick_unfinished");
     fail::remove("mock_collect_tick_interval");
+}
+
+#[test]
+fn test_store_heartbeat_after_replay() {
+    let cluster = Cluster::with_config_and_extra_setting(v2_default_config(), |config| {
+        config.pd_store_heartbeat_tick_interval = ReadableDuration::millis(10);
+        config.inspect_interval = ReadableDuration::millis(10);
+    });
+
+    fail::cfg("APPLY_COMMITTED_ENTRIES", "pause").unwrap();
 }
