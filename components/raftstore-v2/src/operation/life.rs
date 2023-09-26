@@ -681,6 +681,10 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                         let _ = router.send_raft_message(m.into());
                     },
                 );
+            } else {
+                // Source peer is already destroyed. Forward to store, and let
+                // it report GcPeer response.
+                let _ = ctx.router.send_raft_message(m.into());
             }
         });
     }
@@ -748,15 +752,23 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         }
         // 2. ask target to check whether source should be deleted.
         for record in state.get_merged_records() {
-            for (source, target) in record
-                .get_source_peers()
-                .iter()
-                .zip(record.get_target_peers())
-            {
+            for source in record.get_source_peers() {
                 need_gc_ids.push(source.get_id());
                 if gc_context.confirmed_ids.contains(&source.get_id()) {
                     continue;
                 }
+                let Some(target) = record
+                    .get_target_peers()
+                    .iter()
+                    .find(|p| p.get_store_id() == source.get_store_id())
+                else {
+                    panic!(
+                        "[region {}] {} target peer not found, {:?}",
+                        self.region_id(),
+                        self.peer_id(),
+                        state
+                    );
+                };
 
                 let mut msg = RaftMessage::default();
                 msg.set_region_id(record.get_target_region_id());
