@@ -110,7 +110,7 @@ const RAFT_ENGINE_MEMORY_LIMIT_RATE: f64 = 0.15;
 const WRITE_BUFFER_MEMORY_LIMIT_RATE: f64 = 0.2;
 // Too large will increase Raft Engine memory usage.
 const WRITE_BUFFER_MEMORY_LIMIT_MAX: u64 = ReadableSize::gb(8).0;
-const DEFAULT_LOCK_BUFFER_MEMORY_LIMIT: ReadableSize = ReadableSize::mb(32);
+const DEFAULT_LOCK_BUFFER_MEMORY_LIMIT: ReadableSize = ReadableSize::mb(128);
 
 /// Configs that actually took effect in the last run
 pub const LAST_CONFIG_FILE: &str = "last_tikv.toml";
@@ -1403,7 +1403,7 @@ impl DbConfig {
                 self.writecf.max_compactions.get_or_insert(1);
                 self.lockcf
                     .write_buffer_size
-                    .get_or_insert(ReadableSize::mb(4));
+                    .get_or_insert(ReadableSize::mb(32));
                 self.lockcf
                     .write_buffer_limit
                     .get_or_insert(DEFAULT_LOCK_BUFFER_MEMORY_LIMIT);
@@ -2030,6 +2030,15 @@ impl<T: ConfigurableDb + Send + Sync> ConfigManager for DbConfigManger<T> {
                     for (name, value) in titan_change {
                         cf_change.insert(name, value);
                     }
+                }
+                if let Some(f) = cf_change.remove("write_buffer_limit") {
+                    if cf_name != CF_LOCK {
+                        return Err(
+                            "cf write buffer manager is only supportted for lock cf now".into()
+                        );
+                    }
+                    let size: ReadableSize = f.into();
+                    self.db.set_cf_flush_size(cf_name, size.0 as usize)?;
                 }
                 if !cf_change.is_empty() {
                     let cf_change = config_value_to_string(cf_change.into_iter().collect());
@@ -2824,6 +2833,7 @@ pub struct BackupStreamConfig {
     pub initial_scan_pending_memory_quota: ReadableSize,
     #[online_config(skip)]
     pub initial_scan_rate_limit: ReadableSize,
+    pub initial_scan_concurrency: usize,
 }
 
 impl BackupStreamConfig {
@@ -2850,6 +2860,9 @@ impl BackupStreamConfig {
                 self.min_ts_interval
             )
             .into());
+        }
+        if self.initial_scan_concurrency == 0 {
+            return Err("the `initial_scan_concurrency` shouldn't be zero".into());
         }
         Ok(())
     }
@@ -2878,6 +2891,7 @@ impl Default for BackupStreamConfig {
             file_size_limit,
             initial_scan_pending_memory_quota: ReadableSize(quota_size as _),
             initial_scan_rate_limit: ReadableSize::mb(60),
+            initial_scan_concurrency: 6,
             temp_file_memory_quota: cache_size,
         }
     }
@@ -5167,6 +5181,7 @@ mod tests {
         cfg.rocksdb.defaultcf.block_cache_size = Some(ReadableSize::mb(8));
         cfg.rocksdb.rate_bytes_per_sec = ReadableSize::mb(64);
         cfg.rocksdb.rate_limiter_auto_tuned = false;
+        cfg.rocksdb.lockcf.write_buffer_limit = Some(ReadableSize::mb(1));
         cfg.validate().unwrap();
         let (storage, cfg_controller, ..) = new_engines::<ApiV1>(cfg);
         let db = storage.get_engine().get_rocksdb();
@@ -5208,6 +5223,34 @@ mod tests {
             .unwrap();
         let flush_size = db.get_db_options().get_flush_size().unwrap();
         assert_eq!(flush_size, ReadableSize::mb(10).0);
+
+        cfg_controller
+            .update_config("rocksdb.lockcf.write-buffer-limit", "22MB")
+            .unwrap();
+        let cf_opt = db.get_options_cf("lock").unwrap();
+        let flush_size = cf_opt.get_flush_size().unwrap();
+        assert_eq!(flush_size, ReadableSize::mb(22).0);
+
+        cfg_controller
+            .update_config("rocksdb.lockcf.write-buffer-size", "102MB")
+            .unwrap();
+        let cf_opt = db.get_options_cf("lock").unwrap();
+        let bsize = cf_opt.get_write_buffer_size();
+        assert_eq!(bsize, ReadableSize::mb(102).0);
+
+        cfg_controller
+            .update_config("rocksdb.writecf.write-buffer-size", "102MB")
+            .unwrap();
+        let cf_opt = db.get_options_cf("write").unwrap();
+        let bsize = cf_opt.get_write_buffer_size();
+        assert_eq!(bsize, ReadableSize::mb(102).0);
+
+        cfg_controller
+            .update_config("rocksdb.defaultcf.write-buffer-size", "102MB")
+            .unwrap();
+        let cf_opt = db.get_options_cf("default").unwrap();
+        let bsize = cf_opt.get_write_buffer_size();
+        assert_eq!(bsize, ReadableSize::mb(102).0);
 
         // update some configs on default cf
         let cf_opts = db.get_options_cf(CF_DEFAULT).unwrap();
