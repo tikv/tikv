@@ -307,7 +307,7 @@ impl SubscriptionTracer {
             }
         };
 
-        let subscription = sub.value_mut();
+        let mut subscription = sub.value_mut();
 
         let old_epoch = subscription.meta.get_region_epoch();
         let new_epoch = new_region.get_region_epoch();
