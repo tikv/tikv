@@ -5,8 +5,9 @@ use std::{
     collections::HashSet,
     fmt,
     marker::PhantomData,
+    path::PathBuf,
     sync::{Arc, Mutex},
-    time::Duration, path::PathBuf,
+    time::Duration,
 };
 
 use concurrency_manager::ConcurrencyManager;
