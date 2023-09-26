@@ -347,13 +347,15 @@ where
             let body_bytes = hyper::body::to_bytes(req.into_body()).await?;
             let body = String::from_utf8(body_bytes.to_vec()).unwrap();
 
-            info!("resolve symbol for pcs: {}", body);
             let ctx = addr2line::Context::new(&object).unwrap();
             let symbols = object.symbol_map();
 
             // Get `/proc/self/maps` to get memory mapping information.
             let maps = get_process_maps(std::process::id() as Pid).unwrap();
 
+            // The request body is a list of addr to be resolved joined by '+'.
+            // Resolve addrs with addr2line and write the symbols each per line in
+            // response.
             for pc in body.split('+') {
                 let pc = usize::from_str_radix(pc.trim_start_matches("0x"), 16).unwrap_or(0);
                 if pc == 0 {
@@ -366,11 +368,10 @@ where
                     let start = map.start();
                     if (pc >= start) && (pc < (start + map.size())) {
                         // What we have is a virtual address(VA). But in most modern OSes, address
-                        // spaces are randomized for a new process. So we
-                        // need to examine the `proc/self/maps` to get the base address of text
-                        // section loaded in memory. The address in file
-                        // should be (VA - start address of text section in memory + text section
-                        // offset in file).
+                        // spaces are randomized for a new process. So we need to examine the
+                        // `proc/self/maps` to get the base address of text section loaded in
+                        // memory. The address in file should be
+                        //   (VA - text start address in memory + text section offset in file)
                         addr = Some(pc - start + map.offset);
                         break;
                     }
@@ -395,7 +396,7 @@ where
                     }
                 };
                 if let Some(f) = sym {
-                    // should be "<hex address> <function name>"
+                    // should be <hex address> <function name>
                     info!("resolve: {:#x} {:#x} {}", addr, pc, f);
                     text.push_str(format!("{:#x} {}\n", pc, f).as_str());
                 } else {
