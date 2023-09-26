@@ -501,13 +501,14 @@ impl<K: PrewriteKind> Prewriter<K> {
                 MVCC_PREWRITE_REQUEST_REJECT_COUNTER_VEC
                     .max_flying_time_exceeded
                     .inc();
+                warn!("dropping prewrite request due to max_flying_time limit exceeded"; "start_ts" => %self.start_ts);
                 return Err(box_err!("request max_flying_time limit exceeded"));
             }
             if let Some(commit_ts) = context.txn_status_cache.get(self.start_ts) {
                 MVCC_PREWRITE_REQUEST_REJECT_COUNTER_VEC.committed.inc();
-                return Err(MvccError(Box::new(MvccErrorInner::Committed {
+                warn!("dropping prewrite request due to transaction already committed"; "start_ts" => %self.start_ts, "commit_ts" => %commit_ts);
+                return Err(MvccError(Box::new(MvccErrorInner::TxnNotFound {
                     start_ts: self.start_ts,
-                    commit_ts,
                     key: vec![],
                 }))
                 .into());
