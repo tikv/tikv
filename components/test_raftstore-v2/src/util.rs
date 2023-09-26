@@ -1,6 +1,12 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{fmt::Write, path::Path, sync::Arc, thread, time::Duration};
+use std::{
+    fmt::Write,
+    path::Path,
+    sync::Arc,
+    thread,
+    time::{Duration, Instant},
+};
 
 use encryption_export::{data_key_manager_from_config, DataKeyManager};
 use engine_rocks::{RocksEngine, RocksStatistics};
@@ -21,7 +27,7 @@ use rand::{prelude::SliceRandom, RngCore};
 use server::common::ConfiguredRaftEngine;
 use tempfile::TempDir;
 use test_pd_client::TestPdClient;
-use test_raftstore::{new_get_cmd, new_put_cf_cmd, new_request, new_snap_cmd, Config};
+use test_raftstore::{new_get_cmd, new_put_cf_cmd, new_request, new_snap_cmd, sleep_ms, Config};
 use tikv::{
     server::KvEngineFactoryBuilder,
     storage::{
@@ -30,7 +36,8 @@ use tikv::{
     },
 };
 use tikv_util::{
-    config::ReadableDuration, escape, future::block_on_timeout, worker::LazyWorker, HandyRwLock,
+    config::ReadableDuration, escape, future::block_on_timeout, time::InstantExt,
+    worker::LazyWorker, HandyRwLock,
 };
 use txn_types::Key;
 
@@ -449,6 +456,31 @@ pub fn wait_down_peers<T: Simulator<EK>, EK: KvEngine>(
         "got {:?}, want {} peers which should include {:?}",
         peers, count, peer
     );
+}
+
+pub fn wait_region_epoch_change<T: Simulator<EK>, EK: KvEngine>(
+    cluster: &Cluster<T, EK>,
+    waited_region: &metapb::Region,
+    timeout: Duration,
+) {
+    let timer = Instant::now();
+    loop {
+        if waited_region.get_region_epoch().get_version()
+            == cluster
+                .get_region_epoch(waited_region.get_id())
+                .get_version()
+        {
+            if timer.saturating_elapsed() > timeout {
+                panic!(
+                    "region {:?}, region epoch is still not changed.",
+                    waited_region
+                );
+            }
+        } else {
+            break;
+        }
+        sleep_ms(10);
+    }
 }
 
 pub struct PeerClient {

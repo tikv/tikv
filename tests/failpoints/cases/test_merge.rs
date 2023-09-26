@@ -3,7 +3,7 @@
 use std::{
     sync::{
         atomic::{AtomicBool, Ordering},
-        mpsc::{channel, Sender},
+        mpsc::{channel, sync_channel, Sender},
         *,
     },
     thread,
@@ -22,14 +22,16 @@ use raft::eraftpb::MessageType;
 use raftstore::store::*;
 use raftstore_v2::router::PeerMsg;
 use test_raftstore::*;
+use test_raftstore_macro::test_case;
 use tikv::storage::{kv::SnapshotExt, Snapshot};
 use tikv_util::{config::*, future::block_on_timeout, time::Instant, HandyRwLock};
 use txn_types::{Key, LastChange, PessimisticLock};
 
 /// Test if merge is rollback as expected.
-#[test]
+#[test_case(test_raftstore::new_node_cluster)]
+#[test_case(test_raftstore_v2::new_node_cluster)]
 fn test_node_merge_rollback() {
-    let mut cluster = new_node_cluster(0, 3);
+    let mut cluster = new_cluster(0, 3);
     configure_for_merge(&mut cluster.cfg);
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_operator();
@@ -53,8 +55,16 @@ fn test_node_merge_rollback() {
     let schedule_merge_fp = "on_schedule_merge";
     fail::cfg(schedule_merge_fp, "return()").unwrap();
 
-    // The call is finished when prepare_merge is applied.
-    cluster.must_try_merge(region.get_id(), target_region.get_id());
+    let (tx, rx) = channel();
+    let tx = Mutex::new(tx);
+    fail::cfg_callback("on_apply_res_prepare_merge", move || {
+        tx.lock().unwrap().send(()).unwrap();
+    })
+    .unwrap();
+
+    cluster.merge_region(region.get_id(), target_region.get_id(), Callback::None);
+    // PrepareMerge is applied.
+    rx.recv().unwrap();
 
     // Add a peer to trigger rollback.
     pd_client.must_add_peer(right.get_id(), new_peer(3, 5));
@@ -74,12 +84,7 @@ fn test_node_merge_rollback() {
     region.mut_region_epoch().set_version(4);
     for i in 1..3 {
         must_get_equal(&cluster.get_engine(i), b"k11", b"v11");
-        let state_key = keys::region_state_key(region.get_id());
-        let state: RegionLocalState = cluster
-            .get_engine(i)
-            .get_msg_cf(CF_RAFT, &state_key)
-            .unwrap()
-            .unwrap();
+        let state = cluster.region_local_state(region.get_id(), i);
         assert_eq!(state.get_state(), PeerState::Normal);
         assert_eq!(*state.get_region(), region);
     }
@@ -88,7 +93,10 @@ fn test_node_merge_rollback() {
     fail::cfg(schedule_merge_fp, "return()").unwrap();
 
     let target_region = pd_client.get_region(b"k3").unwrap();
-    cluster.must_try_merge(region.get_id(), target_region.get_id());
+    cluster.merge_region(region.get_id(), target_region.get_id(), Callback::None);
+    // PrepareMerge is applied.
+    rx.recv().unwrap();
+
     let mut region = pd_client.get_region(b"k1").unwrap();
 
     // Split to trigger rollback.
@@ -103,12 +111,7 @@ fn test_node_merge_rollback() {
     region.mut_region_epoch().set_version(6);
     for i in 1..3 {
         must_get_equal(&cluster.get_engine(i), b"k12", b"v12");
-        let state_key = keys::region_state_key(region.get_id());
-        let state: RegionLocalState = cluster
-            .get_engine(i)
-            .get_msg_cf(CF_RAFT, &state_key)
-            .unwrap()
-            .unwrap();
+        let state = cluster.region_local_state(region.get_id(), i);
         assert_eq!(state.get_state(), PeerState::Normal);
         assert_eq!(*state.get_region(), region);
     }
@@ -1835,19 +1838,7 @@ fn test_concurrent_between_transfer_leader_and_merge() {
     rx2.recv().unwrap();
     fail::remove("on_reject_commit_merge_1");
 
-    let timer = Instant::now();
-    loop {
-        if right.get_region_epoch().get_version()
-            == cluster.get_region_epoch(right.get_id()).get_version()
-        {
-            if timer.saturating_elapsed() > Duration::from_secs(5) {
-                panic!("region {:?} is still not merged.", right);
-            }
-        } else {
-            break;
-        }
-        sleep_ms(10);
-    }
+    wait_region_epoch_change(&cluster, &right, Duration::from_secs(5));
 
     let region = pd_client.get_region(b"k1").unwrap();
     assert_eq!(region.get_id(), right.get_id());
@@ -1855,4 +1846,130 @@ fn test_concurrent_between_transfer_leader_and_merge() {
     assert_eq!(region.get_end_key(), left.get_end_key());
 
     cluster.must_put(b"k4", b"v4");
+}
+
+struct MsgVoteFilter {}
+
+impl Filter for MsgVoteFilter {
+    fn before(&self, msgs: &mut Vec<RaftMessage>) -> raftstore::Result<()> {
+        msgs.retain(|m| {
+            let msg_type = m.get_message().msg_type;
+            msg_type != MessageType::MsgRequestPreVote && msg_type != MessageType::MsgRequestVote
+        });
+        check_messages(msgs)
+    }
+}
+
+// Before the fix of this PR (#15649), after prepare merge, raft cmd can still
+// be proposed if restart is involved. If the proposed raft cmd is CompactLog,
+// panic can occur during fetch entries: see issue https://github.com/tikv/tikv/issues/15633.
+// Consider the case:
+// 1. node-1 apply PrepareMerge (assume log index 30), so it's in is_merging
+//    status which reject all proposals except for Rollback Merge
+// 2. node-1 advance persisted_apply to 30
+// 3. node-1 restart and became leader. Now, it's not in is_merging status, so
+//    proposals can be proposed
+// 4. node-1 propose CompactLog, replicate it to other nodes, and commit
+// 5. node-0 apply PrepareMerge
+// 6. node-0 apply CompactLog
+// 6. node-0 fetches raft log entries which is required by
+//    AdminCmdType::CommitMerge and panic (due to compacted)
+#[test]
+fn test_restart_may_lose_merging_state() {
+    use test_raftstore_v2::*;
+    let mut cluster = new_node_cluster(0, 2);
+    configure_for_merge(&mut cluster.cfg);
+    cluster.cfg.raft_store.raft_log_gc_count_limit = Some(12);
+    cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(10);
+    cluster.cfg.raft_store.raft_base_tick_interval = ReadableDuration::millis(10);
+    cluster.cfg.raft_store.merge_check_tick_interval = ReadableDuration::millis(10);
+
+    cluster.run();
+    fail::cfg("maybe_propose_compact_log", "return").unwrap();
+    fail::cfg("on_ask_commit_merge", "return").unwrap();
+    fail::cfg("flush_before_close_threshold", "return(0)").unwrap();
+
+    let (tx, rx) = channel();
+    let tx = Mutex::new(tx);
+    fail::cfg_callback("on_apply_res_prepare_merge", move || {
+        tx.lock().unwrap().send(()).unwrap();
+    })
+    .unwrap();
+
+    let region = cluster.get_region(b"");
+    cluster.must_split(&region, b"k20");
+
+    let source = cluster.get_region(b"k05");
+    let target = cluster.get_region(b"k25");
+
+    cluster.add_send_filter_on_node(2, Box::new(MsgVoteFilter {}));
+
+    cluster.must_transfer_leader(
+        source.id,
+        source
+            .get_peers()
+            .iter()
+            .find(|p| p.store_id == 1)
+            .cloned()
+            .unwrap(),
+    );
+    cluster.must_transfer_leader(
+        target.id,
+        target
+            .get_peers()
+            .iter()
+            .find(|p| p.store_id == 1)
+            .cloned()
+            .unwrap(),
+    );
+
+    for i in 0..20 {
+        let k = format!("k{:02}", i);
+        cluster.must_put(k.as_bytes(), b"val");
+    }
+
+    cluster.merge_region(source.id, target.id, Callback::None);
+
+    rx.recv().unwrap();
+    let router = cluster.get_router(1).unwrap();
+    let (tx, rx) = sync_channel(1);
+    let msg = PeerMsg::FlushBeforeClose { tx };
+    router.force_send(source.id, msg).unwrap();
+    rx.recv().unwrap();
+
+    let (tx, rx) = channel();
+    let tx = Mutex::new(tx);
+    fail::cfg_callback("on_apply_res_commit_merge_2", move || {
+        tx.lock().unwrap().send(()).unwrap();
+    })
+    .unwrap();
+
+    cluster.stop_node(1);
+    // Need to avoid propose commit merge, before node 1 becomes leader. Otherwise,
+    // the commit merge will be rejected.
+    let (tx2, rx2) = channel();
+    let tx2 = Mutex::new(tx2);
+    fail::cfg_callback("on_applied_current_term", move || {
+        tx2.lock().unwrap().send(()).unwrap();
+    })
+    .unwrap();
+
+    fail::remove("maybe_propose_compact_log");
+    cluster.run_node(1).unwrap();
+
+    // we have two regions.
+    rx2.recv().unwrap();
+    rx2.recv().unwrap();
+    fail::remove("on_ask_commit_merge");
+    // wait node 2 to apply commit merge
+    rx.recv_timeout(Duration::from_secs(10)).unwrap();
+
+    wait_region_epoch_change(&cluster, &target, Duration::from_secs(5));
+
+    let region = cluster.get_region(b"k1");
+    assert_eq!(region.get_id(), target.get_id());
+    assert_eq!(region.get_start_key(), source.get_start_key());
+    assert_eq!(region.get_end_key(), target.get_end_key());
+
+    cluster.must_put(b"k400", b"v400");
 }
