@@ -647,5 +647,5 @@ fn test_suspend_import() {
         .unwrap_err();
     let sst_range = (20, 30);
     let ssts = write(sst_range).unwrap();
-    multi_ingest(&ssts.get_metas()).unwrap();
+    multi_ingest(ssts.get_metas()).unwrap();
 }
