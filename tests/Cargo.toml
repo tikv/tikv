@@ -41,7 +41,7 @@ path = "benches/deadlock_detector/mod.rs"
 
 [features]
 default = ["failpoints", "testexport", "test-engine-kv-rocksdb", "test-engine-raft-raft-engine", "cloud-aws", "cloud-gcp", "cloud-azure"]
-failpoints = ["fail/failpoints", "tikv/failpoints", "pd_client/failpoints", "raft_log_engine/failpoints"]
+failpoints = ["fail/failpoints", "tikv/failpoints", "pd_client/failpoints"]
 cloud-aws = ["external_storage_export/cloud-aws"]
 cloud-gcp = ["external_storage_export/cloud-gcp"]
 cloud-azure = ["external_storage_export/cloud-azure"]
@@ -120,7 +120,6 @@ uuid = { version = "0.8.1", features = ["serde", "v4"] }
 procinfo = { git = "https://github.com/tikv/procinfo-rs", rev = "7693954bd1dd86eb1709572fd7b62fd5f7ff2ea1" }
 
 [dev-dependencies]
-arrow = "46.0"
 byteorder = "1.2"
 # See https://bheisler.github.io/criterion.rs/book/user_guide/known_limitations.html for the usage
 # of `real_blackbox` feature.

@@ -351,9 +351,7 @@ where
                 match fut.await? {
                     Some(query_res) => {
                         if query_res.read().is_none() {
-                            let QueryResult::Response(res) = query_res else {
-                                unreachable!()
-                            };
+                            let QueryResult::Response(res) = query_res else { unreachable!() };
                             // Get an error explicitly in header,
                             // or leader reports KeyIsLocked error via read index.
                             assert!(

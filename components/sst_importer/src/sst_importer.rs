@@ -384,8 +384,8 @@ impl SstImporter {
     // This method is blocking. It performs the following transformations before
     // writing to disk:
     //
-    //  1. only KV pairs in the *inclusive* range (`[start, end]`) are used. (set
-    //     the range to `["", ""]` to import everything).
+    //  1. only KV pairs in the *inclusive* range (`[start, end]`) are used.
+    //     (set the range to `["", ""]` to import everything).
     //  2. keys are rewritten according to the given rewrite rule.
     //
     // Both the range and rewrite keys are specified using origin keys. However,
@@ -1558,7 +1558,7 @@ mod tests {
         let env = get_env(key_manager.clone(), None /* io_rate_limiter */).unwrap();
         let db = new_test_engine_with_env(db_path.to_str().unwrap(), &[CF_DEFAULT], env);
 
-        let cases = [(0, 10), (5, 15), (10, 20), (0, 100)];
+        let cases = vec![(0, 10), (5, 15), (10, 20), (0, 100)];
 
         let mut ingested = Vec::new();
 
@@ -2072,10 +2072,13 @@ mod tests {
             false,
         )
         .unwrap();
-        let ext_storage = importer.wrap_kms(
-            importer.external_storage_or_cache(&backend, "").unwrap(),
-            false,
-        );
+        let ext_storage = {
+            let inner = importer.wrap_kms(
+                importer.external_storage_or_cache(&backend, "").unwrap(),
+                false,
+            );
+            inner
+        };
 
         // test do_read_kv_file()
         let output = block_on_external_io(importer.do_read_kv_file(

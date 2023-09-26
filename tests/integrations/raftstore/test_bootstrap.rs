@@ -287,8 +287,8 @@ fn test_flush_before_stop2() {
 // 1. lock `k` with index 6
 // 2. on_applied_res => lockcf's last_modified = 6
 // 3. flush lock cf => lockcf's flushed_index = 6
-// 4. batch {unlock `k`, write `k`} with index 7 (last_modified is updated in
-//    store but RocksDB is modified in apply. So,
+// 4. batch {unlock `k`, write `k`} with index 7
+//    (last_modified is updated in store but RocksDB is modified in apply. So,
 // before on_apply_res, the last_modified is not updated.)
 //
 // flush-before-close:

@@ -1006,18 +1006,7 @@ pub fn must_new_cluster_and_kv_client_mul(
     TikvClient,
     Context,
 ) {
-    must_new_cluster_with_cfg_and_kv_client_mul(count, |_| {})
-}
-
-pub fn must_new_cluster_with_cfg_and_kv_client_mul(
-    count: usize,
-    configure: impl FnMut(&mut Cluster<ServerCluster<RocksEngine>, RocksEngine>),
-) -> (
-    Cluster<ServerCluster<RocksEngine>, RocksEngine>,
-    TikvClient,
-    Context,
-) {
-    let (cluster, leader, ctx) = must_new_and_configure_cluster_mul(count, configure);
+    let (cluster, leader, ctx) = must_new_cluster_mul(count);
 
     let env = Arc::new(Environment::new(1));
     let channel =
@@ -1026,7 +1015,6 @@ pub fn must_new_cluster_with_cfg_and_kv_client_mul(
 
     (cluster, client, ctx)
 }
-
 pub fn must_new_cluster_mul(
     count: usize,
 ) -> (

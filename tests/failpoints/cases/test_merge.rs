@@ -1712,7 +1712,8 @@ fn test_destroy_source_peer_while_merging() {
 }
 
 struct MsgTimeoutFilter {
-    tx: Sender<RaftMessage>,
+    // wrap with mutex to make tx Sync.
+    tx: Mutex<Sender<RaftMessage>>,
 }
 
 impl Filter for MsgTimeoutFilter {
@@ -1720,7 +1721,7 @@ impl Filter for MsgTimeoutFilter {
         let mut res = Vec::with_capacity(msgs.len());
         for m in msgs.drain(..) {
             if m.get_message().msg_type == MessageType::MsgTimeoutNow {
-                self.tx.send(m).unwrap();
+                self.tx.lock().unwrap().send(m).unwrap();
             } else {
                 res.push(m);
             }
@@ -1789,7 +1790,7 @@ fn test_concurrent_between_transfer_leader_and_merge() {
     // msg by using Filter. So we make node-1-1000 be in leader_transferring status
     // for some time.
     let (tx, rx_msg) = channel();
-    let filter = MsgTimeoutFilter { tx };
+    let filter = MsgTimeoutFilter { tx: Mutex::new(tx) };
     cluster.add_send_filter_on_node(1, Box::new(filter));
 
     pd_client.transfer_leader(
@@ -1813,13 +1814,15 @@ fn test_concurrent_between_transfer_leader_and_merge() {
 
     let router = cluster.get_router(2).unwrap();
     let (tx, rx) = channel();
+    let tx = Mutex::new(tx);
     let _ = fail::cfg_callback("propose_commit_merge_1", move || {
-        tx.send(()).unwrap();
+        tx.lock().unwrap().send(()).unwrap();
     });
 
     let (tx2, rx2) = channel();
+    let tx2 = Mutex::new(tx2);
     let _ = fail::cfg_callback("on_propose_commit_merge_success", move || {
-        tx2.send(()).unwrap();
+        tx2.lock().unwrap().send(()).unwrap();
     });
 
     cluster.merge_region(left.get_id(), right.get_id(), Callback::None);
