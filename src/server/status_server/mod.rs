@@ -13,7 +13,8 @@ use std::{
     task::{Context, Poll},
     time::{Duration, Instant},
 };
-use proc_maps::linux_maps::{get_process_maps, MapRange, Pid};
+#[cfg(target_os = "linux")]
+use proc_maps::linux_maps::{get_process_maps, Pid};
 use async_stream::stream;
 use collections::HashMap;
 use flate2::{write::GzEncoder, Compression};
@@ -358,10 +359,10 @@ where
                 }
 
                 let mut addr = None;
-                for map in maps {
+                for map in maps.iter() {
                     let start = map.start();
                     if (pc >= start) && (pc < (start + map.size())) {
-                        let addr = Some(pc - map.offset);
+                        addr = Some(pc - start + map.offset);
                         break;
                     }
                 }
