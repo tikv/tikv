@@ -28,6 +28,7 @@ use raftstore_v2::{
 };
 use tikv_kv::{Modify, WriteEvent};
 use tikv_util::time::Instant;
+use tracker::{get_tls_tracker_token, GLOBAL_TRACKERS};
 use txn_types::{TxnExtra, TxnExtraScheduler, WriteBatchFlags};
 
 use super::{
@@ -172,7 +173,7 @@ impl<EK: KvEngine, ER: RaftEngine> tikv_kv::Engine for RaftKv2<EK, ER> {
                 .set_key_ranges(mem::take(&mut ctx.key_ranges).into());
         }
         ASYNC_REQUESTS_COUNTER_VEC.snapshot.all.inc();
-        let begin_instant = Instant::now_coarse();
+        let begin_instant = Instant::now();
 
         let mut header = new_request_header(ctx.pb_ctx);
         let mut flags = 0;
@@ -200,9 +201,32 @@ impl<EK: KvEngine, ER: RaftEngine> tikv_kv::Engine for RaftKv2<EK, ER> {
             let res = f.await;
             match res {
                 Ok(snap) => {
-                    ASYNC_REQUESTS_DURATIONS_VEC
-                        .snapshot
-                        .observe(begin_instant.saturating_elapsed_secs());
+                    let elapse = begin_instant.saturating_elapsed_secs();
+                    let tracker = get_tls_tracker_token();
+                    GLOBAL_TRACKERS.with_tracker(tracker, |tracker| {
+                        if tracker.metrics.read_index_propose_wait_nanos > 0 {
+                            ASYNC_REQUESTS_DURATIONS_VEC
+                                .snapshot_read_index_propose_wait
+                                .observe(
+                                    tracker.metrics.read_index_propose_wait_nanos as f64
+                                        / 1_000_000_000.0,
+                                );
+                            // snapshot may be handled by lease read in raftstore
+                            if tracker.metrics.read_index_confirm_wait_nanos > 0 {
+                                ASYNC_REQUESTS_DURATIONS_VEC
+                                    .snapshot_read_index_confirm
+                                    .observe(
+                                        tracker.metrics.read_index_confirm_wait_nanos as f64
+                                            / 1_000_000_000.0,
+                                    );
+                            }
+                        } else if tracker.metrics.local_read {
+                            ASYNC_REQUESTS_DURATIONS_VEC
+                                .snapshot_local_read
+                                .observe(elapse);
+                        }
+                    });
+                    ASYNC_REQUESTS_DURATIONS_VEC.snapshot.observe(elapse);
                     ASYNC_REQUESTS_COUNTER_VEC.snapshot.success.inc();
                     Ok(snap)
                 }
