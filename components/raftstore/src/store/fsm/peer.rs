@@ -4526,6 +4526,7 @@ where
     }
 
     fn on_ready_prepare_merge(&mut self, region: metapb::Region, state: MergeState) {
+        fail_point!("on_apply_res_prepare_merge");
         {
             let mut meta = self.ctx.store_meta.lock().unwrap();
             meta.set_region(

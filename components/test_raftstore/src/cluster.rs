@@ -4,7 +4,10 @@ use std::{
     collections::hash_map::Entry as MapEntry,
     error::Error as StdError,
     result,
-    sync::{mpsc, Arc, Mutex, RwLock},
+    sync::{
+        mpsc::{self},
+        Arc, Mutex, RwLock,
+    },
     thread,
     time::Duration,
 };

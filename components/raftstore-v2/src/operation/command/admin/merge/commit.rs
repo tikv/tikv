@@ -175,7 +175,20 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     }
 
     // Match v1::schedule_merge.
+<<<<<<< HEAD
     fn ask_target_peer_to_commit_merge<T>(&mut self, store_ctx: &mut StoreContext<EK, ER, T>) {
+=======
+    fn ask_target_peer_to_commit_merge<T: Transport>(
+        &mut self,
+        store_ctx: &mut StoreContext<EK, ER, T>,
+    ) {
+        fail::fail_point!("on_schedule_merge", |_| {});
+        fail::fail_point!(
+            "ask_target_peer_to_commit_merge_2",
+            self.region_id() == 2,
+            |_| {}
+        );
+>>>>>>> 977888de9b (raftstore-v2: fix "failed to get merge entries" panic (#15649))
         let state = self.applied_merge_state().unwrap();
         let target = state.get_target();
         let target_id = target.get_id();
@@ -197,7 +210,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 Ok(ents) => ents,
                 Err(e) => slog_panic!(
                     self.logger,
-                    "failed to get merge entires";
+                    "failed to get merge entries";
                     "err" => ?e,
                     "low" => low,
                     "commit" => state.get_commit()
@@ -253,6 +266,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         store_ctx: &mut StoreContext<EK, ER, T>,
         req: RaftCmdRequest,
     ) {
+<<<<<<< HEAD
         match self.validate_commit_merge(&req) {
             Some(true) if self.is_leader() => {
                 let (ch, _) = CmdResChannel::pair();
@@ -273,6 +287,9 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     }
 
     fn validate_commit_merge(&self, req: &RaftCmdRequest) -> Option<bool> {
+=======
+        fail::fail_point!("on_ask_commit_merge", |_| {});
+>>>>>>> 977888de9b (raftstore-v2: fix "failed to get merge entries" panic (#15649))
         let expected_epoch = req.get_header().get_region_epoch();
         let merge = req.get_admin_request().get_commit_merge();
         assert!(merge.has_source_state() && merge.get_source_state().has_merge_state());
@@ -693,6 +710,12 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         store_ctx: &mut StoreContext<EK, ER, T>,
         mut res: CommitMergeResult,
     ) {
+        fail::fail_point!(
+            "on_apply_res_commit_merge_2",
+            self.peer().store_id == 2,
+            |_| {}
+        );
+
         let region = res.region_state.get_region();
         assert!(
             res.source.get_end_key() == region.get_end_key()

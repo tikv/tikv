@@ -544,6 +544,129 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         }
         apply_trace.maybe_advance_admin_flushed(apply_index);
     }
+<<<<<<< HEAD
+=======
+
+    pub fn cleanup_stale_ssts<T>(
+        &mut self,
+        ctx: &mut StoreContext<EK, ER, T>,
+        cfs: &[&str],
+        index: u64,
+        apply_index: u64,
+    ) {
+        let mut stale_ssts = vec![];
+        for cf in cfs {
+            let ssts = self.sst_apply_state().stale_ssts(cf, index);
+            if !ssts.is_empty() {
+                info!(
+                    self.logger,
+                    "schedule delete stale ssts after flush";
+                    "stale_ssts" => ?stale_ssts,
+                    "apply_index" => apply_index,
+                    "cf" => cf,
+                    "flushed_index" => index,
+                );
+                stale_ssts.extend(ssts);
+            }
+        }
+        if !stale_ssts.is_empty() {
+            _ = ctx
+                .schedulers
+                .tablet
+                .schedule(tablet::Task::CleanupImportSst(
+                    stale_ssts.into_boxed_slice(),
+                ));
+        }
+    }
+
+    pub fn flush_before_close<T>(&mut self, ctx: &StoreContext<EK, ER, T>, tx: SyncSender<()>) {
+        info!(
+            self.logger,
+            "region flush before close begin";
+        );
+        let region_id = self.region_id();
+        let flush_threshold: u64 = (|| {
+            fail_point!("flush_before_close_threshold", |t| {
+                t.unwrap().parse::<u64>().unwrap()
+            });
+            50
+        })();
+
+        if let Some(tablet) = self.tablet().cloned() {
+            let applied_index = self.storage().entry_storage().applied_index();
+
+            let mut tried_count: usize = 0;
+            let mut flushed = false;
+            // flush the oldest cf one by one until we are under the replay count threshold
+            loop {
+                let replay_count = self.storage().estimate_replay_count();
+                if replay_count < flush_threshold || tried_count == 3 {
+                    // Ideally, the replay count should be 0 after three flush_oldest_cf. If not,
+                    // there may exist bug, but it's not desireable to block here, so we at most try
+                    // three times.
+                    if replay_count >= flush_threshold && tried_count == 3 {
+                        warn!(
+                            self.logger,
+                            "after three flush_oldest_cf, the expected replay count still exceeds the threshold";
+                            "replay_count" => replay_count,
+                            "threshold" => flush_threshold,
+                        );
+                    }
+                    if flushed {
+                        let admin_flush = self.storage_mut().apply_trace_mut().admin.flushed;
+                        let (_, _, tablet_index) = ctx
+                            .tablet_registry
+                            .parse_tablet_name(Path::new(tablet.path()))
+                            .unwrap();
+                        let mut lb = ctx.engine.log_batch(1);
+                        lb.put_flushed_index(region_id, CF_RAFT, tablet_index, admin_flush)
+                            .unwrap();
+                        ctx.engine.consume(&mut lb, true).unwrap();
+                        info!(
+                            self.logger,
+                            "flush before close flush admin for region";
+                            "admin_flush" => admin_flush,
+                        );
+                    }
+                    break;
+                }
+
+                info!(
+                    self.logger,
+                    "flush-before-close: replay count exceeds threshold, pick the oldest cf to flush";
+                    "count" => replay_count,
+                    "tried" => tried_count,
+                );
+                tried_count += 1;
+                tablet.flush_oldest_cf(true, None).unwrap();
+                flushed = true;
+
+                let flush_state = self.flush_state().clone();
+                let mut apply_trace = self.storage_mut().apply_trace_mut();
+
+                let flushed_indexes = flush_state.as_ref().flushed_index();
+                for i in 0..flushed_indexes.len() {
+                    let flush_index = flushed_indexes[i].load(Ordering::SeqCst);
+                    let cf = offset_to_cf(i);
+                    apply_trace.on_flush(cf, flush_index);
+                }
+
+                // We should use applied_index rather than flushed_index here. Memtable flush
+                // may be earlier than `on_apply_res` which means flushed_index can be larger
+                // than applied_index, and using flush_index can cause data loss which is
+                // described on the comment of `test_flush_index_exceed_last_modified`.
+                apply_trace.maybe_advance_admin_flushed(applied_index);
+                apply_trace.persisted_applied = apply_trace.admin.flushed;
+            }
+        }
+
+        info!(
+            self.logger,
+            "region flush before close done";
+        );
+        let _ = tx.send(());
+    }
+>>>>>>> 977888de9b (raftstore-v2: fix "failed to get merge entries" panic (#15649))
 }
 
 #[cfg(test)]

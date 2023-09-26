@@ -213,6 +213,14 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             abnormal_peer_context: AbnormalPeerContext::default(),
         };
 
+        // If merge_context is not None, it means the PrepareMerge is applied before
+        // restart. So we have to neter prepare merge again to prevent all proposals
+        // except for RollbackMerge.
+        if let Some(ref state) = peer.merge_context {
+            peer.proposal_control
+                .enter_prepare_merge(state.prepare_merge_index().unwrap());
+        }
+
         // If this region has only one peer and I am the one, campaign directly.
         let region = peer.region();
         if region.get_peers().len() == 1
@@ -247,9 +255,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     }
 
     /// Set the region of a peer.
-    ///
-    /// This will update the region of the peer, caller must ensure the region
-    /// has been preserved in a durable device.
     pub fn set_region(
         &mut self,
         host: &CoprocessorHost<EK>,

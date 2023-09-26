@@ -1,6 +1,16 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
+<<<<<<< HEAD
 use std::{fmt::Write, sync::Arc, thread, time::Duration};
+=======
+use std::{
+    fmt::Write,
+    path::Path,
+    sync::Arc,
+    thread,
+    time::{Duration, Instant},
+};
+>>>>>>> 977888de9b (raftstore-v2: fix "failed to get merge entries" panic (#15649))
 
 use encryption_export::{data_key_manager_from_config, DataKeyManager};
 use engine_rocks::{RocksEngine, RocksStatistics};
@@ -17,7 +27,11 @@ use raftstore::Result;
 use rand::{prelude::SliceRandom, RngCore};
 use server::common::ConfiguredRaftEngine;
 use tempfile::TempDir;
+<<<<<<< HEAD
 use test_raftstore::{new_get_cmd, new_put_cf_cmd, new_request, Config};
+=======
+use test_raftstore::{new_get_cmd, new_put_cf_cmd, new_request, new_snap_cmd, sleep_ms, Config};
+>>>>>>> 977888de9b (raftstore-v2: fix "failed to get merge entries" panic (#15649))
 use tikv::{
     server::KvEngineFactoryBuilder,
     storage::{
@@ -26,7 +40,14 @@ use tikv::{
         point_key_range, Engine, Snapshot,
     },
 };
+<<<<<<< HEAD
 use tikv_util::{config::ReadableDuration, worker::LazyWorker, HandyRwLock};
+=======
+use tikv_util::{
+    config::ReadableDuration, escape, future::block_on_timeout, time::InstantExt,
+    worker::LazyWorker, HandyRwLock,
+};
+>>>>>>> 977888de9b (raftstore-v2: fix "failed to get merge entries" panic (#15649))
 use txn_types::Key;
 
 use crate::{bootstrap_store, cluster::Cluster, ServerCluster, Simulator};
@@ -307,3 +328,124 @@ pub fn test_delete_range<T: Simulator<EK>, EK: KvEngine>(cluster: &mut Cluster<T
         assert!(cluster.get_cf(cf, k).is_none());
     }
 }
+<<<<<<< HEAD
+=======
+
+pub fn must_get_value(resp: &RaftCmdResponse) -> Vec<u8> {
+    if resp.get_header().has_error() {
+        panic!("failed to read {:?}", resp);
+    }
+    assert_eq!(resp.get_responses().len(), 1);
+    assert_eq!(resp.get_responses()[0].get_cmd_type(), CmdType::Get);
+    assert!(resp.get_responses()[0].has_get());
+    resp.get_responses()[0].get_get().get_value().to_vec()
+}
+
+pub fn must_read_on_peer<T: Simulator<EK>, EK: KvEngine>(
+    cluster: &mut Cluster<T, EK>,
+    peer: metapb::Peer,
+    region: metapb::Region,
+    key: &[u8],
+    value: &[u8],
+) {
+    let timeout = Duration::from_secs(5);
+    match read_on_peer(cluster, peer, region, key, false, timeout) {
+        Ok(ref resp) if value == must_get_value(resp).as_slice() => (),
+        other => panic!(
+            "read key {}, expect value {:?}, got {:?}",
+            log_wrappers::hex_encode_upper(key),
+            value,
+            other
+        ),
+    }
+}
+
+pub fn must_error_read_on_peer<T: Simulator<EK>, EK: KvEngine>(
+    cluster: &mut Cluster<T, EK>,
+    peer: metapb::Peer,
+    region: metapb::Region,
+    key: &[u8],
+    timeout: Duration,
+) {
+    if let Ok(mut resp) = read_on_peer(cluster, peer, region, key, false, timeout) {
+        if !resp.get_header().has_error() {
+            let value = resp.mut_responses()[0].mut_get().take_value();
+            panic!(
+                "key {}, expect error but got {}",
+                log_wrappers::hex_encode_upper(key),
+                escape(&value)
+            );
+        }
+    }
+}
+
+pub fn put_with_timeout<T: Simulator<EK>, EK: KvEngine>(
+    cluster: &mut Cluster<T, EK>,
+    node_id: u64,
+    key: &[u8],
+    value: &[u8],
+    timeout: Duration,
+) -> Result<RaftCmdResponse> {
+    let mut region = cluster.get_region(key);
+    let region_id = region.get_id();
+    let mut req = new_request(
+        region_id,
+        region.take_region_epoch(),
+        vec![new_put_cf_cmd(CF_DEFAULT, key, value)],
+        false,
+    );
+    req.mut_header().set_peer(
+        region
+            .get_peers()
+            .iter()
+            .find(|p| p.store_id == node_id)
+            .unwrap()
+            .clone(),
+    );
+    cluster.call_command_on_node(node_id, req, timeout)
+}
+
+pub fn wait_down_peers<T: Simulator<EK>, EK: KvEngine>(
+    cluster: &Cluster<T, EK>,
+    count: u64,
+    peer: Option<u64>,
+) {
+    let mut peers = cluster.get_down_peers();
+    for _ in 1..1000 {
+        if peers.len() == count as usize && peer.as_ref().map_or(true, |p| peers.contains_key(p)) {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+        peers = cluster.get_down_peers();
+    }
+    panic!(
+        "got {:?}, want {} peers which should include {:?}",
+        peers, count, peer
+    );
+}
+
+pub fn wait_region_epoch_change<T: Simulator<EK>, EK: KvEngine>(
+    cluster: &Cluster<T, EK>,
+    waited_region: &metapb::Region,
+    timeout: Duration,
+) {
+    let timer = Instant::now();
+    loop {
+        if waited_region.get_region_epoch().get_version()
+            == cluster
+                .get_region_epoch(waited_region.get_id())
+                .get_version()
+        {
+            if timer.saturating_elapsed() > timeout {
+                panic!(
+                    "region {:?}, region epoch is still not changed.",
+                    waited_region
+                );
+            }
+        } else {
+            break;
+        }
+        sleep_ms(10);
+    }
+}
+>>>>>>> 977888de9b (raftstore-v2: fix "failed to get merge entries" panic (#15649))

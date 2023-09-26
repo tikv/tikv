@@ -120,6 +120,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         store_ctx: &mut StoreContext<EK, ER, T>,
         force: bool,
     ) {
+        fail::fail_point!("maybe_propose_compact_log", |_| {});
+
         // As leader, we would not keep caches for the peers that didn't response
         // heartbeat in the last few seconds. That happens probably because
         // another TiKV is down. In this case if we do not clean up the cache,
