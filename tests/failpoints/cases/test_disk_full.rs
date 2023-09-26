@@ -70,6 +70,7 @@ macro_rules! ensure_disk_usage_is_reported {
 fn test_disk_full_leader_behaviors() {
     for usage in [DiskUsage::AlmostFull, DiskUsage::AlreadyFull] {
         let mut cluster = new_cluster(0, 3);
+        cluster.cfg.raft_store.gc_peer_check_interval = ReadableDuration::millis(500); // set gc duration for v2
         cluster.pd_client.disable_default_operator();
         cluster.run();
 
@@ -269,6 +270,7 @@ fn test_majority_disk_full() {
     let mut cluster = new_cluster(0, 3);
     // To ensure the thread has full store disk usage infomation.
     cluster.cfg.raft_store.store_batch_system.pool_size = 1;
+    cluster.cfg.raft_store.gc_peer_check_interval = ReadableDuration::millis(500); // set gc duration for v2
     cluster.pd_client.disable_default_operator();
     cluster.run();
 
