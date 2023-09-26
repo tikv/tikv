@@ -610,9 +610,9 @@ fn test_suspend_import() {
     let write_res = write(sst_range);
     write_res.unwrap();
     let ingest_res = ingest(&sst);
-    assert_to_string_contains!(ingest_res.unwrap_err(), "Denied");
+    assert_to_string_contains!(ingest_res.unwrap_err(), "Suspended");
     let multi_ingest_res = multi_ingest(&[sst.clone()]);
-    assert_to_string_contains!(multi_ingest_res.unwrap_err(), "Denied");
+    assert_to_string_contains!(multi_ingest_res.unwrap_err(), "Suspended");
 
     assert!(
         import
@@ -637,7 +637,7 @@ fn test_suspend_import() {
     let write_res = write(sst_range);
     let sst = write_res.unwrap().metas;
     let res = multi_ingest(&sst);
-    assert_to_string_contains!(res.unwrap_err(), "Denied");
+    assert_to_string_contains!(res.unwrap_err(), "Suspended");
     std::thread::sleep(Duration::from_secs(1));
     multi_ingest(&sst).unwrap();
 
