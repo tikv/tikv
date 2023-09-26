@@ -1898,10 +1898,11 @@ fn test_deterministic_commit_rollback_merge() {
     // left(1000) <- right(1).
     let (tx1, rx1) = channel();
     let (tx2, rx2) = channel();
-    let rx2_ = Mutex::new(rx2);
+    let tx1 = Mutex::new(tx1);
+    let rx2 = Mutex::new(rx2);
     fail::cfg_callback("on_propose_commit_merge_fail_store_1", move || {
-        tx1.send(()).unwrap();
-        rx2_.lock().unwrap().recv().unwrap();
+        tx1.lock().unwrap().send(()).unwrap();
+        rx2.lock().unwrap().recv().unwrap();
     })
     .unwrap();
     cluster.merge_region(right.get_id(), left.get_id(), Callback::None);
@@ -1928,28 +1929,15 @@ fn test_deterministic_commit_rollback_merge() {
 
     // By remove the failpoint, CheckMerge tick sends a AskCommitMerge again.
     fail::remove("ask_target_peer_to_commit_merge_store_1");
-    // At this point, source region will propose rollback merge.
+    // At this point, source region will propose rollback merge if commit merge
+    // is not deterministic.
 
-    // Wait for source handle RejectCommitMerge and commit rollback merge.
-    let timer = Instant::now();
-    loop {
-        if left.get_region_epoch().get_version()
-            == cluster.get_region_epoch(left.get_id()).get_version()
-        {
-            if timer.saturating_elapsed() > Duration::from_secs(5) {
-                panic!("region {:?} is still not merged.", left);
-            }
-        } else {
-            break;
-        }
-        sleep_ms(10);
-    }
+    // Wait for source handle commit or rollback merge.
+    wait_region_epoch_change(&cluster, &left, Duration::from_secs(5));
 
-    let region = pd_client.get_region(b"k1").unwrap();
-    assert_eq!(region.get_id(), left.get_id());
-    assert_eq!(region.get_start_key(), right.get_start_key());
-    assert_eq!(region.get_end_key(), left.get_end_key());
-
+    // No matter commit merge or rollback merge, cluster must be available to
+    // process requests
+    cluster.must_put(b"k0", b"v0");
     cluster.must_put(b"k4", b"v4");
 }
 
