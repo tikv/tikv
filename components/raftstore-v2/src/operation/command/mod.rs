@@ -21,7 +21,6 @@ use std::{
     sync::{atomic::Ordering, Arc},
     time::Duration,
 };
-use backtrace::Backtrace;
 
 use engine_traits::{KvEngine, PerfContext, RaftEngine, WriteBatch, WriteOptions};
 use fail::fail_point;
@@ -76,7 +75,6 @@ pub use control::ProposalControl;
 use pd_client::{BucketMeta, BucketStat};
 use protobuf::Message;
 pub use write::{SimpleWriteBinary, SimpleWriteEncoder, SimpleWriteReqDecoder};
-use crate::fsm::BacktraceWrap;
 
 pub type SimpleWriteReqEncoder =
     raftstore::store::simple_write::SimpleWriteReqEncoder<CmdResChannel>;
@@ -277,18 +275,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             });
         }
         let last_index = self.raft_group().raft.raft_log.last_index();
-        let res = self.raft_group_mut().propose(proposal_ctx, data);
-        let caller = BacktraceWrap(Backtrace::new());
-        info!(
-            self.logger,
-            "propose raft entry";
-            "caller" => ?caller,
-            "res" => ?res,
-            "last_index" => last_index,
-            "index" => self.raft_group().raft.raft_log.last_index(),
-        );
-        res?;
-
+        self.raft_group_mut().propose(proposal_ctx, data)?;
         if self.raft_group().raft.raft_log.last_index() == last_index {
             // The message is dropped silently, this usually due to leader absence
             // or transferring leader. Both cases can be considered as NotLeader error.
