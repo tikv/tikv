@@ -56,8 +56,9 @@ fn test_node_merge_rollback() {
     fail::cfg(schedule_merge_fp, "return()").unwrap();
 
     let (tx, rx) = channel();
+    let tx = Mutex::new(tx);
     fail::cfg_callback("on_apply_res_prepare_merge", move || {
-        tx.send(()).unwrap();
+        tx.lock().unwrap().send(()).unwrap();
     })
     .unwrap();
 
@@ -1889,8 +1890,9 @@ fn test_restart_may_lose_merging_state() {
     fail::cfg("flush_before_close_threshold", "return(0)").unwrap();
 
     let (tx, rx) = channel();
+    let tx = Mutex::new(tx);
     fail::cfg_callback("on_apply_res_prepare_merge", move || {
-        tx.send(()).unwrap();
+        tx.lock().unwrap().send(()).unwrap();
     })
     .unwrap();
 
@@ -1936,8 +1938,9 @@ fn test_restart_may_lose_merging_state() {
     rx.recv().unwrap();
 
     let (tx, rx) = channel();
+    let tx = Mutex::new(tx);
     fail::cfg_callback("on_apply_res_commit_merge_2", move || {
-        tx.send(()).unwrap();
+        tx.lock().unwrap().send(()).unwrap();
     })
     .unwrap();
 
@@ -1945,8 +1948,9 @@ fn test_restart_may_lose_merging_state() {
     // Need to avoid propose commit merge, before node 1 becomes leader. Otherwise,
     // the commit merge will be rejected.
     let (tx2, rx2) = channel();
+    let tx2 = Mutex::new(tx2);
     fail::cfg_callback("on_applied_current_term", move || {
-        tx2.send(()).unwrap();
+        tx2.lock().unwrap().send(()).unwrap();
     })
     .unwrap();
 
