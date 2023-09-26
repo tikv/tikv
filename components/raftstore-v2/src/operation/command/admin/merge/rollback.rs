@@ -4,9 +4,8 @@
 
 use engine_traits::{KvEngine, RaftEngine, RaftLogBatch};
 use kvproto::{
-    metapb,
     raft_cmdpb::{AdminCmdType, AdminRequest, AdminResponse},
-    raft_serverpb::PeerState,
+    raft_serverpb::{PeerState, RegionLocalState},
 };
 use raftstore::{
     coprocessor::RegionChangeReason,
@@ -28,7 +27,7 @@ use crate::{
 #[derive(Debug)]
 pub struct RollbackMergeResult {
     commit: u64,
-    region: metapb::Region,
+    region_state: RegionLocalState,
 }
 
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
@@ -118,7 +117,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
             AdminResponse::default(),
             AdminCmdResult::RollbackMerge(RollbackMergeResult {
                 commit: rollback.get_commit(),
-                region,
+                region_state: self.region_state().clone(),
             }),
         ))
     }
@@ -131,6 +130,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         store_ctx: &mut StoreContext<EK, ER, T>,
         res: RollbackMergeResult,
     ) {
+        let region = res.region_state.get_region();
         assert_ne!(res.commit, 0);
         let current = self.merge_context().and_then(|c| c.prepare_merge_index());
         if current != Some(res.commit) {
@@ -143,21 +143,21 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         }
         {
             let mut meta = store_ctx.store_meta.lock().unwrap();
-            meta.set_region(&res.region, true, &self.logger);
-            let (reader, _) = meta.readers.get_mut(&res.region.get_id()).unwrap();
+            meta.set_region(region, true, &self.logger);
+            let (reader, _) = meta.readers.get_mut(&region.get_id()).unwrap();
             self.set_region(
                 &store_ctx.coprocessor_host,
                 reader,
-                res.region.clone(),
+                region.clone(),
                 RegionChangeReason::RollbackMerge,
                 self.storage().region_state().get_tablet_index(),
             );
         }
-        let region_state = self.storage().region_state().clone();
         let region_id = self.region_id();
         self.state_changes_mut()
-            .put_region_state(region_id, res.commit, &region_state)
+            .put_region_state(region_id, res.commit, &res.region_state)
             .unwrap();
+        self.storage_mut().set_region_state(res.region_state);
         self.set_has_extra_write();
 
         self.rollback_merge(store_ctx);

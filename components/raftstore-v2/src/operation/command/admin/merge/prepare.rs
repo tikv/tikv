@@ -812,6 +812,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         store_ctx: &mut StoreContext<EK, ER, T>,
         res: PrepareMergeResult,
     ) {
+        fail::fail_point!("on_apply_res_prepare_merge");
+
         let region = res.region_state.get_region().clone();
         {
             let mut meta = store_ctx.store_meta.lock().unwrap();
