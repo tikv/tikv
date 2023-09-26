@@ -41,7 +41,7 @@ impl<'a> JsonRef<'a> {
             }
         }
         let mut res = self.to_owned();
-        for (expr, value) in path_expr_list.iter().zip(values) {
+        for (expr, value) in path_expr_list.iter().zip(values.into_iter()) {
             let modifier = BinaryModifier::new(res.as_ref());
             res = match mt {
                 ModifyType::Insert => modifier.insert(expr, value)?,

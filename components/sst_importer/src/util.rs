@@ -97,8 +97,7 @@ pub fn copy_sst_for_ingestion<P: AsRef<Path>, Q: AsRef<Path>>(
 
     let mut pmts = file_system::metadata(clone)?.permissions();
     if pmts.readonly() {
-        use std::os::unix::fs::PermissionsExt;
-        pmts.set_mode(0o644);
+        pmts.set_readonly(false);
         file_system::set_permissions(clone, pmts)?;
     }
 

@@ -1015,10 +1015,10 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
                 if features.contains(FeatureGate::STREAM_MULTIPLEXING) {
                     multiplexing
                         .entry((conn_id, downstream.get_req_id()))
-                        .or_default()
+                        .or_insert_with(Default::default)
                         .push(*region_id);
                 } else {
-                    let x = one_way.entry(conn_id).or_default();
+                    let x = one_way.entry(conn_id).or_insert_with(Default::default);
                     x.0.push(downstream.get_req_id());
                     x.1.push(*region_id);
                 }
@@ -2324,7 +2324,7 @@ mod tests {
         // region 3 to conn b.
         let mut conn_rxs = vec![];
         let quota = Arc::new(MemoryQuota::new(usize::MAX));
-        for region_ids in [vec![1, 2], vec![3]] {
+        for region_ids in vec![vec![1, 2], vec![3]] {
             let (tx, rx) = channel::channel(1, quota.clone());
             conn_rxs.push(rx);
             let conn = Conn::new(tx, String::new());

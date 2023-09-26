@@ -956,9 +956,7 @@ impl StreamTaskInfo {
             .last_flush_time
             .swap(Box::into_raw(Box::new(Instant::now())), Ordering::SeqCst);
         // manual gc last instant
-        unsafe {
-            let _ = Box::from_raw(ptr);
-        }
+        unsafe { Box::from_raw(ptr) };
     }
 
     pub fn should_flush(&self, flush_interval: &Duration) -> bool {

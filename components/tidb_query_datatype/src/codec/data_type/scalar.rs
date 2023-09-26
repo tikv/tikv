@@ -467,20 +467,21 @@ impl<'a> ScalarValueRef<'a> {
 
 impl<'a> Ord for ScalarValueRef<'a> {
     fn cmp(&self, other: &Self) -> Ordering {
-        match_template_evaltype! {
-            TT, match (self, other) {
-                // v1 and v2 are `Option<T>`. However, in MySQL NULL values are considered lower
-                // than any non-NULL value, so using `Option::PartialOrd` directly is fine.
-                (ScalarValueRef::TT(v1), ScalarValueRef::TT(v2)) => v1.cmp(v2),
-                _ => panic!("Cannot compare two ScalarValueRef in different type"),
-            }
-        }
+        self.partial_cmp(other)
+            .expect("Cannot compare two ScalarValueRef in different type")
     }
 }
 
 impl<'a> PartialOrd for ScalarValueRef<'a> {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
+        match_template_evaltype! {
+            TT, match (self, other) {
+                // v1 and v2 are `Option<T>`. However, in MySQL NULL values are considered lower
+                // than any non-NULL value, so using `Option::PartialOrd` directly is fine.
+                (ScalarValueRef::TT(v1), ScalarValueRef::TT(v2)) => Some(v1.cmp(v2)),
+                _ => None,
+            }
+        }
     }
 }
 
