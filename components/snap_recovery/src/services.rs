@@ -26,7 +26,8 @@ use futures::{
     FutureExt, SinkExt, StreamExt,
 };
 use grpcio::{
-    ClientStreamingSink, RequestStream, RpcContext, ServerStreamingSink, UnarySink, WriteFlags,
+    ClientStreamingSink, RequestStream, RpcContext, RpcStatus, RpcStatusCode, ServerStreamingSink,
+    UnarySink, WriteFlags,
 };
 use kvproto::{raft_serverpb::StoreIdent, recoverdatapb::*};
 use raftstore::{
@@ -93,7 +94,9 @@ struct RecoverRegionState {
 
 impl RecoverRegionState {
     /// Create the state by wrapping a execution of recover region.
-    fn wrap_task<F: Future<Output = ()>>(task: F) -> (Self, impl Future<Output = ()>) {
+    fn wrap_task<F: Future<Output = T>, T>(
+        task: F,
+    ) -> (Self, impl Future<Output = std::result::Result<T, Aborted>>) {
         let finished = Arc::new(AtomicBool::new(false));
         let (cancelable_task, abort) = futures::future::abortable(task);
         let state = Self {
@@ -102,10 +105,9 @@ impl RecoverRegionState {
             abort,
         };
         (state, async move {
-            if let Err(Aborted) = cancelable_task.await {
-                warn!("Recover region aborted.");
-            }
+            let res = cancelable_task.await;
             finished.store(true, Ordering::SeqCst);
+            res
         })
     }
 }
@@ -266,7 +268,7 @@ impl<ER: RaftEngine> RecoverData for RecoveryService<ER> {
     // assign region leader and wait leader apply to last log
     fn recover_region(
         &mut self,
-        _ctx: RpcContext<'_>,
+        ctx: RpcContext<'_>,
         mut stream: RequestStream<RecoverRegionRequest>,
         sink: ClientStreamingSink<RecoverRegionResponse>,
     ) {
@@ -347,14 +349,16 @@ impl<ER: RaftEngine> RecoverData for RecoveryService<ER> {
                 Err(e) => error!("failed to get store id"; "error" => ?e),
             };
 
-            let _ = sink.success(resp).await;
+            resp
         };
 
         let mut last_state_lock = self.last_recovery_region_rpc.lock().unwrap();
         if let Some(last_state) = last_state_lock.take() {
-            info!("Another task enter, checking last task."; 
-                "finished" => ?last_state.finished, 
-                "start_before" => ?last_state.start_at.elapsed());
+            info!("Another task enter, checking last task.";
+                "finished" => ?last_state.finished,
+                "start_before" => ?last_state.start_at.elapsed(),
+                "peer" => ctx.peer(),
+            );
             if !last_state.finished.load(Ordering::SeqCst) {
                 last_state.abort.abort();
                 warn!("Last task not finished, aborting it.");
@@ -362,7 +366,15 @@ impl<ER: RaftEngine> RecoverData for RecoveryService<ER> {
         }
         let (state, task) = RecoverRegionState::wrap_task(task);
         *last_state_lock = Some(state);
-        self.threads.spawn_ok(task);
+        self.threads.spawn_ok(async move {
+            let res = match task.await {
+                Ok(resp) => sink.success(resp),
+                Err(Aborted) => sink.fail(RpcStatus::new(RpcStatusCode::ABORTED)),
+            };
+            if let Err(err) = res.await {
+                warn!("failed to response recover region rpc"; "err" => %err);
+            }
+        });
     }
 
     // 3. ensure all region peer/follower apply to last
@@ -444,6 +456,8 @@ impl<ER: RaftEngine> RecoverData for RecoveryService<ER> {
 mod test {
     use std::{sync::atomic::Ordering, time::Duration};
 
+    use futures::never::Never;
+
     use super::RecoverRegionState;
 
     #[test]
@@ -452,16 +466,17 @@ mod test {
             .enable_time()
             .build()
             .unwrap();
-        let (state, task) = RecoverRegionState::wrap_task(futures::future::pending());
+        let (state, task) = RecoverRegionState::wrap_task(futures::future::pending::<Never>());
         let hnd = rt.spawn(task);
         state.abort.abort();
         rt.block_on(async { tokio::time::timeout(Duration::from_secs(10), hnd).await })
             .unwrap()
-            .unwrap();
+            .unwrap()
+            .unwrap_err();
 
-        let (state, task) = RecoverRegionState::wrap_task(futures::future::ready(()));
+        let (state, task) = RecoverRegionState::wrap_task(futures::future::ready(42));
         assert_eq!(state.finished.load(Ordering::SeqCst), false);
-        rt.block_on(task);
+        assert_eq!(rt.block_on(task), Ok(42));
         assert_eq!(state.finished.load(Ordering::SeqCst), true);
     }
 }
