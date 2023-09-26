@@ -1342,7 +1342,6 @@ impl Time {
         Ok((((ymd << 17) | hms) << 24) | u64::from(self.micro()))
     }
 
-    #[allow(deprecated)]
     pub fn from_duration(
         ctx: &mut EvalContext,
         duration: Duration,
@@ -1416,7 +1415,6 @@ impl Time {
             .ok_or_else(|| Error::incorrect_datetime_value(self))
     }
 
-    #[allow(deprecated)]
     pub fn normalized(self, ctx: &mut EvalContext) -> Result<Self> {
         if self.get_time_type() == TimeType::Timestamp {
             return Ok(self);
@@ -1502,7 +1500,6 @@ impl Time {
             + self.day()) as i32
     }
 
-    #[allow(deprecated)]
     pub fn weekday(self) -> Weekday {
         let date = if self.month() == 0 {
             NaiveDate::from_ymd(self.year() as i32 - 1, 12, 1)
