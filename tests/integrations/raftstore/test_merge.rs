@@ -1929,7 +1929,8 @@ fn test_gc_source_peers_forward_by_store_after_merge() {
     // So cluster becomes
     //  left region: merged
     // right region: 1(leader) 2 | 3 (destroyed but not yet cleaned in removed
-    // records) | means isolation.
+    // records)
+    // | means isolation.
 
     // Cluster filters and wait for gc peer ticks.
     cluster.clear_recv_filter_on_node(1);
