@@ -13,7 +13,6 @@ use std::{
     task::{Context, Poll},
     time::{Duration, Instant},
 };
-#[cfg(target_os = "linux")]
 use proc_maps::linux_maps::{get_process_maps, Pid};
 use async_stream::stream;
 use collections::HashMap;
@@ -372,23 +371,29 @@ where
                 };
 
                 // Look up the function name for the address.
-                let f = ctx.find_frames(addr as u64);
-                let func = if let Some(func) = f.skip_all_loads().unwrap().next().unwrap() {
-                    func.function
-                } else {
+                let frames = ctx.find_frames(addr as u64).skip_all_loads().unwrap();
+                let mut found = false;
+                while let Some(frame) = frames.next().unwrap() {
+                    found = true;
+                    let f = if let Some(func) = frame.function {
+                        func.demangle().unwrap().as_ref()
+                    } else {
+                        "??"
+                    };
+                    // should be "<hex address> <function name>"
+                    info!(
+                        "resolve: {:#x} {:#x} {}",
+                        addr,
+                        pc,
+                        f,
+                    );
+                    text.push_str(
+                        format!("{:#x} {}\n", pc, f).as_str()); // TODO: handle error
+                }; 
+                if !found {
                     info!("can't resolve mapped addr: {:#x}, pc: {:#x}", addr, pc);
                     continue;
                 };
-
-                // should be "<hex address> <function name>"
-                info!(
-                    "resolve: {:#x} {}",
-                    pc,
-                    func.as_ref().unwrap().demangle().unwrap()
-                );
-                text.push_str(
-                    format!("{:#x} {}\n", pc, func.unwrap().demangle().unwrap()).as_str(),
-                ); // TODO: handle error
             }
         }
         let response = Response::builder()
