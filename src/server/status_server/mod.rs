@@ -13,7 +13,7 @@ use std::{
     task::{Context, Poll},
     time::{Duration, Instant},
 };
-use proc_maps::linux_maps::{get_process_maps, Pid};
+
 use async_stream::stream;
 use collections::HashMap;
 use flate2::{write::GzEncoder, Compression};
@@ -41,6 +41,7 @@ use openssl::{
     x509::X509,
 };
 use pin_project::pin_project;
+use proc_maps::linux_maps::{get_process_maps, Pid};
 pub use profile::{
     activate_heap_profile, deactivate_heap_profile, heap_profiles_dir, jeprof_heap_profile,
     list_heap_profiles, read_file, start_one_cpu_profile, start_one_heap_profile,
@@ -346,9 +347,9 @@ where
 
             info!("resolve symbol for pcs: {}", body);
             let ctx = addr2line::Context::new(&object).unwrap();
+            let symbols = object.symbol_map();
 
             let maps = get_process_maps(std::process::id() as Pid).unwrap();
-            
 
             for pc in body.split('+') {
                 let pc = usize::from_str_radix(pc.trim_start_matches("0x"), 16).unwrap_or(0);
@@ -373,6 +374,14 @@ where
                 // Look up the function name for the address.
                 let mut frames = ctx.find_frames(addr as u64).skip_all_loads().unwrap();
                 let mut found = false;
+                // You need to specify an offset to addr2line, not a virtual address (VA).
+                // Presumably if you had address space randomization turned off, you could use a
+                // full VA, but in most modern OSes, address spaces are randomized for a new
+                // process. Given the VA 0x4005BDC by valgrind, find the base
+                // address of your process or library in memory. Do this by examining the
+                // /proc/<PID>/maps file while your program is running. The line of interest is
+                // the text segment of your process, which is identifiable by the permissions
+                // r-xp and the name of your program or library.
                 while let Some(frame) = frames.next().unwrap() {
                     found = true;
                     let f = if let Some(func) = frame.function {
@@ -381,17 +390,17 @@ where
                         "??".to_owned()
                     };
                     // should be "<hex address> <function name>"
-                    info!(
-                        "resolve: {:#x} {:#x} {}",
-                        addr,
-                        pc,
-                        f,
-                    );
-                    text.push_str(
-                        format!("{:#x} {}\n", pc, f).as_str()); // TODO: handle error
-                }; 
+                    info!("resolve: {:#x} {:#x} {}", addr, pc, f,);
+                    text.push_str(format!("{:#x} {}\n", pc, f).as_str()); // TODO: handle error
+                }
                 if !found {
-                    info!("can't resolve mapped addr: {:#x}, pc: {:#x}", addr, pc);
+                    if let Some(sym) = symbols.get(addr as u64) {
+                        let f = sym.name();
+                        info!("resolve: {:#x} {:#x} {}", addr, pc, f);
+                        text.push_str(format!("{:#x} {}\n", pc, f).as_str()); // TODO: handle error
+                    } else {
+                        info!("can't resolve mapped addr: {:#x}, pc: {:#x}", addr, pc);
+                    }
                     continue;
                 };
             }
