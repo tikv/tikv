@@ -306,7 +306,6 @@ struct WriteResFeed {
 unsafe impl Send for WriteResFeed {}
 
 impl WriteResFeed {
-    #[allow(clippy::arc_with_non_send_sync)]
     fn pair() -> (Self, WriteResSub) {
         let core = Arc::new(WriteResCore {
             ev: AtomicU8::new(0),
@@ -582,9 +581,7 @@ where
             tx.notify(res);
         }
         rx.inspect(move |ev| {
-            let WriteEvent::Finished(res) = ev else {
-                return;
-            };
+            let WriteEvent::Finished(res) = ev else { return };
             match res {
                 Ok(()) => {
                     ASYNC_REQUESTS_COUNTER_VEC.write.success.inc();

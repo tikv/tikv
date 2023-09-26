@@ -43,7 +43,6 @@ macro_rules! request {
 }
 
 #[test]
-#[allow(clippy::let_underscore_future)]
 fn test_pd_client_deadlock() {
     let (_server, client) = new_test_server_and_client(ReadableDuration::millis(100));
     let pd_client_reconnect_fp = "pd_client_reconnect";
