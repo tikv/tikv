@@ -371,24 +371,22 @@ where
                 };
 
                 // Look up the function name for the address.
-                let frames = ctx.find_frames(addr as u64).skip_all_loads().unwrap();
+                let mut frames = ctx.find_frames(addr as u64).skip_all_loads().unwrap();
                 let mut found = false;
                 while let Some(frame) = frames.next().unwrap() {
                     found = true;
-                    let f = if let Some(func) = frame.function {
-                        func.demangle().unwrap().as_ref()
-                    } else {
-                        "??"
-                    };
-                    // should be "<hex address> <function name>"
-                    info!(
-                        "resolve: {:#x} {:#x} {}",
-                        addr,
-                        pc,
-                        f,
-                    );
-                    text.push_str(
-                        format!("{:#x} {}\n", pc, f).as_str()); // TODO: handle error
+                    if let Some(func) = frame.function {
+                        let f = func.demangle().unwrap().as_ref();
+                         // should be "<hex address> <function name>"
+                        info!(
+                            "resolve: {:#x} {:#x} {}",
+                            addr,
+                            pc,
+                            f,
+                        );
+                        text.push_str(
+                            format!("{:#x} {}\n", pc, f).as_str()); // TODO: handle error
+                    }
                 }; 
                 if !found {
                     info!("can't resolve mapped addr: {:#x}, pc: {:#x}", addr, pc);
