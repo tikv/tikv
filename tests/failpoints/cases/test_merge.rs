@@ -1883,7 +1883,7 @@ fn test_restart_may_lose_merging_state() {
     cluster.run();
     fail::cfg("maybe_propose_compact_log", "return").unwrap();
     fail::cfg("on_ask_commit_merge", "return").unwrap();
-    fail::cfg("flush_before_cluse_threshold", "return(0)").unwrap();
+    fail::cfg("flush_before_close_threshold", "return(0)").unwrap();
 
     let (tx, rx) = channel();
     fail::cfg_callback("on_apply_res_prepare_merge", move || {

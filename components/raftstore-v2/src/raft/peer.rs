@@ -231,6 +231,9 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             unsafe_recovery_state: None,
         };
 
+        // If merge_context is not None, it means the PrepareMerge is applied before
+        // restart. So we have to neter prepare merge again to prevent all proposals
+        // except for RollbackMerge.
         if let Some(ref state) = peer.merge_context {
             peer.proposal_control
                 .enter_prepare_merge(state.prepare_merge_index().unwrap());
