@@ -11,4 +11,4 @@ mod store;
 
 pub use apply::{ApplyFsm, ApplyResReporter, ApplyScheduler};
 pub use peer::{PeerFsm, PeerFsmDelegate, SenderFsmPair};
-pub use store::{Store, StoreFsm, StoreFsmDelegate, StoreMeta, BacktraceWrap};
+pub use store::{BacktraceWrap, Store, StoreFsm, StoreFsmDelegate, StoreMeta};
