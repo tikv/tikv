@@ -2,6 +2,7 @@
 
 use std::{
     error::Error as StdError,
+    fmt::Display,
     future::Future,
     result,
     sync::{
@@ -186,6 +187,21 @@ impl<ER: RaftEngine> RecoveryService<ER> {
         Ok(store_id)
     }
 
+    fn abort_last_recover_region(&self, place: impl Display) {
+        let mut last_state_lock = self.last_recovery_region_rpc.lock().unwrap();
+        if let Some(last_state) = last_state_lock.take() {
+            info!("Another task enter, checking last task.";
+                "finished" => ?last_state.finished,
+                "start_before" => ?last_state.start_at.elapsed(),
+                "abort_by" => %place,
+            );
+            if !last_state.finished.load(Ordering::SeqCst) {
+                last_state.abort.abort();
+                warn!("Last task not finished, aborting it.");
+            }
+        }
+    }
+
     // a new wait apply syncer share with all regions,
     // when all region reached the target index, share reference decreased to 0,
     // trigger closure to send finish info back.
@@ -236,7 +252,7 @@ impl<ER: RaftEngine> RecoverData for RecoveryService<ER> {
     // 1. br start to ready region meta
     fn read_region_meta(
         &mut self,
-        _ctx: RpcContext<'_>,
+        ctx: RpcContext<'_>,
         _req: ReadRegionMetaRequest,
         mut sink: ServerStreamingSink<RegionMeta>,
     ) {
@@ -261,6 +277,11 @@ impl<ER: RaftEngine> RecoverData for RecoveryService<ER> {
             }
         });
 
+        // Hacking: Some times, the client may omit the RPC call to `recover_region` if
+        // no leader should be register to some (unfortunate) store. So we abort
+        // last recover region here too, anyway this RPC implies a consequent
+        // `recover_region` for now.
+        self.abort_last_recover_region(format_args!("read_region_meta by {}", ctx.peer()));
         self.threads.spawn_ok(send_task);
     }
 
@@ -352,20 +373,9 @@ impl<ER: RaftEngine> RecoverData for RecoveryService<ER> {
             resp
         };
 
-        let mut last_state_lock = self.last_recovery_region_rpc.lock().unwrap();
-        if let Some(last_state) = last_state_lock.take() {
-            info!("Another task enter, checking last task.";
-                "finished" => ?last_state.finished,
-                "start_before" => ?last_state.start_at.elapsed(),
-                "peer" => ctx.peer(),
-            );
-            if !last_state.finished.load(Ordering::SeqCst) {
-                last_state.abort.abort();
-                warn!("Last task not finished, aborting it.");
-            }
-        }
+        self.abort_last_recover_region(format!("recover_region by {}", ctx.peer()));
         let (state, task) = RecoverRegionState::wrap_task(task);
-        *last_state_lock = Some(state);
+        *self.last_recovery_region_rpc.lock().unwrap() = Some(state);
         self.threads.spawn_ok(async move {
             let res = match task.await {
                 Ok(resp) => sink.success(resp),
