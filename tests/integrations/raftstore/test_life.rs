@@ -7,9 +7,7 @@ use std::{
 
 use kvproto::raft_serverpb::{ExtraMessageType, PeerState, RaftMessage};
 use raftstore::errors::Result;
-use test_raftstore::{
-    new_learner_peer, new_peer, sleep_ms, Filter, FilterFactory, Simulator as S1,
-};
+use test_raftstore::{new_learner_peer, new_peer, Filter, FilterFactory, Simulator as S1};
 use test_raftstore_v2::Simulator as S2;
 use tikv_util::{time::Instant, HandyRwLock};
 
@@ -124,20 +122,7 @@ fn test_gc_peer_tiflash_engine() {
         .must_remove_peer(r21, new_learner_peer(2, 10));
 
     // Make sure leader cleans up removed_records.
-    let start = Instant::now();
-    loop {
-        sleep_ms(500);
-        if cluster_v2
-            .region_local_state(r21, 1)
-            .get_removed_records()
-            .is_empty()
-        {
-            break;
-        }
-        if start.saturating_elapsed() > Duration::from_secs(5) {
-            panic!("timeout");
-        }
-    }
+    cluster_v2.must_empty_region_removed_records(r21);
 }
 
 #[test]

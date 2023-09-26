@@ -573,7 +573,30 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         }
 
         forward_destroy_to_source_peer(msg, |m| {
+<<<<<<< HEAD
             let _ = ctx.router.send_raft_message(m.into());
+=======
+            let source_checkpoint = super::merge_source_path(
+                &ctx.tablet_registry,
+                check.get_check_region_id(),
+                source_index,
+            );
+            if source_checkpoint.exists() {
+                let router = ctx.router.clone();
+                self.record_tombstone_tablet_path_callback(
+                    ctx,
+                    source_checkpoint,
+                    extra_msg.get_index(),
+                    move || {
+                        let _ = router.send_raft_message(m.into());
+                    },
+                );
+            } else {
+                // Source peer is already destroyed. Forward to store, and let
+                // it report GcPeer response.
+                let _ = ctx.router.send_raft_message(m.into());
+            }
+>>>>>>> 9307f7ccfd (raftstore-v2: fix MergedRecords not being cleaned up (#15650))
         });
     }
 
@@ -621,16 +644,32 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             let _ = ctx.trans.send(msg);
         }
         for record in state.get_merged_records() {
+<<<<<<< HEAD
             // For merge, we ask target to check whether source should be deleted.
             for (source, target) in record
                 .get_source_peers()
                 .iter()
                 .zip(record.get_target_peers())
             {
+=======
+            for source in record.get_source_peers() {
+>>>>>>> 9307f7ccfd (raftstore-v2: fix MergedRecords not being cleaned up (#15650))
                 need_gc_ids.push(source.get_id());
                 if gc_context.confirmed_ids.contains(&source.get_id()) {
                     continue;
                 }
+                let Some(target) = record
+                    .get_target_peers()
+                    .iter()
+                    .find(|p| p.get_store_id() == source.get_store_id())
+                else {
+                    panic!(
+                        "[region {}] {} target peer not found, {:?}",
+                        self.region_id(),
+                        self.peer_id(),
+                        state
+                    );
+                };
 
                 let mut msg = RaftMessage::default();
                 msg.set_region_id(record.get_target_region_id());

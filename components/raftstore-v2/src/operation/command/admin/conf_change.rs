@@ -586,7 +586,18 @@ impl<EK: KvEngine, R> Apply<EK, R> {
         let mut removed_records: Vec<_> = self.region_state_mut().take_removed_records().into();
         let mut merged_records: Vec<_> = self.region_state_mut().take_merged_records().into();
         let updates = admin_req.get_update_gc_peers().get_peer_id();
+<<<<<<< HEAD
         info!(self.logger, "update gc peer"; "index" => log_index, "updates" => ?updates, "gc_peers" => ?removed_records, "merged_peers" => ?merged_records);
+=======
+        info!(
+            self.logger,
+            "update gc peer";
+            "index" => log_index,
+            "updates" => ?updates,
+            "removed_records" => ?removed_records,
+            "merged_records" => ?merged_records
+        );
+>>>>>>> 9307f7ccfd (raftstore-v2: fix MergedRecords not being cleaned up (#15650))
         removed_records.retain(|p| !updates.contains(&p.get_id()));
         merged_records.retain_mut(|r| {
             let mut sources: Vec<_> = r.take_source_peers().into();
