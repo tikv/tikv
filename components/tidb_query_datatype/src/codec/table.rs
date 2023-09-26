@@ -528,7 +528,7 @@ pub fn generate_index_data_for_test(
     let mut expect_row = HashMap::default();
     let mut v: Vec<_> = indice
         .iter()
-        .map(|(cid, value)| {
+        .map(|&(ref cid, ref value)| {
             expect_row.insert(
                 *cid,
                 datum::encode_key(&mut EvalContext::default(), &[value.clone()]).unwrap(),

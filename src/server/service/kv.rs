@@ -889,6 +889,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
         forward_duplex!(self.proxy, batch_commands, ctx, stream, sink);
 
         let (tx, rx) = unbounded(WakePolicy::TillReach(GRPC_MSG_NOTIFY_SIZE));
+        let ctx = Arc::new(ctx);
         let peer = ctx.peer();
         let storage = self.storage.clone();
         let copr = self.copr.clone();
@@ -1190,7 +1191,7 @@ fn handle_batch_commands_request<E: Engine, L: LockManager, F: KvFormat>(
                         response_batch_commands_request(id, resp, tx.clone(), begin_instant, GrpcTypeKind::raw_get, source);
                     }
                 },
-                Some(batch_commands_request::request::Cmd::Coprocessor(mut req)) => {
+                Some(batch_commands_request::request::Cmd::Coprocessor(req)) => {
                     let resource_control_ctx = req.get_context().get_resource_control_context();
                     if let Some(resource_manager) = resource_manager {
                         resource_manager.consume_penalty(resource_control_ctx);
@@ -1199,7 +1200,7 @@ fn handle_batch_commands_request<E: Engine, L: LockManager, F: KvFormat>(
                         .with_label_values(&[resource_control_ctx.get_resource_group_name()])
                         .inc();
                     let begin_instant = Instant::now();
-                    let source = req.mut_context().take_request_source();
+                    let source = req.get_context().get_request_source().to_owned();
                     let resp = future_copr(copr, Some(peer.to_string()), req)
                         .map_ok(|resp| {
                             resp.map(oneof!(batch_commands_response::response::Cmd::Coprocessor))
@@ -1224,7 +1225,7 @@ fn handle_batch_commands_request<E: Engine, L: LockManager, F: KvFormat>(
                         String::default(),
                     );
                 }
-                $(Some(batch_commands_request::request::Cmd::$cmd(mut req)) => {
+                $(Some(batch_commands_request::request::Cmd::$cmd(req)) => {
                     let resource_control_ctx = req.get_context().get_resource_control_context();
                     if let Some(resource_manager) = resource_manager {
                         resource_manager.consume_penalty(resource_control_ctx);
@@ -1233,7 +1234,7 @@ fn handle_batch_commands_request<E: Engine, L: LockManager, F: KvFormat>(
                         .with_label_values(&[resource_control_ctx.get_resource_group_name()])
                         .inc();
                     let begin_instant = Instant::now();
-                    let source = req.mut_context().take_request_source();
+                    let source = req.get_context().get_request_source().to_owned();
                     let resp = $future_fn($($arg,)* req)
                         .map_ok(oneof!(batch_commands_response::response::Cmd::$cmd))
                         .map_err(|_| GRPC_MSG_FAIL_COUNTER.$metric_name.inc());

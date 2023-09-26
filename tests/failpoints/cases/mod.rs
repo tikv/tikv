@@ -1,8 +1,5 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-#![allow(clippy::arc_with_non_send_sync)]
-#![allow(clippy::unnecessary_mut_passed)]
-#[allow(clippy::let_underscore_future)]
 mod test_async_fetch;
 mod test_async_io;
 mod test_backup;

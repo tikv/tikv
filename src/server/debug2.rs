@@ -1113,7 +1113,7 @@ fn get_tablet_cache(
                     "tablet load failed, region_state {:?}",
                     region_state.get_state()
                 );
-                Err(box_err!(e))
+                return Err(box_err!(e));
             }
         }
     }
