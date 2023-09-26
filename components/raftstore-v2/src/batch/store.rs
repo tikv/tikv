@@ -493,11 +493,7 @@ impl<EK: KvEngine, ER: RaftEngine, T> StorePollerBuilder<EK, ER, T> {
                 self.remove_dir(&path)?;
                 continue;
             }
-            let Some((prefix, region_id, tablet_index)) =
-                self.tablet_registry.parse_tablet_name(&path)
-            else {
-                continue;
-            };
+            let Some((prefix, region_id, tablet_index)) = self.tablet_registry.parse_tablet_name(&path) else { continue };
             if prefix == MERGE_SOURCE_PREFIX {
                 continue;
             }

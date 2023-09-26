@@ -492,7 +492,6 @@ fn test_backup_raw_meta() {
 }
 
 #[test]
-#[allow(clippy::permissions_set_readonly_false)]
 fn test_invalid_external_storage() {
     let mut suite = TestSuite::new(1, 144 * 1024 * 1024, ApiVersion::V1);
     // Put some data.

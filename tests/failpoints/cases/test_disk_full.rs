@@ -124,7 +124,6 @@ fn test_disk_full_leader_behaviors() {
 #[test_case(test_raftstore_v2::new_node_cluster)]
 fn test_disk_full_follower_behaviors() {
     for usage in [DiskUsage::AlmostFull, DiskUsage::AlreadyFull] {
-        // test_disk_full_func(usage);
         let mut cluster = new_cluster(0, 3);
         cluster.pd_client.disable_default_operator();
         cluster.run();

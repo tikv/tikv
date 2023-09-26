@@ -179,7 +179,7 @@ impl PendingDeleteRanges {
     ) -> Vec<(u64, Vec<u8>, Vec<u8>, u64)> {
         let ranges = self.find_overlap_ranges(start_key, end_key);
 
-        for (_, s_key, ..) in &ranges {
+        for &(_, ref s_key, ..) in &ranges {
             self.ranges.remove(s_key).unwrap();
         }
         ranges
@@ -1293,7 +1293,7 @@ pub(crate) mod tests {
             }
         };
 
-        #[cfg(feature = "failpoints")]
+        #[allow(dead_code)]
         let must_not_finish = |ids: &[u64]| {
             for id in ids {
                 let region_key = keys::region_state_key(*id);
