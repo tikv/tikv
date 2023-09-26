@@ -419,11 +419,7 @@ where
         }
         self.state_size = 0;
         if let ExtraBatchWrite::V2(_) = self.extra_batch_write {
-            let ExtraBatchWrite::V2(lb) =
-                mem::replace(&mut self.extra_batch_write, ExtraBatchWrite::None)
-            else {
-                unreachable!()
-            };
+            let ExtraBatchWrite::V2(lb) = mem::replace(&mut self.extra_batch_write, ExtraBatchWrite::None) else { unreachable!() };
             wb.merge(lb).unwrap();
         }
     }

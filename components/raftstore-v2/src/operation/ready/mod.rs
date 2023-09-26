@@ -439,9 +439,10 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 return;
             }
 
+            let msg_type = msg.get_message().get_msg_type();
             // This can be a message that sent when it's still a follower. Nevertheleast,
             // it's meaningless to continue to handle the request as callbacks are cleared.
-            if msg.get_message().get_msg_type() == MessageType::MsgReadIndex
+            if msg_type == MessageType::MsgReadIndex
                 && self.is_leader()
                 && (msg.get_message().get_from() == raft::INVALID_ID
                     || msg.get_message().get_from() == self.peer_id())
@@ -450,14 +451,18 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 return;
             }
 
-            if msg.get_message().get_msg_type() == MessageType::MsgReadIndex
+            if msg_type == MessageType::MsgReadIndex
                 && self.is_leader()
                 && self.on_step_read_index(ctx, msg.mut_message())
             {
                 // Read index has respond in `on_step_read_index`,
                 // No need to step again.
             } else if let Err(e) = self.raft_group_mut().step(msg.take_message()) {
-                error!(self.logger, "raft step error"; "err" => ?e);
+                error!(self.logger, "raft step error";
+                    "from_peer" => ?msg.get_from_peer(),
+                    "region_epoch" => ?msg.get_region_epoch(),
+                    "message_type" => ?msg_type,
+                    "err" => ?e);
             } else {
                 let committed_index = self.raft_group().raft.raft_log.committed;
                 self.report_commit_log_duration(ctx, pre_committed_index, committed_index);
