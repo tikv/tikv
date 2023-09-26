@@ -55,7 +55,7 @@ mod tests {
                     if let Some(tag) = self.current_ctx {
                         self.records
                             .entry(tag.as_bytes().to_vec())
-                            .or_default()
+                            .or_insert_with(RawRecord::default)
                             .cpu_time += ms;
                     }
                     self.ops.push(op);
@@ -140,7 +140,7 @@ mod tests {
             if let Ok(mut r) = self.records.lock() {
                 for (tag, record) in records.records.iter() {
                     r.entry(tag.extra_attachment.to_vec())
-                        .or_default()
+                        .or_insert_with(RawRecord::default)
                         .merge(record);
                 }
             }
@@ -156,10 +156,10 @@ mod tests {
 
             let mut records = self.records.lock().unwrap();
             for k in expected.keys() {
-                records.entry(k.clone()).or_default();
+                records.entry(k.clone()).or_insert_with(RawRecord::default);
             }
             for k in records.keys() {
-                expected.entry(k.clone()).or_default();
+                expected.entry(k.clone()).or_insert_with(RawRecord::default);
             }
             for (k, expected_value) in expected {
                 let value = records.get(&k).unwrap();
@@ -324,10 +324,10 @@ mod tests {
     fn merge(
         maps: impl IntoIterator<Item = HashMap<Vec<u8>, RawRecord>>,
     ) -> HashMap<Vec<u8>, RawRecord> {
-        let mut map: HashMap<Vec<u8>, RawRecord> = HashMap::default();
+        let mut map = HashMap::default();
         for m in maps {
             for (k, v) in m {
-                map.entry(k).or_default().merge(&v);
+                map.entry(k).or_insert_with(RawRecord::default).merge(&v);
             }
         }
         map
