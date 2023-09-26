@@ -87,7 +87,8 @@ const WIRE_EXTRA_BYTES: usize = 12;
 const WRITER_GC_INTERVAL: Duration = Duration::from_secs(300);
 /// The max time of suspending requests.
 /// This may save us from some client sending insane value to the server.
-const SUSPEND_REQUEST_MAX_SECS: u64 = /* 6h */ 6 * 60 * 60;
+const SUSPEND_REQUEST_MAX_SECS: u64 = // 6h
+    6 * 60 * 60;
 
 fn transfer_error(err: storage::Error) -> ImportPbError {
     let mut e = ImportPbError::default();
@@ -1315,7 +1316,7 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
         if req.should_suspend_imports && req.get_duration_in_secs() > SUSPEND_REQUEST_MAX_SECS {
             ctx.spawn(async move {
                 send_rpc_response!(Err(Error::Io(
-                    std::io::Error::new(std::io::ErrorKind::InvalidInput, 
+                    std::io::Error::new(std::io::ErrorKind::InvalidInput,
                         format!("you are going to suspend the import RPCs too long. (for {} seconds, max acceptable duration is {} seconds)", 
                         req.get_duration_in_secs(), SUSPEND_REQUEST_MAX_SECS)))), sink, label, timer);
             });
