@@ -3378,6 +3378,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "memmap2"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "43a5a03cefb0d953ec0be133036f14e109412fa594edc2f77227249db66cc3ed"
+dependencies = [
+ "libc 0.2.146",
+]
+
+[[package]]
 name = "memoffset"
 version = "0.6.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6897,6 +6906,7 @@ dependencies = [
  "log",
  "log_wrappers",
  "match-template",
+ "memmap2 0.8.0",
  "memory_trace_macros",
  "mime",
  "more-asserts",

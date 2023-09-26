@@ -3,6 +3,7 @@
 /// Provides profilers for TiKV.
 mod profile;
 use std::{
+    borrow::Cow,
     env::{args, current_exe},
     error::Error as StdError,
     net::SocketAddr,
@@ -328,8 +329,9 @@ where
     // The request and response format follows pprof remote server https://gperftools.github.io/gperftools/pprof_remote_servers.html
     // Here is the go pprof implementation https://github.com/golang/go/blob/3857a89e7eb872fa22d569e70b7e076bec74ebbb/src/net/http/pprof/pprof.go#L191
     async fn get_symbol(req: Request<Body>) -> hyper::Result<Response<Body>> {
-        let bin_data = std::fs::read(current_exe().unwrap()).unwrap(); // TODO: handle error 
-        let object = object::File::parse(&*bin_data).unwrap();
+        let file = std::fs::File::open(current_exe().unwrap()).unwrap(); // TODO: handle error 
+        let map = unsafe { memmap2::Mmap::map(&file).unwrap() };
+        let object = object::File::parse(&*map).unwrap();
         let mut text = String::new();
 
         if req.method() == Method::GET {
@@ -349,6 +351,7 @@ where
             let ctx = addr2line::Context::new(&object).unwrap();
             let symbols = object.symbol_map();
 
+            // Get `/proc/self/maps` to get memory mapping information.
             let maps = get_process_maps(std::process::id() as Pid).unwrap();
 
             for pc in body.split('+') {
@@ -362,6 +365,12 @@ where
                 for map in maps.iter() {
                     let start = map.start();
                     if (pc >= start) && (pc < (start + map.size())) {
+                        // What we have is a virtual address(VA). But in most modern OSes, address
+                        // spaces are randomized for a new process. So we
+                        // need to examine the `proc/self/maps` to get the base address of text
+                        // section loaded in memory. The address in file
+                        // should be (VA - start address of text section in memory + text section
+                        // offset in file).
                         addr = Some(pc - start + map.offset);
                         break;
                     }
@@ -371,38 +380,28 @@ where
                     continue;
                 };
 
-                // Look up the function name for the address.
+                // Look up the frame by DWARF debug info.
                 let mut frames = ctx.find_frames(addr as u64).skip_all_loads().unwrap();
-                let mut found = false;
-                // You need to specify an offset to addr2line, not a virtual address (VA).
-                // Presumably if you had address space randomization turned off, you could use a
-                // full VA, but in most modern OSes, address spaces are randomized for a new
-                // process. Given the VA 0x4005BDC by valgrind, find the base
-                // address of your process or library in memory. Do this by examining the
-                // /proc/<PID>/maps file while your program is running. The line of interest is
-                // the text segment of your process, which is identifiable by the permissions
-                // r-xp and the name of your program or library.
+                let mut sym = None;
                 while let Some(frame) = frames.next().unwrap() {
-                    found = true;
-                    let f = if let Some(func) = frame.function {
-                        func.demangle().unwrap().into_owned()
-                    } else {
-                        "??".to_owned()
-                    };
-                    // should be "<hex address> <function name>"
-                    info!("resolve: {:#x} {:#x} {}", addr, pc, f,);
-                    text.push_str(format!("{:#x} {}\n", pc, f).as_str()); // TODO: handle error
-                }
-                if !found {
-                    if let Some(sym) = symbols.get(addr as u64) {
-                        let f = sym.name();
-                        info!("resolve: {:#x} {:#x} {}", addr, pc, f);
-                        text.push_str(format!("{:#x} {}\n", pc, f).as_str()); // TODO: handle error
-                    } else {
-                        info!("can't resolve mapped addr: {:#x}, pc: {:#x}", addr, pc);
+                    if let Some(func) = frame.function {
+                        sym = Some(func.demangle().unwrap())
                     }
-                    continue;
+                }
+                if sym.is_none() {
+                    // If not found by DWARF, try to look up the address in the symbol table.
+                    if let Some(s) = symbols.get(addr as u64) {
+                        sym = Some(addr2line::demangle_auto(Cow::from(s.name()), None));
+                    }
                 };
+                if let Some(f) = sym {
+                    // should be "<hex address> <function name>"
+                    info!("resolve: {:#x} {:#x} {}", addr, pc, f);
+                    text.push_str(format!("{:#x} {}\n", pc, f).as_str());
+                } else {
+                    info!("can't resolve mapped addr: {:#x}, pc: {:#x}", addr, pc);
+                    text.push_str(format!("{:#x} ??\n", pc).as_str());
+                }
             }
         }
         let response = Response::builder()

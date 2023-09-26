@@ -94,6 +94,7 @@ libloading = "0.7"
 log = { version = "0.4", features = ["max_level_trace", "release_max_level_debug"] }
 log_wrappers = { workspace = true }
 match-template = "0.0.1"
+memmap2 = "0.8.0"
 memory_trace_macros = { workspace = true }
 mime = "0.3.13"
 more-asserts = "0.2"
