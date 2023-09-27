@@ -2904,7 +2904,90 @@ def RaftMessage() -> RowPanel:
     layout = Layout(title="Raft Message")
     layout.row(
         [
-            # graph_panel()
+            graph_panel(
+                title="Sent messages per server",
+                description="The number of Raft messages sent by each TiKV instance",
+                yaxes=yaxes(left_format=UNITS.OPS_PER_SEC),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_raftstore_raft_sent_message_total",
+                        ),
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="Flush messages per server",
+                description="The number of Raft messages flushed by each TiKV instance",
+                yaxes=yaxes(left_format=UNITS.OPS_PER_SEC),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_server_raft_message_flush_total",
+                            by_labels=["instance", "reason"],
+                        ),
+                    ),
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel(
+                title="Receive messages per server",
+                description="The number of Raft messages received by each TiKV instance",
+                yaxes=yaxes(left_format=UNITS.OPS_PER_SEC),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_server_raft_message_recv_total",
+                        ),
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="Messages",
+                description="The number of different types of Raft messages that are sent",
+                yaxes=yaxes(left_format=UNITS.OPS_PER_SEC),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_raftstore_raft_sent_message_total",
+                            by_labels=["type"],
+                        ),
+                    ),
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel(
+                title="Vote",
+                description="The total number of vote messages that are sent in Raft",
+                yaxes=yaxes(left_format=UNITS.OPS_PER_SEC),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_raftstore_raft_sent_message_total",
+                            label_selectors=['type="vote"'],
+                        ),
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="Raft dropped messages",
+                description="The number of dropped Raft messages per type",
+                yaxes=yaxes(left_format=UNITS.OPS_PER_SEC),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_raftstore_raft_dropped_message_total",
+                            by_labels=["type"],
+                        ),
+                    ),
+                ],
+            ),
         ]
     )
     return layout.row_panel
@@ -2914,7 +2997,127 @@ def RaftAdmin() -> RowPanel:
     layout = Layout(title="Raft Admin")
     layout.row(
         [
-            # graph_panel()
+            graph_panel(
+                title="Admin proposals",
+                description="The number of admin proposals",
+                yaxes=yaxes(left_format=UNITS.OPS_PER_SEC),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_raftstore_proposal_total",
+                            label_selectors=['type=~"conf_change|transfer_leader"'],
+                            by_labels=["type"],
+                        ),
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="Admin apply",
+                description="The number of the processed apply command",
+                yaxes=yaxes(left_format=UNITS.OPS_PER_SEC),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_raftstore_admin_cmd_total",
+                            label_selectors=['type!="compact"'],
+                            by_labels=["type"],
+                        ),
+                    ),
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel(
+                title="Check split",
+                description="The number of raftstore split checks",
+                yaxes=yaxes(left_format=UNITS.OPS_PER_SEC),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_raftstore_check_split_total",
+                            label_selectors=['type!="ignore"'],
+                            by_labels=["type"],
+                        ),
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="99.99% Check split duration",
+                description="The time consumed when running split check in .9999",
+                yaxes=yaxes(left_format=UNITS.SECONDS),
+                targets=[
+                    target(
+                        expr=expr_histogram_quantile(
+                            0.9999,
+                            "tikv_raftstore_check_split_duration_seconds",
+                            by_labels=["instance"],
+                        ),
+                        legend_format="{{instance}}",
+                    ),
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel(
+                title="Load base split event",
+                yaxes=yaxes(left_format=UNITS.OPS_PER_MIN),
+                targets=[
+                    target(
+                        expr=expr_sum_delta(
+                            "tikv_load_base_split_event",
+                            range_selector="1m",
+                            by_labels=["type"],
+                        ),
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="Load base split duration",
+                yaxes=yaxes(left_format=UNITS.SECONDS),
+                targets=[
+                    target(
+                        expr=expr_histogram_quantile(
+                            0.80,
+                            "tikv_load_base_split_duration_seconds",
+                            by_labels=["instance"],
+                        ),
+                        legend_format="80%-{{instance}}",
+                    ),
+                    target(
+                        expr=expr_histogram_quantile(
+                            0.99,
+                            "tikv_load_base_split_duration_seconds",
+                            by_labels=["instance"],
+                        ),
+                        legend_format="99%-{{instance}}",
+                    ),
+                    target(
+                        expr=expr_histogram_avg(
+                            "tikv_load_base_split_duration_seconds",
+                            by_labels=["instance"],
+                        ),
+                        legend_format="avg-{{instance}}",
+                    ),
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel(
+                title="Peer in Flashback State",
+                targets=[
+                    target(
+                        expr=expr_sum(
+                            "tikv_raftstore_peer_in_flashback_state",
+                        ),
+                    ),
+                ],
+            ),
         ]
     )
     return layout.row_panel
