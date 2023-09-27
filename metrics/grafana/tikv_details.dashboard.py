@@ -687,7 +687,7 @@ def expr_histogram_quantile(
     by_labels: list[str] = [],
 ) -> Expr:
     """
-    Query an instant vector of a metric.
+    Query a quantile of a histogram metric.
 
     Example:
 
@@ -717,6 +717,46 @@ def expr_histogram_quantile(
     ).extra(
         # Do not attach default label selector again.
         default_label_selectors=[]
+    )
+
+
+def expr_histogram_avg(
+    metrics: str,
+    label_selectors: list[str] = [],
+    by_labels: list[str] = ["instance"],
+) -> str:
+    """
+    Query the avg of a histogram metric.
+
+    Example:
+
+    sum(rate(
+        tikv_grpc_msg_duration_seconds_sum
+        {k8s_cluster="$k8s_cluster",tidb_cluster="$tidb_cluster",instance=~"$instance"}
+        [$__rate_interval]
+    )) / sum(rate(
+        tikv_grpc_msg_duration_seconds_count
+        {k8s_cluster="$k8s_cluster",tidb_cluster="$tidb_cluster",instance=~"$instance"}
+        [$__rate_interval]
+    ))
+    """
+    for suffix in ["_bucket", "_count", "_sum"]:
+        assert not metrics.endswith(
+            suffix
+        ), f"'{metrics}' should not specify '{suffix}' suffix manually"
+
+    return expr_operator(
+        expr_sum_rate(
+            metrics + "_sum",
+            label_selectors=label_selectors,
+            by_labels=by_labels,
+        ),
+        "/",
+        expr_sum_rate(
+            metrics + "_count",
+            label_selectors=label_selectors,
+            by_labels=by_labels,
+        ),
     )
 
 
@@ -776,18 +816,10 @@ def graph_panel_histogram_quantiles(
                 legend_format=r"99%",
             ),
             target(
-                expr=expr_operator(
-                    expr_sum_rate(
-                        f"{metric}_sum",
-                        label_selectors=label_selectors,
-                        by_labels=[],  # override default by instance.
-                    ),
-                    "/",
-                    expr_sum_rate(
-                        f"{metric}_count",
-                        label_selectors=label_selectors,
-                        by_labels=[],  # override default by instance.
-                    ),
+                expr=expr_histogram_avg(
+                    metric,
+                    label_selectors=label_selectors,
+                    by_labels=[],  # override default by instance.
                 ),
                 legend_format="avg",
             ),
@@ -820,6 +852,50 @@ def graph_panel_histogram_quantiles(
     )
 
 
+def heatmap_panel_graph_panel_histogram_quantile_pairs(
+    heatmap_title: str,
+    heatmap_description: str,
+    graph_title: str,
+    graph_description: str,
+    quantile: float,
+    yaxis_format: str,
+    metric: str,
+    label_selectors=[],
+) -> list[Panel]:
+    return [
+        heatmap_panel(
+            title=heatmap_title,
+            description=heatmap_description,
+            yaxis=yaxis(format=yaxis_format),
+            targets=[
+                target(
+                    expr=expr_sum_rate(
+                        f"{metric}_bucket",
+                        label_selectors=label_selectors,
+                        by_labels=["le"],
+                    ),
+                ),
+            ],
+        ),
+        graph_panel(
+            title=graph_title,
+            description=graph_description,
+            yaxes=yaxes(left_format=yaxis_format),
+            targets=[
+                target(
+                    expr=expr_histogram_quantile(
+                        quantile,
+                        f"{metric}",
+                        label_selectors=label_selectors,
+                        by_labels=["instance"],
+                    ),
+                    legend_format="{{instance}}",
+                ),
+            ],
+        ),
+    ]
+
+
 #### Utilities Function End ####
 
 #### Metrics Definition Start ####
@@ -827,7 +903,7 @@ def graph_panel_histogram_quantiles(
 
 def Templates() -> Templating:
     return Templating(
-        [
+        list = [
             template(
                 name="k8s_cluster",
                 query="label_values(tikv_engine_block_cache_size_bytes, k8s_cluster)",
@@ -1449,11 +1525,7 @@ def Server() -> RowPanel:
                 yaxes=yaxes(left_format=UNITS.BYTES_IEC),
                 targets=[
                     target(
-                        expr=expr_operator(
-                            expr_sum_rate("tikv_region_written_bytes_sum"),
-                            "/",
-                            expr_sum_rate("tikv_region_written_bytes_count"),
-                        ),
+                        expr=expr_histogram_avg("tikv_region_written_bytes"),
                         legend_format="{{instance}}",
                     ),
                 ],
@@ -1478,11 +1550,7 @@ def Server() -> RowPanel:
                 yaxes=yaxes(left_format=UNITS.BYTES_IEC),
                 targets=[
                     target(
-                        expr=expr_operator(
-                            expr_sum_rate("tikv_region_written_keys_sum"),
-                            "/",
-                            expr_sum_rate("tikv_region_written_keys_count"),
-                        ),
+                        expr=expr_histogram_avg("tikv_region_written_keys"),
                         legend_format="{{instance}}",
                     ),
                 ],
@@ -1576,16 +1644,9 @@ def Server() -> RowPanel:
                 yaxes=yaxes(left_format=UNITS.SECONDS, log_base=2),
                 targets=[
                     target(
-                        expr=expr_operator(
-                            expr_sum_rate(
-                                "tikv_yatp_pool_schedule_wait_duration_sum",
-                                by_labels=["name"],
-                            ),
-                            "/",
-                            expr_sum_rate(
-                                "tikv_yatp_pool_schedule_wait_duration_count",
-                                by_labels=["name"],
-                            ),
+                        expr=expr_histogram_avg(
+                            "tikv_yatp_pool_schedule_wait_duration",
+                            by_labels=["name"],
                         ),
                         legend_format="{{name}}",
                     ),
@@ -1705,16 +1766,9 @@ def gRPC() -> RowPanel:
                 yaxes=yaxes(left_format=UNITS.SECONDS, log_base=2),
                 targets=[
                     target(
-                        expr=expr_operator(
-                            expr_sum_rate(
-                                "tikv_grpc_msg_duration_seconds_sum",
-                                by_labels=["type"],
-                            ),
-                            "/",
-                            expr_sum_rate(
-                                "tikv_grpc_msg_duration_seconds_count",
-                                by_labels=["type"],
-                            ),
+                        expr=expr_histogram_avg(
+                            "tikv_grpc_msg_duration_seconds",
+                            by_labels=["type"],
                         ),
                         legend_format="{{type}}",
                     ),
@@ -1743,30 +1797,16 @@ def gRPC() -> RowPanel:
                         legend_format=r"99% response",
                     ),
                     target(
-                        expr=expr_operator(
-                            expr_sum_rate(
-                                "tikv_server_grpc_req_batch_size_sum",
-                                by_labels=[],  # override default by instance.
-                            ),
-                            "/",
-                            expr_sum_rate(
-                                "tikv_server_grpc_req_batch_size_count",
-                                by_labels=[],  # override default by instance.
-                            ),
+                        expr=expr_histogram_avg(
+                            "tikv_server_grpc_req_batch_size",
+                            by_labels=[],  # override default by instance.
                         ),
                         legend_format="avg request",
                     ),
                     target(
-                        expr=expr_operator(
-                            expr_sum_rate(
-                                "tikv_server_grpc_resp_batch_size_sum",
-                                by_labels=[],  # override default by instance.
-                            ),
-                            "/",
-                            expr_sum_rate(
-                                "tikv_server_grpc_resp_batch_size_count",
-                                by_labels=[],  # override default by instance.
-                            ),
+                        expr=expr_histogram_avg(
+                            "tikv_server_grpc_resp_batch_size",
+                            by_labels=[],  # override default by instance.
                         ),
                         legend_format="avg response",
                     ),
@@ -1778,16 +1818,9 @@ def gRPC() -> RowPanel:
                         legend_format=r"99% kv get batch",
                     ),
                     target(
-                        expr=expr_operator(
-                            expr_sum_rate(
-                                "tikv_server_request_batch_size_sum",
-                                by_labels=[],  # override default by instance.
-                            ),
-                            "/",
-                            expr_sum_rate(
-                                "tikv_server_request_batch_size_count",
-                                by_labels=[],  # override default by instance.
-                            ),
+                        expr=expr_histogram_avg(
+                            "tikv_server_request_batch_size",
+                            by_labels=[],  # override default by instance.
                         ),
                         legend_format="avg kv batch",
                     ),
@@ -1804,16 +1837,9 @@ def gRPC() -> RowPanel:
                         legend_format=r"99%",
                     ),
                     target(
-                        expr=expr_operator(
-                            expr_sum_rate(
-                                "tikv_server_raft_message_batch_size_sum",
-                                by_labels=[],  # override default by instance.
-                            ),
-                            "/",
-                            expr_sum_rate(
-                                "tikv_server_raft_message_batch_size_count",
-                                by_labels=[],  # override default by instance.
-                            ),
+                        expr=expr_histogram_avg(
+                            "tikv_server_raft_message_batch_size",
+                            by_labels=[],  # override default by instance.
                         ),
                         legend_format="avg",
                     ),
@@ -2247,16 +2273,9 @@ def PD() -> RowPanel:
                 yaxes=yaxes(left_format=UNITS.SECONDS),
                 targets=[
                     target(
-                        expr=expr_operator(
-                            expr_sum_rate(
-                                "tikv_pd_request_duration_seconds_sum",
-                                by_labels=["type"],
-                            ),
-                            "/",
-                            expr_sum_rate(
-                                "tikv_pd_request_duration_seconds_count",
-                                by_labels=["type"],
-                            ),
+                        expr=expr_histogram_avg(
+                            "tikv_pd_request_duration_seconds",
+                            by_labels=["type"],
                         ),
                         legend_format="{{type}}",
                     ),
@@ -2458,16 +2477,9 @@ def IOBreakdown() -> RowPanel:
                         legend_format=r"{{type}}-99%",
                     ),
                     target(
-                        expr=expr_operator(
-                            expr_sum_rate(
-                                "tikv_rate_limiter_request_wait_duration_seconds_sum",
-                                by_labels=[],  # override default by instance.
-                            ),
-                            "/",
-                            expr_sum_rate(
-                                "tikv_rate_limiter_request_wait_duration_seconds_count",
-                                by_labels=[],  # override default by instance.
-                            ),
+                        expr=expr_histogram_avg(
+                            "tikv_rate_limiter_request_wait_duration_seconds",
+                            by_labels=[],  # override default by instance.
                         ),
                         legend_format="avg",
                     ),
@@ -2592,96 +2604,58 @@ def RaftWaterfall() -> RowPanel:
 
 def RaftIO() -> RowPanel:
     layout = Layout(title="Raft IO")
-
-    def heatmap_panel_graph_panel_pairs(
-        heatmap_title: str,
-        heatmap_description: str,
-        graph_title: str,
-        graph_description: str,
-        yaxis_format: str,
-        metric: str,
-        label_selectors=[],
-    ):
-        return [
-            heatmap_panel(
-                title=heatmap_title,
-                description=heatmap_description,
-                yaxis=yaxis(format=yaxis_format),
-                targets=[
-                    target(
-                        expr=expr_sum_rate(
-                            f"{metric}_bucket",
-                            label_selectors=label_selectors,
-                            by_labels=["le"],
-                        ),
-                    ),
-                ],
-            ),
-            graph_panel(
-                title=graph_title,
-                description=graph_description,
-                yaxes=yaxes(left_format=yaxis_format),
-                targets=[
-                    target(
-                        expr=expr_histogram_quantile(
-                            0.99,
-                            f"{metric}",
-                            label_selectors=label_selectors,
-                            by_labels=["instance"],
-                        ),
-                        legend_format="{{instance}}",
-                    ),
-                ],
-            ),
-        ]
-
     layout.row(
-        heatmap_panel_graph_panel_pairs(
+        heatmap_panel_graph_panel_histogram_quantile_pairs(
             heatmap_title="Process ready duration",
             heatmap_description="The time consumed for peer processes to be ready in Raft",
             graph_title="99% Process ready duration per server",
             graph_description="The time consumed for peer processes to be ready in Raft",
+            quantile=0.99,
             yaxis_format=UNITS.SECONDS,
             metric="tikv_raftstore_raft_process_duration_secs",
             label_selectors=['type="ready"'],
         )
     )
     layout.row(
-        heatmap_panel_graph_panel_pairs(
+        heatmap_panel_graph_panel_histogram_quantile_pairs(
             heatmap_title="Store write loop duration",
             heatmap_description="The time duration of store write loop when store-io-pool-size is not zero.",
             graph_title="99% Store write loop duration per server",
             graph_description="The time duration of store write loop on each TiKV instance when store-io-pool-size is not zero.",
+            quantile=0.99,
             yaxis_format=UNITS.SECONDS,
             metric="tikv_raftstore_store_write_loop_duration_seconds",
         )
     )
     layout.row(
-        heatmap_panel_graph_panel_pairs(
+        heatmap_panel_graph_panel_histogram_quantile_pairs(
             heatmap_title="Append log duration",
             heatmap_description="The time consumed when Raft appends log",
             graph_title="99% Commit log duration per server",
             graph_description="The time consumed when Raft commits log on each TiKV instance",
+            quantile=0.99,
             yaxis_format=UNITS.SECONDS,
             metric="tikv_raftstore_append_log_duration_seconds",
         )
     )
     layout.row(
-        heatmap_panel_graph_panel_pairs(
+        heatmap_panel_graph_panel_histogram_quantile_pairs(
             heatmap_title="Commit log duration",
             heatmap_description="The time consumed when Raft commits log",
             graph_title="99% Commit log duration per server",
             graph_description="The time consumed when Raft commits log on each TiKV instance",
+            quantile=0.99,
             yaxis_format=UNITS.SECONDS,
             metric="tikv_raftstore_commit_log_duration_seconds",
         )
     )
     layout.row(
-        heatmap_panel_graph_panel_pairs(
+        heatmap_panel_graph_panel_histogram_quantile_pairs(
             heatmap_title="Apply log duration",
             heatmap_description="The time consumed when Raft applies log",
             graph_title="99% Apply log duration per server",
             graph_description="The time consumed for Raft to apply logs per TiKV instance",
+            quantile=0.99,
             yaxis_format=UNITS.SECONDS,
             metric="tikv_raftstore_apply_log_duration_seconds",
         )
