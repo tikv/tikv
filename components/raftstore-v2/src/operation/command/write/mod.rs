@@ -110,12 +110,13 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 
     pub fn propose_pending_writes<T>(&mut self, ctx: &mut StoreContext<EK, ER, T>) {
         if let Some(encoder) = self.simple_write_encoder_mut().take() {
+            let header = encoder.header().clone();
             let call_proposed_on_success = if encoder.notify_proposed() {
                 // The request has pass conflict check and called all proposed callbacks.
                 false
             } else {
                 // Epoch may have changed since last check.
-                let from_epoch = encoder.header().get_region_epoch();
+                let from_epoch = header.get_region_epoch();
                 let res = util::compare_region_epoch(
                     from_epoch,
                     self.region(),
@@ -133,7 +134,10 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 self.applied_to_current_term()
             };
             let (data, chs) = encoder.encode();
-            let res = self.propose(ctx, data);
+            let res = self
+                .validate_command(&header, None, &mut ctx.raft_metrics)
+                .and_then(|_| self.propose(ctx, data));
+
             fail_point!("after_propose_pending_writes");
 
             self.post_propose_command(ctx, res, chs, call_proposed_on_success);

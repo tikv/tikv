@@ -2,6 +2,7 @@
 
 use std::{
     sync::{
+        atomic::{AtomicBool, Ordering},
         mpsc::{channel, sync_channel},
         Arc, Mutex,
     },
@@ -9,6 +10,7 @@ use std::{
     time::Duration,
 };
 
+use engine_traits::CF_DEFAULT;
 use futures::executor::block_on;
 use grpcio::{ChannelBuilder, Environment};
 use kvproto::{
@@ -16,6 +18,7 @@ use kvproto::{
         self as pb, AssertionLevel, Context, GetRequest, Op, PessimisticLockRequest,
         PrewriteRequest, PrewriteRequestPessimisticAction::*,
     },
+    raft_serverpb::RaftMessage,
     tikvpb::TikvClient,
 };
 use raft::prelude::{ConfChangeType, MessageType};
@@ -45,7 +48,9 @@ use tikv::{
         Snapshot, TestEngineBuilder, TestStorageBuilderApiV1,
     },
 };
+use tikv_kv::{Engine, Modify, WriteData, WriteEvent};
 use tikv_util::{
+    config::ReadableDuration,
     store::{new_peer, peer::new_incoming_voter},
     HandyRwLock,
 };
@@ -802,4 +807,88 @@ fn test_next_last_change_info_called_when_gc() {
     fail::remove("before_get_write_in_next_last_change_info");
 
     assert_eq!(h.join().unwrap().unwrap().as_slice(), b"v");
+}
+
+fn must_put<E: Engine>(ctx: &Context, engine: &E, key: &[u8], value: &[u8]) {
+    engine.put(ctx, Key::from_raw(key), value.to_vec()).unwrap();
+}
+
+fn must_delete<E: Engine>(ctx: &Context, engine: &E, key: &[u8]) {
+    engine.delete(ctx, Key::from_raw(key)).unwrap();
+}
+
+#[test]
+fn test_forbid_forward_propose() {
+    use test_raftstore_v2::*;
+    let count = 3;
+    let mut cluster = new_server_cluster(0, count);
+    cluster.cfg.raft_store.raft_base_tick_interval = ReadableDuration::millis(10);
+    cluster.cfg.raft_store.store_batch_system.pool_size = 2;
+    cluster.run();
+
+    let region = cluster.get_region(b"");
+    let peer1 = new_peer(1, 1);
+    let peer2 = new_peer(2, 2);
+    cluster.must_transfer_leader(region.id, peer2.clone());
+    let storage = cluster.sim.rl().storages[&1].clone();
+    let storage2 = cluster.sim.rl().storages[&2].clone();
+
+    let p = Arc::new(AtomicBool::new(false));
+    let p2 = p.clone();
+    let (tx, rx) = channel();
+    let tx = Mutex::new(tx);
+    cluster.add_recv_filter_on_node(
+        2,
+        Box::new(DropMessageFilter::new(Arc::new(move |_| {
+            if p2.load(Ordering::Relaxed) {
+                tx.lock().unwrap().send(()).unwrap();
+                // One msg is enough
+                p2.store(false, Ordering::Relaxed);
+                true
+            } else {
+                false
+            }
+        }))),
+    );
+
+    let k = Key::from_raw(b"k");
+    let mut ctx = Context::default();
+    ctx.set_region_id(region.get_id());
+    ctx.set_region_epoch(region.get_region_epoch().clone());
+    ctx.set_peer(peer2.clone());
+
+    // block node when collecting message to make some msgs in a single batch
+    fail::cfg("on_peer_collect_message_2", "pause").unwrap();
+    let _ = storage2.async_write(
+        &ctx,
+        WriteData::from_modifies(vec![Modify::Put(CF_DEFAULT, k.clone(), b"val".to_vec())]),
+        WriteEvent::BASIC_EVENT,
+        None,
+    );
+
+    // Make node 1 become leader
+    let router = cluster.get_router(1).unwrap();
+    let mut raft_msg = RaftMessage::default();
+    raft_msg.set_region_id(1);
+    raft_msg.set_to_peer(peer1.clone());
+    raft_msg.set_region_epoch(region.get_region_epoch().clone());
+    raft_msg
+        .mut_message()
+        .set_msg_type(MessageType::MsgTimeoutNow);
+    router.send_raft_message(Box::new(raft_msg)).unwrap();
+
+    std::thread::sleep(Duration::from_secs(1));
+
+    ctx.set_peer(peer1.clone());
+    must_put(&ctx, &storage, b"k", b"val");
+    must_delete(&ctx, &storage, b"k");
+
+    p.store(true, Ordering::Release);
+    rx.recv().unwrap();
+    // Ensure the msg is sent by router.
+    std::thread::sleep(Duration::from_millis(100));
+    fail::remove("on_peer_collect_message_2");
+
+    std::thread::sleep(Duration::from_secs(1));
+    assert_eq!(cluster.get(k.as_encoded()), None);
 }
