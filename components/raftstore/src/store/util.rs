@@ -306,7 +306,7 @@ pub fn compare_region_epoch(
     // tells TiDB with a epoch not match error contains the latest target Region
     // info, TiDB updates its region cache and sends requests to TiKV B,
     // and TiKV B has not applied commit merge yet, since the region epoch in
-    // request is higher than TiKV B, the request must be denied due to epoch
+    // request is higher than TiKV B, the request must be suspended due to epoch
     // not match, so it does not read on a stale snapshot, thus avoid the
     // KeyNotInRegion error.
     let current_epoch = region.get_region_epoch();
