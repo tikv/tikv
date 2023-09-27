@@ -22,7 +22,7 @@ fn test_gc_peer_on_tombstone_store() {
     let peer_on_store3 = find_peer(&region, 3).unwrap().clone();
     cluster.must_transfer_leader(region.get_id(), peer_on_store1);
     cluster.add_send_filter(IsolationFilterFactory::new(3));
-    pd_client.must_remove_peer(region.get_id(), peer_on_store3.clone());
+    pd_client.must_remove_peer(region.get_id(), peer_on_store3);
 
     // Immediately invalidate store address cache.
     fail::cfg("mock_store_refresh_interval_secs", "return(0)").unwrap();
