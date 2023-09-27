@@ -59,4 +59,41 @@ fn test_store_heartbeat_after_replay() {
     });
 
     fail::cfg("APPLY_COMMITTED_ENTRIES", "pause").unwrap();
+    let router = &mut cluster.routers[0];
+    let header = Box::new(router.new_request_for(2).take_header());
+    let mut put = SimpleWriteEncoder::with_capacity(64);
+    put.put(CF_DEFAULT, b"key", b"value");
+    router.wait_applied_to_current_term(2, Duration::from_secs(3));
+
+    let (msg, mut sub0) = PeerMsg::simple_write(header.clone(), put.encode());
+    router.send(2, msg).unwrap();
+    assert!(block_on(sub0.wait_proposed()));
+    assert!(block_on(sub0.wait_committed()));
+    let before_restart = chrono::Local::now().timestamp() as u32;
+    cluster.restart(0);
+
+    // There should be no store heartbeats before replay is finished.
+    let timer = Instant::now();
+    while timer.elapsed < Duration::from_secs(3) {
+        let stats = block_on(cluster.node(0).pd_client().get_store_stats_async(1)).unwrap();
+        assert!(stats.get_start_time() < before_restart);
+        std::thread::sleep(Duration::from_millis(100));
+    }
+
+    // Unblock replay.
+    fail::remove("APPLY_COMMITTED_ENTRIES");
+
+    // There should be store heartbeats after replay is finished.
+    timer = Instant::now();
+    let heartbeat_sent = false;
+
+    while timer.elapsed < Duration::from_secs(3) {
+        let stats = block_on(cluster.node(0).pd_client().get_store_stats_async(1)).unwrap();
+        if stats.get_start_time() > before_restart {
+            heartbeat_sent = true;
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    assert!(heartbeat_sent);
 }
