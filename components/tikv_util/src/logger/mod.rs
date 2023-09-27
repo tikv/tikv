@@ -6,6 +6,7 @@ mod formatter;
 use std::{
     env, fmt,
     io::{self, BufWriter},
+    num::NonZeroU64,
     path::{Path, PathBuf},
     sync::{
         atomic::{AtomicUsize, Ordering},
@@ -631,10 +632,14 @@ fn write_log_fields(
     Ok(())
 }
 
+fn format_thread_id(thread_id: NonZeroU64) -> String {
+    format!("{:#0x}", thread_id)
+}
+
 fn get_values() -> OwnedKV<impl SendSyncRefUnwindSafeKV> {
     slog_o!(
         "thread_id" => FnValue(|_| {
-            format!("{:#0x}", std::thread::current().id().as_u64())
+            format_thread_id(std::thread::current().id().as_u64())
         })
     )
 }
@@ -690,7 +695,14 @@ impl<'a> slog::Serializer for Serializer<'a> {
 
 #[cfg(test)]
 mod tests {
-    use std::{cell::RefCell, io, io::Write, str::from_utf8};
+    use std::{
+        cell::RefCell,
+        io,
+        io::Write,
+        str::from_utf8,
+        sync::{mpsc, RwLock},
+        time::Duration,
+    };
 
     use chrono::DateTime;
     use regex::Regex;
@@ -716,8 +728,6 @@ mod tests {
     }
 
     fn log_format_cases(logger: slog::Logger) {
-        use std::time::Duration;
-
         // Empty message is not recommend, just for test purpose here.
         slog_info!(logger, "");
         slog_info!(logger, "Welcome");
@@ -778,7 +788,7 @@ mod tests {
 
         log_format_cases(logger);
 
-        let thread_id = format!("{:#0x}", std::thread::current().id().as_u64());
+        let thread_id = format_thread_id(std::thread::current().id().as_u64());
         let expect = format!(
             r#"[2019/01/15 13:40:39.619 +08:00] [INFO] [mod.rs:469] [] [thread_id={0}]
 [2019/01/15 13:40:39.619 +08:00] [INFO] [mod.rs:469] [Welcome] [thread_id={0}]
@@ -830,7 +840,7 @@ mod tests {
 
         log_format_cases(logger);
 
-        let thread_id = format!("{:#0x}", std::thread::current().id().as_u64());
+        let thread_id = format_thread_id(std::thread::current().id().as_u64());
         let expect = format!(
             r#"{{"time":"2020/05/16 15:49:52.449 +08:00","level":"INFO","caller":"mod.rs:469","message":"","thread_id":"{0}"}}
 {{"time":"2020/05/16 15:49:52.450 +08:00","level":"INFO","caller":"mod.rs:469","message":"Welcome","thread_id":"{0}"}}
@@ -1092,5 +1102,49 @@ mod tests {
                 );
             }
         });
+    }
+
+    static THREAD_SAFE_BUFFER: RwLock<Vec<u8>> = RwLock::new(Vec::new());
+
+    struct ThreadSafeWriter;
+    impl Write for ThreadSafeWriter {
+        fn write(&mut self, data: &[u8]) -> io::Result<usize> {
+            let mut buffer = THREAD_SAFE_BUFFER.write().unwrap();
+            buffer.write(data)
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            let mut buffer = THREAD_SAFE_BUFFER.write().unwrap();
+            buffer.flush()
+        }
+    }
+
+    #[test]
+    fn test_threadid() {
+        let drain = TikvFormat::new(PlainSyncDecorator::new(ThreadSafeWriter), true).fuse();
+        let logger = slog::Logger::root_typed(drain, get_values()).into_erased();
+
+        slog_info!(logger, "Hello from the first thread");
+        let this_threadid = thread::current().id().as_u64();
+        let this_threadid = format_thread_id(this_threadid);
+
+        let handle = thread::spawn(move || {
+            slog_info!(logger, "Hello from the second thread");
+        });
+        let other_threadid = handle.thread().id().as_u64();
+        let other_threadid = format_thread_id(other_threadid);
+        handle.join().unwrap();
+
+        let expected = vec![this_threadid, other_threadid];
+
+        let re = Regex::new(r"\[thread_id=(.*?)\]").unwrap();
+        let buffer = THREAD_SAFE_BUFFER.read().unwrap();
+        let output = from_utf8(&buffer).unwrap();
+        let actual: Vec<&str> = output
+            .lines()
+            .map(|line| re.captures(line).unwrap())
+            .map(|captures| captures.get(1).unwrap().as_str())
+            .collect();
+        assert_eq!(expected, actual);
     }
 }
