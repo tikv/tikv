@@ -736,9 +736,7 @@ def heatmap_panel(
         "_bucket"
     ), f"'{metric}' should be a histogram metric with '_bucket' suffix"
     t = target(
-        expr=expr_sum_rate(
-            metric, label_selectors=label_selectors, by_labels=["le"]
-        )
+        expr=expr_sum_rate(metric, label_selectors=label_selectors, by_labels=["le"])
     )
     # Make sure targets are in heatmap format.
     t.format = "heatmap"
@@ -2840,7 +2838,63 @@ def RaftProcess() -> RowPanel:
     layout = Layout(title="Raft Process")
     layout.row(
         [
-            # graph_panel()
+            graph_panel(
+                title="Ready handled",
+                description="The count of different ready type of Raft",
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_raftstore_raft_ready_handled_total",
+                            by_labels=["type"],
+                        ),
+                    ),
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_raftstore_raft_process_duration_secs_count",
+                            label_selectors=['type="ready"'],
+                            by_labels=[],  # overwrite default by instance.
+                        ),
+                        legend_format="count",
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="Max duration of raft store events",
+                description="The max time consumed by raftstore events",
+                yaxes=yaxes(left_format=UNITS.SECONDS),
+                targets=[
+                    target(
+                        expr=expr_histogram_quantile(
+                            0.999999,
+                            "tikv_raftstore_event_duration",
+                            by_labels=["type"],
+                        ),
+                        legend_format="{{type}}",
+                    ),
+                    target(
+                        expr=expr_histogram_quantile(
+                            0.999999,
+                            "tikv_broadcast_normal_duration_seconds",
+                        ),
+                        legend_format="broadcast_normal",
+                    ),
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            heatmap_panel(
+                title="Replica read lock checking duration",
+                description="Replica read lock checking duration",
+                yaxis=yaxis(format=UNITS.SECONDS),
+                metric="tikv_replica_read_lock_check_duration_seconds_bucket",
+            ),
+            heatmap_panel(
+                title="Peer msg length distribution",
+                description="The length of peer msgs for each round handling",
+                metric="tikv_raftstore_peer_msg_len_bucket",
+            ),
         ]
     )
     return layout.row_panel
