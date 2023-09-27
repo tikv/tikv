@@ -513,7 +513,7 @@ impl TwoPhaseResolver {
             return min_ts.min(stable_ts);
         }
 
-        self.resolver.resolve(min_ts)
+        self.resolver.resolve(min_ts, None)
     }
 
     pub fn resolved_ts(&self) -> TimeStamp {
@@ -543,7 +543,7 @@ impl TwoPhaseResolver {
                 // advance the internal resolver.
                 // the start ts of initial scanning would be a safe ts for min ts
                 // -- because is used to be a resolved ts.
-                self.resolver.resolve(ts);
+                self.resolver.resolve(ts, None);
             }
             None => {
                 warn!("BUG: a two-phase resolver is executing phase_one_done when not in phase one"; "resolver" => ?self)

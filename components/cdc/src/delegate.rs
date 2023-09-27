@@ -436,7 +436,7 @@ impl Delegate {
         }
         debug!("cdc try to advance ts"; "region_id" => self.region_id, "min_ts" => min_ts);
         let resolver = self.resolver.as_mut().unwrap();
-        let resolved_ts = resolver.resolve(min_ts);
+        let resolved_ts = resolver.resolve(min_ts, None);
         debug!("cdc resolved ts updated";
             "region_id" => self.region_id, "resolved_ts" => resolved_ts);
         Some(resolved_ts)

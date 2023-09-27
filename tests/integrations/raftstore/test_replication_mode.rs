@@ -13,7 +13,7 @@ fn prepare_cluster() -> Cluster<ServerCluster> {
     cluster.pd_client.disable_default_operator();
     cluster.pd_client.configure_dr_auto_sync("zone");
     cluster.cfg.raft_store.pd_store_heartbeat_tick_interval = ReadableDuration::millis(50);
-    cluster.cfg.raft_store.raft_log_gc_threshold = 10;
+    cluster.cfg.raft_store.raft_log_gc_threshold = 1;
     cluster.add_label(1, "zone", "ES");
     cluster.add_label(2, "zone", "ES");
     cluster.add_label(3, "zone", "WS");
@@ -290,11 +290,9 @@ fn test_switching_replication_mode() {
         .rl()
         .async_command_on_node(1, request, cb)
         .unwrap();
-    assert_eq!(
-        rx.recv_timeout(Duration::from_millis(100)),
-        Err(future::RecvTimeoutError::Timeout)
-    );
-    must_get_none(&cluster.get_engine(1), b"k3");
+    // sync recover should not block write. ref https://github.com/tikv/tikv/issues/14975.
+    assert_eq!(rx.recv_timeout(Duration::from_millis(100)).is_ok(), true);
+    must_get_equal(&cluster.get_engine(1), b"k3", b"v3");
     let state = cluster.pd_client.region_replication_status(region.get_id());
     assert_eq!(state.state_id, 3);
     assert_eq!(state.state, RegionReplicationState::SimpleMajority);
@@ -305,6 +303,26 @@ fn test_switching_replication_mode() {
     let state = cluster.pd_client.region_replication_status(region.get_id());
     assert_eq!(state.state_id, 3);
     assert_eq!(state.state, RegionReplicationState::IntegrityOverLabel);
+
+    cluster.add_send_filter(IsolationFilterFactory::new(3));
+    let mut request = new_request(
+        region.get_id(),
+        region.get_region_epoch().clone(),
+        vec![new_put_cf_cmd("default", b"k4", b"v4")],
+        false,
+    );
+    request.mut_header().set_peer(new_peer(1, 1));
+    let (cb, mut rx) = make_cb(&request);
+    cluster
+        .sim
+        .rl()
+        .async_command_on_node(1, request, cb)
+        .unwrap();
+    // already enable group commit.
+    assert_eq!(
+        rx.recv_timeout(Duration::from_millis(100)),
+        Err(future::RecvTimeoutError::Timeout)
+    );
 }
 
 #[test]
