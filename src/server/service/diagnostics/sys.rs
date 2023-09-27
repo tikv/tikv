@@ -601,7 +601,7 @@ mod tests {
             ]
         );
         // memory
-        for name in ["virtual", "swap"].into_iter() {
+        for name in vec!["virtual", "swap"].into_iter() {
             let item = collector
                 .iter()
                 .find(|x| x.get_tp() == "memory" && x.get_name() == name);

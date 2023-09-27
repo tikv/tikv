@@ -434,7 +434,6 @@ fn test_txn_query_stats_tmpl<F: KvFormat>() {
     fail::remove("only_check_source_task_name");
 }
 
-#[allow(clippy::extra_unused_type_parameters)]
 fn raw_put<F: KvFormat>(
     _cluster: &Cluster<ServerCluster>,
     client: &TikvClient,

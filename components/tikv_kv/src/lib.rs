@@ -9,7 +9,6 @@
 #![feature(min_specialization)]
 #![feature(type_alias_impl_trait)]
 #![feature(associated_type_defaults)]
-#![feature(impl_trait_in_assoc_type)]
 
 #[macro_use(fail_point)]
 extern crate fail;

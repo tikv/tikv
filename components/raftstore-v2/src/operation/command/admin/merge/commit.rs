@@ -172,6 +172,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         &mut self,
         store_ctx: &mut StoreContext<EK, ER, T>,
     ) {
+        fail::fail_point!("on_schedule_merge", |_| {});
         fail::fail_point!(
             "ask_target_peer_to_commit_merge_2",
             self.region_id() == 2,
@@ -198,7 +199,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 Ok(ents) => ents,
                 Err(e) => slog_panic!(
                     self.logger,
-                    "failed to get merge entires";
+                    "failed to get merge entries";
                     "err" => ?e,
                     "low" => low,
                     "commit" => state.get_commit()
@@ -261,6 +262,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         store_ctx: &mut StoreContext<EK, ER, T>,
         req: RaftCmdRequest,
     ) {
+        fail::fail_point!("on_ask_commit_merge", |_| {});
         let expected_epoch = req.get_header().get_region_epoch();
         let merge = req.get_admin_request().get_commit_merge();
         assert!(merge.has_source_state() && merge.get_source_state().has_merge_state());
@@ -736,6 +738,12 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         store_ctx: &mut StoreContext<EK, ER, T>,
         mut res: CommitMergeResult,
     ) {
+        fail::fail_point!(
+            "on_apply_res_commit_merge_2",
+            self.peer().store_id == 2,
+            |_| {}
+        );
+
         let region = res.region_state.get_region();
         assert!(
             res.source.get_end_key() == region.get_end_key()
@@ -821,6 +829,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 "target_region" => ?self.region(),
             );
             self.add_pending_tick(PeerTick::SplitRegionCheck);
+            self.maybe_schedule_gc_peer_tick();
         }
     }
 
