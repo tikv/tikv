@@ -903,7 +903,7 @@ def heatmap_panel_graph_panel_histogram_quantile_pairs(
 
 def Templates() -> Templating:
     return Templating(
-        list = [
+        list=[
             template(
                 name="k8s_cluster",
                 query="label_values(tikv_engine_block_cache_size_bytes, k8s_cluster)",
@@ -2689,6 +2689,7 @@ def RaftIO() -> RowPanel:
                         expr=expr_histogram_quantile(
                             0.99,
                             "tikv_raftstore_store_write_msg_block_wait_duration_seconds",
+                            by_labels=["instance"],
                         ),
                         legend_format="{{instance}}",
                     ),
@@ -2703,7 +2704,166 @@ def RaftPropose() -> RowPanel:
     layout = Layout(title="Raft Propose")
     layout.row(
         [
-            # graph_panel()
+            graph_panel(
+                title="Raft proposals per ready",
+                description="The proposal count of a Regions in a tick",
+                targets=[
+                    target(
+                        expr=expr_histogram_quantile(
+                            0.99,
+                            "tikv_raftstore_apply_proposal",
+                            by_labels=["instance"],
+                        ),
+                        legend_format="{{instance}}",
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="Raft read/write proposals",
+                description="The number of proposals per type",
+                yaxes=yaxes(left_format=UNITS.OPS_PER_SEC),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_raftstore_proposal_total",
+                            label_selectors=['type=~"local_read|normal|read_index"'],
+                            by_labels=["type"],
+                        ),
+                    ),
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel(
+                title="Raft read proposals per server",
+                description="The number of read proposals which are made by each TiKV instance",
+                yaxes=yaxes(left_format=UNITS.OPS_PER_SEC),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_raftstore_proposal_total",
+                            label_selectors=['type=~"local_read|read_index"'],
+                        ),
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="Raft write proposals per server",
+                description="The number of write proposals which are made by each TiKV instance",
+                yaxes=yaxes(left_format=UNITS.OPS_PER_SEC),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_raftstore_proposal_total",
+                            label_selectors=['type=~"normal"'],
+                        ),
+                    ),
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        heatmap_panel_graph_panel_histogram_quantile_pairs(
+            heatmap_title="Propose wait duration",
+            heatmap_description="The wait time of each proposal",
+            graph_title="99% Propose wait duration per server",
+            graph_description="The wait time of each proposal in each TiKV instance",
+            quantile=0.99,
+            yaxis_format=UNITS.SECONDS,
+            metric="tikv_raftstore_request_wait_time_duration_secs",
+        )
+    )
+    layout.row(
+        heatmap_panel_graph_panel_histogram_quantile_pairs(
+            heatmap_title="Store write wait duration",
+            heatmap_description="The wait time of each store write task",
+            graph_title="99% Store write wait duration per server",
+            graph_description="The wait time of each store write task in each TiKV instance",
+            quantile=0.99,
+            yaxis_format=UNITS.SECONDS,
+            metric="tikv_raftstore_store_write_task_wait_duration_secs",
+        )
+    )
+    layout.row(
+        heatmap_panel_graph_panel_histogram_quantile_pairs(
+            heatmap_title="Apply wait duration",
+            heatmap_description="The wait time of each apply task",
+            graph_title="99% Apply wait duration per server",
+            graph_description="The wait time of each apply task in each TiKV instance",
+            quantile=0.99,
+            yaxis_format=UNITS.SECONDS,
+            metric="tikv_raftstore_apply_wait_time_duration_secs",
+        )
+    )
+    layout.row(
+        [
+            heatmap_panel(
+                title="Store write handle msg duration",
+                description="The handle duration of each store write task msg",
+                yaxis=yaxis(format=UNITS.SECONDS),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_raftstore_store_write_handle_msg_duration_secs",
+                            by_labels=["le"],
+                        ),
+                    ),
+                ],
+            ),
+            heatmap_panel(
+                title="Store write trigger size",
+                description="The distribution of write trigger size",
+                yaxis=yaxis(format=UNITS.BYTES_IEC),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_raftstore_store_write_trigger_wb_bytes",
+                            by_labels=["le"],
+                        ),
+                    ),
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel(
+                title="Raft propose speed",
+                description="The rate at which peers propose logs",
+                yaxes=yaxes(left_format=UNITS.BYTES_SEC_IEC),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_raftstore_propose_log_size_sum",
+                        ),
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="Perf Context duration",
+                description="The rate at which peers propose logs",
+                yaxes=yaxes(left_format=UNITS.SECONDS),
+                targets=[
+                    target(
+                        expr=expr_histogram_quantile(
+                            0.99,
+                            "tikv_raftstore_store_perf_context_time_duration_secs",
+                            by_labels=["type"],
+                        ),
+                        legend_format="store-{{type}}",
+                    ),
+                    target(
+                        expr=expr_histogram_quantile(
+                            0.99,
+                            "tikv_raftstore_apply_perf_context_time_duration_secs",
+                            by_labels=["type"],
+                        ),
+                        legend_format="apply-{{type}}",
+                    ),
+                ],
+            ),
         ]
     )
     return layout.row_panel
