@@ -695,14 +695,7 @@ impl<'a> slog::Serializer for Serializer<'a> {
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        cell::RefCell,
-        io,
-        io::Write,
-        str::from_utf8,
-        sync::{mpsc, RwLock},
-        time::Duration,
-    };
+    use std::{cell::RefCell, io, io::Write, str::from_utf8, sync::RwLock, time::Duration};
 
     use chrono::DateTime;
     use regex::Regex;
