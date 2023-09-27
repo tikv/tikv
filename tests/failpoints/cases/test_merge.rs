@@ -1846,7 +1846,6 @@ fn test_concurrent_between_transfer_leader_and_merge() {
     assert_eq!(region.get_end_key(), left.get_end_key());
 
     cluster.must_put(b"k4", b"v4");
-    panic!();
 }
 
 #[test]
