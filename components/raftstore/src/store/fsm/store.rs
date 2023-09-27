@@ -43,7 +43,7 @@ use kvproto::{
     raft_serverpb::{ExtraMessage, ExtraMessageType, PeerState, RaftMessage, RegionLocalState},
     replication_modepb::{ReplicationMode, ReplicationStatus},
 };
-use pd_client::{Feature, FeatureGate, PdClient};
+use pd_client::{metrics::STORE_SIZE_EVENT_INT_VEC, Feature, FeatureGate, PdClient};
 use protobuf::Message;
 use raft::StateRole;
 use resource_control::{channel::unbounded, ResourceGroupManager};
@@ -466,10 +466,6 @@ where
     pub fn close(&self, region_id: u64) {
         self.router.close(region_id);
         self.update_trace();
-    }
-
-    pub fn clear_cache(&self) {
-        self.router.clear_cache();
     }
 
     fn update_trace(&self) {
@@ -1847,8 +1843,6 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             warn!("set thread priority for raftstore failed"; "error" => ?e);
         }
         self.workers = Some(workers);
-        // This router will not be accessed again, free all caches.
-        self.router.clear_cache();
         Ok(())
     }
 
@@ -1961,7 +1955,8 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
             }
             info!(
                 "region doesn't exist yet, wait for it to be split";
-                "region_id" => region_id
+                "region_id" => region_id,
+                "to_peer_id" => msg.get_to_peer().get_id(),
             );
             return Ok(CheckMsgStatus::FirstRequest);
         }
@@ -2525,7 +2520,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
                     self.ctx.cfg.region_compact_min_tombstones,
                     self.ctx.cfg.region_compact_tombstones_percent,
                     self.ctx.cfg.region_compact_min_redundant_rows,
-                    self.ctx.cfg.region_compact_redundant_rows_percent,
+                    self.ctx.cfg.region_compact_redundant_rows_percent(),
                 ),
             },
         )) {
@@ -2796,6 +2791,8 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
     fn on_cleanup_import_sst(&mut self) -> Result<()> {
         let mut delete_ssts = Vec::new();
         let mut validate_ssts = Vec::new();
+        let import_size = box_try!(self.ctx.importer.get_total_size());
+        STORE_SIZE_EVENT_INT_VEC.import_size.set(import_size as i64);
 
         let ssts = box_try!(self.ctx.importer.list_ssts());
         if ssts.is_empty() {

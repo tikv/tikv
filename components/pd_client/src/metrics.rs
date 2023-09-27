@@ -2,7 +2,7 @@
 
 use lazy_static::lazy_static;
 use prometheus::*;
-use prometheus_static_metric::{make_static_metric, register_static_histogram_vec};
+use prometheus_static_metric::*;
 
 make_static_metric! {
     pub label_enum PDRequestEventType {
@@ -40,8 +40,33 @@ make_static_metric! {
         meta_storage_watch,
     }
 
+    pub label_enum PDReconnectEventKind {
+        success,
+        failure,
+        no_need,
+        cancel,
+        try_connect,
+    }
+
+    pub label_enum StoreSizeEventType {
+        capacity,
+        available,
+        used,
+        snap_size,
+        raft_size,
+        kv_size,
+        import_size,
+    }
+
+    pub struct StoreSizeEventIntrVec: IntGauge {
+        "type" => StoreSizeEventType,
+    }
+
     pub struct PDRequestEventHistogramVec: Histogram {
         "type" => PDRequestEventType,
+    }
+    pub struct PDReconnectEventCounterVec: IntCounter {
+        "type" => PDReconnectEventKind,
     }
 }
 
@@ -66,12 +91,14 @@ lazy_static! {
         &["type"]
     )
     .unwrap();
-    pub static ref PD_RECONNECT_COUNTER_VEC: IntCounterVec = register_int_counter_vec!(
-        "tikv_pd_reconnect_total",
-        "Total number of PD reconnections.",
-        &["type"]
-    )
-    .unwrap();
+    pub static ref PD_RECONNECT_COUNTER_VEC: PDReconnectEventCounterVec =
+        register_static_int_counter_vec!(
+            PDReconnectEventCounterVec,
+            "tikv_pd_reconnect_total",
+            "Total number of PD reconnections.",
+            &["type"]
+        )
+        .unwrap();
     pub static ref PD_PENDING_HEARTBEAT_GAUGE: IntGauge = register_int_gauge!(
         "tikv_pd_pending_heartbeat_total",
         "Total number of pending region heartbeat"
@@ -88,8 +115,14 @@ lazy_static! {
         &["type"]
     )
     .unwrap();
-    pub static ref STORE_SIZE_GAUGE_VEC: IntGaugeVec =
-        register_int_gauge_vec!("tikv_store_size_bytes", "Size of storage.", &["type"]).unwrap();
+    pub static ref STORE_SIZE_EVENT_INT_VEC: StoreSizeEventIntrVec =
+        register_static_int_gauge_vec!(
+            StoreSizeEventIntrVec,
+            "tikv_store_size_bytes",
+            "Size of storage.",
+            &["type"]
+        )
+        .unwrap();
     pub static ref REGION_READ_KEYS_HISTOGRAM: Histogram = register_histogram!(
         "tikv_region_read_keys",
         "Histogram of keys written for regions",

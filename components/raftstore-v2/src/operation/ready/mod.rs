@@ -31,7 +31,7 @@ use std::{
     time::Instant,
 };
 
-use engine_traits::{KvEngine, RaftEngine};
+use engine_traits::{KvEngine, RaftEngine, DATA_CFS};
 use error_code::ErrorCodeExt;
 use kvproto::{
     raft_cmdpb::AdminCmdType,
@@ -418,9 +418,10 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 return;
             }
 
+            let msg_type = msg.get_message().get_msg_type();
             // This can be a message that sent when it's still a follower. Nevertheleast,
             // it's meaningless to continue to handle the request as callbacks are cleared.
-            if msg.get_message().get_msg_type() == MessageType::MsgReadIndex
+            if msg_type == MessageType::MsgReadIndex
                 && self.is_leader()
                 && (msg.get_message().get_from() == raft::INVALID_ID
                     || msg.get_message().get_from() == self.peer_id())
@@ -429,14 +430,18 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 return;
             }
 
-            if msg.get_message().get_msg_type() == MessageType::MsgReadIndex
+            if msg_type == MessageType::MsgReadIndex
                 && self.is_leader()
                 && self.on_step_read_index(ctx, msg.mut_message())
             {
                 // Read index has respond in `on_step_read_index`,
                 // No need to step again.
             } else if let Err(e) = self.raft_group_mut().step(msg.take_message()) {
-                error!(self.logger, "raft step error"; "err" => ?e);
+                error!(self.logger, "raft step error";
+                    "from_peer" => ?msg.get_from_peer(),
+                    "region_epoch" => ?msg.get_region_epoch(),
+                    "message_type" => ?msg_type,
+                    "err" => ?e);
             } else {
                 let committed_index = self.raft_group().raft.raft_log.committed;
                 self.report_commit_log_duration(ctx, pre_committed_index, committed_index);
@@ -896,6 +901,14 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         self.storage_mut()
             .entry_storage_mut()
             .update_cache_persisted(persisted_index);
+        if let Some(idx) = self
+            .storage_mut()
+            .apply_trace_mut()
+            .take_flush_index(ready_number)
+        {
+            let apply_index = self.flush_state().applied_index();
+            self.cleanup_stale_ssts(ctx, DATA_CFS, idx, apply_index);
+        }
 
         if self.is_in_force_leader() {
             // forward commit index, the committed entries will be applied in

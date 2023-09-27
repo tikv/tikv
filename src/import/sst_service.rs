@@ -165,6 +165,9 @@ impl RequestCollector {
     }
 
     fn accept_kv(&mut self, cf: &str, is_delete: bool, k: Vec<u8>, v: Vec<u8>) {
+        debug!("Accepting KV."; "cf" => %cf, 
+            "key" => %log_wrappers::Value::key(&k), 
+            "value" => %log_wrappers::Value::key(&v));
         // Need to skip the empty key/value that could break the transaction or cause
         // data corruption. see details at https://github.com/pingcap/tiflow/issues/5468.
         if k.is_empty() || (!is_delete && v.is_empty()) {
@@ -567,7 +570,6 @@ impl<E: Engine> ImportSstService<E> {
             let buff = importer
                 .read_from_kv_file(
                     meta,
-                    rule,
                     ext_storage.clone(),
                     req.get_storage_backend(),
                     &limiter,
@@ -579,6 +581,7 @@ impl<E: Engine> ImportSstService<E> {
                 meta.get_start_ts(),
                 meta.get_restore_ts(),
                 buff,
+                rule,
                 |k, v| collector.accept_kv(meta.get_cf(), meta.get_is_delete(), k, v),
             )? {
                 if let Some(range) = range.as_mut() {
