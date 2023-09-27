@@ -79,6 +79,7 @@ pub struct RaftMetrics {
     pub raft_log_gc_skipped: RaftLogGcSkippedCounterVec,
 
     // local histogram
+    pub handle_wait: LocalHistogram,
     pub store_time: LocalHistogram,
     pub propose_wait_time: LocalHistogram,
     pub process_ready: LocalHistogram,
@@ -115,6 +116,7 @@ impl RaftMetrics {
                 &RAFT_INVALID_PROPOSAL_COUNTER_VEC,
             ),
             raft_log_gc_skipped: RaftLogGcSkippedCounterVec::from(&RAFT_LOG_GC_SKIPPED_VEC),
+            handle_wait: HANDLE_WAIT_HISTOGRAM.local(),
             store_time: STORE_TIME_HISTOGRAM.local(),
             propose_wait_time: REQUEST_WAIT_TIME_HISTOGRAM.local(),
             process_ready: PEER_RAFT_PROCESS_DURATION
@@ -152,6 +154,7 @@ impl RaftMetrics {
         self.invalid_proposal.flush();
         self.raft_log_gc_skipped.flush();
 
+        self.handle_wait.flush();
         self.store_time.flush();
         self.propose_wait_time.flush();
         self.process_ready.flush();

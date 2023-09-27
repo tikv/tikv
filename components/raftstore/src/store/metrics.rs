@@ -295,6 +295,12 @@ make_static_metric! {
 }
 
 lazy_static! {
+    pub static ref HANDLE_WAIT_HISTOGRAM: Histogram =
+        register_histogram!(
+            "tikv_raftstore_handle_wait_duration_secs",
+            "Bucketed histogram of peer handle wait duration.",
+            exponential_buckets(0.00001, 2.0, 26).unwrap()
+        ).unwrap();
     pub static ref STORE_TIME_HISTOGRAM: Histogram =
         register_histogram!(
             "tikv_raftstore_store_duration_secs",
