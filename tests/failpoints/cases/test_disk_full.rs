@@ -111,6 +111,8 @@ fn test_disk_full_leader_behaviors() {
 
         // Test remove peer should be allowed.
         cluster.pd_client.must_remove_peer(1, new_peer(3, 3));
+        // Sleep for a while until the disk usage and peer changes have been synced.
+        thread::sleep(Duration::from_secs(1));
         must_get_none(&cluster.get_engine(3), b"k1");
 
         // Test add peer should be allowed. It must be a higher peer-id in v2.
@@ -118,6 +120,8 @@ fn test_disk_full_leader_behaviors() {
         must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
 
         fail::remove(get_fp(usage, 1));
+        // Sleep for a while before next case to make it clear.
+        thread::sleep(Duration::from_secs(1));
     }
 }
 
@@ -338,7 +342,7 @@ fn test_majority_disk_full() {
 
     // Configuration change should be allowed.
     cluster.pd_client.must_remove_peer(1, new_peer(2, 2));
-    // Sleep for a while until the disk usage changes have been synced.
+    // Sleep for a while until the disk usage and peer changes have been synced.
     thread::sleep(Duration::from_secs(1));
 
     // After the last configuration change is applied, the raft group will be like
