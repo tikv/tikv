@@ -16,6 +16,7 @@ mod all {
     use futures::{Stream, StreamExt};
     use pd_client::PdClient;
     use test_raftstore::IsolationFilterFactory;
+    use tikv::config::BackupStreamConfig;
     use tikv_util::{box_err, defer, info, HandyRwLock};
     use tokio::time::timeout;
     use txn_types::{Key, TimeStamp};
@@ -429,5 +430,26 @@ mod all {
             suite.flushed_files.path(),
             round1.iter().map(|k| k.as_slice()),
         ))
+    }
+
+    #[test]
+    fn update_config() {
+        let suite = SuiteBuilder::new_named("network_partition")
+            .nodes(1)
+            .build();
+        let mut basic_config = BackupStreamConfig::default();
+        basic_config.initial_scan_concurrency = 4;
+        suite.run(|| Task::ChangeConfig(basic_config.clone()));
+        suite.wait_with(|e| {
+            assert_eq!(e.initial_scan_semaphore.available_permits(), 4,);
+            true
+        });
+
+        basic_config.initial_scan_concurrency = 16;
+        suite.run(|| Task::ChangeConfig(basic_config.clone()));
+        suite.wait_with(|e| {
+            assert_eq!(e.initial_scan_semaphore.available_permits(), 16,);
+            true
+        });
     }
 }

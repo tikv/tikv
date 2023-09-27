@@ -2155,12 +2155,11 @@ mod tests {
         let (notify_tx, notify_rx) = channel();
         let (wait_spawn_tx, wait_spawn_rx) = channel();
         let runtime = tokio::runtime::Runtime::new().unwrap();
-        let handler = runtime.spawn(async move {
+        let _ = runtime.spawn(async move {
             wait_spawn_tx.send(()).unwrap();
             notify.notified().await;
             notify_tx.send(()).unwrap();
         });
-        drop(handler);
         wait_spawn_rx.recv().unwrap();
         thread::sleep(std::time::Duration::from_millis(500)); // Prevent lost notify.
         must_not_redirect(&mut reader, &rx, task);

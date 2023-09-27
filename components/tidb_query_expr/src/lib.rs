@@ -10,8 +10,6 @@
 
 #![allow(elided_lifetimes_in_paths)] // Necessary until rpn_fn accepts functions annotated with lifetimes.
 #![allow(incomplete_features)]
-#![allow(clippy::needless_raw_string_hashes)]
-#![allow(clippy::needless_return_with_question_mark)]
 #![feature(proc_macro_hygiene)]
 #![feature(specialization)]
 #![feature(test)]

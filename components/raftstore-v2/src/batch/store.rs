@@ -1,7 +1,6 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    cmp,
     ops::{Deref, DerefMut},
     path::Path,
     sync::{
@@ -140,7 +139,7 @@ impl<EK: KvEngine, ER: RaftEngine, T> StoreContext<EK, ER, T> {
         self.tick_batch[PeerTick::CheckLongUncommitted as usize].wait_duration =
             self.cfg.check_long_uncommitted_interval.0;
         self.tick_batch[PeerTick::GcPeer as usize].wait_duration =
-            60 * cmp::min(Duration::from_secs(1), self.cfg.raft_base_tick_interval.0);
+            self.cfg.gc_peer_check_interval.0;
     }
 
     // Return None means it has passed unsafe vote period.
@@ -489,11 +488,7 @@ impl<EK: KvEngine, ER: RaftEngine, T> StorePollerBuilder<EK, ER, T> {
                 self.remove_dir(&path)?;
                 continue;
             }
-            let Some((prefix, region_id, tablet_index)) =
-                self.tablet_registry.parse_tablet_name(&path)
-            else {
-                continue;
-            };
+            let Some((prefix, region_id, tablet_index)) = self.tablet_registry.parse_tablet_name(&path) else { continue };
             if prefix == MERGE_SOURCE_PREFIX {
                 continue;
             }

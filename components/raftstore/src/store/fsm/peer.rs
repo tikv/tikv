@@ -1015,10 +1015,10 @@ where
             // in snapshot recovery after we stopped all conf changes from PD.
             // if the follower slow than leader and has the pending conf change.
             // that's means
-            // 1. if the follower didn't finished the conf change => it cannot be chosen to
-            //    be leader during recovery.
-            // 2. if the follower has been chosen to be leader => it already apply the
-            //    pending conf change already.
+            // 1. if the follower didn't finished the conf change
+            //    => it cannot be chosen to be leader during recovery.
+            // 2. if the follower has been chosen to be leader
+            //    => it already apply the pending conf change already.
             return;
         }
         debug!(
@@ -4602,6 +4602,7 @@ where
     }
 
     fn on_ready_prepare_merge(&mut self, region: metapb::Region, state: MergeState) {
+        fail_point!("on_apply_res_prepare_merge");
         {
             let mut meta = self.ctx.store_meta.lock().unwrap();
             meta.set_region(

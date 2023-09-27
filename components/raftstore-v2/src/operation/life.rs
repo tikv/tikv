@@ -424,7 +424,13 @@ impl Store {
         };
         if destroyed {
             if msg.get_is_tombstone() {
+                let msg_region_epoch = msg.get_region_epoch().clone();
                 if let Some(msg) = build_peer_destroyed_report(&mut msg) {
+                    info!(self.logger(), "peer reports destroyed";
+                        "from_peer" => ?msg.get_from_peer(),
+                        "from_region_epoch" => ?msg_region_epoch,
+                        "region_id" => ?msg.get_region_id(),
+                        "to_peer_id" => ?msg.get_to_peer().get_id());
                     let _ = ctx.trans.send(msg);
                 }
                 return false;
@@ -581,7 +587,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             .iter()
             .find(|p| p.id == msg.get_from_peer().get_id())
         {
-            let tombstone_msg = self.tombstone_message_for_same_region(peer.clone());
+            let tombstone_msg = self.tombstone_message(
+                self.region_id(),
+                self.region().get_region_epoch().clone(),
+                peer.clone(),
+            );
             self.add_message(tombstone_msg);
             true
         } else {
@@ -589,13 +599,24 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         }
     }
 
-    fn tombstone_message_for_same_region(&self, peer: metapb::Peer) -> RaftMessage {
-        let region_id = self.region_id();
+    fn tombstone_message(
+        &self,
+        region_id: u64,
+        region_epoch: metapb::RegionEpoch,
+        peer: metapb::Peer,
+    ) -> RaftMessage {
         let mut tombstone_message = RaftMessage::default();
+        if self.region_id() != region_id {
+            // After merge, target region needs to GC peers of source region.
+            let extra_msg = tombstone_message.mut_extra_msg();
+            extra_msg.set_type(ExtraMessageType::MsgGcPeerRequest);
+            let check_peer = extra_msg.mut_check_gc_peer();
+            check_peer.set_from_region_id(self.region_id());
+        }
         tombstone_message.set_region_id(region_id);
         tombstone_message.set_from_peer(self.peer().clone());
         tombstone_message.set_to_peer(peer);
-        tombstone_message.set_region_epoch(self.region().get_region_epoch().clone());
+        tombstone_message.set_region_epoch(region_epoch);
         tombstone_message.set_is_tombstone(true);
         tombstone_message
     }
@@ -604,6 +625,10 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         match msg.get_to_peer().get_id().cmp(&self.peer_id()) {
             cmp::Ordering::Less => {
                 if let Some(msg) = build_peer_destroyed_report(msg) {
+                    info!(self.logger, "peer reports destroyed";
+                        "from_peer" => ?msg.get_from_peer(),
+                        "from_region_epoch" => ?msg.get_region_epoch(),
+                        "to_peer_id" => ?msg.get_to_peer().get_id());
                     self.add_message(msg);
                 }
             }
@@ -637,12 +662,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let check_peer_id = check.get_check_peer().get_id();
         let records = self.storage().region_state().get_merged_records();
         let Some(record) = records.iter().find(|r| {
-            r.get_source_peers()
-                .iter()
-                .any(|p| p.get_id() == check_peer_id)
-        }) else {
-            return;
-        };
+            r.get_source_peers().iter().any(|p| p.get_id() == check_peer_id)
+        }) else { return };
         let source_index = record.get_source_index();
         forward_destroy_to_source_peer(msg, |m| {
             let source_checkpoint = super::merge_source_path(
@@ -660,6 +681,10 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                         let _ = router.send_raft_message(m.into());
                     },
                 );
+            } else {
+                // Source peer is already destroyed. Forward to store, and let
+                // it report GcPeer response.
+                let _ = ctx.router.send_raft_message(m.into());
             }
         });
     }
@@ -675,6 +700,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             && state.get_merged_records().iter().all(|p| {
                 p.get_source_peers()
                     .iter()
+                    .chain(p.get_source_removed_records())
                     .all(|p| p.get_id() != gc_peer_id)
             })
         {
@@ -699,27 +725,50 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         }
         let mut need_gc_ids = Vec::with_capacity(5);
         let gc_context = self.gc_peer_context();
-        for peer in state.get_removed_records() {
-            need_gc_ids.push(peer.get_id());
-            if gc_context.confirmed_ids.contains(&peer.get_id()) {
-                continue;
-            }
+        let mut tombstone_removed_records =
+            |region_id, region_epoch: &metapb::RegionEpoch, peer: &metapb::Peer| {
+                need_gc_ids.push(peer.get_id());
+                if gc_context.confirmed_ids.contains(&peer.get_id()) {
+                    return;
+                }
 
-            let msg = self.tombstone_message_for_same_region(peer.clone());
-            // For leader, it's OK to send gc message immediately.
-            let _ = ctx.trans.send(msg);
+                let msg = self.tombstone_message(region_id, region_epoch.clone(), peer.clone());
+                // For leader, it's OK to send gc message immediately.
+                let _ = ctx.trans.send(msg);
+            };
+        for peer in state.get_removed_records() {
+            tombstone_removed_records(self.region_id(), self.region().get_region_epoch(), peer);
         }
+        // For merge, we need to
+        // 1. ask source removed peers to destroy.
         for record in state.get_merged_records() {
-            // For merge, we ask target to check whether source should be deleted.
-            for (source, target) in record
-                .get_source_peers()
-                .iter()
-                .zip(record.get_target_peers())
-            {
+            for peer in record.get_source_removed_records() {
+                tombstone_removed_records(
+                    record.get_source_region_id(),
+                    record.get_source_epoch(),
+                    peer,
+                );
+            }
+        }
+        // 2. ask target to check whether source should be deleted.
+        for record in state.get_merged_records() {
+            for source in record.get_source_peers() {
                 need_gc_ids.push(source.get_id());
                 if gc_context.confirmed_ids.contains(&source.get_id()) {
                     continue;
                 }
+                let Some(target) = record
+                    .get_target_peers()
+                    .iter()
+                    .find(|p| p.get_store_id() == source.get_store_id())
+                else {
+                    panic!(
+                        "[region {}] {} target peer not found, {:?}",
+                        self.region_id(),
+                        self.peer_id(),
+                        state
+                    );
+                };
 
                 let mut msg = RaftMessage::default();
                 msg.set_region_id(record.get_target_region_id());
