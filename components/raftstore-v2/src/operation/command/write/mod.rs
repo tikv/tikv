@@ -114,12 +114,14 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 
     pub fn propose_pending_writes<T>(&mut self, ctx: &mut StoreContext<EK, ER, T>) {
         if let Some(encoder) = self.simple_write_encoder_mut().take() {
+            let cids = encoder.cids.clone();
+            let header = encoder.header().clone();
             let call_proposed_on_success = if encoder.notify_proposed() {
                 // The request has pass conflict check and called all proposed callbacks.
                 false
             } else {
                 // Epoch may have changed since last check.
-                let from_epoch = encoder.header().get_region_epoch();
+                let from_epoch = header.get_region_epoch();
                 let res = util::compare_region_epoch(
                     from_epoch,
                     self.region(),
@@ -136,57 +138,61 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 // Only when it applies to current term, the epoch check can be reliable.
                 self.applied_to_current_term()
             };
-            let cids = encoder.cids.clone();
             let (data, chs) = encoder.encode();
+            let res = if let Err(e) = self.validate_command(&header, None, &mut ctx.raft_metrics) {
+                Err(e)
+            } else {
+                let last_index = self.raft_group().raft.raft_log.last_index();
+                let res = self.propose(ctx, data);
+                let current_index = self.raft_group().raft.raft_log.last_index();
+                fail_point!("after_propose_pending_writes");
 
-            let last_index = self.raft_group().raft.raft_log.last_index();
-            let res = self.propose(ctx, data);
-            let current_index = self.raft_group().raft.raft_log.last_index();
-            fail_point!("after_propose_pending_writes");
-
-            if cids.is_empty() {
-                match res {
-                    Ok(index) => {
-                        info!(
-                            self.logger,
-                            "propose write";
-                            "index" => index,
-                        );
-                    }
-                    Err(ref e) => {
-                        info!(
-                            self.logger,
-                            "propose write failed";
-                            "last_index" => last_index,
-                            "current_index" => current_index,
-                            "err" => ?e,
-                        );
+                if cids.is_empty() {
+                    match res {
+                        Ok(index) => {
+                            info!(
+                                self.logger,
+                                "propose write";
+                                "index" => index,
+                            );
+                        }
+                        Err(ref e) => {
+                            info!(
+                                self.logger,
+                                "propose write failed";
+                                "last_index" => last_index,
+                                "current_index" => current_index,
+                                "err" => ?e,
+                            );
+                        }
                     }
                 }
-            }
 
-            for cid in cids {
-                match res {
-                    Ok(index) => {
-                        info!(
-                            self.logger,
-                            "propose write";
-                            "cid" => cid,
-                            "index" => index,
-                        );
-                    }
-                    Err(ref e) => {
-                        info!(
-                            self.logger,
-                            "propose write failed";
-                            "cid" => cid,
-                            "last_index" => last_index,
-                            "current_index" => current_index,
-                            "err" => ?e,
-                        );
+                for cid in cids {
+                    match res {
+                        Ok(index) => {
+                            info!(
+                                self.logger,
+                                "propose write";
+                                "cid" => cid,
+                                "index" => index,
+                            );
+                        }
+                        Err(ref e) => {
+                            info!(
+                                self.logger,
+                                "propose write failed";
+                                "cid" => cid,
+                                "last_index" => last_index,
+                                "current_index" => current_index,
+                                "err" => ?e,
+                            );
+                        }
                     }
                 }
-            }
+
+                res
+            };
 
             self.post_propose_command(ctx, res, chs, call_proposed_on_success);
         }
