@@ -4,16 +4,8 @@ use std::{cmp, collections::BTreeMap, sync::Arc};
 
 use collections::{HashMap, HashSet};
 use raftstore::store::RegionReadProgress;
-<<<<<<< HEAD
 use tikv_util::time::Instant;
-use txn_types::TimeStamp;
-=======
-use tikv_util::{
-    memory::{HeapSize, MemoryQuota},
-    time::Instant,
-};
 use txn_types::{Key, TimeStamp};
->>>>>>> 9bf96f9216 (metrics: more logs and metrics for resolved-ts (#15416))
 
 use crate::metrics::RTS_RESOLVED_FAIL_ADVANCE_VEC;
 
@@ -59,13 +51,7 @@ pub struct Resolver {
     // key -> start_ts
     pub(crate) locks_by_key: HashMap<Arc<[u8]>, TimeStamp>,
     // start_ts -> locked keys.
-<<<<<<< HEAD
-    lock_ts_heap: BTreeMap<TimeStamp, HashSet<Arc<[u8]>>>,
-=======
     pub(crate) lock_ts_heap: BTreeMap<TimeStamp, HashSet<Arc<[u8]>>>,
-    // The last shrink time.
-    last_aggressive_shrink_time: Instant,
->>>>>>> 9bf96f9216 (metrics: more logs and metrics for resolved-ts (#15416))
     // The timestamps that guarantees no more commit will happen before.
     resolved_ts: TimeStamp,
     // The highest index `Resolver` had been tracked
@@ -76,10 +62,6 @@ pub struct Resolver {
     min_ts: TimeStamp,
     // Whether the `Resolver` is stopped
     stopped: bool,
-<<<<<<< HEAD
-=======
-    // The memory quota for the `Resolver` and its lock keys and timestamps.
-    memory_quota: Arc<MemoryQuota>,
     // The last attempt of resolve(), used for diagnosis.
     pub(crate) last_attempt: Option<LastAttempt>,
 }
@@ -109,7 +91,6 @@ impl slog::Value for LastAttempt {
             ),
         )
     }
->>>>>>> 9bf96f9216 (metrics: more logs and metrics for resolved-ts (#15416))
 }
 
 impl std::fmt::Debug for Resolver {
@@ -151,11 +132,7 @@ impl Resolver {
             tracked_index: 0,
             min_ts: TimeStamp::zero(),
             stopped: false,
-<<<<<<< HEAD
-=======
-            memory_quota,
             last_attempt: None,
->>>>>>> 9bf96f9216 (metrics: more logs and metrics for resolved-ts (#15416))
         }
     }
 
@@ -246,24 +223,12 @@ impl Resolver {
     ///
     /// `min_ts` advances the resolver even if there is no write.
     /// Return None means the resolver is not initialized.
-<<<<<<< HEAD
-    pub fn resolve(&mut self, min_ts: TimeStamp, now: Option<Instant>) -> TimeStamp {
-=======
     pub fn resolve(
         &mut self,
         min_ts: TimeStamp,
         now: Option<Instant>,
         source: TsSource,
     ) -> TimeStamp {
-        // Use a small ratio to shrink the memory usage aggressively.
-        const AGGRESSIVE_SHRINK_RATIO: usize = 2;
-        const AGGRESSIVE_SHRINK_INTERVAL: Duration = Duration::from_secs(10);
-        if self.last_aggressive_shrink_time.saturating_elapsed() > AGGRESSIVE_SHRINK_INTERVAL {
-            self.shrink_ratio(AGGRESSIVE_SHRINK_RATIO, None);
-            self.last_aggressive_shrink_time = Instant::now_coarse();
-        }
-
->>>>>>> 9bf96f9216 (metrics: more logs and metrics for resolved-ts (#15416))
         // The `Resolver` is stopped, not need to advance, just return the current
         // `resolved_ts`
         if self.stopped {
@@ -352,17 +317,10 @@ impl Resolver {
     pub(crate) fn num_transactions(&self) -> u64 {
         self.lock_ts_heap.len() as u64
     }
-<<<<<<< HEAD
-=======
-
-    pub(crate) fn read_progress(&self) -> Option<&Arc<RegionReadProgress>> {
-        self.read_progress.as_ref()
-    }
 
     pub(crate) fn oldest_transaction(&self) -> Option<(&TimeStamp, &HashSet<Arc<[u8]>>)> {
         self.lock_ts_heap.iter().next()
     }
->>>>>>> 9bf96f9216 (metrics: more logs and metrics for resolved-ts (#15416))
 }
 
 #[cfg(test)]
@@ -452,117 +410,4 @@ mod tests {
             }
         }
     }
-<<<<<<< HEAD
-=======
-
-    #[test]
-    fn test_memory_quota() {
-        let memory_quota = Arc::new(MemoryQuota::new(1024));
-        let mut resolver = Resolver::new(1, memory_quota.clone());
-        let mut key = vec![0; 77];
-        let lock_size = resolver.lock_heap_size(&key);
-        let mut ts = TimeStamp::default();
-        while resolver.track_lock(ts, key.clone(), None) {
-            ts.incr();
-            key[0..8].copy_from_slice(&ts.into_inner().to_be_bytes());
-        }
-        let remain = 1024 % lock_size;
-        assert_eq!(memory_quota.in_use(), 1024 - remain);
-
-        let mut ts = TimeStamp::default();
-        for _ in 0..5 {
-            ts.incr();
-            key[0..8].copy_from_slice(&ts.into_inner().to_be_bytes());
-            resolver.untrack_lock(&key, None);
-        }
-        assert_eq!(memory_quota.in_use(), 1024 - 5 * lock_size - remain);
-        drop(resolver);
-        assert_eq!(memory_quota.in_use(), 0);
-    }
-
-    #[test]
-    fn test_untrack_lock_shrink_ratio() {
-        let memory_quota = Arc::new(MemoryQuota::new(std::usize::MAX));
-        let mut resolver = Resolver::new(1, memory_quota);
-        let mut key = vec![0; 16];
-        let mut ts = TimeStamp::default();
-        for _ in 0..1000 {
-            ts.incr();
-            key[0..8].copy_from_slice(&ts.into_inner().to_be_bytes());
-            let _ = resolver.track_lock(ts, key.clone(), None);
-        }
-        assert!(
-            resolver.locks_by_key.capacity() >= 1000,
-            "{}",
-            resolver.locks_by_key.capacity()
-        );
-
-        let mut ts = TimeStamp::default();
-        for _ in 0..901 {
-            ts.incr();
-            key[0..8].copy_from_slice(&ts.into_inner().to_be_bytes());
-            resolver.untrack_lock(&key, None);
-        }
-        // shrink_to_fit may reserve some space in accordance with the resize
-        // policy, but it is expected to be less than 500.
-        assert!(
-            resolver.locks_by_key.capacity() < 500,
-            "{}, {}",
-            resolver.locks_by_key.capacity(),
-            resolver.locks_by_key.len(),
-        );
-
-        for _ in 0..99 {
-            ts.incr();
-            key[0..8].copy_from_slice(&ts.into_inner().to_be_bytes());
-            resolver.untrack_lock(&key, None);
-        }
-        assert!(
-            resolver.locks_by_key.capacity() < 100,
-            "{}, {}",
-            resolver.locks_by_key.capacity(),
-            resolver.locks_by_key.len(),
-        );
-
-        // Trigger aggressive shrink.
-        resolver.last_aggressive_shrink_time = Instant::now_coarse() - Duration::from_secs(600);
-        resolver.resolve(TimeStamp::new(0), None, TsSource::PdTso);
-        assert!(
-            resolver.locks_by_key.capacity() == 0,
-            "{}, {}",
-            resolver.locks_by_key.capacity(),
-            resolver.locks_by_key.len(),
-        );
-    }
-
-    #[test]
-    fn test_untrack_lock_set_shrink_ratio() {
-        let memory_quota = Arc::new(MemoryQuota::new(std::usize::MAX));
-        let mut resolver = Resolver::new(1, memory_quota);
-        let mut key = vec![0; 16];
-        let ts = TimeStamp::new(1);
-        for i in 0..1000usize {
-            key[0..8].copy_from_slice(&i.to_be_bytes());
-            let _ = resolver.track_lock(ts, key.clone(), None);
-        }
-        assert!(
-            resolver.lock_ts_heap[&ts].capacity() >= 1000,
-            "{}",
-            resolver.lock_ts_heap[&ts].capacity()
-        );
-
-        for i in 0..990usize {
-            key[0..8].copy_from_slice(&i.to_be_bytes());
-            resolver.untrack_lock(&key, None);
-        }
-        // shrink_to_fit may reserve some space in accordance with the resize
-        // policy, but it is expected to be less than 100.
-        assert!(
-            resolver.lock_ts_heap[&ts].capacity() < 500,
-            "{}, {}",
-            resolver.lock_ts_heap[&ts].capacity(),
-            resolver.lock_ts_heap[&ts].len(),
-        );
-    }
->>>>>>> 9bf96f9216 (metrics: more logs and metrics for resolved-ts (#15416))
 }

@@ -28,11 +28,7 @@ use raftstore::{
     store::util::compare_region_epoch,
     Error as RaftStoreError,
 };
-<<<<<<< HEAD
-use resolved_ts::Resolver;
-=======
-use resolved_ts::{Resolver, TsSource, ON_DROP_WARN_HEAP_SIZE};
->>>>>>> 9bf96f9216 (metrics: more logs and metrics for resolved-ts (#15416))
+use resolved_ts::{Resolver, TsSource};
 use tikv::storage::{txn::TxnEntry, Statistics};
 use tikv_util::{debug, info, warn};
 use txn_types::{Key, Lock, LockType, TimeStamp, WriteBatchFlags, WriteRef, WriteType};
