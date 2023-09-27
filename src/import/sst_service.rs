@@ -480,21 +480,25 @@ where
         max_raft_size: usize,
     ) -> std::result::Result<Option<Range>, ImportPbError> {
         type RaftWriteFuture = futures::channel::oneshot::Receiver<raftstore::store::WriteResponse>;
-        async fn handle_raft_write(fut: RaftWriteFuture) -> std::result::Result<(), ImportPbError> {
+        async fn handle_raft_write(fut: RaftWriteFuture, task: &str, task_index: i32) -> std::result::Result<(), ImportPbError> {
+            info!("[debug apply] before wait raft write"; "task" => task);
             match fut.await {
                 Err(e) => {
                     let msg = format!("failed to complete raft command: {}", e);
                     let mut e = ImportPbError::default();
                     e.set_message(msg);
+                    info!("[debug apply] after wait raft write"; "task" => task, "error" => ?e, "index" => task_index);
                     return Err(e);
                 }
-                Ok(mut r) if r.response.get_header().has_error() => {
+                Ok(mut r) => if r.response.get_header().has_error() {
                     let mut e = ImportPbError::default();
                     e.set_message("failed to complete raft command".to_string());
                     e.set_store_error(r.response.take_header().take_error());
+                    info!("[debug apply] after wait raft write"; "task" => task, "error_response" => ?e, "index" => task_index);
                     return Err(e);
+                } else {
+                    info!("[debug apply] after wait raft write"; "task" => task, "index" => task_index);
                 }
-                _ => {}
             }
             Ok(())
         }
@@ -509,6 +513,11 @@ where
             metas.push(req.take_meta());
             rules.push(req.take_rewrite_rule());
         }
+        let task_key = if metas.is_empty() {
+            String::from("none")
+        } else {
+            format!("path: {}, offset: {}", metas[0].get_name(), metas[0].get_range_offset())
+        };
         let ext_storage = importer.wrap_kms(
             importer
                 .external_storage_or_cache(req.get_storage_backend(), req.get_storage_cache_id())?,
@@ -518,7 +527,9 @@ where
         let mut inflight_futures: VecDeque<RaftWriteFuture> = VecDeque::new();
 
         let mut tasks = metas.iter().zip(rules.iter()).peekable();
+        let mut task_index = 0;
         while let Some((meta, rule)) = tasks.next() {
+            info!("[debug apply] before download file"; "task" => &task_key);
             let buff = importer.read_from_kv_file(
                 meta,
                 rule,
@@ -541,11 +552,12 @@ where
                     range = Some(r);
                 }
             }
+            info!("[debug apply] after download file"; "task" => &task_key);
 
             let is_last_task = tasks.peek().is_none();
             for req in collector.drain_raft_reqs(is_last_task) {
                 while inflight_futures.len() >= MAX_INFLIGHT_RAFT_MSGS {
-                    handle_raft_write(inflight_futures.pop_front().unwrap()).await?;
+                    handle_raft_write(inflight_futures.pop_front().unwrap(), &task_key, task_index).await?;
                 }
                 let (cb, future) = paired_future_callback();
                 match router.send_command(req, Callback::write(cb), RaftCmdExtraOpts::default()) {
@@ -558,10 +570,11 @@ where
                     }
                 }
             }
+            task_index += 1;
         }
         assert!(collector.is_empty());
         for fut in inflight_futures {
-            handle_raft_write(fut).await?;
+            handle_raft_write(fut, &task_key, task_index).await?;
         }
 
         Ok(range)
