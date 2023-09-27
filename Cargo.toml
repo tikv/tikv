@@ -1,6 +1,6 @@
 [package]
 name = "tikv"
-version = "6.5.4"
+version = "6.5.5"
 authors = ["The TiKV Authors"]
 description = "A distributed transactional key-value database powered by Rust and Raft"
 license = "Apache-2.0"
@@ -379,6 +379,7 @@ tipb = { git = "https://github.com/pingcap/tipb.git" }
 kvproto = { git = "https://github.com/pingcap/kvproto.git", branch = "release-6.5" }
 yatp = { git = "https://github.com/tikv/yatp.git", branch = "master" }
 tokio-timer = { git = "https://github.com/tikv/tokio", branch = "tokio-timer-hotfix" }
+tokio-executor = { git = "https://github.com/tikv/tokio", branch = "tokio-timer-hotfix" }
 
 [profile.dev.package.grpcio-sys]
 debug = false
