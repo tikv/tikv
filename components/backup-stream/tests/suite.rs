@@ -16,7 +16,7 @@ use backup_stream::{
         MetadataClient, StreamTask,
     },
     observer::BackupStreamObserver,
-    router::Router,
+    router::{Router, TaskSelector},
     utils, BackupStreamResolver, Endpoint, GetCheckpointResult, RegionCheckpointOperation,
     RegionSet, Service, Task,
 };
@@ -31,9 +31,10 @@ use kvproto::{
 };
 use pd_client::PdClient;
 use protobuf::parse_from_bytes;
-use raftstore::router::CdcRaftRouter;
+use raftstore::{router::CdcRaftRouter, RegionInfoAccessor};
 use resolved_ts::LeadershipResolver;
 use tempdir::TempDir;
+use test_pd_client::TestPdClient;
 use test_raftstore::{new_server_cluster, Cluster, ServerCluster};
 use test_util::retry;
 use tikv::config::BackupStreamConfig;
@@ -48,6 +49,13 @@ use tikv_util::{
 };
 use txn_types::{Key, TimeStamp, WriteRef};
 use walkdir::WalkDir;
+
+pub type TestEndpoint = Endpoint<
+    ErrorStore<SlashEtcStore>,
+    RegionInfoAccessor,
+    engine_test::kv::KvTestEngine,
+    TestPdClient,
+>;
 
 pub fn mutation(k: Vec<u8>, v: Vec<u8>) -> Mutation {
     mutation_op(k, v, Op::Put)
@@ -391,7 +399,7 @@ impl Suite {
         ))
         .unwrap();
         let name = name.to_owned();
-        self.wait_with(move |r| block_on(r.get_task_info(&name)).is_ok())
+        self.wait_with_router(move |r| block_on(r.get_task_info(&name)).is_ok())
     }
 
     /// This function tries to calculate the global checkpoint from the flush
@@ -762,19 +770,25 @@ impl Suite {
     }
 
     pub fn sync(&self) {
-        self.wait_with(|_| true)
+        self.wait_with_router(|_| true)
     }
 
-    pub fn wait_with(&self, cond: impl FnMut(&Router) -> bool + Send + 'static + Clone) {
+    pub fn wait_with(&self, cond: impl FnMut(&mut TestEndpoint) -> bool + Send + 'static + Clone) {
         self.endpoints
             .iter()
             .map({
                 move |(_, wkr)| {
                     let (tx, rx) = std::sync::mpsc::channel();
+                    let mut cond = cond.clone();
                     wkr.scheduler()
                         .schedule(Task::Sync(
                             Box::new(move || tx.send(()).unwrap()),
-                            Box::new(cond.clone()),
+                            Box::new(move |this| {
+                                let ep = this
+                                    .downcast_mut::<TestEndpoint>()
+                                    .expect("`Sync` with wrong type");
+                                cond(ep)
+                            }),
                         ))
                         .unwrap();
                     rx
@@ -783,27 +797,21 @@ impl Suite {
             .for_each(|rx| rx.recv().unwrap())
     }
 
+    pub fn wait_with_router(&self, mut cond: impl FnMut(&Router) -> bool + Send + 'static + Clone) {
+        self.wait_with(move |ep| cond(&ep.range_router))
+    }
+
     pub fn wait_for_flush(&self) {
-        use std::ffi::OsString;
-        std::fs::File::open(&self.temp_files)
-            .unwrap()
-            .sync_all()
-            .unwrap();
-        for _ in 0..100 {
-            if !walkdir::WalkDir::new(&self.temp_files)
-                .into_iter()
-                .any(|x| x.unwrap().path().extension() == Some(&OsString::from("log")))
-            {
-                return;
+        self.wait_with_router(move |r| {
+            let task_names = block_on(r.select_task(TaskSelector::All.reference()));
+            for task_name in task_names {
+                let tsk = block_on(r.get_task_info(&task_name));
+                if tsk.unwrap().is_flushing() {
+                    return false;
+                }
             }
-            std::thread::sleep(Duration::from_secs(1));
-        }
-        let v = walkdir::WalkDir::new(&self.temp_files)
-            .into_iter()
-            .collect::<Vec<_>>();
-        if !v.is_empty() {
-            panic!("the temp isn't empty after the deadline ({:?})", v)
-        }
+            true
+        });
     }
 
     pub fn must_shuffle_leader(&mut self, region_id: u64) {
