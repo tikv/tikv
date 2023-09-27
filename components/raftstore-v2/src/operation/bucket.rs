@@ -297,11 +297,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         if let Some(apply_scheduler) = self.apply_scheduler() {
             apply_scheduler.send(ApplyTask::RefreshBucketStat(region_buckets.meta.clone()));
         }
-        let version = region_buckets.meta.version;
-        let keys = region_buckets.meta.keys.clone();
         if !self.is_leader() {
             return;
         }
+        let version = region_buckets.meta.version;
+        let keys = region_buckets.meta.keys.clone();
         // Notify followers to flush their relevant memtables
         let peers = self.region().get_peers().to_vec();
         for p in peers {
