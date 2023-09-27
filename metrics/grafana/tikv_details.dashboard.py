@@ -41,334 +41,6 @@ DATASOURCE = f"${{{DATASOURCE_INPUT.name}}}"
 #### Utilities Function Start ####
 
 
-def template(
-    name, query, data_source, hide, regex=None, include_all=False, all_value=None
-) -> Template:
-    return Template(
-        dataSource=data_source,
-        hide=hide,
-        label=name,
-        multi=False,
-        name=name,
-        query=query,
-        refresh=2,
-        sort=1,
-        type="query",
-        useTags=False,
-        regex=regex,
-        includeAll=include_all,
-        allValue=all_value,
-    )
-
-
-class Layout:
-    # Rows are always 24 "units" wide.
-    ROW_WIDTH = 24
-    PANEL_HEIGHT = 6
-    row_panel: RowPanel
-    current_row_y_pos: int
-
-    def __init__(self, title, collapsed=True) -> None:
-        self.current_row_y_pos = 0
-        self.row_panel = RowPanel(
-            title=title,
-            gridPos=GridPos(h=self.PANEL_HEIGHT, w=self.ROW_WIDTH, x=0, y=0),
-            collapsed=collapsed,
-        )
-
-    def row(self, panels: list[Panel]):
-        """Start a new row and evenly scales panels width"""
-        count = len(panels)
-        if count == 0:
-            return panels
-        width = self.ROW_WIDTH // count
-        remain = self.ROW_WIDTH % count
-        x = 0
-        for panel in panels:
-            panel.gridPos = GridPos(
-                h=self.PANEL_HEIGHT,
-                w=width,
-                x=x,
-                y=self.current_row_y_pos,
-            )
-            x += width
-        panels[-1].gridPos.w += remain
-        self.row_panel.panels.extend(panels)
-        self.current_row_y_pos += self.PANEL_HEIGHT
-
-
-def timeseries_panel(
-    title,
-    targets,
-    legend_calcs=["max", "last"],
-    unit="s",
-    draw_style="line",
-    line_width=1,
-    fill_opacity=10,
-    gradient_mode="opacity",
-    tooltip_mode="multi",
-    legend_display_mode="table",
-    legend_placement="right",
-    description=None,
-    data_source=DATASOURCE,
-) -> TimeSeries:
-    return TimeSeries(
-        title=title,
-        dataSource=data_source,
-        description=description,
-        targets=targets,
-        legendCalcs=legend_calcs,
-        drawStyle=draw_style,
-        lineWidth=line_width,
-        fillOpacity=fill_opacity,
-        gradientMode=gradient_mode,
-        unit=unit,
-        tooltipMode=tooltip_mode,
-        legendDisplayMode=legend_display_mode,
-        legendPlacement=legend_placement,
-    )
-
-
-def graph_legend(
-    avg=False,
-    current=True,
-    max=True,
-    min=False,
-    show=True,
-    total=False,
-    align_as_table=True,
-    hide_empty=True,
-    hide_zero=True,
-    right_side=True,
-    side_width=None,
-    sort_desc=True,
-) -> Legend:
-    sort = "max" if max else "current"
-    return Legend(
-        avg=avg,
-        current=current,
-        max=max,
-        min=min,
-        show=show,
-        total=total,
-        alignAsTable=align_as_table,
-        hideEmpty=hide_empty,
-        hideZero=hide_zero,
-        rightSide=right_side,
-        sideWidth=side_width,
-        sort=sort,
-        sortDesc=sort_desc,
-    )
-
-
-def graph_panel(
-    title: str,
-    targets: list[Target],
-    description=None,
-    yaxes=YAxes(),
-    legend=None,
-    tooltip=Tooltip(shared=True, valueType="individual"),
-    lines=True,
-    line_width=1,
-    fill=1,
-    fill_gradient=1,
-    stack=False,
-    thresholds: list[GraphThreshold] = [],
-    series_overrides: list[SeriesOverride] = [],
-    data_source=DATASOURCE,
-) -> Panel:
-    # extraJson add patches grafanalib result.
-    extraJson = {}
-    if fill_gradient != 0:
-        # fillGradient is only valid when fill is 1.
-        if fill == 0:
-            fill = 1
-        # fillGradient is not set correctly in grafanalib(0.7.0), so we need to
-        # set it manually.
-        # TODO: remove it when grafanalib fix this.
-        extraJson["fillGradient"] = 1
-    for target in targets:
-        # Make sure traget is in time_series format.
-        target.format = TIME_SERIES_TARGET_FORMAT
-
-    return Graph(
-        title=title,
-        dataSource=data_source,
-        description=description,
-        targets=targets,
-        yAxes=yaxes,
-        legend=legend if legend else graph_legend(),
-        lines=lines,
-        bars=not lines,
-        lineWidth=line_width,
-        fill=fill,
-        fillGradient=fill_gradient,
-        stack=stack,
-        nullPointMode=NULL_AS_NULL,
-        thresholds=thresholds,
-        tooltip=tooltip,
-        seriesOverrides=series_overrides,
-        # Do not specify max max data points, let Grafana decide.
-        maxDataPoints=None,
-        extraJson=extraJson,
-    )
-
-
-def series_override(
-    alias: str,
-    bars: bool = False,
-    lines: bool = True,
-    yaxis: int = 1,
-    fill: int = 1,
-    zindex: int = 0,
-    dashes: Optional[bool] = None,
-    dash_length: Optional[int] = None,
-    space_length: Optional[int] = None,
-    transform_negative_y: bool = False,
-) -> SeriesOverride:
-    class SeriesOverridePatch(SeriesOverride):
-        dashes_override: Optional[bool]
-        dash_length_override: Optional[int]
-        space_length_override: Optional[int]
-        transform_negative_y: bool
-
-        def __init__(self, *args, **kwargs) -> None:
-            self.dashes_override = kwargs["dashes"]
-            if self.dashes_override is None:
-                del kwargs["dashes"]
-            self.dash_length_override = kwargs["dashLength"]
-            if self.dash_length_override is None:
-                del kwargs["dashLength"]
-            self.space_length_override = kwargs["spaceLength"]
-            if self.space_length_override is None:
-                del kwargs["spaceLength"]
-            self.transform_negative_y = kwargs["transform_negative_y"]
-            del kwargs["transform_negative_y"]
-            super().__init__(*args, **kwargs)
-
-        def to_json_data(self):
-            data = super().to_json_data()
-            # The default 'null' color makes it transparent, remove it.
-            del data["color"]
-            # The default 'null' makes it a transparent line, remove it.
-            if self.dashes_override is None:
-                del data["dashes"]
-            if self.dash_length_override is None:
-                del data["dashLength"]
-            if self.space_length_override is None:
-                del data["spaceLength"]
-            # Add missing transform.
-            if self.transform_negative_y:
-                data["transform"] = "negative-Y"
-            return data
-
-    return SeriesOverridePatch(
-        alias=alias,
-        bars=bars,
-        lines=lines,
-        yaxis=yaxis,
-        fill=fill,
-        zindex=zindex,
-        dashes=dashes,
-        dashLength=dash_length,
-        spaceLength=space_length,
-        transform_negative_y=transform_negative_y,
-    )
-
-
-def yaxis(format: str, log_base=1) -> YAxis:
-    assert format not in [
-        UNITS.BYTES,
-        UNITS.BITS,
-        UNITS.KILO_BYTES,
-        UNITS.MEGA_BYTES,
-        UNITS.GIGA_BYTES,
-        UNITS.TERA_BYTES,
-        UNITS.PETA_BYTES,
-        UNITS.BYTES_SEC,
-        UNITS.KILO_BYTES_SEC,
-        UNITS.MEGA_BYTES_SEC,
-        UNITS.GIGA_BYTES_SEC,
-        UNITS.TERA_BYTES_SEC,
-        UNITS.PETA_BYTES_SEC,
-    ], "Must not use SI bytes"
-    return YAxis(format=format, logBase=log_base)
-
-
-def yaxes(left_format: str, right_format: Optional[str] = None, log_base=1) -> YAxes:
-    ya = YAxes(left=yaxis(left_format, log_base=log_base))
-    if right_format is not None:
-        ya.right = yaxis(right_format, log_base=log_base)
-    return ya
-
-
-def heatmap_color() -> HeatmapColor:
-    return HeatmapColor(
-        cardColor="#b4ff00",
-        colorScale="sqrt",
-        colorScheme="interpolateSpectral",
-        exponent=0.5,
-        mode="spectrum",
-        max=None,
-        min=None,
-    )
-
-
-def heatmap_panel(
-    title: str,
-    targets: list[Target],
-    description=None,
-    yaxis=yaxis(UNITS.NO_FORMAT),
-    tooltip=Tooltip(shared=True, valueType="individual"),
-    color=heatmap_color(),
-    data_source=DATASOURCE,
-) -> Panel:
-    for target in targets:
-        assert (
-            target.legendFormat == "{{le}}"
-        ), f"Heatmap target must have legendFormat=le, got {target.legendFormat}"
-        # Make sure targets are in heatmap format.
-        target.format = "heatmap"
-
-    return Heatmap(
-        title=title,
-        dataSource=data_source,
-        description=description,
-        targets=targets,
-        yAxis=yaxis,
-        color=color,
-        dataFormat="tsbuckets",
-        yBucketBound="upper",
-        tooltip=tooltip,
-        extraJson={"tooltip": {"showHistogram": True}},
-        hideZeroBuckets=True,
-        # Do not specify max max data points, let Grafana decide.
-        maxDataPoints=None,
-    )
-
-
-def stat_panel(
-    title: str,
-    targets: list[Target],
-    description=None,
-    format=UNITS.NONE_FORMAT,
-    graph_mode="none",
-    data_source=DATASOURCE,
-) -> Panel:
-    for target in targets:
-        # Make sure traget is in time_series format.
-        target.format = TIME_SERIES_TARGET_FORMAT
-    return Stat(
-        title=title,
-        dataSource=data_source,
-        description=description,
-        targets=targets,
-        format=format,
-        graphMode=graph_mode,
-        reduceCalc="lastNotNull",
-    )
-
-
 @attr.s
 class Expr(object):
     """
@@ -777,6 +449,340 @@ def target(
     )
 
 
+def template(
+    name, query, data_source, hide, regex=None, include_all=False, all_value=None
+) -> Template:
+    return Template(
+        dataSource=data_source,
+        hide=hide,
+        label=name,
+        multi=False,
+        name=name,
+        query=query,
+        refresh=2,
+        sort=1,
+        type="query",
+        useTags=False,
+        regex=regex,
+        includeAll=include_all,
+        allValue=all_value,
+    )
+
+
+class Layout:
+    # Rows are always 24 "units" wide.
+    ROW_WIDTH = 24
+    PANEL_HEIGHT = 6
+    row_panel: RowPanel
+    current_row_y_pos: int
+
+    def __init__(self, title, collapsed=True) -> None:
+        self.current_row_y_pos = 0
+        self.row_panel = RowPanel(
+            title=title,
+            gridPos=GridPos(h=self.PANEL_HEIGHT, w=self.ROW_WIDTH, x=0, y=0),
+            collapsed=collapsed,
+        )
+
+    def row(self, panels: list[Panel]):
+        """Start a new row and evenly scales panels width"""
+        count = len(panels)
+        if count == 0:
+            return panels
+        width = self.ROW_WIDTH // count
+        remain = self.ROW_WIDTH % count
+        x = 0
+        for panel in panels:
+            panel.gridPos = GridPos(
+                h=self.PANEL_HEIGHT,
+                w=width,
+                x=x,
+                y=self.current_row_y_pos,
+            )
+            x += width
+        panels[-1].gridPos.w += remain
+        self.row_panel.panels.extend(panels)
+        self.current_row_y_pos += self.PANEL_HEIGHT
+
+
+def timeseries_panel(
+    title,
+    targets,
+    legend_calcs=["max", "last"],
+    unit="s",
+    draw_style="line",
+    line_width=1,
+    fill_opacity=10,
+    gradient_mode="opacity",
+    tooltip_mode="multi",
+    legend_display_mode="table",
+    legend_placement="right",
+    description=None,
+    data_source=DATASOURCE,
+) -> TimeSeries:
+    return TimeSeries(
+        title=title,
+        dataSource=data_source,
+        description=description,
+        targets=targets,
+        legendCalcs=legend_calcs,
+        drawStyle=draw_style,
+        lineWidth=line_width,
+        fillOpacity=fill_opacity,
+        gradientMode=gradient_mode,
+        unit=unit,
+        tooltipMode=tooltip_mode,
+        legendDisplayMode=legend_display_mode,
+        legendPlacement=legend_placement,
+    )
+
+
+def graph_legend(
+    avg=False,
+    current=True,
+    max=True,
+    min=False,
+    show=True,
+    total=False,
+    align_as_table=True,
+    hide_empty=True,
+    hide_zero=True,
+    right_side=True,
+    side_width=None,
+    sort_desc=True,
+) -> Legend:
+    sort = "max" if max else "current"
+    return Legend(
+        avg=avg,
+        current=current,
+        max=max,
+        min=min,
+        show=show,
+        total=total,
+        alignAsTable=align_as_table,
+        hideEmpty=hide_empty,
+        hideZero=hide_zero,
+        rightSide=right_side,
+        sideWidth=side_width,
+        sort=sort,
+        sortDesc=sort_desc,
+    )
+
+
+def graph_panel(
+    title: str,
+    targets: list[Target],
+    description=None,
+    yaxes=YAxes(),
+    legend=None,
+    tooltip=Tooltip(shared=True, valueType="individual"),
+    lines=True,
+    line_width=1,
+    fill=1,
+    fill_gradient=1,
+    stack=False,
+    thresholds: list[GraphThreshold] = [],
+    series_overrides: list[SeriesOverride] = [],
+    data_source=DATASOURCE,
+) -> Panel:
+    # extraJson add patches grafanalib result.
+    extraJson = {}
+    if fill_gradient != 0:
+        # fillGradient is only valid when fill is 1.
+        if fill == 0:
+            fill = 1
+        # fillGradient is not set correctly in grafanalib(0.7.0), so we need to
+        # set it manually.
+        # TODO: remove it when grafanalib fix this.
+        extraJson["fillGradient"] = 1
+    for target in targets:
+        # Make sure traget is in time_series format.
+        target.format = TIME_SERIES_TARGET_FORMAT
+
+    return Graph(
+        title=title,
+        dataSource=data_source,
+        description=description,
+        targets=targets,
+        yAxes=yaxes,
+        legend=legend if legend else graph_legend(),
+        lines=lines,
+        bars=not lines,
+        lineWidth=line_width,
+        fill=fill,
+        fillGradient=fill_gradient,
+        stack=stack,
+        nullPointMode=NULL_AS_NULL,
+        thresholds=thresholds,
+        tooltip=tooltip,
+        seriesOverrides=series_overrides,
+        # Do not specify max max data points, let Grafana decide.
+        maxDataPoints=None,
+        extraJson=extraJson,
+    )
+
+
+def series_override(
+    alias: str,
+    bars: bool = False,
+    lines: bool = True,
+    yaxis: int = 1,
+    fill: int = 1,
+    zindex: int = 0,
+    dashes: Optional[bool] = None,
+    dash_length: Optional[int] = None,
+    space_length: Optional[int] = None,
+    transform_negative_y: bool = False,
+) -> SeriesOverride:
+    class SeriesOverridePatch(SeriesOverride):
+        dashes_override: Optional[bool]
+        dash_length_override: Optional[int]
+        space_length_override: Optional[int]
+        transform_negative_y: bool
+
+        def __init__(self, *args, **kwargs) -> None:
+            self.dashes_override = kwargs["dashes"]
+            if self.dashes_override is None:
+                del kwargs["dashes"]
+            self.dash_length_override = kwargs["dashLength"]
+            if self.dash_length_override is None:
+                del kwargs["dashLength"]
+            self.space_length_override = kwargs["spaceLength"]
+            if self.space_length_override is None:
+                del kwargs["spaceLength"]
+            self.transform_negative_y = kwargs["transform_negative_y"]
+            del kwargs["transform_negative_y"]
+            super().__init__(*args, **kwargs)
+
+        def to_json_data(self):
+            data = super().to_json_data()
+            # The default 'null' color makes it transparent, remove it.
+            del data["color"]
+            # The default 'null' makes it a transparent line, remove it.
+            if self.dashes_override is None:
+                del data["dashes"]
+            if self.dash_length_override is None:
+                del data["dashLength"]
+            if self.space_length_override is None:
+                del data["spaceLength"]
+            # Add missing transform.
+            if self.transform_negative_y:
+                data["transform"] = "negative-Y"
+            return data
+
+    return SeriesOverridePatch(
+        alias=alias,
+        bars=bars,
+        lines=lines,
+        yaxis=yaxis,
+        fill=fill,
+        zindex=zindex,
+        dashes=dashes,
+        dashLength=dash_length,
+        spaceLength=space_length,
+        transform_negative_y=transform_negative_y,
+    )
+
+
+def yaxis(format: str, log_base=1) -> YAxis:
+    assert format not in [
+        UNITS.BYTES,
+        UNITS.BITS,
+        UNITS.KILO_BYTES,
+        UNITS.MEGA_BYTES,
+        UNITS.GIGA_BYTES,
+        UNITS.TERA_BYTES,
+        UNITS.PETA_BYTES,
+        UNITS.BYTES_SEC,
+        UNITS.KILO_BYTES_SEC,
+        UNITS.MEGA_BYTES_SEC,
+        UNITS.GIGA_BYTES_SEC,
+        UNITS.TERA_BYTES_SEC,
+        UNITS.PETA_BYTES_SEC,
+    ], "Must not use SI bytes"
+    return YAxis(format=format, logBase=log_base)
+
+
+def yaxes(left_format: str, right_format: Optional[str] = None, log_base=1) -> YAxes:
+    ya = YAxes(left=yaxis(left_format, log_base=log_base))
+    if right_format is not None:
+        ya.right = yaxis(right_format, log_base=log_base)
+    return ya
+
+
+def heatmap_color() -> HeatmapColor:
+    return HeatmapColor(
+        cardColor="#b4ff00",
+        colorScale="sqrt",
+        colorScheme="interpolateSpectral",
+        exponent=0.5,
+        mode="spectrum",
+        max=None,
+        min=None,
+    )
+
+
+def heatmap_panel(
+    title: str,
+    metric: str,
+    description=None,
+    label_selectors: list[str] = [],
+    yaxis=yaxis(UNITS.NO_FORMAT),
+    tooltip=Tooltip(shared=True, valueType="individual"),
+    color=heatmap_color(),
+    data_source=DATASOURCE,
+) -> Panel:
+    assert metric.endswith(
+        "_bucket"
+    ), f"'{metric}' should be a histogram metric with '_bucket' suffix"
+    t = target(
+        expr=expr_sum_rate(
+            metric, label_selectors=label_selectors, by_labels=["le"]
+        )
+    )
+    # Make sure targets are in heatmap format.
+    t.format = "heatmap"
+    # Heatmap target legendFormat should be "{{le}}"
+    t.legendFormat = "{{le}}"
+    return Heatmap(
+        title=title,
+        dataSource=data_source,
+        description=description,
+        targets=[t],
+        yAxis=yaxis,
+        color=color,
+        dataFormat="tsbuckets",
+        yBucketBound="upper",
+        tooltip=tooltip,
+        extraJson={"tooltip": {"showHistogram": True}},
+        hideZeroBuckets=True,
+        # Do not specify max max data points, let Grafana decide.
+        maxDataPoints=None,
+    )
+
+
+def stat_panel(
+    title: str,
+    targets: list[Target],
+    description=None,
+    format=UNITS.NONE_FORMAT,
+    graph_mode="none",
+    data_source=DATASOURCE,
+) -> Panel:
+    for target in targets:
+        # Make sure traget is in time_series format.
+        target.format = TIME_SERIES_TARGET_FORMAT
+    return Stat(
+        title=title,
+        dataSource=data_source,
+        description=description,
+        targets=targets,
+        format=format,
+        graphMode=graph_mode,
+        reduceCalc="lastNotNull",
+    )
+
+
 def graph_panel_histogram_quantiles(
     title: str,
     description: str,
@@ -867,15 +873,8 @@ def heatmap_panel_graph_panel_histogram_quantile_pairs(
             title=heatmap_title,
             description=heatmap_description,
             yaxis=yaxis(format=yaxis_format),
-            targets=[
-                target(
-                    expr=expr_sum_rate(
-                        f"{metric}_bucket",
-                        label_selectors=label_selectors,
-                        by_labels=["le"],
-                    ),
-                ),
-            ],
+            metric=f"{metric}_bucket",
+            label_selectors=label_selectors,
         ),
         graph_panel(
             title=graph_title,
@@ -1488,13 +1487,7 @@ def Server() -> RowPanel:
         [
             heatmap_panel(
                 title="Approximate region size",
-                targets=[
-                    target(
-                        expr=expr_sum_rate(
-                            "tikv_raftstore_region_size_bucket", by_labels=["le"]
-                        ),
-                    ),
-                ],
+                metric="tikv_raftstore_region_size_bucket",
                 yaxis=yaxis(format=UNITS.BYTES_IEC),
             ),
             graph_panel_histogram_quantiles(
@@ -1510,13 +1503,7 @@ def Server() -> RowPanel:
         [
             heatmap_panel(
                 title="Region written bytes",
-                targets=[
-                    target(
-                        expr=expr_sum_rate(
-                            "tikv_region_written_bytes_bucket", by_labels=["le"]
-                        ),
-                    ),
-                ],
+                metric="tikv_region_written_bytes_bucket",
                 yaxis=yaxis(format=UNITS.BYTES_IEC),
             ),
             graph_panel(
@@ -1536,13 +1523,7 @@ def Server() -> RowPanel:
         [
             heatmap_panel(
                 title="Region written keys",
-                targets=[
-                    target(
-                        expr=expr_sum_rate(
-                            "tikv_region_written_keys_bucket", by_labels=["le"]
-                        ),
-                    ),
-                ],
+                metric="tikv_region_written_keys_bucket",
             ),
             graph_panel(
                 title="Region average written keys",
@@ -2803,27 +2784,13 @@ def RaftPropose() -> RowPanel:
                 title="Store write handle msg duration",
                 description="The handle duration of each store write task msg",
                 yaxis=yaxis(format=UNITS.SECONDS),
-                targets=[
-                    target(
-                        expr=expr_sum_rate(
-                            "tikv_raftstore_store_write_handle_msg_duration_secs",
-                            by_labels=["le"],
-                        ),
-                    ),
-                ],
+                metric="tikv_raftstore_store_write_handle_msg_duration_secs_bucket",
             ),
             heatmap_panel(
                 title="Store write trigger size",
                 description="The distribution of write trigger size",
                 yaxis=yaxis(format=UNITS.BYTES_IEC),
-                targets=[
-                    target(
-                        expr=expr_sum_rate(
-                            "tikv_raftstore_store_write_trigger_wb_bytes",
-                            by_labels=["le"],
-                        ),
-                    ),
-                ],
+                metric="tikv_raftstore_store_write_trigger_wb_bytes_bucket",
             ),
         ]
     )

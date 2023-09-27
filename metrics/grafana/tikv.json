@@ -17707,7 +17707,7 @@
           "targets": [
             {
               "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "sum(rate(\n    tikv_raftstore_store_write_handle_msg_duration_secs\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) ",
+              "expr": "sum(rate(\n    tikv_raftstore_store_write_handle_msg_duration_secs_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) ",
               "format": "heatmap",
               "hide": false,
               "instant": false,
@@ -17715,7 +17715,7 @@
               "intervalFactor": 1,
               "legendFormat": "{{le}}",
               "metric": "",
-              "query": "sum(rate(\n    tikv_raftstore_store_write_handle_msg_duration_secs\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) ",
+              "query": "sum(rate(\n    tikv_raftstore_store_write_handle_msg_duration_secs_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) ",
               "refId": "",
               "step": 10,
               "target": ""
@@ -17811,7 +17811,7 @@
           "targets": [
             {
               "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "sum(rate(\n    tikv_raftstore_store_write_trigger_wb_bytes\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) ",
+              "expr": "sum(rate(\n    tikv_raftstore_store_write_trigger_wb_bytes_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) ",
               "format": "heatmap",
               "hide": false,
               "instant": false,
@@ -17819,7 +17819,7 @@
               "intervalFactor": 1,
               "legendFormat": "{{le}}",
               "metric": "",
-              "query": "sum(rate(\n    tikv_raftstore_store_write_trigger_wb_bytes\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) ",
+              "query": "sum(rate(\n    tikv_raftstore_store_write_trigger_wb_bytes_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) ",
               "refId": "",
               "step": 10,
               "target": ""
