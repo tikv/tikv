@@ -146,9 +146,10 @@ impl AbnormalPeerContext {
 
     #[inline]
     pub fn reset(&mut self) {
+        // No need to refresh disk_full_peers as it will be refreshed
+        // automatically when the disk usage updated.
         self.pending_peers.clear();
         self.down_peers.clear();
-        // self.disk_full_peers.clear();
     }
 
     #[inline]

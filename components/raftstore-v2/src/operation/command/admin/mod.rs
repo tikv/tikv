@@ -148,35 +148,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             return;
         }
         // Prepare Merge need to be broadcast to as many as followers when disk full.
-        let is_merge_cmd =
-            cmd_type == AdminCmdType::PrepareMerge || cmd_type == AdminCmdType::RollbackMerge;
-        let has_disk_full_peers = self.abnormal_peer_context().disk_full_peers().is_empty();
-        let proposal_index = self.next_proposal_index();
-        if is_merge_cmd
-            && (!matches!(ctx.self_disk_usage, DiskUsage::Normal) || !has_disk_full_peers)
-        {
-            self.has_region_merge_proposal = true;
-            self.region_merge_proposal_index = proposal_index;
-            let mut peers = vec![];
-            self.abnormal_peer_context_mut()
-                .disk_full_peers_mut()
-                .peers_mut()
-                .iter_mut()
-                .for_each(|(k, v)| {
-                    if !matches!(v.0, DiskUsage::AlreadyFull) {
-                        v.1 = true;
-                        peers.push(*k);
-                    }
-                });
-            debug!(
-                self.logger,
-                "adjust max inflight msgs";
-                "cmd_type" => ?cmd_type,
-                "raft_max_inflight_msgs" => ctx.cfg.raft_max_inflight_msgs,
-                "region" => self.region_id()
-            );
-            self.adjust_peers_max_inflight_msgs(&peers, ctx.cfg.raft_max_inflight_msgs);
-        }
+        self.on_prepare_merge(cmd_type, ctx);
         // To maintain propose order, we need to make pending proposal first.
         self.propose_pending_writes(ctx);
         let res = if is_conf_change {
@@ -299,6 +271,42 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             }
         }
         self.post_propose_command(ctx, res, vec![ch], true);
+    }
+
+    fn on_prepare_merge<T: Transport>(
+        &mut self,
+        cmd_type: AdminCmdType,
+        ctx: &StoreContext<EK, ER, T>,
+    ) {
+        let is_merge_cmd =
+            cmd_type == AdminCmdType::PrepareMerge || cmd_type == AdminCmdType::RollbackMerge;
+        let has_disk_full_peers = self.abnormal_peer_context().disk_full_peers().is_empty();
+        let proposal_index = self.next_proposal_index();
+        if is_merge_cmd
+            && (!matches!(ctx.self_disk_usage, DiskUsage::Normal) || !has_disk_full_peers)
+        {
+            self.has_region_merge_proposal = true;
+            self.region_merge_proposal_index = proposal_index;
+            let mut peers = vec![];
+            self.abnormal_peer_context_mut()
+                .disk_full_peers_mut()
+                .peers_mut()
+                .iter_mut()
+                .for_each(|(k, v)| {
+                    if !matches!(v.0, DiskUsage::AlreadyFull) {
+                        v.1 = true;
+                        peers.push(*k);
+                    }
+                });
+            debug!(
+                self.logger,
+                "adjust max inflight msgs";
+                "cmd_type" => ?cmd_type,
+                "raft_max_inflight_msgs" => ctx.cfg.raft_max_inflight_msgs,
+                "region" => self.region_id()
+            );
+            self.adjust_peers_max_inflight_msgs(&peers, ctx.cfg.raft_max_inflight_msgs);
+        }
     }
 
     fn start_pre_flush<T: Transport>(
