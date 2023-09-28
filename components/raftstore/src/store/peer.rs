@@ -3858,6 +3858,11 @@ where
             return false;
         }
 
+        if self.is_leader() {
+            poll_ctx.raft_metrics.read_index_source.leader.inc();
+        } else {
+            poll_ctx.raft_metrics.read_index_source.follower.inc();
+        }
         let mut read = ReadIndexRequest::with_command(id, req, cb, now);
         read.addition_request = request.map(Box::new);
         self.push_pending_read(read, self.is_leader());
