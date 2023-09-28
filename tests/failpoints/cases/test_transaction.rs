@@ -855,7 +855,7 @@ fn test_forbid_forward_propose() {
     let mut ctx = Context::default();
     ctx.set_region_id(region.get_id());
     ctx.set_region_epoch(region.get_region_epoch().clone());
-    ctx.set_peer(peer2.clone());
+    ctx.set_peer(peer2);
 
     // block node when collecting message to make some msgs in a single batch
     fail::cfg("on_peer_collect_message_2", "pause").unwrap();
@@ -879,7 +879,7 @@ fn test_forbid_forward_propose() {
 
     std::thread::sleep(Duration::from_secs(1));
 
-    ctx.set_peer(peer1.clone());
+    ctx.set_peer(peer1);
     must_put(&ctx, &storage, b"k", b"val");
     must_delete(&ctx, &storage, b"k");
 

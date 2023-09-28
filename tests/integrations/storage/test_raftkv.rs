@@ -2,7 +2,7 @@
 use std::{
     sync::{atomic::AtomicBool, Arc},
     thread,
-    time::{self, Duration},
+    time::{self},
 };
 
 use engine_traits::{CfName, IterOptions, CF_DEFAULT};
