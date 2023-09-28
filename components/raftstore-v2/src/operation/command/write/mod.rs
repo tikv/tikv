@@ -110,7 +110,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 
     pub fn propose_pending_writes<T>(&mut self, ctx: &mut StoreContext<EK, ER, T>) {
         if let Some(encoder) = self.simple_write_encoder_mut().take() {
-            let header = encoder.header().clone();
+            let header = encoder.header();
+            let validate_res = self.validate_command(header, None, &mut ctx.raft_metrics);
             let call_proposed_on_success = if encoder.notify_proposed() {
                 // The request has pass conflict check and called all proposed callbacks.
                 false
@@ -133,10 +134,9 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 // Only when it applies to current term, the epoch check can be reliable.
                 self.applied_to_current_term()
             };
+
             let (data, chs) = encoder.encode();
-            let res = self
-                .validate_command(&header, None, &mut ctx.raft_metrics)
-                .and_then(|_| self.propose(ctx, data));
+            let res = validate_res.and_then(|_| self.propose(ctx, data));
 
             fail_point!("after_propose_pending_writes");
 

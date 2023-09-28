@@ -817,6 +817,12 @@ fn must_delete<E: Engine>(ctx: &Context, engine: &E, key: &[u8]) {
     engine.delete(ctx, Key::from_raw(key)).unwrap();
 }
 
+// Before the fix, a proposal can be proposed twice, which is caused by that
+// write proposal validation and propose are not atomic. So a raft message with
+// higher term between them can make the proposal goes to msg proposal
+// forwarding logic. However, raft proposal forawrd logic is not compatible with
+// the raft store, as the failed proposal makes client retry. The retried
+// proposal coupled with forward proposal makes the propsal applied twice.
 #[test]
 fn test_forbid_forward_propose() {
     use test_raftstore_v2::*;
@@ -857,7 +863,8 @@ fn test_forbid_forward_propose() {
     ctx.set_region_epoch(region.get_region_epoch().clone());
     ctx.set_peer(peer2);
 
-    // block node when collecting message to make some msgs in a single batch
+    // block node when collecting message to make async write proposal and a raft
+    // message with higher term occured in a single batch.
     fail::cfg("on_peer_collect_message_2", "pause").unwrap();
     let _ = storage2.async_write(
         &ctx,

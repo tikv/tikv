@@ -1,8 +1,7 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 use std::{
     sync::{atomic::AtomicBool, Arc},
-    thread,
-    time::{self},
+    thread, time,
 };
 
 use engine_traits::{CfName, IterOptions, CF_DEFAULT};
