@@ -921,7 +921,7 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
         }
         router.register_all(mailboxes);
 
-        let router_for_cb = Mutex::new(router.router.control_mailbox());
+        let router_for_cb = Mutex::new(router.clone());
         let cb_logger = self.logger.clone();
         // The callback will be called once all the references are dropped. It is
         // referenced by all the peers that have unfinished replay work and
@@ -930,11 +930,12 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
         // store state machine and all the peers are ready.
         let replay_finished_cb = Arc::new(InvokeClosureOnDrop(Some(Box::new(move || {
             info!(cb_logger, "scheduling store heartbeat");
-            router_for_cb
-                .lock()
-                .unwrap()
-                .force_send(StoreMsg::Tick(StoreTick::PdStoreHeartbeat))
-                .unwrap();
+            let router = router_for_cb.lock().unwrap();
+            if !router.is_shutdown() {
+                router
+                    .force_send_control(StoreMsg::Tick(StoreTick::PdStoreHeartbeat))
+                    .unwrap();
+            }
         }))));
 
         // Make sure Msg::Start is the first message each FSM received.
