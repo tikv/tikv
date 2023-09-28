@@ -1959,6 +1959,7 @@ where
             if StateRole::Leader == r {
                 self.fsm.missing_ticks = 0;
                 self.register_split_region_check_tick();
+                self.ctx.raft_metrics.heartbeat_reason.on_role_chagned.inc();
                 self.fsm.peer.heartbeat_pd(self.ctx);
                 self.register_pd_heartbeat_tick();
                 self.register_raft_gc_log_tick();
@@ -2576,6 +2577,7 @@ where
         result?;
 
         if self.fsm.peer.any_new_peer_catch_up(from_peer_id) {
+            self.ctx.raft_metrics.heartbeat_reason.on_raft_message.inc();
             self.fsm.peer.heartbeat_pd(self.ctx);
             self.fsm.peer.should_wake_up = true;
         }
@@ -3806,6 +3808,11 @@ where
                 "peer_id" => self.fsm.peer_id(),
                 "region" => ?self.fsm.peer.region(),
             );
+            self.ctx
+                .raft_metrics
+                .heartbeat_reason
+                .on_ready_change_peer
+                .inc();
             self.fsm.peer.heartbeat_pd(self.ctx);
 
             if !self.fsm.peer.disk_full_peers.is_empty() {
@@ -3941,6 +3948,11 @@ where
                 self.fsm.peer.approximate_size = share_size;
                 self.fsm.peer.approximate_keys = share_keys;
             }
+            self.ctx
+                .raft_metrics
+                .heartbeat_reason
+                .on_ready_split_region
+                .inc();
             self.fsm.peer.heartbeat_pd(self.ctx);
             // Notify pd immediately to let it update the region meta.
             info!(
@@ -4074,6 +4086,11 @@ where
                 *new_peer.peer.txn_ext.pessimistic_locks.write() = locks;
                 // The new peer is likely to become leader, send a heartbeat immediately to
                 // reduce client query miss.
+                self.ctx
+                    .raft_metrics
+                    .heartbeat_reason
+                    .on_ready_split_region
+                    .inc();
                 new_peer.peer.heartbeat_pd(self.ctx);
             }
 
@@ -4582,6 +4599,11 @@ where
                 "source_region" => ?source,
                 "target_region" => ?self.fsm.peer.region(),
             );
+            self.ctx
+                .raft_metrics
+                .heartbeat_reason
+                .on_ready_commit_merge
+                .inc();
             self.fsm.peer.heartbeat_pd(self.ctx);
         }
         if let Err(e) = self.ctx.router.force_send(
@@ -4649,6 +4671,11 @@ where
                     pessimistic_locks.status = LocksStatus::Normal;
                 }
             }
+            self.ctx
+                .raft_metrics
+                .heartbeat_reason
+                .on_ready_rollback_merge
+                .inc();
             self.fsm.peer.heartbeat_pd(self.ctx);
         }
     }
@@ -6025,6 +6052,11 @@ where
         if !self.fsm.peer.is_leader() {
             return;
         }
+        self.ctx
+            .raft_metrics
+            .heartbeat_reason
+            .on_pd_heartbeat_tick
+            .inc();
         self.fsm.peer.heartbeat_pd(self.ctx);
         if self.ctx.cfg.hibernate_regions && self.fsm.peer.replication_mode_need_catch_up() {
             self.register_pd_heartbeat_tick();

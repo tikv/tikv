@@ -258,6 +258,20 @@ make_static_metric! {
         follower,
     }
 
+    pub label_enum HeartbeatReason {
+        on_ready_rollback_merge,
+        on_ready_split_region,
+        on_ready_change_peer,
+        on_role_chagned,
+        on_raft_message,
+        on_ready_commit_merge,
+        on_pd_heartbeat_tick,
+    }
+
+    pub struct HeartbeatReasonCounterVec : LocalIntCounter {
+        "reason" => HeartbeatReason,
+    }
+
     pub struct ReadIndexCounterVec : LocalIntCounter {
         "type" => Role,
     }
@@ -803,6 +817,13 @@ lazy_static! {
         "tikv_raftstore_read_index_source",
         "Total number of read index source.",
         &["type"]
+    )
+    .unwrap();
+
+    pub static ref HEARTBEAT_REASON_COUNTER_VEC: IntCounterVec = register_int_counter_vec!(
+        "tikv_raftstore_heartbeat_reason_total",
+        "Total number of heartbeat reason.",
+        &["reason"]
     )
     .unwrap();
 
