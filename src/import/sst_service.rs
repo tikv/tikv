@@ -48,55 +48,16 @@ use tikv_util::{
 use tokio::{runtime::Runtime, time::sleep};
 use txn_types::{Key, TimeStamp, WriteRef, WriteType};
 
-<<<<<<< HEAD
 use super::make_rpc_error;
-use crate::{import::duplicate_detect::DuplicateDetector, server::CONFIG_ROCKSDB_GAUGE};
+use crate::{
+    import::duplicate_detect::DuplicateDetector, send_rpc_response, server::CONFIG_ROCKSDB_GAUGE,
+};
 
 const MAX_INFLIGHT_RAFT_MSGS: usize = 64;
-=======
-use super::{
-    make_rpc_error,
-    raft_writer::{self, wait_write},
-};
-use crate::{
-    import::duplicate_detect::DuplicateDetector,
-    send_rpc_response,
-    server::CONFIG_ROCKSDB_GAUGE,
-    storage::{self, errors::extract_region_error_from_error},
-};
-
-/// The concurrency of sending raft request for every `apply` requests.
-/// This value `16` would mainly influence the speed of applying a huge file:
-/// when we downloading the files into disk, loading all of them into memory may
-/// lead to OOM. This would be able to back-pressure them.
-/// (only log files greater than 16 * 7M = 112M would be throttled by this.)
-/// NOTE: Perhaps add a memory quota for download to disk mode and get rid of
-/// this value?
-const REQUEST_WRITE_CONCURRENCY: usize = 16;
-/// The extra bytes required by the wire encoding.
-/// Generally, a field (and a embedded message) would introduce some extra
-/// bytes. In detail, they are:
-/// - 2 bytes for the request type (Tag+Value).
-/// - 2 bytes for every string or bytes field (Tag+Length), they are:
-/// .  + the key field
-/// .  + the value field
-/// .  + the CF field (None for CF_DEFAULT)
-/// - 2 bytes for the embedded message field `PutRequest` (Tag+Length).
-/// - 2 bytes for the request itself (which would be embedded into a
-///   [`RaftCmdRequest`].)
-/// In fact, the length field is encoded by varint, which may grow when the
-/// content length is greater than 128, however when the length is greater than
-/// 128, the extra 1~4 bytes can be ignored.
-const WIRE_EXTRA_BYTES: usize = 12;
-/// The interval of running the GC for
-/// [`raft_writer::ThrottledTlsEngineWriter`]. There aren't too many items held
-/// in the writer. So we can run the GC less frequently.
-const WRITER_GC_INTERVAL: Duration = Duration::from_secs(300);
 /// The max time of suspending requests.
 /// This may save us from some client sending insane value to the server.
 const SUSPEND_REQUEST_MAX_SECS: u64 = // 6h
     6 * 60 * 60;
->>>>>>> 73bc4012f0 (sst_importer: impl SuspendImport interface (#15612))
 
 /// When encoded into the wire format, every message would be add a 2 bytes
 /// header. We add the header size to it so we won't make the request exceed the
@@ -126,22 +87,13 @@ where
     limiter: Limiter,
     task_slots: Arc<Mutex<HashSet<PathBuf>>>,
     raft_entry_max_size: ReadableSize,
+    // When less than now, don't accept any requests.
+    suspend_req_until: Arc<AtomicU64>,
 }
 
-<<<<<<< HEAD
 pub struct SnapshotResult<E: KvEngine> {
     snapshot: RegionSnapshot<E::Snapshot>,
     term: u64,
-=======
-    writer: raft_writer::ThrottledTlsEngineWriter,
-
-    // it's some iff multi-rocksdb is enabled
-    store_meta: Option<Arc<Mutex<StoreMeta<E::Local>>>>,
-    resource_manager: Option<Arc<ResourceGroupManager>>,
-
-    // When less than now, don't accept any requests.
-    suspend_req_until: Arc<AtomicU64>,
->>>>>>> 73bc4012f0 (sst_importer: impl SuspendImport interface (#15612))
 }
 
 struct RequestCollector {
@@ -377,13 +329,7 @@ where
             limiter: Limiter::new(f64::INFINITY),
             task_slots: Arc::new(Mutex::new(HashSet::default())),
             raft_entry_max_size,
-<<<<<<< HEAD
-=======
-            writer,
-            store_meta,
-            resource_manager,
             suspend_req_until: Arc::new(AtomicU64::new(0)),
->>>>>>> 73bc4012f0 (sst_importer: impl SuspendImport interface (#15612))
         }
     }
 
