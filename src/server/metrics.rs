@@ -86,6 +86,7 @@ make_auto_flush_static_metric! {
         failed,
         success,
         tombstone,
+        not_found,
     }
 
     pub label_enum ReplicaReadLockCheckResult {

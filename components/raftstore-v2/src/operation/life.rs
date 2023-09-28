@@ -600,6 +600,42 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         ctx.confirmed_ids.push(gc_peer_id);
     }
 
+<<<<<<< HEAD
+=======
+    // Clean up removed and merged records for peers on tombstone stores,
+    // otherwise it may keep sending gc peer request to the tombstone store.
+    pub fn on_store_maybe_tombstone_gc_peer(&mut self, store_id: u64) {
+        let mut peers_on_tombstone = vec![];
+        let state = self.storage().region_state();
+        for peer in state.get_removed_records() {
+            if peer.get_store_id() == store_id {
+                peers_on_tombstone.push(peer.clone());
+            }
+        }
+        for record in state.get_merged_records() {
+            for peer in record.get_source_peers() {
+                if peer.get_store_id() == store_id {
+                    peers_on_tombstone.push(peer.clone());
+                }
+            }
+        }
+        if peers_on_tombstone.is_empty() {
+            return;
+        }
+        info!(self.logger, "gc peer on tombstone store";
+            "tombstone_store_id" => store_id,
+            "peers" => ?peers_on_tombstone);
+        let ctx = self.gc_peer_context_mut();
+        for peer in peers_on_tombstone {
+            if !ctx.confirmed_ids.contains(&peer.get_id()) {
+                ctx.confirmed_ids.push(peer.get_id());
+            }
+        }
+    }
+
+    // Removes deleted peers from region state by proposing a `UpdateGcPeer`
+    // command.
+>>>>>>> a7db07d72d (raftstore-v2: gc removed_records and merged_records on tombstone store  (#15677))
     pub fn on_gc_peer_tick<T: Transport>(&mut self, ctx: &mut StoreContext<EK, ER, T>) {
         if !self.is_leader() {
             return;

@@ -547,7 +547,9 @@ impl PdCluster {
     fn get_store(&self, store_id: u64) -> Result<metapb::Store> {
         match self.stores.get(&store_id) {
             Some(s) if s.store.get_id() != 0 => Ok(s.store.clone()),
-            _ => Err(box_err!("store {} not found", store_id)),
+            // Matches PD error message.
+            // See https://github.com/tikv/pd/blob/v7.3.0/server/grpc_service.go#L777-L780
+            _ => Err(box_err!("invalid store ID {}, not found", store_id)),
         }
     }
 

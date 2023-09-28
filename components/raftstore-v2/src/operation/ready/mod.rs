@@ -177,6 +177,13 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         }
     }
 
+    pub fn on_store_maybe_tombstone(&mut self, store_id: u64) {
+        if !self.is_leader() {
+            return;
+        }
+        self.on_store_maybe_tombstone_gc_peer(store_id);
+    }
+
     pub fn on_raft_message<T: Transport>(
         &mut self,
         ctx: &mut StoreContext<EK, ER, T>,

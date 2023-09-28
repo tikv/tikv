@@ -222,6 +222,11 @@ impl<EK: KvEngine> RaftExtension for TestExtension<EK> {
     }
 
     #[inline]
+    fn report_store_maybe_tombstone(&self, store_id: u64) {
+        self.extension.report_store_maybe_tombstone(store_id)
+    }
+
+    #[inline]
     fn report_snapshot_status(
         &self,
         region_id: u64,
