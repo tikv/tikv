@@ -96,19 +96,19 @@ fn test_store_heartbeat_after_replay() {
         std::thread::sleep(Duration::from_millis(100));
     }
 
-    std::thread::sleep(Duration::from_secs(1));
     // Unblock replay.
     fail::remove("on_handle_apply");
 
+    // Trigger raft ready() processing.
     let router = &mut cluster.routers[0];
     let mut put1 = SimpleWriteEncoder::with_capacity(64);
     put1.put(CF_DEFAULT, b"key1", b"value");
-    let (msg1, _) = PeerMsg::simple_write(header.clone(), put1.encode());
+    let (msg1, _) = PeerMsg::simple_write(header, put1.encode());
     router.send(2, msg1).unwrap();
+
     // There should be store heartbeats after replay is finished.
     timer = Instant::now();
     let mut heartbeat_sent = false;
-
     while timer.elapsed() < Duration::from_secs(3) {
         let stats = block_on(cluster.node(0).pd_client().get_store_stats_async(1)).unwrap();
         if stats.get_start_time() > before_restart {
