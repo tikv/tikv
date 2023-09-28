@@ -9,7 +9,7 @@ use crossbeam::utils::CachePadded;
 use parking_lot::Mutex;
 use tikv_util::{
     lru,
-    lru::{GetTailKV, LruCache},
+    lru::{GetTailKv, LruCache},
 };
 use txn_types::TimeStamp;
 
@@ -57,9 +57,9 @@ impl lru::EvictPolicy<TimeStamp, CacheEntry> for TxnStatusCacheEvictPolicy {
         &self,
         current_size: usize,
         capacity: usize,
-        get_tail_kv: &impl GetTailKV<TimeStamp, CacheEntry>,
+        get_tail_kv: &impl GetTailKv<TimeStamp, CacheEntry>,
     ) -> bool {
-        if current_size < capacity {
+        if current_size <= capacity {
             return false;
         }
 
@@ -383,12 +383,12 @@ mod tests {
         }
 
         println!(
-            "benchmark {}: duration per iter: avg: {}ns, stddev: {}ns, percentile .99: {}, percentile .999: {}",
+            "benchmark {}: duration per iter: avg: {:?}, stddev: {:?}, percentile .99: {:?}, percentile .999: {:?}",
             name,
-            total_stats.avg(),
-            total_stats.stddev(),
-            total_stats.percentile(0.99),
-            total_stats.percentile(0.999)
+            Duration::from_nanos(total_stats.avg() as u64),
+            Duration::from_nanos(total_stats.stddev() as u64),
+            Duration::from_nanos(total_stats.percentile(0.99) as u64),
+            Duration::from_nanos(total_stats.percentile(0.999) as u64),
         );
     }
 
@@ -456,10 +456,5 @@ mod tests {
         bench_txn_status_cache_concurrent_impl(64, 10000, true, false);
         bench_txn_status_cache_concurrent_impl(64, 10000, false, true);
         bench_txn_status_cache_concurrent_impl(64, 10000, true, true);
-    }
-
-    #[test]
-    fn test_basic_insert_and_delete() {
-        let c = TxnStatusCache::new();
     }
 }

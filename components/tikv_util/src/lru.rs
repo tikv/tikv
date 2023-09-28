@@ -174,7 +174,7 @@ impl<K, V> SizePolicy<K, V> for CountTracker {
     }
 }
 
-pub trait GetTailKV<K, V> {
+pub trait GetTailKv<K, V> {
     fn get_tail_kv(&self) -> Option<(&K, &V)>;
 }
 
@@ -183,15 +183,15 @@ pub trait EvictPolicy<K, V> {
         &self,
         current_size: usize,
         capacity: usize,
-        get_tail_kv: &impl GetTailKV<K, V>,
+        get_tail_kv: &impl GetTailKv<K, V>,
     ) -> bool;
 }
 
 pub struct EvictOnFull;
 
 impl<K, V> EvictPolicy<K, V> for EvictOnFull {
-    fn should_evict(&self, current_size: usize, capacity: usize, _: &impl GetTailKV<K, V>) -> bool {
-        capacity <= current_size
+    fn should_evict(&self, current_size: usize, capacity: usize, _: &impl GetTailKv<K, V>) -> bool {
+        capacity < current_size
     }
 }
 
@@ -291,9 +291,11 @@ where
     fn insert_impl(&mut self, key: K, value: V, replace: bool) {
         let mut old_key = None;
         let current_size = SizePolicy::<K, V>::current(&self.size_policy);
+        // In case the current size exactly equals to capacity, we also expect to reuse tail when
+        // inserting. Use `current_size + 1` to include the case.
         let should_evict_on_insert =
             self.evict_policy
-                .should_evict(current_size, self.capacity, self);
+                .should_evict(current_size + 1, self.capacity, self);
         match self.map.entry(key) {
             HashMapEntry::Occupied(mut e) => {
                 if replace {
@@ -423,7 +425,7 @@ where
     }
 }
 
-impl<K, V, T, E> GetTailKV<K, V> for LruCache<K, V, T, E>
+impl<K, V, T, E> GetTailKv<K, V> for LruCache<K, V, T, E>
 where
     K: Eq + Hash + Clone + std::fmt::Debug,
     T: SizePolicy<K, V>,
