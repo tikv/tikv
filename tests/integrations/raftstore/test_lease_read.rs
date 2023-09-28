@@ -16,6 +16,7 @@ use pd_client::PdClient;
 use raft::eraftpb::{ConfChangeType, MessageType};
 use raftstore::store::{Callback, RegionSnapshot};
 use test_raftstore::*;
+use test_raftstore_macro::test_case;
 use tikv_util::{config::*, future::block_on_timeout, time::Instant, HandyRwLock};
 
 // A helper function for testing the lease reads and lease renewing.

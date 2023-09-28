@@ -17,7 +17,7 @@ use raftstore::Result;
 use rand::{prelude::SliceRandom, RngCore};
 use server::common::ConfiguredRaftEngine;
 use tempfile::TempDir;
-use test_raftstore::{new_get_cmd, new_put_cf_cmd, new_request, Config};
+use test_raftstore::{must_get_value, new_get_cmd, new_put_cf_cmd, new_request, Config};
 use tikv::{
     server::KvEngineFactoryBuilder,
     storage::{
@@ -26,7 +26,7 @@ use tikv::{
         point_key_range, Engine, Snapshot,
     },
 };
-use tikv_util::{config::ReadableDuration, worker::LazyWorker, HandyRwLock};
+use tikv_util::{config::ReadableDuration, escape, worker::LazyWorker, HandyRwLock};
 use txn_types::Key;
 
 use crate::{bootstrap_store, cluster::Cluster, ServerCluster, Simulator};
@@ -305,5 +305,43 @@ pub fn test_delete_range<T: Simulator<EK>, EK: KvEngine>(cluster: &mut Cluster<T
     for _ in 0..50 {
         let k = &data_set.choose(&mut rng).unwrap().0;
         assert!(cluster.get_cf(cf, k).is_none());
+    }
+}
+
+pub fn must_read_on_peer<T: Simulator<EK>, EK: KvEngine>(
+    cluster: &mut Cluster<T, EK>,
+    peer: metapb::Peer,
+    region: metapb::Region,
+    key: &[u8],
+    value: &[u8],
+) {
+    let timeout = Duration::from_secs(5);
+    match read_on_peer(cluster, peer, region, key, false, timeout) {
+        Ok(ref resp) if value == must_get_value(resp).as_slice() => (),
+        other => panic!(
+            "read key {}, expect value {:?}, got {:?}",
+            log_wrappers::hex_encode_upper(key),
+            value,
+            other
+        ),
+    }
+}
+
+pub fn must_error_read_on_peer<T: Simulator<EK>, EK: KvEngine>(
+    cluster: &mut Cluster<T, EK>,
+    peer: metapb::Peer,
+    region: metapb::Region,
+    key: &[u8],
+    timeout: Duration,
+) {
+    if let Ok(mut resp) = read_on_peer(cluster, peer, region, key, false, timeout) {
+        if !resp.get_header().has_error() {
+            let value = resp.mut_responses()[0].mut_get().take_value();
+            panic!(
+                "key {}, expect error but got {}",
+                log_wrappers::hex_encode_upper(key),
+                escape(&value)
+            );
+        }
     }
 }
