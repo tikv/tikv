@@ -143,8 +143,9 @@ fn handle_qe_response(
     can_be_cached: bool,
     data_version: Option<u64>,
 ) -> Result<Response> {
-    use crate::coprocessor::Error;
     use tidb_query_common::error::{ErrorInner, EvaluateError};
+
+    use crate::coprocessor::Error;
 
     match result {
         Ok((sel_resp, range)) => {
@@ -181,8 +182,9 @@ fn handle_qe_response(
 fn handle_qe_stream_response(
     result: tidb_query_common::Result<(Option<(StreamResponse, IntervalRange)>, bool)>,
 ) -> Result<(Option<Response>, bool)> {
-    use crate::coprocessor::Error;
     use tidb_query_common::error::{ErrorInner, EvaluateError};
+
+    use crate::coprocessor::Error;
 
     match result {
         Ok((Some((s_resp, range)), finished)) => {
