@@ -37,6 +37,7 @@ use sst_importer::{
 };
 use tikv_util::{
     config::ReadableSize,
+    deadline::Deadline,
     future::{create_stream_with_buffer, paired_future_callback},
     sys::thread::ThreadBuildWrapper,
     time::{Instant, Limiter},
@@ -526,6 +527,7 @@ where
 
         let mut inflight_futures: VecDeque<RaftWriteFuture> = VecDeque::new();
 
+        let deadline = Deadline::from_now(Duration::from_secs(900));
         let mut tasks = metas.iter().zip(rules.iter()).peekable();
         let mut task_index = 0;
         while let Some((meta, rule)) = tasks.next() {
@@ -560,7 +562,10 @@ where
                     handle_raft_write(inflight_futures.pop_front().unwrap(), &task_key, task_index).await?;
                 }
                 let (cb, future) = paired_future_callback();
-                match router.send_command(req, Callback::write(cb), RaftCmdExtraOpts::default()) {
+                match router.send_command(req, Callback::write(cb), RaftCmdExtraOpts {
+                    deadline: Some(deadline),
+                    ..Default::default()
+                }) {
                     Ok(_) => inflight_futures.push_back(future),
                     Err(e) => {
                         let msg = format!("failed to send raft command: {}", e);
