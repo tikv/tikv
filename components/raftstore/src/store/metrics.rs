@@ -253,6 +253,15 @@ make_static_metric! {
         unable_to_split_cpu_top,
     }
 
+    pub label_enum Role {
+        leader,
+        follower,
+    }
+
+    pub struct ReadIndexCounterVec : LocalIntCounter {
+        "type" => Role,
+    }
+
     pub struct HibernatedPeerStateGauge: IntGauge {
         "state" => {
             awaken,
@@ -787,6 +796,13 @@ lazy_static! {
         "tikv_raftstore_raft_log_gc_skipped",
         "Total number of skipped raft log gc.",
         &["reason"]
+    )
+    .unwrap();
+
+    pub static ref READ_INDEX_SOURCE_VEC: IntCounterVec = register_int_counter_vec!(
+        "tikv_raftstore_read_index_source",
+        "Total number of read index source.",
+        &["type"]
     )
     .unwrap();
 
