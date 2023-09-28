@@ -366,7 +366,7 @@ mod tests {
         for _ in 0..1000 {
             ts.incr();
             key[0..8].copy_from_slice(&ts.into_inner().to_be_bytes());
-            let _ = resolver.track_lock(ts, key.clone(), None);
+            resolver.track_lock(ts, key.clone(), None);
         }
         assert!(
             resolver.locks_by_key.capacity() >= 1000,
@@ -419,7 +419,7 @@ mod tests {
         let ts = TimeStamp::new(1);
         for i in 0..1000usize {
             key[0..8].copy_from_slice(&i.to_be_bytes());
-            let _ = resolver.track_lock(ts, key.clone(), None);
+            resolver.track_lock(ts, key.clone(), None);
         }
         assert!(
             resolver.lock_ts_heap[&ts].capacity() >= 1000,
