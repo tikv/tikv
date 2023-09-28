@@ -120,6 +120,9 @@ impl rocksdb::EventListener for RocksEventListener {
                 DBBackgroundErrorReason::Compaction => "compaction",
                 DBBackgroundErrorReason::WriteCallback => "write_callback",
                 DBBackgroundErrorReason::MemTable => "memtable",
+                DBBackgroundErrorReason::ManifestWrite => "manifest_write",
+                DBBackgroundErrorReason::FlushNoWAL => "flush_no_wal",
+                DBBackgroundErrorReason::ManifestWriteNoWAL => "manifest_write_no_wal",
             };
 
             if err.starts_with("Corruption") || err.starts_with("IO error") {

@@ -461,6 +461,9 @@ impl TablePropertiesCollector for MvccPropertiesCollector {
                     } else {
                         self.props.num_deletes += 1;
                     }
+                    if let Some(expire_ts) = raw_value.expire_ts {
+                        self.props.ttl.add(expire_ts);
+                    }
                 }
                 Err(_) => {
                     self.num_errors += 1;
@@ -847,6 +850,8 @@ mod tests {
         assert_eq!(props.num_puts, 4);
         assert_eq!(props.num_versions, 7);
         assert_eq!(props.max_row_versions, 3);
+        assert_eq!(props.ttl.max_expire_ts, Some(u64::MAX));
+        assert_eq!(props.ttl.min_expire_ts, Some(10));
     }
 
     #[bench]

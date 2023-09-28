@@ -8,9 +8,10 @@ use futures::executor::block_on;
 use kvproto::{kvrpcpb::*, metapb::RegionEpoch};
 use pd_client::PdClient;
 use tempfile::Builder;
-use test_raftstore::sleep_ms;
+use test_raftstore::{sleep_ms, IsolationFilterFactory};
 use test_sst_importer::*;
 pub use testsuite::*;
+use tikv_util::store::new_peer;
 
 #[test]
 fn test_resolved_ts_basic() {
@@ -138,6 +139,34 @@ fn test_dynamic_change_advance_ts_interval() {
         region.id,
         block_on(suite.cluster.pd_client.get_tso()).unwrap(),
     );
+
+    suite.stop();
+}
+
+// This case checks resolved ts can still be advanced quickly even if some TiKV
+// stores are partitioned.
+#[test]
+fn test_store_partitioned() {
+    let mut suite = TestSuite::new(3);
+    let r = suite.cluster.get_region(&[]);
+    suite.cluster.must_transfer_leader(r.id, new_peer(1, 1));
+    suite.must_get_rts_ge(r.id, block_on(suite.cluster.pd_client.get_tso()).unwrap());
+
+    suite
+        .cluster
+        .add_send_filter(IsolationFilterFactory::new(3));
+    let tso = block_on(suite.cluster.pd_client.get_tso()).unwrap();
+    for _ in 0..50 {
+        let rts = suite.region_resolved_ts(r.id).unwrap();
+        if rts > tso {
+            if rts.physical() - tso.physical() < 3000 {
+                break;
+            } else {
+                panic!("resolved ts doesn't advance in time")
+            }
+        }
+        sleep_ms(100);
+    }
 
     suite.stop();
 }

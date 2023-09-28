@@ -138,12 +138,14 @@ impl MiscExt for RocksEngine {
                 handles.push(util::get_cf_handle(self.as_inner(), cf)?);
             }
         }
-        self.as_inner().flush_cfs(&handles, wait).map_err(r2e)
+        self.as_inner()
+            .flush_cfs(&handles, wait, false)
+            .map_err(r2e)
     }
 
     fn flush_cf(&self, cf: &str, wait: bool) -> Result<()> {
         let handle = util::get_cf_handle(self.as_inner(), cf)?;
-        self.as_inner().flush_cf(handle, wait).map_err(r2e)
+        self.as_inner().flush_cf(handle, wait, false).map_err(r2e)
     }
 
     fn delete_ranges_cf(
