@@ -291,8 +291,8 @@ where
     fn insert_impl(&mut self, key: K, value: V, replace: bool) {
         let mut old_key = None;
         let current_size = SizePolicy::<K, V>::current(&self.size_policy);
-        // In case the current size exactly equals to capacity, we also expect to reuse tail when
-        // inserting. Use `current_size + 1` to include the case.
+        // In case the current size exactly equals to capacity, we also expect to reuse
+        // tail when inserting. Use `current_size + 1` to include the case.
         let should_evict_on_insert =
             self.evict_policy
                 .should_evict(current_size + 1, self.capacity, self);
