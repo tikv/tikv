@@ -125,16 +125,9 @@ pub struct ImportSstService<E: Engine> {
     raft_entry_max_size: ReadableSize,
 
     writer: raft_writer::ThrottledTlsEngineWriter,
-<<<<<<< HEAD
-=======
-
-    // it's some iff multi-rocksdb is enabled
-    store_meta: Option<Arc<Mutex<StoreMeta<E::Local>>>>,
-    resource_manager: Option<Arc<ResourceGroupManager>>,
 
     // When less than now, don't accept any requests.
     suspend_req_until: Arc<AtomicU64>,
->>>>>>> 73bc4012f0 (sst_importer: impl SuspendImport interface (#15612))
 }
 
 struct RequestCollector {
@@ -360,12 +353,7 @@ impl<E: Engine> ImportSstService<E> {
             task_slots: Arc::new(Mutex::new(HashSet::default())),
             raft_entry_max_size,
             writer,
-<<<<<<< HEAD
-=======
-            store_meta,
-            resource_manager,
             suspend_req_until: Arc::new(AtomicU64::new(0)),
->>>>>>> 73bc4012f0 (sst_importer: impl SuspendImport interface (#15612))
         }
     }
 
