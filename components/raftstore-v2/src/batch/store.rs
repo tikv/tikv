@@ -44,7 +44,7 @@ use tikv_util::{
     config::{Tracker, VersionTrack},
     log::SlogFormat,
     sys::SysQuota,
-    time::{duration_to_sec, Instant as TiInstant},
+    time::{duration_to_sec, monotonic_raw_now, Instant as TiInstant},
     timer::SteadyTimer,
     worker::{Builder, LazyWorker, Scheduler, Worker},
     yatp_pool::{DefaultTicker, FuturePool, YatpPoolBuilder},
@@ -69,7 +69,6 @@ pub struct StoreContext<EK: KvEngine, ER: RaftEngine, T> {
     pub coprocessor_host: CoprocessorHost<EK>,
     /// The transport for sending messages to peers on other stores.
     pub trans: T,
-    pub current_time: Option<Timespec>,
     pub has_ready: bool,
     pub raft_metrics: RaftMetrics,
     /// The latest configuration.
@@ -87,6 +86,11 @@ pub struct StoreContext<EK: KvEngine, ER: RaftEngine, T> {
     pub engine: ER,
     pub tablet_registry: TabletRegistry<EK>,
     pub apply_pool: FuturePool,
+
+    /// current_time from monotonic_raw_now.
+    pub current_time: Option<Timespec>,
+    /// unsafe_vote_deadline from monotonic_raw_now.
+    pub unsafe_vote_deadline: Option<Timespec>,
 
     /// Disk usage for the store itself.
     pub self_disk_usage: DiskUsage,
@@ -123,6 +127,23 @@ impl<EK: KvEngine, ER: RaftEngine, T> StoreContext<EK, ER, T> {
             self.cfg.check_long_uncommitted_interval.0;
         self.tick_batch[PeerTick::GcPeer as usize].wait_duration =
             60 * cmp::min(Duration::from_secs(1), self.cfg.raft_base_tick_interval.0);
+    }
+
+    // Return None means it has passed unsafe vote period.
+    pub fn maybe_in_unsafe_vote_period(&mut self) -> Option<Duration> {
+        if self.cfg.allow_unsafe_vote_after_start {
+            return None;
+        }
+        let deadline = TiInstant::Monotonic(self.unsafe_vote_deadline?);
+        let current_time =
+            TiInstant::Monotonic(*self.current_time.get_or_insert_with(monotonic_raw_now));
+        let remain_duration = deadline.saturating_duration_since(current_time);
+        if remain_duration > Duration::ZERO {
+            Some(remain_duration)
+        } else {
+            self.unsafe_vote_deadline.take();
+            None
+        }
     }
 }
 
@@ -304,6 +325,7 @@ struct StorePollerBuilder<EK: KvEngine, ER: RaftEngine, T> {
     global_stat: GlobalStoreStat,
     sst_importer: Arc<SstImporter>,
     key_manager: Option<Arc<DataKeyManager>>,
+    node_start_time: Timespec, // monotonic_raw_now
 }
 
 impl<EK: KvEngine, ER: RaftEngine, T> StorePollerBuilder<EK, ER, T> {
@@ -322,6 +344,7 @@ impl<EK: KvEngine, ER: RaftEngine, T> StorePollerBuilder<EK, ER, T> {
         coprocessor_host: CoprocessorHost<EK>,
         sst_importer: Arc<SstImporter>,
         key_manager: Option<Arc<DataKeyManager>>,
+        node_start_time: Timespec, // monotonic_raw_now
     ) -> Self {
         let pool_size = cfg.value().apply_batch_system.pool_size;
         let max_pool_size = std::cmp::max(
@@ -351,6 +374,7 @@ impl<EK: KvEngine, ER: RaftEngine, T> StorePollerBuilder<EK, ER, T> {
             global_stat,
             sst_importer,
             key_manager,
+            node_start_time,
         }
     }
 
@@ -470,11 +494,20 @@ where
 
     fn build(&mut self, _priority: batch_system::Priority) -> Self::Handler {
         let cfg = self.cfg.value().clone();
+        let election_timeout = cfg.raft_base_tick_interval.0
+            * if cfg.raft_min_election_timeout_ticks != 0 {
+                cfg.raft_min_election_timeout_ticks as u32
+            } else {
+                cfg.raft_election_timeout_ticks as u32
+            };
+        let unsafe_vote_deadline =
+            Some(self.node_start_time + time::Duration::from_std(election_timeout).unwrap());
         let mut poll_ctx = StoreContext {
             logger: self.logger.clone(),
             store_id: self.store_id,
             trans: self.trans.clone(),
             current_time: None,
+            unsafe_vote_deadline,
             has_ready: false,
             raft_metrics: RaftMetrics::new(cfg.waterfall_metrics),
             cfg,
@@ -573,6 +606,7 @@ pub struct StoreSystem<EK: KvEngine, ER: RaftEngine> {
     schedulers: Option<Schedulers<EK, ER>>,
     logger: Logger,
     shutdown: Arc<AtomicBool>,
+    node_start_time: Timespec, // monotonic_raw_now
 }
 
 impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
@@ -716,6 +750,7 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
             coprocessor_host,
             sst_importer,
             key_manager,
+            self.node_start_time,
         );
         self.workers = Some(workers);
         self.schedulers = Some(schedulers);
@@ -857,6 +892,7 @@ where
         schedulers: None,
         logger: logger.clone(),
         shutdown: Arc::new(AtomicBool::new(false)),
+        node_start_time: monotonic_raw_now(),
     };
     (StoreRouter { router, logger }, system)
 }
