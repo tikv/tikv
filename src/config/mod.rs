@@ -645,6 +645,7 @@ macro_rules! build_cf_opt {
                     $cf_name,
                     provider.clone(),
                     $opt.compaction_guard_min_output_file_size.0,
+                    $opt.max_compaction_bytes.0,
                 )
                 .unwrap();
                 cf_opts.set_sst_partitioner_factory(factory);
