@@ -405,7 +405,7 @@ impl TestNode {
         }
     }
 
-    fn start(
+    pub fn start(
         &mut self,
         cfg: Arc<VersionTrack<Config>>,
         cop_cfg: Arc<VersionTrack<CopConfig>>,
@@ -438,7 +438,7 @@ impl TestNode {
         &self.pd_client
     }
 
-    fn stop(&mut self) {
+    pub fn stop(&mut self) {
         self.running_state.take();
     }
 
@@ -532,7 +532,7 @@ pub fn disable_all_auto_ticks(cfg: &mut Config) {
 
 pub struct Cluster {
     pd_server: test_pd::Server<Service>,
-    nodes: Vec<TestNode>,
+    pub nodes: Vec<TestNode>,
     receivers: Vec<Receiver<RaftMessage>>,
     pub routers: Vec<TestRouter>,
     logger: Logger,

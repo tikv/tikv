@@ -731,7 +731,14 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     /// are persisted.
     #[inline]
     pub fn handle_raft_ready<T: Transport>(&mut self, ctx: &mut StoreContext<EK, ER, T>) {
-        let has_ready = self.reset_has_ready();
+        let has_ready = if cfg!(feature = "failpoints") {
+            (|| {
+                fail::fail_point!("set_raft_has_ready", |_| true);
+                self.reset_has_ready()
+            })()
+        } else {
+            self.reset_has_ready()
+        };
         let has_extra_write = self.reset_has_extra_write();
         if !has_ready || self.destroy_progress().started() {
             #[cfg(feature = "testexport")]
