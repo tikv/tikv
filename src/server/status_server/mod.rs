@@ -347,61 +347,31 @@ where
             let body_bytes = hyper::body::to_bytes(req.into_body()).await?;
             let body = String::from_utf8(body_bytes.to_vec()).unwrap();
 
-            let ctx = addr2line::Context::new(&object).unwrap();
-            let symbols = object.symbol_map();
-
-            // Get `/proc/self/maps` to get memory mapping information.
-            let maps = get_process_maps(std::process::id() as Pid).unwrap();
-
             // The request body is a list of addr to be resolved joined by '+'.
             // Resolve addrs with addr2line and write the symbols each per line in
             // response.
             for pc in body.split('+') {
-                let pc = usize::from_str_radix(pc.trim_start_matches("0x"), 16).unwrap_or(0);
-                if pc == 0 {
-                    info!("invalid pc: {}", pc);
+                let addr = usize::from_str_radix(pc.trim_start_matches("0x"), 16).unwrap_or(0);
+                if addr == 0 {
+                    info!("invalid addr: {}", addr);
                     continue;
                 }
+            
+                // Would be multiple symbols if inlined.
+                let mut syms = vec![];
+                backtrace::resolve(addr as * mut std::ffi::c_void, |sym| {
+                    let name = sym.name().unwrap_or(backtrace::SymbolName::new(b"<unknown>"));
+                    syms.push(name.to_string());
+                });
 
-                let mut addr = None;
-                for map in maps.iter() {
-                    let start = map.start();
-                    if (pc >= start) && (pc < (start + map.size())) {
-                        // What we have is a virtual address(VA). But in most modern OSes, address
-                        // spaces are randomized for a new process. So we need to examine the
-                        // `proc/self/maps` to get the base address of text section loaded in
-                        // memory. The address in file should be
-                        //   (VA - text start address in memory + text section offset in file)
-                        addr = Some(pc - start + map.offset);
-                        break;
-                    }
-                }
-                let Some(addr) = addr else {
-                    info!("can't map pc: {}", pc);
-                    continue;
-                };
-
-                // Look up the frame by DWARF debug info.
-                let mut frames = ctx.find_frames(addr as u64).skip_all_loads().unwrap();
-                let mut sym = None;
-                while let Some(frame) = frames.next().unwrap() {
-                    if let Some(func) = frame.function {
-                        sym = Some(func.demangle().unwrap())
-                    }
-                }
-                if sym.is_none() {
-                    // If not found by DWARF, try to look up the address in the symbol table.
-                    if let Some(s) = symbols.get(addr as u64) {
-                        sym = Some(addr2line::demangle_auto(Cow::from(s.name()), None));
-                    }
-                };
-                if let Some(f) = sym {
+                if !syms.is_empty() {
+                    let f = syms.join("--"); // join inline functions with '--'
                     // should be <hex address> <function name>
-                    info!("resolve: {:#x} {:#x} {}", addr, pc, f);
-                    text.push_str(format!("{:#x} {}\n", pc, f).as_str());
+                    info!("resolve: {:#x} {}", addr, f);
+                    text.push_str(format!("{:#x} {}\n", addr, f).as_str());
                 } else {
-                    info!("can't resolve mapped addr: {:#x}, pc: {:#x}", addr, pc);
-                    text.push_str(format!("{:#x} ??\n", pc).as_str());
+                    info!("can't resolve mapped addr: {:#x}", addr);
+                    text.push_str(format!("{:#x} ??\n", addr).as_str());
                 }
             }
         }
