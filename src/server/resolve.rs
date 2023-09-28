@@ -117,6 +117,7 @@ where
                 // "invalid store ID %d, not found" for such store id.
                 // See https://github.com/tikv/pd/blob/v7.3.0/server/grpc_service.go#L777-L780
                 if format!("{:?}", e).contains("not found") {
+                    RESOLVE_STORE_COUNTER_STATIC.not_found.inc();
                     info!("resolve store not found"; "store_id" => store_id);
                     self.router.report_store_maybe_tombstone(store_id);
                 }

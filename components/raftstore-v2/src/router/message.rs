@@ -197,7 +197,7 @@ pub enum PeerMsg {
     StoreUnreachable {
         to_store_id: u64,
     },
-    // A store may be tombstone. Use it with cautious, it also means store not
+    // A store may be tombstone. Use it with caution, it also means store not
     // found, PD can not distinguish them now, as PD may delete tombstone stores.
     StoreMaybeTombstone {
         store_id: u64,
