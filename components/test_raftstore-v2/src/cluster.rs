@@ -1380,6 +1380,7 @@ impl<T: Simulator<EK>, EK: KvEngine> Cluster<T, EK> {
             region.get_region_epoch().clone(),
             vec![split_key],
             "test".into(),
+            false,
         );
 
         router
