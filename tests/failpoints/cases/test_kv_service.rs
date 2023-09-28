@@ -100,4 +100,6 @@ fn test_undetermined_write_err() {
     .unwrap_err();
     assert_eq!(err.to_string(), "RpcFailure: 1-CANCELLED CANCELLED",);
     fail::remove("applied_cb_return_undetermined_err");
+    // The previous panic hasn't been captured.
+    assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(cluster))).is_err());
 }

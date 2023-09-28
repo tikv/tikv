@@ -375,6 +375,14 @@ macro_rules! cf_config {
             pub checksum: ChecksumType,
             #[online_config(skip)]
             pub max_compactions: u32,
+            // `ttl == None` means disable this feature in Rocksdb.
+            // `ttl` in Rocksdb is 30 days as default.
+            #[online_config(skip)]
+            pub ttl: Option<ReadableDuration>,
+            // `periodic_compaction_seconds == None` means disabled this feature in Rocksdb.
+            // `periodic_compaction_seconds` in Rocksdb is 30 days as default.
+            #[online_config(skip)]
+            pub periodic_compaction_seconds: Option<ReadableDuration>,
             #[online_config(submodule)]
             pub titan: TitanCfConfig,
         }
@@ -627,6 +635,13 @@ macro_rules! build_cf_opt {
         if let Some(r) = $compaction_limiter {
             cf_opts.set_compaction_thread_limiter(r);
         }
+        cf_opts.set_ttl($opt.ttl.unwrap_or(ReadableDuration::secs(0)).0.as_secs());
+        cf_opts.set_periodic_compaction_seconds(
+            $opt.periodic_compaction_seconds
+                .unwrap_or(ReadableDuration::secs(0))
+                .0
+                .as_secs(),
+        );
         cf_opts
     }};
 }
@@ -686,7 +701,7 @@ impl Default for DefaultCfConfig {
             prop_keys_index_distance: DEFAULT_PROP_KEYS_INDEX_DISTANCE,
             enable_doubly_skiplist: true,
             enable_compaction_guard: None,
-            compaction_guard_min_output_file_size: ReadableSize::mb(1),
+            compaction_guard_min_output_file_size: ReadableSize::mb(8),
             compaction_guard_max_output_file_size: ReadableSize::mb(128),
             bottommost_level_compression: DBCompressionType::Zstd,
             bottommost_zstd_compression_dict_size: 0,
@@ -695,6 +710,8 @@ impl Default for DefaultCfConfig {
             format_version: 2,
             checksum: ChecksumType::CRC32c,
             max_compactions: 0,
+            ttl: None,
+            periodic_compaction_seconds: None,
             titan: TitanCfConfig::default(),
         }
     }
@@ -721,10 +738,6 @@ impl DefaultCfConfig {
             prop_size_index_distance: self.prop_size_index_distance,
             prop_keys_index_distance: self.prop_keys_index_distance,
         };
-        cf_opts.add_table_properties_collector_factory(
-            "tikv.rawkv-mvcc-properties-collector",
-            RawMvccPropertiesCollectorFactory::default(),
-        );
         cf_opts.add_table_properties_collector_factory("tikv.range-properties-collector", f);
         if let Some(factory) = filter_factory {
             match api_version {
@@ -750,6 +763,10 @@ impl DefaultCfConfig {
                         .unwrap();
                 }
                 ApiVersion::V2 => {
+                    cf_opts.add_table_properties_collector_factory(
+                        "tikv.rawkv-mvcc-properties-collector",
+                        RawMvccPropertiesCollectorFactory::default(),
+                    );
                     let factory = StackingCompactionFilterFactory::new(
                         factory.clone(),
                         RawCompactionFilterFactory,
@@ -780,6 +797,10 @@ impl DefaultCfConfig {
                         .unwrap();
                 }
                 ApiVersion::V2 => {
+                    cf_opts.add_table_properties_collector_factory(
+                        "tikv.rawkv-mvcc-properties-collector",
+                        RawMvccPropertiesCollectorFactory::default(),
+                    );
                     cf_opts
                         .set_compaction_filter_factory(
                             "apiv2_gc_compaction_filter_factory",
@@ -850,7 +871,7 @@ impl Default for WriteCfConfig {
             prop_keys_index_distance: DEFAULT_PROP_KEYS_INDEX_DISTANCE,
             enable_doubly_skiplist: true,
             enable_compaction_guard: None,
-            compaction_guard_min_output_file_size: ReadableSize::mb(1),
+            compaction_guard_min_output_file_size: ReadableSize::mb(8),
             compaction_guard_max_output_file_size: ReadableSize::mb(128),
             bottommost_level_compression: DBCompressionType::Zstd,
             bottommost_zstd_compression_dict_size: 0,
@@ -859,6 +880,8 @@ impl Default for WriteCfConfig {
             format_version: 2,
             checksum: ChecksumType::CRC32c,
             max_compactions: 0,
+            ttl: None,
+            periodic_compaction_seconds: None,
             titan,
         }
     }
@@ -968,7 +991,7 @@ impl Default for LockCfConfig {
             prop_keys_index_distance: DEFAULT_PROP_KEYS_INDEX_DISTANCE,
             enable_doubly_skiplist: true,
             enable_compaction_guard: None,
-            compaction_guard_min_output_file_size: ReadableSize::mb(1),
+            compaction_guard_min_output_file_size: ReadableSize::mb(8),
             compaction_guard_max_output_file_size: ReadableSize::mb(128),
             bottommost_level_compression: DBCompressionType::Disable,
             bottommost_zstd_compression_dict_size: 0,
@@ -977,6 +1000,8 @@ impl Default for LockCfConfig {
             format_version: 2,
             checksum: ChecksumType::CRC32c,
             max_compactions: 0,
+            ttl: None,
+            periodic_compaction_seconds: None,
             titan,
         }
     }
@@ -1061,7 +1086,7 @@ impl Default for RaftCfConfig {
             prop_keys_index_distance: DEFAULT_PROP_KEYS_INDEX_DISTANCE,
             enable_doubly_skiplist: true,
             enable_compaction_guard: None,
-            compaction_guard_min_output_file_size: ReadableSize::mb(1),
+            compaction_guard_min_output_file_size: ReadableSize::mb(8),
             compaction_guard_max_output_file_size: ReadableSize::mb(128),
             bottommost_level_compression: DBCompressionType::Disable,
             bottommost_zstd_compression_dict_size: 0,
@@ -1070,6 +1095,8 @@ impl Default for RaftCfConfig {
             format_version: 2,
             checksum: ChecksumType::CRC32c,
             max_compactions: 0,
+            ttl: None,
+            periodic_compaction_seconds: None,
             titan,
         }
     }
@@ -1580,7 +1607,7 @@ impl Default for RaftDefaultCfConfig {
             prop_keys_index_distance: DEFAULT_PROP_KEYS_INDEX_DISTANCE,
             enable_doubly_skiplist: true,
             enable_compaction_guard: None,
-            compaction_guard_min_output_file_size: ReadableSize::mb(1),
+            compaction_guard_min_output_file_size: ReadableSize::mb(8),
             compaction_guard_max_output_file_size: ReadableSize::mb(128),
             bottommost_level_compression: DBCompressionType::Disable,
             bottommost_zstd_compression_dict_size: 0,
@@ -1589,6 +1616,8 @@ impl Default for RaftDefaultCfConfig {
             format_version: 2,
             checksum: ChecksumType::CRC32c,
             max_compactions: 0,
+            ttl: None,
+            periodic_compaction_seconds: None,
             titan: TitanCfConfig::default(),
         }
     }
@@ -2677,6 +2706,7 @@ pub struct BackupStreamConfig {
     pub initial_scan_pending_memory_quota: ReadableSize,
     #[online_config(skip)]
     pub initial_scan_rate_limit: ReadableSize,
+    pub initial_scan_concurrency: usize,
 }
 
 impl BackupStreamConfig {
@@ -2704,6 +2734,9 @@ impl BackupStreamConfig {
             )
             .into());
         }
+        if self.initial_scan_concurrency == 0 {
+            return Err("the `initial_scan_concurrency` shouldn't be zero".into());
+        }
         Ok(())
     }
 }
@@ -2724,6 +2757,7 @@ impl Default for BackupStreamConfig {
             file_size_limit: ReadableSize::mb(256),
             initial_scan_pending_memory_quota: ReadableSize(quota_size as _),
             initial_scan_rate_limit: ReadableSize::mb(60),
+            initial_scan_concurrency: 6,
         }
     }
 }
@@ -5748,6 +5782,19 @@ mod tests {
         cfg.raftdb.defaultcf.level0_stop_writes_trigger = None;
         cfg.raftdb.defaultcf.soft_pending_compaction_bytes_limit = None;
         cfg.raftdb.defaultcf.hard_pending_compaction_bytes_limit = None;
+        // ColumnFamily::ttl
+        cfg.rocksdb.defaultcf.ttl = None;
+        cfg.rocksdb.writecf.ttl = None;
+        cfg.rocksdb.lockcf.ttl = None;
+        cfg.rocksdb.raftcf.ttl = None;
+        cfg.raftdb.defaultcf.ttl = None;
+        // ColumnFamily::periodic_compaction_seconds
+        cfg.rocksdb.defaultcf.periodic_compaction_seconds = None;
+        cfg.rocksdb.writecf.periodic_compaction_seconds = None;
+        cfg.rocksdb.lockcf.periodic_compaction_seconds = None;
+        cfg.rocksdb.raftcf.periodic_compaction_seconds = None;
+        cfg.raftdb.defaultcf.periodic_compaction_seconds = None;
+
         cfg.coprocessor
             .optimize_for(default_cfg.storage.engine == EngineType::RaftKv2);
 

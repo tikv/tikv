@@ -150,6 +150,7 @@ serde = { version = "1.0", features = ["derive"] }
 serde_derive = "1.0"
 serde_ignored = "0.1"
 serde_json = { version = "1.0", features = ["preserve_order"] }
+service = { workspace = true }
 slog = { workspace = true }
 slog-global = { workspace = true }
 smallvec = "1.4"
@@ -270,6 +271,7 @@ members = [
   "components/resource_metering",
   "components/security",
   "components/server",
+  "components/service",
   "components/snap_recovery",
   "components/sst_importer",
   "components/test_backup",
@@ -347,6 +349,7 @@ resource_control = { path = "components/resource_control" }
 resource_metering = { path = "components/resource_metering" }
 security = { path = "components/security" }
 server = { path = "components/server" }
+service = { path = "components/service" }
 snap_recovery = { path = "components/snap_recovery" }
 sst_importer = { path = "components/sst_importer" }
 test_backup = { path = "components/test_backup" }
@@ -380,6 +383,7 @@ tipb = { git = "https://github.com/pingcap/tipb.git" }
 kvproto = { git = "https://github.com/pingcap/kvproto.git", branch = "release-7.1" }
 yatp = { git = "https://github.com/tikv/yatp.git", branch = "master" }
 tokio-timer = { git = "https://github.com/tikv/tokio", branch = "tokio-timer-hotfix" }
+tokio-executor = { git = "https://github.com/tikv/tokio", branch = "tokio-timer-hotfix" }
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }
 

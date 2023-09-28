@@ -345,6 +345,19 @@ impl<L, R> Either<L, R> {
             _ => None,
         }
     }
+
+    #[inline]
+    pub fn is_left(&self) -> bool {
+        match *self {
+            Either::Left(_) => true,
+            Either::Right(_) => false,
+        }
+    }
+
+    #[inline]
+    pub fn is_right(&self) -> bool {
+        !self.is_left()
+    }
 }
 
 impl<L, R, T> AsRef<T> for Either<L, R>
