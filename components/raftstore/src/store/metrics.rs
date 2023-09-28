@@ -257,6 +257,20 @@ make_static_metric! {
         unable_to_split_cpu_top,
     }
 
+    pub label_enum HeartbeatReason {
+        on_ready_rollback_merge,
+        on_ready_split_region,
+        on_ready_change_peer,
+        on_role_chagned,
+        on_raft_message,
+        on_ready_commit_merge,
+        on_pd_heartbeat_tick,
+    }
+
+    pub struct HeartbeatReasonCounterVec : LocalIntCounter {
+        "reason" => HeartbeatReason,
+    }
+
     pub struct HibernatedPeerStateGauge: IntGauge {
         "state" => {
             awaken,
@@ -854,6 +868,13 @@ lazy_static! {
     pub static ref RAFT_LOG_GC_SKIPPED_VEC: IntCounterVec = register_int_counter_vec!(
         "tikv_raftstore_raft_log_gc_skipped",
         "Total number of skipped raft log gc.",
+        &["reason"]
+    )
+    .unwrap();
+
+    pub static ref HEARTBEAT_REASON_COUNTER_VEC: IntCounterVec = register_int_counter_vec!(
+        "tikv_raftstore_heartbeat_reason_total",
+        "Total number of heartbeat reason.",
         &["reason"]
     )
     .unwrap();
