@@ -38,7 +38,7 @@ use crate::{
         GcPeerContext, MergeContext, ProposalControl, ReplayWatch, SimpleWriteReqEncoder,
         SplitFlowControl, SplitPendingAppend, TxnContext,
     },
-    router::{ApplyTask, CmdResChannel, PeerTick, QueryResChannel},
+    router::{CmdResChannel, PeerTick, QueryResChannel},
     Result,
 };
 
@@ -510,10 +510,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 "apply_index" =>  self.storage().entry_storage().applied_index()
             );
             self.set_replay_watch(None);
-            // Flush to avoid recover again and again.
-            if let Some(scheduler) = self.apply_scheduler() {
-                scheduler.send(ApplyTask::ManualFlush);
-            }
             self.add_pending_tick(PeerTick::Raft);
         }
     }
