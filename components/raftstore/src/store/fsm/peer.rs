@@ -617,10 +617,14 @@ where
         let count = msgs.len();
         for m in msgs.drain(..) {
             match m {
-                PeerMsg::RaftMessage(msg) => {
+                PeerMsg::RaftMessage(msg, recv_time) => {
                     if !self.ctx.coprocessor_host.on_raft_message(&msg.msg) {
                         continue;
                     }
+                    self.ctx
+                        .raft_metrics
+                        .process_wait_time
+                        .observe(recv_time.saturating_elapsed().as_secs_f64());
                     if let Err(e) = self.on_raft_message(msg) {
                         error!(%e;
                             "handle raft message err";
