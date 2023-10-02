@@ -496,12 +496,10 @@ pub mod test_router {
 
     impl RaftStoreRouter<RocksEngine> for TestRaftStoreRouter {
         fn send_raft_msg(&self, msg: RaftMessage) -> RaftStoreResult<()> {
-            let _ = self
-                .tx
-                .send(Either::Left(PeerMsg::RaftMessage(InspectedRaftMessage {
-                    heap_size: 0,
-                    msg,
-                })));
+            let _ = self.tx.send(Either::Left(PeerMsg::RaftMessage(
+                InspectedRaftMessage { heap_size: 0, msg },
+                Some(TiInstant::now()),
+            )));
             Ok(())
         }
 
@@ -528,7 +526,9 @@ mod tests {
     };
     use resource_metering::ResourceTagFactory;
     use security::SecurityConfig;
-    use tikv_util::{config::ReadableDuration, quota_limiter::QuotaLimiter};
+    use tikv_util::{
+        config::ReadableDuration, quota_limiter::QuotaLimiter, time::Instant as TiInstant,
+    };
     use tokio::runtime::Builder as TokioBuilder;
 
     use super::{
