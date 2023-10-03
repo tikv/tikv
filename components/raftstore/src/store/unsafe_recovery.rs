@@ -1,7 +1,7 @@
 // Copyright 2023 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    fmt, mem,
+    mem,
     sync::{mpsc::SyncSender, Arc, Mutex},
     time::Duration,
 };
@@ -15,7 +15,9 @@ use kvproto::{
     raft_cmdpb::RaftCmdRequest,
 };
 use raft::eraftpb::ConfChangeType;
-use tikv_util::{box_err, error, info, time::Instant as TiInstant, warn};
+use tikv_util::{
+    box_err, error, info, synchronizer::InvokeClosureOnDrop, time::Instant as TiInstant, warn,
+};
 
 use super::{
     fsm::new_admin_request, worker::new_change_peer_v2_request, PeerMsg, RaftRouter,
@@ -175,9 +177,7 @@ pub enum ForceLeaderState {
     },
 }
 
-// Following shared states are used while reporting to PD for unsafe recovery
-// and shared among all the regions per their life cycle.
-// The work flow is like:
+// The unsafe recovery work flow is like:
 // 1. report phase
 //   - start_unsafe_recovery_report
 //      - broadcast wait-apply commands
@@ -198,32 +198,6 @@ pub enum ForceLeaderState {
 //         learner
 //       - exit joint state
 //     - start_unsafe_recovery_report
-
-// A wrapper of a closure that will be invoked when it is dropped.
-// This design has two benefits:
-//   1. Using a closure (dynamically dispatched), so that it can avoid having
-//      generic member fields like RaftRouter, thus avoid having Rust generic
-//      type explosion problem.
-//   2. Invoke on drop, so that it can be easily and safely used (together with
-//      Arc) as a coordinator between all concerning peers. Each of the peers
-//      holds a reference to the same structure, and whoever finishes the task
-//      drops its reference. Once the last reference is dropped, indicating all
-//      the peers have finished their own tasks, the closure is invoked.
-pub struct InvokeClosureOnDrop(Option<Box<dyn FnOnce() + Send + Sync>>);
-
-impl fmt::Debug for InvokeClosureOnDrop {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "InvokeClosureOnDrop")
-    }
-}
-
-impl Drop for InvokeClosureOnDrop {
-    fn drop(&mut self) {
-        if let Some(on_drop) = self.0.take() {
-            on_drop();
-        }
-    }
-}
 
 pub fn start_unsafe_recovery_report(
     router: Arc<dyn UnsafeRecoveryHandle>,

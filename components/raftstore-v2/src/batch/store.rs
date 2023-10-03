@@ -47,6 +47,7 @@ use tikv_util::{
     box_err,
     config::{Tracker, VersionTrack},
     log::SlogFormat,
+    synchronizer::InvokeClosureOnDrop,
     sys::SysQuota,
     time::{duration_to_sec, monotonic_raw_now, Instant as TiInstant, Limiter},
     timer::{SteadyTimer, GLOBAL_TIMER_HANDLE},
@@ -59,8 +60,7 @@ use time::Timespec;
 use crate::{
     fsm::{PeerFsm, PeerFsmDelegate, SenderFsmPair, StoreFsm, StoreFsmDelegate, StoreMeta},
     operation::{
-        InvokeClosureOnDrop, ReplayWatch, SharedReadTablet, MERGE_IN_PROGRESS_PREFIX,
-        MERGE_SOURCE_PREFIX, SPLIT_PREFIX,
+        ReplayWatch, SharedReadTablet, MERGE_IN_PROGRESS_PREFIX, MERGE_SOURCE_PREFIX, SPLIT_PREFIX,
     },
     raft::Storage,
     router::{PeerMsg, PeerTick, StoreMsg, StoreTick},

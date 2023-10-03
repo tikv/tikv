@@ -54,6 +54,7 @@ use tikv_util::{
     log::SlogFormat,
     slog_panic,
     store::find_peer,
+    synchronizer::InvokeClosureOnDrop,
     time::{duration_to_sec, monotonic_raw_now, Duration},
 };
 
@@ -72,22 +73,6 @@ use crate::{
 };
 
 const PAUSE_FOR_REPLAY_GAP: u64 = 0;
-
-pub struct InvokeClosureOnDrop(pub Option<Box<dyn FnOnce() + Send + Sync>>);
-
-impl fmt::Debug for InvokeClosureOnDrop {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "InvokeClosureOnDrop")
-    }
-}
-
-impl Drop for InvokeClosureOnDrop {
-    fn drop(&mut self) {
-        if let Some(on_drop) = self.0.take() {
-            on_drop();
-        }
-    }
-}
 
 pub struct ReplayWatch {
     normal_peers: AtomicUsize,

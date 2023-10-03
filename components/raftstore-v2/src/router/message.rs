@@ -19,16 +19,14 @@ use raftstore::store::{
     UnsafeRecoveryForceLeaderSyncer, UnsafeRecoveryWaitApplySyncer,
 };
 use resource_control::ResourceMetered;
-use tikv_util::time::Instant;
+use tikv_util::{synchronizer::InvokeClosureOnDrop, time::Instant};
 
 use super::response_channel::{
     AnyResChannel, CmdResChannel, CmdResSubscriber, DebugInfoChannel, QueryResChannel,
     QueryResSubscriber,
 };
 use crate::{
-    operation::{
-        CatchUpLogs, InvokeClosureOnDrop, ReplayWatch, RequestHalfSplit, RequestSplit, SplitInit,
-    },
+    operation::{CatchUpLogs, ReplayWatch, RequestHalfSplit, RequestSplit, SplitInit},
     router::ApplyRes,
 };
 
