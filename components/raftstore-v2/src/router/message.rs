@@ -156,7 +156,7 @@ pub enum PeerMsg {
     /// Raft message is the message sent between raft nodes in the same
     /// raft group. Messages need to be redirected to raftstore if target
     /// peer doesn't exist.
-    RaftMessage(Box<RaftMessage>),
+    RaftMessage(Box<RaftMessage>, Option<Instant>),
     /// Query won't change any state. A typical query is KV read. In most cases,
     /// it will be processed using lease or read index.
     RaftQuery(RaftRequest<QueryResChannel>),
