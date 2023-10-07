@@ -819,10 +819,6 @@ fn flashback_whole_cluster(
         "flashback whole cluster with version {} from {:?} to {:?}",
         version, start_key, end_key
     );
-    println!(
-        "flashback whole cluster with version {} from {:?} to {:?}",
-        version, start_key, end_key
-    );
     let cfg = cfg.clone();
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .thread_name("flashback")
