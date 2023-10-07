@@ -624,9 +624,16 @@ where
                 resp.set_read_state_ts(core.read_state().ts);
                 resp.set_read_state_apply_index(core.read_state().idx);
                 resp.set_discard(core.discarding());
-            // TODO: set durations
-            // resp.set_duration_to_last_consume_leader_ms();
-            // resp.set_duration_to_last_update_safe_ts_ms();
+                resp.set_duration_to_last_consume_leader_ms(
+                    core.last_instant_of_consume_leader()
+                        .map(|t| t.saturating_elapsed().as_millis() as u64)
+                        .unwrap_or(u64::MAX),
+                );
+                resp.set_duration_to_last_update_safe_ts_ms(
+                    core.last_instant_of_update_ts()
+                        .map(|t| t.saturating_elapsed().as_millis() as u64)
+                        .unwrap_or(u64::MAX),
+                );
             } else {
                 resp.set_region_read_progress_exist(false);
             }

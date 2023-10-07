@@ -2,6 +2,7 @@
 
 use lazy_static::lazy_static;
 use prometheus::*;
+use prometheus_static_metric::*;
 
 /// The status of a task.
 /// The ordering of this imples the priority for presenting to the user.
@@ -155,9 +156,31 @@ lazy_static! {
         &["stage"]
     )
     .unwrap();
-    pub static ref LOST_LEADER_REGION: IntCounter = register_int_counter!(
-        "tikv_log_backup_lost_leader_region",
-        "The regions that lost leadership during resolving"
+    pub static ref MISC_EVENTS: MiscEvents = register_static_int_counter_vec!(
+        MiscEvents,
+        "tikv_log_backup_misc_events",
+        "Events counter, including 'plain' events(i.e. events without extra information).",
+        &["name"]
     )
     .unwrap();
+    pub static ref MIN_TS_RESOLVE_DURATION: Histogram = register_histogram!(
+        "tikv_log_backup_resolve_duration_sec",
+        "The duration of resolving.",
+        exponential_buckets(0.001, 2.0, 16).unwrap()
+    )
+    .unwrap();
+}
+
+make_static_metric! {
+    pub label_enum MiscEventsName {
+        skip_resolve_non_leader,
+        skip_resolve_no_subscription,
+    }
+
+    pub struct MiscEvents: IntCounter {
+        "name" => {
+            skip_resolve_non_leader,
+            skip_resolve_no_subscription,
+        }
+    }
 }

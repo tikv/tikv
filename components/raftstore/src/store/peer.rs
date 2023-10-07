@@ -20,11 +20,13 @@ use bytes::Bytes;
 use collections::{HashMap, HashSet};
 use crossbeam::{atomic::AtomicCell, channel::TrySendError};
 use engine_traits::{
-    Engines, KvEngine, PerfContext, RaftEngine, Snapshot, WriteBatch, WriteOptions, CF_LOCK,
+    Engines, KvEngine, PerfContext, RaftEngine, Snapshot, WriteBatch, WriteOptions, CF_DEFAULT,
+    CF_LOCK, CF_WRITE,
 };
 use error_code::ErrorCodeExt;
 use fail::fail_point;
 use getset::{Getters, MutGetters};
+use keys::{enc_end_key, enc_start_key};
 use kvproto::{
     errorpb,
     kvrpcpb::{DiskFullOpt, ExtraOp as TxnExtraOp, LockInfo},
@@ -82,7 +84,10 @@ use super::{
     DestroyPeerJob, LocalReadContext,
 };
 use crate::{
-    coprocessor::{CoprocessorHost, RegionChangeEvent, RegionChangeReason, RoleChange},
+    coprocessor::{
+        split_observer::NO_VALID_SPLIT_KEY, CoprocessorHost, RegionChangeEvent, RegionChangeReason,
+        RoleChange,
+    },
     errors::RAFTSTORE_IS_BUSY,
     router::RaftStoreRouter,
     store::{
@@ -99,8 +104,8 @@ use crate::{
         txn_ext::LocksStatus,
         util::{admin_cmd_epoch_lookup, RegionReadProgress},
         worker::{
-            HeartbeatTask, RaftlogGcTask, ReadDelegate, ReadExecutor, ReadProgress, RegionTask,
-            SplitCheckTask,
+            CleanupTask, CompactTask, HeartbeatTask, RaftlogGcTask, ReadDelegate, ReadExecutor,
+            ReadProgress, RegionTask, SplitCheckTask,
         },
         Callback, Config, GlobalReplicationState, PdTask, ReadCallback, ReadIndexContext,
         ReadResponse, TxnExt, WriteCallback, RAFT_INIT_LOG_INDEX,
@@ -662,7 +667,8 @@ impl UnsafeRecoveryForceLeaderSyncer {
 #[derive(Clone, Debug)]
 pub struct UnsafeRecoveryExecutePlanSyncer {
     _closure: Arc<InvokeClosureOnDrop>,
-    abort: Arc<Mutex<bool>>,
+    pub(self) time: TiInstant,
+    pub(self) abort: Arc<Mutex<bool>>,
 }
 
 impl UnsafeRecoveryExecutePlanSyncer {
@@ -681,6 +687,7 @@ impl UnsafeRecoveryExecutePlanSyncer {
         }));
         UnsafeRecoveryExecutePlanSyncer {
             _closure: Arc::new(closure),
+            time: TiInstant::now(),
             abort,
         }
     }
@@ -727,7 +734,8 @@ impl SnapshotRecoveryWaitApplySyncer {
 #[derive(Clone, Debug)]
 pub struct UnsafeRecoveryWaitApplySyncer {
     _closure: Arc<InvokeClosureOnDrop>,
-    abort: Arc<Mutex<bool>>,
+    pub(self) time: TiInstant,
+    pub(self) abort: Arc<Mutex<bool>>,
 }
 
 impl UnsafeRecoveryWaitApplySyncer {
@@ -761,6 +769,7 @@ impl UnsafeRecoveryWaitApplySyncer {
         }));
         UnsafeRecoveryWaitApplySyncer {
             _closure: Arc::new(closure),
+            time: TiInstant::now(),
             abort,
         }
     }
@@ -807,6 +816,7 @@ impl UnsafeRecoveryFillOutReportSyncer {
     }
 }
 
+#[derive(Debug)]
 pub enum SnapshotRecoveryState {
     // This state is set by the leader peer fsm. Once set, it sync and check leader commit index
     // and force forward to last index once follower appended and then it also is checked
@@ -819,6 +829,7 @@ pub enum SnapshotRecoveryState {
     },
 }
 
+#[derive(Debug)]
 pub enum UnsafeRecoveryState {
     // Stores the state that is necessary for the wait apply stage of unsafe recovery process.
     // This state is set by the peer fsm. Once set, it is checked every time this peer applies a
@@ -838,6 +849,34 @@ pub enum UnsafeRecoveryState {
         demote_after_exit: bool,
     },
     Destroy(UnsafeRecoveryExecutePlanSyncer),
+}
+
+impl UnsafeRecoveryState {
+    pub fn check_timeout(&self, timeout: Duration) -> bool {
+        let time = match self {
+            UnsafeRecoveryState::WaitApply { syncer, .. } => syncer.time,
+            UnsafeRecoveryState::DemoteFailedVoters { syncer, .. }
+            | UnsafeRecoveryState::Destroy(syncer) => syncer.time,
+        };
+        time.saturating_elapsed() >= timeout
+    }
+
+    pub fn is_abort(&self) -> bool {
+        let abort = match &self {
+            UnsafeRecoveryState::WaitApply { syncer, .. } => &syncer.abort,
+            UnsafeRecoveryState::DemoteFailedVoters { syncer, .. }
+            | UnsafeRecoveryState::Destroy(syncer) => &syncer.abort,
+        };
+        *abort.lock().unwrap()
+    }
+
+    pub fn abort(&mut self) {
+        match self {
+            UnsafeRecoveryState::WaitApply { syncer, .. } => syncer.abort(),
+            UnsafeRecoveryState::DemoteFailedVoters { syncer, .. }
+            | UnsafeRecoveryState::Destroy(syncer) => syncer.abort(),
+        }
+    }
 }
 
 #[derive(Getters, MutGetters)]
@@ -1031,6 +1070,8 @@ where
     pub lead_transferee: u64,
     pub unsafe_recovery_state: Option<UnsafeRecoveryState>,
     pub snapshot_recovery_state: Option<SnapshotRecoveryState>,
+
+    last_record_safe_point: u64,
 }
 
 impl<EK, ER> Peer<EK, ER>
@@ -1154,6 +1195,7 @@ where
                 REGION_READ_PROGRESS_CAP,
                 peer_id,
             )),
+            last_record_safe_point: 0,
             memtrace_raft_entries: 0,
             write_router: WriteRouter::new(tag),
             unpersisted_readies: VecDeque::default(),
@@ -4276,7 +4318,70 @@ where
         poll_ctx: &mut PollContext<EK, ER, T>,
         req: &mut RaftCmdRequest,
     ) -> Result<ProposalContext> {
-        poll_ctx.coprocessor_host.pre_propose(self.region(), req)?;
+        poll_ctx
+            .coprocessor_host
+            .pre_propose(self.region(), req)
+            .map_err(|e| {
+                // If the error of prepropose contains str `NO_VALID_SPLIT_KEY`, it may mean the
+                // split_key of the split request is the region start key which
+                // means we may have so many potential duplicate mvcc versions
+                // that we can not manage to get a valid split key. So, we
+                // trigger a compaction to handle it.
+                if e.to_string().contains(NO_VALID_SPLIT_KEY) {
+                    let safe_ts = (|| {
+                        fail::fail_point!("safe_point_inject", |t| {
+                            t.unwrap().parse::<u64>().unwrap()
+                        });
+                        poll_ctx.safe_point.load(Ordering::Relaxed)
+                    })();
+                    if safe_ts <= self.last_record_safe_point {
+                        debug!(
+                            "skip schedule compact range due to safe_point not updated";
+                            "region_id" => self.region_id,
+                            "safe_point" => safe_ts,
+                        );
+                        return e;
+                    }
+
+                    let start_key = enc_start_key(self.region());
+                    let end_key = enc_end_key(self.region());
+
+                    let mut all_scheduled = true;
+                    for cf in [CF_WRITE, CF_DEFAULT] {
+                        let task = CompactTask::Compact {
+                            cf_name: String::from(cf),
+                            start_key: Some(start_key.clone()),
+                            end_key: Some(end_key.clone()),
+                        };
+
+                        if let Err(e) = poll_ctx
+                            .cleanup_scheduler
+                            .schedule(CleanupTask::Compact(task))
+                        {
+                            error!(
+                                "schedule compact range task failed";
+                                "region_id" => self.region_id,
+                                "cf" => ?cf,
+                                "err" => ?e,
+                            );
+                            all_scheduled = false;
+                            break;
+                        }
+                    }
+
+                    if all_scheduled {
+                        info!(
+                            "schedule compact range due to no valid split keys";
+                            "region_id" => self.region_id,
+                            "safe_point" => safe_ts,
+                            "region_start_key" => log_wrappers::Value::key(&start_key),
+                            "region_end_key" => log_wrappers::Value::key(&end_key),
+                        );
+                        self.last_record_safe_point = safe_ts;
+                    }
+                }
+                e
+            })?;
         let mut ctx = ProposalContext::empty();
 
         if get_sync_log_from_request(req) {
@@ -4315,7 +4420,9 @@ where
         // Should not propose normal in force leader state.
         // In `pre_propose_raft_command`, it rejects all the requests expect conf-change
         // if in force leader state.
-        if self.force_leader.is_some() {
+        if self.force_leader.is_some()
+            && req.get_admin_request().get_cmd_type() != AdminCmdType::RollbackMerge
+        {
             poll_ctx.raft_metrics.invalid_proposal.force_leader.inc();
             panic!(
                 "{} propose normal in force leader state {:?}",

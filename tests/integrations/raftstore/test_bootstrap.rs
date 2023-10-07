@@ -1,7 +1,7 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 use std::{
     path::Path,
-    sync::{Arc, Mutex},
+    sync::{atomic::AtomicU64, Arc, Mutex},
 };
 
 use concurrency_manager::ConcurrencyManager;
@@ -113,6 +113,7 @@ fn test_node_bootstrap_with_prepared_data() {
         ConcurrencyManager::new(1.into()),
         CollectorRegHandle::new_for_test(),
         None,
+        Arc::new(AtomicU64::new(0)),
     )
     .unwrap();
     assert!(

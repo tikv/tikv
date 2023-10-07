@@ -38,7 +38,7 @@ use crate::{
     metrics,
     observer::BackupStreamObserver,
     router::{Router, TaskSelector},
-    subscription_track::SubscriptionTracer,
+    subscription_track::{CheckpointType, ResolveResult, SubscriptionTracer},
     try_send,
     utils::{self, CallbackWaitGroup, Work},
     Task,
@@ -73,7 +73,7 @@ struct ScanCmd {
 
 /// The response of requesting resolve the new checkpoint of regions.
 pub struct ResolvedRegions {
-    items: Vec<(Region, TimeStamp)>,
+    items: Vec<ResolveResult>,
     checkpoint: TimeStamp,
 }
 
@@ -82,7 +82,7 @@ impl ResolvedRegions {
     /// Note: Maybe we can compute the global checkpoint internal and getting
     /// the interface clear. However we must take the `min_ts` or we cannot
     /// provide valid global checkpoint if there isn't any region checkpoint.
-    pub fn new(checkpoint: TimeStamp, checkpoints: Vec<(Region, TimeStamp)>) -> Self {
+    pub fn new(checkpoint: TimeStamp, checkpoints: Vec<ResolveResult>) -> Self {
         Self {
             items: checkpoints,
             checkpoint,
@@ -90,7 +90,16 @@ impl ResolvedRegions {
     }
 
     /// take the region checkpoints from the structure.
+    #[deprecated = "please use `take_resolve_result` instead."]
     pub fn take_region_checkpoints(&mut self) -> Vec<(Region, TimeStamp)> {
+        std::mem::take(&mut self.items)
+            .into_iter()
+            .map(|x| (x.region, x.checkpoint))
+            .collect()
+    }
+
+    /// take the resolve result from this struct.
+    pub fn take_resolve_result(&mut self) -> Vec<ResolveResult> {
         std::mem::take(&mut self.items)
     }
 
@@ -413,7 +422,10 @@ where
         mut leader_checker: LeadershipResolver,
     ) {
         while let Some(op) = message_box.recv().await {
-            info!("backup stream: on_modify_observe"; "op" => ?op);
+            // Skip some trivial resolve commands.
+            if !matches!(op, ObserveOp::ResolveRegions { .. }) {
+                info!("backup stream: on_modify_observe"; "op" => ?op);
+            }
             match op {
                 ObserveOp::Start { region } => {
                     fail::fail_point!("delay_on_start_observe");
@@ -470,7 +482,7 @@ where
                 }
                 ObserveOp::ResolveRegions { callback, min_ts } => {
                     let now = Instant::now();
-                    let timedout = self.wait(Duration::from_secs(30)).await;
+                    let timedout = self.wait(Duration::from_secs(5)).await;
                     if timedout {
                         warn!("waiting for initial scanning done timed out, forcing progress!"; 
                             "take" => ?now.saturating_elapsed(), "timedout" => %timedout);
@@ -483,11 +495,13 @@ where
                     // If there isn't any region observed, the `min_ts` can be used as resolved ts
                     // safely.
                     let rts = min_region.map(|rs| rs.checkpoint).unwrap_or(min_ts);
-                    info!("getting checkpoint"; "defined_by_region" => ?min_region);
-                    callback(ResolvedRegions::new(
-                        rts,
-                        cps.into_iter().map(|r| (r.region, r.checkpoint)).collect(),
-                    ));
+                    if min_region
+                        .map(|mr| mr.checkpoint_type != CheckpointType::MinTs)
+                        .unwrap_or(false)
+                    {
+                        info!("getting non-trivial checkpoint"; "defined_by_region" => ?min_region);
+                    }
+                    callback(ResolvedRegions::new(rts, cps));
                 }
             }
         }

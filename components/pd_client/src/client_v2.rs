@@ -47,9 +47,7 @@ use kvproto::{
 };
 use security::SecurityManager;
 use tikv_util::{
-    box_err,
-    config::ReadableDuration,
-    error, info,
+    box_err, error, info,
     mpsc::future as mpsc,
     slow_log, thd_name,
     time::{duration_to_sec, Instant},
@@ -71,6 +69,8 @@ use crate::PdFuture;
 fn request_timeout() -> Duration {
     fail_point!("pd_client_v2_request_timeout", |s| {
         use std::str::FromStr;
+
+        use tikv_util::config::ReadableDuration;
         ReadableDuration::from_str(&s.unwrap()).unwrap().0
     });
     Duration::from_secs(REQUEST_TIMEOUT_SEC)
@@ -121,7 +121,7 @@ impl RawClient {
 
     /// Returns Ok(true) when a new connection is established.
     async fn maybe_reconnect(&mut self, ctx: &ConnectContext, force: bool) -> Result<bool> {
-        PD_RECONNECT_COUNTER_VEC.with_label_values(&["try"]).inc();
+        PD_RECONNECT_COUNTER_VEC.try_connect.inc();
         let start = Instant::now();
 
         let members = self.members.clone();
@@ -139,21 +139,15 @@ impl RawClient {
             .await
         {
             Err(e) => {
-                PD_RECONNECT_COUNTER_VEC
-                    .with_label_values(&["failure"])
-                    .inc();
+                PD_RECONNECT_COUNTER_VEC.failure.inc();
                 return Err(e);
             }
             Ok(None) => {
-                PD_RECONNECT_COUNTER_VEC
-                    .with_label_values(&["no-need"])
-                    .inc();
+                PD_RECONNECT_COUNTER_VEC.no_need.inc();
                 return Ok(false);
             }
             Ok(Some(tuple)) => {
-                PD_RECONNECT_COUNTER_VEC
-                    .with_label_values(&["success"])
-                    .inc();
+                PD_RECONNECT_COUNTER_VEC.success.inc();
                 tuple
             }
         };
@@ -412,6 +406,8 @@ async fn reconnect_loop(
     let backoff = (|| {
         fail_point!("pd_client_v2_backoff", |s| {
             use std::str::FromStr;
+
+            use tikv_util::config::ReadableDuration;
             ReadableDuration::from_str(&s.unwrap()).unwrap().0
         });
         request_timeout()

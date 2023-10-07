@@ -21,7 +21,11 @@ use tikv::{
     server::Config,
     storage::TestEngineBuilder,
 };
-use tikv_util::{codec::number::*, config::ReadableSize};
+use tikv_util::{
+    codec::number::*,
+    config::{ReadableDuration, ReadableSize},
+    HandyRwLock,
+};
 use tipb::{
     AnalyzeColumnsReq, AnalyzeReq, AnalyzeType, ChecksumRequest, Chunk, Expr, ExprType,
     ScalarFuncSig, SelectResponse,
@@ -224,6 +228,44 @@ fn test_select_after_lease() {
         let result_encoded = datum::encode_value(&mut EvalContext::default(), &row).unwrap();
         assert_eq!(result_encoded, &*expected_encoded);
     }
+}
+
+/// If a failed read should not trigger panic.
+#[test]
+fn test_select_failed() {
+    let mut cluster = test_raftstore::new_server_cluster(0, 3);
+    cluster.cfg.raft_store.check_leader_lease_interval = ReadableDuration::hours(10);
+    cluster.run();
+    // make sure leader has been elected.
+    assert_eq!(cluster.must_get(b""), None);
+    let region = cluster.get_region(b"");
+    let leader = cluster.leader_of_region(region.get_id()).unwrap();
+    let engine = cluster.sim.rl().storages[&leader.get_id()].clone();
+    let mut ctx = Context::default();
+    ctx.set_region_id(region.get_id());
+    ctx.set_region_epoch(region.get_region_epoch().clone());
+    ctx.set_peer(leader);
+
+    let product = ProductTable::new();
+    let (_, endpoint, _) =
+        init_data_with_engine_and_commit(ctx.clone(), engine, &product, &[], true);
+
+    // Sleep until the leader lease is expired.
+    thread::sleep(
+        cluster.cfg.raft_store.raft_heartbeat_interval()
+            * cluster.cfg.raft_store.raft_election_timeout_ticks as u32
+            * 2,
+    );
+    for id in 1..=3 {
+        if id != ctx.get_peer().get_store_id() {
+            cluster.stop_node(id);
+        }
+    }
+    let req = DagSelect::from(&product).build_with(ctx.clone(), &[0]);
+    let f = endpoint.parse_and_handle_unary_request(req, None);
+    cluster.stop_node(ctx.get_peer().get_store_id());
+    drop(cluster);
+    let _ = futures::executor::block_on(f);
 }
 
 #[test]

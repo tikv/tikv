@@ -350,6 +350,14 @@ macro_rules! cf_config {
             #[serde(with = "rocks_config::checksum_serde")]
             #[online_config(skip)]
             pub checksum: ChecksumType,
+            // `ttl == None` means disable this feature in Rocksdb.
+            // `ttl` in Rocksdb is 30 days as default.
+            #[online_config(skip)]
+            pub ttl: Option<ReadableDuration>,
+            // `periodic_compaction_seconds == None` means disabled this feature in Rocksdb.
+            // `periodic_compaction_seconds` in Rocksdb is 30 days as default.
+            #[online_config(skip)]
+            pub periodic_compaction_seconds: Option<ReadableDuration>,
             #[online_config(submodule)]
             pub titan: TitanCfConfig,
         }
@@ -594,6 +602,13 @@ macro_rules! build_cf_opt {
                 warn!("compaction guard is disabled due to region info provider not available")
             }
         }
+        cf_opts.set_ttl($opt.ttl.unwrap_or(ReadableDuration::secs(0)).0.as_secs());
+        cf_opts.set_periodic_compaction_seconds(
+            $opt.periodic_compaction_seconds
+                .unwrap_or(ReadableDuration::secs(0))
+                .0
+                .as_secs(),
+        );
         cf_opts
     }};
 }
@@ -656,6 +671,8 @@ impl Default for DefaultCfConfig {
             prepopulate_block_cache: PrepopulateBlockCache::Disabled,
             format_version: 2,
             checksum: ChecksumType::CRC32c,
+            ttl: None,
+            periodic_compaction_seconds: None,
             titan: TitanCfConfig::default(),
         }
     }
@@ -772,6 +789,8 @@ impl Default for WriteCfConfig {
             prepopulate_block_cache: PrepopulateBlockCache::Disabled,
             format_version: 2,
             checksum: ChecksumType::CRC32c,
+            ttl: None,
+            periodic_compaction_seconds: None,
             titan,
         }
     }
@@ -870,6 +889,8 @@ impl Default for LockCfConfig {
             prepopulate_block_cache: PrepopulateBlockCache::Disabled,
             format_version: 2,
             checksum: ChecksumType::CRC32c,
+            ttl: None,
+            periodic_compaction_seconds: None,
             titan,
         }
     }
@@ -946,6 +967,8 @@ impl Default for RaftCfConfig {
             prepopulate_block_cache: PrepopulateBlockCache::Disabled,
             format_version: 2,
             checksum: ChecksumType::CRC32c,
+            ttl: None,
+            periodic_compaction_seconds: None,
             titan,
         }
     }
@@ -1322,6 +1345,8 @@ impl Default for RaftDefaultCfConfig {
             prepopulate_block_cache: PrepopulateBlockCache::Disabled,
             format_version: 2,
             checksum: ChecksumType::CRC32c,
+            ttl: None,
+            periodic_compaction_seconds: None,
             titan: TitanCfConfig::default(),
         }
     }
@@ -2472,6 +2497,8 @@ impl Default for BackupConfig {
 #[serde(rename_all = "kebab-case")]
 pub struct BackupStreamConfig {
     #[online_config(skip)]
+    pub min_ts_interval: ReadableDuration,
+    #[online_config(skip)]
     pub max_flush_interval: ReadableDuration,
     #[online_config(skip)]
     pub num_threads: usize,
@@ -2498,6 +2525,20 @@ impl BackupStreamConfig {
             );
             self.num_threads = default_cfg.num_threads;
         }
+        if self.max_flush_interval < ReadableDuration::secs(10) {
+            return Err(format!(
+                "the max_flush_interval is too small, it is {}, and should be greater than 10s.",
+                self.max_flush_interval
+            )
+            .into());
+        }
+        if self.min_ts_interval < ReadableDuration::secs(1) {
+            return Err(format!(
+                "the min_ts_interval is too small, it is {}, and should be greater than 1s.",
+                self.min_ts_interval
+            )
+            .into());
+        }
         Ok(())
     }
 }
@@ -2508,6 +2549,7 @@ impl Default for BackupStreamConfig {
         let total_mem = SysQuota::memory_limit_in_bytes();
         let quota_size = (total_mem as f64 * 0.1).min(ReadableSize::mb(512).0 as _);
         Self {
+            min_ts_interval: ReadableDuration::secs(10),
             max_flush_interval: ReadableDuration::minutes(3),
             // use at most 50% of vCPU by default
             num_threads: (cpu_num * 0.5).clamp(2.0, 12.0) as usize,
@@ -5476,6 +5518,18 @@ mod tests {
         cfg.raftdb.defaultcf.level0_stop_writes_trigger = None;
         cfg.raftdb.defaultcf.soft_pending_compaction_bytes_limit = None;
         cfg.raftdb.defaultcf.hard_pending_compaction_bytes_limit = None;
+        // ColumnFamily::ttl
+        cfg.rocksdb.defaultcf.ttl = None;
+        cfg.rocksdb.writecf.ttl = None;
+        cfg.rocksdb.lockcf.ttl = None;
+        cfg.rocksdb.raftcf.ttl = None;
+        cfg.raftdb.defaultcf.ttl = None;
+        // ColumnFamily::periodic_compaction_seconds
+        cfg.rocksdb.defaultcf.periodic_compaction_seconds = None;
+        cfg.rocksdb.writecf.periodic_compaction_seconds = None;
+        cfg.rocksdb.lockcf.periodic_compaction_seconds = None;
+        cfg.rocksdb.raftcf.periodic_compaction_seconds = None;
+        cfg.raftdb.defaultcf.periodic_compaction_seconds = None;
 
         assert_eq!(cfg, default_cfg);
     }

@@ -366,6 +366,8 @@ fn test_serde_custom_tikv_config() {
             prepopulate_block_cache: PrepopulateBlockCache::FlushOnly,
             format_version: 5,
             checksum: ChecksumType::XXH3,
+            ttl: Some(ReadableDuration::days(10)),
+            periodic_compaction_seconds: Some(ReadableDuration::days(10)),
         },
         writecf: WriteCfConfig {
             block_size: ReadableSize::kb(12),
@@ -434,6 +436,8 @@ fn test_serde_custom_tikv_config() {
             prepopulate_block_cache: PrepopulateBlockCache::FlushOnly,
             format_version: 5,
             checksum: ChecksumType::XXH3,
+            ttl: Some(ReadableDuration::days(10)),
+            periodic_compaction_seconds: Some(ReadableDuration::days(10)),
         },
         lockcf: LockCfConfig {
             block_size: ReadableSize::kb(12),
@@ -502,6 +506,8 @@ fn test_serde_custom_tikv_config() {
             prepopulate_block_cache: PrepopulateBlockCache::FlushOnly,
             format_version: 5,
             checksum: ChecksumType::XXH3,
+            ttl: Some(ReadableDuration::days(10)),
+            periodic_compaction_seconds: Some(ReadableDuration::days(10)),
         },
         raftcf: RaftCfConfig {
             block_size: ReadableSize::kb(12),
@@ -570,6 +576,8 @@ fn test_serde_custom_tikv_config() {
             prepopulate_block_cache: PrepopulateBlockCache::FlushOnly,
             format_version: 5,
             checksum: ChecksumType::XXH3,
+            ttl: Some(ReadableDuration::days(10)),
+            periodic_compaction_seconds: Some(ReadableDuration::days(10)),
         },
         titan: titan_db_config.clone(),
     };
@@ -653,6 +661,8 @@ fn test_serde_custom_tikv_config() {
             prepopulate_block_cache: PrepopulateBlockCache::FlushOnly,
             format_version: 5,
             checksum: ChecksumType::XXH3,
+            ttl: None,
+            periodic_compaction_seconds: None,
         },
         titan: titan_db_config,
     };
@@ -761,8 +771,14 @@ fn test_serde_custom_tikv_config() {
         ..Default::default()
     };
     value.backup_stream = BackupStreamConfig {
-        num_threads: 12,
-        ..Default::default()
+        max_flush_interval: ReadableDuration::secs(11),
+        num_threads: 7,
+        enable: true,
+        temp_path: "./stream".to_string(),
+        file_size_limit: ReadableSize::gb(5),
+        initial_scan_pending_memory_quota: ReadableSize::kb(2),
+        initial_scan_rate_limit: ReadableSize::mb(3),
+        min_ts_interval: ReadableDuration::secs(2),
     };
     value.import = ImportConfig {
         num_threads: 123,
