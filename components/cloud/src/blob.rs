@@ -133,6 +133,12 @@ impl std::ops::Deref for StringNonEmpty {
     }
 }
 
+impl std::ops::DerefMut for StringNonEmpty {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
 impl std::fmt::Display for StringNonEmpty {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         self.0.fmt(f)
