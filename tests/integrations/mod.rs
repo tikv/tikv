@@ -13,6 +13,7 @@ extern crate tikv_util;
 mod backup;
 mod config;
 mod coprocessor;
+mod debugger;
 mod import;
 mod pd;
 mod raftstore;
