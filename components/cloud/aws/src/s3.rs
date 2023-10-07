@@ -693,7 +693,7 @@ mod tests {
         config.access_key_pair = Some(AccessKeyPair {
             access_key: StringNonEmpty::required("abc".to_string()).unwrap(),
             secret_access_key: StringNonEmpty::required("xyz".to_string()).unwrap(),
-            None,
+            session_token: Some(StringNonEmpty::required("token".to_string()).unwrap()),
         });
         let mut s = S3Storage::new(config.clone()).unwrap();
         // set a less than 5M value not work
