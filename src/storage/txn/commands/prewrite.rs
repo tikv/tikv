@@ -490,28 +490,22 @@ impl<K: PrewriteKind> Prewriter<K> {
         snapshot: impl Snapshot,
         mut context: WriteContext<'_, impl LockManager>,
     ) -> Result<WriteResult> {
-        // Reject requests to transaction that has already been committed. But only for
-        // requests from new versions that supports passing sending timestamp.
-        if self.ctx.send_timestamp != 0 {
-            let now = std::time::SystemTime::now();
-            let now_millis = now.duration_since(UNIX_EPOCH).unwrap().as_millis();
-            if now_millis
-                >= (self.ctx.send_timestamp + txn_status_cache::REQ_MAX_FLYING_TIME_MILLIS) as u128
-            {
-                MVCC_PREWRITE_REQUEST_REJECT_COUNTER_VEC
-                    .max_flying_time_exceeded
-                    .inc();
-                warn!("dropping prewrite request due to max_flying_time limit exceeded"; "start_ts" => %self.start_ts);
-                return Err(box_err!("request max_flying_time limit exceeded"));
-            }
+        // Handle special cases about retried prewrite requests for pessimistic
+        // transactions.
+        if let TransactionKind::Pessimistic(_) = self.kind.txn_kind() {
             if let Some(commit_ts) = context.txn_status_cache.get(self.start_ts) {
                 MVCC_PREWRITE_REQUEST_REJECT_COUNTER_VEC.committed.inc();
-                warn!("dropping prewrite request due to transaction already committed"; "start_ts" => %self.start_ts, "commit_ts" => %commit_ts);
-                return Err(MvccError(Box::new(MvccErrorInner::TxnNotFound {
-                    start_ts: self.start_ts,
-                    key: vec![],
-                }))
-                .into());
+                warn!("prewrite request received due to transaction is known to be already committed"; "start_ts" => %self.start_ts, "commit_ts" => %commit_ts);
+                // In normal cases if the transaction is committed, then the key should have
+                // been already prewritten successfully. But in order to
+                // simplify code as well as prevent possible corner cases or
+                // special cases in the future, we disallow skipping constraint
+                // check in this case.
+                // We regard this request as a retried request no matter if it really is (the
+                // original request may arrive later than retried request due to
+                // network latency, in which case we'd better handle it like a
+                // retried request).
+                self.ctx.is_retry_request = true;
             }
         }
 
