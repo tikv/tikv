@@ -1,5 +1,9 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
-use std::{error::Error as StdError, io, time::Duration};
+use std::{
+    error::Error as StdError,
+    io,
+    time::{Duration, SystemTime},
+};
 
 use async_trait::async_trait;
 use cloud::{
@@ -16,6 +20,7 @@ pub use kvproto::brpb::{Bucket as InputBucket, CloudDynamic, S3 as InputConfig};
 use rusoto_core::{request::DispatchSignedRequest, ByteStream, RusotoError};
 use rusoto_credential::{ProvideAwsCredentials, StaticProvider};
 use rusoto_s3::{util::AddressingStyle, *};
+use rusoto_sts::{StsAssumeRoleSessionCredentialsProvider, StsClient};
 use thiserror::Error;
 use tikv_util::{debug, stream::error_stream, time::Instant};
 use tokio::time::{sleep, timeout};
@@ -29,6 +34,7 @@ pub const STORAGE_VENDOR_NAME_AWS: &str = "aws";
 pub struct AccessKeyPair {
     pub access_key: StringNonEmpty,
     pub secret_access_key: StringNonEmpty,
+    pub session_token: Option<StringNonEmpty>,
 }
 
 impl std::fmt::Debug for AccessKeyPair {
@@ -36,6 +42,7 @@ impl std::fmt::Debug for AccessKeyPair {
         f.debug_struct("AccessKeyPair")
             .field("access_key", &self.access_key)
             .field("secret_access_key", &"?")
+            .field("session_token", &self.session_token)
             .finish()
     }
 }
@@ -51,6 +58,8 @@ pub struct Config {
     storage_class: Option<StringNonEmpty>,
     multi_part_size: usize,
     object_lock_enabled: bool,
+    role_arn: Option<StringNonEmpty>,
+    external_id: Option<StringNonEmpty>,
 }
 
 impl Config {
@@ -66,6 +75,8 @@ impl Config {
             storage_class: None,
             multi_part_size: MINIMUM_PART_SIZE,
             object_lock_enabled: false,
+            role_arn: None,
+            external_id: None,
         }
     }
 
@@ -78,12 +89,16 @@ impl Config {
         let access_key_opt = attrs.get("access_key");
         let access_key_pair = if let Some(access_key) = access_key_opt {
             let secret_access_key = attrs.get("secret_access_key").unwrap_or(def).clone();
+            let session_token = attrs
+                .get("session_token")
+                .map_or(None, |x| StringNonEmpty::opt(x.to_string()));
             Some(AccessKeyPair {
                 access_key: StringNonEmpty::required_field(access_key.clone(), "access_key")?,
                 secret_access_key: StringNonEmpty::required_field(
                     secret_access_key,
                     "secret_access_key",
                 )?,
+                session_token,
             })
         } else {
             None
@@ -99,6 +114,8 @@ impl Config {
             sse_kms_key_id: StringNonEmpty::opt(attrs.get("sse_kms_key_id").unwrap_or(def).clone()),
             multi_part_size: MINIMUM_PART_SIZE,
             object_lock_enabled: false,
+            role_arn: StringNonEmpty::opt(attrs.get("role_arn").unwrap_or(def).clone()),
+            external_id: StringNonEmpty::opt(attrs.get("external_id").unwrap_or(def).clone()),
         })
     }
 
@@ -114,13 +131,17 @@ impl Config {
         };
         let access_key_pair = match StringNonEmpty::opt(input.access_key) {
             None => None,
-            Some(ak) => Some(AccessKeyPair {
-                access_key: ak,
-                secret_access_key: StringNonEmpty::required_field(
-                    input.secret_access_key,
-                    "secret_access_key",
-                )?,
-            }),
+            Some(ak) => {
+                let session_token = StringNonEmpty::opt(input.session_token);
+                Some(AccessKeyPair {
+                    access_key: ak,
+                    secret_access_key: StringNonEmpty::required_field(
+                        input.secret_access_key,
+                        "secret_access_key",
+                    )?,
+                    session_token,
+                })
+            }
         };
         Ok(Config {
             storage_class,
@@ -132,6 +153,8 @@ impl Config {
             sse_kms_key_id: StringNonEmpty::opt(input.sse_kms_key_id),
             multi_part_size: MINIMUM_PART_SIZE,
             object_lock_enabled: input.object_lock_enabled,
+            role_arn: StringNonEmpty::opt(input.role_arn),
+            external_id: StringNonEmpty::opt(input.external_id),
         })
     }
 }
@@ -203,15 +226,48 @@ impl S3Storage {
         D: DispatchSignedRequest + Send + Sync + 'static,
     {
         // static credentials are used with minio
-        if let Some(access_key_pair) = &config.access_key_pair {
-            let cred_provider = StaticProvider::new_minimal(
-                (*access_key_pair.access_key).to_owned(),
-                (*access_key_pair.secret_access_key).to_owned(),
-            );
-            Self::new_creds_dispatcher(config, dispatcher, cred_provider)
-        } else {
-            let cred_provider = util::CredentialsProvider::new()?;
-            Self::new_creds_dispatcher(config, dispatcher, cred_provider)
+        match (&config.access_key_pair, &config.role_arn) {
+            // ak/sk has the highiest prority
+            (Some(access_key_pair), None) => {
+                let cred_provider = StaticProvider::new(
+                    (*access_key_pair.access_key).to_owned(),
+                    (*access_key_pair.secret_access_key).to_owned(),
+                    access_key_pair
+                        .session_token
+                        .to_owned()
+                        .as_deref_mut()
+                        .map(|s| s.clone()),
+                    None,
+                );
+                Self::new_creds_dispatcher(config, dispatcher, cred_provider)
+            }
+            (None, role_arn) => {
+                // try assume role if it's not nil
+                let bucket_region = none_to_empty(config.bucket.region.clone());
+                let bucket_endpoint = config.bucket.endpoint.clone();
+                let region = util::get_region(&bucket_region, &none_to_empty(bucket_endpoint))?;
+                let sts = StsClient::new(region);
+                let duration_since_epoch = SystemTime::now()
+                    .duration_since(SystemTime::UNIX_EPOCH)
+                    .unwrap();
+                let timestamp_secs = duration_since_epoch.as_secs();
+                let cred_provider = StsAssumeRoleSessionCredentialsProvider::new(
+                    sts,
+                    none_to_empty(role_arn.clone()),
+                    format!("{}", timestamp_secs),
+                    config.external_id.clone().as_deref_mut().map(|e| e.clone()),
+                    // default duration is 15min
+                    None,
+                    None,
+                    None,
+                );
+                Self::new_creds_dispatcher(config, dispatcher, cred_provider)
+            }
+            _ => {
+                // default credentials from env
+                let cred_provider = util::CredentialsProvider::new()?;
+                Self::new_creds_dispatcher(config, dispatcher, cred_provider)
+            }
         }
     }
 
@@ -637,6 +693,7 @@ mod tests {
         config.access_key_pair = Some(AccessKeyPair {
             access_key: StringNonEmpty::required("abc".to_string()).unwrap(),
             secret_access_key: StringNonEmpty::required("xyz".to_string()).unwrap(),
+            None,
         });
         let mut s = S3Storage::new(config.clone()).unwrap();
         // set a less than 5M value not work
