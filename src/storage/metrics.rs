@@ -63,7 +63,7 @@ pub fn tls_collect_scan_details(cmd: CommandKind, stats: &Statistics) {
         m.borrow_mut()
             .local_scan_details
             .entry(cmd)
-            .or_default()
+            .or_insert_with(Default::default)
             .add(stats);
     });
 }

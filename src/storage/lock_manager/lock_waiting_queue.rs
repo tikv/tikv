@@ -110,7 +110,12 @@ impl Eq for LockWaitEntry {}
 
 impl PartialOrd<Self> for LockWaitEntry {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        Some(self.cmp(other))
+        // Reverse it since the priority queue is a max heap and we want to pop the
+        // minimal.
+        other
+            .parameters
+            .start_ts
+            .partial_cmp(&self.parameters.start_ts)
     }
 }
 
