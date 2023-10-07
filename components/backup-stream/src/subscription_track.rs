@@ -82,7 +82,6 @@ impl ActiveSubscription {
         self.handle.stop_observing();
     }
 
-    #[cfg(test)]
     pub fn is_observing(&self) -> bool {
         self.handle.is_observing()
     }
@@ -320,7 +319,6 @@ impl SubscriptionTracer {
     }
 
     /// check whether the region_id should be observed by this observer.
-    #[cfg(test)]
     pub fn is_observing(&self, region_id: u64) -> bool {
         let sub = self.0.get_mut(&region_id);
         match sub {
