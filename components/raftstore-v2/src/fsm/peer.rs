@@ -196,6 +196,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
         self.schedule_tick(PeerTick::SplitRegionCheck);
         self.schedule_tick(PeerTick::PdHeartbeat);
         self.schedule_tick(PeerTick::CompactLog);
+        self.fsm.peer.on_check_merge(self.store_ctx);
         if self.fsm.peer.storage().is_initialized() {
             self.fsm.peer.schedule_apply_fsm(self.store_ctx);
         }
@@ -313,6 +314,9 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
                 }
                 PeerMsg::StoreUnreachable { to_store_id } => {
                     self.fsm.peer_mut().on_store_unreachable(to_store_id)
+                }
+                PeerMsg::StoreMaybeTombstone { store_id } => {
+                    self.fsm.peer_mut().on_store_maybe_tombstone(store_id)
                 }
                 PeerMsg::SnapshotSent { to_peer_id, status } => {
                     self.fsm.peer_mut().on_snapshot_sent(to_peer_id, status)

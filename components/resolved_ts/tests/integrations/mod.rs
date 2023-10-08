@@ -9,9 +9,10 @@ use kvproto::{kvrpcpb::*, metapb::RegionEpoch};
 use pd_client::PdClient;
 use resolved_ts::Task;
 use tempfile::Builder;
-use test_raftstore::sleep_ms;
+use test_raftstore::{sleep_ms, IsolationFilterFactory};
 use test_sst_importer::*;
 pub use testsuite::*;
+use tikv_util::store::new_peer;
 
 #[test]
 fn test_resolved_ts_basic() {
@@ -228,6 +229,34 @@ fn test_scan_log_memory_quota_exceeded() {
     );
     let res = rx.recv_timeout(Duration::from_secs(5)).unwrap();
     assert_eq!(res.unwrap().1, 0, "{:?}", res);
+
+    suite.stop();
+}
+
+// This case checks resolved ts can still be advanced quickly even if some TiKV
+// stores are partitioned.
+#[test]
+fn test_store_partitioned() {
+    let mut suite = TestSuite::new(3);
+    let r = suite.cluster.get_region(&[]);
+    suite.cluster.must_transfer_leader(r.id, new_peer(1, 1));
+    suite.must_get_rts_ge(r.id, block_on(suite.cluster.pd_client.get_tso()).unwrap());
+
+    suite
+        .cluster
+        .add_send_filter(IsolationFilterFactory::new(3));
+    let tso = block_on(suite.cluster.pd_client.get_tso()).unwrap();
+    for _ in 0..50 {
+        let rts = suite.region_resolved_ts(r.id).unwrap();
+        if rts > tso {
+            if rts.physical() - tso.physical() < 3000 {
+                break;
+            } else {
+                panic!("resolved ts doesn't advance in time")
+            }
+        }
+        sleep_ms(100);
+    }
 
     suite.stop();
 }

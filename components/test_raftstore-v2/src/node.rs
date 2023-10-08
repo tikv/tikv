@@ -258,7 +258,7 @@ impl<EK: KvEngine> Simulator<EK> for NodeCluster<EK> {
             )
         } else {
             let trans = self.trans.core.lock().unwrap();
-            let (snap_mgr, _) = &trans.snap_paths[&node_id];
+            let &(ref snap_mgr, _) = &trans.snap_paths[&node_id];
             (snap_mgr.clone(), None)
         };
         self.snap_mgrs.insert(node_id, snap_mgr.clone());

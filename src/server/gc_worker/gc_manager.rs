@@ -546,9 +546,7 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine> GcMan
     ) -> GcManagerResult<Option<Key>> {
         // Get the information of the next region to do GC.
         let (region, next_key) = self.get_next_gc_context(from_key);
-        let Some(region) = region else {
-            return Ok(None);
-        };
+        let Some(region) = region else { return Ok(None) };
 
         let hex_start = format!("{:?}", log_wrappers::Value::key(region.get_start_key()));
         let hex_end = format!("{:?}", log_wrappers::Value::key(region.get_end_key()));
@@ -809,7 +807,7 @@ mod tests {
 
         // Following code asserts gc_tasks == expected_gc_tasks.
         assert_eq!(gc_tasks.len(), expected_gc_tasks.len());
-        let all_passed = gc_tasks.into_iter().zip(expected_gc_tasks).all(
+        let all_passed = gc_tasks.into_iter().zip(expected_gc_tasks.into_iter()).all(
             |((region, safe_point), (expect_region, expect_safe_point))| {
                 region == expect_region && safe_point == expect_safe_point.into()
             },
@@ -886,7 +884,7 @@ mod tests {
 
     #[test]
     fn test_auto_gc_rewinding() {
-        for regions in [
+        for regions in vec![
             // First region starts with empty and last region ends with empty.
             vec![
                 (b"".to_vec(), b"1".to_vec(), 1),

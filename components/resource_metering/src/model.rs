@@ -87,7 +87,7 @@ impl RawRecords {
         pdqselect::select_by(&mut buf, k, |a, b| b.cmp(a));
         let kth = buf[k];
         // Evict records with cpu time less or equal than `kth`
-        let evicted_records = self.records.extract_if(|_, r| r.cpu_time <= kth);
+        let evicted_records = self.records.drain_filter(|_, r| r.cpu_time <= kth);
         // Record evicted into others
         for (_, record) in evicted_records {
             others.merge(&record);

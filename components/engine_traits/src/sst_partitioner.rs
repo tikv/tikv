@@ -22,6 +22,8 @@ pub struct SstPartitionerContext<'a> {
     pub output_level: i32,
     pub smallest_key: &'a [u8],
     pub largest_key: &'a [u8],
+    pub next_level_boundaries: Vec<&'a [u8]>,
+    pub next_level_sizes: Vec<usize>,
 }
 
 pub trait SstPartitioner {
