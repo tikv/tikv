@@ -6,7 +6,7 @@
 //! protobuf), but handling of the commands is similar. We therefore have a
 //! single type (Prewriter) to handle both kinds of prewrite.
 
-use std::{mem, time::UNIX_EPOCH};
+use std::mem;
 
 use engine_traits::CF_WRITE;
 use kvproto::kvrpcpb::{
@@ -24,9 +24,8 @@ use crate::storage::{
     kv::WriteData,
     lock_manager::LockManager,
     mvcc::{
-        has_data_in_range, metrics::MVCC_PREWRITE_REQUEST_REJECT_COUNTER_VEC, Error as MvccError,
-        ErrorInner as MvccErrorInner, MvccTxn, Result as MvccResult, SnapshotReader,
-        TxnCommitRecord,
+        has_data_in_range, metrics::*, Error as MvccError, ErrorInner as MvccErrorInner, MvccTxn,
+        Result as MvccResult, SnapshotReader, TxnCommitRecord,
     },
     txn::{
         actions::prewrite::{prewrite, CommitKind, TransactionKind, TransactionProperties},
@@ -34,7 +33,7 @@ use crate::storage::{
             Command, CommandExt, ReleasedLocks, ResponsePolicy, TypedCommand, WriteCommand,
             WriteContext, WriteResult,
         },
-        txn_status_cache, Error, ErrorInner, Result,
+        Error, ErrorInner, Result,
     },
     types::PrewriteResult,
     Context, Error as StorageError, ProcessResult, Snapshot,
@@ -493,8 +492,16 @@ impl<K: PrewriteKind> Prewriter<K> {
         // Handle special cases about retried prewrite requests for pessimistic
         // transactions.
         if let TransactionKind::Pessimistic(_) = self.kind.txn_kind() {
-            if let Some(commit_ts) = context.txn_status_cache.get(self.start_ts) {
-                MVCC_PREWRITE_REQUEST_REJECT_COUNTER_VEC.committed.inc();
+            if let Some(commit_ts) = context.txn_status_cache.get_no_promote(self.start_ts) {
+                if self.ctx.is_retry_request {
+                    MVCC_PREWRITE_REQUEST_AFTER_COMMIT_COUNTER_VEC
+                        .retry_req
+                        .inc();
+                } else {
+                    MVCC_PREWRITE_REQUEST_AFTER_COMMIT_COUNTER_VEC
+                        .non_retry_req
+                        .inc();
+                }
                 warn!("prewrite request received due to transaction is known to be already committed"; "start_ts" => %self.start_ts, "commit_ts" => %commit_ts);
                 // In normal cases if the transaction is committed, then the key should have
                 // been already prewritten successfully. But in order to

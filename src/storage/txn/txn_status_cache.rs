@@ -1,5 +1,102 @@
 // Copyright 2023 TiKV Project Authors. Licensed under Apache-2.0.
 
+//! This module implements a cache for the status of recent finished
+//! transactions. When a transaction is committed or rolled back, we store the
+//! information in the cache for a while. Later, in some cases, one can find
+//! the transaction status without accessing the physical storage. This helps
+//! to quickly find out the transaction status in some cases.
+//!
+//! > **Note:**
+//! > * Currently, only committed transactions are cached. We may also cache
+//! > rolled-back transactions in the future.
+//! > * Currently, the cache is only used to filter unnecessary stale prewrite
+//! > requests. We will also consider use the cache for other purposes in the
+//! > future.
+//!
+//! ## Why we need this?
+//!
+//! ### For filtering out unwanted late-arrived stale prewrite requests
+//!
+//! This solves a problem which has a complicated background.
+//!
+//! There's such an optimization in pessimistic transactions when TiKV runs
+//! accompanied with TiDB: non-unique index keys don't need to be pessimistic-
+//! locked, and WRITE CF don't need to be checked either when prewriting. The
+//! correctness in case there's any kinds of conflicts will be protected by
+//! the corresponding row key, as the index key is never written without
+//! writing the corresponding row key.
+//!
+//! However, it's later found to be problematic, especially with async commit
+//! and 1PC, as the prewrite requests on these index keys lost its idempotency.
+//! You can see [this issue](https://github.com/tikv/tikv/issues/11187) to see
+//! how it causes problems, including those that affects transaction
+//! correctness.
+//!
+//! The problem happens when the prewrite request to the same index key is
+//! sent more than once. Our first solution is to add a `is_retry_request` flag
+//! to the second (or even more) requests, which is sent due to retrying from
+//! the client side. But it's still imperfect, considering that it's
+//! theoretically possible that the original request arrives to TiKV later than
+//! the retried one. In fact, we once observed this happens in an environment
+//! where the network is terribly unstable.
+//!
+//! Our second solution, additional to the previous one, is to use this cache.
+//! Each committed transaction should be guaranteed to be kept in the cache for
+//! [a long-enough time](CACHE_ITEMS_REQUIRED_KEEP_TIME_MILLIS). When a prewrite
+//! request is received, it should check the cache before executing. If it finds
+//! its belonging transaction is already committed, it won't skip constraint
+//! check in WRITE CF. Note that if the index key is already committed but the
+//! transaction info is not cached, then a late-arrived prewrite request cannot
+//! be protected by this mechanism. This means we shouldn't miss any cacheable
+//! transactions, and it is the reason why committed transactions should be
+//! cached for *a long-enough time*.
+//!
+//! Unfortunately, the solution is still imperfect. As it's already known, one
+//! of the reasons is that we don't have mechanism to refuse requests that have
+//! past more than [CACHE_ITEMS_REQUIRED_KEEP_TIME_MILLIS] since they were sent.
+//! The other reason is that the cache can't be synced across different TiKV
+//! instances. Consider this case:
+//!
+//! 1. Client try to send prewrite request to TiKV A, who has the leader of the
+//! region containing a index key. The request is not received by TiKV and the
+//! client retries.
+//! 2. The leader is transferred to TiKV B, and the retries prewrite request
+//! is sent to it and processed successfully.
+//! 3. The transaction is committed on TiKV B, not being known by TiKV A.
+//! 4. The leader transferred back to TiKV A.
+//! 5. The original request arrives to TiKV A and being executed. As the
+//! status of the transaction is not in the cache in TiKV A, the prewrite
+//! request will be handled in normal way, skipping constraint checks.
+//!
+//! As of the time when this module is written, the above remaining cases have
+//! not yet been handled, considering the extremely low possibility to happen
+//! and high complexity to fix.
+//!
+//! The perfect and most elegant way to fix all of these problem is never to
+//! skip constraint checks or never skipping pessimistic locks for index keys.
+//! Or to say, totally remove the optimization mentioned above on index keys.
+//! But for historical reason, this may lead to significant performance
+//! regression in existing clusters.
+//!
+//! ### For read data locked by large transactions more efficiently
+//!
+//! * Note: the `TxnStatusCache` is designed prepared for this usage, but not
+//! used yet for now.
+//!
+//! Consider the case that a cluster a very-large transaction locked a lot of
+//! keys after prewritting, while many simple reads and writes executes
+//! frequently, thus these simple transactions frequently meets the lock left
+//! by the large transaction. It will be very inefficient for these small
+//! transactions to come back to the client and start resolve lock procedure.
+//! Even if the client side has the cache of that transaction, it still wastes
+//! an RTT.
+//!
+//! There would be more possibilities if we have such a cache in TiKV side: for
+//! read requests, it can check the cache to know whether it can read from the
+//! lock; and for write requests, if it finds the transaction of that lock is
+//! already committed, it can merge together the resolve-lock-committing and the
+//! write operation that the request need to perform.
+
 use std::{
     sync::{atomic::AtomicU64, Arc},
     time::{SystemTime, UNIX_EPOCH},
@@ -13,14 +110,21 @@ use tikv_util::{
 };
 use txn_types::TimeStamp;
 
-use crate::storage::metrics::SCHED_TXN_STATUS_CACHE_SIZE;
+use crate::storage::metrics::*;
 
 const TXN_STATUS_CACHE_SLOTS: usize = 128;
 
-pub const REQ_MAX_FLYING_TIME_MILLIS: u64 = 30000;
+/// An cache item should be kept for at least this time.
+/// Actually this should be guaranteed only for committed transactions. See
+/// [this section](#
+/// for-filtering-out-unwanted-late-arrived-stale-prewrite-requests) for details
+/// about why this is needed.
+const CACHE_ITEMS_REQUIRED_KEEP_TIME_MILLIS: u64 = 30000;
 
 struct CacheEntry {
     commit_ts: TimeStamp,
+    /// The system timestamp in milliseconds when the entry is inserted to the
+    /// cache.
     insert_time: u64,
 }
 
@@ -37,6 +141,7 @@ impl TxnStatusCacheEvictPolicy {
         SystemTime::now()
     }
 
+    /// The
     #[inline]
     #[cfg(test)]
     fn now(&self) -> SystemTime {
@@ -121,12 +226,15 @@ impl TxnStatusCache {
     }
 
     pub fn new() -> Self {
-        Self::with_slots_and_time_limit(TXN_STATUS_CACHE_SLOTS, REQ_MAX_FLYING_TIME_MILLIS)
+        Self::with_slots_and_time_limit(
+            TXN_STATUS_CACHE_SLOTS,
+            CACHE_ITEMS_REQUIRED_KEEP_TIME_MILLIS,
+        )
     }
 
     #[cfg(test)]
     pub fn new_for_test() -> Self {
-        Self::with_slots_and_time_limit(16, REQ_MAX_FLYING_TIME_MILLIS)
+        Self::with_slots_and_time_limit(16, CACHE_ITEMS_REQUIRED_KEEP_TIME_MILLIS)
     }
 
     pub fn with_slots_and_time_limit(slots: usize, limit_millis: u64) -> Self {
@@ -168,7 +276,7 @@ impl TxnStatusCache {
         slot.last_check_capacity = capacity;
     }
 
-    pub fn get(&self, start_ts: TimeStamp) -> Option<TimeStamp> {
+    pub fn get_no_promote(&self, start_ts: TimeStamp) -> Option<TimeStamp> {
         let slot = self.slots[self.slot_index(start_ts)].lock();
         slot.cache
             .get_no_promote(&start_ts)
@@ -222,7 +330,7 @@ mod tests {
     fn bench_get_impl(b: &mut test::Bencher, init_size: usize) {
         let c = TxnStatusCache::with_slots_and_time_limit(
             TXN_STATUS_CACHE_SLOTS,
-            REQ_MAX_FLYING_TIME_MILLIS,
+            CACHE_ITEMS_REQUIRED_KEEP_TIME_MILLIS,
         );
         let now = SystemTime::now();
         for i in 1..=init_size {
@@ -235,7 +343,7 @@ mod tests {
         let rand_range = if init_size == 0 { 10000 } else { init_size } as u64;
         b.iter(|| {
             let ts = rand::thread_rng().gen_range(0u64, rand_range);
-            let res = c.get(ts.into());
+            let res = c.get_no_promote(ts.into());
             test::black_box(&res);
         })
     }
@@ -438,7 +546,7 @@ mod tests {
             );
 
             if get_before_insert {
-                test::black_box(c.get(time_shift.into()));
+                test::black_box(c.get_no_promote(time_shift.into()));
             }
             c.insert(time_shift.into(), (time_shift + 1).into(), now);
             test::black_box(&c);

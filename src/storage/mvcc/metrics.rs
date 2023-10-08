@@ -36,11 +36,6 @@ make_static_metric! {
         write_not_loaded_skip
     }
 
-    pub label_enum MvccPrewriteRequestRejectReason {
-        max_flying_time_exceeded,
-        committed,
-    }
-
     pub struct MvccConflictCounterVec: IntCounter {
         "type" => MvccConflictKind,
     }
@@ -57,8 +52,11 @@ make_static_metric! {
         "type" => MvccPrewriteAssertionPerfKind,
     }
 
-    pub struct MvccPrewriteRequestRejectCounterVec: IntCounter {
-        "type" => MvccPrewriteRequestRejectReason,
+    pub struct MvccPrewriteRequestAfterCommitCounterVec: IntCounter {
+        "type" => {
+            non_retry_req,
+            retry_req,
+        },
     }
 }
 
@@ -113,10 +111,10 @@ lazy_static! {
         )
         .unwrap()
     };
-    pub static ref MVCC_PREWRITE_REQUEST_REJECT_COUNTER_VEC: MvccPrewriteRequestRejectCounterVec = {
+    pub static ref MVCC_PREWRITE_REQUEST_AFTER_COMMIT_COUNTER_VEC: MvccPrewriteRequestAfterCommitCounterVec = {
         register_static_int_counter_vec!(
-            MvccPrewriteRequestRejectCounterVec,
-            "tikv_storage_mvcc_prewrite_request_reject_counter",
+            MvccPrewriteRequestAfterCommitCounterVec,
+            "tikv_storage_mvcc_prewrite_request_after_commit_counter",
             "Counter of rejected prewrite requests",
             &["type"]
         )
