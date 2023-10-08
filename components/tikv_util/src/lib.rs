@@ -133,6 +133,10 @@ pub fn slices_in_range<T>(entry: &VecDeque<T>, low: usize, high: usize) -> (&[T]
     }
 }
 
+pub fn dump_async_tasks() -> String {
+    async_backtrace::taskdump_tree(false)
+}
+
 pub struct DefaultRng {
     rng: ThreadRng,
 }

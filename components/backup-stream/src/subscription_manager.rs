@@ -2,6 +2,7 @@
 
 use std::{sync::Arc, time::Duration};
 
+use async_backtrace::framed;
 use engine_traits::KvEngine;
 use error_code::ErrorCodeExt;
 use futures::FutureExt;
@@ -176,6 +177,7 @@ where
 
 impl ScanCmd {
     /// execute the initial scanning via the specificated [`InitialDataLoader`].
+    #[framed]
     async fn exec_by(&self, initial_scan: impl InitialScan) -> Result<()> {
         let Self {
             region,
@@ -195,6 +197,7 @@ impl ScanCmd {
     }
 
     /// execute the command, when meeting error, retrying.
+    #[framed]
     async fn exec_by_with_retry(self, init: impl InitialScan) {
         let mut retry_time = INITIAL_SCAN_FAILURE_MAX_RETRY_TIME;
         loop {
@@ -233,9 +236,6 @@ async fn scan_executor_loop(init: impl InitialScan, mut cmds: Receiver<ScanCmd>)
 
         let init = init.clone();
         tokio::task::spawn(async move {
-            metrics::PENDING_INITIAL_SCAN_LEN
-                .with_label_values(&["executing"])
-                .inc();
             cmd.exec_by_with_retry(init).await;
             metrics::PENDING_INITIAL_SCAN_LEN
                 .with_label_values(&["executing"])
@@ -397,6 +397,7 @@ where
     }
 
     /// the handler loop.
+    #[framed]
     async fn region_operator_loop<E, RT>(
         self,
         mut message_box: Receiver<ObserveOp>,
@@ -532,6 +533,7 @@ where
         }
     }
 
+    #[framed]
     async fn try_start_observe(&self, region: &Region, handle: ObserveHandle) -> Result<()> {
         match self.find_task_by_region(region) {
             None => {
@@ -559,6 +561,7 @@ where
         Ok(())
     }
 
+    #[framed]
     async fn start_observe(&self, region: Region) {
         self.start_observe_with_failure_count(region, 0).await
     }
@@ -668,6 +671,7 @@ where
         Ok(())
     }
 
+    #[framed]
     async fn get_last_checkpoint_of(&self, task: &str, region: &Region) -> Result<TimeStamp> {
         fail::fail_point!("get_last_checkpoint_of", |hint| Err(Error::Other(
             box_err!(
@@ -688,6 +692,7 @@ where
         Ok(cp.ts)
     }
 
+    #[framed]
     async fn spawn_scan(&self, cmd: ScanCmd) {
         // we should not spawn initial scanning tasks to the tokio blocking pool
         // because it is also used for converting sync File I/O to async. (for now!)
@@ -702,6 +707,7 @@ where
         }
     }
 
+    #[framed]
     async fn observe_over_with_initial_data_from_checkpoint(
         &self,
         region: &Region,

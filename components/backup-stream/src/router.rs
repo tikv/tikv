@@ -13,6 +13,7 @@ use std::{
     time::Duration,
 };
 
+use async_backtrace::{frame, framed};
 use engine_traits::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use external_storage::{BackendConfig, UnpinReader};
 use external_storage_export::{create_storage, ExternalStorage};
@@ -866,16 +867,19 @@ impl StreamTaskInfo {
         })
     }
 
+    #[framed]
     async fn on_events_of_key(&self, key: TempFileKey, events: ApplyEvents) -> Result<()> {
         fail::fail_point!("before_generate_temp_file");
-        if let Some(f) = self.files.read().await.get(&key) {
-            self.total_size
-                .fetch_add(f.lock().await.on_events(events).await?, Ordering::SeqCst);
+        if let Some(f) = frame!(self.files.read()).await.get(&key) {
+            self.total_size.fetch_add(
+                frame!(f.lock()).await.on_events(events).await?,
+                Ordering::SeqCst,
+            );
             return Ok(());
         }
 
         // slow path: try to insert the element.
-        let mut w = self.files.write().await;
+        let mut w = frame!(self.files.write()).await;
         // double check before insert. there may be someone already insert that
         // when we are waiting for the write lock.
         // silence the lint advising us to use the `Entry` API which may introduce
@@ -888,14 +892,17 @@ impl StreamTaskInfo {
         }
 
         let f = w.get(&key).unwrap();
-        self.total_size
-            .fetch_add(f.lock().await.on_events(events).await?, Ordering::SeqCst);
+        self.total_size.fetch_add(
+            frame!(f.lock()).await.on_events(events).await?,
+            Ordering::SeqCst,
+        );
         fail::fail_point!("after_write_to_file");
         Ok(())
     }
 
     /// Append a event to the files. This wouldn't trigger `fsync` syscall.
     /// i.e. No guarantee of persistence.
+    #[framed]
     pub async fn on_events(&self, kv: ApplyEvents) -> Result<()> {
         use futures::FutureExt;
         let now = Instant::now_coarse();
@@ -921,6 +928,7 @@ impl StreamTaskInfo {
     }
 
     /// Flush all template files and generate corresponding metadata.
+    #[framed]
     pub async fn generate_metadata(&self, store_id: u64) -> Result<MetadataInfo> {
         let mut w = self.flushing_files.write().await;
         let mut wm = self.flushing_meta_files.write().await;
@@ -970,6 +978,7 @@ impl StreamTaskInfo {
     }
 
     /// move need-flushing files to flushing_files.
+    #[framed]
     pub async fn move_to_flushing_files(&self) -> Result<&Self> {
         // if flushing_files is not empty, which represents this flush is a retry
         // operation.
@@ -998,6 +1007,7 @@ impl StreamTaskInfo {
         Ok(self)
     }
 
+    #[framed]
     pub async fn clear_flushing_files(&self) {
         for (_, data_file, _) in self.flushing_files.write().await.drain(..) {
             debug!("removing data file"; "size" => %data_file.file_size, "name" => %data_file.inner.path().display());
@@ -1017,6 +1027,7 @@ impl StreamTaskInfo {
         }
     }
 
+    #[framed]
     async fn merge_and_flush_log_files_to(
         storage: Arc<dyn ExternalStorage>,
         files: &mut [(TempFileKey, DataFile, DataFileInfo)],
@@ -1101,6 +1112,7 @@ impl StreamTaskInfo {
         Ok(())
     }
 
+    #[framed]
     pub async fn flush_log(&self, metadata: &mut MetadataInfo) -> Result<()> {
         let storage = self.storage.clone();
         self.merge_log(metadata, storage.clone(), &self.flushing_files, false)
@@ -1110,6 +1122,7 @@ impl StreamTaskInfo {
         Ok(())
     }
 
+    #[framed]
     async fn merge_log(
         &self,
         metadata: &mut MetadataInfo,
@@ -1154,6 +1167,7 @@ impl StreamTaskInfo {
         Ok(())
     }
 
+    #[framed]
     pub async fn flush_meta(&self, metadata_info: MetadataInfo) -> Result<()> {
         if !metadata_info.file_groups.is_empty() {
             let meta_path = metadata_info.path_to_meta();
@@ -1182,6 +1196,7 @@ impl StreamTaskInfo {
     /// The caller can try to advance the resolved ts and provide it to the
     /// function, and we would use `max(resolved_ts_provided,
     /// resolved_ts_from_file)`.
+    #[framed]
     pub async fn do_flush(
         &self,
         store_id: u64,
@@ -1271,6 +1286,7 @@ impl StreamTaskInfo {
         Ok(())
     }
 
+    #[framed]
     pub async fn update_global_checkpoint(
         &self,
         global_checkpoint: u64,
@@ -1405,6 +1421,7 @@ impl DataFile {
     }
 
     /// Add a new KV pair to the file, returning its size.
+    #[framed]
     async fn on_events(&mut self, events: ApplyEvents) -> Result<usize> {
         let now = Instant::now_coarse();
         let mut total_size = 0;

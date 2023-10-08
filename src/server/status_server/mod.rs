@@ -485,6 +485,10 @@ impl<R> StatusServer<R>
 where
     R: 'static + Send + RaftExtension + Clone,
 {
+    async fn dump_async_trace() -> hyper::Result<Response<Body>> {
+        Ok(make_response(StatusCode::OK, tikv_util::dump_async_tasks()))
+    }
+
     async fn handle_pause_grpc(
         mut grpc_service_mgr: GrpcServiceManager,
     ) -> hyper::Result<Response<Body>> {
@@ -734,6 +738,7 @@ where
                             (Method::PUT, "/resume_grpc") => {
                                 Self::handle_resume_grpc(grpc_service_mgr).await
                             }
+                            (Method::GET, "/async_tasks") => Self::dump_async_trace().await,
                             _ => Ok(make_response(StatusCode::NOT_FOUND, "path not found")),
                         }
                     }

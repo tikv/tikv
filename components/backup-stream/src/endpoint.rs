@@ -9,6 +9,7 @@ use std::{
     time::Duration,
 };
 
+use async_backtrace::frame;
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::KvEngine;
 use error_code::ErrorCodeExt;
@@ -130,14 +131,14 @@ where
         let meta_client_clone = meta_client.clone();
         let scheduler_clone = scheduler.clone();
         // TODO build a error handle mechanism #error 2
-        pool.spawn(async {
+        pool.spawn(frame!(async {
             if let Err(err) = Self::start_and_watch_tasks(meta_client_clone, scheduler_clone).await
             {
                 err.report("failed to start watch tasks");
             }
-        });
+        }));
 
-        pool.spawn(Self::starts_flush_ticks(range_router.clone()));
+        pool.spawn(frame!(Self::starts_flush_ticks(range_router.clone())));
 
         let initial_scan_memory_quota =
             PendingMemoryQuota::new(config.initial_scan_pending_memory_quota.0 as _);
@@ -171,7 +172,7 @@ where
             ((config.num_threads + 1) / 2).max(1),
             resolver,
         );
-        pool.spawn(op_loop);
+        pool.spawn(frame!(op_loop));
         let mut checkpoint_mgr = CheckpointManager::default();
         pool.spawn(checkpoint_mgr.spawn_subscription_mgr());
         let ep = Endpoint {
@@ -311,19 +312,19 @@ where
         let meta_client_clone = meta_client.clone();
         let scheduler_clone = scheduler.clone();
 
-        Handle::current().spawn(async move {
+        Handle::current().spawn(frame!(async move {
             if let Err(err) =
                 Self::starts_watch_task(meta_client_clone, scheduler_clone, revision).await
             {
                 err.report("failed to start watch tasks");
             }
-        });
+        }));
 
-        Handle::current().spawn(async move {
+        Handle::current().spawn(frame!(async move {
             if let Err(err) = Self::starts_watch_pause(meta_client, scheduler, revision).await {
                 err.report("failed to start watch pause");
             }
-        });
+        }));
 
         Ok(())
     }
@@ -471,7 +472,7 @@ where
         let router = self.range_router.clone();
         let sched = self.scheduler.clone();
         let subs = self.subs.clone();
-        self.pool.spawn(async move {
+        self.pool.spawn(frame!(async move {
             let region_id = batch.region_id;
             let kvs = Self::record_batch(subs, batch);
             if kvs.as_ref().map(|x| x.is_empty()).unwrap_or(true) {
@@ -497,7 +498,7 @@ where
                 .with_label_values(&["save_to_temp_file"])
                 .observe(time_cost);
             drop(work)
-        });
+        }));
     }
 
     pub fn handle_watch_task(&self, op: TaskOp) {
@@ -619,7 +620,7 @@ where
 
         let task_name = task.info.get_name().to_owned();
         // clean the safepoint created at pause(if there is)
-        self.pool.spawn(
+        self.pool.spawn(frame!(
             self.pd_client
                 .update_service_safe_point(
                     self.pause_guard_id_for_task(task.info.get_name()),
@@ -628,8 +629,8 @@ where
                 )
                 .map(|r| {
                     r.map_err(|err| Error::from(err).report("removing safe point for pausing"))
-                }),
-        );
+                })
+        ));
         self.pool.block_on(async move {
             let task_clone = task.clone();
             let run = async move {
@@ -695,12 +696,12 @@ where
             Err(err) => {
                 err.report(format!("failed to resume backup stream task {}", task_name));
                 let sched = self.scheduler.clone();
-                tokio::task::spawn(async move {
+                tokio::task::spawn(frame!(async move {
                     tokio::time::sleep(Duration::from_secs(5)).await;
                     sched
                         .schedule(Task::WatchTask(TaskOp::ResumeTask(task_name)))
                         .unwrap();
-                });
+                }));
             }
         }
     }
@@ -814,11 +815,11 @@ where
     }
 
     fn on_flush_with_min_ts(&self, task: String, min_ts: TimeStamp) {
-        self.pool.spawn(self.do_flush(task, min_ts).map(|r| {
+        self.pool.spawn(frame!(self.do_flush(task, min_ts).map(|r| {
             if let Err(err) = r {
                 err.report("during updating flush status")
             }
-        }));
+        })));
     }
 
     fn update_global_checkpoint(&self, task: String) -> future![()] {
@@ -883,7 +884,7 @@ where
             handle.abort();
         }
         let (fut, handle) = futures::future::abortable(self.update_global_checkpoint(task));
-        self.pool.spawn(fut);
+        self.pool.spawn(frame!(fut));
         self.abort_last_storage_save = Some(handle);
     }
 
@@ -911,12 +912,12 @@ where
         use std::cmp::Ordering::*;
         match diff.cmp(&0) {
             Less => {
-                self.pool.spawn(
+                self.pool.spawn(frame!(
                     Arc::clone(sema)
                     .acquire_many_owned(-diff as _)
                     // It is OK to trivially ignore the Error case (semaphore has been closed, we are shutting down the server.)
-                    .map_ok(|p| p.forget()),
-                );
+                    .map_ok(|p| p.forget())
+                ));
             }
             Equal => {}
             Greater => {
@@ -948,10 +949,10 @@ where
                     cb()
                 } else {
                     let sched = self.scheduler.clone();
-                    self.pool.spawn(async move {
+                    self.pool.spawn(frame!(async move {
                         tokio::time::sleep(Duration::from_millis(500)).await;
                         sched.schedule(Task::Sync(cb, cond)).unwrap();
-                    });
+                    }));
                 }
             }
             Task::MarkFailover(t) => self.failover_time = Some(t),
@@ -1007,11 +1008,11 @@ where
             }
             RegionCheckpointOperation::Subscribe(sub) => {
                 let fut = self.checkpoint_mgr.add_subscriber(sub);
-                self.pool.spawn(async move {
+                self.pool.spawn(frame!(async move {
                     if let Err(err) = fut.await {
                         err.report("adding subscription");
                     }
-                });
+                }));
             }
             RegionCheckpointOperation::PrepareMinTsForResolve => {
                 if self.observer.is_hibernating() {

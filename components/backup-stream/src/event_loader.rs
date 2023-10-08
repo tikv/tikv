@@ -2,6 +2,7 @@
 
 use std::{marker::PhantomData, sync::Arc, time::Duration};
 
+use async_backtrace::{frame, framed};
 use engine_traits::{KvEngine, CF_DEFAULT, CF_WRITE};
 use kvproto::{kvrpcpb::ExtraOp, metapb::Region, raft_cmdpb::CmdType};
 use raftstore::{
@@ -219,6 +220,7 @@ where
         }
     }
 
+    #[framed]
     pub async fn capture_change(
         &self,
         region: &Region,
@@ -271,6 +273,7 @@ where
         Ok(snap)
     }
 
+    #[framed]
     pub async fn observe_over_with_retry(
         &self,
         region: &Region,
@@ -368,6 +371,7 @@ where
         f(v.value_mut().resolver())
     }
 
+    #[framed]
     async fn scan_and_async_send(
         &self,
         region: &Region,
@@ -406,21 +410,22 @@ where
             let sink = self.sink.clone();
             let event_size = events.size();
             let sched = self.scheduler.clone();
-            let permit = self.quota.pending(event_size).await;
-            self.limit.consume(disk_read as _).await;
+            let permit = frame!(self.quota.pending(event_size)).await;
+            frame!(self.limit.consume(disk_read as _)).await;
             debug!("sending events to router"; "size" => %event_size, "region" => %region_id);
             metrics::INCREMENTAL_SCAN_SIZE.observe(event_size as f64);
             metrics::INCREMENTAL_SCAN_DISK_READ.inc_by(disk_read as f64);
             metrics::HEAP_MEMORY.add(event_size as _);
-            join_handles.push(tokio::spawn(async move {
+            join_handles.push(tokio::spawn(frame!(async move {
                 utils::handle_on_event_result(&sched, sink.on_events(events).await);
                 metrics::HEAP_MEMORY.sub(event_size as _);
                 debug!("apply event done"; "size" => %event_size, "region" => %region_id);
                 drop(permit);
-            }));
+            })));
         }
     }
 
+    #[framed]
     pub async fn do_initial_scan(
         &self,
         region: &Region,
@@ -434,11 +439,12 @@ where
 
         let mut join_handles = Vec::with_capacity(8);
 
-        let permit = self
-            .concurrency_limit
-            .acquire()
+        let permit = frame!(self.concurrency_limit.acquire())
             .await
             .expect("BUG: semaphore closed");
+        metrics::PENDING_INITIAL_SCAN_LEN
+            .with_label_values(&["executing"])
+            .inc();
         // It is ok to sink more data than needed. So scan to +inf TS for convenance.
         let event_loader = EventLoader::load_from(snap, start_ts, TimeStamp::max(), region)?;
         let stats = self
@@ -446,7 +452,7 @@ where
             .await?;
         drop(permit);
 
-        futures::future::try_join_all(join_handles)
+        async_backtrace::frame!(futures::future::try_join_all(join_handles))
             .await
             .map_err(|err| annotate!(err, "tokio runtime failed to join consuming threads"))?;
 

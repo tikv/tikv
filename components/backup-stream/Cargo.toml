@@ -83,6 +83,7 @@ tonic = { version = "0.8", optional = true }
 txn_types = { workspace = true }
 uuid = "0.8"
 yatp = { workspace = true }
+async-backtrace = "0.2.6"
 
 [dev-dependencies]
 async-trait = "0.1"
