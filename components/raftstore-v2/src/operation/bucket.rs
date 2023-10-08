@@ -469,10 +469,10 @@ mod tests {
         let _ = bucket_stats_info.on_refresh_region_buckets(
             &cfg,
             next_bucket_version,
-            buckets.clone(),
-            region_epoch.clone(),
-            region.clone(),
-            bucket_ranges.clone(),
+            buckets,
+            region_epoch,
+            region,
+            bucket_ranges,
         );
         bucket_stats_info
     }
@@ -551,10 +551,10 @@ mod tests {
         let mut change_bucket_version = bucket_stats_info.on_refresh_region_buckets(
             &cfg,
             next_bucket_version,
-            buckets.clone(),
+            buckets,
             region_epoch.clone(),
             region.clone(),
-            bucket_ranges.clone(),
+            bucket_ranges,
         );
         let bucket_stats = bucket_stats_info.bucket_stat().as_ref().unwrap();
         assert!(!change_bucket_version);
