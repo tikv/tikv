@@ -1,18 +1,25 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    collections::HashSet, fmt, marker::PhantomData, path::PathBuf, sync::Arc, time::Duration,
+    any::Any,
+    collections::HashSet,
+    fmt,
+    marker::PhantomData,
+    path::PathBuf,
+    sync::{Arc, Mutex},
+    time::Duration,
 };
 
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::KvEngine;
 use error_code::ErrorCodeExt;
-use futures::FutureExt;
+use futures::{stream::AbortHandle, FutureExt, TryFutureExt};
 use kvproto::{
     brpb::{StreamBackupError, StreamBackupTaskInfo},
     metapb::Region,
 };
 use pd_client::PdClient;
+use raft::StateRole;
 use raftstore::{
     coprocessor::{CmdBatch, ObserveHandle, RegionInfoProvider},
     router::CdcHandle,
@@ -32,7 +39,7 @@ use tikv_util::{
 use tokio::{
     io::Result as TokioResult,
     runtime::{Handle, Runtime},
-    sync::oneshot,
+    sync::{oneshot, Semaphore},
 };
 use tokio_stream::StreamExt;
 use txn_types::TimeStamp;
@@ -61,12 +68,8 @@ const SLOW_EVENT_THRESHOLD: f64 = 120.0;
 /// CHECKPOINT_SAFEPOINT_TTL_IF_ERROR specifies the safe point TTL(24 hour) if
 /// task has fatal error.
 const CHECKPOINT_SAFEPOINT_TTL_IF_ERROR: u64 = 24;
-/// The timeout for tick updating the checkpoint.
-/// Generally, it would take ~100ms.
-/// 5s would be enough for it.
-const TICK_UPDATE_TIMEOUT: Duration = Duration::from_secs(5);
 
-pub struct Endpoint<S, R, E, RT, PDC> {
+pub struct Endpoint<S, R, E: KvEngine, PDC> {
     // Note: those fields are more like a shared context between components.
     // For now, we copied them everywhere, maybe we'd better extract them into a
     // context type.
@@ -75,33 +78,37 @@ pub struct Endpoint<S, R, E, RT, PDC> {
     pub(crate) store_id: u64,
     pub(crate) regions: R,
     pub(crate) engine: PhantomData<E>,
-    pub(crate) router: RT,
     pub(crate) pd_client: Arc<PDC>,
     pub(crate) subs: SubscriptionTracer,
     pub(crate) concurrency_manager: ConcurrencyManager,
 
-    range_router: Router,
+    // Note: some of fields are public so test cases are able to access them.
+    pub range_router: Router,
     observer: BackupStreamObserver,
     pool: Runtime,
-    initial_scan_memory_quota: PendingMemoryQuota,
-    initial_scan_throughput_quota: Limiter,
     region_operator: RegionSubscriptionManager<S, R, PDC>,
     failover_time: Option<Instant>,
     // We holds the config before, even it is useless for now,
     // however probably it would be useful in the future.
     config: BackupStreamConfig,
     checkpoint_mgr: CheckpointManager,
+
+    // Runtime status:
+    /// The handle to abort last save storage safe point.
+    /// This is used for simulating an asynchronous background worker.
+    /// Each time we spawn a task, once time goes by, we abort that task.
+    pub abort_last_storage_save: Option<AbortHandle>,
+    pub initial_scan_semaphore: Arc<Semaphore>,
 }
 
-impl<S, R, E, RT, PDC> Endpoint<S, R, E, RT, PDC>
+impl<S, R, E, PDC> Endpoint<S, R, E, PDC>
 where
     R: RegionInfoProvider + 'static + Clone,
     E: KvEngine,
-    RT: CdcHandle<E> + 'static,
     PDC: PdClient + 'static,
     S: MetaStore + 'static,
 {
-    pub fn new(
+    pub fn new<RT: CdcHandle<E> + 'static>(
         store_id: u64,
         store: S,
         config: BackupStreamConfig,
@@ -149,17 +156,21 @@ where
         info!("the endpoint of stream backup started"; "path" => %config.temp_path);
         let subs = SubscriptionTracer::default();
 
+        let initial_scan_semaphore = Arc::new(Semaphore::new(config.initial_scan_concurrency));
         let (region_operator, op_loop) = RegionSubscriptionManager::start(
             InitialDataLoader::new(
-                router.clone(),
-                accessor.clone(),
                 range_router.clone(),
                 subs.clone(),
                 scheduler.clone(),
-                initial_scan_memory_quota.clone(),
-                pool.handle().clone(),
-                initial_scan_throughput_quota.clone(),
+                initial_scan_memory_quota,
+                initial_scan_throughput_quota,
+                // NOTE: in fact we can get rid of the `Arc`. Just need to warp the router when the
+                // scanner pool is created. But at that time the handle has been sealed in the
+                // `InitialScan` trait -- we cannot do that.
+                Arc::new(Mutex::new(router)),
+                Arc::clone(&initial_scan_semaphore),
             ),
+            accessor.clone(),
             observer.clone(),
             meta_client.clone(),
             pd_client.clone(),
@@ -170,6 +181,7 @@ where
         let mut checkpoint_mgr = CheckpointManager::default();
         pool.spawn(checkpoint_mgr.spawn_subscription_mgr());
         let ep = Endpoint {
+            initial_scan_semaphore,
             meta_client,
             range_router,
             scheduler,
@@ -178,28 +190,25 @@ where
             store_id,
             regions: accessor,
             engine: PhantomData,
-            router,
             pd_client,
             subs,
             concurrency_manager,
-            initial_scan_memory_quota,
-            initial_scan_throughput_quota,
             region_operator,
             failover_time: None,
             config,
             checkpoint_mgr,
+            abort_last_storage_save: None,
         };
         ep.pool.spawn(ep.min_ts_worker());
         ep
     }
 }
 
-impl<S, R, E, RT, PDC> Endpoint<S, R, E, RT, PDC>
+impl<S, R, E, PDC> Endpoint<S, R, E, PDC>
 where
     S: MetaStore + 'static,
     R: RegionInfoProvider + Clone + 'static,
     E: KvEngine,
-    RT: CdcHandle<E> + 'static,
     PDC: PdClient + 'static,
 {
     fn get_meta_client(&self) -> MetadataClient<S> {
@@ -497,20 +506,6 @@ where
         });
     }
 
-    /// Make an initial data loader using the resource of the endpoint.
-    pub fn make_initial_loader(&self) -> InitialDataLoader<E, R, RT> {
-        InitialDataLoader::new(
-            self.router.clone(),
-            self.regions.clone(),
-            self.range_router.clone(),
-            self.subs.clone(),
-            self.scheduler.clone(),
-            self.initial_scan_memory_quota.clone(),
-            self.pool.handle().clone(),
-            self.initial_scan_throughput_quota.clone(),
-        )
-    }
-
     pub fn handle_watch_task(&self, op: TaskOp) {
         match op {
             TaskOp::AddTask(task) => {
@@ -528,13 +523,12 @@ where
         }
     }
 
-    async fn observe_and_scan_region(
+    async fn observe_regions_in_range(
         &self,
-        init: InitialDataLoader<E, R, RT>,
         task: &StreamTask,
         start_key: Vec<u8>,
         end_key: Vec<u8>,
-    ) -> Result<()> {
+    ) {
         let start = Instant::now_coarse();
         let success = self
             .observer
@@ -552,7 +546,9 @@ where
         // directly and this would be fast. If this gets slow, maybe make it async
         // again. (Will that bring race conditions? say `Start` handled after
         // `ResfreshResolver` of some region.)
-        let range_init_result = init.initialize_range(start_key.clone(), end_key.clone());
+        let range_init_result = self
+            .initialize_range(start_key.clone(), end_key.clone())
+            .await;
         match range_init_result {
             Ok(()) => {
                 info!("backup stream success to initialize"; 
@@ -563,6 +559,45 @@ where
             Err(e) => {
                 e.report("backup stream initialize failed");
             }
+        }
+    }
+
+    /// initialize a range: it simply scan the regions with leader role and send
+    /// them to [`initialize_region`].
+    pub async fn initialize_range(&self, start_key: Vec<u8>, end_key: Vec<u8>) -> Result<()> {
+        // Generally we will be very very fast to consume.
+        // Directly clone the initial data loader to the background thread looks a
+        // little heavier than creating a new channel. TODO: Perhaps we need a
+        // handle to the `InitialDataLoader`. Making it a `Runnable` worker might be a
+        // good idea.
+        let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+        self.regions
+            .seek_region(
+                &start_key,
+                Box::new(move |i| {
+                    // Ignore the error, this can only happen while the server is shutting down, the
+                    // future has been canceled.
+                    let _ = i
+                        .filter(|r| r.role == StateRole::Leader)
+                        .take_while(|r| r.region.start_key < end_key)
+                        .try_for_each(|r| {
+                            tx.blocking_send(ObserveOp::Start {
+                                region: r.region.clone(),
+                            })
+                        });
+                }),
+            )
+            .map_err(|err| {
+                Error::Other(box_err!(
+                    "failed to seek region for start key {}: {}",
+                    utils::redact(&start_key),
+                    err
+                ))
+            })?;
+        // Don't reschedule this command: or once the endpoint's mailbox gets
+        // full, the system might deadlock.
+        while let Some(cmd) = rx.recv().await {
+            self.region_operator.request(cmd).await;
         }
         Ok(())
     }
@@ -581,7 +616,6 @@ where
     /// Load the task into memory: this would make the endpint start to observe.
     fn load_task(&self, task: StreamTask) {
         let cli = self.meta_client.clone();
-        let init = self.make_initial_loader();
         let range_router = self.range_router.clone();
 
         info!(
@@ -624,10 +658,8 @@ where
                     .await?;
 
                 for (start_key, end_key) in ranges {
-                    let init = init.clone();
-
-                    self.observe_and_scan_region(init, &task, start_key, end_key)
-                        .await?
+                    self.observe_regions_in_range(&task, start_key, end_key)
+                        .await
                 }
                 info!(
                     "finish register backup stream ranges";
@@ -852,23 +884,26 @@ where
         }
     }
 
-    fn on_update_global_checkpoint(&self, task: String) {
-        let _guard = self.pool.handle().enter();
-        let result = self.pool.block_on(tokio::time::timeout(
-            TICK_UPDATE_TIMEOUT,
-            self.update_global_checkpoint(task),
-        ));
-        if let Err(err) = result {
-            warn!("log backup update global checkpoint timed out"; "err" => %err)
+    fn on_update_global_checkpoint(&mut self, task: String) {
+        if let Some(handle) = self.abort_last_storage_save.take() {
+            handle.abort();
         }
+        let (fut, handle) = futures::future::abortable(self.update_global_checkpoint(task));
+        self.pool.spawn(fut);
+        self.abort_last_storage_save = Some(handle);
     }
 
     fn on_update_change_config(&mut self, cfg: BackupStreamConfig) {
+        let concurrency_diff =
+            cfg.initial_scan_concurrency as isize - self.config.initial_scan_concurrency as isize;
         info!(
             "update log backup config";
              "config" => ?cfg,
+             "concurrency_diff" => concurrency_diff,
         );
         self.range_router.udpate_config(&cfg);
+        self.update_semaphore_capacity(&self.initial_scan_semaphore, concurrency_diff);
+
         self.config = cfg;
     }
 
@@ -876,6 +911,24 @@ where
     /// This would register the region to the RaftStore.
     pub fn on_modify_observe(&self, op: ObserveOp) {
         self.pool.block_on(self.region_operator.request(op));
+    }
+
+    fn update_semaphore_capacity(&self, sema: &Arc<Semaphore>, diff: isize) {
+        use std::cmp::Ordering::*;
+        match diff.cmp(&0) {
+            Less => {
+                self.pool.spawn(
+                    Arc::clone(sema)
+                    .acquire_many_owned(-diff as _)
+                    // It is OK to trivially ignore the Error case (semaphore has been closed, we are shutting down the server.)
+                    .map_ok(|p| p.forget()),
+                );
+            }
+            Equal => {}
+            Greater => {
+                sema.add_permits(diff as _);
+            }
+        }
     }
 
     pub fn run_task(&mut self, task: Task) {
@@ -897,7 +950,7 @@ where
                 self.on_update_change_config(cfg);
             }
             Task::Sync(cb, mut cond) => {
-                if cond(&self.range_router) {
+                if cond(self) {
                     cb()
                 } else {
                     let sched = self.scheduler.clone();
@@ -1118,7 +1171,9 @@ pub enum Task {
         // Run the closure if ...
         Box<dyn FnOnce() + Send>,
         // This returns `true`.
-        Box<dyn FnMut(&Router) -> bool + Send>,
+        // The argument should be `self`, but there are too many generic argument for `self`...
+        // So let the caller in test cases downcast this to the type they need manually...
+        Box<dyn FnMut(&mut dyn Any) -> bool + Send>,
     ),
     /// Mark the store as a failover store.
     /// This would prevent store from updating its checkpoint ts for a while.
@@ -1287,12 +1342,11 @@ impl Task {
     }
 }
 
-impl<S, R, E, RT, PDC> Runnable for Endpoint<S, R, E, RT, PDC>
+impl<S, R, E, PDC> Runnable for Endpoint<S, R, E, PDC>
 where
     S: MetaStore + 'static,
     R: RegionInfoProvider + Clone + 'static,
     E: KvEngine,
-    RT: CdcHandle<E> + 'static,
     PDC: PdClient + 'static,
 {
     type Task = Task;
@@ -1305,10 +1359,7 @@ where
 #[cfg(test)]
 mod test {
     use engine_rocks::RocksEngine;
-    use raftstore::{
-        coprocessor::region_info_accessor::MockRegionInfoProvider, router::CdcRaftRouter,
-    };
-    use test_raftstore::MockRaftStoreRouter;
+    use raftstore::coprocessor::region_info_accessor::MockRegionInfoProvider;
     use tikv_util::worker::dummy_scheduler;
 
     use crate::{
@@ -1323,13 +1374,9 @@ mod test {
         cli.insert_task_with_range(&task, &[]).await.unwrap();
 
         fail::cfg("failed_to_get_tasks", "1*return").unwrap();
-        Endpoint::<
-            _,
-            MockRegionInfoProvider,
-            RocksEngine,
-            CdcRaftRouter<MockRaftStoreRouter>,
-            MockPdClient,
-        >::start_and_watch_tasks(cli, sched)
+        Endpoint::<_, MockRegionInfoProvider, RocksEngine, MockPdClient>::start_and_watch_tasks(
+            cli, sched,
+        )
         .await
         .unwrap();
         fail::remove("failed_to_get_tasks");

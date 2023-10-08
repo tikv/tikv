@@ -19,7 +19,6 @@ use raft::eraftpb::MessageType;
 use raftstore::{store::ReadIndexContext, Result};
 use test_raftstore::{Simulator as S1, *};
 use test_raftstore_macro::test_case;
-use test_raftstore_v2::Simulator as S2;
 use tikv_util::{config::*, future::block_on_timeout, time::Instant, HandyRwLock};
 use txn_types::{Key, Lock, LockType};
 use uuid::Uuid;
