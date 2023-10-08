@@ -10,7 +10,7 @@ mod client_v2;
 mod feature_gate;
 pub mod metrics;
 mod tso;
-mod util;
+pub mod util;
 
 mod config;
 pub mod errors;
@@ -33,7 +33,10 @@ pub use self::{
     config::Config,
     errors::{Error, Result},
     feature_gate::{Feature, FeatureGate},
-    util::{merge_bucket_stats, new_bucket_stats, PdConnector, REQUEST_RECONNECT_INTERVAL},
+    util::{
+        find_bucket_index, merge_bucket_stats, new_bucket_stats, PdConnector,
+        REQUEST_RECONNECT_INTERVAL,
+    },
 };
 
 pub type Key = Vec<u8>;
@@ -187,7 +190,7 @@ impl BucketStat {
     }
 
     pub fn write_key(&mut self, key: &[u8], value_size: u64) {
-        let idx = match util::find_bucket_index(key, &self.meta.keys) {
+        let idx = match find_bucket_index(key, &self.meta.keys) {
             Some(idx) => idx,
             None => return,
         };

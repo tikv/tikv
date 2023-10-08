@@ -13,6 +13,7 @@ use concurrency_manager::ConcurrencyManager;
 use engine_traits::PerfLevel;
 use futures::{channel::mpsc, future::Either, prelude::*};
 use kvproto::{coprocessor as coppb, errorpb, kvrpcpb};
+use pd_client::util::find_bucket_index;
 use protobuf::{CodedInputStream, Message};
 use resource_control::{ResourceGroupManager, TaskMetadata};
 use resource_metering::{FutureExt, ResourceTagFactory, StreamExt};
@@ -418,20 +419,12 @@ impl<E: Engine> Endpoint<E> {
         let snapshot =
             unsafe { with_tls_engine(|engine| Self::async_snapshot(engine, &tracker.req_ctx)) }
                 .await?;
-        let latest_buckets = snapshot.ext().get_buckets();
+        let latest_buckets: Option<Arc<pd_client::BucketMeta>> = snapshot.ext().get_buckets();
 
         // Check if the buckets version is latest.
         // skip if request don't carry this bucket version.
-        if let Some(ref buckets) = latest_buckets&&
-            buckets.version > tracker.req_ctx.context.buckets_version &&
-            tracker.req_ctx.context.buckets_version!=0 {
-                let mut bucket_not_match = errorpb::BucketVersionNotMatch::default();
-                bucket_not_match.set_version(buckets.version);
-                bucket_not_match.set_keys(buckets.keys.clone().into());
-                let mut err = errorpb::Error::default();
-                err.set_bucket_version_not_match(bucket_not_match);
-                return Err(Error::Region(err));
-        }
+        valid_copr_key_range(&tracker.req_ctx, latest_buckets)?;
+
         // When snapshot is retrieved, deadline may exceed.
         tracker.on_snapshot_finished();
         tracker.req_ctx.deadline.check()?;
@@ -809,6 +802,40 @@ impl<E: Engine> Endpoint<E> {
             .map(|item: std::result::Result<_, ()>| item.unwrap())
     }
 }
+
+// valid_copr_key_range return false iif the request key range cross two or more
+// buckets.
+fn valid_copr_key_range(
+    req_ctx: &ReqContext,
+    buckets: Option<Arc<pd_client::BucketMeta>>,
+) ->std::result::Result<()> {
+    if buckets.is_none() {
+        return Ok(());
+    }
+    let request_bucket_version = req_ctx.context.buckets_version;
+    let latest_buckets = buckets.unwrap();
+    if request_bucket_version == 0 || request_bucket_version >= latest_buckets.version {
+        return Ok(());
+    }
+    let start_key = txn_types::Key::from_raw(&req_ctx.lower_bound);
+    let end_key = txn_types::Key::from_raw(&req_ctx.upper_bound);
+    let first_index = find_bucket_index(start_key.as_encoded(), &latest_buckets.keys);
+    let last_index = find_bucket_index(end_key.as_encoded(), &latest_buckets.keys);
+    let mut cross_buckets=false;
+    if let (Some(first_index), Some(last_index)) = (first_index, last_index) {
+        cross_buckets= first_index + 1 >= last_index;
+    }
+    if cross_buckets{
+        return Ok(())
+    }
+    let mut bucket_not_match = errorpb::BucketVersionNotMatch::default();
+    bucket_not_match.set_version(latest_buckets.version);
+    bucket_not_match.set_keys(latest_buckets.keys.clone().into());
+    let mut err = errorpb::Error::default();
+    err.set_bucket_version_not_match(bucket_not_match);
+    Err(Error::Region(err))
+}
+
 
 fn make_error_batch_response(batch_resp: &mut coppb::StoreBatchTaskResponse, e: Error) {
     warn!(
