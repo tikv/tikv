@@ -14,22 +14,7 @@ version = "0.16.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3e61f2b7f93d2c7d2b08263acaa4a363b3e276806c68af6134c44f523bf1aacd"
 dependencies = [
- "gimli 0.25.0",
-]
-
-[[package]]
-name = "addr2line"
-version = "0.21.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8a30b2e23b9e17a9f90641c7ab1549cd9b44f296d3ccbf309d2863cfe398a0cb"
-dependencies = [
- "cpp_demangle",
- "fallible-iterator",
- "gimli 0.28.0",
- "memmap2 0.5.10",
- "object 0.32.1",
- "rustc-demangle",
- "smallvec",
+ "gimli",
 ]
 
 [[package]]
@@ -496,12 +481,12 @@ version = "0.3.61"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e7a905d892734eea339e896738c14b9afce22b5318f64b951e70bf3844419b01"
 dependencies = [
- "addr2line 0.16.0",
+ "addr2line",
  "cc",
  "cfg-if 1.0.0",
  "libc 0.2.146",
  "miniz_oxide 0.4.4",
- "object 0.26.2",
+ "object",
  "rustc-demangle",
 ]
 
@@ -690,29 +675,6 @@ dependencies = [
  "cexpr",
  "clang-sys",
  "clap 2.33.0",
- "env_logger 0.9.0",
- "lazy_static",
- "lazycell",
- "log",
- "peeking_take_while",
- "proc-macro2",
- "quote",
- "regex",
- "rustc-hash",
- "shlex 1.1.0",
- "which",
-]
-
-[[package]]
-name = "bindgen"
-version = "0.60.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "062dddbc1ba4aca46de6338e2bf87771414c335f7b2f2036e8f3e9befebf88e6"
-dependencies = [
- "bitflags",
- "cexpr",
- "clang-sys",
- "clap 3.1.6",
  "env_logger 0.9.0",
  "lazy_static",
  "lazycell",
@@ -1196,15 +1158,6 @@ name = "core-foundation-sys"
 version = "0.8.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ea221b5284a47e40033bf9b66f35f984ec0ea2931eb03505246cd27a963f981b"
-
-[[package]]
-name = "cpp_demangle"
-version = "0.4.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7e8227005286ec39567949b33df9896bcadfa6051bccca2488129f108ca23119"
-dependencies = [
- "cfg-if 1.0.0",
-]
 
 [[package]]
 name = "cpu-time"
@@ -1970,12 +1923,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "fallible-iterator"
-version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2acce4a10f12dc2fb14a218589d4f1f62ef011b2d0cc4b3cb1bba8e94da14649"
-
-[[package]]
 name = "farmhash"
 version = "1.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2099,7 +2046,6 @@ dependencies = [
  "crc32fast",
  "libc 0.2.146",
  "libz-sys",
- "miniz-sys",
  "miniz_oxide 0.3.7",
 ]
 
@@ -2450,16 +2396,6 @@ name = "gimli"
 version = "0.25.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f0a01e0497841a3b2db4f8afa483cce65f7e96a3498bd6c541734792aeac8fe7"
-
-[[package]]
-name = "gimli"
-version = "0.28.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6fb8d784f27acf97159b40fc4db5ecd8aa23b9ad5ef69cdd136d3bc80665f0c0"
-dependencies = [
- "fallible-iterator",
- "stable_deref_trait",
-]
 
 [[package]]
 name = "glob"
@@ -3060,17 +2996,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "libproc"
-version = "0.12.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0b799ad155d75ce914c467ee5627b62247c20d4aedbd446f821484cebf3cded7"
-dependencies = [
- "bindgen 0.59.2",
- "errno",
- "libc 0.2.146",
-]
-
-[[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
 source = "git+https://github.com/tikv/rust-rocksdb.git#f04f4dd8eacc30e67c24bc2529a6d9c6edb85f8f"
@@ -3177,15 +3102,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "mach2"
-version = "0.4.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6d0d1830bcd151a6fc4aea1369af235b36c1528fe976b8ff678683c9995eade8"
-dependencies = [
- "libc 0.2.146",
-]
-
-[[package]]
 name = "maligned"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3269,15 +3185,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "memmap2"
-version = "0.8.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "43a5a03cefb0d953ec0be133036f14e109412fa594edc2f77227249db66cc3ed"
-dependencies = [
- "libc 0.2.146",
-]
-
-[[package]]
 name = "memoffset"
 version = "0.6.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3323,16 +3230,6 @@ name = "minimal-lexical"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "68354c5c6bd36d73ff3feceb05efa59b6acb7626617f4962be322a825e61f79a"
-
-[[package]]
-name = "miniz-sys"
-version = "0.1.12"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1e9e3ae51cea1576ceba0dde3d484d30e6e5b86dee0b2d412fe3a16a15c98202"
-dependencies = [
- "cc",
- "libc 0.2.146",
-]
 
 [[package]]
 name = "miniz_oxide"
@@ -3713,17 +3610,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39f37e50073ccad23b6d09bcb5b263f4e76d3bb6038e4a3c08e52162ffa8abc2"
 dependencies = [
  "memchr",
-]
-
-[[package]]
-name = "object"
-version = "0.32.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9cf5f9dd3933bd50a9e1f149ec995f39ae2c496d31fd772c1fd45ebc27e902b0"
-dependencies = [
- "flate2",
- "memchr",
- "ruzstd",
 ]
 
 [[package]]
@@ -4226,20 +4112,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dec2b086b7a862cf4de201096214fa870344cf922b2b30c167badb3af3195406"
 dependencies = [
  "unicode-ident",
-]
-
-[[package]]
-name = "proc-maps"
-version = "0.3.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3d17946c951c8e8c4233375fdbfc212b215bd14ea1b18388eae8c95bb03a0174"
-dependencies = [
- "anyhow",
- "bindgen 0.60.1",
- "libc 0.2.146",
- "libproc",
- "mach2",
- "winapi 0.3.9",
 ]
 
 [[package]]
@@ -5261,17 +5133,6 @@ name = "rustversion"
 version = "1.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cb5d2a036dc6d2d8fd16fde3498b04306e29bd193bf306a57427019b823d5acd"
-
-[[package]]
-name = "ruzstd"
-version = "0.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ac3ffab8f9715a0d455df4bbb9d21e91135aab3cd3ca187af0cd0c3c3f868fdc"
-dependencies = [
- "byteorder",
- "thiserror-core",
- "twox-hash",
-]
 
 [[package]]
 name = "ryu"
@@ -6487,26 +6348,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "thiserror-core"
-version = "1.0.38"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0d97345f6437bb2004cd58819d8a9ef8e36cdd7661c2abc4bbde0a7c40d9f497"
-dependencies = [
- "thiserror-core-impl",
-]
-
-[[package]]
-name = "thiserror-core-impl"
-version = "1.0.38"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "10ac1c5050e43014d16b2f94d0d2ce79e65ffdd8b38d8048f9c8f6a8a6da62ac"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 1.0.103",
-]
-
-[[package]]
 name = "thiserror-impl"
 version = "1.0.30"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6687,7 +6528,6 @@ dependencies = [
 name = "tikv"
 version = "7.4.0-alpha"
 dependencies = [
- "addr2line 0.21.0",
  "anyhow",
  "api_version",
  "async-stream 0.2.0",
@@ -6741,7 +6581,6 @@ dependencies = [
  "log",
  "log_wrappers",
  "match-template",
- "memmap2 0.8.0",
  "memory_trace_macros",
  "mime",
  "more-asserts",
@@ -6750,7 +6589,6 @@ dependencies = [
  "notify",
  "num-traits",
  "num_cpus",
- "object 0.32.1",
  "online_config",
  "openssl",
  "panic_hook",
@@ -6760,7 +6598,6 @@ dependencies = [
  "pin-project",
  "pnet_datalink",
  "pprof",
- "proc-maps",
  "procinfo",
  "prometheus",
  "prometheus-static-metric",

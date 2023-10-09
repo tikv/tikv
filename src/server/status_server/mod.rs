@@ -3,7 +3,7 @@
 /// Provides profilers for TiKV.
 mod profile;
 use std::{
-    env::{args, current_exe},
+    env::args,
     error::Error as StdError,
     net::SocketAddr,
     path::PathBuf,
@@ -34,7 +34,6 @@ use hyper::{
     Body, Method, Request, Response, Server, StatusCode,
 };
 use kvproto::resource_manager::ResourceGroup;
-use object::Object;
 use online_config::OnlineConfig;
 use openssl::{
     ssl::{Ssl, SslAcceptor, SslContext, SslFiletype, SslMethod, SslVerifyMode},
@@ -324,55 +323,56 @@ where
         Ok(response)
     }
 
+    async fn get_symbol_count(req: Request<Body>) -> hyper::Result<Response<Body>> {
+        assert_eq!(req.method(), Method::GET);
+        // We don't know how many symbols we have, but we
+        // do have symbol information. pprof only cares whether
+        // this number is 0 (no symbols available) or > 0.
+        let text = "num_symbols: 1\n";
+        let response = Response::builder()
+            .header("Content-Type", mime::TEXT_PLAIN.to_string())
+            .header("X-Content-Type-Options", "nosniff")
+            .header("Content-Length", text.len())
+            .body(text.into())
+            .unwrap();
+        Ok(response)
+    }
+
     // The request and response format follows pprof remote server https://gperftools.github.io/gperftools/pprof_remote_servers.html
     // Here is the go pprof implementation https://github.com/golang/go/blob/3857a89e7eb872fa22d569e70b7e076bec74ebbb/src/net/http/pprof/pprof.go#L191
     async fn get_symbol(req: Request<Body>) -> hyper::Result<Response<Body>> {
-        let file = std::fs::File::open(current_exe().unwrap()).unwrap(); // TODO: handle error 
-        let map = unsafe { memmap2::Mmap::map(&file).unwrap() };
-        let object = object::File::parse(&*map).unwrap();
+        assert_eq!(req.method(), Method::POST);
         let mut text = String::new();
+        let body_bytes = hyper::body::to_bytes(req.into_body()).await?;
+        let body = String::from_utf8(body_bytes.to_vec()).unwrap();
 
-        if req.method() == Method::GET {
-            // We don't know how many symbols we have, but we
-            // do have symbol information. Pprof only cares whether
-            // this number is 0 (no symbols available) or > 0.
-            if object.has_debug_symbols() {
-                text.push_str("num_symbols: 1\n");
-            } else {
-                text.push_str("num_symbols: 0\n");
+        // The request body is a list of addr to be resolved joined by '+'.
+        // Resolve addrs with addr2line and write the symbols each per line in
+        // response.
+        for pc in body.split('+') {
+            let addr = usize::from_str_radix(pc.trim_start_matches("0x"), 16).unwrap_or(0);
+            if addr == 0 {
+                info!("invalid addr: {}", addr);
+                continue;
             }
-        } else {
-            let body_bytes = hyper::body::to_bytes(req.into_body()).await?;
-            let body = String::from_utf8(body_bytes.to_vec()).unwrap();
 
-            // The request body is a list of addr to be resolved joined by '+'.
-            // Resolve addrs with addr2line and write the symbols each per line in
-            // response.
-            for pc in body.split('+') {
-                let addr = usize::from_str_radix(pc.trim_start_matches("0x"), 16).unwrap_or(0);
-                if addr == 0 {
-                    info!("invalid addr: {}", addr);
-                    continue;
-                }
+            // Would be multiple symbols if inlined.
+            let mut syms = vec![];
+            backtrace::resolve(addr as *mut std::ffi::c_void, |sym| {
+                let name = sym
+                    .name()
+                    .unwrap_or(backtrace::SymbolName::new(b"<unknown>"));
+                syms.push(name.to_string());
+            });
 
-                // Would be multiple symbols if inlined.
-                let mut syms = vec![];
-                backtrace::resolve(addr as *mut std::ffi::c_void, |sym| {
-                    let name = sym
-                        .name()
-                        .unwrap_or(backtrace::SymbolName::new(b"<unknown>"));
-                    syms.push(name.to_string());
-                });
-
-                if !syms.is_empty() {
-                    // join inline functions with '--'
-                    let f = syms.join("--");
-                    // should be <hex address> <function name>
-                    text.push_str(format!("{:#x} {}\n", addr, f).as_str());
-                } else {
-                    info!("can't resolve mapped addr: {:#x}", addr);
-                    text.push_str(format!("{:#x} ??\n", addr).as_str());
-                }
+            if !syms.is_empty() {
+                // join inline functions with '--'
+                let f = syms.join("--");
+                // should be <hex address> <function name>
+                text.push_str(format!("{:#x} {}\n", addr, f).as_str());
+            } else {
+                info!("can't resolve mapped addr: {:#x}", addr);
+                text.push_str(format!("{:#x} ??\n", addr).as_str());
             }
         }
         let response = Response::builder()
@@ -770,7 +770,9 @@ where
                                 Self::dump_heap_prof_to_resp(req).await
                             }
                             (Method::GET, "/debug/pprof/cmdline") => Self::get_cmdline(req).await,
-                            (Method::GET, "/debug/pprof/symbol") => Self::get_symbol(req).await,
+                            (Method::GET, "/debug/pprof/symbol") => {
+                                Self::get_symbol_count(req).await
+                            }
                             (Method::POST, "/debug/pprof/symbol") => Self::get_symbol(req).await,
                             (Method::GET, "/config") => {
                                 Self::get_config(req, &cfg_controller).await
