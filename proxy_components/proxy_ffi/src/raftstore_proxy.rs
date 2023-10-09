@@ -29,6 +29,7 @@ pub struct RaftStoreProxy {
     raftstore_proxy_engine: RwLock<Option<Eng>>,
     pd_client: Option<Arc<dyn PdClient>>,
     cluster_raftstore_ver: RwLock<RaftstoreVer>,
+    proxy_config_str: String,
 }
 
 impl RaftStoreProxy {
@@ -38,6 +39,7 @@ impl RaftStoreProxy {
         read_index_client: Option<Box<dyn read_index_helper::ReadIndex>>,
         raftstore_proxy_engine: Option<Eng>,
         pd_client: Option<Arc<dyn PdClient>>,
+        proxy_config_str: String,
     ) -> Self {
         RaftStoreProxy {
             status,
@@ -46,6 +48,7 @@ impl RaftStoreProxy {
             raftstore_proxy_engine: RwLock::new(raftstore_proxy_engine),
             pd_client,
             cluster_raftstore_ver: RwLock::new(RaftstoreVer::Uncertain),
+            proxy_config_str,
         }
     }
 }
@@ -377,6 +380,11 @@ impl RaftStoreProxy {
         } else {
             unreachable!()
         }
+    }
+
+    // TODO may be we can later move ProxyConfig to proxy_ffi.
+    pub fn get_proxy_config_str(&self) -> &String {
+        &self.proxy_config_str
     }
 }
 

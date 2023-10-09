@@ -1,11 +1,12 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
 use engine_store_ffi::ffi::{
-    get_engine_store_server_helper,
-    interfaces_ffi::{RawCppPtr, RawCppPtrArr, RawCppPtrTuple, RawVoidPtr},
-    UnwrapExternCFunc,
+    ffi_gc_rust_ptr, get_engine_store_server_helper,
+    interfaces_ffi::{RawCppPtr, RawCppPtrArr, RawCppPtrTuple, RawVoidPtr, RustStrWithView},
+    UnwrapExternCFunc, TEST_GC_OBJ_MONITOR,
 };
 use mock_engine_store::{mock_cluster::init_global_ffi_helper_set, mock_store::RawCppPtrTypeImpl};
+use proxy_ffi::build_from_string;
 
 #[test]
 fn test_tuple_of_raw_cpp_ptr() {
@@ -95,4 +96,16 @@ fn test_carray_of_raw_cpp_ptr() {
             LEN as u64,
         );
     }
+}
+
+#[test]
+fn test_rust_owned_objects() {
+    let s = String::from("hello");
+    let sv: Vec<u8> = s.as_bytes().to_owned();
+    let rs: RustStrWithView = build_from_string(sv.clone());
+    assert_eq!(rs.buff.to_slice(), s.as_bytes());
+    ffi_gc_rust_ptr(rs.inner.ptr, rs.inner.type_);
+    let df = RustStrWithView::default();
+    ffi_gc_rust_ptr(df.inner.ptr, df.inner.type_);
+    assert!(TEST_GC_OBJ_MONITOR.valid_clean_rust());
 }

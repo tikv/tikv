@@ -12,6 +12,8 @@ use mock_engine_store::{
     interfaces_ffi::BaseBuffView, mock_cluster::v1::server::new_server_cluster,
 };
 use proxy_ffi::{
+    domain_impls::TEST_GC_OBJ_MONITOR,
+    ffi_gc_rust_ptr,
     interfaces_ffi::{ColumnFamilyType, EngineIteratorSeekType},
     snapshot_reader_impls::{tablet_reader::TabletReader, *},
 };
@@ -77,6 +79,159 @@ fn generate_snap<EK: KvEngine>(
     (msg, snap_key)
 }
 
+fn prepare_snapshot(
+    cluster_v1: &mut Cluster<mock_engine_store::mock_cluster::v1::server::ServerCluster>,
+    cluster_v2: &mut test_raftstore_v2::Cluster<
+        test_raftstore_v2::ServerCluster<engine_rocks::RocksEngine>,
+        engine_rocks::RocksEngine,
+    >,
+    key_num: usize,
+) -> PathBuf {
+    let s1_addr = cluster_v1.get_addr(1);
+    let region = cluster_v2.get_region(b"");
+    let region_id = region.get_id();
+    let engine = cluster_v2.get_engine(1);
+    let tablet = engine.get_tablet_by_id(region_id).unwrap();
+
+    for i in 0..key_num {
+        let k = format!("zk{:06}", i);
+        tablet.put(k.as_bytes(), &random_long_vec(1024)).unwrap();
+        tablet
+            .put_cf(CF_LOCK, k.as_bytes(), &random_long_vec(1024))
+            .unwrap();
+        tablet
+            .put_cf(CF_WRITE, k.as_bytes(), &random_long_vec(1024))
+            .unwrap();
+    }
+
+    let snap_mgr = cluster_v2.get_snap_mgr(1);
+    let security_mgr = cluster_v2.get_security_mgr();
+    let (msg, snap_key) = generate_snap(&engine, region_id, &snap_mgr);
+    let limit = Limiter::new(f64::INFINITY);
+    let env = Arc::new(Environment::new(1));
+    let _ = block_on(async {
+        let client =
+            TikvClient::new(security_mgr.connect(ChannelBuilder::new(env.clone()), &s1_addr));
+        send_snap_v2(client, snap_mgr.clone(), msg, limit.clone())
+            .await
+            .unwrap()
+    });
+
+    // The snapshot has been received by cluster v1, so check it's completeness
+    let snap_mgr = cluster_v1.get_snap_mgr(1);
+    snap_mgr
+        .tablet_snap_manager()
+        .expect("v1 compact tablet snap mgr")
+        .final_recv_path(&snap_key)
+}
+
+#[test]
+fn test_get_snapshot_seek() {
+    let mut cluster_v1 = new_server_cluster(1, 1);
+    let mut cluster_v2 = test_raftstore_v2::new_server_cluster(1, 1);
+    cluster_v1.cfg.raft_store.enable_v2_compatible_learner = true;
+    cluster_v1.run();
+    cluster_v2.run();
+
+    let key_count = 100;
+    let path = prepare_snapshot(&mut cluster_v1, &mut cluster_v2, key_count);
+
+    let reader = TabletReader::ffi_get_cf_file_reader(
+        path.as_path().to_str().unwrap(),
+        ColumnFamilyType::Write,
+        None,
+    );
+
+    unsafe {
+        let k = format!("k{:06}", 99);
+        let bf = BaseBuffView {
+            data: k.as_ptr() as *const _,
+            len: k.len() as u64,
+        };
+        let cf = ColumnFamilyType::Write;
+        ffi_sst_reader_seek(reader.clone(), cf, EngineIteratorSeekType::Key, bf);
+        let remained = ffi_sst_reader_remained(reader.clone(), cf);
+        if remained == 1 {
+            ffi_sst_reader_next(reader.clone(), cf);
+            let remained = ffi_sst_reader_remained(reader.clone(), cf);
+            if remained == 1 {
+                ffi_sst_reader_key(reader.clone(), cf);
+            }
+        }
+    }
+
+    unsafe {
+        let k = format!("k{:06}", 100);
+        let bf = BaseBuffView {
+            data: k.as_ptr() as *const _,
+            len: k.len() as u64,
+        };
+        let cf = ColumnFamilyType::Write;
+        ffi_sst_reader_seek(reader.clone(), cf, EngineIteratorSeekType::Key, bf);
+        let remained = ffi_sst_reader_remained(reader.clone(), cf);
+        if remained == 1 {
+            ffi_sst_reader_next(reader.clone(), cf);
+            let remained = ffi_sst_reader_remained(reader.clone(), cf);
+            if remained == 1 {
+                ffi_sst_reader_key(reader.clone(), cf);
+            }
+        }
+    }
+
+    cluster_v1.shutdown();
+    cluster_v2.shutdown();
+}
+
+#[test]
+fn test_get_snapshot_split_keys() {
+    let mut cluster_v1 = new_server_cluster(1, 1);
+    let mut cluster_v2 = test_raftstore_v2::new_server_cluster(1, 1);
+    cluster_v1.cfg.raft_store.enable_v2_compatible_learner = true;
+    cluster_v1.run();
+    cluster_v2.run();
+
+    let key_count = 10000;
+    let path = prepare_snapshot(&mut cluster_v1, &mut cluster_v2, key_count);
+
+    unsafe {
+        let reader = TabletReader::ffi_get_cf_file_reader(
+            path.as_path().to_str().unwrap(),
+            ColumnFamilyType::Write,
+            None,
+        );
+        // If we want to split the range into 2 parts, it should return 1 split key.
+        let split_count = 4;
+        let res = ffi_get_split_keys(reader.clone(), split_count);
+        let maximum = format!("k{:06}", key_count);
+        let minimum = format!("k{:06}", 0);
+        tikv_util::debug!("minimum split key is {}", minimum);
+        tikv_util::debug!("maximum split key is {}", maximum);
+        for i in 0..res.len {
+            let buff = res.buffs.add(i as usize);
+            let slice = (*buff).to_slice();
+            // If the snapshot is too small, it will provide worse and less split keys than
+            // we want. For example, given a 10000 key snapshot, it generates:
+            // 4-keys is zk000000,zk004065,zk008130,zk009999
+            // 3-keys is zk004065,zk008130,zk009999
+            // 2-keys is zk004065,zk008130
+            tikv_util::debug!(
+                "the {}-th split key is {}",
+                i,
+                std::str::from_utf8_unchecked(slice)
+            );
+            // We don't return the boundary.
+            assert!(slice > minimum.as_bytes());
+            assert!(slice < maximum.as_bytes());
+        }
+        assert_eq!(res.len, split_count - 1);
+        ffi_gc_rust_ptr(res.inner.ptr, res.inner.type_);
+    }
+    assert!(TEST_GC_OBJ_MONITOR.valid_clean_rust());
+
+    cluster_v1.shutdown();
+    cluster_v2.shutdown();
+}
+
 #[test]
 fn test_parse_tablet_snapshot() {
     let test_parse_snap = |key_num| {
@@ -86,56 +241,21 @@ fn test_parse_tablet_snapshot() {
         cluster_v1.run();
         cluster_v2.run();
 
-        let s1_addr = cluster_v1.get_addr(1);
-        let region = cluster_v2.get_region(b"");
-        let region_id = region.get_id();
-        let engine = cluster_v2.get_engine(1);
-        let tablet = engine.get_tablet_by_id(region_id).unwrap();
-
-        for i in 0..key_num {
-            let k = format!("zk{:04}", i);
-            tablet.put(k.as_bytes(), &random_long_vec(1024)).unwrap();
-            tablet
-                .put_cf(CF_LOCK, k.as_bytes(), &random_long_vec(1024))
-                .unwrap();
-            tablet
-                .put_cf(CF_WRITE, k.as_bytes(), &random_long_vec(1024))
-                .unwrap();
-        }
-
-        let snap_mgr = cluster_v2.get_snap_mgr(1);
-        let security_mgr = cluster_v2.get_security_mgr();
-        let (msg, snap_key) = generate_snap(&engine, region_id, &snap_mgr);
-        let limit = Limiter::new(f64::INFINITY);
-        let env = Arc::new(Environment::new(1));
-        let _ = block_on(async {
-            let client =
-                TikvClient::new(security_mgr.connect(ChannelBuilder::new(env.clone()), &s1_addr));
-            send_snap_v2(client, snap_mgr.clone(), msg, limit.clone())
-                .await
-                .unwrap()
-        });
-
-        // The snapshot has been received by cluster v1, so check it's completeness
-        let snap_mgr = cluster_v1.get_snap_mgr(1);
-        let path = snap_mgr
-            .tablet_snap_manager()
-            .expect("v1 compact tablet snap mgr")
-            .final_recv_path(&snap_key);
+        let path = prepare_snapshot(&mut cluster_v1, &mut cluster_v2, key_num);
 
         let validate = |cf: ColumnFamilyType| unsafe {
             let reader =
                 TabletReader::ffi_get_cf_file_reader(path.as_path().to_str().unwrap(), cf, None);
 
             // SSTReaderPtr is not aware of the data prefix 'z'.
-            let k = format!("k{:04}", 5);
+            let k = format!("k{:06}", 5);
             let bf = BaseBuffView {
                 data: k.as_ptr() as *const _,
                 len: k.len() as u64,
             };
             ffi_sst_reader_seek(reader.clone(), cf, EngineIteratorSeekType::Key, bf);
             for i in 5..key_num {
-                let k = format!("k{:04}", i);
+                let k = format!("k{:06}", i);
                 assert_eq!(ffi_sst_reader_remained(reader.clone(), cf), 1);
                 let kbf = ffi_sst_reader_key(reader.clone(), cf);
                 assert_eq!(kbf.to_slice(), k.as_bytes());
@@ -145,7 +265,7 @@ fn test_parse_tablet_snapshot() {
 
             // If the sst is "empty" to this region. Will not panic, and remained should be
             // false.
-            let k = format!("k{:04}", key_num + 10);
+            let k = format!("k{:06}", key_num + 10);
             let bf = BaseBuffView {
                 data: k.as_ptr() as *const _,
                 len: k.len() as u64,
@@ -160,7 +280,7 @@ fn test_parse_tablet_snapshot() {
         cluster_v2.shutdown();
     };
 
-    test_parse_snap(20);
+    test_parse_snap(10);
 }
 
 // This test won't run, since we don;t have transport for snapshot data.

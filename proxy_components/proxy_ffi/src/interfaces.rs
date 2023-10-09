@@ -234,6 +234,19 @@ pub mod root {
         }
         #[repr(C)]
         #[derive(Debug)]
+        pub struct RustStrWithView {
+            pub buff: root::DB::BaseBuffView,
+            pub inner: root::DB::RawRustPtr,
+        }
+        #[repr(C)]
+        #[derive(Debug)]
+        pub struct RustStrWithViewVec {
+            pub buffs: *const root::DB::BaseBuffView,
+            pub len: u64,
+            pub inner: root::DB::RawRustPtr,
+        }
+        #[repr(C)]
+        #[derive(Debug)]
         pub struct SSTReaderInterfaces {
             pub fn_get_sst_reader: ::std::option::Option<
                 unsafe extern "C" fn(
@@ -284,6 +297,18 @@ pub mod root {
                     arg3: root::DB::EngineIteratorSeekType,
                     arg4: root::DB::BaseBuffView,
                 ),
+            >,
+            pub fn_approx_size: ::std::option::Option<
+                unsafe extern "C" fn(
+                    arg1: root::DB::SSTReaderPtr,
+                    arg2: root::DB::ColumnFamilyType,
+                ) -> u64,
+            >,
+            pub fn_get_split_keys: ::std::option::Option<
+                unsafe extern "C" fn(
+                    arg1: root::DB::SSTReaderPtr,
+                    splits_count: u64,
+                ) -> root::DB::RustStrWithViewVec,
             >,
         }
         #[repr(u32)]
@@ -433,6 +458,12 @@ pub mod root {
                     compact_term: u64,
                     applied_index: u64,
                 ),
+            >,
+            pub fn_get_config_json: ::std::option::Option<
+                unsafe extern "C" fn(
+                    arg1: root::DB::RaftStoreProxyPtr,
+                    kind: u64,
+                ) -> root::DB::RustStrWithView,
             >,
         }
         #[repr(C)]
@@ -659,7 +690,7 @@ pub mod root {
                 arg3: root::DB::RawVoidPtr,
             ) -> u32;
         }
-        pub const RAFT_STORE_PROXY_VERSION: u64 = 3797917752479181299;
+        pub const RAFT_STORE_PROXY_VERSION: u64 = 5692329170612304456;
         pub const RAFT_STORE_PROXY_MAGIC_NUMBER: u32 = 324508639;
     }
 }

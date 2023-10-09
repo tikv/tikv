@@ -3,12 +3,13 @@ use std::{cell::RefCell, sync::Arc};
 
 use encryption::DataKeyManager;
 use engine_rocks::{get_env, RocksCfOptions, RocksDbOptions};
-use engine_traits::{Iterable, Iterator};
+use engine_traits::{Iterable, Iterator, RangePropertiesExt, CF_WRITE};
 
 use crate::{
-    cf_to_name,
+    build_from_vec_string, cf_to_name,
     interfaces_ffi::{
-        BaseBuffView, ColumnFamilyType, EngineIteratorSeekType, SSTFormatKind, SSTReaderPtr,
+        BaseBuffView, ColumnFamilyType, EngineIteratorSeekType, RustStrWithViewVec, SSTFormatKind,
+        SSTReaderPtr,
     },
 };
 
@@ -114,11 +115,58 @@ impl TabletReader {
             }
             EngineIteratorSeekType::Last => {
                 let _ = iter.seek_to_last();
+                *self.remained.borrow_mut() = false;
             }
             EngineIteratorSeekType::Key => {
                 let dk = keys::data_key(bf.to_slice());
-                let _ = iter.seek(&dk);
+                match iter.seek(&dk) {
+                    Ok(x) => {
+                        *self.remained.borrow_mut() = x;
+                    }
+                    Err(_e) => {
+                        *self.remained.borrow_mut() = false;
+                    }
+                }
             }
         };
+    }
+
+    pub fn ffi_approx_size(&self, cf: ColumnFamilyType) -> u64 {
+        let handle =
+            engine_rocks::util::get_cf_handle(self.kv_engine.as_inner(), cf_to_name(cf)).unwrap();
+        let v = self
+            .kv_engine
+            .as_inner()
+            .get_approximate_sizes_cf(handle, &[rocksdb::Range::new(b"", keys::DATA_MAX_KEY)]);
+        assert_eq!(v.len(), 1);
+        v[0]
+    }
+
+    pub fn ffi_get_split_keys(&self, splits_count: u64) -> RustStrWithViewVec {
+        let range = engine_traits::Range {
+            start_key: b"",
+            end_key: keys::DATA_MAX_KEY,
+        };
+        assert!(splits_count >= 2);
+        let keys_count: usize = splits_count as usize - 1;
+        match self
+            .kv_engine
+            .get_range_approximate_split_keys_cf(CF_WRITE, range, keys_count)
+        {
+            Ok(r) => {
+                if r.is_empty() {
+                    return RustStrWithViewVec::default();
+                }
+                let truncated_string: Vec<Vec<u8>> = r
+                    .into_iter()
+                    .map(|s| keys::origin_key(&s).to_owned())
+                    .collect();
+                build_from_vec_string(truncated_string)
+            }
+            Err(e) => {
+                tikv_util::info!("ffi_get_split_keys failed due to {:?}", e);
+                RustStrWithViewVec::default()
+            }
+        }
     }
 }

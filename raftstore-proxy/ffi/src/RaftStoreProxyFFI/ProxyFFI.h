@@ -123,14 +123,14 @@ struct RawCppPtrCarr {
 };
 
 // An tuple of pointers, like `void **`,
-// Can be used to represent structures.
+// Can be used to represent structures created from C side.
 struct RawCppPtrTuple {
   RawCppPtr *inner;
   const uint64_t len;
 };
 
 // An array of pointers(same type), like `T **`,
-// Can be used to represent arrays.
+// Can be used to represent arrays created from C side.
 struct RawCppPtrArr {
   RawVoidPtr *inner;
   const uint64_t len;
@@ -174,6 +174,24 @@ struct SSTReaderPtr {
   SSTFormatKind kind;
 };
 
+struct RustStrWithView {
+  // It is a view of something inside `inner`.
+  BaseBuffView buff;
+  // Should never be accessed on C++ side.
+  // Call fn_gc_rust_ptr to this after `buffs` is no longer used.
+  RawRustPtr inner;
+};
+
+struct RustStrWithViewVec {
+  // It is a view of something inside `inner`.
+  const BaseBuffView *buffs;
+  // It is the length of view.
+  uint64_t len;
+  // Should never be accessed on C++ side.
+  // Call fn_gc_rust_ptr to this after `buffs` is no longer used.
+  RawRustPtr inner;
+};
+
 struct SSTReaderInterfaces {
   SSTReaderPtr (*fn_get_sst_reader)(SSTView, RaftStoreProxyPtr);
   uint8_t (*fn_remained)(SSTReaderPtr, ColumnFamilyType);
@@ -184,6 +202,8 @@ struct SSTReaderInterfaces {
   SSTFormatKind (*fn_kind)(SSTReaderPtr, ColumnFamilyType);
   void (*fn_seek)(SSTReaderPtr, ColumnFamilyType, EngineIteratorSeekType,
                   BaseBuffView);
+  uint64_t (*fn_approx_size)(SSTReaderPtr, ColumnFamilyType);
+  RustStrWithViewVec (*fn_get_split_keys)(SSTReaderPtr, uint64_t splits_count);
 };
 
 enum class MsgPBType : uint32_t {
@@ -248,6 +268,7 @@ struct RaftStoreProxyFFIHelper {
   void (*fn_notify_compact_log)(RaftStoreProxyPtr, uint64_t region_id,
                                 uint64_t compact_index, uint64_t compact_term,
                                 uint64_t applied_index);
+  RustStrWithView (*fn_get_config_json)(RaftStoreProxyPtr, uint64_t kind);
 };
 
 struct PageStorageInterfaces {

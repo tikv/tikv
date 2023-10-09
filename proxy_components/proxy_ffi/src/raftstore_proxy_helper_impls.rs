@@ -22,7 +22,7 @@ use super::{
     interfaces_ffi::{
         BaseBuffView, CppStrVecView, KVGetStatus, RaftProxyStatus, RaftStoreProxyFFIHelper,
         RaftStoreProxyPtr, RaftstoreVer, RawCppPtr, RawCppStringPtr, RawRustPtr, RawVoidPtr,
-        SSTReaderInterfaces,
+        RustStrWithView, SSTReaderInterfaces,
     },
     read_index_helper,
     snapshot_reader_impls::*,
@@ -75,6 +75,8 @@ impl RaftStoreProxyFFIHelper {
                 fn_gc: Some(ffi_gc_sst_reader),
                 fn_kind: Some(ffi_sst_reader_format_kind),
                 fn_seek: Some(ffi_sst_reader_seek),
+                fn_approx_size: Some(ffi_approx_size),
+                fn_get_split_keys: Some(ffi_get_split_keys),
             },
             fn_server_info: None,
             fn_make_read_index_task: Some(ffi_make_read_index_task),
@@ -86,6 +88,7 @@ impl RaftStoreProxyFFIHelper {
             fn_get_region_local_state: Some(ffi_get_region_local_state),
             fn_get_cluster_raftstore_version: Some(ffi_get_cluster_raftstore_version),
             fn_notify_compact_log: Some(ffi_notify_compact_log),
+            fn_get_config_json: Some(ffi_get_config_json),
         }
     }
 }
@@ -294,5 +297,21 @@ pub unsafe extern "C" fn ffi_poll_timer_task(task_ptr: RawVoidPtr, waker: RawVoi
         1
     } else {
         0
+    }
+}
+
+pub unsafe extern "C" fn ffi_get_config_json(
+    proxy_ptr: RaftStoreProxyPtr,
+    _kind: u64,
+) -> RustStrWithView {
+    let s = proxy_ptr
+        .as_ref()
+        .get_proxy_config_str()
+        .as_bytes()
+        .to_owned();
+    if s.is_empty() {
+        RustStrWithView::default()
+    } else {
+        build_from_string(s)
     }
 }

@@ -123,6 +123,7 @@ pub fn run_impl<CER: ConfiguredRaftEngine, F: KvFormat>(
     engine_store_server_helper: &EngineStoreServerHelper,
 ) {
     let (service_event_tx, service_event_rx) = tikv_util::mpsc::unbounded(); // pipe for controling service
+    let proxy_config_str = serde_json::to_string(&proxy_config).unwrap_or_default();
     let engine_store_server_helper_ptr = engine_store_server_helper as *const _ as isize;
     let mut tikv = TiKvServer::<CER, F>::init(
         config,
@@ -150,6 +151,7 @@ pub fn run_impl<CER: ConfiguredRaftEngine, F: KvFormat>(
         ))),
         None,
         Some(tikv.pd_client.clone()),
+        proxy_config_str,
     );
     info!("start probing cluster's raftstore version");
     // We wait for a maximum of 10 seconds for every store.
@@ -272,7 +274,7 @@ pub fn run_impl<CER: ConfiguredRaftEngine, F: KvFormat>(
 #[inline]
 fn run_impl_only_for_decryption<CER: ConfiguredRaftEngine, F: KvFormat>(
     config: TikvConfig,
-    _proxy_config: ProxyConfig,
+    proxy_config: ProxyConfig,
     engine_store_server_helper: &EngineStoreServerHelper,
 ) {
     let encryption_key_manager =
@@ -287,12 +289,14 @@ fn run_impl_only_for_decryption<CER: ConfiguredRaftEngine, F: KvFormat>(
             .unwrap()
             .map(Arc::new);
 
+    let proxy_config_str = serde_json::to_string(&proxy_config).unwrap_or_default();
     let mut proxy = RaftStoreProxy::new(
         AtomicU8::new(RaftProxyStatus::Idle as u8),
         encryption_key_manager.clone(),
         Option::None,
         None,
         None,
+        proxy_config_str,
     );
 
     let proxy_ref = &proxy;

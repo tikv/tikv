@@ -80,8 +80,11 @@ impl ClusterExt {
         cluster_ext_ptr: isize,
         mock_cfg: MockConfig,
         pd_client: Option<Arc<dyn pd_client::PdClient>>,
+        proxy_cfg: &ProxyConfig,
     ) -> (FFIHelperSet, TikvConfig) {
         // We must allocate on heap to avoid move.
+
+        let proxy_config_str = serde_json::to_string(proxy_cfg).unwrap_or_default();
         let proxy = Box::new(engine_store_ffi::ffi::RaftStoreProxy::new(
             AtomicU8::new(RaftProxyStatus::Idle as u8),
             key_mgr.clone(),
@@ -96,6 +99,7 @@ impl ClusterExt {
             },
             None,
             pd_client,
+            proxy_config_str,
         ));
 
         let proxy_ref = proxy.as_ref();
@@ -163,6 +167,7 @@ impl ClusterExt {
             cluster_ext_ptr,
             mock_cfg,
             pd_client,
+            proxy_cfg,
         );
 
         // We can not use moved or cloned engines any more.

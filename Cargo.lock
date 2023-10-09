@@ -3587,6 +3587,7 @@ dependencies = [
  "resource_control",
  "resource_metering",
  "security",
+ "serde_json",
  "server",
  "service",
  "slog",
@@ -4674,6 +4675,7 @@ dependencies = [
 name = "proxy_ffi"
 version = "0.0.1"
 dependencies = [
+ "collections",
  "encryption",
  "engine_rocks",
  "engine_test",
@@ -4690,6 +4692,7 @@ dependencies = [
  "raftstore",
  "reqwest",
  "rocksdb",
+ "serde_json",
  "slog",
  "slog-global",
  "tikv_util",
@@ -4835,6 +4838,8 @@ dependencies = [
  "rand_xorshift",
  "resource_metering",
  "security",
+ "serde",
+ "serde_derive",
  "serde_json",
  "slog",
  "slog-global",
