@@ -723,4 +723,61 @@ mod tests {
             assert!(cache.size() <= 42);
         }
     }
+
+    #[test]
+    fn test_get_no_promote() {
+        let mut cache = LruCache::with_capacity_sample_and_trace(3, 0, CountTracker);
+        cache.insert(1, 1);
+        cache.insert(2, 2);
+        cache.insert(3, 3);
+        assert_eq!(cache.size(), 3);
+        assert_eq!(cache.get_no_promote(&1).unwrap(), 1);
+        cache.insert(4, 4);
+        assert_eq!(cache.size(), 3);
+        // Key 1 is not promoted, so it's popped out first.
+        assert!(cache.get_no_promote(&1).is_none());
+        // Other entries are not affected.
+        assert!(cache.get_no_promote(&2).is_none());
+        assert!(cache.get_no_promote(&3).is_none());
+        assert!(cache.get_no_promote(&4).is_none());
+    }
+
+    #[test]
+    fn test_insert_if_not_exist() {
+        let mut cache = LruCache::with_capacity_sample_and_trace(4, 0, CountTracker);
+        cache.insert_if_not_exist(1, 1);
+        cache.insert_if_not_exist(2, 2);
+        cache.insert_if_not_exist(3, 3);
+        assert_eq!(cache.size(), 3);
+        assert_eq!(cache.get_no_promote(&1).unwrap(), 1);
+        assert_eq!(cache.get_no_promote(&2).unwrap(), 2);
+        assert_eq!(cache.get_no_promote(&3).unwrap(), 3);
+
+        cache.insert_if_not_exist(1, 11);
+        // Not updated.
+        assert_eq!(cache.get_no_promote(&1).unwrap(), 1);
+
+        cache.insert_if_not_exist(4, 4);
+        cache.insert_if_not_exist(2, 22);
+        // Not updated.
+        assert_eq!(cache.get_no_promote(&2).unwrap(), 2);
+
+        assert_eq!(cache.size(), 4);
+        cache.insert_if_not_exist(5, 5);
+        assert_eq!(cache.size(), 4);
+        // key 1 is not promoted, so it's first popped out.
+        assert!(cache.get_no_promote(&1).is_none());
+        assert_eq!(cache.get_no_promote(&2).unwrap(), 2);
+
+        cache.insert_if_not_exist(6, 6);
+        assert_eq!(cache.size(), 4);
+        // key 2 is not promoted either, so it's first popped out.
+        assert!(cache.get_no_promote(&2).is_none());
+        assert_eq!(cache.get_no_promote(&3).unwrap(), 3);
+
+        cache.insert_if_not_exist(7, 7);
+        assert_eq!(cache.size(), 4);
+        assert!(cache.get_no_promote(&3).is_none());
+        assert_eq!(cache.get_no_promote(&4).unwrap(), 4);
+    }
 }

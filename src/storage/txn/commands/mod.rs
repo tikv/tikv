@@ -422,11 +422,11 @@ pub struct WriteResult {
     pub new_acquired_locks: Vec<LockInfo>,
     pub lock_guards: Vec<KeyHandleGuard>,
     pub response_policy: ResponsePolicy,
-    /// The txn status that can be inferred by the successful writing. This will be used
-    /// to update the cache.
+    /// The txn status that can be inferred by the successful writing. This will
+    /// be used to update the cache.
     ///
-    /// Currently only commit_ts of committed transactions will be collected. Rolled-back
-    /// transactions may also be collected in the future.
+    /// Currently only commit_ts of committed transactions will be collected.
+    /// Rolled-back transactions may also be collected in the future.
     pub known_txn_status: Vec<(TimeStamp, TimeStamp)>,
 }
 
