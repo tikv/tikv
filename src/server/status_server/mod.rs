@@ -3,7 +3,6 @@
 /// Provides profilers for TiKV.
 mod profile;
 use std::{
-    borrow::Cow,
     env::{args, current_exe},
     error::Error as StdError,
     net::SocketAddr,
@@ -42,7 +41,6 @@ use openssl::{
     x509::X509,
 };
 use pin_project::pin_project;
-use proc_maps::linux_maps::{get_process_maps, Pid};
 pub use profile::{
     activate_heap_profile, deactivate_heap_profile, heap_profiles_dir, jeprof_heap_profile,
     list_heap_profiles, read_file, start_one_cpu_profile, start_one_heap_profile,
@@ -356,18 +354,20 @@ where
                     info!("invalid addr: {}", addr);
                     continue;
                 }
-            
+
                 // Would be multiple symbols if inlined.
                 let mut syms = vec![];
-                backtrace::resolve(addr as * mut std::ffi::c_void, |sym| {
-                    let name = sym.name().unwrap_or(backtrace::SymbolName::new(b"<unknown>"));
+                backtrace::resolve(addr as *mut std::ffi::c_void, |sym| {
+                    let name = sym
+                        .name()
+                        .unwrap_or(backtrace::SymbolName::new(b"<unknown>"));
                     syms.push(name.to_string());
                 });
 
                 if !syms.is_empty() {
-                    let f = syms.join("--"); // join inline functions with '--'
+                    // join inline functions with '--'
+                    let f = syms.join("--");
                     // should be <hex address> <function name>
-                    info!("resolve: {:#x} {}", addr, f);
                     text.push_str(format!("{:#x} {}\n", addr, f).as_str());
                 } else {
                     info!("can't resolve mapped addr: {:#x}", addr);
@@ -1739,7 +1739,6 @@ mod tests {
 
     #[test]
     fn test_pprof_symbol_service() {
-        test_util::init_log_for_test();
         let _test_guard = TEST_PROFILE_MUTEX.lock().unwrap();
         let temp_dir = tempfile::TempDir::new().unwrap();
         let mut status_server = StatusServer::new(
@@ -1756,6 +1755,13 @@ mod tests {
         let _ = status_server.start(addr);
         let client = Client::new();
 
+        let mut addr = None;
+        backtrace::trace(|f| {
+            addr = Some(f.ip());
+            false
+        });
+        assert!(addr.is_some());
+
         let uri = Uri::builder()
             .scheme("http")
             .authority(status_server.listening_addr().to_string().as_str())
@@ -1765,17 +1771,21 @@ mod tests {
         let req = Request::builder()
             .method(Method::POST)
             .uri(uri)
-            .body(Body::from("0x0000000000b72b46+0x000055ffb1fbbb46+0x000055ffb294cfdf+0x000055ffb2a4e952+0x000055ffb2b666df+0x000055ffb2b6755d+0x000055ffb2ec7052+0x000055ffb2ef13e3+0x000055ffb2fc0b00+0x000055ffb2fc1d54+0x000055ffb2fc4011+0x000055ffb2fc5080+0x000055ffb31e0925+0x000055ffb32661dd+0x000055ffb326a21d+0x000055ffb34c04c0+0x000055ffb34cb446+0x000055ffb36cd37f+0x000055ffb36f1cd4+0x000055ffb378004c+0x000055ffb37a13dc+0x000055ffb37a3fbc+0x000055ffb3941db5+0x000055ffb394abd5+0x000055ffb398cc1d+0x000055ffb398cf8d+0x000055ffb3a2e04c+0x000055ffb3a2f2f0+0x000055ffb3d3960c+0x000055ffb422166f+0x000055ffb459c8d6+0x000055ffb45ce7bc+0x000055ffb46b691d+0x000055ffb46d4a4d+0x000055ffb497f538+0x000055ffb510a14d+0x000055ffb510abb9+0x000055ffb510d827+0x000055ffb5116524+0x000055ffb513ac91+0x000055ffb52481da+0x000055ffb53fa82d+0x000055ffb53fd497+0x000055ffb5400795+0x000055ffb5404b4f+0x000055ffb54772b3+0x000055ffb5484bf0+0x000055ffb54851d0+0x00007f5fe05af132+0x00007f5fe07d960"))
-            .expect("request builder");
+            .body(Body::from(format!("{:p}", addr.unwrap())))
+            .unwrap();
         let handle = status_server
             .thread_pool
             .spawn(async move { client.request(req).await.unwrap() });
         let resp = block_on(handle).unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
         let body_bytes = block_on(hyper::body::to_bytes(resp.into_body())).unwrap();
-        println!(
-            "{}",
-            String::from_utf8(body_bytes.as_ref().to_owned()).unwrap()
+        assert!(
+            String::from_utf8(body_bytes.as_ref().to_owned())
+                .unwrap()
+                .split(' ')
+                .last()
+                .unwrap()
+                .starts_with("backtrace::backtrace")
         );
         status_server.stop();
     }
