@@ -91,7 +91,7 @@ impl Config {
             let secret_access_key = attrs.get("secret_access_key").unwrap_or(def).clone();
             let session_token = attrs
                 .get("session_token")
-                .map_or(None, |x| StringNonEmpty::opt(x.to_string()));
+                .and_then(|x| StringNonEmpty::opt(x.to_string()));
             Some(AccessKeyPair {
                 access_key: StringNonEmpty::required_field(access_key.clone(), "access_key")?,
                 secret_access_key: StringNonEmpty::required_field(
