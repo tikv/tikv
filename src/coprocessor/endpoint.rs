@@ -419,11 +419,9 @@ impl<E: Engine> Endpoint<E> {
         let snapshot =
             unsafe { with_tls_engine(|engine| Self::async_snapshot(engine, &tracker.req_ctx)) }
                 .await?;
-        let latest_buckets: Option<Arc<pd_client::BucketMeta>> = snapshot.ext().get_buckets();
+        let latest_buckets = snapshot.ext().get_buckets();
 
-        // Check if the buckets version is latest.
-        // skip if request don't carry this bucket version.
-        valid_copr_key_range(&tracker.req_ctx, latest_buckets)?;
+        check_request_key_range(&tracker.req_ctx, latest_buckets.clone())?;
 
         // When snapshot is retrieved, deadline may exceed.
         tracker.on_snapshot_finished();
@@ -803,12 +801,12 @@ impl<E: Engine> Endpoint<E> {
     }
 }
 
-// valid_copr_key_range return false iif the request key range cross two or more
-// buckets.
-fn valid_copr_key_range(
+// check_request_key_range return error iif the request key range cross two or
+// more buckets.
+fn check_request_key_range(
     req_ctx: &ReqContext,
     buckets: Option<Arc<pd_client::BucketMeta>>,
-) ->std::result::Result<()> {
+) -> std::result::Result<(), Error> {
     if buckets.is_none() {
         return Ok(());
     }
@@ -817,25 +815,26 @@ fn valid_copr_key_range(
     if request_bucket_version == 0 || request_bucket_version >= latest_buckets.version {
         return Ok(());
     }
+
+    // check the request key range cross two or more buckets.
     let start_key = txn_types::Key::from_raw(&req_ctx.lower_bound);
     let end_key = txn_types::Key::from_raw(&req_ctx.upper_bound);
     let first_index = find_bucket_index(start_key.as_encoded(), &latest_buckets.keys);
     let last_index = find_bucket_index(end_key.as_encoded(), &latest_buckets.keys);
-    let mut cross_buckets=false;
+    let mut cross_buckets = true;
     if let (Some(first_index), Some(last_index)) = (first_index, last_index) {
-        cross_buckets= first_index + 1 >= last_index;
+        cross_buckets = last_index - first_index >= 2;
     }
-    if cross_buckets{
-        return Ok(())
+    if cross_buckets {
+        let mut bucket_not_match = errorpb::BucketVersionNotMatch::default();
+        bucket_not_match.set_version(latest_buckets.version);
+        bucket_not_match.set_keys(latest_buckets.keys.clone().into());
+        let mut err = errorpb::Error::default();
+        err.set_bucket_version_not_match(bucket_not_match);
+        return Err(Error::Region(err));
     }
-    let mut bucket_not_match = errorpb::BucketVersionNotMatch::default();
-    bucket_not_match.set_version(latest_buckets.version);
-    bucket_not_match.set_keys(latest_buckets.keys.clone().into());
-    let mut err = errorpb::Error::default();
-    err.set_bucket_version_not_match(bucket_not_match);
-    Err(Error::Region(err))
+    Ok(())
 }
-
 
 fn make_error_batch_response(batch_resp: &mut coppb::StoreBatchTaskResponse, e: Error) {
     warn!(
@@ -2040,5 +2039,68 @@ mod tests {
 
         let resp = block_on(copr.parse_and_handle_unary_request(req, None));
         assert_eq!(resp.get_locked().get_key(), b"key");
+    }
+
+    #[test]
+    fn test_check_request_key_range() {
+        let mut context = kvrpcpb::Context::default();
+        context.set_region_id(1);
+        context.set_buckets_version(2);
+        let ranges = vec![];
+        let mut req_ctx = ReqContext::new(
+            ReqTag::select,
+            context,
+            ranges,
+            Duration::from_secs(0),
+            None,
+            None,
+            TimeStamp::max(),
+            None,
+            PerfLevel::EnableCount,
+        );
+
+        let mut bucket_meta = pd_client::BucketMeta::default();
+        bucket_meta.region_id = 1;
+        bucket_meta.version = 3;
+        bucket_meta.keys = vec![
+            vec![
+                116, 128, 0, 0, 0, 0, 0, 0, 255, 179, 95, 114, 128, 0, 0, 0, 0, 255, 0, 175, 155,
+                0, 0, 0, 0, 0, 250,
+            ],
+            vec![
+                116, 128, 0, 255, 255, 255, 255, 255, 255, 253, 0, 0, 0, 0, 0, 0, 0, 248,
+            ],
+            vec![
+                116, 128, 0, 255, 255, 255, 255, 255, 255, 254, 0, 0, 0, 0, 0, 0, 0, 248,
+            ],
+        ];
+        let mut row_keys = vec![];
+        for key in bucket_meta.keys.iter() {
+            row_keys.push(
+                txn_types::Key::from_encoded(key.clone())
+                    .into_raw()
+                    .unwrap(),
+            );
+        }
+
+        // request key range not in bucket range
+        let buckets = Some(Arc::new(bucket_meta));
+        check_request_key_range(&req_ctx, buckets.clone()).unwrap_err();
+
+        // request key range cross two bucket range
+        req_ctx.lower_bound = row_keys.get(0).unwrap().to_vec();
+        req_ctx.upper_bound = row_keys.get(2).unwrap().to_vec();
+        check_request_key_range(&req_ctx, buckets.clone()).unwrap_err();
+
+        // request key range in bucket range
+        req_ctx.lower_bound = row_keys.get(0).unwrap().to_vec();
+        req_ctx.upper_bound = row_keys.get(1).unwrap().to_vec();
+        check_request_key_range(&req_ctx, buckets.clone()).unwrap();
+
+        // request buckets version is not less than the current bucket version
+        req_ctx.upper_bound = vec![];
+        req_ctx.lower_bound = vec![];
+        req_ctx.context.buckets_version = 3;
+        check_request_key_range(&req_ctx, buckets).unwrap();
     }
 }
