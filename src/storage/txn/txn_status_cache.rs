@@ -95,7 +95,7 @@
 //! read requests, it can check the cache to know whether it can read from the
 //! lock; and for write requests, if it finds the transaction of that lock is
 //! already committed, it can merge together the resolve-lock-committing and the
-//! write operation that the request need to perform.
+//! write operation that the request needs to perform.
 
 use std::{
     sync::{atomic::AtomicU64, Arc},
@@ -128,6 +128,9 @@ struct CacheEntry {
     insert_time: u64,
 }
 
+/// Defines the policy to evict expired entries from the cache.
+/// [`TxnStatusCache`] needs to keep entries for a while, so the common
+/// policy that only limiting capacity is not proper to be used here.
 struct TxnStatusCacheEvictPolicy {
     limit_millis: u64,
     #[allow(dead_code)]
@@ -141,10 +144,12 @@ impl TxnStatusCacheEvictPolicy {
         SystemTime::now()
     }
 
-    /// The
+    /// When used in tests, the system time can be simulated by controlling the
+    /// field `simulated_system_time`.
     #[inline]
     #[cfg(test)]
     fn now(&self) -> SystemTime {
+        // Always get the system time to simulate the latency.
         let now = SystemTime::now();
         if let Some(pseudo_system_time) = &self.simulated_system_time {
             UNIX_EPOCH
@@ -168,6 +173,8 @@ impl lru::EvictPolicy<TimeStamp, CacheEntry> for TxnStatusCacheEvictPolicy {
             return false;
         }
 
+        // See how much time has been elapsed since the tail entry is inserted.
+        // If it's long enough, remove it.
         if let Some((_, v)) = get_tail_kv.get_tail_kv() {
             self.now().duration_since(UNIX_EPOCH).unwrap().as_millis() as u64
                 > self.limit_millis + v.insert_time
@@ -183,6 +190,18 @@ struct TxnStatusCacheSlot {
     last_check_capacity: usize,
 }
 
+/// The cache for storing transaction status. It holds recent
+/// `start_ts` -> `commit_ts` pairs for a while, which can be useful for quickly
+/// but not strictly determining transaction status.
+///
+/// `TxnStatusCache` is divided into several slots
+/// to make the lock more fine-grained. Each slot uses an [`LruCache`] as the
+/// internal implementation, with customized evict policy. However, we do not
+/// always adopt the LRU behavior. Some operation to an existing entry in the
+/// cache won't promote it to the most-recent place.
+///
+/// Note that the `TxnStatusCache` updates metrics in some operations assuming
+/// there's at most one instance of `TxnStatusCache` in a process.
 pub struct TxnStatusCache {
     slots: Vec<CachePadded<Mutex<TxnStatusCacheSlot>>>,
 }
@@ -241,6 +260,12 @@ impl TxnStatusCache {
         Self::new_impl(slots, limit_millis, None)
     }
 
+    /// Create a `TxnStatusCache` instance for test purpose, with simulating
+    /// system time enabled. This helps when testing functionalities that are
+    /// related to system time.
+    ///
+    /// An `AtomicU64` will be returned. Store timestamps
+    /// in milliseconds in it to control the time.
     #[cfg(test)]
     fn with_simulated_system_time(slots: usize, limit_millis: u64) -> (Self, Arc<AtomicU64>) {
         let system_time = Arc::new(AtomicU64::new(0));
@@ -252,6 +277,12 @@ impl TxnStatusCache {
         fxhash::hash(&start_ts) % self.slots.len()
     }
 
+    /// Insert a transaction status into the cache. The current system should
+    /// be passed from outside to avoid getting system time repeatedly when
+    /// multiple items is being inserted.
+    ///
+    /// If the transaction's information is already in the cache, it will
+    /// **NOT** be promoted to the most-recent place of the internal LRU.
     pub fn insert(&self, start_ts: TimeStamp, commit_ts: TimeStamp, now: SystemTime) {
         let mut slot = self.slots[self.slot_index(start_ts)].lock();
         let insert_time = now.duration_since(UNIX_EPOCH).unwrap().as_millis() as u64;
@@ -276,6 +307,8 @@ impl TxnStatusCache {
         slot.last_check_capacity = capacity;
     }
 
+    /// Try to get an item from the cache, without promoting the item (if
+    /// exists) to the most recent place.
     pub fn get_no_promote(&self, start_ts: TimeStamp) -> Option<TimeStamp> {
         let slot = self.slots[self.slot_index(start_ts)].lock();
         slot.cache
@@ -295,7 +328,6 @@ mod tests {
     };
 
     use rand::Rng;
-    use test::Bencher;
 
     use super::*;
 
@@ -303,6 +335,8 @@ mod tests {
         let (c, time) =
             TxnStatusCache::with_simulated_system_time(TXN_STATUS_CACHE_SLOTS, init_size as u64);
         let start_time = SystemTime::now();
+        // Spread these items evenly in a specific time limit, so that every time
+        // a new item is inserted, an item will be popped out.
         for i in 1..=init_size {
             c.insert(
                 (i as u64).into(),
@@ -312,15 +346,19 @@ mod tests {
         }
         let mut current_time_shift = (init_size + 1) as u64;
         b.iter(|| {
-            let now = start_time + Duration::from_millis(current_time_shift);
+            let simulated_now = start_time + Duration::from_millis(current_time_shift);
+            // Simulate the system time advancing.
             time.store(
-                now.duration_since(UNIX_EPOCH).unwrap().as_millis() as u64,
+                simulated_now
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap()
+                    .as_millis() as u64,
                 Ordering::Release,
             );
             c.insert(
                 current_time_shift.into(),
                 (current_time_shift + 1).into(),
-                now,
+                simulated_now,
             );
             current_time_shift += 1;
         });
@@ -350,28 +388,27 @@ mod tests {
 
     #[bench]
     fn bench_insert_empty(b: &mut test::Bencher) {
-        // 120ns/iter
         bench_insert_impl(b, 0);
     }
 
     #[bench]
     fn bench_insert_100000(b: &mut test::Bencher) {
-        // 132ns/iter
         bench_insert_impl(b, 100000);
     }
 
     #[bench]
     fn bench_get_empty(b: &mut test::Bencher) {
-        // 25ns/iter
         bench_get_impl(b, 0);
     }
 
     #[bench]
     fn bench_get_100000(b: &mut test::Bencher) {
-        // 35ns/iter
         bench_get_impl(b, 100000);
     }
 
+    /// A simple statistic tool for collecting a set of data and calculating the
+    /// average, stddev, and percentiles (by using a linear histogram).
+    /// Data is collected in u128, and results are given in f64.
     struct SimpleStatistics {
         sum: u128,
         sum_square: u128,
@@ -391,7 +428,8 @@ mod tests {
             }
         }
 
-        fn add(&mut self, other: &Self) {
+        /// Merge another instance into the current one
+        fn add(&mut self, other: Self) {
             self.sum += other.sum;
             self.sum_square += other.sum_square;
             self.count += other.count;
@@ -415,6 +453,8 @@ mod tests {
             (sum_sqr_diff / (self.count - 1) as f64).sqrt()
         }
 
+        /// Calculate the percentile value at specified position (should be in
+        /// range [0, 1])
         fn percentile(&self, percentile: f64) -> f64 {
             let mut bucket = self.buckets.len();
             let mut prefix_sum = self.count;
@@ -449,15 +489,13 @@ mod tests {
         }
     }
 
-    // As it seems neither rust's builtin test framework nor criterion supports
-    // benchmarking concurrent operations, we use a test to simulate it, and
-    // ignore it by default. Remember to pass --nocapture to get the output.
     fn bench_concurrent_impl<T>(
         name: &str,
         threads: usize,
         function: impl Fn(u64) -> T + Send + Sync + 'static,
     ) {
         let start_time = Instant::now();
+        // Run the benchmark code repeatedly for 10 seconds.
         const TIME_LIMIT: Duration = Duration::from_secs(10);
         let iteration = Arc::new(AtomicU64::new(0));
 
@@ -487,7 +525,7 @@ mod tests {
 
         let mut total_stats = SimpleStatistics::new(20);
         for h in handles {
-            total_stats.add(&h.join().unwrap());
+            total_stats.add(h.join().unwrap());
         }
 
         println!(
@@ -554,8 +592,16 @@ mod tests {
     }
 
     #[bench]
-    // #[ignore]
-    fn test_bench_txn_status_cache_concurrent(_b: &mut Bencher) {
+    #[ignore]
+    fn test_bench_txn_status_cache_concurrent(_b: &mut test::Bencher) {
+        // This case is implemented to run the concurrent benchmark in a handy way
+        // just like running other normal benchmarks. However, it doesn't seem
+        // to be possible to benchmark an operation in concurrent way by using
+        // either the built-in bencher or criterion.
+        // Here we test it in our own way without using the built-in bencher,
+        // and output the result by stdout.
+        // When you need to run this benchmark, comment out the `#[ignore]` and
+        // add --nocapture in your benchmark command line to get the result.
         bench_txn_status_cache_concurrent_impl(16, 10000, false, false);
         bench_txn_status_cache_concurrent_impl(16, 10000, true, false);
         bench_txn_status_cache_concurrent_impl(16, 10000, false, true);
