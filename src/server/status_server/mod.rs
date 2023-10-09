@@ -312,7 +312,7 @@ where
     async fn get_cmdline(_req: Request<Body>) -> hyper::Result<Response<Body>> {
         let args = args().into_iter().fold(String::new(), |mut a, b| {
             a.push_str(&b);
-            a.push_str("\x00");
+            a.push('\x00');
             a
         });
         let response = Response::builder()
@@ -361,7 +361,7 @@ where
             backtrace::resolve(addr as *mut std::ffi::c_void, |sym| {
                 let name = sym
                     .name()
-                    .unwrap_or(backtrace::SymbolName::new(b"<unknown>"));
+                    .unwrap_or_else(|| backtrace::SymbolName::new(b"<unknown>"));
                 syms.push(name.to_string());
             });
 
