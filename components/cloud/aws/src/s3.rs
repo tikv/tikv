@@ -221,53 +221,63 @@ impl S3Storage {
         Ok(S3Storage { config, client })
     }
 
+    fn maybe_assume_role<P, D>(
+        config: Config,
+        cred_provider: P,
+        dispatcher: D,
+    ) -> io::Result<S3Storage>
+    where
+        P: ProvideAwsCredentials + Send + Sync + 'static,
+        D: DispatchSignedRequest + Send + Sync + 'static,
+    {
+        if let Some(role_arn) = config.role_arn.clone() {
+            // try use role arn anyway with current creds when it's not nil.
+            let bucket_region = none_to_empty(config.bucket.region.clone());
+            let bucket_endpoint = config.bucket.endpoint.clone();
+            let region = util::get_region(&bucket_region, &none_to_empty(bucket_endpoint))?;
+            // cannot use the same dispatcher because of move, so use another http client.
+            let sts = StsClient::new_with(util::new_http_client()?, cred_provider, region);
+            let duration_since_epoch = SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .unwrap();
+            let timestamp_secs = duration_since_epoch.as_secs();
+            let cred_provider = StsAssumeRoleSessionCredentialsProvider::new(
+                sts,
+                none_to_empty(Some(role_arn)),
+                format!("{}", timestamp_secs),
+                config.external_id.clone().as_deref_mut().map(|e| e.clone()),
+                // default duration is 15min
+                None,
+                None,
+                None,
+            );
+            Self::new_creds_dispatcher(config, dispatcher, cred_provider)
+        } else {
+            // or just use original cred_provider to access s3.
+            Self::new_creds_dispatcher(config, dispatcher, cred_provider)
+        }
+    }
+
     pub fn with_request_dispatcher<D>(config: Config, dispatcher: D) -> io::Result<S3Storage>
     where
         D: DispatchSignedRequest + Send + Sync + 'static,
     {
         // static credentials are used with minio
-        match (&config.access_key_pair, &config.role_arn) {
-            // ak/sk has the highiest prority
-            (Some(access_key_pair), None) => {
-                let cred_provider = StaticProvider::new(
-                    (*access_key_pair.access_key).to_owned(),
-                    (*access_key_pair.secret_access_key).to_owned(),
-                    access_key_pair
-                        .session_token
-                        .to_owned()
-                        .as_deref_mut()
-                        .map(|s| s.clone()),
-                    None,
-                );
-                Self::new_creds_dispatcher(config, dispatcher, cred_provider)
-            }
-            (None, role_arn) => {
-                // try assume role if it's not nil
-                let bucket_region = none_to_empty(config.bucket.region.clone());
-                let bucket_endpoint = config.bucket.endpoint.clone();
-                let region = util::get_region(&bucket_region, &none_to_empty(bucket_endpoint))?;
-                let sts = StsClient::new(region);
-                let duration_since_epoch = SystemTime::now()
-                    .duration_since(SystemTime::UNIX_EPOCH)
-                    .unwrap();
-                let timestamp_secs = duration_since_epoch.as_secs();
-                let cred_provider = StsAssumeRoleSessionCredentialsProvider::new(
-                    sts,
-                    none_to_empty(role_arn.clone()),
-                    format!("{}", timestamp_secs),
-                    config.external_id.clone().as_deref_mut().map(|e| e.clone()),
-                    // default duration is 15min
-                    None,
-                    None,
-                    None,
-                );
-                Self::new_creds_dispatcher(config, dispatcher, cred_provider)
-            }
-            _ => {
-                // default credentials from env
-                let cred_provider = util::CredentialsProvider::new()?;
-                Self::new_creds_dispatcher(config, dispatcher, cred_provider)
-            }
+        if let Some(access_key_pair) = &config.access_key_pair {
+            let cred_provider = StaticProvider::new(
+                (*access_key_pair.access_key).to_owned(),
+                (*access_key_pair.secret_access_key).to_owned(),
+                access_key_pair
+                    .session_token
+                    .to_owned()
+                    .as_deref_mut()
+                    .map(|s| s.clone()),
+                None,
+            );
+            Self::maybe_assume_role(config, cred_provider, dispatcher)
+        } else {
+            let cred_provider = util::CredentialsProvider::new()?;
+            Self::maybe_assume_role(config, cred_provider, dispatcher)
         }
     }
 
