@@ -258,12 +258,16 @@ where
         self.trace.clear();
         self.size_policy.on_reset(0);
     }
+
+    /// Get the capacity limited on the `LruCache`.
     #[inline]
     pub fn capacity(&self) -> usize {
         self.capacity
     }
+
+    /// Get the capacity actually allocated by the internal data structure.
     #[inline]
-    pub fn internal_mem_capacity(&self) -> usize {
+    pub fn internal_allocated_capacity(&self) -> usize {
         self.map.capacity()
     }
 }
@@ -352,6 +356,8 @@ where
         self.insert_impl(key, value, true);
     }
 
+    /// Insert an entry if the key doesn't exist before. The existing entry
+    /// won't be replaced and won't be promoted to the most-recent place.
     #[inline]
     pub fn insert_if_not_exist(&mut self, key: K, value: V) {
         self.insert_impl(key, value, false);
@@ -378,6 +384,7 @@ where
         }
     }
 
+    /// Get an item by key without promoting the item.
     #[inline]
     pub fn get_no_promote(&self, key: &K) -> Option<&V> {
         self.map.get(key).map(|v| &v.value)

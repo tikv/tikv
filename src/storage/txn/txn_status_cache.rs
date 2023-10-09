@@ -227,7 +227,7 @@ impl TxnStatusCache {
                             simulated_system_time: simulated_system_time.clone(),
                         },
                     );
-                    let capacity = cache.internal_mem_capacity();
+                    let capacity = cache.internal_allocated_capacity();
                     initial_capacity += capacity;
                     Mutex::new(TxnStatusCacheSlot {
                         cache,
@@ -294,7 +294,7 @@ impl TxnStatusCache {
             },
         );
         let size = slot.cache.size();
-        let capacity = slot.cache.internal_mem_capacity();
+        let capacity = slot.cache.internal_allocated_capacity();
         // Update statistics.
         // CAUTION: Assuming that only one TxnStatusCache instance is in a TiKV process.
         SCHED_TXN_STATUS_CACHE_SIZE
@@ -455,17 +455,17 @@ mod tests {
 
         /// Calculate the percentile value at specified position (should be in
         /// range [0, 1])
-        fn percentile(&self, percentile: f64) -> f64 {
+        fn percentile(&self, position: f64) -> f64 {
             let mut bucket = self.buckets.len();
             let mut prefix_sum = self.count;
             while bucket > 0 {
                 bucket -= 1;
                 prefix_sum -= self.buckets[bucket];
                 let prefix_percentile = prefix_sum as f64 / self.count as f64;
-                if prefix_percentile <= percentile {
-                    assert_le!(prefix_sum as f64, percentile * self.count as f64);
+                if prefix_percentile <= position {
+                    assert_le!(prefix_sum as f64, position * self.count as f64);
                     assert_lt!(
-                        percentile * self.count as f64,
+                        position * self.count as f64,
                         (prefix_sum + self.buckets[bucket]) as f64
                     );
                     break;
@@ -473,7 +473,7 @@ mod tests {
             }
 
             bucket as f64 * self.bucket_width as f64
-                + (percentile * self.count as f64 - prefix_sum as f64) * self.bucket_width as f64
+                + (position * self.count as f64 - prefix_sum as f64) * self.bucket_width as f64
                     / self.buckets[bucket] as f64
         }
 
