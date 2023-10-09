@@ -3,9 +3,10 @@
 use std::{marker::PhantomData, sync::Arc, time::Duration};
 
 use engine_traits::{KvEngine, CF_DEFAULT, CF_WRITE};
+use futures::executor::block_on;
 use kvproto::{kvrpcpb::ExtraOp, metapb::Region, raft_cmdpb::CmdType};
 use raftstore::{
-    coprocessor::ObserveHandle,
+    coprocessor::{ObserveHandle, RegionInfoProvider},
     router::CdcHandle,
     store::{fsm::ChangeObserver, Callback},
 };
@@ -20,16 +21,22 @@ use tikv_util::{
     time::{Instant, Limiter},
     worker::Scheduler,
 };
-use tokio::sync::{OwnedSemaphorePermit, Semaphore};
+use tokio::{
+    runtime::Handle,
+    sync::{OwnedSemaphorePermit, Semaphore},
+};
 use txn_types::{Key, Lock, TimeStamp};
 
 use crate::{
     annotate, debug,
+    endpoint::ObserveOp,
     errors::{ContextualResultExt, Error, Result},
     metrics,
     router::{ApplyEvent, ApplyEvents, Router},
     subscription_track::{Ref, RefMut, SubscriptionTracer, TwoPhaseResolver},
-    utils, Task,
+    try_send,
+    utils::{self, RegionPager},
+    Task,
 };
 
 const MAX_GET_SNAPSHOT_RETRY: usize = 5;
@@ -53,12 +60,10 @@ impl PendingMemoryQuota {
         Self(Arc::new(Semaphore::new(quota)))
     }
 
-    pub async fn pending(&self, size: usize) -> PendingMemory {
+    pub fn pending(&self, size: usize) -> PendingMemory {
         PendingMemory(
-            self.0
-                .clone()
-                .acquire_many_owned(size as _)
-                .await
+            Handle::current()
+                .block_on(self.0.clone().acquire_many_owned(size as _))
                 .expect("BUG: the semaphore is closed unexpectedly."),
         )
     }
@@ -170,108 +175,57 @@ impl<S: Snapshot> EventLoader<S> {
 }
 
 /// The context for loading incremental data between range.
-/// Like [`cdc::Initializer`].
+/// Like [`cdc::Initializer`], but supports initialize over range.
 /// Note: maybe we can merge those two structures?
+/// Note': maybe extract more fields to trait so it would be easier to test.
 #[derive(Clone)]
-pub struct InitialDataLoader<E: KvEngine, H> {
+pub struct InitialDataLoader<E, R, RT> {
     // Note: maybe we can make it an abstract thing like `EventSink` with
     //       method `async (KvEvent) -> Result<()>`?
     pub(crate) sink: Router,
     pub(crate) tracing: SubscriptionTracer,
     pub(crate) scheduler: Scheduler<Task>,
-
+    // Note: this is only for `init_range`, maybe make it an argument?
+    pub(crate) regions: R,
+    // Note: Maybe move those fields about initial scanning into some trait?
+    pub(crate) router: RT,
     pub(crate) quota: PendingMemoryQuota,
     pub(crate) limit: Limiter,
-    // If there are too many concurrent initial scanning, the limit of disk speed or pending memory
-    // quota will probably be triggered. Then the whole scanning will be pretty slow. And when
-    // we are holding a iterator for a long time, the memtable may not be able to be flushed.
-    // Using this to restrict the possibility of that.
-    concurrency_limit: Arc<Semaphore>,
 
-    cdc_handle: H,
-
+    pub(crate) handle: Handle,
     _engine: PhantomData<E>,
 }
 
-impl<E, H> InitialDataLoader<E, H>
+impl<E, R, RT> InitialDataLoader<E, R, RT>
 where
     E: KvEngine,
-    H: CdcHandle<E> + Sync,
+    R: RegionInfoProvider + Clone + 'static,
+    RT: CdcHandle<E>,
 {
     pub fn new(
+        router: RT,
+        regions: R,
         sink: Router,
         tracing: SubscriptionTracer,
         sched: Scheduler<Task>,
         quota: PendingMemoryQuota,
+        handle: Handle,
         limiter: Limiter,
-        cdc_handle: H,
-        concurrency_limit: Arc<Semaphore>,
     ) -> Self {
         Self {
+            router,
+            regions,
             sink,
             tracing,
             scheduler: sched,
             _engine: PhantomData,
             quota,
-            cdc_handle,
-            concurrency_limit,
+            handle,
             limit: limiter,
         }
     }
 
-    pub async fn capture_change(
-        &self,
-        region: &Region,
-        cmd: ChangeObserver,
-    ) -> Result<impl Snapshot> {
-        let (callback, fut) =
-            tikv_util::future::paired_future_callback::<std::result::Result<_, Error>>();
-
-        self.cdc_handle
-            .capture_change(
-                region.get_id(),
-                region.get_region_epoch().clone(),
-                cmd,
-                Callback::read(Box::new(|snapshot| {
-                    if snapshot.response.get_header().has_error() {
-                        callback(Err(Error::RaftRequest(
-                            snapshot.response.get_header().get_error().clone(),
-                        )));
-                        return;
-                    }
-                    if let Some(snap) = snapshot.snapshot {
-                        callback(Ok(snap));
-                        return;
-                    }
-                    callback(Err(Error::Other(box_err!(
-                        "PROBABLY BUG: the response contains neither error nor snapshot"
-                    ))))
-                })),
-            )
-            .context(format_args!(
-                "failed to register the observer to region {}",
-                region.get_id()
-            ))?;
-
-        let snap = fut
-            .await
-            .map_err(|err| {
-                annotate!(
-                    err,
-                    "message 'CaptureChange' dropped for region {}",
-                    region.id
-                )
-            })
-            .flatten()
-            .context(format_args!(
-                "failed to get initial snapshot: failed to get the snapshot (region_id = {})",
-                region.get_id(),
-            ))?;
-        // Note: maybe warp the snapshot via `RegionSnapshot`?
-        Ok(snap)
-    }
-
-    pub async fn observe_over_with_retry(
+    pub fn observe_over_with_retry(
         &self,
         region: &Region,
         mut cmd: impl FnMut() -> ChangeObserver,
@@ -279,7 +233,7 @@ where
         let mut last_err = None;
         for _ in 0..MAX_GET_SNAPSHOT_RETRY {
             let c = cmd();
-            let r = self.capture_change(region, c).await;
+            let r = self.observe_over(region, c);
             match r {
                 Ok(s) => {
                     return Ok(s);
@@ -311,12 +265,71 @@ where
                     if !can_retry {
                         break;
                     }
-                    tokio::time::sleep(Duration::from_secs(1)).await;
+                    std::thread::sleep(Duration::from_secs(1));
                     continue;
                 }
             }
         }
         Err(last_err.expect("BUG: max retry time exceed but no error"))
+    }
+
+    /// Start observe over some region.
+    /// This will register the region to the raftstore as observing,
+    /// and return the current snapshot of that region.
+    fn observe_over(&self, region: &Region, cmd: ChangeObserver) -> Result<impl Snapshot> {
+        // There are 2 ways for getting the initial snapshot of a region:
+        // - the BR method: use the interface in the RaftKv interface, read the
+        //   key-values directly.
+        // - the CDC method: use the raftstore message `SignificantMsg::CaptureChange`
+        //   to register the region to CDC observer and get a snapshot at the same time.
+        // Registering the observer to the raftstore is necessary because we should only
+        // listen events from leader. In CDC, the change observer is
+        // per-delegate(i.e. per-region), we can create the command per-region here too.
+
+        let (callback, fut) =
+            tikv_util::future::paired_future_callback::<std::result::Result<_, Error>>();
+
+        self.router
+            .capture_change(
+                region.get_id(),
+                region.get_region_epoch().clone(),
+                cmd,
+                Callback::read(Box::new(|snapshot| {
+                    if snapshot.response.get_header().has_error() {
+                        callback(Err(Error::RaftRequest(
+                            snapshot.response.get_header().get_error().clone(),
+                        )));
+                        return;
+                    }
+                    if let Some(snap) = snapshot.snapshot {
+                        callback(Ok(snap));
+                        return;
+                    }
+                    callback(Err(Error::Other(box_err!(
+                        "PROBABLY BUG: the response contains neither error nor snapshot"
+                    ))))
+                })),
+            )
+            .context(format_args!(
+                "failed to register the observer to region {}",
+                region.get_id()
+            ))?;
+
+        let snap = block_on(fut)
+            .map_err(|err| {
+                annotate!(
+                    err,
+                    "message 'CaptureChange' dropped for region {}",
+                    region.id
+                )
+            })
+            .flatten()
+            .context(format_args!(
+                "failed to get initial snapshot: failed to get the snapshot (region_id = {})",
+                region.get_id(),
+            ))?;
+        // Note: maybe warp the snapshot via `RegionSnapshot`?
+        Ok(snap)
     }
 
     fn with_resolver<T: 'static>(
@@ -368,7 +381,7 @@ where
         f(v.value_mut().resolver())
     }
 
-    async fn scan_and_async_send(
+    fn scan_and_async_send(
         &self,
         region: &Region,
         handle: &ObserveHandle,
@@ -406,8 +419,8 @@ where
             let sink = self.sink.clone();
             let event_size = events.size();
             let sched = self.scheduler.clone();
-            let permit = self.quota.pending(event_size).await;
-            self.limit.consume(disk_read as _).await;
+            let permit = self.quota.pending(event_size);
+            self.limit.blocking_consume(disk_read as _);
             debug!("sending events to router"; "size" => %event_size, "region" => %region_id);
             metrics::INCREMENTAL_SCAN_SIZE.observe(event_size as f64);
             metrics::INCREMENTAL_SCAN_DISK_READ.inc_by(disk_read as f64);
@@ -421,7 +434,7 @@ where
         }
     }
 
-    pub async fn do_initial_scan(
+    pub fn do_initial_scan(
         &self,
         region: &Region,
         // We are using this handle for checking whether the initial scan is stale.
@@ -429,25 +442,18 @@ where
         start_ts: TimeStamp,
         snap: impl Snapshot,
     ) -> Result<Statistics> {
+        let _guard = self.handle.enter();
         let tr = self.tracing.clone();
         let region_id = region.get_id();
 
         let mut join_handles = Vec::with_capacity(8);
 
-        let permit = self
-            .concurrency_limit
-            .acquire()
-            .await
-            .expect("BUG: semaphore closed");
         // It is ok to sink more data than needed. So scan to +inf TS for convenance.
         let event_loader = EventLoader::load_from(snap, start_ts, TimeStamp::max(), region)?;
-        let stats = self
-            .scan_and_async_send(region, &handle, event_loader, &mut join_handles)
-            .await?;
-        drop(permit);
+        let stats = self.scan_and_async_send(region, &handle, event_loader, &mut join_handles)?;
 
-        futures::future::try_join_all(join_handles)
-            .await
+        Handle::current()
+            .block_on(futures::future::try_join_all(join_handles))
             .map_err(|err| annotate!(err, "tokio runtime failed to join consuming threads"))?;
 
         Self::with_resolver_by(&tr, region, &handle, |r| {
@@ -460,6 +466,31 @@ where
         ))?;
 
         Ok(stats)
+    }
+
+    /// initialize a range: it simply scan the regions with leader role and send
+    /// them to [`initialize_region`].
+    pub fn initialize_range(&self, start_key: Vec<u8>, end_key: Vec<u8>) -> Result<()> {
+        let mut pager = RegionPager::scan_from(self.regions.clone(), start_key, end_key);
+        loop {
+            let regions = pager.next_page(8)?;
+            debug!("scanning for entries in region."; "regions" => ?regions);
+            if regions.is_empty() {
+                break;
+            }
+            for r in regions {
+                // Note: Even we did the initial scanning, and blocking resolved ts from
+                // advancing, if the next_backup_ts was updated in some extreme condition, there
+                // is still little chance to lost data: For example, if a region cannot elect
+                // the leader for long time. (say, net work partition) At that time, we have
+                // nowhere to record the lock status of this region.
+                try_send!(
+                    self.scheduler,
+                    Task::ModifyObserve(ObserveOp::Start { region: r.region })
+                );
+            }
+        }
+        Ok(())
     }
 }
 
