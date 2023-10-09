@@ -49,6 +49,11 @@ impl<EK: KvEngine, ER: RaftEngine> tikv_kv::RaftExtension for Extension<EK, ER> 
             .send_control(StoreMsg::StoreUnreachable { to_store_id });
     }
 
+    fn report_store_maybe_tombstone(&self, store_id: u64) {
+        self.router
+            .broadcast_normal(|| PeerMsg::StoreMaybeTombstone { store_id });
+    }
+
     fn report_snapshot_status(
         &self,
         region_id: u64,
