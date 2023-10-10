@@ -6229,6 +6229,8 @@ mod tests {
             default_cfg.coprocessor.region_split_size(),
             ReadableSize::mb(500)
         );
+        assert!(!default_cfg.coprocessor.enable_region_bucket());
+        default_cfg.coprocessor.validate(true).unwrap();
         assert!(default_cfg.coprocessor.enable_region_bucket());
 
         let mut default_cfg = TikvConfig::default();
@@ -6240,7 +6242,6 @@ mod tests {
             ReadableSize::mb(500)
         );
         assert!(!default_cfg.coprocessor.enable_region_bucket());
-
         default_cfg.coprocessor.validate(true).unwrap();
         assert!(default_cfg.coprocessor.enable_region_bucket());
     }
