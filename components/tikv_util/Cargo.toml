@@ -9,6 +9,7 @@ failpoints = ["fail/failpoints"]
 test-cgroup = []
 
 [dependencies]
+async-backtrace = "0.2.6"
 async-speed-limit = "0.4.0"
 backtrace = "0.3.9"
 byteorder = "1.2"
@@ -62,7 +63,6 @@ tokio-timer = { workspace = true }
 tracker = { workspace = true }
 url = "2"
 yatp = { workspace = true }
-async-backtrace = "0.2.6"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 procinfo = { git = "https://github.com/tikv/procinfo-rs", rev = "7693954bd1dd86eb1709572fd7b62fd5f7ff2ea1" }
