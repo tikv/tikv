@@ -425,13 +425,12 @@ fn test_read_index_lock_checking_on_follower() {
 fn test_follower_buckets() {
     let mut cluster = new_cluster(0, 3);
     cluster.run();
-    fail::cfg("skip_check_stale_read_safe", "return()").unwrap();
     let product = ProductTable::new();
     let (raft_engine, ctx) = leader_raft_engine!(cluster, "");
     let (_, endpoint, _) =
         init_data_with_engine_and_commit(ctx.clone(), raft_engine, &product, &[], true);
 
-    let req = DagSelect::from(&product).build_with(ctx, &[0]);
+    let mut req = DagSelect::from(&product).build_with(ctx, &[0]);
     let resp = handle_request(&endpoint, req.clone());
     assert_eq!(resp.get_latest_buckets_version(), 0);
 
@@ -470,6 +469,5 @@ fn test_follower_buckets() {
         }
         panic!("test_follower_buckets test case failed, can not get bucket version in time");
     };
-    wait_refresh_buckets(endpoint, &mut req.clone());
-    fail::remove("skip_check_stale_read_safe");
+    wait_refresh_buckets(endpoint, &mut req);
 }
