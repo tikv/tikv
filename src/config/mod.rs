@@ -3402,7 +3402,8 @@ impl TikvConfig {
         // on tikv
         self.coprocessor
             .optimize_for(self.storage.engine == EngineType::RaftKv2);
-        self.coprocessor.validate()?;
+        self.coprocessor
+            .validate(self.storage.engine == EngineType::RaftKv2)?;
         self.split
             .optimize_for(self.coprocessor.region_split_size());
         self.raft_store
