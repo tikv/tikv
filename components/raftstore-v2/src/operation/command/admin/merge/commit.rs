@@ -825,6 +825,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 "target_region" => ?self.region(),
             );
             self.add_pending_tick(PeerTick::SplitRegionCheck);
+            self.maybe_schedule_gc_peer_tick();
         }
     }
 

@@ -211,6 +211,15 @@ impl BucketStat {
         }
     }
 
+    pub fn clean_stats(&mut self, idx: usize) {
+        self.stats.write_keys[idx] = 0;
+        self.stats.write_bytes[idx] = 0;
+        self.stats.read_qps[idx] = 0;
+        self.stats.write_qps[idx] = 0;
+        self.stats.read_keys[idx] = 0;
+        self.stats.read_bytes[idx] = 0;
+    }
+
     pub fn split(&mut self, idx: usize) {
         assert!(idx != 0);
         // inherit the traffic stats for splited bucket
