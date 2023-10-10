@@ -338,8 +338,10 @@ where
         Ok(response)
     }
 
-    // The request and response format follows pprof remote server https://gperftools.github.io/gperftools/pprof_remote_servers.html
-    // Here is the go pprof implementation https://github.com/golang/go/blob/3857a89e7eb872fa22d569e70b7e076bec74ebbb/src/net/http/pprof/pprof.go#L191
+    // The request and response format follows pprof remote server
+    // https://gperftools.github.io/gperftools/pprof_remote_servers.html
+    // Here is the go pprof implementation:
+    // https://github.com/golang/go/blob/3857a89e7eb872fa22d569e70b7e076bec74ebbb/src/net/http/pprof/pprof.go#L191
     async fn get_symbol(req: Request<Body>) -> hyper::Result<Response<Body>> {
         assert_eq!(req.method(), Method::POST);
         let mut text = String::new();
