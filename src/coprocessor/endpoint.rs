@@ -20,7 +20,7 @@ use resource_metering::{FutureExt, ResourceTagFactory, StreamExt};
 use tidb_query_common::execute_stats::ExecSummary;
 use tikv_alloc::trace::MemoryTraceGuard;
 use tikv_kv::SnapshotExt;
-use tikv_util::{quota_limiter::QuotaLimiter, time::Instant};
+use tikv_util::{config::ReadableSize, quota_limiter::QuotaLimiter, time::Instant};
 use tipb::{AnalyzeReq, AnalyzeType, ChecksumRequest, ChecksumScanOn, DagRequest, ExecType};
 use tokio::sync::Semaphore;
 use txn_types::Lock;
@@ -41,6 +41,11 @@ use crate::{
 /// light ones, which means they don't need a permit from the semaphore before
 /// execution.
 const LIGHT_TASK_THRESHOLD: Duration = Duration::from_millis(5);
+// It is used to limit the size of the request key range, default 100MB.
+// It will reject this cop request if the size of the request is greater than
+// the limit. Client should update bucket info by the region error and split
+// this request and retry.
+const MAX_KEY_RANGE_SIZE: u64 = ReadableSize::mb(100).0;
 
 /// A pool to build and run Coprocessor request handlers.
 #[derive(Clone)]
@@ -821,11 +826,15 @@ fn check_request_key_range(
     let end_key = txn_types::Key::from_raw(&req_ctx.upper_bound);
     let first_index = find_bucket_index(start_key.as_encoded(), &latest_buckets.keys);
     let last_index = find_bucket_index(end_key.as_encoded(), &latest_buckets.keys);
-    let mut cross_buckets = true;
+    let mut reject_read = true;
     if let (Some(first_index), Some(last_index)) = (first_index, last_index) {
-        cross_buckets = last_index - first_index >= 2;
+        let mut range_size = 0;
+        for i in first_index..=last_index - 1 {
+            range_size += latest_buckets.sizes.get(i).unwrap_or(&0);
+        }
+        reject_read = range_size >= MAX_KEY_RANGE_SIZE;
     }
-    if cross_buckets {
+    if reject_read {
         let mut bucket_not_match = errorpb::BucketVersionNotMatch::default();
         bucket_not_match.set_version(latest_buckets.version);
         bucket_not_match.set_keys(latest_buckets.keys.clone().into());
@@ -2068,11 +2077,19 @@ mod tests {
                 0, 0, 0, 0, 0, 250,
             ],
             vec![
+                116, 128, 0, 255, 255, 255, 255, 255, 255, 252, 0, 0, 0, 0, 0, 0, 0, 248,
+            ],
+            vec![
                 116, 128, 0, 255, 255, 255, 255, 255, 255, 253, 0, 0, 0, 0, 0, 0, 0, 248,
             ],
             vec![
                 116, 128, 0, 255, 255, 255, 255, 255, 255, 254, 0, 0, 0, 0, 0, 0, 0, 248,
             ],
+        ];
+        bucket_meta.sizes = vec![
+            ReadableSize::mb(50).0,
+            ReadableSize::mb(50).0,
+            ReadableSize::mb(50).0,
         ];
         let mut row_keys = vec![];
         for key in bucket_meta.keys.iter() {

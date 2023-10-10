@@ -350,7 +350,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             version,
             region_epoch: region_epoch.clone(),
             keys,
-            sizes: sizes,
+            sizes,
         };
 
         let mut store_meta = store_ctx.store_meta.lock().unwrap();

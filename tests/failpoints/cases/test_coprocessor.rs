@@ -11,6 +11,7 @@ use kvproto::{
 };
 use more_asserts::{assert_ge, assert_le};
 use protobuf::Message;
+use raft_log_engine::ReadableSize;
 use raftstore::store::Bucket;
 use test_coprocessor::*;
 use test_raftstore_macro::test_case;
@@ -427,6 +428,8 @@ fn test_read_index_lock_checking_on_follower() {
 #[test_case(test_raftstore::new_server_cluster)]
 #[test_case(test_raftstore_v2::new_server_cluster)]
 fn test_follower_buckets() {
+    use tidb_query_datatype::codec::table;
+
     let mut cluster = new_cluster(0, 3);
     cluster.run();
     fail::cfg("skip_check_stale_read_safe", "return()").unwrap();
@@ -434,17 +437,24 @@ fn test_follower_buckets() {
     let (raft_engine, ctx) = leader_raft_engine!(cluster, "");
     let (_, endpoint, _) =
         init_data_with_engine_and_commit(ctx.clone(), raft_engine, &product, &[], true);
-
     let mut req = DagSelect::from(&product).build_with(ctx, &[0]);
     let resp = handle_request(&endpoint, req.clone());
     assert_eq!(resp.get_latest_buckets_version(), 0);
 
-    let mut bucket_key = product.get_record_range_all().get_start().to_owned();
-    bucket_key.push(0);
-    let region = cluster.get_region(&bucket_key);
+    let mut keys = vec![];
+    keys.push(
+        txn_types::Key::from_raw(&table::encode_row_key(product.id, i64::MAX - 3)).into_encoded(),
+    );
+    keys.push(
+        txn_types::Key::from_raw(&table::encode_row_key(product.id, i64::MAX - 2)).into_encoded(),
+    );
+    keys.push(
+        txn_types::Key::from_raw(&table::encode_row_key(product.id, i64::MAX - 1)).into_encoded(),
+    );
+    let region = cluster.get_region(keys.get(0).unwrap());
     let bucket = Bucket {
-        keys: vec![bucket_key],
-        size: 1024,
+        keys,
+        size: ReadableSize::mb(100).0,
     };
 
     cluster.refresh_region_bucket_keys(&region, vec![bucket], None, None);
