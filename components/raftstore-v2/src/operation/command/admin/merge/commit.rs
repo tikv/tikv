@@ -687,6 +687,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             info!(
                 self.logger,
                 "become follower for new logs";
+                "first_log_term" => first.term,
+                "first_log_index" => first.index,
                 "new_log_term" => last_log.term,
                 "new_log_index" => last_log.index,
                 "term" => self.term(),
