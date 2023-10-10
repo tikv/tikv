@@ -13,7 +13,6 @@ use raft::eraftpb::{ConfChangeType, MessageType};
 use raftstore::store::{Callback, LocksStatus};
 use test_raftstore::*;
 use test_raftstore_macro::test_case;
-use test_raftstore_v2::Simulator as _;
 use tikv::storage::{kv::SnapshotExt, Snapshot};
 use tikv_util::{config::*, HandyRwLock};
 use txn_types::{Key, PessimisticLock};
