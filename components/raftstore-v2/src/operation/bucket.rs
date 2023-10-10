@@ -11,10 +11,10 @@ use kvproto::{
 };
 use pd_client::{BucketMeta, BucketStat};
 use raftstore::{
-    coprocessor::RegionChangeEvent,
+    coprocessor::{Config, RegionChangeEvent},
     store::{util, Bucket, BucketRange, ReadProgress, SplitCheckTask, Transport},
 };
-use slog::{error, info, warn};
+use slog::{error, info};
 
 use crate::{
     batch::StoreContext,
@@ -26,15 +26,13 @@ use crate::{
 
 #[derive(Debug, Clone, Default)]
 pub struct BucketStatsInfo {
+    // the stats is increment flow.
     bucket_stat: Option<BucketStat>,
-    // the last buckets records the stats that the recently refreshed.
-    last_bucket_stat: Option<BucketStat>,
     // the report bucket stat records the increment stats after last report pd.
     // it will be reset after report pd.
     report_bucket_stat: Option<BucketStat>,
-    // last bucket count.
-    // BucketStat.meta is Arc so it cannot be used for last bucket count
-    last_bucket_count: usize,
+    // avoid the version roll back, it record the last bucket version if bucket stat isn't none.
+    last_bucket_version: u64,
 }
 
 impl BucketStatsInfo {
@@ -42,55 +40,33 @@ impl BucketStatsInfo {
     /// diff_size_threshold.
     pub fn gen_bucket_range_for_update(
         &self,
-        diff_size_threshold: u64,
+        region_bucket_max_size: u64,
     ) -> Option<Vec<BucketRange>> {
         let region_buckets = self.bucket_stat.as_ref()?;
         let stats = &region_buckets.stats;
         let keys = &region_buckets.meta.keys;
+        let sizes = &region_buckets.meta.sizes;
 
-        let empty_last_keys = vec![];
-        let empty_last_stats = metapb::BucketStats::default();
-        let (last_keys, last_stats, stats_reset) = self
-            .last_bucket_stat
-            .as_ref()
-            .map(|b| {
-                (
-                    &b.meta.keys,
-                    &b.stats,
-                    region_buckets.create_time != b.create_time,
-                )
-            })
-            .unwrap_or((&empty_last_keys, &empty_last_stats, false));
-
-        let mut bucket_ranges = vec![];
-        let mut j = 0;
+        let mut suspect_bucket_ranges = vec![];
         assert_eq!(keys.len(), stats.write_bytes.len() + 1);
         for i in 0..stats.write_bytes.len() {
-            let mut diff_in_bytes = stats.write_bytes[i];
-            while j < last_keys.len() && keys[i] > last_keys[j] {
-                j += 1;
-            }
-            if j < last_keys.len() && keys[i] == last_keys[j] {
-                if !stats_reset {
-                    diff_in_bytes -= last_stats.write_bytes[j];
-                }
-                j += 1;
-            }
-            if diff_in_bytes >= diff_size_threshold {
-                bucket_ranges.push(BucketRange(keys[i].clone(), keys[i + 1].clone()));
+            let estimated_bucket_size = stats.write_bytes[i] + sizes[i];
+            if estimated_bucket_size >= region_bucket_max_size {
+                suspect_bucket_ranges.push(BucketRange(keys[i].clone(), keys[i + 1].clone()));
             }
         }
-        Some(bucket_ranges)
+        Some(suspect_bucket_ranges)
     }
 
     #[inline]
     pub fn version(&self) -> u64 {
         self.bucket_stat
             .as_ref()
-            .or(self.last_bucket_stat.as_ref())
             .map(|b| b.meta.version)
+            .or(Some(self.last_bucket_version))
             .unwrap_or_default()
     }
+
     #[inline]
     pub fn add_bucket_flow(&mut self, delta: &Option<BucketStat>) {
         if let (Some(buckets), Some(report_buckets), Some(delta)) = (
@@ -105,21 +81,18 @@ impl BucketStatsInfo {
 
     #[inline]
     pub fn set_bucket_stat(&mut self, buckets: Option<BucketStat>) {
-        if let Some(b) = self.bucket_stat.take() {
-            self.last_bucket_stat = Some(b);
-        }
-        self.report_bucket_stat = buckets.clone();
-        self.bucket_stat = buckets;
-        self.last_bucket_count = self
-            .bucket_stat
-            .as_ref()
-            .map_or(0, |bucket_stat| bucket_stat.meta.keys.len() - 1);
-    }
-
-    #[inline]
-    pub fn clear_bucket_stat(&mut self) {
-        if let Some(bucket) = self.report_bucket_stat.as_mut() {
-            bucket.clear_stats();
+        self.bucket_stat = buckets.clone();
+        if let Some(new_buckets) = buckets {
+            self.last_bucket_version = new_buckets.meta.version;
+            let mut new_report_buckets = BucketStat::from_meta(new_buckets.meta);
+            if let Some(old) = &mut self.report_bucket_stat {
+                new_report_buckets.merge(old);
+                *old = new_report_buckets;
+            } else {
+                self.report_bucket_stat = Some(new_report_buckets);
+            }
+        } else {
+            self.report_bucket_stat = None;
         }
     }
 
@@ -136,9 +109,125 @@ impl BucketStatsInfo {
         &self.bucket_stat
     }
 
-    #[inline]
-    pub fn last_bucket_count(&self) -> usize {
-        self.last_bucket_count
+    pub fn on_refresh_region_buckets(
+        &mut self,
+        cfg: &Config,
+        next_bucket_version: u64,
+        buckets: Vec<Bucket>,
+        region_epoch: RegionEpoch,
+        region: metapb::Region,
+        bucket_ranges: Option<Vec<BucketRange>>,
+    ) -> bool {
+        let change_bucket_version: bool;
+        // The region buckets reset after this region happened split or merge.
+        // The message should be dropped if it's epoch is lower than the regions.
+        // The bucket ranges is none when the region buckets is also none.
+        // So this condition indicates that the region buckets needs to refresh not
+        // renew.
+        if let Some(bucket_ranges) = bucket_ranges&&self.bucket_stat.is_some(){
+            assert_eq!(buckets.len(), bucket_ranges.len());
+            change_bucket_version=self.update_buckets(cfg, next_bucket_version, buckets, region_epoch,  &bucket_ranges);
+        }else{
+            change_bucket_version = true;
+            // when the region buckets is none, the exclusive buckets includes all the
+            // bucket keys.
+           self.init_buckets(cfg, next_bucket_version, buckets, region_epoch, region);
+        }
+        change_bucket_version
+    }
+
+    fn update_buckets(
+        &mut self,
+        cfg: &Config,
+        next_bucket_version: u64,
+        buckets: Vec<Bucket>,
+        region_epoch: RegionEpoch,
+        bucket_ranges: &Vec<BucketRange>,
+    ) -> bool {
+        let origin_region_buckets = self.bucket_stat.as_ref().unwrap();
+        let mut change_bucket_version = false;
+        let mut meta_idx = 0;
+        let mut region_buckets = origin_region_buckets.clone();
+        let mut meta = (*region_buckets.meta).clone();
+        meta.region_epoch = region_epoch;
+
+        // bucket stats will clean if the bucket size is updated.
+        for (bucket, bucket_range) in buckets.into_iter().zip(bucket_ranges) {
+            // the bucket ranges maybe need to split or merge not all the meta keys, so it
+            // needs to find the first keys.
+            while meta_idx < meta.keys.len() && meta.keys[meta_idx] != bucket_range.0 {
+                meta_idx += 1;
+            }
+            // meta_idx can't be not the last entry (which is end key)
+            if meta_idx >= meta.keys.len() - 1 {
+                break;
+            }
+            // the bucket size is small and does not have split keys,
+            // then it should be merged with its left neighbor
+            let region_bucket_merge_size =
+                cfg.region_bucket_merge_size_ratio * (cfg.region_bucket_size.0 as f64);
+            if bucket.keys.is_empty() && bucket.size <= (region_bucket_merge_size as u64) {
+                meta.sizes[meta_idx] = bucket.size;
+                region_buckets.clean_stats(meta_idx);
+                // the region has more than one bucket
+                // and the left neighbor + current bucket size is not very big
+                if meta.keys.len() > 2
+                    && meta_idx != 0
+                    && meta.sizes[meta_idx - 1] + bucket.size < cfg.region_bucket_size.0 * 2
+                {
+                    // bucket is too small
+                    region_buckets.left_merge(meta_idx);
+                    meta.left_merge(meta_idx);
+                    change_bucket_version = true;
+                    continue;
+                }
+            } else {
+                // update size
+                meta.sizes[meta_idx] = bucket.size / (bucket.keys.len() + 1) as u64;
+                region_buckets.clean_stats(meta_idx);
+                // insert new bucket keys (split the original bucket)
+                for bucket_key in bucket.keys {
+                    meta_idx += 1;
+                    region_buckets.split(meta_idx);
+                    meta.split(meta_idx, bucket_key);
+                    change_bucket_version = true;
+                }
+            }
+            meta_idx += 1;
+        }
+        if change_bucket_version {
+            meta.version = next_bucket_version;
+        }
+        region_buckets.meta = Arc::new(meta);
+        self.set_bucket_stat(Some(region_buckets));
+        change_bucket_version
+    }
+
+    fn init_buckets(
+        &mut self,
+        cfg: &Config,
+        next_bucket_version: u64,
+        mut buckets: Vec<Bucket>,
+        region_epoch: RegionEpoch,
+        region: metapb::Region,
+    ) {
+        // when the region buckets is none, the exclusive buckets includes all the
+        // bucket keys.
+        assert_eq!(buckets.len(), 1);
+        let bucket_keys = buckets.pop().unwrap().keys;
+        let bucket_count = bucket_keys.len() + 1;
+        let mut meta = BucketMeta {
+            region_id: region.get_id(),
+            region_epoch,
+            version: next_bucket_version,
+            keys: bucket_keys,
+            sizes: vec![cfg.region_bucket_size.0; bucket_count],
+        };
+        // padding the boundary keys and initialize the flow.
+        meta.keys.insert(0, region.get_start_key().to_vec());
+        meta.keys.push(region.get_end_key().to_vec());
+        let bucket_stats = BucketStat::from_meta(Arc::new(meta));
+        self.set_bucket_stat(Some(bucket_stats));
     }
 }
 
@@ -148,130 +237,35 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         &mut self,
         store_ctx: &mut StoreContext<EK, ER, T>,
         region_epoch: RegionEpoch,
-        mut buckets: Vec<Bucket>,
+        buckets: Vec<Bucket>,
         bucket_ranges: Option<Vec<BucketRange>>,
     ) {
-        // bucket version layout
-        //   term       logical counter
-        // |-----------|-----------|
-        //  high bits     low bits
-        // term: given 10s election timeout, the 32 bit means 1362 year running time
-        let gen_bucket_version = |term, current_version| {
-            let current_version_term = current_version >> 32;
-            let bucket_version: u64 = if current_version_term == term {
-                current_version + 1
-            } else {
-                if term > u32::MAX.into() {
-                    error!(
-                        self.logger,
-                        "unexpected term {} more than u32::MAX. Bucket
-                    version will be backward.",
-                        term
-                    );
-                }
-                term << 32
-            };
-            bucket_version
-        };
-
-        let region = self.region();
-        let current_version = self.region_buckets_info().version();
-        let next_bucket_version = gen_bucket_version(self.term(), current_version);
-        let mut is_first_refresh = true;
-        let mut change_bucket_version = false;
-        let mut region_buckets: BucketStat;
-
-        // The region buckets reset after this region happened split or merge.
-        // The message should be dropped if it's epoch is lower than the regions.
-        // The bucket ranges is none when the region buckets is also none.
-        // So this condition indicates that the region buckets needs to refresh not
-        // renew.
-        if let (Some(bucket_ranges), Some(peer_region_buckets)) =
-            (bucket_ranges, self.region_buckets_info().bucket_stat())
-        {
-            is_first_refresh = false;
-            assert_eq!(buckets.len(), bucket_ranges.len());
-            let mut meta_idx = 0;
-            region_buckets = peer_region_buckets.clone();
-            let mut meta = (*region_buckets.meta).clone();
-            meta.region_epoch = region_epoch;
-            for (bucket, bucket_range) in buckets.into_iter().zip(bucket_ranges) {
-                // the bucket ranges maybe need to split or merge not all the meta keys, so it
-                // needs to find the first keys.
-                while meta_idx < meta.keys.len() && meta.keys[meta_idx] != bucket_range.0 {
-                    meta_idx += 1;
-                }
-                // meta_idx can't be not the last entry (which is end key)
-                if meta_idx >= meta.keys.len() - 1 {
-                    warn!(
-                        self.logger,
-                        "can't find the bucket key";
-                        "bucket_range_key" => log_wrappers::Value::key(&bucket_range.0));
-                    break;
-                }
-                // the bucket size is small and does not have split keys,
-                // then it should be merged with its left neighbor
-                let region_bucket_merge_size = store_ctx
-                    .coprocessor_host
-                    .cfg
-                    .region_bucket_merge_size_ratio
-                    * (store_ctx.coprocessor_host.cfg.region_bucket_size.0 as f64);
-                if bucket.keys.is_empty() && bucket.size <= (region_bucket_merge_size as u64) {
-                    meta.sizes[meta_idx] = bucket.size;
-                    // the region has more than one bucket
-                    // and the left neighbor + current bucket size is not very big
-                    if meta.keys.len() > 2
-                        && meta_idx != 0
-                        && meta.sizes[meta_idx - 1] + bucket.size
-                            < store_ctx.coprocessor_host.cfg.region_bucket_size.0 * 2
-                    {
-                        // bucket is too small
-                        region_buckets.left_merge(meta_idx);
-                        meta.left_merge(meta_idx);
-                        change_bucket_version = true;
-                        continue;
-                    }
-                } else {
-                    // update size
-                    meta.sizes[meta_idx] = bucket.size / (bucket.keys.len() + 1) as u64;
-                    // insert new bucket keys (split the original bucket)
-                    for bucket_key in bucket.keys {
-                        meta_idx += 1;
-                        region_buckets.split(meta_idx);
-                        meta.split(meta_idx, bucket_key);
-                        change_bucket_version = true;
-                    }
-                }
-                meta_idx += 1;
-            }
-            if self.region_buckets_info().last_bucket_count() != region_buckets.meta.keys.len() - 1
-            {
-                change_bucket_version = true;
-            }
-            if change_bucket_version {
-                meta.version = next_bucket_version;
-            }
-            region_buckets.meta = Arc::new(meta);
-        } else {
-            // when the region buckets is none, the exclusive buckets includes all the
-            // bucket keys.
-            assert_eq!(buckets.len(), 1);
-            change_bucket_version = true;
-            let bucket_keys = buckets.pop().unwrap().keys;
-            let bucket_count = bucket_keys.len() + 1;
-            let mut meta = BucketMeta {
-                region_id: self.region_id(),
-                region_epoch,
-                version: next_bucket_version,
-                keys: bucket_keys,
-                sizes: vec![store_ctx.coprocessor_host.cfg.region_bucket_size.0; bucket_count],
-            };
-            // padding the boundary keys and initialize the flow.
-            meta.keys.insert(0, region.get_start_key().to_vec());
-            meta.keys.push(region.get_end_key().to_vec());
-            region_buckets = BucketStat::from_meta(Arc::new(meta));
+        if self.term() > u32::MAX.into() {
+            error!(
+                self.logger,
+                "unexpected term {} more than u32::MAX. Bucket version will be backward.",
+                self.term()
+            );
         }
 
+        let current_version = self.region_buckets_info().version();
+        let next_bucket_version = util::gen_bucket_version(self.term(), current_version);
+        // let mut is_first_refresh = true;
+        let region = self.region().clone();
+        let change_bucket_version = self.region_buckets_info_mut().on_refresh_region_buckets(
+            &store_ctx.coprocessor_host.cfg,
+            next_bucket_version,
+            buckets,
+            region_epoch,
+            region,
+            bucket_ranges,
+        );
+        let region_buckets = self
+            .region_buckets_info()
+            .bucket_stat()
+            .as_ref()
+            .unwrap()
+            .clone();
         let buckets_count = region_buckets.meta.keys.len() - 1;
         if change_bucket_version {
             // TODO: we may need to make it debug once the coprocessor timeout is resolved.
@@ -281,17 +275,18 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 "bucket_version" => next_bucket_version,
                 "buckets_count" => buckets_count,
                 "estimated_region_size" => region_buckets.meta.total_size(),
-                "first_refresh" => is_first_refresh,
             );
+        } else {
+            // it means the buckets key range not any change, so don't need to refresh.
+            return;
         }
+
         store_ctx.coprocessor_host.on_region_changed(
-            region,
+            self.region(),
             RegionChangeEvent::UpdateBuckets(buckets_count),
             self.state_role(),
         );
         let meta = region_buckets.meta.clone();
-        self.region_buckets_info_mut()
-            .set_bucket_stat(Some(region_buckets.clone()));
         {
             let mut store_meta = store_ctx.store_meta.lock().unwrap();
             if let Some(reader) = store_meta.readers.get_mut(&self.region_id()) {
@@ -302,14 +297,14 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         if let Some(apply_scheduler) = self.apply_scheduler() {
             apply_scheduler.send(ApplyTask::RefreshBucketStat(region_buckets.meta.clone()));
         }
+        if !self.is_leader() {
+            return;
+        }
         let version = region_buckets.meta.version;
         let keys = region_buckets.meta.keys.clone();
         let sizes = region_buckets.meta.sizes.clone();
         // Notify followers to flush their relevant memtables
         let peers = self.region().get_peers().to_vec();
-        if !self.is_leader() {
-            return;
-        }
         for p in peers {
             if p == *self.peer() || p.is_witness {
                 continue;
@@ -400,9 +395,9 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         if !ctx.coprocessor_host.cfg.enable_region_bucket() {
             return None;
         }
-        let bucket_update_diff_size_threshold = ctx.coprocessor_host.cfg.region_bucket_size.0 / 2;
+        let region_bucket_max_size = ctx.coprocessor_host.cfg.region_bucket_size.0 * 2;
         self.region_buckets_info()
-            .gen_bucket_range_for_update(bucket_update_diff_size_threshold)
+            .gen_bucket_range_for_update(region_bucket_max_size)
     }
 }
 
@@ -449,5 +444,180 @@ where
             bucket_ranges,
         );
         self.schedule_tick(PeerTick::ReportBuckets);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // create BucketStatsInfo include three keys: ["","100","200",""].
+    fn mock_bucket_stats_info() -> BucketStatsInfo {
+        let mut bucket_stats_info = BucketStatsInfo::default();
+        let cfg = Config::default();
+        let next_bucket_version = 1;
+        let bucket_ranges = None;
+        let mut region_epoch = RegionEpoch::default();
+        region_epoch.set_conf_ver(1);
+        region_epoch.set_version(1);
+        let mut region = metapb::Region::default();
+        region.set_id(1);
+
+        let mut buckets = vec![];
+        let mut bucket = Bucket::default();
+        bucket.keys.push(vec![100]);
+        bucket.keys.push(vec![200]);
+        buckets.insert(0, bucket);
+
+        let _ = bucket_stats_info.on_refresh_region_buckets(
+            &cfg,
+            next_bucket_version,
+            buckets,
+            region_epoch,
+            region,
+            bucket_ranges,
+        );
+        bucket_stats_info
+    }
+
+    #[test]
+    pub fn test_version() {
+        let mut bucket_stats_info = mock_bucket_stats_info();
+        assert_eq!(1, bucket_stats_info.version());
+        bucket_stats_info.set_bucket_stat(None);
+        assert_eq!(1, bucket_stats_info.version());
+
+        let mut meta = BucketMeta::default();
+        meta.version = 2;
+        meta.keys.push(vec![]);
+        meta.keys.push(vec![]);
+        let bucket_stat = BucketStat::from_meta(Arc::new(meta));
+        bucket_stats_info.set_bucket_stat(Some(bucket_stat));
+        assert_eq!(2, bucket_stats_info.version());
+    }
+
+    #[test]
+    pub fn test_insert_new_buckets() {
+        let bucket_stats_info = mock_bucket_stats_info();
+
+        let cfg = Config::default();
+        let bucket_stat = bucket_stats_info.bucket_stat.unwrap();
+        assert_eq!(
+            vec![vec![], vec![100], vec![200], vec![]],
+            bucket_stat.meta.keys
+        );
+        for i in 0..bucket_stat.stats.write_bytes.len() {
+            assert_eq!(cfg.region_bucket_size.0, bucket_stat.meta.sizes[i]);
+            assert_eq!(0, bucket_stat.stats.write_bytes[i]);
+        }
+    }
+
+    #[test]
+    pub fn test_report_buckets() {
+        let mut bucket_stats_info = mock_bucket_stats_info();
+        let bucket_stats = bucket_stats_info.bucket_stat().as_ref().unwrap();
+        let mut delta_bucket_stats = bucket_stats.clone();
+        delta_bucket_stats.write_key(&[1], 1);
+        delta_bucket_stats.write_key(&[201], 1);
+        bucket_stats_info.add_bucket_flow(&Some(delta_bucket_stats.clone()));
+        let bucket_stats = bucket_stats_info.report_bucket_stat();
+        assert_eq!(vec![2, 0, 2], bucket_stats.stats.write_bytes);
+
+        let report_bucket_stats = bucket_stats_info.report_bucket_stat();
+        assert_eq!(vec![0, 0, 0], report_bucket_stats.stats.write_bytes);
+        bucket_stats_info.add_bucket_flow(&Some(delta_bucket_stats));
+        assert_eq!(vec![2, 0, 2], bucket_stats.stats.write_bytes);
+    }
+
+    #[test]
+    pub fn test_spilt_and_merge_buckets() {
+        let mut bucket_stats_info = mock_bucket_stats_info();
+        let next_bucket_version = 2;
+        let mut region = metapb::Region::default();
+        region.set_id(1);
+        let cfg = Config::default();
+        let bucket_size = cfg.region_bucket_size.0;
+        let bucket_stats = bucket_stats_info.bucket_stat().as_ref().unwrap();
+        let region_epoch = bucket_stats.meta.region_epoch.clone();
+
+        // step1: update buckets flow
+        let mut delta_bucket_stats = bucket_stats.clone();
+        delta_bucket_stats.write_key(&[1], 1);
+        delta_bucket_stats.write_key(&[201], 1);
+        bucket_stats_info.add_bucket_flow(&Some(delta_bucket_stats));
+        let bucket_stats = bucket_stats_info.bucket_stat().as_ref().unwrap();
+        assert_eq!(vec![2, 0, 2], bucket_stats.stats.write_bytes);
+
+        // step2: tick not affect anything
+        let bucket_ranges = Some(vec![]);
+        let buckets = vec![];
+        let mut change_bucket_version = bucket_stats_info.on_refresh_region_buckets(
+            &cfg,
+            next_bucket_version,
+            buckets,
+            region_epoch.clone(),
+            region.clone(),
+            bucket_ranges,
+        );
+        let bucket_stats = bucket_stats_info.bucket_stat().as_ref().unwrap();
+        assert!(!change_bucket_version);
+        assert_eq!(vec![2, 0, 2], bucket_stats.stats.write_bytes);
+
+        // step3: split key 50
+        let mut bucket_ranges = Some(vec![BucketRange(vec![], vec![100])]);
+        let mut bucket = Bucket::default();
+        bucket.keys = vec![vec![50]];
+        bucket.size = bucket_size;
+        let mut buckets = vec![bucket];
+        change_bucket_version = bucket_stats_info.on_refresh_region_buckets(
+            &cfg,
+            next_bucket_version,
+            buckets.clone(),
+            region_epoch.clone(),
+            region.clone(),
+            bucket_ranges.clone(),
+        );
+        assert!(change_bucket_version);
+        let bucket_stats = bucket_stats_info.bucket_stat().as_ref().unwrap();
+        assert_eq!(
+            vec![vec![], vec![50], vec![100], vec![200], vec![]],
+            bucket_stats.meta.keys
+        );
+        assert_eq!(
+            vec![bucket_size / 2, bucket_size / 2, bucket_size, bucket_size],
+            bucket_stats.meta.sizes
+        );
+        assert_eq!(vec![0, 0, 0, 2], bucket_stats.stats.write_bytes);
+
+        // step4: merge [50-100] to [0-50],
+        bucket_ranges = Some(vec![BucketRange(vec![50], vec![100])]);
+        let mut bucket = Bucket::default();
+        bucket.keys = vec![];
+        bucket.size = 0;
+        buckets = vec![bucket];
+        change_bucket_version = bucket_stats_info.on_refresh_region_buckets(
+            &cfg,
+            next_bucket_version,
+            buckets,
+            region_epoch,
+            region,
+            bucket_ranges,
+        );
+        assert!(change_bucket_version);
+
+        let bucket_stats = bucket_stats_info.bucket_stat().as_ref().unwrap();
+        assert_eq!(
+            vec![vec![], vec![100], vec![200], vec![]],
+            bucket_stats.meta.keys
+        );
+        assert_eq!(
+            vec![bucket_size / 2, bucket_size, bucket_size],
+            bucket_stats.meta.sizes
+        );
+        assert_eq!(vec![0, 0, 2], bucket_stats.stats.write_bytes);
+
+        // report buckets doesn't be affected by the split and merge.
+        let report_bucket_stats = bucket_stats_info.report_bucket_stat();
+        assert_eq!(vec![4, 0, 2], report_bucket_stats.stats.write_bytes);
     }
 }
