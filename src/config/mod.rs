@@ -3523,7 +3523,6 @@ impl TikvConfig {
             }
         }
 
-<<<<<<< HEAD
         let mut limit = self.memory_usage_limit.unwrap();
         let total = ReadableSize(SysQuota::memory_limit_in_bytes());
         if limit.0 > total.0 {
@@ -3542,37 +3541,6 @@ impl TikvConfig {
                 limit, default,
             );
         }
-=======
-        // Validate sub-components.
-        self.log.validate()?;
-        self.readpool.validate()?;
-        self.storage.validate()?;
-        self.rocksdb.validate()?;
-        self.raftdb.validate()?;
-        self.raft_engine.validate()?;
-        self.server.validate()?;
-        self.pd.validate()?;
-        self.coprocessor
-            .validate(self.storage.engine == EngineType::RaftKv2)?;
-        self.raft_store.validate(
-            self.coprocessor.region_split_size(),
-            self.coprocessor.enable_region_bucket(),
-            self.coprocessor.region_bucket_size,
-            self.storage.engine == EngineType::RaftKv2,
-        )?;
-        self.security.validate()?;
-        self.import.validate()?;
-        self.backup.validate()?;
-        self.log_backup.validate()?;
-        self.cdc
-            .validate(self.storage.engine == EngineType::RaftKv2)?;
-        self.pessimistic_txn.validate()?;
-        self.gc.validate()?;
-        self.resolved_ts.validate()?;
-        self.resource_metering.validate()?;
-        self.quota.validate()?;
-        self.causal_ts.validate()?;
->>>>>>> 905e8bffbe (raftstore: disable region bucket for raftstore v1 by default (#15740))
 
         Ok(())
     }
