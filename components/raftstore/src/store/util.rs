@@ -160,6 +160,20 @@ pub fn new_empty_snapshot(
     snapshot
 }
 
+pub fn gen_bucket_version(term: u64, current_version: u64) -> u64 {
+    //   term       logical counter
+    // |-----------|-----------|
+    //  high bits     low bits
+    // term: given 10s election timeout, the 32 bit means 1362 year running time
+    let current_version_term = current_version >> 32;
+    let bucket_version: u64 = if current_version_term == term {
+        current_version + 1
+    } else {
+        term << 32
+    };
+    bucket_version
+}
+
 const STR_CONF_CHANGE_ADD_NODE: &str = "AddNode";
 const STR_CONF_CHANGE_REMOVE_NODE: &str = "RemoveNode";
 const STR_CONF_CHANGE_ADDLEARNER_NODE: &str = "AddLearner";
@@ -306,7 +320,7 @@ pub fn compare_region_epoch(
     // tells TiDB with a epoch not match error contains the latest target Region
     // info, TiDB updates its region cache and sends requests to TiKV B,
     // and TiKV B has not applied commit merge yet, since the region epoch in
-    // request is higher than TiKV B, the request must be denied due to epoch
+    // request is higher than TiKV B, the request must be suspended due to epoch
     // not match, so it does not read on a stale snapshot, thus avoid the
     // KeyNotInRegion error.
     let current_epoch = region.get_region_epoch();

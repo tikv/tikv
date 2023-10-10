@@ -1940,3 +1940,34 @@ fn test_gc_source_peers_forward_by_store_after_merge() {
     cluster.must_empty_region_merged_records(right.get_id());
     cluster.must_empty_region_removed_records(right.get_id());
 }
+
+#[test_case(test_raftstore_v2::new_node_cluster)]
+fn test_gc_merged_record_in_time() {
+    let mut cluster = new_cluster(0, 3);
+    configure_for_merge(&mut cluster.cfg);
+    cluster.cfg.raft_store.gc_peer_check_interval = ReadableDuration::millis(100);
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+    cluster.run();
+
+    let region = cluster.get_region(b"k1");
+    cluster.must_split(&region, b"k2");
+    let left = cluster.get_region(b"k1");
+    let right = cluster.get_region(b"k3");
+
+    let left_peer_on_store1 = find_peer(&left, 1).unwrap().clone();
+    cluster.must_transfer_leader(left.get_id(), left_peer_on_store1);
+    let right_peer_on_store1 = find_peer(&right, 1).unwrap().clone();
+    cluster.must_transfer_leader(right.get_id(), right_peer_on_store1);
+
+    // Wait enough time to trigger gc peer, and if there is nothing to gc,
+    // leader skips registering gc peer tick.
+    sleep_ms(3 * cluster.cfg.raft_store.gc_peer_check_interval.as_millis());
+
+    // Merge left to right.
+    pd_client.must_merge(left.get_id(), right.get_id());
+
+    // Once merge complete, gc peer tick should be registered and merged record
+    // will be cleaned up in time.
+    cluster.must_empty_region_merged_records(right.get_id());
+}
