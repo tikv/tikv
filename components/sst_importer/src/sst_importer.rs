@@ -975,18 +975,11 @@ impl SstImporter {
             largest_key = largest_key
                 .map_or_else(|| Some(key.clone()), |v: Vec<u8>| Some(v.max(key.clone())));
         }
-<<<<<<< HEAD
-        if total_key != not_in_range {
-            info!("build download request file done"; "total keys" => %total_key,
-            "ts filtered keys" => %ts_not_expected,
-            "range filtered keys" => %not_in_range);
-=======
         if not_in_range != 0 || ts_not_expected != 0 {
             info!("build download request file done";
                 "total_keys" => %total_key,
                 "ts_filtered_keys" => %ts_not_expected,
                 "range_filtered_keys" => %not_in_range);
->>>>>>> 6f0d84e911 (sst_importer: don't cache rewritten files (#15502))
         }
 
         IMPORTER_APPLY_DURATION
@@ -2104,12 +2097,8 @@ mod tests {
             ..Default::default()
         };
         let importer =
-<<<<<<< HEAD
-            SstImporter::new(&cfg, import_dir, Some(key_manager), ApiVersion::V1).unwrap();
-        let rewrite_rule = &new_rewrite_rule(b"", b"", 12345);
-=======
             SstImporter::new(&cfg, import_dir, Some(key_manager), ApiVersion::V1, false).unwrap();
->>>>>>> 6f0d84e911 (sst_importer: don't cache rewritten files (#15502))
+        let rewrite_rule = &new_rewrite_rule(b"", b"", 12345);
         let ext_storage = {
             importer.wrap_kms(
                 importer.external_storage_or_cache(&backend, "").unwrap(),
