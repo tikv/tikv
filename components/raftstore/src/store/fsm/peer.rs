@@ -6031,13 +6031,7 @@ where
             RegionChangeEvent::UpdateBuckets(buckets_count),
             self.fsm.peer.get_role(),
         );
-<<<<<<< HEAD
         let old_region_buckets = self.fsm.peer.region_buckets.replace(region_buckets);
-=======
-        let keys = region_buckets.meta.keys.clone();
-        let old_region_buckets: Option<BucketStat> =
-            self.fsm.peer.region_buckets.replace(region_buckets);
->>>>>>> d7fc4b3b2e (coprocessor: return `bucket version not match` error if the given bucket's version is stale (#15224))
         self.fsm.peer.last_region_buckets = old_region_buckets;
         let mut store_meta = self.ctx.store_meta.lock().unwrap();
         if let Some(reader) = store_meta.readers.get_mut(&self.fsm.region_id()) {
@@ -6045,29 +6039,6 @@ where
                 self.fsm.peer.region_buckets.as_ref().unwrap().meta.clone(),
             ));
         }
-<<<<<<< HEAD
-=======
-
-        // Notify followers to refresh their buckets version
-        if self.fsm.peer.is_leader() {
-            let peers = self.region().get_peers().to_vec();
-            for p in peers {
-                if &p == self.peer() || p.is_witness {
-                    continue;
-                }
-                let mut extra_msg = ExtraMessage::default();
-                extra_msg.set_type(ExtraMessageType::MsgRefreshBuckets);
-                let mut refresh_buckets = RefreshBuckets::new();
-                refresh_buckets.set_version(version);
-                refresh_buckets.set_keys(keys.clone().into());
-                extra_msg.set_refresh_buckets(refresh_buckets);
-                self.fsm
-                    .peer
-                    .send_extra_message(extra_msg, &mut self.ctx.trans, &p);
-            }
-        }
-
->>>>>>> d7fc4b3b2e (coprocessor: return `bucket version not match` error if the given bucket's version is stale (#15224))
         debug!(
             "finished on_refresh_region_buckets";
             "region_id" => self.fsm.region_id(),
@@ -6082,32 +6053,6 @@ where
         );
     }
 
-<<<<<<< HEAD
-=======
-    pub fn on_msg_refresh_buckets(&mut self, msg: RaftMessage) {
-        // leader should not receive this message
-        if self.fsm.peer.is_leader() {
-            return;
-        }
-        let version = msg.get_extra_msg().get_refresh_buckets().get_version();
-        let keys = msg.get_extra_msg().get_refresh_buckets().get_keys();
-        let region_epoch = msg.get_region_epoch().clone();
-
-        let meta = BucketMeta {
-            region_id: self.region_id(),
-            version,
-            region_epoch,
-            keys: keys.to_vec(),
-            sizes: vec![],
-        };
-
-        let mut store_meta = self.ctx.store_meta.lock().unwrap();
-        if let Some(reader) = store_meta.readers.get_mut(&self.region_id()) {
-            reader.update(ReadProgress::region_buckets(Arc::new(meta)));
-        }
-    }
-
->>>>>>> d7fc4b3b2e (coprocessor: return `bucket version not match` error if the given bucket's version is stale (#15224))
     fn on_compaction_declined_bytes(&mut self, declined_bytes: u64) {
         self.fsm.peer.compaction_declined_bytes += declined_bytes;
         if self.fsm.peer.compaction_declined_bytes >= self.ctx.cfg.region_split_check_diff().0 {

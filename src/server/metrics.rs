@@ -469,17 +469,7 @@ make_auto_flush_static_metric! {
         err_store_not_match,
         err_raft_entry_too_large,
         err_leader_memory_lock_check,
-<<<<<<< HEAD
-=======
-        err_read_index_not_ready,
-        err_proposal_in_merging_mode,
-        err_data_is_not_ready,
-        err_region_not_initialized,
-        err_disk_full,
-        err_recovery_in_progress,
-        err_flashback_in_progress,
         err_buckets_version_not_match,
->>>>>>> d7fc4b3b2e (coprocessor: return `bucket version not match` error if the given bucket's version is stale (#15224))
         err_undetermind,
     }
 
@@ -509,19 +499,9 @@ impl From<ErrorHeaderKind> for RequestStatusKind {
             ErrorHeaderKind::StaleCommand => RequestStatusKind::err_stale_command,
             ErrorHeaderKind::StoreNotMatch => RequestStatusKind::err_store_not_match,
             ErrorHeaderKind::RaftEntryTooLarge => RequestStatusKind::err_raft_entry_too_large,
-<<<<<<< HEAD
-=======
-            ErrorHeaderKind::ReadIndexNotReady => RequestStatusKind::err_read_index_not_ready,
-            ErrorHeaderKind::ProposalInMergeMode => RequestStatusKind::err_proposal_in_merging_mode,
-            ErrorHeaderKind::DataNotReady => RequestStatusKind::err_data_is_not_ready,
-            ErrorHeaderKind::RegionNotInitialized => RequestStatusKind::err_region_not_found,
-            ErrorHeaderKind::DiskFull => RequestStatusKind::err_disk_full,
-            ErrorHeaderKind::RecoveryInProgress => RequestStatusKind::err_recovery_in_progress,
-            ErrorHeaderKind::FlashbackInProgress => RequestStatusKind::err_flashback_in_progress,
             ErrorHeaderKind::BucketsVersionNotMatch => {
                 RequestStatusKind::err_buckets_version_not_match
             }
->>>>>>> d7fc4b3b2e (coprocessor: return `bucket version not match` error if the given bucket's version is stale (#15224))
             ErrorHeaderKind::Other => RequestStatusKind::err_other,
         }
     }

@@ -1,10 +1,11 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::Arc;
+use std::{sync::Arc, thread, time::Duration};
 
 use futures::executor::block_on;
 use grpcio::{ChannelBuilder, Environment};
 use kvproto::{
+    coprocessor::Request,
     kvrpcpb::{Context, IsolationLevel},
     tikvpb::TikvClient,
 };
@@ -418,8 +419,6 @@ fn test_read_index_lock_checking_on_follower() {
         resp
     );
 }
-<<<<<<< HEAD
-=======
 
 #[test_case(test_raftstore::new_server_cluster)]
 #[test_case(test_raftstore_v2::new_server_cluster)]
@@ -432,14 +431,14 @@ fn test_follower_buckets() {
     let (_, endpoint, _) =
         init_data_with_engine_and_commit(ctx.clone(), raft_engine, &product, &[], true);
 
-    let mut req = DagSelect::from(&product).build_with(ctx, &[0]);
+    let req = DagSelect::from(&product).build_with(ctx, &[0]);
     let resp = handle_request(&endpoint, req.clone());
     assert_eq!(resp.get_latest_buckets_version(), 0);
 
     let mut bucket_key = product.get_record_range_all().get_start().to_owned();
     bucket_key.push(0);
     let region = cluster.get_region(&bucket_key);
-    let bucket = Bucket {
+    let bucket = raftstore::store::Bucket {
         keys: vec![bucket_key],
         size: 1024,
     };
@@ -472,12 +471,5 @@ fn test_follower_buckets() {
         panic!("test_follower_buckets test case failed, can not get bucket version in time");
     };
     wait_refresh_buckets(endpoint, &mut req.clone());
-    for (engine, ctx) in follower_raft_engine!(cluster, "") {
-        req.set_context(ctx.clone());
-        let (_, endpoint, _) =
-            init_data_with_engine_and_commit(ctx.clone(), engine, &product, &[], true);
-        wait_refresh_buckets(endpoint, &mut req.clone());
-    }
     fail::remove("skip_check_stale_read_safe");
 }
->>>>>>> d7fc4b3b2e (coprocessor: return `bucket version not match` error if the given bucket's version is stale (#15224))
