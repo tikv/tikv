@@ -487,8 +487,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             quota_limiter,
             resource_manager,
             feature_gate,
-            // TODO: Make it configurable
-            txn_status_cache: TxnStatusCache::new(40 * 1000 * 128),
+            txn_status_cache: TxnStatusCache::new(config.txn_status_cache_capacity),
         });
 
         slow_log!(
