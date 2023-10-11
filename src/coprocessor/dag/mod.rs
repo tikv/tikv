@@ -237,13 +237,13 @@ mod tests {
 
         // Evaluate Error
         let err = CommonError::from(EvaluateError::DeadlineExceeded);
-        let res = handle_qe_response(Err(err.into()), false, None);
+        let res = handle_qe_response(Err(err), false, None);
         assert!(matches!(res, Err(Error::DeadlineExceeded)));
 
         let err = CommonError::from(EvaluateError::InvalidCharacterString {
             charset: "test".into(),
         });
-        let res = handle_qe_response(Err(err.into()), false, None).unwrap();
+        let res = handle_qe_response(Err(err), false, None).unwrap();
         let mut select_res = SelectResponse::new();
         Message::merge_from_bytes(&mut select_res, res.get_data()).unwrap();
         assert_eq!(select_res.get_error().get_code(), 1300);
