@@ -175,7 +175,25 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     }
 
     // Match v1::schedule_merge.
+<<<<<<< HEAD
     fn ask_target_peer_to_commit_merge<T>(&mut self, store_ctx: &mut StoreContext<EK, ER, T>) {
+=======
+    fn ask_target_peer_to_commit_merge<T: Transport>(
+        &mut self,
+        store_ctx: &mut StoreContext<EK, ER, T>,
+    ) {
+        fail::fail_point!("on_schedule_merge", |_| {});
+        fail::fail_point!(
+            "ask_target_peer_to_commit_merge_2",
+            self.region_id() == 2,
+            |_| {}
+        );
+        fail::fail_point!(
+            "ask_target_peer_to_commit_merge_store_1",
+            store_ctx.store_id == 1,
+            |_| {}
+        );
+>>>>>>> e29d3a989d (raftstore-v2: fix non-deterministic region merge (#15697))
         let state = self.applied_merge_state().unwrap();
         let target = state.get_target();
         let target_id = target.get_id();
@@ -290,14 +308,22 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 "ignore commit merge because peer is already in merged_records";
                 "source" => ?source_region,
             );
+<<<<<<< HEAD
             None
         } else if util::is_epoch_stale(expected_epoch, region.get_region_epoch()) {
+=======
+            return;
+        }
+        // current region_epoch > region epoch in commit merge.
+        if util::is_epoch_stale(expected_epoch, region.get_region_epoch()) {
+>>>>>>> e29d3a989d (raftstore-v2: fix non-deterministic region merge (#15697))
             info!(
                 self.logger,
                 "reject commit merge because of stale";
                 "current_epoch" => ?region.get_region_epoch(),
                 "expected_epoch" => ?expected_epoch,
             );
+<<<<<<< HEAD
             Some(false)
         } else if expected_epoch == region.get_region_epoch() {
             assert!(
@@ -321,12 +347,61 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 Some(true)
             }
         } else {
+=======
+            let index = commit_of_merge(req.get_admin_request().get_commit_merge());
+            let _ = store_ctx
+                .router
+                .force_send(source_id, PeerMsg::RejectCommitMerge { index });
+            return;
+        }
+        // current region_epoch < region epoch in commit merge.
+        if util::is_epoch_stale(region.get_region_epoch(), expected_epoch) {
+>>>>>>> e29d3a989d (raftstore-v2: fix non-deterministic region merge (#15697))
             info!(
                 self.logger,
-                "ignore commit merge because self epoch is stale";
+                "target region still not catch up, skip.";
                 "source" => ?source_region,
+                "target_region_epoch" => ?expected_epoch,
+                "exist_region_epoch" => ?self.region().get_region_epoch(),
             );
+<<<<<<< HEAD
             None
+=======
+            return;
+        }
+        assert!(
+            util::is_sibling_regions(source_region, region),
+            "{}: {:?}, {:?}",
+            SlogFormat(&self.logger),
+            source_region,
+            region
+        );
+        assert!(
+            region_on_same_stores(source_region, region),
+            "{:?}, {:?}",
+            source_region,
+            region
+        );
+        assert!(!self.storage().has_dirty_data());
+        let (ch, res) = CmdResChannel::pair();
+        self.on_admin_command(store_ctx, req, ch);
+        if let Some(res) = res.take_result()
+            && res.get_header().has_error()
+        {
+            error!(
+                self.logger,
+                "failed to propose commit merge";
+                "source" => source_id,
+                "res" => ?res,
+            );
+            fail::fail_point!(
+                "on_propose_commit_merge_fail_store_1",
+                store_ctx.store_id == 1,
+                |_| {}
+            );
+        } else {
+            fail::fail_point!("on_propose_commit_merge_success");
+>>>>>>> e29d3a989d (raftstore-v2: fix non-deterministic region merge (#15697))
         }
     }
 
@@ -649,6 +724,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             info!(
                 self.logger,
                 "become follower for new logs";
+                "first_log_term" => first.term,
+                "first_log_index" => first.index,
                 "new_log_term" => last_log.term,
                 "new_log_index" => last_log.index,
                 "term" => self.term(),
