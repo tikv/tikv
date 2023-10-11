@@ -1412,14 +1412,25 @@ impl DbConfig {
         }
     }
 
-    pub fn build_resources(&self, env: Arc<Env>) -> DbResources {
+    pub fn build_resources(&self, env: Arc<Env>, engine: EngineType) -> DbResources {
         let rate_limiter = if self.rate_bytes_per_sec.0 > 0 {
+            // for raft-v2, we use a longer window to make the compaction io smoother
+            let (tune_per_secs, window_size, recent_size) = match engine {
+                // 1s tune duraion, long term window is 5m, short term window is 30s.
+                // this is the default settings.
+                EngineType::RaftKv => (1, 300, 30),
+                // 5s tune duraion, long term window is 1h, short term window is 5m
+                EngineType::RaftKv2 => (5, 720, 60),
+            };
             Some(Arc::new(RateLimiter::new_writeampbased_with_auto_tuned(
                 self.rate_bytes_per_sec.0 as i64,
                 (self.rate_limiter_refill_period.as_millis() * 1000) as i64,
                 10, // fairness
                 self.rate_limiter_mode,
                 self.rate_limiter_auto_tuned,
+                tune_per_secs,
+                window_size,
+                recent_size,
             )))
         } else {
             None
@@ -3714,7 +3725,8 @@ impl TikvConfig {
         self.raft_engine.validate()?;
         self.server.validate()?;
         self.pd.validate()?;
-        self.coprocessor.validate()?;
+        self.coprocessor
+            .validate(self.storage.engine == EngineType::RaftKv2)?;
         self.raft_store.validate(
             self.coprocessor.region_split_size(),
             self.coprocessor.enable_region_bucket(),
@@ -4844,7 +4856,9 @@ mod tests {
     fn test_rocks_rate_limit_zero() {
         let mut tikv_cfg = TikvConfig::default();
         tikv_cfg.rocksdb.rate_bytes_per_sec = ReadableSize(0);
-        let resource = tikv_cfg.rocksdb.build_resources(Arc::new(Env::default()));
+        let resource = tikv_cfg
+            .rocksdb
+            .build_resources(Arc::new(Env::default()), tikv_cfg.storage.engine);
         tikv_cfg
             .rocksdb
             .build_opt(&resource, tikv_cfg.storage.engine);
@@ -5008,7 +5022,9 @@ mod tests {
         Arc<FlowController>,
     ) {
         assert_eq!(F::TAG, cfg.storage.api_version());
-        let resource = cfg.rocksdb.build_resources(Arc::default());
+        let resource = cfg
+            .rocksdb
+            .build_resources(Arc::default(), cfg.storage.engine);
         let engine = RocksDBEngine::new(
             &cfg.storage.data_dir,
             Some(cfg.rocksdb.build_opt(&resource, cfg.storage.engine)),
@@ -6223,21 +6239,25 @@ mod tests {
         let mut default_cfg = TikvConfig::default();
         default_cfg.coprocessor.region_split_size = Some(ReadableSize::mb(500));
         default_cfg.coprocessor.optimize_for(false);
-        default_cfg.coprocessor.validate().unwrap();
+        default_cfg.coprocessor.validate(false).unwrap();
         assert_eq!(
             default_cfg.coprocessor.region_split_size(),
             ReadableSize::mb(500)
         );
+        assert!(!default_cfg.coprocessor.enable_region_bucket());
+        default_cfg.coprocessor.validate(true).unwrap();
         assert!(default_cfg.coprocessor.enable_region_bucket());
 
         let mut default_cfg = TikvConfig::default();
         default_cfg.coprocessor.region_split_size = Some(ReadableSize::mb(500));
         default_cfg.coprocessor.optimize_for(true);
-        default_cfg.coprocessor.validate().unwrap();
+        default_cfg.coprocessor.validate(false).unwrap();
         assert_eq!(
             default_cfg.coprocessor.region_split_size(),
             ReadableSize::mb(500)
         );
+        assert!(!default_cfg.coprocessor.enable_region_bucket());
+        default_cfg.coprocessor.validate(true).unwrap();
         assert!(default_cfg.coprocessor.enable_region_bucket());
     }
 
