@@ -169,9 +169,9 @@ impl lru::EvictPolicy<TimeStamp, CacheEntry> for TxnStatusCacheEvictPolicy {
         capacity: usize,
         get_tail_kv: &impl GetTailKv<TimeStamp, CacheEntry>,
     ) -> bool {
-        if current_size <= capacity {
-            return false;
-        }
+        // if current_size <= capacity {
+        //     return false;
+        // }
 
         // See how much time has been elapsed since the tail entry is inserted.
         // If it's long enough, remove it.
@@ -179,7 +179,7 @@ impl lru::EvictPolicy<TimeStamp, CacheEntry> for TxnStatusCacheEvictPolicy {
             self.now().duration_since(UNIX_EPOCH).unwrap().as_millis() as u64
                 > self.limit_millis + v.insert_time
         } else {
-            true
+            false
         }
     }
 }
@@ -671,6 +671,8 @@ mod tests {
         c.insert(3.into(), 4.into(), now());
         set_time(2);
         c.insert(5.into(), 6.into(), now());
+        // Size should be calculated by count.
+        assert_eq!(c.slots[0].lock().cache.size(), 3);
 
         // Insert entry 1 again. So if entry 1 is the first one to be popped out, it
         // verifies that inserting an existing key won't promote it.
@@ -774,13 +776,36 @@ mod tests {
         c.insert(25.into(), 26.into(), now() - Duration::from_millis(2));
         assert!(c.get_no_promote(17.into()).is_none());
         assert_eq!(c.get_no_promote(19.into()).unwrap(), 20.into());
+
+        // The cache's contents:
+        // 19@4007, 23@3500, 25@4007
+        set_time(4010);
+        c.insert(27.into(), 28.into(), now());
+        // The cache's contents:
+        // 19@4007, 23@3500, 25@4007, 27@4010
+
         // It's also possible to check with a lower time considering that system time
         // may be changed. Insert with time 5018, but check with time 5008
         set_time(5008);
-        c.insert(27.into(), 28.into(), now() + Duration::from_millis(10));
+        c.insert(29.into(), 30.into(), now() + Duration::from_millis(10));
         assert!(c.get_no_promote(19.into()).is_none());
         assert!(c.get_no_promote(23.into()).is_none());
-        assert_eq!(c.get_no_promote(25.into()).unwrap(), 26.into());
+        assert!(c.get_no_promote(25.into()).is_none());
         assert_eq!(c.get_no_promote(27.into()).unwrap(), 28.into());
+        assert_eq!(c.get_no_promote(29.into()).unwrap(), 30.into());
+
+        // Now the the cache's contents are:
+        // 27@4010, 29@5018
+        // Considering the case that system time is being changed, it's even
+        // possible that the entry being inserted is already expired
+        // comparing to the current time. It doesn't matter whether the
+        // entry will be dropped immediately or not. We just ensure it won't
+        // trigger more troubles.
+        set_time(7000);
+        c.insert(31.into(), 32.into(), now() - Duration::from_millis(1001));
+        assert!(c.get_no_promote(27.into()).is_none());
+        assert!(c.get_no_promote(29.into()).is_none());
+        assert!(c.get_no_promote(31.into()).is_none());
+        assert_eq!(c.slots[0].lock().cache.size(), 0);
     }
 }
