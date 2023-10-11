@@ -42,7 +42,7 @@
 //!
 //! Our second solution, additional to the previous one, is to use this cache.
 //! Each committed transaction should be guaranteed to be kept in the cache for
-//! [a long-enough time](CACHE_ITEMS_REQUIRED_KEEP_TIME_MILLIS). When a prewrite
+//! [a long-enough time](CACHE_ITEMS_REQUIRED_KEEP_TIME). When a prewrite
 //! request is received, it should check the cache before executing. If it finds
 //! its belonging transaction is already committed, it won't skip constraint
 //! check in WRITE CF. Note that if the index key is already committed but the
@@ -55,7 +55,7 @@
 //! may still be problematic due to the following reasons:
 //!
 //! 1. We don't have mechanism to refuse requests that have
-//! past more than [CACHE_ITEMS_REQUIRED_KEEP_TIME_MILLIS] since they were sent.
+//! past more than [CACHE_ITEMS_REQUIRED_KEEP_TIME] since they were sent.
 //! 2. To prevent the cache from consuming too much more memory than expected,
 //! we have a limit to the capacity (though the limit is very large), and it's
 //! configurable (so the cache can be disabled, see how the `capacity` parameter
@@ -108,7 +108,7 @@
 
 use std::{
     sync::{atomic::AtomicU64, Arc},
-    time::{SystemTime, UNIX_EPOCH},
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use crossbeam::utils::CachePadded;
@@ -128,7 +128,7 @@ const TXN_STATUS_CACHE_SLOTS: usize = 128;
 /// [this section](#
 /// for-filtering-out-unwanted-late-arrived-stale-prewrite-requests) for details
 /// about why this is needed.
-const CACHE_ITEMS_REQUIRED_KEEP_TIME_MILLIS: u64 = 30000;
+const CACHE_ITEMS_REQUIRED_KEEP_TIME: Duration = Duration::from_secs(30);
 
 struct CacheEntry {
     commit_ts: TimeStamp,
@@ -141,12 +141,23 @@ struct CacheEntry {
 /// [`TxnStatusCache`] needs to keep entries for a while, so the common
 /// policy that only limiting capacity is not proper to be used here.
 struct TxnStatusCacheEvictPolicy {
-    limit_millis: u64,
-    #[allow(dead_code)]
+    required_keep_time_millis: u64,
+    #[cfg(test)]
     simulated_system_time: Option<Arc<AtomicU64>>,
 }
 
 impl TxnStatusCacheEvictPolicy {
+    fn new(
+        required_keep_time: Duration,
+        #[allow(unused_variables)] simulated_system_time: Option<Arc<AtomicU64>>,
+    ) -> Self {
+        Self {
+            required_keep_time_millis: required_keep_time.as_millis() as u64,
+            #[cfg(test)]
+            simulated_system_time,
+        }
+    }
+
     #[inline]
     #[cfg(not(test))]
     fn now(&self) -> SystemTime {
@@ -182,7 +193,7 @@ impl lru::EvictPolicy<TimeStamp, CacheEntry> for TxnStatusCacheEvictPolicy {
         // If it's long enough, remove it.
         if let Some((_, v)) = get_tail_kv.get_tail_kv() {
             if self.now().duration_since(UNIX_EPOCH).unwrap().as_millis() as u64
-                > self.limit_millis + v.insert_time
+                > self.required_keep_time_millis + v.insert_time
             {
                 return true;
             }
@@ -193,11 +204,8 @@ impl lru::EvictPolicy<TimeStamp, CacheEntry> for TxnStatusCacheEvictPolicy {
     }
 }
 
-struct TxnStatusCacheSlot {
-    cache: LruCache<TimeStamp, CacheEntry, lru::CountTracker, TxnStatusCacheEvictPolicy>,
-    last_check_size: usize,
-    last_check_capacity: usize,
-}
+type TxnStatusCacheSlot =
+    LruCache<TimeStamp, CacheEntry, lru::CountTracker, TxnStatusCacheEvictPolicy>;
 
 /// The cache for storing transaction status. It holds recent
 /// `start_ts` -> `commit_ts` pairs for a while, which can be useful for quickly
@@ -221,7 +229,7 @@ unsafe impl Sync for TxnStatusCache {}
 impl TxnStatusCache {
     fn new_impl(
         slots: usize,
-        limit_millis: u64,
+        required_keep_time: Duration,
         capacity: usize,
         simulated_system_time: Option<Arc<AtomicU64>>,
     ) -> Self {
@@ -245,19 +253,14 @@ impl TxnStatusCache {
                         allowed_capacity_per_slot,
                         0,
                         lru::CountTracker::default(),
-                        TxnStatusCacheEvictPolicy {
-                            limit_millis,
-                            simulated_system_time: simulated_system_time.clone(),
-                        },
+                        TxnStatusCacheEvictPolicy::new(
+                            required_keep_time,
+                            simulated_system_time.clone(),
+                        ),
                     );
                     let allocated_capacity = cache.internal_allocated_capacity();
                     initial_allocated_capacity_total += allocated_capacity;
-                    Mutex::new(TxnStatusCacheSlot {
-                        cache,
-                        last_check_size: 0,
-                        last_check_capacity: allocated_capacity,
-                    })
-                    .into()
+                    Mutex::new(cache).into()
                 })
                 .collect(),
             is_enabled: true,
@@ -271,7 +274,7 @@ impl TxnStatusCache {
     pub fn new(capacity: usize) -> Self {
         Self::with_slots_and_time_limit(
             TXN_STATUS_CACHE_SLOTS,
-            CACHE_ITEMS_REQUIRED_KEEP_TIME_MILLIS,
+            CACHE_ITEMS_REQUIRED_KEEP_TIME,
             capacity,
         )
     }
@@ -279,11 +282,15 @@ impl TxnStatusCache {
     #[cfg(test)]
     pub fn new_for_test() -> Self {
         // 1M capacity should be enough for tests.
-        Self::with_slots_and_time_limit(16, CACHE_ITEMS_REQUIRED_KEEP_TIME_MILLIS, 1 << 20)
+        Self::with_slots_and_time_limit(16, CACHE_ITEMS_REQUIRED_KEEP_TIME, 1 << 20)
     }
 
-    pub fn with_slots_and_time_limit(slots: usize, limit_millis: u64, capacity: usize) -> Self {
-        Self::new_impl(slots, limit_millis, capacity, None)
+    pub fn with_slots_and_time_limit(
+        slots: usize,
+        required_keep_time: Duration,
+        capacity: usize,
+    ) -> Self {
+        Self::new_impl(slots, required_keep_time, capacity, None)
     }
 
     /// Create a `TxnStatusCache` instance for test purpose, with simulating
@@ -295,11 +302,16 @@ impl TxnStatusCache {
     #[cfg(test)]
     fn with_simulated_system_time(
         slots: usize,
-        limit_millis: u64,
+        requried_keep_time: Duration,
         capacity: usize,
     ) -> (Self, Arc<AtomicU64>) {
         let system_time = Arc::new(AtomicU64::new(0));
-        let res = Self::new_impl(slots, limit_millis, capacity, Some(system_time.clone()));
+        let res = Self::new_impl(
+            slots,
+            requried_keep_time,
+            capacity,
+            Some(system_time.clone()),
+        );
         (res, system_time)
     }
 
@@ -318,27 +330,27 @@ impl TxnStatusCache {
             return;
         }
 
-        let mut slot = self.slots[self.slot_index(start_ts)].lock();
         let insert_time = now.duration_since(UNIX_EPOCH).unwrap().as_millis() as u64;
-        slot.cache.insert_if_not_exist(
+        let mut slot = self.slots[self.slot_index(start_ts)].lock();
+        let previous_size = slot.size();
+        let previous_allocated = slot.internal_allocated_capacity();
+        slot.insert_if_not_exist(
             start_ts,
             CacheEntry {
                 commit_ts,
                 insert_time,
             },
         );
-        let size = slot.cache.size();
-        let capacity = slot.cache.internal_allocated_capacity();
+        let size = slot.size();
+        let allocated = slot.internal_allocated_capacity();
         // Update statistics.
         // CAUTION: Assuming that only one TxnStatusCache instance is in a TiKV process.
         SCHED_TXN_STATUS_CACHE_SIZE
             .used
-            .add(size as i64 - slot.last_check_size as i64);
+            .add(size as i64 - previous_size as i64);
         SCHED_TXN_STATUS_CACHE_SIZE
             .allocated
-            .add(capacity as i64 - slot.last_check_capacity as i64);
-        slot.last_check_size = size;
-        slot.last_check_capacity = capacity;
+            .add(allocated as i64 - previous_allocated as i64);
     }
 
     /// Try to get an item from the cache, without promoting the item (if
@@ -349,9 +361,7 @@ impl TxnStatusCache {
         }
 
         let slot = self.slots[self.slot_index(start_ts)].lock();
-        slot.cache
-            .get_no_promote(&start_ts)
-            .map(|entry| entry.commit_ts)
+        slot.get_no_promote(&start_ts).map(|entry| entry.commit_ts)
     }
 
     pub fn get(&self, start_ts: TimeStamp) -> Option<TimeStamp> {
@@ -360,7 +370,7 @@ impl TxnStatusCache {
         }
 
         let mut slot = self.slots[self.slot_index(start_ts)].lock();
-        slot.cache.get(&start_ts).map(|entry| entry.commit_ts)
+        slot.get(&start_ts).map(|entry| entry.commit_ts)
     }
 }
 
@@ -381,7 +391,7 @@ mod tests {
     fn bench_insert_impl(b: &mut test::Bencher, init_size: usize) {
         let (c, time) = TxnStatusCache::with_simulated_system_time(
             TXN_STATUS_CACHE_SLOTS,
-            init_size as u64,
+            Duration::from_millis(init_size as u64),
             1 << 20,
         );
         let start_time = SystemTime::now();
@@ -418,7 +428,7 @@ mod tests {
     fn bench_get_impl(b: &mut test::Bencher, init_size: usize) {
         let c = TxnStatusCache::with_slots_and_time_limit(
             TXN_STATUS_CACHE_SLOTS,
-            CACHE_ITEMS_REQUIRED_KEEP_TIME_MILLIS,
+            CACHE_ITEMS_REQUIRED_KEEP_TIME,
             1 << 20,
         );
         let now = SystemTime::now();
@@ -600,8 +610,11 @@ mod tests {
         } else {
             TXN_STATUS_CACHE_SLOTS
         };
-        let (c, time) =
-            TxnStatusCache::with_simulated_system_time(slots, init_size as u64, 1 << 20);
+        let (c, time) = TxnStatusCache::with_simulated_system_time(
+            slots,
+            Duration::from_millis(init_size as u64),
+            1 << 20,
+        );
         let start_time = SystemTime::now();
         for i in 1..=init_size {
             c.insert(
@@ -697,7 +710,8 @@ mod tests {
 
     #[test]
     fn test_evicting_expired() {
-        let (c, time) = TxnStatusCache::with_simulated_system_time(1, 1000, 1000);
+        let (c, time) =
+            TxnStatusCache::with_simulated_system_time(1, Duration::from_millis(1000), 1000);
         let time_base = SystemTime::now();
         let set_time = |offset_millis: u64| {
             time.store(
@@ -719,7 +733,7 @@ mod tests {
         set_time(2);
         c.insert(5.into(), 6.into(), now());
         // Size should be calculated by count.
-        assert_eq!(c.slots[0].lock().cache.size(), 3);
+        assert_eq!(c.slots[0].lock().size(), 3);
 
         // Insert entry 1 again. So if entry 1 is the first one to be popped out, it
         // verifies that inserting an existing key won't promote it.
@@ -853,18 +867,18 @@ mod tests {
         assert!(c.get_no_promote(27.into()).is_none());
         assert!(c.get_no_promote(29.into()).is_none());
         assert!(c.get_no_promote(31.into()).is_none());
-        assert_eq!(c.slots[0].lock().cache.size(), 0);
+        assert_eq!(c.slots[0].lock().size(), 0);
     }
 
     #[test]
     fn test_setting_capacity() {
-        let c = TxnStatusCache::new_impl(2, 1000, 10, None);
+        let c = TxnStatusCache::new_impl(2, Duration::from_millis(1000), 10, None);
         assert!(c.is_enabled);
         assert_eq!(c.slots.len(), 2);
-        assert_eq!(c.slots[0].lock().cache.capacity(), 5);
-        assert_eq!(c.slots[1].lock().cache.capacity(), 5);
+        assert_eq!(c.slots[0].lock().capacity(), 5);
+        assert_eq!(c.slots[1].lock().capacity(), 5);
 
-        let c = TxnStatusCache::new_impl(2, 1000, 0, None);
+        let c = TxnStatusCache::new_impl(2, Duration::from_millis(1000), 0, None);
         assert!(!c.is_enabled);
         assert_eq!(c.slots.len(), 0);
         // All operations are noops and won't cause panic or return any incorrect
@@ -876,7 +890,8 @@ mod tests {
 
     #[test]
     fn test_evicting_by_capacity() {
-        let (c, time) = TxnStatusCache::with_simulated_system_time(1, 1000, 5);
+        let (c, time) =
+            TxnStatusCache::with_simulated_system_time(1, Duration::from_millis(1000), 5);
         let time_base = SystemTime::now();
         let set_time = |offset_millis: u64| {
             time.store(
@@ -899,18 +914,18 @@ mod tests {
         set_time(8);
         c.insert(9.into(), 10.into(), now());
         // Entry 1 not evicted. 5 entries in the cache currently
-        assert_eq!(c.slots[0].lock().cache.len(), 5);
+        assert_eq!(c.slots[0].lock().len(), 5);
         assert_eq!(c.get_no_promote(1.into()).unwrap(), 2.into());
         set_time(10);
         c.insert(11.into(), 12.into(), now());
         // Entry 1 evicted. Still 5 entries in the cache.
-        assert_eq!(c.slots[0].lock().cache.len(), 5);
+        assert_eq!(c.slots[0].lock().len(), 5);
         assert!(c.get_no_promote(1.into()).is_none());
         assert_eq!(c.get_no_promote(3.into()).unwrap(), 4.into());
 
         // Nothing will be evicted after trying to insert an existing key.
         c.insert(11.into(), 12.into(), now());
-        assert_eq!(c.slots[0].lock().cache.len(), 5);
+        assert_eq!(c.slots[0].lock().len(), 5);
         assert_eq!(c.get_no_promote(3.into()).unwrap(), 4.into());
 
         // Current contents (key@time):
@@ -918,7 +933,7 @@ mod tests {
         // Evicting by time works as well.
         set_time(1005);
         c.insert(13.into(), 14.into(), now());
-        assert_eq!(c.slots[0].lock().cache.len(), 4);
+        assert_eq!(c.slots[0].lock().len(), 4);
         assert!(c.get_no_promote(3.into()).is_none());
         assert!(c.get_no_promote(5.into()).is_none());
         assert_eq!(c.get_no_promote(7.into()).unwrap(), 8.into());
@@ -931,12 +946,12 @@ mod tests {
         c.insert(15.into(), 16.into(), now());
         // Current contents:
         // 13@1005, 7@6. 9@8, 11@10, 15@1005
-        assert_eq!(c.slots[0].lock().cache.len(), 5);
+        assert_eq!(c.slots[0].lock().len(), 5);
         // Expired entries that are not the tail can be evicted after the tail
         // is evicted due to capacity exceeded.
         set_time(1011);
         c.insert(17.into(), 18.into(), now());
-        assert_eq!(c.slots[0].lock().cache.len(), 2);
+        assert_eq!(c.slots[0].lock().len(), 2);
         assert!(c.get_no_promote(13.into()).is_none());
         assert!(c.get_no_promote(7.into()).is_none());
         assert!(c.get_no_promote(9.into()).is_none());
