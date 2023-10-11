@@ -95,7 +95,6 @@ pub fn enter_snap_recovery_mode(config: &mut TikvConfig) {
     // The election is fully controlled by the restore procedure of BR.
     config.raft_store.allow_unsafe_vote_after_start = true;
 
-
     // disable auto compactions during the restore
     config.rocksdb.defaultcf.disable_auto_compactions = true;
     config.rocksdb.writecf.disable_auto_compactions = true;
