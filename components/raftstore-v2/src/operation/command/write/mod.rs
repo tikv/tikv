@@ -5,7 +5,7 @@ use engine_traits::{
 };
 use fail::fail_point;
 use futures::channel::oneshot;
-use kvproto::{kvrpcpb::DiskFullOpt, raft_cmdpb::RaftRequestHeader};
+use kvproto::raft_cmdpb::RaftRequestHeader;
 use raftstore::{
     store::{
         cmd_resp,
@@ -13,6 +13,7 @@ use raftstore::{
         metrics::PEER_WRITE_CMD_COUNTER,
         msg::ErrorCallback,
         util::{self, NORMAL_REQ_CHECK_CONF_VER, NORMAL_REQ_CHECK_VER},
+        RaftCmdExtraOpts,
     },
     Error, Result,
 };
@@ -42,7 +43,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         header: Box<RaftRequestHeader>,
         data: SimpleWriteBinary,
         ch: CmdResChannel,
-        disk_full_opt: Option<DiskFullOpt>,
+        extra_opts: Option<RaftCmdExtraOpts>,
     ) {
         if !self.serving() {
             apply::notify_req_region_removed(self.region_id(), ch);
@@ -60,12 +61,19 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             ch.report_error(resp);
             return;
         }
-        // Check whether the write request can be proposed with the given disk full
-        // option.
-        if let Some(opt) = disk_full_opt && let Err(e) = self.check_proposal_with_disk_full_opt(ctx, opt) {
-            let resp = cmd_resp::new_error(e);
-            ch.report_error(resp);
-            return;
+        if let Some(opts) = extra_opts {
+            if let Some(Err(e)) = opts.deadline.map(|deadline| deadline.check()) {
+                let resp = cmd_resp::new_error(e.into());
+                ch.report_error(resp);
+                return;
+            }
+            // Check whether the write request can be proposed with the given disk full
+            // option.
+            if let Err(e) = self.check_proposal_with_disk_full_opt(ctx, opts.disk_full_opt) {
+                let resp = cmd_resp::new_error(e);
+                ch.report_error(resp);
+                return;
+            }
         }
         // To maintain propose order, we need to make pending proposal first.
         self.propose_pending_writes(ctx);

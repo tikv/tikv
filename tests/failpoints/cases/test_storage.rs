@@ -237,8 +237,9 @@ fn test_raftkv_early_error_report() {
     fail::remove(raftkv_fp);
 }
 
+// FIXME: #[test_case(test_raftstore_v2::new_server_cluster)]
+// Raftstore-v2 not support get the storage engine, returning `None` currently.
 #[test_case(test_raftstore::new_server_cluster)]
-#[test_case(test_raftstore_v2::new_server_cluster)] // TODO: have bugs
 fn test_scale_scheduler_pool() {
     let snapshot_fp = "scheduler_start_execute";
     let mut cluster = new_cluster(0, 1);
@@ -1096,8 +1097,8 @@ fn test_async_apply_prewrite_impl<E: Engine, F: KvFormat>(
     }
 }
 
-// #[test_case(test_raftstore::new_server_cluster)]
-#[test_case(test_raftstore_v2::new_server_cluster)] // TODO: have bugs
+#[test_case(test_raftstore::new_server_cluster)]
+#[test_case(test_raftstore_v2::new_server_cluster)]
 fn test_async_apply_prewrite() {
     let mut cluster = new_cluster(0, 1);
     cluster.run();
@@ -1120,7 +1121,6 @@ fn test_async_apply_prewrite() {
     ctx.set_region_epoch(cluster.get_region_epoch(1));
     ctx.set_peer(cluster.leader_of_region(1).unwrap());
 
-    println!("Case 1");
     test_async_apply_prewrite_impl(
         &storage,
         ctx.clone(),
@@ -1133,7 +1133,6 @@ fn test_async_apply_prewrite() {
         true,
         true,
     );
-    println!("Case 2");
     test_async_apply_prewrite_impl(
         &storage,
         ctx.clone(),
@@ -1146,7 +1145,6 @@ fn test_async_apply_prewrite() {
         true,
         true,
     );
-    println!("Case 3");
     test_async_apply_prewrite_impl(
         &storage,
         ctx.clone(),
@@ -1159,7 +1157,6 @@ fn test_async_apply_prewrite() {
         true,
         true,
     );
-    println!("Case 4");
     test_async_apply_prewrite_impl(
         &storage,
         ctx.clone(),
@@ -1172,7 +1169,6 @@ fn test_async_apply_prewrite() {
         false,
         false,
     );
-    println!("Case 6");
     test_async_apply_prewrite_impl(
         &storage,
         ctx.clone(),
@@ -1185,7 +1181,6 @@ fn test_async_apply_prewrite() {
         false,
         false,
     );
-    println!("Case 7");
     test_async_apply_prewrite_impl(
         &storage,
         ctx,
@@ -1420,7 +1415,7 @@ fn test_async_apply_prewrite_1pc() {
 }
 
 #[test_case(test_raftstore::new_server_cluster)]
-#[test_case(test_raftstore_v2::new_server_cluster)] // TODO: dead lock
+#[test_case(test_raftstore_v2::new_server_cluster)]
 fn test_atomic_cas_lock_by_latch() {
     let mut cluster = new_cluster(0, 1);
     cluster.run();
@@ -1609,7 +1604,7 @@ fn test_deadline_exceeded_on_get_and_batch_get() {
 }
 
 #[test_case(test_raftstore::new_server_cluster)]
-#[test_case(test_raftstore_v2::new_server_cluster)] // TODO: have bugs
+#[test_case(test_raftstore_v2::new_server_cluster)]
 fn test_before_propose_deadline() {
     let mut cluster = new_cluster(0, 1);
     cluster.run();

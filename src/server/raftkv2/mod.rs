@@ -20,7 +20,10 @@ use kvproto::{
 pub use node::NodeV2;
 pub use raft_extension::Extension;
 use raftstore::{
-    store::{cmd_resp, msg::ErrorCallback, util::encode_start_ts_into_flag_data, RegionSnapshot},
+    store::{
+        cmd_resp, msg::ErrorCallback, util::encode_start_ts_into_flag_data, RaftCmdExtraOpts,
+        RegionSnapshot,
+    },
     Error,
 };
 use raftstore_v2::{
@@ -322,7 +325,10 @@ impl<EK: KvEngine, ER: RaftEngine> tikv_kv::Engine for RaftKv2<EK, ER> {
                 data,
                 ch,
                 send_time: Instant::now_coarse(),
-                disk_full_opt: batch.disk_full_opt,
+                extra_opts: RaftCmdExtraOpts {
+                    deadline: batch.deadline,
+                    disk_full_opt: batch.disk_full_opt,
+                },
             });
             self.router
                 .store_router()
