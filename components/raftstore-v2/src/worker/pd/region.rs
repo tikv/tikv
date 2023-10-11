@@ -339,9 +339,9 @@ where
         self.is_hb_receiver_scheduled = true;
     }
 
-    pub fn handle_report_region_buckets(&mut self, region_buckets: BucketStat) {
-        let region_id = region_buckets.meta.region_id;
-        self.merge_buckets(region_buckets);
+    pub fn handle_report_region_buckets(&mut self, delta_buckets: BucketStat) {
+        let region_id = delta_buckets.meta.region_id;
+        self.merge_buckets(delta_buckets);
         let report_buckets = self.region_buckets.get_mut(&region_id).unwrap();
         let last_report_ts = if report_buckets.last_report_ts.is_zero() {
             self.start_ts
@@ -388,8 +388,8 @@ where
                 .engine_total_query_num
                 .add_query_stats(&region_info.query_stats.0);
         }
-        for (_, region_buckets) in std::mem::take(&mut stats.region_buckets) {
-            self.merge_buckets(region_buckets);
+        for (_, delta_buckets) in std::mem::take(&mut stats.region_buckets) {
+            self.merge_buckets(delta_buckets);
         }
         if !stats.region_infos.is_empty() {
             self.stats_monitor.maybe_send_read_stats(stats);
@@ -424,18 +424,18 @@ where
         }
     }
 
-    fn merge_buckets(&mut self, mut buckets: BucketStat) {
-        let region_id = buckets.meta.region_id;
+    fn merge_buckets(&mut self, mut delta: BucketStat) {
+        let region_id = delta.meta.region_id;
         self.region_buckets
             .entry(region_id)
             .and_modify(|report_bucket| {
                 let current = &mut report_bucket.current_stat;
-                if current.meta < buckets.meta {
-                    std::mem::swap(current, &mut buckets);
+                if current.meta < delta.meta {
+                    std::mem::swap(current, &mut delta);
                 }
-                current.merge(&buckets);
+                current.merge(&delta);
             })
-            .or_insert_with(|| ReportBucket::new(buckets));
+            .or_insert_with(|| ReportBucket::new(delta));
     }
 
     fn calculate_region_cpu_records(
