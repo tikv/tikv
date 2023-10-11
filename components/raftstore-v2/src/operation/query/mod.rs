@@ -136,6 +136,12 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 
         let flags = WriteBatchFlags::from_bits_check(msg.get_header().get_flags());
         if flags.contains(WriteBatchFlags::STALE_READ) {
+            // log the stale read request.
+            info!(
+                self.logger,
+                "unexpected stale read request";
+                "request" => ?msg,
+            );
             return Err(box_err!(
                 "PeerMsg::RaftQuery should not get stale read requests"
             ));
