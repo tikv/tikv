@@ -1889,7 +1889,9 @@ mod tests {
         .unwrap_err();
         assert!(matches!(
             res,
-            Error(box ErrorInner::Mvcc(MvccError(box MvccErrorInner::AlreadyExist { .. })))
+            Error(box ErrorInner::Mvcc(MvccError(
+                box MvccErrorInner::AlreadyExist { .. }
+            )))
         ));
 
         assert_eq!(cm.max_ts().into_inner(), 15);
@@ -1912,7 +1914,9 @@ mod tests {
         .unwrap_err();
         assert!(matches!(
             res,
-            Error(box ErrorInner::Mvcc(MvccError(box MvccErrorInner::WriteConflict { .. })))
+            Error(box ErrorInner::Mvcc(MvccError(
+                box MvccErrorInner::WriteConflict { .. }
+            )))
         ));
     }
 
@@ -2322,9 +2326,9 @@ mod tests {
         .unwrap_err();
         assert!(matches!(
             err,
-            Error(box ErrorInner::Mvcc(MvccError(box MvccErrorInner::PessimisticLockNotFound {
-                ..
-            })))
+            Error(box ErrorInner::Mvcc(MvccError(
+                box MvccErrorInner::PessimisticLockNotFound { .. }
+            )))
         ));
         must_unlocked(&mut engine, b"k2");
         // However conflict still won't be checked if there's a non-retry request
@@ -2507,9 +2511,9 @@ mod tests {
         let err = prewrite_command(&mut engine, cm.clone(), &mut stat, cmd).unwrap_err();
         assert!(matches!(
             err,
-            Error(box ErrorInner::Mvcc(MvccError(box MvccErrorInner::PessimisticLockNotFound {
-                ..
-            })))
+            Error(box ErrorInner::Mvcc(MvccError(
+                box MvccErrorInner::PessimisticLockNotFound { .. }
+            )))
         ));
         // Passing keys in different order gets the same result:
         let cmd = PrewritePessimistic::with_defaults(
@@ -2530,9 +2534,9 @@ mod tests {
         let err = prewrite_command(&mut engine, cm, &mut stat, cmd).unwrap_err();
         assert!(matches!(
             err,
-            Error(box ErrorInner::Mvcc(MvccError(box MvccErrorInner::PessimisticLockNotFound {
-                ..
-            })))
+            Error(box ErrorInner::Mvcc(MvccError(
+                box MvccErrorInner::PessimisticLockNotFound { .. }
+            )))
         ));
 
         // If the two keys are sent in different requests, it would be the client's duty
