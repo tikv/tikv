@@ -718,7 +718,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         );
         let region_id = self.region_id();
         let flush_threshold: u64 = (|| {
-            fail_point!("flush_before_cluse_threshold", |t| {
+            fail_point!("flush_before_close_threshold", |t| {
                 t.unwrap().parse::<u64>().unwrap()
             });
             50

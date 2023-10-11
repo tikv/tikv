@@ -7,7 +7,7 @@ use std::{
 
 use engine_traits::Peekable;
 use raftstore_v2::router::{PeerMsg, PeerTick};
-use tikv_util::store::new_peer;
+use tikv_util::{config::ReadableDuration, info, store::new_peer};
 
 use crate::cluster::{
     life_helper::assert_peer_not_exist,
@@ -179,7 +179,9 @@ fn test_rollback() {
 // Target is merging.
 #[test]
 fn test_merge_conflict_0() {
-    let mut cluster = Cluster::default();
+    let mut cluster = Cluster::with_configs(1, None, None, |cfg| {
+        cfg.merge_check_tick_interval = ReadableDuration::millis(100);
+    });
     let store_id = cluster.node(0).id();
     let router = &mut cluster.routers[0];
 
@@ -216,6 +218,7 @@ fn test_merge_conflict_0() {
         format!("k{}", region_3_id).as_bytes(),
         false,
     );
+    info!("regions: {:?}, {:?}, {:?}", region_1, region_2, region_3);
 
     // pause merge progress of 2+3.
     let fp = fail::FailGuard::new("apply_commit_merge", "pause");
@@ -236,9 +239,9 @@ fn test_merge_conflict_0() {
     .unwrap();
     let region_2 = cluster.routers[0].region_detail(region_2.get_id());
     merge_region(&cluster, 0, region_1, peer_1, region_2, false);
+    drop(fp);
     // wait for rollback.
     rx.recv_timeout(std::time::Duration::from_secs(1)).unwrap();
-    drop(fp);
     fail::remove("apply_rollback_merge");
 
     // Check region 1 is not merged and can serve writes.
