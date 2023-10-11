@@ -304,6 +304,7 @@ impl<EK: KvEngine, ER: RaftEngine> tikv_kv::Engine for RaftKv2<EK, ER> {
             data,
             ch,
             send_time: Instant::now_coarse(),
+            disk_full_opt: batch.disk_full_opt,
         });
         let res = self
             .router
