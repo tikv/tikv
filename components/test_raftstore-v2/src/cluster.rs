@@ -37,7 +37,7 @@ use pd_client::PdClient;
 use raftstore::{
     store::{
         cmd_resp, initial_region, region_meta::RegionMeta, util::check_key_in_region, Bucket,
-        BucketRange, Callback, RegionSnapshot, TabletSnapManager, WriteResponse,
+        BucketRange, Callback, RaftCmdExtraOpts, RegionSnapshot, TabletSnapManager, WriteResponse,
         INIT_EPOCH_CONF_VER, INIT_EPOCH_VER,
     },
     Error, Result,
@@ -220,7 +220,7 @@ pub trait Simulator<EK: KvEngine> {
             None => {
                 error!("call_query_on_node receives none response"; "request" => ?request);
                 // Do not unwrap here, sometimes raftstore v2 may return none.
-                Err(box_err!("receives none response {:?}", request))
+                return Err(box_err!("receives none response {:?}", request));
             }
         }
     }
@@ -285,7 +285,16 @@ pub trait Simulator<EK: KvEngine> {
     fn async_command_on_node(
         &mut self,
         node_id: u64,
+        request: RaftCmdRequest,
+    ) -> BoxFuture<'static, RaftCmdResponse> {
+        self.async_command_on_node_with_opts(node_id, request, RaftCmdExtraOpts::default())
+    }
+
+    fn async_command_on_node_with_opts(
+        &mut self,
+        node_id: u64,
         mut request: RaftCmdRequest,
+        opts: RaftCmdExtraOpts,
     ) -> BoxFuture<'static, RaftCmdResponse> {
         let region_id = request.get_header().get_region_id();
 
@@ -316,7 +325,11 @@ pub trait Simulator<EK: KvEngine> {
                     _ => unreachable!(),
                 }
             }
-            PeerMsg::simple_write(Box::new(request.take_header()), write_encoder.encode())
+            PeerMsg::simple_write_with_opt(
+                Box::new(request.take_header()),
+                write_encoder.encode(),
+                opts.disk_full_opt,
+            )
         };
 
         self.async_peer_msg_on_node(node_id, region_id, msg)
@@ -1275,6 +1288,20 @@ impl<T: Simulator<EK>, EK: KvEngine> Cluster<T, EK> {
             .async_command_on_node(leader.get_store_id(), req)
     }
 
+    pub fn async_request_with_opts(
+        &mut self,
+        mut req: RaftCmdRequest,
+        opts: RaftCmdExtraOpts,
+    ) -> Result<BoxFuture<'static, RaftCmdResponse>> {
+        let region_id = req.get_header().get_region_id();
+        let leader = self.leader_of_region(region_id).unwrap();
+        req.mut_header().set_peer(leader.clone());
+        Ok(self
+            .sim
+            .wl()
+            .async_command_on_node_with_opts(leader.get_store_id(), req, opts))
+    }
+
     pub fn async_put(
         &mut self,
         key: &[u8],
@@ -1612,7 +1639,6 @@ impl<T: Simulator<EK>, EK: KvEngine> Cluster<T, EK> {
         )
     }
 
-    #[allow(clippy::let_underscore_future)]
     pub fn merge_region(&mut self, source: u64, target: u64, _cb: Callback<RocksSnapshot>) {
         // FIXME: callback is ignored.
         let mut req = self.new_prepare_merge(source, target);
@@ -1687,6 +1713,50 @@ impl<T: Simulator<EK>, EK: KvEngine> Cluster<T, EK> {
                 panic!("region {} is not removed after 60s.", region_id);
             }
             thread::sleep(Duration::from_millis(100));
+        }
+    }
+
+    pub fn must_empty_region_removed_records(&mut self, region_id: u64) {
+        let timer = Instant::now();
+        loop {
+            thread::sleep(Duration::from_millis(100));
+
+            let leader = match self.leader_of_region(region_id) {
+                None => continue,
+                Some(l) => l,
+            };
+            let region_state = self.region_local_state(region_id, leader.get_store_id());
+            if region_state.get_removed_records().is_empty() {
+                return;
+            }
+            if timer.saturating_elapsed() > Duration::from_secs(5) {
+                panic!(
+                    "merged records and removed records must be empty, {:?}",
+                    region_state
+                );
+            }
+        }
+    }
+
+    pub fn must_empty_region_merged_records(&mut self, region_id: u64) {
+        let timer = Instant::now();
+        loop {
+            thread::sleep(Duration::from_millis(100));
+
+            let leader = match self.leader_of_region(region_id) {
+                None => continue,
+                Some(l) => l,
+            };
+            let region_state = self.region_local_state(region_id, leader.get_store_id());
+            if region_state.get_merged_records().is_empty() {
+                return;
+            }
+            if timer.saturating_elapsed() > Duration::from_secs(5) {
+                panic!(
+                    "merged records and removed records must be empty, {:?}",
+                    region_state
+                );
+            }
         }
     }
 

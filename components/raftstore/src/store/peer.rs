@@ -1086,6 +1086,8 @@ where
             // of term explicitly to get correct metadata.
             info!(
                 "become follower for new logs";
+                "first_log_term" => first.term,
+                "first_log_index" => first.index,
                 "new_log_term" => last_log.term,
                 "new_log_index" => last_log.index,
                 "term" => self.term(),
@@ -2314,14 +2316,14 @@ where
             CheckApplyingSnapStatus::Applying => {
                 // If this peer is applying snapshot, we should not get a new ready.
                 // There are two reasons in my opinion:
-                //   1. If we handle a new ready and persist the data(e.g. entries), we can not
-                //      tell raft-rs that this ready has been persisted because the ready need
-                //      to be persisted one by one from raft-rs's view.
-                //   2. When this peer is applying snapshot, the response msg should not be sent
-                //      to leader, thus the leader will not send new entries to this peer.
-                //      Although it's possible a new leader may send a AppendEntries msg to this
-                //      peer, this possibility is very low. In most cases, there is no msg need
-                //      to be handled.
+                //   1. If we handle a new ready and persist the data(e.g. entries),
+                //      we can not tell raft-rs that this ready has been persisted because
+                //      the ready need to be persisted one by one from raft-rs's view.
+                //   2. When this peer is applying snapshot, the response msg should not
+                //      be sent to leader, thus the leader will not send new entries to
+                //      this peer. Although it's possible a new leader may send a AppendEntries
+                //      msg to this peer, this possibility is very low. In most cases, there
+                //      is no msg need to be handled.
                 // So we choose to not get a new ready which makes the logic more clear.
                 debug!(
                     "still applying snapshot, skip further handling";
@@ -4467,25 +4469,27 @@ where
     /// to target follower first to ensures it's ready to become leader.
     /// After that the real transfer leader process begin.
     ///
-    /// 1. pre_transfer_leader on leader: Leader will send a MsgTransferLeader
-    ///    to follower.
-    /// 2. pre_ack_transfer_leader_msg on follower: If follower passes all
-    ///    necessary checks, it will try to warmup the entry cache.
-    /// 3. ack_transfer_leader_msg on follower: When the entry cache has been
-    ///    warmed up or the operator is timeout, the follower reply an ACK with
-    ///    type MsgTransferLeader and its promised persistent index.
+    /// 1. pre_transfer_leader on leader:
+    ///     Leader will send a MsgTransferLeader to follower.
+    /// 2. pre_ack_transfer_leader_msg on follower:
+    ///     If follower passes all necessary checks, it will try to warmup
+    ///     the entry cache.
+    /// 3. ack_transfer_leader_msg on follower:
+    ///     When the entry cache has been warmed up or the operator is timeout,
+    ///     the follower reply an ACK with type MsgTransferLeader and
+    ///     its promised persistent index.
     ///
     /// Additional steps when there are remaining pessimistic
     /// locks to propose (detected in function on_transfer_leader_msg).
     ///    1. Leader firstly proposes pessimistic locks and then proposes a
     ///       TransferLeader command.
-    ///    2. ack_transfer_leader_msg on follower again: The follower applies
-    ///       the TransferLeader command and replies an ACK with special context
-    ///       TRANSFER_LEADER_COMMAND_REPLY_CTX.
+    ///    2. ack_transfer_leader_msg on follower again:
+    ///        The follower applies the TransferLeader command and replies an
+    ///        ACK with special context TRANSFER_LEADER_COMMAND_REPLY_CTX.
     ///
-    /// 4. ready_to_transfer_leader on leader: Leader checks if it's appropriate
-    ///    to transfer leadership. If it does, it calls raft transfer_leader API
-    ///    to do the remaining work.
+    /// 4. ready_to_transfer_leader on leader:
+    ///     Leader checks if it's appropriate to transfer leadership. If it
+    ///     does, it calls raft transfer_leader API to do the remaining work.
     ///
     /// See also: tikv/rfcs#37.
     fn propose_transfer_leader<T>(
@@ -5046,6 +5050,15 @@ impl DiskFullPeers {
     }
     pub fn majority(&self) -> bool {
         self.majority
+    }
+    pub fn set_majority(&mut self, majority: bool) {
+        self.majority = majority;
+    }
+    pub fn peers(&self) -> &HashMap<u64, (DiskUsage, bool)> {
+        &self.peers
+    }
+    pub fn peers_mut(&mut self) -> &mut HashMap<u64, (DiskUsage, bool)> {
+        &mut self.peers
     }
     pub fn has(&self, peer_id: u64) -> bool {
         !self.peers.is_empty() && self.peers.contains_key(&peer_id)
@@ -5818,7 +5831,7 @@ mod tests {
         admin_req.clear_transfer_leader();
         req.clear_admin_request();
 
-        for (op, policy) in [
+        for (op, policy) in vec![
             (CmdType::Get, RequestPolicy::ReadLocal),
             (CmdType::Snap, RequestPolicy::ReadLocal),
             (CmdType::Put, RequestPolicy::ProposeNormal),
@@ -5971,7 +5984,7 @@ mod tests {
 
         // (1, 4) and (1, 5) is not committed
         let entries = vec![(1, 1), (1, 2), (1, 3), (1, 4), (1, 5), (2, 6), (2, 7)];
-        let committed = [(1, 1), (1, 2), (1, 3), (2, 6), (2, 7)];
+        let committed = vec![(1, 1), (1, 2), (1, 3), (2, 6), (2, 7)];
         for (index, term) in entries.clone() {
             if term != 1 {
                 continue;

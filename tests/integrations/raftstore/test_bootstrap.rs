@@ -216,7 +216,7 @@ fn test_flush_before_stop() {
     let region = cluster.get_region(b"k60");
     cluster.must_split(&region, b"k070");
 
-    fail::cfg("flush_before_cluse_threshold", "return(10)").unwrap();
+    fail::cfg("flush_before_close_threshold", "return(10)").unwrap();
 
     for i in 0..100 {
         let key = format!("k{:03}", i);
@@ -260,7 +260,7 @@ fn test_flush_before_stop2() {
     let mut cluster = new_server_cluster(0, 3);
     cluster.run();
 
-    fail::cfg("flush_before_cluse_threshold", "return(10)").unwrap();
+    fail::cfg("flush_before_close_threshold", "return(10)").unwrap();
     fail::cfg("on_flush_completed", "return").unwrap();
 
     for i in 0..20 {
@@ -287,8 +287,8 @@ fn test_flush_before_stop2() {
 // 1. lock `k` with index 6
 // 2. on_applied_res => lockcf's last_modified = 6
 // 3. flush lock cf => lockcf's flushed_index = 6
-// 4. batch {unlock `k`, write `k`} with index 7 (last_modified is updated in
-//    store but RocksDB is modified in apply. So,
+// 4. batch {unlock `k`, write `k`} with index 7
+//    (last_modified is updated in store but RocksDB is modified in apply. So,
 // before on_apply_res, the last_modified is not updated.)
 //
 // flush-before-close:
@@ -331,7 +331,7 @@ fn test_flush_index_exceed_last_modified() {
         )
         .unwrap();
 
-    fail::cfg("flush_before_cluse_threshold", "return(1)").unwrap();
+    fail::cfg("flush_before_close_threshold", "return(1)").unwrap();
     let router = cluster.get_router(1).unwrap();
     let (tx, rx) = sync_channel(1);
     let msg = PeerMsg::FlushBeforeClose { tx };

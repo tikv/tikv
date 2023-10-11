@@ -482,6 +482,12 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         }
         self.check_unsafe_recovery_state(ctx);
     }
+
+    pub fn post_propose_fail(&mut self, cmd_type: AdminCmdType) {
+        if cmd_type == AdminCmdType::PrepareMerge {
+            self.post_prepare_merge_fail();
+        }
+    }
 }
 
 #[derive(Debug)]

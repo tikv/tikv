@@ -178,6 +178,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             self.region_id() == 2,
             |_| {}
         );
+        fail::fail_point!(
+            "ask_target_peer_to_commit_merge_store_1",
+            store_ctx.store_id == 1,
+            |_| {}
+        );
         let state = self.applied_merge_state().unwrap();
         let target = state.get_target();
         let target_id = target.get_id();
@@ -295,7 +300,10 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                     target_id: self.region_id(),
                 },
             );
-        } else if util::is_epoch_stale(expected_epoch, region.get_region_epoch()) {
+            return;
+        }
+        // current region_epoch > region epoch in commit merge.
+        if util::is_epoch_stale(expected_epoch, region.get_region_epoch()) {
             info!(
                 self.logger,
                 "reject commit merge because of stale";
@@ -306,63 +314,51 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             let _ = store_ctx
                 .router
                 .force_send(source_id, PeerMsg::RejectCommitMerge { index });
-        } else if expected_epoch == region.get_region_epoch() {
-            assert!(
-                util::is_sibling_regions(source_region, region),
-                "{}: {:?}, {:?}",
-                SlogFormat(&self.logger),
-                source_region,
-                region
-            );
-            assert!(
-                region_on_same_stores(source_region, region),
-                "{:?}, {:?}",
-                source_region,
-                region
-            );
-            assert!(!self.storage().has_dirty_data());
-            if self.is_leader() && !self.leader_transferring() {
-                let index = commit_of_merge(req.get_admin_request().get_commit_merge());
-                if self.proposal_control().is_merging() {
-                    // `on_admin_command` may delay our request indefinitely. It's better to check
-                    // directly.
-                    info!(
-                        self.logger,
-                        "reject commit merge because of target is merging with another region";
-                    );
-                } else {
-                    let (ch, res) = CmdResChannel::pair();
-                    self.on_admin_command(store_ctx, req, ch);
-                    if let Some(res) = res.take_result()
-                        && res.get_header().has_error()
-                    {
-                        error!(
-                            self.logger,
-                            "failed to propose commit merge";
-                            "source" => source_id,
-                            "res" => ?res,
-                        );
-                    } else {
-                        fail::fail_point!("on_propose_commit_merge_success");
-                        return;
-                    }
-                }
-                let _ = store_ctx
-                    .router
-                    .force_send(source_id, PeerMsg::RejectCommitMerge { index });
-            } else if self.leader_transferring() {
-                info!(
-                    self.logger,
-                    "not to propose commit merge when transferring leader";
-                    "transferee" => self.leader_transferee(),
-                );
-            }
-        } else {
+            return;
+        }
+        // current region_epoch < region epoch in commit merge.
+        if util::is_epoch_stale(region.get_region_epoch(), expected_epoch) {
             info!(
                 self.logger,
-                "ignore commit merge because self epoch is stale";
+                "target region still not catch up, skip.";
                 "source" => ?source_region,
+                "target_region_epoch" => ?expected_epoch,
+                "exist_region_epoch" => ?self.region().get_region_epoch(),
             );
+            return;
+        }
+        assert!(
+            util::is_sibling_regions(source_region, region),
+            "{}: {:?}, {:?}",
+            SlogFormat(&self.logger),
+            source_region,
+            region
+        );
+        assert!(
+            region_on_same_stores(source_region, region),
+            "{:?}, {:?}",
+            source_region,
+            region
+        );
+        assert!(!self.storage().has_dirty_data());
+        let (ch, res) = CmdResChannel::pair();
+        self.on_admin_command(store_ctx, req, ch);
+        if let Some(res) = res.take_result()
+            && res.get_header().has_error()
+        {
+            error!(
+                self.logger,
+                "failed to propose commit merge";
+                "source" => source_id,
+                "res" => ?res,
+            );
+            fail::fail_point!(
+                "on_propose_commit_merge_fail_store_1",
+                store_ctx.store_id == 1,
+                |_| {}
+            );
+        } else {
+            fail::fail_point!("on_propose_commit_merge_success");
         }
     }
 
@@ -691,6 +687,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             info!(
                 self.logger,
                 "become follower for new logs";
+                "first_log_term" => first.term,
+                "first_log_index" => first.index,
                 "new_log_term" => last_log.term,
                 "new_log_index" => last_log.index,
                 "term" => self.term(),
@@ -829,6 +827,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 "target_region" => ?self.region(),
             );
             self.add_pending_tick(PeerTick::SplitRegionCheck);
+            self.maybe_schedule_gc_peer_tick();
         }
     }
 

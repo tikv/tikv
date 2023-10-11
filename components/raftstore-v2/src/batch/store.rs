@@ -47,7 +47,7 @@ use tikv_util::{
     box_err,
     config::{Tracker, VersionTrack},
     log::SlogFormat,
-    sys::SysQuota,
+    sys::{disk::get_disk_status, SysQuota},
     time::{duration_to_sec, monotonic_raw_now, Instant as TiInstant, Limiter},
     timer::{SteadyTimer, GLOBAL_TIMER_HANDLE},
     worker::{Builder, LazyWorker, Scheduler, Worker},
@@ -104,6 +104,10 @@ pub struct StoreContext<EK: KvEngine, ER: RaftEngine, T> {
 
     /// Disk usage for the store itself.
     pub self_disk_usage: DiskUsage,
+    // TODO: how to remove offlined stores?
+    /// Disk usage for other stores. The store itself is not included.
+    /// Only contains items which is not `DiskUsage::Normal`.
+    pub store_disk_usages: HashMap<u64, DiskUsage>,
 
     pub snap_mgr: TabletSnapManager,
     pub global_stat: GlobalStoreStat,
@@ -228,6 +232,7 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport + 'static> PollHandler<PeerFsm<E
         if self.store_msg_buf.capacity() == 0 || self.peer_msg_buf.capacity() == 0 {
             self.apply_buf_capacity();
         }
+        self.poll_ctx.self_disk_usage = get_disk_status(self.poll_ctx.store_id);
         // Apply configuration changes.
         if let Some(cfg) = self.cfg_tracker.any_new().map(|c| c.clone()) {
             let last_messages_per_tick = self.messages_per_tick();
@@ -488,11 +493,7 @@ impl<EK: KvEngine, ER: RaftEngine, T> StorePollerBuilder<EK, ER, T> {
                 self.remove_dir(&path)?;
                 continue;
             }
-            let Some((prefix, region_id, tablet_index)) =
-                self.tablet_registry.parse_tablet_name(&path)
-            else {
-                continue;
-            };
+            let Some((prefix, region_id, tablet_index)) = self.tablet_registry.parse_tablet_name(&path) else { continue };
             if prefix == MERGE_SOURCE_PREFIX {
                 continue;
             }
@@ -565,6 +566,7 @@ where
             apply_pool: self.apply_pool.clone(),
             high_priority_pool: self.high_priority_pool.clone(),
             self_disk_usage: DiskUsage::Normal,
+            store_disk_usages: Default::default(),
             snap_mgr: self.snap_mgr.clone(),
             coprocessor_host: self.coprocessor_host.clone(),
             global_stat: self.global_stat.clone(),

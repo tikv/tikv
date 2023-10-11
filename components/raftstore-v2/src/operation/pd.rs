@@ -103,7 +103,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let task = pd::Task::RegionHeartbeat(pd::RegionHeartbeatTask {
             term: self.term(),
             region: self.region().clone(),
-            down_peers: self.collect_down_peers(ctx.cfg.max_peer_down_duration.0),
+            down_peers: self.collect_down_peers(ctx),
             peer: self.peer().clone(),
             pending_peers: self.collect_pending_peers(ctx),
             written_bytes: self.self_stat().written_bytes,

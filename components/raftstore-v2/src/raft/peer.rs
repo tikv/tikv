@@ -32,6 +32,7 @@ use tikv_util::{slog_panic, time::duration_to_sec};
 
 use super::storage::Storage;
 use crate::{
+    batch::StoreContext,
     fsm::ApplyScheduler,
     operation::{
         AbnormalPeerContext, AsyncWriter, BucketStatsInfo, CompactLogContext, DestroyProgress,
@@ -125,6 +126,10 @@ pub struct Peer<EK: KvEngine, ER: RaftEngine> {
     gc_peer_context: GcPeerContext,
 
     abnormal_peer_context: AbnormalPeerContext,
+
+    // region merge logic need to be broadcast to all followers when disk full happens.
+    pub has_region_merge_proposal: bool,
+    pub region_merge_proposal_index: u64,
 
     /// Force leader state is only used in online recovery when the majority of
     /// peers are missing. In this state, it forces one peer to become leader
@@ -227,10 +232,15 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             pending_messages: vec![],
             gc_peer_context: GcPeerContext::default(),
             abnormal_peer_context: AbnormalPeerContext::default(),
+            has_region_merge_proposal: false,
+            region_merge_proposal_index: 0_u64,
             force_leader_state: None,
             unsafe_recovery_state: None,
         };
 
+        // If merge_context is not None, it means the PrepareMerge is applied before
+        // restart. So we have to neter prepare merge again to prevent all proposals
+        // except for RollbackMerge.
         if let Some(ref state) = peer.merge_context {
             peer.proposal_control
                 .enter_prepare_merge(state.prepare_merge_index().unwrap());
@@ -597,7 +607,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         )
     }
 
-    pub fn collect_down_peers(&mut self, max_duration: Duration) -> Vec<pdpb::PeerStats> {
+    pub fn collect_down_peers<T>(&mut self, ctx: &StoreContext<EK, ER, T>) -> Vec<pdpb::PeerStats> {
         let mut down_peers = Vec::new();
         let mut down_peer_ids = Vec::new();
         let now = Instant::now();
@@ -607,7 +617,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             }
             if let Some(instant) = self.peer_heartbeats.get(&p.get_id()) {
                 let elapsed = now.saturating_duration_since(*instant);
-                if elapsed >= max_duration {
+                if elapsed >= ctx.cfg.max_peer_down_duration.0 {
                     let mut stats = pdpb::PeerStats::default();
                     stats.set_peer(p.clone());
                     stats.set_down_seconds(elapsed.as_secs());
@@ -616,8 +626,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 }
             }
         }
+        let exist_down_peers = !down_peer_ids.is_empty();
         *self.abnormal_peer_context_mut().down_peers_mut() = down_peer_ids;
-        // TODO: `refill_disk_full_peers`
+        if exist_down_peers {
+            self.refill_disk_full_peers(ctx);
+        }
         down_peers
     }
 
@@ -920,6 +933,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     #[inline]
     pub fn last_sent_snapshot_index(&self) -> u64 {
         self.last_sent_snapshot_index
+    }
+
+    #[inline]
+    pub fn next_proposal_index(&self) -> u64 {
+        self.raft_group.raft.raft_log.last_index() + 1
     }
 
     #[inline]
