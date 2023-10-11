@@ -315,6 +315,11 @@ impl TxnStatusCache {
             .get_no_promote(&start_ts)
             .map(|entry| entry.commit_ts)
     }
+
+    pub fn get(&self, start_ts: TimeStamp) -> Option<TimeStamp> {
+        let mut slot = self.slots[self.slot_index(start_ts)].lock();
+        slot.cache.get(&start_ts).map(|entry| entry.commit_ts)
+    }
 }
 
 #[cfg(test)]
@@ -327,7 +332,7 @@ mod tests {
         time::{Duration, Instant, SystemTime},
     };
 
-    use rand::Rng;
+    use rand::{prelude::SliceRandom, Rng};
 
     use super::*;
 
@@ -593,7 +598,7 @@ mod tests {
 
     #[bench]
     #[ignore]
-    fn test_bench_txn_status_cache_concurrent(_b: &mut test::Bencher) {
+    fn bench_txn_status_cache_concurrent(_b: &mut test::Bencher) {
         // This case is implemented to run the concurrent benchmark in a handy way
         // just like running other normal benchmarks. However, it doesn't seem
         // to be possible to benchmark an operation in concurrent way by using
@@ -610,5 +615,172 @@ mod tests {
         bench_txn_status_cache_concurrent_impl(64, 10000, true, false);
         bench_txn_status_cache_concurrent_impl(64, 10000, false, true);
         bench_txn_status_cache_concurrent_impl(64, 10000, true, true);
+    }
+
+    #[test]
+    fn test_txn_status_cache_insert_and_get() {
+        let c = TxnStatusCache::new_for_test();
+        assert!(c.get_no_promote(1.into()).is_none());
+
+        let now = SystemTime::now();
+
+        c.insert(1.into(), 2.into(), now);
+        assert_eq!(c.get_no_promote(1.into()).unwrap(), 2.into());
+        c.insert(3.into(), 4.into(), now);
+        assert_eq!(c.get_no_promote(3.into()).unwrap(), 4.into());
+
+        // This won't actually happen, since a transaction will never have commit info
+        // with two different commit_ts. We just use this to check replacing
+        // won't happen.
+        c.insert(1.into(), 4.into(), now);
+        assert_eq!(c.get_no_promote(1.into()).unwrap(), 2.into());
+
+        let mut start_ts_list: Vec<_> = (1..100).step_by(2).map(TimeStamp::from).collect();
+        start_ts_list.shuffle(&mut rand::thread_rng());
+        for &start_ts in &start_ts_list {
+            let commit_ts = start_ts.next();
+            c.insert(start_ts, commit_ts, now);
+        }
+        start_ts_list.shuffle(&mut rand::thread_rng());
+        for &start_ts in &start_ts_list {
+            let commit_ts = start_ts.next();
+            assert_eq!(c.get_no_promote(start_ts).unwrap(), commit_ts);
+        }
+    }
+
+    #[test]
+    fn test_txn_status_cache_evicting_expired() {
+        let (c, time) = TxnStatusCache::with_simulated_system_time(1, 1000);
+        let time_base = SystemTime::now();
+        let set_time = |offset_millis: u64| {
+            time.store(
+                time_base.duration_since(UNIX_EPOCH).unwrap().as_millis() as u64 + offset_millis,
+                Ordering::Release,
+            )
+        };
+        let now = || UNIX_EPOCH + Duration::from_millis(time.load(Ordering::Acquire));
+
+        set_time(0);
+        assert_lt!(
+            time_base.duration_since(now()).unwrap(),
+            Duration::from_millis(1)
+        );
+
+        c.insert(1.into(), 2.into(), now());
+        set_time(1);
+        c.insert(3.into(), 4.into(), now());
+        set_time(2);
+        c.insert(5.into(), 6.into(), now());
+
+        // Insert entry 1 again. So if entry 1 is the first one to be popped out, it
+        // verifies that inserting an existing key won't promote it.
+        c.insert(1.into(), 2.into(), now());
+
+        // All the 3 entries are kept
+        assert_eq!(c.get_no_promote(1.into()).unwrap(), 2.into());
+        assert_eq!(c.get_no_promote(3.into()).unwrap(), 4.into());
+        assert_eq!(c.get_no_promote(5.into()).unwrap(), 6.into());
+
+        set_time(1001);
+        c.insert(7.into(), 8.into(), now());
+        // Entry 1 will be popped out.
+        assert!(c.get_no_promote(1.into()).is_none());
+        assert_eq!(c.get_no_promote(3.into()).unwrap(), 4.into());
+        assert_eq!(c.get_no_promote(5.into()).unwrap(), 6.into());
+        set_time(1004);
+        c.insert(9.into(), 10.into(), now());
+        // It pops more than 1 entries if there are many expired items at the tail.
+        // Entry 3 and 5 will be popped out.
+        assert!(c.get_no_promote(1.into()).is_none());
+        assert!(c.get_no_promote(3.into()).is_none());
+        assert!(c.get_no_promote(5.into()).is_none());
+        assert_eq!(c.get_no_promote(7.into()).unwrap(), 8.into());
+        assert_eq!(c.get_no_promote(9.into()).unwrap(), 10.into());
+
+        // Now the cache's contents are:
+        // 7@1001, 9@1004
+        // Test `get` promotes an entry and entries are not in order on insert time.
+        assert_eq!(c.get(7.into()).unwrap(), 8.into());
+        set_time(2003);
+        c.insert(11.into(), 12.into(), now());
+        assert_eq!(c.get_no_promote(7.into()).unwrap(), 8.into());
+        assert_eq!(c.get_no_promote(9.into()).unwrap(), 10.into());
+        assert_eq!(c.get_no_promote(11.into()).unwrap(), 12.into());
+
+        set_time(2005);
+        c.insert(13.into(), 14.into(), now());
+        assert!(c.get_no_promote(7.into()).is_none());
+        assert!(c.get_no_promote(9.into()).is_none());
+        assert_eq!(c.get_no_promote(11.into()).unwrap(), 12.into());
+
+        // Now the cache's contents are:
+        // 11@2003, 13@2005
+        // Test inserting existed entries.
+        // According to the implementation of LruCache, though it won't do any update to
+        // the content, it still check the tail to see if anything can be
+        // evicted.
+        set_time(3004);
+        c.insert(13.into(), 14.into(), now());
+        assert!(c.get_no_promote(11.into()).is_none());
+        assert_eq!(c.get_no_promote(13.into()).unwrap(), 14.into());
+
+        set_time(3006);
+        c.insert(13.into(), 14.into(), now());
+        assert!(c.get_no_promote(13.into()).is_none());
+
+        // Now the cache is empty.
+        c.insert(15.into(), 16.into(), now());
+        set_time(3008);
+        c.insert(17.into(), 18.into(), now());
+        // Test inserting existed entry doesn't promote it.
+        // Re-insert 15.
+        set_time(3009);
+        c.insert(15.into(), 16.into(), now());
+        set_time(4007);
+        c.insert(19.into(), 20.into(), now());
+        // 15's insert time is not updated, and is at the tail of the LRU, so it should
+        // be popped.
+        assert!(c.get_no_promote(15.into()).is_none());
+        assert_eq!(c.get_no_promote(17.into()).unwrap(), 18.into());
+
+        // Now the cache's contents are:
+        // 17@3008, 19@4007
+        // Test system time being changed, which can lead to current time being less
+        // than entries' insert time.
+        set_time(2000);
+        c.insert(21.into(), 22.into(), now());
+        assert_eq!(c.get_no_promote(17.into()).unwrap(), 18.into());
+        assert_eq!(c.get_no_promote(19.into()).unwrap(), 20.into());
+        assert_eq!(c.get_no_promote(21.into()).unwrap(), 22.into());
+        set_time(3500);
+        c.insert(23.into(), 24.into(), now());
+        assert_eq!(c.get_no_promote(21.into()).unwrap(), 22.into());
+        assert_eq!(c.get(17.into()).unwrap(), 18.into());
+        assert_eq!(c.get(19.into()).unwrap(), 20.into());
+        assert_eq!(c.get(23.into()).unwrap(), 24.into());
+        // `get` promotes the entries, and entry 21 is put to the tail.
+        c.insert(23.into(), 24.into(), now());
+        assert_eq!(c.get_no_promote(17.into()).unwrap(), 18.into());
+        assert_eq!(c.get_no_promote(19.into()).unwrap(), 20.into());
+        assert!(c.get_no_promote(21.into()).is_none());
+        assert_eq!(c.get_no_promote(23.into()).unwrap(), 24.into());
+
+        // Now the cache's contents are:
+        // 17@3008, 19@4007, 23@3500
+        // The time passed to `insert` may differ from the time fetched in
+        // the `TxnStatusCacheEvictPolicy` as they are fetched at different time.
+        set_time(4009);
+        // Insert with time 4007, but check with time 4009
+        c.insert(25.into(), 26.into(), now() - Duration::from_millis(2));
+        assert!(c.get_no_promote(17.into()).is_none());
+        assert_eq!(c.get_no_promote(19.into()).unwrap(), 20.into());
+        // It's also possible to check with a lower time considering that system time
+        // may be changed. Insert with time 5018, but check with time 5008
+        set_time(5008);
+        c.insert(27.into(), 28.into(), now() + Duration::from_millis(10));
+        assert!(c.get_no_promote(19.into()).is_none());
+        assert!(c.get_no_promote(23.into()).is_none());
+        assert_eq!(c.get_no_promote(25.into()).unwrap(), 26.into());
+        assert_eq!(c.get_no_promote(27.into()).unwrap(), 28.into());
     }
 }
