@@ -370,6 +370,13 @@ make_static_metric! {
             keys,
         },
     }
+
+    pub struct TxnStatusCacheSizeGauge: IntGauge {
+        "type" =>  {
+            used,
+            allocated,
+        }
+    }
 }
 
 lazy_static! {
@@ -599,6 +606,14 @@ lazy_static! {
         "tikv_lock_wait_queue_length",
         "Statistics of length of queues counted when enqueueing",
         exponential_buckets(1.0, 2.0, 16).unwrap()
+    )
+    .unwrap();
+
+    pub static ref SCHED_TXN_STATUS_CACHE_SIZE: TxnStatusCacheSizeGauge = register_static_int_gauge_vec!(
+        TxnStatusCacheSizeGauge,
+        "tikv_scheduler_txn_status_cache_size",
+        "Statistics of size and capacity of txn status cache",
+        &["type"]
     )
     .unwrap();
 }
