@@ -441,16 +441,11 @@ fn test_follower_buckets() {
     let resp = handle_request(&endpoint, req.clone());
     assert_eq!(resp.get_latest_buckets_version(), 0);
 
-    let mut keys = vec![];
-    keys.push(
+    let keys = vec![
         txn_types::Key::from_raw(&table::encode_row_key(product.id, i64::MAX - 3)).into_encoded(),
-    );
-    keys.push(
         txn_types::Key::from_raw(&table::encode_row_key(product.id, i64::MAX - 2)).into_encoded(),
-    );
-    keys.push(
         txn_types::Key::from_raw(&table::encode_row_key(product.id, i64::MAX - 1)).into_encoded(),
-    );
+    ];
     let region = cluster.get_region(keys.get(0).unwrap());
     let bucket = Bucket {
         keys,

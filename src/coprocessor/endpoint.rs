@@ -811,7 +811,7 @@ impl<E: Engine> Endpoint<E> {
 fn check_request_key_range(
     req_ctx: &ReqContext,
     buckets: Option<Arc<pd_client::BucketMeta>>,
-) -> std::result::Result<(), Error> {
+) -> Result<()> {
     if buckets.is_none() {
         return Ok(());
     }

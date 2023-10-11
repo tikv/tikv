@@ -6115,7 +6115,7 @@ where
                 let mut refresh_buckets = RefreshBuckets::new();
                 refresh_buckets.set_version(version);
                 refresh_buckets.set_keys(keys.clone().into());
-                refresh_buckets.set_sizes(sizes.clone().into());
+                refresh_buckets.set_sizes(sizes.clone());
                 extra_msg.set_refresh_buckets(refresh_buckets);
                 self.fsm
                     .peer
