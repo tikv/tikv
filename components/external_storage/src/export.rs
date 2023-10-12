@@ -9,8 +9,7 @@ use cloud::blob::{BlobStorage, PutResource};
 use encryption::DataKeyManager;
 use gcp::GcsStorage;
 use kvproto::brpb::{
-    AzureBlobStorage, CloudDynamic, Gcs, Noop, StorageBackend,
-    StorageBackend_oneof_backend as Backend, S3,
+    AzureBlobStorage, Gcs, Noop, StorageBackend, StorageBackend_oneof_backend as Backend, S3,
 };
 use tikv_util::time::{Instant, Limiter};
 
@@ -71,14 +70,10 @@ fn create_backend(
         }
         Backend::Gcs(config) => blob_store(GcsStorage::from_input(config.clone())?),
         Backend::AzureBlobStorage(config) => blob_store(AzureStorage::from_input(config.clone())?),
-        Backend::CloudDynamic(dyn_backend) => match dyn_backend.provider_name.as_str() {
-            "aws" | "s3" => blob_store(S3Storage::from_cloud_dynamic(dyn_backend)?),
-            "gcp" | "gcs" => blob_store(GcsStorage::from_cloud_dynamic(dyn_backend)?),
-            "azure" | "azblob" => blob_store(AzureStorage::from_cloud_dynamic(dyn_backend)?),
-            _ => {
-                return Err(bad_backend(Backend::CloudDynamic(dyn_backend.clone())));
-            }
-        },
+        Backend::CloudDynamic(dyn_backend) => {
+            // CloudDynamic backend is no longer supported.
+            return Err(bad_backend(Backend::CloudDynamic(dyn_backend.clone())));
+        }
         #[allow(unreachable_patterns)]
         _ => return Err(bad_backend(backend.clone())),
     };
@@ -123,12 +118,6 @@ pub fn make_gcs_backend(config: Gcs) -> StorageBackend {
 pub fn make_azblob_backend(config: AzureBlobStorage) -> StorageBackend {
     let mut backend = StorageBackend::default();
     backend.set_azure_blob_storage(config);
-    backend
-}
-
-pub fn make_cloud_backend(config: CloudDynamic) -> StorageBackend {
-    let mut backend = StorageBackend::default();
-    backend.set_cloud_dynamic(config);
     backend
 }
 
