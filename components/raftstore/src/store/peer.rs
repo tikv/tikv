@@ -1086,6 +1086,8 @@ where
             // of term explicitly to get correct metadata.
             info!(
                 "become follower for new logs";
+                "first_log_term" => first.term,
+                "first_log_index" => first.index,
                 "new_log_term" => last_log.term,
                 "new_log_index" => last_log.index,
                 "term" => self.term(),
@@ -4237,7 +4239,9 @@ where
         // Should not propose normal in force leader state.
         // In `pre_propose_raft_command`, it rejects all the requests expect conf-change
         // if in force leader state.
-        if self.force_leader.is_some() {
+        if self.force_leader.is_some()
+            && req.get_admin_request().get_cmd_type() != AdminCmdType::RollbackMerge
+        {
             poll_ctx.raft_metrics.invalid_proposal.force_leader.inc();
             panic!(
                 "{} propose normal in force leader state {:?}",
@@ -5046,6 +5050,15 @@ impl DiskFullPeers {
     }
     pub fn majority(&self) -> bool {
         self.majority
+    }
+    pub fn set_majority(&mut self, majority: bool) {
+        self.majority = majority;
+    }
+    pub fn peers(&self) -> &HashMap<u64, (DiskUsage, bool)> {
+        &self.peers
+    }
+    pub fn peers_mut(&mut self) -> &mut HashMap<u64, (DiskUsage, bool)> {
+        &mut self.peers
     }
     pub fn has(&self, peer_id: u64) -> bool {
         !self.peers.is_empty() && self.peers.contains_key(&peer_id)

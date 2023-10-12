@@ -4,7 +4,7 @@ use std::{
     borrow::Cow,
     collections::HashMap,
     fs::File,
-    io::{self, BufReader, Read},
+    io::{self, BufReader, ErrorKind, Read},
     ops::Bound,
     path::{Path, PathBuf},
     sync::{
@@ -291,6 +291,23 @@ impl SstImporter {
     pub fn get_path(&self, meta: &SstMeta) -> PathBuf {
         let path = self.dir.join(meta).unwrap();
         path.save
+    }
+
+    pub fn get_total_size(&self) -> Result<u64> {
+        let mut total_size = 0;
+        for entry in file_system::read_dir(self.dir.get_root_dir())? {
+            match entry.and_then(|e| e.metadata().map(|m| (e, m))) {
+                Ok((_, m)) => {
+                    if !m.is_file() {
+                        continue;
+                    }
+                    total_size += m.len();
+                }
+                Err(e) if e.kind() == ErrorKind::NotFound => continue,
+                Err(e) => return Err(Error::from(e)),
+            };
+        }
+        Ok(total_size)
     }
 
     pub fn create(&self, meta: &SstMeta) -> Result<ImportFile> {
@@ -642,7 +659,6 @@ impl SstImporter {
     async fn exec_download(
         &self,
         meta: &KvMeta,
-        rewrite_rule: &RewriteRule,
         ext_storage: Arc<dyn external_storage_export::ExternalStorage>,
         speed_limiter: &Limiter,
     ) -> Result<LoadedFile> {
@@ -690,9 +706,8 @@ impl SstImporter {
             .with_label_values(&["exec_download"])
             .observe(start.saturating_elapsed().as_secs_f64());
 
-        let rewrite_buff = self.rewrite_kv_file(buff, rewrite_rule)?;
         Ok(LoadedFile {
-            content: Arc::from(rewrite_buff.into_boxed_slice()),
+            content: Arc::from(buff.into_boxed_slice()),
             permit,
         })
     }
@@ -700,7 +715,6 @@ impl SstImporter {
     pub async fn do_read_kv_file(
         &self,
         meta: &KvMeta,
-        rewrite_rule: &RewriteRule,
         ext_storage: Arc<dyn external_storage_export::ExternalStorage>,
         speed_limiter: &Limiter,
     ) -> Result<CacheKvFile> {
@@ -741,7 +755,7 @@ impl SstImporter {
         }
 
         cache
-            .get_or_try_init(|| self.exec_download(meta, rewrite_rule, ext_storage, speed_limiter))
+            .get_or_try_init(|| self.exec_download(meta, ext_storage, speed_limiter))
             .await?;
         Ok(CacheKvFile::Mem(cache))
     }
@@ -814,7 +828,6 @@ impl SstImporter {
     pub async fn read_from_kv_file(
         &self,
         meta: &KvMeta,
-        rewrite_rule: &RewriteRule,
         ext_storage: Arc<dyn external_storage_export::ExternalStorage>,
         backend: &StorageBackend,
         speed_limiter: &Limiter,
@@ -823,7 +836,7 @@ impl SstImporter {
             self.do_download_kv_file(meta, backend, speed_limiter)
                 .await?
         } else {
-            self.do_read_kv_file(meta, rewrite_rule, ext_storage, speed_limiter)
+            self.do_read_kv_file(meta, ext_storage, speed_limiter)
                 .await?
         };
         match c {
@@ -841,8 +854,7 @@ impl SstImporter {
                 let mut buffer = Vec::new();
                 reader.read_to_end(&mut buffer)?;
 
-                let rewrite_buff = self.rewrite_kv_file(buffer, rewrite_rule)?;
-                Ok(Arc::from(rewrite_buff.into_boxed_slice()))
+                Ok(Arc::from(buffer.into_boxed_slice()))
             }
         }
     }
@@ -940,7 +952,11 @@ impl SstImporter {
 
         // perform iteration and key rewrite.
         let mut new_buff = Vec::with_capacity(file_buff.len());
-        let mut event_iter = EventIterator::new(file_buff.as_slice());
+        let mut event_iter = EventIterator::with_rewriting(
+            file_buff.as_slice(),
+            rewrite_rule.get_old_key_prefix(),
+            rewrite_rule.get_new_key_prefix(),
+        );
         let mut key = new_prefix.to_vec();
         let new_prefix_data_key_len = key.len();
 
@@ -983,9 +999,14 @@ impl SstImporter {
         start_ts: u64,
         restore_ts: u64,
         file_buff: Arc<[u8]>,
+        rewrite_rule: &RewriteRule,
         mut build_fn: impl FnMut(Vec<u8>, Vec<u8>),
     ) -> Result<Option<Range>> {
-        let mut event_iter = EventIterator::new(file_buff.as_ref());
+        let mut event_iter = EventIterator::with_rewriting(
+            file_buff.as_ref(),
+            rewrite_rule.get_old_key_prefix(),
+            rewrite_rule.get_new_key_prefix(),
+        );
         let mut smallest_key = None;
         let mut largest_key = None;
         let mut total_key = 0;
@@ -1001,6 +1022,16 @@ impl SstImporter {
             event_iter.next()?;
             INPORTER_APPLY_COUNT.with_label_values(&["key_meet"]).inc();
 
+            if !event_iter
+                .key()
+                .starts_with(rewrite_rule.get_new_key_prefix())
+            {
+                return Err(Error::WrongKeyPrefix {
+                    what: "do_apply_kv_file",
+                    key: event_iter.key().to_vec(),
+                    prefix: rewrite_rule.get_old_key_prefix().to_vec(),
+                });
+            }
             let key = event_iter.key().to_vec();
             let value = event_iter.value().to_vec();
             let ts = Key::decode_ts_from(&key)?;
@@ -1028,7 +1059,7 @@ impl SstImporter {
             largest_key = largest_key
                 .map_or_else(|| Some(key.clone()), |v: Vec<u8>| Some(v.max(key.clone())));
         }
-        if total_key != not_in_range {
+        if not_in_range != 0 || ts_not_expected != 0 {
             info!("build download request file done";
                 "total_keys" => %total_key,
                 "ts_filtered_keys" => %ts_not_expected,
@@ -2050,10 +2081,8 @@ mod tests {
         };
 
         // test do_read_kv_file()
-        let rewrite_rule = &new_rewrite_rule(b"", b"", 12345);
         let output = block_on_external_io(importer.do_read_kv_file(
             &kv_meta,
-            rewrite_rule,
             ext_storage,
             &Limiter::new(f64::INFINITY),
         ))
@@ -2163,7 +2192,6 @@ mod tests {
         };
         let importer =
             SstImporter::new(&cfg, import_dir, Some(key_manager), ApiVersion::V1, false).unwrap();
-        let rewrite_rule = &new_rewrite_rule(b"", b"", 12345);
         let ext_storage = {
             importer.wrap_kms(
                 importer.external_storage_or_cache(&backend, "").unwrap(),
@@ -2181,7 +2209,6 @@ mod tests {
         assert!(importer.import_support_download());
         let output = block_on_external_io(importer.read_from_kv_file(
             &kv_meta,
-            rewrite_rule,
             ext_storage,
             &backend,
             &Limiter::new(f64::INFINITY),

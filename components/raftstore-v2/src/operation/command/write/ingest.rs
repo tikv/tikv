@@ -2,8 +2,9 @@
 
 use collections::HashMap;
 use crossbeam::channel::TrySendError;
-use engine_traits::{data_cf_offset, KvEngine, RaftEngine};
+use engine_traits::{data_cf_offset, KvEngine, RaftEngine, DATA_CFS_LEN};
 use kvproto::import_sstpb::SstMeta;
+use pd_client::metrics::STORE_SIZE_EVENT_INT_VEC;
 use raftstore::{
     store::{check_sst_for_ingestion, metrics::PEER_WRITE_CMD_COUNTER, util},
     Result,
@@ -16,7 +17,7 @@ use crate::{
     batch::StoreContext,
     fsm::{ApplyResReporter, Store, StoreFsmDelegate},
     raft::{Apply, Peer},
-    router::{PeerMsg, StoreTick},
+    router::{PeerMsg, SstApplyIndex, StoreTick},
     worker::tablet,
 };
 
@@ -39,6 +40,8 @@ impl Store {
         &mut self,
         ctx: &mut StoreContext<EK, ER, T>,
     ) -> Result<()> {
+        let import_size = box_try!(ctx.sst_importer.get_total_size());
+        STORE_SIZE_EVENT_INT_VEC.import_size.set(import_size as i64);
         let ssts = box_try!(ctx.sst_importer.list_ssts());
         if ssts.is_empty() {
             return Ok(());
@@ -107,10 +110,12 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
     #[inline]
     pub fn apply_ingest(&mut self, index: u64, ssts: Vec<SstMeta>) -> Result<()> {
+        fail::fail_point!("on_apply_ingest");
         PEER_WRITE_CMD_COUNTER.ingest_sst.inc();
         let mut infos = Vec::with_capacity(ssts.len());
         let mut size: i64 = 0;
         let mut keys: u64 = 0;
+        let mut cf_indexes = [u64::MAX; DATA_CFS_LEN];
         for sst in &ssts {
             // This may not be enough as ingest sst may not trigger flush at all.
             let off = data_cf_offset(sst.get_cf_name());
@@ -138,6 +143,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                     slog_panic!(self.logger, "corrupted sst"; "sst" => ?sst, "error" => ?e);
                 }
             }
+            cf_indexes[off] = index;
         }
         if !infos.is_empty() {
             // Unlike v1, we can't batch ssts accross regions.
@@ -154,6 +160,11 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
         self.metrics.size_diff_hint += size;
         self.metrics.written_bytes += size as u64;
         self.metrics.written_keys += keys;
+        for (cf_index, index) in cf_indexes.into_iter().enumerate() {
+            if index != u64::MAX {
+                self.push_sst_applied_index(SstApplyIndex { cf_index, index });
+            }
+        }
         Ok(())
     }
 }

@@ -216,7 +216,7 @@ fn test_flush_before_stop() {
     let region = cluster.get_region(b"k60");
     cluster.must_split(&region, b"k070");
 
-    fail::cfg("flush_before_cluse_threshold", "return(10)").unwrap();
+    fail::cfg("flush_before_close_threshold", "return(10)").unwrap();
 
     for i in 0..100 {
         let key = format!("k{:03}", i);
@@ -260,7 +260,7 @@ fn test_flush_before_stop2() {
     let mut cluster = new_server_cluster(0, 3);
     cluster.run();
 
-    fail::cfg("flush_before_cluse_threshold", "return(10)").unwrap();
+    fail::cfg("flush_before_close_threshold", "return(10)").unwrap();
     fail::cfg("on_flush_completed", "return").unwrap();
 
     for i in 0..20 {
@@ -331,7 +331,7 @@ fn test_flush_index_exceed_last_modified() {
         )
         .unwrap();
 
-    fail::cfg("flush_before_cluse_threshold", "return(1)").unwrap();
+    fail::cfg("flush_before_close_threshold", "return(1)").unwrap();
     let router = cluster.get_router(1).unwrap();
     let (tx, rx) = sync_channel(1);
     let msg = PeerMsg::FlushBeforeClose { tx };

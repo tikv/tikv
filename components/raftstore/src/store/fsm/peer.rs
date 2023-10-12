@@ -2859,6 +2859,11 @@ where
     }
 
     fn reset_raft_tick(&mut self, state: GroupState) {
+        debug!(
+            "reset raft tick to {:?}", state;
+            "region_id"=> self.fsm.region_id(),
+            "peer_id" => self.fsm.peer_id(),
+        );
         self.fsm.reset_hibernate_state(state);
         self.fsm.missing_ticks = 0;
         self.fsm.peer.should_wake_up = false;
@@ -4434,6 +4439,9 @@ where
 
     fn schedule_merge(&mut self) -> Result<()> {
         fail_point!("on_schedule_merge", |_| Ok(()));
+        fail_point!("on_schedule_merge_ret_err", |_| Err(Error::RegionNotFound(
+            1
+        )));
         let (request, target_id) = {
             let state = self.fsm.peer.pending_merge_state.as_ref().unwrap();
             let expect_region = state.get_target();
@@ -4557,6 +4565,17 @@ where
                         "error_code" => %e.error_code(),
                     );
                     self.rollback_merge();
+                } else if let Some(ForceLeaderState::ForceLeader { .. }) =
+                    &self.fsm.peer.force_leader
+                {
+                    info!(
+                        "failed to schedule merge, rollback in force leader state";
+                        "region_id" => self.fsm.region_id(),
+                        "peer_id" => self.fsm.peer_id(),
+                        "err" => %e,
+                        "error_code" => %e.error_code(),
+                    );
+                    self.rollback_merge();
                 }
             } else if !is_learner(&self.fsm.peer.peer) {
                 info!(
@@ -4583,6 +4602,7 @@ where
     }
 
     fn on_ready_prepare_merge(&mut self, region: metapb::Region, state: MergeState) {
+        fail_point!("on_apply_res_prepare_merge");
         {
             let mut meta = self.ctx.store_meta.lock().unwrap();
             meta.set_region(
@@ -5228,7 +5248,8 @@ where
             // error-prone
             if !(msg.has_admin_request()
                 && (msg.get_admin_request().get_cmd_type() == AdminCmdType::ChangePeer
-                    || msg.get_admin_request().get_cmd_type() == AdminCmdType::ChangePeerV2))
+                    || msg.get_admin_request().get_cmd_type() == AdminCmdType::ChangePeerV2
+                    || msg.get_admin_request().get_cmd_type() == AdminCmdType::RollbackMerge))
             {
                 return Err(Error::RecoveryInProgress(self.region_id()));
             }
@@ -5949,27 +5970,6 @@ where
             }
         };
 
-        // bucket version layout
-        //   term       logical counter
-        // |-----------|-----------|
-        //  high bits     low bits
-        // term: given 10s election timeout, the 32 bit means 1362 year running time
-        let gen_bucket_version = |term, current_version| {
-            let current_version_term = current_version >> 32;
-            let bucket_version: u64 = if current_version_term == term {
-                current_version + 1
-            } else {
-                if term > u32::MAX.into() {
-                    error!(
-                        "unexpected term {} more than u32::MAX. Bucket version will be backward.",
-                        term
-                    );
-                }
-                term << 32
-            };
-            bucket_version
-        };
-
         let region = self.fsm.peer.region();
         if util::is_epoch_stale(&region_epoch, region.get_region_epoch()) {
             info!(
@@ -6021,7 +6021,7 @@ where
             region_buckets = self.fsm.peer.region_buckets.clone().unwrap();
             let mut meta = (*region_buckets.meta).clone();
             if !buckets.is_empty() {
-                meta.version = gen_bucket_version(self.fsm.peer.term(), current_version);
+                meta.version = util::gen_bucket_version(self.fsm.peer.term(), current_version);
             }
             meta.region_epoch = region_epoch;
             for (bucket, bucket_range) in buckets.into_iter().zip(bucket_ranges) {
@@ -6075,7 +6075,7 @@ where
             let mut meta = BucketMeta {
                 region_id: self.fsm.region_id(),
                 region_epoch,
-                version: gen_bucket_version(self.fsm.peer.term(), current_version),
+                version: util::gen_bucket_version(self.fsm.peer.term(), current_version),
                 keys: bucket_keys,
                 sizes: vec![self.ctx.coprocessor_host.cfg.region_bucket_size.0; bucket_count],
             };

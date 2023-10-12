@@ -212,6 +212,7 @@ fn test_serde_custom_tikv_config() {
         max_leader_missing_duration: ReadableDuration::hours(12),
         abnormal_leader_missing_duration: ReadableDuration::hours(6),
         peer_stale_state_check_interval: ReadableDuration::hours(2),
+        gc_peer_check_interval: ReadableDuration::days(1),
         leader_transfer_max_log_lag: 123,
         snap_apply_batch_size: ReadableSize::mb(12),
         snap_apply_copy_symlink: true,
@@ -857,6 +858,7 @@ fn test_serde_custom_tikv_config() {
         advance_ts_interval: ReadableDuration::secs(5),
         scan_lock_pool_size: 1,
         memory_quota: ReadableSize::mb(1),
+        incremental_scan_concurrency: 7,
     };
     value.causal_ts = CausalTsConfig {
         renew_interval: ReadableDuration::millis(100),

@@ -1359,15 +1359,9 @@ where
         self.store_stat.region_bytes_read.flush();
         self.store_stat.region_keys_read.flush();
 
-        STORE_SIZE_GAUGE_VEC
-            .with_label_values(&["capacity"])
-            .set(capacity as i64);
-        STORE_SIZE_GAUGE_VEC
-            .with_label_values(&["available"])
-            .set(available as i64);
-        STORE_SIZE_GAUGE_VEC
-            .with_label_values(&["used"])
-            .set(used_size as i64);
+        STORE_SIZE_EVENT_INT_VEC.capacity.set(capacity as i64);
+        STORE_SIZE_EVENT_INT_VEC.available.set(available as i64);
+        STORE_SIZE_EVENT_INT_VEC.used.set(used_size as i64);
 
         let slow_score = self.slow_score.get();
         stats.set_slow_score(slow_score as u64);
@@ -2596,15 +2590,21 @@ fn collect_engine_size<EK: KvEngine, ER: RaftEngine>(
     } else {
         store_info.capacity
     };
-    let used_size = snap_mgr_size
-        + store_info
-            .kv_engine
-            .get_engine_used_size()
-            .expect("kv engine used size")
-        + store_info
-            .raft_engine
-            .get_engine_size()
-            .expect("raft engine used size");
+    let raft_size = store_info
+        .raft_engine
+        .get_engine_size()
+        .expect("raft engine used size");
+
+    let kv_size = store_info
+        .kv_engine
+        .get_engine_used_size()
+        .expect("kv engine used size");
+
+    STORE_SIZE_EVENT_INT_VEC.raft_size.set(raft_size as i64);
+    STORE_SIZE_EVENT_INT_VEC.snap_size.set(snap_mgr_size as i64);
+    STORE_SIZE_EVENT_INT_VEC.kv_size.set(kv_size as i64);
+
+    let used_size = snap_mgr_size + kv_size + raft_size;
     let mut available = capacity.checked_sub(used_size).unwrap_or_default();
     // We only care about rocksdb SST file size, so we should check disk available
     // here.
