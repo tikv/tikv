@@ -189,6 +189,19 @@ impl<ER: RaftEngine> RecoveryService<ER> {
 
     fn abort_last_recover_region(&self, place: impl Display) {
         let mut last_state_lock = self.last_recovery_region_rpc.lock().unwrap();
+        Self::abort_last_recover_region_of(place, &mut last_state_lock)
+    }
+
+    fn replace_last_recover_region(&self, place: impl Display, new_state: RecoverRegionState) {
+        let mut last_state_lock = self.last_recovery_region_rpc.lock().unwrap();
+        Self::abort_last_recover_region_of(place, &mut last_state_lock);
+        *last_state_lock = Some(new_state);
+    }
+
+    fn abort_last_recover_region_of(
+        place: impl Display,
+        last_state_lock: &mut Option<RecoverRegionState>,
+    ) {
         if let Some(last_state) = last_state_lock.take() {
             info!("Another task enter, checking last task.";
                 "finished" => ?last_state.finished,
@@ -277,7 +290,7 @@ impl<ER: RaftEngine> RecoverData for RecoveryService<ER> {
             }
         });
 
-        // Hacking: Some times, the client may omit the RPC call to `recover_region` if
+        // Hacking: Sometimes, the client may omit the RPC call to `recover_region` if
         // no leader should be register to some (unfortunate) store. So we abort
         // last recover region here too, anyway this RPC implies a consequent
         // `recover_region` for now.
@@ -373,9 +386,8 @@ impl<ER: RaftEngine> RecoverData for RecoveryService<ER> {
             resp
         };
 
-        self.abort_last_recover_region(format!("recover_region by {}", ctx.peer()));
         let (state, task) = RecoverRegionState::wrap_task(task);
-        *self.last_recovery_region_rpc.lock().unwrap() = Some(state);
+        self.replace_last_recover_region(format!("recover_region by {}", ctx.peer()), state);
         self.threads.spawn_ok(async move {
             let res = match task.await {
                 Ok(resp) => sink.success(resp),
