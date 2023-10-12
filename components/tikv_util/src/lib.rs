@@ -133,6 +133,12 @@ pub fn slices_in_range<T>(entry: &VecDeque<T>, low: usize, high: usize) -> (&[T]
     }
 }
 
+/// Dump the current running asynchronous tasks traced by `async-backtrace`.
+// NOTE: Perhaps we can wrap all asynchronous tracing commands (like `frame!`
+// and `#[framed]`) to here. but for now the generated function of
+// `async-backtrace::framed` will import `async_backtrace` itself, which seems a
+// little strange... Perhaps we need to implement that attribute marco by
+// ourselves.
 pub fn dump_async_tasks() -> String {
     async_backtrace::taskdump_tree(false)
 }
