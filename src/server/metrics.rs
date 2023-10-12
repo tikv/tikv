@@ -469,6 +469,7 @@ make_auto_flush_static_metric! {
         err_store_not_match,
         err_raft_entry_too_large,
         err_leader_memory_lock_check,
+        err_buckets_version_not_match,
         err_undetermind,
     }
 
@@ -498,6 +499,9 @@ impl From<ErrorHeaderKind> for RequestStatusKind {
             ErrorHeaderKind::StaleCommand => RequestStatusKind::err_stale_command,
             ErrorHeaderKind::StoreNotMatch => RequestStatusKind::err_store_not_match,
             ErrorHeaderKind::RaftEntryTooLarge => RequestStatusKind::err_raft_entry_too_large,
+            ErrorHeaderKind::BucketsVersionNotMatch => {
+                RequestStatusKind::err_buckets_version_not_match
+            }
             ErrorHeaderKind::Other => RequestStatusKind::err_other,
         }
     }

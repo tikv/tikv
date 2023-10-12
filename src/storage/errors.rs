@@ -176,6 +176,7 @@ pub enum ErrorHeaderKind {
     StaleCommand,
     StoreNotMatch,
     RaftEntryTooLarge,
+    BucketsVersionNotMatch,
     Other,
 }
 
@@ -193,6 +194,7 @@ impl ErrorHeaderKind {
             ErrorHeaderKind::StaleCommand => "stale_command",
             ErrorHeaderKind::StoreNotMatch => "store_not_match",
             ErrorHeaderKind::RaftEntryTooLarge => "raft_entry_too_large",
+            ErrorHeaderKind::BucketsVersionNotMatch => "buckets_version_not_match",
             ErrorHeaderKind::Other => "other",
         }
     }
@@ -227,6 +229,8 @@ pub fn get_error_kind_from_header(header: &errorpb::Error) -> ErrorHeaderKind {
         ErrorHeaderKind::StoreNotMatch
     } else if header.has_raft_entry_too_large() {
         ErrorHeaderKind::RaftEntryTooLarge
+    } else if header.has_bucket_version_not_match() {
+        ErrorHeaderKind::BucketsVersionNotMatch
     } else {
         ErrorHeaderKind::Other
     }
