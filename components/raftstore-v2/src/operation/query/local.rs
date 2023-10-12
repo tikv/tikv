@@ -25,7 +25,7 @@ use raftstore::{
     },
     Result,
 };
-use slog::{debug, Logger};
+use slog::{debug, info, Logger};
 use tikv_util::{box_err, codec::number::decode_u64, time::monotonic_raw_now, Either};
 use time::Timespec;
 use tracker::{get_tls_tracker_token, GLOBAL_TRACKERS};
@@ -421,6 +421,16 @@ where
         // while the raftstore doesn't. So we need to trigger an update
         // explicitly. TODO: find a way to reduce the triggered heartbeats.
         req.mut_header().set_read_quorum(true);
+        // log stale read
+        let flags = WriteBatchFlags::from_bits_check(req.get_header().get_flags());
+        if flags.contains(WriteBatchFlags::STALE_READ) {
+            info!(
+                self.logger,
+                "unexpected stale read request from try_to_renew_lease";
+                "request" => ?req,
+                "backtrace" => ?std::backtrace::Backtrace::force_capture(),
+            );
+        }
         let (msg, sub) = PeerMsg::raft_query(req);
         let res = match MsgRouter::send(&self.router, region_id, msg) {
             Ok(()) => Ok(sub),
@@ -467,6 +477,16 @@ where
 
         let region_id = req.header.get_ref().region_id;
         TLS_LOCAL_READ_METRICS.with(|m| m.borrow_mut().renew_lease_advance.inc());
+        // log stale read
+        let flags = WriteBatchFlags::from_bits_check(req.get_header().get_flags());
+        if flags.contains(WriteBatchFlags::STALE_READ) {
+            info!(
+                self.logger,
+                "unexpected stale read request from maybe_renew_lease_in_advance";
+                "request" => ?req,
+                "backtrace" => ?std::backtrace::Backtrace::force_capture(),
+            );
+        }
         // Send a read query which may renew the lease
         let msg = PeerMsg::raft_query(req.clone()).0;
         if let Err(e) = MsgRouter::send(&self.router, region_id, msg) {

@@ -349,6 +349,16 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     ) {
         let mut err = errorpb::Error::default();
         let region_id = read_cmd.request.get_header().get_region_id();
+        // log if stale read
+        let flags = WriteBatchFlags::from_bits_check(read_cmd.request.get_header().get_flags());
+        if flags.contains(WriteBatchFlags::STALE_READ) {
+            info!(
+                self.logger,
+                "unexpected stale read request from send_read_command";
+                "request" => ?read_cmd.request,
+                "backtrace" => ?std::backtrace::Backtrace::force_capture(),
+            );
+        }
         let read_ch = match ctx.router.send(region_id, PeerMsg::RaftQuery(read_cmd)) {
             Ok(()) => return,
             Err(TrySendError::Full(PeerMsg::RaftQuery(cmd))) => {
