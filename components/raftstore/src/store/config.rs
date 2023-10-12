@@ -633,10 +633,6 @@ impl Config {
         if self.raft_log_gc_size_limit.is_none() && raft_kv_v2 {
             self.raft_log_gc_size_limit = Some(ReadableSize::mb(200));
         }
-
-        if self.raft_log_gc_count_limit.is_none() && raft_kv_v2 {
-            self.raft_log_gc_count_limit = Some(10000);
-        }
     }
 
     pub fn validate(
@@ -1538,7 +1534,10 @@ mod tests {
         cfg.validate(split_size, true, split_size / 20, false)
             .unwrap();
         assert_eq!(cfg.raft_log_gc_size_limit(), ReadableSize::mb(200));
-        assert_eq!(cfg.raft_log_gc_count_limit(), 10000);
+        assert_eq!(
+            cfg.raft_log_gc_count_limit(),
+            split_size * 3 / 4 / ReadableSize::kb(1)
+        );
 
         cfg = Config::new();
         cfg.optimize_for(false);
