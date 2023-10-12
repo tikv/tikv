@@ -160,7 +160,7 @@ fn test_gc_removed_peer() {
     };
     cluster.add_send_filter(factory);
 
-    let must_gc_peer = |to_peer: kvproto::metapb::Peer| {
+    let check_gc_peer = |to_peer: kvproto::metapb::Peer, timeout| -> bool {
         let epoch = cluster.get_region_epoch(region_id);
         let mut msg = RaftMessage::default();
         msg.set_is_tombstone(true);
@@ -177,13 +177,19 @@ fn test_gc_removed_peer() {
         check_peer.set_check_region_epoch(epoch);
 
         cluster.sim.wl().send_raft_msg(msg.clone()).unwrap();
-        let gc_resp = rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        let Ok(gc_resp) = rx.recv_timeout(timeout) else {
+            return false;
+        };
         assert_eq!(gc_resp.get_region_id(), region_id);
         assert_eq!(*gc_resp.get_from_peer(), to_peer);
+        true
     };
 
     // Mock gc a peer that has been removed before creation.
-    must_gc_peer(new_learner_peer(2, 5));
+    assert!(check_gc_peer(
+        new_learner_peer(2, 5),
+        Duration::from_secs(5)
+    ));
 
     cluster
         .pd_client
@@ -198,5 +204,17 @@ fn test_gc_removed_peer() {
     cluster.wait_peer_state(region_id, 2, PeerState::Tombstone);
 
     // Mock gc peer request. GC learner(2, 4).
-    must_gc_peer(new_learner_peer(2, 4));
+    let start = Instant::now();
+    loop {
+        if check_gc_peer(new_learner_peer(2, 4), Duration::from_millis(200)) {
+            return;
+        }
+        if start.saturating_elapsed() > Duration::from_secs(5) {
+            break;
+        }
+    }
+    assert!(check_gc_peer(
+        new_learner_peer(2, 4),
+        Duration::from_millis(200)
+    ));
 }
