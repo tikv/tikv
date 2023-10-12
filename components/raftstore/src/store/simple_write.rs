@@ -49,7 +49,6 @@ where
     channels: Vec<C>,
     size_limit: usize,
     write_type: WriteType,
-    notify_proposed: bool,
 }
 
 impl<C> SimpleWriteReqEncoder<C>
@@ -57,14 +56,10 @@ where
     C: ErrorCallback + WriteCallback,
 {
     /// Create a request encoder.
-    ///
-    /// If `notify_proposed` is true, channels will be called `notify_proposed`
-    /// when it's appended.
     pub fn new(
         header: Box<RaftRequestHeader>,
         bin: SimpleWriteBinary,
         size_limit: usize,
-        notify_proposed: bool,
     ) -> SimpleWriteReqEncoder<C> {
         let mut buf = Vec::with_capacity(256);
         buf.push(MAGIC_PREFIX);
@@ -77,7 +72,6 @@ where
             channels: vec![],
             size_limit,
             write_type: bin.write_type,
-            notify_proposed,
         }
     }
 
@@ -112,16 +106,8 @@ where
     }
 
     #[inline]
-    pub fn add_response_channel(&mut self, mut ch: C) {
-        if self.notify_proposed {
-            ch.notify_proposed();
-        }
+    pub fn add_response_channel(&mut self, ch: C) {
         self.channels.push(ch);
-    }
-
-    #[inline]
-    pub fn notify_proposed(&self) -> bool {
-        self.notify_proposed
     }
 
     #[inline]

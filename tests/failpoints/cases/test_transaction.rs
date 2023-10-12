@@ -11,7 +11,7 @@ use std::{
 };
 
 use engine_traits::CF_DEFAULT;
-use futures::executor::block_on;
+use futures::{executor::block_on, StreamExt};
 use grpcio::{ChannelBuilder, Environment};
 use kvproto::{
     kvrpcpb::{
@@ -866,10 +866,10 @@ fn test_forbid_forward_propose() {
     // block node when collecting message to make async write proposal and a raft
     // message with higher term occured in a single batch.
     fail::cfg("on_peer_collect_message_2", "pause").unwrap();
-    let _ = storage2.async_write(
+    let mut res = storage2.async_write(
         &ctx,
         WriteData::from_modifies(vec![Modify::Put(CF_DEFAULT, k.clone(), b"val".to_vec())]),
-        WriteEvent::BASIC_EVENT,
+        WriteEvent::EVENT_PROPOSED,
         None,
     );
 
@@ -895,6 +895,9 @@ fn test_forbid_forward_propose() {
     // Ensure the msg is sent by router.
     std::thread::sleep(Duration::from_millis(100));
     fail::remove("on_peer_collect_message_2");
+
+    let r = block_on(async { res.next().await }).unwrap();
+    assert!(matches!(r, WriteEvent::Finished(Err { .. })));
 
     std::thread::sleep(Duration::from_secs(1));
     assert_eq!(cluster.get(k.as_encoded()), None);
