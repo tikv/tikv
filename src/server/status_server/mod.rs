@@ -733,6 +733,7 @@ where
                             (&Method::GET, "/metrics")
                                 | (&Method::GET, "/status")
                                 | (&Method::GET, "/config")
+                                | (&Method::GET, "/debug/pprof/profile")
                         );
 
                         if should_check_cert && !check_cert(security_config, x509) {
