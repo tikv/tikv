@@ -16,6 +16,7 @@ mod all {
     use futures::{Stream, StreamExt};
     use pd_client::PdClient;
     use test_raftstore::IsolationFilterFactory;
+    use tikv::config::BackupStreamConfig;
     use tikv_util::{box_err, defer, info, HandyRwLock};
     use tokio::time::timeout;
     use txn_types::{Key, TimeStamp};
@@ -231,21 +232,19 @@ mod all {
             .schedule(Task::UpdateGlobalCheckpoint("greenwoods".to_owned()))
             .unwrap();
         let start = Instant::now();
-        let (tx, rx) = tokio::sync::oneshot::channel();
-        sched
-            .schedule(Task::Sync(
-                Box::new(move || {
-                    tx.send(Instant::now()).unwrap();
-                }),
-                Box::new(|_| true),
-            ))
-            .unwrap();
-        let end = run_async_test(rx).unwrap();
+        let (tx, rx) = std::sync::mpsc::channel();
+        suite.wait_with(move |ep| {
+            tx.send((Instant::now(), ep.abort_last_storage_save.is_some()))
+                .unwrap();
+            true
+        });
+        let (end, has_abort) = rx.recv().unwrap();
         assert!(
-            end - start < Duration::from_secs(10),
+            end - start < Duration::from_secs(2),
             "take = {:?}",
             end - start
         );
+        assert!(has_abort);
     }
 
     /// This test case tests whether we correctly handle the pessimistic locks.
@@ -431,5 +430,26 @@ mod all {
             suite.flushed_files.path(),
             round1.iter().map(|k| k.as_slice()),
         ))
+    }
+
+    #[test]
+    fn update_config() {
+        let suite = SuiteBuilder::new_named("network_partition")
+            .nodes(1)
+            .build();
+        let mut basic_config = BackupStreamConfig::default();
+        basic_config.initial_scan_concurrency = 4;
+        suite.run(|| Task::ChangeConfig(basic_config.clone()));
+        suite.wait_with(|e| {
+            assert_eq!(e.initial_scan_semaphore.available_permits(), 4,);
+            true
+        });
+
+        basic_config.initial_scan_concurrency = 16;
+        suite.run(|| Task::ChangeConfig(basic_config.clone()));
+        suite.wait_with(|e| {
+            assert_eq!(e.initial_scan_semaphore.available_permits(), 16,);
+            true
+        });
     }
 }
