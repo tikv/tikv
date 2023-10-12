@@ -11,7 +11,7 @@ use raftstore::{
         fsm::{apply, MAX_PROPOSAL_SIZE_RATIO},
         metrics::PEER_WRITE_CMD_COUNTER,
         msg::ErrorCallback,
-        util::{self},
+        util,
     },
     Error, Result,
 };
@@ -113,14 +113,10 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             };
 
             let (data, chs) = encoder.encode();
-<<<<<<< HEAD
-            let res = self.propose(ctx, data);
-=======
             let res = res.and_then(|_| self.propose(ctx, data));
 
-            fail_point!("after_propose_pending_writes");
+            fail::fail_point!("after_propose_pending_writes");
 
->>>>>>> 272fcd04f6 (raftstore-v2: avoid follower forwarding propose msg (#15704))
             self.post_propose_command(ctx, res, chs, call_proposed_on_success);
         }
     }

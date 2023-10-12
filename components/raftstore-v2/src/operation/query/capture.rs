@@ -271,7 +271,7 @@ mod test {
         let mut header = Box::<RaftRequestHeader>::default();
         header.set_region_id(region_id);
         header.set_region_epoch(region_epoch);
-        let req_encoder = SimpleWriteReqEncoder::new(header, encoder.encode(), 512, false);
+        let req_encoder = SimpleWriteReqEncoder::new(header, encoder.encode(), 512);
         let (bin, _) = req_encoder.encode();
         let mut e = Entry::default();
         e.set_entry_type(EntryType::EntryNormal);
