@@ -375,11 +375,11 @@ macro_rules! cf_config {
             pub checksum: ChecksumType,
             #[online_config(skip)]
             pub max_compactions: u32,
-            // `ttl == None` means using default setting in Rocksdb.
+            // `ttl == None` means disable this feature in Rocksdb.
             // `ttl` in Rocksdb is 30 days as default.
             #[online_config(skip)]
             pub ttl: Option<ReadableDuration>,
-            // `periodic_compaction_seconds == None` means using default setting in Rocksdb.
+            // `periodic_compaction_seconds == None` means disabled this feature in Rocksdb.
             // `periodic_compaction_seconds` in Rocksdb is 30 days as default.
             #[online_config(skip)]
             pub periodic_compaction_seconds: Option<ReadableDuration>,
@@ -635,12 +635,13 @@ macro_rules! build_cf_opt {
         if let Some(r) = $compaction_limiter {
             cf_opts.set_compaction_thread_limiter(r);
         }
-        if let Some(ttl) = $opt.ttl {
-            cf_opts.set_ttl(ttl.0.as_secs());
-        }
-        if let Some(secs) = $opt.periodic_compaction_seconds {
-            cf_opts.set_periodic_compaction_seconds(secs.0.as_secs());
-        }
+        cf_opts.set_ttl($opt.ttl.unwrap_or(ReadableDuration::secs(0)).0.as_secs());
+        cf_opts.set_periodic_compaction_seconds(
+            $opt.periodic_compaction_seconds
+                .unwrap_or(ReadableDuration::secs(0))
+                .0
+                .as_secs(),
+        );
         cf_opts
     }};
 }
@@ -2705,6 +2706,7 @@ pub struct BackupStreamConfig {
     pub initial_scan_pending_memory_quota: ReadableSize,
     #[online_config(skip)]
     pub initial_scan_rate_limit: ReadableSize,
+    pub initial_scan_concurrency: usize,
 }
 
 impl BackupStreamConfig {
@@ -2732,6 +2734,9 @@ impl BackupStreamConfig {
             )
             .into());
         }
+        if self.initial_scan_concurrency == 0 {
+            return Err("the `initial_scan_concurrency` shouldn't be zero".into());
+        }
         Ok(())
     }
 }
@@ -2752,6 +2757,7 @@ impl Default for BackupStreamConfig {
             file_size_limit: ReadableSize::mb(256),
             initial_scan_pending_memory_quota: ReadableSize(quota_size as _),
             initial_scan_rate_limit: ReadableSize::mb(60),
+            initial_scan_concurrency: 6,
         }
     }
 }
@@ -3396,7 +3402,8 @@ impl TikvConfig {
         // on tikv
         self.coprocessor
             .optimize_for(self.storage.engine == EngineType::RaftKv2);
-        self.coprocessor.validate()?;
+        self.coprocessor
+            .validate(self.storage.engine == EngineType::RaftKv2)?;
         self.split
             .optimize_for(self.coprocessor.region_split_size());
         self.raft_store
@@ -5834,21 +5841,25 @@ mod tests {
         let mut default_cfg = TikvConfig::default();
         default_cfg.coprocessor.region_split_size = Some(ReadableSize::mb(500));
         default_cfg.coprocessor.optimize_for(false);
-        default_cfg.coprocessor.validate().unwrap();
+        default_cfg.coprocessor.validate(false).unwrap();
         assert_eq!(
             default_cfg.coprocessor.region_split_size(),
             ReadableSize::mb(500)
         );
+        assert!(!default_cfg.coprocessor.enable_region_bucket());
+        default_cfg.coprocessor.validate(true).unwrap();
         assert!(default_cfg.coprocessor.enable_region_bucket());
 
         let mut default_cfg = TikvConfig::default();
         default_cfg.coprocessor.region_split_size = Some(ReadableSize::mb(500));
         default_cfg.coprocessor.optimize_for(true);
-        default_cfg.coprocessor.validate().unwrap();
+        default_cfg.coprocessor.validate(false).unwrap();
         assert_eq!(
             default_cfg.coprocessor.region_split_size(),
             ReadableSize::mb(500)
         );
+        assert!(!default_cfg.coprocessor.enable_region_bucket());
+        default_cfg.coprocessor.validate(true).unwrap();
         assert!(default_cfg.coprocessor.enable_region_bucket());
     }
 
