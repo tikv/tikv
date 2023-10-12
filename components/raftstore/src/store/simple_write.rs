@@ -544,7 +544,6 @@ mod tests {
             header.clone(),
             bin,
             usize::MAX,
-            false,
         );
 
         let mut encoder = SimpleWriteEncoder::with_capacity(512);
@@ -556,7 +555,6 @@ mod tests {
             header.clone(),
             bin,
             0,
-            false,
         );
 
         let (bytes, _) = req_encoder.encode();
@@ -605,9 +603,8 @@ mod tests {
             .collect();
         encoder.ingest(exp.clone());
         let bin = encoder.encode();
-        let req_encoder = SimpleWriteReqEncoder::<Callback<engine_rocks::RocksSnapshot>>::new(
-            header, bin, 0, false,
-        );
+        let req_encoder =
+            SimpleWriteReqEncoder::<Callback<engine_rocks::RocksSnapshot>>::new(header, bin, 0);
         let (bytes, _) = req_encoder.encode();
         let mut decoder =
             SimpleWriteReqDecoder::new(decoder_fallback, &logger, &bytes, 0, 0).unwrap();
@@ -669,7 +666,6 @@ mod tests {
                 header.clone(),
                 bin.clone(),
                 512,
-                false,
             );
 
         let mut header2 = Box::<RaftRequestHeader>::default();
@@ -686,7 +682,6 @@ mod tests {
                 header.clone(),
                 bin2.clone(),
                 512,
-                false,
             );
         assert!(!req_encoder2.amend(&header, &bin));
 
@@ -721,7 +716,6 @@ mod tests {
             header.clone(),
             SimpleWriteEncoder::with_capacity(512).encode(),
             512,
-            false,
         );
         let (bin, _) = req_encoder.encode();
         assert_eq!(
@@ -739,7 +733,6 @@ mod tests {
             header.clone(),
             encoder.encode(),
             512,
-            false,
         );
         let (bin, _) = req_encoder.encode();
         let req = SimpleWriteReqDecoder::new(decoder_fallback, &logger, &bin, 0, 0)
@@ -757,7 +750,6 @@ mod tests {
             header.clone(),
             encoder.encode(),
             512,
-            false,
         );
         let (bin, _) = req_encoder.encode();
         let req = SimpleWriteReqDecoder::new(decoder_fallback, &logger, &bin, 0, 0)
@@ -774,7 +766,6 @@ mod tests {
             header.clone(),
             encoder.encode(),
             512,
-            false,
         );
         let (bin, _) = req_encoder.encode();
         let req = SimpleWriteReqDecoder::new(decoder_fallback, &logger, &bin, 0, 0)
@@ -802,7 +793,6 @@ mod tests {
             header,
             encoder.encode(),
             512,
-            false,
         );
         let (bin, _) = req_encoder.encode();
         let req = SimpleWriteReqDecoder::new(decoder_fallback, &logger, &bin, 0, 0)
