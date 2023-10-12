@@ -125,16 +125,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 false
             } else {
                 // Epoch may have changed since last check.
-                let from_epoch = header.get_region_epoch();
-                let res = util::compare_region_epoch(
-                    from_epoch,
-                    self.region(),
-                    NORMAL_REQ_CHECK_CONF_VER,
-                    NORMAL_REQ_CHECK_VER,
-                    true,
-                );
-                if let Err(e) = res {
-                    // TODO: query sibling regions.
+                if let Err(e) = validate_res && matches!(e, Error::EpochNotMatch { .. }) {
                     ctx.raft_metrics.invalid_proposal.epoch_not_match.inc();
                     encoder.encode().1.report_error(cmd_resp::new_error(e));
                     return;
