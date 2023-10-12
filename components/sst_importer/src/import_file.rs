@@ -625,7 +625,7 @@ mod test {
         });
         assert_eq!(
             ssts.iter()
-                .map(|meta_with_ver|{ meta_with_ver.meta.clone() })
+                .map(|meta_with_ver| { meta_with_ver.meta.clone() })
                 .collect(),
             vec![meta]
         );

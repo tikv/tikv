@@ -22,7 +22,7 @@ pub struct Runner {
     importer: Arc<SstImporter>,
 }
 
-impl Runner{
+impl Runner {
     pub fn new(importer: Arc<SstImporter>) -> Runner {
         Runner { importer }
     }
