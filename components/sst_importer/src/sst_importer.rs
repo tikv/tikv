@@ -51,14 +51,13 @@ use txn_types::{Key, TimeStamp, WriteRef};
 
 use crate::{
     caching::cache_map::{CacheMap, ShareOwned},
-    import_file::{ImportDir, ImportFile},
+    import_file::{ImportDir, ImportFile, SstMetaWithApiVersion},
     import_mode::{ImportModeSwitcher, RocksDbMetricsFn},
     import_mode2::{HashRange, ImportModeSwitcherV2},
     metrics::*,
     sst_writer::{RawSstWriter, TxnSstWriter},
     util, Config, ConfigManager as ImportConfigManager, Error, Result,
 };
-use crate::import_file::SstMetaWithApiVersion;
 
 pub struct LoadedFile {
     permit: MemUsePermit,

@@ -42,13 +42,12 @@ use tikv_kv::{
 };
 use tikv_util::{
     config::ReadableSize,
-    future::create_stream_with_buffer,
+    future::{create_stream_with_buffer, paired_future_callback},
     sys::thread::ThreadBuildWrapper,
     time::{Instant, Limiter},
     HandyRwLock,
 };
 use tokio::{runtime::Runtime, time::sleep};
-use tikv_util::future::paired_future_callback;
 use txn_types::{Key, TimeStamp, WriteRef, WriteType};
 
 use super::{
@@ -689,10 +688,7 @@ fn check_local_region_stale(
 ) -> Result<()> {
     let (cb, f) = paired_future_callback();
     region_info_accessor
-        .find_region_by_id(
-            region_id,
-            cb,
-        )
+        .find_region_by_id(region_id, cb)
         .map_err(|e| {
             Error::Engine(format!("failed to find region {} err {:?}", region_id, e).into())
         })?;

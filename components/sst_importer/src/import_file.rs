@@ -458,13 +458,14 @@ impl ImportDir {
 }
 
 const SST_SUFFIX: &str = ".sst";
-// version 2: compared to version 1 which is the default version, we will check epoch of request and
-// local region in write API.
+// version 2: compared to version 1 which is the default version, we will check
+// epoch of request and local region in write API.
 pub const API_VERSION_2: i32 = 2;
 
-/// sst_meta_to_path will encode the filepath with default api version (current is 2). So when
-/// the SstMeta is created in old version of TiKV and filepath will not correspond to the real file,
-/// in the deletion logic we can't remove these files.
+/// sst_meta_to_path will encode the filepath with default api version (current
+/// is 2). So when the SstMeta is created in old version of TiKV and filepath
+/// will not correspond to the real file, in the deletion logic we can't remove
+/// these files.
 pub fn sst_meta_to_path(meta: &SstMeta) -> Result<PathBuf> {
     Ok(PathBuf::from(format!(
         "{}_{}_{}_{}_{}_{}{}",
@@ -516,10 +517,7 @@ pub fn parse_meta_from_path<P: AsRef<Path>>(path: P) -> Result<SstMetaWithApiVer
     if elems.len() > 5 {
         api_version = elems[5].parse()?;
     }
-    Ok(SstMetaWithApiVersion {
-        meta,
-        api_version,
-    })
+    Ok(SstMetaWithApiVersion { meta, api_version })
 }
 
 #[cfg(test)]
@@ -625,9 +623,12 @@ mod test {
                 .unwrap();
             meta.mut_range().set_start(start)
         });
-        assert_eq!(ssts.iter().map(|meta_with_ver|{
-            meta_with_ver.meta.clone()
-        }).collect(), vec![meta]);
+        assert_eq!(
+            ssts.iter()
+                .map(|meta_with_ver|{ meta_with_ver.meta.clone() })
+                .collect(),
+            vec![meta]
+        );
     }
 
     #[test]

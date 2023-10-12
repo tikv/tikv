@@ -23,12 +23,8 @@ pub struct Runner {
 }
 
 impl Runner{
-    pub fn new(
-        importer: Arc<SstImporter>,
-    ) -> Runner {
-        Runner {
-            importer,
-        }
+    pub fn new(importer: Arc<SstImporter>) -> Runner {
+        Runner { importer }
     }
 
     /// Deletes SST files from the importer.
