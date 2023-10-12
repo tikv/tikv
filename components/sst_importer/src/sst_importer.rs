@@ -4,7 +4,7 @@ use std::{
     borrow::Cow,
     collections::HashMap,
     fs::File,
-    io::{self, BufReader, Read},
+    io::{self, BufReader, ErrorKind, Read},
     ops::Bound,
     path::{Path, PathBuf},
     sync::{
@@ -293,6 +293,23 @@ impl SstImporter {
         path.save
     }
 
+    pub fn get_total_size(&self) -> Result<u64> {
+        let mut total_size = 0;
+        for entry in file_system::read_dir(self.dir.get_root_dir())? {
+            match entry.and_then(|e| e.metadata().map(|m| (e, m))) {
+                Ok((_, m)) => {
+                    if !m.is_file() {
+                        continue;
+                    }
+                    total_size += m.len();
+                }
+                Err(e) if e.kind() == ErrorKind::NotFound => continue,
+                Err(e) => return Err(Error::from(e)),
+            };
+        }
+        Ok(total_size)
+    }
+
     pub fn create(&self, meta: &SstMeta) -> Result<ImportFile> {
         match self.dir.create(meta, self.key_manager.clone()) {
             Ok(f) => {
@@ -367,8 +384,8 @@ impl SstImporter {
     // This method is blocking. It performs the following transformations before
     // writing to disk:
     //
-    //  1. only KV pairs in the *inclusive* range (`[start, end]`) are used. (set
-    //     the range to `["", ""]` to import everything).
+    //  1. only KV pairs in the *inclusive* range (`[start, end]`) are used.
+    //     (set the range to `["", ""]` to import everything).
     //  2. keys are rewritten according to the given rewrite rule.
     //
     // Both the range and rewrite keys are specified using origin keys. However,
@@ -1541,7 +1558,7 @@ mod tests {
         let env = get_env(key_manager.clone(), None /* io_rate_limiter */).unwrap();
         let db = new_test_engine_with_env(db_path.to_str().unwrap(), &[CF_DEFAULT], env);
 
-        let cases = [(0, 10), (5, 15), (10, 20), (0, 100)];
+        let cases = vec![(0, 10), (5, 15), (10, 20), (0, 100)];
 
         let mut ingested = Vec::new();
 
@@ -2055,10 +2072,13 @@ mod tests {
             false,
         )
         .unwrap();
-        let ext_storage = importer.wrap_kms(
-            importer.external_storage_or_cache(&backend, "").unwrap(),
-            false,
-        );
+        let ext_storage = {
+            let inner = importer.wrap_kms(
+                importer.external_storage_or_cache(&backend, "").unwrap(),
+                false,
+            );
+            inner
+        };
 
         // test do_read_kv_file()
         let output = block_on_external_io(importer.do_read_kv_file(

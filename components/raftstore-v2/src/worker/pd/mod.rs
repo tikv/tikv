@@ -57,7 +57,6 @@ pub enum Task {
     },
     // In region.rs.
     RegionHeartbeat(RegionHeartbeatTask),
-    ReportRegionBuckets(BucketStat),
     UpdateReadStats(ReadStats),
     UpdateWriteStats(WriteStats),
     UpdateRegionCpuRecords(Arc<RawRecords>),
@@ -85,6 +84,7 @@ pub enum Task {
         initial_status: u64,
         txn_ext: Arc<TxnExt>,
     },
+    // BucketStat is the delta write flow of the bucket.
     ReportBuckets(BucketStat),
     ReportMinResolvedTs {
         store_id: u64,
@@ -123,7 +123,6 @@ impl Display for Task {
                 hb_task.region,
                 hb_task.peer.get_id(),
             ),
-            Task::ReportRegionBuckets(ref buckets) => write!(f, "report buckets: {:?}", buckets),
             Task::UpdateReadStats(ref stats) => {
                 write!(f, "update read stats: {stats:?}")
             }
@@ -314,7 +313,6 @@ where
                 write_io_rates,
             } => self.handle_update_store_infos(cpu_usages, read_io_rates, write_io_rates),
             Task::RegionHeartbeat(task) => self.handle_region_heartbeat(task),
-            Task::ReportRegionBuckets(buckets) => self.handle_report_region_buckets(buckets),
             Task::UpdateReadStats(stats) => self.handle_update_read_stats(stats),
             Task::UpdateWriteStats(stats) => self.handle_update_write_stats(stats),
             Task::UpdateRegionCpuRecords(records) => self.handle_update_region_cpu_records(records),
@@ -341,7 +339,7 @@ where
                 initial_status,
                 txn_ext,
             } => self.handle_update_max_timestamp(region_id, initial_status, txn_ext),
-            Task::ReportBuckets(buckets) => self.handle_report_region_buckets(buckets),
+            Task::ReportBuckets(delta_buckets) => self.handle_report_region_buckets(delta_buckets),
             Task::ReportMinResolvedTs {
                 store_id,
                 min_resolved_ts,

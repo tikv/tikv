@@ -304,6 +304,7 @@ impl<EK: KvEngine, ER: RaftEngine> tikv_kv::Engine for RaftKv2<EK, ER> {
             data,
             ch,
             send_time: Instant::now_coarse(),
+            disk_full_opt: batch.disk_full_opt,
         });
         let res = self
             .router
@@ -315,9 +316,7 @@ impl<EK: KvEngine, ER: RaftEngine> tikv_kv::Engine for RaftKv2<EK, ER> {
             early_err: res.err(),
         })
         .inspect(move |ev| {
-            let WriteEvent::Finished(res) = ev else {
-                return;
-            };
+            let WriteEvent::Finished(res) = ev else { return };
             match res {
                 Ok(()) => {
                     ASYNC_REQUESTS_COUNTER_VEC.write.success.inc();

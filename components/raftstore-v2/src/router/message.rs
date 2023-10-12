@@ -6,6 +6,7 @@ use std::sync::{mpsc::SyncSender, Arc};
 use collections::HashSet;
 use kvproto::{
     import_sstpb::SstMeta,
+    kvrpcpb::DiskFullOpt,
     metapb,
     metapb::RegionEpoch,
     pdpb,
@@ -134,6 +135,7 @@ pub struct SimpleWrite {
     pub header: Box<RaftRequestHeader>,
     pub data: SimpleWriteBinary,
     pub ch: CmdResChannel,
+    pub disk_full_opt: DiskFullOpt,
 }
 
 #[derive(Debug)]
@@ -196,6 +198,11 @@ pub enum PeerMsg {
     },
     StoreUnreachable {
         to_store_id: u64,
+    },
+    // A store may be tombstone. Use it with caution, it also means store not
+    // found, PD can not distinguish them now, as PD may delete tombstone stores.
+    StoreMaybeTombstone {
+        store_id: u64,
     },
     /// Reports whether the snapshot sending is successful or not.
     SnapshotSent {
@@ -292,6 +299,14 @@ impl PeerMsg {
         header: Box<RaftRequestHeader>,
         data: SimpleWriteBinary,
     ) -> (Self, CmdResSubscriber) {
+        PeerMsg::simple_write_with_opt(header, data, DiskFullOpt::default())
+    }
+
+    pub fn simple_write_with_opt(
+        header: Box<RaftRequestHeader>,
+        data: SimpleWriteBinary,
+        disk_full_opt: DiskFullOpt,
+    ) -> (Self, CmdResSubscriber) {
         let (ch, sub) = CmdResChannel::pair();
         (
             PeerMsg::SimpleWrite(SimpleWrite {
@@ -299,6 +314,7 @@ impl PeerMsg {
                 header,
                 data,
                 ch,
+                disk_full_opt,
             }),
             sub,
         )

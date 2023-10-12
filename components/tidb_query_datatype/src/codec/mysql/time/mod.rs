@@ -1094,7 +1094,7 @@ impl Time {
         )
     }
 
-    fn try_into_chrono_datetime(self, ctx: &EvalContext) -> Result<DateTime<Tz>> {
+    fn try_into_chrono_datetime(self, ctx: &mut EvalContext) -> Result<DateTime<Tz>> {
         chrono_datetime(
             &ctx.cfg.tz,
             self.year(),
@@ -2670,9 +2670,9 @@ mod tests {
 
     #[test]
     fn test_no_zero_in_date() -> Result<()> {
-        let cases = ["2019-01-00", "2019-00-01"];
+        let cases = vec!["2019-01-00", "2019-00-01"];
 
-        for case in cases {
+        for &case in cases.iter() {
             // Enable NO_ZERO_IN_DATE only. If zero-date is encountered, a warning is
             // produced.
             let mut ctx = EvalContext::from(TimeEnv {
@@ -2817,7 +2817,7 @@ mod tests {
 
             let actual = Time::from_duration(&mut ctx, duration, TimeType::DateTime)?;
             let today = actual
-                .try_into_chrono_datetime(&ctx)?
+                .try_into_chrono_datetime(&mut ctx)?
                 .checked_sub_signed(chrono::Duration::nanoseconds(duration.to_nanos()))
                 .unwrap();
 
@@ -2837,7 +2837,7 @@ mod tests {
         let mut ctx = EvalContext::default();
         for i in 2..10 {
             let actual = Time::from_local_time(&mut ctx, TimeType::DateTime, i % MAX_FSP)?;
-            let c_datetime = actual.try_into_chrono_datetime(&ctx)?;
+            let c_datetime = actual.try_into_chrono_datetime(&mut ctx)?;
 
             let now0 = c_datetime.timestamp_millis() as u64;
             let now1 = Utc::now().timestamp_millis() as u64;
