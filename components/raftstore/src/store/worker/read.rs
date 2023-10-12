@@ -2282,26 +2282,27 @@ mod tests {
         };
         let term6 = 6;
 
-        // Register region1
+        // Register region1.
         let pr_ids1 = vec![2, 3, 4];
         let prs1 = new_peers(store_id, pr_ids1.clone());
+        // Ensure the leader lease is long enough so the fallback would work.
         prepare_read_delegate_with_lease(
             store_id,
             1,
             term6,
-            pr_ids1,
+            pr_ids1.clone(),
             epoch13.clone(),
             store_meta.clone(),
             Duration::seconds(10),
         );
         let leader1 = prs1[0].clone();
 
-        // Local read
+        // Local read.
         let mut cmd = RaftCmdRequest::default();
         let mut header = RaftRequestHeader::default();
         header.set_region_id(1);
         header.set_peer(leader1);
-        header.set_region_epoch(epoch13);
+        header.set_region_epoch(epoch13.clone());
         header.set_term(term6);
         header.set_flags(header.get_flags() | WriteBatchFlags::STALE_READ.bits());
         cmd.set_header(header.clone());
@@ -2350,5 +2351,34 @@ mod tests {
         );
         must_not_redirect(&mut reader, &rx, task);
         snap_rx.recv().unwrap().snapshot.unwrap();
+
+        // The fallback would not happen if the lease is not valid.
+        prepare_read_delegate_with_lease(
+            store_id,
+            1,
+            term6,
+            pr_ids1,
+            epoch13.clone(),
+            store_meta.clone(),
+            Duration::milliseconds(1),
+        );
+        thread::sleep(std::time::Duration::from_millis(50));
+        let (snap_tx, snap_rx) = channel();
+        let task2 = RaftCommand::<KvTestSnapshot>::new(
+            cmd.clone(),
+            Callback::read(Box::new(move |resp: ReadResponse<KvTestSnapshot>| {
+                snap_tx.send(resp).unwrap();
+            })),
+        );
+        must_not_redirect(&mut reader, &rx, task2);
+        assert!(
+            snap_rx
+                .recv()
+                .unwrap()
+                .response
+                .get_header()
+                .get_error()
+                .has_data_is_not_ready()
+        );
     }
 }
