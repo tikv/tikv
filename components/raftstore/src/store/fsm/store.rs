@@ -2758,6 +2758,10 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         {
             let meta = self.ctx.store_meta.lock().unwrap();
             for sst in ssts {
+                if sst.api_version < sst_importer::API_VERSION_2 {
+                    // SST of old versions are created by old TiKV and have different prerequisite
+                    // we can't delete them here. They can only be deleted manually
+                }
                 if let Some(r) = meta.regions.get(&sst.get_region_id()) {
                     let region_epoch = r.get_region_epoch();
                     if util::is_epoch_stale(sst.get_region_epoch(), region_epoch) {

@@ -50,7 +50,7 @@ impl Store {
         let mut region_ssts: HashMap<_, Vec<_>> = HashMap::default();
         for sst in ssts {
             region_ssts
-                .entry(sst.get_region_id())
+                .entry(sst.meta.get_region_id())
                 .or_default()
                 .push(sst);
         }
