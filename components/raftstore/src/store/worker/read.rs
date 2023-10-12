@@ -2358,8 +2358,8 @@ mod tests {
             1,
             term6,
             pr_ids1,
-            epoch13.clone(),
-            store_meta.clone(),
+            epoch13,
+            store_meta,
             Duration::milliseconds(1),
         );
         thread::sleep(std::time::Duration::from_millis(50));
