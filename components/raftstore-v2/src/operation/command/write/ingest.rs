@@ -43,6 +43,11 @@ impl Store {
         let import_size = box_try!(ctx.sst_importer.get_total_size());
         STORE_SIZE_EVENT_INT_VEC.import_size.set(import_size as i64);
         let ssts = box_try!(ctx.sst_importer.list_ssts());
+        // filter old version SSTs
+        let ssts: Vec<_> = ssts
+            .into_iter()
+            .filter(|sst| sst.api_version >= sst_importer::API_VERSION_2)
+            .collect();
         if ssts.is_empty() {
             return Ok(());
         }
@@ -52,7 +57,7 @@ impl Store {
             region_ssts
                 .entry(sst.meta.get_region_id())
                 .or_default()
-                .push(sst);
+                .push(sst.meta);
         }
 
         let ranges = ctx.sst_importer.ranges_in_import();
