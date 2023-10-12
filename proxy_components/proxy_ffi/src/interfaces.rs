@@ -342,6 +342,11 @@ pub mod root {
             pub apply_state: root::DB::CppStrWithView,
             pub region: root::DB::CppStrWithView,
         }
+        #[repr(u64)]
+        #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
+        pub enum ConfigJsonType {
+            ProxyConfigAddressed = 1,
+        }
         #[repr(C)]
         #[derive(Debug)]
         pub struct RaftStoreProxyFFIHelper {
@@ -462,7 +467,7 @@ pub mod root {
             pub fn_get_config_json: ::std::option::Option<
                 unsafe extern "C" fn(
                     arg1: root::DB::RaftStoreProxyPtr,
-                    kind: u64,
+                    kind: root::DB::ConfigJsonType,
                 ) -> root::DB::RustStrWithView,
             >,
         }
@@ -690,7 +695,7 @@ pub mod root {
                 arg3: root::DB::RawVoidPtr,
             ) -> u32;
         }
-        pub const RAFT_STORE_PROXY_VERSION: u64 = 5692329170612304456;
+        pub const RAFT_STORE_PROXY_VERSION: u64 = 3413295096116791749;
         pub const RAFT_STORE_PROXY_MAGIC_NUMBER: u32 = 324508639;
     }
 }

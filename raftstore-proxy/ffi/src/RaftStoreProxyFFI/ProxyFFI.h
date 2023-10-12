@@ -233,6 +233,8 @@ struct FastAddPeerRes {
   CppStrWithView region;
 };
 
+enum class ConfigJsonType : uint64_t { ProxyConfigAddressed = 1 };
+
 struct RaftStoreProxyFFIHelper {
   RaftStoreProxyPtr proxy_ptr;
   RaftProxyStatus (*fn_handle_get_proxy_status)(RaftStoreProxyPtr);
@@ -268,7 +270,7 @@ struct RaftStoreProxyFFIHelper {
   void (*fn_notify_compact_log)(RaftStoreProxyPtr, uint64_t region_id,
                                 uint64_t compact_index, uint64_t compact_term,
                                 uint64_t applied_index);
-  RustStrWithView (*fn_get_config_json)(RaftStoreProxyPtr, uint64_t kind);
+  RustStrWithView (*fn_get_config_json)(RaftStoreProxyPtr, ConfigJsonType kind);
 };
 
 struct PageStorageInterfaces {

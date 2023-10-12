@@ -111,7 +111,7 @@ impl TabletReader {
         let iter = b.as_mut().unwrap();
         match et {
             EngineIteratorSeekType::First => {
-                let _ = iter.seek_to_first();
+                *self.remained.borrow_mut() = iter.seek_to_first().unwrap();
             }
             EngineIteratorSeekType::Last => {
                 let _ = iter.seek_to_last();

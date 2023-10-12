@@ -169,13 +169,33 @@ fn test_get_snapshot_seek() {
         let cf = ColumnFamilyType::Write;
         ffi_sst_reader_seek(reader.clone(), cf, EngineIteratorSeekType::Key, bf);
         let remained = ffi_sst_reader_remained(reader.clone(), cf);
-        if remained == 1 {
-            ffi_sst_reader_next(reader.clone(), cf);
-            let remained = ffi_sst_reader_remained(reader.clone(), cf);
-            if remained == 1 {
-                ffi_sst_reader_key(reader.clone(), cf);
-            }
-        }
+        assert_eq!(remained, 0);
+    }
+
+    unsafe {
+        let k = format!("k{:06}", 55);
+        let bf = BaseBuffView {
+            data: k.as_ptr() as *const _,
+            len: k.len() as u64,
+        };
+        let cf = ColumnFamilyType::Write;
+        ffi_sst_reader_seek(reader.clone(), cf, EngineIteratorSeekType::Last, bf);
+        let remained = ffi_sst_reader_remained(reader.clone(), cf);
+        assert_eq!(remained, 0);
+    }
+
+    unsafe {
+        let k = format!("k{:06}", 55);
+        let bf = BaseBuffView {
+            data: k.as_ptr() as *const _,
+            len: k.len() as u64,
+        };
+        let cf = ColumnFamilyType::Write;
+        ffi_sst_reader_seek(reader.clone(), cf, EngineIteratorSeekType::First, bf);
+        let remained = ffi_sst_reader_remained(reader.clone(), cf);
+        assert_eq!(remained, 1);
+        let kbf = ffi_sst_reader_key(reader.clone(), cf);
+        assert_eq!(kbf.to_slice(), format!("k{:06}", 0).as_bytes());
     }
 
     cluster_v1.shutdown();

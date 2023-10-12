@@ -298,7 +298,7 @@ impl RaftStoreProxy {
                             status_server_retry,
                             status_server_retry_limit
                         );
-                        std::thread::sleep(std::time::Duration::from_millis(1000));
+                        std::thread::sleep(std::time::Duration::from_millis(3000));
                         continue;
                     }
                     return false;

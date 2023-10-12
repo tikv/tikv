@@ -20,9 +20,9 @@ use super::{
     encryption_impls::*,
     engine_store_helper_impls::*,
     interfaces_ffi::{
-        BaseBuffView, CppStrVecView, KVGetStatus, RaftProxyStatus, RaftStoreProxyFFIHelper,
-        RaftStoreProxyPtr, RaftstoreVer, RawCppPtr, RawCppStringPtr, RawRustPtr, RawVoidPtr,
-        RustStrWithView, SSTReaderInterfaces,
+        BaseBuffView, ConfigJsonType, CppStrVecView, KVGetStatus, RaftProxyStatus,
+        RaftStoreProxyFFIHelper, RaftStoreProxyPtr, RaftstoreVer, RawCppPtr, RawCppStringPtr,
+        RawRustPtr, RawVoidPtr, RustStrWithView, SSTReaderInterfaces,
     },
     read_index_helper,
     snapshot_reader_impls::*,
@@ -302,16 +302,20 @@ pub unsafe extern "C" fn ffi_poll_timer_task(task_ptr: RawVoidPtr, waker: RawVoi
 
 pub unsafe extern "C" fn ffi_get_config_json(
     proxy_ptr: RaftStoreProxyPtr,
-    _kind: u64,
+    kind: ConfigJsonType,
 ) -> RustStrWithView {
-    let s = proxy_ptr
-        .as_ref()
-        .get_proxy_config_str()
-        .as_bytes()
-        .to_owned();
-    if s.is_empty() {
-        RustStrWithView::default()
-    } else {
-        build_from_string(s)
+    match kind {
+        ConfigJsonType::ProxyConfigAddressed => {
+            let s = proxy_ptr
+                .as_ref()
+                .get_proxy_config_str()
+                .as_bytes()
+                .to_owned();
+            if s.is_empty() {
+                RustStrWithView::default()
+            } else {
+                build_from_string(s)
+            }
+        }
     }
 }
