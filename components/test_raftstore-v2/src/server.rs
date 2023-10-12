@@ -1076,12 +1076,15 @@ pub fn must_new_cluster_and_debug_client() -> (
             DebuggerImplV2::new(tablet_registry, raft_engine, ConfigController::default());
 
         sim.pending_debug_service = Some(Box::new(move |cluster, debug_thread_handle| {
-            let raft_extension = cluster.storages.get(&1).unwrap().raft_extension();
+            let raftkv = cluster.storages.get(&1).unwrap();
+            let raft_extension = raftkv.raft_extension();
 
             create_debug(DebugService::new(
                 debugger.clone(),
                 debug_thread_handle,
                 raft_extension,
+                raftkv.raftkv.router().store_meta().clone(),
+                Arc::new(|_, _, _, _| false),
             ))
         }));
     }

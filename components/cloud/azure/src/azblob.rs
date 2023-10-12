@@ -456,7 +456,7 @@ impl ContainerBuilder for TokenCredContainerBuilder {
                 .token_cred
                 .get_token(&self.token_resource)
                 .await
-                .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, format!("{}", &e)))?;
+                .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, format!("{:?}", &e)))?;
             let http_client = new_http_client();
             let storage_client = StorageAccountClient::new_bearer_token(
                 http_client,
