@@ -29,6 +29,7 @@ cloud-gcp = ["raftstore/cloud-gcp"]
 cloud-azure = ["raftstore/cloud-azure"]
 
 [dependencies]
+backtrace = "0.3.65" 
 batch-system = { workspace = true }
 bytes = "1.0"
 causal_ts = { workspace = true }
@@ -59,6 +60,7 @@ service = { workspace = true }
 slog = "2.3"
 smallvec = "1.4"
 sst_importer = { workspace = true }
+stdext = "0.3.1"
 thiserror = "1.0"
 tikv_util = { workspace = true }
 time = "0.1"

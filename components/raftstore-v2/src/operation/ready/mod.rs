@@ -39,6 +39,7 @@ use kvproto::{
 };
 use protobuf::Message as _;
 use raft::{eraftpb, prelude::MessageType, Ready, SnapshotStatus, StateRole, INVALID_ID};
+use raft_proto::eraftpb::MessageType::MsgPropose;
 use raftstore::{
     coprocessor::{RegionChangeEvent, RoleChange},
     store::{
@@ -525,6 +526,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         msg: eraftpb::Message,
         disk_usage: DiskUsage,
     ) -> Option<RaftMessage> {
+        assert_ne!(msg.msg_type, MsgPropose);
         let to_peer = match self.peer_from_cache(msg.to) {
             Some(p) => p,
             None => {
@@ -597,6 +599,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             "to" => to_peer_id,
         );
 
+        assert_ne!(msg.get_message().msg_type, MsgPropose);
         match ctx.trans.send(msg) {
             Ok(()) => ctx.raft_metrics.send_message.add(msg_type, true),
             Err(e) => {

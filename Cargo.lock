@@ -10,9 +10,9 @@ checksum = "8b5ace29ee3216de37c0546865ad08edef58b0f9e76838ed8959a84a990e58c5"
 
 [[package]]
 name = "addr2line"
-version = "0.16.0"
+version = "0.21.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3e61f2b7f93d2c7d2b08263acaa4a363b3e276806c68af6134c44f523bf1aacd"
+checksum = "8a30b2e23b9e17a9f90641c7ab1549cd9b44f296d3ccbf309d2863cfe398a0cb"
 dependencies = [
  "gimli",
 ]
@@ -477,15 +477,15 @@ dependencies = [
 
 [[package]]
 name = "backtrace"
-version = "0.3.61"
+version = "0.3.69"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e7a905d892734eea339e896738c14b9afce22b5318f64b951e70bf3844419b01"
+checksum = "2089b7e3f35b9dd2d0ed921ead4f6d318c27680d4a5bd167b3ee120edb105837"
 dependencies = [
  "addr2line",
  "cc",
  "cfg-if 1.0.0",
  "libc 0.2.146",
- "miniz_oxide 0.4.4",
+ "miniz_oxide 0.7.1",
  "object",
  "rustc-demangle",
 ]
@@ -2393,9 +2393,9 @@ dependencies = [
 
 [[package]]
 name = "gimli"
-version = "0.25.0"
+version = "0.28.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f0a01e0497841a3b2db4f8afa483cce65f7e96a3498bd6c541734792aeac8fe7"
+checksum = "6fb8d784f27acf97159b40fc4db5ecd8aa23b9ad5ef69cdd136d3bc80665f0c0"
 
 [[package]]
 name = "glob"
@@ -3242,12 +3242,11 @@ dependencies = [
 
 [[package]]
 name = "miniz_oxide"
-version = "0.4.4"
+version = "0.7.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a92518e98c078586bc6c934028adcca4c92a53d6a958196de835170a01d84e4b"
+checksum = "e7810e0be55b428ada41041c41f32c9f1a42817901b4ccf45fa3d4b6561e74c7"
 dependencies = [
  "adler",
- "autocfg",
 ]
 
 [[package]]
@@ -3504,17 +3503,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "num-derive"
-version = "0.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9e6a0fd4f737c707bd9086cc16c925f294943eb62eb71499e9fd4cf71f8b9f4e"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.18",
-]
-
-[[package]]
 name = "num-format"
 version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3605,9 +3593,9 @@ dependencies = [
 
 [[package]]
 name = "object"
-version = "0.26.2"
+version = "0.32.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "39f37e50073ccad23b6d09bcb5b263f4e76d3bb6038e4a3c08e52162ffa8abc2"
+checksum = "9cf5f9dd3933bd50a9e1f149ec995f39ae2c496d31fd772c1fd45ebc27e902b0"
 dependencies = [
  "memchr",
 ]
@@ -4316,8 +4304,9 @@ dependencies = [
 [[package]]
 name = "raft"
 version = "0.7.0"
-source = "git+https://github.com/tikv/raft-rs?branch=master#9d360a3b0cdb691da8e500a4f73c457b605a1d73"
+source = "git+https://github.com/SpadeA-Tang/raft-rs?branch=debug-jepsen#283510c33f2739cd734f88db433a3c7dfb62e0d5"
 dependencies = [
+ "backtrace",
  "bytes",
  "fxhash",
  "getset",
@@ -4330,8 +4319,8 @@ dependencies = [
 
 [[package]]
 name = "raft-engine"
-version = "0.4.1"
-source = "git+https://github.com/tikv/raft-engine.git#fa56f891fdf0b1cb5b7849b7bee3c5dadbb96103"
+version = "0.3.0"
+source = "git+https://github.com/tikv/raft-engine.git#de3ad04a2db9cdf795b1c82d7413b9b53bac92a8"
 dependencies = [
  "byteorder",
  "crc32fast",
@@ -4347,7 +4336,7 @@ dependencies = [
  "lz4-sys",
  "memmap2 0.7.0",
  "nix 0.26.2",
- "num-derive 0.4.0",
+ "num-derive",
  "num-traits",
  "parking_lot 0.12.1",
  "prometheus",
@@ -4364,8 +4353,8 @@ dependencies = [
 
 [[package]]
 name = "raft-engine-ctl"
-version = "0.4.1"
-source = "git+https://github.com/tikv/raft-engine.git#fa56f891fdf0b1cb5b7849b7bee3c5dadbb96103"
+version = "0.3.0"
+source = "git+https://github.com/tikv/raft-engine.git#de3ad04a2db9cdf795b1c82d7413b9b53bac92a8"
 dependencies = [
  "clap 3.1.6",
  "env_logger 0.10.0",
@@ -4375,7 +4364,7 @@ dependencies = [
 [[package]]
 name = "raft-proto"
 version = "0.7.0"
-source = "git+https://github.com/tikv/raft-rs?branch=master#9d360a3b0cdb691da8e500a4f73c457b605a1d73"
+source = "git+https://github.com/SpadeA-Tang/raft-rs?branch=debug-jepsen#283510c33f2739cd734f88db433a3c7dfb62e0d5"
 dependencies = [
  "bytes",
  "protobuf",
@@ -4483,6 +4472,7 @@ dependencies = [
 name = "raftstore-v2"
 version = "0.1.0"
 dependencies = [
+ "backtrace",
  "batch-system",
  "bytes",
  "causal_ts",
@@ -4516,6 +4506,7 @@ dependencies = [
  "slog-global",
  "smallvec",
  "sst_importer",
+ "stdext",
  "tempfile",
  "test_pd",
  "test_util",
@@ -5731,6 +5722,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
 
 [[package]]
+name = "stdext"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6f3b6b32ae82412fb897ef134867d53a294f57ba5b758f06d71e865352c3e207"
+
+[[package]]
 name = "str_stack"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6440,7 +6437,7 @@ dependencies = [
  "match-template",
  "nom 7.1.0",
  "num",
- "num-derive 0.3.0",
+ "num-derive",
  "num-traits",
  "ordered-float",
  "protobuf",

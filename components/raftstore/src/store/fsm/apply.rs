@@ -5745,7 +5745,6 @@ mod tests {
                 self.header.clone(),
                 bin,
                 1000,
-                false,
             );
             let (bytes, _) = req_encoder.encode();
             self.entry.set_data(bytes.into());

@@ -12,7 +12,7 @@ use raftstore::{
         fsm::{apply, MAX_PROPOSAL_SIZE_RATIO},
         metrics::PEER_WRITE_CMD_COUNTER,
         msg::ErrorCallback,
-        util::{self, NORMAL_REQ_CHECK_CONF_VER, NORMAL_REQ_CHECK_VER},
+        util::{self},
     },
     Error, Result,
 };
@@ -42,6 +42,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         header: Box<RaftRequestHeader>,
         data: SimpleWriteBinary,
         ch: CmdResChannel,
+        cid: Option<u64>,
         disk_full_opt: Option<DiskFullOpt>,
     ) {
         if !self.serving() {
@@ -49,7 +50,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             return;
         }
         if let Some(encoder) = self.simple_write_encoder_mut() {
-            if encoder.amend(&header, &data) {
+            if encoder.amend(&header, &data, cid) {
                 encoder.add_response_channel(ch);
                 self.set_has_ready();
                 return;
@@ -80,14 +81,14 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             ch.report_error(resp);
             return;
         }
-        // ProposalControl is reliable only when applied to current term.
-        let call_proposed_on_success = self.applied_to_current_term();
         let mut encoder = SimpleWriteReqEncoder::new(
             header,
             data,
             (ctx.cfg.raft_entry_max_size.0 as f64 * MAX_PROPOSAL_SIZE_RATIO) as usize,
-            call_proposed_on_success,
         );
+        if let Some(cid) = cid {
+            encoder.cids.push(cid);
+        }
         encoder.add_response_channel(ch);
         self.set_has_ready();
         self.simple_write_encoder_mut().replace(encoder);
@@ -106,7 +107,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             Box::<RaftRequestHeader>::default(),
             data,
             ctx.cfg.raft_entry_max_size.0 as usize,
-            false,
         )
         .encode()
         .0
@@ -118,32 +118,70 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 
     pub fn propose_pending_writes<T>(&mut self, ctx: &mut StoreContext<EK, ER, T>) {
         if let Some(encoder) = self.simple_write_encoder_mut().take() {
-            let call_proposed_on_success = if encoder.notify_proposed() {
-                // The request has pass conflict check and called all proposed callbacks.
+            let header = encoder.header();
+            let cids = encoder.cids.clone();
+            let res = self.validate_command(header, None, &mut ctx.raft_metrics);
+            let call_proposed_on_success = if matches!(res, Err(Error::EpochNotMatch { .. })) {
                 false
             } else {
-                // Epoch may have changed since last check.
-                let from_epoch = encoder.header().get_region_epoch();
-                let res = util::compare_region_epoch(
-                    from_epoch,
-                    self.region(),
-                    NORMAL_REQ_CHECK_CONF_VER,
-                    NORMAL_REQ_CHECK_VER,
-                    true,
-                );
-                if let Err(e) = res {
-                    // TODO: query sibling regions.
-                    ctx.raft_metrics.invalid_proposal.epoch_not_match.inc();
-                    encoder.encode().1.report_error(cmd_resp::new_error(e));
-                    return;
-                }
-                // Only when it applies to current term, the epoch check can be reliable.
                 self.applied_to_current_term()
             };
-            let (data, chs) = encoder.encode();
-            let res = self.propose(ctx, data);
-            fail_point!("after_propose_pending_writes");
 
+            let (data, chs) = encoder.encode();
+            let res = if let Err(e) = res {
+                Err(e)
+            } else {
+                let last_index = self.raft_group().raft.raft_log.last_index();
+                let res = self.propose(ctx, data);
+                let current_index = self.raft_group().raft.raft_log.last_index();
+                if cids.is_empty() {
+                    match res {
+                        Ok(index) => {
+                            info!(
+                                self.logger,
+                                "propose write";
+                                "index" => index,
+                            );
+                        }
+                        Err(ref e) => {
+                            info!(
+                                self.logger,
+                                "propose write failed";
+                                "last_index" => last_index,
+                                "current_index" => current_index,
+                                "err" => ?e,
+                            );
+                        }
+                    }
+                }
+
+                for cid in cids {
+                    match res {
+                        Ok(index) => {
+                            info!(
+                                self.logger,
+                                "propose write";
+                                "cid" => cid,
+                                "index" => index,
+                            );
+                        }
+                        Err(ref e) => {
+                            info!(
+                                self.logger,
+                                "propose write failed";
+                                "cid" => cid,
+                                "last_index" => last_index,
+                                "current_index" => current_index,
+                                "err" => ?e,
+                            );
+                        }
+                    }
+                }
+
+                res
+            };
+
+            fail_point!("after_propose_pending_writes");
             self.post_propose_command(ctx, res, chs, call_proposed_on_success);
         }
     }
@@ -151,7 +189,24 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 
 impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
     #[inline]
-    pub fn apply_put(&mut self, cf: &str, index: u64, key: &[u8], value: &[u8]) -> Result<()> {
+    pub fn apply_put(
+        &mut self,
+        cf: &str,
+        index: u64,
+        key: &[u8],
+        value: &[u8],
+        start_ts: u64,
+    ) -> Result<()> {
+        info!(
+            self.logger,
+            "handle put";
+            "cf" => ?cf,
+            "start_ts" => ?start_ts,
+            "key" => log_wrappers::hex_encode_upper(key),
+            "value" => log_wrappers::hex_encode_upper(value),
+            "index" => index,
+        );
+
         PEER_WRITE_CMD_COUNTER.put.inc();
         let off = data_cf_offset(cf);
         if self.should_skip(off, index) {
@@ -198,7 +253,15 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
     }
 
     #[inline]
-    pub fn apply_delete(&mut self, cf: &str, index: u64, key: &[u8]) -> Result<()> {
+    pub fn apply_delete(&mut self, cf: &str, index: u64, key: &[u8], start_ts: u64) -> Result<()> {
+        info!(
+            self.logger,
+            "handle delete";
+            "cf" => ?cf,
+            "start_ts" => ?start_ts,
+            "key" => log_wrappers::hex_encode_upper(key),
+            "index" => index,
+        );
         PEER_WRITE_CMD_COUNTER.delete.inc();
         let off = data_cf_offset(cf);
         if self.should_skip(off, index) {

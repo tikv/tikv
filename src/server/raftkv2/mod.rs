@@ -263,6 +263,7 @@ impl<EK: KvEngine, ER: RaftEngine> tikv_kv::Engine for RaftKv2<EK, ER> {
     ) -> Self::WriteRes {
         fail_point!("raftkv_async_write");
 
+        let cid = batch.cid;
         let region_id = ctx.region_id;
         ASYNC_REQUESTS_COUNTER_VEC.write.all.inc();
         let begin_instant = Instant::now_coarse();
@@ -274,6 +275,8 @@ impl<EK: KvEngine, ER: RaftEngine> tikv_kv::Engine for RaftKv2<EK, ER> {
         if batch.extra.allowed_in_flashback {
             flags |= WriteBatchFlags::FLASHBACK.bits();
         }
+        // Debug, set resource_group_name using start_ts.
+        header.set_flag_data(ctx.get_txn_source().to_le_bytes().to_vec());
         header.set_flags(flags);
 
         self.schedule_txn_extra(batch.extra);
@@ -304,6 +307,7 @@ impl<EK: KvEngine, ER: RaftEngine> tikv_kv::Engine for RaftKv2<EK, ER> {
             data,
             ch,
             send_time: Instant::now_coarse(),
+            cid,
             disk_full_opt: batch.disk_full_opt,
         });
         let res = self

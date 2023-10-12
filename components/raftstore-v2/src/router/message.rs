@@ -135,6 +135,7 @@ pub struct SimpleWrite {
     pub header: Box<RaftRequestHeader>,
     pub data: SimpleWriteBinary,
     pub ch: CmdResChannel,
+    pub cid: Option<u64>,
     pub disk_full_opt: DiskFullOpt,
 }
 
@@ -314,6 +315,7 @@ impl PeerMsg {
                 header,
                 data,
                 ch,
+                cid: None,
                 disk_full_opt,
             }),
             sub,
