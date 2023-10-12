@@ -244,22 +244,30 @@ const RAFTDB_DEFAULT_BACKGROUND_JOB_LIMITS: BackgroundJobLimits = BackgroundJobL
 
 // `defaults` serves as an upper bound for returning limits.
 fn get_background_job_limits_impl(
+    engine_type: EngineType,
     cpu_num: u32,
     defaults: &BackgroundJobLimits,
 ) -> BackgroundJobLimits {
     // At the minimum, we should have two background jobs: one for flush and one for
     // compaction. Otherwise, the number of background jobs should not exceed
     // cpu_num - 1.
-    let max_background_jobs = cmp::max(2, cmp::min(defaults.max_background_jobs, cpu_num - 1));
+    let mut max_background_jobs = cmp::max(2, cmp::min(defaults.max_background_jobs, cpu_num - 1));
     // Scale flush threads proportionally to cpu cores. Also make sure the number of
     // flush threads doesn't exceed total jobs.
     let max_background_flushes = cmp::min(
         (max_background_jobs + 3) / 4,
         defaults.max_background_flushes,
     );
-    // Cap max_sub_compactions to allow at least two compactions.
-    let max_compactions = max_background_jobs - max_background_flushes;
+
+    // set the default compaction threads differently for v1 and v2:
+    // v1: cap max_sub_compactions to allow at least two compactions.
+    // v2: decrease the compaction threads to make the qps more stable.
+    let max_compactions = match engine_type {
+        EngineType::RaftKv => max_background_jobs - max_background_flushes,
+        EngineType::RaftKv2 => (max_background_jobs + 7) / 8,
+    };
     let max_sub_compactions: u32 = (max_compactions - 1).clamp(1, defaults.max_sub_compactions);
+    max_background_jobs = max_background_flushes + max_compactions;
     // Maximum background GC threads for Titan
     let max_titan_background_gc = cmp::min(defaults.max_titan_background_gc, cpu_num);
 
@@ -271,9 +279,12 @@ fn get_background_job_limits_impl(
     }
 }
 
-fn get_background_job_limits(defaults: &BackgroundJobLimits) -> BackgroundJobLimits {
+fn get_background_job_limits(
+    engine_type: EngineType,
+    defaults: &BackgroundJobLimits,
+) -> BackgroundJobLimits {
     let cpu_num = cmp::max(SysQuota::cpu_cores_quota() as u32, 1);
-    get_background_job_limits_impl(cpu_num, defaults)
+    get_background_job_limits_impl(engine_type, cpu_num, defaults)
 }
 
 macro_rules! cf_config {
@@ -1308,19 +1319,14 @@ pub struct DbResources {
 
 impl Default for DbConfig {
     fn default() -> DbConfig {
-        let bg_job_limits = get_background_job_limits(&KVDB_DEFAULT_BACKGROUND_JOB_LIMITS);
-        let titan_config = TitanDbConfig {
-            max_background_gc: bg_job_limits.max_titan_background_gc as i32,
-            ..Default::default()
-        };
         DbConfig {
             wal_recovery_mode: DBRecoveryMode::PointInTime,
             wal_dir: "".to_owned(),
             wal_ttl_seconds: 0,
             wal_size_limit: ReadableSize::kb(0),
             max_total_wal_size: None,
-            max_background_jobs: bg_job_limits.max_background_jobs as i32,
-            max_background_flushes: bg_job_limits.max_background_flushes as i32,
+            max_background_jobs: 0,
+            max_background_flushes: 0,
             max_manifest_file_size: ReadableSize::mb(128),
             create_if_missing: true,
             max_open_files: 40960,
@@ -1339,7 +1345,7 @@ impl Default for DbConfig {
             rate_limiter_auto_tuned: true,
             bytes_per_sync: ReadableSize::mb(1),
             wal_bytes_per_sync: ReadableSize::kb(512),
-            max_sub_compactions: bg_job_limits.max_sub_compactions,
+            max_sub_compactions: 0,
             writable_file_max_buffer_size: ReadableSize::mb(1),
             use_direct_io_for_flush_and_compaction: false,
             enable_pipelined_write: false,
@@ -1354,7 +1360,7 @@ impl Default for DbConfig {
             writecf: WriteCfConfig::default(),
             lockcf: LockCfConfig::default(),
             raftcf: RaftCfConfig::default(),
-            titan: titan_config,
+            titan: TitanDbConfig::default(),
         }
     }
 }
@@ -1409,6 +1415,19 @@ impl DbConfig {
                     .write_buffer_limit
                     .get_or_insert(DEFAULT_LOCK_BUFFER_MEMORY_LIMIT);
             }
+        }
+        let bg_job_limits = get_background_job_limits(engine, &KVDB_DEFAULT_BACKGROUND_JOB_LIMITS);
+        if self.max_background_jobs == 0 {
+            self.max_background_jobs = bg_job_limits.max_background_jobs as i32;
+        }
+        if self.max_background_flushes == 0 {
+            self.max_background_flushes = bg_job_limits.max_background_flushes as i32;
+        }
+        if self.max_sub_compactions == 0 {
+            self.max_sub_compactions = bg_job_limits.max_sub_compactions;
+        }
+        if self.titan.max_background_gc == 0 {
+            self.titan.max_background_gc = bg_job_limits.max_titan_background_gc as i32;
         }
     }
 
@@ -1807,7 +1826,9 @@ pub struct RaftDbConfig {
 
 impl Default for RaftDbConfig {
     fn default() -> RaftDbConfig {
-        let bg_job_limits = get_background_job_limits(&RAFTDB_DEFAULT_BACKGROUND_JOB_LIMITS);
+        // raftdb should only be used for raftkv
+        let bg_job_limits =
+            get_background_job_limits(EngineType::RaftKv, &RAFTDB_DEFAULT_BACKGROUND_JOB_LIMITS);
         let titan_config = TitanDbConfig {
             max_background_gc: bg_job_limits.max_titan_background_gc as i32,
             ..Default::default()
@@ -5913,59 +5934,67 @@ mod tests {
 
     #[test]
     fn test_background_job_limits() {
-        // cpu num = 1
-        assert_eq!(
-            get_background_job_limits_impl(
-                1, // cpu_num
-                &KVDB_DEFAULT_BACKGROUND_JOB_LIMITS
-            ),
-            BackgroundJobLimits {
-                max_background_jobs: 2,
-                max_background_flushes: 1,
-                max_sub_compactions: 1,
-                max_titan_background_gc: 1,
-            }
-        );
-        assert_eq!(
-            get_background_job_limits_impl(
-                1, // cpu_num
-                &RAFTDB_DEFAULT_BACKGROUND_JOB_LIMITS
-            ),
-            BackgroundJobLimits {
-                max_background_jobs: 2,
-                max_background_flushes: 1,
-                max_sub_compactions: 1,
-                max_titan_background_gc: 1,
-            }
-        );
-        // cpu num = 2
-        assert_eq!(
-            get_background_job_limits_impl(
-                2, // cpu_num
-                &KVDB_DEFAULT_BACKGROUND_JOB_LIMITS
-            ),
-            BackgroundJobLimits {
-                max_background_jobs: 2,
-                max_background_flushes: 1,
-                max_sub_compactions: 1,
-                max_titan_background_gc: 2,
-            }
-        );
-        assert_eq!(
-            get_background_job_limits_impl(
-                2, // cpu_num
-                &RAFTDB_DEFAULT_BACKGROUND_JOB_LIMITS
-            ),
-            BackgroundJobLimits {
-                max_background_jobs: 2,
-                max_background_flushes: 1,
-                max_sub_compactions: 1,
-                max_titan_background_gc: 2,
-            }
-        );
+        for engine in [EngineType::RaftKv, EngineType::RaftKv2] {
+            // cpu num = 1
+            assert_eq!(
+                get_background_job_limits_impl(
+                    engine,
+                    1, // cpu_num
+                    &KVDB_DEFAULT_BACKGROUND_JOB_LIMITS
+                ),
+                BackgroundJobLimits {
+                    max_background_jobs: 2,
+                    max_background_flushes: 1,
+                    max_sub_compactions: 1,
+                    max_titan_background_gc: 1,
+                }
+            );
+            assert_eq!(
+                get_background_job_limits_impl(
+                    engine,
+                    1, // cpu_num
+                    &RAFTDB_DEFAULT_BACKGROUND_JOB_LIMITS
+                ),
+                BackgroundJobLimits {
+                    max_background_jobs: 2,
+                    max_background_flushes: 1,
+                    max_sub_compactions: 1,
+                    max_titan_background_gc: 1,
+                }
+            );
+            // cpu num = 2
+            assert_eq!(
+                get_background_job_limits_impl(
+                    EngineType::RaftKv,
+                    2, // cpu_num
+                    &KVDB_DEFAULT_BACKGROUND_JOB_LIMITS
+                ),
+                BackgroundJobLimits {
+                    max_background_jobs: 2,
+                    max_background_flushes: 1,
+                    max_sub_compactions: 1,
+                    max_titan_background_gc: 2,
+                }
+            );
+            assert_eq!(
+                get_background_job_limits_impl(
+                    EngineType::RaftKv,
+                    2, // cpu_num
+                    &RAFTDB_DEFAULT_BACKGROUND_JOB_LIMITS
+                ),
+                BackgroundJobLimits {
+                    max_background_jobs: 2,
+                    max_background_flushes: 1,
+                    max_sub_compactions: 1,
+                    max_titan_background_gc: 2,
+                }
+            );
+        }
+
         // cpu num = 4
         assert_eq!(
             get_background_job_limits_impl(
+                EngineType::RaftKv,
                 4, // cpu_num
                 &KVDB_DEFAULT_BACKGROUND_JOB_LIMITS
             ),
@@ -5978,6 +6007,20 @@ mod tests {
         );
         assert_eq!(
             get_background_job_limits_impl(
+                EngineType::RaftKv2,
+                4, // cpu_num
+                &KVDB_DEFAULT_BACKGROUND_JOB_LIMITS
+            ),
+            BackgroundJobLimits {
+                max_background_jobs: 2,
+                max_background_flushes: 1,
+                max_sub_compactions: 1,
+                max_titan_background_gc: 4,
+            }
+        );
+        assert_eq!(
+            get_background_job_limits_impl(
+                EngineType::RaftKv,
                 4, // cpu_num
                 &RAFTDB_DEFAULT_BACKGROUND_JOB_LIMITS
             ),
@@ -5991,6 +6034,7 @@ mod tests {
         // cpu num = 8
         assert_eq!(
             get_background_job_limits_impl(
+                EngineType::RaftKv,
                 8, // cpu_num
                 &KVDB_DEFAULT_BACKGROUND_JOB_LIMITS
             ),
@@ -6003,6 +6047,20 @@ mod tests {
         );
         assert_eq!(
             get_background_job_limits_impl(
+                EngineType::RaftKv2,
+                8, // cpu_num
+                &KVDB_DEFAULT_BACKGROUND_JOB_LIMITS
+            ),
+            BackgroundJobLimits {
+                max_background_jobs: 3,
+                max_background_flushes: 2,
+                max_sub_compactions: 1,
+                max_titan_background_gc: 4,
+            }
+        );
+        assert_eq!(
+            get_background_job_limits_impl(
+                EngineType::RaftKv,
                 8, // cpu_num
                 &RAFTDB_DEFAULT_BACKGROUND_JOB_LIMITS
             ),
@@ -6011,6 +6069,7 @@ mod tests {
         // cpu num = 16
         assert_eq!(
             get_background_job_limits_impl(
+                EngineType::RaftKv,
                 16, // cpu_num
                 &KVDB_DEFAULT_BACKGROUND_JOB_LIMITS
             ),
@@ -6018,6 +6077,20 @@ mod tests {
         );
         assert_eq!(
             get_background_job_limits_impl(
+                EngineType::RaftKv2,
+                16, // cpu_num
+                &KVDB_DEFAULT_BACKGROUND_JOB_LIMITS
+            ),
+            BackgroundJobLimits {
+                max_background_jobs: 5,
+                max_background_flushes: 3,
+                max_sub_compactions: 1,
+                max_titan_background_gc: 4,
+            }
+        );
+        assert_eq!(
+            get_background_job_limits_impl(
+                EngineType::RaftKv,
                 16, // cpu_num
                 &RAFTDB_DEFAULT_BACKGROUND_JOB_LIMITS
             ),
