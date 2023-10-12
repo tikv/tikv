@@ -1350,7 +1350,7 @@ mod test {
 
         // Split will create checkpoint tablet, so if there are some writes before
         // split, they should be flushed immediately.
-        apply.apply_put(CF_DEFAULT, 50, b"k04", b"v4").unwrap();
+        apply.apply_put(CF_DEFAULT, 50, b"k04", b"v4", 0).unwrap();
         apply.apply_flow_control_mut().set_need_flush(true);
         assert!(!WriteBatch::is_empty(apply.write_batch.as_ref().unwrap()));
         splits.mut_requests().clear();

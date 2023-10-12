@@ -21,7 +21,7 @@ use raftstore::{
     },
     Error, Result,
 };
-use slog::debug;
+use slog::{debug, info};
 use tikv_util::time::monotonic_raw_now;
 use time::Timespec;
 use tracker::GLOBAL_TRACKERS;
@@ -135,6 +135,13 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             .filter(|req| req.has_read_index())
             .map(|req| req.take_read_index());
         let (id, dropped) = propose_read_index(self.raft_group_mut(), request.as_ref());
+        info!(
+            self.logger,
+            "*** propose read index leader";
+            "start_ts" => ?request.as_ref().map(|r| r.get_start_ts()),
+            "uuid" => ?id,
+            "dropped" => dropped,
+        );
         if dropped {
             // The message gets dropped silently, can't be handled anymore.
             notify_stale_req(self.term(), ch);

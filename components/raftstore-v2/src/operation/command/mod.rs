@@ -47,7 +47,7 @@ use raftstore::{
     },
     Error, Result,
 };
-use slog::{debug, error, warn};
+use slog::{error, info, warn};
 use tikv_util::{
     box_err,
     log::SlogFormat,
@@ -394,7 +394,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         ctx: &mut StoreContext<EK, ER, T>,
         apply_res: ApplyRes,
     ) {
-        debug!(
+        info!(
             self.logger,
             "async apply finish";
             "res" => ?apply_res,
@@ -546,7 +546,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
         for req in decoder {
             match req {
                 SimpleWrite::Put(put) => {
-                    let _ = self.apply_put(put.cf, u64::MAX, put.key, put.value);
+                    let _ = self.apply_put(put.cf, u64::MAX, put.key, put.value, 0);
                 }
                 SimpleWrite::Delete(delete) => {
                     let _ = self.apply_delete(delete.cf, u64::MAX, delete.key);
@@ -667,11 +667,17 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                     if self.observe().level != ObserveLevel::None {
                         req = decoder.to_raft_cmd_request();
                     }
+                    let flag_data = req.get_header().get_flag_data();
+                    let start_ts = if flag_data.len() == 8 {
+                        u64::from_le_bytes(flag_data.try_into().unwrap())
+                    } else {
+                        0
+                    };
                     let resp = new_response(decoder.header());
-                    for req in decoder {
-                        match req {
+                    for write in decoder {
+                        match write {
                             SimpleWrite::Put(put) => {
-                                self.apply_put(put.cf, log_index, put.key, put.value)?;
+                                self.apply_put(put.cf, log_index, put.key, put.value, start_ts)?;
                             }
                             SimpleWrite::Delete(delete) => {
                                 self.apply_delete(delete.cf, log_index, delete.key)?;
@@ -764,13 +770,25 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
             resp.set_admin_response(admin_resp);
             Ok((req, resp))
         } else {
+            let flag_data = req.get_header().get_flag_data();
+            let start_ts = if flag_data.len() == 8 {
+                u64::from_le_bytes(flag_data.try_into().unwrap())
+            } else {
+                0
+            };
             for r in req.get_requests() {
                 match r.get_cmd_type() {
                     // These three writes should all use the new codec. Keep them here for
                     // backward compatibility.
                     CmdType::Put => {
                         let put = r.get_put();
-                        self.apply_put(put.get_cf(), log_index, put.get_key(), put.get_value())?;
+                        self.apply_put(
+                            put.get_cf(),
+                            log_index,
+                            put.get_key(),
+                            put.get_value(),
+                            start_ts,
+                        )?;
                     }
                     CmdType::Delete => {
                         let delete = r.get_delete();

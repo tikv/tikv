@@ -13,7 +13,7 @@ use raftstore::{
     },
     Error,
 };
-use slog::debug;
+use slog::{debug, info};
 use tikv_util::time::monotonic_raw_now;
 use tracker::GLOBAL_TRACKERS;
 
@@ -73,7 +73,14 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             .filter(|req| req.has_read_index())
             .map(|req| req.take_read_index());
         // No need to check `dropped` as it only meaningful for leader.
-        let (id, _dropped) = propose_read_index(self.raft_group_mut(), request.as_ref());
+        let (id, dropped) = propose_read_index(self.raft_group_mut(), request.as_ref());
+        info!(
+            self.logger,
+            "*** propose read index follower";
+            "start_ts" => ?request.as_ref().map(|r| r.get_start_ts()),
+            "uuid" => ?id,
+            "dropped" => dropped,
+        );
         let now = monotonic_raw_now();
         let mut read = ReadIndexRequest::with_command(id, req, ch, now);
         read.addition_request = request.map(Box::new);
