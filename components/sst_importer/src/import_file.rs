@@ -440,7 +440,7 @@ impl ImportDir {
         Ok(real_key.map(ToOwned::to_owned))
     }
 
-    pub fn list_ssts(&self) -> Result<Vec<SstMetaWithAPIVersion>> {
+    pub fn list_ssts(&self) -> Result<Vec<SstMetaWithApiVersion>> {
         let mut ssts = Vec::new();
         for e in file_system::read_dir(&self.root_dir)? {
             let e = e?;
@@ -478,12 +478,12 @@ pub fn sst_meta_to_path(meta: &SstMeta) -> Result<PathBuf> {
     )))
 }
 
-pub struct SstMetaWithAPIVersion {
+pub struct SstMetaWithApiVersion {
     pub meta: SstMeta,
     pub api_version: i32, // in future we may move api_version into SstMeta
 }
 
-pub fn parse_meta_from_path<P: AsRef<Path>>(path: P) -> Result<SstMetaWithAPIVersion> {
+pub fn parse_meta_from_path<P: AsRef<Path>>(path: P) -> Result<SstMetaWithApiVersion> {
     let path = path.as_ref();
     let file_name = match path.file_name().and_then(|n| n.to_str()) {
         Some(name) => name,
@@ -516,7 +516,7 @@ pub fn parse_meta_from_path<P: AsRef<Path>>(path: P) -> Result<SstMetaWithAPIVer
     if elems.len() > 5 {
         api_version = elems[5].parse()?;
     }
-    Ok(SstMetaWithAPIVersion {
+    Ok(SstMetaWithApiVersion {
         meta,
         api_version,
     })
@@ -524,7 +524,6 @@ pub fn parse_meta_from_path<P: AsRef<Path>>(path: P) -> Result<SstMetaWithAPIVer
 
 #[cfg(test)]
 mod test {
-    use std::iter::Iterator;
     use engine_traits::CF_DEFAULT;
 
     use super::*;

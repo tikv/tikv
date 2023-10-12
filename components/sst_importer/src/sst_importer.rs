@@ -58,7 +58,7 @@ use crate::{
     sst_writer::{RawSstWriter, TxnSstWriter},
     util, Config, ConfigManager as ImportConfigManager, Error, Result,
 };
-use crate::import_file::SstMetaWithAPIVersion;
+use crate::import_file::SstMetaWithApiVersion;
 
 pub struct LoadedFile {
     permit: MemUsePermit,
@@ -1388,7 +1388,7 @@ impl SstImporter {
     /// List the basic information of the current SST files.
     /// The information contains UUID, region ID, region Epoch.
     /// Other fields may be left blank.
-    pub fn list_ssts(&self) -> Result<Vec<SstMetaWithAPIVersion>> {
+    pub fn list_ssts(&self) -> Result<Vec<SstMetaWithApiVersion>> {
         self.dir.list_ssts()
     }
 

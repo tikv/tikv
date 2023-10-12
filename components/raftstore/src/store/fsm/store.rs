@@ -42,7 +42,7 @@ use kvproto::{
     raft_serverpb::{ExtraMessage, ExtraMessageType, PeerState, RaftMessage, RegionLocalState},
     replication_modepb::{ReplicationMode, ReplicationStatus},
 };
-use pd_client::{metrics::STORE_SIZE_EVENT_INT_VEC, Feature, FeatureGate, PdClient};
+use pd_client::{Feature, FeatureGate, PdClient};
 use protobuf::Message;
 use raft::StateRole;
 use resource_control::{channel::unbounded, ResourceGroupManager};
@@ -2765,7 +2765,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
                 }
                 if let Some(r) = meta.regions.get(&sst.meta.get_region_id()) {
                     let region_epoch = r.get_region_epoch();
-                    if util::is_epoch_stale(sst.get_region_epoch(), region_epoch) {
+                    if util::is_epoch_stale(sst.meta.get_region_epoch(), region_epoch) {
                         // If the SST epoch is stale, it will not be ingested anymore.
                         delete_ssts.push(sst.meta);
                     }
