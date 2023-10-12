@@ -2098,7 +2098,6 @@ mod tests {
         };
         let importer =
             SstImporter::new(&cfg, import_dir, Some(key_manager), ApiVersion::V1).unwrap();
-        let rewrite_rule = &new_rewrite_rule(b"", b"", 12345);
         let ext_storage = {
             importer.wrap_kms(
                 importer.external_storage_or_cache(&backend, "").unwrap(),
