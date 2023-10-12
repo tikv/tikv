@@ -462,6 +462,9 @@ const SST_SUFFIX: &str = ".sst";
 // local region in write API.
 pub const API_VERSION_2: i32 = 2;
 
+/// sst_meta_to_path will encode the filepath with default api version (current is 2). So when
+/// the SstMeta is created in old version of TiKV and filepath will not correspond to the real file,
+/// in the deletion logic we can't remove these files.
 pub fn sst_meta_to_path(meta: &SstMeta) -> Result<PathBuf> {
     Ok(PathBuf::from(format!(
         "{}_{}_{}_{}_{}_{}{}",

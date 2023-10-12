@@ -2763,17 +2763,17 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
                     // we can't delete them here. They can only be deleted manually
                     continue;
                 }
-                if let Some(r) = meta.regions.get(&sst.get_region_id()) {
+                if let Some(r) = meta.regions.get(&sst.meta.get_region_id()) {
                     let region_epoch = r.get_region_epoch();
                     if util::is_epoch_stale(sst.get_region_epoch(), region_epoch) {
                         // If the SST epoch is stale, it will not be ingested anymore.
-                        delete_ssts.push(sst);
+                        delete_ssts.push(sst.meta);
                     }
                 } else {
                     // The write RPC of import sst service have make sure the region do exist at the
                     // write time, and now the region is not found, sst can be
                     // deleted because it won't be used by ingest in future.
-                    delete_ssts.push(sst);
+                    delete_ssts.push(sst.meta);
                 }
             }
         }
