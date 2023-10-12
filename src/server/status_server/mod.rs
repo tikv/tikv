@@ -40,11 +40,7 @@ use openssl::{
     x509::X509,
 };
 use pin_project::pin_project;
-pub use profile::{
-    activate_heap_profile, deactivate_heap_profile, heap_profiles_dir, jeprof_heap_profile,
-    list_heap_profiles, read_file, start_one_cpu_profile, start_one_heap_profile,
-    HEAP_PROFILE_REGEX,
-};
+use profile::*;
 use prometheus::TEXT_FORMAT;
 use regex::Regex;
 use resource_control::ResourceGroupManager;
@@ -170,16 +166,22 @@ where
                 Ok(val) => val,
                 Err(err) => return Ok(make_response(StatusCode::BAD_REQUEST, err.to_string())),
             },
-            None => 60,
+            None => 0,
         };
 
-        let interval = Duration::from_secs(interval);
-        let period = GLOBAL_TIMER_HANDLE
-            .interval(Instant::now() + interval, interval)
-            .compat()
-            .map_ok(|_| ())
-            .map_err(|_| TIMER_CANCELED.to_owned())
-            .into_stream();
+        let period = if interval == 0 {
+            None
+        } else {
+            let interval = Duration::from_secs(interval);
+            Some(
+                GLOBAL_TIMER_HANDLE
+                    .interval(Instant::now() + interval, interval)
+                    .compat()
+                    .map_ok(|_| ())
+                    .map_err(|_| TIMER_CANCELED.to_owned())
+                    .into_stream(),
+            )
+        };
         let (tx, rx) = oneshot::channel();
         let callback = move || tx.send(()).unwrap_or_default();
         let res = Handle::current().spawn(activate_heap_profile(period, store_path, callback));
@@ -201,7 +203,6 @@ where
         Ok(make_response(StatusCode::OK, body))
     }
 
-    #[allow(dead_code)]
     async fn dump_heap_prof_to_resp(req: Request<Body>) -> hyper::Result<Response<Body>> {
         let query = req.uri().query().unwrap_or("");
         let query_pairs: HashMap<_, _> = url::form_urlencoded::parse(query.as_bytes()).collect();
@@ -239,21 +240,7 @@ where
                 return Ok(make_response(StatusCode::BAD_REQUEST, errmsg));
             }
         } else {
-            let mut seconds = 10;
-            if let Some(s) = query_pairs.get("seconds") {
-                match s.parse() {
-                    Ok(val) => seconds = val,
-                    Err(_) => {
-                        let errmsg = "request should have seconds argument".to_owned();
-                        return Ok(make_response(StatusCode::BAD_REQUEST, errmsg));
-                    }
-                }
-            }
-            let timer = GLOBAL_TIMER_HANDLE.delay(Instant::now() + Duration::from_secs(seconds));
-            let end = Compat01As03::new(timer)
-                .map_err(|_| TIMER_CANCELED.to_owned())
-                .into_future();
-            start_one_heap_profile(end, use_jeprof).await
+            dump_one_heap_profile()
         };
 
         match result {
@@ -746,7 +733,6 @@ where
                             (&Method::GET, "/metrics")
                                 | (&Method::GET, "/status")
                                 | (&Method::GET, "/config")
-                                | (&Method::GET, "/debug/pprof/profile")
                         );
 
                         if should_check_cert && !check_cert(security_config, x509) {
