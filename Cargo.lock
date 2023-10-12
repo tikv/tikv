@@ -1838,28 +1838,20 @@ dependencies = [
  "async-trait",
  "aws",
  "azure",
- "bytes",
  "cloud",
  "encryption",
  "engine_traits",
- "fail",
- "ffi-support",
  "file_system",
  "futures 0.3.15",
- "futures-executor",
  "futures-io",
  "futures-util",
  "gcp",
- "grpcio",
  "kvproto",
  "lazy_static",
- "libloading",
  "matches",
  "openssl",
  "prometheus",
- "protobuf",
  "rand 0.8.5",
- "rusoto_core",
  "rust-ini",
  "slog",
  "slog-global",
@@ -1896,16 +1888,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e51093e27b0797c359783294ca4f0a911c270184cb10f85783b118614a1501be"
 dependencies = [
  "instant",
-]
-
-[[package]]
-name = "ffi-support"
-version = "0.4.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f85d4d1be103c0b2d86968f0b0690dc09ac0ba205b90adb0389b552869e5000e"
-dependencies = [
- "lazy_static",
- "log",
 ]
 
 [[package]]
