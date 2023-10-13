@@ -267,6 +267,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
                         write.header,
                         write.data,
                         write.ch,
+                        Some(write.extra_opts),
                     );
                 }
                 PeerMsg::UnsafeWrite(write) => {
@@ -314,6 +315,9 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
                 }
                 PeerMsg::StoreUnreachable { to_store_id } => {
                     self.fsm.peer_mut().on_store_unreachable(to_store_id)
+                }
+                PeerMsg::StoreMaybeTombstone { store_id } => {
+                    self.fsm.peer_mut().on_store_maybe_tombstone(store_id)
                 }
                 PeerMsg::SnapshotSent { to_peer_id, status } => {
                     self.fsm.peer_mut().on_snapshot_sent(to_peer_id, status)
@@ -378,9 +382,10 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
                     syncer,
                     failed_stores,
                 ),
-                PeerMsg::ExitForceLeaderState => {
-                    self.fsm.peer_mut().on_exit_force_leader(self.store_ctx)
-                }
+                PeerMsg::ExitForceLeaderState => self
+                    .fsm
+                    .peer_mut()
+                    .on_exit_force_leader(self.store_ctx, false),
                 PeerMsg::ExitForceLeaderStateCampaign => {
                     self.fsm.peer_mut().on_exit_force_leader_campaign()
                 }

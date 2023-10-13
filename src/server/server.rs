@@ -533,8 +533,8 @@ mod tests {
 
     use super::{
         super::{
-            resolve::{Callback as ResolveCallback, StoreAddrResolver},
-            Config, Result,
+            resolve::{self, Callback as ResolveCallback, StoreAddrResolver},
+            Config,
         },
         *,
     };
@@ -552,7 +552,7 @@ mod tests {
     }
 
     impl StoreAddrResolver for MockResolver {
-        fn resolve(&self, _: u64, cb: ResolveCallback) -> Result<()> {
+        fn resolve(&self, _: u64, cb: ResolveCallback) -> resolve::Result<()> {
             if self.quick_fail.load(Ordering::SeqCst) {
                 return Err(box_err!("quick fail"));
             }

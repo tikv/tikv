@@ -46,8 +46,11 @@ use tikv_util::{
 use yatp::{task::future::TaskCell, ThreadPool};
 
 use crate::server::{
-    self, load_statistics::ThreadLoadPool, metrics::*, snap::Task as SnapTask, Config,
-    StoreAddrResolver,
+    load_statistics::ThreadLoadPool,
+    metrics::*,
+    resolve::{Error as ResolveError, Result as ResolveResult},
+    snap::Task as SnapTask,
+    Config, StoreAddrResolver,
 };
 
 pub struct MetadataSourceStoreId {}
@@ -642,7 +645,7 @@ where
     S: StoreAddrResolver,
     R: RaftExtension + Unpin + 'static,
 {
-    fn resolve(&self) -> impl Future<Output = server::Result<String>> {
+    fn resolve(&self) -> impl Future<Output = ResolveResult<String>> {
         let (tx, rx) = oneshot::channel();
         let store_id = self.store_id;
         let res = self.builder.resolver.resolve(
@@ -673,7 +676,7 @@ where
             res?;
             match rx.await {
                 Ok(a) => a,
-                Err(_) => Err(server::Error::Other(
+                Err(_) => Err(ResolveError::Other(
                     "failed to receive resolve result".into(),
                 )),
             }
@@ -824,8 +827,7 @@ async fn start<S, R>(
                 RESOLVE_STORE_COUNTER.with_label_values(&["failed"]).inc();
                 back_end.clear_pending_message("resolve");
                 error_unknown!(?e; "resolve store address failed"; "store_id" => back_end.store_id,);
-                // TOMBSTONE
-                if format!("{}", e).contains("has been removed") {
+                if let ResolveError::StoreTombstone(_) = e {
                     let mut pool = pool.lock().unwrap();
                     if let Some(s) = pool.connections.remove(&(back_end.store_id, conn_id)) {
                         s.set_conn_state(ConnState::Disconnected);
@@ -940,7 +942,7 @@ struct CachedQueue {
 /// ```text
 /// for m in msgs {
 ///     if !raft_client.send(m) {
-///         // handle error.   
+///         // handle error.
 ///     }
 /// }
 /// raft_client.flush();
