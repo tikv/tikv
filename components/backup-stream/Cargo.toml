@@ -27,7 +27,6 @@ test = true
 harness = true
 
 [dependencies]
-async-backtrace = "0.2.6"
 async-compression = { version = "0.3.14", features = ["tokio", "zstd"] }
 async-trait = { version = "0.1" }
 bytes = "1"

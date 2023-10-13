@@ -44,6 +44,8 @@ pub mod config;
 pub mod future;
 #[macro_use]
 pub mod macros;
+#[macro_use]
+pub mod async_trace;
 pub mod callback;
 pub mod deadline;
 pub mod keybuilder;
@@ -131,16 +133,6 @@ pub fn slices_in_range<T>(entry: &VecDeque<T>, low: usize, high: usize) -> (&[T]
     } else {
         (&first[low..], &second[..high - first.len()])
     }
-}
-
-/// Dump the current running asynchronous tasks traced by `async-backtrace`.
-// NOTE: Perhaps we can wrap all asynchronous tracing commands (like `frame!`
-// and `#[framed]`) to here. but for now the generated function of
-// `async-backtrace::framed` will import `async_backtrace` itself, which seems a
-// little strange... Perhaps we need to implement that attribute marco by
-// ourselves.
-pub fn dump_async_tasks() -> String {
-    async_backtrace::taskdump_tree(false)
 }
 
 pub struct DefaultRng {

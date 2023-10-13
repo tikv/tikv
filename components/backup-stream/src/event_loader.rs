@@ -2,7 +2,6 @@
 
 use std::{marker::PhantomData, sync::Arc, time::Duration};
 
-use async_backtrace::{frame, framed};
 use engine_traits::{KvEngine, CF_DEFAULT, CF_WRITE};
 use kvproto::{kvrpcpb::ExtraOp, metapb::Region, raft_cmdpb::CmdType};
 use raftstore::{
@@ -17,7 +16,8 @@ use tikv::storage::{
     Snapshot, Statistics,
 };
 use tikv_util::{
-    box_err,
+    async_trace::framed,
+    box_err, frame, root,
     time::{Instant, Limiter},
     worker::Scheduler,
 };
@@ -416,7 +416,7 @@ where
             metrics::INCREMENTAL_SCAN_SIZE.observe(event_size as f64);
             metrics::INCREMENTAL_SCAN_DISK_READ.inc_by(disk_read as f64);
             metrics::HEAP_MEMORY.add(event_size as _);
-            join_handles.push(tokio::spawn(frame!(async move {
+            join_handles.push(tokio::spawn(root!(dyn format!("consume[region={region_id},event_cnt={event_size}]"); async move {
                 utils::handle_on_event_result(&sched, sink.on_events(events).await);
                 metrics::HEAP_MEMORY.sub(event_size as _);
                 debug!("apply event done"; "size" => %event_size, "region" => %region_id);
@@ -452,7 +452,7 @@ where
             .await?;
         drop(permit);
 
-        async_backtrace::frame!(futures::future::try_join_all(join_handles))
+        frame!(futures::future::try_join_all(join_handles))
             .await
             .map_err(|err| annotate!(err, "tokio runtime failed to join consuming threads"))?;
 

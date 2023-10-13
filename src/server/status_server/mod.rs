@@ -486,7 +486,10 @@ where
     R: 'static + Send + RaftExtension + Clone,
 {
     async fn dump_async_trace() -> hyper::Result<Response<Body>> {
-        Ok(make_response(StatusCode::OK, tikv_util::dump_async_tasks()))
+        Ok(make_response(
+            StatusCode::OK,
+            tikv_util::async_trace::dump_async_tasks(),
+        ))
     }
 
     async fn handle_pause_grpc(

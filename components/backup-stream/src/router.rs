@@ -13,7 +13,6 @@ use std::{
     time::Duration,
 };
 
-use async_backtrace::{frame, framed};
 use engine_traits::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use external_storage::{BackendConfig, UnpinReader};
 use external_storage_export::{create_storage, ExternalStorage};
@@ -32,10 +31,11 @@ use slog_global::debug;
 use tidb_query_datatype::codec::table::decode_table_id;
 use tikv::config::BackupStreamConfig;
 use tikv_util::{
+    async_trace::framed,
     box_err,
     codec::stream_event::EventEncoder,
     config::ReadableSize,
-    error, info,
+    error, frame, info,
     time::{Instant, Limiter},
     warn,
     worker::Scheduler,

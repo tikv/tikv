@@ -2,7 +2,6 @@
 
 use std::{sync::Arc, time::Duration};
 
-use async_backtrace::framed;
 use engine_traits::KvEngine;
 use error_code::ErrorCodeExt;
 use futures::FutureExt;
@@ -16,7 +15,8 @@ use raftstore::{
 };
 use tikv::storage::Statistics;
 use tikv_util::{
-    box_err, debug, info, sys::thread::ThreadBuildWrapper, time::Instant, warn, worker::Scheduler,
+    async_trace::framed, box_err, debug, info, root, sys::thread::ThreadBuildWrapper,
+    time::Instant, warn, worker::Scheduler,
 };
 use tokio::sync::mpsc::{channel, error::SendError, Receiver, Sender};
 use txn_types::TimeStamp;
@@ -235,12 +235,13 @@ async fn scan_executor_loop(init: impl InitialScan, mut cmds: Receiver<ScanCmd>)
         }
 
         let init = init.clone();
-        tokio::task::spawn(async move {
+        let id = cmd.region.id;
+        tokio::task::spawn(root!(dyn format!("cmd[region={id}]"); async move {
             cmd.exec_by_with_retry(init).await;
             metrics::PENDING_INITIAL_SCAN_LEN
                 .with_label_values(&["executing"])
                 .dec();
-        });
+        }));
     }
 }
 
