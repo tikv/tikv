@@ -230,7 +230,7 @@ impl S3Storage {
         P: ProvideAwsCredentials + Send + Sync + 'static,
         D: DispatchSignedRequest + Send + Sync + 'static,
     {
-        if let Some(role_arn) = config.role_arn.clone() {
+        if config.role_arn.is_some() {
             // try use role arn anyway with current creds when it's not nil.
             let bucket_region = none_to_empty(config.bucket.region.clone());
             let bucket_endpoint = config.bucket.endpoint.clone();
