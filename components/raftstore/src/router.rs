@@ -1,6 +1,9 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::borrow::Cow;
+use std::{
+    borrow::Cow,
+    sync::{Arc, Mutex},
+};
 
 // #[PerformanceCriticalPath]
 use crossbeam::channel::TrySendError;
@@ -331,6 +334,7 @@ impl<EK: KvEngine, ER: RaftEngine> crate::coprocessor::StoreHandle for RaftRoute
                 split_keys,
                 callback: Callback::None,
                 source,
+                share_source_region_size: true,
             },
         ) {
             warn!(
@@ -403,6 +407,33 @@ where
         region_id: u64,
         callback: Callback<EK::Snapshot>,
     ) -> RaftStoreResult<()>;
+}
+
+impl<EK: KvEngine, T: CdcHandle<EK>> CdcHandle<EK> for Arc<Mutex<T>> {
+    fn capture_change(
+        &self,
+        region_id: u64,
+        region_epoch: metapb::RegionEpoch,
+        change_observer: ChangeObserver,
+        callback: Callback<<EK as KvEngine>::Snapshot>,
+    ) -> RaftStoreResult<()> {
+        Mutex::lock(self).unwrap().capture_change(
+            region_id,
+            region_epoch,
+            change_observer,
+            callback,
+        )
+    }
+
+    fn check_leadership(
+        &self,
+        region_id: u64,
+        callback: Callback<<EK as KvEngine>::Snapshot>,
+    ) -> RaftStoreResult<()> {
+        Mutex::lock(self)
+            .unwrap()
+            .check_leadership(region_id, callback)
+    }
 }
 
 /// A wrapper of SignificantRouter that is specialized for implementing

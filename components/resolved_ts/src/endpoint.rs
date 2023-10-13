@@ -1,12 +1,13 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
+    cmp::min,
     collections::HashMap,
     fmt,
     marker::PhantomData,
     sync::{
         atomic::{AtomicBool, Ordering},
-        Arc, Mutex,
+        Arc, Mutex, MutexGuard,
     },
     time::Duration,
 };
@@ -14,7 +15,7 @@ use std::{
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::KvEngine;
 use grpcio::Environment;
-use kvproto::{metapb::Region, raft_cmdpb::AdminCmdType};
+use kvproto::{kvrpcpb::LeaderInfo, metapb::Region, raft_cmdpb::AdminCmdType};
 use online_config::{self, ConfigChange, ConfigManager, OnlineConfig};
 use pd_client::PdClient;
 use raftstore::{
@@ -22,7 +23,9 @@ use raftstore::{
     router::CdcHandle,
     store::{
         fsm::store::StoreRegionMeta,
-        util::{self, RegionReadProgress, RegionReadProgressRegistry},
+        util::{
+            self, ReadState, RegionReadProgress, RegionReadProgressCore, RegionReadProgressRegistry,
+        },
     },
 };
 use security::SecurityManager;
@@ -35,12 +38,16 @@ use tokio::sync::Notify;
 use txn_types::{Key, TimeStamp};
 
 use crate::{
-    advance::{AdvanceTsWorker, LeadershipResolver},
+    advance::{AdvanceTsWorker, LeadershipResolver, DEFAULT_CHECK_LEADER_TIMEOUT_DURATION},
     cmd::{ChangeLog, ChangeRow},
     metrics::*,
-    resolver::Resolver,
+    resolver::{LastAttempt, Resolver},
     scanner::{ScanEntry, ScanMode, ScanTask, ScannerPool},
+    TsSource,
 };
+
+/// grace period for identifying identifying slow resolved-ts and safe-ts.
+const SLOW_LOG_GRACE_PERIOD_MS: u64 = 1000;
 
 enum ResolverStatus {
     Pending {
@@ -279,6 +286,265 @@ pub struct Endpoint<T, E: KvEngine, S> {
     _phantom: PhantomData<(T, E)>,
 }
 
+// methods that are used for metrics and logging
+impl<T, E, S> Endpoint<T, E, S>
+where
+    T: 'static + CdcHandle<E>,
+    E: KvEngine,
+    S: StoreRegionMeta,
+{
+    fn is_leader(&self, store_id: Option<u64>, leader_store_id: Option<u64>) -> bool {
+        store_id.is_some() && store_id == leader_store_id
+    }
+
+    fn collect_stats(&mut self) -> Stats {
+        let store_id = self.get_or_init_store_id();
+        let mut stats = Stats::default();
+        self.region_read_progress.with(|registry| {
+            for (region_id, read_progress) in registry {
+                let (leader_info, leader_store_id) = read_progress.dump_leader_info();
+                let core = read_progress.get_core();
+                let resolved_ts = leader_info.get_read_state().get_safe_ts();
+                let safe_ts = core.read_state().ts;
+
+                if resolved_ts == 0 {
+                    stats.zero_ts_count += 1;
+                    continue;
+                }
+
+                if self.is_leader(store_id, leader_store_id) {
+                    // leader resolved-ts
+                    if resolved_ts < stats.min_leader_resolved_ts.resolved_ts {
+                        let resolver = self.regions.get(region_id).map(|x| &x.resolver);
+                        stats
+                            .min_leader_resolved_ts
+                            .set(*region_id, resolver, &core, &leader_info);
+                    }
+                } else {
+                    // follower safe-ts
+                    if safe_ts > 0 && safe_ts < stats.min_follower_safe_ts.safe_ts {
+                        stats.min_follower_safe_ts.set(*region_id, &core);
+                    }
+
+                    // follower resolved-ts
+                    if resolved_ts < stats.min_follower_resolved_ts.resolved_ts {
+                        stats.min_follower_resolved_ts.set(*region_id, &core);
+                    }
+                }
+            }
+        });
+
+        stats.resolver = self.collect_resolver_stats();
+        stats.cm_min_lock = self.advance_worker.concurrency_manager.global_min_lock();
+        stats
+    }
+
+    fn collect_resolver_stats(&mut self) -> ResolverStats {
+        let mut stats = ResolverStats::default();
+        for observed_region in self.regions.values() {
+            match &observed_region.resolver_status {
+                ResolverStatus::Pending { locks, .. } => {
+                    for l in locks {
+                        match l {
+                            PendingLock::Track { key, .. } => stats.heap_size += key.len() as i64,
+                            PendingLock::Untrack { key, .. } => stats.heap_size += key.len() as i64,
+                        }
+                    }
+                    stats.unresolved_count += 1;
+                }
+                ResolverStatus::Ready { .. } => {
+                    stats.heap_size += observed_region.resolver.size() as i64;
+                    stats.resolved_count += 1;
+                }
+            }
+        }
+        stats
+    }
+
+    fn update_metrics(&self, stats: &Stats) {
+        let now = self.approximate_now_tso();
+        // general
+        if stats.min_follower_resolved_ts.resolved_ts < stats.min_leader_resolved_ts.resolved_ts {
+            RTS_MIN_RESOLVED_TS.set(stats.min_follower_resolved_ts.resolved_ts as i64);
+            RTS_MIN_RESOLVED_TS_GAP.set(now.saturating_sub(
+                TimeStamp::from(stats.min_follower_resolved_ts.resolved_ts).physical(),
+            ) as i64);
+            RTS_MIN_RESOLVED_TS_REGION.set(stats.min_follower_resolved_ts.region_id as i64);
+        } else {
+            RTS_MIN_RESOLVED_TS.set(stats.min_leader_resolved_ts.resolved_ts as i64);
+            RTS_MIN_RESOLVED_TS_GAP.set(now.saturating_sub(
+                TimeStamp::from(stats.min_leader_resolved_ts.resolved_ts).physical(),
+            ) as i64);
+            RTS_MIN_RESOLVED_TS_REGION.set(stats.min_leader_resolved_ts.region_id as i64);
+        }
+        RTS_ZERO_RESOLVED_TS.set(stats.zero_ts_count);
+
+        RTS_LOCK_HEAP_BYTES_GAUGE.set(stats.resolver.heap_size);
+        RTS_REGION_RESOLVE_STATUS_GAUGE_VEC
+            .with_label_values(&["resolved"])
+            .set(stats.resolver.resolved_count);
+        RTS_REGION_RESOLVE_STATUS_GAUGE_VEC
+            .with_label_values(&["unresolved"])
+            .set(stats.resolver.unresolved_count);
+
+        CONCURRENCY_MANAGER_MIN_LOCK_TS.set(
+            stats
+                .cm_min_lock
+                .clone()
+                .map(|(ts, _)| ts.into_inner())
+                .unwrap_or_default() as i64,
+        );
+
+        // min follower safe ts
+        RTS_MIN_FOLLOWER_SAFE_TS_REGION.set(stats.min_follower_safe_ts.region_id as i64);
+        RTS_MIN_FOLLOWER_SAFE_TS.set(stats.min_follower_safe_ts.safe_ts as i64);
+        RTS_MIN_FOLLOWER_SAFE_TS_GAP.set(
+            now.saturating_sub(TimeStamp::from(stats.min_follower_safe_ts.safe_ts).physical())
+                as i64,
+        );
+        RTS_MIN_FOLLOWER_SAFE_TS_DURATION_TO_LAST_CONSUME_LEADER.set(
+            stats
+                .min_follower_safe_ts
+                .duration_to_last_consume_leader
+                .map(|x| x as i64)
+                .unwrap_or(-1),
+        );
+
+        // min leader resolved ts
+        RTS_MIN_LEADER_RESOLVED_TS.set(stats.min_leader_resolved_ts.resolved_ts as i64);
+        RTS_MIN_LEADER_RESOLVED_TS_REGION.set(stats.min_leader_resolved_ts.region_id as i64);
+        RTS_MIN_LEADER_RESOLVED_TS_REGION_MIN_LOCK_TS.set(
+            stats
+                .min_leader_resolved_ts
+                .min_lock
+                .as_ref()
+                .map(|(ts, _)| (*ts).into_inner() as i64)
+                .unwrap_or(-1),
+        );
+        RTS_MIN_LEADER_RESOLVED_TS_GAP
+            .set(now.saturating_sub(
+                TimeStamp::from(stats.min_leader_resolved_ts.resolved_ts).physical(),
+            ) as i64);
+        RTS_MIN_LEADER_DUATION_TO_LAST_UPDATE_SAFE_TS.set(
+            stats
+                .min_leader_resolved_ts
+                .duration_to_last_update_ms
+                .map(|x| x as i64)
+                .unwrap_or(-1),
+        );
+
+        // min follower resolved ts
+        RTS_MIN_FOLLOWER_RESOLVED_TS.set(stats.min_follower_resolved_ts.resolved_ts as i64);
+        RTS_MIN_FOLLOWER_RESOLVED_TS_REGION.set(stats.min_follower_resolved_ts.region_id as i64);
+        RTS_MIN_FOLLOWER_RESOLVED_TS_GAP.set(
+            now.saturating_sub(
+                TimeStamp::from(stats.min_follower_resolved_ts.resolved_ts).physical(),
+            ) as i64,
+        );
+        RTS_MIN_FOLLOWER_RESOLVED_TS_DURATION_TO_LAST_CONSUME_LEADER.set(
+            stats
+                .min_follower_resolved_ts
+                .duration_to_last_consume_leader
+                .map(|x| x as i64)
+                .unwrap_or(-1),
+        );
+    }
+
+    // Approximate a TSO from PD. It is better than local timestamp when clock skew
+    // exists.
+    // Returns the physical part.
+    fn approximate_now_tso(&self) -> u64 {
+        self.advance_worker
+            .last_pd_tso
+            .try_lock()
+            .map(|opt| {
+                opt.map(|(pd_ts, instant)| {
+                    pd_ts.physical() + instant.saturating_elapsed().as_millis() as u64
+                })
+                .unwrap_or_else(|| TimeStamp::physical_now())
+            })
+            .unwrap_or_else(|_| TimeStamp::physical_now())
+    }
+
+    fn log_slow_regions(&self, stats: &Stats) {
+        let expected_interval = min(
+            self.cfg.advance_ts_interval.as_millis(),
+            DEFAULT_CHECK_LEADER_TIMEOUT_DURATION.as_millis() as u64,
+        ) + self.cfg.advance_ts_interval.as_millis();
+        let leader_threshold = expected_interval + SLOW_LOG_GRACE_PERIOD_MS;
+        let follower_threshold = 2 * expected_interval + SLOW_LOG_GRACE_PERIOD_MS;
+        let now = self.approximate_now_tso();
+
+        // min leader resolved ts
+        let min_leader_resolved_ts_gap = now
+            .saturating_sub(TimeStamp::from(stats.min_leader_resolved_ts.resolved_ts).physical());
+        if min_leader_resolved_ts_gap > leader_threshold {
+            info!(
+                "the max gap of leader resolved-ts is large";
+                "region_id" => stats.min_leader_resolved_ts.region_id,
+                "gap" => format!("{}ms", min_leader_resolved_ts_gap),
+                "read_state" => ?stats.min_leader_resolved_ts.read_state,
+                "applied_index" => stats.min_leader_resolved_ts.applied_index,
+                "min_lock" => ?stats.min_leader_resolved_ts.min_lock,
+                "lock_num" => stats.min_leader_resolved_ts.lock_num,
+                "txn_num" => stats.min_leader_resolved_ts.txn_num,
+                "min_memory_lock" => ?stats.cm_min_lock,
+                "duration_to_last_update_safe_ts" => match stats.min_leader_resolved_ts.duration_to_last_update_ms {
+                    Some(d) => format!("{}ms", d),
+                    None => "none".to_owned(),
+                },
+                "last_resolve_attempt" => &stats.min_leader_resolved_ts.last_resolve_attempt,
+            );
+        }
+
+        // min follower safe ts
+        let min_follower_safe_ts_gap =
+            now.saturating_sub(TimeStamp::from(stats.min_follower_safe_ts.safe_ts).physical());
+        if min_follower_safe_ts_gap > follower_threshold {
+            info!(
+                "the max gap of follower safe-ts is large";
+                "region_id" => stats.min_follower_safe_ts.region_id,
+                "gap" => format!("{}ms", min_follower_safe_ts_gap),
+                "safe_ts" => stats.min_follower_safe_ts.safe_ts,
+                "resolved_ts" => stats.min_follower_safe_ts.resolved_ts,
+                "duration_to_last_consume_leader" => match stats.min_follower_safe_ts.duration_to_last_consume_leader {
+                    Some(d) => format!("{}ms", d),
+                    None => "none".to_owned(),
+                },
+                "applied_index" => stats.min_follower_safe_ts.applied_index,
+                "latest_candidate" => ?stats.min_follower_safe_ts.latest_candidate,
+                "oldest_candidate" => ?stats.min_follower_safe_ts.oldest_candidate,
+            );
+        }
+
+        // min follower resolved ts
+        let min_follower_resolved_ts_gap = now
+            .saturating_sub(TimeStamp::from(stats.min_follower_resolved_ts.resolved_ts).physical());
+        if min_follower_resolved_ts_gap > follower_threshold {
+            if stats.min_follower_resolved_ts.region_id == stats.min_follower_safe_ts.region_id {
+                info!(
+                    "the max gap of follower resolved-ts is large; it's the same region that has the min safe-ts"
+                );
+            } else {
+                info!(
+                    "the max gap of follower resolved-ts is large";
+                    "region_id" => stats.min_follower_resolved_ts.region_id,
+                    "gap" => format!("{}ms", min_follower_resolved_ts_gap),
+                    "safe_ts" => stats.min_follower_resolved_ts.safe_ts,
+                    "resolved_ts" => stats.min_follower_resolved_ts.resolved_ts,
+                    "duration_to_last_consume_leader" => match stats.min_follower_resolved_ts.duration_to_last_consume_leader {
+                        Some(d) => format!("{}ms", d),
+                        None => "none".to_owned(),
+                    },
+                    "applied_index" => stats.min_follower_resolved_ts.applied_index,
+                    "latest_candidate" => ?stats.min_follower_resolved_ts.latest_candidate,
+                    "oldest_candidate" => ?stats.min_follower_resolved_ts.oldest_candidate,
+                );
+            }
+        }
+    }
+}
+
 impl<T, E, S> Endpoint<T, E, S>
 where
     T: 'static + CdcHandle<E>,
@@ -504,14 +770,22 @@ where
 
     // Update advanced resolved ts.
     // Must ensure all regions are leaders at the point of ts.
-    fn handle_resolved_ts_advanced(&mut self, regions: Vec<u64>, ts: TimeStamp) {
+    fn handle_resolved_ts_advanced(
+        &mut self,
+        regions: Vec<u64>,
+        ts: TimeStamp,
+        ts_source: TsSource,
+    ) {
         if regions.is_empty() {
             return;
         }
+        let now = tikv_util::time::Instant::now_coarse();
         for region_id in regions.iter() {
             if let Some(observe_region) = self.regions.get_mut(region_id) {
                 if let ResolverStatus::Ready = observe_region.resolver_status {
-                    let _ = observe_region.resolver.resolve(ts);
+                    let _ = observe_region
+                        .resolver
+                        .resolve(ts, Some(now), ts_source.clone());
                 }
             }
         }
@@ -597,6 +871,29 @@ where
             self.store_id
         })
     }
+
+    fn handle_get_diagnosis_info(
+        &self,
+        region_id: u64,
+        log_locks: bool,
+        min_start_ts: u64,
+        callback: tikv::server::service::ResolvedTsDiagnosisCallback,
+    ) {
+        if let Some(r) = self.regions.get(&region_id) {
+            if log_locks {
+                r.resolver.log_locks(min_start_ts);
+            }
+            callback(Some((
+                r.resolver.stopped(),
+                r.resolver.resolved_ts().into_inner(),
+                r.resolver.tracked_index(),
+                r.resolver.num_locks(),
+                r.resolver.num_transactions(),
+            )));
+        } else {
+            callback(None);
+        }
+    }
 }
 
 pub enum Task {
@@ -619,6 +916,7 @@ pub enum Task {
     ResolvedTsAdvanced {
         regions: Vec<u64>,
         ts: TimeStamp,
+        ts_source: TsSource,
     },
     ChangeLog {
         cmd_batch: Vec<CmdBatch>,
@@ -631,6 +929,12 @@ pub enum Task {
     },
     ChangeConfig {
         change: ConfigChange,
+    },
+    GetDiagnosisInfo {
+        region_id: u64,
+        log_locks: bool,
+        min_start_ts: u64,
+        callback: tikv::server::service::ResolvedTsDiagnosisCallback,
     },
 }
 
@@ -667,10 +971,12 @@ impl fmt::Debug for Task {
             Task::ResolvedTsAdvanced {
                 ref regions,
                 ref ts,
+                ref ts_source,
             } => de
                 .field("name", &"advance_resolved_ts")
                 .field("regions", &regions)
                 .field("ts", &ts)
+                .field("ts_source", &ts_source.label())
                 .finish(),
             Task::ChangeLog { .. } => de.field("name", &"change_log").finish(),
             Task::ScanLocks {
@@ -688,6 +994,11 @@ impl fmt::Debug for Task {
             Task::ChangeConfig { ref change } => de
                 .field("name", &"change_config")
                 .field("change", &change)
+                .finish(),
+            Task::GetDiagnosisInfo { region_id, .. } => de
+                .field("name", &"get_diagnosis_info")
+                .field("region_id", &region_id)
+                .field("callback", &"callback")
                 .finish(),
         }
     }
@@ -722,9 +1033,11 @@ where
             Task::AdvanceResolvedTs { leader_resolver } => {
                 self.handle_advance_resolved_ts(leader_resolver)
             }
-            Task::ResolvedTsAdvanced { regions, ts } => {
-                self.handle_resolved_ts_advanced(regions, ts)
-            }
+            Task::ResolvedTsAdvanced {
+                regions,
+                ts,
+                ts_source,
+            } => self.handle_resolved_ts_advanced(regions, ts, ts_source),
             Task::ChangeLog { cmd_batch } => self.handle_change_log(cmd_batch),
             Task::ScanLocks {
                 region_id,
@@ -733,6 +1046,12 @@ where
                 apply_index,
             } => self.handle_scan_locks(region_id, observe_id, entries, apply_index),
             Task::ChangeConfig { change } => self.handle_change_config(change),
+            Task::GetDiagnosisInfo {
+                region_id,
+                log_locks,
+                min_start_ts,
+                callback,
+            } => self.handle_get_diagnosis_info(region_id, log_locks, min_start_ts, callback),
         }
     }
 }
@@ -754,6 +1073,138 @@ impl ConfigManager for ResolvedTsConfigManager {
     }
 }
 
+#[derive(Default)]
+struct Stats {
+    // stats for metrics
+    zero_ts_count: i64,
+    min_leader_resolved_ts: LeaderStats,
+    min_follower_safe_ts: FollowerStats,
+    min_follower_resolved_ts: FollowerStats,
+    resolver: ResolverStats,
+    // we don't care about min_safe_ts_leader, because safe_ts should be equal to resolved_ts in
+    // leaders
+    // The min memory lock in concurrency manager.
+    cm_min_lock: Option<(TimeStamp, Key)>,
+}
+
+struct LeaderStats {
+    region_id: u64,
+    resolved_ts: u64,
+    read_state: ReadState,
+    duration_to_last_update_ms: Option<u64>,
+    last_resolve_attempt: Option<LastAttempt>,
+    applied_index: u64,
+    // min lock in LOCK CF
+    min_lock: Option<(TimeStamp, Key)>,
+    lock_num: Option<u64>,
+    txn_num: Option<u64>,
+}
+
+impl Default for LeaderStats {
+    fn default() -> Self {
+        Self {
+            region_id: 0,
+            resolved_ts: u64::MAX,
+            read_state: ReadState::default(),
+            duration_to_last_update_ms: None,
+            applied_index: 0,
+            last_resolve_attempt: None,
+            min_lock: None,
+            lock_num: None,
+            txn_num: None,
+        }
+    }
+}
+
+impl LeaderStats {
+    fn set(
+        &mut self,
+        region_id: u64,
+        resolver: Option<&Resolver>,
+        region_read_progress: &MutexGuard<'_, RegionReadProgressCore>,
+        leader_info: &LeaderInfo,
+    ) {
+        *self = LeaderStats {
+            region_id,
+            resolved_ts: leader_info.get_read_state().get_safe_ts(),
+            read_state: region_read_progress.read_state().clone(),
+            duration_to_last_update_ms: region_read_progress
+                .last_instant_of_update_ts()
+                .map(|i| i.saturating_elapsed().as_millis() as u64),
+            last_resolve_attempt: resolver.and_then(|r| r.last_attempt.clone()),
+            min_lock: resolver.and_then(|r| {
+                r.oldest_transaction().map(|(ts, keys)| {
+                    (
+                        *ts,
+                        keys.iter()
+                            .next()
+                            .map(|k| Key::from_encoded_slice(k.as_ref()))
+                            .unwrap_or_else(|| Key::from_encoded_slice("no_keys_found".as_ref())),
+                    )
+                })
+            }),
+            applied_index: region_read_progress.applied_index(),
+            lock_num: resolver.map(|r| r.num_locks()),
+            txn_num: resolver.map(|r| r.num_transactions()),
+        };
+    }
+}
+
+struct FollowerStats {
+    region_id: u64,
+    resolved_ts: u64,
+    safe_ts: u64,
+    latest_candidate: Option<ReadState>,
+    oldest_candidate: Option<ReadState>,
+    applied_index: u64,
+    duration_to_last_consume_leader: Option<u64>,
+}
+
+impl Default for FollowerStats {
+    fn default() -> Self {
+        Self {
+            region_id: 0,
+            safe_ts: u64::MAX,
+            resolved_ts: u64::MAX,
+            latest_candidate: None,
+            oldest_candidate: None,
+            applied_index: 0,
+            duration_to_last_consume_leader: None,
+        }
+    }
+}
+
+impl FollowerStats {
+    fn set(
+        &mut self,
+        region_id: u64,
+        region_read_progress: &MutexGuard<'_, RegionReadProgressCore>,
+    ) {
+        let read_state = region_read_progress.read_state();
+        *self = FollowerStats {
+            region_id,
+            resolved_ts: region_read_progress
+                .get_leader_info()
+                .get_read_state()
+                .get_safe_ts(),
+            safe_ts: read_state.ts,
+            applied_index: region_read_progress.applied_index(),
+            latest_candidate: region_read_progress.pending_items().back().cloned(),
+            oldest_candidate: region_read_progress.pending_items().front().cloned(),
+            duration_to_last_consume_leader: region_read_progress
+                .last_instant_of_consume_leader()
+                .map(|i| i.saturating_elapsed().as_millis() as u64),
+        };
+    }
+}
+
+#[derive(Default)]
+struct ResolverStats {
+    resolved_count: i64,
+    unresolved_count: i64,
+    heap_size: i64,
+}
+
 const METRICS_FLUSH_INTERVAL: u64 = 10_000; // 10s
 
 impl<T, E, S> RunnableWithTimer for Endpoint<T, E, S>
@@ -763,70 +1214,9 @@ where
     S: StoreRegionMeta,
 {
     fn on_timeout(&mut self) {
-        let store_id = self.get_or_init_store_id();
-        let (mut oldest_ts, mut oldest_region, mut zero_ts_count) = (u64::MAX, 0, 0);
-        let (mut oldest_leader_ts, mut oldest_leader_region) = (u64::MAX, 0);
-        self.region_read_progress.with(|registry| {
-            for (region_id, read_progress) in registry {
-                let (leader_info, leader_store_id) = read_progress.dump_leader_info();
-                let ts = leader_info.get_read_state().get_safe_ts();
-                if ts == 0 {
-                    zero_ts_count += 1;
-                    continue;
-                }
-                if ts < oldest_ts {
-                    oldest_ts = ts;
-                    oldest_region = *region_id;
-                }
-
-                if let (Some(store_id), Some(leader_store_id)) = (store_id, leader_store_id) {
-                    if leader_store_id == store_id && ts < oldest_leader_ts {
-                        oldest_leader_ts = ts;
-                        oldest_leader_region = *region_id;
-                    }
-                }
-            }
-        });
-        let mut lock_heap_size = 0;
-        let (mut resolved_count, mut unresolved_count) = (0, 0);
-        for observe_region in self.regions.values() {
-            match &observe_region.resolver_status {
-                ResolverStatus::Pending { locks, .. } => {
-                    for l in locks {
-                        match l {
-                            PendingLock::Track { key, .. } => lock_heap_size += key.len(),
-                            PendingLock::Untrack { key, .. } => lock_heap_size += key.len(),
-                        }
-                    }
-                    unresolved_count += 1;
-                }
-                ResolverStatus::Ready { .. } => {
-                    lock_heap_size += observe_region.resolver.size();
-                    resolved_count += 1;
-                }
-            }
-        }
-        RTS_MIN_RESOLVED_TS_REGION.set(oldest_region as i64);
-        RTS_MIN_RESOLVED_TS.set(oldest_ts as i64);
-        RTS_ZERO_RESOLVED_TS.set(zero_ts_count as i64);
-        RTS_MIN_RESOLVED_TS_GAP.set(
-            TimeStamp::physical_now().saturating_sub(TimeStamp::from(oldest_ts).physical()) as i64,
-        );
-
-        RTS_MIN_LEADER_RESOLVED_TS_REGION.set(oldest_leader_region as i64);
-        RTS_MIN_LEADER_RESOLVED_TS.set(oldest_leader_ts as i64);
-        RTS_MIN_LEADER_RESOLVED_TS_GAP.set(
-            TimeStamp::physical_now().saturating_sub(TimeStamp::from(oldest_leader_ts).physical())
-                as i64,
-        );
-
-        RTS_LOCK_HEAP_BYTES_GAUGE.set(lock_heap_size as i64);
-        RTS_REGION_RESOLVE_STATUS_GAUGE_VEC
-            .with_label_values(&["resolved"])
-            .set(resolved_count as _);
-        RTS_REGION_RESOLVE_STATUS_GAUGE_VEC
-            .with_label_values(&["unresolved"])
-            .set(unresolved_count as _);
+        let stats = self.collect_stats();
+        self.update_metrics(&stats);
+        self.log_slow_regions(&stats);
     }
 
     fn get_interval(&self) -> Duration {
