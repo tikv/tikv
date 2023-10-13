@@ -817,23 +817,27 @@ fn check_request_key_range(
     }
     let request_bucket_version = req_ctx.context.buckets_version;
     let latest_buckets = buckets.unwrap();
-    if request_bucket_version == 0 || request_bucket_version >= latest_buckets.version {
+    if request_bucket_version == 0
+        || request_bucket_version >= latest_buckets.version
+        || latest_buckets.is_empty()
+    {
         return Ok(());
     }
 
     // check the request key range cross two or more buckets.
     let start_key = txn_types::Key::from_raw(&req_ctx.lower_bound);
     let end_key = txn_types::Key::from_raw(&req_ctx.upper_bound);
+    let mut reject_read = true;
     let first_index = find_bucket_index(start_key.as_encoded(), &latest_buckets.keys);
     let last_index = find_bucket_index(end_key.as_encoded(), &latest_buckets.keys);
-    let mut reject_read = true;
     if let (Some(first_index), Some(last_index)) = (first_index, last_index) {
-        let mut range_size = 0;
-        for i in first_index..=last_index - 1 {
-            range_size += latest_buckets.sizes.get(i).unwrap_or(&0);
+        let mut range_size: u64 = 0;
+        for i in first_index..=last_index {
+            range_size = range_size.saturating_add(*latest_buckets.sizes.get(i).unwrap_or(&0));
         }
         reject_read = range_size >= MAX_KEY_RANGE_SIZE;
     }
+
     if reject_read {
         let mut bucket_not_match = errorpb::BucketVersionNotMatch::default();
         bucket_not_match.set_version(latest_buckets.version);
@@ -2087,9 +2091,9 @@ mod tests {
             ],
         ];
         bucket_meta.sizes = vec![
-            ReadableSize::mb(50).0,
-            ReadableSize::mb(50).0,
-            ReadableSize::mb(50).0,
+            ReadableSize::mb(40).0,
+            ReadableSize::mb(40).0,
+            ReadableSize::mb(40).0,
         ];
         let mut row_keys = vec![];
         for key in bucket_meta.keys.iter() {
