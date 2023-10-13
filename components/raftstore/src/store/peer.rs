@@ -660,8 +660,9 @@ impl UnsafeRecoveryForceLeaderSyncer {
 
 #[derive(Clone, Debug)]
 pub struct UnsafeRecoveryExecutePlanSyncer {
+    pub(self) time: TiInstant,
     _closure: Arc<InvokeClosureOnDrop>,
-    abort: Arc<Mutex<bool>>,
+    pub(self) abort: Arc<Mutex<bool>>,
 }
 
 impl UnsafeRecoveryExecutePlanSyncer {
@@ -679,6 +680,7 @@ impl UnsafeRecoveryExecutePlanSyncer {
             start_unsafe_recovery_report(&*router_ptr, report_id, true);
         }));
         UnsafeRecoveryExecutePlanSyncer {
+            time: TiInstant::now(),
             _closure: Arc::new(closure),
             abort,
         }
@@ -725,8 +727,9 @@ impl SnapshotRecoveryWaitApplySyncer {
 
 #[derive(Clone, Debug)]
 pub struct UnsafeRecoveryWaitApplySyncer {
+    pub(self) time: TiInstant,
     _closure: Arc<InvokeClosureOnDrop>,
-    abort: Arc<Mutex<bool>>,
+    pub(self) abort: Arc<Mutex<bool>>,
 }
 
 impl UnsafeRecoveryWaitApplySyncer {
@@ -739,11 +742,11 @@ impl UnsafeRecoveryWaitApplySyncer {
         let abort = Arc::new(Mutex::new(false));
         let abort_clone = abort.clone();
         let closure = InvokeClosureOnDrop(Box::new(move || {
-            info!("Unsafe recovery, wait apply finished");
             if *abort_clone.lock().unwrap() {
                 warn!("Unsafe recovery, wait apply aborted");
                 return;
             }
+            info!("Unsafe recovery, wait apply finished");
             let router_ptr = thread_safe_router.lock().unwrap();
             if exit_force_leader {
                 (*router_ptr).broadcast_normal(|| {
@@ -759,6 +762,7 @@ impl UnsafeRecoveryWaitApplySyncer {
             });
         }));
         UnsafeRecoveryWaitApplySyncer {
+            time: TiInstant::now(),
             _closure: Arc::new(closure),
             abort,
         }
@@ -806,6 +810,7 @@ impl UnsafeRecoveryFillOutReportSyncer {
     }
 }
 
+#[derive(Debug)]
 pub enum SnapshotRecoveryState {
     // This state is set by the leader peer fsm. Once set, it sync and check leader commit index
     // and force forward to last index once follower appended and then it also is checked
@@ -818,6 +823,7 @@ pub enum SnapshotRecoveryState {
     },
 }
 
+#[derive(Debug)]
 pub enum UnsafeRecoveryState {
     // Stores the state that is necessary for the wait apply stage of unsafe recovery process.
     // This state is set by the peer fsm. Once set, it is checked every time this peer applies a
@@ -837,6 +843,34 @@ pub enum UnsafeRecoveryState {
         demote_after_exit: bool,
     },
     Destroy(UnsafeRecoveryExecutePlanSyncer),
+}
+
+impl UnsafeRecoveryState {
+    pub fn check_timeout(&self, timeout: Duration) -> bool {
+        let time = match self {
+            UnsafeRecoveryState::WaitApply { syncer, .. } => syncer.time,
+            UnsafeRecoveryState::DemoteFailedVoters { syncer, .. }
+            | UnsafeRecoveryState::Destroy(syncer) => syncer.time,
+        };
+        time.saturating_elapsed() >= timeout
+    }
+
+    pub fn is_abort(&self) -> bool {
+        let abort = match &self {
+            UnsafeRecoveryState::WaitApply { syncer, .. } => &syncer.abort,
+            UnsafeRecoveryState::DemoteFailedVoters { syncer, .. }
+            | UnsafeRecoveryState::Destroy(syncer) => &syncer.abort,
+        };
+        *abort.lock().unwrap()
+    }
+
+    pub fn abort(&mut self) {
+        match self {
+            UnsafeRecoveryState::WaitApply { syncer, .. } => syncer.abort(),
+            UnsafeRecoveryState::DemoteFailedVoters { syncer, .. }
+            | UnsafeRecoveryState::Destroy(syncer) => syncer.abort(),
+        }
+    }
 }
 
 #[derive(Getters, MutGetters)]
@@ -1100,7 +1134,7 @@ where
             max_size_per_msg: cfg.raft_max_size_per_msg.0,
             max_inflight_msgs: cfg.raft_max_inflight_msgs,
             applied: applied_index,
-            check_quorum: true,
+            check_quorum: !cfg.unsafe_disable_check_quorum,
             skip_bcast_commit: true,
             pre_vote: cfg.prevote,
             max_committed_size_per_ready: MAX_COMMITTED_SIZE_PER_READY,
@@ -1968,6 +2002,19 @@ where
                     return Ok(());
                 }
                 self.should_wake_up = state == LeaseState::Expired;
+            }
+        } else if util::is_vote_msg(&m) {
+            // Only by passing an election timeout can peers handle request vote safely.
+            // See https://github.com/tikv/tikv/issues/15035
+            if let Some(remain) = ctx.maybe_in_unsafe_vote_period() {
+                debug!("drop request vote for one election timeout after node start";
+                    "region_id" => self.region_id,
+                    "peer_id" => self.peer.get_id(),
+                    "from_peer_id" => m.get_from(),
+                    "remain_duration" => ?remain,
+                );
+                ctx.raft_metrics.message_dropped.unsafe_vote.inc();
+                return Ok(());
             }
         }
 
