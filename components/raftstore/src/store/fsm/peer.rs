@@ -806,6 +806,8 @@ where
                         target_index: self.fsm.peer.raft_group.raft.raft_log.last_index(),
                         demote_after_exit: true,
                     });
+            } else {
+                self.fsm.peer.unsafe_recovery_state = Some(UnsafeRecoveryState::Failed);
             }
         } else {
             self.unsafe_recovery_demote_failed_voters(syncer, failed_voters);
@@ -845,6 +847,8 @@ where
                         target_index: self.fsm.peer.raft_group.raft.raft_log.last_index(),
                         demote_after_exit: false,
                     });
+            } else {
+                self.fsm.peer.unsafe_recovery_state = Some(UnsafeRecoveryState::Failed);
             }
         } else {
             warn!(
@@ -893,13 +897,87 @@ where
             self.fsm.peer.raft_group.raft.raft_log.committed
         };
 
+<<<<<<< HEAD
         self.fsm.peer.unsafe_recovery_state = Some(UnsafeRecoveryState::WaitApply {
+=======
+        if target_index > self.fsm.peer.raft_group.raft.raft_log.applied {
+            info!(
+                "Unsafe recovery, start wait apply";
+                "region_id" => self.region().get_id(),
+                "peer_id" => self.fsm.peer_id(),
+                "target_index" => target_index,
+                "applied" =>  self.fsm.peer.raft_group.raft.raft_log.applied,
+            );
+            self.fsm.peer.unsafe_recovery_state = Some(UnsafeRecoveryState::WaitApply {
+                target_index,
+                syncer,
+            });
+            self.fsm
+                .peer
+                .unsafe_recovery_maybe_finish_wait_apply(/* force= */ self.fsm.stopped);
+        }
+    }
+
+    // func be invoked firstly after assigned leader by BR, wait all leader apply to
+    // last log index func be invoked secondly wait follower apply to last
+    // index, however the second call is broadcast, it may improve in future
+    fn on_snapshot_recovery_wait_apply(&mut self, syncer: SnapshotRecoveryWaitApplySyncer) {
+        if let Some(state) = &self.fsm.peer.snapshot_recovery_state {
+            warn!(
+                "can't wait apply, another recovery in progress";
+                "region_id" => self.region_id(),
+                "peer_id" => self.fsm.peer_id(),
+                "state" => ?state,
+            );
+            syncer.abort();
+            return;
+        }
+
+        let target_index = self.fsm.peer.raft_group.raft.raft_log.last_index();
+
+        // during the snapshot recovery, broadcast waitapply, some peer may stale
+        if !self.fsm.peer.is_leader() {
+            info!(
+                "snapshot follower recovery started";
+                "region_id" => self.region_id(),
+                "peer_id" => self.fsm.peer_id(),
+                "target_index" => target_index,
+                "applied_index" => self.fsm.peer.raft_group.raft.raft_log.applied,
+                "pending_remove" => self.fsm.peer.pending_remove,
+                "voter" => self.fsm.peer.raft_group.raft.vote,
+            );
+
+            // do some sanity check, for follower, leader already apply to last log,
+            // case#1 if it is learner during backup and never vote before, vote is 0
+            // case#2 if peer is suppose to remove
+            if self.fsm.peer.raft_group.raft.vote == 0 || self.fsm.peer.pending_remove {
+                info!(
+                    "this peer is never vote before or pending remove, it should be skip to wait apply"
+                );
+                return;
+            }
+        } else {
+            info!(
+                "snapshot leader wait apply started";
+                "region_id" => self.region_id(),
+                "peer_id" => self.fsm.peer_id(),
+                "target_index" => target_index,
+                "applied_index" => self.fsm.peer.raft_group.raft.raft_log.applied,
+            );
+        }
+
+        self.fsm.peer.snapshot_recovery_state = Some(SnapshotRecoveryState::WaitLogApplyToLast {
+>>>>>>> b4e0bf7bab (raftstore: Introduce failed state for unsafe recovery to fix rollback merge timeout (#15635))
             target_index,
             syncer,
         });
         self.fsm
             .peer
+<<<<<<< HEAD
             .unsafe_recovery_maybe_finish_wait_apply(/*force=*/ self.fsm.stopped);
+=======
+            .snapshot_recovery_maybe_finish_wait_apply(self.fsm.stopped);
+>>>>>>> b4e0bf7bab (raftstore: Introduce failed state for unsafe recovery to fix rollback merge timeout (#15635))
     }
 
     fn on_unsafe_recovery_fill_out_report(&mut self, syncer: UnsafeRecoveryFillOutReportSyncer) {
@@ -1305,7 +1383,7 @@ where
             } => {
                 self.on_enter_pre_force_leader(syncer, failed_stores);
             }
-            SignificantMsg::ExitForceLeaderState => self.on_exit_force_leader(),
+            SignificantMsg::ExitForceLeaderState => self.on_exit_force_leader(false),
             SignificantMsg::UnsafeRecoveryDemoteFailedVoters {
                 syncer,
                 failed_voters,
@@ -1532,8 +1610,17 @@ where
         self.fsm.has_ready = true;
     }
 
-    fn on_exit_force_leader(&mut self) {
+    fn on_exit_force_leader(&mut self, force: bool) {
         if self.fsm.peer.force_leader.is_none() {
+            return;
+        }
+        if let Some(UnsafeRecoveryState::Failed) = self.fsm.peer.unsafe_recovery_state && !force {
+            // Skip force leader if the plan failed, so wait for the next retry of plan with force leader state holding
+            info!(
+                "skip exiting force leader state";
+                "region_id" => self.fsm.region_id(),
+                "peer_id" => self.fsm.peer_id(),
+            );
             return;
         }
 
@@ -1544,7 +1631,7 @@ where
         );
         self.fsm.peer.force_leader = None;
         // make sure it's not hibernated
-        assert_eq!(self.fsm.hibernate_state.group_state(), GroupState::Ordered);
+        assert_ne!(self.fsm.hibernate_state.group_state(), GroupState::Idle);
         // leader lease shouldn't be renewed in force leader state.
         assert_eq!(
             self.fsm.peer.leader_lease().inspect(None),
@@ -2080,7 +2167,10 @@ where
                 }
             }
             // Destroy does not need be processed, the state is cleaned up together with peer.
-            Some(_) | None => {}
+            Some(UnsafeRecoveryState::Destroy { .. })
+            | Some(UnsafeRecoveryState::Failed)
+            | Some(UnsafeRecoveryState::WaitInitialize(..))
+            | None => {}
         }
     }
 
@@ -5589,6 +5679,33 @@ where
             return;
         }
 
+<<<<<<< HEAD
+=======
+        if let Some(state) = &mut self.fsm.peer.unsafe_recovery_state {
+            let unsafe_recovery_state_timeout_failpoint = || -> bool {
+                fail_point!("unsafe_recovery_state_timeout", |_| true);
+                false
+            };
+            // Clean up the unsafe recovery state after a timeout, since the PD recovery
+            // process may have been aborted for some reasons.
+            if unsafe_recovery_state_timeout_failpoint()
+                || state.check_timeout(UNSAFE_RECOVERY_STATE_TIMEOUT)
+            {
+                info!("timeout, abort unsafe recovery"; "state" => ?state);
+                state.abort();
+                self.fsm.peer.unsafe_recovery_state = None;
+            }
+        }
+
+        if let Some(ForceLeaderState::ForceLeader { time, .. }) = self.fsm.peer.force_leader {
+            // Clean up the force leader state after a timeout, since the PD recovery
+            // process may have been aborted for some reasons.
+            if time.saturating_elapsed() > UNSAFE_RECOVERY_STATE_TIMEOUT {
+                self.on_exit_force_leader(true);
+            }
+        }
+
+>>>>>>> b4e0bf7bab (raftstore: Introduce failed state for unsafe recovery to fix rollback merge timeout (#15635))
         if self.ctx.cfg.hibernate_regions {
             let group_state = self.fsm.hibernate_state.group_state();
             if group_state == GroupState::Idle {
