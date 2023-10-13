@@ -239,6 +239,52 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
                 PeerMsg::QueryDebugInfo(ch) => self.fsm.peer_mut().on_query_debug_info(ch),
                 #[cfg(feature = "testexport")]
                 PeerMsg::WaitFlush(ch) => self.fsm.peer_mut().on_wait_flush(ch),
+<<<<<<< HEAD
+=======
+                PeerMsg::FlushBeforeClose { tx } => {
+                    self.fsm.peer_mut().flush_before_close(self.store_ctx, tx)
+                }
+                PeerMsg::EnterForceLeaderState {
+                    syncer,
+                    failed_stores,
+                } => self.fsm.peer_mut().on_enter_pre_force_leader(
+                    self.store_ctx,
+                    syncer,
+                    failed_stores,
+                ),
+                PeerMsg::ExitForceLeaderState => self
+                    .fsm
+                    .peer_mut()
+                    .on_exit_force_leader(self.store_ctx, false),
+                PeerMsg::ExitForceLeaderStateCampaign => {
+                    self.fsm.peer_mut().on_exit_force_leader_campaign()
+                }
+                PeerMsg::UnsafeRecoveryWaitApply(syncer) => {
+                    self.fsm.peer_mut().on_unsafe_recovery_wait_apply(syncer)
+                }
+                PeerMsg::UnsafeRecoveryFillOutReport(syncer) => self
+                    .fsm
+                    .peer_mut()
+                    .on_unsafe_recovery_fill_out_report(syncer),
+                PeerMsg::UnsafeRecoveryWaitInitialized(syncer) => self
+                    .fsm
+                    .peer_mut()
+                    .on_unsafe_recovery_wait_initialized(syncer),
+                PeerMsg::UnsafeRecoveryDestroy(syncer) => {
+                    self.fsm.peer_mut().on_unsafe_recovery_destroy_peer(syncer)
+                }
+                PeerMsg::UnsafeRecoveryDemoteFailedVoters {
+                    failed_voters,
+                    syncer,
+                } => self
+                    .fsm
+                    .peer_mut()
+                    .on_unsafe_recovery_pre_demote_failed_voters(
+                        self.store_ctx,
+                        syncer,
+                        failed_voters,
+                    ),
+>>>>>>> b4e0bf7bab (raftstore: Introduce failed state for unsafe recovery to fix rollback merge timeout (#15635))
             }
         }
         // TODO: instead of propose pending commands immediately, we should use timeout.

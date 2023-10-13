@@ -814,6 +814,8 @@ where
                         target_index: self.fsm.peer.raft_group.raft.raft_log.last_index(),
                         demote_after_exit: true,
                     });
+            } else {
+                self.fsm.peer.unsafe_recovery_state = Some(UnsafeRecoveryState::Failed);
             }
         } else {
             self.unsafe_recovery_demote_failed_voters(syncer, failed_voters);
@@ -853,6 +855,8 @@ where
                         target_index: self.fsm.peer.raft_group.raft.raft_log.last_index(),
                         demote_after_exit: false,
                     });
+            } else {
+                self.fsm.peer.unsafe_recovery_state = Some(UnsafeRecoveryState::Failed);
             }
         } else {
             warn!(
@@ -903,13 +907,22 @@ where
             self.fsm.peer.raft_group.raft.raft_log.committed
         };
 
-        self.fsm.peer.unsafe_recovery_state = Some(UnsafeRecoveryState::WaitApply {
-            target_index,
-            syncer,
-        });
-        self.fsm
-            .peer
-            .unsafe_recovery_maybe_finish_wait_apply(/* force= */ self.fsm.stopped);
+        if target_index > self.fsm.peer.raft_group.raft.raft_log.applied {
+            info!(
+                "Unsafe recovery, start wait apply";
+                "region_id" => self.region().get_id(),
+                "peer_id" => self.fsm.peer_id(),
+                "target_index" => target_index,
+                "applied" =>  self.fsm.peer.raft_group.raft.raft_log.applied,
+            );
+            self.fsm.peer.unsafe_recovery_state = Some(UnsafeRecoveryState::WaitApply {
+                target_index,
+                syncer,
+            });
+            self.fsm
+                .peer
+                .unsafe_recovery_maybe_finish_wait_apply(/* force= */ self.fsm.stopped);
+        }
     }
 
     // func be invoked firstly after assigned leader by BR, wait all leader apply to
@@ -1446,7 +1459,7 @@ where
             } => {
                 self.on_enter_pre_force_leader(syncer, failed_stores);
             }
-            SignificantMsg::ExitForceLeaderState => self.on_exit_force_leader(),
+            SignificantMsg::ExitForceLeaderState => self.on_exit_force_leader(false),
             SignificantMsg::UnsafeRecoveryDemoteFailedVoters {
                 syncer,
                 failed_voters,
@@ -1680,8 +1693,17 @@ where
         self.fsm.has_ready = true;
     }
 
-    fn on_exit_force_leader(&mut self) {
+    fn on_exit_force_leader(&mut self, force: bool) {
         if self.fsm.peer.force_leader.is_none() {
+            return;
+        }
+        if let Some(UnsafeRecoveryState::Failed) = self.fsm.peer.unsafe_recovery_state && !force {
+            // Skip force leader if the plan failed, so wait for the next retry of plan with force leader state holding
+            info!(
+                "skip exiting force leader state";
+                "region_id" => self.fsm.region_id(),
+                "peer_id" => self.fsm.peer_id(),
+            );
             return;
         }
 
@@ -1692,7 +1714,7 @@ where
         );
         self.fsm.peer.force_leader = None;
         // make sure it's not hibernated
-        assert_eq!(self.fsm.hibernate_state.group_state(), GroupState::Ordered);
+        assert_ne!(self.fsm.hibernate_state.group_state(), GroupState::Idle);
         // leader lease shouldn't be renewed in force leader state.
         assert_eq!(
             self.fsm.peer.leader_lease().inspect(None),
@@ -2253,7 +2275,10 @@ where
                 }
             }
             // Destroy does not need be processed, the state is cleaned up together with peer.
-            Some(_) | None => {}
+            Some(UnsafeRecoveryState::Destroy { .. })
+            | Some(UnsafeRecoveryState::Failed)
+            | Some(UnsafeRecoveryState::WaitInitialize(..))
+            | None => {}
         }
     }
 
@@ -6074,13 +6099,6 @@ where
             return;
         }
 
-        if let Some(ForceLeaderState::ForceLeader { time, .. }) = self.fsm.peer.force_leader {
-            // Clean up the force leader state after a timeout, since the PD recovery
-            // process may have been aborted for some reasons.
-            if time.saturating_elapsed() > UNSAFE_RECOVERY_STATE_TIMEOUT {
-                self.on_exit_force_leader();
-            }
-        }
         if let Some(state) = &mut self.fsm.peer.unsafe_recovery_state {
             let unsafe_recovery_state_timeout_failpoint = || -> bool {
                 fail_point!("unsafe_recovery_state_timeout", |_| true);
@@ -6093,6 +6111,15 @@ where
             {
                 info!("timeout, abort unsafe recovery"; "state" => ?state);
                 state.abort();
+                self.fsm.peer.unsafe_recovery_state = None;
+            }
+        }
+
+        if let Some(ForceLeaderState::ForceLeader { time, .. }) = self.fsm.peer.force_leader {
+            // Clean up the force leader state after a timeout, since the PD recovery
+            // process may have been aborted for some reasons.
+            if time.saturating_elapsed() > UNSAFE_RECOVERY_STATE_TIMEOUT {
+                self.on_exit_force_leader(true);
             }
         }
 
