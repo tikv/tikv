@@ -123,6 +123,7 @@ enum DelayReason {
 /// in most case.
 const MAX_REGIONS_IN_ERROR: usize = 10;
 const REGION_SPLIT_SKIP_MAX_COUNT: usize = 3;
+const UNSAFE_RECOVERY_STATE_TIMEOUT: Duration = Duration::from_secs(60);
 
 pub const MAX_PROPOSAL_SIZE_RATIO: f64 = 0.4;
 
@@ -766,11 +767,12 @@ where
         syncer: UnsafeRecoveryExecutePlanSyncer,
         failed_voters: Vec<metapb::Peer>,
     ) {
-        if self.fsm.peer.unsafe_recovery_state.is_some() {
+        if let Some(state) = &self.fsm.peer.unsafe_recovery_state && !state.is_abort() {
             warn!(
                 "Unsafe recovery, demote failed voters has already been initiated";
                 "region_id" => self.region().get_id(),
                 "peer_id" => self.fsm.peer.peer.get_id(),
+                "state" => ?state,
             );
             syncer.abort();
             return;
@@ -867,11 +869,12 @@ where
     }
 
     fn on_unsafe_recovery_destroy(&mut self, syncer: UnsafeRecoveryExecutePlanSyncer) {
-        if self.fsm.peer.unsafe_recovery_state.is_some() {
+        if let Some(state) = &self.fsm.peer.unsafe_recovery_state && !state.is_abort() {
             warn!(
                 "Unsafe recovery, can't destroy, another plan is executing in progress";
                 "region_id" => self.region_id(),
                 "peer_id" => self.fsm.peer_id(),
+                "state" => ?state,
             );
             syncer.abort();
             return;
@@ -885,11 +888,12 @@ where
     }
 
     fn on_unsafe_recovery_wait_apply(&mut self, syncer: UnsafeRecoveryWaitApplySyncer) {
-        if self.fsm.peer.unsafe_recovery_state.is_some() {
+        if let Some(state) = &self.fsm.peer.unsafe_recovery_state && !state.is_abort() {
             warn!(
                 "Unsafe recovery, can't wait apply, another plan is executing in progress";
                 "region_id" => self.region_id(),
                 "peer_id" => self.fsm.peer_id(),
+                "state" => ?state,
             );
             syncer.abort();
             return;
@@ -916,11 +920,12 @@ where
     // last log index func be invoked secondly wait follower apply to last
     // index, however the second call is broadcast, it may improve in future
     fn on_snapshot_recovery_wait_apply(&mut self, syncer: SnapshotRecoveryWaitApplySyncer) {
-        if self.fsm.peer.snapshot_recovery_state.is_some() {
+        if let Some(state) = &self.fsm.peer.snapshot_recovery_state {
             warn!(
                 "can't wait apply, another recovery in progress";
                 "region_id" => self.region_id(),
                 "peer_id" => self.fsm.peer_id(),
+                "state" => ?state,
             );
             syncer.abort();
             return;
@@ -1038,8 +1043,15 @@ where
                 split_keys,
                 callback,
                 source,
+                share_source_region_size,
             } => {
-                self.on_prepare_split_region(region_epoch, split_keys, callback, &source);
+                self.on_prepare_split_region(
+                    region_epoch,
+                    split_keys,
+                    callback,
+                    &source,
+                    share_source_region_size,
+                );
             }
             CasualMessage::ComputeHashResult {
                 index,
@@ -3990,6 +4002,7 @@ where
         derived: metapb::Region,
         regions: Vec<metapb::Region>,
         new_split_regions: HashMap<u64, apply::NewSplitPeer>,
+        share_source_region_size: bool,
     ) {
         fail_point!("on_split", self.ctx.store_id() == 3, |_| {});
 
@@ -4011,8 +4024,15 @@ where
 
         // Roughly estimate the size and keys for new regions.
         let new_region_count = regions.len() as u64;
-        let estimated_size = self.fsm.peer.approximate_size.map(|v| v / new_region_count);
-        let estimated_keys = self.fsm.peer.approximate_keys.map(|v| v / new_region_count);
+        let mut share_size = None;
+        let mut share_keys = None;
+        // if share_source_region_size is true, it means the new region contains any
+        // data from the origin region
+        if share_source_region_size {
+            share_size = self.fsm.peer.approximate_size.map(|v| v / new_region_count);
+            share_keys = self.fsm.peer.approximate_keys.map(|v| v / new_region_count);
+        }
+
         let mut meta = self.ctx.store_meta.lock().unwrap();
         meta.set_region(
             &self.ctx.coprocessor_host,
@@ -4027,8 +4047,10 @@ where
 
         let is_leader = self.fsm.peer.is_leader();
         if is_leader {
-            self.fsm.peer.approximate_size = estimated_size;
-            self.fsm.peer.approximate_keys = estimated_keys;
+            if share_source_region_size {
+                self.fsm.peer.approximate_size = share_size;
+                self.fsm.peer.approximate_keys = share_keys;
+            }
             self.fsm.peer.heartbeat_pd(self.ctx);
             // Notify pd immediately to let it update the region meta.
             info!(
@@ -4158,8 +4180,8 @@ where
             new_peer.has_ready |= campaigned;
 
             if is_leader {
-                new_peer.peer.approximate_size = estimated_size;
-                new_peer.peer.approximate_keys = estimated_keys;
+                new_peer.peer.approximate_size = share_size;
+                new_peer.peer.approximate_keys = share_keys;
                 *new_peer.peer.txn_ext.pessimistic_locks.write() = locks;
                 // The new peer is likely to become leader, send a heartbeat immediately to
                 // reduce client query miss.
@@ -4986,7 +5008,13 @@ where
                     derived,
                     regions,
                     new_split_regions,
-                } => self.on_ready_split_region(derived, regions, new_split_regions),
+                    share_source_region_size,
+                } => self.on_ready_split_region(
+                    derived,
+                    regions,
+                    new_split_regions,
+                    share_source_region_size,
+                ),
                 ExecResult::PrepareMerge { region, state } => {
                     self.on_ready_prepare_merge(region, state)
                 }
@@ -5711,7 +5739,7 @@ where
             return;
         }
 
-        fail_point!("on_split_region_check_tick");
+        fail_point!("on_split_region_check_tick", |_| {});
         self.register_split_region_check_tick();
 
         // To avoid frequent scan, we only add new scan tasks if all previous tasks
@@ -5769,6 +5797,7 @@ where
         split_keys: Vec<Vec<u8>>,
         cb: Callback<EK::Snapshot>,
         source: &str,
+        share_source_region_size: bool,
     ) {
         info!(
             "on split";
@@ -5814,6 +5843,7 @@ where
             split_keys,
             peer: self.fsm.peer.peer.clone(),
             right_derive: self.ctx.cfg.right_derive_when_split,
+            share_source_region_size,
             callback: cb,
         };
         if let Err(ScheduleError::Stopped(t)) = self.ctx.pd_scheduler.schedule(task) {
@@ -6233,13 +6263,22 @@ where
         if let Some(ForceLeaderState::ForceLeader { time, .. }) = self.fsm.peer.force_leader {
             // Clean up the force leader state after a timeout, since the PD recovery
             // process may have been aborted for some reasons.
-            if time.saturating_elapsed()
-                > cmp::max(
-                    self.ctx.cfg.peer_stale_state_check_interval.0,
-                    Duration::from_secs(60),
-                )
-            {
+            if time.saturating_elapsed() > UNSAFE_RECOVERY_STATE_TIMEOUT {
                 self.on_exit_force_leader();
+            }
+        }
+        if let Some(state) = &mut self.fsm.peer.unsafe_recovery_state {
+            let unsafe_recovery_state_timeout_failpoint = || -> bool {
+                fail_point!("unsafe_recovery_state_timeout", |_| true);
+                false
+            };
+            // Clean up the unsafe recovery state after a timeout, since the PD recovery
+            // process may have been aborted for some reasons.
+            if unsafe_recovery_state_timeout_failpoint()
+                || state.check_timeout(UNSAFE_RECOVERY_STATE_TIMEOUT)
+            {
+                info!("timeout, abort unsafe recovery"; "state" => ?state);
+                state.abort();
             }
         }
 
