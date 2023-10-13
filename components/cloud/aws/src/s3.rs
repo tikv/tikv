@@ -243,9 +243,9 @@ impl S3Storage {
             let timestamp_secs = duration_since_epoch.as_secs();
             let cred_provider = StsAssumeRoleSessionCredentialsProvider::new(
                 sts,
-                none_to_empty(Some(role_arn)),
+                String::clone(config.role_arn.as_deref().unwrap()),
                 format!("{}", timestamp_secs),
-                config.external_id.clone().as_deref_mut().map(|e| e.clone()),
+                config.external_id.as_deref().map(String::clone),
                 // default duration is 15min
                 None,
                 None,
@@ -267,11 +267,7 @@ impl S3Storage {
             let cred_provider = StaticProvider::new(
                 (*access_key_pair.access_key).to_owned(),
                 (*access_key_pair.secret_access_key).to_owned(),
-                access_key_pair
-                    .session_token
-                    .to_owned()
-                    .as_deref_mut()
-                    .map(|s| s.clone()),
+                access_key_pair.session_token.as_deref().map(String::clone),
                 None,
             );
             Self::maybe_assume_role(config, cred_provider, dispatcher)
