@@ -2819,7 +2819,11 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
+<<<<<<< HEAD
 source = "git+https://github.com/tikv/rust-rocksdb.git#3282f221d2c84968d05b79dc13b73fc5539e27ad"
+=======
+source = "git+https://github.com/tikv/rust-rocksdb.git#b68565569d711d78f8ae0d24e2d2b59f0fd03ef1"
+>>>>>>> 517522b5e7 (raftstore-v2: support column family based write buffer manager (#15453))
 dependencies = [
  "bindgen 0.57.0",
  "bzip2-sys",
@@ -2838,7 +2842,11 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
+<<<<<<< HEAD
 source = "git+https://github.com/tikv/rust-rocksdb.git#3282f221d2c84968d05b79dc13b73fc5539e27ad"
+=======
+source = "git+https://github.com/tikv/rust-rocksdb.git#b68565569d711d78f8ae0d24e2d2b59f0fd03ef1"
+>>>>>>> 517522b5e7 (raftstore-v2: support column family based write buffer manager (#15453))
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -4700,7 +4708,11 @@ dependencies = [
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
+<<<<<<< HEAD
 source = "git+https://github.com/tikv/rust-rocksdb.git#3282f221d2c84968d05b79dc13b73fc5539e27ad"
+=======
+source = "git+https://github.com/tikv/rust-rocksdb.git#b68565569d711d78f8ae0d24e2d2b59f0fd03ef1"
+>>>>>>> 517522b5e7 (raftstore-v2: support column family based write buffer manager (#15453))
 dependencies = [
  "libc 0.2.139",
  "librocksdb_sys",

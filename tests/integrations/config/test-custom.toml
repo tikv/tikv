@@ -426,6 +426,7 @@ compression-per-level = [
     "lz4",
 ]
 write-buffer-size = "1MB"
+write-buffer-limit = "16MB"
 max-write-buffer-number = 12
 min-write-buffer-number-to-merge = 12
 max-bytes-for-level-base = "12KB"
