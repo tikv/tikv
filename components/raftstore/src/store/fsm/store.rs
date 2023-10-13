@@ -462,10 +462,6 @@ where
         self.update_trace();
     }
 
-    pub fn clear_cache(&self) {
-        self.router.clear_cache();
-    }
-
     fn update_trace(&self) {
         let router_trace = self.router.trace();
         MEMTRACE_RAFT_ROUTER_ALIVE.trace(TraceEvent::Reset(router_trace.alive));
@@ -1824,8 +1820,6 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             warn!("set thread priority for raftstore failed"; "error" => ?e);
         }
         self.workers = Some(workers);
-        // This router will not be accessed again, free all caches.
-        self.router.clear_cache();
         Ok(())
     }
 
