@@ -123,6 +123,7 @@ enum DelayReason {
 /// in most case.
 const MAX_REGIONS_IN_ERROR: usize = 10;
 const REGION_SPLIT_SKIP_MAX_COUNT: usize = 3;
+const UNSAFE_RECOVERY_STATE_TIMEOUT: Duration = Duration::from_secs(60);
 
 pub const MAX_PROPOSAL_SIZE_RATIO: f64 = 0.4;
 
@@ -766,11 +767,12 @@ where
         syncer: UnsafeRecoveryExecutePlanSyncer,
         failed_voters: Vec<metapb::Peer>,
     ) {
-        if self.fsm.peer.unsafe_recovery_state.is_some() {
+        if let Some(state) = &self.fsm.peer.unsafe_recovery_state && !state.is_abort() {
             warn!(
                 "Unsafe recovery, demote failed voters has already been initiated";
                 "region_id" => self.region().get_id(),
                 "peer_id" => self.fsm.peer.peer.get_id(),
+                "state" => ?state,
             );
             syncer.abort();
             return;
@@ -867,11 +869,12 @@ where
     }
 
     fn on_unsafe_recovery_destroy(&mut self, syncer: UnsafeRecoveryExecutePlanSyncer) {
-        if self.fsm.peer.unsafe_recovery_state.is_some() {
+        if let Some(state) = &self.fsm.peer.unsafe_recovery_state && !state.is_abort() {
             warn!(
                 "Unsafe recovery, can't destroy, another plan is executing in progress";
                 "region_id" => self.region_id(),
                 "peer_id" => self.fsm.peer_id(),
+                "state" => ?state,
             );
             syncer.abort();
             return;
@@ -885,11 +888,12 @@ where
     }
 
     fn on_unsafe_recovery_wait_apply(&mut self, syncer: UnsafeRecoveryWaitApplySyncer) {
-        if self.fsm.peer.unsafe_recovery_state.is_some() {
+        if let Some(state) = &self.fsm.peer.unsafe_recovery_state && !state.is_abort() {
             warn!(
                 "Unsafe recovery, can't wait apply, another plan is executing in progress";
                 "region_id" => self.region_id(),
                 "peer_id" => self.fsm.peer_id(),
+                "state" => ?state,
             );
             syncer.abort();
             return;
@@ -916,11 +920,12 @@ where
     // last log index func be invoked secondly wait follower apply to last
     // index, however the second call is broadcast, it may improve in future
     fn on_snapshot_recovery_wait_apply(&mut self, syncer: SnapshotRecoveryWaitApplySyncer) {
-        if self.fsm.peer.snapshot_recovery_state.is_some() {
+        if let Some(state) = &self.fsm.peer.snapshot_recovery_state {
             warn!(
                 "can't wait apply, another recovery in progress";
                 "region_id" => self.region_id(),
                 "peer_id" => self.fsm.peer_id(),
+                "state" => ?state,
             );
             syncer.abort();
             return;
@@ -6273,13 +6278,22 @@ where
         if let Some(ForceLeaderState::ForceLeader { time, .. }) = self.fsm.peer.force_leader {
             // Clean up the force leader state after a timeout, since the PD recovery
             // process may have been aborted for some reasons.
-            if time.saturating_elapsed()
-                > cmp::max(
-                    self.ctx.cfg.peer_stale_state_check_interval.0,
-                    Duration::from_secs(60),
-                )
-            {
+            if time.saturating_elapsed() > UNSAFE_RECOVERY_STATE_TIMEOUT {
                 self.on_exit_force_leader();
+            }
+        }
+        if let Some(state) = &mut self.fsm.peer.unsafe_recovery_state {
+            let unsafe_recovery_state_timeout_failpoint = || -> bool {
+                fail_point!("unsafe_recovery_state_timeout", |_| true);
+                false
+            };
+            // Clean up the unsafe recovery state after a timeout, since the PD recovery
+            // process may have been aborted for some reasons.
+            if unsafe_recovery_state_timeout_failpoint()
+                || state.check_timeout(UNSAFE_RECOVERY_STATE_TIMEOUT)
+            {
+                info!("timeout, abort unsafe recovery"; "state" => ?state);
+                state.abort();
             }
         }
 
