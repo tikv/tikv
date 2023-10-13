@@ -678,12 +678,6 @@ fn test_force_leader_on_hibernated_leader() {
 #[test]
 fn test_force_leader_on_hibernated_follower() {
     let mut cluster = new_node_cluster(0, 5);
-    cluster.cfg.raft_store.raft_base_tick_interval = ReadableDuration::millis(10);
-    cluster.cfg.raft_store.raft_election_timeout_ticks = 10;
-    cluster.cfg.raft_store.raft_store_max_leader_lease = ReadableDuration::millis(90);
-    cluster.cfg.raft_store.raft_log_gc_count_limit = Some(8);
-    cluster.cfg.raft_store.merge_max_log_gap = 3;
-    cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(10);
     cluster.pd_client.disable_default_operator();
 
     cluster.run();
@@ -717,16 +711,6 @@ fn test_force_leader_on_hibernated_follower() {
     cluster
         .pd_client
         .must_remove_peer(region.get_id(), find_peer(&region, 5).unwrap().clone());
-    // wait a while to trigger message to set the state to chaos
-    // Isolate node 2
-    cluster.add_send_filter(IsolationFilterFactory::new(2));
-    // wait election timeout
-    sleep_ms(
-        cluster.cfg.raft_store.raft_election_timeout_ticks as u64
-            * cluster.cfg.raft_store.raft_base_tick_interval.as_millis()
-            * 5,
-    );
-
     cluster.exit_force_leader(region.get_id(), 1);
 
     // quorum is formed, can propose command successfully now
