@@ -437,6 +437,7 @@ pub mod test_router {
     use engine_rocks::{RocksEngine, RocksSnapshot};
     use kvproto::raft_serverpb::RaftMessage;
     use raftstore::{router::RaftStoreRouter, store::*, Result as RaftStoreResult};
+    use tikv_util::time::Instant as TiInstant;
 
     use super::*;
 
