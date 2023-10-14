@@ -3127,7 +3127,164 @@ def RaftLog() -> RowPanel:
     layout = Layout(title="Raft Log")
     layout.row(
         [
-            # graph_panel()
+            graph_panel(
+                title="Raft log GC write duration",
+                yaxes=yaxes(left_format=UNITS.SECONDS, log_base=10),
+                targets=[
+                    target(
+                        expr=expr_histogram_quantile(
+                            0.9999,
+                            "tikv_raftstore_raft_log_gc_write_duration_secs",
+                            by_labels=["instance"],
+                        ),
+                        legend_format="99.99%-{{instance}}",
+                    ),
+                    target(
+                        expr=expr_histogram_avg(
+                            "tikv_raftstore_raft_log_gc_write_duration_secs",
+                            by_labels=["instance"],
+                        ),
+                        legend_format="avg-{{instance}}",
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="Raft log GC kv sync duration",
+                yaxes=yaxes(left_format=UNITS.SECONDS, log_base=10),
+                targets=[
+                    target(
+                        expr=expr_histogram_quantile(
+                            0.9999,
+                            "tikv_raftstore_raft_log_kv_sync_duration_secs",
+                            by_labels=["instance"],
+                        ),
+                        legend_format="99.99%-{{instance}}",
+                    ),
+                    target(
+                        expr=expr_histogram_avg(
+                            "tikv_raftstore_raft_log_kv_sync_duration_secs",
+                            by_labels=["instance"],
+                        ),
+                        legend_format="avg-{{instance}}",
+                    ),
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel(
+                title="Raft log GC write operations",
+                yaxes=yaxes(left_format=UNITS.OPS_PER_SEC),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_raftstore_raft_log_gc_write_duration_secs_count",
+                        ),
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="Raft log GC seek operations ",
+                yaxes=yaxes(left_format=UNITS.OPS_PER_SEC),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_raftstore_raft_log_gc_seek_operations_count",
+                        ),
+                    ),
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel(
+                title="Raft log lag",
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_raftstore_log_lag_sum",
+                        ),
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="Raft log gc skipped",
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_raftstore_raft_log_gc_skipped",
+                            by_labels=["instance", "reason"],
+                        ),
+                    ),
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel(
+                title="Raft log GC failed",
+                yaxes=yaxes(left_format=UNITS.OPS_PER_SEC),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_raftstore_raft_log_gc_failed",
+                        ),
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="Raft log fetch ",
+                yaxes=yaxes(left_format=UNITS.OPS_PER_SEC),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_raftstore_entry_fetches",
+                            by_labels=["type"],
+                        ),
+                    ),
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel(
+                title="Raft log async fetch task duration",
+                yaxes=yaxes(left_format=UNITS.SECONDS, log_base=10),
+                targets=[
+                    target(
+                        expr=expr_histogram_quantile(
+                            0.9999,
+                            "tikv_raftstore_entry_fetches_task_duration_seconds",
+                        ),
+                        legend_format="99.99%",
+                    ),
+                    target(
+                        expr=expr_histogram_avg(
+                            "tikv_raftstore_entry_fetches_task_duration_seconds",
+                            by_labels=["instance"],
+                        ),
+                        legend_format="avg-{{instance}}",
+                    ),
+                    target(
+                        expr=expr_sum(
+                            "tikv_worker_pending_task_total",
+                            label_selectors=['name=~"raftlog-fetch-worker"'],
+                        ),
+                        legend_format="pending-task",
+                    ),
+                ],
+                series_overrides=[
+                    series_override(
+                        alias="/pending-task/",
+                        yaxis=2,
+                        transform_negative_y=True,
+                    ),
+                ],
+            ),
         ]
     )
     return layout.row_panel
@@ -3137,7 +3294,36 @@ def LocalReader() -> RowPanel:
     layout = Layout(title="Local Reader")
     layout.row(
         [
-            # graph_panel()
+            graph_panel(
+                title="Raft log async fetch task duration",
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_raftstore_local_read_reject_total",
+                            by_labels=["instance", "reason"],
+                        ),
+                        legend_format="{{instance}}-reject-by-{{reason}}",
+                    ),
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_raftstore_local_read_executed_requests",
+                        ),
+                        legend_format="{{instance}}-total",
+                    ),
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_raftstore_local_read_executed_stale_read_requests",
+                        ),
+                        legend_format="{{instance}}-stale-read",
+                    ),
+                ],
+                series_overrides=[
+                    series_override(
+                        alias="/.*-total/",
+                        yaxis=2,
+                    ),
+                ],
+            ),
         ]
     )
     return layout.row_panel
