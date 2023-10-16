@@ -545,7 +545,7 @@ fn test_unsafe_recovery_rollback_merge() {
     }
 
     // Block merge commit, let go of the merge prepare.
-    fail::cfg("on_schedule_merge_ret_err", "return()").unwrap();
+    fail::cfg("on_schedule_merge", "return()").unwrap();
 
     let region = pd_client.get_region(b"k1").unwrap();
     cluster.must_split(&region, b"k2");
@@ -608,6 +608,48 @@ fn test_unsafe_recovery_rollback_merge() {
     pd_client.must_set_unsafe_recovery_plan(nodes[0], plan.clone());
     cluster.must_send_store_heartbeat(nodes[0]);
 
+    // Can't propose demotion as it's in merging mode
+    let mut store_report = None;
+    for _ in 0..20 {
+        store_report = pd_client.must_get_store_report(nodes[0]);
+        if store_report.is_some() {
+            break;
+        }
+        sleep_ms(100);
+    }
+    assert_ne!(store_report, None);
+    let has_force_leader = store_report
+        .unwrap()
+        .get_peer_reports()
+        .iter()
+        .any(|p| p.get_is_force_leader());
+    // Force leader is not exited due to demotion failure
+    assert!(has_force_leader);
+
+    fail::remove("on_schedule_merge");
+    fail::cfg("on_schedule_merge_ret_err", "return()").unwrap();
+
+    // Make sure merge check is scheduled, and rollback merge is triggered
+    sleep_ms(50);
+
+    // Re-triggers the unsafe recovery plan execution.
+    pd_client.must_set_unsafe_recovery_plan(nodes[0], plan);
+    cluster.must_send_store_heartbeat(nodes[0]);
+    let mut store_report = None;
+    for _ in 0..20 {
+        store_report = pd_client.must_get_store_report(nodes[0]);
+        if store_report.is_some() {
+            break;
+        }
+        sleep_ms(100);
+    }
+    assert_ne!(store_report, None);
+    // No force leader
+    for peer_report in store_report.unwrap().get_peer_reports() {
+        assert!(!peer_report.get_is_force_leader());
+    }
+
+    // Demotion is done
     let mut demoted = false;
     for _ in 0..10 {
         let new_left = block_on(pd_client.get_region_by_id(left.get_id()))

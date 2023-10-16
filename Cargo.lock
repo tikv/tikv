@@ -5362,10 +5362,14 @@ dependencies = [
  "engine_traits",
  "futures 0.3.15",
  "grpcio",
+ "itertools",
  "keys",
  "kvproto",
+ "lazy_static",
  "log",
  "pd_client",
+ "prometheus",
+ "prometheus-static-metric",
  "protobuf",
  "raft_log_engine",
  "raftstore",
@@ -5377,6 +5381,7 @@ dependencies = [
  "tikv",
  "tikv_alloc",
  "tikv_util",
+ "tokio",
  "toml",
  "txn_types",
 ]
@@ -5622,9 +5627,8 @@ checksum = "20518fe4a4c9acf048008599e464deb21beeae3d3578418951a189c235a7a9a8"
 
 [[package]]
 name = "sysinfo"
-version = "0.26.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ade661fa5e048ada64ad7901713301c21d2dbc5b65ee7967de8826c111452960"
+version = "0.26.9"
+source = "git+https://github.com/tikv/sysinfo?branch=0.26-fix-cpu#5a1bcf08816979624ef2ad79cfb896de432a9501"
 dependencies = [
  "cfg-if 1.0.0",
  "core-foundation-sys",
