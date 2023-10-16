@@ -56,7 +56,7 @@ impl KvEngineFactoryBuilder {
                 flow_listener: None,
                 sst_recovery_sender: None,
                 encryption_key_manager: key_manager,
-                db_resources: config.rocksdb.build_resources(env),
+                db_resources: config.rocksdb.build_resources(env, config.storage.engine),
                 cf_resources: config.rocksdb.build_cf_resources(cache),
                 state_storage: None,
                 lite: false,

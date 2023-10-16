@@ -110,7 +110,7 @@ const RAFT_ENGINE_MEMORY_LIMIT_RATE: f64 = 0.15;
 const WRITE_BUFFER_MEMORY_LIMIT_RATE: f64 = 0.2;
 // Too large will increase Raft Engine memory usage.
 const WRITE_BUFFER_MEMORY_LIMIT_MAX: u64 = ReadableSize::gb(8).0;
-const DEFAULT_LOCK_BUFFER_MEMORY_LIMIT: ReadableSize = ReadableSize::mb(32);
+const DEFAULT_LOCK_BUFFER_MEMORY_LIMIT: ReadableSize = ReadableSize::mb(128);
 
 /// Configs that actually took effect in the last run
 pub const LAST_CONFIG_FILE: &str = "last_tikv.toml";
@@ -244,22 +244,30 @@ const RAFTDB_DEFAULT_BACKGROUND_JOB_LIMITS: BackgroundJobLimits = BackgroundJobL
 
 // `defaults` serves as an upper bound for returning limits.
 fn get_background_job_limits_impl(
+    engine_type: EngineType,
     cpu_num: u32,
     defaults: &BackgroundJobLimits,
 ) -> BackgroundJobLimits {
     // At the minimum, we should have two background jobs: one for flush and one for
     // compaction. Otherwise, the number of background jobs should not exceed
     // cpu_num - 1.
-    let max_background_jobs = cmp::max(2, cmp::min(defaults.max_background_jobs, cpu_num - 1));
+    let mut max_background_jobs = cmp::max(2, cmp::min(defaults.max_background_jobs, cpu_num - 1));
     // Scale flush threads proportionally to cpu cores. Also make sure the number of
     // flush threads doesn't exceed total jobs.
     let max_background_flushes = cmp::min(
         (max_background_jobs + 3) / 4,
         defaults.max_background_flushes,
     );
-    // Cap max_sub_compactions to allow at least two compactions.
-    let max_compactions = max_background_jobs - max_background_flushes;
+
+    // set the default compaction threads differently for v1 and v2:
+    // v1: cap max_sub_compactions to allow at least two compactions.
+    // v2: decrease the compaction threads to make the qps more stable.
+    let max_compactions = match engine_type {
+        EngineType::RaftKv => max_background_jobs - max_background_flushes,
+        EngineType::RaftKv2 => (max_background_jobs + 7) / 8,
+    };
     let max_sub_compactions: u32 = (max_compactions - 1).clamp(1, defaults.max_sub_compactions);
+    max_background_jobs = max_background_flushes + max_compactions;
     // Maximum background GC threads for Titan
     let max_titan_background_gc = cmp::min(defaults.max_titan_background_gc, cpu_num);
 
@@ -271,9 +279,12 @@ fn get_background_job_limits_impl(
     }
 }
 
-fn get_background_job_limits(defaults: &BackgroundJobLimits) -> BackgroundJobLimits {
+fn get_background_job_limits(
+    engine_type: EngineType,
+    defaults: &BackgroundJobLimits,
+) -> BackgroundJobLimits {
     let cpu_num = cmp::max(SysQuota::cpu_cores_quota() as u32, 1);
-    get_background_job_limits_impl(cpu_num, defaults)
+    get_background_job_limits_impl(engine_type, cpu_num, defaults)
 }
 
 macro_rules! cf_config {
@@ -645,6 +656,7 @@ macro_rules! build_cf_opt {
                     $cf_name,
                     provider.clone(),
                     $opt.compaction_guard_min_output_file_size.0,
+                    $opt.max_compaction_bytes.0,
                 )
                 .unwrap();
                 cf_opts.set_sst_partitioner_factory(factory);
@@ -1307,19 +1319,14 @@ pub struct DbResources {
 
 impl Default for DbConfig {
     fn default() -> DbConfig {
-        let bg_job_limits = get_background_job_limits(&KVDB_DEFAULT_BACKGROUND_JOB_LIMITS);
-        let titan_config = TitanDbConfig {
-            max_background_gc: bg_job_limits.max_titan_background_gc as i32,
-            ..Default::default()
-        };
         DbConfig {
             wal_recovery_mode: DBRecoveryMode::PointInTime,
             wal_dir: "".to_owned(),
             wal_ttl_seconds: 0,
             wal_size_limit: ReadableSize::kb(0),
             max_total_wal_size: None,
-            max_background_jobs: bg_job_limits.max_background_jobs as i32,
-            max_background_flushes: bg_job_limits.max_background_flushes as i32,
+            max_background_jobs: 0,
+            max_background_flushes: 0,
             max_manifest_file_size: ReadableSize::mb(128),
             create_if_missing: true,
             max_open_files: 40960,
@@ -1338,7 +1345,7 @@ impl Default for DbConfig {
             rate_limiter_auto_tuned: true,
             bytes_per_sync: ReadableSize::mb(1),
             wal_bytes_per_sync: ReadableSize::kb(512),
-            max_sub_compactions: bg_job_limits.max_sub_compactions,
+            max_sub_compactions: 0,
             writable_file_max_buffer_size: ReadableSize::mb(1),
             use_direct_io_for_flush_and_compaction: false,
             enable_pipelined_write: false,
@@ -1353,7 +1360,7 @@ impl Default for DbConfig {
             writecf: WriteCfConfig::default(),
             lockcf: LockCfConfig::default(),
             raftcf: RaftCfConfig::default(),
-            titan: titan_config,
+            titan: TitanDbConfig::default(),
         }
     }
 }
@@ -1403,22 +1410,46 @@ impl DbConfig {
                 self.writecf.max_compactions.get_or_insert(1);
                 self.lockcf
                     .write_buffer_size
-                    .get_or_insert(ReadableSize::mb(4));
+                    .get_or_insert(ReadableSize::mb(32));
                 self.lockcf
                     .write_buffer_limit
                     .get_or_insert(DEFAULT_LOCK_BUFFER_MEMORY_LIMIT);
             }
         }
+        let bg_job_limits = get_background_job_limits(engine, &KVDB_DEFAULT_BACKGROUND_JOB_LIMITS);
+        if self.max_background_jobs == 0 {
+            self.max_background_jobs = bg_job_limits.max_background_jobs as i32;
+        }
+        if self.max_background_flushes == 0 {
+            self.max_background_flushes = bg_job_limits.max_background_flushes as i32;
+        }
+        if self.max_sub_compactions == 0 {
+            self.max_sub_compactions = bg_job_limits.max_sub_compactions;
+        }
+        if self.titan.max_background_gc == 0 {
+            self.titan.max_background_gc = bg_job_limits.max_titan_background_gc as i32;
+        }
     }
 
-    pub fn build_resources(&self, env: Arc<Env>) -> DbResources {
+    pub fn build_resources(&self, env: Arc<Env>, engine: EngineType) -> DbResources {
         let rate_limiter = if self.rate_bytes_per_sec.0 > 0 {
+            // for raft-v2, we use a longer window to make the compaction io smoother
+            let (tune_per_secs, window_size, recent_size) = match engine {
+                // 1s tune duraion, long term window is 5m, short term window is 30s.
+                // this is the default settings.
+                EngineType::RaftKv => (1, 300, 30),
+                // 5s tune duraion, long term window is 1h, short term window is 5m
+                EngineType::RaftKv2 => (5, 720, 60),
+            };
             Some(Arc::new(RateLimiter::new_writeampbased_with_auto_tuned(
                 self.rate_bytes_per_sec.0 as i64,
                 (self.rate_limiter_refill_period.as_millis() * 1000) as i64,
                 10, // fairness
                 self.rate_limiter_mode,
                 self.rate_limiter_auto_tuned,
+                tune_per_secs,
+                window_size,
+                recent_size,
             )))
         } else {
             None
@@ -1482,7 +1513,7 @@ impl DbConfig {
             opts.set_paranoid_checks(b);
         }
         if for_engine == EngineType::RaftKv {
-            opts.set_info_log(RocksdbLogger);
+            opts.set_info_log(RocksdbLogger::default());
         }
         opts.set_info_log_level(self.info_log_level.into());
         if self.titan.enabled {
@@ -1795,7 +1826,9 @@ pub struct RaftDbConfig {
 
 impl Default for RaftDbConfig {
     fn default() -> RaftDbConfig {
-        let bg_job_limits = get_background_job_limits(&RAFTDB_DEFAULT_BACKGROUND_JOB_LIMITS);
+        // raftdb should only be used for raftkv
+        let bg_job_limits =
+            get_background_job_limits(EngineType::RaftKv, &RAFTDB_DEFAULT_BACKGROUND_JOB_LIMITS);
         let titan_config = TitanDbConfig {
             max_background_gc: bg_job_limits.max_titan_background_gc as i32,
             ..Default::default()
@@ -1858,7 +1891,7 @@ impl RaftDbConfig {
         opts.set_max_log_file_size(self.info_log_max_size.0);
         opts.set_log_file_time_to_roll(self.info_log_roll_time.as_secs());
         opts.set_keep_log_file_num(self.info_log_keep_log_file_num);
-        opts.set_info_log(RaftDbLogger);
+        opts.set_info_log(RaftDbLogger::default());
         opts.set_info_log_level(self.info_log_level.into());
         opts.set_max_subcompactions(self.max_sub_compactions);
         opts.set_writable_file_max_buffer_size(self.writable_file_max_buffer_size.0 as i32);
@@ -2015,7 +2048,7 @@ impl<T: ConfigurableDb + Send + Sync> ConfigManager for DbConfigManger<T> {
         self.cfg.update(change.clone())?;
         let change_str = format!("{:?}", change);
         let mut change: Vec<(String, ConfigValue)> = change.into_iter().collect();
-        let cf_config = change.extract_if(|(name, _)| name.ends_with("cf"));
+        let cf_config = change.drain_filter(|(name, _)| name.ends_with("cf"));
         for (cf_name, cf_change) in cf_config {
             if let ConfigValue::Module(mut cf_change) = cf_change {
                 // defaultcf -> default
@@ -2049,7 +2082,7 @@ impl<T: ConfigurableDb + Send + Sync> ConfigManager for DbConfigManger<T> {
         }
 
         if let Some(rate_bytes_config) = change
-            .extract_if(|(name, _)| name == "rate_bytes_per_sec")
+            .drain_filter(|(name, _)| name == "rate_bytes_per_sec")
             .next()
         {
             let rate_bytes_per_sec: ReadableSize = rate_bytes_config.1.into();
@@ -2058,7 +2091,7 @@ impl<T: ConfigurableDb + Send + Sync> ConfigManager for DbConfigManger<T> {
         }
 
         if let Some(rate_bytes_config) = change
-            .extract_if(|(name, _)| name == "rate_limiter_auto_tuned")
+            .drain_filter(|(name, _)| name == "rate_limiter_auto_tuned")
             .next()
         {
             let rate_limiter_auto_tuned: bool = rate_bytes_config.1.into();
@@ -2067,7 +2100,7 @@ impl<T: ConfigurableDb + Send + Sync> ConfigManager for DbConfigManger<T> {
         }
 
         if let Some(size) = change
-            .extract_if(|(name, _)| name == "write_buffer_limit")
+            .drain_filter(|(name, _)| name == "write_buffer_limit")
             .next()
         {
             let size: ReadableSize = size.1.into();
@@ -2075,14 +2108,14 @@ impl<T: ConfigurableDb + Send + Sync> ConfigManager for DbConfigManger<T> {
         }
 
         if let Some(f) = change
-            .extract_if(|(name, _)| name == "write_buffer_flush_oldest_first")
+            .drain_filter(|(name, _)| name == "write_buffer_flush_oldest_first")
             .next()
         {
             self.db.set_flush_oldest_first(f.1.into())?;
         }
 
         if let Some(background_jobs_config) = change
-            .extract_if(|(name, _)| name == "max_background_jobs")
+            .drain_filter(|(name, _)| name == "max_background_jobs")
             .next()
         {
             let max_background_jobs: i32 = background_jobs_config.1.into();
@@ -2090,7 +2123,7 @@ impl<T: ConfigurableDb + Send + Sync> ConfigManager for DbConfigManger<T> {
         }
 
         if let Some(background_subcompactions_config) = change
-            .extract_if(|(name, _)| name == "max_sub_compactions")
+            .drain_filter(|(name, _)| name == "max_sub_compactions")
             .next()
         {
             let max_subcompactions: u32 = background_subcompactions_config.1.into();
@@ -2099,7 +2132,7 @@ impl<T: ConfigurableDb + Send + Sync> ConfigManager for DbConfigManger<T> {
         }
 
         if let Some(background_flushes_config) = change
-            .extract_if(|(name, _)| name == "max_background_flushes")
+            .drain_filter(|(name, _)| name == "max_background_flushes")
             .next()
         {
             let max_background_flushes: i32 = background_flushes_config.1.into();
@@ -3713,7 +3746,8 @@ impl TikvConfig {
         self.raft_engine.validate()?;
         self.server.validate()?;
         self.pd.validate()?;
-        self.coprocessor.validate()?;
+        self.coprocessor
+            .validate(self.storage.engine == EngineType::RaftKv2)?;
         self.raft_store.validate(
             self.coprocessor.region_split_size(),
             self.coprocessor.enable_region_bucket(),
@@ -4843,7 +4877,9 @@ mod tests {
     fn test_rocks_rate_limit_zero() {
         let mut tikv_cfg = TikvConfig::default();
         tikv_cfg.rocksdb.rate_bytes_per_sec = ReadableSize(0);
-        let resource = tikv_cfg.rocksdb.build_resources(Arc::new(Env::default()));
+        let resource = tikv_cfg
+            .rocksdb
+            .build_resources(Arc::new(Env::default()), tikv_cfg.storage.engine);
         tikv_cfg
             .rocksdb
             .build_opt(&resource, tikv_cfg.storage.engine);
@@ -5007,7 +5043,9 @@ mod tests {
         Arc<FlowController>,
     ) {
         assert_eq!(F::TAG, cfg.storage.api_version());
-        let resource = cfg.rocksdb.build_resources(Arc::default());
+        let resource = cfg
+            .rocksdb
+            .build_resources(Arc::default(), cfg.storage.engine);
         let engine = RocksDBEngine::new(
             &cfg.storage.data_dir,
             Some(cfg.rocksdb.build_opt(&resource, cfg.storage.engine)),
@@ -5896,59 +5934,67 @@ mod tests {
 
     #[test]
     fn test_background_job_limits() {
-        // cpu num = 1
-        assert_eq!(
-            get_background_job_limits_impl(
-                1, // cpu_num
-                &KVDB_DEFAULT_BACKGROUND_JOB_LIMITS
-            ),
-            BackgroundJobLimits {
-                max_background_jobs: 2,
-                max_background_flushes: 1,
-                max_sub_compactions: 1,
-                max_titan_background_gc: 1,
-            }
-        );
-        assert_eq!(
-            get_background_job_limits_impl(
-                1, // cpu_num
-                &RAFTDB_DEFAULT_BACKGROUND_JOB_LIMITS
-            ),
-            BackgroundJobLimits {
-                max_background_jobs: 2,
-                max_background_flushes: 1,
-                max_sub_compactions: 1,
-                max_titan_background_gc: 1,
-            }
-        );
-        // cpu num = 2
-        assert_eq!(
-            get_background_job_limits_impl(
-                2, // cpu_num
-                &KVDB_DEFAULT_BACKGROUND_JOB_LIMITS
-            ),
-            BackgroundJobLimits {
-                max_background_jobs: 2,
-                max_background_flushes: 1,
-                max_sub_compactions: 1,
-                max_titan_background_gc: 2,
-            }
-        );
-        assert_eq!(
-            get_background_job_limits_impl(
-                2, // cpu_num
-                &RAFTDB_DEFAULT_BACKGROUND_JOB_LIMITS
-            ),
-            BackgroundJobLimits {
-                max_background_jobs: 2,
-                max_background_flushes: 1,
-                max_sub_compactions: 1,
-                max_titan_background_gc: 2,
-            }
-        );
+        for engine in [EngineType::RaftKv, EngineType::RaftKv2] {
+            // cpu num = 1
+            assert_eq!(
+                get_background_job_limits_impl(
+                    engine,
+                    1, // cpu_num
+                    &KVDB_DEFAULT_BACKGROUND_JOB_LIMITS
+                ),
+                BackgroundJobLimits {
+                    max_background_jobs: 2,
+                    max_background_flushes: 1,
+                    max_sub_compactions: 1,
+                    max_titan_background_gc: 1,
+                }
+            );
+            assert_eq!(
+                get_background_job_limits_impl(
+                    engine,
+                    1, // cpu_num
+                    &RAFTDB_DEFAULT_BACKGROUND_JOB_LIMITS
+                ),
+                BackgroundJobLimits {
+                    max_background_jobs: 2,
+                    max_background_flushes: 1,
+                    max_sub_compactions: 1,
+                    max_titan_background_gc: 1,
+                }
+            );
+            // cpu num = 2
+            assert_eq!(
+                get_background_job_limits_impl(
+                    EngineType::RaftKv,
+                    2, // cpu_num
+                    &KVDB_DEFAULT_BACKGROUND_JOB_LIMITS
+                ),
+                BackgroundJobLimits {
+                    max_background_jobs: 2,
+                    max_background_flushes: 1,
+                    max_sub_compactions: 1,
+                    max_titan_background_gc: 2,
+                }
+            );
+            assert_eq!(
+                get_background_job_limits_impl(
+                    EngineType::RaftKv,
+                    2, // cpu_num
+                    &RAFTDB_DEFAULT_BACKGROUND_JOB_LIMITS
+                ),
+                BackgroundJobLimits {
+                    max_background_jobs: 2,
+                    max_background_flushes: 1,
+                    max_sub_compactions: 1,
+                    max_titan_background_gc: 2,
+                }
+            );
+        }
+
         // cpu num = 4
         assert_eq!(
             get_background_job_limits_impl(
+                EngineType::RaftKv,
                 4, // cpu_num
                 &KVDB_DEFAULT_BACKGROUND_JOB_LIMITS
             ),
@@ -5961,6 +6007,20 @@ mod tests {
         );
         assert_eq!(
             get_background_job_limits_impl(
+                EngineType::RaftKv2,
+                4, // cpu_num
+                &KVDB_DEFAULT_BACKGROUND_JOB_LIMITS
+            ),
+            BackgroundJobLimits {
+                max_background_jobs: 2,
+                max_background_flushes: 1,
+                max_sub_compactions: 1,
+                max_titan_background_gc: 4,
+            }
+        );
+        assert_eq!(
+            get_background_job_limits_impl(
+                EngineType::RaftKv,
                 4, // cpu_num
                 &RAFTDB_DEFAULT_BACKGROUND_JOB_LIMITS
             ),
@@ -5974,6 +6034,7 @@ mod tests {
         // cpu num = 8
         assert_eq!(
             get_background_job_limits_impl(
+                EngineType::RaftKv,
                 8, // cpu_num
                 &KVDB_DEFAULT_BACKGROUND_JOB_LIMITS
             ),
@@ -5986,6 +6047,20 @@ mod tests {
         );
         assert_eq!(
             get_background_job_limits_impl(
+                EngineType::RaftKv2,
+                8, // cpu_num
+                &KVDB_DEFAULT_BACKGROUND_JOB_LIMITS
+            ),
+            BackgroundJobLimits {
+                max_background_jobs: 3,
+                max_background_flushes: 2,
+                max_sub_compactions: 1,
+                max_titan_background_gc: 4,
+            }
+        );
+        assert_eq!(
+            get_background_job_limits_impl(
+                EngineType::RaftKv,
                 8, // cpu_num
                 &RAFTDB_DEFAULT_BACKGROUND_JOB_LIMITS
             ),
@@ -5994,6 +6069,7 @@ mod tests {
         // cpu num = 16
         assert_eq!(
             get_background_job_limits_impl(
+                EngineType::RaftKv,
                 16, // cpu_num
                 &KVDB_DEFAULT_BACKGROUND_JOB_LIMITS
             ),
@@ -6001,6 +6077,20 @@ mod tests {
         );
         assert_eq!(
             get_background_job_limits_impl(
+                EngineType::RaftKv2,
+                16, // cpu_num
+                &KVDB_DEFAULT_BACKGROUND_JOB_LIMITS
+            ),
+            BackgroundJobLimits {
+                max_background_jobs: 5,
+                max_background_flushes: 3,
+                max_sub_compactions: 1,
+                max_titan_background_gc: 4,
+            }
+        );
+        assert_eq!(
+            get_background_job_limits_impl(
+                EngineType::RaftKv,
                 16, // cpu_num
                 &RAFTDB_DEFAULT_BACKGROUND_JOB_LIMITS
             ),
@@ -6222,21 +6312,25 @@ mod tests {
         let mut default_cfg = TikvConfig::default();
         default_cfg.coprocessor.region_split_size = Some(ReadableSize::mb(500));
         default_cfg.coprocessor.optimize_for(false);
-        default_cfg.coprocessor.validate().unwrap();
+        default_cfg.coprocessor.validate(false).unwrap();
         assert_eq!(
             default_cfg.coprocessor.region_split_size(),
             ReadableSize::mb(500)
         );
+        assert!(!default_cfg.coprocessor.enable_region_bucket());
+        default_cfg.coprocessor.validate(true).unwrap();
         assert!(default_cfg.coprocessor.enable_region_bucket());
 
         let mut default_cfg = TikvConfig::default();
         default_cfg.coprocessor.region_split_size = Some(ReadableSize::mb(500));
         default_cfg.coprocessor.optimize_for(true);
-        default_cfg.coprocessor.validate().unwrap();
+        default_cfg.coprocessor.validate(false).unwrap();
         assert_eq!(
             default_cfg.coprocessor.region_split_size(),
             ReadableSize::mb(500)
         );
+        assert!(!default_cfg.coprocessor.enable_region_bucket());
+        default_cfg.coprocessor.validate(true).unwrap();
         assert!(default_cfg.coprocessor.enable_region_bucket());
     }
 

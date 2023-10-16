@@ -97,12 +97,8 @@ where
             ) {
                 Ok(mut region_ids) => {
                     for region_id in region_ids.drain(..) {
-                        let Some(mut tablet_cache) = self.tablet_registry.get(region_id) else {
-                            continue;
-                        };
-                        let Some(tablet) = tablet_cache.latest() else {
-                            continue;
-                        };
+                        let Some(mut tablet_cache) = self.tablet_registry.get(region_id) else {continue};
+                        let Some(tablet) = tablet_cache.latest() else {continue};
                         for cf in &cf_names {
                             if let Err(e) =
                                 tablet.compact_range_cf(cf, None, None, false, 1 /* threads */)
@@ -147,12 +143,8 @@ fn collect_regions_to_compact<E: KvEngine>(
     );
     let mut regions_to_compact = vec![];
     for id in region_ids {
-        let Some(mut tablet_cache) = reg.get(id) else {
-            continue;
-        };
-        let Some(tablet) = tablet_cache.latest() else {
-            continue;
-        };
+        let Some(mut tablet_cache) = reg.get(id) else {continue};
+        let Some(tablet) = tablet_cache.latest() else {continue};
         if tablet.auto_compactions_is_disabled().expect("cf") {
             info!(
                 logger,
