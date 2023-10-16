@@ -450,7 +450,8 @@ impl<S: Snapshot> ScanPolicy<S> for LatestKvPolicy {
         statistics: &mut Statistics,
     ) -> Result<HandleRes<Self::Output>> {
         let value: Option<Value> = loop {
-            let write = WriteRef::parse(cursors.write.value(&mut statistics.write))?;
+            let val = cursors.write.value(&mut statistics.write);
+            let write = WriteRef::parse(val)?;
 
             if !write.check_gc_fence_as_latest_version(cfg.ts) {
                 break None;
@@ -463,6 +464,7 @@ impl<S: Snapshot> ScanPolicy<S> for LatestKvPolicy {
                 "current_key" => log_wrappers::hex_encode_upper(current_key),
                 "scanner_ts" => cfg.ts,
                 "write" => ?write,
+                "write_val" => log_wrappers::hex_encode_upper(val),
             );
 
             match write.write_type {
