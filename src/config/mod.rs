@@ -270,8 +270,19 @@ fn get_background_job_limits_impl(
         (max_background_jobs + 3) / 4,
         defaults.max_background_flushes,
     );
+<<<<<<< HEAD
     // Cap max_sub_compactions to allow at least two compactions.
     let max_compactions = max_background_jobs - max_background_flushes;
+=======
+
+    // set the default compaction threads differently for v1 and v2:
+    // v1: cap max_sub_compactions to allow at least two compactions.
+    // v2: decrease the compaction threads to make the qps more stable.
+    let max_compactions = match engine_type {
+        EngineType::RaftKv => max_background_jobs - max_background_flushes,
+        EngineType::RaftKv2 => (max_background_jobs + 3) / 4,
+    };
+>>>>>>> 8c7d9e3b7d (config: adjust rocksdb background compaction threads (#15769))
     let max_sub_compactions: u32 = (max_compactions - 1).clamp(1, defaults.max_sub_compactions);
     // Maximum background GC threads for Titan
     let max_titan_background_gc = cmp::min(defaults.max_titan_background_gc, cpu_num);
@@ -5636,6 +5647,23 @@ mod tests {
         );
         assert_eq!(
             get_background_job_limits_impl(
+<<<<<<< HEAD
+=======
+                EngineType::RaftKv2,
+                8, // cpu_num
+                &KVDB_DEFAULT_BACKGROUND_JOB_LIMITS
+            ),
+            BackgroundJobLimits {
+                max_background_jobs: 4,
+                max_background_flushes: 2,
+                max_sub_compactions: 1,
+                max_titan_background_gc: 4,
+            }
+        );
+        assert_eq!(
+            get_background_job_limits_impl(
+                EngineType::RaftKv,
+>>>>>>> 8c7d9e3b7d (config: adjust rocksdb background compaction threads (#15769))
                 8, // cpu_num
                 &RAFTDB_DEFAULT_BACKGROUND_JOB_LIMITS
             ),
@@ -5651,6 +5679,23 @@ mod tests {
         );
         assert_eq!(
             get_background_job_limits_impl(
+<<<<<<< HEAD
+=======
+                EngineType::RaftKv2,
+                16, // cpu_num
+                &KVDB_DEFAULT_BACKGROUND_JOB_LIMITS
+            ),
+            BackgroundJobLimits {
+                max_background_jobs: 6,
+                max_background_flushes: 3,
+                max_sub_compactions: 2,
+                max_titan_background_gc: 4,
+            }
+        );
+        assert_eq!(
+            get_background_job_limits_impl(
+                EngineType::RaftKv,
+>>>>>>> 8c7d9e3b7d (config: adjust rocksdb background compaction threads (#15769))
                 16, // cpu_num
                 &RAFTDB_DEFAULT_BACKGROUND_JOB_LIMITS
             ),
