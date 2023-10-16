@@ -439,7 +439,7 @@ impl ImportDir {
         Ok(real_key.map(ToOwned::to_owned))
     }
 
-    pub fn list_ssts(&self) -> Result<Vec<SstMeta>> {
+    pub fn list_ssts(&self) -> Result<Vec<SstMetaWithApiVersion>> {
         let mut ssts = Vec::new();
         for e in file_system::read_dir(&self.root_dir)? {
             let e = e?;
@@ -457,20 +457,33 @@ impl ImportDir {
 }
 
 const SST_SUFFIX: &str = ".sst";
+// version 2: compared to version 1 which is the default version, we will check
+// epoch of request and local region in write API.
+pub const API_VERSION_2: i32 = 2;
 
+/// sst_meta_to_path will encode the filepath with default api version (current
+/// is 2). So when the SstMeta is created in old version of TiKV and filepath
+/// will not correspond to the real file, in the deletion logic we can't remove
+/// these files.
 pub fn sst_meta_to_path(meta: &SstMeta) -> Result<PathBuf> {
     Ok(PathBuf::from(format!(
-        "{}_{}_{}_{}_{}{}",
+        "{}_{}_{}_{}_{}_{}{}",
         UuidBuilder::from_slice(meta.get_uuid())?.build(),
         meta.get_region_id(),
         meta.get_region_epoch().get_conf_ver(),
         meta.get_region_epoch().get_version(),
         meta.get_cf_name(),
+        API_VERSION_2,
         SST_SUFFIX,
     )))
 }
 
-pub fn parse_meta_from_path<P: AsRef<Path>>(path: P) -> Result<SstMeta> {
+pub struct SstMetaWithApiVersion {
+    pub meta: SstMeta,
+    pub api_version: i32, // in future we may move api_version into SstMeta
+}
+
+pub fn parse_meta_from_path<P: AsRef<Path>>(path: P) -> Result<SstMetaWithApiVersion> {
     let path = path.as_ref();
     let file_name = match path.file_name().and_then(|n| n.to_str()) {
         Some(name) => name,
@@ -499,7 +512,11 @@ pub fn parse_meta_from_path<P: AsRef<Path>>(path: P) -> Result<SstMeta> {
         // cf_name to path.
         meta.set_cf_name(elems[4].to_owned());
     }
-    Ok(meta)
+    let mut api_version = 1;
+    if elems.len() > 5 {
+        api_version = elems[5].parse()?;
+    }
+    Ok(SstMetaWithApiVersion { meta, api_version })
 }
 
 #[cfg(test)]
@@ -519,11 +536,12 @@ mod test {
         meta.mut_region_epoch().set_version(3);
 
         let path = sst_meta_to_path(&meta).unwrap();
-        let expected_path = format!("{}_1_2_3_default.sst", uuid);
+        let expected_path = format!("{}_1_2_3_default_2.sst", uuid);
         assert_eq!(path.to_str().unwrap(), &expected_path);
 
-        let new_meta = parse_meta_from_path(path).unwrap();
-        assert_eq!(meta, new_meta);
+        let meta_with_ver = parse_meta_from_path(path).unwrap();
+        assert_eq!(meta, meta_with_ver.meta);
+        assert_eq!(2, meta_with_ver.api_version);
     }
 
     #[test]
@@ -542,8 +560,9 @@ mod test {
             meta.get_region_epoch().get_version(),
             SST_SUFFIX,
         ));
-        let new_meta = parse_meta_from_path(path).unwrap();
-        assert_eq!(meta, new_meta);
+        let meta_with_ver = parse_meta_from_path(path).unwrap();
+        assert_eq!(meta, meta_with_ver.meta);
+        assert_eq!(1, meta_with_ver.api_version);
     }
 
     #[cfg(feature = "test-engines-rocksdb")]
@@ -595,14 +614,20 @@ mod test {
         w.finish().unwrap();
         dp.save(arcmgr.as_deref()).unwrap();
         let mut ssts = dir.list_ssts().unwrap();
-        ssts.iter_mut().for_each(|meta| {
+        ssts.iter_mut().for_each(|meta_with_ver| {
+            let meta = &mut meta_with_ver.meta;
             let start = dir
                 .load_start_key_by_meta::<RocksEngine>(meta, arcmgr.clone())
                 .unwrap()
                 .unwrap();
             meta.mut_range().set_start(start)
         });
-        assert_eq!(ssts, vec![meta]);
+        assert_eq!(
+            ssts.iter()
+                .map(|meta_with_ver| { meta_with_ver.meta.clone() })
+                .collect(),
+            vec![meta]
+        );
     }
 
     #[test]

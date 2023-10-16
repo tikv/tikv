@@ -14,8 +14,13 @@ use std::{
 use collections::HashSet;
 use engine_traits::{KvEngine, CF_DEFAULT, CF_WRITE};
 use file_system::{set_io_type, IoType};
+<<<<<<< HEAD
 use futures::{sink::SinkExt, stream::TryStreamExt, TryFutureExt};
 use futures_executor::{ThreadPool, ThreadPoolBuilder};
+=======
+use futures::{sink::SinkExt, stream::TryStreamExt, FutureExt, TryFutureExt};
+use futures_executor::block_on;
+>>>>>>> d8756403ef (import: write RPC will check region epoch before continue (#15013))
 use grpcio::{
     ClientStreamingSink, RequestStream, RpcContext, ServerStreamingSink, UnarySink, WriteFlags,
 };
@@ -28,6 +33,7 @@ use kvproto::{
         WriteRequest_oneof_chunk as Chunk, *,
     },
     kvrpcpb::Context,
+<<<<<<< HEAD
     raft_cmdpb::{CmdType, DeleteRequest, PutRequest, RaftCmdRequest, RaftRequestHeader, Request},
 };
 use protobuf::Message;
@@ -35,6 +41,13 @@ use raftstore::{
     router::RaftStoreRouter,
     store::{Callback, RaftCmdExtraOpts, RegionSnapshot},
 };
+=======
+    metapb::RegionEpoch,
+};
+use raftstore::{coprocessor::RegionInfoProvider, store::util::is_epoch_stale, RegionInfoAccessor};
+use raftstore_v2::StoreMeta;
+use resource_control::{with_resource_limiter, ResourceGroupManager};
+>>>>>>> d8756403ef (import: write RPC will check region epoch before continue (#15013))
 use sst_importer::{
     error_inc, metrics::*, sst_importer::DownloadExt, sst_meta_to_path, Config, Error, Result,
     SstImporter,
@@ -87,6 +100,17 @@ where
     limiter: Limiter,
     task_slots: Arc<Mutex<HashSet<PathBuf>>>,
     raft_entry_max_size: ReadableSize,
+<<<<<<< HEAD
+=======
+    region_info_accessor: Arc<RegionInfoAccessor>,
+
+    writer: raft_writer::ThrottledTlsEngineWriter,
+
+    // it's some iff multi-rocksdb is enabled
+    store_meta: Option<Arc<Mutex<StoreMeta<E::Local>>>>,
+    resource_manager: Option<Arc<ResourceGroupManager>>,
+
+>>>>>>> d8756403ef (import: write RPC will check region epoch before continue (#15013))
     // When less than now, don't accept any requests.
     suspend_req_until: Arc<AtomicU64>,
 }
@@ -290,7 +314,14 @@ where
         router: Router,
         engine: E,
         importer: Arc<SstImporter>,
+<<<<<<< HEAD
     ) -> ImportSstService<E, Router> {
+=======
+        store_meta: Option<Arc<Mutex<StoreMeta<E::Local>>>>,
+        resource_manager: Option<Arc<ResourceGroupManager>>,
+        region_info_accessor: Arc<RegionInfoAccessor>,
+    ) -> Self {
+>>>>>>> d8756403ef (import: write RPC will check region epoch before continue (#15013))
         let props = tikv_util::thread_group::current_properties();
         let threads = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(cfg.num_threads)
@@ -329,6 +360,13 @@ where
             limiter: Limiter::new(f64::INFINITY),
             task_slots: Arc::new(Mutex::new(HashSet::default())),
             raft_entry_max_size,
+<<<<<<< HEAD
+=======
+            region_info_accessor,
+            writer,
+            store_meta,
+            resource_manager,
+>>>>>>> d8756403ef (import: write RPC will check region epoch before continue (#15013))
             suspend_req_until: Arc::new(AtomicU64::new(0)),
         }
     }
@@ -625,6 +663,59 @@ where
     }
 }
 
+fn check_local_region_stale(
+    region_id: u64,
+    epoch: &RegionEpoch,
+    region_info_accessor: Arc<dyn RegionInfoProvider>,
+) -> Result<()> {
+    let (cb, f) = paired_future_callback();
+    region_info_accessor
+        .find_region_by_id(region_id, cb)
+        .map_err(|e| {
+            Error::Engine(format!("failed to find region {} err {:?}", region_id, e).into())
+        })?;
+    match block_on(f)? {
+        Some(local_region_info) => {
+            let local_region_epoch = local_region_info.region.region_epoch.unwrap();
+
+            // TODO(lance6717): we should only need to check conf_ver because we require all
+            // peers have SST on the disk, and does not care about which one is
+            // leader. But since check_sst_for_ingestion also checks epoch version,
+            // we just keep it here for now.
+
+            // when local region epoch is stale, client can retry write later
+            if is_epoch_stale(&local_region_epoch, epoch) {
+                return Err(Error::Engine(
+                    format!("request region {} is ahead of local region, local epoch {:?}, request epoch {:?}, please retry write later",
+                            region_id, local_region_epoch, epoch).into(),
+                ));
+            }
+            // when local region epoch is ahead, client need to rescan region from PD to get
+            // latest region later
+            if is_epoch_stale(epoch, &local_region_epoch) {
+                return Err(Error::Engine(
+                    format!("request region {} is staler than local region, local epoch {:?}, request epoch {:?}, please rescan region later",
+                            region_id, local_region_epoch, epoch).into(),
+                ));
+            }
+
+            // not match means to rescan
+            Ok(())
+        }
+        None => {
+            // when region not found, we can't tell whether it's stale or ahead, so we just
+            // return the safest case
+            Err(Error::Engine(
+                format!(
+                    "region {} is not found, please rescan region later",
+                    region_id
+                )
+                .into(),
+            ))
+        }
+    }
+}
+
 #[macro_export]
 macro_rules! impl_write {
     ($fn:ident, $req_ty:ident, $resp_ty:ident, $chunk_ty:ident, $writer_fn:ident) => {
@@ -635,7 +726,12 @@ macro_rules! impl_write {
             sink: ClientStreamingSink<$resp_ty>,
         ) {
             let import = self.importer.clone();
+<<<<<<< HEAD
             let engine = self.engine.clone();
+=======
+            let tablets = self.tablets.clone();
+            let region_info_accessor = self.region_info_accessor.clone();
+>>>>>>> d8756403ef (import: write RPC will check region epoch before continue (#15013))
             let (rx, buf_driver) =
                 create_stream_with_buffer(stream, self.cfg.stream_channel_window);
             let mut rx = rx.map_err(Error::from);
@@ -652,6 +748,26 @@ macro_rules! impl_write {
                         },
                         _ => return Err(Error::InvalidChunk),
                     };
+<<<<<<< HEAD
+=======
+                    // wait the region epoch on this TiKV to catch up with the epoch
+                    // in request, which comes from PD and represents the majority
+                    // peers' status.
+                    let region_id = meta.get_region_id();
+                    check_local_region_stale(
+                        region_id,
+                        meta.get_region_epoch(),
+                        region_info_accessor,
+                    )?;
+                    let tablet = match tablets.get(region_id) {
+                        Some(t) => t,
+                        None => {
+                            return Err(Error::Engine(
+                                format!("region {} not found", region_id).into(),
+                            ));
+                        }
+                    };
+>>>>>>> d8756403ef (import: write RPC will check region epoch before continue (#15013))
 
                     let writer = match import.$writer_fn(&engine, meta) {
                         Ok(w) => w,
@@ -1253,9 +1369,13 @@ fn write_needs_restore(write: &[u8]) -> bool {
 
 #[cfg(test)]
 mod test {
-    use std::collections::HashMap;
+    use std::{
+        collections::HashMap,
+        sync::{Arc, Mutex},
+    };
 
     use engine_traits::{CF_DEFAULT, CF_WRITE};
+<<<<<<< HEAD
     use kvproto::{kvrpcpb::Context, metapb::RegionEpoch, raft_cmdpb::*};
     use protobuf::Message;
     use txn_types::{Key, TimeStamp, Write, WriteType};
@@ -1270,6 +1390,26 @@ mod test {
     /// use 1/2 of the max raft command size as the goal of batching, where the
     /// extra size is acceptable.
     const HEADER_EXTRA_SIZE: u32 = 40;
+=======
+    use kvproto::{
+        kvrpcpb::Context,
+        metapb::{Region, RegionEpoch},
+        raft_cmdpb::{RaftCmdRequest, Request},
+    };
+    use protobuf::{Message, SingularPtrField};
+    use raft::StateRole::Follower;
+    use raftstore::{
+        coprocessor::{region_info_accessor::Callback, RegionInfoProvider},
+        RegionInfo,
+    };
+    use tikv_kv::{Modify, WriteData};
+    use txn_types::{Key, TimeStamp, Write, WriteBatchFlags, WriteType};
+
+    use crate::{
+        import::sst_service::{check_local_region_stale, RequestCollector},
+        server::raftkv,
+    };
+>>>>>>> d8756403ef (import: write RPC will check region epoch before continue (#15013))
 
     fn write(key: &[u8], ty: WriteType, commit_ts: u64, start_ts: u64) -> (Vec<u8>, Vec<u8>) {
         let k = Key::from_raw(key).append_ts(TimeStamp::new(commit_ts));
@@ -1563,5 +1703,101 @@ mod test {
             assert!(req_size < 1024 + HEADER_EXTRA_SIZE, "{}", req_size);
         }
         assert_eq!(total, 100);
+    }
+
+    #[test]
+    fn test_write_rpc_check_region_epoch() {
+        struct MockRegionInfoProvider {
+            map: Mutex<HashMap<u64, RegionInfo>>,
+        }
+        impl RegionInfoProvider for MockRegionInfoProvider {
+            fn find_region_by_id(
+                &self,
+                region_id: u64,
+                callback: Callback<Option<RegionInfo>>,
+            ) -> Result<(), raftstore::coprocessor::Error> {
+                callback(self.map.lock().unwrap().get(&region_id).cloned());
+                Ok(())
+            }
+        }
+
+        let mock_provider = Arc::new(MockRegionInfoProvider {
+            map: Mutex::new(HashMap::new()),
+        });
+
+        let mut req_epoch = RegionEpoch {
+            conf_ver: 10,
+            version: 10,
+            ..Default::default()
+        };
+        // test for region not found
+        let result = check_local_region_stale(1, &req_epoch, mock_provider.clone());
+        assert!(result.is_err());
+        // check error message contains "rescan region later", client will match this
+        // string pattern
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("rescan region later")
+        );
+
+        let mut local_region_info = RegionInfo {
+            region: Region {
+                id: 1,
+                region_epoch: SingularPtrField::some(req_epoch.clone()),
+                ..Default::default()
+            },
+            role: Follower,
+            buckets: 1,
+        };
+        mock_provider
+            .map
+            .lock()
+            .unwrap()
+            .insert(1, local_region_info.clone());
+        // test the local region epoch is same as request
+        let result = check_local_region_stale(1, &req_epoch, mock_provider.clone());
+        result.unwrap();
+
+        // test the local region epoch is ahead of request
+        local_region_info
+            .region
+            .region_epoch
+            .as_mut()
+            .unwrap()
+            .conf_ver = 11;
+        mock_provider
+            .map
+            .lock()
+            .unwrap()
+            .insert(1, local_region_info.clone());
+        let result = check_local_region_stale(1, &req_epoch, mock_provider.clone());
+        assert!(result.is_err());
+        // check error message contains "rescan region later", client will match this
+        // string pattern
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("rescan region later")
+        );
+
+        req_epoch.conf_ver = 11;
+        let result = check_local_region_stale(1, &req_epoch, mock_provider.clone());
+        result.unwrap();
+
+        // test the local region epoch is staler than request
+        req_epoch.version = 12;
+        let result = check_local_region_stale(1, &req_epoch, mock_provider);
+        assert!(result.is_err());
+        // check error message contains "retry write later", client will match this
+        // string pattern
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("retry write later")
+        );
     }
 }
