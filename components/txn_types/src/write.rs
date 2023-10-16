@@ -265,7 +265,7 @@ impl Write {
     }
 }
 
-#[derive(PartialEq, Clone)]
+#[derive(PartialEq, Clone, Debug)]
 pub struct WriteRef<'a> {
     pub write_type: WriteType,
     pub start_ts: TimeStamp,
@@ -586,5 +586,22 @@ mod tests {
                 case.2
             );
         }
+    }
+
+    pub fn decode_hex(s: &str) -> Vec<u8> {
+        (0..s.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap())
+            .collect::<Vec<_>>()
+    }
+
+    #[test]
+    fn test_x() {
+        let a = "44958090C2A99EA9960653958090C2A99EA99606";
+        let a = "50958090C2A99EA9960676013053958090C2A99EA99606";
+        // let a = "50958090C2A99EA99606760F80000200000002030100030003970D53958090C2A99EA99606";
+        let mut bys = decode_hex(&a);
+        let write = WriteRef::parse(&mut bys);
+        println!("{:?}", write);
     }
 }

@@ -473,7 +473,7 @@ impl<E: Engine> Endpoint<E> {
         let (exec_details, exec_details_v2) = tracker.get_exec_details();
         tracker.on_finish_all_items();
 
-        info!("cop handle finish"; "return_rows" => exec_summary.num_produced_rows);
+        info!("cop handle finish"; "return_rows" => exec_summary.num_produced_rows,  "req_ctx" => ?tracker.req_ctx);
 
         let mut resp = match result {
             Ok(resp) => {

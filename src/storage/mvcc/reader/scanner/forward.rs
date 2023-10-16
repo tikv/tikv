@@ -330,7 +330,17 @@ impl<S: Snapshot, P: ScanPolicy<S>> ForwardScanner<S, P> {
                     // Meet another key.
                     return Ok(false);
                 }
+
                 let key_commit_ts = Key::decode_ts_from(current_key)?;
+
+                info!(
+                    "on move_write_cursor_to_ts";
+                    "user_key" => log_wrappers::hex_encode_upper(user_key.as_encoded().as_slice()),
+                    "current_key" => log_wrappers::hex_encode_upper(current_key),
+                    "scanner_ts" => self.cfg.ts,
+                    "current_key_commit_ts" => key_commit_ts,
+                );
+
                 if key_commit_ts <= self.cfg.ts {
                     // Founded, don't need to seek again.
                     needs_seek = false;
@@ -445,6 +455,15 @@ impl<S: Snapshot> ScanPolicy<S> for LatestKvPolicy {
             if !write.check_gc_fence_as_latest_version(cfg.ts) {
                 break None;
             }
+
+            let current_key = cursors.write.key(&mut statistics.write);
+            info!(
+                "on handle_write";
+                "user_key" => log_wrappers::hex_encode_upper(current_user_key.as_encoded().as_slice()),
+                "current_key" => log_wrappers::hex_encode_upper(current_key),
+                "scanner_ts" => cfg.ts,
+                "write" => ?write,
+            );
 
             match write.write_type {
                 WriteType::Put => {
