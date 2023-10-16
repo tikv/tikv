@@ -10871,4 +10871,108 @@ mod tests {
         // Prewrite still succeeds
         rx.recv().unwrap().unwrap();
     }
+
+    #[test]
+    fn test_prewrite_cached_committed_transaction_do_not_skip_constraint_check() {
+        let storage = TestStorageBuilderApiV1::new(MockLockManager::new())
+            .build()
+            .unwrap();
+        let cm = storage.concurrency_manager.clone();
+        let k1 = Key::from_raw(b"k1");
+        let pk = b"pk";
+        // Simulate the case that the current TiKV instance have a non-unique
+        // index key of a pessimistic transaction. It won't be pessimistic
+        // locked, and prewrite skips constraint checks.
+        // Simulate the case that a prewrite is performed twice, with async
+        // commit enabled, and max_ts changes when the second request arrives.
+
+        // A retrying prewrite request arrives.
+        cm.update_max_ts(20.into());
+        let mut ctx = Context::default();
+        ctx.set_is_retry_request(true);
+        let (tx, rx) = channel();
+        storage
+            .sched_txn_command(
+                commands::PrewritePessimistic::new(
+                    vec![(
+                        Mutation::make_put(k1.clone(), b"v".to_vec()),
+                        SkipPessimisticCheck,
+                    )],
+                    pk.to_vec(),
+                    10.into(),
+                    3000,
+                    10.into(),
+                    1,
+                    11.into(),
+                    0.into(),
+                    Some(vec![]),
+                    false,
+                    AssertionLevel::Off,
+                    vec![],
+                    ctx,
+                ),
+                Box::new(move |res| {
+                    tx.send(res).unwrap();
+                }),
+            )
+            .unwrap();
+
+        let res = rx.recv().unwrap().unwrap();
+        assert_eq!(res.min_commit_ts, 21.into());
+
+        // Commit it.
+        let (tx, rx) = channel();
+        storage
+            .sched_txn_command(
+                commands::Commit::new(vec![k1.clone()], 10.into(), 21.into(), Context::default()),
+                expect_ok_callback(tx, 0),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+
+        // Check committed; push max_ts to 30
+        assert_eq!(
+            block_on(storage.get(Context::default(), k1.clone(), 30.into()))
+                .unwrap()
+                .0,
+            Some(b"v".to_vec())
+        );
+
+        let (tx, rx) = channel();
+        storage
+            .sched_txn_command(
+                commands::PrewritePessimistic::new(
+                    vec![(
+                        Mutation::make_put(k1.clone(), b"v".to_vec()),
+                        SkipPessimisticCheck,
+                    )],
+                    pk.to_vec(),
+                    10.into(),
+                    3000,
+                    10.into(),
+                    1,
+                    11.into(),
+                    0.into(),
+                    Some(vec![]),
+                    false,
+                    AssertionLevel::Off,
+                    vec![],
+                    Context::default(),
+                ),
+                Box::new(move |res| {
+                    tx.send(res).unwrap();
+                }),
+            )
+            .unwrap();
+        let res = rx.recv().unwrap().unwrap();
+        assert_eq!(res.min_commit_ts, 21.into());
+
+        // Key must not be locked.
+        assert_eq!(
+            block_on(storage.get(Context::default(), k1.clone(), 50.into()))
+                .unwrap()
+                .0,
+            Some(b"v".to_vec())
+        );
+    }
 }
