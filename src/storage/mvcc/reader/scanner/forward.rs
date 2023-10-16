@@ -458,11 +458,13 @@ impl<S: Snapshot> ScanPolicy<S> for LatestKvPolicy {
             }
 
             let current_key = cursors.write.key(&mut statistics.write);
+            let key_commit_ts = Key::decode_ts_from(current_key)?;
             info!(
                 "on handle_write";
                 "user_key" => log_wrappers::hex_encode_upper(current_user_key.as_encoded().as_slice()),
                 "current_key" => log_wrappers::hex_encode_upper(current_key),
                 "scanner_ts" => cfg.ts,
+                "current_key_commit_ts" => key_commit_ts,
                 "write" => ?write,
                 "write_val" => log_wrappers::hex_encode_upper(val),
             );
