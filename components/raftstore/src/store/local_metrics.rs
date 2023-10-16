@@ -112,8 +112,10 @@ pub struct RaftMetrics {
 
     // local histogram
     pub store_time: LocalHistogram,
+    // the wait time for processing a raft command
     pub propose_wait_time: LocalHistogram,
-    pub process_wait_time: LocalHistogram, 
+    // the wait time for processing a raft message
+    pub process_wait_time: LocalHistogram,
     pub process_ready: LocalHistogram,
     pub event_time: RaftEventDurationVec,
     pub peer_msg_len: LocalHistogram,
