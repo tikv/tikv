@@ -546,7 +546,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
     ) {
         let cid = specified_cid.unwrap_or_else(|| self.inner.gen_id());
         let tracker = get_tls_tracker_token();
-        debug!("received new command"; "cid" => cid, "cmd" => ?cmd, "tracker" => ?tracker);
+        info!("received new command"; "cid" => cid, "cmd" => ?cmd, "tracker" => ?tracker);
 
         let tag = cmd.tag();
         let priority_tag = get_priority_tag(cmd.priority());
