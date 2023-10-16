@@ -115,7 +115,7 @@ use crossbeam::utils::CachePadded;
 use parking_lot::Mutex;
 use tikv_util::{
     lru,
-    lru::{GetTailKv, LruCache},
+    lru::{GetTailEntry, LruCache},
 };
 use txn_types::TimeStamp;
 
@@ -187,11 +187,11 @@ impl lru::EvictPolicy<TimeStamp, CacheEntry> for TxnStatusCacheEvictPolicy {
         &self,
         current_size: usize,
         capacity: usize,
-        get_tail_kv: &impl GetTailKv<TimeStamp, CacheEntry>,
+        get_tail_entry: &impl GetTailEntry<TimeStamp, CacheEntry>,
     ) -> bool {
         // See how much time has been elapsed since the tail entry is inserted.
         // If it's long enough, remove it.
-        if let Some((_, v)) = get_tail_kv.get_tail_kv() {
+        if let Some((_, v)) = get_tail_entry.get_tail_entry() {
             if self.now().duration_since(UNIX_EPOCH).unwrap().as_millis() as u64
                 > self.required_keep_time_millis + v.insert_time
             {
