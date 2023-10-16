@@ -267,7 +267,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
                         write.header,
                         write.data,
                         write.ch,
-                        Some(write.disk_full_opt),
+                        Some(write.extra_opts),
                     );
                 }
                 PeerMsg::UnsafeWrite(write) => {
@@ -382,9 +382,10 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
                     syncer,
                     failed_stores,
                 ),
-                PeerMsg::ExitForceLeaderState => {
-                    self.fsm.peer_mut().on_exit_force_leader(self.store_ctx)
-                }
+                PeerMsg::ExitForceLeaderState => self
+                    .fsm
+                    .peer_mut()
+                    .on_exit_force_leader(self.store_ctx, false),
                 PeerMsg::ExitForceLeaderStateCampaign => {
                     self.fsm.peer_mut().on_exit_force_leader_campaign()
                 }
