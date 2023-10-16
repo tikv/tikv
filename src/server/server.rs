@@ -528,7 +528,7 @@ mod tests {
     use resource_metering::ResourceTagFactory;
     use security::SecurityConfig;
     use tikv_util::{
-        config::ReadableDuration, quota_limiter::QuotaLimiter, time::Instant as TiInstant,
+        config::ReadableDuration, quota_limiter::QuotaLimiter,
     };
     use tokio::runtime::Builder as TokioBuilder;
 
