@@ -194,7 +194,7 @@ pub trait EvictPolicy<K, V> {
         &self,
         current_size: usize,
         capacity: usize,
-        get_tail_kv: &impl GetTailEntry<K, V>,
+        get_tail_entry: &impl GetTailEntry<K, V>,
     ) -> bool;
 }
 
