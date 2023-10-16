@@ -310,7 +310,8 @@ where
     E: EvictPolicy<K, V>,
 {
     #[inline]
-    fn insert_impl(&mut self, key: K, value: V, replace: bool) {
+    fn insert_impl(&mut self, key: K, value: V, replace: bool) -> bool {
+        let mut inserted = true;
         let mut old_key = None;
         let current_size = SizePolicy::<K, V>::current(&self.size_policy);
         // In case the current size exactly equals to capacity, we also expect to reuse
@@ -326,6 +327,8 @@ where
                     let mut entry = e.get_mut();
                     self.trace.promote(entry.record);
                     entry.value = value;
+                } else {
+                    inserted = false;
                 }
             }
             HashMapEntry::Vacant(v) => {
@@ -351,7 +354,8 @@ where
         // Perhaps we can reject entries larger than capacity goes in the LRU cache, but
         // that is impossible for now: the `SizePolicy` trait doesn't provide the
         // interface of querying the actual size of an item.
-        self.evict_until_fit()
+        self.evict_until_fit();
+        inserted
     }
 
     fn evict_until_fit(&mut self) {
@@ -377,8 +381,8 @@ where
     /// Insert an entry if the key doesn't exist before. The existing entry
     /// won't be replaced and won't be promoted to the most-recent place.
     #[inline]
-    pub fn insert_if_not_exist(&mut self, key: K, value: V) {
-        self.insert_impl(key, value, false);
+    pub fn insert_if_not_exist(&mut self, key: K, value: V) -> bool {
+        self.insert_impl(key, value, false)
     }
 
     #[inline]
@@ -763,37 +767,37 @@ mod tests {
     #[test]
     fn test_insert_if_not_exist() {
         let mut cache = LruCache::with_capacity_sample_and_trace(4, 0, CountTracker::default());
-        cache.insert_if_not_exist(1, 1);
-        cache.insert_if_not_exist(2, 2);
-        cache.insert_if_not_exist(3, 3);
+        assert!(cache.insert_if_not_exist(1, 1));
+        assert!(cache.insert_if_not_exist(2, 2));
+        assert!(cache.insert_if_not_exist(3, 3));
         assert_eq!(cache.size(), 3);
         assert_eq!(*cache.get_no_promote(&1).unwrap(), 1);
         assert_eq!(*cache.get_no_promote(&2).unwrap(), 2);
         assert_eq!(*cache.get_no_promote(&3).unwrap(), 3);
 
-        cache.insert_if_not_exist(1, 11);
+        assert!(!cache.insert_if_not_exist(1, 11));
         // Not updated.
         assert_eq!(*cache.get_no_promote(&1).unwrap(), 1);
 
-        cache.insert_if_not_exist(4, 4);
-        cache.insert_if_not_exist(2, 22);
+        assert!(cache.insert_if_not_exist(4, 4));
+        assert!(!cache.insert_if_not_exist(2, 22));
         // Not updated.
         assert_eq!(*cache.get_no_promote(&2).unwrap(), 2);
 
         assert_eq!(cache.size(), 4);
-        cache.insert_if_not_exist(5, 5);
+        assert!(cache.insert_if_not_exist(5, 5));
         assert_eq!(cache.size(), 4);
         // key 1 is not promoted, so it's first popped out.
         assert!(cache.get_no_promote(&1).is_none());
         assert_eq!(*cache.get_no_promote(&2).unwrap(), 2);
 
-        cache.insert_if_not_exist(6, 6);
+        assert!(cache.insert_if_not_exist(6, 6));
         assert_eq!(cache.size(), 4);
         // key 2 is not promoted either, so it's first popped out.
         assert!(cache.get_no_promote(&2).is_none());
         assert_eq!(*cache.get_no_promote(&3).unwrap(), 3);
 
-        cache.insert_if_not_exist(7, 7);
+        assert!(cache.insert_if_not_exist(7, 7));
         assert_eq!(cache.size(), 4);
         assert!(cache.get_no_promote(&3).is_none());
         assert_eq!(*cache.get_no_promote(&4).unwrap(), 4);
