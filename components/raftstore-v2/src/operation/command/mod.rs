@@ -43,7 +43,7 @@ use raftstore::{
         },
         msg::ErrorCallback,
         util::{self, check_flashback_state},
-        Config, Transport, WriteCallback,
+        Config, ProposalContext, Transport, WriteCallback,
     },
     Error, Result,
 };
@@ -202,7 +202,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             // progress less error-prone.
             if !(admin_type.is_some()
                 && (admin_type.unwrap() == AdminCmdType::ChangePeer
-                    || admin_type.unwrap() == AdminCmdType::ChangePeerV2))
+                    || admin_type.unwrap() == AdminCmdType::ChangePeerV2
+                    || admin_type.unwrap() == AdminCmdType::RollbackMerge))
             {
                 return Err(Error::RecoveryInProgress(self.region_id()));
             }
@@ -239,7 +240,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         store_ctx: &mut StoreContext<EK, ER, T>,
         data: Vec<u8>,
     ) -> Result<u64> {
-        self.propose_with_ctx(store_ctx, data, vec![])
+        self.propose_with_ctx(store_ctx, data, ProposalContext::empty())
     }
 
     #[inline]
@@ -247,12 +248,12 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         &mut self,
         store_ctx: &mut StoreContext<EK, ER, T>,
         data: Vec<u8>,
-        proposal_ctx: Vec<u8>,
+        proposal_ctx: ProposalContext,
     ) -> Result<u64> {
         // Should not propose normal in force leader state.
         // In `pre_propose_raft_command`, it rejects all the requests expect
         // conf-change if in force leader state.
-        if self.has_force_leader() {
+        if self.has_force_leader() && proposal_ctx != ProposalContext::ROLLBACK_MERGE {
             store_ctx.raft_metrics.invalid_proposal.force_leader.inc();
             panic!(
                 "[{}] {} propose normal in force leader state {:?}",
@@ -274,7 +275,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             });
         }
         let last_index = self.raft_group().raft.raft_log.last_index();
-        self.raft_group_mut().propose(proposal_ctx, data)?;
+        self.raft_group_mut().propose(proposal_ctx.to_vec(), data)?;
         if self.raft_group().raft.raft_log.last_index() == last_index {
             // The message is dropped silently, this usually due to leader absence
             // or transferring leader. Both cases can be considered as NotLeader error.
