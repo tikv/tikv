@@ -135,6 +135,10 @@ impl<K> Trace<K> {
             r.key.as_ptr().read()
         }
     }
+
+    fn get_tail(&self) -> &K {
+        unsafe { self.tail.as_ref().prev.as_ref().key.assume_init_ref() }
+    }
 }
 
 impl<K> Drop for Trace<K> {
@@ -174,23 +178,37 @@ impl<K, V> SizePolicy<K, V> for CountTracker {
     }
 }
 
-pub trait GetTailKv<K, V> {
-    fn get_tail_kv(&self) -> Option<(&K, &V)>;
+/// Some [`EvictPolicy`] may need to know what the entry bing popped out is to
+/// determine if it really can be popped. But there is performance cost to
+/// always get the tail entry. So we pass this interface to the `should_evict`
+/// function. An implementation of `EvictPolicy` can read the tail entry only
+/// when it really needs.
+pub trait GetTailEntry<K, V> {
+    fn get_tail_entry(&self) -> Option<(&K, &V)>;
 }
 
+/// An [`EvictPolicy`] defines how the [`LruCache`] should determine an entry
+/// at the tail should be popped out.
 pub trait EvictPolicy<K, V> {
     fn should_evict(
         &self,
         current_size: usize,
         capacity: usize,
-        get_tail_kv: &impl GetTailKv<K, V>,
+        get_tail_kv: &impl GetTailEntry<K, V>,
     ) -> bool;
 }
 
+/// The default [`EvictPolicy`] of [`LruCache`], which pops out entries at the
+/// tail when the limit specified by `capacity` is exceeded.
 pub struct EvictOnFull;
 
 impl<K, V> EvictPolicy<K, V> for EvictOnFull {
-    fn should_evict(&self, current_size: usize, capacity: usize, _: &impl GetTailKv<K, V>) -> bool {
+    fn should_evict(
+        &self,
+        current_size: usize,
+        capacity: usize,
+        _: &impl GetTailEntry<K, V>,
+    ) -> bool {
         capacity < current_size
     }
 }
@@ -432,18 +450,18 @@ where
     }
 }
 
-impl<K, V, T, E> GetTailKv<K, V> for LruCache<K, V, T, E>
+impl<K, V, T, E> GetTailEntry<K, V> for LruCache<K, V, T, E>
 where
     K: Eq + Hash + Clone + std::fmt::Debug,
     T: SizePolicy<K, V>,
     E: EvictPolicy<K, V>,
 {
-    fn get_tail_kv(&self) -> Option<(&K, &V)> {
+    fn get_tail_entry(&self) -> Option<(&K, &V)> {
         if self.is_empty() {
             return None;
         }
 
-        let k = unsafe { self.trace.tail.as_ref().prev.as_ref().key.assume_init_ref() };
+        let k = self.trace.get_tail();
         self.map
             .get_key_value(k)
             .map(|(k, entry)| (k, &entry.value))
