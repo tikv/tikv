@@ -399,10 +399,17 @@ impl RaftLogGcSkippedMetrics {
 /// The buffered metrics counters for raft.
 pub struct RaftMetrics {
     pub store_time: LocalHistogram,
+<<<<<<< HEAD
     pub ready: RaftReadyMetrics,
     pub send_message: RaftSendMessageMetrics,
     pub message_dropped: RaftMessageDropMetrics,
     pub propose: RaftProposeMetrics,
+=======
+    // the wait time for processing a raft command
+    pub propose_wait_time: LocalHistogram,
+    // the wait time for processing a raft message
+    pub process_wait_time: LocalHistogram,
+>>>>>>> 6e826308b9 (add more metrics for slow commit log diagnostics (#15716))
     pub process_ready: LocalHistogram,
     pub event_time: RaftEventDurationVec,
     pub peer_msg_len: LocalHistogram,
@@ -423,10 +430,15 @@ impl RaftMetrics {
     pub fn new(waterfall_metrics: bool) -> Self {
         Self {
             store_time: STORE_TIME_HISTOGRAM.local(),
+<<<<<<< HEAD
             ready: Default::default(),
             send_message: Default::default(),
             message_dropped: Default::default(),
             propose: Default::default(),
+=======
+            propose_wait_time: REQUEST_WAIT_TIME_HISTOGRAM.local(),
+            process_wait_time: RAFT_MESSAGE_WAIT_TIME_HISTOGRAM.local(),
+>>>>>>> 6e826308b9 (add more metrics for slow commit log diagnostics (#15716))
             process_ready: PEER_RAFT_PROCESS_DURATION
                 .with_label_values(&["ready"])
                 .local(),
@@ -452,6 +464,15 @@ impl RaftMetrics {
         self.ready.flush();
         self.send_message.flush();
         self.propose.flush();
+<<<<<<< HEAD
+=======
+        self.invalid_proposal.flush();
+        self.raft_log_gc_skipped.flush();
+
+        self.store_time.flush();
+        self.propose_wait_time.flush();
+        self.process_wait_time.flush();
+>>>>>>> 6e826308b9 (add more metrics for slow commit log diagnostics (#15716))
         self.process_ready.flush();
         self.event_time.flush();
         self.peer_msg_len.flush();
