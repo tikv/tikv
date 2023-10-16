@@ -168,7 +168,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         header.set_term(self.term());
         let empty_data = SimpleWriteEncoder::with_capacity(0).encode();
         let (ch, _) = CmdResChannel::pair();
-        self.on_simple_write(ctx, header, empty_data, ch);
+        self.on_simple_write(ctx, header, empty_data, ch, None);
     }
 
     /// response the read index request
