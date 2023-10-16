@@ -209,7 +209,15 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
     pub fn on_msgs(&mut self, peer_msgs_buf: &mut Vec<PeerMsg>) {
         for msg in peer_msgs_buf.drain(..) {
             match msg {
+<<<<<<< HEAD
                 PeerMsg::RaftMessage(msg) => self.fsm.peer.on_raft_message(self.store_ctx, msg),
+=======
+                PeerMsg::RaftMessage(msg, send_time) => {
+                    self.fsm
+                        .peer
+                        .on_raft_message(self.store_ctx, msg, send_time);
+                }
+>>>>>>> 6e826308b9 (add more metrics for slow commit log diagnostics (#15716))
                 PeerMsg::RaftQuery(cmd) => {
                     self.on_receive_command(cmd.send_time);
                     self.on_query(cmd.request, cmd.ch)

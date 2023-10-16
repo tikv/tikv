@@ -29,10 +29,32 @@ use kvproto::{
     raft_serverpb::{PeerState, RaftMessage, RaftSnapshotData},
 };
 use protobuf::Message as _;
+<<<<<<< HEAD
 use raft::{eraftpb, Ready, StateRole, INVALID_ID};
 use raftstore::store::{util, ExtraStates, FetchedLogs, ReadProgress, Transport, WriteTask};
 use slog::{debug, error, trace, warn};
 use tikv_util::time::{duration_to_sec, monotonic_raw_now};
+=======
+use raft::{eraftpb, prelude::MessageType, Ready, SnapshotStatus, StateRole, INVALID_ID};
+use raftstore::{
+    coprocessor::{RegionChangeEvent, RoleChange},
+    store::{
+        fsm::store::StoreRegionMeta,
+        needs_evict_entry_cache,
+        util::{self, is_first_append_entry, is_initial_msg},
+        worker_metrics::SNAP_COUNTER,
+        FetchedLogs, ReadProgress, Transport, WriteCallback, WriteTask,
+    },
+};
+use slog::{debug, error, info, warn, Logger};
+use tikv_util::{
+    log::SlogFormat,
+    slog_panic,
+    store::find_peer,
+    sys::disk::DiskUsage,
+    time::{duration_to_sec, monotonic_raw_now, Duration, Instant as TiInstant},
+};
+>>>>>>> 6e826308b9 (add more metrics for slow commit log diagnostics (#15716))
 
 pub use self::{
     async_writer::AsyncWriter,
@@ -67,6 +89,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         &mut self,
         ctx: &mut StoreContext<EK, ER, T>,
         mut msg: Box<RaftMessage>,
+        send_time: Option<TiInstant>,
     ) {
         debug!(
             self.logger,
@@ -75,6 +98,20 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             "from_peer_id" => msg.get_from_peer().get_id(),
             "to_peer_id" => msg.get_to_peer().get_id(),
         );
+<<<<<<< HEAD
+=======
+        if let Some(send_time) = send_time {
+            let process_wait_time = send_time.saturating_elapsed();
+            ctx.raft_metrics
+                .process_wait_time
+                .observe(duration_to_sec(process_wait_time));
+        }
+
+        if self.pause_for_replay() && msg.get_message().get_msg_type() == MessageType::MsgAppend {
+            ctx.raft_metrics.message_dropped.recovery.inc();
+            return;
+        }
+>>>>>>> 6e826308b9 (add more metrics for slow commit log diagnostics (#15716))
         if !self.serving() {
             return;
         }

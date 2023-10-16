@@ -142,8 +142,13 @@ impl Store {
     {
         let region_id = msg.get_region_id();
         // The message can be sent when the peer is being created, so try send it first.
+<<<<<<< HEAD
         let msg = if let Err(TrySendError::Disconnected(PeerMsg::RaftMessage(m))) =
             ctx.router.send(region_id, PeerMsg::RaftMessage(msg))
+=======
+        let mut msg = if let Err(TrySendError::Disconnected(PeerMsg::RaftMessage(m, _))) =
+            ctx.router.send(region_id, PeerMsg::RaftMessage(msg, None))
+>>>>>>> 6e826308b9 (add more metrics for slow commit log diagnostics (#15716))
         {
             m
         } else {
@@ -253,7 +258,7 @@ impl Store {
         if from_peer.id != raft::INVALID_ID {
             // For now the peer only exists in memory. It will persist its states when
             // handling its first readiness.
-            let _ = ctx.router.send(region_id, PeerMsg::RaftMessage(msg));
+            let _ = ctx.router.send(region_id, PeerMsg::RaftMessage(msg, None));
         }
     }
 }
