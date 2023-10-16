@@ -28,7 +28,7 @@ use tikv::config::BackupStreamConfig;
 use tikv_util::{
     box_err,
     config::ReadableDuration,
-    debug, defer, frame, info, root,
+    debug, defer, info, root,
     sys::thread::ThreadBuildWrapper,
     time::{Instant, Limiter},
     warn,
