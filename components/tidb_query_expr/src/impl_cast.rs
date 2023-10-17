@@ -1032,10 +1032,10 @@ fn cast_bytes_like_as_duration(
     val: &[u8],
     overflow_as_null: bool,
 ) -> Result<Option<Duration>> {
-    let val = std::str::from_utf8(val).map_err(Error::Encoding)?;
+    let val = String::from_utf8_lossy(val);
     let result = Duration::parse_consider_overflow(
         ctx,
-        val,
+        &val,
         extra.ret_field_type.get_decimal() as i8,
         overflow_as_null,
     );
@@ -6308,6 +6308,7 @@ mod tests {
             b"-17:51:04.78",
             b"17:51:04.78",
             b"-17:51:04.78",
+            b"\x92\x6b",
         ];
 
         test_as_duration_helper(
