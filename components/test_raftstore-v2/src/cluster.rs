@@ -69,6 +69,9 @@ use tikv_util::{
 };
 use txn_types::WriteBatchFlags;
 
+// MAX duration waiting for releasing store metas, default: 10s.
+const MAX_WAIT_RELEASE_INTERVAL: u32 = 1000;
+
 // We simulate 3 or 5 nodes, each has a store.
 // Sometimes, we use fixed id to test, which means the id
 // isn't allocated by pd, and node id, store id are same.
@@ -328,7 +331,7 @@ pub trait Simulator<EK: KvEngine> {
             PeerMsg::simple_write_with_opt(
                 Box::new(request.take_header()),
                 write_encoder.encode(),
-                opts.disk_full_opt,
+                opts,
             )
         };
 
@@ -1874,15 +1877,17 @@ impl<T: Simulator<EK>, EK: KvEngine> Cluster<T, EK> {
         }
         self.leaders.clear();
         for store_meta in self.store_metas.values() {
-            while Arc::strong_count(store_meta) != 1 {
+            // Limits the loop count of checking.
+            let mut idx = 0;
+            while Arc::strong_count(store_meta) != 1 && idx < MAX_WAIT_RELEASE_INTERVAL {
                 std::thread::sleep(Duration::from_millis(10));
+                idx += 1;
             }
         }
         self.store_metas.clear();
         for sst_worker in self.sst_workers.drain(..) {
             sst_worker.stop_worker();
         }
-
         debug!("all nodes are shut down.");
     }
 
