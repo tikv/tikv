@@ -1385,10 +1385,12 @@ impl DbConfig {
                 let total_mem = SysQuota::memory_limit_in_bytes() as f64;
                 // purge-threshold is set to twice the limit. Too large limit will cause trouble
                 // to raft log replay.
-                self.write_buffer_limit.get_or_insert(ReadableSize(cmp::min(
+                let write_buffer_limit = cmp::min(
                     (total_mem * WRITE_BUFFER_MEMORY_LIMIT_RATE) as u64,
                     WRITE_BUFFER_MEMORY_LIMIT_MAX,
-                )));
+                );
+                self.write_buffer_limit
+                    .get_or_insert(ReadableSize(write_buffer_limit));
                 self.max_total_wal_size.get_or_insert(ReadableSize(1));
                 self.stats_dump_period
                     .get_or_insert(ReadableDuration::minutes(0));
@@ -1410,10 +1412,12 @@ impl DbConfig {
                 self.writecf.max_compactions.get_or_insert(1);
                 self.lockcf
                     .write_buffer_size
-                    .get_or_insert(ReadableSize::mb(32));
+                    .get_or_insert(ReadableSize::mb(4));
+                let lockcf_buffer_limit =
+                    cmp::max(write_buffer_limit / 8, DEFAULT_LOCK_BUFFER_MEMORY_LIMIT.0);
                 self.lockcf
                     .write_buffer_limit
-                    .get_or_insert(DEFAULT_LOCK_BUFFER_MEMORY_LIMIT);
+                    .get_or_insert(ReadableSize(lockcf_buffer_limit));
             }
         }
         let bg_job_limits = get_background_job_limits(engine, &KVDB_DEFAULT_BACKGROUND_JOB_LIMITS);
