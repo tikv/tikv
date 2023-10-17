@@ -362,10 +362,9 @@ impl<S: Snapshot> CmdEpochChecker<S> {
     fn post_propose(&mut self, cmd_type: AdminCmdType, index: u64, term: u64) {
         self.maybe_update_term(term);
         let epoch_state = admin_cmd_epoch_lookup(cmd_type);
-        assert!(
-            self.last_conflict_index(epoch_state.check_ver, epoch_state.check_conf_ver)
-                .is_none()
-        );
+        assert!(self
+            .last_conflict_index(epoch_state.check_ver, epoch_state.check_conf_ver)
+            .is_none());
 
         if epoch_state.change_conf_ver || epoch_state.change_ver {
             if let Some(cmd) = self.proposed_admin_cmd.back() {
@@ -974,20 +973,21 @@ where
     pub fn switch_replication_mode(&mut self, state: &Mutex<GlobalReplicationState>) {
         self.replication_sync = false;
         let guard = state.lock().unwrap();
-        let (enable_group_commit, calculate_group_id) = if guard.status().get_mode() == ReplicationMode::Majority {
-            self.replication_mode_version = 0;
-            self.dr_auto_sync_state = DrAutoSyncState::Async;
-            (false, false)
-        } else {
-            self.dr_auto_sync_state = guard.status().get_dr_auto_sync().get_state();
-            self.replication_mode_version = guard.status().get_dr_auto_sync().state_id;
-            match guard.status().get_dr_auto_sync().get_state() {
-                // SyncRecover will enable group commit after it catches up logs.
-                DrAutoSyncState::Async => (false, false),
-                DrAutoSyncState::SyncRecover => (false, true),
-                _ => (true, true),
-            }
-        };
+        let (enable_group_commit, calculate_group_id) =
+            if guard.status().get_mode() == ReplicationMode::Majority {
+                self.replication_mode_version = 0;
+                self.dr_auto_sync_state = DrAutoSyncState::Async;
+                (false, false)
+            } else {
+                self.dr_auto_sync_state = guard.status().get_dr_auto_sync().get_state();
+                self.replication_mode_version = guard.status().get_dr_auto_sync().state_id;
+                match guard.status().get_dr_auto_sync().get_state() {
+                    // SyncRecover will enable group commit after it catches up logs.
+                    DrAutoSyncState::Async => (false, false),
+                    DrAutoSyncState::SyncRecover => (false, true),
+                    _ => (true, true),
+                }
+            };
         drop(guard);
         self.switch_group_commit(enable_group_commit, calculate_group_id, state);
     }
