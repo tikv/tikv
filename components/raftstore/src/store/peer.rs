@@ -362,9 +362,9 @@ impl<S: Snapshot> CmdEpochChecker<S> {
     fn post_propose(&mut self, cmd_type: AdminCmdType, index: u64, term: u64) {
         self.maybe_update_term(term);
         let epoch_state = admin_cmd_epoch_lookup(cmd_type);
-        assert!(self
-            .last_conflict_index(epoch_state.check_ver, epoch_state.check_conf_ver)
-            .is_none());
+        assert!(
+            self.last_conflict_index(epoch_state.check_ver, epoch_state.check_conf_ver)
+                .is_none());
 
         if epoch_state.change_conf_ver || epoch_state.change_ver {
             if let Some(cmd) = self.proposed_admin_cmd.back() {
