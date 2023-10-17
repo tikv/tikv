@@ -48,7 +48,7 @@ use tikv_util::{
     config::{Tracker, VersionTrack},
     log::SlogFormat,
     synchronizer::InvokeClosureOnDrop,
-    sys::SysQuota,
+    sys::{disk::get_disk_status, SysQuota},
     time::{duration_to_sec, monotonic_raw_now, Instant as TiInstant, Limiter},
     timer::{SteadyTimer, GLOBAL_TIMER_HANDLE},
     worker::{Builder, LazyWorker, Scheduler, Worker},
@@ -105,6 +105,10 @@ pub struct StoreContext<EK: KvEngine, ER: RaftEngine, T> {
 
     /// Disk usage for the store itself.
     pub self_disk_usage: DiskUsage,
+    // TODO: how to remove offlined stores?
+    /// Disk usage for other stores. The store itself is not included.
+    /// Only contains items which is not `DiskUsage::Normal`.
+    pub store_disk_usages: HashMap<u64, DiskUsage>,
 
     pub snap_mgr: TabletSnapManager,
     pub global_stat: GlobalStoreStat,
@@ -229,6 +233,7 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport + 'static> PollHandler<PeerFsm<E
         if self.store_msg_buf.capacity() == 0 || self.peer_msg_buf.capacity() == 0 {
             self.apply_buf_capacity();
         }
+        self.poll_ctx.self_disk_usage = get_disk_status(self.poll_ctx.store_id);
         // Apply configuration changes.
         if let Some(cfg) = self.cfg_tracker.any_new().map(|c| c.clone()) {
             let last_messages_per_tick = self.messages_per_tick();
@@ -562,6 +567,7 @@ where
             apply_pool: self.apply_pool.clone(),
             high_priority_pool: self.high_priority_pool.clone(),
             self_disk_usage: DiskUsage::Normal,
+            store_disk_usages: Default::default(),
             snap_mgr: self.snap_mgr.clone(),
             coprocessor_host: self.coprocessor_host.clone(),
             global_stat: self.global_stat.clone(),
@@ -1007,16 +1013,16 @@ impl<EK: KvEngine, ER: RaftEngine> StoreRouter<EK, ER> {
         msg: Box<RaftMessage>,
     ) -> std::result::Result<(), TrySendError<Box<RaftMessage>>> {
         let id = msg.get_region_id();
-        let peer_msg = PeerMsg::RaftMessage(msg);
+        let peer_msg = PeerMsg::RaftMessage(msg, Some(TiInstant::now()));
         let store_msg = match self.router.try_send(id, peer_msg) {
             Either::Left(Ok(())) => return Ok(()),
-            Either::Left(Err(TrySendError::Full(PeerMsg::RaftMessage(m)))) => {
+            Either::Left(Err(TrySendError::Full(PeerMsg::RaftMessage(m, _)))) => {
                 return Err(TrySendError::Full(m));
             }
-            Either::Left(Err(TrySendError::Disconnected(PeerMsg::RaftMessage(m)))) => {
+            Either::Left(Err(TrySendError::Disconnected(PeerMsg::RaftMessage(m, _)))) => {
                 return Err(TrySendError::Disconnected(m));
             }
-            Either::Right(PeerMsg::RaftMessage(m)) => StoreMsg::RaftMessage(m),
+            Either::Right(PeerMsg::RaftMessage(m, _)) => StoreMsg::RaftMessage(m),
             _ => unreachable!(),
         };
         match self.router.send_control(store_msg) {

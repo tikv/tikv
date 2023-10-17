@@ -112,7 +112,10 @@ pub struct RaftMetrics {
 
     // local histogram
     pub store_time: LocalHistogram,
+    // the wait time for processing a raft command
     pub propose_wait_time: LocalHistogram,
+    // the wait time for processing a raft message
+    pub process_wait_time: LocalHistogram,
     pub process_ready: LocalHistogram,
     pub event_time: RaftEventDurationVec,
     pub peer_msg_len: LocalHistogram,
@@ -152,6 +155,7 @@ impl RaftMetrics {
             raft_log_gc_skipped: RaftLogGcSkippedCounterVec::from(&RAFT_LOG_GC_SKIPPED_VEC),
             store_time: STORE_TIME_HISTOGRAM.local(),
             propose_wait_time: REQUEST_WAIT_TIME_HISTOGRAM.local(),
+            process_wait_time: RAFT_MESSAGE_WAIT_TIME_HISTOGRAM.local(),
             process_ready: PEER_RAFT_PROCESS_DURATION
                 .with_label_values(&["ready"])
                 .local(),
@@ -190,6 +194,7 @@ impl RaftMetrics {
 
         self.store_time.flush();
         self.propose_wait_time.flush();
+        self.process_wait_time.flush();
         self.process_ready.flush();
         self.event_time.flush();
         self.peer_msg_len.flush();
