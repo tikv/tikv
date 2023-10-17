@@ -43,6 +43,7 @@ macro_rules! send_rpc_response {
                     .with_label_values(&[$label, "error"])
                     .observe($timer.saturating_elapsed_secs());
                 error_inc($label, &e);
+                warn!("lance test"; "err" => ?e);
                 $sink.fail(make_rpc_error(e))
             }
         };
