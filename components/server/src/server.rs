@@ -69,7 +69,7 @@ use raftstore::{
     },
     RaftRouterCompactedEventSender,
 };
-use resolved_ts::LeadershipResolver;
+use resolved_ts::{LeadershipResolver, Task};
 use resource_control::{
     ResourceGroupManager, ResourceManagerService, MIN_PRIORITY_UPDATE_INTERVAL,
 };
@@ -252,6 +252,7 @@ struct TikvServer<ER: RaftEngine> {
     causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
     tablet_registry: Option<TabletRegistry<RocksEngine>>,
     br_snap_recovery_mode: bool, // use for br snapshot recovery
+    resolved_ts_scheduler: Option<Scheduler<Task>>,
     grpc_service_mgr: GrpcServiceManager,
 }
 
@@ -435,6 +436,7 @@ where
             causal_ts_provider,
             tablet_registry: None,
             br_snap_recovery_mode: is_recovering_marked,
+            resolved_ts_scheduler: None,
             grpc_service_mgr: GrpcServiceManager::new(tx),
         }
     }
@@ -1018,6 +1020,7 @@ where
                 server.env(),
                 self.security_mgr.clone(),
             );
+            self.resolved_ts_scheduler = Some(rts_worker.scheduler());
             rts_worker.start_with_timer(rts_endpoint);
             self.core.to_stop.push(rts_worker);
         }
@@ -1079,10 +1082,27 @@ where
         debugger.set_raft_statistics(self.raft_statistics.clone());
 
         // Debug service.
+        let resolved_ts_scheduler = Arc::new(self.resolved_ts_scheduler.clone());
         let debug_service = DebugService::new(
             debugger,
             servers.server.get_debug_thread_pool().clone(),
             engines.engine.raft_extension(),
+            self.engines.as_ref().unwrap().store_meta.clone(),
+            Arc::new(
+                move |region_id, log_locks, min_start_ts, callback| -> bool {
+                    if let Some(s) = resolved_ts_scheduler.as_ref() {
+                        let res = s.schedule(Task::GetDiagnosisInfo {
+                            region_id,
+                            log_locks,
+                            min_start_ts,
+                            callback,
+                        });
+                        res.is_ok()
+                    } else {
+                        false
+                    }
+                },
+            ),
         );
         if servers
             .server
