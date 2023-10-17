@@ -39,11 +39,7 @@ use tikv_util::{
     time::Instant,
     HandyRwLock,
 };
-<<<<<<< HEAD
-use txn_types::{Key, PessimisticLock};
-=======
-use txn_types::{Key, LastChange, PessimisticLock, TimeStamp};
->>>>>>> 9b1a816f12 (raftstore: trigger compaction when no valid split key can be found (#15284))
+use txn_types::{Key, PessimisticLock, TimeStamp};
 
 #[test]
 fn test_follower_slow_split() {

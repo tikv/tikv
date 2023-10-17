@@ -600,11 +600,7 @@ impl ServerCluster {
             concurrency_manager.clone(),
             collector_reg_handle,
             causal_ts_provider,
-<<<<<<< HEAD
-=======
-            GrpcServiceManager::dummy(),
             Arc::new(AtomicU64::new(0)),
->>>>>>> 9b1a816f12 (raftstore: trigger compaction when no valid split key can be found (#15284))
         )?;
         assert!(node_id == 0 || node_id == node.id());
         let node_id = node.id();

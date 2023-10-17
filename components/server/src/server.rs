@@ -955,11 +955,7 @@ where
             self.concurrency_manager.clone(),
             collector_reg_handle,
             self.causal_ts_provider.clone(),
-<<<<<<< HEAD
-=======
-            self.grpc_service_mgr.clone(),
             safe_point.clone(),
->>>>>>> 9b1a816f12 (raftstore: trigger compaction when no valid split key can be found (#15284))
         )
         .unwrap_or_else(|e| fatal!("failed to start node: {}", e));
 
