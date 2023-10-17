@@ -128,11 +128,8 @@ use crate::{
 };
 
 #[inline]
-fn run_impl<CER: ConfiguredRaftEngine, F: KvFormat>(
-    config: TikvConfig,
-    service_event_tx: TikvMpsc::Sender<ServiceEvent>,
-    service_event_rx: TikvMpsc::Receiver<ServiceEvent>,
-) {
+fn run_impl<CER: ConfiguredRaftEngine, F: KvFormat>(config: TikvConfig) {
+    let (service_event_tx, service_event_rx) = tikv_util::mpsc::unbounded();
     let mut tikv = TikvServer::<CER>::init::<F>(config, service_event_tx.clone());
 
     // Must be called after `TikvServer::init`.
@@ -189,11 +186,7 @@ fn run_impl<CER: ConfiguredRaftEngine, F: KvFormat>(
 
 /// Run a TiKV server. Returns when the server is shutdown by the user, in which
 /// case the server will be properly stopped.
-pub fn run_tikv(
-    config: TikvConfig,
-    service_event_tx: TikvMpsc::Sender<ServiceEvent>,
-    service_event_rx: TikvMpsc::Receiver<ServiceEvent>,
-) {
+pub fn run_tikv(config: TikvConfig) {
     // Sets the global logger ASAP.
     // It is okay to use the config w/o `validate()`,
     // because `initial_logger()` handles various conditions.
@@ -214,9 +207,9 @@ pub fn run_tikv(
 
     dispatch_api_version!(config.storage.api_version(), {
         if !config.raft_engine.enable {
-            run_impl::<RocksEngine, API>(config, service_event_tx, service_event_rx)
+            run_impl::<RocksEngine, API>(config)
         } else {
-            run_impl::<RaftLogEngine, API>(config, service_event_tx, service_event_rx)
+            run_impl::<RaftLogEngine, API>(config)
         }
     })
 }
