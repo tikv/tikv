@@ -230,20 +230,11 @@ where
     T: SizePolicy<K, V>,
 {
     pub fn with_capacity_sample_and_trace(
-        mut capacity: usize,
+        capacity: usize,
         sample_mask: usize,
         size_policy: T,
     ) -> LruCache<K, V, T> {
-        if capacity == 0 {
-            capacity = 1;
-        }
-        LruCache {
-            map: HashMap::default(),
-            trace: Trace::new(sample_mask),
-            capacity,
-            size_policy,
-            evict_policy: EvictOnFull,
-        }
+        Self::new(capacity, sample_mask, size_policy, EvictOnFull)
     }
 }
 
@@ -253,6 +244,7 @@ where
     E: EvictPolicy<K, V>,
 {
     pub fn new(mut capacity: usize, sample_mask: usize, size_policy: T, evict_policy: E) -> Self {
+        // The capacity is at least 1.
         if capacity == 0 {
             capacity = 1;
         }
