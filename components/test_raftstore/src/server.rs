@@ -2,7 +2,7 @@
 
 use std::{
     path::Path,
-    sync::{Arc, Mutex, RwLock},
+    sync::{atomic::AtomicU64, Arc, Mutex, RwLock},
     thread,
     time::Duration,
     usize,
@@ -606,6 +606,7 @@ impl ServerCluster {
             concurrency_manager.clone(),
             collector_reg_handle,
             causal_ts_provider,
+            Arc::new(AtomicU64::new(0)),
         )?;
         assert!(node_id == 0 || node_id == node.id());
         let node_id = node.id();

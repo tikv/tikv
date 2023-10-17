@@ -102,6 +102,7 @@ where
         start_key: Option<&[u8]>,
         end_key: Option<&[u8]>,
     ) -> Result<(), Error> {
+        fail_point!("on_compact_range_cf");
         let timer = Instant::now();
         let compact_range_timer = COMPACT_RANGE_CF
             .with_label_values(&[cf_name])
