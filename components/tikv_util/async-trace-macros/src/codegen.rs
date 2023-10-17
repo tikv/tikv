@@ -1,3 +1,4 @@
+use proc_macro::Diagnostic;
 use proc_macro2::TokenStream;
 use quote::{quote, quote_spanned, ToTokens};
 use syn::{
@@ -7,6 +8,8 @@ use syn::{
 };
 
 use crate::MaybeItemFnRef;
+
+const IN_FRAME: &str = "in_frame";
 
 /// Given an existing function, generate an instrumented version of that
 /// function
@@ -75,10 +78,12 @@ pub(crate) fn gen_function<'a, B: ToTokens + 'a>(
         instrumented_function_name,
         self_type,
     );
+    let mut truncated_params = params.clone();
+    erase_in_frame(&mut truncated_params);
 
     quote!(
         #(#attrs) *
-        #vis #constness #unsafety #asyncness #abi fn #ident<#gen_params>(#params) #output
+        #vis #constness #unsafety #asyncness #abi fn #ident<#gen_params>(#truncated_params) #output
         #where_clause
         {
             #body
@@ -90,21 +95,70 @@ pub(crate) fn gen_function<'a, B: ToTokens + 'a>(
 /// Instrument a block
 fn gen_block<B: ToTokens>(
     block: &B,
-    _params: &Punctuated<FnArg, Token![,]>,
+    params: &Punctuated<FnArg, Token![,]>,
     async_context: bool,
     instrumented_function_name: &str,
     _self_type: Option<&TypePath>,
 ) -> proc_macro2::TokenStream {
     let name = LitStr::new(instrumented_function_name, block.span());
+    let to_trace = traced_args(params.iter());
     // Generate the instrumented function body.
     // If the function is an `async fn`, this will wrap it in an async block,
-    // which is `instrument`ed using `tracing-futures`. Otherwise, this will
+    // which register its args needed to be traced to the span name.
     // enter the span and then perform the rest of the body.
     if async_context {
-        quote!(tikv_util::frame!(#name; async move { #block }).await)
+        if to_trace.is_empty() {
+            quote!(tikv_util::frame!(#name; async move { #block }).await)
+        } else {
+            let formatter = gen_traced_frame_formatter(instrumented_function_name, &to_trace);
+            quote!(tikv_util::frame!(dyn #formatter; async move { #block }).await)
+        }
     } else {
         quote_spanned!(block.span() => #block)
     }
+}
+
+fn traced_args<'a>(params: impl Iterator<Item = &'a FnArg>) -> Vec<&'a FnArg> {
+    let mut to_trace = vec![];
+    for p in params {
+        let attrs = match p {
+            FnArg::Receiver(rec) => &rec.attrs,
+            FnArg::Typed(ty) => &ty.attrs,
+        };
+        let should_trace = attrs.iter().any(|attr| attr.meta.path().is_ident(IN_FRAME));
+        if should_trace {
+            to_trace.push(p);
+        }
+    }
+    to_trace
+}
+
+fn gen_traced_frame_formatter(func_name: &str, to_trace: &[&FnArg]) -> proc_macro2::TokenStream {
+    let mut format_str_segments = vec![];
+    let mut format_args = Punctuated::<Box<dyn ToTokens>, Token![,]>::new();
+    for arg in to_trace.iter() {
+        match arg {
+            FnArg::Typed(arg) => {
+                if let Pat::Ident(id) = &*arg.pat {
+                    format_str_segments.push(format!("{}={{}}", id.ident));
+                    format_args.push(Box::new(id.ident.clone()));
+                } else {
+                    Diagnostic::spanned(
+                        arg.span().unwrap(),
+                        proc_macro::Level::Warning,
+                        "#[in_frame] cannot trace pattern matching argument yet.",
+                    )
+                    .emit();
+                }
+            }
+            FnArg::Receiver(rec) => {
+                format_str_segments.push("self={}".to_owned());
+                format_args.push(Box::new(rec.self_token));
+            }
+        }
+    }
+    let format_str = format!("{func_name}({})", format_str_segments.join(", "));
+    quote!(format!(#format_str, #format_args))
 }
 
 /// The specific async code pattern that was detected
@@ -335,7 +389,8 @@ impl<'block> AsyncInfo<'block> {
         }
 
         let vis = &self.input.vis;
-        let sig = &self.input.sig;
+        let mut sig = self.input.sig.clone();
+        erase_in_frame(&mut sig.inputs);
         let attrs = &self.input.attrs;
         quote!(
             #(#attrs) *
@@ -429,4 +484,14 @@ fn erase_impl_trait(ty: &Type) -> Type {
     let mut ty = ty.clone();
     ImplTraitEraser.visit_type_mut(&mut ty);
     ty
+}
+
+fn erase_in_frame<S>(args: &mut Punctuated<FnArg, S>) {
+    for arg in args {
+        let attrs = match arg {
+            FnArg::Receiver(rec) => &mut rec.attrs,
+            FnArg::Typed(ty) => &mut ty.attrs,
+        };
+        attrs.retain(|attr| !attr.meta.path().is_ident(IN_FRAME))
+    }
 }
