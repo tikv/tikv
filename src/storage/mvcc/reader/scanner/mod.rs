@@ -339,6 +339,31 @@ impl<S: Snapshot> ScannerConfig<S> {
     }
 }
 
+/// `near_seek_data_by_write` is like `near_load_data_by_write`, but only
+/// seeks to the target position instead of loading data.
+pub fn near_seek_data_by_write<I>(
+    default_cursor: &mut Cursor<I>, // TODO: make it `ForwardCursor`.
+    user_key: &Key,
+    write_start_ts: TimeStamp,
+    statistics: &mut Statistics,
+) -> Result<()>
+where
+    I: Iterator,
+{
+    let seek_key = user_key.clone().append_ts(write_start_ts);
+    default_cursor.near_seek(&seek_key, &mut statistics.data)?;
+    if !default_cursor.valid()?
+        || default_cursor.key(&mut statistics.data) != seek_key.as_encoded().as_slice()
+    {
+        return Err(default_not_found_error(
+            user_key.clone().append_ts(write_start_ts).into_encoded(),
+            "near_load_data_by_write",
+        ));
+    }
+    statistics.data.processed_keys += 1;
+    Ok(())
+}
+
 /// Reads user key's value in default CF according to the given write CF value
 /// (`write`).
 ///
@@ -362,17 +387,7 @@ pub fn near_load_data_by_write<I>(
 where
     I: Iterator,
 {
-    let seek_key = user_key.clone().append_ts(write_start_ts);
-    default_cursor.near_seek(&seek_key, &mut statistics.data)?;
-    if !default_cursor.valid()?
-        || default_cursor.key(&mut statistics.data) != seek_key.as_encoded().as_slice()
-    {
-        return Err(default_not_found_error(
-            user_key.clone().append_ts(write_start_ts).into_encoded(),
-            "near_load_data_by_write",
-        ));
-    }
-    statistics.data.processed_keys += 1;
+    near_seek_data_by_write(default_cursor, user_key, write_start_ts, statistics)?;
     Ok(default_cursor.value(&mut statistics.data).to_vec())
 }
 

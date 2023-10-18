@@ -576,13 +576,18 @@ impl<S: Snapshot> ScanPolicy<S> for LatestEntryPolicy {
                         let start_ts = write.start_ts;
                         cursors.ensure_default_cursor(cfg)?;
                         let default_cursor = cursors.default.as_mut().unwrap();
-                        let default_value = super::near_load_data_by_write(
+                        super::near_seek_data_by_write(
                             default_cursor,
                             &current_user_key,
                             start_ts,
-                            statistics,
+                            statistics
                         )?;
                         let default_key = default_cursor.key(&mut statistics.data).to_vec();
+                        let default_value = if cfg.omit_value {
+                            Vec::new()
+                        } else {
+                            default_cursor.value(&mut statistics.data).to_vec()
+                        };
                         (default_key, default_value)
                     } else {
                         (Vec::new(), Vec::new())
@@ -1718,6 +1723,65 @@ mod latest_entry_tests {
         },
         Engine, Modify, TestEngineBuilder,
     };
+
+    #[test]
+    fn test_entry_scanner_behaviors() {
+        let mut engine = TestEngineBuilder::new().build().unwrap();
+
+        // a-{3,4} will be retrieved, with an inlined value.
+        must_prewrite_put(&mut engine, b"a", b"value", b"a", 1);
+        must_commit(&mut engine, b"a", 1, 2);
+        must_prewrite_put(&mut engine, b"a", b"value", b"a", 3);
+        must_commit(&mut engine, b"a", 3, 4);
+
+        // b-{3,4} will be retrieved, with an omit value.
+        must_prewrite_put(&mut engine, b"b", b"value", b"a", 1);
+        must_commit(&mut engine, b"b", 1, 2);
+        must_prewrite_put(&mut engine, b"b", &[b'x'; 1024], b"a", 3);
+        must_commit(&mut engine, b"b", 3, 4);
+
+        // c-{3,_} will be retrieved, with an inlined value.
+        must_prewrite_put(&mut engine, b"c", b"value", b"a", 1);
+        must_commit(&mut engine, b"c", 1, 2);
+        //must_prewrite_put(&mut engine, b"c", b"value", b"a", 3);
+
+        let snapshot = engine.snapshot(Default::default()).unwrap();
+        let mut scanner = ScannerBuilder::new(snapshot, TimeStamp::max())
+            .range(None, None)
+            .omit_value(true)
+            .build_entry_scanner(0.into(), true)
+            .unwrap();
+
+        let got = scanner.next_entry().unwrap().unwrap();
+        let mut builder: EntryBuilder = EntryBuilder::default();
+        let expected = builder
+            .key(b"a")
+            .value(b"value")
+            .start_ts(3.into())
+            .commit_ts(4.into())
+            .build_commit(WriteType::Put, true);
+        assert_eq!(got, expected);
+
+        let got = scanner.next_entry().unwrap().unwrap();
+        let mut builder: EntryBuilder = EntryBuilder::default();
+        let expected = builder
+            .key(b"b")
+            .start_ts(3.into())
+            .commit_ts(4.into())
+            .build_commit(WriteType::Put, false);
+        assert_eq!(got, expected);
+
+        let got = scanner.next_entry().unwrap().unwrap();
+        println!("got: {:?}", got);
+        let mut builder: EntryBuilder = EntryBuilder::default();
+        let expected = builder
+            .key(b"c")
+            .value(b"value")
+            .start_ts(3.into())
+            .primary(b"a")
+            .build_prewrite(LockType::Put, true);
+        assert_eq!(got, expected);
+    }
 
     /// Check whether everything works as usual when `EntryScanner::get()` goes
     /// out of bound.
