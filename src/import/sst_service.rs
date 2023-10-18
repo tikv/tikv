@@ -15,7 +15,6 @@ use std::{
 use engine_traits::{CompactExt, MiscExt, CF_DEFAULT, CF_WRITE};
 use file_system::{set_io_type, IoType};
 use futures::{sink::SinkExt, stream::TryStreamExt, FutureExt, TryFutureExt};
-use futures_executor::block_on;
 use grpcio::{
     ClientStreamingSink, RequestStream, RpcContext, ServerStreamingSink, UnarySink, WriteFlags,
 };
@@ -30,7 +29,11 @@ use kvproto::{
     kvrpcpb::Context,
     metapb::RegionEpoch,
 };
-use raftstore::{coprocessor::RegionInfoProvider, store::util::is_epoch_stale, RegionInfoAccessor};
+use raftstore::{
+    coprocessor::{RegionInfo, RegionInfoProvider},
+    store::util::is_epoch_stale,
+    RegionInfoAccessor,
+};
 use raftstore_v2::StoreMeta;
 use resource_control::{with_resource_limiter, ResourceGroupManager};
 use sst_importer::{
@@ -684,15 +687,9 @@ impl<E: Engine> ImportSstService<E> {
 fn check_local_region_stale(
     region_id: u64,
     epoch: &RegionEpoch,
-    region_info_accessor: Arc<dyn RegionInfoProvider>,
+    local_region_info: Option<RegionInfo>,
 ) -> Result<()> {
-    let (cb, f) = paired_future_callback();
-    region_info_accessor
-        .find_region_by_id(region_id, cb)
-        .map_err(|e| {
-            Error::Engine(format!("failed to find region {} err {:?}", region_id, e).into())
-        })?;
-    match block_on(f)? {
+    match local_region_info {
         Some(local_region_info) => {
             let local_region_epoch = local_region_info.region.region_epoch.unwrap();
 
@@ -777,11 +774,17 @@ macro_rules! impl_write {
                     // in request, which comes from PD and represents the majority
                     // peers' status.
                     let region_id = meta.get_region_id();
-                    check_local_region_stale(
-                        region_id,
-                        meta.get_region_epoch(),
-                        region_info_accessor,
-                    )?;
+                    let (cb, f) = paired_future_callback();
+                    region_info_accessor
+                        .find_region_by_id(region_id, cb)
+                        .map_err(|e| {
+                            Error::Engine(
+                                format!("failed to find region {} err {:?}", region_id, e).into(),
+                            )
+                        })?;
+                    let res = f.await?;
+                    check_local_region_stale(region_id, meta.get_region_epoch(), res)?;
+
                     let tablet = match tablets.get(region_id) {
                         Some(t) => t,
                         None => {
