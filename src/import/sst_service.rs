@@ -1768,20 +1768,6 @@ mod test {
 
     #[test]
     fn test_write_rpc_check_region_epoch() {
-        struct MockRegionInfoProvider {
-            map: Mutex<HashMap<u64, RegionInfo>>,
-        }
-        impl RegionInfoProvider for MockRegionInfoProvider {
-            fn find_region_by_id(
-                &self,
-                region_id: u64,
-                callback: Callback<Option<RegionInfo>>,
-            ) -> Result<(), raftstore::coprocessor::Error> {
-                callback(self.map.lock().unwrap().get(&region_id).cloned());
-                Ok(())
-            }
-        }
-
         let mut req_epoch = RegionEpoch {
             conf_ver: 10,
             version: 10,
