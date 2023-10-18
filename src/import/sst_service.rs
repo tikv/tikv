@@ -1458,10 +1458,7 @@ fn write_needs_restore(write: &[u8]) -> bool {
 
 #[cfg(test)]
 mod test {
-    use std::{
-        collections::HashMap,
-        sync::{Arc, Mutex},
-    };
+    use std::collections::HashMap;
 
     use engine_traits::{CF_DEFAULT, CF_WRITE};
     use kvproto::{
@@ -1471,10 +1468,7 @@ mod test {
     };
     use protobuf::{Message, SingularPtrField};
     use raft::StateRole::Follower;
-    use raftstore::{
-        coprocessor::{region_info_accessor::Callback, RegionInfoProvider},
-        RegionInfo,
-    };
+    use raftstore::RegionInfo;
     use tikv_kv::{Modify, WriteData};
     use txn_types::{Key, TimeStamp, Write, WriteBatchFlags, WriteType};
 
