@@ -27,7 +27,7 @@ use raftstore::{
         cmd_resp,
         fsm::{apply, apply::validate_batch_split},
         msg::ErrorCallback,
-        Transport,
+        ProposalContext, Transport,
     },
     Error,
 };
@@ -264,6 +264,10 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 AdminCmdType::UpdateGcPeer => {
                     let data = req.write_to_bytes().unwrap();
                     self.propose(ctx, data)
+                }
+                AdminCmdType::RollbackMerge => {
+                    let data = req.write_to_bytes().unwrap();
+                    self.propose_with_ctx(ctx, data, ProposalContext::ROLLBACK_MERGE)
                 }
                 AdminCmdType::PrepareMerge => self.propose_prepare_merge(ctx, req),
                 AdminCmdType::CommitMerge => self.propose_commit_merge(ctx, req),
