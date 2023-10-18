@@ -692,7 +692,11 @@ fn check_local_region_stale(
         .map_err(|e| {
             Error::Engine(format!("failed to find region {} err {:?}", region_id, e).into())
         })?;
-    match block_on(f)? {
+    let result = tokio::runtime::Builder::new_current_thread()
+        .build()
+        .unwrap()
+        .block_on(f)?;
+    match result {
         Some(local_region_info) => {
             let local_region_epoch = local_region_info.region.region_epoch.unwrap();
 
