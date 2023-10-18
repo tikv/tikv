@@ -3,6 +3,7 @@
 use std::fmt::{self, Display, Formatter};
 
 use engine_traits::{KvEngine, RaftEngine};
+use pd_client::PdClient;
 use tikv_util::worker::Runnable;
 
 use super::{
@@ -10,6 +11,7 @@ use super::{
     cleanup_sst::{Runner as CleanupSstRunner, Task as CleanupSstTask},
     compact::{Runner as CompactRunner, Task as CompactTask},
 };
+use crate::store::StoreRouter;
 
 pub enum Task {
     Compact(CompactTask),
@@ -27,26 +29,29 @@ impl Display for Task {
     }
 }
 
-pub struct Runner<E, R>
+pub struct Runner<E, R, C, S>
 where
     E: KvEngine,
     R: RaftEngine,
+    S: StoreRouter<E>,
 {
     compact: CompactRunner<E>,
-    cleanup_sst: CleanupSstRunner,
+    cleanup_sst: CleanupSstRunner<E, C, S>,
     gc_snapshot: GcSnapshotRunner<E, R>,
 }
 
-impl<E, R> Runner<E, R>
+impl<E, R, C, S> Runner<E, R, C, S>
 where
     E: KvEngine,
     R: RaftEngine,
+    C: PdClient,
+    S: StoreRouter<E>,
 {
     pub fn new(
         compact: CompactRunner<E>,
-        cleanup_sst: CleanupSstRunner,
+        cleanup_sst: CleanupSstRunner<E, C, S>,
         gc_snapshot: GcSnapshotRunner<E, R>,
-    ) -> Runner<E, R> {
+    ) -> Runner<E, R, C, S> {
         Runner {
             compact,
             cleanup_sst,
@@ -55,10 +60,12 @@ where
     }
 }
 
-impl<E, R> Runnable for Runner<E, R>
+impl<E, R, C, S> Runnable for Runner<E, R, C, S>
 where
     E: KvEngine,
     R: RaftEngine,
+    C: PdClient,
+    S: StoreRouter<E>,
 {
     type Task = Task;
 
