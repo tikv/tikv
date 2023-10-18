@@ -36,14 +36,13 @@ use futures::{compat::Future01CompatExt, FutureExt};
 use grpcio_health::HealthService;
 use keys::{self, data_end_key, data_key, enc_end_key, enc_start_key};
 use kvproto::{
-    import_sstpb::{SstMeta, SwitchMode},
     metapb::{self, Region, RegionEpoch},
     pdpb::{self, QueryStats, StoreStats},
     raft_cmdpb::{AdminCmdType, AdminRequest},
     raft_serverpb::{ExtraMessage, ExtraMessageType, PeerState, RaftMessage, RegionLocalState},
     replication_modepb::{ReplicationMode, ReplicationStatus},
 };
-use pd_client::{metrics::STORE_SIZE_EVENT_INT_VEC, Feature, FeatureGate, PdClient};
+use pd_client::{Feature, FeatureGate, PdClient};
 use protobuf::Message;
 use raft::StateRole;
 use resource_control::{channel::unbounded, ResourceGroupManager};
@@ -383,7 +382,10 @@ where
         for e in msg.get_message().get_entries() {
             heap_size += bytes_capacity(&e.data) + bytes_capacity(&e.context);
         }
-        let peer_msg = PeerMsg::RaftMessage(InspectedRaftMessage { heap_size, msg });
+        let peer_msg = PeerMsg::RaftMessage(
+            InspectedRaftMessage { heap_size, msg },
+            Some(TiInstant::now()),
+        );
         let event = TraceEvent::Add(heap_size);
         let send_failed = Cell::new(true);
 
@@ -398,13 +400,13 @@ where
                 send_failed.set(false);
                 return Ok(());
             }
-            Either::Left(Err(TrySendError::Full(PeerMsg::RaftMessage(im)))) => {
+            Either::Left(Err(TrySendError::Full(PeerMsg::RaftMessage(im, _)))) => {
                 return Err(TrySendError::Full(im.msg));
             }
-            Either::Left(Err(TrySendError::Disconnected(PeerMsg::RaftMessage(im)))) => {
+            Either::Left(Err(TrySendError::Disconnected(PeerMsg::RaftMessage(im, _)))) => {
                 return Err(TrySendError::Disconnected(im.msg));
             }
-            Either::Right(PeerMsg::RaftMessage(im)) => StoreMsg::RaftMessage(im),
+            Either::Right(PeerMsg::RaftMessage(im, _)) => StoreMsg::RaftMessage(im),
             _ => unreachable!(),
         };
         match self.send_control(store_msg) {
@@ -810,9 +812,6 @@ impl<'a, EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
                     }
                 }
                 StoreMsg::CompactedEvent(event) => self.on_compaction_finished(event),
-                StoreMsg::ValidateSstResult { invalid_ssts } => {
-                    self.on_validate_sst_result(invalid_ssts)
-                }
                 StoreMsg::ClearRegionSizeInRange { start_key, end_key } => {
                     self.clear_region_size_in_range(&start_key, &end_key)
                 }
@@ -1652,12 +1651,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         );
 
         let compact_runner = CompactRunner::new(engines.kv.clone());
-        let cleanup_sst_runner = CleanupSstRunner::new(
-            meta.get_id(),
-            self.router.clone(),
-            Arc::clone(&importer),
-            Arc::clone(&pd_client),
-        );
+        let cleanup_sst_runner = CleanupSstRunner::new(Arc::clone(&importer));
         let gc_snapshot_runner = GcSnapshotRunner::new(
             meta.get_id(),
             self.router.clone(), // RaftRouter
@@ -2076,14 +2070,18 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         });
 
         let region_id = msg.msg.get_region_id();
-        let msg = match self.ctx.router.send(region_id, PeerMsg::RaftMessage(msg)) {
+        let msg = match self
+            .ctx
+            .router
+            .send(region_id, PeerMsg::RaftMessage(msg, None))
+        {
             Ok(()) => {
                 forwarded.set(true);
                 return Ok(());
             }
             Err(TrySendError::Full(_)) => return Ok(()),
             Err(TrySendError::Disconnected(_)) if self.ctx.router.is_shutdown() => return Ok(()),
-            Err(TrySendError::Disconnected(PeerMsg::RaftMessage(im))) => im.msg,
+            Err(TrySendError::Disconnected(PeerMsg::RaftMessage(im, None))) => im.msg,
             Err(_) => unreachable!(),
         };
 
@@ -2155,7 +2153,8 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
                     check_msg_status == CheckMsgStatus::NewPeerFirst,
                 )? {
                     // Peer created, send the message again.
-                    let peer_msg = PeerMsg::RaftMessage(InspectedRaftMessage { heap_size, msg });
+                    let peer_msg =
+                        PeerMsg::RaftMessage(InspectedRaftMessage { heap_size, msg }, None);
                     if self.ctx.router.send(region_id, peer_msg).is_ok() {
                         forwarded.set(true);
                     }
@@ -2178,7 +2177,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
                 store_meta.pending_msgs.push(msg);
             } else {
                 drop(store_meta);
-                let peer_msg = PeerMsg::RaftMessage(InspectedRaftMessage { heap_size, msg });
+                let peer_msg = PeerMsg::RaftMessage(InspectedRaftMessage { heap_size, msg }, None);
                 if let Err(e) = self.ctx.router.force_send(region_id, peer_msg) {
                     warn!("handle first request failed"; "region_id" => region_id, "error" => ?e);
                 } else {
@@ -2755,44 +2754,8 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
 }
 
 impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER, T> {
-    fn on_validate_sst_result(&mut self, ssts: Vec<SstMeta>) {
-        if ssts.is_empty() || self.ctx.importer.get_mode() == SwitchMode::Import {
-            return;
-        }
-        // A stale peer can still ingest a stale Sst before it is
-        // destroyed. We need to make sure that no stale peer exists.
-        let mut delete_ssts = Vec::new();
-        {
-            let meta = self.ctx.store_meta.lock().unwrap();
-            for sst in ssts {
-                if !meta.regions.contains_key(&sst.get_region_id()) {
-                    delete_ssts.push(sst);
-                }
-            }
-        }
-        if delete_ssts.is_empty() {
-            return;
-        }
-
-        let task = CleanupSstTask::DeleteSst { ssts: delete_ssts };
-        if let Err(e) = self
-            .ctx
-            .cleanup_scheduler
-            .schedule(CleanupTask::CleanupSst(task))
-        {
-            error!(
-                "schedule to delete ssts failed";
-                "store_id" => self.fsm.store.id,
-                "err" => ?e,
-            );
-        }
-    }
-
     fn on_cleanup_import_sst(&mut self) -> Result<()> {
         let mut delete_ssts = Vec::new();
-        let mut validate_ssts = Vec::new();
-        let import_size = box_try!(self.ctx.importer.get_total_size());
-        STORE_SIZE_EVENT_INT_VEC.import_size.set(import_size as i64);
 
         let ssts = box_try!(self.ctx.importer.list_ssts());
         if ssts.is_empty() {
@@ -2801,15 +2764,22 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         {
             let meta = self.ctx.store_meta.lock().unwrap();
             for sst in ssts {
-                if let Some(r) = meta.regions.get(&sst.get_region_id()) {
+                if sst.api_version < sst_importer::API_VERSION_2 {
+                    // SST of old versions are created by old TiKV and have different prerequisite
+                    // we can't delete them here. They can only be deleted manually
+                    continue;
+                }
+                if let Some(r) = meta.regions.get(&sst.meta.get_region_id()) {
                     let region_epoch = r.get_region_epoch();
-                    if util::is_epoch_stale(sst.get_region_epoch(), region_epoch) {
+                    if util::is_epoch_stale(sst.meta.get_region_epoch(), region_epoch) {
                         // If the SST epoch is stale, it will not be ingested anymore.
-                        delete_ssts.push(sst);
+                        delete_ssts.push(sst.meta);
                     }
                 } else {
-                    // If the peer doesn't exist, we need to validate the SST through PD.
-                    validate_ssts.push(sst);
+                    // The write RPC of import sst service have make sure the region do exist at the
+                    // write time, and now the region is not found, sst can be
+                    // deleted because it won't be used by ingest in future.
+                    delete_ssts.push(sst.meta);
                 }
             }
         }
@@ -2825,27 +2795,6 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
                     "schedule to delete ssts failed";
                     "store_id" => self.fsm.store.id,
                     "err" => ?e
-                );
-            }
-        }
-
-        // When there is an import job running, the region which this sst belongs may
-        // has not been split from the origin region because the apply thread is so busy
-        // that it can not apply SplitRequest as soon as possible. So we can not
-        // delete this sst file.
-        if !validate_ssts.is_empty() && self.ctx.importer.get_mode() != SwitchMode::Import {
-            let task = CleanupSstTask::ValidateSst {
-                ssts: validate_ssts,
-            };
-            if let Err(e) = self
-                .ctx
-                .cleanup_scheduler
-                .schedule(CleanupTask::CleanupSst(task))
-            {
-                error!(
-                   "schedule to validate ssts failed";
-                   "store_id" => self.fsm.store.id,
-                   "err" => ?e,
                 );
             }
         }
