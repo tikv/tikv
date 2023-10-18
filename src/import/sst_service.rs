@@ -1782,17 +1782,13 @@ mod test {
             }
         }
 
-        let mock_provider = Arc::new(MockRegionInfoProvider {
-            map: Mutex::new(HashMap::new()),
-        });
-
         let mut req_epoch = RegionEpoch {
             conf_ver: 10,
             version: 10,
             ..Default::default()
         };
         // test for region not found
-        let result = check_local_region_stale(1, &req_epoch, mock_provider.clone());
+        let result = check_local_region_stale(1, &req_epoch, None);
         assert!(result.is_err());
         // check error message contains "rescan region later", client will match this
         // string pattern
@@ -1812,13 +1808,8 @@ mod test {
             role: Follower,
             buckets: 1,
         };
-        mock_provider
-            .map
-            .lock()
-            .unwrap()
-            .insert(1, local_region_info.clone());
         // test the local region epoch is same as request
-        let result = check_local_region_stale(1, &req_epoch, mock_provider.clone());
+        let result = check_local_region_stale(1, &req_epoch, Some(local_region_info.clone()));
         result.unwrap();
 
         // test the local region epoch is ahead of request
@@ -1828,12 +1819,7 @@ mod test {
             .as_mut()
             .unwrap()
             .conf_ver = 11;
-        mock_provider
-            .map
-            .lock()
-            .unwrap()
-            .insert(1, local_region_info.clone());
-        let result = check_local_region_stale(1, &req_epoch, mock_provider.clone());
+        let result = check_local_region_stale(1, &req_epoch, Some(local_region_info.clone()));
         assert!(result.is_err());
         // check error message contains "rescan region later", client will match this
         // string pattern
@@ -1845,12 +1831,12 @@ mod test {
         );
 
         req_epoch.conf_ver = 11;
-        let result = check_local_region_stale(1, &req_epoch, mock_provider.clone());
+        let result = check_local_region_stale(1, &req_epoch, Some(local_region_info.clone()));
         result.unwrap();
 
         // test the local region epoch is staler than request
         req_epoch.version = 12;
-        let result = check_local_region_stale(1, &req_epoch, mock_provider);
+        let result = check_local_region_stale(1, &req_epoch, Some(local_region_info));
         assert!(result.is_err());
         // check error message contains "retry write later", client will match this
         // string pattern
