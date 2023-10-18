@@ -14,7 +14,8 @@ use std::{
 
 use engine_traits::{CompactExt, MiscExt, CF_DEFAULT, CF_WRITE};
 use file_system::{set_io_type, IoType};
-use futures::{sink::SinkExt, stream::TryStreamExt, FutureExt, TryFutureExt};
+use futures::{future, sink::SinkExt, stream::TryStreamExt, FutureExt, TryFutureExt};
+use futures_util::StreamExt;
 use grpcio::{
     ClientStreamingSink, RequestStream, RpcContext, ServerStreamingSink, UnarySink, WriteFlags,
 };
@@ -783,7 +784,13 @@ macro_rules! impl_write {
                             )
                         })?;
                     let res = f.await?;
-                    check_local_region_stale(region_id, meta.get_region_epoch(), res)?;
+                    if let Err(e) = check_local_region_stale(region_id, meta.get_region_epoch(), res) {
+                        let _ = rx.for_each(|i| {
+                            drop(i);
+                            future::ready(())
+                        });
+                        return Err(e);
+                    }
 
                     let tablet = match tablets.get(region_id) {
                         Some(t) => t,
