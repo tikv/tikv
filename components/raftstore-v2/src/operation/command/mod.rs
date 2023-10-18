@@ -39,8 +39,13 @@ use raftstore::{
         local_metrics::RaftMetrics,
         metrics::*,
         msg::ErrorCallback,
+<<<<<<< HEAD
         util::{self, admin_cmd_epoch_lookup},
         WriteCallback,
+=======
+        util::{self, check_flashback_state},
+        Config, ProposalContext, Transport, WriteCallback,
+>>>>>>> 7953ea518c (raftstore-v2: Allow rollback merge during unsafe recovery for raftstore v2 (#15780))
     },
     Error, Result,
 };
@@ -172,6 +177,44 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             }
             return Err(e);
         }
+<<<<<<< HEAD
+=======
+        if self.has_force_leader() {
+            metrics.invalid_proposal.force_leader.inc();
+            // in force leader state, forbid requests to make the recovery
+            // progress less error-prone.
+            if !(admin_type.is_some()
+                && (admin_type.unwrap() == AdminCmdType::ChangePeer
+                    || admin_type.unwrap() == AdminCmdType::ChangePeerV2
+                    || admin_type.unwrap() == AdminCmdType::RollbackMerge))
+            {
+                return Err(Error::RecoveryInProgress(self.region_id()));
+            }
+        }
+        // Check whether the region is in the flashback state and the request could be
+        // proposed. Skip the not prepared error because the
+        // `self.region().is_in_flashback` may not be the latest right after applying
+        // the `PrepareFlashback` admin command, we will let it pass here and check in
+        // the apply phase and because a read-only request doesn't need to be applied,
+        // so it will be allowed during the flashback progress, for example, a snapshot
+        // request.
+        if let Err(e) = util::check_flashback_state(
+            self.region().get_is_in_flashback(),
+            self.region().get_flashback_start_ts(),
+            header,
+            admin_type,
+            self.region_id(),
+            true,
+        ) {
+            match e {
+                Error::FlashbackInProgress(..) => {
+                    metrics.invalid_proposal.flashback_in_progress.inc()
+                }
+                _ => unreachable!("{:?}", e),
+            }
+            return Err(e);
+        }
+>>>>>>> 7953ea518c (raftstore-v2: Allow rollback merge during unsafe recovery for raftstore v2 (#15780))
         Ok(())
     }
 
@@ -191,7 +234,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         store_ctx: &mut StoreContext<EK, ER, T>,
         data: Vec<u8>,
     ) -> Result<u64> {
-        self.propose_with_ctx(store_ctx, data, vec![])
+        self.propose_with_ctx(store_ctx, data, ProposalContext::empty())
     }
 
     #[inline]
@@ -199,8 +242,24 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         &mut self,
         store_ctx: &mut StoreContext<EK, ER, T>,
         data: Vec<u8>,
-        proposal_ctx: Vec<u8>,
+        proposal_ctx: ProposalContext,
     ) -> Result<u64> {
+<<<<<<< HEAD
+=======
+        // Should not propose normal in force leader state.
+        // In `pre_propose_raft_command`, it rejects all the requests expect
+        // conf-change if in force leader state.
+        if self.has_force_leader() && proposal_ctx != ProposalContext::ROLLBACK_MERGE {
+            store_ctx.raft_metrics.invalid_proposal.force_leader.inc();
+            panic!(
+                "[{}] {} propose normal in force leader state {:?}",
+                self.region_id(),
+                self.peer_id(),
+                self.force_leader()
+            );
+        };
+
+>>>>>>> 7953ea518c (raftstore-v2: Allow rollback merge during unsafe recovery for raftstore v2 (#15780))
         store_ctx.raft_metrics.propose.normal.inc();
         store_ctx
             .raft_metrics
@@ -213,7 +272,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             });
         }
         let last_index = self.raft_group().raft.raft_log.last_index();
-        self.raft_group_mut().propose(proposal_ctx, data)?;
+        self.raft_group_mut().propose(proposal_ctx.to_vec(), data)?;
         if self.raft_group().raft.raft_log.last_index() == last_index {
             // The message is dropped silently, this usually due to leader absence
             // or transferring leader. Both cases can be considered as NotLeader error.
