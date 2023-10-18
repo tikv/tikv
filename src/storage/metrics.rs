@@ -612,7 +612,7 @@ lazy_static! {
     pub static ref SCHED_TXN_STATUS_CACHE_SIZE: TxnStatusCacheSizeGauge = register_static_int_gauge_vec!(
         TxnStatusCacheSizeGauge,
         "tikv_scheduler_txn_status_cache_size",
-        "Statistics of size and capacity of txn status cache",
+        "Statistics of size and capacity of txn status cache (represented in count of entries)",
         &["type"]
     )
     .unwrap();
