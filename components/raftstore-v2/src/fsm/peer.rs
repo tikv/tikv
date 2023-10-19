@@ -247,8 +247,10 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
     pub fn on_msgs(&mut self, peer_msgs_buf: &mut Vec<PeerMsg>) {
         for msg in peer_msgs_buf.drain(..) {
             match msg {
-                PeerMsg::RaftMessage(msg) => {
-                    self.fsm.peer.on_raft_message(self.store_ctx, msg);
+                PeerMsg::RaftMessage(msg, send_time) => {
+                    self.fsm
+                        .peer
+                        .on_raft_message(self.store_ctx, msg, send_time);
                 }
                 PeerMsg::RaftQuery(cmd) => {
                     self.on_receive_command(cmd.send_time, cmd.ch.read_tracker());
@@ -267,6 +269,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
                         write.header,
                         write.data,
                         write.ch,
+                        Some(write.extra_opts),
                     );
                 }
                 PeerMsg::UnsafeWrite(write) => {
@@ -381,9 +384,10 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
                     syncer,
                     failed_stores,
                 ),
-                PeerMsg::ExitForceLeaderState => {
-                    self.fsm.peer_mut().on_exit_force_leader(self.store_ctx)
-                }
+                PeerMsg::ExitForceLeaderState => self
+                    .fsm
+                    .peer_mut()
+                    .on_exit_force_leader(self.store_ctx, false),
                 PeerMsg::ExitForceLeaderStateCampaign => {
                     self.fsm.peer_mut().on_exit_force_leader_campaign()
                 }
