@@ -48381,7 +48381,7 @@
           "dashLength": 10,
           "dashes": false,
           "datasource": "${DS_TEST-CLUSTER}",
-          "description": "Shows the changing rate of the slowness on I/O operations. 'value > 0' means the related store might has a slow trend.",
+          "description": "The changing rate of the slowness on I/O operations. 'value > 0' means the related store might has a slow trend.",
           "fill": 1,
           "fillGradient": 0,
           "gridPos": {
@@ -48470,7 +48470,7 @@
           "dashLength": 10,
           "dashes": false,
           "datasource": "${DS_TEST-CLUSTER}",
-          "description": "Shows the changing trend of QPS on each store. 'value < 0' means the QPS has a dropping trend.",
+          "description": "The changing trend of QPS on each store. 'value < 0' means the QPS has a dropping trend.",
           "fill": 1,
           "fillGradient": 0,
           "gridPos": {
@@ -48559,7 +48559,7 @@
           "dashLength": 10,
           "dashes": false,
           "datasource": "${DS_TEST-CLUSTER}",
-          "description": "Records the sampling latency of recent queries. A larger value indicates that the store is more likely to be the slowest store.",
+          "description": "The sampling latency of recent queries. A larger value indicates that the store is more likely to be the slowest store.",
           "fill": 1,
           "fillGradient": 0,
           "gridPos": {
@@ -48648,7 +48648,7 @@
           "dashLength": 10,
           "dashes": false,
           "datasource": "${DS_TEST-CLUSTER}",
-          "description": "Store slow trend result, showing the QPS of each store.",
+          "description": "The QPS of each store.",
           "fill": 1,
           "fillGradient": 0,
           "gridPos": {
