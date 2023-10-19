@@ -488,7 +488,7 @@ where
     async fn dump_async_trace() -> hyper::Result<Response<Body>> {
         Ok(make_response(
             StatusCode::OK,
-            tikv_util::async_trace::dump_async_tasks(),
+            tikv_util::async_trace::dump_all_tree_bytes(),
         ))
     }
 

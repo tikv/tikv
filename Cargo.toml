@@ -278,7 +278,6 @@ members = [
   "components/tikv_alloc",
   "components/tikv_kv",
   "components/tikv_util",
-  "components/tikv_util/async-trace-macros",
   "components/tipb_helper",
   "components/tracker",
   "components/txn_types",

@@ -15,10 +15,11 @@ use raftstore::{
 };
 use tikv::storage::Statistics;
 use tikv_util::{
-    async_trace::framed, box_err, debug, info, root, sys::thread::ThreadBuildWrapper,
-    time::Instant, warn, worker::Scheduler,
+    box_err, debug, info, root, sys::thread::ThreadBuildWrapper, time::Instant, warn,
+    worker::Scheduler,
 };
 use tokio::sync::mpsc::{channel, error::SendError, Receiver, Sender};
+use tracing::instrument;
 use txn_types::TimeStamp;
 
 use crate::{
@@ -177,7 +178,7 @@ where
 
 impl ScanCmd {
     /// execute the initial scanning via the specificated [`InitialDataLoader`].
-    #[framed]
+    #[instrument(skip_all)]
     async fn exec_by(&self, initial_scan: impl InitialScan) -> Result<()> {
         let Self {
             region,
@@ -197,7 +198,7 @@ impl ScanCmd {
     }
 
     /// execute the command, when meeting error, retrying.
-    #[framed]
+    #[instrument(skip_all)]
     async fn exec_by_with_retry(self, init: impl InitialScan) {
         let mut retry_time = INITIAL_SCAN_FAILURE_MAX_RETRY_TIME;
         loop {
@@ -236,12 +237,16 @@ async fn scan_executor_loop(init: impl InitialScan, mut cmds: Receiver<ScanCmd>)
 
         let init = init.clone();
         let id = cmd.region.id;
-        tokio::task::spawn(root!(dyn format!("cmd[region={id}]"); async move {
+        let handle_id = cmd.handle.id;
+        tokio::task::spawn(root!("exec_initial_scan"; async move {
+            metrics::PENDING_INITIAL_SCAN_LEN
+                .with_label_values(&["executing"])
+                .inc();
             cmd.exec_by_with_retry(init).await;
             metrics::PENDING_INITIAL_SCAN_LEN
                 .with_label_values(&["executing"])
                 .dec();
-        }));
+        }; region = id, handle = ?handle_id));
     }
 }
 
@@ -252,9 +257,9 @@ fn spawn_executors(
 ) -> ScanPoolHandle {
     let (tx, rx) = tokio::sync::mpsc::channel(MESSAGE_BUFFER_SIZE);
     let pool = create_scan_pool(number);
-    pool.spawn(async move {
+    pool.spawn(root!("scan_executor_loop"; async move {
         scan_executor_loop(init, rx).await;
-    });
+    }));
     ScanPoolHandle { tx, _pool: pool }
 }
 
@@ -398,7 +403,7 @@ where
     }
 
     /// the handler loop.
-    #[framed]
+    #[instrument(skip_all)]
     async fn region_operator_loop<E, RT>(
         self,
         mut message_box: Receiver<ObserveOp>,
@@ -534,7 +539,7 @@ where
         }
     }
 
-    #[framed]
+    #[instrument(skip_all)]
     async fn try_start_observe(&self, region: &Region, handle: ObserveHandle) -> Result<()> {
         match self.find_task_by_region(region) {
             None => {
@@ -562,7 +567,7 @@ where
         Ok(())
     }
 
-    #[framed]
+    #[instrument(skip_all)]
     async fn start_observe(&self, region: Region) {
         self.start_observe_with_failure_count(region, 0).await
     }
@@ -672,7 +677,7 @@ where
         Ok(())
     }
 
-    #[framed]
+    #[instrument(skip_all)]
     async fn get_last_checkpoint_of(&self, task: &str, region: &Region) -> Result<TimeStamp> {
         fail::fail_point!("get_last_checkpoint_of", |hint| Err(Error::Other(
             box_err!(
@@ -693,7 +698,7 @@ where
         Ok(cp.ts)
     }
 
-    #[framed]
+    #[instrument(skip_all)]
     async fn spawn_scan(&self, cmd: ScanCmd) {
         // we should not spawn initial scanning tasks to the tokio blocking pool
         // because it is also used for converting sync File I/O to async. (for now!)
@@ -708,7 +713,7 @@ where
         }
     }
 
-    #[framed]
+    #[instrument(skip_all)]
     async fn observe_over_with_initial_data_from_checkpoint(
         &self,
         region: &Region,

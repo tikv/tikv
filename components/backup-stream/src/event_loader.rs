@@ -16,12 +16,12 @@ use tikv::storage::{
     Snapshot, Statistics,
 };
 use tikv_util::{
-    async_trace::framed,
     box_err, frame, root,
     time::{Instant, Limiter},
     worker::Scheduler,
 };
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
+use tracing::instrument;
 use txn_types::{Key, Lock, TimeStamp};
 
 use crate::{
@@ -220,7 +220,7 @@ where
         }
     }
 
-    #[framed]
+    #[instrument(skip_all)]
     pub async fn capture_change(
         &self,
         region: &Region,
@@ -273,7 +273,7 @@ where
         Ok(snap)
     }
 
-    #[framed]
+    #[instrument(skip_all)]
     pub async fn observe_over_with_retry(
         &self,
         region: &Region,
@@ -371,7 +371,7 @@ where
         f(v.value_mut().resolver())
     }
 
-    #[framed]
+    #[instrument(skip_all)]
     async fn scan_and_async_send(
         &self,
         region: &Region,
@@ -410,22 +410,22 @@ where
             let sink = self.sink.clone();
             let event_size = events.size();
             let sched = self.scheduler.clone();
-            let permit = frame!(self.quota.pending(event_size)).await;
-            frame!(self.limit.consume(disk_read as _)).await;
+            let permit = frame!(default; self.quota.pending(event_size); %event_size).await;
+            frame!(default; self.limit.consume(disk_read as _); %disk_read).await;
             debug!("sending events to router"; "size" => %event_size, "region" => %region_id);
             metrics::INCREMENTAL_SCAN_SIZE.observe(event_size as f64);
             metrics::INCREMENTAL_SCAN_DISK_READ.inc_by(disk_read as f64);
             metrics::HEAP_MEMORY.add(event_size as _);
-            join_handles.push(tokio::spawn(root!(dyn format!("consume[region={region_id},event_cnt={event_size}]"); async move {
-                utils::handle_on_event_result(&sched, sink.on_events(events).await);
-                metrics::HEAP_MEMORY.sub(event_size as _);
-                debug!("apply event done"; "size" => %event_size, "region" => %region_id);
-                drop(permit);
-            })));
+            join_handles.push(tokio::spawn(root!("consume"; async move {
+                    utils::handle_on_event_result(&sched, sink.on_events(events).await);
+                    metrics::HEAP_MEMORY.sub(event_size as _);
+                    debug!("apply event done"; "size" => %event_size, "region" => %region_id);
+                    drop(permit);
+                }; %region_id, %event_size)));
         }
     }
 
-    #[framed]
+    #[instrument(skip_all)]
     pub async fn do_initial_scan(
         &self,
         region: &Region,
@@ -442,9 +442,7 @@ where
         let permit = frame!(self.concurrency_limit.acquire())
             .await
             .expect("BUG: semaphore closed");
-        metrics::PENDING_INITIAL_SCAN_LEN
-            .with_label_values(&["executing"])
-            .inc();
+
         // It is ok to sink more data than needed. So scan to +inf TS for convenance.
         let event_loader = EventLoader::load_from(snap, start_ts, TimeStamp::max(), region)?;
         let stats = self

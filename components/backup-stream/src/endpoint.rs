@@ -26,6 +26,7 @@ use raftstore::{
 use resolved_ts::{resolve_by_raft, LeadershipResolver};
 use tikv::config::BackupStreamConfig;
 use tikv_util::{
+    async_trace::layer::TraceDrop,
     box_err,
     config::ReadableDuration,
     debug, defer, info, root,
@@ -41,6 +42,7 @@ use tokio::{
     sync::{oneshot, Semaphore},
 };
 use tokio_stream::StreamExt;
+use tracing::instrument;
 use txn_types::TimeStamp;
 
 use super::metrics::HANDLE_EVENT_DURATION_HISTOGRAM;
@@ -130,14 +132,14 @@ where
         let meta_client_clone = meta_client.clone();
         let scheduler_clone = scheduler.clone();
         // TODO build a error handle mechanism #error 2
-        pool.spawn(root!("task_watcher"; async {
+        pool.spawn(root!("flush_ticker"; Self::starts_flush_ticks(range_router.clone())));
+        pool.spawn(root!("start_watch_tasks"; async {
             if let Err(err) = Self::start_and_watch_tasks(meta_client_clone, scheduler_clone).await
             {
                 err.report("failed to start watch tasks");
             }
+            info!("started task watcher!");
         }));
-
-        pool.spawn(root!("flush_ticker"; Self::starts_flush_ticks(range_router.clone())));
 
         let initial_scan_memory_quota =
             PendingMemoryQuota::new(config.initial_scan_pending_memory_quota.0 as _);
@@ -173,7 +175,7 @@ where
         );
         pool.spawn(root!(op_loop));
         let mut checkpoint_mgr = CheckpointManager::default();
-        pool.spawn(checkpoint_mgr.spawn_subscription_mgr());
+        pool.spawn(root!(checkpoint_mgr.spawn_subscription_mgr()));
         let ep = Endpoint {
             initial_scan_semaphore,
             meta_client,
@@ -276,6 +278,7 @@ where
     }
 
     // TODO find a proper way to exit watch tasks
+    #[instrument(skip_all)]
     async fn start_and_watch_tasks(
         meta_client: MetadataClient<S>,
         scheduler: Scheduler<Task>,
@@ -471,7 +474,14 @@ where
         let router = self.range_router.clone();
         let sched = self.scheduler.clone();
         let subs = self.subs.clone();
-        self.pool.spawn(root!(async move {
+        let region = batch.region_id;
+        let from_idx = batch.cmds.iter().next().map(|c| c.index).unwrap_or(0);
+        let (to_idx, term) = batch
+            .cmds
+            .last()
+            .map(|c| (c.index, c.term))
+            .unwrap_or((0, 0));
+        self.pool.spawn(root!("backup_batch"; async move {
             let region_id = batch.region_id;
             let kvs = Self::record_batch(subs, batch);
             if kvs.as_ref().map(|x| x.is_empty()).unwrap_or(true) {
@@ -497,7 +507,7 @@ where
                 .with_label_values(&["save_to_temp_file"])
                 .observe(time_cost);
             drop(work)
-        }));
+        }; %from_idx, %to_idx, %region, current_term = %term));
     }
 
     pub fn handle_watch_task(&self, op: TaskOp) {

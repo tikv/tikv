@@ -200,6 +200,7 @@ pub fn run_tikv(
     // It is okay to use the config w/o `validate()`,
     // because `initial_logger()` handles various conditions.
     initial_logger(&config);
+    tikv_util::async_trace::init();
 
     // Print version information.
     let build_timestamp = option_env!("TIKV_BUILD_TIME");
