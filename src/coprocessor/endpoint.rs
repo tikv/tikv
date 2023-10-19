@@ -819,7 +819,7 @@ fn check_request_key_range(
     let latest_buckets = buckets.unwrap();
     if request_bucket_version == 0
         || request_bucket_version >= latest_buckets.version
-        || latest_buckets.is_empty()
+        || latest_buckets.keys.is_empty()
     {
         return Ok(());
     }
