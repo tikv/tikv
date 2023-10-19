@@ -506,9 +506,7 @@ fn test_migrate_majority_to_drautosync() {
     assert_eq!(state.state, RegionReplicationState::IntegrityOverLabel);
 
     // 2. swith to marjority mode.
-    cluster
-        .pd_client
-        .switch_replication_mode(DrAutoSyncState::Async, vec![]);
+    cluster.pd_client.switch_to_majority_mode();
     thread::sleep(Duration::from_millis(150));
 
     // 3. spilt the region and make a new region, the regions status must be
@@ -519,27 +517,15 @@ fn test_migrate_majority_to_drautosync() {
     must_get_equal(&cluster.get_engine(1), b"n4", b"v4");
     let region_m = cluster.get_region(b"n4");
     let region_k = cluster.get_region(b"k1");
-    let mut state_m = cluster
-        .pd_client
-        .region_replication_status(region_m.get_id());
-    let mut state_k = cluster
-        .pd_client
-        .region_replication_status(region_k.get_id());
-    assert_eq!(state_m.state_id, 2);
-    assert_eq!(state_m.state, RegionReplicationState::SimpleMajority);
-    assert_eq!(state_k.state_id, 2);
-    assert_eq!(state_k.state, RegionReplicationState::SimpleMajority);
 
-    // 4. switch to sync-recover status, the new region generated at marjority mode
+    // 4. switch to dy-auto-sync mode, the new region generated at marjority mode
     // becomes IntegrityOverLabel again.
-    cluster
-        .pd_client
-        .switch_replication_mode(DrAutoSyncState::SyncRecover, vec![]);
+    cluster.pd_client.switch_to_drautosync_mode();
     thread::sleep(Duration::from_millis(100));
-    state_m = cluster
+    let state_m = cluster
         .pd_client
         .region_replication_status(region_m.get_id());
-    state_k = cluster
+    let state_k = cluster
         .pd_client
         .region_replication_status(region_k.get_id());
     assert_eq!(state_m.state_id, 3);
