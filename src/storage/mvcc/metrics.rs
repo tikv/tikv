@@ -115,7 +115,7 @@ lazy_static! {
         register_static_int_counter_vec!(
             MvccPrewriteRequestAfterCommitCounterVec,
             "tikv_storage_mvcc_prewrite_request_after_commit_counter",
-            "Counter of rejected prewrite requests",
+            "Counter of prewrite requests of already-committed transactions that are determined by checking TxnStatucCache",
             &["type"]
         )
         .unwrap()
