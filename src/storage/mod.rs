@@ -10969,7 +10969,7 @@ mod tests {
 
         // Key must not be locked.
         assert_eq!(
-            block_on(storage.get(Context::default(), k1.clone(), 50.into()))
+            block_on(storage.get(Context::default(), k1, 50.into()))
                 .unwrap()
                 .0,
             Some(b"v".to_vec())
