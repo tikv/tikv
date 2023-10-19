@@ -241,7 +241,7 @@ pub struct UnsafeRecoveryForceLeaderSyncer(Arc<InvokeClosureOnDrop>);
 impl UnsafeRecoveryForceLeaderSyncer {
     pub fn new(report_id: u64, router: Arc<dyn UnsafeRecoveryHandle>) -> Self {
         let inner = InvokeClosureOnDrop(Some(Box::new(move || {
-            info!("Unsafe recovery, force leader finished.");
+            info!("Unsafe recovery, force leader finished."; "report_id" => report_id);
             start_unsafe_recovery_report(router, report_id, false);
         })));
         UnsafeRecoveryForceLeaderSyncer(Arc::new(inner))
@@ -260,11 +260,11 @@ impl UnsafeRecoveryExecutePlanSyncer {
         let abort = Arc::new(Mutex::new(false));
         let abort_clone = abort.clone();
         let closure = InvokeClosureOnDrop(Some(Box::new(move || {
-            info!("Unsafe recovery, plan execution finished");
             if *abort_clone.lock().unwrap() {
-                warn!("Unsafe recovery, plan execution aborted");
+                warn!("Unsafe recovery, plan execution aborted"; "report_id" => report_id);
                 return;
             }
+            info!("Unsafe recovery, plan execution finished"; "report_id" => report_id);
             start_unsafe_recovery_report(router, report_id, true);
         })));
         UnsafeRecoveryExecutePlanSyncer {
@@ -330,7 +330,7 @@ impl UnsafeRecoveryWaitApplySyncer {
         let abort_clone = abort.clone();
         let closure = InvokeClosureOnDrop(Some(Box::new(move || {
             if *abort_clone.lock().unwrap() {
-                warn!("Unsafe recovery, wait apply aborted");
+                warn!("Unsafe recovery, wait apply aborted"; "report_id" => report_id);
                 return;
             }
             info!("Unsafe recovery, wait apply finished");
@@ -363,7 +363,7 @@ impl UnsafeRecoveryFillOutReportSyncer {
         let reports = Arc::new(Mutex::new(vec![]));
         let reports_clone = reports.clone();
         let closure = InvokeClosureOnDrop(Some(Box::new(move || {
-            info!("Unsafe recovery, peer reports collected");
+            info!("Unsafe recovery, peer reports collected"; "report_id" => report_id);
             let mut store_report = StoreReport::default();
             {
                 let mut reports_ptr = reports_clone.lock().unwrap();
@@ -420,6 +420,9 @@ pub enum UnsafeRecoveryState {
     },
     Destroy(UnsafeRecoveryExecutePlanSyncer),
     WaitInitialize(UnsafeRecoveryExecutePlanSyncer),
+    // DemoteFailedVoter may fail due to some reasons. It's just a marker to avoid exiting force
+    // leader state
+    Failed,
 }
 
 impl UnsafeRecoveryState {
@@ -429,6 +432,7 @@ impl UnsafeRecoveryState {
             UnsafeRecoveryState::DemoteFailedVoters { syncer, .. }
             | UnsafeRecoveryState::Destroy(syncer)
             | UnsafeRecoveryState::WaitInitialize(syncer) => syncer.time,
+            UnsafeRecoveryState::Failed => return false,
         };
         time.saturating_elapsed() >= timeout
     }
@@ -439,6 +443,7 @@ impl UnsafeRecoveryState {
             UnsafeRecoveryState::DemoteFailedVoters { syncer, .. }
             | UnsafeRecoveryState::Destroy(syncer)
             | UnsafeRecoveryState::WaitInitialize(syncer) => &syncer.abort,
+            UnsafeRecoveryState::Failed => return true,
         };
         *abort.lock().unwrap()
     }
@@ -449,6 +454,7 @@ impl UnsafeRecoveryState {
             UnsafeRecoveryState::DemoteFailedVoters { syncer, .. }
             | UnsafeRecoveryState::Destroy(syncer)
             | UnsafeRecoveryState::WaitInitialize(syncer) => syncer.abort(),
+            UnsafeRecoveryState::Failed => (),
         }
     }
 }
