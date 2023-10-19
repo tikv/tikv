@@ -22,7 +22,16 @@ Then, data(formed by table schema or other pattern) could be R/W from this kind 
 ## Design
 
 ### Overview
+Generally speaking, there are two storage components in TiKV for maintaining multi-raft RSM: `RaftEngine` and `KvEngine`.
+KvEngine is mainly used for applying raft command and providing key-value services.
+RaftEngine will parse its own committed raft log into corresponding normal/admin raft commands, which will be handled by the apply process.
+Multiple modifications about region data/meta/apply-state will be encapsulated into one `Write Batch` and written into KvEngine atomically.
+It is an option to replace KvEngine with `Engine Traits`.
+But it's not easy to guarantee atomicity while writing/reading dynamic key-value pair(such as meta/apply-state) and patterned data(strong schema) together for other storage systems.
+Besides, a few modules and components(like importer or lighting) reply on the SST format of KvEngine in TiKV.
+It may cost a lot to achieve such a replacement.
 
+It's suggested to let the apply process work as usual but only persist meta and state information to bring a few intrusive modifications against the original logic of TiKV.
 i.e., we must replace everywhere that may write normal region data with related interfaces.
 Unlike KvEngine, the storage system(called `engine-store`) under such a framework should be aware of the transition about multi-raft RSM from these interfaces.
 The `engine-store` must have the ability to deal with raft commands to handle queries with region epoch.
