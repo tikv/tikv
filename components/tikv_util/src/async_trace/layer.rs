@@ -99,7 +99,6 @@ where
                     };
                     debug_assert!(ptr.lock().unwrap().on_root());
                     *rt = Some(ptr);
-                    return;
                 }
                 Some(rt) => {
                     let mut tree = rt.lock().unwrap();

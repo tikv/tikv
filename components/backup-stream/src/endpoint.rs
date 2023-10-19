@@ -26,7 +26,6 @@ use raftstore::{
 use resolved_ts::{resolve_by_raft, LeadershipResolver};
 use tikv::config::BackupStreamConfig;
 use tikv_util::{
-    async_trace::layer::TraceDrop,
     box_err,
     config::ReadableDuration,
     debug, defer, info, root,
@@ -475,7 +474,7 @@ where
         let sched = self.scheduler.clone();
         let subs = self.subs.clone();
         let region = batch.region_id;
-        let from_idx = batch.cmds.iter().next().map(|c| c.index).unwrap_or(0);
+        let from_idx = batch.cmds.first().map(|c| c.index).unwrap_or(0);
         let (to_idx, term) = batch
             .cmds
             .last()
@@ -507,7 +506,7 @@ where
                 .with_label_values(&["save_to_temp_file"])
                 .observe(time_cost);
             drop(work)
-        }; %from_idx, %to_idx, %region, current_term = %term));
+        }; from_idx, to_idx, region, current_term = term));
     }
 
     pub fn handle_watch_task(&self, op: TaskOp) {

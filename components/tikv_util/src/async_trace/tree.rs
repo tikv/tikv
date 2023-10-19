@@ -90,7 +90,6 @@ impl Tree {
         {
             Some(i) => {
                 self.current = i;
-                return;
             }
             None => {
                 let new_node = self.arena.new_node(frame.clone());
@@ -135,7 +134,7 @@ impl Tree {
     /// Traverse the tree with a [`TreeVisit`].
     /// This function must be called at the context where the layer has been
     /// registered. i.e. the [`Registry`] of this tree must be the default
-    /// subscriber.
+    /// subscriber. Also notice don't use this in `get_default` context.
     pub fn traverse_with<E, V: TreeVisit<Error = E>>(&self, mut visit: V) -> Result<(), E> {
         tracing::dispatcher::get_default(|def| {
             let lookup = def.downcast_ref::<Registry>();
@@ -209,11 +208,7 @@ impl<W: Write> TreeVisit for FormatTreeTo<W> {
         span: MaybeSpan<'_>,
     ) -> std::io::Result<()> {
         let not_last_one = tree[node].next_sibling().is_some();
-        let branch = if tree[node].next_sibling().is_some() {
-            "├"
-        } else {
-            "└"
-        };
+        let branch = if not_last_one { '├' } else { '└' };
         write!(self.output, "{}{}", self.indent_str, branch)?;
         match span {
             MaybeSpan::Span(span) => {
@@ -232,9 +227,9 @@ impl<W: Write> TreeVisit for FormatTreeTo<W> {
             }
         }
         if not_last_one {
-            self.indent_str.push_str("│");
+            self.indent_str.push('│');
         } else {
-            self.indent_str.push_str(" ");
+            self.indent_str.push(' ');
         }
         Ok(())
     }

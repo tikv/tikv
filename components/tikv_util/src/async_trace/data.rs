@@ -21,7 +21,7 @@ impl fmt::Display for Data {
 }
 
 impl Data {
-    pub fn from_attribute(attr: &Attributes) -> Self {
+    pub fn from_attribute(attr: &Attributes<'_>) -> Self {
         let mut fields = ArrayVec::new();
         attr.record(&mut ValColl(&mut fields));
         Self {
