@@ -752,7 +752,7 @@ macro_rules! impl_write {
             let label = stringify!($fn);
             let resource_manager = self.resource_manager.clone();
             let handle_task = async move {
-                let res = async move {
+                let res = async {
                     let first_req = rx.try_next().await?;
                     let (meta, resource_limiter) = match first_req {
                         Some(r) => {
@@ -784,15 +784,7 @@ macro_rules! impl_write {
                             )
                         })?;
                     let res = f.await?;
-                    if let Err(e) =
-                        check_local_region_stale(region_id, meta.get_region_epoch(), res)
-                    {
-                        let _ = rx.for_each(|i| {
-                            drop(i);
-                            future::ready(())
-                        }).await;
-                        return Err(e);
-                    }
+                    check_local_region_stale(region_id, meta.get_region_epoch(), res)?;
 
                     let tablet = match tablets.get(region_id) {
                         Some(t) => t,
@@ -843,6 +835,8 @@ macro_rules! impl_write {
                 }
                 .await;
                 $crate::send_rpc_response!(res, sink, label, timer);
+                // don't drop rx before send response
+                _ = rx;
             };
 
             self.threads.spawn(buf_driver);
