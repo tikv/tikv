@@ -1423,7 +1423,11 @@ impl TestPdClient {
         cluster.replication_status = Some(status);
     }
 
-    pub fn switch_replication_mode(&self, state: Option<DrAutoSyncState>, available_stores: Vec<u64>) {
+    pub fn switch_replication_mode(
+        &self,
+        state: Option<DrAutoSyncState>,
+        available_stores: Vec<u64>,
+    ) {
         let mut cluster = self.cluster.wl();
         let status = cluster.replication_status.as_mut().unwrap();
         if state.is_none() {
