@@ -784,23 +784,29 @@ macro_rules! impl_write {
                             Error::Engine(
                                 format!("failed to find region {} err {:?}", region_id, e).into(),
                             )
-                        }) {
+                        })
+                    {
                         return (Err(From::from(e)), Some(rx));
                     };
                     let res = match f.await {
                         Ok(r) => r,
                         Err(e) => return (Err(From::from(e)), Some(rx)),
                     };
-                    if let Err(e) = check_local_region_stale(region_id, meta.get_region_epoch(), res) {
+                    if let Err(e) =
+                        check_local_region_stale(region_id, meta.get_region_epoch(), res)
+                    {
                         return (Err(From::from(e)), Some(rx));
                     };
 
                     let tablet = match tablets.get(region_id) {
                         Some(t) => t,
                         None => {
-                            return (Err(Error::Engine(
-                                format!("region {} not found", region_id).into(),
-                            )), Some(rx));
+                            return (
+                                Err(Error::Engine(
+                                    format!("region {} not found", region_id).into(),
+                                )),
+                                Some(rx),
+                            );
                         }
                     };
 
