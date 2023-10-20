@@ -8,7 +8,7 @@ use kvproto::{
     metapb::{Peer, Region},
     tikvpb_grpc::TikvClient,
 };
-use test_raftstore::{must_get_equal, new_mutation, new_peer, PeerClient};
+use test_raftstore::{must_get_equal, new_mutation, new_peer};
 use test_raftstore_macro::test_case;
 use tikv_util::{config::ReadableDuration, time::Instant};
 

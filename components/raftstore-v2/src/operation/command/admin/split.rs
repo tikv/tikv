@@ -35,6 +35,7 @@ use engine_traits::{
 use fail::fail_point;
 use futures::channel::oneshot;
 use kvproto::{
+    kvrpcpb::DiskFullOpt,
     metapb::{self, Region, RegionEpoch},
     pdpb::CheckPolicy,
     raft_cmdpb::{AdminRequest, AdminResponse, RaftCmdRequest, SplitRequest},
@@ -332,6 +333,14 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             ))));
             return;
         }
+        // Check whether the admin request can be proposed when disk full.
+        if let Err(e) =
+            self.check_proposal_with_disk_full_opt(ctx, DiskFullOpt::AllowedOnAlmostFull)
+        {
+            info!(self.logger, "disk is full, skip split"; "err" => ?e);
+            ch.set_result(cmd_resp::new_error(e));
+            return;
+        }
         if let Err(e) = util::validate_split_region(
             self.region_id(),
             self.peer_id(),
@@ -363,6 +372,13 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         if !self.is_leader() {
             // region on this store is no longer leader, skipped.
             info!(self.logger, "not leader, skip.");
+            return;
+        }
+        // Check whether the admin request can be proposed when disk full.
+        if let Err(e) =
+            self.check_proposal_with_disk_full_opt(ctx, DiskFullOpt::AllowedOnAlmostFull)
+        {
+            info!(self.logger, "disk is full, skip half split"; "err" => ?e);
             return;
         }
 
