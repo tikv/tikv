@@ -451,7 +451,6 @@ impl ServerCluster {
             Arc::clone(&importer),
             None,
             resource_manager.clone(),
-            Arc::new(region_info_accessor.clone()),
         );
 
         // Create deadlock service.

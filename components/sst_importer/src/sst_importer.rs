@@ -23,7 +23,7 @@ use engine_traits::{
     IterOptions, Iterator, KvEngine, RefIterable, SstCompressionType, SstExt, SstMetaInfo,
     SstReader, SstWriter, SstWriterBuilder, CF_DEFAULT, CF_WRITE,
 };
-use external_storage_export::{
+use external_storage::{
     compression_reader_dispatcher, encrypt_wrap_reader, ExternalStorage, RestoreConfig,
 };
 use file_system::{get_io_rate_limiter, IoType, OpenOptions};
@@ -51,7 +51,7 @@ use txn_types::{Key, TimeStamp, WriteRef};
 
 use crate::{
     caching::cache_map::{CacheMap, ShareOwned},
-    import_file::{ImportDir, ImportFile, SstMetaWithApiVersion},
+    import_file::{ImportDir, ImportFile},
     import_mode::{ImportModeSwitcher, RocksDbMetricsFn},
     import_mode2::{HashRange, ImportModeSwitcherV2},
     metrics::*,
@@ -470,7 +470,7 @@ impl SstImporter {
         backend: &StorageBackend,
         support_kms: bool,
         speed_limiter: &Limiter,
-        restore_config: external_storage_export::RestoreConfig,
+        restore_config: external_storage::RestoreConfig,
     ) -> Result<()> {
         self._download_rt
             .block_on(self.async_download_file_from_external_storage(
@@ -496,7 +496,7 @@ impl SstImporter {
         // TODO: pass a config to support hdfs
         let ext_storage = if cache_id.is_empty() {
             EXT_STORAGE_CACHE_COUNT.with_label_values(&["skip"]).inc();
-            let s = external_storage_export::create_storage(backend, Default::default())?;
+            let s = external_storage::create_storage(backend, Default::default())?;
             Arc::from(s)
         } else {
             self.cached_storage.cached_or_create(cache_id, backend)?
@@ -513,7 +513,7 @@ impl SstImporter {
         support_kms: bool,
         speed_limiter: &Limiter,
         cache_key: &str,
-        restore_config: external_storage_export::RestoreConfig,
+        restore_config: external_storage::RestoreConfig,
     ) -> Result<()> {
         let start_read = Instant::now();
         if let Some(p) = dst_file.parent() {
@@ -659,7 +659,7 @@ impl SstImporter {
     async fn exec_download(
         &self,
         meta: &KvMeta,
-        ext_storage: Arc<dyn external_storage_export::ExternalStorage>,
+        ext_storage: Arc<dyn external_storage::ExternalStorage>,
         speed_limiter: &Limiter,
     ) -> Result<LoadedFile> {
         let start = Instant::now();
@@ -684,7 +684,7 @@ impl SstImporter {
                 Some((meta.get_range_offset(), range_length))
             }
         };
-        let restore_config = external_storage_export::RestoreConfig {
+        let restore_config = external_storage::RestoreConfig {
             range,
             compression_type: Some(meta.get_compression_type()),
             expected_sha256,
@@ -715,7 +715,7 @@ impl SstImporter {
     pub async fn do_read_kv_file(
         &self,
         meta: &KvMeta,
-        ext_storage: Arc<dyn external_storage_export::ExternalStorage>,
+        ext_storage: Arc<dyn external_storage::ExternalStorage>,
         speed_limiter: &Limiter,
     ) -> Result<CacheKvFile> {
         let start = Instant::now();
@@ -764,18 +764,16 @@ impl SstImporter {
         &self,
         ext_storage: Arc<dyn ExternalStorage>,
         support_kms: bool,
-    ) -> Arc<dyn external_storage_export::ExternalStorage> {
+    ) -> Arc<dyn external_storage::ExternalStorage> {
         // kv-files needn't are decrypted with KMS when download currently because these
         // files are not encrypted when log-backup. It is different from
         // sst-files because sst-files is encrypted when saved with rocksdb env
         // with KMS. to do: support KMS when log-backup and restore point.
         match (support_kms, self.key_manager.clone()) {
-            (true, Some(key_manager)) => {
-                Arc::new(external_storage_export::EncryptedExternalStorage {
-                    key_manager,
-                    storage: ext_storage,
-                })
-            }
+            (true, Some(key_manager)) => Arc::new(external_storage::EncryptedExternalStorage {
+                key_manager,
+                storage: ext_storage,
+            }),
             _ => ext_storage,
         }
     }
@@ -784,7 +782,7 @@ impl SstImporter {
         &self,
         file_length: u64,
         file_name: &str,
-        ext_storage: Arc<dyn external_storage_export::ExternalStorage>,
+        ext_storage: Arc<dyn external_storage::ExternalStorage>,
         speed_limiter: &Limiter,
         restore_config: RestoreConfig,
     ) -> Result<Vec<u8>> {
@@ -806,12 +804,12 @@ impl SstImporter {
             encrypt_wrap_reader(file_crypter, inner)?
         };
 
-        let r = external_storage_export::read_external_storage_info_buff(
+        let r = external_storage::read_external_storage_info_buff(
             &mut reader,
             speed_limiter,
             file_length,
             expected_sha256,
-            external_storage_export::MIN_READ_SPEED,
+            external_storage::MIN_READ_SPEED,
         )
         .await;
         let url = ext_storage.url()?.to_string();
@@ -828,7 +826,7 @@ impl SstImporter {
     pub async fn read_from_kv_file(
         &self,
         meta: &KvMeta,
-        ext_storage: Arc<dyn external_storage_export::ExternalStorage>,
+        ext_storage: Arc<dyn external_storage::ExternalStorage>,
         backend: &StorageBackend,
         speed_limiter: &Limiter,
     ) -> Result<Arc<[u8]>> {
@@ -893,7 +891,7 @@ impl SstImporter {
         } else {
             Some((offset, range_length))
         };
-        let restore_config = external_storage_export::RestoreConfig {
+        let restore_config = external_storage::RestoreConfig {
             range,
             compression_type: Some(meta.compression_type),
             expected_sha256,
@@ -1124,7 +1122,7 @@ impl SstImporter {
             iv: meta.cipher_iv.to_owned(),
         });
 
-        let restore_config = external_storage_export::RestoreConfig {
+        let restore_config = external_storage::RestoreConfig {
             file_crypter,
             ..Default::default()
         };
@@ -1387,7 +1385,7 @@ impl SstImporter {
     /// List the basic information of the current SST files.
     /// The information contains UUID, region ID, region Epoch.
     /// Other fields may be left blank.
-    pub fn list_ssts(&self) -> Result<Vec<SstMetaWithApiVersion>> {
+    pub fn list_ssts(&self) -> Result<Vec<SstMeta>> {
         self.dir.list_ssts()
     }
 
@@ -1500,7 +1498,7 @@ mod tests {
         collect, EncryptionMethod, Error as TraitError, ExternalSstFileInfo, Iterable, Iterator,
         RefIterable, SstReader, SstWriter, CF_DEFAULT, DATA_CFS,
     };
-    use external_storage_export::read_external_storage_info_buff;
+    use external_storage::read_external_storage_info_buff;
     use file_system::File;
     use online_config::{ConfigManager, OnlineConfig};
     use openssl::hash::{Hasher, MessageDigest};
@@ -1587,9 +1585,9 @@ mod tests {
         for sst in &ssts {
             ingested
                 .iter()
-                .find(|s| s.get_uuid() == sst.meta.get_uuid())
+                .find(|s| s.get_uuid() == sst.get_uuid())
                 .unwrap();
-            dir.delete(&sst.meta, key_manager.as_deref()).unwrap();
+            dir.delete(sst, key_manager.as_deref()).unwrap();
         }
         assert!(dir.list_ssts().unwrap().is_empty());
     }
@@ -1707,7 +1705,7 @@ mod tests {
         meta.mut_region_epoch().set_conf_ver(5);
         meta.mut_region_epoch().set_version(6);
 
-        let backend = external_storage_export::make_local_backend(ext_sst_dir.path());
+        let backend = external_storage::make_local_backend(ext_sst_dir.path());
         Ok((ext_sst_dir, backend, meta))
     }
 
@@ -1755,7 +1753,7 @@ mod tests {
         kv_meta.set_length(len as _);
         kv_meta.set_sha256(sha256.finish().unwrap().to_vec());
 
-        let backend = external_storage_export::make_local_backend(ext_dir.path());
+        let backend = external_storage::make_local_backend(ext_dir.path());
         Ok((ext_dir, backend, kv_meta, buff.buffer().to_vec()))
     }
 
@@ -1824,7 +1822,7 @@ mod tests {
         meta.mut_region_epoch().set_conf_ver(5);
         meta.mut_region_epoch().set_version(6);
 
-        let backend = external_storage_export::make_local_backend(ext_sst_dir.path());
+        let backend = external_storage::make_local_backend(ext_sst_dir.path());
         Ok((ext_sst_dir, backend, meta))
     }
 
@@ -1870,7 +1868,7 @@ mod tests {
         meta.mut_region_epoch().set_conf_ver(5);
         meta.mut_region_epoch().set_version(6);
 
-        let backend = external_storage_export::make_local_backend(ext_sst_dir.path());
+        let backend = external_storage::make_local_backend(ext_sst_dir.path());
         Ok((ext_sst_dir, backend, meta))
     }
 
@@ -1904,7 +1902,7 @@ mod tests {
         hasher.update(data).unwrap();
         let hash256 = hasher.finish().unwrap().to_vec();
 
-        block_on_external_io(external_storage_export::read_external_storage_into_file(
+        block_on_external_io(external_storage::read_external_storage_into_file(
             &mut input,
             &mut output,
             &Limiter::new(f64::INFINITY),
@@ -1922,7 +1920,7 @@ mod tests {
 
         let mut input = pending::<io::Result<&[u8]>>().into_async_read();
         let mut output = Vec::new();
-        let err = block_on_external_io(external_storage_export::read_external_storage_into_file(
+        let err = block_on_external_io(external_storage::read_external_storage_into_file(
             &mut input,
             &mut output,
             &Limiter::new(f64::INFINITY),
@@ -2139,7 +2137,7 @@ mod tests {
         };
 
         // test read all of the file.
-        let restore_config = external_storage_export::RestoreConfig {
+        let restore_config = external_storage::RestoreConfig {
             expected_sha256: Some(kv_meta.get_sha256().to_vec()),
             ..Default::default()
         };
@@ -2162,7 +2160,7 @@ mod tests {
 
         // test read range of the file.
         let (offset, len) = (5, 16);
-        let restore_config = external_storage_export::RestoreConfig {
+        let restore_config = external_storage::RestoreConfig {
             range: Some((offset, len)),
             ..Default::default()
         };
@@ -2250,7 +2248,7 @@ mod tests {
         // perform download file into .temp dir.
         let file_name = "sample.sst";
         let path = importer.dir.get_import_path(file_name).unwrap();
-        let restore_config = external_storage_export::RestoreConfig::default();
+        let restore_config = external_storage::RestoreConfig::default();
         importer
             .download_file_from_external_storage(
                 meta.get_length(),
@@ -2285,7 +2283,7 @@ mod tests {
         .unwrap();
 
         let path = importer.dir.get_import_path(kv_meta.get_name()).unwrap();
-        let restore_config = external_storage_export::RestoreConfig {
+        let restore_config = external_storage::RestoreConfig {
             expected_sha256: Some(kv_meta.get_sha256().to_vec()),
             ..Default::default()
         };
@@ -2747,7 +2745,7 @@ mod tests {
         let cfg = Config::default();
         let importer = SstImporter::new(&cfg, &importer_dir, None, ApiVersion::V1, false).unwrap();
         let db = create_sst_test_engine().unwrap();
-        let backend = external_storage_export::make_local_backend(ext_sst_dir.path());
+        let backend = external_storage::make_local_backend(ext_sst_dir.path());
 
         let result = importer.download::<TestEngine>(
             &meta,
