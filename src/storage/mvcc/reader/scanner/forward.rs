@@ -55,6 +55,7 @@ pub trait ScanPolicy<S: Snapshot> {
     fn output_size(&mut self, output: &Self::Output) -> usize;
 }
 
+#[derive(Debug)]
 pub enum HandleRes<T> {
     Return(T),
     Skip(Key),
@@ -543,7 +544,9 @@ impl<S: Snapshot> ScanPolicy<S> for LatestEntryPolicy {
         cursors: &mut Cursors<S>,
         statistics: &mut Statistics,
     ) -> Result<HandleRes<Self::Output>> {
-        scan_latest_handle_lock(current_user_key, cfg, cursors, statistics)
+        let res = scan_latest_handle_lock(current_user_key, cfg, cursors, statistics);
+        println!("handle_lock returns {:?}", res);
+        res
     }
 
     fn handle_write(
@@ -1743,7 +1746,7 @@ mod latest_entry_tests {
         // c-{3,_} will be retrieved, with an inlined value.
         must_prewrite_put(&mut engine, b"c", b"value", b"a", 1);
         must_commit(&mut engine, b"c", 1, 2);
-        //must_prewrite_put(&mut engine, b"c", b"value", b"a", 3);
+        must_prewrite_put(&mut engine, b"c", b"value", b"a", 3);
 
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let mut scanner = ScannerBuilder::new(snapshot, TimeStamp::max())
@@ -1771,6 +1774,7 @@ mod latest_entry_tests {
             .build_commit(WriteType::Put, false);
         assert_eq!(got, expected);
 
+        println!("bad case starts...");
         let got = scanner.next_entry().unwrap().unwrap();
         println!("got: {:?}", got);
         let mut builder: EntryBuilder = EntryBuilder::default();
