@@ -6456,7 +6456,7 @@ where
         if let Err(e) = self
             .ctx
             .pd_scheduler
-            .schedule(PdTask::ReportBuckets(region_buckets.clone()))
+            .schedule(PdTask::ReportBuckets(region_buckets))
         {
             error!(
                 "failed to report region buckets";
