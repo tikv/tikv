@@ -751,8 +751,11 @@ macro_rules! impl_write {
             let label = stringify!($fn);
             let resource_manager = self.resource_manager.clone();
             let handle_task = async move {
-                let res = async {
-                    let first_req = rx.try_next().await?;
+                let (res, rx) = async move {
+                    let first_req = match rx.try_next().await {
+                        Ok(r) => r,
+                        Err(e) => return (Err(From::from(e)), Some(rx)),
+                    };
                     let (meta, resource_limiter) = match first_req {
                         Some(r) => {
                             let limiter = resource_manager.as_ref().and_then(|m| {
@@ -765,32 +768,39 @@ macro_rules! impl_write {
                             });
                             match r.chunk {
                                 Some($chunk_ty::Meta(m)) => (m, limiter),
-                                _ => return Err(Error::InvalidChunk),
+                                _ => return (Err(Error::InvalidChunk), Some(rx)),
                             }
                         }
-                        _ => return Err(Error::InvalidChunk),
+                        _ => return (Err(Error::InvalidChunk), Some(rx)),
                     };
                     // wait the region epoch on this TiKV to catch up with the epoch
                     // in request, which comes from PD and represents the majority
                     // peers' status.
                     let region_id = meta.get_region_id();
                     let (cb, f) = paired_future_callback();
-                    region_info_accessor
+                    if let Err(e) = region_info_accessor
                         .find_region_by_id(region_id, cb)
                         .map_err(|e| {
                             Error::Engine(
                                 format!("failed to find region {} err {:?}", region_id, e).into(),
                             )
-                        })?;
-                    let res = f.await?;
-                    check_local_region_stale(region_id, meta.get_region_epoch(), res)?;
+                        }) {
+                        return (Err(From::from(e)), Some(rx));
+                    };
+                    let res = match f.await {
+                        Ok(r) => r,
+                        Err(e) => return (Err(From::from(e)), Some(rx)),
+                    };
+                    if let Err(e) = check_local_region_stale(region_id, meta.get_region_epoch(), res) {
+                        return (Err(From::from(e)), Some(rx));
+                    };
 
                     let tablet = match tablets.get(region_id) {
                         Some(t) => t,
                         None => {
-                            return Err(Error::Engine(
+                            return (Err(Error::Engine(
                                 format!("region {} not found", region_id).into(),
-                            ));
+                            )), Some(rx));
                         }
                     };
 
@@ -798,10 +808,10 @@ macro_rules! impl_write {
                         Ok(w) => w,
                         Err(e) => {
                             error!("build writer failed {:?}", e);
-                            return Err(Error::InvalidChunk);
+                            return (Err(Error::InvalidChunk), Some(rx));
                         }
                     };
-                    let (writer, resource_limiter) = rx
+                    let result = rx
                         .try_fold(
                             (writer, resource_limiter),
                             |(mut writer, limiter), req| async move {
@@ -818,7 +828,11 @@ macro_rules! impl_write {
                                     .map(|w| (w, limiter))
                             },
                         )
-                        .await?;
+                        .await;
+                    let (writer, resource_limiter) = match result {
+                        Ok(r) => r,
+                        Err(e) => return (Err(From::from(e)), None),
+                    };
 
                     let finish_fn = async {
                         let metas = writer.finish()?;
@@ -827,15 +841,20 @@ macro_rules! impl_write {
                     };
 
                     let metas: Result<_> = with_resource_limiter(finish_fn, resource_limiter).await;
-                    let metas = metas?;
+                    let metas = match metas {
+                        Ok(r) => r,
+                        Err(e) => return (Err(From::from(e)), None),
+                    };
                     let mut resp = $resp_ty::default();
                     resp.set_metas(metas.into());
-                    Ok(resp)
+                    (Ok(resp), None)
                 }
                 .await;
                 $crate::send_rpc_response!(res, sink, label, timer);
                 // don't drop rx before send response
-                _ = rx;
+                if rx.is_some() {
+                    warn!("lance test")
+                }
             };
 
             self.threads.spawn(buf_driver);
