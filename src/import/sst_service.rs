@@ -14,8 +14,7 @@ use std::{
 
 use engine_traits::{CompactExt, MiscExt, CF_DEFAULT, CF_WRITE};
 use file_system::{set_io_type, IoType};
-use futures::{future, sink::SinkExt, stream::TryStreamExt, FutureExt, TryFutureExt};
-use futures_util::StreamExt;
+use futures::{sink::SinkExt, stream::TryStreamExt, FutureExt, TryFutureExt};
 use grpcio::{
     ClientStreamingSink, RequestStream, RpcContext, ServerStreamingSink, UnarySink, WriteFlags,
 };
