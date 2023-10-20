@@ -782,9 +782,7 @@ where
     persisted_number: u64,
     /// The context of applying snapshot.
     apply_snap_ctx: Option<ApplySnapshotContext>,
-    /// region buckets.
-    // pub region_buckets: Option<BucketStat>,
-    // pub last_region_buckets: Option<BucketStat>,
+    /// region buckets info in this region.
     region_buckets_info: BucketStatsInfo,
     /// lead_transferee if this peer(leader) is in a leadership transferring.
     pub lead_transferee: u64,
