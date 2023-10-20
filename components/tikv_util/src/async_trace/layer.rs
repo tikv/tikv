@@ -1,3 +1,5 @@
+// Copyright 2023 TiKV Project Authors. Licensed under Apache-2.0.
+
 use std::{
     borrow::Cow,
     cell::RefCell,
@@ -16,18 +18,19 @@ lazy_static::lazy_static! {
     static ref GLOBAL_LAYER: CurrentStacksLayer = CurrentStacksLayer::default();
 }
 
-/// Initial the `tracing` subscriber
+/// Initial the global `tracing` subscriber.
+/// This will setup a global subscriber with the layer which traces the current
+/// tree. It may be overridden by local subscribers, in that case, the global
+/// subscriber may not be able to trace the async tasks. You may manually add
+/// the layer to your subscriber.
 pub fn init() {
     subscriber::set_global_default(tracing_subscriber::registry().with(GLOBAL_LAYER.clone()))
-        .expect("failed to set the global dispatcher for async_trace, if you are adding `tracing` support for TiKV, please read the comment.");
+        .expect("failed to set the global dispatcher for async_trace.");
 }
 
-pub fn dump_all_tree_bytes() -> Vec<u8> {
-    GLOBAL_LAYER.fmt_bytes()
-}
-
-pub fn get_span_trees() -> &'static DashMap<span::Id, Arc<Mutex<Tree>>> {
-    &GLOBAL_LAYER.roots
+/// Get the reference to the singleton of global layer.
+pub fn global() -> &'static CurrentStacksLayer {
+    &GLOBAL_LAYER
 }
 
 #[derive(Default, Clone)]
@@ -40,6 +43,7 @@ impl CurrentStacksLayer {
         &self.roots
     }
 
+    /// Format the tree to a human readable string.
     pub fn fmt_string(&self) -> String {
         let res = self.fmt_bytes();
         match String::from_utf8_lossy(&res) {
@@ -49,7 +53,8 @@ impl CurrentStacksLayer {
         }
     }
 
-    fn fmt_bytes(&self) -> Vec<u8> {
+    /// Format the tree to a (probably valid) utf-8 byte sequence.
+    pub fn fmt_bytes(&self) -> Vec<u8> {
         use std::io::Write;
         let mut res = Cursor::new(vec![]);
         for ent in self.roots.iter() {

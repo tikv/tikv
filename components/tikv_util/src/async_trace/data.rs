@@ -1,13 +1,15 @@
+// Copyright 2023 TiKV Project Authors. Licensed under Apache-2.0.
+
 use std::fmt;
 
-use arrayvec::ArrayVec;
+use smallvec::SmallVec;
 use tracing::{field::Visit, span::Attributes};
 
 use crate::time::Instant;
 
 pub struct Data {
     pub start_at: Instant,
-    pub fields: ArrayVec<(&'static str, Val), 4>,
+    pub fields: SmallVec<[(&'static str, Val); 8]>,
 }
 
 impl fmt::Display for Data {
@@ -22,7 +24,7 @@ impl fmt::Display for Data {
 
 impl Data {
     pub fn from_attribute(attr: &Attributes<'_>) -> Self {
-        let mut fields = ArrayVec::new();
+        let mut fields = SmallVec::new();
         attr.record(&mut ValColl(&mut fields));
         Self {
             start_at: Instant::now_coarse(),
@@ -55,7 +57,7 @@ impl fmt::Display for Val {
         }
     }
 }
-pub struct ValColl<'a, const N: usize>(pub &'a mut ArrayVec<(&'static str, Val), N>);
+pub struct ValColl<'a, const N: usize>(pub &'a mut SmallVec<[(&'static str, Val); N]>);
 
 impl<'a, const N: usize> Visit for ValColl<'a, N> {
     fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {

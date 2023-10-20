@@ -1,3 +1,5 @@
+// Copyright 2023 TiKV Project Authors. Licensed under Apache-2.0.
+
 use std::{borrow::Cow, io::Write};
 
 pub use indextree::{Arena, NodeId};
@@ -208,8 +210,8 @@ impl<W: Write> TreeVisit for FormatTreeTo<W> {
         span: MaybeSpan<'_>,
     ) -> std::io::Result<()> {
         let not_last_one = tree[node].next_sibling().is_some();
-        let branch = if not_last_one { '├' } else { '└' };
-        write!(self.output, "{}{}", self.indent_str, branch)?;
+        let tip = if not_last_one { '├' } else { '└' };
+        write!(self.output, "{}{}", self.indent_str, tip)?;
         match span {
             MaybeSpan::Span(span) => {
                 writeln!(
@@ -226,11 +228,9 @@ impl<W: Write> TreeVisit for FormatTreeTo<W> {
                 writeln!(self.output, "[DROPPED] [span_id={}]", id.into_u64())?;
             }
         }
-        if not_last_one {
-            self.indent_str.push('│');
-        } else {
-            self.indent_str.push(' ');
-        }
+
+        let branch = if not_last_one { '│' } else { ' ' };
+        self.indent_str.push(branch);
         Ok(())
     }
 

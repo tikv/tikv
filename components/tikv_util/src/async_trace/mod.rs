@@ -1,3 +1,5 @@
+// Copyright 2023 TiKV Project Authors. Licensed under Apache-2.0.
+
 //! This mod provides the basic ability of tracing asynchronous tasks.
 //! Generally it will collect all enabled (no need to be entered) spans.
 //! When applying to the asynchronous tasks' spans, this implements something
@@ -68,7 +70,7 @@ pub mod tree;
 #[cfg(test)]
 mod test;
 
-pub use layer::{dump_all_tree_bytes, init};
+pub use layer::init;
 
 #[macro_export]
 #[doc(hidden)]
