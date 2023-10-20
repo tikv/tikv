@@ -264,7 +264,7 @@ fn get_background_job_limits_impl(
     // v2: decrease the compaction threads to make the qps more stable.
     let max_compactions = match engine_type {
         EngineType::RaftKv => max_background_jobs - max_background_flushes,
-        EngineType::RaftKv2 => (max_background_jobs + 7) / 8,
+        EngineType::RaftKv2 => (max_background_jobs + 3) / 4,
     };
     let max_sub_compactions: u32 = (max_compactions - 1).clamp(1, defaults.max_sub_compactions);
     max_background_jobs = max_background_flushes + max_compactions;
@@ -6052,7 +6052,7 @@ mod tests {
                 &KVDB_DEFAULT_BACKGROUND_JOB_LIMITS
             ),
             BackgroundJobLimits {
-                max_background_jobs: 3,
+                max_background_jobs: 4,
                 max_background_flushes: 2,
                 max_sub_compactions: 1,
                 max_titan_background_gc: 4,
@@ -6082,9 +6082,9 @@ mod tests {
                 &KVDB_DEFAULT_BACKGROUND_JOB_LIMITS
             ),
             BackgroundJobLimits {
-                max_background_jobs: 5,
+                max_background_jobs: 6,
                 max_background_flushes: 3,
-                max_sub_compactions: 1,
+                max_sub_compactions: 2,
                 max_titan_background_gc: 4,
             }
         );
