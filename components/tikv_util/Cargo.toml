@@ -62,8 +62,8 @@ time = "0.1"
 tokio = { version = "1.5", features = ["rt-multi-thread"] }
 tokio-executor = { workspace = true }
 tokio-timer = { workspace = true }
-tracing = { version = "0.1.39", default-features = false, features = [ "async-await", "attributes", "std", "tracing-attributes" ] }
-tracing-subscriber = "0.3.17"
+tracing = { version = "0.1.39", default-features = false, features = [ "attributes", "std" ] }
+tracing-subscriber = { version = "0.3.17", default-features = false, features = [ "registry", "smallvec" ] }
 tracker = { workspace = true }
 url = "2"
 yatp = { workspace = true }
