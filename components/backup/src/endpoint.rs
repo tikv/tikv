@@ -12,8 +12,7 @@ use async_channel::SendError;
 use causal_ts::{CausalTsProvider, CausalTsProviderImpl};
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::{name_to_cf, raw_ttl::ttl_current_ts, CfName, KvEngine, SstCompressionType};
-use external_storage::{BackendConfig, HdfsConfig};
-use external_storage_export::{create_storage, ExternalStorage};
+use external_storage::{create_storage, BackendConfig, ExternalStorage, HdfsConfig};
 use futures::{channel::mpsc::*, executor::block_on};
 use kvproto::{
     brpb::*,
@@ -1302,7 +1301,7 @@ pub mod tests {
     use api_version::{api_v2::RAW_KEY_PREFIX, dispatch_api_version, KvFormat, RawValue};
     use collections::HashSet;
     use engine_traits::MiscExt;
-    use external_storage_export::{make_local_backend, make_noop_backend};
+    use external_storage::{make_local_backend, make_noop_backend};
     use file_system::{IoOp, IoRateLimiter, IoType};
     use futures::{executor::block_on, stream::StreamExt};
     use kvproto::metapb;
