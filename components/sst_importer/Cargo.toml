@@ -28,8 +28,8 @@ dashmap = "5"
 encryption = { workspace = true }
 engine_rocks = { workspace = true }
 engine_traits = { workspace = true }
-external_storage ={ workspace = true }
 error_code = { workspace = true }
+external_storage ={ workspace = true }
 file_system = { workspace = true }
 futures = { version = "0.3", features = ["thread-pool"] }
 futures-util = { version = "0.3", default-features = false, features = ["io"] }
