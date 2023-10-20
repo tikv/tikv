@@ -446,6 +446,11 @@ impl<E: Engine> Endpoint<E> {
             CachedRequestHandler::builder()(snapshot, &tracker.req_ctx)?
         } else {
             if tracker.req_ctx.cache_match_version.is_some() {
+                warn!("cache version mismatch";
+                    "region_id" => tracker.req_ctx.context.region_id,
+                    "req version" => tracker.req_ctx.cache_match_version,
+                    "snap version" => snapshot.ext().get_data_version(),
+                );
                 COPR_CACHE_EFFICIENCY_VEC.with_label_values(&["miss"]).inc();
             } else {
                 COPR_CACHE_EFFICIENCY_VEC
