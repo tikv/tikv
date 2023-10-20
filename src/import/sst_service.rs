@@ -784,11 +784,13 @@ macro_rules! impl_write {
                             )
                         })?;
                     let res = f.await?;
-                    if let Err(e) = check_local_region_stale(region_id, meta.get_region_epoch(), res) {
+                    if let Err(e) =
+                        check_local_region_stale(region_id, meta.get_region_epoch(), res)
+                    {
                         let _ = rx.for_each(|i| {
                             drop(i);
                             future::ready(())
-                        });
+                        }).await;
                         return Err(e);
                     }
 
