@@ -48450,7 +48450,7 @@
           },
           "yaxes": [
             {
-              "format": "decbytes",
+              "format": "none",
               "logBase": 1,
               "show": true
             },
@@ -48539,7 +48539,7 @@
           },
           "yaxes": [
             {
-              "format": "decbytes",
+              "format": "none",
               "logBase": 1,
               "show": true
             },
@@ -48628,8 +48628,11 @@
           },
           "yaxes": [
             {
-              "format": "decbytes",
+              "format": "µs",
+              "label": null,
               "logBase": 1,
+              "max": null,
+              "min": null,
               "show": true
             },
             {
@@ -48717,8 +48720,11 @@
           },
           "yaxes": [
             {
-              "format": "decbytes",
+              "format": "ops",
+              "label": null,
               "logBase": 1,
+              "max": null,
+              "min": "0",
               "show": true
             },
             {
