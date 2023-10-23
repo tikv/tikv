@@ -1580,7 +1580,8 @@
               "intervalFactor": 2,
               "legendFormat": "{{instance}} - buckets",
               "refId": "B",
-              "step": 10
+              "step": 10,
+              "hide": true
             }
           ],
           "thresholds": [],
