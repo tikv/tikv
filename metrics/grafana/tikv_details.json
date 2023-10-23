@@ -48612,7 +48612,17 @@
               "refId": "A"
             }
           ],
-          "thresholds": [],
+          "thresholds": [
+            {
+              "value": 275000,
+              "colorMode": "critical",
+              "op": "gt",
+              "fill": false,
+              "line": true,
+              "visible": true,
+              "yaxis": "left"
+            }
+          ],
           "timeRegions": [],
           "title": "AVG Sampling Latency",
           "tooltip": {
