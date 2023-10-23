@@ -178,11 +178,12 @@ impl<K, V> SizePolicy<K, V> for CountTracker {
     }
 }
 
-/// Some [`EvictPolicy`] may need to know what the entry bing popped out is to
-/// determine if it really can be popped. But there is performance cost to
-/// always get the tail entry. So we pass this interface to the `should_evict`
-/// function. An implementation of `EvictPolicy` can read the tail entry only
-/// when it really needs.
+/// Some [`EvictPolicy`] (e.g. the `TxnStatusCache` in
+/// `tikv::storage::txn::txn_status_cache` module) may need to know what the
+/// entry bing popped out is to determine if it really can be popped. But there
+/// is performance cost to always get the tail entry. So we pass this interface
+/// to the `should_evict` function. An implementation of `EvictPolicy` can read
+/// the tail entry only when it really needs.
 pub trait GetTailEntry<K, V> {
     fn get_tail_entry(&self) -> Option<(&K, &V)>;
 }
