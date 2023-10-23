@@ -10,7 +10,7 @@ use std::{
 use collections::HashMap;
 use engine_rocks::RocksEngine;
 use engine_traits::CF_DEFAULT;
-use external_storage_export::{ExternalStorage, UnpinReader};
+use external_storage::{ExternalStorage, UnpinReader};
 use futures::{executor::block_on, io::Cursor as AsyncCursor, stream, SinkExt};
 use grpcio::{ChannelBuilder, Environment, Result, WriteFlags};
 use kvproto::{

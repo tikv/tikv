@@ -4,7 +4,6 @@ use std::{io, marker::Unpin, pin::Pin, task::Poll};
 
 use async_trait::async_trait;
 use futures_io::AsyncRead;
-pub use kvproto::brpb::CloudDynamic;
 
 pub trait BlobConfig: 'static + Send + Sync {
     fn name(&self) -> &'static str;
@@ -176,20 +175,6 @@ impl BucketConf {
             u.set_path(&path);
             Ok(u)
         }
-    }
-
-    pub fn from_cloud_dynamic(cloud_dynamic: &CloudDynamic) -> io::Result<Self> {
-        let bucket = cloud_dynamic.bucket.clone().into_option().ok_or_else(|| {
-            io::Error::new(io::ErrorKind::Other, "Required field bucket is missing")
-        })?;
-
-        Ok(Self {
-            endpoint: StringNonEmpty::opt(bucket.endpoint),
-            bucket: StringNonEmpty::required_field(bucket.bucket, "bucket")?,
-            prefix: StringNonEmpty::opt(bucket.prefix),
-            storage_class: StringNonEmpty::opt(bucket.storage_class),
-            region: StringNonEmpty::opt(bucket.region),
-        })
     }
 }
 
