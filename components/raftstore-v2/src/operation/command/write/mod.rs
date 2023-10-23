@@ -5,14 +5,15 @@ use engine_traits::{
 };
 use fail::fail_point;
 use futures::channel::oneshot;
-use kvproto::{kvrpcpb::DiskFullOpt, raft_cmdpb::RaftRequestHeader};
+use kvproto::raft_cmdpb::RaftRequestHeader;
 use raftstore::{
     store::{
         cmd_resp,
         fsm::{apply, MAX_PROPOSAL_SIZE_RATIO},
         metrics::PEER_WRITE_CMD_COUNTER,
         msg::ErrorCallback,
-        util::{self, NORMAL_REQ_CHECK_CONF_VER, NORMAL_REQ_CHECK_VER},
+        util::{self},
+        RaftCmdExtraOpts,
     },
     Error, Result,
 };
@@ -42,7 +43,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         header: Box<RaftRequestHeader>,
         data: SimpleWriteBinary,
         ch: CmdResChannel,
-        disk_full_opt: Option<DiskFullOpt>,
+        extra_opts: Option<RaftCmdExtraOpts>,
     ) {
         if !self.serving() {
             apply::notify_req_region_removed(self.region_id(), ch);
@@ -60,12 +61,19 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             ch.report_error(resp);
             return;
         }
-        // Check whether the write request can be proposed with the given disk full
-        // option.
-        if let Some(opt) = disk_full_opt && let Err(e) = self.check_proposal_with_disk_full_opt(ctx, opt) {
-            let resp = cmd_resp::new_error(e);
-            ch.report_error(resp);
-            return;
+        if let Some(opts) = extra_opts {
+            if let Some(Err(e)) = opts.deadline.map(|deadline| deadline.check()) {
+                let resp = cmd_resp::new_error(e.into());
+                ch.report_error(resp);
+                return;
+            }
+            // Check whether the write request can be proposed with the given disk full
+            // option.
+            if let Err(e) = self.check_proposal_with_disk_full_opt(ctx, opts.disk_full_opt) {
+                let resp = cmd_resp::new_error(e);
+                ch.report_error(resp);
+                return;
+            }
         }
         // To maintain propose order, we need to make pending proposal first.
         self.propose_pending_writes(ctx);
@@ -80,13 +88,10 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             ch.report_error(resp);
             return;
         }
-        // ProposalControl is reliable only when applied to current term.
-        let call_proposed_on_success = self.applied_to_current_term();
         let mut encoder = SimpleWriteReqEncoder::new(
             header,
             data,
             (ctx.cfg.raft_entry_max_size.0 as f64 * MAX_PROPOSAL_SIZE_RATIO) as usize,
-            call_proposed_on_success,
         );
         encoder.add_response_channel(ch);
         self.set_has_ready();
@@ -106,7 +111,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             Box::<RaftRequestHeader>::default(),
             data,
             ctx.cfg.raft_entry_max_size.0 as usize,
-            false,
         )
         .encode()
         .0
@@ -118,30 +122,17 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 
     pub fn propose_pending_writes<T>(&mut self, ctx: &mut StoreContext<EK, ER, T>) {
         if let Some(encoder) = self.simple_write_encoder_mut().take() {
-            let call_proposed_on_success = if encoder.notify_proposed() {
-                // The request has pass conflict check and called all proposed callbacks.
+            let header = encoder.header();
+            let res = self.validate_command(header, None, &mut ctx.raft_metrics);
+            let call_proposed_on_success = if matches!(res, Err(Error::EpochNotMatch { .. })) {
                 false
             } else {
-                // Epoch may have changed since last check.
-                let from_epoch = encoder.header().get_region_epoch();
-                let res = util::compare_region_epoch(
-                    from_epoch,
-                    self.region(),
-                    NORMAL_REQ_CHECK_CONF_VER,
-                    NORMAL_REQ_CHECK_VER,
-                    true,
-                );
-                if let Err(e) = res {
-                    // TODO: query sibling regions.
-                    ctx.raft_metrics.invalid_proposal.epoch_not_match.inc();
-                    encoder.encode().1.report_error(cmd_resp::new_error(e));
-                    return;
-                }
-                // Only when it applies to current term, the epoch check can be reliable.
                 self.applied_to_current_term()
             };
+
             let (data, chs) = encoder.encode();
-            let res = self.propose(ctx, data);
+            let res = res.and_then(|_| self.propose(ctx, data));
+
             fail_point!("after_propose_pending_writes");
 
             self.post_propose_command(ctx, res, chs, call_proposed_on_success);

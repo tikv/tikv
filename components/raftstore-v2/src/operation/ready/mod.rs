@@ -55,7 +55,7 @@ use tikv_util::{
     slog_panic,
     store::find_peer,
     sys::disk::DiskUsage,
-    time::{duration_to_sec, monotonic_raw_now, Duration},
+    time::{duration_to_sec, monotonic_raw_now, Duration, Instant as TiInstant},
 };
 
 pub use self::{
@@ -259,6 +259,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         &mut self,
         ctx: &mut StoreContext<EK, ER, T>,
         mut msg: Box<RaftMessage>,
+        send_time: Option<TiInstant>,
     ) {
         debug!(
             self.logger,
@@ -268,6 +269,13 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             "to_peer_id" => msg.get_to_peer().get_id(),
             "disk_usage" => ?msg.disk_usage,
         );
+        if let Some(send_time) = send_time {
+            let process_wait_time = send_time.saturating_elapsed();
+            ctx.raft_metrics
+                .process_wait_time
+                .observe(duration_to_sec(process_wait_time));
+        }
+
         if self.pause_for_replay() && msg.get_message().get_msg_type() == MessageType::MsgAppend {
             ctx.raft_metrics.message_dropped.recovery.inc();
             return;

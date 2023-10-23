@@ -92,13 +92,12 @@
 //! * Note: the `TxnStatusCache` is designed prepared for this usage, but not
 //! used yet for now.
 //!
-//! Consider the case that a cluster a very-large transaction locked a lot of
-//! keys after prewritting, while many simple reads and writes executes
-//! frequently, thus these simple transactions frequently meets the lock left
-//! by the large transaction. It will be very inefficient for these small
-//! transactions to come back to the client and start resolve lock procedure.
-//! Even if the client side has the cache of that transaction, it still wastes
-//! an RTT.
+//! Consider the case that a very-large transaction locked a lot of keys after
+//! prewriting, while many simple reads and writes executes frequently, thus
+//! these simple transactions frequently meets the lock left by the large
+//! transaction. It will be very inefficient for these small transactions to
+//! come back to the client and start resolve lock procedure. Even if the client
+//! side has the cache of that transaction, it still wastes an RTT.
 //!
 //! There would be more possibilities if we have such a cache in TiKV side: for
 //! read requests, it can check the cache to know whether it can read from the
@@ -115,7 +114,7 @@ use crossbeam::utils::CachePadded;
 use parking_lot::Mutex;
 use tikv_util::{
     lru,
-    lru::{GetTailKv, LruCache},
+    lru::{GetTailEntry, LruCache},
 };
 use txn_types::TimeStamp;
 
@@ -187,11 +186,11 @@ impl lru::EvictPolicy<TimeStamp, CacheEntry> for TxnStatusCacheEvictPolicy {
         &self,
         current_size: usize,
         capacity: usize,
-        get_tail_kv: &impl GetTailKv<TimeStamp, CacheEntry>,
+        get_tail_entry: &impl GetTailEntry<TimeStamp, CacheEntry>,
     ) -> bool {
         // See how much time has been elapsed since the tail entry is inserted.
         // If it's long enough, remove it.
-        if let Some((_, v)) = get_tail_kv.get_tail_kv() {
+        if let Some((_, v)) = get_tail_entry.get_tail_entry() {
             if self.now().duration_since(UNIX_EPOCH).unwrap().as_millis() as u64
                 > self.required_keep_time_millis + v.insert_time
             {
@@ -319,9 +318,9 @@ impl TxnStatusCache {
         fxhash::hash(&start_ts) % self.slots.len()
     }
 
-    /// Insert a transaction status into the cache. The current system should
-    /// be passed from outside to avoid getting system time repeatedly when
-    /// multiple items is being inserted.
+    /// Insert a transaction status into the cache. The current system time
+    /// should be passed from outside to avoid getting system time repeatedly
+    /// when multiple items is being inserted.
     ///
     /// If the transaction's information is already in the cache, it will
     /// **NOT** be promoted to the most-recent place of the internal LRU.

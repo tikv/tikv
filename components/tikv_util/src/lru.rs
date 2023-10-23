@@ -135,6 +135,10 @@ impl<K> Trace<K> {
             r.key.as_ptr().read()
         }
     }
+
+    fn get_tail(&self) -> &K {
+        unsafe { self.tail.as_ref().prev.as_ref().key.assume_init_ref() }
+    }
 }
 
 impl<K> Drop for Trace<K> {
@@ -174,23 +178,38 @@ impl<K, V> SizePolicy<K, V> for CountTracker {
     }
 }
 
-pub trait GetTailKv<K, V> {
-    fn get_tail_kv(&self) -> Option<(&K, &V)>;
+/// Some [`EvictPolicy`] (e.g. the `TxnStatusCache` in
+/// `tikv::storage::txn::txn_status_cache` module) may need to know what the
+/// entry bing popped out is to determine if it really can be popped. But there
+/// is performance cost to always get the tail entry. So we pass this interface
+/// to the `should_evict` function. An implementation of `EvictPolicy` can read
+/// the tail entry only when it really needs.
+pub trait GetTailEntry<K, V> {
+    fn get_tail_entry(&self) -> Option<(&K, &V)>;
 }
 
+/// An [`EvictPolicy`] defines how the [`LruCache`] should determine an entry
+/// at the tail should be popped out.
 pub trait EvictPolicy<K, V> {
     fn should_evict(
         &self,
         current_size: usize,
         capacity: usize,
-        get_tail_kv: &impl GetTailKv<K, V>,
+        get_tail_entry: &impl GetTailEntry<K, V>,
     ) -> bool;
 }
 
+/// The default [`EvictPolicy`] of [`LruCache`], which pops out entries at the
+/// tail when the limit specified by `capacity` is exceeded.
 pub struct EvictOnFull;
 
 impl<K, V> EvictPolicy<K, V> for EvictOnFull {
-    fn should_evict(&self, current_size: usize, capacity: usize, _: &impl GetTailKv<K, V>) -> bool {
+    fn should_evict(
+        &self,
+        current_size: usize,
+        capacity: usize,
+        _: &impl GetTailEntry<K, V>,
+    ) -> bool {
         capacity < current_size
     }
 }
@@ -212,20 +231,11 @@ where
     T: SizePolicy<K, V>,
 {
     pub fn with_capacity_sample_and_trace(
-        mut capacity: usize,
+        capacity: usize,
         sample_mask: usize,
         size_policy: T,
     ) -> LruCache<K, V, T> {
-        if capacity == 0 {
-            capacity = 1;
-        }
-        LruCache {
-            map: HashMap::default(),
-            trace: Trace::new(sample_mask),
-            capacity,
-            size_policy,
-            evict_policy: EvictOnFull,
-        }
+        Self::new(capacity, sample_mask, size_policy, EvictOnFull)
     }
 }
 
@@ -235,6 +245,7 @@ where
     E: EvictPolicy<K, V>,
 {
     pub fn new(mut capacity: usize, sample_mask: usize, size_policy: T, evict_policy: E) -> Self {
+        // The capacity is at least 1.
         if capacity == 0 {
             capacity = 1;
         }
@@ -292,7 +303,8 @@ where
     E: EvictPolicy<K, V>,
 {
     #[inline]
-    fn insert_impl(&mut self, key: K, value: V, replace: bool) {
+    fn insert_impl(&mut self, key: K, value: V, replace: bool) -> bool {
+        let mut inserted = true;
         let mut old_key = None;
         let current_size = SizePolicy::<K, V>::current(&self.size_policy);
         // In case the current size exactly equals to capacity, we also expect to reuse
@@ -308,6 +320,8 @@ where
                     let mut entry = e.get_mut();
                     self.trace.promote(entry.record);
                     entry.value = value;
+                } else {
+                    inserted = false;
                 }
             }
             HashMapEntry::Vacant(v) => {
@@ -333,7 +347,8 @@ where
         // Perhaps we can reject entries larger than capacity goes in the LRU cache, but
         // that is impossible for now: the `SizePolicy` trait doesn't provide the
         // interface of querying the actual size of an item.
-        self.evict_until_fit()
+        self.evict_until_fit();
+        inserted
     }
 
     fn evict_until_fit(&mut self) {
@@ -359,8 +374,8 @@ where
     /// Insert an entry if the key doesn't exist before. The existing entry
     /// won't be replaced and won't be promoted to the most-recent place.
     #[inline]
-    pub fn insert_if_not_exist(&mut self, key: K, value: V) {
-        self.insert_impl(key, value, false);
+    pub fn insert_if_not_exist(&mut self, key: K, value: V) -> bool {
+        self.insert_impl(key, value, false)
     }
 
     #[inline]
@@ -432,18 +447,18 @@ where
     }
 }
 
-impl<K, V, T, E> GetTailKv<K, V> for LruCache<K, V, T, E>
+impl<K, V, T, E> GetTailEntry<K, V> for LruCache<K, V, T, E>
 where
     K: Eq + Hash + Clone + std::fmt::Debug,
     T: SizePolicy<K, V>,
     E: EvictPolicy<K, V>,
 {
-    fn get_tail_kv(&self) -> Option<(&K, &V)> {
+    fn get_tail_entry(&self) -> Option<(&K, &V)> {
         if self.is_empty() {
             return None;
         }
 
-        let k = unsafe { self.trace.tail.as_ref().prev.as_ref().key.assume_init_ref() };
+        let k = self.trace.get_tail();
         self.map
             .get_key_value(k)
             .map(|(k, entry)| (k, &entry.value))
@@ -745,37 +760,37 @@ mod tests {
     #[test]
     fn test_insert_if_not_exist() {
         let mut cache = LruCache::with_capacity_sample_and_trace(4, 0, CountTracker::default());
-        cache.insert_if_not_exist(1, 1);
-        cache.insert_if_not_exist(2, 2);
-        cache.insert_if_not_exist(3, 3);
+        assert!(cache.insert_if_not_exist(1, 1));
+        assert!(cache.insert_if_not_exist(2, 2));
+        assert!(cache.insert_if_not_exist(3, 3));
         assert_eq!(cache.size(), 3);
         assert_eq!(*cache.get_no_promote(&1).unwrap(), 1);
         assert_eq!(*cache.get_no_promote(&2).unwrap(), 2);
         assert_eq!(*cache.get_no_promote(&3).unwrap(), 3);
 
-        cache.insert_if_not_exist(1, 11);
+        assert!(!cache.insert_if_not_exist(1, 11));
         // Not updated.
         assert_eq!(*cache.get_no_promote(&1).unwrap(), 1);
 
-        cache.insert_if_not_exist(4, 4);
-        cache.insert_if_not_exist(2, 22);
+        assert!(cache.insert_if_not_exist(4, 4));
+        assert!(!cache.insert_if_not_exist(2, 22));
         // Not updated.
         assert_eq!(*cache.get_no_promote(&2).unwrap(), 2);
 
         assert_eq!(cache.size(), 4);
-        cache.insert_if_not_exist(5, 5);
+        assert!(cache.insert_if_not_exist(5, 5));
         assert_eq!(cache.size(), 4);
         // key 1 is not promoted, so it's first popped out.
         assert!(cache.get_no_promote(&1).is_none());
         assert_eq!(*cache.get_no_promote(&2).unwrap(), 2);
 
-        cache.insert_if_not_exist(6, 6);
+        assert!(cache.insert_if_not_exist(6, 6));
         assert_eq!(cache.size(), 4);
         // key 2 is not promoted either, so it's first popped out.
         assert!(cache.get_no_promote(&2).is_none());
         assert_eq!(*cache.get_no_promote(&3).unwrap(), 3);
 
-        cache.insert_if_not_exist(7, 7);
+        assert!(cache.insert_if_not_exist(7, 7));
         assert_eq!(cache.size(), 4);
         assert!(cache.get_no_promote(&3).is_none());
         assert_eq!(*cache.get_no_promote(&4).unwrap(), 4);
