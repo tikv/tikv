@@ -4,7 +4,7 @@ use std::path::Path;
 
 use encryption::DataKeyManager;
 use engine_traits::EncryptionKeyManager;
-use external_storage_export::ExternalStorage;
+use external_storage::ExternalStorage;
 use file_system::File;
 
 use super::Result;

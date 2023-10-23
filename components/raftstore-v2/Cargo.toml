@@ -24,10 +24,6 @@ test-engines-panic = [
   "engine_test/test-engines-panic",
 ]
 
-cloud-aws = ["raftstore/cloud-aws"]
-cloud-gcp = ["raftstore/cloud-gcp"]
-cloud-azure = ["raftstore/cloud-azure"]
-
 [dependencies]
 batch-system = { workspace = true }
 bytes = "1.0"
