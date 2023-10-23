@@ -976,14 +976,13 @@ fn test_refresh_region_bucket_keys() {
     cluster.run();
     let pd_client = Arc::clone(&cluster.pd_client);
 
+    // case: init bucket info
     cluster.must_put(b"k11", b"v1");
     let mut region = pd_client.get_region(b"k11").unwrap();
-
     let bucket = Bucket {
         keys: vec![b"k11".to_vec()],
         size: 1024 * 1024 * 200,
     };
-
     let mut expected_buckets = metapb::Buckets::default();
     expected_buckets.set_keys(bucket.clone().keys.into());
     expected_buckets
@@ -997,6 +996,8 @@ fn test_refresh_region_bucket_keys() {
         Option::None,
         Some(expected_buckets.clone()),
     );
+
+    // case: bucket range should refresh if epoch changed
     let conf_ver = region.get_region_epoch().get_conf_ver() + 1;
     region.mut_region_epoch().set_conf_ver(conf_ver);
 
@@ -1018,6 +1019,7 @@ fn test_refresh_region_bucket_keys() {
     );
     assert_eq!(bucket_version2, bucket_version + 1);
 
+    // case：stale epoch will not refresh buckets info
     let conf_ver = 0;
     region.mut_region_epoch().set_conf_ver(conf_ver);
     let bucket_version3 = cluster.refresh_region_bucket_keys(
@@ -1028,6 +1030,7 @@ fn test_refresh_region_bucket_keys() {
     );
     assert_eq!(bucket_version3, bucket_version2);
 
+    // case : bucket split 
     // now the buckets is ["", "k12", ""]. further split ["", k12], [k12, ""]
     // buckets into more buckets
     let region = pd_client.get_region(b"k11").unwrap();
@@ -1066,6 +1069,7 @@ fn test_refresh_region_bucket_keys() {
     );
     assert_eq!(bucket_version4, bucket_version3 + 1);
 
+    // case: merge buckets
     // remove k11~k12, k12~k121, k122~[] bucket
     let buckets = vec![
         Bucket {
@@ -1107,7 +1111,7 @@ fn test_refresh_region_bucket_keys() {
 
     assert_eq!(bucket_version5, bucket_version4 + 1);
 
-    // split the region
+    // case: split the region
     pd_client.must_split_region(region, pdpb::CheckPolicy::Usekey, vec![b"k11".to_vec()]);
     let mut buckets = vec![Bucket {
         keys: vec![b"k10".to_vec()],
@@ -1132,7 +1136,7 @@ fn test_refresh_region_bucket_keys() {
         cluster.refresh_region_bucket_keys(&region, buckets, None, Some(expected_buckets.clone()));
     assert_eq!(bucket_version6, bucket_version5 + 1);
 
-    // merge the region
+    // case: merge the region
     pd_client.must_merge(left_id, right.get_id());
     let region = pd_client.get_region(b"k10").unwrap();
     let buckets = vec![Bucket {
@@ -1145,6 +1149,7 @@ fn test_refresh_region_bucket_keys() {
         cluster.refresh_region_bucket_keys(&region, buckets, None, Some(expected_buckets.clone()));
     assert_eq!(bucket_version7, bucket_version6 + 1);
 
+    // case: nothing changed
     let bucket_version8 = cluster.refresh_region_bucket_keys(
         &region,
         vec![],
