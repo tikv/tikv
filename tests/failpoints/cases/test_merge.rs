@@ -1831,7 +1831,10 @@ fn test_concurrent_between_transfer_leader_and_merge() {
     // Actually, store 1 should not reach the line of propose_commit_merge_1
     let _ = rx.recv_timeout(Duration::from_secs(2));
     router
-        .force_send(msg.get_region_id(), PeerMsg::RaftMessage(Box::new(msg)))
+        .force_send(
+            msg.get_region_id(),
+            PeerMsg::RaftMessage(Box::new(msg), None),
+        )
         .unwrap();
 
     // Wait region 1 of node 2 to become leader

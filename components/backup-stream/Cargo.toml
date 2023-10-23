@@ -43,7 +43,6 @@ error_code = { workspace = true }
 # Also we need wait until https://github.com/etcdv3/etcd-client/pull/43/files to be merged.
 etcd-client = { git = "https://github.com/pingcap/etcd-client", rev = "41d393c32a7a7c728550cee1d9a138dafe6f3e27", features = ["pub-response-field", "tls-openssl-vendored"], optional = true }
 external_storage = { workspace = true }
-external_storage_export = { workspace = true }
 fail = "0.5"
 file_system = { workspace = true }
 futures = "0.3"
@@ -78,7 +77,7 @@ tikv_kv = { workspace = true }
 tikv_util = { workspace = true }
 tokio = { version = "1.5", features = ["rt-multi-thread", "macros", "time", "sync"] }
 tokio-stream = "0.1"
-tokio-util = { version = "0.7", features = ["compat"] } 
+tokio-util = { version = "0.7", features = ["compat"] }
 tonic = { version = "0.8", optional = true }
 txn_types = { workspace = true }
 uuid = "0.8"
