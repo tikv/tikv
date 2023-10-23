@@ -7,7 +7,7 @@ use engine_traits::{
     CfName, ExternalSstFileInfo, KvEngine, SstCompressionType, SstExt, SstWriter, SstWriterBuilder,
     CF_DEFAULT, CF_WRITE,
 };
-use external_storage_export::{ExternalStorage, UnpinReader};
+use external_storage::{ExternalStorage, UnpinReader};
 use file_system::Sha256Reader;
 use futures_util::io::AllowStdIo;
 use kvproto::{
@@ -485,9 +485,8 @@ mod tests {
             .build()
             .unwrap();
         let db = rocks.get_rocksdb();
-        let backend = external_storage_export::make_local_backend(temp.path());
-        let storage =
-            external_storage_export::create_storage(&backend, Default::default()).unwrap();
+        let backend = external_storage::make_local_backend(temp.path());
+        let storage = external_storage::create_storage(&backend, Default::default()).unwrap();
 
         // Test empty file.
         let mut r = kvproto::metapb::Region::default();

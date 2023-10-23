@@ -14,8 +14,7 @@ use std::{
 };
 
 use engine_traits::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
-use external_storage::{BackendConfig, UnpinReader};
-use external_storage_export::{create_storage, ExternalStorage};
+use external_storage::{create_storage, BackendConfig, ExternalStorage, UnpinReader};
 use futures::io::Cursor;
 use kvproto::{
     brpb::{
@@ -1885,7 +1884,7 @@ mod tests {
     #[tokio::test]
     async fn test_do_flush() {
         let tmp_dir = tempfile::tempdir().unwrap();
-        let backend = external_storage_export::make_local_backend(tmp_dir.path());
+        let backend = external_storage::make_local_backend(tmp_dir.path());
         let mut task_info = StreamBackupTaskInfo::default();
         task_info.set_storage(backend);
         let stream_task = StreamTask {
@@ -2258,7 +2257,7 @@ mod tests {
     async fn test_update_global_checkpoint() -> Result<()> {
         // create local storage
         let tmp_dir = tempfile::tempdir().unwrap();
-        let backend = external_storage_export::make_local_backend(tmp_dir.path());
+        let backend = external_storage::make_local_backend(tmp_dir.path());
 
         // build a StreamTaskInfo
         let mut task_info = StreamBackupTaskInfo::default();
