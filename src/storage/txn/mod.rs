@@ -6,6 +6,7 @@ pub mod commands;
 pub mod flow_controller;
 pub mod sched_pool;
 pub mod scheduler;
+pub mod txn_status_cache;
 
 mod actions;
 mod latch;
