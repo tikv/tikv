@@ -48381,7 +48381,7 @@
           "dashLength": 10,
           "dashes": false,
           "datasource": "${DS_TEST-CLUSTER}",
-          "description": "The changing rate of the slowness on I/O operations. 'value > 0' means the related store might has a slow trend.",
+          "description": "The changing trend of the slowness on I/O operations. 'value > 0' means the related store might has a slow trend.",
           "fill": 1,
           "fillGradient": 0,
           "gridPos": {
@@ -48525,7 +48525,7 @@
           ],
           "thresholds": [],
           "timeRegions": [],
-          "title": "QPS Changing Rate",
+          "title": "QPS Changing Trend",
           "tooltip": {
             "shared": true,
             "sort": 0,
