@@ -2,7 +2,7 @@
 
 use std::fmt;
 
-use smallvec::SmallVec;
+use smallvec::{Array, SmallVec};
 use tracing::{field::Visit, span::Attributes};
 
 use crate::time::Instant;
@@ -57,9 +57,9 @@ impl fmt::Display for Val {
         }
     }
 }
-pub struct ValColl<'a, const N: usize>(pub &'a mut SmallVec<[(&'static str, Val); N]>);
+pub struct ValColl<'a, A: Array<Item = (&'static str, Val)>>(pub &'a mut SmallVec<A>);
 
-impl<'a, const N: usize> Visit for ValColl<'a, N> {
+impl<'a, A: Array<Item = (&'static str, Val)>> Visit for ValColl<'a, A> {
     fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
         self.0
             .push((field.name(), Val::String(format!("{value:?}"))))
