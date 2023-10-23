@@ -754,7 +754,7 @@ macro_rules! impl_write {
                 let (res, rx) = async move {
                     let first_req = match rx.try_next().await {
                         Ok(r) => r,
-                        Err(e) => return (Err(From::from(e)), Some(rx)),
+                        Err(e) => return (Err(e), Some(rx)),
                     };
                     let (meta, resource_limiter) = match first_req {
                         Some(r) => {
@@ -786,7 +786,7 @@ macro_rules! impl_write {
                             )
                         })
                     {
-                        return (Err(From::from(e)), Some(rx));
+                        return (Err(e), Some(rx));
                     };
                     let res = match f.await {
                         Ok(r) => r,
@@ -795,7 +795,7 @@ macro_rules! impl_write {
                     if let Err(e) =
                         check_local_region_stale(region_id, meta.get_region_epoch(), res)
                     {
-                        return (Err(From::from(e)), Some(rx));
+                        return (Err(e), Some(rx));
                     };
 
                     let tablet = match tablets.get(region_id) {
@@ -837,7 +837,7 @@ macro_rules! impl_write {
                         .await;
                     let (writer, resource_limiter) = match result {
                         Ok(r) => r,
-                        Err(e) => return (Err(From::from(e)), None),
+                        Err(e) => return (Err(e), None),
                     };
 
                     let finish_fn = async {
@@ -849,7 +849,7 @@ macro_rules! impl_write {
                     let metas: Result<_> = with_resource_limiter(finish_fn, resource_limiter).await;
                     let metas = match metas {
                         Ok(r) => r,
-                        Err(e) => return (Err(From::from(e)), None),
+                        Err(e) => return (Err(e), None),
                     };
                     let mut resp = $resp_ty::default();
                     resp.set_metas(metas.into());
@@ -858,9 +858,7 @@ macro_rules! impl_write {
                 .await;
                 $crate::send_rpc_response!(res, sink, label, timer);
                 // don't drop rx before send response
-                if rx.is_some() {
-                    warn!("lance test")
-                }
+                _ = rx;
             };
 
             self.threads.spawn(buf_driver);
