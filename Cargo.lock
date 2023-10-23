@@ -7740,7 +7740,7 @@ checksum = "541b12c998c5b56aa2b4e6f18f03664eef9a4fd0a246a55594efae6cc2d964b5"
 [[package]]
 name = "yatp"
 version = "0.0.1"
-source = "git+https://github.com/tikv/yatp.git?branch=master#5572a78702572087cab8ddcdd1fe30e5bf76ae42"
+source = "git+https://github.com/glorv/yatp?branch=prioirty-reschedule#d2e6b52fe064291bd94ade8a24a64444a9c68073"
 dependencies = [
  "crossbeam-deque",
  "crossbeam-skiplist",

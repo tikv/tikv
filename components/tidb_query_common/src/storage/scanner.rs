@@ -5,6 +5,7 @@ use std::{marker::PhantomData, time::Duration};
 use api_version::KvFormat;
 use tikv_util::time::Instant;
 use yatp::task::future::reschedule;
+use yatp::queue::multilevel::get_task_priority;
 
 use super::{range::*, ranges_iter::*, OwnedKvPair, Storage};
 use crate::error::StorageError;
@@ -54,9 +55,24 @@ impl RescheduleChecker {
         }
     }
 
+    #[inline]
+    fn get_max_time_slice(priority: u64) -> Duration {
+        let level = priority >> 60;
+        if priority == 0 {
+            MAX_TIME_SLICE
+        } else if level < 6 {
+            Duration::from_millis(5)
+        } else if level < 12 {
+            Duration::from_millis(2)
+        } else {
+            Duration::from_millis(1)
+        }
+    }
+
     #[inline(always)]
     async fn check_reschedule(&mut self, force_check: bool) {
         self.prev_key_count += 1;
+        //let priority = get_task_priority();
         if (force_check || self.prev_key_count % CHECK_KEYS == 0)
             && self.prev_start.saturating_elapsed() > MAX_TIME_SLICE
         {

@@ -208,6 +208,9 @@ procinfo = { git = "https://github.com/tikv/procinfo-rs", rev = "7693954bd1dd86e
 # [patch.'https://github.com/tikv/rust-rocksdb']
 # rocksdb = { git = "https://github.com/your_github_id/rust-rocksdb", branch = "your_branch" }
 
+[patch.'https://github.com/tikv/yatp']
+yatp = { git = "https://github.com/glorv/yatp", branch = "prioirty-reschedule" }
+
 [workspace]
 # See https://github.com/rust-lang/rfcs/blob/master/text/2957-cargo-features2.md
 # Without resolver = 2, using `cargo build --features x` to build `cmd`

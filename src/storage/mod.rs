@@ -820,6 +820,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                     let source = ctx.take_request_source();
                     let region_id = ctx.get_region_id();
                     let peer = ctx.get_peer();
+                    let group_name = ctx.get_resource_control_context().get_resource_group_name().to_string();
 
                     let key = Key::from_raw(req.get_key());
                     tls_collect_query(
@@ -857,7 +858,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                             snap_ctx
                         }
                         Err(e) => {
-                            consumer.consume(id, Err(e), begin_instant, source);
+                            consumer.consume(id, Err(e), begin_instant, source, group_name);
                             continue;
                         }
                     };
@@ -876,6 +877,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                         source,
                         tracker,
                         deadline,
+                        group_name,
                     ));
                 }
                 Self::with_tls_engine(|engine| engine.release_snapshot());
@@ -893,10 +895,11 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                         source,
                         tracker,
                         deadline,
+                        group_name,
                     ) = req_snap;
                     let snap_res = snap.await;
                     if let Err(e) = deadline.check() {
-                        consumer.consume(id, Err(Error::from(e)), begin_instant, source);
+                        consumer.consume(id, Err(Error::from(e)), begin_instant, source, group_name);
                         continue;
                     }
 
@@ -928,6 +931,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                                             .map(|v| (v, stat)),
                                         begin_instant,
                                         source,
+                                        group_name,
                                     );
                                 }
                                 Err(e) => {
@@ -936,12 +940,13 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                                         Err(Error::from(txn::Error::from(e))),
                                         begin_instant,
                                         source,
+                                        group_name,
                                     );
                                 }
                             }
                         }),
                         Err(e) => {
-                            consumer.consume(id, Err(e), begin_instant, source);
+                            consumer.consume(id, Err(e), begin_instant, source, group_name);
                         }
                     }
                 }
@@ -1835,6 +1840,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                                             .map_err(Error::from),
                                         begin_instant,
                                         ctx.take_request_source(),
+                                        "".into(),
                                     );
                                     tls_collect_read_flow(
                                         ctx.get_region_id(),
@@ -1850,12 +1856,13 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                                         Err(e),
                                         begin_instant,
                                         ctx.take_request_source(),
+                                        "".into(),
                                     );
                                 }
                             }
                         }
                         Err(e) => {
-                            consumer.consume(id, Err(e), begin_instant, ctx.take_request_source());
+                            consumer.consume(id, Err(e), begin_instant, ctx.take_request_source(), "".to_owned());
                         }
                     }
                 }
@@ -3430,6 +3437,7 @@ pub trait ResponseBatchConsumer<ConsumeResponse: Sized>: Send {
         res: Result<ConsumeResponse>,
         begin: Instant,
         request_source: String,
+        group: String,
     );
 }
 
@@ -3730,6 +3738,7 @@ pub mod test_util {
             res: Result<(Option<Vec<u8>>, Statistics)>,
             _: Instant,
             _source: String,
+            _group: String,
         ) {
             self.data.lock().unwrap().push(GetResult {
                 id,
@@ -3739,7 +3748,7 @@ pub mod test_util {
     }
 
     impl ResponseBatchConsumer<Option<Vec<u8>>> for GetConsumer {
-        fn consume(&self, id: u64, res: Result<Option<Vec<u8>>>, _: Instant, _source: String) {
+        fn consume(&self, id: u64, res: Result<Option<Vec<u8>>>, _: Instant, _source: String, _group: String) {
             self.data.lock().unwrap().push(GetResult { id, res });
         }
     }

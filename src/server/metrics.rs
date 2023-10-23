@@ -238,6 +238,13 @@ lazy_static! {
         exponential_buckets(5e-5, 2.0, 22).unwrap() // 50us ~ 104s
     )
     .unwrap();
+    pub static ref GRPC_MSG_GROUP_HISTOGRAM_VEC: HistogramVec = register_histogram_vec!(
+        "tikv_grpc_msg_group_duration_seconds",
+        "Bucketed histogram of grpc server messages by resource group",
+        &["name"],
+        exponential_buckets(5e-5, 2.0, 22).unwrap() // 50us ~ 104s
+    )
+    .unwrap();
     pub static ref SERVER_INFO_GAUGE_VEC: IntGaugeVec = register_int_gauge_vec!(
         "tikv_server_info",
         "Indicate the tikv server info, and the value is the server startup timestamp(s).",
