@@ -29,11 +29,24 @@ pub fn init() {
 }
 
 /// Get the reference to the singleton of global layer.
+/// You can access the tree via this reference.
 pub fn global() -> &'static CurrentStacksLayer {
     &GLOBAL_LAYER
 }
 
 #[derive(Default, Clone)]
+/// A layer tracing the currently enabled spans.
+///
+/// # Notice
+///
+/// For performance reason, this traces the span's id instead of the span it
+/// self. So be aware that:
+/// - Even this type is shareable, please don't register the same one to two
+///   different `Registry`s, or the span ID between them may be mixed up. Which
+///   may lead to resource leakage or other strange thing.
+/// - When trying to access the content of spans, make sure the current default
+///   subscriber is where this layer registered to. Or you may get many
+///   `[DROPPED]` spans.
 pub struct CurrentStacksLayer {
     roots: Arc<DashMap<span::Id, Arc<Mutex<Tree>>>>,
 }
