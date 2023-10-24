@@ -1030,7 +1030,7 @@ fn test_refresh_region_bucket_keys() {
     );
     assert_eq!(bucket_version3, bucket_version2);
 
-    // case : bucket split 
+    // case : bucket split
     // now the buckets is ["", "k12", ""]. further split ["", k12], [k12, ""]
     // buckets into more buckets
     let region = pd_client.get_region(b"k11").unwrap();
