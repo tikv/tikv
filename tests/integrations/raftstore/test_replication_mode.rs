@@ -493,7 +493,7 @@ fn test_migrate_majority_to_drautosync() {
         false,
     );
     request.mut_header().set_peer(new_peer(1, 1));
-    let (cb, mut rx) = make_cb(&request);
+    let (cb, rx) = make_cb(&request);
     cluster
         .sim
         .rl()
