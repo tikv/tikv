@@ -9,7 +9,7 @@ use encryption::Error as EncryptionError;
 use error_code::{self, ErrorCode, ErrorCodeExt};
 use futures::channel::oneshot::Canceled;
 use grpcio::Error as GrpcError;
-use kvproto::{errorpb, import_sstpb, kvrpcpb::ApiVersion};
+use kvproto::{errorpb, import_sstpb, kvrpcpb::ApiVersion, metapb::RegionEpoch};
 use tikv_util::codec::Error as CodecError;
 use uuid::Error as UuidError;
 
@@ -118,6 +118,20 @@ pub enum Error {
     #[error("Importing a SST file with imcompatible api version")]
     IncompatibleApiVersion,
 
+    #[error("request region {} is ahead of local region, local epoch {:?}, request epoch {:?}, please retry write later", .region_id, .local_region_epoch, .request_region_epoch)]
+    RequestTooNew {
+        region_id: u64,
+        local_region_epoch: RegionEpoch,
+        request_region_epoch: RegionEpoch,
+    },
+
+    #[error("request region {} is staler than local region, local epoch {:?}, request epoch {:?}, please rescan region later", .region_id, .local_region_epoch, .request_region_epoch)]
+    RequestTooOld {
+        region_id: u64,
+        local_region_epoch: RegionEpoch,
+        request_region_epoch: RegionEpoch,
+    },
+
     #[error("Key mode mismatched with the request mode, writer: {:?}, storage: {:?}, key: {}", .writer, .storage_api_version, .key)]
     InvalidKeyMode {
         writer: SstWriterType,
@@ -213,6 +227,8 @@ impl ErrorCodeExt for Error {
             Error::InvalidKeyMode { .. } => error_code::sst_importer::INVALID_KEY_MODE,
             Error::ResourceNotEnough(_) => error_code::sst_importer::RESOURCE_NOT_ENOUTH,
             Error::Suspended { .. } => error_code::sst_importer::SUSPENDED,
+            Error::RequestTooNew { .. } => error_code::sst_importer::REQUEST_TOO_NEW,
+            Error::RequestTooOld { .. } => error_code::sst_importer::REQUEST_TOO_OLD,
         }
     }
 }
