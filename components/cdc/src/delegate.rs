@@ -423,7 +423,12 @@ impl Delegate {
             downstream.state.store(DownstreamState::Stopped);
             let error_event = error.clone();
             if let Err(err) = downstream.sink_error_event(region_id, error_event) {
-                warn!("cdc broadcast error failed";
+                warn!("cdc send region error failed";
+                    "region_id" => region_id, "error" => ?err, "origin_error" => ?error,
+                    "downstream_id" => ?downstream.id, "downstream" => ?downstream.peer,
+                    "request_id" => downstream.req_id, "conn_id" => ?downstream.conn_id);
+            } else {
+                info!("cdc send region error success";
                     "region_id" => region_id, "error" => ?err, "origin_error" => ?error,
                     "downstream_id" => ?downstream.id, "downstream" => ?downstream.peer,
                     "request_id" => downstream.req_id, "conn_id" => ?downstream.conn_id);
