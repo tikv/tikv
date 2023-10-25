@@ -2764,22 +2764,22 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         {
             let meta = self.ctx.store_meta.lock().unwrap();
             for sst in ssts {
-                if sst.api_version < sst_importer::API_VERSION_2 {
+                if sst.1 < sst_importer::API_VERSION_2 {
                     // SST of old versions are created by old TiKV and have different prerequisite
                     // we can't delete them here. They can only be deleted manually
                     continue;
                 }
-                if let Some(r) = meta.regions.get(&sst.meta.get_region_id()) {
+                if let Some(r) = meta.regions.get(&sst.0.get_region_id()) {
                     let region_epoch = r.get_region_epoch();
-                    if util::is_epoch_stale(sst.meta.get_region_epoch(), region_epoch) {
+                    if util::is_epoch_stale(sst.0.get_region_epoch(), region_epoch) {
                         // If the SST epoch is stale, it will not be ingested anymore.
-                        delete_ssts.push(sst.meta);
+                        delete_ssts.push(sst.0);
                     }
                 } else {
                     // The write RPC of import sst service have make sure the region do exist at the
                     // write time, and now the region is not found, sst can be
                     // deleted because it won't be used by ingest in future.
-                    delete_ssts.push(sst.meta);
+                    delete_ssts.push(sst.0);
                 }
             }
         }
