@@ -578,7 +578,7 @@ where
         self.subs.add_pending_region(&region);
         if let Err(err) = self.try_start_observe(&region, handle.clone()).await {
             warn!("failed to start observe, would retry"; "err" => %err, utils::slog_region(&region));
-            tokio::spawn(async move {
+            tokio::spawn(root!("retry_start_observe"; async move {
                 #[cfg(not(feature = "failpoints"))]
                 let delay = backoff_for_start_observe(has_failed_for);
                 #[cfg(feature = "failpoints")]
@@ -602,7 +602,7 @@ where
                         has_failed_for: has_failed_for + 1
                     })
                 )
-            });
+            }));
         }
     }
 

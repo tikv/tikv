@@ -452,8 +452,7 @@ impl RouterInner {
         let cfg = self.tempfile_config_for_task(&task);
         let stream_task =
             StreamTaskInfo::new(task, ranges.clone(), merged_file_size_limit, cfg).await?;
-        self.tasks
-            .lock()
+        frame!(self.tasks.lock())
             .await
             .insert(task_name.clone(), Arc::new(stream_task));
 
@@ -480,7 +479,7 @@ impl RouterInner {
     }
 
     pub async fn unregister_task(&self, task_name: &str) -> Option<StreamBackupTaskInfo> {
-        self.tasks.lock().await.remove(task_name).map(|t| {
+        frame!(self.tasks.lock()).await.remove(task_name).map(|t| {
             info!(
                 "backup stream unregister task";
                 "task" => task_name,
@@ -496,8 +495,9 @@ impl RouterInner {
         r.get_value_by_point(key).cloned()
     }
 
+    #[instrument(skip(self))]
     pub async fn select_task(&self, selector: TaskSelectorRef<'_>) -> Vec<String> {
-        let s = self.tasks.lock().await;
+        let s = frame!(self.tasks.lock()).await;
         s.iter()
             .filter(|(name, info)| {
                 selector.matches(
@@ -523,8 +523,9 @@ impl RouterInner {
         tasks.insert(task_name.to_owned(), Arc::new(raw));
     }
 
+    #[instrument(skip(self))]
     pub async fn get_task_info(&self, task_name: &str) -> Result<Arc<StreamTaskInfo>> {
-        let task_info = match self.tasks.lock().await.get(task_name) {
+        let task_info = match frame!(self.tasks.lock()).await.get(task_name) {
             Some(t) => t.clone(),
             None => {
                 info!("backup stream no task"; "task" => ?task_name);
@@ -536,6 +537,7 @@ impl RouterInner {
         Ok(task_info)
     }
 
+    #[instrument(skip_all, fields(task))]
     async fn on_event(&self, task: String, events: ApplyEvents) -> Result<()> {
         let task_info = self.get_task_info(&task).await?;
         task_info.on_events(events).await?;
@@ -575,6 +577,7 @@ impl RouterInner {
 
     /// flush the specified task, once once success, return the min resolved ts
     /// of this flush. returns `None` if failed.
+    #[instrument(skip(self, resolve_to))]
     pub async fn do_flush(
         &self,
         task_name: &str,
@@ -611,6 +614,7 @@ impl RouterInner {
         }
     }
 
+    #[instrument(skip(self))]
     pub async fn update_global_checkpoint(
         &self,
         task_name: &str,
@@ -624,6 +628,7 @@ impl RouterInner {
     }
 
     /// tick aims to flush log/meta to extern storage periodically.
+    #[instrument(skip_all)]
     pub async fn tick(&self) {
         let max_flush_interval = self.max_flush_interval.rl().to_owned();
 

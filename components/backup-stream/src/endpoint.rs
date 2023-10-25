@@ -194,7 +194,7 @@ where
             checkpoint_mgr,
             abort_last_storage_save: None,
         };
-        ep.pool.spawn(ep.min_ts_worker());
+        ep.pool.spawn(root!(ep.min_ts_worker()));
         ep
     }
 }
@@ -250,7 +250,7 @@ where
                 if let Err(err_report) = err_fut.await {
                     err_report.report(format_args!("failed to upload error {}", err_report));
                     // Let's retry reporting after 5s.
-                    tokio::task::spawn(async move {
+                    tokio::task::spawn(root!("retry_report_fatal_err"; async move {
                         tokio::time::sleep(Duration::from_secs(5)).await;
                         try_send!(
                             sched,
@@ -259,7 +259,7 @@ where
                                 Box::new(annotate!(err_report, "origin error: {}", msg))
                             )
                         );
-                    });
+                    }));
                 }
             });
         }
@@ -828,7 +828,7 @@ where
                 if let Err(err) = r {
                     err.report("during updating flush status")
                 }
-            })));
+            }); min_ts = min_ts.into_inner()));
     }
 
     fn update_global_checkpoint(&self, task: String) -> future![()] {

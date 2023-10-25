@@ -410,8 +410,8 @@ where
             let sink = self.sink.clone();
             let event_size = events.size();
             let sched = self.scheduler.clone();
-            let permit = frame!(default; self.quota.pending(event_size); %event_size).await;
-            frame!(default; self.limit.consume(disk_read as _); %disk_read).await;
+            let permit = frame!(default; self.quota.pending(event_size); event_size).await;
+            frame!(default; self.limit.consume(disk_read as _); disk_read).await;
             debug!("sending events to router"; "size" => %event_size, "region" => %region_id);
             metrics::INCREMENTAL_SCAN_SIZE.observe(event_size as f64);
             metrics::INCREMENTAL_SCAN_DISK_READ.inc_by(disk_read as f64);
