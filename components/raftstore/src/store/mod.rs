@@ -11,6 +11,7 @@ pub mod msg;
 mod peer;
 mod read_queue;
 pub mod region_meta;
+pub mod snapshot_backup;
 pub mod transport;
 #[macro_use]
 pub mod util;

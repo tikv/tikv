@@ -1,7 +1,9 @@
 // Copyright 2023 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    fmt, mem,
+    fmt,
+    future::Future,
+    mem,
     sync::{mpsc::SyncSender, Arc, Mutex},
     time::Duration,
 };
@@ -10,12 +12,14 @@ use collections::HashSet;
 use crossbeam::channel::SendError;
 use engine_traits::{KvEngine, RaftEngine};
 use kvproto::{
-    metapb,
+    errorpb::{Error, StaleCommand},
+    metapb::{self, Region},
     pdpb::{ChangePeer, PeerReport, StoreReport},
     raft_cmdpb::RaftCmdRequest,
 };
 use raft::eraftpb::ConfChangeType;
 use tikv_util::{box_err, error, info, time::Instant as TiInstant, warn};
+use tokio::sync::oneshot;
 
 use super::{
     fsm::new_admin_request, worker::new_change_peer_v2_request, PeerMsg, RaftRouter,
@@ -278,6 +282,7 @@ impl UnsafeRecoveryExecutePlanSyncer {
         *self.abort.lock().unwrap() = true;
     }
 }
+
 // Syncer only send to leader in 2nd BR restore
 #[derive(Clone, Debug)]
 pub struct SnapshotRecoveryWaitApplySyncer {

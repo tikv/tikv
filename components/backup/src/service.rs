@@ -137,6 +137,15 @@ where
 
         ctx.spawn(send_task);
     }
+
+    fn prepare_snapshot_backup(
+        &mut self,
+        ctx: grpcio::RpcContext,
+        _stream: grpcio::RequestStream<PrepareSnapshotBackupRequest>,
+        sink: grpcio::DuplexSink<PrepareSnapshotBackupResponse>,
+    ) {
+        grpcio::unimplemented_call!(ctx, sink)
+    }
 }
 
 #[cfg(test)]

@@ -3,7 +3,7 @@
 // #[PerformanceCriticalPath]
 #[cfg(any(test, feature = "testexport"))]
 use std::sync::Arc;
-use std::{borrow::Cow, fmt};
+use std::{borrow::Cow, fmt, task::Waker, time::Duration};
 
 use collections::HashSet;
 use engine_traits::{CompactedEvent, KvEngine, Snapshot};
@@ -27,7 +27,10 @@ use smallvec::{smallvec, SmallVec};
 use tikv_util::{deadline::Deadline, escape, memory::HeapSize, time::Instant};
 use tracker::{get_tls_tracker_token, TrackerToken};
 
-use super::{local_metrics::TimeTracker, region_meta::RegionMeta, FetchedLogs, RegionSnapshot};
+use super::{
+    local_metrics::TimeTracker, region_meta::RegionMeta, snapshot_backup::PrepareSyncer,
+    FetchedLogs, RegionSnapshot,
+};
 use crate::store::{
     fsm::apply::{CatchUpLogs, ChangeObserver, TaskRes as ApplyTaskRes},
     metrics::RaftEventDurationType,
@@ -531,6 +534,22 @@ where
     UnsafeRecoveryFillOutReport(UnsafeRecoveryFillOutReportSyncer),
     SnapshotRecoveryWaitApply(SnapshotRecoveryWaitApplySyncer),
     CheckPendingAdmin(UnboundedSender<CheckAdminResponse>),
+    SnapshotBackupPrepare(),
+}
+
+enum SnapshotBackupPrepareRequest {
+    HeartBeat {
+        lease_duration: Duration,
+        on_result: PrepareSyncer<()>,
+    },
+    DoPrepare {
+        lease_duration: Duration,
+        on_prepare_done: PrepareSyncer<()>,
+        on_apply_done: PrepareSyncer<()>,
+    },
+    Reset {
+        on_result: PrepareSyncer<()>,
+    },
 }
 
 /// Message that will be sent to a peer.
