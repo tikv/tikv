@@ -185,9 +185,7 @@ impl BucketStatsInfo {
     pub fn version(&self) -> u64 {
         self.bucket_stat
             .as_ref()
-            .map(|b| b.meta.version)
-            .or(Some(self.last_bucket_version))
-            .unwrap_or_default()
+            .map_or(self.last_bucket_version, |b| b.meta.version)
     }
 
     #[inline]
