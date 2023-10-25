@@ -2331,11 +2331,7 @@ where
                     .peer
                     .region_buckets_info_mut()
                     .add_bucket_flow(&res.bucket_stat);
-                // let buckets = self.fsm.peer.region_buckets_info().bucket_stat();
-                // if let (Some(delta), Some(buckets)) = (res.bucket_stat, buckets) {
-                //     buckets.merge(&delta);
-                //     self.fsm.peer.region_buckets_info_mut().add_bucket_flow(res.bucket_stat);
-                // }
+
                 self.fsm.has_ready |= self.fsm.peer.post_apply(
                     self.ctx,
                     res.apply_state,
