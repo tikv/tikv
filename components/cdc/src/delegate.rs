@@ -429,7 +429,7 @@ impl Delegate {
                     "request_id" => downstream.req_id, "conn_id" => ?downstream.conn_id);
             } else {
                 info!("cdc send region error success";
-                    "region_id" => region_id, "error" => ?err, "origin_error" => ?error,
+                    "region_id" => region_id, "origin_error" => ?error,
                     "downstream_id" => ?downstream.id, "downstream" => ?downstream.peer,
                     "request_id" => downstream.req_id, "conn_id" => ?downstream.conn_id);
             }
