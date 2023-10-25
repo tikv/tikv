@@ -1450,6 +1450,7 @@ impl TestPdClient {
             dr.state_id += 1;
             return;
         }
+        status.set_mode(ReplicationMode::DrAutoSync);
         let mut dr = status.mut_dr_auto_sync();
         dr.state_id += 1;
         dr.set_state(state.unwrap());
