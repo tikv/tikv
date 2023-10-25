@@ -695,7 +695,12 @@ fn check_local_region_stale(
 
             // when local region epoch is stale, client can retry write later
             if is_epoch_stale(&local_region_epoch, epoch) {
-                let request_region_epoch = *epoch;
+                let request_region_epoch = RegionEpoch {
+                    conf_ver: epoch.conf_ver,
+                    version: epoch.version,
+                    unknown_fields: Default::default(),
+                    cached_size: Default::default(),
+                };
                 return Err(Error::RequestTooNew {
                     region_id,
                     local_region_epoch,
@@ -705,7 +710,12 @@ fn check_local_region_stale(
             // when local region epoch is ahead, client need to rescan region from PD to get
             // latest region later
             if is_epoch_stale(epoch, &local_region_epoch) {
-                let request_region_epoch = *epoch;
+                let request_region_epoch = RegionEpoch {
+                    conf_ver: epoch.conf_ver,
+                    version: epoch.version,
+                    unknown_fields: Default::default(),
+                    cached_size: Default::default(),
+                };
                 return Err(Error::RequestTooOld {
                     region_id,
                     local_region_epoch,
