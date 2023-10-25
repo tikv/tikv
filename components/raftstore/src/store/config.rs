@@ -152,6 +152,16 @@ pub struct Config {
     pub lock_cf_compact_interval: ReadableDuration,
     pub lock_cf_compact_bytes_threshold: ReadableSize,
 
+    /// The duration of time to attempt scheduling a full compaction. If not
+    /// set, full compaction is not run automatically.
+    pub full_compact_tick_interval: ReadableDuration,
+    /// Hours of the day during which we may execute a full compaction. If not
+    /// set or empty, full compaction may be started every
+    /// `full_compact_tick_interval`. This should be a list in of hours (in
+    /// the local timezone) e.g., ["23", "4"]
+    #[online_config(skip)]
+    pub full_compact_restrict_hours_local_tz: Vec<u32>,
+
     #[online_config(skip)]
     pub notify_capacity: usize,
     pub messages_per_tick: usize,
@@ -435,6 +445,9 @@ impl Default for Config {
             region_compact_redundant_rows_percent: None,
             pd_heartbeat_tick_interval: ReadableDuration::minutes(1),
             pd_store_heartbeat_tick_interval: ReadableDuration::secs(10),
+            // Disable full compaction by default
+            full_compact_tick_interval: ReadableDuration::secs(0),
+            full_compact_restrict_hours_local_tz: Vec::new(),
             notify_capacity: 40960,
             snap_mgr_gc_tick_interval: ReadableDuration::minutes(1),
             snap_gc_timeout: ReadableDuration::hours(4),

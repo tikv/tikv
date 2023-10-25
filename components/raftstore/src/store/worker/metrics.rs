@@ -160,6 +160,11 @@ lazy_static! {
         &["cf"]
     )
     .unwrap();
+    pub static ref FULL_COMPACT: Histogram = register_histogram!(
+        "tikv_raftstore_full_compact_duration_seconds",
+        "Bucketed histogram of full compaction"
+    )
+    .unwrap();
     pub static ref REGION_HASH_HISTOGRAM: Histogram = register_histogram!(
         "tikv_raftstore_hash_duration_seconds",
         "Bucketed histogram of raftstore hash computation duration"

@@ -4359,6 +4359,7 @@ dependencies = [
  "byteorder",
  "bytes",
  "causal_ts",
+ "chrono",
  "collections",
  "concurrency_manager",
  "crc32fast",
