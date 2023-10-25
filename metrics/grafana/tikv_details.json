@@ -48858,7 +48858,7 @@
           "refId": "StandardVariableQuery"
         },
         "refresh": 1,
-        "regex": "/type=\"([^\"]+)\"/",
+        "regex": "/\btype=\"([^\"]+)\"/",
         "skipUrlSync": false,
         "sort": 1,
         "tagValuesQuery": "",
