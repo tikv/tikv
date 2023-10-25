@@ -1,5 +1,5 @@
 use engine_traits::CF_DEFAULT;
-use external_storage_export::LocalStorage;
+use external_storage::LocalStorage;
 use kvproto::import_sstpb::ApplyRequest;
 use tempfile::TempDir;
 

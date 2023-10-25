@@ -506,7 +506,6 @@ dependencies = [
  "engine_traits",
  "error_code",
  "external_storage",
- "external_storage_export",
  "file_system",
  "futures 0.3.15",
  "futures-util",
@@ -560,7 +559,6 @@ dependencies = [
  "error_code",
  "etcd-client",
  "external_storage",
- "external_storage_export",
  "fail",
  "file_system",
  "futures 0.3.15",
@@ -1838,73 +1836,28 @@ version = "0.0.1"
 dependencies = [
  "async-compression",
  "async-trait",
- "bytes",
+ "aws",
+ "azure",
+ "cloud",
  "encryption",
  "engine_traits",
- "fail",
- "ffi-support",
  "file_system",
  "futures 0.3.15",
- "futures-executor",
  "futures-io",
  "futures-util",
- "grpcio",
+ "gcp",
  "kvproto",
  "lazy_static",
- "libloading",
  "matches",
  "openssl",
  "prometheus",
- "protobuf",
  "rand 0.8.5",
- "rusoto_core",
  "rust-ini",
  "slog",
  "slog-global",
  "structopt",
  "tempfile",
  "tikv_alloc",
- "tikv_util",
- "tokio",
- "tokio-util",
- "url",
-]
-
-[[package]]
-name = "external_storage_export"
-version = "0.0.1"
-dependencies = [
- "async-compression",
- "async-trait",
- "aws",
- "azure",
- "cloud",
- "encryption",
- "engine_traits",
- "external_storage",
- "ffi-support",
- "file_system",
- "futures 0.3.15",
- "futures-executor",
- "futures-io",
- "futures-util",
- "gcp",
- "grpcio",
- "kvproto",
- "lazy_static",
- "libc 0.2.146",
- "libloading",
- "matches",
- "nix 0.24.1",
- "once_cell",
- "protobuf",
- "rust-ini",
- "signal-hook",
- "slog",
- "slog-global",
- "slog-term",
- "structopt",
- "tempfile",
  "tikv_util",
  "tokio",
  "tokio-util",
@@ -1935,16 +1888,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e51093e27b0797c359783294ca4f0a911c270184cb10f85783b118614a1501be"
 dependencies = [
  "instant",
-]
-
-[[package]]
-name = "ffi-support"
-version = "0.4.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f85d4d1be103c0b2d86968f0b0690dc09ac0ba205b90adb0389b552869e5000e"
-dependencies = [
- "lazy_static",
- "log",
 ]
 
 [[package]]
@@ -4316,7 +4259,7 @@ dependencies = [
 [[package]]
 name = "raft"
 version = "0.7.0"
-source = "git+https://github.com/tikv/raft-rs?branch=master#9d360a3b0cdb691da8e500a4f73c457b605a1d73"
+source = "git+https://github.com/tikv/raft-rs?branch=master#f60fb9e143e5b93f7db8917ea376cda04effcbb4"
 dependencies = [
  "bytes",
  "fxhash",
@@ -4375,7 +4318,7 @@ dependencies = [
 [[package]]
 name = "raft-proto"
 version = "0.7.0"
-source = "git+https://github.com/tikv/raft-rs?branch=master#9d360a3b0cdb691da8e500a4f73c457b605a1d73"
+source = "git+https://github.com/tikv/raft-rs?branch=master#f60fb9e143e5b93f7db8917ea376cda04effcbb4"
 dependencies = [
  "bytes",
  "protobuf",
@@ -5689,7 +5632,7 @@ dependencies = [
  "engine_test",
  "engine_traits",
  "error_code",
- "external_storage_export",
+ "external_storage",
  "file_system",
  "futures 0.3.15",
  "futures-util",
@@ -6004,7 +5947,7 @@ dependencies = [
  "concurrency_manager",
  "crc64fast",
  "engine_traits",
- "external_storage_export",
+ "external_storage",
  "file_system",
  "futures 0.3.15",
  "futures-executor",
@@ -6259,7 +6202,7 @@ dependencies = [
  "engine_test",
  "engine_traits",
  "error_code",
- "external_storage_export",
+ "external_storage",
  "fail",
  "file_system",
  "futures 0.3.15",
@@ -6526,7 +6469,7 @@ dependencies = [
 
 [[package]]
 name = "tikv"
-version = "7.5.0-alpha"
+version = "7.6.0-alpha"
 dependencies = [
  "anyhow",
  "api_version",
