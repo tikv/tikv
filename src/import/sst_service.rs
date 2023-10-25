@@ -695,32 +695,18 @@ fn check_local_region_stale(
 
             // when local region epoch is stale, client can retry write later
             if is_epoch_stale(&local_region_epoch, epoch) {
-                let request_region_epoch = RegionEpoch {
-                    conf_ver: epoch.conf_ver,
-                    version: epoch.version,
-                    unknown_fields: Default::default(),
-                    cached_size: Default::default(),
-                };
-                return Err(Error::RequestTooNew {
-                    region_id,
-                    local_region_epoch,
-                    request_region_epoch,
-                });
+                return Err(Error::RequestTooNew(format!(
+                    "request region {} is ahead of local region, local epoch {:?}, request epoch {:?}, please retry write later",
+                    region_id, local_region_epoch, epoch
+                )));
             }
             // when local region epoch is ahead, client need to rescan region from PD to get
             // latest region later
             if is_epoch_stale(epoch, &local_region_epoch) {
-                let request_region_epoch = RegionEpoch {
-                    conf_ver: epoch.conf_ver,
-                    version: epoch.version,
-                    unknown_fields: Default::default(),
-                    cached_size: Default::default(),
-                };
-                return Err(Error::RequestTooOld {
-                    region_id,
-                    local_region_epoch,
-                    request_region_epoch,
-                });
+                return Err(Error::RequestTooOld(format!(
+                    "request region {} is staler than local region, local epoch {:?}, request epoch {:?}",
+                    region_id, local_region_epoch, epoch
+                )));
             }
 
             // not match means to rescan
@@ -729,13 +715,10 @@ fn check_local_region_stale(
         None => {
             // when region not found, we can't tell whether it's stale or ahead, so we just
             // return the safest case
-            Err(Error::Engine(
-                format!(
-                    "region {} is not found, please rescan region later",
-                    region_id
-                )
-                .into(),
-            ))
+            Err(Error::RequestTooOld(format!(
+                "region {} is not found",
+                region_id
+            )))
         }
     }
 }
