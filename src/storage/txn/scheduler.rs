@@ -843,6 +843,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             "cid" => cid, "pipelined" => pipelined, "async_apply_prewrite" => async_apply_prewrite);
         drop(lock_guards);
         let tctx = self.inner.dequeue_task_context(cid);
+        let write_succeeded = result.is_ok();
 
         let mut do_wake_up = !tctx.woken_up_resumable_lock_requests.is_empty();
         // If pipelined pessimistic lock or async apply prewrite takes effect, it's not
@@ -887,7 +888,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
 
         self.on_acquired_locks_finished(metadata, new_acquired_locks);
 
-        if !known_txn_status.is_empty() {
+        if write_succeeded && !known_txn_status.is_empty() {
             let now = std::time::SystemTime::now();
             for (start_ts, commit_ts) in known_txn_status {
                 self.inner.txn_status_cache.insert(start_ts, commit_ts, now);

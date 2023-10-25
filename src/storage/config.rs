@@ -34,6 +34,8 @@ const DEFAULT_RESERVED_RAFT_SPACE_GB: u64 = 1;
 // In tests, we've observed 1.2M entries in the TxnStatusCache. We
 // conservatively set the limit to 5M entries in total.
 // As TxnStatusCache have 128 slots by default. We round it to 5.12M.
+// This consumes at most around 300MB memory theoretically, but it usually
+// it's much less as it's hard to see the capacity being used up.
 const DEFAULT_TXN_STATUS_CACHE_CAPACITY: usize = 40_000 * 128;
 
 // Block cache capacity used when TikvConfig isn't validated. It should only

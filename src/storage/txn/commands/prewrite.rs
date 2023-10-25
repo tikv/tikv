@@ -493,6 +493,7 @@ impl<K: PrewriteKind> Prewriter<K> {
         // transactions.
         if let TransactionKind::Pessimistic(_) = self.kind.txn_kind() {
             if let Some(commit_ts) = context.txn_status_cache.get_no_promote(self.start_ts) {
+                fail_point!("before_prewrite_txn_status_cache_hit");
                 if self.ctx.is_retry_request {
                     MVCC_PREWRITE_REQUEST_AFTER_COMMIT_COUNTER_VEC
                         .retry_req
@@ -513,6 +514,8 @@ impl<K: PrewriteKind> Prewriter<K> {
                 // network latency, in which case we'd better handle it like a
                 // retried request).
                 self.ctx.is_retry_request = true;
+            } else {
+                fail_point!("before_prewrite_txn_status_cache_miss");
             }
         }
 

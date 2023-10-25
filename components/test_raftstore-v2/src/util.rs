@@ -17,7 +17,10 @@ use futures::future::BoxFuture;
 use grpcio::{ChannelBuilder, Environment};
 use kvproto::{
     encryptionpb::EncryptionMethod,
-    kvrpcpb::{Context, DiskFullOpt, GetResponse, Mutation, PrewriteResponse},
+    kvrpcpb::{
+        Context, DiskFullOpt, GetResponse, Mutation,
+        PrewriteRequestPessimisticAction::DoPessimisticCheck, PrewriteResponse,
+    },
     metapb,
     raft_cmdpb::{CmdType, RaftCmdRequest, RaftCmdResponse},
     tikvpb::TikvClient,
@@ -544,6 +547,7 @@ impl PeerClient {
             &self.cli,
             self.ctx.clone(),
             muts,
+            vec![],
             pk,
             ts,
             0,
@@ -557,6 +561,7 @@ impl PeerClient {
             &self.cli,
             self.ctx.clone(),
             muts,
+            vec![],
             pk,
             ts,
             0,

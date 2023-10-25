@@ -3,10 +3,14 @@
 use std::{sync::Arc, time::Duration};
 
 use grpcio::{ChannelBuilder, Environment};
-use kvproto::{kvrpcpb::*, tikvpb::TikvClient};
+use kvproto::{
+    kvrpcpb::{PrewriteRequestPessimisticAction::SkipPessimisticCheck, *},
+    tikvpb::TikvClient,
+};
 use test_raftstore::{
-    configure_for_lease_read, must_kv_commit, must_kv_prewrite, must_new_cluster_and_kv_client,
-    must_new_cluster_mul, new_server_cluster, try_kv_prewrite_with_impl,
+    configure_for_lease_read, must_kv_commit, must_kv_have_locks, must_kv_prewrite,
+    must_kv_prewrite_with, must_new_cluster_and_kv_client, must_new_cluster_mul,
+    new_server_cluster, try_kv_prewrite_with, try_kv_prewrite_with_impl,
 };
 use tikv_util::{config::ReadableDuration, HandyRwLock};
 
@@ -92,6 +96,7 @@ fn test_undetermined_write_err() {
         &client,
         ctx,
         vec![mutation],
+        vec![],
         b"k".to_vec(),
         10,
         0,
@@ -155,4 +160,170 @@ fn test_stale_read_on_local_leader() {
     assert!(resp.error.is_none());
     assert!(resp.region_error.is_none());
     assert_eq!(v, resp.get_value());
+}
+
+#[test]
+fn test_storage_do_not_update_txn_status_cache_on_write_error() {
+    let cache_hit_fp = "before_prewrite_txn_status_cache_hit";
+    let cache_miss_fp = "before_prewrite_txn_status_cache_miss";
+
+    let (cluster, leader, ctx) = must_new_cluster_mul(1);
+    let env = Arc::new(Environment::new(1));
+    let channel = ChannelBuilder::new(env)
+        .connect(&cluster.sim.read().unwrap().get_addr(leader.get_store_id()));
+    let client = TikvClient::new(channel);
+
+    let pk = b"pk".to_vec();
+
+    // Case 1: Test write successfully.
+
+    let mut mutation = Mutation::default();
+    mutation.set_op(Op::Put);
+    mutation.set_key(b"k1".to_vec());
+    mutation.set_value(b"v1".to_vec());
+    must_kv_prewrite_with(
+        &client,
+        ctx.clone(),
+        vec![mutation.clone()],
+        vec![SkipPessimisticCheck],
+        pk.clone(),
+        10,
+        10,
+        true,
+        false,
+    );
+    must_kv_commit(&client, ctx.clone(), vec![b"k1".to_vec()], 10, 15, 15);
+
+    // Expect cache hit
+    fail::cfg(cache_miss_fp, "panic").unwrap();
+    must_kv_prewrite_with(
+        &client,
+        ctx.clone(),
+        vec![mutation],
+        vec![SkipPessimisticCheck],
+        pk.clone(),
+        10,
+        10,
+        true,
+        false,
+    );
+    // Key not locked.
+    must_kv_have_locks(&client, ctx.clone(), 19, b"k1", b"k2", &[]);
+    fail::remove(cache_miss_fp);
+
+    // Case 2: Write failed.
+
+    let mut mutation = Mutation::default();
+    mutation.set_op(Op::Put);
+    mutation.set_key(b"k2".to_vec());
+    mutation.set_value(b"v2".to_vec());
+
+    try_kv_prewrite_with(
+        &client,
+        ctx.clone(),
+        vec![mutation.clone()],
+        vec![SkipPessimisticCheck],
+        pk.clone(),
+        20,
+        20,
+        true,
+        false,
+    );
+    fail::cfg("raftkv_early_error_report", "return").unwrap();
+    let mut commit_req = CommitRequest::default();
+    commit_req.set_context(ctx.clone());
+    commit_req.set_start_version(20);
+    commit_req.set_commit_version(25);
+    commit_req.set_keys(vec![b"k2".to_vec()].into());
+    let commit_resp = client.kv_commit(&req).unwrap();
+    assert!(commit_resp.has_region_error());
+    fail::remove("raftkv_early_error_report");
+    must_kv_have_locks(
+        &client,
+        ctx.clone(),
+        29,
+        b"k2",
+        b"k3",
+        &[(b"k2", Op::Put, 20, 20)],
+    );
+
+    // Expect cache miss
+    fail::cfg(cache_hit_fp, "panic").unwrap();
+    try_kv_prewrite_with(
+        &client,
+        ctx.clone(),
+        vec![mutation],
+        vec![SkipPessimisticCheck],
+        pk.clone(),
+        20,
+        20,
+        true,
+        false,
+    );
+    must_kv_have_locks(
+        &client,
+        ctx.clone(),
+        29,
+        b"k2",
+        b"k3",
+        &[(b"k2", Op::Put, 20, 20)],
+    );
+    fail::remove(cache_hit_fp);
+
+    // Case 3: Undetermined error.
+    let mut mutation = Mutation::default();
+    mutation.set_op(Op::Put);
+    mutation.set_key(b"k3".to_vec());
+    mutation.set_value(b"v3".to_vec());
+
+    try_kv_prewrite_with(
+        &client,
+        ctx.clone(),
+        vec![mutation.clone()],
+        vec![SkipPessimisticCheck],
+        pk.clone(),
+        30,
+        30,
+        true,
+        false,
+    );
+    fail::cfg("applied_cb_return_undetermined_err", "return()").unwrap();
+    let mut commit_req = CommitRequest::default();
+    commit_req.set_context(ctx.clone());
+    commit_req.set_start_version(30);
+    commit_req.set_commit_version(35);
+    commit_req.set_keys(vec![b"k3".to_vec()].into());
+    client.kv_commit(&req).unwrap_err();
+    fail::remove("applied_cb_return_undetermined_err");
+    must_kv_have_locks(
+        &client,
+        ctx.clone(),
+        39,
+        b"k3",
+        b"k4",
+        &[(b"k3", Op::Put, 30, 30)],
+    );
+
+    // Expect cache miss
+    fail::cfg(cache_hit_fp, "panic").unwrap();
+    try_kv_prewrite_with(
+        &client,
+        ctx.clone(),
+        vec![mutation],
+        vec![SkipPessimisticCheck],
+        pk.clone(),
+        30,
+        30,
+        true,
+        false,
+    );
+    must_kv_have_locks(
+        &client,
+        ctx.clone(),
+        39,
+        b"k3",
+        b"k4",
+        &[(b"k3", Op::Put, 30, 30)],
+    );
+    fail::remove(cache_hit_fp);
 }
