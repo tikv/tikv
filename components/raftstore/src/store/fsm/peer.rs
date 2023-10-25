@@ -6125,6 +6125,7 @@ where
             self.fsm.peer.get_role(),
         );
         let keys = region_buckets.meta.keys.clone();
+        let sizes = region_buckets.meta.sizes.clone();
         let old_region_buckets: Option<BucketStat> =
             self.fsm.peer.region_buckets.replace(region_buckets);
         self.fsm.peer.last_region_buckets = old_region_buckets;
@@ -6148,6 +6149,7 @@ where
                 let mut refresh_buckets = RefreshBuckets::new();
                 refresh_buckets.set_version(version);
                 refresh_buckets.set_keys(keys.clone().into());
+                refresh_buckets.set_sizes(sizes.clone());
                 extra_msg.set_refresh_buckets(refresh_buckets);
                 self.fsm
                     .peer
@@ -6176,6 +6178,7 @@ where
         }
         let version = msg.get_extra_msg().get_refresh_buckets().get_version();
         let keys = msg.get_extra_msg().get_refresh_buckets().get_keys();
+        let sizes = msg.get_extra_msg().get_refresh_buckets().get_sizes();
         let region_epoch = msg.get_region_epoch().clone();
 
         let meta = BucketMeta {
@@ -6183,7 +6186,7 @@ where
             version,
             region_epoch,
             keys: keys.to_vec(),
-            sizes: vec![],
+            sizes: sizes.to_vec(),
         };
 
         let mut store_meta = self.ctx.store_meta.lock().unwrap();

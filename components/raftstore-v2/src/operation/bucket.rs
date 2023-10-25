@@ -302,6 +302,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         }
         let version = region_buckets.meta.version;
         let keys = region_buckets.meta.keys.clone();
+        let sizes = region_buckets.meta.sizes.clone();
         // Notify followers to flush their relevant memtables
         let peers = self.region().get_peers().to_vec();
         for p in peers {
@@ -318,6 +319,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             let mut refresh_buckets = RefreshBuckets::new();
             refresh_buckets.set_version(version);
             refresh_buckets.set_keys(keys.clone().into());
+            refresh_buckets.set_sizes(sizes.clone());
             extra_msg.set_refresh_buckets(refresh_buckets);
             self.send_raft_message(store_ctx, msg);
         }
@@ -335,6 +337,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let extra_msg = msg.get_extra_msg();
         let version = extra_msg.get_refresh_buckets().get_version();
         let keys = extra_msg.get_refresh_buckets().get_keys().to_vec();
+        let sizes = extra_msg.get_refresh_buckets().get_sizes().to_vec();
         let region_epoch = msg.get_region_epoch();
 
         let meta = BucketMeta {
@@ -342,7 +345,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             version,
             region_epoch: region_epoch.clone(),
             keys,
-            sizes: vec![],
+            sizes,
         };
 
         let mut store_meta = store_ctx.store_meta.lock().unwrap();

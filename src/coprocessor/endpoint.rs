@@ -13,13 +13,14 @@ use concurrency_manager::ConcurrencyManager;
 use engine_traits::PerfLevel;
 use futures::{channel::mpsc, future::Either, prelude::*};
 use kvproto::{coprocessor as coppb, errorpb, kvrpcpb};
+use pd_client::util::find_bucket_index;
 use protobuf::{CodedInputStream, Message};
 use resource_control::{ResourceGroupManager, TaskMetadata};
 use resource_metering::{FutureExt, ResourceTagFactory, StreamExt};
 use tidb_query_common::execute_stats::ExecSummary;
 use tikv_alloc::trace::MemoryTraceGuard;
 use tikv_kv::SnapshotExt;
-use tikv_util::{quota_limiter::QuotaLimiter, time::Instant};
+use tikv_util::{config::ReadableSize, quota_limiter::QuotaLimiter, time::Instant};
 use tipb::{AnalyzeReq, AnalyzeType, ChecksumRequest, ChecksumScanOn, DagRequest, ExecType};
 use tokio::sync::Semaphore;
 use txn_types::Lock;
@@ -40,6 +41,11 @@ use crate::{
 /// light ones, which means they don't need a permit from the semaphore before
 /// execution.
 const LIGHT_TASK_THRESHOLD: Duration = Duration::from_millis(5);
+// It is used to limit the size of the request key range, default 100MB.
+// It will reject this cop request if the size of the request is greater than
+// the limit. Client should update bucket info by the region error and split
+// this request and retry.
+const MAX_KEY_RANGE_SIZE: u64 = ReadableSize::mb(100).0;
 
 /// A pool to build and run Coprocessor request handlers.
 #[derive(Clone)]
@@ -420,18 +426,8 @@ impl<E: Engine> Endpoint<E> {
                 .await?;
         let latest_buckets = snapshot.ext().get_buckets();
 
-        // Check if the buckets version is latest.
-        // skip if request don't carry this bucket version.
-        if let Some(ref buckets) = latest_buckets&&
-            buckets.version > tracker.req_ctx.context.buckets_version &&
-            tracker.req_ctx.context.buckets_version!=0 {
-                let mut bucket_not_match = errorpb::BucketVersionNotMatch::default();
-                bucket_not_match.set_version(buckets.version);
-                bucket_not_match.set_keys(buckets.keys.clone().into());
-                let mut err = errorpb::Error::default();
-                err.set_bucket_version_not_match(bucket_not_match);
-                return Err(Error::Region(err));
-        }
+        check_request_key_range(&tracker.req_ctx, latest_buckets.clone())?;
+
         // When snapshot is retrieved, deadline may exceed.
         tracker.on_snapshot_finished();
         tracker.req_ctx.deadline.check()?;
@@ -808,6 +804,49 @@ impl<E: Engine> Endpoint<E> {
             .or_else(|e| futures::future::ok(make_error_response(e))) // Stream<Resp, ()>
             .map(|item: std::result::Result<_, ()>| item.unwrap())
     }
+}
+
+// check_request_key_range return error iif the request key range cross two or
+// more buckets.
+fn check_request_key_range(
+    req_ctx: &ReqContext,
+    buckets: Option<Arc<pd_client::BucketMeta>>,
+) -> Result<()> {
+    if buckets.is_none() {
+        return Ok(());
+    }
+    let request_bucket_version = req_ctx.context.buckets_version;
+    let latest_buckets = buckets.unwrap();
+    if request_bucket_version == 0
+        || request_bucket_version >= latest_buckets.version
+        || latest_buckets.keys.is_empty()
+    {
+        return Ok(());
+    }
+
+    // check the request key range cross two or more buckets.
+    let start_key = txn_types::Key::from_raw(&req_ctx.lower_bound);
+    let end_key = txn_types::Key::from_raw(&req_ctx.upper_bound);
+    let mut reject_read = true;
+    let first_index = find_bucket_index(start_key.as_encoded(), &latest_buckets.keys);
+    let last_index = find_bucket_index(end_key.as_encoded(), &latest_buckets.keys);
+    if let (Some(first_index), Some(last_index)) = (first_index, last_index) {
+        let mut range_size: u64 = 0;
+        for i in first_index..=last_index {
+            range_size = range_size.saturating_add(*latest_buckets.sizes.get(i).unwrap_or(&0));
+        }
+        reject_read = range_size >= MAX_KEY_RANGE_SIZE;
+    }
+
+    if reject_read {
+        let mut bucket_not_match = errorpb::BucketVersionNotMatch::default();
+        bucket_not_match.set_version(latest_buckets.version);
+        bucket_not_match.set_keys(latest_buckets.keys.clone().into());
+        let mut err = errorpb::Error::default();
+        err.set_bucket_version_not_match(bucket_not_match);
+        return Err(Error::Region(err));
+    }
+    Ok(())
 }
 
 fn make_error_batch_response(batch_resp: &mut coppb::StoreBatchTaskResponse, e: Error) {
@@ -2013,5 +2052,76 @@ mod tests {
 
         let resp = block_on(copr.parse_and_handle_unary_request(req, None));
         assert_eq!(resp.get_locked().get_key(), b"key");
+    }
+
+    #[test]
+    fn test_check_request_key_range() {
+        let mut context = kvrpcpb::Context::default();
+        context.set_region_id(1);
+        context.set_buckets_version(2);
+        let ranges = vec![];
+        let mut req_ctx = ReqContext::new(
+            ReqTag::select,
+            context,
+            ranges,
+            Duration::from_secs(0),
+            None,
+            None,
+            TimeStamp::max(),
+            None,
+            PerfLevel::EnableCount,
+        );
+
+        let mut bucket_meta = pd_client::BucketMeta::default();
+        bucket_meta.region_id = 1;
+        bucket_meta.version = 3;
+        bucket_meta.keys = vec![
+            vec![
+                116, 128, 0, 0, 0, 0, 0, 0, 255, 179, 95, 114, 128, 0, 0, 0, 0, 255, 0, 175, 155,
+                0, 0, 0, 0, 0, 250,
+            ],
+            vec![
+                116, 128, 0, 255, 255, 255, 255, 255, 255, 252, 0, 0, 0, 0, 0, 0, 0, 248,
+            ],
+            vec![
+                116, 128, 0, 255, 255, 255, 255, 255, 255, 253, 0, 0, 0, 0, 0, 0, 0, 248,
+            ],
+            vec![
+                116, 128, 0, 255, 255, 255, 255, 255, 255, 254, 0, 0, 0, 0, 0, 0, 0, 248,
+            ],
+        ];
+        bucket_meta.sizes = vec![
+            ReadableSize::mb(40).0,
+            ReadableSize::mb(40).0,
+            ReadableSize::mb(40).0,
+        ];
+        let mut row_keys = vec![];
+        for key in bucket_meta.keys.iter() {
+            row_keys.push(
+                txn_types::Key::from_encoded(key.clone())
+                    .into_raw()
+                    .unwrap(),
+            );
+        }
+
+        // request key range not in bucket range
+        let buckets = Some(Arc::new(bucket_meta));
+        check_request_key_range(&req_ctx, buckets.clone()).unwrap_err();
+
+        // request key range cross two bucket range
+        req_ctx.lower_bound = row_keys.get(0).unwrap().to_vec();
+        req_ctx.upper_bound = row_keys.get(2).unwrap().to_vec();
+        check_request_key_range(&req_ctx, buckets.clone()).unwrap_err();
+
+        // request key range in bucket range
+        req_ctx.lower_bound = row_keys.get(0).unwrap().to_vec();
+        req_ctx.upper_bound = row_keys.get(1).unwrap().to_vec();
+        check_request_key_range(&req_ctx, buckets.clone()).unwrap();
+
+        // request buckets version is not less than the current bucket version
+        req_ctx.upper_bound = vec![];
+        req_ctx.lower_bound = vec![];
+        req_ctx.context.buckets_version = 3;
+        check_request_key_range(&req_ctx, buckets).unwrap();
     }
 }
