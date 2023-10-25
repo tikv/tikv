@@ -1514,13 +1514,10 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         // finishes applying. See the comments in `PeerPessimisticLocks` for how this
         // flag is used.
         let txn_ext2 = txn_ext.clone();
-        // This lock must be scoped(instead of manually drop) for now: https://github.com/rust-lang/rust/issues/104883
-        // This was triggered after upgrading the parking_lot and lock_api...
-        let mut res = {
-            let mut pessimistic_locks_guard = txn_ext2
-                .as_ref()
-                .map(|txn_ext| txn_ext.pessimistic_locks.write());
-            let removed_pessimistic_locks = match pessimistic_locks_guard.as_mut() {
+        let mut pessimistic_locks_guard = txn_ext2
+            .as_ref()
+            .map(|txn_ext| txn_ext.pessimistic_locks.write());
+        let removed_pessimistic_locks = match pessimistic_locks_guard.as_mut() {
             Some(locks)
                 // If there is a leader or region change, removing the locks is unnecessary.
                 if locks.term == term && locks.version == version && !locks.is_empty() =>
@@ -1541,45 +1538,45 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             }
             _ => vec![],
         };
-            // Keep the read lock guard of the pessimistic lock table until the request is
-            // sent to the raftstore.
-            //
-            // If some in-memory pessimistic locks need to be proposed, we will propose
-            // another TransferLeader command. Then, we can guarantee even if the proposed
-            // locks don't include the locks deleted here, the response message of the
-            // transfer leader command must be later than this write command because this
-            // write command has been sent to the raftstore. Then, we don't need to worry
-            // this request will fail due to the voluntary leader transfer.
-            let _downgraded_guard = pessimistic_locks_guard.and_then(|guard| {
-                (!removed_pessimistic_locks.is_empty()).then(|| RwLockWriteGuard::downgrade(guard))
-            });
-            let on_applied = Box::new(move |res: &mut kv::Result<()>| {
-                if res.is_ok() && !removed_pessimistic_locks.is_empty() {
-                    // Removing pessimistic locks when it succeeds to apply. This should be done in
-                    // the apply thread, to make sure it happens before other admin commands are
-                    // executed.
-                    if let Some(mut pessimistic_locks) = txn_ext
-                        .as_ref()
-                        .map(|txn_ext| txn_ext.pessimistic_locks.write())
-                    {
-                        // If epoch version or term does not match, region or leader change has
-                        // happened, so we needn't remove the key.
-                        if pessimistic_locks.term == term && pessimistic_locks.version == version {
-                            for key in removed_pessimistic_locks {
-                                pessimistic_locks.remove(&key);
-                            }
+        // Keep the read lock guard of the pessimistic lock table until the request is
+        // sent to the raftstore.
+        //
+        // If some in-memory pessimistic locks need to be proposed, we will propose
+        // another TransferLeader command. Then, we can guarantee even if the proposed
+        // locks don't include the locks deleted here, the response message of the
+        // transfer leader command must be later than this write command because this
+        // write command has been sent to the raftstore. Then, we don't need to worry
+        // this request will fail due to the voluntary leader transfer.
+        let downgraded_guard = pessimistic_locks_guard.and_then(|guard| {
+            (!removed_pessimistic_locks.is_empty()).then(|| RwLockWriteGuard::downgrade(guard))
+        });
+        let on_applied = Box::new(move |res: &mut kv::Result<()>| {
+            if res.is_ok() && !removed_pessimistic_locks.is_empty() {
+                // Removing pessimistic locks when it succeeds to apply. This should be done in
+                // the apply thread, to make sure it happens before other admin commands are
+                // executed.
+                if let Some(mut pessimistic_locks) = txn_ext
+                    .as_ref()
+                    .map(|txn_ext| txn_ext.pessimistic_locks.write())
+                {
+                    // If epoch version or term does not match, region or leader change has
+                    // happened, so we needn't remove the key.
+                    if pessimistic_locks.term == term && pessimistic_locks.version == version {
+                        for key in removed_pessimistic_locks {
+                            pessimistic_locks.remove(&key);
                         }
                     }
                 }
-            });
-
-            unsafe {
-                with_tls_engine(|e: &mut E| {
-                    e.async_write(&ctx, to_be_write, subscribed, Some(on_applied))
-                })
             }
-        };
+        });
+
         let async_write_start = Instant::now_coarse();
+        let mut res = unsafe {
+            with_tls_engine(|e: &mut E| {
+                e.async_write(&ctx, to_be_write, subscribed, Some(on_applied))
+            })
+        };
+        drop(downgraded_guard);
 
         while let Some(ev) = res.next().await {
             match ev {
