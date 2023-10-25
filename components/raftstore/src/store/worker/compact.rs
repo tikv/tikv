@@ -11,11 +11,13 @@ use fail::fail_point;
 use thiserror::Error;
 use tikv_util::{box_try, error, info, time::Instant, warn, worker::Runnable};
 
-use super::metrics::COMPACT_RANGE_CF;
+use super::metrics::{COMPACT_RANGE_CF, FULL_COMPACT};
 
 type Key = Vec<u8>;
 
 pub enum Task {
+    FullCompact,
+
     Compact {
         cf_name: String,
         start_key: Option<Key>, // None means smallest key
@@ -58,6 +60,7 @@ impl CompactThreshold {
 impl Display for Task {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match *self {
+            Task::FullCompact => f.debug_struct("FullCompact").finish(),
             Task::Compact {
                 ref cf_name,
                 ref start_key,
@@ -127,6 +130,23 @@ where
         Runner { engine }
     }
 
+    /// Full compaction.
+    pub fn full_compact(&mut self) -> Result<(), Error> {
+        fail_point!("on_full_compact");
+        let timer = Instant::now();
+        let full_compact_timer = FULL_COMPACT.start_coarse_timer();
+        box_try!(
+            self.engine
+                .compact_range(None, None, false, 1 /* threads */,)
+        );
+        full_compact_timer.observe_duration();
+        info!(
+            "full compaction finished";
+            "time_takes" => ?timer.saturating_elapsed(),
+        );
+        Ok(())
+    }
+
     /// Sends a compact range command to RocksDB to compact the range of the cf.
     pub fn compact_range_cf(
         &mut self,
@@ -163,6 +183,11 @@ where
 
     fn run(&mut self, task: Task) {
         match task {
+            Task::FullCompact => {
+                if let Err(e) = self.full_compact() {
+                    error!("full compaction failed"; "err" => %e);
+                }
+            }
             Task::Compact {
                 cf_name,
                 start_key,
