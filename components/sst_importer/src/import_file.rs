@@ -512,7 +512,7 @@ pub fn parse_meta_from_path<P: AsRef<Path>>(path: P) -> Result<(SstMeta, i32)> {
     if elems.len() > 5 {
         api_version = elems[5].parse()?;
     }
-    Ok(( meta, api_version ))
+    Ok((meta, api_version))
 }
 
 #[cfg(test)]

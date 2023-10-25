@@ -693,25 +693,24 @@ fn check_local_region_stale(
         Some(local_region_info) => {
             let local_region_epoch = local_region_info.region.region_epoch.unwrap();
 
-            // TODO(lance6717): we should only need to check conf_ver because we require all
-            // peers have SST on the disk, and does not care about which one is
-            // leader. But since check_sst_for_ingestion also checks epoch version,
-            // we just keep it here for now.
-
             // when local region epoch is stale, client can retry write later
             if is_epoch_stale(&local_region_epoch, epoch) {
-                return Err(Error::Engine(
-                    format!("request region {} is ahead of local region, local epoch {:?}, request epoch {:?}, please retry write later",
-                            region_id, local_region_epoch, epoch).into(),
-                ));
+                let request_region_epoch = *epoch;
+                return Err(Error::RequestTooNew {
+                    region_id,
+                    local_region_epoch,
+                    request_region_epoch,
+                });
             }
             // when local region epoch is ahead, client need to rescan region from PD to get
             // latest region later
             if is_epoch_stale(epoch, &local_region_epoch) {
-                return Err(Error::Engine(
-                    format!("request region {} is staler than local region, local epoch {:?}, request epoch {:?}, please rescan region later",
-                            region_id, local_region_epoch, epoch).into(),
-                ));
+                let request_region_epoch = *epoch;
+                return Err(Error::RequestTooOld {
+                    region_id,
+                    local_region_epoch,
+                    request_region_epoch,
+                });
             }
 
             // not match means to rescan
