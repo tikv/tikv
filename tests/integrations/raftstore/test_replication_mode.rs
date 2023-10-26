@@ -34,6 +34,18 @@ fn run_cluster(cluster: &mut Cluster<ServerCluster>) {
     cluster.must_put(b"k1", b"v0");
 }
 
+fn prepare_labels(cluster: &mut Cluster<ServerCluster>) {
+    cluster.add_label(1, "dc", "dc1");
+    cluster.add_label(2, "dc", "dc1");
+    cluster.add_label(3, "dc", "dc2");
+    cluster.add_label(1, "zone", "z1");
+    cluster.add_label(2, "zone", "z2");
+    cluster.add_label(3, "zone", "z3");
+    cluster.add_label(1, "host", "h1");
+    cluster.add_label(2, "host", "h2");
+    cluster.add_label(3, "host", "h3");
+}
+
 /// When using DrAutoSync replication mode, data should be replicated to
 /// different labels before committed.
 #[test]
@@ -180,7 +192,7 @@ fn test_sync_recover_after_apply_snapshot() {
     // swith to async
     cluster
         .pd_client
-        .switch_replication_mode(DrAutoSyncState::Async, vec![]);
+        .switch_replication_mode(Some(DrAutoSyncState::Async), vec![]);
     rx.recv_timeout(Duration::from_millis(100)).unwrap();
     must_get_equal(&cluster.get_engine(1), b"k2", b"v2");
     thread::sleep(Duration::from_millis(100));
@@ -197,7 +209,7 @@ fn test_sync_recover_after_apply_snapshot() {
 
     cluster
         .pd_client
-        .switch_replication_mode(DrAutoSyncState::SyncRecover, vec![]);
+        .switch_replication_mode(Some(DrAutoSyncState::SyncRecover), vec![]);
     thread::sleep(Duration::from_millis(100));
     // Add node 3 back, snapshot will apply
     cluster.clear_send_filters();
@@ -326,7 +338,7 @@ fn test_switching_replication_mode() {
 
     cluster
         .pd_client
-        .switch_replication_mode(DrAutoSyncState::Async, vec![]);
+        .switch_replication_mode(Some(DrAutoSyncState::Async), vec![]);
     rx.recv_timeout(Duration::from_millis(100)).unwrap();
     must_get_equal(&cluster.get_engine(1), b"k2", b"v2");
     thread::sleep(Duration::from_millis(100));
@@ -336,7 +348,7 @@ fn test_switching_replication_mode() {
 
     cluster
         .pd_client
-        .switch_replication_mode(DrAutoSyncState::SyncRecover, vec![]);
+        .switch_replication_mode(Some(DrAutoSyncState::SyncRecover), vec![]);
     thread::sleep(Duration::from_millis(100));
     let mut request = new_request(
         region.get_id(),
@@ -392,7 +404,7 @@ fn test_replication_mode_allowlist() {
     run_cluster(&mut cluster);
     cluster
         .pd_client
-        .switch_replication_mode(DrAutoSyncState::Async, vec![1]);
+        .switch_replication_mode(Some(DrAutoSyncState::Async), vec![1]);
     thread::sleep(Duration::from_millis(100));
 
     // 2,3 are paused, so it should not be able to write.
@@ -418,7 +430,7 @@ fn test_replication_mode_allowlist() {
     // clear allowlist.
     cluster
         .pd_client
-        .switch_replication_mode(DrAutoSyncState::Async, vec![]);
+        .switch_replication_mode(Some(DrAutoSyncState::Async), vec![]);
     rx.recv_timeout(Duration::from_millis(100)).unwrap();
     must_get_equal(&cluster.get_engine(1), b"k2", b"v2");
 }
@@ -517,8 +529,6 @@ fn test_migrate_replication_mode() {
     assert_eq!(state.state, RegionReplicationState::IntegrityOverLabel);
 }
 
-<<<<<<< HEAD
-=======
 #[test]
 fn test_migrate_majority_to_drautosync() {
     // 1. start cluster, enable dr-auto-sync and set labels.
@@ -583,7 +593,6 @@ fn test_migrate_majority_to_drautosync() {
     assert_eq!(state_k.state, RegionReplicationState::IntegrityOverLabel);
 }
 
->>>>>>> c6adb042c9 (raftstore: Fix group commit is mistakenly enabled in sync recover state (#15830))
 /// Tests if labels are loaded correctly after rolling start.
 #[test]
 fn test_loading_label_after_rolling_start() {
