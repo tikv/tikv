@@ -6,6 +6,7 @@ use std::{
     io::{self, Write},
     path::{Path, PathBuf},
     sync::Arc,
+    time::SystemTime,
 };
 
 use api_version::api_v2::TIDB_RANGES_COMPLEMENT;
@@ -440,7 +441,7 @@ impl ImportDir {
         Ok(real_key.map(ToOwned::to_owned))
     }
 
-    pub fn list_ssts(&self) -> Result<Vec<(SstMeta, i32)>> {
+    pub fn list_ssts(&self) -> Result<Vec<(SstMeta, i32, SystemTime)>> {
         let mut ssts = Vec::new();
         for e in file_system::read_dir(&self.root_dir)? {
             let e = e?;
@@ -449,7 +450,10 @@ impl ImportDir {
             }
             let path = e.path();
             match parse_meta_from_path(&path) {
-                Ok(sst) => ssts.push(sst),
+                Ok(sst) => {
+                    let last_modify = e.metadata()?.modified()?;
+                    ssts.push((sst.0, sst.1, last_modify))
+                }
                 Err(e) => error!(%e; "path_to_sst_meta failed"; "path" => %path.display(),),
             }
         }
@@ -611,7 +615,7 @@ mod test {
         dp.save(arcmgr.as_deref()).unwrap();
         let mut ssts = dir.list_ssts().unwrap();
         ssts.iter_mut().for_each(|meta_with_ver| {
-            let meta = &mut meta_with_ver.meta;
+            let meta = &mut meta_with_ver.0;
             let start = dir
                 .load_start_key_by_meta::<RocksEngine>(meta, arcmgr.clone())
                 .unwrap()
@@ -620,7 +624,7 @@ mod test {
         });
         assert_eq!(
             ssts.iter()
-                .map(|meta_with_ver| { meta_with_ver.meta.clone() })
+                .map(|meta_with_ver| { meta_with_ver.0.clone() })
                 .collect(),
             vec![meta]
         );
