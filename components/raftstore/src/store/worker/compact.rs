@@ -481,4 +481,44 @@ mod tests {
         .unwrap();
         assert_eq!(ranges_need_to_compact, expected_ranges);
     }
+
+    #[test]
+    fn test_full_compact_deletes() {
+        let tmp_dir = Builder::new().prefix("test").tempdir().unwrap();
+        let engine = open_db(tmp_dir.path().to_str().unwrap());
+        let mut runner = Runner::new(engine.clone());
+
+        // mvcc_put 0..5
+        for i in 0..5 {
+            let (k, v) = (format!("k{}", i), format!("value{}", i));
+            mvcc_put(&engine, k.as_bytes(), v.as_bytes(), 1.into(), 2.into());
+        }
+        engine.flush_cf(CF_WRITE, true).unwrap();
+
+        let (start, end) = (data_key(b"k0"), data_key(b"k5"));
+        let stats = engine
+            .get_range_stats(CF_WRITE, &start, &end)
+            .unwrap()
+            .unwrap();
+        assert_eq!(stats.num_entries, stats.num_versions);
+
+        for i in 0..5 {
+            let k = format!("k{}", i);
+            delete(&engine, k.as_bytes(), 3.into());
+        }
+        engine.flush_cf(CF_WRITE, true).unwrap();
+
+        let stats = engine
+            .get_range_stats(CF_WRITE, &start, &end)
+            .unwrap()
+            .unwrap();
+        assert_eq!(stats.num_entries - stats.num_versions, 5);
+
+        runner.run(Task::FullCompact);
+        let stats = engine
+            .get_range_stats(CF_WRITE, &start, &end)
+            .unwrap()
+            .unwrap();
+        assert_eq!(stats.num_entries - stats.num_versions, 0);
+    }
 }
