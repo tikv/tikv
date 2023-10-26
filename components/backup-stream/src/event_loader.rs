@@ -18,6 +18,7 @@ use tikv::storage::{
 use tikv_util::{
     box_err, frame, root,
     time::{Instant, Limiter},
+    warn,
     worker::Scheduler,
 };
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
@@ -36,13 +37,16 @@ use crate::{
 const MAX_GET_SNAPSHOT_RETRY: usize = 5;
 
 #[derive(Clone)]
-pub struct PendingMemoryQuota(Arc<Semaphore>);
+pub struct PendingMemoryQuota {
+    sema: Arc<Semaphore>,
+    capacity: usize,
+}
 
 impl std::fmt::Debug for PendingMemoryQuota {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("PendingMemoryQuota")
-            .field("remain", &self.0.available_permits())
-            .field("total", &self.0)
+            .field("remain", &self.sema.available_permits())
+            .field("total", &self.capacity)
             .finish()
     }
 }
@@ -51,12 +55,19 @@ pub struct PendingMemory(OwnedSemaphorePermit);
 
 impl PendingMemoryQuota {
     pub fn new(quota: usize) -> Self {
-        Self(Arc::new(Semaphore::new(quota)))
+        Self {
+            sema: Arc::new(Semaphore::new(quota)),
+            capacity: quota,
+        }
+    }
+
+    pub fn capacity(&self) -> usize {
+        self.capacity
     }
 
     pub async fn pending(&self, size: usize) -> PendingMemory {
         PendingMemory(
-            self.0
+            self.sema
                 .clone()
                 .acquire_many_owned(size as _)
                 .await
@@ -410,18 +421,31 @@ where
             let sink = self.sink.clone();
             let event_size = events.size();
             let sched = self.scheduler.clone();
-            let permit = frame!(default; self.quota.pending(event_size); event_size).await;
+            let to_use_memory = if event_size > self.quota.capacity() {
+                warn!("log backup encountered a monolithic event batch, the memory quota may be exceeded."; "cap" => %self.quota.capacity(), "event_size" => %event_size);
+                self.quota.capacity()
+            } else {
+                event_size
+            };
             frame!(default; self.limit.consume(disk_read as _); disk_read).await;
             debug!("sending events to router"; "size" => %event_size, "region" => %region_id);
             metrics::INCREMENTAL_SCAN_SIZE.observe(event_size as f64);
             metrics::INCREMENTAL_SCAN_DISK_READ.inc_by(disk_read as f64);
             metrics::HEAP_MEMORY.add(event_size as _);
-            join_handles.push(tokio::spawn(root!("consume"; async move {
+
+            let permit = frame!(default; self.quota.pending(to_use_memory); to_use_memory);
+            let fut = tokio::spawn(root!("consume"; async move {
                     utils::handle_on_event_result(&sched, sink.on_events(events).await);
                     metrics::HEAP_MEMORY.sub(event_size as _);
                     debug!("apply event done"; "size" => %event_size, "region" => %region_id);
-                    drop(permit);
+                }; %region_id, %event_size));
+            let permit = permit.await;
+            if !fut.is_finished() {
+                join_handles.push(tokio::spawn(root!("consume_permit"; async move {
+                        fut.await.expect("failed to join background task");
+                        drop(permit);
                 }; %region_id, %event_size)));
+            }
         }
     }
 
