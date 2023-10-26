@@ -73,7 +73,7 @@ If heap profiling is not currently active, the server will return a message indi
 
 List available heap profiling profiles which are periodically dumped when activated by `heap_activate` API with `interval` specified.
 
-Note: Once deactivation is performed, all existing profiles will be deleted.
+Note that, once deactivation is performed, all existing profiles will be deleted.
 
 ```bash
 curl -X GET 'http://$TIKV_ADDRESS/debug/pprof/heap_list'
