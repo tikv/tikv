@@ -22176,7 +22176,7 @@
         "options": [],
         "query": "query_result(tikv_storage_command_total{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\"} != 0)",
         "refresh": 2,
-        "regex": "/type=\"([^\"]+)\"/",
+        "regex": "/\\btype=\"([^\"]+)\"/",
         "sort": 1,
         "tagValuesQuery": null,
         "tagsQuery": null,

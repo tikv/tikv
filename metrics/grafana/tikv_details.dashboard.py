@@ -924,7 +924,7 @@ def Templates() -> Templating:
                 query='query_result(tikv_storage_command_total{k8s_cluster="$k8s_cluster", tidb_cluster="$tidb_cluster"} != 0)',
                 data_source=DATASOURCE,
                 hide=SHOW,
-                regex='/type="([^"]+)"/',
+                regex='/\\btype="([^"]+)"/',
                 include_all=True,
             ),
             template(
