@@ -844,6 +844,9 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         drop(lock_guards);
 
         if result.is_ok() && !known_txn_status.is_empty() {
+            // Update cache before calling the callback.
+            // Reversing the order can lead to test failures as the cache may still
+            // remain not updated after receiving signal from the callback.
             let now = std::time::SystemTime::now();
             for (start_ts, commit_ts) in known_txn_status {
                 self.inner.txn_status_cache.insert(start_ts, commit_ts, now);
