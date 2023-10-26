@@ -773,9 +773,12 @@ macro_rules! impl_write {
                     if let Err(e) = region_info_accessor
                         .find_region_by_id(region_id, cb)
                         .map_err(|e| {
-                            Error::Engine(
-                                format!("failed to find region {} err {:?}", region_id, e).into(),
-                            )
+                            // when region not found, we can't tell whether it's stale or ahead, so
+                            // we just return the safest case
+                            Error::RequestTooOld(format!(
+                                "failed to find region {} err {:?}",
+                                region_id, e
+                            ))
                         })
                     {
                         return (Err(e), Some(rx));
@@ -794,9 +797,10 @@ macro_rules! impl_write {
                         Some(t) => t,
                         None => {
                             return (
-                                Err(Error::Engine(
-                                    format!("region {} not found", region_id).into(),
-                                )),
+                                Err(Error::RequestTooOld(format!(
+                                    "region {} not found",
+                                    region_id
+                                ))),
                                 Some(rx),
                             );
                         }

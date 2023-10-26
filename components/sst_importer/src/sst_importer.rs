@@ -11,7 +11,7 @@ use std::{
         atomic::{AtomicU64, Ordering},
         Arc,
     },
-    time::Duration,
+    time::{Duration, SystemTime},
 };
 
 use collections::HashSet;
@@ -1385,9 +1385,9 @@ impl SstImporter {
     }
 
     /// List the basic information of the current SST files.
-    /// The information contains UUID, region ID, region Epoch.
-    /// Other fields may be left blank.
-    pub fn list_ssts(&self) -> Result<Vec<(SstMeta, i32)>> {
+    /// The information contains UUID, region ID, region Epoch, api version,
+    /// last modified time. Other fields may be left blank.
+    pub fn list_ssts(&self) -> Result<Vec<(SstMeta, i32, SystemTime)>> {
         self.dir.list_ssts()
     }
 
