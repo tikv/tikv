@@ -11058,7 +11058,7 @@ mod tests {
                     40.into(),
                     Context::default(),
                 ),
-                expect_fail_callback(tx.clone(), 0, |_| ()),
+                expect_fail_callback(tx, 0, |_| ()),
             )
             .unwrap();
         rx.recv().unwrap();
@@ -11180,7 +11180,7 @@ mod tests {
                     vec![Key::from_raw(b"k5")],
                     Context::default(),
                 ),
-                expect_ok_callback(tx.clone(), 0),
+                expect_ok_callback(tx, 0),
             )
             .unwrap();
         rx.recv().unwrap();
