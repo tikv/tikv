@@ -1,6 +1,6 @@
 [package]
 name = "tikv"
-version = "7.5.0-alpha"
+version = "7.6.0-alpha"
 authors = ["The TiKV Authors"]
 description = "A distributed transactional key-value database powered by Rust and Raft"
 license = "Apache-2.0"
@@ -22,16 +22,14 @@ portable = ["engine_rocks/portable"]
 sse = ["engine_rocks/sse"]
 mem-profiling = ["tikv_alloc/mem-profiling"]
 failpoints = ["fail/failpoints", "raftstore/failpoints", "tikv_util/failpoints", "engine_rocks/failpoints", "raft_log_engine/failpoints"]
-cloud-aws = ["encryption_export/cloud-aws", "sst_importer/cloud-aws"]
-cloud-gcp = ["encryption_export/cloud-gcp", "sst_importer/cloud-gcp"]
-cloud-azure = ["encryption_export/cloud-azure", "sst_importer/cloud-azure"]
+cloud-aws = ["encryption_export/cloud-aws"]
+cloud-gcp = ["encryption_export/cloud-gcp"]
+cloud-azure = ["encryption_export/cloud-azure"]
 testexport = ["raftstore/testexport", "api_version/testexport", "causal_ts/testexport", "engine_traits/testexport", "engine_rocks/testexport", "engine_panic/testexport"]
 test-engine-kv-rocksdb = ["engine_test/test-engine-kv-rocksdb"]
 test-engine-raft-raft-engine = ["engine_test/test-engine-raft-raft-engine"]
 test-engines-rocksdb = ["engine_test/test-engines-rocksdb"]
 test-engines-panic = ["engine_test/test-engines-panic"]
-cloud-storage-grpc = ["sst_importer/cloud-storage-grpc"]
-cloud-storage-dylib = ["sst_importer/cloud-storage-dylib"]
 pprof-fp = ["pprof/frame-pointer"]
 
 # for testing configure propegate to other crates
@@ -239,7 +237,6 @@ members = [
 #  "components/engine_tirocks",
   "components/error_code",
   "components/external_storage",
-  "components/external_storage/export",
   "components/file_system",
   "components/into_other",
   "components/keys",
@@ -314,7 +311,6 @@ engine_traits = { path = "components/engine_traits" }
 engine_traits_tests = { path = "components/engine_traits_tests", default-features = false }
 error_code = { path = "components/error_code" }
 external_storage = { path = "components/external_storage" }
-external_storage_export = { path = "components/external_storage/export" }
 file_system = { path = "components/file_system" }
 gcp = { path = "components/cloud/gcp" }
 into_other = { path = "components/into_other" }
