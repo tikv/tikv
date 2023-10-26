@@ -36,9 +36,7 @@ The server will return CPU profiling data. The response format is determined by 
 
 The raw profile data can be handled by `pprof` tool. For example, use `go tool pprof --http=0.0.0.0:1234 xxx.proto` to open a interactive web browser.
 
-## Heap Profiling
-
-### Activate Heap Profiling
+## Activate Heap Profiling
 
 Activate heap profiling of jemalloc. When activated, jemalloc would collect memory usage at malloc, demalloc, etc., walking the call stack to capture a backtrace. So it would affect performance in some extent.
 
@@ -56,7 +54,7 @@ curl -X GET 'http://$TIKV_ADDRESS/debug/pprof/heap_activate?interval=<interval>'
 
 A confirmation message indicating whether heap profiling activation was successful. If it has been already activated, it would return a error message without any side effect.
 
-### Deactivate Heap Profiling
+## Deactivate Heap Profiling
 
 Deactivate the currently running heap profiling.
 
@@ -71,7 +69,7 @@ If heap profiling is not currently active, the server will return a message indi
 
 ### List Heap Profiles
 
-List available heap profiling profiles which are periodically dumped when activated by `heap_activate` API with `interval` specified.
+## List Heap Profiles
 
 Note that, once deactivation is performed, all existing profiles will be deleted.
 
@@ -85,7 +83,7 @@ It will return a list of profiles, each represented as a file name and last modi
 
 If there are no available heap profiles or heap profiling is inactive, the server will return an empty list.
 
-### Retrieve Heap Profile
+## Retrieve Heap Profile
 
 Collect and export heap profiling data.
 
@@ -109,7 +107,7 @@ curl -X GET 'http://$TIKV_ADDRESS/debug/pprof/heap?name=<name>&jeprof=<true>'
 
 The server will return heap profiling data. The response format is determined by the `jeprof` parameter. If true, the response will be a call graph in SVG format. Otherwise, the response will be raw profile data in jemalloc dedicated format.
 
-### Heap Profile Symbolization
+## Heap Profile Symbolization
 
 The heap profile retrieved by `heap` API by default is a raw profile data in jemalloc dedicated format, which should be handled by `jeporf` to visualize.
 
