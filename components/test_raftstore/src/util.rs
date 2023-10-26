@@ -1060,11 +1060,12 @@ pub fn try_kv_prewrite_pessimistic(
     pk: Vec<u8>,
     ts: u64,
 ) -> PrewriteResponse {
+    let len = muts.len();
     try_kv_prewrite_with(
         client,
         ctx,
         muts,
-        vec![DoPessimisticCheck; muts.len()],
+        vec![DoPessimisticCheck; len],
         pk,
         ts,
         ts,
@@ -1090,11 +1091,12 @@ pub fn must_kv_prewrite_pessimistic(
     pk: Vec<u8>,
     ts: u64,
 ) {
+    let len = muts.len();
     must_kv_prewrite_with(
         client,
         ctx,
         muts,
-        vec![DoPessimisticCheck; muts.len()],
+        vec![DoPessimisticCheck; len],
         pk,
         ts,
         ts,

@@ -10992,6 +10992,7 @@ mod tests {
             .build()
             .unwrap();
         let cm = storage.concurrency_manager.clone();
+        let pk = b"pk";
 
         // Commit
         let (tx, rx) = channel();
@@ -11130,8 +11131,8 @@ mod tests {
         storage
             .sched_txn_command(
                 commands::ResolveLockReadPhase::new(
-                    [(TimeStamp::from(70), TimeStamp::from(80))]
-                        .iter()
+                    vec![(TimeStamp::from(70), TimeStamp::from(80))]
+                        .into_iter()
                         .collect(),
                     None,
                     Context::default(),

@@ -17,10 +17,7 @@ use futures::future::BoxFuture;
 use grpcio::{ChannelBuilder, Environment};
 use kvproto::{
     encryptionpb::EncryptionMethod,
-    kvrpcpb::{
-        Context, DiskFullOpt, GetResponse, Mutation,
-        PrewriteRequestPessimisticAction::DoPessimisticCheck, PrewriteResponse,
-    },
+    kvrpcpb::{Context, DiskFullOpt, GetResponse, Mutation, PrewriteResponse},
     metapb,
     raft_cmdpb::{CmdType, RaftCmdRequest, RaftCmdResponse},
     tikvpb::TikvClient,

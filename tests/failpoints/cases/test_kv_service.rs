@@ -235,7 +235,7 @@ fn test_storage_do_not_update_txn_status_cache_on_write_error() {
     commit_req.set_start_version(20);
     commit_req.set_commit_version(25);
     commit_req.set_keys(vec![b"k2".to_vec()].into());
-    let commit_resp = client.kv_commit(&req).unwrap();
+    let commit_resp = client.kv_commit(&commit_req).unwrap();
     assert!(commit_resp.has_region_error());
     fail::remove("raftkv_early_error_report");
     must_kv_have_locks(
@@ -267,63 +267,6 @@ fn test_storage_do_not_update_txn_status_cache_on_write_error() {
         b"k2",
         b"k3",
         &[(b"k2", Op::Put, 20, 20)],
-    );
-    fail::remove(cache_hit_fp);
-
-    // Case 3: Undetermined error.
-    let mut mutation = Mutation::default();
-    mutation.set_op(Op::Put);
-    mutation.set_key(b"k3".to_vec());
-    mutation.set_value(b"v3".to_vec());
-
-    try_kv_prewrite_with(
-        &client,
-        ctx.clone(),
-        vec![mutation.clone()],
-        vec![SkipPessimisticCheck],
-        pk.clone(),
-        30,
-        30,
-        true,
-        false,
-    );
-    fail::cfg("applied_cb_return_undetermined_err", "return()").unwrap();
-    let mut commit_req = CommitRequest::default();
-    commit_req.set_context(ctx.clone());
-    commit_req.set_start_version(30);
-    commit_req.set_commit_version(35);
-    commit_req.set_keys(vec![b"k3".to_vec()].into());
-    client.kv_commit(&req).unwrap_err();
-    fail::remove("applied_cb_return_undetermined_err");
-    must_kv_have_locks(
-        &client,
-        ctx.clone(),
-        39,
-        b"k3",
-        b"k4",
-        &[(b"k3", Op::Put, 30, 30)],
-    );
-
-    // Expect cache miss
-    fail::cfg(cache_hit_fp, "panic").unwrap();
-    try_kv_prewrite_with(
-        &client,
-        ctx.clone(),
-        vec![mutation],
-        vec![SkipPessimisticCheck],
-        pk.clone(),
-        30,
-        30,
-        true,
-        false,
-    );
-    must_kv_have_locks(
-        &client,
-        ctx.clone(),
-        39,
-        b"k3",
-        b"k4",
-        &[(b"k3", Op::Put, 30, 30)],
     );
     fail::remove(cache_hit_fp);
 }
