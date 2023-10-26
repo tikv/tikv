@@ -831,6 +831,9 @@ impl<'a, EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
                     mut inspector,
                 } => {
                     inspector.record_store_wait(send_time.saturating_elapsed());
+                    inspector.record_store_commit(self.ctx.raft_metrics.stat_commit_log.avg());
+                    // Reset the stat_commit_log and wait it to be refreshed in the next tick.
+                    self.ctx.raft_metrics.stat_commit_log.reset();
                     self.ctx.pending_latency_inspect.push(inspector);
                 }
                 StoreMsg::UnsafeRecoveryReport(report) => self.store_heartbeat_pd(Some(report)),

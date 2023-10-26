@@ -1727,7 +1727,7 @@ where
         let has_snap_task = self.get_store().has_gen_snap_task();
         let pre_commit_index = self.raft_group.raft.raft_log.committed;
         self.raft_group.step(m)?;
-        self.report_commit_log_duration(pre_commit_index, &ctx.raft_metrics);
+        self.report_commit_log_duration(pre_commit_index, &mut ctx.raft_metrics);
 
         let mut for_balance = false;
         if !has_snap_task && self.get_store().has_gen_snap_task() {
@@ -1772,7 +1772,7 @@ where
         }
     }
 
-    fn report_commit_log_duration(&self, pre_commit_index: u64, metrics: &RaftMetrics) {
+    fn report_commit_log_duration(&self, pre_commit_index: u64, metrics: &mut RaftMetrics) {
         if !metrics.waterfall_metrics || self.proposals.is_empty() {
             return;
         }
@@ -1793,8 +1793,14 @@ where
                     };
                     for tracker in trackers {
                         tracker.observe(now, hist, |t| {
-                            t.metrics.commit_not_persisted = !commit_persisted;
-                            &mut t.metrics.wf_commit_log_nanos
+                            // Collect the metrics related to commit_log
+                            // durations.
+                            metrics
+                                .stat_commit_log
+                                .record(Duration::from_nanos(tracker.observe(now, hist, |t| {
+                                    t.metrics.commit_not_persisted = !commit_persisted;
+                                    &mut t.metrics.wf_commit_log_nanos
+                                })));
                         });
                     }
                 }
@@ -3007,7 +3013,7 @@ where
             let pre_commit_index = self.raft_group.raft.raft_log.committed;
             self.raft_group.on_persist_ready(self.persisted_number);
             self.report_persist_log_duration(pre_persist_index, &ctx.raft_metrics);
-            self.report_commit_log_duration(pre_commit_index, &ctx.raft_metrics);
+            self.report_commit_log_duration(pre_commit_index, &mut ctx.raft_metrics);
 
             let persist_index = self.raft_group.raft.raft_log.persisted;
             self.mut_store().update_cache_persisted(persist_index);
@@ -3052,7 +3058,7 @@ where
         let pre_commit_index = self.raft_group.raft.raft_log.committed;
         let mut light_rd = self.raft_group.advance_append(ready);
         self.report_persist_log_duration(pre_persist_index, &ctx.raft_metrics);
-        self.report_commit_log_duration(pre_commit_index, &ctx.raft_metrics);
+        self.report_commit_log_duration(pre_commit_index, &mut ctx.raft_metrics);
 
         let persist_index = self.raft_group.raft.raft_log.persisted;
         if self.is_in_force_leader() {
