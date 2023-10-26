@@ -89,7 +89,9 @@ pub(crate) struct Initializer<E> {
     pub(crate) request_id: u64,
     pub(crate) checkpoint_ts: TimeStamp,
 
-    pub(crate) speed_limiter: Limiter,
+    pub(crate) scan_speed_limiter: Limiter,
+    pub(crate) fetch_speed_limiter: Limiter,
+
     pub(crate) max_scan_batch_bytes: usize,
     pub(crate) max_scan_batch_size: usize,
 
@@ -398,16 +400,14 @@ impl<E: KvEngine> Initializer<E> {
             perf_delta,
         } = self.do_scan(scanner, old_value_cursors, &mut entries)?;
 
-        CDC_SCAN_BYTES.inc_by(emit as _);
         TLS_CDC_PERF_STATS.with(|x| *x.borrow_mut() += perf_delta);
         tls_flush_perf_stats();
-        let require = if let Some(bytes) = disk_read {
+        if let Some(bytes) = disk_read {
             CDC_SCAN_DISK_READ_BYTES.inc_by(bytes as _);
-            bytes
-        } else {
-            perf_delta.block_read_byte as usize
-        };
-        self.speed_limiter.consume(require).await;
+            self.scan_speed_limiter.consume(bytes).await;
+        }
+        CDC_SCAN_BYTES.inc_by(emit as _);
+        self.fetch_speed_limiter.consume(emit as _).await;
 
         if let Some(resolver) = resolver {
             // Track the locks.
@@ -614,7 +614,8 @@ mod tests {
     }
 
     fn mock_initializer(
-        speed_limit: usize,
+        scan_limit: usize,
+        fetch_limit: usize,
         buffer: usize,
         engine: Option<RocksEngine>,
         kv_api: ChangeDataRequestKvApi,
@@ -656,7 +657,8 @@ mod tests {
             conn_id: ConnId::new(),
             request_id: 0,
             checkpoint_ts: 1.into(),
-            speed_limiter: Limiter::new(speed_limit as _),
+            scan_speed_limiter: Limiter::new(scan_limit as _),
+            fetch_limiter: Limiter::new(fetch_limit as _),
             max_scan_batch_bytes: 1024 * 1024,
             max_scan_batch_size: 1024,
             build_resolver: true,
@@ -706,6 +708,7 @@ mod tests {
         // Buffer must be large enough to unblock async incremental scan.
         let buffer = 1000;
         let (mut worker, pool, mut initializer, rx, mut drain) = mock_initializer(
+            total_bytes,
             total_bytes,
             buffer,
             engine.kv_engine(),
@@ -804,6 +807,7 @@ mod tests {
         let buffer = 1000;
         let (mut worker, pool, mut initializer, _rx, mut drain) = mock_initializer(
             total_bytes,
+            total_bytes,
             buffer,
             engine.kv_engine(),
             ChangeDataRequestKvApi::TiDb,
@@ -885,6 +889,7 @@ mod tests {
             for checkpoint_ts in [200, 100, 150] {
                 let (mut worker, pool, mut initializer, _rx, mut drain) = mock_initializer(
                     usize::MAX,
+                    usize::MAX,
                     1000,
                     engine.kv_engine(),
                     ChangeDataRequestKvApi::TiDb,
@@ -949,6 +954,7 @@ mod tests {
         let buffer = 1;
         let (mut worker, _pool, mut initializer, rx, _drain) = mock_initializer(
             total_bytes,
+            total_bytes,
             buffer,
             None,
             ChangeDataRequestKvApi::TiDb,
@@ -1003,7 +1009,7 @@ mod tests {
         let total_bytes = 1;
         let buffer = 1;
         let (mut worker, pool, mut initializer, _rx, _drain) =
-            mock_initializer(total_bytes, buffer, None, kv_api, false);
+            mock_initializer(total_bytes, total_bytes, buffer, None, kv_api, false);
 
         let change_cmd = ChangeObserver::from_cdc(1, ObserveHandle::new());
         let raft_router = CdcRaftRouter(MockRaftStoreRouter::new());
