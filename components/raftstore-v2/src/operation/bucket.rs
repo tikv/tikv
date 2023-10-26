@@ -5,8 +5,16 @@
 use std::sync::Arc;
 
 use engine_traits::{KvEngine, RaftEngine};
+<<<<<<< HEAD
 use kvproto::metapb::{self, RegionEpoch};
 use pd_client::{BucketMeta, BucketStat};
+=======
+use kvproto::{
+    metapb::RegionEpoch,
+    raft_serverpb::{ExtraMessageType, RaftMessage, RefreshBuckets},
+};
+use pd_client::BucketMeta;
+>>>>>>> 12c2cf1098 (raftstore: improve the bucket split strategy  (#15798))
 use raftstore::{
     coprocessor::RegionChangeEvent,
     store::{util, Bucket, BucketRange, ReadProgress, SplitCheckTask, Transport},
@@ -21,6 +29,7 @@ use crate::{
     worker::pd,
 };
 
+<<<<<<< HEAD
 #[derive(Debug, Clone, Default)]
 pub struct BucketStatsInfo {
     bucket_stat: Option<BucketStat>,
@@ -226,6 +235,52 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 meta_idx += 1;
             }
             region_buckets.meta = Arc::new(meta);
+=======
+impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
+    #[inline]
+    pub fn on_refresh_region_buckets<T: Transport>(
+        &mut self,
+        store_ctx: &mut StoreContext<EK, ER, T>,
+        region_epoch: RegionEpoch,
+        buckets: Vec<Bucket>,
+        bucket_ranges: Option<Vec<BucketRange>>,
+    ) {
+        if self.term() > u32::MAX.into() {
+            error!(
+                self.logger,
+                "unexpected term {} more than u32::MAX. Bucket version will be backward.",
+                self.term()
+            );
+        }
+
+        let current_version = self.region_buckets_info().version();
+        let next_bucket_version = util::gen_bucket_version(self.term(), current_version);
+        let region = self.region().clone();
+        let change_bucket_version = self.region_buckets_info_mut().on_refresh_region_buckets(
+            &store_ctx.coprocessor_host.cfg,
+            next_bucket_version,
+            buckets,
+            region_epoch,
+            &region,
+            bucket_ranges,
+        );
+        let region_buckets = self
+            .region_buckets_info()
+            .bucket_stat()
+            .as_ref()
+            .unwrap()
+            .clone();
+        let buckets_count = region_buckets.meta.keys.len() - 1;
+        if change_bucket_version {
+            // TODO: we may need to make it debug once the coprocessor timeout is resolved.
+            info!(
+                self.logger,
+                "refreshed region bucket info";
+                "bucket_version" => next_bucket_version,
+                "buckets_count" => buckets_count,
+                "estimated_region_size" => region_buckets.meta.total_size(),
+            );
+>>>>>>> 12c2cf1098 (raftstore: improve the bucket split strategy  (#15798))
         } else {
             // when the region buckets is none, the exclusive buckets includes all the
             // bucket keys.

@@ -78,12 +78,22 @@ pub use self::{
     txn_ext::{LocksStatus, PeerPessimisticLocks, PessimisticLockPair, TxnExt},
     util::{RegionReadProgress, RegionReadProgressRegistry},
     worker::{
+<<<<<<< HEAD
         metrics as worker_metrics, AutoSplitController, Bucket, BucketRange, CachedReadDelegate,
         CheckLeaderRunner, CheckLeaderTask, FlowStatistics, FlowStatsReporter, KeyEntry,
         LocalReadContext, LocalReader, LocalReaderCore, PdStatsMonitor, PdTask, ReadDelegate,
         ReadExecutor, ReadExecutorProvider, ReadProgress, ReadStats, RefreshConfigTask, RegionTask,
         SplitCheckRunner, SplitCheckTask, SplitConfig, SplitConfigManager, SplitInfo,
         StoreMetaDelegate, StoreStatsReporter, TrackVer, WriteStats,
+=======
+        metrics as worker_metrics, need_compact, AutoSplitController, BatchComponent, Bucket,
+        BucketRange, BucketStatsInfo, CachedReadDelegate, CheckLeaderRunner, CheckLeaderTask,
+        CompactThreshold, FlowStatistics, FlowStatsReporter, KeyEntry, LocalReadContext,
+        LocalReader, LocalReaderCore, PdStatsMonitor, PdTask, ReadDelegate, ReadExecutor,
+        ReadExecutorProvider, ReadProgress, ReadStats, RefreshConfigTask, RegionTask,
+        SplitCheckRunner, SplitCheckTask, SplitConfig, SplitConfigManager, SplitInfo,
+        StoreMetaDelegate, StoreStatsReporter, TrackVer, WriteStats, WriterContoller,
+>>>>>>> 12c2cf1098 (raftstore: improve the bucket split strategy  (#15798))
         BIG_REGION_CPU_OVERLOAD_THRESHOLD_RATIO, DEFAULT_BIG_REGION_BYTE_THRESHOLD,
         DEFAULT_BIG_REGION_QPS_THRESHOLD, DEFAULT_BYTE_THRESHOLD, DEFAULT_QPS_THRESHOLD,
         NUM_COLLECT_STORE_INFOS_PER_HEARTBEAT, REGION_CPU_OVERLOAD_THRESHOLD_RATIO,

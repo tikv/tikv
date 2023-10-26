@@ -21,7 +21,6 @@ pub use ready::{
 };
 
 pub(crate) use self::{
-    bucket::BucketStatsInfo,
     command::SplitInit,
     query::{LocalReader, ReadDelegatePair, SharedReadTablet},
     txn_ext::TxnContext,

@@ -23,8 +23,14 @@ use raftstore::{
         fsm::ApplyMetrics,
         metrics::RAFT_PEER_PENDING_DURATION,
         util::{Lease, RegionReadProgress},
+<<<<<<< HEAD
         Config, EntryStorage, PeerStat, ProposalQueue, ReadDelegate, ReadIndexQueue, ReadProgress,
         TabletSnapManager, WriteTask,
+=======
+        BucketStatsInfo, Config, EntryStorage, ForceLeaderState, PeerStat, ProposalQueue,
+        ReadDelegate, ReadIndexQueue, ReadProgress, TabletSnapManager, UnsafeRecoveryState,
+        WriteTask,
+>>>>>>> 12c2cf1098 (raftstore: improve the bucket split strategy  (#15798))
     },
 };
 use slog::{debug, info, Logger};
@@ -34,9 +40,15 @@ use super::storage::Storage;
 use crate::{
     fsm::ApplyScheduler,
     operation::{
+<<<<<<< HEAD
         AbnormalPeerContext, AsyncWriter, BucketStatsInfo, CompactLogContext, DestroyProgress,
         GcPeerContext, MergeContext, ProposalControl, SimpleWriteReqEncoder, SplitFlowControl,
         TxnContext,
+=======
+        AbnormalPeerContext, AsyncWriter, CompactLogContext, DestroyProgress, GcPeerContext,
+        MergeContext, ProposalControl, ReplayWatch, SimpleWriteReqEncoder, SplitFlowControl,
+        SplitPendingAppend, TxnContext,
+>>>>>>> 12c2cf1098 (raftstore: improve the bucket split strategy  (#15798))
     },
     router::{ApplyTask, CmdResChannel, PeerTick, QueryResChannel},
     Result,

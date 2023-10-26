@@ -439,7 +439,11 @@ impl ReadDelegate {
             read_progress: peer.read_progress.clone(),
             pending_remove: false,
             wait_data: false,
-            bucket_meta: peer.region_buckets.as_ref().map(|b| b.meta.clone()),
+            bucket_meta: peer
+                .region_buckets_info()
+                .bucket_stat()
+                .as_ref()
+                .map(|b| b.meta.clone()),
             track_ver: TrackVer::new(),
         }
     }
