@@ -112,11 +112,6 @@ impl<E: KvEngine> Initializer<E> {
     ) -> Result<()> {
         fail_point!("cdc_before_initialize");
 
-        CDC_SCAN_TASKS.with_label_values(&["ongoing"]).inc();
-        tikv_util::defer!({
-            CDC_SCAN_TASKS.with_label_values(&["ongoing"]).dec();
-        });
-
         // To avoid holding too many snapshots and holding them too long,
         // we need to acquire scan concurrency permit before taking snapshot.
         let sched = self.sched.clone();
@@ -171,6 +166,9 @@ impl<E: KvEngine> Initializer<E> {
     ) -> Result<()> {
         if let Some(region_snapshot) = resp.snapshot {
             assert_eq!(self.region_id, region_snapshot.get_region().get_id());
+            CDC_SCAN_TASKS.with_label_values(&["ongoing"]).inc();
+            tikv_util::defer!(CDC_SCAN_TASKS.with_label_values(&["ongoing"]).dec());
+
             let scan_concurrency_semaphore = self.scan_concurrency_semaphore.clone();
             let _permit = scan_concurrency_semaphore.acquire().await;
             let region = region_snapshot.get_region().clone();
