@@ -41,7 +41,8 @@ pub use self::{
     },
     region::{Runner as RegionRunner, Task as RegionTask},
     split_check::{
-        Bucket, BucketRange, KeyEntry, Runner as SplitCheckRunner, Task as SplitCheckTask,
+        Bucket, BucketRange, BucketStatsInfo, KeyEntry, Runner as SplitCheckRunner,
+        Task as SplitCheckTask,
     },
     split_config::{SplitConfig, SplitConfigManager},
     split_controller::{AutoSplitController, ReadStats, SplitConfigChange, WriteStats},

@@ -17,8 +17,14 @@ use raftstore::{
     store::{
         fsm::Proposal,
         util::{Lease, RegionReadProgress},
+<<<<<<< HEAD
         Config, EntryStorage, PeerStat, ProposalQueue, ReadDelegate, ReadIndexQueue, ReadProgress,
         TxnExt,
+=======
+        BucketStatsInfo, Config, EntryStorage, ForceLeaderState, PeerStat, ProposalQueue,
+        ReadDelegate, ReadIndexQueue, ReadProgress, TabletSnapManager, UnsafeRecoveryState,
+        WriteTask,
+>>>>>>> 12c2cf1098 (raftstore: improve the bucket split strategy  (#15798))
     },
     Error,
 };
@@ -35,11 +41,21 @@ use time::Timespec;
 use super::{storage::Storage, Apply};
 use crate::{
     batch::StoreContext,
+<<<<<<< HEAD
     fsm::{ApplyFsm, ApplyScheduler},
     operation::{AsyncWriter, DestroyProgress, ProposalControl, SimpleWriteEncoder},
     router::{CmdResChannel, QueryResChannel},
     tablet::CachedTablet,
     worker::PdTask,
+=======
+    fsm::ApplyScheduler,
+    operation::{
+        AbnormalPeerContext, AsyncWriter, CompactLogContext, DestroyProgress, GcPeerContext,
+        MergeContext, ProposalControl, ReplayWatch, SimpleWriteReqEncoder, SplitFlowControl,
+        SplitPendingAppend, TxnContext,
+    },
+    router::{ApplyTask, CmdResChannel, PeerTick, QueryResChannel},
+>>>>>>> 12c2cf1098 (raftstore: improve the bucket split strategy  (#15798))
     Result,
 };
 

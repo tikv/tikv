@@ -443,7 +443,16 @@ impl ReadDelegate {
             txn_ext: peer.txn_ext.clone(),
             read_progress: peer.read_progress.clone(),
             pending_remove: false,
+<<<<<<< HEAD
             bucket_meta: peer.region_buckets.as_ref().map(|b| b.meta.clone()),
+=======
+            wait_data: false,
+            bucket_meta: peer
+                .region_buckets_info()
+                .bucket_stat()
+                .as_ref()
+                .map(|b| b.meta.clone()),
+>>>>>>> 12c2cf1098 (raftstore: improve the bucket split strategy  (#15798))
             track_ver: TrackVer::new(),
         }
     }

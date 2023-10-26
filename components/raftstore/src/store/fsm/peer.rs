@@ -41,7 +41,11 @@ use kvproto::{
     replication_modepb::{DrAutoSyncState, ReplicationMode},
 };
 use parking_lot::RwLockWriteGuard;
+<<<<<<< HEAD
 use pd_client::{merge_bucket_stats, new_bucket_stats, BucketMeta, BucketStat};
+=======
+use pd_client::BucketMeta;
+>>>>>>> 12c2cf1098 (raftstore: improve the bucket split strategy  (#15798))
 use protobuf::Message;
 use raft::{
     self,
@@ -2272,6 +2276,7 @@ where
                     return;
                 }
                 let applied_index = res.apply_state.applied_index;
+<<<<<<< HEAD
                 let buckets = self.fsm.peer.region_buckets.as_mut();
                 if let (Some(delta), Some(buckets)) = (res.bucket_stat, buckets) {
                     merge_bucket_stats(
@@ -2281,6 +2286,13 @@ where
                         &delta.stats,
                     );
                 }
+=======
+                self.fsm
+                    .peer
+                    .region_buckets_info_mut()
+                    .add_bucket_flow(&res.bucket_stat);
+
+>>>>>>> 12c2cf1098 (raftstore: improve the bucket split strategy  (#15798))
                 self.fsm.has_ready |= self.fsm.peer.post_apply(
                     self.ctx,
                     res.apply_state,
@@ -5709,7 +5721,7 @@ where
     fn on_refresh_region_buckets(
         &mut self,
         region_epoch: RegionEpoch,
-        mut buckets: Vec<Bucket>,
+        buckets: Vec<Bucket>,
         bucket_ranges: Option<Vec<BucketRange>>,
         _cb: Callback<EK::Snapshot>,
     ) {
@@ -5758,14 +5770,14 @@ where
             // test purpose
             #[cfg(any(test, feature = "testexport"))]
             {
-                let default_buckets = BucketStat::default();
                 test_only_callback(
                     _cb,
                     self.fsm
                         .peer
-                        .region_buckets
+                        .region_buckets_info()
+                        .bucket_stat()
                         .as_ref()
-                        .unwrap_or(&default_buckets)
+                        .unwrap()
                         .meta
                         .clone(),
                 );
@@ -5773,9 +5785,13 @@ where
             return;
         }
 
-        let mut current_version = self
+        let current_version = self.fsm.peer.region_buckets_info().version();
+        let next_bucket_version = util::gen_bucket_version(self.fsm.peer.term(), current_version);
+        let region = self.region().clone();
+        let change_bucket_version = self
             .fsm
             .peer
+<<<<<<< HEAD
             .region_buckets
             .as_ref()
             .map(|b| b.meta.version)
@@ -5861,32 +5877,86 @@ where
             region_buckets = BucketStat::new(Arc::new(meta), stats);
         }
 
+=======
+            .region_buckets_info_mut()
+            .on_refresh_region_buckets(
+                &self.ctx.coprocessor_host.cfg,
+                next_bucket_version,
+                buckets,
+                region_epoch,
+                &region,
+                bucket_ranges,
+            );
+        let region_buckets = self
+            .fsm
+            .peer
+            .region_buckets_info()
+            .bucket_stat()
+            .as_ref()
+            .unwrap()
+            .clone();
+>>>>>>> 12c2cf1098 (raftstore: improve the bucket split strategy  (#15798))
         let buckets_count = region_buckets.meta.keys.len() - 1;
+        if change_bucket_version {
+            // TODO: we may need to make it debug once the coprocessor timeout is resolved.
+            info!(
+                "finished on_refresh_region_buckets";
+                "region_id" => self.fsm.region_id(),
+                "buckets_count" => buckets_count,
+                "buckets_size" => ?region_buckets.meta.sizes,
+            );
+        } else {
+            // it means the buckets key range not any change, so don't need to refresh.
+            test_only_callback(_cb, region_buckets.meta);
+            return;
+        }
         self.ctx.coprocessor_host.on_region_changed(
-            region,
+            self.region(),
             RegionChangeEvent::UpdateBuckets(buckets_count),
             self.fsm.peer.get_role(),
         );
+<<<<<<< HEAD
         let old_region_buckets = self.fsm.peer.region_buckets.replace(region_buckets);
         self.fsm.peer.last_region_buckets = old_region_buckets;
+=======
+        let keys = region_buckets.meta.keys.clone();
+        let version = region_buckets.meta.version;
+>>>>>>> 12c2cf1098 (raftstore: improve the bucket split strategy  (#15798))
         let mut store_meta = self.ctx.store_meta.lock().unwrap();
         if let Some(reader) = store_meta.readers.get_mut(&self.fsm.region_id()) {
-            reader.update(ReadProgress::region_buckets(
-                self.fsm.peer.region_buckets.as_ref().unwrap().meta.clone(),
-            ));
+            reader.update(ReadProgress::region_buckets(region_buckets.meta.clone()));
         }
+<<<<<<< HEAD
         debug!(
             "finished on_refresh_region_buckets";
             "region_id" => self.fsm.region_id(),
             "buckets count" => buckets_count,
             "buckets size" => ?self.fsm.peer.region_buckets.as_ref().unwrap().meta.sizes,
         );
+=======
+
+        // Notify followers to refresh their buckets version
+        if self.fsm.peer.is_leader() {
+            let peers = self.region().get_peers().to_vec();
+            for p in peers {
+                if &p == self.peer() || p.is_witness {
+                    continue;
+                }
+                let mut extra_msg = ExtraMessage::default();
+                extra_msg.set_type(ExtraMessageType::MsgRefreshBuckets);
+                let mut refresh_buckets = RefreshBuckets::new();
+                refresh_buckets.set_version(version);
+                refresh_buckets.set_keys(keys.clone().into());
+                extra_msg.set_refresh_buckets(refresh_buckets);
+                self.fsm
+                    .peer
+                    .send_extra_message(extra_msg, &mut self.ctx.trans, &p);
+            }
+        }
+>>>>>>> 12c2cf1098 (raftstore: improve the bucket split strategy  (#15798))
         // test purpose
         #[cfg(any(test, feature = "testexport"))]
-        test_only_callback(
-            _cb,
-            self.fsm.peer.region_buckets.as_ref().unwrap().meta.clone(),
-        );
+        test_only_callback(_cb, region_buckets.meta);
     }
 
     fn on_compaction_declined_bytes(&mut self, declined_bytes: u64) {
@@ -5902,50 +5972,11 @@ where
         if !self.ctx.coprocessor_host.cfg.enable_region_bucket {
             return None;
         }
-        let region_buckets = self.fsm.peer.region_buckets.as_ref()?;
-        let stats = &region_buckets.stats;
-        let keys = &region_buckets.meta.keys;
-
-        let empty_last_keys = vec![];
-        let empty_last_stats = metapb::BucketStats::default();
-        let (last_keys, last_stats, stats_reset) = self
-            .fsm
+        let region_bucket_max_size = self.ctx.coprocessor_host.cfg.region_bucket_size.0 * 2;
+        self.fsm
             .peer
-            .last_region_buckets
-            .as_ref()
-            .map(|b| {
-                (
-                    &b.meta.keys,
-                    &b.stats,
-                    region_buckets.create_time != b.create_time,
-                )
-            })
-            .unwrap_or((&empty_last_keys, &empty_last_stats, false));
-
-        let mut bucket_ranges = vec![];
-        let mut j = 0;
-        assert_eq!(keys.len(), stats.write_bytes.len() + 1);
-        for i in 0..stats.write_bytes.len() {
-            let mut diff_in_bytes = stats.write_bytes[i];
-            while j < last_keys.len() && keys[i] > last_keys[j] {
-                j += 1;
-            }
-            if j < last_keys.len() && keys[i] == last_keys[j] {
-                if !stats_reset {
-                    diff_in_bytes -= last_stats.write_bytes[j];
-                }
-                j += 1;
-            }
-
-            // if the bucket's write_bytes exceed half of the configured region_bucket_size,
-            // add it to the bucket_ranges for checking update
-            let bucket_update_diff_size_threshold =
-                self.ctx.coprocessor_host.cfg.region_bucket_size.0 / 2;
-            if diff_in_bytes >= bucket_update_diff_size_threshold {
-                bucket_ranges.push(BucketRange(keys[i].clone(), keys[i + 1].clone()));
-            }
-        }
-        Some(bucket_ranges)
+            .region_buckets_info()
+            .gen_bucket_range_for_update(region_bucket_max_size)
     }
 
     fn on_schedule_half_split_region(
@@ -6222,7 +6253,7 @@ where
 
     fn on_report_region_buckets_tick(&mut self) {
         if !self.fsm.peer.is_leader()
-            || self.fsm.peer.region_buckets.is_none()
+            || self.fsm.peer.region_buckets_info().bucket_stat().is_none()
             || self.fsm.hibernate_state.group_state() == GroupState::Idle
         {
             return;
@@ -6230,11 +6261,11 @@ where
 
         let region_id = self.region_id();
         let peer_id = self.fsm.peer_id();
-        let region_buckets = self.fsm.peer.region_buckets.as_mut().unwrap();
+        let region_buckets = self.fsm.peer.region_buckets_info_mut().report_bucket_stat();
         if let Err(e) = self
             .ctx
             .pd_scheduler
-            .schedule(PdTask::ReportBuckets(region_buckets.clone()))
+            .schedule(PdTask::ReportBuckets(region_buckets))
         {
             error!(
                 "failed to report region buckets";
@@ -6243,7 +6274,10 @@ where
                 "err" => ?e,
             );
         }
+<<<<<<< HEAD
         region_buckets.stats = new_bucket_stats(&region_buckets.meta);
+=======
+>>>>>>> 12c2cf1098 (raftstore: improve the bucket split strategy  (#15798))
 
         self.register_report_region_buckets_tick();
     }
@@ -6316,6 +6350,13 @@ where
             Some(self.fsm.peer.approximate_size.unwrap_or_default() + size);
         self.fsm.peer.approximate_keys =
             Some(self.fsm.peer.approximate_keys.unwrap_or_default() + keys);
+<<<<<<< HEAD
+=======
+
+        if let Some(buckets) = &mut self.fsm.peer.region_buckets_info_mut().bucket_stat_mut() {
+            buckets.ingest_sst(keys, size);
+        }
+>>>>>>> 12c2cf1098 (raftstore: improve the bucket split strategy  (#15798))
         // The ingested file may be overlapped with the data in engine, so we need to
         // check it again to get the accurate value.
         self.fsm.peer.may_skip_split_check = false;

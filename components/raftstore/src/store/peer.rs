@@ -44,7 +44,7 @@ use kvproto::{
     },
 };
 use parking_lot::RwLockUpgradableReadGuard;
-use pd_client::{BucketStat, INVALID_ID};
+use pd_client::INVALID_ID;
 use protobuf::Message;
 use raft::{
     self,
@@ -81,6 +81,7 @@ use super::{
         self, check_region_epoch, is_initial_msg, AdminCmdEpochState, ChangePeerI, ConfChangeKind,
         Lease, LeaseState, NORMAL_REQ_CHECK_CONF_VER, NORMAL_REQ_CHECK_VER,
     },
+    worker::BucketStatsInfo,
     DestroyPeerJob, LocalReadContext,
 };
 use crate::{
@@ -1063,9 +1064,8 @@ where
     persisted_number: u64,
     /// The context of applying snapshot.
     apply_snap_ctx: Option<ApplySnapshotContext>,
-    /// region buckets.
-    pub region_buckets: Option<BucketStat>,
-    pub last_region_buckets: Option<BucketStat>,
+    /// region buckets info in this region.
+    region_buckets_info: BucketStatsInfo,
     /// lead_transferee if this peer(leader) is in a leadership transferring.
     pub lead_transferee: u64,
     pub unsafe_recovery_state: Option<UnsafeRecoveryState>,
@@ -1203,8 +1203,7 @@ where
             unpersisted_ready: None,
             persisted_number: 0,
             apply_snap_ctx: None,
-            region_buckets: None,
-            last_region_buckets: None,
+            region_buckets_info: BucketStatsInfo::default(),
             lead_transferee: raft::INVALID_ID,
             unsafe_recovery_state: None,
             snapshot_recovery_state: None,
@@ -1582,6 +1581,16 @@ where
     #[inline]
     pub fn region(&self) -> &metapb::Region {
         self.get_store().region()
+    }
+
+    #[inline]
+    pub fn region_buckets_info_mut(&mut self) -> &mut BucketStatsInfo {
+        &mut self.region_buckets_info
+    }
+
+    #[inline]
+    pub fn region_buckets_info(&self) -> &BucketStatsInfo {
+        &self.region_buckets_info
     }
 
     /// Check whether the peer can be hibernated.
@@ -3078,7 +3087,10 @@ where
                 commit_term,
                 committed_entries,
                 cbs,
-                self.region_buckets.as_ref().map(|b| b.meta.clone()),
+                self.region_buckets_info()
+                    .bucket_stat()
+                    .as_ref()
+                    .map(|b| b.meta.clone()),
             );
             apply.on_schedule(&ctx.raft_metrics);
             self.mut_store()
@@ -3577,10 +3589,7 @@ where
     }
 
     pub fn reset_region_buckets(&mut self) {
-        if self.region_buckets.is_some() {
-            self.last_region_buckets = self.region_buckets.take();
-            self.region_buckets = None;
-        }
+        self.region_buckets_info_mut().set_bucket_stat(None);
     }
 
     /// Try to renew leader lease.
@@ -4887,7 +4896,11 @@ where
         let mut resp = reader.execute(&req, &Arc::new(region), read_index, None);
         if let Some(snap) = resp.snapshot.as_mut() {
             snap.txn_ext = Some(self.txn_ext.clone());
-            snap.bucket_meta = self.region_buckets.as_ref().map(|b| b.meta.clone());
+            snap.bucket_meta = self
+                .region_buckets_info()
+                .bucket_stat()
+                .as_ref()
+                .map(|s| s.meta.clone());
         }
         resp.txn_extra_op = self.txn_extra_op.load();
         cmd_resp::bind_term(&mut resp.response, self.term());
