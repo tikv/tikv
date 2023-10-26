@@ -67,9 +67,9 @@ curl -X GET 'http://$TIKV_ADDRESS/debug/pprof/heap_deactivate'
 If heap profiling is active, it will be stopped. The server will return a message indicating whether the deactivation was successful.
 If heap profiling is not currently active, the server will return a message indicating that no heap profiling is running.
 
-### List Heap Profiles
-
 ## List Heap Profiles
+
+List available heap profiling profiles which are periodically dumped when activated by `heap_activate` API with `interval` specified.
 
 Note that, once deactivation is performed, all existing profiles will be deleted.
 
@@ -90,9 +90,9 @@ Collect and export heap profiling data.
 Note that, heap profile is not like CPU profile which is collected within the specified time range right after the request. Instead, heap profile is just a snapshot of the accumulated memory usage at the time of request, as the memory usage is always being collected once activated.
 
 ```bash
-curl -X GET 'http://$TIKV_ADDRESS/debug/pprof/heap?name=<name>&jeprof=<true>'
-```
 curl -X GET 'http://$TIKV_ADDRESS/debug/pprof/heap?name=<name>&jeprof=<jeprof>'
+```
+
 #### Parameters
 
 - **name** (optional): Specifies the name of the heap profile to retrieve. If not specified, a heap profile will be retrieved.
