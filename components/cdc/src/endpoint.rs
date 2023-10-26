@@ -793,6 +793,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
             sink: conn.get_sink().clone(),
             request_id: request.get_request_id(),
             downstream_state,
+            scan_concurrency_semaphore: self.scan_concurrency_semaphore.clone(),
             speed_limiter: self.scan_speed_limiter.clone(),
             max_scan_batch_bytes: self.max_scan_batch_bytes,
             max_scan_batch_size: self.max_scan_batch_size,
@@ -805,14 +806,10 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
         };
 
         let cdc_handle = self.cdc_handle.clone();
-        let concurrency_semaphore = self.scan_concurrency_semaphore.clone();
         let memory_quota = self.sink_memory_quota.clone();
         self.workers.spawn(async move {
             CDC_SCAN_TASKS.with_label_values(&["total"]).inc();
-            match init
-                .initialize(change_cmd, cdc_handle, concurrency_semaphore, memory_quota)
-                .await
-            {
+            match init.initialize(change_cmd, cdc_handle, memory_quota).await {
                 Ok(()) => {
                     CDC_SCAN_TASKS.with_label_values(&["finish"]).inc();
                 }

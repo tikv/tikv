@@ -90,6 +90,7 @@ pub(crate) struct Initializer<E> {
     pub(crate) request_id: u64,
     pub(crate) checkpoint_ts: TimeStamp,
 
+    pub(crate) scan_concurrency_semaphore: Arc<Semaphore>,
     pub(crate) speed_limiter: Limiter,
     pub(crate) max_scan_batch_bytes: usize,
     pub(crate) max_scan_batch_size: usize,
@@ -107,25 +108,9 @@ impl<E: KvEngine> Initializer<E> {
         &mut self,
         change_observer: ChangeObserver,
         cdc_handle: T,
-        concurrency_semaphore: Arc<Semaphore>,
         memory_quota: Arc<MemoryQuota>,
     ) -> Result<()> {
         fail_point!("cdc_before_initialize");
-        let _permit = concurrency_semaphore.acquire().await;
-
-        // When downstream_state is Stopped, it means the corresponding delegate
-        // is stopped. The initialization can be safely canceled.
-        //
-        // Acquiring a permit may take some time, it is possible that
-        // initialization can be canceled.
-        if self.downstream_state.load() == DownstreamState::Stopped {
-            info!("cdc async incremental scan canceled";
-                "region_id" => self.region_id,
-                "downstream_id" => ?self.downstream_id,
-                "observe_id" => ?self.observe_id,
-                "conn_id" => ?self.conn_id);
-            return Err(box_err!("scan canceled"));
-        }
 
         CDC_SCAN_TASKS.with_label_values(&["ongoing"]).inc();
         tikv_util::defer!({
@@ -186,6 +171,8 @@ impl<E: KvEngine> Initializer<E> {
     ) -> Result<()> {
         if let Some(region_snapshot) = resp.snapshot {
             assert_eq!(self.region_id, region_snapshot.get_region().get_id());
+            let scan_concurrency_semaphore = self.scan_concurrency_semaphore.clone();
+            let _permit = scan_concurrency_semaphore.acquire().await;
             let region = region_snapshot.get_region().clone();
             self.async_incremental_scan(region_snapshot, region, memory_quota)
                 .await
