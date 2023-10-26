@@ -1440,6 +1440,16 @@ impl TestPdClient {
     pub fn switch_replication_mode(&self, state: DrAutoSyncState, available_stores: Vec<u64>) {
         let mut cluster = self.cluster.wl();
         let status = cluster.replication_status.as_mut().unwrap();
+<<<<<<< HEAD
+=======
+        if state.is_none() {
+            status.set_mode(ReplicationMode::Majority);
+            let mut dr = status.mut_dr_auto_sync();
+            dr.state_id += 1;
+            return;
+        }
+        status.set_mode(ReplicationMode::DrAutoSync);
+>>>>>>> c6adb042c9 (raftstore: Fix group commit is mistakenly enabled in sync recover state (#15830))
         let mut dr = status.mut_dr_auto_sync();
         dr.state_id += 1;
         dr.set_state(state);

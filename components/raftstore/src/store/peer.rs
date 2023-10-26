@@ -965,7 +965,10 @@ where
             return;
         }
         self.replication_mode_version = state.status().get_dr_auto_sync().state_id;
-        let enable = state.status().get_dr_auto_sync().get_state() != DrAutoSyncState::Async;
+        let enable = !matches!(
+            state.status().get_dr_auto_sync().get_state(),
+            DrAutoSyncState::Async | DrAutoSyncState::SyncRecover
+        );
         self.raft_group.raft.enable_group_commit(enable);
         self.dr_auto_sync_state = state.status().get_dr_auto_sync().get_state();
     }
