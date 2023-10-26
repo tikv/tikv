@@ -1424,9 +1424,10 @@ macro_rules! numeric_enum_serializing_mod {
 /// States:
 ///   1. Init - Only source directory contains Raft data.
 ///   2. Migrating - A marker file contains the path of source directory. The
-/// source      directory contains a complete copy of Raft data. Target
-/// directory may exist.   3. Completed - Only target directory contains Raft
-/// data. Marker file may exist.
+///      source directory contains a complete copy of Raft data. Target
+///      directory may exist.
+///   3. Completed - Only target directory contains Raft data. Marker file may
+///      exist.
 pub struct RaftDataStateMachine {
     root: PathBuf,
     in_progress_marker: PathBuf,
@@ -1450,8 +1451,8 @@ impl RaftDataStateMachine {
 
     /// Checks if the current condition is a valid state.
     pub fn validate(&self, should_exist: bool) -> std::result::Result<(), String> {
-        if Self::data_exists(&self.source)
-            && Self::data_exists(&self.target)
+        if Self::raft_data_exists(&self.source)
+            && Self::raft_data_exists(&self.target)
             && !self.in_progress_marker.exists()
         {
             return Err(format!(
@@ -1460,7 +1461,7 @@ impl RaftDataStateMachine {
                 self.target.display()
             ));
         }
-        let exists = Self::data_exists(&self.source) || Self::data_exists(&self.target);
+        let exists = Self::raft_data_exists(&self.source) || Self::raft_data_exists(&self.target);
         if exists != should_exist {
             if should_exist {
                 return Err("Cannot find raft data set.".to_owned());
@@ -1482,7 +1483,7 @@ impl RaftDataStateMachine {
                 fs::remove_dir_all(&trash).unwrap();
             }
         }
-        if !Self::data_exists(&self.source) {
+        if !Self::raft_data_exists(&self.source) {
             // Recover from Completed state.
             if self.in_progress_marker.exists() {
                 Self::must_remove(&self.in_progress_marker);
@@ -1492,7 +1493,7 @@ impl RaftDataStateMachine {
             if let Some(real_source) = self.read_marker() {
                 // Recover from Migrating state.
                 if real_source == self.target {
-                    if Self::data_exists(&self.target) {
+                    if Self::raft_data_exists(&self.target) {
                         Self::must_remove(&self.source);
                         return false;
                     }
@@ -1505,7 +1506,7 @@ impl RaftDataStateMachine {
                 }
             } else {
                 // Halfway between Init and Migrating.
-                assert!(!Self::data_exists(&self.target));
+                assert!(!Self::raft_data_exists(&self.target));
             }
         }
         // Init -> Migrating.
@@ -1515,9 +1516,9 @@ impl RaftDataStateMachine {
 
     /// Exits the `Migrating` state and enters the `Completed` state.
     pub fn after_dump_data(&mut self) {
-        assert!(Self::data_exists(&self.source));
-        assert!(Self::data_exists(&self.target));
-        Self::must_remove(&self.source); // Enters the `Completed` state.
+        assert!(Self::raft_data_exists(&self.source));
+        assert!(Self::raft_data_exists(&self.target));
+        Self::must_remove_except(&self.source, &self.target); // Enters the `Completed` state.
         Self::must_remove(&self.in_progress_marker);
     }
 
@@ -1525,8 +1526,8 @@ impl RaftDataStateMachine {
     // between them to test crash safety.
     #[cfg(test)]
     fn after_dump_data_with_check<F: Fn()>(&mut self, check: &F) {
-        assert!(Self::data_exists(&self.source));
-        assert!(Self::data_exists(&self.target));
+        assert!(Self::raft_data_exists(&self.source));
+        assert!(Self::raft_data_exists(&self.target));
         Self::must_remove(&self.source); // Enters the `Completed` state.
         check();
         Self::must_remove(&self.in_progress_marker);
@@ -1569,6 +1570,31 @@ impl RaftDataStateMachine {
         }
     }
 
+    // Remove all files and directories under `remove_path` except `retain_path`.
+    fn must_remove_except(remove_path: &Path, retain_path: &Path) {
+        if !remove_path.exists() {
+            info!("Path not exists"; "path" => %remove_path.display());
+            return;
+        }
+        if !remove_path.is_dir() {
+            info!("Path is not a directory, so remove directly"; "path" => %remove_path.display());
+            Self::must_remove(remove_path);
+            return;
+        }
+        if !retain_path.starts_with(remove_path) {
+            info!("Retain path is not under the remove path, so remove directly"; "Retain path" => %retain_path.display(), "remove path" => %remove_path.display());
+            Self::must_remove(remove_path);
+            return;
+        }
+
+        for entry in fs::read_dir(remove_path).unwrap() {
+            let sub_path = entry.unwrap().path();
+            if sub_path != retain_path {
+                Self::must_remove(&sub_path);
+            }
+        }
+    }
+
     fn must_rename_dir(from: &Path, to: &Path) {
         fs::rename(from, to).unwrap();
         let mut dir = to.to_path_buf();
@@ -1576,11 +1602,34 @@ impl RaftDataStateMachine {
         Self::sync_dir(&dir);
     }
 
-    fn data_exists(path: &Path) -> bool {
-        if !path.exists() || !path.is_dir() {
-            return false;
+    pub fn raftengine_exist(raftengine_path: &Path) -> bool {
+        if raftengine_path.is_dir() {
+            for entry in raftengine_path.read_dir().unwrap() {
+                match entry {
+                    Ok(entry) => {
+                        let path = entry.path();
+                        if path.is_file() && path.extension() == Some("raftlog".as_ref()) {
+                            return true;
+                        }
+                    }
+                    Err(e) => {
+                        warn!("Scan raft engine dir failed"; "path" => %raftengine_path.display(), "err" => ?e)
+                    }
+                };
+            }
         }
-        fs::read_dir(path).unwrap().next().is_some()
+        false
+    }
+
+    pub fn raftdb_exist(raftdb_path: &Path) -> bool {
+        if raftdb_path.is_dir() && raftdb_path.join("CURRENT").exists() {
+            return true;
+        }
+        false
+    }
+
+    pub fn raft_data_exists(path: &Path) -> bool {
+        Self::raftengine_exist(path) || Self::raftdb_exist(path)
     }
 
     fn sync_dir(dir: &Path) {
@@ -2101,6 +2150,98 @@ yyy = 100
     }
 
     #[test]
+    fn test_raft_engine_switch() {
+        // default setting, raft-db and raft-engine are not in the same place, need
+        // dump raft data from raft-db
+        let dir = tempfile::Builder::new().tempdir().unwrap();
+        let root = dir.path().join("root");
+        let source = root.join("source");
+        fs::create_dir_all(&source).unwrap();
+        let raftdb_data = source.join("CURRENT");
+        fs::File::create(raftdb_data).unwrap();
+        let target = root.join("target");
+        fs::create_dir_all(&target).unwrap();
+        let mut state = RaftDataStateMachine::new(
+            root.to_str().unwrap(),
+            source.to_str().unwrap(),
+            target.to_str().unwrap(),
+        );
+        state.validate(true).unwrap();
+        let should_dump = state.before_open_target();
+        assert!(should_dump);
+        fs::remove_dir_all(&root).unwrap();
+
+        // raft-db is eventually moved, can't dump from raft-db
+        let dir = tempfile::Builder::new().tempdir().unwrap();
+        let root = dir.path().join("root");
+        let source = root.join("source");
+        fs::create_dir_all(&source).unwrap();
+        let target = root.join("target");
+        fs::create_dir_all(&target).unwrap();
+        state = RaftDataStateMachine::new(
+            root.to_str().unwrap(),
+            source.to_str().unwrap(),
+            target.to_str().unwrap(),
+        );
+        state.validate(true).unwrap_err();
+        fs::remove_dir_all(&root).unwrap();
+
+        // when setting raft-db dir, raft-engine dir is not set, raft-engine dir
+        // inherit from raft-db dir, need to dump raft data from raft-db
+        let dir = tempfile::Builder::new().tempdir().unwrap();
+        let root = dir.path().join("root");
+        let source = root.join("source");
+        fs::create_dir_all(&source).unwrap();
+        let raftdb_data = source.join("CURRENT");
+        fs::File::create(raftdb_data).unwrap();
+        let target = source.join("target");
+        fs::create_dir_all(&target).unwrap();
+        state = RaftDataStateMachine::new(
+            root.to_str().unwrap(),
+            source.to_str().unwrap(),
+            target.to_str().unwrap(),
+        );
+        state.validate(true).unwrap();
+        let should_dump = state.before_open_target();
+        assert!(should_dump);
+        fs::remove_dir_all(&root).unwrap();
+
+        // inherit scenario raft-db is eventually moved, can't dump from raft-db
+        let dir = tempfile::Builder::new().tempdir().unwrap();
+        let root = dir.path().join("root");
+        let source = root.join("source");
+        fs::create_dir_all(&source).unwrap();
+        let target = source.join("target");
+        fs::create_dir_all(&target).unwrap();
+        state = RaftDataStateMachine::new(
+            root.to_str().unwrap(),
+            source.to_str().unwrap(),
+            target.to_str().unwrap(),
+        );
+        state.validate(true).unwrap_err();
+        fs::remove_dir_all(&root).unwrap();
+
+        // raft-db dump from raft-engine
+        let dir = tempfile::Builder::new().tempdir().unwrap();
+        let root = dir.path().join("root");
+        let source = root.join("source");
+        fs::create_dir_all(&source).unwrap();
+        let raftdb_data = source.join("CURRENT");
+        fs::File::create(raftdb_data).unwrap();
+        let target = source.join("target");
+        fs::create_dir_all(&target).unwrap();
+        let mut state = RaftDataStateMachine::new(
+            root.to_str().unwrap(),
+            source.to_str().unwrap(),
+            target.to_str().unwrap(),
+        );
+        state.validate(true).unwrap();
+        let should_dump = state.before_open_target();
+        assert!(should_dump);
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
     fn test_raft_data_migration() {
         fn run_migration<F: Fn()>(root: &Path, source: &Path, target: &Path, check: F) {
             let mut state = RaftDataStateMachine::new(
@@ -2122,11 +2263,14 @@ yyy = 100
                     fs::write(&marker, backup_marker).unwrap();
                 }
 
-                let source_file = source.join("file");
-                let target_file = target.join("file");
+                let mut source_file = source.join("CURRENT");
+                let target_file = target.join("0000000000000001.raftlog");
                 if !target.exists() {
                     fs::create_dir_all(target).unwrap();
                     check();
+                }
+                if !source_file.exists() {
+                    source_file = source.join("0000000000000001.raftlog");
                 }
                 fs::copy(source_file, target_file).unwrap();
                 check();
@@ -2159,7 +2303,7 @@ yyy = 100
         let target = root.join("target");
         fs::create_dir_all(&target).unwrap();
         // Write some data into source.
-        let source_file = source.join("file");
+        let source_file = source.join("CURRENT");
         File::create(source_file).unwrap();
 
         let backup = dir.path().join("backup");
@@ -2174,5 +2318,164 @@ yyy = 100
             run_migration(&root, &target, &source, || {});
             copy_dir(&backup, &root).unwrap();
         });
+    }
+
+    #[test]
+    fn test_must_remove_except() {
+        fn create_raftdb(path: &Path) {
+            fs::create_dir(path).unwrap();
+            // CURRENT file as the marker of raftdb.
+            let raftdb_data = path.join("CURRENT");
+            fs::File::create(raftdb_data).unwrap();
+        }
+
+        fn create_raftengine(path: &Path) {
+            fs::create_dir(path).unwrap();
+            let raftengine_data = path.join("raftengine_data");
+            fs::File::create(raftengine_data).unwrap();
+        }
+
+        fn create_test_root(path: &Path) {
+            fs::create_dir(path).unwrap();
+        }
+
+        fn raftengine_must_exist(path: &Path) {
+            assert!(path.exists());
+            let raftengine_data = path.join("raftengine_data");
+            assert!(raftengine_data.exists());
+        }
+
+        fn raftdb_must_not_exist(path: &Path) {
+            assert!(!path.exists());
+            let raftdb_data = path.join("raftdb_data");
+            assert!(!raftdb_data.exists());
+        }
+        let test_dir = tempfile::Builder::new()
+            .tempdir()
+            .unwrap()
+            .into_path()
+            .join("test_must_remove_except");
+
+        // before:
+        // test_must_remove_except
+        // ├── raftdb
+        // │   └── raftdb_data
+        // └── raftengine
+        //     └── raftengine_data
+        //
+        // after:
+        // test_must_remove_except
+        // └── raftengine
+        //     └── raftengine_data
+        create_test_root(&test_dir);
+        let raftdb_dir = test_dir.join("raftdb");
+        let raftengine_dir = test_dir.join("raftengine");
+        create_raftdb(&raftdb_dir);
+        create_raftengine(&raftengine_dir);
+        RaftDataStateMachine::must_remove_except(&raftdb_dir, &raftengine_dir);
+        raftengine_must_exist(&raftengine_dir);
+        raftdb_must_not_exist(&raftdb_dir);
+        fs::remove_dir_all(&test_dir).unwrap();
+
+        // before:
+        // test_must_remove_except/
+        // └── raftdb
+        //     ├── raftdb_data
+        //     └── raftengine
+        //         └── raftengine_data
+        //
+        // after:
+        // test_must_remove_except/
+        // └── raftdb
+        //     └── raftengine
+        //         └── raftengine_data
+        create_test_root(&test_dir);
+        let raftdb_dir = test_dir.join("raftdb");
+        let raftengine_dir = raftdb_dir.join("raftengine");
+        create_raftdb(&raftdb_dir);
+        create_raftengine(&raftengine_dir);
+        RaftDataStateMachine::must_remove_except(&raftdb_dir, &raftengine_dir);
+        raftengine_must_exist(&raftengine_dir);
+        assert!(!test_dir.join("raftdb/raftdb_data").exists());
+        fs::remove_dir_all(&test_dir).unwrap();
+
+        // before:
+        // test_must_remove_except/
+        // └── raftengine
+        //     ├── raftdb
+        //     │   └── raftdb_data
+        //     └── raftengine_data
+        //
+        // after:
+        // test_must_remove_except/
+        // └── raftengine
+        //     └── raftengine_data
+        create_test_root(&test_dir);
+        let raftengine_dir = test_dir.join("raftengine");
+        let raftdb_dir = raftengine_dir.join("raftdb");
+        create_raftengine(&raftengine_dir);
+        create_raftdb(&raftdb_dir);
+        RaftDataStateMachine::must_remove_except(&raftdb_dir, &raftengine_dir);
+        raftengine_must_exist(&raftengine_dir);
+        raftdb_must_not_exist(&raftdb_dir);
+        fs::remove_dir_all(&test_dir).unwrap();
+
+        // before:
+        // test_must_remove_except/
+        // ├── raftdb_data
+        // └── raftengine
+        //     └── raftengine_data
+        //
+        // after:
+        // test_must_remove_except/
+        // └── raftengine
+        //     └── raftengine_data
+        create_test_root(&test_dir);
+        let raftdb_data = test_dir.join("raftdb_data");
+        fs::File::create(raftdb_data).unwrap();
+        let raftengine_dir = test_dir.join("raftengine");
+        create_raftengine(&raftengine_dir);
+        RaftDataStateMachine::must_remove_except(&test_dir, &raftengine_dir);
+        raftengine_must_exist(&raftengine_dir);
+        assert!(!test_dir.join("raftdb_data").exists());
+        fs::remove_dir_all(&test_dir).unwrap();
+    }
+
+    #[test]
+    fn test_raft_data_exist() {
+        fn clear_dir(path: &PathBuf) {
+            if path.exists() {
+                fs::remove_dir_all(path).unwrap();
+            }
+            fs::create_dir(path).unwrap();
+        }
+        let test_dir = tempfile::Builder::new().tempdir().unwrap().into_path();
+
+        clear_dir(&test_dir);
+        fs::File::create(test_dir.join("0000000000000001.raftlog")).unwrap();
+        assert!(RaftDataStateMachine::raftengine_exist(&test_dir));
+
+        clear_dir(&test_dir);
+        fs::File::create(test_dir.join("0000000000000001.raftlog")).unwrap();
+        fs::File::create(test_dir.join("trash")).unwrap();
+        assert!(RaftDataStateMachine::raftengine_exist(&test_dir));
+
+        clear_dir(&test_dir);
+        fs::File::create(test_dir.join("raftlog")).unwrap();
+        assert!(!RaftDataStateMachine::raftengine_exist(&test_dir));
+
+        clear_dir(&test_dir);
+        assert!(!RaftDataStateMachine::raftengine_exist(&test_dir));
+
+        clear_dir(&test_dir);
+        fs::File::create(test_dir.join("CURRENT")).unwrap();
+        assert!(RaftDataStateMachine::raftdb_exist(&test_dir));
+
+        clear_dir(&test_dir);
+        fs::File::create(test_dir.join("NOT_CURRENT")).unwrap();
+        assert!(!RaftDataStateMachine::raftdb_exist(&test_dir));
+
+        clear_dir(&test_dir);
+        assert!(!RaftDataStateMachine::raftdb_exist(&test_dir));
     }
 }
