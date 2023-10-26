@@ -1897,6 +1897,11 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                 .push_lock_wait(entry, Default::default());
         }
     }
+
+    #[cfg(test)]
+    pub fn get_txn_status_cache(&self) -> &TxnStatusCache {
+        &self.inner.txn_status_cache
+    }
 }
 
 pub async fn get_raw_ext(

@@ -10930,6 +10930,16 @@ mod tests {
             .unwrap();
         rx.recv().unwrap();
 
+        // The txn's status is cached
+        assert_eq!(
+            storage
+                .sched
+                .get_txn_status_cache()
+                .get_no_promote(10.into())
+                .unwrap(),
+            21.into()
+        );
+
         // Check committed; push max_ts to 30
         assert_eq!(
             block_on(storage.get(Context::default(), k1.clone(), 30.into()))
@@ -10973,6 +10983,213 @@ mod tests {
                 .unwrap()
                 .0,
             Some(b"v".to_vec())
+        );
+    }
+
+    #[test]
+    fn test_updating_txn_status_cache() {
+        let storage = TestStorageBuilderApiV1::new(MockLockManager::new())
+            .build()
+            .unwrap();
+        let cm = storage.concurrency_manager.clone();
+
+        // Commit
+        let (tx, rx) = channel();
+        storage
+            .sched_txn_command(
+                commands::PrewritePessimistic::new(
+                    vec![(
+                        Mutation::make_put(Key::from_raw(b"k1"), b"v1".to_vec()),
+                        SkipPessimisticCheck,
+                    )],
+                    pk.to_vec(),
+                    10.into(),
+                    3000,
+                    10.into(),
+                    1,
+                    11.into(),
+                    0.into(),
+                    Some(vec![]),
+                    false,
+                    AssertionLevel::Off,
+                    vec![],
+                    Context::default(),
+                ),
+                expect_ok_callback(tx.clone(), 0),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        assert!(
+            storage
+                .sched
+                .get_txn_status_cache()
+                .get_no_promote(10.into())
+                .is_none()
+        );
+
+        storage
+            .sched_txn_command(
+                commands::Commit::new(
+                    vec![Key::from_raw(b"k1")],
+                    10.into(),
+                    20.into(),
+                    Context::default(),
+                ),
+                expect_ok_callback(tx.clone(), 0),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        assert_eq!(
+            storage
+                .sched
+                .get_txn_status_cache()
+                .get_no_promote(10.into())
+                .unwrap(),
+            20.into()
+        );
+
+        // Unsuccessful commit won't update cache
+        storage
+            .sched_txn_command(
+                commands::Commit::new(
+                    vec![Key::from_raw(b"k2")],
+                    30.into(),
+                    40.into(),
+                    Context::default(),
+                ),
+                expect_fail_callback(tx.clone(), 0, |_| ()),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        assert!(
+            storage
+                .sched
+                .get_txn_status_cache()
+                .get_no_promote(30.into())
+                .is_none()
+        );
+
+        // 1PC update
+        let (tx, rx) = channel();
+        cm.update_max_ts(59.into());
+        storage
+            .sched_txn_command(
+                Prewrite::new(
+                    vec![Mutation::make_put(Key::from_raw(b"k3"), b"v3".to_vec())],
+                    pk.to_vec(),
+                    50.into(),
+                    3000,
+                    false,
+                    1,
+                    51.into(),
+                    0.into(),
+                    Some(vec![]),
+                    true,
+                    AssertionLevel::Off,
+                    Context::default(),
+                ),
+                Box::new(move |res| {
+                    tx.send(res).unwrap();
+                }),
+            )
+            .unwrap();
+        let res = rx.recv().unwrap().unwrap();
+        assert_eq!(res.one_pc_commit_ts, 60.into());
+        assert_eq!(
+            storage
+                .sched
+                .get_txn_status_cache()
+                .get_no_promote(50.into())
+                .unwrap(),
+            60.into()
+        );
+
+        // Resolve lock commit
+        let (tx, rx) = channel();
+        storage
+            .sched_txn_command(
+                Prewrite::new(
+                    vec![Mutation::make_put(Key::from_raw(b"k4"), b"v4".to_vec())],
+                    pk.to_vec(),
+                    70.into(),
+                    3000,
+                    false,
+                    1,
+                    0.into(),
+                    0.into(),
+                    None,
+                    false,
+                    AssertionLevel::Off,
+                    Context::default(),
+                ),
+                expect_ok_callback(tx.clone(), 0),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+
+        storage
+            .sched_txn_command(
+                commands::ResolveLockReadPhase::new(
+                    [(TimeStamp::from(70), TimeStamp::from(80))]
+                        .iter()
+                        .collect(),
+                    None,
+                    Context::default(),
+                ),
+                expect_ok_callback(tx.clone(), 0),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        assert_eq!(
+            storage
+                .sched
+                .get_txn_status_cache()
+                .get_no_promote(70.into())
+                .unwrap(),
+            80.into()
+        );
+
+        // Resolve lock lite
+        storage
+            .sched_txn_command(
+                Prewrite::new(
+                    vec![Mutation::make_put(Key::from_raw(b"k5"), b"v5".to_vec())],
+                    pk.to_vec(),
+                    90.into(),
+                    3000,
+                    false,
+                    1,
+                    0.into(),
+                    0.into(),
+                    None,
+                    false,
+                    AssertionLevel::Off,
+                    Context::default(),
+                ),
+                expect_ok_callback(tx.clone(), 0),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+
+        storage
+            .sched_txn_command(
+                commands::ResolveLockLite::new(
+                    90.into(),
+                    100.into(),
+                    vec![Key::from_raw(b"k5")],
+                    Context::default(),
+                ),
+                expect_ok_callback(tx.clone(), 0),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        assert_eq!(
+            storage
+                .sched
+                .get_txn_status_cache()
+                .get_no_promote(90.into())
+                .unwrap(),
+            100.into()
         );
     }
 }
