@@ -92,7 +92,7 @@ Note that, heap profile is not like CPU profile which is collected within the sp
 ```bash
 curl -X GET 'http://$TIKV_ADDRESS/debug/pprof/heap?name=<name>&jeprof=<true>'
 ```
-
+curl -X GET 'http://$TIKV_ADDRESS/debug/pprof/heap?name=<name>&jeprof=<jeprof>'
 #### Parameters
 
 - **name** (optional): Specifies the name of the heap profile to retrieve. If not specified, a heap profile will be retrieved.
