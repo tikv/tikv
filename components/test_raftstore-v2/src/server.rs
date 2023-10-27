@@ -542,6 +542,12 @@ impl<EK: KvEngine> ServerCluster<EK> {
             raft_kv_v2,
             LocalTablets::Registry(tablet_registry.clone()),
             Arc::clone(&importer),
+<<<<<<< HEAD
+=======
+            Some(store_meta),
+            resource_manager.clone(),
+            Arc::new(region_info_accessor.clone()),
+>>>>>>> 69ef88b2e9 (import: write RPC will check region epoch before continue (#15795))
         );
 
         // Create deadlock service.

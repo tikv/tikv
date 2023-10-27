@@ -404,7 +404,19 @@ docker_test:
 	docker run -i -v $(shell pwd):/tikv \
 		${DEV_DOCKER_IMAGE_NAME}:${DOCKER_IMAGE_TAG} \
 		make test
+<<<<<<< HEAD
 	
+=======
+
+docker_shell:
+	docker build -f Dockerfile.test \
+		-t ${DEV_DOCKER_IMAGE_NAME}:${DOCKER_IMAGE_TAG} \
+		.
+	docker run -it -v $(shell pwd):/tikv \
+		${DEV_DOCKER_IMAGE_NAME}:${DOCKER_IMAGE_TAG} \
+		/bin/bash
+
+>>>>>>> 69ef88b2e9 (import: write RPC will check region epoch before continue (#15795))
 ## The driver for script/run-cargo.sh
 ## ----------------------------------
 

@@ -11,7 +11,7 @@ use std::{
         atomic::{AtomicU64, Ordering},
         Arc,
     },
-    time::Duration,
+    time::{Duration, SystemTime},
 };
 
 use dashmap::{mapref::entry::Entry, DashMap};
@@ -1293,9 +1293,9 @@ impl SstImporter {
     }
 
     /// List the basic information of the current SST files.
-    /// The information contains UUID, region ID, region Epoch.
-    /// Other fields may be left blank.
-    pub fn list_ssts(&self) -> Result<Vec<SstMeta>> {
+    /// The information contains UUID, region ID, region Epoch, api version,
+    /// last modified time. Other fields may be left blank.
+    pub fn list_ssts(&self) -> Result<Vec<(SstMeta, i32, SystemTime)>> {
         self.dir.list_ssts()
     }
 
@@ -1495,9 +1495,9 @@ mod tests {
         for sst in &ssts {
             ingested
                 .iter()
-                .find(|s| s.get_uuid() == sst.get_uuid())
+                .find(|s| s.get_uuid() == sst.0.get_uuid())
                 .unwrap();
-            dir.delete(sst, key_manager.as_deref()).unwrap();
+            dir.delete(&sst.0, key_manager.as_deref()).unwrap();
         }
         assert!(dir.list_ssts().unwrap().is_empty());
     }
