@@ -135,10 +135,11 @@ where
         fail_point!("on_full_compact");
         let timer = Instant::now();
         let full_compact_timer = FULL_COMPACT.start_coarse_timer();
-        box_try!(
-            self.engine
-                .compact_range(None, None, false, 1 /* threads */,)
-        );
+        box_try!(self.engine.compact_range(
+            None, None, // Compact the entire key range
+            true, // exclusive manual: do not run if background compaction is running
+            1,    // number of threads threads
+        ));
         full_compact_timer.observe_duration();
         info!(
             "full compaction finished";
