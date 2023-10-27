@@ -10992,7 +10992,6 @@ mod tests {
             .build()
             .unwrap();
         let cm = storage.concurrency_manager.clone();
-        let pk = b"pk";
 
         // Commit
         let (tx, rx) = channel();
@@ -11003,7 +11002,7 @@ mod tests {
                         Mutation::make_put(Key::from_raw(b"k1"), b"v1".to_vec()),
                         SkipPessimisticCheck,
                     )],
-                    pk.to_vec(),
+                    b"k1".to_vec(),
                     10.into(),
                     3000,
                     10.into(),
@@ -11077,7 +11076,7 @@ mod tests {
             .sched_txn_command(
                 Prewrite::new(
                     vec![Mutation::make_put(Key::from_raw(b"k3"), b"v3".to_vec())],
-                    pk.to_vec(),
+                    b"k3".to_vec(),
                     50.into(),
                     3000,
                     false,
@@ -11111,7 +11110,7 @@ mod tests {
             .sched_txn_command(
                 Prewrite::new(
                     vec![Mutation::make_put(Key::from_raw(b"k4"), b"v4".to_vec())],
-                    pk.to_vec(),
+                    b"pk".to_vec(),
                     70.into(),
                     3000,
                     false,
@@ -11155,7 +11154,7 @@ mod tests {
             .sched_txn_command(
                 Prewrite::new(
                     vec![Mutation::make_put(Key::from_raw(b"k5"), b"v5".to_vec())],
-                    pk.to_vec(),
+                    b"pk".to_vec(),
                     90.into(),
                     3000,
                     false,
@@ -11180,7 +11179,7 @@ mod tests {
                     vec![Key::from_raw(b"k5")],
                     Context::default(),
                 ),
-                expect_ok_callback(tx, 0),
+                expect_ok_callback(tx.clone(), 0),
             )
             .unwrap();
         rx.recv().unwrap();
@@ -11191,6 +11190,188 @@ mod tests {
                 .get_no_promote(90.into())
                 .unwrap(),
             100.into()
+        );
+
+        // CheckTxnStatus: uncommitted transaction
+        storage
+            .sched_txn_command(
+                commands::CheckTxnStatus::new(
+                    Key::from_raw(b"k1"),
+                    9.into(),
+                    110.into(),
+                    110.into(),
+                    true,
+                    false,
+                    false,
+                    false,
+                    Context::default(),
+                ),
+                expect_ok_callback(tx.clone(), 0),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        assert!(
+            storage
+                .sched
+                .get_txn_status_cache()
+                .get_no_promote(9.into())
+                .is_none()
+        );
+
+        // CheckTxnStatus: committed transaction
+        storage.sched.get_txn_status_cache().remove(10.into());
+        storage
+            .sched_txn_command(
+                commands::CheckTxnStatus::new(
+                    Key::from_raw(b"k1"),
+                    10.into(),
+                    110.into(),
+                    110.into(),
+                    true,
+                    false,
+                    false,
+                    false,
+                    Context::default(),
+                ),
+                expect_ok_callback(tx.clone(), 0),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        assert_eq!(
+            storage
+                .sched
+                .get_txn_status_cache()
+                .get_no_promote(10.into())
+                .unwrap(),
+            20.into()
+        );
+
+        // CheckSecondaryLocks: uncommitted transaction
+        storage
+            .sched_txn_command(
+                Prewrite::new(
+                    vec![Mutation::make_put(Key::from_raw(b"k6"), b"v6".to_vec())],
+                    b"pk".to_vec(),
+                    120.into(),
+                    3000,
+                    false,
+                    1,
+                    0.into(),
+                    0.into(),
+                    Some(vec![]),
+                    false,
+                    AssertionLevel::Off,
+                    Context::default(),
+                ),
+                expect_ok_callback(tx.clone(), 0),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+
+        // Lock exists but the transaction status is still unknown
+        storage
+            .sched_txn_command(
+                commands::CheckSecondaryLocks::new(
+                    vec![Key::from_raw(b"k6")],
+                    120.into(),
+                    Context::default(),
+                ),
+                expect_ok_callback(tx.clone(), 0),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        assert!(
+            storage
+                .sched
+                .get_txn_status_cache()
+                .get_no_promote(120.into())
+                .is_none()
+        );
+
+        // One of the lock doesn't exist so the transaction becomes rolled-back status.
+        storage
+            .sched_txn_command(
+                commands::CheckSecondaryLocks::new(
+                    vec![Key::from_raw(b"k6"), Key::from_raw(b"k7")],
+                    120.into(),
+                    Context::default(),
+                ),
+                expect_ok_callback(tx.clone(), 0),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        assert!(
+            storage
+                .sched
+                .get_txn_status_cache()
+                .get_no_promote(120.into())
+                .is_none()
+        );
+
+        // CheckSecondaryLocks: committed transaction
+        storage
+            .sched_txn_command(
+                Prewrite::new(
+                    vec![
+                        Mutation::make_put(Key::from_raw(b"k8"), b"v8".to_vec()),
+                        Mutation::make_put(Key::from_raw(b"k9"), b"v9".to_vec()),
+                    ],
+                    b"pk".to_vec(),
+                    130.into(),
+                    3000,
+                    false,
+                    1,
+                    0.into(),
+                    0.into(),
+                    Some(vec![]),
+                    false,
+                    AssertionLevel::Off,
+                    Context::default(),
+                ),
+                expect_ok_callback(tx.clone(), 0),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        // Commit one of the key
+        storage
+            .sched_txn_command(
+                commands::Commit::new(
+                    vec![Key::from_raw(b"k9")],
+                    130.into(),
+                    140.into(),
+                    Context::default(),
+                ),
+                expect_ok_callback(tx.clone(), 0),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        assert_eq!(
+            storage
+                .sched
+                .get_txn_status_cache()
+                .remove(130.into())
+                .unwrap(),
+            140.into()
+        );
+
+        storage
+            .sched_txn_command(
+                commands::CheckSecondaryLocks::new(
+                    vec![Key::from_raw(b"k8"), Key::from_raw(b"k9")],
+                    130.into(),
+                    Context::default(),
+                ),
+                expect_ok_callback(tx, 0),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        assert_eq!(
+            storage
+                .sched
+                .get_txn_status_cache()
+                .get_no_promote(130.into())
+                .unwrap(),
+            140.into()
         );
     }
 }

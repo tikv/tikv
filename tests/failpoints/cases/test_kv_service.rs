@@ -254,19 +254,12 @@ fn test_storage_do_not_update_txn_status_cache_on_write_error() {
         ctx.clone(),
         vec![mutation],
         vec![SkipPessimisticCheck],
-        pk.clone(),
+        pk,
         20,
         20,
         true,
         false,
     );
-    must_kv_have_locks(
-        &client,
-        ctx.clone(),
-        29,
-        b"k2",
-        b"k3",
-        &[(b"k2", Op::Put, 20, 20)],
-    );
+    must_kv_have_locks(&client, ctx, 29, b"k2", b"k3", &[(b"k2", Op::Put, 20, 20)]);
     fail::remove(cache_hit_fp);
 }
