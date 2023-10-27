@@ -26,7 +26,12 @@ pub mod sst_importer;
 pub use self::{
     config::Config,
     errors::{error_inc, Error, Result},
+<<<<<<< HEAD
     import_file::sst_meta_to_path,
+=======
+    import_file::{sst_meta_to_path, API_VERSION_2},
+    import_mode2::range_overlaps,
+>>>>>>> 69ef88b2e9 (import: write RPC will check region epoch before continue (#15795))
     sst_importer::SstImporter,
     sst_writer::{RawSstWriter, TxnSstWriter},
     util::{copy_sst_for_ingestion, prepare_sst_for_ingestion},

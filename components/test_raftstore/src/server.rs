@@ -441,6 +441,12 @@ impl ServerCluster {
             sim_router.clone(),
             engines.kv.clone(),
             Arc::clone(&importer),
+<<<<<<< HEAD
+=======
+            None,
+            resource_manager.clone(),
+            Arc::new(region_info_accessor.clone()),
+>>>>>>> 69ef88b2e9 (import: write RPC will check region epoch before continue (#15795))
         );
 
         // Create deadlock service.

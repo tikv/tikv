@@ -369,6 +369,7 @@ where
             router.clone(),
             config.coprocessor.clone(),
         ));
+
         let region_info_accessor = RegionInfoAccessor::new(coprocessor_host.as_mut().unwrap());
 
         // Initialize concurrency manager
@@ -1256,6 +1257,12 @@ where
             self.router.clone(),
             engines.engines.kv.clone(),
             servers.importer.clone(),
+<<<<<<< HEAD
+=======
+            None,
+            self.resource_manager.clone(),
+            Arc::new(self.region_info_accessor.clone()),
+>>>>>>> 69ef88b2e9 (import: write RPC will check region epoch before continue (#15795))
         );
         if servers
             .server
