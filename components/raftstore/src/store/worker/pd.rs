@@ -928,7 +928,7 @@ struct SlowTrendStatistics {
     slow_result_recorder: RequestPerSecRecorder,
 }
 
-impl SlownessStatistics {
+impl SlowTrendStatistics {
     #[inline]
     fn new(cfg: &Config) -> Self {
         Self {
@@ -971,7 +971,7 @@ impl SlownessStatistics {
     }
 
     #[inline]
-    fn record(&self, duration: RaftStoreDuration) {
+    fn record(&mut self, duration: RaftstoreDuration) {
         // TODO: It's more appropriate to divide the factor into `Disk IO factor` and
         // `Net IO factor`.
         // Currently, when `network ratio == 1`, it summarizes all factors by `sum`
@@ -985,7 +985,7 @@ impl SlownessStatistics {
                 tikv_util::time::duration_to_us(duration.store_wait_duration.unwrap()) as f64;
             let network_io_latency =
                 tikv_util::time::duration_to_us(duration.store_commit_duration.unwrap()) as f64;
-            (disk_io_latency + network_io_latency * net_io_factor) as u64
+            (disk_io_latency + network_io_latency * self.net_io_factor) as u64
         }();
         self.slow_cause.record(latency, Instant::now());
     }
@@ -1368,7 +1368,7 @@ where
             .engine_total_query_num
             .sub_query_stats(&self.store_stat.engine_last_query_num);
         let total_query_num = self
-            .slow_trend_result_recorder
+            .slow_trend.slow_result_recorder
             .record_and_get_current_rps(res.get_all_query_num(), Instant::now());
         stats.set_query_stats(res.0);
 
@@ -1501,7 +1501,7 @@ where
         slow_trend.set_cause_rate(slow_trend_cause_rate);
         slow_trend.set_cause_value(self.slow_trend.slow_cause.l0_avg());
         if let Some(total_query_num) = total_query_num {
-            self.slow_trend_result
+            self.slow_trend.slow_result
                 .record(total_query_num as u64, Instant::now());
             slow_trend.set_result_value(self.slow_trend.slow_result.l0_avg());
             let slow_trend_result_rate = self.slow_trend.slow_result.increasing_rate();
@@ -2296,9 +2296,7 @@ where
             Task::QueryRegionLeader { region_id } => self.handle_query_region_leader(region_id),
             Task::UpdateSlowScore { id, duration } => {
                 self.slow_score.record(id, duration.sum());
-                self.slow_trend
-                    .record(duration)
-                    .record(inspect_raftstore_slowness(duration, self), Instant::now());
+                self.slow_trend.record(duration);
             }
             Task::RegionCpuRecords(records) => self.handle_region_cpu_records(records),
             Task::ReportMinResolvedTs {

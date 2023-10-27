@@ -932,6 +932,12 @@ impl Config {
             ));
         }
 
+        if self.slow_trend_network_io_factor < 0.0 {
+            return Err(box_err!(
+                "slow_trend_network_io_factor must be greater than 0"
+            ));
+        }
+
         Ok(())
     }
 

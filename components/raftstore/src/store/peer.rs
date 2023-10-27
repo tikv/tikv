@@ -1792,16 +1792,14 @@ where
                         &metrics.wf_commit_not_persist_log
                     };
                     for tracker in trackers {
-                        tracker.observe(now, hist, |t| {
-                            // Collect the metrics related to commit_log
-                            // durations.
-                            metrics
-                                .stat_commit_log
-                                .record(Duration::from_nanos(tracker.observe(now, hist, |t| {
-                                    t.metrics.commit_not_persisted = !commit_persisted;
-                                    &mut t.metrics.wf_commit_log_nanos
-                                })));
-                        });
+                        // Collect the metrics related to commit_log
+                        // durations.
+                        metrics
+                            .stat_commit_log
+                            .record(Duration::from_nanos(tracker.observe(now, hist, |t| {
+                                t.metrics.commit_not_persisted = !commit_persisted;
+                                &mut t.metrics.wf_commit_log_nanos
+                            })));
                     }
                 }
             }
