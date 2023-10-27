@@ -48,7 +48,7 @@ groups:
     - record: tikv_coprocessor_request_duration_seconds:1m
       expr: sum(rate(tikv_coprocessor_request_duration_seconds_bucket{instance=~".*"}[1m])) by (le)
     - record: tikv_futurepool_pending_task:1m
-      expr: sum(rate(tikv_futurepool_pending_task_total{instance=~".*"}[1m])) by (name)
+      expr: sum(avg_over_time(tikv_futurepool_pending_task_total{instance=~".*"}[1m])) by (name)
     - record: tikv_storage_engine_async_request:1m
       expr: sum(rate(tikv_storage_engine_async_request_total{instance=~".*", status!~"all|success"}[1m])) by (status)
     - record: tikv_thread_cpu_seconds_nogrpc:1m

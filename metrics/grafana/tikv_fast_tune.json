@@ -2712,7 +2712,7 @@
       "steppedLine": false,
       "targets": [
         {
-          "expr": "sum(rate(tikv_futurepool_pending_task_total{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", name=~\"sched-worker-.*\"}[1m]))",
+          "expr": "sum(avg_over_time(tikv_futurepool_pending_task_total{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", name=~\"sched-worker-.*\"}[1m]))",
           "format": "time_series",
           "hide": false,
           "intervalFactor": 1,
@@ -5763,7 +5763,7 @@
       "steppedLine": false,
       "targets": [
         {
-          "expr": "sum(rate(tikv_futurepool_pending_task_total{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", name=~\"cop-normal\"}[1m]))",
+          "expr": "sum(avg_over_time(tikv_futurepool_pending_task_total{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", name=~\"cop-normal\"}[1m]))",
           "format": "time_series",
           "hide": false,
           "intervalFactor": 1,
