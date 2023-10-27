@@ -476,12 +476,17 @@ class Layout:
     row_panel: RowPanel
     current_row_y_pos: int
 
-    def __init__(self, title, collapsed=True) -> None:
+    def __init__(self, title, collapsed=True, repeat: Optional[str] = None) -> None:
+        extraJson = None
+        if repeat:
+            extraJson = {"repeat": repeat}
+            title = f"{title} - ${repeat}"
         self.current_row_y_pos = 0
         self.row_panel = RowPanel(
             title=title,
             gridPos=GridPos(h=self.PANEL_HEIGHT, w=self.ROW_WIDTH, x=0, y=0),
             collapsed=collapsed,
+            extraJson=extraJson,
         )
 
     def row(self, panels: list[Panel]):
@@ -3329,6 +3334,46 @@ def LocalReader() -> RowPanel:
     return layout.row_panel
 
 
+def UnifiedReadPool() -> RowPanel:
+    layout = Layout(title="Unified Read Pool")
+    layout.row(
+        [
+            # graph_panel()
+        ]
+    )
+    return layout.row_panel
+
+
+def Storage() -> RowPanel:
+    layout = Layout(title="Storage")
+    layout.row(
+        [
+            # graph_panel()
+        ]
+    )
+    return layout.row_panel
+
+
+def FlowControl() -> RowPanel:
+    layout = Layout(title="Flow Control")
+    layout.row(
+        [
+            # graph_panel()
+        ]
+    )
+    return layout.row_panel
+
+
+def Scheduler() -> RowPanel:
+    layout = Layout(title="Scheduler", repeat="command")
+    layout.row(
+        [
+            # graph_panel()
+        ]
+    )
+    return layout.row_panel
+
+
 #### Metrics Definition End ####
 
 
@@ -3359,5 +3404,9 @@ dashboard = Dashboard(
         RaftAdmin(),
         RaftLog(),
         LocalReader(),
+        UnifiedReadPool(),
+        Storage(),
+        FlowControl(),
+        Scheduler(),
     ],
 ).auto_panel_ids()
