@@ -396,9 +396,10 @@ impl Default for Config {
             region_compact_tombstones_percent: 30,
             pd_heartbeat_tick_interval: ReadableDuration::minutes(1),
             pd_store_heartbeat_tick_interval: ReadableDuration::secs(10),
-            // Disable full compaction by default
+            // Disable periodic full compaction by default
             periodic_full_compact_tick_interval: ReadableDuration::secs(0),
-            periodic_full_compact_start_times: ReadableSchedule(Vec::new()),
+            // Do not restrict to specified start times by default
+            periodic_full_compact_start_times: ReadableSchedule::default(),
             notify_capacity: 40960,
             snap_mgr_gc_tick_interval: ReadableDuration::minutes(1),
             snap_gc_timeout: ReadableDuration::hours(4),

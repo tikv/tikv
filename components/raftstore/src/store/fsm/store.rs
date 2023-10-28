@@ -2343,15 +2343,13 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
 
     fn on_full_compact_tick(&mut self) {
         self.register_full_compact_tick();
-        if !self.ctx.cfg.periodic_full_compact_start_times.0.is_empty() {
+        if !self.ctx.cfg.periodic_full_compact_start_times.is_empty() {
             let local_time = chrono::Local::now();
             if !self
                 .ctx
                 .cfg
                 .periodic_full_compact_start_times
-                .0
-                .iter()
-                .any(|time| time.hour_matches(local_time))
+                .is_scheduled_this_hour(&local_time)
             {
                 debug!(
                     "full compaction may not run at this time";
