@@ -557,7 +557,7 @@ impl From<ConfigValue> for ReadableSchedule {
                     .collect::<Vec<_>>(),
             )
         } else {
-            panic!("expect: ConfigValue::OffsetTimeVec, got :{:?}", c)
+            panic!("expect: ConfigValue::Schedule, got: {:?}", c)
         }
     }
 }
