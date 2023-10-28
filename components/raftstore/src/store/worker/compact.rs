@@ -16,7 +16,7 @@ use super::metrics::{COMPACT_RANGE_CF, FULL_COMPACT};
 type Key = Vec<u8>;
 
 pub enum Task {
-    FullCompact,
+    PeriodicFullCompact,
 
     Compact {
         cf_name: String,
@@ -60,7 +60,7 @@ impl CompactThreshold {
 impl Display for Task {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match *self {
-            Task::FullCompact => f.debug_struct("FullCompact").finish(),
+            Task::PeriodicFullCompact => f.debug_struct("FullCompact").finish(),
             Task::Compact {
                 ref cf_name,
                 ref start_key,
@@ -130,13 +130,19 @@ where
         Runner { engine }
     }
 
-    /// Full compaction.
+    /// Periodic full compaction.
+    ///
+    /// NOTE this is a highly experimental feature!
+    ///
+    /// TODO: Do not start if there is heavy I/O.
+    /// TODO: Make it possible to rate limit, pause, or abort this by compacting
+    /// a range at a time.
     pub fn full_compact(&mut self) -> Result<(), Error> {
         fail_point!("on_full_compact");
         let timer = Instant::now();
         let full_compact_timer = FULL_COMPACT.start_coarse_timer();
         box_try!(self.engine.compact_range(
-            None, None, // Compact the entire key range
+            None, None, // Compact the entire key range.
             true, // exclusive manual: do not run if background compaction is running
             1,    // number of threads threads
         ));
@@ -184,9 +190,9 @@ where
 
     fn run(&mut self, task: Task) {
         match task {
-            Task::FullCompact => {
+            Task::PeriodicFullCompact => {
                 if let Err(e) = self.full_compact() {
-                    error!("full compaction failed"; "err" => %e);
+                    error!("periodic full compaction failed"; "err" => %e);
                 }
             }
             Task::Compact {
@@ -515,7 +521,7 @@ mod tests {
             .unwrap();
         assert_eq!(stats.num_entries - stats.num_versions, 5);
 
-        runner.run(Task::FullCompact);
+        runner.run(Task::PeriodicFullCompact);
         let stats = engine
             .get_range_stats(CF_WRITE, &start, &end)
             .unwrap()
