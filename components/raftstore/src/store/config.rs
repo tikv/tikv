@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use serde_with::with_prefix;
 use tikv_util::{
     box_err,
-    config::{ReadableDuration, ReadableSize, VersionTrack},
+    config::{ReadableDuration, ReadableSchedule, ReadableSize, VersionTrack},
     error, info,
     sys::SysQuota,
     warn,
@@ -131,15 +131,20 @@ pub struct Config {
     pub lock_cf_compact_interval: ReadableDuration,
     pub lock_cf_compact_bytes_threshold: ReadableSize,
 
-    /// The duration of time to attempt scheduling a full compaction. If not
-    /// set, full compaction is not run automatically.
-    pub full_compact_tick_interval: ReadableDuration,
-    /// Hours of the day during which we may execute a full compaction. If not
-    /// set or empty, full compaction may be started every
-    /// `full_compact_tick_interval`. This should be a list in of hours (in
-    /// the local timezone) e.g., ["23", "4"]
-    #[online_config(skip)]
-    pub full_compact_restrict_hours_local_tz: Vec<u32>,
+    /// The duration of time to wait before attempt scheduling a full
+    /// compaction. If not set, periodic full compaction is not run
+    /// automatically.
+    ///
+    /// NOTE: This feature is highly experimental!
+    pub periodic_full_compact_tick_interval: ReadableDuration,
+
+    /// Hours of the day during which we may execute a periodic full compaction.
+    /// If not set or empty, periodic full compaction may be started every
+    /// `periodic_full_compact_tick_interval`. In toml this should be a list of
+    /// timesin "HH:MM" format with an optional timezone offset. If no timezone
+    /// is specified, local timezone is used. E.g.,
+    /// `["23:00 +0000", "03:00 +0700"]` or `["23:00", "03:00"]`.
+    pub periodic_full_compact_start_times: ReadableSchedule,
 
     #[online_config(skip)]
     pub notify_capacity: usize,
@@ -413,8 +418,8 @@ impl Default for Config {
             pd_heartbeat_tick_interval: ReadableDuration::minutes(1),
             pd_store_heartbeat_tick_interval: ReadableDuration::secs(10),
             // Disable full compaction by default
-            full_compact_tick_interval: ReadableDuration::secs(0),
-            full_compact_restrict_hours_local_tz: Vec::new(),
+            periodic_full_compact_tick_interval: ReadableDuration::secs(0),
+            periodic_full_compact_start_times: ReadableSchedule(Vec::new()),
             notify_capacity: 40960,
             snap_mgr_gc_tick_interval: ReadableDuration::minutes(1),
             snap_gc_timeout: ReadableDuration::hours(4),
