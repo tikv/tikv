@@ -23,7 +23,6 @@ use batch_system::{
     HandlerBuilder, PollHandler, Priority,
 };
 use causal_ts::CausalTsProviderImpl;
-use chrono::Timelike;
 use collections::{HashMap, HashMapEntry, HashSet};
 use concurrency_manager::ConcurrencyManager;
 use crossbeam::channel::{TryRecvError, TrySendError};
@@ -769,7 +768,7 @@ impl<'a, EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
             StoreTick::SnapGc => self.on_snap_mgr_gc(),
             StoreTick::CompactLockCf => self.on_compact_lock_cf(),
             StoreTick::CompactCheck => self.on_compact_check_tick(),
-            StoreTick::FullCompact => self.on_full_compact_tick(),
+            StoreTick::PeriodicFullCompact => self.on_full_compact_tick(),
             StoreTick::ConsistencyCheck => self.on_consistency_check_tick(),
             StoreTick::CleanupImportSst => self.on_cleanup_import_sst_tick(),
         }
@@ -2441,25 +2440,27 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
 
     fn register_full_compact_tick(&self) {
         self.ctx.schedule_store_tick(
-            StoreTick::FullCompact,
-            self.ctx.cfg.full_compact_tick_interval.0,
+            StoreTick::PeriodicFullCompact,
+            self.ctx.cfg.periodic_full_compact_tick_interval.0,
         )
     }
 
     fn on_full_compact_tick(&mut self) {
         self.register_full_compact_tick();
-        if !self.ctx.cfg.full_compact_restrict_hours_local_tz.is_empty() {
-            let hour_in_local_tz = chrono::Local::now().time().hour();
+        if !self.ctx.cfg.periodic_full_compact_start_times.0.is_empty() {
+            let local_time = chrono::Local::now();
             if !self
                 .ctx
                 .cfg
-                .full_compact_restrict_hours_local_tz
-                .contains(&hour_in_local_tz)
+                .periodic_full_compact_start_times
+                .0
+                .iter()
+                .any(|time| time.hour_matches(local_time))
             {
                 debug!(
                     "full compaction may not run at this time";
-                    "hour_in_local_tz" => hour_in_local_tz,
-                    "full_compact_restrict_hours_local_tz" => ?self.ctx.cfg.full_compact_restrict_hours_local_tz,
+                    "local_time" => ?local_time,
+                    "periodic_full_compact_start_times" => ?self.ctx.cfg.periodic_full_compact_start_times,
                 );
                 return;
             }
@@ -2468,9 +2469,9 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         if let Err(e) = self
             .ctx
             .cleanup_scheduler
-            .schedule(CleanupTask::Compact(CompactTask::FullCompact))
+            .schedule(CleanupTask::Compact(CompactTask::PeriodicFullCompact))
         {
-            error!("failed to schedule full compaction";
+            error!("failed to schedule a periodic full compaction";
             "store_id" => self.fsm.store.id,
             "err" => ?e
             );
