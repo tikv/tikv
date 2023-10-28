@@ -35,7 +35,7 @@ use tikv::{
         BlockCacheConfig, Config as StorageConfig, FlowControlConfig, IoRateLimitConfig,
     },
 };
-use tikv_util::config::{LogFormat, ReadableDuration, ReadableSize};
+use tikv_util::config::{LogFormat, ReadableDuration, ReadableSchedule, ReadableSize};
 
 mod dynamic;
 mod test_config_client;
@@ -257,8 +257,8 @@ fn test_serde_custom_tikv_config() {
         unreachable_backoff: ReadableDuration::secs(111),
         check_peers_availability_interval: ReadableDuration::secs(30),
         unsafe_disable_check_quorum: false,
-        full_compact_tick_interval: ReadableDuration::secs(0),
-        full_compact_restrict_hours_local_tz: Vec::new(),
+        periodic_full_compact_tick_interval: ReadableDuration::secs(0),
+        periodic_full_compact_start_times: ReadableSchedule(Vec::new()),
     };
     value.pd = PdConfig::new(vec!["example.com:443".to_owned()]);
     let titan_cf_config = TitanCfConfig {

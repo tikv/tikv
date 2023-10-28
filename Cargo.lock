@@ -3425,6 +3425,7 @@ checksum = "86f0b0d4bf799edbc74508c1e8bf170ff5f41238e5f8225603ca7caaae2b7860"
 name = "online_config"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "online_config_derive",
  "serde",
  "serde_derive",
