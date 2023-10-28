@@ -656,7 +656,7 @@ impl UnsafeRecoveryForceLeaderSyncer {
     pub fn new(report_id: u64, router: RaftRouter<impl KvEngine, impl RaftEngine>) -> Self {
         let thread_safe_router = Mutex::new(router);
         let inner = InvokeClosureOnDrop(Box::new(move || {
-            info!("Unsafe recovery, force leader finished.");
+            info!("Unsafe recovery, force leader finished."; "report_id" => report_id);
             let router_ptr = thread_safe_router.lock().unwrap();
             start_unsafe_recovery_report(&*router_ptr, report_id, false);
         }));
@@ -677,11 +677,11 @@ impl UnsafeRecoveryExecutePlanSyncer {
         let abort = Arc::new(Mutex::new(false));
         let abort_clone = abort.clone();
         let closure = InvokeClosureOnDrop(Box::new(move || {
-            info!("Unsafe recovery, plan execution finished");
             if *abort_clone.lock().unwrap() {
-                warn!("Unsafe recovery, plan execution aborted");
+                warn!("Unsafe recovery, plan execution aborted"; "report_id" => report_id);
                 return;
             }
+            info!("Unsafe recovery, plan execution finished"; "report_id" => report_id);
             let router_ptr = thread_safe_router.lock().unwrap();
             start_unsafe_recovery_report(&*router_ptr, report_id, true);
         }));
@@ -748,11 +748,11 @@ impl UnsafeRecoveryWaitApplySyncer {
         let abort = Arc::new(Mutex::new(false));
         let abort_clone = abort.clone();
         let closure = InvokeClosureOnDrop(Box::new(move || {
-            info!("Unsafe recovery, wait apply finished");
             if *abort_clone.lock().unwrap() {
-                warn!("Unsafe recovery, wait apply aborted");
+                warn!("Unsafe recovery, wait apply aborted"; "report_id" => report_id);
                 return;
             }
+            info!("Unsafe recovery, wait apply finished"; "report_id" => report_id);
             let router_ptr = thread_safe_router.lock().unwrap();
             if exit_force_leader {
                 (*router_ptr).broadcast_normal(|| {
@@ -791,7 +791,7 @@ impl UnsafeRecoveryFillOutReportSyncer {
         let reports = Arc::new(Mutex::new(vec![]));
         let reports_clone = reports.clone();
         let closure = InvokeClosureOnDrop(Box::new(move || {
-            info!("Unsafe recovery, peer reports collected");
+            info!("Unsafe recovery, peer reports collected"; "report_id" => report_id);
             let mut store_report = pdpb::StoreReport::default();
             {
                 let mut reports_ptr = reports_clone.lock().unwrap();
@@ -801,7 +801,7 @@ impl UnsafeRecoveryFillOutReportSyncer {
             let router_ptr = thread_safe_router.lock().unwrap();
             if let Err(e) = (*router_ptr).send_control(StoreMsg::UnsafeRecoveryReport(store_report))
             {
-                error!("Unsafe recovery, fail to schedule reporting"; "err" => ?e);
+                error!("Unsafe recovery, fail to schedule reporting"; "err" => ?e, "report_id" => report_id);
             }
         }));
         UnsafeRecoveryFillOutReportSyncer {
@@ -849,6 +849,9 @@ pub enum UnsafeRecoveryState {
         demote_after_exit: bool,
     },
     Destroy(UnsafeRecoveryExecutePlanSyncer),
+    // DemoteFailedVoter may fail due to some reasons. It's just a marker to avoid exiting force
+    // leader state
+    Failed,
 }
 
 impl UnsafeRecoveryState {
@@ -857,6 +860,7 @@ impl UnsafeRecoveryState {
             UnsafeRecoveryState::WaitApply { syncer, .. } => syncer.time,
             UnsafeRecoveryState::DemoteFailedVoters { syncer, .. }
             | UnsafeRecoveryState::Destroy(syncer) => syncer.time,
+            UnsafeRecoveryState::Failed => return false,
         };
         time.saturating_elapsed() >= timeout
     }
@@ -866,6 +870,7 @@ impl UnsafeRecoveryState {
             UnsafeRecoveryState::WaitApply { syncer, .. } => &syncer.abort,
             UnsafeRecoveryState::DemoteFailedVoters { syncer, .. }
             | UnsafeRecoveryState::Destroy(syncer) => &syncer.abort,
+            UnsafeRecoveryState::Failed => return true,
         };
         *abort.lock().unwrap()
     }
@@ -875,6 +880,7 @@ impl UnsafeRecoveryState {
             UnsafeRecoveryState::WaitApply { syncer, .. } => syncer.abort(),
             UnsafeRecoveryState::DemoteFailedVoters { syncer, .. }
             | UnsafeRecoveryState::Destroy(syncer) => syncer.abort(),
+            UnsafeRecoveryState::Failed => (),
         }
     }
 }
@@ -1234,7 +1240,10 @@ where
             return;
         }
         self.replication_mode_version = state.status().get_dr_auto_sync().state_id;
-        let enable = state.status().get_dr_auto_sync().get_state() != DrAutoSyncState::Async;
+        let enable = !matches!(
+            state.status().get_dr_auto_sync().get_state(),
+            DrAutoSyncState::Async | DrAutoSyncState::SyncRecover
+        );
         self.raft_group.raft.enable_group_commit(enable);
         self.dr_auto_sync_state = state.status().get_dr_auto_sync().get_state();
     }
@@ -1243,29 +1252,32 @@ where
     pub fn switch_replication_mode(&mut self, state: &Mutex<GlobalReplicationState>) {
         self.replication_sync = false;
         let guard = state.lock().unwrap();
-        let enable_group_commit = if guard.status().get_mode() == ReplicationMode::Majority {
-            self.replication_mode_version = 0;
-            self.dr_auto_sync_state = DrAutoSyncState::Async;
-            false
-        } else {
-            self.dr_auto_sync_state = guard.status().get_dr_auto_sync().get_state();
-            self.replication_mode_version = guard.status().get_dr_auto_sync().state_id;
-            match guard.status().get_dr_auto_sync().get_state() {
-                // SyncRecover will enable group commit after it catches up logs.
-                DrAutoSyncState::Async | DrAutoSyncState::SyncRecover => false,
-                _ => true,
-            }
-        };
+        let (enable_group_commit, calculate_group_id) =
+            if guard.status().get_mode() == ReplicationMode::Majority {
+                self.replication_mode_version = 0;
+                self.dr_auto_sync_state = DrAutoSyncState::Async;
+                (false, false)
+            } else {
+                self.dr_auto_sync_state = guard.status().get_dr_auto_sync().get_state();
+                self.replication_mode_version = guard.status().get_dr_auto_sync().state_id;
+                match guard.status().get_dr_auto_sync().get_state() {
+                    // SyncRecover will enable group commit after it catches up logs.
+                    DrAutoSyncState::Async => (false, false),
+                    DrAutoSyncState::SyncRecover => (false, true),
+                    _ => (true, true),
+                }
+            };
         drop(guard);
-        self.switch_group_commit(enable_group_commit, state);
+        self.switch_group_commit(enable_group_commit, calculate_group_id, state);
     }
 
     fn switch_group_commit(
         &mut self,
         enable_group_commit: bool,
+        calculate_group_id: bool,
         state: &Mutex<GlobalReplicationState>,
     ) {
-        if enable_group_commit {
+        if enable_group_commit || calculate_group_id {
             let mut guard = state.lock().unwrap();
             let ids = mem::replace(
                 guard.calculate_commit_group(
@@ -4420,7 +4432,9 @@ where
         // Should not propose normal in force leader state.
         // In `pre_propose_raft_command`, it rejects all the requests expect conf-change
         // if in force leader state.
-        if self.force_leader.is_some() {
+        if self.force_leader.is_some()
+            && req.get_admin_request().get_cmd_type() != AdminCmdType::RollbackMerge
+        {
             poll_ctx.raft_metrics.invalid_proposal.force_leader.inc();
             panic!(
                 "{} propose normal in force leader state {:?}",
@@ -5310,7 +5324,7 @@ where
                     // should enable group commit to promise `IntegrityOverLabel`. then safe
                     // to switch to the `Sync` phase.
                     if self.dr_auto_sync_state == DrAutoSyncState::SyncRecover {
-                        self.switch_group_commit(true, &ctx.global_replication_state)
+                        self.switch_group_commit(true, true, &ctx.global_replication_state)
                     }
                     self.replication_sync = true;
                 }

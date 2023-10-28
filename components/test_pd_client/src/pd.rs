@@ -1309,12 +1309,23 @@ impl TestPdClient {
         cluster.replication_status = Some(status);
     }
 
-    pub fn switch_replication_mode(&self, state: DrAutoSyncState, available_stores: Vec<u64>) {
+    pub fn switch_replication_mode(
+        &self,
+        state: Option<DrAutoSyncState>,
+        available_stores: Vec<u64>,
+    ) {
         let mut cluster = self.cluster.wl();
         let status = cluster.replication_status.as_mut().unwrap();
+        if state.is_none() {
+            status.set_mode(ReplicationMode::Majority);
+            let mut dr = status.mut_dr_auto_sync();
+            dr.state_id += 1;
+            return;
+        }
+        status.set_mode(ReplicationMode::DrAutoSync);
         let mut dr = status.mut_dr_auto_sync();
         dr.state_id += 1;
-        dr.set_state(state);
+        dr.set_state(state.unwrap());
         dr.available_stores = available_stores;
     }
 
