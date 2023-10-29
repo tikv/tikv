@@ -907,21 +907,12 @@ def heatmap_panel_graph_panel_histogram_quantile_pairs(
             metric=f"{metric}_bucket",
             label_selectors=label_selectors,
         ),
-        graph_panel(
+        graph_panel_histogram_quantiles(
             title=graph_title,
             description=graph_description,
+            metric=f"{metric}",
             yaxes=yaxes(left_format=yaxis_format),
-            targets=[
-                target(
-                    expr=expr_histogram_quantile(
-                        quantile,
-                        f"{metric}",
-                        label_selectors=label_selectors,
-                        by_labels=["instance"],
-                    ),
-                    legend_format="{{instance}}",
-                ),
-            ],
+            hide_count=True,
         ),
     ]
 
@@ -3455,8 +3446,93 @@ def Storage() -> RowPanel:
     layout = Layout(title="Storage")
     layout.row(
         [
-            # graph_panel()
+            graph_panel(
+                title="Storage command total",
+                description="The total count of different kinds of commands received",
+                yaxes=yaxes(left_format=UNITS.OPS_PER_SEC, log_base=10),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_storage_command_total",
+                            by_labels=["type"],
+                        ),
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="Storage async request error",
+                description="The total number of engine asynchronous request errors",
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_storage_engine_async_request_total",
+                            label_selectors=['status!~"all|success"'],
+                            by_labels=["status"],
+                        ),
+                    ),
+                ],
+            ),
         ]
+    )
+    layout.row(
+        heatmap_panel_graph_panel_histogram_quantile_pairs(
+            heatmap_title="Storage async write duration",
+            heatmap_description="The time consumed by processing asynchronous write requests",
+            graph_title="Storage async write duration",
+            graph_description="The storage async write duration",
+            yaxis_format=UNITS.SECONDS,
+            quantile=0.99,
+            metric="tikv_storage_engine_async_request_duration_seconds",
+            label_selectors=['type="write"'],
+        ),
+    )
+    layout.row(
+        heatmap_panel_graph_panel_histogram_quantile_pairs(
+            heatmap_title="Storage async snapshot duration",
+            heatmap_description="The time consumed by processing asynchronous snapshot requests",
+            graph_title="Storage async snapshot duration",
+            graph_description="The storage async snapshot duration",
+            yaxis_format=UNITS.SECONDS,
+            quantile=0.99,
+            metric="tikv_storage_engine_async_request_duration_seconds",
+            label_selectors=['type="snapshot"'],
+        ),
+    )
+    layout.row(
+        heatmap_panel_graph_panel_histogram_quantile_pairs(
+            heatmap_title="Storage async snapshot duration (pure local read)",
+            heatmap_description="The storage async snapshot duration without the involving of raftstore",
+            graph_title="Storage async snapshot duration (pure local read)",
+            graph_description="The storage async snapshot duration without the involving of raftstore",
+            yaxis_format=UNITS.SECONDS,
+            quantile=0.99,
+            metric="tikv_storage_engine_async_request_duration_seconds",
+            label_selectors=['type="snapshot_local_read"'],
+        ),
+    )
+    layout.row(
+        heatmap_panel_graph_panel_histogram_quantile_pairs(
+            heatmap_title="Read index propose wait duration",
+            heatmap_description="Read index propose wait duration associated with async snapshot",
+            graph_title="Read index propose wait duration",
+            graph_description="Read index propose wait duration associated with async snapshot",
+            yaxis_format=UNITS.SECONDS,
+            quantile=0.99,
+            metric="tikv_storage_engine_async_request_duration_seconds",
+            label_selectors=['type="snapshot_read_index_propose_wait"'],
+        ),
+    )
+    layout.row(
+        heatmap_panel_graph_panel_histogram_quantile_pairs(
+            heatmap_title="Read index confirm duration",
+            heatmap_description="Read index confirm duration associated with async snapshot",
+            graph_title="Read index confirm duration",
+            graph_description="Read index confirm duration associated with async snapshot",
+            yaxis_format=UNITS.SECONDS,
+            quantile=0.99,
+            metric="tikv_storage_engine_async_request_duration_seconds",
+            label_selectors=['type="snapshot_read_index_confirm"'],
+        ),
     )
     return layout.row_panel
 
