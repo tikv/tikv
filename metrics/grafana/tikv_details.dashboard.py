@@ -331,6 +331,34 @@ def expr_sum_delta(
     )
 
 
+def expr_sum_aggr_over_time(
+    metric: str,
+    aggr: str,
+    range_selector: str,
+    label_selectors: list[str] = [],
+    by_labels: list[str] = ["instance"],
+) -> Expr:
+    """
+    Calculate the sum of average value of all points in the specified interval of a metric.
+
+    Example:
+
+    sum(avg_over_time(
+        tikv_grpc_msg_duration_seconds_count
+        {k8s_cluster="$k8s_cluster",tidb_cluster="$tidb_cluster",instance=~"$instance",type!="kv_gc"}
+        [1m]
+    )) by (instance)
+    """
+    return expr_aggr_func(
+        metric=metric,
+        aggr_op="sum",
+        func=f"{aggr}_over_time",
+        label_selectors=label_selectors,
+        range_selector=range_selector,
+        by_labels=by_labels,
+    )
+
+
 def expr_simple(
     metric: str,
     label_selectors: list[str] = [],
@@ -3338,7 +3366,86 @@ def UnifiedReadPool() -> RowPanel:
     layout = Layout(title="Unified Read Pool")
     layout.row(
         [
-            # graph_panel()
+            graph_panel(
+                title="Time used by level",
+                description="The time used by each level in the unified read pool per second. Level 0 refers to small queries.",
+                yaxes=yaxes(left_format=UNITS.MICRO_SECONDS),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_multilevel_level_elapsed",
+                            label_selectors=['name="unified-read-pool"'],
+                            by_labels=["level"],
+                        ),
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="Level 0 chance",
+                description="The chance that level 0 (small) tasks are scheduled in the unified read pool.",
+                yaxes=yaxes(left_format=UNITS.PERCENT_UNIT),
+                targets=[
+                    target(
+                        expr=expr_simple(
+                            "tikv_multilevel_level0_chance",
+                            label_selectors=['name="unified-read-pool"'],
+                        ),
+                        legend_format="{{type}}",
+                    ),
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel(
+                title="Running tasks",
+                description="The number of concurrently running tasks in the unified read pool.",
+                targets=[
+                    target(
+                        expr=expr_sum_aggr_over_time(
+                            "tikv_unified_read_pool_running_tasks",
+                            "avg",
+                            "1m",
+                        ),
+                    ),
+                ],
+            ),
+            heatmap_panel(
+                title="Unified Read Pool Wait Duration",
+                yaxis=yaxis(format=UNITS.SECONDS),
+                metric="tikv_yatp_pool_schedule_wait_duration_bucket",
+                label_selectors=['name=~"unified-read.*"'],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel_histogram_quantiles(
+                title="Duration of One Time Slice",
+                description="Unified read pool task execution time during one schedule.",
+                yaxes=yaxes(left_format=UNITS.SECONDS, log_base=2),
+                metric="tikv_yatp_task_poll_duration",
+                hide_count=True,
+            ),
+            graph_panel_histogram_quantiles(
+                title="Task Execute Duration",
+                description="Unified read pool task total execution duration.",
+                yaxes=yaxes(left_format=UNITS.SECONDS, log_base=2),
+                metric="tikv_yatp_task_exec_duration",
+                hide_count=True,
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel_histogram_quantiles(
+                title="Task Schedule Times",
+                description="Task schedule number of times.",
+                yaxes=yaxes(left_format=UNITS.NONE_FORMAT, log_base=2),
+                metric="tikv_yatp_task_execute_times",
+                hide_count=True,
+            ),
         ]
     )
     return layout.row_panel
