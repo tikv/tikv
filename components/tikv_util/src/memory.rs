@@ -2,7 +2,10 @@
 
 use std::{
     mem,
-    sync::atomic::{AtomicUsize, Ordering},
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    },
 };
 
 use kvproto::{
@@ -85,6 +88,34 @@ impl_display_as_debug!(MemoryQuotaExceeded);
 pub struct MemoryQuota {
     in_use: AtomicUsize,
     capacity: AtomicUsize,
+}
+
+pub struct OwnedAllocated {
+    allocated: usize,
+    from: Arc<MemoryQuota>,
+}
+
+impl OwnedAllocated {
+    pub fn of(target: Arc<MemoryQuota>) -> Self {
+        Self {
+            allocated: 0,
+            from: target,
+        }
+    }
+
+    pub fn allocate_more(&mut self, bytes: usize) -> Result<(), MemoryQuotaExceeded> {
+        let res = self.from.alloc(bytes);
+        if res.is_ok() {
+            self.allocated += bytes;
+        }
+        res
+    }
+}
+
+impl Drop for OwnedAllocated {
+    fn drop(&mut self) {
+        self.from.free(self.allocated)
+    }
 }
 
 impl MemoryQuota {
