@@ -345,3 +345,184 @@ pub fn must_error_read_on_peer<T: Simulator<EK>, EK: KvEngine>(
         }
     }
 }
+<<<<<<< HEAD
+=======
+
+pub fn put_with_timeout<T: Simulator<EK>, EK: KvEngine>(
+    cluster: &mut Cluster<T, EK>,
+    node_id: u64,
+    key: &[u8],
+    value: &[u8],
+    timeout: Duration,
+) -> Result<RaftCmdResponse> {
+    let mut region = cluster.get_region(key);
+    let region_id = region.get_id();
+    let mut req = new_request(
+        region_id,
+        region.take_region_epoch(),
+        vec![new_put_cf_cmd(CF_DEFAULT, key, value)],
+        false,
+    );
+    req.mut_header().set_peer(
+        region
+            .get_peers()
+            .iter()
+            .find(|p| p.store_id == node_id)
+            .unwrap()
+            .clone(),
+    );
+    cluster.call_command_on_node(node_id, req, timeout)
+}
+
+pub fn wait_down_peers<T: Simulator<EK>, EK: KvEngine>(
+    cluster: &Cluster<T, EK>,
+    count: u64,
+    peer: Option<u64>,
+) {
+    let mut peers = cluster.get_down_peers();
+    for _ in 1..1000 {
+        if peers.len() == count as usize && peer.as_ref().map_or(true, |p| peers.contains_key(p)) {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+        peers = cluster.get_down_peers();
+    }
+    panic!(
+        "got {:?}, want {} peers which should include {:?}",
+        peers, count, peer
+    );
+}
+
+pub fn wait_region_epoch_change<T: Simulator<EK>, EK: KvEngine>(
+    cluster: &Cluster<T, EK>,
+    waited_region: &metapb::Region,
+    timeout: Duration,
+) {
+    let timer = Instant::now();
+    loop {
+        if waited_region.get_region_epoch().get_version()
+            == cluster
+                .get_region_epoch(waited_region.get_id())
+                .get_version()
+        {
+            if timer.saturating_elapsed() > timeout {
+                panic!(
+                    "region {:?}, region epoch is still not changed.",
+                    waited_region
+                );
+            }
+        } else {
+            break;
+        }
+        sleep_ms(10);
+    }
+}
+
+pub struct PeerClient {
+    pub cli: TikvClient,
+    pub ctx: Context,
+}
+
+impl PeerClient {
+    pub fn new<EK: KvEngine>(
+        cluster: &Cluster<ServerCluster<EK>, EK>,
+        region_id: u64,
+        peer: metapb::Peer,
+    ) -> PeerClient {
+        let cli = {
+            let env = Arc::new(Environment::new(1));
+            let channel =
+                ChannelBuilder::new(env).connect(&cluster.sim.rl().get_addr(peer.get_store_id()));
+            TikvClient::new(channel)
+        };
+        let ctx = {
+            let epoch = cluster.get_region_epoch(region_id);
+            let mut ctx = Context::default();
+            ctx.set_region_id(region_id);
+            ctx.set_peer(peer);
+            ctx.set_region_epoch(epoch);
+            ctx
+        };
+        PeerClient { cli, ctx }
+    }
+
+    pub fn kv_read(&self, key: Vec<u8>, ts: u64) -> GetResponse {
+        test_raftstore::kv_read(&self.cli, self.ctx.clone(), key, ts)
+    }
+
+    pub fn must_kv_read_equal(&self, key: Vec<u8>, val: Vec<u8>, ts: u64) {
+        test_raftstore::must_kv_read_equal(&self.cli, self.ctx.clone(), key, val, ts)
+    }
+
+    pub fn must_kv_write(&self, pd_client: &TestPdClient, kvs: Vec<Mutation>, pk: Vec<u8>) -> u64 {
+        test_raftstore::must_kv_write(pd_client, &self.cli, self.ctx.clone(), kvs, pk)
+    }
+
+    pub fn must_kv_prewrite(&self, muts: Vec<Mutation>, pk: Vec<u8>, ts: u64) {
+        test_raftstore::must_kv_prewrite(&self.cli, self.ctx.clone(), muts, pk, ts)
+    }
+
+    pub fn try_kv_prewrite(
+        &self,
+        muts: Vec<Mutation>,
+        pk: Vec<u8>,
+        ts: u64,
+        opt: DiskFullOpt,
+    ) -> PrewriteResponse {
+        let mut ctx = self.ctx.clone();
+        ctx.disk_full_opt = opt;
+        test_raftstore::try_kv_prewrite(&self.cli, ctx, muts, pk, ts)
+    }
+
+    pub fn must_kv_prewrite_async_commit(&self, muts: Vec<Mutation>, pk: Vec<u8>, ts: u64) {
+        test_raftstore::must_kv_prewrite_with(
+            &self.cli,
+            self.ctx.clone(),
+            muts,
+            vec![],
+            pk,
+            ts,
+            0,
+            true,
+            false,
+        )
+    }
+
+    pub fn must_kv_prewrite_one_pc(&self, muts: Vec<Mutation>, pk: Vec<u8>, ts: u64) {
+        test_raftstore::must_kv_prewrite_with(
+            &self.cli,
+            self.ctx.clone(),
+            muts,
+            vec![],
+            pk,
+            ts,
+            0,
+            false,
+            true,
+        )
+    }
+
+    pub fn must_kv_commit(&self, keys: Vec<Vec<u8>>, start_ts: u64, commit_ts: u64) {
+        test_raftstore::must_kv_commit(
+            &self.cli,
+            self.ctx.clone(),
+            keys,
+            start_ts,
+            commit_ts,
+            commit_ts,
+        )
+    }
+
+    pub fn must_kv_rollback(&self, keys: Vec<Vec<u8>>, start_ts: u64) {
+        test_raftstore::must_kv_rollback(&self.cli, self.ctx.clone(), keys, start_ts)
+    }
+
+    pub fn must_kv_pessimistic_lock(&self, key: Vec<u8>, ts: u64) {
+        test_raftstore::must_kv_pessimistic_lock(&self.cli, self.ctx.clone(), key, ts)
+    }
+
+    pub fn must_kv_pessimistic_rollback(&self, key: Vec<u8>, ts: u64) {
+        test_raftstore::must_kv_pessimistic_rollback(&self.cli, self.ctx.clone(), key, ts, ts)
+    }
+}
+>>>>>>> 0a34c6f479 (txn: Fix to the prewrite requests retry problem by using TxnStatusCache (#15658))
