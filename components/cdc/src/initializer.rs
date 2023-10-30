@@ -1031,12 +1031,8 @@ mod tests {
         let memory_quota = Arc::new(MemoryQuota::new(usize::MAX));
 
         initializer.downstream_state.store(DownstreamState::Stopped);
-        block_on(initializer.initialize(
-            change_cmd,
-            raft_router.clone(),
-            memory_quota.clone(),
-        ))
-        .unwrap_err();
+        block_on(initializer.initialize(change_cmd, raft_router.clone(), memory_quota.clone()))
+            .unwrap_err();
 
         let (tx, rx) = sync_channel(1);
         pool.spawn(async move {
@@ -1051,11 +1047,7 @@ mod tests {
         pool.spawn(async move {
             // Migrated to 2021 migration. This let statement is probably not needed, see
             //   https://doc.rust-lang.org/edition-guide/rust-2021/disjoint-capture-in-closures.html
-            let _ = (
-                &initializer,
-                &change_cmd,
-                &raft_router,
-            );
+            let _ = (&initializer, &change_cmd, &raft_router);
             let res = initializer
                 .initialize(change_cmd, raft_router, memory_quota)
                 .await;
@@ -1063,7 +1055,8 @@ mod tests {
         });
 
         // Shouldn't timeout, gets an error instead.
-        assert!(rx1.recv_timeout(Duration::from_millis(200)).unwrap().is_err());
+        let res = rx1.recv_timeout(Duration::from_millis(200)).unwrap();
+        assert!(res.is_err());
 
         worker.stop();
     }
