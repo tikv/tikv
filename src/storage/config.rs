@@ -31,6 +31,28 @@ const DEFAULT_SCHED_PENDING_WRITE_MB: u64 = 100;
 const DEFAULT_RESERVED_SPACE_GB: u64 = 5;
 const DEFAULT_RESERVED_RAFT_SPACE_GB: u64 = 1;
 
+<<<<<<< HEAD
+=======
+// In tests, we've observed 1.2M entries in the TxnStatusCache. We
+// conservatively set the limit to 5M entries in total.
+// As TxnStatusCache have 128 slots by default. We round it to 5.12M.
+// This consumes at most around 300MB memory theoretically, but usually it's
+// much less as it's hard to see the capacity being used up.
+const DEFAULT_TXN_STATUS_CACHE_CAPACITY: usize = 40_000 * 128;
+
+// Block cache capacity used when TikvConfig isn't validated. It should only
+// occur in tests.
+const FALLBACK_BLOCK_CACHE_CAPACITY: ReadableSize = ReadableSize::mb(128);
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "kebab-case")]
+pub enum EngineType {
+    RaftKv,
+    #[serde(alias = "partitioned-raft-kv")]
+    RaftKv2,
+}
+
+>>>>>>> 0a34c6f479 (txn: Fix to the prewrite requests retry problem by using TxnStatusCache (#15658))
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, OnlineConfig)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
@@ -62,6 +84,8 @@ pub struct Config {
     pub background_error_recovery_window: ReadableDuration,
     /// Interval to check TTL for all SSTs,
     pub ttl_check_poll_interval: ReadableDuration,
+    #[online_config(skip)]
+    pub txn_status_cache_capacity: usize,
     #[online_config(submodule)]
     pub flow_control: FlowControlConfig,
     #[online_config(submodule)]
@@ -90,6 +114,7 @@ impl Default for Config {
             api_version: 1,
             enable_ttl: false,
             ttl_check_poll_interval: ReadableDuration::hours(12),
+            txn_status_cache_capacity: DEFAULT_TXN_STATUS_CACHE_CAPACITY,
             flow_control: FlowControlConfig::default(),
             block_cache: BlockCacheConfig::default(),
             io_rate_limit: IoRateLimitConfig::default(),

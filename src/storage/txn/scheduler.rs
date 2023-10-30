@@ -83,6 +83,7 @@ use crate::{
             flow_controller::FlowController,
             latch::{Latches, Lock},
             sched_pool::{tls_collect_query, tls_collect_scan_details, SchedPool},
+            txn_status_cache::TxnStatusCache,
             Error, ErrorInner, ProcessResult,
         },
         types::StorageCallback,
@@ -285,6 +286,8 @@ struct SchedulerInner<L: LockManager> {
 
     quota_limiter: Arc<QuotaLimiter>,
     feature_gate: FeatureGate,
+
+    txn_status_cache: TxnStatusCache,
 }
 
 #[inline]
@@ -475,6 +478,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             lock_wait_queues,
             quota_limiter,
             feature_gate,
+            txn_status_cache: TxnStatusCache::new(config.txn_status_cache_capacity),
         });
 
         slow_log!(
@@ -799,6 +803,11 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         lock_guards: Vec<KeyHandleGuard>,
         pipelined: bool,
         async_apply_prewrite: bool,
+<<<<<<< HEAD
+=======
+        new_acquired_locks: Vec<kvrpcpb::LockInfo>,
+        known_txn_status: Vec<(TimeStamp, TimeStamp)>,
+>>>>>>> 0a34c6f479 (txn: Fix to the prewrite requests retry problem by using TxnStatusCache (#15658))
         tag: CommandKind,
     ) {
         // TODO: Does async apply prewrite worth a special metric here?
@@ -819,6 +828,17 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         debug!("write command finished";
             "cid" => cid, "pipelined" => pipelined, "async_apply_prewrite" => async_apply_prewrite);
         drop(lock_guards);
+
+        if result.is_ok() && !known_txn_status.is_empty() {
+            // Update cache before calling the callback.
+            // Reversing the order can lead to test failures as the cache may still
+            // remain not updated after receiving signal from the callback.
+            let now = std::time::SystemTime::now();
+            for (start_ts, commit_ts) in known_txn_status {
+                self.inner.txn_status_cache.insert(start_ts, commit_ts, now);
+            }
+        }
+
         let tctx = self.inner.dequeue_task_context(cid);
 
         let mut do_wake_up = !tctx.woken_up_resumable_lock_requests.is_empty();
@@ -1164,6 +1184,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                 statistics,
                 async_apply_prewrite: self.inner.enable_async_apply_prewrite,
                 raw_ext,
+                txn_status_cache: &self.inner.txn_status_cache,
             };
             let begin_instant = Instant::now();
             let res = unsafe {
@@ -1204,6 +1225,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             released_locks,
             lock_guards,
             response_policy,
+            known_txn_status,
         } = match deadline
             .check()
             .map_err(StorageError::from)
@@ -1274,7 +1296,23 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         }
 
         if to_be_write.modifies.is_empty() {
+<<<<<<< HEAD
             scheduler.on_write_finished(cid, pr, Ok(()), lock_guards, false, false, tag);
+=======
+            scheduler.on_write_finished(
+                cid,
+                pr,
+                Ok(()),
+                lock_guards,
+                false,
+                false,
+                new_acquired_locks,
+                known_txn_status,
+                tag,
+                metadata,
+                sched_details,
+            );
+>>>>>>> 0a34c6f479 (txn: Fix to the prewrite requests retry problem by using TxnStatusCache (#15658))
             return;
         }
 
@@ -1295,7 +1333,23 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                     engine.schedule_txn_extra(to_be_write.extra);
                 })
             }
+<<<<<<< HEAD
             scheduler.on_write_finished(cid, pr, Ok(()), lock_guards, false, false, tag);
+=======
+            scheduler.on_write_finished(
+                cid,
+                pr,
+                Ok(()),
+                lock_guards,
+                false,
+                false,
+                new_acquired_locks,
+                known_txn_status,
+                tag,
+                metadata,
+                sched_details,
+            );
+>>>>>>> 0a34c6f479 (txn: Fix to the prewrite requests retry problem by using TxnStatusCache (#15658))
             return;
         }
 
@@ -1479,6 +1533,11 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                         lock_guards,
                         pipelined,
                         is_async_apply_prewrite,
+<<<<<<< HEAD
+=======
+                        new_acquired_locks,
+                        known_txn_status,
+>>>>>>> 0a34c6f479 (txn: Fix to the prewrite requests retry problem by using TxnStatusCache (#15658))
                         tag,
                     );
                     KV_COMMAND_KEYWRITE_HISTOGRAM_VEC
@@ -1701,6 +1760,11 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                 .lock_wait_queues
                 .push_lock_wait(entry, Default::default());
         }
+    }
+
+    #[cfg(test)]
+    pub fn get_txn_status_cache(&self) -> &TxnStatusCache {
+        &self.inner.txn_status_cache
     }
 }
 

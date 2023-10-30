@@ -130,6 +130,12 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for CheckTxnStatus {
         let mut released_locks = ReleasedLocks::new();
         released_locks.push(released);
 
+        let write_result_known_txn_status = if let TxnStatus::Committed { commit_ts } = &txn_status
+        {
+            vec![(self.lock_ts, *commit_ts)]
+        } else {
+            vec![]
+        };
         let pr = ProcessResult::TxnStatus { txn_status };
         let mut write_data = WriteData::from_modifies(txn.into_modifies());
         write_data.set_allowed_on_disk_almost_full();
@@ -142,6 +148,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for CheckTxnStatus {
             released_locks,
             lock_guards: vec![],
             response_policy: ResponsePolicy::OnApplied,
+            known_txn_status: write_result_known_txn_status,
         })
     }
 }
@@ -164,6 +171,7 @@ pub mod tests {
             commands::{pessimistic_rollback, WriteCommand, WriteContext},
             scheduler::DEFAULT_EXECUTION_DURATION_LIMIT,
             tests::*,
+            txn_status_cache::TxnStatusCache,
         },
         types::TxnStatus,
         ProcessResult, TestEngineBuilder,
@@ -207,6 +215,7 @@ pub mod tests {
                     statistics: &mut Default::default(),
                     async_apply_prewrite: false,
                     raw_ext: None,
+                    txn_status_cache: &TxnStatusCache::new_for_test(),
                 },
             )
             .unwrap();
@@ -255,6 +264,7 @@ pub mod tests {
                     statistics: &mut Default::default(),
                     async_apply_prewrite: false,
                     raw_ext: None,
+                    txn_status_cache: &TxnStatusCache::new_for_test(),
                 },
             )
             .map(|r| {

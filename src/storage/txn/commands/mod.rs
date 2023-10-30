@@ -70,7 +70,7 @@ use crate::storage::{
     },
     metrics,
     mvcc::{Lock as MvccLock, MvccReader, ReleasedLock, SnapshotReader},
-    txn::{latch, ProcessResult, Result},
+    txn::{latch, txn_status_cache::TxnStatusCache, ProcessResult, Result},
     types::{
         MvccInfo, PessimisticLockParameters, PessimisticLockResults, PrewriteResult,
         SecondaryLocksStatus, StorageCallbackType, TxnStatus,
@@ -420,6 +420,12 @@ pub struct WriteResult {
     pub released_locks: ReleasedLocks,
     pub lock_guards: Vec<KeyHandleGuard>,
     pub response_policy: ResponsePolicy,
+    /// The txn status that can be inferred by the successful writing. This will
+    /// be used to update the cache.
+    ///
+    /// Currently only commit_ts of committed transactions will be collected.
+    /// Rolled-back transactions may also be collected in the future.
+    pub known_txn_status: Vec<(TimeStamp, TimeStamp)>,
 }
 
 pub struct WriteResultLockInfo {
@@ -571,6 +577,7 @@ pub struct WriteContext<'a, L: LockManager> {
     pub statistics: &'a mut Statistics,
     pub async_apply_prewrite: bool,
     pub raw_ext: Option<RawExt>, // use for apiv2
+    pub txn_status_cache: &'a TxnStatusCache,
 }
 
 pub struct ReaderWithStats<'a, S: Snapshot> {
@@ -811,6 +818,7 @@ pub mod test_util {
             statistics,
             async_apply_prewrite: false,
             raw_ext: None,
+            txn_status_cache: &TxnStatusCache::new_for_test(),
         };
         let ret = cmd.cmd.process_write(snap, context)?;
         let res = match ret.pr {
@@ -949,6 +957,7 @@ pub mod test_util {
             statistics,
             async_apply_prewrite: false,
             raw_ext: None,
+            txn_status_cache: &TxnStatusCache::new_for_test(),
         };
 
         let ret = cmd.cmd.process_write(snap, context)?;
@@ -974,6 +983,7 @@ pub mod test_util {
             statistics,
             async_apply_prewrite: false,
             raw_ext: None,
+            txn_status_cache: &TxnStatusCache::new_for_test(),
         };
 
         let ret = cmd.cmd.process_write(snap, context)?;
