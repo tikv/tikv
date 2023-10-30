@@ -4,7 +4,7 @@ use std::{cell::RefCell, convert::Infallible, time::Duration};
 
 use collections::HashMap;
 use futures::channel::oneshot;
-use futures_util::{Future, FutureExt};
+use futures_util::{future::BoxFuture, Future, FutureExt};
 use tokio::runtime::Handle;
 use tracing::{
     dispatcher, instrument,
@@ -63,6 +63,13 @@ fn collect_tree() -> HashMap<String, Vec<String>> {
     res
 }
 
+#[allow(unused)]
+fn debug_dump_current_tree() -> String {
+    let layer =
+        dispatcher::get_default(|d| d.downcast_ref::<CurrentStacksLayer>().unwrap().clone());
+    layer.fmt_string()
+}
+
 #[instrument]
 async fn exec() {
     let jh = tokio::spawn(pending());
@@ -72,8 +79,8 @@ async fn exec() {
     frame!("selecting"; futures::future::select_all(
         [
             &mut sleeping as &mut (dyn Future<Output = ()> + Unpin),
-            &mut jh.map(|_| ()) as _,
-            &mut Box::pin(foo(tx)) as _,
+            &mut frame!(jh.map(|_| ())) as _,
+            &mut frame!(Box::pin(foo(tx))) as _,
         ]
         .iter_mut(),
     ))
@@ -149,6 +156,7 @@ async fn buz(tx: oneshot::Sender<HashMap<String, Vec<String>>>) {
 
 #[instrument(skip_all)]
 async fn baz(tx: oneshot::Sender<HashMap<String, Vec<String>>>) {
+    println!("{}", debug_dump_current_tree());
     let _ = tx.send(collect_tree());
 }
 
@@ -183,6 +191,7 @@ async fn join_many(max: usize) -> HashMap<String, Vec<String>> {
     let (tx, rx) = oneshot::channel();
     tokio::spawn(async move {
         tokio::task::yield_now().await;
+        println!("{}", debug_dump_current_tree());
         tx.send(collect_tree()).unwrap();
         drop(v);
     });
@@ -195,6 +204,25 @@ fn local_sub() -> DefaultGuard {
     let sub = CurrentStacksLayer::default();
     let layer = tracing_subscriber::registry().with(sub);
     subscriber::set_default(layer)
+}
+
+fn count_to_zero(n: usize, rx: oneshot::Receiver<()>) -> BoxFuture<'static, ()> {
+    if n == 0 {
+        Box::pin(rx.map(|_| ()))
+    } else {
+        Box::pin(frame!(default; count_to_zero(n - 1, rx); n))
+    }
+}
+
+#[tokio::test]
+async fn test_long_stack() {
+    let _g = local_sub();
+    let (tx, rx) = oneshot::channel();
+    let jh = tokio::spawn(root!(count_to_zero(20, rx)));
+    tokio::task::yield_now().await;
+    println!("{}", debug_dump_current_tree());
+    tx.send(()).unwrap();
+    jh.await.unwrap();
 }
 
 #[tokio::test]

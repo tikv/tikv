@@ -76,7 +76,7 @@ impl CurrentStacksLayer {
             writeln!(res, "{}", id.into_u64()).unwrap();
             tree.lock()
                 .unwrap()
-                .traverse_with(FormatTreeTo::new(&mut res))
+                .traverse_with(FormatTreeTo::ascii(&mut res))
                 .unwrap();
         }
         res.into_inner()

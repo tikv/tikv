@@ -1,8 +1,9 @@
 // Copyright 2023 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{borrow::Cow, io::Write};
+use std::{borrow::Cow, io::Write, marker::PhantomData};
 
 pub use indextree::{Arena, NodeId};
+use smallvec::SmallVec;
 use tracing::span;
 use tracing_subscriber::{
     registry::{LookupSpan, SpanRef},
@@ -165,7 +166,7 @@ impl Tree {
     /// Returns a UTF-8 byte string.
     pub fn fmt_bytes(&self) -> Vec<u8> {
         let mut res = vec![];
-        self.traverse_with(FormatTreeTo::new(&mut res))
+        self.traverse_with(FormatTreeTo::ascii(&mut res))
             .expect("failed to dump bytes to a vector");
         res
     }
@@ -185,22 +186,133 @@ impl Tree {
     }
 }
 
-pub struct FormatTreeTo<W> {
-    indent_str: String,
+fn format(mut w: impl Write, span: MaybeSpan<'_>) -> std::io::Result<()> {
+    match span {
+        MaybeSpan::Span(span) => {
+            writeln!(
+                w,
+                "[{}:{}] [span_id={}] [{:?}] {}",
+                span.metadata().file().unwrap_or("UNKNOWN"),
+                span.metadata().line().unwrap_or(0),
+                span.id().into_u64(),
+                span.name(),
+                span.extensions().get::<Data>().unwrap()
+            )?;
+        }
+        MaybeSpan::Dropped(id) => {
+            writeln!(w, "[DROPPED] [span_id={}]", id.into_u64())?;
+        }
+    }
+    Ok(())
+}
+
+pub struct FormatPlainTo<W> {
+    forked_indices: SmallVec<[u32; 8]>,
+    current_idx: u32,
 
     output: W,
 }
 
-impl<W> FormatTreeTo<W> {
+impl<W> FormatPlainTo<W> {
     pub fn new(output: W) -> Self {
         Self {
-            indent_str: String::new(),
+            current_idx: 0,
+            forked_indices: SmallVec::new(),
             output,
         }
     }
 }
 
-impl<W: Write> TreeVisit for FormatTreeTo<W> {
+impl<W: Write> TreeVisit for FormatPlainTo<W> {
+    type Error = std::io::Error;
+
+    fn enter(
+        &mut self,
+        tree: &Arena<span::Id>,
+        node: NodeId,
+        span: MaybeSpan<'_>,
+    ) -> std::io::Result<()> {
+        self.current_idx += 1;
+
+        write!(self.output, "[")?;
+        for i in self.forked_indices.iter() {
+            write!(self.output, "{i}& ")?;
+        }
+        write!(self.output, "{}] ", self.current_idx)?;
+        format(&mut self.output, span)?;
+        let forked = node.children(tree).nth(1).is_some();
+        if forked {
+            self.forked_indices.push(self.current_idx);
+            self.current_idx = 0;
+        }
+
+        Ok(())
+    }
+
+    fn leave(&mut self, _tree: &Arena<span::Id>, _node: NodeId) -> std::io::Result<()> {
+        if self.current_idx == 0 {
+            self.current_idx = self.forked_indices.pop().unwrap_or(0);
+        }
+        self.current_idx -= 1;
+        Ok(())
+    }
+}
+
+pub trait Style {
+    const BRANCH: char;
+    const SPACE: char;
+    const FORKED_TIP: char;
+    const TIP: char;
+}
+
+pub struct UnicodeTree;
+
+impl Style for UnicodeTree {
+    const BRANCH: char = '│';
+    const SPACE: char = ' ';
+    const FORKED_TIP: char = '├';
+    const TIP: char = '└';
+}
+
+pub struct AsciiTree;
+
+impl Style for AsciiTree {
+    const BRANCH: char = '|';
+    const SPACE: char = ' ';
+    const FORKED_TIP: char = '+';
+    const TIP: char = '`';
+}
+
+pub struct FormatTreeTo<W, S: Style> {
+    indent_str: String,
+
+    output: W,
+    _style: PhantomData<S>,
+}
+
+impl<W> FormatTreeTo<W, AsciiTree> {
+    pub fn ascii(output: W) -> Self {
+        FormatTreeTo::stylized(output)
+    }
+}
+
+impl<W> FormatTreeTo<W, UnicodeTree> {
+    pub fn unicode(output: W) -> Self {
+        FormatTreeTo::stylized(output)
+    }
+}
+
+impl<W, S: Style> FormatTreeTo<W, S> {
+    pub fn stylized(output: W) -> Self {
+        Self {
+            indent_str: String::new(),
+            output,
+            _style: PhantomData,
+        }
+    }
+}
+
+impl<W: Write, S: Style> TreeVisit for FormatTreeTo<W, S> {
     type Error = std::io::Error;
 
     fn enter(
@@ -210,27 +322,12 @@ impl<W: Write> TreeVisit for FormatTreeTo<W> {
         span: MaybeSpan<'_>,
     ) -> std::io::Result<()> {
         let not_last_one = tree[node].next_sibling().is_some();
-        let tip = if not_last_one { '├' } else { '└' };
-        write!(self.output, "{}{}", self.indent_str, tip)?;
-        match span {
-            MaybeSpan::Span(span) => {
-                writeln!(
-                    self.output,
-                    "[{}:{}] [span_id={}] [{:?}] {}",
-                    span.metadata().file().unwrap_or("UNKNOWN"),
-                    span.metadata().line().unwrap_or(0),
-                    span.id().into_u64(),
-                    span.name(),
-                    span.extensions().get::<Data>().unwrap()
-                )?;
-            }
-            MaybeSpan::Dropped(id) => {
-                writeln!(self.output, "[DROPPED] [span_id={}]", id.into_u64())?;
-            }
-        }
+        let tip_ch = if not_last_one { S::FORKED_TIP } else { S::TIP };
+        write!(self.output, "{}{}", self.indent_str, tip_ch)?;
+        format(&mut self.output, span)?;
 
-        let branch = if not_last_one { '│' } else { ' ' };
-        self.indent_str.push(branch);
+        let branch_ch = if not_last_one { S::BRANCH } else { S::SPACE };
+        self.indent_str.push(branch_ch);
         Ok(())
     }
 
