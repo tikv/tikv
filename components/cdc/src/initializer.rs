@@ -654,6 +654,7 @@ mod tests {
             conn_id: ConnId::new(),
             request_id: 0,
             checkpoint_ts: 1.into(),
+            scan_concurrency_semaphore: Arc::new(Semaphore::new(1)),
             speed_limiter: Limiter::new(speed_limit as _),
             max_scan_batch_bytes: 1024 * 1024,
             max_scan_batch_size: 1024,
@@ -1027,22 +1028,18 @@ mod tests {
 
         let change_cmd = ChangeObserver::from_cdc(1, ObserveHandle::new());
         let raft_router = CdcRaftRouter(MockRaftStoreRouter::new());
-        let concurrency_semaphore = Arc::new(Semaphore::new(1));
         let memory_quota = Arc::new(MemoryQuota::new(usize::MAX));
 
         initializer.downstream_state.store(DownstreamState::Stopped);
         block_on(initializer.initialize(
             change_cmd,
             raft_router.clone(),
-            concurrency_semaphore.clone(),
             memory_quota.clone(),
         ))
         .unwrap_err();
 
         let (tx, rx) = sync_channel(1);
-        let concurrency_semaphore_ = concurrency_semaphore.clone();
         pool.spawn(async move {
-            let _permit = concurrency_semaphore_.acquire().await;
             tx.send(()).unwrap();
             tx.send(()).unwrap();
             tx.send(()).unwrap();
@@ -1058,20 +1055,15 @@ mod tests {
                 &initializer,
                 &change_cmd,
                 &raft_router,
-                &concurrency_semaphore,
             );
             let res = initializer
-                .initialize(change_cmd, raft_router, concurrency_semaphore, memory_quota)
+                .initialize(change_cmd, raft_router, memory_quota)
                 .await;
             tx1.send(res).unwrap();
         });
-        // Must timeout because there is no enough permit.
-        rx1.recv_timeout(Duration::from_millis(200)).unwrap_err();
 
-        // Release the permit
-        rx.recv_timeout(Duration::from_millis(200)).unwrap();
-        let res = rx1.recv_timeout(Duration::from_millis(200)).unwrap();
-        res.unwrap_err();
+        // Shouldn't timeout, gets an error instead.
+        assert!(rx1.recv_timeout(Duration::from_millis(200)).unwrap().is_err());
 
         worker.stop();
     }
