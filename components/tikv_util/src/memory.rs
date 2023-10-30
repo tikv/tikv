@@ -213,4 +213,25 @@ mod tests {
         quota.alloc(40).unwrap();
         assert_eq!(quota.in_use(), 50);
     }
+
+    #[test]
+    fn test_allocated() {
+        let quota = Arc::new(MemoryQuota::new(100));
+        let mut allocated = OwnedAllocated::of(Arc::clone(&quota));
+        allocated.allocate_more(42).unwrap();
+        assert_eq!(quota.in_use(), 42);
+        quota.alloc(59).unwrap_err();
+        allocated.allocate_more(16).unwrap();
+        assert_eq!(quota.in_use(), 58);
+        let mut allocated2 = OwnedAllocated::of(Arc::clone(&quota));
+        allocated2.allocate_more(8).unwrap();
+        allocated2.allocate_more(40).unwrap_err();
+        assert_eq!(quota.in_use(), 66);
+        quota.alloc(4).unwrap();
+        assert_eq!(quota.in_use(), 70);
+        drop(allocated);
+        assert_eq!(quota.in_use(), 12);
+        drop(allocated2);
+        assert_eq!(quota.in_use(), 4);
+    }
 }
