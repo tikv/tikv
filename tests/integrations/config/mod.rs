@@ -270,7 +270,6 @@ fn test_serde_custom_tikv_config() {
         slow_trend_unsensitive_result: 0.5,
         enable_v2_compatible_learner: false,
         unsafe_disable_check_quorum: false,
-        periodic_full_compact_tick_interval: ReadableDuration::secs(0),
         periodic_full_compact_start_times: ReadableSchedule::default(),
     };
     value.pd = PdConfig::new(vec!["example.com:443".to_owned()]);
