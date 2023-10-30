@@ -92,6 +92,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for PessimisticRollback {
             lock_info: None,
             lock_guards: vec![],
             response_policy: ResponsePolicy::OnApplied,
+            known_txn_status: vec![],
         })
     }
 }
@@ -112,6 +113,7 @@ pub mod tests {
             commands::{WriteCommand, WriteContext},
             scheduler::DEFAULT_EXECUTION_DURATION_LIMIT,
             tests::*,
+            txn_status_cache::TxnStatusCache,
         },
         TestEngineBuilder,
     };
@@ -141,6 +143,11 @@ pub mod tests {
             extra_op: Default::default(),
             statistics: &mut Default::default(),
             async_apply_prewrite: false,
+<<<<<<< HEAD
+=======
+            raw_ext: None,
+            txn_status_cache: &TxnStatusCache::new_for_test(),
+>>>>>>> 0a34c6f479 (txn: Fix to the prewrite requests retry problem by using TxnStatusCache (#15658))
         };
         let result = command.process_write(snapshot, write_context).unwrap();
         write(engine, &ctx, result.to_be_write.modifies);

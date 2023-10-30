@@ -63,6 +63,15 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for ResolveLockLite {
         }
         released_locks.wake_up(context.lock_mgr);
 
+<<<<<<< HEAD
+=======
+        let known_txn_status = if !self.commit_ts.is_zero() {
+            vec![(self.start_ts, self.commit_ts)]
+        } else {
+            vec![]
+        };
+        let new_acquired_locks = txn.take_new_locks();
+>>>>>>> 0a34c6f479 (txn: Fix to the prewrite requests retry problem by using TxnStatusCache (#15658))
         let mut write_data = WriteData::from_modifies(txn.into_modifies());
         write_data.set_allowed_on_disk_almost_full();
         Ok(WriteResult {
@@ -73,6 +82,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for ResolveLockLite {
             lock_info: None,
             lock_guards: vec![],
             response_policy: ResponsePolicy::OnApplied,
+            known_txn_status,
         })
     }
 }

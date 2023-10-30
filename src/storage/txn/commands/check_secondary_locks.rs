@@ -139,6 +139,12 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for CheckSecondaryLocks {
             }
         }
 
+        let write_result_known_txn_status =
+            if let SecondaryLocksStatus::Committed(commit_ts) = &result {
+                vec![(self.start_ts, *commit_ts)]
+            } else {
+                vec![]
+            };
         let mut rows = 0;
         if let SecondaryLocksStatus::RolledBack = &result {
             // Lock is only released when result is `RolledBack`.
@@ -157,6 +163,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for CheckSecondaryLocks {
             lock_info: None,
             lock_guards: vec![],
             response_policy: ResponsePolicy::OnApplied,
+            known_txn_status: write_result_known_txn_status,
         })
     }
 }
@@ -172,7 +179,10 @@ pub mod tests {
         kv::TestEngineBuilder,
         lock_manager::DummyLockManager,
         mvcc::tests::*,
-        txn::{commands::WriteCommand, scheduler::DEFAULT_EXECUTION_DURATION_LIMIT, tests::*},
+        txn::{
+            commands::WriteCommand, scheduler::DEFAULT_EXECUTION_DURATION_LIMIT, tests::*,
+            txn_status_cache::TxnStatusCache,
+        },
         Engine,
     };
 
@@ -201,6 +211,11 @@ pub mod tests {
                     extra_op: Default::default(),
                     statistics: &mut Default::default(),
                     async_apply_prewrite: false,
+<<<<<<< HEAD
+=======
+                    raw_ext: None,
+                    txn_status_cache: &TxnStatusCache::new_for_test(),
+>>>>>>> 0a34c6f479 (txn: Fix to the prewrite requests retry problem by using TxnStatusCache (#15658))
                 },
             )
             .unwrap();
@@ -237,6 +252,11 @@ pub mod tests {
                         extra_op: Default::default(),
                         statistics: &mut Default::default(),
                         async_apply_prewrite: false,
+<<<<<<< HEAD
+=======
+                        raw_ext: None,
+                        txn_status_cache: &TxnStatusCache::new_for_test(),
+>>>>>>> 0a34c6f479 (txn: Fix to the prewrite requests retry problem by using TxnStatusCache (#15658))
                     },
                 )
                 .unwrap();

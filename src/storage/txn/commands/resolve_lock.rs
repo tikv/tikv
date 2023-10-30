@@ -81,8 +81,13 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for ResolveLock {
 
         let mut scan_key = self.scan_key.take();
         let rows = key_locks.len();
+<<<<<<< HEAD
         // Map txn's start_ts to ReleasedLocks
         let mut released_locks = HashMap::default();
+=======
+        let mut released_locks = ReleasedLocks::new();
+        let mut known_txn_status = vec![];
+>>>>>>> 0a34c6f479 (txn: Fix to the prewrite requests retry problem by using TxnStatusCache (#15658))
         for (current_key, current_lock) in key_locks {
             txn.start_ts = current_lock.ts;
             reader.start_ts = current_lock.ts;
@@ -103,7 +108,10 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for ResolveLock {
                 // They could be left if the transaction is finally committed and pessimistic conflict
                 // retry happens during execution.
                 match commit(&mut txn, &mut reader, current_key.clone(), commit_ts) {
-                    Ok(res) => res,
+                    Ok(res) => {
+                        known_txn_status.push((current_lock.ts, commit_ts));
+                        res
+                    }
                     Err(MvccError(box MvccErrorInner::TxnLockNotFound { .. }))
                         if current_lock.is_pessimistic_lock() =>
                     {
@@ -132,6 +140,9 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for ResolveLock {
             .into_iter()
             .for_each(|(_, released_locks)| released_locks.wake_up(lock_mgr));
 
+        known_txn_status.sort();
+        known_txn_status.dedup();
+
         let pr = if scan_key.is_none() {
             ProcessResult::Res
         } else {
@@ -155,6 +166,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for ResolveLock {
             lock_info: None,
             lock_guards: vec![],
             response_policy: ResponsePolicy::OnApplied,
+            known_txn_status,
         })
     }
 }

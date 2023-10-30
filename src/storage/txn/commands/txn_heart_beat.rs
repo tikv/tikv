@@ -92,6 +92,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for TxnHeartBeat {
             lock_info: None,
             lock_guards: vec![],
             response_policy: ResponsePolicy::OnApplied,
+            known_txn_status: vec![],
         })
     }
 }
@@ -107,7 +108,10 @@ pub mod tests {
         kv::TestEngineBuilder,
         lock_manager::DummyLockManager,
         mvcc::tests::*,
-        txn::{commands::WriteCommand, scheduler::DEFAULT_EXECUTION_DURATION_LIMIT, tests::*},
+        txn::{
+            commands::WriteCommand, scheduler::DEFAULT_EXECUTION_DURATION_LIMIT, tests::*,
+            txn_status_cache::TxnStatusCache,
+        },
         Engine,
     };
 
@@ -138,6 +142,11 @@ pub mod tests {
                     extra_op: Default::default(),
                     statistics: &mut Default::default(),
                     async_apply_prewrite: false,
+<<<<<<< HEAD
+=======
+                    raw_ext: None,
+                    txn_status_cache: &TxnStatusCache::new_for_test(),
+>>>>>>> 0a34c6f479 (txn: Fix to the prewrite requests retry problem by using TxnStatusCache (#15658))
                 },
             )
             .unwrap();
@@ -179,6 +188,11 @@ pub mod tests {
                         extra_op: Default::default(),
                         statistics: &mut Default::default(),
                         async_apply_prewrite: false,
+<<<<<<< HEAD
+=======
+                        raw_ext: None,
+                        txn_status_cache: &TxnStatusCache::new_for_test(),
+>>>>>>> 0a34c6f479 (txn: Fix to the prewrite requests retry problem by using TxnStatusCache (#15658))
                     },
                 )
                 .is_err()

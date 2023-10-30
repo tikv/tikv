@@ -66,10 +66,16 @@ use crate::{
             commands::{Command, ResponsePolicy, WriteContext, WriteResult, WriteResultLockInfo},
             flow_controller::FlowController,
             latch::{Latches, Lock},
+<<<<<<< HEAD
             sched_pool::{
                 tls_collect_query, tls_collect_read_duration, tls_collect_scan_details, SchedPool,
             },
             Error, ProcessResult,
+=======
+            sched_pool::{tls_collect_query, tls_collect_scan_details, SchedPool},
+            txn_status_cache::TxnStatusCache,
+            Error, ErrorInner, ProcessResult,
+>>>>>>> 0a34c6f479 (txn: Fix to the prewrite requests retry problem by using TxnStatusCache (#15658))
         },
         types::StorageCallback,
         DynamicConfigs, Error as StorageError, ErrorInner as StorageErrorInner,
@@ -218,6 +224,8 @@ struct SchedulerInner<L: LockManager> {
 
     quota_limiter: Arc<QuotaLimiter>,
     feature_gate: FeatureGate,
+
+    txn_status_cache: TxnStatusCache,
 }
 
 #[inline]
@@ -384,6 +392,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             resource_tag_factory,
             quota_limiter,
             feature_gate,
+            txn_status_cache: TxnStatusCache::new(config.txn_status_cache_capacity),
         });
 
         slow_log!(
@@ -649,7 +658,15 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         lock_guards: Vec<KeyHandleGuard>,
         pipelined: bool,
         async_apply_prewrite: bool,
+<<<<<<< HEAD
         tag: metrics::CommandKind,
+=======
+        new_acquired_locks: Vec<kvrpcpb::LockInfo>,
+        known_txn_status: Vec<(TimeStamp, TimeStamp)>,
+        tag: CommandKind,
+        metadata: TaskMetadata<'_>,
+        sched_details: &SchedulerDetails,
+>>>>>>> 0a34c6f479 (txn: Fix to the prewrite requests retry problem by using TxnStatusCache (#15658))
     ) {
         // TODO: Does async apply prewrite worth a special metric here?
         if pipelined {
@@ -669,6 +686,17 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         debug!("write command finished";
             "cid" => cid, "pipelined" => pipelined, "async_apply_prewrite" => async_apply_prewrite);
         drop(lock_guards);
+
+        if result.is_ok() && !known_txn_status.is_empty() {
+            // Update cache before calling the callback.
+            // Reversing the order can lead to test failures as the cache may still
+            // remain not updated after receiving signal from the callback.
+            let now = std::time::SystemTime::now();
+            for (start_ts, commit_ts) in known_txn_status {
+                self.inner.txn_status_cache.insert(start_ts, commit_ts, now);
+            }
+        }
+
         let tctx = self.inner.dequeue_task_context(cid);
 
         // If pipelined pessimistic lock or async apply prewrite takes effect, it's not guaranteed
@@ -829,6 +857,11 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                 extra_op: task.extra_op,
                 statistics,
                 async_apply_prewrite: self.inner.enable_async_apply_prewrite,
+<<<<<<< HEAD
+=======
+                raw_ext,
+                txn_status_cache: &self.inner.txn_status_cache,
+>>>>>>> 0a34c6f479 (txn: Fix to the prewrite requests retry problem by using TxnStatusCache (#15658))
             };
 
             task.cmd
@@ -859,6 +892,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             lock_info,
             lock_guards,
             response_policy,
+            known_txn_status,
         } = match deadline
             .check()
             .map_err(StorageError::from)
@@ -878,6 +912,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         };
         SCHED_STAGE_COUNTER_VEC.get(tag).write.inc();
 
+<<<<<<< HEAD
         if let Some(lock_info) = lock_info {
             let WriteResultLockInfo {
                 lock,
@@ -890,6 +925,71 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                 resource_group_tag: ctx.get_resource_group_tag().into(),
             };
             scheduler.on_wait_for_lock(cid, ts, pr, lock, is_first_lock, wait_timeout, diag_ctx);
+=======
+        let mut pr = Some(pr);
+
+        if !lock_info.is_empty() {
+            if tag == CommandKind::acquire_pessimistic_lock {
+                assert_eq!(lock_info.len(), 1);
+                let lock_info = lock_info.into_iter().next().unwrap();
+
+                // Only handle lock waiting if `wait_timeout` is set. Otherwise it indicates
+                // that it's a lock-no-wait request and we need to report error
+                // immediately.
+                if lock_info.parameters.wait_timeout.is_some() {
+                    assert_eq!(to_be_write.size(), 0);
+                    pr = Some(ProcessResult::Res);
+
+                    scheduler.on_wait_for_lock(&ctx, cid, lock_info, tracker);
+                } else {
+                    // For requests with `allow_lock_with_conflict`, key errors are set key-wise.
+                    // TODO: It's better to return this error from
+                    // `commands::AcquirePessimisticLocks::process_write`.
+                    if lock_info.parameters.allow_lock_with_conflict {
+                        pr = Some(ProcessResult::PessimisticLockRes {
+                            res: Err(StorageError::from(Error::from(MvccError::from(
+                                MvccErrorInner::KeyIsLocked(lock_info.lock_info_pb),
+                            )))),
+                        });
+                    }
+                }
+            } else if tag == CommandKind::acquire_pessimistic_lock_resumed {
+                // Some requests meets lock again after waiting and resuming.
+                scheduler.on_wait_for_lock_after_resuming(cid, pr.as_mut().unwrap(), lock_info);
+            } else {
+                // WriteResult returning lock info is only expected to exist for pessimistic
+                // lock requests.
+                unreachable!();
+            }
+        }
+
+        let woken_up_resumable_entries = if !released_locks.is_empty() {
+            scheduler.on_release_locks(&metadata, released_locks)
+        } else {
+            smallvec![]
+        };
+
+        if !woken_up_resumable_entries.is_empty() {
+            scheduler
+                .inner
+                .store_lock_changes(cid, woken_up_resumable_entries);
+        }
+
+        if to_be_write.modifies.is_empty() {
+            scheduler.on_write_finished(
+                cid,
+                pr,
+                Ok(()),
+                lock_guards,
+                false,
+                false,
+                new_acquired_locks,
+                known_txn_status,
+                tag,
+                metadata,
+                sched_details,
+            );
+>>>>>>> 0a34c6f479 (txn: Fix to the prewrite requests retry problem by using TxnStatusCache (#15658))
             return;
         }
 
@@ -915,7 +1015,23 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                     engine.schedule_txn_extra(to_be_write.extra);
                 })
             }
+<<<<<<< HEAD
             scheduler.on_write_finished(cid, pr, Ok(()), lock_guards, false, false, tag);
+=======
+            scheduler.on_write_finished(
+                cid,
+                pr,
+                Ok(()),
+                lock_guards,
+                false,
+                false,
+                new_acquired_locks,
+                known_txn_status,
+                tag,
+                metadata,
+                sched_details,
+            );
+>>>>>>> 0a34c6f479 (txn: Fix to the prewrite requests retry problem by using TxnStatusCache (#15658))
             return;
         }
 
@@ -1093,6 +1209,11 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                         lock_guards,
                         pipelined,
                         is_async_apply_prewrite,
+<<<<<<< HEAD
+=======
+                        new_acquired_locks,
+                        known_txn_status,
+>>>>>>> 0a34c6f479 (txn: Fix to the prewrite requests retry problem by using TxnStatusCache (#15658))
                         tag,
                     );
                     KV_COMMAND_KEYWRITE_HISTOGRAM_VEC
@@ -1193,6 +1314,181 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             PessimisticLockMode::Sync
         }
     }
+<<<<<<< HEAD
+=======
+
+    fn make_lock_waiting(
+        &self,
+        cid: u64,
+        lock_wait_token: LockWaitToken,
+        lock_info: WriteResultLockInfo,
+    ) -> (LockWaitContext<L>, Box<LockWaitEntry>, kvrpcpb::LockInfo) {
+        let mut slot = self.inner.get_task_slot(cid);
+        let task_ctx = slot.get_mut(&cid).unwrap();
+        let cb = task_ctx.cb.take().unwrap();
+
+        let ctx = LockWaitContext::new(
+            lock_info.key.clone(),
+            self.inner.lock_wait_queues.clone(),
+            lock_wait_token,
+            cb.unwrap_normal_request_callback(),
+            lock_info.parameters.allow_lock_with_conflict,
+        );
+        let first_batch_cb = ctx.get_callback_for_first_write_batch();
+        task_ctx.cb = Some(SchedulerTaskCallback::NormalRequestCallback(first_batch_cb));
+        drop(slot);
+
+        assert!(lock_info.req_states.is_none());
+
+        let lock_wait_entry = Box::new(LockWaitEntry {
+            key: lock_info.key,
+            lock_hash: lock_info.lock_digest.hash,
+            parameters: lock_info.parameters,
+            should_not_exist: lock_info.should_not_exist,
+            lock_wait_token,
+            req_states: ctx.get_shared_states().clone(),
+            legacy_wake_up_index: None,
+            key_cb: Some(ctx.get_callback_for_blocked_key().into()),
+        });
+
+        (ctx, lock_wait_entry, lock_info.lock_info_pb)
+    }
+
+    fn make_lock_waiting_after_resuming(
+        &self,
+        lock_info: WriteResultLockInfo,
+        cb: PessimisticLockKeyCallback,
+    ) -> Box<LockWaitEntry> {
+        Box::new(LockWaitEntry {
+            key: lock_info.key,
+            lock_hash: lock_info.lock_digest.hash,
+            parameters: lock_info.parameters,
+            should_not_exist: lock_info.should_not_exist,
+            lock_wait_token: lock_info.lock_wait_token,
+            // This must be called after an execution fo AcquirePessimisticLockResumed, in which
+            // case there must be a valid req_state.
+            req_states: lock_info.req_states.unwrap(),
+            legacy_wake_up_index: None,
+            key_cb: Some(cb.into()),
+        })
+    }
+
+    fn on_wait_for_lock_after_resuming(
+        &self,
+        cid: u64,
+        pr: &mut ProcessResult,
+        lock_info: Vec<WriteResultLockInfo>,
+    ) {
+        if lock_info.is_empty() {
+            return;
+        }
+
+        // TODO: Update lock wait relationship.
+
+        let results = match pr {
+            ProcessResult::PessimisticLockRes {
+                res: Ok(PessimisticLockResults(res)),
+            } => res,
+            _ => unreachable!(),
+        };
+
+        let mut slot = self.inner.get_task_slot(cid);
+        let task_ctx = slot.get_mut(&cid).unwrap();
+        let cbs = match task_ctx.cb {
+            Some(SchedulerTaskCallback::LockKeyCallbacks(ref mut v)) => v,
+            _ => unreachable!(),
+        };
+        assert_eq!(results.len(), cbs.len());
+
+        let finished_len = results.len() - lock_info.len();
+
+        let original_results = std::mem::replace(results, Vec::with_capacity(finished_len));
+        let original_cbs = std::mem::replace(cbs, Vec::with_capacity(finished_len));
+        let mut lock_wait_entries = SmallVec::<[_; 10]>::with_capacity(lock_info.len());
+        let mut lock_info_it = lock_info.into_iter();
+
+        for (result, cb) in original_results.into_iter().zip(original_cbs) {
+            if let PessimisticLockKeyResult::Waiting = &result {
+                let lock_info = lock_info_it.next().unwrap();
+                let lock_info_pb = lock_info.lock_info_pb.clone();
+                let entry = self.make_lock_waiting_after_resuming(lock_info, cb);
+                lock_wait_entries.push((entry, lock_info_pb));
+            } else {
+                results.push(result);
+                cbs.push(cb);
+            }
+        }
+
+        assert!(lock_info_it.next().is_none());
+        assert_eq!(results.len(), cbs.len());
+
+        // Release the mutex in the latch slot.
+        drop(slot);
+
+        // Add to the lock waiting queue.
+        // TODO: the request may be canceled from lock manager at this time. If so, it
+        // should not be added to the queue.
+        for (entry, lock_info_pb) in lock_wait_entries {
+            self.inner
+                .lock_wait_queues
+                .push_lock_wait(entry, lock_info_pb);
+        }
+    }
+
+    fn put_back_lock_wait_entries(&self, entries: impl IntoIterator<Item = Box<LockWaitEntry>>) {
+        for entry in entries.into_iter() {
+            // TODO: Do not pass `default` as the lock info. Here we need another method
+            // `put_back_lock_wait`, which doesn't require updating lock info and
+            // additionally checks if the lock wait entry is already canceled.
+            self.inner
+                .lock_wait_queues
+                .push_lock_wait(entry, Default::default());
+        }
+    }
+
+    #[cfg(test)]
+    pub fn get_txn_status_cache(&self) -> &TxnStatusCache {
+        &self.inner.txn_status_cache
+    }
+}
+
+pub async fn get_raw_ext(
+    causal_ts_provider: Option<Arc<CausalTsProviderImpl>>,
+    concurrency_manager: ConcurrencyManager,
+    max_ts_synced: bool,
+    cmd: &Command,
+) -> Result<Option<RawExt>, Error> {
+    if causal_ts_provider.is_some() {
+        match cmd {
+            Command::RawCompareAndSwap(_) | Command::RawAtomicStore(_) => {
+                if !max_ts_synced {
+                    return Err(ErrorInner::MaxTimestampNotSynced {
+                        region_id: cmd.ctx().get_region_id(),
+                        start_ts: TimeStamp::zero(),
+                    }
+                    .into());
+                }
+                let key_guard = get_raw_key_guard(&causal_ts_provider, concurrency_manager)
+                    .await
+                    .map_err(|err: StorageError| {
+                        ErrorInner::Other(box_err!("failed to key guard: {:?}", err))
+                    })?;
+                let ts =
+                    get_causal_ts(&causal_ts_provider)
+                        .await
+                        .map_err(|err: StorageError| {
+                            ErrorInner::Other(box_err!("failed to get casual ts: {:?}", err))
+                        })?;
+                return Ok(Some(RawExt {
+                    ts: ts.unwrap(),
+                    key_guard: key_guard.unwrap(),
+                }));
+            }
+            _ => {}
+        }
+    }
+    Ok(None)
+>>>>>>> 0a34c6f479 (txn: Fix to the prewrite requests retry problem by using TxnStatusCache (#15658))
 }
 
 #[derive(Debug, PartialEq)]

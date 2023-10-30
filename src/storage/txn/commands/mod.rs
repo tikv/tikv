@@ -56,7 +56,7 @@ use crate::storage::{
     lock_manager::{self, LockManager, WaitTimeout},
     metrics,
     mvcc::{Lock as MvccLock, MvccReader, ReleasedLock, SnapshotReader},
-    txn::{latch, ProcessResult, Result},
+    txn::{latch, txn_status_cache::TxnStatusCache, ProcessResult, Result},
     types::{
         MvccInfo, PessimisticLockRes, PrewriteResult, SecondaryLocksStatus, StorageCallbackType,
         TxnStatus,
@@ -374,6 +374,12 @@ pub struct WriteResult {
     pub lock_info: Option<WriteResultLockInfo>,
     pub lock_guards: Vec<KeyHandleGuard>,
     pub response_policy: ResponsePolicy,
+    /// The txn status that can be inferred by the successful writing. This will
+    /// be used to update the cache.
+    ///
+    /// Currently only commit_ts of committed transactions will be collected.
+    /// Rolled-back transactions may also be collected in the future.
+    pub known_txn_status: Vec<(TimeStamp, TimeStamp)>,
 }
 
 pub struct WriteResultLockInfo {
@@ -502,6 +508,11 @@ pub struct WriteContext<'a, L: LockManager> {
     pub extra_op: ExtraOp,
     pub statistics: &'a mut Statistics,
     pub async_apply_prewrite: bool,
+<<<<<<< HEAD
+=======
+    pub raw_ext: Option<RawExt>, // use for apiv2
+    pub txn_status_cache: &'a TxnStatusCache,
+>>>>>>> 0a34c6f479 (txn: Fix to the prewrite requests retry problem by using TxnStatusCache (#15658))
 }
 
 pub struct ReaderWithStats<'a, S: Snapshot> {
@@ -722,6 +733,11 @@ pub mod test_util {
             extra_op: ExtraOp::Noop,
             statistics,
             async_apply_prewrite: false,
+<<<<<<< HEAD
+=======
+            raw_ext: None,
+            txn_status_cache: &TxnStatusCache::new_for_test(),
+>>>>>>> 0a34c6f479 (txn: Fix to the prewrite requests retry problem by using TxnStatusCache (#15658))
         };
         let ret = cmd.cmd.process_write(snap, context)?;
         let res = match ret.pr {
@@ -859,6 +875,11 @@ pub mod test_util {
             extra_op: ExtraOp::Noop,
             statistics,
             async_apply_prewrite: false,
+<<<<<<< HEAD
+=======
+            raw_ext: None,
+            txn_status_cache: &TxnStatusCache::new_for_test(),
+>>>>>>> 0a34c6f479 (txn: Fix to the prewrite requests retry problem by using TxnStatusCache (#15658))
         };
 
         let ret = cmd.cmd.process_write(snap, context)?;
@@ -883,6 +904,11 @@ pub mod test_util {
             extra_op: ExtraOp::Noop,
             statistics,
             async_apply_prewrite: false,
+<<<<<<< HEAD
+=======
+            raw_ext: None,
+            txn_status_cache: &TxnStatusCache::new_for_test(),
+>>>>>>> 0a34c6f479 (txn: Fix to the prewrite requests retry problem by using TxnStatusCache (#15658))
         };
 
         let ret = cmd.cmd.process_write(snap, context)?;
