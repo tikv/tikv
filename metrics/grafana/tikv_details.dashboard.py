@@ -465,6 +465,7 @@ def target(
     legend_format: Optional[str] = None,
     hide=False,
     data_source=DATASOURCE,
+    interval_factor=1,  # Prefer "high" resolution
 ) -> Target:
     if legend_format is None and isinstance(expr, Expr) and expr.by_labels:
         legend_format = "-".join(map(lambda x: "{{" + f"{x}" + "}}", expr.by_labels))
@@ -472,7 +473,7 @@ def target(
         expr=f"{expr}",
         hide=hide,
         legendFormat=legend_format,
-        intervalFactor=1,  # Prefer "high" resolution
+        intervalFactor=interval_factor,
         datasource=data_source,
     )
 
@@ -500,7 +501,7 @@ def template(
 class Layout:
     # Rows are always 24 "units" wide.
     ROW_WIDTH = 24
-    PANEL_HEIGHT = 6
+    PANEL_HEIGHT = 7
     row_panel: RowPanel
     current_row_y_pos: int
 
@@ -769,7 +770,7 @@ def heatmap_panel(
         "_bucket"
     ), f"'{metric}' should be a histogram metric with '_bucket' suffix"
     t = target(
-        expr=expr_sum_rate(metric, label_selectors=label_selectors, by_labels=["le"])
+        expr=expr_sum_rate(metric, label_selectors=label_selectors, by_labels=["le"]),
     )
     # Make sure targets are in heatmap format.
     t.format = "heatmap"
@@ -787,8 +788,10 @@ def heatmap_panel(
         tooltip=tooltip,
         extraJson={"tooltip": {"showHistogram": True}},
         hideZeroBuckets=True,
-        # Do not specify max max data points, let Grafana decide.
-        maxDataPoints=None,
+        # Limit data points, because too many data points slows browser when
+        # the resolution is too high.
+        # See: https://grafana.com/blog/2020/06/23/how-to-visualize-prometheus-histograms-in-grafana/
+        maxDataPoints=512,
     )
 
 
@@ -957,6 +960,7 @@ def Templates() -> Templating:
                 data_source=DATASOURCE,
                 hide=SHOW,
                 include_all=True,
+                all_value=".*",
             ),
             template(
                 name="titan_db",
