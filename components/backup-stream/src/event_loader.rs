@@ -12,7 +12,7 @@ use raftstore::{
 use tikv::storage::{
     kv::StatisticsSummary,
     mvcc::{DeltaScanner, ScannerBuilder},
-    txn::{EntryBatch, TxnEntry, TxnEntryScanner},
+    txn::{TxnEntry, TxnEntryScanner},
     Snapshot, Statistics,
 };
 use tikv_util::{
@@ -21,7 +21,7 @@ use tikv_util::{
     time::{Instant, Limiter},
     worker::Scheduler,
 };
-use tokio::sync::{OwnedSemaphorePermit, Semaphore};
+use tokio::sync::Semaphore;
 use txn_types::{Key, Lock, TimeStamp};
 
 use crate::{
