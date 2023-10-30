@@ -257,7 +257,6 @@ fn test_serde_custom_tikv_config() {
         unreachable_backoff: ReadableDuration::secs(111),
         check_peers_availability_interval: ReadableDuration::secs(30),
         unsafe_disable_check_quorum: false,
-        periodic_full_compact_tick_interval: ReadableDuration::secs(0),
         periodic_full_compact_start_times: ReadableSchedule::default(),
     };
     value.pd = PdConfig::new(vec!["example.com:443".to_owned()]);

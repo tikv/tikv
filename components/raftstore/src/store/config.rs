@@ -123,18 +123,10 @@ pub struct Config {
     pub lock_cf_compact_interval: ReadableDuration,
     pub lock_cf_compact_bytes_threshold: ReadableSize,
 
-    /// The duration of time to wait before attempt scheduling a full
-    /// compaction. If not set, periodic full compaction is not run
-    /// automatically.
-    ///
-    /// NOTE: This feature is highly experimental!
-    pub periodic_full_compact_tick_interval: ReadableDuration,
-
     /// Hours of the day during which we may execute a periodic full compaction.
-    /// If not set or empty, periodic full compaction may be started every
-    /// `periodic_full_compact_tick_interval`. In toml this should be a list of
-    /// timesin "HH:MM" format with an optional timezone offset. If no timezone
-    /// is specified, local timezone is used. E.g.,
+    /// If not set or empty, periodic full compaction will not run. In toml this
+    /// should be a list of timesin "HH:MM" format with an optional timezone
+    /// offset. If no timezone is specified, local timezone is used. E.g.,
     /// `["23:00 +0000", "03:00 +0700"]` or `["23:00", "03:00"]`.
     pub periodic_full_compact_start_times: ReadableSchedule,
 
@@ -396,9 +388,7 @@ impl Default for Config {
             region_compact_tombstones_percent: 30,
             pd_heartbeat_tick_interval: ReadableDuration::minutes(1),
             pd_store_heartbeat_tick_interval: ReadableDuration::secs(10),
-            // Disable periodic full compaction by default
-            periodic_full_compact_tick_interval: ReadableDuration::secs(0),
-            // Do not restrict to specified start times by default
+            // Disable periodic full compaction by default.
             periodic_full_compact_start_times: ReadableSchedule::default(),
             notify_capacity: 40960,
             snap_mgr_gc_tick_interval: ReadableDuration::minutes(1),

@@ -107,6 +107,7 @@ where
     /// a range at a time.
     pub fn full_compact(&mut self) -> Result<(), Error> {
         fail_point!("on_full_compact");
+        info!("full compaction started");
         let timer = Instant::now();
         let full_compact_timer = FULL_COMPACT.start_coarse_timer();
         box_try!(self.engine.compact_range(
