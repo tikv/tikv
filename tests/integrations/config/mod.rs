@@ -667,6 +667,11 @@ fn test_serde_custom_tikv_config() {
             export_priority: IOPriority::High,
             other_priority: IOPriority::Low,
         },
+<<<<<<< HEAD
+=======
+        background_error_recovery_window: ReadableDuration::hours(1),
+        txn_status_cache_capacity: 1000,
+>>>>>>> 0a34c6f479 (txn: Fix to the prewrite requests retry problem by using TxnStatusCache (#15658))
     };
     value.coprocessor = CopConfig {
         split_region_on_table: false,

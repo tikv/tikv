@@ -90,6 +90,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for RawCompareAndSwap {
             lock_info: None,
             lock_guards: vec![],
             response_policy: ResponsePolicy::OnApplied,
+            known_txn_status: vec![],
         })
     }
 }
@@ -101,7 +102,17 @@ mod tests {
     use concurrency_manager::ConcurrencyManager;
     use engine_traits::CF_DEFAULT;
     use kvproto::kvrpcpb::Context;
+<<<<<<< HEAD
     use txn_types::Key;
+=======
+
+    use super::*;
+    use crate::storage::{
+        lock_manager::MockLockManager,
+        txn::{scheduler::get_raw_ext, txn_status_cache::TxnStatusCache},
+        Engine, Statistics, TestEngineBuilder,
+    };
+>>>>>>> 0a34c6f479 (txn: Fix to the prewrite requests retry problem by using TxnStatusCache (#15658))
 
     #[test]
     fn test_cas_basic() {
@@ -170,6 +181,11 @@ mod tests {
             extra_op: ExtraOp::Noop,
             statistics: &mut statistic,
             async_apply_prewrite: false,
+<<<<<<< HEAD
+=======
+            raw_ext,
+            txn_status_cache: &TxnStatusCache::new_for_test(),
+>>>>>>> 0a34c6f479 (txn: Fix to the prewrite requests retry problem by using TxnStatusCache (#15658))
         };
         let ret = cmd.cmd.process_write(snap, context)?;
         match ret.pr {
@@ -186,4 +202,65 @@ mod tests {
             _ => unreachable!(),
         }
     }
+<<<<<<< HEAD
+=======
+
+    #[test]
+    fn test_cas_process_write() {
+        test_kv_format_impl!(test_cas_process_write_impl);
+    }
+
+    fn test_cas_process_write_impl<F: KvFormat>() {
+        let mut engine = TestEngineBuilder::new().build().unwrap();
+        let ts_provider = super::super::test_util::gen_ts_provider(F::TAG);
+
+        let cm = concurrency_manager::ConcurrencyManager::new(1.into());
+        let raw_key = b"rk";
+        let raw_value = b"valuek";
+        let ttl = 30;
+        let encode_value = RawValue {
+            user_value: raw_value.to_vec(),
+            expire_ts: ttl_to_expire_ts(ttl),
+            is_delete: false,
+        };
+        let cmd = RawCompareAndSwap::new(
+            CF_DEFAULT,
+            F::encode_raw_key(raw_key, None),
+            None,
+            raw_value.to_vec(),
+            ttl,
+            F::TAG,
+            Context::default(),
+        );
+        let mut statistic = Statistics::default();
+        let snap = engine.snapshot(Default::default()).unwrap();
+        let raw_ext = block_on(get_raw_ext(ts_provider, cm.clone(), true, &cmd.cmd)).unwrap();
+        let context = WriteContext {
+            lock_mgr: &MockLockManager::new(),
+            concurrency_manager: cm,
+            extra_op: kvproto::kvrpcpb::ExtraOp::Noop,
+            statistics: &mut statistic,
+            async_apply_prewrite: false,
+            raw_ext,
+            txn_status_cache: &TxnStatusCache::new_for_test(),
+        };
+        let cmd: Command = cmd.into();
+        let write_result = cmd.process_write(snap, context).unwrap();
+        let modifies_with_ts = vec![Modify::Put(
+            CF_DEFAULT,
+            F::encode_raw_key(raw_key, Some(101.into())),
+            F::encode_raw_value_owned(encode_value),
+        )];
+        assert_eq!(write_result.to_be_write.modifies, modifies_with_ts);
+        if F::TAG == ApiVersion::V2 {
+            assert_eq!(write_result.lock_guards.len(), 1);
+            let raw_key = vec![api_version::api_v2::RAW_KEY_PREFIX];
+            let encoded_key = ApiV2::encode_raw_key(&raw_key, Some(100.into()));
+            assert_eq!(
+                write_result.lock_guards.first().unwrap().key(),
+                &encoded_key
+            );
+        }
+    }
+>>>>>>> 0a34c6f479 (txn: Fix to the prewrite requests retry problem by using TxnStatusCache (#15658))
 }

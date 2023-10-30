@@ -170,6 +170,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLock 
             lock_info,
             lock_guards: vec![],
             response_policy: ResponsePolicy::OnProposed,
+            known_txn_status: vec![],
         })
     }
 }

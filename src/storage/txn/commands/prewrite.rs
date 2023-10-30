@@ -10,7 +10,7 @@ use crate::storage::{
     kv::WriteData,
     lock_manager::LockManager,
     mvcc::{
-        has_data_in_range, Error as MvccError, ErrorInner as MvccErrorInner, MvccTxn,
+        has_data_in_range, metrics::*, Error as MvccError, ErrorInner as MvccErrorInner, MvccTxn,
         Result as MvccResult, SnapshotReader, TxnCommitRecord,
     },
     txn::{
@@ -382,6 +382,36 @@ impl<K: PrewriteKind> Prewriter<K> {
         snapshot: impl Snapshot,
         mut context: WriteContext<'_, impl LockManager>,
     ) -> Result<WriteResult> {
+        // Handle special cases about retried prewrite requests for pessimistic
+        // transactions.
+        if let TransactionKind::Pessimistic(_) = self.kind.txn_kind() {
+            if let Some(commit_ts) = context.txn_status_cache.get_no_promote(self.start_ts) {
+                fail_point!("before_prewrite_txn_status_cache_hit");
+                if self.ctx.is_retry_request {
+                    MVCC_PREWRITE_REQUEST_AFTER_COMMIT_COUNTER_VEC
+                        .retry_req
+                        .inc();
+                } else {
+                    MVCC_PREWRITE_REQUEST_AFTER_COMMIT_COUNTER_VEC
+                        .non_retry_req
+                        .inc();
+                }
+                warn!("prewrite request received due to transaction is known to be already committed"; "start_ts" => %self.start_ts, "commit_ts" => %commit_ts);
+                // In normal cases if the transaction is committed, then the key should have
+                // been already prewritten successfully. But in order to
+                // simplify code as well as prevent possible corner cases or
+                // special cases in the future, we disallow skipping constraint
+                // check in this case.
+                // We regard this request as a retried request no matter if it really is (the
+                // original request may arrive later than retried request due to
+                // network latency, in which case we'd better handle it like a
+                // retried request).
+                self.ctx.is_retry_request = true;
+            } else {
+                fail_point!("before_prewrite_txn_status_cache_miss");
+            }
+        }
+
         self.kind
             .can_skip_constraint_check(&mut self.mutations, &snapshot, &mut context)?;
         self.check_max_ts_synced(&snapshot)?;
@@ -616,6 +646,11 @@ impl<K: PrewriteKind> Prewriter<K> {
                 lock_info: None,
                 lock_guards,
                 response_policy: ResponsePolicy::OnApplied,
+                known_txn_status: if !one_pc_commit_ts.is_zero() {
+                    vec![(self.start_ts, one_pc_commit_ts)]
+                } else {
+                    vec![]
+                },
             }
         } else {
             // Skip write stage if some keys are locked.
@@ -634,6 +669,7 @@ impl<K: PrewriteKind> Prewriter<K> {
                 lock_info: None,
                 lock_guards: vec![],
                 response_policy: ResponsePolicy::OnApplied,
+                known_txn_status: vec![],
             }
         };
 
@@ -813,7 +849,11 @@ mod tests {
             commands::test_util::{
                 commit, pessimistic_prewrite_with_cm, prewrite, prewrite_with_cm, rollback,
             },
+<<<<<<< HEAD
             tests::{must_acquire_pessimistic_lock, must_commit, must_rollback},
+=======
+            txn_status_cache::TxnStatusCache,
+>>>>>>> 0a34c6f479 (txn: Fix to the prewrite requests retry problem by using TxnStatusCache (#15658))
             Error, ErrorInner,
         },
         DummyLockManager, Engine, Snapshot, Statistics, TestEngineBuilder,
@@ -1395,6 +1435,11 @@ mod tests {
                     extra_op: ExtraOp::Noop,
                     statistics: &mut Statistics::default(),
                     async_apply_prewrite: false,
+<<<<<<< HEAD
+=======
+                    raw_ext: None,
+                    txn_status_cache: &TxnStatusCache::new_for_test(),
+>>>>>>> 0a34c6f479 (txn: Fix to the prewrite requests retry problem by using TxnStatusCache (#15658))
                 }
             };
         }
@@ -1561,6 +1606,11 @@ mod tests {
                 extra_op: ExtraOp::Noop,
                 statistics: &mut statistics,
                 async_apply_prewrite: case.async_apply_prewrite,
+<<<<<<< HEAD
+=======
+                raw_ext: None,
+                txn_status_cache: &TxnStatusCache::new_for_test(),
+>>>>>>> 0a34c6f479 (txn: Fix to the prewrite requests retry problem by using TxnStatusCache (#15658))
             };
             let engine = TestEngineBuilder::new().build().unwrap();
             let snap = engine.snapshot(Default::default()).unwrap();
@@ -1673,6 +1723,11 @@ mod tests {
             extra_op: ExtraOp::Noop,
             statistics: &mut statistics,
             async_apply_prewrite: false,
+<<<<<<< HEAD
+=======
+            raw_ext: None,
+            txn_status_cache: &TxnStatusCache::new_for_test(),
+>>>>>>> 0a34c6f479 (txn: Fix to the prewrite requests retry problem by using TxnStatusCache (#15658))
         };
         let snap = engine.snapshot(Default::default()).unwrap();
         let result = cmd.cmd.process_write(snap, context).unwrap();
@@ -1700,6 +1755,11 @@ mod tests {
             extra_op: ExtraOp::Noop,
             statistics: &mut statistics,
             async_apply_prewrite: false,
+<<<<<<< HEAD
+=======
+            raw_ext: None,
+            txn_status_cache: &TxnStatusCache::new_for_test(),
+>>>>>>> 0a34c6f479 (txn: Fix to the prewrite requests retry problem by using TxnStatusCache (#15658))
         };
         let snap = engine.snapshot(Default::default()).unwrap();
         let result = cmd.cmd.process_write(snap, context).unwrap();
@@ -1775,6 +1835,11 @@ mod tests {
             extra_op: ExtraOp::Noop,
             statistics: &mut statistics,
             async_apply_prewrite: false,
+<<<<<<< HEAD
+=======
+            raw_ext: None,
+            txn_status_cache: &TxnStatusCache::new_for_test(),
+>>>>>>> 0a34c6f479 (txn: Fix to the prewrite requests retry problem by using TxnStatusCache (#15658))
         };
         let snap = engine.snapshot(Default::default()).unwrap();
         let result = cmd.cmd.process_write(snap, context).unwrap();
@@ -1803,6 +1868,11 @@ mod tests {
             extra_op: ExtraOp::Noop,
             statistics: &mut statistics,
             async_apply_prewrite: false,
+<<<<<<< HEAD
+=======
+            raw_ext: None,
+            txn_status_cache: &TxnStatusCache::new_for_test(),
+>>>>>>> 0a34c6f479 (txn: Fix to the prewrite requests retry problem by using TxnStatusCache (#15658))
         };
         let snap = engine.snapshot(Default::default()).unwrap();
         let result = cmd.cmd.process_write(snap, context).unwrap();
@@ -2006,6 +2076,11 @@ mod tests {
             extra_op: ExtraOp::Noop,
             statistics: &mut statistics,
             async_apply_prewrite: false,
+<<<<<<< HEAD
+=======
+            raw_ext: None,
+            txn_status_cache: &TxnStatusCache::new_for_test(),
+>>>>>>> 0a34c6f479 (txn: Fix to the prewrite requests retry problem by using TxnStatusCache (#15658))
         };
         let snap = engine.snapshot(Default::default()).unwrap();
         assert!(prewrite_cmd.cmd.process_write(snap, context).is_err());
@@ -2026,6 +2101,11 @@ mod tests {
             extra_op: ExtraOp::Noop,
             statistics: &mut statistics,
             async_apply_prewrite: false,
+<<<<<<< HEAD
+=======
+            raw_ext: None,
+            txn_status_cache: &TxnStatusCache::new_for_test(),
+>>>>>>> 0a34c6f479 (txn: Fix to the prewrite requests retry problem by using TxnStatusCache (#15658))
         };
         let snap = engine.snapshot(Default::default()).unwrap();
         assert!(prewrite_cmd.cmd.process_write(snap, context).is_err());
@@ -2068,6 +2148,11 @@ mod tests {
             extra_op: ExtraOp::Noop,
             statistics: &mut statistics,
             async_apply_prewrite: false,
+<<<<<<< HEAD
+=======
+            raw_ext: None,
+            txn_status_cache: &TxnStatusCache::new_for_test(),
+>>>>>>> 0a34c6f479 (txn: Fix to the prewrite requests retry problem by using TxnStatusCache (#15658))
         };
         let snap = engine.snapshot(Default::default()).unwrap();
         let res = prewrite_cmd.cmd.process_write(snap, context).unwrap();

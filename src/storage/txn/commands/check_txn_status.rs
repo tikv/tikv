@@ -120,6 +120,12 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for CheckTxnStatus {
             released_locks.wake_up(context.lock_mgr);
         }
 
+        let write_result_known_txn_status = if let TxnStatus::Committed { commit_ts } = &txn_status
+        {
+            vec![(self.lock_ts, *commit_ts)]
+        } else {
+            vec![]
+        };
         let pr = ProcessResult::TxnStatus { txn_status };
         let mut write_data = WriteData::from_modifies(txn.into_modifies());
         write_data.set_allowed_on_disk_almost_full();
@@ -131,6 +137,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for CheckTxnStatus {
             lock_info: None,
             lock_guards: vec![],
             response_policy: ResponsePolicy::OnApplied,
+            known_txn_status: write_result_known_txn_status,
         })
     }
 }
@@ -149,8 +156,30 @@ pub mod tests {
     use concurrency_manager::ConcurrencyManager;
     use kvproto::kvrpcpb::Context;
     use tikv_util::deadline::Deadline;
+<<<<<<< HEAD
     use txn_types::Key;
     use txn_types::WriteType;
+=======
+    use txn_types::{Key, LastChange, WriteType};
+
+    use super::{TxnStatus::*, *};
+    use crate::storage::{
+        kv::Engine,
+        lock_manager::MockLockManager,
+        mvcc,
+        mvcc::tests::*,
+        txn::{
+            self,
+            actions::acquire_pessimistic_lock::tests::acquire_pessimistic_lock_allow_lock_with_conflict,
+            commands::{pessimistic_rollback, WriteCommand, WriteContext},
+            scheduler::DEFAULT_EXECUTION_DURATION_LIMIT,
+            tests::*,
+            txn_status_cache::TxnStatusCache,
+        },
+        types::TxnStatus,
+        ProcessResult, TestEngineBuilder,
+    };
+>>>>>>> 0a34c6f479 (txn: Fix to the prewrite requests retry problem by using TxnStatusCache (#15658))
 
     pub fn must_success<E: Engine>(
         engine: &E,
@@ -188,6 +217,11 @@ pub mod tests {
                     extra_op: Default::default(),
                     statistics: &mut Default::default(),
                     async_apply_prewrite: false,
+<<<<<<< HEAD
+=======
+                    raw_ext: None,
+                    txn_status_cache: &TxnStatusCache::new_for_test(),
+>>>>>>> 0a34c6f479 (txn: Fix to the prewrite requests retry problem by using TxnStatusCache (#15658))
                 },
             )
             .unwrap();
@@ -225,6 +259,7 @@ pub mod tests {
             resolving_pessimistic_lock,
             deadline: Deadline::from_now(DEFAULT_EXECUTION_DURATION_LIMIT),
         };
+<<<<<<< HEAD
         assert!(
             command
                 .process_write(
@@ -236,6 +271,25 @@ pub mod tests {
                         statistics: &mut Default::default(),
                         async_apply_prewrite: false,
                     },
+=======
+        command
+            .process_write(
+                snapshot,
+                WriteContext {
+                    lock_mgr: &MockLockManager::new(),
+                    concurrency_manager: cm,
+                    extra_op: Default::default(),
+                    statistics: &mut Default::default(),
+                    async_apply_prewrite: false,
+                    raw_ext: None,
+                    txn_status_cache: &TxnStatusCache::new_for_test(),
+                },
+            )
+            .map(|r| {
+                panic!(
+                    "expected check_txn_status fail but succeeded with result: {:?}",
+                    r.pr
+>>>>>>> 0a34c6f479 (txn: Fix to the prewrite requests retry problem by using TxnStatusCache (#15658))
                 )
                 .is_err()
         );
