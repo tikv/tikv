@@ -396,10 +396,6 @@ where
             self.with_resolver(region, handle, |r| {
                 event_loader.emit_entries_to(&mut events, r)
             })?;
-            if !res.more {
-                metrics::INITIAL_SCAN_DURATION.observe(start.saturating_elapsed_secs());
-                return Ok(stats.stat);
-            }
             stats.add_statistics(&res.statistics);
             let region_id = region.get_id();
             let sink = self.sink.clone();
@@ -416,6 +412,10 @@ where
                 drop(allocated);
                 debug!("apply event done"; "size" => %event_size, "region" => %region_id);
             }));
+            if !res.more {
+                metrics::INITIAL_SCAN_DURATION.observe(start.saturating_elapsed_secs());
+                return Ok(stats.stat);
+            }
             if res.out_of_memory {
                 futures::future::try_join_all(join_handles.drain(..))
                     .await
@@ -473,6 +473,8 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use futures::executor::block_on;
     use kvproto::metapb::*;
     use tikv::storage::{txn::tests::*, TestEngineBuilder};
