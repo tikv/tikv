@@ -117,6 +117,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for RawCompareAndSwap {
             new_acquired_locks: vec![],
             lock_guards,
             response_policy: ResponsePolicy::OnApplied,
+            known_txn_status: vec![],
         })
     }
 }
@@ -134,8 +135,9 @@ mod tests {
 
     use super::*;
     use crate::storage::{
-        lock_manager::MockLockManager, txn::scheduler::get_raw_ext, Engine, Statistics,
-        TestEngineBuilder,
+        lock_manager::MockLockManager,
+        txn::{scheduler::get_raw_ext, txn_status_cache::TxnStatusCache},
+        Engine, Statistics, TestEngineBuilder,
     };
 
     #[test]
@@ -215,6 +217,7 @@ mod tests {
             statistics: &mut statistic,
             async_apply_prewrite: false,
             raw_ext,
+            txn_status_cache: &TxnStatusCache::new_for_test(),
         };
         let ret = cmd.cmd.process_write(snap, context)?;
         match ret.pr {
@@ -269,6 +272,7 @@ mod tests {
             statistics: &mut statistic,
             async_apply_prewrite: false,
             raw_ext,
+            txn_status_cache: &TxnStatusCache::new_for_test(),
         };
         let cmd: Command = cmd.into();
         let write_result = cmd.process_write(snap, context).unwrap();
