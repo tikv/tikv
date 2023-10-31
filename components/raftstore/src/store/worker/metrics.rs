@@ -147,8 +147,8 @@ lazy_static! {
     )
     .unwrap();
     pub static ref FULL_COMPACT: Histogram = register_histogram!(
-        "tikv_raftstore_full_compact_duration_seconds",
-        "Bucketed histogram of full compaction"
+        "tikv_storage_full_compact_duration_seconds",
+        "Bucketed histogram of full compaction for the storage."
     )
     .unwrap();
     pub static ref REGION_HASH_HISTOGRAM: Histogram = register_histogram!(
