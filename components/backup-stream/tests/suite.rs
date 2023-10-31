@@ -2,7 +2,7 @@
 
 use std::{
     collections::{HashMap, HashSet},
-    path::Path,
+    path::{Path, PathBuf},
     sync::Arc,
     time::Duration,
 };
@@ -49,6 +49,18 @@ use tikv_util::{
 };
 use txn_types::{Key, TimeStamp, WriteRef};
 use walkdir::WalkDir;
+
+#[derive(Debug)]
+pub struct FileSegments {
+    path: PathBuf,
+    segments: Vec<(usize, usize)>,
+}
+
+#[derive(Default, Debug)]
+pub struct LogFiles {
+    default_cf: Vec<FileSegments>,
+    write_cf: Vec<FileSegments>,
+}
 
 pub type TestEndpoint = Endpoint<
     ErrorStore<SlashEtcStore>,
@@ -453,7 +465,12 @@ impl Suite {
         for ts in (from..(from + n)).map(|x| x * 2) {
             let ts = ts as u64;
             let key = make_record_key(for_table, ts);
-            let muts = vec![mutation(key.clone(), b"hello, world".to_vec())];
+            let value = if ts % 4 == 0 {
+                b"hello, world".to_vec()
+            } else {
+                [0xdd; 1024].to_vec()
+            };
+            let muts = vec![mutation(key.clone(), value)];
             let enc_key = Key::from_raw(&key).into_encoded();
             let region = self.cluster.get_region_id(&enc_key);
             let start_ts = self.cluster.pd_client.get_tso().await.unwrap();
@@ -548,6 +565,52 @@ impl Suite {
         meta_map
     }
 
+    pub fn get_files_to_check(&self, path: &Path) -> std::io::Result<LogFiles> {
+        let mut res = LogFiles::default();
+        for entry in WalkDir::new(path.join("v1/backupmeta")) {
+            let entry = entry?;
+            println!("reading {}", entry.path().display());
+            if entry.file_name().to_str().unwrap().ends_with(".meta") {
+                let content = std::fs::read(entry.path())?;
+                let meta = protobuf::parse_from_bytes::<Metadata>(&content)?;
+                for fg in meta.get_file_groups() {
+                    let mut default_segs = vec![];
+                    let mut write_segs = vec![];
+                    for file in fg.get_data_files_info() {
+                        dbg!(&file);
+                        let v = if file.cf == "default" || file.cf.is_empty() {
+                            Some(&mut default_segs)
+                        } else if file.cf == "write" {
+                            Some(&mut write_segs)
+                        } else {
+                            None
+                        };
+                        v.into_iter().for_each(|v| {
+                            v.push((
+                                file.get_range_offset() as usize,
+                                (file.get_range_offset() + file.get_range_length()) as usize,
+                            ))
+                        });
+                    }
+                    let p = path.join(fg.get_path());
+                    if !default_segs.is_empty() {
+                        res.default_cf.push(FileSegments {
+                            path: p.clone(),
+                            segments: default_segs,
+                        })
+                    }
+                    if !write_segs.is_empty() {
+                        res.write_cf.push(FileSegments {
+                            path: p,
+                            segments: write_segs,
+                        })
+                    }
+                }
+            }
+        }
+        Ok(res)
+    }
+
     pub async fn check_for_write_records<'a>(
         &self,
         path: &Path,
@@ -557,41 +620,68 @@ impl Suite {
         let n = remain_keys.len();
         let mut extra_key = 0;
         let mut extra_len = 0;
-        let meta_map = self.load_metadata_for_write_records(path);
-        for entry in WalkDir::new(path) {
-            let entry = entry.unwrap();
+        let files = self.get_files_to_check(path).unwrap_or_default();
+        let mut default_keys = HashSet::new();
+        for entry in files.write_cf {
             println!("checking: {:?}", entry);
-            if entry.file_type().is_file()
-                && entry
-                    .file_name()
-                    .to_str()
-                    .map_or(false, |s| s.ends_with(".log"))
-            {
-                let buf = std::fs::read(entry.path()).unwrap();
-                let file_infos = meta_map.get(entry.file_name().to_str().unwrap()).unwrap();
-                for &file_info in file_infos {
-                    let mut decoder = ZstdDecoder::new(Vec::new());
-                    let pbuf: &[u8] = &buf[file_info.0..file_info.1];
-                    decoder.write_all(pbuf).await.unwrap();
-                    decoder.flush().await.unwrap();
-                    decoder.close().await.unwrap();
-                    let content = decoder.into_inner();
 
-                    let mut iter = EventIterator::new(&content);
-                    loop {
-                        if !iter.valid() {
-                            break;
-                        }
-                        iter.next().unwrap();
-                        if !remain_keys.remove(iter.key()) {
-                            extra_key += 1;
-                            extra_len += iter.key().len() + iter.value().len();
-                        }
+            let buf = std::fs::read(&entry.path).unwrap();
+            for &file_info in entry.segments.iter() {
+                let mut decoder = ZstdDecoder::new(Vec::new());
+                let pbuf: &[u8] = &buf[file_info.0..file_info.1];
+                decoder.write_all(pbuf).await.unwrap();
+                decoder.flush().await.unwrap();
+                decoder.close().await.unwrap();
+                let content = decoder.into_inner();
 
-                        let value = iter.value();
-                        let wf = WriteRef::parse(value).unwrap();
+                let mut iter = EventIterator::new(&content);
+                loop {
+                    if !iter.valid() {
+                        break;
+                    }
+                    iter.next().unwrap();
+                    if !remain_keys.remove(iter.key()) {
+                        extra_key += 1;
+                        extra_len += iter.key().len() + iter.value().len();
+                    }
+
+                    let value = iter.value();
+                    let wf = WriteRef::parse(value).unwrap();
+                    if wf.short_value.is_none() {
+                        let mut key = Key::from_encoded_slice(iter.key());
+                        key.append_ts_inplace(wf.start_ts);
+
+                        default_keys.insert(key.into_encoded());
+                    } else {
                         assert_eq!(wf.short_value, Some(b"hello, world" as &[u8]));
                     }
+                }
+            }
+        }
+
+        for entry in files.default_cf {
+            let buf = std::fs::read(&entry.path).unwrap();
+            for &file_info in entry.segments.iter() {
+                let mut decoder = ZstdDecoder::new(Vec::new());
+                let pbuf: &[u8] = &buf[file_info.0..file_info.1];
+                decoder.write_all(pbuf).await.unwrap();
+                decoder.flush().await.unwrap();
+                decoder.close().await.unwrap();
+                let content = decoder.into_inner();
+
+                let mut iter = EventIterator::new(&content);
+                loop {
+                    if !iter.valid() {
+                        break;
+                    }
+                    iter.next().unwrap();
+                    if !default_keys.remove(iter.key()) {
+                        extra_key += 1;
+                        extra_len += iter.key().len() + iter.value().len();
+                    }
+
+                    let value = iter.value();
+                    assert_eq!(value, &[0xdd; 1024]);
                 }
             }
         }
