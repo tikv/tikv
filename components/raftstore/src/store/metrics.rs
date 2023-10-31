@@ -210,6 +210,130 @@ make_auto_flush_static_metric! {
 }
 
 make_static_metric! {
+<<<<<<< HEAD
+=======
+    pub label_enum RaftReadyType {
+        message,
+        commit,
+        append,
+        snapshot,
+        pending_region,
+        has_ready_region,
+    }
+
+    pub label_enum RaftSentMessageCounterType {
+        append,
+        append_resp,
+        prevote,
+        prevote_resp,
+        vote,
+        vote_resp,
+        snapshot,
+        heartbeat,
+        heartbeat_resp,
+        transfer_leader,
+        timeout_now,
+        read_index,
+        read_index_resp,
+    }
+
+    pub label_enum SendStatus {
+        accept,
+        drop,
+    }
+
+    pub label_enum RaftDroppedMessage {
+        mismatch_store_id,
+        mismatch_region_epoch,
+        mismatch_witness_snapshot,
+        stale_msg,
+        region_overlap,
+        region_no_peer,
+        region_tombstone_peer,
+        region_nonexistent,
+        applying_snap,
+        disk_full,
+        non_witness,
+        recovery,
+        unsafe_vote,
+    }
+
+    pub label_enum ProposalType {
+        all,
+        local_read,
+        read_index,
+        unsafe_read_index,
+        normal,
+        transfer_leader,
+        conf_change,
+        batch,
+        dropped_read_index,
+    }
+
+    pub label_enum RaftInvalidProposal {
+        mismatch_store_id,
+        region_not_found,
+        not_leader,
+        mismatch_peer_id,
+        stale_command,
+        epoch_not_match,
+        read_index_no_leader,
+        region_not_initialized,
+        is_applying_snapshot,
+        force_leader,
+        witness,
+        flashback_in_progress,
+        flashback_not_prepared,
+        non_witness,
+    }
+
+    pub label_enum RaftEventDurationType {
+        compact_check,
+        periodic_full_compact,
+        pd_store_heartbeat,
+        snap_gc,
+        compact_lock_cf,
+        consistency_check,
+        cleanup_import_sst,
+        raft_engine_purge,
+        peer_msg,
+        store_msg,
+    }
+
+    pub label_enum RaftLogGcSkippedReason {
+        reserve_log,
+        compact_idx_too_small,
+        threshold_limit,
+    }
+
+    pub label_enum LoadBaseSplitEventType {
+        // Workload fits the QPS threshold or byte threshold.
+        load_fit,
+        // Workload fits the CPU threshold.
+        cpu_load_fit,
+        // The statistical key is empty.
+        empty_statistical_key,
+        // Split info has been collected, ready to split.
+        ready_to_split,
+        // Split info has not been collected yet, not ready to split.
+        not_ready_to_split,
+        // The number of sampled keys does not meet the threshold.
+        no_enough_sampled_key,
+        // The number of sampled keys located on left and right does not meet the threshold.
+        no_enough_lr_key,
+        // The number of balanced keys does not meet the score.
+        no_balance_key,
+        // The number of contained keys does not meet the score.
+        no_uncross_key,
+        // Split info for the top hot CPU region has been collected, ready to split.
+        ready_to_split_cpu_top,
+        // Hottest key range for the top hot CPU region could not be found.
+        empty_hottest_key_range,
+        // The top hot CPU region could not be split.
+        unable_to_split_cpu_top,
+    }
+
+>>>>>>> 2a24cfc4b2 (rafstore, engine_rocks: periodic full compaction (#12729) (#15853))
     pub struct HibernatedPeerStateGauge: IntGauge {
         "state" => {
             awaken,

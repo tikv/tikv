@@ -31,7 +31,7 @@ use tikv::server::Config as ServerConfig;
 use tikv::storage::config::{
     BlockCacheConfig, Config as StorageConfig, FlowControlConfig, IORateLimitConfig,
 };
-use tikv_util::config::{LogFormat, ReadableDuration, ReadableSize};
+use tikv_util::config::{LogFormat, ReadableDuration, ReadableSchedule, ReadableSize};
 
 mod dynamic;
 mod test_config_client;
@@ -230,6 +230,17 @@ fn test_serde_custom_tikv_config() {
         inspect_interval: ReadableDuration::millis(444),
         raft_msg_flush_interval: ReadableDuration::micros(250),
         unreachable_backoff: ReadableDuration::secs(111),
+<<<<<<< HEAD
+=======
+        check_peers_availability_interval: ReadableDuration::secs(30),
+        check_request_snapshot_interval: ReadableDuration::minutes(1),
+        slow_trend_unsensitive_cause: 10.0,
+        slow_trend_unsensitive_result: 0.5,
+        enable_v2_compatible_learner: false,
+        unsafe_disable_check_quorum: false,
+        periodic_full_compact_start_times: ReadableSchedule::default(),
+        periodic_full_compact_start_max_cpu: 0.1,
+>>>>>>> 2a24cfc4b2 (rafstore, engine_rocks: periodic full compaction (#12729) (#15853))
     };
     value.pd = PdConfig::new(vec!["example.com:443".to_owned()]);
     let titan_cf_config = TitanCfConfig {

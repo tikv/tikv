@@ -26,8 +26,15 @@ batch-system = { path = "../batch-system", default-features = false }
 bitflags = "1.0.1"
 byteorder = "1.2"
 bytes = "1.0"
+<<<<<<< HEAD
 concurrency_manager = { path = "../concurrency_manager", default-features = false }
 online_config = { path = "../online_config" }
+=======
+causal_ts = { workspace = true }
+chrono = "0.4"
+collections = { workspace = true }
+concurrency_manager = { workspace = true }
+>>>>>>> 2a24cfc4b2 (rafstore, engine_rocks: periodic full compaction (#12729) (#15853))
 crc32fast = "1.2"
 crossbeam = "0.8"
 derivative = "2"
