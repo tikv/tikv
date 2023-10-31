@@ -30,7 +30,11 @@ use tikv::server::Config as ServerConfig;
 use tikv::storage::config::{
     BlockCacheConfig, Config as StorageConfig, FlowControlConfig, IORateLimitConfig,
 };
+<<<<<<< HEAD
 use tikv_util::config::{LogFormat, OptionReadableSize, ReadableDuration, ReadableSize};
+=======
+use tikv_util::config::{LogFormat, ReadableDuration, ReadableSchedule, ReadableSize};
+>>>>>>> 2a24cfc4b2 (rafstore, engine_rocks: periodic full compaction (#12729) (#15853))
 
 mod dynamic;
 mod test_config_client;
@@ -223,6 +227,27 @@ fn test_serde_custom_tikv_config() {
         io_reschedule_hotpot_duration: ReadableDuration::secs(4321),
         inspect_interval: ReadableDuration::millis(444),
         raft_msg_flush_interval: ReadableDuration::micros(250),
+<<<<<<< HEAD
+=======
+        check_leader_lease_interval: ReadableDuration::millis(123),
+        renew_leader_lease_advance_duration: ReadableDuration::millis(456),
+        reactive_memory_lock_tick_interval: ReadableDuration::millis(566),
+        reactive_memory_lock_timeout_tick: 8,
+        report_region_buckets_tick_interval: ReadableDuration::secs(1234),
+        check_long_uncommitted_interval: ReadableDuration::secs(1),
+        long_uncommitted_base_threshold: ReadableDuration::secs(1),
+        max_entry_cache_warmup_duration: ReadableDuration::secs(2),
+        max_snapshot_file_raw_size: ReadableSize::gb(10),
+        unreachable_backoff: ReadableDuration::secs(111),
+        check_peers_availability_interval: ReadableDuration::secs(30),
+        check_request_snapshot_interval: ReadableDuration::minutes(1),
+        slow_trend_unsensitive_cause: 10.0,
+        slow_trend_unsensitive_result: 0.5,
+        enable_v2_compatible_learner: false,
+        unsafe_disable_check_quorum: false,
+        periodic_full_compact_start_times: ReadableSchedule::default(),
+        periodic_full_compact_start_max_cpu: 0.1,
+>>>>>>> 2a24cfc4b2 (rafstore, engine_rocks: periodic full compaction (#12729) (#15853))
     };
     value.pd = PdConfig::new(vec!["example.com:443".to_owned()]);
     let titan_cf_config = TitanCfConfig {

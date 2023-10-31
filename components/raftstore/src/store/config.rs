@@ -14,8 +14,23 @@ use online_config::{ConfigChange, ConfigManager, ConfigValue, OnlineConfig};
 use prometheus::register_gauge_vec;
 use serde::{Deserialize, Serialize};
 use serde_with::with_prefix;
+<<<<<<< HEAD
 use tikv_util::config::{ReadableDuration, ReadableSize, VersionTrack};
 use tikv_util::{box_err, info, warn};
+=======
+use tikv_util::{
+    box_err,
+    config::{ReadableDuration, ReadableSchedule, ReadableSize, VersionTrack},
+    error, info,
+    sys::SysQuota,
+    warn,
+    worker::Scheduler,
+};
+use time::Duration as TimeDuration;
+
+use super::worker::{RaftStoreBatchComponent, RefreshConfigTask};
+use crate::{coprocessor::config::RAFTSTORE_V2_SPLIT_SIZE, Result};
+>>>>>>> 2a24cfc4b2 (rafstore, engine_rocks: periodic full compaction (#12729) (#15853))
 
 lazy_static! {
     pub static ref CONFIG_RAFTSTORE_GAUGE: prometheus::GaugeVec = register_gauge_vec!(
@@ -108,6 +123,15 @@ pub struct Config {
     pub snap_gc_timeout: ReadableDuration,
     pub lock_cf_compact_interval: ReadableDuration,
     pub lock_cf_compact_bytes_threshold: ReadableSize,
+
+    /// Hours of the day during which we may execute a periodic full compaction.
+    /// If not set or empty, periodic full compaction will not run. In toml this
+    /// should be a list of timesin "HH:MM" format with an optional timezone
+    /// offset. If no timezone is specified, local timezone is used. E.g.,
+    /// `["23:00 +0000", "03:00 +0700"]` or `["23:00", "03:00"]`.
+    pub periodic_full_compact_start_times: ReadableSchedule,
+    /// Do not start a full compaction if cpu utilization exceeds this number.
+    pub periodic_full_compact_start_max_cpu: f64,
 
     #[online_config(skip)]
     pub notify_capacity: usize,
@@ -278,6 +302,11 @@ impl Default for Config {
             region_compact_tombstones_percent: 30,
             pd_heartbeat_tick_interval: ReadableDuration::minutes(1),
             pd_store_heartbeat_tick_interval: ReadableDuration::secs(10),
+            // Disable periodic full compaction by default.
+            periodic_full_compact_start_times: ReadableSchedule::default(),
+            // If periodic full compaction is enabled, do not start a full compaction
+            // if the CPU utilization is over 10%.
+            periodic_full_compact_start_max_cpu: 0.1,
             notify_capacity: 40960,
             snap_mgr_gc_tick_interval: ReadableDuration::minutes(1),
             snap_gc_timeout: ReadableDuration::hours(4),
