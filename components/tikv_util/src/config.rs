@@ -15,6 +15,10 @@ use std::{
     time::Duration,
 };
 
+use chrono::{
+    format::{self, Fixed, Item, Parsed},
+    DateTime, FixedOffset, Local, NaiveTime, TimeZone, Timelike,
+};
 use online_config::ConfigValue;
 use serde::{
     de::{self, Unexpected, Visitor},
@@ -511,6 +515,166 @@ impl<'de> Deserialize<'de> for ReadableDuration {
         }
 
         deserializer.deserialize_str(DurVisitor)
+    }
+}
+
+#[derive(Clone, Debug, Copy, PartialEq)]
+pub struct ReadableOffsetTime(pub NaiveTime, pub FixedOffset);
+
+impl From<ReadableOffsetTime> for ConfigValue {
+    fn from(ot: ReadableOffsetTime) -> ConfigValue {
+        ConfigValue::OffsetTime((ot.0, ot.1))
+    }
+}
+
+impl From<ConfigValue> for ReadableOffsetTime {
+    fn from(c: ConfigValue) -> ReadableOffsetTime {
+        if let ConfigValue::OffsetTime(ot) = c {
+            ReadableOffsetTime(ot.0, ot.1)
+        } else {
+            panic!("expect: ConfigValue::OffsetTime, got: {:?}", c)
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Default)]
+pub struct ReadableSchedule(pub Vec<ReadableOffsetTime>);
+
+impl From<ReadableSchedule> for ConfigValue {
+    fn from(otv: ReadableSchedule) -> ConfigValue {
+        ConfigValue::Schedule(otv.0.into_iter().map(|ot| (ot.0, ot.1)).collect::<Vec<_>>())
+    }
+}
+
+impl From<ConfigValue> for ReadableSchedule {
+    fn from(c: ConfigValue) -> ReadableSchedule {
+        if let ConfigValue::Schedule(otv) = c {
+            ReadableSchedule(
+                otv.into_iter()
+                    .map(|(o, t)| ReadableOffsetTime(o, t))
+                    .collect::<Vec<_>>(),
+            )
+        } else {
+            panic!("expect: ConfigValue::Schedule, got: {:?}", c)
+        }
+    }
+}
+
+impl ReadableSchedule {
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    pub fn is_scheduled_this_hour<Tz: TimeZone>(&self, datetime: &DateTime<Tz>) -> bool {
+        self.0.iter().any(|time| time.hour_matches(datetime))
+    }
+
+    pub fn is_scheduled_this_hour_minute<Tz: TimeZone>(&self, datetime: &DateTime<Tz>) -> bool {
+        self.0
+            .iter()
+            .any(|time| time.hour_minutes_matches(datetime))
+    }
+}
+
+impl FromStr for ReadableOffsetTime {
+    type Err = String;
+
+    fn from_str(ot_str: &str) -> Result<ReadableOffsetTime, String> {
+        let (time, offset) = if let Some((time_str, offset_str)) = ot_str.split_once(' ') {
+            let time = NaiveTime::parse_from_str(time_str, "%H:%M").map_err(|e| e.to_string())?;
+            let offset = parse_offset(offset_str)?;
+            (time, offset)
+        } else {
+            let time = NaiveTime::parse_from_str(ot_str, "%H:%M").map_err(|e| e.to_string())?;
+            (time, local_offset())
+        };
+        Ok(ReadableOffsetTime(time, offset))
+    }
+}
+
+/// Returns the `FixedOffset` for the timezone this `tikv` server has been
+/// configured to use.
+fn local_offset() -> FixedOffset {
+    let &offset = Local::now().offset();
+    offset
+}
+
+/// Parses the offset specified by `str`.
+/// Note: `FixedOffset` in latest `chrono` implements `FromStr`. Once we are
+/// able to upgrade to it (`components/tidb_query_datatype` requires a large
+/// refactoring that is outside the scope of this PR), we can remove this
+/// method.
+fn parse_offset(offset_str: &str) -> Result<FixedOffset, String> {
+    let mut parsed = Parsed::new();
+    format::parse(
+        &mut parsed,
+        offset_str,
+        [Item::Fixed(Fixed::TimezoneOffsetZ)].iter(),
+    )
+    .map_err(|e| e.to_string())?;
+    parsed.to_fixed_offset().map_err(|e| e.to_string())
+}
+
+impl fmt::Display for ReadableOffsetTime {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{} {}", self.0, self.1)
+    }
+}
+
+impl ReadableOffsetTime {
+    /// Converts `datetime` from `Tz` to the same timezone as this instance and
+    /// returns `true` if the hour of the day is matches hour of this
+    /// instance.
+    pub fn hour_matches<Tz: TimeZone>(&self, datetime: &DateTime<Tz>) -> bool {
+        self.convert_to_this_offset(datetime).hour() == self.0.hour()
+    }
+
+    /// Converts `datetime` from `Tz` to the same timezone as this instance and
+    /// returns `true` if hours and minutes match this instance.
+    pub fn hour_minutes_matches<Tz: TimeZone>(&self, datetime: &DateTime<Tz>) -> bool {
+        let time = self.convert_to_this_offset(datetime);
+        time.hour() == self.0.hour() && time.minute() == self.0.minute()
+    }
+
+    fn convert_to_this_offset<Tz: TimeZone>(&self, datetime: &DateTime<Tz>) -> NaiveTime {
+        datetime.with_timezone(&self.1).time()
+    }
+}
+
+impl Serialize for ReadableOffsetTime {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut buffer = String::new();
+        write!(buffer, "{}", self).unwrap();
+        serializer.serialize_str(&buffer)
+    }
+}
+
+impl<'de> Deserialize<'de> for ReadableOffsetTime {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct OffTimeVisitor;
+
+        impl<'de> Visitor<'de> for OffTimeVisitor {
+            type Value = ReadableOffsetTime;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                formatter.write_str("valid duration")
+            }
+
+            fn visit_str<E>(self, off_time_str: &str) -> Result<ReadableOffsetTime, E>
+            where
+                E: de::Error,
+            {
+                off_time_str.parse().map_err(E::custom)
+            }
+        }
+
+        deserializer.deserialize_str(OffTimeVisitor)
     }
 }
 
@@ -1749,6 +1913,90 @@ mod tests {
             assert!(toml::from_str::<DurHolder>(&src_str).is_err(), "{}", src);
         }
         assert!(toml::from_str::<DurHolder>("d = 23").is_err());
+    }
+
+    #[test]
+    fn test_readable_offset_time() {
+        let decode_cases = vec![
+            (
+                "23:00 +0000",
+                ReadableOffsetTime(
+                    NaiveTime::from_hms_opt(23, 00, 00).unwrap(),
+                    FixedOffset::east_opt(0).unwrap(),
+                ),
+            ),
+            (
+                "03:00",
+                ReadableOffsetTime(NaiveTime::from_hms_opt(3, 00, 00).unwrap(), local_offset()),
+            ),
+            (
+                "13:23 +09:30",
+                ReadableOffsetTime(
+                    NaiveTime::from_hms_opt(13, 23, 00).unwrap(),
+                    FixedOffset::east_opt(3600 * 9 + 1800).unwrap(),
+                ),
+            ),
+            (
+                "09:30 -08:00",
+                ReadableOffsetTime(
+                    NaiveTime::from_hms_opt(9, 30, 00).unwrap(),
+                    FixedOffset::west_opt(3600 * 8).unwrap(),
+                ),
+            ),
+        ];
+        for (encoded, expected) in decode_cases {
+            let actual = encoded.parse::<ReadableOffsetTime>().unwrap_or_else(|e| {
+                panic!(
+                    "error parsing encoded={} expected={} error={}",
+                    encoded, expected, e
+                )
+            });
+            assert_eq!(actual, expected);
+        }
+        let time = ReadableOffsetTime(
+            NaiveTime::from_hms_opt(9, 30, 00).unwrap(),
+            FixedOffset::west_opt(0).unwrap(),
+        );
+        assert_eq!(format!("{}", time), "09:30:00 +00:00");
+        let dt = DateTime::parse_from_rfc3339("2023-10-27T09:39:57-00:00").unwrap();
+        assert!(time.hour_matches(&dt));
+        assert!(!time.hour_minutes_matches(&dt));
+        let dt = DateTime::parse_from_rfc3339("2023-10-27T09:30:57-00:00").unwrap();
+        assert!(time.hour_minutes_matches(&dt));
+    }
+
+    #[test]
+    fn test_readable_schedule() {
+        let schedule = ReadableSchedule(
+            vec!["09:30 +00:00", "23:00 +00:00"]
+                .into_iter()
+                .flat_map(ReadableOffsetTime::from_str)
+                .collect::<Vec<_>>(),
+        );
+
+        let time_a = DateTime::parse_from_rfc3339("2023-10-27T09:30:57-00:00").unwrap();
+        let time_b = DateTime::parse_from_rfc3339("2023-10-28T09:00:57-00:00").unwrap();
+        let time_c = DateTime::parse_from_rfc3339("2023-10-27T23:15:00-00:00").unwrap();
+        let time_d = DateTime::parse_from_rfc3339("2023-10-27T23:00:00-00:00").unwrap();
+        let time_e = DateTime::parse_from_rfc3339("2023-10-27T20:00:00-00:00").unwrap();
+
+        // positives for schedule by hour
+        assert!(schedule.is_scheduled_this_hour(&time_a));
+        assert!(schedule.is_scheduled_this_hour(&time_b));
+        assert!(schedule.is_scheduled_this_hour(&time_c));
+        assert!(schedule.is_scheduled_this_hour(&time_d));
+
+        // negatives for schedule by hour
+        assert!(!schedule.is_scheduled_this_hour(&time_e));
+
+        // positives for schedule by hour and minute
+        assert!(schedule.is_scheduled_this_hour_minute(&time_a));
+        assert!(schedule.is_scheduled_this_hour_minute(&time_d));
+
+        // negatives for schedule by hour and minute
+        assert!(!schedule.is_scheduled_this_hour_minute(&time_b));
+        assert!(!schedule.is_scheduled_this_hour_minute(&time_c));
+        assert!(!schedule.is_scheduled_this_hour_minute(&time_e));
     }
 
     #[test]

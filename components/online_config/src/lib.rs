@@ -5,9 +5,12 @@ use std::{
     fmt::{self, Debug, Display, Formatter},
 };
 
+use chrono::{FixedOffset, NaiveTime};
 pub use online_config_derive::*;
 
 pub type ConfigChange = HashMap<String, ConfigValue>;
+pub type OffsetTime = (NaiveTime, FixedOffset);
+pub type Schedule = Vec<OffsetTime>;
 
 #[derive(Clone, PartialEq)]
 pub enum ConfigValue {
@@ -23,6 +26,8 @@ pub enum ConfigValue {
     BlobRunMode(String),
     IOPriority(String),
     Module(ConfigChange),
+    OffsetTime(OffsetTime),
+    Schedule(Schedule),
     Skip,
     None,
 }
@@ -42,6 +47,8 @@ impl Display for ConfigValue {
             ConfigValue::BlobRunMode(v) => write!(f, "{}", v),
             ConfigValue::IOPriority(v) => write!(f, "{}", v),
             ConfigValue::Module(v) => write!(f, "{:?}", v),
+            ConfigValue::OffsetTime((t, o)) => write!(f, "{} {}", t, o),
+            ConfigValue::Schedule(v) => write!(f, "{:?}", v),
             ConfigValue::Skip => write!(f, "ConfigValue::Skip"),
             ConfigValue::None => write!(f, ""),
         }

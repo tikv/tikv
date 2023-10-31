@@ -218,6 +218,7 @@ make_auto_flush_static_metric! {
 make_static_metric! {
     pub label_enum RaftEventDurationType {
         compact_check,
+        periodic_full_compact,
         pd_store_heartbeat,
         snap_gc,
         compact_lock_cf,
