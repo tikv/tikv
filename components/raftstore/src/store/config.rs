@@ -129,6 +129,8 @@ pub struct Config {
     /// offset. If no timezone is specified, local timezone is used. E.g.,
     /// `["23:00 +0000", "03:00 +0700"]` or `["23:00", "03:00"]`.
     pub periodic_full_compact_start_times: ReadableSchedule,
+    /// Do not start a full compaction if cpu utilization exceeds this number.
+    pub periodic_full_compact_start_max_cpu: f64,
 
     #[online_config(skip)]
     pub notify_capacity: usize,
@@ -390,6 +392,9 @@ impl Default for Config {
             pd_store_heartbeat_tick_interval: ReadableDuration::secs(10),
             // Disable periodic full compaction by default.
             periodic_full_compact_start_times: ReadableSchedule::default(),
+            // If periodic full compaction is enabled, do not start a full compaction
+            // if the CPU utilization is over 10%.
+            periodic_full_compact_start_max_cpu: 0.1,
             notify_capacity: 40960,
             snap_mgr_gc_tick_interval: ReadableDuration::minutes(1),
             snap_gc_timeout: ReadableDuration::hours(4),

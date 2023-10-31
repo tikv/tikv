@@ -258,6 +258,7 @@ fn test_serde_custom_tikv_config() {
         check_peers_availability_interval: ReadableDuration::secs(30),
         unsafe_disable_check_quorum: false,
         periodic_full_compact_start_times: ReadableSchedule::default(),
+        periodic_full_compact_start_max_cpu: 0.1,
     };
     value.pd = PdConfig::new(vec!["example.com:443".to_owned()]);
     let titan_cf_config = TitanCfConfig {
