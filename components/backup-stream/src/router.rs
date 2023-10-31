@@ -540,6 +540,15 @@ impl RouterInner {
         let task_info = self.get_task_info(&task).await?;
         task_info.on_events(events).await?;
         let file_size_limit = self.temp_file_size_limit.load(Ordering::SeqCst);
+        #[cfg(features = "failpoints")]
+        {
+            let delayed = (|| {
+                fail::fail_point!("router_on_event_delay_ms", |v| {
+                    v.and_then(|v| v.parse::<u64>().ok()).unwrap_or(0)
+                })
+            })();
+            tokio::time::sleep(Duration::from_millis(delayed)).await;
+        }
 
         // When this event make the size of temporary files exceeds the size limit, make
         // a flush. Note that we only flush if the size is less than the limit before

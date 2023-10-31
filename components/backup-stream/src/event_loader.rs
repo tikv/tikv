@@ -406,6 +406,7 @@ where
             metrics::INCREMENTAL_SCAN_SIZE.observe(event_size as f64);
             metrics::INCREMENTAL_SCAN_DISK_READ.inc_by(disk_read as f64);
             metrics::HEAP_MEMORY.add(event_size as _);
+            fail::fail_point!("scan_and_async_send::about_to_consume");
             join_handles.push(tokio::spawn(async move {
                 utils::handle_on_event_result(&sched, sink.on_events(events).await);
                 metrics::HEAP_MEMORY.sub(event_size as _);
