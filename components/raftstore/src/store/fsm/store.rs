@@ -118,8 +118,9 @@ pub const PENDING_MSG_CAP: usize = 100;
 pub const ENTRY_CACHE_EVICT_TICK_DURATION: Duration = Duration::from_secs(1);
 pub const MULTI_FILES_SNAPSHOT_FEATURE: Feature = Feature::require(6, 1, 0); // it only makes sense for large region
 
-const PERIODIC_FULL_COMPACT_TICK_INTERVAL_DURATION: Duration = Duration::from_secs(30 * 60); // Check every half hour.
-const PERIODIC_FULL_COMPACT_CPU_MAX_USAGE_PCT: f64 = 0.10;
+// Every 30 minutes, check if we can run full compaction. This allows the config
+// setting `periodic_full_compact_start_max_cpu` to be changed dynamically.
+const PERIODIC_FULL_COMPACT_TICK_INTERVAL_DURATION: Duration = Duration::from_secs(30 * 60);
 
 pub struct StoreInfo<EK, ER> {
     pub kv_engine: EK,
@@ -2466,16 +2467,18 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
 
         let mut proc_stats = ProcessStat::cur_proc_stat().unwrap();
         let cpu_usage = proc_stats.cpu_usage().unwrap();
-        if cpu_usage > PERIODIC_FULL_COMPACT_CPU_MAX_USAGE_PCT {
+        let max_start_cpu_usage = self.ctx.cfg.periodic_full_compact_start_max_cpu;
+        if cpu_usage > max_start_cpu_usage {
             warn!(
-                "full compaction may not run at this time, cpu usage is above threshold";
+                "full compaction may not run at this time, cpu usage is above max";
                 "cpu_usage" => cpu_usage,
-                "threshold" => PERIODIC_FULL_COMPACT_CPU_MAX_USAGE_PCT,
+                "threshold" => max_start_cpu_usage,
             );
             return;
         }
 
-        // full compact
+        // Attempt executing a periodic full compaction.
+        // Note that full compaction will not run if other compaction tasks are running.
         if let Err(e) = self
             .ctx
             .cleanup_scheduler
