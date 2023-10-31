@@ -311,6 +311,7 @@ mod profiling {
     // C string should end with a '\0'.
     const PROF_ACTIVE: &[u8] = b"prof.active\0";
     const PROF_DUMP: &[u8] = b"prof.dump\0";
+    // const BACKGROUND_THREAD: &[u8] = b"background_thread\0";
 
     pub fn activate_prof() -> ProfResult<()> {
         unsafe {

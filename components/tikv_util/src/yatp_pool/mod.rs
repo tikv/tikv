@@ -184,6 +184,7 @@ impl<T: PoolTicker> Runner for YatpPoolRunner<T> {
         // SAFETY: we will call `remove_thread_memory_accessor` at `end`.
         unsafe {
             tikv_alloc::add_thread_memory_accessor();
+            // 
         }
     }
 

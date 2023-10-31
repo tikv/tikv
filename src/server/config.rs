@@ -83,6 +83,7 @@ pub struct Config {
 
     #[online_config(skip)]
     pub status_thread_pool_size: usize,
+    pub enable_heap_profile: bool,
 
     pub max_grpc_send_msg_len: i32,
 
@@ -218,6 +219,7 @@ impl Default for Config {
             status_addr: DEFAULT_STATUS_ADDR.to_owned(),
             advertise_status_addr: DEFAULT_ADVERTISE_LISTENING_ADDR.to_owned(),
             status_thread_pool_size: 1,
+            enable_heap_profile: true,
             max_grpc_send_msg_len: DEFAULT_MAX_GRPC_SEND_MSG_LEN,
             raft_client_grpc_send_msg_buffer: 512 * 1024,
             raft_client_queue_size: 8192,
