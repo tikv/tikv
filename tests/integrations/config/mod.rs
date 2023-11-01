@@ -37,7 +37,7 @@ use tikv::{
         BlockCacheConfig, Config as StorageConfig, EngineType, FlowControlConfig, IoRateLimitConfig,
     },
 };
-use tikv_util::config::{LogFormat, ReadableDuration, ReadableSize};
+use tikv_util::config::{LogFormat, ReadableDuration, ReadableSchedule, ReadableSize};
 
 mod dynamic;
 mod test_config_client;
@@ -270,6 +270,8 @@ fn test_serde_custom_tikv_config() {
         slow_trend_unsensitive_result: 0.5,
         enable_v2_compatible_learner: false,
         unsafe_disable_check_quorum: false,
+        periodic_full_compact_start_times: ReadableSchedule::default(),
+        periodic_full_compact_start_max_cpu: 0.1,
     };
     value.pd = PdConfig::new(vec!["example.com:443".to_owned()]);
     let titan_cf_config = TitanCfConfig {
@@ -761,6 +763,7 @@ fn test_serde_custom_tikv_config() {
             other_priority: IoPriority::Low,
         },
         background_error_recovery_window: ReadableDuration::hours(1),
+        txn_status_cache_capacity: 1000,
     };
     value.coprocessor = CopConfig {
         split_region_on_table: false,
@@ -848,6 +851,7 @@ fn test_serde_custom_tikv_config() {
         incremental_scan_threads: 3,
         incremental_scan_concurrency: 4,
         incremental_scan_speed_limit: ReadableSize(7),
+        incremental_fetch_speed_limit: ReadableSize(8),
         incremental_scan_ts_filter_ratio: 0.7,
         tso_worker_threads: 2,
         old_value_cache_memory_quota: ReadableSize::mb(14),
