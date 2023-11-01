@@ -1734,12 +1734,19 @@ pub struct RaftstoreDuration {
 
 impl RaftstoreDuration {
     pub fn sum(&self) -> std::time::Duration {
+        self.delays_on_disk_io() + self.delays_on_net_io()
+    }
+
+    pub fn delays_on_disk_io(&self) -> std::time::Duration {
         self.store_wait_duration.unwrap_or_default()
             + self.store_process_duration.unwrap_or_default()
             + self.store_write_duration.unwrap_or_default()
-            + self.store_commit_duration.unwrap_or_default()
             + self.apply_wait_duration.unwrap_or_default()
             + self.apply_process_duration.unwrap_or_default()
+    }
+
+    pub fn delays_on_net_io(&self) -> std::time::Duration {
+        self.store_commit_duration.unwrap_or_default()
     }
 }
 

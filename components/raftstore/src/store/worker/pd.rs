@@ -982,9 +982,9 @@ impl SlowTrendStatistics {
                 return tikv_util::time::duration_to_us(duration.sum());
             }
             let disk_io_latency =
-                tikv_util::time::duration_to_us(duration.store_wait_duration.unwrap()) as f64;
+                tikv_util::time::duration_to_us(duration.delays_on_disk_io()) as f64;
             let network_io_latency =
-                tikv_util::time::duration_to_us(duration.store_commit_duration.unwrap()) as f64;
+                tikv_util::time::duration_to_us(duration.delays_on_net_io()) as f64;
             (disk_io_latency + network_io_latency * self.net_io_factor) as u64
         }();
         self.slow_cause.record(latency, Instant::now());
@@ -1368,7 +1368,8 @@ where
             .engine_total_query_num
             .sub_query_stats(&self.store_stat.engine_last_query_num);
         let total_query_num = self
-            .slow_trend.slow_result_recorder
+            .slow_trend
+            .slow_result_recorder
             .record_and_get_current_rps(res.get_all_query_num(), Instant::now());
         stats.set_query_stats(res.0);
 
@@ -1501,7 +1502,8 @@ where
         slow_trend.set_cause_rate(slow_trend_cause_rate);
         slow_trend.set_cause_value(self.slow_trend.slow_cause.l0_avg());
         if let Some(total_query_num) = total_query_num {
-            self.slow_trend.slow_result
+            self.slow_trend
+                .slow_result
                 .record(total_query_num as u64, Instant::now());
             slow_trend.set_result_value(self.slow_trend.slow_result.l0_avg());
             let slow_trend_result_rate = self.slow_trend.slow_result.increasing_rate();
@@ -2295,7 +2297,7 @@ where
             } => self.handle_update_max_timestamp(region_id, initial_status, txn_ext),
             Task::QueryRegionLeader { region_id } => self.handle_query_region_leader(region_id),
             Task::UpdateSlowScore { id, duration } => {
-                self.slow_score.record(id, duration.sum());
+                self.slow_score.record(id, duration.delays_on_disk_io());
                 self.slow_trend.record(duration);
             }
             Task::RegionCpuRecords(records) => self.handle_region_cpu_records(records),
@@ -2364,8 +2366,6 @@ where
         let inspector = LatencyInspector::new(
             id,
             Box::new(move |id, duration| {
-                let dur = duration.sum();
-
                 STORE_INSPECT_DURATION_HISTOGRAM
                     .with_label_values(&["store_process"])
                     .observe(tikv_util::time::duration_to_sec(
@@ -2384,7 +2384,7 @@ where
 
                 STORE_INSPECT_DURATION_HISTOGRAM
                     .with_label_values(&["all"])
-                    .observe(tikv_util::time::duration_to_sec(dur));
+                    .observe(tikv_util::time::duration_to_sec(duration.sum()));
                 if let Err(e) = scheduler.schedule(Task::UpdateSlowScore { id, duration }) {
                     warn!("schedule pd task failed"; "err" => ?e);
                 }
