@@ -89,10 +89,10 @@ use crate::{
             TRANSFER_LEADER_COMMAND_REPLY_CTX,
         },
         region_meta::RegionMeta,
+        snapshot_backup::{SnapshotBrState, SnapshotBrWaitApplySyncer},
         transport::Transport,
         unsafe_recovery::{
-            exit_joint_request, ForceLeaderState, SnapshotRecoveryState,
-            SnapshotRecoveryWaitApplySyncer, UnsafeRecoveryExecutePlanSyncer,
+            exit_joint_request, ForceLeaderState, UnsafeRecoveryExecutePlanSyncer,
             UnsafeRecoveryFillOutReportSyncer, UnsafeRecoveryForceLeaderSyncer,
             UnsafeRecoveryState, UnsafeRecoveryWaitApplySyncer,
         },
@@ -925,7 +925,7 @@ where
     // func be invoked firstly after assigned leader by BR, wait all leader apply to
     // last log index func be invoked secondly wait follower apply to last
     // index, however the second call is broadcast, it may improve in future
-    fn on_snapshot_recovery_wait_apply(&mut self, syncer: SnapshotRecoveryWaitApplySyncer) {
+    fn on_snapshot_recovery_wait_apply(&mut self, syncer: SnapshotBrWaitApplySyncer) {
         if let Some(state) = &self.fsm.peer.snapshot_recovery_state {
             warn!(
                 "can't wait apply, another recovery in progress";
@@ -970,7 +970,7 @@ where
             );
         }
 
-        self.fsm.peer.snapshot_recovery_state = Some(SnapshotRecoveryState::WaitLogApplyToLast {
+        self.fsm.peer.snapshot_recovery_state = Some(SnapshotBrState::WaitLogApplyToLast {
             target_index,
             syncer,
         });
@@ -1481,7 +1481,7 @@ where
                 self.on_unsafe_recovery_fill_out_report(syncer)
             }
             // for snapshot recovery (safe recovery)
-            SignificantMsg::SnapshotRecoveryWaitApply(syncer) => {
+            SignificantMsg::SnapshotBrWaitApply(syncer) => {
                 self.on_snapshot_recovery_wait_apply(syncer)
             }
             SignificantMsg::CheckPendingAdmin(ch) => self.on_check_pending_admin(ch),

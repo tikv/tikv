@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use futures::StreamExt;
 use raft::eraftpb::MessageType;
-use raftstore::store::{PeerMsg, SignificantMsg, SnapshotRecoveryWaitApplySyncer};
+use raftstore::store::{PeerMsg, SignificantMsg, SnapshotBrWaitApplySyncer};
 use test_raftstore::*;
 use tikv_util::HandyRwLock;
 
@@ -97,8 +97,8 @@ fn test_snap_wait_apply() {
     let (tx, rx) = std::sync::mpsc::sync_channel(1);
 
     router.broadcast_normal(|| {
-        PeerMsg::SignificantMsg(SignificantMsg::SnapshotRecoveryWaitApply(
-            SnapshotRecoveryWaitApplySyncer::new(1, tx.clone()),
+        PeerMsg::SignificantMsg(SignificantMsg::SnapshotBrWaitApply(
+            SnapshotBrWaitApplySyncer::new(1, tx.clone()),
         ))
     });
 
@@ -114,8 +114,8 @@ fn test_snap_wait_apply() {
     // apply.
     let (tx, rx) = std::sync::mpsc::sync_channel(1);
     router.broadcast_normal(|| {
-        PeerMsg::SignificantMsg(SignificantMsg::SnapshotRecoveryWaitApply(
-            SnapshotRecoveryWaitApplySyncer::new(1, tx.clone()),
+        PeerMsg::SignificantMsg(SignificantMsg::SnapshotBrWaitApply(
+            SnapshotBrWaitApplySyncer::new(1, tx.clone()),
         ))
     });
 

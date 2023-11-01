@@ -100,8 +100,9 @@ use crate::{
         memory::{needs_evict_entry_cache, MEMTRACE_RAFT_ENTRIES},
         msg::{CasualMessage, ErrorCallback, RaftCommand},
         peer_storage::HandleSnapshotResult,
+        snapshot_backup::SnapshotBrState,
         txn_ext::LocksStatus,
-        unsafe_recovery::{ForceLeaderState, SnapshotRecoveryState, UnsafeRecoveryState},
+        unsafe_recovery::{ForceLeaderState, UnsafeRecoveryState},
         util::{admin_cmd_epoch_lookup, RegionReadProgress},
         worker::{
             CleanupTask, CompactTask, HeartbeatTask, RaftlogGcTask, ReadDelegate, ReadExecutor,
@@ -786,7 +787,7 @@ where
     /// lead_transferee if this peer(leader) is in a leadership transferring.
     pub lead_transferee: u64,
     pub unsafe_recovery_state: Option<UnsafeRecoveryState>,
-    pub snapshot_recovery_state: Option<SnapshotRecoveryState>,
+    pub snapshot_recovery_state: Option<SnapshotBrState>,
 
     last_record_safe_point: u64,
 }
@@ -5011,7 +5012,7 @@ where
     }
 
     pub fn snapshot_recovery_maybe_finish_wait_apply(&mut self, force: bool) {
-        if let Some(SnapshotRecoveryState::WaitLogApplyToLast { target_index, .. }) =
+        if let Some(SnapshotBrState::WaitLogApplyToLast { target_index, .. }) =
             &self.snapshot_recovery_state
         {
             if self.raft_group.raft.term != self.raft_group.raft.raft_log.last_term() {

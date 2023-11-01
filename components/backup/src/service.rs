@@ -144,7 +144,13 @@ where
         _stream: grpcio::RequestStream<PrepareSnapshotBackupRequest>,
         sink: grpcio::DuplexSink<PrepareSnapshotBackupResponse>,
     ) {
-        grpcio::unimplemented_call!(ctx, sink)
+        let router = match self.router {
+            Some(r) => r,
+            None => {
+                unimplemented_call!(ctx, sink);
+                return;
+            }
+        };
     }
 }
 

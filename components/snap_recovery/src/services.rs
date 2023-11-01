@@ -29,7 +29,7 @@ use raftstore::{
         fsm::RaftRouter,
         msg::{PeerMsg, SignificantMsg},
         transport::SignificantRouter,
-        SnapshotRecoveryWaitApplySyncer,
+        SnapshotBrWaitApplySyncer,
     },
 };
 use thiserror::Error;
@@ -144,11 +144,9 @@ impl<ER: RaftEngine> RecoveryService<ER> {
     // when all region reached the target index, share reference decreased to 0,
     // trigger closure to send finish info back.
     pub fn wait_apply_last(router: RaftRouter<RocksEngine, ER>, sender: SyncSender<u64>) {
-        let wait_apply = SnapshotRecoveryWaitApplySyncer::new(0, sender);
+        let wait_apply = SnapshotBrWaitApplySyncer::new(0, sender);
         router.broadcast_normal(|| {
-            PeerMsg::SignificantMsg(SignificantMsg::SnapshotRecoveryWaitApply(
-                wait_apply.clone(),
-            ))
+            PeerMsg::SignificantMsg(SignificantMsg::SnapshotBrWaitApply(wait_apply.clone()))
         });
     }
 }
@@ -259,10 +257,10 @@ impl<ER: RaftEngine> RecoverData for RecoveryService<ER> {
             for &region_id in &leaders {
                 let (tx, rx) = sync_channel(1);
                 REGION_EVENT_COUNTER.start_wait_leader_apply.inc();
-                let wait_apply = SnapshotRecoveryWaitApplySyncer::new(region_id, tx.clone());
+                let wait_apply = SnapshotBrWaitApplySyncer::new(region_id, tx.clone());
                 if let Err(e) = raft_router.significant_send(
                     region_id,
-                    SignificantMsg::SnapshotRecoveryWaitApply(wait_apply.clone()),
+                    SignificantMsg::SnapshotBrWaitApply(wait_apply.clone()),
                 ) {
                     error!(
                         "failed to send wait apply";

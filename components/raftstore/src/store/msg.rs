@@ -28,16 +28,15 @@ use tikv_util::{deadline::Deadline, escape, memory::HeapSize, time::Instant};
 use tracker::{get_tls_tracker_token, TrackerToken};
 
 use super::{
-    local_metrics::TimeTracker, region_meta::RegionMeta, snapshot_backup::PrepareSyncer,
-    FetchedLogs, RegionSnapshot,
+    local_metrics::TimeTracker, region_meta::RegionMeta,
+    snapshot_backup::SnapshotBrWaitApplySyncer, FetchedLogs, RegionSnapshot,
 };
 use crate::store::{
     fsm::apply::{CatchUpLogs, ChangeObserver, TaskRes as ApplyTaskRes},
     metrics::RaftEventDurationType,
     unsafe_recovery::{
-        SnapshotRecoveryWaitApplySyncer, UnsafeRecoveryExecutePlanSyncer,
-        UnsafeRecoveryFillOutReportSyncer, UnsafeRecoveryForceLeaderSyncer,
-        UnsafeRecoveryWaitApplySyncer,
+        UnsafeRecoveryExecutePlanSyncer, UnsafeRecoveryFillOutReportSyncer,
+        UnsafeRecoveryForceLeaderSyncer, UnsafeRecoveryWaitApplySyncer,
     },
     util::{KeysInfoFormatter, LatencyInspector},
     worker::{Bucket, BucketRange},
@@ -532,24 +531,8 @@ where
     UnsafeRecoveryDestroy(UnsafeRecoveryExecutePlanSyncer),
     UnsafeRecoveryWaitApply(UnsafeRecoveryWaitApplySyncer),
     UnsafeRecoveryFillOutReport(UnsafeRecoveryFillOutReportSyncer),
-    SnapshotRecoveryWaitApply(SnapshotRecoveryWaitApplySyncer),
+    SnapshotBrWaitApply(SnapshotBrWaitApplySyncer),
     CheckPendingAdmin(UnboundedSender<CheckAdminResponse>),
-    SnapshotBackupPrepare(),
-}
-
-enum SnapshotBackupPrepareRequest {
-    HeartBeat {
-        lease_duration: Duration,
-        on_result: PrepareSyncer<()>,
-    },
-    DoPrepare {
-        lease_duration: Duration,
-        on_prepare_done: PrepareSyncer<()>,
-        on_apply_done: PrepareSyncer<()>,
-    },
-    Reset {
-        on_result: PrepareSyncer<()>,
-    },
 }
 
 /// Message that will be sent to a peer.
