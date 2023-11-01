@@ -366,9 +366,9 @@ macro_rules! cf_config {
             #[online_config(skip)]
             pub bottommost_level_compression: DBCompressionType,
             #[online_config(skip)]
-            pub bottommost_zstd_compression_dict_size: i32,
+            pub bottommost_zstd_compression_dict_size: ReadableSize,
             #[online_config(skip)]
-            pub bottommost_zstd_compression_sample_size: i32,
+            pub bottommost_zstd_compression_sample_size: ReadableSize,
             #[serde(with = "rocks_config::prepopulate_block_cache_serde")]
             #[online_config(skip)]
             pub prepopulate_block_cache: PrepopulateBlockCache,
@@ -604,6 +604,14 @@ macro_rules! build_cf_opt {
         assert!($opt.compression_per_level.len() >= $opt.num_levels as usize);
         let compression_per_level = $opt.compression_per_level[..$opt.num_levels as usize].to_vec();
         cf_opts.compression_per_level(compression_per_level.as_slice());
+        cf_opts.set_compression_options(
+            -14,   // window_bits
+            32767, // level
+            0,     // strategy
+            $opt.bottommost_zstd_compression_dict_size.0 as i32,
+            $opt.bottommost_zstd_compression_sample_size.0 as i32,
+            1, // parallel_threads
+        );
         cf_opts.bottommost_compression($opt.bottommost_level_compression);
         // To set for bottommost level sst compression. The first 3 parameters refer to
         // the default value in `CompressionOptions` in
@@ -612,8 +620,8 @@ macro_rules! build_cf_opt {
             -14,   // window_bits
             32767, // level
             0,     // strategy
-            $opt.bottommost_zstd_compression_dict_size,
-            $opt.bottommost_zstd_compression_sample_size,
+            $opt.bottommost_zstd_compression_dict_size.0 as i32,
+            $opt.bottommost_zstd_compression_sample_size.0 as i32,
             1, // parallel_threads
         );
         cf_opts.set_write_buffer_size($opt.write_buffer_size.unwrap_or(ReadableSize::mb(32)).0);
@@ -740,8 +748,8 @@ impl Default for DefaultCfConfig {
             compaction_guard_min_output_file_size: ReadableSize::mb(8),
             compaction_guard_max_output_file_size: ReadableSize::mb(128),
             bottommost_level_compression: DBCompressionType::Zstd,
-            bottommost_zstd_compression_dict_size: 0,
-            bottommost_zstd_compression_sample_size: 0,
+            bottommost_zstd_compression_dict_size:  ReadableSize::kb(16),
+            bottommost_zstd_compression_sample_size: ReadableSize::kb(1600),
             prepopulate_block_cache: PrepopulateBlockCache::Disabled,
             format_version: None,
             checksum: ChecksumType::CRC32c,
@@ -916,8 +924,8 @@ impl Default for WriteCfConfig {
             compaction_guard_min_output_file_size: ReadableSize::mb(8),
             compaction_guard_max_output_file_size: ReadableSize::mb(128),
             bottommost_level_compression: DBCompressionType::Zstd,
-            bottommost_zstd_compression_dict_size: 0,
-            bottommost_zstd_compression_sample_size: 0,
+            bottommost_zstd_compression_dict_size:  ReadableSize::kb(16),
+            bottommost_zstd_compression_sample_size: ReadableSize::kb(1600),
             prepopulate_block_cache: PrepopulateBlockCache::Disabled,
             format_version: None,
             checksum: ChecksumType::CRC32c,
@@ -1042,8 +1050,8 @@ impl Default for LockCfConfig {
             compaction_guard_min_output_file_size: ReadableSize::mb(8),
             compaction_guard_max_output_file_size: ReadableSize::mb(128),
             bottommost_level_compression: DBCompressionType::Disable,
-            bottommost_zstd_compression_dict_size: 0,
-            bottommost_zstd_compression_sample_size: 0,
+            bottommost_zstd_compression_dict_size:  ReadableSize::kb(16),
+            bottommost_zstd_compression_sample_size: ReadableSize::kb(1600),
             prepopulate_block_cache: PrepopulateBlockCache::Disabled,
             format_version: None,
             checksum: ChecksumType::CRC32c,
@@ -1145,8 +1153,8 @@ impl Default for RaftCfConfig {
             compaction_guard_min_output_file_size: ReadableSize::mb(8),
             compaction_guard_max_output_file_size: ReadableSize::mb(128),
             bottommost_level_compression: DBCompressionType::Disable,
-            bottommost_zstd_compression_dict_size: 0,
-            bottommost_zstd_compression_sample_size: 0,
+            bottommost_zstd_compression_dict_size:  ReadableSize::kb(16),
+            bottommost_zstd_compression_sample_size: ReadableSize::kb(1600),
             prepopulate_block_cache: PrepopulateBlockCache::Disabled,
             format_version: None,
             checksum: ChecksumType::CRC32c,
@@ -1724,8 +1732,8 @@ impl Default for RaftDefaultCfConfig {
             compaction_guard_min_output_file_size: ReadableSize::mb(8),
             compaction_guard_max_output_file_size: ReadableSize::mb(128),
             bottommost_level_compression: DBCompressionType::Disable,
-            bottommost_zstd_compression_dict_size: 0,
-            bottommost_zstd_compression_sample_size: 0,
+            bottommost_zstd_compression_dict_size:  ReadableSize::kb(16),
+            bottommost_zstd_compression_sample_size: ReadableSize::kb(1600),
             prepopulate_block_cache: PrepopulateBlockCache::Disabled,
             format_version: Some(2),
             checksum: ChecksumType::CRC32c,
