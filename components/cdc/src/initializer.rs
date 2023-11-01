@@ -88,6 +88,7 @@ pub(crate) struct Initializer<E> {
     pub(crate) request_id: u64,
     pub(crate) checkpoint_ts: TimeStamp,
 
+    pub(crate) scan_concurrency_semaphore: Arc<Semaphore>,
     pub(crate) scan_speed_limiter: Limiter,
     pub(crate) fetch_speed_limiter: Limiter,
 
@@ -107,29 +108,8 @@ impl<E: KvEngine> Initializer<E> {
         &mut self,
         change_cmd: ChangeObserver,
         raft_router: T,
-        concurrency_semaphore: Arc<Semaphore>,
     ) -> Result<()> {
         fail_point!("cdc_before_initialize");
-        let _permit = concurrency_semaphore.acquire().await;
-
-        // When downstream_state is Stopped, it means the corresponding delegate
-        // is stopped. The initialization can be safely canceled.
-        //
-        // Acquiring a permit may take some time, it is possible that
-        // initialization can be canceled.
-        if self.downstream_state.load() == DownstreamState::Stopped {
-            info!("cdc async incremental scan canceled";
-                "region_id" => self.region_id,
-                "downstream_id" => ?self.downstream_id,
-                "observe_id" => ?self.observe_id,
-                "conn_id" => ?self.conn_id);
-            return Err(box_err!("scan canceled"));
-        }
-
-        CDC_SCAN_TASKS.with_label_values(&["ongoing"]).inc();
-        tikv_util::defer!({
-            CDC_SCAN_TASKS.with_label_values(&["ongoing"]).dec();
-        });
 
         // To avoid holding too many snapshots and holding them too long,
         // we need to acquire scan concurrency permit before taking snapshot.
@@ -186,6 +166,11 @@ impl<E: KvEngine> Initializer<E> {
     ) -> Result<()> {
         if let Some(region_snapshot) = resp.snapshot {
             assert_eq!(self.region_id, region_snapshot.get_region().get_id());
+            CDC_SCAN_TASKS.with_label_values(&["ongoing"]).inc();
+            tikv_util::defer!(CDC_SCAN_TASKS.with_label_values(&["ongoing"]).dec());
+
+            let scan_concurrency_semaphore = self.scan_concurrency_semaphore.clone();
+            let _permit = scan_concurrency_semaphore.acquire().await;
             let region = region_snapshot.get_region().clone();
             self.async_incremental_scan(region_snapshot, region).await
         } else {
@@ -204,10 +189,24 @@ impl<E: KvEngine> Initializer<E> {
         snap: S,
         region: Region,
     ) -> Result<()> {
-        let downstream_id = self.downstream_id;
         let region_id = region.get_id();
+        let downstream_id = self.downstream_id;
         let observe_id = self.observe_id;
+        let conn_id = self.conn_id;
         let kv_api = self.kv_api;
+        let on_cancel = || -> Result<()> {
+            info!("cdc async incremental scan canceled";
+                "region_id" => region_id,
+                "downstream_id" => ?downstream_id,
+                "observe_id" => ?observe_id,
+                "conn_id" => ?conn_id);
+            Err(box_err!("scan canceled"))
+        };
+
+        if self.downstream_state.load() == DownstreamState::Stopped {
+            return on_cancel();
+        }
+
         debug!("cdc async incremental scan";
             "region_id" => region_id,
             "downstream_id" => ?downstream_id,
@@ -254,7 +253,6 @@ impl<E: KvEngine> Initializer<E> {
         };
 
         fail_point!("cdc_incremental_scan_start");
-        let conn_id = self.conn_id;
         let mut done = false;
         let start = Instant::now_coarse();
 
@@ -263,15 +261,6 @@ impl<E: KvEngine> Initializer<E> {
             curr_state,
             DownstreamState::Initializing | DownstreamState::Stopped
         ));
-
-        let on_cancel = || -> Result<()> {
-            info!("cdc async incremental scan canceled";
-                "region_id" => region_id,
-                "downstream_id" => ?downstream_id,
-                "observe_id" => ?observe_id,
-                "conn_id" => ?conn_id);
-            Err(box_err!("scan canceled"))
-        };
 
         while !done {
             // When downstream_state is Stopped, it means the corresponding
@@ -653,6 +642,7 @@ mod tests {
             conn_id: ConnId::new(),
             request_id: 0,
             checkpoint_ts: 1.into(),
+            scan_concurrency_semaphore: Arc::new(Semaphore::new(1)),
             scan_speed_limiter: Limiter::new(scan_limit as _),
             fetch_speed_limiter: Limiter::new(fetch_limit as _),
             max_scan_batch_bytes: 1024 * 1024,
@@ -999,17 +989,10 @@ mod tests {
         let concurrency_semaphore = Arc::new(Semaphore::new(1));
 
         initializer.downstream_state.store(DownstreamState::Stopped);
-        block_on(initializer.initialize(
-            change_cmd,
-            raft_router.clone(),
-            concurrency_semaphore.clone(),
-        ))
-        .unwrap_err();
+        block_on(initializer.initialize(change_cmd, raft_router.clone())).unwrap_err();
 
         let (tx, rx) = sync_channel(1);
-        let concurrency_semaphore_ = concurrency_semaphore.clone();
         pool.spawn(async move {
-            let _permit = concurrency_semaphore_.acquire().await;
             tx.send(()).unwrap();
             tx.send(()).unwrap();
             tx.send(()).unwrap();
@@ -1019,18 +1002,13 @@ mod tests {
         let (tx1, rx1) = sync_channel(1);
         let change_cmd = ChangeObserver::from_cdc(1, ObserveHandle::new());
         pool.spawn(async move {
-            let res = initializer
-                .initialize(change_cmd, raft_router, concurrency_semaphore)
-                .await;
+            let res = initializer.initialize(change_cmd, raft_router).await;
             tx1.send(res).unwrap();
         });
-        // Must timeout because there is no enough permit.
-        rx1.recv_timeout(Duration::from_millis(200)).unwrap_err();
 
-        // Release the permit
-        rx.recv_timeout(Duration::from_millis(200)).unwrap();
+        // Shouldn't timeout, gets an error instead.
         let res = rx1.recv_timeout(Duration::from_millis(200)).unwrap();
-        res.unwrap_err();
+        assert!(res.is_err());
 
         worker.stop();
     }
