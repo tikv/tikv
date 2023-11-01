@@ -629,93 +629,13 @@ impl Delegate {
     fn sink_downstream(
         &mut self,
         entries: Vec<EventRow>,
-        index: u64,
-        kv_api: ChangeDataRequestKvApi,
+        _index: u64,
+        _kv_api: ChangeDataRequestKvApi,
     ) -> Result<()> {
         if entries.is_empty() {
             return Ok(());
         }
-
-        // Filter the entries which are lossy DDL events.
-        // We don't need to send them to downstream.
-        let entries = entries
-            .iter()
-            .filter(|x| !TxnSource::is_lossy_ddl_reorg_source_set(x.txn_source))
-            .cloned()
-            .collect::<Vec<EventRow>>();
-
-        let downstreams = self.downstreams();
-        assert!(
-            !downstreams.is_empty(),
-            "region {} miss downstream",
-            self.region_id
-        );
-
-        let mut need_filter = false;
-        for ds in downstreams {
-            if ds.filter_loop {
-                need_filter = true;
-                break;
-            }
-        }
-
-        // Collect the change event cause by user write, which cdc write source is not
-        // set. For changefeed which only need the user write,
-        // send the `filtered_entries`, or else, send them all.
-        let filtered = if need_filter {
-            let filtered = entries
-                .iter()
-                .filter(|x| !TxnSource::is_cdc_write_source_set(x.txn_source))
-                .cloned()
-                .collect::<Vec<EventRow>>();
-            if filtered.is_empty() {
-                None
-            } else {
-                Some(Event {
-                    region_id: self.region_id,
-                    index,
-                    event: Some(Event_oneof_event::Entries(EventEntries {
-                        entries: filtered.into(),
-                        ..Default::default()
-                    })),
-                    ..Default::default()
-                })
-            }
-        } else {
-            None
-        };
-
-        let event_entries = EventEntries {
-            entries: entries.into(),
-            ..Default::default()
-        };
-        let change_data_event = Event {
-            region_id: self.region_id,
-            index,
-            event: Some(Event_oneof_event::Entries(event_entries)),
-            ..Default::default()
-        };
-
-        let send = move |downstream: &Downstream| {
-            // No ready downstream or a downstream that does not match the kv_api type, will
-            // be ignored. There will be one region that contains both Txn & Raw entries.
-            // The judgement here is for sending entries to downstreams with correct kv_api.
-            if !downstream.state.load().ready_for_change_events() || downstream.kv_api != kv_api {
-                return Ok(());
-            }
-            if downstream.filter_loop && filtered.is_none() {
-                return Ok(());
-            }
-
-            let event = if downstream.filter_loop {
-                filtered.clone().unwrap()
-            } else {
-                change_data_event.clone()
-            };
-            // Do not force send for real time change data events.
-            let force_send = false;
-            downstream.sink_event(event, force_send)
-        };
+        let send = move |_downstream: &Downstream| { return Ok(()) };
         match self.broadcast(send) {
             Ok(()) => Ok(()),
             Err(e) => {
