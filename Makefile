@@ -331,7 +331,7 @@ unset-override:
 
 pre-format: unset-override
 	@rustup component add rustfmt
-	@which cargo-sort &> /dev/null || cargo install -q cargo-sort
+	@which cargo-sort &> /dev/null || cargo +nightly install -q cargo-sort
 
 format: pre-format
 	@cargo fmt
