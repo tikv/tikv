@@ -7,9 +7,7 @@
 mod suite;
 
 mod all {
-    use std::{
-        time::{Duration, Instant},
-    };
+    use std::time::{Duration, Instant};
 
     use backup_stream::{
         errors::Error, router::TaskSelector, GetCheckpointResult, RegionCheckpointOperation,
