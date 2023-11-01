@@ -653,7 +653,7 @@ mod tests {
             request_id: 0,
             checkpoint_ts: 1.into(),
             scan_speed_limiter: Limiter::new(scan_limit as _),
-            fetch_limiter: Limiter::new(fetch_limit as _),
+            fetch_speed_limiter: Limiter::new(fetch_limit as _),
             max_scan_batch_bytes: 1024 * 1024,
             max_scan_batch_size: 1024,
             build_resolver: true,
