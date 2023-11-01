@@ -371,6 +371,23 @@ impl TxnStatusCache {
         let mut slot = self.slots[self.slot_index(start_ts)].lock();
         slot.get(&start_ts).map(|entry| entry.commit_ts)
     }
+
+    /// Remove an entry from the cache. We usually don't need to remove anything
+    /// from the `TxnStatusCache`, but it's useful in tests to construct cache-
+    /// miss cases.
+    #[cfg(test)]
+    pub fn remove(&self, start_ts: TimeStamp) -> Option<TimeStamp> {
+        if !self.is_enabled {
+            return None;
+        }
+
+        let res = {
+            let mut slot = self.slots[self.slot_index(start_ts)].lock();
+            slot.remove(&start_ts).map(|e| e.commit_ts)
+        };
+        debug_assert!(self.get_no_promote(start_ts).is_none());
+        res
+    }
 }
 
 #[cfg(test)]
