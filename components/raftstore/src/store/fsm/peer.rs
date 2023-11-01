@@ -6067,6 +6067,7 @@ where
             );
         } else {
             // it means the buckets key range not any change, so don't need to refresh.
+            #[cfg(any(test, feature = "testexport"))]
             test_only_callback(_cb, region_buckets.meta);
             return;
         }
