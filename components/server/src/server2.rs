@@ -1300,7 +1300,6 @@ where
         if status_enabled {
             let mut status_server = match StatusServer::new(
                 self.core.config.server.status_thread_pool_size,
-                self.core.config.server.enable_heap_profile,
                 self.cfg_controller.clone().unwrap(),
                 Arc::new(self.core.config.security.clone()),
                 self.engines.as_ref().unwrap().engine.raft_extension(),

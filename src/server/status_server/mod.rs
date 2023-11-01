@@ -101,7 +101,6 @@ where
 {
     pub fn new(
         status_thread_pool_size: usize,
-        enable_heap_profile: bool,
         cfg_controller: ConfigController,
         security_config: Arc<SecurityConfig>,
         router: R,
@@ -118,9 +117,6 @@ where
                 || debug!("stopping status server"),
             )
             .build()?;
-        if enable_heap_profile {
-            tikv_alloc::activate_prof().unwrap();
-        }
 
         let (tx, rx) = oneshot::channel::<()>();
         Ok(StatusServer {

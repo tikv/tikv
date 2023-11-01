@@ -298,7 +298,6 @@ where
                 .after_start(|| {
                     // SAFETY: we will call `remove_thread_memory_accessor` at before_stop.
                     unsafe { add_thread_memory_accessor() };
-                    // add 
                 })
                 .before_stop(|| {
                     remove_thread_memory_accessor();
@@ -1453,7 +1452,6 @@ where
         if status_enabled {
             let mut status_server = match StatusServer::new(
                 self.core.config.server.status_thread_pool_size,
-                self.core.config.server.enable_heap_profile,
                 self.cfg_controller.take().unwrap(),
                 Arc::new(self.core.config.security.clone()),
                 self.engines.as_ref().unwrap().engine.raft_extension(),
