@@ -43,7 +43,7 @@ use tikv_util::{
         number::NumberEncoder,
         stream_event::{EventIterator, Iterator},
     },
-    info,
+    debug, info,
     worker::LazyWorker,
     HandyRwLock,
 };
@@ -595,7 +595,7 @@ impl Suite {
             decoder.into_inner()
         };
         for entry in files.write_cf {
-            println!("checking write: {:?}", entry);
+            debug!("checking write: {:?}", entry);
 
             let buf = std::fs::read(&entry.path).unwrap();
             for &file_info in entry.segments.iter() {
@@ -626,7 +626,7 @@ impl Suite {
         }
 
         for entry in files.default_cf {
-            println!("checking default: {:?}", entry);
+            debug!("checking default: {:?}", entry);
 
             let buf = std::fs::read(&entry.path).unwrap();
             for &file_info in entry.segments.iter() {
