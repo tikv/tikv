@@ -96,19 +96,17 @@ pub struct OwnedAllocated {
 }
 
 impl OwnedAllocated {
-    pub fn of(target: Arc<MemoryQuota>) -> Self {
+    pub fn new(target: Arc<MemoryQuota>) -> Self {
         Self {
             allocated: 0,
             from: target,
         }
     }
 
-    pub fn allocate_more(&mut self, bytes: usize) -> Result<(), MemoryQuotaExceeded> {
-        let res = self.from.alloc(bytes);
-        if res.is_ok() {
-            self.allocated += bytes;
-        }
-        res
+    pub fn alloc(&mut self, bytes: usize) -> Result<(), MemoryQuotaExceeded> {
+        self.from.alloc(bytes)?;
+        self.allocated += bytes;
+        Ok(())
     }
 }
 
@@ -217,15 +215,15 @@ mod tests {
     #[test]
     fn test_allocated() {
         let quota = Arc::new(MemoryQuota::new(100));
-        let mut allocated = OwnedAllocated::of(Arc::clone(&quota));
-        allocated.allocate_more(42).unwrap();
+        let mut allocated = OwnedAllocated::new(Arc::clone(&quota));
+        allocated.alloc(42).unwrap();
         assert_eq!(quota.in_use(), 42);
         quota.alloc(59).unwrap_err();
-        allocated.allocate_more(16).unwrap();
+        allocated.alloc(16).unwrap();
         assert_eq!(quota.in_use(), 58);
-        let mut allocated2 = OwnedAllocated::of(Arc::clone(&quota));
-        allocated2.allocate_more(8).unwrap();
-        allocated2.allocate_more(40).unwrap_err();
+        let mut allocated2 = OwnedAllocated::new(Arc::clone(&quota));
+        allocated2.alloc(8).unwrap();
+        allocated2.alloc(40).unwrap_err();
         assert_eq!(quota.in_use(), 66);
         quota.alloc(4).unwrap();
         assert_eq!(quota.in_use(), 70);

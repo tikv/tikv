@@ -108,7 +108,7 @@ impl<S: Snapshot> EventLoader<S> {
                 Some(entry) => {
                     let size = entry.size();
                     batch.push(entry);
-                    if memory_quota.allocate_more(size).is_err() {
+                    if memory_quota.alloc(size).is_err() {
                         return Ok(self.out_of_memory());
                     }
                 }
@@ -389,7 +389,7 @@ where
             let mut events = ApplyEvents::with_capacity(1024, region.id);
             // Note: the call of `fill_entries` is the only step which would read the disk.
             //       we only need to record the disk throughput of this.
-            let mut allocated = OwnedAllocated::of(Arc::clone(&self.quota));
+            let mut allocated = OwnedAllocated::new(Arc::clone(&self.quota));
             let (res, disk_read) =
                 utils::with_record_read_throughput(|| event_loader.fill_entries(&mut allocated));
             let res = res?;
@@ -514,8 +514,9 @@ mod tests {
         let mut loader =
             EventLoader::load_from(snap, TimeStamp::zero(), TimeStamp::max(), &r).unwrap();
 
-        let (r, data_load) =
-            with_record_read_throughput(|| loader.fill_entries(&mut OwnedAllocated::of(quota_inf)));
+        let (r, data_load) = with_record_read_throughput(|| {
+            loader.fill_entries(&mut OwnedAllocated::new(quota_inf))
+        });
         r.unwrap();
         let mut events = ApplyEvents::with_capacity(1024, 42);
         let mut res = TwoPhaseResolver::new(42, None);
