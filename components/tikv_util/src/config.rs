@@ -1605,21 +1605,18 @@ impl RaftDataStateMachine {
 fn dir_exists(path: &Path) -> bool {
     return path.exists() && path.is_dir();
 }
-    pub fn raftengine_exist(raftengine_path: &Path) -> bool {
-        if raftengine_path.is_dir() {
-            for entry in raftengine_path.read_dir().unwrap() {
-                match entry {
-                    Ok(entry) => {
-                        let path = entry.path();
-                        if path.is_file() && path.extension() == Some("raftlog".as_ref()) {
-                            return true;
-                        }
-                    }
-                    Err(e) => {
-                        warn!("Scan raft engine dir failed"; "path" => %raftengine_path.display(), "err" => ?e)
-                    }
-                };
+    pub fn raftengine_exists(path: &Path) -> bool {
+        if !dir_exists(path) {
+            return false;
+        }
+        fs::read_dir(path).unwrap().any(|entry| {
+            if let Ok(e) = entry {
+                let p = e.path();
+                p.is_file() && p.extension().map_or(false, |ext| ext == "raftlog")
+            } else {
+                false // No need to warn
             }
+        })
         }
         false
     }
