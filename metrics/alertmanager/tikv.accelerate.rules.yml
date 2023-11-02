@@ -32,7 +32,7 @@ groups:
     - record: tikv_pd_request_duration_seconds:avg:1m
       expr: sum(rate(tikv_pd_request_duration_seconds_sum{instance=~".*"}[1m])) by (type) / sum(rate(tikv_pd_request_duration_seconds_count{instance=~".*"}[1m])) by (type)
     - record: tikv_coprocessor_request_wait_seconds:p95:1m
-      expr: histogram_quantile(0.95, sum(rate(tikv_coprocessor_request_wait_seconds_bucket{instance=~".*"}[1m])) by (le, instance,req))
+      expr: histogram_quantile(0.95, sum(rate(tikv_coprocessor_request_wait_seconds_bucket{instance=~".*", type="all"}[1m])) by (le, instance,req))
     - record: tikv_grpc_msg_duration_seconds:avg:1m
       expr: sum(rate(tikv_grpc_msg_duration_seconds_sum{instance=~".*"}[1m])) by (type) / sum(rate(tikv_grpc_msg_duration_seconds_count[1m])) by (type)
     - record: tikv_raftstore_apply_wait_time_duration_secs:p99:1m
@@ -48,7 +48,7 @@ groups:
     - record: tikv_coprocessor_request_duration_seconds:1m
       expr: sum(rate(tikv_coprocessor_request_duration_seconds_bucket{instance=~".*"}[1m])) by (le)
     - record: tikv_futurepool_pending_task:1m
-      expr: sum(rate(tikv_futurepool_pending_task_total{instance=~".*"}[1m])) by (name)
+      expr: sum(avg_over_time(tikv_futurepool_pending_task_total{instance=~".*"}[1m])) by (name)
     - record: tikv_storage_engine_async_request:1m
       expr: sum(rate(tikv_storage_engine_async_request_total{instance=~".*", status!~"all|success"}[1m])) by (status)
     - record: tikv_thread_cpu_seconds_nogrpc:1m
