@@ -1615,8 +1615,8 @@ impl RaftDataStateMachine {
 
     /// Checks if the current condition is a valid state.
     pub fn validate(&self, should_exist: bool) -> std::result::Result<(), String> {
-        if Self::raft_data_exists(&self.source)
-            && Self::raft_data_exists(&self.target)
+        if Self::data_exists(&self.source)
+            && Self::data_exists(&self.target)
             && !self.in_progress_marker.exists()
         {
             return Err(format!(
@@ -1625,7 +1625,7 @@ impl RaftDataStateMachine {
                 self.target.display()
             ));
         }
-        let exists = Self::raft_data_exists(&self.source) || Self::raft_data_exists(&self.target);
+        let exists = Self::data_exists(&self.source) || Self::data_exists(&self.target);
         if exists != should_exist {
             if should_exist {
                 return Err("Cannot find raft data set.".to_owned());
@@ -1647,7 +1647,7 @@ impl RaftDataStateMachine {
                 fs::remove_dir_all(&trash).unwrap();
             }
         }
-        if !Self::raft_data_exists(&self.source) {
+        if !Self::data_exists(&self.source) {
             // Recover from Completed state.
             if self.in_progress_marker.exists() {
                 Self::must_remove(&self.in_progress_marker);
@@ -1657,7 +1657,7 @@ impl RaftDataStateMachine {
             if let Some(real_source) = self.read_marker() {
                 // Recover from Migrating state.
                 if real_source == self.target {
-                    if Self::raft_data_exists(&self.target) {
+                    if Self::data_exists(&self.target) {
                         Self::must_remove(&self.source);
                         return false;
                     }
@@ -1670,7 +1670,7 @@ impl RaftDataStateMachine {
                 }
             } else {
                 // Halfway between Init and Migrating.
-                assert!(!Self::raft_data_exists(&self.target));
+                assert!(!Self::data_exists(&self.target));
             }
         }
         // Init -> Migrating.
@@ -1680,8 +1680,8 @@ impl RaftDataStateMachine {
 
     /// Exits the `Migrating` state and enters the `Completed` state.
     pub fn after_dump_data(&mut self) {
-        assert!(Self::raft_data_exists(&self.source));
-        assert!(Self::raft_data_exists(&self.target));
+        assert!(Self::data_exists(&self.source));
+        assert!(Self::data_exists(&self.target));
         Self::must_remove_except(&self.source, &self.target); // Enters the `Completed` state.
         Self::must_remove(&self.in_progress_marker);
     }
@@ -1690,8 +1690,8 @@ impl RaftDataStateMachine {
     // between them to test crash safety.
     #[cfg(test)]
     fn after_dump_data_with_check<F: Fn()>(&mut self, check: &F) {
-        assert!(Self::raft_data_exists(&self.source));
-        assert!(Self::raft_data_exists(&self.target));
+        assert!(Self::data_exists(&self.source));
+        assert!(Self::data_exists(&self.target));
         Self::must_remove(&self.source); // Enters the `Completed` state.
         check();
         Self::must_remove(&self.in_progress_marker);
@@ -1765,12 +1765,14 @@ impl RaftDataStateMachine {
         assert!(dir.pop());
         Self::sync_dir(&dir);
     }
-#[inline]
-fn dir_exists(path: &Path) -> bool {
-    return path.exists() && path.is_dir();
-}
+
+    #[inline]
+    fn dir_exists(path: &Path) -> bool {
+        path.exists() && path.is_dir()
+    }
+
     pub fn raftengine_exists(path: &Path) -> bool {
-        if !dir_exists(path) {
+        if !Self::dir_exists(path) {
             return false;
         }
         fs::read_dir(path).unwrap().any(|entry| {
@@ -1778,15 +1780,13 @@ fn dir_exists(path: &Path) -> bool {
                 let p = e.path();
                 p.is_file() && p.extension().map_or(false, |ext| ext == "raftlog")
             } else {
-                false // No need to warn
+                false
             }
         })
-        }
-        false
     }
 
     pub fn raftdb_exists(path: &Path) -> bool {
-        if !dir_exists(path) {
+        if !Self::dir_exists(path) {
             return false;
         }
         let current_file_path = path.join("CURRENT");
@@ -2702,29 +2702,29 @@ yyy = 100
 
         clear_dir(&test_dir);
         fs::File::create(test_dir.join("0000000000000001.raftlog")).unwrap();
-        assert!(RaftDataStateMachine::raftengine_exist(&test_dir));
+        assert!(RaftDataStateMachine::raftengine_exists(&test_dir));
 
         clear_dir(&test_dir);
         fs::File::create(test_dir.join("0000000000000001.raftlog")).unwrap();
         fs::File::create(test_dir.join("trash")).unwrap();
-        assert!(RaftDataStateMachine::raftengine_exist(&test_dir));
+        assert!(RaftDataStateMachine::raftengine_exists(&test_dir));
 
         clear_dir(&test_dir);
         fs::File::create(test_dir.join("raftlog")).unwrap();
-        assert!(!RaftDataStateMachine::raftengine_exist(&test_dir));
+        assert!(!RaftDataStateMachine::raftengine_exists(&test_dir));
 
         clear_dir(&test_dir);
-        assert!(!RaftDataStateMachine::raftengine_exist(&test_dir));
+        assert!(!RaftDataStateMachine::raftengine_exists(&test_dir));
 
         clear_dir(&test_dir);
         fs::File::create(test_dir.join("CURRENT")).unwrap();
-        assert!(RaftDataStateMachine::raftdb_exist(&test_dir));
+        assert!(RaftDataStateMachine::raftdb_exists(&test_dir));
 
         clear_dir(&test_dir);
         fs::File::create(test_dir.join("NOT_CURRENT")).unwrap();
-        assert!(!RaftDataStateMachine::raftdb_exist(&test_dir));
+        assert!(!RaftDataStateMachine::raftdb_exists(&test_dir));
 
         clear_dir(&test_dir);
-        assert!(!RaftDataStateMachine::raftdb_exist(&test_dir));
+        assert!(!RaftDataStateMachine::raftdb_exists(&test_dir));
     }
 }

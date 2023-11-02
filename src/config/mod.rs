@@ -4007,7 +4007,7 @@ impl TikvConfig {
             ));
         }
 
-        if RaftDataStateMachine::raftengine_exist(Path::new(&last_raft_engine_dir))
+        if RaftDataStateMachine::raftengine_exists(Path::new(&last_raft_engine_dir))
             && last_raft_engine_dir != self.raft_engine.config.dir
         {
             return Err(format!(
