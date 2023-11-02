@@ -99,6 +99,13 @@ make_auto_flush_static_metric! {
         fail,
     }
 
+    pub label_enum ResourcePriority {
+        high,
+        medium,
+        low,
+        unknown,
+    }
+
     pub struct GcCommandCounterVec: LocalIntCounter {
         "type" => GcCommandKind,
     }
@@ -134,6 +141,7 @@ make_auto_flush_static_metric! {
 
     pub struct GrpcMsgHistogramVec: LocalHistogram {
         "type" => GrpcTypeKind,
+        "priority" => ResourcePriority,
     }
 
     pub struct ReplicaReadLockCheckHistogramVec: LocalHistogram {
@@ -234,7 +242,7 @@ lazy_static! {
     pub static ref GRPC_MSG_HISTOGRAM_VEC: HistogramVec = register_histogram_vec!(
         "tikv_grpc_msg_duration_seconds",
         "Bucketed histogram of grpc server messages",
-        &["type"],
+        &["type","priority"],
         exponential_buckets(5e-5, 2.0, 22).unwrap() // 50us ~ 104s
     )
     .unwrap();
@@ -599,4 +607,17 @@ pub fn record_request_source_metrics(source: String, duration: Duration) {
             metrics.duration_us.flush();
         }
     });
+}
+
+impl From<u32> for ResourcePriority {
+    fn from(priority: u32) -> Self {
+        // the mapping definition of priority in TIDB repo,
+        // see: https://github.com/bufferflies/tidb/blob/8b151114546d6a02d8250787a2a3213620e30524/parser/parser.y#L1740-L1752
+        match priority {
+            1 => ResourcePriority::low,
+            8 => ResourcePriority::medium,
+            16 => ResourcePriority::high,
+            _ => ResourcePriority::unknown,
+        }
+    }
 }

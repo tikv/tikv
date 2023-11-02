@@ -198,8 +198,10 @@ macro_rules! handle_request {
 
             let source = req.get_context().get_request_source().to_owned();
             let resource_control_ctx = req.get_context().get_resource_control_context();
+            let mut resource_group_priority = ResourcePriority::unknown;
             if let Some(resource_manager) = &self.resource_manager {
                 resource_manager.consume_penalty(resource_control_ctx);
+                resource_group_priority= ResourcePriority::from(resource_manager.get_resource_group_priority(resource_control_ctx.get_resource_group_name()));
             }
             GRPC_RESOURCE_GROUP_COUNTER_VEC
                     .with_label_values(&[resource_control_ctx.get_resource_group_name()])
@@ -212,6 +214,7 @@ macro_rules! handle_request {
                 sink.success(resp).await?;
                 GRPC_MSG_HISTOGRAM_STATIC
                     .$fn_name
+                    .get(resource_group_priority)
                     .observe(elapsed.as_secs_f64());
                 record_request_source_metrics(source, elapsed);
                 ServerResult::Ok(())
@@ -430,6 +433,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
             sink.success(resp).await?;
             GRPC_MSG_HISTOGRAM_STATIC
                 .kv_prepare_flashback_to_version
+                .get(ResourcePriority::unknown)
                 .observe(elapsed.as_secs_f64());
             record_request_source_metrics(source, elapsed);
             ServerResult::Ok(())
@@ -461,6 +465,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
             sink.success(resp).await?;
             GRPC_MSG_HISTOGRAM_STATIC
                 .kv_flashback_to_version
+                .unknown
                 .observe(elapsed.as_secs_f64());
             record_request_source_metrics(source, elapsed);
             ServerResult::Ok(())
@@ -480,9 +485,15 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
         forward_unary!(self.proxy, coprocessor, ctx, req, sink);
         let source = req.get_context().get_request_source().to_owned();
         let resource_control_ctx = req.get_context().get_resource_control_context();
+        let mut resource_group_priority = ResourcePriority::unknown;
         if let Some(resource_manager) = &self.resource_manager {
             resource_manager.consume_penalty(resource_control_ctx);
+            resource_group_priority = ResourcePriority::from(
+                resource_manager
+                    .get_resource_group_priority(resource_control_ctx.get_resource_group_name()),
+            );
         }
+
         GRPC_RESOURCE_GROUP_COUNTER_VEC
             .with_label_values(&[resource_control_ctx.get_resource_group_name()])
             .inc();
@@ -495,6 +506,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
             let elapsed = begin_instant.saturating_elapsed();
             GRPC_MSG_HISTOGRAM_STATIC
                 .coprocessor
+                .get(resource_group_priority)
                 .observe(elapsed.as_secs_f64());
             record_request_source_metrics(source, elapsed);
             ServerResult::Ok(())
@@ -518,8 +530,13 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
     ) {
         let source = req.get_context().get_request_source().to_owned();
         let resource_control_ctx = req.get_context().get_resource_control_context();
+        let mut resource_group_priority = ResourcePriority::unknown;
         if let Some(resource_manager) = &self.resource_manager {
             resource_manager.consume_penalty(resource_control_ctx);
+            resource_group_priority = ResourcePriority::from(
+                resource_manager
+                    .get_resource_group_priority(resource_control_ctx.get_resource_group_name()),
+            );
         }
         GRPC_RESOURCE_GROUP_COUNTER_VEC
             .with_label_values(&[resource_control_ctx.get_resource_group_name()])
@@ -533,6 +550,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
             let elapsed = begin_instant.saturating_elapsed();
             GRPC_MSG_HISTOGRAM_STATIC
                 .raw_coprocessor
+                .get(resource_group_priority)
                 .observe(elapsed.as_secs_f64());
             record_request_source_metrics(source, elapsed);
             ServerResult::Ok(())
@@ -584,6 +602,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
             let elapsed = begin_instant.saturating_elapsed();
             GRPC_MSG_HISTOGRAM_STATIC
                 .unsafe_destroy_range
+                .unknown
                 .observe(elapsed.as_secs_f64());
             record_request_source_metrics(source, elapsed);
             ServerResult::Ok(())
@@ -607,8 +626,13 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
     ) {
         let begin_instant = Instant::now();
         let resource_control_ctx = req.get_context().get_resource_control_context();
+        let mut resource_group_priority = ResourcePriority::unknown;
         if let Some(resource_manager) = &self.resource_manager {
             resource_manager.consume_penalty(resource_control_ctx);
+            resource_group_priority = ResourcePriority::from(
+                resource_manager
+                    .get_resource_group_priority(resource_control_ctx.get_resource_group_name()),
+            );
         }
         GRPC_RESOURCE_GROUP_COUNTER_VEC
             .with_label_values(&[resource_control_ctx.get_resource_group_name()])
@@ -628,6 +652,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
                 Ok(_) => {
                     GRPC_MSG_HISTOGRAM_STATIC
                         .coprocessor_stream
+                        .get(resource_group_priority)
                         .observe(begin_instant.saturating_elapsed().as_secs_f64());
                     let _ = sink.close().await;
                 }
@@ -866,6 +891,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
             sink.success(resp).await?;
             GRPC_MSG_HISTOGRAM_STATIC
                 .split_region
+                .unknown
                 .observe(begin_instant.saturating_elapsed().as_secs_f64());
             ServerResult::Ok(())
         }
@@ -1029,6 +1055,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
             let elapsed = begin_instant.saturating_elapsed();
             GRPC_MSG_HISTOGRAM_STATIC
                 .check_leader
+                .unknown
                 .observe(elapsed.as_secs_f64());
             ServerResult::Ok(())
         }
@@ -1292,6 +1319,7 @@ fn handle_measures_for_batch_commands(measures: &mut MeasuredBatchResponse) {
         let elapsed = now.saturating_duration_since(begin);
         GRPC_MSG_HISTOGRAM_STATIC
             .get(label)
+            .unknown
             .observe(elapsed.as_secs_f64());
         record_request_source_metrics(source, elapsed);
         let exec_details = resp.cmd.as_mut().and_then(|cmd| match cmd {

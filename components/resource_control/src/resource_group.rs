@@ -234,6 +234,12 @@ impl ResourceGroupManager {
         }
     }
 
+    pub fn get_resource_group_priority(&self, name: &str) -> u32 {
+        self.resource_groups
+            .get(name)
+            .map_or(u32::MIN, |g| g.group.priority)
+    }
+
     pub fn get_resource_limiter(
         &self,
         rg: &str,
