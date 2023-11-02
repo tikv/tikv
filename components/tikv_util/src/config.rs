@@ -1628,8 +1628,8 @@ fn dir_exists(path: &Path) -> bool {
         false
     }
 
-    pub fn raft_data_exists(path: &Path) -> bool {
-        Self::raftengine_exist(path) || Self::raftdb_exist(path)
+    pub fn data_exists(path: &Path) -> bool {
+        Self::raftengine_exists(path) || Self::raftdb_exists(path)
     }
 
     fn sync_dir(dir: &Path) {
