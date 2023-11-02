@@ -732,7 +732,13 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
             sink: conn.get_sink().clone(),
             request_id: request.get_request_id(),
             downstream_state,
+<<<<<<< HEAD
             speed_limiter: self.scan_speed_limiter.clone(),
+=======
+            scan_concurrency_semaphore: self.scan_concurrency_semaphore.clone(),
+            scan_speed_limiter: self.scan_speed_limiter.clone(),
+            fetch_speed_limiter: self.fetch_speed_limiter.clone(),
+>>>>>>> 4c369d2cdc (cdc: incremental scans acquire snapshots before semaphores to avoid useless queue (#15865))
             max_scan_batch_bytes: self.max_scan_batch_bytes,
             max_scan_batch_size: self.max_scan_batch_size,
             observe_id,
@@ -743,6 +749,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
             filter_loop,
         };
 
+<<<<<<< HEAD
         let raft_router = self.raft_router.clone();
         let concurrency_semaphore = self.scan_concurrency_semaphore.clone();
         self.workers.spawn(async move {
@@ -751,6 +758,13 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
                 .initialize(change_cmd, raft_router, concurrency_semaphore)
                 .await
             {
+=======
+        let cdc_handle = self.cdc_handle.clone();
+        let memory_quota = self.sink_memory_quota.clone();
+        self.workers.spawn(async move {
+            CDC_SCAN_TASKS.with_label_values(&["total"]).inc();
+            match init.initialize(change_cmd, cdc_handle, memory_quota).await {
+>>>>>>> 4c369d2cdc (cdc: incremental scans acquire snapshots before semaphores to avoid useless queue (#15865))
                 Ok(()) => {
                     CDC_SCAN_TASKS.with_label_values(&["finish"]).inc();
                 }
