@@ -1621,11 +1621,12 @@ fn dir_exists(path: &Path) -> bool {
         false
     }
 
-    pub fn raftdb_exist(raftdb_path: &Path) -> bool {
-        if raftdb_path.is_dir() && raftdb_path.join("CURRENT").exists() {
-            return true;
+    pub fn raftdb_exists(path: &Path) -> bool {
+        if !dir_exists(path) {
+            return false;
         }
-        false
+        let current_file_path = path.join("CURRENT");
+        current_file_path.exists() && current_file_path.is_file()
     }
 
     pub fn data_exists(path: &Path) -> bool {
