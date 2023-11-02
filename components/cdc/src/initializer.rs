@@ -35,7 +35,7 @@ use tikv_kv::Iterator;
 use tikv_util::{
     box_err,
     codec::number,
-    debug, error, info,
+    debug, defer, error, info,
     memory::MemoryQuota,
     sys::inspector::{self_thread_inspector, ThreadInspector},
     time::{Instant, Limiter},
@@ -165,13 +165,8 @@ impl<E: KvEngine> Initializer<E> {
         memory_quota: Arc<MemoryQuota>,
     ) -> Result<()> {
         if let Some(region_snapshot) = resp.snapshot {
-            assert_eq!(self.region_id, region_snapshot.get_region().get_id());
-            CDC_SCAN_TASKS.with_label_values(&["ongoing"]).inc();
-            tikv_util::defer!(CDC_SCAN_TASKS.with_label_values(&["ongoing"]).dec());
-
-            let scan_concurrency_semaphore = self.scan_concurrency_semaphore.clone();
-            let _permit = scan_concurrency_semaphore.acquire().await;
             let region = region_snapshot.get_region().clone();
+            assert_eq!(self.region_id, region.get_id());
             self.async_incremental_scan(region_snapshot, region, memory_quota)
                 .await
         } else {
@@ -191,6 +186,11 @@ impl<E: KvEngine> Initializer<E> {
         region: Region,
         memory_quota: Arc<MemoryQuota>,
     ) -> Result<()> {
+        let scan_concurrency_semaphore = self.scan_concurrency_semaphore.clone();
+        let _permit = scan_concurrency_semaphore.acquire().await;
+        CDC_SCAN_TASKS.with_label_values(&["ongoing"]).inc();
+        defer!(CDC_SCAN_TASKS.with_label_values(&["ongoing"]).dec());
+
         let region_id = region.get_id();
         let downstream_id = self.downstream_id;
         let observe_id = self.observe_id;
@@ -1034,20 +1034,11 @@ mod tests {
         block_on(initializer.initialize(change_cmd, raft_router.clone(), memory_quota.clone()))
             .unwrap_err();
 
-        let (tx, rx) = sync_channel(1);
-        pool.spawn(async move {
-            tx.send(()).unwrap();
-            tx.send(()).unwrap();
-            tx.send(()).unwrap();
-        });
-        rx.recv_timeout(Duration::from_millis(200)).unwrap();
-
         let (tx1, rx1) = sync_channel(1);
         let change_cmd = ChangeObserver::from_cdc(1, ObserveHandle::new());
         pool.spawn(async move {
             // Migrated to 2021 migration. This let statement is probably not needed, see
             //   https://doc.rust-lang.org/edition-guide/rust-2021/disjoint-capture-in-closures.html
-            let _ = (&initializer, &change_cmd, &raft_router);
             let res = initializer
                 .initialize(change_cmd, raft_router, memory_quota)
                 .await;
