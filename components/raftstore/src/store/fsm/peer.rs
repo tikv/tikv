@@ -51,7 +51,7 @@ use raft::{
 use smallvec::SmallVec;
 use tikv_alloc::trace::TraceEvent;
 use tikv_util::{
-    box_err, debug, defer, error, escape, info, is_zero_duration,
+    box_err, debug, defer, error, escape, info, info_or_debug, is_zero_duration,
     mpsc::{self, LooseBoundedSender, Receiver},
     store::{find_peer, find_peer_by_id, is_learner, region_on_same_stores},
     sys::disk::DiskUsage,
@@ -1085,11 +1085,11 @@ where
             } => {
                 self.on_hash_computed(index, context, hash);
             }
-            CasualMessage::RegionApproximateSize { size } => {
-                self.on_approximate_region_size(size);
+            CasualMessage::RegionApproximateSize { size, may_split } => {
+                self.on_approximate_region_size(size, may_split);
             }
-            CasualMessage::RegionApproximateKeys { keys } => {
-                self.on_approximate_region_keys(keys);
+            CasualMessage::RegionApproximateKeys { keys, may_split } => {
+                self.on_approximate_region_keys(keys, may_split);
             }
             CasualMessage::RefreshRegionBuckets {
                 region_epoch,
@@ -1369,6 +1369,8 @@ where
     fn on_clear_region_size(&mut self) {
         self.fsm.peer.approximate_size = None;
         self.fsm.peer.approximate_keys = None;
+        self.fsm.peer.may_split_size = None;
+        self.fsm.peer.may_split_keys = None;
         self.fsm.peer.may_skip_split_check = false;
         self.register_split_region_check_tick();
     }
@@ -5248,6 +5250,14 @@ where
         &mut self,
         msg: &RaftCmdRequest,
     ) -> Result<Option<RaftCmdResponse>> {
+        // failpoint
+        fail_point!(
+            "fail_pre_propose_split",
+            msg.has_admin_request()
+                && msg.get_admin_request().get_cmd_type() == AdminCmdType::BatchSplit,
+            |_| Err(Error::Other(box_err!("fail_point")))
+        );
+
         // Check store_id, make sure that the msg is dispatched to the right place.
         if let Err(e) = util::check_store_id(msg.get_header(), self.store_id()) {
             self.ctx
@@ -5472,7 +5482,10 @@ where
                 return;
             }
             Err(e) => {
-                debug!(
+                // log for admin requests
+                let is_admin_request = msg.has_admin_request();
+                info_or_debug!(
+                    is_admin_request;
                     "failed to propose";
                     "region_id" => self.region_id(),
                     "peer_id" => self.fsm.peer_id(),
@@ -5857,6 +5870,11 @@ where
             return;
         }
 
+        // To avoid run the check if it's splitting.
+        if self.fsm.peer.is_splitting() {
+            return;
+        }
+
         // When Lightning or BR is importing data to TiKV, their ingest-request may fail
         // because of region-epoch not matched. So we hope TiKV do not check region size
         // and split region during importing.
@@ -5897,8 +5915,14 @@ where
         }
         self.fsm.peer.size_diff_hint = 0;
         self.fsm.peer.compaction_declined_bytes = 0;
-        // the task is scheduled, next tick may skip it.
-        self.fsm.peer.may_skip_split_check = true;
+        // the task is scheduled, next tick may skip it only when the size and keys are
+        // small If either size or keys are big enough to do a split,
+        // keep split check tick until split is done
+        if !matches!(self.fsm.peer.may_split_size, Some(true))
+            && !matches!(self.fsm.peer.may_split_keys, Some(true))
+        {
+            self.fsm.peer.may_skip_split_check = true;
+        }
     }
 
     fn on_prepare_split_region(
@@ -5974,15 +5998,41 @@ where
         }
     }
 
-    fn on_approximate_region_size(&mut self, size: u64) {
-        self.fsm.peer.approximate_size = Some(size);
+    fn on_approximate_region_size(&mut self, size: Option<u64>, may_split: Option<bool>) {
+        // if size is none, it means no estimated size
+        if size.is_some() {
+            self.fsm.peer.approximate_size = size;
+        }
+
+        if may_split.is_some() {
+            self.fsm.peer.may_split_size = may_split;
+        }
+
+        // if the region is truely splittable,
+        // may_skip_split_check should be false
+        if matches!(may_split, Some(true)) {
+            self.fsm.peer.may_skip_split_check = false;
+        }
         self.register_split_region_check_tick();
         self.register_pd_heartbeat_tick();
         fail_point!("on_approximate_region_size");
     }
 
-    fn on_approximate_region_keys(&mut self, keys: u64) {
-        self.fsm.peer.approximate_keys = Some(keys);
+    fn on_approximate_region_keys(&mut self, keys: Option<u64>, may_split: Option<bool>) {
+        // if keys is none, it means no estimated keys
+        if keys.is_some() {
+            self.fsm.peer.approximate_keys = keys;
+        }
+
+        if may_split.is_some() {
+            self.fsm.peer.may_split_keys = may_split;
+        }
+
+        // if the region is truely splittable,
+        // may_skip_split_check should be false
+        if matches!(may_split, Some(true)) {
+            self.fsm.peer.may_skip_split_check = false;
+        }
         self.register_split_region_check_tick();
         self.register_pd_heartbeat_tick();
     }
