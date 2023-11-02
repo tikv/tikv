@@ -271,18 +271,16 @@ pub mod tests {
             match rx.try_recv() {
                 Ok(SchedTask::UpdateApproximateKeys {
                     region_id,
-                    may_split,
+                    splitable,
                     ..
                 })
                 | Ok(SchedTask::UpdateApproximateSize {
                     region_id,
-                    may_split,
+                    splitable,
                     ..
                 }) => {
                     assert_eq!(region_id, exp_region.get_id());
-                    if let Some(may_split) = may_split {
-                        split = may_split || split;
-                    }
+                    split = split || splitable.unwrap_or(false);
                 }
                 Ok(SchedTask::RefreshRegionBuckets { region_id, .. }) => {
                     assert_eq!(region_id, exp_region.get_id());
@@ -324,18 +322,16 @@ pub mod tests {
             match rx.try_recv() {
                 Ok(SchedTask::UpdateApproximateSize {
                     region_id,
-                    may_split,
+                    splitable,
                     ..
                 })
                 | Ok(SchedTask::UpdateApproximateKeys {
                     region_id,
-                    may_split,
+                    splitable,
                     ..
                 }) => {
                     assert_eq!(region_id, exp_region.get_id());
-                    if let Some(may_split) = may_split {
-                        split = split || may_split;
-                    }
+                    split = split || splitable.unwrap_or(false);
                 }
                 Ok(SchedTask::RefreshRegionBuckets { region_id, .. }) => {
                     assert_eq!(region_id, exp_region.get_id());

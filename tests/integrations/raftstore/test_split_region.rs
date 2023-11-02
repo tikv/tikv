@@ -609,7 +609,7 @@ fn test_node_split_region_after_reboot_with_config_change() {
     sleep_ms(200);
     assert_eq!(pd_client.get_split_count(), 0);
 
-    // change the config to make the region splittable
+    // change the config to make the region splitable
     cluster.cfg.coprocessor.region_max_size = Some(ReadableSize(region_max_size / 3));
     cluster.cfg.coprocessor.region_split_size = Some(ReadableSize(region_split_size / 3));
     cluster.cfg.coprocessor.region_bucket_size = ReadableSize(region_split_size / 3);

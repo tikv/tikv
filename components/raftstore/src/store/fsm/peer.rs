@@ -1085,11 +1085,11 @@ where
             } => {
                 self.on_hash_computed(index, context, hash);
             }
-            CasualMessage::RegionApproximateSize { size, may_split } => {
-                self.on_approximate_region_size(size, may_split);
+            CasualMessage::RegionApproximateSize { size, splitable } => {
+                self.on_approximate_region_size(size, splitable);
             }
-            CasualMessage::RegionApproximateKeys { keys, may_split } => {
-                self.on_approximate_region_keys(keys, may_split);
+            CasualMessage::RegionApproximateKeys { keys, splitable } => {
+                self.on_approximate_region_keys(keys, splitable);
             }
             CasualMessage::RefreshRegionBuckets {
                 region_epoch,
@@ -5915,8 +5915,9 @@ where
         }
         self.fsm.peer.size_diff_hint = 0;
         self.fsm.peer.compaction_declined_bytes = 0;
-        // the task is scheduled, next tick may skip it only when the size and keys are
-        // small If either size or keys are big enough to do a split,
+        // The task is scheduled, the next tick may skip it only when the size and keys
+        // are small.
+        // If either size or keys are big enough to do a split,
         // keep split check tick until split is done
         if !matches!(self.fsm.peer.may_split_size, Some(true))
             && !matches!(self.fsm.peer.may_split_keys, Some(true))
@@ -5998,19 +5999,19 @@ where
         }
     }
 
-    fn on_approximate_region_size(&mut self, size: Option<u64>, may_split: Option<bool>) {
-        // if size is none, it means no estimated size
+    fn on_approximate_region_size(&mut self, size: Option<u64>, splitable: Option<bool>) {
+        // If size is none, it means no estimated size
         if size.is_some() {
             self.fsm.peer.approximate_size = size;
         }
 
-        if may_split.is_some() {
-            self.fsm.peer.may_split_size = may_split;
+        if splitable.is_some() {
+            self.fsm.peer.may_split_size = splitable;
         }
 
-        // if the region is truely splittable,
+        // If the region is truly splitable,
         // may_skip_split_check should be false
-        if matches!(may_split, Some(true)) {
+        if matches!(splitable, Some(true)) {
             self.fsm.peer.may_skip_split_check = false;
         }
         self.register_split_region_check_tick();
@@ -6018,19 +6019,19 @@ where
         fail_point!("on_approximate_region_size");
     }
 
-    fn on_approximate_region_keys(&mut self, keys: Option<u64>, may_split: Option<bool>) {
+    fn on_approximate_region_keys(&mut self, keys: Option<u64>, splitable: Option<bool>) {
         // if keys is none, it means no estimated keys
         if keys.is_some() {
             self.fsm.peer.approximate_keys = keys;
         }
 
-        if may_split.is_some() {
-            self.fsm.peer.may_split_keys = may_split;
+        if splitable.is_some() {
+            self.fsm.peer.may_split_keys = splitable;
         }
 
-        // if the region is truely splittable,
+        // If the region is truly splitable,
         // may_skip_split_check should be false
-        if matches!(may_split, Some(true)) {
+        if matches!(splitable, Some(true)) {
             self.fsm.peer.may_skip_split_check = false;
         }
         self.register_split_region_check_tick();

@@ -306,16 +306,16 @@ mod tests {
             match rx.try_recv() {
                 Ok(SchedTask::UpdateApproximateSize {
                     region_id,
-                    may_split,
+                    splitable,
                     ..
                 })
                 | Ok(SchedTask::UpdateApproximateKeys {
                     region_id,
-                    may_split,
+                    splitable,
                     ..
                 }) => {
                     assert_eq!(region_id, region.get_id());
-                    assert!(may_split.is_none());
+                    assert!(splitable.is_none());
                     recv_cnt += 1;
                     if recv_cnt == 2 {
                         break;
@@ -426,16 +426,16 @@ mod tests {
             match rx.try_recv() {
                 Ok(SchedTask::UpdateApproximateSize {
                     region_id,
-                    may_split,
+                    splitable,
                     ..
                 })
                 | Ok(SchedTask::UpdateApproximateKeys {
                     region_id,
-                    may_split,
+                    splitable,
                     ..
                 }) => {
                     assert_eq!(region_id, region.get_id());
-                    assert!(may_split.is_none());
+                    assert!(splitable.is_none());
                     recv_cnt += 1;
                     if recv_cnt == 2 {
                         break;
