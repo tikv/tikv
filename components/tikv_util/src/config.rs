@@ -1601,7 +1601,10 @@ impl RaftDataStateMachine {
         assert!(dir.pop());
         Self::sync_dir(&dir);
     }
-
+#[inline]
+fn dir_exists(path: &Path) -> bool {
+    return path.exists() && path.is_dir();
+}
     pub fn raftengine_exist(raftengine_path: &Path) -> bool {
         if raftengine_path.is_dir() {
             for entry in raftengine_path.read_dir().unwrap() {
