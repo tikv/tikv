@@ -558,13 +558,13 @@ pub enum CasualMessage<EK: KvEngine> {
     /// split-check thread.
     RegionApproximateSize {
         size: Option<u64>,
-        may_split: Option<bool>,
+        splitable: Option<bool>,
     },
 
     /// Approximate key count of target region.
     RegionApproximateKeys {
         keys: Option<u64>,
-        may_split: Option<bool>,
+        splitable: Option<bool>,
     },
     CompactionDeclinedBytes {
         bytes: u64,
@@ -649,18 +649,18 @@ impl<EK: KvEngine> fmt::Debug for CasualMessage<EK> {
                 KeysInfoFormatter(split_keys.iter()),
                 source,
             ),
-            CasualMessage::RegionApproximateSize { size, may_split } => {
+            CasualMessage::RegionApproximateSize { size, splitable } => {
                 write!(
                     fmt,
-                    "Region's approximate size [size: {:?}], [may_split: {:?}]",
-                    size, may_split
+                    "Region's approximate size [size: {:?}], [splitable: {:?}]",
+                    size, splitable
                 )
             }
-            CasualMessage::RegionApproximateKeys { keys, may_split } => {
+            CasualMessage::RegionApproximateKeys { keys, splitable } => {
                 write!(
                     fmt,
-                    "Region's approximate keys [keys: {:?}], [may_split: {:?}",
-                    keys, may_split
+                    "Region's approximate keys [keys: {:?}], [splitable: {:?}",
+                    keys, splitable
                 )
             }
             CasualMessage::CompactionDeclinedBytes { bytes } => {

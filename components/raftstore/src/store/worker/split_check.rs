@@ -695,8 +695,8 @@ impl<EK: KvEngine, S: StoreHandle> Runner<EK, S> {
         };
 
         if !split_keys.is_empty() {
-            // notify peer that if the region is truely splittable.
-            // If it's truely splittable, then skip_split_check should be false;
+            // Notify peer that if the region is truly splitable.
+            // If it's truly splitable, then skip_split_check should be false;
             self.router.update_approximate_size(
                 region.get_id(),
                 None,

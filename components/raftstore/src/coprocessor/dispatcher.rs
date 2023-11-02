@@ -19,8 +19,8 @@ use crate::store::BucketRange;
 
 /// A handle for coprocessor to schedule some command back to raftstore.
 pub trait StoreHandle: Clone + Send {
-    fn update_approximate_size(&self, region_id: u64, size: Option<u64>, may_split: Option<bool>);
-    fn update_approximate_keys(&self, region_id: u64, keys: Option<u64>, may_split: Option<bool>);
+    fn update_approximate_size(&self, region_id: u64, size: Option<u64>, splitable: Option<bool>);
+    fn update_approximate_keys(&self, region_id: u64, keys: Option<u64>, splitable: Option<bool>);
     fn ask_split(
         &self,
         region_id: u64,
@@ -48,12 +48,12 @@ pub trait StoreHandle: Clone + Send {
 pub enum SchedTask {
     UpdateApproximateSize {
         region_id: u64,
-        may_split: Option<bool>,
+        splitable: Option<bool>,
         size: Option<u64>,
     },
     UpdateApproximateKeys {
         region_id: u64,
-        may_split: Option<bool>,
+        splitable: Option<bool>,
         keys: Option<u64>,
     },
     AskSplit {
@@ -77,18 +77,18 @@ pub enum SchedTask {
 }
 
 impl StoreHandle for std::sync::mpsc::SyncSender<SchedTask> {
-    fn update_approximate_size(&self, region_id: u64, size: Option<u64>, may_split: Option<bool>) {
+    fn update_approximate_size(&self, region_id: u64, size: Option<u64>, splitable: Option<bool>) {
         let _ = self.try_send(SchedTask::UpdateApproximateSize {
             region_id,
-            may_split,
+            splitable,
             size,
         });
     }
 
-    fn update_approximate_keys(&self, region_id: u64, keys: Option<u64>, may_split: Option<bool>) {
+    fn update_approximate_keys(&self, region_id: u64, keys: Option<u64>, splitable: Option<bool>) {
         let _ = self.try_send(SchedTask::UpdateApproximateKeys {
             region_id,
-            may_split,
+            splitable,
             keys,
         });
     }
