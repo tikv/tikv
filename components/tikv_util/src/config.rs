@@ -1582,7 +1582,7 @@ impl RaftDataStateMachine {
             return;
         }
         if !retain_path.starts_with(remove_path) {
-            info!("Retain path is not under the remove path, so remove directly"; "Retain path" => %retain_path.display(), "remove path" => %remove_path.display());
+            info!("Removing directory as retain path is not under remove path"; "retain path" => %retain_path.display(), "remove path" => %remove_path.display());
             Self::must_remove(remove_path);
             return;
         }
