@@ -669,8 +669,10 @@ where
     pub compaction_declined_bytes: u64,
     /// Approximate size of the region.
     pub approximate_size: Option<u64>,
+    pub may_split_size: Option<bool>,
     /// Approximate keys of the region.
     pub approximate_keys: Option<u64>,
+    pub may_split_keys: Option<bool>,
     /// Whether this region has scheduled a split check task. If we just
     /// splitted  the region or ingested one file which may be overlapped
     /// with the existed data, reset the flag so that the region can be
@@ -864,7 +866,9 @@ where
             size_diff_hint: 0,
             delete_keys_hint: 0,
             approximate_size: None,
+            may_split_size: None,
             approximate_keys: None,
+            may_split_keys: None,
             may_skip_split_check: false,
             compaction_declined_bytes: 0,
             leader_unreachable: false,

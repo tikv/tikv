@@ -1294,7 +1294,7 @@ pub(crate) mod tests {
         };
 
         #[allow(dead_code)]
-        let must_not_finish = |ids: &[u64]| {
+        let _must_not_finish = |ids: &[u64]| {
             for id in ids {
                 let region_key = keys::region_state_key(*id);
                 assert_eq!(
