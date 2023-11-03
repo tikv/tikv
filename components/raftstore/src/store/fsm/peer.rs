@@ -89,15 +89,14 @@ use crate::{
             TRANSFER_LEADER_COMMAND_REPLY_CTX,
         },
         region_meta::RegionMeta,
-        snapshot_backup::{SnapshotBrState, SnapshotBrWaitApplySyncer},
+        snapshot_backup::{SnapshotBrState, SnapshotBrWaitApplyRequest, SnapshotBrWaitApplySyncer},
         transport::Transport,
         unsafe_recovery::{
             exit_joint_request, ForceLeaderState, UnsafeRecoveryExecutePlanSyncer,
             UnsafeRecoveryFillOutReportSyncer, UnsafeRecoveryForceLeaderSyncer,
             UnsafeRecoveryState, UnsafeRecoveryWaitApplySyncer,
         },
-        util,
-        util::{KeysInfoFormatter, LeaseState},
+        util::{self, compare_region_epoch, KeysInfoFormatter, LeaseState},
         worker::{
             Bucket, BucketRange, CleanupTask, ConsistencyCheckTask, GcSnapshotTask, RaftlogGcTask,
             ReadDelegate, ReadProgress, RegionTask, SplitCheckTask,
@@ -925,7 +924,7 @@ where
     // func be invoked firstly after assigned leader by BR, wait all leader apply to
     // last log index func be invoked secondly wait follower apply to last
     // index, however the second call is broadcast, it may improve in future
-    fn on_snapshot_recovery_wait_apply(&mut self, syncer: SnapshotBrWaitApplySyncer) {
+    fn on_snapshot_recovery_wait_apply(&mut self, req: SnapshotBrWaitApplyRequest) {
         if let Some(state) = &self.fsm.peer.snapshot_recovery_state {
             warn!(
                 "can't wait apply, another recovery in progress";
@@ -933,11 +932,19 @@ where
                 "peer_id" => self.fsm.peer_id(),
                 "state" => ?state,
             );
-            syncer.abort();
+            req.syncer.abort();
             return;
         }
 
         let target_index = self.fsm.peer.raft_group.raft.raft_log.last_index();
+        let term = self.fsm.peer.raft_group.raft.term;
+        if let Some(e) = &req.expected_epoch {
+            if let Err(err) = compare_region_epoch(e, self.region(), true, true, true) {
+                warn!("epoch not match for wait apply, aborting."; "err" => %err);
+                req.syncer.abort();
+                return;
+            }
+        }
 
         // during the snapshot recovery, broadcast waitapply, some peer may stale
         if !self.fsm.peer.is_leader() {
@@ -972,7 +979,8 @@ where
 
         self.fsm.peer.snapshot_recovery_state = Some(SnapshotBrState::WaitLogApplyToLast {
             target_index,
-            syncer,
+            valid_for_term: Some(term),
+            syncer: req.syncer,
         });
         self.fsm
             .peer

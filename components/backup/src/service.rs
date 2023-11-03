@@ -9,15 +9,18 @@ use kvproto::brpb::*;
 use raftstore::store::{
     fsm::store::RaftRouter,
     msg::{PeerMsg, SignificantMsg},
+    snapshot_backup::SnapshotBrHandle,
 };
 use tikv_util::{error, info, worker::*};
 
 use super::Task;
+use crate::disk_snap::{self, StreamHandleLoop};
 
 /// Service handles the RPC messages for the `Backup` service.
 #[derive(Clone)]
-pub struct Service<EK: KvEngine, ER: RaftEngine> {
+pub struct Service<EK: KvEngine, ER: RaftEngine, H: SnapshotBrHandle> {
     scheduler: Scheduler<Task>,
+    env: disk_snap::Env<H>,
     router: Option<RaftRouter<EK, ER>>,
 }
 
@@ -144,13 +147,7 @@ where
         _stream: grpcio::RequestStream<PrepareSnapshotBackupRequest>,
         sink: grpcio::DuplexSink<PrepareSnapshotBackupResponse>,
     ) {
-        let router = match self.router {
-            Some(r) => r,
-            None => {
-                unimplemented_call!(ctx, sink);
-                return;
-            }
-        };
+        ctx.spawn(StreamHandleLoop::new(todo!()).handle_stream(_stream, sink.into()))
     }
 }
 

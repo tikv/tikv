@@ -5012,10 +5012,23 @@ where
     }
 
     pub fn snapshot_recovery_maybe_finish_wait_apply(&mut self, force: bool) {
-        if let Some(SnapshotBrState::WaitLogApplyToLast { target_index, .. }) =
-            &self.snapshot_recovery_state
+        if let Some(SnapshotBrState::WaitLogApplyToLast {
+            target_index,
+            valid_for_term,
+            ..
+        }) = &self.snapshot_recovery_state
         {
-            if self.raft_group.raft.term != self.raft_group.raft.raft_log.last_term() {
+            if valid_for_term
+                .map(|vt| vt != self.raft_group.raft.term)
+                .unwrap_or(false)
+            {
+                info!("leadership changed, aborting syncer because required."; "region_id" => self.region().id);
+                match self.snapshot_recovery_state.take() {
+                    Some(SnapshotBrState::WaitLogApplyToLast { syncer, .. }) => {
+                        syncer.abort();
+                    }
+                    _ => unreachable!(),
+                };
                 return;
             }
 

@@ -1,7 +1,7 @@
 use std::{
     future::Future,
     sync::{
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
         Arc, Mutex,
     },
     time::{Duration, UNIX_EPOCH},
@@ -10,7 +10,7 @@ use std::{
 use engine_traits::{KvEngine, RaftEngine};
 use kvproto::{
     errorpb::{Error, StaleCommand},
-    metapb::{self, Region},
+    metapb::{self, Region, RegionEpoch},
 };
 use tikv_util::{box_err, error, info, time::Instant as TiInstant, warn};
 use tokio::sync::oneshot;
@@ -30,30 +30,61 @@ fn epoch_second_coarse() -> u64 {
     spec.sec as u64
 }
 
-pub trait SnapshotBrHandle {
-    fn send_wait_apply(&self, region: u64, syncer: SnapshotBrWaitApplySyncer) -> crate::Result<()>;
-    fn broadcast_wait_apply(&self, syncer: SnapshotBrWaitApplySyncer);
+#[derive(Debug, Clone)]
+pub struct SnapshotBrWaitApplyRequest {
+    pub syncer: SnapshotBrWaitApplySyncer,
+    pub expected_epoch: Option<RegionEpoch>,
+    pub abort_when_term_change: bool,
+}
+
+impl SnapshotBrWaitApplyRequest {
+    /// Create a "relax" request for waiting apply.
+    /// This only waits to the last index, without checking the region epoch or
+    /// leadership migrating.
+    pub fn relaxed(syncer: SnapshotBrWaitApplySyncer) -> Self {
+        Self {
+            syncer,
+            expected_epoch: None,
+            abort_when_term_change: false,
+        }
+    }
+
+    /// Create a "strict" request for waiting apply.
+    /// This will wait to last applied index, and aborts if the region epoch not
+    /// match or the last index may not be committed.
+    pub fn strict(syncer: SnapshotBrWaitApplySyncer, epoch: RegionEpoch) -> Self {
+        Self {
+            syncer,
+            expected_epoch: Some(epoch),
+            abort_when_term_change: true,
+        }
+    }
+}
+
+pub trait SnapshotBrHandle: Sync + Send {
+    fn send_wait_apply(&self, region: u64, req: SnapshotBrWaitApplyRequest) -> crate::Result<()>;
+    fn broadcast_wait_apply(&self, req: SnapshotBrWaitApplyRequest);
 }
 
 impl<EK: KvEngine, ER: RaftEngine> SnapshotBrHandle for Mutex<RaftRouter<EK, ER>> {
-    fn send_wait_apply(&self, region: u64, syncer: SnapshotBrWaitApplySyncer) -> crate::Result<()> {
-        let msg = SignificantMsg::SnapshotBrWaitApply(syncer);
+    fn send_wait_apply(&self, region: u64, req: SnapshotBrWaitApplyRequest) -> crate::Result<()> {
+        let msg = SignificantMsg::SnapshotBrWaitApply(req);
         self.lock().unwrap().significant_send(region, msg)
     }
 
-    fn broadcast_wait_apply(&self, syncer: SnapshotBrWaitApplySyncer) {
-        let msg_gen =
-            || PeerMsg::SignificantMsg(SignificantMsg::SnapshotBrWaitApply(syncer.clone()));
+    fn broadcast_wait_apply(&self, req: SnapshotBrWaitApplyRequest) {
+        let msg_gen = || PeerMsg::SignificantMsg(SignificantMsg::SnapshotBrWaitApply(req.clone()));
         self.lock().unwrap().broadcast_normal(msg_gen);
     }
 }
 
-struct RejectIngestAndAdmin {
+pub struct RejectIngestAndAdmin {
     until: AtomicU64,
+    initialized: AtomicBool,
 }
 
 impl RejectIngestAndAdmin {
-    fn disabled(&self) -> bool {
+    pub fn rejected(&self) -> bool {
         let mut v = self.until.load(Ordering::Acquire);
         if v == 0 {
             return true;
@@ -75,7 +106,11 @@ impl RejectIngestAndAdmin {
         expired
     }
 
-    fn heartbeat(&self, lease: Duration) -> bool {
+    pub fn connected(&self) -> bool {
+        self.initialized.load(Ordering::Acquire)
+    }
+
+    pub fn heartbeat(&self, lease: Duration) -> bool {
         let mut v = self.until.load(Ordering::SeqCst);
         let now = epoch_second_coarse();
         let new_lease = now + lease.as_secs();
@@ -98,7 +133,15 @@ impl RejectIngestAndAdmin {
     }
 }
 
-impl Coprocessor for Arc<RejectIngestAndAdmin> {}
+impl Coprocessor for Arc<RejectIngestAndAdmin> {
+    fn start(&self) {
+        self.initialized.store(true, Ordering::Release)
+    }
+
+    fn stop(&self) {
+        self.initialized.store(true, Ordering::Release)
+    }
+}
 
 impl QueryObserver for Arc<RejectIngestAndAdmin> {
     fn pre_propose_query(
@@ -106,7 +149,7 @@ impl QueryObserver for Arc<RejectIngestAndAdmin> {
         cx: &mut crate::coprocessor::ObserverContext<'_>,
         reqs: &mut Vec<kvproto::raft_cmdpb::Request>,
     ) -> crate::coprocessor::Result<()> {
-        if self.disabled() {
+        if self.rejected() {
             return Ok(());
         }
         for req in reqs {
@@ -129,7 +172,7 @@ impl AdminObserver for Arc<RejectIngestAndAdmin> {
         _: &mut crate::coprocessor::ObserverContext<'_>,
         admin: &mut kvproto::raft_cmdpb::AdminRequest,
     ) -> crate::coprocessor::Result<()> {
-        if self.disabled() {
+        if self.rejected() {
             return Ok(());
         }
         Err(box_err!(
@@ -139,7 +182,11 @@ impl AdminObserver for Arc<RejectIngestAndAdmin> {
     }
 }
 
-// Syncer only send to leader in 2nd BR restore
+/// A syncer for wait apply.
+/// The sender used for constructing this structure will:
+/// Be closed, if the `abort` has been called.
+/// Send the report id to the caller, if all replicas of this Syncer has been
+/// dropped.
 #[derive(Clone, Debug)]
 pub struct SnapshotBrWaitApplySyncer {
     channel: Option<Arc<Mutex<Option<oneshot::Sender<u64>>>>>,
@@ -148,7 +195,10 @@ pub struct SnapshotBrWaitApplySyncer {
 
 impl Drop for SnapshotBrWaitApplySyncer {
     fn drop(&mut self) {
-        let chan = self.channel.take().expect("channel taken");
+        let chan = self
+            .channel
+            .take()
+            .expect("channel taken, maybe dropped twice");
         if let Ok(ch) = Arc::try_unwrap(chan) {
             if let Some(ch) = ch.into_inner().unwrap() {
                 if ch.send(self.report_id).is_err() {
@@ -182,6 +232,7 @@ pub enum SnapshotBrState {
     // reset / droppeds. The syncer is dropped and send the response to the invoker.
     WaitLogApplyToLast {
         target_index: u64,
+        valid_for_term: Option<u64>,
         syncer: SnapshotBrWaitApplySyncer,
     },
 }
