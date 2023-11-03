@@ -14,7 +14,7 @@ use std::{
         atomic::{AtomicU64, Ordering},
         Arc, Mutex,
     },
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime},
     u64,
 };
 
@@ -2753,6 +2753,9 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
     }
 }
 
+// we will remove 1-week old version 1 SST files.
+const VERSION_1_SST_CLEANUP_DURATION: Duration = Duration::from_secs(7 * 24 * 60 * 60);
+
 impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER, T> {
     fn on_cleanup_import_sst(&mut self) -> Result<()> {
         let mut delete_ssts = Vec::new();
@@ -2761,25 +2764,36 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         if ssts.is_empty() {
             return Ok(());
         }
+        let now = SystemTime::now();
         {
             let meta = self.ctx.store_meta.lock().unwrap();
             for sst in ssts {
-                if sst.api_version < sst_importer::API_VERSION_2 {
-                    // SST of old versions are created by old TiKV and have different prerequisite
-                    // we can't delete them here. They can only be deleted manually
-                    continue;
-                }
-                if let Some(r) = meta.regions.get(&sst.meta.get_region_id()) {
+                if let Some(r) = meta.regions.get(&sst.0.get_region_id()) {
                     let region_epoch = r.get_region_epoch();
-                    if util::is_epoch_stale(sst.meta.get_region_epoch(), region_epoch) {
+                    if util::is_epoch_stale(sst.0.get_region_epoch(), region_epoch) {
                         // If the SST epoch is stale, it will not be ingested anymore.
-                        delete_ssts.push(sst.meta);
+                        delete_ssts.push(sst.0);
                     }
+                } else if sst.1 >= sst_importer::API_VERSION_2 {
+                    // The write RPC of import sst service have make sure the region do exist at
+                    // the write time, and now the region is not found,
+                    // sst can be deleted because it won't be used by
+                    // ingest in future.
+                    delete_ssts.push(sst.0);
                 } else {
-                    // The write RPC of import sst service have make sure the region do exist at the
-                    // write time, and now the region is not found, sst can be
-                    // deleted because it won't be used by ingest in future.
-                    delete_ssts.push(sst.meta);
+                    // in the old protocol, we can't easily know if the SST will be used in the
+                    // committed raft log, so we only delete the SST
+                    // files that has not be modified for 1 week.
+                    if let Ok(duration) = now.duration_since(sst.2) {
+                        if duration > VERSION_1_SST_CLEANUP_DURATION {
+                            warn!(
+                                "found 1-week old SST file of version 1, will delete it";
+                                "sst_meta" => ?sst.0,
+                                "last_modified" => ?sst.2
+                            );
+                            delete_ssts.push(sst.0);
+                        }
+                    }
                 }
             }
         }

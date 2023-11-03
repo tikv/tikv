@@ -6,6 +6,7 @@ use std::{
     io::{self, Write},
     path::{Path, PathBuf},
     sync::Arc,
+    time::SystemTime,
 };
 
 use api_version::api_v2::TIDB_RANGES_COMPLEMENT;
@@ -440,7 +441,7 @@ impl ImportDir {
         Ok(real_key.map(ToOwned::to_owned))
     }
 
-    pub fn list_ssts(&self) -> Result<Vec<SstMetaWithApiVersion>> {
+    pub fn list_ssts(&self) -> Result<Vec<(SstMeta, i32, SystemTime)>> {
         let mut ssts = Vec::new();
         for e in file_system::read_dir(&self.root_dir)? {
             let e = e?;
@@ -449,7 +450,10 @@ impl ImportDir {
             }
             let path = e.path();
             match parse_meta_from_path(&path) {
-                Ok(sst) => ssts.push(sst),
+                Ok(sst) => {
+                    let last_modify = e.metadata()?.modified()?;
+                    ssts.push((sst.0, sst.1, last_modify))
+                }
                 Err(e) => error!(%e; "path_to_sst_meta failed"; "path" => %path.display(),),
             }
         }
@@ -479,12 +483,7 @@ pub fn sst_meta_to_path(meta: &SstMeta) -> Result<PathBuf> {
     )))
 }
 
-pub struct SstMetaWithApiVersion {
-    pub meta: SstMeta,
-    pub api_version: i32, // in future we may move api_version into SstMeta
-}
-
-pub fn parse_meta_from_path<P: AsRef<Path>>(path: P) -> Result<SstMetaWithApiVersion> {
+pub fn parse_meta_from_path<P: AsRef<Path>>(path: P) -> Result<(SstMeta, i32)> {
     let path = path.as_ref();
     let file_name = match path.file_name().and_then(|n| n.to_str()) {
         Some(name) => name,
@@ -517,7 +516,7 @@ pub fn parse_meta_from_path<P: AsRef<Path>>(path: P) -> Result<SstMetaWithApiVer
     if elems.len() > 5 {
         api_version = elems[5].parse()?;
     }
-    Ok(SstMetaWithApiVersion { meta, api_version })
+    Ok((meta, api_version))
 }
 
 #[cfg(test)]
@@ -541,8 +540,8 @@ mod test {
         assert_eq!(path.to_str().unwrap(), &expected_path);
 
         let meta_with_ver = parse_meta_from_path(path).unwrap();
-        assert_eq!(meta, meta_with_ver.meta);
-        assert_eq!(2, meta_with_ver.api_version);
+        assert_eq!(meta, meta_with_ver.0);
+        assert_eq!(2, meta_with_ver.1);
     }
 
     #[test]
@@ -562,8 +561,8 @@ mod test {
             SST_SUFFIX,
         ));
         let meta_with_ver = parse_meta_from_path(path).unwrap();
-        assert_eq!(meta, meta_with_ver.meta);
-        assert_eq!(1, meta_with_ver.api_version);
+        assert_eq!(meta, meta_with_ver.0);
+        assert_eq!(1, meta_with_ver.1);
     }
 
     #[cfg(feature = "test-engines-rocksdb")]
@@ -616,7 +615,7 @@ mod test {
         dp.save(arcmgr.as_deref()).unwrap();
         let mut ssts = dir.list_ssts().unwrap();
         ssts.iter_mut().for_each(|meta_with_ver| {
-            let meta = &mut meta_with_ver.meta;
+            let meta = &mut meta_with_ver.0;
             let start = dir
                 .load_start_key_by_meta::<RocksEngine>(meta, arcmgr.clone())
                 .unwrap()
@@ -625,7 +624,7 @@ mod test {
         });
         assert_eq!(
             ssts.iter()
-                .map(|meta_with_ver| { meta_with_ver.meta.clone() })
+                .map(|meta_with_ver| { meta_with_ver.0.clone() })
                 .collect(),
             vec![meta]
         );

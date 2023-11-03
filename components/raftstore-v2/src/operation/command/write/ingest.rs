@@ -46,7 +46,7 @@ impl Store {
         // filter old version SSTs
         let ssts: Vec<_> = ssts
             .into_iter()
-            .filter(|sst| sst.api_version >= sst_importer::API_VERSION_2)
+            .filter(|sst| sst.1 >= sst_importer::API_VERSION_2)
             .collect();
         if ssts.is_empty() {
             return Ok(());
@@ -55,9 +55,9 @@ impl Store {
         let mut region_ssts: HashMap<_, Vec<_>> = HashMap::default();
         for sst in ssts {
             region_ssts
-                .entry(sst.meta.get_region_id())
+                .entry(sst.0.get_region_id())
                 .or_default()
-                .push(sst.meta);
+                .push(sst.0);
         }
 
         let ranges = ctx.sst_importer.ranges_in_import();

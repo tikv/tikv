@@ -11,7 +11,7 @@ use std::{
         atomic::{AtomicU64, Ordering},
         Arc,
     },
-    time::Duration,
+    time::{Duration, SystemTime},
 };
 
 use collections::HashSet;
@@ -51,7 +51,7 @@ use txn_types::{Key, TimeStamp, WriteRef};
 
 use crate::{
     caching::cache_map::{CacheMap, ShareOwned},
-    import_file::{ImportDir, ImportFile, SstMetaWithApiVersion},
+    import_file::{ImportDir, ImportFile},
     import_mode::{ImportModeSwitcher, RocksDbMetricsFn},
     import_mode2::{HashRange, ImportModeSwitcherV2},
     metrics::*,
@@ -1385,9 +1385,9 @@ impl SstImporter {
     }
 
     /// List the basic information of the current SST files.
-    /// The information contains UUID, region ID, region Epoch.
-    /// Other fields may be left blank.
-    pub fn list_ssts(&self) -> Result<Vec<SstMetaWithApiVersion>> {
+    /// The information contains UUID, region ID, region Epoch, api version,
+    /// last modified time. Other fields may be left blank.
+    pub fn list_ssts(&self) -> Result<Vec<(SstMeta, i32, SystemTime)>> {
         self.dir.list_ssts()
     }
 
@@ -1587,9 +1587,9 @@ mod tests {
         for sst in &ssts {
             ingested
                 .iter()
-                .find(|s| s.get_uuid() == sst.meta.get_uuid())
+                .find(|s| s.get_uuid() == sst.0.get_uuid())
                 .unwrap();
-            dir.delete(&sst.meta, key_manager.as_deref()).unwrap();
+            dir.delete(&sst.0, key_manager.as_deref()).unwrap();
         }
         assert!(dir.list_ssts().unwrap().is_empty());
     }

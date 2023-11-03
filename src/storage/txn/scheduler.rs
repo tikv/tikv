@@ -83,6 +83,7 @@ use crate::{
             flow_controller::FlowController,
             latch::{Latches, Lock},
             sched_pool::{tls_collect_query, tls_collect_scan_details, SchedPool},
+            txn_status_cache::TxnStatusCache,
             Error, ErrorInner, ProcessResult,
         },
         types::StorageCallback,
@@ -293,6 +294,8 @@ struct TxnSchedulerInner<L: LockManager> {
     quota_limiter: Arc<QuotaLimiter>,
     resource_manager: Option<Arc<ResourceGroupManager>>,
     feature_gate: FeatureGate,
+
+    txn_status_cache: TxnStatusCache,
 }
 
 #[inline]
@@ -484,6 +487,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             quota_limiter,
             resource_manager,
             feature_gate,
+            txn_status_cache: TxnStatusCache::new(config.txn_status_cache_capacity),
         });
 
         slow_log!(
@@ -815,6 +819,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         pipelined: bool,
         async_apply_prewrite: bool,
         new_acquired_locks: Vec<kvrpcpb::LockInfo>,
+        known_txn_status: Vec<(TimeStamp, TimeStamp)>,
         tag: CommandKind,
         metadata: TaskMetadata<'_>,
         sched_details: &SchedulerDetails,
@@ -837,6 +842,17 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         debug!("write command finished";
             "cid" => cid, "pipelined" => pipelined, "async_apply_prewrite" => async_apply_prewrite);
         drop(lock_guards);
+
+        if result.is_ok() && !known_txn_status.is_empty() {
+            // Update cache before calling the callback.
+            // Reversing the order can lead to test failures as the cache may still
+            // remain not updated after receiving signal from the callback.
+            let now = std::time::SystemTime::now();
+            for (start_ts, commit_ts) in known_txn_status {
+                self.inner.txn_status_cache.insert(start_ts, commit_ts, now);
+            }
+        }
+
         let tctx = self.inner.dequeue_task_context(cid);
 
         let mut do_wake_up = !tctx.woken_up_resumable_lock_requests.is_empty();
@@ -1258,6 +1274,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                 statistics: &mut sched_details.stat,
                 async_apply_prewrite: self.inner.enable_async_apply_prewrite,
                 raw_ext,
+                txn_status_cache: &self.inner.txn_status_cache,
             };
             let begin_instant = Instant::now();
             let res = unsafe {
@@ -1328,6 +1345,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             new_acquired_locks,
             lock_guards,
             response_policy,
+            known_txn_status,
         } = match deadline
             .check()
             .map_err(StorageError::from)
@@ -1406,6 +1424,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                 false,
                 false,
                 new_acquired_locks,
+                known_txn_status,
                 tag,
                 metadata,
                 sched_details,
@@ -1441,6 +1460,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                 false,
                 false,
                 new_acquired_locks,
+                known_txn_status,
                 tag,
                 metadata,
                 sched_details,
@@ -1636,6 +1656,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                         pipelined,
                         is_async_apply_prewrite,
                         new_acquired_locks,
+                        known_txn_status,
                         tag,
                         metadata,
                         sched_details,
@@ -1878,6 +1899,11 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                 .lock_wait_queues
                 .push_lock_wait(entry, Default::default());
         }
+    }
+
+    #[cfg(test)]
+    pub fn get_txn_status_cache(&self) -> &TxnStatusCache {
+        &self.inner.txn_status_cache
     }
 }
 
