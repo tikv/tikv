@@ -5,6 +5,7 @@ use crate::utils::v1::*;
 enum SourceType {
     Leader,
     Learner,
+    // The learner coesn't catch up with Leader.
     DelayedLearner,
     InvalidSource,
 }
@@ -43,6 +44,294 @@ fn basic_fast_add_peer() {
     // fail::remove("before_tiflash_check_double_write");
 }
 
+// The idea is:
+// - old_one is replicated to store 3 as a normal raft snapshot. It has the
+//   original wider range.
+// - new_one is derived from old_one, and then replicated to store 2 by normal
+//   path, and then replicated to store 3 by FAP.
+
+// Expected result is:
+// - apply snapshot old_one [-inf, inf)
+// - pre handle old_one [-inf, inf)
+// - fap handle new_one [-inf, k2)
+//      - pre-handle data
+//      - ingest data(the post apply stage on TiFlash)
+//      - send fake and empty snapshot
+// - apply snapshot new_one [-inf, k2) <- won't happen, due to overlap
+// - post apply new_one [-inf, k2), k1=v13 <- won't happen
+// - post apply old_one [-inf, inf), k1=v1
+
+#[test]
+fn test_overlap_last_apply_old() {
+    let (mut cluster, pd_client) = new_mock_cluster_snap(0, 3);
+    pd_client.disable_default_operator();
+    disable_auto_gen_compact_log(&mut cluster);
+    cluster.cfg.proxy_cfg.engine_store.enable_fast_add_peer = true;
+    tikv_util::set_panic_hook(true, "./");
+    // Can always apply snapshot immediately
+    fail::cfg("apply_on_handle_snapshot_sync", "return(true)").unwrap();
+    // Otherwise will panic with `assert_eq!(apply_state, last_applied_state)`.
+    fail::cfg("on_pre_write_apply_state", "return(true)").unwrap();
+    cluster.cfg.raft_store.right_derive_when_split = true;
+
+    let _ = cluster.run_conf_change();
+    cluster.must_put(b"k1", b"v1");
+    cluster.must_put(b"k3", b"v3");
+
+    // Use an invalid store id to make FAP fallback.
+    fail::cfg("fap_mock_add_peer_from_id", "return(4)").unwrap();
+
+    // Delay, so the legacy snapshot comes after fap snapshot in pending_applies
+    // queue.
+    fail::cfg("on_ob_pre_handle_snapshot_s3", "pause").unwrap();
+    pd_client.must_add_peer(1, new_learner_peer(3, 3003));
+    std::thread::sleep(std::time::Duration::from_millis(1000));
+
+    // Split
+    check_key(&cluster, b"k1", b"v1", Some(true), None, Some(vec![1]));
+    check_key(&cluster, b"k3", b"v3", Some(true), None, Some(vec![1]));
+    // Generates 2 peers {1001@1, 1002@3} for region 1.
+    // However, we use the older snapshot, so the 1002 peer is not inited.
+    cluster.must_split(&cluster.get_region(b"k1"), b"k2");
+
+    let new_one_1000_k1 = cluster.get_region(b"k1");
+    let old_one_1_k3 = cluster.get_region(b"k3"); // region_id = 1
+    assert_ne!(new_one_1000_k1.get_id(), old_one_1_k3.get_id());
+    pd_client.must_remove_peer(new_one_1000_k1.get_id(), new_learner_peer(3, 1002));
+    assert_ne!(new_one_1000_k1.get_id(), old_one_1_k3.get_id());
+    assert_eq!(1, old_one_1_k3.get_id());
+
+    // Prevent FAP
+    fail::cfg("fap_mock_add_peer_from_id", "return(2)").unwrap();
+    debug!(
+        "old_one(with k3) is {}, new_one(with k1) is {}",
+        old_one_1_k3.get_id(),
+        new_one_1000_k1.get_id()
+    );
+    must_wait_until_cond_node(
+        &cluster.cluster_ext,
+        old_one_1_k3.get_id(),
+        Some(vec![1]),
+        &|states: &States| -> bool {
+            states.in_disk_region_state.get_region().get_peers().len() == 2
+        },
+    );
+
+    // k1 was in old region, but reassigned to new region then.
+    cluster.must_put(b"k1", b"v13");
+    std::thread::sleep(std::time::Duration::from_millis(1000));
+
+    // Prepare a peer for FAP.
+    pd_client.must_add_peer(new_one_1000_k1.get_id(), new_learner_peer(2, 2003));
+    must_wait_until_cond_node(
+        &cluster.cluster_ext,
+        new_one_1000_k1.get_id(),
+        Some(vec![1, 2]),
+        &|states: &States| -> bool {
+            states.in_disk_region_state.get_region().get_peers().len() == 2
+        },
+    );
+
+    fail::cfg("on_can_apply_snapshot", "return(false)").unwrap();
+    fail::cfg("fap_mock_add_peer_from_id", "return(2)").unwrap();
+    // FAP will ingest data, but not finish applying snapshot due to failpoint.
+    pd_client.must_add_peer(new_one_1000_k1.get_id(), new_learner_peer(3, 3001));
+    // TODO wait FAP finished "build and send"
+    std::thread::sleep(std::time::Duration::from_millis(5000));
+    // Now let store's snapshot of region 1 to prehandle.
+    // So it will come after 1003 in `pending_applies`.
+    fail::remove("on_ob_pre_handle_snapshot_s3");
+    std::thread::sleep(std::time::Duration::from_millis(1000));
+
+    // Reject all raft log, to test snapshot result.
+    cluster.add_send_filter(CloneFilterFactory(
+        RegionPacketFilter::new(1, 3)
+            .msg_type(MessageType::MsgAppend)
+            .direction(Direction::Recv),
+    ));
+
+    fail::remove("on_can_apply_snapshot");
+    debug!("remove on_can_apply_snapshot");
+
+    must_not_wait_until_cond_generic_for(
+        &cluster.cluster_ext,
+        new_one_1000_k1.get_id(),
+        Some(vec![3]),
+        &|states: &HashMap<u64, States>| -> bool { states.contains_key(&1000) },
+        3000,
+    );
+
+    // k1 is in a different region in store 3 than in global view.
+    assert_eq!(cluster.get_region(b"k1").get_id(), new_one_1000_k1.get_id());
+    check_key(&cluster, b"k1", b"v1", None, Some(true), Some(vec![3]));
+    check_key_ex(
+        &cluster,
+        b"k1",
+        b"v1",
+        Some(true),
+        None,
+        Some(vec![3]),
+        Some(old_one_1_k3.get_id()),
+        true,
+    );
+    check_key(&cluster, b"k3", b"v3", Some(true), None, Some(vec![3]));
+
+    cluster.clear_send_filters();
+
+    fail::remove("fap_mock_add_peer_from_id");
+    fail::remove("on_can_apply_snapshot");
+    fail::remove("apply_on_handle_snapshot_sync");
+    fail::remove("on_pre_write_apply_state");
+    cluster.shutdown();
+}
+
+// If a legacy snapshot is applied between fn_fast_add_peer and
+// build_and_send_snapshot, it will override the previous snapshot's data, which
+// is actually newer.
+
+#[test]
+fn test_overlap_apply_legacy_in_the_middle() {
+    let (mut cluster, pd_client) = new_mock_cluster_snap(0, 3);
+    pd_client.disable_default_operator();
+    disable_auto_gen_compact_log(&mut cluster);
+    cluster.cfg.proxy_cfg.engine_store.enable_fast_add_peer = true;
+    cluster.cfg.tikv.raft_store.store_batch_system.pool_size = 4;
+    cluster.cfg.tikv.raft_store.apply_batch_system.pool_size = 4;
+    tikv_util::set_panic_hook(true, "./");
+    // Can always apply snapshot immediately
+    fail::cfg("apply_on_handle_snapshot_sync", "return(true)").unwrap();
+    // Otherwise will panic with `assert_eq!(apply_state, last_applied_state)`.
+    fail::cfg("on_pre_write_apply_state", "return(true)").unwrap();
+    cluster.cfg.raft_store.right_derive_when_split = true;
+
+    let _ = cluster.run_conf_change();
+    cluster.must_put(b"k1", b"v1");
+    cluster.must_put(b"k3", b"v3");
+
+    // Use an invalid store id to make FAP fallback.
+    fail::cfg("fap_mock_add_peer_from_id", "return(4)").unwrap();
+
+    // Don't use send filter to prevent applying snapshot,
+    // since it may no longer send snapshot after split.
+    fail::cfg("fap_on_msg_snapshot_1_3003", "pause").unwrap();
+    pd_client.must_add_peer(1, new_learner_peer(3, 3003));
+    std::thread::sleep(std::time::Duration::from_millis(1000));
+
+    // Split
+    check_key(&cluster, b"k1", b"v1", Some(true), None, Some(vec![1]));
+    check_key(&cluster, b"k3", b"v3", Some(true), None, Some(vec![1]));
+    // Generates 2 peers {1001@1, 1002@3} for region 1.
+    // However, we use the older snapshot, so the 1002 peer is not inited.
+    cluster.must_split(&cluster.get_region(b"k1"), b"k2");
+
+    let new_one_1000_k1 = cluster.get_region(b"k1");
+    let old_one_1_k3 = cluster.get_region(b"k3"); // region_id = 1
+    assert_ne!(new_one_1000_k1.get_id(), old_one_1_k3.get_id());
+    pd_client.must_remove_peer(new_one_1000_k1.get_id(), new_learner_peer(3, 1002));
+    assert_ne!(new_one_1000_k1.get_id(), old_one_1_k3.get_id());
+    assert_eq!(1, old_one_1_k3.get_id());
+
+    // Prevent FAP
+    fail::cfg("fap_mock_add_peer_from_id", "return(2)").unwrap();
+    debug!(
+        "old_one(with k3) is {}, new_one(with k1) is {}",
+        old_one_1_k3.get_id(),
+        new_one_1000_k1.get_id()
+    );
+    must_wait_until_cond_node(
+        &cluster.cluster_ext,
+        old_one_1_k3.get_id(),
+        Some(vec![1]),
+        &|states: &States| -> bool {
+            states.in_disk_region_state.get_region().get_peers().len() == 2
+        },
+    );
+
+    // k1 was in old region, but reassigned to new region then.
+    cluster.must_put(b"k1", b"v13");
+    std::thread::sleep(std::time::Duration::from_millis(1000));
+
+    // Prepare a peer for FAP.
+    pd_client.must_add_peer(new_one_1000_k1.get_id(), new_learner_peer(2, 2003));
+    must_wait_until_cond_node(
+        &cluster.cluster_ext,
+        new_one_1000_k1.get_id(),
+        Some(vec![1, 2]),
+        &|states: &States| -> bool {
+            states.in_disk_region_state.get_region().get_peers().len() == 2
+        },
+    );
+
+    // Wait for conf change.
+    fail::cfg("fap_ffi_pause", "pause").unwrap();
+    fail::cfg("fap_mock_add_peer_from_id", "return(2)").unwrap();
+    // FAP will ingest data, but not finish applying snapshot due to failpoint.
+    pd_client.must_add_peer(new_one_1000_k1.get_id(), new_learner_peer(3, 3001));
+    must_wait_until_cond_node(
+        &cluster.cluster_ext,
+        new_one_1000_k1.get_id(),
+        Some(vec![2]),
+        &|states: &States| -> bool {
+            states.in_disk_region_state.get_region().get_peers().len() == 3
+        },
+    );
+    std::thread::sleep(std::time::Duration::from_millis(1000));
+    fail::cfg("fap_ffi_pause_after_fap_call", "pause").unwrap();
+    fail::remove("fap_ffi_pause");
+
+    // std::thread::sleep(std::time::Duration::from_millis(5000));
+    check_key_ex(
+        &cluster,
+        b"k1",
+        b"v13",
+        None,
+        Some(true),
+        Some(vec![3]),
+        None,
+        true,
+    );
+
+    // Now the FAP snapshot will stuck at fap_ffi_pause_after_fap_call,
+    // We will make the legacy one apply.
+    fail::remove("fap_mock_add_peer_from_id");
+    fail::remove("fap_on_msg_snapshot_1_3003");
+
+    // std::thread::sleep(std::time::Duration::from_millis(5000));
+    check_key_ex(
+        &cluster,
+        b"k1",
+        b"v1",
+        None,
+        Some(true),
+        Some(vec![3]),
+        None,
+        true,
+    );
+    // Make FAP continue after the legacy snapshot is applied.
+    fail::remove("fap_ffi_pause_after_fap_call");
+    // TODO wait until fap finishes.
+    // std::thread::sleep(std::time::Duration::from_millis(5000));
+    check_key_ex(
+        &cluster,
+        b"k1",
+        b"v1",
+        None,
+        Some(true),
+        Some(vec![3]),
+        None,
+        true,
+    );
+
+    fail::remove("fap_mock_add_peer_from_id");
+    fail::remove("on_can_apply_snapshot");
+    fail::remove("apply_on_handle_snapshot_sync");
+    fail::remove("on_pre_write_apply_state");
+    cluster.shutdown();
+}
+
+// `block_wait`: whether we block wait in a MsgAppend handling, or return with
+// WaitForData. `pause`: pause in some core procedures.
+// `check_timeout`: mock and check if FAP timeouts.
 fn simple_fast_add_peer(
     source_type: SourceType,
     block_wait: bool,
@@ -136,7 +425,7 @@ fn simple_fast_add_peer(
         _ => (),
     }
 
-    // Add peer 3
+    // Add peer 3 by FAP
     pd_client.must_add_peer(1, new_learner_peer(3, 3));
     cluster.must_put(b"k2", b"v2");
 
@@ -241,14 +530,9 @@ fn simple_fast_add_peer(
                 &mut |_, _ffi: &mut FFIHelperSet| {
                     // Not actually the case, since we allow handling
                     // MsgAppend multiple times.
-                    // So the following fires when:
+                    // So it fires when in
                     // (DelayedLearner, false, ApplySnapshot)
-
-                    // let server = &ffi.engine_store_server;
-                    // (*ffi.engine_store_server).mutate_region_states(1, |e:
-                    // &mut RegionStats| { assert_eq!(1,
-                    // e.fast_add_peer_count.load(Ordering::SeqCst));
-                    // });
+                    // when we want to assert `fast_add_peer_count` == 1.
                 },
             );
         }
@@ -364,6 +648,7 @@ mod simple_blocked_nopause {}
 mod simple_blocked_pause {
     use super::*;
     // Delay when fetch and build data
+
     #[test]
     fn test_simpleb_from_learner_paused_build() {
         fail::cfg("fap_core_no_fallback", "panic").unwrap();
@@ -385,7 +670,7 @@ mod simple_blocked_pause {
     }
 
     // Delay when applying snapshot
-    // This test is origianlly aimed to test multiple MsgSnapshot.
+    // This test is origially aimed to test multiple MsgSnapshot.
     // However, we observed less repeated MsgAppend than in real cluster.
     #[test]
     fn test_simpleb_from_learner_paused_apply() {
@@ -461,9 +746,13 @@ fn test_timeout_fallback() {
     fail::remove("apply_on_handle_snapshot_sync");
 }
 
+// If the peer is initialized, it will not use fap to catch up.
 #[test]
 fn test_existing_peer() {
-    // fail::cfg("before_tiflash_check_double_write", "return").unwrap();
+    // Can always apply snapshot immediately
+    fail::cfg("apply_on_handle_snapshot_sync", "return(true)").unwrap();
+    // Otherwise will panic with `assert_eq!(apply_state, last_applied_state)`.
+    fail::cfg("on_pre_write_apply_state", "return(true)").unwrap();
 
     tikv_util::set_panic_hook(true, "./");
     let (mut cluster, pd_client) = new_mock_cluster(0, 2);
@@ -481,20 +770,38 @@ fn test_existing_peer() {
     fail::remove("fap_core_no_fallback");
 
     stop_tiflash_node(&mut cluster, 2);
+
+    cluster.must_put(b"k5", b"v5");
+    cluster.must_put(b"k6", b"v6");
+    force_compact_log(&mut cluster, b"k6", Some(vec![1]));
+
     fail::cfg("fap_core_no_fast_path", "panic").unwrap();
+
     restart_tiflash_node(&mut cluster, 2);
-    must_put_and_check_key(&mut cluster, 5, 6, Some(true), None, None);
+
+    iter_ffi_helpers(&cluster, Some(vec![2]), &mut |_, ffi: &mut FFIHelperSet| {
+        (*ffi.engine_store_server).mutate_region_states(1, |e: &mut RegionStats| {
+            assert_eq!(e.apply_snap_count.load(Ordering::SeqCst), 0);
+        });
+    });
+
+    check_key(&mut cluster, b"k6", b"v6", Some(true), None, None);
+
+    iter_ffi_helpers(&cluster, Some(vec![2]), &mut |_, ffi: &mut FFIHelperSet| {
+        (*ffi.engine_store_server).mutate_region_states(1, |e: &mut RegionStats| {
+            assert_eq!(e.apply_snap_count.load(Ordering::SeqCst), 1);
+        });
+    });
 
     cluster.shutdown();
     fail::remove("fap_core_no_fast_path");
-    // fail::remove("before_tiflash_check_double_write");
+    fail::remove("apply_on_handle_snapshot_sync");
+    fail::remove("on_pre_write_apply_state");
 }
 
 // We will reject remote peer in Applying state.
 #[test]
 fn test_apply_snapshot() {
-    // fail::cfg("before_tiflash_check_double_write", "return").unwrap();
-
     tikv_util::set_panic_hook(true, "./");
     let (mut cluster, pd_client) = new_mock_cluster(0, 3);
     cluster.cfg.proxy_cfg.engine_store.enable_fast_add_peer = true;

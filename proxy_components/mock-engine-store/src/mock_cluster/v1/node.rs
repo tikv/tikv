@@ -356,6 +356,13 @@ impl Simulator<TiFlashEngine> for NodeCluster {
             key_mgr_cloned,
         );
         tiflash_ob.register_to(&mut coprocessor_host);
+        engines
+            .kv
+            .proxy_ext
+            .engine_store_hub
+            .as_ref()
+            .unwrap()
+            .set_store_id(node_id);
 
         let cm = ConcurrencyManager::new(1.into());
         self.concurrency_managers.insert(node_id, cm.clone());

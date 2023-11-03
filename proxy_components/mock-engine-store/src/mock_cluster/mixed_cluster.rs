@@ -20,6 +20,7 @@ pub trait MixedCluster {
     fn get_engine(&self, node_id: u64) -> &impl RawEngine<engine_rocks::RocksEngine>;
     fn must_put(&mut self, key: &[u8], value: &[u8]);
     fn must_get(&self, id: u64, key: &[u8], expected: Option<&[u8]>);
+    fn must_get_finally(&self, id: u64, key: &[u8], expected: Option<&[u8]>);
     fn run_node(&mut self, node_id: u64);
     fn stop_node(&mut self, node_id: u64);
     fn call_command_on_leader(

@@ -566,6 +566,13 @@ impl ServerCluster {
             key_mgr_cloned,
         );
         tiflash_ob.register_to(&mut coprocessor_host);
+        engines
+            .kv
+            .proxy_ext
+            .engine_store_hub
+            .as_ref()
+            .unwrap()
+            .set_store_id(node_id);
 
         // Register the role change observer of the lock manager.
         lock_mgr.register_detector_role_change_observer(&mut coprocessor_host);

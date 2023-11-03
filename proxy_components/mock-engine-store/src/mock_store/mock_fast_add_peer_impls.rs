@@ -113,7 +113,7 @@ pub(crate) unsafe extern "C" fn ffi_fast_add_peer(
                 store_id,
                 new_peer_id,
             ) {
-                debug!("recover from remote peer: preparing from {} to {}, not applied conf change {}", from_store, store_id, new_peer_id; "region_id" => region_id);
+                debug!("recover from remote peer: preparing from {} to {}, failed for applied conf change for peer {} region_meta {:?}", from_store, store_id, new_peer_id, new_region_meta; "region_id" => region_id);
                 ret = Some(failed_add_peer_res(interfaces_ffi::FastAddPeerStatus::WaitForData));
                 return;
             }
@@ -169,6 +169,11 @@ pub(crate) unsafe extern "C" fn ffi_fast_add_peer(
                 ret = Some(failed_add_peer_res(interfaces_ffi::FastAddPeerStatus::FailedInject));
                 return;
             }
+            crate::write_snapshot_to_db_data(
+                &mut (*store.engine_store_server),
+                target_region,
+                String::from("fast-add-peer"),
+            );
             if fail_after_write {
                 let mut raft_wb = target_engines.raft.log_batch(1024);
                 let mut entries: Vec<raft::eraftpb::Entry> = Default::default();

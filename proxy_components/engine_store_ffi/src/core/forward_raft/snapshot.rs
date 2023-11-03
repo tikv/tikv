@@ -121,7 +121,9 @@ impl<T: Transport + 'static, ER: RaftEngine> ProxyForwarder<T, ER> {
             "snapshot" => ?snap,
         );
         fail::fail_point!("on_ob_pre_handle_snapshot", |_| {});
-
+        fail::fail_point!("on_ob_pre_handle_snapshot_s3", self.store_id == 3, |_| {});
+        // TODO in fap, Snapshot could still have display_path even though it is a faked
+        // empty one
         let snap = match snap {
             None => return,
             Some(s) => s,

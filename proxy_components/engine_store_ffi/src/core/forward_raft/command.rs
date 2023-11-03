@@ -490,6 +490,14 @@ impl<T: Transport + 'static, ER: RaftEngine> ProxyForwarder<T, ER> {
     }
 
     pub fn on_raft_message(&self, msg: &RaftMessage) -> bool {
+        fail::fail_point!(
+            "fap_on_msg_snapshot_1_3003",
+            msg.get_message().get_msg_type() == raft::eraftpb::MessageType::MsgSnapshot
+                && msg.get_to_peer().get_store_id() == 3
+                && msg.get_to_peer().get_id() == 3003
+                && msg.region_id == 1,
+            |_| unreachable!()
+        );
         !self.maybe_fast_path_tick(msg)
     }
 }

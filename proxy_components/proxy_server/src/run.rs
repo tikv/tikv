@@ -497,6 +497,7 @@ impl<CER: ConfiguredRaftEngine, F: KvFormat> TiKvServer<CER, F> {
             engine_store_ffi::ffi::gen_engine_store_server_helper(engine_store_server_helper);
         let engine_store_hub = Arc::new(engine_store_ffi::engine::TiFlashEngineStoreHub {
             engine_store_server_helper: helper,
+            store_id: std::cell::RefCell::new(0),
         });
         // engine_tiflash::MixedModeEngine has engine_rocks::RocksEngine inside
         let mut kv_engine = TiFlashEngine::from_rocks(kv_engine);

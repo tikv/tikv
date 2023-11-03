@@ -73,8 +73,7 @@ fn test_default_no_config_item() {
     let mut proxy_config = gen_proxy_config(&cpath, false, &mut v);
     overwrite_config_with_cmd_args(&mut config, &mut proxy_config, &matches);
     address_proxy_config(&mut config, &proxy_config);
-    use serde_derive::{Deserialize, Serialize};
-    use serde_json::{Map, Value};
+    use serde_json::Value;
     let json_format_proxy = serde_json::to_string(&proxy_config).unwrap();
     let parsed_json_proxy: Value = serde_json::from_str(json_format_proxy.as_str()).unwrap();
     {

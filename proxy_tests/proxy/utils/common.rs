@@ -106,15 +106,17 @@ pub fn must_put_and_check_key(
     );
 }
 
-pub fn check_key(
+pub fn check_key_ex(
     cluster: &impl MixedCluster,
     k: &[u8],
     v: &[u8],
     in_mem: Option<bool>,
     in_disk: Option<bool>,
     engines: Option<Vec<u64>>,
+    maybe_region_id: Option<u64>,
+    finally_get: bool,
 ) {
-    let region_id = cluster.get_region(k).get_id();
+    let region_id = maybe_region_id.unwrap_or_else(|| cluster.get_region(k).get_id());
     let engine_keys = {
         match engines {
             Some(e) => e.to_vec(),
@@ -125,9 +127,17 @@ pub fn check_key(
         match in_disk {
             Some(b) => {
                 if b {
-                    cluster.must_get(id, k, Some(v));
+                    if finally_get {
+                        cluster.must_get_finally(id, k, Some(v));
+                    } else {
+                        cluster.must_get(id, k, Some(v));
+                    }
                 } else {
-                    cluster.must_get(id, k, None);
+                    if finally_get {
+                        cluster.must_get_finally(id, k, None);
+                    } else {
+                        cluster.must_get(id, k, None);
+                    }
                 }
             }
             None => (),
@@ -145,8 +155,20 @@ pub fn check_key(
     }
 }
 
+pub fn check_key(
+    cluster: &impl MixedCluster,
+    k: &[u8],
+    v: &[u8],
+    in_mem: Option<bool>,
+    in_disk: Option<bool>,
+    engines: Option<Vec<u64>>,
+) {
+    check_key_ex(cluster, k, v, in_mem, in_disk, engines, None, false)
+}
+
 pub fn disable_auto_gen_compact_log(cluster: &mut impl MixedCluster) {
     // Disable AUTO generated compact log.
+    // Otherwise may trigger `assert_eq!(apply_state, last_applied_state);`.
     // This will not totally disable, so we use some failpoints later.
     cluster.mut_config().raft_store.raft_log_gc_count_limit = Some(1000);
     cluster.mut_config().raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(100000);

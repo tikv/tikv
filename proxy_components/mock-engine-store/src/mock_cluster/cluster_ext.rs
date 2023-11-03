@@ -176,6 +176,7 @@ impl ClusterExt {
             let helper = engine_store_ffi::ffi::gen_engine_store_server_helper(helper_ptr);
             let engine_store_hub = Arc::new(engine_store_ffi::engine::TiFlashEngineStoreHub {
                 engine_store_server_helper: helper,
+                store_id: std::cell::RefCell::new(0),
             });
             (helper_ptr, engine_store_hub)
         };

@@ -26,8 +26,10 @@ pub struct FlushedIndex {
 /// All in_disk_ state can somehow be fetched through KvEngine or RaftEngine.
 #[derive(Debug)]
 pub struct States {
+    // In proxy's memory, may be smaller than in_disk_apply_state.
     pub in_memory_apply_state: RaftApplyState,
     pub in_memory_applied_term: u64,
+    // In persistence of raft-engine.
     pub in_disk_apply_state: RaftApplyState,
     pub in_disk_region_state: RegionLocalState,
     pub in_disk_raft_state: RaftLocalState,
@@ -241,7 +243,7 @@ pub fn must_wait_until_cond_node(
         std::thread::sleep(std::time::Duration::from_millis(100));
         retry += 1;
         if retry >= 30 {
-            panic!("states not as expect after timeout")
+            panic!("states not as expect after timeout {:?}", new_states)
         }
     }
 }
@@ -262,7 +264,29 @@ pub fn must_wait_until_cond_generic(
         std::thread::sleep(std::time::Duration::from_millis(100));
         retry += 1;
         if retry >= 30 {
-            panic!("states not as expect after timeout")
+            panic!("states not as expect after timeout {:?}", new_states)
+        }
+    }
+}
+
+pub fn must_not_wait_until_cond_generic_for(
+    cluster_ext: &ClusterExt,
+    region_id: u64,
+    store_ids: Option<Vec<u64>>,
+    pred: &dyn Fn(&HashMap<u64, States>) -> bool,
+    millis: u64,
+) -> HashMap<u64, States> {
+    let mut retry = 0;
+    loop {
+        let new_states = maybe_collect_states(cluster_ext, region_id, store_ids.clone());
+        let fail = pred(&new_states);
+        if fail {
+            panic!("states should not be {:?}", new_states)
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        retry += 1;
+        if retry * 100 >= millis {
+            break new_states;
         }
     }
 }
@@ -465,7 +489,7 @@ pub fn must_wait_until_cond_states(
         std::thread::sleep(std::time::Duration::from_millis(100));
         retry += 1;
         if retry >= 30 {
-            panic!("states not as expect after timeout")
+            panic!("states not as expect after timeout {:?}", new_states)
         }
     }
 }

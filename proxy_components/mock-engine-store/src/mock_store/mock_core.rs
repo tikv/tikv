@@ -44,6 +44,7 @@ impl MockRegion {
 pub struct RegionStats {
     pub pre_handle_count: AtomicU64,
     pub fast_add_peer_count: AtomicU64,
+    pub apply_snap_count: AtomicU64,
 }
 
 // In case of newly added cfs.
@@ -139,8 +140,30 @@ pub fn copy_data_from(
     // kv data in memory
     for cf in 0..3 {
         for (k, v) in &source.data[cf] {
-            // debug!("copy_data_from region {} {:?} {:?}", region_id, k, v);
-            write_kv_in_mem(target, cf, k.as_slice(), v.as_slice());
+            if (k.as_slice() >= source.region.get_start_key()
+                || source.region.get_start_key().is_empty())
+                && (k.as_slice() < source.region.get_end_key()
+                    || source.region.get_end_key().is_empty())
+            {
+                debug!(
+                    "copy_data_from write to region {} {:?} {:?} S {:?} E {:?}",
+                    region_id,
+                    k,
+                    v,
+                    source.region.get_start_key(),
+                    source.region.get_end_key()
+                );
+                write_kv_in_mem(target, cf, k.as_slice(), v.as_slice());
+            } else {
+                debug!(
+                    "copy_data_from skip write to region {} {:?} {:?} S {:?} E {:?}",
+                    region_id,
+                    k,
+                    v,
+                    source.region.get_start_key(),
+                    source.region.get_end_key()
+                );
+            }
         }
     }
 

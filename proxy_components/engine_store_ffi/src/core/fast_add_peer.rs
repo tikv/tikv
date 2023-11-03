@@ -255,6 +255,7 @@ impl<T: Transport + 'static, ER: RaftEngine> ProxyForwarder<T, ER> {
         let res = self
             .engine_store_server_helper
             .fast_add_peer(region_id, new_peer_id);
+        fail::fail_point!("fap_ffi_pause_after_fap_call", |_| { unreachable!() });
         match res.status {
             FastAddPeerStatus::Ok => (),
             FastAddPeerStatus::WaitForData => {

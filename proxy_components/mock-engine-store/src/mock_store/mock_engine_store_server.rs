@@ -166,6 +166,42 @@ pub(crate) unsafe fn write_to_db_data(
     write_to_db_data_by_engine(store.id, kv, region, reason)
 }
 
+pub(crate) unsafe fn write_snapshot_to_db_data(
+    store: &mut EngineStoreServer,
+    region: &mut Box<MockRegion>,
+    reason: String,
+) {
+    let kv = &mut store.engines.as_mut().unwrap().kv;
+    write_snapshot_to_db_data_by_engine(store.id, kv, region, reason)
+}
+
+pub(crate) unsafe fn write_snapshot_to_db_data_by_engine(
+    store_id: u64,
+    kv: &TiFlashEngine,
+    region: &mut Box<MockRegion>,
+    reason: String,
+) {
+    info!("mock flush snapshot to engine";
+        "region" => ?region.region,
+        "store_id" => store_id,
+        "reason" => reason
+    );
+    let mut batch = kv.rocks.log_batch(1000);
+    let local_state = kvproto::raft_serverpb::RaftLocalState::default();
+    kv.rocks
+        .clean(region.region.get_id(), 0, &local_state, &mut batch)
+        .unwrap();
+    kv.rocks.consume(&mut batch, true).unwrap();
+    // TODO clear range
+    for cf in 0..3 {
+        for (k, v) in region.data[cf].iter() {
+            let tikv_key = keys::data_key(k.as_slice());
+            let cf_name = cf_to_name(cf.into());
+            kv.rocks.put_cf(cf_name, tikv_key.as_slice(), v).unwrap();
+        }
+    }
+}
+
 pub(crate) unsafe fn write_to_db_data_by_engine(
     store_id: u64,
     kv: &TiFlashEngine,
@@ -177,17 +213,15 @@ pub(crate) unsafe fn write_to_db_data_by_engine(
         "store_id" => store_id,
         "reason" => reason
     );
+
     for cf in 0..3 {
         let pending_write = std::mem::take(region.pending_write.as_mut().get_mut(cf).unwrap());
-        let mut pending_remove =
-            std::mem::take(region.pending_delete.as_mut().get_mut(cf).unwrap());
+        let pending_remove = std::mem::take(region.pending_delete.as_mut().get_mut(cf).unwrap());
         for (k, v) in pending_write.into_iter() {
             let tikv_key = keys::data_key(k.as_slice());
             let cf_name = cf_to_name(cf.into());
             if !pending_remove.contains(&k) {
                 kv.rocks.put_cf(cf_name, tikv_key.as_slice(), &v).unwrap();
-            } else {
-                pending_remove.remove(&k);
             }
         }
         let cf_name = cf_to_name(cf.into());

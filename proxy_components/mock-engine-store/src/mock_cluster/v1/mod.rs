@@ -46,6 +46,36 @@ impl<T: Simulator<TiFlashEngine>> MixedCluster for Cluster<T> {
             None => must_get_none(<Cluster<T>>::get_engine(self, node_id), key),
         };
     }
+    fn must_get_finally(&self, node_id: u64, key: &[u8], value: Option<&[u8]>) {
+        use engine_traits::Peekable;
+        let engine = <Cluster<T>>::get_engine(self, node_id);
+        let cf = "default";
+        for _ in 1..300 {
+            let res = engine.get_value_cf(cf, &keys::data_key(key)).unwrap();
+            if let (Some(value), Some(res)) = (value, res.as_ref()) {
+                if value == &res[..] {
+                    return;
+                }
+            }
+            if value.is_none() && res.is_none() {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+
+        tikv_util::debug!("last try to get {}", log_wrappers::hex_encode_upper(key));
+        let res = engine.get_value_cf(cf, &keys::data_key(key)).unwrap();
+        if value.is_none() && res.is_none()
+            || value.is_some() && res.is_some() && value.unwrap() == &*res.unwrap()
+        {
+            return;
+        }
+        panic!(
+            "can't get value {:?} for key {}",
+            value.map(tikv_util::escape),
+            log_wrappers::hex_encode_upper(key)
+        )
+    }
     fn run_node(&mut self, node_id: u64) {
         <Cluster<T>>::run_node(self, node_id).unwrap();
     }
