@@ -6205,6 +6205,12 @@ where
                 cb(peer_stat);
             }
         }
+
+        // only check the suspect buckets, not split region.
+        if source == "bucket" {
+            return;
+        }
+
         let task = SplitCheckTask::split_check_key_range(
             region.clone(),
             start_key,

@@ -1938,7 +1938,7 @@ impl<T: Simulator> Cluster<T> {
                 start_key: None,
                 end_key: None,
                 policy: CheckPolicy::Scan,
-                source: "test",
+                source: "bucket",
                 cb,
             },
         )
