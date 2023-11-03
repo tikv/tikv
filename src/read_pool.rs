@@ -27,9 +27,7 @@ use tikv_util::{
     yatp_pool::{self, CleanupMethod, FuturePool, PoolTicker, YatpPoolBuilder},
 };
 use tracker::TrackedFuture;
-use yatp::{
-    metrics::MULTILEVEL_LEVEL_ELAPSED, pool::Remote, queue::Extras, task::future::TaskCell,
-};
+use yatp::{metrics::MULTILEVEL_LEVEL_ELAPSED, queue::Extras};
 
 use self::metrics::*;
 use crate::{
@@ -55,7 +53,7 @@ pub enum ReadPool {
         read_pool_low: FuturePool,
     },
     Yatp {
-        pool: yatp::ThreadPool<TaskCell>,
+        pool: FuturePool,
         running_tasks: IntGauge,
         running_threads: IntGauge,
         max_tasks: usize,
@@ -86,7 +84,7 @@ impl ReadPool {
                 resource_ctl,
                 time_slice_inspector,
             } => ReadPoolHandle::Yatp {
-                remote: pool.remote().clone(),
+                remote: pool.clone(),
                 running_tasks: running_tasks.clone(),
                 running_threads: running_threads.clone(),
                 max_tasks: *max_tasks,
@@ -106,7 +104,7 @@ pub enum ReadPoolHandle {
         read_pool_low: FuturePool,
     },
     Yatp {
-        remote: Remote<TaskCell>,
+        remote: FuturePool,
         running_tasks: IntGauge,
         running_threads: IntGauge,
         max_tasks: usize,
@@ -167,31 +165,26 @@ impl ReadPoolHandle {
                 let group_name = metadata.group_name().to_owned();
                 let mut extras = Extras::new_multilevel(task_id, fixed_level);
                 extras.set_metadata(metadata.to_vec());
-                let task_cell = if let Some(resource_ctl) = resource_ctl {
-                    TaskCell::new(
-                        TrackedFuture::new(with_resource_limiter(
-                            ControlledFuture::new(
-                                async move {
-                                    f.await;
-                                    running_tasks.dec();
-                                },
-                                resource_ctl.clone(),
-                                group_name,
-                            ),
-                            resource_limiter,
-                        )),
-                        extras,
-                    )
+                if let Some(resource_ctl) = resource_ctl {
+                    let fut = TrackedFuture::new(with_resource_limiter(
+                        ControlledFuture::new(
+                            async move {
+                                f.await;
+                                running_tasks.dec();
+                            },
+                            resource_ctl.clone(),
+                            group_name,
+                        ),
+                        resource_limiter,
+                    ));
+                    remote.spawn_with_extras(fut, extras)?;
                 } else {
-                    TaskCell::new(
-                        TrackedFuture::new(async move {
-                            f.await;
-                            running_tasks.dec();
-                        }),
-                        extras,
-                    )
-                };
-                remote.spawn(task_cell);
+                    let fut = async move {
+                        f.await;
+                        running_tasks.dec();
+                    };
+                    remote.spawn_with_extras(fut, extras)?;
+                }
             }
         }
         Ok(())
@@ -260,7 +253,7 @@ impl ReadPoolHandle {
                 pool_size,
                 ..
             } => {
-                remote.scale_workers(max_thread_count);
+                remote.scale_pool_size(max_thread_count);
                 *max_tasks = max_tasks
                     .saturating_div(*pool_size)
                     .saturating_mul(max_thread_count);
@@ -474,9 +467,9 @@ pub fn build_yatp_read_pool_with_name<E: Engine, R: FlowStatsReporter>(
             destroy_tls_engine::<E>();
         });
     let pool = if let Some(ref r) = resource_ctl {
-        builder.build_priority_pool(r.clone())
+        builder.build_priority_future_pool(r.clone())
     } else {
-        builder.build_multi_level_pool()
+        builder.build_multi_level_future_pool()
     };
     let time_slice_inspector = Arc::new(TimeSliceInspector::new(&unified_read_pool_name));
     ReadPool::Yatp {
