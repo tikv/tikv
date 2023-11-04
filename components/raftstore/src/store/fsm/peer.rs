@@ -1367,11 +1367,7 @@ where
     }
 
     fn on_clear_region_size(&mut self) {
-        self.fsm.peer.approximate_size = None;
-        self.fsm.peer.approximate_keys = None;
-        self.fsm.peer.may_split_size = None;
-        self.fsm.peer.may_split_keys = None;
-        self.fsm.peer.may_skip_split_check = false;
+        self.fsm.peer.split_check_trigger.on_clear_region_size();
         self.register_split_region_check_tick();
     }
 
@@ -4115,8 +4111,18 @@ where
         // if share_source_region_size is true, it means the new region contains any
         // data from the origin region
         if share_source_region_size {
-            share_size = self.fsm.peer.approximate_size.map(|v| v / new_region_count);
-            share_keys = self.fsm.peer.approximate_keys.map(|v| v / new_region_count);
+            share_size = self
+                .fsm
+                .peer
+                .split_check_trigger
+                .approximate_size
+                .map(|v| v / new_region_count);
+            share_keys = self
+                .fsm
+                .peer
+                .split_check_trigger
+                .approximate_keys
+                .map(|v| v / new_region_count);
         }
 
         let mut meta = self.ctx.store_meta.lock().unwrap();
@@ -4128,14 +4134,11 @@ where
         );
         self.fsm.peer.post_split();
 
-        // It's not correct anymore, so set it to false to schedule a split check task.
-        self.fsm.peer.may_skip_split_check = false;
-
         let is_leader = self.fsm.peer.is_leader();
         if is_leader {
             if share_source_region_size {
-                self.fsm.peer.approximate_size = share_size;
-                self.fsm.peer.approximate_keys = share_keys;
+                self.fsm.peer.split_check_trigger.approximate_size = share_size;
+                self.fsm.peer.split_check_trigger.approximate_keys = share_keys;
             }
             self.fsm.peer.heartbeat_pd(self.ctx);
             // Notify pd immediately to let it update the region meta.
@@ -4271,8 +4274,8 @@ where
             new_peer.has_ready |= campaigned;
 
             if is_leader {
-                new_peer.peer.approximate_size = share_size;
-                new_peer.peer.approximate_keys = share_keys;
+                new_peer.peer.split_check_trigger.approximate_size = share_size;
+                new_peer.peer.split_check_trigger.approximate_keys = share_keys;
                 *new_peer.peer.txn_ext.pessimistic_locks.write() = locks;
                 // The new peer is likely to become leader, send a heartbeat immediately to
                 // reduce client query miss.
@@ -4290,11 +4293,6 @@ where
                 .insert(new_region_id, ReadDelegate::from_peer(new_peer.get_peer()));
             meta.region_read_progress
                 .insert(new_region_id, new_peer.peer.read_progress.clone());
-            if last_region_id == new_region_id {
-                // To prevent from big region, the right region needs run split
-                // check again after split.
-                new_peer.peer.size_diff_hint = self.ctx.cfg.region_split_check_diff().0;
-            }
             let mailbox = BasicMailbox::new(sender, new_peer, self.ctx.router.state_cnt().clone());
             self.ctx.router.register(new_region_id, mailbox);
             self.ctx
@@ -4789,7 +4787,7 @@ where
         // make approximate size and keys updated in time.
         // the reason why follower need to update is that there is a issue that after
         // merge and then transfer leader, the new leader may have stale size and keys.
-        self.fsm.peer.size_diff_hint = self.ctx.cfg.region_split_check_diff().0;
+        self.fsm.peer.split_check_trigger.reset_skip_check();
         self.fsm.peer.reset_region_buckets();
         if self.fsm.peer.is_leader() {
             info!(
@@ -5853,9 +5851,11 @@ where
         // whether the region should split.
         // We assume that `may_skip_split_check` is only set true after the split check
         // task is scheduled.
-        if self.fsm.peer.may_skip_split_check
-            && self.fsm.peer.compaction_declined_bytes < self.ctx.cfg.region_split_check_diff().0
-            && self.fsm.peer.size_diff_hint < self.ctx.cfg.region_split_check_diff().0
+        if self
+            .fsm
+            .peer
+            .split_check_trigger
+            .should_skip(self.ctx.cfg.region_split_check_diff().0)
         {
             return;
         }
@@ -5913,17 +5913,7 @@ where
             );
             return;
         }
-        self.fsm.peer.size_diff_hint = 0;
-        self.fsm.peer.compaction_declined_bytes = 0;
-        // The task is scheduled, the next tick may skip it only when the size and keys
-        // are small.
-        // If either size or keys are big enough to do a split,
-        // keep split check tick until split is done
-        if !matches!(self.fsm.peer.may_split_size, Some(true))
-            && !matches!(self.fsm.peer.may_split_keys, Some(true))
-        {
-            self.fsm.peer.may_skip_split_check = true;
-        }
+        self.fsm.peer.split_check_trigger.post_triggered();
     }
 
     fn on_prepare_split_region(
@@ -6000,40 +5990,20 @@ where
     }
 
     fn on_approximate_region_size(&mut self, size: Option<u64>, splitable: Option<bool>) {
-        // If size is none, it means no estimated size
-        if size.is_some() {
-            self.fsm.peer.approximate_size = size;
-        }
-
-        if splitable.is_some() {
-            self.fsm.peer.may_split_size = splitable;
-        }
-
-        // If the region is truly splitable,
-        // may_skip_split_check should be false
-        if matches!(splitable, Some(true)) {
-            self.fsm.peer.may_skip_split_check = false;
-        }
+        self.fsm
+            .peer
+            .split_check_trigger
+            .on_approximate_region_size(size, splitable);
         self.register_split_region_check_tick();
         self.register_pd_heartbeat_tick();
         fail_point!("on_approximate_region_size");
     }
 
     fn on_approximate_region_keys(&mut self, keys: Option<u64>, splitable: Option<bool>) {
-        // if keys is none, it means no estimated keys
-        if keys.is_some() {
-            self.fsm.peer.approximate_keys = keys;
-        }
-
-        if splitable.is_some() {
-            self.fsm.peer.may_split_keys = splitable;
-        }
-
-        // If the region is truly splitable,
-        // may_skip_split_check should be false
-        if matches!(splitable, Some(true)) {
-            self.fsm.peer.may_skip_split_check = false;
-        }
+        self.fsm
+            .peer
+            .split_check_trigger
+            .on_approximate_region_keys(keys, splitable);
         self.register_split_region_check_tick();
         self.register_pd_heartbeat_tick();
     }
@@ -6181,8 +6151,10 @@ where
     }
 
     fn on_compaction_declined_bytes(&mut self, declined_bytes: u64) {
-        self.fsm.peer.compaction_declined_bytes += declined_bytes;
-        if self.fsm.peer.compaction_declined_bytes >= self.ctx.cfg.region_split_check_diff().0 {
+        self.fsm.peer.split_check_trigger.compaction_declined_bytes += declined_bytes;
+        if self.fsm.peer.split_check_trigger.compaction_declined_bytes
+            >= self.ctx.cfg.region_split_check_diff().0
+        {
             UPDATE_REGION_SIZE_BY_COMPACTION_COUNTER.inc();
         }
         self.register_split_region_check_tick();
@@ -6588,17 +6560,14 @@ where
             size += sst.total_bytes;
             keys += sst.total_kvs;
         }
-        self.fsm.peer.approximate_size =
-            Some(self.fsm.peer.approximate_size.unwrap_or_default() + size);
-        self.fsm.peer.approximate_keys =
-            Some(self.fsm.peer.approximate_keys.unwrap_or_default() + keys);
+        self.fsm
+            .peer
+            .split_check_trigger
+            .on_ingest_sst_result(size, keys);
 
         if let Some(buckets) = &mut self.fsm.peer.region_buckets_info_mut().bucket_stat_mut() {
             buckets.ingest_sst(keys, size);
         }
-        // The ingested file may be overlapped with the data in engine, so we need to
-        // check it again to get the accurate value.
-        self.fsm.peer.may_skip_split_check = false;
         if self.fsm.peer.is_leader() {
             self.on_pd_heartbeat_tick();
             self.register_split_region_check_tick();
