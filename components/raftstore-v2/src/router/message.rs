@@ -14,7 +14,7 @@ use kvproto::{
 };
 use raftstore::store::{
     fsm::ChangeObserver, metrics::RaftEventDurationType, simple_write::SimpleWriteBinary,
-    util::LatencyInspector, FetchedLogs, GenSnapRes, TabletSnapKey,
+    util::LatencyInspector, FetchedLogs, GenSnapRes, RaftCmdExtraOpts, TabletSnapKey,
     UnsafeRecoveryExecutePlanSyncer, UnsafeRecoveryFillOutReportSyncer,
     UnsafeRecoveryForceLeaderSyncer, UnsafeRecoveryWaitApplySyncer,
 };
@@ -134,6 +134,7 @@ pub struct SimpleWrite {
     pub header: Box<RaftRequestHeader>,
     pub data: SimpleWriteBinary,
     pub ch: CmdResChannel,
+    pub extra_opts: RaftCmdExtraOpts,
 }
 
 #[derive(Debug)]
@@ -156,7 +157,7 @@ pub enum PeerMsg {
     /// Raft message is the message sent between raft nodes in the same
     /// raft group. Messages need to be redirected to raftstore if target
     /// peer doesn't exist.
-    RaftMessage(Box<RaftMessage>),
+    RaftMessage(Box<RaftMessage>, Option<Instant>),
     /// Query won't change any state. A typical query is KV read. In most cases,
     /// it will be processed using lease or read index.
     RaftQuery(RaftRequest<QueryResChannel>),
@@ -196,6 +197,11 @@ pub enum PeerMsg {
     },
     StoreUnreachable {
         to_store_id: u64,
+    },
+    // A store may be tombstone. Use it with caution, it also means store not
+    // found, PD can not distinguish them now, as PD may delete tombstone stores.
+    StoreMaybeTombstone {
+        store_id: u64,
     },
     /// Reports whether the snapshot sending is successful or not.
     SnapshotSent {
@@ -292,6 +298,14 @@ impl PeerMsg {
         header: Box<RaftRequestHeader>,
         data: SimpleWriteBinary,
     ) -> (Self, CmdResSubscriber) {
+        PeerMsg::simple_write_with_opt(header, data, RaftCmdExtraOpts::default())
+    }
+
+    pub fn simple_write_with_opt(
+        header: Box<RaftRequestHeader>,
+        data: SimpleWriteBinary,
+        extra_opts: RaftCmdExtraOpts,
+    ) -> (Self, CmdResSubscriber) {
         let (ch, sub) = CmdResChannel::pair();
         (
             PeerMsg::SimpleWrite(SimpleWrite {
@@ -299,6 +313,7 @@ impl PeerMsg {
                 header,
                 data,
                 ch,
+                extra_opts,
             }),
             sub,
         )

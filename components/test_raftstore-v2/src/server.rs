@@ -223,6 +223,11 @@ impl<EK: KvEngine> RaftExtension for TestExtension<EK> {
     }
 
     #[inline]
+    fn report_store_maybe_tombstone(&self, store_id: u64) {
+        self.extension.report_store_maybe_tombstone(store_id)
+    }
+
+    #[inline]
     fn report_snapshot_status(
         &self,
         region_id: u64,
@@ -556,6 +561,7 @@ impl<EK: KvEngine> ServerCluster<EK> {
             Arc::clone(&importer),
             Some(store_meta),
             resource_manager.clone(),
+            Arc::new(region_info_accessor.clone()),
         );
 
         // Create deadlock service.

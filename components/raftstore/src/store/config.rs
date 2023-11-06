@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use serde_with::with_prefix;
 use tikv_util::{
     box_err,
-    config::{ReadableDuration, ReadableSize, VersionTrack},
+    config::{ReadableDuration, ReadableSchedule, ReadableSize, VersionTrack},
     error, info,
     sys::SysQuota,
     warn,
@@ -152,6 +152,15 @@ pub struct Config {
     pub lock_cf_compact_interval: ReadableDuration,
     pub lock_cf_compact_bytes_threshold: ReadableSize,
 
+    /// Hours of the day during which we may execute a periodic full compaction.
+    /// If not set or empty, periodic full compaction will not run. In toml this
+    /// should be a list of timesin "HH:MM" format with an optional timezone
+    /// offset. If no timezone is specified, local timezone is used. E.g.,
+    /// `["23:00 +0000", "03:00 +0700"]` or `["23:00", "03:00"]`.
+    pub periodic_full_compact_start_times: ReadableSchedule,
+    /// Do not start a full compaction if cpu utilization exceeds this number.
+    pub periodic_full_compact_start_max_cpu: f64,
+
     #[online_config(skip)]
     pub notify_capacity: usize,
     pub messages_per_tick: usize,
@@ -169,6 +178,9 @@ pub struct Config {
     /// and try to alert monitoring systems, if there is any.
     pub abnormal_leader_missing_duration: ReadableDuration,
     pub peer_stale_state_check_interval: ReadableDuration,
+    /// Interval to check GC peers.
+    #[doc(hidden)]
+    pub gc_peer_check_interval: ReadableDuration,
 
     #[online_config(hidden)]
     pub leader_transfer_max_log_lag: u64,
@@ -432,6 +444,11 @@ impl Default for Config {
             region_compact_redundant_rows_percent: None,
             pd_heartbeat_tick_interval: ReadableDuration::minutes(1),
             pd_store_heartbeat_tick_interval: ReadableDuration::secs(10),
+            // Disable periodic full compaction by default.
+            periodic_full_compact_start_times: ReadableSchedule::default(),
+            // If periodic full compaction is enabled, do not start a full compaction
+            // if the CPU utilization is over 10%.
+            periodic_full_compact_start_max_cpu: 0.1,
             notify_capacity: 40960,
             snap_mgr_gc_tick_interval: ReadableDuration::minutes(1),
             snap_gc_timeout: ReadableDuration::hours(4),
@@ -510,6 +527,7 @@ impl Default for Config {
             renew_leader_lease_advance_duration: ReadableDuration::secs(0),
             allow_unsafe_vote_after_start: false,
             report_region_buckets_tick_interval: ReadableDuration::secs(10),
+            gc_peer_check_interval: ReadableDuration::secs(60),
             max_snapshot_file_raw_size: ReadableSize::mb(100),
             unreachable_backoff: ReadableDuration::secs(10),
             // TODO: make its value reasonable
@@ -1060,6 +1078,9 @@ impl Config {
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["leader_transfer_max_log_lag"])
             .set(self.leader_transfer_max_log_lag as f64);
+        CONFIG_RAFTSTORE_GAUGE
+            .with_label_values(&["gc_peer_check_interval"])
+            .set(self.gc_peer_check_interval.as_secs_f64());
 
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["snap_apply_batch_size"])

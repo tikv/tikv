@@ -5,7 +5,9 @@ use std::mem;
 use collections::HashSet;
 use engine_traits::{KvEngine, RaftEngine};
 use raft::{eraftpb::MessageType, StateRole, Storage};
-use raftstore::store::{util::LeaseState, ForceLeaderState, UnsafeRecoveryForceLeaderSyncer};
+use raftstore::store::{
+    util::LeaseState, ForceLeaderState, UnsafeRecoveryForceLeaderSyncer, UnsafeRecoveryState,
+};
 use slog::{info, warn};
 use tikv_util::time::Instant as TiInstant;
 
@@ -182,8 +184,17 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         self.set_has_ready();
     }
 
-    pub fn on_exit_force_leader<T>(&mut self, ctx: &StoreContext<EK, ER, T>) {
+    // TODO: add exit force leader check tick for raftstore v2
+    pub fn on_exit_force_leader<T>(&mut self, ctx: &StoreContext<EK, ER, T>, force: bool) {
         if !self.has_force_leader() {
+            return;
+        }
+
+        if let Some(UnsafeRecoveryState::Failed) = self.unsafe_recovery_state() && !force {
+            // Skip force leader if the plan failed, so wait for the next retry of plan with force leader state holding
+            info!(
+                self.logger, "skip exiting force leader state"
+            );
             return;
         }
 

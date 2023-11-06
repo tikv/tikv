@@ -35,7 +35,7 @@ use tikv_kv::Iterator;
 use tikv_util::{
     box_err,
     codec::number,
-    debug, error, info,
+    debug, defer, error, info,
     memory::MemoryQuota,
     sys::inspector::{self_thread_inspector, ThreadInspector},
     time::{Instant, Limiter},
@@ -90,7 +90,10 @@ pub(crate) struct Initializer<E> {
     pub(crate) request_id: u64,
     pub(crate) checkpoint_ts: TimeStamp,
 
-    pub(crate) speed_limiter: Limiter,
+    pub(crate) scan_concurrency_semaphore: Arc<Semaphore>,
+    pub(crate) scan_speed_limiter: Limiter,
+    pub(crate) fetch_speed_limiter: Limiter,
+
     pub(crate) max_scan_batch_bytes: usize,
     pub(crate) max_scan_batch_size: usize,
 
@@ -107,30 +110,9 @@ impl<E: KvEngine> Initializer<E> {
         &mut self,
         change_observer: ChangeObserver,
         cdc_handle: T,
-        concurrency_semaphore: Arc<Semaphore>,
         memory_quota: Arc<MemoryQuota>,
     ) -> Result<()> {
         fail_point!("cdc_before_initialize");
-        let _permit = concurrency_semaphore.acquire().await;
-
-        // When downstream_state is Stopped, it means the corresponding delegate
-        // is stopped. The initialization can be safely canceled.
-        //
-        // Acquiring a permit may take some time, it is possible that
-        // initialization can be canceled.
-        if self.downstream_state.load() == DownstreamState::Stopped {
-            info!("cdc async incremental scan canceled";
-                "region_id" => self.region_id,
-                "downstream_id" => ?self.downstream_id,
-                "observe_id" => ?self.observe_id,
-                "conn_id" => ?self.conn_id);
-            return Err(box_err!("scan canceled"));
-        }
-
-        CDC_SCAN_TASKS.with_label_values(&["ongoing"]).inc();
-        tikv_util::defer!({
-            CDC_SCAN_TASKS.with_label_values(&["ongoing"]).dec();
-        });
 
         // To avoid holding too many snapshots and holding them too long,
         // we need to acquire scan concurrency permit before taking snapshot.
@@ -185,8 +167,8 @@ impl<E: KvEngine> Initializer<E> {
         memory_quota: Arc<MemoryQuota>,
     ) -> Result<()> {
         if let Some(region_snapshot) = resp.snapshot {
-            assert_eq!(self.region_id, region_snapshot.get_region().get_id());
             let region = region_snapshot.get_region().clone();
+            assert_eq!(self.region_id, region.get_id());
             self.async_incremental_scan(region_snapshot, region, memory_quota)
                 .await
         } else {
@@ -206,10 +188,29 @@ impl<E: KvEngine> Initializer<E> {
         region: Region,
         memory_quota: Arc<MemoryQuota>,
     ) -> Result<()> {
-        let downstream_id = self.downstream_id;
+        let scan_concurrency_semaphore = self.scan_concurrency_semaphore.clone();
+        let _permit = scan_concurrency_semaphore.acquire().await;
+        CDC_SCAN_TASKS.with_label_values(&["ongoing"]).inc();
+        defer!(CDC_SCAN_TASKS.with_label_values(&["ongoing"]).dec());
+
         let region_id = region.get_id();
+        let downstream_id = self.downstream_id;
         let observe_id = self.observe_id;
+        let conn_id = self.conn_id;
         let kv_api = self.kv_api;
+        let on_cancel = || -> Result<()> {
+            info!("cdc async incremental scan canceled";
+                "region_id" => region_id,
+                "downstream_id" => ?downstream_id,
+                "observe_id" => ?observe_id,
+                "conn_id" => ?conn_id);
+            Err(box_err!("scan canceled"))
+        };
+
+        if self.downstream_state.load() == DownstreamState::Stopped {
+            return on_cancel();
+        }
+
         self.observed_range.update_region_key_range(&region);
         debug!("cdc async incremental scan";
             "region_id" => region_id,
@@ -258,7 +259,6 @@ impl<E: KvEngine> Initializer<E> {
         };
 
         fail_point!("cdc_incremental_scan_start");
-        let conn_id = self.conn_id;
         let mut done = false;
         let start = Instant::now_coarse();
 
@@ -267,15 +267,6 @@ impl<E: KvEngine> Initializer<E> {
             curr_state,
             DownstreamState::Initializing | DownstreamState::Stopped
         ));
-
-        let on_cancel = || -> Result<()> {
-            info!("cdc async incremental scan canceled";
-                "region_id" => region_id,
-                "downstream_id" => ?downstream_id,
-                "observe_id" => ?observe_id,
-                "conn_id" => ?conn_id);
-            Err(box_err!("scan canceled"))
-        };
 
         while !done {
             // When downstream_state is Stopped, it means the corresponding
@@ -404,16 +395,14 @@ impl<E: KvEngine> Initializer<E> {
             perf_delta,
         } = self.do_scan(scanner, old_value_cursors, &mut entries)?;
 
-        CDC_SCAN_BYTES.inc_by(emit as _);
         TLS_CDC_PERF_STATS.with(|x| *x.borrow_mut() += perf_delta);
         tls_flush_perf_stats();
-        let require = if let Some(bytes) = disk_read {
+        if let Some(bytes) = disk_read {
             CDC_SCAN_DISK_READ_BYTES.inc_by(bytes as _);
-            bytes
-        } else {
-            perf_delta.block_read_byte as usize
-        };
-        self.speed_limiter.consume(require).await;
+            self.scan_speed_limiter.consume(bytes).await;
+        }
+        CDC_SCAN_BYTES.inc_by(emit as _);
+        self.fetch_speed_limiter.consume(emit as _).await;
 
         if let Some(resolver) = resolver {
             // Track the locks.
@@ -575,7 +564,6 @@ mod tests {
         time::Duration,
     };
 
-    use collections::HashSet;
     use engine_rocks::RocksEngine;
     use engine_traits::{MiscExt, CF_WRITE};
     use futures::{executor::block_on, StreamExt};
@@ -584,6 +572,7 @@ mod tests {
         errorpb::Error as ErrorHeader,
     };
     use raftstore::{coprocessor::ObserveHandle, router::CdcRaftRouter, store::RegionSnapshot};
+    use resolved_ts::TxnLocks;
     use test_raftstore::MockRaftStoreRouter;
     use tikv::storage::{
         kv::Engine,
@@ -624,7 +613,8 @@ mod tests {
     }
 
     fn mock_initializer(
-        speed_limit: usize,
+        scan_limit: usize,
+        fetch_limit: usize,
         buffer: usize,
         engine: Option<RocksEngine>,
         kv_api: ChangeDataRequestKvApi,
@@ -665,7 +655,9 @@ mod tests {
             conn_id: ConnId::new(),
             request_id: 0,
             checkpoint_ts: 1.into(),
-            speed_limiter: Limiter::new(speed_limit as _),
+            scan_concurrency_semaphore: Arc::new(Semaphore::new(1)),
+            scan_speed_limiter: Limiter::new(scan_limit as _),
+            fetch_speed_limiter: Limiter::new(fetch_limit as _),
             max_scan_batch_bytes: 1024 * 1024,
             max_scan_batch_size: 1024,
             build_resolver: true,
@@ -681,7 +673,7 @@ mod tests {
     fn test_initializer_build_resolver() {
         let mut engine = TestEngineBuilder::new().build_without_cache().unwrap();
 
-        let mut expected_locks = BTreeMap::<TimeStamp, HashSet<Arc<[u8]>>>::new();
+        let mut expected_locks = BTreeMap::<TimeStamp, TxnLocks>::new();
 
         // Only observe ["", "b\0x90"]
         let observed_range = ObservedRange::new(
@@ -704,10 +696,12 @@ mod tests {
             total_bytes += v.len();
             let ts = TimeStamp::new(i as _);
             must_prewrite_put(&mut engine, k, v, k, ts);
-            expected_locks
-                .entry(ts)
-                .or_default()
-                .insert(k.to_vec().into());
+            let txn_locks = expected_locks.entry(ts).or_insert_with(|| {
+                let mut txn_locks = TxnLocks::default();
+                txn_locks.sample_lock = Some(k.to_vec().into());
+                txn_locks
+            });
+            txn_locks.lock_count += 1;
         }
 
         let region = Region::default();
@@ -715,6 +709,7 @@ mod tests {
         // Buffer must be large enough to unblock async incremental scan.
         let buffer = 1000;
         let (mut worker, pool, mut initializer, rx, mut drain) = mock_initializer(
+            total_bytes,
             total_bytes,
             buffer,
             engine.kv_engine(),
@@ -831,6 +826,7 @@ mod tests {
         let buffer = 1000;
         let (mut worker, pool, mut initializer, _rx, mut drain) = mock_initializer(
             total_bytes,
+            total_bytes,
             buffer,
             engine.kv_engine(),
             ChangeDataRequestKvApi::TiDb,
@@ -913,6 +909,7 @@ mod tests {
             for checkpoint_ts in [200, 100, 150] {
                 let (mut worker, pool, mut initializer, _rx, mut drain) = mock_initializer(
                     usize::MAX,
+                    usize::MAX,
                     1000,
                     engine.kv_engine(),
                     ChangeDataRequestKvApi::TiDb,
@@ -978,6 +975,7 @@ mod tests {
         let buffer = 1;
         let (mut worker, _pool, mut initializer, rx, _drain) = mock_initializer(
             total_bytes,
+            total_bytes,
             buffer,
             None,
             ChangeDataRequestKvApi::TiDb,
@@ -1032,55 +1030,30 @@ mod tests {
         let total_bytes = 1;
         let buffer = 1;
         let (mut worker, pool, mut initializer, _rx, _drain) =
-            mock_initializer(total_bytes, buffer, None, kv_api, false);
+            mock_initializer(total_bytes, total_bytes, buffer, None, kv_api, false);
 
         let change_cmd = ChangeObserver::from_cdc(1, ObserveHandle::new());
         let raft_router = CdcRaftRouter(MockRaftStoreRouter::new());
-        let concurrency_semaphore = Arc::new(Semaphore::new(1));
         let memory_quota = Arc::new(MemoryQuota::new(usize::MAX));
 
         initializer.downstream_state.store(DownstreamState::Stopped);
-        block_on(initializer.initialize(
-            change_cmd,
-            raft_router.clone(),
-            concurrency_semaphore.clone(),
-            memory_quota.clone(),
-        ))
-        .unwrap_err();
-
-        let (tx, rx) = sync_channel(1);
-        let concurrency_semaphore_ = concurrency_semaphore.clone();
-        pool.spawn(async move {
-            let _permit = concurrency_semaphore_.acquire().await;
-            tx.send(()).unwrap();
-            tx.send(()).unwrap();
-            tx.send(()).unwrap();
-        });
-        rx.recv_timeout(Duration::from_millis(200)).unwrap();
+        block_on(initializer.initialize(change_cmd, raft_router.clone(), memory_quota.clone()))
+            .unwrap_err();
 
         let (tx1, rx1) = sync_channel(1);
         let change_cmd = ChangeObserver::from_cdc(1, ObserveHandle::new());
         pool.spawn(async move {
             // Migrated to 2021 migration. This let statement is probably not needed, see
             //   https://doc.rust-lang.org/edition-guide/rust-2021/disjoint-capture-in-closures.html
-            let _ = (
-                &initializer,
-                &change_cmd,
-                &raft_router,
-                &concurrency_semaphore,
-            );
             let res = initializer
-                .initialize(change_cmd, raft_router, concurrency_semaphore, memory_quota)
+                .initialize(change_cmd, raft_router, memory_quota)
                 .await;
             tx1.send(res).unwrap();
         });
-        // Must timeout because there is no enough permit.
-        rx1.recv_timeout(Duration::from_millis(200)).unwrap_err();
 
-        // Release the permit
-        rx.recv_timeout(Duration::from_millis(200)).unwrap();
+        // Shouldn't timeout, gets an error instead.
         let res = rx1.recv_timeout(Duration::from_millis(200)).unwrap();
-        res.unwrap_err();
+        assert!(res.is_err());
 
         worker.stop();
     }
