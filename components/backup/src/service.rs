@@ -9,7 +9,7 @@ use kvproto::brpb::*;
 use raftstore::store::{
     fsm::store::RaftRouter,
     msg::{PeerMsg, SignificantMsg},
-    snapshot_backup::SnapshotBrHandle,
+    snapshot_backup::{SnapshotBrHandle, UnimplementedHandle},
 };
 use tikv_util::{error, info, worker::*};
 
@@ -17,40 +17,47 @@ use super::Task;
 use crate::disk_snap::{self, StreamHandleLoop};
 
 /// Service handles the RPC messages for the `Backup` service.
-#[derive(Clone)]
-pub struct Service<EK: KvEngine, ER: RaftEngine, H: SnapshotBrHandle> {
+pub struct Service<H: SnapshotBrHandle> {
     scheduler: Scheduler<Task>,
-    env: disk_snap::Env<H>,
-    router: Option<RaftRouter<EK, ER>>,
+    snap_br_env: disk_snap::Env<H>,
 }
 
-impl<EK, ER> Service<EK, ER>
-where
-    EK: KvEngine,
-    ER: RaftEngine,
-{
+impl<H: SnapshotBrHandle> Clone for Service<H> {
+    fn clone(&self) -> Self {
+        Self {
+            scheduler: self.scheduler.clone(),
+            snap_br_env: self.snap_br_env.clone(),
+        }
+    }
+}
+
+impl Service<UnimplementedHandle> {
     // Create a new backup service without router, this used for raftstore v2.
     // because we don't have RaftStoreRouter any more.
     pub fn new(scheduler: Scheduler<Task>) -> Self {
         Service {
             scheduler,
-            router: None,
-        }
-    }
-
-    // Create a new backup service with router, this used for raftstore v1.
-    pub fn with_router(scheduler: Scheduler<Task>, router: RaftRouter<EK, ER>) -> Self {
-        Service {
-            scheduler,
-            router: Some(router),
+            snap_br_env: disk_snap::Env::unimplemented(),
         }
     }
 }
 
-impl<EK, ER> Backup for Service<EK, ER>
+impl<H> Service<H>
 where
-    EK: KvEngine,
-    ER: RaftEngine,
+    H: SnapshotBrHandle,
+{
+    // Create a new backup service with router, this used for raftstore v1.
+    pub fn with_env(scheduler: Scheduler<Task>, env: disk_snap::Env<H>) -> Self {
+        Service {
+            scheduler,
+            snap_br_env: env,
+        }
+    }
+}
+
+impl<H> Backup for Service<H>
+where
+    H: SnapshotBrHandle + 'static,
 {
     fn check_pending_admin_op(
         &mut self,
@@ -58,34 +65,37 @@ where
         _req: CheckAdminRequest,
         mut sink: ServerStreamingSink<CheckAdminResponse>,
     ) {
-        let (tx, rx) = mpsc::unbounded();
-        match &self.router {
-            Some(router) => {
-                router.broadcast_normal(|| {
-                    PeerMsg::SignificantMsg(SignificantMsg::CheckPendingAdmin(tx.clone()))
-                });
-                let send_task = async move {
-                    let mut s = rx.map(|resp| Ok((resp, WriteFlags::default())));
-                    sink.send_all(&mut s).await?;
-                    sink.close().await?;
-                    Ok(())
-                }
-                .map(|res: Result<()>| match res {
-                    Ok(_) => {
-                        info!("check admin closed");
-                    }
-                    Err(e) => {
-                        error!("check admin canceled"; "error" => ?e);
-                    }
-                });
-                ctx.spawn(send_task);
-            }
-            None => {
-                // check pending admin reqeust is used for EBS Backup.
-                // for raftstore v2. we don't need it for now. so just return unimplemented
-                unimplemented_call!(ctx, sink)
-            }
-        }
+        unimplemented_call!(ctx, sink);
+        return;
+        // TODO: implement them via handle or remove them.
+        // let (tx, rx) = mpsc::unbounded();
+        // match &self.router {
+        // Some(router) => {
+        // router.broadcast_normal(|| {
+        // PeerMsg::SignificantMsg(SignificantMsg::CheckPendingAdmin(tx.
+        // clone())) });
+        // let send_task = async move {
+        // let mut s = rx.map(|resp| Ok((resp, WriteFlags::default())));
+        // sink.send_all(&mut s).await?;
+        // sink.close().await?;
+        // Ok(())
+        // }
+        // .map(|res: Result<()>| match res {
+        // Ok(_) => {
+        // info!("check admin closed");
+        // }
+        // Err(e) => {
+        // error!("check admin canceled"; "error" => ?e);
+        // }
+        // });
+        // ctx.spawn(send_task);
+        // }
+        // None => {
+        // check pending admin reqeust is used for EBS Backup.
+        // for raftstore v2. we don't need it for now. so just return
+        // unimplemented
+        // }
+        // }
     }
 
     fn backup(
@@ -144,10 +154,11 @@ where
     fn prepare_snapshot_backup(
         &mut self,
         ctx: grpcio::RpcContext,
-        _stream: grpcio::RequestStream<PrepareSnapshotBackupRequest>,
+        stream: grpcio::RequestStream<PrepareSnapshotBackupRequest>,
         sink: grpcio::DuplexSink<PrepareSnapshotBackupResponse>,
     ) {
-        ctx.spawn(StreamHandleLoop::new(todo!()).handle_stream(_stream, sink.into()))
+        let l = StreamHandleLoop::new(self.snap_br_env.clone());
+        ctx.spawn(l.run(stream, sink.into()))
     }
 }
 
@@ -167,7 +178,7 @@ mod tests {
     fn new_rpc_suite() -> (Server, BackupClient, ReceiverWrapper<Task>) {
         let env = Arc::new(EnvBuilder::new().build());
         let (scheduler, rx) = dummy_scheduler();
-        let backup_service = super::Service::<RocksEngine, RocksEngine>::new(scheduler);
+        let backup_service = super::Service::new(scheduler);
         let builder =
             ServerBuilder::new(env.clone()).register_service(create_backup(backup_service));
         let mut server = builder.bind("127.0.0.1", 0).build().unwrap();

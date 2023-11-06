@@ -1,8 +1,13 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::time::{Duration, Instant};
+use std::{
+    collections::HashMap,
+    time::{Duration, Instant},
+};
 
 use futures::{compat::Future01CompatExt, executor::block_on, future::TryFutureExt, StreamExt};
+use grpcio::ChannelBuilder;
+use kvproto::brpb_grpc::BackupClient;
 use raft::eraftpb::MessageType;
 use raftstore::store::{
     snapshot_backup::SnapshotBrWaitApplyRequest, PeerMsg, SignificantMsg, SnapshotBrWaitApplySyncer,
@@ -127,6 +132,7 @@ fn test_snap_wait_apply() {
             SnapshotBrWaitApplyRequest::relaxed(syncer.clone()),
         ))
     });
+    drop(syncer);
 
     // we expect recv the region id from rx.
     assert_eq!(block_on(rx), Ok(1));

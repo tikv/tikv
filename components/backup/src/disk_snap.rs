@@ -18,14 +18,22 @@ use kvproto::{
     metapb::Region,
 };
 use raftstore::store::{
-    snapshot_backup::{RejectIngestAndAdmin, SnapshotBrHandle, SnapshotBrWaitApplyRequest},
+    snapshot_backup::{
+        RejectIngestAndAdmin, SnapshotBrHandle, SnapshotBrWaitApplyRequest, UnimplementedHandle,
+    },
     SignificantRouter, SnapshotBrWaitApplySyncer,
 };
 use tikv_util::warn;
-use tokio::sync::{mpsc, oneshot};
+use tokio::{
+    sync::{mpsc, oneshot},
+    time::{Interval, MissedTickBehavior},
+};
 use tokio_stream::Stream;
 
 type Result<T> = std::result::Result<T, Error>;
+
+const TICK_INTERVAL: Duration = Duration::from_secs(100);
+const SERVER_SIDE_LEASE_IN_SEC: u64 = 300;
 
 enum Error {
     NotInitialized,
@@ -100,13 +108,37 @@ impl Error {
     }
 }
 
-#[derive(Clone)]
 pub struct Env<SR: SnapshotBrHandle> {
     handle: Arc<SR>,
     rejector: Arc<RejectIngestAndAdmin>,
 }
 
+impl<SR: SnapshotBrHandle> Clone for Env<SR> {
+    fn clone(&self) -> Self {
+        Self {
+            handle: Arc::clone(&self.handle),
+            rejector: Arc::clone(&self.rejector),
+        }
+    }
+}
+
+impl Env<UnimplementedHandle> {
+    pub fn unimplemented() -> Self {
+        Self {
+            handle: Arc::new(UnimplementedHandle),
+            rejector: Default::default(),
+        }
+    }
+}
+
 impl<SR: SnapshotBrHandle> Env<SR> {
+    pub fn with_rejector(handle: SR, rejector: Arc<RejectIngestAndAdmin>) -> Self {
+        Self {
+            handle: Arc::new(handle),
+            rejector,
+        }
+    }
+
     fn check_initialized(&self) -> Result<()> {
         if !self.rejector.connected() {
             return Err(Error::NotInitialized);
@@ -116,7 +148,7 @@ impl<SR: SnapshotBrHandle> Env<SR> {
 
     fn check_rejected(&self) -> Result<()> {
         self.check_initialized()?;
-        if !self.rejector.rejected() {
+        if self.rejector.allowed() {
             return Err(Error::LeaseExpired);
         }
         Ok(())
@@ -209,7 +241,7 @@ impl<SR: SnapshotBrHandle + 'static> StreamHandleLoop<SR> {
         }
     }
 
-    pub async fn handle_stream(
+    pub async fn run(
         mut self,
         mut input: impl Stream<Item = grpcio::Result<PReq>> + Unpin,
         mut sink: ResultSink,

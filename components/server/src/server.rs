@@ -64,6 +64,7 @@ use raftstore::{
             RaftBatchSystem, RaftRouter, StoreMeta, MULTI_FILES_SNAPSHOT_FEATURE, PENDING_MSG_CAP,
         },
         memory::MEMTRACE_ROOT as MEMTRACE_RAFTSTORE,
+        snapshot_backup::RejectIngestAndAdmin,
         AutoSplitController, CheckLeaderRunner, LocalReader, SnapManager, SnapManagerBuilder,
         SplitCheckRunner, SplitConfigManager, StoreMetaDelegate,
     },
@@ -1165,8 +1166,10 @@ where
         // Backup service.
         let mut backup_worker = Box::new(self.core.background_worker.lazy_build("backup-endpoint"));
         let backup_scheduler = backup_worker.scheduler();
-        let backup_service =
-            backup::Service::<RocksEngine, ER>::with_router(backup_scheduler, self.router.clone());
+        let rejector = Arc::new(RejectIngestAndAdmin::default());
+        rejector.register_to(self.coprocessor_host.as_mut().unwrap());
+        let env = backup::disk_snap::Env::with_rejector(Mutex::new(self.router.clone()), rejector);
+        let backup_service = backup::Service::with_env(backup_scheduler, env);
         if servers
             .server
             .register_service(create_backup(backup_service))

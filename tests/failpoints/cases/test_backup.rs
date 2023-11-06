@@ -54,3 +54,43 @@ fn backup_blocked_by_memory_lock() {
 
     suite.stop();
 }
+
+mod disk_snap {
+    use std::time::Duration;
+
+    use futures::{executor::block_on, sink::SinkExt, stream::StreamExt};
+    use grpcio::WriteFlags;
+    use kvproto::brpb::{PrepareSnapshotBackupRequest, PrepareSnapshotBackupRequestType};
+    use raftstore::store::Callback;
+    use test_backup::disk_snap::{assert_success, Suite};
+    use test_raftstore::must_contains_error;
+
+    #[test]
+    fn test_merge() {
+        let mut suite = Suite::new(1);
+        let resp = suite.split(b"k");
+        assert_success(&resp.response);
+        let mut source = suite.cluster.get_region(b"a");
+        let target = suite.cluster.get_region(b"z");
+        assert_ne!(source.id, target.id);
+        fail::cfg("on_schedule_merge", "pause").unwrap();
+        let resp = suite.cluster.try_merge(source.id, target.id);
+        assert_success(&resp);
+        let mut call = suite.prepare_backup(1);
+        call.prepare(60);
+        fail::remove("on_schedule_merge");
+        // Manually "apply" the prepare merge on region epoch.
+        source.mut_region_epoch().set_conf_ver(2);
+        source.mut_region_epoch().set_version(3);
+        call.wait_apply([&source, &target].into_iter().cloned());
+        let source = suite.cluster.get_region(b"a");
+        let target = suite.cluster.get_region(b"z");
+        assert_ne!(source.id, target.id);
+        suite.nodes[&1].rejector.reset();
+        test_util::eventually(Duration::from_secs(1), Duration::from_secs(10), || {
+            let source = suite.cluster.get_region(b"a");
+            let target = suite.cluster.get_region(b"z");
+            source.id == target.id
+        })
+    }
+}

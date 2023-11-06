@@ -32,3 +32,5 @@ tidb_query_common = { workspace = true }
 tikv = { workspace = true }
 tikv_util = { workspace = true }
 txn_types = { workspace = true }
+engine_test = { workspace = true }
+raftstore = { workspace = true }

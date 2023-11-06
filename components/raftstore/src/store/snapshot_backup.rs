@@ -19,7 +19,10 @@ use txn_types::TimeStamp;
 use super::{
     unsafe_recovery::InvokeClosureOnDrop, PeerMsg, RaftRouter, SignificantMsg, SignificantRouter,
 };
-use crate::coprocessor::{AdminObserver, CmdObserver, Coprocessor, QueryObserver};
+use crate::coprocessor::{
+    AdminObserver, BoxAdminObserver, BoxQueryObserver, CmdObserver, Coprocessor, CoprocessorHost,
+    QueryObserver,
+};
 
 fn epoch_second() -> u64 {
     TimeStamp::physical_now() / 1000
@@ -63,7 +66,7 @@ impl SnapshotBrWaitApplyRequest {
 
 pub trait SnapshotBrHandle: Sync + Send {
     fn send_wait_apply(&self, region: u64, req: SnapshotBrWaitApplyRequest) -> crate::Result<()>;
-    fn broadcast_wait_apply(&self, req: SnapshotBrWaitApplyRequest);
+    fn broadcast_wait_apply(&self, req: SnapshotBrWaitApplyRequest) -> crate::Result<()>;
 }
 
 impl<EK: KvEngine, ER: RaftEngine> SnapshotBrHandle for Mutex<RaftRouter<EK, ER>> {
@@ -72,9 +75,26 @@ impl<EK: KvEngine, ER: RaftEngine> SnapshotBrHandle for Mutex<RaftRouter<EK, ER>
         self.lock().unwrap().significant_send(region, msg)
     }
 
-    fn broadcast_wait_apply(&self, req: SnapshotBrWaitApplyRequest) {
+    fn broadcast_wait_apply(&self, req: SnapshotBrWaitApplyRequest) -> crate::Result<()> {
         let msg_gen = || PeerMsg::SignificantMsg(SignificantMsg::SnapshotBrWaitApply(req.clone()));
         self.lock().unwrap().broadcast_normal(msg_gen);
+        Ok(())
+    }
+}
+
+pub struct UnimplementedHandle;
+
+impl SnapshotBrHandle for UnimplementedHandle {
+    fn send_wait_apply(&self, _region: u64, _req: SnapshotBrWaitApplyRequest) -> crate::Result<()> {
+        Err(crate::Error::Other(box_err!(
+            "send_wait_apply not implemented"
+        )))
+    }
+
+    fn broadcast_wait_apply(&self, _req: SnapshotBrWaitApplyRequest) -> crate::Result<()> {
+        Err(crate::Error::Other(box_err!(
+            "broadcast_wait_apply not implemented"
+        )))
     }
 }
 
@@ -83,13 +103,29 @@ pub struct RejectIngestAndAdmin {
     initialized: AtomicBool,
 }
 
+impl Default for RejectIngestAndAdmin {
+    fn default() -> Self {
+        Self {
+            until: AtomicU64::new(0),
+            initialized: AtomicBool::new(false),
+        }
+    }
+}
+
 impl RejectIngestAndAdmin {
-    pub fn rejected(&self) -> bool {
+    pub fn register_to(self: &Arc<Self>, coprocessor_host: &mut CoprocessorHost<impl KvEngine>) {
+        let reg = &mut coprocessor_host.registry;
+        reg.register_query_observer(0, BoxQueryObserver::new(Arc::clone(self)));
+        reg.register_admin_observer(0, BoxAdminObserver::new(Arc::clone(self)));
+        info!("registered reject ingest and admin coprocessor to TiKV.");
+    }
+
+    pub fn allowed(&self) -> bool {
         let mut v = self.until.load(Ordering::Acquire);
         if v == 0 {
             return true;
         }
-        let mut expired = v > epoch_second_coarse();
+        let mut expired = v < epoch_second_coarse();
         while expired {
             match self
                 .until
@@ -98,7 +134,7 @@ impl RejectIngestAndAdmin {
                 Ok(_) => break,
                 Err(new_val) => {
                     v = new_val;
-                    expired = v > epoch_second_coarse();
+                    expired = v < epoch_second_coarse();
                 }
             }
         }
@@ -114,7 +150,7 @@ impl RejectIngestAndAdmin {
         let mut v = self.until.load(Ordering::SeqCst);
         let now = epoch_second_coarse();
         let new_lease = now + lease.as_secs();
-        let expired = v > now;
+        let expired = v < now;
         loop {
             match self
                 .until
@@ -130,6 +166,10 @@ impl RejectIngestAndAdmin {
             }
         }
         expired
+    }
+
+    pub fn reset(&self) {
+        self.until.store(0, Ordering::SeqCst)
     }
 }
 
@@ -149,7 +189,7 @@ impl QueryObserver for Arc<RejectIngestAndAdmin> {
         cx: &mut crate::coprocessor::ObserverContext<'_>,
         reqs: &mut Vec<kvproto::raft_cmdpb::Request>,
     ) -> crate::coprocessor::Result<()> {
-        if self.rejected() {
+        if self.allowed() {
             return Ok(());
         }
         for req in reqs {
@@ -172,7 +212,7 @@ impl AdminObserver for Arc<RejectIngestAndAdmin> {
         _: &mut crate::coprocessor::ObserverContext<'_>,
         admin: &mut kvproto::raft_cmdpb::AdminRequest,
     ) -> crate::coprocessor::Result<()> {
-        if self.rejected() {
+        if self.allowed() {
             return Ok(());
         }
         Err(box_err!(
