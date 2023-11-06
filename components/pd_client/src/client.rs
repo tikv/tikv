@@ -1244,9 +1244,6 @@ impl MetaStorageClient for RpcClient {
                 futures::future::ready(r).err_into().try_flatten()
             };
             Box::pin(async move {
-                // Migrated to 2021 migration. This let statement is probably not needed, see
-                //   https://doc.rust-lang.org/edition-guide/rust-2021/disjoint-capture-in-closures.html
-                let _ = &req;
                 fail::fail_point!("meta_storage_get", req.key.ends_with(b"rejectme"), |_| {
                     Err(super::Error::Grpc(grpcio::Error::RemoteStopped))
                 });
@@ -1300,9 +1297,6 @@ impl MetaStorageClient for RpcClient {
                 futures::future::ready(r).err_into().try_flatten()
             };
             Box::pin(async move {
-                // Migrated to 2021 migration. This let statement is probably not needed, see
-                //   https://doc.rust-lang.org/edition-guide/rust-2021/disjoint-capture-in-closures.html
-                // let _ = &req;
                 let resp = handler.await?;
                 PD_REQUEST_HISTOGRAM_VEC
                     .meta_storage_delete
