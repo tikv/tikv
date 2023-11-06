@@ -1,25 +1,27 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 mod future_pool;
-mod metrics;
+pub mod metrics;
 
 use std::sync::Arc;
 
 use fail::fail_point;
 pub use future_pool::{Full, FuturePool};
 use futures::{compat::Stream01CompatExt, StreamExt};
-use prometheus::{local::LocalHistogram, Histogram};
 use yatp::{
     pool::{CloneRunnerBuilder, Local, Remote, Runner},
     queue::{multilevel, priority, Extras, QueueType, TaskCell as _},
     task::future::{Runner as FutureRunner, TaskCell},
     ThreadPool,
+   
 };
+
 
 use crate::{
     thread_group::GroupProperties,
     time::{Duration, Instant},
     timer::GLOBAL_TIMER_HANDLE,
+    // metrics::PoolName;
 };
 
 const DEFAULT_CLEANUP_INTERVAL: Duration = if cfg!(test) {
@@ -165,7 +167,9 @@ pub struct YatpPoolRunner<T: PoolTicker> {
     before_pause: Option<Arc<dyn Fn() + Send + Sync>>,
 
     // Statistics about the schedule wait duration.
-    schedule_wait_duration: LocalHistogram,
+    // schedule_wait_duration: LocalHistogram,
+
+    thread_name: metrics::PoolName,
 }
 
 impl<T: PoolTicker> Runner for YatpPoolRunner<T> {
@@ -190,13 +194,15 @@ impl<T: PoolTicker> Runner for YatpPoolRunner<T> {
     fn handle(&mut self, local: &mut Local<Self::TaskCell>, mut task_cell: Self::TaskCell) -> bool {
         let extras = task_cell.mut_extras();
         if let Some(schedule_time) = extras.schedule_time() {
-            self.schedule_wait_duration
-                .observe(schedule_time.elapsed().as_secs_f64());
+            // self.schedule_wait_duration
+            //     .observe(schedule_time.elapsed().as_secs_f64());
+            let name=self.thread_name;
+            // YATP_POOL_SCHEDULE_WAIT_DURATION_STATIC.name.
         }
         let finished = self.inner.handle(local, task_cell);
-        if self.ticker.try_tick() {
-            self.schedule_wait_duration.flush();
-        }
+        // if self.ticker.try_tick() {
+        //     self.schedule_wait_duration.flush();
+        // }
         finished
     }
 
@@ -229,7 +235,7 @@ impl<T: PoolTicker> YatpPoolRunner<T> {
         after_start: Option<Arc<dyn Fn() + Send + Sync>>,
         before_stop: Option<Arc<dyn Fn() + Send + Sync>>,
         before_pause: Option<Arc<dyn Fn() + Send + Sync>>,
-        schedule_wait_duration: Histogram,
+        thread_name: String,
     ) -> Self {
         YatpPoolRunner {
             inner,
@@ -238,7 +244,7 @@ impl<T: PoolTicker> YatpPoolRunner<T> {
             after_start,
             before_stop,
             before_pause,
-            schedule_wait_duration: schedule_wait_duration.local(),
+            thread_name: metrics::PoolName::from(thread_name),
         }
     }
 }
@@ -469,15 +475,15 @@ impl<T: PoolTicker> YatpPoolBuilder<T> {
         let after_start = self.after_start.take();
         let before_stop = self.before_stop.take();
         let before_pause = self.before_pause.take();
-        let schedule_wait_duration =
-            metrics::YATP_POOL_SCHEDULE_WAIT_DURATION_VEC.with_label_values(&[&name]);
+        // let schedule_wait_duration =
+        //     metrics::YATP_POOL_SCHEDULE_WAIT_DURATION_VEC.with_label_values(&[&name]);
         let read_pool_runner = YatpPoolRunner::new(
             Default::default(),
             self.ticker.clone(),
             after_start,
             before_stop,
             before_pause,
-            schedule_wait_duration,
+            name,
         );
         (builder, read_pool_runner)
     }
