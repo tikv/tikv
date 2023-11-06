@@ -62,9 +62,6 @@ impl TestSuite {
             obs.insert(id, rts_ob.clone());
             sim.coprocessor_hooks.entry(id).or_default().push(Box::new(
                 move |host: &mut CoprocessorHost<_>| {
-                    // Migrated to 2021 migration. This let statement is probably not needed, see
-                    //   https://doc.rust-lang.org/edition-guide/rust-2021/disjoint-capture-in-closures.html
-                    let _ = &rts_ob;
                     rts_ob.register_to(host);
                 },
             ));

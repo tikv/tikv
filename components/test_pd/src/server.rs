@@ -262,9 +262,6 @@ impl<C: PdMocker + Send + Sync + 'static> Pd for PdMock<C> {
     ) {
         let cli = self.etcd_client.clone();
         let future = async move {
-            // Migrated to 2021 migration. This let statement is probably not needed, see
-            //   https://doc.rust-lang.org/edition-guide/rust-2021/disjoint-capture-in-closures.html
-            let _ = &req;
             let mut watcher = match cli
                 .lock()
                 .await

@@ -1909,9 +1909,6 @@ where
             .pd_client
             .report_region_buckets(&delta, Duration::from_secs(interval_second));
         let f = async move {
-            // Migrated to 2021 migration. This let statement is probably not needed, see
-            //   https://doc.rust-lang.org/edition-guide/rust-2021/disjoint-capture-in-closures.html
-            let _ = &delta;
             if let Err(e) = resp.await {
                 debug!(
                     "failed to send buckets";
