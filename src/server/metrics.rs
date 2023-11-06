@@ -13,11 +13,16 @@ use tikv_util::time::Instant;
 pub use crate::storage::kv::metrics::{
     GcKeysCF, GcKeysCounterVec, GcKeysCounterVecInner, GcKeysDetail,
 };
-
-use crate::tikv_util::yatp_pool::metrics::ResourcePriority;
 use crate::storage::ErrorHeaderKind;
 
 make_auto_flush_static_metric! {
+    pub label_enum ResourcePriority {
+        high,
+        medium,
+        low,
+        unknown,
+    }
+
     pub label_enum GrpcTypeKind {
         invalid,
         kv_get,
@@ -604,15 +609,15 @@ pub fn record_request_source_metrics(source: String, duration: Duration) {
     });
 }
 
-// impl From<u32> for ResourcePriority {
-//     fn from(priority: u32) -> Self {
-//         // the mapping definition of priority in TIDB repo,
-//         // see: https://github.com/bufferflies/tidb/blob/8b151114546d6a02d8250787a2a3213620e30524/parser/parser.y#L1740-L1752
-//         match priority {
-//             1 => ResourcePriority::low,
-//             8 => ResourcePriority::medium,
-//             16 => ResourcePriority::high,
-//             _ => ResourcePriority::unknown,
-//         }
-//     }
-// }
+impl From<u32> for ResourcePriority {
+    fn from(priority: u32) -> Self {
+        // the mapping definition of priority in TIDB repo,
+        // see: https://github.com/bufferflies/tidb/blob/8b151114546d6a02d8250787a2a3213620e30524/parser/parser.y#L1740-L1752
+        match priority {
+            1 => ResourcePriority::low,
+            8 => ResourcePriority::medium,
+            16 => ResourcePriority::high,
+            _ => ResourcePriority::unknown,
+        }
+    }
+}

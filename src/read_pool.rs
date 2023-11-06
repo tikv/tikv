@@ -164,8 +164,8 @@ impl ReadPoolHandle {
                     CommandPri::Normal => None,
                     CommandPri::Low => Some(2),
                 };
-                let group_name: Vec<u8> = metadata.group_name().to_owned();
-                let mut extras: Extras = Extras::new_multilevel(task_id, fixed_level);
+                let group_name = metadata.group_name().to_owned();
+                let mut extras = Extras::new_multilevel(task_id, fixed_level);
                 extras.set_metadata(metadata.to_vec());
                 let task_cell = if let Some(resource_ctl) = resource_ctl {
                     TaskCell::new(
