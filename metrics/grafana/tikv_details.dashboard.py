@@ -3545,7 +3545,189 @@ def FlowControl() -> RowPanel:
     layout = Layout(title="Flow Control")
     layout.row(
         [
-            # graph_panel()
+            graph_panel(
+                title="Scheduler flow",
+                description="",
+                yaxes=yaxes(left_format=UNITS.BYTES_IEC),
+                targets=[
+                    target(
+                        expr=expr_sum(
+                            "tikv_scheduler_write_flow",
+                        ),
+                        legend_format="write-{{instance}}",
+                    ),
+                    target(
+                        expr=expr_sum(
+                            "tikv_scheduler_throttle_flow",
+                        ).extra(" != 0"),
+                        legend_format="throttle-{{instance}}",
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="Scheduler discard ratio",
+                description="",
+                yaxes=yaxes(left_format=UNITS.PERCENT_UNIT),
+                targets=[
+                    target(
+                        expr=expr_sum(
+                            "tikv_scheduler_discard_ratio",
+                            by_labels=["type"],
+                        ).extra(" / 10000000"),
+                    ),
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            heatmap_panel(
+                title="Throttle duration",
+                metric="tikv_scheduler_throttle_duration_seconds_bucket",
+                yaxis=yaxis(format=UNITS.SECONDS),
+            ),
+            graph_panel(
+                title="Scheduler throttled CF",
+                description="The count of pending commands per TiKV instance",
+                yaxes=yaxes(left_format=UNITS.OPS_PER_SEC),
+                targets=[
+                    target(
+                        expr=expr_simple(
+                            "tikv_scheduler_throttle_cf",
+                        ).extra(" != 0"),
+                        legend_format="{{instance}}-{{cf}}",
+                    ),
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel(
+                title="Flow controller actions",
+                description="",
+                yaxes=yaxes(left_format=UNITS.OPS_PER_SEC),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_scheduler_throttle_action_total",
+                            by_labels=["type", "cf"],
+                        ),
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="Flush/L0 flow",
+                description="",
+                yaxes=yaxes(left_format=UNITS.BYTES_IEC),
+                targets=[
+                    target(
+                        expr=expr_sum(
+                            "tikv_scheduler_l0_flow",
+                            by_labels=["instance", "cf"],
+                        ),
+                        legend_format="{{cf}}_l0_flow-{{instance}}",
+                    ),
+                    target(
+                        expr=expr_sum(
+                            "tikv_scheduler_flush_flow",
+                            by_labels=["instance", "cf"],
+                        ),
+                        legend_format="{{cf}}_flush_flow-{{instance}}",
+                    ),
+                    target(
+                        expr=expr_sum(
+                            "tikv_scheduler_l0_flow",
+                        ),
+                        legend_format="total_l0_flow-{{instance}}",
+                    ),
+                    target(
+                        expr=expr_sum(
+                            "tikv_scheduler_flush_flow",
+                        ),
+                        legend_format="total_flush_flow-{{instance}}",
+                    ),
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel(
+                title="Flow controller factors",
+                description="",
+                targets=[
+                    target(
+                        expr=expr_max(
+                            "tikv_scheduler_l0",
+                        ),
+                        legend_format="l0-{{instance}}",
+                    ),
+                    target(
+                        expr=expr_max(
+                            "tikv_scheduler_memtable",
+                        ),
+                        legend_format="memtable-{{instance}}",
+                    ),
+                    target(
+                        expr=expr_max(
+                            "tikv_scheduler_l0_avg",
+                        ),
+                        legend_format="avg_l0-{{instance}}",
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="Compaction pending bytes",
+                description="",
+                yaxes=yaxes(left_format=UNITS.BYTES_IEC),
+                targets=[
+                    target(
+                        expr=expr_sum(
+                            "tikv_engine_pending_compaction_bytes",
+                            label_selectors=['db="kv"'],
+                            by_labels=["cf"],
+                        ),
+                    ),
+                    target(
+                        expr=expr_sum(
+                            "tikv_scheduler_pending_compaction_bytes",
+                            by_labels=["cf"],
+                        ).extra(" / 10000000"),
+                        legend_format="pending-bytes-{{instance}}",
+                    ),
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel(
+                title="Txn command throttled duration",
+                description="Throttle time for txn storage commands in 1 minute.",
+                yaxes=yaxes(left_format=UNITS.MICRO_SECONDS),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_txn_command_throttle_time_total",
+                            by_labels=["type"],
+                        ),
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="Non-txn command throttled duration",
+                description="Throttle time for non-txn related processing like analyze or dag in 1 minute.",
+                yaxes=yaxes(left_format=UNITS.MICRO_SECONDS),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_non_txn_command_throttle_time_total",
+                            by_labels=["type"],
+                        ),
+                    ),
+                ],
+            ),
         ]
     )
     return layout.row_panel
