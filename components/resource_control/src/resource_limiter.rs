@@ -86,7 +86,7 @@ impl ResourceLimiter {
     }
 
     pub(crate) fn get_limit_statistics(&self, ty: ResourceType) -> GroupStatistics {
-        let (total_consumed, total_wait_dur_us, read_consumed, write_consumed) =
+        let (total_consumed, total_wait_dur_us, read_consumed, write_consumed, request_count) =
             self.limiters[ty as usize].get_statistics();
         GroupStatistics {
             version: self.version,
@@ -94,6 +94,7 @@ impl ResourceLimiter {
             total_wait_dur_us,
             read_consumed,
             write_consumed,
+            request_count,
         }
     }
 }
@@ -104,6 +105,7 @@ pub(crate) struct QuotaLimiter {
     total_wait_dur_us: AtomicU64,
     read_bytes: AtomicU64,
     write_bytes: AtomicU64,
+    req_count: AtomicU64,
 }
 
 impl QuotaLimiter {
@@ -113,6 +115,7 @@ impl QuotaLimiter {
             total_wait_dur_us: AtomicU64::new(0),
             read_bytes: AtomicU64::new(0),
             write_bytes: AtomicU64::new(0),
+            req_count: AtomicU64::new(0),
         }
     }
 
@@ -128,12 +131,13 @@ impl QuotaLimiter {
         self.limiter.set_speed_limit(limit);
     }
 
-    fn get_statistics(&self) -> (u64, u64, u64, u64) {
+    fn get_statistics(&self) -> (u64, u64, u64, u64, u64) {
         (
             self.limiter.total_bytes_consumed() as u64,
             self.total_wait_dur_us.load(Ordering::Relaxed),
             self.read_bytes.load(Ordering::Relaxed),
             self.write_bytes.load(Ordering::Relaxed),
+            self.req_count.load(Ordering::Relaxed),
         )
     }
 
@@ -146,6 +150,7 @@ impl QuotaLimiter {
             self.total_wait_dur_us
                 .fetch_add(dur.as_micros() as u64, Ordering::Relaxed);
         }
+        self.req_count.fetch_add(1, Ordering::Relaxed);
         dur
     }
 
@@ -162,6 +167,7 @@ impl QuotaLimiter {
             self.total_wait_dur_us
                 .fetch_add(dur.as_micros() as u64, Ordering::Relaxed);
         }
+        self.req_count.fetch_add(1, Ordering::Relaxed);
         dur
     }
 }
@@ -173,6 +179,7 @@ pub struct GroupStatistics {
     pub total_wait_dur_us: u64,
     pub read_consumed: u64,
     pub write_consumed: u64,
+    pub request_count: u64,
 }
 
 impl std::ops::Sub for GroupStatistics {
@@ -184,6 +191,7 @@ impl std::ops::Sub for GroupStatistics {
             total_wait_dur_us: self.total_wait_dur_us.saturating_sub(rhs.total_wait_dur_us),
             read_consumed: self.read_consumed.saturating_sub(rhs.read_consumed),
             write_consumed: self.write_consumed.saturating_sub(rhs.write_consumed),
+            request_count: self.request_count.saturating_sub(rhs.request_count),
         }
     }
 }
@@ -198,6 +206,7 @@ impl std::ops::Div<f64> for GroupStatistics {
             total_wait_dur_us: (self.total_wait_dur_us as f64 / rhs) as u64,
             read_consumed: (self.read_consumed as f64 / rhs) as u64,
             write_consumed: (self.write_consumed as f64 / rhs) as u64,
+            request_count: (self.request_count as f64 / rhs) as u64,
         }
     }
 }

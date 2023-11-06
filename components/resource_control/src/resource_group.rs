@@ -357,6 +357,11 @@ impl ResourceGroupManager {
             group_priority.unwrap_or(default_group.group.priority),
         )
     }
+
+    #[inline]
+    pub fn get_priority_resource_limiters(&self) -> [Arc<ResourceLimiter>; 3] {
+        self.priority_limiters.clone()
+    }
 }
 
 pub(crate) struct ResourceGroup {
