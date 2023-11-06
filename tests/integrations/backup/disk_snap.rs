@@ -1,12 +1,12 @@
 // Copyright 2023 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::time::Duration;
 
-use futures::{executor::block_on, sink::SinkExt, stream::StreamExt};
-use grpcio::WriteFlags;
-use kvproto::brpb::{PrepareSnapshotBackupRequest, PrepareSnapshotBackupRequestType};
-use raftstore::store::Callback;
-use test_backup::disk_snap::{assert_success, Suite};
+
+use futures::{stream::StreamExt};
+
+
+
+use test_backup::disk_snap::{Suite};
 use test_raftstore::must_contains_error;
 
 #[test]

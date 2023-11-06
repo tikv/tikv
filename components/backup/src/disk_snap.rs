@@ -1,11 +1,11 @@
 //! This module contains things about disk snapshot.
 
-use std::{future::Future, sync::Arc, task::Poll, time::Duration};
+use std::{sync::Arc, task::Poll, time::Duration};
 
 use futures::future;
 use futures_util::{
     future::{BoxFuture, FutureExt},
-    sink::{Sink, SinkExt},
+    sink::{SinkExt},
     stream::StreamExt,
 };
 use grpcio::{RpcStatus, WriteFlags};
@@ -20,13 +20,11 @@ use kvproto::{
 use raftstore::store::{
     snapshot_backup::{
         RejectIngestAndAdmin, SnapshotBrHandle, SnapshotBrWaitApplyRequest, UnimplementedHandle,
-    },
-    SignificantRouter, SnapshotBrWaitApplySyncer,
+    }, SnapshotBrWaitApplySyncer,
 };
 use tikv_util::warn;
 use tokio::{
-    sync::{mpsc, oneshot},
-    time::{Interval, MissedTickBehavior},
+    sync::{oneshot},
 };
 use tokio_stream::Stream;
 

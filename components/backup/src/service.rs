@@ -2,13 +2,11 @@
 
 use std::sync::atomic::*;
 
-use engine_traits::{KvEngine, RaftEngine};
+
 use futures::{channel::mpsc, FutureExt, SinkExt, StreamExt, TryFutureExt};
 use grpcio::{self, *};
 use kvproto::brpb::*;
 use raftstore::store::{
-    fsm::store::RaftRouter,
-    msg::{PeerMsg, SignificantMsg},
     snapshot_backup::{SnapshotBrHandle, UnimplementedHandle},
 };
 use tikv_util::{error, info, worker::*};
@@ -63,7 +61,7 @@ where
         &mut self,
         ctx: RpcContext<'_>,
         _req: CheckAdminRequest,
-        mut sink: ServerStreamingSink<CheckAdminResponse>,
+        sink: ServerStreamingSink<CheckAdminResponse>,
     ) {
         unimplemented_call!(ctx, sink);
         return;
@@ -166,7 +164,7 @@ where
 mod tests {
     use std::{sync::Arc, time::Duration};
 
-    use engine_rocks::RocksEngine;
+    
     use external_storage_export::make_local_backend;
     use tikv::storage::txn::tests::{must_commit, must_prewrite_put};
     use tikv_util::worker::{dummy_scheduler, ReceiverWrapper};

@@ -58,12 +58,12 @@ fn backup_blocked_by_memory_lock() {
 mod disk_snap {
     use std::time::Duration;
 
-    use futures::{executor::block_on, sink::SinkExt, stream::StreamExt};
-    use grpcio::WriteFlags;
-    use kvproto::brpb::{PrepareSnapshotBackupRequest, PrepareSnapshotBackupRequestType};
-    use raftstore::store::Callback;
+    use futures::{stream::StreamExt};
+    
+    
+    
     use test_backup::disk_snap::{assert_success, Suite};
-    use test_raftstore::must_contains_error;
+    
 
     #[test]
     fn test_merge() {
