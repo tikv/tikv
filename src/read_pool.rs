@@ -155,7 +155,6 @@ impl ReadPoolHandle {
                 if running_tasks.get() as usize >= *max_tasks {
                     return Err(ReadPoolError::UnifiedReadPoolFull);
                 }
-
                 running_tasks.inc();
                 let fixed_level = match priority {
                     CommandPri::High => Some(0),

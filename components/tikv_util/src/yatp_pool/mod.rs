@@ -369,7 +369,7 @@ impl<T: PoolTicker> YatpPoolBuilder<T> {
         FuturePool::from_pool(pool, &name, size, task)
     }
 
-    pub fn build_single_level_pool(self) -> ThreadPool<TaskCell> {
+    fn build_single_level_pool(self) -> ThreadPool<TaskCell> {
         let (builder, runner) = self.create_builder();
         builder.build_with_queue_and_runner(
             yatp::queue::QueueType::SingleLevel,
@@ -388,7 +388,7 @@ impl<T: PoolTicker> YatpPoolBuilder<T> {
         FuturePool::from_pool(pool, &name, size, task)
     }
 
-    pub fn build_multi_level_pool(self) -> ThreadPool<TaskCell> {
+    fn build_multi_level_pool(self) -> ThreadPool<TaskCell> {
         let name = self
             .name_prefix
             .clone()
