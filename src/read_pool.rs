@@ -54,10 +54,8 @@ pub enum ReadPool {
     },
     Yatp {
         pool: FuturePool,
+        // deprecated. will remove in the v8.x.
         running_tasks: IntGauge,
-        running_threads: IntGauge,
-        max_tasks: usize,
-        pool_size: usize,
         resource_ctl: Option<Arc<ResourceController>>,
         time_slice_inspector: Arc<TimeSliceInspector>,
     },
@@ -78,17 +76,11 @@ impl ReadPool {
             ReadPool::Yatp {
                 pool,
                 running_tasks,
-                running_threads,
-                max_tasks,
-                pool_size,
                 resource_ctl,
                 time_slice_inspector,
             } => ReadPoolHandle::Yatp {
                 remote: pool.clone(),
                 running_tasks: running_tasks.clone(),
-                running_threads: running_threads.clone(),
-                max_tasks: *max_tasks,
-                pool_size: *pool_size,
                 resource_ctl: resource_ctl.clone(),
                 time_slice_inspector: time_slice_inspector.clone(),
             },
@@ -106,9 +98,6 @@ pub enum ReadPoolHandle {
     Yatp {
         remote: FuturePool,
         running_tasks: IntGauge,
-        running_threads: IntGauge,
-        max_tasks: usize,
-        pool_size: usize,
         resource_ctl: Option<Arc<ResourceController>>,
         time_slice_inspector: Arc<TimeSliceInspector>,
     },
@@ -143,18 +132,10 @@ impl ReadPoolHandle {
             ReadPoolHandle::Yatp {
                 remote,
                 running_tasks,
-                max_tasks,
                 resource_ctl,
                 ..
             } => {
                 let running_tasks = running_tasks.clone();
-                // Note that the running task number limit is not strict.
-                // If several tasks are spawned at the same time while the running task number
-                // is close to the limit, they may all pass this check and the number of running
-                // tasks may exceed the limit.
-                if running_tasks.get() as usize >= *max_tasks {
-                    return Err(ReadPoolError::UnifiedReadPoolFull);
-                }
                 running_tasks.inc();
                 let fixed_level = match priority {
                     CommandPri::High => Some(0),
@@ -223,7 +204,7 @@ impl ReadPoolHandle {
             ReadPoolHandle::FuturePools {
                 read_pool_normal, ..
             } => read_pool_normal.get_pool_size(),
-            ReadPoolHandle::Yatp { pool_size, .. } => *pool_size,
+            ReadPoolHandle::Yatp { remote, .. } => remote.get_pool_size(),
         }
     }
 
@@ -233,10 +214,10 @@ impl ReadPoolHandle {
                 read_pool_normal, ..
             } => read_pool_normal.get_running_task_count() / read_pool_normal.get_pool_size(),
             ReadPoolHandle::Yatp {
+                remote,
                 running_tasks,
-                pool_size,
                 ..
-            } => running_tasks.get() as usize / *pool_size,
+            } => running_tasks.get() as usize / remote.get_pool_size(),
         }
     }
 
@@ -245,19 +226,8 @@ impl ReadPoolHandle {
             ReadPoolHandle::FuturePools { .. } => {
                 unreachable!()
             }
-            ReadPoolHandle::Yatp {
-                remote,
-                running_threads,
-                max_tasks,
-                pool_size,
-                ..
-            } => {
+            ReadPoolHandle::Yatp { remote, .. } => {
                 remote.scale_pool_size(max_thread_count);
-                *max_tasks = max_tasks
-                    .saturating_div(*pool_size)
-                    .saturating_mul(max_thread_count);
-                running_threads.set(max_thread_count as i64);
-                *pool_size = max_thread_count;
             }
         }
     }
@@ -457,6 +427,11 @@ pub fn build_yatp_read_pool_with_name<E: Engine, R: FlowStatsReporter>(
                 config.max_thread_count,
             ),
         )
+        .max_tasks(
+            config
+                .max_tasks_per_worker
+                .saturating_mul(config.max_thread_count),
+        )
         .after_start(move || {
             let engine = raftkv.lock().unwrap().clone();
             set_tls_engine(engine);
@@ -475,12 +450,6 @@ pub fn build_yatp_read_pool_with_name<E: Engine, R: FlowStatsReporter>(
         pool,
         running_tasks: UNIFIED_READ_POOL_RUNNING_TASKS
             .with_label_values(&[&unified_read_pool_name]),
-        running_threads: UNIFIED_READ_POOL_RUNNING_THREADS
-            .with_label_values(&[&unified_read_pool_name]),
-        max_tasks: config
-            .max_tasks_per_worker
-            .saturating_mul(config.max_thread_count),
-        pool_size: config.max_thread_count,
         resource_ctl,
         time_slice_inspector,
     }
@@ -746,12 +715,6 @@ mod metrics {
         pub static ref UNIFIED_READ_POOL_RUNNING_TASKS: IntGaugeVec = register_int_gauge_vec!(
             "tikv_unified_read_pool_running_tasks",
             "The number of running tasks in the unified read pool",
-            &["name"]
-        )
-        .unwrap();
-        pub static ref UNIFIED_READ_POOL_RUNNING_THREADS: IntGaugeVec = register_int_gauge_vec!(
-            "tikv_unified_read_pool_thread_count",
-            "The number of running threads in the unified read pool",
             &["name"]
         )
         .unwrap();

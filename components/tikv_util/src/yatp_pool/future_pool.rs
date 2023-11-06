@@ -56,7 +56,7 @@ impl FuturePool {
                 pool,
                 env,
                 pool_size: AtomicUsize::new(pool_size),
-                max_tasks,
+                max_tasks: AtomicUsize::new(max_tasks),
             }),
         }
     }
@@ -131,13 +131,20 @@ struct PoolInner {
     env: Env,
     // for accessing pool_size config since yatp doesn't offer such getter.
     pool_size: AtomicUsize,
-    max_tasks: usize,
+    max_tasks: AtomicUsize,
 }
 
 impl PoolInner {
     #[inline]
     fn scale_pool_size(&self, thread_count: usize) {
         self.pool.scale_workers(thread_count);
+        let mut max_tasks = self.max_tasks.load(Ordering::Acquire);
+        if max_tasks != std::usize::MAX {
+            max_tasks = max_tasks
+                .saturating_div(self.pool_size.load(Ordering::Acquire))
+                .saturating_mul(thread_count);
+            self.max_tasks.store(max_tasks, Ordering::Release);
+        }
         self.pool_size.store(thread_count, Ordering::Release);
     }
 
@@ -153,15 +160,16 @@ impl PoolInner {
             max_tasks: 100,
         }));
 
-        if self.max_tasks == std::usize::MAX {
+        let max_tasks = self.max_tasks.load(Ordering::Acquire);
+        if max_tasks == std::usize::MAX {
             return Ok(());
         }
 
         let current_tasks = self.get_running_task_count();
-        if current_tasks >= self.max_tasks {
+        if current_tasks >= max_tasks {
             Err(Full {
                 current_tasks,
-                max_tasks: self.max_tasks,
+                max_tasks,
             })
         } else {
             Ok(())
