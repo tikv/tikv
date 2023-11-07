@@ -51,6 +51,13 @@ make_static_metric! {
     pub struct MvccPrewriteAssertionPerfCounterVec: IntCounter {
         "type" => MvccPrewriteAssertionPerfKind,
     }
+
+    pub struct MvccPrewriteRequestAfterCommitCounterVec: IntCounter {
+        "type" => {
+            non_retry_req,
+            retry_req,
+        },
+    }
 }
 
 lazy_static! {
@@ -100,6 +107,15 @@ lazy_static! {
             MvccPrewriteAssertionPerfCounterVec,
             "tikv_storage_mvcc_prewrite_assertion_perf",
             "Counter of assertion operations in transactions",
+            &["type"]
+        )
+        .unwrap()
+    };
+    pub static ref MVCC_PREWRITE_REQUEST_AFTER_COMMIT_COUNTER_VEC: MvccPrewriteRequestAfterCommitCounterVec = {
+        register_static_int_counter_vec!(
+            MvccPrewriteRequestAfterCommitCounterVec,
+            "tikv_storage_mvcc_prewrite_request_after_commit_counter",
+            "Counter of prewrite requests of already-committed transactions that are determined by checking TxnStatucCache",
             &["type"]
         )
         .unwrap()
