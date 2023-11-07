@@ -63,10 +63,10 @@ impl From<u32> for ResourceGroupPriority {
     }
 }
 
-impl From<String> for PoolName {
-    fn from(name: String) -> Self {
-        match name.as_str() {
-            "unified_read_pool" => PoolName::unified_read_pool,
+impl From<&str> for PoolName {
+    fn from(name: &str) -> Self {
+        match name {
+            "unified-read-pool" => PoolName::unified_read_pool,
             "yatp_pool" => PoolName::yatp_pool,
             _ => PoolName::unknown,
         }

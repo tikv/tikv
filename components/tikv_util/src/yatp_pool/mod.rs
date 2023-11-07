@@ -196,7 +196,9 @@ impl<T: PoolTicker> Runner for YatpPoolRunner<T> {
             let name = self.thread_name;
             let mut priority = ResourceGroupPriority::unknown;
             if let Some(provider) = &self.priority_provider {
-                priority = ResourceGroupPriority::from(decode_group_priority(provider.priority_of(extras)));
+                priority = ResourceGroupPriority::from(decode_group_priority(
+                    provider.priority_of(extras),
+                ));
             }
             YATP_POOL_SCHEDULE_WAIT_DURATION_STATIC
                 .get(name)
@@ -235,7 +237,7 @@ impl<T: PoolTicker> YatpPoolRunner<T> {
         after_start: Option<Arc<dyn Fn() + Send + Sync>>,
         before_stop: Option<Arc<dyn Fn() + Send + Sync>>,
         before_pause: Option<Arc<dyn Fn() + Send + Sync>>,
-        thread_name: String,
+        thread_name: metrics::PoolName,
         priority_provider: Option<Arc<dyn priority::TaskPriorityProvider>>,
     ) -> Self {
         YatpPoolRunner {
@@ -245,7 +247,7 @@ impl<T: PoolTicker> YatpPoolRunner<T> {
             after_start,
             before_stop,
             before_pause,
-            thread_name: metrics::PoolName::from(thread_name),
+            thread_name,
             priority_provider,
         }
     }
@@ -470,6 +472,8 @@ impl<T: PoolTicker> YatpPoolBuilder<T> {
         priority_provider: Option<Arc<dyn priority::TaskPriorityProvider>>,
     ) -> (yatp::Builder, YatpPoolRunner<T>) {
         let name = self.name_prefix.unwrap_or_else(|| "yatp_pool".to_string());
+        info!("create yatp pool with name {}", name);
+        let pool_name = metrics::PoolName::from(name.as_str());
         let mut builder = yatp::Builder::new(thd_name!(name));
         builder
             .stack_size(self.stack_size)
@@ -479,14 +483,15 @@ impl<T: PoolTicker> YatpPoolBuilder<T> {
 
         let after_start = self.after_start.take();
         let before_stop = self.before_stop.take();
-        let before_pause = self.before_pause.take();
+        let before_pause: Option<Arc<dyn Fn() + Send + Sync>> = self.before_pause.take();
+
         let read_pool_runner = YatpPoolRunner::new(
             Default::default(),
             self.ticker.clone(),
             after_start,
             before_stop,
             before_pause,
-            name,
+            pool_name,
             priority_provider,
         );
         (builder, read_pool_runner)
