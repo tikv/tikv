@@ -502,8 +502,8 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
         let future = future_copr(&self.copr, Some(ctx.peer()), req);
         let task = async move {
             let resp = future.await?.consume();
-            sink.success(resp).await?;
             let elapsed = begin_instant.saturating_elapsed();
+            sink.success(resp).await?;
             GRPC_MSG_HISTOGRAM_STATIC
                 .coprocessor
                 .get(resource_group_priority)
@@ -546,8 +546,8 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
         let future = future_raw_coprocessor(&self.copr_v2, &self.storage, req);
         let task = async move {
             let resp = future.await?;
-            sink.success(resp).await?;
             let elapsed = begin_instant.saturating_elapsed();
+            sink.success(resp).await?;
             GRPC_MSG_HISTOGRAM_STATIC
                 .raw_coprocessor
                 .get(resource_group_priority)
@@ -598,8 +598,8 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
             if let Err(e) = res {
                 resp.set_error(format!("{}", e));
             }
-            sink.success(resp).await?;
             let elapsed = begin_instant.saturating_elapsed();
+            sink.success(resp).await?;
             GRPC_MSG_HISTOGRAM_STATIC
                 .unsafe_destroy_range
                 .unknown
@@ -888,11 +888,11 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
                     }
                 }
             }
-            sink.success(resp).await?;
             GRPC_MSG_HISTOGRAM_STATIC
                 .split_region
                 .unknown
                 .observe(begin_instant.saturating_elapsed().as_secs_f64());
+            sink.success(resp).await?;
             ServerResult::Ok(())
         }
         .map_err(|e| {
@@ -1041,6 +1041,10 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
                 .schedule(CheckLeaderTask::CheckLeader { leaders, cb })
                 .map_err(|e| Error::Other(format!("{}", e).into()))?;
             let regions = resp.await?;
+            GRPC_MSG_HISTOGRAM_STATIC
+                .check_leader
+                .unknown
+                .observe(begin_instant.saturating_elapsed().as_secs_f64());
             let mut resp = CheckLeaderResponse::default();
             resp.set_ts(ts);
             resp.set_regions(regions);
