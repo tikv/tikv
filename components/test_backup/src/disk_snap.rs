@@ -4,9 +4,11 @@ use std::{
 };
 
 use backup::disk_snap::Env as BEnv;
-use engine_test::{kv::KvTestEngine as Ek, raft::RaftTestEngine as Er};
 use futures_executor::block_on;
-use futures_util::{sink::SinkExt, stream::StreamExt};
+use futures_util::{
+    sink::SinkExt,
+    stream::{Fuse, StreamExt},
+};
 use grpcio::{
     ChannelBuilder, ClientDuplexReceiver, Environment, Server, ServerBuilder, StreamingCallSink,
     WriteFlags,
@@ -17,12 +19,9 @@ use kvproto::{
         PrepareSnapshotBackupRequestType, PrepareSnapshotBackupResponse,
     },
     metapb::Region,
-    raft_cmdpb::{PrepareFlashbackResponse, RaftCmdResponse, SplitResponse},
+    raft_cmdpb::RaftCmdResponse,
 };
-use raftstore::store::{
-    snapshot_backup::{RejectIngestAndAdmin, SnapshotBrHandle},
-    Callback, RaftRouter, WriteResponse,
-};
+use raftstore::store::{snapshot_backup::RejectIngestAndAdmin, Callback, WriteResponse};
 use test_raftstore::*;
 use tikv_util::{future::paired_future_callback, worker::dummy_scheduler, HandyRwLock};
 
@@ -61,7 +60,7 @@ impl Suite {
 
     fn start_backup(&mut self, id: u64) {
         let (sched, _) = dummy_scheduler();
-        let mut w = self.cluster.sim.wl();
+        let w = self.cluster.sim.wl();
         let router = Mutex::new(w.get_router(id).unwrap());
         let env = BEnv::with_rejector(router, self.nodes[&id].rejector.clone());
         let service = backup::Service::with_env(sched, env);
@@ -85,21 +84,21 @@ impl Suite {
         self.cluster
             .split_region(&region, split_key, Callback::write(tx));
         let resp = block_on(rx).unwrap();
+        self.cluster.wait_region_split(&region);
         resp
     }
 
-    pub fn backup(&self, id: u64) -> &brpb::BackupClient {
+    fn backup(&self, id: u64) -> &brpb::BackupClient {
         self.nodes[&id].backup_client.as_ref().unwrap()
     }
 
     pub fn prepare_backup(&self, node: u64) -> PrepareBackup {
         let cli = self.backup(node);
-        let (mut tx, mut rx) = cli.prepare_snapshot_backup().unwrap();
-        let mut req = PrepareSnapshotBackupRequest::new();
+        let (tx, rx) = cli.prepare_snapshot_backup().unwrap();
         PrepareBackup {
             store_id: node,
             tx,
-            rx,
+            rx: rx.fuse(),
         }
     }
 
@@ -124,7 +123,7 @@ impl Suite {
 
 pub struct PrepareBackup {
     tx: StreamingCallSink<PrepareSnapshotBackupRequest>,
-    rx: ClientDuplexReceiver<PrepareSnapshotBackupResponse>,
+    rx: Fuse<ClientDuplexReceiver<PrepareSnapshotBackupResponse>>,
 
     pub store_id: u64,
 }
@@ -159,6 +158,26 @@ impl PrepareBackup {
             }
         });
     }
+
+    pub fn send_wait_apply(&mut self, r: impl IntoIterator<Item = Region>) {
+        let mut req = PrepareSnapshotBackupRequest::new();
+        req.set_ty(PrepareSnapshotBackupRequestType::WaitApply);
+        req.set_regions(r.into_iter().collect());
+        block_on(async {
+            self.tx.send((req, WriteFlags::default())).await.unwrap();
+        })
+    }
+
+    pub fn next(&mut self) -> PrepareSnapshotBackupResponse {
+        block_on(self.rx.next()).unwrap().unwrap()
+    }
+}
+
+#[track_caller]
+pub fn must_wait_apply_success(res: &PrepareSnapshotBackupResponse) -> u64 {
+    assert!(!res.has_error(), "{res:?}");
+    assert_eq!(res.ty, PrepareSnapshotBackupEventType::WaitApplyDone,);
+    res.get_region().id
 }
 
 #[track_caller]

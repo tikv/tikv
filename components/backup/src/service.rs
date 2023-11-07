@@ -2,14 +2,11 @@
 
 use std::sync::atomic::*;
 
-
 use futures::{channel::mpsc, FutureExt, SinkExt, StreamExt, TryFutureExt};
 use grpcio::{self, *};
 use kvproto::brpb::*;
-use raftstore::store::{
-    snapshot_backup::{SnapshotBrHandle, UnimplementedHandle},
-};
-use tikv_util::{error, info, worker::*};
+use raftstore::store::snapshot_backup::{SnapshotBrHandle, UnimplementedHandle};
+use tikv_util::{error, info, warn, worker::*};
 
 use super::Task;
 use crate::disk_snap::{self, StreamHandleLoop};
@@ -156,7 +153,11 @@ where
         sink: grpcio::DuplexSink<PrepareSnapshotBackupResponse>,
     ) {
         let l = StreamHandleLoop::new(self.snap_br_env.clone());
-        ctx.spawn(l.run(stream, sink.into()))
+        ctx.spawn(async move {
+            if let Err(err) = l.run(stream, sink.into()).await {
+                warn!("stream closed; perhaps a problem cannot be retried happens"; "reason" => ?err);
+            }
+        })
     }
 }
 
@@ -164,7 +165,6 @@ where
 mod tests {
     use std::{sync::Arc, time::Duration};
 
-    
     use external_storage_export::make_local_backend;
     use tikv::storage::txn::tests::{must_commit, must_prewrite_put};
     use tikv_util::worker::{dummy_scheduler, ReceiverWrapper};

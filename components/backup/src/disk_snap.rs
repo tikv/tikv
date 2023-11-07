@@ -1,11 +1,15 @@
 //! This module contains things about disk snapshot.
 
-use std::{sync::Arc, task::Poll, time::Duration};
+use std::{
+    sync::{atomic::AtomicU64, Arc},
+    task::Poll,
+    time::Duration,
+};
 
 use futures::future;
 use futures_util::{
     future::{BoxFuture, FutureExt},
-    sink::{SinkExt},
+    sink::SinkExt,
     stream::StreamExt,
 };
 use grpcio::{RpcStatus, WriteFlags};
@@ -20,18 +24,14 @@ use kvproto::{
 use raftstore::store::{
     snapshot_backup::{
         RejectIngestAndAdmin, SnapshotBrHandle, SnapshotBrWaitApplyRequest, UnimplementedHandle,
-    }, SnapshotBrWaitApplySyncer,
+    },
+    SnapshotBrWaitApplySyncer,
 };
 use tikv_util::warn;
-use tokio::{
-    sync::{oneshot},
-};
+use tokio::sync::oneshot;
 use tokio_stream::Stream;
 
 type Result<T> = std::result::Result<T, Error>;
-
-const TICK_INTERVAL: Duration = Duration::from_secs(100);
-const SERVER_SIDE_LEASE_IN_SEC: u64 = 300;
 
 enum Error {
     NotInitialized,
@@ -60,6 +60,7 @@ impl ResultSink {
         error_extra_info: impl FnOnce(&mut PResp),
     ) -> grpcio::Result<Self> {
         match result {
+            // Note: should we batch here?
             Ok(item) => self.0.send((item, WriteFlags::default())).await?,
             Err(err) => match err.how_to_handle() {
                 HandleErr::AbortStream(status) => {
@@ -109,6 +110,7 @@ impl Error {
 pub struct Env<SR: SnapshotBrHandle> {
     handle: Arc<SR>,
     rejector: Arc<RejectIngestAndAdmin>,
+    active_stream: Arc<AtomicU64>,
 }
 
 impl<SR: SnapshotBrHandle> Clone for Env<SR> {
@@ -116,6 +118,7 @@ impl<SR: SnapshotBrHandle> Clone for Env<SR> {
         Self {
             handle: Arc::clone(&self.handle),
             rejector: Arc::clone(&self.rejector),
+            active_stream: Arc::clone(&self.active_stream),
         }
     }
 }
@@ -125,6 +128,7 @@ impl Env<UnimplementedHandle> {
         Self {
             handle: Arc::new(UnimplementedHandle),
             rejector: Default::default(),
+            active_stream: Arc::new(AtomicU64::new(0)),
         }
     }
 }
@@ -134,6 +138,7 @@ impl<SR: SnapshotBrHandle> Env<SR> {
         Self {
             handle: Arc::new(handle),
             rejector,
+            active_stream: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -243,24 +248,17 @@ impl<SR: SnapshotBrHandle + 'static> StreamHandleLoop<SR> {
         mut self,
         mut input: impl Stream<Item = grpcio::Result<PReq>> + Unpin,
         mut sink: ResultSink,
-    ) {
+    ) -> grpcio::Result<()> {
         loop {
             match self.next_event(&mut input).await {
                 StreamHandleEvent::Req(req) => match req.get_ty() {
                     PReqT::UpdateLease => {
                         let lease_dur = Duration::from_secs(req.get_lease_in_seconds());
-                        let feed_res = sink
+                        sink = sink
                             .send(self.env.update_lease(lease_dur), |resp| {
                                 resp.set_ty(PEvnT::UpdateLeaseResult);
                             })
-                            .await;
-                        match feed_res {
-                            Ok(new_sink) => sink = new_sink,
-                            Err(err) => {
-                                warn!("stream closed; perhaps a problem cannot be retried happens"; "reason" => ?err);
-                                return;
-                            }
-                        }
+                            .await?;
                     }
                     PReqT::WaitApply => {
                         let regions = req.get_regions();
@@ -277,23 +275,19 @@ impl<SR: SnapshotBrHandle + 'static> StreamHandleLoop<SR> {
                         resp.set_ty(PEvnT::WaitApplyDone);
                         resp
                     });
-                    let feed_res = sink
+                    sink = sink
                         .send(resp, |resp| {
                             resp.set_ty(PEvnT::WaitApplyDone);
                             resp.set_region(region);
                         })
-                        .await;
-                    match feed_res {
-                        Ok(new_sink) => sink = new_sink,
-                        Err(err) => {
-                            warn!("stream closed; perhaps a problem cannot be retried happens"; "reason" => ?err);
-                            return;
-                        }
-                    }
+                        .await?;
                 }
                 StreamHandleEvent::ConnectionGone(err) => {
                     warn!("the client has gone, aborting loop"; "err" => ?err);
-                    return;
+                    return match err {
+                        None => Ok(()),
+                        Some(err) => Err(err),
+                    };
                 }
             }
         }

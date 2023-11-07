@@ -924,7 +924,7 @@ where
     // func be invoked firstly after assigned leader by BR, wait all leader apply to
     // last log index func be invoked secondly wait follower apply to last
     // index, however the second call is broadcast, it may improve in future
-    fn on_snapshot_recovery_wait_apply(&mut self, req: SnapshotBrWaitApplyRequest) {
+    fn on_snapshot_br_wait_apply(&mut self, req: SnapshotBrWaitApplyRequest) {
         if let Some(state) = &self.fsm.peer.snapshot_recovery_state {
             warn!(
                 "can't wait apply, another recovery in progress";
@@ -949,7 +949,7 @@ where
         // during the snapshot recovery, broadcast waitapply, some peer may stale
         if !self.fsm.peer.is_leader() {
             info!(
-                "snapshot follower recovery started";
+                "snapshot follower wait apply started";
                 "region_id" => self.region_id(),
                 "peer_id" => self.fsm.peer_id(),
                 "target_index" => target_index,
@@ -1489,9 +1489,7 @@ where
                 self.on_unsafe_recovery_fill_out_report(syncer)
             }
             // for snapshot recovery (safe recovery)
-            SignificantMsg::SnapshotBrWaitApply(syncer) => {
-                self.on_snapshot_recovery_wait_apply(syncer)
-            }
+            SignificantMsg::SnapshotBrWaitApply(syncer) => self.on_snapshot_br_wait_apply(syncer),
             SignificantMsg::CheckPendingAdmin(ch) => self.on_check_pending_admin(ch),
         }
     }
