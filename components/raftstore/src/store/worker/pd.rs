@@ -982,7 +982,7 @@ impl SlowTrendStatistics {
                 return tikv_util::time::duration_to_us(duration.sum());
             }
             let disk_io_latency =
-                tikv_util::time::duration_to_us(duration.delays_on_disk_io(false)) as f64;
+                tikv_util::time::duration_to_us(duration.delays_on_disk_io(true)) as f64;
             let network_io_latency =
                 tikv_util::time::duration_to_us(duration.delays_on_net_io()) as f64;
             (disk_io_latency + network_io_latency * self.net_io_factor) as u64
