@@ -121,7 +121,7 @@ pub use self::{
 use self::{kv::SnapContext, test_util::latest_feature_gate};
 use crate::{
     read_pool::{ReadPool, ReadPoolHandle},
-    server::lock_manager::waiter_manager,
+    server::{lock_manager::waiter_manager, metrics::ResourcePriority},
     storage::{
         config::Config,
         kv::{with_tls_engine, Modify, WriteData},
@@ -260,6 +260,12 @@ impl<E: Engine, L: LockManager, F: KvFormat> Drop for Storage<E, L, F> {
 }
 
 impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
+    pub fn get_resource_group_priority(&self, resource_group_name: &str) -> u32 {
+        self.resource_manager
+            .as_ref()
+            .map_or(0, |r| r.get_resource_group_priority(resource_group_name))
+    }
+
     /// Create a `Storage` from given engine.
     pub fn from_engine<R: FlowStatsReporter>(
         engine: E,
@@ -775,12 +781,15 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         let priority = requests[0].get_context().get_priority();
         let metadata =
             TaskMetadata::from_ctx(requests[0].get_context().get_resource_control_context());
+        let resource_group_name = requests[0]
+            .get_context()
+            .get_resource_control_context()
+            .get_resource_group_name();
+        let resource_priority =
+            ResourcePriority::from(self.get_resource_group_priority(resource_group_name));
         let resource_limiter = self.resource_manager.as_ref().and_then(|r| {
             r.get_resource_limiter(
-                requests[0]
-                    .get_context()
-                    .get_resource_control_context()
-                    .get_resource_group_name(),
+                resource_group_name,
                 requests[0].get_context().get_request_source(),
             )
         });
@@ -857,7 +866,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                             snap_ctx
                         }
                         Err(e) => {
-                            consumer.consume(id, Err(e), begin_instant, source);
+                            consumer.consume(id, Err(e), begin_instant, source, resource_priority);
                             continue;
                         }
                     };
@@ -896,7 +905,13 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                     ) = req_snap;
                     let snap_res = snap.await;
                     if let Err(e) = deadline.check() {
-                        consumer.consume(id, Err(Error::from(e)), begin_instant, source);
+                        consumer.consume(
+                            id,
+                            Err(Error::from(e)),
+                            begin_instant,
+                            source,
+                            resource_priority,
+                        );
                         continue;
                     }
 
@@ -928,6 +943,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                                             .map(|v| (v, stat)),
                                         begin_instant,
                                         source,
+                                        resource_priority,
                                     );
                                 }
                                 Err(e) => {
@@ -936,12 +952,13 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                                         Err(Error::from(txn::Error::from(e))),
                                         begin_instant,
                                         source,
+                                        resource_priority,
                                     );
                                 }
                             }
                         }),
                         Err(e) => {
-                            consumer.consume(id, Err(e), begin_instant, source);
+                            consumer.consume(id, Err(e), begin_instant, source, resource_priority);
                         }
                     }
                 }
@@ -1747,12 +1764,15 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         // all requests in a batch have the same region, epoch, term, replica_read
         let priority = gets[0].get_context().get_priority();
         let metadata = TaskMetadata::from_ctx(gets[0].get_context().get_resource_control_context());
+        let resource_group_name = gets[0]
+            .get_context()
+            .get_resource_control_context()
+            .get_resource_group_name();
+        let resource_priority =
+            ResourcePriority::from(self.get_resource_group_priority(resource_group_name));
         let resource_limiter = self.resource_manager.as_ref().and_then(|r| {
             r.get_resource_limiter(
-                gets[0]
-                    .get_context()
-                    .get_resource_control_context()
-                    .get_resource_group_name(),
+                resource_group_name,
                 gets[0].get_context().get_request_source(),
             )
         });
@@ -1835,6 +1855,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                                             .map_err(Error::from),
                                         begin_instant,
                                         ctx.take_request_source(),
+                                        resource_priority,
                                     );
                                     tls_collect_read_flow(
                                         ctx.get_region_id(),
@@ -1850,12 +1871,19 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                                         Err(e),
                                         begin_instant,
                                         ctx.take_request_source(),
+                                        resource_priority,
                                     );
                                 }
                             }
                         }
                         Err(e) => {
-                            consumer.consume(id, Err(e), begin_instant, ctx.take_request_source());
+                            consumer.consume(
+                                id,
+                                Err(e),
+                                begin_instant,
+                                ctx.take_request_source(),
+                                resource_priority,
+                            );
                         }
                     }
                 }
@@ -3430,6 +3458,7 @@ pub trait ResponseBatchConsumer<ConsumeResponse: Sized>: Send {
         res: Result<ConsumeResponse>,
         begin: Instant,
         request_source: String,
+        resource_priority: ResourcePriority,
     );
 }
 
@@ -3730,6 +3759,7 @@ pub mod test_util {
             res: Result<(Option<Vec<u8>>, Statistics)>,
             _: Instant,
             _source: String,
+            _resource_priority: ResourcePriority,
         ) {
             self.data.lock().unwrap().push(GetResult {
                 id,
@@ -3739,7 +3769,14 @@ pub mod test_util {
     }
 
     impl ResponseBatchConsumer<Option<Vec<u8>>> for GetConsumer {
-        fn consume(&self, id: u64, res: Result<Option<Vec<u8>>>, _: Instant, _source: String) {
+        fn consume(
+            &self,
+            id: u64,
+            res: Result<Option<Vec<u8>>>,
+            _: Instant,
+            _source: String,
+            _resource_priority: ResourcePriority,
+        ) {
             self.data.lock().unwrap().push(GetResult { id, res });
         }
     }
