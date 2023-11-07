@@ -11,7 +11,7 @@ make_auto_flush_static_metric! {
         unknown,
     }
 
-    pub label_enum ResourcePriority {
+    pub label_enum ResourceGroupPriority {
         high,
         medium,
         low,
@@ -20,7 +20,7 @@ make_auto_flush_static_metric! {
 
     pub struct YATPPoolScheduleWaitDurationVec: LocalHistogram {
         "name" => PoolName,
-        "priority" => ResourcePriority,
+        "priority" => ResourceGroupPriority,
     }
 }
 
@@ -50,15 +50,15 @@ lazy_static! {
     .unwrap();
 }
 
-impl From<u32> for ResourcePriority {
+impl From<u32> for ResourceGroupPriority {
     fn from(priority: u32) -> Self {
         // the mapping definition of priority in TIDB repo,
         // see: https://github.com/tidb/blob/8b151114546d6a02d8250787a2a3213620e30524/parser/parser.y#L1740-L1752
         match priority {
-            1 => ResourcePriority::low,
-            8 => ResourcePriority::medium,
-            16 => ResourcePriority::high,
-            _ => ResourcePriority::unknown,
+            1 => ResourceGroupPriority::low,
+            8 => ResourceGroupPriority::medium,
+            16 => ResourceGroupPriority::high,
+            _ => ResourceGroupPriority::unknown,
         }
     }
 }

@@ -1,14 +1,14 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 mod future_pool;
-pub mod metrics;
+mod metrics;
 
 use std::sync::Arc;
 
 use fail::fail_point;
 pub use future_pool::{Full, FuturePool};
 use futures::{compat::Stream01CompatExt, StreamExt};
-use metrics::{ResourcePriority, YATP_POOL_SCHEDULE_WAIT_DURATION_STATIC};
+use metrics::{ResourceGroupPriority, YATP_POOL_SCHEDULE_WAIT_DURATION_STATIC};
 use yatp::{
     pool::{CloneRunnerBuilder, Local, Remote, Runner},
     queue::{multilevel, priority, Extras, QueueType, TaskCell as _},
@@ -194,10 +194,9 @@ impl<T: PoolTicker> Runner for YatpPoolRunner<T> {
         if let Some(schedule_time) = extras.schedule_time() {
             let wait_duration = schedule_time.elapsed().as_secs_f64();
             let name = self.thread_name;
-            let mut priority = ResourcePriority::unknown;
+            let mut priority = ResourceGroupPriority::unknown;
             if let Some(provider) = &self.priority_provider {
-                priority =
-                    ResourcePriority::from(decode_group_priority(provider.priority_of(extras)));
+                priority = ResourceGroupPriority::from(decode_group_priority(provider.priority_of(extras)));
             }
             YATP_POOL_SCHEDULE_WAIT_DURATION_STATIC
                 .get(name)
