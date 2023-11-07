@@ -3733,13 +3733,180 @@ def FlowControl() -> RowPanel:
     return layout.row_panel
 
 
-def Scheduler() -> RowPanel:
+def SchedulerCommands() -> RowPanel:
     layout = Layout(title="Scheduler", repeat="command")
     layout.row(
         [
-            # graph_panel()
+            graph_panel(
+                title="Scheduler stage total",
+                description="The total number of commands on each stage in commit command",
+                yaxes=yaxes(left_format=UNITS.OPS_PER_SEC),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_scheduler_too_busy_total",
+                            label_selectors=['type="$command"'],
+                        ),
+                        legend_format="busy-{{instance}}",
+                    ),
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_scheduler_stage_total",
+                            label_selectors=['type="$command"'],
+                            by_labels=["stage"],
+                        ),
+                    ),
+                ],
+            ),
         ]
     )
+    layout.row(
+        [
+            graph_panel_histogram_quantiles(
+                title="Scheduler command duration",
+                description="The time consumed when executing commit command",
+                yaxes=yaxes(left_format=UNITS.SECONDS),
+                metric="tikv_scheduler_command_duration_seconds",
+                label_selectors=['type="$command"'],
+                hide_count=True,
+            ),
+            graph_panel_histogram_quantiles(
+                title="Scheduler latch wait duration",
+                description="The time which is caused by latch wait in commit command",
+                yaxes=yaxes(left_format=UNITS.SECONDS),
+                metric="tikv_scheduler_latch_wait_duration_seconds",
+                label_selectors=['type="$command"'],
+                hide_count=True,
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel_histogram_quantiles(
+                title="Scheduler keys read",
+                description="The count of keys read by a commit command",
+                yaxes=yaxes(left_format=UNITS.NONE_FORMAT),
+                metric="tikv_scheduler_kv_command_key_read",
+                label_selectors=['type="$command"'],
+                hide_count=True,
+            ),
+            graph_panel_histogram_quantiles(
+                title="Scheduler keys written",
+                description="The count of keys written by a commit command",
+                yaxes=yaxes(left_format=UNITS.NONE_FORMAT),
+                metric="tikv_scheduler_kv_command_key_write",
+                label_selectors=['type="$command"'],
+                hide_count=True,
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel(
+                title="Scheduler scan details",
+                description="The keys scan details of each CF when executing commit command",
+                yaxes=yaxes(left_format=UNITS.NONE_FORMAT),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_scheduler_kv_scan_details",
+                            label_selectors=['req="$command"'],
+                            by_labels=["tag"],
+                        ),
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="Scheduler scan details [lock]",
+                description="The keys scan details of lock CF when executing commit command",
+                yaxes=yaxes(left_format=UNITS.NONE_FORMAT),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_scheduler_kv_scan_details",
+                            label_selectors=['req="$command", cf="lock"'],
+                            by_labels=["tag"],
+                        ),
+                    ),
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel(
+                title="Scheduler scan details [write]",
+                description="The keys scan details of write CF when executing commit command",
+                yaxes=yaxes(left_format=UNITS.NONE_FORMAT),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_scheduler_kv_scan_details",
+                            label_selectors=['req="$command", cf="write"'],
+                            by_labels=["tag"],
+                        ),
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="Scheduler scan details [default]",
+                description="The keys scan details of default CF when executing commit command",
+                yaxes=yaxes(left_format=UNITS.NONE_FORMAT),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_scheduler_kv_scan_details",
+                            label_selectors=['req="$command", cf="default"'],
+                            by_labels=["tag"],
+                        ),
+                    ),
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel_histogram_quantiles(
+                title="Scheduler command read duration",
+                description="The time consumed on reading when executing commit command",
+                yaxes=yaxes(left_format=UNITS.SECONDS),
+                metric="tikv_scheduler_processing_read_duration_seconds",
+                label_selectors=['type="$command"'],
+                hide_count=True,
+            ),
+            heatmap_panel(
+                title="Check memory locks duration",
+                description="The time consumed on checking memory locks",
+                yaxis=yaxis(format=UNITS.SECONDS),
+                metric="tikv_storage_check_mem_lock_duration_seconds_bucket",
+                label_selectors=['type="$command"'],
+            ),
+        ]
+    )
+    return layout.row_panel
+
+
+def Scheduler() -> RowPanel:
+    layout = Layout(title="Scheduler")
+    layout.row([])
+    return layout.row_panel
+
+
+def GC() -> RowPanel:
+    layout = Layout(title="GC")
+    layout.row([])
+    return layout.row_panel
+
+
+def Snapshot() -> RowPanel:
+    layout = Layout(title="Snapshot")
+    layout.row([])
+    return layout.row_panel
+
+
+def Task() -> RowPanel:
+    layout = Layout(title="Task")
+    layout.row([])
     return layout.row_panel
 
 
@@ -3776,6 +3943,10 @@ dashboard = Dashboard(
         UnifiedReadPool(),
         Storage(),
         FlowControl(),
+        SchedulerCommands(),
         Scheduler(),
+        GC(),
+        Snapshot(),
+        Task(),
     ],
 ).auto_panel_ids()
