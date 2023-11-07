@@ -796,6 +796,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
         };
 
         let change_cmd = ChangeObserver::from_cdc(region_id, delegate.handle.clone());
+        let downstream_closed = downstream_.get_closed_notifier();
         let observed_range = downstream_.observed_range;
         let region_epoch = request.take_region_epoch();
         let mut init = Initializer {
@@ -809,6 +810,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
             sink: conn.get_sink().clone(),
             request_id: request.get_request_id(),
             downstream_state,
+            downstream_closed,
             scan_concurrency_semaphore: self.scan_concurrency_semaphore.clone(),
             scan_speed_limiter: self.scan_speed_limiter.clone(),
             fetch_speed_limiter: self.fetch_speed_limiter.clone(),

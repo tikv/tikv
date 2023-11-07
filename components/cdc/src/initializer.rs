@@ -1,5 +1,5 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
-use std::sync::Arc;
+use std::{mem::swap, sync::Arc};
 
 use api_version::ApiV2;
 use crossbeam::atomic::AtomicCell;
@@ -9,6 +9,7 @@ use engine_traits::{
     TablePropertiesExt, UserCollectedProperties, CF_DEFAULT, CF_WRITE, DATA_KEY_PREFIX_LEN,
 };
 use fail::fail_point;
+use futures::{future, select, Future, FutureExt};
 use keys::{data_end_key, data_key};
 use kvproto::{
     cdcpb::ChangeDataRequestKvApi,
@@ -86,6 +87,7 @@ pub(crate) struct Initializer<E> {
     pub(crate) observe_id: ObserveId,
     pub(crate) downstream_id: DownstreamId,
     pub(crate) downstream_state: Arc<AtomicCell<DownstreamState>>,
+    pub(crate) downstream_closed: Box<dyn Future<Output = ()> + Send + Sync + Unpin>,
     pub(crate) conn_id: ConnId,
     pub(crate) request_id: u64,
     pub(crate) checkpoint_ts: TimeStamp,
@@ -188,11 +190,6 @@ impl<E: KvEngine> Initializer<E> {
         region: Region,
         memory_quota: Arc<MemoryQuota>,
     ) -> Result<()> {
-        let scan_concurrency_semaphore = self.scan_concurrency_semaphore.clone();
-        let _permit = scan_concurrency_semaphore.acquire().await;
-        CDC_SCAN_TASKS.with_label_values(&["ongoing"]).inc();
-        defer!(CDC_SCAN_TASKS.with_label_values(&["ongoing"]).dec());
-
         let region_id = region.get_id();
         let downstream_id = self.downstream_id;
         let observe_id = self.observe_id;
@@ -207,12 +204,24 @@ impl<E: KvEngine> Initializer<E> {
             Err(box_err!("scan canceled"))
         };
 
-        if self.downstream_state.load() == DownstreamState::Stopped {
-            return on_cancel();
-        }
+        let scan_concurrency_semaphore = self.scan_concurrency_semaphore.clone();
+        let mut downstream_closed = Box::new(future::pending().shared())
+            as Box<dyn Future<Output = ()> + Send + Sync + Unpin>;
+        swap(&mut self.downstream_closed, &mut downstream_closed);
+        let _permit = select! {
+            _ = (&mut downstream_closed).fuse() => {
+                return on_cancel();
+            }
+            x = scan_concurrency_semaphore.acquire().fuse() => match x {
+                Ok(x) => x,
+                Err(_) => return on_cancel(),
+            }
+        };
+        CDC_SCAN_TASKS.with_label_values(&["ongoing"]).inc();
+        defer!(CDC_SCAN_TASKS.with_label_values(&["ongoing"]).dec());
 
         self.observed_range.update_region_key_range(&region);
-        debug!("cdc async incremental scan";
+        debug!("cdc async incremental scan starts";
             "region_id" => region_id,
             "downstream_id" => ?downstream_id,
             "observe_id" => ?self.observe_id,
@@ -269,14 +278,14 @@ impl<E: KvEngine> Initializer<E> {
         ));
 
         while !done {
-            // When downstream_state is Stopped, it means the corresponding
-            // delegate is stopped. The initialization can be safely canceled.
-            if self.downstream_state.load() == DownstreamState::Stopped {
-                return on_cancel();
-            }
             let cursors = old_value_cursors.as_mut();
             let resolver = resolver.as_mut();
-            let entries = self.scan_batch(&mut scanner, cursors, resolver).await?;
+            let entries = select! {
+                _ = (&mut downstream_closed).fuse() => {
+                    return on_cancel();
+                }
+                x = self.scan_batch(&mut scanner, cursors, resolver).fuse() => x?,
+            };
             if let Some(None) = entries.last() {
                 // If the last element is None, it means scanning is finished.
                 done = true;
@@ -560,18 +569,33 @@ mod tests {
     use std::{
         collections::BTreeMap,
         fmt::Display,
-        sync::mpsc::{channel, sync_channel, Receiver, RecvTimeoutError, Sender},
+        sync::{
+            mpsc::{channel, Receiver, RecvTimeoutError, Sender},
+            Arc,
+        },
         time::Duration,
     };
 
+    use crossbeam::atomic::AtomicCell;
     use engine_rocks::RocksEngine;
     use engine_traits::{MiscExt, CF_WRITE};
-    use futures::{executor::block_on, StreamExt};
+    use futures::{channel::oneshot, executor::block_on, future, Future, FutureExt, StreamExt};
     use kvproto::{
-        cdcpb::{EventLogType, Event_oneof_event},
+        cdcpb::{ChangeDataRequestKvApi, EventLogType, Event_oneof_event},
         errorpb::Error as ErrorHeader,
+        kvrpcpb::ExtraOp as TxnExtraOp,
+        metapb::{Region, RegionEpoch},
+        raft_cmdpb::RaftCmdResponse,
     };
-    use raftstore::{coprocessor::ObserveHandle, router::CdcRaftRouter, store::RegionSnapshot};
+    use raftstore::{
+        coprocessor::{ObserveHandle, ObserveId},
+        router::CdcRaftRouter,
+        store::{
+            fsm::ChangeObserver,
+            msg::{Callback, PeerMsg, ReadResponse, SignificantMsg},
+            RegionSnapshot,
+        },
+    };
     use resolved_ts::TxnLocks;
     use test_raftstore::MockRaftStoreRouter;
     use tikv::storage::{
@@ -583,14 +607,27 @@ mod tests {
         TestEngineBuilder,
     };
     use tikv_util::{
+        box_err,
         memory::MemoryQuota,
         sys::thread::ThreadBuildWrapper,
+        time::Limiter,
         worker::{LazyWorker, Runnable},
     };
-    use tokio::runtime::{Builder, Runtime};
+    use tokio::{
+        runtime::{Builder, Runtime},
+        sync::Semaphore,
+    };
+    use txn_types::{Key, TimeStamp};
 
-    use super::*;
-    use crate::txn_source::TxnSource;
+    use crate::{
+        channel::recv_timeout,
+        delegate::{on_init_downstream, DownstreamId, DownstreamState},
+        endpoint::Deregister,
+        initializer::{Initializer, ObservedRange},
+        service::ConnId,
+        txn_source::TxnSource,
+        CdcEvent, Error, Result, Task,
+    };
 
     struct ReceiverRunnable<T: Display + Send> {
         tx: Sender<T>,
@@ -652,6 +689,7 @@ mod tests {
             observe_id: ObserveId::new(),
             downstream_id: DownstreamId::new(),
             downstream_state,
+            downstream_closed: Box::new(future::pending().shared()),
             conn_id: ConnId::new(),
             request_id: 0,
             checkpoint_ts: 1.into(),
@@ -1027,34 +1065,108 @@ mod tests {
     }
 
     fn test_initializer_initialize_impl(kv_api: ChangeDataRequestKvApi) {
-        let total_bytes = 1;
-        let buffer = 1;
-        let (mut worker, pool, mut initializer, _rx, _drain) =
-            mock_initializer(total_bytes, total_bytes, buffer, None, kv_api, false);
+        let (mut worker, pool, mut initializer, tasks, mut drain) =
+            mock_initializer(1, 1, 128, None, kv_api, false);
+        let scan_concurrency_semaphore = initializer.scan_concurrency_semaphore.clone();
+        let downstream_state = initializer.downstream_state.clone();
+        let region_id = initializer.region_id;
+        let router = CdcRaftRouter(MockRaftStoreRouter::new());
+        let quota = Arc::new(MemoryQuota::new(usize::MAX));
+        let mut res: Result<()>;
 
-        let change_cmd = ChangeObserver::from_cdc(1, ObserveHandle::new());
-        let raft_router = CdcRaftRouter(MockRaftStoreRouter::new());
-        let memory_quota = Arc::new(MemoryQuota::new(usize::MAX));
+        // initialize on an unexist region.
+        downstream_state.store(DownstreamState::Uninitialized);
+        initializer.downstream_closed = Box::new(future::pending().shared());
+        let f = do_initialize(initializer, &router, None, &quota, &tasks, &pool);
+        (initializer, res) = block_on(f);
+        assert!(matches!(res, Err(Error::Request(x)) if x.has_region_not_found()));
 
-        initializer.downstream_state.store(DownstreamState::Stopped);
-        block_on(initializer.initialize(change_cmd, raft_router.clone(), memory_quota.clone()))
-            .unwrap_err();
+        let snap_ch = router.0.add_region(region_id, 100);
 
-        let (tx1, rx1) = sync_channel(1);
-        let change_cmd = ChangeObserver::from_cdc(1, ObserveHandle::new());
-        pool.spawn(async move {
-            // Migrated to 2021 migration. This let statement is probably not needed, see
-            //   https://doc.rust-lang.org/edition-guide/rust-2021/disjoint-capture-in-closures.html
-            let res = initializer
-                .initialize(change_cmd, raft_router, memory_quota)
-                .await;
-            tx1.send(res).unwrap();
-        });
+        // initialize will be waiting on the semaphore, still can be canceled.
+        let (tx, rx) = oneshot::channel::<()>();
+        downstream_state.store(DownstreamState::Uninitialized);
+        initializer.downstream_closed = Box::new(rx.then(|_| future::ready(())).shared());
+        let permit = scan_concurrency_semaphore.try_acquire().unwrap();
+        let f = do_initialize(initializer, &router, Some(&snap_ch), &quota, &tasks, &pool);
+        std::thread::sleep(Duration::from_millis(100));
+        drop(tx);
+        (initializer, res) = block_on(f);
+        assert!(matches!(res, Err(Error::Other(x)) if x.to_string().contains("scan canceled")));
+        drop(permit);
 
-        // Shouldn't timeout, gets an error instead.
-        let res = rx1.recv_timeout(Duration::from_millis(200)).unwrap();
-        assert!(res.is_err());
+        // normal initialize.
+        downstream_state.store(DownstreamState::Uninitialized);
+        initializer.downstream_closed = Box::new(future::pending().shared());
+        let f = do_initialize(initializer, &router, Some(&snap_ch), &quota, &tasks, &pool);
+        for _ in 0..2 {
+            // Consume the INIT event and the barrier.
+            recv_timeout(&mut drain.drain(), Duration::from_millis(100)).unwrap();
+        }
+        (initializer, res) = block_on(f);
+        assert!(res.is_ok());
 
+        drop(initializer);
         worker.stop();
+    }
+
+    fn do_initialize(
+        mut initializer: Initializer<RocksEngine>,
+        raft_router: &CdcRaftRouter<MockRaftStoreRouter>,
+        snap_ch: Option<&tikv_util::mpsc::Receiver<PeerMsg<RocksEngine>>>,
+        memory_quota: &Arc<MemoryQuota>,
+        rx: &Receiver<Task>,
+        pool: &Runtime,
+    ) -> impl Future<Output = (Initializer<RocksEngine>, Result<()>)> {
+        let region_id = initializer.region_id;
+        let change_cmd = ChangeObserver::from_cdc(region_id, ObserveHandle::new());
+        let router = raft_router.clone();
+        let quota = Arc::clone(memory_quota);
+        let init = pool.spawn(async move {
+            let res = initializer.initialize(change_cmd, router, quota).await;
+            (initializer, res)
+        });
+        if let Some(snap_ch) = snap_ch {
+            match snap_ch.recv().unwrap() {
+                PeerMsg::SignificantMsg(SignificantMsg::CaptureChange { callback, .. }) => {
+                    match callback {
+                        Callback::Read { cb, .. } => {
+                            let mut region = Region::default();
+                            region.set_id(region_id);
+                            region.mut_peers().push(Default::default());
+                            let mut engine =
+                                TestEngineBuilder::new().build_without_cache().unwrap();
+                            let snap = engine.snapshot(Default::default()).unwrap();
+                            let snapshot =
+                                Some(RegionSnapshot::from_snapshot(snap, Arc::new(region)));
+                            cb(ReadResponse {
+                                response: RaftCmdResponse::default(),
+                                snapshot,
+                                txn_extra_op: TxnExtraOp::Noop,
+                            })
+                        }
+                        _ => unreachable!(),
+                    }
+                }
+                _ => unreachable!(),
+            }
+            match rx.recv().unwrap() {
+                Task::InitDownstream {
+                    downstream_state,
+                    incremental_scan_barrier,
+                    cb,
+                    ..
+                } => {
+                    match incremental_scan_barrier {
+                        CdcEvent::Barrier(Some(f)) => f(()),
+                        _ => unreachable!(),
+                    }
+                    assert!(on_init_downstream(&downstream_state));
+                    cb();
+                }
+                _ => unreachable!(),
+            }
+        }
+        init.then(|x| future::ready(x.unwrap()))
     }
 }

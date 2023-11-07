@@ -5,13 +5,18 @@ use std::{
     string::String,
     sync::{
         atomic::{AtomicUsize, Ordering},
-        Arc,
+        Arc, Mutex,
     },
 };
 
 use api_version::{ApiV2, KeyMode, KvFormat};
 use collections::{HashMap, HashMapEntry};
 use crossbeam::atomic::AtomicCell;
+use futures::{
+    channel::oneshot::{self, Receiver, Sender},
+    future::Shared,
+    Future, FutureExt,
+};
 use kvproto::{
     cdcpb::{
         ChangeDataRequestKvApi, Error as EventError, Event, EventEntries, EventLogType, EventRow,
@@ -133,6 +138,7 @@ pub struct Downstream {
     region_epoch: RegionEpoch,
     sink: Option<Sink>,
     state: Arc<AtomicCell<DownstreamState>>,
+    closed_notifier: (Arc<Mutex<Option<Sender<()>>>>, Shared<Receiver<()>>),
     kv_api: ChangeDataRequestKvApi,
     filter_loop: bool,
     pub(crate) observed_range: ObservedRange,
@@ -152,6 +158,7 @@ impl Downstream {
         filter_loop: bool,
         observed_range: ObservedRange,
     ) -> Downstream {
+        let (tx, rx) = oneshot::channel();
         Downstream {
             id: DownstreamId::new(),
             req_id,
@@ -160,6 +167,7 @@ impl Downstream {
             region_epoch,
             sink: None,
             state: Arc::new(AtomicCell::new(DownstreamState::default())),
+            closed_notifier: (Arc::new(Mutex::new(Some(tx))), rx.shared()),
             kv_api,
             filter_loop,
             observed_range,
@@ -220,6 +228,10 @@ impl Downstream {
 
     pub fn get_state(&self) -> Arc<AtomicCell<DownstreamState>> {
         self.state.clone()
+    }
+
+    pub fn get_closed_notifier(&self) -> Box<dyn Future<Output = ()> + Send + Sync + Unpin> {
+        Box::new(self.closed_notifier.1.clone().map(|_| ()))
     }
 
     pub fn get_conn_id(&self) -> ConnId {
@@ -421,6 +433,10 @@ impl Delegate {
         let error = err.into_error_event(self.region_id);
         let send = move |downstream: &Downstream| {
             downstream.state.store(DownstreamState::Stopped);
+            if let Some(tx) = downstream.closed_notifier.0.lock().unwrap().take() {
+                tx.send(()).unwrap();
+            }
+
             let error_event = error.clone();
             if let Err(err) = downstream.sink_error_event(region_id, error_event) {
                 warn!("cdc send region error failed";
@@ -1545,6 +1561,7 @@ mod tests {
         assert_eq!(map.len(), 5);
 
         let (sink, mut drain) = channel(1, Arc::new(MemoryQuota::new(1024)));
+        let (tx, rx) = oneshot::channel();
         let downstream = Downstream {
             id: DownstreamId::new(),
             req_id: 1,
@@ -1553,6 +1570,7 @@ mod tests {
             region_epoch: RegionEpoch::default(),
             sink: Some(sink),
             state: Arc::new(AtomicCell::new(DownstreamState::Normal)),
+            closed_notifier: (Arc::new(Mutex::new(Some(tx))), rx.shared()),
             kv_api: ChangeDataRequestKvApi::TiDb,
             filter_loop: false,
             observed_range,
@@ -1619,6 +1637,7 @@ mod tests {
         assert_eq!(map.len(), 5);
 
         let (sink, mut drain) = channel(1, Arc::new(MemoryQuota::new(1024)));
+        let (tx, rx) = oneshot::channel();
         let downstream = Downstream {
             id: DownstreamId::new(),
             req_id: 1,
@@ -1627,6 +1646,7 @@ mod tests {
             region_epoch: RegionEpoch::default(),
             sink: Some(sink),
             state: Arc::new(AtomicCell::new(DownstreamState::Normal)),
+            closed_notifier: (Arc::new(Mutex::new(Some(tx))), rx.shared()),
             kv_api: ChangeDataRequestKvApi::TiDb,
             filter_loop,
             observed_range,
