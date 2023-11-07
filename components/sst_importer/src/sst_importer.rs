@@ -566,14 +566,16 @@ impl SstImporter {
             .open(dst_file)?
             .sync_data()?;
 
+        let elapsed = start_read.saturating_elapsed();
         IMPORTER_DOWNLOAD_DURATION
             .with_label_values(&["read"])
-            .observe(start_read.saturating_elapsed().as_secs_f64());
-
-        debug!("downloaded file succeed";
-            "name" => src_file_name,
-            "url"  => %util::url_for(&ext_storage),
-        );
+            .observe(elapsed.as_secs_f64());
+        if elapsed > Duration::from_secs(600) {
+            info!("[debug blocken] download file too slow";
+                "name" => src_file_name,
+                "length" => file_length,
+                "cost" => ?elapsed);
+        }
         Ok(())
     }
 
@@ -1078,6 +1080,7 @@ impl SstImporter {
         engine: E,
         ext: DownloadExt<'_>,
     ) -> Result<Option<Range>> {
+        let start_download = Instant::now();
         let path = self.dir.join(meta)?;
 
         let file_crypter = crypter.map(|c| FileEncryptionInfo {
@@ -1090,7 +1093,16 @@ impl SstImporter {
             file_crypter,
             ..Default::default()
         };
-
+        let before_elapsed = start_download.saturating_elapsed();
+        IMPORTER_DOWNLOAD_DURATION
+            .with_label_values(&["before"])
+            .observe(before_elapsed.as_secs_f64());
+        if before_elapsed > Duration::from_secs(600) {
+            info!("[debug blocken] before download file too slow";
+                "name" => name,
+                "length" => meta.length,
+                "cost" => ?before_elapsed);
+        }
         self.async_download_file_from_external_storage(
             meta.length,
             name,
@@ -1103,18 +1115,23 @@ impl SstImporter {
         )
         .await?;
 
+        let after_download = Instant::now();
         // now validate the SST file.
         let env = get_env(self.key_manager.clone(), get_io_rate_limiter())?;
         // Use abstracted SstReader after Env is abstracted.
         let dst_file_name = path.temp.to_str().unwrap();
         let sst_reader = RocksSstReader::open_with_env(dst_file_name, Some(env))?;
         sst_reader.verify_checksum()?;
-
-        debug!("downloaded file and verified";
-            "meta" => ?meta,
-            "name" => name,
-            "path" => dst_file_name,
-        );
+        let after_elapsed = after_download.saturating_elapsed();
+        IMPORTER_DOWNLOAD_DURATION
+            .with_label_values(&["after"])
+            .observe(after_elapsed.as_secs_f64());
+        if after_elapsed > Duration::from_secs(600) {
+            info!("[debug blocken] after download file too slow";
+                "name" => name,
+                "length" => meta.length,
+                "cost" => ?after_elapsed);
+        }
 
         // undo key rewrite so we could compare with the keys inside SST
         let old_prefix = rewrite_rule.get_old_key_prefix();
