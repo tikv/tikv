@@ -486,12 +486,12 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
         let source = req.get_context().get_request_source().to_owned();
         let resource_control_ctx = req.get_context().get_resource_control_context();
         let mut resource_group_priority = ResourcePriority::unknown;
+        info!("coprocessor resource_manager is none: {}", self.resource_manager.is_none());    
         if let Some(resource_manager) = &self.resource_manager {
             resource_manager.consume_penalty(resource_control_ctx);
-            resource_group_priority = ResourcePriority::from(
-                resource_manager
-                    .get_resource_group_priority(resource_control_ctx.get_resource_group_name()),
-            );
+            let priority=resource_manager.get_resource_group_priority(resource_control_ctx.get_resource_group_name());
+            info!("coprocessor priority: {}", priority);    
+            resource_group_priority = ResourcePriority::from(priority);
         }
 
         GRPC_RESOURCE_GROUP_COUNTER_VEC
