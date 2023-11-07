@@ -8,7 +8,14 @@ mod suite;
 pub use suite::*;
 
 mod all {
-    use std::time::Duration;
+
+    use std::{
+        sync::{
+            atomic::{AtomicBool, Ordering},
+            Arc,
+        },
+        time::Duration,
+    };
 
     use backup_stream::{
         metadata::{
@@ -18,7 +25,7 @@ mod all {
         GetCheckpointResult, RegionCheckpointOperation, RegionSet, Task,
     };
     use futures::executor::block_on;
-    use tikv_util::defer;
+    use tikv_util::{config::ReadableSize, defer};
 
     use crate::{
         make_record_key, make_split_key_at_record, make_table_key, mutation, run_async_test,
@@ -55,7 +62,7 @@ mod all {
         let mut suite = super::SuiteBuilder::new_named("basic").build();
         fail::cfg("try_start_observe", "1*return").unwrap();
 
-        run_async_test(async {
+        let (round1, round2) = run_async_test(async {
             // write data before the task starting, for testing incremental scanning.
             let round1 = suite.write_records(0, 128, 1).await;
             suite.must_register_task(1, "test_basic");
@@ -63,13 +70,13 @@ mod all {
             let round2 = suite.write_records(256, 128, 1).await;
             suite.force_flush_files("test_basic");
             suite.wait_for_flush();
-            suite
-                .check_for_write_records(
-                    suite.flushed_files.path(),
-                    round1.union(&round2).map(Vec::as_slice),
-                )
-                .await;
+            (round1, round2)
         });
+        suite.check_for_write_records(
+            suite.flushed_files.path(),
+            round1.union(&round2).map(Vec::as_slice),
+        );
+
         suite.cluster.shutdown();
     }
     #[test]
@@ -122,10 +129,10 @@ mod all {
         let keys2 = run_async_test(suite.write_records(256, 128, 1));
         suite.force_flush_files("region_failure");
         suite.wait_for_flush();
-        run_async_test(suite.check_for_write_records(
+        suite.check_for_write_records(
             suite.flushed_files.path(),
             keys.union(&keys2).map(|s| s.as_slice()),
-        ));
+        );
     }
     #[test]
     fn initial_scan_failure() {
@@ -146,10 +153,10 @@ mod all {
         let keys2 = run_async_test(suite.write_records(256, 128, 1));
         suite.force_flush_files("initial_scan_failure");
         suite.wait_for_flush();
-        run_async_test(suite.check_for_write_records(
+        suite.check_for_write_records(
             suite.flushed_files.path(),
             keys.union(&keys2).map(|s| s.as_slice()),
-        ));
+        );
     }
     #[test]
     fn failed_during_refresh_region() {
@@ -172,10 +179,10 @@ mod all {
         let keys2 = run_async_test(suite.write_records(256, 128, 1));
         suite.force_flush_files("fail_to_refresh_region");
         suite.wait_for_flush();
-        run_async_test(suite.check_for_write_records(
+        suite.check_for_write_records(
             suite.flushed_files.path(),
             keys.union(&keys2).map(|s| s.as_slice()),
-        ));
+        );
         let leader = suite.cluster.leader_of_region(1).unwrap().store_id;
         let (tx, rx) = std::sync::mpsc::channel();
         suite.endpoints[&leader]
@@ -269,11 +276,65 @@ mod all {
         let items = run_async_test(suite.write_records(0, 128, 1));
         suite.force_flush_files("retry_abort");
         suite.wait_for_flush();
-        run_async_test(
-            suite.check_for_write_records(
-                suite.flushed_files.path(),
-                items.iter().map(Vec::as_slice),
-            ),
+        suite.check_for_write_records(suite.flushed_files.path(), items.iter().map(Vec::as_slice));
+    }
+    #[test]
+    fn failure_and_split() {
+        let mut suite = SuiteBuilder::new_named("failure_and_split")
+            .nodes(1)
+            .build();
+        fail::cfg("try_start_observe0", "pause").unwrap();
+
+        // write data before the task starting, for testing incremental scanning.
+        let round1 = run_async_test(suite.write_records(0, 128, 1));
+        suite.must_register_task(1, "failure_and_split");
+        suite.sync();
+
+        suite.must_split(&make_split_key_at_record(1, 42));
+        suite.sync();
+        std::thread::sleep(Duration::from_millis(200));
+        fail::cfg("try_start_observe", "2*return").unwrap();
+        fail::cfg("try_start_observe0", "off").unwrap();
+
+        let round2 = run_async_test(suite.write_records(256, 128, 1));
+        suite.force_flush_files("failure_and_split");
+        suite.wait_for_flush();
+        suite.check_for_write_records(
+            suite.flushed_files.path(),
+            round1.union(&round2).map(Vec::as_slice),
         );
+        let cp = suite.global_checkpoint();
+        assert!(cp > 512, "it is {}", cp);
+        suite.cluster.shutdown();
+    }
+
+    #[test]
+    fn memory_quota() {
+        let mut suite = SuiteBuilder::new_named("memory_quota")
+            .cfg(|cfg| cfg.initial_scan_pending_memory_quota = ReadableSize::kb(2))
+            .build();
+        let keys = run_async_test(suite.write_records(0, 128, 1));
+        let failed = Arc::new(AtomicBool::new(false));
+        fail::cfg("router_on_event_delay_ms", "6*return(1000)").unwrap();
+        fail::cfg_callback("scan_and_async_send::about_to_consume", {
+            let failed = failed.clone();
+            move || {
+                let v = backup_stream::metrics::HEAP_MEMORY.get();
+                // Not greater than max key length * concurrent initial scan number.
+                if v > 4096 * 6 {
+                    println!("[[ FAILED ]] The memory usage is {v} which exceeds the quota");
+                    failed.store(true, Ordering::SeqCst);
+                }
+            }
+        })
+        .unwrap();
+        suite.must_register_task(1, "memory_quota");
+        suite.force_flush_files("memory_quota");
+        suite.wait_for_flush();
+        suite.check_for_write_records(
+            suite.flushed_files.path(),
+            keys.iter().map(|v| v.as_slice()),
+        );
+        assert!(!failed.load(Ordering::SeqCst));
     }
 }
