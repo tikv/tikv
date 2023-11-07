@@ -2297,6 +2297,7 @@ where
             } => self.handle_update_max_timestamp(region_id, initial_status, txn_ext),
             Task::QueryRegionLeader { region_id } => self.handle_query_region_leader(region_id),
             Task::UpdateSlowScore { id, duration } => {
+                // Fine-tuned, `SlowScore` only takes the I/O jitters on the disk into account.
                 self.slow_score
                     .record(id, duration.delays_on_disk_io(false));
                 self.slow_trend.record(duration);
