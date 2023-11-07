@@ -4167,7 +4167,6 @@ where
         if meta.region_ranges.remove(&last_key).is_none() {
             panic!("{} original region should exist", self.fsm.peer.tag);
         }
-        let last_region_id = regions.last().unwrap().get_id();
         for (new_region, locks) in regions.into_iter().zip(region_locks) {
             let new_region_id = new_region.get_id();
 
