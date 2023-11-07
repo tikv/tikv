@@ -1104,7 +1104,7 @@ mod tests {
             recv_timeout(&mut drain.drain(), Duration::from_millis(100)).unwrap();
         }
         (initializer, res) = block_on(f);
-        assert!(res.is_ok());
+        res.unwrap();
 
         drop(initializer);
         worker.stop();
@@ -1128,25 +1128,21 @@ mod tests {
         });
         if let Some(snap_ch) = snap_ch {
             match snap_ch.recv().unwrap() {
-                PeerMsg::SignificantMsg(SignificantMsg::CaptureChange { callback, .. }) => {
-                    match callback {
-                        Callback::Read { cb, .. } => {
-                            let mut region = Region::default();
-                            region.set_id(region_id);
-                            region.mut_peers().push(Default::default());
-                            let mut engine =
-                                TestEngineBuilder::new().build_without_cache().unwrap();
-                            let snap = engine.snapshot(Default::default()).unwrap();
-                            let snapshot =
-                                Some(RegionSnapshot::from_snapshot(snap, Arc::new(region)));
-                            cb(ReadResponse {
-                                response: RaftCmdResponse::default(),
-                                snapshot,
-                                txn_extra_op: TxnExtraOp::Noop,
-                            })
-                        }
-                        _ => unreachable!(),
-                    }
+                PeerMsg::SignificantMsg(SignificantMsg::CaptureChange {
+                    callback: Callback::Read { cb, .. },
+                    ..
+                }) => {
+                    let mut region = Region::default();
+                    region.set_id(region_id);
+                    region.mut_peers().push(Default::default());
+                    let mut engine = TestEngineBuilder::new().build_without_cache().unwrap();
+                    let snap = engine.snapshot(Default::default()).unwrap();
+                    let snapshot = Some(RegionSnapshot::from_snapshot(snap, Arc::new(region)));
+                    cb(ReadResponse {
+                        response: RaftCmdResponse::default(),
+                        snapshot,
+                        txn_extra_op: TxnExtraOp::Noop,
+                    })
                 }
                 _ => unreachable!(),
             }
