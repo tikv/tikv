@@ -133,7 +133,7 @@ pub fn remove_thread_memory_accessor() {
 
 use std::thread::ThreadId;
 
-pub use self::profiling::{activate_prof, deactivate_prof, dump_prof};
+pub use self::profiling::*;
 
 pub fn dump_stats() -> String {
     let mut buf = Vec::with_capacity(1024);
@@ -311,6 +311,19 @@ mod profiling {
     // C string should end with a '\0'.
     const PROF_ACTIVE: &[u8] = b"prof.active\0";
     const PROF_DUMP: &[u8] = b"prof.dump\0";
+    const PROF_RESET: &[u8] = b"prof.reset\0";
+
+    pub fn set_prof_sample(rate: usize) -> ProfResult<()> {
+        unsafe {
+            if let Err(e) = tikv_jemalloc_ctl::raw::write(PROF_RESET, rate) {
+                return Err(ProfError::JemallocError(format!(
+                    "failed to set prof sample: {}",
+                    e
+                )));
+            }
+        }
+        Ok(())
+    }
 
     pub fn activate_prof() -> ProfResult<()> {
         unsafe {
@@ -429,6 +442,9 @@ mod profiling {
         Err(ProfError::MemProfilingNotEnabled)
     }
     pub fn deactivate_prof() -> ProfResult<()> {
+        Err(ProfError::MemProfilingNotEnabled)
+    }
+    pub fn set_prof_sample(_rate: usize) -> ProfResult<()> {
         Err(ProfError::MemProfilingNotEnabled)
     }
 }

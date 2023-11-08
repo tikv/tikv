@@ -24,6 +24,10 @@ pub fn deactivate_prof() -> ProfResult<()> {
     Err(ProfError::MemProfilingNotEnabled)
 }
 
+pub fn set_prof_sample(_rate: usize) -> ProfResult<()> {
+    Err(ProfError::MemProfilingNotEnabled)
+}
+
 /// # Safety
 ///
 /// It is safe. The unsafe marker is just for matching the function signature.

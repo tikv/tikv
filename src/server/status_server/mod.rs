@@ -41,6 +41,7 @@ use openssl::{
 };
 use pin_project::pin_project;
 use profile::*;
+pub use profile::{activate_heap_profile, deactivate_heap_profile};
 use prometheus::TEXT_FORMAT;
 use regex::Regex;
 use resource_control::ResourceGroupManager;
