@@ -571,6 +571,119 @@ pub fn can_amend_read<C>(
     false
 }
 
+/// The SplitCheckTrigger maintains the internal status to determine
+/// if a split check task should be triggered.
+#[derive(Default, Debug)]
+pub struct SplitCheckTrigger {
+    /// An inaccurate difference in region size since last reset.
+    /// It is used to decide whether split check is needed.
+    size_diff_hint: u64,
+    /// An inaccurate difference in region size after compaction.
+    /// It is used to trigger check split to update approximate size and keys
+    /// after space reclamation of deleted entries.
+    pub compaction_declined_bytes: u64,
+    /// Approximate size of the region.
+    pub approximate_size: Option<u64>,
+    may_split_size: Option<bool>,
+    /// Approximate keys of the region.
+    pub approximate_keys: Option<u64>,
+    may_split_keys: Option<bool>,
+    /// Whether this region has scheduled a split check task. If we just
+    /// splitted  the region or ingested one file which may be overlapped
+    /// with the existed data, reset the flag so that the region can be
+    /// splitted again.
+    may_skip_split_check: bool,
+}
+
+impl SplitCheckTrigger {
+    pub fn should_skip(&self, threshold: u64) -> bool {
+        self.may_skip_split_check
+            && self.compaction_declined_bytes < threshold
+            && self.size_diff_hint < threshold
+    }
+
+    pub fn post_triggered(&mut self) {
+        self.size_diff_hint = 0;
+        self.compaction_declined_bytes = 0;
+        // The task is scheduled, the next tick may skip it only when the size and keys
+        // are small.
+        // If either size or keys are big enough to do a split,
+        // keep split check tick until split is done
+        if !matches!(self.may_split_size, Some(true)) && !matches!(self.may_split_keys, Some(true))
+        {
+            self.may_skip_split_check = true;
+        }
+    }
+
+    pub fn post_split(&mut self) {
+        self.size_diff_hint = 0;
+        self.may_split_keys = None;
+        self.may_split_size = None;
+        // It's not correct anymore, so set it to false to schedule a split check task.
+        self.may_skip_split_check = false;
+    }
+
+    pub fn add_size_diff(&mut self, size_diff: i64) {
+        let diff = self.size_diff_hint as i64 + size_diff;
+        self.size_diff_hint = cmp::max(diff, 0) as u64;
+    }
+
+    pub fn reset_skip_check(&mut self) {
+        self.may_skip_split_check = false;
+    }
+
+    pub fn on_clear_region_size(&mut self) {
+        self.approximate_size = None;
+        self.approximate_keys = None;
+        self.may_split_size = None;
+        self.may_split_keys = None;
+        self.may_skip_split_check = false;
+    }
+
+    pub fn on_approximate_region_size(&mut self, size: Option<u64>, splitable: Option<bool>) {
+        // If size is none, it means no estimated size
+        if size.is_some() {
+            self.approximate_size = size;
+        }
+
+        if splitable.is_some() {
+            self.may_split_size = splitable;
+        }
+
+        // If the region is truly splitable,
+        // may_skip_split_check should be false
+        if matches!(splitable, Some(true)) {
+            self.may_skip_split_check = false;
+        }
+    }
+
+    pub fn on_approximate_region_keys(&mut self, keys: Option<u64>, splitable: Option<bool>) {
+        // if keys is none, it means no estimated keys
+        if keys.is_some() {
+            self.approximate_keys = keys;
+        }
+
+        if splitable.is_some() {
+            self.may_split_keys = splitable;
+        }
+
+        // If the region is truly splitable,
+        // may_skip_split_check should be false
+        if matches!(splitable, Some(true)) {
+            self.may_skip_split_check = false;
+        }
+    }
+
+    pub fn on_ingest_sst_result(&mut self, size: u64, keys: u64) {
+        self.approximate_size = Some(self.approximate_size.unwrap_or_default() + size);
+        self.approximate_keys = Some(self.approximate_keys.unwrap_or_default() + keys);
+
+        // The ingested file may be overlapped with the data in engine, so we need to
+        // check it again to get the accurate value.
+        self.may_skip_split_check = false;
+    }
+}
+
 #[derive(Getters, MutGetters)]
 pub struct Peer<EK, ER>
 where
@@ -658,25 +771,10 @@ where
     pub peers_start_pending_time: Vec<(u64, Instant)>,
     /// A inaccurate cache about which peer is marked as down.
     down_peer_ids: Vec<u64>,
-
-    /// An inaccurate difference in region size since last reset.
-    /// It is used to decide whether split check is needed.
-    pub size_diff_hint: u64,
+    /// the split check trigger
+    pub split_check_trigger: SplitCheckTrigger,
     /// The count of deleted keys since last reset.
     delete_keys_hint: u64,
-    /// An inaccurate difference in region size after compaction.
-    /// It is used to trigger check split to update approximate size and keys
-    /// after space reclamation of deleted entries.
-    pub compaction_declined_bytes: u64,
-    /// Approximate size of the region.
-    pub approximate_size: Option<u64>,
-    /// Approximate keys of the region.
-    pub approximate_keys: Option<u64>,
-    /// Whether this region has scheduled a split check task. If we just
-    /// splitted  the region or ingested one file which may be overlapped
-    /// with the existed data, reset the flag so that the region can be
-    /// splitted again.
-    pub may_skip_split_check: bool,
 
     /// The state for consistency check.
     pub consistency_state: ConsistencyState,
@@ -862,12 +960,8 @@ where
             wait_data_peers: Vec::default(),
             peers_start_pending_time: vec![],
             down_peer_ids: vec![],
-            size_diff_hint: 0,
+            split_check_trigger: SplitCheckTrigger::default(),
             delete_keys_hint: 0,
-            approximate_size: None,
-            approximate_keys: None,
-            may_skip_split_check: false,
-            compaction_declined_bytes: 0,
             leader_unreachable: false,
             pending_remove: false,
             wait_data,
@@ -3361,8 +3455,8 @@ where
         self.peer_stat.written_keys += apply_metrics.written_keys;
         self.peer_stat.written_bytes += apply_metrics.written_bytes;
         self.delete_keys_hint += apply_metrics.delete_keys_hint;
-        let diff = self.size_diff_hint as i64 + apply_metrics.size_diff_hint;
-        self.size_diff_hint = cmp::max(diff, 0) as u64;
+        self.split_check_trigger
+            .add_size_diff(apply_metrics.size_diff_hint);
 
         if self.has_pending_snapshot() && self.ready_to_handle_pending_snap() {
             has_ready = true;
@@ -3394,9 +3488,9 @@ where
     }
 
     pub fn post_split(&mut self) {
-        // Reset delete_keys_hint and size_diff_hint.
         self.delete_keys_hint = 0;
-        self.size_diff_hint = 0;
+        self.split_check_trigger.post_split();
+
         self.reset_region_buckets();
     }
 
@@ -5211,8 +5305,8 @@ where
             pending_peers: self.collect_pending_peers(ctx),
             written_bytes: self.peer_stat.written_bytes,
             written_keys: self.peer_stat.written_keys,
-            approximate_size: self.approximate_size,
-            approximate_keys: self.approximate_keys,
+            approximate_size: self.split_check_trigger.approximate_size,
+            approximate_keys: self.split_check_trigger.approximate_keys,
             replication_status: self.region_replication_status(ctx),
             wait_data_peers: self.wait_data_peers.clone(),
         });
