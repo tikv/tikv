@@ -1,6 +1,3 @@
-log-level = "info"
-log-file = ""
-log-format = "text"
 slow-log-file = "slow_foo"
 slow-log-threshold = "1s"
 log-rotation-timespan = "1d"
@@ -18,6 +15,10 @@ filename = "foo"
 max-size = 1
 max-backups = 2
 max-days = 3
+
+[memory]
+enable-heap-profiling = true
+heap-profiling-sample-rate = 20
 
 [readpool.unified]
 min-thread-count = 5

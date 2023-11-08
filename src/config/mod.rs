@@ -14,7 +14,7 @@ use std::{
     error::Error,
     fs, i32,
     io::{Error as IoError, ErrorKind, Write},
-    path::Path,
+    path::{Path, PathBuf},
     str,
     sync::{Arc, RwLock},
     usize,
@@ -47,6 +47,7 @@ use engine_traits::{
     CF_WRITE,
 };
 use file_system::IoRateLimiter;
+use futures_executor::block_on;
 use keys::region_raft_prefix_len;
 use kvproto::kvrpcpb::ApiVersion;
 use online_config::{ConfigChange, ConfigManager, ConfigValue, OnlineConfig, Result as CfgResult};
@@ -82,6 +83,7 @@ use crate::{
     server::{
         gc_worker::{GcConfig, RawCompactionFilterFactory, WriteCompactionFilterFactory},
         lock_manager::Config as PessimisticTxnConfig,
+        status_server::activate_heap_profile,
         ttl::TtlCompactionFilterFactory,
         Config as ServerConfig, CONFIG_ROCKSDB_GAUGE,
     },
@@ -1263,10 +1265,10 @@ pub struct DbConfig {
     #[serde(with = "rocks_config::rate_limiter_mode_serde")]
     #[online_config(skip)]
     pub rate_limiter_mode: DBRateLimiterMode,
-    // deprecated. use rate_limiter_auto_tuned.
     #[online_config(skip)]
     #[doc(hidden)]
     #[serde(skip_serializing)]
+    #[deprecated = "The configuration has been removed. Use `rate_limiter_auto_tuned` instead"]
     pub auto_tuned: Option<bool>,
     pub rate_limiter_auto_tuned: bool,
     pub bytes_per_sync: ReadableSize,
@@ -1318,6 +1320,7 @@ pub struct DbResources {
 }
 
 impl Default for DbConfig {
+    #[allow(deprecated)]
     fn default() -> DbConfig {
         DbConfig {
             wal_recovery_mode: DBRecoveryMode::PointInTime,
@@ -2968,10 +2971,12 @@ pub struct CdcConfig {
     #[online_config(skip)]
     #[doc(hidden)]
     #[serde(skip_serializing)]
+    #[deprecated = "The configuration has been removed."]
     pub old_value_cache_size: usize,
 }
 
 impl Default for CdcConfig {
+    #[allow(deprecated)]
     fn default() -> Self {
         Self {
             min_ts_interval: ReadableDuration::secs(1),
@@ -3214,6 +3219,45 @@ impl ConfigManager for LogConfigManager {
 #[derive(Clone, Serialize, Deserialize, PartialEq, Debug, OnlineConfig)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
+pub struct MemoryConfig {
+    // Whether enable the heap profiling which may have a bit performance overhead about 2% for the
+    // default sample rate.
+    #[online_config(skip)]
+    pub enable_heap_profiling: bool,
+    // Average interval (log base 2) between allocation samples, as measured in bytes of allocation
+    // activity. Increasing the sampling interval decreases profile fidelity, but also decreases
+    // the computational overhead. The default sample interval is 512 KiB (2^19 B).
+    #[online_config(skip)]
+    pub heap_profiling_sample_rate: usize,
+}
+
+impl Default for MemoryConfig {
+    fn default() -> Self {
+        Self {
+            enable_heap_profiling: false,
+            heap_profiling_sample_rate: 19,
+        }
+    }
+}
+
+impl MemoryConfig {
+    pub fn init(&self) {
+        if self.enable_heap_profiling {
+            if let Err(e) = block_on(activate_heap_profile(
+                None::<futures::channel::mpsc::Receiver<_>>,
+                PathBuf::default(),
+                || {},
+            )) {
+                error!("failed to enable heap profiling"; "err" => ?e);
+            }
+            tikv_alloc::set_prof_sample(self.heap_profiling_sample_rate).unwrap();
+        }
+    }
+}
+
+#[derive(Clone, Serialize, Deserialize, PartialEq, Debug, OnlineConfig)]
+#[serde(default)]
+#[serde(rename_all = "kebab-case")]
 pub struct QuotaConfig {
     pub foreground_cpu_time: usize,
     pub foreground_write_bandwidth: ReadableSize,
@@ -3261,21 +3305,29 @@ pub struct TikvConfig {
     #[online_config(hidden)]
     pub cfg_path: String,
 
-    // Deprecated! These configuration has been moved to LogConfig.
-    // They are preserved for compatibility check.
     #[doc(hidden)]
     #[online_config(skip)]
+    #[serde(skip_serializing)]
+    #[deprecated = "The configuration has been moved to log.level."]
     pub log_level: LogLevel,
     #[doc(hidden)]
     #[online_config(skip)]
+    #[serde(skip_serializing)]
+    #[deprecated = "The configuration has been moved to log.file.filename."]
     pub log_file: String,
     #[doc(hidden)]
     #[online_config(skip)]
+    #[serde(skip_serializing)]
+    #[deprecated = "The configuration has been moved to log.format."]
     pub log_format: LogFormat,
     #[online_config(skip)]
+    #[serde(skip_serializing)]
+    #[deprecated = "The configuration has been moved to log.file.max_days."]
     pub log_rotation_timespan: ReadableDuration,
     #[doc(hidden)]
     #[online_config(skip)]
+    #[serde(skip_serializing)]
+    #[deprecated = "The configuration has been moved to log.file.max_size."]
     pub log_rotation_size: ReadableSize,
 
     #[online_config(skip)]
@@ -3305,6 +3357,9 @@ pub struct TikvConfig {
 
     #[online_config(submodule)]
     pub log: LogConfig,
+
+    #[online_config(submodule)]
+    pub memory: MemoryConfig,
 
     #[online_config(submodule)]
     pub quota: QuotaConfig,
@@ -3383,6 +3438,7 @@ pub struct TikvConfig {
 }
 
 impl Default for TikvConfig {
+    #[allow(deprecated)]
     fn default() -> TikvConfig {
         TikvConfig {
             cfg_path: "".to_owned(),
@@ -3399,6 +3455,7 @@ impl Default for TikvConfig {
             memory_usage_limit: None,
             memory_usage_high_water: 0.9,
             log: LogConfig::default(),
+            memory: MemoryConfig::default(),
             quota: QuotaConfig::default(),
             readpool: ReadPoolConfig::default(),
             server: ServerConfig::default(),
@@ -3777,6 +3834,7 @@ impl TikvConfig {
 
     // As the init of `logger` is very early, this adjust needs to be separated and
     // called immediately after parsing the command line.
+    #[allow(deprecated)]
     pub fn logger_compatible_adjust(&mut self) {
         let default_tikv_cfg = TikvConfig::default();
         let default_log_cfg = LogConfig::default();
@@ -3828,6 +3886,7 @@ impl TikvConfig {
         }
     }
 
+    #[allow(deprecated)]
     pub fn compatible_adjust(&mut self) {
         let default_raft_store = RaftstoreConfig::default();
         let default_coprocessor = CopConfig::default();
