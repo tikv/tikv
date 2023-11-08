@@ -148,7 +148,7 @@ where
 
     fn prepare_snapshot_backup(
         &mut self,
-        ctx: grpcio::RpcContext,
+        ctx: grpcio::RpcContext<'_>,
         stream: grpcio::RequestStream<PrepareSnapshotBackupRequest>,
         sink: grpcio::DuplexSink<PrepareSnapshotBackupResponse>,
     ) {

@@ -16,17 +16,11 @@ use tikv_util::{box_err, error, info, time::Instant as TiInstant, warn};
 use tokio::sync::oneshot;
 use txn_types::TimeStamp;
 
-use super::{
-    unsafe_recovery::InvokeClosureOnDrop, PeerMsg, RaftRouter, SignificantMsg, SignificantRouter,
-};
+use super::{metrics, PeerMsg, RaftRouter, SignificantMsg, SignificantRouter};
 use crate::coprocessor::{
     AdminObserver, BoxAdminObserver, BoxQueryObserver, CmdObserver, Coprocessor, CoprocessorHost,
     QueryObserver,
 };
-
-fn epoch_second() -> u64 {
-    TimeStamp::physical_now() / 1000
-}
 
 fn epoch_second_coarse() -> u64 {
     let spec = tikv_util::time::monotonic_coarse_now();
@@ -72,11 +66,15 @@ pub trait SnapshotBrHandle: Sync + Send {
 impl<EK: KvEngine, ER: RaftEngine> SnapshotBrHandle for Mutex<RaftRouter<EK, ER>> {
     fn send_wait_apply(&self, region: u64, req: SnapshotBrWaitApplyRequest) -> crate::Result<()> {
         let msg = SignificantMsg::SnapshotBrWaitApply(req);
+        metrics::SNAP_BR_WAIT_APPLY_EVENT.sent.inc();
         self.lock().unwrap().significant_send(region, msg)
     }
 
     fn broadcast_wait_apply(&self, req: SnapshotBrWaitApplyRequest) -> crate::Result<()> {
-        let msg_gen = || PeerMsg::SignificantMsg(SignificantMsg::SnapshotBrWaitApply(req.clone()));
+        let msg_gen = || {
+            metrics::SNAP_BR_WAIT_APPLY_EVENT.sent.inc();
+            PeerMsg::SignificantMsg(SignificantMsg::SnapshotBrWaitApply(req.clone()))
+        };
         self.lock().unwrap().broadcast_normal(msg_gen);
         Ok(())
     }
@@ -131,7 +129,10 @@ impl RejectIngestAndAdmin {
                 .until
                 .compare_exchange(v, 0, Ordering::SeqCst, Ordering::SeqCst)
             {
-                Ok(_) => break,
+                Ok(_) => {
+                    metrics::SNAP_BR_SUSPEND_COMMAND_LEASE_UNTIL.set(0);
+                    break;
+                }
                 Err(new_val) => {
                     v = new_val;
                     expired = v < epoch_second_coarse();
@@ -146,11 +147,16 @@ impl RejectIngestAndAdmin {
         self.initialized.load(Ordering::Acquire)
     }
 
+    /// Extend the lease.
+    ///
+    /// # Returns
+    ///
+    /// Whether previously there is a lease.
     pub fn heartbeat(&self, lease: Duration) -> bool {
         let mut v = self.until.load(Ordering::SeqCst);
         let now = epoch_second_coarse();
         let new_lease = now + lease.as_secs();
-        let expired = v < now;
+        let last_lease_valid = v > now;
         loop {
             match self
                 .until
@@ -165,11 +171,13 @@ impl RejectIngestAndAdmin {
                 }
             }
         }
-        expired
+        metrics::SNAP_BR_SUSPEND_COMMAND_LEASE_UNTIL.set(new_lease as _);
+        last_lease_valid
     }
 
     pub fn reset(&self) {
-        self.until.store(0, Ordering::SeqCst)
+        self.until.store(0, Ordering::SeqCst);
+        metrics::SNAP_BR_SUSPEND_COMMAND_LEASE_UNTIL.set(0);
     }
 }
 
@@ -197,6 +205,9 @@ impl QueryObserver for Arc<RejectIngestAndAdmin> {
                 // Note: this will reject the batch of commands, which isn't so effective.
                 // But we cannot reject proposing a subset of command for now...
                 cx.bypass = true;
+                metrics::SNAP_BR_SUSPEND_COMMAND_TYPE
+                    .with_label_values(&["Ingest"])
+                    .inc();
                 return Err(box_err!(
                     "trying to propose ingest while preparing snapshot backup, abort it"
                 ));
@@ -215,6 +226,9 @@ impl AdminObserver for Arc<RejectIngestAndAdmin> {
         if self.allowed() {
             return Ok(());
         }
+        metrics::SNAP_BR_SUSPEND_COMMAND_TYPE
+            .with_label_values(&[&format!("{:?}", admin.get_cmd_type())])
+            .inc();
         Err(box_err!(
             "rejecting proposing admin commands while preparing snapshot backup: rejected {:?}",
             admin
@@ -244,6 +258,7 @@ impl Drop for SnapshotBrWaitApplySyncer {
                 if ch.send(self.report_id).is_err() {
                     warn!("reply waitapply states failure."; "report" => self.report_id);
                 }
+                metrics::SNAP_BR_WAIT_APPLY_EVENT.finished.inc()
             } else {
                 warn!("wait apply aborted."; "report" => self.report_id);
             }
@@ -259,9 +274,26 @@ impl SnapshotBrWaitApplySyncer {
         }
     }
 
-    pub fn abort(self) {
+    pub fn abort(self, reason: AbortReason) {
+        warn!("aborting wait apply."; "reason" => ?reason, "id" => %self.report_id);
+        match reason {
+            AbortReason::EpochNotMatch(_) => {
+                metrics::SNAP_BR_WAIT_APPLY_EVENT.epoch_not_match.inc()
+            }
+            AbortReason::TermMismatch { .. } => {
+                metrics::SNAP_BR_WAIT_APPLY_EVENT.term_not_match.inc()
+            }
+            AbortReason::Duplicated => metrics::SNAP_BR_WAIT_APPLY_EVENT.duplicated.inc(),
+        }
         self.channel.as_ref().unwrap().lock().unwrap().take();
     }
+}
+
+#[derive(Debug)]
+pub enum AbortReason {
+    EpochNotMatch(kvproto::errorpb::EpochNotMatch),
+    TermMismatch { expected: u64, current: u64 },
+    Duplicated,
 }
 
 #[derive(Debug)]

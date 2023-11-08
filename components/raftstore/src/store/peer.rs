@@ -100,7 +100,7 @@ use crate::{
         memory::{needs_evict_entry_cache, MEMTRACE_RAFT_ENTRIES},
         msg::{CasualMessage, ErrorCallback, RaftCommand},
         peer_storage::HandleSnapshotResult,
-        snapshot_backup::SnapshotBrState,
+        snapshot_backup::{AbortReason, SnapshotBrState},
         txn_ext::LocksStatus,
         unsafe_recovery::{ForceLeaderState, UnsafeRecoveryState},
         util::{admin_cmd_epoch_lookup, RegionReadProgress},
@@ -5024,8 +5024,15 @@ where
             {
                 info!("leadership changed, aborting syncer because required."; "region_id" => self.region().id);
                 match self.snapshot_recovery_state.take() {
-                    Some(SnapshotBrState::WaitLogApplyToLast { syncer, .. }) => {
-                        syncer.abort();
+                    Some(SnapshotBrState::WaitLogApplyToLast {
+                        syncer,
+                        valid_for_term,
+                        ..
+                    }) => {
+                        syncer.abort(AbortReason::TermMismatch {
+                            expected: valid_for_term.unwrap_or_default(),
+                            current: self.raft_group.raft.term,
+                        });
                     }
                     _ => unreachable!(),
                 };

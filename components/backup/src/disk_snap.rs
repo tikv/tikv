@@ -161,8 +161,16 @@ impl<SR: SnapshotBrHandle> Env<SR> {
         self.check_initialized()?;
         let mut event = PResp::new();
         event.set_ty(PEvnT::UpdateLeaseResult);
-        event.set_last_lease_is_vaild(self.rejector.heartbeat(lease_dur));
+        event.set_last_lease_is_valid(self.rejector.heartbeat(lease_dur));
         Ok(event)
+    }
+
+    fn reset(&self) -> PResp {
+        let rejected = !self.rejector.allowed();
+        let mut event = PResp::new();
+        event.set_ty(PEvnT::UpdateLeaseResult);
+        event.set_last_lease_is_valid(rejected);
+        event
     }
 }
 
@@ -266,6 +274,14 @@ impl<SR: SnapshotBrHandle + 'static> StreamHandleLoop<SR> {
                             let res = self.async_wait_apply(region);
                             self.pending_regions.push(res);
                         }
+                    }
+                    PReqT::Finish => {
+                        sink.send(Ok(self.env.reset()), |_| {})
+                            .await?
+                            .0
+                            .close()
+                            .await?;
+                        return Ok(());
                     }
                 },
                 StreamHandleEvent::WaitApplyDone(region, res) => {

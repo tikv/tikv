@@ -89,7 +89,9 @@ use crate::{
             TRANSFER_LEADER_COMMAND_REPLY_CTX,
         },
         region_meta::RegionMeta,
-        snapshot_backup::{SnapshotBrState, SnapshotBrWaitApplyRequest, SnapshotBrWaitApplySyncer},
+        snapshot_backup::{
+            AbortReason, SnapshotBrState, SnapshotBrWaitApplyRequest, SnapshotBrWaitApplySyncer,
+        },
         transport::Transport,
         unsafe_recovery::{
             exit_joint_request, ForceLeaderState, UnsafeRecoveryExecutePlanSyncer,
@@ -932,7 +934,7 @@ where
                 "peer_id" => self.fsm.peer_id(),
                 "state" => ?state,
             );
-            req.syncer.abort();
+            req.syncer.abort(AbortReason::Duplicated);
             return;
         }
 
@@ -941,7 +943,9 @@ where
         if let Some(e) = &req.expected_epoch {
             if let Err(err) = compare_region_epoch(e, self.region(), true, true, true) {
                 warn!("epoch not match for wait apply, aborting."; "err" => %err);
-                req.syncer.abort();
+                let mut pberr = errorpb::Error::from(err);
+                req.syncer
+                    .abort(AbortReason::EpochNotMatch(pberr.take_epoch_not_match()));
                 return;
             }
         }
@@ -976,6 +980,7 @@ where
                 "applied_index" => self.fsm.peer.raft_group.raft.raft_log.applied,
             );
         }
+        SNAP_BR_WAIT_APPLY_EVENT.accepted.inc();
 
         self.fsm.peer.snapshot_recovery_state = Some(SnapshotBrState::WaitLogApplyToLast {
             target_index,
