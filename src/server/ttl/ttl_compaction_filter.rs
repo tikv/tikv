@@ -11,8 +11,22 @@ use engine_rocks::{
     RocksTtlProperties,
 };
 use engine_traits::raw_ttl::ttl_current_ts;
+use prometheus::{*};
 
 use crate::server::metrics::TTL_CHECKER_ACTIONS_COUNTER_VEC;
+
+lazy_static! {
+    pub static ref TTL_EXPIRE_KV_SIZE_COUNTER: IntCounter = register_int_counter!(
+        "tikv_ttl_expire_kv_size_total",
+        "Total size of rawkv ttl expire",
+    )
+    .unwrap();
+    pub static ref TTL_EXPIRE_KV_ENTRY_COUNTER: IntCounter = register_int_counter!(
+        "tikv_ttl_expire_kv_entry_total",
+        "Total number of rawkv ttl expire",
+    )
+    .unwrap();
+}
 
 #[derive(Default)]
 pub struct TtlCompactionFilterFactory<F: KvFormat> {
@@ -83,7 +97,11 @@ impl<F: KvFormat> CompactionFilter for TtlCompactionFilter<F> {
             Ok(RawValue {
                 expire_ts: Some(expire_ts),
                 ..
-            }) if expire_ts <= self.ts => CompactionFilterDecision::Remove,
+            }) if expire_ts <= self.ts => {
+                TTL_EXPIRE_KV_SIZE_COUNTER.inc_by(key.len() as u64 + value.len() as u64);
+                TTL_EXPIRE_KV_ENTRY_COUNTER.inc();
+                CompactionFilterDecision::Remove
+            }
             Err(err) => {
                 TTL_CHECKER_ACTIONS_COUNTER_VEC
                     .with_label_values(&["ts_error"])
