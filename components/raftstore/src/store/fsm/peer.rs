@@ -231,8 +231,23 @@ where
         Ok((
             tx,
             Box::new(PeerFsm {
+<<<<<<< HEAD
                 peer: Peer::new(store_id, cfg, sched, engines, region, meta_peer)?,
                 tick_registry: PeerTicks::empty(),
+=======
+                peer: Peer::new(
+                    store_id,
+                    cfg,
+                    region_scheduler,
+                    raftlog_fetch_scheduler,
+                    engines,
+                    region,
+                    meta_peer,
+                    wait_data,
+                    None,
+                )?,
+                tick_registry: [false; PeerTick::VARIANT_COUNT],
+>>>>>>> f574ec0830 (raftstore: gc uninitialized stale peer after merge (#15934))
                 missing_ticks: 0,
                 hibernate_state: HibernateState::ordered(),
                 stopped: false,
@@ -259,12 +274,19 @@ where
         engines: Engines<EK, ER>,
         region_id: u64,
         peer: metapb::Peer,
+        create_by_peer: metapb::Peer,
     ) -> Result<SenderFsmPair<EK, ER>> {
         // We will remove tombstone key when apply snapshot
         info!(
             "replicate peer";
             "region_id" => region_id,
             "peer_id" => peer.get_id(),
+<<<<<<< HEAD
+=======
+            "store_id" => store_id,
+            "create_by_peer_id" => create_by_peer.get_id(),
+            "create_by_peer_store_id" => create_by_peer.get_store_id(),
+>>>>>>> f574ec0830 (raftstore: gc uninitialized stale peer after merge (#15934))
         );
 
         let mut region = metapb::Region::default();
@@ -275,8 +297,23 @@ where
         Ok((
             tx,
             Box::new(PeerFsm {
+<<<<<<< HEAD
                 peer: Peer::new(store_id, cfg, sched, engines, &region, peer)?,
                 tick_registry: PeerTicks::empty(),
+=======
+                peer: Peer::new(
+                    store_id,
+                    cfg,
+                    region_scheduler,
+                    raftlog_fetch_scheduler,
+                    engines,
+                    &region,
+                    peer,
+                    false,
+                    Some(create_by_peer),
+                )?,
+                tick_registry: [false; PeerTick::VARIANT_COUNT],
+>>>>>>> f574ec0830 (raftstore: gc uninitialized stale peer after merge (#15934))
                 missing_ticks: 0,
                 hibernate_state: HibernateState::ordered(),
                 stopped: false,

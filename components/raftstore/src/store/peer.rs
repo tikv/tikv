@@ -465,6 +465,13 @@ where
     peer_cache: RefCell<HashMap<u64, metapb::Peer>>,
     /// Record the last instant of each peer's heartbeat response.
     pub peer_heartbeats: HashMap<u64, Instant>,
+<<<<<<< HEAD
+=======
+    /// Record the waiting data status of each follower or learner peer.
+    pub wait_data_peers: Vec<u64>,
+    /// This peer is created by a raft message from `create_by_peer`.
+    create_by_peer: Option<metapb::Peer>,
+>>>>>>> f574ec0830 (raftstore: gc uninitialized stale peer after merge (#15934))
 
     proposals: ProposalQueue<EK::Snapshot>,
     leader_missing_time: Option<Instant>,
@@ -608,6 +615,11 @@ where
         engines: Engines<EK, ER>,
         region: &metapb::Region,
         peer: metapb::Peer,
+<<<<<<< HEAD
+=======
+        wait_data: bool,
+        create_by_peer: Option<metapb::Peer>,
+>>>>>>> f574ec0830 (raftstore: gc uninitialized stale peer after merge (#15934))
     ) -> Result<Peer<EK, ER>> {
         if peer.get_id() == raft::INVALID_ID {
             return Err(box_err!("invalid peer id"));
@@ -646,6 +658,11 @@ where
             pending_reads: Default::default(),
             peer_cache: RefCell::new(HashMap::default()),
             peer_heartbeats: HashMap::default(),
+<<<<<<< HEAD
+=======
+            wait_data_peers: Vec::default(),
+            create_by_peer,
+>>>>>>> f574ec0830 (raftstore: gc uninitialized stale peer after merge (#15934))
             peers_start_pending_time: vec![],
             down_peer_ids: vec![],
             size_diff_hint: 0,
@@ -4458,9 +4475,16 @@ where
         &mut self,
         ctx: &mut PollContext<EK, ER, T>,
     ) {
-        if self.check_stale_conf_ver < self.region().get_region_epoch().get_conf_ver() {
+        if self.check_stale_conf_ver < self.region().get_region_epoch().get_conf_ver()
+            || self.region().get_region_epoch().get_conf_ver() == 0
+        {
             self.check_stale_conf_ver = self.region().get_region_epoch().get_conf_ver();
             self.check_stale_peers = self.region().get_peers().to_vec();
+            if let Some(create_by_peer) = self.create_by_peer.as_ref() {
+                // Push create_by_peer in case the peer is removed before
+                // initialization which has no peer in region.
+                self.check_stale_peers.push(create_by_peer.clone());
+            }
         }
         for peer in &self.check_stale_peers {
             if peer.get_id() == self.peer_id() {
