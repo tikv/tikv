@@ -8,7 +8,7 @@ use std::sync::Arc;
 use fail::fail_point;
 pub use future_pool::{Full, FuturePool};
 use futures::{compat::Stream01CompatExt, StreamExt};
-use prometheus::{local::LocalHistogram, Histogram};
+use metrics::{ResourceGroupPriority, YATP_POOL_SCHEDULE_WAIT_DURATION_STATIC};
 use yatp::{
     pool::{CloneRunnerBuilder, Local, Remote, Runner},
     queue::{multilevel, priority, Extras, QueueType, TaskCell as _},
@@ -165,7 +165,9 @@ pub struct YatpPoolRunner<T: PoolTicker> {
     before_pause: Option<Arc<dyn Fn() + Send + Sync>>,
 
     // Statistics about the schedule wait duration.
-    schedule_wait_duration: LocalHistogram,
+    // schedule_wait_duration: LocalHistogram,
+    thread_name: metrics::PoolName,
+    priority_provider: Option<Arc<dyn priority::TaskPriorityProvider>>,
 }
 
 impl<T: PoolTicker> Runner for YatpPoolRunner<T> {
@@ -190,14 +192,20 @@ impl<T: PoolTicker> Runner for YatpPoolRunner<T> {
     fn handle(&mut self, local: &mut Local<Self::TaskCell>, mut task_cell: Self::TaskCell) -> bool {
         let extras = task_cell.mut_extras();
         if let Some(schedule_time) = extras.schedule_time() {
-            self.schedule_wait_duration
-                .observe(schedule_time.elapsed().as_secs_f64());
+            let wait_duration = schedule_time.elapsed().as_secs_f64();
+            let name = self.thread_name;
+            let mut priority = ResourceGroupPriority::unknown;
+            if let Some(provider) = &self.priority_provider {
+                priority = ResourceGroupPriority::from(decode_group_priority(
+                    provider.priority_of(extras),
+                ));
+            }
+            YATP_POOL_SCHEDULE_WAIT_DURATION_STATIC
+                .get(name)
+                .get(priority)
+                .observe(wait_duration);
         }
-        let finished = self.inner.handle(local, task_cell);
-        if self.ticker.try_tick() {
-            self.schedule_wait_duration.flush();
-        }
-        finished
+        self.inner.handle(local, task_cell)
     }
 
     fn pause(&mut self, local: &mut Local<Self::TaskCell>) -> bool {
@@ -229,7 +237,8 @@ impl<T: PoolTicker> YatpPoolRunner<T> {
         after_start: Option<Arc<dyn Fn() + Send + Sync>>,
         before_stop: Option<Arc<dyn Fn() + Send + Sync>>,
         before_pause: Option<Arc<dyn Fn() + Send + Sync>>,
-        schedule_wait_duration: Histogram,
+        thread_name: metrics::PoolName,
+        priority_provider: Option<Arc<dyn priority::TaskPriorityProvider>>,
     ) -> Self {
         YatpPoolRunner {
             inner,
@@ -238,7 +247,8 @@ impl<T: PoolTicker> YatpPoolRunner<T> {
             after_start,
             before_stop,
             before_pause,
-            schedule_wait_duration: schedule_wait_duration.local(),
+            thread_name,
+            priority_provider,
         }
     }
 }
@@ -370,7 +380,7 @@ impl<T: PoolTicker> YatpPoolBuilder<T> {
     }
 
     pub fn build_single_level_pool(self) -> ThreadPool<TaskCell> {
-        let (builder, runner) = self.create_builder();
+        let (builder, runner) = self.create_builder(None);
         builder.build_with_queue_and_runner(
             yatp::queue::QueueType::SingleLevel,
             yatp::pool::CloneRunnerBuilder(runner),
@@ -388,7 +398,7 @@ impl<T: PoolTicker> YatpPoolBuilder<T> {
                 .cleanup_interval(self.cleanup_method.preferred_interval()),
         );
         let pending_task = self.try_spawn_cleanup(multilevel_builder.cleanup_fn());
-        let (builder, read_pool_runner) = self.create_builder();
+        let (builder, read_pool_runner) = self.create_builder(None);
         let runner_builder =
             multilevel_builder.runner_builder(CloneRunnerBuilder(read_pool_runner));
         let pool = builder
@@ -411,10 +421,10 @@ impl<T: PoolTicker> YatpPoolBuilder<T> {
             priority::Config::default()
                 .name(Some(name))
                 .cleanup_interval(self.cleanup_method.preferred_interval()),
-            priority_provider,
+            priority_provider.clone(),
         );
         let pending_task = self.try_spawn_cleanup(priority_builder.cleanup_fn());
-        let (builder, read_pool_runner) = self.create_builder();
+        let (builder, read_pool_runner) = self.create_builder(Some(priority_provider));
         let runner_builder = priority_builder.runner_builder(CloneRunnerBuilder(read_pool_runner));
         let pool = builder
             .build_with_queue_and_runner(QueueType::Priority(priority_builder), runner_builder);
@@ -457,8 +467,13 @@ impl<T: PoolTicker> YatpPoolBuilder<T> {
         self.cleanup_method.try_spawn(cleanup)
     }
 
-    fn create_builder(mut self) -> (yatp::Builder, YatpPoolRunner<T>) {
+    fn create_builder(
+        mut self,
+        priority_provider: Option<Arc<dyn priority::TaskPriorityProvider>>,
+    ) -> (yatp::Builder, YatpPoolRunner<T>) {
         let name = self.name_prefix.unwrap_or_else(|| "yatp_pool".to_string());
+        info!("create yatp pool with name {}", name);
+        let pool_name = metrics::PoolName::from(name.as_str());
         let mut builder = yatp::Builder::new(thd_name!(name));
         builder
             .stack_size(self.stack_size)
@@ -468,19 +483,23 @@ impl<T: PoolTicker> YatpPoolBuilder<T> {
 
         let after_start = self.after_start.take();
         let before_stop = self.before_stop.take();
-        let before_pause = self.before_pause.take();
-        let schedule_wait_duration =
-            metrics::YATP_POOL_SCHEDULE_WAIT_DURATION_VEC.with_label_values(&[&name]);
+        let before_pause: Option<Arc<dyn Fn() + Send + Sync>> = self.before_pause.take();
+
         let read_pool_runner = YatpPoolRunner::new(
             Default::default(),
             self.ticker.clone(),
             after_start,
             before_stop,
             before_pause,
-            schedule_wait_duration,
+            pool_name,
+            priority_provider,
         );
         (builder, read_pool_runner)
     }
+}
+
+pub fn decode_group_priority(priority: u64) -> u32 {
+    ((!priority >> 60) as u32) + 1
 }
 
 #[cfg(test)]
