@@ -28899,7 +28899,659 @@
       "maxDataPoints": 100,
       "maxPerRow": null,
       "minSpan": null,
-      "panels": [],
+      "panels": [
+        {
+          "aliasColors": {},
+          "bars": false,
+          "cacheTimeout": null,
+          "datasource": "${DS_TEST-CLUSTER}",
+          "description": "The total number of commands on each stage",
+          "editable": true,
+          "error": false,
+          "fieldConfig": {
+            "defaults": {
+              "thresholds": {
+                "mode": "absolute",
+                "steps": []
+              }
+            }
+          },
+          "fill": 1,
+          "fillGradient": 1,
+          "grid": {
+            "threshold1": null,
+            "threshold1Color": "rgba(216, 200, 27, 0.27)",
+            "threshold2": null,
+            "threshold2Color": "rgba(234, 112, 112, 0.22)"
+          },
+          "gridPos": {
+            "h": 7,
+            "w": 12,
+            "x": 0,
+            "y": 0
+          },
+          "height": null,
+          "hideTimeOverride": false,
+          "id": 213,
+          "interval": null,
+          "isNew": true,
+          "legend": {
+            "alignAsTable": true,
+            "avg": false,
+            "current": true,
+            "hideEmpty": true,
+            "hideZero": true,
+            "max": true,
+            "min": false,
+            "rightSide": true,
+            "show": true,
+            "sideWidth": null,
+            "sort": "max",
+            "sortDesc": true,
+            "total": false,
+            "values": true
+          },
+          "lines": true,
+          "linewidth": 1,
+          "links": [],
+          "maxDataPoints": null,
+          "maxPerRow": null,
+          "minSpan": null,
+          "nullPointMode": "null",
+          "options": {
+            "alertThreshold": true,
+            "dataLinks": []
+          },
+          "percentage": false,
+          "pointradius": 5,
+          "points": false,
+          "renderer": "flot",
+          "repeat": null,
+          "repeatDirection": null,
+          "seriesOverrides": [],
+          "span": null,
+          "stack": false,
+          "steppedLine": false,
+          "targets": [
+            {
+              "datasource": "${DS_TEST-CLUSTER}",
+              "expr": "sum(rate(\n    tikv_scheduler_too_busy_total\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (stage) ",
+              "format": "time_series",
+              "hide": false,
+              "instant": false,
+              "interval": "",
+              "intervalFactor": 1,
+              "legendFormat": "{{stage}}",
+              "metric": "",
+              "query": "sum(rate(\n    tikv_scheduler_too_busy_total\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (stage) ",
+              "refId": "",
+              "step": 10,
+              "target": ""
+            },
+            {
+              "datasource": "${DS_TEST-CLUSTER}",
+              "expr": "sum(rate(\n    tikv_scheduler_stage_total\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (stage) ",
+              "format": "time_series",
+              "hide": false,
+              "instant": false,
+              "interval": "",
+              "intervalFactor": 1,
+              "legendFormat": "{{stage}}",
+              "metric": "",
+              "query": "sum(rate(\n    tikv_scheduler_stage_total\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (stage) ",
+              "refId": "",
+              "step": 10,
+              "target": ""
+            }
+          ],
+          "thresholds": [],
+          "timeFrom": null,
+          "timeShift": null,
+          "title": "Scheduler stage total",
+          "tooltip": {
+            "msResolution": true,
+            "shared": true,
+            "sort": 0,
+            "value_type": "individual"
+          },
+          "transformations": [],
+          "transparent": false,
+          "type": "graph",
+          "xaxis": {
+            "mode": "time",
+            "name": null,
+            "show": true,
+            "values": []
+          },
+          "yaxes": [
+            {
+              "decimals": null,
+              "format": "ops",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            },
+            {
+              "decimals": null,
+              "format": "short",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            }
+          ],
+          "yaxis": {
+            "align": false,
+            "alignLevel": 0
+          }
+        },
+        {
+          "aliasColors": {},
+          "bars": false,
+          "cacheTimeout": null,
+          "datasource": "${DS_TEST-CLUSTER}",
+          "description": "The total writing bytes of commands on each stage",
+          "editable": true,
+          "error": false,
+          "fieldConfig": {
+            "defaults": {
+              "thresholds": {
+                "mode": "absolute",
+                "steps": []
+              }
+            }
+          },
+          "fill": 1,
+          "fillGradient": 1,
+          "grid": {
+            "threshold1": null,
+            "threshold1Color": "rgba(216, 200, 27, 0.27)",
+            "threshold2": null,
+            "threshold2Color": "rgba(234, 112, 112, 0.22)"
+          },
+          "gridPos": {
+            "h": 7,
+            "w": 12,
+            "x": 12,
+            "y": 0
+          },
+          "height": null,
+          "hideTimeOverride": false,
+          "id": 214,
+          "interval": null,
+          "isNew": true,
+          "legend": {
+            "alignAsTable": true,
+            "avg": false,
+            "current": true,
+            "hideEmpty": true,
+            "hideZero": true,
+            "max": true,
+            "min": false,
+            "rightSide": true,
+            "show": true,
+            "sideWidth": null,
+            "sort": "max",
+            "sortDesc": true,
+            "total": false,
+            "values": true
+          },
+          "lines": true,
+          "linewidth": 1,
+          "links": [],
+          "maxDataPoints": null,
+          "maxPerRow": null,
+          "minSpan": null,
+          "nullPointMode": "null",
+          "options": {
+            "alertThreshold": true,
+            "dataLinks": []
+          },
+          "percentage": false,
+          "pointradius": 5,
+          "points": false,
+          "renderer": "flot",
+          "repeat": null,
+          "repeatDirection": null,
+          "seriesOverrides": [],
+          "span": null,
+          "stack": false,
+          "steppedLine": false,
+          "targets": [
+            {
+              "datasource": "${DS_TEST-CLUSTER}",
+              "expr": "sum((\n    tikv_scheduler_writing_bytes\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n)) by (instance) ",
+              "format": "time_series",
+              "hide": false,
+              "instant": false,
+              "interval": "",
+              "intervalFactor": 1,
+              "legendFormat": "{{instance}}",
+              "metric": "",
+              "query": "sum((\n    tikv_scheduler_writing_bytes\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n)) by (instance) ",
+              "refId": "",
+              "step": 10,
+              "target": ""
+            }
+          ],
+          "thresholds": [],
+          "timeFrom": null,
+          "timeShift": null,
+          "title": "Scheduler writing bytes",
+          "tooltip": {
+            "msResolution": true,
+            "shared": true,
+            "sort": 0,
+            "value_type": "individual"
+          },
+          "transformations": [],
+          "transparent": false,
+          "type": "graph",
+          "xaxis": {
+            "mode": "time",
+            "name": null,
+            "show": true,
+            "values": []
+          },
+          "yaxes": [
+            {
+              "decimals": null,
+              "format": "bytes",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            },
+            {
+              "decimals": null,
+              "format": "short",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            }
+          ],
+          "yaxis": {
+            "align": false,
+            "alignLevel": 0
+          }
+        },
+        {
+          "aliasColors": {},
+          "bars": false,
+          "cacheTimeout": null,
+          "datasource": "${DS_TEST-CLUSTER}",
+          "description": "The count of different priority commands",
+          "editable": true,
+          "error": false,
+          "fieldConfig": {
+            "defaults": {
+              "thresholds": {
+                "mode": "absolute",
+                "steps": []
+              }
+            }
+          },
+          "fill": 1,
+          "fillGradient": 1,
+          "grid": {
+            "threshold1": null,
+            "threshold1Color": "rgba(216, 200, 27, 0.27)",
+            "threshold2": null,
+            "threshold2Color": "rgba(234, 112, 112, 0.22)"
+          },
+          "gridPos": {
+            "h": 7,
+            "w": 12,
+            "x": 0,
+            "y": 7
+          },
+          "height": null,
+          "hideTimeOverride": false,
+          "id": 215,
+          "interval": null,
+          "isNew": true,
+          "legend": {
+            "alignAsTable": true,
+            "avg": false,
+            "current": true,
+            "hideEmpty": true,
+            "hideZero": true,
+            "max": true,
+            "min": false,
+            "rightSide": true,
+            "show": true,
+            "sideWidth": null,
+            "sort": "max",
+            "sortDesc": true,
+            "total": false,
+            "values": true
+          },
+          "lines": true,
+          "linewidth": 1,
+          "links": [],
+          "maxDataPoints": null,
+          "maxPerRow": null,
+          "minSpan": null,
+          "nullPointMode": "null",
+          "options": {
+            "alertThreshold": true,
+            "dataLinks": []
+          },
+          "percentage": false,
+          "pointradius": 5,
+          "points": false,
+          "renderer": "flot",
+          "repeat": null,
+          "repeatDirection": null,
+          "seriesOverrides": [],
+          "span": null,
+          "stack": false,
+          "steppedLine": false,
+          "targets": [
+            {
+              "datasource": "${DS_TEST-CLUSTER}",
+              "expr": "sum(rate(\n    tikv_scheduler_commands_pri_total\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (priority) ",
+              "format": "time_series",
+              "hide": false,
+              "instant": false,
+              "interval": "",
+              "intervalFactor": 1,
+              "legendFormat": "{{priority}}",
+              "metric": "",
+              "query": "sum(rate(\n    tikv_scheduler_commands_pri_total\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (priority) ",
+              "refId": "",
+              "step": 10,
+              "target": ""
+            }
+          ],
+          "thresholds": [],
+          "timeFrom": null,
+          "timeShift": null,
+          "title": "Scheduler priority commands",
+          "tooltip": {
+            "msResolution": true,
+            "shared": true,
+            "sort": 0,
+            "value_type": "individual"
+          },
+          "transformations": [],
+          "transparent": false,
+          "type": "graph",
+          "xaxis": {
+            "mode": "time",
+            "name": null,
+            "show": true,
+            "values": []
+          },
+          "yaxes": [
+            {
+              "decimals": null,
+              "format": "ops",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            },
+            {
+              "decimals": null,
+              "format": "short",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            }
+          ],
+          "yaxis": {
+            "align": false,
+            "alignLevel": 0
+          }
+        },
+        {
+          "aliasColors": {},
+          "bars": false,
+          "cacheTimeout": null,
+          "datasource": "${DS_TEST-CLUSTER}",
+          "description": "The count of pending commands per TiKV instance",
+          "editable": true,
+          "error": false,
+          "fieldConfig": {
+            "defaults": {
+              "thresholds": {
+                "mode": "absolute",
+                "steps": []
+              }
+            }
+          },
+          "fill": 1,
+          "fillGradient": 1,
+          "grid": {
+            "threshold1": null,
+            "threshold1Color": "rgba(216, 200, 27, 0.27)",
+            "threshold2": null,
+            "threshold2Color": "rgba(234, 112, 112, 0.22)"
+          },
+          "gridPos": {
+            "h": 7,
+            "w": 12,
+            "x": 12,
+            "y": 7
+          },
+          "height": null,
+          "hideTimeOverride": false,
+          "id": 216,
+          "interval": null,
+          "isNew": true,
+          "legend": {
+            "alignAsTable": true,
+            "avg": false,
+            "current": true,
+            "hideEmpty": true,
+            "hideZero": true,
+            "max": true,
+            "min": false,
+            "rightSide": true,
+            "show": true,
+            "sideWidth": null,
+            "sort": "max",
+            "sortDesc": true,
+            "total": false,
+            "values": true
+          },
+          "lines": true,
+          "linewidth": 1,
+          "links": [],
+          "maxDataPoints": null,
+          "maxPerRow": null,
+          "minSpan": null,
+          "nullPointMode": "null",
+          "options": {
+            "alertThreshold": true,
+            "dataLinks": []
+          },
+          "percentage": false,
+          "pointradius": 5,
+          "points": false,
+          "renderer": "flot",
+          "repeat": null,
+          "repeatDirection": null,
+          "seriesOverrides": [],
+          "span": null,
+          "stack": false,
+          "steppedLine": false,
+          "targets": [
+            {
+              "datasource": "${DS_TEST-CLUSTER}",
+              "expr": "sum((\n    tikv_scheduler_contex_total\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n)) by (instance) ",
+              "format": "time_series",
+              "hide": false,
+              "instant": false,
+              "interval": "",
+              "intervalFactor": 1,
+              "legendFormat": "{{instance}}",
+              "metric": "",
+              "query": "sum((\n    tikv_scheduler_contex_total\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n)) by (instance) ",
+              "refId": "",
+              "step": 10,
+              "target": ""
+            }
+          ],
+          "thresholds": [],
+          "timeFrom": null,
+          "timeShift": null,
+          "title": "Scheduler pending commands",
+          "tooltip": {
+            "msResolution": true,
+            "shared": true,
+            "sort": 0,
+            "value_type": "individual"
+          },
+          "transformations": [],
+          "transparent": false,
+          "type": "graph",
+          "xaxis": {
+            "mode": "time",
+            "name": null,
+            "show": true,
+            "values": []
+          },
+          "yaxes": [
+            {
+              "decimals": null,
+              "format": "ops",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            },
+            {
+              "decimals": null,
+              "format": "short",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            }
+          ],
+          "yaxis": {
+            "align": false,
+            "alignLevel": 0
+          }
+        },
+        {
+          "cacheTimeout": null,
+          "cards": {
+            "cardPadding": null,
+            "cardRound": null
+          },
+          "color": {
+            "cardColor": "#b4ff00",
+            "colorScale": "sqrt",
+            "colorScheme": "interpolateSpectral",
+            "exponent": 0.5,
+            "max": null,
+            "min": null,
+            "mode": "spectrum"
+          },
+          "dataFormat": "tsbuckets",
+          "datasource": "${DS_TEST-CLUSTER}",
+          "description": null,
+          "editable": true,
+          "error": false,
+          "fieldConfig": {
+            "defaults": {
+              "thresholds": {
+                "mode": "absolute",
+                "steps": []
+              }
+            }
+          },
+          "gridPos": {
+            "h": 7,
+            "w": 24,
+            "x": 0,
+            "y": 14
+          },
+          "heatmap": {},
+          "height": null,
+          "hideTimeOverride": false,
+          "hideZeroBuckets": true,
+          "highlightCards": true,
+          "id": 217,
+          "interval": null,
+          "legend": {
+            "show": false
+          },
+          "links": [],
+          "maxDataPoints": 512,
+          "maxPerRow": null,
+          "minSpan": null,
+          "options": null,
+          "repeat": null,
+          "repeatDirection": null,
+          "reverseYBuckets": false,
+          "span": null,
+          "targets": [
+            {
+              "datasource": "${DS_TEST-CLUSTER}",
+              "expr": "sum(rate(\n    tikv_yatp_pool_schedule_wait_duration_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",name=~\"sched-worker.*\"}\n    [$__rate_interval]\n)) by (le) ",
+              "format": "heatmap",
+              "hide": false,
+              "instant": false,
+              "interval": "",
+              "intervalFactor": 1,
+              "legendFormat": "{{le}}",
+              "metric": "",
+              "query": "sum(rate(\n    tikv_yatp_pool_schedule_wait_duration_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",name=~\"sched-worker.*\"}\n    [$__rate_interval]\n)) by (le) ",
+              "refId": "",
+              "step": 10,
+              "target": ""
+            }
+          ],
+          "timeFrom": null,
+          "timeShift": null,
+          "title": "Txn Scheduler Pool Wait Duration",
+          "tooltip": {
+            "msResolution": true,
+            "shared": true,
+            "showHistogram": true,
+            "sort": 0,
+            "value_type": "individual"
+          },
+          "transformations": [],
+          "transparent": false,
+          "type": "heatmap",
+          "xAxis": {
+            "mode": "time",
+            "name": null,
+            "show": true,
+            "values": []
+          },
+          "xBucketNumber": null,
+          "xBucketSize": null,
+          "yAxis": {
+            "decimals": null,
+            "format": "s",
+            "label": null,
+            "logBase": 1,
+            "max": null,
+            "min": null,
+            "show": true
+          },
+          "yBucketBound": "upper",
+          "yBucketNumber": null,
+          "yBucketSize": null
+        }
+      ],
       "repeat": null,
       "repeatDirection": null,
       "span": null,
@@ -28934,7 +29586,7 @@
       },
       "height": null,
       "hideTimeOverride": false,
-      "id": 213,
+      "id": 218,
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -28975,7 +29627,7 @@
       },
       "height": null,
       "hideTimeOverride": false,
-      "id": 214,
+      "id": 219,
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -29016,7 +29668,7 @@
       },
       "height": null,
       "hideTimeOverride": false,
-      "id": 215,
+      "id": 220,
       "interval": null,
       "links": [],
       "maxDataPoints": 100,

@@ -3888,7 +3888,80 @@ def SchedulerCommands() -> RowPanel:
 
 def Scheduler() -> RowPanel:
     layout = Layout(title="Scheduler")
-    layout.row([])
+    layout.row(
+        [
+            graph_panel(
+                title="Scheduler stage total",
+                description="The total number of commands on each stage",
+                yaxes=yaxes(left_format=UNITS.OPS_PER_SEC),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_scheduler_too_busy_total",
+                            by_labels=["stage"],
+                        ),
+                    ),
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_scheduler_stage_total",
+                            by_labels=["stage"],
+                        ),
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="Scheduler writing bytes",
+                description="The total writing bytes of commands on each stage",
+                yaxes=yaxes(left_format=UNITS.BYTES_IEC),
+                targets=[
+                    target(
+                        expr=expr_sum(
+                            "tikv_scheduler_writing_bytes",
+                        ),
+                    ),
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel(
+                title="Scheduler priority commands",
+                description="The count of different priority commands",
+                yaxes=yaxes(left_format=UNITS.OPS_PER_SEC),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_scheduler_commands_pri_total",
+                            by_labels=["priority"],
+                        ),
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="Scheduler pending commands",
+                description="The count of pending commands per TiKV instance",
+                yaxes=yaxes(left_format=UNITS.OPS_PER_SEC),
+                targets=[
+                    target(
+                        expr=expr_sum(
+                            "tikv_scheduler_contex_total",
+                        ),
+                    ),
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            heatmap_panel(
+                title="Txn Scheduler Pool Wait Duration",
+                yaxis=yaxis(format=UNITS.SECONDS),
+                metric="tikv_yatp_pool_schedule_wait_duration_bucket",
+                label_selectors=['name=~"sched-worker.*"'],
+            ),
+        ]
+    )
     return layout.row_panel
 
 
