@@ -1444,9 +1444,6 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             // Safety: `self.sched_pool` ensures a TLS engine exists.
             unsafe {
                 with_tls_engine(|engine: &mut E| {
-                    // Migrated to 2021 migration. This let statement is probably not needed, see
-                    //   https://doc.rust-lang.org/edition-guide/rust-2021/disjoint-capture-in-closures.html
-                    let _ = &to_be_write;
                     // We skip writing the raftstore, but to improve CDC old value hit rate,
                     // we should send the old values to the CDC scheduler.
                     engine.schedule_txn_extra(to_be_write.extra);

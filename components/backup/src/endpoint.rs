@@ -931,9 +931,6 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
         });
 
         self.pool.borrow_mut().spawn(async move {
-            // Migrated to 2021 migration. This let statement is probably not needed, see
-            //   https://doc.rust-lang.org/edition-guide/rust-2021/disjoint-capture-in-closures.html
-            let _ = &request;
             loop {
                 // when get the guard, release it until we finish scanning a batch,
                 // because if we were suspended during scanning,

@@ -1043,8 +1043,6 @@ mod tests {
         let (tx1, rx1) = sync_channel(1);
         let change_cmd = ChangeObserver::from_cdc(1, ObserveHandle::new());
         pool.spawn(async move {
-            // Migrated to 2021 migration. This let statement is probably not needed, see
-            //   https://doc.rust-lang.org/edition-guide/rust-2021/disjoint-capture-in-closures.html
             let res = initializer
                 .initialize(change_cmd, raft_router, memory_quota)
                 .await;
