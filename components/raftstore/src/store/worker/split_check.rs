@@ -695,6 +695,19 @@ impl<EK: KvEngine, S: StoreHandle> Runner<EK, S> {
         };
 
         if !split_keys.is_empty() {
+            // Notify peer that if the region is truly splitable.
+            // If it's truly splitable, then skip_split_check should be false;
+            self.router.update_approximate_size(
+                region.get_id(),
+                None,
+                Some(!split_keys.is_empty()),
+            );
+            self.router.update_approximate_keys(
+                region.get_id(),
+                None,
+                Some(!split_keys.is_empty()),
+            );
+
             let region_epoch = region.get_region_epoch().clone();
             self.router
                 .ask_split(region_id, region_epoch, split_keys, "split checker".into());
@@ -736,6 +749,7 @@ impl<EK: KvEngine, S: StoreHandle> Runner<EK, S> {
             } else {
                 (!host.enable_region_bucket(), &empty_bucket)
             };
+        let mut split_keys = vec![];
 
         MergedIterator::<<EK as Iterable>::Iterator>::new(
             tablet, LARGE_CFS, start_key, end_key, false,
@@ -748,6 +762,7 @@ impl<EK: KvEngine, S: StoreHandle> Runner<EK, S> {
             let mut skip_on_kv = false;
             while let Some(e) = iter.next() {
                 if skip_on_kv && skip_check_bucket {
+                    split_keys = host.split_keys();
                     return;
                 }
                 if !skip_on_kv && host.on_kv(region, &e) {
@@ -810,6 +825,8 @@ impl<EK: KvEngine, S: StoreHandle> Runner<EK, S> {
                 }
             }
 
+            split_keys = host.split_keys();
+
             // if we scan the whole range, we can update approximate size and keys with
             // accurate value.
             if is_key_range {
@@ -823,8 +840,17 @@ impl<EK: KvEngine, S: StoreHandle> Runner<EK, S> {
                 "bucket_count" => buckets.len(),
                 "bucket_size" => bucket_size,
             );
-            self.router.update_approximate_size(region.get_id(), size);
-            self.router.update_approximate_keys(region.get_id(), keys);
+
+            self.router.update_approximate_size(
+                region.get_id(),
+                Some(size),
+                Some(!split_keys.is_empty()),
+            );
+            self.router.update_approximate_keys(
+                region.get_id(),
+                Some(keys),
+                Some(!split_keys.is_empty()),
+            );
         })?;
 
         if host.enable_region_bucket() {
@@ -839,7 +865,7 @@ impl<EK: KvEngine, S: StoreHandle> Runner<EK, S> {
         }
         timer.observe_duration();
 
-        Ok(host.split_keys())
+        Ok(split_keys)
     }
 
     fn change_cfg(&mut self, change: ConfigChange) {
