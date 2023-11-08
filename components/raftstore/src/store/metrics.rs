@@ -214,6 +214,7 @@ make_static_metric! {
 
     pub label_enum RaftEventDurationType {
         compact_check,
+        periodic_full_compact,
         pd_store_heartbeat,
         snap_gc,
         compact_lock_cf,
@@ -564,6 +565,13 @@ lazy_static! {
         register_histogram!(
             "tikv_raftstore_request_wait_time_duration_secs",
             "Bucketed histogram of request wait time duration.",
+            exponential_buckets(0.00001, 2.0, 26).unwrap()
+        ).unwrap();
+
+    pub static ref RAFT_MESSAGE_WAIT_TIME_HISTOGRAM: Histogram =
+        register_histogram!(
+            "tikv_raftstore_raft_msg_wait_time_duration_secs",
+            "Bucketed histogram of raft message wait time duration.",
             exponential_buckets(0.00001, 2.0, 26).unwrap()
         ).unwrap();
 

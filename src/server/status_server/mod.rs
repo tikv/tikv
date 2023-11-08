@@ -3,6 +3,7 @@
 /// Provides profilers for TiKV.
 mod profile;
 use std::{
+    env::args,
     error::Error as StdError,
     net::SocketAddr,
     path::PathBuf,
@@ -39,11 +40,7 @@ use openssl::{
     x509::X509,
 };
 use pin_project::pin_project;
-pub use profile::{
-    activate_heap_profile, deactivate_heap_profile, heap_profiles_dir, jeprof_heap_profile,
-    list_heap_profiles, read_file, start_one_cpu_profile, start_one_heap_profile,
-    HEAP_PROFILE_REGEX,
-};
+use profile::*;
 use prometheus::TEXT_FORMAT;
 use regex::Regex;
 use resource_control::ResourceGroupManager;
@@ -169,16 +166,22 @@ where
                 Ok(val) => val,
                 Err(err) => return Ok(make_response(StatusCode::BAD_REQUEST, err.to_string())),
             },
-            None => 60,
+            None => 0,
         };
 
-        let interval = Duration::from_secs(interval);
-        let period = GLOBAL_TIMER_HANDLE
-            .interval(Instant::now() + interval, interval)
-            .compat()
-            .map_ok(|_| ())
-            .map_err(|_| TIMER_CANCELED.to_owned())
-            .into_stream();
+        let period = if interval == 0 {
+            None
+        } else {
+            let interval = Duration::from_secs(interval);
+            Some(
+                GLOBAL_TIMER_HANDLE
+                    .interval(Instant::now() + interval, interval)
+                    .compat()
+                    .map_ok(|_| ())
+                    .map_err(|_| TIMER_CANCELED.to_owned())
+                    .into_stream(),
+            )
+        };
         let (tx, rx) = oneshot::channel();
         let callback = move || tx.send(()).unwrap_or_default();
         let res = Handle::current().spawn(activate_heap_profile(period, store_path, callback));
@@ -200,7 +203,6 @@ where
         Ok(make_response(StatusCode::OK, body))
     }
 
-    #[allow(dead_code)]
     async fn dump_heap_prof_to_resp(req: Request<Body>) -> hyper::Result<Response<Body>> {
         let query = req.uri().query().unwrap_or("");
         let query_pairs: HashMap<_, _> = url::form_urlencoded::parse(query.as_bytes()).collect();
@@ -238,21 +240,7 @@ where
                 return Ok(make_response(StatusCode::BAD_REQUEST, errmsg));
             }
         } else {
-            let mut seconds = 10;
-            if let Some(s) = query_pairs.get("seconds") {
-                match s.parse() {
-                    Ok(val) => seconds = val,
-                    Err(_) => {
-                        let errmsg = "request should have seconds argument".to_owned();
-                        return Ok(make_response(StatusCode::BAD_REQUEST, errmsg));
-                    }
-                }
-            }
-            let timer = GLOBAL_TIMER_HANDLE.delay(Instant::now() + Duration::from_secs(seconds));
-            let end = Compat01As03::new(timer)
-                .map_err(|_| TIMER_CANCELED.to_owned())
-                .into_future();
-            start_one_heap_profile(end, use_jeprof).await
+            dump_one_heap_profile()
         };
 
         match result {
@@ -306,6 +294,83 @@ where
                 .unwrap(),
             Err(_) => make_response(StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error"),
         })
+    }
+
+    async fn get_cmdline(_req: Request<Body>) -> hyper::Result<Response<Body>> {
+        let args = args().into_iter().fold(String::new(), |mut a, b| {
+            a.push_str(&b);
+            a.push('\x00');
+            a
+        });
+        let response = Response::builder()
+            .header("Content-Type", mime::TEXT_PLAIN.to_string())
+            .header("X-Content-Type-Options", "nosniff")
+            .body(args.into())
+            .unwrap();
+        Ok(response)
+    }
+
+    async fn get_symbol_count(req: Request<Body>) -> hyper::Result<Response<Body>> {
+        assert_eq!(req.method(), Method::GET);
+        // We don't know how many symbols we have, but we
+        // do have symbol information. pprof only cares whether
+        // this number is 0 (no symbols available) or > 0.
+        let text = "num_symbols: 1\n";
+        let response = Response::builder()
+            .header("Content-Type", mime::TEXT_PLAIN.to_string())
+            .header("X-Content-Type-Options", "nosniff")
+            .header("Content-Length", text.len())
+            .body(text.into())
+            .unwrap();
+        Ok(response)
+    }
+
+    // The request and response format follows pprof remote server
+    // https://gperftools.github.io/gperftools/pprof_remote_servers.html
+    // Here is the go pprof implementation:
+    // https://github.com/golang/go/blob/3857a89e7eb872fa22d569e70b7e076bec74ebbb/src/net/http/pprof/pprof.go#L191
+    async fn get_symbol(req: Request<Body>) -> hyper::Result<Response<Body>> {
+        assert_eq!(req.method(), Method::POST);
+        let mut text = String::new();
+        let body_bytes = hyper::body::to_bytes(req.into_body()).await?;
+        let body = String::from_utf8(body_bytes.to_vec()).unwrap();
+
+        // The request body is a list of addr to be resolved joined by '+'.
+        // Resolve addrs with addr2line and write the symbols each per line in
+        // response.
+        for pc in body.split('+') {
+            let addr = usize::from_str_radix(pc.trim_start_matches("0x"), 16).unwrap_or(0);
+            if addr == 0 {
+                info!("invalid addr: {}", addr);
+                continue;
+            }
+
+            // Would be multiple symbols if inlined.
+            let mut syms = vec![];
+            backtrace::resolve(addr as *mut std::ffi::c_void, |sym| {
+                let name = sym
+                    .name()
+                    .unwrap_or_else(|| backtrace::SymbolName::new(b"<unknown>"));
+                syms.push(name.to_string());
+            });
+
+            if !syms.is_empty() {
+                // join inline functions with '--'
+                let f = syms.join("--");
+                // should be <hex address> <function name>
+                text.push_str(format!("{:#x} {}\n", addr, f).as_str());
+            } else {
+                info!("can't resolve mapped addr: {:#x}", addr);
+                text.push_str(format!("{:#x} ??\n", addr).as_str());
+            }
+        }
+        let response = Response::builder()
+            .header("Content-Type", mime::TEXT_PLAIN.to_string())
+            .header("X-Content-Type-Options", "nosniff")
+            .header("Content-Length", text.len())
+            .body(text.into())
+            .unwrap();
+        Ok(response)
     }
 
     async fn update_config(
@@ -693,6 +758,11 @@ where
                             (Method::GET, "/debug/pprof/heap") => {
                                 Self::dump_heap_prof_to_resp(req).await
                             }
+                            (Method::GET, "/debug/pprof/cmdline") => Self::get_cmdline(req).await,
+                            (Method::GET, "/debug/pprof/symbol") => {
+                                Self::get_symbol_count(req).await
+                            }
+                            (Method::POST, "/debug/pprof/symbol") => Self::get_symbol(req).await,
                             (Method::GET, "/config") => {
                                 Self::get_config(req, &cfg_controller).await
                             }
@@ -1654,6 +1724,59 @@ mod tests {
         assert_eq!(
             resp.headers().get("Content-Type").unwrap(),
             &mime::IMAGE_SVG.to_string()
+        );
+        status_server.stop();
+    }
+
+    #[test]
+    fn test_pprof_symbol_service() {
+        let _test_guard = TEST_PROFILE_MUTEX.lock().unwrap();
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let mut status_server = StatusServer::new(
+            1,
+            ConfigController::default(),
+            Arc::new(SecurityConfig::default()),
+            MockRouter,
+            temp_dir.path().to_path_buf(),
+            None,
+            GrpcServiceManager::dummy(),
+        )
+        .unwrap();
+        let addr = "127.0.0.1:0".to_owned();
+        let _ = status_server.start(addr);
+        let client = Client::new();
+
+        let mut addr = None;
+        backtrace::trace(|f| {
+            addr = Some(f.ip());
+            false
+        });
+        assert!(addr.is_some());
+
+        let uri = Uri::builder()
+            .scheme("http")
+            .authority(status_server.listening_addr().to_string().as_str())
+            .path_and_query("/debug/pprof/symbol")
+            .build()
+            .unwrap();
+        let req = Request::builder()
+            .method(Method::POST)
+            .uri(uri)
+            .body(Body::from(format!("{:p}", addr.unwrap())))
+            .unwrap();
+        let handle = status_server
+            .thread_pool
+            .spawn(async move { client.request(req).await.unwrap() });
+        let resp = block_on(handle).unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body_bytes = block_on(hyper::body::to_bytes(resp.into_body())).unwrap();
+        assert!(
+            String::from_utf8(body_bytes.as_ref().to_owned())
+                .unwrap()
+                .split(' ')
+                .last()
+                .unwrap()
+                .starts_with("backtrace::backtrace")
         );
         status_server.stop();
     }

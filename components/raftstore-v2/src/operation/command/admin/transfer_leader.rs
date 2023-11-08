@@ -118,7 +118,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         transferee
     }
 
-    fn pre_transfer_leader(&mut self, peer: &metapb::Peer) -> bool {
+    pub fn pre_transfer_leader(&mut self, peer: &metapb::Peer) -> bool {
         if self.raft_group().raft.has_pending_conf() {
             info!(
                 self.logger,

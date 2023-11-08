@@ -165,7 +165,8 @@ where
 mod tests {
     use std::{sync::Arc, time::Duration};
 
-    use external_storage_export::make_local_backend;
+    use engine_rocks::RocksEngine;
+    use external_storage::make_local_backend;
     use tikv::storage::txn::tests::{must_commit, must_prewrite_put};
     use tikv_util::worker::{dummy_scheduler, ReceiverWrapper};
     use txn_types::TimeStamp;

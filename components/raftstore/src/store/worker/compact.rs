@@ -11,11 +11,13 @@ use fail::fail_point;
 use thiserror::Error;
 use tikv_util::{box_try, error, info, time::Instant, warn, worker::Runnable};
 
-use super::metrics::COMPACT_RANGE_CF;
+use super::metrics::{COMPACT_RANGE_CF, FULL_COMPACT};
 
 type Key = Vec<u8>;
 
 pub enum Task {
+    PeriodicFullCompact,
+
     Compact {
         cf_name: String,
         start_key: Option<Key>, // None means smallest key
@@ -58,6 +60,7 @@ impl CompactThreshold {
 impl Display for Task {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match *self {
+            Task::PeriodicFullCompact => f.debug_struct("FullCompact").finish(),
             Task::Compact {
                 ref cf_name,
                 ref start_key,
@@ -127,6 +130,31 @@ where
         Runner { engine }
     }
 
+    /// Periodic full compaction.
+    ///
+    /// NOTE this is a highly experimental feature!
+    ///
+    /// TODO: Do not start if there is heavy I/O.
+    /// TODO: Make it possible to rate limit, pause, or abort this by compacting
+    /// a range at a time.
+    pub fn full_compact(&mut self) -> Result<(), Error> {
+        fail_point!("on_full_compact");
+        info!("full compaction started");
+        let timer = Instant::now();
+        let full_compact_timer = FULL_COMPACT.start_coarse_timer();
+        box_try!(self.engine.compact_range(
+            None, None, // Compact the entire key range.
+            true, // no other compaction will run when this is running
+            1,    // number of threads threads
+        ));
+        full_compact_timer.observe_duration();
+        info!(
+            "full compaction finished";
+            "time_takes" => ?timer.saturating_elapsed(),
+        );
+        Ok(())
+    }
+
     /// Sends a compact range command to RocksDB to compact the range of the cf.
     pub fn compact_range_cf(
         &mut self,
@@ -163,6 +191,11 @@ where
 
     fn run(&mut self, task: Task) {
         match task {
+            Task::PeriodicFullCompact => {
+                if let Err(e) = self.full_compact() {
+                    error!("periodic full compaction failed"; "err" => %e);
+                }
+            }
             Task::Compact {
                 cf_name,
                 start_key,
@@ -455,5 +488,45 @@ mod tests {
         )
         .unwrap();
         assert_eq!(ranges_need_to_compact, expected_ranges);
+    }
+
+    #[test]
+    fn test_full_compact_deletes() {
+        let tmp_dir = Builder::new().prefix("test").tempdir().unwrap();
+        let engine = open_db(tmp_dir.path().to_str().unwrap());
+        let mut runner = Runner::new(engine.clone());
+
+        // mvcc_put 0..5
+        for i in 0..5 {
+            let (k, v) = (format!("k{}", i), format!("value{}", i));
+            mvcc_put(&engine, k.as_bytes(), v.as_bytes(), 1.into(), 2.into());
+        }
+        engine.flush_cf(CF_WRITE, true).unwrap();
+
+        let (start, end) = (data_key(b"k0"), data_key(b"k5"));
+        let stats = engine
+            .get_range_stats(CF_WRITE, &start, &end)
+            .unwrap()
+            .unwrap();
+        assert_eq!(stats.num_entries, stats.num_versions);
+
+        for i in 0..5 {
+            let k = format!("k{}", i);
+            delete(&engine, k.as_bytes(), 3.into());
+        }
+        engine.flush_cf(CF_WRITE, true).unwrap();
+
+        let stats = engine
+            .get_range_stats(CF_WRITE, &start, &end)
+            .unwrap()
+            .unwrap();
+        assert_eq!(stats.num_entries - stats.num_versions, 5);
+
+        runner.run(Task::PeriodicFullCompact);
+        let stats = engine
+            .get_range_stats(CF_WRITE, &start, &end)
+            .unwrap()
+            .unwrap();
+        assert_eq!(stats.num_entries - stats.num_versions, 0);
     }
 }

@@ -98,12 +98,12 @@ groups:
       summary: TiKV async request write duration seconds more than 1s
 
   - alert: TiKV_coprocessor_request_wait_seconds
-    expr: histogram_quantile(0.9999, sum(rate(tikv_coprocessor_request_wait_seconds_bucket[1m])) by (le, instance, req)) > 10
+    expr: histogram_quantile(0.9999, sum(rate(tikv_coprocessor_request_wait_seconds_bucket{type="all"}[1m])) by (le, instance, req)) > 10
     for: 1m
     labels:
       env: ENV_LABELS_ENV
       level: critical
-      expr:  histogram_quantile(0.9999, sum(rate(tikv_coprocessor_request_wait_seconds_bucket[1m])) by (le, instance, req)) > 10
+      expr:  histogram_quantile(0.9999, sum(rate(tikv_coprocessor_request_wait_seconds_bucket{type="all"}[1m])) by (le, instance, req)) > 10
     annotations:
       description: 'cluster: ENV_LABELS_ENV, instance: {{ $labels.instance }}, values:{{ $value }}'
       value: '{{ $value }}'
