@@ -7,7 +7,9 @@ pub mod function;
 #[cfg(test)]
 pub mod test_util;
 
-pub use self::expr::{RpnExpression, RpnExpressionNode};
-pub use self::expr_builder::RpnExpressionBuilder;
-pub use self::expr_eval::{RpnStackNode, BATCH_MAX_SIZE};
-pub use self::function::{RpnFnCallExtra, RpnFnMeta};
+pub use self::{
+    expr::{RpnExpression, RpnExpressionNode},
+    expr_builder::RpnExpressionBuilder,
+    expr_eval::{RpnStackNode, BATCH_MAX_SIZE},
+    function::{RpnFnCallExtra, RpnFnMeta},
+};

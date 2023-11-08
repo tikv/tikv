@@ -1,16 +1,18 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::FieldTypeAccessor;
 use codec::buffer::BufferWriter;
 use tipb::FieldType;
 
-use super::column::{ChunkColumnEncoder, Column};
-use super::Result;
-use crate::codec::Datum;
+use super::{
+    column::{ChunkColumnEncoder, Column},
+    Result,
+};
+use crate::{codec::Datum, FieldTypeAccessor};
 
 /// `Chunk` stores multiple rows of data.
-/// Values are appended in compact format and can be directly accessed without decoding.
-/// When the chunk is done processing, we can reuse the allocated memory by resetting it.
+/// Values are appended in compact format and can be directly accessed without
+/// decoding. When the chunk is done processing, we can reuse the allocated
+/// memory by resetting it.
 pub struct Chunk {
     columns: Vec<Column>,
 }
@@ -31,7 +33,8 @@ impl Chunk {
     }
 
     /// Reset the chunk, so the memory it allocated can be reused.
-    /// Make sure all the data in the chunk is not used anymore before you reuse this chunk.
+    /// Make sure all the data in the chunk is not used anymore before you reuse
+    /// this chunk.
     pub fn reset(&mut self) {
         for column in &mut self.columns {
             column.reset();
@@ -163,14 +166,18 @@ impl<'a> Iterator for RowIterator<'a> {
 
 #[cfg(test)]
 mod tests {
-    use crate::FieldTypeTp;
     use test::{black_box, Bencher};
 
     use super::*;
-    use crate::codec::batch::LazyBatchColumn;
-    use crate::codec::datum::{Datum, DatumEncoder};
-    use crate::codec::mysql::*;
-    use crate::expr::EvalContext;
+    use crate::{
+        codec::{
+            batch::LazyBatchColumn,
+            datum::{Datum, DatumEncoder},
+            mysql::*,
+        },
+        expr::EvalContext,
+        FieldTypeTp,
+    };
 
     #[test]
     fn test_append_datum() {
@@ -181,7 +188,7 @@ mod tests {
             FieldTypeTp::DateTime.into(),
             FieldTypeTp::Duration.into(),
             FieldTypeTp::NewDecimal.into(),
-            FieldTypeTp::JSON.into(),
+            FieldTypeTp::Json.into(),
             FieldTypeTp::String.into(),
         ];
         let json: Json = r#"{"k1":"v1"}"#.parse().unwrap();
@@ -222,7 +229,7 @@ mod tests {
             FieldTypeTp::DateTime.into(),
             FieldTypeTp::Duration.into(),
             FieldTypeTp::NewDecimal.into(),
-            FieldTypeTp::JSON.into(),
+            FieldTypeTp::Json.into(),
             FieldTypeTp::String.into(),
         ];
         let json: Json = r#"{"k1":"v1"}"#.parse().unwrap();
@@ -322,7 +329,7 @@ mod tests {
     fn bench_encode_from_raw_json_datum(b: &mut Bencher) {
         let json: Json = r#"{"k1":"v1"}"#.parse().unwrap();
         let datum = Datum::Json(json);
-        bench_encode_from_raw_datum_impl(b, datum, FieldTypeTp::JSON);
+        bench_encode_from_raw_datum_impl(b, datum, FieldTypeTp::Json);
     }
 
     #[test]
@@ -334,7 +341,7 @@ mod tests {
             FieldTypeTp::VarChar.into(),
             FieldTypeTp::VarChar.into(),
             FieldTypeTp::NewDecimal.into(),
-            FieldTypeTp::JSON.into(),
+            FieldTypeTp::Json.into(),
         ];
         let mut chunk = Chunk::new(&fields, rows);
 

@@ -1,16 +1,17 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use batch_system::test_runner::*;
-use batch_system::*;
+use std::sync::Arc;
+
+use batch_system::{test_runner::*, *};
 use criterion::*;
 
 fn bench_send(c: &mut Criterion) {
     let (control_tx, control_fsm) = Runner::new(100000);
     let (router, mut system) =
-        batch_system::create_system(&Config::default(), control_tx, control_fsm);
+        batch_system::create_system(&Config::default(), control_tx, control_fsm, None);
     system.spawn("test".to_owned(), Builder::new());
     let (normal_tx, normal_fsm) = Runner::new(100000);
-    let normal_box = BasicMailbox::new(normal_tx, normal_fsm);
+    let normal_box = BasicMailbox::new(normal_tx, normal_fsm, Arc::default());
     router.register(1, normal_box);
 
     c.bench_function("router::send", |b| {

@@ -1,13 +1,21 @@
-use super::timestamp::TimeStamp;
-use crate::Write;
+// Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
+
+use std::fmt::{self, Debug, Display, Formatter};
+
+use bitflags::bitflags;
 use byteorder::{ByteOrder, NativeEndian};
 use collections::HashMap;
-use kvproto::kvrpcpb;
-use std::fmt::{self, Debug, Display, Formatter};
-use tikv_util::codec;
-use tikv_util::codec::bytes;
-use tikv_util::codec::bytes::BytesEncoder;
-use tikv_util::codec::number::{self, NumberEncoder};
+use kvproto::kvrpcpb::{self, Assertion};
+use tikv_util::{
+    codec,
+    codec::{
+        bytes,
+        bytes::BytesEncoder,
+        number::{self, NumberEncoder},
+    },
+};
+
+use super::timestamp::TimeStamp;
 
 // Short value max len must <= 255.
 pub const SHORT_VALUE_MAX_LEN: usize = 255;
@@ -51,7 +59,8 @@ impl Key {
         Key(encoded)
     }
 
-    /// Creates a key from raw bytes but returns None if the key is an empty slice.
+    /// Creates a key from raw bytes but returns None if the key is an empty
+    /// slice.
     #[inline]
     pub fn from_raw_maybe_unbounded(key: &[u8]) -> Option<Key> {
         if key.is_empty() {
@@ -81,7 +90,8 @@ impl Key {
         Key(encoded_key)
     }
 
-    /// Creates a key with reserved capacity for timestamp from encoded bytes slice.
+    /// Creates a key with reserved capacity for timestamp from encoded bytes
+    /// slice.
     #[inline]
     pub fn from_encoded_slice(encoded_key: &[u8]) -> Key {
         let mut k = Vec::with_capacity(encoded_key.len() + number::U64_SIZE);
@@ -103,9 +113,16 @@ impl Key {
 
     /// Creates a new key by appending a `u64` timestamp to this key.
     #[inline]
+    #[must_use]
     pub fn append_ts(mut self, ts: TimeStamp) -> Key {
         self.0.encode_u64_desc(ts.into_inner()).unwrap();
         self
+    }
+
+    /// Appending a `u64` timestamp to input key.
+    #[inline]
+    pub fn append_ts_inplace(&mut self, ts: TimeStamp) {
+        self.0.encode_u64_desc(ts.into_inner()).unwrap();
     }
 
     /// Gets the timestamp contained in this key.
@@ -119,7 +136,8 @@ impl Key {
 
     /// Creates a new key by truncating the timestamp from this key.
     ///
-    /// Preconditions: the caller must ensure this is actually a timestamped key.
+    /// Preconditions: the caller must ensure this is actually a timestamped
+    /// key.
     #[inline]
     pub fn truncate_ts(mut self) -> Result<Key, codec::Error> {
         let len = self.0.len();
@@ -174,14 +192,24 @@ impl Key {
         Ok(number::decode_u64_desc(&mut ts)?.into())
     }
 
-    /// Whether the user key part of a ts encoded key `ts_encoded_key` equals to the encoded
-    /// user key `user_key`.
+    /// Decode the timestamp from a ts encoded key and return in bytes.
+    #[inline]
+    pub fn decode_ts_bytes_from(key: &[u8]) -> Result<&[u8], codec::Error> {
+        let len = key.len();
+        if len < number::U64_SIZE {
+            return Err(codec::Error::KeyLength);
+        }
+        Ok(&key[key.len() - number::U64_SIZE..])
+    }
+
+    /// Whether the user key part of a ts encoded key `ts_encoded_key` equals to
+    /// the encoded user key `user_key`.
     ///
-    /// There is an optimization in this function, which is to compare the last 8 encoded bytes
-    /// first before comparing the rest. It is because in TiDB many records are ended with an 8
-    /// byte row id and in many situations only this part is different when calling this function.
-    //
-    // TODO: If the last 8 byte is memory aligned, it would be better.
+    /// There is an optimization in this function, which is to compare the last
+    /// 8 encoded bytes first before comparing the rest. It is because in TiDB
+    /// many records are ended with an 8 byte row id and in many situations only
+    /// this part is different when calling this function. TODO: If the last
+    /// 8 byte is memory aligned, it would be better.
     #[inline]
     pub fn is_user_key_eq(ts_encoded_key: &[u8], user_key: &[u8]) -> bool {
         let user_key_len = user_key.len();
@@ -190,8 +218,8 @@ impl Key {
         }
         if user_key_len >= number::U64_SIZE {
             // We compare last 8 bytes as u64 first, then compare the rest.
-            // TODO: Can we just use == to check the left part and right part? `memcmp` might
-            //       be smart enough.
+            // TODO: Can we just use == to check the left part and right part? `memcmp`
+            // might be smart enough.
             let left = NativeEndian::read_u64(&ts_encoded_key[user_key_len - 8..]);
             let right = NativeEndian::read_u64(&user_key[user_key_len - 8..]);
             if left != right {
@@ -212,11 +240,17 @@ impl Key {
     pub fn gen_hash(&self) -> u64 {
         farmhash::fingerprint64(&self.to_raw().unwrap())
     }
+
+    #[allow(clippy::len_without_is_empty)]
+    #[inline]
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
 }
 
 impl Clone for Key {
     fn clone(&self) -> Self {
-        // default clone implemention use self.len() to reserve capacity
+        // default clone implementation use self.len() to reserve capacity
         // for the sake of appending ts, we need to reserve more
         let mut key = Vec::with_capacity(self.0.capacity());
         key.extend_from_slice(&self.0);
@@ -245,96 +279,191 @@ pub enum MutationType {
     Other,
 }
 
-impl MutationType {
-    pub fn may_have_old_value(&self) -> bool {
-        matches!(self, MutationType::Put | MutationType::Delete)
-    }
-}
-
 /// A row mutation.
-#[derive(Debug, Clone)]
+///
+/// It may also carry an `Assertion` field, which means it has such an
+/// *assertion* to the data (the key already exist or not exist). The assertion
+/// should pass if the mutation (in a prewrite request) is going to be finished
+/// successfully, otherwise it indicates there should be some bug causing the
+/// attempt to write wrong data.
+#[derive(Clone)]
 pub enum Mutation {
     /// Put `Value` into `Key`, overwriting any existing value.
-    Put((Key, Value)),
+    Put((Key, Value), Assertion),
     /// Delete `Key`.
-    Delete(Key),
+    Delete(Key, Assertion),
     /// Set a lock on `Key`.
-    Lock(Key),
+    Lock(Key, Assertion),
     /// Put `Value` into `Key` if `Key` does not yet exist.
     ///
     /// Returns `kvrpcpb::KeyError::AlreadyExists` if the key already exists.
-    Insert((Key, Value)),
+    Insert((Key, Value), Assertion),
     /// Check `key` must be not exist.
     ///
     /// Returns `kvrpcpb::KeyError::AlreadyExists` if the key already exists.
-    CheckNotExists(Key),
+    CheckNotExists(Key, Assertion),
+}
+
+impl Debug for Mutation {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self)
+    }
+}
+
+impl Display for Mutation {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            Mutation::Put((key, value), assertion) => write!(
+                f,
+                "Put key:{:?} value:{:?} assertion:{:?}",
+                key,
+                &log_wrappers::Value::value(value),
+                assertion
+            ),
+            Mutation::Delete(key, assertion) => {
+                write!(f, "Delete key:{:?} assertion:{:?}", key, assertion)
+            }
+            Mutation::Lock(key, assertion) => {
+                write!(f, "Lock key:{:?} assertion:{:?}", key, assertion)
+            }
+            Mutation::Insert((key, value), assertion) => write!(
+                f,
+                "Put key:{:?} value:{:?} assertion:{:?}",
+                key,
+                &log_wrappers::Value::value(value),
+                assertion
+            ),
+            Mutation::CheckNotExists(key, assertion) => {
+                write!(f, "CheckNotExists key:{:?} assertion:{:?}", key, assertion)
+            }
+        }
+    }
 }
 
 impl Mutation {
     pub fn key(&self) -> &Key {
         match self {
-            Mutation::Put((ref key, _)) => key,
-            Mutation::Delete(ref key) => key,
-            Mutation::Lock(ref key) => key,
-            Mutation::Insert((ref key, _)) => key,
-            Mutation::CheckNotExists(ref key) => key,
+            Mutation::Put((ref key, _), _) => key,
+            Mutation::Delete(ref key, _) => key,
+            Mutation::Lock(ref key, _) => key,
+            Mutation::Insert((ref key, _), _) => key,
+            Mutation::CheckNotExists(ref key, _) => key,
         }
     }
 
     pub fn mutation_type(&self) -> MutationType {
         match self {
-            Mutation::Put(_) => MutationType::Put,
-            Mutation::Delete(_) => MutationType::Delete,
-            Mutation::Lock(_) => MutationType::Lock,
-            Mutation::Insert(_) => MutationType::Insert,
+            Mutation::Put(..) => MutationType::Put,
+            Mutation::Delete(..) => MutationType::Delete,
+            Mutation::Lock(..) => MutationType::Lock,
+            Mutation::Insert(..) => MutationType::Insert,
             _ => MutationType::Other,
         }
     }
 
     pub fn into_key_value(self) -> (Key, Option<Value>) {
         match self {
-            Mutation::Put((key, value)) => (key, Some(value)),
-            Mutation::Delete(key) => (key, None),
-            Mutation::Lock(key) => (key, None),
-            Mutation::Insert((key, value)) => (key, Some(value)),
-            Mutation::CheckNotExists(key) => (key, None),
+            Mutation::Put((key, value), _) => (key, Some(value)),
+            Mutation::Delete(key, _) => (key, None),
+            Mutation::Lock(key, _) => (key, None),
+            Mutation::Insert((key, value), _) => (key, Some(value)),
+            Mutation::CheckNotExists(key, _) => (key, None),
         }
     }
 
     pub fn should_not_exists(&self) -> bool {
-        matches!(self, Mutation::Insert(_) | Mutation::CheckNotExists(_))
+        matches!(
+            self,
+            Mutation::Insert(_, _) | Mutation::CheckNotExists(_, _)
+        )
     }
 
     pub fn should_not_write(&self) -> bool {
-        matches!(self, Mutation::CheckNotExists(_))
+        matches!(self, Mutation::CheckNotExists(_, _))
+    }
+
+    pub fn get_assertion(&self) -> Assertion {
+        *match self {
+            Mutation::Put(_, assertion) => assertion,
+            Mutation::Delete(_, assertion) => assertion,
+            Mutation::Lock(_, assertion) => assertion,
+            Mutation::Insert(_, assertion) => assertion,
+            Mutation::CheckNotExists(_, assertion) => assertion,
+        }
+    }
+
+    pub fn set_assertion(&mut self, assertion: Assertion) {
+        *match self {
+            Mutation::Put(_, ref mut assertion) => assertion,
+            Mutation::Delete(_, ref mut assertion) => assertion,
+            Mutation::Lock(_, ref mut assertion) => assertion,
+            Mutation::Insert(_, ref mut assertion) => assertion,
+            Mutation::CheckNotExists(_, ref mut assertion) => assertion,
+        } = assertion;
+    }
+
+    /// Creates a Put mutation with none assertion.
+    pub fn make_put(key: Key, value: Value) -> Self {
+        Mutation::Put((key, value), Assertion::None)
+    }
+
+    /// Creates a Delete mutation with none assertion.
+    pub fn make_delete(key: Key) -> Self {
+        Mutation::Delete(key, Assertion::None)
+    }
+
+    /// Creates a Lock mutation with none assertion.
+    pub fn make_lock(key: Key) -> Self {
+        Mutation::Lock(key, Assertion::None)
+    }
+
+    /// Creates a Insert mutation with none assertion.
+    pub fn make_insert(key: Key, value: Value) -> Self {
+        Mutation::Insert((key, value), Assertion::None)
+    }
+
+    /// Creates a CheckNotExists mutation with none assertion.
+    pub fn make_check_not_exists(key: Key) -> Self {
+        Mutation::CheckNotExists(key, Assertion::None)
     }
 }
 
 impl From<kvrpcpb::Mutation> for Mutation {
     fn from(mut m: kvrpcpb::Mutation) -> Mutation {
         match m.get_op() {
-            kvrpcpb::Op::Put => Mutation::Put((Key::from_raw(m.get_key()), m.take_value())),
-            kvrpcpb::Op::Del => Mutation::Delete(Key::from_raw(m.get_key())),
-            kvrpcpb::Op::Lock => Mutation::Lock(Key::from_raw(m.get_key())),
-            kvrpcpb::Op::Insert => Mutation::Insert((Key::from_raw(m.get_key()), m.take_value())),
-            kvrpcpb::Op::CheckNotExists => Mutation::CheckNotExists(Key::from_raw(m.get_key())),
+            kvrpcpb::Op::Put => Mutation::Put(
+                (Key::from_raw(m.get_key()), m.take_value()),
+                m.get_assertion(),
+            ),
+            kvrpcpb::Op::Del => Mutation::Delete(Key::from_raw(m.get_key()), m.get_assertion()),
+            kvrpcpb::Op::Lock => Mutation::Lock(Key::from_raw(m.get_key()), m.get_assertion()),
+            kvrpcpb::Op::Insert => Mutation::Insert(
+                (Key::from_raw(m.get_key()), m.take_value()),
+                m.get_assertion(),
+            ),
+            kvrpcpb::Op::CheckNotExists => {
+                Mutation::CheckNotExists(Key::from_raw(m.get_key()), m.get_assertion())
+            }
             _ => panic!("mismatch Op in prewrite mutations"),
         }
     }
 }
 
-/// `OldValue` is used by cdc to read the previous value associated with some key during the prewrite process
+/// `OldValue` is used by cdc to read the previous value associated with some
+/// key during the prewrite process.
 #[derive(Debug, Clone, PartialEq)]
 pub enum OldValue {
-    /// A real `OldValue`
-    Value {
-        short_value: Option<Value>,
-        start_ts: TimeStamp,
-    },
-    /// `None` means we don't found a previous value
+    /// A real `OldValue`.
+    Value { value: Value },
+    /// A timestamp of an old value in case a value is not inlined in Write.
+    ValueTimeStamp { start_ts: TimeStamp },
+    /// `None` means we don't found a previous value.
     None,
-    /// `Unspecified` means the user doesn't care about the previous value
+    /// The user doesn't care about the previous value.
     Unspecified,
+    /// Not sure whether the old value exists or not. users can seek CF_WRITE to
+    /// the give position to take a look.
+    SeekWrite(Key),
 }
 
 impl Default for OldValue {
@@ -343,44 +472,68 @@ impl Default for OldValue {
     }
 }
 
-impl From<Option<Write>> for OldValue {
-    fn from(write: Option<Write>) -> Self {
-        match write {
-            Some(w) => OldValue::Value {
-                short_value: w.short_value,
-                start_ts: w.start_ts,
-            },
-            None => OldValue::None,
+impl OldValue {
+    pub fn value(value: Value) -> Self {
+        OldValue::Value { value }
+    }
+
+    pub fn seek_write(raw_user_key: &[u8], ts: u64) -> Self {
+        let key = Key::from_raw(raw_user_key).append_ts(ts.into());
+        OldValue::SeekWrite(key)
+    }
+
+    /// `resolved` means it's either something or `None`.
+    pub fn resolved(&self) -> bool {
+        match self {
+            Self::Value { .. } | Self::ValueTimeStamp { .. } | Self::None => true,
+            Self::Unspecified | Self::SeekWrite(_) => false,
+        }
+    }
+
+    /// The finalized `OldValue::Value` content, or `None` for
+    /// `OldValue::Unspecified`.
+    ///
+    /// # Panics
+    ///
+    /// Panic if it's `OldValue::ValueTimeStamp` or `OldValue::SeekWrite`.
+    pub fn finalized(self) -> Option<Value> {
+        match self {
+            Self::Value { value } => Some(value),
+            Self::None | Self::Unspecified => None,
+            _ => panic!("OldValue must be finalized"),
+        }
+    }
+
+    pub fn size(&self) -> usize {
+        self.value_size() + std::mem::size_of::<OldValue>()
+    }
+
+    pub fn value_size(&self) -> usize {
+        match self {
+            OldValue::Value { value } => value.len(),
+            _ => 0,
         }
     }
 }
 
-impl OldValue {
-    pub fn specified(&self) -> bool {
-        !matches!(self, OldValue::Unspecified)
-    }
+// Returned by MvccTxn when extra_op is set to kvrpcpb::ExtraOp::ReadOldValue.
+// key with current ts -> (short value of the prev txn, start ts of the prev
+// txn). The value of the map will be None when the mutation is `Insert`.
+// MutationType is the type of mutation of the current write.
+pub type OldValues = HashMap<Key, (OldValue, Option<MutationType>)>;
 
-    pub fn exists(&self) -> bool {
-        matches!(self, OldValue::Value { .. })
-    }
-
-    pub fn size(&self) -> usize {
-        let value_size = match self {
-            OldValue::Value {
-                short_value: Some(v),
-                ..
-            } => v.len(),
-            _ => 0,
-        };
-        value_size + std::mem::size_of::<TimeStamp>()
+pub fn insert_old_value_if_resolved(
+    old_values: &mut OldValues,
+    key: Key,
+    start_ts: TimeStamp,
+    old_value: OldValue,
+    mutation_type: Option<MutationType>,
+) {
+    if old_value.resolved() {
+        let key = key.append_ts(start_ts);
+        old_values.insert(key, (old_value, mutation_type));
     }
 }
-
-// Returned by MvccTxn when extra_op is set to kvrpcpb::ExtraOp::ReadOldValue.
-// key with current ts -> (short value of the prev txn, start ts of the prev txn).
-// The value of the map will be None when the mutation is `Insert`.
-// MutationType is the type of mutation of the current write.
-pub type OldValues = HashMap<Key, (OldValue, MutationType)>;
 
 // Extra data fields filled by kvrpcpb::ExtraOp.
 #[derive(Default, Debug, Clone)]
@@ -389,6 +542,8 @@ pub struct TxnExtra {
     // Marks that this transaction is a 1PC transaction. RaftKv should set this flag
     // in the raft command request.
     pub one_pc: bool,
+    // Marks that this transaction is allowed in the flashback state.
+    pub allowed_in_flashback: bool,
 }
 
 impl TxnExtra {
@@ -401,9 +556,134 @@ pub trait TxnExtraScheduler: Send + Sync {
     fn schedule(&self, txn_extra: TxnExtra);
 }
 
+bitflags! {
+    /// Additional flags for a write batch.
+    /// They should be set in the `flags` field in `RaftRequestHeader`.
+    pub struct WriteBatchFlags: u64 {
+        /// Indicates this request is from a 1PC transaction.
+        /// It helps CDC recognize 1PC transactions and handle them correctly.
+        const ONE_PC = 0b00000001;
+        /// Indicates this request is from a stale read-only transaction.
+        const STALE_READ = 0b00000010;
+        /// Indicates this request is a transfer leader command that needs to be proposed
+        /// like a normal command.
+        const TRANSFER_LEADER_PROPOSAL = 0b00000100;
+        /// Indicates this request is a flashback transaction.
+        const FLASHBACK = 0b00001000;
+        /// Indicates the relevant tablet has been flushed, and we can propose split now.
+        const PRE_FLUSH_FINISHED = 0b00010000;
+    }
+}
+
+impl WriteBatchFlags {
+    /// Convert from underlying bit representation
+    /// panic if it contains bits that do not correspond to a flag
+    pub fn from_bits_check(bits: u64) -> WriteBatchFlags {
+        match WriteBatchFlags::from_bits(bits) {
+            None => panic!("unrecognized flags: {:b}", bits),
+            // zero or more flags
+            Some(f) => f,
+        }
+    }
+}
+
+/// The position info of the last actual write (PUT or DELETE) of a LOCK record.
+/// Note that if the last change is a DELETE, its LastChange can be either
+/// Exist(which points to it) or NotExist.
+#[derive(Clone, Eq, PartialEq, Debug)]
+pub enum LastChange {
+    Unknown,
+    /// The pointer may point to a PUT or a DELETE record.
+    Exist {
+        /// The commit TS of the latest PUT/DELETE record
+        last_change_ts: TimeStamp,
+        /// The estimated number of versions that need skipping from this record
+        /// to find the latest PUT/DELETE record. Note this could be inaccurate.
+        estimated_versions_to_last_change: u64,
+    },
+    /// Either there is no previous write of the key or the last write is a
+    /// DELETE.
+    NotExist,
+}
+
+impl LastChange {
+    pub fn make_exist(last_change_ts: TimeStamp, estimated_versions_to_last_change: u64) -> Self {
+        assert!(!last_change_ts.is_zero());
+        assert!(estimated_versions_to_last_change > 0);
+        LastChange::Exist {
+            last_change_ts,
+            estimated_versions_to_last_change,
+        }
+    }
+
+    // How `LastChange` is stored.
+    // (1) ts == 0 && version == 0 means Unknown.
+    // (2) ts == 0 && version > 0 means NotExist. In current implementation version
+    // is set to 1. In older implementations it can be any positive integer. So
+    // we accept any positive when deserializing.
+    // (3) ts > 0 && version > 0 means Exist.
+
+    pub fn to_parts(&self) -> (TimeStamp, u64) {
+        match self {
+            LastChange::Unknown => (TimeStamp::zero(), 0),
+            LastChange::Exist {
+                last_change_ts,
+                estimated_versions_to_last_change,
+            } => (*last_change_ts, *estimated_versions_to_last_change),
+            LastChange::NotExist => (TimeStamp::zero(), 1),
+        }
+    }
+
+    pub fn from_parts(last_change_ts: TimeStamp, estimated_versions_to_last_change: u64) -> Self {
+        if last_change_ts.is_zero() {
+            if estimated_versions_to_last_change > 0 {
+                LastChange::NotExist
+            } else {
+                LastChange::Unknown
+            }
+        } else {
+            Self::make_exist(last_change_ts, estimated_versions_to_last_change)
+        }
+    }
+}
+
+impl Default for LastChange {
+    fn default() -> Self {
+        LastChange::Unknown
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_flags() {
+        assert!(WriteBatchFlags::from_bits_check(0).is_empty());
+        assert_eq!(
+            WriteBatchFlags::from_bits_check(WriteBatchFlags::ONE_PC.bits()),
+            WriteBatchFlags::ONE_PC
+        );
+        assert_eq!(
+            WriteBatchFlags::from_bits_check(WriteBatchFlags::STALE_READ.bits()),
+            WriteBatchFlags::STALE_READ
+        );
+    }
+
+    #[test]
+    fn test_flags_panic() {
+        for _ in 0..100 {
+            panic_hook::recover_safe(|| {
+                // r must be an invalid flags if it is not zero
+                let r = rand::random::<u64>() & !WriteBatchFlags::all().bits();
+                WriteBatchFlags::from_bits_check(r);
+                if r == 0 {
+                    panic!("panic for zero");
+                }
+            })
+            .unwrap_err();
+        }
+    }
 
     #[test]
     fn test_is_user_key_eq() {
@@ -492,7 +772,7 @@ mod tests {
             let shorter_encoded = Key::from_encoded_slice(&encoded.0[..encoded_len - 9]);
             assert!(!shorter_encoded.is_encoded_from(&raw));
             let mut longer_encoded = encoded.as_encoded().clone();
-            longer_encoded.extend(&[0, 0, 0, 0, 0, 0, 0, 0, 0xFF]);
+            longer_encoded.extend([0, 0, 0, 0, 0, 0, 0, 0, 0xFF]);
             let longer_encoded = Key::from_encoded(longer_encoded);
             assert!(!longer_encoded.is_encoded_from(&raw));
 
@@ -504,6 +784,58 @@ mod tests {
             let mut longer_raw = raw.to_vec();
             longer_raw.push(0);
             assert!(!encoded.is_encoded_from(&longer_raw));
+        }
+    }
+
+    #[test]
+    fn test_old_value_resolved() {
+        let cases = vec![
+            (OldValue::Unspecified, false),
+            (OldValue::None, true),
+            (OldValue::Value { value: vec![] }, true),
+            (OldValue::ValueTimeStamp { start_ts: 0.into() }, true),
+        ];
+        for (old_value, v) in cases {
+            assert_eq!(old_value.resolved(), v);
+        }
+    }
+
+    #[test]
+    fn test_append_ts() {
+        let cases = vec![
+            (
+                Key::from_encoded(b"abc".to_vec()),
+                TimeStamp::from(100),
+                Key::from_encoded(vec![
+                    b'a', b'b', b'c', 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x9B,
+                ]),
+            ),
+            (
+                Key::from_raw(b"z"),
+                TimeStamp::from(1000),
+                Key::from_encoded(vec![
+                    b'z', 0, 0, 0, 0, 0, 0, 0, 0xF8, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFC, 0x17,
+                ]),
+            ),
+        ];
+        for (key, ts, key_with_ts) in cases {
+            assert_eq!(key.clone().append_ts(ts), key_with_ts);
+            let mut another_key = key.clone();
+            another_key.append_ts_inplace(ts);
+            assert_eq!(another_key, key_with_ts);
+        }
+    }
+
+    #[test]
+    fn test_serialize_last_change() {
+        let objs = vec![
+            LastChange::Unknown,
+            LastChange::NotExist,
+            LastChange::make_exist(100.into(), 3),
+        ];
+        for obj in objs {
+            let (ts, versions) = obj.to_parts();
+            assert_eq!(obj, LastChange::from_parts(ts, versions));
         }
     }
 }

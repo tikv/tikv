@@ -1,8 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use super::super::Result;
-use super::path_expr::PathExpression;
-use super::{JsonRef, JsonType};
+use super::{super::Result, path_expr::PathExpression, JsonRef, JsonType};
 
 impl<'a> JsonRef<'a> {
     fn len(&self) -> i64 {
@@ -13,7 +11,7 @@ impl<'a> JsonRef<'a> {
     }
 
     /// `json_length` is the implementation for JSON_LENGTH in mysql
-    /// https://dev.mysql.com/doc/refman/5.7/en/json-attribute-functions.html#function_json-length
+    /// <https://dev.mysql.com/doc/refman/5.7/en/json-attribute-functions.html#function_json-length>
     pub fn json_length(&self, path_expr_list: &[PathExpression]) -> Result<Option<i64>> {
         if path_expr_list.is_empty() {
             return Ok(Some(self.len()));
@@ -27,8 +25,7 @@ impl<'a> JsonRef<'a> {
 
 #[cfg(test)]
 mod tests {
-    use super::super::path_expr::parse_json_path_expr;
-    use super::super::Json;
+    use super::super::{path_expr::parse_json_path_expr, Json};
     #[test]
     fn test_json_length() {
         let mut test_cases = vec![

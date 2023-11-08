@@ -22,6 +22,10 @@ impl Charset for CharsetBinary {
             Some((data[0], 1))
         }
     }
+
+    fn charset() -> crate::Charset {
+        crate::Charset::Binary
+    }
 }
 
 pub struct CharsetUtf8mb4;
@@ -39,15 +43,20 @@ impl Charset for CharsetUtf8mb4 {
     fn decode_one(data: &[u8]) -> Option<(Self::Char, usize)> {
         let mut it = data.iter();
         let start = it.as_slice().as_ptr();
-        if let Some(c) = core::str::next_code_point(&mut it) {
-            unsafe {
-                Some((
+        unsafe {
+            core::str::next_code_point(&mut it).map(|c| {
+                (
                     std::char::from_u32_unchecked(c),
                     it.as_slice().as_ptr().offset_from(start) as usize,
-                ))
-            }
-        } else {
-            None
+                )
+            })
         }
     }
+
+    fn charset() -> crate::Charset {
+        crate::Charset::Utf8Mb4
+    }
 }
+
+// gbk character data actually stored with utf8mb4 character encoding.
+pub type CharsetGbk = CharsetUtf8mb4;

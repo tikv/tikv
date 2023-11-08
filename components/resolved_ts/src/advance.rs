@@ -1,347 +1,674 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::{
+    cmp,
+    ffi::CString,
+    sync::{
+        atomic::{AtomicI32, Ordering},
+        Arc,
+    },
+    time::Duration,
+};
 
-use collections::HashMap;
+use collections::{HashMap, HashSet};
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::KvEngine;
-use futures::compat::Future01CompatExt;
-use grpcio::{ChannelBuilder, Environment};
-use kvproto::kvrpcpb::{CheckLeaderRequest, LeaderInfo};
-use kvproto::metapb::{PeerRole, Region};
-use kvproto::tikvpb::TikvClient;
+use fail::fail_point;
+use futures::{compat::Future01CompatExt, future::select_all, FutureExt, TryFutureExt};
+use grpcio::{
+    ChannelBuilder, CompressionAlgorithms, Environment, Error as GrpcError, RpcStatusCode,
+};
+use kvproto::{
+    kvrpcpb::{CheckLeaderRequest, CheckLeaderResponse},
+    metapb::{Peer, PeerRole},
+    tikvpb::TikvClient,
+};
 use pd_client::PdClient;
-use raftstore::router::RaftStoreRouter;
-use raftstore::store::fsm::StoreMeta;
-use raftstore::store::msg::{Callback, SignificantMsg};
+use protobuf::Message;
+use raftstore::{
+    router::CdcHandle,
+    store::{msg::Callback, util::RegionReadProgressRegistry},
+};
 use security::SecurityManager;
-use tikv_util::timer::SteadyTimer;
-use tikv_util::worker::Scheduler;
-use tokio::runtime::{Builder, Runtime};
+use tikv_util::{
+    info,
+    sys::thread::ThreadBuildWrapper,
+    time::{Instant, SlowTimer},
+    timer::SteadyTimer,
+    worker::Scheduler,
+};
+use tokio::{
+    runtime::{Builder, Runtime},
+    sync::{Mutex, Notify},
+};
 use txn_types::TimeStamp;
 
-use crate::endpoint::Task;
-use crate::errors::Result;
+use crate::{endpoint::Task, metrics::*, TsSource};
 
-pub struct AdvanceTsWorker<T, E: KvEngine> {
-    store_meta: Arc<Mutex<StoreMeta>>,
+pub(crate) const DEFAULT_CHECK_LEADER_TIMEOUT_DURATION: Duration = Duration::from_secs(5); // 5s
+const DEFAULT_GRPC_GZIP_COMPRESSION_LEVEL: usize = 2;
+const DEFAULT_GRPC_MIN_MESSAGE_SIZE_TO_COMPRESS: usize = 4096;
+
+pub struct AdvanceTsWorker {
     pd_client: Arc<dyn PdClient>,
+    advance_ts_interval: Duration,
     timer: SteadyTimer,
     worker: Runtime,
-    raft_router: T,
-    advance_ts_interval: Duration,
-    scheduler: Scheduler<Task<E::Snapshot>>,
-    /// The concurrency manager for transactions. It's needed for CDC to check locks when
-    /// calculating resolved_ts.
-    concurrency_manager: ConcurrencyManager,
-    hibernate_regions_compatible: bool,
-    // store_id -> client
-    tikv_clients: Arc<Mutex<HashMap<u64, TikvClient>>>,
-    env: Arc<Environment>,
-    security_mgr: Arc<SecurityManager>,
+    scheduler: Scheduler<Task>,
+    /// The concurrency manager for transactions. It's needed for CDC to check
+    /// locks when calculating resolved_ts.
+    pub(crate) concurrency_manager: ConcurrencyManager,
+
+    // cache the last pd tso, used to approximate the next timestamp w/o an actual TSO RPC
+    pub(crate) last_pd_tso: Arc<std::sync::Mutex<Option<(TimeStamp, Instant)>>>,
 }
 
-impl<T, E: KvEngine> AdvanceTsWorker<T, E> {
+impl AdvanceTsWorker {
     pub fn new(
-        pd_client: Arc<dyn PdClient>,
-        scheduler: Scheduler<Task<E::Snapshot>>,
-        raft_router: T,
-        store_meta: Arc<Mutex<StoreMeta>>,
-        concurrency_manager: ConcurrencyManager,
-        env: Arc<Environment>,
-        security_mgr: Arc<SecurityManager>,
         advance_ts_interval: Duration,
-        hibernate_regions_compatible: bool,
+        pd_client: Arc<dyn PdClient>,
+        scheduler: Scheduler<Task>,
+        concurrency_manager: ConcurrencyManager,
     ) -> Self {
-        let worker = Builder::new()
-            .threaded_scheduler()
+        let worker = Builder::new_multi_thread()
             .thread_name("advance-ts")
-            .core_threads(1)
+            .worker_threads(1)
+            .enable_time()
+            .with_sys_hooks()
             .build()
             .unwrap();
         Self {
-            env,
-            security_mgr,
             scheduler,
             pd_client,
             worker,
-            timer: SteadyTimer::default(),
-            raft_router,
-            store_meta,
-            concurrency_manager,
             advance_ts_interval,
-            hibernate_regions_compatible,
-            tikv_clients: Arc::new(Mutex::new(HashMap::default())),
+            timer: SteadyTimer::default(),
+            concurrency_manager,
+            last_pd_tso: Arc::new(std::sync::Mutex::new(None)),
         }
     }
 }
 
-impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> AdvanceTsWorker<T, E> {
-    pub fn register_advance_event(&self, regions: Vec<u64>) {
-        let timeout = self.timer.delay(self.advance_ts_interval);
+impl AdvanceTsWorker {
+    // Advance ts asynchronously and register RegisterAdvanceEvent when its done.
+    pub fn advance_ts_for_regions(
+        &self,
+        regions: Vec<u64>,
+        mut leader_resolver: LeadershipResolver,
+        advance_ts_interval: Duration,
+        advance_notify: Arc<Notify>,
+    ) {
+        let cm = self.concurrency_manager.clone();
         let pd_client = self.pd_client.clone();
         let scheduler = self.scheduler.clone();
-        let raft_router = self.raft_router.clone();
-        let cm: ConcurrencyManager = self.concurrency_manager.clone();
-        let env = self.env.clone();
-        let security_mgr = self.security_mgr.clone();
-        let store_meta = self.store_meta.clone();
-        let tikv_clients = self.tikv_clients.clone();
-        let hibernate_regions_compatible = self.hibernate_regions_compatible;
+        let timeout = self.timer.delay(advance_ts_interval);
+        let min_timeout = self.timer.delay(cmp::min(
+            DEFAULT_CHECK_LEADER_TIMEOUT_DURATION,
+            self.advance_ts_interval,
+        ));
 
+        let last_pd_tso = self.last_pd_tso.clone();
         let fut = async move {
-            let _ = timeout.compat().await;
-            // Ignore get tso errors since we will retry every `min_ts_interval`.
+            // Ignore get tso errors since we will retry every `advdance_ts_interval`.
             let mut min_ts = pd_client.get_tso().await.unwrap_or_default();
+            if let Ok(mut last_pd_tso) = last_pd_tso.try_lock() {
+                *last_pd_tso = Some((min_ts, Instant::now()));
+            }
+            let mut ts_source = TsSource::PdTso;
 
-            // Sync with concurrency manager so that it can work correctly when optimizations
-            // like async commit is enabled.
-            // Note: This step must be done before scheduling `Task::MinTS` task, and the
-            // resolver must be checked in or after `Task::MinTS`' execution.
+            // Sync with concurrency manager so that it can work correctly when
+            // optimizations like async commit is enabled.
+            // Note: This step must be done before scheduling `Task::MinTs` task, and the
+            // resolver must be checked in or after `Task::MinTs`' execution.
             cm.update_max_ts(min_ts);
-            if let Some(min_mem_lock_ts) = cm.global_min_lock_ts() {
+            if let Some((min_mem_lock_ts, lock)) = cm.global_min_lock() {
                 if min_mem_lock_ts < min_ts {
                     min_ts = min_mem_lock_ts;
+                    ts_source = TsSource::MemoryLock(lock);
                 }
             }
 
-            if let Err(e) = scheduler.schedule(Task::RegisterAdvanceEvent) {
-                info!("failed to schedule register advance event"; "err" => ?e);
-            }
-
-            let regions = if hibernate_regions_compatible {
-                Self::region_resolved_ts_store(
-                    regions,
-                    store_meta,
-                    pd_client,
-                    security_mgr,
-                    env,
-                    tikv_clients,
-                    min_ts,
-                )
-                .await
-            } else {
-                Self::region_resolved_ts_raft(regions, raft_router, min_ts).await
-            };
-
+            let regions = leader_resolver.resolve(regions, min_ts).await;
             if !regions.is_empty() {
-                if let Err(e) = scheduler.schedule(Task::AdvanceResolvedTs {
+                if let Err(e) = scheduler.schedule(Task::ResolvedTsAdvanced {
                     regions,
                     ts: min_ts,
+                    ts_source,
                 }) {
                     info!("failed to schedule advance event"; "err" => ?e);
                 }
             }
+
+            futures::select! {
+                _ = timeout.compat().fuse() => (),
+                // Skip wait timeout if a notify is arrived.
+                _ = advance_notify.notified().fuse() => (),
+            };
+            // Wait min timeout to prevent from overloading advancing resolved ts.
+            let _ = min_timeout.compat().await;
+
+            // NB: We must schedule the leader resolver even if there is no region,
+            //     otherwise we can not advance resolved ts next time.
+            if let Err(e) = scheduler.schedule(Task::AdvanceResolvedTs { leader_resolver }) {
+                error!("failed to schedule register advance event"; "err" => ?e);
+            }
         };
         self.worker.spawn(fut);
     }
+}
 
-    async fn region_resolved_ts_raft(
-        regions: Vec<u64>,
-        raft_router: T,
-        min_ts: TimeStamp,
-    ) -> Vec<u64> {
-        // TODO: send a message to raftstore would consume too much cpu time,
-        // try to handle it outside raftstore.
-        let regions: Vec<_> = regions
-            .iter()
-            .copied()
-            .map(|region_id| {
-                let raft_router_clone = raft_router.clone();
-                async move {
-                    let (tx, rx) = tokio::sync::oneshot::channel();
-                    if let Err(e) = raft_router_clone.significant_send(
-                        region_id,
-                        SignificantMsg::LeaderCallback(Callback::Read(Box::new(move |resp| {
-                            let resp = if resp.response.get_header().has_error() {
-                                None
-                            } else {
-                                Some(region_id)
-                            };
-                            if tx.send(resp).is_err() {
-                                error!("resolved-ts send tso response failed"; "region_id" => region_id);
-                            }
-                        }))),
-                    ) {
-                        warn!("resolved-ts send LeaderCallback failed"; "err" => ?e, "min_ts" => min_ts);
-                        return None;
-                    }
-                    rx.await.unwrap_or(None)
-                }
-            })
-            .collect();
-        let resps = futures::future::join_all(regions).await;
-        resps
-            .into_iter()
-            .filter_map(|resp| resp)
-            .collect::<Vec<u64>>()
+pub struct LeadershipResolver {
+    tikv_clients: Mutex<HashMap<u64, TikvClient>>,
+    pd_client: Arc<dyn PdClient>,
+    env: Arc<Environment>,
+    security_mgr: Arc<SecurityManager>,
+    region_read_progress: RegionReadProgressRegistry,
+    store_id: u64,
+
+    // store_id -> check leader request, record the request to each stores.
+    store_req_map: HashMap<u64, CheckLeaderRequest>,
+    progresses: HashMap<u64, RegionProgress>,
+    checking_regions: HashSet<u64>,
+    valid_regions: HashSet<u64>,
+
+    gc_interval: Duration,
+    last_gc_time: Instant,
+}
+
+impl LeadershipResolver {
+    pub fn new(
+        store_id: u64,
+        pd_client: Arc<dyn PdClient>,
+        env: Arc<Environment>,
+        security_mgr: Arc<SecurityManager>,
+        region_read_progress: RegionReadProgressRegistry,
+        gc_interval: Duration,
+    ) -> LeadershipResolver {
+        LeadershipResolver {
+            tikv_clients: Mutex::default(),
+            store_id,
+            pd_client,
+            env,
+            security_mgr,
+            region_read_progress,
+
+            store_req_map: HashMap::default(),
+            progresses: HashMap::default(),
+            valid_regions: HashSet::default(),
+            checking_regions: HashSet::default(),
+            last_gc_time: Instant::now_coarse(),
+            gc_interval,
+        }
     }
 
-    async fn region_resolved_ts_store(
-        regions: Vec<u64>,
-        store_meta: Arc<Mutex<StoreMeta>>,
-        pd_client: Arc<dyn PdClient>,
-        security_mgr: Arc<SecurityManager>,
-        env: Arc<Environment>,
-        cdc_clients: Arc<Mutex<HashMap<u64, TikvClient>>>,
-        min_ts: TimeStamp,
-    ) -> Vec<u64> {
-        let region_has_quorum = |region: &Region, stores: &[u64]| {
-            let mut voters = 0;
-            let mut incoming_voters = 0;
-            let mut demoting_voters = 0;
-
-            let mut resp_voters = 0;
-            let mut resp_incoming_voters = 0;
-            let mut resp_demoting_voters = 0;
-
-            region.get_peers().iter().for_each(|peer| {
-                let mut in_resp = false;
-                for store_id in stores {
-                    if *store_id == peer.store_id {
-                        in_resp = true;
-                        break;
-                    }
-                }
-                match peer.get_role() {
-                    PeerRole::Voter => {
-                        voters += 1;
-                        if in_resp {
-                            resp_voters += 1;
-                        }
-                    }
-                    PeerRole::IncomingVoter => {
-                        incoming_voters += 1;
-                        if in_resp {
-                            resp_incoming_voters += 1;
-                        }
-                    }
-                    PeerRole::DemotingVoter => {
-                        demoting_voters += 1;
-                        if in_resp {
-                            resp_demoting_voters += 1;
-                        }
-                    }
-                    PeerRole::Learner => (),
-                }
-            });
-
-            let has_incoming_majority =
-                (resp_voters + resp_incoming_voters) >= ((voters + incoming_voters) / 2 + 1);
-            let has_demoting_majority =
-                (resp_voters + resp_demoting_voters) >= ((voters + demoting_voters) / 2 + 1);
-
-            has_incoming_majority && has_demoting_majority
-        };
-
-        let find_store_id = |region: &Region, peer_id| {
-            for peer in region.get_peers() {
-                if peer.id == peer_id {
-                    return Some(peer.store_id);
-                }
-            }
-            None
-        };
-
-        // store_id -> leaders info, record the request to each stores
-        let mut store_map: HashMap<u64, Vec<LeaderInfo>> = HashMap::default();
-        // region_id -> region, cache the information of regions
-        let mut region_map: HashMap<u64, Region> = HashMap::default();
-        // region_id -> peers id, record the responses
-        let mut resp_map: HashMap<u64, Vec<u64>> = HashMap::default();
-        {
-            let meta = store_meta.lock().unwrap();
-            let store_id = match meta.store_id {
-                Some(id) => id,
-                None => return vec![],
-            };
-            for region_id in regions {
-                if let Some(region) = meta.regions.get(&region_id) {
-                    if let Some((term, leader_id)) = meta.leaders.get(&region_id) {
-                        let leader_store_id = find_store_id(&region, *leader_id);
-                        if leader_store_id.is_none() {
-                            continue;
-                        }
-                        if leader_store_id.unwrap() != meta.store_id.unwrap() {
-                            continue;
-                        }
-                        for peer in region.get_peers() {
-                            if peer.store_id == store_id && peer.id == *leader_id {
-                                resp_map.entry(region_id).or_default().push(store_id);
-                                continue;
-                            }
-                            if peer.get_role() == PeerRole::Learner {
-                                continue;
-                            }
-                            let mut leader_info = LeaderInfo::default();
-                            leader_info.set_peer_id(*leader_id);
-                            leader_info.set_term(*term);
-                            leader_info.set_region_id(region_id);
-                            leader_info.set_region_epoch(region.get_region_epoch().clone());
-                            store_map
-                                .entry(peer.store_id)
-                                .or_default()
-                                .push(leader_info);
-                        }
-                        region_map.insert(region_id, region.clone());
-                    }
-                }
-            }
+    fn gc(&mut self) {
+        let now = Instant::now_coarse();
+        if now - self.last_gc_time > self.gc_interval {
+            self.store_req_map = HashMap::default();
+            self.progresses = HashMap::default();
+            self.valid_regions = HashSet::default();
+            self.checking_regions = HashSet::default();
+            self.last_gc_time = now;
         }
-        let stores = store_map.into_iter().map(|(store_id, regions)| {
-            let cdc_clients = cdc_clients.clone();
-            let env = env.clone();
-            let pd_client = pd_client.clone();
-            let security_mgr = security_mgr.clone();
-            async move {
-                if cdc_clients.lock().unwrap().get(&store_id).is_none() {
-                    let store = box_try!(pd_client.get_store_async(store_id).await);
-                    let cb = ChannelBuilder::new(env.clone());
-                    let channel = security_mgr.connect(cb, &store.address);
-                    cdc_clients
-                        .lock()
-                        .unwrap()
-                        .insert(store_id, TikvClient::new(channel));
+    }
+
+    fn clear(&mut self) {
+        for v in self.store_req_map.values_mut() {
+            v.regions.clear();
+            v.ts = 0;
+        }
+        for v in self.progresses.values_mut() {
+            v.clear();
+        }
+        self.checking_regions.clear();
+        self.valid_regions.clear();
+    }
+
+    // Confirms leadership of region peer before trying to advance resolved ts.
+    // This function broadcasts a special message to all stores, gets the leader id
+    // of them to confirm whether current peer has a quorum which accepts its
+    // leadership.
+    pub async fn resolve(&mut self, regions: Vec<u64>, min_ts: TimeStamp) -> Vec<u64> {
+        if regions.is_empty() {
+            return regions;
+        }
+
+        // Clear previous result before resolving.
+        self.clear();
+        // GC when necessary to prevent memory leak.
+        self.gc();
+
+        PENDING_RTS_COUNT.inc();
+        defer!(PENDING_RTS_COUNT.dec());
+        fail_point!("before_sync_replica_read_state", |_| regions.clone());
+
+        let store_id = self.store_id;
+        let valid_regions = &mut self.valid_regions;
+        let progresses = &mut self.progresses;
+        let store_req_map = &mut self.store_req_map;
+        let checking_regions = &mut self.checking_regions;
+        for region_id in &regions {
+            checking_regions.insert(*region_id);
+        }
+        self.region_read_progress.with(|registry| {
+            for (region_id, read_progress) in registry {
+                if !checking_regions.contains(region_id) {
+                    continue;
                 }
-                let client = cdc_clients.lock().unwrap().get(&store_id).unwrap().clone();
-                let mut req = CheckLeaderRequest::default();
-                req.set_regions(regions.into());
-                req.set_ts(min_ts.into_inner());
-                let res = box_try!(client.check_leader_async(&req)).await;
-                let resp = box_try!(res);
-                Result::Ok((store_id, resp))
+                let core = read_progress.get_core();
+                let local_leader_info = core.get_local_leader_info();
+                let leader_id = local_leader_info.get_leader_id();
+                let leader_store_id = local_leader_info.get_leader_store_id();
+                let peer_list = local_leader_info.get_peers();
+                // Check if the leader in this store
+                if leader_store_id != Some(store_id) {
+                    continue;
+                }
+                let leader_info = core.get_leader_info();
+
+                let prog = progresses
+                    .entry(*region_id)
+                    .or_insert_with(|| RegionProgress::new(peer_list.len()));
+                let mut unvotes = 0;
+                for peer in peer_list {
+                    if peer.store_id == store_id && peer.id == leader_id {
+                        prog.resps.push(store_id);
+                    } else {
+                        // It's still necessary to check leader on learners even if they don't vote
+                        // because performing stale read on learners require it.
+                        store_req_map
+                            .entry(peer.store_id)
+                            .or_insert_with(|| {
+                                let mut req = CheckLeaderRequest::default();
+                                req.regions = Vec::with_capacity(registry.len()).into();
+                                req
+                            })
+                            .regions
+                            .push(leader_info.clone());
+                        if peer.get_role() != PeerRole::Learner {
+                            unvotes += 1;
+                        }
+                    }
+                }
+
+                // Check `region_has_quorum` here because `store_map` can be empty,
+                // in which case `region_has_quorum` won't be called any more.
+                if unvotes == 0 && region_has_quorum(peer_list, &prog.resps) {
+                    prog.resolved = true;
+                    valid_regions.insert(*region_id);
+                } else {
+                    prog.peers.extend_from_slice(peer_list);
+                }
             }
         });
-        let resps = futures::future::join_all(stores).await;
-        resps
-            .into_iter()
-            .filter_map(|resp| match resp {
-                Ok(resp) => Some(resp),
-                Err(e) => {
-                    debug!("resolved-ts check leader error"; "err" =>?e);
-                    None
+
+        let env = &self.env;
+        let pd_client = &self.pd_client;
+        let security_mgr = &self.security_mgr;
+        let tikv_clients = &self.tikv_clients;
+        // Approximate `LeaderInfo` size
+        let leader_info_size = store_req_map
+            .values()
+            .find(|req| !req.regions.is_empty())
+            .map_or(0, |req| req.regions[0].compute_size());
+        let mut check_leader_rpcs = Vec::with_capacity(store_req_map.len());
+        for (store_id, req) in store_req_map {
+            if req.regions.is_empty() {
+                continue;
+            }
+            let env = env.clone();
+            let to_store = *store_id;
+            let region_num = req.regions.len() as u32;
+            CHECK_LEADER_REQ_SIZE_HISTOGRAM.observe((leader_info_size * region_num) as f64);
+            CHECK_LEADER_REQ_ITEM_COUNT_HISTOGRAM.observe(region_num as f64);
+
+            // Check leadership for `regions` on `to_store`.
+            let rpc = async move {
+                PENDING_CHECK_LEADER_REQ_COUNT.inc();
+                defer!(PENDING_CHECK_LEADER_REQ_COUNT.dec());
+                let client = get_tikv_client(to_store, pd_client, security_mgr, env, tikv_clients)
+                    .await
+                    .map_err(|e| (to_store, e.retryable(), format!("[get tikv client] {}", e)))?;
+
+                // Set min_ts in the request.
+                req.set_ts(min_ts.into_inner());
+                let slow_timer = SlowTimer::default();
+                defer!({
+                    slow_log!(
+                        T
+                        slow_timer,
+                        "check leader rpc costs too long, to_store: {}",
+                        to_store
+                    );
+                    let elapsed = slow_timer.saturating_elapsed();
+                    RTS_CHECK_LEADER_DURATION_HISTOGRAM_VEC
+                        .with_label_values(&["rpc"])
+                        .observe(elapsed.as_secs_f64());
+                });
+
+                let rpc = match client.check_leader_async(req) {
+                    Ok(rpc) => rpc,
+                    Err(GrpcError::RpcFailure(status))
+                        if status.code() == RpcStatusCode::UNIMPLEMENTED =>
+                    {
+                        // Some stores like TiFlash don't implement it.
+                        return Ok((to_store, CheckLeaderResponse::default()));
+                    }
+                    Err(e) => return Err((to_store, true, format!("[rpc create failed]{}", e))),
+                };
+
+                PENDING_CHECK_LEADER_REQ_SENT_COUNT.inc();
+                defer!(PENDING_CHECK_LEADER_REQ_SENT_COUNT.dec());
+                let timeout = DEFAULT_CHECK_LEADER_TIMEOUT_DURATION;
+                let resp = tokio::time::timeout(timeout, rpc)
+                    .map_err(|e| (to_store, true, format!("[timeout] {}", e)))
+                    .await?
+                    .map_err(|e| (to_store, true, format!("[rpc failed] {}", e)))?;
+                Ok((to_store, resp))
+            }
+            .boxed();
+            check_leader_rpcs.push(rpc);
+        }
+        let start = Instant::now_coarse();
+
+        defer!({
+            RTS_CHECK_LEADER_DURATION_HISTOGRAM_VEC
+                .with_label_values(&["all"])
+                .observe(start.saturating_elapsed_secs());
+        });
+
+        let rpc_count = check_leader_rpcs.len();
+        for _ in 0..rpc_count {
+            // Use `select_all` to avoid the process getting blocked when some
+            // TiKVs were down.
+            let (res, _, remains) = select_all(check_leader_rpcs).await;
+            check_leader_rpcs = remains;
+            match res {
+                Ok((to_store, resp)) => {
+                    for region_id in resp.regions {
+                        if let Some(prog) = progresses.get_mut(&region_id) {
+                            if prog.resolved {
+                                continue;
+                            }
+                            prog.resps.push(to_store);
+                            if region_has_quorum(&prog.peers, &prog.resps) {
+                                prog.resolved = true;
+                                valid_regions.insert(region_id);
+                            }
+                        }
+                    }
                 }
-            })
-            .map(|(store_id, resp)| {
-                resp.regions
-                    .into_iter()
-                    .map(move |region_id| (store_id, region_id))
-            })
-            .flatten()
-            .for_each(|(store_id, region_id)| {
-                resp_map.entry(region_id).or_default().push(store_id);
-            });
-        resp_map
-            .into_iter()
-            .filter_map(|(region_id, stores)| {
-                if region_has_quorum(&region_map[&region_id], &stores) {
-                    Some(region_id)
+                Err((to_store, reconnect, err)) => {
+                    info!("check leader failed"; "error" => ?err, "to_store" => to_store);
+                    if reconnect {
+                        self.tikv_clients.lock().await.remove(&to_store);
+                    }
+                }
+            }
+            if valid_regions.len() >= progresses.len() {
+                break;
+            }
+        }
+        let res: Vec<u64> = self.valid_regions.drain().collect();
+        if res.len() != checking_regions.len() {
+            warn!(
+                "check leader returns valid regions different from checking regions";
+                "valid_regions" => res.len(),
+                "checking_regions" => checking_regions.len(),
+            );
+        }
+        res
+    }
+}
+
+pub async fn resolve_by_raft<T, E>(regions: Vec<u64>, min_ts: TimeStamp, cdc_handle: T) -> Vec<u64>
+where
+    T: 'static + CdcHandle<E>,
+    E: KvEngine,
+{
+    let mut reqs = Vec::with_capacity(regions.len());
+    for region_id in regions {
+        let cdc_handle_clone = cdc_handle.clone();
+        let req = async move {
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            let callback = Callback::read(Box::new(move |resp| {
+                let resp = if resp.response.get_header().has_error() {
+                    None
                 } else {
-                    debug!("resolved-ts cannot get quorum for resolved ts"; "region_id" => region_id, "stores" => ?stores, "region" => ?&region_map[&region_id]);
-                    None
+                    Some(region_id)
+                };
+                if tx.send(resp).is_err() {
+                    error!("cdc send tso response failed"; "region_id" => region_id);
                 }
+            }));
+            if let Err(e) = cdc_handle_clone.check_leadership(region_id, callback) {
+                warn!("cdc send LeaderCallback failed"; "err" => ?e, "min_ts" => min_ts);
+                return None;
+            }
+            rx.await.unwrap_or(None)
+        };
+        reqs.push(req);
+    }
+
+    let resps = futures::future::join_all(reqs).await;
+    resps.into_iter().flatten().collect::<Vec<u64>>()
+}
+
+fn region_has_quorum(peers: &[Peer], stores: &[u64]) -> bool {
+    let mut voters = 0;
+    let mut incoming_voters = 0;
+    let mut demoting_voters = 0;
+
+    let mut resp_voters = 0;
+    let mut resp_incoming_voters = 0;
+    let mut resp_demoting_voters = 0;
+
+    peers.iter().for_each(|peer| {
+        let mut in_resp = false;
+        for store_id in stores {
+            if *store_id == peer.store_id {
+                in_resp = true;
+                break;
+            }
+        }
+        match peer.get_role() {
+            PeerRole::Voter => {
+                voters += 1;
+                if in_resp {
+                    resp_voters += 1;
+                }
+            }
+            PeerRole::IncomingVoter => {
+                incoming_voters += 1;
+                if in_resp {
+                    resp_incoming_voters += 1;
+                }
+            }
+            PeerRole::DemotingVoter => {
+                demoting_voters += 1;
+                if in_resp {
+                    resp_demoting_voters += 1;
+                }
+            }
+            PeerRole::Learner => (),
+        }
+    });
+
+    let has_incoming_majority =
+        (resp_voters + resp_incoming_voters) >= ((voters + incoming_voters) / 2 + 1);
+    let has_demoting_majority =
+        (resp_voters + resp_demoting_voters) >= ((voters + demoting_voters) / 2 + 1);
+
+    has_incoming_majority && has_demoting_majority
+}
+
+static CONN_ID: AtomicI32 = AtomicI32::new(0);
+
+async fn get_tikv_client(
+    store_id: u64,
+    pd_client: &Arc<dyn PdClient>,
+    security_mgr: &SecurityManager,
+    env: Arc<Environment>,
+    tikv_clients: &Mutex<HashMap<u64, TikvClient>>,
+) -> pd_client::Result<TikvClient> {
+    {
+        let clients = tikv_clients.lock().await;
+        if let Some(client) = clients.get(&store_id).cloned() {
+            return Ok(client);
+        }
+    }
+    let timeout = DEFAULT_CHECK_LEADER_TIMEOUT_DURATION;
+    let store = tokio::time::timeout(timeout, pd_client.get_store_async(store_id))
+        .await
+        .map_err(|e| pd_client::Error::Other(Box::new(e)))
+        .flatten()?;
+    let mut clients = tikv_clients.lock().await;
+    let start = Instant::now_coarse();
+    // hack: so it's different args, grpc will always create a new connection.
+    // the check leader requests may be large but not frequent, compress it to
+    // reduce the traffic.
+    let cb = ChannelBuilder::new(env.clone())
+        .raw_cfg_int(
+            CString::new("random id").unwrap(),
+            CONN_ID.fetch_add(1, Ordering::SeqCst),
+        )
+        .default_compression_algorithm(CompressionAlgorithms::GRPC_COMPRESS_GZIP)
+        .default_gzip_compression_level(DEFAULT_GRPC_GZIP_COMPRESSION_LEVEL)
+        .default_grpc_min_message_size_to_compress(DEFAULT_GRPC_MIN_MESSAGE_SIZE_TO_COMPRESS);
+
+    let channel = security_mgr.connect(cb, &store.peer_address);
+    let cli = TikvClient::new(channel);
+    clients.insert(store_id, cli.clone());
+    RTS_TIKV_CLIENT_INIT_DURATION_HISTOGRAM.observe(start.saturating_elapsed_secs());
+    Ok(cli)
+}
+
+struct RegionProgress {
+    resolved: bool,
+    peers: Vec<Peer>,
+    resps: Vec<u64>,
+}
+
+impl RegionProgress {
+    fn new(len: usize) -> Self {
+        RegionProgress {
+            resolved: false,
+            peers: Vec::with_capacity(len),
+            resps: Vec::with_capacity(len),
+        }
+    }
+    fn clear(&mut self) {
+        self.resolved = false;
+        self.peers.clear();
+        self.resps.clear();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        sync::{
+            mpsc::{channel, Receiver, Sender},
+            Arc,
+        },
+        time::Duration,
+    };
+
+    use grpcio::{self, ChannelBuilder, EnvBuilder, Server, ServerBuilder};
+    use kvproto::{metapb::Region, tikvpb::Tikv, tikvpb_grpc::create_tikv};
+    use pd_client::PdClient;
+    use raftstore::store::util::RegionReadProgress;
+    use tikv_util::store::new_peer;
+
+    use super::*;
+
+    #[derive(Clone)]
+    struct MockTikv {
+        req_tx: Sender<CheckLeaderRequest>,
+    }
+
+    impl Tikv for MockTikv {
+        fn check_leader(
+            &mut self,
+            ctx: grpcio::RpcContext<'_>,
+            req: CheckLeaderRequest,
+            sink: ::grpcio::UnarySink<CheckLeaderResponse>,
+        ) {
+            self.req_tx.send(req).unwrap();
+            ctx.spawn(async {
+                sink.success(CheckLeaderResponse::default()).await.unwrap();
             })
-            .collect()
+        }
+    }
+
+    struct MockPdClient {}
+    impl PdClient for MockPdClient {}
+
+    fn new_rpc_suite(env: Arc<Environment>) -> (Server, TikvClient, Receiver<CheckLeaderRequest>) {
+        let (tx, rx) = channel();
+        let tikv_service = MockTikv { req_tx: tx };
+        let builder = ServerBuilder::new(env.clone()).register_service(create_tikv(tikv_service));
+        let mut server = builder.bind("127.0.0.1", 0).build().unwrap();
+        server.start();
+        let (_, port) = server.bind_addrs().next().unwrap();
+        let addr = format!("127.0.0.1:{}", port);
+        let channel = ChannelBuilder::new(env).connect(&addr);
+        let client = TikvClient::new(channel);
+        (server, client, rx)
+    }
+
+    #[tokio::test]
+    async fn test_resolve_leader_request_size() {
+        let env = Arc::new(EnvBuilder::new().build());
+        let (mut server, tikv_client, rx) = new_rpc_suite(env.clone());
+
+        let mut region1 = Region::default();
+        region1.id = 1;
+        region1.peers.push(new_peer(1, 1));
+        region1.peers.push(new_peer(2, 11));
+        let progress1 = RegionReadProgress::new(&region1, 1, 1, 1);
+        progress1.update_leader_info(1, 1, &region1);
+
+        let mut region2 = Region::default();
+        region2.id = 2;
+        region2.peers.push(new_peer(1, 2));
+        region2.peers.push(new_peer(2, 22));
+        let progress2 = RegionReadProgress::new(&region2, 1, 1, 2);
+        progress2.update_leader_info(2, 2, &region2);
+
+        let mut leader_resolver = LeadershipResolver::new(
+            1, // store id
+            Arc::new(MockPdClient {}),
+            env.clone(),
+            Arc::new(SecurityManager::default()),
+            RegionReadProgressRegistry::new(),
+            Duration::from_secs(1),
+        );
+        leader_resolver
+            .tikv_clients
+            .lock()
+            .await
+            .insert(2 /* store id */, tikv_client);
+        leader_resolver
+            .region_read_progress
+            .insert(1, Arc::new(progress1));
+        leader_resolver
+            .region_read_progress
+            .insert(2, Arc::new(progress2));
+
+        leader_resolver.resolve(vec![1, 2], TimeStamp::new(1)).await;
+        let req = rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        assert_eq!(req.regions.len(), 2);
+
+        // Checking one region only send 1 region in request.
+        leader_resolver.resolve(vec![1], TimeStamp::new(1)).await;
+        let req = rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        assert_eq!(req.regions.len(), 1);
+
+        // Checking zero region does not send request.
+        leader_resolver.resolve(vec![], TimeStamp::new(1)).await;
+        rx.recv_timeout(Duration::from_secs(1)).unwrap_err();
+
+        let _ = server.shutdown().await;
     }
 }

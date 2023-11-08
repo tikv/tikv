@@ -2,129 +2,140 @@
 
 //! A module contains test cases for lease read on Raft leader.
 
-use std::sync::atomic::*;
-use std::sync::{mpsc, Arc, Mutex};
-use std::time::*;
-use std::{mem, thread};
+use std::{
+    mem,
+    sync::{atomic::*, mpsc, Arc, Mutex},
+    thread,
+    time::Duration,
+};
 
-use kvproto::metapb;
-use kvproto::raft_serverpb::RaftLocalState;
-use raft::eraftpb::{ConfChangeType, MessageType};
-
-use engine_rocks::{Compat, RocksSnapshot};
-use engine_traits::Peekable;
+use engine_rocks::RocksSnapshot;
+use kvproto::{metapb, raft_serverpb::RaftMessage};
+use more_asserts::assert_le;
 use pd_client::PdClient;
+use raft::eraftpb::{ConfChangeType, MessageType};
 use raftstore::store::{Callback, RegionSnapshot};
 use test_raftstore::*;
-use tikv_util::config::*;
-use tikv_util::HandyRwLock;
+use test_raftstore_macro::test_case;
+use tikv_util::{config::*, future::block_on_timeout, time::Instant, HandyRwLock};
 
 // A helper function for testing the lease reads and lease renewing.
 // The leader keeps a record of its leader lease, and uses the system's
 // monotonic raw clocktime to check whether its lease has expired.
 // If the leader lease has not expired, when the leader receives a read request
-//   1. with `read_quorum == false`, the leader will serve it by reading local data.
-//      This way of handling request is called "lease read".
-//   2. with `read_quorum == true`, the leader will serve it by doing index read (see raft's doc).
-//      This way of handling request is called "index read".
-// If the leader lease has expired, leader will serve both kinds of requests by index read, and
-// propose an no-op entry to raft quorum to renew the lease.
-// No matter what status the leader lease is, a write request is always served by writing a Raft
-// log to the Raft quorum. It is called "consistent write". All writes are consistent writes.
-// Every time the leader performs a consistent read/write, it will try to renew its lease.
-fn test_renew_lease<T: Simulator>(cluster: &mut Cluster<T>) {
-    // Avoid triggering the log compaction in this test case.
-    cluster.cfg.raft_store.raft_log_gc_threshold = 100;
-    // Increase the Raft tick interval to make this test case running reliably.
-    // Use large election timeout to make leadership stable.
-    configure_for_lease_read(cluster, Some(50), Some(10_000));
-    // Override max leader lease to 2 seconds.
-    let max_lease = Duration::from_secs(2);
-    cluster.cfg.raft_store.raft_store_max_leader_lease = ReadableDuration(max_lease);
+//   - with `read_quorum == false`, the leader will serve it by reading local
+// data. This way of handling request is called "lease read".
+//   - with `read_quorum == true`, the leader will serve it by doing index read
+// (see raft's doc). This way of handling request is called "index read".
+// If the leader lease has expired, leader will serve both kinds of requests by
+// index read, and propose an no-op entry to raft quorum to renew the lease.
+// No matter what status the leader lease is, a write request is always served
+// by writing a Raft log to the Raft quorum. It is called "consistent write".
+// All writes are consistent writes. Every time the leader performs a consistent
+// read/write, it will try to renew its lease.
+macro_rules! test_renew_lease {
+    ($cluster:expr) => {
+        // Avoid triggering the log compaction in this test case.
+        $cluster.cfg.raft_store.raft_log_gc_threshold = 100;
+        // Increase the Raft tick interval to make this test case running reliably.
+        // Use large election timeout to make leadership stable.
+        configure_for_lease_read(&mut $cluster.cfg, Some(50), Some(10_000));
+        // Override max leader lease to 2 seconds.
+        let max_lease = Duration::from_secs(2);
+        $cluster.cfg.raft_store.raft_store_max_leader_lease = ReadableDuration(max_lease);
+        $cluster.cfg.raft_store.check_leader_lease_interval = ReadableDuration::hours(10);
+        $cluster.cfg.raft_store.renew_leader_lease_advance_duration = ReadableDuration::secs(0);
 
-    let node_id = 1u64;
-    let store_id = 1u64;
-    let peer = new_peer(store_id, node_id);
-    cluster.pd_client.disable_default_operator();
-    let region_id = cluster.run_conf_change();
+        let node_id = 1u64;
+        let store_id = 1u64;
+        let peer = new_peer(store_id, node_id);
+        $cluster.pd_client.disable_default_operator();
+        let region_id = $cluster.run_conf_change();
 
-    let key = b"k";
-    cluster.must_put(key, b"v0");
-    for id in 2..=cluster.engines.len() as u64 {
-        cluster.pd_client.must_add_peer(region_id, new_peer(id, id));
-        must_get_equal(&cluster.get_engine(id), key, b"v0");
-    }
+        let key = b"k";
+        $cluster.must_put(key, b"v0");
+        for id in 2..=$cluster.engines.len() as u64 {
+            $cluster
+                .pd_client
+                .must_add_peer(region_id, new_peer(id, id));
+            must_get_equal(&$cluster.get_engine(id), key, b"v0");
+        }
 
-    // Write the initial value for a key.
-    let key = b"k";
-    cluster.must_put(key, b"v1");
-    // Force `peer` to become leader.
-    let region = cluster.get_region(key);
-    let region_id = region.get_id();
-    cluster.must_transfer_leader(region_id, peer.clone());
-    let engine = cluster.get_raft_engine(store_id);
-    let state_key = keys::raft_state_key(region_id);
-    let state: RaftLocalState = engine.c().get_msg(&state_key).unwrap().unwrap();
-    let last_index = state.get_last_index();
+        // Write the initial value for a key.
+        let key = b"k";
+        $cluster.must_put(key, b"v1");
+        // Force `peer` to become leader.
+        let region = $cluster.get_region(key);
+        let region_id = region.get_id();
+        $cluster.must_transfer_leader(region_id, peer.clone());
+        let state = $cluster.raft_local_state(region_id, store_id);
+        let last_index = state.get_last_index();
 
-    let detector = LeaseReadFilter::default();
-    cluster.add_send_filter(CloneFilterFactory(detector.clone()));
+        let detector = LeaseReadFilter::default();
+        $cluster.add_send_filter(CloneFilterFactory(detector.clone()));
 
-    // Issue a read request and check the value on response.
-    must_read_on_peer(cluster, peer.clone(), region.clone(), key, b"v1");
-    assert_eq!(detector.ctx.rl().len(), 0);
+        // Issue a read request and check the value on response.
+        must_read_on_peer(&mut $cluster, peer.clone(), region.clone(), key, b"v1");
+        assert_eq!(detector.ctx.rl().len(), 0);
 
-    let mut expect_lease_read = 0;
+        let mut expect_lease_read = 0;
 
-    if cluster.engines.len() > 1 {
+        if $cluster.engines.len() > 1 {
+            // Wait for the leader lease to expire.
+            thread::sleep(max_lease);
+
+            // Issue a read request and check the value on response.
+            must_read_on_peer(&mut $cluster, peer.clone(), region.clone(), key, b"v1");
+
+            // Check if the leader does a index read and renewed its lease.
+            assert_eq!($cluster.leader_of_region(region_id), Some(peer.clone()));
+            expect_lease_read += 1;
+            assert_eq!(detector.ctx.rl().len(), expect_lease_read);
+        }
+
         // Wait for the leader lease to expire.
         thread::sleep(max_lease);
 
+        // Issue a write request.
+        $cluster.must_put(key, b"v2");
+
+        // Check if the leader has renewed its lease so that it can do lease read.
+        assert_eq!($cluster.leader_of_region(region_id), Some(peer.clone()));
+        let state = $cluster.raft_local_state(region_id, store_id);
+        assert_eq!(state.get_last_index(), last_index + 1);
+
         // Issue a read request and check the value on response.
-        must_read_on_peer(cluster, peer.clone(), region.clone(), key, b"v1");
+        must_read_on_peer(&mut $cluster, peer, region, key, b"v2");
 
-        // Check if the leader does a index read and renewed its lease.
-        assert_eq!(cluster.leader_of_region(region_id), Some(peer.clone()));
-        expect_lease_read += 1;
+        // Check if the leader does a local read.
         assert_eq!(detector.ctx.rl().len(), expect_lease_read);
-    }
-
-    // Wait for the leader lease to expire.
-    thread::sleep(max_lease);
-
-    // Issue a write request.
-    cluster.must_put(key, b"v2");
-
-    // Check if the leader has renewed its lease so that it can do lease read.
-    assert_eq!(cluster.leader_of_region(region_id), Some(peer.clone()));
-    let state: RaftLocalState = engine.c().get_msg(&state_key).unwrap().unwrap();
-    assert_eq!(state.get_last_index(), last_index + 1);
-
-    // Issue a read request and check the value on response.
-    must_read_on_peer(cluster, peer, region, key, b"v2");
-
-    // Check if the leader does a local read.
-    assert_eq!(detector.ctx.rl().len(), expect_lease_read);
+    };
 }
 
-#[test]
+#[test_case(test_raftstore::new_node_cluster)]
+#[test_case(test_raftstore_v2::new_node_cluster)]
 fn test_one_node_renew_lease() {
     let count = 1;
-    let mut cluster = new_node_cluster(0, count);
-    test_renew_lease(&mut cluster);
+    let mut cluster = new_cluster(0, count);
+    test_renew_lease!(cluster);
 }
 
-#[test]
+#[test_case(test_raftstore::new_node_cluster)]
+#[test_case(test_raftstore_v2::new_node_cluster)]
 fn test_node_renew_lease() {
     let count = 3;
-    let mut cluster = new_node_cluster(0, count);
-    test_renew_lease(&mut cluster);
+    let mut cluster = new_cluster(0, count);
+    test_renew_lease!(cluster);
 }
 
-// A helper function for testing the lease reads when the lease has expired.
+// Test lease reads when the lease has expired.
 // If the leader lease has expired, there may be new leader elected and
 // the old leader will fail to renew its lease.
-fn test_lease_expired<T: Simulator>(cluster: &mut Cluster<T>) {
+#[test_case(test_raftstore::new_node_cluster)]
+#[test_case(test_raftstore_v2::new_node_cluster)]
+fn test_node_lease_expired() {
+    let count = 3;
+    let mut cluster = new_cluster(0, count);
     let pd_client = Arc::clone(&cluster.pd_client);
     // Disable default max peer number check.
     pd_client.disable_default_operator();
@@ -132,7 +143,7 @@ fn test_lease_expired<T: Simulator>(cluster: &mut Cluster<T>) {
     // Avoid triggering the log compaction in this test case.
     cluster.cfg.raft_store.raft_log_gc_threshold = 100;
     // Increase the Raft tick interval to make this test case running reliably.
-    let election_timeout = configure_for_lease_read(cluster, Some(50), None);
+    let election_timeout = configure_for_lease_read(&mut cluster.cfg, Some(50), None);
 
     let node_id = 3u64;
     let store_id = 3u64;
@@ -154,26 +165,23 @@ fn test_lease_expired<T: Simulator>(cluster: &mut Cluster<T>) {
     thread::sleep(election_timeout * 2);
 
     // Issue a read request and check the value on response.
-    must_error_read_on_peer(cluster, peer, region, key, Duration::from_secs(1));
+    must_error_read_on_peer(&mut cluster, peer, region, key, Duration::from_secs(1));
 }
 
-#[test]
-fn test_node_lease_expired() {
+// Test leader holds unsafe lease during the leader transfer procedure.
+// When leader transfer procedure aborts later, the leader would use and update
+// the lease as usual.
+#[test_case(test_raftstore::new_node_cluster)]
+#[test_case(test_raftstore_v2::new_node_cluster)]
+fn test_node_lease_unsafe_during_leader_transfers() {
     let count = 3;
-    let mut cluster = new_node_cluster(0, count);
-    test_lease_expired(&mut cluster);
-}
-
-// A helper function for testing the leader holds unsafe lease during the leader transfer
-// procedure, so it will not do lease read.
-// Since raft will not propose any request during leader transfer procedure, consistent read/write
-// could not be performed neither.
-// When leader transfer procedure aborts later, the leader would use and update the lease as usual.
-fn test_lease_unsafe_during_leader_transfers<T: Simulator>(cluster: &mut Cluster<T>) {
+    let mut cluster = new_cluster(0, count);
     // Avoid triggering the log compaction in this test case.
     cluster.cfg.raft_store.raft_log_gc_threshold = 100;
     // Increase the Raft tick interval to make this test case running reliably.
-    let election_timeout = configure_for_lease_read(cluster, Some(500), None);
+    let election_timeout = configure_for_lease_read(&mut cluster.cfg, Some(500), Some(5));
+    cluster.cfg.raft_store.check_leader_lease_interval = ReadableDuration::hours(10);
+    cluster.cfg.raft_store.renew_leader_lease_advance_duration = ReadableDuration::secs(0);
 
     let store_id = 1u64;
     let peer = new_peer(store_id, 1);
@@ -200,23 +208,22 @@ fn test_lease_unsafe_during_leader_transfers<T: Simulator>(cluster: &mut Cluster
     cluster.must_transfer_leader(region_id, peer.clone());
 
     // Issue a read request and check the value on response.
-    must_read_on_peer(cluster, peer.clone(), region.clone(), key, b"v1");
+    must_read_on_peer(&mut cluster, peer.clone(), region.clone(), key, b"v1");
 
-    let engine = cluster.get_raft_engine(store_id);
-    let state_key = keys::raft_state_key(region_id);
-    let state: RaftLocalState = engine.c().get_msg(&state_key).unwrap().unwrap();
+    let state = cluster.raft_local_state(region_id, store_id);
     let last_index = state.get_last_index();
 
     // Check if the leader does a local read.
-    must_read_on_peer(cluster, peer.clone(), region.clone(), key, b"v1");
-    let state: RaftLocalState = engine.c().get_msg(&state_key).unwrap().unwrap();
+    must_read_on_peer(&mut cluster, peer.clone(), region.clone(), key, b"v1");
+    let state = cluster.raft_local_state(region_id, store_id);
     assert_eq!(state.get_last_index(), last_index);
     assert_eq!(detector.ctx.rl().len(), 0);
 
     // Ensure peer 3 is ready to transfer leader.
     must_get_equal(&cluster.get_engine(3), key, b"v1");
 
-    // Drop MsgTimeoutNow to `peer3` so that the leader transfer procedure would abort later.
+    // Drop MsgTimeoutNow to `peer3` so that the leader transfer procedure would
+    // abort later.
     cluster.add_send_filter(CloneFilterFactory(
         RegionPacketFilter::new(region_id, peer3_store_id)
             .msg_type(MessageType::MsgTimeoutNow)
@@ -226,71 +233,74 @@ fn test_lease_unsafe_during_leader_transfers<T: Simulator>(cluster: &mut Cluster
     // Issue a transfer leader request to transfer leader from `peer` to `peer3`.
     cluster.transfer_leader(region_id, peer3);
 
-    // Delay a while to ensure transfer leader procedure is triggered inside raft module.
+    // Delay a while to ensure transfer leader procedure is triggered inside raft
+    // module.
     thread::sleep(election_timeout / 2);
 
     // Issue a read request and it will fall back to read index.
-    must_read_on_peer(cluster, peer.clone(), region.clone(), key, b"v1");
+    must_read_on_peer(&mut cluster, peer.clone(), region.clone(), key, b"v1");
     assert_eq!(detector.ctx.rl().len(), 1);
 
     // And read index should not update lease.
-    must_read_on_peer(cluster, peer.clone(), region.clone(), key, b"v1");
+    must_read_on_peer(&mut cluster, peer.clone(), region.clone(), key, b"v1");
     assert_eq!(detector.ctx.rl().len(), 2);
 
     // Make sure the leader transfer procedure timeouts.
     thread::sleep(election_timeout * 2);
 
-    // Then the leader transfer procedure aborts, now the leader could do lease read or consistent
-    // read/write and renew/reuse the lease as usual.
+    // Then the leader transfer procedure aborts, now the leader could do lease read
+    // or consistent read/write and renew/reuse the lease as usual.
 
     // Issue a read request and check the value on response.
-    must_read_on_peer(cluster, peer.clone(), region.clone(), key, b"v1");
+    must_read_on_peer(&mut cluster, peer.clone(), region.clone(), key, b"v1");
     assert_eq!(detector.ctx.rl().len(), 3);
 
     // Check if the leader also propose an entry to renew its lease.
-    let state: RaftLocalState = engine.c().get_msg(&state_key).unwrap().unwrap();
-    assert_eq!(state.get_last_index(), last_index + 1);
+    cluster.wait_last_index(region_id, store_id, last_index + 1, Duration::from_secs(5));
 
-    // wait some time for the proposal to be applied.
-    thread::sleep(election_timeout / 2);
+    // Wait some time for the proposal to be applied.
+    let now = Instant::now();
+    loop {
+        thread::sleep(Duration::from_millis(100));
+        if now.saturating_elapsed() > election_timeout * 2 {
+            panic!("store {} must apply to {}", store_id, last_index + 1);
+        }
+        let apply_state = cluster.apply_state(region_id, store_id);
+        if apply_state.applied_index > last_index {
+            break;
+        }
+    }
 
     // Check if the leader does a local read.
-    must_read_on_peer(cluster, peer, region, key, b"v1");
-    let state: RaftLocalState = engine.c().get_msg(&state_key).unwrap().unwrap();
+    must_read_on_peer(&mut cluster, peer, region, key, b"v1");
+    let state = cluster.raft_local_state(region_id, store_id);
     assert_eq!(state.get_last_index(), last_index + 1);
     assert_eq!(detector.ctx.rl().len(), 3);
 }
 
-#[test]
-fn test_node_lease_unsafe_during_leader_transfers() {
-    let count = 3;
-    let mut cluster = new_node_cluster(0, count);
-    test_lease_unsafe_during_leader_transfers(&mut cluster);
-}
-
-#[test]
+#[test_case(test_raftstore::new_node_cluster)]
+// #[test_case(test_raftstore_v2::new_node_cluster)]
+// TODO: batch get snapshot is not supported in raftstore v2 currently.
+//       https://github.com/tikv/tikv/issues/14876
 fn test_node_batch_id_in_lease() {
     let count = 3;
-    let mut cluster = new_node_cluster(0, count);
-    test_batch_id_in_lease(&mut cluster);
-}
-
-fn test_batch_id_in_lease<T: Simulator>(cluster: &mut Cluster<T>) {
+    let mut cluster = new_cluster(0, count);
     let pd_client = Arc::clone(&cluster.pd_client);
     // Disable default max peer number check.
     pd_client.disable_default_operator();
 
     // Avoid triggering the log compaction in this test case.
     cluster.cfg.raft_store.raft_log_gc_threshold = 100;
+    cluster.cfg.raft_store.check_leader_lease_interval = ReadableDuration::hours(10);
 
     // Increase the Raft tick interval to make this test case running reliably.
-    let election_timeout = configure_for_lease_read(cluster, Some(100), None);
+    let election_timeout = configure_for_lease_read(&mut cluster.cfg, Some(100), None);
     cluster.run();
 
     let (split_key1, split_key2) = (b"k22", b"k44");
     let keys = vec![b"k11", b"k33", b"k55"];
-    let _ = keys.iter().map(|key| {
-        cluster.must_put(*key, b"v1");
+    let _ = keys.iter().map(|&key| {
+        cluster.must_put(key, b"v1");
     });
 
     let region = pd_client.get_region(keys[0]).unwrap();
@@ -336,7 +346,7 @@ fn test_batch_id_in_lease<T: Simulator>(cluster: &mut Cluster<T>) {
         .zip(regions)
         .map(|(p, r)| (p.clone(), r))
         .collect();
-    let responses = batch_read_on_peer(cluster, &requests);
+    let responses = batch_read_on_peer(&mut cluster, &requests);
     let snaps: Vec<RegionSnapshot<RocksSnapshot>> = responses
         .into_iter()
         .map(|response| {
@@ -345,7 +355,8 @@ fn test_batch_id_in_lease<T: Simulator>(cluster: &mut Cluster<T>) {
         })
         .collect();
 
-    // Snapshot 0 and 1 will use one RocksSnapshot because we have renew their lease.
+    // Snapshot 0 and 1 will use one RocksSnapshot because we have renew their
+    // lease.
     assert!(std::ptr::eq(
         snaps[0].get_snapshot(),
         snaps[1].get_snapshot()
@@ -357,7 +368,7 @@ fn test_batch_id_in_lease<T: Simulator>(cluster: &mut Cluster<T>) {
 
     // make sure that region 2 could renew lease.
     cluster.must_put(b"k55", b"v2");
-    let responses = batch_read_on_peer(cluster, &requests);
+    let responses = batch_read_on_peer(&mut cluster, &requests);
     let snaps2: Vec<RegionSnapshot<RocksSnapshot>> = responses
         .into_iter()
         .map(|response| {
@@ -380,14 +391,15 @@ fn test_batch_id_in_lease<T: Simulator>(cluster: &mut Cluster<T>) {
     ));
 }
 
-/// test whether the read index callback will be handled when a region is destroyed.
-/// If it's not handled properly, it will cause dead lock in transaction scheduler.
+/// test whether the read index callback will be handled when a region is
+/// destroyed. If it's not handled properly, it will cause dead lock in
+/// transaction scheduler.
 #[test]
 fn test_node_callback_when_destroyed() {
     let count = 3;
     let mut cluster = new_node_cluster(0, count);
     // Increase the election tick to make this test case running reliably.
-    configure_for_lease_read(&mut cluster, None, Some(50));
+    configure_for_lease_read(&mut cluster.cfg, None, Some(50));
     cluster.run();
     cluster.must_put(b"k1", b"v1");
     let leader = cluster.leader_of_region(1).unwrap();
@@ -415,7 +427,7 @@ fn test_node_callback_when_destroyed() {
     let get = new_get_cmd(b"k1");
     let mut req = new_request(1, epoch, vec![get], true);
     req.mut_header().set_peer(leader);
-    let (cb, rx) = make_cb(&req);
+    let (cb, mut rx) = make_cb(&req);
     cluster
         .sim
         .rl()
@@ -437,12 +449,13 @@ fn test_node_callback_when_destroyed() {
 }
 
 /// Test if the callback proposed by read index is cleared correctly.
-#[test]
+#[test_case(test_raftstore::new_server_cluster)]
+#[test_case(test_raftstore_v2::new_server_cluster)]
 fn test_lease_read_callback_destroy() {
     // Only server cluster can fake sending message successfully in raftstore layer.
-    let mut cluster = new_server_cluster(0, 3);
+    let mut cluster = new_cluster(0, 3);
     // Increase the Raft tick interval to make this test case running reliably.
-    let election_timeout = configure_for_lease_read(&mut cluster, Some(50), None);
+    let election_timeout = configure_for_lease_read(&mut cluster.cfg, Some(50), None);
     cluster.run();
     cluster.must_transfer_leader(1, new_peer(1, 1));
     cluster.must_put(b"k1", b"v1");
@@ -456,18 +469,19 @@ fn test_lease_read_callback_destroy() {
     cluster.must_put(b"k2", b"v2");
 }
 
-/// A read index request will be appended to waiting list when there is an on-going request
-/// to reduce heartbeat messages. But when leader is in suspect lease, requests should not
-/// be batched because lease can be expired at anytime.
+/// A read index request will be appended to waiting list when there is an
+/// on-going request to reduce heartbeat messages. But when leader is in suspect
+/// lease, requests should not be batched because lease can be expired at
+/// anytime.
 #[test]
 fn test_read_index_stale_in_suspect_lease() {
     let mut cluster = new_node_cluster(0, 3);
 
     // Increase the election tick to make this test case running reliably.
-    configure_for_lease_read(&mut cluster, Some(50), Some(10_000));
+    configure_for_lease_read(&mut cluster.cfg, Some(50), Some(10_000));
     let max_lease = Duration::from_secs(2);
     // Stop log compaction to transfer leader with filter easier.
-    configure_for_request_snapshot(&mut cluster);
+    configure_for_request_snapshot(&mut cluster.cfg);
     cluster.cfg.raft_store.raft_store_max_leader_lease = ReadableDuration(max_lease);
 
     cluster.pd_client.disable_default_operator();
@@ -476,15 +490,16 @@ fn test_read_index_stale_in_suspect_lease() {
     cluster.pd_client.must_add_peer(r1, new_peer(3, 3));
 
     let r1 = cluster.get_region(b"k1");
-    // Put and test again to ensure that peer 3 get the latest writes by message append
-    // instead of snapshot, so that transfer leader to peer 3 can 100% success.
+    // Put and test again to ensure that peer 3 get the latest writes by message
+    // append instead of snapshot, so that transfer leader to peer 3 can 100%
+    // success.
     cluster.must_put(b"k1", b"v1");
     must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
     cluster.must_put(b"k2", b"v2");
     must_get_equal(&cluster.get_engine(3), b"k2", b"v2");
     // Ensure peer 3 is ready to become leader.
-    let rx = async_read_on_peer(&mut cluster, new_peer(3, 3), r1.clone(), b"k2", true, true);
-    let resp = rx.recv_timeout(Duration::from_secs(3)).unwrap();
+    let resp_ch = async_read_on_peer(&mut cluster, new_peer(3, 3), r1.clone(), b"k2", true, true);
+    let resp = block_on_timeout(resp_ch, Duration::from_secs(3)).unwrap();
     assert!(!resp.get_header().has_error(), "{:?}", resp);
     assert_eq!(
         resp.get_responses()[0].get_get().get_value(),
@@ -509,7 +524,7 @@ fn test_read_index_stale_in_suspect_lease() {
             sim.async_command_on_node(
                 old_leader.get_id(),
                 read_request,
-                Callback::Read(Box::new(move |resp| tx.send(resp.response).unwrap())),
+                Callback::read(Box::new(move |resp| tx.send(resp.response).unwrap())),
             )
             .unwrap();
             rx
@@ -538,7 +553,7 @@ fn test_read_index_stale_in_suspect_lease() {
     // Unpark all pending messages and clear all filters.
     let router = cluster.sim.wl().get_router(old_leader.get_id()).unwrap();
     'LOOP: loop {
-        for raft_msg in mem::replace(dropped_msgs.lock().unwrap().as_mut(), vec![]) {
+        for raft_msg in mem::take::<Vec<_>>(dropped_msgs.lock().unwrap().as_mut()) {
             let msg_type = raft_msg.get_message().get_msg_type();
             if msg_type == MessageType::MsgHeartbeatResponse {
                 router.send_raft_message(raft_msg).unwrap();
@@ -561,10 +576,11 @@ fn test_read_index_stale_in_suspect_lease() {
     drop(cluster);
 }
 
-#[test]
+#[test_case(test_raftstore::new_node_cluster)]
+#[test_case(test_raftstore_v2::new_node_cluster)]
 fn test_local_read_cache() {
-    let mut cluster = new_node_cluster(0, 3);
-    configure_for_lease_read(&mut cluster, Some(50), None);
+    let mut cluster = new_cluster(0, 3);
+    configure_for_lease_read(&mut cluster.cfg, Some(50), None);
     cluster.pd_client.disable_default_operator();
     cluster.run();
     let pd_client = Arc::clone(&cluster.pd_client);
@@ -599,7 +615,7 @@ fn test_not_leader_read_lease() {
     // Avoid triggering the log compaction in this test case.
     cluster.cfg.raft_store.raft_log_gc_threshold = 100;
     // Increase the Raft tick interval to make this test case running reliably.
-    configure_for_lease_read(&mut cluster, Some(50), None);
+    configure_for_lease_read(&mut cluster.cfg, Some(50), None);
     let heartbeat_interval = cluster.cfg.raft_store.raft_heartbeat_interval();
 
     cluster.run();
@@ -632,7 +648,7 @@ fn test_not_leader_read_lease() {
         true,
     );
     req.mut_header().set_peer(new_peer(1, 1));
-    let (cb, rx) = make_cb(&req);
+    let (cb, mut rx) = make_cb(&req);
     cluster.sim.rl().async_command_on_node(1, req, cb).unwrap();
 
     cluster.must_transfer_leader(region_id, new_peer(3, 3));
@@ -641,19 +657,20 @@ fn test_not_leader_read_lease() {
 }
 
 /// Test whether read index is greater than applied index.
-/// 1. Add hearbeat msg filter.
+/// 1. Add heartbeat msg filter.
 /// 2. Propose a read index request.
 /// 3. Put a key and get the latest applied index.
 /// 4. Propose another read index request.
-/// 5. Remove the filter and check whether the latter read index is greater than applied index.
+/// 5. Remove the filter and check whether the latter read index is greater than
+/// applied index.
 ///
 /// In previous implementation, these two read index request will be batched and
-/// will get the same read index which breaks the correctness because the latter one
-/// is proposed after the applied index has increased and replied to client.
+/// will get the same read index which breaks the correctness because the latter
+/// one is proposed after the applied index has increased and replied to client.
 #[test]
 fn test_read_index_after_write() {
     let mut cluster = new_node_cluster(0, 3);
-    configure_for_lease_read(&mut cluster, Some(50), Some(10));
+    configure_for_lease_read(&mut cluster.cfg, Some(50), Some(10));
     let heartbeat_interval = cluster.cfg.raft_store.raft_heartbeat_interval();
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_operator();
@@ -666,7 +683,8 @@ fn test_read_index_after_write() {
     cluster.must_transfer_leader(region.get_id(), region_on_store1.clone());
 
     cluster.add_send_filter(IsolationFilterFactory::new(3));
-    // Add heartbeat msg filter to prevent the leader to reply the read index response.
+    // Add heartbeat msg filter to prevent the leader to reply the read index
+    // response.
     let filter = Box::new(
         RegionPacketFilter::new(region.get_id(), 2)
             .direction(Direction::Recv)
@@ -697,7 +715,7 @@ fn test_read_index_after_write() {
     );
     req.mut_header()
         .set_peer(new_peer(1, region_on_store1.get_id()));
-    let (cb, rx) = make_cb(&req);
+    let (cb, mut rx) = make_cb(&req);
     cluster.sim.rl().async_command_on_node(1, req, cb).unwrap();
 
     cluster.sim.wl().clear_recv_filters(2);
@@ -709,4 +727,185 @@ fn test_read_index_after_write() {
             .get_read_index()
             >= applied_index
     );
+}
+
+#[test_case(test_raftstore::new_node_cluster)]
+#[test_case(test_raftstore_v2::new_node_cluster)]
+fn test_infinite_lease() {
+    let mut cluster = new_cluster(0, 3);
+    // Avoid triggering the log compaction in this test case.
+    cluster.cfg.raft_store.raft_log_gc_threshold = 100;
+    // Increase the Raft tick interval to make this test case running reliably.
+    // Use large election timeout to make leadership stable.
+    configure_for_lease_read(&mut cluster.cfg, Some(50), Some(10_000));
+    // Override max leader lease to 2 seconds.
+    let max_lease = Duration::from_secs(2);
+    cluster.cfg.raft_store.raft_store_max_leader_lease = ReadableDuration(max_lease);
+
+    let peer = new_peer(1, 1);
+    cluster.pd_client.disable_default_operator();
+    let region_id = cluster.run_conf_change();
+
+    let key = b"k";
+    cluster.must_put(key, b"v0");
+    for id in 2..=cluster.engines.len() as u64 {
+        cluster.pd_client.must_add_peer(region_id, new_peer(id, id));
+        must_get_equal(&cluster.get_engine(id), key, b"v0");
+    }
+
+    // Force `peer` to become leader.
+    let region = cluster.get_region(key);
+    let region_id = region.get_id();
+    cluster.must_transfer_leader(region_id, peer.clone());
+
+    let detector = LeaseReadFilter::default();
+    cluster.add_send_filter(CloneFilterFactory(detector.clone()));
+
+    // Issue a read request and check the value on response.
+    must_read_on_peer(&mut cluster, peer.clone(), region.clone(), key, b"v0");
+    assert_eq!(detector.ctx.rl().len(), 0);
+
+    // Wait for the leader lease to expire.
+    thread::sleep(max_lease);
+
+    // Check if renew-lease-tick proposed a read index and renewed the leader lease.
+    assert_eq!(cluster.leader_of_region(region_id), Some(peer.clone()));
+    assert_eq!(detector.ctx.rl().len(), 1);
+    // Issue a read request to verify the lease.
+    must_read_on_peer(&mut cluster, peer.clone(), region, key, b"v0");
+    assert_eq!(cluster.leader_of_region(region_id), Some(peer));
+    assert_eq!(detector.ctx.rl().len(), 1);
+
+    // renew-lease-tick shouldn't propose any request if the leader lease is not
+    // expired.
+    for _ in 0..4 {
+        cluster.must_put(key, b"v0");
+        thread::sleep(max_lease / 4);
+    }
+    assert_eq!(detector.ctx.rl().len(), 1);
+}
+
+// LocalReader will try to renew lease in advance, so the region that has
+// continuous reads should not go to hibernate.
+#[test_case(test_raftstore::new_node_cluster)]
+#[test_case(test_raftstore_v2::new_node_cluster)]
+fn test_node_local_read_renew_lease() {
+    let mut cluster = new_cluster(0, 3);
+    cluster.cfg.raft_store.raft_store_max_leader_lease = ReadableDuration::millis(500);
+    let (base_tick_ms, election_ticks) = (50, 10);
+    configure_for_lease_read(&mut cluster.cfg, Some(50), Some(10));
+    cluster.pd_client.disable_default_operator();
+    let region_id = cluster.run_conf_change();
+
+    let key = b"k";
+    cluster.must_put(key, b"v0");
+    for id in 2..=3 {
+        cluster.pd_client.must_add_peer(region_id, new_peer(id, id));
+        must_get_equal(&cluster.get_engine(id), key, b"v0");
+    }
+
+    // Write the initial value for a key.
+    let key = b"k";
+    cluster.must_put(key, b"v1");
+    // Force `peer` to become leader.
+    let region = cluster.get_region(key);
+    let region_id = region.get_id();
+    let peer = new_peer(1, 1);
+    cluster.must_transfer_leader(region_id, peer.clone());
+
+    let detector = LeaseReadFilter::default();
+    cluster.add_send_filter(CloneFilterFactory(detector.clone()));
+
+    // election_timeout_ticks * base_tick_interval * 3
+    let hibernate_wait = election_ticks * Duration::from_millis(base_tick_ms) * 3;
+    let request_wait = Duration::from_millis(base_tick_ms);
+    let max_renew_lease_time = 3;
+    let round = hibernate_wait.as_millis() / request_wait.as_millis();
+    for i in 0..round {
+        // Issue a read request and check the value on response.
+        must_read_on_peer(&mut cluster, peer.clone(), region.clone(), key, b"v1");
+        // Plus 1 to prevent case failure when test machine is too slow.
+        assert_le!(detector.ctx.rl().len(), max_renew_lease_time + 1, "{}", i);
+        thread::sleep(request_wait);
+    }
+}
+
+#[test_case(test_raftstore::new_node_cluster)]
+#[test_case(test_raftstore_v2::new_node_cluster)]
+fn test_node_lease_restart_during_isolation() {
+    let mut cluster = new_cluster(0, 3);
+    let election_timeout = configure_for_lease_read(&mut cluster.cfg, Some(500), Some(3));
+    cluster.cfg.raft_store.allow_unsafe_vote_after_start = false;
+    cluster.run();
+    sleep_ms(election_timeout.as_millis() as _);
+    let mut region;
+    let start = Instant::now_coarse();
+    let key = b"k";
+    loop {
+        region = cluster.get_region(key);
+        if region.get_peers().len() == 3
+            && region
+                .get_peers()
+                .iter()
+                .all(|p| p.get_role() == metapb::PeerRole::Voter)
+        {
+            break;
+        }
+        if start.saturating_elapsed() > Duration::from_secs(5) {
+            panic!("timeout");
+        }
+    }
+
+    let region_id = region.get_id();
+    let peer1 = find_peer(&region, 1).unwrap();
+    let peer2 = find_peer(&region, 2).unwrap();
+
+    cluster.must_put(key, b"v0");
+    cluster.must_transfer_leader(region_id, peer1.clone());
+    must_read_on_peer(&mut cluster, peer1.clone(), region.clone(), key, b"v0");
+    cluster.must_transfer_leader(region_id, peer2.clone());
+    must_read_on_peer(&mut cluster, peer2.clone(), region.clone(), key, b"v0");
+
+    cluster.add_send_filter(IsolationFilterFactory::new(2));
+
+    // Restart node 3.
+    cluster.stop_node(3);
+    cluster.run_node(3).unwrap();
+
+    // Let peer1 start election.
+    let mut timeout = RaftMessage::default();
+    timeout.mut_message().set_to(peer1.get_id());
+    timeout
+        .mut_message()
+        .set_msg_type(MessageType::MsgTimeoutNow);
+    timeout
+        .mut_message()
+        .set_msg_type(MessageType::MsgTimeoutNow);
+    timeout.set_region_id(region.get_id());
+    timeout.set_from_peer(peer2.clone());
+    timeout.set_to_peer(peer1.clone());
+    timeout.set_region_epoch(region.get_region_epoch().clone());
+    cluster.send_raft_msg(timeout).unwrap();
+
+    let (tx, rx) = mpsc::channel();
+    let append_resp_notifier = Box::new(MessageTypeNotifier::new(
+        MessageType::MsgAppendResponse,
+        tx,
+        Arc::from(AtomicBool::new(true)),
+    ));
+    cluster.sim.wl().add_send_filter(3, append_resp_notifier);
+    let timeout = Duration::from_secs(5);
+    rx.recv_timeout(timeout).unwrap();
+
+    let mut put = new_request(
+        region.get_id(),
+        region.get_region_epoch().clone(),
+        vec![new_put_cmd(key, b"v1")],
+        false,
+    );
+    put.mut_header().set_peer(peer1.clone());
+    let resp = cluster.call_command(put, timeout).unwrap();
+    assert!(!resp.get_header().has_error(), "{:?}", resp);
+    must_read_on_peer(&mut cluster, peer1.clone(), region.clone(), key, b"v1");
+    must_error_read_on_peer(&mut cluster, peer2.clone(), region.clone(), key, timeout);
 }

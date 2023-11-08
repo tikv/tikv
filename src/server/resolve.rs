@@ -1,23 +1,44 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::fmt::{self, Display, Formatter};
-use std::sync::{Arc, Mutex};
-use std::time::Instant;
+use std::{
+    error::Error as StdError,
+    fmt::{self, Display, Formatter},
+    sync::{Arc, Mutex},
+};
 
 use collections::HashMap;
-use engine_rocks::RocksEngine;
 use kvproto::replication_modepb::ReplicationMode;
 use pd_client::{take_peer_address, PdClient};
-use raftstore::router::RaftStoreRouter;
 use raftstore::store::GlobalReplicationState;
-use tikv_util::worker::{Runnable, Scheduler, Worker};
+use thiserror::Error;
+use tikv_kv::RaftExtension;
+use tikv_util::{
+    info,
+    time::Instant,
+    worker::{Runnable, Scheduler, Worker},
+};
 
 use super::metrics::*;
-use super::Result;
 
 const STORE_ADDRESS_REFRESH_SECONDS: u64 = 60;
 
+#[derive(Debug, Error)]
+pub enum Error {
+    #[error("{0:?}")]
+    Other(#[from] Box<dyn StdError + Sync + Send>),
+    #[error("store {0} has been removed")]
+    StoreTombstone(u64),
+}
+
+pub type Result<T> = std::result::Result<T, Error>;
+
 pub type Callback = Box<dyn FnOnce(Result<String>) + Send>;
+
+pub fn store_address_refresh_interval_secs() -> u64 {
+    fail_point!("mock_store_refresh_interval_secs", |arg| arg
+        .map_or(0, |e| e.parse().unwrap()));
+    STORE_ADDRESS_REFRESH_SECONDS
+}
 
 /// A trait for resolving store addresses.
 pub trait StoreAddrResolver: Send + Clone {
@@ -43,27 +64,27 @@ struct StoreAddr {
 }
 
 /// A runner for resolving store addresses.
-struct Runner<T, RR>
+struct Runner<T, R>
 where
     T: PdClient,
-    RR: RaftStoreRouter<RocksEngine>,
+    R: RaftExtension,
 {
     pd_client: Arc<T>,
     store_addrs: HashMap<u64, StoreAddr>,
     state: Arc<Mutex<GlobalReplicationState>>,
-    router: RR,
+    router: R,
 }
 
-impl<T, RR> Runner<T, RR>
+impl<T, R> Runner<T, R>
 where
     T: PdClient,
-    RR: RaftStoreRouter<RocksEngine>,
+    R: RaftExtension,
 {
     fn resolve(&mut self, store_id: u64) -> Result<String> {
         if let Some(s) = self.store_addrs.get(&store_id) {
             let now = Instant::now();
-            let elapsed = now.duration_since(s.last_update);
-            if elapsed.as_secs() < STORE_ADDRESS_REFRESH_SECONDS {
+            let elapsed = now.saturating_duration_since(s.last_update);
+            if elapsed.as_secs() < store_address_refresh_interval_secs() {
                 return Ok(s.addr.clone());
             }
         }
@@ -87,9 +108,21 @@ where
             // it explicitly.
             Err(pd_client::Error::StoreTombstone(_)) => {
                 RESOLVE_STORE_COUNTER_STATIC.tombstone.inc();
-                return Err(box_err!("store {} has been removed", store_id));
+                self.router.report_store_maybe_tombstone(store_id);
+                return Err(Error::StoreTombstone(store_id));
             }
-            Err(e) => return Err(box_err!(e)),
+            Err(e) => {
+                // Tombstone store may be removed manually or automatically
+                // after 30 days of deletion. PD returns
+                // "invalid store ID %d, not found" for such store id.
+                // See https://github.com/tikv/pd/blob/v7.3.0/server/grpc_service.go#L777-L780
+                if format!("{:?}", e).contains("not found") {
+                    RESOLVE_STORE_COUNTER_STATIC.not_found.inc();
+                    info!("resolve store not found"; "store_id" => store_id);
+                    self.router.report_store_maybe_tombstone(store_id);
+                }
+                return Err(box_err!(e));
+            }
         };
         let mut group_id = None;
         let mut state = self.state.lock().unwrap();
@@ -116,16 +149,18 @@ where
     }
 }
 
-impl<T, RR> Runnable for Runner<T, RR>
+impl<T, R> Runnable for Runner<T, R>
 where
     T: PdClient,
-    RR: RaftStoreRouter<RocksEngine>,
+    R: RaftExtension,
 {
     type Task = Task;
     fn run(&mut self, task: Task) {
+        let start = Instant::now();
         let store_id = task.store_id;
         let resp = self.resolve(store_id);
-        (task.cb)(resp)
+        (task.cb)(resp);
+        ADDRESS_RESOLVE_HISTOGRAM.observe(start.saturating_elapsed_secs());
     }
 }
 
@@ -142,14 +177,14 @@ impl PdStoreAddrResolver {
 }
 
 /// Creates a new `PdStoreAddrResolver`.
-pub fn new_resolver<T, RR: 'static>(
+pub fn new_resolver<T, R>(
     pd_client: Arc<T>,
     worker: &Worker,
-    router: RR,
+    router: R,
 ) -> (PdStoreAddrResolver, Arc<Mutex<GlobalReplicationState>>)
 where
     T: PdClient + 'static,
-    RR: RaftStoreRouter<RocksEngine>,
+    R: RaftExtension + 'static,
 {
     let state = Arc::new(Mutex::new(GlobalReplicationState::default()));
     let runner = Runner {
@@ -171,20 +206,35 @@ impl StoreAddrResolver for PdStoreAddrResolver {
     }
 }
 
+#[derive(Clone)]
+pub struct MockStoreAddrResolver {
+    pub resolve_fn: Arc<dyn Fn(u64, Callback) -> Result<()> + Send + Sync>,
+}
+
+impl StoreAddrResolver for MockStoreAddrResolver {
+    fn resolve(&self, store_id: u64, cb: Callback) -> Result<()> {
+        (self.resolve_fn)(store_id, cb)
+    }
+}
+
+impl Default for MockStoreAddrResolver {
+    fn default() -> MockStoreAddrResolver {
+        MockStoreAddrResolver {
+            resolve_fn: Arc::new(|_, _| unimplemented!()),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use std::net::SocketAddr;
-    use std::ops::Sub;
-    use std::str::FromStr;
-    use std::sync::Arc;
-    use std::thread;
-    use std::time::{Duration, Instant};
+    use std::{net::SocketAddr, ops::Sub, str::FromStr, sync::Arc, thread, time::Duration};
 
     use collections::HashMap;
     use kvproto::metapb;
     use pd_client::{PdClient, Result};
-    use raftstore::router::RaftStoreBlackHole;
+    use tikv_kv::FakeExtension;
+
+    use super::*;
 
     const STORE_ADDRESS_REFRESH_SECONDS: u64 = 60;
 
@@ -205,7 +255,7 @@ mod tests {
             // The store address will be changed every millisecond.
             let mut store = self.store.clone();
             let mut sock = SocketAddr::from_str(store.get_address()).unwrap();
-            sock.set_port(tikv_util::time::duration_to_ms(self.start.elapsed()) as u16);
+            sock.set_port(tikv_util::time::duration_to_ms(self.start.saturating_elapsed()) as u16);
             store.set_address(format!("{}:{}", sock.ip(), sock.port()));
             Ok(store)
         }
@@ -219,7 +269,7 @@ mod tests {
         store
     }
 
-    fn new_runner(store: metapb::Store) -> Runner<MockPdClient, RaftStoreBlackHole> {
+    fn new_runner(store: metapb::Store) -> Runner<MockPdClient, FakeExtension> {
         let client = MockPdClient {
             start: Instant::now(),
             store,
@@ -228,7 +278,7 @@ mod tests {
             pd_client: Arc::new(client),
             store_addrs: HashMap::default(),
             state: Default::default(),
-            router: RaftStoreBlackHole,
+            router: FakeExtension,
         }
     }
 
@@ -238,21 +288,21 @@ mod tests {
     fn test_resolve_store_state_up() {
         let store = new_store(STORE_ADDR, metapb::StoreState::Up);
         let runner = new_runner(store);
-        assert!(runner.get_address(0).is_ok());
+        runner.get_address(0).unwrap();
     }
 
     #[test]
     fn test_resolve_store_state_offline() {
         let store = new_store(STORE_ADDR, metapb::StoreState::Offline);
         let runner = new_runner(store);
-        assert!(runner.get_address(0).is_ok());
+        runner.get_address(0).unwrap();
     }
 
     #[test]
     fn test_resolve_store_state_tombstone() {
         let store = new_store(STORE_ADDR, metapb::StoreState::Tombstone);
         let runner = new_runner(store);
-        assert!(runner.get_address(0).is_err());
+        runner.get_address(0).unwrap_err();
     }
 
     #[test]

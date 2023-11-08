@@ -1,8 +1,10 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::engine::PanicEngine;
-use engine_traits::{CompactExt, CompactedEvent, Result};
 use std::collections::BTreeMap;
+
+use engine_traits::{CompactExt, CompactedEvent, Result};
+
+use crate::engine::PanicEngine;
 
 impl CompactExt for PanicEngine {
     type CompactedEvent = PanicCompactedEvent;
@@ -11,7 +13,7 @@ impl CompactExt for PanicEngine {
         panic!()
     }
 
-    fn compact_range(
+    fn compact_range_cf(
         &self,
         cf: &str,
         start_key: Option<&[u8]>,
@@ -22,8 +24,9 @@ impl CompactExt for PanicEngine {
         panic!()
     }
 
-    fn compact_files_in_range(
+    fn compact_files_in_range_cf(
         &self,
+        cf: &str,
         start: Option<&[u8]>,
         end: Option<&[u8]>,
         output_level: Option<i32>,
@@ -31,13 +34,18 @@ impl CompactExt for PanicEngine {
         panic!()
     }
 
-    fn compact_files_in_range_cf(
+    fn compact_files_cf(
         &self,
-        cf_name: &str,
-        start: Option<&[u8]>,
-        end: Option<&[u8]>,
+        cf: &str,
+        files: Vec<String>,
         output_level: Option<i32>,
+        max_subcompactions: u32,
+        exclude_l0: bool,
     ) -> Result<()> {
+        panic!()
+    }
+
+    fn check_in_range(&self, start: Option<&[u8]>, end: Option<&[u8]>) -> Result<()> {
         panic!()
     }
 }

@@ -1,14 +1,24 @@
-use crate::storage::mvcc::{
-    GcInfo, MvccTxn, Result as MvccResult, GC_DELETE_VERSIONS_HISTOGRAM, MAX_TXN_WRITE_SIZE,
-    MVCC_VERSIONS_HISTOGRAM,
-};
-use crate::storage::Snapshot;
+// Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
+
 use txn_types::{Key, TimeStamp, Write, WriteType};
 
-pub fn gc(txn: &mut MvccTxn<impl Snapshot>, key: Key, safe_point: TimeStamp) -> MvccResult<GcInfo> {
-    let gc = Gc::new(txn, key);
+use crate::{
+    server::gc_worker::STAT_TXN_KEYMODE,
+    storage::{
+        mvcc::{GcInfo, MvccReader, MvccTxn, Result as MvccResult, MAX_TXN_WRITE_SIZE},
+        Snapshot,
+    },
+};
+
+pub fn gc<'a, S: Snapshot>(
+    txn: &'a mut MvccTxn,
+    reader: &'a mut MvccReader<S>,
+    key: Key,
+    safe_point: TimeStamp,
+) -> MvccResult<GcInfo> {
+    let gc = Gc::new(txn, reader, key);
     let info = gc.run(safe_point)?;
-    info.report_metrics();
+    info.report_metrics(STAT_TXN_KEYMODE);
 
     Ok(info)
 }
@@ -18,11 +28,12 @@ struct Gc<'a, S: Snapshot> {
     key: Key,
     cur_ts: TimeStamp,
     info: GcInfo,
-    txn: &'a mut MvccTxn<S>,
+    txn: &'a mut MvccTxn,
+    reader: &'a mut MvccReader<S>,
 }
 
 impl<'a, S: Snapshot> Gc<'a, S> {
-    fn new(txn: &'a mut MvccTxn<S>, key: Key) -> Gc<'a, S> {
+    fn new(txn: &'a mut MvccTxn, reader: &'a mut MvccReader<S>, key: Key) -> Gc<'a, S> {
         Gc {
             key,
             cur_ts: TimeStamp::max(),
@@ -32,6 +43,7 @@ impl<'a, S: Snapshot> Gc<'a, S> {
                 is_completed: false,
             },
             txn,
+            reader,
         }
     }
 
@@ -44,7 +56,7 @@ impl<'a, S: Snapshot> Gc<'a, S> {
     }
 
     fn next_write(&mut self) -> MvccResult<Option<(TimeStamp, Write)>> {
-        let result = self.txn.reader.seek_write(&self.key, self.cur_ts)?;
+        let result = self.reader.seek_write(&self.key, self.cur_ts)?;
         if let Some((commit, _)) = result {
             self.cur_ts = commit.prev();
             self.info.found_versions += 1;
@@ -110,66 +122,50 @@ impl State {
     }
 }
 
-impl GcInfo {
-    fn report_metrics(&self) {
-        MVCC_VERSIONS_HISTOGRAM.observe(self.found_versions as f64);
-        if self.deleted_versions > 0 {
-            GC_DELETE_VERSIONS_HISTOGRAM.observe(self.deleted_versions as f64);
-        }
-    }
-}
-
 pub mod tests {
-    use super::*;
-    use crate::storage::kv::SnapContext;
-    use crate::storage::mvcc::tests::write;
-    use crate::storage::{Engine, ScanMode};
     use concurrency_manager::ConcurrencyManager;
     use kvproto::kvrpcpb::Context;
+    #[cfg(test)]
+    use txn_types::SHORT_VALUE_MAX_LEN;
 
+    use super::*;
+    use crate::storage::{kv::SnapContext, mvcc::tests::write, Engine, ScanMode};
     #[cfg(test)]
     use crate::storage::{
         mvcc::tests::{must_get, must_get_none},
         txn::tests::*,
         RocksEngine, TestEngineBuilder,
     };
-    #[cfg(test)]
-    use txn_types::SHORT_VALUE_MAX_LEN;
 
-    pub fn must_succeed<E: Engine>(engine: &E, key: &[u8], safe_point: impl Into<TimeStamp>) {
+    pub fn must_succeed<E: Engine>(engine: &mut E, key: &[u8], safe_point: impl Into<TimeStamp>) {
         let ctx = SnapContext::default();
         let snapshot = engine.snapshot(ctx).unwrap();
         let cm = ConcurrencyManager::new(1.into());
-        let mut txn = MvccTxn::for_scan(
-            snapshot,
-            Some(ScanMode::Forward),
-            TimeStamp::zero(),
-            true,
-            cm,
-        );
-        gc(&mut txn, Key::from_raw(key), safe_point.into()).unwrap();
+        let mut txn = MvccTxn::new(TimeStamp::zero(), cm);
+        let mut reader = MvccReader::new(snapshot, Some(ScanMode::Forward), true);
+        gc(&mut txn, &mut reader, Key::from_raw(key), safe_point.into()).unwrap();
         write(engine, &Context::default(), txn.into_modifies());
     }
 
     #[cfg(test)]
     fn test_gc_imp<F>(k: &[u8], v1: &[u8], v2: &[u8], v3: &[u8], v4: &[u8], gc: F)
     where
-        F: Fn(&RocksEngine, &[u8], u64),
+        F: Fn(&mut RocksEngine, &[u8], u64),
     {
-        let engine = TestEngineBuilder::new().build().unwrap();
+        let mut engine = TestEngineBuilder::new().build().unwrap();
 
-        must_prewrite_put(&engine, k, v1, k, 5);
-        must_commit(&engine, k, 5, 10);
-        must_prewrite_put(&engine, k, v2, k, 15);
-        must_commit(&engine, k, 15, 20);
-        must_prewrite_delete(&engine, k, k, 25);
-        must_commit(&engine, k, 25, 30);
-        must_prewrite_put(&engine, k, v3, k, 35);
-        must_commit(&engine, k, 35, 40);
-        must_prewrite_lock(&engine, k, k, 45);
-        must_commit(&engine, k, 45, 50);
-        must_prewrite_put(&engine, k, v4, k, 55);
-        must_rollback(&engine, k, 55);
+        must_prewrite_put(&mut engine, k, v1, k, 5);
+        must_commit(&mut engine, k, 5, 10);
+        must_prewrite_put(&mut engine, k, v2, k, 15);
+        must_commit(&mut engine, k, 15, 20);
+        must_prewrite_delete(&mut engine, k, k, 25);
+        must_commit(&mut engine, k, 25, 30);
+        must_prewrite_put(&mut engine, k, v3, k, 35);
+        must_commit(&mut engine, k, 35, 40);
+        must_prewrite_lock(&mut engine, k, k, 45);
+        must_commit(&mut engine, k, 45, 50);
+        must_prewrite_put(&mut engine, k, v4, k, 55);
+        must_rollback(&mut engine, k, 55, false);
 
         // Transactions:
         // startTS commitTS Command
@@ -196,19 +192,19 @@ pub mod tests {
         // 10             Commit(PUT,5)
         // 5    x5
 
-        gc(&engine, k, 12);
-        must_get(&engine, k, 12, v1);
+        gc(&mut engine, k, 12);
+        must_get(&mut engine, k, 12, v1);
 
-        gc(&engine, k, 22);
-        must_get(&engine, k, 22, v2);
-        must_get_none(&engine, k, 12);
+        gc(&mut engine, k, 22);
+        must_get(&mut engine, k, 22, v2);
+        must_get_none(&mut engine, k, 12);
 
-        gc(&engine, k, 32);
-        must_get_none(&engine, k, 22);
-        must_get_none(&engine, k, 35);
+        gc(&mut engine, k, 32);
+        must_get_none(&mut engine, k, 22);
+        must_get_none(&mut engine, k, 35);
 
-        gc(&engine, k, 60);
-        must_get(&engine, k, 62, v3);
+        gc(&mut engine, k, 60);
+        must_get(&mut engine, k, 62, v3);
     }
 
     #[test]

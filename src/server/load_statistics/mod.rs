@@ -1,67 +1,74 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::{
+    cell::RefCell,
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    },
+};
 
-/// A load metric for all threads.
-pub struct ThreadLoad {
-    term: AtomicUsize,
-    load: AtomicUsize,
-    threshold: usize,
+use collections::HashMap;
+use parking_lot::Mutex;
+use tikv_util::sys::thread::{self, Pid};
+
+thread_local! {
+    static CURRENT_LOAD: RefCell<Option<Arc<AtomicUsize>>> = RefCell::new(None);
 }
 
-impl ThreadLoad {
-    /// Constructs a new `ThreadLoad` with the specified threshold.
-    pub fn with_threshold(threshold: usize) -> Self {
-        ThreadLoad {
-            term: AtomicUsize::new(0),
-            load: AtomicUsize::new(0),
+/// A load metric for all threads.
+pub struct ThreadLoadPool {
+    stats: Mutex<HashMap<Pid, Arc<AtomicUsize>>>,
+    threshold: usize,
+    total_load: AtomicUsize,
+}
+
+impl ThreadLoadPool {
+    pub fn with_threshold(threshold: usize) -> ThreadLoadPool {
+        ThreadLoadPool {
+            stats: Mutex::default(),
             threshold,
+            total_load: AtomicUsize::new(0),
         }
     }
 
-    #[allow(dead_code)]
-    pub fn get_threshold(&self) -> usize {
-        // read-only
-        self.threshold
+    /// Check if current thread is in heavy load.
+    pub fn current_thread_in_heavy_load(&self) -> bool {
+        CURRENT_LOAD.with(|l| {
+            let mut l = l.borrow_mut();
+            if l.is_none() {
+                let mut loads = self.stats.lock();
+                *l = Some(loads.entry(thread::thread_id()).or_default().clone());
+            }
+            l.as_ref().unwrap().load(Ordering::Relaxed) >= self.threshold
+        })
     }
 
-    /// Returns true if the current load exceeds its threshold.
-    #[allow(dead_code)]
-    pub fn in_heavy_load(&self) -> bool {
-        self.load.load(Ordering::Relaxed) > self.threshold
-    }
-
-    /// Increases when updating `load`.
-    #[allow(dead_code)]
-    pub fn term(&self) -> usize {
-        self.term.load(Ordering::Relaxed)
-    }
-
-    /// Gets the current load. For example, 200 means the threads consuming 200% of the CPU resources.
-    #[allow(dead_code)]
-    pub fn load(&self) -> usize {
-        self.load.load(Ordering::Relaxed)
+    /// Gets the current load. For example, 200 means the threads consuming 200%
+    /// of the CPU resources.
+    pub fn total_load(&self) -> usize {
+        self.total_load.load(Ordering::Relaxed)
     }
 }
 
 #[cfg(target_os = "linux")]
 mod linux;
 #[cfg(target_os = "linux")]
-pub use self::linux::*;
+pub use self::linux::ThreadLoadStatistics;
 
 #[cfg(not(target_os = "linux"))]
 mod other_os {
-    use super::ThreadLoad;
-    use std::sync::Arc;
-    use std::time::Instant;
+    use std::{sync::Arc, time::Instant};
+
+    use super::ThreadLoadPool;
 
     /// A dummy `ThreadLoadStatistics` implementation for non-Linux platforms
-    pub struct ThreadLoadStatistics {}
+    pub struct ThreadLoadStatistics;
 
     impl ThreadLoadStatistics {
         /// Constructs a new `ThreadLoadStatistics`.
-        pub fn new(_slots: usize, _prefix: &str, _thread_load: Arc<ThreadLoad>) -> Self {
-            ThreadLoadStatistics {}
+        pub fn new(_slots: usize, _prefix: &str, _thread_load: Arc<ThreadLoadPool>) -> Self {
+            ThreadLoadStatistics
         }
         /// Designate target thread count of this collector.
         pub fn set_thread_target(&mut self, _target: usize) {}

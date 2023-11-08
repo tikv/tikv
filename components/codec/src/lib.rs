@@ -4,10 +4,6 @@
 #![feature(core_intrinsics)]
 #![feature(min_specialization)]
 
-#[macro_use]
-extern crate static_assertions;
-#[macro_use]
-extern crate failure;
 #[cfg(test)]
 extern crate test;
 #[allow(unused_extern_crates)]
@@ -20,10 +16,14 @@ mod error;
 pub mod number;
 
 pub mod prelude {
-    pub use super::buffer::{BufferReader, BufferWriter};
-    pub use super::byte::{CompactByteDecoder, CompactByteEncoder};
-    pub use super::byte::{MemComparableByteDecoder, MemComparableByteEncoder};
-    pub use super::number::{NumberDecoder, NumberEncoder};
+    pub use super::{
+        buffer::{BufferReader, BufferWriter},
+        byte::{
+            CompactByteDecoder, CompactByteEncoder, MemComparableByteDecoder,
+            MemComparableByteEncoder,
+        },
+        number::{NumberDecoder, NumberEncoder},
+    };
 }
 
 pub use self::error::{Error, ErrorInner, Result};

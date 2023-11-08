@@ -1,10 +1,12 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use super::*;
-
-use tidb_query_datatype::codec::{datum, Datum};
-use tidb_query_datatype::expr::EvalContext;
+use tidb_query_datatype::{
+    codec::{datum, Datum},
+    expr::EvalContext,
+};
 use tipb::{ColumnInfo, FieldType};
+
+use super::*;
 
 pub const TYPE_VAR_CHAR: i32 = 1;
 pub const TYPE_LONG: i32 = 2;
@@ -62,11 +64,13 @@ impl ColumnBuilder {
         }
     }
 
+    #[must_use]
     pub fn col_type(mut self, t: i32) -> ColumnBuilder {
         self.col_type = t;
         self
     }
 
+    #[must_use]
     pub fn primary_key(mut self, b: bool) -> ColumnBuilder {
         if b {
             self.index = 0;
@@ -76,11 +80,13 @@ impl ColumnBuilder {
         self
     }
 
+    #[must_use]
     pub fn index_key(mut self, idx_id: i64) -> ColumnBuilder {
         self.index = idx_id;
         self
     }
 
+    #[must_use]
     pub fn default(mut self, val: Datum) -> ColumnBuilder {
         self.default_val = Some(val);
         self
@@ -93,5 +99,11 @@ impl ColumnBuilder {
             index: self.index,
             default_val: self.default_val,
         }
+    }
+}
+
+impl Default for ColumnBuilder {
+    fn default() -> Self {
+        Self::new()
     }
 }

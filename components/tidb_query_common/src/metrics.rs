@@ -14,6 +14,7 @@ make_auto_flush_static_metric! {
         batch_stream_aggr,
         batch_limit,
         batch_top_n,
+        batch_projection,
         table_scan,
         index_scan,
         selection,

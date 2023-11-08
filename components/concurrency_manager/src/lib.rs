@@ -10,20 +10,25 @@
 //! In order to mutate the lock of a key stored in the lock table, it needs
 //! to be locked first using `lock_key` or `lock_keys`.
 
+use fail::fail_point;
+
 mod key_handle;
 mod lock_table;
 
-pub use self::key_handle::{KeyHandle, KeyHandleGuard};
-pub use self::lock_table::LockTable;
-
 use std::{
-    mem::{self, MaybeUninit},
+    mem::MaybeUninit,
     sync::{
         atomic::{AtomicU64, Ordering},
         Arc,
     },
 };
+
 use txn_types::{Key, Lock, TimeStamp};
+
+pub use self::{
+    key_handle::{KeyHandle, KeyHandleGuard},
+    lock_table::LockTable,
+};
 
 // Pay attention that the async functions of ConcurrencyManager should not hold
 // the mutex.
@@ -53,8 +58,8 @@ impl ConcurrencyManager {
         }
     }
 
-    /// Acquires a mutex of the key and returns an RAII guard. When the guard goes
-    /// out of scope, the mutex will be unlocked.
+    /// Acquires a mutex of the key and returns an RAII guard. When the guard
+    /// goes out of scope, the mutex will be unlocked.
     ///
     /// The guard can be used to store Lock in the table. The stored lock
     /// is visible to `read_key_check` and `read_range_check`.
@@ -62,8 +67,8 @@ impl ConcurrencyManager {
         self.lock_table.lock_key(key).await
     }
 
-    /// Acquires mutexes of the keys and returns the RAII guards. The order of the
-    /// guards is the same with the given keys.
+    /// Acquires mutexes of the keys and returns the RAII guards. The order of
+    /// the guards is the same with the given keys.
     ///
     /// The guards can be used to store Lock in the table. The stored lock
     /// is visible to `read_key_check` and `read_range_check`.
@@ -76,10 +81,7 @@ impl ConcurrencyManager {
         for (index, key) in keys_with_index {
             result[index] = MaybeUninit::new(self.lock_table.lock_key(key).await);
         }
-        #[allow(clippy::unsound_collection_transmute)]
-        unsafe {
-            mem::transmute(result)
-        }
+        unsafe { tikv_util::memory::vec_transmute(result) }
     }
 
     /// Checks if there is a memory lock of the key which blocks the read.
@@ -90,7 +92,9 @@ impl ConcurrencyManager {
         key: &Key,
         check_fn: impl FnOnce(&Lock) -> Result<(), E>,
     ) -> Result<(), E> {
-        self.lock_table.check_key(key, check_fn)
+        let res = self.lock_table.check_key(key, check_fn);
+        fail_point!("cm_after_read_key_check");
+        res
     }
 
     /// Checks if there is a memory lock in the range which blocks the read.
@@ -102,7 +106,9 @@ impl ConcurrencyManager {
         end_key: Option<&Key>,
         check_fn: impl FnMut(&Key, &Lock) -> Result<(), E>,
     ) -> Result<(), E> {
-        self.lock_table.check_range(start_key, end_key, check_fn)
+        let res = self.lock_table.check_range(start_key, end_key, check_fn);
+        fail_point!("cm_after_read_range_check");
+        res
     }
 
     /// Find the minimum start_ts among all locks in memory.
@@ -118,19 +124,38 @@ impl ConcurrencyManager {
         });
         min_lock_ts
     }
+
+    pub fn global_min_lock(&self) -> Option<(TimeStamp, Key)> {
+        let mut min_lock: Option<(TimeStamp, Key)> = None;
+        // TODO: The iteration looks not so efficient. It's better to be optimized.
+        self.lock_table.for_each_kv(|key, handle| {
+            if let Some(curr_ts) = handle.with_lock(|lock| lock.as_ref().map(|l| l.ts)) {
+                if min_lock
+                    .as_ref()
+                    .map(|(ts, _)| ts > &curr_ts)
+                    .unwrap_or(true)
+                {
+                    min_lock = Some((curr_ts, key.clone()));
+                }
+            }
+        });
+        min_lock
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use txn_types::LockType;
+
+    use super::*;
 
     #[tokio::test]
     async fn test_lock_keys_order() {
         let concurrency_manager = ConcurrencyManager::new(1.into());
         let keys: Vec<_> = [b"c", b"a", b"b"]
             .iter()
-            .map(|k| Key::from_raw(*k))
+            .copied()
+            .map(|k| Key::from_raw(k))
             .collect();
         let guards = concurrency_manager.lock_keys(keys.iter()).await;
         for (key, guard) in keys.iter().zip(&guards) {
@@ -153,7 +178,17 @@ mod tests {
 
     fn new_lock(ts: impl Into<TimeStamp>, primary: &[u8], lock_type: LockType) -> Lock {
         let ts = ts.into();
-        Lock::new(lock_type, primary.to_vec(), ts, 0, None, 0.into(), 1, ts)
+        Lock::new(
+            lock_type,
+            primary.to_vec(),
+            ts,
+            0,
+            None,
+            0.into(),
+            1,
+            ts,
+            false,
+        )
     }
 
     #[tokio::test]
@@ -174,8 +209,9 @@ mod tests {
             vec![20, 40, 30],
             vec![30, 20, 40],
         ];
-        let keys: Vec<_> = vec![b"a", b"b", b"c"]
-            .into_iter()
+        let keys: Vec<_> = [b"a", b"b", b"c"]
+            .iter()
+            .copied()
             .map(|k| Key::from_raw(k))
             .collect();
 

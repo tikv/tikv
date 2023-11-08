@@ -1,28 +1,16 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::collections::HashMap;
-use std::fs;
-use std::path::Path;
+use std::{collections::HashMap, fs, path::Path, sync::Arc};
 
-use engine_rocks::RocksEngine;
-use engine_rocks::RocksSstReader;
-pub use engine_rocks::RocksSstWriter;
-use engine_rocks::RocksSstWriterBuilder;
-use engine_traits::KvEngine;
-use engine_traits::SstReader;
-use engine_traits::SstWriter;
-use engine_traits::SstWriterBuilder;
+use engine_rocks::{
+    raw::{DBEntryType, Env, TablePropertiesCollector, TablePropertiesCollectorFactory},
+    util::new_engine_opt,
+    RocksCfOptions, RocksDbOptions, RocksEngine, RocksSstReader, RocksSstWriterBuilder,
+};
+pub use engine_rocks::{RocksEngine as TestEngine, RocksSstWriter};
+use engine_traits::{KvEngine, SstWriter, SstWriterBuilder};
 use kvproto::import_sstpb::*;
 use uuid::Uuid;
-
-use engine_rocks::raw::{
-    ColumnFamilyOptions, DBEntryType, DBOptions, Env, TablePropertiesCollector,
-    TablePropertiesCollectorFactory,
-};
-use engine_rocks::raw_util::{new_engine, CFOptions};
-use std::sync::Arc;
-
-pub use engine_rocks::RocksEngine as TestEngine;
 
 pub const PROP_TEST_MARKER_CF_NAME: &[u8] = b"tikv.test_marker_cf_name";
 
@@ -41,42 +29,41 @@ pub fn new_test_engine_with_options_and_env<F>(
     env: Option<Arc<Env>>,
 ) -> RocksEngine
 where
-    F: FnMut(&str, &mut ColumnFamilyOptions),
+    F: FnMut(&str, &mut RocksCfOptions),
 {
     let cf_opts = cfs
         .iter()
         .map(|cf| {
-            let mut opt = ColumnFamilyOptions::new();
+            let mut opt = RocksCfOptions::default();
             if let Some(ref env) = env {
                 opt.set_env(env.clone());
             }
-            apply(*cf, &mut opt);
+            apply(cf, &mut opt);
             opt.add_table_properties_collector_factory(
                 "tikv.test_properties",
-                Box::new(TestPropertiesCollectorFactory::new(*cf)),
+                TestPropertiesCollectorFactory::new(*cf),
             );
-            CFOptions::new(*cf, opt)
+            (*cf, opt)
         })
         .collect();
 
-    let db_opts = env.map(|e| {
-        let mut opts = DBOptions::default();
+    let db_opts = env.map_or_else(RocksDbOptions::default, |e| {
+        let mut opts = RocksDbOptions::default();
         opts.set_env(e);
         opts
     });
-    let db = new_engine(path, db_opts, cfs, Some(cf_opts)).expect("rocks test engine");
-    RocksEngine::from_db(Arc::new(db))
+    new_engine_opt(path, db_opts, cf_opts).expect("rocks test engine")
 }
 
 pub fn new_test_engine_with_options<F>(path: &str, cfs: &[&str], apply: F) -> RocksEngine
 where
-    F: FnMut(&str, &mut ColumnFamilyOptions),
+    F: FnMut(&str, &mut RocksCfOptions),
 {
     new_test_engine_with_options_and_env(path, cfs, apply, None)
 }
 
-pub fn new_sst_reader(path: &str) -> RocksSstReader {
-    RocksSstReader::open(path).expect("test sst reader")
+pub fn new_sst_reader(path: &str, e: Option<Arc<Env>>) -> RocksSstReader {
+    RocksSstReader::open_with_env(path, e).expect("test sst reader")
 }
 
 pub fn new_sst_writer(path: &str) -> RocksSstWriter {
@@ -117,21 +104,38 @@ pub fn gen_sst_file_by_db<P: AsRef<Path>>(
     }
     w.finish().unwrap();
 
-    read_sst_file(path, range)
+    read_sst_file(path, (&[range.0], &[range.1]))
 }
 
 pub fn gen_sst_file<P: AsRef<Path>>(path: P, range: (u8, u8)) -> (SstMeta, Vec<u8>) {
     gen_sst_file_by_db(path, range, None)
 }
 
-pub fn read_sst_file<P: AsRef<Path>>(path: P, range: (u8, u8)) -> (SstMeta, Vec<u8>) {
+pub fn gen_sst_file_with_kvs<P: AsRef<Path>>(
+    path: P,
+    kvs: &[(&[u8], &[u8])],
+) -> (SstMeta, Vec<u8>) {
+    let builder = RocksSstWriterBuilder::new();
+    let mut w = builder.build(path.as_ref().to_str().unwrap()).unwrap();
+    for (k, v) in kvs {
+        let dk = keys::data_key(k);
+        w.put(&dk, v).unwrap();
+    }
+    w.finish().unwrap();
+
+    let start_key = kvs[0].0;
+    let end_key = keys::next_key(kvs.last().cloned().unwrap().0);
+    read_sst_file(path, (start_key, &end_key))
+}
+
+pub fn read_sst_file<P: AsRef<Path>>(path: P, range: (&[u8], &[u8])) -> (SstMeta, Vec<u8>) {
     let data = fs::read(path).unwrap();
     let crc32 = calc_data_crc32(&data);
 
     let mut meta = SstMeta::default();
     meta.set_uuid(Uuid::new_v4().as_bytes().to_vec());
-    meta.mut_range().set_start(vec![range.0]);
-    meta.mut_range().set_end(vec![range.1]);
+    meta.mut_range().set_start(range.0.to_vec());
+    meta.mut_range().set_end(range.1.to_vec());
     meta.set_crc32(crc32);
     meta.set_length(data.len() as u64);
     meta.set_cf_name("default".to_owned());
@@ -150,9 +154,9 @@ impl TestPropertiesCollectorFactory {
     }
 }
 
-impl TablePropertiesCollectorFactory for TestPropertiesCollectorFactory {
-    fn create_table_properties_collector(&mut self, _: u32) -> Box<dyn TablePropertiesCollector> {
-        Box::new(TestPropertiesCollector::new(self.cf.clone()))
+impl TablePropertiesCollectorFactory<TestPropertiesCollector> for TestPropertiesCollectorFactory {
+    fn create_table_properties_collector(&mut self, _: u32) -> TestPropertiesCollector {
+        TestPropertiesCollector::new(self.cf.clone())
     }
 }
 

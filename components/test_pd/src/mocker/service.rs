@@ -1,11 +1,16 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use collections::HashMap;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::Mutex;
+use std::sync::{
+    atomic::{AtomicBool, AtomicUsize, Ordering},
+    Mutex,
+};
 
-use kvproto::metapb::{Peer, Region, Store, StoreState};
-use kvproto::pdpb::*;
+use collections::HashMap;
+use fail::fail_point;
+use kvproto::{
+    metapb::{Buckets, Peer, Region, Store, StoreState},
+    pdpb::*,
+};
 
 use super::*;
 
@@ -14,8 +19,9 @@ pub struct Service {
     id_allocator: AtomicUsize,
     members_resp: Mutex<Option<GetMembersResponse>>,
     is_bootstrapped: AtomicBool,
-    stores: Mutex<HashMap<u64, Store>>,
+    stores: Mutex<HashMap<u64, (Store, StoreStats)>>,
     regions: Mutex<HashMap<u64, Region>>,
+    buckets: Mutex<HashMap<u64, Buckets>>,
     leaders: Mutex<HashMap<u64, Peer>>,
     feature_gate: Mutex<String>,
 }
@@ -30,6 +36,7 @@ impl Service {
             regions: Mutex::new(HashMap::default()),
             leaders: Mutex::new(HashMap::default()),
             feature_gate: Mutex::new(String::default()),
+            buckets: Mutex::new(HashMap::default()),
         }
     }
 
@@ -42,7 +49,10 @@ impl Service {
     /// Add an arbitrary store.
     pub fn add_store(&self, store: Store) {
         let store_id = store.get_id();
-        self.stores.lock().unwrap().insert(store_id, store);
+        self.stores
+            .lock()
+            .unwrap()
+            .insert(store_id, (store, StoreStats::new()));
     }
 
     pub fn set_cluster_version(&self, version: String) {
@@ -50,9 +60,15 @@ impl Service {
     }
 }
 
+impl Default for Service {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 fn make_members_response(eps: Vec<String>) -> GetMembersResponse {
     let mut members = Vec::with_capacity(eps.len());
-    for (i, ep) in (&eps).iter().enumerate() {
+    for (i, ep) in eps.iter().enumerate() {
         let mut m = Member::default();
         m.set_name(format!("pd{}", i));
         m.set_member_id(100 + i as u64);
@@ -85,7 +101,7 @@ impl PdMocker for Service {
 
         if self.is_bootstrapped.load(Ordering::SeqCst) {
             let mut err = Error::default();
-            err.set_type(ErrorType::Unknown);
+            err.set_type(ErrorType::AlreadyBootstrapped);
             err.set_message("cluster is already bootstrapped".to_owned());
             header.set_error(err);
             resp.set_header(header);
@@ -96,7 +112,7 @@ impl PdMocker for Service {
         self.stores
             .lock()
             .unwrap()
-            .insert(store.get_id(), store.clone());
+            .insert(store.get_id(), (store.clone(), StoreStats::new()));
         self.regions
             .lock()
             .unwrap()
@@ -113,6 +129,7 @@ impl PdMocker for Service {
     }
 
     fn alloc_id(&self, _: &AllocIdRequest) -> Option<Result<AllocIdResponse>> {
+        fail_point!("connect_leader", |_| None);
         let mut resp = AllocIdResponse::default();
         resp.set_header(Service::header());
 
@@ -126,9 +143,10 @@ impl PdMocker for Service {
         let mut resp = GetStoreResponse::default();
         let stores = self.stores.lock().unwrap();
         match stores.get(&req.get_store_id()) {
-            Some(store) => {
+            Some((store, stats)) => {
                 resp.set_header(Service::header());
                 resp.set_store(store.clone());
+                resp.set_stats(stats.clone());
                 Some(Ok(resp))
             }
             None => {
@@ -148,7 +166,7 @@ impl PdMocker for Service {
         resp.set_header(Service::header());
         let exclude_tombstone = req.get_exclude_tombstone_stores();
         let stores = self.stores.lock().unwrap();
-        for store in stores.values() {
+        for (store, _) in stores.values() {
             if exclude_tombstone && store.get_state() == StoreState::Tombstone {
                 continue;
             }
@@ -194,6 +212,9 @@ impl PdMocker for Service {
             Some(region) => {
                 resp.set_header(Service::header());
                 resp.set_region(region.clone());
+                if let Some(bucket) = self.buckets.lock().unwrap().get(&req.get_region_id()) {
+                    resp.set_buckets(bucket.clone());
+                }
                 if let Some(leader) = leaders.get(&region.get_id()) {
                     resp.set_leader(leader.clone());
                 }
@@ -211,6 +232,16 @@ impl PdMocker for Service {
         }
     }
 
+    fn report_buckets(&self, req: &ReportBucketsRequest) -> Option<Result<ReportBucketsResponse>> {
+        let buckets = req.get_buckets();
+        let region_id = req.get_buckets().get_region_id();
+        self.buckets
+            .lock()
+            .unwrap()
+            .insert(region_id, buckets.clone());
+        None
+    }
+
     fn region_heartbeat(
         &self,
         req: &RegionHeartbeatRequest,
@@ -226,16 +257,28 @@ impl PdMocker for Service {
             .insert(region_id, req.get_leader().clone());
 
         let mut resp = RegionHeartbeatResponse::default();
+        resp.set_region_id(req.get_region().get_id());
         let header = Service::header();
         resp.set_header(header);
         Some(Ok(resp))
     }
 
-    fn store_heartbeat(&self, _: &StoreHeartbeatRequest) -> Option<Result<StoreHeartbeatResponse>> {
+    fn store_heartbeat(
+        &self,
+        req: &StoreHeartbeatRequest,
+    ) -> Option<Result<StoreHeartbeatResponse>> {
         let mut resp = StoreHeartbeatResponse::default();
         let header = Service::header();
         resp.set_header(header);
         resp.set_cluster_version(self.feature_gate.lock().unwrap().to_owned());
+        if let Some((_, stats)) = self
+            .stores
+            .lock()
+            .unwrap()
+            .get_mut(&req.get_stats().get_store_id())
+        {
+            *stats = req.get_stats().clone();
+        }
         Some(Ok(resp))
     }
 

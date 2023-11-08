@@ -2,66 +2,71 @@
 
 use std::fmt::{self, Display, Formatter};
 
-use super::cleanup_sst::{Runner as CleanupSSTRunner, Task as CleanupSSTTask};
-use super::compact::{Runner as CompactRunner, Task as CompactTask};
-
-use crate::store::StoreRouter;
-use engine_traits::KvEngine;
-use pd_client::PdClient;
+use engine_traits::{KvEngine, RaftEngine};
 use tikv_util::worker::Runnable;
+
+use super::{
+    cleanup_snapshot::{Runner as GcSnapshotRunner, Task as GcSnapshotTask},
+    cleanup_sst::{Runner as CleanupSstRunner, Task as CleanupSstTask},
+    compact::{Runner as CompactRunner, Task as CompactTask},
+};
 
 pub enum Task {
     Compact(CompactTask),
-    CleanupSST(CleanupSSTTask),
+    CleanupSst(CleanupSstTask),
+    GcSnapshot(GcSnapshotTask),
 }
 
 impl Display for Task {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
             Task::Compact(ref t) => t.fmt(f),
-            Task::CleanupSST(ref t) => t.fmt(f),
+            Task::CleanupSst(ref t) => t.fmt(f),
+            Task::GcSnapshot(ref t) => t.fmt(f),
         }
     }
 }
 
-pub struct Runner<E, C, S>
+pub struct Runner<E, R>
 where
     E: KvEngine,
-    S: StoreRouter<E>,
+    R: RaftEngine,
 {
     compact: CompactRunner<E>,
-    cleanup_sst: CleanupSSTRunner<E, C, S>,
+    cleanup_sst: CleanupSstRunner,
+    gc_snapshot: GcSnapshotRunner<E, R>,
 }
 
-impl<E, C, S> Runner<E, C, S>
+impl<E, R> Runner<E, R>
 where
     E: KvEngine,
-    C: PdClient,
-    S: StoreRouter<E>,
+    R: RaftEngine,
 {
     pub fn new(
         compact: CompactRunner<E>,
-        cleanup_sst: CleanupSSTRunner<E, C, S>,
-    ) -> Runner<E, C, S> {
+        cleanup_sst: CleanupSstRunner,
+        gc_snapshot: GcSnapshotRunner<E, R>,
+    ) -> Runner<E, R> {
         Runner {
             compact,
             cleanup_sst,
+            gc_snapshot,
         }
     }
 }
 
-impl<E, C, S> Runnable for Runner<E, C, S>
+impl<E, R> Runnable for Runner<E, R>
 where
     E: KvEngine,
-    C: PdClient,
-    S: StoreRouter<E>,
+    R: RaftEngine,
 {
     type Task = Task;
 
     fn run(&mut self, task: Task) {
         match task {
             Task::Compact(t) => self.compact.run(t),
-            Task::CleanupSST(t) => self.cleanup_sst.run(t),
+            Task::CleanupSst(t) => self.cleanup_sst.run(t),
+            Task::GcSnapshot(t) => self.gc_snapshot.run(t),
         }
     }
 }

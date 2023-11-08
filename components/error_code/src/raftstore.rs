@@ -1,7 +1,8 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use super::ErrorCodeExt;
 use kvproto::errorpb;
+
+use super::ErrorCodeExt;
 
 define_error_codes!(
     "KV:Raftstore:",
@@ -10,6 +11,7 @@ define_error_codes!(
     READ_INDEX_NOT_READY => ("ReadIndexNotReady", "", ""),
     ENTRY_TOO_LARGE => ("EntryTooLarge", "", ""),
     NOT_LEADER => ("NotLeader", "", ""),
+    DISK_FULL => ("DiskFull", "", ""),
     STORE_NOT_MATCH => ("StoreNotMatch", "", ""),
     REGION_NOT_FOUND => ("RegionNotFound", "", ""),
     REGION_NOT_INITIALIZED => ("RegionNotInitialized", "", ""),
@@ -17,13 +19,21 @@ define_error_codes!(
     STALE_COMMAND => ("StaleCommand", "", ""),
     TRANSPORT => ("Transport", "", ""),
     COPROCESSOR => ("Coprocessor", "", ""),
-    IO => ("IO", "", ""),
+    IO => ("Io", "", ""),
     PROTOBUF => ("Protobuf", "", ""),
     ADDR_PARSE => ("AddressParse", "", ""),
     TIMEOUT => ("Timeout", "", ""),
     EPOCH_NOT_MATCH => ("EpochNotMatch", "", ""),
     UNKNOWN => ("Unknown", "", ""),
     SERVER_IS_BUSY => ("ServerIsBusy", "", ""),
+    DATA_IS_NOT_READY => ("DataIsNotReady", "", ""),
+    DEADLINE_EXCEEDED => ("DeadlineExceeded", "", ""),
+    PENDING_PREPARE_MERGE => ("PendingPrepareMerge", "", ""),
+    RECOVERY_IN_PROGRESS => ("RecoveryInProgress", "", ""),
+    FLASHBACK_IN_PROGRESS => ("FlashbackInProgress", "", ""),
+    FLASHBACK_NOT_PREPARED => ("FlashbackNotPrepared", "", ""),
+    IS_WITNESS => ("IsWitness", "", ""),
+    MISMATCH_PEER_ID => ("MismatchPeerId", "", ""),
 
     SNAP_ABORT => ("SnapAbort", "", ""),
     SNAP_TOO_MANY => ("SnapTooMany", "", ""),
@@ -34,6 +44,8 @@ impl ErrorCodeExt for errorpb::Error {
     fn error_code(&self) -> ErrorCode {
         if self.has_not_leader() {
             NOT_LEADER
+        } else if self.has_disk_full() {
+            DISK_FULL
         } else if self.has_region_not_found() {
             REGION_NOT_FOUND
         } else if self.has_key_not_in_region() {
@@ -52,6 +64,16 @@ impl ErrorCodeExt for errorpb::Error {
             READ_INDEX_NOT_READY
         } else if self.has_proposal_in_merging_mode() {
             PROPOSAL_IN_MERGING_MODE
+        } else if self.has_data_is_not_ready() {
+            DATA_IS_NOT_READY
+        } else if self.has_recovery_in_progress() {
+            RECOVERY_IN_PROGRESS
+        } else if self.has_flashback_in_progress() {
+            FLASHBACK_IN_PROGRESS
+        } else if self.has_flashback_not_prepared() {
+            FLASHBACK_NOT_PREPARED
+        } else if self.has_is_witness() {
+            IS_WITNESS
         } else {
             UNKNOWN
         }

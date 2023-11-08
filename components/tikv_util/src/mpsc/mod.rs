@@ -1,21 +1,24 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-/*!
+//! This module provides an implementation of mpsc channel based on
+//! crossbeam_channel. Comparing to the crossbeam_channel, this implementation
+//! supports closed detection and try operations.
 
-This module provides an implementation of mpsc channel based on
-crossbeam_channel. Comparing to the crossbeam_channel, this implementation
-supports closed detection and try operations.
+pub mod future;
+pub mod priority_queue;
 
-*/
-pub mod batch;
+use std::{
+    sync::{
+        atomic::{AtomicBool, AtomicIsize, AtomicUsize, Ordering},
+        Arc,
+    },
+    time::Duration,
+};
 
 use crossbeam::channel::{
     self, RecvError, RecvTimeoutError, SendError, TryRecvError, TrySendError,
 };
-use std::cell::Cell;
-use std::sync::atomic::{AtomicBool, AtomicIsize, Ordering};
-use std::sync::Arc;
-use std::time::Duration;
+use fail::fail_point;
 
 struct State {
     sender_cnt: AtomicIsize,
@@ -94,7 +97,8 @@ impl<T> Sender<T> {
         self.sender.is_empty()
     }
 
-    /// Blocks the current thread until a message is sent or the channel is disconnected.
+    /// Blocks the current thread until a message is sent or the channel is
+    /// disconnected.
     #[inline]
     pub fn send(&self, t: T) -> Result<(), SendError<T>> {
         if self.state.is_sender_connected() {
@@ -203,7 +207,7 @@ const CHECK_INTERVAL: usize = 8;
 /// A sender of channel that limits the maximun pending messages count loosely.
 pub struct LooseBoundedSender<T> {
     sender: Sender<T>,
-    tried_cnt: Cell<usize>,
+    tried_cnt: AtomicUsize,
     limit: usize,
 }
 
@@ -225,21 +229,23 @@ impl<T> LooseBoundedSender<T> {
     /// Send a message regardless its capacity limit.
     #[inline]
     pub fn force_send(&self, t: T) -> Result<(), SendError<T>> {
-        let cnt = self.tried_cnt.get();
-        self.tried_cnt.set(cnt + 1);
+        self.tried_cnt.fetch_add(1, Ordering::AcqRel);
         self.sender.send(t)
     }
 
     /// Attempts to send a message into the channel without blocking.
     #[inline]
     pub fn try_send(&self, t: T) -> Result<(), TrySendError<T>> {
-        let cnt = self.tried_cnt.get();
-        if cnt < CHECK_INTERVAL {
-            self.tried_cnt.set(cnt + 1);
-        } else if self.len() < self.limit {
-            self.tried_cnt.set(1);
-        } else {
-            return Err(TrySendError::Full(t));
+        let check_interval = || {
+            fail_point!("loose_bounded_sender_check_interval", |_| 0);
+            CHECK_INTERVAL
+        };
+        if self.tried_cnt.fetch_add(1, Ordering::AcqRel) >= check_interval() {
+            if self.len() < self.limit {
+                self.tried_cnt.store(1, Ordering::Release);
+            } else {
+                return Err(TrySendError::Full(t));
+            }
         }
 
         match self.sender.send(t) {
@@ -266,7 +272,7 @@ impl<T> Clone for LooseBoundedSender<T> {
     fn clone(&self) -> LooseBoundedSender<T> {
         LooseBoundedSender {
             sender: self.sender.clone(),
-            tried_cnt: self.tried_cnt.clone(),
+            tried_cnt: AtomicUsize::new(0),
             limit: self.limit,
         }
     }
@@ -278,7 +284,7 @@ pub fn loose_bounded<T>(cap: usize) -> (LooseBoundedSender<T>, Receiver<T>) {
     (
         LooseBoundedSender {
             sender,
-            tried_cnt: Cell::new(0),
+            tried_cnt: AtomicUsize::new(0),
             limit: cap,
         },
         receiver,
@@ -287,9 +293,11 @@ pub fn loose_bounded<T>(cap: usize) -> (LooseBoundedSender<T>, Receiver<T>) {
 
 #[cfg(test)]
 mod tests {
+    use std::{thread, time::Duration};
+
     use crossbeam::channel::*;
-    use std::thread;
-    use std::time::*;
+
+    use crate::time::Instant;
 
     #[test]
     fn test_bounded() {
@@ -310,7 +318,7 @@ mod tests {
             rx.recv_timeout(Duration::from_millis(100)),
             Err(RecvTimeoutError::Timeout)
         );
-        let elapsed = timer.elapsed();
+        let elapsed = timer.saturating_elapsed();
         assert!(elapsed >= Duration::from_millis(100), "{:?}", elapsed);
 
         drop(rx);
@@ -360,11 +368,11 @@ mod tests {
         });
         let timer = Instant::now();
         assert_eq!(rx1.recv(), Ok(10));
-        let elapsed = timer.elapsed();
+        let elapsed = timer.saturating_elapsed();
         assert!(elapsed >= Duration::from_millis(100), "{:?}", elapsed);
         let timer = Instant::now();
         tx2.send(2).unwrap();
-        let elapsed = timer.elapsed();
+        let elapsed = timer.saturating_elapsed();
         assert!(elapsed >= Duration::from_millis(50), "{:?}", elapsed);
     }
 
@@ -382,7 +390,7 @@ mod tests {
             rx.recv_timeout(Duration::from_millis(100)),
             Err(RecvTimeoutError::Timeout)
         );
-        let elapsed = timer.elapsed();
+        let elapsed = timer.saturating_elapsed();
         assert!(elapsed >= Duration::from_millis(100), "{:?}", elapsed);
 
         drop(rx);
@@ -406,7 +414,7 @@ mod tests {
         });
         let timer = Instant::now();
         assert_eq!(rx.recv(), Ok(10));
-        let elapsed = timer.elapsed();
+        let elapsed = timer.saturating_elapsed();
         assert!(elapsed >= Duration::from_millis(100), "{:?}", elapsed);
 
         let (tx, rx) = super::unbounded::<u64>();
@@ -457,7 +465,7 @@ mod tests {
             rx.recv_timeout(Duration::from_millis(100)),
             Err(RecvTimeoutError::Timeout)
         );
-        let elapsed = timer.elapsed();
+        let elapsed = timer.saturating_elapsed();
         assert!(elapsed >= Duration::from_millis(100), "{:?}", elapsed);
 
         tx.force_send(1).unwrap();
@@ -486,7 +494,7 @@ mod tests {
         });
         let timer = Instant::now();
         assert_eq!(rx.recv(), Ok(10));
-        let elapsed = timer.elapsed();
+        let elapsed = timer.saturating_elapsed();
         assert!(elapsed >= Duration::from_millis(100), "{:?}", elapsed);
     }
 }

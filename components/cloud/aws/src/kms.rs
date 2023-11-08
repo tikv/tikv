@@ -1,20 +1,23 @@
-use async_trait::async_trait;
+// Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
+
 use std::ops::Deref;
 
-use rusoto_core::request::DispatchSignedRequest;
-use rusoto_core::RusotoError;
+use async_trait::async_trait;
+use cloud::{
+    error::{Error, KmsError, Result},
+    kms::{Config, CryptographyType, DataKeyPair, EncryptedKey, KeyId, KmsProvider, PlainKey},
+};
+use rusoto_core::{request::DispatchSignedRequest, RusotoError};
 use rusoto_credential::ProvideAwsCredentials;
-use rusoto_kms::{DecryptError, GenerateDataKeyError};
-use rusoto_kms::{DecryptRequest, GenerateDataKeyRequest, Kms, KmsClient};
+use rusoto_kms::{
+    DecryptError, DecryptRequest, GenerateDataKeyError, GenerateDataKeyRequest, Kms, KmsClient,
+};
 use tikv_util::stream::RetryError;
 
 use crate::util;
-use cloud::error::{Error, KmsError, Result};
-use cloud::kms::{Config, DataKeyPair, EncryptedKey, KeyId, KmsProvider, PlainKey};
 
 const AWS_KMS_DATA_KEY_SPEC: &str = "AES_256";
-const AWS_KMS_VENDOR_NAME: &[u8] = b"AWS";
-pub const AWS_VENDOR_NAME: &str = "aws";
+pub const ENCRYPTION_VENDOR_NAME_AWS_KMS: &str = "AWS";
 
 pub struct AwsKms {
     client: KmsClient,
@@ -75,15 +78,15 @@ impl AwsKms {
 
 #[async_trait]
 impl KmsProvider for AwsKms {
-    fn name(&self) -> &[u8] {
-        AWS_KMS_VENDOR_NAME
+    fn name(&self) -> &str {
+        ENCRYPTION_VENDOR_NAME_AWS_KMS
     }
 
-    // On decrypt failure, the rule is to return WrongMasterKey error in case it is possible that
-    // a wrong master key has been used, or other error otherwise.
+    // On decrypt failure, the rule is to return WrongMasterKey error in case it is
+    // possible that a wrong master key has been used, or other error otherwise.
     async fn decrypt_data_key(&self, data_key: &EncryptedKey) -> Result<Vec<u8>> {
         let decrypt_request = DecryptRequest {
-            ciphertext_blob: bytes::Bytes::copy_from_slice(&*data_key),
+            ciphertext_blob: bytes::Bytes::copy_from_slice(data_key),
             // Use default algorithm SYMMETRIC_DEFAULT.
             encryption_algorithm: None,
             // Use key_id encoded in ciphertext.
@@ -116,11 +119,29 @@ impl KmsProvider for AwsKms {
                 let plaintext_key = response.plaintext.unwrap().as_ref().to_vec();
                 Ok(DataKeyPair {
                     encrypted: EncryptedKey::new(ciphertext_key)?,
-                    plaintext: PlainKey::new(plaintext_key)?,
+                    plaintext: PlainKey::new(plaintext_key, CryptographyType::AesGcm256)?,
                 })
             })
     }
 }
+
+// Rusoto errors Display implementation just gives the cause message and
+// discards the type. This is really bad when the cause message is empty!
+// Use Debug instead: this will show both
+pub struct FixRusotoErrorDisplay<E: std::fmt::Debug + std::error::Error + Send + Sync + 'static>(
+    RusotoError<E>,
+);
+impl<E: std::error::Error + Send + Sync + 'static> std::fmt::Debug for FixRusotoErrorDisplay<E> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:?}", self.0)
+    }
+}
+impl<E: std::error::Error + Send + Sync + 'static> std::fmt::Display for FixRusotoErrorDisplay<E> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:?}", self.0)
+    }
+}
+impl<E: std::error::Error + Send + Sync + 'static> std::error::Error for FixRusotoErrorDisplay<E> {}
 
 fn classify_generate_data_key_error(err: RusotoError<GenerateDataKeyError>) -> Error {
     if let RusotoError::Service(e) = &err {
@@ -131,7 +152,7 @@ fn classify_generate_data_key_error(err: RusotoError<GenerateDataKeyError>) -> E
             }
             GenerateDataKeyError::DependencyTimeout(_) => Error::ApiTimeout(err.into()),
             GenerateDataKeyError::KMSInternal(_) => Error::ApiInternal(err.into()),
-            _ => Error::KmsError(KmsError::Other(err.into())),
+            _ => Error::KmsError(KmsError::Other(FixRusotoErrorDisplay(err).into())),
         }
     } else {
         classify_error(err)
@@ -146,7 +167,7 @@ fn classify_decrypt_error(err: RusotoError<DecryptError>) -> Error {
             }
             DecryptError::DependencyTimeout(_) => Error::ApiTimeout(err.into()),
             DecryptError::KMSInternal(_) => Error::ApiInternal(err.into()),
-            _ => Error::KmsError(KmsError::Other(err.into())),
+            _ => Error::KmsError(KmsError::Other(FixRusotoErrorDisplay(err).into())),
         }
     } else {
         classify_error(err)
@@ -158,7 +179,7 @@ fn classify_error<E: std::error::Error + Send + Sync + 'static>(err: RusotoError
         RusotoError::HttpDispatch(_) => Error::ApiTimeout(err.into()),
         RusotoError::Credentials(_) => Error::ApiAuthentication(err.into()),
         e if e.is_retryable() => Error::ApiInternal(err.into()),
-        _ => Error::Other(err.into()),
+        _ => Error::KmsError(KmsError::Other(FixRusotoErrorDisplay(err).into())),
     }
 }
 
@@ -178,12 +199,13 @@ impl std::fmt::Debug for KmsClientDebug {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use rusoto_credential::StaticProvider;
-    use rusoto_kms::{DecryptResponse, GenerateDataKeyResponse};
     // use rusoto_mock::MockRequestDispatcher;
     use cloud::kms::Location;
+    use rusoto_credential::StaticProvider;
+    use rusoto_kms::{DecryptResponse, GenerateDataKeyResponse};
     use rusoto_mock::MockRequestDispatcher;
+
+    use super::*;
 
     #[tokio::test]
     async fn test_aws_kms() {
@@ -196,6 +218,7 @@ mod tests {
                 region: "ap-southeast-2".to_string(),
                 endpoint: String::new(),
             },
+            azure: None,
         };
 
         let dispatcher =
@@ -239,6 +262,7 @@ mod tests {
                 region: "ap-southeast-2".to_string(),
                 endpoint: String::new(),
             },
+            azure: None,
         };
 
         // IncorrectKeyException

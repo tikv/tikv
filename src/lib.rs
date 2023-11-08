@@ -22,38 +22,32 @@
 #![feature(cell_update)]
 #![feature(proc_macro_hygiene)]
 #![feature(min_specialization)]
-#![feature(const_fn)]
 #![feature(box_patterns)]
-#![feature(shrink_to)]
 #![feature(drain_filter)]
-#![feature(negative_impls)]
+#![feature(deadline_api)]
+#![feature(let_chains)]
+#![feature(read_buf)]
+#![feature(type_alias_impl_trait)]
+#![allow(incomplete_features)]
+#![feature(return_position_impl_trait_in_trait)]
 
 #[macro_use(fail_point)]
 extern crate fail;
 #[macro_use]
 extern crate lazy_static;
 #[macro_use]
-extern crate quick_error;
-#[macro_use]
 extern crate serde_derive;
-#[macro_use]
-extern crate slog_derive;
-#[macro_use]
-extern crate derive_more;
 #[macro_use]
 extern crate more_asserts;
 #[macro_use]
-extern crate vlog;
-#[macro_use]
 extern crate tikv_util;
-#[macro_use]
-extern crate failure;
 
 #[cfg(test)]
 extern crate test;
 
 pub mod config;
 pub mod coprocessor;
+pub mod coprocessor_v2;
 pub mod import;
 pub mod read_pool;
 pub mod server;
@@ -71,7 +65,7 @@ pub fn tikv_version_info(build_time: Option<&str>) -> String {
          \nRust Version:      {}\
          \nEnable Features:   {}\
          \nProfile:           {}",
-        env!("CARGO_PKG_VERSION"),
+        tikv_build_version(),
         option_env!("TIKV_EDITION").unwrap_or("Community"),
         option_env!("TIKV_BUILD_GIT_HASH").unwrap_or(fallback),
         option_env!("TIKV_BUILD_GIT_BRANCH").unwrap_or(fallback),
@@ -82,6 +76,11 @@ pub fn tikv_version_info(build_time: Option<&str>) -> String {
             .trim(),
         option_env!("TIKV_PROFILE").unwrap_or(fallback),
     )
+}
+
+/// return the build version of tikv-server
+pub fn tikv_build_version() -> &'static str {
+    env!("CARGO_PKG_VERSION")
 }
 
 /// Prints the tikv version information to the standard output.

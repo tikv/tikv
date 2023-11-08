@@ -1,28 +1,19 @@
 [package]
 name = "codec"
 version = "0.0.1"
-edition = "2018"
+edition = "2021"
 publish = false
-
-[features]
-default = ["protobuf-codec"]
-protobuf-codec = [
-  "error_code/protobuf-codec",
-]
-prost-codec = [
-  "error_code/prost-codec",
-]
 
 [dependencies]
 byteorder = "1.2"
-error_code = { path = "../error_code", default-features = false }
-failure = "0.1"
+error_code = { workspace = true }
 libc = "0.2"
 static_assertions = { version = "1.0", features = ["nightly"] }
-tikv_alloc = { path = "../tikv_alloc" }
+thiserror = "1.0"
+tikv_alloc = { workspace = true }
 
 [dev-dependencies]
-panic_hook = { path = "../panic_hook" }
+bytes = "1.0"
+panic_hook = { workspace = true }
 protobuf = "2"
-bytes = "0.5"
-rand = "0.7"
+rand = "0.8"

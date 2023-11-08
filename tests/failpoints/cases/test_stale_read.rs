@@ -1,24 +1,23 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::atomic::*;
-use std::sync::{mpsc, Arc, Mutex};
-use std::time::Duration;
-use std::{mem, thread};
+use std::{
+    sync::{atomic::*, mpsc, Arc, Mutex},
+    thread,
+    time::Duration,
+};
 
 use kvproto::metapb::{Peer, Region};
-use raft::eraftpb::MessageType;
-
 use pd_client::PdClient;
+use raft::eraftpb::MessageType;
 use raftstore::store::Callback;
 use test_raftstore::*;
-use tikv_util::config::*;
-use tikv_util::HandyRwLock;
+use tikv_util::{config::*, HandyRwLock};
 
 fn stale_read_during_splitting(right_derive: bool) {
     let count = 3;
     let mut cluster = new_node_cluster(0, count);
     cluster.cfg.raft_store.right_derive_when_split = right_derive;
-    let election_timeout = configure_for_lease_read(&mut cluster, None, None);
+    let election_timeout = configure_for_lease_read(&mut cluster.cfg, None, None);
     cluster.run();
 
     // Write the initial values.
@@ -216,8 +215,8 @@ fn test_node_stale_read_during_splitting_right_derive() {
 fn test_stale_read_during_merging() {
     let count = 3;
     let mut cluster = new_node_cluster(0, count);
-    configure_for_merge(&mut cluster);
-    let election_timeout = configure_for_lease_read(&mut cluster, None, None);
+    configure_for_merge(&mut cluster.cfg);
+    let election_timeout = configure_for_lease_read(&mut cluster.cfg, None, None);
     cluster.cfg.raft_store.right_derive_when_split = false;
     cluster.cfg.raft_store.pd_heartbeat_tick_interval =
         cluster.cfg.raft_store.raft_base_tick_interval;
@@ -324,9 +323,9 @@ fn test_read_index_when_transfer_leader_2() {
     let mut cluster = new_node_cluster(0, 3);
 
     // Increase the election tick to make this test case running reliably.
-    configure_for_lease_read(&mut cluster, Some(50), Some(10_000));
+    configure_for_lease_read(&mut cluster.cfg, Some(50), Some(10_000));
     // Stop log compaction to transfer leader with filter easier.
-    configure_for_request_snapshot(&mut cluster);
+    configure_for_request_snapshot(&mut cluster.cfg);
     let max_lease = Duration::from_secs(2);
     cluster.cfg.raft_store.raft_store_max_leader_lease = ReadableDuration(max_lease);
 
@@ -339,8 +338,9 @@ fn test_read_index_when_transfer_leader_2() {
     must_get_equal(&cluster.get_engine(2), b"k0", b"v0");
     must_get_equal(&cluster.get_engine(3), b"k0", b"v0");
 
-    // Put and test again to ensure that peer 3 get the latest writes by message append
-    // instead of snapshot, so that transfer leader to peer 3 can 100% success.
+    // Put and test again to ensure that peer 3 get the latest writes by message
+    // append instead of snapshot, so that transfer leader to peer 3 can 100%
+    // success.
     cluster.must_put(b"k1", b"v1");
     must_get_equal(&cluster.get_engine(2), b"k1", b"v1");
     must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
@@ -362,7 +362,7 @@ fn test_read_index_when_transfer_leader_2() {
             sim.async_command_on_node(
                 old_leader.get_id(),
                 read_request,
-                Callback::Read(Box::new(move |resp| tx.send(resp.response).unwrap())),
+                Callback::read(Box::new(move |resp| tx.send(resp.response).unwrap())),
             )
             .unwrap();
             rx
@@ -393,7 +393,7 @@ fn test_read_index_when_transfer_leader_2() {
     let router = cluster.sim.wl().get_router(old_leader.get_id()).unwrap();
     let mut reserved_msgs = Vec::new();
     'LOOP: loop {
-        for raft_msg in mem::replace(dropped_msgs.lock().unwrap().as_mut(), vec![]) {
+        for raft_msg in std::mem::take(&mut *dropped_msgs.lock().unwrap()) {
             let msg_type = raft_msg.get_message().get_msg_type();
             if msg_type == MessageType::MsgHeartbeatResponse || msg_type == MessageType::MsgAppend {
                 reserved_msgs.push(raft_msg);
@@ -404,8 +404,8 @@ fn test_read_index_when_transfer_leader_2() {
         }
     }
 
-    // Resume reserved messages in one batch to make sure the old leader can get read and role
-    // change in one `Ready`.
+    // Resume reserved messages in one batch to make sure the old leader can get
+    // read and role change in one `Ready`.
     fail::cfg("pause_on_peer_collect_message", "pause").unwrap();
     for raft_msg in reserved_msgs {
         router.send_raft_message(raft_msg).unwrap();
@@ -455,7 +455,7 @@ fn test_read_after_peer_destroyed() {
         false,
     );
     request.mut_header().set_peer(new_peer(1, 1));
-    let (cb, rx) = make_cb(&request);
+    let (cb, mut rx) = make_cb(&request);
     cluster
         .sim
         .rl()
@@ -473,16 +473,17 @@ fn test_read_after_peer_destroyed() {
     );
 }
 
-/// In previous implementation, we suspect the leader lease at the position of `leader_commit_prepare_merge`
-/// failpoint when `PrepareMerge` log is committed, which is too late to prevent stale read.
+/// In previous implementation, we suspect the leader lease at the position of
+/// `leader_commit_prepare_merge` failpoint when `PrepareMerge` log is
+/// committed, which is too late to prevent stale read.
 #[test]
 fn test_stale_read_during_merging_2() {
     let mut cluster = new_node_cluster(0, 3);
     let pd_client = cluster.pd_client.clone();
     pd_client.disable_default_operator();
 
-    configure_for_merge(&mut cluster);
-    configure_for_lease_read(&mut cluster, Some(50), Some(20));
+    configure_for_merge(&mut cluster.cfg);
+    configure_for_lease_read(&mut cluster.cfg, Some(50), Some(20));
 
     cluster.run();
 

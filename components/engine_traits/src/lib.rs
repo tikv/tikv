@@ -60,14 +60,15 @@
 //! - [`SyncMutable`] and [`Mutable`] - types to which single key/value pairs
 //!   can be written. This includes engines and write batches.
 //!
-//! - [`WriteBatch`] - types that can commit multiple key/value pairs in batches.
-//!   A `WriteBatchExt::WriteBtach` commits all pairs in one atomic transaction.
-//!   A `WriteBatchExt::WriteBatchVec` does not (FIXME: is this correct?).
+//! - [`WriteBatch`] - types that can commit multiple key/value pairs in
+//!   batches. A `WriteBatchExt::WriteBatch` commits all pairs in one atomic
+//!   transaction. A `WriteBatchExt::WriteBatchVec` does not (FIXME: is this
+//!   correct?).
 //!
 //! The `KvEngine` instance generally acts as a factory for types that implement
 //! other traits in the crate. These factory methods, associated types, and
-//! other associated methods are defined in "extension" traits. For example, methods
-//! on engines related to batch writes are in the `WriteBatchExt` trait.
+//! other associated methods are defined in "extension" traits. For example,
+//! methods on engines related to batch writes are in the `WriteBatchExt` trait.
 //!
 //!
 //! # Design notes
@@ -75,19 +76,19 @@
 //! - `KvEngine` is the main engine trait. It requires many other traits, which
 //!   have many other associated types that implement yet more traits.
 //!
-//! - Features should be grouped into their own modules with their own
-//!   traits. A common pattern is to have an associated type that implements
-//!   a trait, and an "extension" trait that associates that type with `KvEngine`,
-//!   which is part of `KvEngine's trait requirements.
+//! - Features should be grouped into their own modules with their own traits. A
+//!   common pattern is to have an associated type that implements a trait, and
+//!   an "extension" trait that associates that type with `KvEngine`, which is
+//!   part of `KvEngine's trait requirements.
 //!
 //! - For now, for simplicity, all extension traits are required by `KvEngine`.
 //!   In the future it may be feasible to separate them for engines with
 //!   different feature sets.
 //!
-//! - Associated types generally have the same name as the trait they
-//!   are required to implement. Engine extensions generally have the same
-//!   name suffixed with `Ext`. Concrete implementations usually have the
-//!   same name prefixed with the database name, i.e. `Rocks`.
+//! - Associated types generally have the same name as the trait they are
+//!   required to implement. Engine extensions generally have the same name
+//!   suffixed with `Ext`. Concrete implementations usually have the same name
+//!   prefixed with the database name, i.e. `Rocks`.
 //!
 //!   Example:
 //!
@@ -121,13 +122,13 @@
 //!   use a standard new method). If future engines require factory methods, the
 //!   traits can be converted then.
 //!
-//! - Types that require a handle to the engine (or some other "parent" type)
-//!   do so with either Rc or Arc. An example is EngineIterator. The reason
-//!   for this is that associated types cannot contain lifetimes. That requires
+//! - Types that require a handle to the engine (or some other "parent" type) do
+//!   so with either Rc or Arc. An example is EngineIterator. The reason for
+//!   this is that associated types cannot contain lifetimes. That requires
 //!   "generic associated types". See
 //!
-//!   - [https://github.com/rust-lang/rfcs/pull/1598](https://github.com/rust-lang/rfcs/pull/1598)
-//!   - [https://github.com/rust-lang/rust/issues/44265](https://github.com/rust-lang/rust/issues/44265)
+//!   - <https://github.com/rust-lang/rfcs/pull/1598>
+//!   - <https://github.com/rust-lang/rust/issues/44265>
 //!
 //! - Traits can't have mutually-recursive associated types. That is, if
 //!   `KvEngine` has a `Snapshot` associated type, `Snapshot` can't then have a
@@ -139,7 +140,7 @@
 //!
 //! # The porting process
 //!
-//! These are some guidelines that seem to make the porting managable. As the
+//! These are some guidelines that seem to make the porting manageable. As the
 //! process continues new strategies are discovered and written here. This is a
 //! big refactoring and will take many monthse.
 //!
@@ -190,7 +191,7 @@
 //!
 //! At the end of this phase the `engine` crate will be deleted.
 //!
-//! ## 3) "Pulling up" the generic abstractions through TiKv
+//! ## 3) "Pulling up" the generic abstractions through TiKV
 //!
 //! With all of TiKV using the `engine_traits` traits in conjunction with the
 //! concrete `engine_rocks` types, we can push generic type parameters up
@@ -221,15 +222,15 @@
 //!   `RocksDB::from_ref` and `RocksDB::as_inner` methods.
 //!
 //! - Down follow the type system too far "down the rabbit hole". When you see
-//!   that another subsystem is blocking you from refactoring the system you
-//!   are trying to refactor, stop, stash your changes, and focus on the other
+//!   that another subsystem is blocking you from refactoring the system you are
+//!   trying to refactor, stop, stash your changes, and focus on the other
 //!   system instead.
 //!
 //! - You will through away branches that lead to dead ends. Learn from the
 //!   experience and try again from a different angle.
 //!
-//! - For now, use the same APIs as the RocksDB bindings, as methods
-//!   on the various engine traits, and with this crate's error type.
+//! - For now, use the same APIs as the RocksDB bindings, as methods on the
+//!   various engine traits, and with this crate's error type.
 //!
 //! - When new types are needed from the RocksDB API, add a new module, define a
 //!   new trait (possibly with the same name as the RocksDB type), then define a
@@ -239,10 +240,6 @@
 //!   it in engine_traits and engine_rocks, replacing all the callers with calls
 //!   into the traits, then delete the versions in the `engine` crate.
 //!
-//! - Use the .c() method from engine_rocks::compat::Compat to get a
-//!   KvEngine reference from Arc<DB> in the fewest characters. It also
-//!   works on Snapshot, and can be adapted to other types.
-//!
 //! - Use `IntoOther` to adapt between error types of dependencies that are not
 //!   themselves interdependent. E.g. raft::Error can be created from
 //!   engine_traits::Error even though neither `raft` tor `engine_traits` know
@@ -251,17 +248,18 @@
 //! - "Plain old data" types in `engine` can be moved directly into
 //!   `engine_traits` and reexported from `engine` to ease the transition.
 //!   Likewise `engine_rocks` can temporarily call code from inside `engine`.
+#![cfg_attr(test, feature(test))]
 #![feature(min_specialization)]
-#![recursion_limit = "200"]
+#![feature(assert_matches)]
+#![feature(linked_list_cursors)]
+#![feature(let_chains)]
+#![feature(str_split_as_str)]
+#![feature(drain_filter)]
 
-#[macro_use]
-extern crate quick_error;
-#[allow(unused_extern_crates)]
-extern crate tikv_alloc;
+#[macro_use(fail_point)]
+extern crate fail;
 #[cfg(test)]
-#[macro_use]
-extern crate serde_derive;
-extern crate slog_global;
+extern crate test;
 
 // These modules contain traits that need to be implemented by engines, either
 // they are required by KvEngine or are an associated type of KvEngine. It is
@@ -283,30 +281,39 @@ mod engine;
 pub use crate::engine::*;
 mod file_system;
 pub use crate::file_system::*;
+mod flush;
+pub use flush::*;
 mod import;
 pub use import::*;
 mod misc;
 pub use misc::*;
 mod snapshot;
 pub use crate::snapshot::*;
+mod snapshot_misc;
+pub use crate::snapshot_misc::SnapshotMiscExt;
 mod sst;
 pub use crate::sst::*;
-mod table_properties;
-pub use crate::table_properties::*;
 mod write_batch;
 pub use crate::write_batch::*;
 mod encryption;
 pub use crate::encryption::*;
-mod properties;
-pub use crate::properties::*;
 mod mvcc_properties;
 mod sst_partitioner;
 pub use crate::sst_partitioner::*;
 mod range_properties;
-pub use crate::mvcc_properties::*;
-pub use crate::range_properties::*;
+pub use crate::{mvcc_properties::*, range_properties::*};
+mod tablet;
+pub use tablet::*;
+mod ttl_properties;
+pub use crate::ttl_properties::*;
 mod perf_context;
 pub use crate::perf_context::*;
+mod flow_control_factors;
+pub use crate::flow_control_factors::*;
+mod table_properties;
+pub use crate::table_properties::*;
+mod checkpoint;
+pub use crate::checkpoint::*;
 
 // These modules contain more general traits, some of which may be implemented
 // by multiple types.
@@ -331,16 +338,21 @@ mod options;
 pub use crate::options::*;
 pub mod range;
 pub use crate::range::*;
+
+// FIXME: Move raft engine traits to a separate crate.
+
 mod raft_engine;
-pub use raft_engine::{CacheStats, RaftEngine, RaftLogBatch};
+pub use raft_engine::{
+    CacheStats, RaftEngine, RaftEngineDebug, RaftEngineReadOnly, RaftLogBatch,
+    RAFT_LOG_MULTI_GET_CNT,
+};
 
 // These modules need further scrutiny
 
 pub mod compaction_job;
+pub mod raw_ttl;
 pub mod util;
 pub use compaction_job::*;
-
-pub mod config;
 
 // FIXME: This should live somewhere else
 pub const DATA_KEY_PREFIX_LEN: usize = 1;

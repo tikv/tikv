@@ -1,27 +1,36 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::cmp::Ordering;
-use std::convert::TryInto;
-use std::marker::PhantomData;
-use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
-use std::sync::Arc;
-
-use crate::storage::mvcc::{Lock, LockType, WriteRef, WriteType};
-use engine_traits::{
-    IterOptions, Iterable, Iterator as EngineIterator, KvEngine, Peekable, SeekKey,
+// #[PerformanceCriticalPath] called by raftstore
+use std::{
+    cmp::Ordering,
+    convert::TryInto,
+    marker::PhantomData,
+    sync::{
+        atomic::{AtomicU64, Ordering as AtomicOrdering},
+        Arc,
+    },
 };
-use engine_traits::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
+
+use engine_traits::{
+    IterOptions, Iterable, Iterator as EngineIterator, KvEngine, Peekable, CF_DEFAULT, CF_LOCK,
+    CF_RAFT, CF_WRITE,
+};
 use kvproto::kvrpcpb::{MvccInfo, MvccLock, MvccValue, MvccWrite, Op};
-use raftstore::coprocessor::{ConsistencyCheckMethod, ConsistencyCheckObserver, Coprocessor};
-use raftstore::Result;
+use raftstore::{
+    coprocessor::{ConsistencyCheckMethod, ConsistencyCheckObserver, Coprocessor},
+    Result,
+};
 use tikv_util::keybuilder::KeyBuilder;
 use txn_types::Key;
+
+use crate::storage::mvcc::{Lock, LockType, WriteRef, WriteType};
 
 const PHYSICAL_SHIFT_BITS: usize = 18;
 const SAFE_POINT_WINDOW: usize = 120;
 
-// When leader broadcasts a ComputeHash command to followers, it's possible that the safe point
-// becomes stale when the command reaches followers. So use a 2 minutes window to reduce this.
+// When leader broadcasts a ComputeHash command to followers, it's possible that
+// the safe point becomes stale when the command reaches followers. So use a 2
+// minutes window to reduce this.
 fn get_safe_point_for_check(mut safe_point: u64) -> u64 {
     safe_point >>= PHYSICAL_SHIFT_BITS;
     safe_point += (SAFE_POINT_WINDOW * 1000) as u64; // 120s * 1000ms/s.
@@ -97,7 +106,7 @@ impl<E: KvEngine> ConsistencyCheckObserver<E> for Mvcc<E> {
         }
 
         let mut scanner = MvccInfoScanner::new(
-            |cf, opts| snap.iterator_cf_opt(cf, opts).map_err(|e| box_err!(e)),
+            |cf, opts| snap.iterator_opt(cf, opts).map_err(|e| box_err!(e)),
             Some(&keys::data_key(region.get_start_key())),
             Some(&keys::data_end_key(region.get_end_key())),
             MvccChecksum::new(safe_point),
@@ -154,7 +163,7 @@ impl<Iter: EngineIterator, Ob: MvccInfoObserver> MvccInfoScanner<Iter, Ob> {
         let iter_opts = IterOptions::new(key_builder(from)?, key_builder(to)?, false);
         let gen_iter = |cf: &str| -> Result<Iter> {
             let mut iter = f(cf, iter_opts.clone())?;
-            box_try!(iter.seek(SeekKey::Key(from)));
+            box_try!(iter.seek(from));
             Ok(iter)
         };
 
@@ -166,7 +175,7 @@ impl<Iter: EngineIterator, Ob: MvccInfoObserver> MvccInfoScanner<Iter, Ob> {
         })
     }
 
-    fn next_item(&mut self) -> Result<Option<Ob::Target>> {
+    pub fn next_item(&mut self) -> Result<Option<Ob::Target>> {
         let mut lock_ok = box_try!(self.lock_iter.valid());
         let mut writes_ok = box_try!(self.write_iter.valid());
 
@@ -212,7 +221,7 @@ impl<Iter: EngineIterator, Ob: MvccInfoObserver> MvccInfoScanner<Iter, Ob> {
 }
 
 #[derive(Clone, Default)]
-struct MvccInfoCollector {
+pub struct MvccInfoCollector {
     current_item: Vec<u8>,
     mvcc_info: MvccInfo,
 }
@@ -236,7 +245,7 @@ impl MvccInfoObserver for MvccInfoCollector {
             return Ok(false);
         }
 
-        let write = box_try!(WriteRef::parse(&value));
+        let write = box_try!(WriteRef::parse(value));
         let mut write_info = MvccWrite::default();
         match write.write_type {
             WriteType::Put => write_info.set_type(Op::Put),
@@ -246,7 +255,7 @@ impl MvccInfoObserver for MvccInfoCollector {
         }
         write_info.set_start_ts(write.start_ts.into_inner());
         write_info.set_commit_ts(commit_ts.into_inner());
-        if let Some(ref value) = write.short_value {
+        if let Some(value) = write.short_value {
             write_info.set_short_value(value.to_vec());
         }
 
@@ -373,7 +382,7 @@ impl MvccInfoObserver for MvccChecksum {
             return Ok(true);
         }
 
-        let write = box_try!(WriteRef::parse(&value));
+        let write = box_try!(WriteRef::parse(value));
         let start_ts = write.start_ts.into_inner();
 
         self.digest.update(key);
@@ -416,16 +425,18 @@ impl MvccInfoObserver for MvccChecksum {
 
 #[cfg(test)]
 mod tests {
+    use engine_test::kv::KvTestEngine;
+
     use super::*;
-    use crate::storage::kv::TestEngineBuilder;
-    use crate::storage::txn::tests::must_rollback;
-    use crate::storage::txn::tests::{must_commit, must_prewrite_delete, must_prewrite_put};
-    use engine_rocks::RocksEngine;
+    use crate::storage::{
+        kv::TestEngineBuilder,
+        txn::tests::{must_commit, must_prewrite_delete, must_prewrite_put, must_rollback},
+    };
 
     #[test]
     fn test_update_context() {
         let safe_point = Arc::new(AtomicU64::new((123 << PHYSICAL_SHIFT_BITS) * 1000));
-        let observer = Mvcc::<RocksEngine>::new(safe_point);
+        let observer = Mvcc::<KvTestEngine>::new(safe_point);
 
         let mut context = Vec::new();
         assert!(observer.update_context(&mut context));
@@ -437,24 +448,24 @@ mod tests {
 
     #[test]
     fn test_mvcc_checksum() {
-        let engine = TestEngineBuilder::new().build().unwrap();
-        must_prewrite_put(&engine, b"zAAAAA", b"value", b"PRIMARY", 100);
-        must_commit(&engine, b"zAAAAA", 100, 101);
-        must_prewrite_put(&engine, b"zCCCCC", b"value", b"PRIMARY", 110);
-        must_commit(&engine, b"zCCCCC", 110, 111);
+        let mut engine = TestEngineBuilder::new().build().unwrap();
+        must_prewrite_put(&mut engine, b"zAAAAA", b"value", b"PRIMARY", 100);
+        must_commit(&mut engine, b"zAAAAA", 100, 101);
+        must_prewrite_put(&mut engine, b"zCCCCC", b"value", b"PRIMARY", 110);
+        must_commit(&mut engine, b"zCCCCC", 110, 111);
 
-        must_prewrite_put(&engine, b"zBBBBB", b"value", b"PRIMARY", 200);
-        must_commit(&engine, b"zBBBBB", 200, 201);
-        must_prewrite_put(&engine, b"zDDDDD", b"value", b"PRIMARY", 200);
-        must_rollback(&engine, b"zDDDDD", 200);
-        must_prewrite_put(&engine, b"zFFFFF", b"value", b"PRIMARY", 200);
-        must_prewrite_delete(&engine, b"zGGGGG", b"PRIMARY", 200);
+        must_prewrite_put(&mut engine, b"zBBBBB", b"value", b"PRIMARY", 200);
+        must_commit(&mut engine, b"zBBBBB", 200, 201);
+        must_prewrite_put(&mut engine, b"zDDDDD", b"value", b"PRIMARY", 200);
+        must_rollback(&mut engine, b"zDDDDD", 200, false);
+        must_prewrite_put(&mut engine, b"zFFFFF", b"value", b"PRIMARY", 200);
+        must_prewrite_delete(&mut engine, b"zGGGGG", b"PRIMARY", 200);
 
         let mut checksums = Vec::with_capacity(3);
         for &safe_point in &[150, 160, 100] {
             let raw = engine.get_rocksdb();
             let mut scanner = MvccInfoScanner::new(
-                |cf, opts| raw.iterator_cf_opt(cf, opts).map_err(|e| box_err!(e)),
+                |cf, opts| raw.iterator_opt(cf, opts).map_err(|e| box_err!(e)),
                 Some(&keys::data_key(b"")),
                 Some(&keys::data_end_key(b"")),
                 MvccChecksum::new(safe_point),
@@ -470,31 +481,28 @@ mod tests {
 
     #[test]
     fn test_mvcc_info_collector() {
-        use crate::storage::mvcc::Write;
-        use engine_rocks::raw::{ColumnFamilyOptions, DBOptions};
-        use engine_rocks::raw_util::CFOptions;
+        use engine_test::ctor::{CfOptions, DbOptions};
         use engine_traits::SyncMutable;
         use txn_types::TimeStamp;
+
+        use crate::storage::mvcc::Write;
 
         let tmp = tempfile::Builder::new()
             .prefix("test_debug")
             .tempdir()
             .unwrap();
         let path = tmp.path().to_str().unwrap();
-        let engine = Arc::new(
-            engine_rocks::raw_util::new_engine_opt(
-                path,
-                DBOptions::new(),
-                vec![
-                    CFOptions::new(CF_DEFAULT, ColumnFamilyOptions::new()),
-                    CFOptions::new(CF_WRITE, ColumnFamilyOptions::new()),
-                    CFOptions::new(CF_LOCK, ColumnFamilyOptions::new()),
-                    CFOptions::new(CF_RAFT, ColumnFamilyOptions::new()),
-                ],
-            )
-            .unwrap(),
-        );
-        let engine = RocksEngine::from_db(engine);
+        let engine = engine_test::kv::new_engine_opt(
+            path,
+            DbOptions::default(),
+            vec![
+                (CF_DEFAULT, CfOptions::new()),
+                (CF_WRITE, CfOptions::new()),
+                (CF_LOCK, CfOptions::new()),
+                (CF_RAFT, CfOptions::new()),
+            ],
+        )
+        .unwrap();
 
         let cf_default_data = vec![
             (b"k1", b"v", 5.into()),
@@ -524,6 +532,7 @@ mod tests {
                 TimeStamp::zero(),
                 0,
                 TimeStamp::zero(),
+                false,
             );
             let value = lock.to_bytes();
             engine
@@ -549,7 +558,7 @@ mod tests {
 
         let scan_mvcc = |start: &[u8], end: &[u8], limit: u64| {
             MvccInfoIterator::new(
-                |cf, opts| engine.iterator_cf_opt(cf, opts).map_err(|e| box_err!(e)),
+                |cf, opts| engine.iterator_opt(cf, opts).map_err(|e| box_err!(e)),
                 if start.is_empty() { None } else { Some(start) },
                 if end.is_empty() { None } else { Some(end) },
                 limit as usize,
@@ -559,7 +568,7 @@ mod tests {
 
         let mut count = 0;
         for key_and_mvcc in scan_mvcc(b"z", &[], 30) {
-            assert!(key_and_mvcc.is_ok());
+            key_and_mvcc.unwrap();
             count += 1;
         }
         assert_eq!(count, 7);

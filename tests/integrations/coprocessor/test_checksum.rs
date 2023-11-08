@@ -2,17 +2,23 @@
 
 use std::u64;
 
-use kvproto::coprocessor::{KeyRange, Request};
-use kvproto::kvrpcpb::{Context, IsolationLevel};
+use api_version::{keyspace::KvPair, ApiV1};
+use futures::executor::block_on;
+use kvproto::{
+    coprocessor::{KeyRange, Request},
+    kvrpcpb::{Context, IsolationLevel},
+};
 use protobuf::Message;
-use tipb::{ChecksumAlgorithm, ChecksumRequest, ChecksumResponse, ChecksumScanOn};
-
 use test_coprocessor::*;
-use tidb_query_common::storage::scanner::{RangesScanner, RangesScannerOptions};
-use tidb_query_common::storage::Range;
-use tikv::coprocessor::dag::TiKVStorage;
-use tikv::coprocessor::*;
-use tikv::storage::{Engine, SnapshotStore};
+use tidb_query_common::storage::{
+    scanner::{RangesScanner, RangesScannerOptions},
+    Range,
+};
+use tikv::{
+    coprocessor::{dag::TikvStorage, *},
+    storage::{Engine, SnapshotStore},
+};
+use tipb::{ChecksumAlgorithm, ChecksumRequest, ChecksumResponse, ChecksumScanOn};
 use txn_types::TimeStamp;
 
 fn new_checksum_request(range: KeyRange, scan_on: ChecksumScanOn) -> Request {
@@ -42,7 +48,7 @@ fn test_checksum() {
     ];
 
     let product = ProductTable::new();
-    let (store, endpoint) = init_data_with_commit(&product, &data, true);
+    let (store, endpoint, _) = init_data_with_commit(&product, &data, true);
 
     for column in &[&product["id"], &product["name"], &product["count"]] {
         assert!(column.index >= 0);
@@ -71,10 +77,11 @@ fn reversed_checksum_crc64_xor<E: Engine>(store: &Store<E>, range: KeyRange) -> 
         IsolationLevel::Si,
         true,
         Default::default(),
+        Default::default(),
         false,
     );
-    let mut scanner = RangesScanner::new(RangesScannerOptions {
-        storage: TiKVStorage::new(store, false),
+    let mut scanner = RangesScanner::<_, ApiV1>::new(RangesScannerOptions {
+        storage: TikvStorage::new(store, false),
         ranges: vec![Range::from_pb_range(range, false)],
         scan_backward_in_range: true,
         is_key_only: false,
@@ -83,10 +90,11 @@ fn reversed_checksum_crc64_xor<E: Engine>(store: &Store<E>, range: KeyRange) -> 
 
     let mut checksum = 0;
     let digest = crc64fast::Digest::new();
-    while let Some((k, v)) = scanner.next().unwrap() {
+    while let Some(row) = block_on(scanner.next()).unwrap() {
+        let (k, v) = row.kv();
         let mut digest = digest.clone();
-        digest.write(&k);
-        digest.write(&v);
+        digest.write(k);
+        digest.write(v);
         checksum ^= digest.sum64();
     }
     checksum

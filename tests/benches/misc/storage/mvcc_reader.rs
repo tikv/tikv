@@ -1,15 +1,15 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use kvproto::kvrpcpb::{Context, IsolationLevel};
-use test_storage::{SyncTestStorage, SyncTestStorageBuilder};
+use kvproto::kvrpcpb::Context;
+use test_storage::{SyncTestStorageApiV1, SyncTestStorageBuilderApiV1};
 use tidb_query_datatype::codec::table;
-use tikv::storage::{kv::RocksEngine, mvcc::MvccReader, Engine};
+use tikv::storage::{kv::RocksEngine, mvcc::SnapshotReader, Engine};
 use txn_types::{Key, Mutation};
 
-fn prepare_mvcc_data(key: &Key, n: u64) -> SyncTestStorage<RocksEngine> {
-    let store = SyncTestStorageBuilder::new().build().unwrap();
+fn prepare_mvcc_data(key: &Key, n: u64) -> SyncTestStorageApiV1<RocksEngine> {
+    let store = SyncTestStorageBuilderApiV1::default().build(0).unwrap();
     for ts in 1..=n {
-        let mutation = Mutation::Put((key.clone(), b"value".to_vec()));
+        let mutation = Mutation::make_put(key.clone(), b"value".to_vec());
         store
             .prewrite(
                 Context::default(),
@@ -34,14 +34,13 @@ fn bench_get_txn_commit_record(b: &mut test::Bencher, n: u64) {
     let key = Key::from_raw(&table::encode_row_key(1, 0));
     let store = prepare_mvcc_data(&key, n);
     b.iter(|| {
-        let mut mvcc_reader = MvccReader::new(
+        let mut mvcc_reader = SnapshotReader::new(
+            1.into(),
             store.get_engine().snapshot(Default::default()).unwrap(),
-            None,
             true,
-            IsolationLevel::Si,
         );
         mvcc_reader
-            .get_txn_commit_record(&key, 1.into())
+            .get_txn_commit_record(&key)
             .unwrap()
             .unwrap_single_record();
     });

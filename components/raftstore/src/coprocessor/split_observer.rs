@@ -1,95 +1,107 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use super::{AdminObserver, Coprocessor, ObserverContext, Result as CopResult};
-use tikv_util::codec::bytes::{self, encode_bytes};
+use itertools::Itertools;
+use kvproto::{
+    metapb::Region,
+    raft_cmdpb::{AdminCmdType, AdminRequest, SplitRequest},
+};
+use tikv_util::{box_err, box_try, codec::bytes, error, warn};
 
-use crate::store::util;
-use kvproto::metapb::Region;
-use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, SplitRequest};
-use std::result::Result as StdResult;
+use super::{AdminObserver, Coprocessor, ObserverContext, Result as CopResult};
+use crate::{store::util, Error};
+
+pub const NO_VALID_SPLIT_KEY: &str = "no valid key found for split.";
+
+pub fn strip_timestamp_if_exists(mut key: Vec<u8>) -> Vec<u8> {
+    let mut slice = key.as_slice();
+    let strip_len = match bytes::decode_bytes(&mut slice, false) {
+        // It is an encoded key and the slice points to the remaining unparsable
+        // part which most likely is timestamp. Note that the key can be a raw key
+        // in valid encoded form, but treat it as a encoded key anyway.
+        Ok(_) => slice.len(),
+        // It must be a raw key so no need to strip.
+        Err(_) => 0,
+    };
+    key.truncate(key.len() - strip_len);
+    key
+}
+
+pub fn is_valid_split_key(key: &[u8], index: usize, region: &Region) -> bool {
+    if key.is_empty() {
+        warn!(
+            "skip invalid split key: key is empty";
+            "region_id" => region.get_id(),
+            "index" => index,
+        );
+        return false;
+    }
+
+    if let Err(Error::KeyNotInRegion(..)) = util::check_key_in_region_exclusive(key, region) {
+        // use this to distinguish whether the key is at the edge or outside of the
+        // region.
+        let equal_start_key = key == region.get_start_key();
+        warn!(
+            "skip invalid split key: key is not in region";
+            "key" => log_wrappers::Value::key(key),
+            "region_id" => region.get_id(),
+            "start_key" => log_wrappers::Value::key(region.get_start_key()),
+            "end_key" => log_wrappers::Value::key(region.get_end_key()),
+            "index" => index,
+            "equal_start_key" => equal_start_key,
+        );
+        return false;
+    }
+
+    true
+}
 
 /// `SplitObserver` adjusts the split key so that it won't separate
-/// the data of a row into two region. It adjusts the key according
-/// to the key format of `TiDB`.
+/// multiple MVCC versions of a key into two regions.
 #[derive(Clone)]
 pub struct SplitObserver;
 
-type Result<T> = StdResult<T, String>;
-
 impl SplitObserver {
-    fn adjust_key(&self, region: &Region, key: Vec<u8>) -> Result<Vec<u8>> {
-        if key.is_empty() {
-            return Err("key is empty".to_owned());
-        }
-
-        let key = match bytes::decode_bytes(&mut key.as_slice(), false) {
-            Ok(x) => x,
-            // It's a raw key, skip it.
-            Err(_) => return Ok(key),
-        };
-
-        let key = encode_bytes(&key);
-        match util::check_key_in_region_exclusive(&key, region) {
-            Ok(()) => Ok(key),
-            Err(_) => Err(format!(
-                "key {} should be in ({}, {})",
-                log_wrappers::Value::key(&key),
-                log_wrappers::Value::key(&region.get_start_key()),
-                log_wrappers::Value::key(&region.get_end_key()),
-            )),
-        }
-    }
-
     fn on_split(
         &self,
         ctx: &mut ObserverContext<'_>,
         splits: &mut Vec<SplitRequest>,
-    ) -> Result<()> {
-        let (mut i, mut j) = (0, 0);
-        let mut last_valid_key: Option<Vec<u8>> = None;
-        let region_id = ctx.region().get_id();
-        while i < splits.len() {
-            let k = i;
-            i += 1;
-            {
-                let split = &mut splits[k];
+    ) -> Result<(), String> {
+        let ajusted_splits = std::mem::take(splits)
+            .into_iter()
+            .enumerate()
+            .filter_map(|(i, mut split)| {
                 let key = split.take_split_key();
-                match self.adjust_key(ctx.region(), key) {
-                    Ok(key) => {
-                        if last_valid_key.as_ref().map_or(false, |k| *k >= key) {
-                            warn!(
-                                "key is not larger than previous, skip.";
-                                "region_id" => region_id,
-                                "key" => log_wrappers::Value::key(&key),
-                                "previous" => log_wrappers::Value::key(last_valid_key.as_ref().unwrap()),
-                                "index" => k,
-                            );
-                            continue;
-                        }
-                        last_valid_key = Some(key.clone());
-                        split.set_split_key(key)
-                    }
-                    Err(e) => {
-                        warn!(
-                            "invalid key, skip";
-                            "region_id" => region_id,
-                            "index" => k,
-                            "err" => ?e,
-                        );
-                        continue;
-                    }
+                let key = strip_timestamp_if_exists(key);
+                if is_valid_split_key(&key, i, ctx.region) {
+                    split.split_key = key;
+                    Some(split)
+                } else {
+                    None
                 }
-            }
-            if k != j {
-                splits.swap(k, j);
-            }
-            j += 1;
+            })
+            .coalesce(|prev, curr| {
+                // Make sure that the split keys are sorted and unique.
+                if prev.split_key < curr.split_key {
+                    Err((prev, curr))
+                } else {
+                    warn!(
+                        "skip invalid split key: key should not be larger than the previous.";
+                        "region_id" => ctx.region.id,
+                        "key" => log_wrappers::Value::key(&curr.split_key),
+                        "previous" => log_wrappers::Value::key(&prev.split_key),
+                    );
+                    Ok(prev)
+                }
+            })
+            .collect::<Vec<_>>();
+
+        if ajusted_splits.is_empty() {
+            Err(NO_VALID_SPLIT_KEY.to_owned())
+        } else {
+            // Rewrite the splits.
+            *splits = ajusted_splits;
+            Ok(())
         }
-        if j == 0 {
-            return Err("no valid key found for split.".to_owned());
-        }
-        splits.truncate(j);
-        Ok(())
     }
 }
 
@@ -150,21 +162,25 @@ impl AdminObserver for SplitObserver {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::coprocessor::AdminObserver;
-    use crate::coprocessor::ObserverContext;
     use byteorder::{BigEndian, WriteBytesExt};
-    use kvproto::metapb::Region;
-    use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, SplitRequest};
-    use tidb_query_datatype::codec::{datum, table, Datum};
-    use tidb_query_datatype::expr::EvalContext;
+    use kvproto::{
+        metapb::Region,
+        raft_cmdpb::{AdminCmdType, AdminRequest, SplitRequest},
+    };
+    use tidb_query_datatype::{
+        codec::{datum, table, Datum},
+        expr::EvalContext,
+    };
     use tikv_util::codec::bytes::encode_bytes;
 
-    fn new_split_request(key: &[u8]) -> AdminRequest {
+    use super::*;
+    use crate::coprocessor::{AdminObserver, ObserverContext};
+
+    fn new_split_request(key: Vec<u8>) -> AdminRequest {
         let mut req = AdminRequest::default();
         req.set_cmd_type(AdminCmdType::Split);
         let mut split_req = SplitRequest::default();
-        split_req.set_split_key(key.to_vec());
+        split_req.set_split_key(key);
         req.set_split(split_req);
         req
     }
@@ -230,14 +246,13 @@ mod tests {
 
         let observer = SplitObserver;
 
-        let resp = observer.pre_propose_admin(&mut ctx, &mut req);
         // since no split is defined, actual coprocessor won't be invoke.
-        assert!(resp.is_ok());
+        observer.pre_propose_admin(&mut ctx, &mut req).unwrap();
         assert!(!req.has_split(), "only split req should be handle.");
 
-        req = new_split_request(b"test");
+        req = new_split_request(new_row_key(1, 2, 0));
         // For compatible reason, split should supported too.
-        assert!(observer.pre_propose_admin(&mut ctx, &mut req).is_ok());
+        observer.pre_propose_admin(&mut ctx, &mut req).unwrap();
 
         // Empty key should be skipped.
         let mut split_keys = vec![vec![]];
@@ -247,7 +262,7 @@ mod tests {
         req = new_batch_split_request(split_keys.clone());
         // Although invalid keys should be skipped, but if all keys are
         // invalid, errors should be reported.
-        assert!(observer.pre_propose_admin(&mut ctx, &mut req).is_err());
+        observer.pre_propose_admin(&mut ctx, &mut req).unwrap_err();
 
         let mut key = new_row_key(1, 2, 0);
         let mut expected_key = key[..key.len() - 8].to_vec();

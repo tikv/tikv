@@ -1,44 +1,18 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::Mutex;
-use std::time::Duration;
+use std::{sync::Mutex, time::Duration};
 
-use async_trait::async_trait;
-use derive_more::Deref;
+use cloud::kms::{CryptographyType, DataKeyPair, EncryptedKey, KmsProvider, PlainKey};
 use kvproto::encryptionpb::EncryptedContent;
+use tikv_util::{
+    box_err,
+    stream::{retry, with_timeout},
+    sys::thread::ThreadBuildWrapper,
+};
 use tokio::runtime::{Builder, Runtime};
 
 use super::{metadata::MetadataKey, Backend, MemAesGcmBackend};
-use crate::crypter::{Iv, PlainKey};
-use crate::{Error, Result};
-use tikv_util::stream::{retry, with_timeout};
-
-#[async_trait]
-pub trait KmsProvider: Sync + Send + 'static + std::fmt::Debug {
-    async fn generate_data_key(&self) -> Result<DataKeyPair>;
-    async fn decrypt_data_key(&self, data_key: &EncryptedKey) -> Result<Vec<u8>>;
-    fn name(&self) -> &[u8];
-}
-
-// EncryptedKey is a newtype used to mark data as an encrypted key
-// It requires the vec to be non-empty
-#[derive(PartialEq, Clone, Debug, Deref)]
-pub struct EncryptedKey(Vec<u8>);
-
-impl EncryptedKey {
-    pub fn new(key: Vec<u8>) -> Result<Self> {
-        if key.is_empty() {
-            error!("Encrypted content is empty");
-        }
-        Ok(Self(key))
-    }
-}
-
-#[derive(Debug)]
-pub struct DataKeyPair {
-    pub encrypted: EncryptedKey,
-    pub plaintext: PlainKey,
-}
+use crate::{crypter::Iv, errors::cloud_convert_error, Error, Result};
 
 #[derive(Debug)]
 struct State {
@@ -74,11 +48,10 @@ impl KmsBackend {
     pub fn new(kms_provider: Box<dyn KmsProvider>) -> Result<KmsBackend> {
         // Basic scheduler executes futures in the current thread.
         let runtime = Mutex::new(
-            Builder::new()
-                .basic_scheduler()
+            Builder::new_current_thread()
                 .thread_name("kms-runtime")
-                .core_threads(1)
                 .enable_all()
+                .with_sys_hooks()
                 .build()?,
         );
 
@@ -93,13 +66,17 @@ impl KmsBackend {
     fn encrypt_content(&self, plaintext: &[u8], iv: Iv) -> Result<EncryptedContent> {
         let mut opt_state = self.state.lock().unwrap();
         if opt_state.is_none() {
-            let mut runtime = self.runtime.lock().unwrap();
-            let data_key = runtime.block_on(retry(|| {
-                with_timeout(self.timeout_duration, self.kms_provider.generate_data_key())
-            }))?;
+            let runtime = self.runtime.lock().unwrap();
+            let data_key = runtime
+                .block_on(retry(|| {
+                    with_timeout(self.timeout_duration, self.kms_provider.generate_data_key())
+                }))
+                .map_err(cloud_convert_error("get data key failed".into()))?;
             *opt_state = Some(State::new_from_datakey(DataKeyPair {
-                plaintext: PlainKey::new(data_key.plaintext.clone())?,
-                encrypted: EncryptedKey::new((*data_key.encrypted).clone())?,
+                plaintext: PlainKey::new(data_key.plaintext.clone(), CryptographyType::AesGcm256)
+                    .map_err(cloud_convert_error("invalid plain key".into()))?,
+                encrypted: EncryptedKey::new((*data_key.encrypted).clone())
+                    .map_err(cloud_convert_error("invalid encrypted key".into()))?,
             })?);
         }
         let state = opt_state.as_ref().unwrap();
@@ -109,7 +86,7 @@ impl KmsBackend {
         // Set extra metadata for KmsBackend.
         content.metadata.insert(
             MetadataKey::KmsVendor.as_str().to_owned(),
-            self.kms_provider.name().to_vec(),
+            self.kms_provider.name().as_bytes().to_vec(),
         );
         content.metadata.insert(
             MetadataKey::KmsCiphertextKey.as_str().to_owned(),
@@ -119,17 +96,17 @@ impl KmsBackend {
         Ok(content)
     }
 
-    // On decrypt failure, the rule is to return WrongMasterKey error in case it is possible that
-    // a wrong master key has been used, or other error otherwise.
+    // On decrypt failure, the rule is to return WrongMasterKey error in case it is
+    // possible that a wrong master key has been used, or other error otherwise.
     fn decrypt_content(&self, content: &EncryptedContent) -> Result<Vec<u8>> {
         let vendor_name = self.kms_provider.name();
         match content.metadata.get(MetadataKey::KmsVendor.as_str()) {
-            Some(val) if val.as_slice() == vendor_name => (),
+            Some(val) if val.as_slice() == vendor_name.as_bytes() => (),
             None => {
                 return Err(
-                    // If vender is missing in metadata, it could be the encrypted content is invalid
-                    // or corrupted, but it is also possible that the content is encrypted using the
-                    // FileBackend. Return WrongMasterKey anyway.
+                    // If vender is missing in metadata, it could be the encrypted content is
+                    // invalid or corrupted, but it is also possible that the content is encrypted
+                    // using the FileBackend. Return WrongMasterKey anyway.
                     Error::WrongMasterKey(box_err!("missing KMS vendor")),
                 );
             }
@@ -138,13 +115,14 @@ impl KmsBackend {
                     "KMS vendor mismatch expect {:?} got {:?}",
                     vendor_name,
                     other
-                ))
+                ));
             }
         }
 
         let ciphertext_key = match content.metadata.get(MetadataKey::KmsCiphertextKey.as_str()) {
             None => return Err(box_err!("KMS ciphertext key not found")),
-            Some(key) => EncryptedKey::new(key.to_vec())?,
+            Some(key) => EncryptedKey::new(key.to_vec())
+                .map_err(cloud_convert_error("invalid encrypted key".into()))?,
         };
 
         {
@@ -155,16 +133,19 @@ impl KmsBackend {
                 }
             }
             {
-                let mut runtime = self.runtime.lock().unwrap();
-                let plaintext = runtime.block_on(retry(|| {
-                    with_timeout(
-                        self.timeout_duration,
-                        self.kms_provider.decrypt_data_key(&ciphertext_key),
-                    )
-                }))?;
+                let runtime = self.runtime.lock().unwrap();
+                let plaintext = runtime
+                    .block_on(retry(|| {
+                        with_timeout(
+                            self.timeout_duration,
+                            self.kms_provider.decrypt_data_key(&ciphertext_key),
+                        )
+                    }))
+                    .map_err(cloud_convert_error("decrypt encrypted key failed".into()))?;
                 let data_key = DataKeyPair {
                     encrypted: ciphertext_key,
-                    plaintext: PlainKey::new(plaintext)?,
+                    plaintext: PlainKey::new(plaintext, CryptographyType::AesGcm256)
+                        .map_err(cloud_convert_error("invalid plain key".into()))?,
                 };
                 let state = State::new_from_datakey(data_key)?;
                 let content = state.encryption_backend.decrypt_content(content)?;
@@ -191,9 +172,12 @@ impl Backend for KmsBackend {
 
 #[cfg(test)]
 mod fake {
+    use async_trait::async_trait;
+    use cloud::{error::Result, kms::KmsProvider};
+
     use super::*;
 
-    const FAKE_VENDOR_NAME: &[u8] = b"FAKE";
+    const FAKE_VENDOR_NAME: &str = "FAKE";
     const FAKE_DATA_KEY_ENCRYPTED: &[u8] = b"encrypted                       ";
 
     #[derive(Debug)]
@@ -204,7 +188,7 @@ mod fake {
     impl FakeKms {
         pub fn new(plaintext_key: Vec<u8>) -> Self {
             Self {
-                plaintext_key: PlainKey::new(plaintext_key).unwrap(),
+                plaintext_key: PlainKey::new(plaintext_key, CryptographyType::AesGcm256).unwrap(),
             }
         }
     }
@@ -214,7 +198,8 @@ mod fake {
         async fn generate_data_key(&self) -> Result<DataKeyPair> {
             Ok(DataKeyPair {
                 encrypted: EncryptedKey::new(FAKE_DATA_KEY_ENCRYPTED.to_vec())?,
-                plaintext: PlainKey::new(self.plaintext_key.clone()).unwrap(),
+                plaintext: PlainKey::new(self.plaintext_key.clone(), CryptographyType::AesGcm256)
+                    .unwrap(),
             })
         }
 
@@ -222,7 +207,7 @@ mod fake {
             Ok(vec![1u8, 32])
         }
 
-        fn name(&self) -> &[u8] {
+        fn name(&self) -> &str {
             FAKE_VENDOR_NAME
         }
     }
@@ -230,17 +215,17 @@ mod fake {
 
 #[cfg(test)]
 mod tests {
-    use super::fake::FakeKms;
-    use super::*;
     use hex::FromHex;
     use matches::assert_matches;
 
+    use super::{fake::FakeKms, *};
+
     #[test]
     fn test_state() {
-        let plaintext = PlainKey::new(vec![1u8; 32]).unwrap();
+        let plaintext = PlainKey::new(vec![1u8; 32], CryptographyType::AesGcm256).unwrap();
         let encrypted = EncryptedKey::new(vec![2u8; 32]).unwrap();
         let data_key = DataKeyPair {
-            plaintext: PlainKey::new(plaintext.clone()).unwrap(),
+            plaintext: PlainKey::new(plaintext.clone(), CryptographyType::AesGcm256).unwrap(),
             encrypted: encrypted.clone(),
         };
         let encrypted2 = EncryptedKey::new(vec![3u8; 32]).unwrap();

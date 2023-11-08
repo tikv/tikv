@@ -1,21 +1,22 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::fs::{self, File};
-use std::io;
-use std::marker::Unpin;
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
-
-use futures_executor::block_on;
-use futures_io::AsyncRead;
-use futures_util::{
-    io::{copy, AllowStdIo},
-    stream::TryStreamExt,
+use std::{
+    fs::File as StdFile,
+    io::{self, BufReader, Read, Seek},
+    path::{Path, PathBuf},
+    sync::Arc,
 };
+
+use async_trait::async_trait;
+use futures::io::AllowStdIo;
+use futures_util::stream::TryStreamExt;
 use rand::Rng;
+use tikv_util::stream::error_stream;
+use tokio::fs::{self, File};
+use tokio_util::compat::FuturesAsyncReadCompatExt;
 
 use super::ExternalStorage;
-use tikv_util::stream::error_stream;
+use crate::UnpinReader;
 
 const LOCAL_STORAGE_TMP_FILE_SUFFIX: &str = "tmp";
 
@@ -30,7 +31,7 @@ impl LocalStorage {
     /// Create a new local storage in the given path.
     pub fn new(base: &Path) -> io::Result<LocalStorage> {
         info!("create local storage"; "base" => base.display());
-        let base_dir = Arc::new(File::open(base)?);
+        let base_dir = Arc::new(File::from_std(StdFile::open(base)?));
         Ok(LocalStorage {
             base: base.to_owned(),
             base_dir,
@@ -45,59 +46,118 @@ impl LocalStorage {
     }
 }
 
+fn url_for(base: &Path) -> url::Url {
+    let mut u = url::Url::parse("local:///").unwrap();
+    u.set_path(base.to_str().unwrap());
+    u
+}
+
+pub const STORAGE_NAME: &str = "local";
+
+#[async_trait]
 impl ExternalStorage for LocalStorage {
-    fn write(
-        &self,
-        name: &str,
-        reader: Box<dyn AsyncRead + Send + Unpin>,
-        _content_length: u64,
-    ) -> io::Result<()> {
-        // Storage does not support dir,
-        // "a/a.sst", "/" and "" will return an error.
-        if Path::new(name)
-            .parent()
-            .map_or(true, |p| p.parent().is_some())
-        {
-            return Err(io::Error::new(
-                io::ErrorKind::Other,
-                format!("[{}] parent is not allowed in storage", name),
-            ));
-        }
-        // Sanitize check, do not save file if it is already exist.
-        if fs::metadata(self.base.join(name)).is_ok() {
-            return Err(io::Error::new(
-                io::ErrorKind::AlreadyExists,
-                format!("[{}] is already exists in {}", name, self.base.display()),
-            ));
-        }
-        let tmp_path = self.tmp_path(Path::new(name));
-        let mut tmp_f = AllowStdIo::new(File::create(&tmp_path)?);
-        block_on(copy(reader, &mut tmp_f))?;
-        tmp_f.into_inner().sync_all()?;
-        debug!("save file to local storage";
-            "name" => %name, "base" => %self.base.display());
-        fs::rename(tmp_path, self.base.join(name))?;
-        // Fsync the base dir.
-        self.base_dir.sync_all()
+    fn name(&self) -> &'static str {
+        STORAGE_NAME
     }
 
-    fn read(&self, name: &str) -> Box<dyn AsyncRead + Unpin + '_> {
+    fn url(&self) -> io::Result<url::Url> {
+        Ok(url_for(self.base.as_path()))
+    }
+
+    async fn write(&self, name: &str, reader: UnpinReader, _content_length: u64) -> io::Result<()> {
+        let p = Path::new(name);
+        if p.is_absolute() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!(
+                    "the file name (it is {}) should never be absolute path",
+                    p.display()
+                ),
+            ));
+        }
+        if name.is_empty() || p.file_name().map(|s| s.is_empty()).unwrap_or(true) {
+            return Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                format!("the file name (it is {}) should not be empty", p.display()),
+            ));
+        }
+        // create the parent dir if there isn't one.
+        // note: we may write to arbitrary directory here if the path contains things
+        // like '../' but internally the file name should be fully controlled by
+        // TiKV, so maybe it is OK?
+        if let Some(parent) = Path::new(name).parent() {
+            fs::create_dir_all(self.base.join(parent))
+                .await
+                // According to the man page mkdir(2), it returns EEXIST if there is already the dir.
+                // (However in practice, it doesn't fail in both Linux(CentOS 7) and macOS(12.2).)
+                // Ignore the `AlreadyExists` anyway for safety.
+                .or_else(|e| {
+                    if e.kind() == io::ErrorKind::AlreadyExists {
+                        Ok(())
+                    } else {
+                        Err(e)
+                    }
+                })?;
+        }
+
+        // Because s3 could support writing(put_object) a existed object.
+        // For the interface consistent with s3, local storage need also support write a
+        // existed file.
+        if fs::metadata(self.base.join(name)).await.is_ok() {
+            info!("[{}] is already exists in {}", name, self.base.display());
+        }
+        let tmp_path = self.tmp_path(Path::new(name));
+        let mut tmp_f = File::create(&tmp_path).await?;
+        tokio::io::copy(&mut reader.0.compat(), &mut tmp_f).await?;
+        tmp_f.sync_all().await?;
+        debug!("save file to local storage";
+            "name" => %name, "base" => %self.base.display());
+        fs::rename(tmp_path, self.base.join(name)).await?;
+        // Fsync the base dir.
+        self.base_dir.sync_all().await
+    }
+
+    fn read(&self, name: &str) -> crate::ExternalData<'_> {
         debug!("read file from local storage";
             "name" => %name, "base" => %self.base.display());
-        match File::open(self.base.join(name)) {
+        // We used std i/o here for removing the requirement of tokio reactor when
+        // restoring.
+        // FIXME: when restore side get ready, use tokio::fs::File for returning.
+        match StdFile::open(self.base.join(name)) {
             Ok(file) => Box::new(AllowStdIo::new(file)) as _,
             Err(e) => Box::new(error_stream(e).into_async_read()) as _,
         }
+    }
+
+    fn read_part(&self, name: &str, off: u64, len: u64) -> crate::ExternalData<'_> {
+        debug!("read part of file from local storage";
+            "name" => %name, "off" => %off, "len" => %len, "base" => %self.base.display());
+
+        let mut file = match StdFile::open(self.base.join(name)) {
+            Ok(file) => file,
+            Err(e) => return Box::new(error_stream(e).into_async_read()) as _,
+        };
+        match file.seek(std::io::SeekFrom::Start(off)) {
+            Ok(_) => (),
+            Err(e) => return Box::new(error_stream(e).into_async_read()) as _,
+        };
+        let reader = BufReader::new(file);
+        let take = reader.take(len);
+        Box::new(AllowStdIo::new(take)) as _
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::fs;
+
+    use futures::AsyncReadExt;
     use tempfile::Builder;
 
-    #[test]
-    fn test_local_storage() {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_local_storage() {
         let temp_dir = Builder::new().tempdir().unwrap();
         let path = temp_dir.path();
         let ls = LocalStorage::new(path).unwrap();
@@ -106,29 +166,92 @@ mod tests {
         let tp = ls.tmp_path(Path::new("t.sst"));
         assert_eq!(tp.parent().unwrap(), path);
         assert!(tp.file_name().unwrap().to_str().unwrap().starts_with('t'));
-        assert!(tp
-            .as_path()
-            .extension()
-            .unwrap()
-            .to_str()
-            .unwrap()
-            .starts_with(LOCAL_STORAGE_TMP_FILE_SUFFIX));
+        assert!(
+            tp.as_path()
+                .extension()
+                .unwrap()
+                .to_str()
+                .unwrap()
+                .starts_with(LOCAL_STORAGE_TMP_FILE_SUFFIX)
+        );
 
         // Test save_file
         let magic_contents: &[u8] = b"5678";
         let content_length = magic_contents.len() as u64;
-        ls.write("a.log", Box::new(magic_contents), content_length)
-            .unwrap();
+        ls.write(
+            "a.log",
+            UnpinReader(Box::new(magic_contents)),
+            content_length,
+        )
+        .await
+        .unwrap();
         assert_eq!(fs::read(path.join("a.log")).unwrap(), magic_contents);
 
         // Names contain parent is not allowed.
-        ls.write("a/a.log", Box::new(magic_contents), content_length)
-            .unwrap_err();
-        // Empty name is not allowed.
-        ls.write("", Box::new(magic_contents), content_length)
+        ls.write(
+            "a/a.log",
+            UnpinReader(Box::new(magic_contents)),
+            content_length,
+        )
+        .await
+        .unwrap();
+        let mut r = ls.read("a/a.log");
+        let mut s = String::new();
+        r.read_to_string(&mut s).await.unwrap();
+        assert_eq!(magic_contents, s.as_bytes());
+
+        ls.write(
+            "a/b.log",
+            UnpinReader(Box::new(magic_contents)),
+            content_length,
+        )
+        .await
+        .unwrap();
+        let mut r = ls.read("a/b.log");
+        let mut s = String::new();
+        r.read_to_string(&mut s).await.unwrap();
+        assert_eq!(magic_contents, s.as_bytes()); // Empty name is not allowed.
+
+        ls.write("", UnpinReader(Box::new(magic_contents)), content_length)
+            .await
             .unwrap_err();
         // root is not allowed.
-        ls.write("/", Box::new(magic_contents), content_length)
+        ls.write("/", UnpinReader(Box::new(magic_contents)), content_length)
+            .await
             .unwrap_err();
+        ls.write(
+            "/dir/but/nothing/",
+            UnpinReader(Box::new(magic_contents)),
+            content_length,
+        )
+        .await
+        .unwrap_err();
+    }
+
+    #[test]
+    fn test_url_of_backend() {
+        assert_eq!(url_for(Path::new("/tmp/a")).to_string(), "local:///tmp/a");
+    }
+
+    #[tokio::test]
+    async fn test_write_existed_file() {
+        let temp_dir = Builder::new().tempdir().unwrap();
+        let path = temp_dir.path();
+        let ls = LocalStorage::new(path).unwrap();
+
+        let filename = "existed.file";
+        let buf1: &[u8] = b"pingcap";
+        let buf2: &[u8] = b"tikv";
+        ls.write(filename, UnpinReader(Box::new(buf1)), buf1.len() as _)
+            .await
+            .unwrap();
+        ls.write(filename, UnpinReader(Box::new(buf2)), buf2.len() as _)
+            .await
+            .unwrap();
+
+        let mut read_buff: Vec<u8> = Vec::new();
+        ls.read(filename).read_to_end(&mut read_buff).await.unwrap();
+        assert_eq!(read_buff.len(), 4);
+        assert_eq!(&read_buff, buf2);
     }
 }

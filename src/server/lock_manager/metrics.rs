@@ -12,6 +12,7 @@ make_auto_flush_static_metric! {
             detect,
             clean_up_wait_for,
             clean_up,
+            update_wait_for,
         },
     }
 
@@ -51,20 +52,13 @@ lazy_static! {
     pub static ref WAITER_LIFETIME_HISTOGRAM: Histogram = register_histogram!(
         "tikv_lock_manager_waiter_lifetime_duration",
         "Duration of waiters' lifetime in seconds",
-        exponential_buckets(0.0005, 2.0, 20).unwrap() // 0.5ms ~ 524s
+        exponential_buckets(0.00001, 2.0, 26).unwrap() // 0.5ms ~ 524s
     )
     .unwrap();
     pub static ref DETECT_DURATION_HISTOGRAM: Histogram = register_histogram!(
         "tikv_lock_manager_detect_duration",
         "Duration of handling detect requests",
         exponential_buckets(0.0001, 2.0, 20).unwrap() // 0.1ms ~ 104s
-    )
-    .unwrap();
-    pub static ref WAIT_TABLE_STATUS_GAUGE: WaitTableStatusGauge = register_static_int_gauge_vec!(
-        WaitTableStatusGauge,
-        "tikv_lock_manager_wait_table_status",
-        "Status of the wait table",
-        &["type"]
     )
     .unwrap();
     pub static ref DETECTOR_LEADER_GAUGE: IntGauge = register_int_gauge!(

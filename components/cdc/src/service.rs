@@ -1,257 +1,240 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::collections::hash_map::Entry;
-use std::fmt;
-use std::sync::atomic::{AtomicUsize, Ordering};
-
-use collections::HashMap;
-use futures::future::{self, TryFutureExt};
-use futures::sink::SinkExt;
-use futures::stream::{self, StreamExt, TryStreamExt};
-use grpcio::{
-    DuplexSink, Error as GrpcError, RequestStream, Result as GrpcResult, RpcContext, RpcStatus,
-    RpcStatusCode, WriteFlags,
+use std::sync::{
+    atomic::{AtomicUsize, Ordering},
+    Arc,
 };
-use kvproto::cdcpb::{
-    ChangeData, ChangeDataEvent, ChangeDataRequest, Compatibility, Event, ResolvedTs,
-};
-use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
-use protobuf::Message;
-use tikv_util::mpsc::batch::{self, BatchReceiver, Sender as BatchSender, VecCollector};
-use tikv_util::worker::*;
 
-use crate::delegate::{Downstream, DownstreamID};
-use crate::endpoint::{Deregister, Task};
+use collections::{HashMap, HashMapEntry};
+use crossbeam::atomic::AtomicCell;
+use futures::stream::TryStreamExt;
+use grpcio::{DuplexSink, RequestStream, RpcContext, RpcStatus, RpcStatusCode};
+use kvproto::{
+    cdcpb::{
+        ChangeData, ChangeDataEvent, ChangeDataRequest, ChangeDataRequestKvApi,
+        ChangeDataRequest_oneof_request,
+    },
+    kvrpcpb::ApiVersion,
+};
+use tikv_util::{error, info, memory::MemoryQuota, warn, worker::*};
+
+use crate::{
+    channel::{channel, Sink, CDC_CHANNLE_CAPACITY},
+    delegate::{Downstream, DownstreamId, DownstreamState, ObservedRange},
+    endpoint::{Deregister, Task},
+};
 
 static CONNECTION_ID_ALLOC: AtomicUsize = AtomicUsize::new(0);
 
-const CDC_MSG_NOTIFY_COUNT: usize = 8;
-const CDC_MAX_RESP_SIZE: u32 = 6 * 1024 * 1024; // 6MB
-const CDC_MSG_MAX_BATCH_SIZE: usize = 128;
-// Assume the average size of event is 1KB.
-// 2 = (CDC_MSG_MAX_BATCH_SIZE * 1KB / CDC_EVENT_MAX_BATCH_SIZE).ceil() + 1 /* reserve for ResolvedTs */;
-const CDC_EVENT_MAX_BATCH_SIZE: usize = 2;
+pub fn validate_kv_api(kv_api: ChangeDataRequestKvApi, api_version: ApiVersion) -> bool {
+    kv_api == ChangeDataRequestKvApi::TiDb
+        || (kv_api == ChangeDataRequestKvApi::RawKv && api_version == ApiVersion::V2)
+}
 
 /// A unique identifier of a Connection.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
-pub struct ConnID(usize);
+pub struct ConnId(usize);
 
-impl ConnID {
-    pub fn new() -> ConnID {
-        ConnID(CONNECTION_ID_ALLOC.fetch_add(1, Ordering::SeqCst))
+impl ConnId {
+    pub fn new() -> ConnId {
+        ConnId(CONNECTION_ID_ALLOC.fetch_add(1, Ordering::SeqCst))
     }
 }
 
-#[derive(Clone)]
-pub enum CdcEvent {
-    ResolvedTs(ResolvedTs),
-    Event(Event),
-}
-
-impl CdcEvent {
-    pub fn size(&self) -> u32 {
-        match self {
-            CdcEvent::ResolvedTs(ref r) => r.compute_size(),
-            CdcEvent::Event(ref e) => e.compute_size(),
-        }
-    }
-
-    pub fn event(&self) -> &Event {
-        match self {
-            CdcEvent::ResolvedTs(_) => unreachable!(),
-            CdcEvent::Event(ref e) => e,
-        }
-    }
-
-    pub fn resolved_ts(&self) -> &ResolvedTs {
-        match self {
-            CdcEvent::ResolvedTs(ref r) => r,
-            CdcEvent::Event(_) => unreachable!(),
-        }
+impl Default for ConnId {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
-impl fmt::Debug for CdcEvent {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            CdcEvent::ResolvedTs(ref r) => {
-                let mut d = f.debug_struct("ResolvedTs");
-                d.field("resolved ts", &r.ts);
-                d.field("region count", &r.regions.len());
-                d.finish()
-            }
-            CdcEvent::Event(e) => {
-                let mut d = f.debug_struct("Event");
-                d.field("region_id", &e.region_id);
-                d.field("request_id", &e.request_id);
-                #[cfg(not(feature = "prost-codec"))]
-                if e.has_entries() {
-                    d.field("entries count", &e.get_entries().get_entries().len());
-                }
-                #[cfg(feature = "prost-codec")]
-                if e.event.is_some() {
-                    use kvproto::cdcpb::event;
-                    if let Some(event::Event::Entries(ref es)) = e.event.as_ref() {
-                        d.field("entries count", &es.entries.len());
-                    }
-                }
-                d.finish()
-            }
-        }
-    }
-}
-
-struct EventBatcher {
-    buffer: Vec<ChangeDataEvent>,
-    last_size: u32,
-}
-
-impl EventBatcher {
-    fn with_capacity(cap: usize) -> EventBatcher {
-        EventBatcher {
-            buffer: Vec::with_capacity(cap),
-            last_size: 0,
-        }
-    }
-
-    // The size of the response should not exceed CDC_MAX_RESP_SIZE.
-    // Split the events into multiple responses by CDC_MAX_RESP_SIZE here.
-    fn push(&mut self, event: CdcEvent) {
-        let size = event.size();
-        if size >= CDC_MAX_RESP_SIZE {
-            warn!("cdc event too large"; "size" => size, "event" => ?event);
-        }
-        match event {
-            CdcEvent::Event(e) => {
-                if self.buffer.is_empty() || self.last_size + size >= CDC_MAX_RESP_SIZE {
-                    self.last_size = 0;
-                    self.buffer.push(ChangeDataEvent::default());
-                }
-                self.last_size += size;
-                self.buffer.last_mut().unwrap().mut_events().push(e);
-            }
-            CdcEvent::ResolvedTs(r) => {
-                let mut change_data_event = ChangeDataEvent::default();
-                change_data_event.set_resolved_ts(r);
-                self.buffer.push(change_data_event);
-
-                // Make sure the next message is not batched with ResolvedTs.
-                self.last_size = CDC_MAX_RESP_SIZE;
-            }
-        }
-    }
-
-    fn build(self) -> Vec<ChangeDataEvent> {
-        self.buffer
-    }
-}
-
+// FeatureGate checks whether a feature is enabled or not on client versions.
+//
+// NOTE: default features can't be disabled by clients. Clients can only enable
+// features by specifying GRPC headers. See `EventFeedHeaders`.
 bitflags::bitflags! {
     pub struct FeatureGate: u8 {
         const BATCH_RESOLVED_TS = 0b00000001;
-        // Uncomment when its ready.
-        // const LargeTxn       = 0b00000010;
+        const VALIDATE_CLUSTER_ID = 0b00000010;
+        const STREAM_MULTIPLEXING = 0b00000100;
+    }
+}
+
+impl FeatureGate {
+    fn default_features(version: &semver::Version) -> FeatureGate {
+        let mut features = FeatureGate::empty();
+        if *version >= semver::Version::new(4, 0, 8) {
+            features.set(FeatureGate::BATCH_RESOLVED_TS, true);
+        }
+        if *version >= semver::Version::new(5, 3, 0) {
+            features.set(FeatureGate::VALIDATE_CLUSTER_ID, true);
+        }
+        features
+    }
+
+    /// Returns the first version (v4.0.8) that supports batch resolved ts.
+    pub fn batch_resolved_ts() -> semver::Version {
+        semver::Version::new(4, 0, 8)
     }
 }
 
 pub struct Conn {
-    id: ConnID,
-    sink: BatchSender<CdcEvent>,
-    downstreams: HashMap<u64, DownstreamID>,
+    id: ConnId,
+    sink: Sink,
+    downstreams: HashMap<DownstreamKey, DownstreamValue>,
     peer: String,
+
+    // Set when the connection established, or the first request received.
     version: Option<(semver::Version, FeatureGate)>,
 }
 
+#[derive(PartialEq, Eq, Hash)]
+struct DownstreamKey {
+    request_id: u64,
+    region_id: u64,
+}
+
+#[derive(Clone)]
+struct DownstreamValue {
+    id: DownstreamId,
+    state: Arc<AtomicCell<DownstreamState>>,
+}
+
 impl Conn {
-    pub fn new(sink: BatchSender<CdcEvent>, peer: String) -> Conn {
+    pub fn new(sink: Sink, peer: String) -> Conn {
         Conn {
-            id: ConnID::new(),
+            id: ConnId::new(),
             sink,
             downstreams: HashMap::default(),
-            version: None,
             peer,
+            version: None,
         }
     }
 
-    // TODO refactor into Error::Version.
-    pub fn check_version_and_set_feature(&mut self, ver: semver::Version) -> Option<Compatibility> {
-        // Assume batch resolved ts will be release in v4.0.7
-        // For easy of testing (nightly CI), we lower the gate to v4.0.6
-        // TODO bump the version when cherry pick to release branch.
-        let v407_bacth_resoled_ts = semver::Version::new(4, 0, 6);
-
-        match &self.version {
-            Some((version, _)) => {
-                if version == &ver {
-                    None
-                } else {
-                    error!("different version on the same connection";
-                        "previous version" => ?version, "version" => ?ver,
-                        "downstream" => ?self.peer, "conn_id" => ?self.id);
-                    Some(Compatibility {
-                        required_version: version.to_string(),
-                        ..Default::default()
-                    })
-                }
-            }
-            None => {
-                let mut features = FeatureGate::empty();
-                if v407_bacth_resoled_ts <= ver {
-                    features.toggle(FeatureGate::BATCH_RESOLVED_TS);
-                }
-                info!("cdc connection version"; "version" => ver.to_string(), "features" => ?features);
-                self.version = Some((ver, features));
-                None
-            }
+    pub fn check_version_and_set_feature(
+        &mut self,
+        version: semver::Version,
+        explicit_features: Vec<&'static str>,
+    ) {
+        let mut features = FeatureGate::default_features(&version);
+        if explicit_features.contains(&EventFeedHeaders::STREAM_MULTIPLEXING) {
+            features.set(FeatureGate::STREAM_MULTIPLEXING, true);
+        } else {
+            // NOTE: we can handle more explicit features here.
         }
-        // Return Err(Compatibility) when TiKV reaches the next major release,
-        // so that we can remove feature gates.
+
+        if self.version.replace((version, features)).is_some() {
+            panic!("should never be some");
+        }
     }
 
-    pub fn get_feature(&self) -> Option<&FeatureGate> {
-        self.version.as_ref().map(|(_, f)| f)
+    pub fn features(&self) -> &FeatureGate {
+        self.version.as_ref().map(|(_, f)| f).unwrap()
     }
 
     pub fn get_peer(&self) -> &str {
         &self.peer
     }
 
-    pub fn get_id(&self) -> ConnID {
+    pub fn get_id(&self) -> ConnId {
         self.id
     }
 
-    pub fn take_downstreams(self) -> HashMap<u64, DownstreamID> {
-        self.downstreams
+    pub fn get_sink(&self) -> &Sink {
+        &self.sink
     }
 
-    pub fn get_sink(&self) -> BatchSender<CdcEvent> {
-        self.sink.clone()
+    pub fn get_downstream(&self, request_id: u64, region_id: u64) -> Option<DownstreamId> {
+        let key = DownstreamKey {
+            request_id,
+            region_id,
+        };
+        self.downstreams.get(&key).map(|v| v.id)
     }
 
-    pub fn subscribe(&mut self, region_id: u64, downstream_id: DownstreamID) -> bool {
-        match self.downstreams.entry(region_id) {
-            Entry::Occupied(_) => false,
-            Entry::Vacant(v) => {
-                v.insert(downstream_id);
-                true
+    pub fn subscribe(
+        &mut self,
+        request_id: u64,
+        region_id: u64,
+        downstream_id: DownstreamId,
+        downstream_state: Arc<AtomicCell<DownstreamState>>,
+    ) -> Option<DownstreamId> {
+        let key = DownstreamKey {
+            request_id,
+            region_id,
+        };
+        match self.downstreams.entry(key) {
+            HashMapEntry::Occupied(value) => Some(value.get().id),
+            HashMapEntry::Vacant(v) => {
+                v.insert(DownstreamValue {
+                    id: downstream_id,
+                    state: downstream_state,
+                });
+                None
             }
         }
     }
 
-    pub fn unsubscribe(&mut self, region_id: u64) {
-        self.downstreams.remove(&region_id);
+    pub fn unsubscribe(&mut self, request_id: u64, region_id: u64) -> Option<DownstreamId> {
+        let key = DownstreamKey {
+            request_id,
+            region_id,
+        };
+        self.downstreams.remove(&key).map(|value| value.id)
     }
 
-    pub fn downstream_id(&self, region_id: u64) -> Option<DownstreamID> {
-        self.downstreams.get(&region_id).copied()
+    pub fn unsubscribe_request(&mut self, request_id: u64) -> Vec<(u64, DownstreamId)> {
+        let mut downstreams = Vec::new();
+        self.downstreams.retain(|key, value| -> bool {
+            if key.request_id == request_id {
+                downstreams.push((key.region_id, value.id));
+                return false;
+            }
+            true
+        });
+        downstreams
     }
 
-    pub fn flush(&self) {
-        if !self.sink.is_empty() {
-            if let Some(notifier) = self.sink.get_notifier() {
-                notifier.notify();
+    pub fn iter_downstreams<F>(&self, mut f: F)
+    where
+        F: FnMut(u64, u64, DownstreamId, &Arc<AtomicCell<DownstreamState>>),
+    {
+        for (key, value) in &self.downstreams {
+            f(key.request_id, key.region_id, value.id, &value.state);
+        }
+    }
+
+    #[cfg(test)]
+    pub fn downstreams_count(&self) -> usize {
+        self.downstreams.len()
+    }
+}
+
+// Examaples for all available headers:
+//  * features -> feature_a,feature_b
+#[derive(Debug, Default)]
+struct EventFeedHeaders {
+    features: Vec<&'static str>,
+}
+
+impl EventFeedHeaders {
+    const FEATURES_KEY: &str = "features";
+    const STREAM_MULTIPLEXING: &str = "stream-multiplexing";
+    const FEATURES: &'static [&'static str] = &[Self::STREAM_MULTIPLEXING];
+
+    fn parse_features(value: &[u8]) -> Result<Vec<&'static str>, String> {
+        let value = std::str::from_utf8(value).unwrap_or_default();
+        let (mut features, mut unknowns) = (Vec::new(), Vec::new());
+        for feature in value.split(',').map(|x| x.trim()) {
+            if let Some(i) = Self::FEATURES.iter().position(|x| *x == feature) {
+                features.push(Self::FEATURES[i]);
+            } else {
+                unknowns.push(feature);
             }
         }
+        if !unknowns.is_empty() {
+            return Err(unknowns.join(","));
+        }
+        Ok(features)
     }
 }
 
@@ -261,231 +244,370 @@ impl Conn {
 #[derive(Clone)]
 pub struct Service {
     scheduler: Scheduler<Task>,
+    memory_quota: Arc<MemoryQuota>,
 }
 
 impl Service {
     /// Create a ChangeData service.
     ///
     /// It requires a scheduler of an `Endpoint` in order to schedule tasks.
-    pub fn new(scheduler: Scheduler<Task>) -> Service {
-        Service { scheduler }
+    pub fn new(scheduler: Scheduler<Task>, memory_quota: Arc<MemoryQuota>) -> Service {
+        Service {
+            scheduler,
+            memory_quota,
+        }
+    }
+
+    // Parse HTTP/2 headers. Only for `Self::event_feed_v2`.
+    fn parse_headers(ctx: &RpcContext<'_>) -> Result<EventFeedHeaders, String> {
+        let mut header = EventFeedHeaders::default();
+        let metadata = ctx.request_headers();
+        for i in 0..metadata.len() {
+            let (key, value) = metadata.get(i).unwrap();
+            if key == EventFeedHeaders::FEATURES_KEY {
+                header.features = EventFeedHeaders::parse_features(value)?;
+            }
+        }
+        Ok(header)
+    }
+
+    fn parse_version_from_request_header(
+        request: &ChangeDataRequest,
+        peer: &str,
+    ) -> semver::Version {
+        let version_field = request.get_header().get_ticdc_version();
+        match semver::Version::parse(version_field) {
+            Ok(v) => v,
+            Err(e) => {
+                warn!(
+                    "empty or invalid TiCDC version, please upgrading TiCDC";
+                    "version" => version_field,
+                    "downstream" => ?peer, "region_id" => request.region_id,
+                    "error" => ?e,
+                );
+                semver::Version::new(0, 0, 0)
+            }
+        }
+    }
+
+    fn set_conn_version(
+        scheduler: &Scheduler<Task>,
+        conn_id: ConnId,
+        version: semver::Version,
+        explicit_features: Vec<&'static str>,
+    ) -> Result<(), String> {
+        let task = Task::SetConnVersion {
+            conn_id,
+            version,
+            explicit_features,
+        };
+        scheduler.schedule(task).map_err(|e| format!("{:?}", e))
+    }
+
+    // ### Command types:
+    // * Register registers a region. 1) both `request_id` and `region_id` must be
+    //   specified; 2) `request_id` can be 0 but `region_id` can not.
+    // * Deregister deregisters some regions in one same `request_id` or just one
+    //   region. 1) if both `request_id` and `region_id` are specified, just
+    //   deregister the region; 2) if only `request_id` is specified, all region
+    //   subscriptions with the same `request_id` will be deregistered.
+    fn handle_request(
+        scheduler: &Scheduler<Task>,
+        peer: &str,
+        request: ChangeDataRequest,
+        conn_id: ConnId,
+    ) -> Result<(), String> {
+        match request.request {
+            None | Some(ChangeDataRequest_oneof_request::Register(_)) => {
+                Self::handle_register(scheduler, peer, request, conn_id)
+            }
+            Some(ChangeDataRequest_oneof_request::Deregister(_)) => {
+                Self::handle_deregister(scheduler, request, conn_id)
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    fn handle_register(
+        scheduler: &Scheduler<Task>,
+        peer: &str,
+        request: ChangeDataRequest,
+        conn_id: ConnId,
+    ) -> Result<(), String> {
+        let observed_range =
+            match ObservedRange::new(request.start_key.clone(), request.end_key.clone()) {
+                Ok(observed_range) => observed_range,
+                Err(e) => {
+                    warn!(
+                        "cdc invalid observed start key or end key version";
+                        "downstream" => ?peer, "region_id" => request.region_id,
+                        "error" => ?e,
+                    );
+                    ObservedRange::default()
+                }
+            };
+        let downstream = Downstream::new(
+            peer.to_owned(),
+            request.get_region_epoch().clone(),
+            request.request_id,
+            conn_id,
+            request.kv_api,
+            request.filter_loop,
+            observed_range,
+        );
+        let task = Task::Register {
+            request,
+            downstream,
+            conn_id,
+        };
+        scheduler.schedule(task).map_err(|e| format!("{:?}", e))
+    }
+
+    fn handle_deregister(
+        scheduler: &Scheduler<Task>,
+        request: ChangeDataRequest,
+        conn_id: ConnId,
+    ) -> Result<(), String> {
+        let task = if request.region_id != 0 {
+            Task::Deregister(Deregister::Region {
+                conn_id,
+                request_id: request.request_id,
+                region_id: request.region_id,
+            })
+        } else {
+            Task::Deregister(Deregister::Request {
+                conn_id,
+                request_id: request.request_id,
+            })
+        };
+        scheduler.schedule(task).map_err(|e| format!("{:?}", e))
+    }
+
+    // Differences between `Self::event_feed` and `Self::event_feed_v2`:
+    //
+    // ### Why `v2`
+    // `v2` is expected to resolve this problem: clients version is higher than
+    // server, In which case, `v1` compatibility check mechanism doesn't work.
+    //
+    // ### How `v2`
+    // In `v2`, clients tells requested features to connected servers. If a
+    // server finds a client requires unavailable features, it can fail the
+    // connection with an UNIMPLEMENTED status code.
+    //
+    // ### Details about `v2` features
+    // * stream-multiplexing: a region can be subscribed multiple times in one
+    //   `Conn` with different `request_id`.
+    fn handle_event_feed(
+        &mut self,
+        ctx: RpcContext<'_>,
+        stream: RequestStream<ChangeDataRequest>,
+        mut sink: DuplexSink<ChangeDataEvent>,
+        event_feed_v2: bool,
+    ) {
+        sink.enhance_batch(true);
+        let (event_sink, mut event_drain) =
+            channel(CDC_CHANNLE_CAPACITY, self.memory_quota.clone());
+        let conn = Conn::new(event_sink, ctx.peer());
+        let conn_id = conn.get_id();
+        let mut explicit_features = vec![];
+
+        if event_feed_v2 {
+            let headers = match Self::parse_headers(&ctx) {
+                Ok(headers) => headers,
+                Err(e) => {
+                    let peer = ctx.peer();
+                    error!("cdc connection with bad headers"; "downstream" => ?peer, "headers" => &e);
+                    ctx.spawn(async move {
+                        let status = RpcStatus::with_message(RpcStatusCode::UNIMPLEMENTED, e);
+                        if let Err(e) = sink.fail(status).await {
+                            error!("cdc failed to send error"; "downstream" => ?peer, "error" => ?e);
+                        }
+                    });
+                    return;
+                }
+            };
+            explicit_features = headers.features;
+        }
+        info!("cdc connection created"; "downstream" => ctx.peer(), "features" => ?explicit_features);
+
+        if let Err(e) = self.scheduler.schedule(Task::OpenConn { conn }) {
+            let peer = ctx.peer();
+            error!("cdc connection initiate failed"; "downstream" => ?peer, "error" => ?e);
+            ctx.spawn(async move {
+                let status = RpcStatus::with_message(RpcStatusCode::UNKNOWN, format!("{:?}", e));
+                if let Err(e) = sink.fail(status).await {
+                    error!("cdc failed to send error"; "downstream" => ?peer, "error" => ?e);
+                }
+            });
+            return;
+        }
+
+        let peer = ctx.peer();
+        let scheduler = self.scheduler.clone();
+        let recv_req = async move {
+            let mut stream = stream.map_err(|e| format!("{:?}", e));
+            if let Some(request) = stream.try_next().await? {
+                // Get version from the first request in the stream.
+                let version = Self::parse_version_from_request_header(&request, &peer);
+                Self::set_conn_version(&scheduler, conn_id, version, explicit_features)?;
+                Self::handle_request(&scheduler, &peer, request, conn_id)?;
+            }
+            while let Some(request) = stream.try_next().await? {
+                Self::handle_request(&scheduler, &peer, request, conn_id)?;
+            }
+            let deregister = Deregister::Conn(conn_id);
+            if let Err(e) = scheduler.schedule(Task::Deregister(deregister)) {
+                error!("cdc deregister failed"; "error" => ?e, "conn_id" => ?conn_id);
+            }
+            Ok::<(), String>(())
+        };
+
+        let peer = ctx.peer();
+        ctx.spawn(async move {
+            if let Err(e) = recv_req.await {
+                warn!("cdc receive failed"; "error" => ?e, "downstream" => peer, "conn_id" => ?conn_id);
+            } else {
+                info!("cdc receive closed"; "downstream" => peer, "conn_id" => ?conn_id);
+            }
+        });
+
+        let peer = ctx.peer();
+        ctx.spawn(async move {
+            #[cfg(feature = "failpoints")]
+            sleep_before_drain_change_event().await;
+            if let Err(e) = event_drain.forward(&mut sink).await {
+                warn!("cdc send failed"; "error" => ?e, "downstream" => peer, "conn_id" => ?conn_id);
+            } else {
+                info!("cdc send closed"; "downstream" => peer, "conn_id" => ?conn_id);
+            }
+        });
     }
 }
 
 impl ChangeData for Service {
     fn event_feed(
         &mut self,
-        ctx: RpcContext,
+        ctx: RpcContext<'_>,
         stream: RequestStream<ChangeDataRequest>,
-        mut sink: DuplexSink<ChangeDataEvent>,
+        sink: DuplexSink<ChangeDataEvent>,
     ) {
-        // TODO: make it a bounded channel.
-        let (tx, rx) = batch::unbounded(CDC_MSG_NOTIFY_COUNT);
-        let peer = ctx.peer();
-        let conn = Conn::new(tx, peer);
-        let conn_id = conn.get_id();
+        self.handle_event_feed(ctx, stream, sink, false);
+    }
 
-        if let Err(status) = self
-            .scheduler
-            .schedule(Task::OpenConn { conn })
-            .map_err(|e| RpcStatus::new(RpcStatusCode::INVALID_ARGUMENT, Some(format!("{:?}", e))))
-        {
-            error!("cdc connection initiate failed"; "error" => ?status);
-            ctx.spawn(
-                sink.fail(status)
-                    .unwrap_or_else(|e| error!("cdc failed to send error"; "error" => ?e)),
-            );
-            return;
-        }
+    fn event_feed_v2(
+        &mut self,
+        ctx: RpcContext<'_>,
+        stream: RequestStream<ChangeDataRequest>,
+        sink: DuplexSink<ChangeDataEvent>,
+    ) {
+        self.handle_event_feed(ctx, stream, sink, true);
+    }
+}
 
-        let peer = ctx.peer();
-        let scheduler = self.scheduler.clone();
-        let recv_req = stream.try_for_each(move |request| {
-            let region_epoch = request.get_region_epoch().clone();
-            let req_id = request.get_request_id();
-            let enable_old_value = request.get_extra_op() == TxnExtraOp::ReadOldValue;
-            let version = match semver::Version::parse(request.get_header().get_ticdc_version()) {
-                Ok(v) => v,
-                Err(e) => {
-                    warn!("empty or invalid TiCDC version, please upgrading TiCDC";
-                        "version" => request.get_header().get_ticdc_version(),
-                        "error" => ?e);
-                    semver::Version::new(0, 0, 0)
-                }
-            };
-            let downstream = Downstream::new(
-                peer.clone(),
-                region_epoch,
-                req_id,
-                conn_id,
-                enable_old_value,
-            );
-            let ret = scheduler
-                .schedule(Task::Register {
-                    request,
-                    downstream,
-                    conn_id,
-                    version,
-                })
-                .map_err(|e| {
-                    GrpcError::RpcFailure(RpcStatus::new(
-                        RpcStatusCode::INVALID_ARGUMENT,
-                        Some(format!("{:?}", e)),
-                    ))
-                });
-            future::ready(ret)
-        });
+#[cfg(feature = "failpoints")]
+async fn sleep_before_drain_change_event() {
+    use std::time::{Duration, Instant};
 
-        let rx = BatchReceiver::new(rx, CDC_MSG_MAX_BATCH_SIZE, Vec::new, VecCollector);
-        let mut rx = rx
-            .map(|events| {
-                let mut batcher = EventBatcher::with_capacity(CDC_EVENT_MAX_BATCH_SIZE);
-                events.into_iter().for_each(|e| batcher.push(e));
-                let resps = batcher.build();
-                let last_idx = resps.len() - 1;
-                stream::iter(resps.into_iter().enumerate().map(move |(i, e)| {
-                    // Buffer messages and flush them at once.
-                    let write_flags = WriteFlags::default().buffer_hint(i != last_idx);
-                    GrpcResult::Ok((e, write_flags))
-                }))
-            })
-            .flatten();
-
-        let peer = ctx.peer();
-        let scheduler = self.scheduler.clone();
-        ctx.spawn(async move {
-            let res = recv_req.await;
-            // Unregister this downstream only.
-            let deregister = Deregister::Conn(conn_id);
-            if let Err(e) = scheduler.schedule(Task::Deregister(deregister)) {
-                error!("cdc deregister failed"; "error" => ?e, "conn_id" => ?conn_id);
-            }
-            match res {
-                Ok(()) => {
-                    info!("cdc send half closed"; "downstream" => peer, "conn_id" => ?conn_id);
-                }
-                Err(e) => {
-                    warn!("cdc send failed"; "error" => ?e, "downstream" => peer, "conn_id" => ?conn_id);
-                }
-            }
-        });
-
-        let peer = ctx.peer();
-        let scheduler = self.scheduler.clone();
-
-        ctx.spawn(async move {
-            let res = sink.send_all(&mut rx).await;
-            // Unregister this downstream only.
-            let deregister = Deregister::Conn(conn_id);
-            if let Err(e) = scheduler.schedule(Task::Deregister(deregister)) {
-                error!("cdc deregister failed"; "error" => ?e);
-            }
-            match res {
-                Ok(_s) => {
-                    info!("cdc send half closed"; "downstream" => peer, "conn_id" => ?conn_id);
-                    let _ = sink.close().await;
-                }
-                Err(e) => {
-                    warn!("cdc send failed"; "error" => ?e, "downstream" => peer, "conn_id" => ?conn_id);
-                }
-            }
-        });
+    use tikv_util::timer::GLOBAL_TIMER_HANDLE;
+    let should_sleep = || {
+        fail::fail_point!("cdc_sleep_before_drain_change_event", |_| true);
+        false
+    };
+    if should_sleep() {
+        let dur = Duration::from_secs(5);
+        let timer = GLOBAL_TIMER_HANDLE.delay(Instant::now() + dur);
+        let _ = futures::compat::Compat01As03::new(timer).await;
     }
 }
 
 #[cfg(test)]
 mod tests {
-    #[cfg(feature = "prost-codec")]
-    use kvproto::cdcpb::event::{
-        Entries as EventEntries, Event as Event_oneof_event, Row as EventRow,
-    };
-    use kvproto::cdcpb::{ChangeDataEvent, Event, ResolvedTs};
-    #[cfg(not(feature = "prost-codec"))]
-    use kvproto::cdcpb::{EventEntries, EventRow, Event_oneof_event};
+    use std::{sync::Arc, time::Duration};
 
-    use crate::service::{CdcEvent, EventBatcher, CDC_EVENT_MAX_BATCH_SIZE, CDC_MAX_RESP_SIZE};
+    use futures::{executor::block_on, SinkExt};
+    use grpcio::{self, ChannelBuilder, EnvBuilder, Server, ServerBuilder, WriteFlags};
+    use kvproto::cdcpb::{create_change_data, ChangeDataClient, ResolvedTs};
+    use tikv_util::future::block_on_timeout;
+
+    use super::*;
+    use crate::channel::{recv_timeout, CdcEvent};
+
+    fn new_rpc_suite(capacity: usize) -> (Server, ChangeDataClient, ReceiverWrapper<Task>) {
+        let memory_quota = Arc::new(MemoryQuota::new(capacity));
+        let (scheduler, rx) = dummy_scheduler();
+        let cdc_service = Service::new(scheduler, memory_quota);
+        let env = Arc::new(EnvBuilder::new().build());
+        let builder =
+            ServerBuilder::new(env.clone()).register_service(create_change_data(cdc_service));
+        let mut server = builder.bind("127.0.0.1", 0).build().unwrap();
+        server.start();
+        let (_, port) = server.bind_addrs().next().unwrap();
+        let addr = format!("127.0.0.1:{}", port);
+        let channel = ChannelBuilder::new(env).connect(&addr);
+        let client = ChangeDataClient::new(channel);
+        (server, client, rx)
+    }
 
     #[test]
-    fn test_event_batcher() {
-        let check_events = |result: Vec<ChangeDataEvent>, expected: Vec<Vec<CdcEvent>>| {
-            assert_eq!(result.len(), expected.len());
+    fn test_flow_control() {
+        // Disable CDC sink memory quota.
+        let capacity = usize::MAX;
+        let (_server, client, mut task_rx) = new_rpc_suite(capacity);
+        // Create a event feed stream.
+        let (mut tx, mut rx) = client.event_feed().unwrap();
+        let mut req = ChangeDataRequest {
+            region_id: 1,
+            ..Default::default()
+        };
+        req.mut_header().set_ticdc_version("4.0.7".into());
+        block_on(tx.send((req, WriteFlags::default()))).unwrap();
+        let task = task_rx.recv_timeout(Duration::from_millis(100)).unwrap();
+        let conn = if let Some(Task::OpenConn { conn }) = task {
+            conn
+        } else {
+            panic!("expect to be Task::OpenConn");
+        };
+        let sink = conn.get_sink().clone();
+        // Approximate 1 KB.
+        let mut rts = ResolvedTs::default();
+        rts.set_regions(vec![u64::MAX; 128]);
 
-            for i in 0..expected.len() {
-                if !result[i].has_resolved_ts() {
-                    assert_eq!(result[i].events.len(), expected[i].len());
-                    for j in 0..expected[i].len() {
-                        assert_eq!(&result[i].events[j], expected[i][j].event());
-                    }
-                } else {
-                    assert_eq!(expected[i].len(), 1);
-                    assert_eq!(result[i].get_resolved_ts(), expected[i][0].resolved_ts());
+        let send = || {
+            let rts_ = rts.clone();
+            let mut sink_ = sink.clone();
+            Box::pin(async move { sink_.send_all(vec![CdcEvent::ResolvedTs(rts_)]).await })
+        };
+        let must_fill_window = || {
+            let mut window_size = 0;
+            loop {
+                if matches!(
+                    block_on_timeout(send(), Duration::from_millis(100)),
+                    Err(_) | Ok(Err(_))
+                ) {
+                    // Window is filled and flow control in sink is triggered.
+                    break;
                 }
+                window_size += 1;
+                // gRPC window size should not be larger than 1GB.
+                assert!(window_size <= 1024 * 1024, "window_size: {}", window_size);
             }
+            window_size
         };
 
-        let row_small = EventRow::default();
-        let event_entries = EventEntries {
-            entries: vec![row_small].into(),
-            ..Default::default()
-        };
-        let event_small = Event {
-            event: Some(Event_oneof_event::Entries(event_entries)),
-            ..Default::default()
-        };
-
-        let mut row_big = EventRow::default();
-        row_big.set_key(vec![0_u8; CDC_MAX_RESP_SIZE as usize]);
-        let event_entries = EventEntries {
-            entries: vec![row_big].into(),
-            ..Default::default()
-        };
-        let event_big = Event {
-            event: Some(Event_oneof_event::Entries(event_entries)),
-            ..Default::default()
-        };
-
-        let mut resolved_ts = ResolvedTs::default();
-        resolved_ts.set_ts(1);
-
-        // None empty event should not return a zero size.
-        assert_ne!(CdcEvent::ResolvedTs(resolved_ts.clone()).size(), 0);
-        assert_ne!(CdcEvent::Event(event_big.clone()).size(), 0);
-        assert_ne!(CdcEvent::Event(event_small.clone()).size(), 0);
-
-        // An ReslovedTs event follows a small event, they should not be batched
-        // in one message.
-        let mut batcher = EventBatcher::with_capacity(CDC_EVENT_MAX_BATCH_SIZE);
-        batcher.push(CdcEvent::ResolvedTs(resolved_ts.clone()));
-        batcher.push(CdcEvent::Event(event_small.clone()));
-
-        check_events(
-            batcher.build(),
-            vec![
-                vec![CdcEvent::ResolvedTs(resolved_ts.clone())],
-                vec![CdcEvent::Event(event_small.clone())],
-            ],
-        );
-
-        // A more complex case.
-        let mut batcher = EventBatcher::with_capacity(1024);
-        batcher.push(CdcEvent::Event(event_small.clone()));
-        batcher.push(CdcEvent::ResolvedTs(resolved_ts.clone()));
-        batcher.push(CdcEvent::ResolvedTs(resolved_ts.clone()));
-        batcher.push(CdcEvent::Event(event_big.clone()));
-        batcher.push(CdcEvent::Event(event_small.clone()));
-        batcher.push(CdcEvent::Event(event_small.clone()));
-        batcher.push(CdcEvent::Event(event_big.clone()));
-
-        check_events(
-            batcher.build(),
-            vec![
-                vec![CdcEvent::Event(event_small.clone())],
-                vec![CdcEvent::ResolvedTs(resolved_ts.clone())],
-                vec![CdcEvent::ResolvedTs(resolved_ts)],
-                vec![CdcEvent::Event(event_big.clone())],
-                vec![CdcEvent::Event(event_small); 2],
-                vec![CdcEvent::Event(event_big)],
-            ],
-        );
+        // Fill gRPC window.
+        let window_size = must_fill_window();
+        assert_ne!(window_size, 0);
+        // After receiving a message, sink should be able to send again.
+        recv_timeout(&mut rx, Duration::from_millis(100))
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        block_on_timeout(send(), Duration::from_millis(100))
+            .unwrap()
+            .unwrap();
+        // gRPC client may update window size after receiving a message,
+        // though server should not be able to send messages infinitely.
+        let window_size = must_fill_window();
+        assert_ne!(window_size, 0);
     }
 }

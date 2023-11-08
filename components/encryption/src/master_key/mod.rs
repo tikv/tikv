@@ -1,6 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use kvproto::encryptionpb::EncryptedContent;
+use tikv_util::box_err;
 
 use crate::{Error, Result};
 
@@ -27,7 +28,7 @@ mod metadata;
 use self::metadata::*;
 
 mod kms;
-pub use self::kms::{DataKeyPair, EncryptedKey, KmsBackend, KmsProvider};
+pub use self::kms::KmsBackend;
 
 #[derive(Default, Debug, Clone)]
 pub struct PlaintextBackend {}
@@ -69,11 +70,12 @@ impl Backend for PlaintextBackend {
 
 #[cfg(test)]
 pub mod tests {
-    use super::*;
-    use crate::*;
+    use std::{collections::HashMap, sync::Mutex};
+
     use lazy_static::lazy_static;
-    use std::collections::HashMap;
-    use std::sync::Mutex;
+
+    use super::{Backend, *};
+    use crate::*;
 
     #[derive(Debug)]
     pub struct MockBackend {
@@ -104,8 +106,9 @@ pub mod tests {
     }
 
     impl MockBackend {
-        // Callers are responsible for enabling tracking on the MockBackend by calling this function
-        // This names the backend instance, allowiing later fine-grained recall
+        // Callers are responsible for enabling tracking on the MockBackend by calling
+        // this function This names the backend instance, allowing later fine-grained
+        // recall
         pub fn track(&mut self, name: String) {
             let track = make_track(&name);
             self.track = track.clone();

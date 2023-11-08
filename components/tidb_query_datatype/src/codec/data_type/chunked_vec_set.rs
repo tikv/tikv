@@ -1,11 +1,11 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use super::bit_vec::BitVec;
-use super::{ChunkRef, ChunkedVec, UnsafeRefInto};
-use super::{Set, SetRef};
-use crate::impl_chunked_vec_common;
 use std::sync::Arc;
+
 use tikv_util::buffer_vec::BufferVec;
+
+use super::{bit_vec::BitVec, ChunkRef, ChunkedVec, Set, SetRef, UnsafeRefInto};
+use crate::impl_chunked_vec_common;
 
 /// `ChunkedVecSet` stores set in a compact way.
 ///
@@ -20,7 +20,8 @@ use tikv_util::buffer_vec::BufferVec;
 /// stored representation issue
 ///
 /// TODO: add way to set set column data
-/// TODO: code fot set/enum looks nearly the same, considering refactor them using macro
+/// TODO: code fot set/enum looks nearly the same, considering refactor them
+/// using macro
 #[derive(Debug, Clone)]
 pub struct ChunkedVecSet {
     data: Arc<BufferVec>,
@@ -30,7 +31,7 @@ pub struct ChunkedVecSet {
 
 impl ChunkedVecSet {
     #[inline]
-    pub fn get(&self, idx: usize) -> Option<SetRef> {
+    pub fn get(&self, idx: usize) -> Option<SetRef<'_>> {
         assert!(idx < self.len());
         if self.bitmap.get(idx) {
             Some(SetRef::new(&self.data, self.value[idx]))

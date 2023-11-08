@@ -1,34 +1,28 @@
 [package]
 name = "test_backup"
 version = "0.0.1"
-edition = "2018"
+edition = "2021"
 publish = false
 
-[features]
-protobuf-codec = [
-  "backup/protobuf-codec",
-]
-prost-codec = [
-  "backup/prost-codec",
-]
-
 [dependencies]
-backup = { path = "../backup" }
-collections = { path = "../collections" }
-concurrency_manager = { path = "../concurrency_manager" }
+api_version = { workspace = true }
+backup = { workspace = true }
+collections = { workspace = true }
+concurrency_manager = { workspace = true }
 crc64fast = "0.1"
-engine_traits = { path = "../engine_traits" }
-external_storage = { path = "../external_storage" }
-file_system = { path = "../file_system" }
+engine_traits = { workspace = true }
+external_storage ={ workspace = true }
+file_system = { workspace = true }
 futures = "0.3"
 futures-executor = "0.3"
 futures-util = { version = "0.3", default-features = false, features = ["io"] }
-grpcio = { version = "0.8",  default-features = false, features = ["openssl-vendored"] }
-kvproto = { git = "https://github.com/pingcap/kvproto.git", default-features = false }
-rand = "0.7"
+grpcio = { workspace = true }
+kvproto = { workspace = true }
+protobuf = "2"
+rand = "0.8"
 tempfile = "3.0"
-test_raftstore = { path = "../test_raftstore" }
-tidb_query_common = { path = "../tidb_query_common" }
-tikv = { path = "../../", default-features = false }
-tikv_util = { path = "../tikv_util" }
-txn_types = { path = "../txn_types" }
+test_raftstore = { workspace = true }
+tidb_query_common = { workspace = true }
+tikv = { workspace = true }
+tikv_util = { workspace = true }
+txn_types = { workspace = true }

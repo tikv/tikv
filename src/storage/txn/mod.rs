@@ -3,42 +3,50 @@
 //! Storage Transactions
 
 pub mod commands;
+pub mod flow_controller;
 pub mod sched_pool;
 pub mod scheduler;
+pub mod txn_status_cache;
 
 mod actions;
-
-pub use actions::{
-    acquire_pessimistic_lock::acquire_pessimistic_lock,
-    cleanup::cleanup,
-    commit::commit,
-    gc::gc,
-    prewrite::{prewrite, CommitKind, TransactionKind, TransactionProperties},
-};
-
 mod latch;
 mod store;
 
-use crate::storage::{
-    types::{MvccInfo, PessimisticLockRes, PrewriteResult, SecondaryLocksStatus, TxnStatus},
-    Error as StorageError, Result as StorageResult,
-};
+use std::{error::Error as StdError, io::Error as IoError};
+
 use error_code::{self, ErrorCode, ErrorCodeExt};
 use kvproto::kvrpcpb::LockInfo;
-use std::error;
-use std::fmt;
-use std::io::Error as IoError;
-use txn_types::{Key, TimeStamp};
+use thiserror::Error;
+use txn_types::{Key, TimeStamp, Value};
 
-pub use self::commands::{Command, RESOLVE_LOCK_BATCH_SIZE};
-pub use self::latch::{Latches, Lock};
-pub use self::scheduler::Scheduler;
-pub use self::store::{
-    EntryBatch, FixtureStore, FixtureStoreScanner, Scanner, SnapshotStore, Store, TxnEntry,
-    TxnEntryScanner, TxnEntryStore,
+pub use self::{
+    actions::{
+        acquire_pessimistic_lock::acquire_pessimistic_lock,
+        cleanup::cleanup,
+        commit::commit,
+        flashback_to_version::{
+            flashback_to_version_read_lock, flashback_to_version_read_write,
+            flashback_to_version_write, rollback_locks, FLASHBACK_BATCH_SIZE,
+        },
+        gc::gc,
+        prewrite::{prewrite, CommitKind, TransactionKind, TransactionProperties},
+    },
+    commands::{Command, RESOLVE_LOCK_BATCH_SIZE},
+    latch::{Latches, Lock},
+    scheduler::TxnScheduler,
+    store::{
+        EntryBatch, FixtureStore, FixtureStoreScanner, Scanner, SnapshotStore, Store, TxnEntry,
+        TxnEntryScanner, TxnEntryStore,
+    },
+};
+use crate::storage::{
+    mvcc::Error as MvccError,
+    types::{MvccInfo, PessimisticLockResults, PrewriteResult, SecondaryLocksStatus, TxnStatus},
+    Error as StorageError, Result as StorageResult,
 };
 
 /// Process result of a command.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug)]
 pub enum ProcessResult {
     Res,
@@ -67,10 +75,14 @@ pub enum ProcessResult {
         err: StorageError,
     },
     PessimisticLockRes {
-        res: StorageResult<PessimisticLockRes>,
+        res: StorageResult<PessimisticLockResults>,
     },
     SecondaryLocksStatus {
         status: SecondaryLocksStatus,
+    },
+    RawCompareAndSwapRes {
+        previous_value: Option<Value>,
+        succeed: bool,
     },
 }
 
@@ -85,60 +97,54 @@ impl ProcessResult {
     }
 }
 
-quick_error! {
-    #[derive(Debug)]
-    pub enum ErrorInner {
-        Engine(err: crate::storage::kv::Error) {
-            from()
-            cause(err)
-            display("{}", err)
-        }
-        Codec(err: tikv_util::codec::Error) {
-            from()
-            cause(err)
-            display("{}", err)
-        }
-        ProtoBuf(err: protobuf::error::ProtobufError) {
-            from()
-            cause(err)
-            display("{}", err)
-        }
-        Mvcc(err: crate::storage::mvcc::Error) {
-            from()
-            cause(err)
-            display("{}", err)
-        }
-        Other(err: Box<dyn error::Error + Sync + Send>) {
-            from()
-            cause(err.as_ref())
-            display("{:?}", err)
-        }
-        Io(err: IoError) {
-            from()
-            cause(err)
-            display("{}", err)
-        }
-        InvalidTxnTso {start_ts: TimeStamp, commit_ts: TimeStamp} {
-            display("Invalid transaction tso with start_ts:{},commit_ts:{}",
-                        start_ts,
-                        commit_ts)
-        }
-        InvalidReqRange {start: Option<Vec<u8>>,
-                        end: Option<Vec<u8>>,
-                        lower_bound: Option<Vec<u8>>,
-                        upper_bound: Option<Vec<u8>>} {
-            display("Request range exceeds bound, request range:[{}, end:{}), physical bound:[{}, {})",
-                        start.as_ref().map(|x| &x[..]).map(log_wrappers::Value::key).map(|x| format!("{:?}", x)).unwrap_or_else(|| "(none)".to_owned()),
-                        end.as_ref().map(|x| &x[..]).map(log_wrappers::Value::key).map(|x| format!("{:?}", x)).unwrap_or_else(|| "(none)".to_owned()),
-                        lower_bound.as_ref().map(|x| &x[..]).map(log_wrappers::Value::key).map(|x| format!("{:?}", x)).unwrap_or_else(|| "(none)".to_owned()),
-                        upper_bound.as_ref().map(|x| &x[..]).map(log_wrappers::Value::key).map(|x| format!("{:?}", x)).unwrap_or_else(|| "(none)".to_owned()))
-        }
-        MaxTimestampNotSynced { region_id: u64, start_ts: TimeStamp } {
-            display("Prewrite for async commit fails due to potentially stale max timestamp, start_ts: {}, region_id: {}",
-                        start_ts,
-                        region_id)
-        }
-    }
+#[derive(Debug, Error)]
+pub enum ErrorInner {
+    #[error("{0}")]
+    Engine(#[from] crate::storage::kv::Error),
+
+    #[error("{0}")]
+    Codec(#[from] tikv_util::codec::Error),
+
+    #[error("{0}")]
+    ProtoBuf(#[from] protobuf::error::ProtobufError),
+
+    #[error("{0}")]
+    Mvcc(#[from] crate::storage::mvcc::Error),
+
+    #[error("{0:?}")]
+    Other(#[from] Box<dyn StdError + Sync + Send>),
+
+    #[error("{0}")]
+    Io(#[from] IoError),
+
+    #[error("Invalid transaction tso with start_ts:{start_ts}, commit_ts:{commit_ts}")]
+    InvalidTxnTso {
+        start_ts: TimeStamp,
+        commit_ts: TimeStamp,
+    },
+
+    #[error(
+        "Request range exceeds bound, request range:[{}, {}), physical bound:[{}, {})",
+        .start.as_ref().map(|x| &x[..]).map(log_wrappers::Value::key).map(|x| format!("{:?}", x)).unwrap_or_else(|| "(none)".to_owned()),
+        .end.as_ref().map(|x| &x[..]).map(log_wrappers::Value::key).map(|x| format!("{:?}", x)).unwrap_or_else(|| "(none)".to_owned()),
+        .lower_bound.as_ref().map(|x| &x[..]).map(log_wrappers::Value::key).map(|x| format!("{:?}", x)).unwrap_or_else(|| "(none)".to_owned()),
+        .upper_bound.as_ref().map(|x| &x[..]).map(log_wrappers::Value::key).map(|x| format!("{:?}", x)).unwrap_or_else(|| "(none)".to_owned())
+    )]
+    InvalidReqRange {
+        start: Option<Vec<u8>>,
+        end: Option<Vec<u8>>,
+        lower_bound: Option<Vec<u8>>,
+        upper_bound: Option<Vec<u8>>,
+    },
+
+    #[error(
+        "Prewrite for async commit fails due to potentially stale max timestamp, \
+        start_ts: {start_ts}, region_id: {region_id}"
+    )]
+    MaxTimestampNotSynced { region_id: u64, start_ts: TimeStamp },
+
+    #[error("region {0} not prepared the flashback")]
+    FlashbackNotPrepared(u64),
 }
 
 impl ErrorInner {
@@ -172,34 +178,25 @@ impl ErrorInner {
                 region_id,
                 start_ts,
             }),
+            ErrorInner::FlashbackNotPrepared(region_id) => {
+                Some(ErrorInner::FlashbackNotPrepared(region_id))
+            }
             ErrorInner::Other(_) | ErrorInner::ProtoBuf(_) | ErrorInner::Io(_) => None,
         }
     }
 }
 
-pub struct Error(pub Box<ErrorInner>);
+#[derive(Debug, Error)]
+#[error(transparent)]
+pub struct Error(#[from] pub Box<ErrorInner>);
 
 impl Error {
     pub fn maybe_clone(&self) -> Option<Error> {
         self.0.maybe_clone().map(Error::from)
     }
-}
-
-impl fmt::Debug for Error {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        fmt::Debug::fmt(&self.0, f)
-    }
-}
-
-impl fmt::Display for Error {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        fmt::Display::fmt(&self.0, f)
-    }
-}
-
-impl std::error::Error for Error {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        std::error::Error::source(&self.0)
+    pub fn from_mvcc<T: Into<MvccError>>(err: T) -> Self {
+        let err = err.into();
+        Error::from(ErrorInner::Mvcc(err))
     }
 }
 
@@ -234,29 +231,37 @@ impl ErrorCodeExt for Error {
             ErrorInner::MaxTimestampNotSynced { .. } => {
                 error_code::storage::MAX_TIMESTAMP_NOT_SYNCED
             }
+            ErrorInner::FlashbackNotPrepared(_) => error_code::storage::FLASHBACK_NOT_PREPARED,
         }
     }
 }
 
 pub mod tests {
+    pub use actions::{
+        acquire_pessimistic_lock::tests::{
+            must_err as must_acquire_pessimistic_lock_err,
+            must_err_return_value as must_acquire_pessimistic_lock_return_value_err,
+            must_pessimistic_locked, must_succeed as must_acquire_pessimistic_lock,
+            must_succeed_allow_lock_with_conflict as must_acquire_pessimistic_lock_allow_lock_with_conflict,
+            must_succeed_for_large_txn as must_acquire_pessimistic_lock_for_large_txn,
+            must_succeed_impl as must_acquire_pessimistic_lock_impl,
+            must_succeed_return_value as must_acquire_pessimistic_lock_return_value,
+            must_succeed_with_ttl as must_acquire_pessimistic_lock_with_ttl,
+        },
+        cleanup::tests::{
+            must_cleanup_with_gc_fence, must_err as must_cleanup_err, must_succeed as must_cleanup,
+        },
+        commit::tests::{
+            must_err as must_commit_err, must_succeed as must_commit,
+            must_succeed_on_region as must_commit_on_region,
+        },
+        gc::tests::must_succeed as must_gc,
+        prewrite::tests::{
+            try_pessimistic_prewrite_check_not_exists, try_prewrite_check_not_exists,
+            try_prewrite_insert,
+        },
+        tests::*,
+    };
+
     use super::*;
-    pub use actions::acquire_pessimistic_lock::tests::{
-        must_err as must_acquire_pessimistic_lock_err,
-        must_err_return_value as must_acquire_pessimistic_lock_return_value_err,
-        must_pessimistic_locked, must_succeed as must_acquire_pessimistic_lock,
-        must_succeed_for_large_txn as must_acquire_pessimistic_lock_for_large_txn,
-        must_succeed_impl as must_acquire_pessimistic_lock_impl,
-        must_succeed_return_value as must_acquire_pessimistic_lock_return_value,
-        must_succeed_with_ttl as must_acquire_pessimistic_lock_with_ttl,
-    };
-    pub use actions::cleanup::tests::{
-        must_cleanup_with_gc_fence, must_err as must_cleanup_err, must_succeed as must_cleanup,
-    };
-    pub use actions::commit::tests::{must_err as must_commit_err, must_succeed as must_commit};
-    pub use actions::gc::tests::must_succeed as must_gc;
-    pub use actions::prewrite::tests::{
-        try_pessimistic_prewrite_check_not_exists, try_prewrite_check_not_exists,
-        try_prewrite_insert,
-    };
-    pub use actions::tests::*;
 }

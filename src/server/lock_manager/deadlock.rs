@@ -1,85 +1,122 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use super::client::{self, Client};
-use super::config::Config;
-use super::metrics::*;
-use super::waiter_manager::Scheduler as WaiterMgrScheduler;
-use super::{Error, Result};
-use crate::server::resolve::StoreAddrResolver;
-use crate::storage::lock_manager::Lock;
-use collections::{HashMap, HashSet};
-use engine_rocks::RocksEngine;
-use futures::future::{self, FutureExt, TryFutureExt};
-use futures::sink::SinkExt;
-use futures::stream::TryStreamExt;
+use std::{
+    cell::RefCell,
+    fmt::{self, Display, Formatter},
+    rc::Rc,
+    sync::{Arc, Mutex},
+};
+
+use collections::HashMap;
+use engine_traits::KvEngine;
+use futures::{
+    future::{self, FutureExt, TryFutureExt},
+    sink::SinkExt,
+    stream::TryStreamExt,
+};
 use grpcio::{
     self, DuplexSink, Environment, RequestStream, RpcContext, RpcStatus, RpcStatusCode, UnarySink,
     WriteFlags,
 };
-use kvproto::deadlock::*;
-use kvproto::metapb::Region;
+use kvproto::{deadlock::*, metapb::Region};
 use pd_client::{PdClient, INVALID_ID};
 use raft::StateRole;
-use raftstore::coprocessor::{
-    BoxRegionChangeObserver, BoxRoleObserver, Coprocessor, CoprocessorHost, ObserverContext,
-    RegionChangeEvent, RegionChangeObserver, RoleObserver,
+use raftstore::{
+    coprocessor::{
+        BoxRegionChangeObserver, BoxRoleObserver, Coprocessor, CoprocessorHost, ObserverContext,
+        RegionChangeEvent, RegionChangeObserver, RoleChange, RoleObserver,
+    },
+    store::util::is_region_initialized,
 };
-use raftstore::store::util::is_region_initialized;
 use security::SecurityManager;
-use std::cell::RefCell;
-use std::fmt::{self, Display, Formatter};
-use std::rc::Rc;
-use std::sync::{Arc, Mutex};
-use tikv_util::future::paired_future_callback;
-use tikv_util::time::{Duration, Instant};
-use tikv_util::worker::{FutureRunnable, FutureScheduler, Stopped};
+use tikv_util::{
+    future::paired_future_callback,
+    time::{Duration, Instant},
+    worker::{FutureRunnable, FutureScheduler, Stopped},
+};
 use tokio::task::spawn_local;
 use txn_types::TimeStamp;
+
+use super::{
+    client::{self, Client},
+    config::Config,
+    metrics::*,
+    waiter_manager::Scheduler as WaiterMgrScheduler,
+    Error, Result,
+};
+use crate::{
+    server::resolve::StoreAddrResolver,
+    storage::lock_manager::{DiagnosticContext, KeyLockWaitInfo, LockDigest},
+};
 
 /// `Locks` is a set of locks belonging to one transaction.
 struct Locks {
     ts: TimeStamp,
-    hashes: Vec<u64>,
+    // (hash, key)
+    // The `key` is recorded as diagnostic information. There may be multiple keys with the same
+    // hash, but it should be enough if we record only one of them.
+    keys: Vec<(u64, Vec<u8>)>,
+    resource_group_tag: Vec<u8>,
     last_detect_time: Instant,
 }
 
 impl Locks {
     /// Creates a new `Locks`.
-    fn new(ts: TimeStamp, hash: u64, last_detect_time: Instant) -> Self {
+    fn new(
+        ts: TimeStamp,
+        hash: u64,
+        key: Vec<u8>,
+        resource_group_tag: Vec<u8>,
+        last_detect_time: Instant,
+    ) -> Self {
         Self {
             ts,
-            hashes: vec![hash],
+            keys: vec![(hash, key)],
+            resource_group_tag,
             last_detect_time,
         }
     }
 
     /// Pushes the `hash` if not exist and updates `last_detect_time`.
-    fn push(&mut self, lock_hash: u64, now: Instant) {
-        if !self.hashes.contains(&lock_hash) {
-            self.hashes.push(lock_hash)
+    fn push(&mut self, lock_hash: u64, key: Vec<u8>, now: Instant) {
+        if !self.keys.iter().any(|(hash, _)| *hash == lock_hash) {
+            self.keys.push((lock_hash, key))
         }
         self.last_detect_time = now
     }
 
     /// Removes the `lock_hash` and returns true if the `Locks` is empty.
     fn remove(&mut self, lock_hash: u64) -> bool {
-        if let Some(idx) = self.hashes.iter().position(|hash| *hash == lock_hash) {
-            self.hashes.remove(idx);
+        if let Some(idx) = self.keys.iter().position(|(hash, _)| *hash == lock_hash) {
+            self.keys.remove(idx);
         }
-        self.hashes.is_empty()
+        self.keys.is_empty()
     }
 
     /// Returns true if the `Locks` is expired.
     fn is_expired(&self, now: Instant, ttl: Duration) -> bool {
-        now.duration_since(self.last_detect_time) >= ttl
+        now.saturating_duration_since(self.last_detect_time) >= ttl
+    }
+
+    /// Generate a `WaitForEntry` for the lock.
+    fn to_wait_for_entry(&self, waiter_ts: TimeStamp) -> WaitForEntry {
+        let mut entry = WaitForEntry::default();
+        entry.set_txn(waiter_ts.into_inner());
+        entry.set_wait_for_txn(self.ts.into_inner());
+        entry.set_key_hash(self.keys[0].0);
+        entry.set_key(self.keys[0].1.clone());
+        entry.set_resource_group_tag(self.resource_group_tag.clone());
+        entry
     }
 }
 
 /// Used to detect the deadlock of wait-for-lock in the cluster.
 pub struct DetectTable {
-    /// Keeps the DAG of wait-for-lock. Every edge from `txn_ts` to `lock_ts` has a survival time -- `ttl`.
-    /// When checking the deadlock, if the ttl has elpased, the corresponding edge will be removed.
-    /// `last_detect_time` is the start time of the edge. `Detect` requests will refresh it.
+    /// Keeps the DAG of wait-for-lock. Every edge from `txn_ts` to `lock_ts`
+    /// has a survival time -- `ttl`. When checking the deadlock, if the ttl
+    /// has elpased, the corresponding edge will be removed.
+    /// `last_detect_time` is the start time of the edge. `Detect` requests will
+    /// refresh it.
     // txn_ts => (lock_ts => Locks)
     wait_for_map: HashMap<TimeStamp, HashMap<TimeStamp, Locks>>,
 
@@ -103,8 +140,20 @@ impl DetectTable {
         }
     }
 
-    /// Returns the key hash which causes deadlock.
-    pub fn detect(&mut self, txn_ts: TimeStamp, lock_ts: TimeStamp, lock_hash: u64) -> Option<u64> {
+    /// Returns the key hash which causes deadlock, and the current wait chain
+    /// that forms the deadlock with `txn_ts`'s waiting for txn at
+    /// `lock_ts`. Note that the current detecting edge is not included in
+    /// the returned wait chain. This is intended to reduce RPC message size
+    /// since the information about current detecting txn is included in a
+    /// separated field.
+    pub fn detect(
+        &mut self,
+        txn_ts: TimeStamp,
+        lock_ts: TimeStamp,
+        lock_hash: u64,
+        lock_key: &[u8],
+        resource_group_tag: &[u8],
+    ) -> Option<(u64, Vec<WaitForEntry>)> {
         let _timer = DETECT_DURATION_HISTOGRAM.start_coarse_timer();
         TASK_COUNTER_METRICS.detect.inc();
 
@@ -112,41 +161,60 @@ impl DetectTable {
         self.active_expire();
 
         // If `txn_ts` is waiting for `lock_ts`, it won't cause deadlock.
-        if self.register_if_existed(txn_ts, lock_ts, lock_hash) {
+        // The `resource_group_tag` will be consumed if it's successfully registered.
+        if self.register_if_existed(txn_ts, lock_ts, lock_hash, lock_key, resource_group_tag) {
             return None;
         }
 
-        if let Some(deadlock_key_hash) = self.do_detect(txn_ts, lock_ts) {
+        if let Some((deadlock_key_hash, wait_chain)) = self.do_detect(txn_ts, lock_ts) {
             ERROR_COUNTER_METRICS.deadlock.inc();
-            return Some(deadlock_key_hash);
+            return Some((deadlock_key_hash, wait_chain));
         }
-        self.register(txn_ts, lock_ts, lock_hash);
+        self.register(txn_ts, lock_ts, lock_hash, lock_key, resource_group_tag);
         None
     }
 
-    /// Checks if there is an edge from `wait_for_ts` to `txn_ts`.
-    fn do_detect(&mut self, txn_ts: TimeStamp, wait_for_ts: TimeStamp) -> Option<u64> {
+    /// Checks if there is a path from `wait_for_ts` to `txn_ts`.
+    fn do_detect(
+        &mut self,
+        txn_ts: TimeStamp,
+        wait_for_ts: TimeStamp,
+    ) -> Option<(u64, Vec<WaitForEntry>)> {
         let now = self.now;
         let ttl = self.ttl;
 
         let mut stack = vec![wait_for_ts];
-        // Memorize the pushed vertexes to avoid duplicate search.
-        let mut pushed: HashSet<TimeStamp> = HashSet::default();
-        pushed.insert(wait_for_ts);
-        while let Some(wait_for_ts) = stack.pop() {
-            if let Some(wait_for) = self.wait_for_map.get_mut(&wait_for_ts) {
+        // Memorize the pushed vertexes to avoid duplicate search, and maps to the
+        // predecessor of the vertex.
+        // Since the graph is a DAG instead of a tree, a vertex may have multiple
+        // predecessors. But it's ok if we only remember one: for each vertex,
+        // if it has a route to the goal (txn_ts), we must be able to find the
+        // goal and exit this function before visiting the vertex one more time.
+        let mut pushed: HashMap<TimeStamp, TimeStamp> = HashMap::default();
+        pushed.insert(wait_for_ts, TimeStamp::zero());
+        while let Some(curr_ts) = stack.pop() {
+            if let Some(wait_for) = self.wait_for_map.get_mut(&curr_ts) {
                 // Remove expired edges.
                 wait_for.retain(|_, locks| !locks.is_expired(now, ttl));
                 if wait_for.is_empty() {
-                    self.wait_for_map.remove(&wait_for_ts);
+                    self.wait_for_map.remove(&curr_ts);
                 } else {
                     for (lock_ts, locks) in wait_for {
-                        if *lock_ts == txn_ts {
-                            return Some(locks.hashes[0]);
+                        let lock_ts = *lock_ts;
+
+                        if lock_ts == txn_ts {
+                            let hash = locks.keys[0].0;
+                            let last_entry = locks.to_wait_for_entry(curr_ts);
+                            let mut wait_chain =
+                                self.generate_wait_chain(wait_for_ts, curr_ts, pushed);
+                            wait_chain.push(last_entry);
+                            return Some((hash, wait_chain));
                         }
-                        if !pushed.contains(lock_ts) {
-                            stack.push(*lock_ts);
-                            pushed.insert(*lock_ts);
+
+                        #[allow(clippy::map_entry)]
+                        if !pushed.contains_key(&lock_ts) {
+                            stack.push(lock_ts);
+                            pushed.insert(lock_ts, curr_ts);
                         }
                     }
                 }
@@ -155,36 +223,96 @@ impl DetectTable {
         None
     }
 
-    /// Returns true and adds to the detect table if `txn_ts` is waiting for `lock_ts`.
+    /// Generate the wait chain after deadlock is detected. This function is
+    /// part of implementation of `do_detect`. It assumes there's a path
+    /// from `start` to `end` in the waiting graph, and every single edge
+    /// `V1 -> V2` has an entry in `vertex_predecessors_map` so that
+    /// `vertex_predecessors_map[V2] == V1`, and `vertex_predecessors_map[V1] ==
+    /// 0`.
+    fn generate_wait_chain(
+        &self,
+        start: TimeStamp,
+        end: TimeStamp,
+        vertex_predecessors_map: HashMap<TimeStamp, TimeStamp>,
+    ) -> Vec<WaitForEntry> {
+        // It's rare that a deadlock formed by too many transactions. Preallocating a
+        // few elements should be enough in most cases.
+        let mut wait_chain = Vec::with_capacity(3);
+
+        let mut lock_ts = end;
+        loop {
+            let waiter_ts = *vertex_predecessors_map.get(&lock_ts).unwrap();
+            if waiter_ts.is_zero() {
+                assert_eq!(lock_ts, start);
+                break;
+            }
+            let locks = self
+                .wait_for_map
+                .get(&waiter_ts)
+                .unwrap()
+                .get(&lock_ts)
+                .unwrap();
+
+            let entry = locks.to_wait_for_entry(waiter_ts);
+            wait_chain.push(entry);
+
+            // Move backward
+            lock_ts = waiter_ts;
+        }
+
+        wait_chain.reverse();
+        wait_chain
+    }
+
+    /// Returns true and adds to the detect table if `txn_ts` is waiting for
+    /// `lock_ts`. When the function returns true, `key` and
+    /// `resource_group_tag` may be taken to store in the waiting graph.
     fn register_if_existed(
         &mut self,
         txn_ts: TimeStamp,
         lock_ts: TimeStamp,
         lock_hash: u64,
+        key: &[u8],
+        resource_group_tag: &[u8],
     ) -> bool {
         if let Some(wait_for) = self.wait_for_map.get_mut(&txn_ts) {
             if let Some(locks) = wait_for.get_mut(&lock_ts) {
-                locks.push(lock_hash, self.now);
+                locks.push(lock_hash, key.to_vec(), self.now);
+                locks.resource_group_tag = resource_group_tag.to_vec();
                 return true;
             }
         }
         false
     }
 
-    /// Adds to the detect table. The edge from `txn_ts` to `lock_ts` must not exist.
-    fn register(&mut self, txn_ts: TimeStamp, lock_ts: TimeStamp, lock_hash: u64) {
+    /// Adds to the detect table. The edge from `txn_ts` to `lock_ts` must not
+    /// exist.
+    fn register(
+        &mut self,
+        txn_ts: TimeStamp,
+        lock_ts: TimeStamp,
+        lock_hash: u64,
+        key: &[u8],
+        resource_group_tag: &[u8],
+    ) {
         let wait_for = self.wait_for_map.entry(txn_ts).or_default();
         assert!(!wait_for.contains_key(&lock_ts));
-        let locks = Locks::new(lock_ts, lock_hash, self.now);
+        let locks = Locks::new(
+            lock_ts,
+            lock_hash,
+            key.to_vec(),
+            resource_group_tag.to_vec(),
+            self.now,
+        );
         wait_for.insert(locks.ts, locks);
     }
 
     /// Removes the corresponding wait_for_entry.
-    fn clean_up_wait_for(&mut self, txn_ts: TimeStamp, lock_ts: TimeStamp, lock_hash: u64) {
+    fn clean_up_wait_for(&mut self, txn_ts: TimeStamp, lock_digest: LockDigest) {
         if let Some(wait_for) = self.wait_for_map.get_mut(&txn_ts) {
-            if let Some(locks) = wait_for.get_mut(&lock_ts) {
-                if locks.remove(lock_hash) {
-                    wait_for.remove(&lock_ts);
+            if let Some(locks) = wait_for.get_mut(&lock_digest.ts) {
+                if locks.remove(lock_digest.hash) {
+                    wait_for.remove(&lock_digest.ts);
                     if wait_for.is_empty() {
                         self.wait_for_map.remove(&txn_ts);
                     }
@@ -218,7 +346,8 @@ impl DetectTable {
     /// Iterates the whole table to remove all expired entries.
     fn active_expire(&mut self) {
         if self.wait_for_map.len() >= Self::ACTIVE_EXPIRE_THRESHOLD
-            && self.now.duration_since(self.last_active_expire) >= Self::ACTIVE_EXPIRE_INTERVAL
+            && self.now.saturating_duration_since(self.last_active_expire)
+                >= Self::ACTIVE_EXPIRE_INTERVAL
         {
             let now = self.now;
             let ttl = self.ttl;
@@ -267,7 +396,9 @@ pub enum Task {
     Detect {
         tp: DetectType,
         txn_ts: TimeStamp,
-        lock: Lock,
+        wait_info: Option<KeyLockWaitInfo>,
+        // Only valid when `tp == Detect`.
+        diag_ctx: DiagnosticContext,
     },
     /// The detect request of other nodes.
     DetectRpc {
@@ -277,10 +408,11 @@ pub enum Task {
     /// If the node has the leader region and the role of the node changes,
     /// a `ChangeRole` task will be scheduled.
     ///
-    /// It's the only way to change the node from leader to follower, and vice versa.
+    /// It's the only way to change the node from leader to follower, and vice
+    /// versa.
     ChangeRole(Role),
     /// Change the ttl of DetectTable
-    ChangeTTL(Duration),
+    ChangeTtl(Duration),
     // Task only used for test
     #[cfg(any(test, feature = "testexport"))]
     Validate(Box<dyn FnOnce(u64) + Send>),
@@ -291,14 +423,19 @@ pub enum Task {
 impl Display for Task {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
-            Task::Detect { tp, txn_ts, lock } => write!(
+            Task::Detect {
+                tp,
+                txn_ts,
+                wait_info,
+                ..
+            } => write!(
                 f,
-                "Detect {{ tp: {:?}, txn_ts: {}, lock: {:?} }}",
-                tp, txn_ts, lock
+                "Detect {{ tp: {:?}, txn_ts: {}, wait_info: {:?} }}",
+                tp, txn_ts, wait_info
             ),
             Task::DetectRpc { .. } => write!(f, "Detect Rpc"),
             Task::ChangeRole(role) => write!(f, "ChangeRole {{ role: {:?} }}", role),
-            Task::ChangeTTL(ttl) => write!(f, "ChangeTTL {{ ttl: {:?} }}", ttl),
+            Task::ChangeTtl(ttl) => write!(f, "ChangeTtl {{ ttl: {:?} }}", ttl),
             #[cfg(any(test, feature = "testexport"))]
             Task::Validate(_) => write!(f, "Validate dead lock config"),
             #[cfg(test)]
@@ -307,8 +444,8 @@ impl Display for Task {
     }
 }
 
-/// `Scheduler` is the wrapper of the `FutureScheduler<Task>` to simplify scheduling tasks
-/// to the deadlock detector.
+/// `Scheduler` is the wrapper of the `FutureScheduler<Task>` to simplify
+/// scheduling tasks to the deadlock detector.
 #[derive(Clone)]
 pub struct Scheduler(FutureScheduler<Task>);
 
@@ -325,19 +462,27 @@ impl Scheduler {
         }
     }
 
-    pub fn detect(&self, txn_ts: TimeStamp, lock: Lock) {
+    pub fn detect(
+        &self,
+        txn_ts: TimeStamp,
+        wait_info: KeyLockWaitInfo,
+        diag_ctx: DiagnosticContext,
+    ) {
+        // TODO: Support detect many keys in a batch
         self.notify_scheduler(Task::Detect {
             tp: DetectType::Detect,
             txn_ts,
-            lock,
+            wait_info: Some(wait_info),
+            diag_ctx,
         });
     }
 
-    pub fn clean_up_wait_for(&self, txn_ts: TimeStamp, lock: Lock) {
+    pub fn clean_up_wait_for(&self, start_ts: TimeStamp, wait_info: KeyLockWaitInfo) {
         self.notify_scheduler(Task::Detect {
             tp: DetectType::CleanUpWaitFor,
-            txn_ts,
-            lock,
+            txn_ts: start_ts,
+            wait_info: Some(wait_info),
+            diag_ctx: DiagnosticContext::default(),
         });
     }
 
@@ -345,7 +490,8 @@ impl Scheduler {
         self.notify_scheduler(Task::Detect {
             tp: DetectType::CleanUp,
             txn_ts,
-            lock: Lock::default(),
+            wait_info: None,
+            diag_ctx: DiagnosticContext::default(),
         });
     }
 
@@ -354,7 +500,7 @@ impl Scheduler {
     }
 
     pub fn change_ttl(&self, t: Duration) {
-        self.notify_scheduler(Task::ChangeTTL(t));
+        self.notify_scheduler(Task::ChangeTtl(t));
     }
 
     #[cfg(any(test, feature = "testexport"))]
@@ -368,14 +514,15 @@ impl Scheduler {
     }
 }
 
-/// The leader region is the region containing the LEADER_KEY and the leader of the
-/// leader region is also the leader of the deadlock detector.
+/// The leader region is the region containing the LEADER_KEY and the leader of
+/// the leader region is also the leader of the deadlock detector.
 const LEADER_KEY: &[u8] = b"";
 
-/// `RoleChangeNotifier` observes region or role change events of raftstore. If the
-/// region is the leader region and the role of this node is changed, a `ChangeRole`
-/// task will be scheduled to the deadlock detector. It's the only way to change the
-/// node from the leader of deadlock detector to follower, and vice versa.
+/// `RoleChangeNotifier` observes region or role change events of raftstore. If
+/// the region is the leader region and the role of this node is changed, a
+/// `ChangeRole` task will be scheduled to the deadlock detector. It's the only
+/// way to change the node from the leader of deadlock detector to follower, and
+/// vice versa.
 #[derive(Clone)]
 pub(crate) struct RoleChangeNotifier {
     /// The id of the valid leader region.
@@ -402,7 +549,7 @@ impl RoleChangeNotifier {
         }
     }
 
-    pub(crate) fn register(self, host: &mut CoprocessorHost<RocksEngine>) {
+    pub(crate) fn register(self, host: &mut CoprocessorHost<impl KvEngine>) {
         host.registry
             .register_role_observer(1, BoxRoleObserver::new(self.clone()));
         host.registry
@@ -413,13 +560,13 @@ impl RoleChangeNotifier {
 impl Coprocessor for RoleChangeNotifier {}
 
 impl RoleObserver for RoleChangeNotifier {
-    fn on_role_change(&self, ctx: &mut ObserverContext<'_>, role: StateRole) {
+    fn on_role_change(&self, ctx: &mut ObserverContext<'_>, role_change: &RoleChange) {
         let region = ctx.region();
         // A region is created first, so the leader region id must be valid.
         if Self::is_leader_region(region)
             && *self.leader_region_id.lock().unwrap() == region.get_id()
         {
-            self.scheduler.change_role(role.into());
+            self.scheduler.change_role(role_change.state.into());
         }
     }
 }
@@ -434,7 +581,7 @@ impl RegionChangeObserver for RoleChangeNotifier {
         let region = ctx.region();
         if Self::is_leader_region(region) {
             match event {
-                RegionChangeEvent::Create | RegionChangeEvent::Update => {
+                RegionChangeEvent::Create | RegionChangeEvent::Update(_) => {
                     *self.leader_region_id.lock().unwrap() = region.get_id();
                     self.scheduler.change_role(role.into());
                 }
@@ -453,6 +600,7 @@ impl RegionChangeObserver for RoleChangeNotifier {
                         self.scheduler.change_role(Role::Follower);
                     }
                 }
+                RegionChangeEvent::UpdateBuckets(_) => {}
             }
         }
     }
@@ -624,8 +772,9 @@ where
                 }
             }
         }
-        // If the node is a follower, it will receive a `ChangeRole(Follower)` msg when the leader
-        // is changed. It should reset itself even if the role of the node is not changed.
+        // If the node is a follower, it will receive a `ChangeRole(Follower)` msg when
+        // the leader is changed. It should reset itself even if the role of the
+        // node is not changed.
         self.reset(role);
     }
 
@@ -643,20 +792,16 @@ where
         );
         let waiter_mgr_scheduler = self.waiter_mgr_scheduler.clone();
         let (send, recv) = leader_client.register_detect_handler(Box::new(move |mut resp| {
-            let WaitForEntry {
-                txn,
-                wait_for_txn,
-                key_hash,
-                ..
-            } = resp.take_entry();
-            waiter_mgr_scheduler.deadlock(
-                txn.into(),
-                Lock {
-                    ts: wait_for_txn.into(),
-                    hash: key_hash,
-                },
-                resp.get_deadlock_key_hash(),
-            )
+            let entry = resp.take_entry();
+            let txn = entry.txn.into();
+            let lock = LockDigest {
+                ts: entry.wait_for_txn.into(),
+                hash: entry.key_hash,
+            };
+            let mut wait_chain: Vec<_> = resp.take_wait_chain().into();
+            let key = entry.get_key().to_vec();
+            wait_chain.push(entry);
+            waiter_mgr_scheduler.deadlock(txn, key, lock, resp.get_deadlock_key_hash(), wait_chain)
         }));
         spawn_local(send.map_err(|e| error!("leader client failed"; "err" => ?e)));
         // No need to log it again.
@@ -668,9 +813,16 @@ where
 
     /// Returns true if sends successfully.
     ///
-    /// If the client is None, reconnects the leader first, then sends the request to the leader.
-    /// If sends failed, sets the client to None for retry.
-    fn send_request_to_leader(&mut self, tp: DetectType, txn_ts: TimeStamp, lock: Lock) -> bool {
+    /// If the client is None, reconnects the leader first, then sends the
+    /// request to the leader. If sends failed, sets the client to None for
+    /// retry.
+    fn send_request_to_leader(
+        &mut self,
+        tp: DetectType,
+        txn_ts: TimeStamp,
+        wait_info: &Option<KeyLockWaitInfo>,
+        diag_ctx: DiagnosticContext,
+    ) -> bool {
         assert!(!self.is_leader() && self.leader_info.is_some());
 
         if self.leader_client.is_none() {
@@ -684,8 +836,12 @@ where
             };
             let mut entry = WaitForEntry::default();
             entry.set_txn(txn_ts.into_inner());
-            entry.set_wait_for_txn(lock.ts.into_inner());
-            entry.set_key_hash(lock.hash);
+            if let Some(wait_info) = wait_info.as_ref() {
+                entry.set_wait_for_txn(wait_info.lock_digest.ts.into_inner());
+                entry.set_key_hash(wait_info.lock_digest.hash);
+            }
+            entry.set_key(diag_ctx.key);
+            entry.set_resource_group_tag(diag_ctx.resource_group_tag);
             let mut req = DeadlockRequest::default();
             req.set_tp(tp);
             req.set_entry(entry);
@@ -698,26 +854,57 @@ where
         false
     }
 
-    fn handle_detect_locally(&self, tp: DetectType, txn_ts: TimeStamp, lock: Lock) {
+    fn handle_detect_locally(
+        &self,
+        tp: DetectType,
+        txn_ts: TimeStamp,
+        wait_info: Option<KeyLockWaitInfo>,
+        diag_ctx: DiagnosticContext,
+    ) {
         let detect_table = &mut self.inner.borrow_mut().detect_table;
         match tp {
             DetectType::Detect => {
-                if let Some(deadlock_key_hash) = detect_table.detect(txn_ts, lock.ts, lock.hash) {
-                    self.waiter_mgr_scheduler
-                        .deadlock(txn_ts, lock, deadlock_key_hash);
+                let wait_info = wait_info.unwrap();
+                if let Some((deadlock_key_hash, mut wait_chain)) = detect_table.detect(
+                    txn_ts,
+                    wait_info.lock_digest.ts,
+                    wait_info.lock_digest.hash,
+                    &diag_ctx.key,
+                    &diag_ctx.resource_group_tag,
+                ) {
+                    let mut last_entry = WaitForEntry::default();
+                    last_entry.set_txn(txn_ts.into_inner());
+                    last_entry.set_wait_for_txn(wait_info.lock_digest.ts.into_inner());
+                    last_entry.set_key_hash(wait_info.lock_digest.hash);
+                    last_entry.set_key(diag_ctx.key.clone());
+                    last_entry.set_resource_group_tag(diag_ctx.resource_group_tag);
+                    wait_chain.push(last_entry);
+                    self.waiter_mgr_scheduler.deadlock(
+                        txn_ts,
+                        diag_ctx.key.clone(),
+                        wait_info.lock_digest,
+                        deadlock_key_hash,
+                        wait_chain,
+                    );
                 }
             }
             DetectType::CleanUpWaitFor => {
-                detect_table.clean_up_wait_for(txn_ts, lock.ts, lock.hash)
+                detect_table.clean_up_wait_for(txn_ts, wait_info.unwrap().lock_digest)
             }
             DetectType::CleanUp => detect_table.clean_up(txn_ts),
         }
     }
 
     /// Handles detect requests of itself.
-    fn handle_detect(&mut self, tp: DetectType, txn_ts: TimeStamp, lock: Lock) {
+    fn handle_detect(
+        &mut self,
+        tp: DetectType,
+        txn_ts: TimeStamp,
+        wait_info: Option<KeyLockWaitInfo>,
+        diag_ctx: DiagnosticContext,
+    ) {
         if self.is_leader() {
-            self.handle_detect_locally(tp, txn_ts, lock);
+            self.handle_detect_locally(tp, txn_ts, wait_info, diag_ctx);
         } else {
             for _ in 0..2 {
                 // TODO: If the leader hasn't been elected, it requests Pd for
@@ -727,15 +914,17 @@ where
                 if self.leader_client.is_none() && !self.refresh_leader_info() {
                     break;
                 }
-                if self.send_request_to_leader(tp, txn_ts, lock) {
+                if self.send_request_to_leader(tp, txn_ts, &wait_info, diag_ctx.clone()) {
                     return;
                 }
-                // Because the client is asynchronous, it won't be closed until failing to send a
-                // request. So retry to refresh the leader info and send it again.
+                // Because the client is asynchronous, it won't be closed until
+                // failing to send a request. So retry to
+                // refresh the leader info and send it again.
             }
-            // If a request which causes deadlock is dropped, it leads to the waiter timeout.
-            // TiDB will retry to acquire the lock and detect deadlock again.
-            warn!("detect request dropped"; "tp" => ?tp, "txn_ts" => txn_ts, "lock" => ?lock);
+            // If a request which causes deadlock is dropped, it leads to the waiter
+            // timeout. TiDB will retry to acquire the lock and detect deadlock
+            // again.
+            warn!("detect request dropped"; "tp" => ?tp, "txn_ts" => txn_ts, "wait_info" => ?wait_info);
             ERROR_COUNTER_METRICS.dropped.inc();
         }
     }
@@ -746,10 +935,11 @@ where
         stream: RequestStream<DeadlockRequest>,
         sink: DuplexSink<DeadlockResponse>,
     ) {
+        // TODO: Support batch checking.
         if !self.is_leader() {
-            let status = RpcStatus::new(
+            let status = RpcStatus::with_message(
                 RpcStatusCode::FAILED_PRECONDITION,
-                Some("I'm not the leader of deadlock detector".to_string()),
+                "I'm not the leader of deadlock detector".to_string(),
             );
             spawn_local(sink.fail(status).map_err(|_| ()));
             ERROR_COUNTER_METRICS.not_leader.inc();
@@ -768,24 +958,37 @@ where
                 txn,
                 wait_for_txn,
                 key_hash,
+                key,
+                resource_group_tag,
                 ..
             } = req.get_entry();
             let detect_table = &mut inner.detect_table;
             let res = match req.get_tp() {
                 DeadlockRequestType::Detect => {
-                    if let Some(deadlock_key_hash) =
-                        detect_table.detect(txn.into(), wait_for_txn.into(), *key_hash)
-                    {
+                    if let Some((deadlock_key_hash, wait_chain)) = detect_table.detect(
+                        txn.into(),
+                        wait_for_txn.into(),
+                        *key_hash,
+                        key,
+                        resource_group_tag,
+                    ) {
                         let mut resp = DeadlockResponse::default();
                         resp.set_entry(req.take_entry());
                         resp.set_deadlock_key_hash(deadlock_key_hash);
+                        resp.set_wait_chain(wait_chain.into());
                         Some((resp, WriteFlags::default()))
                     } else {
                         None
                     }
                 }
                 DeadlockRequestType::CleanUpWaitFor => {
-                    detect_table.clean_up_wait_for(txn.into(), wait_for_txn.into(), *key_hash);
+                    detect_table.clean_up_wait_for(
+                        txn.into(),
+                        LockDigest {
+                            ts: wait_for_txn.into(),
+                            hash: *key_hash,
+                        },
+                    );
                     None
                 }
                 DeadlockRequestType::CleanUp => {
@@ -824,14 +1027,19 @@ where
 {
     fn run(&mut self, task: Task) {
         match task {
-            Task::Detect { tp, txn_ts, lock } => {
-                self.handle_detect(tp, txn_ts, lock);
+            Task::Detect {
+                tp,
+                txn_ts,
+                wait_info,
+                diag_ctx,
+            } => {
+                self.handle_detect(tp, txn_ts, wait_info, diag_ctx);
             }
             Task::DetectRpc { stream, sink } => {
                 self.handle_detect_rpc(stream, sink);
             }
             Task::ChangeRole(role) => self.handle_change_role(role),
-            Task::ChangeTTL(ttl) => self.handle_change_ttl(ttl),
+            Task::ChangeTtl(ttl) => self.handle_change_ttl(ttl),
             #[cfg(any(test, feature = "testexport"))]
             Task::Validate(f) => f(self.inner.borrow().detect_table.ttl.as_millis() as u64),
             #[cfg(test)]
@@ -865,9 +1073,9 @@ impl Deadlock for Service {
     ) {
         let (cb, f) = paired_future_callback();
         if !self.waiter_mgr_scheduler.dump_wait_table(cb) {
-            let status = RpcStatus::new(
+            let status = RpcStatus::with_message(
                 RpcStatusCode::RESOURCE_EXHAUSTED,
-                Some("waiter manager has stopped".to_owned()),
+                "waiter manager has stopped".to_owned(),
             );
             ctx.spawn(sink.fail(status).map(|_| ()))
         } else {
@@ -893,9 +1101,9 @@ impl Deadlock for Service {
         let task = Task::DetectRpc { stream, sink };
         if let Err(Stopped(Task::DetectRpc { sink, .. })) = self.detector_scheduler.0.schedule(task)
         {
-            let status = RpcStatus::new(
+            let status = RpcStatus::with_message(
                 RpcStatusCode::RESOURCE_EXHAUSTED,
-                Some("deadlock detector has stopped".to_owned()),
+                "deadlock detector has stopped".to_owned(),
             );
             ctx.spawn(sink.fail(status).map(|_| ()));
         }
@@ -904,27 +1112,42 @@ impl Deadlock for Service {
 
 #[cfg(test)]
 pub mod tests {
-    use super::*;
-    use crate::server::resolve::Callback;
+    use engine_test::kv::KvTestEngine;
     use futures::executor::block_on;
+    use raftstore::coprocessor::RegionChangeReason;
     use security::SecurityConfig;
     use tikv_util::worker::FutureWorker;
+
+    use super::*;
+    use crate::server::resolve;
 
     #[test]
     fn test_detect_table() {
         let mut detect_table = DetectTable::new(Duration::from_secs(10));
 
         // Deadlock: 1 -> 2 -> 1
-        assert_eq!(detect_table.detect(1.into(), 2.into(), 2), None);
-        assert_eq!(detect_table.detect(2.into(), 1.into(), 1).unwrap(), 2);
+        assert_eq!(detect_table.detect(1.into(), 2.into(), 2, &[], &[]), None);
+        assert_eq!(
+            detect_table
+                .detect(2.into(), 1.into(), 1, &[], &[])
+                .unwrap()
+                .0,
+            2
+        );
         // Deadlock: 1 -> 2 -> 3 -> 1
-        assert_eq!(detect_table.detect(2.into(), 3.into(), 3), None);
-        assert_eq!(detect_table.detect(3.into(), 1.into(), 1).unwrap(), 3);
+        assert_eq!(detect_table.detect(2.into(), 3.into(), 3, &[], &[]), None);
+        assert_eq!(
+            detect_table
+                .detect(3.into(), 1.into(), 1, &[], &[])
+                .unwrap()
+                .0,
+            3
+        );
         detect_table.clean_up(2.into());
         assert_eq!(detect_table.wait_for_map.contains_key(&2.into()), false);
 
         // After cycle is broken, no deadlock.
-        assert_eq!(detect_table.detect(3.into(), 1.into(), 1), None);
+        assert_eq!(detect_table.detect(3.into(), 1.into(), 1, &[], &[]), None);
         assert_eq!(detect_table.wait_for_map.get(&3.into()).unwrap().len(), 1);
         assert_eq!(
             detect_table
@@ -933,13 +1156,13 @@ pub mod tests {
                 .unwrap()
                 .get(&1.into())
                 .unwrap()
-                .hashes
+                .keys
                 .len(),
             1
         );
 
         // Different key_hash grows the list.
-        assert_eq!(detect_table.detect(3.into(), 1.into(), 2), None);
+        assert_eq!(detect_table.detect(3.into(), 1.into(), 2, &[], &[]), None);
         assert_eq!(
             detect_table
                 .wait_for_map
@@ -947,13 +1170,13 @@ pub mod tests {
                 .unwrap()
                 .get(&1.into())
                 .unwrap()
-                .hashes
+                .keys
                 .len(),
             2
         );
 
         // Same key_hash doesn't grow the list.
-        assert_eq!(detect_table.detect(3.into(), 1.into(), 2), None);
+        assert_eq!(detect_table.detect(3.into(), 1.into(), 2, &[], &[]), None);
         assert_eq!(
             detect_table
                 .wait_for_map
@@ -961,13 +1184,13 @@ pub mod tests {
                 .unwrap()
                 .get(&1.into())
                 .unwrap()
-                .hashes
+                .keys
                 .len(),
             2
         );
 
         // Different lock_ts grows the map.
-        assert_eq!(detect_table.detect(3.into(), 2.into(), 2), None);
+        assert_eq!(detect_table.detect(3.into(), 2.into(), 2, &[], &[]), None);
         assert_eq!(detect_table.wait_for_map.get(&3.into()).unwrap().len(), 2);
         assert_eq!(
             detect_table
@@ -976,13 +1199,19 @@ pub mod tests {
                 .unwrap()
                 .get(&2.into())
                 .unwrap()
-                .hashes
+                .keys
                 .len(),
             1
         );
 
         // Clean up entries shrinking the map.
-        detect_table.clean_up_wait_for(3.into(), 1.into(), 1);
+        detect_table.clean_up_wait_for(
+            3.into(),
+            LockDigest {
+                ts: 1.into(),
+                hash: 1,
+            },
+        );
         assert_eq!(
             detect_table
                 .wait_for_map
@@ -990,18 +1219,36 @@ pub mod tests {
                 .unwrap()
                 .get(&1.into())
                 .unwrap()
-                .hashes
+                .keys
                 .len(),
             1
         );
-        detect_table.clean_up_wait_for(3.into(), 1.into(), 2);
+        detect_table.clean_up_wait_for(
+            3.into(),
+            LockDigest {
+                ts: 1.into(),
+                hash: 2,
+            },
+        );
         assert_eq!(detect_table.wait_for_map.get(&3.into()).unwrap().len(), 1);
-        detect_table.clean_up_wait_for(3.into(), 2.into(), 2);
+        detect_table.clean_up_wait_for(
+            3.into(),
+            LockDigest {
+                ts: 2.into(),
+                hash: 2,
+            },
+        );
         assert_eq!(detect_table.wait_for_map.contains_key(&3.into()), false);
 
         // Clean up non-exist entry
         detect_table.clean_up(3.into());
-        detect_table.clean_up_wait_for(3.into(), 1.into(), 1);
+        detect_table.clean_up_wait_for(
+            3.into(),
+            LockDigest {
+                ts: 1.into(),
+                hash: 1,
+            },
+        );
     }
 
     #[test]
@@ -1009,29 +1256,69 @@ pub mod tests {
         let mut detect_table = DetectTable::new(Duration::from_millis(100));
 
         // Deadlock
-        assert!(detect_table.detect(1.into(), 2.into(), 1).is_none());
-        assert!(detect_table.detect(2.into(), 1.into(), 2).is_some());
+        assert!(
+            detect_table
+                .detect(1.into(), 2.into(), 1, &[], &[])
+                .is_none()
+        );
+        assert!(
+            detect_table
+                .detect(2.into(), 1.into(), 2, &[], &[])
+                .is_some()
+        );
         // After sleep, the expired entry has been removed. So there is no deadlock.
         std::thread::sleep(Duration::from_millis(500));
         assert_eq!(detect_table.wait_for_map.len(), 1);
-        assert!(detect_table.detect(2.into(), 1.into(), 2).is_none());
+        assert!(
+            detect_table
+                .detect(2.into(), 1.into(), 2, &[], &[])
+                .is_none()
+        );
         assert_eq!(detect_table.wait_for_map.len(), 1);
 
         // `Detect` updates the last_detect_time, so the entry won't be removed.
         detect_table.clear();
-        assert!(detect_table.detect(1.into(), 2.into(), 1).is_none());
+        assert!(
+            detect_table
+                .detect(1.into(), 2.into(), 1, &[], &[])
+                .is_none()
+        );
         std::thread::sleep(Duration::from_millis(500));
-        assert!(detect_table.detect(1.into(), 2.into(), 1).is_none());
-        assert!(detect_table.detect(2.into(), 1.into(), 2).is_some());
+        assert!(
+            detect_table
+                .detect(1.into(), 2.into(), 1, &[], &[])
+                .is_none()
+        );
+        assert!(
+            detect_table
+                .detect(2.into(), 1.into(), 2, &[], &[])
+                .is_some()
+        );
 
         // Remove expired entry shrinking the map.
         detect_table.clear();
-        assert!(detect_table.detect(1.into(), 2.into(), 1).is_none());
-        assert!(detect_table.detect(1.into(), 3.into(), 1).is_none());
+        assert!(
+            detect_table
+                .detect(1.into(), 2.into(), 1, &[], &[])
+                .is_none()
+        );
+        assert!(
+            detect_table
+                .detect(1.into(), 3.into(), 1, &[], &[])
+                .is_none()
+        );
         assert_eq!(detect_table.wait_for_map.len(), 1);
         std::thread::sleep(Duration::from_millis(500));
-        assert!(detect_table.detect(1.into(), 3.into(), 2).is_none());
-        assert!(detect_table.detect(2.into(), 1.into(), 2).is_none());
+        assert!(
+            detect_table
+                .detect(1.into(), 3.into(), 2, &[], &[])
+                .is_none()
+        );
+        assert!(
+            detect_table
+                .detect(2.into(), 1.into(), 2, &[], &[])
+                .is_none()
+        );
         assert_eq!(detect_table.wait_for_map.get(&1.into()).unwrap().len(), 1);
         assert_eq!(
             detect_table
@@ -1040,32 +1327,148 @@ pub mod tests {
                 .unwrap()
                 .get(&3.into())
                 .unwrap()
-                .hashes
+                .keys
                 .len(),
             2
         );
         std::thread::sleep(Duration::from_millis(500));
-        assert!(detect_table.detect(3.into(), 2.into(), 3).is_none());
+        assert!(
+            detect_table
+                .detect(3.into(), 2.into(), 3, &[], &[])
+                .is_none()
+        );
         assert_eq!(detect_table.wait_for_map.len(), 2);
-        assert!(detect_table.detect(3.into(), 1.into(), 3).is_none());
+        assert!(
+            detect_table
+                .detect(3.into(), 1.into(), 3, &[], &[])
+                .is_none()
+        );
         assert_eq!(detect_table.wait_for_map.len(), 1);
+    }
+
+    #[test]
+    fn test_deadlock_generating_wait_chain() {
+        #[derive(Clone, Copy, Debug, PartialEq)]
+        struct Edge<'a> {
+            ts: u64,
+            lock_ts: u64,
+            hash: u64,
+            key: &'a [u8],
+            tag: &'a [u8],
+        }
+
+        let new_edge = |ts, lock_ts, hash, key, tag| Edge {
+            ts,
+            lock_ts,
+            hash,
+            key,
+            tag,
+        };
+
+        // Detect specified edges sequentially, and expects the last one will cause the
+        // deadlock.
+        let test_once = |edges: &[Edge<'_>]| {
+            let mut detect_table = DetectTable::new(Duration::from_millis(100));
+            let mut edge_map = HashMap::default();
+
+            for e in &edges[0..edges.len() - 1] {
+                assert!(
+                    detect_table
+                        .detect(e.ts.into(), e.lock_ts.into(), e.hash, e.key, e.tag)
+                        .is_none()
+                );
+                edge_map.insert((e.ts, e.lock_ts), *e);
+            }
+
+            let last = edges.last().unwrap();
+            let (_, wait_chain) = detect_table
+                .detect(
+                    last.ts.into(),
+                    last.lock_ts.into(),
+                    last.hash,
+                    last.key,
+                    last.tag,
+                )
+                .unwrap();
+
+            // Walk through the wait chain
+            let mut current_position = last.lock_ts;
+            for (i, entry) in wait_chain.iter().enumerate() {
+                let edge = Edge {
+                    ts: entry.get_txn(),
+                    lock_ts: entry.get_wait_for_txn(),
+                    hash: entry.get_key_hash(),
+                    key: entry.get_key(),
+                    tag: entry.get_resource_group_tag(),
+                };
+                let expect_edge = edge_map.get(&(edge.ts, edge.lock_ts)).unwrap();
+                assert_eq!(
+                    edge, *expect_edge,
+                    "failed at item {}, full wait chain {:?}",
+                    i, wait_chain
+                );
+                assert_eq!(
+                    edge.ts, current_position,
+                    "failed at item {}, full wait chain {:?}",
+                    i, wait_chain
+                );
+                current_position = edge.lock_ts;
+            }
+            assert_eq!(
+                current_position, last.ts,
+                "incorrect wait chain {:?}",
+                wait_chain
+            );
+        };
+
+        test_once(&[
+            new_edge(1, 2, 11, b"k1", b"tag1"),
+            new_edge(2, 1, 12, b"k2", b"tag2"),
+        ]);
+
+        test_once(&[
+            new_edge(1, 2, 11, b"k1", b"tag1"),
+            new_edge(2, 3, 12, b"k2", b"tag2"),
+            new_edge(3, 1, 13, b"k3", b"tag3"),
+        ]);
+
+        test_once(&[
+            new_edge(1, 2, 11, b"k12", b"tag12"),
+            new_edge(2, 3, 12, b"k23", b"tag23"),
+            new_edge(2, 4, 13, b"k24", b"tag24"),
+            new_edge(4, 1, 14, b"k41", b"tag41"),
+        ]);
+
+        test_once(&[
+            new_edge(1, 2, 11, b"k12", b"tag12"),
+            new_edge(1, 3, 12, b"k13", b"tag13"),
+            new_edge(2, 4, 13, b"k24", b"tag24"),
+            new_edge(3, 5, 14, b"k35", b"tag35"),
+            new_edge(2, 5, 15, b"k25", b"tag25"),
+            new_edge(5, 6, 16, b"k56", b"tag56"),
+            new_edge(6, 1, 17, b"k61", b"tag61"),
+        ]);
+
+        use rand::seq::SliceRandom;
+        let mut case = vec![
+            new_edge(1, 2, 11, b"k12", b"tag12"),
+            new_edge(1, 3, 12, b"k13", b"tag13"),
+            new_edge(2, 4, 13, b"k24", b"tag24"),
+            new_edge(3, 5, 14, b"k35", b"tag35"),
+            new_edge(2, 5, 15, b"k25", b"tag25"),
+            new_edge(5, 6, 16, b"k56", b"tag56"),
+        ];
+        case.shuffle(&mut rand::thread_rng());
+        case.push(new_edge(6, 1, 17, b"k61", b"tag61"));
+        test_once(&case);
     }
 
     pub(crate) struct MockPdClient;
 
     impl PdClient for MockPdClient {}
 
-    #[derive(Clone)]
-    pub(crate) struct MockResolver;
-
-    impl StoreAddrResolver for MockResolver {
-        fn resolve(&self, _store_id: u64, _cb: Callback) -> Result<()> {
-            Err(Error::Other(box_err!("unimplemented")))
-        }
-    }
-
     fn start_deadlock_detector(
-        host: &mut CoprocessorHost<RocksEngine>,
+        host: &mut CoprocessorHost<KvTestEngine>,
     ) -> (FutureWorker<Task>, Scheduler) {
         let waiter_mgr_worker = FutureWorker::new("dummy-waiter-mgr");
         let waiter_mgr_scheduler = WaiterMgrScheduler::new(waiter_mgr_worker.scheduler());
@@ -1073,7 +1476,7 @@ pub mod tests {
         let detector_runner = Detector::new(
             1,
             Arc::new(MockPdClient {}),
-            MockResolver {},
+            resolve::MockStoreAddrResolver::default(),
             Arc::new(SecurityManager::new(&SecurityConfig::default()).unwrap()),
             waiter_mgr_scheduler,
             &Config::default(),
@@ -1112,7 +1515,7 @@ pub mod tests {
         ];
         let events = [
             RegionChangeEvent::Create,
-            RegionChangeEvent::Update,
+            RegionChangeEvent::Update(RegionChangeReason::ChangePeer),
             RegionChangeEvent::Destroy,
         ];
         let check_role = |role| {
@@ -1148,7 +1551,11 @@ pub mod tests {
         check_role(Role::Follower);
         // Leader region id is changed.
         region.set_id(2);
-        host.on_region_changed(&region, RegionChangeEvent::Update, StateRole::Leader);
+        host.on_region_changed(
+            &region,
+            RegionChangeEvent::Update(RegionChangeReason::ChangePeer),
+            StateRole::Leader,
+        );
         // Destroy the previous leader region.
         region.set_id(1);
         host.on_region_changed(&region, RegionChangeEvent::Destroy, StateRole::Leader);
@@ -1159,19 +1566,19 @@ pub mod tests {
         host.on_region_changed(&region, RegionChangeEvent::Create, StateRole::Follower);
         check_role(Role::Follower);
         for &follower_role in &follower_roles {
-            host.on_role_change(&region, follower_role);
+            host.on_role_change(&region, RoleChange::new(follower_role));
             check_role(Role::Follower);
-            host.on_role_change(&invalid, StateRole::Leader);
+            host.on_role_change(&invalid, RoleChange::new(StateRole::Leader));
             check_role(Role::Follower);
-            host.on_role_change(&other, StateRole::Leader);
+            host.on_role_change(&other, RoleChange::new(StateRole::Leader));
             check_role(Role::Follower);
-            host.on_role_change(&region, StateRole::Leader);
+            host.on_role_change(&region, RoleChange::new(StateRole::Leader));
             check_role(Role::Leader);
-            host.on_role_change(&invalid, follower_role);
+            host.on_role_change(&invalid, RoleChange::new(follower_role));
             check_role(Role::Leader);
-            host.on_role_change(&other, follower_role);
+            host.on_role_change(&other, RoleChange::new(follower_role));
             check_role(Role::Leader);
-            host.on_role_change(&region, follower_role);
+            host.on_role_change(&region, RoleChange::new(follower_role));
             check_role(Role::Follower);
         }
 

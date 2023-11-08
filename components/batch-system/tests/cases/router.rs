@@ -1,26 +1,27 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use batch_system::test_runner::*;
-use batch_system::*;
+use std::{
+    sync::{atomic::*, Arc},
+    time::Duration,
+};
+
+use batch_system::{test_runner::*, *};
 use crossbeam::channel::*;
-use std::sync::atomic::*;
-use std::sync::Arc;
-use std::time::Duration;
 use tikv_util::mpsc;
 
 fn counter_closure(counter: &Arc<AtomicUsize>) -> Message {
     let c = counter.clone();
-    Message::Callback(Box::new(move |_: &mut Runner| {
+    Message::Callback(Box::new(move |_: &Handler, _: &mut Runner| {
         c.fetch_add(1, Ordering::SeqCst);
     }))
 }
 
 fn noop() -> Message {
-    Message::Callback(Box::new(|_| ()))
+    Message::Callback(Box::new(|_, _| ()))
 }
 
 fn unreachable() -> Message {
-    Message::Callback(Box::new(|_: &mut Runner| unreachable!()))
+    Message::Callback(Box::new(|_: &Handler, _: &mut Runner| unreachable!()))
 }
 
 #[test]
@@ -29,7 +30,7 @@ fn test_basic() {
     let (control_drop_tx, control_drop_rx) = mpsc::unbounded();
     control_fsm.sender = Some(control_drop_tx);
     let (router, mut system) =
-        batch_system::create_system(&Config::default(), control_tx, control_fsm);
+        batch_system::create_system(&Config::default(), control_tx, control_fsm, None);
     let builder = Builder::new();
     system.spawn("test".to_owned(), builder);
 
@@ -48,14 +49,16 @@ fn test_basic() {
     let router_ = router.clone();
     // Control mailbox should be connected.
     router
-        .send_control(Message::Callback(Box::new(move |_: &mut Runner| {
-            let (sender, mut runner) = Runner::new(10);
-            let (tx1, rx1) = mpsc::unbounded();
-            runner.sender = Some(tx1);
-            let mailbox = BasicMailbox::new(sender, runner);
-            router_.register(1, mailbox);
-            tx.send(rx1).unwrap();
-        })))
+        .send_control(Message::Callback(Box::new(
+            move |_: &Handler, _: &mut Runner| {
+                let (sender, mut runner) = Runner::new(10);
+                let (tx1, rx1) = mpsc::unbounded();
+                runner.sender = Some(tx1);
+                let mailbox = BasicMailbox::new(sender, runner, Arc::default());
+                router_.register(1, mailbox);
+                tx.send(rx1).unwrap();
+            },
+        )))
         .unwrap();
     let runner_drop_rx = rx.recv_timeout(Duration::from_secs(3)).unwrap();
 
@@ -68,12 +71,12 @@ fn test_basic() {
     router
         .send(
             1,
-            Message::Callback(Box::new(move |_: &mut Runner| {
+            Message::Callback(Box::new(move |_: &Handler, _: &mut Runner| {
                 rx.recv_timeout(Duration::from_secs(100)).unwrap();
             })),
         )
         .unwrap();
-    let counter = Arc::new(AtomicUsize::new(0));
+    let counter = Arc::default();
     let sent_cnt = (0..)
         .take_while(|_| router.send(1, counter_closure(&counter)).is_ok())
         .count();
@@ -89,7 +92,7 @@ fn test_basic() {
     router
         .force_send(
             1,
-            Message::Callback(Box::new(move |_: &mut Runner| {
+            Message::Callback(Box::new(move |_: &Handler, _: &mut Runner| {
                 tx.send(1).unwrap();
             })),
         )
@@ -121,4 +124,38 @@ fn test_basic() {
         control_drop_rx.recv_timeout(Duration::from_secs(3)),
         Err(RecvTimeoutError::Disconnected)
     );
+}
+
+#[test]
+fn test_router_trace() {
+    let (control_tx, control_fsm) = Runner::new(10);
+    let (router, mut system) =
+        batch_system::create_system(&Config::default(), control_tx, control_fsm, None);
+    let builder = Builder::new();
+    system.spawn("test".to_owned(), builder);
+
+    let register_runner = |addr| {
+        let (sender, runner) = Runner::new(10);
+        let mailbox = BasicMailbox::new(sender, runner, router.state_cnt().clone());
+        router.register(addr, mailbox);
+    };
+    let close_runner = |addr| {
+        router.close(addr);
+    };
+
+    let mut mailboxes = vec![];
+    for i in 0..10 {
+        register_runner(i);
+        mailboxes.push(router.mailbox(i).unwrap());
+    }
+    assert_eq!(router.alive_cnt(), 10);
+    assert_eq!(router.state_cnt().load(Ordering::Relaxed), 11);
+    for i in 0..10 {
+        close_runner(i);
+    }
+    assert_eq!(router.alive_cnt(), 0);
+    assert_eq!(router.state_cnt().load(Ordering::Relaxed), 11);
+    drop(mailboxes);
+    assert_eq!(router.alive_cnt(), 0);
+    assert_eq!(router.state_cnt().load(Ordering::Relaxed), 1);
 }

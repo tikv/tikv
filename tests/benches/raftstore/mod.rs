@@ -1,19 +1,17 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::fmt;
-use std::sync::Arc;
 
 use criterion::{Bencher, Criterion};
-use engine_rocks::raw::DB;
-use engine_rocks::Compat;
+use engine_rocks::RocksEngine;
 use engine_traits::{Mutable, WriteBatch, WriteBatchExt};
 use test_raftstore::*;
 use test_util::*;
 
 const DEFAULT_DATA_SIZE: usize = 100_000;
 
-fn enc_write_kvs(db: &Arc<DB>, kvs: &[(Vec<u8>, Vec<u8>)]) {
-    let mut wb = db.c().write_batch();
+fn enc_write_kvs(db: &RocksEngine, kvs: &[(Vec<u8>, Vec<u8>)]) {
+    let mut wb = db.write_batch();
     for &(ref k, ref v) in kvs {
         wb.put(&keys::data_key(k), v).unwrap();
     }
@@ -23,7 +21,7 @@ fn enc_write_kvs(db: &Arc<DB>, kvs: &[(Vec<u8>, Vec<u8>)]) {
 fn prepare_cluster<T: Simulator>(cluster: &mut Cluster<T>, initial_kvs: &[(Vec<u8>, Vec<u8>)]) {
     cluster.run();
     for engines in cluster.engines.values() {
-        enc_write_kvs(engines.kv.as_inner(), initial_kvs);
+        enc_write_kvs(&engines.kv, initial_kvs);
     }
     cluster.leader_of_region(1).unwrap();
 }
@@ -35,7 +33,7 @@ struct SetConfig<F> {
     value_size: usize,
 }
 
-fn bench_set<T, F>(b: &mut Bencher, input: &SetConfig<F>)
+fn bench_set<T, F>(b: &mut Bencher<'_>, input: &SetConfig<F>)
 where
     T: Simulator,
     F: ClusterFactory<T>,
@@ -57,7 +55,7 @@ struct GetConfig<F> {
     nodes: usize,
 }
 
-fn bench_get<T, F>(b: &mut Bencher, input: &GetConfig<F>)
+fn bench_get<T, F>(b: &mut Bencher<'_>, input: &GetConfig<F>)
 where
     T: Simulator,
     F: ClusterFactory<T>,
@@ -84,7 +82,7 @@ struct DeleteConfig<F> {
     nodes: usize,
 }
 
-fn bench_delete<T, F>(b: &mut Bencher, input: &DeleteConfig<F>)
+fn bench_delete<T, F>(b: &mut Bencher<'_>, input: &DeleteConfig<F>)
 where
     T: Simulator,
     F: ClusterFactory<T>,

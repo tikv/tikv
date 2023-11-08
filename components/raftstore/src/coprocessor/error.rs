@@ -1,18 +1,14 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use error_code::{self, ErrorCode, ErrorCodeExt};
-use std::error::Error as StdError;
-use std::result::Result as StdResult;
+use std::{error::Error as StdError, result::Result as StdResult};
 
-quick_error! {
-    #[derive(Debug)]
-    pub enum Error {
-        Other(err: Box<dyn StdError + Sync + Send>) {
-            from()
-            cause(err.as_ref())
-            display("{}", err)
-        }
-    }
+use error_code::{self, ErrorCode, ErrorCodeExt};
+use thiserror::Error;
+
+#[derive(Debug, Error)]
+pub enum Error {
+    #[error("{0}")]
+    Other(#[from] Box<dyn StdError + Sync + Send>),
 }
 
 pub type Result<T> = StdResult<T, Error>;

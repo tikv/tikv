@@ -1,8 +1,10 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::cmp::Ordering;
-use std::fmt::{Display, Formatter};
-use std::sync::Arc;
+use std::{
+    cmp::Ordering,
+    fmt::{Display, Formatter},
+    sync::Arc,
+};
 
 use tikv_util::buffer_vec::BufferVec;
 
@@ -67,7 +69,7 @@ impl PartialOrd for Set {
     }
 }
 
-impl crate::codec::data_type::AsMySQLBool for Set {
+impl crate::codec::data_type::AsMySqlBool for Set {
     #[inline]
     fn as_mysql_bool(&self, _context: &mut crate::expr::EvalContext) -> crate::codec::Result<bool> {
         Ok(self.value > 0)

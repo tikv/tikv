@@ -2,35 +2,42 @@
 
 use std::sync::Arc;
 
+use api_version::{ApiV1, KvFormat};
+use async_trait::async_trait;
+use codec::{number::NumberCodec, prelude::NumberDecoder};
+use itertools::izip;
 use kvproto::coprocessor::KeyRange;
-use tidb_query_datatype::{Collation, EvalType, FieldTypeAccessor};
-use tipb::ColumnInfo;
-use tipb::FieldType;
-use tipb::IndexScan;
+use tidb_query_common::{
+    storage::{IntervalRange, Storage},
+    Result,
+};
+use tidb_query_datatype::{
+    codec::{
+        batch::{LazyBatchColumn, LazyBatchColumnVec},
+        collation::collator::PADDING_SPACE,
+        datum,
+        datum::DatumDecoder,
+        row::v2::{decode_v2_u64, RowSlice, V1CompatibleEncoder},
+        table,
+        table::{check_index_key, INDEX_VALUE_VERSION_FLAG, MAX_OLD_ENCODED_VALUE_LEN},
+        Datum,
+    },
+    expr::{EvalConfig, EvalContext},
+    EvalType, FieldTypeAccessor,
+};
+use tipb::{ColumnInfo, FieldType, IndexScan};
+use DecodeHandleStrategy::*;
 
 use super::util::scan_executor::*;
 use crate::interface::*;
-use codec::number::NumberCodec;
-use codec::prelude::NumberDecoder;
-use itertools::izip;
-use tidb_query_common::storage::{IntervalRange, Storage};
-use tidb_query_common::Result;
-use tidb_query_datatype::codec::batch::{LazyBatchColumn, LazyBatchColumnVec};
-use tidb_query_datatype::codec::row::v2::{decode_v2_u64, RowSlice, V1CompatibleEncoder};
-use tidb_query_datatype::codec::table::{
-    check_index_key, INDEX_VALUE_VERSION_FLAG, MAX_OLD_ENCODED_VALUE_LEN,
-};
-use tidb_query_datatype::codec::{datum, datum::DatumDecoder, table, Datum};
-use tidb_query_datatype::expr::{EvalConfig, EvalContext};
 
-use tidb_query_datatype::codec::collation::collator::PADDING_SPACE;
-use DecodeHandleStrategy::*;
+pub struct BatchIndexScanExecutor<S: Storage, F: KvFormat>(
+    ScanExecutor<S, IndexScanExecutorImpl, F>,
+);
 
-pub struct BatchIndexScanExecutor<S: Storage>(ScanExecutor<S, IndexScanExecutorImpl>);
-
-// We assign a dummy type `Box<dyn Storage<Statistics = ()>>` so that we can omit the type
-// when calling `check_supported`.
-impl BatchIndexScanExecutor<Box<dyn Storage<Statistics = ()>>> {
+// We assign a dummy type `Box<dyn Storage<Statistics = ()>>` so that we can
+// omit the type when calling `check_supported`.
+impl BatchIndexScanExecutor<Box<dyn Storage<Statistics = ()>>, ApiV1> {
     /// Checks whether this executor can be used.
     #[inline]
     pub fn check_supported(descriptor: &IndexScan) -> Result<()> {
@@ -38,7 +45,7 @@ impl BatchIndexScanExecutor<Box<dyn Storage<Statistics = ()>>> {
     }
 }
 
-impl<S: Storage> BatchIndexScanExecutor<S> {
+impl<S: Storage, F: KvFormat> BatchIndexScanExecutor<S, F> {
     pub fn new(
         storage: S,
         config: Arc<EvalConfig>,
@@ -49,28 +56,43 @@ impl<S: Storage> BatchIndexScanExecutor<S> {
         unique: bool,
         is_scanned_range_aware: bool,
     ) -> Result<Self> {
-        // Note 1: `unique = true` doesn't completely mean that it is a unique index scan. Instead
-        // it just means that we can use point-get for this index. In the following scenarios
-        // `unique` will be `false`:
+        // Note 1: `unique = true` doesn't completely mean that it is a unique index
+        // scan. Instead it just means that we can use point-get for this index.
+        // In the following scenarios `unique` will be `false`:
         // - scan from a non-unique index
         // - scan from a unique index with like: where unique-index like xxx
         //
-        // Note 2: Unlike table scan executor, the accepted `columns_info` of index scan executor is
-        // strictly stipulated. The order of columns in the schema must be the same as index data
-        // stored and if PK handle is needed it must be placed as the last one.
+        // Note 2: Unlike table scan executor, the accepted `columns_info` of index scan
+        // executor is strictly stipulated. The order of columns in the schema must be
+        // the same as index data stored and if PK handle is needed it must be placed as
+        // the last one.
         //
-        // Note 3: Currently TiDB may send multiple PK handles to TiKV (but only the last one is
-        // real). We accept this kind of request for compatibility considerations, but will be
-        // forbidden soon.
+        // Note 3: Currently TiDB may send multiple PK handles to TiKV (but only the
+        // last one is real). We accept this kind of request for compatibility
+        // considerations, but will be forbidden soon.
         //
-        // Note 4: When process global indexes, an extra partition ID column with column ID
-        // `table::EXTRA_PARTITION_ID_COL_ID` will append to column info to indicate which partiton
-        // handles belong to. See https://github.com/pingcap/parser/pull/1010 for more information.
-        let pid_column_cnt = columns_info.last().map_or(0, |ci| {
-            (ci.get_column_id() == table::EXTRA_PARTITION_ID_COL_ID) as usize
+        // Note 4: When process global indexes, an extra partition ID column with column
+        // ID `table::EXTRA_PARTITION_ID_COL_ID` will append to column info to indicate which partiton handles belong to. See https://github.com/pingcap/parser/pull/1010 for more information.
+        //
+        // Note 5: When process a partitioned table's index under
+        // tidb_partition_prune_mode = 'dynamic' and with either an active transaction
+        // buffer or with a SelectLock/pessimistic lock, we need to return the physical
+        // table id since several partitions may be included in the range.
+        //
+        // Note 6: Also int_handle (-1), EXTRA_PARTITION_ID_COL_ID (-2) and
+        // EXTRA_PHYSICAL_TABLE_ID_COL_ID (-3) must be requested in this order in
+        // columns_info! since current implementation looks for them backwards for -3,
+        // -2, -1.
+        let physical_table_id_column_cnt = columns_info.last().map_or(0, |ci| {
+            (ci.get_column_id() == table::EXTRA_PHYSICAL_TABLE_ID_COL_ID) as usize
         });
+        let pid_column_cnt = columns_info
+            .get(columns_info.len() - 1 - physical_table_id_column_cnt)
+            .map_or(0, |ci| {
+                (ci.get_column_id() == table::EXTRA_PARTITION_ID_COL_ID) as usize
+            });
         let is_int_handle = columns_info
-            .get(columns_info.len() - 1 - pid_column_cnt)
+            .get(columns_info.len() - 1 - pid_column_cnt - physical_table_id_column_cnt)
             .map_or(false, |ci| ci.get_pk_handle());
         let is_common_handle = primary_column_ids_len > 0;
         let (decode_handle_strategy, handle_column_cnt) = match (is_int_handle, is_common_handle) {
@@ -86,7 +108,7 @@ impl<S: Storage> BatchIndexScanExecutor<S> {
             }
         };
 
-        if handle_column_cnt + pid_column_cnt > columns_info.len() {
+        if handle_column_cnt + pid_column_cnt + physical_table_id_column_cnt > columns_info.len() {
             return Err(other_err!(
                 "The number of handle columns exceeds the length of `columns_info`"
             ));
@@ -94,17 +116,19 @@ impl<S: Storage> BatchIndexScanExecutor<S> {
 
         let schema: Vec<_> = columns_info
             .iter()
-            .map(|ci| field_type_from_column_info(&ci))
+            .map(|ci| field_type_from_column_info(ci))
             .collect();
 
-        let columns_id_without_handle: Vec<_> = columns_info
-            [..columns_info.len() - handle_column_cnt - pid_column_cnt]
+        let columns_id_without_handle: Vec<_> = columns_info[..columns_info.len()
+            - handle_column_cnt
+            - pid_column_cnt
+            - physical_table_id_column_cnt]
             .iter()
             .map(|ci| ci.get_column_id())
             .collect();
 
-        let columns_id_for_common_handle = columns_info
-            [columns_id_without_handle.len()..columns_info.len() - pid_column_cnt]
+        let columns_id_for_common_handle = columns_info[columns_id_without_handle.len()
+            ..columns_info.len() - pid_column_cnt - physical_table_id_column_cnt]
             .iter()
             .map(|ci| ci.get_column_id())
             .collect();
@@ -116,6 +140,7 @@ impl<S: Storage> BatchIndexScanExecutor<S> {
             columns_id_for_common_handle,
             decode_handle_strategy,
             pid_column_cnt,
+            physical_table_id_column_cnt,
             index_version: -1,
         };
         let wrapper = ScanExecutor::new(ScanExecutorOptions {
@@ -131,7 +156,8 @@ impl<S: Storage> BatchIndexScanExecutor<S> {
     }
 }
 
-impl<S: Storage> BatchExecutor for BatchIndexScanExecutor<S> {
+#[async_trait]
+impl<S: Storage, F: KvFormat> BatchExecutor for BatchIndexScanExecutor<S, F> {
     type StorageStats = S::Statistics;
 
     #[inline]
@@ -140,8 +166,8 @@ impl<S: Storage> BatchExecutor for BatchIndexScanExecutor<S> {
     }
 
     #[inline]
-    fn next_batch(&mut self, scan_rows: usize) -> BatchExecuteResult {
-        self.0.next_batch(scan_rows)
+    async fn next_batch(&mut self, scan_rows: usize) -> BatchExecuteResult {
+        self.0.next_batch(scan_rows).await
     }
 
     #[inline]
@@ -189,7 +215,13 @@ struct IndexScanExecutorImpl {
     decode_handle_strategy: DecodeHandleStrategy,
 
     /// Number of partition ID columns, now it can only be 0 or 1.
+    /// Must be after all normal columns and handle, but before
+    /// physical_table_id_column
     pid_column_cnt: usize,
+
+    /// Number of Physical Table ID columns, can only be 0 or 1.
+    /// Must be last, after pid_column
+    physical_table_id_column_cnt: usize,
 
     index_version: i64,
 }
@@ -205,10 +237,11 @@ impl ScanExecutorImpl for IndexScanExecutorImpl {
         &mut self.context
     }
 
-    /// Constructs empty columns, with PK containing int handle in decoded format and the rest in raw format.
+    /// Constructs empty columns, with PK containing int handle in decoded
+    /// format and the rest in raw format.
     ///
-    /// Note: the structure of the constructed column is the same as table scan executor but due
-    /// to different reasons.
+    /// Note: the structure of the constructed column is the same as table scan
+    /// executor but due to different reasons.
     fn build_column_vec(&self, scan_rows: usize) -> LazyBatchColumnVec {
         let columns_len = self.schema.len();
         let mut columns = Vec::with_capacity(columns_len);
@@ -226,7 +259,9 @@ impl ScanExecutorImpl for IndexScanExecutorImpl {
                 ));
             }
             DecodeCommonHandle => {
-                for _ in self.columns_id_without_handle.len()..columns_len - self.pid_column_cnt {
+                for _ in self.columns_id_without_handle.len()
+                    ..columns_len - self.pid_column_cnt - self.physical_table_id_column_cnt
+                {
                     columns.push(LazyBatchColumn::raw_with_capacity(scan_rows));
                 }
             }
@@ -239,58 +274,67 @@ impl ScanExecutorImpl for IndexScanExecutorImpl {
             ));
         }
 
+        if self.physical_table_id_column_cnt > 0 {
+            columns.push(LazyBatchColumn::decoded_with_capacity_and_tp(
+                scan_rows,
+                EvalType::Int,
+            ));
+        }
+
         assert_eq!(columns.len(), columns_len);
         LazyBatchColumnVec::from(columns)
     }
 
     // Value layout: (see https://docs.google.com/document/d/1Co5iMiaxitv3okJmLYLJxZYCNChcjzswJMRr-_45Eqg/edit?usp=sharing)
-    //		+-- IndexValueVersion0  (with restore data, or common handle, or index is global)
-    //		|
-    //		|  Layout: TailLen | Options      | Padding      | [IntHandle] | [UntouchedFlag]
-    //		|  Length:   1     | len(options) | len(padding) |    8        |     1
-    //		|
-    //		|  TailLen:       len(padding) + len(IntHandle) + len(UntouchedFlag)
-    //		|  Options:       Encode some value for new features, such as common handle, new collations or global index.
-    //		|                 See below for more information.
-    //		|  Padding:       Ensure length of value always >= 10. (or >= 11 if UntouchedFlag exists.)
-    //		|  IntHandle:     Only exists when table use int handles and index is unique.
-    //		|  UntouchedFlag: Only exists when index is untouched.
-    //		|
-    //		+-- Old Encoding (without restore data, integer handle, local)
-    //		|
-    //		|  Layout: [Handle] | [UntouchedFlag]
-    //		|  Length:   8      |     1
-    //		|
-    //		|  Handle:        Only exists in unique index.
-    //		|  UntouchedFlag: Only exists when index is untouched.
-    //		|
-    //		|  If neither Handle nor UntouchedFlag exists, value will be one single byte '0' (i.e. []byte{'0'}).
-    //		|  Length of value <= 9, use to distinguish from the new encoding.
+    // ```text
+    // 		+-- IndexValueVersion0  (with restore data, or common handle, or index is global)
     // 		|
-    //		+-- IndexValueForClusteredIndexVersion1
-    //		|
-    //		|  Layout: TailLen |    VersionFlag  |    Version     ｜ Options      |   [UntouchedFlag]
-    //		|  Length:   1     |        1        |      1         |  len(options) |         1
-    //		|
-    //		|  TailLen:       len(UntouchedFlag)
-    //		|  Options:       Encode some value for new features, such as common handle, new collations or global index.
-    //		|                 See below for more information.
-    //		|  UntouchedFlag: Only exists when index is untouched.
-    //		|
-    //		|  Layout of Options:
-    //		|
-    //		|     Segment:             Common Handle                 |     Global Index      |   New Collation
+    // 		|  Layout: TailLen | Options      | Padding      | [IntHandle] | [UntouchedFlag]
+    // 		|  Length:   1     | len(options) | len(padding) |    8        |     1
+    // 		|
+    // 		|  TailLen:       len(padding) + len(IntHandle) + len(UntouchedFlag)
+    // 		|  Options:       Encode some value for new features, such as common handle, new collations or global index.
+    // 		|                 See below for more information.
+    // 		|  Padding:       Ensure length of value always >= 10. (or >= 11 if UntouchedFlag exists.)
+    // 		|  IntHandle:     Only exists when table use int handles and index is unique.
+    // 		|  UntouchedFlag: Only exists when index is untouched.
+    // 		|
+    // 		+-- Old Encoding (without restore data, integer handle, local)
+    // 		|
+    // 		|  Layout: [Handle] | [UntouchedFlag]
+    // 		|  Length:   8      |     1
+    // 		|
+    // 		|  Handle:        Only exists in unique index.
+    // 		|  UntouchedFlag: Only exists when index is untouched.
+    // 		|
+    // 		|  If neither Handle nor UntouchedFlag exists, value will be one single byte '0' (i.e. []byte{'0'}).
+    // 		|  Length of value <= 9, use to distinguish from the new encoding.
+    // 		|
+    // 		+-- IndexValueForClusteredIndexVersion1
+    // 		|
+    // 		|  Layout: TailLen |    VersionFlag  |    Version     ｜ Options      |   [UntouchedFlag]
+    // 		|  Length:   1     |        1        |      1         |  len(options) |         1
+    // 		|
+    // 		|  TailLen:       len(UntouchedFlag)
+    // 		|  Options:       Encode some value for new features, such as common handle, new collations or global index.
+    // 		|                 See below for more information.
+    // 		|  UntouchedFlag: Only exists when index is untouched.
+    // 		|
+    // 		|  Layout of Options:
+    // 		|
+    // 		|     Segment:             Common Handle                 |     Global Index      |   New Collation
     // 		|     Layout:  CHandle Flag | CHandle Len | CHandle      | PidFlag | PartitionID |    restoreData
-    //		|     Length:     1         | 2           | len(CHandle) |    1    |    8        |   len(restoreData)
-    //		|
-    //		|     Common Handle Segment: Exists when unique index used common handles.
-    //		|     Global Index Segment:  Exists when index is global.
-    //		|     New Collation Segment: Exists when new collation is used and index or handle contains non-binary string.
-    //		|     In v4.0, restored data contains all the index values. For example, (a int, b char(10)) and index (a, b).
-    //		|     The restored data contains both the values of a and b.
-    //		|     In v5.0, restored data contains only non-binary data(except for char and _bin). In the above example, the restored data contains only the value of b.
-    //		|     Besides, if the collation of b is _bin, then restored data is an integer indicate the spaces are truncated. Then we use sortKey
-    //		|     and the restored data together to restore original data.
+    // 		|     Length:     1         | 2           | len(CHandle) |    1    |    8        |   len(restoreData)
+    // 		|
+    // 		|     Common Handle Segment: Exists when unique index used common handles.
+    // 		|     Global Index Segment:  Exists when index is global.
+    // 		|     New Collation Segment: Exists when new collation is used and index or handle contains non-binary string.
+    // 		|     In v4.0, restored data contains all the index values. For example, (a int, b char(10)) and index (a, b).
+    // 		|     The restored data contains both the values of a and b.
+    // 		|     In v5.0, restored data contains only non-binary data(except for char and _bin). In the above example, the restored data contains only the value of b.
+    // 		|     Besides, if the collation of b is _bin, then restored data is an integer indicate the spaces are truncated. Then we use sortKey
+    // 		|     and the restored data together to restore original data.
+    // ```
     #[inline]
     fn process_kv_pair(
         &mut self,
@@ -299,6 +343,9 @@ impl ScanExecutorImpl for IndexScanExecutorImpl {
         columns: &mut LazyBatchColumnVec,
     ) -> Result<()> {
         check_index_key(key)?;
+        if self.physical_table_id_column_cnt > 0 {
+            self.process_physical_table_id_column(key, columns)?;
+        }
         key = &key[table::PREFIX_LEN + table::ID_LEN..];
         if self.index_version == -1 {
             self.index_version = Self::get_index_version(value)?
@@ -329,7 +376,7 @@ enum RestoreData<'a> {
 #[derive(PartialEq, Debug, Copy, Clone)]
 enum DecodePartitionIdOp<'a> {
     Nop,
-    PID(&'a [u8]),
+    Pid(&'a [u8]),
 }
 
 impl IndexScanExecutorImpl {
@@ -397,8 +444,11 @@ impl IndexScanExecutorImpl {
         Ok(())
     }
 
-    // Process index values that are in old collation but don't contain common handles.
-    // NOTE: We should extract the index columns from the key first, and extract the handles from value if there is no handle in the key.
+    // Process index values that are in old collation, when
+    // `new_collations_enabled_on_first_bootstrap` = true also will access this
+    // function.
+    // NOTE: We should extract the index columns from the key first,
+    // and extract the handles from value if there is no handle in the key.
     // Otherwise, extract the handles from the key.
     fn process_old_collation_kv(
         &mut self,
@@ -431,9 +481,11 @@ impl IndexScanExecutorImpl {
             }
             DecodeCommonHandle => {
                 // Otherwise, if the handle is common handle, we extract it from the key.
+                let end_index =
+                    columns.columns_len() - self.pid_column_cnt - self.physical_table_id_column_cnt;
                 Self::extract_columns_from_datum_format(
                     &mut key_payload,
-                    &mut columns[self.columns_id_without_handle.len()..],
+                    &mut columns[self.columns_id_without_handle.len()..end_index],
                 )?;
             }
         }
@@ -441,16 +493,23 @@ impl IndexScanExecutorImpl {
         Ok(())
     }
 
-    // restore_original_data restores the index values whose format is introduced in TiDB 5.0.
-    // Unlike the format in TiDB 4.0, the new format is optimized for storage space:
-    // 1. If the index is a composed index, only the non-binary string column's value need to write to value, not all.
-    // 2. If a string column's collation is _bin, then we only write the number of the truncated spaces to value.
-    // 3. If a string column is char, not varchar, then we use the sortKey directly.
+    // restore_original_data restores the index values whose format is introduced in
+    // TiDB 5.0. Unlike the format in TiDB 4.0, the new format is optimized for
+    // storage space:
+    // - If the index is a composed index, only the non-binary string column's value
+    //   need to write to value, not all.
+    // - If a string column's collation is _bin, then we only write the number of
+    //   the truncated spaces to value.
+    // - If a string column is char, not varchar, then we use the sortKey directly.
+    //
     // The whole logic of this function is:
-    // 1. For each column pass in, check if it needs the restored data to get to original data. If not, check the next column.
-    // 2. Skip if the `sort key` is NULL, because the original data must be NULL.
-    // 3. Depend on the collation if `_bin` or not. Process them differently to get the correct original data.
-    // 4. Write the original data into the column, we need to make sure pop() is called.
+    // - For each column pass in, check if it needs the restored data to get to
+    //   original data. If not, check the next column.
+    // - Skip if the `sort key` is NULL, because the original data must be NULL.
+    // - Depend on the collation if `_bin` or not. Process them differently to get
+    //   the correct original data.
+    // - Write the original data into the column, we need to make sure pop() is
+    //   called.
     fn restore_original_data<'a>(
         &self,
         restored_values: &[u8],
@@ -463,7 +522,7 @@ impl IndexScanExecutorImpl {
             }
             let is_bin_collation = field_type
                 .collation()
-                .map(|col| col == Collation::Utf8Mb4Bin)
+                .map(|col| col.is_bin_collation())
                 .unwrap_or(false);
 
             assert!(!column.is_empty());
@@ -481,7 +540,8 @@ impl IndexScanExecutorImpl {
             column.mut_raw().pop();
 
             let original_data = if is_bin_collation {
-                // _bin collation, we need to combine data from key and value to form the original data.
+                // _bin collation, we need to combine data from key and value to form the
+                // original data.
 
                 // Unwrap as checked by `decoded_value.read_datum() == Datum::Null`
                 let truncate_str = decoded_value.as_string()?.unwrap();
@@ -513,6 +573,11 @@ impl IndexScanExecutorImpl {
 
     // get_index_version is the same as getIndexVersion() in the TiDB repo.
     fn get_index_version(value: &[u8]) -> Result<i64> {
+        if value.len() == 3 || value.len() == 4 {
+            // For the unique index with null value or non-unique index, the length can be 3
+            // or 4 if <= 9.
+            return Ok(1);
+        }
         if value.len() <= MAX_OLD_ENCODED_VALUE_LEN {
             return Ok(0);
         }
@@ -606,7 +671,7 @@ impl IndexScanExecutorImpl {
             } else if partition_id_bytes.is_empty() {
                 DecodePartitionIdOp::Nop
             } else {
-                DecodePartitionIdOp::PID(partition_id_bytes)
+                DecodePartitionIdOp::Pid(partition_id_bytes)
             }
         };
 
@@ -636,7 +701,7 @@ impl IndexScanExecutorImpl {
         &mut self,
         mut key_payload: &[u8],
         columns: &mut LazyBatchColumnVec,
-        restore_data: RestoreData,
+        restore_data: RestoreData<'_>,
     ) -> Result<()> {
         match restore_data {
             RestoreData::NotExists => {
@@ -648,11 +713,13 @@ impl IndexScanExecutorImpl {
 
             // If there are some restore data, we need to process them to get the original data.
             RestoreData::V4(rst) => {
-                // 4.0 version format, use the restore data directly. The restore data contain all the indexed values.
+                // 4.0 version format, use the restore data directly. The restore data contain
+                // all the indexed values.
                 self.extract_columns_from_row_format(rst, columns)?;
             }
             RestoreData::V5(rst) => {
-                // Extract the data from key, then use the restore data to get the original data.
+                // Extract the data from key, then use the restore data to get the original
+                // data.
                 Self::extract_columns_from_datum_format(
                     &mut key_payload,
                     &mut columns[..self.columns_id_without_handle.len()],
@@ -675,9 +742,9 @@ impl IndexScanExecutorImpl {
     #[inline]
     fn decode_handle_columns(
         &mut self,
-        decode_handle: DecodeHandleOp,
+        decode_handle: DecodeHandleOp<'_>,
         columns: &mut LazyBatchColumnVec,
-        restore_data: RestoreData,
+        restore_data: RestoreData<'_>,
     ) -> Result<()> {
         match decode_handle {
             DecodeHandleOp::Nop => {}
@@ -694,7 +761,8 @@ impl IndexScanExecutorImpl {
                     .push_int(Some(handle));
             }
             DecodeHandleOp::CommonHandle(mut handle) => {
-                let end_index = columns.columns_len() - self.pid_column_cnt;
+                let end_index =
+                    columns.columns_len() - self.pid_column_cnt - self.physical_table_id_column_cnt;
                 Self::extract_columns_from_datum_format(
                     &mut handle,
                     &mut columns[self.columns_id_without_handle.len()..end_index],
@@ -709,7 +777,8 @@ impl IndexScanExecutorImpl {
 
         if let DecodeHandleOp::CommonHandle(_) = decode_handle {
             let skip = self.columns_id_without_handle.len();
-            let end_index = columns.columns_len() - self.pid_column_cnt;
+            let end_index =
+                columns.columns_len() - self.pid_column_cnt - self.physical_table_id_column_cnt;
             self.restore_original_data(
                 restore_data_bytes,
                 izip!(
@@ -724,17 +793,30 @@ impl IndexScanExecutorImpl {
     }
 
     #[inline]
+    fn process_physical_table_id_column(
+        &mut self,
+        key: &[u8],
+        columns: &mut LazyBatchColumnVec,
+    ) -> Result<()> {
+        let table_id = table::decode_table_id(key)?;
+        let col_index = columns.columns_len() - 1;
+        columns[col_index].mut_decoded().push_int(Some(table_id));
+        Ok(())
+    }
+
+    #[inline]
     fn decode_pid_columns(
         &mut self,
         columns: &mut LazyBatchColumnVec,
-        decode_pid: DecodePartitionIdOp,
+        decode_pid: DecodePartitionIdOp<'_>,
     ) -> Result<()> {
         match decode_pid {
             DecodePartitionIdOp::Nop => {}
-            DecodePartitionIdOp::PID(pid) => {
-                // If need partition id, append partition id to the last column.
+            DecodePartitionIdOp::Pid(pid) => {
+                // If need partition id, append partition id to the last column
+                // before physical table id column if exists.
                 let pid = NumberCodec::decode_i64(pid);
-                let idx = columns.columns_len() - 1;
+                let idx = columns.columns_len() - self.physical_table_id_column_cnt - 1;
                 columns[idx].mut_decoded().push_int(Some(pid))
             }
         }
@@ -744,7 +826,7 @@ impl IndexScanExecutorImpl {
     #[inline]
     fn split_common_handle(value: &[u8]) -> Result<(&[u8], &[u8])> {
         if value
-            .get(0)
+            .first()
             .map_or(false, |c| *c == table::INDEX_VALUE_COMMON_HANDLE_FLAG)
         {
             let handle_len = (&value[1..]).read_u16().map_err(|_| {
@@ -766,7 +848,7 @@ impl IndexScanExecutorImpl {
     #[inline]
     fn split_partition_id(value: &[u8]) -> Result<(&[u8], &[u8])> {
         if value
-            .get(0)
+            .first()
             .map_or(false, |c| *c == table::INDEX_VALUE_PARTITION_ID_FLAG)
         {
             if value.len() < 9 {
@@ -785,7 +867,7 @@ impl IndexScanExecutorImpl {
     fn split_restore_data(value: &[u8]) -> Result<(&[u8], &[u8])> {
         Ok(
             if value
-                .get(0)
+                .first()
                 .map_or(false, |c| *c == table::INDEX_VALUE_RESTORED_DATA_FLAG)
             {
                 (value, &value[value.len()..])
@@ -798,24 +880,25 @@ impl IndexScanExecutorImpl {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     use std::sync::Arc;
 
     use codec::prelude::NumberEncoder;
+    use futures::executor::block_on;
     use kvproto::coprocessor::KeyRange;
-    use tidb_query_datatype::{FieldTypeAccessor, FieldTypeTp};
+    use tidb_query_common::{storage::test_fixture::FixtureStorage, util::convert_to_prefix_next};
+    use tidb_query_datatype::{
+        codec::{
+            data_type::*,
+            datum,
+            row::v2::encoder_for_test::{Column, RowEncoder},
+            table, Datum,
+        },
+        expr::EvalConfig,
+        Collation, FieldTypeAccessor, FieldTypeTp,
+    };
     use tipb::ColumnInfo;
 
-    use tidb_query_common::storage::test_fixture::FixtureStorage;
-    use tidb_query_common::util::convert_to_prefix_next;
-    use tidb_query_datatype::codec::data_type::*;
-    use tidb_query_datatype::codec::{
-        datum,
-        row::v2::encoder_for_test::{Column, RowEncoder},
-        table, Datum,
-    };
-    use tidb_query_datatype::expr::EvalConfig;
+    use super::*;
 
     #[test]
     fn test_basic() {
@@ -850,6 +933,12 @@ mod tests {
                 ci.set_pk_handle(true);
                 ci
             },
+            {
+                let mut ci = ColumnInfo::default();
+                ci.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
+                ci.set_column_id(table::EXTRA_PHYSICAL_TABLE_ID_COL_ID);
+                ci
+            },
         ];
 
         // The schema of these columns. Used to check executor output.
@@ -857,12 +946,14 @@ mod tests {
             FieldTypeTp::LongLong.into(),
             FieldTypeTp::Double.into(),
             FieldTypeTp::LongLong.into(),
+            FieldTypeTp::LongLong.into(),
         ];
 
         // Case 1. Normal index.
 
-        // For a normal index, the PK handle is stored in the key and nothing interesting is stored
-        // in the value. So let's build corresponding KV data.
+        // For a normal index, the PK handle is stored in the key and nothing
+        // interesting is stored in the value. So let's build corresponding KV
+        // data.
 
         let store = {
             let kv: Vec<_> = data
@@ -891,7 +982,7 @@ mod tests {
                 range
             }];
 
-            let mut executor = BatchIndexScanExecutor::new(
+            let mut executor = BatchIndexScanExecutor::<_, ApiV1>::new(
                 store.clone(),
                 Arc::new(EvalConfig::default()),
                 vec![columns_info[0].clone(), columns_info[1].clone()],
@@ -903,8 +994,8 @@ mod tests {
             )
             .unwrap();
 
-            let mut result = executor.next_batch(10);
-            assert!(result.is_drained.as_ref().unwrap());
+            let mut result = block_on(executor.next_batch(10));
+            assert!(result.is_drained.as_ref().unwrap().stop());
             assert_eq!(result.physical_columns.columns_len(), 2);
             assert_eq!(result.physical_columns.rows_len(), 3);
             assert!(result.physical_columns[0].is_raw());
@@ -930,6 +1021,164 @@ mod tests {
         }
 
         {
+            // Case 1.1.b Normal index, without PK, scan total index in reverse order.
+            // With Physical Table ID Column
+
+            let key_ranges = vec![{
+                let mut range = KeyRange::default();
+                let start_data = datum::encode_key(&mut ctx, &[Datum::Min]).unwrap();
+                let start_key = table::encode_index_seek_key(TABLE_ID, INDEX_ID, &start_data);
+                range.set_start(start_key);
+                let end_data = datum::encode_key(&mut ctx, &[Datum::Max]).unwrap();
+                let end_key = table::encode_index_seek_key(TABLE_ID, INDEX_ID, &end_data);
+                range.set_end(end_key);
+                range
+            }];
+
+            let mut executor = BatchIndexScanExecutor::<_, ApiV1>::new(
+                store.clone(),
+                Arc::new(EvalConfig::default()),
+                vec![
+                    columns_info[0].clone(),
+                    columns_info[1].clone(),
+                    columns_info[3].clone(),
+                ],
+                key_ranges,
+                0,
+                true,
+                false,
+                false,
+            )
+            .unwrap();
+
+            let mut result = block_on(executor.next_batch(10));
+            assert!(result.is_drained.as_ref().unwrap().stop());
+            assert_eq!(result.physical_columns.columns_len(), 3);
+            assert_eq!(result.physical_columns.rows_len(), 3);
+            assert!(result.physical_columns[0].is_raw());
+            result.physical_columns[0]
+                .ensure_all_decoded_for_test(&mut ctx, &schema[0])
+                .unwrap();
+            assert_eq!(
+                result.physical_columns[0].decoded().to_int_vec(),
+                &[Some(5), Some(5), Some(-5)]
+            );
+            assert!(result.physical_columns[1].is_raw());
+            result.physical_columns[1]
+                .ensure_all_decoded_for_test(&mut ctx, &schema[1])
+                .unwrap();
+            assert_eq!(
+                result.physical_columns[1].decoded().to_real_vec(),
+                &[
+                    Real::new(10.5).ok(),
+                    Real::new(5.1).ok(),
+                    Real::new(0.3).ok()
+                ]
+            );
+            result.physical_columns[2]
+                .ensure_all_decoded_for_test(&mut ctx, &schema[3])
+                .unwrap();
+            assert_eq!(
+                result.physical_columns[2].decoded().to_int_vec(),
+                &[Some(TABLE_ID), Some(TABLE_ID), Some(TABLE_ID)]
+            );
+        }
+
+        {
+            // Case 1.1.c Normal index, without PK, scan total index in reverse order.
+            // With Columns in WRONG order!!
+
+            let key_ranges = vec![{
+                let mut range = KeyRange::default();
+                let start_data = datum::encode_key(&mut ctx, &[Datum::Min]).unwrap();
+                let start_key = table::encode_index_seek_key(TABLE_ID, INDEX_ID, &start_data);
+                range.set_start(start_key);
+                let end_data = datum::encode_key(&mut ctx, &[Datum::Max]).unwrap();
+                let end_key = table::encode_index_seek_key(TABLE_ID, INDEX_ID, &end_data);
+                range.set_end(end_key);
+                range
+            }];
+
+            let mut executor = BatchIndexScanExecutor::<_, ApiV1>::new(
+                store.clone(),
+                Arc::new(EvalConfig::default()),
+                vec![columns_info[1].clone(), columns_info[0].clone()],
+                key_ranges,
+                0,
+                true,
+                false,
+                false,
+            )
+            .unwrap();
+
+            let mut result = block_on(executor.next_batch(10));
+            assert!(result.is_drained.as_ref().unwrap().stop());
+            assert_eq!(result.physical_columns.columns_len(), 2);
+            assert_eq!(result.physical_columns.rows_len(), 3);
+            assert!(result.physical_columns[0].is_raw());
+            result.physical_columns[0]
+                .ensure_all_decoded_for_test(&mut ctx, &schema[1])
+                .unwrap_err();
+            assert!(result.physical_columns[1].is_raw());
+            result.physical_columns[1]
+                .ensure_all_decoded_for_test(&mut ctx, &schema[0])
+                .unwrap_err();
+        }
+
+        {
+            // Case 1.1.d Normal index, without PK, scan total index in reverse order.
+            // With Physical Table ID Column in WRONG order!!
+
+            let key_ranges = vec![{
+                let mut range = KeyRange::default();
+                let start_data = datum::encode_key(&mut ctx, &[Datum::Min]).unwrap();
+                let start_key = table::encode_index_seek_key(TABLE_ID, INDEX_ID, &start_data);
+                range.set_start(start_key);
+                let end_data = datum::encode_key(&mut ctx, &[Datum::Max]).unwrap();
+                let end_key = table::encode_index_seek_key(TABLE_ID, INDEX_ID, &end_data);
+                range.set_end(end_key);
+                range
+            }];
+
+            let mut executor = BatchIndexScanExecutor::<_, ApiV1>::new(
+                store.clone(),
+                Arc::new(EvalConfig::default()),
+                vec![
+                    columns_info[0].clone(),
+                    columns_info[3].clone(),
+                    columns_info[1].clone(),
+                ],
+                key_ranges,
+                0,
+                true,
+                false,
+                false,
+            )
+            .unwrap();
+
+            let mut result = block_on(executor.next_batch(10));
+            assert!(result.is_drained.as_ref().unwrap().stop());
+            assert_eq!(result.physical_columns.columns_len(), 3);
+            assert_eq!(result.physical_columns.rows_len(), 3);
+            assert!(result.physical_columns[0].is_raw());
+            result.physical_columns[0]
+                .ensure_all_decoded_for_test(&mut ctx, &schema[0])
+                .unwrap();
+            assert_eq!(
+                result.physical_columns[0].decoded().to_int_vec(),
+                &[Some(5), Some(5), Some(-5)]
+            );
+            assert!(result.physical_columns[1].is_raw());
+            result.physical_columns[1]
+                .ensure_all_decoded_for_test(&mut ctx, &schema[3])
+                .unwrap_err();
+            assert!(result.physical_columns[2].is_raw());
+            result.physical_columns[2]
+                .ensure_all_decoded_for_test(&mut ctx, &schema[1])
+                .unwrap_err();
+        }
+
+        {
             // Case 1.2. Normal index, with PK, scan index prefix.
 
             let key_ranges = vec![{
@@ -943,7 +1192,7 @@ mod tests {
                 range
             }];
 
-            let mut executor = BatchIndexScanExecutor::new(
+            let mut executor = BatchIndexScanExecutor::<_, ApiV1>::new(
                 store,
                 Arc::new(EvalConfig::default()),
                 vec![
@@ -959,8 +1208,8 @@ mod tests {
             )
             .unwrap();
 
-            let mut result = executor.next_batch(10);
-            assert!(result.is_drained.as_ref().unwrap());
+            let mut result = block_on(executor.next_batch(10));
+            assert!(result.is_drained.as_ref().unwrap().stop());
             assert_eq!(result.physical_columns.columns_len(), 3);
             assert_eq!(result.physical_columns.rows_len(), 2);
             assert!(result.physical_columns[0].is_raw());
@@ -1020,7 +1269,7 @@ mod tests {
                 range
             }];
 
-            let mut executor = BatchIndexScanExecutor::new(
+            let mut executor = BatchIndexScanExecutor::<_, ApiV1>::new(
                 store.clone(),
                 Arc::new(EvalConfig::default()),
                 vec![
@@ -1036,8 +1285,8 @@ mod tests {
             )
             .unwrap();
 
-            let mut result = executor.next_batch(10);
-            assert!(result.is_drained.as_ref().unwrap());
+            let mut result = block_on(executor.next_batch(10));
+            assert!(result.is_drained.as_ref().unwrap().stop());
             assert_eq!(result.physical_columns.columns_len(), 3);
             assert_eq!(result.physical_columns.rows_len(), 2);
             assert!(result.physical_columns[0].is_raw());
@@ -1077,7 +1326,7 @@ mod tests {
                 range
             }];
 
-            let mut executor = BatchIndexScanExecutor::new(
+            let mut executor = BatchIndexScanExecutor::<_, ApiV1>::new(
                 store,
                 Arc::new(EvalConfig::default()),
                 vec![
@@ -1093,8 +1342,8 @@ mod tests {
             )
             .unwrap();
 
-            let mut result = executor.next_batch(10);
-            assert!(result.is_drained.as_ref().unwrap());
+            let mut result = block_on(executor.next_batch(10));
+            assert!(result.is_drained.as_ref().unwrap().stop());
             assert_eq!(result.physical_columns.columns_len(), 3);
             assert_eq!(result.physical_columns.rows_len(), 1);
             assert!(result.physical_columns[0].is_raw());
@@ -1191,7 +1440,7 @@ mod tests {
         let mut value = value_prefix.clone();
         value.extend(restore_data);
         let store = FixtureStorage::from(vec![(key.clone(), value)]);
-        let mut executor = BatchIndexScanExecutor::new(
+        let mut executor = BatchIndexScanExecutor::<_, ApiV1>::new(
             store,
             Arc::new(EvalConfig::default()),
             columns_info.clone(),
@@ -1203,8 +1452,8 @@ mod tests {
         )
         .unwrap();
 
-        let mut result = executor.next_batch(10);
-        assert!(result.is_drained.as_ref().unwrap());
+        let mut result = block_on(executor.next_batch(10));
+        assert!(result.is_drained.as_ref().unwrap().stop());
         assert_eq!(result.physical_columns.columns_len(), 3);
         assert_eq!(result.physical_columns.rows_len(), 1);
         assert!(result.physical_columns[0].is_raw());
@@ -1234,7 +1483,7 @@ mod tests {
 
         let value = value_prefix;
         let store = FixtureStorage::from(vec![(key, value)]);
-        let mut executor = BatchIndexScanExecutor::new(
+        let mut executor = BatchIndexScanExecutor::<_, ApiV1>::new(
             store,
             Arc::new(EvalConfig::default()),
             columns_info,
@@ -1246,8 +1495,8 @@ mod tests {
         )
         .unwrap();
 
-        let mut result = executor.next_batch(10);
-        assert!(result.is_drained.as_ref().unwrap());
+        let mut result = block_on(executor.next_batch(10));
+        assert!(result.is_drained.as_ref().unwrap().stop());
         assert_eq!(result.physical_columns.columns_len(), 3);
         assert_eq!(result.physical_columns.rows_len(), 1);
         assert!(result.physical_columns[0].is_raw());
@@ -1330,7 +1579,7 @@ mod tests {
         }];
 
         let store = FixtureStorage::from(vec![(key, vec![])]);
-        let mut executor = BatchIndexScanExecutor::new(
+        let mut executor = BatchIndexScanExecutor::<_, ApiV1>::new(
             store,
             Arc::new(EvalConfig::default()),
             columns_info,
@@ -1342,8 +1591,8 @@ mod tests {
         )
         .unwrap();
 
-        let mut result = executor.next_batch(10);
-        assert!(result.is_drained.as_ref().unwrap());
+        let mut result = block_on(executor.next_batch(10));
+        assert!(result.is_drained.as_ref().unwrap().stop());
         assert_eq!(result.physical_columns.columns_len(), 3);
         assert_eq!(result.physical_columns.rows_len(), 1);
         assert!(result.physical_columns[0].is_raw());
@@ -1430,7 +1679,7 @@ mod tests {
         }];
 
         let store = FixtureStorage::from(vec![(key, value)]);
-        let mut executor = BatchIndexScanExecutor::new(
+        let mut executor = BatchIndexScanExecutor::<_, ApiV1>::new(
             store,
             Arc::new(EvalConfig::default()),
             columns_info,
@@ -1442,8 +1691,8 @@ mod tests {
         )
         .unwrap();
 
-        let mut result = executor.next_batch(10);
-        assert!(result.is_drained.as_ref().unwrap());
+        let mut result = block_on(executor.next_batch(10));
+        assert!(result.is_drained.as_ref().unwrap().stop());
         assert_eq!(result.physical_columns.columns_len(), 3);
         assert_eq!(result.physical_columns.rows_len(), 1);
         assert!(result.physical_columns[0].is_raw());
@@ -1524,7 +1773,7 @@ mod tests {
         }];
 
         let store = FixtureStorage::from(vec![(key, value)]);
-        let mut executor = BatchIndexScanExecutor::new(
+        let mut executor = BatchIndexScanExecutor::<_, ApiV1>::new(
             store,
             Arc::new(EvalConfig::default()),
             columns_info,
@@ -1536,8 +1785,8 @@ mod tests {
         )
         .unwrap();
 
-        let mut result = executor.next_batch(10);
-        assert!(result.is_drained.as_ref().unwrap());
+        let mut result = block_on(executor.next_batch(10));
+        assert!(result.is_drained.as_ref().unwrap().stop());
         assert_eq!(result.physical_columns.columns_len(), 3);
         assert_eq!(result.physical_columns.rows_len(), 1);
         assert!(result.physical_columns[0].is_raw());
@@ -1617,7 +1866,7 @@ mod tests {
         }];
 
         let store = FixtureStorage::from(vec![(key, value)]);
-        let mut executor = BatchIndexScanExecutor::new(
+        let mut executor = BatchIndexScanExecutor::<_, ApiV1>::new(
             store,
             Arc::new(EvalConfig::default()),
             columns_info,
@@ -1629,8 +1878,8 @@ mod tests {
         )
         .unwrap();
 
-        let mut result = executor.next_batch(10);
-        assert!(result.is_drained.as_ref().unwrap());
+        let mut result = block_on(executor.next_batch(10));
+        assert!(result.is_drained.as_ref().unwrap().stop());
         assert_eq!(result.physical_columns.columns_len(), 3);
         assert_eq!(result.physical_columns.rows_len(), 1);
         assert!(result.physical_columns[0].is_raw());
@@ -1743,7 +1992,7 @@ mod tests {
         let mut value = value_prefix;
         value.extend(restore_data);
         let store = FixtureStorage::from(vec![(key, value)]);
-        let mut executor = BatchIndexScanExecutor::new(
+        let mut executor = BatchIndexScanExecutor::<_, ApiV1>::new(
             store,
             Arc::new(EvalConfig::default()),
             columns_info,
@@ -1755,8 +2004,8 @@ mod tests {
         )
         .unwrap();
 
-        let mut result = executor.next_batch(10);
-        assert!(result.is_drained.as_ref().unwrap());
+        let mut result = block_on(executor.next_batch(10));
+        assert!(result.is_drained.as_ref().unwrap().stop());
         assert_eq!(result.physical_columns.columns_len(), 4);
         assert_eq!(result.physical_columns.rows_len(), 1);
         assert!(result.physical_columns[0].is_raw());
@@ -1794,9 +2043,10 @@ mod tests {
     fn test_int_handle_char_index() {
         use tidb_query_datatype::builder::FieldTypeBuilder;
 
-        // Schema: create table t(a int, b char(10) collate utf8mb4_bin, c char(10) collate utf8mb4_unicode_ci, key i_a(a), key i_b(b), key i_c(c), key i_abc(a, b, c), unique key i_ua(a),
-        //  unique key i_ub(b), unique key i_uc(c), unique key i_uabc(a,b,c));
-        // insert into t values (1, "a ", "A ");
+        // Schema: create table t(a int, b char(10) collate utf8mb4_bin, c char(10)
+        // collate utf8mb4_unicode_ci, key i_a(a), key i_b(b), key i_c(c), key i_abc(a,
+        // b, c), unique key i_ua(a),  unique key i_ub(b), unique key i_uc(c),
+        // unique key i_uabc(a,b,c)); insert into t values (1, "a ", "A ");
 
         // i_a and i_ua
         let mut idx_exe = IndexScanExecutorImpl {
@@ -1806,6 +2056,7 @@ mod tests {
             columns_id_for_common_handle: vec![],
             decode_handle_strategy: DecodeHandleStrategy::DecodeIntHandle,
             pid_column_cnt: 0,
+            physical_table_id_column_cnt: 0,
             index_version: -1,
         };
         let mut columns = idx_exe.build_column_vec(10);
@@ -1855,6 +2106,7 @@ mod tests {
             columns_id_for_common_handle: vec![],
             decode_handle_strategy: DecodeHandleStrategy::DecodeIntHandle,
             pid_column_cnt: 0,
+            physical_table_id_column_cnt: 0,
             index_version: -1,
         };
         columns = idx_exe.build_column_vec(10);
@@ -1904,6 +2156,7 @@ mod tests {
             columns_id_for_common_handle: vec![],
             decode_handle_strategy: DecodeHandleStrategy::DecodeIntHandle,
             pid_column_cnt: 0,
+            physical_table_id_column_cnt: 0,
             index_version: -1,
         };
         columns = idx_exe.build_column_vec(10);
@@ -1961,6 +2214,7 @@ mod tests {
             columns_id_for_common_handle: vec![],
             decode_handle_strategy: DecodeHandleStrategy::DecodeIntHandle,
             pid_column_cnt: 0,
+            physical_table_id_column_cnt: 0,
             index_version: -1,
         };
         columns = idx_exe.build_column_vec(10);
@@ -2026,9 +2280,11 @@ mod tests {
     fn test_int_handle_varchar_index() {
         use tidb_query_datatype::builder::FieldTypeBuilder;
 
-        // Schema: create table t(a int, b varchar(10) collate utf8mb4_bin, c varchar(10) collate utf8mb4_unicode_ci, key i_a(a), key i_b(b), key i_c(c), key i_abc(a, b, c), unique key i_ua(a),
-        //  unique key i_ub(b), unique key i_uc(c), unique key i_uabc(a,b,c));
-        // insert into t values (1, "a ", "A ");
+        // Schema: create table t(a int, b varchar(10) collate utf8mb4_bin, c
+        // varchar(10) collate utf8mb4_unicode_ci, key i_a(a), key i_b(b), key i_c(c),
+        // key i_abc(a, b, c), unique key i_ua(a),  unique key i_ub(b), unique
+        // key i_uc(c), unique key i_uabc(a,b,c)); insert into t values (1, "a
+        // ", "A ");
 
         // i_a and i_ua
         let mut idx_exe = IndexScanExecutorImpl {
@@ -2038,6 +2294,7 @@ mod tests {
             columns_id_for_common_handle: vec![],
             decode_handle_strategy: DecodeHandleStrategy::DecodeIntHandle,
             pid_column_cnt: 0,
+            physical_table_id_column_cnt: 0,
             index_version: -1,
         };
         let mut columns = idx_exe.build_column_vec(10);
@@ -2087,6 +2344,7 @@ mod tests {
             columns_id_for_common_handle: vec![],
             decode_handle_strategy: DecodeHandleStrategy::DecodeIntHandle,
             pid_column_cnt: 0,
+            physical_table_id_column_cnt: 0,
             index_version: -1,
         };
         columns = idx_exe.build_column_vec(10);
@@ -2141,6 +2399,7 @@ mod tests {
             columns_id_for_common_handle: vec![],
             decode_handle_strategy: DecodeHandleStrategy::DecodeIntHandle,
             pid_column_cnt: 0,
+            physical_table_id_column_cnt: 0,
             index_version: -1,
         };
         columns = idx_exe.build_column_vec(10);
@@ -2200,6 +2459,7 @@ mod tests {
             columns_id_for_common_handle: vec![],
             decode_handle_strategy: DecodeHandleStrategy::DecodeIntHandle,
             pid_column_cnt: 0,
+            physical_table_id_column_cnt: 0,
             index_version: -1,
         };
         columns = idx_exe.build_column_vec(10);
@@ -2265,9 +2525,12 @@ mod tests {
     fn test_common_handle_index() {
         use tidb_query_datatype::builder::FieldTypeBuilder;
 
-        // create table t(a int, b char(10) collate utf8mb4_bin, c char(10) collate utf8mb4_unicode_ci, d varchar(10) collate utf8mb4_bin, e varchar(10) collate utf8mb4_general_ci
-        // , primary key(a, b, c, d, e),  key i_a(a), key i_b(b), key i_c(c), key i_d(d), key i_e(e), key i_abcde(a, b, c, d, e), unique key i_ua(a), unique key i_ub(b), unique key i_uc(
-        // c), unique key i_ud(d), unique key i_ue(e), unique key i_uabcde(a,b,c, d, e));
+        // create table t(a int, b char(10) collate utf8mb4_bin, c char(10) collate
+        // utf8mb4_unicode_ci, d varchar(10) collate utf8mb4_bin, e varchar(10) collate
+        // utf8mb4_general_ci , primary key(a, b, c, d, e),  key i_a(a), key
+        // i_b(b), key i_c(c), key i_d(d), key i_e(e), key i_abcde(a, b, c, d, e),
+        // unique key i_ua(a), unique key i_ub(b), unique key i_uc( c), unique
+        // key i_ud(d), unique key i_ue(e), unique key i_uabcde(a,b,c, d, e));
         //
         // CREATE TABLE `t` (
         //   `a` int(11) NOT NULL,
@@ -2319,6 +2582,7 @@ mod tests {
             columns_id_for_common_handle: vec![1, 2, 3, 4, 5],
             decode_handle_strategy: DecodeHandleStrategy::DecodeCommonHandle,
             pid_column_cnt: 0,
+            physical_table_id_column_cnt: 0,
             index_version: -1,
         };
         let mut columns = idx_exe.build_column_vec(10);
@@ -2434,6 +2698,7 @@ mod tests {
             columns_id_for_common_handle: vec![1, 2, 3, 4, 5],
             decode_handle_strategy: DecodeHandleStrategy::DecodeCommonHandle,
             pid_column_cnt: 0,
+            physical_table_id_column_cnt: 0,
             index_version: -1,
         };
         columns = idx_exe.build_column_vec(10);
@@ -2549,6 +2814,7 @@ mod tests {
             columns_id_for_common_handle: vec![1, 2, 3, 4, 5],
             decode_handle_strategy: DecodeHandleStrategy::DecodeCommonHandle,
             pid_column_cnt: 0,
+            physical_table_id_column_cnt: 0,
             index_version: -1,
         };
         columns = idx_exe.build_column_vec(10);
@@ -2664,6 +2930,7 @@ mod tests {
             columns_id_for_common_handle: vec![1, 2, 3, 4, 5],
             decode_handle_strategy: DecodeHandleStrategy::DecodeCommonHandle,
             pid_column_cnt: 0,
+            physical_table_id_column_cnt: 0,
             index_version: -1,
         };
         columns = idx_exe.build_column_vec(10);
@@ -2779,6 +3046,7 @@ mod tests {
             columns_id_for_common_handle: vec![1, 2, 3, 4, 5],
             decode_handle_strategy: DecodeHandleStrategy::DecodeCommonHandle,
             pid_column_cnt: 0,
+            physical_table_id_column_cnt: 0,
             index_version: -1,
         };
         columns = idx_exe.build_column_vec(10);
@@ -2907,6 +3175,7 @@ mod tests {
             columns_id_for_common_handle: vec![1, 2, 3, 4, 5],
             decode_handle_strategy: DecodeHandleStrategy::DecodeCommonHandle,
             pid_column_cnt: 0,
+            physical_table_id_column_cnt: 0,
             index_version: -1,
         };
         columns = idx_exe.build_column_vec(10);
@@ -3027,6 +3296,153 @@ mod tests {
         assert_eq!(
             columns[9].raw().last().unwrap().read_datum().unwrap(),
             Datum::Bytes("A ".as_bytes().to_vec())
+        );
+    }
+
+    #[test]
+    fn test_common_handle_with_physical_table_id() {
+        // CREATE TABLE `tcommonhash` (
+        //     `a` int(11) NOT NULL,
+        //     `b` int(11) DEFAULT NULL,
+        //     `c` int(11) NOT NULL,
+        //     `d` int(11) NOT NUL,
+        //     PRIMARY KEY (`a`,`c`,`d`) /*T![clustered_index] CLUSTERED */,
+        //     KEY `idx_bc` (`b`,`c`)
+        //  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin
+        // insert into tcommonhash values (1, 2, 3, 1);
+
+        // idx_bc
+        let mut idx_exe = IndexScanExecutorImpl {
+            context: Default::default(),
+            schema: vec![
+                FieldTypeTp::Long.into(),
+                FieldTypeTp::Long.into(),
+                FieldTypeTp::Long.into(),
+                FieldTypeTp::Long.into(),
+                FieldTypeTp::Long.into(),
+                // EXTRA_PHYSICAL_TABLE_ID_COL
+                FieldTypeTp::Long.into(),
+            ],
+            columns_id_without_handle: vec![2, 3],
+            columns_id_for_common_handle: vec![1, 3, 4],
+            decode_handle_strategy: DecodeHandleStrategy::DecodeCommonHandle,
+            pid_column_cnt: 0,
+            physical_table_id_column_cnt: 1,
+            index_version: -1,
+        };
+        let mut columns = idx_exe.build_column_vec(10);
+        idx_exe
+            .process_kv_pair(
+                &[
+                    0x74, 0x80, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x5c, 0x5f, 0x69, 0x80, 0x0, 0x0,
+                    0x0, 0x0, 0x0, 0x0, 0x2, 0x3, 0x80, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x2, 0x3,
+                    0x80, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x3, 0x3, 0x80, 0x0, 0x0, 0x0, 0x0, 0x0,
+                    0x0, 0x1, 0x3, 0x80, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x3, 0x3, 0x80, 0x0, 0x0,
+                    0x0, 0x0, 0x0, 0x0, 0x1,
+                ],
+                &[0x0, 0x7d, 0x1],
+                &mut columns,
+            )
+            .unwrap();
+        assert_eq!(
+            columns[0].raw().last().unwrap().read_datum().unwrap(),
+            Datum::I64(2)
+        );
+        assert_eq!(
+            columns[1].raw().last().unwrap().read_datum().unwrap(),
+            Datum::I64(3)
+        );
+        assert_eq!(
+            columns[2].raw().last().unwrap().read_datum().unwrap(),
+            Datum::I64(1)
+        );
+        assert_eq!(
+            columns[3].raw().last().unwrap().read_datum().unwrap(),
+            Datum::I64(3)
+        );
+        assert_eq!(
+            columns[4].raw().last().unwrap().read_datum().unwrap(),
+            Datum::I64(1)
+        );
+        assert_eq!(
+            // physical table id
+            columns[5].mut_decoded().to_int_vec()[0].unwrap(),
+            92
+        );
+    }
+
+    #[test]
+    fn test_common_handle_index_latin1_bin() {
+        use tidb_query_datatype::builder::FieldTypeBuilder;
+
+        // create table t(c1 varchar(200) CHARACTER SET latin1 COLLATE latin1_bin, c2
+        // int, primary key(c1) clustered, key kk(c2)); idx_exec for index
+        // kk(c2), its columns will be <c2, c1>
+        let mut idx_exe = IndexScanExecutorImpl {
+            context: Default::default(),
+            schema: vec![
+                FieldTypeTp::Long.into(),
+                FieldTypeBuilder::new()
+                    .tp(FieldTypeTp::String)
+                    .collation(Collation::Latin1Bin)
+                    .into(),
+            ],
+            columns_id_without_handle: vec![2],
+            columns_id_for_common_handle: vec![1],
+            decode_handle_strategy: DecodeHandleStrategy::DecodeCommonHandle,
+            pid_column_cnt: 0,
+            physical_table_id_column_cnt: 0,
+            index_version: -1,
+        };
+        let mut columns = idx_exe.build_column_vec(1);
+        idx_exe
+            .process_kv_pair(
+                &[
+                    0x74, 0x80, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x37, 0x5f, 0x69, 0x80, 0x0, 0x0,
+                    0x0, 0x0, 0x0, 0x0, 0x2, 0x3, 0x80, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x1, 0x1,
+                    0x6a, 0x6f, 0x76, 0x69, 0x61, 0x6c, 0x65, 0x64, 0xff, 0x69, 0x73, 0x6f, 0x6e,
+                    0x0, 0x0, 0x0, 0x0, 0xfb,
+                ],
+                &[
+                    0x0, 0x7d, 0x1, 0x80, 0x0, 0x1, 0x0, 0x0, 0x0, 0x1, 0x1, 0x0, 0x0,
+                ],
+                &mut columns,
+            )
+            .unwrap();
+        assert_eq!(
+            columns[1].raw().last().unwrap().read_datum().unwrap(),
+            Datum::Bytes("jovialedison".as_bytes().to_vec())
+        );
+    }
+
+    #[test]
+    fn test_index_version() {
+        assert_eq!(
+            IndexScanExecutorImpl::get_index_version(&[0x0, 0x7d, 0x1]).unwrap(),
+            1
+        );
+        assert_eq!(
+            IndexScanExecutorImpl::get_index_version(&[0x1, 0x7d, 0x1, 0x31]).unwrap(),
+            1
+        );
+        assert_eq!(
+            IndexScanExecutorImpl::get_index_version(&[
+                0x0, 0x7d, 0x1, 0x80, 0x0, 0x2, 0x0, 0x0, 0x0, 0x1, 0x2, 0x1, 0x0, 0x2, 0x0, 0x61,
+                0x31
+            ])
+            .unwrap(),
+            1
+        );
+        assert_eq!(
+            IndexScanExecutorImpl::get_index_version(&[
+                0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x4, 0x31
+            ])
+            .unwrap(),
+            0
+        );
+        assert_eq!(
+            IndexScanExecutorImpl::get_index_version(&[0x30]).unwrap(),
+            0
         );
     }
 }

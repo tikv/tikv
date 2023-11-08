@@ -1,24 +1,32 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine_traits::{DecodeProperties, IndexHandles};
-use std::cmp;
-use std::collections::HashMap;
-use std::io::Read;
-use std::ops::{Deref, DerefMut};
-use std::u64;
+use std::{
+    cmp,
+    collections::HashMap,
+    io::Read,
+    ops::{Deref, DerefMut},
+    u64,
+};
 
-use engine_traits::KvEngine;
-use engine_traits::Range;
-use engine_traits::{IndexHandle, MvccProperties, TableProperties, TablePropertiesCollection};
+use api_version::{ApiV2, KeyMode, KvFormat};
+use engine_traits::{raw_ttl::ttl_current_ts, MvccProperties, Range, RangeStats};
 use rocksdb::{
     DBEntryType, TablePropertiesCollector, TablePropertiesCollectorFactory, TitanBlobIndex,
     UserCollectedProperties,
 };
-use tikv_util::codec::number::{self, NumberEncoder};
-use tikv_util::codec::{Error, Result};
+use tikv_util::{
+    codec::{
+        number::{self, NumberEncoder},
+        Error, Result,
+    },
+    info,
+};
 use txn_types::{Key, Write, WriteType};
 
-use crate::mvcc_properties::*;
+use crate::{
+    decode_properties::{DecodeProperties, IndexHandle, IndexHandles},
+    mvcc_properties::*,
+};
 
 const PROP_TOTAL_SIZE: &str = "tikv.total_size";
 const PROP_SIZE_INDEX: &str = "tikv.size_index";
@@ -95,6 +103,12 @@ impl UserProperties {
     }
 }
 
+impl Default for UserProperties {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl DecodeProperties for UserProperties {
     fn decode(&self, k: &str) -> Result<&[u8]> {
         match self.0.get(k.as_bytes()) {
@@ -117,25 +131,10 @@ impl<'a> DecodeProperties for UserCollectedPropertiesDecoder<'a> {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Copy)]
-pub enum RangeOffsetKind {
-    Size,
-    Keys,
-}
-
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Clone, Copy)]
 pub struct RangeOffsets {
     pub size: u64,
     pub keys: u64,
-}
-
-impl RangeOffsets {
-    fn get(&self, kind: RangeOffsetKind) -> u64 {
-        match kind {
-            RangeOffsetKind::Keys => self.keys,
-            RangeOffsetKind::Size => self.size,
-        }
-    }
 }
 
 #[derive(Debug, Default)]
@@ -168,7 +167,10 @@ impl RangeProperties {
     pub fn decode<T: DecodeProperties>(props: &T) -> Result<RangeProperties> {
         match RangeProperties::decode_from_range_properties(props) {
             Ok(res) => return Ok(res),
-            Err(e) => info!("decode to RangeProperties failed with err: {:?}, try to decode to SizeProperties, maybe upgrade from v2.0 or older version?", e),
+            Err(e) => info!(
+                "decode to RangeProperties failed with err: {:?}, try to decode to SizeProperties, maybe upgrade from v2.0 or older version?",
+                e
+            ),
         }
         SizeProperties::decode(props).map(|res| res.into())
     }
@@ -190,52 +192,31 @@ impl RangeProperties {
     }
 
     pub fn get_approximate_size_in_range(&self, start: &[u8], end: &[u8]) -> u64 {
-        self.get_approximate_distance_in_range(RangeOffsetKind::Size, start, end)
+        self.get_approximate_distance_in_range(start, end).0
     }
 
     pub fn get_approximate_keys_in_range(&self, start: &[u8], end: &[u8]) -> u64 {
-        self.get_approximate_distance_in_range(RangeOffsetKind::Keys, start, end)
+        self.get_approximate_distance_in_range(start, end).1
     }
 
-    fn get_approximate_distance_in_range(
-        &self,
-        kind: RangeOffsetKind,
-        start: &[u8],
-        end: &[u8],
-    ) -> u64 {
+    /// Returns `size` and `keys`.
+    pub fn get_approximate_distance_in_range(&self, start: &[u8], end: &[u8]) -> (u64, u64) {
         assert!(start <= end);
         if start == end {
-            return 0;
+            return (0, 0);
         }
         let start_offset = match self.offsets.binary_search_by_key(&start, |&(ref k, _)| k) {
-            Ok(idx) => self.offsets[idx].1.get(kind),
-            Err(next_idx) => {
-                if next_idx == 0 {
-                    0
-                } else {
-                    self.offsets[next_idx - 1].1.get(kind)
-                }
-            }
+            Ok(idx) => Some(idx),
+            Err(next_idx) => next_idx.checked_sub(1),
         };
-
         let end_offset = match self.offsets.binary_search_by_key(&end, |&(ref k, _)| k) {
-            Ok(idx) => self.offsets[idx].1.get(kind),
-            Err(next_idx) => {
-                if next_idx == 0 {
-                    0
-                } else {
-                    self.offsets[next_idx - 1].1.get(kind)
-                }
-            }
+            Ok(idx) => Some(idx),
+            Err(next_idx) => next_idx.checked_sub(1),
         };
-
-        if end_offset < start_offset {
-            panic!(
-                "start {:?} end {:?} start_offset {} end_offset {}",
-                start, end, start_offset, end_offset
-            );
-        }
-        end_offset - start_offset
+        let start = start_offset.map_or_else(|| Default::default(), |x| self.offsets[x].1);
+        let end = end_offset.map_or_else(|| Default::default(), |x| self.offsets[x].1);
+        assert!(end.size >= start.size && end.keys >= start.keys);
+        (end.size - start.size, end.keys - start.keys)
     }
 
     // equivalent to range(Excluded(start_key), Excluded(end_key))
@@ -345,8 +326,8 @@ impl RangePropertiesCollector {
     }
 
     fn insert_new_point(&mut self, key: Vec<u8>) {
-        self.last_offsets = self.cur_offsets.clone();
-        self.props.offsets.push((key, self.cur_offsets.clone()));
+        self.last_offsets = self.cur_offsets;
+        self.props.offsets.push((key, self.cur_offsets));
     }
 }
 
@@ -394,16 +375,14 @@ impl Default for RangePropertiesCollectorFactory {
     }
 }
 
-impl TablePropertiesCollectorFactory for RangePropertiesCollectorFactory {
-    fn create_table_properties_collector(&mut self, _: u32) -> Box<dyn TablePropertiesCollector> {
-        Box::new(RangePropertiesCollector::new(
-            self.prop_size_index_distance,
-            self.prop_keys_index_distance,
-        ))
+impl TablePropertiesCollectorFactory<RangePropertiesCollector> for RangePropertiesCollectorFactory {
+    fn create_table_properties_collector(&mut self, _: u32) -> RangePropertiesCollector {
+        RangePropertiesCollector::new(self.prop_size_index_distance, self.prop_keys_index_distance)
     }
 }
 
-/// Can only be used for write CF.
+/// Can be used for write CF in TiDB & TxnKV scenario, or be used for default CF
+/// in RawKV scenario.
 pub struct MvccPropertiesCollector {
     props: MvccProperties,
     last_row: Vec<u8>,
@@ -411,10 +390,12 @@ pub struct MvccPropertiesCollector {
     row_versions: u64,
     cur_index_handle: IndexHandle,
     row_index_handles: IndexHandles,
+    key_mode: KeyMode, // Use KeyMode::Txn for both TiDB & TxnKV, KeyMode::Raw for RawKV.
+    current_ts: u64,
 }
 
 impl MvccPropertiesCollector {
-    fn new() -> MvccPropertiesCollector {
+    fn new(key_mode: KeyMode) -> MvccPropertiesCollector {
         MvccPropertiesCollector {
             props: MvccProperties::new(),
             last_row: Vec::new(),
@@ -422,6 +403,8 @@ impl MvccPropertiesCollector {
             row_versions: 0,
             cur_index_handle: IndexHandle::default(),
             row_index_handles: IndexHandles::new(),
+            key_mode,
+            current_ts: ttl_current_ts(),
         }
     }
 }
@@ -469,18 +452,37 @@ impl TablePropertiesCollector for MvccPropertiesCollector {
             self.props.max_row_versions = self.row_versions;
         }
 
-        let write_type = match Write::parse_type(value) {
-            Ok(v) => v,
-            Err(_) => {
-                self.num_errors += 1;
-                return;
+        if self.key_mode == KeyMode::Raw {
+            let decode_raw_value = ApiV2::decode_raw_value(value);
+            match decode_raw_value {
+                Ok(raw_value) => {
+                    if raw_value.is_valid(self.current_ts) {
+                        self.props.num_puts += 1;
+                    } else {
+                        self.props.num_deletes += 1;
+                    }
+                    if let Some(expire_ts) = raw_value.expire_ts {
+                        self.props.ttl.add(expire_ts);
+                    }
+                }
+                Err(_) => {
+                    self.num_errors += 1;
+                }
             }
-        };
+        } else {
+            let write_type = match Write::parse_type(value) {
+                Ok(v) => v,
+                Err(_) => {
+                    self.num_errors += 1;
+                    return;
+                }
+            };
 
-        match write_type {
-            WriteType::Put => self.props.num_puts += 1,
-            WriteType::Delete => self.props.num_deletes += 1,
-            _ => {}
+            match write_type {
+                WriteType::Put => self.props.num_puts += 1,
+                WriteType::Delete => self.props.num_deletes += 1,
+                _ => {}
+            }
         }
 
         // Add new row.
@@ -510,25 +512,33 @@ impl TablePropertiesCollector for MvccPropertiesCollector {
     }
 }
 
-/// Can only be used for write CF.
+/// Can be used for write CF of TiDB/TxnKV, default CF of RawKV.
 #[derive(Default)]
 pub struct MvccPropertiesCollectorFactory {}
 
-impl TablePropertiesCollectorFactory for MvccPropertiesCollectorFactory {
-    fn create_table_properties_collector(&mut self, _: u32) -> Box<dyn TablePropertiesCollector> {
-        Box::new(MvccPropertiesCollector::new())
+impl TablePropertiesCollectorFactory<MvccPropertiesCollector> for MvccPropertiesCollectorFactory {
+    fn create_table_properties_collector(&mut self, _: u32) -> MvccPropertiesCollector {
+        MvccPropertiesCollector::new(KeyMode::Txn)
     }
 }
 
-pub fn get_range_entries_and_versions<E>(
-    engine: &E,
+#[derive(Default)]
+pub struct RawMvccPropertiesCollectorFactory {}
+
+impl TablePropertiesCollectorFactory<MvccPropertiesCollector>
+    for RawMvccPropertiesCollectorFactory
+{
+    fn create_table_properties_collector(&mut self, _: u32) -> MvccPropertiesCollector {
+        MvccPropertiesCollector::new(KeyMode::Raw)
+    }
+}
+
+pub fn get_range_stats(
+    engine: &crate::RocksEngine,
     cf: &str,
     start: &[u8],
     end: &[u8],
-) -> Option<(u64, u64)>
-where
-    E: KvEngine,
-{
+) -> Option<RangeStats> {
     let range = Range::new(start, end);
     let collection = match engine.get_properties_of_tables_in_range(cf, &[range]) {
         Ok(v) => v,
@@ -543,34 +553,34 @@ where
     let mut props = MvccProperties::new();
     let mut num_entries = 0;
     for (_, v) in collection.iter() {
-        let mvcc = match RocksMvccProperties::decode(&v.user_collected_properties()) {
+        let mvcc = match RocksMvccProperties::decode(v.user_collected_properties()) {
             Ok(v) => v,
             Err(_) => return None,
         };
         num_entries += v.num_entries();
         props.add(&mvcc);
     }
-
-    Some((num_entries, props.num_versions))
+    Some(RangeStats {
+        num_entries,
+        num_versions: props.num_versions,
+        num_rows: props.num_rows,
+    })
 }
 
 #[cfg(test)]
 mod tests {
+    use api_version::RawValue;
+    use engine_traits::{MiscExt, SyncMutable, CF_WRITE, LARGE_CFS};
     use rand::Rng;
-
-    use std::sync::Arc;
-
-    use crate::raw::{ColumnFamilyOptions, DBOptions, Writable};
-    use crate::raw::{DBEntryType, TablePropertiesCollector};
     use tempfile::Builder;
     use test::Bencher;
-
-    use crate::compat::Compat;
-    use crate::raw_util::CFOptions;
-    use engine_traits::{CF_WRITE, LARGE_CFS};
     use txn_types::{Key, Write, WriteType};
 
     use super::*;
+    use crate::{
+        raw::{DBEntryType, TablePropertiesCollector},
+        RocksCfOptions, RocksDbOptions,
+    };
 
     #[allow(clippy::many_single_char_names)]
     #[test]
@@ -587,15 +597,18 @@ mod tests {
             ("g", DEFAULT_PROP_SIZE_INDEX_DISTANCE / 2, 1),
             ("h", DEFAULT_PROP_SIZE_INDEX_DISTANCE / 8, 1),
             ("i", DEFAULT_PROP_SIZE_INDEX_DISTANCE / 4, 1),
-            // handle "i": size(size = DISTANCE / 8 * 9 + 4, offset = DISTANCE / 8 * 17 + 9),keys(4,5)
+            // handle "i": size(size = DISTANCE / 8 * 9 + 4, offset = DISTANCE / 8 * 17 +
+            // 9),keys(4,5)
             ("j", DEFAULT_PROP_SIZE_INDEX_DISTANCE / 2, 1),
             ("k", DEFAULT_PROP_SIZE_INDEX_DISTANCE / 2, 1),
             // handle "k": size(size = DISTANCE + 2, offset = DISTANCE / 8 * 25 + 11),keys(2,11)
             ("l", 0, DEFAULT_PROP_KEYS_INDEX_DISTANCE / 2),
             ("m", 0, DEFAULT_PROP_KEYS_INDEX_DISTANCE / 2),
-            //handle "m": keys = DEFAULT_PROP_KEYS_INDEX_DISTANCE,offset = 11+DEFAULT_PROP_KEYS_INDEX_DISTANCE
+            // handle "m": keys = DEFAULT_PROP_KEYS_INDEX_DISTANCE,offset =
+            // 11+DEFAULT_PROP_KEYS_INDEX_DISTANCE
             ("n", 1, DEFAULT_PROP_KEYS_INDEX_DISTANCE),
-            //handle "n": keys = DEFAULT_PROP_KEYS_INDEX_DISTANCE, offset = 11+2*DEFAULT_PROP_KEYS_INDEX_DISTANCE
+            // handle "n": keys = DEFAULT_PROP_KEYS_INDEX_DISTANCE, offset =
+            // 11+2*DEFAULT_PROP_KEYS_INDEX_DISTANCE
             ("o", 1, 1),
             // handle　"o": keys = 1, offset = 12 + 2*DEFAULT_PROP_KEYS_INDEX_DISTANCE
         ];
@@ -626,19 +639,19 @@ mod tests {
         assert_eq!(props.get_approximate_keys_in_range(b"", b"k"), 11_u64);
 
         assert_eq!(props.offsets.len(), 7);
-        let a = props.get(b"a".as_ref());
+        let a = props.get(b"a");
         assert_eq!(a.size, 1);
-        let e = props.get(b"e".as_ref());
+        let e = props.get(b"e");
         assert_eq!(e.size, DEFAULT_PROP_SIZE_INDEX_DISTANCE + 5);
-        let i = props.get(b"i".as_ref());
+        let i = props.get(b"i");
         assert_eq!(i.size, DEFAULT_PROP_SIZE_INDEX_DISTANCE / 8 * 17 + 9);
-        let k = props.get(b"k".as_ref());
+        let k = props.get(b"k");
         assert_eq!(k.size, DEFAULT_PROP_SIZE_INDEX_DISTANCE / 8 * 25 + 11);
-        let m = props.get(b"m".as_ref());
+        let m = props.get(b"m");
         assert_eq!(m.keys, 11 + DEFAULT_PROP_KEYS_INDEX_DISTANCE);
-        let n = props.get(b"n".as_ref());
+        let n = props.get(b"n");
         assert_eq!(n.keys, 11 + 2 * DEFAULT_PROP_KEYS_INDEX_DISTANCE);
-        let o = props.get(b"o".as_ref());
+        let o = props.get(b"o");
         assert_eq!(o.keys, 12 + 2 * DEFAULT_PROP_KEYS_INDEX_DISTANCE);
         let empty = RangeOffsets::default();
         let cases = [
@@ -686,7 +699,8 @@ mod tests {
             ("g", DEFAULT_PROP_SIZE_INDEX_DISTANCE / 2),
             ("h", DEFAULT_PROP_SIZE_INDEX_DISTANCE / 8),
             ("i", DEFAULT_PROP_SIZE_INDEX_DISTANCE / 4),
-            // handle "i": size(size = DISTANCE / 8 * 9 + 4, offset = DISTANCE / 8 * 17 + 9),keys(4,5)
+            // handle "i": size(size = DISTANCE / 8 * 9 + 4, offset = DISTANCE / 8 * 17 +
+            // 9),keys(4,5)
             ("j", DEFAULT_PROP_SIZE_INDEX_DISTANCE / 2),
             ("k", DEFAULT_PROP_SIZE_INDEX_DISTANCE / 2),
             // handle "k": size(size = DISTANCE + 2, offset = DISTANCE / 8 * 25 + 11),keys(2,11)
@@ -698,7 +712,7 @@ mod tests {
         let mut collector = RangePropertiesCollector::default();
         let mut extra_value_size: u64 = 0;
         for &(k, vlen) in &cases {
-            if handles.contains(&k) || rng.gen_range(0, 2) == 0 {
+            if handles.contains(&k) || rng.gen_range(0..2) == 0 {
                 let v = vec![0; vlen as usize - extra_value_size as usize];
                 extra_value_size = 0;
                 collector.add(k.as_bytes(), &v, DBEntryType::Put, 0, 0);
@@ -735,16 +749,15 @@ mod tests {
             .tempdir()
             .unwrap();
         let path_str = path.path().to_str().unwrap();
-        let db_opts = DBOptions::new();
-        let mut cf_opts = ColumnFamilyOptions::new();
+        let db_opts = RocksDbOptions::default();
+        let mut cf_opts = RocksCfOptions::default();
         cf_opts.set_level_zero_file_num_compaction_trigger(10);
-        let f = Box::new(MvccPropertiesCollectorFactory::default());
-        cf_opts.add_table_properties_collector_factory("tikv.mvcc-properties-collector", f);
-        let cfs_opts = LARGE_CFS
-            .iter()
-            .map(|cf| CFOptions::new(cf, cf_opts.clone()))
-            .collect();
-        let db = Arc::new(crate::raw_util::new_engine_opt(path_str, db_opts, cfs_opts).unwrap());
+        cf_opts.add_table_properties_collector_factory(
+            "tikv.mvcc-properties-collector",
+            MvccPropertiesCollectorFactory::default(),
+        );
+        let cfs_opts = LARGE_CFS.iter().map(|cf| (*cf, cf_opts.clone())).collect();
+        let db = crate::util::new_engine_opt(path_str, db_opts, cfs_opts).unwrap();
 
         let cases = ["a", "b", "c"];
         for &key in &cases {
@@ -753,24 +766,22 @@ mod tests {
                     .append_ts(2.into())
                     .as_encoded(),
             );
-            let write_cf = db.cf_handle(CF_WRITE).unwrap();
-            db.put_cf(write_cf, &k1, b"v1").unwrap();
-            db.delete_cf(write_cf, &k1).unwrap();
+            db.put_cf(CF_WRITE, &k1, b"v1").unwrap();
+            db.delete_cf(CF_WRITE, &k1).unwrap();
             let key = keys::data_key(
                 Key::from_raw(key.as_bytes())
                     .append_ts(3.into())
                     .as_encoded(),
             );
-            db.put_cf(write_cf, &key, b"v2").unwrap();
-            db.flush_cf(write_cf, true).unwrap();
+            db.put_cf(CF_WRITE, &key, b"v2").unwrap();
+            db.flush_cf(CF_WRITE, true).unwrap();
         }
 
         let start_keys = keys::data_key(&[]);
         let end_keys = keys::data_end_key(&[]);
-        let (entries, versions) =
-            get_range_entries_and_versions(db.c(), CF_WRITE, &start_keys, &end_keys).unwrap();
-        assert_eq!(entries, (cases.len() * 2) as u64);
-        assert_eq!(versions, cases.len() as u64);
+        let range_stats = get_range_stats(&db, CF_WRITE, &start_keys, &end_keys).unwrap();
+        assert_eq!(range_stats.num_entries, (cases.len() * 2) as u64);
+        assert_eq!(range_stats.num_versions, cases.len() as u64);
     }
 
     #[test]
@@ -786,7 +797,7 @@ mod tests {
             ("ef", 6, WriteType::Put, DBEntryType::Delete),
             ("gh", 7, WriteType::Delete, DBEntryType::Put),
         ];
-        let mut collector = MvccPropertiesCollector::new();
+        let mut collector = MvccPropertiesCollector::new(KeyMode::Txn);
         for &(key, ts, write_type, entry_type) in &cases {
             let ts = ts.into();
             let k = Key::from_raw(key.as_bytes()).append_ts(ts);
@@ -805,6 +816,44 @@ mod tests {
         assert_eq!(props.max_row_versions, 3);
     }
 
+    #[test]
+    fn test_mvcc_properties_rawkv_mode() {
+        let test_raws = vec![
+            (b"r\0a", 1, false, u64::MAX),
+            (b"r\0a", 5, false, u64::MAX),
+            (b"r\0a", 7, false, u64::MAX),
+            (b"r\0b", 1, false, u64::MAX),
+            (b"r\0b", 1, true, u64::MAX),
+            (b"r\0c", 1, true, 10),
+            (b"r\0d", 1, true, 10),
+        ];
+
+        let mut collector = MvccPropertiesCollector::new(KeyMode::Raw);
+        for &(key, ts, is_delete, expire_ts) in &test_raws {
+            let encode_key = ApiV2::encode_raw_key(key, Some(ts.into()));
+            let k = keys::data_key(encode_key.as_encoded());
+            let v = ApiV2::encode_raw_value(RawValue {
+                user_value: &[0; 10][..],
+                expire_ts: Some(expire_ts),
+                is_delete,
+            });
+            collector.add(&k, &v, DBEntryType::Put, 0, 0);
+        }
+
+        let result = UserProperties(collector.finish());
+
+        let props = RocksMvccProperties::decode(&result).unwrap();
+        assert_eq!(props.min_ts, 1.into());
+        assert_eq!(props.max_ts, 7.into());
+        assert_eq!(props.num_rows, 4);
+        assert_eq!(props.num_deletes, 3);
+        assert_eq!(props.num_puts, 4);
+        assert_eq!(props.num_versions, 7);
+        assert_eq!(props.max_row_versions, 3);
+        assert_eq!(props.ttl.max_expire_ts, Some(u64::MAX));
+        assert_eq!(props.ttl.min_expire_ts, Some(10));
+    }
+
     #[bench]
     fn bench_mvcc_properties(b: &mut Bencher) {
         let ts = 1.into();
@@ -818,7 +867,7 @@ mod tests {
             entries.push((k, w.as_ref().to_bytes()));
         }
 
-        let mut collector = MvccPropertiesCollector::new();
+        let mut collector = MvccPropertiesCollector::new(KeyMode::Txn);
         b.iter(|| {
             for &(ref k, ref v) in &entries {
                 collector.add(k, v, DBEntryType::Put, 0, 0);

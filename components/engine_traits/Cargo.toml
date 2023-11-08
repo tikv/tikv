@@ -1,41 +1,34 @@
 [package]
 name = "engine_traits"
 version = "0.0.1"
-edition = "2018"
+edition = "2021"
 publish = false
 
 [features]
-default = ["protobuf-codec"]
-protobuf-codec = [
-  "error_code/protobuf-codec",
-  "raft/protobuf-codec",
-  "kvproto/protobuf-codec",
-  "tikv_util/protobuf-codec",
-  "txn_types/protobuf-codec",
-]
-prost-codec = [
-  "error_code/prost-codec",
-  "raft/prost-codec",
-  "kvproto/prost-codec",
-  "tikv_util/prost-codec",
-  "txn_types/prost-codec",
-]
+failpoints = ["fail/failpoints"]
+testexport = []
 
 [dependencies]
-error_code = { path = "../error_code", default-features = false }
-file_system = { path = "../file_system" }
-log_wrappers = { path = "../log_wrappers" }
+case_macros = { workspace = true }
+collections = { workspace = true }
+error_code = { workspace = true }
+fail = "0.5"
+file_system = { workspace = true }
+keys = { workspace = true }
+kvproto = { workspace = true }
+lazy_static = "1.0"
+log_wrappers = { workspace = true }
 protobuf = "2"
-quick-error = "1.2.3"
-tikv_alloc = { path = "../tikv_alloc" }
-tikv_util = { path = "../tikv_util", default-features = false }
-txn_types = { path = "../txn_types", default-features = false }
+raft = { workspace = true }
 serde = "1.0"
-slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
-slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }
-kvproto = { git = "https://github.com/pingcap/kvproto.git", default-features = false }
-raft = { version = "0.6.0-alpha", default-features = false }
+slog = { workspace = true }
+slog-global = { workspace = true }
+thiserror = "1.0"
+tikv_alloc = { workspace = true }
+tikv_util = { workspace = true }
+tracker = { workspace = true }
+txn_types = { workspace = true }
 
 [dev-dependencies]
-toml = "0.5"
 serde_derive = "1.0"
+toml = "0.5"

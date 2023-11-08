@@ -1,3 +1,5 @@
+// Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
+
 use std::{fs, io::Write, path::Path};
 
 use error_code::*;
@@ -16,7 +18,7 @@ fn main() {
         storage::ALL_ERROR_CODES.iter(),
     ];
     let path = Path::new("./etc/error_code.toml");
-    let mut f = fs::File::create(&path).unwrap();
+    let mut f = fs::File::create(path).unwrap();
     err_codes
         .into_iter()
         .flatten()

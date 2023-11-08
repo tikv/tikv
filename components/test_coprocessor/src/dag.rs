@@ -1,38 +1,34 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-// {Limit, Selection, Aggregation, TopN} are passed into Executor as Box<T> in Prost,
-// but plain T in Protobuf. We used .into() to support both types,
-// but T -> T in Protobuf generates this clippy warning. We just allow it here.
-#![cfg_attr(feature = "protobuf-codec", allow(clippy::useless_conversion))]
-
-use super::*;
-
+use kvproto::{
+    coprocessor::{KeyRange, Request},
+    kvrpcpb::Context,
+};
 use protobuf::Message;
-
-use kvproto::coprocessor::{KeyRange, Request};
-use kvproto::kvrpcpb::Context;
-use tipb::ColumnInfo;
-use tipb::{Aggregation, ExecType, Executor, IndexScan, Limit, Selection, TableScan, TopN};
-use tipb::{ByItem, Expr, ExprType};
-use tipb::{Chunk, DagRequest};
-
 use tidb_query_datatype::codec::{datum, Datum};
 use tikv::coprocessor::REQ_TYPE_DAG;
 use tikv_util::codec::number::NumberEncoder;
+use tipb::{
+    Aggregation, ByItem, Chunk, ColumnInfo, DagRequest, ExecType, Executor, Expr, ExprType,
+    IndexScan, Limit, Selection, TableScan, TopN,
+};
 
-pub struct DAGSelect {
+use super::*;
+
+pub struct DagSelect {
     pub execs: Vec<Executor>,
     pub cols: Vec<ColumnInfo>,
     pub order_by: Vec<ByItem>,
     pub limit: Option<u64>,
     pub aggregate: Vec<Expr>,
     pub group_by: Vec<Expr>,
-    pub key_range: KeyRange,
+    pub key_ranges: Vec<KeyRange>,
     pub output_offsets: Option<Vec<u32>>,
+    pub paging_size: Option<u64>,
 }
 
-impl DAGSelect {
-    pub fn from(table: &Table) -> DAGSelect {
+impl DagSelect {
+    pub fn from(table: &Table) -> DagSelect {
         let mut exec = Executor::default();
         exec.set_tp(ExecType::TypeTableScan);
         let mut tbl_scan = TableScan::default();
@@ -42,19 +38,20 @@ impl DAGSelect {
         tbl_scan.set_columns(columns_info);
         exec.set_tbl_scan(tbl_scan);
 
-        DAGSelect {
+        DagSelect {
             execs: vec![exec],
             cols: table.columns_info(),
             order_by: vec![],
             limit: None,
             aggregate: vec![],
             group_by: vec![],
-            key_range: table.get_record_range_all(),
+            key_ranges: vec![table.get_record_range_all()],
             output_offsets: None,
+            paging_size: None,
         }
     }
 
-    pub fn from_index(table: &Table, index: &Column) -> DAGSelect {
+    pub fn from_index(table: &Table, index: &Column) -> DagSelect {
         let idx = index.index;
         let mut exec = Executor::default();
         exec.set_tp(ExecType::TypeIndexScan);
@@ -68,24 +65,27 @@ impl DAGSelect {
         exec.set_idx_scan(scan);
 
         let range = table.get_index_range_all(idx);
-        DAGSelect {
+        DagSelect {
             execs: vec![exec],
             cols: columns_info.to_vec(),
             order_by: vec![],
             limit: None,
             aggregate: vec![],
             group_by: vec![],
-            key_range: range,
+            key_ranges: vec![range],
             output_offsets: None,
+            paging_size: None,
         }
     }
 
-    pub fn limit(mut self, n: u64) -> DAGSelect {
+    #[must_use]
+    pub fn limit(mut self, n: u64) -> DagSelect {
         self.limit = Some(n);
         self
     }
 
-    pub fn order_by(mut self, col: &Column, desc: bool) -> DAGSelect {
+    #[must_use]
+    pub fn order_by(mut self, col: &Column, desc: bool) -> DagSelect {
         let col_offset = offset_for_column(&self.cols, col.id);
         let mut item = ByItem::default();
         let mut expr = Expr::default();
@@ -98,11 +98,13 @@ impl DAGSelect {
         self
     }
 
-    pub fn count(self, col: &Column) -> DAGSelect {
+    #[must_use]
+    pub fn count(self, col: &Column) -> DagSelect {
         self.aggr_col(col, ExprType::Count)
     }
 
-    pub fn aggr_col(mut self, col: &Column, aggr_t: ExprType) -> DAGSelect {
+    #[must_use]
+    pub fn aggr_col(mut self, col: &Column, aggr_t: ExprType) -> DagSelect {
         let col_offset = offset_for_column(&self.cols, col.id);
         let mut col_expr = Expr::default();
         col_expr.set_field_type(col.as_field_type());
@@ -110,7 +112,8 @@ impl DAGSelect {
         col_expr.mut_val().encode_i64(col_offset).unwrap();
         let mut expr = Expr::default();
         let mut expr_ft = col.as_field_type();
-        // Avg will contains two auxiliary columns (sum, count) and the sum should be a `Decimal`
+        // Avg will contains two auxiliary columns (sum, count) and the sum should be a
+        // `Decimal`
         if aggr_t == ExprType::Avg || aggr_t == ExprType::Sum {
             expr_ft.set_tp(0xf6); // FieldTypeTp::NewDecimal
         }
@@ -121,39 +124,48 @@ impl DAGSelect {
         self
     }
 
-    pub fn first(self, col: &Column) -> DAGSelect {
+    #[must_use]
+    pub fn first(self, col: &Column) -> DagSelect {
         self.aggr_col(col, ExprType::First)
     }
 
-    pub fn sum(self, col: &Column) -> DAGSelect {
+    #[must_use]
+    pub fn sum(self, col: &Column) -> DagSelect {
         self.aggr_col(col, ExprType::Sum)
     }
 
-    pub fn avg(self, col: &Column) -> DAGSelect {
+    #[must_use]
+    pub fn avg(self, col: &Column) -> DagSelect {
         self.aggr_col(col, ExprType::Avg)
     }
 
-    pub fn max(self, col: &Column) -> DAGSelect {
+    #[must_use]
+    pub fn max(self, col: &Column) -> DagSelect {
         self.aggr_col(col, ExprType::Max)
     }
 
-    pub fn min(self, col: &Column) -> DAGSelect {
+    #[must_use]
+    pub fn min(self, col: &Column) -> DagSelect {
         self.aggr_col(col, ExprType::Min)
     }
 
-    pub fn bit_and(self, col: &Column) -> DAGSelect {
+    #[must_use]
+    pub fn bit_and(self, col: &Column) -> DagSelect {
         self.aggr_col(col, ExprType::AggBitAnd)
     }
 
-    pub fn bit_or(self, col: &Column) -> DAGSelect {
+    #[must_use]
+    pub fn bit_or(self, col: &Column) -> DagSelect {
         self.aggr_col(col, ExprType::AggBitOr)
     }
 
-    pub fn bit_xor(self, col: &Column) -> DAGSelect {
+    #[must_use]
+    pub fn bit_xor(self, col: &Column) -> DagSelect {
         self.aggr_col(col, ExprType::AggBitXor)
     }
 
-    pub fn group_by(mut self, cols: &[&Column]) -> DAGSelect {
+    #[must_use]
+    pub fn group_by(mut self, cols: &[&Column]) -> DagSelect {
         for col in cols {
             let offset = offset_for_column(&self.cols, col.id);
             let mut expr = Expr::default();
@@ -165,18 +177,39 @@ impl DAGSelect {
         self
     }
 
-    pub fn output_offsets(mut self, output_offsets: Option<Vec<u32>>) -> DAGSelect {
+    #[must_use]
+    pub fn output_offsets(mut self, output_offsets: Option<Vec<u32>>) -> DagSelect {
         self.output_offsets = output_offsets;
         self
     }
 
-    pub fn where_expr(mut self, expr: Expr) -> DAGSelect {
+    #[must_use]
+    pub fn where_expr(mut self, expr: Expr) -> DagSelect {
         let mut exec = Executor::default();
         exec.set_tp(ExecType::TypeSelection);
         let mut selection = Selection::default();
         selection.mut_conditions().push(expr);
-        exec.set_selection(selection.into());
+        exec.set_selection(selection);
         self.execs.push(exec);
+        self
+    }
+
+    #[must_use]
+    pub fn desc(mut self, desc: bool) -> DagSelect {
+        self.execs[0].mut_tbl_scan().set_desc(desc);
+        self
+    }
+
+    #[must_use]
+    pub fn paging_size(mut self, paging_size: u64) -> DagSelect {
+        assert_ne!(paging_size, 0);
+        self.paging_size = Some(paging_size);
+        self
+    }
+
+    #[must_use]
+    pub fn key_ranges(mut self, key_ranges: Vec<KeyRange>) -> DagSelect {
+        self.key_ranges = key_ranges;
         self
     }
 
@@ -196,7 +229,7 @@ impl DAGSelect {
             if !self.group_by.is_empty() {
                 aggr.set_group_by(self.group_by.into());
             }
-            exec.set_aggregation(aggr.into());
+            exec.set_aggregation(aggr);
             self.execs.push(exec);
         }
 
@@ -208,7 +241,7 @@ impl DAGSelect {
             if let Some(limit) = self.limit.take() {
                 topn.set_limit(limit);
             }
-            exec.set_top_n(topn.into());
+            exec.set_top_n(topn);
             self.execs.push(exec);
         }
 
@@ -217,7 +250,7 @@ impl DAGSelect {
             exec.set_tp(ExecType::TypeLimit);
             let mut limit = Limit::default();
             limit.set_limit(l);
-            exec.set_limit(limit.into());
+            exec.set_limit(limit);
             self.execs.push(exec);
         }
 
@@ -237,21 +270,22 @@ impl DAGSelect {
         req.set_start_ts(next_id() as u64);
         req.set_tp(REQ_TYPE_DAG);
         req.set_data(dag.write_to_bytes().unwrap());
-        req.set_ranges(vec![self.key_range].into());
+        req.set_ranges(self.key_ranges.into());
+        req.set_paging_size(self.paging_size.unwrap_or(0));
         req.set_context(ctx);
         req
     }
 }
 
-pub struct DAGChunkSpliter {
+pub struct DagChunkSpliter {
     chunks: Vec<Chunk>,
     datums: Vec<Datum>,
     col_cnt: usize,
 }
 
-impl DAGChunkSpliter {
-    pub fn new(chunks: Vec<Chunk>, col_cnt: usize) -> DAGChunkSpliter {
-        DAGChunkSpliter {
+impl DagChunkSpliter {
+    pub fn new(chunks: Vec<Chunk>, col_cnt: usize) -> DagChunkSpliter {
+        DagChunkSpliter {
             chunks,
             col_cnt,
             datums: Vec::with_capacity(0),
@@ -259,7 +293,7 @@ impl DAGChunkSpliter {
     }
 }
 
-impl Iterator for DAGChunkSpliter {
+impl Iterator for DagChunkSpliter {
     type Item = Vec<Datum>;
 
     fn next(&mut self) -> Option<Vec<Datum>> {

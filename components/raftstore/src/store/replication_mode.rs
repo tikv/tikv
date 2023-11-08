@@ -1,8 +1,12 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+// #[PerformanceCriticalPath]
 use collections::{HashMap, HashMapEntry};
-use kvproto::metapb;
-use kvproto::replication_modepb::{ReplicationMode, ReplicationStatus};
+use kvproto::{
+    metapb,
+    replication_modepb::{ReplicationMode, ReplicationStatus, StoreDrAutoSyncStatus},
+};
+use tikv_util::info;
 
 /// A registry that maps store to a group.
 ///
@@ -89,11 +93,12 @@ impl StoreGroup {
 
     /// Gets the group ID of store.
     ///
-    /// Different version may indicates different label key. If version is less than
-    /// recorded one, then label key has to be changed, new value can't be mixed with
-    /// old values, so `None` is returned. If version is larger, then label key must
-    /// still matches. Because `recalculate` is called before updating regions'
-    /// replication status, so unchanged recorded version means unchanged label key.
+    /// Different version may indicates different label key. If version is less
+    /// than recorded one, then label key has to be changed, new value can't
+    /// be mixed with old values, so `None` is returned. If version is larger,
+    /// then label key must still matches. Because `recalculate` is called
+    /// before updating regions' replication status, so unchanged recorded
+    /// version means unchanged label key.
     #[inline]
     pub fn group_id(&self, version: u64, store_id: u64) -> Option<u64> {
         if version < self.version {
@@ -171,15 +176,30 @@ impl GlobalReplicationState {
         }
         &mut self.group_buffer
     }
+
+    pub fn store_dr_autosync_status(&self) -> Option<StoreDrAutoSyncStatus> {
+        match self.status.get_mode() {
+            ReplicationMode::DrAutoSync => {
+                let mut s = StoreDrAutoSyncStatus::new();
+                s.set_state(self.status.get_dr_auto_sync().get_state());
+                s.set_state_id(self.status.get_dr_auto_sync().get_state_id());
+                Some(s)
+            }
+            ReplicationMode::Majority => None,
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
+
+    use kvproto::{
+        metapb,
+        replication_modepb::{ReplicationMode, ReplicationStatus},
+    };
+    use tikv_util::store::new_peer;
+
     use super::*;
-    use crate::store::util::new_peer;
-    use kvproto::metapb;
-    use kvproto::replication_modepb::{ReplicationMode, ReplicationStatus};
-    use std::panic;
 
     fn new_label(key: &str, value: &str) -> metapb::StoreLabel {
         metapb::StoreLabel {
@@ -309,10 +329,13 @@ mod tests {
         );
         // But a calculated group id can't be changed.
         let res = panic_hook::recover_safe(move || {
+            // Migrated to 2021 migration. This let statement is probably not needed, see
+            //   https://doc.rust-lang.org/edition-guide/rust-2021/disjoint-capture-in-closures.html
+            let _ = &state;
             state
                 .group
                 .register_store(1, vec![label1.clone(), label3.clone()])
         });
-        assert!(res.is_err(), "existing group id can't be changed.");
+        res.unwrap_err();
     }
 }

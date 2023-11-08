@@ -3,7 +3,8 @@
 mod chunk;
 mod column;
 
+pub use self::{
+    chunk::{Chunk, ChunkEncoder},
+    column::{ChunkColumnEncoder, Column},
+};
 pub use crate::codec::{Error, Result};
-
-pub use self::chunk::{Chunk, ChunkEncoder};
-pub use self::column::{ChunkColumnEncoder, Column};

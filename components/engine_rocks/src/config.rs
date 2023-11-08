@@ -1,9 +1,14 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use configuration::ConfigValue;
-pub use rocksdb::PerfLevel;
-use rocksdb::{DBCompressionType, DBInfoLogLevel, DBTitanDBBlobRunMode};
-use std::str::FromStr;
+use std::{convert::TryFrom, str::FromStr};
+
+use online_config::ConfigValue;
+use rocksdb::{
+    CompactionPriority, DBCompactionStyle, DBCompressionType, DBInfoLogLevel, DBRateLimiterMode,
+    DBRecoveryMode, DBTitanDBBlobRunMode,
+};
+use serde::{Deserialize, Serialize};
+use tikv_util::numeric_enum_serializing_mod;
 
 #[derive(Copy, Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -58,11 +63,12 @@ impl From<CompressionType> for DBCompressionType {
 pub mod compression_type_level_serde {
     use std::fmt;
 
-    use serde::de::{Error, SeqAccess, Unexpected, Visitor};
-    use serde::ser::SerializeSeq;
-    use serde::{Deserializer, Serializer};
-
     use rocksdb::DBCompressionType;
+    use serde::{
+        de::{Error, SeqAccess, Unexpected, Visitor},
+        ser::SerializeSeq,
+        Deserializer, Serializer,
+    };
 
     pub fn serialize<S>(ts: &[DBCompressionType; 7], serializer: S) -> Result<S::Ok, S::Error>
     where
@@ -144,10 +150,11 @@ pub mod compression_type_level_serde {
 pub mod compression_type_serde {
     use std::fmt;
 
-    use serde::de::{Error, Unexpected, Visitor};
-    use serde::{Deserializer, Serializer};
-
     use rocksdb::DBCompressionType;
+    use serde::{
+        de::{Error, Unexpected, Visitor},
+        Deserializer, Serializer,
+    };
 
     pub fn serialize<S>(t: &DBCompressionType, serializer: S) -> Result<S::Ok, S::Error>
     where
@@ -195,7 +202,121 @@ pub mod compression_type_serde {
                     "disable" => DBCompressionType::Disable,
                     _ => {
                         return Err(E::invalid_value(
-                            Unexpected::Other(&"invalid compression type".to_string()),
+                            Unexpected::Other("invalid compression type"),
+                            &self,
+                        ));
+                    }
+                };
+                Ok(str)
+            }
+        }
+
+        deserializer.deserialize_str(StrVistor)
+    }
+}
+
+pub mod checksum_serde {
+    use std::fmt;
+
+    use rocksdb::ChecksumType;
+    use serde::{
+        de::{Error, Unexpected, Visitor},
+        Deserializer, Serializer,
+    };
+
+    pub fn serialize<S>(t: &ChecksumType, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let name = match *t {
+            ChecksumType::NoChecksum => "no",
+            ChecksumType::CRC32c => "crc32c",
+            ChecksumType::XxHash => "xxhash",
+            ChecksumType::XxHash64 => "xxhash64",
+            ChecksumType::XXH3 => "xxh3",
+        };
+        serializer.serialize_str(name)
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<ChecksumType, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct StrVistor;
+        impl<'de> Visitor<'de> for StrVistor {
+            type Value = ChecksumType;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                write!(formatter, "a checksum type")
+            }
+
+            fn visit_str<E>(self, value: &str) -> Result<ChecksumType, E>
+            where
+                E: Error,
+            {
+                let str = match &*value.trim().to_lowercase() {
+                    "no" => ChecksumType::NoChecksum,
+                    "crc32c" => ChecksumType::CRC32c,
+                    "xxhash" => ChecksumType::XxHash,
+                    "xxhash64" => ChecksumType::XxHash64,
+                    "xxh3" => ChecksumType::XXH3,
+                    _ => {
+                        return Err(E::invalid_value(
+                            Unexpected::Other("invalid checksum type"),
+                            &self,
+                        ));
+                    }
+                };
+                Ok(str)
+            }
+        }
+
+        deserializer.deserialize_str(StrVistor)
+    }
+}
+
+pub mod prepopulate_block_cache_serde {
+    use std::fmt;
+
+    use rocksdb::PrepopulateBlockCache;
+    use serde::{
+        de::{Error, Unexpected, Visitor},
+        Deserializer, Serializer,
+    };
+
+    pub fn serialize<S>(t: &PrepopulateBlockCache, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let name = match *t {
+            PrepopulateBlockCache::Disabled => "disabled",
+            PrepopulateBlockCache::FlushOnly => "flush-only",
+        };
+        serializer.serialize_str(name)
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<PrepopulateBlockCache, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct StrVistor;
+        impl<'de> Visitor<'de> for StrVistor {
+            type Value = PrepopulateBlockCache;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                write!(formatter, "a prepopulate block cache mode")
+            }
+
+            fn visit_str<E>(self, value: &str) -> Result<PrepopulateBlockCache, E>
+            where
+                E: Error,
+            {
+                let str = match &*value.trim().to_lowercase() {
+                    "disabled" => PrepopulateBlockCache::Disabled,
+                    "flush-only" => PrepopulateBlockCache::FlushOnly,
+                    _ => {
+                        return Err(E::invalid_value(
+                            Unexpected::Other("invalid prepopulate block cache mode"),
                             &self,
                         ));
                     }
@@ -218,21 +339,22 @@ pub enum BlobRunMode {
 
 impl From<BlobRunMode> for ConfigValue {
     fn from(mode: BlobRunMode) -> ConfigValue {
-        ConfigValue::BlobRunMode(format!("k{:?}", mode))
+        let str_value = match mode {
+            BlobRunMode::Normal => "normal",
+            BlobRunMode::ReadOnly => "read-only",
+            BlobRunMode::Fallback => "fallback",
+        };
+        ConfigValue::String(str_value.into())
     }
 }
 
-impl From<ConfigValue> for BlobRunMode {
-    fn from(c: ConfigValue) -> BlobRunMode {
-        if let ConfigValue::BlobRunMode(s) = c {
-            match s.as_str() {
-                "kNormal" => BlobRunMode::Normal,
-                "kReadOnly" => BlobRunMode::ReadOnly,
-                "kFallback" => BlobRunMode::Fallback,
-                m => panic!("expect: kNormal, kReadOnly or kFallback, got: {:?}", m),
-            }
+impl TryFrom<ConfigValue> for BlobRunMode {
+    type Error = String;
+    fn try_from(c: ConfigValue) -> Result<BlobRunMode, Self::Error> {
+        if let ConfigValue::String(s) = c {
+            Self::from_str(&s)
         } else {
-            panic!("expect: ConfigValue::BlobRunMode, got: {:?}", c);
+            panic!("expect: ConfigValue::String, got: {:?}", c);
         }
     }
 }
@@ -262,115 +384,38 @@ impl From<BlobRunMode> for DBTitanDBBlobRunMode {
     }
 }
 
-macro_rules! numeric_enum_mod {
-    ($name:ident $enum:ident { $($variant:ident = $value:expr, )* }) => {
-        pub mod $name {
-            use std::fmt;
-
-            use serde::{Serializer, Deserializer};
-            use serde::de::{self, Unexpected, Visitor};
-            use rocksdb::$enum;
-
-            pub fn serialize<S>(mode: &$enum, serializer: S) -> Result<S::Ok, S::Error>
-                where S: Serializer
-            {
-                serializer.serialize_i64(*mode as i64)
-            }
-
-            pub fn deserialize<'de, D>(deserializer: D) -> Result<$enum, D::Error>
-                where D: Deserializer<'de>
-            {
-                struct EnumVisitor;
-
-                impl<'de> Visitor<'de> for EnumVisitor {
-                    type Value = $enum;
-
-                    fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-                        write!(formatter, concat!("valid ", stringify!($enum)))
-                    }
-
-                    fn visit_i64<E>(self, value: i64) -> Result<$enum, E>
-                        where E: de::Error
-                    {
-                        match value {
-                            $( $value => Ok($enum::$variant), )*
-                            _ => Err(E::invalid_value(Unexpected::Signed(value), &self))
-                        }
-                    }
-                }
-
-                deserializer.deserialize_i64(EnumVisitor)
-            }
-
-            #[cfg(test)]
-            mod tests {
-                use toml;
-                use rocksdb::$enum;
-
-                #[test]
-                fn test_serde() {
-                    #[derive(Serialize, Deserialize, PartialEq)]
-                    struct EnumHolder {
-                        #[serde(with = "super")]
-                        e: $enum,
-                    }
-
-                    let cases = vec![
-                        $(($enum::$variant, $value), )*
-                    ];
-                    for (e, v) in cases {
-                        let holder = EnumHolder { e };
-                        let res = toml::to_string(&holder).unwrap();
-                        let exp = format!("e = {}\n", v);
-                        assert_eq!(res, exp);
-                        let h: EnumHolder = toml::from_str(&exp).unwrap();
-                        assert!(h == holder);
-                    }
-                }
-            }
-        }
-    }
-}
-
-numeric_enum_mod! {compaction_pri_serde CompactionPriority {
+numeric_enum_serializing_mod! {compaction_pri_serde CompactionPriority {
     ByCompensatedSize = 0,
     OldestLargestSeqFirst = 1,
     OldestSmallestSeqFirst = 2,
     MinOverlappingRatio = 3,
 }}
 
-numeric_enum_mod! {rate_limiter_mode_serde DBRateLimiterMode {
+numeric_enum_serializing_mod! {rate_limiter_mode_serde DBRateLimiterMode {
     ReadOnly = 1,
     WriteOnly = 2,
     AllIo = 3,
 }}
 
-numeric_enum_mod! {compaction_style_serde DBCompactionStyle {
+numeric_enum_serializing_mod! {compaction_style_serde DBCompactionStyle {
     Level = 0,
     Universal = 1,
+    Fifo = 2,
+    None = 3,
 }}
 
-numeric_enum_mod! {recovery_mode_serde DBRecoveryMode {
+numeric_enum_serializing_mod! {recovery_mode_serde DBRecoveryMode {
     TolerateCorruptedTailRecords = 0,
     AbsoluteConsistency = 1,
     PointInTime = 2,
     SkipAnyCorruptedRecords = 3,
 }}
 
-numeric_enum_mod! {perf_level_serde PerfLevel {
-    Uninitialized = 0,
-    Disable = 1,
-    EnableCount = 2,
-    EnableTimeExceptForMutex = 3,
-    EnableTimeAndCPUTimeExceptForMutex = 4,
-    EnableTime = 5,
-    OutOfBounds = 6,
-}}
-
 #[cfg(test)]
 mod tests {
-    use super::*;
     use rocksdb::DBCompressionType;
+
+    use super::*;
 
     #[test]
     fn test_parse_compression_type() {
@@ -408,18 +453,22 @@ mod tests {
 
         // length is wrong.
         assert!(toml::from_str::<CompressionTypeHolder>("tp = [\"no\"]").is_err());
-        assert!(toml::from_str::<CompressionTypeHolder>(
-            r#"tp = [
+        assert!(
+            toml::from_str::<CompressionTypeHolder>(
+                r#"tp = [
             "no", "no", "no", "no", "no", "no", "no", "no"
         ]"#
-        )
-        .is_err());
+            )
+            .is_err()
+        );
         // value is wrong.
-        assert!(toml::from_str::<CompressionTypeHolder>(
-            r#"tp = [
+        assert!(
+            toml::from_str::<CompressionTypeHolder>(
+                r#"tp = [
             "no", "no", "no", "no", "no", "no", "yes"
         ]"#
-        )
-        .is_err());
+            )
+            .is_err()
+        );
     }
 }

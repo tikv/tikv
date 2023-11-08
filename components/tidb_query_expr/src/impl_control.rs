@@ -1,7 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use tidb_query_codegen::rpn_fn;
-
 use tidb_query_common::Result;
 use tidb_query_datatype::codec::data_type::*;
 
@@ -142,10 +141,9 @@ fn case_when_validator<T: EvaluableRet>(expr: &tipb::Expr) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     use tipb::ScalarFuncSig;
 
+    use super::*;
     use crate::test_util::RpnFnScalarEvaluator;
 
     #[test]

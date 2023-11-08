@@ -1,30 +1,24 @@
-use crate::{RocksEngine, RocksWriteBatch};
+// Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine_traits::{Error, RaftEngine, RaftLogBatch, Result};
+// #[PerformanceCriticalPath]
 use engine_traits::{
-    Iterable, KvEngine, MiscExt, Mutable, Peekable, SyncMutable, WriteBatch, WriteBatchExt,
-    WriteOptions, CF_DEFAULT,
+    Error, Iterable, KvEngine, MiscExt, Mutable, Peekable, RaftEngine, RaftEngineDebug,
+    RaftEngineReadOnly, RaftLogBatch, Result, WriteBatch, WriteBatchExt, WriteOptions, CF_DEFAULT,
+    RAFT_LOG_MULTI_GET_CNT,
 };
-use kvproto::raft_serverpb::RaftLocalState;
+use kvproto::{
+    metapb::Region,
+    raft_serverpb::{
+        RaftApplyState, RaftLocalState, RegionLocalState, StoreIdent, StoreRecoverState,
+    },
+};
 use protobuf::Message;
 use raft::eraftpb::Entry;
+use tikv_util::{box_err, box_try};
 
-const RAFT_LOG_MULTI_GET_CNT: u64 = 8;
+use crate::{util, RocksEngine, RocksWriteBatchVec};
 
-// FIXME: RaftEngine should probably be implemented generically
-// for all KvEngines, but is currently implemented separately for
-// every engine.
-impl RaftEngine for RocksEngine {
-    type LogBatch = RocksWriteBatch;
-
-    fn log_batch(&self, capacity: usize) -> Self::LogBatch {
-        RocksWriteBatch::with_capacity(self.as_inner().clone(), capacity)
-    }
-
-    fn sync(&self) -> Result<()> {
-        self.sync_wal()
-    }
-
+impl RaftEngineReadOnly for RocksEngine {
     fn get_raft_state(&self, raft_group_id: u64) -> Result<Option<RaftLocalState>> {
         let key = keys::raft_state_key(raft_group_id);
         self.get_msg_cf(CF_DEFAULT, &key)
@@ -46,7 +40,8 @@ impl RaftEngine for RocksEngine {
         let (max_size, mut total_size, mut count) = (max_size.unwrap_or(usize::MAX), 0, 0);
 
         if high - low <= RAFT_LOG_MULTI_GET_CNT {
-            // If election happens in inactive regions, they will just try to fetch one empty log.
+            // If election happens in inactive regions, they will just try to fetch one
+            // empty log.
             for i in low..high {
                 if total_size > 0 && total_size >= max_size {
                     break;
@@ -68,10 +63,11 @@ impl RaftEngine for RocksEngine {
             return Ok(count);
         }
 
-        let (mut check_compacted, mut next_index) = (true, low);
+        let (mut check_compacted, mut compacted, mut next_index) = (true, false, low);
         let start_key = keys::raft_log_key(region_id, low);
         let end_key = keys::raft_log_key(region_id, high);
         self.scan(
+            CF_DEFAULT,
             &start_key,
             &end_key,
             true, // fill_cache
@@ -81,6 +77,7 @@ impl RaftEngine for RocksEngine {
 
                 if check_compacted {
                     if entry.get_index() != low {
+                        compacted = true;
                         // May meet gap or has been compacted.
                         return Ok(false);
                     }
@@ -103,8 +100,129 @@ impl RaftEngine for RocksEngine {
             return Ok(count);
         }
 
+        if compacted {
+            return Err(Error::EntriesCompacted);
+        }
+
         // Here means we don't fetch enough entries.
         Err(Error::EntriesUnavailable)
+    }
+
+    fn is_empty(&self) -> Result<bool> {
+        let mut is_empty = true;
+        self.scan(CF_DEFAULT, b"", b"", false, |_, _| {
+            is_empty = false;
+            Ok(false)
+        })?;
+
+        Ok(is_empty)
+    }
+
+    fn get_store_ident(&self) -> Result<Option<StoreIdent>> {
+        self.get_msg_cf(CF_DEFAULT, keys::STORE_IDENT_KEY)
+    }
+
+    fn get_prepare_bootstrap_region(&self) -> Result<Option<Region>> {
+        self.get_msg_cf(CF_DEFAULT, keys::PREPARE_BOOTSTRAP_KEY)
+    }
+
+    // Following methods are used by raftstore v2 only, which always use raft log
+    // engine.
+    fn get_region_state(
+        &self,
+        _raft_group_id: u64,
+        _apply_index: u64,
+    ) -> Result<Option<RegionLocalState>> {
+        panic!()
+    }
+
+    fn get_apply_state(
+        &self,
+        _raft_group_id: u64,
+        _apply_index: u64,
+    ) -> Result<Option<RaftApplyState>> {
+        panic!()
+    }
+
+    fn get_flushed_index(&self, _raft_group_id: u64, _cf: &str) -> Result<Option<u64>> {
+        panic!()
+    }
+
+    fn get_dirty_mark(&self, _raft_group_id: u64, _tablet_index: u64) -> Result<bool> {
+        panic!()
+    }
+
+    fn get_recover_state(&self) -> Result<Option<StoreRecoverState>> {
+        self.get_msg_cf(CF_DEFAULT, keys::RECOVER_STATE_KEY)
+    }
+}
+
+impl RaftEngineDebug for RocksEngine {
+    fn scan_entries<F>(&self, raft_group_id: u64, mut f: F) -> Result<()>
+    where
+        F: FnMut(Entry) -> Result<bool>,
+    {
+        let start_key = keys::raft_log_key(raft_group_id, 0);
+        let end_key = keys::raft_log_key(raft_group_id, u64::MAX);
+        self.scan(
+            CF_DEFAULT,
+            &start_key,
+            &end_key,
+            false, // fill_cache
+            |_, value| {
+                let mut entry = Entry::default();
+                entry.merge_from_bytes(value)?;
+                f(entry)
+            },
+        )
+    }
+}
+
+impl RocksEngine {
+    fn gc_impl(
+        &self,
+        raft_group_id: u64,
+        mut from: u64,
+        to: u64,
+        raft_wb: &mut RocksWriteBatchVec,
+    ) -> Result<usize> {
+        if from == 0 {
+            let start_key = keys::raft_log_key(raft_group_id, 0);
+            let prefix = keys::raft_log_prefix(raft_group_id);
+            match self.seek(CF_DEFAULT, &start_key)? {
+                Some((k, _)) if k.starts_with(&prefix) => from = box_try!(keys::raft_log_index(&k)),
+                // No need to gc.
+                _ => return Ok(0),
+            }
+        }
+        if from >= to {
+            return Ok(0);
+        }
+
+        for idx in from..to {
+            let key = keys::raft_log_key(raft_group_id, idx);
+            raft_wb.delete(&key)?;
+            if raft_wb.count() >= Self::WRITE_BATCH_MAX_KEYS * 2 {
+                raft_wb.write()?;
+                raft_wb.clear();
+            }
+        }
+        Ok((to - from) as usize)
+    }
+}
+
+// FIXME: RaftEngine should probably be implemented generically
+// for all KvEngines, but is currently implemented separately for
+// every engine.
+impl RaftEngine for RocksEngine {
+    type LogBatch = RocksWriteBatchVec;
+
+    fn log_batch(&self, capacity: usize) -> Self::LogBatch {
+        RocksWriteBatchVec::with_unit_capacity(self, capacity)
+    }
+
+    fn sync(&self) -> Result<()> {
+        self.sync_wal()
     }
 
     fn consume(&self, batch: &mut Self::LogBatch, sync_log: bool) -> Result<usize> {
@@ -133,21 +251,31 @@ impl RaftEngine for RocksEngine {
     fn clean(
         &self,
         raft_group_id: u64,
+        mut first_index: u64,
         state: &RaftLocalState,
         batch: &mut Self::LogBatch,
     ) -> Result<()> {
         batch.delete(&keys::raft_state_key(raft_group_id))?;
-        let seek_key = keys::raft_log_key(raft_group_id, 0);
-        let prefix = keys::raft_log_prefix(raft_group_id);
-        if let Some((key, _)) = self.seek(&seek_key)? {
-            if !key.starts_with(&prefix) {
-                // No raft logs for the raft group.
+        batch.delete(&keys::region_state_key(raft_group_id))?;
+        batch.delete(&keys::apply_state_key(raft_group_id))?;
+        if first_index == 0 {
+            let seek_key = keys::raft_log_key(raft_group_id, 0);
+            let prefix = keys::raft_log_prefix(raft_group_id);
+            fail::fail_point!("engine_rocks_raft_engine_clean_seek", |_| Ok(()));
+            if let Some((key, _)) = self.seek(CF_DEFAULT, &seek_key)? {
+                if !key.starts_with(&prefix) {
+                    // No raft logs for the raft group.
+                    return Ok(());
+                }
+                first_index = match keys::raft_log_index(&key) {
+                    Ok(index) => index,
+                    Err(_) => return Ok(()),
+                };
+            } else {
                 return Ok(());
             }
-            let first_index = match keys::raft_log_index(&key) {
-                Ok(index) => index,
-                Err(_) => return Ok(()),
-            };
+        }
+        if first_index <= state.last_index {
             for index in first_index..=state.last_index {
                 let key = keys::raft_log_key(raft_group_id, index);
                 batch.delete(&key)?;
@@ -156,71 +284,82 @@ impl RaftEngine for RocksEngine {
         Ok(())
     }
 
-    fn append(&self, raft_group_id: u64, entries: Vec<Entry>) -> Result<usize> {
-        let mut wb = RocksWriteBatch::new(self.as_inner().clone());
-        let buf = Vec::with_capacity(1024);
-        wb.append_impl(raft_group_id, &entries, buf)?;
-        self.consume(&mut wb, false)
+    fn gc(&self, raft_group_id: u64, from: u64, to: u64, batch: &mut Self::LogBatch) -> Result<()> {
+        self.gc_impl(raft_group_id, from, to, batch)?;
+        Ok(())
     }
 
-    fn put_raft_state(&self, raft_group_id: u64, state: &RaftLocalState) -> Result<()> {
-        self.put_msg(&keys::raft_state_key(raft_group_id), state)
-    }
-
-    fn gc(&self, raft_group_id: u64, mut from: u64, to: u64) -> Result<usize> {
-        if from >= to {
-            return Ok(0);
-        }
-        if from == 0 {
-            let start_key = keys::raft_log_key(raft_group_id, 0);
-            let prefix = keys::raft_log_prefix(raft_group_id);
-            match self.seek(&start_key)? {
-                Some((k, _)) if k.starts_with(&prefix) => from = box_try!(keys::raft_log_index(&k)),
-                // No need to gc.
-                _ => return Ok(0),
-            }
-        }
-
-        let mut raft_wb = self.write_batch_with_cap(4 * 1024);
-        for idx in from..to {
-            let key = keys::raft_log_key(raft_group_id, idx);
-            raft_wb.delete(&key)?;
-            if raft_wb.count() >= Self::WRITE_BATCH_MAX_KEYS {
-                raft_wb.write()?;
-                raft_wb.clear();
-            }
-        }
-
-        // TODO: disable WAL here.
-        if !Mutable::is_empty(&raft_wb) {
-            raft_wb.write()?;
-        }
-        Ok((to - from) as usize)
-    }
-
-    fn purge_expired_files(&self) -> Result<Vec<u64>> {
-        Ok(vec![])
-    }
-
-    fn has_builtin_entry_cache(&self) -> bool {
-        false
+    fn delete_all_but_one_states_before(
+        &self,
+        _raft_group_id: u64,
+        _apply_index: u64,
+        _batch: &mut Self::LogBatch,
+    ) -> Result<()> {
+        panic!()
     }
 
     fn flush_metrics(&self, instance: &str) {
         KvEngine::flush_metrics(self, instance)
     }
 
-    fn reset_statistics(&self) {
-        KvEngine::reset_statistics(self)
-    }
-
     fn dump_stats(&self) -> Result<String> {
         MiscExt::dump_stats(self)
     }
+
+    fn get_engine_size(&self) -> Result<u64> {
+        let handle = util::get_cf_handle(self.as_inner(), CF_DEFAULT)?;
+        let used_size = util::get_engine_cf_used_size(self.as_inner(), handle);
+
+        Ok(used_size)
+    }
+
+    fn get_engine_path(&self) -> &str {
+        self.as_inner().path()
+    }
+
+    fn for_each_raft_group<E, F>(&self, f: &mut F) -> std::result::Result<(), E>
+    where
+        F: FnMut(u64) -> std::result::Result<(), E>,
+        E: From<Error>,
+    {
+        let start_key = keys::REGION_META_MIN_KEY;
+        let end_key = keys::REGION_META_MAX_KEY;
+        let mut err = None;
+        self.scan(CF_DEFAULT, start_key, end_key, false, |key, _| {
+            let (region_id, suffix) = box_try!(keys::decode_region_meta_key(key));
+            if suffix != keys::REGION_STATE_SUFFIX {
+                return Ok(true);
+            }
+
+            match f(region_id) {
+                Ok(()) => Ok(true),
+                Err(e) => {
+                    err = Some(e);
+                    Ok(false)
+                }
+            }
+        })?;
+        match err {
+            None => Ok(()),
+            Some(e) => Err(e),
+        }
+    }
 }
 
-impl RaftLogBatch for RocksWriteBatch {
-    fn append(&mut self, raft_group_id: u64, entries: Vec<Entry>) -> Result<()> {
+impl RaftLogBatch for RocksWriteBatchVec {
+    fn append(
+        &mut self,
+        raft_group_id: u64,
+        overwrite_to: Option<u64>,
+        entries: Vec<Entry>,
+    ) -> Result<()> {
+        let overwrite_to = overwrite_to.unwrap_or(0);
+        if let Some(last) = entries.last() && last.get_index() + 1 < overwrite_to {
+            for index in last.get_index() + 1..overwrite_to {
+                let key = keys::raft_log_key(raft_group_id, index);
+                self.delete(&key).unwrap();
+            }
+        }
         if let Some(max_size) = entries.iter().map(|e| e.compute_size()).max() {
             let ser_buf = Vec::with_capacity(max_size as usize);
             return self.append_impl(raft_group_id, &entries, ser_buf);
@@ -228,23 +367,79 @@ impl RaftLogBatch for RocksWriteBatch {
         Ok(())
     }
 
-    fn cut_logs(&mut self, raft_group_id: u64, from: u64, to: u64) {
-        for index in from..to {
-            let key = keys::raft_log_key(raft_group_id, index);
-            self.delete(&key).unwrap();
-        }
-    }
-
     fn put_raft_state(&mut self, raft_group_id: u64, state: &RaftLocalState) -> Result<()> {
         self.put_msg(&keys::raft_state_key(raft_group_id), state)
     }
 
+    fn persist_size(&self) -> usize {
+        self.data_size()
+    }
+
     fn is_empty(&self) -> bool {
-        Mutable::is_empty(self)
+        WriteBatch::is_empty(self)
+    }
+
+    fn merge(&mut self, src: Self) -> Result<()> {
+        WriteBatch::merge(self, src)
+    }
+
+    fn put_store_ident(&mut self, ident: &StoreIdent) -> Result<()> {
+        self.put_msg(keys::STORE_IDENT_KEY, ident)
+    }
+
+    fn put_prepare_bootstrap_region(&mut self, region: &Region) -> Result<()> {
+        self.put_msg(keys::PREPARE_BOOTSTRAP_KEY, region)
+    }
+
+    fn remove_prepare_bootstrap_region(&mut self) -> Result<()> {
+        self.delete(keys::PREPARE_BOOTSTRAP_KEY)
+    }
+
+    // Following methods are used by raftstore v2 only, which always use raft log
+    // engine.
+    fn put_region_state(
+        &mut self,
+        _raft_group_id: u64,
+        _apply_index: u64,
+        _state: &RegionLocalState,
+    ) -> Result<()> {
+        panic!()
+    }
+
+    fn put_apply_state(
+        &mut self,
+        _raft_group_id: u64,
+        _apply_index: u64,
+        _state: &RaftApplyState,
+    ) -> Result<()> {
+        panic!()
+    }
+
+    fn put_flushed_index(
+        &mut self,
+        _raft_group_id: u64,
+        _cf: &str,
+        _tablet_index: u64,
+        _apply_index: u64,
+    ) -> Result<()> {
+        panic!()
+    }
+
+    fn put_dirty_mark(
+        &mut self,
+        _raft_group_id: u64,
+        _tablet_index: u64,
+        _dirty: bool,
+    ) -> Result<()> {
+        panic!()
+    }
+
+    fn put_recover_state(&mut self, state: &StoreRecoverState) -> Result<()> {
+        self.put_msg(keys::RECOVER_STATE_KEY, state)
     }
 }
 
-impl RocksWriteBatch {
+impl RocksWriteBatchVec {
     fn append_impl(
         &mut self,
         raft_group_id: u64,

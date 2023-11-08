@@ -1,28 +1,31 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::convert::TryFrom;
-use std::{cmp::Ordering, sync::Arc};
+use std::{cmp::Ordering, convert::TryFrom, sync::Arc};
 
-use tidb_query_datatype::{EvalType, FieldTypeAccessor};
-use tipb::Aggregation;
-use tipb::{Expr, FieldType};
-
-use crate::interface::*;
-use crate::util::aggr_executor::*;
-use crate::util::*;
+use async_trait::async_trait;
 use tidb_query_aggr::*;
-use tidb_query_common::storage::IntervalRange;
-use tidb_query_common::Result;
-use tidb_query_datatype::codec::batch::{LazyBatchColumn, LazyBatchColumnVec};
-use tidb_query_datatype::codec::data_type::*;
-use tidb_query_datatype::expr::{EvalConfig, EvalContext};
-use tidb_query_expr::RpnStackNode;
-use tidb_query_expr::{RpnExpression, RpnExpressionBuilder};
+use tidb_query_common::{storage::IntervalRange, Result};
+use tidb_query_datatype::{
+    codec::{
+        batch::{LazyBatchColumn, LazyBatchColumnVec},
+        data_type::*,
+    },
+    expr::{EvalConfig, EvalContext},
+    match_template_evaltype, EvalType, FieldTypeAccessor,
+};
+use tidb_query_expr::{RpnExpression, RpnExpressionBuilder, RpnStackNode};
+use tipb::{Aggregation, Expr, FieldType};
+
+use crate::{
+    interface::*,
+    util::{aggr_executor::*, *},
+};
 
 pub struct BatchStreamAggregationExecutor<Src: BatchExecutor>(
     AggregationExecutor<Src, BatchStreamAggregationImpl>,
 );
 
+#[async_trait]
 impl<Src: BatchExecutor> BatchExecutor for BatchStreamAggregationExecutor<Src> {
     type StorageStats = Src::StorageStats;
 
@@ -32,8 +35,8 @@ impl<Src: BatchExecutor> BatchExecutor for BatchStreamAggregationExecutor<Src> {
     }
 
     #[inline]
-    fn next_batch(&mut self, scan_rows: usize) -> BatchExecuteResult {
-        self.0.next_batch(scan_rows)
+    async fn next_batch(&mut self, scan_rows: usize) -> BatchExecuteResult {
+        self.0.next_batch(scan_rows).await
     }
 
     #[inline]
@@ -57,8 +60,8 @@ impl<Src: BatchExecutor> BatchExecutor for BatchStreamAggregationExecutor<Src> {
     }
 }
 
-// We assign a dummy type `Box<dyn BatchExecutor<StorageStats = ()>>` so that we can omit the type
-// when calling `check_supported`.
+// We assign a dummy type `Box<dyn BatchExecutor<StorageStats = ()>>` so that we
+// can omit the type when calling `check_supported`.
 impl BatchStreamAggregationExecutor<Box<dyn BatchExecutor<StorageStats = ()>>> {
     /// Checks whether this executor can be used.
     #[inline]
@@ -94,13 +97,15 @@ pub struct BatchStreamAggregationImpl {
     states: Vec<Box<dyn AggrFunctionState>>,
 
     /// Stores evaluation results of group by expressions.
-    /// It is just used to reduce allocations. The lifetime is not really 'static. The elements
-    /// are only valid in the same batch where they are added.
+    /// It is just used to reduce allocations. The lifetime is not really
+    /// 'static. The elements are only valid in the same batch where they
+    /// are added.
     group_by_results_unsafe: Vec<RpnStackNode<'static>>,
 
     /// Stores evaluation results of aggregate expressions.
-    /// It is just used to reduce allocations. The lifetime is not really 'static. The elements
-    /// are only valid in the same batch where they are added.
+    /// It is just used to reduce allocations. The lifetime is not really
+    /// 'static. The elements are only valid in the same batch where they
+    /// are added.
     aggr_expr_results_unsafe: Vec<RpnStackNode<'static>>,
 }
 
@@ -120,6 +125,17 @@ impl<Src: BatchExecutor> BatchStreamAggregationExecutor<Src> {
             aggr_def_parser,
         )
         .unwrap()
+    }
+
+    #[cfg(test)]
+    pub fn new_for_test_with_config(
+        config: Arc<EvalConfig>,
+        src: Src,
+        group_by_exps: Vec<RpnExpression>,
+        aggr_defs: Vec<Expr>,
+        aggr_def_parser: impl AggrDefinitionParser,
+    ) -> Self {
+        Self::new_impl(config, src, group_by_exps, aggr_defs, aggr_def_parser).unwrap()
     }
 
     pub fn new(
@@ -214,8 +230,8 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for BatchStreamAggregation
         let group_by_len = self.group_by_exps.len();
         let aggr_fn_len = entities.each_aggr_fn.len();
 
-        // Decode columns with mutable input first, so subsequent access to input can be immutable
-        // (and the borrow checker will be happy)
+        // Decode columns with mutable input first, so subsequent access to input can be
+        // immutable (and the borrow checker will be happy)
         ensure_columns_decoded(
             context,
             &self.group_by_exps,
@@ -333,10 +349,10 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for BatchStreamAggregation
     fn iterate_available_groups(
         &mut self,
         entities: &mut Entities<Src>,
-        src_is_drained: bool,
+        src_is_drained: BatchExecIsDrain,
         mut iteratee: impl FnMut(&mut Entities<Src>, &[Box<dyn AggrFunctionState>]) -> Result<()>,
     ) -> Result<Vec<LazyBatchColumn>> {
-        let number_of_groups = if src_is_drained {
+        let number_of_groups = if src_is_drained.stop() {
             AggregationExecutorImpl::<Src>::groups_len(self)
         } else {
             // don't include the partial group
@@ -367,7 +383,7 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for BatchStreamAggregation
             .drain(keys_range)
             .zip((0..group_by_exps_len).cycle())
         {
-            match_template_evaluable! {
+            match_template_evaltype! {
                 TT, match key {
                     ScalarValue::TT(key) => {
                         group_by_columns[group_index].mut_decoded().push(key);
@@ -379,8 +395,8 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for BatchStreamAggregation
         Ok(group_by_columns)
     }
 
-    /// We cannot ensure the last group is complete, so we can output partial results
-    /// only if group count >= 2.
+    /// We cannot ensure the last group is complete, so we can output partial
+    /// results only if group count >= 2.
     #[inline]
     fn is_partial_results_ready(&self) -> bool {
         AggregationExecutorImpl::<Src>::groups_len(self) >= 2
@@ -403,7 +419,7 @@ fn update_current_states(
         for (state, aggr_fn_input) in current_states.iter_mut().zip(aggr_expr_results) {
             match aggr_fn_input {
                 RpnStackNode::Scalar { value, .. } => {
-                    match_template_evaluable! {
+                    match_template_evaltype! {
                         TT, match value.as_scalar_value_ref() {
                             ScalarValueRef::TT(scalar_value) => {
                                 update_repeat!(
@@ -419,7 +435,7 @@ fn update_current_states(
                 RpnStackNode::Vector { value, .. } => {
                     let physical_vec = value.as_ref();
                     let logical_rows = value.logical_rows();
-                    match_template_evaluable! {
+                    match_template_evaltype! {
                         TT, match physical_vec {
                             VectorValue::TT(vec) => {
                                 update_vector!(
@@ -440,23 +456,26 @@ fn update_current_states(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
-    use tidb_query_datatype::builder::FieldTypeBuilder;
-    use tidb_query_datatype::{Collation, FieldTypeTp};
+    use futures::executor::block_on;
+    use tidb_query_datatype::{
+        builder::FieldTypeBuilder, expr::EvalWarnings, Collation, FieldTypeTp,
+    };
+    use tidb_query_expr::{
+        impl_arithmetic::{arithmetic_fn_meta, RealPlus},
+        RpnExpressionBuilder,
+    };
     use tipb::ScalarFuncSig;
 
+    use super::*;
     use crate::util::mock_executor::MockExecutor;
-    use tidb_query_datatype::expr::EvalWarnings;
-    use tidb_query_expr::impl_arithmetic::{arithmetic_fn_meta, RealPlus};
-    use tidb_query_expr::RpnExpressionBuilder;
 
     #[test]
     fn test_it_works_integration() {
         use tipb::ExprType;
         use tipb_helper::ExprDefBuilder;
 
-        // This test creates a stream aggregation executor with the following aggregate functions:
+        // This test creates a stream aggregation executor with the following aggregate
+        // functions:
         // - COUNT(1)
         // - AVG(col_1 + 1.0)
         // And group by:
@@ -495,11 +514,11 @@ mod tests {
             AllAggrDefinitionParser,
         );
 
-        let r = exec.next_batch(1);
+        let r = block_on(exec.next_batch(1));
         assert_eq!(&r.logical_rows, &[0, 1]);
         assert_eq!(r.physical_columns.rows_len(), 2);
         assert_eq!(r.physical_columns.columns_len(), 5);
-        assert!(!r.is_drained.unwrap());
+        assert!(r.is_drained.unwrap().is_remain());
         // COUNT
         assert_eq!(
             r.physical_columns[0].decoded().to_int_vec(),
@@ -526,16 +545,16 @@ mod tests {
             &[None, Real::new(3.5).ok()]
         );
 
-        let r = exec.next_batch(1);
+        let r = block_on(exec.next_batch(1));
         assert!(r.logical_rows.is_empty());
         assert_eq!(r.physical_columns.rows_len(), 0);
-        assert!(!r.is_drained.unwrap());
+        assert!(r.is_drained.unwrap().is_remain());
 
-        let r = exec.next_batch(1);
+        let r = block_on(exec.next_batch(1));
         assert_eq!(&r.logical_rows, &[0]);
         assert_eq!(r.physical_columns.rows_len(), 1);
         assert_eq!(r.physical_columns.columns_len(), 5);
-        assert!(r.is_drained.unwrap());
+        assert!(r.is_drained.unwrap().stop());
         // COUNT
         assert_eq!(r.physical_columns[0].decoded().to_int_vec(), &[Some(5)]);
         // AVG_COUNT
@@ -579,11 +598,11 @@ mod tests {
             AllAggrDefinitionParser,
         );
 
-        let r = exec.next_batch(1);
+        let r = block_on(exec.next_batch(1));
         assert_eq!(&r.logical_rows, &[0, 1]);
         assert_eq!(r.physical_columns.rows_len(), 2);
         assert_eq!(r.physical_columns.columns_len(), 2);
-        assert!(!r.is_drained.unwrap());
+        assert!(r.is_drained.unwrap().is_remain());
         // col_0
         assert_eq!(
             r.physical_columns[0].decoded().to_bytes_vec(),
@@ -595,16 +614,16 @@ mod tests {
             &[None, Real::new(1.5).ok()]
         );
 
-        let r = exec.next_batch(1);
+        let r = block_on(exec.next_batch(1));
         assert!(r.logical_rows.is_empty());
         assert_eq!(r.physical_columns.rows_len(), 0);
-        assert!(!r.is_drained.unwrap());
+        assert!(r.is_drained.unwrap().is_remain());
 
-        let r = exec.next_batch(1);
+        let r = block_on(exec.next_batch(1));
         assert_eq!(&r.logical_rows, &[0]);
         assert_eq!(r.physical_columns.rows_len(), 1);
         assert_eq!(r.physical_columns.columns_len(), 2);
-        assert!(r.is_drained.unwrap());
+        assert!(r.is_drained.unwrap().stop());
         // col_0
         assert_eq!(
             r.physical_columns[0].decoded().to_bytes_vec(),
@@ -672,7 +691,7 @@ mod tests {
                     ]),
                     logical_rows: vec![3, 1, 4, 2, 6],
                     warnings: EvalWarnings::default(),
-                    is_drained: Ok(false),
+                    is_drained: Ok(BatchExecIsDrain::Remain),
                 },
                 BatchExecuteResult {
                     physical_columns: LazyBatchColumnVec::from(vec![
@@ -683,7 +702,7 @@ mod tests {
                     ]),
                     logical_rows: vec![2],
                     warnings: EvalWarnings::default(),
-                    is_drained: Ok(false),
+                    is_drained: Ok(BatchExecIsDrain::Remain),
                 },
                 BatchExecuteResult {
                     physical_columns: LazyBatchColumnVec::from(vec![
@@ -694,7 +713,7 @@ mod tests {
                     ]),
                     logical_rows: (0..2).collect(),
                     warnings: EvalWarnings::default(),
-                    is_drained: Ok(true),
+                    is_drained: Ok(BatchExecIsDrain::Drain),
                 },
             ],
         )

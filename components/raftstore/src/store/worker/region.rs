@@ -1,70 +1,83 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::collections::Bound::{Excluded, Included, Unbounded};
-use std::collections::{BTreeMap, VecDeque};
-use std::fmt::{self, Display, Formatter};
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::mpsc::SyncSender;
-use std::sync::Arc;
-use std::time::{Duration, Instant};
-use std::u64;
+use std::{
+    collections::{
+        BTreeMap,
+        Bound::{Excluded, Included, Unbounded},
+        VecDeque,
+    },
+    fmt::{self, Display, Formatter},
+    sync::{
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+        mpsc::SyncSender,
+        Arc,
+    },
+    time::Duration,
+    u64,
+};
 
-use engine_traits::{DeleteStrategy, Range, CF_LOCK, CF_RAFT};
-use engine_traits::{KvEngine, Mutable, WriteBatch};
+use collections::HashMap;
+use engine_traits::{
+    DeleteStrategy, KvEngine, Mutable, Range, WriteBatch, WriteOptions, CF_LOCK, CF_RAFT,
+};
+use fail::fail_point;
+use file_system::{IoType, WithIoType};
 use kvproto::raft_serverpb::{PeerState, RaftApplyState, RegionLocalState};
+use pd_client::PdClient;
 use raft::eraftpb::Snapshot as RaftSnapshot;
-
-use crate::coprocessor::CoprocessorHost;
-use crate::store::peer_storage::{
-    JOB_STATUS_CANCELLED, JOB_STATUS_CANCELLING, JOB_STATUS_FAILED, JOB_STATUS_FINISHED,
-    JOB_STATUS_PENDING, JOB_STATUS_RUNNING,
+use tikv_util::{
+    box_err, box_try,
+    config::VersionTrack,
+    defer, error, info,
+    time::{Instant, UnixSecs},
+    warn,
+    worker::{Runnable, RunnableWithTimer},
+    yatp_pool::{DefaultTicker, FuturePool, YatpPoolBuilder},
 };
-use crate::store::snap::{plain_file_used, Error, Result, SNAPSHOT_CFS};
-use crate::store::transport::CasualRouter;
-use crate::store::{
-    self, check_abort, ApplyOptions, CasualMessage, SnapEntry, SnapKey, SnapManager,
-};
-use yatp::pool::{Builder, ThreadPool};
-use yatp::task::future::TaskCell;
-
-use file_system::{IOType, WithIOType};
-use tikv_util::worker::{Runnable, RunnableWithTimer};
 
 use super::metrics::*;
+use crate::{
+    coprocessor::CoprocessorHost,
+    store::{
+        self, check_abort,
+        peer_storage::{
+            JOB_STATUS_CANCELLED, JOB_STATUS_CANCELLING, JOB_STATUS_FAILED, JOB_STATUS_FINISHED,
+            JOB_STATUS_PENDING, JOB_STATUS_RUNNING,
+        },
+        snap::{plain_file_used, Error, Result, SNAPSHOT_CFS},
+        transport::CasualRouter,
+        ApplyOptions, CasualMessage, Config, SnapEntry, SnapKey, SnapManager,
+    },
+};
 
-const GENERATE_POOL_SIZE: usize = 2;
+const CLEANUP_MAX_REGION_COUNT: usize = 64;
+const SNAP_GENERATOR_MAX_POOL_SIZE: usize = 16;
 
-// used to periodically check whether we should delete a stale peer's range in region runner
-
-#[cfg(test)]
-pub const STALE_PEER_CHECK_TICK: usize = 1; // 1000 milliseconds
-
-#[cfg(not(test))]
-pub const STALE_PEER_CHECK_TICK: usize = 10; // 10000 milliseconds
-
-// used to periodically check whether schedule pending applies in region runner
-pub const PENDING_APPLY_CHECK_INTERVAL: u64 = 1_000; // 1000 milliseconds
-
-const CLEANUP_MAX_REGION_COUNT: usize = 128;
+const TIFLASH: &str = "tiflash";
+const ENGINE: &str = "engine";
 
 /// Region related task
 #[derive(Debug)]
 pub enum Task<S> {
     Gen {
         region_id: u64,
-        last_applied_index_term: u64,
+        last_applied_term: u64,
         last_applied_state: RaftApplyState,
         kv_snap: S,
+        canceled: Arc<AtomicBool>,
         notifier: SyncSender<RaftSnapshot>,
         for_balance: bool,
+        to_store_id: u64,
     },
     Apply {
         region_id: u64,
         status: Arc<AtomicUsize>,
+        peer_id: u64,
     },
     /// Destroy data between [start_key, end_key).
     ///
-    /// The deletion may and may not succeed.
+    /// The actual deletion may be delayed if the engine is overloaded or a
+    /// reader is still referencing the data.
     Destroy {
         region_id: u64,
         start_key: Vec<u8>,
@@ -95,8 +108,8 @@ impl<S> Display for Task<S> {
                 f,
                 "Destroy {} [{}, {})",
                 region_id,
-                log_wrappers::Value::key(&start_key),
-                log_wrappers::Value::key(&end_key)
+                log_wrappers::Value::key(start_key),
+                log_wrappers::Value::key(end_key)
             ),
         }
     }
@@ -109,13 +122,14 @@ struct StalePeerInfo {
     pub region_id: u64,
     pub end_key: Vec<u8>,
     // Once the oldest snapshot sequence exceeds this, it ensures that no one is
-    // reading on this peer anymore. So we can safely call `delete_files_in_range`
-    // , which may break the consistency of snapshot, of this peer range.
+    // reading on this peer anymore. So we can safely call `delete_files_in_range`,
+    // which may break the consistency of snapshot, of this peer range.
     pub stale_sequence: u64,
 }
 
 /// A structure records all ranges to be deleted with some delay.
-/// The delay is because there may be some coprocessor requests related to these ranges.
+/// The delay is because there may be some coprocessor requests related to these
+/// ranges.
 #[derive(Clone, Default)]
 struct PendingDeleteRanges {
     ranges: BTreeMap<Vec<u8>, StalePeerInfo>, // start_key -> StalePeerInfo
@@ -165,7 +179,7 @@ impl PendingDeleteRanges {
     ) -> Vec<(u64, Vec<u8>, Vec<u8>, u64)> {
         let ranges = self.find_overlap_ranges(start_key, end_key);
 
-        for &(_, ref s_key, _, _) in &ranges {
+        for &(_, ref s_key, ..) in &ranges {
             self.ranges.remove(s_key).unwrap();
         }
         ranges
@@ -180,8 +194,15 @@ impl PendingDeleteRanges {
 
     /// Inserts a new range waiting to be deleted.
     ///
-    /// Before an insert is called, it must call drain_overlap_ranges to clean the overlapping range.
-    fn insert(&mut self, region_id: u64, start_key: &[u8], end_key: &[u8], stale_sequence: u64) {
+    /// Before an insert is called, it must call drain_overlap_ranges to clean
+    /// the overlapping range.
+    fn insert(
+        &mut self,
+        region_id: u64,
+        start_key: Vec<u8>,
+        end_key: Vec<u8>,
+        stale_sequence: u64,
+    ) {
         if !self.find_overlap_ranges(&start_key, &end_key).is_empty() {
             panic!(
                 "[region {}] register deleting data in [{}, {}) failed due to overlap",
@@ -192,10 +213,10 @@ impl PendingDeleteRanges {
         }
         let info = StalePeerInfo {
             region_id,
-            end_key: end_key.to_owned(),
+            end_key,
             stale_sequence,
         };
-        self.ranges.insert(start_key.to_owned(), info);
+        self.ranges.insert(start_key, info);
     }
 
     /// Gets all stale ranges info.
@@ -217,21 +238,14 @@ impl PendingDeleteRanges {
     }
 }
 
-#[derive(Clone)]
-struct SnapContext<EK, R>
-where
-    EK: KvEngine,
-{
+struct SnapGenContext<EK, R> {
     engine: EK,
-    batch_size: usize,
     mgr: SnapManager,
-    use_delete_range: bool,
-    pending_delete_ranges: PendingDeleteRanges,
-    coprocessor_host: CoprocessorHost<EK>,
     router: R,
+    start: UnixSecs,
 }
 
-impl<EK, R> SnapContext<EK, R>
+impl<EK, R> SnapGenContext<EK, R>
 where
     EK: KvEngine,
     R: CasualRouter<EK>,
@@ -240,11 +254,12 @@ where
     fn generate_snap(
         &self,
         region_id: u64,
-        last_applied_index_term: u64,
+        last_applied_term: u64,
         last_applied_state: RaftApplyState,
         kv_snap: EK::Snapshot,
         notifier: SyncSender<RaftSnapshot>,
         for_balance: bool,
+        allow_multi_files_snapshot: bool,
     ) -> Result<()> {
         // do we need to check leader here?
         let snap = box_try!(store::do_snapshot::<EK>(
@@ -252,9 +267,11 @@ where
             &self.engine,
             kv_snap,
             region_id,
-            last_applied_index_term,
+            last_applied_term,
             last_applied_state,
             for_balance,
+            allow_multi_files_snapshot,
+            self.start
         ));
         // Only enable the fail point when the region id is equal to 1, which is
         // the id of bootstrapped region in tests.
@@ -266,54 +283,146 @@ where
                 "err" => %e,
             );
         }
-        // The error can be ignored as snapshot will be sent in next heartbeat in the end.
+        // The error can be ignored as snapshot will be sent in next heartbeat in the
+        // end.
         let _ = self
             .router
             .send(region_id, CasualMessage::SnapshotGenerated);
         Ok(())
     }
 
-    /// Handles the task of generating snapshot of the Region. It calls `generate_snap` to do the actual work.
+    /// Handles the task of generating snapshot of the Region. It calls
+    /// `generate_snap` to do the actual work.
     fn handle_gen(
         &self,
         region_id: u64,
-        last_applied_index_term: u64,
+        last_applied_term: u64,
         last_applied_state: RaftApplyState,
         kv_snap: EK::Snapshot,
+        canceled: Arc<AtomicBool>,
         notifier: SyncSender<RaftSnapshot>,
         for_balance: bool,
+        allow_multi_files_snapshot: bool,
     ) {
-        SNAP_COUNTER.generate.all.inc();
-        let start = tikv_util::time::Instant::now();
-        let _io_type_guard = WithIOType::new(if for_balance {
-            IOType::LoadBalance
+        fail_point!("before_region_gen_snap", |_| ());
+        SNAP_COUNTER.generate.start.inc();
+        if canceled.load(Ordering::Relaxed) {
+            info!("generate snap is canceled"; "region_id" => region_id);
+            SNAP_COUNTER.generate.abort.inc();
+            return;
+        }
+
+        let start = Instant::now();
+        let _io_type_guard = WithIoType::new(if for_balance {
+            IoType::LoadBalance
         } else {
-            IOType::Replication
+            IoType::Replication
         });
 
         if let Err(e) = self.generate_snap(
             region_id,
-            last_applied_index_term,
+            last_applied_term,
             last_applied_state,
             kv_snap,
             notifier,
             for_balance,
+            allow_multi_files_snapshot,
         ) {
             error!(%e; "failed to generate snap!!!"; "region_id" => region_id,);
+            SNAP_COUNTER.generate.fail.inc();
             return;
         }
 
         SNAP_COUNTER.generate.success.inc();
-        SNAP_HISTOGRAM.generate.observe(start.elapsed_secs());
+        SNAP_HISTOGRAM
+            .generate
+            .observe(start.saturating_elapsed_secs());
+    }
+}
+
+pub struct Runner<EK, R, T>
+where
+    EK: KvEngine,
+    T: PdClient + 'static,
+{
+    batch_size: usize,
+    use_delete_range: bool,
+    ingest_copy_symlink: bool,
+    clean_stale_tick: usize,
+    clean_stale_check_interval: Duration,
+    clean_stale_ranges_tick: usize,
+
+    tiflash_stores: HashMap<u64, bool>,
+    // we may delay some apply tasks if level 0 files to write stall threshold,
+    // pending_applies records all delayed apply task, and will check again later
+    pending_applies: VecDeque<Task<EK::Snapshot>>,
+    // Ranges that have been logically destroyed at a specific sequence number. We can
+    // assume there will be no reader (engine snapshot) newer than that sequence number. Therefore,
+    // they can be physically deleted with `DeleteFiles` when we're sure there is no older
+    // reader as well.
+    // To protect this assumption, before a new snapshot is applied, the overlapping pending ranges
+    // must first be removed.
+    // The sole purpose of maintaining this list is to optimize deletion with `DeleteFiles`
+    // whenever we can. Errors while processing them can be ignored.
+    pending_delete_ranges: PendingDeleteRanges,
+
+    engine: EK,
+    mgr: SnapManager,
+    coprocessor_host: CoprocessorHost<EK>,
+    router: R,
+    pd_client: Option<Arc<T>>,
+    pool: FuturePool,
+}
+
+impl<EK, R, T> Runner<EK, R, T>
+where
+    EK: KvEngine,
+    R: CasualRouter<EK>,
+    T: PdClient + 'static,
+{
+    pub fn new(
+        engine: EK,
+        mgr: SnapManager,
+        cfg: Arc<VersionTrack<Config>>,
+        coprocessor_host: CoprocessorHost<EK>,
+        router: R,
+        pd_client: Option<Arc<T>>,
+    ) -> Runner<EK, R, T> {
+        Runner {
+            batch_size: cfg.value().snap_apply_batch_size.0 as usize,
+            use_delete_range: cfg.value().use_delete_range,
+            ingest_copy_symlink: cfg.value().snap_apply_copy_symlink,
+            clean_stale_tick: 0,
+            clean_stale_check_interval: Duration::from_millis(
+                cfg.value().region_worker_tick_interval.as_millis(),
+            ),
+            clean_stale_ranges_tick: cfg.value().clean_stale_ranges_tick,
+            tiflash_stores: HashMap::default(),
+            pending_applies: VecDeque::new(),
+            pending_delete_ranges: PendingDeleteRanges::default(),
+            engine,
+            mgr,
+            coprocessor_host,
+            router,
+            pd_client,
+            pool: YatpPoolBuilder::new(DefaultTicker::default())
+                .name_prefix("snap-generator")
+                .thread_count(
+                    1,
+                    cfg.value().snap_generator_pool_size,
+                    SNAP_GENERATOR_MAX_POOL_SIZE,
+                )
+                .build_future_pool(),
+        }
     }
 
-    /// Applies snapshot data of the Region.
-    fn apply_snap(&mut self, region_id: u64, abort: Arc<AtomicUsize>) -> Result<()> {
-        info!("begin apply snap data"; "region_id" => region_id);
-        fail_point!("region_apply_snap", |_| { Ok(()) });
-        check_abort(&abort)?;
+    pub fn snap_generator_pool(&self) -> FuturePool {
+        self.pool.clone()
+    }
+
+    fn region_state(&self, region_id: u64) -> Result<RegionLocalState> {
         let region_key = keys::region_state_key(region_id);
-        let mut region_state: RegionLocalState =
+        let region_state: RegionLocalState =
             match box_try!(self.engine.get_msg_cf(CF_RAFT, &region_key)) {
                 Some(state) => state,
                 None => {
@@ -323,28 +432,41 @@ where
                     ));
                 }
             };
+        Ok(region_state)
+    }
 
-        // clear up origin data.
-        let region = region_state.get_region().clone();
-        let start_key = keys::enc_start_key(&region);
-        let end_key = keys::enc_end_key(&region);
-        check_abort(&abort)?;
-        self.cleanup_overlap_ranges(&start_key, &end_key)?;
-        self.delete_all_in_range(&[Range::new(&start_key, &end_key)])?;
-        check_abort(&abort)?;
-        fail_point!("apply_snap_cleanup_range");
-
+    fn apply_state(&self, region_id: u64) -> Result<RaftApplyState> {
         let state_key = keys::apply_state_key(region_id);
         let apply_state: RaftApplyState =
             match box_try!(self.engine.get_msg_cf(CF_RAFT, &state_key)) {
                 Some(state) => state,
                 None => {
                     return Err(box_err!(
-                        "failed to get raftstate from {}",
+                        "failed to get apply_state from {}",
                         log_wrappers::Value::key(&state_key)
                     ));
                 }
             };
+        Ok(apply_state)
+    }
+
+    /// Applies snapshot data of the Region.
+    fn apply_snap(&mut self, region_id: u64, peer_id: u64, abort: Arc<AtomicUsize>) -> Result<()> {
+        info!("begin apply snap data"; "region_id" => region_id, "peer_id" => peer_id);
+        fail_point!("region_apply_snap", |_| { Ok(()) });
+        check_abort(&abort)?;
+
+        let mut region_state = self.region_state(region_id)?;
+        let region = region_state.get_region().clone();
+        let start_key = keys::enc_start_key(&region);
+        let end_key = keys::enc_end_key(&region);
+        check_abort(&abort)?;
+        self.clean_overlap_ranges(start_key, end_key)?;
+        check_abort(&abort)?;
+        fail_point!("apply_snap_cleanup_range");
+
+        // apply snapshot
+        let apply_state = self.apply_state(region_id)?;
         let term = apply_state.get_truncated_state().get_term();
         let idx = apply_state.get_truncated_state().get_index();
         let snap_key = SnapKey::new(region_id, term, idx);
@@ -352,7 +474,7 @@ where
         defer!({
             self.mgr.deregister(&snap_key, &SnapEntry::Applying);
         });
-        let mut s = box_try!(self.mgr.get_snapshot_for_applying_to_engine(&snap_key));
+        let mut s = box_try!(self.mgr.get_snapshot_for_applying(&snap_key));
         if !s.exists() {
             return Err(box_err!("missing snapshot file {}", s.path()));
         }
@@ -360,16 +482,20 @@ where
         let timer = Instant::now();
         let options = ApplyOptions {
             db: self.engine.clone(),
-            region,
+            region: region.clone(),
             abort: Arc::clone(&abort),
             write_batch_size: self.batch_size,
             coprocessor_host: self.coprocessor_host.clone(),
+            ingest_copy_symlink: self.ingest_copy_symlink,
         };
         s.apply(options)?;
+        self.coprocessor_host
+            .post_apply_snapshot(&region, peer_id, &snap_key, Some(&s));
 
+        // delete snapshot state.
         let mut wb = self.engine.write_batch();
         region_state.set_state(PeerState::Normal);
-        box_try!(wb.put_msg_cf(CF_RAFT, &region_key, &region_state));
+        box_try!(wb.put_msg_cf(CF_RAFT, &keys::region_state_key(region_id), &region_state));
         box_try!(wb.delete_cf(CF_RAFT, &keys::snapshot_raft_state_key(region_id)));
         wb.write().unwrap_or_else(|e| {
             panic!("{} failed to save apply_snap result: {:?}", region_id, e);
@@ -377,31 +503,33 @@ where
         info!(
             "apply new data";
             "region_id" => region_id,
-            "time_takes" => ?timer.elapsed(),
+            "time_takes" => ?timer.saturating_elapsed(),
         );
         Ok(())
     }
 
-    /// Tries to apply the snapshot of the specified Region. It calls `apply_snap` to do the actual work.
-    fn handle_apply(&mut self, region_id: u64, status: Arc<AtomicUsize>) {
+    /// Tries to apply the snapshot of the specified Region. It calls
+    /// `apply_snap` to do the actual work.
+    fn handle_apply(&mut self, region_id: u64, peer_id: u64, status: Arc<AtomicUsize>) {
         let _ = status.compare_exchange(
             JOB_STATUS_PENDING,
             JOB_STATUS_RUNNING,
             Ordering::SeqCst,
             Ordering::SeqCst,
         );
-        SNAP_COUNTER.apply.all.inc();
-        // let apply_histogram = SNAP_HISTOGRAM.with_label_values(&["apply"]);
-        // let timer = apply_histogram.start_coarse_timer();
-        let start = tikv_util::time::Instant::now();
+        SNAP_COUNTER.apply.start.inc();
 
-        match self.apply_snap(region_id, Arc::clone(&status)) {
+        let start = Instant::now();
+
+        match self.apply_snap(region_id, peer_id, Arc::clone(&status)) {
             Ok(()) => {
                 status.swap(JOB_STATUS_FINISHED, Ordering::SeqCst);
                 SNAP_COUNTER.apply.success.inc();
             }
             Err(Error::Abort) => {
                 warn!("applying snapshot is aborted"; "region_id" => region_id);
+                self.coprocessor_host
+                    .cancel_apply_snapshot(region_id, peer_id);
                 assert_eq!(
                     status.swap(JOB_STATUS_CANCELLED, Ordering::SeqCst),
                     JOB_STATUS_CANCELLING
@@ -415,80 +543,89 @@ where
             }
         }
 
-        SNAP_HISTOGRAM.apply.observe(start.elapsed_secs());
+        SNAP_HISTOGRAM
+            .apply
+            .observe(start.saturating_elapsed_secs());
+        let _ = self.router.send(region_id, CasualMessage::SnapshotApplied);
     }
 
-    /// Cleans up the data within the range.
-    fn cleanup_range(&self, ranges: &[Range]) -> Result<()> {
-        self.engine
-            .delete_all_in_range(DeleteStrategy::DeleteFiles, &ranges)
-            .unwrap_or_else(|e| {
-                error!("failed to delete files in range"; "err" => %e);
-            });
-        self.delete_all_in_range(ranges)?;
-        self.engine
-            .delete_all_in_range(DeleteStrategy::DeleteBlobs, &ranges)
-            .unwrap_or_else(|e| {
-                error!("failed to delete files in range"; "err" => %e);
-            });
-        Ok(())
-    }
-
-    /// Gets the overlapping ranges and cleans them up.
-    fn cleanup_overlap_ranges(&mut self, start_key: &[u8], end_key: &[u8]) -> Result<()> {
+    /// Tries to clean up files in pending ranges overlapping with the given
+    /// bounds. These pending ranges will be removed. Returns an updated range
+    /// that also includes these ranges. Caller must ensure the remaining keys
+    /// in the returning range will be deleted properly.
+    fn clean_overlap_ranges_roughly(
+        &mut self,
+        mut start_key: Vec<u8>,
+        mut end_key: Vec<u8>,
+    ) -> (Vec<u8>, Vec<u8>) {
         let overlap_ranges = self
             .pending_delete_ranges
-            .drain_overlap_ranges(start_key, end_key);
+            .drain_overlap_ranges(&start_key, &end_key);
         if overlap_ranges.is_empty() {
-            return Ok(());
+            return (start_key, end_key);
         }
+        CLEAN_COUNTER_VEC.with_label_values(&["overlap"]).inc();
         let oldest_sequence = self
             .engine
             .get_oldest_snapshot_sequence_number()
             .unwrap_or(u64::MAX);
-        let mut ranges = Vec::with_capacity(overlap_ranges.len());
-        let mut df_ranges = Vec::with_capacity(overlap_ranges.len());
-        for (region_id, start_key, end_key, stale_sequence) in overlap_ranges.iter() {
-            // `DeleteFiles` may break current rocksdb snapshots consistency,
-            // so do not use it unless we can make sure there is no reader of the destroyed peer anymore.
-            if *stale_sequence < oldest_sequence {
-                df_ranges.push(Range::new(start_key, end_key));
-            } else {
-                SNAP_COUNTER_VEC
-                    .with_label_values(&["overlap", "not_delete_files"])
-                    .inc();
-            }
-            info!("delete data in range because of overlap"; "region_id" => region_id,
-                  "start_key" => log_wrappers::Value::key(start_key),
-                  "end_key" => log_wrappers::Value::key(end_key));
-            ranges.push(Range::new(start_key, end_key));
-        }
+        let df_ranges: Vec<_> = overlap_ranges
+            .iter()
+            .filter_map(|(region_id, cur_start, cur_end, stale_sequence)| {
+                info!(
+                    "delete data in range because of overlap"; "region_id" => region_id,
+                    "start_key" => log_wrappers::Value::key(cur_start),
+                    "end_key" => log_wrappers::Value::key(cur_end)
+                );
+                if &start_key > cur_start {
+                    start_key = cur_start.clone();
+                }
+                if &end_key < cur_end {
+                    end_key = cur_end.clone();
+                }
+                if *stale_sequence < oldest_sequence {
+                    Some(Range::new(cur_start, cur_end))
+                } else {
+                    SNAP_COUNTER_VEC
+                        .with_label_values(&["overlap", "not_delete_files"])
+                        .inc();
+                    None
+                }
+            })
+            .collect();
         self.engine
-            .delete_all_in_range(DeleteStrategy::DeleteFiles, &df_ranges)
-            .unwrap_or_else(|e| {
+            .delete_ranges_cfs(
+                &WriteOptions::default(),
+                DeleteStrategy::DeleteFiles,
+                &df_ranges,
+            )
+            .map_err(|e| {
                 error!("failed to delete files in range"; "err" => %e);
-            });
+            })
+            .unwrap();
+        (start_key, end_key)
+    }
 
-        self.delete_all_in_range(&ranges)
+    /// Cleans up data in the given range and all pending ranges overlapping
+    /// with it.
+    fn clean_overlap_ranges(&mut self, start_key: Vec<u8>, end_key: Vec<u8>) -> Result<()> {
+        let (start_key, end_key) = self.clean_overlap_ranges_roughly(start_key, end_key);
+        self.delete_all_in_range(&[Range::new(&start_key, &end_key)])
     }
 
     /// Inserts a new pending range, and it will be cleaned up with some delay.
-    fn insert_pending_delete_range(&mut self, region_id: u64, start_key: &[u8], end_key: &[u8]) {
-        if let Err(e) = self.cleanup_overlap_ranges(start_key, end_key) {
-            warn!("cleanup_overlap_ranges failed";
-                "region_id" => region_id,
-                "start_key" => log_wrappers::Value::key(start_key),
-                "end_key" => log_wrappers::Value::key(end_key),
-                "err" => %e,
-            );
-        } else {
-            info!("register deleting data in range";
-                "region_id" => region_id,
-                "start_key" => log_wrappers::Value::key(start_key),
-                "end_key" => log_wrappers::Value::key(end_key),
-            );
-        }
-
+    fn insert_pending_delete_range(
+        &mut self,
+        region_id: u64,
+        start_key: Vec<u8>,
+        end_key: Vec<u8>,
+    ) {
+        let (start_key, end_key) = self.clean_overlap_ranges_roughly(start_key, end_key);
+        info!("register deleting data in range";
+            "region_id" => region_id,
+            "start_key" => log_wrappers::Value::key(&start_key),
+            "end_key" => log_wrappers::Value::key(&end_key),
+        );
         let seq = self.engine.get_latest_sequence_number();
         self.pending_delete_ranges
             .insert(region_id, start_key, end_key, seq);
@@ -497,34 +634,60 @@ where
     /// Cleans up stale ranges.
     fn clean_stale_ranges(&mut self) {
         STALE_PEER_PENDING_DELETE_RANGE_GAUGE.set(self.pending_delete_ranges.len() as f64);
-
+        if self.ingest_maybe_stall() {
+            return;
+        }
         let oldest_sequence = self
             .engine
             .get_oldest_snapshot_sequence_number()
             .unwrap_or(u64::MAX);
-        let mut cleanup_ranges: Vec<(u64, Vec<u8>, Vec<u8>)> = self
+        let mut region_ranges: Vec<(u64, Vec<u8>, Vec<u8>)> = self
             .pending_delete_ranges
             .stale_ranges(oldest_sequence)
             .map(|(region_id, s, e)| (region_id, s.to_vec(), e.to_vec()))
             .collect();
-        cleanup_ranges.sort_by(|a, b| a.1.cmp(&b.1));
-        while cleanup_ranges.len() > CLEANUP_MAX_REGION_COUNT {
-            cleanup_ranges.pop();
+        if region_ranges.is_empty() {
+            return;
         }
-        let ranges: Vec<Range> = cleanup_ranges
+        CLEAN_COUNTER_VEC.with_label_values(&["destroy"]).inc_by(1);
+        region_ranges.sort_by(|a, b| a.1.cmp(&b.1));
+        region_ranges.truncate(CLEANUP_MAX_REGION_COUNT);
+        let ranges: Vec<_> = region_ranges
             .iter()
             .map(|(region_id, start, end)| {
                 info!("delete data in range because of stale"; "region_id" => region_id,
-                  "start_key" => log_wrappers::Value::key(start),
-                  "end_key" => log_wrappers::Value::key(end));
+                    "start_key" => log_wrappers::Value::key(start),
+                    "end_key" => log_wrappers::Value::key(end));
                 Range::new(start, end)
             })
             .collect();
-        if let Err(e) = self.cleanup_range(&ranges) {
+
+        self.engine
+            .delete_ranges_cfs(
+                &WriteOptions::default(),
+                DeleteStrategy::DeleteFiles,
+                &ranges,
+            )
+            .map_err(|e| {
+                error!("failed to delete files in range"; "err" => %e);
+            })
+            .unwrap();
+        if let Err(e) = self.delete_all_in_range(&ranges) {
             error!("failed to cleanup stale range"; "err" => %e);
             return;
         }
-        for (_, key, _) in cleanup_ranges {
+        self.engine
+            .delete_ranges_cfs(
+                &WriteOptions::default(),
+                DeleteStrategy::DeleteBlobs,
+                &ranges,
+            )
+            .map_err(|e| {
+                error!("failed to delete blobs in range"; "err" => %e);
+            })
+            .unwrap();
+
+        for (_, key, _) in region_ranges {
             assert!(
                 self.pending_delete_ranges.remove(&key).is_some(),
                 "cleanup pending_delete_ranges {} should exist",
@@ -533,8 +696,8 @@ where
         }
     }
 
-    /// Checks the number of files at level 0 to avoid write stall after ingesting sst.
-    /// Returns true if the ingestion causes write stall.
+    /// Checks the number of files at level 0 to avoid write stall after
+    /// ingesting sst. Returns true if the ingestion causes write stall.
     fn ingest_maybe_stall(&self) -> bool {
         for cf in SNAPSHOT_CFS {
             // no need to check lock cf
@@ -548,8 +711,10 @@ where
         false
     }
 
-    fn delete_all_in_range(&self, ranges: &[Range]) -> Result<()> {
+    fn delete_all_in_range(&self, ranges: &[Range<'_>]) -> Result<()> {
+        let wopts = WriteOptions::default();
         for cf in self.engine.cf_names() {
+            // CF_LOCK usually contains fewer keys than other CFs, so we delete them by key.
             let strategy = if cf == CF_LOCK {
                 DeleteStrategy::DeleteByKey
             } else if self.use_delete_range {
@@ -559,78 +724,93 @@ where
                     sst_path: self.mgr.get_temp_path_for_ingest(),
                 }
             };
-            box_try!(self.engine.delete_ranges_cf(cf, strategy, ranges));
+            box_try!(self.engine.delete_ranges_cf(&wopts, cf, strategy, ranges));
         }
 
         Ok(())
     }
-}
 
-pub struct Runner<EK, R>
-where
-    EK: KvEngine,
-{
-    pool: ThreadPool<TaskCell>,
-    ctx: SnapContext<EK, R>,
-    // we may delay some apply tasks if level 0 files to write stall threshold,
-    // pending_applies records all delayed apply task, and will check again later
-    pending_applies: VecDeque<Task<EK::Snapshot>>,
-    clean_stale_tick: usize,
-    clean_stale_check_interval: Duration,
-}
+    /// Calls observer `pre_apply_snapshot` for every task.
+    /// Multiple task can be `pre_apply_snapshot` at the same time.
+    fn pre_apply_snapshot(&self, task: &Task<EK::Snapshot>) -> Result<()> {
+        let (region_id, abort, peer_id) = match task {
+            Task::Apply {
+                region_id,
+                status,
+                peer_id,
+            } => (region_id, status.clone(), peer_id),
+            _ => panic!("invalid apply snapshot task"),
+        };
 
-impl<EK, R> Runner<EK, R>
-where
-    EK: KvEngine,
-    R: CasualRouter<EK>,
-{
-    pub fn new(
-        engine: EK,
-        mgr: SnapManager,
-        batch_size: usize,
-        use_delete_range: bool,
-        coprocessor_host: CoprocessorHost<EK>,
-        router: R,
-    ) -> Runner<EK, R> {
-        Runner {
-            pool: Builder::new(thd_name!("snap-generator"))
-                .max_thread_count(GENERATE_POOL_SIZE)
-                .build_future_pool(),
-            ctx: SnapContext {
-                engine,
-                mgr,
-                batch_size,
-                use_delete_range,
-                pending_delete_ranges: PendingDeleteRanges::default(),
-                coprocessor_host,
-                router,
-            },
-            pending_applies: VecDeque::new(),
-            clean_stale_tick: 0,
-            clean_stale_check_interval: Duration::from_millis(PENDING_APPLY_CHECK_INTERVAL),
+        let region_state = self.region_state(*region_id)?;
+        let apply_state = self.apply_state(*region_id)?;
+
+        check_abort(&abort)?;
+
+        let term = apply_state.get_truncated_state().get_term();
+        let idx = apply_state.get_truncated_state().get_index();
+        let snap_key = SnapKey::new(*region_id, term, idx);
+        let s = box_try!(self.mgr.get_snapshot_for_applying(&snap_key));
+        if !s.exists() {
+            self.coprocessor_host.pre_apply_snapshot(
+                region_state.get_region(),
+                *peer_id,
+                &snap_key,
+                None,
+            );
+            return Err(box_err!("missing snapshot file {}", s.path()));
         }
+        check_abort(&abort)?;
+        self.coprocessor_host.pre_apply_snapshot(
+            region_state.get_region(),
+            *peer_id,
+            &snap_key,
+            Some(&s),
+        );
+        Ok(())
     }
 
     /// Tries to apply pending tasks if there is some.
-    fn handle_pending_applies(&mut self) {
+    fn handle_pending_applies(&mut self, is_timeout: bool) {
         fail_point!("apply_pending_snapshot", |_| {});
+        let mut new_batch = true;
         while !self.pending_applies.is_empty() {
-            // should not handle too many applies than the number of files that can be ingested.
-            // check level 0 every time because we can not make sure how does the number of level 0 files change.
-            if self.ctx.ingest_maybe_stall() {
+            // should not handle too many applies than the number of files that can be
+            // ingested. check level 0 every time because we can not make sure
+            // how does the number of level 0 files change.
+            if self.ingest_maybe_stall() {
                 break;
             }
-            if let Some(Task::Apply { region_id, status }) = self.pending_applies.pop_front() {
-                self.ctx.handle_apply(region_id, status);
+            if let Some(Task::Apply { region_id, .. }) = self.pending_applies.front() {
+                fail_point!("handle_new_pending_applies", |_| {});
+                if !self.engine.can_apply_snapshot(
+                    is_timeout,
+                    new_batch,
+                    *region_id,
+                    self.pending_applies.len(),
+                ) {
+                    // KvEngine can't apply snapshot for other reasons.
+                    break;
+                }
+                if let Some(Task::Apply {
+                    region_id,
+                    status,
+                    peer_id,
+                }) = self.pending_applies.pop_front()
+                {
+                    new_batch = false;
+                    self.handle_apply(region_id, peer_id, status);
+                }
             }
         }
     }
 }
 
-impl<EK, R> Runnable for Runner<EK, R>
+impl<EK, R, T> Runnable for Runner<EK, R, T>
 where
     EK: KvEngine,
     R: CasualRouter<EK> + Send + Clone + 'static,
+    T: PdClient,
 {
     type Task = Task<EK::Snapshot>;
 
@@ -638,34 +818,73 @@ where
         match task {
             Task::Gen {
                 region_id,
-                last_applied_index_term,
+                last_applied_term,
                 last_applied_state,
                 kv_snap,
+                canceled,
                 notifier,
                 for_balance,
+                to_store_id,
             } => {
                 // It is safe for now to handle generating and applying snapshot concurrently,
                 // but it may not when merge is implemented.
-                let ctx = self.ctx.clone();
-
+                let mut allow_multi_files_snapshot = false;
+                // if to_store_id is 0, it means the to_store_id cannot be found
+                if to_store_id != 0 {
+                    if let Some(is_tiflash) = self.tiflash_stores.get(&to_store_id) {
+                        allow_multi_files_snapshot = !is_tiflash;
+                    } else {
+                        let is_tiflash = self.pd_client.as_ref().map_or(false, |pd_client| {
+                            if let Ok(s) = pd_client.get_store(to_store_id) {
+                                return s.get_labels().iter().any(|label| {
+                                    label.get_key().to_lowercase() == ENGINE
+                                        && label.get_value().to_lowercase() == TIFLASH
+                                });
+                            }
+                            true
+                        });
+                        self.tiflash_stores.insert(to_store_id, is_tiflash);
+                        allow_multi_files_snapshot = !is_tiflash;
+                    }
+                }
+                SNAP_COUNTER.generate.all.inc();
+                let ctx = SnapGenContext {
+                    engine: self.engine.clone(),
+                    mgr: self.mgr.clone(),
+                    router: self.router.clone(),
+                    start: UnixSecs::now(),
+                };
+                let scheduled_time = Instant::now_coarse();
                 self.pool.spawn(async move {
-                    tikv_alloc::add_thread_memory_accessor();
+                    SNAP_GEN_WAIT_DURATION_HISTOGRAM
+                        .observe(scheduled_time.saturating_elapsed_secs());
+
                     ctx.handle_gen(
                         region_id,
-                        last_applied_index_term,
+                        last_applied_term,
                         last_applied_state,
                         kv_snap,
+                        canceled,
                         notifier,
                         for_balance,
+                        allow_multi_files_snapshot,
                     );
-                    tikv_alloc::remove_thread_memory_accessor();
-                });
+                }).unwrap_or_else(
+                    |e| {
+                        error!("failed to generate snapshot"; "region_id" => region_id, "err" => ?e);
+                        SNAP_COUNTER.generate.fail.inc();
+                    },
+                );
             }
             task @ Task::Apply { .. } => {
                 fail_point!("on_region_worker_apply", true, |_| {});
+                if self.coprocessor_host.should_pre_apply_snapshot() {
+                    let _ = self.pre_apply_snapshot(&task);
+                }
+                SNAP_COUNTER.apply.all.inc();
                 // to makes sure applying snapshots in order.
                 self.pending_applies.push_back(task);
-                self.handle_pending_applies();
+                self.handle_pending_applies(false);
                 if !self.pending_applies.is_empty() {
                     // delay the apply and retry later
                     SNAP_COUNTER.apply.delay.inc()
@@ -679,32 +898,24 @@ where
                 fail_point!("on_region_worker_destroy", true, |_| {});
                 // try to delay the range deletion because
                 // there might be a coprocessor request related to this range
-                self.ctx
-                    .insert_pending_delete_range(region_id, &start_key, &end_key);
-
-                // try to delete stale ranges if there are any
-                if !self.ctx.ingest_maybe_stall() {
-                    self.ctx.clean_stale_ranges();
-                }
+                self.insert_pending_delete_range(region_id, start_key, end_key);
+                self.clean_stale_ranges();
             }
         }
     }
-
-    fn shutdown(&mut self) {
-        self.pool.shutdown();
-    }
 }
 
-impl<EK, R> RunnableWithTimer for Runner<EK, R>
+impl<EK, R, T> RunnableWithTimer for Runner<EK, R, T>
 where
     EK: KvEngine,
     R: CasualRouter<EK> + Send + Clone + 'static,
+    T: PdClient + 'static,
 {
     fn on_timeout(&mut self) {
-        self.handle_pending_applies();
+        self.handle_pending_applies(true);
         self.clean_stale_tick += 1;
-        if self.clean_stale_tick >= STALE_PEER_CHECK_TICK {
-            self.ctx.clean_stale_ranges();
+        if self.clean_stale_tick >= self.clean_stale_ranges_tick {
+            self.clean_stale_ranges();
             self.clean_stale_tick = 0;
         }
     }
@@ -715,33 +926,56 @@ where
 }
 
 #[cfg(test)]
-mod tests {
-    use std::io;
-    use std::sync::atomic::AtomicUsize;
-    use std::sync::{mpsc, Arc};
-    use std::thread;
-    use std::time::Duration;
-
-    use crate::coprocessor::CoprocessorHost;
-    use crate::store::peer_storage::JOB_STATUS_PENDING;
-    use crate::store::snap::tests::get_test_db_for_regions;
-    use crate::store::worker::RegionRunner;
-    use crate::store::{CasualMessage, SnapKey, SnapManager};
-    use engine_test::ctor::CFOptions;
-    use engine_test::ctor::ColumnFamilyOptions;
-    use engine_test::kv::{KvTestEngine, KvTestSnapshot};
-    use engine_traits::KvEngine;
-    use engine_traits::{
-        CFNamesExt, CompactExt, MiscExt, Mutable, Peekable, SyncMutable, WriteBatch, WriteBatchExt,
+pub(crate) mod tests {
+    use std::{
+        io,
+        sync::{atomic::AtomicUsize, mpsc, Arc},
+        thread,
+        time::Duration,
     };
-    use engine_traits::{CF_DEFAULT, CF_RAFT};
-    use kvproto::raft_serverpb::{PeerState, RaftApplyState, RegionLocalState};
-    use raft::eraftpb::Entry;
-    use tempfile::Builder;
-    use tikv_util::worker::{LazyWorker, Worker};
 
-    use super::PendingDeleteRanges;
-    use super::Task;
+    use engine_test::{
+        ctor::CfOptions,
+        kv::{KvTestEngine, KvTestSnapshot},
+    };
+    use engine_traits::{
+        CompactExt, FlowControlFactorsExt, KvEngine, MiscExt, Mutable, Peekable,
+        RaftEngineReadOnly, SyncMutable, WriteBatch, WriteBatchExt, CF_DEFAULT, CF_WRITE,
+    };
+    use keys::data_key;
+    use kvproto::raft_serverpb::{PeerState, RaftApplyState, RaftSnapshotData, RegionLocalState};
+    use pd_client::RpcClient;
+    use protobuf::Message;
+    use tempfile::Builder;
+    use tikv_util::{
+        config::{ReadableDuration, ReadableSize},
+        worker::{LazyWorker, Worker},
+    };
+
+    use super::*;
+    use crate::{
+        coprocessor::{
+            ApplySnapshotObserver, BoxApplySnapshotObserver, Coprocessor, CoprocessorHost,
+            ObserverContext,
+        },
+        store::{
+            peer_storage::JOB_STATUS_PENDING, snap::tests::get_test_db_for_regions,
+            worker::RegionRunner, CasualMessage, SnapKey, SnapManager,
+        },
+    };
+
+    const PENDING_APPLY_CHECK_INTERVAL: Duration = Duration::from_millis(200);
+    const STALE_PEER_CHECK_TICK: usize = 1;
+
+    pub fn make_raftstore_cfg(use_delete_range: bool) -> Arc<VersionTrack<Config>> {
+        let mut store_cfg = Config::default();
+        store_cfg.snap_apply_batch_size = ReadableSize(0);
+        store_cfg.region_worker_tick_interval = ReadableDuration(PENDING_APPLY_CHECK_INTERVAL);
+        store_cfg.clean_stale_ranges_tick = STALE_PEER_CHECK_TICK;
+        store_cfg.use_delete_range = use_delete_range;
+        store_cfg.snap_generator_pool_size = 2;
+        Arc::new(VersionTrack::new(store_cfg))
+    }
 
     fn insert_range(
         pending_delete_ranges: &mut PendingDeleteRanges,
@@ -750,7 +984,12 @@ mod tests {
         e: &str,
         stale_sequence: u64,
     ) {
-        pending_delete_ranges.insert(id, s.as_bytes(), e.as_bytes(), stale_sequence);
+        pending_delete_ranges.insert(
+            id,
+            s.as_bytes().to_owned(),
+            e.as_bytes().to_owned(),
+            stale_sequence,
+        );
     }
 
     #[test]
@@ -772,8 +1011,7 @@ mod tests {
         // when we want to insert [g, q), we first extract overlap ranges,
         // which are [f, i), [m, n), [p, t)
         let timeout2 = 12;
-        let overlap_ranges =
-            pending_delete_ranges.drain_overlap_ranges(&b"g".to_vec(), &b"q".to_vec());
+        let overlap_ranges = pending_delete_ranges.drain_overlap_ranges(b"g", b"q");
         assert_eq!(
             overlap_ranges,
             [
@@ -826,7 +1064,7 @@ mod tests {
     #[test]
     fn test_stale_peer() {
         let temp_dir = Builder::new().prefix("test_stale_peer").tempdir().unwrap();
-        let engine = get_test_db_for_regions(&temp_dir, None, None, None, None, &[1]).unwrap();
+        let engine = get_test_db_for_regions(&temp_dir, None, None, None, &[1]).unwrap();
 
         let snap_dir = Builder::new().prefix("snap_dir").tempdir().unwrap();
         let mgr = SnapManager::new(snap_dir.path().to_str().unwrap());
@@ -834,13 +1072,14 @@ mod tests {
         let mut worker: LazyWorker<Task<KvTestSnapshot>> = bg_worker.lazy_build("region-worker");
         let sched = worker.scheduler();
         let (router, _) = mpsc::sync_channel(11);
+        let cfg = make_raftstore_cfg(false);
         let mut runner = RegionRunner::new(
             engine.kv.clone(),
             mgr,
-            0,
-            false,
+            cfg,
             CoprocessorHost::<KvTestEngine>::default(),
             router,
+            Option::<Arc<RpcClient>>::None,
         );
         runner.clean_stale_check_interval = Duration::from_millis(100);
 
@@ -888,31 +1127,39 @@ mod tests {
             .prefix("test_pending_applies")
             .tempdir()
             .unwrap();
+        let obs = MockApplySnapshotObserver::default();
+        let mut host = CoprocessorHost::<KvTestEngine>::default();
+        host.registry
+            .register_apply_snapshot_observer(1, BoxApplySnapshotObserver::new(obs.clone()));
 
-        let mut cf_opts = ColumnFamilyOptions::new();
+        let mut cf_opts = CfOptions::new();
         cf_opts.set_level_zero_slowdown_writes_trigger(5);
         cf_opts.set_disable_auto_compactions(true);
         let kv_cfs_opts = vec![
-            CFOptions::new("default", cf_opts.clone()),
-            CFOptions::new("write", cf_opts.clone()),
-            CFOptions::new("lock", cf_opts.clone()),
-            CFOptions::new("raft", cf_opts.clone()),
+            (CF_DEFAULT, cf_opts.clone()),
+            (CF_WRITE, cf_opts.clone()),
+            (CF_LOCK, cf_opts.clone()),
+            (CF_RAFT, cf_opts.clone()),
         ];
-        let raft_cfs_opt = CFOptions::new(CF_DEFAULT, cf_opts);
         let engine = get_test_db_for_regions(
             &temp_dir,
             None,
-            Some(raft_cfs_opt),
             None,
             Some(kv_cfs_opts),
-            &[1, 2, 3, 4, 5, 6],
+            &[1, 2, 3, 4, 5, 6, 7],
         )
         .unwrap();
 
-        for cf_name in engine.kv.cf_names() {
-            for i in 0..6 {
-                engine.kv.put_cf(cf_name, &[i], &[i]).unwrap();
-                engine.kv.put_cf(cf_name, &[i + 1], &[i + 1]).unwrap();
+        for cf_name in &["default", "write", "lock"] {
+            for i in 0..7 {
+                engine
+                    .kv
+                    .put_cf(cf_name, &data_key(i.to_string().as_bytes()), &[i])
+                    .unwrap();
+                engine
+                    .kv
+                    .put_cf(cf_name, &data_key((i + 1).to_string().as_bytes()), &[i + 1])
+                    .unwrap();
                 engine.kv.flush_cf(cf_name, true).unwrap();
                 // check level 0 files
                 assert_eq!(
@@ -928,17 +1175,19 @@ mod tests {
 
         let snap_dir = Builder::new().prefix("snap_dir").tempdir().unwrap();
         let mgr = SnapManager::new(snap_dir.path().to_str().unwrap());
+        mgr.init().unwrap();
         let bg_worker = Worker::new("snap-manager");
-        let mut worker = bg_worker.lazy_build("snapshot-worker");
+        let mut worker = bg_worker.lazy_build("snap-manager");
         let sched = worker.scheduler();
         let (router, receiver) = mpsc::sync_channel(1);
+        let cfg = make_raftstore_cfg(true);
         let runner = RegionRunner::new(
             engine.kv.clone(),
             mgr,
-            0,
-            true,
-            CoprocessorHost::<KvTestEngine>::default(),
+            cfg,
+            host,
             router,
+            Option::<Arc<RpcClient>>::None,
         );
         worker.start_with_timer(runner);
 
@@ -951,19 +1200,17 @@ mod tests {
                 .unwrap()
                 .unwrap();
             let idx = apply_state.get_applied_index();
-            let entry = engine
-                .raft
-                .get_msg::<Entry>(&keys::raft_log_key(id, idx))
-                .unwrap()
-                .unwrap();
+            let entry = engine.raft.get_entry(id, idx).unwrap().unwrap();
             sched
                 .schedule(Task::Gen {
                     region_id: id,
                     kv_snap: engine.kv.snapshot(),
-                    last_applied_index_term: entry.get_term(),
+                    last_applied_term: entry.get_term(),
                     last_applied_state: apply_state,
+                    canceled: Arc::new(AtomicBool::new(false)),
                     notifier: tx,
                     for_balance: false,
+                    to_store_id: 0,
                 })
                 .unwrap();
             let s1 = rx.recv().unwrap();
@@ -973,11 +1220,14 @@ mod tests {
                 }
                 msg => panic!("expected SnapshotGenerated, but got {:?}", msg),
             }
-            let data = s1.get_data();
+            let mut data = RaftSnapshotData::default();
+            data.merge_from_bytes(s1.get_data()).unwrap();
             let key = SnapKey::from_snap(&s1).unwrap();
             let mgr = SnapManager::new(snap_dir.path().to_str().unwrap());
             let mut s2 = mgr.get_snapshot_for_sending(&key).unwrap();
-            let mut s3 = mgr.get_snapshot_for_receiving(&key, &data[..]).unwrap();
+            let mut s3 = mgr
+                .get_snapshot_for_receiving(&key, data.take_meta())
+                .unwrap();
             io::copy(&mut s2, &mut s3).unwrap();
             s3.save().unwrap();
 
@@ -999,23 +1249,63 @@ mod tests {
                 .schedule(Task::Apply {
                     region_id: id,
                     status,
+                    peer_id: 1,
                 })
                 .unwrap();
         };
-        let wait_apply_finish = |id: u64| {
-            let region_key = keys::region_state_key(id);
-            loop {
-                thread::sleep(Duration::from_millis(100));
-                if engine
-                    .kv
-                    .get_msg_cf::<RegionLocalState>(CF_RAFT, &region_key)
-                    .unwrap()
-                    .unwrap()
-                    .get_state()
-                    == PeerState::Normal
-                {
-                    break;
+        let destroy_region = |id: u64| {
+            let start_key = data_key(id.to_string().as_bytes());
+            let end_key = data_key((id + 1).to_string().as_bytes());
+            // destroy region
+            sched
+                .schedule(Task::Destroy {
+                    region_id: id,
+                    start_key,
+                    end_key,
+                })
+                .unwrap();
+        };
+
+        let check_region_exist = |id: u64| -> bool {
+            let key = data_key(id.to_string().as_bytes());
+            let v = engine.kv.get_value(&key).unwrap();
+            v.is_some()
+        };
+
+        let wait_apply_finish = |ids: &[u64]| {
+            for id in ids {
+                match receiver.recv_timeout(Duration::from_secs(5)) {
+                    Ok((region_id, CasualMessage::SnapshotApplied)) => {
+                        assert_eq!(region_id, *id);
+                    }
+                    msg => panic!("expected {} SnapshotApplied, but got {:?}", id, msg),
                 }
+                let region_key = keys::region_state_key(*id);
+                assert_eq!(
+                    engine
+                        .kv
+                        .get_msg_cf::<RegionLocalState>(CF_RAFT, &region_key)
+                        .unwrap()
+                        .unwrap()
+                        .get_state(),
+                    PeerState::Normal
+                )
+            }
+        };
+
+        #[allow(dead_code)]
+        let must_not_finish = |ids: &[u64]| {
+            for id in ids {
+                let region_key = keys::region_state_key(*id);
+                assert_eq!(
+                    engine
+                        .kv
+                        .get_msg_cf::<RegionLocalState>(CF_RAFT, &region_key)
+                        .unwrap()
+                        .unwrap()
+                        .get_state(),
+                    PeerState::Applying
+                )
             }
         };
 
@@ -1027,7 +1317,7 @@ mod tests {
                 .get_cf_num_files_at_level(CF_DEFAULT, 0)
                 .unwrap()
                 .unwrap(),
-            6
+            7
         );
 
         // compact all files to the bottomest level
@@ -1041,7 +1331,14 @@ mod tests {
             0
         );
 
-        wait_apply_finish(1);
+        wait_apply_finish(&[1]);
+        assert_eq!(obs.pre_apply_count.load(Ordering::SeqCst), 1);
+        assert_eq!(obs.post_apply_count.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            obs.pre_apply_hash.load(Ordering::SeqCst),
+            obs.post_apply_hash.load(Ordering::SeqCst)
+        );
+        assert_eq!(obs.cancel_apply.load(Ordering::SeqCst), 0);
 
         // the pending apply task should be finished and snapshots are ingested.
         // note that when ingest sst, it may flush memtable if overlap,
@@ -1057,7 +1354,7 @@ mod tests {
 
         // no write stall, ingest without delay
         gen_and_apply_snap(2);
-        wait_apply_finish(2);
+        wait_apply_finish(&[2]);
         assert_eq!(
             engine
                 .kv
@@ -1087,6 +1384,9 @@ mod tests {
             4
         );
         gen_and_apply_snap(5);
+        destroy_region(6);
+        thread::sleep(PENDING_APPLY_CHECK_INTERVAL * 2);
+        assert!(check_region_exist(6));
         assert_eq!(
             engine
                 .kv
@@ -1108,7 +1408,7 @@ mod tests {
         );
 
         // make sure have checked pending applies
-        wait_apply_finish(4);
+        wait_apply_finish(&[3, 4]);
 
         // before two pending apply tasks should be finished and snapshots are ingested
         // and one still in pending.
@@ -1131,7 +1431,7 @@ mod tests {
                 .unwrap(),
             0
         );
-        wait_apply_finish(5);
+        wait_apply_finish(&[5]);
 
         // the last one pending task finished
         assert_eq!(
@@ -1142,5 +1442,72 @@ mod tests {
                 .unwrap(),
             2
         );
+        thread::sleep(PENDING_APPLY_CHECK_INTERVAL * 2);
+        assert!(!check_region_exist(6));
+
+        #[cfg(feature = "failpoints")]
+        {
+            engine.kv.compact_files_in_range(None, None, None).unwrap();
+            fail::cfg("handle_new_pending_applies", "return").unwrap();
+            gen_and_apply_snap(7);
+            thread::sleep(PENDING_APPLY_CHECK_INTERVAL * 2);
+            must_not_finish(&[7]);
+            fail::remove("handle_new_pending_applies");
+            thread::sleep(PENDING_APPLY_CHECK_INTERVAL * 2);
+            wait_apply_finish(&[7]);
+        }
+        bg_worker.stop();
+        // Wait the timer fired. Otherwise deletion of directory may race with timer
+        // task.
+        thread::sleep(PENDING_APPLY_CHECK_INTERVAL * 2);
+    }
+
+    #[derive(Clone, Default)]
+    struct MockApplySnapshotObserver {
+        pub pre_apply_count: Arc<AtomicUsize>,
+        pub post_apply_count: Arc<AtomicUsize>,
+        pub pre_apply_hash: Arc<AtomicUsize>,
+        pub post_apply_hash: Arc<AtomicUsize>,
+        pub cancel_apply: Arc<AtomicUsize>,
+    }
+
+    impl Coprocessor for MockApplySnapshotObserver {}
+
+    impl ApplySnapshotObserver for MockApplySnapshotObserver {
+        fn pre_apply_snapshot(
+            &self,
+            _: &mut ObserverContext<'_>,
+            peer_id: u64,
+            key: &crate::store::SnapKey,
+            snapshot: Option<&crate::store::Snapshot>,
+        ) {
+            let code =
+                snapshot.unwrap().total_size() + key.term + key.region_id + key.idx + peer_id;
+            self.pre_apply_count.fetch_add(1, Ordering::SeqCst);
+            self.pre_apply_hash
+                .fetch_add(code as usize, Ordering::SeqCst);
+        }
+
+        fn post_apply_snapshot(
+            &self,
+            _: &mut ObserverContext<'_>,
+            peer_id: u64,
+            key: &crate::store::SnapKey,
+            snapshot: Option<&crate::store::Snapshot>,
+        ) {
+            let code =
+                snapshot.unwrap().total_size() + key.term + key.region_id + key.idx + peer_id;
+            self.post_apply_count.fetch_add(1, Ordering::SeqCst);
+            self.post_apply_hash
+                .fetch_add(code as usize, Ordering::SeqCst);
+        }
+
+        fn should_pre_apply_snapshot(&self) -> bool {
+            true
+        }
+
+        fn cancel_apply_snapshot(&self, _: u64, _: u64) {
+            self.cancel_apply.fetch_add(1, Ordering::SeqCst);
+        }
     }
 }

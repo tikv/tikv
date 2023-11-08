@@ -1,15 +1,21 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::io::Error as IoError;
-use std::{error, result};
+use std::{error, io::Error as IoError, result};
 
 use engine_traits::Error as EngineTraitError;
-use kvproto::backup::Error as ErrorPb;
-use kvproto::errorpb::{Error as RegionError, ServerIsBusy};
-use kvproto::kvrpcpb::KeyError;
-use tikv::storage::kv::{Error as EngineError, ErrorInner as EngineErrorInner};
-use tikv::storage::mvcc::{Error as MvccError, ErrorInner as MvccErrorInner};
-use tikv::storage::txn::{Error as TxnError, ErrorInner as TxnErrorInner};
+use kvproto::{
+    brpb::Error as ErrorPb,
+    errorpb::{Error as RegionError, ServerIsBusy},
+    kvrpcpb::KeyError,
+};
+use thiserror::Error;
+use tikv::storage::{
+    kv::{Error as KvError, ErrorInner as EngineErrorInner},
+    mvcc::{Error as MvccError, ErrorInner as MvccErrorInner},
+    txn::{Error as TxnError, ErrorInner as TxnErrorInner},
+};
+use tikv_util::codec::Error as CodecError;
+use tokio::sync::AcquireError;
 
 use crate::metrics::*;
 
@@ -18,20 +24,20 @@ impl From<Error> for ErrorPb {
     fn from(e: Error) -> ErrorPb {
         let mut err = ErrorPb::default();
         match e {
-            Error::ClusterID { current, request } => {
+            Error::ClusterId { current, request } => {
                 BACKUP_RANGE_ERROR_VEC
                     .with_label_values(&["cluster_mismatch"])
                     .inc();
                 err.mut_cluster_id_error().set_current(current);
                 err.mut_cluster_id_error().set_request(request);
             }
-            Error::Engine(EngineError(box EngineErrorInner::Request(e)))
-            | Error::Txn(TxnError(box TxnErrorInner::Engine(EngineError(
+            Error::Kv(KvError(box EngineErrorInner::Request(e)))
+            | Error::Txn(TxnError(box TxnErrorInner::Engine(KvError(
                 box EngineErrorInner::Request(e),
             ))))
-            | Error::Txn(TxnError(box TxnErrorInner::Mvcc(MvccError(
-                box MvccErrorInner::Engine(EngineError(box EngineErrorInner::Request(e))),
-            )))) => {
+            | Error::Txn(TxnError(box TxnErrorInner::Mvcc(MvccError(box MvccErrorInner::Kv(
+                KvError(box EngineErrorInner::Request(e)),
+            ))))) => {
                 if e.has_not_leader() {
                     BACKUP_RANGE_ERROR_VEC
                         .with_label_values(&["not_leader"])
@@ -74,7 +80,7 @@ impl From<Error> for ErrorPb {
                 e.set_locked(info);
                 err.set_kv_error(e);
             }
-            timeout @ Error::Engine(EngineError(box EngineErrorInner::Timeout(_))) => {
+            timeout @ Error::Kv(KvError(box EngineErrorInner::Timeout(_))) => {
                 BACKUP_RANGE_ERROR_VEC.with_label_values(&["timeout"]).inc();
                 let mut busy = ServerIsBusy::default();
                 let reason = format!("{}", timeout);
@@ -94,24 +100,30 @@ impl From<Error> for ErrorPb {
 }
 
 /// The error type for backup.
-#[derive(Debug, Fail)]
+#[derive(Debug, Error)]
 pub enum Error {
-    #[fail(display = "Other error {}", _0)]
-    Other(Box<dyn error::Error + Sync + Send>),
-    #[fail(display = "RocksDB error {}", _0)]
+    #[error("Other error {0}")]
+    Other(#[from] Box<dyn error::Error + Sync + Send>),
+    #[error("RocksDB error {0}")]
     Rocks(String),
-    #[fail(display = "IO error {}", _0)]
-    Io(IoError),
-    #[fail(display = "Engine error {}", _0)]
-    Engine(EngineError),
-    #[fail(display = "Engine error {}", _0)]
-    EngineTrait(EngineTraitError),
-    #[fail(display = "Transaction error {}", _0)]
-    Txn(TxnError),
-    #[fail(display = "ClusterID error current {}, request {}", current, request)]
-    ClusterID { current: u64, request: u64 },
-    #[fail(display = "Invalid cf {}", cf)]
+    #[error("IO error {0}")]
+    Io(#[from] IoError),
+    #[error("Engine error {0}")]
+    Kv(#[from] KvError),
+    #[error("Engine error {0}")]
+    EngineTrait(#[from] EngineTraitError),
+    #[error("Transaction error {0}")]
+    Txn(#[from] TxnError),
+    #[error("ClusterId error current {current}, request {request}")]
+    ClusterId { current: u64, request: u64 },
+    #[error("Invalid cf {cf}")]
     InvalidCf { cf: String },
+    #[error("Failed to acquire the semaphore {0}")]
+    Semaphore(#[from] AcquireError),
+    #[error("Channel is closed")]
+    ChannelClosed,
+    #[error("Codec error {0}")]
+    Codec(#[from] CodecError),
 }
 
 macro_rules! impl_from {
@@ -127,12 +139,13 @@ macro_rules! impl_from {
 }
 
 impl_from! {
-    Box<dyn error::Error + Sync + Send> => Other,
     String => Rocks,
-    IoError => Io,
-    EngineError => Engine,
-    EngineTraitError => EngineTrait,
-    TxnError => Txn,
+}
+
+impl<T> From<async_channel::SendError<T>> for Error {
+    fn from(_: async_channel::SendError<T>) -> Self {
+        Self::ChannelClosed
+    }
 }
 
 pub type Result<T> = result::Result<T, Error>;

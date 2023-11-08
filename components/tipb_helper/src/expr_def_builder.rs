@@ -4,7 +4,8 @@ use codec::prelude::NumberEncoder;
 use tidb_query_datatype::{FieldTypeAccessor, FieldTypeFlag, FieldTypeTp};
 use tipb::{Expr, ExprType, FieldType, ScalarFuncSig};
 
-/// A helper utility to build `tipb::Expr` (a.k.a. expression definition) easily.
+/// A helper utility to build `tipb::Expr` (a.k.a. expression definition)
+/// easily.
 pub struct ExprDefBuilder(Expr);
 
 impl ExprDefBuilder {
@@ -79,6 +80,7 @@ impl ExprDefBuilder {
         Self(expr)
     }
 
+    #[must_use]
     pub fn push_child(mut self, child: impl Into<Expr>) -> Self {
         self.0.mut_children().push(child.into());
         self

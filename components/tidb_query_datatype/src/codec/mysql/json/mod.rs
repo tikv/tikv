@@ -54,7 +54,6 @@
 //!                             // lengths up to 127, 2 bytes to represent
 //!                             // lengths up to 16383, and so on...
 //! ```
-//!
 
 mod binary;
 mod comparison;
@@ -66,39 +65,48 @@ mod modifier;
 mod path_expr;
 mod serde;
 // json functions
+mod json_contains;
 mod json_depth;
 mod json_extract;
 mod json_keys;
 mod json_length;
+mod json_memberof;
 mod json_merge;
 mod json_modify;
 mod json_remove;
 mod json_type;
-mod json_unquote;
+pub mod json_unquote;
 
-pub use self::jcodec::{JsonDatumPayloadChunkEncoder, JsonDecoder, JsonEncoder};
-pub use self::json_modify::ModifyType;
-pub use self::path_expr::{parse_json_path_expr, PathExpression};
+use std::{
+    collections::BTreeMap,
+    convert::{TryFrom, TryInto},
+    str,
+};
 
-use std::collections::BTreeMap;
-use std::convert::TryFrom;
-use std::str;
-use tikv_util::is_even;
-
-use super::super::datum::Datum;
-use super::super::{Error, Result};
-use crate::codec::convert::ConvertTo;
-use crate::codec::data_type::{Decimal, Real};
-use crate::codec::mysql;
-use crate::codec::mysql::{Duration, Time, TimeType};
-use crate::expr::EvalContext;
 use codec::number::{NumberCodec, F64_SIZE, I64_SIZE};
 use constants::{JSON_LITERAL_FALSE, JSON_LITERAL_NIL, JSON_LITERAL_TRUE};
+use tikv_util::is_even;
+
+pub use self::{
+    jcodec::{JsonDatumPayloadChunkEncoder, JsonDecoder, JsonEncoder},
+    json_modify::ModifyType,
+    path_expr::{parse_json_path_expr, PathExpression},
+};
+use super::super::{datum::Datum, Error, Result};
+use crate::{
+    codec::{
+        convert::ConvertTo,
+        data_type::{BytesRef, Decimal, Real},
+        mysql::{Duration, Time, TimeType},
+    },
+    expr::EvalContext,
+    FieldTypeTp,
+};
 
 const ERR_CONVERT_FAILED: &str = "Can not covert from ";
 
-/// The types of `Json` which follows https://tools.ietf.org/html/rfc7159#section-3
-#[derive(Eq, PartialEq, FromPrimitive, Clone, Debug, Copy)]
+/// The types of `Json` which follows <https://tools.ietf.org/html/rfc7159#section-3>
+#[derive(PartialEq, FromPrimitive, Clone, Debug, Copy)]
 pub enum JsonType {
     Object = 0x01,
     Array = 0x03,
@@ -107,6 +115,14 @@ pub enum JsonType {
     U64 = 0x0a,
     Double = 0x0b,
     String = 0x0c,
+
+    // It's a special value for the compatibility with MySQL.
+    // It will store the raw buffer containing unexpected type (e.g. Binary).
+    Opaque = 0x0d,
+    Date = 0x0e,
+    Datetime = 0x0f,
+    Timestamp = 0x10,
+    Time = 0x11,
 }
 
 impl TryFrom<u8> for JsonType {
@@ -145,7 +161,7 @@ impl<'a> JsonRef<'a> {
 
     /// Returns the underlying value slice
     pub fn value(&self) -> &'a [u8] {
-        &self.value
+        self.value
     }
 
     // Returns the JSON value as u64
@@ -204,24 +220,76 @@ impl<'a> JsonRef<'a> {
         Ok(str::from_utf8(self.get_str_bytes()?)?)
     }
 
+    // Returns the opaque value in bytes
+    pub(crate) fn get_opaque_bytes(&self) -> Result<&'a [u8]> {
+        assert_eq!(self.type_code, JsonType::Opaque);
+        let val = self.value();
+        let (str_len, len_len) = NumberCodec::try_decode_var_u64(&val[1..])?;
+        Ok(&val[(len_len + 1)..len_len + 1 + str_len as usize])
+    }
+
+    pub(crate) fn get_opaque_type(&self) -> Result<FieldTypeTp> {
+        assert_eq!(self.type_code, JsonType::Opaque);
+        let val = self.value();
+        FieldTypeTp::from_u8(val[0]).ok_or(box_err!("invalid opaque type code"))
+    }
+
+    pub fn get_time(&self) -> Result<Time> {
+        assert!(
+            self.type_code == JsonType::Date
+                || self.type_code == JsonType::Datetime
+                || self.type_code == JsonType::Timestamp
+        );
+        let mut val = self.value();
+        val.read_time_from_chunk()
+    }
+
+    pub fn get_duration(&self) -> Result<Duration> {
+        assert_eq!(self.type_code, JsonType::Time);
+        let val = self.value();
+
+        let nanos = NumberCodec::decode_i64_le(val);
+        let fsp = NumberCodec::decode_u32_le(&val[8..])
+            .try_into()
+            .map_err(|_| -> Error { box_err!("invalid fsp") })?;
+        Duration::from_nanos(nanos, fsp)
+    }
+
     // Return whether the value is zero.
     // https://dev.mysql.com/doc/refman/8.0/en/json.html#Converting%20between%20JSON%20and%20non-JSON%20values
     pub(crate) fn is_zero(&self) -> bool {
-        match self.get_type() {
-            JsonType::Object => false,
-            JsonType::Array => false,
-            JsonType::Literal => false,
-            JsonType::I64 => self.get_i64() == 0,
-            JsonType::U64 => self.get_u64() == 0,
-            JsonType::Double => self.get_double() == 0f64,
-            JsonType::String => false,
-        }
+        // This behavior is different on MySQL 5.7 and 8.0
+        //
+        // In MySQL 5.7, most of these non-integer values are 0, and return a warning:
+        // "Invalid JSON value for CAST to INTEGER from column j"
+        //
+        // In MySQL 8, most of these non-integer values are not zero, with a warning:
+        // > "Evaluating a JSON value in SQL boolean context does an implicit comparison
+        // > against JSON integer 0; if this is not what you want, consider converting
+        // > JSON to a SQL numeric type with JSON_VALUE RETURNING"
+        //
+        // TODO: return a warning as MySQL 8 does
+
+        self == &Json::from_u64(0).unwrap().as_ref()
+    }
+
+    // Returns whether the two JsonRef references to the same
+    // json object.
+    //
+    // As the JsonRef exists and holds the reference to the Json
+    // , the `Vec` inside the Json cannot be changed, so comparing
+    // the pointer is enough to represent the reference equality.
+    //
+    // PartialEq and PartialCmp have been implemented for JsonRef
+    // to compare the value.
+    pub(crate) fn ref_eq(&self, other: &JsonRef<'a>) -> bool {
+        std::ptr::eq(self.value, other.value)
     }
 }
 
 /// Json implements type json used in tikv by Binary Json.
 /// The Binary Json format from `MySQL` 5.7 is in the following link:
-/// (https://github.com/mysql/mysql-server/blob/5.7/sql/json_binary.h#L52)
+/// (<https://github.com/mysql/mysql-server/blob/5.7/sql/json_binary.h#L52>)
 /// The only difference is that we use large `object` or large `array` for
 /// the small corresponding ones. That means in our implementation there
 /// is no difference between small `object` and big `object`, so does `array`.
@@ -234,8 +302,12 @@ pub struct Json {
 
 use std::fmt::{Display, Formatter};
 
+use codec::prelude::NumberEncoder;
+
+use crate::codec::mysql::{TimeDecoder, TimeEncoder};
+
 impl Display for Json {
-    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         let s = serde_json::to_string(&self.as_ref()).unwrap();
         write!(f, "{}", s)
     }
@@ -267,6 +339,12 @@ impl Json {
         let mut value = vec![];
         value.write_json_str(s)?;
         Ok(Self::new(JsonType::String, value))
+    }
+
+    pub fn from_opaque(typ: FieldTypeTp, bytes: BytesRef<'_>) -> Result<Self> {
+        let mut value = vec![];
+        value.write_json_opaque(typ, bytes)?;
+        Ok(Self::new(JsonType::Opaque, value))
     }
 
     /// Creates a `literal` JSON from a `bool`
@@ -316,7 +394,7 @@ impl Json {
     }
 
     /// Creates a `object` JSON from key-value pairs
-    pub fn from_kv_pairs(entries: Vec<(&[u8], JsonRef)>) -> Result<Self> {
+    pub fn from_kv_pairs(entries: Vec<(&[u8], JsonRef<'_>)>) -> Result<Self> {
         let mut value = vec![];
         value.write_json_obj_from_keys_values(entries)?;
         Ok(Self::new(JsonType::Object, value))
@@ -328,6 +406,26 @@ impl Json {
         // TODO(fullstop000): use write_json_obj_from_keys_values instead
         value.write_json_obj(&map)?;
         Ok(Self::new(JsonType::Object, value))
+    }
+
+    /// Creates a date/datetime/timestamp JSON from Time
+    pub fn from_time(time: Time) -> Result<Self> {
+        let json_type = match time.get_time_type() {
+            TimeType::Date => JsonType::Date,
+            TimeType::DateTime => JsonType::Datetime,
+            TimeType::Timestamp => JsonType::Timestamp,
+        };
+        let mut value = vec![];
+        value.write_time(time)?;
+        Ok(Self::new(json_type, value))
+    }
+
+    /// Creates a time JSON from duration
+    pub fn from_duration(duration: Duration) -> Result<Self> {
+        let mut value = vec![];
+        value.write_i64_le(duration.to_nanos())?;
+        value.write_u32_le(duration.fsp() as u32)?;
+        Ok(Self::new(JsonType::Time, value))
     }
 
     /// Creates a `null` JSON
@@ -347,7 +445,7 @@ impl Json {
 }
 
 /// Create JSON array by given elements
-/// https://dev.mysql.com/doc/refman/5.7/en/json-creation-functions.html#function_json-array
+/// <https://dev.mysql.com/doc/refman/5.7/en/json-creation-functions.html#function_json-array>
 pub fn json_array(elems: Vec<Datum>) -> Result<Json> {
     let mut a = Vec::with_capacity(elems.len());
     for elem in elems {
@@ -357,7 +455,7 @@ pub fn json_array(elems: Vec<Datum>) -> Result<Json> {
 }
 
 /// Create JSON object by given key-value pairs
-/// https://dev.mysql.com/doc/refman/5.7/en/json-creation-functions.html#function_json-object
+/// <https://dev.mysql.com/doc/refman/5.7/en/json-creation-functions.html#function_json-object>
 pub fn json_object(kvs: Vec<Datum>) -> Result<Json> {
     let len = kvs.len();
     if !is_even(len) {
@@ -399,9 +497,6 @@ impl<'a> ConvertTo<f64> for JsonRef<'a> {
     #[inline]
     fn convert(&self, ctx: &mut EvalContext) -> Result<f64> {
         let d = match self.get_type() {
-            JsonType::Array | JsonType::Object => ctx
-                .handle_truncate_err(Error::truncated_wrong_val("Float", self.to_string()))
-                .map(|_| 0f64)?,
             JsonType::U64 => self.get_u64() as f64,
             JsonType::I64 => self.get_i64() as f64,
             JsonType::Double => self.get_double(),
@@ -409,6 +504,9 @@ impl<'a> ConvertTo<f64> for JsonRef<'a> {
                 .get_literal()
                 .map_or(0f64, |x| if x { 1f64 } else { 0f64 }),
             JsonType::String => self.get_str_bytes()?.convert(ctx)?,
+            _ => ctx
+                .handle_truncate_err(Error::truncated_wrong_val("Float", self.to_string()))
+                .map(|_| 0f64)?,
         };
         Ok(d)
     }
@@ -429,7 +527,8 @@ impl ConvertTo<Json> for i64 {
 impl ConvertTo<Json> for f64 {
     #[inline]
     fn convert(&self, _: &mut EvalContext) -> Result<Json> {
-        // FIXME: `select json_type(cast(1111.11 as json))` should return `DECIMAL`, we return `DOUBLE` now.
+        // FIXME: `select json_type(cast(1111.11 as json))` should return `DECIMAL`, we
+        // return `DOUBLE` now.
         let mut value = vec![0; F64_SIZE];
         NumberCodec::encode_f64_le(&mut value, *self);
         Ok(Json {
@@ -442,7 +541,8 @@ impl ConvertTo<Json> for f64 {
 impl ConvertTo<Json> for Real {
     #[inline]
     fn convert(&self, _: &mut EvalContext) -> Result<Json> {
-        // FIXME: `select json_type(cast(1111.11 as json))` should return `DECIMAL`, we return `DOUBLE` now.
+        // FIXME: `select json_type(cast(1111.11 as json))` should return `DECIMAL`, we
+        // return `DOUBLE` now.
         let mut value = vec![0; F64_SIZE];
         NumberCodec::encode_f64_le(&mut value, self.into_inner());
         Ok(Json {
@@ -455,7 +555,8 @@ impl ConvertTo<Json> for Real {
 impl ConvertTo<Json> for Decimal {
     #[inline]
     fn convert(&self, ctx: &mut EvalContext) -> Result<Json> {
-        // FIXME: `select json_type(cast(1111.11 as json))` should return `DECIMAL`, we return `DOUBLE` now.
+        // FIXME: `select json_type(cast(1111.11 as json))` should return `DECIMAL`, we
+        // return `DOUBLE` now.
         let val: f64 = self.convert(ctx)?;
         val.convert(ctx)
     }
@@ -463,26 +564,19 @@ impl ConvertTo<Json> for Decimal {
 
 impl ConvertTo<Json> for Time {
     #[inline]
-    fn convert(&self, ctx: &mut EvalContext) -> Result<Json> {
-        let tp = self.get_time_type();
-        let s = if tp == TimeType::DateTime || tp == TimeType::Timestamp {
-            self.round_frac(ctx, mysql::MAX_FSP)?
-        } else {
-            *self
-        };
-        Json::from_string(s.to_string())
+    fn convert(&self, _: &mut EvalContext) -> Result<Json> {
+        Json::from_time(*self)
     }
 }
 
 impl ConvertTo<Json> for Duration {
     #[inline]
     fn convert(&self, _: &mut EvalContext) -> Result<Json> {
-        let d = self.maximize_fsp();
-        Json::from_string(d.to_string())
+        Json::from_duration(*self)
     }
 }
 
-impl crate::codec::data_type::AsMySQLBool for Json {
+impl crate::codec::data_type::AsMySqlBool for Json {
     #[inline]
     fn as_mysql_bool(&self, _context: &mut crate::expr::EvalContext) -> crate::codec::Result<bool> {
         // TODO: This logic is not correct. See pingcap/tidb#9593
@@ -492,12 +586,13 @@ impl crate::codec::data_type::AsMySQLBool for Json {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     use std::sync::Arc;
 
-    use crate::codec::error::ERR_TRUNCATE_WRONG_VALUE;
-    use crate::expr::{EvalConfig, EvalContext};
+    use super::*;
+    use crate::{
+        codec::error::ERR_TRUNCATE_WRONG_VALUE,
+        expr::{EvalConfig, EvalContext},
+    };
 
     #[test]
     fn test_json_array() {
@@ -530,7 +625,7 @@ mod tests {
             ],
         ];
         for d in cases {
-            assert!(json_object(d).is_err());
+            json_object(d).unwrap_err();
         }
 
         let cases = vec![
@@ -571,7 +666,7 @@ mod tests {
             let json: Json = jstr.parse().unwrap();
             let get: f64 = json.convert(&mut ctx).unwrap();
             assert!(
-                (get - exp).abs() < std::f64::EPSILON,
+                (get - exp).abs() < f64::EPSILON,
                 "json.as_f64 get: {}, exp: {}",
                 get,
                 exp
@@ -585,7 +680,8 @@ mod tests {
             ("{}", ERR_TRUNCATE_WRONG_VALUE),
             ("[]", ERR_TRUNCATE_WRONG_VALUE),
         ];
-        // avoid to use EvalConfig::default_for_test() that set Flag::IGNORE_TRUNCATE as true
+        // avoid to use EvalConfig::default_for_test() that set Flag::IGNORE_TRUNCATE as
+        // true
         let mut ctx = EvalContext::new(Arc::new(EvalConfig::new()));
         for (jstr, exp) in test_cases {
             let json: Json = jstr.parse().unwrap();

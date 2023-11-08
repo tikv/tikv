@@ -1,26 +1,37 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use super::*;
-
 use std::collections::BTreeMap;
 
-use kvproto::kvrpcpb::{Context, IsolationLevel};
-
 use collections::HashMap;
-use test_storage::{SyncTestStorage, SyncTestStorageBuilder};
-use tidb_query_datatype::codec::{datum, table, Datum};
-use tidb_query_datatype::expr::EvalContext;
-use tikv::storage::{
-    kv::{Engine, RocksEngine, TestEngineBuilder},
-    txn::FixtureStore,
-    SnapshotStore,
+use kvproto::kvrpcpb::{Context, IsolationLevel};
+use test_storage::SyncTestStorageApiV1;
+use tidb_query_datatype::{
+    codec::{
+        data_type::ScalarValue,
+        datum,
+        row::v2::encoder_for_test::{Column as ColumnV2, RowEncoder},
+        table, Datum,
+    },
+    expr::EvalContext,
+};
+use tikv::{
+    server::gc_worker::GcConfig,
+    storage::{
+        kv::{Engine, RocksEngine},
+        lock_manager::MockLockManager,
+        txn::FixtureStore,
+        SnapshotStore, StorageApiV1, TestStorageBuilderApiV1,
+    },
 };
 use txn_types::{Key, Mutation, TimeStamp};
+
+use super::*;
 
 pub struct Insert<'a, E: Engine> {
     store: &'a mut Store<E>,
     table: &'a Table,
     values: BTreeMap<i64, Datum>,
+    values_v2: BTreeMap<i64, ScalarValue>,
 }
 
 impl<'a, E: Engine> Insert<'a, E> {
@@ -29,17 +40,35 @@ impl<'a, E: Engine> Insert<'a, E> {
             store,
             table,
             values: BTreeMap::new(),
+            values_v2: BTreeMap::new(),
         }
     }
 
+    #[must_use]
     pub fn set(mut self, col: &Column, value: Datum) -> Self {
         assert!(self.table.column_by_id(col.id).is_some());
         self.values.insert(col.id, value);
         self
     }
 
+    pub fn set_v2(mut self, col: &Column, value: ScalarValue) -> Self {
+        assert!(self.table.column_by_id(col.id).is_some());
+        self.values_v2.insert(col.id, value);
+        self
+    }
+
     pub fn execute(self) -> i64 {
         self.execute_with_ctx(Context::default())
+    }
+
+    fn prepare_index_kv(&self, handle: &Datum, buf: &mut Vec<(Vec<u8>, Vec<u8>)>) {
+        for (&id, idxs) in &self.table.idxs {
+            let mut v: Vec<_> = idxs.iter().map(|id| self.values[id].clone()).collect();
+            v.push(handle.clone());
+            let encoded = datum::encode_key(&mut EvalContext::default(), &v).unwrap();
+            let idx_key = table::encode_index_seek_key(self.table.id, id, &encoded);
+            buf.push((idx_key, vec![0]));
+        }
     }
 
     pub fn execute_with_ctx(self, ctx: Context) -> i64 {
@@ -53,13 +82,44 @@ impl<'a, E: Engine> Insert<'a, E> {
         let values: Vec<_> = self.values.values().cloned().collect();
         let value = table::encode_row(&mut EvalContext::default(), values, &ids).unwrap();
         let mut kvs = vec![(key, value)];
-        for (&id, idxs) in &self.table.idxs {
-            let mut v: Vec<_> = idxs.iter().map(|id| self.values[id].clone()).collect();
-            v.push(handle.clone());
-            let encoded = datum::encode_key(&mut EvalContext::default(), &v).unwrap();
-            let idx_key = table::encode_index_seek_key(self.table.id, id, &encoded);
-            kvs.push((idx_key, vec![0]));
+        self.prepare_index_kv(&handle, &mut kvs);
+        self.store.put(ctx, kvs);
+        handle.i64()
+    }
+
+    pub fn execute_with_v2_checksum(
+        self,
+        ctx: Context,
+        with_checksum: bool,
+        extra_checksum: Option<u32>,
+    ) -> i64 {
+        let handle = self
+            .values
+            .get(&self.table.handle_id)
+            .cloned()
+            .unwrap_or_else(|| Datum::I64(next_id()));
+        let key = table::encode_row_key(self.table.id, handle.i64());
+        let mut columns: Vec<ColumnV2> = Vec::new();
+        for (id, value) in self.values_v2.iter() {
+            let col_info = self.table.column_by_id(*id).unwrap();
+            columns.push(ColumnV2::new_with_ft(
+                *id,
+                col_info.as_field_type(),
+                value.to_owned(),
+            ));
         }
+        let mut val_buf = Vec::new();
+        if with_checksum {
+            val_buf
+                .write_row_with_checksum(&mut EvalContext::default(), columns, extra_checksum)
+                .unwrap();
+        } else {
+            val_buf
+                .write_row(&mut EvalContext::default(), columns)
+                .unwrap();
+        }
+        let mut kvs = vec![(key, val_buf)];
+        self.prepare_index_kv(&handle, &mut kvs);
         self.store.put(ctx, kvs);
         handle.i64()
     }
@@ -102,7 +162,7 @@ impl<'a, E: Engine> Delete<'a, E> {
 
 /// A store that operates over MVCC and support transactions.
 pub struct Store<E: Engine> {
-    store: SyncTestStorage<E>,
+    store: SyncTestStorageApiV1<E>,
     current_ts: TimeStamp,
     last_committed_ts: TimeStamp,
     handles: Vec<Vec<u8>>,
@@ -110,18 +170,31 @@ pub struct Store<E: Engine> {
 
 impl Store<RocksEngine> {
     pub fn new() -> Self {
-        Self::from_engine(TestEngineBuilder::new().build().unwrap())
+        let storage = TestStorageBuilderApiV1::new(MockLockManager::new())
+            .build()
+            .unwrap();
+        Self::from_storage(storage)
+    }
+}
+
+impl Default for Store<RocksEngine> {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
 impl<E: Engine> Store<E> {
-    pub fn from_engine(engine: E) -> Self {
+    pub fn from_storage(storage: StorageApiV1<E, MockLockManager>) -> Self {
         Self {
-            store: SyncTestStorageBuilder::from_engine(engine).build().unwrap(),
+            store: SyncTestStorageApiV1::from_storage(0, storage, GcConfig::default()).unwrap(),
             current_ts: 1.into(),
             last_committed_ts: TimeStamp::zero(),
             handles: vec![],
         }
+    }
+
+    pub fn current_ts(&self) -> TimeStamp {
+        self.current_ts
     }
 
     pub fn begin(&mut self) {
@@ -134,7 +207,7 @@ impl<E: Engine> Store<E> {
         let pk = kv[0].0.clone();
         let kv = kv
             .drain(..)
-            .map(|(k, v)| Mutation::Put((Key::from_raw(&k), v)))
+            .map(|(k, v)| Mutation::make_put(Key::from_raw(&k), v))
             .collect();
         self.store.prewrite(ctx, kv, pk, self.current_ts).unwrap();
     }
@@ -148,7 +221,7 @@ impl<E: Engine> Store<E> {
         let pk = keys[0].clone();
         let mutations = keys
             .drain(..)
-            .map(|k| Mutation::Delete(Key::from_raw(&k)))
+            .map(|k| Mutation::make_delete(Key::from_raw(&k)))
             .collect();
         self.store
             .prewrite(ctx, mutations, pk, self.current_ts)
@@ -176,6 +249,10 @@ impl<E: Engine> Store<E> {
 
     pub fn get_engine(&self) -> E {
         self.store.get_engine()
+    }
+
+    pub fn get_storage(&self) -> SyncTestStorageApiV1<E> {
+        self.store.clone()
     }
 
     /// Strip off committed MVCC information to get a final data view.
@@ -207,6 +284,7 @@ impl<E: Engine> Store<E> {
             self.last_committed_ts,
             IsolationLevel::Si,
             true,
+            Default::default(),
             Default::default(),
             false,
         )

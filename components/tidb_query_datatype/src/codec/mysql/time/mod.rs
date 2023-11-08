@@ -4,27 +4,30 @@ pub mod extension;
 mod tz;
 pub mod weekmode;
 
-pub use self::extension::*;
-pub use self::tz::Tz;
-pub use self::weekmode::WeekMode;
-
-use std::cmp::Ordering;
-use std::convert::{TryFrom, TryInto};
-use std::fmt::Write;
-use std::hash::{Hash, Hasher};
+use std::{
+    cmp::Ordering,
+    convert::{TryFrom, TryInto},
+    fmt::Write,
+    hash::{Hash, Hasher},
+};
 
 use bitfield::bitfield;
 use boolinator::Boolinator;
 use chrono::prelude::*;
-
-use crate::{FieldTypeAccessor, FieldTypeTp};
 use codec::prelude::*;
 use tipb::FieldType;
 
-use crate::codec::convert::ConvertTo;
-use crate::codec::mysql::{check_fsp, Decimal, Duration};
-use crate::codec::{Error, Result, TEN_POW};
-use crate::expr::{EvalContext, Flag, SqlMode};
+pub use self::{extension::*, tz::Tz, weekmode::WeekMode};
+use crate::{
+    codec::{
+        convert::ConvertTo,
+        data_type::Real,
+        mysql::{check_fsp, Decimal, Duration},
+        Error, Result, TEN_POW,
+    },
+    expr::{EvalContext, Flag, SqlMode},
+    FieldTypeAccessor, FieldTypeTp,
+};
 
 const MIN_TIMESTAMP: i64 = 0;
 pub const MAX_TIMESTAMP: i64 = (1 << 31) - 1;
@@ -71,13 +74,13 @@ fn last_day_of_month(year: u32, month: u32) -> u32 {
 /// assert_eq!([2019, 12, 2, 0, 0, 0, 0], parts);
 /// ```
 /// When year, month or day is zero, there can not have a carry.
-/// e.g.: `"1998-11-00 23:59:59.999" (fsp = 2, round = true)`, in `hms` it contains a carry,
-/// however, the `day` is 0, which is invalid in `MySQL`. When thoese cases encountered, return
-/// None.
+/// e.g.: `"1998-11-00 23:59:59.999" (fsp = 2, round = true)`, in `hms` it
+/// contains a carry, however, the `day` is 0, which is invalid in `MySQL`. When
+/// thoese cases encountered, return None.
 fn round_components(parts: &mut [u32]) -> Option<()> {
     debug_assert_eq!(parts.len(), 7);
     let modulus = [
-        std::u32::MAX,
+        u32::MAX,
         12,
         last_day_of_month(parts[0], parts[1]),
         // hms[.fraction]
@@ -100,6 +103,7 @@ fn round_components(parts: &mut [u32]) -> Option<()> {
 }
 
 #[inline]
+#[allow(clippy::too_many_arguments)]
 fn chrono_datetime<T: TimeZone>(
     time_zone: &T,
     year: u32,
@@ -110,9 +114,10 @@ fn chrono_datetime<T: TimeZone>(
     second: u32,
     micro: u32,
 ) -> Result<DateTime<T>> {
-    // NOTE: We are not using `tz::from_ymd_opt` as suggested in chrono's README due to
-    // chronotope/chrono-tz #23.
-    // As a workaround, we first build a NaiveDate, then attach time zone information to it.
+    // NOTE: We are not using `tz::from_ymd_opt` as suggested in chrono's README due
+    // to chronotope/chrono-tz #23.
+    // As a workaround, we first build a NaiveDate, then attach time zone
+    // information to it.
     NaiveDate::from_ymd_opt(year as i32, month, day)
         .and_then(|date| date.and_hms_opt(hour, minute, second))
         .and_then(|t| t.checked_add_signed(chrono::Duration::microseconds(i64::from(micro))))
@@ -310,7 +315,7 @@ mod parser {
         let end = input
             .iter()
             .position(|&c| !c.is_ascii_digit())
-            .unwrap_or_else(|| input.len());
+            .unwrap_or(input.len());
         (end != 0).as_option()?;
         Some((&input[end..], &input[..end]))
     }
@@ -341,7 +346,8 @@ mod parser {
     /// ```ignore
     ///  split_components_with_tz(b"2020-12-24T15:37:50+0800")?.1 == Some(480*60)
     /// ```
-    /// the second value if not None indicates the offset in seconds of the timezone parsed
+    /// the second value if not None indicates the offset in seconds of the
+    /// timezone parsed
     fn split_components_with_tz(input: &str) -> Option<(Vec<&[u8]>, Option<i32>)> {
         let mut buffer = input.as_bytes();
 
@@ -486,7 +492,7 @@ mod parser {
         }
         // the following statement checks fsp
         ((components.len() != 7 && components.len() != 2)
-            || input.as_bytes()[input.len() - components.last().unwrap().len() - 1] == b'.')
+            || (separators.len() >= components.len() - 1 /* should always true */ && separators[components.len() - 2] == b"."))
             .as_option()?;
 
         Some((components, if has_tz { Some(tz_offset) } else { None }))
@@ -505,8 +511,9 @@ mod parser {
         }
     }
 
-    /// Try to parse a datetime string `input` without fractional part and separators.
-    /// return an array that stores `[year, month, day, hour, minute, second, 0]`
+    /// Try to parse a datetime string `input` without fractional part and
+    /// separators. return an array that stores `[year, month, day, hour,
+    /// minute, second, 0]`
     fn parse_whole(input: &[u8]) -> Option<[u32; 7]> {
         let mut parts = [0u32; 7];
 
@@ -532,8 +539,8 @@ mod parser {
         Some(parts)
     }
 
-    /// Try to parse a fractional part from `input` with `fsp`, round the result if `round` is
-    /// true.
+    /// Try to parse a fractional part from `input` with `fsp`, round the result
+    /// if `round` is true.
     /// NOTE: This function assumes that `fsp` is in range: [0, 6].
     fn parse_frac(input: &[u8], fsp: u8, round: bool) -> Option<(bool, u32)> {
         debug_assert!(fsp < 7);
@@ -565,8 +572,8 @@ mod parser {
         let trimmed = input.trim();
         (!trimmed.is_empty()).as_option()?;
 
-        // to support ISO8601 and MySQL's time zone support, we further parse the following formats
-        // 2020-12-17T11:55:55Z
+        // to support ISO8601 and MySQL's time zone support, we further parse the
+        // following formats 2020-12-17T11:55:55Z
         // 2020-12-17T11:55:55+0800
         // 2020-12-17T11:55:55-08
         // 2020-12-17T11:55:55+02:00
@@ -650,15 +657,14 @@ mod parser {
         }
     }
 
-    pub fn parse_from_decimal(
+    pub fn parse_from_float_string(
         ctx: &mut EvalContext,
-        input: &Decimal,
+        input: String,
         time_type: TimeType,
         fsp: u8,
         round: bool,
     ) -> Option<Time> {
-        let decimal_as_string = input.to_string();
-        let (components, _) = split_components_with_tz(decimal_as_string.as_str())?;
+        let (components, _) = split_components_with_tz(input.as_str())?;
         match components.len() {
             1 | 2 => {
                 let result: i64 = components[0].convert(ctx).ok()?;
@@ -719,7 +725,7 @@ mod parser {
             991_232..=99_991_231 => input * 1_000_000,
             101_000_000..=691_231_235_959 => input + 20_000_000_000_000,
             700_101_000_000..=991_231_235_959 => input + 19_000_000_000_000,
-            1_000_000_000_000..=std::i64::MAX => input,
+            1_000_000_000_000..=i64::MAX => input,
             _ => return None,
         };
 
@@ -773,7 +779,18 @@ impl Time {
         fsp: i8,
         round: bool,
     ) -> Result<Time> {
-        parser::parse_from_decimal(ctx, input, time_type, check_fsp(fsp)?, round)
+        parser::parse_from_float_string(ctx, input.to_string(), time_type, check_fsp(fsp)?, round)
+            .ok_or_else(|| Error::incorrect_datetime_value(input))
+    }
+
+    pub fn parse_from_real(
+        ctx: &mut EvalContext,
+        input: &Real,
+        time_type: TimeType,
+        fsp: i8,
+        round: bool,
+    ) -> Result<Time> {
+        parser::parse_from_float_string(ctx, input.to_string(), time_type, check_fsp(fsp)?, round)
             .ok_or_else(|| Error::incorrect_datetime_value(input))
     }
 }
@@ -832,8 +849,8 @@ fn handle_invalid_date(ctx: &mut EvalContext, mut args: TimeArgs) -> Result<Opti
 /// NOTE: It's inappropriate to construct `Time` first and then verify it.
 /// Because `Time` uses `bitfield`, the range of each field is quite narrow.
 /// For example, the size of `month` field is 5 bits. If we get a value 16 for
-/// `month` and set it, we will got 0 (16 % 16 == 0) instead 16 which is definitely
-/// an invalid value. So we need a larger range for validation.
+/// `month` and set it, we will got 0 (16 % 16 == 0) instead 16 which is
+/// definitely an invalid value. So we need a larger range for validation.
 #[derive(Debug, Clone)]
 pub struct TimeArgs {
     year: u32,
@@ -1342,6 +1359,13 @@ impl Time {
         Time::try_from_chrono_datetime(ctx, time, time_type, duration.fsp() as i8)
     }
 
+    pub fn from_local_time(ctx: &mut EvalContext, time_type: TimeType, fsp: i8) -> Result<Time> {
+        let fsp = check_fsp(fsp)?;
+        let utc = Local::now();
+        let timestamp = ctx.cfg.tz.from_utc_datetime(&utc.naive_utc());
+        Time::try_from_chrono_datetime(ctx, timestamp.naive_local(), time_type, fsp as i8)
+    }
+
     pub fn from_year(
         ctx: &mut EvalContext,
         year: u32,
@@ -1684,14 +1708,14 @@ impl Time {
     #[inline]
     pub fn to_numeric_string(self) -> String {
         let mut buffer = String::with_capacity(15);
-        write!(&mut buffer, "{}", self.date_format("%Y%m%d").unwrap()).unwrap();
+        write!(buffer, "{}", self.date_format("%Y%m%d").unwrap()).unwrap();
         if self.get_time_type() != TimeType::Date {
-            write!(&mut buffer, "{}", self.date_format("%H%i%S").unwrap()).unwrap();
+            write!(buffer, "{}", self.date_format("%H%i%S").unwrap()).unwrap();
         }
         let fsp = usize::from(self.fsp());
         if fsp > 0 {
             write!(
-                &mut buffer,
+                buffer,
                 ".{:0width$}",
                 self.micro() / TEN_POW[MICRO_WIDTH - fsp],
                 width = fsp
@@ -1790,8 +1814,8 @@ impl ConvertTo<Duration> for Time {
             return Ok(Duration::zero());
         }
         let seconds = i64::from(self.hour() * 3600 + self.minute() * 60 + self.second());
-        // `microsecond` returns the number of microseconds since the whole non-leap second.
-        // Such as for 2019-09-22 07:21:22.670936103 UTC,
+        // `microsecond` returns the number of microseconds since the whole non-leap
+        // second. Such as for 2019-09-22 07:21:22.670936103 UTC,
         // it will return 670936103.
         let microsecond = i64::from(self.micro());
         Duration::from_micros(seconds * 1_000_000 + microsecond, self.fsp() as i8)
@@ -1948,7 +1972,7 @@ pub trait TimeDecoder: NumberDecoder {
 
 impl<T: BufferReader> TimeDecoder for T {}
 
-impl crate::codec::data_type::AsMySQLBool for Time {
+impl crate::codec::data_type::AsMySqlBool for Time {
     #[inline]
     fn as_mysql_bool(&self, _context: &mut crate::expr::EvalContext) -> crate::codec::Result<bool> {
         Ok(!self.is_zero())
@@ -1957,13 +1981,15 @@ impl crate::codec::data_type::AsMySQLBool for Time {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::codec::mysql::{MAX_FSP, UNSPECIFIED_FSP};
-    use crate::expr::EvalConfig;
-
     use std::sync::Arc;
 
-    #[derive(Debug)]
+    use super::*;
+    use crate::{
+        codec::mysql::{MAX_FSP, UNSPECIFIED_FSP},
+        expr::EvalConfig,
+    };
+
+    #[derive(Debug, Default)]
     struct TimeEnv {
         strict_mode: bool,
         no_zero_in_date: bool,
@@ -1971,19 +1997,6 @@ mod tests {
         allow_invalid_date: bool,
         ignore_truncate: bool,
         time_zone: Option<Tz>,
-    }
-
-    impl Default for TimeEnv {
-        fn default() -> TimeEnv {
-            TimeEnv {
-                strict_mode: false,
-                no_zero_in_date: false,
-                no_zero_date: false,
-                allow_invalid_date: false,
-                ignore_truncate: false,
-                time_zone: None,
-            }
-        }
     }
 
     impl From<TimeEnv> for EvalContext {
@@ -2042,7 +2055,44 @@ mod tests {
 
         let should_fail = vec![-1111, 1, 100, 700_100, 100_000_000, 100_000_101_000_000];
         for case in should_fail {
-            assert!(Time::parse_from_i64(&mut ctx, case, TimeType::DateTime, 0).is_err());
+            Time::parse_from_i64(&mut ctx, case, TimeType::DateTime, 0).unwrap_err();
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_parse_from_real() -> Result<()> {
+        let cases = vec![
+            ("2000-03-05 00:00:00", "305", 0),
+            ("2000-12-03 00:00:00", "1203", 0),
+            ("2003-12-05 00:00:00.0", "31205", 1),
+            ("2007-01-18 00:00:00.00", "070118", 2),
+            ("0101-12-09 00:00:00.000", "1011209.333", 3),
+            ("2017-01-18 00:00:00.0000", "20170118.123", 4),
+            ("2012-12-31 11:30:45.12335", "121231113045.123345", 5),
+            ("2012-12-31 11:30:45.125000", "20121231113045.123345", 6),
+            ("2012-12-31 11:30:46.00000", "121231113045.9999999", 5),
+            ("2017-01-05 08:40:59.5756", "170105084059.575601", 4),
+        ];
+        let mut ctx = EvalContext::default();
+        for (expected, input, fsp) in cases {
+            let input: Real = input.parse().unwrap();
+            let actual_real =
+                Time::parse_from_real(&mut ctx, &input, TimeType::DateTime, fsp, true)?;
+            assert_eq!(actual_real.to_string(), expected);
+        }
+
+        let should_fail = vec![
+            "201705051315111.22",
+            "2011110859.1111",
+            "2011110859.1111",
+            "191203081.1111",
+            "43128.121105",
+        ];
+
+        for case in should_fail {
+            let case: Real = case.parse().unwrap();
+            Time::parse_from_real(&mut ctx, &case, TimeType::DateTime, 0, true).unwrap_err();
         }
         Ok(())
     }
@@ -2077,9 +2127,7 @@ mod tests {
         ];
         for case in should_fail {
             let case: Decimal = case.parse().unwrap();
-            assert!(
-                Time::parse_from_decimal(&mut ctx, &case, TimeType::DateTime, 0, true).is_err()
-            );
+            Time::parse_from_decimal(&mut ctx, &case, TimeType::DateTime, 0, true).unwrap_err();
         }
         Ok(())
     }
@@ -2153,7 +2201,7 @@ mod tests {
         ];
 
         for case in should_fail {
-            assert!(Time::parse_date(&mut ctx, case).is_err());
+            Time::parse_date(&mut ctx, case).unwrap_err();
         }
         Ok(())
     }
@@ -2238,6 +2286,25 @@ mod tests {
             ("2020-12-23 07:59:23", "2020-12-23 15:59:23+0800", 0, false),
             ("2020-12-23 23:59:23", "2020-12-23 15:59:23-08", 0, false),
             ("2020-12-23 07:59:23", "2020-12-23 15:59:23+08:00", 0, false),
+            ("2022-06-02 11:59:30", "2022-06-02 11:59:30.123Z", 0, false),
+            (
+                "2022-06-02 03:59:30",
+                "2022-06-02 11:59:30.123+0800",
+                0,
+                false,
+            ),
+            (
+                "2022-06-02 19:59:30",
+                "2022-06-02 11:59:30.123-08",
+                0,
+                false,
+            ),
+            (
+                "2022-06-02 03:29:30",
+                "2022-06-02 11:59:30.123+08:30",
+                0,
+                false,
+            ),
         ];
         for (expected, actual, fsp, round) in cases {
             assert_eq!(
@@ -2266,7 +2333,7 @@ mod tests {
         ];
 
         for (case, fsp) in should_fail {
-            assert!(Time::parse_datetime(&mut ctx, case, fsp, false).is_err());
+            Time::parse_datetime(&mut ctx, case, fsp, false).unwrap_err();
         }
         Ok(())
     }
@@ -2401,6 +2468,43 @@ mod tests {
                 r: Some("2020-10-10 10:10:10.000000"),
                 tp: TimeType::Timestamp,
             },
+            Case {
+                tz: "+08:00",
+                t: "2022-06-02T10:10:10Z",
+                r: Some("2022-06-02 18:10:10.000000"),
+                tp: TimeType::DateTime,
+            },
+            Case {
+                tz: "-08:00",
+                t: "2022-06-02T10:10:10Z",
+                r: Some("2022-06-02 02:10:10.000000"),
+                tp: TimeType::DateTime,
+            },
+            Case {
+                tz: "+06:30",
+                t: "2022-06-02T10:10:10-05:00",
+                r: Some("2022-06-02 21:40:10.000000"),
+                tp: TimeType::DateTime,
+            },
+            // Time with fraction
+            Case {
+                tz: "+08:00",
+                t: "2022-06-02T10:10:10.123Z",
+                r: Some("2022-06-02 18:10:10.123000"),
+                tp: TimeType::DateTime,
+            },
+            Case {
+                tz: "-08:00",
+                t: "2022-06-02T10:10:10.123Z",
+                r: Some("2022-06-02 02:10:10.123000"),
+                tp: TimeType::DateTime,
+            },
+            Case {
+                tz: "+06:30",
+                t: "2022-06-02T10:10:10.654321-05:00",
+                r: Some("2022-06-02 21:40:10.654321"),
+                tp: TimeType::DateTime,
+            },
         ];
         let mut result: Vec<Option<String>> = vec![];
         for Case { tz, t, r: _, tp } in &cases {
@@ -2525,7 +2629,7 @@ mod tests {
             ..TimeEnv::default()
         });
 
-        assert!(Time::parse_datetime(&mut ctx, "0000-00-00 00:00:00", 0, false).is_err());
+        Time::parse_datetime(&mut ctx, "0000-00-00 00:00:00", 0, false).unwrap_err();
 
         // Enable NO_ZERO_DATE, STRICT_MODE and IGNORE_TRUNCATE.
         // If zero-date is encountered, an error is returned.
@@ -2551,13 +2655,14 @@ mod tests {
 
         for case in cases {
             // Enable NO_ZERO_DATE, STRICT_MODE and ALLOW_INVALID_DATE.
-            // If an invalid date (converted to zero-date) is encountered, an error is returned.
+            // If an invalid date (converted to zero-date) is encountered, an error is
+            // returned.
             let mut ctx = EvalContext::from(TimeEnv {
                 no_zero_date: true,
                 strict_mode: true,
                 ..TimeEnv::default()
             });
-            assert!(Time::parse_datetime(&mut ctx, case, 0, false).is_err());
+            Time::parse_datetime(&mut ctx, case, 0, false).unwrap_err();
         }
 
         Ok(())
@@ -2568,7 +2673,8 @@ mod tests {
         let cases = vec!["2019-01-00", "2019-00-01"];
 
         for &case in cases.iter() {
-            // Enable NO_ZERO_IN_DATE only. If zero-date is encountered, a warning is produced.
+            // Enable NO_ZERO_IN_DATE only. If zero-date is encountered, a warning is
+            // produced.
             let mut ctx = EvalContext::from(TimeEnv {
                 no_zero_in_date: true,
                 ..TimeEnv::default()
@@ -2603,7 +2709,7 @@ mod tests {
                 strict_mode: true,
                 ..TimeEnv::default()
             });
-            assert!(Time::parse_datetime(&mut ctx, case, 0, false).is_err());
+            Time::parse_datetime(&mut ctx, case, 0, false).unwrap_err();
         }
 
         Ok(())
@@ -2722,6 +2828,20 @@ mod tests {
             assert_eq!(today.hour(), 0);
             assert_eq!(today.minute(), 0);
             assert_eq!(today.second(), 0);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_from_local_time() -> Result<()> {
+        let mut ctx = EvalContext::default();
+        for i in 2..10 {
+            let actual = Time::from_local_time(&mut ctx, TimeType::DateTime, i % MAX_FSP)?;
+            let c_datetime = actual.try_into_chrono_datetime(&mut ctx)?;
+
+            let now0 = c_datetime.timestamp_millis() as u64;
+            let now1 = Utc::now().timestamp_millis() as u64;
+            assert!(now1 - now0 < 1000, "{:?} {:?}", now1, now0);
         }
         Ok(())
     }
@@ -3018,7 +3138,7 @@ mod tests {
             let t = Time::parse_datetime(&mut ctx, s, fsp, true).unwrap();
             let get: f64 = t.convert(&mut ctx).unwrap();
             assert!(
-                (expect - get).abs() < std::f64::EPSILON,
+                (expect - get).abs() < f64::EPSILON,
                 "expect: {}, got: {}",
                 expect,
                 get

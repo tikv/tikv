@@ -1,5 +1,8 @@
-use collections::HashMap;
+// Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
+
 use std::usize;
+
+use collections::HashMap;
 use test::{black_box, Bencher};
 use tipb::ScalarFuncSig;
 

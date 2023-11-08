@@ -1,15 +1,14 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::collections::HashMap;
-use std::string::ToString;
+use std::{collections::HashMap, string::ToString};
 
-use crate::server::service::diagnostics::ioload;
 use kvproto::diagnosticspb::{ServerInfoItem, ServerInfoPair};
-use tikv_util::config::KB;
-use tikv_util::sys::{cpu_time::LiunxStyleCpuTime, sys_quota::SysQuota, *};
+use tikv_util::sys::{cpu_time::LinuxStyleCpuTime, ioload, SysQuota, *};
 use walkdir::WalkDir;
 
-type CpuTimeSnapshot = Option<LiunxStyleCpuTime>;
+use crate::server::service::diagnostics::SYS_INFO;
+
+type CpuTimeSnapshot = Option<LinuxStyleCpuTime>;
 
 #[derive(Clone, Debug)]
 pub struct NicSnapshot {
@@ -24,18 +23,18 @@ pub struct NicSnapshot {
 impl NicSnapshot {
     pub fn from_network_data(data: &impl NetworkExt) -> NicSnapshot {
         NicSnapshot {
-            rx_bytes: data.get_total_received(),
-            tx_bytes: data.get_total_transmitted(),
-            rx_packets: data.get_total_packets_received(),
-            tx_packets: data.get_total_packets_transmitted(),
-            rx_errors: data.get_total_errors_on_received(),
-            tx_errors: data.get_total_errors_on_transmitted(),
+            rx_bytes: data.total_received(),
+            tx_bytes: data.total_transmitted(),
+            rx_packets: data.total_packets_received(),
+            tx_packets: data.total_packets_transmitted(),
+            rx_errors: data.total_errors_on_received(),
+            tx_errors: data.total_errors_on_transmitted(),
         }
     }
 
     fn into_pairs(self, prev: &NicSnapshot) -> Vec<ServerInfoPair> {
         macro_rules! pair {
-            ($label: literal, $value: expr, $old_value: expr) => {{
+            ($label:literal, $value:expr, $old_value:expr) => {{
                 let mut pair = ServerInfoPair::default();
                 pair.set_key($label.to_owned());
                 pair.set_value(format!("{:.2}", ($value - $old_value) as f64));
@@ -60,7 +59,7 @@ fn cpu_load_info(prev_cpu: CpuTimeSnapshot, collector: &mut Vec<ServerInfoItem>)
         let infos = {
             let mut system = SYS_INFO.lock().unwrap();
             system.refresh_system();
-            let load = system.get_load_average();
+            let load = system.load_average();
             vec![
                 ("load1", load.one),
                 ("load5", load.five),
@@ -85,7 +84,7 @@ fn cpu_load_info(prev_cpu: CpuTimeSnapshot, collector: &mut Vec<ServerInfoItem>)
         return;
     }
 
-    let t2 = LiunxStyleCpuTime::current();
+    let t2 = LinuxStyleCpuTime::current();
     if t2.is_err() {
         return;
     }
@@ -127,12 +126,12 @@ fn cpu_load_info(prev_cpu: CpuTimeSnapshot, collector: &mut Vec<ServerInfoItem>)
 fn mem_load_info(collector: &mut Vec<ServerInfoItem>) {
     let mut system = SYS_INFO.lock().unwrap();
     system.refresh_memory();
-    let total_memory = system.get_total_memory() * KB;
-    let used_memory = system.get_used_memory() * KB;
-    let free_memory = system.get_free_memory() * KB;
-    let total_swap = system.get_total_swap() * KB;
-    let used_swap = system.get_used_swap() * KB;
-    let free_swap = system.get_free_swap() * KB;
+    let total_memory = system.total_memory();
+    let used_memory = system.used_memory();
+    let free_memory = system.free_memory();
+    let total_swap = system.total_swap();
+    let used_swap = system.used_swap();
+    let free_swap = system.free_swap();
     drop(system);
     let used_memory_pct = (used_memory as f64) / (total_memory as f64);
     let free_memory_pct = (free_memory as f64) / (total_memory as f64);
@@ -180,7 +179,7 @@ fn nic_load_info(prev_nic: HashMap<String, NicSnapshot>, collector: &mut Vec<Ser
     let mut system = SYS_INFO.lock().unwrap();
     system.refresh_networks_list();
     system.refresh_networks();
-    let current = system.get_networks();
+    let current = system.networks();
 
     for (name, cur) in current {
         let prev = match prev_nic.get(name) {
@@ -199,7 +198,7 @@ fn nic_load_info(prev_nic: HashMap<String, NicSnapshot>, collector: &mut Vec<Ser
 
 fn io_load_info(prev_io: HashMap<String, ioload::IoLoad>, collector: &mut Vec<ServerInfoItem>) {
     let current = ioload::IoLoad::snapshot();
-    let rate = |cur, prev| (cur - prev) as f64;
+    let rate = |cur, prev| (cur - prev);
     for (name, cur) in current.into_iter() {
         let prev = match prev_io.get(&name) {
             Some(p) => p,
@@ -263,7 +262,7 @@ fn io_load_info(prev_io: HashMap<String, ioload::IoLoad>, collector: &mut Vec<Se
 }
 
 pub fn cpu_time_snapshot() -> CpuTimeSnapshot {
-    let t1 = LiunxStyleCpuTime::current();
+    let t1 = LinuxStyleCpuTime::current();
     if t1.is_err() {
         return None;
     }
@@ -292,18 +291,15 @@ pub fn load_info(
 fn cpu_hardware_info(collector: &mut Vec<ServerInfoItem>) {
     let mut system = SYS_INFO.lock().unwrap();
     system.refresh_cpu();
-    let processor = match system.get_processors().iter().next() {
+    let processor = match system.cpus().iter().next() {
         Some(p) => p,
         None => return,
     };
     let mut infos = vec![
-        (
-            "cpu-logical-cores",
-            SysQuota::new().cpu_cores_quota().to_string(),
-        ),
+        ("cpu-logical-cores", SysQuota::cpu_cores_quota().to_string()),
         ("cpu-physical-cores", num_cpus::get_physical().to_string()),
-        ("cpu-frequency", format!("{}MHz", processor.get_frequency())),
-        ("cpu-vendor-id", processor.get_vendor_id().to_string()),
+        ("cpu-frequency", format!("{}MHz", processor.frequency())),
+        ("cpu-vendor-id", processor.vendor_id().to_string()),
     ];
     // Depend on Rust lib return CPU arch not matching
     // Golang lib so need this match loop to conversion
@@ -351,7 +347,7 @@ fn mem_hardware_info(collector: &mut Vec<ServerInfoItem>) {
     system.refresh_memory();
     let mut pair = ServerInfoPair::default();
     pair.set_key("capacity".to_string());
-    pair.set_value((system.get_total_memory() * KB).to_string());
+    pair.set_value(SysQuota::memory_limit_in_bytes().to_string());
     let mut item = ServerInfoItem::default();
     item.set_tp("memory".to_string());
     item.set_name("memory".to_string());
@@ -363,27 +359,23 @@ fn disk_hardware_info(collector: &mut Vec<ServerInfoItem>) {
     let mut system = SYS_INFO.lock().unwrap();
     system.refresh_disks_list();
     system.refresh_disks();
-    let disks = system.get_disks();
+    let disks = system.disks();
     for disk in disks {
-        let total = disk.get_total_space();
-        let free = disk.get_available_space();
+        let file_sys = std::str::from_utf8(disk.file_system()).unwrap_or("unknown");
+        if file_sys == "rootfs" {
+            continue;
+        }
+        let total = disk.total_space();
+        let free = disk.available_space();
         let used = total - free;
         let free_pct = (free as f64) / (total as f64);
         let used_pct = (used as f64) / (total as f64);
         let infos = vec![
-            ("type", format!("{:?}", disk.get_type())),
-            (
-                "fstype",
-                std::str::from_utf8(disk.get_file_system())
-                    .unwrap_or("unkonwn")
-                    .to_string(),
-            ),
+            ("type", format!("{:?}", disk.type_())),
+            ("fstype", file_sys.to_string()),
             (
                 "path",
-                disk.get_mount_point()
-                    .to_str()
-                    .unwrap_or("unknown")
-                    .to_string(),
+                disk.mount_point().to_str().unwrap_or("unknown").to_string(),
             ),
             ("total", total.to_string()),
             ("free", free.to_string()),
@@ -400,7 +392,7 @@ fn disk_hardware_info(collector: &mut Vec<ServerInfoItem>) {
         }
         let mut item = ServerInfoItem::default();
         item.set_tp("disk".to_string());
-        item.set_name(disk.get_name().to_str().unwrap_or("disk").to_string());
+        item.set_name(disk.name().to_str().unwrap_or("disk").to_string());
         item.set_pairs(pairs.into());
         collector.push(item);
     }
@@ -489,7 +481,7 @@ fn get_sysctl_list() -> HashMap<String, String> {
             let content = std::fs::read_to_string(entry.path()).ok()?;
             let path = entry.path().to_str()?;
 
-            let name = path.trim_start_matches(DIR).replace("/", ".");
+            let name = path.trim_start_matches(DIR).replace('/', ".");
             Some((name, content.trim().to_string()))
         })
         .collect()
@@ -517,7 +509,7 @@ fn get_transparent_hugepage() -> Option<ServerInfoItem> {
 pub fn process_info(collector: &mut Vec<ServerInfoItem>) {
     let mut system = SYS_INFO.lock().unwrap();
     system.refresh_processes();
-    let processes = system.get_processes();
+    let processes = system.processes();
     for (pid, p) in processes.iter() {
         if p.cmd().is_empty() {
             continue;
@@ -557,7 +549,7 @@ mod tests {
             system.refresh_networks_list();
             system.refresh_all();
             system
-                .get_networks()
+                .networks()
                 .into_iter()
                 .map(|(n, d)| (n.to_owned(), NicSnapshot::from_network_data(d)))
                 .collect()
@@ -634,9 +626,8 @@ mod tests {
                 .iter()
                 .map(|x| x.get_key())
                 .collect::<Vec<&str>>();
-            assert_eq!(
-                keys,
-                vec![
+            assert!(
+                keys.starts_with(&[
                     "read_io/s",
                     "read_merges/s",
                     "read_sectors/s",
@@ -648,7 +639,9 @@ mod tests {
                     "in_flight/s",
                     "io_ticks/s",
                     "time_in_queue/s",
-                ]
+                ]),
+                "actual: {:?}",
+                keys
             );
         }
     }
@@ -685,6 +678,50 @@ mod tests {
         // at least contains the unit test process
         let processes = collector.iter().find(|x| x.get_tp() == "process").unwrap();
         assert_ne!(processes.get_pairs().len(), 0);
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn test_memory() {
+        let mut mem_total_kb: u64 = 0;
+        {
+            use std::io::BufRead;
+
+            let f = std::fs::File::open("/proc/meminfo").unwrap();
+            let reader = std::io::BufReader::new(f);
+            for line in reader.lines() {
+                let l = line.unwrap();
+                let mut parts = l.split_whitespace();
+                if parts.next().unwrap() != "MemTotal:" {
+                    continue;
+                }
+                mem_total_kb = parts.next().unwrap().parse().unwrap();
+                let unit = parts.next().unwrap();
+                assert_eq!(unit, "kB");
+            }
+        }
+        assert!(mem_total_kb > 0);
+
+        let mut collector = vec![];
+        hardware_info(&mut collector);
+
+        let mut memory_checked = false;
+
+        'outer: for item in &collector {
+            if item.get_tp() != "memory" {
+                continue;
+            }
+            for pair in item.get_pairs() {
+                if pair.get_key() != "capacity" {
+                    continue;
+                }
+                assert_eq!(pair.get_value(), (mem_total_kb * 1024).to_string());
+                memory_checked = true;
+                break 'outer;
+            }
+        }
+
+        assert!(memory_checked);
     }
 
     #[test]

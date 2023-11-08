@@ -1,10 +1,10 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::sync::Arc;
+
 use collections::HashSet;
 use grpcio::{ChannelBuilder, Environment};
-use kvproto::kvrpcpb::*;
-use kvproto::tikvpb::TikvClient;
-use std::sync::Arc;
+use kvproto::{kvrpcpb::*, tikvpb::TikvClient};
 use test_raftstore::new_server_cluster;
 use tikv_util::HandyRwLock;
 
@@ -24,8 +24,7 @@ fn test_check_cn_success() {
     let channel = ChannelBuilder::new(env).secure_connect(&addr, cred);
 
     let client = TikvClient::new(channel);
-    let status = client.kv_get(&GetRequest::default());
-    assert!(status.is_ok());
+    client.kv_get(&GetRequest::default()).unwrap();
 }
 
 #[test]
@@ -45,5 +44,5 @@ fn test_check_cn_fail() {
 
     let client = TikvClient::new(channel);
     let status = client.kv_get(&GetRequest::default());
-    assert!(status.is_err());
+    status.unwrap_err();
 }

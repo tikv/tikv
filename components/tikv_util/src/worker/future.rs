@@ -1,17 +1,22 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use prometheus::IntGauge;
-use std::error::Error;
-use std::fmt::{self, Debug, Display, Formatter};
-use std::io;
-use std::sync::{Arc, Mutex};
-use std::thread::{self, Builder, JoinHandle};
+use std::{
+    error::Error,
+    fmt::{self, Debug, Display, Formatter},
+    io,
+    sync::{Arc, Mutex},
+    thread::{self, Builder, JoinHandle},
+};
 
-use futures::channel::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
-use futures::stream::StreamExt;
+use futures::{
+    channel::mpsc::{unbounded, UnboundedReceiver, UnboundedSender},
+    stream::StreamExt,
+};
+use prometheus::IntGauge;
 use tokio::task::LocalSet;
 
 use super::metrics::*;
+use crate::sys::thread::StdThreadBuildWrapper;
 
 pub struct Stopped<T>(pub T);
 
@@ -51,7 +56,7 @@ pub fn dummy_scheduler<T: Display>() -> Scheduler<T> {
 }
 
 impl<T: Display> Scheduler<T> {
-    fn new<S: Into<Arc<str>>>(name: S, sender: UnboundedSender<Option<T>>) -> Scheduler<T> {
+    pub fn new<S: Into<Arc<str>>>(name: S, sender: UnboundedSender<Option<T>>) -> Scheduler<T> {
         let name = name.into();
         Scheduler {
             metrics_pending_task_count: WORKER_PENDING_TASK_VEC.with_label_values(&[&name]),
@@ -96,7 +101,6 @@ where
     R: Runnable<T> + Send + 'static,
     T: Display + Send + 'static,
 {
-    tikv_alloc::add_thread_memory_accessor();
     let current_thread = thread::current();
     let name = current_thread.name().unwrap();
     let metrics_pending_task_count = WORKER_PENDING_TASK_VEC.with_label_values(&[name]);
@@ -116,14 +120,12 @@ where
             }
         };
         // `UnboundedReceiver` never returns an error.
-        tokio::runtime::Builder::new()
-            .basic_scheduler()
+        tokio::runtime::Builder::new_current_thread()
             .build()
             .unwrap()
             .block_on(handle.run_until(task));
     }
     runner.shutdown();
-    tikv_alloc::remove_thread_memory_accessor();
 }
 
 impl<T: Display + Send + 'static> Worker<T> {
@@ -150,9 +152,13 @@ impl<T: Display + Send + 'static> Worker<T> {
         }
 
         let rx = receiver.take().unwrap();
+        let props = crate::thread_group::current_properties();
         let h = Builder::new()
             .name(thd_name!(self.scheduler.name.as_ref()))
-            .spawn(move || poll(runner, rx))?;
+            .spawn_wrapper(move || {
+                crate::thread_group::set_properties(props);
+                poll(runner, rx)
+            })?;
 
         self.handle = Some(h);
         Ok(())
@@ -194,16 +200,17 @@ impl<T: Display + Send + 'static> Worker<T> {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::mpsc::{self, Sender};
-    use std::time::Duration;
-    use std::time::Instant;
+    use std::{
+        sync::mpsc::{self, Sender},
+        time::Duration,
+    };
 
-    use crate::timer::GLOBAL_TIMER_HANDLE;
     use futures::compat::Future01CompatExt;
     use tokio::task::spawn_local;
     use tokio_timer::timer;
 
     use super::*;
+    use crate::{time::Instant, timer::GLOBAL_TIMER_HANDLE};
 
     struct StepRunner {
         timer: timer::Handle,
@@ -215,7 +222,7 @@ mod tests {
             self.ch.send(step).unwrap();
             let f = self
                 .timer
-                .delay(Instant::now() + Duration::from_millis(step))
+                .delay(std::time::Instant::now() + Duration::from_millis(step))
                 .compat();
             spawn_local(f);
         }
@@ -245,7 +252,7 @@ mod tests {
         assert_eq!(rx.recv_timeout(Duration::from_secs(3)).unwrap(), 1000);
         assert_eq!(rx.recv_timeout(Duration::from_secs(3)).unwrap(), 1500);
         // above three tasks are executed concurrently, should be less then 2s.
-        assert!(start.elapsed() < Duration::from_secs(2));
+        assert!(start.saturating_elapsed() < Duration::from_secs(2));
         worker.stop().unwrap().join().unwrap();
         // now worker can't handle any task
         assert!(worker.is_busy());

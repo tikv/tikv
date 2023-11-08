@@ -4,8 +4,10 @@ use std::intrinsics::{likely, unlikely};
 
 use byteorder::{BigEndian, ByteOrder, LittleEndian};
 
-use crate::buffer::{BufferReader, BufferWriter};
-use crate::{ErrorInner, Result};
+use crate::{
+    buffer::{BufferReader, BufferWriter},
+    ErrorInner, Result,
+};
 
 pub const MAX_VARINT64_LENGTH: usize = 10;
 pub const U64_SIZE: usize = std::mem::size_of::<u64>();
@@ -401,7 +403,8 @@ impl NumberCodec {
     }
 
     /// Encodes an unsigned 64 bit integer `v` to `buf` in VarInt encoding,
-    /// which is not memory-comparable. Returns the number of bytes that encoded.
+    /// which is not memory-comparable. Returns the number of bytes that
+    /// encoded.
     ///
     /// Note: VarInt encoding is slow, try avoid using it.
     ///
@@ -427,13 +430,15 @@ impl NumberCodec {
     }
 
     /// Decodes an unsigned 64 bit integer from `buf` in VarInt encoding.
-    /// Returns decoded result and the number of bytes that successfully decoded.
+    /// Returns decoded result and the number of bytes that successfully
+    /// decoded.
     ///
     /// This function is more efficient when `buf.len() >= 10`.
     ///
     /// # Errors
     ///
-    /// Returns `Error::Io` if there is not enough space to decode the whole VarInt.
+    /// Returns `Error::Io` if there is not enough space to decode the whole
+    /// VarInt.
     pub fn try_decode_var_u64(buf: &[u8]) -> Result<(u64, usize)> {
         #[allow(clippy::cast_lossless)]
         unsafe {
@@ -476,7 +481,8 @@ impl NumberCodec {
     }
 
     /// Encodes a signed 64 bit integer `v` to `buf` in VarInt encoding,
-    /// which is not memory-comparable. Returns the number of bytes that encoded.
+    /// which is not memory-comparable. Returns the number of bytes that
+    /// encoded.
     ///
     /// Note: VarInt encoding is slow, try avoid using it.
     ///
@@ -493,13 +499,15 @@ impl NumberCodec {
     }
 
     /// Decodes a signed 64 bit integer from `buf` in VarInt encoding.
-    /// Returns decoded result and the number of bytes that successfully decoded.
+    /// Returns decoded result and the number of bytes that successfully
+    /// decoded.
     ///
     /// This function is more efficient when `buf.len() >= 10`.
     ///
     /// # Errors
     ///
-    /// Returns `Error::Io` if there is not enough space to decode the whole VarInt.
+    /// Returns `Error::Io` if there is not enough space to decode the whole
+    /// VarInt.
     #[inline]
     pub fn try_decode_var_i64(buf: &[u8]) -> Result<(i64, usize)> {
         let (uv, decoded_bytes) = Self::try_decode_var_u64(buf)?;
@@ -512,8 +520,8 @@ impl NumberCodec {
         }
     }
 
-    /// Gets the length of the first encoded VarInt in the given buffer. If the buffer is not
-    /// complete, the length of buffer will be returned.
+    /// Gets the length of the first encoded VarInt in the given buffer. If the
+    /// buffer is not complete, the length of buffer will be returned.
     ///
     /// This function is more efficient when `buf.len() >= 10`.
     pub fn get_first_encoded_var_int_len(buf: &[u8]) -> usize {
@@ -759,7 +767,8 @@ pub trait NumberDecoder: BufferReader {
     ///
     /// # Errors
     ///
-    /// Returns `Error::Io` if there is not enough space to decode the whole VarInt.
+    /// Returns `Error::Io` if there is not enough space to decode the whole
+    /// VarInt.
     #[inline]
     fn read_var_u64(&mut self) -> Result<u64> {
         let (v, decoded_bytes) = {
@@ -777,7 +786,8 @@ pub trait NumberDecoder: BufferReader {
     ///
     /// # Errors
     ///
-    /// Returns `Error::Io` if there is not enough space to decode the whole VarInt.
+    /// Returns `Error::Io` if there is not enough space to decode the whole
+    /// VarInt.
     #[inline]
     fn read_var_i64(&mut self) -> Result<i64> {
         let (v, decoded_bytes) = {
@@ -1013,11 +1023,13 @@ pub trait NumberEncoder: BufferWriter {
     }
 
     /// Writes an unsigned 64 bit integer `v` in VarInt encoding,
-    /// which is not memory-comparable. Returns the number of bytes that encoded.
+    /// which is not memory-comparable. Returns the number of bytes that
+    /// encoded.
     ///
     /// Note:
     /// - VarInt encoding is slow, try avoid using it.
-    /// - The buffer must reserve 10 bytes for writing, although actual written bytes may be less.
+    /// - The buffer must reserve 10 bytes for writing, although actual written
+    ///   bytes may be less.
     /// - The buffer will be advanced by actual written bytes.
     ///
     /// # Errors
@@ -1037,11 +1049,13 @@ pub trait NumberEncoder: BufferWriter {
     }
 
     /// Writes a signed 64 bit integer `v` in VarInt encoding,
-    /// which is not memory-comparable. Returns the number of bytes that encoded.
+    /// which is not memory-comparable. Returns the number of bytes that
+    /// encoded.
     ///
     /// Note:
     /// - VarInt encoding is slow, try avoid using it.
-    /// - The buffer must reserve 10 bytes for writing, although actual written bytes may be less.
+    /// - The buffer must reserve 10 bytes for writing, although actual written
+    ///   bytes may be less.
     /// - The buffer will be advanced by actual written bytes.
     ///
     /// # Errors
@@ -1070,18 +1084,18 @@ mod tests {
 
     fn get_u8_samples() -> Vec<u8> {
         vec![
-            (::std::i8::MIN as u8),
-            (::std::i8::MIN as u8).wrapping_add(1),
-            (::std::i8::MIN as u8).overflowing_sub(1).0,
-            (::std::i8::MAX as u8),
-            (::std::i8::MAX as u8).wrapping_add(1),
-            (::std::i8::MAX as u8).overflowing_sub(1).0,
-            (::std::u8::MIN as u8),
-            (::std::u8::MIN as u8).wrapping_add(1),
-            (::std::u8::MIN as u8).overflowing_sub(1).0,
-            (::std::u8::MAX as u8),
-            (::std::u8::MAX as u8).wrapping_add(1),
-            (::std::u8::MAX as u8).overflowing_sub(1).0,
+            (i8::MIN as u8),
+            (i8::MIN as u8).wrapping_add(1),
+            (i8::MIN as u8).overflowing_sub(1).0,
+            (i8::MAX as u8),
+            (i8::MAX as u8).wrapping_add(1),
+            (i8::MAX as u8).overflowing_sub(1).0,
+            (u8::MIN),
+            (u8::MIN).wrapping_add(1),
+            (u8::MIN).overflowing_sub(1).0,
+            (u8::MAX),
+            (u8::MAX).wrapping_add(1),
+            (u8::MAX).overflowing_sub(1).0,
             2,
             10,
             20,
@@ -1094,18 +1108,18 @@ mod tests {
 
     fn get_u16_samples() -> Vec<u16> {
         vec![
-            (::std::i16::MIN as u16),
-            (::std::i16::MIN as u16).wrapping_add(1),
-            (::std::i16::MIN as u16).overflowing_sub(1).0,
-            (::std::i16::MAX as u16),
-            (::std::i16::MAX as u16).wrapping_add(1),
-            (::std::i16::MAX as u16).overflowing_sub(1).0,
-            (::std::u16::MIN as u16),
-            (::std::u16::MIN as u16).wrapping_add(1),
-            (::std::u16::MIN as u16).overflowing_sub(1).0,
-            (::std::u16::MAX as u16),
-            (::std::u16::MAX as u16).wrapping_add(1),
-            (::std::u16::MAX as u16).overflowing_sub(1).0,
+            (i16::MIN as u16),
+            (i16::MIN as u16).wrapping_add(1),
+            (i16::MIN as u16).overflowing_sub(1).0,
+            (i16::MAX as u16),
+            (i16::MAX as u16).wrapping_add(1),
+            (i16::MAX as u16).overflowing_sub(1).0,
+            (u16::MIN),
+            (u16::MIN).wrapping_add(1),
+            (u16::MIN).overflowing_sub(1).0,
+            (u16::MAX),
+            (u16::MAX).wrapping_add(1),
+            (u16::MAX).overflowing_sub(1).0,
             0,
             1,
             2,
@@ -1135,18 +1149,18 @@ mod tests {
     #[allow(clippy::cast_lossless)]
     fn get_u32_samples() -> Vec<u32> {
         let mut samples = vec![
-            (::std::i32::MIN as u32),
-            (::std::i32::MIN as u32).wrapping_add(1),
-            (::std::i32::MIN as u32).overflowing_sub(1).0,
-            (::std::i32::MAX as u32),
-            (::std::i32::MAX as u32).wrapping_add(1),
-            (::std::i32::MAX as u32).overflowing_sub(1).0,
-            (::std::u32::MIN as u32),
-            (::std::u32::MIN as u32).wrapping_add(1),
-            (::std::u32::MIN as u32).overflowing_sub(1).0,
-            (::std::u32::MAX as u32),
-            (::std::u32::MAX as u32).wrapping_add(1),
-            (::std::u32::MAX as u32).overflowing_sub(1).0,
+            (i32::MIN as u32),
+            (i32::MIN as u32).wrapping_add(1),
+            (i32::MIN as u32).overflowing_sub(1).0,
+            (i32::MAX as u32),
+            (i32::MAX as u32).wrapping_add(1),
+            (i32::MAX as u32).overflowing_sub(1).0,
+            (u32::MIN),
+            (u32::MIN).wrapping_add(1),
+            (u32::MIN).overflowing_sub(1).0,
+            (u32::MAX),
+            (u32::MAX).wrapping_add(1),
+            (u32::MAX).overflowing_sub(1).0,
         ];
         samples.extend(get_u16_samples().into_iter().map(|v| v as u32));
         samples
@@ -1159,18 +1173,18 @@ mod tests {
     #[allow(clippy::cast_lossless)]
     fn get_u64_samples() -> Vec<u64> {
         let mut samples = vec![
-            (::std::i64::MIN as u64),
-            (::std::i64::MIN as u64).wrapping_add(1),
-            (::std::i64::MIN as u64).overflowing_sub(1).0,
-            (::std::i64::MAX as u64),
-            (::std::i64::MAX as u64).wrapping_add(1),
-            (::std::i64::MAX as u64).overflowing_sub(1).0,
-            (::std::u64::MIN as u64),
-            (::std::u64::MIN as u64).wrapping_add(1),
-            (::std::u64::MIN as u64).overflowing_sub(1).0,
-            (::std::u64::MAX as u64),
-            (::std::u64::MAX as u64).wrapping_add(1),
-            (::std::u64::MAX as u64).overflowing_sub(1).0,
+            (i64::MIN as u64),
+            (i64::MIN as u64).wrapping_add(1),
+            (i64::MIN as u64).overflowing_sub(1).0,
+            (i64::MAX as u64),
+            (i64::MAX as u64).wrapping_add(1),
+            (i64::MAX as u64).overflowing_sub(1).0,
+            (u64::MIN),
+            (u64::MIN).wrapping_add(1),
+            (u64::MIN).overflowing_sub(1).0,
+            (u64::MAX),
+            (u64::MAX).wrapping_add(1),
+            (u64::MAX).overflowing_sub(1).0,
         ];
         samples.extend(get_u32_samples().into_iter().map(|v| v as u64));
         samples
@@ -1186,20 +1200,20 @@ mod tests {
             -1.0,
             0.0,
             1.0,
-            std::f64::MIN,
-            std::f64::MIN_POSITIVE,
-            std::f64::MAX,
-            std::f64::INFINITY,
-            std::f64::NEG_INFINITY,
-            std::f64::EPSILON,
+            f64::MIN,
+            f64::MIN_POSITIVE,
+            f64::MAX,
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+            f64::EPSILON,
             std::f64::consts::PI,
             std::f64::consts::E,
-            std::f32::MIN as f64,
-            std::f32::MIN_POSITIVE as f64,
-            std::f32::MAX as f64,
-            std::f32::INFINITY as f64,
-            std::f32::NEG_INFINITY as f64,
-            std::f32::EPSILON as f64,
+            f32::MIN as f64,
+            f32::MIN_POSITIVE as f64,
+            f32::MAX as f64,
+            f32::INFINITY as f64,
+            f32::NEG_INFINITY as f64,
+            f32::EPSILON as f64,
             std::f32::consts::PI as f64,
             std::f32::consts::E as f64,
             // NAN is intentionally excluded, because NAN != NAN.
@@ -1212,11 +1226,7 @@ mod tests {
     {
         move |a: &T, b: &T| {
             let ord = a.partial_cmp(b).unwrap();
-            if !asc {
-                ord.reverse()
-            } else {
-                ord
-            }
+            if !asc { ord.reverse() } else { ord }
         }
     }
 
@@ -1816,11 +1826,12 @@ mod tests {
 
 #[cfg(test)]
 mod benches {
-    use crate::ErrorInner;
-
     use protobuf::CodedOutputStream;
 
-    /// Encode u64 little endian using `NumberCodec` and store position in extra variable.
+    use crate::ErrorInner;
+
+    /// Encode u64 little endian using `NumberCodec` and store position in extra
+    /// variable.
     #[bench]
     fn bench_encode_u64_le_number_codec(b: &mut test::Bencher) {
         let mut buf: [u8; 10] = [0; 10];
@@ -1836,7 +1847,8 @@ mod benches {
         });
     }
 
-    /// Encode u64 little endian using `byteorder::WriteBytesExt` over a `Cursor<&mut [u8]>`.
+    /// Encode u64 little endian using `byteorder::WriteBytesExt` over a
+    /// `Cursor<&mut [u8]>`.
     #[bench]
     fn bench_encode_u64_le_byteorder(b: &mut test::Bencher) {
         use byteorder::WriteBytesExt;
@@ -1854,7 +1866,8 @@ mod benches {
         });
     }
 
-    /// Encode u64 little endian using `NumberEncoder` over a `Cursor<&mut [u8]>`.
+    /// Encode u64 little endian using `NumberEncoder` over a `Cursor<&mut
+    /// [u8]>`.
     #[bench]
     fn bench_encode_u64_le_buffer_encoder_slice(b: &mut test::Bencher) {
         use super::NumberEncoder;
@@ -1883,7 +1896,8 @@ mod benches {
         });
     }
 
-    /// Decode u64 little endian using `NumberCodec` and store position in extra variable.
+    /// Decode u64 little endian using `NumberCodec` and store position in extra
+    /// variable.
     #[bench]
     fn bench_decode_u64_le_number_codec(b: &mut test::Bencher) {
         let buf: [u8; 10] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 0];
@@ -1896,7 +1910,8 @@ mod benches {
         });
     }
 
-    /// Decode u64 little endian using `NumberCodec` and store position via slice index.
+    /// Decode u64 little endian using `NumberCodec` and store position via
+    /// slice index.
     #[bench]
     fn bench_decode_u64_le_number_codec_over_slice(b: &mut test::Bencher) {
         let buf: Vec<u8> = vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 0];
@@ -1909,7 +1924,8 @@ mod benches {
         });
     }
 
-    /// Decode u64 little endian using `byteorder::ReadBytesExt` over a `Cursor<&[u8]>`.
+    /// Decode u64 little endian using `byteorder::ReadBytesExt` over a
+    /// `Cursor<&[u8]>`.
     #[bench]
     fn bench_decode_u64_le_byteorder(b: &mut test::Bencher) {
         use byteorder::ReadBytesExt;

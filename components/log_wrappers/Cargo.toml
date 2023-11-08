@@ -1,12 +1,12 @@
 [package]
 name = "log_wrappers"
 version = "0.0.1"
-edition = "2018"
+edition = "2021"
 publish = false
 
 [dependencies]
-protobuf = "2.8"
+hex = "0.4"
+protobuf = { version = "2.8", features = ["bytes"] }
 slog = "2.3"
 slog-term = "2.4"
-tikv_alloc = { path = "../tikv_alloc" }
-hex = "0.4"
+tikv_alloc = { workspace = true }

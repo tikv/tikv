@@ -2,14 +2,11 @@
 
 use tidb_query_codegen::AggrFunction;
 use tidb_query_common::Result;
-use tidb_query_datatype::codec::data_type::*;
-use tidb_query_datatype::expr::EvalContext;
-use tidb_query_datatype::EvalType;
+use tidb_query_datatype::{codec::data_type::*, expr::EvalContext, EvalType};
 use tidb_query_expr::RpnExpression;
 use tipb::{Expr, ExprType, FieldType};
 
-use super::summable::Summable;
-use super::*;
+use super::{summable::Summable, *};
 
 /// The parser for SUM aggregate function.
 pub struct AggrFnDefinitionParserSum;
@@ -30,7 +27,6 @@ impl super::parser::AggrDefinitionParser for AggrFnDefinitionParserSum {
         out_schema: &mut Vec<FieldType>,
         out_exp: &mut Vec<RpnExpression>,
     ) -> Result<Box<dyn AggrFunction>> {
-        use std::convert::TryFrom;
         use tidb_query_datatype::FieldTypeAccessor;
 
         assert_eq!(root_expr.get_tp(), ExprType::Sum);
@@ -38,7 +34,7 @@ impl super::parser::AggrDefinitionParser for AggrFnDefinitionParserSum {
         let out_ft = root_expr.take_field_type();
         let out_et = box_try!(EvalType::try_from(out_ft.as_accessor().tp()));
 
-        // The rewrite should always success.
+        // The rewrite should always succeed.
         super::util::rewrite_exp_for_sum_avg(src_schema, &mut exp).unwrap();
 
         let rewritten_eval_type =
@@ -54,7 +50,8 @@ impl super::parser::AggrDefinitionParser for AggrFnDefinitionParserSum {
         out_schema.push(out_ft);
         out_exp.push(exp);
 
-        // Choose a type-aware SUM implementation based on the eval type after rewriting exp.
+        // Choose a type-aware SUM implementation based on the eval type after rewriting
+        // exp.
         Ok(match rewritten_eval_type {
             EvalType::Decimal => Box::new(AggrFnSum::<Decimal>::new()),
             EvalType::Real => Box::new(AggrFnSum::<Real>::new()),
@@ -192,12 +189,13 @@ where
 
     /// # Notes
     ///
-    /// Functions such as SUM() or AVG() that expect a numeric argument cast the argument to a
-    /// number if necessary. For ENUM values, the index number is used in the calculation.
+    /// Functions such as SUM() or AVG() that expect a numeric argument cast the
+    /// argument to a number if necessary. For ENUM values, the index number is
+    /// used in the calculation.
     ///
     /// ref: https://dev.mysql.com/doc/refman/8.0/en/enum.html
     #[inline]
-    fn update_concrete(&mut self, ctx: &mut EvalContext, value: Option<EnumRef>) -> Result<()> {
+    fn update_concrete(&mut self, ctx: &mut EvalContext, value: Option<EnumRef<'_>>) -> Result<()> {
         match value {
             None => Ok(()),
             Some(value) => {
@@ -268,12 +266,13 @@ where
 
     /// # Notes
     ///
-    /// Functions such as SUM() or AVG() that expect a numeric argument cast the argument to a
-    /// number if necessary. For ENUM values, the index number is used in the calculation.
+    /// Functions such as SUM() or AVG() that expect a numeric argument cast the
+    /// argument to a number if necessary. For ENUM values, the index number is
+    /// used in the calculation.
     ///
     /// ref: https://dev.mysql.com/doc/refman/8.0/en/enum.html
     #[inline]
-    fn update_concrete(&mut self, ctx: &mut EvalContext, value: Option<SetRef>) -> Result<()> {
+    fn update_concrete(&mut self, ctx: &mut EvalContext, value: Option<SetRef<'_>>) -> Result<()> {
         match value {
             None => Ok(()),
             Some(value) => {
@@ -306,14 +305,15 @@ where
 mod tests {
     use std::sync::Arc;
 
-    use tidb_query_datatype::codec::batch::{LazyBatchColumn, LazyBatchColumnVec};
-    use tidb_query_datatype::{FieldTypeAccessor, FieldTypeTp};
+    use tidb_query_datatype::{
+        codec::batch::{LazyBatchColumn, LazyBatchColumnVec},
+        FieldTypeAccessor, FieldTypeTp,
+    };
     use tikv_util::buffer_vec::BufferVec;
     use tipb_helper::ExprDefBuilder;
 
-    use crate::parser::AggrDefinitionParser;
-
     use super::*;
+    use crate::parser::AggrDefinitionParser;
 
     #[test]
     fn test_sum_enum() {
@@ -323,22 +323,17 @@ mod tests {
 
         let mut result = [VectorValue::with_capacity(0, EvalType::Decimal)];
 
-        let mut buf = BufferVec::new();
-        buf.push("我好强啊");
-        buf.push("我太强啦");
-        let buf = Arc::new(buf);
-
         state.push_result(&mut ctx, &mut result).unwrap();
         assert_eq!(result[0].to_decimal_vec(), &[None]);
 
-        update!(state, &mut ctx, Some(EnumRef::new(&buf, 2))).unwrap();
+        update!(state, &mut ctx, Some(EnumRef::new("aaa".as_bytes(), &2))).unwrap();
         result[0].clear();
         state.push_result(&mut ctx, &mut result).unwrap();
         assert_eq!(result[0].to_decimal_vec(), vec![Some(Decimal::from(2))]);
 
-        update!(state, &mut ctx, Some(EnumRef::new(&buf, 1))).unwrap();
-        update!(state, &mut ctx, Some(EnumRef::new(&buf, 2))).unwrap();
-        update!(state, &mut ctx, Some(EnumRef::new(&buf, 2))).unwrap();
+        update!(state, &mut ctx, Some(EnumRef::new("bbb".as_bytes(), &1))).unwrap();
+        update!(state, &mut ctx, Some(EnumRef::new("aaa".as_bytes(), &2))).unwrap();
+        update!(state, &mut ctx, Some(EnumRef::new("aaa".as_bytes(), &2))).unwrap();
         result[0].clear();
         state.push_result(&mut ctx, &mut result).unwrap();
         assert_eq!(result[0].to_decimal_vec(), vec![Some(Decimal::from(7))]);
@@ -413,7 +408,7 @@ mod tests {
         let exp_result = exp_result.vector_value().unwrap();
         let vec = exp_result.as_ref().to_real_vec();
         let chunked_vec: ChunkedVecSized<Real> = vec.into();
-        update_vector!(state, &mut ctx, &chunked_vec, exp_result.logical_rows()).unwrap();
+        update_vector!(state, &mut ctx, chunked_vec, exp_result.logical_rows()).unwrap();
 
         let mut aggr_result = [VectorValue::with_capacity(0, EvalType::Real)];
         state.push_result(&mut ctx, &mut aggr_result).unwrap();

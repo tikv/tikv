@@ -2,17 +2,17 @@
 
 use std::sync::Arc;
 
-use tipb::Expr;
-use tipb::FieldType;
-use tipb::Selection;
+use async_trait::async_trait;
+use tidb_query_common::{storage::IntervalRange, Result};
+use tidb_query_datatype::{
+    codec::data_type::*,
+    expr::{EvalConfig, EvalContext},
+    match_template_evaltype,
+};
+use tidb_query_expr::{RpnExpression, RpnExpressionBuilder, RpnStackNode};
+use tipb::{Expr, FieldType, Selection};
 
 use crate::interface::*;
-use tidb_query_common::storage::IntervalRange;
-use tidb_query_common::Result;
-use tidb_query_datatype::codec::data_type::*;
-use tidb_query_datatype::expr::{EvalConfig, EvalContext};
-use tidb_query_expr::RpnStackNode;
-use tidb_query_expr::{RpnExpression, RpnExpressionBuilder};
 
 pub struct BatchSelectionExecutor<Src: BatchExecutor> {
     context: EvalContext,
@@ -21,8 +21,8 @@ pub struct BatchSelectionExecutor<Src: BatchExecutor> {
     conditions: Vec<RpnExpression>,
 }
 
-// We assign a dummy type `Box<dyn BatchExecutor<StorageStats = ()>>` so that we can omit the type
-// when calling `check_supported`.
+// We assign a dummy type `Box<dyn BatchExecutor<StorageStats = ()>>` so that we
+// can omit the type when calling `check_supported`.
 impl BatchSelectionExecutor<Box<dyn BatchExecutor<StorageStats = ()>>> {
     /// Checks whether this executor can be used.
     #[inline]
@@ -63,14 +63,14 @@ impl<Src: BatchExecutor> BatchSelectionExecutor<Src> {
         })
     }
 
-    /// Accepts source result and mutates its `logical_rows` according to predicates.
+    /// Accepts source result and mutates its `logical_rows` according to
+    /// predicates.
     ///
-    /// When errors are returned, it means there are errors during the evaluation. Currently
-    /// we treat this situation as "completely failed".
+    /// When errors are returned, it means there are errors during the
+    /// evaluation. Currently we treat this situation as "completely
+    /// failed".
     fn handle_src_result(&mut self, src_result: &mut BatchExecuteResult) -> Result<()> {
-        // When there are errors in `src_result`, it means that the first several rows do not
-        // have error, which should be filtered according to predicate in this executor.
-        // So we actually don't care whether or not there are errors from src executor.
+        // We handle errors in next_batch, so we can ingore it here.
 
         // TODO: Avoid allocation.
         let mut src_logical_rows_copy = Vec::with_capacity(src_result.logical_rows.len());
@@ -95,7 +95,7 @@ impl<Src: BatchExecutor> BatchSelectionExecutor<Src> {
                 }
                 RpnStackNode::Vector { value, .. } => {
                     let eval_result_logical_rows = value.logical_rows_struct();
-                    match_template_evaluable! {
+                    match_template_evaltype! {
                         TT, match value.as_ref() {
                             VectorValue::TT(eval_result) => {
                                 update_logical_rows_by_vector_value(
@@ -134,17 +134,17 @@ fn update_logical_rows_by_vector_value<'a, TT: EvaluableRef<'a>, T: 'a + ChunkRe
     logical_rows: &mut Vec<usize>,
     ctx: &mut EvalContext,
     eval_result: T,
-    eval_result_logical_rows: LogicalRows,
+    eval_result_logical_rows: LogicalRows<'_>,
 ) -> tidb_query_common::error::Result<()>
 where
-    Option<TT>: AsMySQLBool,
+    Option<TT>: AsMySqlBool,
 {
     let mut err_result = Ok(());
     let mut logical_index = 0;
     logical_rows.retain(|_| {
-        // We don't care the physical index indicated by `logical_rows`, since what's in there
-        // does not affect the filtering. Instead, the eval result in corresponding logical index
-        // matters.
+        // We don't care the physical index indicated by `logical_rows`, since what's in
+        // there does not affect the filtering. Instead, the eval result in
+        // corresponding logical index matters.
 
         let eval_result_physical_index = eval_result_logical_rows.get_idx(logical_index);
         logical_index += 1;
@@ -165,6 +165,7 @@ where
     err_result
 }
 
+#[async_trait]
 impl<Src: BatchExecutor> BatchExecutor for BatchSelectionExecutor<Src> {
     type StorageStats = Src::StorageStats;
 
@@ -175,8 +176,8 @@ impl<Src: BatchExecutor> BatchExecutor for BatchSelectionExecutor<Src> {
     }
 
     #[inline]
-    fn next_batch(&mut self, scan_rows: usize) -> BatchExecuteResult {
-        let mut src_result = self.src.next_batch(scan_rows);
+    async fn next_batch(&mut self, scan_rows: usize) -> BatchExecuteResult {
+        let mut src_result = self.src.next_batch(scan_rows).await;
 
         if let Err(e) = self.handle_src_result(&mut src_result) {
             // TODO: Rows before we meeting an evaluation error are innocent.
@@ -214,14 +215,12 @@ impl<Src: BatchExecutor> BatchExecutor for BatchSelectionExecutor<Src> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
+    use futures::executor::block_on;
     use tidb_query_codegen::rpn_fn;
-    use tidb_query_datatype::FieldTypeTp;
+    use tidb_query_datatype::{codec::batch::LazyBatchColumnVec, expr::EvalWarnings, FieldTypeTp};
 
+    use super::*;
     use crate::util::mock_executor::MockExecutor;
-    use tidb_query_datatype::codec::batch::LazyBatchColumnVec;
-    use tidb_query_datatype::expr::EvalWarnings;
 
     #[test]
     fn test_empty_rows() {
@@ -238,7 +237,7 @@ mod tests {
                     physical_columns: LazyBatchColumnVec::empty(),
                     logical_rows: Vec::new(),
                     warnings: EvalWarnings::default(),
-                    is_drained: Ok(false),
+                    is_drained: Ok(BatchExecIsDrain::Remain),
                 },
                 BatchExecuteResult {
                     physical_columns: LazyBatchColumnVec::from(vec![
@@ -247,42 +246,45 @@ mod tests {
                     ]),
                     logical_rows: Vec::new(),
                     warnings: EvalWarnings::default(),
-                    is_drained: Ok(false),
+                    is_drained: Ok(BatchExecIsDrain::Remain),
                 },
                 BatchExecuteResult {
                     physical_columns: LazyBatchColumnVec::empty(),
                     logical_rows: Vec::new(),
                     warnings: EvalWarnings::default(),
-                    is_drained: Ok(true),
+                    is_drained: Ok(BatchExecIsDrain::Drain),
                 },
             ],
         );
 
         let mut exec = BatchSelectionExecutor::new_for_test(
             src_exec,
-            vec![RpnExpressionBuilder::new_for_test()
-                .push_fn_call_for_test(foo_fn_meta(), 0, FieldTypeTp::LongLong)
-                .build_for_test()],
+            vec![
+                RpnExpressionBuilder::new_for_test()
+                    .push_fn_call_for_test(foo_fn_meta(), 0, FieldTypeTp::LongLong)
+                    .build_for_test(),
+            ],
         );
 
-        // When source executor returns empty rows, selection executor should process correctly.
-        // No errors should be generated and the predicate function should not be called.
+        // When source executor returns empty rows, selection executor should process
+        // correctly. No errors should be generated and the predicate function
+        // should not be called.
 
-        let r = exec.next_batch(1);
+        let r = block_on(exec.next_batch(1));
         // The scan rows parameter has no effect for mock executor. We don't care.
         // FIXME: A compiler bug prevented us write:
         //    |         assert_eq!(r.logical_rows.as_slice(), &[]);
         //    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ cannot infer type
         assert!(r.logical_rows.is_empty());
-        assert!(!r.is_drained.unwrap());
+        assert!(r.is_drained.unwrap().is_remain());
 
-        let r = exec.next_batch(1);
+        let r = block_on(exec.next_batch(1));
         assert!(r.logical_rows.is_empty());
-        assert!(!r.is_drained.unwrap());
+        assert!(r.is_drained.unwrap().is_remain());
 
-        let r = exec.next_batch(1);
+        let r = block_on(exec.next_batch(1));
         assert!(r.logical_rows.is_empty());
-        assert!(r.is_drained.unwrap());
+        assert!(r.is_drained.unwrap().stop());
     }
 
     /// Builds an executor that will return these logical data:
@@ -310,7 +312,7 @@ mod tests {
                     ]),
                     logical_rows: vec![2, 0],
                     warnings: EvalWarnings::default(),
-                    is_drained: Ok(false),
+                    is_drained: Ok(BatchExecIsDrain::Remain),
                 },
                 BatchExecuteResult {
                     physical_columns: LazyBatchColumnVec::from(vec![
@@ -319,7 +321,7 @@ mod tests {
                     ]),
                     logical_rows: Vec::new(),
                     warnings: EvalWarnings::default(),
-                    is_drained: Ok(false),
+                    is_drained: Ok(BatchExecIsDrain::Remain),
                 },
                 BatchExecuteResult {
                     physical_columns: LazyBatchColumnVec::from(vec![
@@ -328,14 +330,14 @@ mod tests {
                     ]),
                     logical_rows: vec![1],
                     warnings: EvalWarnings::default(),
-                    is_drained: Ok(true),
+                    is_drained: Ok(BatchExecIsDrain::Drain),
                 },
             ],
         )
     }
 
-    /// Tests the scenario that there is no predicate or there is a predicate but always returns
-    /// true (no data is filtered).
+    /// Tests the scenario that there is no predicate or there is a predicate
+    /// but always returns true (no data is filtered).
     #[test]
     fn test_no_predicate_or_predicate_always_true() {
         // Build a selection executor without predicate.
@@ -360,17 +362,17 @@ mod tests {
 
             // The selection executor should return data as it is.
 
-            let r = exec.next_batch(1);
+            let r = block_on(exec.next_batch(1));
             assert_eq!(&r.logical_rows, &[2, 0]);
-            assert!(!r.is_drained.unwrap());
+            assert!(r.is_drained.unwrap().is_remain());
 
-            let r = exec.next_batch(1);
+            let r = block_on(exec.next_batch(1));
             assert!(r.logical_rows.is_empty());
-            assert!(!r.is_drained.unwrap());
+            assert!(r.is_drained.unwrap().is_remain());
 
-            let r = exec.next_batch(1);
+            let r = block_on(exec.next_batch(1));
             assert_eq!(&r.logical_rows, &[1]);
-            assert!(r.is_drained.unwrap());
+            assert!(r.is_drained.unwrap().stop());
         }
     }
 
@@ -386,17 +388,17 @@ mod tests {
 
         // The selection executor should always return empty rows.
 
-        let r = exec.next_batch(1);
+        let r = block_on(exec.next_batch(1));
         assert!(r.logical_rows.is_empty());
-        assert!(!r.is_drained.unwrap());
+        assert!(r.is_drained.unwrap().is_remain());
 
-        let r = exec.next_batch(1);
+        let r = block_on(exec.next_batch(1));
         assert!(r.logical_rows.is_empty());
-        assert!(!r.is_drained.unwrap());
+        assert!(r.is_drained.unwrap().is_remain());
 
-        let r = exec.next_batch(1);
+        let r = block_on(exec.next_batch(1));
         assert!(r.logical_rows.is_empty());
-        assert!(r.is_drained.unwrap());
+        assert!(r.is_drained.unwrap().stop());
     }
 
     /// This function returns 1 when the value is even, 0 otherwise.
@@ -444,13 +446,13 @@ mod tests {
                     ]),
                     logical_rows: vec![3, 4, 0, 2],
                     warnings: EvalWarnings::default(),
-                    is_drained: Ok(false),
+                    is_drained: Ok(BatchExecIsDrain::Remain),
                 },
                 BatchExecuteResult {
                     physical_columns: LazyBatchColumnVec::empty(),
                     logical_rows: Vec::new(),
                     warnings: EvalWarnings::default(),
-                    is_drained: Ok(false),
+                    is_drained: Ok(BatchExecIsDrain::Remain),
                 },
                 BatchExecuteResult {
                     physical_columns: LazyBatchColumnVec::from(vec![
@@ -460,14 +462,14 @@ mod tests {
                     ]),
                     logical_rows: vec![0],
                     warnings: EvalWarnings::default(),
-                    is_drained: Ok(true),
+                    is_drained: Ok(BatchExecIsDrain::Drain),
                 },
             ],
         )
     }
 
-    /// Tests the scenario that the predicate returns both true and false. Rows that predicate
-    /// returns false should be removed from the result.
+    /// Tests the scenario that the predicate returns both true and false. Rows
+    /// that predicate returns false should be removed from the result.
     #[test]
     fn test_predicate_1() {
         let src_exec = make_src_executor_using_fixture_2();
@@ -480,17 +482,17 @@ mod tests {
             .build_for_test();
         let mut exec = BatchSelectionExecutor::new_for_test(src_exec, vec![predicate]);
 
-        let r = exec.next_batch(1);
+        let r = block_on(exec.next_batch(1));
         assert_eq!(&r.logical_rows, &[3, 0]);
-        assert!(!r.is_drained.unwrap());
+        assert!(r.is_drained.unwrap().is_remain());
 
-        let r = exec.next_batch(1);
+        let r = block_on(exec.next_batch(1));
         assert!(r.logical_rows.is_empty());
-        assert!(!r.is_drained.unwrap());
+        assert!(r.is_drained.unwrap().is_remain());
 
-        let r = exec.next_batch(1);
+        let r = block_on(exec.next_batch(1));
         assert!(r.logical_rows.is_empty());
-        assert!(r.is_drained.unwrap());
+        assert!(r.is_drained.unwrap().stop());
     }
 
     #[test]
@@ -505,21 +507,21 @@ mod tests {
             .build_for_test();
         let mut exec = BatchSelectionExecutor::new_for_test(src_exec, vec![predicate]);
 
-        let r = exec.next_batch(1);
+        let r = block_on(exec.next_batch(1));
         assert_eq!(&r.logical_rows, &[0, 2]);
-        assert!(!r.is_drained.unwrap());
+        assert!(r.is_drained.unwrap().is_remain());
 
-        let r = exec.next_batch(1);
+        let r = block_on(exec.next_batch(1));
         assert!(r.logical_rows.is_empty());
-        assert!(!r.is_drained.unwrap());
+        assert!(r.is_drained.unwrap().is_remain());
 
-        let r = exec.next_batch(1);
+        let r = block_on(exec.next_batch(1));
         assert!(r.logical_rows.is_empty());
-        assert!(r.is_drained.unwrap());
+        assert!(r.is_drained.unwrap().stop());
     }
 
-    /// Tests the scenario that there are multiple predicates. Only the row that all predicates
-    /// return true should be remained.
+    /// Tests the scenario that there are multiple predicates. Only the row that
+    /// all predicates return true should be remained.
     #[test]
     fn test_multiple_predicate_1() {
         // Use [is_even(column[0]), is_even(column[1])] as the predicate.
@@ -543,17 +545,17 @@ mod tests {
             let src_exec = make_src_executor_using_fixture_2();
             let mut exec = BatchSelectionExecutor::new_for_test(src_exec, predicates);
 
-            let r = exec.next_batch(1);
+            let r = block_on(exec.next_batch(1));
             assert_eq!(&r.logical_rows, &[0]);
-            assert!(!r.is_drained.unwrap());
+            assert!(r.is_drained.unwrap().is_remain());
 
-            let r = exec.next_batch(1);
+            let r = block_on(exec.next_batch(1));
             assert!(r.logical_rows.is_empty());
-            assert!(!r.is_drained.unwrap());
+            assert!(r.is_drained.unwrap().is_remain());
 
-            let r = exec.next_batch(1);
+            let r = block_on(exec.next_batch(1));
             assert!(r.logical_rows.is_empty());
-            assert!(r.is_drained.unwrap());
+            assert!(r.is_drained.unwrap().stop());
         }
     }
 
@@ -578,17 +580,17 @@ mod tests {
             let src_exec = make_src_executor_using_fixture_2();
             let mut exec = BatchSelectionExecutor::new_for_test(src_exec, predicates);
 
-            let r = exec.next_batch(1);
+            let r = block_on(exec.next_batch(1));
             assert!(r.logical_rows.is_empty());
-            assert!(!r.is_drained.unwrap());
+            assert!(r.is_drained.unwrap().is_remain());
 
-            let r = exec.next_batch(1);
+            let r = block_on(exec.next_batch(1));
             assert!(r.logical_rows.is_empty());
-            assert!(!r.is_drained.unwrap());
+            assert!(r.is_drained.unwrap().is_remain());
 
-            let r = exec.next_batch(1);
+            let r = block_on(exec.next_batch(1));
             assert!(r.logical_rows.is_empty());
-            assert!(r.is_drained.unwrap());
+            assert!(r.is_drained.unwrap().stop());
         }
     }
 
@@ -624,7 +626,7 @@ mod tests {
                     ]),
                     logical_rows: vec![1, 3, 4, 0],
                     warnings: EvalWarnings::default(),
-                    is_drained: Ok(false),
+                    is_drained: Ok(BatchExecIsDrain::Remain),
                 },
                 BatchExecuteResult {
                     physical_columns: LazyBatchColumnVec::from(vec![
@@ -633,13 +635,13 @@ mod tests {
                     ]),
                     logical_rows: Vec::new(),
                     warnings: EvalWarnings::default(),
-                    is_drained: Ok(true),
+                    is_drained: Ok(BatchExecIsDrain::Drain),
                 },
             ],
         );
 
-        // When evaluating predicates[0], there will be no error. However we will meet errors for
-        // predicates[1].
+        // When evaluating predicates[0], there will be no error. However we will meet
+        // errors for predicates[1].
 
         let predicates = (0..=1)
             .map(|offset| {
@@ -651,11 +653,11 @@ mod tests {
             .collect();
         let mut exec = BatchSelectionExecutor::new_for_test(src_exec, predicates);
 
-        // TODO: A more precise result is that the first two rows are returned and error starts from
-        // the third row.
+        // TODO: A more precise result is that the first two rows are returned and error
+        // starts from the third row.
 
-        let r = exec.next_batch(1);
+        let r = block_on(exec.next_batch(1));
         assert!(r.logical_rows.is_empty());
-        assert!(r.is_drained.is_err());
+        r.is_drained.unwrap_err();
     }
 }

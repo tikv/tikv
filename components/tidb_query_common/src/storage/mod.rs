@@ -11,8 +11,8 @@ pub type Result<T> = std::result::Result<T, crate::error::StorageError>;
 
 pub type OwnedKvPair = (Vec<u8>, Vec<u8>);
 
-/// The abstract storage interface. The table scan and index scan executor relies on a `Storage`
-/// implementation to provide source data.
+/// The abstract storage interface. The table scan and index scan executor
+/// relies on a `Storage` implementation to provide source data.
 pub trait Storage: Send {
     type Statistics;
 

@@ -1,24 +1,27 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::convert::TryFrom;
-
-use crate::{EvalType, FieldTypeAccessor};
 use tikv_util::buffer_vec::BufferVec;
 use tipb::FieldType;
 
-use crate::codec::chunk::{ChunkColumnEncoder, Column};
-use crate::codec::data_type::{match_template_evaluable, ChunkedVec, LogicalRows, VectorValue};
-use crate::codec::datum_codec::RawDatumDecoder;
-use crate::codec::Result;
-use crate::expr::EvalContext;
+use crate::{
+    codec::{
+        chunk::{ChunkColumnEncoder, Column},
+        data_type::{ChunkedVec, LogicalRows, VectorValue},
+        datum_codec::RawDatumDecoder,
+        Result,
+    },
+    expr::EvalContext,
+    match_template_evaltype, EvalType, FieldTypeAccessor,
+};
 
-/// A container stores an array of datums, which can be either raw (not decoded), or decoded into
-/// the `VectorValue` type.
+/// A container stores an array of datums, which can be either raw (not
+/// decoded), or decoded into the `VectorValue` type.
 ///
 /// TODO:
-/// Since currently the data format in response can be the same as in storage, we use this structure
-/// to avoid unnecessary repeated serialization / deserialization. In future, Coprocessor will
-/// respond all data in Chunk format which is different to the format in storage. At that time,
+/// Since currently the data format in response can be the same as in storage,
+/// we use this structure to avoid unnecessary repeated serialization /
+/// deserialization. In future, Coprocessor will respond all data in Chunk
+/// format which is different to the format in storage. At that time,
 /// this structure is no longer useful and should be removed.
 #[derive(Clone, Debug)]
 pub enum LazyBatchColumn {
@@ -38,14 +41,16 @@ impl LazyBatchColumn {
     #[inline]
     pub fn raw_with_capacity(capacity: usize) -> Self {
         use codec::number::MAX_VARINT64_LENGTH;
-        // We assume that each element *may* has a size of MAX_VAR_INT_LEN + Datum Flag (1 byte).
+        // We assume that each element *may* has a size of MAX_VAR_INT_LEN + Datum Flag
+        // (1 byte).
         LazyBatchColumn::Raw(BufferVec::with_capacity(
             capacity,
             capacity * (MAX_VARINT64_LENGTH + 1),
         ))
     }
 
-    /// Creates a new `LazyBatchColumn::Decoded` with specified capacity and eval type.
+    /// Creates a new `LazyBatchColumn::Decoded` with specified capacity and
+    /// eval type.
     #[inline]
     pub fn decoded_with_capacity_and_tp(capacity: usize, eval_tp: EvalType) -> Self {
         LazyBatchColumn::Decoded(VectorValue::with_capacity(capacity, eval_tp))
@@ -53,6 +58,7 @@ impl LazyBatchColumn {
 
     /// Creates a new empty `LazyBatchColumn` with the same schema.
     #[inline]
+    #[must_use]
     pub fn clone_empty(&self, capacity: usize) -> Self {
         match self {
             LazyBatchColumn::Raw(_) => Self::raw_with_capacity(capacity),
@@ -145,19 +151,21 @@ impl LazyBatchColumn {
         }
     }
 
-    /// Decodes this column if the column is not decoded, according to the given logical rows map.
-    /// After decoding, the decoded column will have the same physical layout as the encoded one
-    /// (i.e. the same logical rows), but elements in unnecessary positions will not be decoded
-    /// and will be `None`.
+    /// Decodes this column if the column is not decoded, according to the given
+    /// logical rows map. After decoding, the decoded column will have the same
+    /// physical layout as the encoded one (i.e. the same logical rows), but
+    /// elements in unnecessary positions will not be decoded and will be
+    /// `None`.
     ///
-    /// The field type is needed because we use the same `DateTime` structure when handling
-    /// Date, Time or Timestamp.
-    // TODO: Maybe it's a better idea to assign different eval types for different date types.
+    /// The field type is needed because we use the same `DateTime` structure
+    /// when handling Date, Time or Timestamp.
+    // TODO: Maybe it's a better idea to assign different eval types for different
+    // date types.
     pub fn ensure_decoded(
         &mut self,
         ctx: &mut EvalContext,
         field_type: &FieldType,
-        logical_rows: LogicalRows,
+        logical_rows: LogicalRows<'_>,
     ) -> Result<()> {
         if self.is_decoded() {
             return Ok(());
@@ -168,7 +176,7 @@ impl LazyBatchColumn {
 
         let mut decoded_column = VectorValue::with_capacity(raw_vec_len, eval_type);
 
-        match_template_evaluable! {
+        match_template_evaltype! {
             TT, match &mut decoded_column {
                 VectorValue::TT(vec) => {
                     match logical_rows {
@@ -268,7 +276,6 @@ impl LazyBatchColumn {
 #[cfg(test)]
 mod tests {
     use super::*;
-
     use crate::codec::datum::{Datum, DatumEncoder};
 
     #[test]
@@ -354,7 +361,8 @@ mod tests {
         assert!(col.is_decoded());
         assert_eq!(col.len(), 3);
         assert_eq!(col.capacity(), 3);
-        // Element 1 is None because it is not referred in `logical_rows` and we don't decode it.
+        // Element 1 is None because it is not referred in `logical_rows` and we don't
+        // decode it.
         assert_eq!(col.decoded().to_int_vec(), &[Some(32), None, Some(10)]);
 
         {
@@ -366,7 +374,8 @@ mod tests {
             assert_eq!(col.decoded().to_int_vec(), &[Some(32), None, Some(10)]);
         }
 
-        // Decode a decoded column, even using a different logical rows, does not have effect.
+        // Decode a decoded column, even using a different logical rows, does not have
+        // effect.
         col.ensure_decoded(
             &mut ctx,
             &FieldTypeTp::Long.into(),
@@ -402,8 +411,10 @@ mod benches {
     /// Bench performance of cloning a decoded column.
     #[bench]
     fn bench_lazy_batch_column_clone_decoded(b: &mut test::Bencher) {
-        use crate::codec::datum::{Datum, DatumEncoder};
-        use crate::FieldTypeTp;
+        use crate::{
+            codec::datum::{Datum, DatumEncoder},
+            FieldTypeTp,
+        };
 
         let mut column = LazyBatchColumn::raw_with_capacity(1000);
 
@@ -429,11 +440,14 @@ mod benches {
 
     /// Bench performance of decoding a raw batch column.
     ///
-    /// Note that there is a clone in the bench suite, whose cost should be excluded.
+    /// Note that there is a clone in the bench suite, whose cost should be
+    /// excluded.
     #[bench]
     fn bench_lazy_batch_column_clone_and_decode(b: &mut test::Bencher) {
-        use crate::codec::datum::{Datum, DatumEncoder};
-        use crate::FieldTypeTp;
+        use crate::{
+            codec::datum::{Datum, DatumEncoder},
+            FieldTypeTp,
+        };
 
         let mut ctx = EvalContext::default();
         let mut column = LazyBatchColumn::raw_with_capacity(1000);
@@ -463,11 +477,14 @@ mod benches {
 
     /// Bench performance of decoding a decoded lazy batch column.
     ///
-    /// Note that there is a clone in the bench suite, whose cost should be excluded.
+    /// Note that there is a clone in the bench suite, whose cost should be
+    /// excluded.
     #[bench]
     fn bench_lazy_batch_column_clone_and_decode_decoded(b: &mut test::Bencher) {
-        use crate::codec::datum::{Datum, DatumEncoder};
-        use crate::FieldTypeTp;
+        use crate::{
+            codec::datum::{Datum, DatumEncoder},
+            FieldTypeTp,
+        };
 
         let mut column = LazyBatchColumn::raw_with_capacity(1000);
 

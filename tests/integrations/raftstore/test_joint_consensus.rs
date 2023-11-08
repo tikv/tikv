@@ -1,15 +1,16 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use kvproto::metapb::{self, PeerRole, Region};
-use kvproto::raft_cmdpb::{ChangePeerRequest, RaftCmdRequest, RaftCmdResponse};
+use std::{sync::Arc, time::*};
+
+use kvproto::{
+    metapb::{self, PeerRole, Region},
+    raft_cmdpb::{ChangePeerRequest, RaftCmdRequest, RaftCmdResponse},
+};
 use pd_client::PdClient;
 use raft::eraftpb::ConfChangeType;
-use raftstore::store::util::find_peer;
 use raftstore::Result;
-use std::sync::mpsc;
-use std::sync::Arc;
-use std::time::*;
 use test_raftstore::*;
+use tikv_util::{future::block_on_timeout, store::find_peer};
 
 /// Tests multiple confchange commands can be done by one request
 #[test]
@@ -166,10 +167,7 @@ fn test_request_in_joint_state() {
     let rx = cluster
         .async_request(put_request(&region, 1, b"k3", b"v3"))
         .unwrap();
-    assert_eq!(
-        rx.recv_timeout(Duration::from_millis(100)),
-        Err(mpsc::RecvTimeoutError::Timeout)
-    );
+    block_on_timeout(rx, Duration::from_millis(100)).unwrap_err();
     cluster.clear_send_filters();
 
     // Isolated peer 3, so the new configuation can't reach quorum
@@ -177,10 +175,7 @@ fn test_request_in_joint_state() {
     let rx = cluster
         .async_request(put_request(&region, 1, b"k4", b"v4"))
         .unwrap();
-    assert_eq!(
-        rx.recv_timeout(Duration::from_millis(100)),
-        Err(mpsc::RecvTimeoutError::Timeout)
-    );
+    block_on_timeout(rx, Duration::from_millis(100)).unwrap_err();
     cluster.clear_send_filters();
 
     // Leave joint
@@ -532,8 +527,10 @@ fn put_request(region: &Region, id: u64, key: &[u8], val: &[u8]) -> RaftCmdReque
 }
 
 fn must_has_peer(region: &Region, peer_id: u64, role: PeerRole) {
-    assert!(region
-        .get_peers()
-        .iter()
-        .any(|p| p.get_id() == peer_id && p.get_role() == role));
+    assert!(
+        region
+            .get_peers()
+            .iter()
+            .any(|p| p.get_id() == peer_id && p.get_role() == role)
+    );
 }

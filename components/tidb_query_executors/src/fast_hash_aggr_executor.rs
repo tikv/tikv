@@ -1,41 +1,45 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::convert::TryFrom;
-use std::hash::Hash;
-use std::sync::Arc;
+use std::{convert::TryFrom, hash::Hash, sync::Arc};
 
+use async_trait::async_trait;
 use collections::HashMap;
-use tidb_query_datatype::Collation;
-use tidb_query_datatype::{EvalType, FieldTypeAccessor};
-use tikv_util::box_try;
-use tipb::Aggregation;
-use tipb::{Expr, FieldType};
-
-use crate::interface::*;
-use crate::util::aggr_executor::*;
-use crate::util::hash_aggr_helper::HashAggregationHelper;
 use tidb_query_aggr::*;
-use tidb_query_common::storage::IntervalRange;
-use tidb_query_common::Result;
-use tidb_query_datatype::codec::batch::{LazyBatchColumn, LazyBatchColumnVec};
-use tidb_query_datatype::codec::collation::{match_template_collator, SortKey};
-use tidb_query_datatype::codec::data_type::*;
-use tidb_query_datatype::expr::{EvalConfig, EvalContext};
+use tidb_query_common::{storage::IntervalRange, Result};
+use tidb_query_datatype::{
+    codec::{
+        batch::{LazyBatchColumn, LazyBatchColumnVec},
+        collation::SortKey,
+        data_type::*,
+    },
+    expr::{EvalConfig, EvalContext},
+    match_template_collator, Collation, EvalType, FieldTypeAccessor,
+};
 use tidb_query_expr::{RpnExpression, RpnExpressionBuilder, RpnStackNode};
+use tikv_util::box_try;
+use tipb::{Aggregation, Expr, FieldType};
 
-pub macro match_template_hashable($t:tt, $($tail:tt)*) {
-    match_template::match_template! {
-        $t = [Int, Real, Bytes, Duration, Decimal, DateTime],
-        $($tail)*
-    }
+use crate::{
+    interface::*,
+    util::{aggr_executor::*, hash_aggr_helper::HashAggregationHelper},
+};
+
+macro_rules! match_template_hashable {
+    ($t:tt, $($tail:tt)*) => {{
+        match_template::match_template! {
+            $t = [Int, Real, Bytes, Duration, Decimal, DateTime, Enum],
+            $($tail)*
+        }
+    }}
 }
 
-/// Fast Hash Aggregation Executor uses hash when comparing group key. It only supports one
-/// group by column.
+/// Fast Hash Aggregation Executor uses hash when comparing group key. It only
+/// supports one group by column.
 pub struct BatchFastHashAggregationExecutor<Src: BatchExecutor>(
     AggregationExecutor<Src, FastHashAggregationImpl>,
 );
 
+#[async_trait]
 impl<Src: BatchExecutor> BatchExecutor for BatchFastHashAggregationExecutor<Src> {
     type StorageStats = Src::StorageStats;
 
@@ -45,8 +49,8 @@ impl<Src: BatchExecutor> BatchExecutor for BatchFastHashAggregationExecutor<Src>
     }
 
     #[inline]
-    fn next_batch(&mut self, scan_rows: usize) -> BatchExecuteResult {
-        self.0.next_batch(scan_rows)
+    async fn next_batch(&mut self, scan_rows: usize) -> BatchExecuteResult {
+        self.0.next_batch(scan_rows).await
     }
 
     #[inline]
@@ -70,8 +74,8 @@ impl<Src: BatchExecutor> BatchExecutor for BatchFastHashAggregationExecutor<Src>
     }
 }
 
-// We assign a dummy type `Box<dyn BatchExecutor<StorageStats = ()>>` so that we can omit the type
-// when calling `check_supported`.
+// We assign a dummy type `Box<dyn BatchExecutor<StorageStats = ()>>` so that we
+// can omit the type when calling `check_supported`.
 impl BatchFastHashAggregationExecutor<Box<dyn BatchExecutor<StorageStats = ()>>> {
     /// Checks whether this executor can be used.
     #[inline]
@@ -122,6 +126,17 @@ impl<Src: BatchExecutor> BatchFastHashAggregationExecutor<Src> {
             aggr_def_parser,
         )
         .unwrap()
+    }
+
+    #[cfg(test)]
+    pub fn new_for_test_with_config(
+        config: Arc<EvalConfig>,
+        src: Src,
+        group_by_exp: RpnExpression,
+        aggr_defs: Vec<Expr>,
+        aggr_def_parser: impl AggrDefinitionParser,
+    ) -> Self {
+        Self::new_impl(config, src, group_by_exp, aggr_defs, aggr_def_parser).unwrap()
     }
 
     pub fn new(
@@ -185,14 +200,15 @@ impl<Src: BatchExecutor> BatchFastHashAggregationExecutor<Src> {
 /// All groups.
 enum Groups {
     // The value of each hash table is the start index in `FastHashAggregationImpl::states`
-    // field. When there are new groups (i.e. new entry in the hash table), the states of the groups
-    // will be appended to `states`.
+    // field. When there are new groups (i.e. new entry in the hash table), the states of the
+    // groups will be appended to `states`.
     Int(HashMap<Option<Int>, usize>),
     Real(HashMap<Option<Real>, usize>),
     Bytes(HashMap<Option<Bytes>, usize>),
     Duration(HashMap<Option<Duration>, usize>),
     Decimal(HashMap<Option<Decimal>, usize>),
     DateTime(HashMap<Option<DateTime>, usize>),
+    Enum(HashMap<Option<Enum>, usize>),
 }
 
 impl Groups {
@@ -251,7 +267,7 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for FastHashAggregationImp
         match group_by_result {
             RpnStackNode::Scalar { value, .. } => {
                 match_template::match_template! {
-                    TT = [Int, Bytes, Real, Duration, Decimal, DateTime],
+                    TT = [Int, Bytes, Real, Duration, Decimal, DateTime, Enum],
                     match value {
                         ScalarValue::TT(v) => {
                             if let Groups::TT(group) = &mut self.groups {
@@ -276,7 +292,7 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for FastHashAggregationImp
                 let group_by_logical_rows = value.logical_rows_struct();
 
                 match_template::match_template! {
-                    TT = [Int, Real, Duration, Decimal, DateTime],
+                    TT = [Int, Real, Duration, Decimal, DateTime, Enum],
                     match group_by_physical_vec {
                         VectorValue::TT(v) => {
                             if let Groups::TT(group) = &mut self.groups {
@@ -345,10 +361,10 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for FastHashAggregationImp
     fn iterate_available_groups(
         &mut self,
         entities: &mut Entities<Src>,
-        src_is_drained: bool,
+        src_is_drained: BatchExecIsDrain,
         mut iteratee: impl FnMut(&mut Entities<Src>, &[Box<dyn AggrFunctionState>]) -> Result<()>,
     ) -> Result<Vec<LazyBatchColumn>> {
-        assert!(src_is_drained);
+        assert!(src_is_drained.stop());
 
         let aggr_fns_len = entities.each_aggr_fn.len();
         let mut group_by_column = LazyBatchColumn::decoded_with_capacity_and_tp(
@@ -374,7 +390,8 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for FastHashAggregationImp
         Ok(vec![group_by_column])
     }
 
-    /// Fast hash aggregation can output aggregate results only if the source is drained.
+    /// Fast hash aggregation can output aggregate results only if the source is
+    /// drained.
     #[inline]
     fn is_partial_results_ready(&self) -> bool {
         false
@@ -449,25 +466,27 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
-    use tidb_query_datatype::FieldTypeTp;
-    use tipb::ScalarFuncSig;
-
-    use crate::util::aggr_executor::tests::*;
-    use crate::util::mock_executor::MockExecutor;
-    use crate::BatchSlowHashAggregationExecutor;
-    use tidb_query_datatype::expr::EvalWarnings;
-    use tidb_query_expr::impl_arithmetic::{arithmetic_fn_meta, RealPlus};
-    use tidb_query_expr::{RpnExpression, RpnExpressionBuilder};
-    use tipb::ExprType;
+    use futures::executor::block_on;
+    use tidb_query_datatype::{expr::EvalWarnings, FieldTypeTp};
+    use tidb_query_expr::{
+        impl_arithmetic::{arithmetic_fn_meta, RealPlus},
+        RpnExpression, RpnExpressionBuilder,
+    };
+    use tipb::{ExprType, ScalarFuncSig};
     use tipb_helper::ExprDefBuilder;
+
+    use super::*;
+    use crate::{
+        util::{aggr_executor::tests::*, mock_executor::MockExecutor},
+        BatchSlowHashAggregationExecutor,
+    };
 
     // Test cases also cover BatchSlowHashAggregationExecutor.
 
     #[test]
     fn test_it_works_integration() {
-        // This test creates a hash aggregation executor with the following aggregate functions:
+        // This test creates a hash aggregation executor with the following aggregate
+        // functions:
         // - COUNT(1)
         // - COUNT(col_1 + 5.0)
         // - AVG(col_0)
@@ -523,29 +542,31 @@ mod tests {
             let src_exec = make_src_executor_1();
             let mut exec = exec_builder(src_exec);
 
-            let r = exec.next_batch(1);
+            let r = block_on(exec.next_batch(1));
             assert!(r.logical_rows.is_empty());
             assert_eq!(r.physical_columns.rows_len(), 0);
-            assert!(!r.is_drained.unwrap());
+            assert!(r.is_drained.unwrap().is_remain());
 
-            let r = exec.next_batch(1);
+            let r = block_on(exec.next_batch(1));
             assert!(r.logical_rows.is_empty());
             assert_eq!(r.physical_columns.rows_len(), 0);
-            assert!(!r.is_drained.unwrap());
+            assert!(r.is_drained.unwrap().is_remain());
 
-            let mut r = exec.next_batch(1);
-            // col_0 + col_1 can result in [NULL, 9.0, 6.0], thus there will be three groups.
+            let mut r = block_on(exec.next_batch(1));
+            // col_0 + col_1 can result in [NULL, 9.0, 6.0], thus there will be three
+            // groups.
             assert_eq!(&r.logical_rows, &[0, 1, 2]);
             assert_eq!(r.physical_columns.rows_len(), 3);
             assert_eq!(r.physical_columns.columns_len(), 5); // 4 result column, 1 group by column
 
-            // Let's check group by column first. Group by column is decoded in fast hash agg,
-            // but not decoded in slow hash agg. So decode it anyway.
+            // Let's check group by column first. Group by column is decoded in fast hash
+            // agg, but not decoded in slow hash agg. So decode it anyway.
             r.physical_columns[4]
                 .ensure_all_decoded_for_test(&mut EvalContext::default(), &exec.schema()[4])
                 .unwrap();
 
-            // The row order is not defined. Let's sort it by the group by column before asserting.
+            // The row order is not defined. Let's sort it by the group by column before
+            // asserting.
             let mut sort_column: Vec<(usize, _)> = r.physical_columns[4]
                 .decoded()
                 .to_real_vec()
@@ -597,7 +618,8 @@ mod tests {
 
     #[test]
     fn test_group_by_a_constant() {
-        // This test creates a hash aggregation executor with the following aggregate functions:
+        // This test creates a hash aggregation executor with the following aggregate
+        // functions:
         // - COUNT(1)
         // - COUNT(col_1 + 5.0)
         // - AVG(col_0)
@@ -656,17 +678,17 @@ mod tests {
             let src_exec = make_src_executor_1();
             let mut exec = exec_builder(src_exec);
 
-            let r = exec.next_batch(1);
+            let r = block_on(exec.next_batch(1));
             assert!(r.logical_rows.is_empty());
             assert_eq!(r.physical_columns.rows_len(), 0);
-            assert!(!r.is_drained.unwrap());
+            assert!(r.is_drained.unwrap().is_remain());
 
-            let r = exec.next_batch(1);
+            let r = block_on(exec.next_batch(1));
             assert!(r.logical_rows.is_empty());
             assert_eq!(r.physical_columns.rows_len(), 0);
-            assert!(!r.is_drained.unwrap());
+            assert!(r.is_drained.unwrap().is_remain());
 
-            let mut r = exec.next_batch(1);
+            let mut r = block_on(exec.next_batch(1));
             assert_eq!(&r.logical_rows, &[0]);
             assert_eq!(r.physical_columns.rows_len(), 1);
             assert_eq!(r.physical_columns.columns_len(), 5); // 4 result column, 1 group by column
@@ -693,7 +715,8 @@ mod tests {
         use tipb::ExprType;
         use tipb_helper::ExprDefBuilder;
 
-        // This test creates a hash aggregation executor with the following aggregate functions:
+        // This test creates a hash aggregation executor with the following aggregate
+        // functions:
         // - COUNT(col_0)
         // - AVG(col_1)
         // And group by:
@@ -739,29 +762,30 @@ mod tests {
             let src_exec = make_src_executor_1();
             let mut exec = exec_builder(src_exec);
 
-            let r = exec.next_batch(1);
+            let r = block_on(exec.next_batch(1));
             assert!(r.logical_rows.is_empty());
             assert_eq!(r.physical_columns.rows_len(), 0);
-            assert!(!r.is_drained.unwrap());
+            assert!(r.is_drained.unwrap().is_remain());
 
-            let r = exec.next_batch(1);
+            let r = block_on(exec.next_batch(1));
             assert!(r.logical_rows.is_empty());
             assert_eq!(r.physical_columns.rows_len(), 0);
-            assert!(!r.is_drained.unwrap());
+            assert!(r.is_drained.unwrap().is_remain());
 
-            let mut r = exec.next_batch(1);
+            let mut r = block_on(exec.next_batch(1));
             // col_4 can result in [NULL, "aa", "aaa"], thus there will be three groups.
             assert_eq!(&r.logical_rows, &[0, 1, 2]);
             assert_eq!(r.physical_columns.rows_len(), 3);
             assert_eq!(r.physical_columns.columns_len(), 4); // 3 result column, 1 group by column
 
-            // Let's check group by column first. Group by column is decoded in fast hash agg,
-            // but not decoded in slow hash agg. So decode it anyway.
+            // Let's check group by column first. Group by column is decoded in fast hash
+            // agg, but not decoded in slow hash agg. So decode it anyway.
             r.physical_columns[3]
                 .ensure_all_decoded_for_test(&mut EvalContext::default(), &exec.schema()[3])
                 .unwrap();
 
-            // The row order is not defined. Let's sort it by the group by column before asserting.
+            // The row order is not defined. Let's sort it by the group by column before
+            // asserting.
             let mut sort_column: Vec<(usize, _)> = r.physical_columns[3]
                 .decoded()
                 .to_bytes_vec()
@@ -856,9 +880,11 @@ mod tests {
         let exec_slow_col = |src_exec| {
             Box::new(BatchSlowHashAggregationExecutor::new_for_test(
                 src_exec,
-                vec![RpnExpressionBuilder::new_for_test()
-                    .push_column_ref_for_test(0)
-                    .build_for_test()],
+                vec![
+                    RpnExpressionBuilder::new_for_test()
+                        .push_column_ref_for_test(0)
+                        .build_for_test(),
+                ],
                 vec![Expr::default()],
                 MyParser,
             )) as Box<dyn BatchExecutor<StorageStats = ()>>
@@ -867,9 +893,11 @@ mod tests {
         let exec_slow_const = |src_exec| {
             Box::new(BatchSlowHashAggregationExecutor::new_for_test(
                 src_exec,
-                vec![RpnExpressionBuilder::new_for_test()
-                    .push_constant_for_test(0)
-                    .build_for_test()],
+                vec![
+                    RpnExpressionBuilder::new_for_test()
+                        .push_constant_for_test(0)
+                        .build_for_test(),
+                ],
                 vec![Expr::default()],
                 MyParser,
             )) as Box<dyn BatchExecutor<StorageStats = ()>>
@@ -907,27 +935,27 @@ mod tests {
                         physical_columns: LazyBatchColumnVec::empty(),
                         logical_rows: Vec::new(),
                         warnings: EvalWarnings::default(),
-                        is_drained: Ok(false),
+                        is_drained: Ok(BatchExecIsDrain::Remain),
                     },
                     BatchExecuteResult {
                         physical_columns: LazyBatchColumnVec::empty(),
                         logical_rows: Vec::new(),
                         warnings: EvalWarnings::default(),
-                        is_drained: Ok(true),
+                        is_drained: Ok(BatchExecIsDrain::Drain),
                     },
                 ],
             );
             let mut exec = exec_builder(src_exec);
 
-            let r = exec.next_batch(1);
+            let r = block_on(exec.next_batch(1));
             assert!(r.logical_rows.is_empty());
             assert_eq!(r.physical_columns.rows_len(), 0);
-            assert!(!r.is_drained.unwrap());
+            assert!(r.is_drained.unwrap().is_remain());
 
-            let r = exec.next_batch(1);
+            let r = block_on(exec.next_batch(1));
             assert!(r.logical_rows.is_empty());
             assert_eq!(r.physical_columns.rows_len(), 0);
-            assert!(r.is_drained.unwrap());
+            assert!(r.is_drained.unwrap().stop());
         }
     }
 
@@ -950,9 +978,11 @@ mod tests {
         let exec_slow_col = |src_exec| {
             Box::new(BatchSlowHashAggregationExecutor::new_for_test(
                 src_exec,
-                vec![RpnExpressionBuilder::new_for_test()
-                    .push_column_ref_for_test(0)
-                    .build_for_test()],
+                vec![
+                    RpnExpressionBuilder::new_for_test()
+                        .push_column_ref_for_test(0)
+                        .build_for_test(),
+                ],
                 vec![],
                 AllAggrDefinitionParser,
             )) as Box<dyn BatchExecutor<StorageStats = ()>>
@@ -965,17 +995,17 @@ mod tests {
             let src_exec = make_src_executor_1();
             let mut exec = exec_builder(src_exec);
 
-            let r = exec.next_batch(1);
+            let r = block_on(exec.next_batch(1));
             assert!(r.logical_rows.is_empty());
             assert_eq!(r.physical_columns.rows_len(), 0);
-            assert!(!r.is_drained.unwrap());
+            assert!(r.is_drained.unwrap().is_remain());
 
-            let r = exec.next_batch(1);
+            let r = block_on(exec.next_batch(1));
             assert!(r.logical_rows.is_empty());
             assert_eq!(r.physical_columns.rows_len(), 0);
-            assert!(!r.is_drained.unwrap());
+            assert!(r.is_drained.unwrap().is_remain());
 
-            let mut r = exec.next_batch(1);
+            let mut r = block_on(exec.next_batch(1));
             assert_eq!(&r.logical_rows, &[0, 1, 2]);
             assert_eq!(r.physical_columns.rows_len(), 3);
             assert_eq!(r.physical_columns.columns_len(), 1); // 0 result column, 1 group by column
@@ -1019,9 +1049,11 @@ mod tests {
         let exec_slow_const = |src_exec| {
             Box::new(BatchSlowHashAggregationExecutor::new_for_test(
                 src_exec,
-                vec![RpnExpressionBuilder::new_for_test()
-                    .push_constant_for_test(1)
-                    .build_for_test()],
+                vec![
+                    RpnExpressionBuilder::new_for_test()
+                        .push_constant_for_test(1)
+                        .build_for_test(),
+                ],
                 vec![],
                 AllAggrDefinitionParser,
             )) as Box<dyn BatchExecutor<StorageStats = ()>>
@@ -1034,17 +1066,17 @@ mod tests {
             let src_exec = make_src_executor_1();
             let mut exec = exec_builder(src_exec);
 
-            let r = exec.next_batch(1);
+            let r = block_on(exec.next_batch(1));
             assert!(r.logical_rows.is_empty());
             assert_eq!(r.physical_columns.rows_len(), 0);
-            assert!(!r.is_drained.unwrap());
+            assert!(r.is_drained.unwrap().is_remain());
 
-            let r = exec.next_batch(1);
+            let r = block_on(exec.next_batch(1));
             assert!(r.logical_rows.is_empty());
             assert_eq!(r.physical_columns.rows_len(), 0);
-            assert!(!r.is_drained.unwrap());
+            assert!(r.is_drained.unwrap().is_remain());
 
-            let mut r = exec.next_batch(1);
+            let mut r = block_on(exec.next_batch(1));
             assert_eq!(&r.logical_rows, &[0]);
             assert_eq!(r.physical_columns.rows_len(), 1);
             assert_eq!(r.physical_columns.columns_len(), 1); // 0 result column, 1 group by column
@@ -1053,5 +1085,89 @@ mod tests {
                 .unwrap();
             assert_eq!(r.physical_columns[0].decoded().to_int_vec(), &[Some(1)]);
         }
+    }
+
+    #[test]
+    fn test_group_by_enum_column() {
+        // This test creates a hash aggregation executor with the following aggregate
+        // functions:
+        // - COUNT(1)
+        // And group by:
+        // - col_0(enum_type)
+
+        let group_by_exp = || {
+            RpnExpressionBuilder::new_for_test()
+                .push_column_ref_for_test(0)
+                .build_for_test()
+        };
+
+        let aggr_definitions = || {
+            vec![
+                ExprDefBuilder::aggr_func(ExprType::Count, FieldTypeTp::LongLong)
+                    .push_child(ExprDefBuilder::constant_int(1))
+                    .build(),
+            ]
+        };
+
+        let exec_builder = |src_exec| {
+            Box::new(BatchFastHashAggregationExecutor::new_for_test(
+                src_exec,
+                group_by_exp(),
+                aggr_definitions(),
+                AllAggrDefinitionParser,
+            )) as Box<dyn BatchExecutor<StorageStats = ()>>
+        };
+
+        let src_exec = MockExecutor::new(
+            vec![FieldTypeTp::Enum.into()],
+            vec![BatchExecuteResult {
+                physical_columns: LazyBatchColumnVec::from(vec![VectorValue::Enum(
+                    vec![
+                        None,
+                        Some(Enum::new(Vec::from("aaaa".as_bytes()), 1)),
+                        Some(Enum::new(Vec::from("bbbb".as_bytes()), 2)),
+                        Some(Enum::new(Vec::from("bbbb".as_bytes()), 2)),
+                        Some(Enum::new(Vec::from("cccc".as_bytes()), 3)),
+                        Some(Enum::new(Vec::from("cccc".as_bytes()), 3)),
+                        Some(Enum::new(Vec::from("cccc".as_bytes()), 3)),
+                    ]
+                    .into(),
+                )]),
+                logical_rows: vec![6, 4, 5, 1, 3, 2, 0],
+                warnings: EvalWarnings::default(),
+                is_drained: Ok(BatchExecIsDrain::Drain),
+            }],
+        );
+        let mut exec = exec_builder(src_exec);
+        let r = block_on(exec.next_batch(4));
+        assert_eq!(r.physical_columns.rows_len(), 4);
+        assert_eq!(r.physical_columns.columns_len(), 2);
+
+        let mut sort_column: Vec<(usize, _)> = r.physical_columns[1]
+            .decoded()
+            .to_enum_vec()
+            .into_iter()
+            .enumerate()
+            .collect();
+        sort_column.sort_by(|a, b| a.1.cmp(&b.1));
+
+        let ordered_column: Vec<_> = sort_column
+            .iter()
+            .map(|(idx, _)| r.physical_columns[1].decoded().to_enum_vec()[*idx].clone())
+            .collect();
+        assert_eq!(
+            &ordered_column,
+            &[
+                None,
+                Some(Enum::new(Vec::from("aaaa".as_bytes()), 1)),
+                Some(Enum::new(Vec::from("bbbb".as_bytes()), 2)),
+                Some(Enum::new(Vec::from("cccc".as_bytes()), 3))
+            ]
+        );
+        let ordered_column: Vec<_> = sort_column
+            .iter()
+            .map(|(idx, _)| r.physical_columns[0].decoded().to_int_vec()[*idx])
+            .collect();
+        assert_eq!(&ordered_column, &[Some(1), Some(1), Some(2), Some(3)]);
     }
 }

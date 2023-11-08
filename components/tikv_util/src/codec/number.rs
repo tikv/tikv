@@ -1,8 +1,11 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::{
+    io::{self, ErrorKind, Write},
+    mem,
+};
+
 use byteorder::{BigEndian, ByteOrder, LittleEndian, WriteBytesExt};
-use std::io::{self, ErrorKind, Write};
-use std::mem;
 
 use super::{BytesSlice, Error, Result};
 
@@ -41,27 +44,31 @@ fn order_decode_f64(u: u64) -> f64 {
 
 pub trait NumberEncoder: Write {
     /// Writes the encoded value to buf.
-    /// It guarantees that the encoded value is in ascending order for comparison.
+    /// It guarantees that the encoded value is in ascending order for
+    /// comparison.
     fn encode_i64(&mut self, v: i64) -> Result<()> {
         let u = order_encode_i64(v);
         self.encode_u64(u)
     }
 
     /// Writes the encoded value to buf.
-    /// It guarantees that the encoded value is in descending order for comparison.
+    /// It guarantees that the encoded value is in descending order for
+    /// comparison.
     fn encode_i64_desc(&mut self, v: i64) -> Result<()> {
         let u = order_encode_i64(v);
         self.encode_u64_desc(u)
     }
 
     /// Writes the encoded value to slice buf.
-    /// It guarantees that the encoded value is in ascending order for comparison.
+    /// It guarantees that the encoded value is in ascending order for
+    /// comparison.
     fn encode_u64(&mut self, v: u64) -> Result<()> {
         self.write_u64::<BigEndian>(v).map_err(From::from)
     }
 
     /// Writes the encoded value to slice buf.
-    /// It guarantees that the encoded value is in descending order for comparison.
+    /// It guarantees that the encoded value is in descending order for
+    /// comparison.
     fn encode_u64_desc(&mut self, v: u64) -> Result<()> {
         self.write_u64::<BigEndian>(!v).map_err(From::from)
     }
@@ -97,14 +104,16 @@ pub trait NumberEncoder: Write {
     }
 
     /// Writes the encoded value to slice buf.
-    /// It guarantees that the encoded value is in ascending order for comparison.
+    /// It guarantees that the encoded value is in ascending order for
+    /// comparison.
     fn encode_f64(&mut self, f: f64) -> Result<()> {
         let u = order_encode_f64(f);
         self.encode_u64(u)
     }
 
     /// Writes the encoded value to slice buf.
-    /// It guarantees that the encoded value is in descending order for comparison.
+    /// It guarantees that the encoded value is in descending order for
+    /// comparison.
     fn encode_f64_desc(&mut self, f: f64) -> Result<()> {
         let u = order_encode_f64(f);
         self.encode_u64_desc(u)
@@ -327,12 +336,12 @@ pub fn read_u8(data: &mut BytesSlice<'_>) -> Result<u8> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::codec::Error;
+    use std::io::ErrorKind;
 
     use protobuf::CodedOutputStream;
-    use std::io::ErrorKind;
-    use std::{f32, f64, i16, i32, i64, u16, u32, u64};
+
+    use super::*;
+    use crate::codec::Error;
 
     const U16_TESTS: &[u16] = &[
         i16::MIN as u16,

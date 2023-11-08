@@ -1,21 +1,22 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use serde_derive::{Deserialize, Serialize};
 use std::error::Error;
+
+use serde_derive::{Deserialize, Serialize};
 use tikv_util::config::ReadableDuration;
 /// The configuration for a PD Client.
 ///
-/// By default during initialization the client will attempt to reconnect every 300s
-/// for infinity, logging only every 10th duplicate error.
+/// By default during initialization the client will attempt to reconnect every
+/// 300s for infinity, logging only every 10th duplicate error.
 #[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct Config {
     /// The PD endpoints for the client.
     ///
-    /// Default is empty.
+    /// Default is `"127.0.0.1:2379"`.
     pub endpoints: Vec<String>,
-    /// The interval at which to retry a PD connection initialization.
+    /// The interval at which to retry a PD connection.
     ///
     /// Default is 300ms.
     pub retry_interval: ReadableDuration,
@@ -23,8 +24,8 @@ pub struct Config {
     ///
     /// Default is isize::MAX, represented by -1.
     pub retry_max_count: isize,
-    /// If the client observes the same error message on retry, it can repeat the message only
-    /// every `n` times.
+    /// If the client observes the same error message on retry, it can repeat
+    /// the message only every `n` times.
     ///
     /// Default is 10. Set to 1 to disable this feature.
     pub retry_log_every: usize,
@@ -32,6 +33,11 @@ pub struct Config {
     ///
     /// Default is 10m.
     pub update_interval: ReadableDuration,
+    /// The switch to support forwarding requests to follower when the network
+    /// partition problem happens.
+    ///
+    /// Default is false.
+    pub enable_forwarding: bool,
 }
 
 impl Default for Config {
@@ -42,6 +48,7 @@ impl Default for Config {
             retry_max_count: std::isize::MAX,
             retry_log_every: 10,
             update_interval: ReadableDuration::minutes(10),
+            enable_forwarding: false,
         }
     }
 }

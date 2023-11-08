@@ -3,32 +3,35 @@
 //! This mod implemented a wrapped future pool that supports `on_tick()` which
 //! is invoked no less than the specific interval.
 
-use std::future::Future;
-use std::sync::Arc;
+use std::{
+    future::Future,
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    },
+};
 
+use fail::fail_point;
 use futures::channel::oneshot::{self, Canceled};
-use prometheus::{Histogram, IntCounter, IntGauge};
-use yatp::task::future;
+use prometheus::{IntCounter, IntGauge};
+use tracker::TrackedFuture;
+use yatp::{queue::Extras, task::future};
 
 pub type ThreadPool = yatp::ThreadPool<future::TaskCell>;
 
 use super::metrics;
-use crate::time::Instant;
 
 #[derive(Clone)]
 struct Env {
     metrics_running_task_count: IntGauge,
     metrics_handled_task_count: IntCounter,
-    metrics_pool_schedule_duration: Histogram,
 }
 
 #[derive(Clone)]
+// FuturePool wraps a yatp thread pool providing task count metrics and gate
+// maximum running tasks.
 pub struct FuturePool {
-    pool: Arc<ThreadPool>,
-    env: Env,
-    // for accessing pool_size config since yatp doesn't offer such getter.
-    pool_size: usize,
-    max_tasks: usize,
+    inner: Arc<PoolInner>,
 }
 
 impl std::fmt::Debug for FuturePool {
@@ -47,28 +50,95 @@ impl FuturePool {
                 .with_label_values(&[name]),
             metrics_handled_task_count: metrics::FUTUREPOOL_HANDLED_TASK_VEC
                 .with_label_values(&[name]),
-            metrics_pool_schedule_duration: metrics::FUTUREPOOL_SCHEDULE_DURATION_VEC
-                .with_label_values(&[name]),
         };
         FuturePool {
-            pool: Arc::new(pool),
-            env,
-            pool_size,
-            max_tasks,
+            inner: Arc::new(PoolInner {
+                pool,
+                env,
+                pool_size: AtomicUsize::new(pool_size),
+                max_tasks,
+            }),
         }
     }
 
     /// Gets inner thread pool size.
     #[inline]
     pub fn get_pool_size(&self) -> usize {
-        self.pool_size
+        self.inner.pool_size.load(Ordering::Relaxed)
+    }
+
+    pub fn scale_pool_size(&self, thread_count: usize) {
+        self.inner.scale_pool_size(thread_count)
     }
 
     /// Gets current running task count.
     #[inline]
     pub fn get_running_task_count(&self) -> usize {
-        // As long as different future pool has different name prefix, we can safely use the value
-        // in metrics.
+        // As long as different future pool has different name prefix, we can safely use
+        // the value in metrics.
+        self.inner.get_running_task_count()
+    }
+
+    /// Spawns a future in the pool.
+    pub fn spawn<F>(&self, future: F) -> Result<(), Full>
+    where
+        F: Future + Send + 'static,
+    {
+        self.inner.spawn(TrackedFuture::new(future), None)
+    }
+
+    pub fn spawn_with_extras<F>(&self, future: F, extras: Extras) -> Result<(), Full>
+    where
+        F: Future + Send + 'static,
+    {
+        self.inner.spawn(TrackedFuture::new(future), Some(extras))
+    }
+
+    /// Spawns a future in the pool and returns a handle to the result of the
+    /// future.
+    ///
+    /// The future will not be executed if the handle is not polled.
+    pub fn spawn_handle<F>(
+        &self,
+        future: F,
+    ) -> Result<impl Future<Output = Result<F::Output, Canceled>>, Full>
+    where
+        F: Future + Send + 'static,
+        F::Output: Send,
+    {
+        self.inner.spawn_handle(TrackedFuture::new(future))
+    }
+
+    /// Return the min thread count and the max thread count that this pool can
+    /// scale to.
+    pub fn thread_count_limit(&self) -> (usize, usize) {
+        self.inner.pool.thread_count_limit()
+    }
+
+    /// Cancel all pending futures and join all threads.
+    pub fn shutdown(&self) {
+        self.inner.pool.shutdown();
+    }
+}
+
+struct PoolInner {
+    pool: ThreadPool,
+    env: Env,
+    // for accessing pool_size config since yatp doesn't offer such getter.
+    pool_size: AtomicUsize,
+    max_tasks: usize,
+}
+
+impl PoolInner {
+    #[inline]
+    fn scale_pool_size(&self, thread_count: usize) {
+        self.pool.scale_workers(thread_count);
+        self.pool_size.store(thread_count, Ordering::Release);
+    }
+
+    fn get_running_task_count(&self) -> usize {
+        // As long as different future pool has different name prefix, we can safely use
+        // the value in metrics.
         self.env.metrics_running_task_count.get() as usize
     }
 
@@ -93,13 +163,10 @@ impl FuturePool {
         }
     }
 
-    /// Spawns a future in the pool.
-    pub fn spawn<F>(&self, future: F) -> Result<(), Full>
+    fn spawn<F>(&self, future: F, extras: Option<Extras>) -> Result<(), Full>
     where
         F: Future + Send + 'static,
     {
-        let timer = Instant::now_coarse();
-        let h_schedule = self.env.metrics_pool_schedule_duration.clone();
         let metrics_handled_task_count = self.env.metrics_handled_task_count.clone();
         let metrics_running_task_count = self.env.metrics_running_task_count.clone();
 
@@ -107,19 +174,21 @@ impl FuturePool {
 
         metrics_running_task_count.inc();
 
-        self.pool.spawn(async move {
-            h_schedule.observe(timer.elapsed_secs());
+        let f = async move {
             let _ = future.await;
             metrics_handled_task_count.inc();
             metrics_running_task_count.dec();
-        });
+        };
+
+        if let Some(extras) = extras {
+            self.pool.spawn(future::TaskCell::new(f, extras));
+        } else {
+            self.pool.spawn(f);
+        }
         Ok(())
     }
 
-    /// Spawns a future in the pool and returns a handle to the result of the future.
-    ///
-    /// The future will not be executed if the handle is not polled.
-    pub fn spawn_handle<F>(
+    fn spawn_handle<F>(
         &self,
         future: F,
     ) -> Result<impl Future<Output = Result<F::Output, Canceled>>, Full>
@@ -127,8 +196,6 @@ impl FuturePool {
         F: Future + Send + 'static,
         F::Output: Send,
     {
-        let timer = Instant::now_coarse();
-        let h_schedule = self.env.metrics_pool_schedule_duration.clone();
         let metrics_handled_task_count = self.env.metrics_handled_task_count.clone();
         let metrics_running_task_count = self.env.metrics_running_task_count.clone();
 
@@ -137,7 +204,6 @@ impl FuturePool {
         let (tx, rx) = oneshot::channel();
         metrics_running_task_count.inc();
         self.pool.spawn(async move {
-            h_schedule.observe(timer.elapsed_secs());
             let res = future.await;
             metrics_handled_task_count.inc();
             metrics_running_task_count.dec();
@@ -147,7 +213,7 @@ impl FuturePool {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Full {
     pub current_tasks: usize,
     pub max_tasks: usize,
@@ -167,18 +233,21 @@ impl std::error::Error for Full {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
-    use std::sync::mpsc;
-    use std::sync::{
-        atomic::{AtomicUsize, Ordering},
-        Mutex,
+    use std::{
+        sync::{
+            atomic::{AtomicUsize, Ordering},
+            mpsc, Mutex,
+        },
+        thread,
+        time::Duration,
     };
-    use std::thread;
-    use std::time::Duration;
 
-    use super::super::{DefaultTicker, PoolTicker, YatpPoolBuilder as Builder, TICK_INTERVAL};
     use futures::executor::block_on;
+
+    use super::{
+        super::{DefaultTicker, PoolTicker, YatpPoolBuilder as Builder, TICK_INTERVAL},
+        *,
+    };
 
     fn spawn_future_and_wait(pool: &FuturePool, duration: Duration) {
         block_on(
@@ -230,7 +299,9 @@ mod tests {
             tx.send(seq).unwrap();
         });
 
-        let pool = Builder::new(ticker).thread_count(1, 1).build_future_pool();
+        let pool = Builder::new(ticker)
+            .thread_count(1, 1, 1)
+            .build_future_pool();
         let try_recv_tick = || {
             let rx = rx.clone();
             block_on(
@@ -240,11 +311,11 @@ mod tests {
             .unwrap()
         };
 
-        assert!(try_recv_tick().is_err());
+        try_recv_tick().unwrap_err();
 
         // Tick is emitted because long enough time has elapsed since pool is created
         spawn_future_and_wait(&pool, TICK_INTERVAL / 20);
-        assert!(try_recv_tick().is_err());
+        try_recv_tick().unwrap_err();
 
         spawn_future_and_wait(&pool, TICK_INTERVAL / 20);
         spawn_future_and_wait(&pool, TICK_INTERVAL / 20);
@@ -252,29 +323,30 @@ mod tests {
         spawn_future_and_wait(&pool, TICK_INTERVAL / 20);
 
         // So far we have only elapsed TICK_INTERVAL * 0.2, so no ticks so far.
-        assert!(try_recv_tick().is_err());
+        try_recv_tick().unwrap_err();
 
-        // Even if long enough time has elapsed, tick is not emitted until next task arrives
+        // Even if long enough time has elapsed, tick is not emitted until next task
+        // arrives
         thread::sleep(TICK_INTERVAL * 2);
-        assert!(try_recv_tick().is_err());
+        try_recv_tick().unwrap_err();
 
         spawn_future_and_wait(&pool, TICK_INTERVAL / 20);
         assert_eq!(try_recv_tick().unwrap(), 0);
-        assert!(try_recv_tick().is_err());
+        try_recv_tick().unwrap_err();
 
         // Tick is not emitted if there is no task
         thread::sleep(TICK_INTERVAL * 2);
-        assert!(try_recv_tick().is_err());
+        try_recv_tick().unwrap_err();
 
         // Tick is emitted since long enough time has passed
         spawn_future_and_wait(&pool, TICK_INTERVAL / 20);
         assert_eq!(try_recv_tick().unwrap(), 1);
-        assert!(try_recv_tick().is_err());
+        try_recv_tick().unwrap_err();
 
         // Tick is emitted immediately after a long task
         spawn_future_and_wait(&pool, TICK_INTERVAL * 2);
         assert_eq!(try_recv_tick().unwrap(), 2);
-        assert!(try_recv_tick().is_err());
+        try_recv_tick().unwrap_err();
     }
 
     #[test]
@@ -287,20 +359,22 @@ mod tests {
             tx.send(seq).unwrap();
         });
 
-        let pool = Builder::new(ticker).thread_count(2, 2).build_future_pool();
+        let pool = Builder::new(ticker)
+            .thread_count(2, 2, 2)
+            .build_future_pool();
 
-        assert!(rx.try_recv().is_err());
+        rx.try_recv().unwrap_err();
 
         // Spawn two tasks, each will be processed in one worker thread.
         spawn_future_without_wait(&pool, TICK_INTERVAL / 2);
         spawn_future_without_wait(&pool, TICK_INTERVAL / 2);
 
-        assert!(rx.try_recv().is_err());
+        rx.try_recv().unwrap_err();
 
         // Wait long enough time to trigger a tick.
         thread::sleep(TICK_INTERVAL * 2);
 
-        assert!(rx.try_recv().is_err());
+        rx.try_recv().unwrap_err();
 
         // These two tasks should both trigger a tick.
         spawn_future_without_wait(&pool, TICK_INTERVAL);
@@ -311,13 +385,13 @@ mod tests {
 
         assert_eq!(rx.try_recv().unwrap(), 0);
         assert_eq!(rx.try_recv().unwrap(), 1);
-        assert!(rx.try_recv().is_err());
+        rx.try_recv().unwrap_err();
     }
 
     #[test]
     fn test_handle_result() {
         let pool = Builder::new(DefaultTicker {})
-            .thread_count(1, 1)
+            .thread_count(1, 1, 1)
             .build_future_pool();
 
         let handle = pool.spawn_handle(async { 42 });
@@ -329,7 +403,7 @@ mod tests {
     fn test_running_task_count() {
         let pool = Builder::new(DefaultTicker {})
             .name_prefix("future_pool_for_running_task_test") // The name is important
-            .thread_count(2, 2)
+            .thread_count(2, 2, 2)
             .build_future_pool();
 
         assert_eq!(pool.get_running_task_count(), 0);
@@ -381,7 +455,7 @@ mod tests {
 
         let read_pool = Builder::new(DefaultTicker {})
             .name_prefix("future_pool_test_full")
-            .thread_count(2, 2)
+            .thread_count(2, 2, 2)
             .max_tasks(4)
             .build_future_pool();
 
@@ -409,7 +483,7 @@ mod tests {
             spawn_long_time_future(&read_pool, 4, 400).unwrap(),
         );
         // no available results (running = 4)
-        assert!(rx.recv_timeout(Duration::from_millis(50)).is_err());
+        rx.recv_timeout(Duration::from_millis(50)).unwrap_err();
 
         // full
         assert!(spawn_long_time_future(&read_pool, 5, 100).is_err());
@@ -426,12 +500,30 @@ mod tests {
         // full
         assert!(spawn_long_time_future(&read_pool, 8, 100).is_err());
 
-        assert!(rx.recv().is_ok());
-        assert!(rx.recv().is_ok());
-        assert!(rx.recv().is_ok());
-        assert!(rx.recv().is_ok());
+        rx.recv().unwrap().unwrap();
+        rx.recv().unwrap().unwrap();
+        rx.recv().unwrap().unwrap();
+        rx.recv().unwrap().unwrap();
 
         // no more results
-        assert!(rx.recv_timeout(Duration::from_millis(500)).is_err());
+        rx.recv_timeout(Duration::from_millis(500)).unwrap_err();
+    }
+
+    #[test]
+    fn test_scale_pool_size() {
+        let pool = Builder::new(DefaultTicker {})
+            .thread_count(1, 4, 8)
+            .build_future_pool();
+
+        assert_eq!(pool.get_pool_size(), 4);
+        let cloned = pool.clone();
+
+        pool.scale_pool_size(8);
+        assert_eq!(pool.get_pool_size(), 8);
+        assert_eq!(cloned.get_pool_size(), 8);
+
+        pool.scale_pool_size(1);
+        assert_eq!(pool.get_pool_size(), 1);
+        assert_eq!(cloned.get_pool_size(), 1);
     }
 }

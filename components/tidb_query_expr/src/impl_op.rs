@@ -1,10 +1,8 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use tidb_query_codegen::rpn_fn;
-
 use tidb_query_common::Result;
-use tidb_query_datatype::codec::data_type::*;
-use tidb_query_datatype::codec::Error;
+use tidb_query_datatype::codec::{data_type::*, Error};
 
 #[rpn_fn(nullable)]
 #[inline]
@@ -31,7 +29,8 @@ pub fn logical_or(arg0: Option<&i64>, arg1: Option<&i64>) -> Result<Option<i64>>
 #[rpn_fn(nullable)]
 #[inline]
 pub fn logical_xor(arg0: Option<&i64>, arg1: Option<&i64>) -> Result<Option<i64>> {
-    // evaluates to 1 if an odd number of operands is nonzero, otherwise 0 is returned.
+    // evaluates to 1 if an odd number of operands is nonzero, otherwise 0 is
+    // returned.
     Ok(match (arg0, arg1) {
         (Some(arg0), Some(arg1)) => Some(((*arg0 == 0) ^ (*arg1 == 0)) as i64),
         _ => None,
@@ -58,15 +57,27 @@ pub fn unary_not_decimal(arg: Option<&Decimal>) -> Result<Option<i64>> {
 
 #[rpn_fn(nullable)]
 #[inline]
+pub fn unary_not_json(arg: Option<JsonRef>) -> Result<Option<i64>> {
+    let json_zero = Json::from_i64(0).unwrap();
+    Ok(arg.as_ref().map(|v| {
+        if v == &json_zero.as_ref() {
+            return 1;
+        }
+        0
+    }))
+}
+
+#[rpn_fn(nullable)]
+#[inline]
 pub fn unary_minus_uint(arg: Option<&Int>) -> Result<Option<Int>> {
     use std::cmp::Ordering::*;
 
     match arg {
         Some(val) => {
             let uval = *val as u64;
-            match uval.cmp(&(std::i64::MAX as u64 + 1)) {
-                Greater => Err(Error::overflow("BIGINT", &format!("-{}", uval)).into()),
-                Equal => Ok(Some(std::i64::MIN)),
+            match uval.cmp(&(i64::MAX as u64 + 1)) {
+                Greater => Err(Error::overflow("BIGINT", format!("-{}", uval)).into()),
+                Equal => Ok(Some(i64::MIN)),
                 Less => Ok(Some(-*val)),
             }
         }
@@ -79,8 +90,8 @@ pub fn unary_minus_uint(arg: Option<&Int>) -> Result<Option<Int>> {
 pub fn unary_minus_int(arg: Option<&Int>) -> Result<Option<Int>> {
     match arg {
         Some(val) => {
-            if *val == std::i64::MIN {
-                Err(Error::overflow("BIGINT", &format!("-{}", *val)).into())
+            if *val == i64::MIN {
+                Err(Error::overflow("BIGINT", format!("-{}", *val)).into())
             } else {
                 Ok(Some(-*val))
             }
@@ -263,13 +274,14 @@ fn right_shift(lhs: Option<&Int>, rhs: Option<&Int>) -> Result<Option<Int>> {
 
 #[cfg(test)]
 mod tests {
-    use tidb_query_datatype::{builder::FieldTypeBuilder, FieldTypeFlag, FieldTypeTp};
+    use tidb_query_datatype::{
+        builder::FieldTypeBuilder, codec::mysql::TimeType, expr::EvalContext, FieldTypeFlag,
+        FieldTypeTp,
+    };
     use tipb::ScalarFuncSig;
 
     use super::*;
     use crate::test_util::RpnFnScalarEvaluator;
-    use tidb_query_datatype::codec::mysql::TimeType;
-    use tidb_query_datatype::expr::EvalContext;
 
     #[test]
     fn test_logical_and() {
@@ -384,10 +396,30 @@ mod tests {
     }
 
     #[test]
+    fn test_unary_not_json() {
+        let test_cases = vec![
+            (None, None),
+            (Some(Json::from_i64(0).unwrap()), Some(1)),
+            (Some(Json::from_i64(1).unwrap()), Some(0)),
+            (
+                Some(Json::from_array(vec![Json::from_i64(0).unwrap()]).unwrap()),
+                Some(0),
+            ),
+        ];
+        for (arg, expect_output) in test_cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(arg.clone())
+                .evaluate(ScalarFuncSig::UnaryNotJson)
+                .unwrap();
+            assert_eq!(output, expect_output, "{:?}", arg.as_ref());
+        }
+    }
+
+    #[test]
     fn test_unary_minus_int() {
         let unsigned_test_cases = vec![
             (None, None),
-            (Some((std::i64::MAX as u64 + 1) as i64), Some(std::i64::MIN)),
+            (Some((i64::MAX as u64 + 1) as i64), Some(i64::MIN)),
             (Some(12345), Some(-12345)),
             (Some(0), Some(0)),
         ];
@@ -402,22 +434,22 @@ mod tests {
                 .unwrap();
             assert_eq!(output, expect_output, "{:?}", arg);
         }
-        assert!(RpnFnScalarEvaluator::new()
+        RpnFnScalarEvaluator::new()
             .push_param_with_field_type(
-                Some((std::i64::MAX as u64 + 2) as i64),
+                Some((i64::MAX as u64 + 2) as i64),
                 FieldTypeBuilder::new()
                     .tp(FieldTypeTp::LongLong)
                     .flag(FieldTypeFlag::UNSIGNED)
-                    .build()
+                    .build(),
             )
             .evaluate::<Int>(ScalarFuncSig::UnaryMinusInt)
-            .is_err());
+            .unwrap_err();
 
         let signed_test_cases = vec![
             (None, None),
-            (Some(std::i64::MAX), Some(-std::i64::MAX)),
-            (Some(-std::i64::MAX), Some(std::i64::MAX)),
-            (Some(std::i64::MIN + 1), Some(std::i64::MAX)),
+            (Some(i64::MAX), Some(-i64::MAX)),
+            (Some(-i64::MAX), Some(i64::MAX)),
+            (Some(i64::MIN + 1), Some(i64::MAX)),
             (Some(0), Some(0)),
         ];
         for (arg, expect_output) in signed_test_cases {
@@ -427,22 +459,31 @@ mod tests {
                 .unwrap();
             assert_eq!(output, expect_output, "{:?}", arg);
         }
-        assert!(RpnFnScalarEvaluator::new()
-            .push_param(std::i64::MIN)
+        RpnFnScalarEvaluator::new()
+            .push_param(i64::MIN)
             .evaluate::<Int>(ScalarFuncSig::UnaryMinusInt)
-            .is_err());
+            .unwrap_err();
     }
 
     #[test]
     fn test_unary_minus_real() {
         let test_cases = vec![
             (None, None),
-            (Some(Real::from(0.123_f64)), Some(Real::from(-0.123_f64))),
-            (Some(Real::from(-0.123_f64)), Some(Real::from(0.123_f64))),
-            (Some(Real::from(0.0_f64)), Some(Real::from(0.0_f64))),
             (
-                Some(Real::from(std::f64::INFINITY)),
-                Some(Real::from(std::f64::NEG_INFINITY)),
+                Some(Real::new(0.123_f64).unwrap()),
+                Some(Real::new(-0.123_f64).unwrap()),
+            ),
+            (
+                Some(Real::new(-0.123_f64).unwrap()),
+                Some(Real::new(0.123_f64).unwrap()),
+            ),
+            (
+                Some(Real::new(0.0_f64).unwrap()),
+                Some(Real::new(0.0_f64).unwrap()),
+            ),
+            (
+                Some(Real::new(f64::INFINITY).unwrap()),
+                Some(Real::new(f64::NEG_INFINITY).unwrap()),
             ),
         ];
         for (arg, expect_output) in test_cases {

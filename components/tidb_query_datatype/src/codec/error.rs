@@ -1,16 +1,13 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::fmt::Display;
-use std::io;
-use std::num::ParseFloatError;
-use std::str::Utf8Error;
-use std::string::FromUtf8Error;
-use std::{error, str};
+use std::{
+    error, fmt::Display, io, num::ParseFloatError, str, str::Utf8Error, string::FromUtf8Error,
+};
 
 use error_code::{self, ErrorCode, ErrorCodeExt};
-use quick_error::quick_error;
 use regex::Error as RegexpError;
 use serde_json::error::Error as SerdeError;
+use thiserror::Error;
 use tidb_query_common::error::EvaluateError;
 use tipb::{self, ScalarFuncSig};
 
@@ -26,36 +23,24 @@ pub const ERR_DIVISION_BY_ZERO: i32 = 1365;
 pub const ERR_DATA_TOO_LONG: i32 = 1406;
 pub const ERR_INCORRECT_PARAMETERS: i32 = 1583;
 pub const ERR_DATA_OUT_OF_RANGE: i32 = 1690;
+pub const ERR_CANNOT_CONVERT_STRING: i32 = 3854;
 
-quick_error! {
-    #[derive(Debug)]
-    pub enum Error {
-        InvalidDataType(reason: String) {
-            display("invalid data type: {}", reason)
-        }
-        Encoding(err: Utf8Error) {
-            from()
-            cause(err)
-            display("encoding failed")
-        }
-        ColumnOffset(offset: usize) {
-            display("illegal column offset: {}", offset)
-        }
-        UnknownSignature(sig: ScalarFuncSig) {
-            display("Unknown signature: {:?}", sig)
-        }
-        Eval(s: String, code:i32) {
-            display("evaluation failed: {}", s)
-        }
-        CorruptedData(s: String) {
-            display("corrupted data: {}", s)
-        }
-        Other(err: Box<dyn error::Error + Send + Sync>) {
-            from()
-            cause(err.as_ref())
-            display("{}", err)
-        }
-    }
+#[derive(Debug, Error)]
+pub enum Error {
+    #[error("invalid data type: {0}")]
+    InvalidDataType(String),
+    #[error("encoding failed")]
+    Encoding(#[from] Utf8Error),
+    #[error("illegal column offset: {0}")]
+    ColumnOffset(usize),
+    #[error("Unknown signature: {0:?}")]
+    UnknownSignature(ScalarFuncSig),
+    #[error("evaluation failed: {0}")]
+    Eval(String, i32),
+    #[error("corrupted data: {0}")]
+    CorruptedData(String),
+    #[error("{0}")]
+    Other(#[from] Box<dyn error::Error + Send + Sync>),
 }
 
 impl Error {
@@ -110,6 +95,11 @@ impl Error {
         }
     }
 
+    pub fn cannot_convert_string(s: &str, charset: &str) -> Error {
+        let msg = format!("Cannot convert string {} from binary to {}", s, charset);
+        Error::Eval(msg, ERR_CANNOT_CONVERT_STRING)
+    }
+
     pub fn code(&self) -> i32 {
         match *self {
             Error::Eval(_, code) => code,
@@ -154,6 +144,10 @@ impl Error {
             val
         );
         Error::Eval(msg, ERR_INCORRECT_PARAMETERS)
+    }
+
+    pub fn regexp_error(msg: String) -> Error {
+        Error::Eval(msg, ERR_REGEXP)
     }
 }
 
@@ -237,7 +231,7 @@ impl ErrorCodeExt for Error {
             Error::ColumnOffset(_) => error_code::coprocessor::COLUMN_OFFSET,
             Error::UnknownSignature(_) => error_code::coprocessor::UNKNOWN_SIGNATURE,
             Error::CorruptedData(_) => error_code::coprocessor::CORRUPTED_DATA,
-            Error::Eval(_, _) => error_code::coprocessor::EVAL,
+            Error::Eval(..) => error_code::coprocessor::EVAL,
             Error::Other(_) => error_code::UNKNOWN,
         }
     }

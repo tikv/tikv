@@ -1,25 +1,25 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::time::Instant;
-
+use api_version::{keyspace::KvPair, ApiV1};
 use async_trait::async_trait;
 use kvproto::coprocessor::{KeyRange, Response};
 use protobuf::Message;
-use tidb_query_common::storage::scanner::{RangesScanner, RangesScannerOptions};
-use tidb_query_common::storage::Range;
-use tidb_query_executors::runner::MAX_TIME_SLICE;
-use tidb_query_expr::BATCH_MAX_SIZE;
+use tidb_query_common::storage::{
+    scanner::{RangesScanner, RangesScannerOptions},
+    Range,
+};
+use tikv_alloc::trace::MemoryTraceGuard;
 use tipb::{ChecksumAlgorithm, ChecksumRequest, ChecksumResponse};
-use yatp::task::future::reschedule;
 
-use crate::coprocessor::dag::TiKVStorage;
-use crate::coprocessor::*;
-use crate::storage::{Snapshot, SnapshotStore, Statistics};
+use crate::{
+    coprocessor::{dag::TikvStorage, *},
+    storage::{Snapshot, SnapshotStore, Statistics},
+};
 
 // `ChecksumContext` is used to handle `ChecksumRequest`
 pub struct ChecksumContext<S: Snapshot> {
     req: ChecksumRequest,
-    scanner: RangesScanner<TiKVStorage<SnapshotStore<S>>>,
+    scanner: RangesScanner<TikvStorage<SnapshotStore<S>>, ApiV1>,
 }
 
 impl<S: Snapshot> ChecksumContext<S> {
@@ -36,10 +36,11 @@ impl<S: Snapshot> ChecksumContext<S> {
             req_ctx.context.get_isolation_level(),
             !req_ctx.context.get_not_fill_cache(),
             req_ctx.bypass_locks.clone(),
+            req_ctx.access_locks.clone(),
             false,
         );
         let scanner = RangesScanner::new(RangesScannerOptions {
-            storage: TiKVStorage::new(store, false),
+            storage: TikvStorage::new(store, false),
             ranges: ranges
                 .into_iter()
                 .map(|r| Range::from_pb_range(r, false))
@@ -54,7 +55,7 @@ impl<S: Snapshot> ChecksumContext<S> {
 
 #[async_trait]
 impl<S: Snapshot> RequestHandler for ChecksumContext<S> {
-    async fn handle_request(&mut self) -> Result<Response> {
+    async fn handle_request(&mut self) -> Result<MemoryTraceGuard<Response>> {
         let algorithm = self.req.get_algorithm();
         if algorithm != ChecksumAlgorithm::Crc64Xor {
             return Err(box_err!("unknown checksum algorithm {:?}", algorithm));
@@ -73,23 +74,13 @@ impl<S: Snapshot> RequestHandler for ChecksumContext<S> {
         let mut prefix_digest = crc64fast::Digest::new();
         prefix_digest.write(&old_prefix);
 
-        let mut row_count = 0;
-        let mut time_slice_start = Instant::now();
-        while let Some((k, v)) = self.scanner.next()? {
-            row_count += 1;
-            if row_count >= BATCH_MAX_SIZE {
-                if time_slice_start.elapsed() > MAX_TIME_SLICE {
-                    reschedule().await;
-                    time_slice_start = Instant::now();
-                }
-                row_count = 0;
-            }
-
+        while let Some(row) = self.scanner.next().await? {
+            let (k, v) = row.kv();
             if !k.starts_with(&new_prefix) {
                 return Err(box_err!("Wrong prefix expect: {:?}", new_prefix));
             }
             checksum =
-                checksum_crc64_xor(checksum, prefix_digest.clone(), &k[new_prefix.len()..], &v);
+                checksum_crc64_xor(checksum, prefix_digest.clone(), &k[new_prefix.len()..], v);
             total_kvs += 1;
             total_bytes += k.len() + v.len() + old_prefix.len() - new_prefix.len();
         }
@@ -102,7 +93,7 @@ impl<S: Snapshot> RequestHandler for ChecksumContext<S> {
 
         let mut resp = Response::default();
         resp.set_data(data);
-        Ok(resp)
+        Ok(resp.into())
     }
 
     fn collect_scan_statistics(&mut self, dest: &mut Statistics) {

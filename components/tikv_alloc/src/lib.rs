@@ -24,14 +24,17 @@
 //! platforms RocksDB is using the system malloc. On Linux C malloc is
 //! redirected to jemalloc.
 //!
-//! This crate accepts two cargo features:
+//! This crate accepts five cargo features:
 //!
-//! - mem-profiling - compiles jemalloc and this crate with profiling
-//!   capability
+//! - mem-profiling - compiles jemalloc and this crate with profiling capability
 //!
 //! - jemalloc - compiles tikv-jemallocator (default)
 //!
 //! - tcmalloc - compiles tcmalloc
+//!
+//! - mimalloc - compiles mimalloc
+//!
+//! - snmalloc - compiles snmalloc
 //!
 //! cfg `fuzzing` is defined by `run_libfuzzer` in `fuzz/cli.rs` and
 //! is passed to rustc directly with `--cfg`; in other words it's not
@@ -78,15 +81,17 @@
 //! `--features=mem-profiling` to cargo for eather `tikv_alloc` or
 //! `tikv`.
 
-#[cfg(feature = "mem-profiling")]
-#[macro_use]
-extern crate log;
+#![cfg_attr(test, feature(test))]
+#![cfg_attr(test, feature(custom_test_frameworks))]
+#![cfg_attr(test, test_runner(runner::run_env_conditional_tests))]
+#![feature(core_intrinsics)]
 
 #[cfg(feature = "jemalloc")]
 #[macro_use]
 extern crate lazy_static;
 
 pub mod error;
+pub mod trace;
 
 #[cfg(not(all(unix, not(fuzzing), feature = "jemalloc")))]
 mod default;
@@ -103,15 +108,59 @@ mod imp;
 #[cfg(all(unix, not(fuzzing), feature = "mimalloc"))]
 #[path = "mimalloc.rs"]
 mod imp;
+#[cfg(all(unix, not(fuzzing), feature = "snmalloc"))]
+#[path = "snmalloc.rs"]
+mod imp;
 #[cfg(not(all(
     unix,
     not(fuzzing),
-    any(feature = "jemalloc", feature = "tcmalloc", feature = "mimalloc")
+    any(
+        feature = "jemalloc",
+        feature = "tcmalloc",
+        feature = "mimalloc",
+        feature = "snmalloc"
+    )
 )))]
 #[path = "system.rs"]
 mod imp;
 
-pub use crate::imp::*;
+pub use crate::{imp::*, trace::*};
 
 #[global_allocator]
 static ALLOC: imp::Allocator = imp::allocator();
+
+#[cfg(test)]
+mod runner {
+    extern crate test;
+    use test::*;
+
+    /// Check for ignored test cases with ignore message "#ifdef <VAR_NAME>".
+    /// The test case will be enabled if the specific environment variable
+    /// is set.
+    pub fn run_env_conditional_tests(cases: &[&TestDescAndFn]) {
+        let cases: Vec<_> = cases
+            .iter()
+            .map(|case| {
+                let mut desc = case.desc.clone();
+                let testfn = match case.testfn {
+                    TestFn::StaticTestFn(f) => TestFn::StaticTestFn(f),
+                    TestFn::StaticBenchFn(f) => TestFn::StaticBenchFn(f),
+                    ref f => panic!("unexpected testfn {:?}", f),
+                };
+                if let Some(msg) = desc.ignore_message {
+                    let keyword = "#ifdef";
+                    if let Some(s) = msg.strip_prefix(keyword) {
+                        let var_name = s.trim();
+                        if var_name.is_empty() || std::env::var(var_name).is_ok() {
+                            desc.ignore = false;
+                            desc.ignore_message = None;
+                        }
+                    }
+                }
+                TestDescAndFn { desc, testfn }
+            })
+            .collect();
+        let args = std::env::args().collect::<Vec<_>>();
+        test_main(&args, cases, None)
+    }
+}

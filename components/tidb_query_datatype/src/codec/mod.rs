@@ -26,9 +26,11 @@ mod overflow;
 pub mod row;
 pub mod table;
 
-pub use self::datum::Datum;
-pub use self::error::{Error, Result};
-pub use self::overflow::{div_i64, div_i64_with_u64, div_u64_with_i64};
+pub use self::{
+    datum::Datum,
+    error::{Error, Result},
+    overflow::{div_i64, div_i64_with_u64, div_u64_with_i64},
+};
 
 const TEN_POW: &[u32] = &[
     1,

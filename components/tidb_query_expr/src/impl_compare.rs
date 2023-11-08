@@ -1,15 +1,16 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::cmp::{max, min, Ordering};
-use std::str;
+use std::{
+    cmp::{max, min, Ordering},
+    str,
+};
 
 use tidb_query_codegen::rpn_fn;
 use tidb_query_common::Result;
-use tidb_query_datatype::codec::collation::Collator;
-use tidb_query_datatype::codec::data_type::*;
-use tidb_query_datatype::codec::mysql::Time;
-use tidb_query_datatype::codec::Error;
-use tidb_query_datatype::expr::EvalContext;
+use tidb_query_datatype::{
+    codec::{collation::Collator, data_type::*, mysql::Time, Error},
+    expr::EvalContext,
+};
 
 #[rpn_fn(nullable)]
 #[inline]
@@ -103,10 +104,10 @@ impl<F: CmpOp> Comparer for UintIntComparer<F> {
             (None, None) => F::compare_null(),
             (None, _) | (_, None) => F::compare_partial_null(),
             (Some(lhs), Some(rhs)) => {
-                let ordering = if *rhs < 0 || *lhs as u64 > std::i64::MAX as u64 {
+                let ordering = if *rhs < 0 || *lhs as u64 > i64::MAX as u64 {
                     Ordering::Greater
                 } else {
-                    lhs.cmp(&rhs)
+                    lhs.cmp(rhs)
                 };
                 Some(F::compare_order(ordering) as i64)
             }
@@ -127,10 +128,10 @@ impl<F: CmpOp> Comparer for IntUintComparer<F> {
             (None, None) => F::compare_null(),
             (None, _) | (_, None) => F::compare_partial_null(),
             (Some(lhs), Some(rhs)) => {
-                let ordering = if *lhs < 0 || *rhs as u64 > std::i64::MAX as u64 {
+                let ordering = if *lhs < 0 || *rhs as u64 > i64::MAX as u64 {
                     Ordering::Less
                 } else {
-                    lhs.cmp(&rhs)
+                    lhs.cmp(rhs)
                 };
                 Some(F::compare_order(ordering) as i64)
             }
@@ -152,63 +153,63 @@ pub trait CmpOp {
     fn compare_order(ordering: std::cmp::Ordering) -> bool;
 }
 
-pub struct CmpOpLT;
+pub struct CmpOpLt;
 
-impl CmpOp for CmpOpLT {
+impl CmpOp for CmpOpLt {
     #[inline]
     fn compare_order(ordering: Ordering) -> bool {
         ordering == Ordering::Less
     }
 }
 
-pub struct CmpOpLE;
+pub struct CmpOpLe;
 
-impl CmpOp for CmpOpLE {
+impl CmpOp for CmpOpLe {
     #[inline]
     fn compare_order(ordering: Ordering) -> bool {
         ordering != Ordering::Greater
     }
 }
 
-pub struct CmpOpGT;
+pub struct CmpOpGt;
 
-impl CmpOp for CmpOpGT {
+impl CmpOp for CmpOpGt {
     #[inline]
     fn compare_order(ordering: Ordering) -> bool {
         ordering == Ordering::Greater
     }
 }
 
-pub struct CmpOpGE;
+pub struct CmpOpGe;
 
-impl CmpOp for CmpOpGE {
+impl CmpOp for CmpOpGe {
     #[inline]
     fn compare_order(ordering: Ordering) -> bool {
         ordering != Ordering::Less
     }
 }
 
-pub struct CmpOpNE;
+pub struct CmpOpNe;
 
-impl CmpOp for CmpOpNE {
+impl CmpOp for CmpOpNe {
     #[inline]
     fn compare_order(ordering: Ordering) -> bool {
         ordering != Ordering::Equal
     }
 }
 
-pub struct CmpOpEQ;
+pub struct CmpOpEq;
 
-impl CmpOp for CmpOpEQ {
+impl CmpOp for CmpOpEq {
     #[inline]
     fn compare_order(ordering: Ordering) -> bool {
         ordering == Ordering::Equal
     }
 }
 
-pub struct CmpOpNullEQ;
+pub struct CmpOpNullEq;
 
-impl CmpOp for CmpOpNullEQ {
+impl CmpOp for CmpOpNullEq {
     #[inline]
     fn compare_null() -> Option<i64> {
         Some(1)
@@ -340,7 +341,10 @@ pub fn interval_real(args: &[Option<&Real>]) -> Result<Option<Int>> {
 
 #[rpn_fn(nullable, varg, min_args = 2, capture = [ctx])]
 #[inline]
-pub fn greatest_time(ctx: &mut EvalContext, args: &[Option<BytesRef>]) -> Result<Option<Bytes>> {
+pub fn greatest_cmp_string_as_time(
+    ctx: &mut EvalContext,
+    args: &[Option<BytesRef>],
+) -> Result<Option<Bytes>> {
     let mut greatest = None;
     for arg in args {
         match arg {
@@ -353,11 +357,11 @@ pub fn greatest_time(ctx: &mut EvalContext, args: &[Option<BytesRef>]) -> Result
                             .map(|_| Ok(None))?;
                     }
                 };
-                match Time::parse_datetime(ctx, &s, Time::parse_fsp(&s), true) {
+                match Time::parse_datetime(ctx, s, Time::parse_fsp(s), true) {
                     Ok(t) => greatest = max(greatest, Some(t)),
                     Err(_) => {
                         return ctx
-                            .handle_invalid_time_error(Error::invalid_time_format(&s))
+                            .handle_invalid_time_error(Error::invalid_time_format(s))
                             .map(|_| Ok(None))?;
                     }
                 }
@@ -373,14 +377,12 @@ pub fn greatest_time(ctx: &mut EvalContext, args: &[Option<BytesRef>]) -> Result
 
 #[rpn_fn(nullable, varg, min_args = 2, capture = [ctx])]
 #[inline]
-pub fn least_time(mut ctx: &mut EvalContext, args: &[Option<BytesRef>]) -> Result<Option<Bytes>> {
+pub fn least_cmp_string_as_time(
+    ctx: &mut EvalContext,
+    args: &[Option<BytesRef>],
+) -> Result<Option<Bytes>> {
     // Max datetime range defined at https://dev.mysql.com/doc/refman/8.0/en/datetime.html
-    let mut least = Some(Time::parse_datetime(
-        &mut ctx,
-        "9999-12-31 23:59:59",
-        0,
-        true,
-    )?);
+    let mut least = Some(Time::parse_datetime(ctx, "9999-12-31 23:59:59", 0, true)?);
     for arg in args {
         match arg {
             Some(arg_val) => {
@@ -392,11 +394,11 @@ pub fn least_time(mut ctx: &mut EvalContext, args: &[Option<BytesRef>]) -> Resul
                             .map(|_| Ok(None))?;
                     }
                 };
-                match Time::parse_datetime(ctx, &s, Time::parse_fsp(&s), true) {
+                match Time::parse_datetime(ctx, s, Time::parse_fsp(s), true) {
                     Ok(t) => least = min(least, Some(t)),
                     Err(_) => {
                         return ctx
-                            .handle_invalid_time_error(Error::invalid_time_format(&s))
+                            .handle_invalid_time_error(Error::invalid_time_format(s))
                             .map(|_| Ok(None))?;
                     }
                 }
@@ -408,6 +410,103 @@ pub fn least_time(mut ctx: &mut EvalContext, args: &[Option<BytesRef>]) -> Resul
     }
 
     Ok(least.map(|time| time.to_string().into_bytes()))
+}
+
+#[rpn_fn(nullable, varg, min_args = 2, capture = [ctx])]
+#[inline]
+pub fn greatest_cmp_string_as_date(
+    ctx: &mut EvalContext,
+    args: &[Option<BytesRef>],
+) -> Result<Option<Bytes>> {
+    let mut greatest = None;
+    for arg in args {
+        match arg {
+            Some(arg_val) => {
+                let s = match str::from_utf8(arg_val) {
+                    Ok(s) => s,
+                    Err(err) => {
+                        return ctx
+                            .handle_invalid_time_error(Error::Encoding(err))
+                            .map(|_| Ok(None))?;
+                    }
+                };
+                match Time::parse_date(ctx, s) {
+                    Ok(t) => greatest = max(greatest, Some(t)),
+                    Err(_) => {
+                        return ctx
+                            .handle_invalid_time_error(Error::invalid_time_format(s))
+                            .map(|_| Ok(None))?;
+                    }
+                }
+            }
+            None => {
+                return Ok(None);
+            }
+        }
+    }
+
+    Ok(greatest.map(|time| time.to_string().into_bytes()))
+}
+
+#[rpn_fn(nullable, varg, min_args = 2, capture = [ctx])]
+#[inline]
+pub fn least_cmp_string_as_date(
+    ctx: &mut EvalContext,
+    args: &[Option<BytesRef>],
+) -> Result<Option<Bytes>> {
+    // Max date range defined at https://dev.mysql.com/doc/refman/8.0/en/datetime.html
+    let mut least = Some(Time::parse_date(ctx, "9999-12-31")?);
+    for arg in args {
+        match arg {
+            Some(arg_val) => {
+                let s = match str::from_utf8(arg_val) {
+                    Ok(s) => s,
+                    Err(err) => {
+                        return ctx
+                            .handle_invalid_time_error(Error::Encoding(err))
+                            .map(|_| Ok(None))?;
+                    }
+                };
+                match Time::parse_date(ctx, s) {
+                    Ok(t) => least = min(least, Some(t)),
+                    Err(_) => {
+                        return ctx
+                            .handle_invalid_time_error(Error::invalid_time_format(s))
+                            .map(|_| Ok(None))?;
+                    }
+                }
+            }
+            None => {
+                return Ok(None);
+            }
+        }
+    }
+
+    Ok(least.map(|time| time.to_string().into_bytes()))
+}
+
+#[rpn_fn(nullable, varg, min_args = 2)]
+#[inline]
+pub fn greatest_datetime(args: &[Option<&DateTime>]) -> Result<Option<DateTime>> {
+    do_get_extremum(args, max)
+}
+
+#[rpn_fn(nullable, varg, min_args = 2)]
+#[inline]
+pub fn least_datetime(args: &[Option<&DateTime>]) -> Result<Option<DateTime>> {
+    do_get_extremum(args, min)
+}
+
+#[rpn_fn(nullable, varg, min_args = 2)]
+#[inline]
+pub fn greatest_duration(args: &[Option<&Duration>]) -> Result<Option<Duration>> {
+    do_get_extremum(args, max)
+}
+
+#[rpn_fn(nullable, varg, min_args = 2)]
+#[inline]
+pub fn least_duration(args: &[Option<&Duration>]) -> Result<Option<Duration>> {
+    do_get_extremum(args, min)
 }
 
 #[inline]
@@ -440,230 +539,228 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
-    use tidb_query_datatype::builder::FieldTypeBuilder;
-    use tidb_query_datatype::{Collation, FieldTypeFlag, FieldTypeTp};
+    use tidb_query_datatype::{builder::FieldTypeBuilder, Collation, FieldTypeFlag, FieldTypeTp};
     use tipb::ScalarFuncSig;
 
+    use super::*;
     use crate::test_util::RpnFnScalarEvaluator;
 
-    #[derive(Clone, Copy, PartialEq, Eq)]
+    #[derive(Clone, Copy, PartialEq)]
     enum TestCaseCmpOp {
-        GT,
-        GE,
-        LT,
-        LE,
-        EQ,
-        NE,
-        NullEQ,
+        Gt,
+        Ge,
+        Lt,
+        Le,
+        Eq,
+        Ne,
+        NullEq,
     }
 
     #[allow(clippy::type_complexity)]
-    fn generate_numeric_compare_cases(
-    ) -> Vec<(Option<Real>, Option<Real>, TestCaseCmpOp, Option<i64>)> {
+    fn generate_numeric_compare_cases()
+    -> Vec<(Option<Real>, Option<Real>, TestCaseCmpOp, Option<i64>)> {
         vec![
-            (None, None, TestCaseCmpOp::GT, None),
-            (Real::new(3.5).ok(), None, TestCaseCmpOp::GT, None),
-            (Real::new(-2.1).ok(), None, TestCaseCmpOp::GT, None),
-            (None, Real::new(3.5).ok(), TestCaseCmpOp::GT, None),
-            (None, Real::new(-2.1).ok(), TestCaseCmpOp::GT, None),
+            (None, None, TestCaseCmpOp::Gt, None),
+            (Real::new(3.5).ok(), None, TestCaseCmpOp::Gt, None),
+            (Real::new(-2.1).ok(), None, TestCaseCmpOp::Gt, None),
+            (None, Real::new(3.5).ok(), TestCaseCmpOp::Gt, None),
+            (None, Real::new(-2.1).ok(), TestCaseCmpOp::Gt, None),
             (
                 Real::new(3.5).ok(),
                 Real::new(-2.1).ok(),
-                TestCaseCmpOp::GT,
+                TestCaseCmpOp::Gt,
                 Some(1),
             ),
             (
                 Real::new(-2.1).ok(),
                 Real::new(3.5).ok(),
-                TestCaseCmpOp::GT,
+                TestCaseCmpOp::Gt,
                 Some(0),
             ),
             (
                 Real::new(3.5).ok(),
                 Real::new(3.5).ok(),
-                TestCaseCmpOp::GT,
+                TestCaseCmpOp::Gt,
                 Some(0),
             ),
             (
                 Real::new(-2.1).ok(),
                 Real::new(-2.1).ok(),
-                TestCaseCmpOp::GT,
+                TestCaseCmpOp::Gt,
                 Some(0),
             ),
-            (None, None, TestCaseCmpOp::GE, None),
-            (Real::new(3.5).ok(), None, TestCaseCmpOp::GE, None),
-            (Real::new(-2.1).ok(), None, TestCaseCmpOp::GE, None),
-            (None, Real::new(3.5).ok(), TestCaseCmpOp::GE, None),
-            (None, Real::new(-2.1).ok(), TestCaseCmpOp::GE, None),
+            (None, None, TestCaseCmpOp::Ge, None),
+            (Real::new(3.5).ok(), None, TestCaseCmpOp::Ge, None),
+            (Real::new(-2.1).ok(), None, TestCaseCmpOp::Ge, None),
+            (None, Real::new(3.5).ok(), TestCaseCmpOp::Ge, None),
+            (None, Real::new(-2.1).ok(), TestCaseCmpOp::Ge, None),
             (
                 Real::new(3.5).ok(),
                 Real::new(-2.1).ok(),
-                TestCaseCmpOp::GE,
+                TestCaseCmpOp::Ge,
                 Some(1),
             ),
             (
                 Real::new(-2.1).ok(),
                 Real::new(3.5).ok(),
-                TestCaseCmpOp::GE,
+                TestCaseCmpOp::Ge,
                 Some(0),
             ),
             (
                 Real::new(3.5).ok(),
                 Real::new(3.5).ok(),
-                TestCaseCmpOp::GE,
+                TestCaseCmpOp::Ge,
                 Some(1),
             ),
             (
                 Real::new(-2.1).ok(),
                 Real::new(-2.1).ok(),
-                TestCaseCmpOp::GE,
+                TestCaseCmpOp::Ge,
                 Some(1),
             ),
-            (None, None, TestCaseCmpOp::LT, None),
-            (Real::new(3.5).ok(), None, TestCaseCmpOp::LT, None),
-            (Real::new(-2.1).ok(), None, TestCaseCmpOp::LT, None),
-            (None, Real::new(3.5).ok(), TestCaseCmpOp::LT, None),
-            (None, Real::new(-2.1).ok(), TestCaseCmpOp::LT, None),
+            (None, None, TestCaseCmpOp::Lt, None),
+            (Real::new(3.5).ok(), None, TestCaseCmpOp::Lt, None),
+            (Real::new(-2.1).ok(), None, TestCaseCmpOp::Lt, None),
+            (None, Real::new(3.5).ok(), TestCaseCmpOp::Lt, None),
+            (None, Real::new(-2.1).ok(), TestCaseCmpOp::Lt, None),
             (
                 Real::new(3.5).ok(),
                 Real::new(-2.1).ok(),
-                TestCaseCmpOp::LT,
+                TestCaseCmpOp::Lt,
                 Some(0),
             ),
             (
                 Real::new(-2.1).ok(),
                 Real::new(3.5).ok(),
-                TestCaseCmpOp::LT,
+                TestCaseCmpOp::Lt,
                 Some(1),
             ),
             (
                 Real::new(3.5).ok(),
                 Real::new(3.5).ok(),
-                TestCaseCmpOp::LT,
+                TestCaseCmpOp::Lt,
                 Some(0),
             ),
             (
                 Real::new(-2.1).ok(),
                 Real::new(-2.1).ok(),
-                TestCaseCmpOp::LT,
+                TestCaseCmpOp::Lt,
                 Some(0),
             ),
-            (None, None, TestCaseCmpOp::LE, None),
-            (Real::new(3.5).ok(), None, TestCaseCmpOp::LE, None),
-            (Real::new(-2.1).ok(), None, TestCaseCmpOp::LE, None),
-            (None, Real::new(3.5).ok(), TestCaseCmpOp::LE, None),
-            (None, Real::new(-2.1).ok(), TestCaseCmpOp::LE, None),
+            (None, None, TestCaseCmpOp::Le, None),
+            (Real::new(3.5).ok(), None, TestCaseCmpOp::Le, None),
+            (Real::new(-2.1).ok(), None, TestCaseCmpOp::Le, None),
+            (None, Real::new(3.5).ok(), TestCaseCmpOp::Le, None),
+            (None, Real::new(-2.1).ok(), TestCaseCmpOp::Le, None),
             (
                 Real::new(3.5).ok(),
                 Real::new(-2.1).ok(),
-                TestCaseCmpOp::LE,
+                TestCaseCmpOp::Le,
                 Some(0),
             ),
             (
                 Real::new(-2.1).ok(),
                 Real::new(3.5).ok(),
-                TestCaseCmpOp::LE,
+                TestCaseCmpOp::Le,
                 Some(1),
             ),
             (
                 Real::new(3.5).ok(),
                 Real::new(3.5).ok(),
-                TestCaseCmpOp::LE,
+                TestCaseCmpOp::Le,
                 Some(1),
             ),
             (
                 Real::new(-2.1).ok(),
                 Real::new(-2.1).ok(),
-                TestCaseCmpOp::LE,
+                TestCaseCmpOp::Le,
                 Some(1),
             ),
-            (None, None, TestCaseCmpOp::EQ, None),
-            (Real::new(3.5).ok(), None, TestCaseCmpOp::EQ, None),
-            (Real::new(-2.1).ok(), None, TestCaseCmpOp::EQ, None),
-            (None, Real::new(3.5).ok(), TestCaseCmpOp::EQ, None),
-            (None, Real::new(-2.1).ok(), TestCaseCmpOp::EQ, None),
+            (None, None, TestCaseCmpOp::Eq, None),
+            (Real::new(3.5).ok(), None, TestCaseCmpOp::Eq, None),
+            (Real::new(-2.1).ok(), None, TestCaseCmpOp::Eq, None),
+            (None, Real::new(3.5).ok(), TestCaseCmpOp::Eq, None),
+            (None, Real::new(-2.1).ok(), TestCaseCmpOp::Eq, None),
             (
                 Real::new(3.5).ok(),
                 Real::new(-2.1).ok(),
-                TestCaseCmpOp::EQ,
+                TestCaseCmpOp::Eq,
                 Some(0),
             ),
             (
                 Real::new(-2.1).ok(),
                 Real::new(3.5).ok(),
-                TestCaseCmpOp::EQ,
+                TestCaseCmpOp::Eq,
                 Some(0),
             ),
             (
                 Real::new(3.5).ok(),
                 Real::new(3.5).ok(),
-                TestCaseCmpOp::EQ,
+                TestCaseCmpOp::Eq,
                 Some(1),
             ),
             (
                 Real::new(-2.1).ok(),
                 Real::new(-2.1).ok(),
-                TestCaseCmpOp::EQ,
+                TestCaseCmpOp::Eq,
                 Some(1),
             ),
-            (None, None, TestCaseCmpOp::NE, None),
-            (Real::new(3.5).ok(), None, TestCaseCmpOp::NE, None),
-            (Real::new(-2.1).ok(), None, TestCaseCmpOp::NE, None),
-            (None, Real::new(3.5).ok(), TestCaseCmpOp::NE, None),
-            (None, Real::new(-2.1).ok(), TestCaseCmpOp::NE, None),
+            (None, None, TestCaseCmpOp::Ne, None),
+            (Real::new(3.5).ok(), None, TestCaseCmpOp::Ne, None),
+            (Real::new(-2.1).ok(), None, TestCaseCmpOp::Ne, None),
+            (None, Real::new(3.5).ok(), TestCaseCmpOp::Ne, None),
+            (None, Real::new(-2.1).ok(), TestCaseCmpOp::Ne, None),
             (
                 Real::new(3.5).ok(),
                 Real::new(-2.1).ok(),
-                TestCaseCmpOp::NE,
+                TestCaseCmpOp::Ne,
                 Some(1),
             ),
             (
                 Real::new(-2.1).ok(),
                 Real::new(3.5).ok(),
-                TestCaseCmpOp::NE,
+                TestCaseCmpOp::Ne,
                 Some(1),
             ),
             (
                 Real::new(3.5).ok(),
                 Real::new(3.5).ok(),
-                TestCaseCmpOp::NE,
+                TestCaseCmpOp::Ne,
                 Some(0),
             ),
             (
                 Real::new(-2.1).ok(),
                 Real::new(-2.1).ok(),
-                TestCaseCmpOp::NE,
+                TestCaseCmpOp::Ne,
                 Some(0),
             ),
-            (None, None, TestCaseCmpOp::NullEQ, Some(1)),
-            (Real::new(3.5).ok(), None, TestCaseCmpOp::NullEQ, Some(0)),
-            (Real::new(-2.1).ok(), None, TestCaseCmpOp::NullEQ, Some(0)),
-            (None, Real::new(3.5).ok(), TestCaseCmpOp::NullEQ, Some(0)),
-            (None, Real::new(-2.1).ok(), TestCaseCmpOp::NullEQ, Some(0)),
+            (None, None, TestCaseCmpOp::NullEq, Some(1)),
+            (Real::new(3.5).ok(), None, TestCaseCmpOp::NullEq, Some(0)),
+            (Real::new(-2.1).ok(), None, TestCaseCmpOp::NullEq, Some(0)),
+            (None, Real::new(3.5).ok(), TestCaseCmpOp::NullEq, Some(0)),
+            (None, Real::new(-2.1).ok(), TestCaseCmpOp::NullEq, Some(0)),
             (
                 Real::new(3.5).ok(),
                 Real::new(-2.1).ok(),
-                TestCaseCmpOp::NullEQ,
+                TestCaseCmpOp::NullEq,
                 Some(0),
             ),
             (
                 Real::new(-2.1).ok(),
                 Real::new(3.5).ok(),
-                TestCaseCmpOp::NullEQ,
+                TestCaseCmpOp::NullEq,
                 Some(0),
             ),
             (
                 Real::new(3.5).ok(),
                 Real::new(3.5).ok(),
-                TestCaseCmpOp::NullEQ,
+                TestCaseCmpOp::NullEq,
                 Some(1),
             ),
             (
                 Real::new(-2.1).ok(),
                 Real::new(-2.1).ok(),
-                TestCaseCmpOp::NullEQ,
+                TestCaseCmpOp::NullEq,
                 Some(1),
             ),
         ]
@@ -673,13 +770,13 @@ mod tests {
     fn test_compare_real() {
         for (arg0, arg1, cmp_op, expect_output) in generate_numeric_compare_cases() {
             let sig = match cmp_op {
-                TestCaseCmpOp::GT => ScalarFuncSig::GtReal,
-                TestCaseCmpOp::GE => ScalarFuncSig::GeReal,
-                TestCaseCmpOp::LT => ScalarFuncSig::LtReal,
-                TestCaseCmpOp::LE => ScalarFuncSig::LeReal,
-                TestCaseCmpOp::EQ => ScalarFuncSig::EqReal,
-                TestCaseCmpOp::NE => ScalarFuncSig::NeReal,
-                TestCaseCmpOp::NullEQ => ScalarFuncSig::NullEqReal,
+                TestCaseCmpOp::Gt => ScalarFuncSig::GtReal,
+                TestCaseCmpOp::Ge => ScalarFuncSig::GeReal,
+                TestCaseCmpOp::Lt => ScalarFuncSig::LtReal,
+                TestCaseCmpOp::Le => ScalarFuncSig::LeReal,
+                TestCaseCmpOp::Eq => ScalarFuncSig::EqReal,
+                TestCaseCmpOp::Ne => ScalarFuncSig::NeReal,
+                TestCaseCmpOp::NullEq => ScalarFuncSig::NullEqReal,
             };
             let output = RpnFnScalarEvaluator::new()
                 .push_param(arg0)
@@ -698,13 +795,13 @@ mod tests {
 
         for (arg0, arg1, cmp_op, expect_output) in generate_numeric_compare_cases() {
             let sig = match cmp_op {
-                TestCaseCmpOp::GT => ScalarFuncSig::GtDuration,
-                TestCaseCmpOp::GE => ScalarFuncSig::GeDuration,
-                TestCaseCmpOp::LT => ScalarFuncSig::LtDuration,
-                TestCaseCmpOp::LE => ScalarFuncSig::LeDuration,
-                TestCaseCmpOp::EQ => ScalarFuncSig::EqDuration,
-                TestCaseCmpOp::NE => ScalarFuncSig::NeDuration,
-                TestCaseCmpOp::NullEQ => ScalarFuncSig::NullEqDuration,
+                TestCaseCmpOp::Gt => ScalarFuncSig::GtDuration,
+                TestCaseCmpOp::Ge => ScalarFuncSig::GeDuration,
+                TestCaseCmpOp::Lt => ScalarFuncSig::LtDuration,
+                TestCaseCmpOp::Le => ScalarFuncSig::LeDuration,
+                TestCaseCmpOp::Eq => ScalarFuncSig::EqDuration,
+                TestCaseCmpOp::Ne => ScalarFuncSig::NeDuration,
+                TestCaseCmpOp::NullEq => ScalarFuncSig::NullEqDuration,
             };
             let output = RpnFnScalarEvaluator::new()
                 .push_param(arg0.map(map_double_to_duration))
@@ -717,8 +814,7 @@ mod tests {
 
     #[test]
     fn test_compare_decimal() {
-        use tidb_query_datatype::codec::convert::ConvertTo;
-        use tidb_query_datatype::expr::EvalContext;
+        use tidb_query_datatype::{codec::convert::ConvertTo, expr::EvalContext};
         fn f64_to_decimal(ctx: &mut EvalContext, f: f64) -> Result<Decimal> {
             let val = f.convert(ctx)?;
             Ok(val)
@@ -726,13 +822,13 @@ mod tests {
         let mut ctx = EvalContext::default();
         for (arg0, arg1, cmp_op, expect_output) in generate_numeric_compare_cases() {
             let sig = match cmp_op {
-                TestCaseCmpOp::GT => ScalarFuncSig::GtDecimal,
-                TestCaseCmpOp::GE => ScalarFuncSig::GeDecimal,
-                TestCaseCmpOp::LT => ScalarFuncSig::LtDecimal,
-                TestCaseCmpOp::LE => ScalarFuncSig::LeDecimal,
-                TestCaseCmpOp::EQ => ScalarFuncSig::EqDecimal,
-                TestCaseCmpOp::NE => ScalarFuncSig::NeDecimal,
-                TestCaseCmpOp::NullEQ => ScalarFuncSig::NullEqDecimal,
+                TestCaseCmpOp::Gt => ScalarFuncSig::GtDecimal,
+                TestCaseCmpOp::Ge => ScalarFuncSig::GeDecimal,
+                TestCaseCmpOp::Lt => ScalarFuncSig::LtDecimal,
+                TestCaseCmpOp::Le => ScalarFuncSig::LeDecimal,
+                TestCaseCmpOp::Eq => ScalarFuncSig::EqDecimal,
+                TestCaseCmpOp::Ne => ScalarFuncSig::NeDecimal,
+                TestCaseCmpOp::NullEq => ScalarFuncSig::NullEqDecimal,
             };
             let output = RpnFnScalarEvaluator::new()
                 .push_param(arg0.map(|v| f64_to_decimal(&mut ctx, v.into_inner()).unwrap()))
@@ -747,13 +843,13 @@ mod tests {
     fn test_compare_signed_int() {
         for (arg0, arg1, cmp_op, expect_output) in generate_numeric_compare_cases() {
             let sig = match cmp_op {
-                TestCaseCmpOp::GT => ScalarFuncSig::GtInt,
-                TestCaseCmpOp::GE => ScalarFuncSig::GeInt,
-                TestCaseCmpOp::LT => ScalarFuncSig::LtInt,
-                TestCaseCmpOp::LE => ScalarFuncSig::LeInt,
-                TestCaseCmpOp::EQ => ScalarFuncSig::EqInt,
-                TestCaseCmpOp::NE => ScalarFuncSig::NeInt,
-                TestCaseCmpOp::NullEQ => ScalarFuncSig::NullEqInt,
+                TestCaseCmpOp::Gt => ScalarFuncSig::GtInt,
+                TestCaseCmpOp::Ge => ScalarFuncSig::GeInt,
+                TestCaseCmpOp::Lt => ScalarFuncSig::LtInt,
+                TestCaseCmpOp::Le => ScalarFuncSig::LeInt,
+                TestCaseCmpOp::Eq => ScalarFuncSig::EqInt,
+                TestCaseCmpOp::Ne => ScalarFuncSig::NeInt,
+                TestCaseCmpOp::NullEq => ScalarFuncSig::NullEqInt,
             };
             let output = RpnFnScalarEvaluator::new()
                 .push_param(arg0.map(|v| v.into_inner() as i64))
@@ -768,44 +864,32 @@ mod tests {
     fn test_compare_int_2() {
         let test_cases = vec![
             (Some(5), false, Some(3), false, Ordering::Greater),
+            (Some(u64::MAX as i64), false, Some(5), false, Ordering::Less),
             (
-                Some(std::u64::MAX as i64),
-                false,
-                Some(5),
-                false,
-                Ordering::Less,
-            ),
-            (
-                Some(std::u64::MAX as i64),
+                Some(u64::MAX as i64),
                 true,
-                Some((std::u64::MAX - 1) as i64),
+                Some((u64::MAX - 1) as i64),
                 true,
                 Ordering::Greater,
             ),
             (
-                Some(std::u64::MAX as i64),
+                Some(u64::MAX as i64),
                 true,
                 Some(5),
                 true,
                 Ordering::Greater,
             ),
-            (Some(5), true, Some(std::i64::MIN), false, Ordering::Greater),
+            (Some(5), true, Some(i64::MIN), false, Ordering::Greater),
             (
-                Some(std::u64::MAX as i64),
+                Some(u64::MAX as i64),
                 true,
-                Some(std::i64::MIN),
+                Some(i64::MIN),
                 false,
                 Ordering::Greater,
             ),
             (Some(5), true, Some(3), false, Ordering::Greater),
-            (Some(std::i64::MIN), false, Some(3), true, Ordering::Less),
-            (
-                Some(5),
-                false,
-                Some(std::u64::MAX as i64),
-                true,
-                Ordering::Less,
-            ),
+            (Some(i64::MIN), false, Some(3), true, Ordering::Less),
+            (Some(5), false, Some(u64::MAX as i64), true, Ordering::Less),
             (Some(5), false, Some(3), true, Ordering::Greater),
         ];
         for (lhs, lhs_is_unsigned, rhs, rhs_is_unsigned, ordering) in test_cases {
@@ -895,6 +979,8 @@ mod tests {
                     Ordering::Equal,
                     Ordering::Equal,
                     Ordering::Equal,
+                    Ordering::Less,
+                    Ordering::Less,
                 ],
             ),
             (
@@ -906,6 +992,8 @@ mod tests {
                     Ordering::Less,
                     Ordering::Less,
                     Ordering::Less,
+                    Ordering::Less,
+                    Ordering::Less,
                 ],
             ),
             (
@@ -917,6 +1005,8 @@ mod tests {
                     Ordering::Greater,
                     Ordering::Equal,
                     Ordering::Equal,
+                    Ordering::Equal,
+                    Ordering::Greater,
                 ],
             ),
             (
@@ -928,6 +1018,8 @@ mod tests {
                     Ordering::Greater,
                     Ordering::Equal,
                     Ordering::Equal,
+                    Ordering::Less,
+                    Ordering::Greater,
                 ],
             ),
             (
@@ -939,6 +1031,8 @@ mod tests {
                     Ordering::Equal,
                     Ordering::Equal,
                     Ordering::Equal,
+                    Ordering::Less,
+                    Ordering::Less,
                 ],
             ),
             (
@@ -950,12 +1044,16 @@ mod tests {
                     Ordering::Greater,
                     Ordering::Equal,
                     Ordering::Equal,
+                    Ordering::Equal,
+                    Ordering::Greater,
                 ],
             ),
             (
                 "À\t",
                 "A",
                 [
+                    Ordering::Greater,
+                    Ordering::Greater,
                     Ordering::Greater,
                     Ordering::Greater,
                     Ordering::Greater,
@@ -972,12 +1070,16 @@ mod tests {
                     Ordering::Greater,
                     Ordering::Greater,
                     Ordering::Greater,
+                    Ordering::Greater,
+                    Ordering::Greater,
                 ],
             ),
             (
                 "a bc",
                 "ab ",
                 [
+                    Ordering::Less,
+                    Ordering::Less,
                     Ordering::Less,
                     Ordering::Less,
                     Ordering::Less,
@@ -994,6 +1096,8 @@ mod tests {
                     Ordering::Less,
                     Ordering::Equal,
                     Ordering::Equal,
+                    Ordering::Equal,
+                    Ordering::Less,
                 ],
             ),
             (
@@ -1005,6 +1109,8 @@ mod tests {
                     Ordering::Greater,
                     Ordering::Less,
                     Ordering::Less,
+                    Ordering::Less,
+                    Ordering::Greater,
                 ],
             ),
             (
@@ -1016,6 +1122,8 @@ mod tests {
                     Ordering::Greater,
                     Ordering::Equal,
                     Ordering::Equal,
+                    Ordering::Greater,
+                    Ordering::Greater,
                 ],
             ),
             (
@@ -1027,6 +1135,8 @@ mod tests {
                     Ordering::Greater,
                     Ordering::Less,
                     Ordering::Equal,
+                    Ordering::Equal,
+                    Ordering::Greater,
                 ],
             ),
         ];
@@ -1036,6 +1146,8 @@ mod tests {
             (Collation::Utf8Mb4Bin, 2),
             (Collation::Utf8Mb4GeneralCi, 3),
             (Collation::Utf8Mb4UnicodeCi, 4),
+            (Collation::Utf8Mb40900AiCi, 5),
+            (Collation::Utf8Mb40900Bin, 6),
         ];
 
         for (str_a, str_b, ordering_in_collations) in cases {
@@ -1311,6 +1423,234 @@ mod tests {
 
     #[test]
     fn test_greatest_time() {
+        let mut ctx = EvalContext::default();
+        let cases = vec![
+            (vec![None, None], None),
+            (
+                vec![
+                    DateTime::parse_date(&mut ctx, "2012-12-12 12:00:39").ok(),
+                    DateTime::parse_date(&mut ctx, "2012-12-24 12:00:39").ok(),
+                    None,
+                ],
+                None,
+            ),
+            (
+                vec![
+                    DateTime::parse_date(&mut ctx, "2012-12-12 12:00:39").ok(),
+                    DateTime::parse_date(&mut ctx, "2012-12-24 12:00:39").ok(),
+                    DateTime::parse_date(&mut ctx, "2012-12-31 12:00:39").ok(),
+                ],
+                DateTime::parse_date(&mut ctx, "2012-12-31 12:00:39").ok(),
+            ),
+            (
+                vec![
+                    DateTime::parse_date(&mut ctx, "2012-12-12 12:00:39").ok(),
+                    DateTime::parse_date(&mut ctx, "2013-12-24 12:00:39").ok(),
+                    DateTime::parse_date(&mut ctx, "2014-12-31 12:00:39").ok(),
+                ],
+                DateTime::parse_date(&mut ctx, "2014-12-31 12:00:39").ok(),
+            ),
+        ];
+
+        for (row, expected) in cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_params(row)
+                .evaluate(ScalarFuncSig::GreatestTime)
+                .unwrap();
+            assert_eq!(output, expected);
+        }
+    }
+
+    #[test]
+    fn test_least_time() {
+        let mut ctx = EvalContext::default();
+        let cases = vec![
+            (vec![None, None], None),
+            (
+                vec![
+                    DateTime::parse_date(&mut ctx, "2012-12-12 12:00:39").ok(),
+                    DateTime::parse_date(&mut ctx, "2012-12-24 12:00:39").ok(),
+                    None,
+                ],
+                None,
+            ),
+            (
+                vec![
+                    DateTime::parse_date(&mut ctx, "2012-12-12 12:00:39").ok(),
+                    DateTime::parse_date(&mut ctx, "2012-12-24 12:00:39").ok(),
+                    DateTime::parse_date(&mut ctx, "2012-12-31 12:00:39").ok(),
+                ],
+                DateTime::parse_date(&mut ctx, "2012-12-12 12:00:39").ok(),
+            ),
+            (
+                vec![
+                    DateTime::parse_date(&mut ctx, "2012-12-12 12:00:39").ok(),
+                    DateTime::parse_date(&mut ctx, "2013-12-24 12:00:39").ok(),
+                    DateTime::parse_date(&mut ctx, "2014-12-31 12:00:39").ok(),
+                ],
+                DateTime::parse_date(&mut ctx, "2012-12-12 12:00:39").ok(),
+            ),
+        ];
+
+        for (row, expected) in cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_params(row)
+                .evaluate(ScalarFuncSig::LeastTime)
+                .unwrap();
+
+            assert_eq!(output, expected);
+        }
+    }
+
+    #[test]
+    fn test_greatest_date() {
+        let mut ctx = EvalContext::default();
+        let cases = vec![
+            (vec![None, None], None),
+            (
+                vec![
+                    DateTime::parse_date(&mut ctx, "2012-12-12").ok(),
+                    DateTime::parse_date(&mut ctx, "2012-12-24").ok(),
+                    None,
+                ],
+                None,
+            ),
+            (
+                vec![
+                    DateTime::parse_date(&mut ctx, "2012-12-12").ok(),
+                    DateTime::parse_date(&mut ctx, "2012-12-24").ok(),
+                    DateTime::parse_date(&mut ctx, "2012-12-31").ok(),
+                ],
+                DateTime::parse_date(&mut ctx, "2012-12-31").ok(),
+            ),
+            (
+                vec![
+                    DateTime::parse_date(&mut ctx, "2012-12-12").ok(),
+                    DateTime::parse_date(&mut ctx, "2013-12-24").ok(),
+                    DateTime::parse_date(&mut ctx, "2014-12-31").ok(),
+                ],
+                DateTime::parse_date(&mut ctx, "2014-12-31").ok(),
+            ),
+        ];
+
+        for (row, expected) in cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_params(row)
+                .evaluate(ScalarFuncSig::GreatestDate)
+                .unwrap();
+            assert_eq!(output, expected);
+        }
+    }
+
+    #[test]
+    fn test_least_date() {
+        let mut ctx = EvalContext::default();
+        let cases = vec![
+            (vec![None, None], None),
+            (
+                vec![
+                    DateTime::parse_date(&mut ctx, "2012-12-12").ok(),
+                    DateTime::parse_date(&mut ctx, "2012-12-24").ok(),
+                    None,
+                ],
+                None,
+            ),
+            (
+                vec![
+                    DateTime::parse_date(&mut ctx, "2012-12-12").ok(),
+                    DateTime::parse_date(&mut ctx, "2012-12-24").ok(),
+                    DateTime::parse_date(&mut ctx, "2012-12-31").ok(),
+                ],
+                DateTime::parse_date(&mut ctx, "2012-12-12").ok(),
+            ),
+            (
+                vec![
+                    DateTime::parse_date(&mut ctx, "2012-12-12").ok(),
+                    DateTime::parse_date(&mut ctx, "2013-12-24").ok(),
+                    DateTime::parse_date(&mut ctx, "2014-12-31").ok(),
+                ],
+                DateTime::parse_date(&mut ctx, "2012-12-12").ok(),
+            ),
+        ];
+
+        for (row, expected) in cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_params(row)
+                .evaluate(ScalarFuncSig::LeastDate)
+                .unwrap();
+
+            assert_eq!(output, expected);
+        }
+    }
+
+    #[test]
+    fn test_greatest_duration() {
+        let mut ctx = EvalContext::default();
+
+        let cases = vec![
+            (vec![None, None], None),
+            (
+                vec![
+                    Duration::parse(&mut ctx, "123:12:12", 0).ok(),
+                    Duration::parse(&mut ctx, "123:22:12", 0).ok(),
+                    None,
+                ],
+                None,
+            ),
+            (
+                vec![
+                    Duration::parse(&mut ctx, "123:12:12", 0).ok(),
+                    Duration::parse(&mut ctx, "123:22:12", 0).ok(),
+                    Duration::parse(&mut ctx, "123:32:12", 0).ok(),
+                ],
+                Duration::parse(&mut ctx, "123:32:12", 0).ok(),
+            ),
+        ];
+
+        for (row, expected) in cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_params(row)
+                .evaluate(ScalarFuncSig::GreatestDuration)
+                .unwrap();
+            assert_eq!(output, expected);
+        }
+    }
+
+    #[test]
+    fn test_least_duration() {
+        let mut ctx = EvalContext::default();
+
+        let cases = vec![
+            (vec![None, None], None),
+            (
+                vec![
+                    Duration::parse(&mut ctx, "123:12:12", 0).ok(),
+                    Duration::parse(&mut ctx, "123:22:12", 0).ok(),
+                    None,
+                ],
+                None,
+            ),
+            (
+                vec![
+                    Duration::parse(&mut ctx, "123:12:12", 0).ok(),
+                    Duration::parse(&mut ctx, "123:22:12", 0).ok(),
+                    Duration::parse(&mut ctx, "123:32:12", 0).ok(),
+                ],
+                Duration::parse(&mut ctx, "123:12:12", 0).ok(),
+            ),
+        ];
+
+        for (row, expected) in cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_params(row)
+                .evaluate(ScalarFuncSig::LeastDuration)
+                .unwrap();
+            assert_eq!(output, expected);
+        }
+    }
+
+    #[test]
+    fn test_greatest_cmp_string_as_time() {
         let cases = vec![
             (vec![None, None], None),
             (
@@ -1361,14 +1701,14 @@ mod tests {
         for (row, expected) in cases {
             let output = RpnFnScalarEvaluator::new()
                 .push_params(row)
-                .evaluate(ScalarFuncSig::GreatestTime)
+                .evaluate(ScalarFuncSig::GreatestCmpStringAsTime)
                 .unwrap();
             assert_eq!(output, expected);
         }
     }
 
     #[test]
-    fn test_least_time() {
+    fn test_least_cmp_string_as_time() {
         let cases = vec![
             (vec![None, None], None),
             (
@@ -1419,8 +1759,125 @@ mod tests {
         for (row, expected) in cases {
             let output = RpnFnScalarEvaluator::new()
                 .push_params(row)
-                .evaluate(ScalarFuncSig::LeastTime)
-                .unwrap() as Option<Vec<u8>>;
+                .evaluate(ScalarFuncSig::LeastCmpStringAsTime)
+                .unwrap();
+
+            assert_eq!(output, expected);
+        }
+    }
+
+    #[test]
+    fn test_greatest_cmp_string_as_date() {
+        let cases = vec![
+            (vec![None, None], None),
+            (
+                vec![
+                    Some(b"2012-12-12".to_owned().to_vec()),
+                    Some(b"2012-12-24".to_owned().to_vec()),
+                    None,
+                ],
+                None,
+            ),
+            (
+                vec![
+                    Some(b"2012-12-12".to_owned().to_vec()),
+                    Some(b"2012-12-24".to_owned().to_vec()),
+                    Some(b"2012-12-31".to_owned().to_vec()),
+                ],
+                Some(b"2012-12-31".to_owned().to_vec()),
+            ),
+            (
+                vec![
+                    Some(b"2012-12-12".to_owned().to_vec()),
+                    Some(b"2012-12-24".to_owned().to_vec()),
+                    Some(b"2012-12-31".to_owned().to_vec()),
+                    Some(b"invalid_time".to_owned().to_vec()),
+                ],
+                None,
+            ),
+            (
+                vec![
+                    Some(b"2012-12-12".to_owned().to_vec()),
+                    Some(b"2012-12-24".to_owned().to_vec()),
+                    Some(b"2012-12-31".to_owned().to_vec()),
+                    Some(b"2012-12-12".to_owned().to_vec()),
+                    Some(b"2012-12-31".to_owned().to_vec()),
+                    Some(b"2018-04-03".to_owned().to_vec()),
+                ],
+                Some(b"2018-04-03".to_owned().to_vec()),
+            ),
+            (
+                vec![
+                    Some(b"2012-12-12".to_owned().to_vec()),
+                    Some(vec![0, 159, 146, 150]), // Invalid utf-8 bytes
+                ],
+                None,
+            ),
+        ];
+
+        for (row, expected) in cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_params(row)
+                .evaluate(ScalarFuncSig::GreatestCmpStringAsDate)
+                .unwrap();
+            assert_eq!(output, expected);
+        }
+    }
+
+    #[test]
+    fn test_least_cmp_string_as_date() {
+        let cases = vec![
+            (vec![None, None], None),
+            (
+                vec![
+                    Some(b"2012-12-12".to_owned().to_vec()),
+                    Some(b"2012-12-24".to_owned().to_vec()),
+                    None,
+                ],
+                None,
+            ),
+            (
+                vec![
+                    Some(b"2012-12-12".to_owned().to_vec()),
+                    Some(b"2012-12-24".to_owned().to_vec()),
+                    Some(b"2012-12-31".to_owned().to_vec()),
+                ],
+                Some(b"2012-12-12".to_owned().to_vec()),
+            ),
+            (
+                vec![
+                    Some(b"2012-12-12".to_owned().to_vec()),
+                    Some(b"2012-12-24".to_owned().to_vec()),
+                    Some(b"2012-12-31".to_owned().to_vec()),
+                    Some(b"invalid_time".to_owned().to_vec()),
+                ],
+                None,
+            ),
+            (
+                vec![
+                    Some(b"2012-12-12".to_owned().to_vec()),
+                    Some(b"2012-12-24".to_owned().to_vec()),
+                    Some(b"2012-12-31".to_owned().to_vec()),
+                    Some(b"2012-12-12".to_owned().to_vec()),
+                    Some(b"2012-12-31".to_owned().to_vec()),
+                    Some(b"2018-04-03".to_owned().to_vec()),
+                ],
+                Some(b"2012-12-12".to_owned().to_vec()),
+            ),
+            (
+                vec![
+                    Some(b"2012-12-12".to_owned().to_vec()),
+                    Some(vec![0, 159, 146, 150]), // Invalid utf-8 bytes
+                ],
+                None,
+            ),
+        ];
+
+        for (row, expected) in cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_params(row)
+                .evaluate(ScalarFuncSig::LeastCmpStringAsDate)
+                .unwrap();
 
             assert_eq!(output, expected);
         }

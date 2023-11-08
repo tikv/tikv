@@ -1,18 +1,23 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::cmp;
-use std::path::Path;
+use std::{
+    cmp,
+    collections::{
+        BTreeMap,
+        Bound::{Excluded, Included, Unbounded},
+    },
+    path::Path,
+    sync::Arc,
+};
 
-use crate::properties::{RangeProperties, UserCollectedPropertiesDecoder};
-use crate::raw::EventListener;
 use collections::hash_set_with_capacity;
-use engine_traits::CompactedEvent;
-use engine_traits::CompactionJobInfo;
+use engine_traits::{CompactedEvent, CompactionJobInfo};
 use rocksdb::{
     CompactionJobInfo as RawCompactionJobInfo, CompactionReason, TablePropertiesCollectionView,
 };
-use std::collections::BTreeMap;
-use std::collections::Bound::{Excluded, Included, Unbounded};
+use tikv_util::warn;
+
+use crate::properties::{RangeProperties, UserCollectedPropertiesDecoder};
 
 pub struct RocksCompactionJobInfo<'a>(&'a RawCompactionJobInfo);
 
@@ -42,6 +47,10 @@ impl CompactionJobInfo for RocksCompactionJobInfo<'_> {
         self.0.input_file_count()
     }
 
+    fn num_input_files_at_output_level(&self) -> usize {
+        self.0.num_input_files_at_output_level()
+    }
+
     fn input_file_at(&self, pos: usize) -> &Path {
         self.0.input_file_at(pos)
     }
@@ -52,6 +61,10 @@ impl CompactionJobInfo for RocksCompactionJobInfo<'_> {
 
     fn output_file_at(&self, pos: usize) -> &Path {
         self.0.output_file_at(pos)
+    }
+
+    fn base_input_level(&self) -> i32 {
+        self.0.base_input_level()
     }
 
     fn table_properties(&self) -> &Self::TablePropertiesCollectionView {
@@ -104,7 +117,7 @@ pub struct RocksCompactedEvent {
 
 impl RocksCompactedEvent {
     pub fn new(
-        info: &RocksCompactionJobInfo,
+        info: &RocksCompactionJobInfo<'_>,
         start_key: Vec<u8>,
         end_key: Vec<u8>,
         input_props: Vec<RangeProperties>,
@@ -184,27 +197,36 @@ impl CompactedEvent for RocksCompactedEvent {
     }
 
     fn cf(&self) -> &str {
-        &*self.cf
+        &self.cf
     }
 }
 
-pub type Filter = fn(&RocksCompactionJobInfo) -> bool;
+pub type Filter = fn(&RocksCompactionJobInfo<'_>) -> bool;
+
+/// The trait for sending RocksCompactedEvent event
+/// This is to workaround Box<dyn Fn> cannot be cloned
+pub trait CompactedEventSender {
+    fn send(&self, event: RocksCompactedEvent);
+}
 
 pub struct CompactionListener {
-    ch: Box<dyn Fn(RocksCompactedEvent) + Send + Sync>,
+    event_sender: Arc<dyn CompactedEventSender + Send + Sync>,
     filter: Option<Filter>,
 }
 
 impl CompactionListener {
     pub fn new(
-        ch: Box<dyn Fn(RocksCompactedEvent) + Send + Sync>,
+        event_sender: Arc<dyn CompactedEventSender + Send + Sync>,
         filter: Option<Filter>,
     ) -> CompactionListener {
-        CompactionListener { ch, filter }
+        CompactionListener {
+            event_sender,
+            filter,
+        }
     }
 }
 
-impl EventListener for CompactionListener {
+impl rocksdb::EventListener for CompactionListener {
     fn on_compaction_completed(&self, info: &RawCompactionJobInfo) {
         let info = &RocksCompactionJobInfo::from_raw(info);
         if info.status().is_err() {
@@ -273,7 +295,7 @@ impl EventListener for CompactionListener {
             return;
         }
 
-        (self.ch)(RocksCompactedEvent::new(
+        self.event_sender.send(RocksCompactedEvent::new(
             info,
             smallest_key.unwrap(),
             largest_key.unwrap(),

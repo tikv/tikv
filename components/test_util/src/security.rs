@@ -1,8 +1,6 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::fs;
-use std::io::Read;
-use std::path::PathBuf;
+use std::{fs, io::Read, path::PathBuf};
 
 use collections::HashSet;
 use encryption_export::EncryptionConfig;

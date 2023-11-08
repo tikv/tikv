@@ -1,25 +1,24 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::convert::Infallible;
-use tikv_util::impl_format_delegate_newtype;
 
 use error_code::{self, ErrorCode, ErrorCodeExt};
-use failure::Fail;
+use thiserror::Error;
 
-#[derive(Fail, Debug)]
+#[derive(Debug, Error)]
 pub enum EvaluateError {
-    #[fail(display = "Execution terminated due to exceeding the deadline")]
+    #[error("Execution terminated due to exceeding the deadline")]
     DeadlineExceeded,
 
-    #[fail(display = "Invalid {} character string", charset)]
+    #[error("Invalid {charset} character string")]
     InvalidCharacterString { charset: String },
 
     /// This variant is only a compatible layer for existing CodecError.
     /// Ideally each error kind should occupy an enum variant.
-    #[fail(display = "{}", msg)]
+    #[error("{msg}")]
     Custom { code: i32, msg: String },
 
-    #[fail(display = "{}", _0)]
+    #[error("{0}")]
     Other(String),
 }
 
@@ -68,6 +67,12 @@ impl From<std::string::FromUtf8Error> for EvaluateError {
     }
 }
 
+impl From<serde_json::Error> for EvaluateError {
+    fn from(err: serde_json::Error) -> Self {
+        EvaluateError::Other(format!("invalid json value: {:?}", err))
+    }
+}
+
 impl ErrorCodeExt for EvaluateError {
     fn error_code(&self) -> ErrorCode {
         match self {
@@ -81,32 +86,32 @@ impl ErrorCodeExt for EvaluateError {
     }
 }
 
-#[derive(Fail, Debug)]
-#[fail(display = "{}", _0)]
-pub struct StorageError(pub failure::Error);
+#[derive(Debug, Error)]
+#[error(transparent)]
+pub struct StorageError(#[from] pub anyhow::Error);
 
-impl From<failure::Error> for StorageError {
+/// We want to restrict the type of errors to be either a `StorageError` or
+/// `EvaluateError`, thus `failure::Error` is not used. Instead, we introduce
+/// our own error enum.
+#[derive(Debug, Error)]
+pub enum ErrorInner {
+    #[error("Storage error: {0}")]
+    Storage(#[source] StorageError),
+
+    #[error("Evaluate error: {0}")]
+    Evaluate(#[source] EvaluateError),
+}
+
+#[derive(Debug, Error)]
+#[error(transparent)]
+pub struct Error(#[from] pub Box<ErrorInner>);
+
+impl From<ErrorInner> for Error {
     #[inline]
-    fn from(err: failure::Error) -> Self {
-        StorageError(err)
+    fn from(e: ErrorInner) -> Self {
+        Error(Box::new(e))
     }
 }
-
-/// We want to restrict the type of errors to be either a `StorageError` or `EvaluateError`, thus
-/// `failure::Error` is not used. Instead, we introduce our own error enum.
-#[derive(Fail, Debug)]
-pub enum ErrorInner {
-    #[fail(display = "Storage error: {}", _0)]
-    Storage(#[fail(cause)] StorageError),
-
-    #[fail(display = "Evaluate error: {}", _0)]
-    Evaluate(#[fail(cause)] EvaluateError),
-}
-
-#[derive(Debug)]
-pub struct Error(pub Box<ErrorInner>);
-
-impl_format_delegate_newtype!(Error);
 
 impl From<StorageError> for Error {
     #[inline]

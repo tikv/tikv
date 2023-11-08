@@ -1,34 +1,39 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::storage::mvcc::{
-    metrics::{MVCC_CONFLICT_COUNTER, MVCC_DUPLICATE_CMD_COUNTER_VEC},
-    ErrorInner, LockType, MvccTxn, ReleasedLock, Result as MvccResult,
-};
-use crate::storage::Snapshot;
+// #[PerformanceCriticalPath]
 use txn_types::{Key, TimeStamp, Write, WriteType};
 
+use crate::storage::{
+    mvcc::{
+        metrics::{MVCC_CONFLICT_COUNTER, MVCC_DUPLICATE_CMD_COUNTER_VEC},
+        ErrorInner, MvccTxn, ReleasedLock, Result as MvccResult, SnapshotReader,
+    },
+    Snapshot,
+};
+
 pub fn commit<S: Snapshot>(
-    txn: &mut MvccTxn<S>,
+    txn: &mut MvccTxn,
+    reader: &mut SnapshotReader<S>,
     key: Key,
     commit_ts: TimeStamp,
 ) -> MvccResult<Option<ReleasedLock>> {
     fail_point!("commit", |err| Err(
-        crate::storage::mvcc::txn::make_txn_error(err, &key, txn.start_ts,).into()
+        crate::storage::mvcc::txn::make_txn_error(err, &key, reader.start_ts,).into()
     ));
 
-    let mut lock = match txn.reader.load_lock(&key)? {
-        Some(mut lock) if lock.ts == txn.start_ts => {
+    let (mut lock, commit) = match reader.load_lock(&key)? {
+        Some(lock) if lock.ts == reader.start_ts => {
             // A lock with larger min_commit_ts than current commit_ts can't be committed
             if commit_ts < lock.min_commit_ts {
                 info!(
                     "trying to commit with smaller commit_ts than min_commit_ts";
                     "key" => %key,
-                    "start_ts" => txn.start_ts,
+                    "start_ts" => reader.start_ts,
                     "commit_ts" => commit_ts,
                     "min_commit_ts" => lock.min_commit_ts,
                 );
                 return Err(ErrorInner::CommitTsExpired {
-                    start_ts: txn.start_ts,
+                    start_ts: reader.start_ts,
                     commit_ts,
                     key: key.into_raw()?,
                     min_commit_ts: lock.min_commit_ts,
@@ -36,25 +41,26 @@ pub fn commit<S: Snapshot>(
                 .into());
             }
 
-            // It's an abnormal routine since pessimistic locks shouldn't be committed in our
-            // transaction model. But a pessimistic lock will be left if the pessimistic
-            // rollback request fails to send and the transaction need not to acquire
-            // this lock again(due to WriteConflict). If the transaction is committed, we
-            // should commit this pessimistic lock too.
-            if lock.lock_type == LockType::Pessimistic {
+            // It's an abnormal routine since pessimistic locks shouldn't be committed in
+            // our transaction model. But a pessimistic lock will be left if the pessimistic
+            // rollback request fails to send or TiKV receives duplicated stale pessimistic
+            // lock request, and the transaction need not to acquire this lock again(due to
+            // WriteConflict). If the transaction is committed, we should remove the
+            // pessimistic lock (like pessimistic_rollback) instead of committing.
+            if lock.is_pessimistic_lock() {
                 warn!(
-                    "commit a pessimistic lock with Lock type";
+                    "rollback a pessimistic lock when trying to commit";
                     "key" => %key,
-                    "start_ts" => txn.start_ts,
+                    "start_ts" => reader.start_ts,
                     "commit_ts" => commit_ts,
                 );
-                // Commit with WriteType::Lock.
-                lock.lock_type = LockType::Lock;
+                (lock, false)
+            } else {
+                (lock, true)
             }
-            lock
         }
         _ => {
-            return match txn.reader.get_txn_commit_record(&key, txn.start_ts)?.info() {
+            return match reader.get_txn_commit_record(&key)?.info() {
                 Some((_, WriteType::Rollback)) | None => {
                     MVCC_CONFLICT_COUNTER.commit_lock_not_found.inc();
                     // None: related Rollback has been collapsed.
@@ -62,11 +68,11 @@ pub fn commit<S: Snapshot>(
                     info!(
                         "txn conflict (lock not found)";
                         "key" => %key,
-                        "start_ts" => txn.start_ts,
+                        "start_ts" => reader.start_ts,
                         "commit_ts" => commit_ts,
                     );
                     Err(ErrorInner::TxnLockNotFound {
-                        start_ts: txn.start_ts,
+                        start_ts: reader.start_ts,
                         commit_ts,
                         key: key.into_raw()?,
                     }
@@ -82,11 +88,21 @@ pub fn commit<S: Snapshot>(
             };
         }
     };
+
+    if !commit {
+        // Rollback a stale pessimistic lock. This function must be called by
+        // resolve-lock in this case.
+        assert!(lock.is_pessimistic_lock());
+        return Ok(txn.unlock_key(key, lock.is_pessimistic_txn(), TimeStamp::zero()));
+    }
+
     let mut write = Write::new(
         WriteType::from_lock_type(lock.lock_type).unwrap(),
-        txn.start_ts,
+        reader.start_ts,
         lock.short_value.take(),
-    );
+    )
+    .set_last_change(lock.last_change.clone())
+    .set_txn_source(lock.txn_source);
 
     for ts in &lock.rollback_ts {
         if *ts == commit_ts {
@@ -96,46 +112,83 @@ pub fn commit<S: Snapshot>(
     }
 
     txn.put_write(key.clone(), commit_ts, write.as_ref().to_bytes());
-    Ok(txn.unlock_key(key, lock.is_pessimistic_txn()))
+    Ok(txn.unlock_key(key, lock.is_pessimistic_txn(), commit_ts))
 }
 
 pub mod tests {
-    use super::*;
-    use crate::storage::mvcc::tests::*;
-    use crate::storage::mvcc::MvccTxn;
-    use crate::storage::Engine;
     use concurrency_manager::ConcurrencyManager;
     use kvproto::kvrpcpb::Context;
-    use txn_types::TimeStamp;
+    #[cfg(test)]
+    use kvproto::kvrpcpb::PrewriteRequestPessimisticAction::*;
+    use tikv_kv::SnapContext;
+    #[cfg(test)]
+    use txn_types::{LastChange, TimeStamp};
 
+    use super::*;
     #[cfg(test)]
     use crate::storage::txn::tests::{
         must_acquire_pessimistic_lock_for_large_txn, must_prewrite_delete, must_prewrite_lock,
-        must_prewrite_put, must_prewrite_put_for_large_txn, must_prewrite_put_impl, must_rollback,
+        must_prewrite_put, must_prewrite_put_for_large_txn, must_prewrite_put_impl,
+        must_prewrite_put_with_txn_soucre, must_rollback,
     };
-
     #[cfg(test)]
     use crate::storage::{
-        mvcc::SHORT_VALUE_MAX_LEN, txn::commands::check_txn_status, TestEngineBuilder, TxnStatus,
+        mvcc::SHORT_VALUE_MAX_LEN,
+        txn::commands::check_txn_status,
+        txn::tests::{must_acquire_pessimistic_lock, must_pessimistic_prewrite_put},
+        TestEngineBuilder, TxnStatus,
+    };
+    use crate::storage::{
+        mvcc::{tests::*, MvccTxn},
+        Engine,
     };
 
     pub fn must_succeed<E: Engine>(
-        engine: &E,
+        engine: &mut E,
         key: &[u8],
         start_ts: impl Into<TimeStamp>,
         commit_ts: impl Into<TimeStamp>,
-    ) {
-        let ctx = Context::default();
-        let snapshot = engine.snapshot(Default::default()).unwrap();
+    ) -> Option<ReleasedLock> {
+        must_succeed_impl(engine, key, start_ts, commit_ts, None)
+    }
+
+    pub fn must_succeed_on_region<E: Engine>(
+        engine: &mut E,
+        region_id: u64,
+        key: &[u8],
+        start_ts: impl Into<TimeStamp>,
+        commit_ts: impl Into<TimeStamp>,
+    ) -> Option<ReleasedLock> {
+        must_succeed_impl(engine, key, start_ts, commit_ts, Some(region_id))
+    }
+
+    fn must_succeed_impl<E: Engine>(
+        engine: &mut E,
+        key: &[u8],
+        start_ts: impl Into<TimeStamp>,
+        commit_ts: impl Into<TimeStamp>,
+        region_id: Option<u64>,
+    ) -> Option<ReleasedLock> {
+        let mut ctx = Context::default();
+        if let Some(region_id) = region_id {
+            ctx.region_id = region_id;
+        }
+        let snap_ctx = SnapContext {
+            pb_ctx: &ctx,
+            ..Default::default()
+        };
+        let snapshot = engine.snapshot(snap_ctx).unwrap();
         let start_ts = start_ts.into();
         let cm = ConcurrencyManager::new(start_ts);
-        let mut txn = MvccTxn::new(snapshot, start_ts, true, cm);
-        commit(&mut txn, Key::from_raw(key), commit_ts.into()).unwrap();
+        let mut txn = MvccTxn::new(start_ts, cm);
+        let mut reader = SnapshotReader::new(start_ts, snapshot, true);
+        let res = commit(&mut txn, &mut reader, Key::from_raw(key), commit_ts.into()).unwrap();
         write(engine, &ctx, txn.into_modifies());
+        res
     }
 
     pub fn must_err<E: Engine>(
-        engine: &E,
+        engine: &mut E,
         key: &[u8],
         start_ts: impl Into<TimeStamp>,
         commit_ts: impl Into<TimeStamp>,
@@ -143,29 +196,30 @@ pub mod tests {
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let start_ts = start_ts.into();
         let cm = ConcurrencyManager::new(start_ts);
-        let mut txn = MvccTxn::new(snapshot, start_ts, true, cm);
-        assert!(commit(&mut txn, Key::from_raw(key), commit_ts.into()).is_err());
+        let mut txn = MvccTxn::new(start_ts, cm);
+        let mut reader = SnapshotReader::new(start_ts, snapshot, true);
+        commit(&mut txn, &mut reader, Key::from_raw(key), commit_ts.into()).unwrap_err();
     }
 
     #[cfg(test)]
     fn test_commit_ok_imp(k1: &[u8], v1: &[u8], k2: &[u8], k3: &[u8]) {
-        let engine = TestEngineBuilder::new().build().unwrap();
-        must_prewrite_put(&engine, k1, v1, k1, 10);
-        must_prewrite_lock(&engine, k2, k1, 10);
-        must_prewrite_delete(&engine, k3, k1, 10);
-        must_locked(&engine, k1, 10);
-        must_locked(&engine, k2, 10);
-        must_locked(&engine, k3, 10);
-        must_succeed(&engine, k1, 10, 15);
-        must_succeed(&engine, k2, 10, 15);
-        must_succeed(&engine, k3, 10, 15);
-        must_written(&engine, k1, 10, 15, WriteType::Put);
-        must_written(&engine, k2, 10, 15, WriteType::Lock);
-        must_written(&engine, k3, 10, 15, WriteType::Delete);
+        let mut engine = TestEngineBuilder::new().build().unwrap();
+        must_prewrite_put(&mut engine, k1, v1, k1, 10);
+        must_prewrite_lock(&mut engine, k2, k1, 10);
+        must_prewrite_delete(&mut engine, k3, k1, 10);
+        must_locked(&mut engine, k1, 10);
+        must_locked(&mut engine, k2, 10);
+        must_locked(&mut engine, k3, 10);
+        must_succeed(&mut engine, k1, 10, 15);
+        must_succeed(&mut engine, k2, 10, 15);
+        must_succeed(&mut engine, k3, 10, 15);
+        must_written(&mut engine, k1, 10, 15, WriteType::Put);
+        must_written(&mut engine, k2, 10, 15, WriteType::Lock);
+        must_written(&mut engine, k3, 10, 15, WriteType::Delete);
         // commit should be idempotent
-        must_succeed(&engine, k1, 10, 15);
-        must_succeed(&engine, k2, 10, 15);
-        must_succeed(&engine, k3, 10, 15);
+        must_succeed(&mut engine, k1, 10, 15);
+        must_succeed(&mut engine, k2, 10, 15);
+        must_succeed(&mut engine, k3, 10, 15);
     }
 
     #[test]
@@ -178,16 +232,16 @@ pub mod tests {
 
     #[cfg(test)]
     fn test_commit_err_imp(k: &[u8], v: &[u8]) {
-        let engine = TestEngineBuilder::new().build().unwrap();
+        let mut engine = TestEngineBuilder::new().build().unwrap();
 
         // Not prewrite yet
-        must_err(&engine, k, 1, 2);
-        must_prewrite_put(&engine, k, v, k, 5);
+        must_err(&mut engine, k, 1, 2);
+        must_prewrite_put(&mut engine, k, v, k, 5);
         // start_ts not match
-        must_err(&engine, k, 4, 5);
-        must_rollback(&engine, k, 5);
+        must_err(&mut engine, k, 4, 5);
+        must_rollback(&mut engine, k, 5, false);
         // commit after rollback
-        must_err(&engine, k, 5, 6);
+        must_err(&mut engine, k, 5, 6);
     }
 
     #[test]
@@ -200,7 +254,7 @@ pub mod tests {
 
     #[test]
     fn test_min_commit_ts() {
-        let engine = TestEngineBuilder::new().build().unwrap();
+        let mut engine = TestEngineBuilder::new().build().unwrap();
 
         let (k, v) = (b"k", b"v");
 
@@ -216,9 +270,9 @@ pub mod tests {
             }
         };
 
-        must_prewrite_put_for_large_txn(&engine, k, v, k, ts(10, 0), 100, 0);
+        must_prewrite_put_for_large_txn(&mut engine, k, v, k, ts(10, 0), 100, 0);
         check_txn_status::tests::must_success(
-            &engine,
+            &mut engine,
             k,
             ts(10, 0),
             ts(20, 0),
@@ -229,13 +283,13 @@ pub mod tests {
             uncommitted(100, ts(20, 1)),
         );
         // The min_commit_ts should be ts(20, 1)
-        must_err(&engine, k, ts(10, 0), ts(15, 0));
-        must_err(&engine, k, ts(10, 0), ts(20, 0));
-        must_succeed(&engine, k, ts(10, 0), ts(20, 1));
+        must_err(&mut engine, k, ts(10, 0), ts(15, 0));
+        must_err(&mut engine, k, ts(10, 0), ts(20, 0));
+        must_succeed(&mut engine, k, ts(10, 0), ts(20, 1));
 
-        must_prewrite_put_for_large_txn(&engine, k, v, k, ts(30, 0), 100, 0);
+        must_prewrite_put_for_large_txn(&mut engine, k, v, k, ts(30, 0), 100, 0);
         check_txn_status::tests::must_success(
-            &engine,
+            &mut engine,
             k,
             ts(30, 0),
             ts(40, 0),
@@ -245,12 +299,13 @@ pub mod tests {
             false,
             uncommitted(100, ts(40, 1)),
         );
-        must_succeed(&engine, k, ts(30, 0), ts(50, 0));
+        must_succeed(&mut engine, k, ts(30, 0), ts(50, 0));
 
-        // If the min_commit_ts of the pessimistic lock is greater than prewrite's, use it.
-        must_acquire_pessimistic_lock_for_large_txn(&engine, k, k, ts(60, 0), ts(60, 0), 100);
+        // If the min_commit_ts of the pessimistic lock is greater than prewrite's, use
+        // it.
+        must_acquire_pessimistic_lock_for_large_txn(&mut engine, k, k, ts(60, 0), ts(60, 0), 100);
         check_txn_status::tests::must_success(
-            &engine,
+            &mut engine,
             k,
             ts(60, 0),
             ts(70, 0),
@@ -261,22 +316,91 @@ pub mod tests {
             uncommitted(100, ts(70, 1)),
         );
         must_prewrite_put_impl(
-            &engine,
+            &mut engine,
             k,
             v,
             k,
             &None,
             ts(60, 0),
-            true,
+            DoPessimisticCheck,
             50,
             ts(60, 0),
             1,
             ts(60, 1),
             TimeStamp::zero(),
+            false,
+            kvproto::kvrpcpb::Assertion::None,
+            kvproto::kvrpcpb::AssertionLevel::Off,
         );
         // The min_commit_ts is ts(70, 0) other than ts(60, 1) in prewrite request.
-        must_large_txn_locked(&engine, k, ts(60, 0), 100, ts(70, 1), false);
-        must_err(&engine, k, ts(60, 0), ts(65, 0));
-        must_succeed(&engine, k, ts(60, 0), ts(80, 0));
+        must_large_txn_locked(&mut engine, k, ts(60, 0), 100, ts(70, 1), false);
+        must_err(&mut engine, k, ts(60, 0), ts(65, 0));
+        must_succeed(&mut engine, k, ts(60, 0), ts(80, 0));
+    }
+
+    #[test]
+    fn test_inherit_last_change_info_from_lock() {
+        let mut engine = TestEngineBuilder::new().build().unwrap();
+
+        let k = b"k";
+        must_prewrite_put(&mut engine, k, b"v1", k, 5);
+        must_succeed(&mut engine, k, 5, 10);
+
+        // WriteType is Lock
+        must_prewrite_lock(&mut engine, k, k, 15);
+        let lock = must_locked(&mut engine, k, 15);
+        assert_eq!(lock.last_change, LastChange::make_exist(10.into(), 1));
+        must_succeed(&mut engine, k, 15, 20);
+        let write = must_written(&mut engine, k, 15, 20, WriteType::Lock);
+        assert_eq!(write.last_change, LastChange::make_exist(10.into(), 1));
+
+        // WriteType is Put
+        must_prewrite_put(&mut engine, k, b"v2", k, 25);
+        let lock = must_locked(&mut engine, k, 25);
+        assert_eq!(lock.last_change, LastChange::Unknown);
+        must_succeed(&mut engine, k, 25, 30);
+        let write = must_written(&mut engine, k, 25, 30, WriteType::Put);
+        assert_eq!(write.last_change, LastChange::Unknown);
+    }
+
+    #[test]
+    fn test_2pc_with_txn_source() {
+        for source in [0x1, 0x85] {
+            let mut engine = TestEngineBuilder::new().build().unwrap();
+
+            let k = b"k";
+            // WriteType is Put
+            must_prewrite_put_with_txn_soucre(&mut engine, k, b"v2", k, 25, source);
+            let lock = must_locked(&mut engine, k, 25);
+            assert_eq!(lock.txn_source, source);
+            must_succeed(&mut engine, k, 25, 30);
+            let write = must_written(&mut engine, k, 25, 30, WriteType::Put);
+            assert_eq!(write.txn_source, source);
+        }
+    }
+
+    #[test]
+    fn test_commit_rollback_pessimistic_lock() {
+        let mut engine = TestEngineBuilder::new().build().unwrap();
+
+        let k1 = b"k1";
+        let k2 = b"k2";
+
+        must_acquire_pessimistic_lock(&mut engine, k1, k1, 10, 10);
+        must_acquire_pessimistic_lock(&mut engine, k2, k1, 10, 10);
+        must_pessimistic_prewrite_put(&mut engine, k1, b"v1", k1, 10, 10, DoPessimisticCheck);
+        let res = must_succeed(&mut engine, k1, 10, 20).unwrap();
+        assert_eq!(res.key, Key::from_raw(k1));
+        assert_eq!(res.start_ts, 10.into());
+        assert_eq!(res.commit_ts, 20.into());
+
+        let res = must_succeed(&mut engine, k2, 10, 20).unwrap();
+        assert_eq!(res.key, Key::from_raw(k2));
+        assert_eq!(res.start_ts, 10.into());
+        assert_eq!(res.commit_ts, 0.into());
+
+        must_written(&mut engine, k1, 10, 20, WriteType::Put);
+        must_not_have_write(&mut engine, k2, 20);
+        must_not_have_write(&mut engine, k2, 10);
     }
 }

@@ -1,14 +1,14 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::cmp::Ordering;
-use std::convert::TryFrom;
+use std::{cmp::Ordering, convert::TryFrom};
 
 use tidb_query_codegen::AggrFunction;
 use tidb_query_common::Result;
-use tidb_query_datatype::codec::collation::*;
-use tidb_query_datatype::codec::data_type::*;
-use tidb_query_datatype::expr::EvalContext;
-use tidb_query_datatype::{Collation, EvalType, FieldTypeAccessor};
+use tidb_query_datatype::{
+    codec::{collation::Collator, data_type::*},
+    expr::EvalContext,
+    match_template_collator, Collation, EvalType, FieldTypeAccessor, FieldTypeFlag,
+};
 use tidb_query_expr::RpnExpression;
 use tipb::{Expr, ExprType, FieldType};
 
@@ -64,6 +64,11 @@ impl<E: Extremum> super::AggrDefinitionParser for AggrFnDefinitionParserExtremum
         assert_eq!(root_expr.get_tp(), E::TP);
         let eval_type =
             EvalType::try_from(exp.ret_field_type(src_schema).as_accessor().tp()).unwrap();
+        let is_unsigned = exp
+            .ret_field_type(src_schema)
+            .as_accessor()
+            .flag()
+            .contains(FieldTypeFlag::UNSIGNED);
 
         let out_ft = root_expr.take_field_type();
         let out_et = box_try!(EvalType::try_from(out_ft.as_accessor().tp()));
@@ -82,7 +87,6 @@ impl<E: Extremum> super::AggrDefinitionParser for AggrFnDefinitionParserExtremum
 
         match_template::match_template! {
             T = [
-                Int => &'static Int,
                 Real => &'static Real,
                 Duration => &'static Duration,
                 Decimal => &'static Decimal,
@@ -91,6 +95,10 @@ impl<E: Extremum> super::AggrDefinitionParser for AggrFnDefinitionParserExtremum
             ],
             match eval_type {
                 EvalType::T => Ok(Box::new(AggFnExtremum::<T, E>::new())),
+                EvalType::Int => match is_unsigned {
+                    false => Ok(Box::new(AggFnExtremumForInt::<E, false>::new())),
+                    true => Ok(Box::new(AggFnExtremumForInt::<E, true>::new())),
+                },
                 EvalType::Enum => Ok(Box::new(AggFnExtremumForEnum::<E>::new())),
                 EvalType::Set => Ok(Box::new(AggFnExtremumForSet::<E>::new())),
                 EvalType::Bytes => match_template_collator! {
@@ -175,7 +183,7 @@ where
             return Ok(());
         }
 
-        if C::sort_compare(&self.extremum.as_ref().unwrap(), &value.as_ref().unwrap())? == E::ORD {
+        if C::sort_compare(self.extremum.as_ref().unwrap(), value.as_ref().unwrap())? == E::ORD {
             self.extremum = value.map(|x| x.into_owned_value());
         }
         Ok(())
@@ -234,13 +242,17 @@ where
 
     /// # Notes
     ///
-    /// For MAX(), MySQL currently compares ENUM and SET columns by their string value rather
-    /// than by the string's relative position in the set. This differs from how ORDER BY
-    /// compares them.
+    /// For MAX(), MySQL currently compares ENUM and SET columns by their string
+    /// value rather than by the string's relative position in the set. This
+    /// differs from how ORDER BY compares them.
     ///
     /// ref: https://dev.mysql.com/doc/refman/5.7/en/aggregate-functions.html#function_max
     #[inline]
-    fn update_concrete(&mut self, _ctx: &mut EvalContext, value: Option<EnumRef>) -> Result<()> {
+    fn update_concrete(
+        &mut self,
+        _ctx: &mut EvalContext,
+        value: Option<EnumRef<'_>>,
+    ) -> Result<()> {
         let extreme_ref = self
             .extremum
             .as_ref()
@@ -248,11 +260,7 @@ where
 
         if value.is_some()
             && (self.extremum.is_none()
-                || extreme_ref
-                    .unwrap()
-                    .as_str()?
-                    .cmp(&value.unwrap().as_str()?)
-                    == E::ORD)
+                || extreme_ref.unwrap().as_str()?.cmp(value.unwrap().as_str()?) == E::ORD)
         {
             self.extremum = value.map(|x| x.into_owned_value());
         }
@@ -323,13 +331,13 @@ where
 
     /// # Notes
     ///
-    /// For MAX(), MySQL currently compares ENUM and SET columns by their string value rather
-    /// than by the string's relative position in the set. This differs from how ORDER BY
-    /// compares them.
+    /// For MAX(), MySQL currently compares ENUM and SET columns by their string
+    /// value rather than by the string's relative position in the set. This
+    /// differs from how ORDER BY compares them.
     ///
     /// ref: https://dev.mysql.com/doc/refman/5.7/en/aggregate-functions.html#function_max
     #[inline]
-    fn update_concrete(&mut self, _ctx: &mut EvalContext, value: Option<SetRef>) -> Result<()> {
+    fn update_concrete(&mut self, _ctx: &mut EvalContext, value: Option<SetRef<'_>>) -> Result<()> {
         let extreme_ref = self
             .extremum
             .as_ref()
@@ -448,20 +456,105 @@ where
     }
 }
 
+#[derive(Debug, AggrFunction)]
+#[aggr_function(state = AggFnStateExtremumForInt::<E, IS_UNSIGNED>::new())]
+pub struct AggFnExtremumForInt<E, const IS_UNSIGNED: bool>
+where
+    E: Extremum,
+    VectorValue: VectorValueExt<Int>,
+{
+    _phantom: std::marker::PhantomData<E>,
+}
+
+impl<E, const IS_UNSIGNED: bool> AggFnExtremumForInt<E, IS_UNSIGNED>
+where
+    E: Extremum,
+    VectorValue: VectorValueExt<Int>,
+{
+    pub fn new() -> Self {
+        Self {
+            _phantom: std::marker::PhantomData,
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct AggFnStateExtremumForInt<E, const IS_UNSIGNED: bool>
+where
+    E: Extremum,
+    VectorValue: VectorValueExt<Int>,
+{
+    extremum: Option<Int>,
+    _phantom: std::marker::PhantomData<E>,
+}
+
+impl<E, const IS_UNSIGNED: bool> AggFnStateExtremumForInt<E, IS_UNSIGNED>
+where
+    E: Extremum,
+    VectorValue: VectorValueExt<Int>,
+{
+    pub fn new() -> Self {
+        Self {
+            extremum: None,
+            _phantom: std::marker::PhantomData,
+        }
+    }
+
+    #[inline]
+    pub fn update_concrete(&mut self, _ctx: &mut EvalContext, value: Option<&Int>) -> Result<()> {
+        if value.is_some() {
+            if self.extremum.is_none() {
+                self.extremum = value.copied();
+                return Ok(());
+            }
+            if IS_UNSIGNED {
+                let v1 = self.extremum.map(|x| x as u64);
+                let v2 = value.map(|x| *x as u64);
+                if v1.cmp(&v2) == E::ORD {
+                    self.extremum = value.copied()
+                }
+            } else {
+                let v1: Option<i64> = self.extremum;
+                let v2: Option<i64> = value.copied();
+                if v1.cmp(&v2) == E::ORD {
+                    self.extremum = v2;
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+impl<E, const IS_UNSIGNED: bool> super::ConcreteAggrFunctionState
+    for AggFnStateExtremumForInt<E, IS_UNSIGNED>
+where
+    E: Extremum,
+    VectorValue: VectorValueExt<Int>,
+{
+    type ParameterType = &'static Int;
+
+    impl_concrete_state! { Self::ParameterType }
+
+    #[inline]
+    fn push_result(&self, _ctx: &mut EvalContext, target: &mut [VectorValue]) -> Result<()> {
+        target[0].push(self.extremum);
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
 
-    use tidb_query_datatype::codec::batch::{LazyBatchColumn, LazyBatchColumnVec};
-    use tidb_query_datatype::EvalType;
-    use tidb_query_datatype::{FieldTypeAccessor, FieldTypeTp};
+    use tidb_query_datatype::{
+        codec::batch::{LazyBatchColumn, LazyBatchColumnVec},
+        EvalType, FieldTypeAccessor, FieldTypeTp,
+    };
     use tikv_util::buffer_vec::BufferVec;
     use tipb_helper::ExprDefBuilder;
 
-    use crate::parser::AggrDefinitionParser;
-    use crate::AggrFunction;
-
     use super::*;
+    use crate::{parser::AggrDefinitionParser, AggrFunction};
 
     #[test]
     fn test_max() {
@@ -501,7 +594,7 @@ mod tests {
         update_vector!(
             state,
             &mut ctx,
-            &ChunkedVecSized::from_slice(&[Some(21i64), None, Some(22i64)]),
+            ChunkedVecSized::from_slice(&[Some(21i64), None, Some(22i64)]),
             &[0, 1, 2]
         )
         .unwrap();
@@ -523,27 +616,25 @@ mod tests {
 
         let mut result = [VectorValue::with_capacity(0, EvalType::Enum)];
 
-        let mut buf = BufferVec::new();
-        buf.push("B - 我好强啊");
-        buf.push("A - 我太强啦");
-        let buf = Arc::new(buf);
-
         state.push_result(&mut ctx, &mut result).unwrap();
         assert_eq!(result[0].to_enum_vec(), &[None]);
 
-        update!(state, &mut ctx, Some(EnumRef::new(&buf, 1))).unwrap();
+        update!(state, &mut ctx, Some(EnumRef::new("bbb".as_bytes(), &1))).unwrap();
         result[0].clear();
         state.push_result(&mut ctx, &mut result).unwrap();
         assert_eq!(
             result[0].to_enum_vec(),
-            vec![Some(Enum::new(buf.clone(), 1))]
+            vec![Some(Enum::new("bbb".as_bytes().to_vec(), 1))]
         );
 
-        update!(state, &mut ctx, Some(EnumRef::new(&buf, 1))).unwrap();
-        update!(state, &mut ctx, Some(EnumRef::new(&buf, 2))).unwrap();
+        update!(state, &mut ctx, Some(EnumRef::new("bbb".as_bytes(), &1))).unwrap();
+        update!(state, &mut ctx, Some(EnumRef::new("aaa".as_bytes(), &2))).unwrap();
         result[0].clear();
         state.push_result(&mut ctx, &mut result).unwrap();
-        assert_eq!(result[0].to_enum_vec(), vec![Some(Enum::new(buf, 1))]);
+        assert_eq!(
+            result[0].to_enum_vec(),
+            vec![Some(Enum::new("bbb".as_bytes().to_vec(), 1))]
+        );
     }
 
     #[test]
@@ -616,7 +707,7 @@ mod tests {
         update_vector!(
             state,
             &mut ctx,
-            &ChunkedVecSized::from_slice(&[Some(69i64), None, Some(68i64)]),
+            ChunkedVecSized::from_slice(&[Some(69i64), None, Some(68i64)]),
             &[0, 1, 2]
         )
         .unwrap();
@@ -671,7 +762,7 @@ mod tests {
                 update!(
                     state,
                     &mut ctx,
-                    Some(&String::from(arg).into_bytes() as BytesRef)
+                    Some(&String::from(arg).into_bytes() as BytesRef<'_>)
                 )
                 .unwrap();
             }
@@ -686,20 +777,6 @@ mod tests {
 
     #[test]
     fn test_integration() {
-        let max_parser = AggrFnDefinitionParserExtremum::<Max>::new();
-        let min_parser = AggrFnDefinitionParserExtremum::<Min>::new();
-
-        let max = ExprDefBuilder::aggr_func(ExprType::Max, FieldTypeTp::LongLong)
-            .push_child(ExprDefBuilder::column_ref(0, FieldTypeTp::LongLong))
-            .build();
-        max_parser.check_supported(&max).unwrap();
-
-        let min = ExprDefBuilder::aggr_func(ExprType::Min, FieldTypeTp::LongLong)
-            .push_child(ExprDefBuilder::column_ref(0, FieldTypeTp::LongLong))
-            .build();
-        min_parser.check_supported(&min).unwrap();
-
-        let src_schema = [FieldTypeTp::LongLong.into()];
         let mut columns = LazyBatchColumnVec::from(vec![{
             let mut col = LazyBatchColumn::decoded_with_capacity_and_tp(0, EvalType::Int);
             col.mut_decoded().push_int(Some(10000));
@@ -713,6 +790,94 @@ mod tests {
             col
         }]);
         let logical_rows = vec![3, 2, 6, 5, 1, 7];
+        let expected_res = vec![Some(99), Some(-1i64)];
+        let mut field_type = FieldType::default();
+        let fta = field_type.as_mut_accessor();
+        fta.set_tp(FieldTypeTp::LongLong);
+
+        test_integration_util(
+            field_type.tp(),
+            field_type.flag(),
+            &mut columns,
+            &logical_rows,
+            &expected_res,
+        );
+    }
+
+    #[test]
+    fn test_aggr_unsigned_signed_int() {
+        // test unsigned bigint
+        let mut columns = LazyBatchColumnVec::from(vec![{
+            let mut col = LazyBatchColumn::decoded_with_capacity_and_tp(0, EvalType::Int);
+            col.mut_decoded().push_int(None);
+            col.mut_decoded().push_int(Some(-1));
+            col.mut_decoded().push_int(Some(2420174916247255494));
+            col.mut_decoded().push_int(Some(3899490809029152765));
+            col
+        }]);
+        let logical_rows = vec![0, 1, 2, 3];
+        let expected_res = vec![Some(-1), Some(2420174916247255494)];
+        let mut field_type = FieldType::default();
+        let fta = field_type.as_mut_accessor();
+        fta.set_tp(FieldTypeTp::LongLong);
+        fta.set_flag(FieldTypeFlag::UNSIGNED);
+
+        test_integration_util(
+            field_type.tp(),
+            field_type.flag(),
+            &mut columns,
+            &logical_rows,
+            &expected_res,
+        );
+
+        // test signed bigint
+        let mut columns = LazyBatchColumnVec::from(vec![{
+            let mut col = LazyBatchColumn::decoded_with_capacity_and_tp(0, EvalType::Int);
+            col.mut_decoded().push_int(None);
+            col.mut_decoded().push_int(Some(-1));
+            col.mut_decoded().push_int(Some(2420174916247255494));
+            col.mut_decoded().push_int(Some(3899490809029152765));
+            col
+        }]);
+        let logical_rows = vec![0, 1, 2, 3];
+        let expected_res = vec![Some(3899490809029152765), Some(-1)];
+        let mut field_type = FieldType::default();
+        let fta = field_type.as_mut_accessor();
+        fta.set_tp(FieldTypeTp::LongLong);
+
+        test_integration_util(
+            field_type.tp(),
+            field_type.flag(),
+            &mut columns,
+            &logical_rows,
+            &expected_res,
+        );
+    }
+
+    fn test_integration_util(
+        field_type: FieldTypeTp,
+        child_flag: FieldTypeFlag,
+        columns: &mut LazyBatchColumnVec,
+        logical_rows: &[usize],
+        expected_res: &[Option<Int>],
+    ) {
+        let max_parser = AggrFnDefinitionParserExtremum::<Max>::new();
+        let min_parser = AggrFnDefinitionParserExtremum::<Min>::new();
+
+        let mut child_field_type: FieldType = field_type.into();
+        child_field_type.as_mut_accessor().set_flag(child_flag);
+
+        let max = ExprDefBuilder::aggr_func(ExprType::Max, field_type)
+            .push_child(ExprDefBuilder::column_ref(0, child_field_type.clone()))
+            .build();
+        max_parser.check_supported(&max).unwrap();
+
+        let min = ExprDefBuilder::aggr_func(ExprType::Min, field_type)
+            .push_child(ExprDefBuilder::column_ref(0, child_field_type.clone()))
+            .build();
+        min_parser.check_supported(&min).unwrap();
+
+        let src_schema = [child_field_type];
 
         let mut schema = vec![];
         let mut exp = vec![];
@@ -722,14 +887,14 @@ mod tests {
             .parse(max, &mut ctx, &src_schema, &mut schema, &mut exp)
             .unwrap();
         assert_eq!(schema.len(), 1);
-        assert_eq!(schema[0].as_accessor().tp(), FieldTypeTp::LongLong);
+        assert_eq!(schema[0].as_accessor().tp(), field_type);
         assert_eq!(exp.len(), 1);
 
         let min_fn = min_parser
             .parse(min, &mut ctx, &src_schema, &mut schema, &mut exp)
             .unwrap();
         assert_eq!(schema.len(), 2);
-        assert_eq!(schema[1].as_accessor().tp(), FieldTypeTp::LongLong);
+        assert_eq!(schema[1].as_accessor().tp(), field_type);
         assert_eq!(exp.len(), 2);
 
         let mut ctx = EvalContext::default();
@@ -741,26 +906,38 @@ mod tests {
         // max
         {
             let max_result = exp[0]
-                .eval(&mut ctx, &src_schema, &mut columns, &logical_rows, 6)
+                .eval(
+                    &mut ctx,
+                    &src_schema,
+                    columns,
+                    logical_rows,
+                    logical_rows.len(),
+                )
                 .unwrap();
             let max_result = max_result.vector_value().unwrap();
             let max_slice: ChunkedVecSized<Int> = max_result.as_ref().to_int_vec().into();
-            update_vector!(max_state, &mut ctx, &max_slice, max_result.logical_rows()).unwrap();
+            update_vector!(max_state, &mut ctx, max_slice, max_result.logical_rows()).unwrap();
             max_state.push_result(&mut ctx, &mut aggr_result).unwrap();
         }
 
         // min
         {
             let min_result = exp[0]
-                .eval(&mut ctx, &src_schema, &mut columns, &logical_rows, 6)
+                .eval(
+                    &mut ctx,
+                    &src_schema,
+                    columns,
+                    logical_rows,
+                    logical_rows.len(),
+                )
                 .unwrap();
             let min_result = min_result.vector_value().unwrap();
             let min_slice: ChunkedVecSized<Int> = min_result.as_ref().to_int_vec().into();
-            update_vector!(min_state, &mut ctx, &min_slice, min_result.logical_rows()).unwrap();
+            update_vector!(min_state, &mut ctx, min_slice, min_result.logical_rows()).unwrap();
             min_state.push_result(&mut ctx, &mut aggr_result).unwrap();
         }
 
-        assert_eq!(aggr_result[0].to_int_vec(), &[Some(99), Some(-1i64),]);
+        assert_eq!(aggr_result[0].to_int_vec(), expected_res);
     }
 
     #[test]

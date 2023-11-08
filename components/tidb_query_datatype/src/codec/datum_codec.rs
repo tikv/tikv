@@ -1,19 +1,25 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-//! The unified entry for encoding and decoding an evaluable type to / from datum bytes.
-//! Datum bytes consists of 1 byte datum flag and variable bytes datum payload.
+//! The unified entry for encoding and decoding an evaluable type to / from
+//! datum bytes. Datum bytes consists of 1 byte datum flag and variable bytes
+//! datum payload.
 
-use crate::{FieldTypeAccessor, FieldTypeTp};
 use codec::prelude::*;
 use tipb::FieldType;
 
 use super::data_type::*;
-use crate::codec::datum;
-use crate::codec::mysql::{
-    DecimalDecoder, DecimalEncoder, DurationDecoder, JsonDecoder, JsonEncoder, TimeDecoder,
+use crate::{
+    codec::{
+        datum,
+        mysql::{
+            DecimalDecoder, DecimalEncoder, DurationDecoder, EnumDecoder, EnumEncoder, JsonDecoder,
+            JsonEncoder, TimeDecoder,
+        },
+        Error, Result,
+    },
+    expr::EvalContext,
+    FieldTypeAccessor, FieldTypeTp,
 };
-use crate::codec::{Error, Result};
-use crate::expr::EvalContext;
 
 /// A decoder to decode the payload part of a datum.
 ///
@@ -26,6 +32,7 @@ pub trait DatumPayloadDecoder:
     + TimeDecoder
     + DecimalDecoder
     + JsonDecoder
+    + EnumDecoder
 {
     #[inline]
     fn read_datum_payload_i64(&mut self) -> Result<i64> {
@@ -122,6 +129,27 @@ pub trait DatumPayloadDecoder:
             Error::InvalidDataType("Failed to decode datum payload as json".to_owned())
         })
     }
+
+    #[inline]
+    fn read_datum_payload_enum_compact_bytes(&mut self, field_type: &FieldType) -> Result<Enum> {
+        self.read_enum_compact_bytes(field_type).map_err(|_| {
+            Error::InvalidDataType("Failed to decode datum payload as enum".to_owned())
+        })
+    }
+
+    #[inline]
+    fn read_datum_payload_enum_uint(&mut self, field_type: &FieldType) -> Result<Enum> {
+        self.read_enum_uint(field_type).map_err(|_| {
+            Error::InvalidDataType("Failed to decode datum payload as enum".to_owned())
+        })
+    }
+
+    #[inline]
+    fn read_datum_payload_enum_var_uint(&mut self, field_type: &FieldType) -> Result<Enum> {
+        self.read_enum_var_uint(field_type).map_err(|_| {
+            Error::InvalidDataType("Failed to decode datum payload as enum".to_owned())
+        })
+    }
 }
 
 impl<T: BufferReader> DatumPayloadDecoder for T {}
@@ -130,7 +158,7 @@ impl<T: BufferReader> DatumPayloadDecoder for T {}
 ///
 /// The types this encoder accepts are not fully 1:1 mapping to evaluable types.
 pub trait DatumPayloadEncoder:
-    NumberEncoder + CompactByteEncoder + JsonEncoder + DecimalEncoder
+    NumberEncoder + CompactByteEncoder + JsonEncoder + DecimalEncoder + EnumEncoder
 {
     #[inline]
     fn write_datum_payload_i64(&mut self, v: i64) -> Result<()> {
@@ -177,9 +205,16 @@ pub trait DatumPayloadEncoder:
     }
 
     #[inline]
-    fn write_datum_payload_json(&mut self, v: JsonRef) -> Result<()> {
+    fn write_datum_payload_json(&mut self, v: JsonRef<'_>) -> Result<()> {
         self.write_json(v).map_err(|_| {
             Error::InvalidDataType("Failed to encode datum payload from json".to_owned())
+        })
+    }
+
+    #[inline]
+    fn write_datum_payload_enum_uint(&mut self, v: EnumRef<'_>) -> Result<()> {
+        self.write_enum_uint(v).map_err(|_| {
+            Error::InvalidDataType("Failed to encode datum payload from enum".to_owned())
         })
     }
 }
@@ -249,9 +284,15 @@ pub trait DatumFlagAndPayloadEncoder: BufferWriter + DatumPayloadEncoder {
         self.write_datum_u64(val.to_packed_u64(ctx)?)
     }
 
-    fn write_datum_json(&mut self, val: JsonRef) -> Result<()> {
+    fn write_datum_json(&mut self, val: JsonRef<'_>) -> Result<()> {
         self.write_u8(datum::JSON_FLAG)?;
         self.write_datum_payload_json(val)?;
+        Ok(())
+    }
+
+    fn write_datum_enum_uint(&mut self, val: EnumRef<'_>) -> Result<()> {
+        self.write_u8(datum::UINT_FLAG)?;
+        self.write_datum_payload_enum_uint(val)?;
         Ok(())
     }
 }
@@ -303,8 +344,13 @@ pub trait EvaluableDatumEncoder: DatumFlagAndPayloadEncoder {
     }
 
     #[inline]
-    fn write_evaluable_datum_json(&mut self, val: JsonRef) -> Result<()> {
+    fn write_evaluable_datum_json(&mut self, val: JsonRef<'_>) -> Result<()> {
         self.write_datum_json(val)
+    }
+
+    #[inline]
+    fn write_evaluable_datum_enum_uint(&mut self, val: EnumRef<'_>) -> Result<()> {
+        self.write_datum_enum_uint(val)
     }
 }
 
@@ -483,6 +529,30 @@ pub fn decode_json_datum(mut raw_datum: &[u8]) -> Result<Option<Json>> {
     }
 }
 
+pub fn decode_enum_datum(mut raw_datum: &[u8], field_type: &FieldType) -> Result<Option<Enum>> {
+    if raw_datum.is_empty() {
+        return Err(Error::InvalidDataType(
+            "Failed to decode datum flag".to_owned(),
+        ));
+    }
+    let flag = raw_datum[0];
+    raw_datum = &raw_datum[1..];
+    match flag {
+        datum::NIL_FLAG => Ok(None),
+        datum::COMPACT_BYTES_FLAG => Ok(Some(
+            raw_datum.read_datum_payload_enum_compact_bytes(field_type)?,
+        )),
+        datum::UINT_FLAG => Ok(Some(raw_datum.read_datum_payload_enum_uint(field_type)?)),
+        datum::VAR_UINT_FLAG => Ok(Some(
+            raw_datum.read_datum_payload_enum_var_uint(field_type)?,
+        )),
+        _ => Err(Error::InvalidDataType(format!(
+            "Unsupported datum flag {} for Enum vector",
+            flag
+        ))),
+    }
+}
+
 pub trait RawDatumDecoder<T> {
     fn decode(self, field_type: &FieldType, ctx: &mut EvalContext) -> Result<Option<T>>;
 }
@@ -530,8 +600,8 @@ impl<'a> RawDatumDecoder<Json> for &'a [u8] {
 }
 
 impl<'a> RawDatumDecoder<Enum> for &'a [u8] {
-    fn decode(self, _field_type: &FieldType, _ctx: &mut EvalContext) -> Result<Option<Enum>> {
-        unimplemented!()
+    fn decode(self, field_type: &FieldType, _ctx: &mut EvalContext) -> Result<Option<Enum>> {
+        decode_enum_datum(self, field_type)
     }
 }
 

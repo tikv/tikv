@@ -13,20 +13,34 @@ mod macros;
 mod runner;
 mod security;
 
-use rand::Rng;
-use std::env;
-use std::sync::atomic::{AtomicU16, Ordering};
-
-pub use crate::encryption::*;
-pub use crate::kv_generator::*;
-pub use crate::logging::*;
-pub use crate::macros::*;
-pub use crate::runner::{
-    clear_failpoints, run_failpoint_tests, run_test_with_hook, run_tests, TestHook,
+use std::{
+    env,
+    fmt::Debug,
+    sync::atomic::{AtomicU16, Ordering},
+    thread,
 };
-pub use crate::security::*;
+
+use rand::Rng;
+use tikv_util::sys::thread::StdThreadBuildWrapper;
+
+pub use crate::{
+    encryption::*,
+    kv_generator::*,
+    logging::*,
+    macros::*,
+    runner::{clear_failpoints, run_failpoint_tests, run_test_with_hook, run_tests, TestHook},
+    security::*,
+};
 
 pub fn setup_for_ci() {
+    // We use backtrace in tests to record suspicious problems. And loading
+    // backtrace the first time can take several seconds. Spawning a thread and
+    // load it ahead of time to avoid causing timeout.
+    thread::Builder::new()
+        .name(tikv_util::thd_name!("backtrace-loader"))
+        .spawn_wrapper(::backtrace::Backtrace::new)
+        .unwrap();
+
     if env::var("CI").is_ok() {
         // HACK! Use `epollex` as the polling engine for gRPC when running CI tests on
         // Linux and it hasn't been set before.
@@ -71,7 +85,7 @@ pub fn alloc_port() -> u16 {
     if p == 0 {
         let _ = INITIAL_PORT.compare_exchange(
             0,
-            rand::thread_rng().gen_range(10240, MIN_LOCAL_PORT),
+            rand::thread_rng().gen_range(10240..MIN_LOCAL_PORT),
             Ordering::SeqCst,
             Ordering::SeqCst,
         );
@@ -84,4 +98,59 @@ pub fn alloc_port() -> u16 {
             Err(e) => p = e,
         }
     }
+}
+
+static MEM_DISK: &str = "TIKV_TEST_MEMORY_DISK_MOUNT_POINT";
+
+/// Gets a temporary path. The directory will be removed when dropped.
+///
+/// The returned path will point to memory only when memory disk is available
+/// and specified.
+pub fn temp_dir(prefix: impl Into<Option<&'static str>>, prefer_mem: bool) -> tempfile::TempDir {
+    let mut builder = tempfile::Builder::new();
+    if let Some(prefix) = prefix.into() {
+        builder.prefix(prefix);
+    }
+    match env::var(MEM_DISK) {
+        Ok(dir) if prefer_mem => {
+            debug!("using memory disk"; "path" => %dir);
+            builder.tempdir_in(dir).unwrap()
+        }
+        _ => builder.tempdir().unwrap(),
+    }
+}
+
+/// Compare two structs and provide more helpful debug difference.
+#[track_caller]
+pub fn assert_eq_debug<C: PartialEq + Debug>(lhs: &C, rhs: &C) {
+    if lhs == rhs {
+        return;
+    }
+    let lhs_str = format!("{:?}", lhs);
+    let rhs_str = format!("{:?}", rhs);
+
+    fn find_index(l: impl Iterator<Item = (u8, u8)>) -> usize {
+        let it = l
+            .enumerate()
+            .take_while(|(_, (l, r))| l == r)
+            .filter(|(_, (l, _))| *l == b' ');
+        let mut last = None;
+        let mut second = None;
+        for a in it {
+            second = last;
+            last = Some(a);
+        }
+        second.map_or(0, |(i, _)| i)
+    }
+    let cpl = find_index(lhs_str.bytes().zip(rhs_str.bytes()));
+    let csl = find_index(lhs_str.bytes().rev().zip(rhs_str.bytes().rev()));
+    if cpl + csl > lhs_str.len() || cpl + csl > rhs_str.len() {
+        assert_eq!(lhs, rhs);
+    }
+    let lhs_diff = String::from_utf8_lossy(&lhs_str.as_bytes()[cpl..lhs_str.len() - csl]);
+    let rhs_diff = String::from_utf8_lossy(&rhs_str.as_bytes()[cpl..rhs_str.len() - csl]);
+    panic!(
+        "config not matched:\nlhs: ...{}...,\nrhs: ...{}...",
+        lhs_diff, rhs_diff
+    );
 }

@@ -1,22 +1,24 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::collections::BTreeMap;
+
 use super::{Json, JsonRef, JsonType};
 use crate::codec::{Error, Result};
-use std::collections::BTreeMap;
 
 impl Json {
     /// `merge` is the implementation for JSON_MERGE in mysql
-    /// https://dev.mysql.com/doc/refman/5.7/en/json-modification-functions.html#function_json-merge
+    /// <https://dev.mysql.com/doc/refman/5.7/en/json-modification-functions.html#function_json-merge>
     ///
     /// The merge rules are listed as following:
     /// 1. adjacent arrays are merged to a single array;
     /// 2. adjacent object are merged to a single object;
     /// 3. a scalar value is autowrapped as an array before merge;
-    /// 4. an adjacent array and object are merged by autowrapping the object as an array.
+    /// 4. an adjacent array and object are merged by autowrapping the object as
+    /// an array.
     ///
     /// See `MergeBinary()` in TiDB `json/binary_function.go`
     #[allow(clippy::comparison_chain)]
-    pub fn merge(bjs: Vec<JsonRef>) -> Result<Json> {
+    pub fn merge(bjs: Vec<JsonRef<'_>>) -> Result<Json> {
         let mut result = vec![];
         let mut objects = vec![];
         for j in bjs {
@@ -65,7 +67,7 @@ impl<'a> MergeUnit<'a> {
 }
 
 // See `mergeBinaryArray()` in TiDB `json/binary_function.go`
-fn merge_binary_array(elems: &[MergeUnit]) -> Result<Json> {
+fn merge_binary_array(elems: &[MergeUnit<'_>]) -> Result<Json> {
     let mut buf = vec![];
     for j in elems.iter() {
         let j = j.as_ref();
@@ -82,7 +84,7 @@ fn merge_binary_array(elems: &[MergeUnit]) -> Result<Json> {
 }
 
 // See `mergeBinaryObject()` in TiDB `json/binary_function.go`
-fn merge_binary_object(objects: &mut Vec<JsonRef>) -> Result<Json> {
+fn merge_binary_object(objects: &mut Vec<JsonRef<'_>>) -> Result<Json> {
     let mut kv_map: BTreeMap<String, Json> = BTreeMap::new();
     for j in objects.drain(..) {
         let elem_count = j.get_elem_count();

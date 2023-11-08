@@ -28,6 +28,14 @@ make_static_metric! {
         pessimistic_rollback,
     }
 
+    pub label_enum MvccPrewriteAssertionPerfKind {
+        none,
+        write_loaded,
+        non_data_version_reload,
+        write_not_loaded_reload,
+        write_not_loaded_skip
+    }
+
     pub struct MvccConflictCounterVec: IntCounter {
         "type" => MvccConflictKind,
     }
@@ -39,25 +47,32 @@ make_static_metric! {
     pub struct MvccCheckTxnStatusCounterVec: IntCounter {
         "type" => MvccCheckTxnStatusKind,
     }
+
+    pub struct MvccPrewriteAssertionPerfCounterVec: IntCounter {
+        "type" => MvccPrewriteAssertionPerfKind,
+    }
+
+    pub struct MvccPrewriteRequestAfterCommitCounterVec: IntCounter {
+        "type" => {
+            non_retry_req,
+            retry_req,
+        },
+    }
 }
 
 lazy_static! {
-    pub static ref MVCC_VERSIONS_HISTOGRAM: Histogram = register_histogram!(
+    pub static ref MVCC_VERSIONS_HISTOGRAM: HistogramVec = register_histogram_vec!(
         "tikv_storage_mvcc_versions",
         "Histogram of versions for each key",
+        &["key_mode"],
         exponential_buckets(1.0, 2.0, 30).unwrap()
     )
     .unwrap();
-    pub static ref GC_DELETE_VERSIONS_HISTOGRAM: Histogram = register_histogram!(
+    pub static ref GC_DELETE_VERSIONS_HISTOGRAM: HistogramVec = register_histogram_vec!(
         "tikv_storage_mvcc_gc_delete_versions",
         "Histogram of versions deleted by gc for each key",
+        &["key_mode"],
         exponential_buckets(1.0, 2.0, 30).unwrap()
-    )
-    .unwrap();
-    pub static ref CONCURRENCY_MANAGER_LOCK_DURATION_HISTOGRAM: Histogram = register_histogram!(
-        "tikv_concurrency_manager_lock_duration",
-        "Histogram of the duration of lock key in the concurrency manager",
-        exponential_buckets(1e-7, 2.0, 20).unwrap() // 100ns ~ 100ms
     )
     .unwrap();
     pub static ref MVCC_CONFLICT_COUNTER: MvccConflictCounterVec = {
@@ -83,6 +98,24 @@ lazy_static! {
             MvccCheckTxnStatusCounterVec,
             "tikv_storage_mvcc_check_txn_status",
             "Counter of different results of check_txn_status",
+            &["type"]
+        )
+        .unwrap()
+    };
+    pub static ref MVCC_PREWRITE_ASSERTION_PERF_COUNTER_VEC: MvccPrewriteAssertionPerfCounterVec = {
+        register_static_int_counter_vec!(
+            MvccPrewriteAssertionPerfCounterVec,
+            "tikv_storage_mvcc_prewrite_assertion_perf",
+            "Counter of assertion operations in transactions",
+            &["type"]
+        )
+        .unwrap()
+    };
+    pub static ref MVCC_PREWRITE_REQUEST_AFTER_COMMIT_COUNTER_VEC: MvccPrewriteRequestAfterCommitCounterVec = {
+        register_static_int_counter_vec!(
+            MvccPrewriteRequestAfterCommitCounterVec,
+            "tikv_storage_mvcc_prewrite_request_after_commit_counter",
+            "Counter of prewrite requests of already-committed transactions that are determined by checking TxnStatucCache",
             &["type"]
         )
         .unwrap()

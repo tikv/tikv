@@ -1,20 +1,24 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use super::aggr_executor::*;
-use crate::interface::*;
 use tidb_query_aggr::{update, AggrFunctionState};
 use tidb_query_common::Result;
-use tidb_query_datatype::codec::batch::LazyBatchColumnVec;
-use tidb_query_datatype::codec::data_type::*;
+use tidb_query_datatype::{
+    codec::{batch::LazyBatchColumnVec, data_type::*},
+    match_template_evaltype,
+};
 use tidb_query_expr::RpnStackNode;
+
+use super::aggr_executor::*;
+use crate::interface::*;
 
 pub struct HashAggregationHelper;
 
 impl HashAggregationHelper {
     /// Updates states for each row.
     ///
-    /// Each row may belong to a different group. States of all groups should be passed in altogether
-    /// in a single vector and the states of each row should be specified by an offset vector.
+    /// Each row may belong to a different group. States of all groups should be
+    /// passed in altogether in a single vector and the states of each row
+    /// should be specified by an offset vector.
     pub fn update_each_row_states_by_offset<Src: BatchExecutor>(
         entities: &mut Entities<Src>,
         input_physical_columns: &mut LazyBatchColumnVec,
@@ -36,7 +40,7 @@ impl HashAggregationHelper {
             )?;
             match aggr_expr_result {
                 RpnStackNode::Scalar { value, .. } => {
-                    match_template_evaluable! {
+                    match_template_evaltype! {
                         TT, match value.as_scalar_value_ref() {
                             ScalarValueRef::TT(scalar_value) => {
                                 for offset in states_offset_each_logical_row {
@@ -50,7 +54,7 @@ impl HashAggregationHelper {
                 RpnStackNode::Vector { value, .. } => {
                     let physical_vec = value.as_ref();
                     let logical_rows = value.logical_rows_struct();
-                    match_template_evaluable! {
+                    match_template_evaltype! {
                         TT, match physical_vec {
                             VectorValue::TT(vec) => {
                                 for (states_offset, physical_idx) in states_offset_each_logical_row

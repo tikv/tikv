@@ -1,57 +1,80 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use kvproto::kvrpcpb::{Context, LockInfo};
-
+use api_version::{ApiV1, KvFormat};
+use kvproto::{
+    kvrpcpb::{Context, KeyRange, LockInfo},
+    metapb,
+};
 use test_raftstore::{Cluster, ServerCluster, SimulateEngine};
-use tikv::storage::kv::{Error as KvError, ErrorInner as KvErrorInner, RocksEngine};
-use tikv::storage::mvcc::{Error as MvccError, ErrorInner as MvccErrorInner, MAX_TXN_WRITE_SIZE};
-use tikv::storage::txn::{Error as TxnError, ErrorInner as TxnErrorInner};
 use tikv::storage::{
-    self, Engine, Error as StorageError, ErrorInner as StorageErrorInner, TxnStatus,
+    self,
+    kv::{Error as KvError, ErrorInner as KvErrorInner, RocksEngine},
+    mvcc::{Error as MvccError, ErrorInner as MvccErrorInner, MAX_TXN_WRITE_SIZE},
+    txn::{Error as TxnError, ErrorInner as TxnErrorInner},
+    Engine, Error as StorageError, ErrorInner as StorageErrorInner, TxnStatus,
 };
 use tikv_util::HandyRwLock;
-use txn_types::{Key, KvPair, Mutation, TimeStamp, Value};
+use txn_types::{self, Key, KvPair, Mutation, TimeStamp, Value};
 
 use super::*;
 
 #[derive(Clone)]
-pub struct AssertionStorage<E: Engine> {
-    pub store: SyncTestStorage<E>,
+pub struct AssertionStorage<E: Engine, F: KvFormat> {
+    pub store: SyncTestStorage<E, F>,
     pub ctx: Context,
 }
 
-impl Default for AssertionStorage<RocksEngine> {
+pub type AssertionStorageApiV1<E> = AssertionStorage<E, ApiV1>;
+
+impl Default for AssertionStorage<RocksEngine, ApiV1> {
     fn default() -> Self {
         AssertionStorage {
             ctx: Context::default(),
-            store: SyncTestStorageBuilder::new().build().unwrap(),
+            store: SyncTestStorageBuilder::default().build(0).unwrap(),
         }
     }
 }
 
-impl AssertionStorage<SimulateEngine> {
+impl<F: KvFormat> AssertionStorage<RocksEngine, F> {
+    pub fn new() -> Self {
+        AssertionStorage {
+            ctx: Context::default(),
+            store: SyncTestStorageBuilder::new().build(0).unwrap(),
+        }
+    }
+}
+
+impl<F: KvFormat> AssertionStorage<SimulateEngine, F> {
     pub fn new_raft_storage_with_store_count(
         count: usize,
         key: &str,
     ) -> (Cluster<ServerCluster>, Self) {
-        let (cluster, store, ctx) = new_raft_storage_with_store_count(count, key);
-        let storage = Self { ctx, store };
+        let (cluster, store, ctx) = new_raft_storage_with_store_count::<F>(count, key);
+        let storage = Self { store, ctx };
         (cluster, storage)
     }
 
-    pub fn update_with_key_byte(&mut self, cluster: &mut Cluster<ServerCluster>, key: &[u8]) {
+    pub fn update_with_key_byte(
+        &mut self,
+        cluster: &mut Cluster<ServerCluster>,
+        key: &[u8],
+    ) -> metapb::Region {
         // ensure the leader of range which contains current key has been elected
         cluster.must_get(key);
         let region = cluster.get_region(key);
         let leader = cluster.leader_of_region(region.get_id()).unwrap();
         if leader.get_store_id() == self.ctx.get_peer().get_store_id() {
-            return;
+            return region;
         }
+        let store_id = leader.store_id;
         let engine = cluster.sim.rl().storages[&leader.get_id()].clone();
         self.ctx.set_region_id(region.get_id());
         self.ctx.set_region_epoch(region.get_region_epoch().clone());
         self.ctx.set_peer(leader);
-        self.store = SyncTestStorageBuilder::from_engine(engine).build().unwrap();
+        self.store = SyncTestStorageBuilder::from_engine(engine)
+            .build(store_id)
+            .unwrap();
+        region
     }
 
     pub fn delete_ok_for_cluster(
@@ -61,7 +84,7 @@ impl AssertionStorage<SimulateEngine> {
         start_ts: impl Into<TimeStamp>,
         commit_ts: impl Into<TimeStamp>,
     ) {
-        let mutations = vec![Mutation::Delete(Key::from_raw(key))];
+        let mutations = vec![Mutation::make_delete(Key::from_raw(key))];
         let commit_keys = vec![Key::from_raw(key)];
         self.two_pc_ok_for_cluster(
             cluster,
@@ -73,7 +96,7 @@ impl AssertionStorage<SimulateEngine> {
         );
     }
 
-    fn get_from_custer(
+    fn get_from_cluster(
         &mut self,
         cluster: &mut Cluster<ServerCluster>,
         key: &[u8],
@@ -82,7 +105,7 @@ impl AssertionStorage<SimulateEngine> {
         let ts = ts.into();
         for _ in 0..3 {
             let res = self.store.get(self.ctx.clone(), &Key::from_raw(key), ts);
-            if let Ok((data, _, _)) = res {
+            if let Ok((data, ..)) = res {
                 return data;
             }
             self.expect_not_leader_or_stale_command(res.unwrap_err());
@@ -97,7 +120,7 @@ impl AssertionStorage<SimulateEngine> {
         key: &[u8],
         ts: impl Into<TimeStamp>,
     ) {
-        assert_eq!(self.get_from_custer(cluster, key, ts), None);
+        assert_eq!(self.get_from_cluster(cluster, key, ts), None);
     }
 
     pub fn put_ok_for_cluster(
@@ -108,9 +131,33 @@ impl AssertionStorage<SimulateEngine> {
         start_ts: impl Into<TimeStamp>,
         commit_ts: impl Into<TimeStamp>,
     ) {
-        let mutations = vec![Mutation::Put((Key::from_raw(key), value.to_vec()))];
+        let mutations = vec![Mutation::make_put(Key::from_raw(key), value.to_vec())];
         let commit_keys = vec![Key::from_raw(key)];
         self.two_pc_ok_for_cluster(cluster, mutations, key, commit_keys, start_ts, commit_ts);
+    }
+
+    pub fn batch_put_ok_for_cluster<'a>(
+        &mut self,
+        cluster: &mut Cluster<ServerCluster>,
+        keys: &[impl AsRef<[u8]>],
+        vals: impl Iterator<Item = &'a [u8]>,
+        start_ts: impl Into<TimeStamp>,
+        commit_ts: impl Into<TimeStamp>,
+    ) {
+        let mutations: Vec<_> = keys
+            .iter()
+            .zip(vals)
+            .map(|(k, v)| Mutation::make_put(Key::from_raw(k.as_ref()), v.to_vec()))
+            .collect();
+        let commit_keys: Vec<_> = keys.iter().map(|k| Key::from_raw(k.as_ref())).collect();
+        self.two_pc_ok_for_cluster(
+            cluster,
+            mutations,
+            keys[0].as_ref(),
+            commit_keys,
+            start_ts,
+            commit_ts,
+        );
     }
 
     fn two_pc_ok_for_cluster(
@@ -137,7 +184,7 @@ impl AssertionStorage<SimulateEngine> {
                 break;
             }
             self.expect_not_leader_or_stale_command(res.unwrap_err());
-            self.update_with_key_byte(cluster, key)
+            self.update_with_key_byte(cluster, key);
         }
         assert!(success);
 
@@ -152,7 +199,7 @@ impl AssertionStorage<SimulateEngine> {
                 break;
             }
             self.expect_not_leader_or_stale_command(res.unwrap_err());
-            self.update_with_key_byte(cluster, key)
+            self.update_with_key_byte(cluster, key);
         }
         assert!(success);
     }
@@ -161,16 +208,17 @@ impl AssertionStorage<SimulateEngine> {
         &mut self,
         cluster: &mut Cluster<ServerCluster>,
         region_key: &[u8],
+        mut region: metapb::Region,
         safe_point: impl Into<TimeStamp>,
     ) {
         let safe_point = safe_point.into();
         for _ in 0..3 {
-            let ret = self.store.gc(self.ctx.clone(), safe_point);
+            let ret = self.store.gc(region, self.ctx.clone(), safe_point);
             if ret.is_ok() {
                 return;
             }
             self.expect_not_leader_or_stale_command(ret.unwrap_err());
-            self.update_with_key_byte(cluster, region_key);
+            region = self.update_with_key_byte(cluster, region_key);
         }
         panic!("failed with 3 retry!");
     }
@@ -188,12 +236,14 @@ impl AssertionStorage<SimulateEngine> {
 
         self.delete_ok_for_cluster(cluster, &key, 1000, 1050);
         self.get_none_from_cluster(cluster, &key, 2000);
-        self.gc_ok_for_cluster(cluster, &key, 2000);
+
+        let region = cluster.get_region(&key);
+        self.gc_ok_for_cluster(cluster, &key, region, 2000);
         self.get_none_from_cluster(cluster, &key, 3000);
     }
 }
 
-impl<E: Engine> AssertionStorage<E> {
+impl<E: Engine, F: KvFormat> AssertionStorage<E, F> {
     pub fn get_none(&self, key: &[u8], ts: impl Into<TimeStamp>) {
         let key = Key::from_raw(key);
         assert_eq!(
@@ -204,7 +254,9 @@ impl<E: Engine> AssertionStorage<E> {
 
     pub fn get_err(&self, key: &[u8], ts: impl Into<TimeStamp>) {
         let key = Key::from_raw(key);
-        assert!(self.store.get(self.ctx.clone(), &key, ts.into()).is_err());
+        self.store
+            .get(self.ctx.clone(), &key, ts.into())
+            .unwrap_err();
     }
 
     pub fn get_ok(&self, key: &[u8], ts: impl Into<TimeStamp>, expect: &[u8]) {
@@ -233,13 +285,19 @@ impl<E: Engine> AssertionStorage<E> {
         assert_eq!(result, expect);
     }
 
+    pub fn batch_get_err(&self, keys: &[&[u8]], ts: impl Into<TimeStamp>) {
+        let keys: Vec<Key> = keys.iter().map(|x| Key::from_raw(x)).collect();
+        self.store
+            .batch_get(self.ctx.clone(), &keys, ts.into())
+            .unwrap_err();
+    }
+
     pub fn batch_get_command_ok(&self, keys: &[&[u8]], ts: u64, expect: Vec<&[u8]>) {
         let result: Vec<Option<Vec<u8>>> = self
             .store
-            .batch_get_command(self.ctx.clone(), &keys, ts)
+            .batch_get_command(self.ctx.clone(), keys, ts)
             .unwrap()
             .into_iter()
-            .map(|(x, _, _)| x)
             .collect();
         let expect: Vec<Option<Vec<u8>>> = expect
             .into_iter()
@@ -248,17 +306,21 @@ impl<E: Engine> AssertionStorage<E> {
         assert_eq!(result, expect);
     }
 
+    pub fn batch_get_command_err(&self, keys: &[&[u8]], ts: u64) {
+        self.store
+            .batch_get_command(self.ctx.clone(), keys, ts)
+            .unwrap_err();
+    }
+
     fn expect_not_leader_or_stale_command(&self, err: storage::Error) {
         match err {
             StorageError(box StorageErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(
-                MvccError(box MvccErrorInner::Engine(KvError(box KvErrorInner::Request(ref e)))),
+                MvccError(box MvccErrorInner::Kv(KvError(box KvErrorInner::Request(ref e)))),
             ))))
             | StorageError(box StorageErrorInner::Txn(TxnError(box TxnErrorInner::Engine(
                 KvError(box KvErrorInner::Request(ref e)),
             ))))
-            | StorageError(box StorageErrorInner::Engine(KvError(box KvErrorInner::Request(
-                ref e,
-            )))) => {
+            | StorageError(box StorageErrorInner::Kv(KvError(box KvErrorInner::Request(ref e)))) => {
                 assert!(
                     e.has_not_leader() | e.has_stale_command(),
                     "invalid error {:?}",
@@ -282,7 +344,6 @@ impl<E: Engine> AssertionStorage<E> {
     ) where
         T: std::fmt::Debug,
     {
-        assert!(resp.is_err());
         let err = resp.unwrap_err();
         match err {
             StorageError(box StorageErrorInner::Txn(TxnError(
@@ -311,7 +372,7 @@ impl<E: Engine> AssertionStorage<E> {
         self.store
             .prewrite(
                 self.ctx.clone(),
-                vec![Mutation::Put((Key::from_raw(key), value.to_vec()))],
+                vec![Mutation::make_put(Key::from_raw(key), value.to_vec())],
                 key.to_vec(),
                 start_ts,
             )
@@ -326,6 +387,24 @@ impl<E: Engine> AssertionStorage<E> {
             .unwrap();
     }
 
+    pub fn put_err(
+        &self,
+        key: &[u8],
+        value: &[u8],
+        start_ts: impl Into<TimeStamp>,
+        _commit_ts: impl Into<TimeStamp>,
+    ) {
+        let start_ts = start_ts.into();
+        self.store
+            .prewrite(
+                self.ctx.clone(),
+                vec![Mutation::make_put(Key::from_raw(key), value.to_vec())],
+                key.to_vec(),
+                start_ts,
+            )
+            .unwrap_err();
+    }
+
     pub fn delete_ok(
         &self,
         key: &[u8],
@@ -336,7 +415,7 @@ impl<E: Engine> AssertionStorage<E> {
         self.store
             .prewrite(
                 self.ctx.clone(),
-                vec![Mutation::Delete(Key::from_raw(key))],
+                vec![Mutation::make_delete(Key::from_raw(key))],
                 key.to_vec(),
                 start_ts,
             )
@@ -354,14 +433,23 @@ impl<E: Engine> AssertionStorage<E> {
     pub fn scan_ok(
         &self,
         start_key: &[u8],
+        end_key: Option<&[u8]>,
         limit: usize,
         ts: impl Into<TimeStamp>,
         expect: Vec<Option<(&[u8], &[u8])>>,
     ) {
-        let key_address = Key::from_raw(start_key);
+        let start_key = Key::from_raw(start_key);
+        let end_key = end_key.map(Key::from_raw);
         let result = self
             .store
-            .scan(self.ctx.clone(), key_address, None, limit, false, ts.into())
+            .scan(
+                self.ctx.clone(),
+                start_key,
+                end_key,
+                limit,
+                false,
+                ts.into(),
+            )
             .unwrap();
         let result: Vec<Option<KvPair>> = result.into_iter().map(Result::ok).collect();
         let expect: Vec<Option<KvPair>> = expect
@@ -371,17 +459,47 @@ impl<E: Engine> AssertionStorage<E> {
         assert_eq!(result, expect);
     }
 
+    pub fn scan_err(
+        &self,
+        start_key: &[u8],
+        end_key: Option<&[u8]>,
+        limit: usize,
+        ts: impl Into<TimeStamp>,
+    ) {
+        let start_key = Key::from_raw(start_key);
+        let end_key = end_key.map(Key::from_raw);
+        self.store
+            .scan(
+                self.ctx.clone(),
+                start_key,
+                end_key,
+                limit,
+                false,
+                ts.into(),
+            )
+            .unwrap_err();
+    }
+
     pub fn reverse_scan_ok(
         &self,
         start_key: &[u8],
+        end_key: Option<&[u8]>,
         limit: usize,
         ts: impl Into<TimeStamp>,
         expect: Vec<Option<(&[u8], &[u8])>>,
     ) {
-        let key_address = Key::from_raw(start_key);
+        let start_key = Key::from_raw(start_key);
+        let end_key = end_key.map(Key::from_raw);
         let result = self
             .store
-            .reverse_scan(self.ctx.clone(), key_address, None, limit, false, ts.into())
+            .reverse_scan(
+                self.ctx.clone(),
+                start_key,
+                end_key,
+                limit,
+                false,
+                ts.into(),
+            )
             .unwrap();
         let result: Vec<Option<KvPair>> = result.into_iter().map(Result::ok).collect();
         let expect: Vec<Option<KvPair>> = expect
@@ -394,14 +512,16 @@ impl<E: Engine> AssertionStorage<E> {
     pub fn scan_key_only_ok(
         &self,
         start_key: &[u8],
+        end_key: Option<&[u8]>,
         limit: usize,
         ts: impl Into<TimeStamp>,
         expect: Vec<Option<&[u8]>>,
     ) {
-        let key_address = Key::from_raw(start_key);
+        let start_key = Key::from_raw(start_key);
+        let end_key = end_key.map(Key::from_raw);
         let result = self
             .store
-            .scan(self.ctx.clone(), key_address, None, limit, true, ts.into())
+            .scan(self.ctx.clone(), start_key, end_key, limit, true, ts.into())
             .unwrap();
         let result: Vec<Option<KvPair>> = result.into_iter().map(Result::ok).collect();
         let expect: Vec<Option<KvPair>> = expect
@@ -572,15 +692,14 @@ impl<E: Engine> AssertionStorage<E> {
         start_ts: impl Into<TimeStamp>,
         current_ts: impl Into<TimeStamp>,
     ) {
-        assert!(self
-            .store
+        self.store
             .cleanup(
                 self.ctx.clone(),
                 Key::from_raw(key),
                 start_ts.into(),
-                current_ts.into()
+                current_ts.into(),
             )
-            .is_err());
+            .unwrap_err();
     }
 
     pub fn rollback_ok(&self, keys: Vec<&[u8]>, start_ts: impl Into<TimeStamp>) {
@@ -592,10 +711,9 @@ impl<E: Engine> AssertionStorage<E> {
 
     pub fn rollback_err(&self, keys: Vec<&[u8]>, start_ts: impl Into<TimeStamp>) {
         let keys: Vec<Key> = keys.iter().map(|x| Key::from_raw(x)).collect();
-        assert!(self
-            .store
+        self.store
             .rollback(self.ctx.clone(), keys, start_ts.into())
-            .is_err());
+            .unwrap_err();
     }
 
     pub fn scan_locks_ok(
@@ -609,12 +727,12 @@ impl<E: Engine> AssertionStorage<E> {
         let start_key = if start_key.is_empty() {
             None
         } else {
-            Some(Key::from_raw(&start_key))
+            Some(Key::from_raw(start_key))
         };
         let end_key = if end_key.is_empty() {
             None
         } else {
-            Some(Key::from_raw(&end_key))
+            Some(Key::from_raw(end_key))
         };
 
         assert_eq!(
@@ -623,6 +741,29 @@ impl<E: Engine> AssertionStorage<E> {
                 .unwrap(),
             expect
         );
+    }
+
+    pub fn scan_locks_err(
+        &self,
+        max_ts: impl Into<TimeStamp>,
+        start_key: &[u8],
+        end_key: &[u8],
+        limit: usize,
+    ) {
+        let start_key = if start_key.is_empty() {
+            None
+        } else {
+            Some(Key::from_raw(start_key))
+        };
+        let end_key = if end_key.is_empty() {
+            None
+        } else {
+            Some(Key::from_raw(end_key))
+        };
+
+        self.store
+            .scan_locks(self.ctx.clone(), max_ts.into(), start_key, end_key, limit)
+            .unwrap_err();
     }
 
     pub fn resolve_lock_ok(
@@ -666,8 +807,32 @@ impl<E: Engine> AssertionStorage<E> {
         self.expect_invalid_tso_err(resp, start_ts, commit_ts.unwrap())
     }
 
-    pub fn gc_ok(&self, safe_point: impl Into<TimeStamp>) {
-        self.store.gc(self.ctx.clone(), safe_point.into()).unwrap();
+    pub fn gc_ok(&self, region: metapb::Region, safe_point: impl Into<TimeStamp>) {
+        self.store
+            .gc(region, self.ctx.clone(), safe_point.into())
+            .unwrap();
+    }
+
+    pub fn delete_range_ok(&self, start_key: &[u8], end_key: &[u8]) {
+        self.store
+            .delete_range(
+                self.ctx.clone(),
+                Key::from_raw(start_key),
+                Key::from_raw(end_key),
+                false,
+            )
+            .unwrap();
+    }
+
+    pub fn delete_range_err(&self, start_key: &[u8], end_key: &[u8]) {
+        self.store
+            .delete_range(
+                self.ctx.clone(),
+                Key::from_raw(start_key),
+                Key::from_raw(end_key),
+                false,
+            )
+            .unwrap_err();
     }
 
     pub fn raw_get_ok(&self, cf: String, key: Vec<u8>, value: Option<Vec<u8>>) {
@@ -675,6 +840,66 @@ impl<E: Engine> AssertionStorage<E> {
             self.store.raw_get(self.ctx.clone(), cf, key).unwrap(),
             value
         );
+    }
+
+    pub fn raw_get_err(&self, cf: String, key: Vec<u8>) {
+        self.store.raw_get(self.ctx.clone(), cf, key).unwrap_err();
+    }
+
+    pub fn raw_get_key_ttl_ok(&self, cf: String, key: Vec<u8>, ttl: Option<u64>) {
+        assert_eq!(
+            self.store
+                .raw_get_key_ttl(self.ctx.clone(), cf, key)
+                .unwrap(),
+            ttl
+        );
+    }
+
+    pub fn raw_get_key_ttl_err(&self, cf: String, key: Vec<u8>) {
+        self.store
+            .raw_get_key_ttl(self.ctx.clone(), cf, key)
+            .unwrap_err();
+    }
+
+    pub fn raw_batch_get_ok(&self, cf: String, keys: Vec<Vec<u8>>, expect: Vec<(&[u8], &[u8])>) {
+        let result: Vec<KvPair> = self
+            .store
+            .raw_batch_get(self.ctx.clone(), cf, keys)
+            .unwrap()
+            .into_iter()
+            .map(|x| x.unwrap())
+            .collect();
+        let expect: Vec<KvPair> = expect
+            .into_iter()
+            .map(|(k, v)| (k.to_vec(), v.to_vec()))
+            .collect();
+        assert_eq!(result, expect);
+    }
+
+    pub fn raw_batch_get_err(&self, cf: String, keys: Vec<Vec<u8>>) {
+        self.store
+            .raw_batch_get(self.ctx.clone(), cf, keys)
+            .unwrap_err();
+    }
+
+    pub fn raw_batch_get_command_ok(&self, cf: String, keys: Vec<Vec<u8>>, expect: Vec<&[u8]>) {
+        let result: Vec<Option<Vec<u8>>> = self
+            .store
+            .raw_batch_get_command(self.ctx.clone(), cf, keys)
+            .unwrap()
+            .into_iter()
+            .collect();
+        let expect: Vec<Option<Vec<u8>>> = expect
+            .into_iter()
+            .map(|x| if x.is_empty() { None } else { Some(x.to_vec()) })
+            .collect();
+        assert_eq!(result, expect);
+    }
+
+    pub fn raw_batch_get_command_err(&self, cf: String, keys: Vec<Vec<u8>>) {
+        self.store
+            .raw_batch_get_command(self.ctx.clone(), cf, keys)
+            .unwrap_err();
     }
 
     pub fn raw_put_ok(&self, cf: String, key: Vec<u8>, value: Vec<u8>) {
@@ -689,6 +914,18 @@ impl<E: Engine> AssertionStorage<E> {
             .unwrap_err();
     }
 
+    pub fn raw_batch_put_ok(&self, cf: String, pairs: Vec<KvPair>) {
+        self.store
+            .raw_batch_put(self.ctx.clone(), cf, pairs)
+            .unwrap();
+    }
+
+    pub fn raw_batch_put_err(&self, cf: String, pairs: Vec<KvPair>) {
+        self.store
+            .raw_batch_put(self.ctx.clone(), cf, pairs)
+            .unwrap_err();
+    }
+
     pub fn raw_delete_ok(&self, cf: String, key: Vec<u8>) {
         self.store.raw_delete(self.ctx.clone(), cf, key).unwrap()
     }
@@ -699,16 +936,41 @@ impl<E: Engine> AssertionStorage<E> {
             .unwrap_err();
     }
 
+    pub fn raw_delete_range_ok(&self, cf: String, start_key: Vec<u8>, end_key: Vec<u8>) {
+        self.store
+            .raw_delete_range(self.ctx.clone(), cf, start_key, end_key)
+            .unwrap()
+    }
+
+    pub fn raw_delete_range_err(&self, cf: String, start_key: Vec<u8>, end_key: Vec<u8>) {
+        self.store
+            .raw_delete_range(self.ctx.clone(), cf, start_key, end_key)
+            .unwrap_err();
+    }
+
+    pub fn raw_batch_delete_ok(&self, cf: String, keys: Vec<Vec<u8>>) {
+        self.store
+            .raw_batch_delete(self.ctx.clone(), cf, keys)
+            .unwrap()
+    }
+
+    pub fn raw_batch_delete_err(&self, cf: String, keys: Vec<Vec<u8>>) {
+        self.store
+            .raw_batch_delete(self.ctx.clone(), cf, keys)
+            .unwrap_err();
+    }
+
     pub fn raw_scan_ok(
         &self,
         cf: String,
         start_key: Vec<u8>,
+        end_key: Option<Vec<u8>>,
         limit: usize,
         expect: Vec<(&[u8], &[u8])>,
     ) {
         let result: Vec<KvPair> = self
             .store
-            .raw_scan(self.ctx.clone(), cf, start_key, None, limit)
+            .raw_scan(self.ctx.clone(), cf, start_key, end_key, limit)
             .unwrap()
             .into_iter()
             .map(|x| x.unwrap())
@@ -720,11 +982,114 @@ impl<E: Engine> AssertionStorage<E> {
         assert_eq!(result, expect);
     }
 
-    pub fn test_txn_store_gc(&self, key: &str) {
+    pub fn raw_scan_err(
+        &self,
+        cf: String,
+        start_key: Vec<u8>,
+        end_key: Option<Vec<u8>>,
+        limit: usize,
+    ) {
+        self.store
+            .raw_scan(self.ctx.clone(), cf, start_key, end_key, limit)
+            .unwrap_err();
+    }
+
+    pub fn raw_batch_scan_ok(
+        &self,
+        cf: String,
+        ranges: Vec<KeyRange>,
+        limit: usize,
+        expect: Vec<(&[u8], &[u8])>,
+    ) {
+        let result: Vec<KvPair> = self
+            .store
+            .raw_batch_scan(self.ctx.clone(), cf, ranges, limit)
+            .unwrap()
+            .into_iter()
+            .map(|x| x.unwrap())
+            .collect();
+        let expect: Vec<KvPair> = expect
+            .into_iter()
+            .map(|(k, v)| (k.to_vec(), v.to_vec()))
+            .collect();
+        assert_eq!(result, expect);
+    }
+
+    pub fn raw_batch_scan_err(&self, cf: String, ranges: Vec<KeyRange>, limit: usize) {
+        self.store
+            .raw_batch_scan(self.ctx.clone(), cf, ranges, limit)
+            .unwrap_err();
+    }
+
+    pub fn raw_compare_and_swap_atomic_ok(
+        &self,
+        cf: String,
+        key: Vec<u8>,
+        previous_value: Option<Vec<u8>>,
+        value: Vec<u8>,
+        expect: (Option<Vec<u8>>, bool),
+    ) {
+        let result = self
+            .store
+            .raw_compare_and_swap_atomic(self.ctx.clone(), cf, key, previous_value, value, 0)
+            .unwrap();
+        assert_eq!(result, expect);
+    }
+
+    pub fn raw_compare_and_swap_atomic_err(
+        &self,
+        cf: String,
+        key: Vec<u8>,
+        previous_value: Option<Vec<u8>>,
+        value: Vec<u8>,
+    ) {
+        self.store
+            .raw_compare_and_swap_atomic(self.ctx.clone(), cf, key, previous_value, value, 0)
+            .unwrap_err();
+    }
+
+    pub fn raw_batch_put_atomic_ok(&self, cf: String, pairs: Vec<KvPair>) {
+        let ttls = vec![0; pairs.len()];
+        self.store
+            .raw_batch_put_atomic(self.ctx.clone(), cf, pairs, ttls)
+            .unwrap();
+    }
+
+    pub fn raw_batch_put_atomic_err(&self, cf: String, pairs: Vec<KvPair>) {
+        let ttls = vec![0; pairs.len()];
+        self.store
+            .raw_batch_put_atomic(self.ctx.clone(), cf, pairs, ttls)
+            .unwrap_err();
+    }
+
+    pub fn raw_batch_delete_atomic_ok(&self, cf: String, keys: Vec<Vec<u8>>) {
+        self.store
+            .raw_batch_delete_atomic(self.ctx.clone(), cf, keys)
+            .unwrap();
+    }
+
+    pub fn raw_batch_delete_atomic_err(&self, cf: String, keys: Vec<Vec<u8>>) {
+        self.store
+            .raw_batch_delete_atomic(self.ctx.clone(), cf, keys)
+            .unwrap_err();
+    }
+
+    pub fn raw_checksum_ok(&self, ranges: Vec<KeyRange>, expect: (u64, u64, u64)) {
+        let result = self.store.raw_checksum(self.ctx.clone(), ranges).unwrap();
+        assert_eq!(result, expect);
+    }
+
+    pub fn raw_checksum_err(&self, ranges: Vec<KeyRange>) {
+        self.store
+            .raw_checksum(self.ctx.clone(), ranges)
+            .unwrap_err();
+    }
+
+    pub fn test_txn_store_gc(&self, key: &str, region: metapb::Region) {
         let key_bytes = key.as_bytes();
         self.put_ok(key_bytes, b"v1", 5, 10);
         self.put_ok(key_bytes, b"v2", 15, 20);
-        self.gc_ok(30);
+        self.gc_ok(region, 30);
         self.get_none(key_bytes, 15);
         self.get_ok(key_bytes, 25, b"v2");
     }
@@ -737,7 +1102,7 @@ impl<E: Engine> AssertionStorage<E> {
         }
         self.delete_ok(&key, 1000, 1050);
         self.get_none(&key, 2000);
-        self.gc_ok(2000);
+        self.gc_ok(metapb::Region::default(), 2000);
         self.get_none(&key, 3000);
     }
 }

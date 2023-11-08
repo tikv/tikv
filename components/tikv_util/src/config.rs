@@ -1,76 +1,76 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::error::Error;
-use std::fmt::{self, Write};
-use std::fs;
-use std::net::{SocketAddrV4, SocketAddrV6};
-use std::ops::{Div, Mul};
-use std::path::{Path, PathBuf};
-use std::str::{self, FromStr};
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, RwLock, RwLockReadGuard};
-use std::time::Duration;
+use std::{
+    error::Error,
+    fmt::{self, Write},
+    fs,
+    net::{SocketAddrV4, SocketAddrV6},
+    ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Sub, SubAssign},
+    path::{Path, PathBuf},
+    str::{self, FromStr},
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc, RwLock, RwLockReadGuard,
+    },
+    time::Duration,
+};
 
-use serde::de::{self, Unexpected, Visitor};
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use chrono::{
+    format::{self, Fixed, Item, Parsed},
+    DateTime, FixedOffset, Local, NaiveTime, TimeZone, Timelike,
+};
+use online_config::ConfigValue;
+use serde::{
+    de::{self, Unexpected, Visitor},
+    Deserialize, Deserializer, Serialize, Serializer,
+};
+use thiserror::Error;
 
 use super::time::Instant;
 use crate::slow_log;
-use configuration::ConfigValue;
 
-quick_error! {
-    #[derive(Debug)]
-    pub enum ConfigError {
-        Limit(msg: String) {
-            description(msg)
-            display("{}", msg)
-        }
-        Address(msg: String) {
-            description(msg)
-            display("config address error: {}", msg)
-        }
-        StoreLabels(msg: String) {
-            description(msg)
-            display("store label error: {}", msg)
-        }
-        Value(msg: String) {
-            description(msg)
-            display("config value error: {}", msg)
-        }
-        FileSystem(msg: String) {
-            description(msg)
-            display("config fs: {}", msg)
-        }
-    }
+#[derive(Debug, Error)]
+pub enum ConfigError {
+    #[error("{0}")]
+    Limit(String),
+    #[error("config address error: {0}")]
+    Address(String),
+    #[error("store label error: {0}")]
+    StoreLabels(String),
+    #[error("config value error: {0}")]
+    Value(String),
+    #[error("config fs: {0}")]
+    FileSystem(String),
 }
 
 const UNIT: u64 = 1;
-const DATA_MAGNITUDE: u64 = 1024;
-pub const KB: u64 = UNIT * DATA_MAGNITUDE;
-pub const MB: u64 = KB * DATA_MAGNITUDE;
-pub const GB: u64 = MB * DATA_MAGNITUDE;
 
-// Make sure it will not overflow.
-const TB: u64 = (GB as u64) * (DATA_MAGNITUDE as u64);
-const PB: u64 = (TB as u64) * (DATA_MAGNITUDE as u64);
+const BINARY_DATA_MAGNITUDE: u64 = 1024;
+pub const B: u64 = UNIT;
+pub const KIB: u64 = UNIT * BINARY_DATA_MAGNITUDE;
+pub const MIB: u64 = KIB * BINARY_DATA_MAGNITUDE;
+pub const GIB: u64 = MIB * BINARY_DATA_MAGNITUDE;
+pub const TIB: u64 = GIB * BINARY_DATA_MAGNITUDE;
+pub const PIB: u64 = TIB * BINARY_DATA_MAGNITUDE;
 
 const TIME_MAGNITUDE_1: u64 = 1000;
 const TIME_MAGNITUDE_2: u64 = 60;
 const TIME_MAGNITUDE_3: u64 = 24;
-const MS: u64 = UNIT;
+const US: u64 = UNIT;
+const MS: u64 = US * TIME_MAGNITUDE_1;
 const SECOND: u64 = MS * TIME_MAGNITUDE_1;
 const MINUTE: u64 = SECOND * TIME_MAGNITUDE_2;
 const HOUR: u64 = MINUTE * TIME_MAGNITUDE_2;
 const DAY: u64 = HOUR * TIME_MAGNITUDE_3;
 
-#[derive(Clone, Copy, Debug, Serialize, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "kebab-case")]
 pub enum LogFormat {
     Text,
     Json,
 }
 
-#[derive(Clone, Debug, Copy, PartialEq)]
+#[derive(Clone, Debug, Copy, PartialEq, PartialOrd, Default)]
 pub struct ReadableSize(pub u64);
 
 impl From<ReadableSize> for ConfigValue {
@@ -89,57 +89,25 @@ impl From<ConfigValue> for ReadableSize {
     }
 }
 
-/// This trivial type is needed, because we can't define the `From<Option<ReadableSize>>`
-/// and `Into<Option<ReadableSize>>` trait for `ConfigValue` which is needed to derive
-/// `Configuration` trait for `BlockCacheConfig`
-#[derive(Clone, Debug, Copy, Serialize, Deserialize, PartialEq)]
-#[serde(from = "Option<ReadableSize>")]
-#[serde(into = "Option<ReadableSize>")]
-pub struct OptionReadableSize(pub Option<ReadableSize>);
-
-impl From<Option<ReadableSize>> for OptionReadableSize {
-    fn from(s: Option<ReadableSize>) -> OptionReadableSize {
-        OptionReadableSize(s)
-    }
-}
-
-impl From<OptionReadableSize> for Option<ReadableSize> {
-    fn from(s: OptionReadableSize) -> Option<ReadableSize> {
-        s.0
-    }
-}
-
-impl From<OptionReadableSize> for ConfigValue {
-    fn from(size: OptionReadableSize) -> ConfigValue {
-        ConfigValue::OptionSize(size.0.map(|v| v.0))
-    }
-}
-
-impl From<ConfigValue> for OptionReadableSize {
-    fn from(s: ConfigValue) -> OptionReadableSize {
-        if let ConfigValue::OptionSize(s) = s {
-            OptionReadableSize(s.map(ReadableSize))
-        } else {
-            panic!("expect: ConfigValue::OptionSize, got: {:?}", s);
-        }
-    }
-}
-
 impl ReadableSize {
     pub const fn kb(count: u64) -> ReadableSize {
-        ReadableSize(count * KB)
+        ReadableSize(count * KIB)
     }
 
     pub const fn mb(count: u64) -> ReadableSize {
-        ReadableSize(count * MB)
+        ReadableSize(count * MIB)
     }
 
     pub const fn gb(count: u64) -> ReadableSize {
-        ReadableSize(count * GB)
+        ReadableSize(count * GIB)
     }
 
     pub const fn as_mb(self) -> u64 {
-        self.0 / MB
+        self.0 / MIB
+    }
+
+    pub fn as_mb_f64(self) -> f64 {
+        self.0 as f64 / MIB as f64
     }
 }
 
@@ -167,28 +135,35 @@ impl Mul<u64> for ReadableSize {
     }
 }
 
+impl fmt::Display for ReadableSize {
+    #[inline]
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let size = self.0;
+        if size == 0 {
+            write!(f, "{}KiB", size)
+        } else if size % PIB == 0 {
+            write!(f, "{}PiB", size / PIB)
+        } else if size % TIB == 0 {
+            write!(f, "{}TiB", size / TIB)
+        } else if size % GIB == 0 {
+            write!(f, "{}GiB", size / GIB)
+        } else if size % MIB == 0 {
+            write!(f, "{}MiB", size / MIB)
+        } else if size % KIB == 0 {
+            write!(f, "{}KiB", size / KIB)
+        } else {
+            write!(f, "{}B", size)
+        }
+    }
+}
+
 impl Serialize for ReadableSize {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
     {
-        let size = self.0;
         let mut buffer = String::new();
-        if size == 0 {
-            write!(buffer, "{}KiB", size).unwrap();
-        } else if size % PB == 0 {
-            write!(buffer, "{}PiB", size / PB).unwrap();
-        } else if size % TB == 0 {
-            write!(buffer, "{}TiB", size / TB).unwrap();
-        } else if size % GB as u64 == 0 {
-            write!(buffer, "{}GiB", size / GB).unwrap();
-        } else if size % MB as u64 == 0 {
-            write!(buffer, "{}MiB", size / MB).unwrap();
-        } else if size % KB as u64 == 0 {
-            write!(buffer, "{}KiB", size / KB).unwrap();
-        } else {
-            return serializer.serialize_u64(size);
-        }
+        write!(buffer, "{}", self).unwrap();
         serializer.serialize_str(&buffer)
     }
 }
@@ -196,44 +171,52 @@ impl Serialize for ReadableSize {
 impl FromStr for ReadableSize {
     type Err = String;
 
+    // This method parses value in binary unit.
     fn from_str(s: &str) -> Result<ReadableSize, String> {
         let size_str = s.trim();
         if size_str.is_empty() {
-            return Err(format!("{:?} is not a valid size.", s));
+            return Err(format!("{s:?} is not a valid size."));
         }
 
         if !size_str.is_ascii() {
-            return Err(format!("ASCII string is expected, but got {:?}", s));
+            return Err(format!("ASCII string is expected, but got {s:?}"));
         }
 
         // size: digits and '.' as decimal separator
         let size_len = size_str
             .to_string()
             .chars()
-            .take_while(|c| char::is_ascii_digit(c) || *c == '.')
+            .take_while(|c| char::is_ascii_digit(c) || ['.', 'e', 'E', '-', '+'].contains(c))
             .count();
 
         // unit: alphabetic characters
         let (size, unit) = size_str.split_at(size_len);
 
         let unit = match unit.trim() {
-            "K" | "KB" | "KiB" => KB,
-            "M" | "MB" | "MiB" => MB,
-            "G" | "GB" | "GiB" => GB,
-            "T" | "TB" | "TiB" => TB,
-            "P" | "PB" | "PiB" => PB,
-            "B" | "" => UNIT,
+            "K" | "KB" | "KiB" => KIB,
+            "M" | "MB" | "MiB" => MIB,
+            "G" | "GB" | "GiB" => GIB,
+            "T" | "TB" | "TiB" => TIB,
+            "P" | "PB" | "PiB" => PIB,
+            "B" | "" => {
+                if size.chars().all(|c| char::is_ascii_digit(&c)) {
+                    return size
+                        .parse::<u64>()
+                        .map(|n| ReadableSize(n))
+                        .map_err(|_| format!("invalid size string: {:?}", s));
+                }
+                UNIT
+            }
             _ => {
                 return Err(format!(
-                    "only B, KB, KiB, MB, MiB, GB, GiB, TB, TiB, PB, and PiB are supported: {:?}",
-                    s
+                    "only B, KB, KiB, MB, MiB, GB, GiB, TB, TiB, PB, and PiB are supported: {s:?}"
                 ));
             }
         };
 
         match size.parse::<f64>() {
             Ok(n) => Ok(ReadableSize((n * unit as f64) as u64)),
-            Err(_) => Err(format!("invalid size string: {:?}", s)),
+            Err(_) => Err(format!("invalid size string: {s:?}")),
         }
     }
 }
@@ -282,8 +265,64 @@ impl<'de> Deserialize<'de> for ReadableSize {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Ord, PartialOrd, Default)]
 pub struct ReadableDuration(pub Duration);
+
+impl Add for ReadableDuration {
+    type Output = ReadableDuration;
+
+    fn add(self, rhs: ReadableDuration) -> ReadableDuration {
+        Self(self.0 + rhs.0)
+    }
+}
+
+impl AddAssign for ReadableDuration {
+    fn add_assign(&mut self, rhs: ReadableDuration) {
+        *self = *self + rhs;
+    }
+}
+
+impl Sub for ReadableDuration {
+    type Output = ReadableDuration;
+
+    fn sub(self, rhs: ReadableDuration) -> ReadableDuration {
+        Self(self.0 - rhs.0)
+    }
+}
+
+impl SubAssign for ReadableDuration {
+    fn sub_assign(&mut self, rhs: ReadableDuration) {
+        *self = *self - rhs;
+    }
+}
+
+impl Mul<u32> for ReadableDuration {
+    type Output = ReadableDuration;
+
+    fn mul(self, rhs: u32) -> Self::Output {
+        Self(self.0 * rhs)
+    }
+}
+
+impl MulAssign<u32> for ReadableDuration {
+    fn mul_assign(&mut self, rhs: u32) {
+        *self = *self * rhs;
+    }
+}
+
+impl Div<u32> for ReadableDuration {
+    type Output = ReadableDuration;
+
+    fn div(self, rhs: u32) -> ReadableDuration {
+        Self(self.0 / rhs)
+    }
+}
+
+impl DivAssign<u32> for ReadableDuration {
+    fn div_assign(&mut self, rhs: u32) {
+        *self = *self / rhs;
+    }
+}
 
 impl From<ReadableDuration> for Duration {
     fn from(readable: ReadableDuration) -> Duration {
@@ -315,15 +354,18 @@ impl FromStr for ReadableDuration {
         if !dur_str.is_ascii() {
             return Err(format!("unexpect ascii string: {}", dur_str));
         }
-        let err_msg = "valid duration, only d, h, m, s, ms are supported.".to_owned();
+        let err_msg = "valid duration, only d, h, m, s, ms, us are supported.".to_owned();
         let mut left = dur_str.as_bytes();
         let mut last_unit = DAY + 1;
         let mut dur = 0f64;
-        while let Some(idx) = left.iter().position(|c| b"dhms".contains(c)) {
+        while let Some(idx) = left.iter().position(|c| b"dhmsu".contains(c)) {
             let (first, second) = left.split_at(idx);
             let unit = if second.starts_with(b"ms") {
                 left = &left[idx + 2..];
                 MS
+            } else if second.starts_with(b"us") {
+                left = &left[idx + 2..];
+                US
             } else {
                 let u = match second[0] {
                     b'd' => DAY,
@@ -336,7 +378,7 @@ impl FromStr for ReadableDuration {
                 u
             };
             if unit >= last_unit {
-                return Err("d, h, m, s, ms should occur in given order.".to_owned());
+                return Err("d, h, m, s, ms, us should occur in given order.".to_owned());
             }
             // do we need to check 12h360m?
             let number_str = unsafe { str::from_utf8_unchecked(first) };
@@ -352,33 +394,36 @@ impl FromStr for ReadableDuration {
         if dur.is_sign_negative() {
             return Err("duration should be positive.".to_owned());
         }
-        let secs = dur as u64 / SECOND as u64;
-        let millis = (dur as u64 % SECOND as u64) as u32 * 1_000_000;
-        Ok(ReadableDuration(Duration::new(secs, millis)))
+        let secs = dur as u64 / SECOND;
+        let micros = (dur as u64 % SECOND) as u32 * 1_000;
+        Ok(ReadableDuration(Duration::new(secs, micros)))
     }
 }
 
 impl ReadableDuration {
-    pub fn secs(secs: u64) -> ReadableDuration {
-        ReadableDuration(Duration::new(secs, 0))
+    pub const ZERO: ReadableDuration = ReadableDuration(Duration::ZERO);
+
+    pub const fn micros(micros: u64) -> ReadableDuration {
+        ReadableDuration(Duration::from_micros(micros))
     }
 
-    pub fn millis(millis: u64) -> ReadableDuration {
-        ReadableDuration(Duration::new(
-            millis / 1000,
-            (millis % 1000) as u32 * 1_000_000,
-        ))
+    pub const fn millis(millis: u64) -> ReadableDuration {
+        ReadableDuration(Duration::from_millis(millis))
     }
 
-    pub fn minutes(minutes: u64) -> ReadableDuration {
+    pub const fn secs(secs: u64) -> ReadableDuration {
+        ReadableDuration(Duration::from_secs(secs))
+    }
+
+    pub const fn minutes(minutes: u64) -> ReadableDuration {
         ReadableDuration::secs(minutes * 60)
     }
 
-    pub fn hours(hours: u64) -> ReadableDuration {
+    pub const fn hours(hours: u64) -> ReadableDuration {
         ReadableDuration::minutes(hours * 60)
     }
 
-    pub fn days(days: u64) -> ReadableDuration {
+    pub const fn days(days: u64) -> ReadableDuration {
         ReadableDuration::hours(days * 24)
     }
 
@@ -386,8 +431,16 @@ impl ReadableDuration {
         self.0.as_secs()
     }
 
+    pub fn as_secs_f64(&self) -> f64 {
+        self.0.as_secs_f64()
+    }
+
     pub fn as_millis(&self) -> u64 {
         crate::time::duration_to_ms(self.0)
+    }
+
+    pub fn as_micros(&self) -> u64 {
+        crate::time::duration_to_us(self.0)
     }
 
     pub fn is_zero(&self) -> bool {
@@ -398,7 +451,7 @@ impl ReadableDuration {
 impl fmt::Display for ReadableDuration {
     #[inline]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let mut dur = crate::time::duration_to_ms(self.0);
+        let mut dur = crate::time::duration_to_us(self.0);
         let mut written = false;
         if dur >= DAY {
             written = true;
@@ -420,9 +473,14 @@ impl fmt::Display for ReadableDuration {
             write!(f, "{}s", dur / SECOND)?;
             dur %= SECOND;
         }
+        if dur >= MS {
+            written = true;
+            write!(f, "{}ms", dur / MS)?;
+            dur %= MS;
+        }
         if dur > 0 {
             written = true;
-            write!(f, "{}ms", dur)?;
+            write!(f, "{}us", dur)?;
         }
         if !written {
             write!(f, "0s")?;
@@ -468,20 +526,259 @@ impl<'de> Deserialize<'de> for ReadableDuration {
     }
 }
 
+#[derive(Clone, Debug, Copy, PartialEq)]
+pub struct ReadableOffsetTime(pub NaiveTime, pub FixedOffset);
+
+impl From<ReadableOffsetTime> for ConfigValue {
+    fn from(ot: ReadableOffsetTime) -> ConfigValue {
+        ConfigValue::OffsetTime((ot.0, ot.1))
+    }
+}
+
+impl From<ConfigValue> for ReadableOffsetTime {
+    fn from(c: ConfigValue) -> ReadableOffsetTime {
+        if let ConfigValue::OffsetTime(ot) = c {
+            ReadableOffsetTime(ot.0, ot.1)
+        } else {
+            panic!("expect: ConfigValue::OffsetTime, got: {:?}", c)
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Default)]
+pub struct ReadableSchedule(pub Vec<ReadableOffsetTime>);
+
+impl From<ReadableSchedule> for ConfigValue {
+    fn from(otv: ReadableSchedule) -> ConfigValue {
+        ConfigValue::Schedule(otv.0.into_iter().map(|ot| (ot.0, ot.1)).collect::<Vec<_>>())
+    }
+}
+
+impl From<ConfigValue> for ReadableSchedule {
+    fn from(c: ConfigValue) -> ReadableSchedule {
+        if let ConfigValue::Schedule(otv) = c {
+            ReadableSchedule(
+                otv.into_iter()
+                    .map(|(o, t)| ReadableOffsetTime(o, t))
+                    .collect::<Vec<_>>(),
+            )
+        } else {
+            panic!("expect: ConfigValue::Schedule, got: {:?}", c)
+        }
+    }
+}
+
+impl ReadableSchedule {
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    pub fn is_scheduled_this_hour<Tz: TimeZone>(&self, datetime: &DateTime<Tz>) -> bool {
+        self.0.iter().any(|time| time.hour_matches(datetime))
+    }
+
+    pub fn is_scheduled_this_hour_minute<Tz: TimeZone>(&self, datetime: &DateTime<Tz>) -> bool {
+        self.0
+            .iter()
+            .any(|time| time.hour_minutes_matches(datetime))
+    }
+}
+
+impl FromStr for ReadableOffsetTime {
+    type Err = String;
+
+    fn from_str(ot_str: &str) -> Result<ReadableOffsetTime, String> {
+        let (time, offset) = if let Some((time_str, offset_str)) = ot_str.split_once(' ') {
+            let time = NaiveTime::parse_from_str(time_str, "%H:%M").map_err(|e| e.to_string())?;
+            let offset = parse_offset(offset_str)?;
+            (time, offset)
+        } else {
+            let time = NaiveTime::parse_from_str(ot_str, "%H:%M").map_err(|e| e.to_string())?;
+            (time, local_offset())
+        };
+        Ok(ReadableOffsetTime(time, offset))
+    }
+}
+
+/// Returns the `FixedOffset` for the timezone this `tikv` server has been
+/// configured to use.
+fn local_offset() -> FixedOffset {
+    let &offset = Local::now().offset();
+    offset
+}
+
+/// Parses the offset specified by `str`.
+/// Note: `FixedOffset` in latest `chrono` implements `FromStr`. Once we are
+/// able to upgrade to it (`components/tidb_query_datatype` requires a large
+/// refactoring that is outside the scope of this PR), we can remove this
+/// method.
+fn parse_offset(offset_str: &str) -> Result<FixedOffset, String> {
+    let mut parsed = Parsed::new();
+    format::parse(
+        &mut parsed,
+        offset_str,
+        [Item::Fixed(Fixed::TimezoneOffsetZ)].iter(),
+    )
+    .map_err(|e| e.to_string())?;
+    parsed.to_fixed_offset().map_err(|e| e.to_string())
+}
+
+impl fmt::Display for ReadableOffsetTime {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{} {}", self.0, self.1)
+    }
+}
+
+impl ReadableOffsetTime {
+    /// Converts `datetime` from `Tz` to the same timezone as this instance and
+    /// returns `true` if the hour of the day is matches hour of this
+    /// instance.
+    pub fn hour_matches<Tz: TimeZone>(&self, datetime: &DateTime<Tz>) -> bool {
+        self.convert_to_this_offset(datetime).hour() == self.0.hour()
+    }
+
+    /// Converts `datetime` from `Tz` to the same timezone as this instance and
+    /// returns `true` if hours and minutes match this instance.
+    pub fn hour_minutes_matches<Tz: TimeZone>(&self, datetime: &DateTime<Tz>) -> bool {
+        let time = self.convert_to_this_offset(datetime);
+        time.hour() == self.0.hour() && time.minute() == self.0.minute()
+    }
+
+    fn convert_to_this_offset<Tz: TimeZone>(&self, datetime: &DateTime<Tz>) -> NaiveTime {
+        datetime.with_timezone(&self.1).time()
+    }
+}
+
+impl Serialize for ReadableOffsetTime {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut buffer = String::new();
+        write!(buffer, "{}", self).unwrap();
+        serializer.serialize_str(&buffer)
+    }
+}
+
+impl<'de> Deserialize<'de> for ReadableOffsetTime {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct OffTimeVisitor;
+
+        impl<'de> Visitor<'de> for OffTimeVisitor {
+            type Value = ReadableOffsetTime;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                formatter.write_str("valid duration")
+            }
+
+            fn visit_str<E>(self, off_time_str: &str) -> Result<ReadableOffsetTime, E>
+            where
+                E: de::Error,
+            {
+                off_time_str.parse().map_err(E::custom)
+            }
+        }
+
+        deserializer.deserialize_str(OffTimeVisitor)
+    }
+}
+
+pub fn normalize_path<P: AsRef<Path>>(path: P) -> PathBuf {
+    use std::path::Component;
+    let mut components = path.as_ref().components().peekable();
+    let mut ret = PathBuf::new();
+
+    while let Some(c @ (Component::Prefix(..) | Component::RootDir)) = components.peek().cloned() {
+        components.next();
+        ret.push(c.as_os_str());
+    }
+
+    for component in components {
+        match component {
+            Component::Prefix(..) | Component::RootDir => unreachable!(),
+            Component::CurDir => {}
+            c @ Component::ParentDir => {
+                if !ret.pop() {
+                    ret.push(c.as_os_str());
+                }
+            }
+            Component::Normal(c) => ret.push(c),
+        }
+    }
+    ret
+}
+
+/// Normalizes the path and canonicalizes its longest physically existing
+/// sub-path.
+fn canonicalize_non_existing_path<P: AsRef<Path>>(path: P) -> std::io::Result<PathBuf> {
+    fn try_canonicalize_normalized_path(path: &Path) -> std::io::Result<PathBuf> {
+        use std::path::Component;
+        let mut components = path.components().peekable();
+        let mut should_canonicalize = true;
+        let mut ret = if path.is_relative() {
+            Path::new(".").canonicalize()?
+        } else {
+            PathBuf::new()
+        };
+
+        while let Some(c @ (Component::Prefix(..) | Component::RootDir)) =
+            components.peek().cloned()
+        {
+            components.next();
+            ret.push(c.as_os_str());
+        }
+        // normalize() will only preserve leading ParentDir.
+        while let Some(Component::ParentDir) = components.peek().cloned() {
+            components.next();
+            ret.pop();
+        }
+
+        for component in components {
+            match component {
+                Component::Normal(c) => {
+                    ret.push(c);
+                    // We try to canonicalize a longest path based on fs info.
+                    if should_canonicalize {
+                        match ret.as_path().canonicalize() {
+                            Ok(path) => {
+                                ret = path;
+                            }
+                            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                                should_canonicalize = false;
+                            }
+                            other => return other,
+                        }
+                    }
+                }
+                Component::Prefix(..)
+                | Component::RootDir
+                | Component::ParentDir
+                | Component::CurDir => unreachable!(),
+            }
+        }
+        Ok(ret)
+    }
+    try_canonicalize_normalized_path(&normalize_path(path))
+}
+
+/// Normalizes the path and canonicalizes its longest physically existing
+/// sub-path.
+fn canonicalize_imp<P: AsRef<Path>>(path: P) -> std::io::Result<PathBuf> {
+    match path.as_ref().canonicalize() {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => canonicalize_non_existing_path(path),
+        other => other,
+    }
+}
+
 pub fn canonicalize_path(path: &str) -> Result<String, Box<dyn Error>> {
     canonicalize_sub_path(path, "")
 }
 
 pub fn canonicalize_sub_path(path: &str, sub_path: &str) -> Result<String, Box<dyn Error>> {
-    let path = Path::new(path);
-    let mut path = match path.canonicalize() {
-        Ok(path) => path,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => PathBuf::from(path),
-        Err(e) => return Err(Box::new(e) as Box<dyn Error>),
-    };
-    if !sub_path.is_empty() {
-        path = path.join(Path::new(sub_path));
-    }
+    let path = canonicalize_imp(Path::new(path).join(Path::new(sub_path)))?;
     if path.exists() && path.is_file() {
         return Err(format!("{}/{} is not a directory!", path.display(), sub_path).into());
     }
@@ -489,7 +786,7 @@ pub fn canonicalize_sub_path(path: &str, sub_path: &str) -> Result<String, Box<d
 }
 
 pub fn canonicalize_log_dir(path: &str, filename: &str) -> Result<String, Box<dyn Error>> {
-    let mut path = Path::new(path).canonicalize()?;
+    let mut path = canonicalize_imp(Path::new(path))?;
     if path.is_file() {
         return Ok(format!("{}", path.display()));
     }
@@ -514,6 +811,9 @@ pub fn ensure_dir_exist(path: &str) -> Result<(), Box<dyn Error>> {
 
 #[cfg(unix)]
 pub fn check_max_open_fds(expect: u64) -> Result<(), ConfigError> {
+    #[cfg(target_os = "freebsd")]
+    let expect = expect as i64;
+
     use std::mem;
 
     unsafe {
@@ -591,7 +891,8 @@ mod check_kernel {
         Ok(())
     }
 
-    /// `check_kernel_params` checks kernel parameters, following are checked so far:
+    /// `check_kernel_params` checks kernel parameters, following are checked so
+    /// far:
     ///   - `net.core.somaxconn` should be greater or equal to 32768.
     ///   - `net.ipv4.tcp_syncookies` should be 0
     ///   - `vm.swappiness` shoud be 0
@@ -640,10 +941,14 @@ pub fn check_kernel() -> Vec<ConfigError> {
 
 #[cfg(target_os = "linux")]
 mod check_data_dir {
-    use std::ffi::{CStr, CString};
-    use std::fs;
-    use std::path::Path;
-    use std::sync::Mutex;
+    use std::{
+        ffi::{CStr, CString},
+        fs,
+        path::Path,
+        sync::Mutex,
+    };
+
+    use lazy_static::lazy_static;
 
     use super::{canonicalize_path, ConfigError};
 
@@ -682,7 +987,7 @@ mod check_data_dir {
                 }
                 let ent = &*ent;
                 let cur_dir = CStr::from_ptr(ent.mnt_dir).to_str().unwrap();
-                if path.starts_with(&cur_dir) && cur_dir.len() >= fs.mnt_dir.len() {
+                if path.starts_with(cur_dir) && cur_dir.len() >= fs.mnt_dir.len() {
                     fs.tp = CStr::from_ptr(ent.mnt_type).to_str().unwrap().to_owned();
                     fs.opts = CStr::from_ptr(ent.mnt_opts).to_str().unwrap().to_owned();
                     fs.fsname = CStr::from_ptr(ent.mnt_fsname).to_str().unwrap().to_owned();
@@ -712,7 +1017,7 @@ mod check_data_dir {
         let block_dir = "/sys/block";
         let mut device_dir = format!("{}/{}", block_dir, dev);
         if !Path::new(&device_dir).exists() {
-            let dir = fs::read_dir(&block_dir).map_err(|e| {
+            let dir = fs::read_dir(block_dir).map_err(|e| {
                 ConfigError::FileSystem(format!(
                     "{}: read block dir {:?} failed: {:?}",
                     op, block_dir, e
@@ -779,9 +1084,8 @@ mod check_data_dir {
 
     #[cfg(test)]
     mod tests {
-        use std::fs::File;
-        use std::io::Write;
-        use std::os::unix::fs::symlink;
+        use std::{fs::File, io::Write, os::unix::fs::symlink};
+
         use tempfile::Builder;
 
         use super::*;
@@ -808,21 +1112,20 @@ securityfs /sys/kernel/security securityfs rw,nosuid,nodev,noexec,relatime 0 0
 
             // not found
             let f2 = get_fs_info("/tmp", &mnt_file);
-            assert!(f2.is_err());
+            f2.unwrap_err();
         }
 
         #[test]
         fn test_get_rotational_info() {
             // test device not exist
             let ret = get_rotational_info("/dev/invalid");
-            assert!(ret.is_err());
+            ret.unwrap_err();
         }
 
         #[test]
         fn test_check_data_dir() {
             // test invalid data_path
-            let ret = check_data_dir("/sys/invalid", "/proc/mounts");
-            assert!(ret.is_err());
+            check_data_dir("/sys/invalid", "/proc/mounts").unwrap_err();
             // get real path's fs_info
             let tmp_dir = Builder::new()
                 .prefix("test-check-data-dir")
@@ -833,13 +1136,15 @@ securityfs /sys/kernel/security securityfs rw,nosuid,nodev,noexec,relatime 0 0
             let fs_info = get_fs_info(&data_path, "/proc/mounts").unwrap();
 
             // data_path may not mounted on a normal device on container
-            if !fs_info.fsname.starts_with("/dev") {
+            // /proc/mounts may contain host's device, which is not accessible in container.
+            if Path::new("/.dockerenv").exists()
+                && (!fs_info.fsname.starts_with("/dev") || !Path::new(&fs_info.fsname).exists())
+            {
                 return;
             }
 
             // test with real path
-            let ret = check_data_dir(&data_path, "/proc/mounts");
-            assert!(ret.is_ok());
+            check_data_dir(&data_path, "/proc/mounts").unwrap();
 
             // test with device mapper
             // get real_path's rotational info
@@ -859,8 +1164,7 @@ securityfs /sys/kernel/security securityfs rw,nosuid,nodev,noexec,relatime 0 0
             let mnt_file = format!("{}/mnt.txt", tmp_dir.path().display());
             create_file(&mnt_file, mninfo.as_bytes());
             // check info
-            let res = check_data_dir(&data_path, &mnt_file);
-            assert!(res.is_ok());
+            check_data_dir(&data_path, &mnt_file).unwrap();
             // check rotational info
             let get = get_rotational_info(&tmp_device).unwrap();
             assert_eq!(expect, get);
@@ -908,7 +1212,8 @@ fn get_file_count(data_path: &str, extension: &str) -> Result<usize, ConfigError
     Ok(file_count)
 }
 
-// check dir is empty of file with certain extension, empty string for any extension.
+// check dir is empty of file with certain extension, empty string for any
+// extension.
 pub fn check_data_dir_empty(data_path: &str, extension: &str) -> Result<(), ConfigError> {
     let op = "data-dir.empty.check";
     let dir = Path::new(data_path);
@@ -926,7 +1231,8 @@ pub fn check_data_dir_empty(data_path: &str, extension: &str) -> Result<(), Conf
 }
 
 /// `check_addr` validates an address. Addresses are formed like "Host:Port".
-/// More details about **Host** and **Port** can be found in WHATWG URL Standard.
+/// More details about **Host** and **Port** can be found in WHATWG URL
+/// Standard.
 ///
 /// Return whether the address is unspecified, i.e. `0.0.0.0` or `::0`
 pub fn check_addr(addr: &str) -> Result<bool, ConfigError> {
@@ -982,13 +1288,15 @@ impl<T> VersionTrack<T> {
         }
     }
 
-    /// Update the value
-    pub fn update<F>(&self, f: F)
+    pub fn update<F, O, E>(&self, f: F) -> Result<O, E>
     where
-        F: FnOnce(&mut T),
+        F: FnOnce(&mut T) -> Result<O, E>,
     {
-        f(&mut self.value.write().unwrap());
-        self.version.fetch_add(1, Ordering::Release);
+        let res = f(&mut self.value.write().unwrap());
+        if res.is_ok() {
+            self.version.fetch_add(1, Ordering::Release);
+        }
+        res
     }
 
     pub fn value(&self) -> RwLockReadGuard<'_, T> {
@@ -1023,7 +1331,11 @@ impl<T> Tracker<T> {
                 Err(_) => {
                     let t = Instant::now_coarse();
                     let value = self.inner.value.read().unwrap();
-                    slow_log!(t.elapsed(), "{} tracker get updated value", self.tag);
+                    slow_log!(
+                        t.saturating_elapsed(),
+                        "{} tracker get updated value",
+                        self.tag
+                    );
                     Some(value)
                 }
             }
@@ -1041,7 +1353,7 @@ enum TomlLine {
     // the `Keys` from "[`Keys`]"
     Table(String),
     // the `Keys` from "`Keys` = value"
-    KVPair(String),
+    KvPair(String),
     // Comment, empty line, etc.
     Unknown,
 }
@@ -1057,13 +1369,13 @@ impl TomlLine {
         if v.is_empty() || v.len() > 2 || TomlLine::parse_key(v[v.len() - 1].as_str()).is_none() {
             return TomlLine::Unknown;
         }
-        TomlLine::KVPair(v.pop().unwrap())
+        TomlLine::KvPair(v.pop().unwrap())
     }
 
     fn parse(s: &str) -> TomlLine {
         let s = s.trim();
         // try to parse table from format of "[`Keys`]"
-        if let Some(k) = s.strip_prefix('[').map(|s| s.strip_suffix(']')).flatten() {
+        if let Some(k) = s.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
             return match TomlLine::parse_key(k) {
                 Some(k) => TomlLine::Table(k),
                 None => TomlLine::Unknown,
@@ -1106,13 +1418,19 @@ impl TomlLine {
     }
 }
 
-/// TomlWriter use to update the config file and only cover the most commom toml
-/// format that used by tikv config file, toml format like: quoted keys, multi-line
-/// value, inline table, etc, are not supported, see https://github.com/toml-lang/toml
+/// TomlWriter use to update the config file and only cover the most common toml
+/// format that used by tikv config file, toml format like: quoted keys,
+/// multi-line value, inline table, etc, are not supported, see <https://github.com/toml-lang/toml>
 /// for more detail.
 pub struct TomlWriter {
     dst: Vec<u8>,
     current_table: String,
+}
+
+impl Default for TomlWriter {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl TomlWriter {
@@ -1125,13 +1443,13 @@ impl TomlWriter {
 
     pub fn write_change(&mut self, src: String, mut change: HashMap<String, String>) {
         for line in src.lines() {
-            match TomlLine::parse(&line) {
+            match TomlLine::parse(line) {
                 TomlLine::Table(keys) => {
                     self.write_current_table(&mut change);
                     self.write(line.as_bytes());
                     self.current_table = keys;
                 }
-                TomlLine::KVPair(keys) => {
+                TomlLine::KvPair(keys) => {
                     match change.remove(&TomlLine::concat_key(&self.current_table, &keys)) {
                         None => self.write(line.as_bytes()),
                         Some(chg) => self.write(TomlLine::encode_kv(&keys, &chg).as_bytes()),
@@ -1179,14 +1497,268 @@ impl TomlWriter {
     }
 }
 
+#[macro_export]
+macro_rules! numeric_enum_serializing_mod {
+    ($name:ident $enum:ident { $($variant:ident = $value:expr, )* }) => {
+        pub mod $name {
+            use std::fmt;
+
+            use serde::{Serializer, Deserializer};
+            use serde::de::{self, Unexpected, Visitor};
+            use super::$enum;
+            use case_macros::*;
+
+            pub fn serialize<S>(mode: &$enum, serializer: S) -> Result<S::Ok, S::Error>
+                where S: Serializer
+            {
+                match mode {
+                    $( $enum::$variant => serializer.serialize_i64($value as i64), )*
+                }
+            }
+
+            pub fn deserialize<'de, D>(deserializer: D) -> Result<$enum, D::Error>
+                where D: Deserializer<'de>
+            {
+                struct EnumVisitor;
+
+                impl<'de> Visitor<'de> for EnumVisitor {
+                    type Value = $enum;
+
+                    fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                        write!(formatter, concat!("valid ", stringify!($enum)))
+                    }
+
+                    fn visit_i64<E>(self, value: i64) -> Result<$enum, E>
+                        where E: de::Error
+                    {
+                        match value {
+                            $( $value => Ok($enum::$variant), )*
+                            _ => Err(E::invalid_value(Unexpected::Signed(value), &self))
+                        }
+                    }
+
+                    fn visit_str<E>(self, value: &str) -> Result<$enum, E>
+                        where E: de::Error
+                    {
+                        match value {
+                            $(kebab_case!($variant) => Ok($enum::$variant), )*
+                            _ => Err(E::invalid_value(Unexpected::Str(value), &self))
+                        }
+                    }
+                }
+
+                deserializer.deserialize_any(EnumVisitor)
+            }
+
+            #[cfg(test)]
+            mod tests {
+                use toml;
+                use super::$enum;
+                use serde::{Deserialize, Serialize};
+
+                #[test]
+                fn test_serde() {
+                    #[derive(Serialize, Deserialize, PartialEq)]
+                    struct EnumHolder {
+                        #[serde(with = "super")]
+                        e: $enum,
+                    }
+
+                    let cases = vec![
+                        $(($enum::$variant, $value), )*
+                    ];
+                    for (e, v) in cases {
+                        let holder = EnumHolder { e };
+                        let res = toml::to_string(&holder).unwrap();
+                        let exp = format!("e = {}\n", v);
+                        assert_eq!(res, exp);
+                        let h: EnumHolder = toml::from_str(&exp).unwrap();
+                        assert!(h == holder);
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Helper for migrating Raft data safely. Such migration is defined as
+/// multiple states that can be uniquely distinguished. And the transitions
+/// between these states are atomic.
+///
+/// States:
+///   1. Init - Only source directory contains Raft data.
+///   2. Migrating - A marker file contains the path of source directory. The
+/// source      directory contains a complete copy of Raft data. Target
+/// directory may exist.   3. Completed - Only target directory contains Raft
+/// data. Marker file may exist.
+pub struct RaftDataStateMachine {
+    root: PathBuf,
+    in_progress_marker: PathBuf,
+    source: PathBuf,
+    target: PathBuf,
+}
+
+impl RaftDataStateMachine {
+    pub fn new(root: &str, source: &str, target: &str) -> Self {
+        let root = PathBuf::from(root);
+        let in_progress_marker = root.join("MIGRATING-RAFT");
+        let source = PathBuf::from(source);
+        let target = PathBuf::from(target);
+        Self {
+            root,
+            in_progress_marker,
+            source,
+            target,
+        }
+    }
+
+    /// Checks if the current condition is a valid state.
+    pub fn validate(&self, should_exist: bool) -> std::result::Result<(), String> {
+        if Self::data_exists(&self.source)
+            && Self::data_exists(&self.target)
+            && !self.in_progress_marker.exists()
+        {
+            return Err(format!(
+                "Found multiple raft data sets: {}, {}",
+                self.source.display(),
+                self.target.display()
+            ));
+        }
+        let exists = Self::data_exists(&self.source) || Self::data_exists(&self.target);
+        if exists != should_exist {
+            if should_exist {
+                return Err("Cannot find raft data set.".to_owned());
+            } else {
+                return Err("Found raft data set when it should not exist.".to_owned());
+            }
+        }
+        Ok(())
+    }
+
+    /// Returns whether a migration is needed. When it's needed, enters the
+    /// `Migrating` state. Otherwise prepares the target directory for
+    /// opening.
+    pub fn before_open_target(&mut self) -> bool {
+        // Clean up trash directory if there is any.
+        for p in [&self.source, &self.target] {
+            let trash = p.with_extension("REMOVE");
+            if trash.exists() {
+                fs::remove_dir_all(&trash).unwrap();
+            }
+        }
+        if !Self::data_exists(&self.source) {
+            // Recover from Completed state.
+            if self.in_progress_marker.exists() {
+                Self::must_remove(&self.in_progress_marker);
+            }
+            return false;
+        } else if self.in_progress_marker.exists() {
+            if let Some(real_source) = self.read_marker() {
+                // Recover from Migrating state.
+                if real_source == self.target {
+                    if Self::data_exists(&self.target) {
+                        Self::must_remove(&self.source);
+                        return false;
+                    }
+                    // It's actually in Completed state, just in the reverse
+                    // direction. Equivalent to Init state.
+                } else {
+                    assert!(real_source == self.source);
+                    Self::must_remove(&self.target);
+                    return true;
+                }
+            } else {
+                // Halfway between Init and Migrating.
+                assert!(!Self::data_exists(&self.target));
+            }
+        }
+        // Init -> Migrating.
+        self.write_marker();
+        true
+    }
+
+    /// Exits the `Migrating` state and enters the `Completed` state.
+    pub fn after_dump_data(&mut self) {
+        assert!(Self::data_exists(&self.source));
+        assert!(Self::data_exists(&self.target));
+        Self::must_remove(&self.source); // Enters the `Completed` state.
+        Self::must_remove(&self.in_progress_marker);
+    }
+
+    // `after_dump_data` involves two atomic operations, insert a check point
+    // between them to test crash safety.
+    #[cfg(test)]
+    fn after_dump_data_with_check<F: Fn()>(&mut self, check: &F) {
+        assert!(Self::data_exists(&self.source));
+        assert!(Self::data_exists(&self.target));
+        Self::must_remove(&self.source); // Enters the `Completed` state.
+        check();
+        Self::must_remove(&self.in_progress_marker);
+    }
+
+    fn write_marker(&self) {
+        use std::io::Write;
+        let mut f = fs::File::create(&self.in_progress_marker).unwrap();
+        f.write_all(self.source.to_str().unwrap().as_bytes())
+            .unwrap();
+        f.sync_all().unwrap();
+        f.write_all(b"//").unwrap();
+        f.sync_all().unwrap();
+        Self::sync_dir(&self.root);
+    }
+
+    // Assumes there is a marker file. Returns None when the content of marker file
+    // is incomplete.
+    fn read_marker(&self) -> Option<PathBuf> {
+        let marker = fs::read_to_string(&self.in_progress_marker).unwrap();
+        if marker.ends_with("//") {
+            Some(PathBuf::from(&marker[..marker.len() - 2]))
+        } else {
+            None
+        }
+    }
+
+    fn must_remove(path: &Path) {
+        if path.exists() {
+            if path.is_dir() {
+                info!("Removing directory"; "path" => %path.display());
+                let trash = path.with_extension("REMOVE");
+                Self::must_rename_dir(path, &trash);
+                fs::remove_dir_all(&trash).unwrap();
+            } else {
+                info!("Removing file"; "path" => %path.display());
+                fs::remove_file(path).unwrap();
+                Self::sync_dir(path.parent().unwrap());
+            }
+        }
+    }
+
+    fn must_rename_dir(from: &Path, to: &Path) {
+        fs::rename(from, to).unwrap();
+        let mut dir = to.to_path_buf();
+        assert!(dir.pop());
+        Self::sync_dir(&dir);
+    }
+
+    fn data_exists(path: &Path) -> bool {
+        if !path.exists() || !path.is_dir() {
+            return false;
+        }
+        fs::read_dir(path).unwrap().next().is_some()
+    }
+
+    fn sync_dir(dir: &Path) {
+        fs::File::open(dir).and_then(|d| d.sync_all()).unwrap();
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use std::fs::File;
-    use std::io::Write;
-    use std::path::Path;
+    use std::{fs::File, io::Write, path::Path};
+
+    use tempfile::Builder;
 
     use super::*;
-    use tempfile::Builder;
 
     #[test]
     fn test_readable_size() {
@@ -1200,8 +1772,8 @@ mod tests {
         assert_eq!(s.0, 2 * 1024 * 1024 * 1024);
         assert_eq!(s.as_mb(), 2048);
 
-        assert_eq!((ReadableSize::mb(2) / 2).0, MB);
-        assert_eq!((ReadableSize::mb(1) / 2).0, 512 * KB);
+        assert_eq!((ReadableSize::mb(2) / 2).0, MIB);
+        assert_eq!((ReadableSize::mb(1) / 2).0, 512 * KIB);
         assert_eq!(ReadableSize::mb(2) / ReadableSize::kb(1), 2048);
     }
 
@@ -1214,11 +1786,11 @@ mod tests {
 
         let legal_cases = vec![
             (0, "0KiB"),
-            (2 * KB, "2KiB"),
-            (4 * MB, "4MiB"),
-            (5 * GB, "5GiB"),
-            (7 * TB, "7TiB"),
-            (11 * PB, "11PiB"),
+            (2 * KIB, "2KiB"),
+            (4 * MIB, "4MiB"),
+            (5 * GIB, "5GiB"),
+            (7 * TIB, "7TiB"),
+            (11 * PIB, "11PiB"),
         ];
         for (size, exp) in legal_cases {
             let c = SizeHolder {
@@ -1232,38 +1804,47 @@ mod tests {
         }
 
         let c = SizeHolder {
-            s: ReadableSize(512),
+            s: ReadableSize((isize::MAX) as u64),
         };
         let res_str = toml::to_string(&c).unwrap();
-        assert_eq!(res_str, "s = 512\n");
+        assert_eq!(res_str, "s = \"9223372036854775807B\"\n");
         let res_size: SizeHolder = toml::from_str(&res_str).unwrap();
         assert_eq!(res_size.s.0, c.s.0);
 
         let decode_cases = vec![
-            (" 0.5 PB", PB / 2),
-            ("0.5 TB", TB / 2),
-            ("0.5GB ", GB / 2),
-            ("0.5MB", MB / 2),
-            ("0.5KB", KB / 2),
-            ("0.5P", PB / 2),
-            ("0.5T", TB / 2),
-            ("0.5G", GB / 2),
-            ("0.5M", MB / 2),
-            ("0.5K", KB / 2),
+            (" 0.5 PB", PIB / 2),
+            ("0.5 TB", TIB / 2),
+            ("0.5GB ", GIB / 2),
+            ("0.5MB", MIB / 2),
+            ("0.5KB", KIB / 2),
+            ("0.5P", PIB / 2),
+            ("0.5T", TIB / 2),
+            ("0.5G", GIB / 2),
+            ("0.5M", MIB / 2),
+            ("0.5K", KIB / 2),
             ("23", 23),
             ("1", 1),
-            ("1024B", KB),
+            ("1024B", KIB),
             // units with binary prefixes
-            (" 0.5 PiB", PB / 2),
-            ("1PiB", PB),
-            ("0.5 TiB", TB / 2),
-            ("2 TiB", TB * 2),
-            ("0.5GiB ", GB / 2),
-            ("787GiB ", GB * 787),
-            ("0.5MiB", MB / 2),
-            ("3MiB", MB * 3),
-            ("0.5KiB", KB / 2),
-            ("1 KiB", KB),
+            (" 0.5 PiB", PIB / 2),
+            ("1PiB", PIB),
+            ("0.5 TiB", TIB / 2),
+            ("2 TiB", TIB * 2),
+            ("0.5GiB ", GIB / 2),
+            ("787GiB ", GIB * 787),
+            ("0.5MiB", MIB / 2),
+            ("3MiB", MIB * 3),
+            ("0.5KiB", KIB / 2),
+            ("1 KiB", KIB),
+            // scientific notation
+            ("0.5e6 B", B * 500000),
+            ("0.5E6 B", B * 500000),
+            ("1e6B", B * 1000000),
+            ("8E6B", B * 8000000),
+            ("8e7", B * 80000000),
+            ("1e-1MB", MIB / 10),
+            ("1e+1MB", MIB * 10),
+            ("0e+10MB", 0),
         ];
         for (src, exp) in decode_cases {
             let src = format!("s = {:?}", src);
@@ -1283,14 +1864,20 @@ mod tests {
 
     #[test]
     fn test_duration_construction() {
-        let mut dur = ReadableDuration::secs(1);
-        assert_eq!(dur.0, Duration::new(1, 0));
-        assert_eq!(dur.as_secs(), 1);
-        assert_eq!(dur.as_millis(), 1000);
+        let mut dur = ReadableDuration::micros(2_010_010);
+        assert_eq!(dur.0, Duration::new(2, 10_010_000));
+        assert_eq!(dur.as_secs(), 2);
+        assert!((dur.as_secs_f64() - 2.010_010).abs() < f64::EPSILON);
+        assert_eq!(dur.as_millis(), 2_010);
         dur = ReadableDuration::millis(1001);
         assert_eq!(dur.0, Duration::new(1, 1_000_000));
         assert_eq!(dur.as_secs(), 1);
+        assert!((dur.as_secs_f64() - 1.001).abs() < f64::EPSILON);
         assert_eq!(dur.as_millis(), 1001);
+        dur = ReadableDuration::secs(1);
+        assert_eq!(dur.0, Duration::new(1, 0));
+        assert_eq!(dur.as_secs(), 1);
+        assert_eq!(dur.as_millis(), 1000);
         dur = ReadableDuration::minutes(2);
         assert_eq!(dur.0, Duration::new(2 * 60, 0));
         assert_eq!(dur.as_secs(), 120);
@@ -1310,20 +1897,21 @@ mod tests {
 
         let legal_cases = vec![
             (0, 0, "0s"),
-            (0, 1, "1ms"),
+            (0, 1_000, "1ms"),
+            (0, 1, "1us"),
             (2, 0, "2s"),
             (24 * 3600, 0, "1d"),
-            (2 * 24 * 3600, 10, "2d10ms"),
+            (2 * 24 * 3600, 10_020, "2d10ms20us"),
             (4 * 60, 0, "4m"),
             (5 * 3600, 0, "5h"),
             (3600 + 2 * 60, 0, "1h2m"),
             (5 * 24 * 3600 + 3600 + 2 * 60, 0, "5d1h2m"),
-            (3600 + 2, 5, "1h2s5ms"),
-            (3 * 24 * 3600 + 7 * 3600 + 2, 5, "3d7h2s5ms"),
+            (3600 + 2, 5_600, "1h2s5ms600us"),
+            (3 * 24 * 3600 + 7 * 3600 + 2, 5_004, "3d7h2s5ms4us"),
         ];
-        for (secs, ms, exp) in legal_cases {
+        for (secs, us, exp) in legal_cases {
             let d = DurHolder {
-                d: ReadableDuration(Duration::new(secs, ms * 1_000_000)),
+                d: ReadableDuration(Duration::new(secs, us * 1_000)),
             };
             let res_str = toml::to_string(&d).unwrap();
             let exp_str = format!("d = {:?}\n", exp);
@@ -1348,6 +1936,90 @@ mod tests {
     }
 
     #[test]
+    fn test_readable_offset_time() {
+        let decode_cases = vec![
+            (
+                "23:00 +0000",
+                ReadableOffsetTime(
+                    NaiveTime::from_hms_opt(23, 00, 00).unwrap(),
+                    FixedOffset::east_opt(0).unwrap(),
+                ),
+            ),
+            (
+                "03:00",
+                ReadableOffsetTime(NaiveTime::from_hms_opt(3, 00, 00).unwrap(), local_offset()),
+            ),
+            (
+                "13:23 +09:30",
+                ReadableOffsetTime(
+                    NaiveTime::from_hms_opt(13, 23, 00).unwrap(),
+                    FixedOffset::east_opt(3600 * 9 + 1800).unwrap(),
+                ),
+            ),
+            (
+                "09:30 -08:00",
+                ReadableOffsetTime(
+                    NaiveTime::from_hms_opt(9, 30, 00).unwrap(),
+                    FixedOffset::west_opt(3600 * 8).unwrap(),
+                ),
+            ),
+        ];
+        for (encoded, expected) in decode_cases {
+            let actual = encoded.parse::<ReadableOffsetTime>().unwrap_or_else(|e| {
+                panic!(
+                    "error parsing encoded={} expected={} error={}",
+                    encoded, expected, e
+                )
+            });
+            assert_eq!(actual, expected);
+        }
+        let time = ReadableOffsetTime(
+            NaiveTime::from_hms_opt(9, 30, 00).unwrap(),
+            FixedOffset::west_opt(0).unwrap(),
+        );
+        assert_eq!(format!("{}", time), "09:30:00 +00:00");
+        let dt = DateTime::parse_from_rfc3339("2023-10-27T09:39:57-00:00").unwrap();
+        assert!(time.hour_matches(&dt));
+        assert!(!time.hour_minutes_matches(&dt));
+        let dt = DateTime::parse_from_rfc3339("2023-10-27T09:30:57-00:00").unwrap();
+        assert!(time.hour_minutes_matches(&dt));
+    }
+
+    #[test]
+    fn test_readable_schedule() {
+        let schedule = ReadableSchedule(
+            vec!["09:30 +00:00", "23:00 +00:00"]
+                .into_iter()
+                .flat_map(ReadableOffsetTime::from_str)
+                .collect::<Vec<_>>(),
+        );
+
+        let time_a = DateTime::parse_from_rfc3339("2023-10-27T09:30:57-00:00").unwrap();
+        let time_b = DateTime::parse_from_rfc3339("2023-10-28T09:00:57-00:00").unwrap();
+        let time_c = DateTime::parse_from_rfc3339("2023-10-27T23:15:00-00:00").unwrap();
+        let time_d = DateTime::parse_from_rfc3339("2023-10-27T23:00:00-00:00").unwrap();
+        let time_e = DateTime::parse_from_rfc3339("2023-10-27T20:00:00-00:00").unwrap();
+
+        // positives for schedule by hour
+        assert!(schedule.is_scheduled_this_hour(&time_a));
+        assert!(schedule.is_scheduled_this_hour(&time_b));
+        assert!(schedule.is_scheduled_this_hour(&time_c));
+        assert!(schedule.is_scheduled_this_hour(&time_d));
+
+        // negatives for schedule by hour
+        assert!(!schedule.is_scheduled_this_hour(&time_e));
+
+        // positives for schedule by hour and minute
+        assert!(schedule.is_scheduled_this_hour_minute(&time_a));
+        assert!(schedule.is_scheduled_this_hour_minute(&time_d));
+
+        // negatives for schedule by hour and minute
+        assert!(!schedule.is_scheduled_this_hour_minute(&time_b));
+        assert!(!schedule.is_scheduled_this_hour_minute(&time_c));
+        assert!(!schedule.is_scheduled_this_hour_minute(&time_e));
+    }
+
+    #[test]
     fn test_canonicalize_path() {
         let tmp = Builder::new()
             .prefix("test-canonicalize")
@@ -1362,20 +2034,55 @@ mod tests {
             tmp_dir.canonicalize().unwrap().join("test1.dump")
         );
 
-        let path2 = format!("{}", tmp_dir.to_path_buf().join("test2").display());
-        assert!(canonicalize_path(&path2).is_ok());
-        ensure_dir_exist(&path2).unwrap();
-        let res_path2 = canonicalize_path(&path2).unwrap();
-        assert_eq!(
-            Path::new(&res_path2),
-            Path::new(&path2).canonicalize().unwrap()
-        );
+        let cases = vec![".", "/../../", "./../"];
+        for case in &cases {
+            assert_eq!(
+                Path::new(&canonicalize_non_existing_path(case).unwrap()),
+                Path::new(case).canonicalize().unwrap(),
+            );
+        }
 
+        // canonicalize a path containing symlink and non-existing nodes
+        ensure_dir_exist(&format!("{}", tmp_dir.to_path_buf().join("dir").display())).unwrap();
+        let nodes: &[&str] = if cfg!(target_os = "linux") {
+            std::os::unix::fs::symlink(
+                tmp_dir.to_path_buf().join("dir"),
+                tmp_dir.to_path_buf().join("symlink"),
+            )
+            .unwrap();
+            &["non_existing", "dir", "symlink"]
+        } else {
+            &["non_existing", "dir"]
+        };
+        for first in nodes {
+            for second in nodes {
+                let base_path = format!("{}/{}/..", tmp_dir.to_str().unwrap(), first,);
+                let sub_path = format!("{}/non_existing", second);
+                let full_path = format!("{}/{}", &base_path, &sub_path);
+                let res_path1 = canonicalize_path(&full_path).unwrap();
+                let res_path2 = canonicalize_sub_path(&base_path, &sub_path).unwrap();
+                assert_eq!(Path::new(&res_path1), Path::new(&res_path2));
+                // resolve to second/non_existing
+                if *second == "non_existing" {
+                    assert_eq!(
+                        Path::new(&res_path1),
+                        tmp_dir.to_path_buf().join("non_existing/non_existing")
+                    );
+                } else {
+                    assert_eq!(
+                        Path::new(&res_path1),
+                        tmp_dir.to_path_buf().join("dir/non_existing")
+                    );
+                }
+            }
+        }
+
+        // canonicalize a file
         let path2 = format!("{}", tmp_dir.to_path_buf().join("test2.dump").display());
         {
             File::create(&path2).unwrap();
         }
-        assert!(canonicalize_path(&path2).is_err());
+        canonicalize_path(&path2).unwrap_err();
         assert!(Path::new(&path2).exists());
     }
 
@@ -1383,7 +2090,6 @@ mod tests {
     #[test]
     fn test_check_kernel() {
         use super::check_kernel::{check_kernel_params, Checker};
-        use std::i64;
 
         // The range of vm.swappiness is from 0 to 100.
         let table: Vec<(&str, i64, Box<Checker>, bool)> = vec![
@@ -1486,31 +2192,27 @@ mod tests {
     #[test]
     fn test_check_data_dir_empty() {
         // test invalid data_path
-        let ret = check_data_dir_empty("/sys/invalid", "txt");
-        assert!(ret.is_ok());
+        check_data_dir_empty("/sys/invalid", "txt").unwrap();
         // test empty data_path
         let tmp_path = Builder::new()
             .prefix("test-get-file-count")
             .tempdir()
             .unwrap()
             .into_path();
-        let ret = check_data_dir_empty(tmp_path.to_str().unwrap(), "txt");
-        assert!(ret.is_ok());
+        check_data_dir_empty(tmp_path.to_str().unwrap(), "txt").unwrap();
         // test non-empty data_path
         let tmp_file = format!("{}", tmp_path.join("test-get-file-count.txt").display());
         create_file(&tmp_file, b"");
-        let ret = check_data_dir_empty(tmp_path.to_str().unwrap(), "");
-        assert!(ret.is_err());
-        let ret = check_data_dir_empty(tmp_path.to_str().unwrap(), "txt");
-        assert!(ret.is_err());
-        let ret = check_data_dir_empty(tmp_path.to_str().unwrap(), "xt");
-        assert!(ret.is_ok());
+        check_data_dir_empty(tmp_path.to_str().unwrap(), "").unwrap_err();
+        check_data_dir_empty(tmp_path.to_str().unwrap(), "txt").unwrap_err();
+        check_data_dir_empty(tmp_path.to_str().unwrap(), "xt").unwrap();
     }
 
     #[test]
     fn test_multi_tracker() {
-        use super::*;
         use std::sync::Arc;
+
+        use super::*;
 
         #[derive(Debug, Default, PartialEq)]
         struct Value {
@@ -1527,9 +2229,10 @@ mod tests {
 
         assert!(trackers.iter_mut().all(|tr| tr.any_new().is_none()));
 
-        vc.update(|v| {
+        let _ = vc.update(|v| -> Result<(), ()> {
             v.v1 = 1000;
             v.v2 = true;
+            Ok(())
         });
         for tr in trackers.iter_mut() {
             let incoming = tr.any_new();
@@ -1643,5 +2346,81 @@ yyy = 100
             toml_value["readpool"]["storage"]["normal-concurrency"].as_integer(),
             Some(2)
         );
+    }
+
+    #[test]
+    fn test_raft_data_migration() {
+        fn run_migration<F: Fn()>(root: &Path, source: &Path, target: &Path, check: F) {
+            let mut state = RaftDataStateMachine::new(
+                root.to_str().unwrap(),
+                source.to_str().unwrap(),
+                target.to_str().unwrap(),
+            );
+            state.validate(true).unwrap();
+            check();
+            // Dump to target.
+            if state.before_open_target() {
+                check();
+                // Simulate partial writes.
+                let marker = root.join("MIGRATING-RAFT");
+                if marker.exists() {
+                    let backup_marker = fs::read_to_string(&marker).unwrap();
+                    fs::write(&marker, "").unwrap();
+                    check();
+                    fs::write(&marker, backup_marker).unwrap();
+                }
+
+                let source_file = source.join("file");
+                let target_file = target.join("file");
+                if !target.exists() {
+                    fs::create_dir_all(target).unwrap();
+                    check();
+                }
+                fs::copy(source_file, target_file).unwrap();
+                check();
+                state.after_dump_data_with_check(&check);
+            }
+            check();
+        }
+
+        fn copy_dir(src: &Path, dst: &Path) -> std::io::Result<()> {
+            if dst.exists() {
+                fs::remove_dir_all(dst)?;
+            }
+            fs::create_dir_all(dst)?;
+            for entry in fs::read_dir(src)? {
+                let entry = entry?;
+                let ty = entry.file_type()?;
+                if ty.is_dir() {
+                    copy_dir(&entry.path(), &dst.join(entry.file_name()))?;
+                } else {
+                    fs::copy(entry.path(), dst.join(entry.file_name()))?;
+                }
+            }
+            Ok(())
+        }
+
+        let dir = tempfile::Builder::new().tempdir().unwrap();
+        let root = dir.path().join("root");
+        let source = root.join("source");
+        fs::create_dir_all(&source).unwrap();
+        let target = root.join("target");
+        fs::create_dir_all(&target).unwrap();
+        // Write some data into source.
+        let source_file = source.join("file");
+        File::create(source_file).unwrap();
+
+        let backup = dir.path().join("backup");
+
+        run_migration(&root, &source, &target, || {
+            copy_dir(&root, &backup).unwrap();
+
+            // Simulate restart and migrate in halfway.
+            run_migration(&root, &source, &target, || {});
+            copy_dir(&backup, &root).unwrap();
+            //
+            run_migration(&root, &target, &source, || {});
+            copy_dir(&backup, &root).unwrap();
+        });
     }
 }

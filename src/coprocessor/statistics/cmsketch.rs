@@ -1,11 +1,12 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use murmur3::murmur3_x64_128;
+use mur3::murmurhash3_x64_128;
 
 /// `CmSketch` is used to estimate point queries.
 /// Refer:[Count-Min Sketch](https://en.wikipedia.org/wiki/Count-min_sketch)
 #[derive(Clone)]
 pub struct CmSketch {
+    #[allow(dead_code)]
     depth: usize,
     width: usize,
     count: u32,
@@ -29,14 +30,13 @@ impl CmSketch {
     }
 
     // `hash` hashes the data into two u64 using murmur hash.
-    fn hash(mut bytes: &[u8]) -> (u64, u64) {
-        let out = murmur3_x64_128(&mut bytes, 0).unwrap();
-        (out as u64, (out >> 64) as u64)
+    fn hash(bytes: &[u8]) -> (u64, u64) {
+        murmurhash3_x64_128(bytes, 0)
     }
 
     // `insert` inserts the data into cm sketch. For each row i, the position at
-    // (h1 + h2*i) % width will be incremented by one, where the (h1, h2) is the hash value
-    // of data.
+    // (h1 + h2*i) % width will be incremented by one, where the (h1, h2) is the
+    // hash value of data.
     pub fn insert(&mut self, bytes: &[u8]) {
         self.count = self.count.wrapping_add(1);
         let (h1, h2) = CmSketch::hash(bytes);
@@ -88,20 +88,17 @@ impl CmSketch {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
-    use std::cmp::min;
-    use std::slice::from_ref;
-
-    use rand::distributions::Distribution;
-    use rand::rngs::StdRng;
-    use rand::SeedableRng;
-    use zipf::ZipfDistribution;
+    use std::{cmp::min, slice::from_ref};
 
     use collections::HashMap;
-    use tidb_query_datatype::codec::datum;
-    use tidb_query_datatype::codec::datum::Datum;
-    use tidb_query_datatype::expr::EvalContext;
+    use rand::{distributions::Distribution, rngs::StdRng, SeedableRng};
+    use tidb_query_datatype::{
+        codec::{datum, datum::Datum},
+        expr::EvalContext,
+    };
+    use zipf::ZipfDistribution;
+
+    use super::*;
 
     impl CmSketch {
         fn query(&self, bytes: &[u8]) -> u32 {

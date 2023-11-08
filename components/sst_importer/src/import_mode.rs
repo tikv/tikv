@@ -1,92 +1,96 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::{Arc, Mutex};
-use std::time::Duration;
-use std::time::Instant;
+use std::{
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex,
+    },
+    time::{Duration, Instant},
+};
 
-use engine_traits::{ColumnFamilyOptions, DBOptions, KvEngine};
-use futures::executor::ThreadPool;
+use engine_traits::{CfOptions, DbOptions, KvEngine};
 use futures_util::compat::Future01CompatExt;
 use kvproto::import_sstpb::*;
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
+use tokio::runtime::Handle;
 
-use super::Config;
-use super::Result;
+use super::{Config, Result};
 
-type RocksDBMetricsFn = fn(cf: &str, name: &str, v: f64);
+pub type RocksDbMetricsFn = fn(cf: &str, name: &str, v: f64);
 
-struct ImportModeSwitcherInner<E: KvEngine> {
-    mode: SwitchMode,
-    backup_db_options: ImportModeDBOptions,
-    backup_cf_options: Vec<(String, ImportModeCFOptions)>,
+struct ImportModeSwitcherInner {
+    is_import: Arc<AtomicBool>,
+    backup_db_options: ImportModeDbOptions,
+    backup_cf_options: Vec<(String, ImportModeCfOptions)>,
     timeout: Duration,
     next_check: Instant,
-    db: E,
-    metrics_fn: RocksDBMetricsFn,
+    metrics_fn: RocksDbMetricsFn,
 }
 
-impl<E: KvEngine> ImportModeSwitcherInner<E> {
-    fn enter_normal_mode(&mut self, mf: RocksDBMetricsFn) -> Result<()> {
-        if self.mode == SwitchMode::Normal {
-            return Ok(());
+impl ImportModeSwitcherInner {
+    fn enter_normal_mode<E: KvEngine>(&mut self, db: &E, mf: RocksDbMetricsFn) -> Result<bool> {
+        if !self.is_import.load(Ordering::Acquire) {
+            return Ok(false);
         }
 
-        self.backup_db_options.set_options(&self.db)?;
+        self.backup_db_options.set_options(db)?;
         for (cf_name, cf_opts) in &self.backup_cf_options {
-            cf_opts.set_options(&self.db, cf_name, mf)?;
+            cf_opts.set_options(db, cf_name, mf)?;
         }
 
-        self.mode = SwitchMode::Normal;
-        Ok(())
+        info!("enter normal mode");
+        self.is_import.store(false, Ordering::Release);
+        Ok(true)
     }
 
-    fn enter_import_mode(&mut self, mf: RocksDBMetricsFn) -> Result<()> {
-        if self.mode == SwitchMode::Import {
-            return Ok(());
+    fn enter_import_mode<E: KvEngine>(&mut self, db: &E, mf: RocksDbMetricsFn) -> Result<bool> {
+        if self.is_import.load(Ordering::Acquire) {
+            return Ok(false);
         }
 
-        self.backup_db_options = ImportModeDBOptions::new_options(&self.db);
+        self.backup_db_options = ImportModeDbOptions::new_options(db);
         self.backup_cf_options.clear();
 
         let import_db_options = self.backup_db_options.optimized_for_import_mode();
-        import_db_options.set_options(&self.db)?;
-        for cf_name in self.db.cf_names() {
-            let cf_opts = ImportModeCFOptions::new_options(&self.db, cf_name);
+        import_db_options.set_options(db)?;
+        for cf_name in db.cf_names() {
+            let cf_opts = ImportModeCfOptions::new_options(db, cf_name);
             let import_cf_options = cf_opts.optimized_for_import_mode();
             self.backup_cf_options.push((cf_name.to_owned(), cf_opts));
-            import_cf_options.set_options(&self.db, cf_name, mf)?;
+            import_cf_options.set_options(db, cf_name, mf)?;
         }
-
-        self.mode = SwitchMode::Import;
-        Ok(())
-    }
-
-    fn get_mode(&self) -> SwitchMode {
-        self.mode
+        info!("enter import mode");
+        self.is_import.store(true, Ordering::Release);
+        Ok(true)
     }
 }
 
 #[derive(Clone)]
-pub struct ImportModeSwitcher<E: KvEngine> {
-    inner: Arc<Mutex<ImportModeSwitcherInner<E>>>,
+pub struct ImportModeSwitcher {
+    inner: Arc<Mutex<ImportModeSwitcherInner>>,
+    is_import: Arc<AtomicBool>,
 }
 
-impl<E: KvEngine> ImportModeSwitcher<E> {
-    pub fn new(cfg: &Config, executor: &ThreadPool, db: E) -> ImportModeSwitcher<E> {
+impl ImportModeSwitcher {
+    pub fn new(cfg: &Config) -> ImportModeSwitcher {
         fn mf(_cf: &str, _name: &str, _v: f64) {}
 
         let timeout = cfg.import_mode_timeout.0;
+        let is_import = Arc::new(AtomicBool::new(false));
         let inner = Arc::new(Mutex::new(ImportModeSwitcherInner {
-            mode: SwitchMode::Normal,
-            backup_db_options: ImportModeDBOptions::new(),
+            is_import: is_import.clone(),
+            backup_db_options: ImportModeDbOptions::new(),
             backup_cf_options: Vec::new(),
             timeout,
             next_check: Instant::now() + timeout,
-            db,
             metrics_fn: mf,
         }));
+        ImportModeSwitcher { inner, is_import }
+    }
 
+    pub fn start<E: KvEngine>(&self, executor: &Handle, db: E) {
         // spawn a background future to put TiKV back into normal mode after timeout
+        let inner = self.inner.clone();
         let switcher = Arc::downgrade(&inner);
         let timer_loop = async move {
             // loop until the switcher has been dropped
@@ -95,10 +99,10 @@ impl<E: KvEngine> ImportModeSwitcher<E> {
                     let mut switcher = switcher.lock().unwrap();
                     let now = Instant::now();
                     if now >= switcher.next_check {
-                        if switcher.mode == SwitchMode::Import {
+                        if switcher.is_import.load(Ordering::Acquire) {
                             let mf = switcher.metrics_fn;
-                            if switcher.enter_normal_mode(mf).is_err() {
-                                error!("failed to put TiKV back into normal mode");
+                            if let Err(e) = switcher.enter_normal_mode(&db, mf) {
+                                error!(?e; "failed to put TiKV back into normal mode");
                             }
                         }
                         switcher.next_check = now + switcher.timeout
@@ -113,33 +117,38 @@ impl<E: KvEngine> ImportModeSwitcher<E> {
                 }
             }
         };
-        executor.spawn_ok(timer_loop);
-
-        ImportModeSwitcher { inner }
+        executor.spawn(timer_loop);
     }
 
-    pub fn enter_normal_mode(&mut self, mf: RocksDBMetricsFn) -> Result<()> {
-        self.inner.lock().unwrap().enter_normal_mode(mf)
+    pub fn enter_normal_mode<E: KvEngine>(&self, db: &E, mf: RocksDbMetricsFn) -> Result<bool> {
+        if !self.is_import.load(Ordering::Acquire) {
+            return Ok(false);
+        }
+        self.inner.lock().unwrap().enter_normal_mode(db, mf)
     }
 
-    pub fn enter_import_mode(&mut self, mf: RocksDBMetricsFn) -> Result<()> {
+    pub fn enter_import_mode<E: KvEngine>(&self, db: &E, mf: RocksDbMetricsFn) -> Result<bool> {
         let mut inner = self.inner.lock().unwrap();
-        inner.enter_import_mode(mf)?;
+        let ret = inner.enter_import_mode(db, mf)?;
         inner.next_check = Instant::now() + inner.timeout;
         inner.metrics_fn = mf;
-        Ok(())
+        Ok(ret)
     }
 
     pub fn get_mode(&self) -> SwitchMode {
-        self.inner.lock().unwrap().get_mode()
+        if self.is_import.load(Ordering::Acquire) {
+            SwitchMode::Import
+        } else {
+            SwitchMode::Normal
+        }
     }
 }
 
-struct ImportModeDBOptions {
+struct ImportModeDbOptions {
     max_background_jobs: i32,
 }
 
-impl ImportModeDBOptions {
+impl ImportModeDbOptions {
     fn new() -> Self {
         Self {
             max_background_jobs: 32,
@@ -152,9 +161,9 @@ impl ImportModeDBOptions {
         }
     }
 
-    fn new_options(db: &impl KvEngine) -> ImportModeDBOptions {
+    fn new_options(db: &impl KvEngine) -> ImportModeDbOptions {
         let db_opts = db.get_db_options();
-        ImportModeDBOptions {
+        ImportModeDbOptions {
             max_background_jobs: db_opts.get_max_background_jobs(),
         }
     }
@@ -170,14 +179,14 @@ impl ImportModeDBOptions {
     }
 }
 
-struct ImportModeCFOptions {
-    level0_stop_writes_trigger: u32,
-    level0_slowdown_writes_trigger: u32,
+struct ImportModeCfOptions {
+    level0_stop_writes_trigger: i32,
+    level0_slowdown_writes_trigger: i32,
     soft_pending_compaction_bytes_limit: u64,
     hard_pending_compaction_bytes_limit: u64,
 }
 
-impl ImportModeCFOptions {
+impl ImportModeCfOptions {
     fn optimized_for_import_mode(&self) -> Self {
         Self {
             level0_stop_writes_trigger: self.level0_stop_writes_trigger.max(1 << 30),
@@ -187,10 +196,10 @@ impl ImportModeCFOptions {
         }
     }
 
-    fn new_options(db: &impl KvEngine, cf_name: &str) -> ImportModeCFOptions {
+    fn new_options(db: &impl KvEngine, cf_name: &str) -> ImportModeCfOptions {
         let cf_opts = db.get_options_cf(cf_name).unwrap(); //FIXME unwrap
 
-        ImportModeCFOptions {
+        ImportModeCfOptions {
             level0_stop_writes_trigger: cf_opts.get_level_zero_stop_writes_trigger(),
             level0_slowdown_writes_trigger: cf_opts.get_level_zero_slowdown_writes_trigger(),
             soft_pending_compaction_bytes_limit: cf_opts.get_soft_pending_compaction_bytes_limit(),
@@ -198,7 +207,7 @@ impl ImportModeCFOptions {
         }
     }
 
-    fn set_options(&self, db: &impl KvEngine, cf_name: &str, mf: RocksDBMetricsFn) -> Result<()> {
+    fn set_options(&self, db: &impl KvEngine, cf_name: &str, mf: RocksDbMetricsFn) -> Result<()> {
         let opts = [
             (
                 "level0_stop_writes_trigger".to_owned(),
@@ -231,19 +240,19 @@ impl ImportModeCFOptions {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
-    use engine_traits::KvEngine;
-    use futures::executor::ThreadPoolBuilder;
     use std::thread;
+
+    use engine_traits::{KvEngine, CF_DEFAULT};
     use tempfile::Builder;
     use test_sst_importer::{new_test_engine, new_test_engine_with_options};
     use tikv_util::config::ReadableDuration;
 
+    use super::*;
+
     fn check_import_options<E>(
         db: &E,
-        expected_db_opts: &ImportModeDBOptions,
-        expected_cf_opts: &ImportModeCFOptions,
+        expected_db_opts: &ImportModeDbOptions,
+        expected_cf_opts: &ImportModeCfOptions,
     ) where
         E: KvEngine,
     {
@@ -280,36 +289,37 @@ mod tests {
             .prefix("test_import_mode_switcher")
             .tempdir()
             .unwrap();
-        let db = new_test_engine(temp_dir.path().to_str().unwrap(), &["a", "b"]);
+        let db = new_test_engine(temp_dir.path().to_str().unwrap(), &[CF_DEFAULT, "a", "b"]);
 
-        let normal_db_options = ImportModeDBOptions::new_options(&db);
+        let normal_db_options = ImportModeDbOptions::new_options(&db);
         let import_db_options = normal_db_options.optimized_for_import_mode();
-        let normal_cf_options = ImportModeCFOptions::new_options(&db, "default");
+        let normal_cf_options = ImportModeCfOptions::new_options(&db, "default");
         let import_cf_options = normal_cf_options.optimized_for_import_mode();
 
         assert!(
             import_cf_options.level0_stop_writes_trigger
                 > normal_cf_options.level0_stop_writes_trigger
         );
-
+        assert_eq!(import_cf_options.hard_pending_compaction_bytes_limit, 0);
+        assert_eq!(import_cf_options.soft_pending_compaction_bytes_limit, 0);
         fn mf(_cf: &str, _name: &str, _v: f64) {}
 
         let cfg = Config::default();
-        let threads = ThreadPoolBuilder::new()
-            .pool_size(cfg.num_threads)
-            .name_prefix("sst-importer")
-            .create()
+        let threads = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
             .unwrap();
 
-        let mut switcher = ImportModeSwitcher::new(&cfg, &threads, db.clone());
+        let switcher = ImportModeSwitcher::new(&cfg);
+        switcher.start(threads.handle(), db.clone());
         check_import_options(&db, &normal_db_options, &normal_cf_options);
-        switcher.enter_import_mode(mf).unwrap();
+        assert!(switcher.enter_import_mode(&db, mf).unwrap());
         check_import_options(&db, &import_db_options, &import_cf_options);
-        switcher.enter_import_mode(mf).unwrap();
+        assert!(!switcher.enter_import_mode(&db, mf).unwrap());
         check_import_options(&db, &import_db_options, &import_cf_options);
-        switcher.enter_normal_mode(mf).unwrap();
+        assert!(switcher.enter_normal_mode(&db, mf).unwrap());
         check_import_options(&db, &normal_db_options, &normal_cf_options);
-        switcher.enter_normal_mode(mf).unwrap();
+        assert!(!switcher.enter_normal_mode(&db, mf).unwrap());
         check_import_options(&db, &normal_db_options, &normal_cf_options);
     }
 
@@ -319,11 +329,11 @@ mod tests {
             .prefix("test_import_mode_timeout")
             .tempdir()
             .unwrap();
-        let db = new_test_engine(temp_dir.path().to_str().unwrap(), &["a", "b"]);
+        let db = new_test_engine(temp_dir.path().to_str().unwrap(), &[CF_DEFAULT, "a", "b"]);
 
-        let normal_db_options = ImportModeDBOptions::new_options(&db);
+        let normal_db_options = ImportModeDbOptions::new_options(&db);
         let import_db_options = normal_db_options.optimized_for_import_mode();
-        let normal_cf_options = ImportModeCFOptions::new_options(&db, "default");
+        let normal_cf_options = ImportModeCfOptions::new_options(&db, "default");
         let import_cf_options = normal_cf_options.optimized_for_import_mode();
 
         fn mf(_cf: &str, _name: &str, _v: f64) {}
@@ -332,18 +342,20 @@ mod tests {
             import_mode_timeout: ReadableDuration::millis(300),
             ..Config::default()
         };
-        let threads = ThreadPoolBuilder::new()
-            .pool_size(cfg.num_threads)
-            .name_prefix("sst-importer")
-            .create()
+
+        let threads = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
             .unwrap();
 
-        let mut switcher = ImportModeSwitcher::new(&cfg, &threads, db.clone());
+        let switcher = ImportModeSwitcher::new(&cfg);
+        switcher.start(threads.handle(), db.clone());
         check_import_options(&db, &normal_db_options, &normal_cf_options);
-        switcher.enter_import_mode(mf).unwrap();
+        switcher.enter_import_mode(&db, mf).unwrap();
         check_import_options(&db, &import_db_options, &import_cf_options);
 
         thread::sleep(Duration::from_secs(1));
+        threads.block_on(tokio::task::yield_now());
 
         check_import_options(&db, &normal_db_options, &normal_cf_options);
     }
@@ -361,7 +373,7 @@ mod tests {
             |_, opt| opt.set_level_zero_stop_writes_trigger(2_000_000_000),
         );
 
-        let normal_cf_options = ImportModeCFOptions::new_options(&db, "default");
+        let normal_cf_options = ImportModeCfOptions::new_options(&db, "default");
         assert_eq!(normal_cf_options.level0_stop_writes_trigger, 2_000_000_000);
         let import_cf_options = normal_cf_options.optimized_for_import_mode();
         assert_eq!(import_cf_options.level0_stop_writes_trigger, 2_000_000_000);

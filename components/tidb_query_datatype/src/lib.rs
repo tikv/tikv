@@ -5,11 +5,8 @@
 #![feature(proc_macro_hygiene)]
 #![feature(min_specialization)]
 #![feature(test)]
-#![feature(decl_macro)]
 #![feature(str_internals)]
 
-#[macro_use]
-extern crate failure;
 #[macro_use]
 extern crate num_derive;
 #[macro_use]
@@ -30,8 +27,7 @@ pub mod prelude {
     pub use super::def::FieldTypeAccessor;
 }
 
-pub use self::def::*;
-pub use self::error::*;
+pub use self::{def::*, error::*};
 
 #[cfg(test)]
 extern crate test;

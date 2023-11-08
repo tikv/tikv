@@ -3,35 +3,36 @@
 mod file_log;
 mod formatter;
 
-use std::env;
-use std::fmt;
-use std::io::{self, BufWriter};
-use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Mutex;
-use std::thread;
+use std::{
+    env, fmt,
+    io::{self, BufWriter},
+    num::NonZeroU64,
+    path::{Path, PathBuf},
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Mutex,
+    },
+    thread,
+};
 
 use log::{self, SetLoggerError};
-use slog::{self, Drain, FnValue, Key, OwnedKVList, PushFnValue, Record, KV};
-use slog_async::{Async, OverflowStrategy};
+use slog::{
+    self, slog_o, Drain, FnValue, Key, OwnedKV, OwnedKVList, PushFnValue, Record,
+    SendSyncRefUnwindSafeKV, KV,
+};
+pub use slog::{FilterFn, Level};
+use slog_async::{Async, AsyncGuard, OverflowStrategy};
 use slog_term::{Decorator, PlainDecorator, RecordDecorator};
 
-use self::file_log::{RotateBySize, RotateByTime, RotatingFileLogger, RotatingFileLoggerBuilder};
+use self::file_log::{RotateBySize, RotatingFileLogger, RotatingFileLoggerBuilder};
 use crate::config::{ReadableDuration, ReadableSize};
-
-pub use slog::{FilterFn, Level};
-
-// The suffix appended to the end of rotated log files by datetime log rotator
-// Warning: Diagnostics service parses log files by file name format.
-//          Remember to update the corresponding code when suffix layout is changed.
-pub const DATETIME_ROTATE_SUFFIX: &str = "%Y-%m-%d-%H:%M:%S%.f";
 
 // Default is 128.
 // Extended since blocking is set, and we don't want to block very often.
 const SLOG_CHANNEL_SIZE: usize = 10240;
 // Default is DropAndReport.
 // It is not desirable to have dropped logs in our use case.
-const SLOG_CHANNEL_OVERFLOW_STRATEGY: OverflowStrategy = OverflowStrategy::Block;
+const SLOG_CHANNEL_OVERFLOW_STRATEGY: OverflowStrategy = OverflowStrategy::Drop;
 const TIMESTAMP_FORMAT: &str = "%Y/%m/%d %H:%M:%S%.3f %:z";
 
 static LOG_LEVEL: AtomicUsize = AtomicUsize::new(usize::max_value());
@@ -56,7 +57,7 @@ where
         disabled_targets.extend(extra_modules.split(',').map(ToOwned::to_owned));
     }
 
-    let filter = move |record: &Record| {
+    let filter = move |record: &Record<'_>| {
         if !disabled_targets.is_empty() {
             // The format of the returned value from module() would like this:
             // ```
@@ -68,69 +69,93 @@ where
             //  ...
             // ```
             // Here get the highest level module name to check.
-            let module = record.module().splitn(2, "::").next().unwrap();
+            let module = record.module().split("::").next().unwrap();
             disabled_targets.iter().all(|target| target != module)
         } else {
             true
         }
     };
 
-    let logger = if use_async {
-        let drain = Async::new(LogAndFuse(drain))
+    let (logger, guard) = if use_async {
+        let (async_log, guard) = Async::new(LogAndFuse(drain))
             .chan_size(SLOG_CHANNEL_SIZE)
             .overflow_strategy(SLOG_CHANNEL_OVERFLOW_STRATEGY)
             .thread_name(thd_name!("slogger"))
-            .build()
-            .filter_level(level)
-            .fuse();
+            .build_with_guard();
+        let drain = async_log.fuse();
         let drain = SlowLogFilter {
             threshold: slow_threshold,
             inner: drain,
         };
-        let filtered = drain.filter(filter).fuse();
-        slog::Logger::root(filtered, slog_o!())
+        let filtered = GlobalLevelFilter::new(drain.filter(filter).fuse());
+
+        (slog::Logger::root(filtered, get_values()), Some(guard))
     } else {
-        let drain = LogAndFuse(Mutex::new(drain).filter_level(level));
+        let drain = LogAndFuse(Mutex::new(drain));
         let drain = SlowLogFilter {
             threshold: slow_threshold,
             inner: drain,
         };
-        let filtered = drain.filter(filter).fuse();
-        slog::Logger::root(filtered, slog_o!())
+        let filtered = GlobalLevelFilter::new(drain.filter(filter).fuse());
+        (slog::Logger::root(filtered, get_values()), None)
     };
 
-    set_global_logger(level, init_stdlog, logger)
+    set_global_logger(level, init_stdlog, logger, guard)
+}
+
+// All Drains are reference-counted by every Logger that uses them. Async drain
+// runs a worker thread and sends a termination (and flushing) message only when
+// being dropped. Because of that it's actually quite easy to have a left-over
+// reference to a Async drain, when terminating: especially on panics or similar
+// unwinding event. Typically it's caused be a leftover reference like Logger in
+// thread-local variable, global variable, or a thread that is not being joined
+// on. So use AsyncGuard to send a flush and termination message to a Async
+// worker thread, and wait for it to finish on the guard's own drop.
+lazy_static::lazy_static! {
+    pub static ref ASYNC_LOGGER_GUARD: Mutex<Option<AsyncGuard>> = Mutex::new(None);
 }
 
 pub fn set_global_logger(
     level: Level,
     init_stdlog: bool,
     logger: slog::Logger,
+    guard: Option<AsyncGuard>,
 ) -> Result<(), SetLoggerError> {
     slog_global::set_global(logger);
     if init_stdlog {
         slog_global::redirect_std_log(Some(level))?;
         grpcio::redirect_log();
     }
+    *ASYNC_LOGGER_GUARD.lock().unwrap() = guard;
 
     Ok(())
+}
+
+// Terminates the current process gracefully by dropping async guard and forcing
+// a flush of logs to ensure messages aren't lost. For more information please
+// refer to:
+//   https://docs.rs/slog-async/2.7.0/slog_async/#beware-of-stdprocessexit
+pub fn exit_process_gracefully(code: i32) -> ! {
+    // force async logger to flush by dropping its guard.
+    *ASYNC_LOGGER_GUARD.lock().unwrap() = None;
+    std::process::exit(code);
 }
 
 /// Constructs a new file writer which outputs log to a file at the specified
 /// path. The file writer rotates for the specified timespan.
 pub fn file_writer<N>(
     path: impl AsRef<Path>,
-    rotation_timespan: ReadableDuration,
-    rotation_size: ReadableSize,
+    rotation_size: u64,
+    max_backups: usize,
+    max_age: u64,
     rename: N,
 ) -> io::Result<BufWriter<RotatingFileLogger>>
 where
     N: 'static + Send + Fn(&Path) -> io::Result<PathBuf>,
 {
     let logger = BufWriter::new(
-        RotatingFileLoggerBuilder::new(path, rename)
-            .add_rotator(RotateByTime::new(rotation_timespan))
-            .add_rotator(RotateBySize::new(rotation_size))
+        RotatingFileLoggerBuilder::new(path, rename, max_backups, ReadableDuration::days(max_age))
+            .add_rotator(RotateBySize::new(ReadableSize::mb(rotation_size)))
             .build()?,
     );
     Ok(logger)
@@ -142,29 +167,38 @@ pub fn term_writer() -> io::Stderr {
 }
 
 /// Formats output logs to "TiDB Log Format".
-pub fn text_format<W>(io: W) -> TikvFormat<PlainDecorator<W>>
+pub fn text_format<W>(io: W, enable_timestamp: bool) -> TikvFormat<PlainDecorator<W>>
 where
     W: io::Write,
 {
     let decorator = PlainDecorator::new(io);
-    TikvFormat::new(decorator)
+    TikvFormat::new(decorator, enable_timestamp)
 }
 
-/// Same as text_format, but is adjusted to be closer to vanilla RocksDB logger format.
-pub fn rocks_text_format<W>(io: W) -> RocksFormat<PlainDecorator<W>>
+pub fn slow_log_text_format<W>(io: W) -> TikvFormat<PlainDecorator<W>>
 where
     W: io::Write,
 {
     let decorator = PlainDecorator::new(io);
-    RocksFormat::new(decorator)
+    TikvFormat::new(decorator, true)
+}
+
+/// Same as text_format, but is adjusted to be closer to vanilla RocksDB logger
+/// format.
+pub fn rocks_text_format<W>(io: W, enable_timestamp: bool) -> RocksFormat<PlainDecorator<W>>
+where
+    W: io::Write,
+{
+    let decorator = PlainDecorator::new(io);
+    RocksFormat::new(decorator, enable_timestamp)
 }
 
 /// Formats output logs to JSON format.
-pub fn json_format<W>(io: W) -> slog_json::Json<W>
+pub fn json_format<W>(io: W, enable_timestamp: bool) -> slog_json::Json<W>
 where
     W: io::Write,
 {
-    slog_json::Json::new(io)
+    let builder = slog_json::Json::new(io)
         .set_newlines(true)
         .set_flush(true)
         .add_key_value(slog_o!(
@@ -178,14 +212,26 @@ where
                 record.line(),
             ))),
             "level" => FnValue(|record| get_unified_log_level(record.level())),
-            "time" => FnValue(|_| chrono::Local::now().format(TIMESTAMP_FORMAT).to_string()),
-        ))
-        .build()
+
+        ));
+    if enable_timestamp {
+        builder.add_key_value(slog_o!("time" => FnValue(|_| chrono::Local::now().format(TIMESTAMP_FORMAT).to_string()),)).build()
+    } else {
+        builder.build()
+    }
+}
+
+pub fn slow_log_json_format<W>(io: W) -> slog_json::Json<W>
+where
+    W: io::Write,
+{
+    json_format(io, true)
 }
 
 pub fn get_level_by_string(lv: &str) -> Option<Level> {
     match &*lv.to_owned().to_lowercase() {
-        "critical" => Some(Level::Critical),
+        // We support `critical` due to legacy.
+        "fatal" | "critical" => Some(Level::Critical),
         "error" => Some(Level::Error),
         // We support `warn` due to legacy.
         "warning" | "warn" => Some(Level::Warning),
@@ -196,13 +242,13 @@ pub fn get_level_by_string(lv: &str) -> Option<Level> {
     }
 }
 
-// The `to_string()` function of `slog::Level` produces values like `erro` and `trce` instead of
-// the full words. This produces the full word.
+// The `to_string()` function of `slog::Level` produces values like `erro` and
+// `trce` instead of the full words. This produces the full word.
 pub fn get_string_by_level(lv: Level) -> &'static str {
     match lv {
-        Level::Critical => "critical",
+        Level::Critical => "fatal",
         Level::Error => "error",
-        Level::Warning => "warning",
+        Level::Warning => "warn",
         Level::Debug => "debug",
         Level::Trace => "trace",
         Level::Info => "info",
@@ -246,7 +292,9 @@ pub fn get_log_level() -> Option<Level> {
 }
 
 pub fn set_log_level(new_level: Level) {
-    LOG_LEVEL.store(new_level.as_usize(), Ordering::SeqCst)
+    LOG_LEVEL.store(new_level.as_usize(), Ordering::SeqCst);
+    // also change std log to new level.
+    let _ = slog_global::redirect_std_log(Some(new_level));
 }
 
 pub struct TikvFormat<D>
@@ -254,14 +302,18 @@ where
     D: Decorator,
 {
     decorator: D,
+    enable_timestamp: bool,
 }
 
 impl<D> TikvFormat<D>
 where
     D: Decorator,
 {
-    pub fn new(decorator: D) -> Self {
-        Self { decorator }
+    pub fn new(decorator: D, enable_timestamp: bool) -> Self {
+        Self {
+            decorator,
+            enable_timestamp,
+        }
     }
 }
 
@@ -275,7 +327,7 @@ where
     fn log(&self, record: &Record<'_>, values: &OwnedKVList) -> Result<Self::Ok, Self::Err> {
         if record.level().as_usize() <= LOG_LEVEL.load(Ordering::Relaxed) {
             self.decorator.with_record(record, values, |decorator| {
-                write_log_header(decorator, record)?;
+                write_log_header(decorator, record, self.enable_timestamp)?;
                 write_log_msg(decorator, record)?;
                 write_log_fields(decorator, record, values)?;
 
@@ -297,14 +349,18 @@ where
     D: Decorator,
 {
     decorator: D,
+    enable_timestamp: bool,
 }
 
 impl<D> RocksFormat<D>
 where
     D: Decorator,
 {
-    pub fn new(decorator: D) -> Self {
-        Self { decorator }
+    pub fn new(decorator: D, enable_timestamp: bool) -> Self {
+        Self {
+            decorator,
+            enable_timestamp,
+        }
     }
 }
 
@@ -318,13 +374,15 @@ where
     fn log(&self, record: &Record<'_>, values: &OwnedKVList) -> Result<Self::Ok, Self::Err> {
         self.decorator.with_record(record, values, |decorator| {
             if !record.tag().ends_with("_header") {
-                decorator.start_timestamp()?;
-                write!(
-                    decorator,
-                    "[{}][{}]",
-                    chrono::Local::now().format(TIMESTAMP_FORMAT),
-                    thread::current().id().as_u64(),
-                )?;
+                if self.enable_timestamp {
+                    decorator.start_timestamp()?;
+                    write!(
+                        decorator,
+                        "[{}][{}]",
+                        chrono::Local::now().format(TIMESTAMP_FORMAT),
+                        thread::current().id().as_u64(),
+                    )?;
+                }
                 decorator.start_level()?;
                 write!(decorator, "[{}]", get_unified_log_level(record.level()))?;
                 decorator.start_whitespace()?;
@@ -354,23 +412,22 @@ where
     type Err = slog::Never;
 
     fn log(&self, record: &Record<'_>, values: &OwnedKVList) -> Result<Self::Ok, Self::Err> {
-        if record.level().as_usize() <= LOG_LEVEL.load(Ordering::Relaxed) {
-            if let Err(e) = self.0.log(record, values) {
-                let fatal_drainer = Mutex::new(text_format(term_writer())).ignore_res();
-                fatal_drainer.log(record, values).unwrap();
-                let fatal_logger = slog::Logger::root(fatal_drainer, slog_o!());
-                slog::slog_crit!(
-                    fatal_logger,
-                    "logger encountered error";
-                    "err" => %e,
-                );
-            }
+        if let Err(e) = self.0.log(record, values) {
+            let fatal_drainer = Mutex::new(text_format(term_writer(), true)).ignore_res();
+            fatal_drainer.log(record, values).unwrap();
+            let fatal_logger = slog::Logger::root(fatal_drainer, slog_o!());
+            slog::slog_crit!(
+                fatal_logger,
+                "logger encountered error";
+                "err" => %e,
+            );
         }
         Ok(())
     }
 }
 
-// Filters logs with operation cost lower than threshold. Otherwise output logs to inner drainer
+// Filters logs with operation cost lower than threshold. Otherwise output logs
+// to inner drainer
 struct SlowLogFilter<D> {
     threshold: u64,
     inner: D,
@@ -383,7 +440,7 @@ where
     type Ok = ();
     type Err = slog::Never;
 
-    fn log(&self, record: &Record, values: &OwnedKVList) -> Result<Self::Ok, Self::Err> {
+    fn log(&self, record: &Record<'_>, values: &OwnedKVList) -> Result<Self::Ok, Self::Err> {
         if record.tag() == "slow_log" {
             let mut s = SlowCostSerializer { cost: None };
             let kv = record.kv();
@@ -396,6 +453,36 @@ where
             }
         }
         self.inner.log(record, values)
+    }
+}
+
+// GlobalLevelFilter is a filter that base on the global `LOG_LEVEL`'s value.
+pub struct GlobalLevelFilter<D: Drain>(pub D);
+
+impl<D: Drain> GlobalLevelFilter<D> {
+    /// Create `LevelFilter`
+    pub fn new(drain: D) -> Self {
+        Self(drain)
+    }
+}
+
+impl<D> Drain for GlobalLevelFilter<D>
+where
+    D: Drain,
+    D::Ok: Default,
+{
+    type Ok = D::Ok;
+    type Err = D::Err;
+    fn log(&self, record: &Record<'_>, logger_values: &OwnedKVList) -> Result<Self::Ok, Self::Err> {
+        if record.level().as_usize() <= LOG_LEVEL.load(Ordering::Relaxed) {
+            self.0.log(record, logger_values)
+        } else {
+            Ok(Default::default())
+        }
+    }
+    #[inline]
+    fn is_enabled(&self, level: Level) -> bool {
+        level.as_usize() <= LOG_LEVEL.load(Ordering::Relaxed) && self.0.is_enabled(level)
     }
 }
 
@@ -423,7 +510,7 @@ pub struct LogCost(pub u64);
 impl slog::Value for LogCost {
     fn serialize(
         &self,
-        _record: &Record,
+        _record: &Record<'_>,
         key: Key,
         serializer: &mut dyn slog::Serializer,
     ) -> slog::Result {
@@ -460,7 +547,7 @@ where
     type Ok = ();
     type Err = io::Error;
 
-    fn log(&self, record: &Record, values: &OwnedKVList) -> Result<Self::Ok, Self::Err> {
+    fn log(&self, record: &Record<'_>, values: &OwnedKVList) -> Result<Self::Ok, Self::Err> {
         let tag = record.tag();
         if self.slow.is_some() && tag.starts_with("slow_log") {
             self.slow.as_ref().unwrap().log(record, values)
@@ -475,13 +562,19 @@ where
 }
 
 /// Writes log header to decorator. See [log-header](https://github.com/tikv/rfcs/blob/master/text/2018-12-19-unified-log-format.md#log-header-section)
-fn write_log_header(decorator: &mut dyn RecordDecorator, record: &Record<'_>) -> io::Result<()> {
-    decorator.start_timestamp()?;
-    write!(
-        decorator,
-        "[{}]",
-        chrono::Local::now().format(TIMESTAMP_FORMAT)
-    )?;
+fn write_log_header(
+    decorator: &mut dyn RecordDecorator,
+    record: &Record<'_>,
+    enable_timestamp: bool,
+) -> io::Result<()> {
+    if enable_timestamp {
+        decorator.start_timestamp()?;
+        write!(
+            decorator,
+            "[{}]",
+            chrono::Local::now().format(TIMESTAMP_FORMAT)
+        )?;
+    }
 
     decorator.start_whitespace()?;
     write!(decorator, " ")?;
@@ -534,9 +627,21 @@ fn write_log_fields(
 
     values.serialize(record, &mut serializer)?;
 
-    serializer.finish()?;
+    serializer.finish();
 
     Ok(())
+}
+
+fn format_thread_id(thread_id: NonZeroU64) -> String {
+    format!("{:#0x}", thread_id)
+}
+
+fn get_values() -> OwnedKV<impl SendSyncRefUnwindSafeKV> {
+    slog_o!(
+        "thread_id" => FnValue(|_| {
+            format_thread_id(std::thread::current().id().as_u64())
+        })
+    )
 }
 
 struct Serializer<'a> {
@@ -554,9 +659,7 @@ impl<'a> Serializer<'a> {
         Ok(())
     }
 
-    fn finish(self) -> io::Result<()> {
-        Ok(())
-    }
+    fn finish(self) {}
 }
 
 impl<'a> Drop for Serializer<'a> {
@@ -592,18 +695,17 @@ impl<'a> slog::Serializer for Serializer<'a> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::{cell::RefCell, io, io::Write, str::from_utf8, sync::RwLock, time::Duration};
+
     use chrono::DateTime;
     use regex::Regex;
     use slog::{slog_debug, slog_info, slog_warn};
     use slog_term::PlainSyncDecorator;
-    use std::cell::RefCell;
-    use std::io;
-    use std::io::Write;
-    use std::str::from_utf8;
 
-    // Due to the requirements of `Logger::root*` on a writer with a 'static lifetime
-    // we need to make a Thread Local,
+    use super::*;
+
+    // Due to the requirements of `Logger::root*` on a writer with a 'static
+    // lifetime we need to make a Thread Local,
     // and implement a custom writer.
     thread_local! {
         static BUFFER: RefCell<Vec<u8>> = RefCell::new(Vec::new());
@@ -619,8 +721,6 @@ mod tests {
     }
 
     fn log_format_cases(logger: slog::Logger) {
-        use std::time::Duration;
-
         // Empty message is not recommend, just for test purpose here.
         slog_info!(logger, "");
         slog_info!(logger, "Welcome");
@@ -647,9 +747,9 @@ mod tests {
         );
 
         slog_warn!(logger, "Type";
-            "Counter" => std::f64::NAN,
-            "Score" => std::f64::INFINITY,
-            "Other" => std::f64::NEG_INFINITY
+            "Counter" => f64::NAN,
+            "Score" => f64::INFINITY,
+            "Other" => f64::NEG_INFINITY
         );
 
         let none: Option<u8> = None;
@@ -676,26 +776,30 @@ mod tests {
     #[test]
     fn test_log_format_text() {
         let decorator = PlainSyncDecorator::new(TestWriter);
-        let drain = TikvFormat::new(decorator).fuse();
-        let logger = slog::Logger::root_typed(drain, slog_o!()).into_erased();
+        let drain = TikvFormat::new(decorator, true).fuse();
+        let logger = slog::Logger::root_typed(drain, get_values()).into_erased();
 
         log_format_cases(logger);
 
-        let expect = r#"[2019/01/15 13:40:39.619 +08:00] [INFO] [mod.rs:469] []
-[2019/01/15 13:40:39.619 +08:00] [INFO] [mod.rs:469] [Welcome]
-[2019/01/15 13:40:39.619 +08:00] [INFO] [mod.rs:470] ["Welcome TiKV"]
-[2019/01/15 13:40:39.619 +08:00] [INFO] [mod.rs:471] [欢迎]
-[2019/01/15 13:40:39.619 +08:00] [INFO] [mod.rs:472] ["欢迎 TiKV"]
-[2019/01/15 13:40:39.615 +08:00] [INFO] [mod.rs:455] ["failed to fetch URL"] [backoff=3s] [attempt=3] [url=http://example.com]
-[2019/01/15 13:40:39.619 +08:00] [INFO] [mod.rs:460] ["failed to \"fetch\" [URL]: http://example.com"]
-[2019/01/15 13:40:39.619 +08:00] [DEBUG] [mod.rs:463] ["Slow query"] ["process keys"=1500] [duration=123ns] [sql="SELECT * FROM TABLE WHERE ID=\"abc\""]
-[2019/01/15 13:40:39.619 +08:00] [WARN] [mod.rs:473] [Type] [Other=-inf] [Score=inf] [Counter=NaN]
-[2019/01/16 16:56:04.854 +08:00] [INFO] [mod.rs:391] ["more type tests"] [str_array="[\"💖\", \"�\", \"☺☻☹\", \"日a本b語ç日ð本Ê語þ日¥本¼語i日©\", \"日a本b語ç日ð本Ê語þ日¥本¼語i日©日a本b語ç日ð本Ê語þ日¥本¼語i日©日a本b語ç日ð本Ê語þ日¥本¼語i日©\", \"\\\\x80\\\\x80\\\\x80\\\\x80\", \"<car><mirror>XML</mirror></car>\"]"] [u8=34] [is_None=None] [is_false=false] [is_true=true] ["store ids"="[1, 2, 3]"] [url-peers="[\"peer1\", \"peer 2\"]"] [urls="[\"http://xxx.com:2347\", \"http://xxx.com:2432\"]"] [field2="in quote"] [field1=no_quote]
-"#;
+        let thread_id = format_thread_id(std::thread::current().id().as_u64());
+        let expect = format!(
+            r#"[2019/01/15 13:40:39.619 +08:00] [INFO] [mod.rs:469] [] [thread_id={0}]
+[2019/01/15 13:40:39.619 +08:00] [INFO] [mod.rs:469] [Welcome] [thread_id={0}]
+[2019/01/15 13:40:39.619 +08:00] [INFO] [mod.rs:470] ["Welcome TiKV"] [thread_id={0}]
+[2019/01/15 13:40:39.619 +08:00] [INFO] [mod.rs:471] [欢迎] [thread_id={0}]
+[2019/01/15 13:40:39.619 +08:00] [INFO] [mod.rs:472] ["欢迎 TiKV"] [thread_id={0}]
+[2019/01/15 13:40:39.615 +08:00] [INFO] [mod.rs:455] ["failed to fetch URL"] [backoff=3s] [attempt=3] [url=http://example.com] [thread_id={0}]
+[2019/01/15 13:40:39.619 +08:00] [INFO] [mod.rs:460] ["failed to \"fetch\" [URL]: http://example.com"] [thread_id={0}]
+[2019/01/15 13:40:39.619 +08:00] [DEBUG] [mod.rs:463] ["Slow query"] ["process keys"=1500] [duration=123ns] [sql="SELECT * FROM TABLE WHERE ID=\"abc\""] [thread_id={0}]
+[2019/01/15 13:40:39.619 +08:00] [WARN] [mod.rs:473] [Type] [Other=-inf] [Score=inf] [Counter=NaN] [thread_id={0}]
+[2019/01/16 16:56:04.854 +08:00] [INFO] [mod.rs:391] ["more type tests"] [str_array="[\"💖\", \"�\", \"☺☻☹\", \"日a本b語ç日ð本Ê語þ日¥本¼語i日©\", \"日a本b語ç日ð本Ê語þ日¥本¼語i日©日a本b語ç日ð本Ê語þ日¥本¼語i日©日a本b語ç日ð本Ê語þ日¥本¼語i日©\", \"\\\\x80\\\\x80\\\\x80\\\\x80\", \"<car><mirror>XML</mirror></car>\"]"] [u8=34] [is_None=None] [is_false=false] [is_true=true] ["store ids"="[1, 2, 3]"] [url-peers="[\"peer1\", \"peer 2\"]"] [urls="[\"http://xxx.com:2347\", \"http://xxx.com:2432\"]"] [field2="in quote"] [field1=no_quote] [thread_id={0}]
+"#,
+            thread_id
+        );
 
         BUFFER.with(|buffer| {
             let mut buffer = buffer.borrow_mut();
-            let output = from_utf8(&*buffer).unwrap();
+            let output = from_utf8(&buffer).unwrap();
             assert_eq!(output.lines().count(), expect.lines().count());
 
             let re = Regex::new(r"(?P<datetime>\[.*?\])\s(?P<level>\[.*?\])\s(?P<source_file>\[.*?\])\s(?P<msg>\[.*?\])\s?(?P<kvs>\[.*\])?").unwrap();
@@ -724,26 +828,30 @@ mod tests {
     #[test]
     fn test_log_format_json() {
         use serde_json::{from_str, Value};
-        let drain = Mutex::new(json_format(TestWriter)).map(slog::Fuse);
-        let logger = slog::Logger::root_typed(drain, slog_o!()).into_erased();
+        let drain = Mutex::new(json_format(TestWriter, true)).map(slog::Fuse);
+        let logger = slog::Logger::root_typed(drain, get_values()).into_erased();
 
         log_format_cases(logger);
 
-        let expect = r#"{"time":"2020/05/16 15:49:52.449 +08:00","level":"INFO","caller":"mod.rs:469","message":""}
-{"time":"2020/05/16 15:49:52.450 +08:00","level":"INFO","caller":"mod.rs:469","message":"Welcome"}
-{"time":"2020/05/16 15:49:52.450 +08:00","level":"INFO","caller":"mod.rs:470","message":"Welcome TiKV"}
-{"time":"2020/05/16 15:49:52.450 +08:00","level":"INFO","caller":"mod.rs:471","message":"欢迎"}
-{"time":"2020/05/16 15:49:52.450 +08:00","level":"INFO","caller":"mod.rs:472","message":"欢迎 TiKV"}
-{"time":"2020/05/16 15:49:52.450 +08:00","level":"INFO","caller":"mod.rs:455","message":"failed to fetch URL","backoff":"3s","attempt":3,"url":"http://example.com"}
-{"time":"2020/05/16 15:49:52.450 +08:00","level":"INFO","caller":"mod.rs:460","message":"failed to \"fetch\" [URL]: http://example.com"}
-{"time":"2020/05/16 15:49:52.450 +08:00","level":"DEBUG","caller":"mod.rs:463","message":"Slow query","process keys":1500,"duration":"123ns","sql":"SELECT * FROM TABLE WHERE ID=\"abc\""}
-{"time":"2020/05/16 15:49:52.450 +08:00","level":"WARN","caller":"mod.rs:473","message":"Type","Other":null,"Score":null,"Counter":null}
-{"time":"2020/05/16 15:49:52.451 +08:00","level":"INFO","caller":"mod.rs:391","message":"more type tests","str_array":"[\"💖\", \"�\", \"☺☻☹\", \"日a本b語ç日ð本Ê語þ日¥本¼語i日©\", \"日a本b語ç日ð本Ê語þ日¥本¼語i日©日a本b語ç日ð本Ê語þ日¥本¼語i日©日a本b語ç日ð本Ê語þ日¥本¼語i日©\", \"\\\\x80\\\\x80\\\\x80\\\\x80\", \"<car><mirror>XML</mirror></car>\"]","u8":34,"is_None":null,"is_false":false,"is_true":true,"store ids":"[1, 2, 3]","url-peers":"[\"peer1\", \"peer 2\"]","urls":"[\"http://xxx.com:2347\", \"http://xxx.com:2432\"]","field2":"in quote","field1":"no_quote"}
-"#;
+        let thread_id = format_thread_id(std::thread::current().id().as_u64());
+        let expect = format!(
+            r#"{{"time":"2020/05/16 15:49:52.449 +08:00","level":"INFO","caller":"mod.rs:469","message":"","thread_id":"{0}"}}
+{{"time":"2020/05/16 15:49:52.450 +08:00","level":"INFO","caller":"mod.rs:469","message":"Welcome","thread_id":"{0}"}}
+{{"time":"2020/05/16 15:49:52.450 +08:00","level":"INFO","caller":"mod.rs:470","message":"Welcome TiKV","thread_id":"{0}"}}
+{{"time":"2020/05/16 15:49:52.450 +08:00","level":"INFO","caller":"mod.rs:471","message":"欢迎","thread_id":"{0}"}}
+{{"time":"2020/05/16 15:49:52.450 +08:00","level":"INFO","caller":"mod.rs:472","message":"欢迎 TiKV","thread_id":"{0}"}}
+{{"time":"2020/05/16 15:49:52.450 +08:00","level":"INFO","caller":"mod.rs:455","message":"failed to fetch URL","backoff":"3s","attempt":3,"url":"http://example.com","thread_id":"{0}"}}
+{{"time":"2020/05/16 15:49:52.450 +08:00","level":"INFO","caller":"mod.rs:460","message":"failed to \"fetch\" [URL]: http://example.com","thread_id":"{0}"}}
+{{"time":"2020/05/16 15:49:52.450 +08:00","level":"DEBUG","caller":"mod.rs:463","message":"Slow query","process keys":1500,"duration":"123ns","sql":"SELECT * FROM TABLE WHERE ID=\"abc\"","thread_id":"{0}"}}
+{{"time":"2020/05/16 15:49:52.450 +08:00","level":"WARN","caller":"mod.rs:473","message":"Type","Other":null,"Score":null,"Counter":null,"thread_id":"{0}"}}
+{{"time":"2020/05/16 15:49:52.451 +08:00","level":"INFO","caller":"mod.rs:391","message":"more type tests","str_array":"[\"💖\", \"�\", \"☺☻☹\", \"日a本b語ç日ð本Ê語þ日¥本¼語i日©\", \"日a本b語ç日ð本Ê語þ日¥本¼語i日©日a本b語ç日ð本Ê語þ日¥本¼語i日©日a本b語ç日ð本Ê語þ日¥本¼語i日©\", \"\\\\x80\\\\x80\\\\x80\\\\x80\", \"<car><mirror>XML</mirror></car>\"]","u8":34,"is_None":null,"is_false":false,"is_true":true,"store ids":"[1, 2, 3]","url-peers":"[\"peer1\", \"peer 2\"]","urls":"[\"http://xxx.com:2347\", \"http://xxx.com:2432\"]","field2":"in quote","field1":"no_quote","thread_id":"{0}"}}
+"#,
+            thread_id
+        );
 
         BUFFER.with(|buffer| {
             let mut buffer = buffer.borrow_mut();
-            let output = from_utf8(&*buffer).unwrap();
+            let output = from_utf8(&buffer).unwrap();
             assert_eq!(output.lines().count(), expect.lines().count());
 
             for (output_line, expect_line) in output.lines().zip(expect.lines()) {
@@ -765,7 +873,40 @@ mod tests {
         });
     }
 
-    /// Removes the wrapping signs, peels `"[hello]"` to `"hello"`, or peels `"(hello)"` to `"hello"`,
+    #[test]
+    fn test_global_level_filter() {
+        let decorator = PlainSyncDecorator::new(TestWriter);
+        let drain = TikvFormat::new(decorator, true).fuse();
+        let logger =
+            slog::Logger::root_typed(GlobalLevelFilter::new(drain), slog_o!()).into_erased();
+
+        let expected = "[2019/01/15 13:40:39.619 +08:00] [INFO] [mod.rs:871] [Welcome]\n";
+        let check_log = |log: &str| {
+            BUFFER.with(|buffer| {
+                let mut buffer = buffer.borrow_mut();
+                let output = from_utf8(&buffer).unwrap();
+                // only check the log len here as some field like timestamp, location may
+                // change.
+                assert_eq!(output.len(), log.len());
+                buffer.clear();
+            });
+        };
+
+        set_log_level(Level::Info);
+        slog_info!(logger, "Welcome");
+        check_log(expected);
+
+        set_log_level(Level::Warning);
+        slog_info!(logger, "Welcome");
+        check_log("");
+
+        set_log_level(Level::Info);
+        slog_info!(logger, "Welcome");
+        check_log(expected);
+    }
+
+    /// Removes the wrapping signs, peels `"[hello]"` to `"hello"`, or peels
+    /// `"(hello)"` to `"hello"`,
     fn peel(output: &str) -> &str {
         assert!(output.len() >= 2);
         &(output[1..output.len() - 1])
@@ -895,8 +1036,8 @@ mod tests {
         }
     }
 
-    struct RaftDBWriter;
-    impl Write for RaftDBWriter {
+    struct RaftDbWriter;
+    impl Write for RaftDbWriter {
         fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
             RAFTDB_BUFFER.with(|buffer| buffer.borrow_mut().write(buf))
         }
@@ -907,10 +1048,10 @@ mod tests {
 
     #[test]
     fn test_slow_log_dispatcher() {
-        let normal = TikvFormat::new(PlainSyncDecorator::new(NormalWriter));
-        let slow = TikvFormat::new(PlainSyncDecorator::new(SlowLogWriter));
-        let rocksdb = TikvFormat::new(PlainSyncDecorator::new(RocksdbLogWriter));
-        let raftdb = TikvFormat::new(PlainSyncDecorator::new(RaftDBWriter));
+        let normal = TikvFormat::new(PlainSyncDecorator::new(NormalWriter), true);
+        let slow = TikvFormat::new(PlainSyncDecorator::new(SlowLogWriter), true);
+        let rocksdb = TikvFormat::new(PlainSyncDecorator::new(RocksdbLogWriter), true);
+        let raftdb = TikvFormat::new(PlainSyncDecorator::new(RaftDbWriter), true);
         let drain = LogDispatcher::new(normal, rocksdb, raftdb, Some(slow)).fuse();
         let drain = SlowLogFilter {
             threshold: 200,
@@ -929,7 +1070,7 @@ mod tests {
         let re = Regex::new(r"(?P<datetime>\[.*?\])\s(?P<level>\[.*?\])\s(?P<source_file>\[.*?\])\s(?P<msg>\[.*?\])\s?(?P<kvs>\[.*\])?").unwrap();
         NORMAL_BUFFER.with(|buffer| {
             let buffer = buffer.borrow_mut();
-            let output = from_utf8(&*buffer).unwrap();
+            let output = from_utf8(&buffer).unwrap();
             let output_segments = re.captures(output).unwrap();
             assert_eq!(output_segments["msg"].to_owned(), r#"["Hello World"]"#);
         });
@@ -941,7 +1082,7 @@ mod tests {
 "#;
         SLOW_BUFFER.with(|buffer| {
             let buffer = buffer.borrow_mut();
-            let output = from_utf8(&*buffer).unwrap();
+            let output = from_utf8(&buffer).unwrap();
             let expect_re = Regex::new(r"(?P<msg>\[.*?\])\s?(?P<kvs>\[.*\])?").unwrap();
             assert_eq!(output.lines().count(), slow_expect.lines().count());
             for (output, expect) in output.lines().zip(slow_expect.lines()) {
@@ -954,5 +1095,49 @@ mod tests {
                 );
             }
         });
+    }
+
+    static THREAD_SAFE_BUFFER: RwLock<Vec<u8>> = RwLock::new(Vec::new());
+
+    struct ThreadSafeWriter;
+    impl Write for ThreadSafeWriter {
+        fn write(&mut self, data: &[u8]) -> io::Result<usize> {
+            let mut buffer = THREAD_SAFE_BUFFER.write().unwrap();
+            buffer.write(data)
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            let mut buffer = THREAD_SAFE_BUFFER.write().unwrap();
+            buffer.flush()
+        }
+    }
+
+    #[test]
+    fn test_threadid() {
+        let drain = TikvFormat::new(PlainSyncDecorator::new(ThreadSafeWriter), true).fuse();
+        let logger = slog::Logger::root_typed(drain, get_values()).into_erased();
+
+        slog_info!(logger, "Hello from the first thread");
+        let this_threadid = thread::current().id().as_u64();
+        let this_threadid = format_thread_id(this_threadid);
+
+        let handle = thread::spawn(move || {
+            slog_info!(logger, "Hello from the second thread");
+        });
+        let other_threadid = handle.thread().id().as_u64();
+        let other_threadid = format_thread_id(other_threadid);
+        handle.join().unwrap();
+
+        let expected = vec![this_threadid, other_threadid];
+
+        let re = Regex::new(r"\[thread_id=(.*?)\]").unwrap();
+        let buffer = THREAD_SAFE_BUFFER.read().unwrap();
+        let output = from_utf8(&buffer).unwrap();
+        let actual: Vec<&str> = output
+            .lines()
+            .map(|line| re.captures(line).unwrap())
+            .map(|captures| captures.get(1).unwrap().as_str())
+            .collect();
+        assert_eq!(expected, actual);
     }
 }

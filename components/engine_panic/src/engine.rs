@@ -1,12 +1,11 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::db_vector::PanicDBVector;
-use crate::snapshot::PanicSnapshot;
-use crate::write_batch::PanicWriteBatch;
 use engine_traits::{
-    IterOptions, Iterable, Iterator, KvEngine, Peekable, ReadOptions, Result, SeekKey, SyncMutable,
+    IterOptions, Iterable, Iterator, KvEngine, Peekable, ReadOptions, Result, SyncMutable,
     WriteOptions,
 };
+
+use crate::{db_vector::PanicDbVector, snapshot::PanicSnapshot, write_batch::PanicWriteBatch};
 
 #[derive(Clone, Debug)]
 pub struct PanicEngine;
@@ -23,12 +22,16 @@ impl KvEngine for PanicEngine {
     fn bad_downcast<T: 'static>(&self) -> &T {
         panic!()
     }
+    #[cfg(feature = "testexport")]
+    fn inner_refcount(&self) -> usize {
+        panic!()
+    }
 }
 
 impl Peekable for PanicEngine {
-    type DBVector = PanicDBVector;
+    type DbVector = PanicDbVector;
 
-    fn get_value_opt(&self, opts: &ReadOptions, key: &[u8]) -> Result<Option<Self::DBVector>> {
+    fn get_value_opt(&self, opts: &ReadOptions, key: &[u8]) -> Result<Option<Self::DbVector>> {
         panic!()
     }
     fn get_value_cf_opt(
@@ -36,7 +39,7 @@ impl Peekable for PanicEngine {
         opts: &ReadOptions,
         cf: &str,
         key: &[u8],
-    ) -> Result<Option<Self::DBVector>> {
+    ) -> Result<Option<Self::DbVector>> {
         panic!()
     }
 }
@@ -66,10 +69,7 @@ impl SyncMutable for PanicEngine {
 impl Iterable for PanicEngine {
     type Iterator = PanicEngineIterator;
 
-    fn iterator_opt(&self, opts: IterOptions) -> Result<Self::Iterator> {
-        panic!()
-    }
-    fn iterator_cf_opt(&self, cf: &str, opts: IterOptions) -> Result<Self::Iterator> {
+    fn iterator_opt(&self, cf: &str, opts: IterOptions) -> Result<Self::Iterator> {
         panic!()
     }
 }
@@ -77,10 +77,18 @@ impl Iterable for PanicEngine {
 pub struct PanicEngineIterator;
 
 impl Iterator for PanicEngineIterator {
-    fn seek(&mut self, key: SeekKey) -> Result<bool> {
+    fn seek(&mut self, key: &[u8]) -> Result<bool> {
         panic!()
     }
-    fn seek_for_prev(&mut self, key: SeekKey) -> Result<bool> {
+    fn seek_for_prev(&mut self, key: &[u8]) -> Result<bool> {
+        panic!()
+    }
+
+    fn seek_to_first(&mut self) -> Result<bool> {
+        panic!()
+    }
+
+    fn seek_to_last(&mut self) -> Result<bool> {
         panic!()
     }
 

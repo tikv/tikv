@@ -1,24 +1,20 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::atomic::*;
-use std::sync::*;
-use std::thread;
-use std::time::Duration;
+use std::{
+    sync::{atomic::*, *},
+    thread,
+    time::Duration,
+};
 
-use rand::Rng;
-
+use engine_traits::Peekable;
 use kvproto::raft_cmdpb::RaftCmdResponse;
 use raft::eraftpb::MessageType;
-
-use engine_rocks::Compat;
-use engine_traits::Peekable;
-use raftstore::router::RaftStoreRouter;
-use raftstore::store::*;
-use raftstore::Result;
-use rand::RngCore;
+use raftstore::{router::RaftStoreRouter, store::*, Result};
+use rand::{Rng, RngCore};
 use test_raftstore::*;
-use tikv_util::config::*;
-use tikv_util::HandyRwLock;
+use tikv::storage::{kv::SnapshotExt, Snapshot};
+use tikv_util::{config::*, HandyRwLock};
+use txn_types::{Key, LastChange, PessimisticLock};
 
 fn test_multi_base<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.run();
@@ -36,7 +32,7 @@ fn test_multi_base_after_bootstrap<T: Simulator>(cluster: &mut Cluster<T>) {
     thread::sleep(Duration::from_millis(200));
 
     cluster.assert_quorum(
-        |engine| match engine.c().get_value(&keys::data_key(key)).unwrap() {
+        |engine| match engine.get_value(&keys::data_key(key)).unwrap() {
             None => false,
             Some(v) => &*v == value,
         },
@@ -48,13 +44,7 @@ fn test_multi_base_after_bootstrap<T: Simulator>(cluster: &mut Cluster<T>) {
     // sleep 200ms in case the commit packet is dropped by simulated transport.
     thread::sleep(Duration::from_millis(200));
 
-    cluster.assert_quorum(|engine| {
-        engine
-            .c()
-            .get_value(&keys::data_key(key))
-            .unwrap()
-            .is_none()
-    });
+    cluster.assert_quorum(|engine| engine.get_value(&keys::data_key(key)).unwrap().is_none());
 
     // TODO add epoch not match test cases.
 }
@@ -82,12 +72,9 @@ fn test_multi_leader_crash<T: Simulator>(cluster: &mut Cluster<T>) {
 
     cluster.must_put(key2, value2);
     cluster.must_delete(key1);
-    must_get_none(
-        &cluster.engines[&last_leader.get_store_id()].kv.as_inner(),
-        key2,
-    );
+    must_get_none(&cluster.engines[&last_leader.get_store_id()].kv, key2);
     must_get_equal(
-        &cluster.engines[&last_leader.get_store_id()].kv.as_inner(),
+        &cluster.engines[&last_leader.get_store_id()].kv,
         key1,
         value1,
     );
@@ -96,14 +83,11 @@ fn test_multi_leader_crash<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.run_node(last_leader.get_store_id()).unwrap();
 
     must_get_equal(
-        &cluster.engines[&last_leader.get_store_id()].kv.as_inner(),
+        &cluster.engines[&last_leader.get_store_id()].kv,
         key2,
         value2,
     );
-    must_get_none(
-        &cluster.engines[&last_leader.get_store_id()].kv.as_inner(),
-        key1,
-    );
+    must_get_none(&cluster.engines[&last_leader.get_store_id()].kv, key1);
 }
 
 fn test_multi_cluster_restart<T: Simulator>(cluster: &mut Cluster<T>) {
@@ -128,12 +112,13 @@ fn test_multi_cluster_restart<T: Simulator>(cluster: &mut Cluster<T>) {
 
 fn test_multi_lost_majority<T: Simulator>(cluster: &mut Cluster<T>, count: usize) {
     cluster.run();
+    let leader = cluster.leader_of_region(1);
 
     let half = (count as u64 + 1) / 2;
     for i in 1..=half {
         cluster.stop_node(i);
     }
-    if let Some(leader) = cluster.leader_of_region(1) {
+    if let Some(leader) = leader {
         if leader.get_store_id() > half {
             cluster.stop_node(leader.get_store_id());
         }
@@ -155,7 +140,7 @@ fn test_multi_random_restart<T: Simulator>(
     let mut value = [0u8; 5];
 
     for i in 1..restart_count {
-        let id = 1 + rng.gen_range(0, node_count as u64);
+        let id = 1 + rng.gen_range(0..node_count as u64);
         cluster.stop_node(id);
 
         let key = i.to_string().into_bytes();
@@ -181,26 +166,6 @@ fn test_multi_node_base() {
     test_multi_base(&mut cluster)
 }
 
-fn test_multi_drop_packet<T: Simulator>(cluster: &mut Cluster<T>) {
-    cluster.run();
-    cluster.add_send_filter(CloneFilterFactory(DropPacketFilter::new(30)));
-    test_multi_base_after_bootstrap(cluster);
-}
-
-#[test]
-fn test_multi_node_latency() {
-    let count = 5;
-    let mut cluster = new_node_cluster(0, count);
-    test_multi_latency(&mut cluster);
-}
-
-#[test]
-fn test_multi_node_drop_packet() {
-    let count = 5;
-    let mut cluster = new_node_cluster(0, count);
-    test_multi_drop_packet(&mut cluster);
-}
-
 #[test]
 fn test_multi_server_base() {
     let count = 5;
@@ -214,6 +179,13 @@ fn test_multi_latency<T: Simulator>(cluster: &mut Cluster<T>) {
         30,
     ))));
     test_multi_base_after_bootstrap(cluster);
+}
+
+#[test]
+fn test_multi_node_latency() {
+    let count = 5;
+    let mut cluster = new_node_cluster(0, count);
+    test_multi_latency(&mut cluster);
 }
 
 #[test]
@@ -241,6 +213,19 @@ fn test_multi_server_random_latency() {
     let count = 5;
     let mut cluster = new_server_cluster(0, count);
     test_multi_random_latency(&mut cluster);
+}
+
+fn test_multi_drop_packet<T: Simulator>(cluster: &mut Cluster<T>) {
+    cluster.run();
+    cluster.add_send_filter(CloneFilterFactory(DropPacketFilter::new(30)));
+    test_multi_base_after_bootstrap(cluster);
+}
+
+#[test]
+fn test_multi_node_drop_packet() {
+    let count = 5;
+    let mut cluster = new_node_cluster(0, count);
+    test_multi_drop_packet(&mut cluster);
 }
 
 #[test]
@@ -339,8 +324,9 @@ fn test_leader_change_with_uncommitted_log<T: Simulator>(cluster: &mut Cluster<T
 
     // now only peer 1 and peer 2 can step to leader.
 
-    // hack: first MsgAppend will append log, second MsgAppend will set commit index,
-    // So only allowing first MsgAppend to make peer 2 have uncommitted entries.
+    // hack: first MsgAppend will append log, second MsgAppend will set commit
+    // index, So only allowing first MsgAppend to make peer 2 have uncommitted
+    // entries.
     cluster.add_send_filter(CloneFilterFactory(
         RegionPacketFilter::new(1, 2)
             .msg_type(MessageType::MsgAppend)
@@ -374,7 +360,7 @@ fn test_leader_change_with_uncommitted_log<T: Simulator>(cluster: &mut Cluster<T
     // peer 1 must have committed, but peer 2 has not.
     must_get_equal(&cluster.get_engine(1), b"k2", b"v2");
 
-    cluster.must_transfer_leader(1, util::new_peer(2, 2));
+    cluster.must_transfer_leader(1, new_peer(2, 2));
 
     must_get_none(&cluster.get_engine(2), b"k2");
 
@@ -469,6 +455,7 @@ fn test_node_leader_change_with_log_overlap() {
                 assert!(resp.response.get_header().has_error());
                 assert!(resp.response.get_header().get_error().has_stale_command());
             })),
+            RaftCmdExtraOpts::default(),
         )
         .unwrap();
 
@@ -510,10 +497,10 @@ fn test_read_leader_with_unapplied_log<T: Simulator>(cluster: &mut Cluster<T>) {
     // guarantee peer 1 is leader
     cluster.must_transfer_leader(1, new_peer(1, 1));
 
-    // if peer 2 is unreachable, leader will not send MsgAppend to peer 2, and the leader will
-    // send MsgAppend with committed information to peer 2 after network recovered, and peer 2
-    // will apply the entry regardless of we add an filter, so we put k0/v0 to make sure the
-    // network is reachable.
+    // if peer 2 is unreachable, leader will not send MsgAppend to peer 2, and the
+    // leader will send MsgAppend with committed information to peer 2 after
+    // network recovered, and peer 2 will apply the entry regardless of we add
+    // an filter, so we put k0/v0 to make sure the network is reachable.
     let (k0, v0) = (b"k0", b"v0");
     cluster.must_put(k0, v0);
 
@@ -521,8 +508,9 @@ fn test_read_leader_with_unapplied_log<T: Simulator>(cluster: &mut Cluster<T>) {
         must_get_equal(&cluster.get_engine(i), k0, v0);
     }
 
-    // hack: first MsgAppend will append log, second MsgAppend will set commit index,
-    // So only allowing first MsgAppend to make peer 2 have uncommitted entries.
+    // hack: first MsgAppend will append log, second MsgAppend will set commit
+    // index, So only allowing first MsgAppend to make peer 2 have uncommitted
+    // entries.
     cluster.add_send_filter(CloneFilterFactory(
         RegionPacketFilter::new(1, 2)
             .msg_type(MessageType::MsgAppend)
@@ -552,14 +540,15 @@ fn test_read_leader_with_unapplied_log<T: Simulator>(cluster: &mut Cluster<T>) {
     // peer 1 must have committed, but peer 2 has not.
     must_get_equal(&cluster.get_engine(1), k, v);
 
-    cluster.must_transfer_leader(1, util::new_peer(2, 2));
+    cluster.must_transfer_leader(1, new_peer(2, 2));
 
-    // leader's term not equal applied index's term, if we read local, we may get old value
-    // in this situation we need use raft read
+    // leader's term not equal applied index's term, if we read local, we may get
+    // old value in this situation we need use raft read
     must_get_none(&cluster.get_engine(2), k);
 
-    // internal read will use raft read no matter read_quorum is false or true, cause applied
-    // index's term not equal leader's term, and will failed with timeout
+    // internal read will use raft read no matter read_quorum is false or true,
+    // cause applied index's term not equal leader's term, and will failed with
+    // timeout
     let req = get_with_timeout(cluster, k, false, Duration::from_secs(10)).unwrap();
     assert!(
         req.get_header().get_error().has_stale_command(),
@@ -705,8 +694,8 @@ fn test_node_dropped_proposal() {
     );
     put_req.mut_header().set_peer(new_peer(1, 1));
     // peer (3, 3) won't become leader and transfer leader request will be canceled
-    // after about an election timeout. Before it's canceled, all proposal will be dropped
-    // silently.
+    // after about an election timeout. Before it's canceled, all proposal will be
+    // dropped silently.
     cluster.transfer_leader(1, new_peer(3, 3));
 
     let (tx, rx) = mpsc::channel();
@@ -719,6 +708,7 @@ fn test_node_dropped_proposal() {
             Callback::write(Box::new(move |resp: WriteResponse| {
                 let _ = tx.send(resp.response);
             })),
+            RaftCmdExtraOpts::default(),
         )
         .unwrap();
 
@@ -818,4 +808,45 @@ fn test_node_catch_up_logs() {
     must_get_equal(&cluster.get_engine(1), b"0009", b"0009");
     cluster.run_node(3).unwrap();
     must_get_equal(&cluster.get_engine(3), b"0009", b"0009");
+}
+
+#[test]
+fn test_leader_drop_with_pessimistic_lock() {
+    let mut cluster = new_server_cluster(0, 3);
+    cluster.run();
+    cluster.must_transfer_leader(1, new_peer(1, 1));
+
+    let txn_ext = cluster
+        .must_get_snapshot_of_region(1)
+        .ext()
+        .get_txn_ext()
+        .unwrap()
+        .clone();
+    txn_ext
+        .pessimistic_locks
+        .write()
+        .insert(vec![(
+            Key::from_raw(b"k1"),
+            PessimisticLock {
+                primary: b"k1".to_vec().into_boxed_slice(),
+                start_ts: 10.into(),
+                ttl: 1000,
+                for_update_ts: 10.into(),
+                min_commit_ts: 10.into(),
+                last_change: LastChange::make_exist(5.into(), 3),
+                is_locked_with_conflict: false,
+            },
+        )])
+        .unwrap();
+
+    // Isolate node 1, leader should be transferred to another node.
+    cluster.add_send_filter(IsolationFilterFactory::new(1));
+    cluster.must_put(b"k1", b"v1");
+    assert_ne!(cluster.leader_of_region(1).unwrap().id, 1);
+
+    // When peer 1 becomes leader again, the pessimistic locks should be cleared
+    // before.
+    cluster.clear_send_filters();
+    cluster.must_transfer_leader(1, new_peer(1, 1));
+    assert!(txn_ext.pessimistic_locks.read().is_empty());
 }

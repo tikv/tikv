@@ -1,7 +1,6 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use super::bit_vec::BitVec;
-use super::{ChunkRef, ChunkedVec, Evaluable, EvaluableRet, UnsafeRefInto};
+use super::{bit_vec::BitVec, ChunkRef, ChunkedVec, Evaluable, EvaluableRet, UnsafeRefInto};
 use crate::impl_chunked_vec_common;
 
 /// A vector storing `Option<T>` with a compact layout.
@@ -10,10 +9,11 @@ use crate::impl_chunked_vec_common;
 /// in that structure itself. This includes `Int`, `Real`, `Decimal`,
 /// `DateTime` and `Duration` in copr framework.
 ///
-/// Inside `ChunkedVecSized`, `bitmap` indicates if an element at given index is null,
-/// and `data` stores actual data. If the element at given index is null (or `None`),
-/// the corresponding `bitmap` bit is false, and `data` stores zero value for
-/// that element. Otherwise, `data` stores actual data, and `bitmap` bit is true.
+/// Inside `ChunkedVecSized`, `bitmap` indicates if an element at given index is
+/// null, and `data` stores actual data. If the element at given index is null
+/// (or `None`), the corresponding `bitmap` bit is false, and `data` stores zero
+/// value for that element. Otherwise, `data` stores actual data, and `bitmap`
+/// bit is true.
 #[derive(Debug, PartialEq, Clone)]
 pub struct ChunkedVecSized<T: Sized> {
     data: Vec<T>,
@@ -138,8 +138,8 @@ mod tests {
             Real::new(1.01001).ok(),
             Real::new(-0.01).ok(),
             Real::new(1.02001).ok(),
-            Real::new(std::f64::MIN).ok(),
-            Real::new(std::f64::MAX).ok(),
+            Real::new(f64::MIN).ok(),
+            Real::new(f64::MAX).ok(),
             None,
         ];
         assert_eq!(
@@ -213,8 +213,8 @@ mod tests {
             Real::new(1.01001).ok(),
             Real::new(-0.01).ok(),
             Real::new(1.02001).ok(),
-            Real::new(std::f64::MIN).ok(),
-            Real::new(std::f64::MAX).ok(),
+            Real::new(f64::MIN).ok(),
+            Real::new(f64::MAX).ok(),
             None,
         ];
         let mut chunked_vec = ChunkedVecSized::<Real>::from_slice(test_real);
@@ -234,8 +234,8 @@ mod tests {
         let test_real_1: &[Option<Real>] = &[None, Real::new(1.01001).ok(), Real::new(-0.01).ok()];
         let test_real_2: &[Option<Real>] = &[
             Real::new(1.02001).ok(),
-            Real::new(std::f64::MIN).ok(),
-            Real::new(std::f64::MAX).ok(),
+            Real::new(f64::MIN).ok(),
+            Real::new(f64::MAX).ok(),
             None,
         ];
         let mut chunked_vec_1 = ChunkedVecSized::<Real>::from_slice(test_real_1);
@@ -250,8 +250,8 @@ mod tests {
                 Real::new(1.01001).ok(),
                 Real::new(-0.01).ok(),
                 Real::new(1.02001).ok(),
-                Real::new(std::f64::MIN).ok(),
-                Real::new(std::f64::MAX).ok(),
+                Real::new(f64::MIN).ok(),
+                Real::new(f64::MAX).ok(),
                 None,
             ]
         );

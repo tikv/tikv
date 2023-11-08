@@ -8,7 +8,7 @@ lazy_static! {
         "tikv_external_storage_create_seconds",
         "Bucketed histogram of creating external storage duration",
         &["type"],
-        exponential_buckets(0.0005, 2.0, 20).unwrap()
+        exponential_buckets(0.00001, 2.0, 26).unwrap()
     )
     .unwrap();
 }

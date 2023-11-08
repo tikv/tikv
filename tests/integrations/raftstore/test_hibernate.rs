@@ -1,20 +1,21 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::atomic::*;
-use std::sync::*;
-use std::thread;
-use std::time::*;
+use std::{
+    sync::{atomic::*, *},
+    thread,
+    time::Duration,
+};
 
 use futures::executor::block_on;
 use pd_client::PdClient;
 use raft::eraftpb::{ConfChangeType, MessageType};
 use test_raftstore::*;
-use tikv_util::HandyRwLock;
+use tikv_util::{time::Instant, HandyRwLock};
 
 #[test]
 fn test_proposal_prevent_sleep() {
     let mut cluster = new_node_cluster(0, 3);
-    configure_for_hibernate(&mut cluster);
+    configure_for_hibernate(&mut cluster.cfg);
     cluster.run();
     cluster.must_transfer_leader(1, new_peer(1, 1));
     cluster.must_put(b"k1", b"v1");
@@ -61,7 +62,7 @@ fn test_proposal_prevent_sleep() {
         true,
     );
     request.mut_header().set_peer(new_peer(1, 1));
-    let (cb, rx) = make_cb(&request);
+    let (cb, mut rx) = make_cb(&request);
     // send to peer 2
     cluster
         .sim
@@ -87,7 +88,7 @@ fn test_proposal_prevent_sleep() {
         RegionPacketFilter::new(1, 1).direction(Direction::Send),
     ));
     let conf_change = new_change_peer_request(ConfChangeType::RemoveNode, new_peer(3, 3));
-    let mut admin_req = new_admin_request(1, &region.get_region_epoch(), conf_change);
+    let mut admin_req = new_admin_request(1, region.get_region_epoch(), conf_change);
     admin_req.mut_header().set_peer(new_peer(1, 1));
     let (cb, _rx) = make_cb(&admin_req);
     cluster
@@ -107,7 +108,7 @@ fn test_proposal_prevent_sleep() {
 #[test]
 fn test_single_voter_restart() {
     let mut cluster = new_server_cluster(0, 2);
-    configure_for_hibernate(&mut cluster);
+    configure_for_hibernate(&mut cluster.cfg);
     cluster.pd_client.disable_default_operator();
     cluster.run_conf_change();
     cluster.pd_client.must_add_peer(1, new_learner_peer(2, 2));
@@ -126,8 +127,8 @@ fn test_single_voter_restart() {
 #[test]
 fn test_prompt_learner() {
     let mut cluster = new_server_cluster(0, 4);
-    configure_for_hibernate(&mut cluster);
-    cluster.cfg.raft_store.raft_log_gc_count_limit = 20;
+    configure_for_hibernate(&mut cluster.cfg);
+    cluster.cfg.raft_store.raft_log_gc_count_limit = Some(20);
     cluster.pd_client.disable_default_operator();
     cluster.run_conf_change();
     cluster.pd_client.must_add_peer(1, new_peer(2, 2));
@@ -146,7 +147,7 @@ fn test_prompt_learner() {
     ));
     let idx = cluster.truncated_state(1, 1).get_index();
     // Trigger a log compaction.
-    for i in 0..cluster.cfg.raft_store.raft_log_gc_count_limit * 2 {
+    for i in 0..cluster.cfg.raft_store.raft_log_gc_count_limit() * 2 {
         cluster.must_put(format!("k{}", i).as_bytes(), format!("v{}", i).as_bytes());
     }
     cluster.wait_log_truncated(1, 1, idx + 1);
@@ -168,7 +169,7 @@ fn test_prompt_learner() {
 #[test]
 fn test_transfer_leader_delay() {
     let mut cluster = new_node_cluster(0, 3);
-    configure_for_hibernate(&mut cluster);
+    configure_for_hibernate(&mut cluster.cfg);
     cluster.run();
     cluster.must_transfer_leader(1, new_peer(1, 1));
     cluster.must_put(b"k1", b"v1");
@@ -181,28 +182,33 @@ fn test_transfer_leader_delay() {
             .msg_type(MessageType::MsgTransferLeader)
             .reserve_dropped(messages.clone()),
     ));
+
     cluster.transfer_leader(1, new_peer(3, 3));
     let timer = Instant::now();
-    while timer.elapsed() < Duration::from_secs(3) && messages.lock().unwrap().is_empty() {
+    while timer.saturating_elapsed() < Duration::from_secs(3) && messages.lock().unwrap().is_empty()
+    {
         thread::sleep(Duration::from_millis(10));
     }
     assert_eq!(messages.lock().unwrap().len(), 1);
+
     // Wait till leader peer goes to sleep again.
     thread::sleep(
         cluster.cfg.raft_store.raft_base_tick_interval.0
             * 2
             * cluster.cfg.raft_store.raft_election_timeout_ticks as u32,
     );
+
     cluster.clear_send_filters();
-    cluster.add_send_filter(CloneFilterFactory(DropMessageFilter::new(
-        MessageType::MsgTimeoutNow,
-    )));
+    cluster.add_send_filter(CloneFilterFactory(DropMessageFilter::new(Arc::new(|m| {
+        m.get_message().get_msg_type() != MessageType::MsgTimeoutNow
+    }))));
     let router = cluster.sim.wl().get_router(1).unwrap();
     router
         .send_raft_message(messages.lock().unwrap().pop().unwrap())
         .unwrap();
+
     let timer = Instant::now();
-    while timer.elapsed() < Duration::from_secs(3) {
+    while timer.saturating_elapsed() < Duration::from_secs(3) {
         let resp = cluster.request(
             b"k2",
             vec![new_put_cmd(b"k2", b"v2")],
@@ -213,7 +219,11 @@ fn test_transfer_leader_delay() {
         if !header.has_error() {
             return;
         }
-        if !header.get_error().get_message().contains("ProposalDropped") {
+        if !header
+            .get_error()
+            .get_message()
+            .contains("proposal dropped")
+        {
             panic!("response {:?} has error", resp);
         }
         thread::sleep(Duration::from_millis(10));
@@ -221,13 +231,14 @@ fn test_transfer_leader_delay() {
     panic!("failed to request after 3 seconds");
 }
 
-/// If a learner is isolated before split and then catch up logs by snapshot, then the
-/// range for split learner will be missing on the node until leader is waken.
+/// If a learner is isolated before split and then catch up logs by snapshot,
+/// then the range for split learner will be missing on the node until leader is
+/// waken.
 #[test]
 fn test_split_delay() {
     let mut cluster = new_server_cluster(0, 4);
-    configure_for_hibernate(&mut cluster);
-    cluster.cfg.raft_store.raft_log_gc_count_limit = 20;
+    configure_for_hibernate(&mut cluster.cfg);
+    cluster.cfg.raft_store.raft_log_gc_count_limit = Some(20);
     cluster.pd_client.disable_default_operator();
     cluster.run_conf_change();
     cluster.pd_client.must_add_peer(1, new_peer(2, 2));
@@ -243,7 +254,7 @@ fn test_split_delay() {
     ));
     let idx = cluster.truncated_state(1, 1).get_index();
     // Trigger a log compaction.
-    for i in 0..cluster.cfg.raft_store.raft_log_gc_count_limit * 2 {
+    for i in 0..cluster.cfg.raft_store.raft_log_gc_count_limit() * 2 {
         cluster.must_put(format!("k{}", i).as_bytes(), format!("v{}", i).as_bytes());
     }
     let region = cluster.get_region(b"k1");
@@ -266,7 +277,7 @@ fn test_split_delay() {
 #[test]
 fn test_inconsistent_configuration() {
     let mut cluster = new_node_cluster(0, 3);
-    configure_for_hibernate(&mut cluster);
+    configure_for_hibernate(&mut cluster.cfg);
     cluster.run();
     cluster.must_transfer_leader(1, new_peer(1, 1));
     cluster.must_put(b"k1", b"v1");
@@ -300,6 +311,8 @@ fn test_inconsistent_configuration() {
     cluster.stop_node(3);
     cluster.run_node(3).unwrap();
     cluster.must_put(b"k2", b"v2");
+    // In case leader changes.
+    cluster.must_transfer_leader(1, new_peer(1, 1));
     must_get_equal(&cluster.get_engine(3), b"k2", b"v2");
     // Wait till leader peer goes to sleep.
     thread::sleep(
@@ -342,14 +355,14 @@ fn test_inconsistent_configuration() {
     assert_eq!(cluster.leader_of_region(1), Some(new_peer(3, 3)));
 }
 
-/// Negotiating hibernation is implemented after 5.0.0, for older version binaries,
-/// negotiating can cause connection reset due to new enum type. The test ensures
-/// negotiation won't happen until cluster is upgraded.
+/// Negotiating hibernation is implemented after 5.0.0, for older version
+/// binaries, negotiating can cause connection reset due to new enum type. The
+/// test ensures negotiation won't happen until cluster is upgraded.
 #[test]
 fn test_hibernate_feature_gate() {
     let mut cluster = new_node_cluster(0, 3);
     cluster.pd_client.reset_version("4.0.0");
-    configure_for_hibernate(&mut cluster);
+    configure_for_hibernate(&mut cluster.cfg);
     cluster.run();
     cluster.must_transfer_leader(1, new_peer(1, 1));
     cluster.must_put(b"k1", b"v1");
@@ -393,11 +406,12 @@ fn test_hibernate_feature_gate() {
     assert!(!awakened.load(Ordering::SeqCst));
 }
 
-/// Tests when leader is demoted in a hibernated region, the region can recover automatically.
+/// Tests when leader is demoted in a hibernated region, the region can recover
+/// automatically.
 #[test]
 fn test_leader_demoted_when_hibernated() {
     let mut cluster = new_node_cluster(0, 4);
-    configure_for_hibernate(&mut cluster);
+    configure_for_hibernate(&mut cluster.cfg);
     cluster.pd_client.disable_default_operator();
     let r = cluster.run_conf_change();
     cluster.pd_client.must_add_peer(r, new_peer(2, 2));
@@ -414,9 +428,15 @@ fn test_leader_demoted_when_hibernated() {
             (ConfChangeType::AddLearnerNode, new_learner_peer(4, 4)),
         ],
     );
-    // So leader will not commit the demote request.
+    // So old leader will not commit the demote request.
     cluster.add_send_filter(CloneFilterFactory(
         RegionPacketFilter::new(r, 1)
+            .msg_type(MessageType::MsgAppendResponse)
+            .direction(Direction::Recv),
+    ));
+    // So new leader will not commit the demote request.
+    cluster.add_send_filter(CloneFilterFactory(
+        RegionPacketFilter::new(r, 3)
             .msg_type(MessageType::MsgAppendResponse)
             .direction(Direction::Recv),
     ));
@@ -440,7 +460,7 @@ fn test_leader_demoted_when_hibernated() {
     ));
     // Wait some time to ensure the request has been delivered.
     thread::sleep(Duration::from_millis(100));
-    // Peer 4 should start campaign.
+    // Peer 3 should start campaign.
     let timer = Instant::now();
     loop {
         cluster.reset_leader_of_region(r);
@@ -450,8 +470,8 @@ fn test_leader_demoted_when_hibernated() {
                 break;
             }
         }
-        if timer.elapsed() > Duration::from_secs(5) {
-            panic!("peer 4 is still not leader after 5 seconds.");
+        if timer.saturating_elapsed() > Duration::from_secs(5) {
+            panic!("peer 3 is still not leader after 5 seconds.");
         }
         let region = cluster.get_region(b"k1");
         let mut request = new_request(
@@ -461,7 +481,7 @@ fn test_leader_demoted_when_hibernated() {
             false,
         );
         request.mut_header().set_peer(new_peer(3, 3));
-        // In case peer 4 is hibernated.
+        // In case peer 3 is hibernated.
         let (cb, _rx) = make_cb(&request);
         cluster
             .sim
@@ -471,10 +491,11 @@ fn test_leader_demoted_when_hibernated() {
     }
 
     cluster.clear_send_filters();
-    // If there is no leader in the region, the cluster can't write two kvs successfully.
-    // The first one is possible to succeed if it's committed with the conf change at the
-    // same time, but the second one can't be committed or accepted because conf change
-    // should be applied and the leader should be demoted as learner.
+    // If there is no leader in the region, the cluster can't write two kvs
+    // successfully. The first one is possible to succeed if it's committed with
+    // the conf change at the same time, but the second one can't be committed
+    // or accepted because conf change should be applied and the leader should
+    // be demoted as learner.
     cluster.must_put(b"k1", b"v1");
     cluster.must_put(b"k2", b"v2");
 }

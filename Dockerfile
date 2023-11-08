@@ -38,10 +38,10 @@ RUN yum install -y epel-release && \
     yum clean all && \
     yum makecache
 
-RUN yum install -y \
-        perl \
-        make cmake3 dwz \
-        gcc gcc-c++ libstdc++-static && \
+RUN yum install -y centos-release-scl && \
+    yum install -y \
+      devtoolset-8 \
+      perl cmake3 && \
     yum clean all
 
 # CentOS gives cmake 3 a weird binary name, so we link it to something more normal
@@ -49,6 +49,11 @@ RUN yum install -y \
 RUN ln -s /usr/bin/cmake3 /usr/bin/cmake
 ENV LIBRARY_PATH /usr/local/lib:$LIBRARY_PATH
 ENV LD_LIBRARY_PATH /usr/local/lib:$LD_LIBRARY_PATH
+
+# Install protoc
+RUN curl -LO "https://github.com/protocolbuffers/protobuf/releases/download/v3.15.8/protoc-3.15.8-linux-x86_64.zip"
+RUN unzip protoc-3.15.8-linux-x86_64.zip -d /usr/local/
+ENV PATH /usr/local/bin/:$PATH
 
 # Install Rustup
 RUN curl https://sh.rustup.rs -sSf | sh -s -- --no-modify-path --default-toolchain none -y
@@ -68,16 +73,15 @@ COPY Cargo.lock ./Cargo.lock
 
 COPY --from=prepare /output/ ./
 
-RUN mkdir -p ./cmd/src/bin && \
-    echo 'fn main() {}' > ./cmd/src/bin/tikv-ctl.rs && \
-    echo 'fn main() {}' > ./cmd/src/bin/tikv-server.rs && \
+RUN mkdir -p ./cmd/tikv-ctl/src ./cmd/tikv-server/src && \
+    echo 'fn main() {}' > ./cmd/tikv-ctl/src/main.rs && \
+    echo 'fn main() {}' > ./cmd/tikv-server/src/main.rs && \
     for cargotoml in $(find . -type f -name "Cargo.toml"); do \
-        sed -i '/fuzz/d' ${cargotoml} && \
-        sed -i '/profiler/d' ${cargotoml} ; \
+        sed -i '/fuzz/d' ${cargotoml} ; \
     done
 
 COPY Makefile ./
-RUN make build_dist_release
+RUN source /opt/rh/devtoolset-8/enable && make build_dist_release
 
 # Remove fingerprints for when we build the real binaries.
 RUN rm -rf ./target/release/.fingerprint/tikv-* && \
@@ -98,12 +102,16 @@ ARG GIT_BRANCH=${GIT_FALLBACK}
 ENV TIKV_BUILD_GIT_HASH=${GIT_HASH}
 ENV TIKV_BUILD_GIT_TAG=${GIT_TAG}
 ENV TIKV_BUILD_GIT_BRANCH=${GIT_BRANCH}
-RUN make build_dist_release
+RUN source /opt/rh/devtoolset-8/enable && make build_dist_release
 
 # Export to a clean image
 FROM pingcap/alpine-glibc
 COPY --from=builder /tikv/target/release/tikv-server /tikv-server
 COPY --from=builder /tikv/target/release/tikv-ctl /tikv-ctl
+
+# FIXME: Figure out why libstdc++ is not staticly linked.
+RUN apk add --no-cache \
+    curl libstdc++
 
 EXPOSE 20160 20180
 

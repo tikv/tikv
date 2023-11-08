@@ -2,8 +2,7 @@
 
 use std::fmt;
 
-use tipb::ColumnInfo;
-use tipb::FieldType;
+use tipb::{ColumnInfo, FieldType};
 
 use crate::error::DataTypeError;
 
@@ -11,9 +10,10 @@ use crate::error::DataTypeError;
 ///
 /// `FieldType` is the field type of a column defined by schema.
 ///
-/// `ColumnInfo` describes a column. It contains `FieldType` and some other column specific
-/// information. However for historical reasons, fields in `FieldType` (for example, `tp`)
-/// are flattened into `ColumnInfo`. Semantically these fields are identical.
+/// `ColumnInfo` describes a column. It contains `FieldType` and some other
+/// column specific information. However for historical reasons, fields in
+/// `FieldType` (for example, `tp`) are flattened into `ColumnInfo`.
+/// Semantically these fields are identical.
 ///
 /// Please refer to [mysql/type.go](https://github.com/pingcap/parser/blob/master/mysql/type.go).
 #[derive(PartialEq, Debug, Clone, Copy)]
@@ -36,7 +36,7 @@ pub enum FieldTypeTp {
     NewDate = 14,
     VarChar = 15,
     Bit = 16,
-    JSON = 0xf5,
+    Json = 0xf5,
     NewDecimal = 0xf6,
     Enum = 0xf7,
     Set = 0xf8,
@@ -50,9 +50,9 @@ pub enum FieldTypeTp {
 }
 
 impl FieldTypeTp {
-    fn from_i32(i: i32) -> Option<FieldTypeTp> {
+    pub fn from_i32(i: i32) -> Option<FieldTypeTp> {
         if (i >= FieldTypeTp::Unspecified as i32 && i <= FieldTypeTp::Bit as i32)
-            || (i >= FieldTypeTp::JSON as i32 && i <= FieldTypeTp::Geometry as i32)
+            || (i >= FieldTypeTp::Json as i32 && i <= FieldTypeTp::Geometry as i32)
         {
             Some(unsafe { ::std::mem::transmute::<i32, FieldTypeTp>(i) })
         } else {
@@ -61,7 +61,7 @@ impl FieldTypeTp {
     }
 
     pub fn from_u8(i: u8) -> Option<FieldTypeTp> {
-        if i <= FieldTypeTp::Bit as u8 || i >= FieldTypeTp::JSON as u8 {
+        if i <= FieldTypeTp::Bit as u8 || i >= FieldTypeTp::Json as u8 {
             Some(unsafe { ::std::mem::transmute::<i32, FieldTypeTp>(i32::from(i)) })
         } else {
             None
@@ -110,15 +110,19 @@ pub enum Collation {
     Utf8Mb4BinNoPadding = 46,
     Utf8Mb4GeneralCi = -45,
     Utf8Mb4UnicodeCi = -224,
+    Utf8Mb40900AiCi = -255,
+    Utf8Mb40900Bin = -309,
     Latin1Bin = -47,
+    GbkBin = -87,
+    GbkChineseCi = -28,
 }
 
 impl Collation {
     /// Parse from collation id.
     ///
-    /// These are magic numbers defined in tidb, where positive numbers are for legacy
-    /// compatibility, and all new clusters with padding configuration enabled will
-    /// use negative numbers to indicate the padding behavior.
+    /// These are magic numbers defined in tidb, where positive numbers are for
+    /// legacy compatibility, and all new clusters with padding configuration
+    /// enabled will use negative numbers to indicate the padding behavior.
     pub fn from_i32(n: i32) -> Result<Self, DataTypeError> {
         match n {
             -33 | -45 => Ok(Collation::Utf8Mb4GeneralCi),
@@ -126,15 +130,52 @@ impl Collation {
             -47 => Ok(Collation::Latin1Bin),
             -63 | 63 | 47 => Ok(Collation::Binary),
             -224 | -192 => Ok(Collation::Utf8Mb4UnicodeCi),
+            -87 => Ok(Collation::GbkBin),
+            -28 => Ok(Collation::GbkChineseCi),
+            -255 => Ok(Collation::Utf8Mb40900AiCi),
+            -309 => Ok(Collation::Utf8Mb40900Bin),
             n if n >= 0 => Ok(Collation::Utf8Mb4BinNoPadding),
             n => Err(DataTypeError::UnsupportedCollation { code: n }),
         }
+    }
+
+    pub fn is_bin_collation(&self) -> bool {
+        matches!(
+            self,
+            Collation::Utf8Mb4Bin | Collation::Latin1Bin | Collation::Utf8Mb40900Bin
+        )
     }
 }
 
 impl fmt::Display for Collation {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         fmt::Debug::fmt(self, f)
+    }
+}
+
+#[derive(PartialEq, Debug, Clone, Copy)]
+pub enum Charset {
+    Utf8,
+    Utf8Mb4,
+    Latin1,
+    Gbk,
+    Binary,
+    Ascii,
+}
+
+impl Charset {
+    pub fn from_name(name: &str) -> Result<Self, DataTypeError> {
+        match name {
+            "utf8mb4" => Ok(Charset::Utf8Mb4),
+            "utf8" => Ok(Charset::Utf8),
+            "latin1" => Ok(Charset::Latin1),
+            "gbk" => Ok(Charset::Gbk),
+            "binary" => Ok(Charset::Binary),
+            "ascii" => Ok(Charset::Ascii),
+            _ => Err(DataTypeError::UnsupportedCharset {
+                name: String::from(name),
+            }),
+        }
     }
 }
 
@@ -154,6 +195,9 @@ bitflags! {
 
         /// Internal: Used for telling boolean literal from integer.
         const IS_BOOLEAN = 1 << 19;
+
+        /// Internal: Used for inferring enum eval type.
+        const ENUM_SET_AS_INT = 1 << 21;
     }
 }
 
@@ -179,8 +223,9 @@ pub trait FieldTypeAccessor {
 
     fn set_collation(&mut self, collation: Collation) -> &mut dyn FieldTypeAccessor;
 
-    /// Convert reference to `FieldTypeAccessor` interface. Useful when an implementer
-    /// provides inherent methods with the same name as the accessor trait methods.
+    /// Convert reference to `FieldTypeAccessor` interface. Useful when an
+    /// implementer provides inherent methods with the same name as the accessor
+    /// trait methods.
     fn as_accessor(&self) -> &dyn FieldTypeAccessor
     where
         Self: Sized,
@@ -196,8 +241,8 @@ pub trait FieldTypeAccessor {
         self as &mut dyn FieldTypeAccessor
     }
 
-    /// Whether this type is a hybrid type, which can represent different types of value in
-    /// specific context.
+    /// Whether this type is a hybrid type, which can represent different types
+    /// of value in specific context.
     ///
     /// Please refer to `Hybrid` in TiDB.
     #[inline]
@@ -218,7 +263,8 @@ pub trait FieldTypeAccessor {
             || tp == FieldTypeTp::LongBlob
     }
 
-    /// Whether this type is a char-like type like a string type or a varchar type.
+    /// Whether this type is a char-like type like a string type or a varchar
+    /// type.
     ///
     /// Please refer to `IsTypeChar` in TiDB.
     #[inline]
@@ -227,7 +273,8 @@ pub trait FieldTypeAccessor {
         tp == FieldTypeTp::String || tp == FieldTypeTp::VarChar
     }
 
-    /// Whether this type is a varchar-like type like a varstring type or a varchar type.
+    /// Whether this type is a varchar-like type like a varstring type or a
+    /// varchar type.
     ///
     /// Please refer to `IsTypeVarchar` in TiDB.
     #[inline]
@@ -286,9 +333,13 @@ pub trait FieldTypeAccessor {
         self.is_non_binary_string_like()
             && (!self
                 .collation()
-                .map(|col| col == Collation::Utf8Mb4Bin)
+                .map(|col| col.is_bin_collation())
                 .unwrap_or(false)
                 || self.is_varchar_like())
+            && self
+                .collation()
+                .map(|col| col != Collation::Utf8Mb40900Bin)
+                .unwrap_or(false)
     }
 }
 
@@ -408,8 +459,10 @@ impl FieldTypeAccessor for ColumnInfo {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::i32;
+
+    use super::*;
+    use crate::builder::FieldTypeBuilder;
 
     fn field_types() -> Vec<FieldTypeTp> {
         vec![
@@ -430,7 +483,7 @@ mod tests {
             FieldTypeTp::NewDate,
             FieldTypeTp::VarChar,
             FieldTypeTp::Bit,
-            FieldTypeTp::JSON,
+            FieldTypeTp::Json,
             FieldTypeTp::NewDecimal,
             FieldTypeTp::Enum,
             FieldTypeTp::Set,
@@ -489,11 +542,14 @@ mod tests {
             (83, Some(Collation::Utf8Mb4BinNoPadding)),
             (-83, Some(Collation::Utf8Mb4Bin)),
             (255, Some(Collation::Utf8Mb4BinNoPadding)),
-            (-255, None),
+            (-255, Some(Collation::Utf8Mb40900AiCi)),
+            (-309, Some(Collation::Utf8Mb40900Bin)),
             (i32::MAX, Some(Collation::Utf8Mb4BinNoPadding)),
             (i32::MIN, None),
             (-192, Some(Collation::Utf8Mb4UnicodeCi)),
             (-224, Some(Collation::Utf8Mb4UnicodeCi)),
+            (-28, Some(Collation::GbkChineseCi)),
+            (-87, Some(Collation::GbkBin)),
         ];
 
         for (collate, expected) in cases {
@@ -505,8 +561,61 @@ mod tests {
             if let Some(c) = expected {
                 assert_eq!(coll.unwrap(), c);
             } else {
-                assert!(coll.is_err());
+                coll.unwrap_err();
             }
+        }
+    }
+
+    #[test]
+    fn test_charset_from_str() {
+        let cases = vec![
+            ("gbk", Some(Charset::Gbk)),
+            ("utf8mb4", Some(Charset::Utf8Mb4)),
+            ("utf8", Some(Charset::Utf8)),
+            ("binary", Some(Charset::Binary)),
+            ("latin1", Some(Charset::Latin1)),
+            ("ascii", Some(Charset::Ascii)),
+            ("somethingwrong", None),
+        ];
+
+        for (charset, expected) in cases {
+            let mut ft = tipb::FieldType::default();
+            ft.set_charset(charset.to_string());
+
+            let charset = Charset::from_name(ft.get_charset());
+
+            if let Some(c) = expected {
+                assert_eq!(charset.unwrap(), c);
+            } else {
+                charset.unwrap_err();
+            }
+        }
+    }
+
+    #[test]
+    fn test_need_restored_data() {
+        let cases = vec![
+            (FieldTypeTp::String, Collation::Binary, false),
+            (FieldTypeTp::VarString, Collation::Binary, false),
+            (FieldTypeTp::String, Collation::Utf8Mb4Bin, false),
+            (FieldTypeTp::VarString, Collation::Utf8Mb4Bin, true),
+            (FieldTypeTp::String, Collation::Utf8Mb4GeneralCi, true),
+            (FieldTypeTp::VarString, Collation::Utf8Mb4GeneralCi, true),
+            (FieldTypeTp::String, Collation::Utf8Mb4UnicodeCi, true),
+            (FieldTypeTp::VarString, Collation::Utf8Mb4UnicodeCi, true),
+            (FieldTypeTp::String, Collation::Utf8Mb40900AiCi, true),
+            (FieldTypeTp::VarString, Collation::Utf8Mb40900AiCi, true),
+            (FieldTypeTp::String, Collation::Utf8Mb40900Bin, false),
+            (FieldTypeTp::VarString, Collation::Utf8Mb40900Bin, false),
+            (FieldTypeTp::String, Collation::GbkBin, true),
+            (FieldTypeTp::VarString, Collation::GbkBin, true),
+            (FieldTypeTp::String, Collation::GbkChineseCi, true),
+            (FieldTypeTp::VarString, Collation::GbkChineseCi, true),
+        ];
+
+        for (tp, collation, result) in cases {
+            let ft = FieldTypeBuilder::new().tp(tp).collation(collation).build();
+            assert_eq!(ft.need_restored_data(), result)
         }
     }
 }

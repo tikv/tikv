@@ -1,28 +1,15 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::engine::PanicEngine;
-use engine_traits::{ImportExt, IngestExternalFileOptions, Result};
 use std::path::Path;
+
+use engine_traits::{ImportExt, IngestExternalFileOptions, Result};
+
+use crate::engine::PanicEngine;
 
 impl ImportExt for PanicEngine {
     type IngestExternalFileOptions = PanicIngestExternalFileOptions;
 
-    fn ingest_external_file_cf(
-        &self,
-        cf: &str,
-        opts: &Self::IngestExternalFileOptions,
-        files: &[&str],
-    ) -> Result<()> {
-        panic!()
-    }
-
-    fn validate_sst_for_ingestion<P: AsRef<Path>>(
-        &self,
-        cf: &str,
-        path: P,
-        expected_size: u64,
-        expected_checksum: u32,
-    ) -> Result<()> {
+    fn ingest_external_file_cf(&self, cf: &str, files: &[&str]) -> Result<()> {
         panic!()
     }
 }
@@ -33,7 +20,16 @@ impl IngestExternalFileOptions for PanicIngestExternalFileOptions {
     fn new() -> Self {
         panic!()
     }
+
     fn move_files(&mut self, f: bool) {
+        panic!()
+    }
+
+    fn get_write_global_seqno(&self) -> bool {
+        panic!()
+    }
+
+    fn set_write_global_seqno(&mut self, f: bool) {
         panic!()
     }
 }

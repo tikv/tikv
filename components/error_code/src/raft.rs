@@ -1,7 +1,8 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use super::ErrorCodeExt;
 use raft::Error;
+
+use super::ErrorCodeExt;
 
 define_error_codes!(
     "KV:Raft:",
@@ -15,7 +16,6 @@ define_error_codes!(
     CODEC_ERROR => ("CodecError", "", ""),
     EXISTS => ("Exists", "", ""),
     NOT_EXISTS => ("NotExists", "", ""),
-    REQUEST_SNAPSHOT_DROPPED => ("RequestSnapshotDropped", "", ""),
     CONF_CHANGE_ERROR => ("ConfChangeError", "", "")
 );
 
@@ -29,10 +29,10 @@ impl ErrorCodeExt for Error {
             Error::ProposalDropped => PROPOSAL_DROPPED,
             Error::ConfigInvalid(_) => CONFIG_INVALID,
             Error::CodecError(_) => CODEC_ERROR,
-            Error::Exists(_, _) => EXISTS,
-            Error::NotExists(_, _) => NOT_EXISTS,
-            Error::RequestSnapshotDropped => REQUEST_SNAPSHOT_DROPPED,
+            Error::Exists { .. } => EXISTS,
+            Error::NotExists { .. } => NOT_EXISTS,
             Error::ConfChangeError(_) => CONF_CHANGE_ERROR,
+            Error::RequestSnapshotDropped => unreachable!(),
         }
     }
 }

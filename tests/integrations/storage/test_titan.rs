@@ -1,31 +1,32 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::f64::INFINITY;
-use std::path::Path;
-use std::sync::Arc;
-use std::thread;
-use std::time::Duration;
+use std::{
+    path::{Path, PathBuf},
+    thread,
+    time::Duration,
+};
 
-use engine_rocks::raw::{IngestExternalFileOptions, Writable};
-use engine_rocks::util::get_cf_handle;
-use engine_rocks::util::new_temp_engine;
-use engine_rocks::RocksEngine;
-use engine_rocks::{Compat, RocksSnapshot, RocksSstWriterBuilder};
+use engine_rocks::{
+    raw::IngestExternalFileOptions, RocksEngine, RocksSnapshot, RocksSstWriterBuilder,
+};
+use engine_test::new_temp_engine;
 use engine_traits::{
-    CompactExt, DeleteStrategy, Engines, KvEngine, MiscExt, Range, SstWriter, SstWriterBuilder,
-    ALL_CFS, CF_DEFAULT, CF_WRITE,
+    CfOptionsExt, CompactExt, DeleteStrategy, Engines, KvEngine, MiscExt, Range, SstWriter,
+    SstWriterBuilder, SyncMutable, WriteOptions, CF_DEFAULT, CF_WRITE,
 };
 use keys::data_key;
 use kvproto::metapb::{Peer, Region};
-use raftstore::store::RegionSnapshot;
-use raftstore::store::{apply_sst_cf_file, build_sst_cf_file};
+use raftstore::store::{apply_sst_cf_file, build_sst_cf_file_list, CfFile, RegionSnapshot};
 use tempfile::Builder;
 use test_raftstore::*;
-use tikv::config::TiKvConfig;
-use tikv::storage::mvcc::ScannerBuilder;
-use tikv::storage::txn::Scanner;
-use tikv_util::config::{ReadableDuration, ReadableSize};
-use tikv_util::time::Limiter;
+use tikv::{
+    config::TikvConfig,
+    storage::{mvcc::ScannerBuilder, txn::Scanner},
+};
+use tikv_util::{
+    config::{ReadableDuration, ReadableSize},
+    time::Limiter,
+};
 use txn_types::{Key, Write, WriteType};
 
 #[test]
@@ -39,40 +40,41 @@ fn test_turnoff_titan() {
 
     let size = 5;
     for i in 0..size {
-        assert!(cluster
+        cluster
             .put(
                 format!("k{:02}0", i).as_bytes(),
                 format!("v{}", i).as_bytes(),
             )
-            .is_ok());
+            .unwrap();
     }
     cluster.must_flush_cf(CF_DEFAULT, true);
     for i in 0..size {
-        assert!(cluster
+        cluster
             .put(
                 format!("k{:02}1", i).as_bytes(),
                 format!("v{}", i).as_bytes(),
             )
-            .is_ok());
+            .unwrap();
     }
     cluster.must_flush_cf(CF_DEFAULT, true);
     for i in cluster.get_node_ids().into_iter() {
-        let db = cluster.get_engine(i);
+        let engine = cluster.get_engine(i);
+        let db = engine.as_inner();
         assert_eq!(
-            db.get_property_int(&"rocksdb.num-files-at-level0").unwrap(),
+            db.get_property_int("rocksdb.num-files-at-level0").unwrap(),
             2
         );
         assert_eq!(
-            db.get_property_int(&"rocksdb.num-files-at-level1").unwrap(),
+            db.get_property_int("rocksdb.num-files-at-level1").unwrap(),
             0
         );
         assert_eq!(
-            db.get_property_int(&"rocksdb.titandb.num-live-blob-file")
+            db.get_property_int("rocksdb.titandb.num-live-blob-file")
                 .unwrap(),
             2
         );
         assert_eq!(
-            db.get_property_int(&"rocksdb.titandb.num-obsolete-blob-file")
+            db.get_property_int("rocksdb.titandb.num-obsolete-blob-file")
                 .unwrap(),
             0
         );
@@ -81,18 +83,16 @@ fn test_turnoff_titan() {
 
     // try reopen db when titan isn't properly turned off.
     configure_for_disable_titan(&mut cluster);
-    assert!(cluster.pre_start_check().is_err());
+    cluster.pre_start_check().unwrap_err();
 
     configure_for_enable_titan(&mut cluster, ReadableSize::kb(0));
-    assert!(cluster.pre_start_check().is_ok());
+    cluster.pre_start_check().unwrap();
     cluster.start().unwrap();
     assert_eq!(cluster.must_get(b"k1"), None);
     for i in cluster.get_node_ids().into_iter() {
         let db = cluster.get_engine(i);
-        let handle = get_cf_handle(&db, CF_DEFAULT).unwrap();
-        let mut opt = Vec::new();
-        opt.push(("blob_run_mode", "kFallback"));
-        assert!(db.set_options_cf(handle, &opt).is_ok());
+        let opt = vec![("blob_run_mode", "kFallback")];
+        db.set_options_cf(CF_DEFAULT, &opt).unwrap();
     }
     cluster.compact_data();
     let mut all_check_pass = true;
@@ -101,17 +101,18 @@ fn test_turnoff_titan() {
         sleep_ms(10);
         all_check_pass = true;
         for i in cluster.get_node_ids().into_iter() {
-            let db = cluster.get_engine(i);
-            if db.get_property_int(&"rocksdb.num-files-at-level0").unwrap() != 0 {
+            let engine = cluster.get_engine(i);
+            let db = engine.as_inner();
+            if db.get_property_int("rocksdb.num-files-at-level0").unwrap() != 0 {
                 all_check_pass = false;
                 break;
             }
-            if db.get_property_int(&"rocksdb.num-files-at-level1").unwrap() != 1 {
+            if db.get_property_int("rocksdb.num-files-at-level1").unwrap() != 1 {
                 all_check_pass = false;
                 break;
             }
             if db
-                .get_property_int(&"rocksdb.titandb.num-live-blob-file")
+                .get_property_int("rocksdb.titandb.num-live-blob-file")
                 .unwrap()
                 != 0
             {
@@ -136,7 +137,7 @@ fn test_turnoff_titan() {
             return;
         }
     }
-    assert!(cluster.pre_start_check().is_ok());
+    cluster.pre_start_check().unwrap();
 }
 
 #[test]
@@ -147,7 +148,7 @@ fn test_delete_files_in_range_for_titan() {
         .unwrap();
 
     // Set configs and create engines
-    let mut cfg = TiKvConfig::default();
+    let mut cfg = TikvConfig::default();
     let cache = cfg.storage.block_cache.build_shared_cache();
     cfg.rocksdb.titan.enabled = true;
     cfg.rocksdb.titan.disable_gc = true;
@@ -157,31 +158,24 @@ fn test_delete_files_in_range_for_titan() {
     cfg.rocksdb.defaultcf.dynamic_level_bytes = false;
     cfg.rocksdb.defaultcf.titan.min_gc_batch_size = ReadableSize(0);
     cfg.rocksdb.defaultcf.titan.discardable_ratio = 0.4;
-    cfg.rocksdb.defaultcf.titan.sample_ratio = 1.0;
     cfg.rocksdb.defaultcf.titan.min_blob_size = ReadableSize(0);
-    let kv_db_opts = cfg.rocksdb.build_opt();
-    let kv_cfs_opts = cfg.rocksdb.build_cf_opts(&cache, None);
+    let resource = cfg
+        .rocksdb
+        .build_resources(Default::default(), cfg.storage.engine);
+    let kv_db_opts = cfg.rocksdb.build_opt(&resource, cfg.storage.engine);
+    let kv_cfs_opts = cfg.rocksdb.build_cf_opts(
+        &cfg.rocksdb.build_cf_resources(cache),
+        None,
+        cfg.storage.api_version(),
+        None,
+        cfg.storage.engine,
+    );
 
     let raft_path = path.path().join(Path::new("titan"));
     let engines = Engines::new(
-        RocksEngine::from_db(Arc::new(
-            engine_rocks::raw_util::new_engine(
-                path.path().to_str().unwrap(),
-                Some(kv_db_opts),
-                ALL_CFS,
-                Some(kv_cfs_opts),
-            )
+        engine_rocks::util::new_engine_opt(path.path().to_str().unwrap(), kv_db_opts, kv_cfs_opts)
             .unwrap(),
-        )),
-        RocksEngine::from_db(Arc::new(
-            engine_rocks::raw_util::new_engine(
-                raft_path.to_str().unwrap(),
-                None,
-                &[CF_DEFAULT],
-                None,
-            )
-            .unwrap(),
-        )),
+        engine_rocks::util::new_engine(raft_path.to_str().unwrap(), &[CF_DEFAULT]).unwrap(),
     );
 
     // Write some mvcc keys and values into db
@@ -190,47 +184,53 @@ fn test_delete_files_in_range_for_titan() {
     let start_ts = 7.into();
     let commit_ts = 8.into();
     let write = Write::new(WriteType::Put, start_ts, None);
-    let db = &engines.kv.as_inner();
-    let default_cf = db.cf_handle(CF_DEFAULT).unwrap();
-    let write_cf = db.cf_handle(CF_WRITE).unwrap();
-    db.put_cf(
-        &default_cf,
-        &data_key(Key::from_raw(b"a").append_ts(start_ts).as_encoded()),
-        b"a_value",
-    )
-    .unwrap();
-    db.put_cf(
-        &write_cf,
-        &data_key(Key::from_raw(b"a").append_ts(commit_ts).as_encoded()),
-        &write.as_ref().to_bytes(),
-    )
-    .unwrap();
-    db.put_cf(
-        &default_cf,
-        &data_key(Key::from_raw(b"b").append_ts(start_ts).as_encoded()),
-        b"b_value",
-    )
-    .unwrap();
-    db.put_cf(
-        &write_cf,
-        &data_key(Key::from_raw(b"b").append_ts(commit_ts).as_encoded()),
-        &write.as_ref().to_bytes(),
-    )
-    .unwrap();
+    engines
+        .kv
+        .put_cf(
+            CF_DEFAULT,
+            &data_key(Key::from_raw(b"a").append_ts(start_ts).as_encoded()),
+            b"a_value",
+        )
+        .unwrap();
+    engines
+        .kv
+        .put_cf(
+            CF_WRITE,
+            &data_key(Key::from_raw(b"a").append_ts(commit_ts).as_encoded()),
+            &write.as_ref().to_bytes(),
+        )
+        .unwrap();
+    engines
+        .kv
+        .put_cf(
+            CF_DEFAULT,
+            &data_key(Key::from_raw(b"b").append_ts(start_ts).as_encoded()),
+            b"b_value",
+        )
+        .unwrap();
+    engines
+        .kv
+        .put_cf(
+            CF_WRITE,
+            &data_key(Key::from_raw(b"b").append_ts(commit_ts).as_encoded()),
+            &write.as_ref().to_bytes(),
+        )
+        .unwrap();
 
     // Flush and compact the kvs into L6.
-    db.flush(true).unwrap();
-    db.c().compact_files_in_range(None, None, None).unwrap();
-    let value = db.get_property_int(&"rocksdb.num-files-at-level0").unwrap();
+    engines.kv.flush_cfs(&[], true).unwrap();
+    engines.kv.compact_files_in_range(None, None, None).unwrap();
+    let db = engines.kv.as_inner();
+    let value = db.get_property_int("rocksdb.num-files-at-level0").unwrap();
     assert_eq!(value, 0);
-    let value = db.get_property_int(&"rocksdb.num-files-at-level6").unwrap();
+    let value = db.get_property_int("rocksdb.num-files-at-level6").unwrap();
     assert_eq!(value, 1);
 
     // Delete one mvcc kvs we have written above.
     // Here we make the kvs on the L5 by ingesting SST.
     let sst_file_path = Path::new(db.path()).join("for_ingest.sst");
     let mut writer = RocksSstWriterBuilder::new()
-        .build(&sst_file_path.to_str().unwrap())
+        .build(sst_file_path.to_str().unwrap())
         .unwrap();
     writer
         .delete(&data_key(
@@ -240,7 +240,8 @@ fn test_delete_files_in_range_for_titan() {
     writer.finish().unwrap();
     let mut opts = IngestExternalFileOptions::new();
     opts.move_files(true);
-    db.ingest_external_file_cf(&default_cf, &opts, &[sst_file_path.to_str().unwrap()])
+    let cf_default = db.cf_handle(CF_DEFAULT).unwrap();
+    db.ingest_external_file_cf(cf_default, &opts, &[sst_file_path.to_str().unwrap()])
         .unwrap();
 
     // Now the LSM structure of default cf is:
@@ -250,20 +251,20 @@ fn test_delete_files_in_range_for_titan() {
     //
     // There is one blob file in Titan
     // blob1: (a_7, a_value), (b_7, b_value)
-    let value = db.get_property_int(&"rocksdb.num-files-at-level0").unwrap();
+    let value = db.get_property_int("rocksdb.num-files-at-level0").unwrap();
     assert_eq!(value, 0);
-    let value = db.get_property_int(&"rocksdb.num-files-at-level5").unwrap();
+    let value = db.get_property_int("rocksdb.num-files-at-level5").unwrap();
     assert_eq!(value, 1);
-    let value = db.get_property_int(&"rocksdb.num-files-at-level6").unwrap();
+    let value = db.get_property_int("rocksdb.num-files-at-level6").unwrap();
     assert_eq!(value, 1);
 
     // Used to trigger titan gc
-    let db = &engines.kv.as_inner();
-    db.put(b"1", b"1").unwrap();
-    db.flush(true).unwrap();
-    db.put(b"2", b"2").unwrap();
-    db.flush(true).unwrap();
-    db.c()
+    let engine = &engines.kv;
+    engine.put(b"1", b"1").unwrap();
+    engine.flush_cfs(&[], true).unwrap();
+    engine.put(b"2", b"2").unwrap();
+    engine.flush_cfs(&[], true).unwrap();
+    engine
         .compact_files_in_range(Some(b"0"), Some(b"3"), Some(1))
         .unwrap();
 
@@ -279,13 +280,14 @@ fn test_delete_files_in_range_for_titan() {
     // blob2: (1, 1)
     // blob3: (2, 2)
     // blob4: (b_7, b_value)
-    let value = db.get_property_int(&"rocksdb.num-files-at-level0").unwrap();
+    let db = engine.as_inner();
+    let value = db.get_property_int("rocksdb.num-files-at-level0").unwrap();
     assert_eq!(value, 0);
-    let value = db.get_property_int(&"rocksdb.num-files-at-level1").unwrap();
+    let value = db.get_property_int("rocksdb.num-files-at-level1").unwrap();
     assert_eq!(value, 1);
-    let value = db.get_property_int(&"rocksdb.num-files-at-level5").unwrap();
+    let value = db.get_property_int("rocksdb.num-files-at-level5").unwrap();
     assert_eq!(value, 1);
-    let value = db.get_property_int(&"rocksdb.num-files-at-level6").unwrap();
+    let value = db.get_property_int("rocksdb.num-files-at-level6").unwrap();
     assert_eq!(value, 1);
 
     // Wait Titan to purge obsolete files
@@ -303,11 +305,12 @@ fn test_delete_files_in_range_for_titan() {
     // blob4: (b_7, b_value)
 
     // `delete_files_in_range` may expose some old keys.
-    // For Titan it may encounter `missing blob file` in `delete_all_in_range`,
+    // For Titan it may encounter `missing blob file` in `delete_ranges_cfs`,
     // so we set key_only for Titan.
     engines
         .kv
-        .delete_all_in_range(
+        .delete_ranges_cfs(
+            &WriteOptions::default(),
             DeleteStrategy::DeleteFiles,
             &[Range::new(
                 &data_key(Key::from_raw(b"a").as_encoded()),
@@ -317,7 +320,8 @@ fn test_delete_files_in_range_for_titan() {
         .unwrap();
     engines
         .kv
-        .delete_all_in_range(
+        .delete_ranges_cfs(
+            &WriteOptions::default(),
             DeleteStrategy::DeleteByKey,
             &[Range::new(
                 &data_key(Key::from_raw(b"a").as_encoded()),
@@ -327,7 +331,8 @@ fn test_delete_files_in_range_for_titan() {
         .unwrap();
     engines
         .kv
-        .delete_all_in_range(
+        .delete_ranges_cfs(
+            &WriteOptions::default(),
             DeleteStrategy::DeleteBlobs,
             &[Range::new(
                 &data_key(Key::from_raw(b"a").as_encoded()),
@@ -346,36 +351,46 @@ fn test_delete_files_in_range_for_titan() {
     // blob2: (1, 1)
     // blob3: (2, 2)
     // blob4: (b_7, b_value)
-    let value = db.get_property_int(&"rocksdb.num-files-at-level0").unwrap();
+    let value = db.get_property_int("rocksdb.num-files-at-level0").unwrap();
     assert_eq!(value, 0);
-    let value = db.get_property_int(&"rocksdb.num-files-at-level1").unwrap();
+    let value = db.get_property_int("rocksdb.num-files-at-level1").unwrap();
     assert_eq!(value, 1);
-    let value = db.get_property_int(&"rocksdb.num-files-at-level5").unwrap();
+    let value = db.get_property_int("rocksdb.num-files-at-level5").unwrap();
     assert_eq!(value, 0);
-    let value = db.get_property_int(&"rocksdb.num-files-at-level6").unwrap();
+    let value = db.get_property_int("rocksdb.num-files-at-level6").unwrap();
     assert_eq!(value, 1);
 
     // Generate a snapshot
-    let default_sst_file_path = path.path().join("default.sst");
-    let write_sst_file_path = path.path().join("write.sst");
-    let limiter = Limiter::new(INFINITY);
-    build_sst_cf_file::<RocksEngine>(
-        &default_sst_file_path.to_str().unwrap(),
+    let limiter = Limiter::new(f64::INFINITY);
+    let mut cf_file = CfFile::new(
+        CF_DEFAULT,
+        PathBuf::from(path.path().to_str().unwrap()),
+        "default".to_string(),
+        ".sst".to_string(),
+    );
+    build_sst_cf_file_list::<RocksEngine>(
+        &mut cf_file,
         &engines.kv,
         &engines.kv.snapshot(),
-        CF_DEFAULT,
         b"",
         b"{",
+        u64::MAX,
         &limiter,
     )
     .unwrap();
-    build_sst_cf_file::<RocksEngine>(
-        &write_sst_file_path.to_str().unwrap(),
+    let mut cf_file_write = CfFile::new(
+        CF_WRITE,
+        PathBuf::from(path.path().to_str().unwrap()),
+        "write".to_string(),
+        ".sst".to_string(),
+    );
+    build_sst_cf_file_list::<RocksEngine>(
+        &mut cf_file_write,
         &engines.kv,
         &engines.kv.snapshot(),
-        CF_WRITE,
         b"",
         b"{",
+        u64::MAX,
         &limiter,
     )
     .unwrap();
@@ -386,18 +401,18 @@ fn test_delete_files_in_range_for_titan() {
         .tempdir()
         .unwrap();
     let engines1 = new_temp_engine(&dir1);
-    apply_sst_cf_file(
-        &default_sst_file_path.to_str().unwrap(),
-        &engines1.kv,
-        CF_DEFAULT,
-    )
-    .unwrap();
-    apply_sst_cf_file(
-        &write_sst_file_path.to_str().unwrap(),
-        &engines1.kv,
-        CF_WRITE,
-    )
-    .unwrap();
+    let tmp_file_paths = cf_file.tmp_file_paths();
+    let tmp_file_paths = tmp_file_paths
+        .iter()
+        .map(|s| s.as_str())
+        .collect::<Vec<&str>>();
+    apply_sst_cf_file(&tmp_file_paths, &engines1.kv, CF_DEFAULT).unwrap();
+    let tmp_file_paths = cf_file_write.tmp_file_paths();
+    let tmp_file_paths = tmp_file_paths
+        .iter()
+        .map(|s| s.as_str())
+        .collect::<Vec<&str>>();
+    apply_sst_cf_file(&tmp_file_paths, &engines1.kv, CF_WRITE).unwrap();
 
     // Do scan on other DB.
     let mut r = Region::default();
@@ -405,7 +420,7 @@ fn test_delete_files_in_range_for_titan() {
     r.set_start_key(b"a".to_vec());
     r.set_end_key(b"z".to_vec());
     let snapshot = RegionSnapshot::<RocksSnapshot>::from_raw(engines1.kv, r);
-    let mut scanner = ScannerBuilder::new(snapshot, 10.into(), false)
+    let mut scanner = ScannerBuilder::new(snapshot, 10.into())
         .range(Some(Key::from_raw(b"a")), None)
         .build()
         .unwrap();

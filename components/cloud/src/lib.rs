@@ -5,12 +5,13 @@
 
 #![feature(min_specialization)]
 
-#[macro_use]
-extern crate failure;
-
 pub mod error;
 pub use error::{Error, ErrorTrait, Result};
 
 pub mod kms;
-#[cfg(test)]
-pub use kms::{Config, DataKeyPair, EncryptedKey, KeyId, KmsProvider, PlainKey};
+pub use kms::{Config, DataKeyPair, EncryptedKey, KeyId, KmsProvider, PlainKey, SubConfigAzure};
+
+pub mod blob;
+pub use blob::{none_to_empty, BucketConf, StringNonEmpty};
+
+pub mod metrics;

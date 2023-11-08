@@ -1,22 +1,24 @@
-use test::{black_box, Bencher};
+// Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
+
+use std::sync::Arc;
 
 use engine_rocks::RocksSnapshot;
 use kvproto::kvrpcpb::{Context, IsolationLevel};
-use std::sync::Arc;
+use test::{black_box, Bencher};
 use test_storage::SyncTestStorageBuilder;
 use tidb_query_datatype::codec::table;
 use tikv::storage::{Engine, SnapshotStore, Statistics, Store};
 use txn_types::{Key, Mutation};
 
 fn table_lookup_gen_data() -> (SnapshotStore<Arc<RocksSnapshot>>, Vec<Key>) {
-    let store = SyncTestStorageBuilder::new().build().unwrap();
+    let store = SyncTestStorageBuilder::default().build(0).unwrap();
     let mut mutations = Vec::new();
     let mut keys = Vec::new();
     for i in 0..30000 {
         let user_key = table::encode_row_key(5, i);
         let user_value = vec![b'x'; 60];
         let key = Key::from_raw(&user_key);
-        let mutation = Mutation::Put((key.clone(), user_value));
+        let mutation = Mutation::make_put(key.clone(), user_value);
         mutations.push(mutation);
         keys.push(key);
     }
@@ -28,7 +30,7 @@ fn table_lookup_gen_data() -> (SnapshotStore<Arc<RocksSnapshot>>, Vec<Key>) {
         .unwrap();
     store.commit(Context::default(), keys, 1, 2).unwrap();
 
-    let engine = store.get_engine();
+    let mut engine = store.get_engine();
     let db = engine.get_rocksdb().get_sync_db();
     db.compact_range_cf(db.cf_handle("write").unwrap(), None, None);
     db.compact_range_cf(db.cf_handle("default").unwrap(), None, None);
@@ -41,11 +43,12 @@ fn table_lookup_gen_data() -> (SnapshotStore<Arc<RocksSnapshot>>, Vec<Key>) {
         IsolationLevel::Si,
         true,
         Default::default(),
+        Default::default(),
         false,
     );
 
-    // Keys are given in order, and are far away from each other to simulate a normal table lookup
-    // scenario.
+    // Keys are given in order, and are far away from each other to simulate a
+    // normal table lookup scenario.
     let mut get_keys = Vec::new();
     for i in (0..30000).step_by(30) {
         get_keys.push(Key::from_raw(&table::encode_row_key(5, i)));

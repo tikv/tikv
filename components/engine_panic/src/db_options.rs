@@ -1,13 +1,13 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+use engine_traits::{DbOptions, DbOptionsExt, Result, TitanCfOptions};
+
 use crate::engine::PanicEngine;
-use engine_traits::Result;
-use engine_traits::{DBOptions, DBOptionsExt, TitanDBOptions};
 
-impl DBOptionsExt for PanicEngine {
-    type DBOptions = PanicDBOptions;
+impl DbOptionsExt for PanicEngine {
+    type DbOptions = PanicDbOptions;
 
-    fn get_db_options(&self) -> Self::DBOptions {
+    fn get_db_options(&self) -> Self::DbOptions {
         panic!()
     }
     fn set_db_options(&self, options: &[(&str, &str)]) -> Result<()> {
@@ -15,10 +15,10 @@ impl DBOptionsExt for PanicEngine {
     }
 }
 
-pub struct PanicDBOptions;
+pub struct PanicDbOptions;
 
-impl DBOptions for PanicDBOptions {
-    type TitanDBOptions = PanicTitanDBOptions;
+impl DbOptions for PanicDbOptions {
+    type TitanDbOptions = PanicTitanDbOptions;
 
     fn new() -> Self {
         panic!()
@@ -40,18 +40,30 @@ impl DBOptions for PanicDBOptions {
         panic!()
     }
 
+    fn get_flush_size(&self) -> Result<u64> {
+        panic!()
+    }
+
     fn set_rate_limiter_auto_tuned(&mut self, rate_limiter_auto_tuned: bool) -> Result<()> {
         panic!()
     }
 
-    fn set_titandb_options(&mut self, opts: &Self::TitanDBOptions) {
+    fn set_flush_size(&mut self, f: usize) -> Result<()> {
+        panic!()
+    }
+
+    fn set_flush_oldest_first(&mut self, f: bool) -> Result<()> {
+        panic!()
+    }
+
+    fn set_titandb_options(&mut self, opts: &Self::TitanDbOptions) {
         panic!()
     }
 }
 
-pub struct PanicTitanDBOptions;
+pub struct PanicTitanDbOptions;
 
-impl TitanDBOptions for PanicTitanDBOptions {
+impl TitanCfOptions for PanicTitanDbOptions {
     fn new() -> Self {
         panic!()
     }

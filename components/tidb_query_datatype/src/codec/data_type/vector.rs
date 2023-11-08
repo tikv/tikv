@@ -1,16 +1,15 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::{EvalType, FieldTypeAccessor};
-
-use super::scalar::ScalarValueRef;
-use super::*;
-use crate::codec::mysql::decimal::DECIMAL_STRUCT_SIZE;
-use crate::codec::Result;
+use super::{scalar::ScalarValueRef, *};
+use crate::{
+    codec::{mysql::decimal::DECIMAL_STRUCT_SIZE, Result},
+    match_template_collator, match_template_evaltype, EvalType, FieldTypeAccessor,
+};
 
 /// A vector value container, a.k.a. column, for all concrete eval types.
 ///
-/// The inner concrete value is immutable. However it is allowed to push and remove values from
-/// this vector container.
+/// The inner concrete value is immutable. However it is allowed to push and
+/// remove values from this vector container.
 #[derive(Debug, PartialEq, Clone)]
 pub enum VectorValue {
     Int(ChunkedVecSized<Int>),
@@ -26,21 +25,63 @@ pub enum VectorValue {
 }
 
 impl VectorValue {
-    /// Creates an empty `VectorValue` according to `eval_tp` and reserves capacity according
-    /// to `capacity`.
+    /// Creates an empty `VectorValue` according to `eval_tp` and reserves
+    /// capacity according to `capacity`.
     #[inline]
     pub fn with_capacity(capacity: usize, eval_tp: EvalType) -> Self {
-        match_template_evaluable! {
+        match_template_evaltype! {
             TT, match eval_tp {
                 EvalType::TT => VectorValue::TT(ChunkedVec::with_capacity(capacity)),
             }
         }
     }
 
+    /// Creates a `VectorValue` of length `len` with the given value `scalar`.
+    #[inline]
+    pub fn from_scalar(scalar: &ScalarValue, len: usize) -> Self {
+        macro_rules! expand_convertion {
+            ($val:tt, $( $tp:tt : $chktp:ty ),* ) => {
+                match &$val {
+                    $(
+                        &ScalarValue::$tp(val) => {
+                            let mut v: $chktp = ChunkedVec::with_capacity(len);
+                            match val {
+                                None => {
+                                    for _ in 0..len {
+                                        v.push_null();
+                                    }
+                                },
+                                Some(val) => {
+                                    for _ in 0..len {
+                                        v.push_data(val.clone());
+                                    }
+                                }
+                            }
+                            VectorValue::$tp(v)
+                        }
+                    )*
+                }
+            }
+        }
+        expand_convertion!(
+            scalar,
+            Int: ChunkedVecSized<Int>,
+            Real: ChunkedVecSized<Real>,
+            Decimal: ChunkedVecSized<Decimal>,
+            DateTime: ChunkedVecSized<DateTime>,
+            Duration: ChunkedVecSized<Duration>,
+            Set: ChunkedVecSet,
+            Json: ChunkedVecJson,
+            Enum: ChunkedVecEnum,
+            Bytes: ChunkedVecBytes
+        )
+    }
+
     /// Creates a new empty `VectorValue` with the same eval type.
     #[inline]
+    #[must_use]
     pub fn clone_empty(&self, capacity: usize) -> Self {
-        match_template_evaluable! {
+        match_template_evaltype! {
             TT, match self {
                 VectorValue::TT(_) => VectorValue::TT(ChunkedVec::with_capacity(capacity)),
             }
@@ -50,7 +91,7 @@ impl VectorValue {
     /// Returns the `EvalType` used to construct current column.
     #[inline]
     pub fn eval_type(&self) -> EvalType {
-        match_template_evaluable! {
+        match_template_evaltype! {
             TT, match self {
                 VectorValue::TT(_) => EvalType::TT,
             }
@@ -60,7 +101,7 @@ impl VectorValue {
     /// Returns the number of datums contained in this column.
     #[inline]
     pub fn len(&self) -> usize {
-        match_template_evaluable! {
+        match_template_evaltype! {
             TT, match self {
                 VectorValue::TT(v) => v.len(),
             }
@@ -75,12 +116,14 @@ impl VectorValue {
         self.len() == 0
     }
 
-    /// Shortens the column, keeping the first `len` datums and dropping the rest.
+    /// Shortens the column, keeping the first `len` datums and dropping the
+    /// rest.
     ///
-    /// If `len` is greater than the column's current length, this has no effect.
+    /// If `len` is greater than the column's current length, this has no
+    /// effect.
     #[inline]
     pub fn truncate(&mut self, len: usize) {
-        match_template_evaluable! {
+        match_template_evaltype! {
             TT, match self {
                 VectorValue::TT(v) => v.truncate(len),
             }
@@ -93,10 +136,11 @@ impl VectorValue {
         self.truncate(0);
     }
 
-    /// Returns the number of elements this column can hold without reallocating.
+    /// Returns the number of elements this column can hold without
+    /// reallocating.
     #[inline]
     pub fn capacity(&self) -> usize {
-        match_template_evaluable! {
+        match_template_evaltype! {
             TT, match self {
                 VectorValue::TT(v) => v.capacity(),
             }
@@ -110,7 +154,7 @@ impl VectorValue {
     /// Panics if `other` does not have the same `EvalType` as `Self`.
     #[inline]
     pub fn append(&mut self, other: &mut VectorValue) {
-        match_template_evaluable! {
+        match_template_evaltype! {
             TT, match self {
                 VectorValue::TT(self_vec) => match other {
                     VectorValue::TT(other_vec) => {
@@ -124,14 +168,15 @@ impl VectorValue {
 
     /// Evaluates values into MySQL logic values.
     ///
-    /// The caller must provide an output buffer which is large enough for holding values.
+    /// The caller must provide an output buffer which is large enough for
+    /// holding values.
     pub fn eval_as_mysql_bools(
         &self,
         ctx: &mut EvalContext,
         outputs: &mut [bool],
     ) -> tidb_query_common::error::Result<()> {
         assert!(outputs.len() >= self.len());
-        match_template_evaluable! {
+        match_template_evaltype! {
             TT, match self {
                 VectorValue::TT(v) => {
                     let l = self.len();
@@ -151,7 +196,7 @@ impl VectorValue {
     /// Panics if index is out of range.
     #[inline]
     pub fn get_scalar_ref(&self, index: usize) -> ScalarValueRef<'_> {
-        match_template_evaluable! {
+        match_template_evaltype! {
             TT, match self {
                 VectorValue::TT(v) => ScalarValueRef::TT(v.get_option_ref(index)),
             }
@@ -216,8 +261,8 @@ impl VectorValue {
                 }
                 size
             }
-            // TODO: implement here after we implement enum/set encoding
-            VectorValue::Enum(_) => unimplemented!(),
+            VectorValue::Enum(_) => logical_rows.len() * 9,
+            // TODO: implement here after we implement set encoding
             VectorValue::Set(_) => unimplemented!(),
         }
     }
@@ -260,8 +305,22 @@ impl VectorValue {
                 }
                 size
             }
-            // TODO: implement here after we implement enum/set encoding
-            VectorValue::Enum(_) => unimplemented!(),
+            VectorValue::Enum(vec) => {
+                let mut size = logical_rows.len() * 9 + 10;
+                for idx in logical_rows {
+                    let el = vec.get_option_ref(*idx);
+                    match el {
+                        Some(v) => {
+                            size += 8 /* Offset */ + v.len();
+                        }
+                        None => {
+                            size += 8;
+                        }
+                    }
+                }
+                size
+            }
+            // TODO: implement here after we implement set encoding
             VectorValue::Set(_) => unimplemented!(),
         }
     }
@@ -307,7 +366,7 @@ impl VectorValue {
                         output.write_evaluable_datum_null()?;
                     }
                     Some(val) => {
-                        output.write_evaluable_datum_decimal(*val)?;
+                        output.write_evaluable_datum_decimal(val)?;
                     }
                 }
                 Ok(())
@@ -317,8 +376,8 @@ impl VectorValue {
                     None => {
                         output.write_evaluable_datum_null()?;
                     }
-                    Some(ref val) => {
-                        output.write_evaluable_datum_bytes(*val)?;
+                    Some(val) => {
+                        output.write_evaluable_datum_bytes(val)?;
                     }
                 }
                 Ok(())
@@ -356,8 +415,18 @@ impl VectorValue {
                 }
                 Ok(())
             }
-            // TODO: implement enum/set encoding
-            VectorValue::Enum(_) => unimplemented!(),
+            VectorValue::Enum(ref vec) => {
+                match &vec.get_option_ref(row_index) {
+                    None => {
+                        output.write_evaluable_datum_null()?;
+                    }
+                    Some(ref val) => {
+                        output.write_evaluable_datum_enum_uint(*val)?;
+                    }
+                }
+                Ok(())
+            }
+            // TODO: implement set encoding
             VectorValue::Set(_) => unimplemented!(),
         }
     }
@@ -369,9 +438,10 @@ impl VectorValue {
         ctx: &mut EvalContext,
         output: &mut Vec<u8>,
     ) -> Result<()> {
-        use crate::codec::collation::{match_template_collator, Collator};
-        use crate::codec::datum_codec::EvaluableDatumEncoder;
-        use crate::Collation;
+        use crate::{
+            codec::{collation::Collator, datum_codec::EvaluableDatumEncoder},
+            Collation,
+        };
 
         match self {
             VectorValue::Bytes(ref vec) => {
@@ -379,7 +449,7 @@ impl VectorValue {
                     None => {
                         output.write_evaluable_datum_null()?;
                     }
-                    Some(ref val) => {
+                    Some(val) => {
                         let sort_key = match_template_collator! {
                             TT, match field_type.collation()? {
                                 Collation::TT => TT::sort_key(val)?
@@ -398,7 +468,8 @@ impl VectorValue {
 macro_rules! impl_as_slice {
     ($ty:tt, $name:ident) => {
         impl VectorValue {
-            /// Extracts a slice of values in specified concrete type from current column.
+            /// Extracts a slice of values in specified concrete type from current
+            /// column.
             ///
             /// # Panics
             ///
@@ -428,8 +499,9 @@ impl_as_slice! { Json, to_json_vec }
 impl_as_slice! { Enum, to_enum_vec }
 impl_as_slice! { Set, to_set_vec }
 
-/// Additional `VectorValue` methods available via generics. These methods support different
-/// concrete types but have same names and should be specified via the generic parameter type.
+/// Additional `VectorValue` methods available via generics. These methods
+/// support different concrete types but have same names and should be specified
+/// via the generic parameter type.
 pub trait VectorValueExt<T: EvaluableRet> {
     /// The generic version for `VectorValue::push_xxx()`.
     fn push(&mut self, v: Option<T>);

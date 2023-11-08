@@ -1,11 +1,18 @@
+// Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
+
+use std::{
+    mem::{forget, ManuallyDrop},
+    thread,
+};
+
 use concurrency_manager::ConcurrencyManager;
 use futures::executor::block_on;
 use rand::prelude::*;
-use std::{mem::forget, mem::ManuallyDrop, thread};
 use txn_types::{Key, Lock, LockType};
 
 // This test is heavy so we shouldn't run it daily.
-// Run it with the following command (recommending release mode) and see the printed stats:
+// Run it with the following command (recommending release mode) and see the
+// printed stats:
 //
 // ```
 // cargo test --package concurrency_manager --test memory_usage --features jemalloc --release -- test_memory_usage --exact --ignored --nocapture
@@ -41,6 +48,7 @@ fn test_memory_usage() {
                     10.into(),
                     1,
                     20.into(),
+                    false,
                 );
 
                 // Key already exists

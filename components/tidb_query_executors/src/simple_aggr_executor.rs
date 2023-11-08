@@ -1,27 +1,31 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-//! Simple aggregation is an aggregation that do not have `GROUP BY`s. It is more even more simpler
-//! than stream aggregation.
+//! Simple aggregation is an aggregation that do not have `GROUP BY`s. It is
+//! more even more simpler than stream aggregation.
 
 use std::sync::Arc;
 
-use tipb::Aggregation;
-use tipb::{Expr, FieldType};
-
-use crate::interface::*;
-use crate::util::aggr_executor::*;
+use async_trait::async_trait;
 use tidb_query_aggr::*;
-use tidb_query_common::storage::IntervalRange;
-use tidb_query_common::Result;
-use tidb_query_datatype::codec::batch::{LazyBatchColumn, LazyBatchColumnVec};
-use tidb_query_datatype::codec::data_type::*;
-use tidb_query_datatype::expr::EvalConfig;
+use tidb_query_common::{storage::IntervalRange, Result};
+use tidb_query_datatype::{
+    codec::{
+        batch::{LazyBatchColumn, LazyBatchColumnVec},
+        data_type::*,
+    },
+    expr::EvalConfig,
+    match_template_evaltype,
+};
 use tidb_query_expr::RpnStackNode;
+use tipb::{Aggregation, Expr, FieldType};
+
+use crate::{interface::*, util::aggr_executor::*};
 
 pub struct BatchSimpleAggregationExecutor<Src: BatchExecutor>(
     AggregationExecutor<Src, SimpleAggregationImpl>,
 );
 
+#[async_trait]
 impl<Src: BatchExecutor> BatchExecutor for BatchSimpleAggregationExecutor<Src> {
     type StorageStats = Src::StorageStats;
 
@@ -31,8 +35,8 @@ impl<Src: BatchExecutor> BatchExecutor for BatchSimpleAggregationExecutor<Src> {
     }
 
     #[inline]
-    fn next_batch(&mut self, scan_rows: usize) -> BatchExecuteResult {
-        self.0.next_batch(scan_rows)
+    async fn next_batch(&mut self, scan_rows: usize) -> BatchExecuteResult {
+        self.0.next_batch(scan_rows).await
     }
 
     #[inline]
@@ -56,8 +60,8 @@ impl<Src: BatchExecutor> BatchExecutor for BatchSimpleAggregationExecutor<Src> {
     }
 }
 
-// We assign a dummy type `Box<dyn BatchExecutor<StorageStats = ()>>` so that we can omit the type
-// when calling `check_supported`.
+// We assign a dummy type `Box<dyn BatchExecutor<StorageStats = ()>>` so that we
+// can omit the type when calling `check_supported`.
 impl BatchSimpleAggregationExecutor<Box<dyn BatchExecutor<StorageStats = ()>>> {
     /// Checks whether this executor can be used.
     #[inline]
@@ -102,9 +106,12 @@ impl<Src: BatchExecutor> BatchSimpleAggregationExecutor<Src> {
         aggr_defs: Vec<Expr>,
         aggr_def_parser: impl AggrDefinitionParser,
     ) -> Result<Self> {
-        // Empty states is fine because it will be re-initialized later according to the content
-        // in entities.
-        let aggr_impl = SimpleAggregationImpl { states: Vec::new() };
+        // Empty states is fine because it will be re-initialized later according to the
+        // content in entities.
+        let aggr_impl = SimpleAggregationImpl {
+            states: Vec::new(),
+            has_input_rows: false,
+        };
 
         Ok(Self(AggregationExecutor::new(
             aggr_impl,
@@ -118,6 +125,13 @@ impl<Src: BatchExecutor> BatchSimpleAggregationExecutor<Src> {
 
 pub struct SimpleAggregationImpl {
     states: Vec<Box<dyn AggrFunctionState>>,
+    // To fix https://github.com/pingcap/tidb/issues/30923
+    // for aggregation without group by, it should return at least 1 row even if
+    // there is no input row, however, the aggregation executed in TiKV is always
+    // the first stage agg, so it is safe to not return any thing if no input.
+    // todo should add variable like agg_stage, and if there is no input rows,
+    //  only return 1 row if the aggregation is in the final stage
+    has_input_rows: bool,
 }
 
 impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for SimpleAggregationImpl {
@@ -128,6 +142,7 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for SimpleAggregationImpl 
             .map(|f| f.create_state())
             .collect();
         self.states = states;
+        self.has_input_rows = false
     }
 
     #[inline]
@@ -138,6 +153,7 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for SimpleAggregationImpl 
         input_logical_rows: &[usize],
     ) -> Result<()> {
         let rows_len = input_logical_rows.len();
+        self.has_input_rows |= rows_len > 0;
 
         assert_eq!(self.states.len(), entities.each_aggr_exprs.len());
 
@@ -154,7 +170,7 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for SimpleAggregationImpl 
 
             match aggr_fn_input {
                 RpnStackNode::Scalar { value, .. } => {
-                    match_template_evaluable! {
+                    match_template_evaltype! {
                         TT, match value.as_scalar_value_ref() {
                             ScalarValueRef::TT(scalar_value) => {
                                 update_repeat!(
@@ -170,7 +186,7 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for SimpleAggregationImpl 
                 RpnStackNode::Vector { value, .. } => {
                     let physical_vec = value.as_ref();
                     let logical_rows = value.logical_rows();
-                    match_template_evaluable! {
+                    match_template_evaltype! {
                         TT, match physical_vec {
                             VectorValue::TT(vec) => {
                                 update_vector!(
@@ -191,22 +207,25 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for SimpleAggregationImpl 
 
     #[inline]
     fn groups_len(&self) -> usize {
-        1
+        self.has_input_rows as usize
     }
 
     #[inline]
     fn iterate_available_groups(
         &mut self,
         entities: &mut Entities<Src>,
-        src_is_drained: bool,
+        src_is_drained: BatchExecIsDrain,
         mut iteratee: impl FnMut(&mut Entities<Src>, &[Box<dyn AggrFunctionState>]) -> Result<()>,
     ) -> Result<Vec<LazyBatchColumn>> {
-        assert!(src_is_drained);
-        iteratee(entities, &self.states)?;
+        assert!(src_is_drained.stop());
+        if self.has_input_rows {
+            iteratee(entities, &self.states)?;
+        }
         Ok(Vec::new())
     }
 
-    /// Simple aggregation can output aggregate results only if the source is drained.
+    /// Simple aggregation can output aggregate results only if the source is
+    /// drained.
     #[inline]
     fn is_partial_results_ready(&self) -> bool {
         false
@@ -215,21 +234,24 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for SimpleAggregationImpl 
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
+    use futures::executor::block_on;
     use tidb_query_codegen::AggrFunction;
-    use tidb_query_datatype::FieldTypeTp;
-
-    use crate::util::aggr_executor::tests::*;
-    use crate::util::mock_executor::MockExecutor;
-    use tidb_query_datatype::expr::{EvalContext, EvalWarnings};
+    use tidb_query_datatype::{
+        expr::{EvalContext, EvalWarnings},
+        FieldTypeTp,
+    };
     use tidb_query_expr::{RpnExpression, RpnExpressionBuilder};
+
+    use super::*;
+    use crate::util::{aggr_executor::tests::*, mock_executor::MockExecutor};
 
     #[test]
     fn test_it_works_unit() {
-        /// Aggregate function `Foo` accepts a Bytes column, returns a Int datum.
+        /// Aggregate function `Foo` accepts a Bytes column, returns a Int
+        /// datum.
         ///
-        /// The returned data is the sum of the length of all accepted bytes datums.
+        /// The returned data is the sum of the length of all accepted bytes
+        /// datums.
         #[derive(Debug, AggrFunction)]
         #[aggr_function(state = AggrFnFooState::new())]
         struct AggrFnFoo;
@@ -274,9 +296,9 @@ mod tests {
             output.push(FieldTypeTp::LongLong.into());
         }
 
-        /// Aggregate function `Bar` accepts a Real column, returns `(a: Int, b: Int, c: Real)`,
-        /// where `a` is the number of rows including nulls, `b` is the number of rows excluding
-        /// nulls, `c` is the sum of all values.
+        /// Aggregate function `Bar` accepts a Real column, returns `(a: Int, b:
+        /// Int, c: Real)`, where `a` is the number of rows including nulls, `b`
+        /// is the number of rows excluding nulls, `c` is the sum of all values.
         #[derive(Debug, AggrFunction)]
         #[aggr_function(state = AggrFnBarState::new())]
         struct AggrFnBar;
@@ -293,7 +315,7 @@ mod tests {
                 Self {
                     rows_with_null: 0,
                     rows_without_null: 0,
-                    sum: Real::from(0.0),
+                    sum: Real::new(0.0).unwrap(),
                 }
             }
         }
@@ -333,7 +355,8 @@ mod tests {
             output.push(FieldTypeTp::Double.into());
         }
 
-        // This test creates a simple aggregation executor with the following aggregate functions:
+        // This test creates a simple aggregation executor with the following aggregate
+        // functions:
         // - Foo("abc")
         // - Foo(NULL)
         // - Bar(42.5)
@@ -344,8 +367,8 @@ mod tests {
 
         let src_exec = make_src_executor_1();
 
-        // As a unit test, let's use the most simple way to build the executor. No complex parsers
-        // involved.
+        // As a unit test, let's use the most simple way to build the executor. No
+        // complex parsers involved.
 
         let aggr_definitions: Vec<_> = (0..6)
             .map(|index| {
@@ -440,15 +463,15 @@ mod tests {
             BatchSimpleAggregationExecutor::new_for_test(src_exec, aggr_definitions, MyParser);
 
         // The scan rows parameter has no effect for mock executor. We don't care.
-        let r = exec.next_batch(1);
+        let r = block_on(exec.next_batch(1));
         assert!(r.logical_rows.is_empty());
-        assert!(!r.is_drained.unwrap());
+        assert!(r.is_drained.unwrap().is_remain());
 
-        let r = exec.next_batch(1);
+        let r = block_on(exec.next_batch(1));
         assert!(r.logical_rows.is_empty());
-        assert!(!r.is_drained.unwrap());
+        assert!(r.is_drained.unwrap().is_remain());
 
-        let r = exec.next_batch(1);
+        let r = block_on(exec.next_batch(1));
         assert_eq!(&r.logical_rows, &[0]);
         assert_eq!(r.physical_columns.rows_len(), 1);
         assert_eq!(r.physical_columns.columns_len(), 12);
@@ -479,7 +502,7 @@ mod tests {
             r.physical_columns[11].decoded().to_real_vec(),
             &[Real::new(12.0).ok()]
         );
-        assert!(r.is_drained.unwrap());
+        assert!(r.is_drained.unwrap().stop());
     }
 
     #[test]
@@ -487,7 +510,8 @@ mod tests {
         use tipb::ExprType;
         use tipb_helper::ExprDefBuilder;
 
-        // This test creates a simple aggregation executor with the following aggregate functions:
+        // This test creates a simple aggregation executor with the following aggregate
+        // functions:
         // - COUNT(1)
         // - COUNT(4.5)
         // - COUNT(NULL)
@@ -527,15 +551,15 @@ mod tests {
             AllAggrDefinitionParser,
         );
 
-        let r = exec.next_batch(1);
+        let r = block_on(exec.next_batch(1));
         assert!(r.logical_rows.is_empty());
-        assert!(!r.is_drained.unwrap());
+        assert!(r.is_drained.unwrap().is_remain());
 
-        let r = exec.next_batch(1);
+        let r = block_on(exec.next_batch(1));
         assert!(r.logical_rows.is_empty());
-        assert!(!r.is_drained.unwrap());
+        assert!(r.is_drained.unwrap().is_remain());
 
-        let r = exec.next_batch(1);
+        let r = block_on(exec.next_batch(1));
         assert_eq!(&r.logical_rows, &[0]);
         assert_eq!(r.physical_columns.rows_len(), 1);
         assert_eq!(r.physical_columns.columns_len(), 10);
@@ -562,7 +586,7 @@ mod tests {
             r.physical_columns[9].decoded().to_real_vec(),
             &[Real::new(8.5).ok()]
         );
-        assert!(r.is_drained.unwrap());
+        assert!(r.is_drained.unwrap().stop());
     }
 
     #[test]
@@ -605,13 +629,13 @@ mod tests {
                     )]),
                     logical_rows: Vec::new(),
                     warnings: EvalWarnings::default(),
-                    is_drained: Ok(false),
+                    is_drained: Ok(BatchExecIsDrain::Remain),
                 },
                 BatchExecuteResult {
                     physical_columns: LazyBatchColumnVec::empty(),
                     logical_rows: Vec::new(),
                     warnings: EvalWarnings::default(),
-                    is_drained: Ok(true),
+                    is_drained: Ok(BatchExecIsDrain::Drain),
                 },
             ],
         );
@@ -644,16 +668,14 @@ mod tests {
         let mut exec =
             BatchSimpleAggregationExecutor::new_for_test(src_exec, vec![Expr::default()], MyParser);
 
-        let r = exec.next_batch(1);
+        let r = block_on(exec.next_batch(1));
         assert!(r.logical_rows.is_empty());
-        assert!(!r.is_drained.unwrap());
+        assert_eq!(r.physical_columns.rows_len(), 0);
+        assert!(r.is_drained.unwrap().is_remain());
 
-        let r = exec.next_batch(1);
-        assert_eq!(&r.logical_rows, &[0]);
-        assert_eq!(r.physical_columns.rows_len(), 1);
-        assert_eq!(r.physical_columns.columns_len(), 1);
-        assert!(r.physical_columns[0].is_decoded());
-        assert_eq!(r.physical_columns[0].decoded().to_int_vec(), &[Some(42)]);
-        assert!(r.is_drained.unwrap());
+        let r = block_on(exec.next_batch(1));
+        assert!(r.logical_rows.is_empty());
+        assert_eq!(r.physical_columns.rows_len(), 0);
+        assert!(r.is_drained.unwrap().stop());
     }
 }

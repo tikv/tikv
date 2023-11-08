@@ -1,16 +1,22 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+// #[PerformanceCriticalPath]
 use txn_types::{Key, TimeStamp};
 
-use crate::storage::kv::WriteData;
-use crate::storage::lock_manager::LockManager;
-use crate::storage::mvcc::MvccTxn;
-use crate::storage::txn::commands::{
-    Command, CommandExt, ReleasedLocks, ResponsePolicy, TypedCommand, WriteCommand, WriteContext,
-    WriteResult,
+use crate::storage::{
+    kv::WriteData,
+    lock_manager::LockManager,
+    mvcc::{MvccTxn, SnapshotReader},
+    txn::{
+        cleanup,
+        commands::{
+            Command, CommandExt, ReaderWithStats, ReleasedLocks, ResponsePolicy, TypedCommand,
+            WriteCommand, WriteContext, WriteResult,
+        },
+        Result,
+    },
+    ProcessResult, Snapshot,
 };
-use crate::storage::txn::{cleanup, Result};
-use crate::storage::{ProcessResult, Snapshot};
 
 command! {
     /// Rollback mutations on a single key.
@@ -32,6 +38,7 @@ command! {
 impl CommandExt for Cleanup {
     ctx!();
     tag!(cleanup);
+    request_type!(KvCleanup);
     ts!(start_ts);
     write_bytes!(key);
     gen_lock!(key);
@@ -39,33 +46,41 @@ impl CommandExt for Cleanup {
 
 impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for Cleanup {
     fn process_write(self, snapshot: S, context: WriteContext<'_, L>) -> Result<WriteResult> {
-        // It is not allowed for commit to overwrite a protected rollback. So we update max_ts
-        // to prevent this case from happening.
+        // It is not allowed for commit to overwrite a protected rollback. So we update
+        // max_ts to prevent this case from happening.
         context.concurrency_manager.update_max_ts(self.start_ts);
 
-        let mut txn = MvccTxn::new(
-            snapshot,
-            self.start_ts,
-            !self.ctx.get_not_fill_cache(),
-            context.concurrency_manager,
+        let mut txn = MvccTxn::new(self.start_ts, context.concurrency_manager);
+        let mut reader = ReaderWithStats::new(
+            SnapshotReader::new_with_ctx(self.start_ts, snapshot, &self.ctx),
+            context.statistics,
         );
 
-        let mut released_locks = ReleasedLocks::new(self.start_ts, TimeStamp::zero());
+        let mut released_locks = ReleasedLocks::new();
         // The rollback must be protected, see more on
         // [issue #7364](https://github.com/tikv/tikv/issues/7364)
-        released_locks.push(cleanup(&mut txn, self.key, self.current_ts, true)?);
-        released_locks.wake_up(context.lock_mgr);
+        released_locks.push(cleanup(
+            &mut txn,
+            &mut reader,
+            self.key,
+            self.current_ts,
+            true,
+        )?);
 
-        context.statistics.add(&txn.take_statistics());
-        let write_data = WriteData::from_modifies(txn.into_modifies());
+        let new_acquired_locks = txn.take_new_locks();
+        let mut write_data = WriteData::from_modifies(txn.into_modifies());
+        write_data.set_allowed_on_disk_almost_full();
         Ok(WriteResult {
             ctx: self.ctx,
             to_be_write: write_data,
             rows: 1,
             pr: ProcessResult::Res,
-            lock_info: None,
+            lock_info: vec![],
+            released_locks,
+            new_acquired_locks,
             lock_guards: vec![],
             response_policy: ResponsePolicy::OnApplied,
+            known_txn_status: vec![],
         })
     }
 }

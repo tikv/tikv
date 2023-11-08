@@ -1,17 +1,14 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use kvproto::raft_serverpb::RaftMessage;
+use raftstore::{store::Transport, Result as RaftStoreResult};
+use tikv_kv::RaftExtension;
 
-use crate::server::raft_client::RaftClient;
-use crate::server::resolve::StoreAddrResolver;
-use engine_rocks::RocksEngine;
-use raftstore::router::RaftStoreRouter;
-use raftstore::store::Transport;
-use raftstore::Result as RaftStoreResult;
+use crate::server::{raft_client::RaftClient, resolve::StoreAddrResolver};
 
 pub struct ServerTransport<T, S>
 where
-    T: RaftStoreRouter<RocksEngine> + 'static,
+    T: RaftExtension + 'static,
     S: StoreAddrResolver + 'static,
 {
     raft_client: RaftClient<S, T>,
@@ -19,7 +16,7 @@ where
 
 impl<T, S> Clone for ServerTransport<T, S>
 where
-    T: RaftStoreRouter<RocksEngine> + 'static,
+    T: RaftExtension + 'static,
     S: StoreAddrResolver + 'static,
 {
     fn clone(&self) -> Self {
@@ -29,17 +26,19 @@ where
     }
 }
 
-impl<T: RaftStoreRouter<RocksEngine> + 'static, S: StoreAddrResolver + 'static>
-    ServerTransport<T, S>
+impl<T, S> ServerTransport<T, S>
+where
+    T: RaftExtension + 'static,
+    S: StoreAddrResolver + 'static,
 {
-    pub fn new(raft_client: RaftClient<S, T>) -> ServerTransport<T, S> {
+    pub fn new(raft_client: RaftClient<S, T>) -> Self {
         ServerTransport { raft_client }
     }
 }
 
 impl<T, S> Transport for ServerTransport<T, S>
 where
-    T: RaftStoreRouter<RocksEngine> + Unpin + 'static,
+    T: RaftExtension + Unpin + 'static,
     S: StoreAddrResolver + Unpin + 'static,
 {
     fn send(&mut self, msg: RaftMessage) -> RaftStoreResult<()> {
@@ -47,6 +46,10 @@ where
             Ok(()) => Ok(()),
             Err(reason) => Err(raftstore::Error::Transport(reason)),
         }
+    }
+
+    fn set_store_allowlist(&mut self, stores: Vec<u64>) {
+        self.raft_client.set_store_allowlist(stores)
     }
 
     fn need_flush(&self) -> bool {

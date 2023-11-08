@@ -1,14 +1,21 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::Arc;
-use std::thread;
-use std::time::Duration;
+use std::{
+    sync::{
+        mpsc,
+        mpsc::{RecvTimeoutError, TryRecvError},
+        Arc,
+    },
+    thread,
+    time::Duration,
+};
 
 use grpcio::{ChannelBuilder, Environment};
-use kvproto::kvrpcpb::*;
-use kvproto::metapb::{Peer, Region};
-use kvproto::tikvpb::TikvClient;
-
+use kvproto::{
+    kvrpcpb::*,
+    metapb::{Peer, Region},
+    tikvpb::TikvClient,
+};
 use test_raftstore::*;
 use tikv_util::{config::ReadableDuration, HandyRwLock};
 
@@ -19,8 +26,11 @@ fn deadlock(client: &TikvClient, ctx: Context, key1: &[u8], ts: u64) -> bool {
     must_kv_pessimistic_lock(client, ctx.clone(), key1.clone(), ts);
     must_kv_pessimistic_lock(client, ctx.clone(), key2.clone(), ts + 1);
 
-    let (client_clone, ctx_clone, key1_clone) = (client.clone(), ctx.clone(), key1.clone());
+    let (client_clone, mut ctx_clone, key1_clone) = (client.clone(), ctx.clone(), key1.clone());
     let handle = thread::spawn(move || {
+        // `resource_group_tag` is set to check if the wait chain reported by the
+        // deadlock error carries the correct information.
+        ctx_clone.set_resource_group_tag(b"tag1".to_vec());
         let resp = kv_pessimistic_lock(
             &client_clone,
             ctx_clone,
@@ -33,15 +43,29 @@ fn deadlock(client: &TikvClient, ctx: Context, key1: &[u8], ts: u64) -> bool {
         assert!(resp.errors[0].has_locked(), "{:?}", resp.errors[0]);
     });
     // Sleep to make sure txn(ts+1) is waiting for txn(ts)
-    thread::sleep(Duration::from_millis(100));
-    let resp = kv_pessimistic_lock(client, ctx.clone(), vec![key2.clone()], ts, ts, false);
+    thread::sleep(Duration::from_millis(300));
+    let mut ctx2 = ctx.clone();
+    ctx2.set_resource_group_tag(b"tag2".to_vec());
+    let resp = kv_pessimistic_lock(client, ctx2, vec![key2.clone()], ts, ts, false);
     handle.join().unwrap();
 
     // Clean up
-    must_kv_pessimistic_rollback(client, ctx.clone(), key1, ts);
-    must_kv_pessimistic_rollback(client, ctx, key2, ts + 1);
+
+    must_kv_pessimistic_rollback(client, ctx.clone(), key1.clone(), ts, ts);
+    must_kv_pessimistic_rollback(client, ctx, key2.clone(), ts + 1, ts + 1);
 
     assert_eq!(resp.errors.len(), 1);
+    if resp.errors[0].has_deadlock() {
+        let wait_chain = resp.errors[0].get_deadlock().get_wait_chain();
+        assert_eq!(wait_chain[0].get_txn(), ts + 1);
+        assert_eq!(wait_chain[0].get_wait_for_txn(), ts);
+        assert_eq!(wait_chain[0].get_key(), key1.as_slice());
+        assert_eq!(wait_chain[0].get_resource_group_tag(), b"tag1");
+        assert_eq!(wait_chain[1].get_txn(), ts);
+        assert_eq!(wait_chain[1].get_wait_for_txn(), ts + 1);
+        assert_eq!(wait_chain[1].get_key(), key2.as_slice());
+        assert_eq!(wait_chain[1].get_resource_group_tag(), b"tag2");
+    }
     resp.errors[0].has_deadlock()
 }
 
@@ -65,9 +89,9 @@ fn build_leader_client(cluster: &mut Cluster<ServerCluster>, key: &[u8]) -> (Tik
 
 /// Creates a deadlock on the store containing key.
 fn must_detect_deadlock(cluster: &mut Cluster<ServerCluster>, key: &[u8], ts: u64) {
-    // Sometimes, deadlocks can't be detected at once due to leader change, but it will be
-    // detected.
-    for _ in 0..3 {
+    // Sometimes, deadlocks can't be detected at once due to leader change, but it
+    // will be detected.
+    for _ in 0..5 {
         let (client, ctx) = build_leader_client(cluster, key);
         if deadlock(&client, ctx, key, ts) {
             return;
@@ -103,8 +127,8 @@ fn must_transfer_leader(cluster: &mut Cluster<ServerCluster>, region_key: &[u8],
 
 /// Transfers the region containing region_key from source store to target peer.
 ///
-/// REQUIRE: The source store must be the leader the region and the target store must not have
-/// this region.
+/// REQUIRE: The source store must be the leader the region and the target store
+/// must not have this region.
 fn must_transfer_region(
     cluster: &mut Cluster<ServerCluster>,
     region_key: &[u8],
@@ -153,7 +177,8 @@ fn find_peer_of_store(region: &Region, store_id: u64) -> Peer {
         .clone()
 }
 
-/// Creates a cluster with only one region and store(1) is the leader of the region.
+/// Creates a cluster with only one region and store(1) is the leader of the
+/// region.
 fn new_cluster_for_deadlock_test(count: usize) -> Cluster<ServerCluster> {
     let mut cluster = new_server_cluster(0, count);
     cluster.cfg.pessimistic_txn.wait_for_lock_timeout = ReadableDuration::millis(500);
@@ -170,6 +195,22 @@ fn new_cluster_for_deadlock_test(count: usize) -> Cluster<ServerCluster> {
     deadlock_detector_leader_must_be(&mut cluster, 1);
     must_detect_deadlock(&mut cluster, b"k", 10);
     cluster
+}
+
+#[test]
+fn test_detect_deadlock_basic() {
+    let mut cluster = new_cluster_for_deadlock_test(3);
+    must_split_region(&mut cluster, b"k", b"k");
+    must_transfer_leader(&mut cluster, b"", 1);
+    must_transfer_leader(&mut cluster, b"k", 1);
+    deadlock_detector_leader_must_be(&mut cluster, 1);
+
+    // Detect on leader
+    must_detect_deadlock(&mut cluster, b"k1", 10);
+    // Detect on follower
+    must_transfer_leader(&mut cluster, b"", 2);
+    deadlock_detector_leader_must_be(&mut cluster, 2);
+    must_detect_deadlock(&mut cluster, b"k1", 20);
 }
 
 #[test]
@@ -198,8 +239,8 @@ fn test_detect_deadlock_when_split_region() {
 #[test]
 fn test_detect_deadlock_when_transfer_region() {
     let mut cluster = new_cluster_for_deadlock_test(4);
-    // Transfer the leader region to store(4) and the leader of deadlock detector should be
-    // also transfered.
+    // Transfer the leader region to store(4) and the leader of deadlock detector
+    // should be also transferred.
     must_transfer_region(&mut cluster, b"k", 1, 4, 4);
     deadlock_detector_leader_must_be(&mut cluster, 4);
     must_detect_deadlock(&mut cluster, b"k", 10);
@@ -211,8 +252,8 @@ fn test_detect_deadlock_when_transfer_region() {
     must_detect_deadlock(&mut cluster, b"k", 10);
     must_detect_deadlock(&mut cluster, b"k1", 10);
 
-    // Transfer the new region back to store(4) which will send a role change message with empty
-    // key range. It shouldn't affect deadlock detector.
+    // Transfer the new region back to store(4) which will send a role change
+    // message with empty key range. It shouldn't affect deadlock detector.
     must_transfer_region(&mut cluster, b"k1", 1, 4, 6);
     deadlock_detector_leader_must_be(&mut cluster, 4);
     must_detect_deadlock(&mut cluster, b"k", 10);
@@ -249,4 +290,107 @@ fn test_detect_deadlock_when_merge_region() {
         must_detect_deadlock(&mut cluster, b"k", 10);
         must_transfer_leader(&mut cluster, b"", 1);
     }
+}
+
+#[test]
+fn test_detect_deadlock_when_updating_wait_info() {
+    use kvproto::kvrpcpb::PessimisticLockKeyResultType::*;
+    let mut cluster = new_cluster_for_deadlock_test(3);
+
+    let key1 = b"key1";
+    let key2 = b"key2";
+    let (client, ctx) = build_leader_client(&mut cluster, key1);
+    let client = Arc::new(client);
+
+    fn async_pessimistic_lock(
+        client: Arc<TikvClient>,
+        ctx: Context,
+        key: &[u8],
+        ts: u64,
+    ) -> mpsc::Receiver<PessimisticLockResponse> {
+        let (tx, rx) = mpsc::channel();
+        let key = vec![key.to_vec()];
+        thread::spawn(move || {
+            let resp =
+                kv_pessimistic_lock_resumable(&client, ctx, key, ts, ts, Some(1000), false, false);
+            tx.send(resp).unwrap();
+        });
+        rx
+    }
+
+    // key1: txn 11 and 12 waits for 10
+    // key2: txn 11 waits for 12
+    let resp = kv_pessimistic_lock_resumable(
+        &client,
+        ctx.clone(),
+        vec![key1.to_vec()],
+        10,
+        10,
+        Some(1000),
+        false,
+        false,
+    );
+    assert!(resp.region_error.is_none());
+    assert!(resp.errors.is_empty());
+    assert_eq!(resp.results[0].get_type(), LockResultNormal);
+    let resp = kv_pessimistic_lock_resumable(
+        &client,
+        ctx.clone(),
+        vec![key2.to_vec()],
+        12,
+        12,
+        Some(1000),
+        false,
+        false,
+    );
+    assert!(resp.region_error.is_none());
+    assert!(resp.errors.is_empty());
+    assert_eq!(resp.results[0].get_type(), LockResultNormal);
+    let rx_txn11_k1 = async_pessimistic_lock(client.clone(), ctx.clone(), key1, 11);
+    let rx_txn12_k1 = async_pessimistic_lock(client.clone(), ctx.clone(), key1, 12);
+    let rx_txn11_k2 = async_pessimistic_lock(client.clone(), ctx.clone(), key2, 11);
+    // All blocked.
+    assert_eq!(
+        rx_txn11_k1
+            .recv_timeout(Duration::from_millis(50))
+            .unwrap_err(),
+        RecvTimeoutError::Timeout
+    );
+    assert_eq!(rx_txn12_k1.try_recv().unwrap_err(), TryRecvError::Empty);
+    assert_eq!(rx_txn11_k2.try_recv().unwrap_err(), TryRecvError::Empty);
+
+    // Release lock at ts=10 on key1 so that txn 11 will be granted the lock.
+    must_kv_pessimistic_rollback(&client, ctx.clone(), key1.to_vec(), 10, 10);
+    let resp = rx_txn11_k1
+        .recv_timeout(Duration::from_millis(200))
+        .unwrap();
+    assert!(resp.region_error.is_none());
+    assert!(resp.errors.is_empty());
+    assert_eq!(resp.results[0].get_type(), LockResultNormal);
+    // And then 12 waits for k1 on key1, which forms a deadlock.
+    let resp = rx_txn12_k1
+        .recv_timeout(Duration::from_millis(1000))
+        .unwrap();
+    assert!(resp.region_error.is_none());
+    assert!(resp.errors[0].has_deadlock());
+    assert_eq!(resp.results[0].get_type(), LockResultFailed);
+    // Check correctness of the wait chain.
+    let wait_chain = resp.errors[0].get_deadlock().get_wait_chain();
+    assert_eq!(wait_chain[0].get_txn(), 11);
+    assert_eq!(wait_chain[0].get_wait_for_txn(), 12);
+    assert_eq!(wait_chain[0].get_key(), key2);
+    assert_eq!(wait_chain[1].get_txn(), 12);
+    assert_eq!(wait_chain[1].get_wait_for_txn(), 11);
+    assert_eq!(wait_chain[1].get_key(), key1);
+
+    // Clean up.
+    must_kv_pessimistic_rollback(&client, ctx.clone(), key1.to_vec(), 11, 11);
+    must_kv_pessimistic_rollback(&client, ctx.clone(), key2.to_vec(), 12, 12);
+    let resp = rx_txn11_k2
+        .recv_timeout(Duration::from_millis(500))
+        .unwrap();
+    assert!(resp.region_error.is_none());
+    assert!(resp.errors.is_empty());
+    assert_eq!(resp.results[0].get_type(), LockResultNormal);
+    must_kv_pessimistic_rollback(&client, ctx, key2.to_vec(), 11, 11);
 }

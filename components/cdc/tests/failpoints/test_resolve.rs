@@ -1,22 +1,24 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
-use crate::{new_event_feed, TestSuite};
-use futures::executor::block_on;
-use futures::sink::SinkExt;
+use std::time::Duration;
+
+use api_version::{test_kv_format_impl, KvFormat};
+use futures::{executor::block_on, sink::SinkExt};
 use grpcio::WriteFlags;
-#[cfg(feature = "prost-codec")]
-use kvproto::cdcpb::event::{Event as Event_oneof_event, LogType as EventLogType};
-#[cfg(not(feature = "prost-codec"))]
-use kvproto::cdcpb::*;
-use kvproto::kvrpcpb::*;
+use kvproto::{cdcpb::*, kvrpcpb::*};
 use pd_client::PdClient;
 use raft::eraftpb::ConfChangeType;
-use std::time::Duration;
 use test_raftstore::*;
 use tikv_util::config::*;
 
+use crate::{new_event_feed, TestSuite, TestSuiteBuilder};
+
 #[test]
 fn test_stale_resolver() {
-    let mut suite = TestSuite::new(3);
+    test_kv_format_impl!(test_stale_resolver_impl<ApiV1 ApiV2>);
+}
+
+fn test_stale_resolver_impl<F: KvFormat>() {
+    let mut suite = TestSuite::new(3, F::TAG);
 
     let fp = "before_schedule_resolver_ready";
     fail::cfg(fp, "pause").unwrap();
@@ -30,7 +32,8 @@ fn test_stale_resolver() {
     // Sleep for a while to wait the scan is done
     sleep_ms(200);
 
-    let (k, v) = ("key1".to_owned(), "value".to_owned());
+    // If tikv enable ApiV2, txn key needs to start with 'x';
+    let (k, v) = ("xkey1".to_owned(), "value".to_owned());
     // Prewrite
     let start_ts = block_on(suite.cluster.pd_client.get_tso()).unwrap();
     let mut mutation = Mutation::default();
@@ -113,7 +116,7 @@ fn test_stale_resolver() {
                     assert_eq!(e.get_type(), EventLogType::Initialized, "{:?}", es);
                 }
                 _ => {
-                    panic!("unexepected event length {:?}", es);
+                    panic!("unexpected event length {:?}", es);
                 }
             },
             Event_oneof_event::Error(e) => panic!("{:?}", e),
@@ -125,11 +128,13 @@ fn test_stale_resolver() {
     suite.stop();
 }
 
+// Resolved ts can still advance even if some regions are merged (it drops
+// callback that is used to advance resolved ts).
 #[test]
 fn test_region_error() {
     let mut cluster = new_server_cluster(1, 1);
     cluster.cfg.cdc.min_ts_interval = ReadableDuration::millis(100);
-    let mut suite = TestSuite::with_cluster(1, cluster);
+    let mut suite = TestSuiteBuilder::new().cluster(cluster).build();
 
     let multi_batch_fp = "cdc_before_handle_multi_batch";
     fail::cfg(multi_batch_fp, "return").unwrap();
@@ -144,14 +149,14 @@ fn test_region_error() {
     let mut req = suite.new_changedata_request(region.get_id());
     req.region_id = source.get_id();
     req.set_region_epoch(source.get_region_epoch().clone());
-    let (mut source_tx, source_wrap, source_event) =
+    let (mut source_tx, source_wrap, _source_event) =
         new_event_feed(suite.get_region_cdc_client(source.get_id()));
     block_on(source_tx.send((req.clone(), WriteFlags::default()))).unwrap();
     // Subscribe target region
     let target = suite.cluster.get_region(b"k2");
     req.region_id = target.get_id();
     req.set_region_epoch(target.get_region_epoch().clone());
-    let (mut target_tx, target_wrap, _target_event) =
+    let (mut target_tx, target_wrap, target_event) =
         new_event_feed(suite.get_region_cdc_client(target.get_id()));
     block_on(target_tx.send((req, WriteFlags::default()))).unwrap();
     sleep_ms(200);
@@ -163,7 +168,7 @@ fn test_region_error() {
 
     let mut last_resolved_ts = 0;
     for _ in 0..5 {
-        let event = source_event(true);
+        let event = target_event(true);
         if let Some(resolved_ts) = event.resolved_ts.as_ref() {
             let ts = resolved_ts.ts;
             assert!(ts > last_resolved_ts);
@@ -183,7 +188,7 @@ fn test_joint_confchange() {
     let mut cluster = new_server_cluster(1, 3);
     cluster.cfg.cdc.min_ts_interval = ReadableDuration::millis(100);
     cluster.cfg.cdc.hibernate_regions_compatible = true;
-    let mut suite = TestSuite::with_cluster(3, cluster);
+    let mut suite = TestSuiteBuilder::new().cluster(cluster).build();
 
     let receive_resolved_ts = |receive_event: &(dyn Fn(bool) -> ChangeDataEvent + Send)| {
         let mut last_resolved_ts = 0;
@@ -192,7 +197,7 @@ fn test_joint_confchange() {
             let event = receive_event(true);
             if let Some(resolved_ts) = event.resolved_ts.as_ref() {
                 let ts = resolved_ts.ts;
-                assert!(ts > last_resolved_ts);
+                assert!(ts >= last_resolved_ts);
                 last_resolved_ts = ts;
                 i += 1;
             }
@@ -255,7 +260,7 @@ fn test_joint_confchange() {
         receive_resolved_ts(&receive_event);
         tx.send(()).unwrap();
     });
-    assert!(rx.recv_timeout(Duration::from_secs(2)).is_err());
+    rx.recv_timeout(Duration::from_secs(2)).unwrap_err();
 
     fail::remove(update_region_fp);
     fail::remove(deregister_fp);
