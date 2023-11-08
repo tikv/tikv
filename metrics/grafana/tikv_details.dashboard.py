@@ -20,6 +20,7 @@ from grafanalib.core import (
     Panel,
     RowPanel,
     SeriesOverride,
+    SingleStat,
     Stat,
     Target,
     Template,
@@ -90,6 +91,7 @@ class Expr(object):
         ],
         validator=instance_of(list),
     )
+    skip_default_instance: bool = attr.ib(default=False, validator=instance_of(bool))
     extra_expr: str = attr.ib(default="", validator=instance_of(str))
 
     def __str__(self) -> str:
@@ -100,6 +102,9 @@ class Expr(object):
         )
         func = self.func if self.func else ""
         label_selectors = self.default_label_selectors + self.label_selectors
+        if self.skip_default_instance:
+            # Remove instance=~"$instance"
+            label_selectors = [l for l in label_selectors if "$instance" not in l]
         assert all(
             ("=" in item or "~" in item) for item in label_selectors
         ), f"Not all items contain '=' or '~', invalid {self.label_selectors}"
@@ -147,6 +152,10 @@ class Expr(object):
             self.extra_expr = extra_expr
         if default_label_selectors is not None:
             self.default_label_selectors = default_label_selectors
+        return self
+
+    def skip_default_instance_selector(self) -> "Expr":
+        self.skip_default_instance = True
         return self
 
 
@@ -504,6 +513,7 @@ class Layout:
     PANEL_HEIGHT = 7
     row_panel: RowPanel
     current_row_y_pos: int
+    current_row_x_pos: int
 
     def __init__(self, title, collapsed=True, repeat: Optional[str] = None) -> None:
         extraJson = None
@@ -511,6 +521,7 @@ class Layout:
             extraJson = {"repeat": repeat}
             title = f"{title} - ${repeat}"
         self.current_row_y_pos = 0
+        self.current_row_x_pos = 0
         self.row_panel = RowPanel(
             title=title,
             gridPos=GridPos(h=self.PANEL_HEIGHT, w=self.ROW_WIDTH, x=0, y=0),
@@ -518,14 +529,14 @@ class Layout:
             extraJson=extraJson,
         )
 
-    def row(self, panels: list[Panel]):
+    def row(self, panels: list[Panel], width: int = ROW_WIDTH):
         """Start a new row and evenly scales panels width"""
         count = len(panels)
         if count == 0:
             return panels
-        width = self.ROW_WIDTH // count
+        width = width // count
         remain = self.ROW_WIDTH % count
-        x = 0
+        x = self.current_row_x_pos % self.ROW_WIDTH
         for panel in panels:
             panel.gridPos = GridPos(
                 h=self.PANEL_HEIGHT,
@@ -537,6 +548,10 @@ class Layout:
         panels[-1].gridPos.w += remain
         self.row_panel.panels.extend(panels)
         self.current_row_y_pos += self.PANEL_HEIGHT
+        self.current_row_x_pos = x
+
+    def half_row(self, panels: list[Panel]):
+        self.row(panels, self.ROW_WIDTH // 2)
 
 
 def timeseries_panel(
@@ -630,7 +645,7 @@ def graph_panel(
         # TODO: remove it when grafanalib fix this.
         extraJson["fillGradient"] = 1
     for target in targets:
-        # Make sure traget is in time_series format.
+        # Make sure target is in time_series format.
         target.format = TIME_SERIES_TARGET_FORMAT
 
     return Graph(
@@ -804,7 +819,7 @@ def stat_panel(
     data_source=DATASOURCE,
 ) -> Panel:
     for target in targets:
-        # Make sure traget is in time_series format.
+        # Make sure target is in time_series format.
         target.format = TIME_SERIES_TARGET_FORMAT
     return Stat(
         title=title,
@@ -3967,7 +3982,285 @@ def Scheduler() -> RowPanel:
 
 def GC() -> RowPanel:
     layout = Layout(title="GC")
-    layout.row([])
+    layout.row(
+        [
+            graph_panel(
+                title="GC tasks",
+                description="The count of GC tasks processed by gc_worker",
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_gcworker_gc_tasks_vec",
+                            by_labels=["task"],
+                        ),
+                        legend_format="total-{{task}}",
+                    ),
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_storage_gc_skipped_counter",
+                            by_labels=["task"],
+                        ),
+                        legend_format="skipped-{{task}}",
+                    ),
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_gcworker_gc_task_fail_vec",
+                            by_labels=["task"],
+                        ),
+                        legend_format="failed-{{task}}",
+                    ),
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_gc_worker_too_busy",
+                            by_labels=[],
+                        ),
+                        legend_format="gcworker-too-busy",
+                    ),
+                ],
+            ),
+            graph_panel_histogram_quantiles(
+                title="GC tasks duration",
+                description="The time consumed when executing GC tasks",
+                yaxes=yaxes(left_format=UNITS.SECONDS),
+                metric="tikv_gcworker_gc_task_duration_vec",
+                label_selectors=['type="$command"'],
+                hide_count=True,
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel(
+                title="TiDB GC seconds",
+                description="The GC duration",
+                yaxes=yaxes(left_format=UNITS.SECONDS),
+                targets=[
+                    target(
+                        expr=expr_histogram_quantile(
+                            1, "tidb_tikvclient_gc_seconds", by_labels=["instance"]
+                        ).skip_default_instance_selector(),
+                        legend_format="{{instance}}",
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="TiDB GC worker actions",
+                description="The count of TiDB GC worker actions",
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tidb_tikvclient_gc_worker_actions_total",
+                            by_labels=["type"],
+                        ).skip_default_instance_selector(),
+                    ),
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel(
+                title="ResolveLocks Progress",
+                description="Progress of ResolveLocks, the first phase of GC",
+                targets=[
+                    target(
+                        expr=expr_max(
+                            "tidb_tikvclient_range_task_stats",
+                            label_selectors=['type=~"resolve-locks.*"'],
+                            by_labels=["result"],
+                        ).skip_default_instance_selector(),
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="TiKV Auto GC Progress",
+                description="Progress of TiKV's GC",
+                yaxes=yaxes(left_format=UNITS.PERCENT_UNIT),
+                targets=[
+                    target(
+                        expr=expr_operator(
+                            expr_sum(
+                                "tikv_gcworker_autogc_processed_regions",
+                                label_selectors=['type="scan"'],
+                            ),
+                            "/",
+                            expr_sum(
+                                "tikv_raftstore_region_count",
+                                label_selectors=['type="region"'],
+                            ),
+                        ),
+                        legend_format="{{instance}}",
+                    ),
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel(
+                title="GC speed",
+                description="keys / second",
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_storage_mvcc_gc_delete_versions_sum",
+                            by_labels=["key_mode"],
+                        ),
+                        legend_format="{{key_mode}}_keys/s",
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="TiKV Auto GC SafePoint",
+                description="SafePoint used for TiKV's Auto GC",
+                yaxes=yaxes(left_format=UNITS.DATE_TIME_ISO),
+                targets=[
+                    target(
+                        expr=expr_max(
+                            "tikv_gcworker_autogc_safe_point",
+                        )
+                        .extra("/ (2^18)")
+                        .skip_default_instance_selector(),
+                    ),
+                ],
+            ),
+        ]
+    )
+    layout.half_row(
+        [
+            stat_panel(
+                title="GC lifetime",
+                description="The lifetime of TiDB GC",
+                format=UNITS.SECONDS,
+                targets=[
+                    target(
+                        expr=expr_max(
+                            "tidb_tikvclient_gc_config",
+                            label_selectors=['type="tikv_gc_life_time"'],
+                            by_labels=[],
+                        ).skip_default_instance_selector(),
+                    ),
+                ],
+            ),
+            stat_panel(
+                title="GC interval",
+                description="The interval of TiDB GC",
+                format=UNITS.SECONDS,
+                targets=[
+                    target(
+                        expr=expr_max(
+                            "tidb_tikvclient_gc_config",
+                            label_selectors=['type="tikv_gc_run_interval"'],
+                            by_labels=[],
+                        ).skip_default_instance_selector(),
+                    ),
+                ],
+            ),
+        ]
+    )
+    layout.half_row(
+        [
+            graph_panel(
+                title="GC in Compaction Filter",
+                description="Keys handled in GC compaction filter",
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_gc_compaction_filtered",
+                            by_labels=["key_mode"],
+                        ),
+                        legend_format="{{key_mode}}_filtered",
+                    ),
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_gc_compaction_filter_skip",
+                            by_labels=["key_mode"],
+                        ),
+                        legend_format="{{key_mode}}_skipped",
+                    ),
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_gc_compaction_mvcc_rollback",
+                            by_labels=["key_mode"],
+                        ),
+                        legend_format="{{key_mode}}_mvcc-rollback/mvcc-lock",
+                    ),
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_gc_compaction_filter_orphan_versions",
+                            by_labels=["key_mode"],
+                        ),
+                        legend_format="{{key_mode}}_orphan-versions",
+                    ),
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_gc_compaction_filter_perform",
+                            by_labels=["key_mode"],
+                        ),
+                        legend_format="{{key_mode}}_performed-times",
+                    ),
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_gc_compaction_failure",
+                            by_labels=["key_mode", "type"],
+                        ),
+                        legend_format="{{key_mode}}_failure-{{type}}",
+                    ),
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_gc_compaction_filter_mvcc_deletion_met",
+                            by_labels=["key_mode"],
+                        ),
+                        legend_format="{{key_mode}}_mvcc-deletion-met",
+                    ),
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_gc_compaction_filter_mvcc_deletion_handled",
+                            by_labels=["key_mode"],
+                        ),
+                        legend_format="{{key_mode}}_mvcc-deletion-handled",
+                    ),
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_gc_compaction_filter_mvcc_deletion_wasted",
+                            by_labels=["key_mode"],
+                        ),
+                        legend_format="{{key_mode}}_mvcc-deletion-wasted",
+                    ),
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel(
+                title="GC scan write details",
+                description="GC scan write details",
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_gcworker_gc_keys",
+                            label_selectors=['cf="write"'],
+                            by_labels=["key_mode", "tag"],
+                        ),
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="GC scan default details",
+                description="GC scan default details",
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_gcworker_gc_keys",
+                            label_selectors=['cf="default"'],
+                            by_labels=["key_mode", "tag"],
+                        ),
+                    ),
+                ],
+            ),
+        ]
+    )
     return layout.row_panel
 
 
