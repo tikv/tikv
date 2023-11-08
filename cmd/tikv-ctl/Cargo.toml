@@ -24,6 +24,7 @@ cloud-gcp = [
 cloud-azure = [
   "encryption_export/cloud-azure",
 ]
+openssl-vendored = ["tikv/openssl-vendored"]
 test-engine-kv-rocksdb = [
   "tikv/test-engine-kv-rocksdb"
 ]

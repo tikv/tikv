@@ -31,6 +31,11 @@ test-engine-raft-raft-engine = ["engine_test/test-engine-raft-raft-engine"]
 test-engines-rocksdb = ["engine_test/test-engines-rocksdb"]
 test-engines-panic = ["engine_test/test-engines-panic"]
 pprof-fp = ["pprof/frame-pointer"]
+openssl-vendored = [
+  "openssl/vendored",
+  "grpcio/openssl-vendored",
+  "hyper-tls/vendored",
+]
 
 # for testing configure propegate to other crates
 # https://stackoverflow.com/questions/41700543/can-we-share-test-utilites-between-crates
@@ -358,7 +363,7 @@ tracker = { path = "components/tracker" }
 txn_types = { path = "components/txn_types" }
 # External libs
 raft = { version = "0.7.0", default-features = false, features = ["protobuf-codec"] }
-grpcio = { version = "0.10.4", default-features = false, features = ["openssl-vendored", "protobuf-codec", "nightly"] }
+grpcio = { version = "0.10.4", default-features = false, features = ["openssl", "protobuf-codec", "nightly"] }
 grpcio-health = { version = "0.10.4", default-features = false, features = ["protobuf-codec"] }
 tipb = { git = "https://github.com/pingcap/tipb.git" }
 kvproto = { git = "https://github.com/pingcap/kvproto.git" }
@@ -380,9 +385,9 @@ opt-level = 1
 debug = false
 opt-level = 1
 
-[profile.dev.package.tirocks-sys]
-debug = false
-opt-level = 1
+# [profile.dev.package.tirocks-sys]
+# debug = false
+# opt-level = 1
 
 [profile.dev.package.tests]
 debug = 1
@@ -403,7 +408,7 @@ rpath = false
 opt-level = 3
 debug = false
 codegen-units = 1
-lto = "thin"
+lto = false
 incremental = false
 panic = 'unwind'
 debug-assertions = false
