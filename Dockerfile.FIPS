@@ -1,23 +1,5 @@
 # This Docker image contains a minimal build environment for a FIPS compliant TiKV.
-#
-# It contains all the tools necessary to reproduce official production builds of TiKV
 
-# We need to use CentOS 7 because many of our users choose this as their deploy machine.
-# Since the glibc it uses (2.17) is from 2012 (https://sourceware.org/glibc/wiki/Glibc%20Timeline)
-# it is our lowest common denominator in terms of distro support.
-
-# Some commands in this script are structured in order to reduce the number of layers Docker
-# generates. Unfortunately Docker is limited to only 125 layers:
-# https://github.com/moby/moby/blob/a9507c6f76627fdc092edc542d5a7ef4a6df5eec/layer/layer.go#L50-L53
-
-# We require epel packages, so enable the fedora EPEL repo then install dependencies.
-# Install the system dependencies
-# Attempt to clean and rebuild the cache to avoid 404s
-
-# To avoid rebuilds we first install all Cargo dependencies
-
-
-# The prepare image avoid ruining the cache of the builder
 FROM redhat/ubi8-minimal:8.6 as builder
 
 RUN microdnf install -y openssl-devel

@@ -391,17 +391,16 @@ pub fn create_aes_ctr_crypter(
         EncryptionMethod::Aes192Ctr => OCipher::aes_192_ctr(),
         EncryptionMethod::Aes256Ctr => OCipher::aes_256_ctr(),
         EncryptionMethod::Sm4Ctr => {
-            return Err(box_err!(
-                "sm4-ctr is not supported when dynamic link openssl"
-            ));
-
-            // #[cfg(feature = "openssl-dylib")]
-            // {
-            //     return Err(box_err!(
-            //         "sm4-ctr is not supported when dynamic link openssl"
-            //     ));
-            // }
-            // OCipher::sm4_ctr()
+            #[cfg(feature = "sm4")]
+            {
+                OCipher::sm4_ctr()
+            }
+            #[cfg(not(feature = "sm4"))]
+            {
+                return Err(box_err!(
+                    "sm4-ctr is not supported by dynamically linked openssl"
+                ));
+            }
         }
     };
     let crypter = OCrypter::new(cipher, mode, key, Some(iv.as_slice()))?;

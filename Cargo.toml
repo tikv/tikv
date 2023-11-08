@@ -33,8 +33,14 @@ test-engines-panic = ["engine_test/test-engines-panic"]
 pprof-fp = ["pprof/frame-pointer"]
 openssl-vendored = [
   "openssl/vendored",
-  "grpcio/openssl-vendored",
   "hyper-tls/vendored",
+  # NB: the "openssl" feature does not make grpcio-sys v0.10 depends on
+  # openssl-sys, and it can not find the static openssl built by openssl-sys.
+  # Enabling "grpcio/openssl-vendored" explicitly makes grpcio-sys depends on
+  # openssl-sys and correctly links to the static openssl.
+  "grpcio/openssl-vendored",
+  # NB: Enable SM4 support if OpenSSL is built from source and statically linked.
+  "encryption_export/sm4",
 ]
 
 # for testing configure propegate to other crates
@@ -384,7 +390,6 @@ opt-level = 1
 [profile.dev.package.libtitan_sys]
 debug = false
 opt-level = 1
-
 # [profile.dev.package.tirocks-sys]
 # debug = false
 # opt-level = 1
