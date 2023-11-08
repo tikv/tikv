@@ -396,6 +396,7 @@ mod profiling {
         fn test_profiling_memory_ifdef_malloc_conf() {
             // Make sure somebody has turned on profiling
             assert!(is_profiling_on(), "set MALLOC_CONF=prof:true");
+            set_prof_sample(19).unwrap(); 
 
             let dir = Builder::new()
                 .prefix("test_profiling_memory")
