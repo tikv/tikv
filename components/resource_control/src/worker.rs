@@ -9,12 +9,14 @@ use std::{
 };
 
 use file_system::{fetch_io_bytes, IoBytes, IoType};
+use prometheus::Histogram;
 use strum::EnumCount;
 use tikv_util::{
     debug,
     sys::{cpu_time::ProcessStat, SysQuota},
     time::Instant,
     warn,
+    yatp_pool::metrics::YATP_POOL_SCHEDULE_WAIT_DURATION_VEC,
 };
 
 use crate::{
@@ -327,7 +329,7 @@ impl<R: ResourceStatsProvider> PriorityLimiterAdjustWorker<R> {
     ) -> Self {
         let trackers = resource_ctl
             .get_priority_resource_limiters()
-            .map(|l| PrioirtyLimiterStatsTracker::new(l));
+            .map(|l| PrioirtyLimiterStatsTracker::new(l, ""));
         Self {
             resource_ctl,
             trackers,
@@ -445,17 +447,55 @@ struct LimiterStats {
     req_count: u64,
 }
 
+struct HistogramTracker {
+    metrics: Histogram,
+    last_sum: f64,
+    last_count: u64,
+}
+
+impl HistogramTracker {
+    fn new(metrics: Histogram) -> Self {
+        let last_sum = metrics.get_sample_sum();
+        let last_count = metrics.get_sample_count();
+        Self {
+            metrics,
+            last_sum,
+            last_count,
+        }
+    }
+
+    fn get_and_upate_statistics(&mut self) -> (f64, u64) {
+        let cur_sum = self.metrics.get_sample_sum();
+        let cur_count = self.metrics.get_sample_count();
+        let res = (cur_sum - self.last_sum, cur_count - self.last_count);
+        self.last_sum = cur_sum;
+        self.last_count = cur_count;
+        res
+    }
+}
+
 struct PrioirtyLimiterStatsTracker {
     limiter: Arc<ResourceLimiter>,
     last_stats: GroupStatistics,
+    // unified-read-pool and schedule-worker-pool wait duration metrics.
+    task_wait_dur_trakcers: [HistogramTracker; 2],
 }
 
 impl PrioirtyLimiterStatsTracker {
-    fn new(limiter: Arc<ResourceLimiter>) -> Self {
+    fn new(limiter: Arc<ResourceLimiter>, priority: &str) -> Self {
+        let task_wait_dur_trakcers =
+            ["unified-read-pool", "sched-worker-priority"].map(|pool_name| {
+                HistogramTracker::new(
+                    YATP_POOL_SCHEDULE_WAIT_DURATION_VEC
+                        .get_metric_with_label_values(&[pool_name, priority])
+                        .unwrap(),
+                )
+            });
         let last_stats = limiter.get_limit_statistics(ResourceType::Cpu);
         Self {
             limiter,
             last_stats,
+            task_wait_dur_trakcers,
         }
     }
 
@@ -463,10 +503,16 @@ impl PrioirtyLimiterStatsTracker {
         let cur_stats = self.limiter.get_limit_statistics(ResourceType::Cpu);
         let stats_delta = (cur_stats - self.last_stats) / dur_secs;
         self.last_stats = cur_stats;
+        let wait_stats: [_; 2] =
+            std::array::from_fn(|i| self.task_wait_dur_trakcers[i].get_and_upate_statistics());
+        let schedule_wait_dur_secs = wait_stats.iter().map(|s| s.0).sum::<f64>() / dur_secs;
+        let task_schedule_count =
+            (wait_stats.iter().map(|s| s.1).sum::<u64>() as f64 / dur_secs) as u64;
         LimiterStats {
             cpu_secs: stats_delta.total_consumed as f64 / MICROS_PER_SEC,
-            wait_secs: stats_delta.total_wait_dur_us as f64 / MICROS_PER_SEC,
-            req_count: stats_delta.request_count,
+            wait_secs: stats_delta.total_wait_dur_us as f64 / MICROS_PER_SEC
+                + schedule_wait_dur_secs,
+            req_count: task_schedule_count,
         }
     }
 }

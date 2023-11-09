@@ -39,6 +39,8 @@ pub struct ResourceLimiter {
     name: String,
     version: u64,
     limiters: [QuotaLimiter; ResourceType::COUNT],
+    // whether the resource limiter is a background limiter or priority limiter.
+    is_background: bool,
 }
 
 impl std::fmt::Debug for ResourceLimiter {
@@ -48,14 +50,25 @@ impl std::fmt::Debug for ResourceLimiter {
 }
 
 impl ResourceLimiter {
-    pub fn new(name: String, cpu_limit: f64, io_limit: f64, version: u64) -> Self {
+    pub fn new(
+        name: String,
+        cpu_limit: f64,
+        io_limit: f64,
+        version: u64,
+        is_background: bool,
+    ) -> Self {
         let cpu_limiter = QuotaLimiter::new(cpu_limit);
         let io_limiter = QuotaLimiter::new(io_limit);
         Self {
             name,
             version,
             limiters: [cpu_limiter, io_limiter],
+            is_background,
         }
+    }
+
+    pub fn is_background(&self) -> bool {
+        self.is_background
     }
 
     pub fn consume(&self, cpu_time: Duration, io_bytes: IoBytes) -> Duration {

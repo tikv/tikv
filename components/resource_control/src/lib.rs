@@ -10,8 +10,8 @@ use serde::{Deserialize, Serialize};
 
 mod resource_group;
 pub use resource_group::{
-    ResourceConsumeType, ResourceController, ResourceGroupManager, TaskMetadata,
-    MIN_PRIORITY_UPDATE_INTERVAL,
+    priority_from_task_meta, ResourceConsumeType, ResourceController, ResourceGroupManager,
+    TaskMetadata, MIN_PRIORITY_UPDATE_INTERVAL,
 };
 
 mod future;

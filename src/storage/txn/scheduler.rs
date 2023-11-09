@@ -472,6 +472,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                 reporter,
                 feature_gate.clone(),
                 resource_ctl,
+                resource_manager.clone(),
             ),
             control_mutex: Arc::new(tokio::sync::Mutex::new(false)),
             lock_mgr,
@@ -1300,10 +1301,14 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             // TODO: write bytes can be a bit inaccurate due to error requests or in-memory
             // pessimistic locks.
             sample.add_write_bytes(write_bytes);
-            // estimate the cpu time for write by the schdule cpu time and write bytes
-            let expected_dur = (sample.cpu_time() + Duration::from_micros(write_bytes as u64))
-                * SCHEDULER_CPU_TIME_FACTOR;
             if let Some(limiter) = resource_limiter {
+                let expected_dur = if limiter.is_background() {
+                    // estimate the cpu time for write by the schdule cpu time and write bytes
+                    (sample.cpu_time() + Duration::from_micros(write_bytes as u64))
+                        * SCHEDULER_CPU_TIME_FACTOR
+                } else {
+                    sample.cpu_time()
+                };
                 limiter
                     .async_consume(
                         expected_dur,

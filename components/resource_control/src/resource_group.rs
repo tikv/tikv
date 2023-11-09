@@ -99,6 +99,7 @@ impl Default for ResourceGroupManager {
                 f64::INFINITY,
                 f64::INFINITY,
                 0,
+                false,
             ))
         });
         let manager = Self {
@@ -192,6 +193,7 @@ impl ResourceGroupManager {
                     f64::INFINITY,
                     f64::INFINITY,
                     version,
+                    true,
                 )))
             })
         } else {
@@ -288,6 +290,14 @@ impl ResourceGroupManager {
     #[inline]
     fn enable_priority_limiter(&self) -> bool {
         self.get_group_count() > 1
+    }
+
+    /// return the priority of target resource group.
+    #[inline]
+    pub fn get_resource_group_priority(&self, group: &str) -> u32 {
+        self.resource_groups
+            .get(group)
+            .map_or(1, |g| g.group.priority)
     }
 
     // Always return the background resource limiter if any;
@@ -699,7 +709,7 @@ impl<'a> TaskMetadata<'a> {
         self.metadata.into_owned()
     }
 
-    fn override_priority(&self) -> u32 {
+    pub fn override_priority(&self) -> u32 {
         if self.metadata.is_empty() {
             return 0;
         }
@@ -723,6 +733,15 @@ impl<'a> TaskMetadata<'a> {
         };
         &self.metadata[start..]
     }
+}
+
+// return the TaskPriority value from task metadata.
+// This function is used for handling thread pool task waiting metrics.
+pub fn priority_from_task_meta(meta: &[u8]) -> usize {
+    let priority = TaskMetadata::from_bytes(meta).override_priority();
+    // mapping (high(15), medium(8), low(1)) -> (0, 1, 2)
+    debug_assert!(priority > 0 && priority < 16);
+    TaskPriority::from(priority) as usize
 }
 
 impl TaskPriorityProvider for ResourceController {
