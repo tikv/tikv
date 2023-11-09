@@ -171,6 +171,8 @@ pub fn deactivate_heap_profile() -> bool {
         Some(tx) => {
             if let Some((tx, _)) = tx.take() {
                 let _ = tx.send(());
+            } else {
+               *activate = None; 
             }
             true
         }
