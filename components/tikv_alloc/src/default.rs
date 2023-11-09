@@ -29,7 +29,7 @@ pub fn set_prof_sample(_rate: usize) -> ProfResult<()> {
     Err(ProfError::MemProfilingNotEnabled)
 }
 
-pub fn is_profiling_on() -> bool {
+pub fn is_profiling_active() -> bool {
     false
 }
 

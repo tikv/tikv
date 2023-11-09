@@ -5477,23 +5477,18 @@ mod tests {
         let cfg_controller = ConfigController::new(cfg);
 
         cfg_controller.register(Module::Memory, Box::new(MemoryConfigManager));
-        println!("here1");
         cfg_controller
             .update_config("memory.enable_heap_profiling", "false")
             .unwrap();
-        assert_eq!(tikv_alloc::is_profiling_on(), false);
-        println!("here2");
+        assert_eq!(tikv_alloc::is_profiling_active(), false);
         cfg_controller
             .update_config("memory.enable_heap_profiling", "true")
             .unwrap();
-        println!("here31");
-        assert_eq!(tikv_alloc::is_profiling_on(), true);
-        println!("here3");
+        assert_eq!(tikv_alloc::is_profiling_active(), true);
 
         cfg_controller
             .update_config("memory.heap_profiling_sample_ratio", "20")
             .unwrap_err();
-        println!("here4");
         assert_eq!(
             cfg_controller
                 .get_current()
