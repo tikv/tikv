@@ -4266,13 +4266,224 @@ def GC() -> RowPanel:
 
 def Snapshot() -> RowPanel:
     layout = Layout(title="Snapshot")
-    layout.row([])
+    layout.row(
+        [
+            graph_panel(
+                title="Rate snapshot message",
+                description="The rate of Raft snapshot messages sent",
+                yaxes=yaxes(left_format=UNITS.OPS_PER_MIN),
+                targets=[
+                    target(
+                        expr=expr_sum_delta(
+                            "tikv_raftstore_raft_sent_message_total",
+                            range_selector="1m",
+                            label_selectors=['type="snapshot"'],
+                        ),
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="Snapshot state count",
+                description="The number of snapshots in different states",
+                targets=[
+                    target(
+                        expr=expr_sum(
+                            "tikv_raftstore_snapshot_traffic_total",
+                            by_labels=["type"],
+                        ),
+                    ),
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel(
+                title="99% Snapshot generation wait duration",
+                description="The time snapshot generation tasks waited to be scheduled. ",
+                yaxes=yaxes(left_format=UNITS.SECONDS),
+                targets=[
+                    target(
+                        expr=expr_histogram_quantile(
+                            0.99,
+                            "tikv_raftstore_snapshot_generation_wait_duration_seconds",
+                            by_labels=["instance"],
+                        ),
+                        legend_format="{{instance}}",
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="99% Handle snapshot duration",
+                description="The time consumed when handling snapshots",
+                yaxes=yaxes(left_format=UNITS.SECONDS),
+                targets=[
+                    target(
+                        expr=expr_histogram_quantile(
+                            0.99,
+                            "tikv_server_send_snapshot_duration_seconds",
+                        ),
+                        legend_format="send",
+                    ),
+                    target(
+                        expr=expr_histogram_quantile(
+                            0.99,
+                            "tikv_raftstore_snapshot_duration_seconds",
+                            label_selectors=['type="apply"'],
+                        ),
+                        legend_format="apply",
+                    ),
+                    target(
+                        expr=expr_histogram_quantile(
+                            0.99,
+                            "tikv_raftstore_snapshot_duration_seconds",
+                            label_selectors=['type="generate"'],
+                        ),
+                        legend_format="generate",
+                    ),
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel(
+                title="99.99% Snapshot size",
+                description="The snapshot size (P99.99).9999",
+                yaxes=yaxes(left_format=UNITS.BYTES_IEC),
+                targets=[
+                    target(
+                        expr=expr_histogram_quantile(
+                            0.9999,
+                            "tikv_snapshot_size",
+                        ),
+                        legend_format="size",
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="99.99% Snapshot KV count",
+                description="The number of KV within a snapshot in .9999",
+                targets=[
+                    target(
+                        expr=expr_histogram_quantile(
+                            0.9999,
+                            "tikv_snapshot_kv_count",
+                        ),
+                        legend_format="count",
+                    ),
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel(
+                title="Snapshot Actions",
+                description="Action stats for snapshot generating and applying",
+                yaxes=yaxes(left_format=UNITS.OPS_PER_MIN),
+                targets=[
+                    target(
+                        expr=expr_sum_delta(
+                            "tikv_raftstore_snapshot_total",
+                            range_selector="1m",
+                            by_labels=["type", "status"],
+                        ),
+                    ),
+                    target(
+                        expr=expr_sum_delta(
+                            "tikv_raftstore_clean_region_count",
+                            range_selector="1m",
+                            by_labels=["type", "status"],
+                        ),
+                        legend_format="clean-region-by-{{type}}",
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="Snapshot transport speed",
+                description="The speed of sending or receiving snapshot",
+                yaxes=yaxes(left_format=UNITS.BYTES_SEC_IEC),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_snapshot_limit_transport_bytes",
+                            by_labels=["instance", "type"],
+                        ),
+                    ),
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_snapshot_limit_generate_bytes",
+                        ),
+                        legend_format="{{instance}}-generate",
+                    ),
+                ],
+            ),
+        ]
+    )
     return layout.row_panel
 
 
 def Task() -> RowPanel:
     layout = Layout(title="Task")
-    layout.row([])
+    layout.row(
+        [
+            graph_panel(
+                title="Worker handled tasks",
+                description="The number of tasks handled by worker",
+                yaxes=yaxes(left_format=UNITS.OPS_PER_SEC),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_worker_handled_task_total",
+                            by_labels=["name"],
+                        ),
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="Worker pending tasks",
+                description="Current pending and running tasks of worker",
+                targets=[
+                    target(
+                        expr=expr_sum(
+                            "tikv_worker_pending_task_total",
+                            by_labels=["name"],
+                        ),
+                    ),
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel(
+                title="FuturePool handled tasks",
+                description="The number of tasks handled by future_pool",
+                yaxes=yaxes(left_format=UNITS.OPS_PER_SEC),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_futurepool_handled_task_total",
+                            by_labels=["name"],
+                        ),
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="FuturePool pending tasks",
+                description="Current pending and running tasks of future_pool",
+                targets=[
+                    target(
+                        expr=expr_sum(
+                            "tikv_futurepool_pending_task_total",
+                            by_labels=["name"],
+                        ),
+                    ),
+                ],
+            ),
+        ]
+    )
     return layout.row_panel
 
 
