@@ -115,8 +115,6 @@ impl<E: KvEngine> Initializer<E> {
         fail_point!("cdc_before_initialize");
         let _permit = concurrency_semaphore.acquire().await;
 
-
-
         // To avoid holding too many snapshots and holding them too long,
         // we need to acquire scan concurrency permit before taking snapshot.
         let sched = self.sched.clone();
