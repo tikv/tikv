@@ -22,7 +22,7 @@ use kvproto::{
     resource_manager::{GroupMode, ResourceGroup as PbResourceGroup},
 };
 use parking_lot::{MappedRwLockReadGuard, RwLock, RwLockReadGuard};
-use strum::EnumCount;
+use strum::{EnumCount, EnumIter, IntoEnumIterator};
 use tikv_util::{info, time::Instant};
 use yatp::queue::priority::TaskPriorityProvider;
 
@@ -57,12 +57,22 @@ pub enum ResourceConsumeType {
     IoBytes(u64),
 }
 
-#[derive(Copy, Clone, Eq, PartialEq, EnumCount)]
+#[derive(Copy, Clone, Eq, PartialEq, EnumCount, EnumIter)]
 #[repr(usize)]
 pub enum TaskPriority {
     High = 0,
     Medium = 1,
     Low = 2,
+}
+
+impl TaskPriority {
+    pub fn as_str(&self) -> &'static str {
+        match *self {
+            TaskPriority::High => "high",
+            TaskPriority::Medium => "medium",
+            TaskPriority::Low => "low",
+        }
+    }
 }
 
 impl From<u32> for TaskPriority {
@@ -93,15 +103,18 @@ pub struct ResourceGroupManager {
 
 impl Default for ResourceGroupManager {
     fn default() -> Self {
-        let priority_limiters = ["high", "medium", "low"].map(|n| {
-            Arc::new(ResourceLimiter::new(
-                n.into(),
-                f64::INFINITY,
-                f64::INFINITY,
-                0,
-                false,
-            ))
-        });
+        let priority_limiters = TaskPriority::iter()
+            .map(|p| {
+                Arc::new(ResourceLimiter::new(
+                    p.as_str().to_owned(),
+                    f64::INFINITY,
+                    f64::INFINITY,
+                    0,
+                ))
+            })
+            .collect::<Vec<_>>()
+            .try_into()
+            .unwrap();
         let manager = Self {
             resource_groups: Default::default(),
             group_count: AtomicU64::new(0),
@@ -297,7 +310,7 @@ impl ResourceGroupManager {
     pub fn get_resource_group_priority(&self, group: &str) -> u32 {
         self.resource_groups
             .get(group)
-            .map_or(1, |g| g.group.priority)
+            .map_or(LOW_PRIORITY, |g| g.group.priority)
     }
 
     // Always return the background resource limiter if any;
@@ -327,6 +340,7 @@ impl ResourceGroupManager {
         }
         Some(self.priority_limiters[TaskPriority::from(task_priority) as usize].clone())
     }
+
 
     // return a ResourceLimiter for background tasks only.
     pub fn get_background_resource_limiter(
@@ -371,7 +385,6 @@ impl ResourceGroupManager {
     #[inline]
     pub fn get_priority_resource_limiters(&self) -> [Arc<ResourceLimiter>; 3] {
         self.priority_limiters.clone()
-    }
 }
 
 pub(crate) struct ResourceGroup {
