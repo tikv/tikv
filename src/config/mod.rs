@@ -3255,31 +3255,27 @@ pub struct MemoryConfigManager;
 
 impl ConfigManager for MemoryConfigManager {
     fn dispatch(&mut self, changes: ConfigChange) -> CfgResult<()> {
-        if let Some(v) = changes.get("enable_heap_profiling") {
-            if let ConfigValue::Bool(enable) = v {
-                if *enable {
-                    let mut activate = HEAP_PROFILE_ACTIVE.lock().unwrap();
-                    // already enabled by HTTP API, do nothing
-                    if activate.is_none() {
-                        *activate = Some(None);
-                        if let Err(e) = tikv_alloc::activate_prof() {
-                            error!("failed to enable heap profiling"; "err" => ?e);
-                        }
+        if let Some(ConfigValue::Bool(enable)) = changes.get("enable_heap_profiling") {
+            if *enable {
+                let mut activate = HEAP_PROFILE_ACTIVE.lock().unwrap();
+                // already enabled by HTTP API, do nothing
+                if activate.is_none() {
+                    *activate = Some(None);
+                    if let Err(e) = tikv_alloc::activate_prof() {
+                        error!("failed to enable heap profiling"; "err" => ?e);
                     }
-                } else {
-                    let mut activate = HEAP_PROFILE_ACTIVE.lock().unwrap();
-                    *activate = None;
-                    if let Err(e) = tikv_alloc::deactivate_prof() {
-                        error!("failed to disable heap profiling"; "err" => ?e);
-                    }
+                }
+            } else {
+                let mut activate = HEAP_PROFILE_ACTIVE.lock().unwrap();
+                *activate = None;
+                if let Err(e) = tikv_alloc::deactivate_prof() {
+                    error!("failed to disable heap profiling"; "err" => ?e);
                 }
             }
         }
 
-        if let Some(v) = changes.get("heap_profiling_sample_rate") {
-            if let ConfigValue::Usize(sample_rate) = v {
-                tikv_alloc::set_prof_sample(*sample_rate).unwrap();
-            }
+        if let Some(ConfigValue::Usize(sample_rate)) = changes.get("heap_profiling_sample_rate") {
+            tikv_alloc::set_prof_sample(*sample_rate).unwrap();
         }
         info!("update memory config"; "config" => ?changes);
         Ok(())
