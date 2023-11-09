@@ -167,7 +167,6 @@ pub struct Config {
 
     #[doc(hidden)]
     #[online_config(skip)]
-    #[serde(skip_serializing)]
     /// When TiKV memory usage reaches `memory_usage_high_water` it will try to
     /// limit memory increasing. For server layer some messages will be rejected
     /// or dropped, if they utilize memory more than
