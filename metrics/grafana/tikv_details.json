@@ -8355,7 +8355,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 61
+        "y": 6
       },
       "id": 6946,
       "panels": [
@@ -8364,17 +8364,12 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "${DS_PLAYGROUND}",
+          "datasource": "${DS_TEST-CLUSTER}",
           "decimals": 1,
           "description": "",
           "editable": true,
           "error": false,
-          "fieldConfig": {
-            "defaults": {},
-            "overrides": []
-          },
           "fill": 1,
-          "fillGradient": 0,
           "grid": {},
           "gridPos": {
             "h": 7,
@@ -8474,7 +8469,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "${DS_PLAYGROUND}",
+          "datasource": "${DS_TEST-CLUSTER}",
           "decimals": 1,
           "description": "",
           "editable": true,
@@ -8584,7 +8579,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "${DS_PLAYGROUND}",
+          "datasource": "${DS_TEST-CLUSTER}",
           "decimals": 1,
           "description": "",
           "editable": true,
@@ -8622,11 +8617,7 @@
           "linewidth": 2,
           "links": [],
           "nullPointMode": "null as zero",
-          "options": {
-            "alertThreshold": true
-          },
           "percentage": false,
-          "pluginVersion": "7.5.11",
           "pointradius": 5,
           "points": false,
           "renderer": "flot",
@@ -8636,10 +8627,8 @@
           "steppedLine": false,
           "targets": [
             {
-              "exemplar": true,
               "expr": "sum(tikv_ttl_checker_processed_regions{instance=~\"$instance\"}) by (instance) / sum(tikv_raftstore_region_count{instance=~\"$instance\", type=\"region\"}) by (instance)",
               "format": "time_series",
-              "interval": "",
               "intervalFactor": 10,
               "legendFormat": "{{instance}}",
               "refId": "E"
@@ -8694,17 +8683,12 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "${DS_PLAYGROUND}",
+          "datasource": "${DS_TEST-CLUSTER}",
           "decimals": 1,
           "description": "",
           "editable": true,
           "error": false,
-          "fieldConfig": {
-            "defaults": {},
-            "overrides": []
-          },
           "fill": 1,
-          "fillGradient": 0,
           "grid": {},
           "gridPos": {
             "h": 7,
@@ -8712,7 +8696,6 @@
             "x": 12,
             "y": 69
           },
-          "hiddenSeries": false,
           "id": 6987,
           "legend": {
             "alignAsTable": true,
@@ -8732,11 +8715,7 @@
           "linewidth": 2,
           "links": [],
           "nullPointMode": "null as zero",
-          "options": {
-            "alertThreshold": true
-          },
           "percentage": false,
-          "pluginVersion": "7.5.11",
           "pointradius": 5,
           "points": false,
           "renderer": "flot",
@@ -8800,7 +8779,7 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "${DS_PLAYGROUND}",
+          "datasource": "${DS_TEST-CLUSTER}",
           "decimals": 1,
           "description": "The time consumed when executing GC tasks",
           "fieldConfig": {
@@ -8931,12 +8910,8 @@
             "rgba(237, 129, 40, 0.89)",
             "#d44a3a"
           ],
-          "datasource": "${DS_PLAYGROUND}",
+          "datasource": "${DS_TEST-CLUSTER}",
           "description": "",
-          "fieldConfig": {
-            "defaults": {},
-            "overrides": []
-          },
           "format": "ms",
           "gauge": {
             "maxValue": 100,
