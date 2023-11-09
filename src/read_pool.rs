@@ -777,7 +777,7 @@ mod tests {
 
         thread::sleep(Duration::from_millis(300));
         match handle.spawn(task3, CommandPri::Normal, 3, TaskMetadata::default(), None) {
-            Err(ReadPoolError::UnifiedReadPoolFull) => {}
+            Err(ReadPoolError::FuturePoolFull(..)) => {}
             _ => panic!("should return full error"),
         }
         tx1.send(()).unwrap();
@@ -826,7 +826,7 @@ mod tests {
 
         thread::sleep(Duration::from_millis(300));
         match handle.spawn(task3, CommandPri::Normal, 3, TaskMetadata::default(), None) {
-            Err(ReadPoolError::UnifiedReadPoolFull) => {}
+            Err(ReadPoolError::FuturePoolFull(..)) => {}
             _ => panic!("should return full error"),
         }
 
@@ -839,7 +839,7 @@ mod tests {
 
         thread::sleep(Duration::from_millis(300));
         match handle.spawn(task5, CommandPri::Normal, 5, TaskMetadata::default(), None) {
-            Err(ReadPoolError::UnifiedReadPoolFull) => {}
+            Err(ReadPoolError::FuturePoolFull(..)) => {}
             _ => panic!("should return full error"),
         }
     }
@@ -882,7 +882,7 @@ mod tests {
 
         thread::sleep(Duration::from_millis(300));
         match handle.spawn(task3, CommandPri::Normal, 3, TaskMetadata::default(), None) {
-            Err(ReadPoolError::UnifiedReadPoolFull) => {}
+            Err(ReadPoolError::FuturePoolFull(..)) => {}
             _ => panic!("should return full error"),
         }
 
@@ -899,7 +899,7 @@ mod tests {
 
         thread::sleep(Duration::from_millis(300));
         match handle.spawn(task5, CommandPri::Normal, 5, TaskMetadata::default(), None) {
-            Err(ReadPoolError::UnifiedReadPoolFull) => {}
+            Err(ReadPoolError::FuturePoolFull(..)) => {}
             _ => panic!("should return full error"),
         }
     }
