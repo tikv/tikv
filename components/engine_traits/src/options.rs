@@ -95,6 +95,8 @@ pub struct IterOptions {
     // never fail a request as incomplete, even on skipping too many keys.
     // It's used to avoid encountering too many tombstones when seeking.
     max_skippable_internal_keys: u64,
+
+    region_id: Option<u64>,
 }
 
 impl IterOptions {
@@ -113,7 +115,12 @@ impl IterOptions {
             key_only: false,
             seek_mode: SeekMode::TotalOrder,
             max_skippable_internal_keys: 0,
+            region_id: None,
         }
+    }
+
+    pub fn region_id(&self) -> Option<u64> {
+        self.region_id
     }
 
     #[inline]
@@ -261,6 +268,7 @@ impl Default for IterOptions {
             key_only: false,
             seek_mode: SeekMode::TotalOrder,
             max_skippable_internal_keys: 0,
+            region_id: None,
         }
     }
 }

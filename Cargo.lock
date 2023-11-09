@@ -4374,6 +4374,7 @@ dependencies = [
  "concurrency_manager",
  "crc32fast",
  "crossbeam",
+ "crossbeam-skiplist",
  "derivative",
  "encryption",
  "encryption_export",

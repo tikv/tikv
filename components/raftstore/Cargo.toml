@@ -90,6 +90,7 @@ tracker = { workspace = true }
 txn_types = { workspace = true }
 uuid = { version = "0.8.1", features = ["serde", "v4"] }
 yatp = { workspace = true }
+crossbeam-skiplist = "0.1.1"
 
 [dev-dependencies]
 encryption_export = { workspace = true }
