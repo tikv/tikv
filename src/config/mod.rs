@@ -14,7 +14,7 @@ use std::{
     error::Error,
     fs, i32,
     io::{Error as IoError, ErrorKind, Write},
-    path::{Path, PathBuf},
+    path::Path,
     str,
     sync::{Arc, RwLock},
     usize,
@@ -47,7 +47,6 @@ use engine_traits::{
     CF_WRITE,
 };
 use file_system::IoRateLimiter;
-use futures_executor::block_on;
 use keys::region_raft_prefix_len;
 use kvproto::kvrpcpb::ApiVersion;
 use online_config::{ConfigChange, ConfigManager, ConfigValue, OnlineConfig, Result as CfgResult};
@@ -83,7 +82,7 @@ use crate::{
     server::{
         gc_worker::{GcConfig, RawCompactionFilterFactory, WriteCompactionFilterFactory},
         lock_manager::Config as PessimisticTxnConfig,
-        status_server::{activate_heap_profile, deactivate_heap_profile},
+        status_server::HEAP_PROFILE_ACTIVE,
         ttl::TtlCompactionFilterFactory,
         Config as ServerConfig, CONFIG_ROCKSDB_GAUGE,
     },
@@ -3237,11 +3236,9 @@ impl Default for MemoryConfig {
 impl MemoryConfig {
     pub fn init(&self) {
         if self.enable_heap_profiling {
-            if let Err(e) = block_on(activate_heap_profile(
-                None::<futures::channel::mpsc::Receiver<_>>,
-                PathBuf::default(),
-                || {},
-            )) {
+            let mut activate = HEAP_PROFILE_ACTIVE.lock().unwrap();
+            *activate = Some(None);
+            if let Err(e) = tikv_alloc::activate_prof() {
                 error!("failed to enable heap profiling"; "err" => ?e);
             }
             tikv_alloc::set_prof_sample(self.heap_profiling_sample_rate).unwrap();
@@ -3256,15 +3253,17 @@ impl ConfigManager for MemoryConfigManager {
         if let Some(v) = changes.get("enable_heap_profiling") {
             if let ConfigValue::Bool(enable) = v {
                 if *enable {
-                    if let Err(e) = block_on(activate_heap_profile(
-                        None::<futures::channel::mpsc::Receiver<_>>,
-                        PathBuf::default(),
-                        || {},
-                    )) {
+                    let mut activate = HEAP_PROFILE_ACTIVE.lock().unwrap();
+                    *activate = Some(None);
+                    if let Err(e) = tikv_alloc::activate_prof() {
                         error!("failed to enable heap profiling"; "err" => ?e);
                     }
                 } else {
-                    deactivate_heap_profile();
+                    let mut activate = HEAP_PROFILE_ACTIVE.lock().unwrap();
+                    *activate = None;
+                    if let Err(e) = tikv_alloc::deactivate_prof() {
+                        error!("failed to disable heap profiling"; "err" => ?e);
+                    }
                 }
             }
         }
@@ -5478,19 +5477,23 @@ mod tests {
         let cfg_controller = ConfigController::new(cfg);
 
         cfg_controller.register(Module::Memory, Box::new(MemoryConfigManager));
-
+        println!("here1");
         cfg_controller
             .update_config("memory.enable_heap_profiling", "false")
             .unwrap();
         assert_eq!(tikv_alloc::is_profiling_on(), false);
+        println!("here2");
         cfg_controller
             .update_config("memory.enable_heap_profiling", "true")
             .unwrap();
+        println!("here31");
         assert_eq!(tikv_alloc::is_profiling_on(), true);
+        println!("here3");
 
         cfg_controller
             .update_config("memory.heap_profiling_sample_ratio", "20")
             .unwrap_err();
+        println!("here4");
         assert_eq!(
             cfg_controller
                 .get_current()
