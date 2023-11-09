@@ -435,6 +435,7 @@ impl PeerTick {
 #[derive(Debug, Clone, Copy)]
 pub enum StoreTick {
     CompactCheck,
+    PeriodicFullCompact,
     PdStoreHeartbeat,
     SnapGc,
     CompactLockCf,
@@ -447,6 +448,7 @@ impl StoreTick {
     pub fn tag(self) -> RaftEventDurationType {
         match self {
             StoreTick::CompactCheck => RaftEventDurationType::compact_check,
+            StoreTick::PeriodicFullCompact => RaftEventDurationType::periodic_full_compact,
             StoreTick::PdStoreHeartbeat => RaftEventDurationType::pd_store_heartbeat,
             StoreTick::SnapGc => RaftEventDurationType::snap_gc,
             StoreTick::CompactLockCf => RaftEventDurationType::compact_lock_cf,
@@ -557,12 +559,14 @@ pub enum CasualMessage<EK: KvEngine> {
     /// Approximate size of target region. This message can only be sent by
     /// split-check thread.
     RegionApproximateSize {
-        size: u64,
+        size: Option<u64>,
+        splitable: Option<bool>,
     },
 
     /// Approximate key count of target region.
     RegionApproximateKeys {
-        keys: u64,
+        keys: Option<u64>,
+        splitable: Option<bool>,
     },
     CompactionDeclinedBytes {
         bytes: u64,
@@ -647,11 +651,19 @@ impl<EK: KvEngine> fmt::Debug for CasualMessage<EK> {
                 KeysInfoFormatter(split_keys.iter()),
                 source,
             ),
-            CasualMessage::RegionApproximateSize { size } => {
-                write!(fmt, "Region's approximate size [size: {:?}]", size)
+            CasualMessage::RegionApproximateSize { size, splitable } => {
+                write!(
+                    fmt,
+                    "Region's approximate size [size: {:?}], [splitable: {:?}]",
+                    size, splitable
+                )
             }
-            CasualMessage::RegionApproximateKeys { keys } => {
-                write!(fmt, "Region's approximate keys [keys: {:?}]", keys)
+            CasualMessage::RegionApproximateKeys { keys, splitable } => {
+                write!(
+                    fmt,
+                    "Region's approximate keys [keys: {:?}], [splitable: {:?}",
+                    keys, splitable
+                )
             }
             CasualMessage::CompactionDeclinedBytes { bytes } => {
                 write!(fmt, "compaction declined bytes {}", bytes)

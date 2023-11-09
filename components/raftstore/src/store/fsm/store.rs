@@ -59,8 +59,11 @@ use tikv_util::{
     mpsc::{self, LooseBoundedSender, Receiver},
     slow_log,
     store::{find_peer, region_on_stores},
-    sys as sys_util,
-    sys::disk::{get_disk_status, DiskUsage},
+    sys::{
+        self as sys_util,
+        cpu_time::ProcessStat,
+        disk::{get_disk_status, DiskUsage},
+    },
     time::{duration_to_sec, monotonic_raw_now, Instant as TiInstant},
     timer::SteadyTimer,
     warn,
@@ -116,6 +119,10 @@ type Key = Vec<u8>;
 pub const PENDING_MSG_CAP: usize = 100;
 pub const ENTRY_CACHE_EVICT_TICK_DURATION: Duration = Duration::from_secs(1);
 pub const MULTI_FILES_SNAPSHOT_FEATURE: Feature = Feature::require(6, 1, 0); // it only makes sense for large region
+
+// Every 30 minutes, check if we can run full compaction. This allows the config
+// setting `periodic_full_compact_start_max_cpu` to be changed dynamically.
+const PERIODIC_FULL_COMPACT_TICK_INTERVAL_DURATION: Duration = Duration::from_secs(30 * 60);
 
 pub struct StoreInfo<EK, ER> {
     pub kv_engine: EK,
@@ -674,6 +681,8 @@ where
             "region_id" => region_id,
             "current_region_epoch" => ?cur_epoch,
             "msg_type" => ?msg_type,
+            "to_peer_id" => ?from_peer.get_id(),
+            "to_peer_store_id" => ?from_peer.get_store_id(),
         );
 
         self.raft_metrics.message_dropped.stale_msg.inc();
@@ -692,6 +701,8 @@ where
             error!(?e;
                 "send gc message failed";
                 "region_id" => region_id,
+                "to_peer_id" => ?from_peer.get_id(),
+                "to_peer_store_id" => ?from_peer.get_store_id(),
             );
         }
     }
@@ -768,6 +779,7 @@ impl<'a, EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
             StoreTick::SnapGc => self.on_snap_mgr_gc(),
             StoreTick::CompactLockCf => self.on_compact_lock_cf(),
             StoreTick::CompactCheck => self.on_compact_check_tick(),
+            StoreTick::PeriodicFullCompact => self.on_full_compact_tick(),
             StoreTick::ConsistencyCheck => self.on_consistency_check_tick(),
             StoreTick::CleanupImportSst => self.on_cleanup_import_sst_tick(),
         }
@@ -858,6 +870,7 @@ impl<'a, EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
         self.fsm.store.start_time = Some(time::get_time());
         self.register_cleanup_import_sst_tick();
         self.register_compact_check_tick();
+        self.register_full_compact_tick();
         self.register_pd_store_heartbeat_tick();
         self.register_compact_lock_cf_tick();
         self.register_snap_mgr_gc_tick();
@@ -2376,6 +2389,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
             self.ctx.engines.clone(),
             region_id,
             target.clone(),
+            msg.get_from_peer().clone(),
         )?;
 
         // WARNING: The checking code must be above this line.
@@ -2432,6 +2446,65 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
                 PeerMsg::CasualMessage(CasualMessage::CompactionDeclinedBytes {
                     bytes: declined_bytes,
                 }),
+            );
+        }
+    }
+
+    fn register_full_compact_tick(&self) {
+        if !self.ctx.cfg.periodic_full_compact_start_times.is_empty() {
+            self.ctx.schedule_store_tick(
+                StoreTick::PeriodicFullCompact,
+                PERIODIC_FULL_COMPACT_TICK_INTERVAL_DURATION,
+            )
+        }
+    }
+
+    fn on_full_compact_tick(&mut self) {
+        self.register_full_compact_tick();
+
+        let local_time = chrono::Local::now();
+        if !self
+            .ctx
+            .cfg
+            .periodic_full_compact_start_times
+            .is_scheduled_this_hour(&local_time)
+        {
+            debug!(
+                "full compaction may not run at this time";
+                "local_time" => ?local_time,
+                "periodic_full_compact_start_times" => ?self.ctx.cfg.periodic_full_compact_start_times,
+            );
+            return;
+        }
+
+        if self.ctx.global_stat.stat.is_busy.load(Ordering::SeqCst) {
+            warn!("full compaction may not run at this time, `is_busy` flag is true",);
+            return;
+        }
+
+        let mut proc_stats = ProcessStat::cur_proc_stat().unwrap();
+        let cpu_usage = proc_stats.cpu_usage().unwrap();
+        let max_start_cpu_usage = self.ctx.cfg.periodic_full_compact_start_max_cpu;
+        if cpu_usage > max_start_cpu_usage {
+            warn!(
+                "full compaction may not run at this time, cpu usage is above max";
+                "cpu_usage" => cpu_usage,
+                "threshold" => max_start_cpu_usage,
+            );
+            return;
+        }
+
+        // Attempt executing a periodic full compaction.
+        // Note that full compaction will not run if other compaction tasks are running.
+        if let Err(e) = self
+            .ctx
+            .cleanup_scheduler
+            .schedule(CleanupTask::Compact(CompactTask::PeriodicFullCompact))
+        {
+            error!(
+                "failed to schedule a periodic full compaction";
+                "store_id" => self.fsm.store.id,
+                "err" => ?e
             );
         }
     }
