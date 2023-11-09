@@ -189,19 +189,19 @@ pub struct Config {
 
     #[doc(hidden)]
     #[serde(skip_serializing)]
-    #[online_config(skip)]
+    #[online_config(hidden)]
     #[deprecated = "The configuration has been moved to readpool.coprocessor.*_concurrency."]
     pub end_point_concurrency: Option<usize>,
 
     #[doc(hidden)]
     #[serde(skip_serializing)]
-    #[online_config(skip)]
+    #[online_config(hidden)]
     #[deprecated = "The configuration has been moved to readpool.coprocessor.stack_size."]
     pub end_point_stack_size: Option<ReadableSize>,
 
     #[doc(hidden)]
     #[serde(skip_serializing)]
-    #[online_config(skip)]
+    #[online_config(hidden)]
     #[deprecated = "The configuration has been moved to readpool.coprocessor.max_tasks_per_worker_*."]
     pub end_point_max_tasks: Option<usize>,
 }
