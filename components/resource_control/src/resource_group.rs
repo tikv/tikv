@@ -103,12 +103,18 @@ pub struct ResourceGroupManager {
 
 impl Default for ResourceGroupManager {
     fn default() -> Self {
-        let priority_limiters = TaskPriority::iter().map(|p| Arc::new(ResourceLimiter::new(
-            p.as_str().to_owned(),
-            f64::INFINITY,
-            f64::INFINITY,
-            0,
-        ))).collect::<Vec<_>>().try_into().unwrap();
+        let priority_limiters = TaskPriority::iter()
+            .map(|p| {
+                Arc::new(ResourceLimiter::new(
+                    p.as_str().to_owned(),
+                    f64::INFINITY,
+                    f64::INFINITY,
+                    0,
+                ))
+            })
+            .collect::<Vec<_>>()
+            .try_into()
+            .unwrap();
         let manager = Self {
             resource_groups: Default::default(),
             group_count: AtomicU64::new(0),
