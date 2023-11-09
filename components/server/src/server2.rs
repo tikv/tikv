@@ -73,7 +73,7 @@ use service::{service_event::ServiceEvent, service_manager::GrpcServiceManager};
 use tikv::{
     config::{
         loop_registry, ConfigController, ConfigurableDb, DbConfigManger, DbType, LogConfigManager,
-        TikvConfig,
+        MemoryConfigManager, TikvConfig,
     },
     coprocessor::{self, MEMTRACE_ROOT as MEMTRACE_COPROCESSOR},
     coprocessor_v2,

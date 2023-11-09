@@ -75,7 +75,9 @@ use security::SecurityManager;
 use service::{service_event::ServiceEvent, service_manager::GrpcServiceManager};
 use snap_recovery::RecoveryService;
 use tikv::{
-    config::{ConfigController, DbConfigManger, DbType, LogConfigManager, TikvConfig},
+    config::{
+        ConfigController, DbConfigManger, DbType, LogConfigManager, MemoryConfigManager, TikvConfig,
+    },
     coprocessor::{self, MEMTRACE_ROOT as MEMTRACE_COPROCESSOR},
     coprocessor_v2,
     import::{ImportSstService, SstImporter},

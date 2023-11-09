@@ -40,8 +40,8 @@ use openssl::{
     x509::X509,
 };
 use pin_project::pin_project;
+pub use profile::HEAP_PROFILE_ACTIVE;
 use profile::*;
-pub use profile::{activate_heap_profile, deactivate_heap_profile};
 use prometheus::TEXT_FORMAT;
 use regex::Regex;
 use resource_control::ResourceGroupManager;
