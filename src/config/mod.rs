@@ -3242,10 +3242,11 @@ impl MemoryConfig {
     pub fn init(&self) {
         if self.enable_heap_profiling {
             let mut activate = HEAP_PROFILE_ACTIVE.lock().unwrap();
-            *activate = Some(None);
             if let Err(e) = tikv_alloc::activate_prof() {
                 error!("failed to enable heap profiling"; "err" => ?e);
+                return;
             }
+            *activate = Some(None);
             tikv_alloc::set_prof_sample(self.heap_profiling_sample_rate).unwrap();
         }
     }
@@ -3260,17 +3261,13 @@ impl ConfigManager for MemoryConfigManager {
                 let mut activate = HEAP_PROFILE_ACTIVE.lock().unwrap();
                 // already enabled by HTTP API, do nothing
                 if activate.is_none() {
+                    tikv_alloc::activate_prof()?;
                     *activate = Some(None);
-                    if let Err(e) = tikv_alloc::activate_prof() {
-                        error!("failed to enable heap profiling"; "err" => ?e);
-                    }
                 }
             } else {
                 let mut activate = HEAP_PROFILE_ACTIVE.lock().unwrap();
+                tikv_alloc::deactivate_prof()?;
                 *activate = None;
-                if let Err(e) = tikv_alloc::deactivate_prof() {
-                    error!("failed to disable heap profiling"; "err" => ?e);
-                }
             }
         }
 
