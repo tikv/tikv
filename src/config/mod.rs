@@ -3223,17 +3223,19 @@ pub struct MemoryConfig {
     // default sample rate.
     pub enable_heap_profiling: bool,
 
-    // Average interval (log base 2) between allocation samples, as measured in bytes of allocation
-    // activity. Increasing the sampling interval decreases profile fidelity, but also decreases
-    // the computational overhead. The default sample interval is 512 KiB (2^19 B).
-    pub heap_profiling_sample_rate: usize,
+    // Average interval between allocation samples, as measured in bytes of allocation activity.
+    // Increasing the sampling interval decreases profile fidelity, but also decreases the
+    // computational overhead.
+    // The default sample interval is 512 KB. It only accepts power of two, otherwise it will be
+    // rounded up to the next power of two.
+    pub profiling_sample_per_bytes: ReadableSize,
 }
 
 impl Default for MemoryConfig {
     fn default() -> Self {
         Self {
             enable_heap_profiling: true,
-            heap_profiling_sample_rate: 19,
+            profiling_sample_per_bytes: ReadableSize::kb(512),
         }
     }
 }
@@ -3247,7 +3249,7 @@ impl MemoryConfig {
                 return;
             }
             *activate = Some(None);
-            tikv_alloc::set_prof_sample(self.heap_profiling_sample_rate).unwrap();
+            tikv_alloc::set_prof_sample(self.profiling_sample_per_bytes.0).unwrap();
         }
     }
 }
@@ -3271,7 +3273,7 @@ impl ConfigManager for MemoryConfigManager {
             }
         }
 
-        if let Some(ConfigValue::Usize(sample_rate)) = changes.get("heap_profiling_sample_rate") {
+        if let Some(ConfigValue::Size(sample_rate)) = changes.get("profiling_sample_per_bytes") {
             tikv_alloc::set_prof_sample(*sample_rate).unwrap();
         }
         info!("update memory config"; "config" => ?changes);
@@ -5488,17 +5490,17 @@ mod tests {
         assert_eq!(tikv_alloc::is_profiling_active(), true);
 
         cfg_controller
-            .update_config("memory.heap_profiling_sample_rate", "20")
+            .update_config("memory.profiling_sample_per_bytes", "1MB")
             .unwrap();
         assert_eq!(
             cfg_controller
                 .get_current()
                 .memory
-                .heap_profiling_sample_rate,
-            20,
+                .profiling_sample_per_bytes,
+            ReadableSize::mb(1),
         );
         cfg_controller
-            .update_config("memory.heap_profiling_sample_rate", "invalid")
+            .update_config("memory.profiling_sample_per_bytes", "invalid")
             .unwrap_err();
     }
 
