@@ -43,12 +43,18 @@ impl<EK: KvEngine, ER: RaftEngine> AsyncReadNotifier for StoreRouter<EK, ER> {
 }
 
 impl<EK: KvEngine, ER: RaftEngine> raftstore::coprocessor::StoreHandle for StoreRouter<EK, ER> {
-    fn update_approximate_size(&self, region_id: u64, size: u64) {
-        let _ = self.send(region_id, PeerMsg::UpdateRegionSize { size });
+    // TODO: add splitable logic in raftstore-v2
+    fn update_approximate_size(&self, region_id: u64, size: Option<u64>, _may_split: Option<bool>) {
+        if let Some(size) = size {
+            let _ = self.send(region_id, PeerMsg::UpdateRegionSize { size });
+        }
     }
 
-    fn update_approximate_keys(&self, region_id: u64, keys: u64) {
-        let _ = self.send(region_id, PeerMsg::UpdateRegionKeys { keys });
+    // TODO: add splitable logic in raftstore-v2
+    fn update_approximate_keys(&self, region_id: u64, keys: Option<u64>, _may_split: Option<bool>) {
+        if let Some(keys) = keys {
+            let _ = self.send(region_id, PeerMsg::UpdateRegionKeys { keys });
+        }
     }
 
     fn ask_split(
