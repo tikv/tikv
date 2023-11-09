@@ -90,7 +90,6 @@ pub(crate) struct Initializer<E> {
     pub(crate) request_id: u64,
     pub(crate) checkpoint_ts: TimeStamp,
 
-    pub(crate) scan_concurrency_semaphore: Arc<Semaphore>,
     pub(crate) scan_speed_limiter: Limiter,
     pub(crate) fetch_speed_limiter: Limiter,
 
@@ -110,9 +109,13 @@ impl<E: KvEngine> Initializer<E> {
         &mut self,
         change_observer: ChangeObserver,
         cdc_handle: T,
+        concurrency_semaphore: Arc<Semaphore>,
         memory_quota: Arc<MemoryQuota>,
     ) -> Result<()> {
         fail_point!("cdc_before_initialize");
+        let _permit = concurrency_semaphore.acquire().await;
+
+
 
         // To avoid holding too many snapshots and holding them too long,
         // we need to acquire scan concurrency permit before taking snapshot.
@@ -188,8 +191,6 @@ impl<E: KvEngine> Initializer<E> {
         region: Region,
         memory_quota: Arc<MemoryQuota>,
     ) -> Result<()> {
-        let scan_concurrency_semaphore = self.scan_concurrency_semaphore.clone();
-        let _permit = scan_concurrency_semaphore.acquire().await;
         CDC_SCAN_TASKS.with_label_values(&["ongoing"]).inc();
         defer!(CDC_SCAN_TASKS.with_label_values(&["ongoing"]).dec());
 
@@ -655,7 +656,6 @@ mod tests {
             conn_id: ConnId::new(),
             request_id: 0,
             checkpoint_ts: 1.into(),
-            scan_concurrency_semaphore: Arc::new(Semaphore::new(1)),
             scan_speed_limiter: Limiter::new(scan_limit as _),
             fetch_speed_limiter: Limiter::new(fetch_limit as _),
             max_scan_batch_bytes: 1024 * 1024,
@@ -1034,26 +1034,51 @@ mod tests {
 
         let change_cmd = ChangeObserver::from_cdc(1, ObserveHandle::new());
         let raft_router = CdcRaftRouter(MockRaftStoreRouter::new());
+        let concurrency_semaphore = Arc::new(Semaphore::new(1));
         let memory_quota = Arc::new(MemoryQuota::new(usize::MAX));
 
         initializer.downstream_state.store(DownstreamState::Stopped);
-        block_on(initializer.initialize(change_cmd, raft_router.clone(), memory_quota.clone()))
-            .unwrap_err();
+        block_on(initializer.initialize(
+            change_cmd,
+            raft_router.clone(),
+            concurrency_semaphore.clone(),
+            memory_quota.clone(),
+        ))
+        .unwrap_err();
+
+        let (tx, rx) = sync_channel(1);
+        let concurrency_semaphore_ = concurrency_semaphore.clone();
+        pool.spawn(async move {
+            let _permit = concurrency_semaphore_.acquire().await;
+            tx.send(()).unwrap();
+            tx.send(()).unwrap();
+            tx.send(()).unwrap();
+        });
+        rx.recv_timeout(Duration::from_millis(200)).unwrap();
 
         let (tx1, rx1) = sync_channel(1);
         let change_cmd = ChangeObserver::from_cdc(1, ObserveHandle::new());
         pool.spawn(async move {
             // Migrated to 2021 migration. This let statement is probably not needed, see
             //   https://doc.rust-lang.org/edition-guide/rust-2021/disjoint-capture-in-closures.html
+            let _ = (
+                &initializer,
+                &change_cmd,
+                &raft_router,
+                &concurrency_semaphore,
+            );
             let res = initializer
-                .initialize(change_cmd, raft_router, memory_quota)
+                .initialize(change_cmd, raft_router, concurrency_semaphore, memory_quota)
                 .await;
             tx1.send(res).unwrap();
         });
+        // Must timeout because there is no enough permit.
+        rx1.recv_timeout(Duration::from_millis(200)).unwrap_err();
 
-        // Shouldn't timeout, gets an error instead.
+        // Release the permit
+        rx.recv_timeout(Duration::from_millis(200)).unwrap();
         let res = rx1.recv_timeout(Duration::from_millis(200)).unwrap();
-        assert!(res.is_err());
+        res.unwrap_err();
 
         worker.stop();
     }
