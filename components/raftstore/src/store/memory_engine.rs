@@ -45,7 +45,13 @@ struct LRUMemoryEngineCore {
 
 impl LRUMemoryEngine {
     pub fn new() -> Self {
-        unimplemented!()
+        LRUMemoryEngine {
+            core: Arc::new(Mutex::new(LRUMemoryEngineCore {
+                engine: HashMap::default(),
+                snapshot_list: vec![],
+                max_version: Arc::new(AtomicU64::new(0)),
+            })),
+        }
     }
 
     pub fn consume_batch(&self, batch: MemoryBatch) {
@@ -188,34 +194,31 @@ impl MemoryEngineSnapshot {
     }
 }
 
-pub struct MemoryEngineIterator<'a, 'b> {
+pub struct MemoryEngineIterator {
     cf: String,
     valid: bool,
     engine: Arc<SkipMap<Vec<u8>, Vec<u8>>>,
     lower_bound: Vec<u8>,
     upper_bound: Vec<u8>,
-    current: Option<SkipListRange<'a, Vec<u8>, Range<Vec<u8>>, Vec<u8>, Vec<u8>>>,
+    current: Option<SkipListRange<'static, Vec<u8>, Range<Vec<u8>>, Vec<u8>, Vec<u8>>>,
 
-    entry: Option<Entry<'b, Vec<u8>, Vec<u8>>>,
+    entry: Option<(Vec<u8>, Vec<u8>)>,
 }
 
-use engine_traits::Iterator;
-impl<'a, 'b> Iterator for MemoryEngineIterator<'a, 'b>
-where
-    'a: 'b,
-{
+// use engine_traits::Iterator;
+impl<'a> MemoryEngineIterator<'a> {
     fn key(&self) -> &[u8] {
         assert!(self.valid);
-        self.entry.as_ref().unwrap().key()
+        &(*self.entry.as_ref().unwrap()).0
     }
 
     fn value(&self) -> &[u8] {
         assert!(self.valid);
-        self.entry.as_ref().unwrap().value()
+        &(*self.entry.as_ref().unwrap()).1
     }
 
     fn next(&mut self) -> engine_traits::Result<bool> {
-        self.entry = self.current.as_mut().unwrap().next();
+        self.entry = self.current.as_mut().unwrap().next().map(|(e)|{(e.move_next())});
         self.valid = self.entry.is_some();
         Ok(self.valid)
     }
@@ -224,7 +227,7 @@ where
         unimplemented!();
     }
 
-    fn seek(&mut self, key: &[u8]) -> engine_traits::Result<bool> {
+    fn seek(&'a mut self, key: &'a [u8]) -> engine_traits::Result<bool> {
         let start = if key < self.lower_bound.as_slice() {
             &self.lower_bound
         } else {
@@ -241,7 +244,7 @@ where
         unimplemented!();
     }
 
-    fn seek_to_first(&'c mut self) -> engine_traits::Result<bool> {
+    fn seek_to_first(&mut self) -> engine_traits::Result<bool> {
         self.current = Some(
             self.engine
                 .range(self.lower_bound.clone()..self.upper_bound.clone()),
@@ -256,9 +259,39 @@ where
     }
 
     fn valid(&self) -> engine_traits::Result<bool> {
-        unimplemented!();
+        Ok(self.valid)
     }
 }
 
-#[test]
-fn test_x() {}
+mod test {
+    use super::*;
+
+    #[test]
+    fn test_x() {
+        let lru = LRUMemoryEngine::new();
+        let mut a = MemoryBatch::default();
+        a.insert(
+            1,
+            [
+                vec![
+                    (b"zk1".to_vec(), b"val".to_vec()),
+                    (b"zk2".to_vec(), b"val2".to_vec()),
+                    (b"zk3".to_vec(), b"val3".to_vec()),
+                ],
+                vec![],
+                vec![],
+            ],
+        );
+
+        lru.consume_batch(a);
+
+        let snapshot = lru.new_snapshot();
+        let mut iter = snapshot.iterator_opt("lock", engine_traits::IterOptions::default());
+        iter.seek_to_first();
+
+        // while iter.valid().unwrap() {
+        //     println!("{:?}, {:?}", iter.key(), iter.value());
+        //     iter.next();
+        // }
+    }
+}
