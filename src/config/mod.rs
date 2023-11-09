@@ -1264,7 +1264,7 @@ pub struct DbConfig {
     #[serde(with = "rocks_config::rate_limiter_mode_serde")]
     #[online_config(skip)]
     pub rate_limiter_mode: DBRateLimiterMode,
-    #[online_config(skip)]
+    #[online_config(hidden)]
     #[doc(hidden)]
     #[serde(skip_serializing)]
     #[deprecated = "The configuration has been removed. Use `rate_limiter_auto_tuned` instead"]
@@ -2967,7 +2967,7 @@ pub struct CdcConfig {
     pub old_value_cache_memory_quota: ReadableSize,
 
     // Deprecated! preserved for compatibility check.
-    #[online_config(skip)]
+    #[online_config(hidden)]
     #[doc(hidden)]
     #[serde(skip_serializing)]
     #[deprecated = "The configuration has been removed."]
@@ -3332,26 +3332,26 @@ pub struct TikvConfig {
     pub cfg_path: String,
 
     #[doc(hidden)]
-    #[online_config(skip)]
+    #[online_config(hidden)]
     #[serde(skip_serializing)]
     #[deprecated = "The configuration has been moved to log.level."]
     pub log_level: LogLevel,
     #[doc(hidden)]
-    #[online_config(skip)]
+    #[online_config(hidden)]
     #[serde(skip_serializing)]
     #[deprecated = "The configuration has been moved to log.file.filename."]
     pub log_file: String,
     #[doc(hidden)]
-    #[online_config(skip)]
+    #[online_config(hidden)]
     #[serde(skip_serializing)]
     #[deprecated = "The configuration has been moved to log.format."]
     pub log_format: LogFormat,
-    #[online_config(skip)]
+    #[online_config(hidden)]
     #[serde(skip_serializing)]
     #[deprecated = "The configuration has been moved to log.file.max_days."]
     pub log_rotation_timespan: ReadableDuration,
     #[doc(hidden)]
-    #[online_config(skip)]
+    #[online_config(hidden)]
     #[serde(skip_serializing)]
     #[deprecated = "The configuration has been moved to log.file.max_size."]
     pub log_rotation_size: ReadableSize,

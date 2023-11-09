@@ -107,7 +107,7 @@ pub struct Config {
     // When a peer is newly added, reject transferring leader to the peer for a while.
     #[doc(hidden)]
     #[serde(skip_serializing)]
-    #[online_config(skip)]
+    #[online_config(hidden)]
     #[deprecated = "The configuration has been removed. It has no effect"]
     pub raft_reject_transfer_leader_duration: ReadableDuration,
 
@@ -321,23 +321,23 @@ pub struct Config {
 
     #[doc(hidden)]
     #[serde(skip_serializing)]
-    #[online_config(skip)]
+    #[online_config(hidden)]
     #[deprecated = "The configuration has been removed. Batch is done in raft client."]
     pub raft_msg_flush_interval: ReadableDuration,
 
     #[doc(hidden)]
     #[serde(skip_serializing)]
-    #[online_config(skip)]
+    #[online_config(hidden)]
     #[deprecated = "The configuration has been moved to coprocessor.region_max_size."]
     pub region_max_size: ReadableSize,
     #[doc(hidden)]
     #[serde(skip_serializing)]
-    #[online_config(skip)]
+    #[online_config(hidden)]
     #[deprecated = "The configuration has been moved to coprocessor.region_split_size."]
     pub region_split_size: ReadableSize,
     #[doc(hidden)]
     #[serde(skip_serializing)]
-    #[online_config(skip)]
+    #[online_config(hidden)]
     #[deprecated = "The configuration has been removed. The time to clean stale peer safely can be decided based on RocksDB snapshot sequence number."]
     pub clean_stale_peer_delay: ReadableDuration,
 
