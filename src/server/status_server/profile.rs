@@ -172,7 +172,7 @@ pub fn deactivate_heap_profile() -> bool {
             if let Some((tx, _)) = tx.take() {
                 let _ = tx.send(());
             } else {
-               *activate = None; 
+                *activate = None;
             }
             true
         }
@@ -279,8 +279,7 @@ pub fn heap_profiles_dir() -> Option<PathBuf> {
         .lock()
         .unwrap()
         .as_ref()
-        .map(|v| v.as_ref().map(|(_, dir)| dir.path().to_owned()))
-        .flatten()
+        .and_then(|v| v.as_ref().map(|(_, dir)| dir.path().to_owned()))
 }
 
 pub fn list_heap_profiles() -> Result<Vec<(String, String)>, String> {
