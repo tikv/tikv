@@ -41,7 +41,6 @@ const DEFAULT_MAX_RU_QUOTA: u64 = 10_000;
 /// The maximum RU quota that can be configured.
 const MAX_RU_QUOTA: u64 = i32::MAX as u64;
 
-#[cfg(test)]
 const LOW_PRIORITY: u32 = 1;
 const MEDIUM_PRIORITY: u32 = 8;
 #[cfg(test)]
@@ -57,7 +56,7 @@ pub enum ResourceConsumeType {
     IoBytes(u64),
 }
 
-#[derive(Copy, Clone, Eq, PartialEq, EnumCount, EnumIter)]
+#[derive(Copy, Clone, Eq, PartialEq, EnumCount, EnumIter, Debug)]
 #[repr(usize)]
 pub enum TaskPriority {
     High = 0,
@@ -110,6 +109,7 @@ impl Default for ResourceGroupManager {
                     f64::INFINITY,
                     f64::INFINITY,
                     0,
+                    false,
                 ))
             })
             .collect::<Vec<_>>()
@@ -341,7 +341,6 @@ impl ResourceGroupManager {
         Some(self.priority_limiters[TaskPriority::from(task_priority) as usize].clone())
     }
 
-
     // return a ResourceLimiter for background tasks only.
     pub fn get_background_resource_limiter(
         &self,
@@ -385,6 +384,7 @@ impl ResourceGroupManager {
     #[inline]
     pub fn get_priority_resource_limiters(&self) -> [Arc<ResourceLimiter>; 3] {
         self.priority_limiters.clone()
+    }
 }
 
 pub(crate) struct ResourceGroup {

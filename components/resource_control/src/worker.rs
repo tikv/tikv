@@ -10,7 +10,7 @@ use std::{
 
 use file_system::{fetch_io_bytes, IoBytes, IoType};
 use prometheus::Histogram;
-use strum::EnumCount;
+use strum::{EnumCount, IntoEnumIterator};
 use tikv_util::{
     debug,
     sys::{cpu_time::ProcessStat, SysQuota},
@@ -21,7 +21,7 @@ use tikv_util::{
 
 use crate::{
     metrics::*,
-    resource_group::ResourceGroupManager,
+    resource_group::{ResourceGroupManager, TaskPriority},
     resource_limiter::{GroupStatistics, ResourceLimiter, ResourceType},
 };
 
@@ -327,9 +327,11 @@ impl<R: ResourceStatsProvider> PriorityLimiterAdjustWorker<R> {
         resource_ctl: Arc<ResourceGroupManager>,
         resource_quota_getter: R,
     ) -> Self {
+        let priorities: [_; 3] = TaskPriority::iter().collect::<Vec<_>>().try_into().unwrap();
         let trackers = resource_ctl
             .get_priority_resource_limiters()
-            .map(|l| PrioirtyLimiterStatsTracker::new(l, ""));
+            .zip(priorities)
+            .map(|(l, p)| PrioirtyLimiterStatsTracker::new(l, p.as_str()));
         Self {
             resource_ctl,
             trackers,
