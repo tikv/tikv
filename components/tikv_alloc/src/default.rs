@@ -25,7 +25,7 @@ pub fn deactivate_prof() -> ProfResult<()> {
     Err(ProfError::MemProfilingNotEnabled)
 }
 
-pub fn set_prof_sample(_rate: usize) -> ProfResult<()> {
+pub fn set_prof_sample(_rate: u64) -> ProfResult<()> {
     Err(ProfError::MemProfilingNotEnabled)
 }
 

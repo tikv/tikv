@@ -1,6 +1,5 @@
 slow-log-file = "slow_foo"
 slow-log-threshold = "1s"
-log-rotation-timespan = "1d"
 panic-when-unexpected-key-or-data = true
 abort-on-panic = true
 memory-usage-limit = "10GB"
@@ -18,7 +17,7 @@ max-days = 3
 
 [memory]
 enable-heap-profiling = false 
-heap-profiling-sample-rate = 20
+profiling-sample-per-bytes = "1MB" 
 
 [readpool.unified]
 min-thread-count = 5
