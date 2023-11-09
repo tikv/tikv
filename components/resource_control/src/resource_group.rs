@@ -22,7 +22,7 @@ use kvproto::{
     resource_manager::{GroupMode, ResourceGroup as PbResourceGroup},
 };
 use parking_lot::{MappedRwLockReadGuard, RwLock, RwLockReadGuard};
-use strum::EnumCount;
+use strum::{EnumCount, EnumIter, IntoEnumIterator};
 use tikv_util::{info, time::Instant};
 use yatp::queue::priority::TaskPriorityProvider;
 
@@ -57,12 +57,22 @@ pub enum ResourceConsumeType {
     IoBytes(u64),
 }
 
-#[derive(Copy, Clone, Eq, PartialEq, EnumCount)]
+#[derive(Copy, Clone, Eq, PartialEq, EnumCount, EnumIter)]
 #[repr(usize)]
 pub enum TaskPriority {
     High = 0,
     Medium = 1,
     Low = 2,
+}
+
+impl TaskPriority {
+    pub fn as_str(&self) -> &'static str {
+        match *self {
+            TaskPriority::High => "high",
+            TaskPriority::Medium => "medium",
+            TaskPriority::Low => "low",
+        }
+    }
 }
 
 impl From<u32> for TaskPriority {
@@ -93,14 +103,12 @@ pub struct ResourceGroupManager {
 
 impl Default for ResourceGroupManager {
     fn default() -> Self {
-        let priority_limiters = ["high", "medium", "low"].map(|n| {
-            Arc::new(ResourceLimiter::new(
-                n.into(),
-                f64::INFINITY,
-                f64::INFINITY,
-                0,
-            ))
-        });
+        let priority_limiters = TaskPriority::iter().map(|p| Arc::new(ResourceLimiter::new(
+            p.as_str().to_owned(),
+            f64::INFINITY,
+            f64::INFINITY,
+            0,
+        ))).collect::<Vec<_>>().try_into().unwrap();
         let manager = Self {
             resource_groups: Default::default(),
             group_count: AtomicU64::new(0),
