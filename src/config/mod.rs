@@ -3254,9 +3254,12 @@ impl ConfigManager for MemoryConfigManager {
             if let ConfigValue::Bool(enable) = v {
                 if *enable {
                     let mut activate = HEAP_PROFILE_ACTIVE.lock().unwrap();
-                    *activate = Some(None);
-                    if let Err(e) = tikv_alloc::activate_prof() {
-                        error!("failed to enable heap profiling"; "err" => ?e);
+                    // already enabled by HTTP API, do nothing
+                    if activate.is_none() {
+                        *activate = Some(None);
+                        if let Err(e) = tikv_alloc::activate_prof() {
+                            error!("failed to enable heap profiling"; "err" => ?e);
+                        }
                     }
                 } else {
                     let mut activate = HEAP_PROFILE_ACTIVE.lock().unwrap();
@@ -5478,17 +5481,17 @@ mod tests {
 
         cfg_controller.register(Module::Memory, Box::new(MemoryConfigManager));
         cfg_controller
-            .update_config("memory.enable_heap_profiling", "false")
+            .update_config("memory.enable_heap_profiling", "true")
             .unwrap();
         assert_eq!(tikv_alloc::is_profiling_active(), false);
         cfg_controller
-            .update_config("memory.enable_heap_profiling", "true")
+            .update_config("memory.enable_heap_profiling", "false")
             .unwrap();
         assert_eq!(tikv_alloc::is_profiling_active(), true);
 
         cfg_controller
-            .update_config("memory.heap_profiling_sample_ratio", "20")
-            .unwrap_err();
+            .update_config("memory.heap_profiling_sample_rate", "20")
+            .unwrap();
         assert_eq!(
             cfg_controller
                 .get_current()
@@ -5496,6 +5499,9 @@ mod tests {
                 .heap_profiling_sample_rate,
             20,
         );
+        cfg_controller
+            .update_config("memory.heap_profiling_sample_rate", "invalid")
+            .unwrap_err();
     }
 
     #[test]
