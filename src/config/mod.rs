@@ -3224,7 +3224,7 @@ pub struct MemoryConfig {
     // default sample rate.
     #[online_config(skip)]
     pub enable_heap_profiling: bool,
-    
+
     // Average interval (log base 2) between allocation samples, as measured in bytes of allocation
     // activity. Increasing the sampling interval decreases profile fidelity, but also decreases
     // the computational overhead. The default sample interval is 512 KiB (2^19 B).
