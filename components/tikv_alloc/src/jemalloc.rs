@@ -312,6 +312,7 @@ mod profiling {
     const PROF_ACTIVE: &[u8] = b"prof.active\0";
     const PROF_DUMP: &[u8] = b"prof.dump\0";
     const PROF_RESET: &[u8] = b"prof.reset\0";
+    const OPT_PROF: &[u8] = b"opt.prof\0";
 
     pub fn set_prof_sample(rate: usize) -> ProfResult<()> {
         unsafe {
@@ -364,23 +365,21 @@ mod profiling {
         Ok(())
     }
 
+    pub fn is_profiling_on() -> bool {
+        match unsafe { tikv_jemalloc_ctl::raw::read(OPT_PROF) } {
+            Err(e) => {
+                // Shouldn't be possible since mem-profiling is set
+                panic!("is_profiling_on: {:?}", e);
+            }
+            Ok(prof) => prof,
+        }
+    }
+
     #[cfg(test)]
     mod tests {
         use std::fs;
 
         use tempfile::Builder;
-
-        const OPT_PROF: &[u8] = b"opt.prof\0";
-
-        fn is_profiling_on() -> bool {
-            match unsafe { tikv_jemalloc_ctl::raw::read(OPT_PROF) } {
-                Err(e) => {
-                    // Shouldn't be possible since mem-profiling is set
-                    panic!("is_profiling_on: {:?}", e);
-                }
-                Ok(prof) => prof,
-            }
-        }
 
         // Only trigger this test with jemallocs `opt.prof` set to
         // true ala `MALLOC_CONF="prof:true"`. It can be run by
@@ -395,7 +394,7 @@ mod profiling {
         #[ignore = "#ifdef MALLOC_CONF"]
         fn test_profiling_memory_ifdef_malloc_conf() {
             // Make sure somebody has turned on profiling
-            assert!(is_profiling_on(), "set MALLOC_CONF=prof:true");
+            assert!(super::is_profiling_on(), "set MALLOC_CONF=prof:true");
             super::set_prof_sample(19).unwrap();
 
             let dir = Builder::new()
@@ -447,5 +446,8 @@ mod profiling {
     }
     pub fn set_prof_sample(_rate: usize) -> ProfResult<()> {
         Err(ProfError::MemProfilingNotEnabled)
+    }
+    pub fn is_profiling_on() -> bool {
+        false
     }
 }
