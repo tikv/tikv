@@ -76,7 +76,7 @@ fn test_serde_custom_tikv_config() {
     value.abort_on_panic = true;
     value.memory_usage_limit = Some(ReadableSize::gb(10));
     value.memory_usage_high_water = 0.65;
-    value.memory.enable_heap_profiling = true;
+    value.memory.enable_heap_profiling = false;
     value.memory.heap_profiling_sample_rate = 20;
     value.server = ServerConfig {
         cluster_id: 0, // KEEP IT ZERO, it is skipped by serde.
