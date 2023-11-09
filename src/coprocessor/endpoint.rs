@@ -511,6 +511,10 @@ impl<E: Engine> Endpoint<E> {
                     .get_resource_control_context()
                     .get_resource_group_name(),
                 req_ctx.context.get_request_source(),
+                req_ctx
+                    .context
+                    .get_resource_control_context()
+                    .get_override_priority(),
             )
         });
         // box the tracker so that moving it is cheap.
@@ -757,6 +761,10 @@ impl<E: Engine> Endpoint<E> {
                     .get_resource_control_context()
                     .get_resource_group_name(),
                 req_ctx.context.get_request_source(),
+                req_ctx
+                    .context
+                    .get_resource_control_context()
+                    .get_override_priority(),
             )
         });
         let key_ranges = req_ctx

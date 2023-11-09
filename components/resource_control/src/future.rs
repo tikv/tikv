@@ -16,7 +16,7 @@ use tokio_timer::Delay;
 
 use crate::{
     resource_group::{ResourceConsumeType, ResourceController},
-    resource_limiter::ResourceLimiter,
+    resource_limiter::{ResourceLimiter, ResourceType},
 };
 
 const MAX_WAIT_DURATION: Duration = Duration::from_secs(10);
@@ -125,13 +125,24 @@ impl<F: Future> Future for LimitedFuture<F> {
         if this.res.is_ready() {
             return std::mem::replace(this.res, Poll::Pending);
         }
-        let last_io_bytes = match get_thread_io_bytes_stats() {
-            Ok(b) => Some(b),
-            Err(e) => {
-                warn!("load thread io bytes failed"; "err" => e);
-                None
+        // get io stats is very expensive, so we only do so if only io control is
+        // enabled.
+        let mut last_io_bytes = None;
+        if this
+            .resource_limiter
+            .get_limiter(ResourceType::Io)
+            .get_rate_limit()
+            .is_finite()
+        {
+            match get_thread_io_bytes_stats() {
+                Ok(b) => {
+                    last_io_bytes = Some(b);
+                }
+                Err(e) => {
+                    warn!("load thread io bytes failed"; "err" => e);
+                }
             }
-        };
+        }
         let start = Instant::now();
         let res = this.f.poll(cx);
         let dur = start.saturating_elapsed();
