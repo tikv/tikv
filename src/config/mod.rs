@@ -83,7 +83,7 @@ use crate::{
     server::{
         gc_worker::{GcConfig, RawCompactionFilterFactory, WriteCompactionFilterFactory},
         lock_manager::Config as PessimisticTxnConfig,
-        status_server::activate_heap_profile,
+        status_server::{activate_heap_profile, deactivate_heap_profile},
         ttl::TtlCompactionFilterFactory,
         Config as ServerConfig, CONFIG_ROCKSDB_GAUGE,
     },
@@ -3222,13 +3222,11 @@ impl ConfigManager for LogConfigManager {
 pub struct MemoryConfig {
     // Whether enable the heap profiling which may have a bit performance overhead about 2% for the
     // default sample rate.
-    #[online_config(skip)]
     pub enable_heap_profiling: bool,
 
     // Average interval (log base 2) between allocation samples, as measured in bytes of allocation
     // activity. Increasing the sampling interval decreases profile fidelity, but also decreases
     // the computational overhead. The default sample interval is 512 KiB (2^19 B).
-    #[online_config(skip)]
     pub heap_profiling_sample_rate: usize,
 }
 
@@ -3253,6 +3251,36 @@ impl MemoryConfig {
             }
             tikv_alloc::set_prof_sample(self.heap_profiling_sample_rate).unwrap();
         }
+    }
+}
+
+pub struct MemoryConfigManager;
+
+impl ConfigManager for MemoryConfigManager {
+    fn dispatch(&mut self, changes: ConfigChange) -> CfgResult<()> {
+        if let Some(v) = changes.get("enable_heap_profiling") {
+            if let ConfigValue::Bool(enable) = v {
+                if *enable {
+                    if let Err(e) = block_on(activate_heap_profile(
+                        None::<futures::channel::mpsc::Receiver<_>>,
+                        PathBuf::default(),
+                        || {},
+                    )) {
+                        error!("failed to enable heap profiling"; "err" => ?e);
+                    }
+                } else {
+                    deactivate_heap_profile();
+                }
+            }
+        }
+
+        if let Some(v) = changes.get("heap_profiling_sample_rate") {
+            if let ConfigValue::Usize(sample_rate) = v {
+                tikv_alloc::set_prof_sample(*sample_rate).unwrap();
+            }
+        }
+        info!("update memory config"; "config" => ?changes);
+        Ok(())
     }
 }
 
@@ -4495,6 +4523,7 @@ pub enum Module {
     BackupStream,
     Quota,
     Log,
+    Memory,
     Unknown(String),
 }
 
@@ -4523,6 +4552,7 @@ impl From<&str> for Module {
             "resource_metering" => Module::ResourceMetering,
             "quota" => Module::Quota,
             "log" => Module::Log,
+            "memory" => Module::Memory,
             n => Module::Unknown(n.to_owned()),
         }
     }
@@ -5424,7 +5454,7 @@ mod tests {
     }
 
     #[test]
-    fn test_change_logconfig() {
+    fn test_change_log_config() {
         let (cfg, _dir) = TikvConfig::with_tmp().unwrap();
         let cfg_controller = ConfigController::new(cfg);
 
@@ -5443,6 +5473,35 @@ mod tests {
         assert_eq!(
             cfg_controller.get_current().log.level,
             LogLevel(Level::Warning)
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "mem-profiling")]
+    fn test_change_memory_config() {
+        let (cfg, _dir) = TikvConfig::with_tmp().unwrap();
+        let cfg_controller = ConfigController::new(cfg);
+
+        cfg_controller.register(Module::Memory, Box::new(MemoryConfigManager));
+
+        cfg_controller
+            .update_config("memory.enable_heap_profiling", "false")
+            .unwrap();
+        assert_eq!(tikv_alloc::is_profiling_on(), false);
+        cfg_controller
+            .update_config("memory.enable_heap_profiling", "true")
+            .unwrap();
+        assert_eq!(tikv_alloc::is_profiling_on(), true);
+
+        cfg_controller
+            .update_config("memory.heap_profiling_sample_ratio", "20")
+            .unwrap_err();
+        assert_eq!(
+            cfg_controller
+                .get_current()
+                .memory
+                .heap_profiling_sample_rate,
+            20,
         );
     }
 

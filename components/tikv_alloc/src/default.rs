@@ -8,6 +8,7 @@ use crate::AllocStats;
 pub fn dump_stats() -> String {
     String::new()
 }
+
 pub fn dump_prof(_path: &str) -> ProfResult<()> {
     Err(ProfError::MemProfilingNotEnabled)
 }
@@ -26,6 +27,10 @@ pub fn deactivate_prof() -> ProfResult<()> {
 
 pub fn set_prof_sample(_rate: usize) -> ProfResult<()> {
     Err(ProfError::MemProfilingNotEnabled)
+}
+
+pub fn is_profiling_on() -> bool {
+    false
 }
 
 /// # Safety
