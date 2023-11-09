@@ -340,7 +340,11 @@ mod tests {
         let resource_ctl = Arc::new(ResourceGroupManager::default());
         let rg1 = new_resource_group_ru("test".into(), 1000, 14);
         resource_ctl.add_resource_group(rg1);
-        assert!(resource_ctl.get_resource_limiter("test", "br").is_none());
+        assert!(
+            resource_ctl
+                .get_background_resource_limiter("test", "br")
+                .is_none()
+        );
 
         let test_provider = TestResourceStatsProvider::new(8.0, 10000.0);
         let mut worker =
@@ -351,10 +355,12 @@ mod tests {
         resource_ctl.add_resource_group(default_bg);
         assert!(
             resource_ctl
-                .get_resource_limiter("default", "lightning")
+                .get_background_resource_limiter("default", "lightning")
                 .is_none()
         );
-        let limiter = resource_ctl.get_resource_limiter("default", "br").unwrap();
+        let limiter = resource_ctl
+            .get_background_resource_limiter("default", "br")
+            .unwrap();
         assert!(
             limiter
                 .get_limiter(ResourceType::Cpu)
@@ -513,13 +519,15 @@ mod tests {
         let default =
             new_background_resource_group_ru("default".into(), 2000, 8, vec!["br".into()]);
         resource_ctl.add_resource_group(default);
-        let new_limiter = resource_ctl.get_resource_limiter("default", "br").unwrap();
+        let new_limiter = resource_ctl
+            .get_background_resource_limiter("default", "br")
+            .unwrap();
         assert_eq!(&*new_limiter as *const _, &*limiter as *const _);
 
         let bg = new_background_resource_group_ru("background".into(), 1000, 15, vec!["br".into()]);
         resource_ctl.add_resource_group(bg);
         let bg_limiter = resource_ctl
-            .get_resource_limiter("background", "br")
+            .get_background_resource_limiter("background", "br")
             .unwrap();
 
         reset_quota(&mut worker, 5.0, 7000.0, Duration::from_secs(1));
@@ -581,7 +589,7 @@ mod tests {
             new_background_resource_group_ru("background".into(), 1000, 15, vec!["br".into()]);
         resource_ctl.add_resource_group(new_bg);
         let new_bg_limiter = resource_ctl
-            .get_resource_limiter("background", "br")
+            .get_background_resource_limiter("background", "br")
             .unwrap();
         assert_ne!(&*bg_limiter as *const _, &*new_bg_limiter as *const _);
         assert!(
