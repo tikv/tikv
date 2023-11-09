@@ -17,7 +17,7 @@ max-backups = 2
 max-days = 3
 
 [memory]
-enable-heap-profiling = true
+enable-heap-profiling = false 
 heap-profiling-sample-rate = 20
 
 [readpool.unified]

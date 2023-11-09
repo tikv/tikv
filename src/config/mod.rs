@@ -3232,7 +3232,7 @@ pub struct MemoryConfig {
 impl Default for MemoryConfig {
     fn default() -> Self {
         Self {
-            enable_heap_profiling: false,
+            enable_heap_profiling: true,
             heap_profiling_sample_rate: 19,
         }
     }
@@ -5479,11 +5479,11 @@ mod tests {
 
         cfg_controller.register(Module::Memory, Box::new(MemoryConfigManager));
         cfg_controller
-            .update_config("memory.enable_heap_profiling", "true")
+            .update_config("memory.enable_heap_profiling", "false")
             .unwrap();
         assert_eq!(tikv_alloc::is_profiling_active(), false);
         cfg_controller
-            .update_config("memory.enable_heap_profiling", "false")
+            .update_config("memory.enable_heap_profiling", "true")
             .unwrap();
         assert_eq!(tikv_alloc::is_profiling_active(), true);
 
