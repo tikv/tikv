@@ -357,9 +357,6 @@ mod test_utils {
     pub fn dump_prof(_: &str) -> ProfResult<()> {
         Ok(())
     }
-    pub fn set_prof_sample(_: usize) -> ProfResult<String> {
-        Ok(())
-    }
 }
 
 #[cfg(unix)]
