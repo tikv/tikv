@@ -2037,6 +2037,8 @@ mod tests {
             enable_async_apply_prewrite: false,
             ..Default::default()
         };
+        let resource_manager = Arc::new(ResourceGroupManager::default());
+        let controller = resource_manager.derive_controller("test".into(), false);
         (
             TxnScheduler::new(
                 engine.clone(),
@@ -2054,11 +2056,8 @@ mod tests {
                 ResourceTagFactory::new_for_test(),
                 Arc::new(QuotaLimiter::default()),
                 latest_feature_gate(),
-                Some(Arc::new(ResourceController::new_for_test(
-                    "test".to_owned(),
-                    true,
-                ))),
-                None,
+                Some(controller),
+                Some(resource_manager),
             ),
             engine,
         )
