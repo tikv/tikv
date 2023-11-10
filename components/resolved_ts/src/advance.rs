@@ -132,6 +132,12 @@ impl AdvanceTsWorker {
                 }
             }
 
+            for region_id in &regions {
+                info!(
+                    "advance_ts_for_regions leader try to resolve region";
+                    "region_id" => *region_id,
+                );
+            }
             let regions = leader_resolver.resolve(regions, min_ts).await;
             if !regions.is_empty() {
                 if let Err(e) = scheduler.schedule(Task::ResolvedTsAdvanced {

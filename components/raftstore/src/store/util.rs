@@ -1235,6 +1235,13 @@ impl RegionReadProgress {
             if !core.pause {
                 self.safe_ts.store(ts, AtomicOrdering::Release);
             }
+            let gap = TimeStamp::physical_now().saturating_sub(TimeStamp::from(ts).physical());
+            info!(
+                "update_safe_ts_with_time";
+                "peer_id" => core.peer_id,
+                "region_id" => core.region_id,
+                "gap" => gap,
+            );
         }
     }
 

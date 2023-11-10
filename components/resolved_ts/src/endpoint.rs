@@ -780,11 +780,20 @@ where
         let now = tikv_util::time::Instant::now_coarse();
         for region_id in regions.iter() {
             if let Some(observe_region) = self.regions.get_mut(region_id) {
+                info!(
+                    "handle_resolved_ts_advanced observe_region exist";
+                    "region_id" => region_id,
+                );
                 if let ResolverStatus::Ready = observe_region.resolver_status {
                     let _ = observe_region
                         .resolver
                         .resolve(ts, Some(now), ts_source.clone());
                 }
+            }else{
+                info!(
+                    "handle_resolved_ts_advanced observe_region not exist";
+                    "region_id" => region_id,
+                );
             }
         }
     }
