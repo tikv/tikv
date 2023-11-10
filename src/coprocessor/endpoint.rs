@@ -28,6 +28,7 @@ use txn_types::Lock;
 
 use crate::{
     coprocessor::{cache::CachedRequestHandler, interceptors::*, metrics::*, tracker::Tracker, *},
+    debug,
     read_pool::ReadPoolHandle,
     server::Config,
     storage::{
@@ -253,6 +254,16 @@ impl<E: Engine> Endpoint<E> {
                         0 => None,
                         i => Some(i),
                     };
+                    if debug::is_user_table_key(&req_ctx.lower_bound) || debug::is_user_table_key(&req_ctx.upper_bound) {
+                        info!(">>> copr build dag handler";
+                            "ranges" => ?&req_ctx.ranges,
+                            "upper" => hex::encode(&req_ctx.upper_bound),
+                            "lower" => hex::encode(&req_ctx.lower_bound),
+                            "data_ver" => data_version,
+                            "ts" => start_ts,
+                        );
+                    }
+
                     dag::DagHandlerBuilder::<_, F>::new(
                         dag,
                         req_ctx.ranges.clone(),
@@ -445,6 +456,15 @@ impl<E: Engine> Endpoint<E> {
             && tracker.req_ctx.cache_match_version == snapshot.ext().get_data_version()
         {
             // Build a cached request handler instead if cache version is matching.
+            if debug::is_user_table_key(&tracker.req_ctx.lower_bound) || debug::is_user_table_key(&tracker.req_ctx.upper_bound) {
+                info!(">>> copr use cached handler";
+                    "ranges" => ?&tracker.req_ctx.ranges,
+                    "upper" => hex::encode(&tracker.req_ctx.upper_bound),
+                    "lower" => hex::encode(&tracker.req_ctx.lower_bound),
+                    "data_ver" => snapshot.ext().get_data_version(),
+                    "ts" => &tracker.req_ctx.txn_start_ts,
+                );
+            }
             CachedRequestHandler::builder()(snapshot, &tracker.req_ctx)?
         } else {
             handler_builder(snapshot, &tracker.req_ctx)?

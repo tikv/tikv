@@ -30,7 +30,7 @@ const REVERSE_SEEK_BOUND: u64 = 16;
 ///
 /// Use `ScannerBuilder` to build `BackwardKvScanner`.
 pub struct BackwardKvScanner<S: Snapshot> {
-    cfg: ScannerConfig<S>,
+    pub(super) cfg: ScannerConfig<S>,
     lock_cursor: Option<Cursor<S::Iter>>,
     write_cursor: Cursor<S::Iter>,
     /// `default cursor` is lazy created only when it's needed.

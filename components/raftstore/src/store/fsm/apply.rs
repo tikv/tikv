@@ -20,7 +20,9 @@ use std::{
     time::Duration,
     usize,
     vec::Drain,
+    thread,
 };
+use rand::Rng;
 
 use batch_system::{
     BasicMailbox, BatchRouter, BatchSystem, Config as BatchSystemConfig, Fsm, HandleResult,
@@ -80,6 +82,7 @@ use crate::{
         ApplyCtxInfo, Cmd, CmdBatch, CmdObserveInfo, CoprocessorHost, ObserveHandle, ObserveLevel,
         RegionState,
     },
+    debug,
     store::{
         cmd_resp,
         entry_storage::{self, CachedEntries},
@@ -1748,8 +1751,17 @@ where
                 unimplemented!();
             }
         );
+        let n = rand::thread_rng().gen_range(0..9);
+        if n < 3 {
+            thread::sleep(Duration::from_millis(10*n));
+        }
 
         let requests = req.get_requests();
+        info!(">>> raft applying";
+            "cmd" => debug::format_raft_cmd(req),
+            "idx" => ctx.exec_log_index,
+            "tag" => &self.tag,
+        );
 
         let mut ranges = vec![];
         let mut ssts = vec![];
