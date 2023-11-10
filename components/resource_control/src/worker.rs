@@ -518,13 +518,11 @@ impl PriorityLimiterStatsTracker {
         let wait_stats: [_; 2] =
             std::array::from_fn(|i| self.task_wait_dur_trakcers[i].get_and_upate_statistics());
         let schedule_wait_dur_secs = wait_stats.iter().map(|s| s.0).sum::<f64>() / dur_secs;
-        let task_schedule_count =
-            (wait_stats.iter().map(|s| s.1).sum::<u64>() as f64 / dur_secs) as u64;
         LimiterStats {
             cpu_secs: stats_delta.total_consumed as f64 / MICROS_PER_SEC,
             wait_secs: stats_delta.total_wait_dur_us as f64 / MICROS_PER_SEC
                 + schedule_wait_dur_secs,
-            req_count: task_schedule_count,
+            req_count: stats_delta.request_count,
         }
     }
 }
