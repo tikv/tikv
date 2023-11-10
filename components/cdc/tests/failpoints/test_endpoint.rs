@@ -573,7 +573,7 @@ fn test_cdc_stream_multiplexing() {
 // This case tests pending regions can still get region split/merge
 // notifications.
 #[test]
-fn test_cdc_notifiy_pending_regions() {
+fn test_cdc_notify_pending_regions() {
     let cluster = new_server_cluster(0, 1);
     cluster.pd_client.disable_default_operator();
     let mut suite = TestSuiteBuilder::new().cluster(cluster).build();
