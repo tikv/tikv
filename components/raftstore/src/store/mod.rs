@@ -19,7 +19,6 @@ mod async_io;
 mod bootstrap;
 mod compaction_guard;
 mod hibernate_state;
-mod memory_engine;
 mod peer_storage;
 mod region_snapshot;
 mod replication_mode;

@@ -790,7 +790,7 @@ mod tests {
         let mut region = Region::default();
         region.set_id(initializer.region_id);
         region.mut_peers().push(Default::default());
-        let snapshot = Some(RegionSnapshot::from_snapshot(snap, Arc::new(region)));
+        let snapshot = Some(RegionSnapshot::from_snapshot(snap, None, Arc::new(region)));
         let resp = ReadResponse {
             snapshot,
             response: Default::default(),

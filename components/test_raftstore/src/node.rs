@@ -33,6 +33,7 @@ use raftstore::{
 use resource_control::ResourceGroupManager;
 use resource_metering::CollectorRegHandle;
 use service::service_manager::GrpcServiceManager;
+use skiplist::memory_engine::LruMemoryEngine;
 use tempfile::TempDir;
 use test_pd_client::TestPdClient;
 use tikv::{
@@ -227,6 +228,7 @@ impl Simulator for NodeCluster {
         node_id: u64,
         cfg: Config,
         engines: Engines<RocksEngine, RaftTestEngine>,
+        memory_engine: Option<LruMemoryEngine>,
         store_meta: Arc<Mutex<StoreMeta>>,
         key_manager: Option<Arc<DataKeyManager>>,
         router: RaftRouter<RocksEngine, RaftTestEngine>,
@@ -307,7 +309,11 @@ impl Simulator for NodeCluster {
 
         let local_reader = LocalReader::new(
             engines.kv.clone(),
-            StoreMetaDelegate::new(store_meta.clone(), engines.kv.clone()),
+            StoreMetaDelegate::new(
+                store_meta.clone(),
+                engines.kv.clone(),
+                memory_engine.clone(),
+            ),
             router.clone(),
         );
         let cfg_controller = ConfigController::new(cfg.tikv.clone());
@@ -323,6 +329,7 @@ impl Simulator for NodeCluster {
         node.try_bootstrap_store(engines.clone())?;
         node.start(
             engines.clone(),
+            memory_engine,
             simulate_trans.clone(),
             snap_mgr.clone(),
             pd_worker,

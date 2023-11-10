@@ -26,6 +26,7 @@ use raftstore::{
 };
 use resource_metering::CollectorRegHandle;
 use service::service_manager::GrpcServiceManager;
+use skiplist::memory_engine::LruMemoryEngine;
 use tikv_util::{
     config::VersionTrack,
     worker::{LazyWorker, Scheduler, Worker},
@@ -162,6 +163,7 @@ where
     pub fn start<T>(
         &mut self,
         engines: Engines<EK, ER>,
+        memory_engine: Option<LruMemoryEngine>,
         trans: T,
         snap_mgr: SnapManager,
         pd_worker: LazyWorker<PdTask<EK, ER>>,
@@ -201,6 +203,7 @@ where
         self.start_store(
             store_id,
             engines,
+            memory_engine,
             trans,
             snap_mgr,
             pd_worker,
@@ -450,6 +453,7 @@ where
         &mut self,
         store_id: u64,
         engines: Engines<EK, ER>,
+        memory_engine: Option<LruMemoryEngine>,
         trans: T,
         snap_mgr: SnapManager,
         pd_worker: LazyWorker<PdTask<EK, ER>>,
@@ -481,6 +485,7 @@ where
             store,
             cfg,
             engines,
+            memory_engine,
             trans,
             pd_client,
             snap_mgr,

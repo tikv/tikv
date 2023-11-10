@@ -4416,6 +4416,7 @@ dependencies = [
  "serde_derive",
  "serde_with",
  "service",
+ "skiplist",
  "slog",
  "slog-global",
  "smallvec",
@@ -5381,6 +5382,7 @@ dependencies = [
  "serde_json",
  "service",
  "signal-hook",
+ "skiplist",
  "slog",
  "slog-global",
  "snap_recovery",
@@ -5463,6 +5465,21 @@ name = "siphasher"
 version = "0.3.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fa8f3741c7372e75519bd9346068370c9cdaabcc1f9599cbcf2a2719352286b7"
+
+[[package]]
+name = "skiplist"
+version = "0.0.1"
+dependencies = [
+ "bytes",
+ "collections",
+ "criterion",
+ "crossbeam-skiplist",
+ "engine_traits",
+ "keys",
+ "rand 0.8.5",
+ "txn_types",
+ "yatp",
+]
 
 [[package]]
 name = "slab"
@@ -6072,6 +6089,7 @@ dependencies = [
  "security",
  "server",
  "service",
+ "skiplist",
  "slog",
  "slog-global",
  "tempfile",
@@ -6575,6 +6593,7 @@ dependencies = [
  "serde_ignored",
  "serde_json",
  "service",
+ "skiplist",
  "slog",
  "slog-global",
  "smallvec",

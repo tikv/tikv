@@ -119,6 +119,10 @@ impl IterOptions {
         }
     }
 
+    pub fn set_region_id(&mut self, region_id: u64) {
+        self.region_id = Some(region_id);
+    }
+
     pub fn region_id(&self) -> Option<u64> {
         self.region_id
     }

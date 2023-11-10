@@ -46,6 +46,7 @@ use resource_control::ResourceGroupManager;
 use resource_metering::{CollectorRegHandle, ResourceTagFactory};
 use security::SecurityManager;
 use service::service_manager::GrpcServiceManager;
+use skiplist::memory_engine::LruMemoryEngine;
 use tempfile::TempDir;
 use test_pd_client::TestPdClient;
 use tikv::{
@@ -265,6 +266,7 @@ impl ServerCluster {
         node_id: u64,
         mut cfg: Config,
         engines: Engines<RocksEngine, RaftTestEngine>,
+        memory_engine: Option<LruMemoryEngine>,
         store_meta: Arc<Mutex<StoreMeta>>,
         key_manager: Option<Arc<DataKeyManager>>,
         router: RaftRouter<RocksEngine, RaftTestEngine>,
@@ -293,7 +295,11 @@ impl ServerCluster {
 
         let local_reader = LocalReader::new(
             engines.kv.clone(),
-            StoreMetaDelegate::new(store_meta.clone(), engines.kv.clone()),
+            StoreMetaDelegate::new(
+                store_meta.clone(),
+                engines.kv.clone(),
+                memory_engine.clone(),
+            ),
             router.clone(),
         );
 
@@ -606,6 +612,7 @@ impl ServerCluster {
         let causal_ts_provider = self.get_causal_ts_provider(node_id);
         node.start(
             engines,
+            memory_engine,
             simulate_trans.clone(),
             snap_mgr,
             pd_worker,
@@ -674,6 +681,7 @@ impl Simulator for ServerCluster {
         node_id: u64,
         cfg: Config,
         engines: Engines<RocksEngine, RaftTestEngine>,
+        memory_engine: Option<LruMemoryEngine>,
         store_meta: Arc<Mutex<StoreMeta>>,
         key_manager: Option<Arc<DataKeyManager>>,
         router: RaftRouter<RocksEngine, RaftTestEngine>,
@@ -686,6 +694,7 @@ impl Simulator for ServerCluster {
                 node_id,
                 cfg,
                 engines,
+                memory_engine,
                 store_meta,
                 key_manager,
                 router,

@@ -17,6 +17,7 @@ use fail::fail_point;
 use keys::DATA_PREFIX_KEY;
 use kvproto::{kvrpcpb::ExtraOp as TxnExtraOp, metapb::Region, raft_serverpb::RaftApplyState};
 use pd_client::BucketMeta;
+use skiplist::memory_engine::MemoryEngineSnapshot;
 use tikv_util::{
     box_err, error, keybuilder::KeyBuilder, metrics::CRITICAL_ERROR,
     panic_when_unexpected_key_or_data, set_panic_mark,
@@ -33,6 +34,7 @@ use crate::{
 #[derive(Debug)]
 pub struct RegionSnapshot<S: Snapshot> {
     snap: Arc<S>,
+    memory_snapshot: Option<MemoryEngineSnapshot>,
     region: Arc<Region>,
     apply_index: Arc<AtomicU64>,
     from_v2: bool,
@@ -52,19 +54,20 @@ where
     where
         EK: KvEngine,
     {
-        RegionSnapshot::from_snapshot(Arc::new(ps.raw_snapshot()), Arc::new(ps.region().clone()))
+        RegionSnapshot::from_snapshot(Arc::new(ps.raw_snapshot()), None, Arc::new(ps.region().clone()))
     }
 
     pub fn from_raw<EK>(db: EK, region: Region) -> RegionSnapshot<EK::Snapshot>
     where
         EK: KvEngine,
     {
-        RegionSnapshot::from_snapshot(Arc::new(db.snapshot()), Arc::new(region))
+        RegionSnapshot::from_snapshot(Arc::new(db.snapshot()), None, Arc::new(region))
     }
 
-    pub fn from_snapshot(snap: Arc<S>, region: Arc<Region>) -> RegionSnapshot<S> {
+    pub fn from_snapshot(snap: Arc<S>, memory_snapshot: Option<MemoryEngineSnapshot>, region: Arc<Region>) -> RegionSnapshot<S> {
         RegionSnapshot {
             snap,
+            memory_snapshot,
             region,
             // Use 0 to indicate that the apply index is missing and we need to KvGet it,
             // since apply index must be >= RAFT_INIT_LOG_INDEX.
@@ -184,6 +187,7 @@ where
     fn clone(&self) -> Self {
         RegionSnapshot {
             snap: self.snap.clone(),
+            memory_snapshot: self.memory_snapshot.clone(),
             region: Arc::clone(&self.region),
             apply_index: Arc::clone(&self.apply_index),
             from_v2: self.from_v2,

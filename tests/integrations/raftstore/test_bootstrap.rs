@@ -110,6 +110,7 @@ fn test_node_bootstrap_with_prepared_data() {
     // try to restart this node, will clear the prepare data
     node.start(
         engines,
+        None,
         simulate_trans,
         snap_mgr,
         pd_worker,

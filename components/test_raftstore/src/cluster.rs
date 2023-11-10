@@ -50,6 +50,7 @@ use raftstore::{
     Error, Result,
 };
 use resource_control::ResourceGroupManager;
+use skiplist::memory_engine::LruMemoryEngine;
 use tempfile::TempDir;
 use test_pd_client::TestPdClient;
 use tikv::server::Result as ServerResult;
@@ -80,6 +81,7 @@ pub trait Simulator {
         node_id: u64,
         cfg: Config,
         engines: Engines<RocksEngine, RaftTestEngine>,
+        memory_engine: Option<LruMemoryEngine>,
         store_meta: Arc<Mutex<StoreMeta>>,
         key_manager: Option<Arc<DataKeyManager>>,
         router: RaftRouter<RocksEngine, RaftTestEngine>,
@@ -170,6 +172,7 @@ pub struct Cluster<T: Simulator> {
     key_managers: Vec<Option<Arc<DataKeyManager>>>,
     pub io_rate_limiter: Option<Arc<IoRateLimiter>>,
     pub engines: HashMap<u64, Engines<RocksEngine, RaftTestEngine>>,
+    pub memory_engine: HashMap<u64, LruMemoryEngine>,
     key_managers_map: HashMap<u64, Option<Arc<DataKeyManager>>>,
     pub labels: HashMap<u64, HashMap<String, String>>,
     group_props: HashMap<u64, GroupProperties>,
@@ -202,6 +205,7 @@ impl<T: Simulator> Cluster<T> {
             count,
             paths: vec![],
             dbs: vec![],
+            memory_engine: HashMap::default(),
             store_metas: HashMap::default(),
             key_managers: vec![],
             io_rate_limiter: None,
@@ -287,6 +291,7 @@ impl<T: Simulator> Cluster<T> {
             self.create_engine(Some(router.clone()));
 
             let engines = self.dbs.last().unwrap().clone();
+            let memory_engine = LruMemoryEngine::new();
             let key_mgr = self.key_managers.last().unwrap().clone();
             let store_meta = Arc::new(Mutex::new(StoreMeta::new(PENDING_MSG_CAP)));
 
@@ -298,6 +303,7 @@ impl<T: Simulator> Cluster<T> {
                 0,
                 self.cfg.clone(),
                 engines.clone(),
+                Some(memory_engine.clone()),
                 store_meta.clone(),
                 key_mgr.clone(),
                 router,
@@ -306,6 +312,7 @@ impl<T: Simulator> Cluster<T> {
             )?;
             self.group_props.insert(node_id, props);
             self.engines.insert(node_id, engines);
+            self.memory_engine.insert(node_id, memory_engine);
             self.store_metas.insert(node_id, store_meta);
             self.key_managers_map.insert(node_id, key_mgr);
             self.sst_workers_map
@@ -353,6 +360,7 @@ impl<T: Simulator> Cluster<T> {
     pub fn run_node(&mut self, node_id: u64) -> ServerResult<()> {
         debug!("starting node {}", node_id);
         let engines = self.engines[&node_id].clone();
+        let memory_engine = self.memory_engine[&node_id].clone();
         let key_mgr = self.key_managers_map[&node_id].clone();
         let (router, system) =
             create_raft_batch_system(&self.cfg.raft_store, &self.resource_manager);
@@ -379,6 +387,7 @@ impl<T: Simulator> Cluster<T> {
             node_id,
             cfg,
             engines,
+            Some(memory_engine),
             store_meta,
             key_mgr,
             router,
@@ -666,6 +675,8 @@ impl<T: Simulator> Cluster<T> {
         for (i, engines) in self.dbs.iter().enumerate() {
             let id = i as u64 + 1;
             self.engines.insert(id, engines.clone());
+            // todo(SpadeA): make it configurable
+            self.memory_engine.insert(id, LruMemoryEngine::new());
             let store_meta = Arc::new(Mutex::new(StoreMeta::new(PENDING_MSG_CAP)));
             self.store_metas.insert(id, store_meta);
             self.key_managers_map

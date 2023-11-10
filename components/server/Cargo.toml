@@ -86,6 +86,7 @@ tokio = { version = "1.5", features = ["rt-multi-thread"] }
 toml = "0.5"
 txn_types = { workspace = true }
 yatp = { workspace = true }
+skiplist = { workspace = true }
 
 [target.'cfg(unix)'.dependencies]
 signal-hook = "0.3"

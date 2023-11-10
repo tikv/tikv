@@ -483,3 +483,57 @@ fn test_follower_buckets() {
     }
     fail::remove("skip_check_stale_read_safe");
 }
+
+/// sort_by sorts the `$v`(a vector of `Vec<Datum>`) by the $index elements in
+/// `Vec<Datum>`
+macro_rules! sort_by {
+    ($v:ident, $index:expr, $t:ident) => {
+        $v.sort_by(|a, b| match (&a[$index], &b[$index]) {
+            (Datum::Null, Datum::Null) => std::cmp::Ordering::Equal,
+            (Datum::$t(a), Datum::$t(b)) => a.cmp(&b),
+            (Datum::Null, _) => std::cmp::Ordering::Less,
+            (_, Datum::Null) => std::cmp::Ordering::Greater,
+            _ => unreachable!(),
+        });
+    };
+}
+
+#[test_case(test_raftstore::new_server_cluster)]
+fn test_xxx() {
+    let data = vec![
+        (1, Some("name:0"), 2),
+        (2, Some("name:4"), 3),
+        (4, Some("name:3"), 1),
+        (5, Some("name:1"), 4),
+    ];
+    let mut cluster = new_cluster(0, 3);
+    cluster.run();
+    let product = ProductTable::new();
+    let (raft_engine, ctx) = leader_raft_engine!(cluster, "");
+    let (_, endpoint, _) =
+        init_data_with_engine_and_commit(ctx.clone(), raft_engine, &product, &data, true);
+    let mut req = DagSelect::from(&product)
+        .group_by(&[&product["name"]])
+        .output_offsets(Some(vec![0]))
+        .build();
+    let (_, ctx) = leader_raft_engine!(cluster, "");
+    req.set_context(ctx);
+    let mut resp = handle_select(&endpoint, req);
+    // should only have name:0, name:2 and name:1
+    let mut row_count = 0;
+    let spliter = DagChunkSpliter::new(resp.take_chunks().into(), 1);
+    let mut results = spliter.collect::<Vec<Vec<Datum>>>();
+    sort_by!(results, 0, Bytes);
+    for (row, name) in results
+        .iter()
+        .zip(&[b"name:0", b"name:1", b"name:3", b"name:4"])
+    {
+        let expected_encoded =
+            datum::encode_value(&mut EvalContext::default(), &[Datum::Bytes(name.to_vec())])
+                .unwrap();
+        let result_encoded = datum::encode_value(&mut EvalContext::default(), row).unwrap();
+        println!("{:?}", result_encoded);
+        row_count += 1;
+    }
+    assert_eq!(row_count, 4);
+}

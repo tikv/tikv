@@ -65,3 +65,4 @@ tikv_util = { workspace = true }
 tokio = { version = "1.5", features = ["rt-multi-thread"] }
 tokio-timer = { workspace = true }
 txn_types = { workspace = true }
+skiplist = { workspace = true }

@@ -21,6 +21,7 @@ use kvproto::{
     raft_cmdpb::{CmdType, RaftCmdRequest, RaftCmdResponse, ReadIndexResponse, Request, Response},
 };
 use pd_client::BucketMeta;
+use skiplist::memory_engine::{LruMemoryEngine, MemoryEngineSnapshot};
 use tikv_util::{
     codec::number::decode_u64,
     debug, error,
@@ -59,6 +60,8 @@ pub trait ReadExecutor {
         &mut self,
         read_context: &Option<LocalReadContext<'_, Self::Tablet>>,
     ) -> Arc<<Self::Tablet as KvEngine>::Snapshot>;
+
+    fn get_memory_engine_snapshot(&self) -> Option<MemoryEngineSnapshot>;
 
     fn get_value(
         &mut self,
@@ -135,6 +138,7 @@ pub trait ReadExecutor {
                 CmdType::Snap => {
                     let snapshot = RegionSnapshot::from_snapshot(
                         self.get_snapshot(&local_read_ctx),
+                        self.get_memory_engine_snapshot(),
                         region.clone(),
                     );
                     response.snapshot = Some(snapshot);
@@ -175,6 +179,7 @@ where
 {
     delegate: Arc<ReadDelegate>,
     kv_engine: E,
+    memory_engine: Option<LruMemoryEngine>,
 }
 
 impl<E> Deref for CachedReadDelegate<E>
@@ -196,6 +201,7 @@ where
         CachedReadDelegate {
             delegate: Arc::clone(&self.delegate),
             kv_engine: self.kv_engine.clone(),
+            memory_engine: self.memory_engine.clone(),
         }
     }
 }
@@ -305,16 +311,22 @@ where
 {
     store_meta: Arc<Mutex<StoreMeta>>,
     kv_engine: E,
+    memory_engine: Option<LruMemoryEngine>,
 }
 
 impl<E> StoreMetaDelegate<E>
 where
     E: KvEngine,
 {
-    pub fn new(store_meta: Arc<Mutex<StoreMeta>>, kv_engine: E) -> Self {
+    pub fn new(
+        store_meta: Arc<Mutex<StoreMeta>>,
+        kv_engine: E,
+        memory_engine: Option<LruMemoryEngine>,
+    ) -> Self {
         StoreMetaDelegate {
             store_meta,
             kv_engine,
+            memory_engine,
         }
     }
 }
@@ -341,6 +353,7 @@ where
                 Some(CachedReadDelegate {
                     delegate: Arc::new(reader),
                     kv_engine: self.kv_engine.clone(),
+                    memory_engine: self.memory_engine.clone(),
                 }),
             );
         }
@@ -1221,6 +1234,12 @@ where
     fn get_snapshot(&mut self, read_context: &Option<LocalReadContext<'_, E>>) -> Arc<E::Snapshot> {
         read_context.as_ref().unwrap().snapshot().unwrap()
     }
+
+    fn get_memory_engine_snapshot(&self) -> Option<MemoryEngineSnapshot> {
+        self.memory_engine
+            .as_ref()
+            .map(|engine| engine.new_snapshot())
+    }
 }
 
 /// #[RaftstoreCommon]
@@ -1328,7 +1347,8 @@ mod tests {
         let path = Builder::new().prefix(path).tempdir().unwrap();
         let db = engine_test::kv::new_engine(path.path().to_str().unwrap(), ALL_CFS).unwrap();
         let (ch, rx, _) = MockRouter::new();
-        let mut reader = LocalReader::new(db.clone(), StoreMetaDelegate::new(store_meta, db), ch);
+        let mut reader =
+            LocalReader::new(db.clone(), StoreMetaDelegate::new(store_meta, db, None), ch);
         reader.local_reader.store_id = Cell::new(Some(store_id));
         (path, reader, rx)
     }
@@ -1806,8 +1826,11 @@ mod tests {
             .unwrap();
         let kv_engine =
             engine_test::kv::new_engine(path.path().to_str().unwrap(), ALL_CFS).unwrap();
-        let store_meta =
-            StoreMetaDelegate::new(Arc::new(Mutex::new(StoreMeta::new(0))), kv_engine.clone());
+        let store_meta = StoreMetaDelegate::new(
+            Arc::new(Mutex::new(StoreMeta::new(0))),
+            kv_engine.clone(),
+            None,
+        );
 
         {
             let mut meta = store_meta.store_meta.as_ref().lock().unwrap();

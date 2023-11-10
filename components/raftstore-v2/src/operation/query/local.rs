@@ -210,6 +210,7 @@ where
                         let region = Arc::clone(&delegate.region);
                         let snap = RegionSnapshot::from_snapshot(
                             Arc::new(delegate.cached_tablet.cache().snapshot()),
+                            None,
                             region,
                         );
 
@@ -241,6 +242,7 @@ where
                         let region = Arc::clone(&delegate.region);
                         let snap = RegionSnapshot::from_snapshot(
                             Arc::new(delegate.cached_tablet.cache().snapshot()),
+                            None,
                             region,
                         );
 
@@ -265,6 +267,7 @@ where
                         let region = Arc::clone(&delegate.region);
                         let snap = RegionSnapshot::from_snapshot(
                             Arc::new(delegate.cached_tablet.cache().snapshot()),
+                            None,
                             region,
                         );
 

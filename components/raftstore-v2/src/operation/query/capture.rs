@@ -117,6 +117,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                 let (applied_index, _) = self.apply_progress();
                 let snap = RegionSnapshot::from_snapshot(
                     Arc::new(self.tablet().snapshot()),
+                    None,
                     Arc::new(self.region().clone()),
                 );
                 snap.set_apply_index(applied_index);

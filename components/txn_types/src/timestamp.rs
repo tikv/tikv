@@ -10,7 +10,7 @@ use collections::HashSet;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Ord, PartialOrd, Hash)]
 #[repr(transparent)]
-pub struct TimeStamp(u64);
+pub struct TimeStamp(pub u64);
 
 pub const TSO_PHYSICAL_SHIFT_BITS: u64 = 18;
 
