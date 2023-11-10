@@ -34,7 +34,6 @@ const DEFAULT_MAX_RU_QUOTA: u64 = 10_000;
 /// The maximum RU quota that can be configured.
 const MAX_RU_QUOTA: u64 = i32::MAX as u64;
 
-#[cfg(test)]
 const LOW_PRIORITY: u32 = 1;
 const MEDIUM_PRIORITY: u32 = 8;
 #[cfg(test)]
@@ -50,11 +49,92 @@ pub enum ResourceConsumeType {
     IoBytes(u64),
 }
 
+<<<<<<< HEAD
+=======
+#[derive(Copy, Clone, Eq, PartialEq, EnumCount, EnumIter, Debug)]
+#[repr(usize)]
+pub enum TaskPriority {
+    High = 0,
+    Medium = 1,
+    Low = 2,
+}
+
+impl TaskPriority {
+    pub fn as_str(&self) -> &'static str {
+        match *self {
+            TaskPriority::High => "high",
+            TaskPriority::Medium => "medium",
+            TaskPriority::Low => "low",
+        }
+    }
+}
+
+impl From<u32> for TaskPriority {
+    fn from(value: u32) -> Self {
+        // map the resource group priority value (1,8,16) to (Low,Medium,High)
+        if value < 6 {
+            Self::Low
+        } else if value < 11 {
+            Self::Medium
+        } else {
+            Self::High
+        }
+    }
+}
+
+>>>>>>> 91b35fb8d3 (resource_control: support automatically tuning priority resource limiters (#15929))
 /// ResourceGroupManager manages the metadata of each resource group.
 #[derive(Default)]
 pub struct ResourceGroupManager {
     resource_groups: DashMap<String, ResourceGroup>,
     registry: RwLock<Vec<Arc<ResourceController>>>,
+<<<<<<< HEAD
+=======
+    // auto incremental version generator used for mark the background
+    // resource limiter has changed.
+    version_generator: AtomicU64,
+    // the shared resource limiter of each priority
+    priority_limiters: [Arc<ResourceLimiter>; TaskPriority::COUNT],
+}
+
+impl Default for ResourceGroupManager {
+    fn default() -> Self {
+        let priority_limiters = TaskPriority::iter()
+            .map(|p| {
+                Arc::new(ResourceLimiter::new(
+                    p.as_str().to_owned(),
+                    f64::INFINITY,
+                    f64::INFINITY,
+                    0,
+                    false,
+                ))
+            })
+            .collect::<Vec<_>>()
+            .try_into()
+            .unwrap();
+        let manager = Self {
+            resource_groups: Default::default(),
+            group_count: AtomicU64::new(0),
+            registry: Default::default(),
+            version_generator: AtomicU64::new(0),
+            priority_limiters,
+        };
+
+        // init the default resource group by default.
+        let mut default_group = PbResourceGroup::new();
+        default_group.name = DEFAULT_RESOURCE_GROUP_NAME.into();
+        default_group.priority = MEDIUM_PRIORITY;
+        default_group.mode = GroupMode::RuMode;
+        default_group
+            .mut_r_u_settings()
+            .mut_r_u()
+            .mut_settings()
+            .fill_rate = MAX_RU_QUOTA;
+        manager.add_resource_group(default_group);
+
+        manager
+    }
+>>>>>>> 91b35fb8d3 (resource_control: support automatically tuning priority resource limiters (#15929))
 }
 
 impl ResourceGroupManager {
@@ -90,7 +170,45 @@ impl ResourceGroupManager {
             controller.add_resource_group(group_name.clone().into_bytes(), ru_quota, rg.priority);
         });
         info!("add resource group"; "name"=> &rg.name, "ru" => rg.get_r_u_settings().get_r_u().get_settings().get_fill_rate());
+<<<<<<< HEAD
         self.resource_groups.insert(group_name, rg);
+=======
+        // try to reuse the quota limit when update resource group settings.
+        let prev_limiter = self
+            .resource_groups
+            .get(&rg.name)
+            .and_then(|g| g.limiter.clone());
+        let limiter = self.build_resource_limiter(&rg, prev_limiter);
+
+        if self
+            .resource_groups
+            .insert(group_name, ResourceGroup::new(rg, limiter))
+            .is_none()
+        {
+            self.group_count.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    fn build_resource_limiter(
+        &self,
+        rg: &PbResourceGroup,
+        old_limiter: Option<Arc<ResourceLimiter>>,
+    ) -> Option<Arc<ResourceLimiter>> {
+        if !rg.get_background_settings().get_job_types().is_empty() {
+            old_limiter.or_else(|| {
+                let version = self.version_generator.fetch_add(1, Ordering::Relaxed);
+                Some(Arc::new(ResourceLimiter::new(
+                    rg.name.clone(),
+                    f64::INFINITY,
+                    f64::INFINITY,
+                    version,
+                    true,
+                )))
+            })
+        } else {
+            None
+        }
+>>>>>>> 91b35fb8d3 (resource_control: support automatically tuning priority resource limiters (#15929))
     }
 
     pub fn remove_resource_group(&self, name: &str) {
@@ -162,6 +280,148 @@ impl ResourceGroupManager {
             );
         }
     }
+<<<<<<< HEAD
+=======
+
+    // only enable priority quota limiter when there is at least 1 user-defined
+    // resource group.
+    #[inline]
+    fn enable_priority_limiter(&self) -> bool {
+        self.get_group_count() > 1
+    }
+
+    /// return the priority of target resource group.
+    #[inline]
+    pub fn get_resource_group_priority(&self, group: &str) -> u32 {
+        self.resource_groups
+            .get(group)
+            .map_or(LOW_PRIORITY, |g| g.group.priority)
+    }
+
+    // Always return the background resource limiter if any;
+    // Only return the foregroup limiter when priority is enabled.
+    pub fn get_resource_limiter(
+        &self,
+        rg: &str,
+        request_source: &str,
+        override_priority: u64,
+    ) -> Option<Arc<ResourceLimiter>> {
+        let (limiter, group_priority) =
+            self.get_background_resource_limiter_with_priority(rg, request_source);
+        if limiter.is_some() {
+            return limiter;
+        }
+
+        // if there is only 1 resource group, priority quota limiter is useless so just
+        // return None for better performance.
+        if !self.enable_priority_limiter() {
+            return None;
+        }
+
+        // request priority has higher priority, 0 means priority is not set.
+        let mut task_priority = override_priority as u32;
+        if task_priority == 0 {
+            task_priority = group_priority;
+        }
+        Some(self.priority_limiters[TaskPriority::from(task_priority) as usize].clone())
+    }
+
+    // return a ResourceLimiter for background tasks only.
+    pub fn get_background_resource_limiter(
+        &self,
+        rg: &str,
+        request_source: &str,
+    ) -> Option<Arc<ResourceLimiter>> {
+        self.get_background_resource_limiter_with_priority(rg, request_source)
+            .0
+    }
+
+    fn get_background_resource_limiter_with_priority(
+        &self,
+        rg: &str,
+        request_source: &str,
+    ) -> (Option<Arc<ResourceLimiter>>, u32) {
+        fail_point!("only_check_source_task_name", |name| {
+            assert_eq!(&name.unwrap(), request_source);
+            (None, 8)
+        });
+        let mut group_priority = None;
+        if let Some(group) = self.resource_groups.get(rg) {
+            group_priority = Some(group.group.priority);
+            if !group.fallback_default {
+                return (
+                    group.get_background_resource_limiter(request_source),
+                    group.group.priority,
+                );
+            }
+        }
+
+        let default_group = self
+            .resource_groups
+            .get(DEFAULT_RESOURCE_GROUP_NAME)
+            .unwrap();
+        (
+            default_group.get_background_resource_limiter(request_source),
+            group_priority.unwrap_or(default_group.group.priority),
+        )
+    }
+
+    #[inline]
+    pub fn get_priority_resource_limiters(&self) -> [Arc<ResourceLimiter>; 3] {
+        self.priority_limiters.clone()
+    }
+}
+
+pub(crate) struct ResourceGroup {
+    pub group: PbResourceGroup,
+    pub limiter: Option<Arc<ResourceLimiter>>,
+    background_source_types: HashSet<String>,
+    // whether to fallback background resource control to `default` group.
+    fallback_default: bool,
+}
+
+impl ResourceGroup {
+    fn new(group: PbResourceGroup, limiter: Option<Arc<ResourceLimiter>>) -> Self {
+        let background_source_types =
+            HashSet::from_iter(group.get_background_settings().get_job_types().to_owned());
+        let fallback_default =
+            !group.has_background_settings() && group.name != DEFAULT_RESOURCE_GROUP_NAME;
+        Self {
+            group,
+            limiter,
+            background_source_types,
+            fallback_default,
+        }
+    }
+
+    pub(crate) fn get_ru_quota(&self) -> u64 {
+        assert!(self.group.has_r_u_settings());
+        self.group
+            .get_r_u_settings()
+            .get_r_u()
+            .get_settings()
+            .get_fill_rate()
+    }
+
+    fn get_background_resource_limiter(
+        &self,
+        request_source: &str,
+    ) -> Option<Arc<ResourceLimiter>> {
+        self.limiter.as_ref().and_then(|limiter| {
+            // the source task name is the last part of `request_source` separated by "_"
+            // the request_source is
+            // {extrenal|internal}_{tidb_req_source}_{source_task_name}
+            let source_task_name = request_source.rsplit('_').next().unwrap_or("");
+            if !source_task_name.is_empty()
+                && self.background_source_types.contains(source_task_name)
+            {
+                Some(limiter.clone())
+            } else {
+                None
+            }
+        })
+    }
+>>>>>>> 91b35fb8d3 (resource_control: support automatically tuning priority resource limiters (#15929))
 }
 
 pub struct ResourceController {
@@ -383,8 +643,104 @@ impl ResourceController {
             CommandPri::Normal => 1,
             CommandPri::High => 0,
         };
+<<<<<<< HEAD
         self.resource_group(name).get_priority(level)
+=======
+        self.resource_group(name).get_priority(level, None)
     }
+}
+
+const OVERRIDE_PRIORITY_MASK: u8 = 0b1000_0000;
+const RESOURCE_GROUP_NAME_MASK: u8 = 0b0100_0000;
+
+#[derive(Clone, Default)]
+pub struct TaskMetadata<'a> {
+    // The first byte is a bit map to indicate which field exists,
+    // then append override priority if nonzero,
+    // then append resource group name if not default
+    metadata: Cow<'a, [u8]>,
+}
+
+impl<'a> TaskMetadata<'a> {
+    pub fn deep_clone(&self) -> TaskMetadata<'static> {
+        TaskMetadata {
+            metadata: Cow::Owned(self.metadata.to_vec()),
+        }
+    }
+
+    pub fn from_ctx(ctx: &ResourceControlContext) -> Self {
+        let mut mask = 0;
+        let mut buf = vec![];
+        if ctx.override_priority != 0 {
+            mask |= OVERRIDE_PRIORITY_MASK;
+        }
+        if !ctx.resource_group_name.is_empty()
+            && ctx.resource_group_name != DEFAULT_RESOURCE_GROUP_NAME
+        {
+            mask |= RESOURCE_GROUP_NAME_MASK;
+        }
+        if mask == 0 {
+            // if all are default value, no need to write anything to save copy cost
+            return Self {
+                metadata: Cow::Owned(buf),
+            };
+        }
+        buf.push(mask);
+        if mask & OVERRIDE_PRIORITY_MASK != 0 {
+            buf.extend_from_slice(&(ctx.override_priority as u32).to_ne_bytes());
+        }
+        if mask & RESOURCE_GROUP_NAME_MASK != 0 {
+            buf.extend_from_slice(ctx.resource_group_name.as_bytes());
+        }
+        Self {
+            metadata: Cow::Owned(buf),
+        }
+    }
+
+    fn from_bytes(bytes: &'a [u8]) -> Self {
+        Self {
+            metadata: Cow::Borrowed(bytes),
+        }
+    }
+
+    pub fn to_vec(self) -> Vec<u8> {
+        self.metadata.into_owned()
+    }
+
+    pub fn override_priority(&self) -> u32 {
+        if self.metadata.is_empty() {
+            return 0;
+        }
+        if self.metadata[0] & OVERRIDE_PRIORITY_MASK == 0 {
+            return 0;
+        }
+        u32::from_ne_bytes(self.metadata[1..5].try_into().unwrap())
+    }
+
+    pub fn group_name(&self) -> &[u8] {
+        if self.metadata.is_empty() {
+            return DEFAULT_RESOURCE_GROUP_NAME.as_bytes();
+        }
+        if self.metadata[0] & RESOURCE_GROUP_NAME_MASK == 0 {
+            return DEFAULT_RESOURCE_GROUP_NAME.as_bytes();
+        }
+        let start = if self.metadata[0] & OVERRIDE_PRIORITY_MASK != 0 {
+            5
+        } else {
+            1
+        };
+        &self.metadata[start..]
+>>>>>>> 91b35fb8d3 (resource_control: support automatically tuning priority resource limiters (#15929))
+    }
+}
+
+// return the TaskPriority value from task metadata.
+// This function is used for handling thread pool task waiting metrics.
+pub fn priority_from_task_meta(meta: &[u8]) -> usize {
+    let priority = TaskMetadata::from_bytes(meta).override_priority();
+    // mapping (high(15), medium(8), low(1)) -> (0, 1, 2)
+    debug_assert!(priority <= 16);
+    TaskPriority::from(priority) as usize
 }
 
 impl TaskPriorityProvider for ResourceController {

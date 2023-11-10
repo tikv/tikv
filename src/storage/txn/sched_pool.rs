@@ -12,7 +12,14 @@ use kvproto::{kvrpcpb::CommandPri, pdpb::QueryKind};
 use pd_client::{Feature, FeatureGate};
 use prometheus::local::*;
 use raftstore::store::WriteStats;
+<<<<<<< HEAD
 use resource_control::{ControlledFuture, ResourceController};
+=======
+use resource_control::{
+    priority_from_task_meta, with_resource_limiter, ControlledFuture, ResourceController,
+    ResourceGroupManager, TaskMetadata,
+};
+>>>>>>> 91b35fb8d3 (resource_control: support automatically tuning priority resource limiters (#15929))
 use tikv_util::{
     sys::SysQuota,
     yatp_pool::{Full, FuturePool, PoolTicker, YatpPoolBuilder},
@@ -101,6 +108,7 @@ impl VanillaQueue {
 struct PriorityQueue {
     worker_pool: FuturePool,
     resource_ctl: Arc<ResourceController>,
+    resource_mgr: Arc<ResourceGroupManager>,
 }
 
 impl PriorityQueue {
@@ -117,15 +125,36 @@ impl PriorityQueue {
         };
         // TODO: maybe use a better way to generate task_id
         let task_id = rand::random::<u64>();
+<<<<<<< HEAD
+=======
+        let group_name = metadata.group_name().to_owned();
+        let resource_limiter = self.resource_mgr.get_resource_limiter(
+            unsafe { std::str::from_utf8_unchecked(&group_name) },
+            "",
+            metadata.override_priority() as u64,
+        );
+>>>>>>> 91b35fb8d3 (resource_control: support automatically tuning priority resource limiters (#15929))
         let mut extras = Extras::new_multilevel(task_id, fixed_level);
         extras.set_metadata(group_name.as_bytes().to_owned());
         self.worker_pool.spawn_with_extras(
+<<<<<<< HEAD
             ControlledFuture::new(
                 async move {
                     f.await;
                 },
                 self.resource_ctl.clone(),
                 group_name.as_bytes().to_owned(),
+=======
+            with_resource_limiter(
+                ControlledFuture::new(
+                    async move {
+                        f.await;
+                    },
+                    self.resource_ctl.clone(),
+                    group_name,
+                ),
+                resource_limiter,
+>>>>>>> 91b35fb8d3 (resource_control: support automatically tuning priority resource limiters (#15929))
             ),
             extras,
         )
@@ -154,6 +183,7 @@ impl SchedPool {
         reporter: R,
         feature_gate: FeatureGate,
         resource_ctl: Option<Arc<ResourceController>>,
+        resource_mgr: Option<Arc<ResourceGroupManager>>,
     ) -> Self {
         let builder = |pool_size: usize, name_prefix: &str| {
             let engine = Arc::new(Mutex::new(engine.clone()));
@@ -180,6 +210,8 @@ impl SchedPool {
                     destroy_tls_engine::<E>();
                     tls_flush(&reporter);
                 })
+                .enable_task_wait_metrics()
+                .metric_idx_from_task_meta(Arc::new(priority_from_task_meta))
         };
         let vanilla = VanillaQueue {
             worker_pool: builder(pool_size, "sched-worker-pool").build_future_pool(),
@@ -190,6 +222,7 @@ impl SchedPool {
             worker_pool: builder(pool_size, "sched-worker-priority")
                 .build_priority_future_pool(r.clone()),
             resource_ctl: r.clone(),
+            resource_mgr: resource_mgr.unwrap(),
         });
         let queue_type = if resource_ctl.is_some() {
             QueueType::Dynamic

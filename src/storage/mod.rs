@@ -3254,7 +3254,8 @@ impl<E: Engine, L: LockManager, F: KvFormat> TestStorageBuilder<E, L, F> {
         } else {
             None
         };
-
+        let manager = Arc::new(ResourceGroupManager::default());
+        let resource_ctl = manager.derive_controller("test".into(), false);
         Storage::from_engine(
             self.engine,
             &self.config,
@@ -3272,7 +3273,12 @@ impl<E: Engine, L: LockManager, F: KvFormat> TestStorageBuilder<E, L, F> {
             Arc::new(QuotaLimiter::default()),
             latest_feature_gate(),
             ts_provider,
+<<<<<<< HEAD
             None,
+=======
+            Some(resource_ctl),
+            Some(manager),
+>>>>>>> 91b35fb8d3 (resource_control: support automatically tuning priority resource limiters (#15929))
         )
     }
 
@@ -3285,7 +3291,8 @@ impl<E: Engine, L: LockManager, F: KvFormat> TestStorageBuilder<E, L, F> {
             &crate::config::StorageReadPoolConfig::default_for_test(),
             engine.clone(),
         );
-
+        let manager = Arc::new(ResourceGroupManager::default());
+        let resource_ctl = manager.derive_controller("test".into(), false);
         Storage::from_engine(
             engine,
             &self.config,
@@ -3303,12 +3310,18 @@ impl<E: Engine, L: LockManager, F: KvFormat> TestStorageBuilder<E, L, F> {
             Arc::new(QuotaLimiter::default()),
             latest_feature_gate(),
             None,
+<<<<<<< HEAD
             Some(Arc::new(ResourceController::new("test".to_owned(), false))),
+=======
+            Some(resource_ctl),
+            Some(manager),
+>>>>>>> 91b35fb8d3 (resource_control: support automatically tuning priority resource limiters (#15929))
         )
     }
 
     pub fn build_for_resource_controller(
         self,
+        resource_manager: Arc<ResourceGroupManager>,
         resource_controller: Arc<ResourceController>,
     ) -> Result<Storage<TxnTestEngine<E>, L, F>> {
         let engine = TxnTestEngine {
@@ -3338,6 +3351,10 @@ impl<E: Engine, L: LockManager, F: KvFormat> TestStorageBuilder<E, L, F> {
             latest_feature_gate(),
             None,
             Some(resource_controller),
+<<<<<<< HEAD
+=======
+            Some(resource_manager),
+>>>>>>> 91b35fb8d3 (resource_control: support automatically tuning priority resource limiters (#15929))
         )
     }
 }

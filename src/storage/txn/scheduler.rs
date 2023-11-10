@@ -458,6 +458,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                 reporter,
                 feature_gate.clone(),
                 resource_ctl,
+                resource_manager.clone(),
             ),
             control_mutex: Arc::new(tokio::sync::Mutex::new(false)),
             lock_mgr,
@@ -1234,6 +1235,27 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             // TODO: write bytes can be a bit inaccurate due to error requests or in-memory
             // pessimistic locks.
             sample.add_write_bytes(write_bytes);
+<<<<<<< HEAD
+=======
+            if let Some(limiter) = resource_limiter {
+                let expected_dur = if limiter.is_background() {
+                    // estimate the cpu time for write by the schduling cpu time and write bytes
+                    (sample.cpu_time() + Duration::from_micros(write_bytes as u64))
+                        * SCHEDULER_CPU_TIME_FACTOR
+                } else {
+                    sample.cpu_time()
+                };
+                limiter
+                    .async_consume(
+                        expected_dur,
+                        IoBytes {
+                            read: 0,
+                            write: write_bytes as u64,
+                        },
+                    )
+                    .await;
+            }
+>>>>>>> 91b35fb8d3 (resource_control: support automatically tuning priority resource limiters (#15929))
         }
         let read_bytes = sched_details
             .stat
@@ -1909,6 +1931,8 @@ mod tests {
             enable_async_apply_prewrite: false,
             ..Default::default()
         };
+        let resource_manager = Arc::new(ResourceGroupManager::default());
+        let controller = resource_manager.derive_controller("test".into(), false);
         (
             TxnScheduler::new(
                 engine.clone(),
@@ -1926,7 +1950,12 @@ mod tests {
                 ResourceTagFactory::new_for_test(),
                 Arc::new(QuotaLimiter::default()),
                 latest_feature_gate(),
+<<<<<<< HEAD
                 Some(Arc::new(ResourceController::new("test".to_owned(), true))),
+=======
+                Some(controller),
+                Some(resource_manager),
+>>>>>>> 91b35fb8d3 (resource_control: support automatically tuning priority resource limiters (#15929))
             ),
             engine,
         )
@@ -2260,6 +2289,8 @@ mod tests {
         };
         let feature_gate = FeatureGate::default();
         feature_gate.set_version("6.0.0").unwrap();
+        let resource_manager = Arc::new(ResourceGroupManager::default());
+        let controller = resource_manager.derive_controller("test".into(), false);
 
         let scheduler = TxnScheduler::new(
             engine,
@@ -2277,7 +2308,12 @@ mod tests {
             ResourceTagFactory::new_for_test(),
             Arc::new(QuotaLimiter::default()),
             feature_gate.clone(),
+<<<<<<< HEAD
             Some(Arc::new(ResourceController::new("test".to_owned(), true))),
+=======
+            Some(controller),
+            Some(resource_manager),
+>>>>>>> 91b35fb8d3 (resource_control: support automatically tuning priority resource limiters (#15929))
         );
         // Use sync mode if pipelined_pessimistic_lock is false.
         assert_eq!(scheduler.pessimistic_lock_mode(), PessimisticLockMode::Sync);
