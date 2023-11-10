@@ -1303,7 +1303,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             sample.add_write_bytes(write_bytes);
             if let Some(limiter) = resource_limiter {
                 let expected_dur = if limiter.is_background() {
-                    // estimate the cpu time for write by the schdule cpu time and write bytes
+                    // estimate the cpu time for write by the schduling cpu time and write bytes
                     (sample.cpu_time() + Duration::from_micros(write_bytes as u64))
                         * SCHEDULER_CPU_TIME_FACTOR
                 } else {

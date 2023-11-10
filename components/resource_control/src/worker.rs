@@ -337,8 +337,8 @@ impl<R: ResourceStatsProvider> PriorityLimiterAdjustWorker<R> {
             trackers,
             resource_quota_getter,
             last_adjust_time: Instant::now_coarse(),
-            is_last_low_cpu: false,
-            is_last_single_group: false,
+            is_last_low_cpu: true,
+            is_last_single_group: true,
         }
     }
     pub fn adjust(&mut self) {
@@ -389,7 +389,12 @@ impl<R: ResourceStatsProvider> PriorityLimiterAdjustWorker<R> {
             self.trackers.iter().skip(1).for_each(|t| {
                 t.limiter
                     .get_limiter(ResourceType::Cpu)
-                    .set_rate_limit(f64::INFINITY)
+                    .set_rate_limit(f64::INFINITY);
+                // 0 represent infinity
+                PRIORITY_QUOTA_LIMIT_VEC
+                    .get_metric_with_label_values(&[t.priority])
+                    .unwrap()
+                    .set(0);
             });
             return;
         }
@@ -431,6 +436,10 @@ impl<R: ResourceStatsProvider> PriorityLimiterAdjustWorker<R> {
                 .limiter
                 .get_limiter(ResourceType::Cpu)
                 .set_rate_limit(limit);
+            PRIORITY_QUOTA_LIMIT_VEC
+                .get_metric_with_label_values(&[self.trackers[i].priority])
+                .unwrap()
+                .set(limit as i64);
             limits[i - 1] = limit;
             expect_cpu_time_total -= level_expected[i];
         }
@@ -477,14 +486,16 @@ impl HistogramTracker {
 }
 
 struct PrioirtyLimiterStatsTracker {
+    priority: &'static str,
     limiter: Arc<ResourceLimiter>,
     last_stats: GroupStatistics,
     // unified-read-pool and schedule-worker-pool wait duration metrics.
     task_wait_dur_trakcers: [HistogramTracker; 2],
+    //
 }
 
 impl PrioirtyLimiterStatsTracker {
-    fn new(limiter: Arc<ResourceLimiter>, priority: &str) -> Self {
+    fn new(limiter: Arc<ResourceLimiter>, priority: &'static str) -> Self {
         let task_wait_dur_trakcers =
             ["unified-read-pool", "sched-worker-priority"].map(|pool_name| {
                 HistogramTracker::new(
@@ -495,6 +506,7 @@ impl PrioirtyLimiterStatsTracker {
             });
         let last_stats = limiter.get_limit_statistics(ResourceType::Cpu);
         Self {
+            priority,
             limiter,
             last_stats,
             task_wait_dur_trakcers,
