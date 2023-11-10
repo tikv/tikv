@@ -51,6 +51,7 @@ use raft::{
     GetEntriesContext, LightReady, ProgressState, RawNode, Ready, SnapshotStatus, StateRole,
     INVALID_INDEX, NO_LIMIT,
 };
+use raft_proto::eraftpb::EntryType::EntryNormal;
 use rand::seq::SliceRandom;
 use smallvec::SmallVec;
 use tikv_alloc::trace::TraceEvent;
@@ -88,6 +89,7 @@ use crate::{
         split_observer::NO_VALID_SPLIT_KEY, CoprocessorHost, RegionChangeEvent, RegionChangeReason,
         RoleChange,
     },
+    debug,
     errors::RAFTSTORE_IS_BUSY,
     router::RaftStoreRouter,
     store::{
@@ -2810,6 +2812,16 @@ where
                 },
                 |_| {}
             );
+
+            if entry.get_entry_type() == EntryNormal {
+                let index = entry.get_index();
+                let cmd: RaftCmdRequest = util::parse_data_at(entry.get_data(), index, &self.tag);
+                info!(">>> raft committed";
+                    "cmd" => debug::format_raft_cmd(&cmd),
+                    "idx" => index,
+                    "tag" => &self.tag,
+                );
+            }
         }
         if let Some(last_entry) = committed_entries.last() {
             self.last_applying_idx = last_entry.get_index();
@@ -3164,11 +3176,13 @@ where
                     }
                     _ => {}
                 }
+                info!(">>> handle read index"; "cmd" => debug::format_raft_cmd(&req), "replica_read" => 0, "idx" => read_index, "tag" => &self.tag);
                 cb.invoke_read(self.handle_read(ctx, req, true, read_index));
                 continue;
             }
             if req.get_header().get_replica_read() {
                 // We should check epoch since the range could be changed.
+                info!(">>> handle read index"; "cmd" => debug::format_raft_cmd(&req), "replica_read" => 1, "idx" => read.read_index, "tag" => &self.tag);
                 cb.invoke_read(self.handle_read(ctx, req, true, read.read_index));
             } else {
                 // The request could be proposed when the peer was leader.
@@ -3704,6 +3718,7 @@ where
         cb: Callback<EK::Snapshot>,
     ) {
         ctx.raft_metrics.propose.local_read.inc();
+        info!(">>> handle read local"; "cmd" => debug::format_raft_cmd(&req), "idx" => self.get_store().commit_index(), "tag" => &self.tag);
         cb.invoke_read(self.handle_read(ctx, req, false, Some(self.get_store().commit_index())))
     }
 

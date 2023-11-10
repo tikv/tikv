@@ -5,6 +5,7 @@ mod backward;
 mod forward;
 
 use std::ops::Bound;
+use hex;
 
 use engine_traits::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use kvproto::kvrpcpb::{ExtraOp, IsolationLevel};
@@ -19,6 +20,7 @@ use self::{
         DeltaEntryPolicy, ForwardKvScanner, ForwardScanner, LatestEntryPolicy, LatestKvPolicy,
     },
 };
+use crate::debug;
 use crate::storage::{
     kv::{CfStatistics, Cursor, CursorBuilder, Iterator, ScanMode, Snapshot, Statistics},
     mvcc::{default_not_found_error, NewerTsCheckState, Result},
@@ -221,14 +223,32 @@ pub enum Scanner<S: Snapshot> {
     Backward(BackwardKvScanner<S>),
 }
 
+impl<S: Snapshot> Scanner<S> {
+    fn get_ts(&mut self) -> TimeStamp {
+        match self {
+            Scanner::Forward(scanner) => scanner.cfg.ts,
+            Scanner::Backward(scanner) => scanner.cfg.ts,
+        }
+    }
+}
+
 impl<S: Snapshot> StoreScanner for Scanner<S> {
     fn next(&mut self) -> TxnResult<Option<(Key, Value)>> {
         fail_point!("scanner_next");
 
-        match self {
+        let res = match self {
             Scanner::Forward(scanner) => Ok(scanner.read_next()?),
             Scanner::Backward(scanner) => Ok(scanner.read_next()?),
+        };
+        if let Ok(Some((key, _))) = &res {
+            if debug::extract_user_table_id(key).is_some() {
+                info!(">>> mvcc scan next";
+                    "key" => hex::encode(key.as_encoded().as_slice()),
+                    "ts" => self.get_ts(),
+                );
+            }
         }
+        res
     }
 
     /// Take out and reset the statistics collected so far.

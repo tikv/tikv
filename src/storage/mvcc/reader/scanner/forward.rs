@@ -116,7 +116,7 @@ impl<S: Snapshot> Cursors<S> {
 }
 
 pub struct ForwardScanner<S: Snapshot, P: ScanPolicy<S>> {
-    cfg: ScannerConfig<S>,
+    pub(super) cfg: ScannerConfig<S>,
     cursors: Cursors<S>,
     /// Is iteration started
     is_started: bool,

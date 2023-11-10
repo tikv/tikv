@@ -93,3 +93,5 @@ pub fn log_tikv_info(build_time: Option<&str>) {
         info!("{}", line);
     }
 }
+
+pub(crate) mod debug;

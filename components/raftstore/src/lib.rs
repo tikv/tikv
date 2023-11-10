@@ -35,3 +35,5 @@ pub fn bytes_capacity(b: &bytes::Bytes) -> usize {
     // This is used to report memory usage to metrics.
     b.len()
 }
+
+pub(crate) mod debug;

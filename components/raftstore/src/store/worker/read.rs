@@ -23,7 +23,7 @@ use kvproto::{
 use pd_client::BucketMeta;
 use tikv_util::{
     codec::number::decode_u64,
-    debug, error,
+    info, debug, error,
     lru::LruCache,
     store::find_peer_by_id,
     time::{monotonic_raw_now, ThreadReadId},
@@ -34,6 +34,7 @@ use txn_types::{TimeStamp, WriteBatchFlags};
 
 use super::metrics::*;
 use crate::{
+    debug,
     errors::RAFTSTORE_IS_BUSY,
     store::{
         cmd_resp,
@@ -999,6 +1000,7 @@ where
         }
 
         let region = Arc::clone(&delegate.region);
+        info!(">>> local read"; "cmd" => debug::format_raft_cmd(&req), "tag" => &delegate.tag);
         let mut response = delegate.execute(req, &region, None, Some(local_read_ctx));
         if let Some(snap) = response.snapshot.as_mut() {
             snap.bucket_meta = delegate.bucket_meta.clone();
@@ -1028,6 +1030,7 @@ where
 
         let region = Arc::clone(&delegate.region);
         // Getting the snapshot
+        info!(">>> stale read"; "cmd" => debug::format_raft_cmd(&req), "ts" => read_ts, "tag" => &delegate.tag);
         let mut response = delegate.execute(req, &region, None, Some(local_read_ctx));
         if let Some(snap) = response.snapshot.as_mut() {
             snap.bucket_meta = delegate.bucket_meta.clone();

@@ -59,6 +59,7 @@ use tracker::GLOBAL_TRACKERS;
 use txn_types::{Key, TimeStamp, TxnExtra, TxnExtraScheduler, WriteBatchFlags};
 
 use super::metrics::*;
+use crate::debug;
 use crate::storage::{
     self, kv,
     kv::{Engine, Error as KvError, ErrorInner as KvErrorInner, Modify, SnapContext, WriteData},
@@ -599,6 +600,7 @@ where
 
     type SnapshotRes = impl Future<Output = kv::Result<Self::Snap>> + Send;
     fn async_snapshot(&mut self, mut ctx: SnapContext<'_>) -> Self::SnapshotRes {
+        let has_user_key = debug::has_user_table_key(&ctx.key_ranges);
         let mut res: kv::Result<()> = (|| {
             fail_point!("raftkv_async_snapshot_err", |_| {
                 Err(box_err!("injected error for async_snapshot"))
@@ -620,6 +622,7 @@ where
 
         let mut header = new_request_header(ctx.pb_ctx);
         let mut flags = 0;
+        let start_ts = ctx.start_ts.unwrap_or_default().into_inner();
         let need_encoded_start_ts = ctx.start_ts.map_or(true, |ts| !ts.is_zero());
         if ctx.pb_ctx.get_stale_read() && need_encoded_start_ts {
             flags |= WriteBatchFlags::STALE_READ.bits();
@@ -632,7 +635,7 @@ where
         if need_encoded_start_ts {
             encode_start_ts_into_flag_data(
                 &mut header,
-                ctx.start_ts.unwrap_or_default().into_inner(),
+                start_ts,
             );
         }
 
@@ -671,6 +674,13 @@ where
                     } else {
                         invalid_resp_type(CmdType::Snap, r[0].get_cmd_type()).into()
                     };
+                    if has_user_key {
+                        info!(">>> async snapshot error";
+                            "err" => ?e,
+                            "ranges" => ?&ctx.key_ranges,
+                            "ts" => start_ts,
+                        );
+                    }
                     Err(e)
                 }
                 Ok(CmdRes::Snap(s)) => {
@@ -700,11 +710,25 @@ where
                     });
                     ASYNC_REQUESTS_DURATIONS_VEC.snapshot.observe(elapse);
                     ASYNC_REQUESTS_COUNTER_VEC.snapshot.success.inc();
+                    if has_user_key {
+                        info!(">>> async snapshot ok";
+                            "ranges" => ?&ctx.key_ranges,
+                            "data_ver" => s.get_data_version().unwrap_or_default(),
+                            "ts" => start_ts,
+                        );
+                    }
                     Ok(s)
                 }
                 Err(e) => {
                     let status_kind = get_status_kind_from_engine_error(&e);
                     ASYNC_REQUESTS_COUNTER_VEC.snapshot.get(status_kind).inc();
+                    if has_user_key {
+                        info!(">>> async snapshot failed";
+                            "err" => ?e,
+                            "ranges" => ?&ctx.key_ranges,
+                            "ts" => start_ts,
+                        );
+                    }
                     Err(e)
                 }
             }
