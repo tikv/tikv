@@ -1,24 +1,24 @@
 use std::{
-    future::Future,
     sync::{
         atomic::{AtomicBool, AtomicU64, Ordering},
         Arc, Mutex,
     },
-    time::{Duration, UNIX_EPOCH},
+    time::{Duration},
 };
 
 use engine_traits::{KvEngine, RaftEngine};
+use futures::channel::mpsc::UnboundedSender;
 use kvproto::{
-    errorpb::{Error, StaleCommand},
-    metapb::{self, Region, RegionEpoch},
+    brpb::CheckAdminResponse,
+    metapb::{RegionEpoch},
 };
-use tikv_util::{box_err, error, info, time::Instant as TiInstant, warn};
+use tikv_util::{box_err, info, warn};
 use tokio::sync::oneshot;
-use txn_types::TimeStamp;
+
 
 use super::{metrics, PeerMsg, RaftRouter, SignificantMsg, SignificantRouter};
 use crate::coprocessor::{
-    AdminObserver, BoxAdminObserver, BoxQueryObserver, CmdObserver, Coprocessor, CoprocessorHost,
+    AdminObserver, BoxAdminObserver, BoxQueryObserver, Coprocessor, CoprocessorHost,
     QueryObserver,
 };
 
@@ -61,6 +61,10 @@ impl SnapshotBrWaitApplyRequest {
 pub trait SnapshotBrHandle: Sync + Send {
     fn send_wait_apply(&self, region: u64, req: SnapshotBrWaitApplyRequest) -> crate::Result<()>;
     fn broadcast_wait_apply(&self, req: SnapshotBrWaitApplyRequest) -> crate::Result<()>;
+    fn broadcast_check_pending_admin(
+        &self,
+        tx: UnboundedSender<CheckAdminResponse>,
+    ) -> crate::Result<()>;
 }
 
 impl<EK: KvEngine, ER: RaftEngine> SnapshotBrHandle for Mutex<RaftRouter<EK, ER>> {
@@ -78,20 +82,44 @@ impl<EK: KvEngine, ER: RaftEngine> SnapshotBrHandle for Mutex<RaftRouter<EK, ER>
         self.lock().unwrap().broadcast_normal(msg_gen);
         Ok(())
     }
+
+    fn broadcast_check_pending_admin(
+        &self,
+        tx: UnboundedSender<CheckAdminResponse>,
+    ) -> crate::Result<()> {
+        self.lock().unwrap().broadcast_normal(|| {
+            PeerMsg::SignificantMsg(SignificantMsg::CheckPendingAdmin(tx.clone()))
+        });
+        Ok(())
+    }
 }
 
-pub struct UnimplementedHandle;
+pub struct UnimplementedHandle {
+    pub reason: String,
+}
 
 impl SnapshotBrHandle for UnimplementedHandle {
     fn send_wait_apply(&self, _region: u64, _req: SnapshotBrWaitApplyRequest) -> crate::Result<()> {
         Err(crate::Error::Other(box_err!(
-            "send_wait_apply not implemented"
+            "send_wait_apply not implemented; note: {}",
+            self.reason
         )))
     }
 
     fn broadcast_wait_apply(&self, _req: SnapshotBrWaitApplyRequest) -> crate::Result<()> {
         Err(crate::Error::Other(box_err!(
-            "broadcast_wait_apply not implemented"
+            "broadcast_wait_apply not implemented; note: {}",
+            self.reason
+        )))
+    }
+
+    fn broadcast_check_pending_admin(
+        &self,
+        _tx: UnboundedSender<CheckAdminResponse>,
+    ) -> crate::Result<()> {
+        Err(crate::Error::Other(box_err!(
+            "broadcast_check_pending_admin not implemented; note: {}",
+            self.reason
         )))
     }
 }
@@ -131,6 +159,7 @@ impl RejectIngestAndAdmin {
             {
                 Ok(_) => {
                     metrics::SNAP_BR_SUSPEND_COMMAND_LEASE_UNTIL.set(0);
+                    metrics::SNAP_BR_LEASE_EVENT.expired.inc();
                     break;
                 }
                 Err(new_val) => {
@@ -172,12 +201,18 @@ impl RejectIngestAndAdmin {
             }
         }
         metrics::SNAP_BR_SUSPEND_COMMAND_LEASE_UNTIL.set(new_lease as _);
+        if last_lease_valid {
+            metrics::SNAP_BR_LEASE_EVENT.renew.inc();
+        } else {
+            metrics::SNAP_BR_LEASE_EVENT.create.inc();
+        }
         last_lease_valid
     }
 
     pub fn reset(&self) {
         self.until.store(0, Ordering::SeqCst);
         metrics::SNAP_BR_SUSPEND_COMMAND_LEASE_UNTIL.set(0);
+        metrics::SNAP_BR_LEASE_EVENT.reset.inc();
     }
 }
 

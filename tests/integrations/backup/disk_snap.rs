@@ -2,16 +2,11 @@
 
 use std::{collections::HashSet, time::Duration};
 
-use kvproto::{
-    brpb::PrepareSnapshotBackupEventType,
-    raft_cmdpb::{CmdType, PutRequest, RaftCmdRequest, Request},
-};
+use kvproto::raft_cmdpb::{CmdType, PutRequest, RaftCmdRequest, Request};
 use raft::prelude::MessageType;
-use raftstore::store::{Callback, RaftCommand};
+use raftstore::store::Callback;
 use test_backup::disk_snap::{assert_success, must_wait_apply_success, Suite};
-use test_raftstore::{
-    must_contains_error, CloneFilterFactory, Direction, RegionPacketFilter, Simulator,
-};
+use test_raftstore::{must_contains_error, Direction, RegionPacketFilter, Simulator};
 use tikv_util::HandyRwLock;
 
 #[test]
@@ -67,20 +62,19 @@ fn test_wait_apply() {
         ld_sid = Some(ld.store_id);
         cmd.mut_header().set_peer(ld);
         let r = suite.cluster.sim.rl();
-        let _ = r
-            .async_command_on_node(
-                ld_sid.unwrap(),
-                cmd,
-                Callback::write_ext(
-                    Box::new(|resp| assert_success(&resp.response)),
-                    Some(Box::new({
-                        let tx = tx.clone();
-                        move || drop(tx)
-                    })),
-                    None,
-                ),
-            )
-            .unwrap();
+        r.async_command_on_node(
+            ld_sid.unwrap(),
+            cmd,
+            Callback::write_ext(
+                Box::new(|resp| assert_success(&resp.response)),
+                Some(Box::new({
+                    let tx = tx.clone();
+                    move || drop(tx)
+                })),
+                None,
+            ),
+        )
+        .unwrap();
     }
     // Hacking: assume all leaders are in one store.
     let mut call = suite.prepare_backup(ld_sid.unwrap());

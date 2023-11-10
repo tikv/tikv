@@ -2,9 +2,8 @@
 
 use std::{
     fmt,
-    future::Future,
     mem,
-    sync::{mpsc::SyncSender, Arc, Mutex},
+    sync::{Arc, Mutex},
     time::Duration,
 };
 
@@ -12,14 +11,13 @@ use collections::HashSet;
 use crossbeam::channel::SendError;
 use engine_traits::{KvEngine, RaftEngine};
 use kvproto::{
-    errorpb::{Error, StaleCommand},
-    metapb::{self, Region},
+    metapb,
     pdpb::{ChangePeer, PeerReport, StoreReport},
     raft_cmdpb::RaftCmdRequest,
 };
 use raft::eraftpb::ConfChangeType;
 use tikv_util::{box_err, error, info, time::Instant as TiInstant, warn};
-use tokio::sync::oneshot;
+
 
 use super::{
     fsm::new_admin_request, worker::new_change_peer_v2_request, PeerMsg, RaftRouter,

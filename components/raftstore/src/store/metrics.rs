@@ -271,7 +271,18 @@ make_static_metric! {
     }
 
     pub struct SnapshotBrWaitApplyEvent : IntCounter {
-        "type" => SnapshotBrWaitApplyEventType
+        "event" => SnapshotBrWaitApplyEventType
+    }
+
+    pub label_enum SnapshotBrLeaseEventType {
+        create,
+        renew,
+        expired,
+        reset,
+    }
+
+    pub struct SnapshotBrLeaseEvent : IntCounter {
+        "event" => SnapshotBrLeaseEventType
     }
 
     pub struct HibernatedPeerStateGauge: IntGauge {
@@ -922,5 +933,12 @@ lazy_static! {
     pub static ref SNAP_BR_SUSPEND_COMMAND_LEASE_UNTIL: IntGauge = register_int_gauge!(
         "tikv_snap_br_suspend_command_lease_until",
         "The lease that snapshot br holds of rejecting some type of commands. (In unix timestamp.)"
+    ).unwrap();
+
+    pub static ref SNAP_BR_LEASE_EVENT: SnapshotBrLeaseEvent = register_static_int_counter_vec!(
+        SnapshotBrLeaseEvent,
+        "tikv_snap_br_lease_event",
+        "The events of the lease to denying new admin commands being proposed by snapshot br.",
+        &["event"]
     ).unwrap();
 }

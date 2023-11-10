@@ -58,12 +58,7 @@ fn backup_blocked_by_memory_lock() {
 mod disk_snap {
     use std::time::Duration;
 
-    use futures::{stream::StreamExt};
-    
-    
-    
     use test_backup::disk_snap::{assert_success, Suite};
-    
 
     #[test]
     fn test_merge() {

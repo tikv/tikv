@@ -32,7 +32,7 @@ impl Service<UnimplementedHandle> {
     pub fn new(scheduler: Scheduler<Task>) -> Self {
         Service {
             scheduler,
-            snap_br_env: disk_snap::Env::unimplemented(),
+            snap_br_env: disk_snap::Env::unimplemented_for_v2(),
         }
     }
 }
@@ -58,39 +58,34 @@ where
         &mut self,
         ctx: RpcContext<'_>,
         _req: CheckAdminRequest,
-        sink: ServerStreamingSink<CheckAdminResponse>,
+        mut sink: ServerStreamingSink<CheckAdminResponse>,
     ) {
-        unimplemented_call!(ctx, sink);
-        return;
-        // TODO: implement them via handle or remove them.
-        // let (tx, rx) = mpsc::unbounded();
-        // match &self.router {
-        // Some(router) => {
-        // router.broadcast_normal(|| {
-        // PeerMsg::SignificantMsg(SignificantMsg::CheckPendingAdmin(tx.
-        // clone())) });
-        // let send_task = async move {
-        // let mut s = rx.map(|resp| Ok((resp, WriteFlags::default())));
-        // sink.send_all(&mut s).await?;
-        // sink.close().await?;
-        // Ok(())
-        // }
-        // .map(|res: Result<()>| match res {
-        // Ok(_) => {
-        // info!("check admin closed");
-        // }
-        // Err(e) => {
-        // error!("check admin canceled"; "error" => ?e);
-        // }
-        // });
-        // ctx.spawn(send_task);
-        // }
-        // None => {
-        // check pending admin reqeust is used for EBS Backup.
-        // for raftstore v2. we don't need it for now. so just return
-        // unimplemented
-        // }
-        // }
+        let (tx, rx) = mpsc::unbounded();
+        if let Err(err) = self.snap_br_env.handle.broadcast_check_pending_admin(tx) {
+            ctx.spawn(
+                sink.fail(RpcStatus::with_message(
+                    RpcStatusCode::INTERNAL,
+                    format!("{err}"),
+                ))
+                .map(|_| ()),
+            );
+            return;
+        }
+        let send_task = async move {
+            sink.send_all(&mut rx.map(|resp| Ok((resp, WriteFlags::default()))))
+                .await?;
+            sink.close().await?;
+            Ok(())
+        }
+        .map(|res: Result<()>| match res {
+            Ok(_) => {
+                info!("check admin closed");
+            }
+            Err(e) => {
+                error!("check admin canceled"; "error" => ?e);
+            }
+        });
+        ctx.spawn(send_task);
     }
 
     fn backup(
@@ -165,7 +160,6 @@ where
 mod tests {
     use std::{sync::Arc, time::Duration};
 
-    use engine_rocks::RocksEngine;
     use external_storage::make_local_backend;
     use tikv::storage::txn::tests::{must_commit, must_prewrite_put};
     use tikv_util::worker::{dummy_scheduler, ReceiverWrapper};

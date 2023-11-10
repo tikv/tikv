@@ -7,7 +7,6 @@ use std::{
     result,
     sync::{
         atomic::{AtomicBool, Ordering},
-        mpsc::{sync_channel, SyncSender},
         Arc, Mutex,
     },
     thread::Builder,
@@ -339,7 +338,7 @@ impl<ER: RaftEngine> RecoverData for RecoveryService<ER> {
             for &region_id in &leaders {
                 let (tx, rx) = oneshot::channel();
                 REGION_EVENT_COUNTER.start_wait_leader_apply.inc();
-                let wait_apply = SnapshotRecoveryWaitApplySyncer::new(region_id, tx);
+                let wait_apply = SnapshotBrWaitApplySyncer::new(region_id, tx);
                 if let Err(e) = raft_router.get_mut().unwrap().significant_send(
                     region_id,
                     SignificantMsg::SnapshotBrWaitApply(SnapshotBrWaitApplyRequest::relaxed(

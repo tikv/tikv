@@ -89,9 +89,7 @@ use crate::{
             TRANSFER_LEADER_COMMAND_REPLY_CTX,
         },
         region_meta::RegionMeta,
-        snapshot_backup::{
-            AbortReason, SnapshotBrState, SnapshotBrWaitApplyRequest, SnapshotBrWaitApplySyncer,
-        },
+        snapshot_backup::{AbortReason, SnapshotBrState, SnapshotBrWaitApplyRequest},
         transport::Transport,
         unsafe_recovery::{
             exit_joint_request, ForceLeaderState, UnsafeRecoveryExecutePlanSyncer,

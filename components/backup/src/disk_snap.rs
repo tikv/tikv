@@ -99,16 +99,15 @@ impl Error {
             }
             Error::LeaseExpired => HandleErr::AbortStream(RpcStatus::with_message(
                 grpcio::RpcStatusCode::FAILED_PRECONDITION,
-                format!(
-                    "the lease has expired, you may not send `wait_apply` because it is no meaning"
-                ),
+                "the lease has expired, you may not send `wait_apply` because it is no meaning"
+                    .to_string(),
             )),
         }
     }
 }
 
 pub struct Env<SR: SnapshotBrHandle> {
-    handle: Arc<SR>,
+    pub(crate) handle: Arc<SR>,
     rejector: Arc<RejectIngestAndAdmin>,
     active_stream: Arc<AtomicU64>,
 }
@@ -124,9 +123,11 @@ impl<SR: SnapshotBrHandle> Clone for Env<SR> {
 }
 
 impl Env<UnimplementedHandle> {
-    pub fn unimplemented() -> Self {
+    pub fn unimplemented_for_v2() -> Self {
         Self {
-            handle: Arc::new(UnimplementedHandle),
+            handle: Arc::new(UnimplementedHandle {
+                reason: "RaftStoreV2 doesn't support snapshot backup.".to_owned(),
+            }),
             rejector: Default::default(),
             active_stream: Arc::new(AtomicU64::new(0)),
         }
