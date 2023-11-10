@@ -55,10 +55,7 @@ impl<F: KvFormat> CompactionFilterFactory for TtlCompactionFilterFactory<F> {
         }
 
         let name = CString::new("ttl_compaction_filter").unwrap();
-        let filter = TtlCompactionFilter::<F> {
-            ts: current,
-            _phantom: PhantomData,
-        };
+        let filter = TtlCompactionFilter::<F>::new();
         Some((name, filter))
     }
 
@@ -70,9 +67,29 @@ impl<F: KvFormat> CompactionFilterFactory for TtlCompactionFilterFactory<F> {
 pub struct TtlCompactionFilter<F: KvFormat> {
     ts: u64,
     _phantom: PhantomData<F>,
+    expire_entry: u64,
+    expire_size: u64,
+}
+
+impl Drop for TtlCompactionFilter<F> {
+    fn drop(&self) {
+        // Accumulate counters would slightly improve performance as prometheus counters
+        // are atomic variables unerlying
+        TTL_EXPIRE_KV_SIZE_COUNTER.inc_by(self.expire_size);
+        TTL_EXPIRE_KV_ENTRY_COUNTER.inc_by(self.expire_entry);
+    }
 }
 
 impl<F: KvFormat> CompactionFilter for TtlCompactionFilter<F> {
+    fn new() -> Self {
+        Self {
+            ts: ttl_current_ts(),
+            _phantom: PhantomData,
+            expire_entry: 0,
+            expire_size: 0,
+        }
+    }
+
     fn featured_filter(
         &mut self,
         _level: usize,
@@ -98,8 +115,8 @@ impl<F: KvFormat> CompactionFilter for TtlCompactionFilter<F> {
                 expire_ts: Some(expire_ts),
                 ..
             }) if expire_ts <= self.ts => {
-                TTL_EXPIRE_KV_SIZE_COUNTER.inc_by(key.len() as u64 + value.len() as u64);
-                TTL_EXPIRE_KV_ENTRY_COUNTER.inc();
+                self.expire_size += key.len() as u64 + value.len() as u64;
+                self.expire_entry += 1;
                 CompactionFilterDecision::Remove
             }
             Err(err) => {
