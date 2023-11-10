@@ -545,6 +545,7 @@ mod tests {
         let name = "test_record_schedule_wait_duration";
         let pool = YatpPoolBuilder::new(DefaultTicker::default())
             .name_prefix(name)
+            .enable_task_wait_metrics()
             .build_single_level_pool();
         let (tx, rx) = mpsc::channel();
         for _ in 0..3 {
