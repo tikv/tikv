@@ -753,7 +753,7 @@ impl<'a> TaskMetadata<'a> {
 pub fn priority_from_task_meta(meta: &[u8]) -> usize {
     let priority = TaskMetadata::from_bytes(meta).override_priority();
     // mapping (high(15), medium(8), low(1)) -> (0, 1, 2)
-    debug_assert!(priority > 0 && priority < 16);
+    debug_assert!(priority > 0 && priority <= 16);
     TaskPriority::from(priority) as usize
 }
 
