@@ -94,15 +94,17 @@ def is_openssl_vendored_enabled(features):
 def check_openssl(executable, is_static_link):
     openssl_libs = ["libcrypto", "libssl"]
     ensure_link([executable], is_static_link, openssl_libs)
-    openssl_symbol = "EVP_EncryptInit"
-    if not is_static_link:
-        p = os.popen("nm %s | grep %s" % (executable, openssl_symbol))
-        lines = p.readlines()
-        text_symbol = "T "+openssl_symbol
-        finds = [l for l in lines if text_symbol in l]
-        if len(finds) != 0:
-            pr("error: %s contains OpenSSL symbol %s in text section\n" % (executable, openssl_symbol))
-            sys.exit(1)
+    if is_static_link:
+        return
+    openssl_symbols = ["EVP_", "OPENSSL"]
+    p = os.popen('nm %s | grep -iE " (t|T) (%s)"' % (executable, "|".join(openssl_symbols)))
+    lines = p.readlines()
+    if lines:
+        pr(
+            "error: %s contains OpenSSL symbol %s in text section:\n%s\n"
+            % (executable, openssl_symbols, "".join(lines))
+        )
+        sys.exit(1)
 
 def check_tests(features):
     if not is_jemalloc_enabled(features):

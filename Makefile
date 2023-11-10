@@ -127,7 +127,7 @@ export DEV_DOCKER_IMAGE_NAME ?= pingcap/tikv_dev
 export ENABLE_FIPS ?= 0
 
 ifeq ($(ENABLE_FIPS),1)
-DOCKER_IMAGE_NAME := ${DOCKER_IMAGE_NAME}-fips
+DOCKER_IMAGE_TAG := ${DOCKER_IMAGE_TAG}-fips
 DOCKER_FILE := ${DOCKER_FILE}.FIPS
 else
 ENABLE_FEATURES += openssl-vendored

@@ -29,7 +29,7 @@ RUN git checkout ${GIT_HASH} && git checkout .
 
 # Do not static link OpenSSL.
 ENV ENABLE_FIPS 1
-RUN ls -lash && make build_dist_release
+RUN make build_dist_release
 
 # Export to a clean image
 FROM redhat/ubi8-minimal:8.6
