@@ -83,6 +83,18 @@
 ## maximum number of old log files to retain
 # max-backups = 0
 
+[memory]
+## Whether enable the heap profiling which may have a bit performance overhead about 2% for the
+## default sample rate.
+# enable-heap-profiling = true
+
+## Average interval between allocation samples, as measured in bytes of allocation activity.
+## Increasing the sampling interval decreases profile fidelity, but also decreases the
+## computational overhead.
+## The default sample interval is 512 KB. It only accepts power of two, otherwise it will be
+## rounded up to the next power of two.
+# profiling-sample-per-bytes = "512KB"
+
 ## Configurations for the single thread pool serving read requests.
 [readpool.unified]
 ## The minimal working thread count of the thread pool.
