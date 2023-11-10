@@ -8655,7 +8655,6 @@
           },
           "yaxes": [
             {
-              "$$hashKey": "object:231",
               "format": "percentunit",
               "label": "",
               "logBase": 1,
@@ -8664,7 +8663,6 @@
               "show": true
             },
             {
-              "$$hashKey": "object:232",
               "format": "short",
               "label": null,
               "logBase": 1,
@@ -8782,12 +8780,7 @@
           "datasource": "${DS_TEST-CLUSTER}",
           "decimals": 1,
           "description": "The time consumed when executing GC tasks",
-          "fieldConfig": {
-            "defaults": {},
-            "overrides": []
-          },
           "fill": 1,
-          "fillGradient": 0,
           "gridPos": {
             "h": 7,
             "w": 12,
@@ -8814,11 +8807,7 @@
           "linewidth": 1,
           "links": [],
           "nullPointMode": "null as zero",
-          "options": {
-            "alertThreshold": true
-          },
           "percentage": false,
-          "pluginVersion": "7.5.11",
           "pointradius": 5,
           "points": false,
           "renderer": "flot",
