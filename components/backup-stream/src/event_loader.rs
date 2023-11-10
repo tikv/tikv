@@ -12,18 +12,17 @@ use raftstore::{
 use tikv::storage::{
     kv::StatisticsSummary,
     mvcc::{DeltaScanner, ScannerBuilder},
-    txn::{EntryBatch, TxnEntry, TxnEntryScanner},
+    txn::{TxnEntry, TxnEntryScanner},
     Snapshot, Statistics,
 };
 use tikv_util::{
     box_err,
+    memory::{MemoryQuota, OwnedAllocated},
     time::{Instant, Limiter},
     warn,
     worker::Scheduler,
 };
-use tokio::sync::{OwnedSemaphorePermit, Semaphore};
-use tracing::instrument;
-use tracing_active_tree::{frame, root};
+use tokio::sync::Semaphore;
 use txn_types::{Key, Lock, TimeStamp};
 
 use crate::{
@@ -37,51 +36,17 @@ use crate::{
 
 const MAX_GET_SNAPSHOT_RETRY: usize = 5;
 
-#[derive(Clone)]
-pub struct PendingMemoryQuota {
-    sema: Arc<Semaphore>,
-    capacity: usize,
-}
-
-impl std::fmt::Debug for PendingMemoryQuota {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("PendingMemoryQuota")
-            .field("remain", &self.sema.available_permits())
-            .field("total", &self.capacity)
-            .finish()
-    }
-}
-
-pub struct PendingMemory(OwnedSemaphorePermit);
-
-impl PendingMemoryQuota {
-    pub fn new(quota: usize) -> Self {
-        Self {
-            sema: Arc::new(Semaphore::new(quota)),
-            capacity: quota,
-        }
-    }
-
-    pub fn capacity(&self) -> usize {
-        self.capacity
-    }
-
-    pub async fn pending(&self, size: usize) -> PendingMemory {
-        PendingMemory(
-            self.sema
-                .clone()
-                .acquire_many_owned(size as _)
-                .await
-                .expect("BUG: the semaphore is closed unexpectedly."),
-        )
-    }
+struct ScanResult {
+    more: bool,
+    out_of_memory: bool,
+    statistics: Statistics,
 }
 
 /// EventLoader transforms data from the snapshot into ApplyEvent.
 pub struct EventLoader<S: Snapshot> {
     scanner: DeltaScanner<S>,
     // pooling the memory.
-    entry_batch: EntryBatch,
+    entry_batch: Vec<TxnEntry>,
 }
 
 const ENTRY_BATCH_SIZE: usize = 1024;
@@ -110,20 +75,48 @@ impl<S: Snapshot> EventLoader<S> {
 
         Ok(Self {
             scanner,
-            entry_batch: EntryBatch::with_capacity(ENTRY_BATCH_SIZE),
+            entry_batch: Vec::with_capacity(ENTRY_BATCH_SIZE),
         })
+    }
+
+    fn scan_result(&mut self, more: bool) -> ScanResult {
+        ScanResult {
+            more,
+            out_of_memory: false,
+            statistics: self.scanner.take_statistics(),
+        }
+    }
+
+    fn out_of_memory(&mut self) -> ScanResult {
+        ScanResult {
+            more: true,
+            out_of_memory: true,
+            statistics: self.scanner.take_statistics(),
+        }
     }
 
     /// Scan a batch of events from the snapshot, and save them into the
     /// internal buffer.
-    fn fill_entries(&mut self) -> Result<Statistics> {
+    fn fill_entries(&mut self, memory_quota: &mut OwnedAllocated) -> Result<ScanResult> {
         assert!(
             self.entry_batch.is_empty(),
-            "EventLoader: the entry batch isn't empty when filling entries, which is error-prone, please call `omit_entries` first. (len = {})",
+            "EventLoader: the entry batch isn't empty when filling entries, which is error-prone, please call `emit_entries_to` first. (len = {})",
             self.entry_batch.len()
         );
-        self.scanner.scan_entries(&mut self.entry_batch)?;
-        Ok(self.scanner.take_statistics())
+        let batch = &mut self.entry_batch;
+        while batch.len() < batch.capacity() {
+            match self.scanner.next_entry()? {
+                Some(entry) => {
+                    let size = entry.size();
+                    batch.push(entry);
+                    if memory_quota.alloc(size).is_err() {
+                        return Ok(self.out_of_memory());
+                    }
+                }
+                None => return Ok(self.scan_result(false)),
+            }
+        }
+        Ok(self.scan_result(true))
     }
 
     /// Drain the internal buffer, converting them to the [`ApplyEvents`],
@@ -133,7 +126,7 @@ impl<S: Snapshot> EventLoader<S> {
         result: &mut ApplyEvents,
         resolver: &mut TwoPhaseResolver,
     ) -> Result<()> {
-        for entry in self.entry_batch.drain() {
+        for entry in self.entry_batch.drain(..) {
             match entry {
                 TxnEntry::Prewrite {
                     default: (key, value),
@@ -193,7 +186,7 @@ pub struct InitialDataLoader<E: KvEngine, H> {
     pub(crate) tracing: SubscriptionTracer,
     pub(crate) scheduler: Scheduler<Task>,
 
-    pub(crate) quota: PendingMemoryQuota,
+    pub(crate) quota: Arc<MemoryQuota>,
     pub(crate) limit: Limiter,
     // If there are too many concurrent initial scanning, the limit of disk speed or pending memory
     // quota will probably be triggered. Then the whole scanning will be pretty slow. And when
@@ -215,7 +208,7 @@ where
         sink: Router,
         tracing: SubscriptionTracer,
         sched: Scheduler<Task>,
-        quota: PendingMemoryQuota,
+        quota: Arc<MemoryQuota>,
         limiter: Limiter,
         cdc_handle: H,
         concurrency_limit: Arc<Semaphore>,
@@ -400,52 +393,43 @@ where
             let mut events = ApplyEvents::with_capacity(1024, region.id);
             // Note: the call of `fill_entries` is the only step which would read the disk.
             //       we only need to record the disk throughput of this.
-            let (stat, disk_read) =
-                utils::with_record_read_throughput(|| event_loader.fill_entries());
-            // We must use the size of entry batch here to check whether we have progress.
-            // Or we may exit too early if there are only records:
-            // - can be inlined to `write` CF (hence it won't be written to default CF)
-            // - are prewritten. (hence it will only contains `Prewrite` records).
-            // In this condition, ALL records generate no ApplyEvent(only lock change),
-            // and we would exit after the first run of loop :(
-            let no_progress = event_loader.entry_batch.is_empty();
-            let stat = stat?;
+            let mut allocated = OwnedAllocated::new(Arc::clone(&self.quota));
+            let (res, disk_read) =
+                utils::with_record_read_throughput(|| event_loader.fill_entries(&mut allocated));
+            let res = res?;
             self.with_resolver(region, handle, |r| {
                 event_loader.emit_entries_to(&mut events, r)
             })?;
-            if no_progress {
-                metrics::INITIAL_SCAN_DURATION.observe(start.saturating_elapsed_secs());
-                return Ok(stats.stat);
-            }
-            stats.add_statistics(&stat);
+            stats.add_statistics(&res.statistics);
             let region_id = region.get_id();
             let sink = self.sink.clone();
             let event_size = events.size();
             let sched = self.scheduler.clone();
-            let to_use_memory = if event_size > self.quota.capacity() {
-                warn!("log backup encountered a monolithic event batch, the memory quota may be exceeded."; "cap" => %self.quota.capacity(), "event_size" => %event_size);
-                self.quota.capacity()
-            } else {
-                event_size
-            };
-            frame!(default; self.limit.consume(disk_read as _); disk_read).await;
+            self.limit.consume(disk_read as _).await;
             debug!("sending events to router"; "size" => %event_size, "region" => %region_id);
             metrics::INCREMENTAL_SCAN_SIZE.observe(event_size as f64);
             metrics::INCREMENTAL_SCAN_DISK_READ.inc_by(disk_read as f64);
             metrics::HEAP_MEMORY.add(event_size as _);
-
-            let permit = frame!(default; self.quota.pending(to_use_memory); to_use_memory);
-            let fut = tokio::spawn(root!("consume"; async move {
-                    utils::handle_on_event_result(&sched, sink.on_events(events).await);
-                    metrics::HEAP_MEMORY.sub(event_size as _);
-                    debug!("apply event done"; "size" => %event_size, "region" => %region_id);
-                }; %region_id, %event_size));
-            let permit = permit.await;
-            if !fut.is_finished() {
-                join_handles.push(tokio::spawn(root!("consume_permit"; async move {
-                        fut.await.expect("failed to join background task");
-                        drop(permit);
-                }; %region_id, %event_size)));
+            fail::fail_point!("scan_and_async_send::about_to_consume");
+            join_handles.push(tokio::spawn(async move {
+                utils::handle_on_event_result(&sched, sink.on_events(events).await);
+                metrics::HEAP_MEMORY.sub(event_size as _);
+                drop(allocated);
+                debug!("apply event done"; "size" => %event_size, "region" => %region_id);
+            }));
+            if !res.more {
+                metrics::INITIAL_SCAN_DURATION.observe(start.saturating_elapsed_secs());
+                return Ok(stats.stat);
+            }
+            if res.out_of_memory {
+                futures::future::try_join_all(join_handles.drain(..))
+                    .await
+                    .map_err(|err| {
+                        annotate!(
+                            err,
+                            "failed to join tokio runtime during out-of-memory-quota"
+                        )
+                    })?;
             }
         }
     }
@@ -459,7 +443,6 @@ where
         start_ts: TimeStamp,
         snap: impl Snapshot,
     ) -> Result<Statistics> {
-        let tr = self.tracing.clone();
         let region_id = region.get_id();
 
         let mut join_handles = Vec::with_capacity(8);
@@ -494,10 +477,13 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use futures::executor::block_on;
     use kvproto::metapb::*;
     use tikv::storage::{txn::tests::*, TestEngineBuilder};
     use tikv_kv::SnapContext;
+    use tikv_util::memory::{MemoryQuota, OwnedAllocated};
     use txn_types::TimeStamp;
 
     use super::EventLoader;
@@ -527,10 +513,13 @@ mod tests {
 
         let snap = block_on(async { tikv_kv::snapshot(&mut engine, SnapContext::default()).await })
             .unwrap();
+        let quota_inf = Arc::new(MemoryQuota::new(usize::MAX));
         let mut loader =
             EventLoader::load_from(snap, TimeStamp::zero(), TimeStamp::max(), &r).unwrap();
 
-        let (r, data_load) = with_record_read_throughput(|| loader.fill_entries());
+        let (r, data_load) = with_record_read_throughput(|| {
+            loader.fill_entries(&mut OwnedAllocated::new(quota_inf))
+        });
         r.unwrap();
         let mut events = ApplyEvents::with_capacity(1024, 42);
         let mut res = TwoPhaseResolver::new(42, None);

@@ -331,7 +331,7 @@ unset-override:
 
 pre-format: unset-override
 	@rustup component add rustfmt
-	@which cargo-sort &> /dev/null || cargo install -q cargo-sort
+	@which cargo-sort &> /dev/null || cargo +nightly install -q cargo-sort
 
 format: pre-format
 	@cargo fmt
@@ -405,6 +405,14 @@ docker_test:
 	docker run -i -v $(shell pwd):/tikv \
 		${DEV_DOCKER_IMAGE_NAME}:${DOCKER_IMAGE_TAG} \
 		make test
+
+docker_shell:
+	docker build -f Dockerfile.test \
+		-t ${DEV_DOCKER_IMAGE_NAME}:${DOCKER_IMAGE_TAG} \
+		.
+	docker run -it -v $(shell pwd):/tikv \
+		${DEV_DOCKER_IMAGE_NAME}:${DOCKER_IMAGE_TAG} \
+		/bin/bash
 
 ## The driver for script/run-cargo.sh
 ## ----------------------------------

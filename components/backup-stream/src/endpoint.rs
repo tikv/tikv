@@ -29,6 +29,7 @@ use tikv_util::{
     box_err,
     config::ReadableDuration,
     debug, defer, info,
+    memory::MemoryQuota,
     sys::thread::ThreadBuildWrapper,
     time::{Instant, Limiter},
     warn,
@@ -53,7 +54,7 @@ use crate::{
         GetCheckpointResult, RegionIdWithVersion, Subscription,
     },
     errors::{Error, Result},
-    event_loader::{InitialDataLoader, PendingMemoryQuota},
+    event_loader::InitialDataLoader,
     future,
     metadata::{store::MetaStore, MetadataClient, MetadataEvent, StreamTask},
     metrics::{self, TaskStatus},
@@ -141,8 +142,9 @@ where
             info!("started task watcher!");
         }));
 
-        let initial_scan_memory_quota =
-            PendingMemoryQuota::new(config.initial_scan_pending_memory_quota.0 as _);
+        let initial_scan_memory_quota = Arc::new(MemoryQuota::new(
+            config.initial_scan_pending_memory_quota.0 as _,
+        ));
         let limit = if config.initial_scan_rate_limit.0 > 0 {
             config.initial_scan_rate_limit.0 as f64
         } else {

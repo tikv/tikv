@@ -40,6 +40,7 @@ use openssl::{
     x509::X509,
 };
 use pin_project::pin_project;
+pub use profile::HEAP_PROFILE_ACTIVE;
 use profile::*;
 use prometheus::TEXT_FORMAT;
 use regex::Regex;
