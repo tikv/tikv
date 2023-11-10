@@ -303,7 +303,7 @@ struct GroupStats {
 /// In general, caller should call this function in a fixed interval.
 pub struct PriorityLimiterAdjustWorker<R> {
     resource_ctl: Arc<ResourceGroupManager>,
-    trackers: [PrioirtyLimiterStatsTracker; 3],
+    trackers: [PriorityLimiterStatsTracker; 3],
     resource_quota_getter: R,
     last_adjust_time: Instant,
     is_last_low_cpu: bool,
@@ -331,7 +331,7 @@ impl<R: ResourceStatsProvider> PriorityLimiterAdjustWorker<R> {
         let trackers = resource_ctl
             .get_priority_resource_limiters()
             .zip(priorities)
-            .map(|(l, p)| PrioirtyLimiterStatsTracker::new(l, p.as_str()));
+            .map(|(l, p)| PriorityLimiterStatsTracker::new(l, p.as_str()));
         Self {
             resource_ctl,
             trackers,
@@ -407,7 +407,7 @@ impl<R: ResourceStatsProvider> PriorityLimiterAdjustWorker<R> {
             self.trackers
                 .iter()
                 .skip(1)
-                .for_each(|t: &PrioirtyLimiterStatsTracker| {
+                .for_each(|t: &PriorityLimiterStatsTracker| {
                     t.limiter
                         .get_limiter(ResourceType::Cpu)
                         .set_rate_limit(f64::INFINITY)
@@ -418,7 +418,6 @@ impl<R: ResourceStatsProvider> PriorityLimiterAdjustWorker<R> {
         let real_cpu_total: f64 = stats.iter().map(|s| s.cpu_secs).sum();
         let expect_pool_cpu_total = real_cpu_total * (process_cpu_stats.total_quota * 0.95)
             / process_cpu_stats.current_used;
-        // let expect_pool_cpu_total =  real_cpu_total * cpu_quota / process_cpu_secs;
         let mut limits = [0.0; 2];
         let level_expected: [_; 3] =
             std::array::from_fn(|i| stats[i].cpu_secs + stats[i].wait_secs);
@@ -485,16 +484,15 @@ impl HistogramTracker {
     }
 }
 
-struct PrioirtyLimiterStatsTracker {
+struct PriorityLimiterStatsTracker {
     priority: &'static str,
     limiter: Arc<ResourceLimiter>,
     last_stats: GroupStatistics,
     // unified-read-pool and schedule-worker-pool wait duration metrics.
     task_wait_dur_trakcers: [HistogramTracker; 2],
-    //
 }
 
-impl PrioirtyLimiterStatsTracker {
+impl PriorityLimiterStatsTracker {
     fn new(limiter: Arc<ResourceLimiter>, priority: &'static str) -> Self {
         let task_wait_dur_trakcers =
             ["unified-read-pool", "sched-worker-priority"].map(|pool_name| {

@@ -229,7 +229,7 @@ macro_rules! handle_request {
     }
 }
 
-// consume resource group penalty and set explict group priority
+// consume resource group penalty and set explicit group priority
 // We override the override_priority here to make handling tasks easier.
 fn consume_penalty_and_set_priority(
     resource_manager: &Arc<ResourceGroupManager>,
