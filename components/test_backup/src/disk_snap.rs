@@ -1,9 +1,11 @@
 use std::{
     collections::{HashMap, HashSet},
+    path::Path,
     sync::{Arc, Mutex},
 };
 
 use backup::disk_snap::Env as BEnv;
+use engine_traits::MiscExt;
 use futures_executor::block_on;
 use futures_util::{
     sink::SinkExt,
@@ -78,14 +80,18 @@ impl Suite {
         node.backup_client = Some(client);
     }
 
-    pub fn split(&mut self, split_key: &[u8]) -> WriteResponse {
+    pub fn try_split(&mut self, split_key: &[u8]) -> WriteResponse {
         let region = self.cluster.get_region(split_key);
         let (tx, rx) = paired_future_callback();
         self.cluster
             .split_region(&region, split_key, Callback::write(tx));
-        let resp = block_on(rx).unwrap();
+        block_on(rx).unwrap()
+    }
+
+    pub fn split(&mut self, split_key: &[u8]) {
+        let region = self.cluster.get_region(split_key);
+        self.try_split(split_key);
         self.cluster.wait_region_split(&region);
-        resp
     }
 
     fn backup(&self, id: u64) -> &brpb::BackupClient {

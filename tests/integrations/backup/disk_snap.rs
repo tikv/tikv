@@ -2,6 +2,7 @@
 
 use std::{collections::HashSet, time::Duration};
 
+use engine_traits::MiscExt;
 use kvproto::raft_cmdpb::{CmdType, PutRequest, RaftCmdRequest, Request};
 use raft::prelude::MessageType;
 use raftstore::store::Callback;
@@ -13,8 +14,9 @@ use tikv_util::HandyRwLock;
 fn test_basic() {
     let mut suite = Suite::new(1);
     let mut call = suite.prepare_backup(1);
+    let p = suite.cluster.get_engine(1);
     call.prepare(60);
-    let resp = suite.split(b"k");
+    let resp = suite.try_split(b"k");
     println!("{:?}", resp.response.get_header().get_error());
     must_contains_error(
         &resp.response,
