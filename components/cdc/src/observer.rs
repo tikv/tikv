@@ -178,7 +178,10 @@ impl RegionChangeObserver for CdcObserver {
         _: StateRole,
     ) {
         match event {
-            RegionChangeEvent::Destroy | RegionChangeEvent::Update(_) => {
+            RegionChangeEvent::Destroy
+            | RegionChangeEvent::Update(
+                RegionChangeReason::Split | RegionChangeReason::CommitMerge,
+            ) => {
                 let region_id = ctx.region().get_id();
                 if let Some(observe_id) = self.is_subscribed(region_id) {
                     // Unregister all downstreams.
