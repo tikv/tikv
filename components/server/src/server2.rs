@@ -73,7 +73,7 @@ use service::{service_event::ServiceEvent, service_manager::GrpcServiceManager};
 use tikv::{
     config::{
         loop_registry, ConfigController, ConfigurableDb, DbConfigManger, DbType, LogConfigManager,
-        TikvConfig,
+        MemoryConfigManager, TikvConfig,
     },
     coprocessor::{self, MEMTRACE_ROOT as MEMTRACE_COPROCESSOR},
     coprocessor_v2,
@@ -441,6 +441,7 @@ where
         );
 
         cfg_controller.register(tikv::config::Module::Log, Box::new(LogConfigManager));
+        cfg_controller.register(tikv::config::Module::Memory, Box::new(MemoryConfigManager));
 
         let lock_mgr = LockManager::new(&self.core.config.pessimistic_txn);
         cfg_controller.register(
