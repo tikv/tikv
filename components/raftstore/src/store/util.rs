@@ -1232,7 +1232,9 @@ impl RegionReadProgress {
             return;
         }
         if let Some(ts) = core.update_safe_ts(apply_index, ts, now) {
-            let gap_before = TimeStamp::from(ts).physical().saturating_sub(TimeStamp::from(self.safe_ts.load(AtomicOrdering::Acquire)).physical());
+            let gap_before = TimeStamp::from(ts).physical().saturating_sub(
+                TimeStamp::from(self.safe_ts.load(AtomicOrdering::Acquire)).physical(),
+            );
             if !core.pause {
                 self.safe_ts.store(ts, AtomicOrdering::Release);
             }
@@ -1244,6 +1246,15 @@ impl RegionReadProgress {
                 "gap" => gap,
                 "gap_before" => gap_before,
             );
+            if gap_before > 5000 {
+                info!(
+                    "update_safe_ts_with_time too long";
+                    "peer_id" => core.peer_id,
+                    "region_id" => core.region_id,
+                    "gap" => gap,
+                    "gap_before" => gap_before,
+                );
+            }
         }
     }
 

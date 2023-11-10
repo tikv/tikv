@@ -789,7 +789,7 @@ where
                         .resolver
                         .resolve(ts, Some(now), ts_source.clone());
                 }
-            }else{
+            } else {
                 info!(
                     "handle_resolved_ts_advanced observe_region not exist";
                     "region_id" => region_id,
