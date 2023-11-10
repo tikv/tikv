@@ -37,7 +37,7 @@ lazy_static! {
     // If it's some it means there are already a CPU profiling.
     static ref CPU_PROFILE_ACTIVE: Mutex<Option<()>> = Mutex::new(None);
     // If it's some it means there are already a heap profiling. The channel is used to deactivate a profiling.
-    static ref HEAP_PROFILE_ACTIVE: Mutex<Option<(Option<Sender<()>>, TempDir)>> = Mutex::new(None);
+    pub static ref HEAP_PROFILE_ACTIVE: Mutex<Option<Option<(Sender<()>, TempDir)>>> = Mutex::new(None);
 
     // To normalize thread names.
     static ref THREAD_NAME_RE: Regex =
@@ -129,7 +129,7 @@ where
     let on_start = move || {
         let mut activate = HEAP_PROFILE_ACTIVE.lock().unwrap();
         assert!(activate.is_none());
-        *activate = Some((Some(tx), dir));
+        *activate = Some(Some((tx, dir)));
         activate_prof().map_err(|e| format!("activate_prof: {}", e))?;
         callback();
         info!("periodical heap profiling is started");
@@ -168,9 +168,11 @@ where
 pub fn deactivate_heap_profile() -> bool {
     let mut activate = HEAP_PROFILE_ACTIVE.lock().unwrap();
     match activate.as_mut() {
-        Some((tx, _)) => {
-            if let Some(tx) = tx.take() {
+        Some(tx) => {
+            if let Some((tx, _)) = tx.take() {
                 let _ = tx.send(());
+            } else {
+                *activate = None;
             }
             true
         }
@@ -277,7 +279,7 @@ pub fn heap_profiles_dir() -> Option<PathBuf> {
         .lock()
         .unwrap()
         .as_ref()
-        .map(|(_, dir)| dir.path().to_owned())
+        .and_then(|v| v.as_ref().map(|(_, dir)| dir.path().to_owned()))
 }
 
 pub fn list_heap_profiles() -> Result<Vec<(String, String)>, String> {
