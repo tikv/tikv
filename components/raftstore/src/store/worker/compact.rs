@@ -4,19 +4,24 @@ use std::{
     collections::VecDeque,
     error::Error as StdError,
     fmt::{self, Display, Formatter},
+    time::Duration,
 };
 
 use engine_traits::{KvEngine, RangeStats, CF_WRITE};
 use fail::fail_point;
 use thiserror::Error;
-use tikv_util::{box_try, error, info, time::Instant, warn, worker::Runnable};
+use tikv_util::{box_try, debug, error, info, time::Instant, warn, worker::Runnable};
 
 use super::metrics::{COMPACT_RANGE_CF, FULL_COMPACT};
 
 type Key = Vec<u8>;
 
 pub enum Task {
-    PeriodicFullCompact,
+    PeriodicFullCompact {
+        // Ranges, or empty if we wish to compact the entire store
+        ranges: Vec<(Key, Key)>,
+        compact_load_controller: FullCompactController,
+    },
 
     Compact {
         cf_name: String,
@@ -34,6 +39,61 @@ pub enum Task {
     },
 }
 
+type CompactPredicateFn = Box<dyn Fn() -> bool + Send>;
+
+pub struct FullCompactController {
+    pub initial_pause_duration_secs: u64,
+    pub max_pause_duration_secs: u64,
+    pub incremental_compaction_pred: Option<CompactPredicateFn>,
+}
+
+impl fmt::Debug for FullCompactController {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("FullCompactController")
+            .field(
+                "initial_pause_duration_secs",
+                &self.initial_pause_duration_secs,
+            )
+            .field("max_pause_duration_secs", &self.max_pause_duration_secs)
+            .field(
+                "has_incremental_compaction_pred",
+                &self.incremental_compaction_pred.is_some(),
+            )
+            .finish()
+    }
+}
+impl FullCompactController {
+    pub fn new(
+        initial_pause_duration_secs: u64,
+        max_pause_duration_secs: u64,
+        incremental_compaction_pred: Option<CompactPredicateFn>,
+    ) -> Self {
+        Self {
+            initial_pause_duration_secs,
+            max_pause_duration_secs,
+            incremental_compaction_pred,
+        }
+    }
+
+    /// Pause until `incremental_compaction_pred` is true.
+    /// TODO: support a timeout and return an Error if timeout is reached.
+    pub fn pause(&self) -> Result<(), Error> {
+        if self.incremental_compaction_pred.is_none() {
+            return Ok(());
+        }
+        let mut duration_secs = self.initial_pause_duration_secs;
+        loop {
+            std::thread::sleep(Duration::from_secs(duration_secs));
+            if (self.incremental_compaction_pred.as_ref().unwrap())() {
+                break;
+            }
+            duration_secs = self.max_pause_duration_secs.max(duration_secs * 2);
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug)]
 pub struct CompactThreshold {
     pub tombstones_num_threshold: u64,
     pub tombstones_percent_threshold: u64,
@@ -60,7 +120,24 @@ impl CompactThreshold {
 impl Display for Task {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match *self {
-            Task::PeriodicFullCompact => f.debug_struct("FullCompact").finish(),
+            Task::PeriodicFullCompact {
+                ref ranges,
+                ref compact_load_controller,
+            } => f
+                .debug_struct("PeriodicFullCompact")
+                .field(
+                    "ranges",
+                    &(
+                        ranges
+                            .first()
+                            .map(|k| log_wrappers::Value::key(k.0.as_slice())),
+                        ranges
+                            .last()
+                            .map(|k| log_wrappers::Value::key(k.1.as_slice())),
+                    ),
+                )
+                .field("coompact_load_controller", compact_load_controller)
+                .finish(),
             Task::Compact {
                 ref cf_name,
                 ref start_key,
@@ -132,21 +209,60 @@ where
 
     /// Periodic full compaction.
     ///
-    /// NOTE this is a highly experimental feature!
+    /// NOTE this is an experimental feature!
     ///
-    /// TODO: Do not start if there is heavy I/O.
-    /// TODO: Make it possible to rate limit, pause, or abort this by compacting
-    /// a range at a time.
-    pub fn full_compact(&mut self) -> Result<(), Error> {
+    /// TODO: Support stopping a full compaction.
+    pub fn full_compact(
+        &mut self,
+        ranges: Vec<(Key, Key)>,
+        compact_controller: FullCompactController,
+    ) -> Result<(), Error> {
         fail_point!("on_full_compact");
         info!("full compaction started");
+        let mut ranges: VecDeque<_> = ranges
+            .iter()
+            .map(|(start, end)| (Some(start.as_slice()), Some(end.as_slice())))
+            .collect();
+        if ranges.is_empty() {
+            ranges.push_front((None, None))
+        }
+
         let timer = Instant::now();
         let full_compact_timer = FULL_COMPACT.start_coarse_timer();
-        box_try!(self.engine.compact_range(
-            None, None, // Compact the entire key range.
-            true, // no other compaction will run when this is running
-            1,    // number of threads threads
-        ));
+
+        while let Some(range) = ranges.pop_front() {
+            debug!(
+                "incremental range full compaction started";
+            "start_key" => ?range.0.map(log_wrappers::Value::key),
+            "end_key" => ?range.1.map(log_wrappers::Value::key),
+             );
+            box_try!(self.engine.compact_range(
+                range.0, range.1, // Compact the entire key range.
+                false,   // non-exclusive
+                1,       // number of threads threads
+            ));
+            debug!(
+                "finished incremental range full compaction";
+                "remaining" => ranges.len(),
+            );
+            if let Some((next_range, predicate_fn)) = ranges
+                .front()
+                .zip(compact_controller.incremental_compaction_pred.as_ref())
+            {
+                if !predicate_fn() {
+                    warn!("pausing full compaction before next increment";
+                    "finished_start_key" => ?range.0.map(log_wrappers::Value::key),
+                    "finished_end_key" => ?range.1.map(log_wrappers::Value::key),
+                    "next_range_start_key" => ?next_range.0.map(log_wrappers::Value::key),
+                    "next_range_end_key" => ?next_range.1.map(log_wrappers::Value::key),
+                    "remaining" => ranges.len(),
+                    );
+                    compact_controller.pause()?;
+                    info!("resuming incremental full compaction");
+                }
+            }
+        }
+
         full_compact_timer.observe_duration();
         info!(
             "full compaction finished";
@@ -191,8 +307,11 @@ where
 
     fn run(&mut self, task: Task) {
         match task {
-            Task::PeriodicFullCompact => {
-                if let Err(e) = self.full_compact() {
+            Task::PeriodicFullCompact {
+                ranges,
+                compact_load_controller,
+            } => {
+                if let Err(e) = self.full_compact(ranges, compact_load_controller) {
                     error!("periodic full compaction failed"; "err" => %e);
                 }
             }
@@ -522,11 +641,68 @@ mod tests {
             .unwrap();
         assert_eq!(stats.num_entries - stats.num_versions, 5);
 
-        runner.run(Task::PeriodicFullCompact);
+        runner.run(Task::PeriodicFullCompact {
+            ranges: Vec::new(),
+            compact_load_controller: FullCompactController::new(0, 0, None),
+        });
         let stats = engine
             .get_range_stats(CF_WRITE, &start, &end)
             .unwrap()
             .unwrap();
         assert_eq!(stats.num_entries - stats.num_versions, 0);
+    }
+
+    #[test]
+    fn test_full_compact_incremental_pausable() {
+        let tmp_dir = Builder::new().prefix("test").tempdir().unwrap();
+        let engine = open_db(tmp_dir.path().to_str().unwrap());
+        let mut runner = Runner::new(engine.clone());
+
+        // mvcc_put 0..100
+        for i in 0..100 {
+            let (k, v) = (format!("k{}", i), format!("value{}", i));
+            mvcc_put(&engine, k.as_bytes(), v.as_bytes(), 1.into(), 2.into());
+        }
+        engine.flush_cf(CF_WRITE, true).unwrap();
+
+        let (start, end) = (data_key(b"k0"), data_key(b"k5"));
+        let stats = engine
+            .get_range_stats(CF_WRITE, &start, &end)
+            .unwrap()
+            .unwrap();
+        assert_eq!(stats.num_entries, stats.num_versions);
+
+        for i in 0..100 {
+            let k = format!("k{}", i);
+            delete(&engine, k.as_bytes(), 3.into());
+        }
+        engine.flush_cf(CF_WRITE, true).unwrap();
+
+        let stats = engine
+            .get_range_stats(CF_WRITE, &start, &end)
+            .unwrap()
+            .unwrap();
+        assert_eq!(stats.num_entries - stats.num_versions, 100);
+
+        let started_at = Instant::now();
+        let started_at_clone = started_at.clone();
+        let pred_fn: CompactPredicateFn =
+            Box::new(move || Instant::now() - started_at > Duration::from_millis(500));
+        let ranges = vec![
+            (data_key(b"k0"), data_key(b"k25")),
+            (data_key(b"k25"), data_key(b"k50")),
+            (data_key(b"k50"), data_key(b"k100")),
+        ];
+        runner.run(Task::PeriodicFullCompact {
+            ranges,
+            compact_load_controller: FullCompactController::new(1, 5, Some(pred_fn)),
+        });
+        let stats = engine
+            .get_range_stats(CF_WRITE, &start, &end)
+            .unwrap()
+            .unwrap();
+        assert_eq!(stats.num_entries - stats.num_versions, 0);
+        // Verify that periodic full compact slept at least once.
+        assert!(Instant::now() - started_at_clone > Duration::from_secs(1));
     }
 }

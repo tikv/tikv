@@ -107,9 +107,9 @@ use crate::{
             ReadDelegate, RefreshConfigRunner, RefreshConfigTask, RegionRunner, RegionTask,
             SplitCheckTask,
         },
-        Callback, CasualMessage, CompactThreshold, GlobalReplicationState, InspectedRaftMessage,
-        MergeResultKind, PdTask, PeerMsg, PeerTick, RaftCommand, SignificantMsg, SnapManager,
-        StoreMsg, StoreTick,
+        Callback, CasualMessage, CompactThreshold, FullCompactController, GlobalReplicationState,
+        InspectedRaftMessage, MergeResultKind, PdTask, PeerMsg, PeerTick, RaftCommand,
+        SignificantMsg, SnapManager, StoreMsg, StoreTick,
     },
     Error, Result,
 };
@@ -2477,35 +2477,65 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
             return;
         }
 
-        if self.ctx.global_stat.stat.is_busy.load(Ordering::SeqCst) {
-            warn!("full compaction may not run at this time, `is_busy` flag is true",);
+        let compact_predicate_fn = self.is_low_load_for_full_compact();
+        if !compact_predicate_fn() {
             return;
         }
 
-        let mut proc_stats = ProcessStat::cur_proc_stat().unwrap();
-        let cpu_usage = proc_stats.cpu_usage().unwrap();
-        let max_start_cpu_usage = self.ctx.cfg.periodic_full_compact_start_max_cpu;
-        if cpu_usage > max_start_cpu_usage {
-            warn!(
-                "full compaction may not run at this time, cpu usage is above max";
-                "cpu_usage" => cpu_usage,
-                "threshold" => max_start_cpu_usage,
-            );
-            return;
-        }
+        let ranges = self.ranges_for_full_compact();
+
+        let compact_load_controller =
+            FullCompactController::new(1, 15 * 60, Some(Box::new(compact_predicate_fn)));
 
         // Attempt executing a periodic full compaction.
         // Note that full compaction will not run if other compaction tasks are running.
-        if let Err(e) = self
-            .ctx
-            .cleanup_scheduler
-            .schedule(CleanupTask::Compact(CompactTask::PeriodicFullCompact))
-        {
+        if let Err(e) = self.ctx.cleanup_scheduler.schedule(CleanupTask::Compact(
+            CompactTask::PeriodicFullCompact {
+                ranges,
+                compact_load_controller,
+            },
+        )) {
             error!(
                 "failed to schedule a periodic full compaction";
                 "store_id" => self.fsm.store.id,
                 "err" => ?e
             );
+        }
+    }
+
+    fn ranges_for_full_compact(&self) -> Vec<(Vec<u8>, Vec<u8>)> {
+        let meta = self.ctx.store_meta.lock().unwrap();
+        let mut ranges = Vec::with_capacity(meta.region_ranges.len());
+
+        for region_id in meta.region_ranges.values() {
+            let region = &meta.regions[region_id];
+            let start_key = keys::enc_start_key(region);
+            let end_key = keys::enc_end_key(region);
+            ranges.push((start_key, end_key))
+        }
+        ranges
+    }
+
+    fn is_low_load_for_full_compact(&self) -> impl Fn() -> bool {
+        let max_start_cpu_usage = self.ctx.cfg.periodic_full_compact_start_max_cpu;
+        let global_stat = self.ctx.global_stat.clone();
+        move || {
+            if global_stat.stat.is_busy.load(Ordering::SeqCst) {
+                warn!("full compaction may not run at this time, `is_busy` flag is true",);
+                return false;
+            }
+
+            let mut proc_stats = ProcessStat::cur_proc_stat().unwrap();
+            let cpu_usage = proc_stats.cpu_usage().unwrap();
+            if cpu_usage > max_start_cpu_usage {
+                warn!(
+                    "full compaction may not run at this time, cpu usage is above max";
+                    "cpu_usage" => cpu_usage,
+                    "threshold" => max_start_cpu_usage,
+                );
+                return false;
+            }
+            true
         }
     }
 
