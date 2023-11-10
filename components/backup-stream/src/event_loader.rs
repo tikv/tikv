@@ -19,10 +19,11 @@ use tikv_util::{
     box_err,
     memory::{MemoryQuota, OwnedAllocated},
     time::{Instant, Limiter},
-    warn,
     worker::Scheduler,
 };
 use tokio::sync::Semaphore;
+use tracing::instrument;
+use tracing_active_tree::frame;
 use txn_types::{Key, Lock, TimeStamp};
 
 use crate::{
@@ -462,7 +463,7 @@ where
             .await
             .map_err(|err| annotate!(err, "tokio runtime failed to join consuming threads"))?;
 
-        Self::with_resolver_by(&tr, region, &handle, |r| {
+        self.with_resolver(region, &handle, |r| {
             r.phase_one_done();
             Ok(())
         })
