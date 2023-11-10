@@ -16,13 +16,14 @@ use tikv::storage::{
     Snapshot, Statistics,
 };
 use tikv_util::{
-    box_err, frame, root,
+    box_err,
     time::{Instant, Limiter},
     warn,
     worker::Scheduler,
 };
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tracing::instrument;
+use tracing_active_tree::{frame, root};
 use txn_types::{Key, Lock, TimeStamp};
 
 use crate::{

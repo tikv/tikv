@@ -553,7 +553,7 @@ where
     async fn dump_async_trace() -> hyper::Result<Response<Body>> {
         Ok(make_response(
             StatusCode::OK,
-            tikv_util::async_trace::layer::global().fmt_bytes(),
+            tracing_active_tree::layer::global().fmt_bytes(),
         ))
     }
 

@@ -601,6 +601,7 @@ dependencies = [
  "tokio-util",
  "tonic",
  "tracing",
+ "tracing-active-tree",
  "txn_types",
  "url",
  "uuid 0.8.2",
@@ -5382,6 +5383,8 @@ dependencies = [
  "tikv_util",
  "tokio",
  "toml",
+ "tracing-active-tree",
+ "tracing-subscriber",
  "txn_types",
  "yatp",
 ]
@@ -6601,6 +6604,7 @@ dependencies = [
  "tokio-openssl",
  "tokio-timer",
  "toml",
+ "tracing-active-tree",
  "tracker",
  "txn_types",
  "url",
@@ -6781,7 +6785,6 @@ dependencies = [
  "crc32fast",
  "crossbeam",
  "crossbeam-skiplist",
- "dashmap",
  "derive_more",
  "error_code",
  "fail",
@@ -6790,7 +6793,6 @@ dependencies = [
  "gag",
  "grpcio",
  "http",
- "indextree",
  "kvproto",
  "lazy_static",
  "libc 0.2.146",
@@ -6821,7 +6823,6 @@ dependencies = [
  "slog-global",
  "slog-json",
  "slog-term",
- "smallvec",
  "sysinfo",
  "tempfile",
  "thiserror",
@@ -6831,8 +6832,6 @@ dependencies = [
  "tokio-executor",
  "tokio-timer",
  "toml",
- "tracing",
- "tracing-subscriber",
  "tracker",
  "url",
  "utime",
@@ -7133,6 +7132,19 @@ dependencies = [
  "pin-project-lite",
  "tracing-attributes",
  "tracing-core",
+]
+
+[[package]]
+name = "tracing-active-tree"
+version = "0.1.0"
+source = "git+https://github.com/tikv/tracing-active-tree.git?rev=a71f8f8148f88ab759deb6d3e1d62d07ab218347#a71f8f8148f88ab759deb6d3e1d62d07ab218347"
+dependencies = [
+ "dashmap",
+ "indextree",
+ "lazy_static",
+ "smallvec",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]

@@ -45,8 +45,6 @@ pub mod config;
 pub mod future;
 #[macro_use]
 pub mod macros;
-#[macro_use]
-pub mod async_trace;
 pub mod callback;
 pub mod deadline;
 pub mod keybuilder;

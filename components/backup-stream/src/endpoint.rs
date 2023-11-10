@@ -28,7 +28,7 @@ use tikv::config::BackupStreamConfig;
 use tikv_util::{
     box_err,
     config::ReadableDuration,
-    debug, defer, info, root,
+    debug, defer, info,
     sys::thread::ThreadBuildWrapper,
     time::{Instant, Limiter},
     warn,
@@ -42,6 +42,7 @@ use tokio::{
 };
 use tokio_stream::StreamExt;
 use tracing::instrument;
+use tracing_active_tree::root;
 use txn_types::TimeStamp;
 
 use super::metrics::HANDLE_EVENT_DURATION_HISTOGRAM;

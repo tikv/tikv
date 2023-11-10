@@ -15,11 +15,11 @@ use raftstore::{
 };
 use tikv::storage::Statistics;
 use tikv_util::{
-    box_err, debug, info, root, sys::thread::ThreadBuildWrapper, time::Instant, warn,
-    worker::Scheduler,
+    box_err, debug, info, sys::thread::ThreadBuildWrapper, time::Instant, warn, worker::Scheduler,
 };
 use tokio::sync::mpsc::{channel, error::SendError, Receiver, Sender};
 use tracing::instrument;
+use tracing_active_tree::root;
 use txn_types::TimeStamp;
 
 use crate::{

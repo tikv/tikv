@@ -33,7 +33,7 @@ use tikv_util::{
     box_err,
     codec::stream_event::EventEncoder,
     config::ReadableSize,
-    error, frame, info,
+    error, info,
     time::{Instant, Limiter},
     warn,
     worker::Scheduler,
@@ -45,6 +45,7 @@ use tokio::{
 };
 use tokio_util::compat::TokioAsyncReadCompatExt;
 use tracing::instrument;
+use tracing_active_tree::frame;
 use txn_types::{Key, Lock, TimeStamp, WriteRef};
 
 use super::errors::Result;

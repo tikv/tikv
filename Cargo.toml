@@ -156,6 +156,7 @@ url = "2"
 uuid = { version = "0.8.1", features = ["serde", "v4"] }
 walkdir = "2"
 yatp = { workspace = true }
+tracing-active-tree = { workspace = true }
 
 [dev-dependencies]
 api_version = { workspace = true, features = ["testexport"] }
@@ -367,6 +368,7 @@ tokio-timer = { git = "https://github.com/tikv/tokio", branch = "tokio-timer-hot
 tokio-executor = { git = "https://github.com/tikv/tokio", branch = "tokio-timer-hotfix" }
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }
+tracing-active-tree = { rev = "a71f8f8148f88ab759deb6d3e1d62d07ab218347", git = "https://github.com/tikv/tracing-active-tree.git" }
 
 [profile.dev.package.grpcio-sys]
 debug = false
