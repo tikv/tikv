@@ -12,7 +12,9 @@ use fail::fail_point;
 use thiserror::Error;
 use tikv_util::{box_try, debug, error, info, time::Instant, warn, worker::Runnable};
 
-use super::metrics::{COMPACT_RANGE_CF, FULL_COMPACT};
+use super::metrics::{
+    COMPACT_RANGE_CF, FULL_COMPACT, FULL_COMPACT_INCREMENTAL, FULL_COMPACT_PAUSE,
+};
 
 type Key = Vec<u8>;
 
@@ -236,11 +238,13 @@ where
             "start_key" => ?range.0.map(log_wrappers::Value::key),
             "end_key" => ?range.1.map(log_wrappers::Value::key),
              );
+            let incremental_timer = FULL_COMPACT_INCREMENTAL.start_coarse_timer();
             box_try!(self.engine.compact_range(
                 range.0, range.1, // Compact the entire key range.
                 false,   // non-exclusive
                 1,       // number of threads threads
             ));
+            incremental_timer.observe_duration();
             debug!(
                 "finished incremental range full compaction";
                 "remaining" => ranges.len(),
@@ -257,8 +261,13 @@ where
                     "next_range_end_key" => ?next_range.1.map(log_wrappers::Value::key),
                     "remaining" => ranges.len(),
                     );
+                    let pause_started = Instant::now();
+                    let pause_timer = FULL_COMPACT_PAUSE.start_coarse_timer();
                     compact_controller.pause()?;
-                    info!("resuming incremental full compaction");
+                    pause_timer.observe_duration();
+                    info!("resuming incremental full compaction";
+                        "paused" => ?pause_started.saturating_elapsed(),
+                    );
                 }
             }
         }
@@ -685,7 +694,6 @@ mod tests {
         assert_eq!(stats.num_entries - stats.num_versions, 100);
 
         let started_at = Instant::now();
-        let started_at_clone = started_at.clone();
         let pred_fn: CompactPredicateFn =
             Box::new(move || Instant::now() - started_at > Duration::from_millis(500));
         let ranges = vec![
@@ -703,6 +711,6 @@ mod tests {
             .unwrap();
         assert_eq!(stats.num_entries - stats.num_versions, 0);
         // Verify that periodic full compact slept at least once.
-        assert!(Instant::now() - started_at_clone > Duration::from_secs(1));
+        assert!(Instant::now() - started_at > Duration::from_secs(1));
     }
 }
