@@ -127,6 +127,7 @@ def check_tests(features):
 
         pr("Checking binary %s" % name)
         check_jemalloc(executable)
+        check_openssl(executable, True)
     pr("")
     print("Done, takes %.2fs." % (time.time() - start))
 

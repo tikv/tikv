@@ -120,6 +120,19 @@ ENABLE_FEATURES += cloud-gcp
 ENABLE_FEATURES += cloud-azure
 endif
 
+export DOCKER_FILE ?= Dockerfile
+export DOCKER_IMAGE_NAME ?= pingcap/tikv
+export DOCKER_IMAGE_TAG ?= latest
+export DEV_DOCKER_IMAGE_NAME ?= pingcap/tikv_dev
+export ENABLE_FIPS ?= 0
+
+ifeq ($(ENABLE_FIPS),1)
+DOCKER_IMAGE_NAME := ${DOCKER_IMAGE_NAME}-fips
+DOCKER_FILE := ${DOCKER_FILE}.FIPS
+else
+ENABLE_FEATURES += openssl-vendored
+endif
+
 PROJECT_DIR:=$(shell dirname $(realpath $(lastword $(MAKEFILE_LIST))))
 
 BIN_PATH = $(CURDIR)/bin
@@ -134,18 +147,6 @@ export TIKV_BUILD_RUSTC_TARGET := $(shell rustc -vV | awk '/host/ { print $$2 }'
 export TIKV_BUILD_GIT_HASH ?= $(shell git rev-parse HEAD 2> /dev/null || echo ${BUILD_INFO_GIT_FALLBACK})
 export TIKV_BUILD_GIT_TAG ?= $(shell git describe --tag || echo ${BUILD_INFO_GIT_FALLBACK})
 export TIKV_BUILD_GIT_BRANCH ?= $(shell git rev-parse --abbrev-ref HEAD 2> /dev/null || echo ${BUILD_INFO_GIT_FALLBACK})
-
-export DOCKER_FILE ?= Dockerfile
-export DOCKER_IMAGE_NAME ?= pingcap/tikv
-export DOCKER_IMAGE_TAG ?= latest
-export DEV_DOCKER_IMAGE_NAME ?= pingcap/tikv_dev
-export ENABLE_FIPS ?= 0
-ifeq ($(ENABLE_FIPS),1)
-DOCKER_IMAGE_NAME := ${DOCKER_IMAGE_NAME}-fips
-DOCKER_FILE := ${DOCKER_FILE}.FIPS
-else
-ENABLE_FEATURES += openssl-vendored
-endif
 
 # Turn on cargo pipelining to add more build parallelism. This has shown decent
 # speedups in TiKV.
