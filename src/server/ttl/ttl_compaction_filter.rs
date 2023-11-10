@@ -11,7 +11,7 @@ use engine_rocks::{
     RocksTtlProperties,
 };
 use engine_traits::raw_ttl::ttl_current_ts;
-use prometheus::{*};
+use prometheus::*;
 
 use crate::server::metrics::TTL_CHECKER_ACTIONS_COUNTER_VEC;
 

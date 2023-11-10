@@ -8597,7 +8597,6 @@
             "x": 0,
             "y": 69
           },
-          "hiddenSeries": false,
           "id": 6985,
           "legend": {
             "alignAsTable": true,
@@ -8787,7 +8786,6 @@
             "x": 0,
             "y": 76
           },
-          "hiddenSeries": false,
           "id": 6986,
           "legend": {
             "alignAsTable": true,
