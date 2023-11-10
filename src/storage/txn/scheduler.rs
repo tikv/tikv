@@ -2392,6 +2392,8 @@ mod tests {
         };
         let feature_gate = FeatureGate::default();
         feature_gate.set_version("6.0.0").unwrap();
+        let resource_manager = Arc::new(ResourceGroupManager::default());
+        let controller = resource_manager.derive_controller("test".into(), false);
 
         let scheduler = TxnScheduler::new(
             engine,
@@ -2409,11 +2411,8 @@ mod tests {
             ResourceTagFactory::new_for_test(),
             Arc::new(QuotaLimiter::default()),
             feature_gate.clone(),
-            Some(Arc::new(ResourceController::new_for_test(
-                "test".to_owned(),
-                true,
-            ))),
-            None,
+            Some(controller),
+            Some(resource_manager),
         );
         // Use sync mode if pipelined_pessimistic_lock is false.
         assert_eq!(scheduler.pessimistic_lock_mode(), PessimisticLockMode::Sync);
