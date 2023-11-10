@@ -41,7 +41,6 @@ const DEFAULT_MAX_RU_QUOTA: u64 = 10_000;
 /// The maximum RU quota that can be configured.
 const MAX_RU_QUOTA: u64 = i32::MAX as u64;
 
-#[cfg(test)]
 const LOW_PRIORITY: u32 = 1;
 const MEDIUM_PRIORITY: u32 = 8;
 #[cfg(test)]
@@ -57,7 +56,7 @@ pub enum ResourceConsumeType {
     IoBytes(u64),
 }
 
-#[derive(Copy, Clone, Eq, PartialEq, EnumCount, EnumIter)]
+#[derive(Copy, Clone, Eq, PartialEq, EnumCount, EnumIter, Debug)]
 #[repr(usize)]
 pub enum TaskPriority {
     High = 0,
@@ -110,6 +109,7 @@ impl Default for ResourceGroupManager {
                     f64::INFINITY,
                     f64::INFINITY,
                     0,
+                    false,
                 ))
             })
             .collect::<Vec<_>>()
@@ -206,6 +206,7 @@ impl ResourceGroupManager {
                     f64::INFINITY,
                     f64::INFINITY,
                     version,
+                    true,
                 )))
             })
         } else {
@@ -304,6 +305,14 @@ impl ResourceGroupManager {
         self.get_group_count() > 1
     }
 
+    /// return the priority of target resource group.
+    #[inline]
+    pub fn get_resource_group_priority(&self, group: &str) -> u32 {
+        self.resource_groups
+            .get(group)
+            .map_or(LOW_PRIORITY, |g| g.group.priority)
+    }
+
     // Always return the background resource limiter if any;
     // Only return the foregroup limiter when priority is enabled.
     pub fn get_resource_limiter(
@@ -370,6 +379,11 @@ impl ResourceGroupManager {
             default_group.get_background_resource_limiter(request_source),
             group_priority.unwrap_or(default_group.group.priority),
         )
+    }
+
+    #[inline]
+    pub fn get_priority_resource_limiters(&self) -> [Arc<ResourceLimiter>; 3] {
+        self.priority_limiters.clone()
     }
 }
 
@@ -708,7 +722,7 @@ impl<'a> TaskMetadata<'a> {
         self.metadata.into_owned()
     }
 
-    fn override_priority(&self) -> u32 {
+    pub fn override_priority(&self) -> u32 {
         if self.metadata.is_empty() {
             return 0;
         }
@@ -732,6 +746,15 @@ impl<'a> TaskMetadata<'a> {
         };
         &self.metadata[start..]
     }
+}
+
+// return the TaskPriority value from task metadata.
+// This function is used for handling thread pool task waiting metrics.
+pub fn priority_from_task_meta(meta: &[u8]) -> usize {
+    let priority = TaskMetadata::from_bytes(meta).override_priority();
+    // mapping (high(15), medium(8), low(1)) -> (0, 1, 2)
+    debug_assert!(priority <= 16);
+    TaskPriority::from(priority) as usize
 }
 
 impl TaskPriorityProvider for ResourceController {
