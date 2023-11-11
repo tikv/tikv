@@ -498,6 +498,7 @@ macro_rules! sort_by {
     };
 }
 
+use core::slice::SlicePattern;
 #[test_case(test_raftstore::new_server_cluster)]
 fn test_xxx() {
     let data = vec![
@@ -506,7 +507,7 @@ fn test_xxx() {
         (4, Some("name:3"), 1),
         (5, Some("name:1"), 4),
     ];
-    let mut cluster = new_cluster(0, 3);
+    let mut cluster = new_cluster(0, 1);
     cluster.run();
     let product = ProductTable::new();
     let (raft_engine, ctx) = leader_raft_engine!(cluster, "");
@@ -536,4 +537,14 @@ fn test_xxx() {
         row_count += 1;
     }
     assert_eq!(row_count, 4);
+    let e = cluster.memory_engine.get(&1).unwrap();
+    let mut iter = e.core.lock().unwrap().engine.get(&1).unwrap().data[1].iter();
+    iter.seek_to_first();
+    while iter.valid() {
+        let k = iter.key().as_slice();
+        let v = iter.value().as_slice();
+        println!("{:?}, {:?}", k, v);
+
+        iter.next();
+    }
 }

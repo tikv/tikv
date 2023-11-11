@@ -30,7 +30,7 @@ pub fn cf_to_id(cf: &str) -> u8 {
 
 #[derive(Clone)]
 pub struct RegionMemoryEngine {
-    data: [Arc<Skiplist<ByteWiseComparator>>; 3],
+    pub data: [Arc<Skiplist<ByteWiseComparator>>; 3],
 }
 
 impl Default for RegionMemoryEngine {
@@ -59,7 +59,7 @@ impl Default for RegionMemoryEngine {
 
 #[derive(Clone)]
 pub struct LruMemoryEngine {
-    core: Arc<Mutex<LruMemoryEngineCore>>,
+    pub core: Arc<Mutex<LruMemoryEngineCore>>,
 }
 
 impl Default for LruMemoryEngine {
@@ -68,8 +68,8 @@ impl Default for LruMemoryEngine {
     }
 }
 
-struct LruMemoryEngineCore {
-    engine: HashMap<u64, RegionMemoryEngine>,
+pub struct LruMemoryEngineCore {
+    pub engine: HashMap<u64, RegionMemoryEngine>,
     // todo: replace it
     snapshot_list: Vec<u64>,
     max_version: Arc<AtomicU64>,
@@ -161,15 +161,15 @@ impl Drop for MemoryEngineSnapshot {
 }
 
 impl MemoryEngineSnapshot {
-    fn iterator_opt(&self, cf: &str, opts: engine_traits::IterOptions) -> MemoryEngineIterator {
+    pub fn iterator_opt(&self, cf: &str, opts: engine_traits::IterOptions) -> MemoryEngineIterator {
         let regional_engine = self
             .engine
             .core
             .lock()
             .unwrap()
             .engine
-            .get(&opts.region_id().unwrap())
-            .unwrap()
+            .entry(opts.region_id().unwrap())
+            .or_default()
             .data[cf_to_id(cf) as usize]
             .clone();
         let (lower_bound, upper_bound) = match opts.build_bounds() {
@@ -196,29 +196,31 @@ pub struct MemoryEngineIterator {
     upper_bound: Vec<u8>,
 }
 
+unsafe impl Send for MemoryEngineIterator {}
+
 // use engine_traits::Iterator;
 impl MemoryEngineIterator {
-    fn key(&self) -> &[u8] {
+    pub fn key(&self) -> &[u8] {
         assert!(self.valid);
         self.iter.key().as_slice()
     }
 
-    fn value(&self) -> &[u8] {
+    pub fn value(&self) -> &[u8] {
         assert!(self.valid);
         self.iter.value().as_slice()
     }
 
-    fn next(&mut self) -> engine_traits::Result<bool> {
+    pub fn next(&mut self) -> engine_traits::Result<bool> {
         self.iter.next();
         self.valid = self.iter.valid();
         Ok(self.valid)
     }
 
-    fn prev(&mut self) -> engine_traits::Result<bool> {
+    pub fn prev(&mut self) -> engine_traits::Result<bool> {
         unimplemented!();
     }
 
-    fn seek(&mut self, key: &[u8]) -> engine_traits::Result<bool> {
+    pub fn seek(&mut self, key: &[u8]) -> engine_traits::Result<bool> {
         let start = if key < self.lower_bound.as_slice() {
             &self.lower_bound
         } else {
@@ -229,21 +231,21 @@ impl MemoryEngineIterator {
         Ok(self.valid)
     }
 
-    fn seek_for_prev(&mut self, _key: &[u8]) -> engine_traits::Result<bool> {
+    pub fn seek_for_prev(&mut self, _key: &[u8]) -> engine_traits::Result<bool> {
         unimplemented!();
     }
 
-    fn seek_to_first(&mut self) -> engine_traits::Result<bool> {
+    pub fn seek_to_first(&mut self) -> engine_traits::Result<bool> {
         self.iter.seek(self.lower_bound.as_slice());
         self.valid = self.iter.valid();
         Ok(self.valid)
     }
 
-    fn seek_to_last(&mut self) -> engine_traits::Result<bool> {
+    pub fn seek_to_last(&mut self) -> engine_traits::Result<bool> {
         unimplemented!();
     }
 
-    fn valid(&self) -> engine_traits::Result<bool> {
+    pub fn valid(&self) -> engine_traits::Result<bool> {
         Ok(self.valid)
     }
 }
