@@ -1203,6 +1203,12 @@ impl RegionReadProgress {
         if let Some(ts) = core.update_applied(applied) {
             if !core.pause {
                 self.safe_ts.store(ts, AtomicOrdering::Release);
+                info!(
+                    "update safe ts in update_applied";
+                    "peer_id" => core.peer_id,
+                    "region_id" => core.region_id,
+                    "ts" => ts,
+                );
                 // No need to update leader safe ts here.
                 coprocessor.on_update_safe_ts(
                     core.region_id,
@@ -1219,6 +1225,12 @@ impl RegionReadProgress {
         if let Some(ts) = core.update_applied(applied) {
             if !core.pause {
                 self.safe_ts.store(ts, AtomicOrdering::Release);
+                info!(
+                    "update safe ts in update_applied_core";
+                    "peer_id" => core.peer_id,
+                    "region_id" => core.region_id,
+                    "ts" => ts,
+                );
             }
         }
     }
@@ -1233,9 +1245,9 @@ impl RegionReadProgress {
         }
         if let Some(ts) = core.update_safe_ts(apply_index, ts, now) {
             let before_ts = self.safe_ts.load(AtomicOrdering::Acquire);
-            let gap_before = TimeStamp::from(ts).physical().saturating_sub(
-                TimeStamp::from(before_ts).physical(),
-            );
+            let gap_before = TimeStamp::from(ts)
+                .physical()
+                .saturating_sub(TimeStamp::from(before_ts).physical());
             if !core.pause {
                 self.safe_ts.store(ts, AtomicOrdering::Release);
             }
@@ -1277,6 +1289,12 @@ impl RegionReadProgress {
         if let Some(ts) = core.merge_safe_ts(source_safe_ts, merge_index) {
             if !core.pause {
                 self.safe_ts.store(ts, AtomicOrdering::Release);
+                info!(
+                    "update safe ts in merge_safe_ts";
+                    "peer_id" => core.peer_id,
+                    "region_id" => core.region_id,
+                    "ts" => ts,
+                );
                 // After region merge, self safe ts may decrease, so leader safe ts should be
                 // reset.
                 coprocessor.on_update_safe_ts(
@@ -1311,6 +1329,12 @@ impl RegionReadProgress {
                 if let Some(ts) = core.update_safe_ts(apply_index, ts, now) {
                     if !core.pause {
                         self.safe_ts.store(ts, AtomicOrdering::Release);
+                        info!(
+                            "update safe ts in consume_leader_info";
+                            "peer_id" => core.peer_id,
+                            "region_id" => core.region_id,
+                            "ts" => ts,
+                        );
                     }
                 }
             }
@@ -1366,6 +1390,12 @@ impl RegionReadProgress {
         core.discard = false;
         self.safe_ts
             .store(core.read_state.ts, AtomicOrdering::Release);
+        info!(
+            "update safe ts in resume";
+            "peer_id" => core.peer_id,
+            "region_id" => core.region_id,
+            "ts" => core.read_state.ts,
+        );
     }
 
     pub fn safe_ts(&self) -> u64 {
