@@ -63,8 +63,7 @@ mod disk_snap {
     #[test]
     fn test_merge() {
         let mut suite = Suite::new(1);
-        let resp = suite.split(b"k");
-        assert_success(&resp.response);
+        suite.split(b"k");
         let mut source = suite.cluster.get_region(b"a");
         let target = suite.cluster.get_region(b"z");
         assert_ne!(source.id, target.id);

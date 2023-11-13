@@ -1,11 +1,9 @@
 use std::{
     collections::{HashMap, HashSet},
-    path::Path,
     sync::{Arc, Mutex},
 };
 
 use backup::disk_snap::Env as BEnv;
-use engine_traits::MiscExt;
 use futures_executor::block_on;
 use futures_util::{
     sink::SinkExt,
