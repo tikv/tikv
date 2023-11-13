@@ -316,7 +316,7 @@ test:
 
 # Run tests with nextest.
 ifndef CUSTOM_TEST_COMMAND
-test_with_nextest: export CUSTOM_TEST_COMMAND=nextest run
+test_with_nextest: export CUSTOM_TEST_COMMAND=nextest run --nocapture
 endif
 test_with_nextest: export RUSTDOCFLAGS="-Z unstable-options --persist-doctests"
 test_with_nextest:
