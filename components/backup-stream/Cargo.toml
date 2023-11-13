@@ -76,11 +76,11 @@ tikv_alloc = { workspace = true }
 tikv_kv = { workspace = true }
 tikv_util = { workspace = true }
 tokio = { version = "1.5", features = ["rt-multi-thread", "macros", "time", "sync"] }
-tracing-active-tree = { workspace = true }
 tokio-stream = "0.1"
 tokio-util = { version = "0.7", features = ["compat"] }
 tonic = { version = "0.8", optional = true }
 tracing = { version = "0.1.39", default-features = false, features = [ "attributes", "std" ] }
+tracing-active-tree = { workspace = true }
 txn_types = { workspace = true }
 uuid = "0.8"
 yatp = { workspace = true }

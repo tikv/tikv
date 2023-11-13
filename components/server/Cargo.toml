@@ -84,11 +84,10 @@ tikv_alloc = { workspace = true }
 tikv_util = { workspace = true }
 tokio = { version = "1.5", features = ["rt-multi-thread"] }
 toml = "0.5"
-txn_types = { workspace = true }
-yatp = { workspace = true }
 tracing-active-tree = { workspace = true }
 tracing-subscriber = { version = "0.3.17", default-features = false, features = [ "registry", "smallvec" ] }
-
+txn_types = { workspace = true }
+yatp = { workspace = true }
 
 [target.'cfg(unix)'.dependencies]
 signal-hook = "0.3"
