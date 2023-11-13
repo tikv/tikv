@@ -217,6 +217,9 @@ fn main() {
         process::exit(1)
     }
 
+    // Init memory related settings.
+    config.memory.init();
+
     let (service_event_tx, service_event_rx) = tikv_util::mpsc::unbounded(); // pipe for controling service
     match config.storage.engine {
         EngineType::RaftKv => server::server::run_tikv(config, service_event_tx, service_event_rx),

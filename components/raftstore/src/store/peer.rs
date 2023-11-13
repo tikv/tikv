@@ -708,6 +708,8 @@ where
     pub peer_heartbeats: HashMap<u64, Instant>,
     /// Record the waiting data status of each follower or learner peer.
     pub wait_data_peers: Vec<u64>,
+    /// This peer is created by a raft message from `create_by_peer`.
+    create_by_peer: Option<metapb::Peer>,
 
     proposals: ProposalQueue<Callback<EK::Snapshot>>,
     leader_missing_time: Option<Instant>,
@@ -904,6 +906,7 @@ where
         region: &metapb::Region,
         peer: metapb::Peer,
         wait_data: bool,
+        create_by_peer: Option<metapb::Peer>,
     ) -> Result<Peer<EK, ER>> {
         let peer_id = peer.get_id();
         if peer_id == raft::INVALID_ID {
@@ -958,6 +961,7 @@ where
             peer_cache: RefCell::new(HashMap::default()),
             peer_heartbeats: HashMap::default(),
             wait_data_peers: Vec::default(),
+            create_by_peer,
             peers_start_pending_time: vec![],
             down_peer_ids: vec![],
             split_check_trigger: SplitCheckTrigger::default(),
@@ -5436,9 +5440,16 @@ where
         &mut self,
         ctx: &mut PollContext<EK, ER, T>,
     ) {
-        if self.check_stale_conf_ver < self.region().get_region_epoch().get_conf_ver() {
+        if self.check_stale_conf_ver < self.region().get_region_epoch().get_conf_ver()
+            || self.region().get_region_epoch().get_conf_ver() == 0
+        {
             self.check_stale_conf_ver = self.region().get_region_epoch().get_conf_ver();
             self.check_stale_peers = self.region().get_peers().to_vec();
+            if let Some(create_by_peer) = self.create_by_peer.as_ref() {
+                // Push create_by_peer in case the peer is removed before
+                // initialization which has no peer in region.
+                self.check_stale_peers.push(create_by_peer.clone());
+            }
         }
         for peer in &self.check_stale_peers {
             if peer.get_id() == self.peer_id() {

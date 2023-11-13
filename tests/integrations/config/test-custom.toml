@@ -1,9 +1,5 @@
-log-level = "info"
-log-file = ""
-log-format = "text"
 slow-log-file = "slow_foo"
 slow-log-threshold = "1s"
-log-rotation-timespan = "1d"
 panic-when-unexpected-key-or-data = true
 abort-on-panic = true
 memory-usage-limit = "10GB"
@@ -18,6 +14,10 @@ filename = "foo"
 max-size = 1
 max-backups = 2
 max-days = 3
+
+[memory]
+enable-heap-profiling = false 
+profiling-sample-per-bytes = "1MB" 
 
 [readpool.unified]
 min-thread-count = 5
