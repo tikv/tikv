@@ -54,6 +54,17 @@ test-engines-panic = [
 cloud-storage-grpc = ["sst_importer/cloud-storage-grpc"]
 cloud-storage-dylib = ["sst_importer/cloud-storage-dylib"]
 pprof-fp = ["pprof/frame-pointer"]
+openssl-vendored = [
+  "openssl/vendored",
+  "hyper-tls/vendored",
+  # NB: the "openssl" feature does not make grpcio-sys v0.10 depends on
+  # openssl-sys, and it can not find the static openssl built by openssl-sys.
+  # Enabling "grpcio/openssl-vendored" explicitly makes grpcio-sys depends on
+  # openssl-sys and correctly links to the static openssl.
+  "grpcio/openssl-vendored",
+  # NB: Enable SM4 support if OpenSSL is built from source and statically linked.
+  "encryption_export/sm4",
+]
 
 # for testing configure propegate to other crates
 # https://stackoverflow.com/questions/41700543/can-we-share-test-utilites-between-crates
@@ -373,7 +384,7 @@ tipb_helper = { path = "components/tipb_helper" }
 tracker = { path = "components/tracker" }
 txn_types = { path = "components/txn_types" }
 # External libs
-grpcio = { version = "0.10.4", default-features = false, features = ["openssl-vendored", "protobuf-codec", "nightly"] }
+grpcio = { version = "0.10.4", default-features = false, features = ["openssl", "protobuf-codec", "nightly"] }
 grpcio-health = { version = "0.10.4", default-features = false, features = ["protobuf-codec"] }
 tipb = { git = "https://github.com/pingcap/tipb.git" }
 kvproto = { git = "https://github.com/pingcap/kvproto.git", branch = "release-6.5" }
@@ -390,10 +401,6 @@ debug = false
 opt-level = 1
 
 [profile.dev.package.libtitan_sys]
-debug = false
-opt-level = 1
-
-[profile.dev.package.tirocks-sys]
 debug = false
 opt-level = 1
 
