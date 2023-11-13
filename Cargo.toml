@@ -390,9 +390,6 @@ opt-level = 1
 [profile.dev.package.libtitan_sys]
 debug = false
 opt-level = 1
-# [profile.dev.package.tirocks-sys]
-# debug = false
-# opt-level = 1
 
 [profile.dev.package.tests]
 debug = 1
@@ -413,7 +410,7 @@ rpath = false
 opt-level = 3
 debug = false
 codegen-units = 1
-lto = false
+lto = "thin"
 incremental = false
 panic = 'unwind'
 debug-assertions = false
