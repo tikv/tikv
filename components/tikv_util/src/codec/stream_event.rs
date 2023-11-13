@@ -6,6 +6,13 @@ use bytes::{Buf, Bytes};
 
 use crate::{codec::Result, Either};
 
+// Note: maybe allow them to be different lifetime.
+// But not necessary for now, so keep it simple...?
+pub struct Rewrite<'a> {
+    from: &'a [u8],
+    to: &'a [u8],
+}
+
 pub trait Iterator {
     fn next(&mut self) -> Result<()>;
 
@@ -19,10 +26,12 @@ pub trait Iterator {
 pub struct EventIterator<'a> {
     buf: &'a [u8],
     offset: usize,
-    key_offset: usize,
     value_offset: usize,
-    key_len: usize,
     value_len: usize,
+
+    key_buf: Vec<u8>,
+
+    rewrite_rule: Option<Rewrite<'a>>,
 }
 
 impl EventIterator<'_> {
@@ -30,10 +39,21 @@ impl EventIterator<'_> {
         EventIterator {
             buf,
             offset: 0,
-            key_offset: 0,
-            key_len: 0,
+            key_buf: vec![],
             value_offset: 0,
             value_len: 0,
+            rewrite_rule: None,
+        }
+    }
+
+    pub fn with_rewriting<'a>(buf: &'a [u8], from: &'a [u8], to: &'a [u8]) -> EventIterator<'a> {
+        EventIterator {
+            buf,
+            offset: 0,
+            key_buf: vec![],
+            value_offset: 0,
+            value_len: 0,
+            rewrite_rule: Some(Rewrite { from, to }),
         }
     }
 
@@ -42,14 +62,47 @@ impl EventIterator<'_> {
         self.offset += 4;
         result
     }
+
+    fn consume_key_with_len(&mut self, key_len: usize) {
+        self.key_buf.clear();
+        self.key_buf.reserve(key_len);
+        self.key_buf
+            .extend_from_slice(&self.buf[self.offset..self.offset + key_len]);
+        self.offset += key_len;
+    }
+
+    fn move_to_next_key_with_rewrite(&mut self) {
+        let key_len = self.get_size() as usize;
+        let rewrite = self.rewrite_rule.as_ref().expect("rewrite rule not set");
+        if key_len < rewrite.from.len()
+            || &self.buf[self.offset..self.offset + rewrite.from.len()] != rewrite.from
+        {
+            self.consume_key_with_len(key_len);
+            return;
+        }
+        self.key_buf.clear();
+        self.key_buf
+            .reserve(rewrite.to.len() + key_len - rewrite.from.len());
+        self.key_buf.extend_from_slice(rewrite.to);
+        self.key_buf
+            .extend_from_slice(&self.buf[self.offset + rewrite.from.len()..self.offset + key_len]);
+        self.offset += key_len;
+    }
+
+    fn fetch_key_buffer_and_move_to_value(&mut self) {
+        if self.rewrite_rule.is_some() {
+            self.move_to_next_key_with_rewrite()
+        } else {
+            let key_len = self.get_size() as usize;
+            self.consume_key_with_len(key_len);
+        }
+    }
 }
 
 impl Iterator for EventIterator<'_> {
     fn next(&mut self) -> Result<()> {
         if self.valid() {
-            self.key_len = self.get_size() as usize;
-            self.key_offset = self.offset;
-            self.offset += self.key_len;
+            self.fetch_key_buffer_and_move_to_value();
 
             self.value_len = self.get_size() as usize;
             self.value_offset = self.offset;
@@ -63,7 +116,7 @@ impl Iterator for EventIterator<'_> {
     }
 
     fn key(&self) -> &[u8] {
-        &self.buf[self.key_offset..self.key_offset + self.key_len]
+        &self.key_buf[..]
     }
 
     fn value(&self) -> &[u8] {
@@ -142,6 +195,46 @@ mod tests {
         }
 
         let mut iter = EventIterator::new(&event);
+
+        let mut index = 0_usize;
+        loop {
+            if !iter.valid() {
+                break;
+            }
+            iter.next().unwrap();
+            assert_eq!(iter.key(), keys[index]);
+            assert_eq!(iter.value(), vals[index]);
+            index += 1;
+        }
+        assert_eq!(count, index);
+    }
+
+    #[test]
+    fn test_rewrite() {
+        let mut rng = rand::thread_rng();
+        let mut event = vec![];
+        let mut keys = vec![];
+        let mut vals = vec![];
+        let count = 20;
+
+        for _i in 0..count {
+            let should_rewrite = rng.gen::<bool>();
+            let mut key: Vec<u8> = std::iter::once(if should_rewrite { b'k' } else { b'l' })
+                .chain((0..100).map(|_| rng.gen_range(0..255)))
+                .collect();
+            let val: Vec<u8> = (0..100).map(|_| rng.gen_range(0..255)).collect();
+            let e = EventEncoder::encode_event(&key, &val);
+            for s in e {
+                event.extend_from_slice(s.as_ref());
+            }
+            if should_rewrite {
+                key[0] = b'r';
+            }
+            keys.push(key);
+            vals.push(val);
+        }
+
+        let mut iter = EventIterator::with_rewriting(&event, b"k", b"r");
 
         let mut index = 0_usize;
         loop {
