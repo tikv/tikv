@@ -425,7 +425,7 @@ impl StoreStatsReporter for PdReporter {
         }
     }
 
-    fn auto_split(&self, split_infos: Vec<SplitInfo>) {
+    fn auto_split(&self, split_infos: Vec<SplitInfo>, _: Option<metapb::Peer>) {
         let task = Task::AutoSplit { split_infos };
         if let Err(e) = self.scheduler.schedule(task) {
             error!(

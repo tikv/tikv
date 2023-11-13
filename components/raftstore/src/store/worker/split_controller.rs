@@ -508,6 +508,7 @@ impl WriteStats {
     }
 }
 
+#[derive(Clone, Debug, Default)]
 pub struct SplitInfo {
     pub region_id: u64,
     pub peer: Peer,

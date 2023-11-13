@@ -155,6 +155,7 @@ where
     },
     AutoSplit {
         split_infos: Vec<SplitInfo>,
+        peer: Option<metapb::Peer>,
     },
     Heartbeat(HeartbeatTask),
     StoreHeartbeat {
@@ -360,7 +361,9 @@ where
                 region.get_id(),
                 log_wrappers::Value::key(split_key),
             ),
-            Task::AutoSplit { ref split_infos } => {
+            Task::AutoSplit {
+                ref split_infos, ..
+            } => {
                 write!(f, "auto split split regions, num is {}", split_infos.len())
             }
             Task::AskBatchSplit {
@@ -493,7 +496,7 @@ pub trait StoreStatsReporter: Send + Clone + Sync + 'static + Collector {
         write_io_rates: RecordPairVec,
     );
     fn report_min_resolved_ts(&self, store_id: u64, min_resolved_ts: u64);
-    fn auto_split(&self, split_infos: Vec<SplitInfo>);
+    fn auto_split(&self, split_infos: Vec<SplitInfo>, peer: Option<metapb::Peer>);
     fn update_latency_stats(&self, timer_tick: u64);
 }
 
@@ -534,8 +537,8 @@ where
         }
     }
 
-    fn auto_split(&self, split_infos: Vec<SplitInfo>) {
-        let task = Task::AutoSplit { split_infos };
+    fn auto_split(&self, split_infos: Vec<SplitInfo>, peer: Option<metapb::Peer>) {
+        let task = Task::AutoSplit { split_infos, peer };
         if let Err(e) = self.0.schedule(task) {
             error!(
                 "failed to send split infos to pd worker";
@@ -747,7 +750,7 @@ where
         let (top_qps, split_infos) =
             auto_split_controller.flush(read_stats_vec, cpu_stats_vec, thread_stats);
         auto_split_controller.clear();
-        reporter.auto_split(split_infos);
+        reporter.auto_split(split_infos, None);
         for i in 0..TOP_N {
             if i < top_qps.len() {
                 READ_QPS_TOPN
@@ -2087,14 +2090,40 @@ where
                 String::from("batch_split"),
                 self.remote.clone(),
             ),
-            Task::AutoSplit { split_infos } => {
+            Task::AutoSplit { split_infos, peer } => {
                 let pd_client = self.pd_client.clone();
                 let router = self.router.clone();
                 let scheduler = self.scheduler.clone();
                 let remote = self.remote.clone();
-
                 let f = async move {
                     for split_info in split_infos {
+                        let mut cb = Callback::None;
+                        let scheduler_cb = scheduler.clone();
+                        let split_info_cb = split_info.clone();
+                        // If peer is None, callback check if not leader error and split the region in leader again.
+                        if peer.is_none() {
+                            cb = Callback::read(Box::new(|mut snap| {
+                                if snap.response.get_header().has_error() {
+                                    let err = snap.response.take_header().take_error();
+                                    if err.has_not_leader() {
+                                        let not_leader = err.get_not_leader();
+                                        if not_leader.has_leader() {
+                                            let leader = not_leader.get_leader();
+                                            if leader.get_id() != split_info_cb.peer.get_id() {
+                                                warn!("failed to auto split region due to not leader, try send to leader"; "err" => ?err);
+                                                let sched = WrappedScheduler(scheduler_cb);
+                                                sched.auto_split(
+                                                    vec![split_info_cb],
+                                                    Some(leader.clone()),
+                                                )
+                                            }
+                                        }
+                                    } else {
+                                        error!("failed to auto split region"; "err" => ?err);
+                                    }
+                                }
+                            }));
+                        }
                         let Ok(Some(region)) =
                             pd_client.get_region_by_id(split_info.region_id).await else { continue };
                         // Try to split the region with the given split key.
@@ -2105,10 +2134,10 @@ where
                                 pd_client.clone(),
                                 region,
                                 vec![split_key],
-                                split_info.peer,
+                                peer.clone().unwrap_or_else(|| split_info.peer),
                                 true,
                                 false,
-                                Callback::None,
+                                cb,
                                 String::from("auto_split"),
                                 remote.clone(),
                             );
@@ -2118,7 +2147,7 @@ where
                             let start_key = split_info.start_key.unwrap();
                             let end_key = split_info.end_key.unwrap();
                             let region_id = region.get_id();
-                            let msg = CasualMessage::HalfSplitRegion {
+                            let msg: CasualMessage<_> = CasualMessage::HalfSplitRegion {
                                 region_epoch: region.get_region_epoch().clone(),
                                 start_key: Some(start_key.clone()),
                                 end_key: Some(end_key.clone()),
