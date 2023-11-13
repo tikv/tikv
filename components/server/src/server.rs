@@ -73,6 +73,7 @@ use resolved_ts::{LeadershipResolver, Task};
 use resource_control::{priority_from_task_meta, ResourceGroupManager};
 use security::SecurityManager;
 use service::{service_event::ServiceEvent, service_manager::GrpcServiceManager};
+use skiplist::memory_engine::LruMemoryEngine;
 use snap_recovery::RecoveryService;
 use tikv::{
     config::{
@@ -150,7 +151,8 @@ fn run_impl<CER: ConfiguredRaftEngine, F: KvFormat>(
     let fetcher = tikv.core.init_io_utility();
     let listener = tikv.core.init_flow_receiver();
     let (engines, engines_info) = tikv.init_raw_engines(listener);
-    tikv.init_engines(engines.clone());
+    let memory_engine = LruMemoryEngine::new();
+    tikv.init_engines(engines.clone(), Some(memory_engine.clone()));
     let server_config = tikv.init_servers();
     tikv.register_services();
     tikv.init_metrics_flusher(fetcher, engines_info);
@@ -240,6 +242,7 @@ struct TikvServer<ER: RaftEngine, F: KvFormat> {
     resolver: Option<resolve::PdStoreAddrResolver>,
     snap_mgr: Option<SnapManager>, // Will be filled in `init_servers`.
     engines: Option<TikvEngines<RocksEngine, ER>>,
+    memory_engine: Option<LruMemoryEngine>,
     kv_statistics: Option<Arc<RocksStatistics>>,
     raft_statistics: Option<Arc<RocksStatistics>>,
     servers: Option<Servers<RocksEngine, ER, F>>,
@@ -426,6 +429,7 @@ where
             resolver: None,
             snap_mgr: None,
             engines: None,
+            memory_engine: None,
             kv_statistics: None,
             raft_statistics: None,
             servers: None,
@@ -445,14 +449,22 @@ where
         }
     }
 
-    fn init_engines(&mut self, engines: Engines<RocksEngine, ER>) {
+    fn init_engines(
+        &mut self,
+        engines: Engines<RocksEngine, ER>,
+        memory_engine: Option<LruMemoryEngine>,
+    ) {
         let store_meta = Arc::new(Mutex::new(StoreMeta::new(PENDING_MSG_CAP)));
         let engine = RaftKv::new(
             ServerRaftStoreRouter::new(
                 self.router.clone(),
                 LocalReader::new(
                     engines.kv.clone(),
-                    StoreMetaDelegate::new(store_meta.clone(), engines.kv.clone()),
+                    StoreMetaDelegate::new(
+                        store_meta.clone(),
+                        engines.kv.clone(),
+                        memory_engine.clone(),
+                    ),
                     self.router.clone(),
                 ),
             ),
@@ -465,6 +477,7 @@ where
             store_meta,
             engine,
         });
+        self.memory_engine = memory_engine;
     }
 
     fn init_gc_worker(
@@ -958,6 +971,7 @@ where
 
         node.start(
             engines.engines.clone(),
+            self.memory_engine.clone(),
             server.transport(),
             snap_mgr,
             pd_worker,

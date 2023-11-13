@@ -48,6 +48,7 @@ use raft::StateRole;
 use resource_control::{channel::unbounded, ResourceGroupManager};
 use resource_metering::CollectorRegHandle;
 use service::service_manager::GrpcServiceManager;
+use skiplist::memory_engine::LruMemoryEngine;
 use sst_importer::SstImporter;
 use tikv_alloc::trace::TraceEvent;
 use tikv_util::{
@@ -560,6 +561,7 @@ where
     pub global_stat: GlobalStoreStat,
     pub store_stat: LocalStoreStat,
     pub engines: Engines<EK, ER>,
+    pub memory_engine: Option<LruMemoryEngine>,
     pub pending_count: usize,
     pub ready_count: usize,
     pub has_ready: bool,
@@ -1204,6 +1206,7 @@ pub struct RaftPollerBuilder<EK: KvEngine, ER: RaftEngine, T> {
     trans: T,
     global_stat: GlobalStoreStat,
     pub engines: Engines<EK, ER>,
+    pub memory_engine: Option<LruMemoryEngine>,
     global_replication_state: Arc<Mutex<GlobalReplicationState>>,
     feature_gate: FeatureGate,
     write_senders: WriteSenders<EK, ER>,
@@ -1447,6 +1450,7 @@ where
             global_stat: self.global_stat.clone(),
             store_stat: self.global_stat.local(),
             engines: self.engines.clone(),
+            memory_engine: self.memory_engine.clone(),
             pending_count: 0,
             ready_count: 0,
             has_ready: false,
@@ -1521,6 +1525,7 @@ where
             write_senders: self.write_senders.clone(),
             node_start_time: self.node_start_time,
             safe_point: self.safe_point.clone(),
+            memory_engine: self.memory_engine.clone(),
         }
     }
 }
@@ -1579,6 +1584,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         meta: metapb::Store,
         cfg: Arc<VersionTrack<Config>>,
         engines: Engines<EK, ER>,
+        memory_engine: Option<LruMemoryEngine>,
         trans: T,
         pd_client: Arc<C>,
         mgr: SnapManager,
@@ -1695,6 +1701,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             cfg,
             store: meta,
             engines,
+            memory_engine: memory_engine,
             router: self.router.clone(),
             split_check_scheduler,
             region_scheduler,

@@ -57,7 +57,11 @@ impl SyncBenchRouter {
                 let region = Arc::new(self.region.to_owned());
                 cb(ReadResponse {
                     response,
-                    snapshot: Some(RegionSnapshot::from_snapshot(Arc::new(snapshot), region)),
+                    snapshot: Some(RegionSnapshot::from_snapshot(
+                        Arc::new(snapshot),
+                        None,
+                        region,
+                    )),
                     txn_extra_op: TxnExtraOp::Noop,
                 })
             }
@@ -147,6 +151,7 @@ fn bench_async_snapshots_noop(b: &mut test::Bencher) {
         response: RaftCmdResponse::default(),
         snapshot: Some(RegionSnapshot::from_snapshot(
             Arc::new(snapshot),
+            None,
             Arc::new(Region::default()),
         )),
         txn_extra_op: TxnExtraOp::Noop,

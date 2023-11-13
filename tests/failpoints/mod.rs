@@ -4,6 +4,7 @@
 #![feature(custom_test_frameworks)]
 #![test_runner(test_util::run_failpoint_tests)]
 #![recursion_limit = "100"]
+#![feature(slice_pattern)]
 
 #[macro_use]
 extern crate slog_global;

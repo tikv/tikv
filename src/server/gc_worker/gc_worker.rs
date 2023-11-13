@@ -1405,7 +1405,7 @@ pub mod test_gc_worker {
                 let mut region = Region::default();
                 // Add a peer to pass initialized check.
                 region.mut_peers().push(Peer::default());
-                Ok(RegionSnapshot::from_snapshot(snap, Arc::new(region)))
+                Ok(RegionSnapshot::from_snapshot(snap, None, Arc::new(region)))
             }
         }
     }

@@ -52,6 +52,7 @@ use raft::{
     INVALID_INDEX, NO_LIMIT,
 };
 use rand::seq::SliceRandom;
+use skiplist::memory_engine::MemoryEngineSnapshot;
 use smallvec::SmallVec;
 use tikv_alloc::trace::TraceEvent;
 use tikv_util::{
@@ -5720,6 +5721,12 @@ where
 
     fn get_snapshot(&mut self, _: &Option<LocalReadContext<'_, EK>>) -> Arc<EK::Snapshot> {
         Arc::new(self.engines.kv.snapshot())
+    }
+
+    fn get_memory_engine_snapshot(&self) -> Option<MemoryEngineSnapshot> {
+        self.memory_engine
+            .as_ref()
+            .map(|engine| engine.new_snapshot())
     }
 }
 

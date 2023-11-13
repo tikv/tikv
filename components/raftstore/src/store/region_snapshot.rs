@@ -2,6 +2,7 @@
 
 // #[PerformanceCriticalPath]
 use std::{
+    marker::PhantomData,
     num::NonZeroU64,
     sync::{
         atomic::{AtomicU64, Ordering},
@@ -17,6 +18,7 @@ use fail::fail_point;
 use keys::DATA_PREFIX_KEY;
 use kvproto::{kvrpcpb::ExtraOp as TxnExtraOp, metapb::Region, raft_serverpb::RaftApplyState};
 use pd_client::BucketMeta;
+use skiplist::memory_engine::{MemoryEngineIterator, MemoryEngineSnapshot};
 use tikv_util::{
     box_err, error, keybuilder::KeyBuilder, metrics::CRITICAL_ERROR,
     panic_when_unexpected_key_or_data, set_panic_mark,
@@ -33,6 +35,7 @@ use crate::{
 #[derive(Debug)]
 pub struct RegionSnapshot<S: Snapshot> {
     snap: Arc<S>,
+    memory_snapshot: Option<MemoryEngineSnapshot>,
     region: Arc<Region>,
     apply_index: Arc<AtomicU64>,
     from_v2: bool,
@@ -52,19 +55,28 @@ where
     where
         EK: KvEngine,
     {
-        RegionSnapshot::from_snapshot(Arc::new(ps.raw_snapshot()), Arc::new(ps.region().clone()))
+        RegionSnapshot::from_snapshot(
+            Arc::new(ps.raw_snapshot()),
+            None,
+            Arc::new(ps.region().clone()),
+        )
     }
 
     pub fn from_raw<EK>(db: EK, region: Region) -> RegionSnapshot<EK::Snapshot>
     where
         EK: KvEngine,
     {
-        RegionSnapshot::from_snapshot(Arc::new(db.snapshot()), Arc::new(region))
+        RegionSnapshot::from_snapshot(Arc::new(db.snapshot()), None, Arc::new(region))
     }
 
-    pub fn from_snapshot(snap: Arc<S>, region: Arc<Region>) -> RegionSnapshot<S> {
+    pub fn from_snapshot(
+        snap: Arc<S>,
+        memory_snapshot: Option<MemoryEngineSnapshot>,
+        region: Arc<Region>,
+    ) -> RegionSnapshot<S> {
         RegionSnapshot {
             snap,
+            memory_snapshot,
             region,
             // Use 0 to indicate that the apply index is missing and we need to KvGet it,
             // since apply index must be >= RAFT_INIT_LOG_INDEX.
@@ -132,9 +144,25 @@ where
         }
     }
 
-    pub fn iter(&self, cf: &str, iter_opt: IterOptions) -> Result<RegionIterator<S>> {
+    pub fn iter(&self, cf: &str, mut iter_opt: IterOptions) -> Result<RegionIterator<S>> {
+        iter_opt.set_region_id(self.region.get_id());
+        let iter = self
+            .memory_snapshot
+            .as_ref()
+            .unwrap()
+            .iterator_opt(cf, iter_opt.clone());
+        let lock_iter = if cf == "lock" {
+            let iter = self
+                .snap
+                .iterator_opt(cf, iter_opt.clone())
+                .expect("creating snapshot iterator");
+            Some(iter)
+        } else {
+            None
+        };
         Ok(RegionIterator::new(
-            &self.snap,
+            iter,
+            lock_iter,
             Arc::clone(&self.region),
             iter_opt,
             cf,
@@ -184,6 +212,7 @@ where
     fn clone(&self) -> Self {
         RegionSnapshot {
             snap: self.snap.clone(),
+            memory_snapshot: self.memory_snapshot.clone(),
             region: Arc::clone(&self.region),
             apply_index: Arc::clone(&self.apply_index),
             from_v2: self.from_v2,
@@ -271,8 +300,12 @@ where
 /// iterate in the region. It behaves as if underlying
 /// db only contains one region.
 pub struct RegionIterator<S: Snapshot> {
-    iter: <S as Iterable>::Iterator,
+    iter: MemoryEngineIterator,
+    lock_iter: Option<<S as Iterable>::Iterator>,
+
     region: Arc<Region>,
+
+    _p: PhantomData<S>,
 }
 
 fn update_lower_bound(iter_opt: &mut IterOptions, region: &Region) {
@@ -305,25 +338,39 @@ where
     S: Snapshot,
 {
     pub fn new(
-        snap: &S,
+        iter: MemoryEngineIterator,
+        lock_iter: Option<<S as Iterable>::Iterator>,
         region: Arc<Region>,
         mut iter_opt: IterOptions,
         cf: &str,
     ) -> RegionIterator<S> {
         update_lower_bound(&mut iter_opt, &region);
         update_upper_bound(&mut iter_opt, &region);
-        let iter = snap
-            .iterator_opt(cf, iter_opt)
-            .expect("creating snapshot iterator"); // FIXME error handling
-        RegionIterator { iter, region }
+        // let iter = snap
+        //     .iterator_opt(cf, iter_opt)
+        //     .expect("creating snapshot iterator"); // FIXME error handling
+        RegionIterator {
+            iter,
+            lock_iter,
+            region,
+            _p: PhantomData,
+        }
     }
 
     pub fn seek_to_first(&mut self) -> Result<bool> {
-        self.iter.seek_to_first().map_err(Error::from)
+        if let Some(ref mut iter) = self.lock_iter {
+            iter.seek_to_first().map_err(Error::from)
+        } else {
+            self.iter.seek_to_first().map_err(Error::from)
+        }
     }
 
     pub fn seek_to_last(&mut self) -> Result<bool> {
-        self.iter.seek_to_last().map_err(Error::from)
+        if let Some(ref mut iter) = self.lock_iter {
+            iter.seek_to_last().map_err(Error::from)
+        } else {
+            self.iter.seek_to_last().map_err(Error::from)
+        }
     }
 
     pub fn seek(&mut self, key: &[u8]) -> Result<bool> {
@@ -332,36 +379,66 @@ where
         });
         self.should_seekable(key)?;
         let key = keys::data_key(key);
-        self.iter.seek(&key).map_err(Error::from)
+
+        if let Some(ref mut iter) = self.lock_iter {
+            iter.seek(&key).map_err(Error::from)
+        } else {
+            self.iter.seek(&key).map_err(Error::from)
+        }
     }
 
     pub fn seek_for_prev(&mut self, key: &[u8]) -> Result<bool> {
         self.should_seekable(key)?;
         let key = keys::data_key(key);
-        self.iter.seek_for_prev(&key).map_err(Error::from)
+
+        if let Some(ref mut iter) = self.lock_iter {
+            iter.seek_for_prev(&key).map_err(Error::from)
+        } else {
+            self.iter.seek_for_prev(&key).map_err(Error::from)
+        }
     }
 
     pub fn prev(&mut self) -> Result<bool> {
-        self.iter.prev().map_err(Error::from)
+        if let Some(ref mut iter) = self.lock_iter {
+            iter.prev().map_err(Error::from)
+        } else {
+            self.iter.prev().map_err(Error::from)
+        }
     }
 
     pub fn next(&mut self) -> Result<bool> {
-        self.iter.next().map_err(Error::from)
+        if let Some(ref mut iter) = self.lock_iter {
+            iter.next().map_err(Error::from)
+        } else {
+            self.iter.next().map_err(Error::from)
+        }
     }
 
     #[inline]
     pub fn key(&self) -> &[u8] {
-        keys::origin_key(self.iter.key())
+        if let Some(ref iter) = self.lock_iter {
+            keys::origin_key(iter.key())
+        } else {
+            keys::origin_key(self.iter.key())
+        }
     }
 
     #[inline]
     pub fn value(&self) -> &[u8] {
-        self.iter.value()
+        if let Some(ref iter) = self.lock_iter {
+            iter.value()
+        } else {
+            self.iter.value()
+        }
     }
 
     #[inline]
     pub fn valid(&self) -> Result<bool> {
-        self.iter.valid().map_err(Error::from)
+        if let Some(ref iter) = self.lock_iter {
+            iter.valid().map_err(Error::from)
+        } else {
+            self.iter.valid().map_err(Error::from)
+        }
     }
 
     #[inline]

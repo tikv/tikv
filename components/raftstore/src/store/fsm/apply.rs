@@ -26,6 +26,7 @@ use batch_system::{
     BasicMailbox, BatchRouter, BatchSystem, Config as BatchSystemConfig, Fsm, HandleResult,
     HandlerBuilder, PollHandler, Priority,
 };
+use bytes::Bytes;
 use collections::{HashMap, HashMapEntry, HashSet};
 use crossbeam::channel::{TryRecvError, TrySendError};
 use engine_traits::{
@@ -52,6 +53,7 @@ use raft::eraftpb::{
 };
 use raft_proto::ConfChangeI;
 use resource_control::{ResourceConsumeType, ResourceController, ResourceMetered};
+use skiplist::memory_engine::{cf_to_id, LruMemoryEngine, MemoryBatch};
 use smallvec::{smallvec, SmallVec};
 use sst_importer::SstImporter;
 use tikv_alloc::trace::TraceEvent;
@@ -402,6 +404,8 @@ where
     exec_log_index: u64,
     exec_log_term: u64,
 
+    memory_engine: Option<LruMemoryEngine>,
+    memory_batch: MemoryBatch,
     kv_wb: EK::WriteBatch,
     kv_wb_last_bytes: u64,
     kv_wb_last_keys: u64,
@@ -478,6 +482,7 @@ where
         importer: Arc<SstImporter>,
         region_scheduler: Scheduler<RegionTask<EK::Snapshot>>,
         engine: EK,
+        memory_engine: Option<LruMemoryEngine>,
         router: ApplyRouter<EK>,
         notifier: Box<dyn Notifier<EK>>,
         cfg: &Config,
@@ -496,6 +501,8 @@ where
             engine,
             router,
             notifier,
+            memory_engine,
+            memory_batch: HashMap::default(),
             kv_wb,
             applied_batch: ApplyCallbackBatch::new(),
             apply_res: vec![],
@@ -593,6 +600,9 @@ where
             let seq = self.kv_wb_mut().write_opt(&write_opts).unwrap_or_else(|e| {
                 panic!("failed to write to engine: {:?}", e);
             });
+            if let Some(ref memory_engine) = self.memory_engine {
+                memory_engine.consume_batch(mem::take(&mut self.memory_batch));
+            }
             if let Some(seqno) = seqno.as_mut() {
                 seqno.post_write(seq)
             }
@@ -1838,6 +1848,10 @@ where
                     e
                 )
             });
+            if ctx.memory_engine.is_some() {
+                ctx.memory_batch.entry(self.region.get_id()).or_default()[cf_to_id(cf) as usize]
+                    .push((Bytes::from(key.to_vec()), Bytes::from(value.to_vec())));
+            }
         } else {
             ctx.kv_wb.put(key, value).unwrap_or_else(|e| {
                 panic!(
@@ -1848,6 +1862,11 @@ where
                     e
                 );
             });
+            if ctx.memory_engine.is_some() {
+                ctx.memory_batch.entry(self.region.get_id()).or_default()
+                    [cf_to_id(CF_DEFAULT) as usize]
+                    .push((Bytes::from(key.to_vec()), Bytes::from(value.to_vec())));
+            }
         }
         Ok(())
     }
@@ -2375,10 +2394,10 @@ where
                         (exist_peer.get_role(), exist_peer.get_id(), peer.get_id());
 
                     if exist_id != incoming_id // Add peer with different id to the same store
-                            // The peer is already the requested role
-                            || (role, change_type) == (PeerRole::Voter, ConfChangeType::AddNode)
-                            || (role, change_type) == (PeerRole::Learner, ConfChangeType::AddLearnerNode)
-                            || exist_peer.get_is_witness() != peer.get_is_witness()
+                        // The peer is already the requested role
+                        || (role, change_type) == (PeerRole::Voter, ConfChangeType::AddNode)
+                        || (role, change_type) == (PeerRole::Learner, ConfChangeType::AddLearnerNode)
+                        || exist_peer.get_is_witness() != peer.get_is_witness()
                     {
                         error!(
                             "can't add duplicated peer";
@@ -4272,6 +4291,7 @@ where
                     response: Default::default(),
                     snapshot: Some(RegionSnapshot::from_snapshot(
                         Arc::new(apply_ctx.engine.snapshot()),
+                        None,
                         Arc::new(self.delegate.region.clone()),
                     )),
                     txn_extra_op: TxnExtraOp::Noop,
@@ -4664,6 +4684,7 @@ pub struct Builder<EK: KvEngine> {
     importer: Arc<SstImporter>,
     region_scheduler: Scheduler<RegionTask<<EK as KvEngine>::Snapshot>>,
     engine: EK,
+    memory_engine: Option<LruMemoryEngine>,
     sender: Box<dyn Notifier<EK>>,
     router: ApplyRouter<EK>,
     store_id: u64,
@@ -4683,6 +4704,7 @@ impl<EK: KvEngine> Builder<EK> {
             importer: builder.importer.clone(),
             region_scheduler: builder.region_scheduler.clone(),
             engine: builder.engines.kv.clone(),
+            memory_engine: builder.memory_engine.clone(),
             sender,
             router,
             store_id: builder.store.get_id(),
@@ -4707,6 +4729,7 @@ where
                 self.importer.clone(),
                 self.region_scheduler.clone(),
                 self.engine.clone(),
+                self.memory_engine.clone(),
                 self.router.clone(),
                 self.sender.clone_box(),
                 &cfg,
@@ -4737,6 +4760,7 @@ where
             router: self.router.clone(),
             store_id: self.store_id,
             pending_create_peers: self.pending_create_peers.clone(),
+            memory_engine: self.memory_engine.clone(),
         }
     }
 }
@@ -5368,6 +5392,7 @@ mod tests {
             router: router.clone(),
             store_id: 1,
             pending_create_peers,
+            memory_engine: None,
         };
         system.spawn("test-basic".to_owned(), builder);
 
@@ -5921,6 +5946,7 @@ mod tests {
             router: router.clone(),
             store_id: 1,
             pending_create_peers,
+            memory_engine: None,
         };
         system.spawn("test-handle-raft".to_owned(), builder);
 
@@ -6262,6 +6288,7 @@ mod tests {
             router: router.clone(),
             store_id: 1,
             pending_create_peers,
+            memory_engine: None,
         };
         system.spawn("test-handle-raft".to_owned(), builder);
 
@@ -6605,6 +6632,7 @@ mod tests {
             router: router.clone(),
             store_id: 1,
             pending_create_peers,
+            memory_engine: None,
         };
         system.spawn("test-handle-raft".to_owned(), builder);
 
@@ -6696,6 +6724,7 @@ mod tests {
             router: router.clone(),
             store_id: 1,
             pending_create_peers,
+            memory_engine: None,
         };
         system.spawn("test-ingest".to_owned(), builder);
 
@@ -6876,6 +6905,7 @@ mod tests {
             router: router.clone(),
             store_id: 1,
             pending_create_peers,
+            memory_engine: None,
         };
         system.spawn("test-bucket".to_owned(), builder);
 
@@ -6969,6 +6999,7 @@ mod tests {
             router: router.clone(),
             store_id: 1,
             pending_create_peers,
+            memory_engine: None,
         };
         system.spawn("test-exec-observer".to_owned(), builder);
 
@@ -7194,6 +7225,7 @@ mod tests {
             router: router.clone(),
             store_id: 1,
             pending_create_peers,
+            memory_engine: None,
         };
         system.spawn("test-handle-raft".to_owned(), builder);
 
@@ -7474,6 +7506,7 @@ mod tests {
             router: router.clone(),
             store_id: 2,
             pending_create_peers,
+            memory_engine: None,
         };
         system.spawn("test-split".to_owned(), builder);
 
@@ -7700,6 +7733,7 @@ mod tests {
             router: router.clone(),
             store_id: 1,
             pending_create_peers,
+            memory_engine: None,
         };
         system.spawn("flashback_need_to_be_applied".to_owned(), builder);
 

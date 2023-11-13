@@ -1399,6 +1399,7 @@ fn test_double_run_node() {
     let e = node
         .start(
             engines,
+            None,
             simulate_trans,
             snap_mgr,
             pd_worker,
