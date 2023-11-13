@@ -13,6 +13,7 @@ use bytes::Bytes;
 use collections::HashMap;
 use crossbeam_skiplist::{map::Entry, SkipMap};
 use engine_traits::{CfNamesExt, SnapshotMiscExt, CF_DEFAULT, CF_LOCK, CF_WRITE};
+use slog_global::info;
 use txn_types::Key;
 
 use crate::{key::ByteWiseComparator, IterRef, Skiplist};
@@ -99,6 +100,12 @@ impl LruMemoryEngine {
             let (max_version, regional_engine) = {
                 let mut core = self.core.lock().unwrap();
                 let max_version = core.max_version.clone();
+                if core.engine.get(&id).is_none() {
+                    info!(
+                        "create region memory engine";
+                        "region_id" => id,
+                    );
+                }
                 let regional_engine = core.engine.entry(id).or_default();
                 (max_version, regional_engine.data.clone())
             };
@@ -161,30 +168,31 @@ impl Drop for MemoryEngineSnapshot {
 }
 
 impl MemoryEngineSnapshot {
-    pub fn iterator_opt(&self, cf: &str, opts: engine_traits::IterOptions) -> MemoryEngineIterator {
+    pub fn iterator_opt(
+        &self,
+        cf: &str,
+        opts: engine_traits::IterOptions,
+    ) -> Option<MemoryEngineIterator> {
+        if opts.region_id().is_none() {
+            return None;
+        }
         let regional_engine = self
             .engine
             .core
             .lock()
             .unwrap()
             .engine
-            .entry(opts.region_id().unwrap())
-            .or_default()
+            .get(&opts.region_id().unwrap())?
             .data[cf_to_id(cf) as usize]
             .clone();
-        let (lower_bound, upper_bound) = match opts.build_bounds() {
-            (Some(lower), Some(upper)) => (lower, upper),
-            (Some(lower), None) => (lower, keys::DATA_MAX_KEY.to_vec()),
-            (None, Some(upper)) => (keys::DATA_MIN_KEY.to_vec(), upper),
-            (None, None) => (keys::DATA_MIN_KEY.to_vec(), keys::DATA_MAX_KEY.to_vec()),
-        };
-        MemoryEngineIterator {
+        let (lower_bound, upper_bound) = opts.build_bounds();
+        Some(MemoryEngineIterator {
             cf: String::from(cf),
             valid: false,
             lower_bound,
             upper_bound,
             iter: regional_engine.iter(),
-        }
+        })
     }
 }
 
@@ -192,8 +200,8 @@ pub struct MemoryEngineIterator {
     cf: String,
     valid: bool,
     iter: IterRef<Skiplist<ByteWiseComparator>, ByteWiseComparator>,
-    lower_bound: Vec<u8>,
-    upper_bound: Vec<u8>,
+    lower_bound: Option<Vec<u8>>,
+    upper_bound: Option<Vec<u8>>,
 }
 
 unsafe impl Send for MemoryEngineIterator {}
@@ -221,8 +229,8 @@ impl MemoryEngineIterator {
     }
 
     pub fn seek(&mut self, key: &[u8]) -> engine_traits::Result<bool> {
-        let start = if key < self.lower_bound.as_slice() {
-            &self.lower_bound
+        let start = if let Some(ref lower_bound) = self.lower_bound && key < lower_bound.as_slice() {
+            &lower_bound
         } else {
             key
         };
@@ -236,7 +244,11 @@ impl MemoryEngineIterator {
     }
 
     pub fn seek_to_first(&mut self) -> engine_traits::Result<bool> {
-        self.iter.seek(self.lower_bound.as_slice());
+        if let Some(ref lower_bound) = self.lower_bound {
+            self.iter.seek(lower_bound.as_slice());
+        } else {
+            self.iter.seek_to_first()
+        }
         self.valid = self.iter.valid();
         Ok(self.valid)
     }

@@ -1701,7 +1701,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             cfg,
             store: meta,
             engines,
-            memory_engine: memory_engine,
+            memory_engine,
             router: self.router.clone(),
             split_check_scheduler,
             region_scheduler,

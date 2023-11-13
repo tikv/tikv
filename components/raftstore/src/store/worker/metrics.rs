@@ -246,4 +246,9 @@ lazy_static! {
         "Total number of renewing lease in advance from local reader."
     )
     .unwrap();
+    pub static ref ITERATOR_COUNT_VEC: IntCounterVec = register_int_counter_vec!(
+        "tikv_iterator_hit",
+        "Whether rocksdb iterator or memory iterator",
+        &["type"]
+    ).unwrap();
 }

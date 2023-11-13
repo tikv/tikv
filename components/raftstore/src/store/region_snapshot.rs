@@ -15,6 +15,7 @@ use engine_traits::{
     Peekable, RaftEngine, ReadOptions, Result as EngineResult, Snapshot, CF_RAFT,
 };
 use fail::fail_point;
+use futures_util::future::Either;
 use keys::DATA_PREFIX_KEY;
 use kvproto::{kvrpcpb::ExtraOp as TxnExtraOp, metapb::Region, raft_serverpb::RaftApplyState};
 use pd_client::BucketMeta;
@@ -25,7 +26,7 @@ use tikv_util::{
 };
 
 use crate::{
-    store::{util, PeerStorage, TxnExt},
+    store::{util, worker_metrics::ITERATOR_COUNT_VEC, PeerStorage, TxnExt},
     Error, Result,
 };
 
@@ -146,23 +147,39 @@ where
 
     pub fn iter(&self, cf: &str, mut iter_opt: IterOptions) -> Result<RegionIterator<S>> {
         iter_opt.set_region_id(self.region.get_id());
-        let iter = self
-            .memory_snapshot
-            .as_ref()
-            .unwrap()
-            .iterator_opt(cf, iter_opt.clone());
-        let lock_iter = if cf == "lock" {
+
+        let iter = if cf == "lock"
+            || self.memory_snapshot.is_none()
+            || self.region.get_id() == 4
+            || self.region.get_id() == 10
+            || true
+        {
             let iter = self
                 .snap
                 .iterator_opt(cf, iter_opt.clone())
                 .expect("creating snapshot iterator");
-            Some(iter)
+            ITERATOR_COUNT_VEC.with_label_values(&["rocksdb"]).inc();
+            Either::Right(iter)
         } else {
-            None
+            if let Some(iter) = self
+                .memory_snapshot
+                .as_ref()
+                .unwrap()
+                .iterator_opt(cf, iter_opt.clone())
+            {
+                ITERATOR_COUNT_VEC.with_label_values(&["in-memory"]).inc();
+                Either::Left(iter)
+            } else {
+                let iter = self
+                    .snap
+                    .iterator_opt(cf, iter_opt.clone())
+                    .expect("creating snapshot iterator");
+                ITERATOR_COUNT_VEC.with_label_values(&["rocksdb"]).inc();
+                Either::Right(iter)
+            }
         };
         Ok(RegionIterator::new(
             iter,
-            lock_iter,
             Arc::clone(&self.region),
             iter_opt,
             cf,
@@ -300,12 +317,8 @@ where
 /// iterate in the region. It behaves as if underlying
 /// db only contains one region.
 pub struct RegionIterator<S: Snapshot> {
-    iter: MemoryEngineIterator,
-    lock_iter: Option<<S as Iterable>::Iterator>,
-
+    iter: Either<MemoryEngineIterator, <S as Iterable>::Iterator>,
     region: Arc<Region>,
-
-    _p: PhantomData<S>,
 }
 
 fn update_lower_bound(iter_opt: &mut IterOptions, region: &Region) {
@@ -338,8 +351,7 @@ where
     S: Snapshot,
 {
     pub fn new(
-        iter: MemoryEngineIterator,
-        lock_iter: Option<<S as Iterable>::Iterator>,
+        iter: Either<MemoryEngineIterator, <S as Iterable>::Iterator>,
         region: Arc<Region>,
         mut iter_opt: IterOptions,
         cf: &str,
@@ -349,27 +361,20 @@ where
         // let iter = snap
         //     .iterator_opt(cf, iter_opt)
         //     .expect("creating snapshot iterator"); // FIXME error handling
-        RegionIterator {
-            iter,
-            lock_iter,
-            region,
-            _p: PhantomData,
-        }
+        RegionIterator { iter, region }
     }
 
     pub fn seek_to_first(&mut self) -> Result<bool> {
-        if let Some(ref mut iter) = self.lock_iter {
-            iter.seek_to_first().map_err(Error::from)
-        } else {
-            self.iter.seek_to_first().map_err(Error::from)
+        match self.iter {
+            Either::Left(ref mut iter) => iter.seek_to_first().map_err(Error::from),
+            Either::Right(ref mut iter) => iter.seek_to_first().map_err(Error::from),
         }
     }
 
     pub fn seek_to_last(&mut self) -> Result<bool> {
-        if let Some(ref mut iter) = self.lock_iter {
-            iter.seek_to_last().map_err(Error::from)
-        } else {
-            self.iter.seek_to_last().map_err(Error::from)
+        match self.iter {
+            Either::Left(ref mut iter) => iter.seek_to_last().map_err(Error::from),
+            Either::Right(ref mut iter) => iter.seek_to_last().map_err(Error::from),
         }
     }
 
@@ -380,10 +385,9 @@ where
         self.should_seekable(key)?;
         let key = keys::data_key(key);
 
-        if let Some(ref mut iter) = self.lock_iter {
-            iter.seek(&key).map_err(Error::from)
-        } else {
-            self.iter.seek(&key).map_err(Error::from)
+        match self.iter {
+            Either::Left(ref mut iter) => iter.seek(&key).map_err(Error::from),
+            Either::Right(ref mut iter) => iter.seek(&key).map_err(Error::from),
         }
     }
 
@@ -391,53 +395,47 @@ where
         self.should_seekable(key)?;
         let key = keys::data_key(key);
 
-        if let Some(ref mut iter) = self.lock_iter {
-            iter.seek_for_prev(&key).map_err(Error::from)
-        } else {
-            self.iter.seek_for_prev(&key).map_err(Error::from)
+        match self.iter {
+            Either::Left(ref mut iter) => iter.seek_for_prev(&key).map_err(Error::from),
+            Either::Right(ref mut iter) => iter.seek_for_prev(&key).map_err(Error::from),
         }
     }
 
     pub fn prev(&mut self) -> Result<bool> {
-        if let Some(ref mut iter) = self.lock_iter {
-            iter.prev().map_err(Error::from)
-        } else {
-            self.iter.prev().map_err(Error::from)
+        match self.iter {
+            Either::Left(ref mut iter) => iter.prev().map_err(Error::from),
+            Either::Right(ref mut iter) => iter.prev().map_err(Error::from),
         }
     }
 
     pub fn next(&mut self) -> Result<bool> {
-        if let Some(ref mut iter) = self.lock_iter {
-            iter.next().map_err(Error::from)
-        } else {
-            self.iter.next().map_err(Error::from)
+        match self.iter {
+            Either::Left(ref mut iter) => iter.next().map_err(Error::from),
+            Either::Right(ref mut iter) => iter.next().map_err(Error::from),
         }
     }
 
     #[inline]
     pub fn key(&self) -> &[u8] {
-        if let Some(ref iter) = self.lock_iter {
-            keys::origin_key(iter.key())
-        } else {
-            keys::origin_key(self.iter.key())
+        match self.iter {
+            Either::Left(ref iter) => keys::origin_key(iter.key()),
+            Either::Right(ref iter) => keys::origin_key(iter.key()),
         }
     }
 
     #[inline]
     pub fn value(&self) -> &[u8] {
-        if let Some(ref iter) = self.lock_iter {
-            iter.value()
-        } else {
-            self.iter.value()
+        match self.iter {
+            Either::Left(ref iter) => iter.value(),
+            Either::Right(ref iter) => iter.value(),
         }
     }
 
     #[inline]
     pub fn valid(&self) -> Result<bool> {
-        if let Some(ref iter) = self.lock_iter {
-            iter.valid().map_err(Error::from)
-        } else {
-            self.iter.valid().map_err(Error::from)
+        match self.iter {
+            Either::Left(ref iter) => iter.valid().map_err(Error::from),
+            Either::Right(ref iter) => iter.valid().map_err(Error::from),
         }
     }
 

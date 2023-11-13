@@ -54,6 +54,7 @@ resource_metering = { workspace = true }
 security = { workspace = true }
 server = { workspace = true }
 service = { workspace = true }
+skiplist = { workspace = true }
 slog = { workspace = true }
 # better to not use slog-global, but pass in the logger
 slog-global = { workspace = true }
@@ -65,4 +66,3 @@ tikv_util = { workspace = true }
 tokio = { version = "1.5", features = ["rt-multi-thread"] }
 tokio-timer = { workspace = true }
 txn_types = { workspace = true }
-skiplist = { workspace = true }

@@ -5477,6 +5477,8 @@ dependencies = [
  "engine_traits",
  "keys",
  "rand 0.8.5",
+ "slog",
+ "slog-global",
  "txn_types",
  "yatp",
 ]

@@ -34,6 +34,7 @@ collections = { workspace = true }
 concurrency_manager = { workspace = true }
 crc32fast = "1.2"
 crossbeam = "0.8"
+crossbeam-skiplist = "0.1.1"
 derivative = "2"
 encryption = { workspace = true }
 engine_rocks = { workspace = true, optional = true }
@@ -75,6 +76,7 @@ serde = "1.0"
 serde_derive = "1.0"
 serde_with = "1.4"
 service = { workspace = true }
+skiplist = { workspace = true }
 slog = { workspace = true }
 slog-global = { workspace = true }
 smallvec = "1.4"
@@ -90,8 +92,6 @@ tracker = { workspace = true }
 txn_types = { workspace = true }
 uuid = { version = "0.8.1", features = ["serde", "v4"] }
 yatp = { workspace = true }
-crossbeam-skiplist = "0.1.1"
-skiplist = { workspace = true }
 
 [dev-dependencies]
 encryption_export = { workspace = true }

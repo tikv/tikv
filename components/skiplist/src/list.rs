@@ -99,12 +99,13 @@ impl<C> Skiplist<C> {
 impl<C: KeyComparator> Skiplist<C> {
     /// Finds the node near to key.
     ///
-    /// If less=true, it finds rightmost node such that node.key < key (if allow_equal=false) or
-    /// node.key <= key (if allow_equal=true).
-    /// If less=false, it finds leftmost node such that node.key > key (if allow_equal=false) or
-    /// node.key >= key (if allow_equal=true).
+    /// If less=true, it finds rightmost node such that node.key < key (if
+    /// allow_equal=false) or node.key <= key (if allow_equal=true).
+    /// If less=false, it finds leftmost node such that node.key > key (if
+    /// allow_equal=false) or node.key >= key (if allow_equal=true).
     ///
-    /// Returns the node found. The bool returned is true if the node has key equal to given key.
+    /// Returns the node found. The bool returned is true if the node has key
+    /// equal to given key.
     unsafe fn find_near(&self, key: &[u8], less: bool, allow_equal: bool) -> *const Node {
         let mut cursor: *const Node = self.inner.head.as_ptr();
         let mut level = self.height();
@@ -162,11 +163,12 @@ impl<C: KeyComparator> Skiplist<C> {
         }
     }
 
-    /// Returns (nodeBefore, nodeAfter) with nodeBefore.key <= key <= nodeAfter.key.
+    /// Returns (nodeBefore, nodeAfter) with nodeBefore.key <= key <=
+    /// nodeAfter.key.
     ///
     /// The input "before" tells us where to start looking.
-    /// If we found a node with the same key, then we return nodeBefore = nodeAfter.
-    /// Otherwise, nodeBefore.key < key < nodeAfter.key.
+    /// If we found a node with the same key, then we return nodeBefore =
+    /// nodeAfter. Otherwise, nodeBefore.key < key < nodeAfter.key.
     unsafe fn find_splice_for_level(
         &self,
         key: &[u8],
@@ -191,9 +193,9 @@ impl<C: KeyComparator> Skiplist<C> {
     /// Insert the key value pair to skiplist.
     ///
     /// Returns None if the insertion success.
-    /// Returns Some(key, vaule) when insertion failed. This happens when the key already exists and
-    /// the existed value not equal to the value passed to this function, returns the passed key and
-    /// value.
+    /// Returns Some(key, vaule) when insertion failed. This happens when the
+    /// key already exists and the existed value not equal to the value
+    /// passed to this function, returns the passed key and value.
     pub fn put(&self, key: impl Into<Bytes>, value: impl Into<Bytes>) -> Option<(Bytes, Bytes)> {
         let (key, value) = (key.into(), value.into());
         let mut list_height = self.height();
