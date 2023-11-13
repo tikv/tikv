@@ -1872,6 +1872,12 @@ where
     }
 
     fn handle_delete(&mut self, ctx: &mut ApplyContext<EK>, req: &Request) -> Result<()> {
+        info!(
+            "handle delete";
+            "region_id" => self.region.get_id(),
+            "cf" => ?req.get_delete().get_cf(),
+        );
+
         PEER_WRITE_CMD_COUNTER.delete.inc();
         let key = req.get_delete().get_key();
         // region key range has no data prefix, so we must use origin key to check.
@@ -2001,6 +2007,11 @@ where
     ) -> Result<()> {
         PEER_WRITE_CMD_COUNTER.ingest_sst.inc();
         let sst = req.get_ingest_sst().get_sst();
+
+        info!(
+            "ingest sst";
+            "region_id" => self.region.get_id(),
+        );
 
         if let Err(e) = check_sst_for_ingestion(sst, &self.region) {
             error!(?e;

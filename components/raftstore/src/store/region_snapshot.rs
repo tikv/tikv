@@ -147,12 +147,14 @@ where
 
     pub fn iter(&self, cf: &str, mut iter_opt: IterOptions) -> Result<RegionIterator<S>> {
         iter_opt.set_region_id(self.region.get_id());
+        update_lower_bound(&mut iter_opt, &self.region);
+        update_upper_bound(&mut iter_opt, &self.region);
 
         let iter = if cf == "lock"
             || self.memory_snapshot.is_none()
-            || self.region.get_id() == 4
-            || self.region.get_id() == 10
-            || true
+            || self.region.get_id() <= 50
+            // || self.region.get_id() == 10
+            // || true
         {
             let iter = self
                 .snap
@@ -356,8 +358,8 @@ where
         mut iter_opt: IterOptions,
         cf: &str,
     ) -> RegionIterator<S> {
-        update_lower_bound(&mut iter_opt, &region);
-        update_upper_bound(&mut iter_opt, &region);
+        // update_lower_bound(&mut iter_opt, &region);
+        // update_upper_bound(&mut iter_opt, &region);
         // let iter = snap
         //     .iterator_opt(cf, iter_opt)
         //     .expect("creating snapshot iterator"); // FIXME error handling
