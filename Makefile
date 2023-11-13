@@ -120,6 +120,19 @@ ENABLE_FEATURES += cloud-gcp
 ENABLE_FEATURES += cloud-azure
 endif
 
+export DOCKER_FILE ?= Dockerfile
+export DOCKER_IMAGE_NAME ?= pingcap/tikv
+export DOCKER_IMAGE_TAG ?= latest
+export DEV_DOCKER_IMAGE_NAME ?= pingcap/tikv_dev
+export ENABLE_FIPS ?= 0
+
+ifeq ($(ENABLE_FIPS),1)
+DOCKER_IMAGE_TAG := ${DOCKER_IMAGE_TAG}-fips
+DOCKER_FILE := ${DOCKER_FILE}.FIPS
+else
+ENABLE_FEATURES += openssl-vendored
+endif
+
 PROJECT_DIR:=$(shell dirname $(realpath $(lastword $(MAKEFILE_LIST))))
 
 BIN_PATH = $(CURDIR)/bin
@@ -135,10 +148,6 @@ export TIKV_BUILD_GIT_HASH ?= $(shell git rev-parse HEAD 2> /dev/null || echo ${
 export TIKV_BUILD_GIT_TAG ?= $(shell git describe --tag || echo ${BUILD_INFO_GIT_FALLBACK})
 export TIKV_BUILD_GIT_BRANCH ?= $(shell git rev-parse --abbrev-ref HEAD 2> /dev/null || echo ${BUILD_INFO_GIT_FALLBACK})
 
-export DOCKER_IMAGE_NAME ?= "pingcap/tikv"
-export DOCKER_IMAGE_TAG ?= "latest"
-export DEV_DOCKER_IMAGE_NAME ?= "pingcap/tikv_dev"
-
 # Turn on cargo pipelining to add more build parallelism. This has shown decent
 # speedups in TiKV.
 #
@@ -153,6 +162,12 @@ export CARGO_BUILD_PIPELINING=true
 #      https://bugzilla.redhat.com/show_bug.cgi?id=1830472
 ifeq ($(TIKV_BUILD_RUSTC_TARGET),aarch64-unknown-linux-gnu)
 export RUSTFLAGS := $(RUSTFLAGS) -Ctarget-feature=-outline-atomics
+endif
+
+ifeq ($(shell basename $(shell which python 2>/dev/null)),python)
+PY := python
+else
+PY := python3
 endif
 
 # Almost all the rules in this Makefile are PHONY
@@ -248,7 +263,7 @@ dist_release:
 	@mkdir -p ${BIN_PATH}
 	@cp -f ${CARGO_TARGET_DIR}/release/tikv-ctl ${CARGO_TARGET_DIR}/release/tikv-server ${BIN_PATH}/
 ifeq ($(shell uname),Linux) # Macs binary isn't elf format
-	@python scripts/check-bins.py --features "${ENABLE_FEATURES}" --check-release ${BIN_PATH}/tikv-ctl ${BIN_PATH}/tikv-server
+	$(PY) scripts/check-bins.py --features "${ENABLE_FEATURES}" --check-release ${BIN_PATH}/tikv-ctl ${BIN_PATH}/tikv-server
 endif
 
 # Build with release flag as if it were for distribution, but without
@@ -393,6 +408,7 @@ error-code: etc/error_code.toml
 docker:
 	docker build \
 		-t ${DOCKER_IMAGE_NAME}:${DOCKER_IMAGE_TAG} \
+		-f ${DOCKER_FILE} \
 		--build-arg GIT_HASH=${TIKV_BUILD_GIT_HASH} \
 		--build-arg GIT_TAG=${TIKV_BUILD_GIT_TAG} \
 		--build-arg GIT_BRANCH=${TIKV_BUILD_GIT_BRANCH} \
