@@ -4,19 +4,26 @@ use std::{
     collections::VecDeque,
     error::Error as StdError,
     fmt::{self, Display, Formatter},
+    sync::atomic::{AtomicBool, Ordering},
     time::Duration,
 };
 
 use engine_traits::{KvEngine, RangeStats, CF_WRITE};
 use fail::fail_point;
+use futures_util::compat::Future01CompatExt;
 use thiserror::Error;
-use tikv_util::{box_try, debug, error, info, time::Instant, warn, worker::Runnable};
+use tikv_util::{
+    box_try, debug, error, info, time::Instant, timer::GLOBAL_TIMER_HANDLE, warn, worker::Runnable,
+};
+use yatp::Remote;
 
 use super::metrics::{
     COMPACT_RANGE_CF, FULL_COMPACT, FULL_COMPACT_INCREMENTAL, FULL_COMPACT_PAUSE,
 };
 
 type Key = Vec<u8>;
+
+static FULL_COMPACTION_IN_PROCESS: AtomicBool = AtomicBool::new(false);
 
 pub enum Task {
     PeriodicFullCompact {
@@ -41,7 +48,7 @@ pub enum Task {
     },
 }
 
-type CompactPredicateFn = Box<dyn Fn() -> bool + Send>;
+type CompactPredicateFn = Box<dyn Fn() -> bool + Send + Sync>;
 
 pub struct FullCompactController {
     pub initial_pause_duration_secs: u64,
@@ -79,13 +86,17 @@ impl FullCompactController {
 
     /// Pause until `incremental_compaction_pred` is true.
     /// TODO: support a timeout and return an Error if timeout is reached.
-    pub fn pause(&self) -> Result<(), Error> {
+    pub async fn pause(&self) -> Result<(), Error> {
         if self.incremental_compaction_pred.is_none() {
             return Ok(());
         }
         let mut duration_secs = self.initial_pause_duration_secs;
         loop {
-            std::thread::sleep(Duration::from_secs(duration_secs));
+            GLOBAL_TIMER_HANDLE
+                .delay(std::time::Instant::now() + Duration::from_secs(duration_secs))
+                .compat()
+                .await
+                .unwrap();
             if (self.incremental_compaction_pred.as_ref().unwrap())() {
                 break;
             }
@@ -199,23 +210,25 @@ pub enum Error {
 
 pub struct Runner<E> {
     engine: E,
+    remote: Remote<yatp::task::future::TaskCell>,
 }
 
 impl<E> Runner<E>
 where
     E: KvEngine,
 {
-    pub fn new(engine: E) -> Runner<E> {
-        Runner { engine }
+    pub fn new(engine: E, remote: Remote<yatp::task::future::TaskCell>) -> Runner<E> {
+        Runner { engine, remote }
     }
 
     /// Periodic full compaction.
+    /// Note: this does not accept a `&self` due to async lifetime issues.
     ///
     /// NOTE this is an experimental feature!
     ///
     /// TODO: Support stopping a full compaction.
-    pub fn full_compact(
-        &mut self,
+    async fn full_compact(
+        engine: E,
         ranges: Vec<(Key, Key)>,
         compact_controller: FullCompactController,
     ) -> Result<(), Error> {
@@ -239,7 +252,7 @@ where
             "end_key" => ?range.1.map(log_wrappers::Value::key),
              );
             let incremental_timer = FULL_COMPACT_INCREMENTAL.start_coarse_timer();
-            box_try!(self.engine.compact_range(
+            box_try!(engine.compact_range(
                 range.0, range.1, // Compact the entire key range.
                 false,   // non-exclusive
                 1,       // number of threads threads
@@ -263,7 +276,7 @@ where
                     );
                     let pause_started = Instant::now();
                     let pause_timer = FULL_COMPACT_PAUSE.start_coarse_timer();
-                    compact_controller.pause()?;
+                    compact_controller.pause().await?;
                     pause_timer.observe_duration();
                     info!("resuming incremental full compaction";
                         "paused" => ?pause_started.saturating_elapsed(),
@@ -320,9 +333,21 @@ where
                 ranges,
                 compact_load_controller,
             } => {
-                if let Err(e) = self.full_compact(ranges, compact_load_controller) {
-                    error!("periodic full compaction failed"; "err" => %e);
-                }
+                if FULL_COMPACTION_IN_PROCESS
+                    .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+                    .unwrap()
+                {
+                    info!("full compaction is already in process, not starting");
+                };
+                let engine = self.engine.clone();
+                self.remote.spawn(async move {
+                    if let Err(e) =
+                        Self::full_compact(engine, ranges, compact_load_controller).await
+                    {
+                        error!("periodic full compaction failed"; "err" => %e);
+                    }
+                    FULL_COMPACTION_IN_PROCESS.store(false, Ordering::SeqCst);
+                });
             }
             Task::Compact {
                 cf_name,
@@ -443,6 +468,7 @@ mod tests {
     };
     use keys::data_key;
     use tempfile::Builder;
+    use tikv_util::yatp_pool::{DefaultTicker, YatpPoolBuilder};
     use txn_types::{Key, TimeStamp, Write, WriteType};
 
     use super::*;
@@ -454,8 +480,8 @@ mod tests {
             .tempdir()
             .unwrap();
         let db = new_engine(path.path().to_str().unwrap(), &[CF_DEFAULT]).unwrap();
-
-        let mut runner = Runner::new(db.clone());
+        let pool = YatpPoolBuilder::new(DefaultTicker::default()).build_future_pool();
+        let mut runner = Runner::new(db.clone(), pool.remote().clone());
 
         // Generate the first SST file.
         let mut wb = db.write_batch();
@@ -622,7 +648,8 @@ mod tests {
     fn test_full_compact_deletes() {
         let tmp_dir = Builder::new().prefix("test").tempdir().unwrap();
         let engine = open_db(tmp_dir.path().to_str().unwrap());
-        let mut runner = Runner::new(engine.clone());
+        let pool = YatpPoolBuilder::new(DefaultTicker::default()).build_future_pool();
+        let mut runner = Runner::new(engine.clone(), pool.remote().clone());
 
         // mvcc_put 0..5
         for i in 0..5 {
@@ -654,6 +681,7 @@ mod tests {
             ranges: Vec::new(),
             compact_load_controller: FullCompactController::new(0, 0, None),
         });
+        std::thread::sleep(Duration::from_millis(2000));
         let stats = engine
             .get_range_stats(CF_WRITE, &start, &end)
             .unwrap()
@@ -665,7 +693,8 @@ mod tests {
     fn test_full_compact_incremental_pausable() {
         let tmp_dir = Builder::new().prefix("test").tempdir().unwrap();
         let engine = open_db(tmp_dir.path().to_str().unwrap());
-        let mut runner = Runner::new(engine.clone());
+        let pool = YatpPoolBuilder::new(DefaultTicker::default()).build_future_pool();
+        let mut runner = Runner::new(engine.clone(), pool.remote().clone());
 
         // mvcc_put 0..100
         for i in 0..100 {
@@ -709,8 +738,12 @@ mod tests {
             .get_range_stats(CF_WRITE, &start, &end)
             .unwrap()
             .unwrap();
+        assert_eq!(stats.num_entries - stats.num_versions, 100);
+        std::thread::sleep(Duration::from_secs(2));
+        let stats = engine
+            .get_range_stats(CF_WRITE, &start, &end)
+            .unwrap()
+            .unwrap();
         assert_eq!(stats.num_entries - stats.num_versions, 0);
-        // Verify that periodic full compact slept at least once.
-        assert!(Instant::now() - started_at > Duration::from_secs(1));
     }
 }
