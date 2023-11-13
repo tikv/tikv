@@ -277,6 +277,7 @@ fn test_serde_custom_tikv_config() {
     let titan_cf_config = TitanCfConfig {
         min_blob_size: ReadableSize(2018),
         blob_file_compression: CompressionType::Zstd,
+        zstd_dict_size: ReadableSize::kb(16),
         blob_cache_size: ReadableSize::gb(12),
         min_gc_batch_size: ReadableSize::kb(12),
         max_gc_batch_size: ReadableSize::mb(12),
@@ -438,6 +439,7 @@ fn test_serde_custom_tikv_config() {
             titan: TitanCfConfig {
                 min_blob_size: ReadableSize(1024), // default value
                 blob_file_compression: CompressionType::Lz4,
+                zstd_dict_size: ReadableSize::kb(0),
                 blob_cache_size: ReadableSize::mb(0),
                 min_gc_batch_size: ReadableSize::mb(16),
                 max_gc_batch_size: ReadableSize::mb(64),
@@ -512,6 +514,7 @@ fn test_serde_custom_tikv_config() {
             titan: TitanCfConfig {
                 min_blob_size: ReadableSize(1024), // default value
                 blob_file_compression: CompressionType::Lz4,
+                zstd_dict_size: ReadableSize::kb(0),
                 blob_cache_size: ReadableSize::mb(0),
                 min_gc_batch_size: ReadableSize::mb(16),
                 max_gc_batch_size: ReadableSize::mb(64),
@@ -586,6 +589,7 @@ fn test_serde_custom_tikv_config() {
             titan: TitanCfConfig {
                 min_blob_size: ReadableSize(1024), // default value
                 blob_file_compression: CompressionType::Lz4,
+                zstd_dict_size: ReadableSize::kb(0),
                 blob_cache_size: ReadableSize::mb(0),
                 min_gc_batch_size: ReadableSize::mb(16),
                 max_gc_batch_size: ReadableSize::mb(64),
