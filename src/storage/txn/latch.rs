@@ -62,8 +62,6 @@ impl Latch {
                 }
                 self.waiting.push_front(item);
             }
-            // FIXME: remove this clippy attribute once https://github.com/rust-lang/rust-clippy/issues/6784 is fixed.
-            #[allow(clippy::manual_flatten)]
             for it in self.waiting.iter_mut() {
                 if let Some((v, _)) = it {
                     if *v == key_hash {
