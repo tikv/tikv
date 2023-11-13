@@ -71,8 +71,8 @@ pub struct TtlCompactionFilter<F: KvFormat> {
     expire_size: u64,
 }
 
-impl Drop for TtlCompactionFilter<F> {
-    fn drop(&self) {
+impl<F: KvFormat> Drop for TtlCompactionFilter<F> {
+    fn drop(&mut self) {
         // Accumulate counters would slightly improve performance as prometheus counters
         // are atomic variables unerlying
         TTL_EXPIRE_KV_SIZE_COUNTER.inc_by(self.expire_size);
@@ -80,7 +80,7 @@ impl Drop for TtlCompactionFilter<F> {
     }
 }
 
-impl<F: KvFormat> CompactionFilter for TtlCompactionFilter<F> {
+impl<F: KvFormat> TtlCompactionFilter<F> {
     fn new() -> Self {
         Self {
             ts: ttl_current_ts(),
@@ -89,7 +89,9 @@ impl<F: KvFormat> CompactionFilter for TtlCompactionFilter<F> {
             expire_size: 0,
         }
     }
+}
 
+impl<F: KvFormat> CompactionFilter for TtlCompactionFilter<F> {
     fn featured_filter(
         &mut self,
         _level: usize,
