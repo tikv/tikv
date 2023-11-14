@@ -225,7 +225,9 @@ impl MemoryEngineIterator {
     }
 
     pub fn prev(&mut self) -> engine_traits::Result<bool> {
-        unimplemented!();
+        self.iter.prev();
+        self.valid = self.iter.valid();
+        Ok(self.valid)
     }
 
     pub fn seek(&mut self, key: &[u8]) -> engine_traits::Result<bool> {
@@ -239,8 +241,15 @@ impl MemoryEngineIterator {
         Ok(self.valid)
     }
 
-    pub fn seek_for_prev(&mut self, _key: &[u8]) -> engine_traits::Result<bool> {
-        unimplemented!();
+    pub fn seek_for_prev(&mut self, key: &[u8]) -> engine_traits::Result<bool> {
+        let end = if let Some(ref upper_bound) = self.upper_bound && key > upper_bound.as_slice() {
+            &upper_bound
+        } else {
+            key
+        };
+        self.iter.seek_for_prev(end);
+        self.valid = self.iter.valid();
+        Ok(self.valid)
     }
 
     pub fn seek_to_first(&mut self) -> engine_traits::Result<bool> {
@@ -254,7 +263,13 @@ impl MemoryEngineIterator {
     }
 
     pub fn seek_to_last(&mut self) -> engine_traits::Result<bool> {
-        unimplemented!();
+        if let Some(ref upper_bound) = self.upper_bound {
+            self.iter.seek(upper_bound.as_slice());
+        } else {
+            self.iter.seek_to_last();
+        }
+        self.valid = self.iter.valid();
+        Ok(self.valid)
     }
 
     pub fn valid(&self) -> engine_traits::Result<bool> {
@@ -295,7 +310,7 @@ mod test {
         let snapshot = lru.new_snapshot();
         let mut opts = engine_traits::IterOptions::default();
         opts.set_region_id(1);
-        let mut iter = snapshot.iterator_opt(CF_DEFAULT, opts);
+        let mut iter = snapshot.iterator_opt(CF_DEFAULT, opts).unwrap();
         let _ = iter.seek(b"kkkkk1");
         while iter.valid().unwrap() {
             let key = iter.key();
