@@ -21,8 +21,8 @@ lazy_static! {
         "Total size of rawkv ttl expire",
     )
     .unwrap();
-    pub static ref TTL_EXPIRE_KV_ENTRY_COUNTER: IntCounter = register_int_counter!(
-        "tikv_ttl_expire_kv_entry_total",
+    pub static ref TTL_EXPIRE_KV_COUNT_COUNTER: IntCounter = register_int_counter!(
+        "tikv_ttl_expire_kv_count_total",
         "Total number of rawkv ttl expire",
     )
     .unwrap();
@@ -67,7 +67,7 @@ impl<F: KvFormat> CompactionFilterFactory for TtlCompactionFilterFactory<F> {
 pub struct TtlCompactionFilter<F: KvFormat> {
     ts: u64,
     _phantom: PhantomData<F>,
-    expire_entry: u64,
+    expire_count: u64,
     expire_size: u64,
 }
 
@@ -76,7 +76,7 @@ impl<F: KvFormat> Drop for TtlCompactionFilter<F> {
         // Accumulate counters would slightly improve performance as prometheus counters
         // are atomic variables underlying
         TTL_EXPIRE_KV_SIZE_COUNTER.inc_by(self.expire_size);
-        TTL_EXPIRE_KV_ENTRY_COUNTER.inc_by(self.expire_entry);
+        TTL_EXPIRE_KV_COUNT_COUNTER.inc_by(self.expire_count);
     }
 }
 
@@ -85,7 +85,7 @@ impl<F: KvFormat> TtlCompactionFilter<F> {
         Self {
             ts: ttl_current_ts(),
             _phantom: PhantomData,
-            expire_entry: 0,
+            expire_count: 0,
             expire_size: 0,
         }
     }
@@ -118,7 +118,7 @@ impl<F: KvFormat> CompactionFilter for TtlCompactionFilter<F> {
                 ..
             }) if expire_ts <= self.ts => {
                 self.expire_size += key.len() as u64 + value.len() as u64;
-                self.expire_entry += 1;
+                self.expire_count += 1;
                 CompactionFilterDecision::Remove
             }
             Err(err) => {
