@@ -5521,7 +5521,28 @@ mod tests {
         let diff = config_value_to_string(diff.into_iter().collect());
         assert_eq!(diff.len(), 1);
         assert_eq!(diff[0].0.as_str(), "blob_run_mode");
-        assert_eq!(diff[0].1.as_str(), "fallback");
+        assert_eq!(diff[0].1.as_str(), "kFallback");
+    }
+
+    #[test]
+    fn test_update_titan_blob_run_mode_config() {
+        let mut cfg = TikvConfig::default();
+        cfg.rocksdb.titan.enabled = true;
+        let (_, cfg_controller, ..) = new_engines::<ApiV1>(cfg);
+        for run_mode in [
+            "kFallback",
+            "kNormal",
+            "kReadOnly",
+            "fallback",
+            "normal",
+            "read-only",
+        ] {
+            let change = HashMap::from([(
+                "rocksdb.defaultcf.titan.blob-run-mode".to_string(),
+                run_mode.to_string(),
+            )]);
+            cfg_controller.update_without_persist(change).unwrap();
+        }
     }
 
     #[test]
