@@ -74,7 +74,7 @@ pub struct TtlCompactionFilter<F: KvFormat> {
 impl<F: KvFormat> Drop for TtlCompactionFilter<F> {
     fn drop(&mut self) {
         // Accumulate counters would slightly improve performance as prometheus counters
-        // are atomic variables unerlying
+        // are atomic variables underlying
         TTL_EXPIRE_KV_SIZE_COUNTER.inc_by(self.expire_size);
         TTL_EXPIRE_KV_ENTRY_COUNTER.inc_by(self.expire_entry);
     }
