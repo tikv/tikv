@@ -3,23 +3,18 @@ use std::{
         atomic::{AtomicBool, AtomicU64, Ordering},
         Arc, Mutex,
     },
-    time::{Duration},
+    time::Duration,
 };
 
 use engine_traits::{KvEngine, RaftEngine};
 use futures::channel::mpsc::UnboundedSender;
-use kvproto::{
-    brpb::CheckAdminResponse,
-    metapb::{RegionEpoch},
-};
+use kvproto::{brpb::CheckAdminResponse, metapb::RegionEpoch};
 use tikv_util::{box_err, info, warn};
 use tokio::sync::oneshot;
 
-
 use super::{metrics, PeerMsg, RaftRouter, SignificantMsg, SignificantRouter};
 use crate::coprocessor::{
-    AdminObserver, BoxAdminObserver, BoxQueryObserver, Coprocessor, CoprocessorHost,
-    QueryObserver,
+    AdminObserver, BoxAdminObserver, BoxQueryObserver, Coprocessor, CoprocessorHost, QueryObserver,
 };
 
 fn epoch_second_coarse() -> u64 {

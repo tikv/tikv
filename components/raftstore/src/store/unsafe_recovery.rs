@@ -1,8 +1,7 @@
 // Copyright 2023 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    fmt,
-    mem,
+    fmt, mem,
     sync::{Arc, Mutex},
     time::Duration,
 };
@@ -17,7 +16,6 @@ use kvproto::{
 };
 use raft::eraftpb::ConfChangeType;
 use tikv_util::{box_err, error, info, time::Instant as TiInstant, warn};
-
 
 use super::{
     fsm::new_admin_request, worker::new_change_peer_v2_request, PeerMsg, RaftRouter,

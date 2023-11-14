@@ -10,6 +10,7 @@ backup = { workspace = true }
 collections = { workspace = true }
 concurrency_manager = { workspace = true }
 crc64fast = "0.1"
+engine_test = { workspace = true }
 engine_traits = { workspace = true }
 external_storage ={ workspace = true }
 file_system = { workspace = true }
@@ -19,6 +20,7 @@ futures-util = { version = "0.3", default-features = false, features = ["io"] }
 grpcio = { workspace = true }
 kvproto = { workspace = true }
 protobuf = "2"
+raftstore = { workspace = true }
 rand = "0.8"
 tempfile = "3.0"
 test_raftstore = { workspace = true }
@@ -26,5 +28,3 @@ tidb_query_common = { workspace = true }
 tikv = { workspace = true }
 tikv_util = { workspace = true }
 txn_types = { workspace = true }
-engine_test = { workspace = true }
-raftstore = { workspace = true }
