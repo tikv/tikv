@@ -18,6 +18,7 @@ failpoints = ["server/failpoints"]
 cloud-aws = ["server/cloud-aws"]
 cloud-gcp = ["server/cloud-gcp"]
 cloud-azure = ["server/cloud-azure"]
+openssl-vendored = ["tikv/openssl-vendored"]
 test-engine-kv-rocksdb = [
   "server/test-engine-kv-rocksdb"
 ]

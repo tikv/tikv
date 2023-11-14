@@ -22,6 +22,12 @@ lazy_static! {
         &["name"]
     )
     .unwrap();
+    pub static ref PRIORITY_QUOTA_LIMIT_VEC: IntGaugeVec = register_int_gauge_vec!(
+        "tikv_resource_control_priority_quota_limit",
+        "The quota limiter for each priority in resource control",
+        &["priority"]
+    )
+    .unwrap();
 }
 
 pub fn deregister_metrics(name: &str) {
