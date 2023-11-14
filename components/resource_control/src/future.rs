@@ -274,7 +274,13 @@ mod tests {
             .name_prefix("test")
             .build_future_pool();
 
-        let resource_limiter = Arc::new(ResourceLimiter::new("".into(), f64::INFINITY, 1000.0, 0));
+        let resource_limiter = Arc::new(ResourceLimiter::new(
+            "".into(),
+            f64::INFINITY,
+            1000.0,
+            0,
+            true,
+        ));
 
         fn spawn_and_wait<F>(pool: &FuturePool, f: F, limiter: Arc<ResourceLimiter>)
         where
