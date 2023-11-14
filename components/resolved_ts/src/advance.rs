@@ -285,6 +285,7 @@ impl LeadershipResolver {
     // of them to confirm whether current peer has a quorum which accepts its
     // leadership.
     pub async fn resolve(&mut self, regions: Vec<u64>, min_ts: TimeStamp) -> Vec<u64> {
+        use rand::Rng;
         if regions.is_empty() {
             return regions;
         }
@@ -405,6 +406,13 @@ impl LeadershipResolver {
                         .observe(elapsed.as_secs_f64());
                 });
 
+                let rand_v: u64 = rand::thread_rng().gen();
+                if (rand_v % 100) == 1 {
+                    info!(
+                        "inject 5s sleep in check_leader rpc";
+                    );
+                    std::thread::sleep(Duration::from_secs(5));
+                }
                 let rpc = match client.check_leader_async(req) {
                     Ok(rpc) => rpc,
                     Err(GrpcError::RpcFailure(status))
