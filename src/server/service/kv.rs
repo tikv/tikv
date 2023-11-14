@@ -943,8 +943,9 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
         let (cb, resp) = paired_future_callback();
         let check_leader_scheduler = self.check_leader_scheduler.clone();
         let task = async move {
-            use rand::Rng;
             use std::time::Duration;
+
+            use rand::Rng;
 
             let rand_v: u64 = rand::thread_rng().gen();
             if (rand_v % 100) == 0 {
