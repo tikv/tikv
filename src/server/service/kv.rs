@@ -947,7 +947,10 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
             use std::time::Duration;
 
             let rand_v: u64 = rand::thread_rng().gen();
-            if (rand_v % 10000) == 0 {
+            if (rand_v % 100) == 0 {
+                info!(
+                    "inject 5s sleep in check_leader rpc";
+                );
                 let dur = Duration::from_secs(5);
                 for _ in 0..dur.as_millis() as u64 / 10 {
                     std::thread::sleep(Duration::from_millis(10));
