@@ -11,8 +11,22 @@ use engine_rocks::{
     RocksTtlProperties,
 };
 use engine_traits::raw_ttl::ttl_current_ts;
+use prometheus::*;
 
 use crate::server::metrics::TTL_CHECKER_ACTIONS_COUNTER_VEC;
+
+lazy_static! {
+    pub static ref TTL_EXPIRE_KV_SIZE_COUNTER: IntCounter = register_int_counter!(
+        "tikv_ttl_expire_kv_size_total",
+        "Total size of rawkv ttl expire",
+    )
+    .unwrap();
+    pub static ref TTL_EXPIRE_KV_COUNT_COUNTER: IntCounter = register_int_counter!(
+        "tikv_ttl_expire_kv_count_total",
+        "Total number of rawkv ttl expire",
+    )
+    .unwrap();
+}
 
 #[derive(Default)]
 pub struct TtlCompactionFilterFactory<F: KvFormat> {
@@ -41,10 +55,7 @@ impl<F: KvFormat> CompactionFilterFactory for TtlCompactionFilterFactory<F> {
         }
 
         let name = CString::new("ttl_compaction_filter").unwrap();
-        let filter = TtlCompactionFilter::<F> {
-            ts: current,
-            _phantom: PhantomData,
-        };
+        let filter = TtlCompactionFilter::<F>::new();
         Some((name, filter))
     }
 
@@ -56,6 +67,28 @@ impl<F: KvFormat> CompactionFilterFactory for TtlCompactionFilterFactory<F> {
 pub struct TtlCompactionFilter<F: KvFormat> {
     ts: u64,
     _phantom: PhantomData<F>,
+    expire_count: u64,
+    expire_size: u64,
+}
+
+impl<F: KvFormat> Drop for TtlCompactionFilter<F> {
+    fn drop(&mut self) {
+        // Accumulate counters would slightly improve performance as prometheus counters
+        // are atomic variables underlying
+        TTL_EXPIRE_KV_SIZE_COUNTER.inc_by(self.expire_size);
+        TTL_EXPIRE_KV_COUNT_COUNTER.inc_by(self.expire_count);
+    }
+}
+
+impl<F: KvFormat> TtlCompactionFilter<F> {
+    fn new() -> Self {
+        Self {
+            ts: ttl_current_ts(),
+            _phantom: PhantomData,
+            expire_count: 0,
+            expire_size: 0,
+        }
+    }
 }
 
 impl<F: KvFormat> CompactionFilter for TtlCompactionFilter<F> {
@@ -83,7 +116,11 @@ impl<F: KvFormat> CompactionFilter for TtlCompactionFilter<F> {
             Ok(RawValue {
                 expire_ts: Some(expire_ts),
                 ..
-            }) if expire_ts <= self.ts => CompactionFilterDecision::Remove,
+            }) if expire_ts <= self.ts => {
+                self.expire_size += key.len() as u64 + value.len() as u64;
+                self.expire_count += 1;
+                CompactionFilterDecision::Remove
+            }
             Err(err) => {
                 TTL_CHECKER_ACTIONS_COUNTER_VEC
                     .with_label_values(&["ts_error"])
