@@ -164,11 +164,8 @@ ifeq ($(TIKV_BUILD_RUSTC_TARGET),aarch64-unknown-linux-gnu)
 export RUSTFLAGS := $(RUSTFLAGS) -Ctarget-feature=-outline-atomics
 endif
 
-ifeq ($(shell basename $(shell which python 2>/dev/null)),python)
-PY := python
-else
-PY := python3
-endif
+# If both python and python3 are installed, it will choose python as a preferred option.
+PYTHON := $(shell command -v python 2> /dev/null || command -v python3 2> /dev/null)
 
 # Almost all the rules in this Makefile are PHONY
 # Declaring a rule as PHONY could improve correctness
@@ -263,7 +260,7 @@ dist_release:
 	@mkdir -p ${BIN_PATH}
 	@cp -f ${CARGO_TARGET_DIR}/release/tikv-ctl ${CARGO_TARGET_DIR}/release/tikv-server ${BIN_PATH}/
 ifeq ($(shell uname),Linux) # Macs binary isn't elf format
-	$(PY) scripts/check-bins.py --features "${ENABLE_FEATURES}" --check-release ${BIN_PATH}/tikv-ctl ${BIN_PATH}/tikv-server
+	$(PYTHON) scripts/check-bins.py --features "${ENABLE_FEATURES}" --check-release ${BIN_PATH}/tikv-ctl ${BIN_PATH}/tikv-server
 endif
 
 # Build with release flag as if it were for distribution, but without
