@@ -40,18 +40,18 @@ impl Default for RegionMemoryEngine {
             data: [
                 Arc::new(Skiplist::with_capacity(
                     ByteWiseComparator::default(),
-                    1 << 20,
-                    true,
+                    3 << 30,
+                    false,
                 )),
                 Arc::new(Skiplist::with_capacity(
                     ByteWiseComparator::default(),
-                    1 << 20,
-                    true,
+                    1 << 10,
+                    false,
                 )),
                 Arc::new(Skiplist::with_capacity(
                     ByteWiseComparator::default(),
-                    1 << 20,
-                    true,
+                    3 << 30,
+                    false,
                 )),
             ],
         }

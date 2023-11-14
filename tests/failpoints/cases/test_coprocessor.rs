@@ -506,6 +506,8 @@ fn test_xxx() {
         (2, Some("name:4"), 3),
         (4, Some("name:3"), 1),
         (5, Some("name:1"), 4),
+        (6, Some("name:6"), 5),
+        (7, Some("name:7"), 6),
     ];
     let mut cluster = new_cluster(0, 1);
     cluster.run();
@@ -517,6 +519,7 @@ fn test_xxx() {
         .group_by(&[&product["name"]])
         .output_offsets(Some(vec![0]))
         .build();
+
     let (_, ctx) = leader_raft_engine!(cluster, "");
     req.set_context(ctx);
     let mut resp = handle_select(&endpoint, req);
@@ -529,16 +532,55 @@ fn test_xxx() {
         .iter()
         .zip(&[b"name:0", b"name:1", b"name:3", b"name:4"])
     {
-        let expected_encoded =
-            datum::encode_value(&mut EvalContext::default(), &[Datum::Bytes(name.to_vec())])
-                .unwrap();
         let result_encoded = datum::encode_value(&mut EvalContext::default(), row).unwrap();
         println!("{:?}", result_encoded);
         row_count += 1;
     }
     assert_eq!(row_count, 4);
     let e = cluster.memory_engine.get(&1).unwrap();
-    let mut iter = e.core.lock().unwrap().engine.get(&1).unwrap().data[1].iter();
+    let mut iter = e.core.lock().unwrap().engine.get(&1).unwrap().data[2].iter();
+    iter.seek_to_first();
+    while iter.valid() {
+        let k = iter.key().as_slice();
+        let v = iter.value().as_slice();
+        println!("{:?}, {:?}", k, v);
+
+        iter.next();
+    }
+}
+
+#[test_case(test_raftstore::new_server_cluster)]
+fn test_xxxxx() {
+    let mut cluster = new_cluster(0, 1);
+    cluster.run();
+
+    for i in 0..100 {
+        let k = format!("k{:04}", i);
+        let key = Key::from_raw(k.as_bytes()).append_ts(10.into());
+        cluster.must_put_cf("write", key.as_encoded(), b"val");
+    }
+
+    let split_key = format!("k{:04}", 20);
+    let region = cluster.get_region(b"");
+    cluster.must_split(&region, split_key.as_bytes());
+
+    let r1 = cluster.get_region(b"");
+    let r2 = cluster.get_region(split_key.as_bytes());
+
+    let e = cluster.memory_engine.get(&1).unwrap();
+    let mut iter = e.core.lock().unwrap().engine.get(&r1.get_id()).unwrap().data[2].iter();
+    iter.seek_to_first();
+    while iter.valid() {
+        let k = iter.key().as_slice();
+        let v = iter.value().as_slice();
+        println!("{:?}, {:?}", k, v);
+
+        iter.next();
+    }
+    println!("next region \n");
+
+    let e = cluster.memory_engine.get(&1).unwrap();
+    let mut iter = e.core.lock().unwrap().engine.get(&r2.get_id()).unwrap().data[2].iter();
     iter.seek_to_first();
     while iter.valid() {
         let k = iter.key().as_slice();

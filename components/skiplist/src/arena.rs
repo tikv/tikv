@@ -52,6 +52,7 @@ impl Arena {
 
         // Grow the arena if there is no enough space
         if offset + size > self.cap.get() {
+            panic!("not support now");
             // Alloc new buf and copy data to new buf
             let mut grow_by = self.cap.get();
             if grow_by > 1 << 30 {

@@ -1957,6 +1957,24 @@ impl<T: Simulator> Cluster<T> {
         rx.recv_timeout(Duration::from_secs(5)).unwrap();
     }
 
+    pub fn propose_half_split_region(&mut self, region: &metapb::Region) {
+        let leader = self.leader_of_region(region.get_id()).unwrap();
+        let router = self.sim.rl().get_router(leader.get_store_id()).unwrap();
+        CasualRouter::send(
+            &router,
+            region.get_id(),
+            CasualMessage::HalfSplitRegion {
+                region_epoch: region.get_region_epoch().clone(),
+                start_key: None,
+                end_key: None,
+                policy: CheckPolicy::Scan,
+                source: "test",
+                cb: Callback::None,
+            },
+        )
+        .unwrap();
+    }
+
     pub fn scan<F>(
         &self,
         store_id: u64,
