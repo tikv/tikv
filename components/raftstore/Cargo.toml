@@ -62,7 +62,7 @@ log = { version = "0.4", features = ["max_level_trace", "release_max_level_debug
 log_wrappers = { workspace = true }
 memory_trace_macros = { workspace = true }
 online_config = { workspace = true }
-openssl = "0.10"
+openssl = { workspace = true }
 ordered-float = "2.6"
 parking_lot = "0.12"
 pd_client = { workspace = true }

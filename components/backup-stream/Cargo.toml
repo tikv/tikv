@@ -53,7 +53,7 @@ kvproto = { workspace = true }
 lazy_static = "1.4"
 log_wrappers = { workspace = true }
 online_config = { workspace = true }
-openssl = "0.10"
+openssl = { workspace = true }
 pd_client = { workspace = true }
 prometheus = { version = "0.13", default-features = false, features = ["nightly"] }
 prometheus-static-metric = "0.5"

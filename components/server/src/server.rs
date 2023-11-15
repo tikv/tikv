@@ -208,15 +208,6 @@ pub fn run_tikv(
     service_event_tx: TikvMpsc::Sender<ServiceEvent>,
     service_event_rx: TikvMpsc::Receiver<ServiceEvent>,
 ) {
-    // Sets the global logger ASAP.
-    // It is okay to use the config w/o `validate()`,
-    // because `initial_logger()` handles various conditions.
-    initial_logger(&config);
-
-    // Print version information.
-    let build_timestamp = option_env!("TIKV_BUILD_TIME");
-    tikv::log_tikv_info(build_timestamp);
-
     // Print resource quota.
     SysQuota::log_quota();
     CPU_CORES_QUOTA_GAUGE.set(SysQuota::cpu_cores_quota());

@@ -74,7 +74,6 @@ fn make_engine_log_path(path: &str, sub_path: &str, filename: &str) -> String {
     })
 }
 
-#[allow(dead_code)]
 pub fn initial_logger(config: &TikvConfig) {
     fail::fail_point!("mock_force_uninitial_logger", |_| {
         LOG_INITIALIZED.store(false, Ordering::SeqCst);

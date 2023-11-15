@@ -356,6 +356,7 @@ dependencies = [
  "kvproto",
  "lazy_static",
  "oauth2",
+ "openssl",
  "regex",
  "slog",
  "slog-global",
@@ -1924,6 +1925,16 @@ dependencies = [
  "lazy_static",
  "libc 0.2.139",
  "winapi 0.3.9",
+]
+
+[[package]]
+name = "fips"
+version = "0.0.1"
+dependencies = [
+ "openssl",
+ "openssl-sys",
+ "slog",
+ "slog-global",
 ]
 
 [[package]]
@@ -6220,6 +6231,7 @@ dependencies = [
  "example_coprocessor_plugin",
  "fail",
  "file_system",
+ "fips",
  "flate2",
  "futures 0.3.15",
  "futures-executor",
@@ -6334,6 +6346,7 @@ dependencies = [
  "engine_traits",
  "error_code",
  "file_system",
+ "fips",
  "futures 0.3.15",
  "gag",
  "grpcio",
@@ -6408,6 +6421,7 @@ version = "0.0.1"
 dependencies = [
  "cc",
  "clap 2.33.0",
+ "fips",
  "serde_json",
  "server",
  "tikv",
