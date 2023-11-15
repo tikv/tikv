@@ -216,7 +216,7 @@ fn test_flush_before_stop() {
     let region = cluster.get_region(b"k60");
     cluster.must_split(&region, b"k070");
 
-    fail::cfg("flush_before_cluse_threshold", "return(10)").unwrap();
+    fail::cfg("flush_before_close_threshold", "return(10)").unwrap();
 
     for i in 0..100 {
         let key = format!("k{:03}", i);
@@ -250,6 +250,36 @@ fn test_flush_before_stop() {
             Ok(())
         })
         .unwrap();
+}
+
+// test flush_before_close will not flush forever
+#[test]
+fn test_flush_before_stop2() {
+    use test_raftstore_v2::*;
+
+    let mut cluster = new_server_cluster(0, 3);
+    cluster.run();
+
+    fail::cfg("flush_before_close_threshold", "return(10)").unwrap();
+    fail::cfg("on_flush_completed", "return").unwrap();
+
+    for i in 0..20 {
+        let key = format!("k{:03}", i);
+        cluster.must_put_cf(CF_WRITE, key.as_bytes(), b"val");
+        cluster.must_put_cf(CF_LOCK, key.as_bytes(), b"val");
+    }
+
+    let router = cluster.get_router(1).unwrap();
+    let raft_engine = cluster.get_raft_engine(1);
+
+    let (tx, rx) = sync_channel(1);
+    let msg = PeerMsg::FlushBeforeClose { tx };
+    router.force_send(1, msg).unwrap();
+
+    rx.recv().unwrap();
+
+    let admin_flush = raft_engine.get_flushed_index(1, CF_RAFT).unwrap().unwrap();
+    assert!(admin_flush < 10);
 }
 
 // We cannot use a flushed index to call `maybe_advance_admin_flushed`
@@ -301,7 +331,7 @@ fn test_flush_index_exceed_last_modified() {
         )
         .unwrap();
 
-    fail::cfg("flush_before_cluse_threshold", "return(1)").unwrap();
+    fail::cfg("flush_before_close_threshold", "return(1)").unwrap();
     let router = cluster.get_router(1).unwrap();
     let (tx, rx) = sync_channel(1);
     let msg = PeerMsg::FlushBeforeClose { tx };

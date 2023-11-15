@@ -22,6 +22,7 @@ use kvproto::{
     resource_manager::{GroupMode, ResourceGroup as PbResourceGroup},
 };
 use parking_lot::{MappedRwLockReadGuard, RwLock, RwLockReadGuard};
+use strum::{EnumCount, EnumIter, IntoEnumIterator};
 use tikv_util::{info, time::Instant};
 use yatp::queue::priority::TaskPriorityProvider;
 
@@ -40,7 +41,6 @@ const DEFAULT_MAX_RU_QUOTA: u64 = 10_000;
 /// The maximum RU quota that can be configured.
 const MAX_RU_QUOTA: u64 = i32::MAX as u64;
 
-#[cfg(test)]
 const LOW_PRIORITY: u32 = 1;
 const MEDIUM_PRIORITY: u32 = 8;
 #[cfg(test)]
@@ -56,21 +56,71 @@ pub enum ResourceConsumeType {
     IoBytes(u64),
 }
 
+#[derive(Copy, Clone, Eq, PartialEq, EnumCount, EnumIter, Debug)]
+#[repr(usize)]
+pub enum TaskPriority {
+    High = 0,
+    Medium = 1,
+    Low = 2,
+}
+
+impl TaskPriority {
+    pub fn as_str(&self) -> &'static str {
+        match *self {
+            TaskPriority::High => "high",
+            TaskPriority::Medium => "medium",
+            TaskPriority::Low => "low",
+        }
+    }
+}
+
+impl From<u32> for TaskPriority {
+    fn from(value: u32) -> Self {
+        // map the resource group priority value (1,8,16) to (Low,Medium,High)
+        if value < 6 {
+            Self::Low
+        } else if value < 11 {
+            Self::Medium
+        } else {
+            Self::High
+        }
+    }
+}
+
 /// ResourceGroupManager manages the metadata of each resource group.
 pub struct ResourceGroupManager {
     pub(crate) resource_groups: DashMap<String, ResourceGroup>,
+    // the count of all groups, a fast path because call `DashMap::len` is a little slower.
+    group_count: AtomicU64,
     registry: RwLock<Vec<Arc<ResourceController>>>,
     // auto incremental version generator used for mark the background
     // resource limiter has changed.
     version_generator: AtomicU64,
+    // the shared resource limiter of each priority
+    priority_limiters: [Arc<ResourceLimiter>; TaskPriority::COUNT],
 }
 
 impl Default for ResourceGroupManager {
     fn default() -> Self {
+        let priority_limiters = TaskPriority::iter()
+            .map(|p| {
+                Arc::new(ResourceLimiter::new(
+                    p.as_str().to_owned(),
+                    f64::INFINITY,
+                    f64::INFINITY,
+                    0,
+                    false,
+                ))
+            })
+            .collect::<Vec<_>>()
+            .try_into()
+            .unwrap();
         let manager = Self {
             resource_groups: Default::default(),
+            group_count: AtomicU64::new(0),
             registry: Default::default(),
             version_generator: AtomicU64::new(0),
+            priority_limiters,
         };
 
         // init the default resource group by default.
@@ -90,6 +140,11 @@ impl Default for ResourceGroupManager {
 }
 
 impl ResourceGroupManager {
+    #[inline]
+    pub fn get_group_count(&self) -> u64 {
+        self.group_count.load(Ordering::Relaxed)
+    }
+
     fn get_ru_setting(rg: &PbResourceGroup, is_read: bool) -> u64 {
         match (rg.get_mode(), is_read) {
             // RU mode, read and write use the same setting.
@@ -129,8 +184,13 @@ impl ResourceGroupManager {
             .and_then(|g| g.limiter.clone());
         let limiter = self.build_resource_limiter(&rg, prev_limiter);
 
-        self.resource_groups
-            .insert(group_name, ResourceGroup::new(rg, limiter));
+        if self
+            .resource_groups
+            .insert(group_name, ResourceGroup::new(rg, limiter))
+            .is_none()
+        {
+            self.group_count.fetch_add(1, Ordering::Relaxed);
+        }
     }
 
     fn build_resource_limiter(
@@ -146,6 +206,7 @@ impl ResourceGroupManager {
                     f64::INFINITY,
                     f64::INFINITY,
                     version,
+                    true,
                 )))
             })
         } else {
@@ -161,6 +222,7 @@ impl ResourceGroupManager {
         if self.resource_groups.remove(&group_name).is_some() {
             deregister_metrics(name);
             info!("remove resource group"; "name"=> name);
+            self.group_count.fetch_sub(1, Ordering::Relaxed);
         }
     }
 
@@ -184,6 +246,8 @@ impl ResourceGroupManager {
                     controller.remove_resource_group(name.as_bytes());
                 }
             });
+            self.group_count
+                .fetch_sub(removed_names.len() as u64, Ordering::Relaxed);
         }
     }
 
@@ -234,20 +298,92 @@ impl ResourceGroupManager {
         }
     }
 
+    // only enable priority quota limiter when there is at least 1 user-defined
+    // resource group.
+    #[inline]
+    fn enable_priority_limiter(&self) -> bool {
+        self.get_group_count() > 1
+    }
+
+    /// return the priority of target resource group.
+    #[inline]
+    pub fn get_resource_group_priority(&self, group: &str) -> u32 {
+        self.resource_groups
+            .get(group)
+            .map_or(LOW_PRIORITY, |g| g.group.priority)
+    }
+
+    // Always return the background resource limiter if any;
+    // Only return the foregroup limiter when priority is enabled.
     pub fn get_resource_limiter(
         &self,
         rg: &str,
         request_source: &str,
+        override_priority: u64,
     ) -> Option<Arc<ResourceLimiter>> {
+        let (limiter, group_priority) =
+            self.get_background_resource_limiter_with_priority(rg, request_source);
+        if limiter.is_some() {
+            return limiter;
+        }
+
+        // if there is only 1 resource group, priority quota limiter is useless so just
+        // return None for better performance.
+        if !self.enable_priority_limiter() {
+            return None;
+        }
+
+        // request priority has higher priority, 0 means priority is not set.
+        let mut task_priority = override_priority as u32;
+        if task_priority == 0 {
+            task_priority = group_priority;
+        }
+        Some(self.priority_limiters[TaskPriority::from(task_priority) as usize].clone())
+    }
+
+    // return a ResourceLimiter for background tasks only.
+    pub fn get_background_resource_limiter(
+        &self,
+        rg: &str,
+        request_source: &str,
+    ) -> Option<Arc<ResourceLimiter>> {
+        self.get_background_resource_limiter_with_priority(rg, request_source)
+            .0
+    }
+
+    fn get_background_resource_limiter_with_priority(
+        &self,
+        rg: &str,
+        request_source: &str,
+    ) -> (Option<Arc<ResourceLimiter>>, u32) {
+        fail_point!("only_check_source_task_name", |name| {
+            assert_eq!(&name.unwrap(), request_source);
+            (None, 8)
+        });
+        let mut group_priority = None;
         if let Some(group) = self.resource_groups.get(rg) {
+            group_priority = Some(group.group.priority);
             if !group.fallback_default {
-                return group.get_resource_limiter(request_source);
+                return (
+                    group.get_background_resource_limiter(request_source),
+                    group.group.priority,
+                );
             }
         }
 
-        self.resource_groups
+        let default_group = self
+            .resource_groups
             .get(DEFAULT_RESOURCE_GROUP_NAME)
-            .and_then(|g| g.get_resource_limiter(request_source))
+            .unwrap();
+        (
+            default_group.get_background_resource_limiter(request_source),
+            group_priority.unwrap_or(default_group.group.priority),
+        )
+    }
+
+    #[inline]
+    pub fn get_priority_resource_limiters(&self) -> [Arc<ResourceLimiter>; 3] {
+        self.priority_limiters.clone()
     }
 }
 
@@ -282,7 +418,10 @@ impl ResourceGroup {
             .get_fill_rate()
     }
 
-    fn get_resource_limiter(&self, request_source: &str) -> Option<Arc<ResourceLimiter>> {
+    fn get_background_resource_limiter(
+        &self,
+        request_source: &str,
+    ) -> Option<Arc<ResourceLimiter>> {
         self.limiter.as_ref().and_then(|limiter| {
             // the source task name is the last part of `request_source` separated by "_"
             // the request_source is
@@ -583,7 +722,7 @@ impl<'a> TaskMetadata<'a> {
         self.metadata.into_owned()
     }
 
-    fn override_priority(&self) -> u32 {
+    pub fn override_priority(&self) -> u32 {
         if self.metadata.is_empty() {
             return 0;
         }
@@ -607,6 +746,15 @@ impl<'a> TaskMetadata<'a> {
         };
         &self.metadata[start..]
     }
+}
+
+// return the TaskPriority value from task metadata.
+// This function is used for handling thread pool task waiting metrics.
+pub fn priority_from_task_meta(meta: &[u8]) -> usize {
+    let priority = TaskMetadata::from_bytes(meta).override_priority();
+    // mapping (high(15), medium(8), low(1)) -> (0, 1, 2)
+    debug_assert!(priority <= 16);
+    TaskPriority::from(priority) as usize
 }
 
 impl TaskPriorityProvider for ResourceController {
@@ -865,6 +1013,35 @@ pub(crate) mod tests {
                 .limiter
                 .is_none()
         );
+    }
+
+    #[test]
+    fn test_resource_group_crud() {
+        let resource_manager = ResourceGroupManager::default();
+        assert_eq!(resource_manager.get_group_count(), 1);
+
+        let group1 = new_resource_group_ru("test1".into(), 100, HIGH_PRIORITY);
+        resource_manager.add_resource_group(group1);
+        assert_eq!(resource_manager.get_group_count(), 2);
+
+        let group2 = new_resource_group_ru("test2".into(), 200, LOW_PRIORITY);
+        resource_manager.add_resource_group(group2);
+        assert_eq!(resource_manager.get_group_count(), 3);
+
+        let group1 = new_resource_group_ru("test1".into(), 150, HIGH_PRIORITY);
+        resource_manager.add_resource_group(group1.clone());
+        assert_eq!(resource_manager.get_group_count(), 3);
+        assert_eq!(
+            resource_manager.get_resource_group("test1").unwrap().group,
+            group1
+        );
+
+        resource_manager.remove_resource_group("test2");
+        assert!(resource_manager.get_resource_group("test2").is_none());
+        assert_eq!(resource_manager.get_group_count(), 2);
+
+        resource_manager.remove_resource_group("test2");
+        assert_eq!(resource_manager.get_group_count(), 2);
     }
 
     #[test]
@@ -1160,5 +1337,97 @@ pub(crate) mod tests {
             assert_eq!(metadata1.override_priority(), priority);
             assert_eq!(metadata1.group_name(), group_name.as_bytes());
         }
+    }
+
+    #[test]
+    fn test_get_resource_limiter() {
+        let mgr = ResourceGroupManager::default();
+
+        let default_group = new_background_resource_group_ru(
+            "default".into(),
+            200,
+            MEDIUM_PRIORITY,
+            vec!["br".into(), "stats".into()],
+        );
+        mgr.add_resource_group(default_group);
+        let default_limiter = mgr
+            .get_resource_group("default")
+            .unwrap()
+            .limiter
+            .clone()
+            .unwrap();
+
+        assert!(mgr.get_resource_limiter("default", "query", 0).is_none());
+        assert!(
+            mgr.get_resource_limiter("default", "query", HIGH_PRIORITY as u64)
+                .is_none()
+        );
+
+        let group1 = new_resource_group("test1".into(), true, 100, 100, HIGH_PRIORITY);
+        mgr.add_resource_group(group1);
+
+        let bg_group = new_background_resource_group_ru(
+            "bg".into(),
+            50,
+            LOW_PRIORITY,
+            vec!["ddl".into(), "stats".into()],
+        );
+        mgr.add_resource_group(bg_group);
+        let bg_limiter = mgr
+            .get_resource_group("bg")
+            .unwrap()
+            .limiter
+            .clone()
+            .unwrap();
+
+        assert!(
+            mgr.get_background_resource_limiter("test1", "ddl")
+                .is_none()
+        );
+        assert!(Arc::ptr_eq(
+            &mgr.get_background_resource_limiter("test1", "stats")
+                .unwrap(),
+            &default_limiter
+        ));
+
+        assert!(Arc::ptr_eq(
+            &mgr.get_background_resource_limiter("bg", "stats").unwrap(),
+            &bg_limiter
+        ));
+        assert!(mgr.get_background_resource_limiter("bg", "br").is_none());
+        assert!(
+            mgr.get_background_resource_limiter("bg", "invalid")
+                .is_none()
+        );
+
+        assert!(Arc::ptr_eq(
+            &mgr.get_background_resource_limiter("unknown", "stats")
+                .unwrap(),
+            &default_limiter
+        ));
+
+        assert!(Arc::ptr_eq(
+            &mgr.get_resource_limiter("test1", "stats", 0).unwrap(),
+            &default_limiter
+        ));
+        assert!(Arc::ptr_eq(
+            &mgr.get_resource_limiter("test1", "query", 0).unwrap(),
+            &mgr.priority_limiters[0]
+        ));
+        assert!(Arc::ptr_eq(
+            &mgr.get_resource_limiter("test1", "query", LOW_PRIORITY as u64)
+                .unwrap(),
+            &mgr.priority_limiters[2]
+        ));
+
+        assert!(Arc::ptr_eq(
+            &mgr.get_resource_limiter("default", "query", LOW_PRIORITY as u64)
+                .unwrap(),
+            &mgr.priority_limiters[2]
+        ));
+        assert!(Arc::ptr_eq(
+            &mgr.get_resource_limiter("unknown", "query", 0).unwrap(),
+            &mgr.priority_limiters[1]
+        ));
     }
 }

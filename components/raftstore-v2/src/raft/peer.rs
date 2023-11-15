@@ -23,8 +23,9 @@ use raftstore::{
         fsm::ApplyMetrics,
         metrics::RAFT_PEER_PENDING_DURATION,
         util::{Lease, RegionReadProgress},
-        Config, EntryStorage, ForceLeaderState, PeerStat, ProposalQueue, ReadDelegate,
-        ReadIndexQueue, ReadProgress, TabletSnapManager, UnsafeRecoveryState, WriteTask,
+        BucketStatsInfo, Config, EntryStorage, ForceLeaderState, PeerStat, ProposalQueue,
+        ReadDelegate, ReadIndexQueue, ReadProgress, TabletSnapManager, UnsafeRecoveryState,
+        WriteTask,
     },
 };
 use slog::{debug, info, Logger};
@@ -32,11 +33,12 @@ use tikv_util::{slog_panic, time::duration_to_sec};
 
 use super::storage::Storage;
 use crate::{
+    batch::StoreContext,
     fsm::ApplyScheduler,
     operation::{
-        AbnormalPeerContext, AsyncWriter, BucketStatsInfo, CompactLogContext, DestroyProgress,
-        GcPeerContext, MergeContext, ProposalControl, ReplayWatch, SimpleWriteReqEncoder,
-        SplitFlowControl, SplitPendingAppend, TxnContext,
+        AbnormalPeerContext, AsyncWriter, CompactLogContext, DestroyProgress, GcPeerContext,
+        MergeContext, ProposalControl, ReplayWatch, SimpleWriteReqEncoder, SplitFlowControl,
+        SplitPendingAppend, TxnContext,
     },
     router::{ApplyTask, CmdResChannel, PeerTick, QueryResChannel},
     Result,
@@ -126,6 +128,10 @@ pub struct Peer<EK: KvEngine, ER: RaftEngine> {
 
     abnormal_peer_context: AbnormalPeerContext,
 
+    // region merge logic need to be broadcast to all followers when disk full happens.
+    pub has_region_merge_proposal: bool,
+    pub region_merge_proposal_index: u64,
+
     /// Force leader state is only used in online recovery when the majority of
     /// peers are missing. In this state, it forces one peer to become leader
     /// out of accordance with Raft election rule, and forbids any
@@ -158,6 +164,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let region_id = storage.region().get_id();
         let tablet_index = storage.region_state().get_tablet_index();
         let merge_context = MergeContext::from_region_state(&logger, storage.region_state());
+        let persisted_applied = storage.apply_trace().persisted_apply_index();
 
         let raft_group = RawNode::new(&raft_cfg, storage, &logger)?;
         let region = raft_group.store().region_state().get_region().clone();
@@ -184,7 +191,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             self_stat: PeerStat::default(),
             peer_cache: vec![],
             peer_heartbeats: HashMap::default(),
-            compact_log_context: CompactLogContext::new(applied_index),
+            compact_log_context: CompactLogContext::new(applied_index, persisted_applied),
             merge_context: merge_context.map(|c| Box::new(c)),
             last_sent_snapshot_index: 0,
             raw_write_encoder: None,
@@ -226,9 +233,19 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             pending_messages: vec![],
             gc_peer_context: GcPeerContext::default(),
             abnormal_peer_context: AbnormalPeerContext::default(),
+            has_region_merge_proposal: false,
+            region_merge_proposal_index: 0_u64,
             force_leader_state: None,
             unsafe_recovery_state: None,
         };
+
+        // If merge_context is not None, it means the PrepareMerge is applied before
+        // restart. So we have to neter prepare merge again to prevent all proposals
+        // except for RollbackMerge.
+        if let Some(ref state) = peer.merge_context {
+            peer.proposal_control
+                .enter_prepare_merge(state.prepare_merge_index().unwrap());
+        }
 
         // If this region has only one peer and I am the one, campaign directly.
         let region = peer.region();
@@ -264,9 +281,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     }
 
     /// Set the region of a peer.
-    ///
-    /// This will update the region of the peer, caller must ensure the region
-    /// has been preserved in a durable device.
     pub fn set_region(
         &mut self,
         host: &CoprocessorHost<EK>,
@@ -594,7 +608,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         )
     }
 
-    pub fn collect_down_peers(&mut self, max_duration: Duration) -> Vec<pdpb::PeerStats> {
+    pub fn collect_down_peers<T>(&mut self, ctx: &StoreContext<EK, ER, T>) -> Vec<pdpb::PeerStats> {
         let mut down_peers = Vec::new();
         let mut down_peer_ids = Vec::new();
         let now = Instant::now();
@@ -604,7 +618,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             }
             if let Some(instant) = self.peer_heartbeats.get(&p.get_id()) {
                 let elapsed = now.saturating_duration_since(*instant);
-                if elapsed >= max_duration {
+                if elapsed >= ctx.cfg.max_peer_down_duration.0 {
                     let mut stats = pdpb::PeerStats::default();
                     stats.set_peer(p.clone());
                     stats.set_down_seconds(elapsed.as_secs());
@@ -613,8 +627,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 }
             }
         }
+        let exist_down_peers = !down_peer_ids.is_empty();
         *self.abnormal_peer_context_mut().down_peers_mut() = down_peer_ids;
-        // TODO: `refill_disk_full_peers`
+        if exist_down_peers {
+            self.refill_disk_full_peers(ctx);
+        }
         down_peers
     }
 
@@ -862,6 +879,16 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     }
 
     #[inline]
+    pub fn leader_transferee(&self) -> u64 {
+        self.leader_transferee
+    }
+
+    #[inline]
+    pub fn leader_transferring(&self) -> bool {
+        self.leader_transferee != raft::INVALID_ID
+    }
+
+    #[inline]
     pub fn long_uncommitted_threshold(&self) -> Duration {
         Duration::from_secs(self.long_uncommitted_threshold)
     }
@@ -907,6 +934,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     #[inline]
     pub fn last_sent_snapshot_index(&self) -> u64 {
         self.last_sent_snapshot_index
+    }
+
+    #[inline]
+    pub fn next_proposal_index(&self) -> u64 {
+        self.raft_group.raft.raft_log.last_index() + 1
     }
 
     #[inline]

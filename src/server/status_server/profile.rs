@@ -1,11 +1,11 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 use std::{
     fs::{File, Metadata},
-    io::Read,
+    io::{Read, Write},
     path::PathBuf,
     pin::Pin,
-    process::Command,
-    sync::Mutex as StdMutex,
+    process::{Command, Stdio},
+    sync::Mutex,
     time::{Duration, UNIX_EPOCH},
 };
 
@@ -23,7 +23,6 @@ use regex::Regex;
 use tempfile::{NamedTempFile, TempDir};
 #[cfg(not(test))]
 use tikv_alloc::{activate_prof, deactivate_prof, dump_prof};
-use tokio::sync::{Mutex, MutexGuard};
 
 #[cfg(test)]
 pub use self::test_utils::TEST_PROFILE_MUTEX;
@@ -31,13 +30,14 @@ pub use self::test_utils::TEST_PROFILE_MUTEX;
 use self::test_utils::{activate_prof, deactivate_prof, dump_prof};
 
 // File name suffix for periodically dumped heap profiles.
-const HEAP_PROFILE_SUFFIX: &str = ".heap";
+pub const HEAP_PROFILE_SUFFIX: &str = ".heap";
+pub const HEAP_PROFILE_REGEX: &str = r"^[0-9]{6,6}\.heap$";
 
 lazy_static! {
-    // If it's locked it means there are already a heap or CPU profiling.
-    static ref PROFILE_MUTEX: Mutex<()> = Mutex::new(());
-    // The channel is used to deactivate a profiling.
-    static ref PROFILE_ACTIVE: StdMutex<Option<(Sender<()>, TempDir)>> = StdMutex::new(None);
+    // If it's some it means there are already a CPU profiling.
+    static ref CPU_PROFILE_ACTIVE: Mutex<Option<()>> = Mutex::new(None);
+    // If it's some it means there are already a heap profiling. The channel is used to deactivate a profiling.
+    pub static ref HEAP_PROFILE_ACTIVE: Mutex<Option<Option<(Sender<()>, TempDir)>>> = Mutex::new(None);
 
     // To normalize thread names.
     static ref THREAD_NAME_RE: Regex =
@@ -47,32 +47,26 @@ lazy_static! {
 
 type OnEndFn<I, T> = Box<dyn FnOnce(I) -> Result<T, String> + Send + 'static>;
 
-struct ProfileGuard<'a, I, T> {
-    _guard: MutexGuard<'a, ()>,
+struct ProfileRunner<I, T> {
     item: Option<I>,
     on_end: Option<OnEndFn<I, T>>,
     end: BoxFuture<'static, Result<(), String>>,
 }
 
-impl<'a, I, T> Unpin for ProfileGuard<'a, I, T> {}
+impl<I, T> Unpin for ProfileRunner<I, T> {}
 
-impl<'a, I, T> ProfileGuard<'a, I, T> {
+impl<I, T> ProfileRunner<I, T> {
     fn new<F1, F2>(
         on_start: F1,
         on_end: F2,
         end: BoxFuture<'static, Result<(), String>>,
-    ) -> Result<ProfileGuard<'a, I, T>, String>
+    ) -> Result<Self, String>
     where
         F1: FnOnce() -> Result<I, String>,
         F2: FnOnce(I) -> Result<T, String> + Send + 'static,
     {
-        let _guard = match PROFILE_MUTEX.try_lock() {
-            Ok(guard) => guard,
-            _ => return Err("Already in Profiling".to_owned()),
-        };
         let item = on_start()?;
-        Ok(ProfileGuard {
-            _guard,
+        Ok(ProfileRunner {
             item: Some(item),
             on_end: Some(Box::new(on_end) as OnEndFn<I, T>),
             end,
@@ -80,7 +74,7 @@ impl<'a, I, T> ProfileGuard<'a, I, T> {
     }
 }
 
-impl<'a, I, T> Future for ProfileGuard<'a, I, T> {
+impl<I, T> Future for ProfileRunner<I, T> {
     type Output = Result<T, String>;
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         match self.end.as_mut().poll(cx) {
@@ -98,34 +92,22 @@ impl<'a, I, T> Future for ProfileGuard<'a, I, T> {
     }
 }
 
-/// Trigger a heap profie and return the content.
-#[allow(dead_code)]
-pub async fn start_one_heap_profile<F>(end: F, use_jeprof: bool) -> Result<Vec<u8>, String>
-where
-    F: Future<Output = Result<(), String>> + Send + 'static,
-{
-    let on_start = || activate_prof().map_err(|e| format!("activate_prof: {}", e));
-
-    let on_end = move |_| {
-        deactivate_prof().map_err(|e| format!("deactivate_prof: {}", e))?;
-        let f = NamedTempFile::new().map_err(|e| format!("create tmp file fail: {}", e))?;
-        let path = f.path().to_str().unwrap();
-        dump_prof(path).map_err(|e| format!("dump_prof: {}", e))?;
-        if use_jeprof {
-            jeprof_heap_profile(path)
-        } else {
-            read_file(path)
-        }
-    };
-
-    ProfileGuard::new(on_start, on_end, end.boxed())?.await
+/// Trigger a heap profile and return the content.
+pub fn dump_one_heap_profile() -> Result<Vec<u8>, String> {
+    if HEAP_PROFILE_ACTIVE.lock().unwrap().is_none() {
+        return Err("heap profiling is not activated".to_owned());
+    }
+    let f = NamedTempFile::new().map_err(|e| format!("create tmp file fail: {}", e))?;
+    let path = f.path().to_str().unwrap();
+    dump_prof(path).map_err(|e| format!("dump_prof: {}", e))?;
+    read_file(path)
 }
 
 /// Activate heap profile and call `callback` if successfully.
 /// `deactivate_heap_profile` can only be called after it's notified from
 /// `callback`.
 pub async fn activate_heap_profile<S, F>(
-    dump_period: S,
+    dump_period: Option<S>,
     store_path: PathBuf,
     callback: F,
 ) -> Result<(), String>
@@ -133,6 +115,10 @@ where
     S: Stream<Item = Result<(), String>> + Send + Unpin + 'static,
     F: FnOnce() + Send + 'static,
 {
+    if HEAP_PROFILE_ACTIVE.lock().unwrap().is_some() {
+        return Err("Already in Heap Profiling".to_owned());
+    }
+
     let (tx, rx) = oneshot::channel();
     let dir = tempfile::Builder::new()
         .prefix("heap-")
@@ -141,40 +127,57 @@ where
     let dir_path = dir.path().to_str().unwrap().to_owned();
 
     let on_start = move || {
-        let mut activate = PROFILE_ACTIVE.lock().unwrap();
+        let mut activate = HEAP_PROFILE_ACTIVE.lock().unwrap();
         assert!(activate.is_none());
+        *activate = Some(Some((tx, dir)));
         activate_prof().map_err(|e| format!("activate_prof: {}", e))?;
-        *activate = Some((tx, dir));
         callback();
         info!("periodical heap profiling is started");
         Ok(())
     };
 
     let on_end = |_| {
-        deactivate_heap_profile();
-        deactivate_prof().map_err(|e| format!("deactivate_prof: {}", e))
+        let res = deactivate_prof().map_err(|e| format!("deactivate_prof: {}", e));
+        *HEAP_PROFILE_ACTIVE.lock().unwrap() = None;
+        res
     };
 
     let end = async move {
-        select! {
-            _ = rx.fuse() => {
-                info!("periodical heap profiling is canceled");
-                Ok(())
-            },
-            res = dump_heap_profile_periodically(dump_period, dir_path).fuse() => {
-                warn!("the heap profiling dump loop shouldn't break"; "res" => ?res);
-                res
+        if let Some(dump_period) = dump_period {
+            select! {
+                _ = rx.fuse() => {
+                    info!("periodical heap profiling is canceled");
+                    Ok(())
+                },
+                res = dump_heap_profile_periodically(dump_period, dir_path).fuse() => {
+                    warn!("the heap profiling dump loop shouldn't break"; "res" => ?res);
+                    res
+                }
             }
+        } else {
+            let _ = rx.await;
+            info!("periodical heap profiling is canceled");
+            Ok(())
         }
     };
 
-    ProfileGuard::new(on_start, on_end, end.boxed())?.await
+    ProfileRunner::new(on_start, on_end, end.boxed())?.await
 }
 
 /// Deactivate heap profile. Return `false` if it hasn't been activated.
 pub fn deactivate_heap_profile() -> bool {
-    let mut activate = PROFILE_ACTIVE.lock().unwrap();
-    activate.take().is_some()
+    let mut activate = HEAP_PROFILE_ACTIVE.lock().unwrap();
+    match activate.as_mut() {
+        Some(tx) => {
+            if let Some((tx, _)) = tx.take() {
+                let _ = tx.send(());
+            } else {
+                *activate = None;
+            }
+            true
+        }
+        None => false,
+    }
 }
 
 /// Trigger one cpu profile.
@@ -186,7 +189,14 @@ pub async fn start_one_cpu_profile<F>(
 where
     F: Future<Output = Result<(), String>> + Send + 'static,
 {
+    if CPU_PROFILE_ACTIVE.lock().unwrap().is_some() {
+        return Err("Already in CPU Profiling".to_owned());
+    }
+
     let on_start = || {
+        let mut activate = CPU_PROFILE_ACTIVE.lock().unwrap();
+        assert!(activate.is_none());
+        *activate = Some(());
         let guard = pprof::ProfilerGuardBuilder::default()
             .frequency(frequency)
             .blocklist(&["libc", "libgcc", "pthread", "vdso"])
@@ -217,10 +227,13 @@ where
                 .flamegraph(&mut body)
                 .map_err(|e| format!("generate flamegraph from report fail: {}", e))?;
         }
+        drop(guard);
+        *CPU_PROFILE_ACTIVE.lock().unwrap() = None;
+
         Ok(body)
     };
 
-    ProfileGuard::new(on_start, on_end, end.boxed())?.await
+    ProfileRunner::new(on_start, on_end, end.boxed())?.await
 }
 
 pub fn read_file(path: &str) -> Result<Vec<u8>, String> {
@@ -233,9 +246,26 @@ pub fn read_file(path: &str) -> Result<Vec<u8>, String> {
 
 pub fn jeprof_heap_profile(path: &str) -> Result<Vec<u8>, String> {
     info!("using jeprof to process {}", path);
-    let output = Command::new("./jeprof")
-        .args(["--show_bytes", "./bin/tikv-server", path, "--svg"])
-        .output()
+    let bin = std::env::current_exe().map_err(|e| format!("get current exe path fail: {}", e))?;
+    let mut jeprof = Command::new("perl")
+        .args([
+            "/dev/stdin",
+            "--show_bytes",
+            &bin.as_os_str().to_string_lossy(),
+            path,
+            "--svg",
+        ])
+        .stdin(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("spawn jeprof fail: {}", e))?;
+    jeprof
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(include_bytes!("jeprof.in"))
+        .unwrap();
+    let output = jeprof
+        .wait_with_output()
         .map_err(|e| format!("jeprof: {}", e))?;
     if !output.status.success() {
         let stderr = std::str::from_utf8(&output.stderr).unwrap_or("invalid utf8");
@@ -244,9 +274,17 @@ pub fn jeprof_heap_profile(path: &str) -> Result<Vec<u8>, String> {
     Ok(output.stdout)
 }
 
+pub fn heap_profiles_dir() -> Option<PathBuf> {
+    HEAP_PROFILE_ACTIVE
+        .lock()
+        .unwrap()
+        .as_ref()
+        .and_then(|v| v.as_ref().map(|(_, dir)| dir.path().to_owned()))
+}
+
 pub fn list_heap_profiles() -> Result<Vec<(String, String)>, String> {
-    let path = match &*PROFILE_ACTIVE.lock().unwrap() {
-        Some((_, ref dir)) => dir.path().to_str().unwrap().to_owned(),
+    let path = match heap_profiles_dir() {
+        Some(path) => path.into_os_string().into_string().unwrap(),
         None => return Ok(vec![]),
     };
 
@@ -257,7 +295,7 @@ pub fn list_heap_profiles() -> Result<Vec<(String, String)>, String> {
             Ok(x) => x,
             _ => continue,
         };
-        let f = item.path().to_str().unwrap().to_owned();
+        let f = item.file_name().to_str().unwrap().to_owned();
         if !f.ends_with(HEAP_PROFILE_SUFFIX) {
             continue;
         }
@@ -372,7 +410,7 @@ mod tests {
             .build()
             .unwrap();
 
-        let expected = "Already in Profiling";
+        let expected = "Already in CPU Profiling";
 
         let (tx1, rx1) = oneshot::channel();
         let rx1 = rx1.map_err(|_| "channel canceled".to_owned());
@@ -384,17 +422,29 @@ mod tests {
         let res2 = rt.spawn(start_one_cpu_profile(rx2, 99, false));
         assert_eq!(block_on(res2).unwrap().unwrap_err(), expected);
 
-        let (_tx2, rx2) = oneshot::channel();
-        let rx2 = rx2.map_err(|_| "channel canceled".to_owned());
-        let res2 = rt.spawn(start_one_heap_profile(rx2, false));
-        assert_eq!(block_on(res2).unwrap().unwrap_err(), expected);
+        drop(tx1);
+        block_on(res1).unwrap().unwrap_err();
+
+        let expected = "Already in Heap Profiling";
+
+        let (tx1, rx1) = mpsc::channel(1);
+        let res1 = rt.spawn(activate_heap_profile(
+            Some(rx1),
+            std::env::temp_dir(),
+            || {},
+        ));
+        thread::sleep(Duration::from_millis(100));
 
         let (_tx2, rx2) = mpsc::channel(1);
-        let res2 = rt.spawn(activate_heap_profile(rx2, std::env::temp_dir(), || {}));
+        let res2 = rt.spawn(activate_heap_profile(
+            Some(rx2),
+            std::env::temp_dir(),
+            || {},
+        ));
         assert_eq!(block_on(res2).unwrap().unwrap_err(), expected);
 
         drop(tx1);
-        block_on(res1).unwrap().unwrap_err();
+        block_on(res1).unwrap().unwrap();
     }
 
     #[test]
@@ -407,7 +457,7 @@ mod tests {
 
         // Test activated profiling can be stopped by canceling the period stream.
         let (tx, rx) = mpsc::channel(1);
-        let res = rt.spawn(activate_heap_profile(rx, std::env::temp_dir(), || {}));
+        let res = rt.spawn(activate_heap_profile(Some(rx), std::env::temp_dir(), || {}));
         drop(tx);
         block_on(res).unwrap().unwrap();
 
@@ -418,7 +468,7 @@ mod tests {
 
         let (_tx, _rx) = mpsc::channel(1);
         let res = rt.spawn(activate_heap_profile(
-            _rx,
+            Some(_rx),
             std::env::temp_dir(),
             on_activated,
         ));
@@ -437,7 +487,7 @@ mod tests {
 
         // Test heap profiling can be stopped by sending an error.
         let (mut tx, rx) = mpsc::channel(1);
-        let res = rt.spawn(activate_heap_profile(rx, std::env::temp_dir(), || {}));
+        let res = rt.spawn(activate_heap_profile(Some(rx), std::env::temp_dir(), || {}));
         block_on(tx.send(Err("test".to_string()))).unwrap();
         block_on(res).unwrap().unwrap_err();
 
@@ -448,7 +498,7 @@ mod tests {
 
         let (_tx, _rx) = mpsc::channel(1);
         let res = rt.spawn(activate_heap_profile(
-            _rx,
+            Some(_rx),
             std::env::temp_dir(),
             on_activated,
         ));

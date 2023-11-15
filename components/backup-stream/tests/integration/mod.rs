@@ -16,6 +16,7 @@ mod all {
     use futures::{Stream, StreamExt};
     use pd_client::PdClient;
     use test_raftstore::IsolationFilterFactory;
+    use tikv::config::BackupStreamConfig;
     use tikv_util::{box_err, defer, info, HandyRwLock};
     use tokio::time::timeout;
     use txn_types::{Key, TimeStamp};
@@ -27,20 +28,19 @@ mod all {
     #[test]
     fn with_split() {
         let mut suite = SuiteBuilder::new_named("with_split").build();
-        run_async_test(async {
+        let (round1, round2) = run_async_test(async {
             let round1 = suite.write_records(0, 128, 1).await;
             suite.must_split(&make_split_key_at_record(1, 42));
             suite.must_register_task(1, "test_with_split");
             let round2 = suite.write_records(256, 128, 1).await;
-            suite.force_flush_files("test_with_split");
-            suite.wait_for_flush();
-            suite
-                .check_for_write_records(
-                    suite.flushed_files.path(),
-                    round1.union(&round2).map(Vec::as_slice),
-                )
-                .await;
+            (round1, round2)
         });
+        suite.force_flush_files("test_with_split");
+        suite.wait_for_flush();
+        suite.check_for_write_records(
+            suite.flushed_files.path(),
+            round1.union(&round2).map(Vec::as_slice),
+        );
         suite.cluster.shutdown();
     }
 
@@ -62,7 +62,7 @@ mod all {
     #[test]
     fn with_split_txn() {
         let mut suite = SuiteBuilder::new_named("split_txn").build();
-        run_async_test(async {
+        let (commit_ts, start_ts, keys) = run_async_test(async {
             let start_ts = suite.cluster.pd_client.get_tso().await.unwrap();
             let keys = (1..1960).map(|i| make_record_key(1, i)).collect::<Vec<_>>();
             suite.must_kv_prewrite(
@@ -75,26 +75,25 @@ mod all {
                 start_ts,
             );
             let commit_ts = suite.cluster.pd_client.get_tso().await.unwrap();
-            suite.commit_keys(keys[1913..].to_vec(), start_ts, commit_ts);
-            suite.must_register_task(1, "test_split_txn");
-            suite.commit_keys(keys[..1913].to_vec(), start_ts, commit_ts);
-            suite.force_flush_files("test_split_txn");
-            suite.wait_for_flush();
-            let keys_encoded = keys
-                .iter()
-                .map(|v| {
-                    Key::from_raw(v.as_slice())
-                        .append_ts(commit_ts)
-                        .into_encoded()
-                })
-                .collect::<Vec<_>>();
-            suite
-                .check_for_write_records(
-                    suite.flushed_files.path(),
-                    keys_encoded.iter().map(Vec::as_slice),
-                )
-                .await;
+            (commit_ts, start_ts, keys)
         });
+        suite.commit_keys(keys[1913..].to_vec(), start_ts, commit_ts);
+        suite.must_register_task(1, "test_split_txn");
+        suite.commit_keys(keys[..1913].to_vec(), start_ts, commit_ts);
+        suite.force_flush_files("test_split_txn");
+        suite.wait_for_flush();
+        let keys_encoded = keys
+            .iter()
+            .map(|v| {
+                Key::from_raw(v.as_slice())
+                    .append_ts(commit_ts)
+                    .into_encoded()
+            })
+            .collect::<Vec<_>>();
+        suite.check_for_write_records(
+            suite.flushed_files.path(),
+            keys_encoded.iter().map(Vec::as_slice),
+        );
         suite.cluster.shutdown();
     }
 
@@ -110,10 +109,10 @@ mod all {
         let round2 = run_async_test(suite.write_records(256, 128, 1));
         suite.force_flush_files("test_leader_down");
         suite.wait_for_flush();
-        run_async_test(suite.check_for_write_records(
+        suite.check_for_write_records(
             suite.flushed_files.path(),
             round1.union(&round2).map(Vec::as_slice),
-        ));
+        );
         suite.cluster.shutdown();
     }
 
@@ -345,10 +344,10 @@ mod all {
         }
         assert_eq!(items.last().unwrap().end_key, Vec::<u8>::default());
 
-        run_async_test(suite.check_for_write_records(
+        suite.check_for_write_records(
             suite.flushed_files.path(),
             round1.union(&round2).map(|x| x.as_slice()),
-        ));
+        );
     }
 
     #[test]
@@ -372,18 +371,18 @@ mod all {
             .unwrap();
         suite.sync();
         std::thread::sleep(Duration::from_secs(2));
-        run_async_test(suite.check_for_write_records(
+        suite.check_for_write_records(
             suite.flushed_files.path(),
             round1.iter().map(|x| x.as_slice()),
-        ));
+        );
         assert!(suite.global_checkpoint() > 256);
         suite.force_flush_files("r");
         suite.wait_for_flush();
         assert!(suite.global_checkpoint() > 512);
-        run_async_test(suite.check_for_write_records(
+        suite.check_for_write_records(
             suite.flushed_files.path(),
             round1.union(&round2).map(|x| x.as_slice()),
-        ));
+        );
     }
 
     #[test]
@@ -425,9 +424,30 @@ mod all {
             ts,
             cps
         );
-        run_async_test(suite.check_for_write_records(
+        suite.check_for_write_records(
             suite.flushed_files.path(),
             round1.iter().map(|k| k.as_slice()),
-        ))
+        )
+    }
+
+    #[test]
+    fn update_config() {
+        let suite = SuiteBuilder::new_named("network_partition")
+            .nodes(1)
+            .build();
+        let mut basic_config = BackupStreamConfig::default();
+        basic_config.initial_scan_concurrency = 4;
+        suite.run(|| Task::ChangeConfig(basic_config.clone()));
+        suite.wait_with(|e| {
+            assert_eq!(e.initial_scan_semaphore.available_permits(), 4,);
+            true
+        });
+
+        basic_config.initial_scan_concurrency = 16;
+        suite.run(|| Task::ChangeConfig(basic_config.clone()));
+        suite.wait_with(|e| {
+            assert_eq!(e.initial_scan_semaphore.available_permits(), 16,);
+            true
+        });
     }
 }

@@ -44,11 +44,19 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             self.raft_group().raft.raft_log.committed
         };
 
-        *self.unsafe_recovery_state_mut() = Some(UnsafeRecoveryState::WaitApply {
-            target_index,
-            syncer,
-        });
-        self.unsafe_recovery_maybe_finish_wait_apply(!self.serving());
+        if target_index > self.raft_group().raft.raft_log.applied {
+            info!(
+                self.logger,
+                "Unsafe recovery, start wait apply";
+                "target_index" => target_index,
+                "applied" =>  self.raft_group().raft.raft_log.applied,
+            );
+            *self.unsafe_recovery_state_mut() = Some(UnsafeRecoveryState::WaitApply {
+                target_index,
+                syncer,
+            });
+            self.unsafe_recovery_maybe_finish_wait_apply(!self.serving());
+        }
     }
 
     pub fn unsafe_recovery_maybe_finish_wait_apply(&mut self, force: bool) {
@@ -113,7 +121,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             Some(UnsafeRecoveryState::DemoteFailedVoters { .. }) => {
                 self.unsafe_recovery_maybe_finish_demote_failed_voters(ctx)
             }
-            Some(UnsafeRecoveryState::Destroy(_)) | None => {}
+            Some(UnsafeRecoveryState::Destroy(_)) | Some(UnsafeRecoveryState::Failed) | None => {}
         }
     }
 }

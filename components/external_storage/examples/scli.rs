@@ -6,19 +6,13 @@ use std::{
     path::Path,
 };
 
-#[cfg(feature = "cloud-azure")]
-use external_storage_export::make_azblob_backend;
-#[cfg(feature = "cloud-gcp")]
-use external_storage_export::make_gcs_backend;
-#[cfg(feature = "cloud-aws")]
-use external_storage_export::make_s3_backend;
-use external_storage_export::{
-    create_storage, make_cloud_backend, make_hdfs_backend, make_local_backend, make_noop_backend,
-    ExternalStorage, UnpinReader,
+use external_storage::{
+    create_storage, make_azblob_backend, make_gcs_backend, make_hdfs_backend, make_local_backend,
+    make_noop_backend, make_s3_backend, ExternalStorage, UnpinReader,
 };
 use futures_util::io::{copy, AllowStdIo};
 use ini::ini::Ini;
-use kvproto::brpb::{AzureBlobStorage, Bucket, CloudDynamic, Gcs, StorageBackend, S3};
+use kvproto::brpb::{AzureBlobStorage, Gcs, StorageBackend, S3};
 use structopt::{clap::arg_enum, StructOpt};
 use tikv_util::stream::block_on_external_io;
 use tokio::runtime::Runtime;
@@ -32,7 +26,6 @@ arg_enum! {
         S3,
         GCS,
         Azure,
-        Cloud,
     }
 }
 
@@ -67,8 +60,6 @@ pub struct Opt {
     /// Remote path prefix
     #[structopt(short = "x", long)]
     prefix: Option<String>,
-    #[structopt(long)]
-    cloud_name: Option<String>,
     #[structopt(subcommand)]
     command: Command,
 }
@@ -80,35 +71,6 @@ enum Command {
     Save,
     /// Load file from storage.
     Load,
-}
-
-fn create_cloud_storage(opt: &Opt) -> Result<StorageBackend> {
-    let mut bucket = Bucket::default();
-    if let Some(endpoint) = &opt.endpoint {
-        bucket.endpoint = endpoint.to_string();
-    }
-    if let Some(region) = &opt.region {
-        bucket.region = region.to_string();
-    }
-    if let Some(bucket_name) = &opt.bucket {
-        bucket.bucket = bucket_name.to_string();
-    } else {
-        return Err(Error::new(ErrorKind::Other, "missing bucket"));
-    }
-    if let Some(prefix) = &opt.prefix {
-        bucket.prefix = prefix.to_string();
-    }
-    let mut config = CloudDynamic::default();
-    config.set_bucket(bucket);
-    let mut attrs = std::collections::HashMap::new();
-    if let Some(credential_file) = &opt.credential_file {
-        attrs.insert("credential_file".to_owned(), credential_file.clone());
-    }
-    config.set_attrs(attrs);
-    if let Some(cloud_name) = &opt.cloud_name {
-        config.provider_name = cloud_name.clone();
-    }
-    Ok(make_cloud_backend(config))
 }
 
 fn create_s3_storage(opt: &Opt) -> Result<StorageBackend> {
@@ -150,10 +112,7 @@ fn create_s3_storage(opt: &Opt) -> Result<StorageBackend> {
     if let Some(prefix) = &opt.prefix {
         config.prefix = prefix.to_string();
     }
-    #[cfg(feature = "cloud-aws")]
-    return Ok(make_s3_backend(config));
-    #[cfg(not(feature = "cloud-aws"))]
-    return Err(Error::new(ErrorKind::Other, "missing feature"));
+    Ok(make_s3_backend(config))
 }
 
 fn create_gcs_storage(opt: &Opt) -> Result<StorageBackend> {
@@ -173,10 +132,7 @@ fn create_gcs_storage(opt: &Opt) -> Result<StorageBackend> {
     if let Some(prefix) = &opt.prefix {
         config.prefix = prefix.to_string();
     }
-    #[cfg(feature = "cloud-gcp")]
-    return Ok(make_gcs_backend(config));
-    #[cfg(not(feature = "cloud-gcp"))]
-    return Err(Error::new(ErrorKind::Other, "missing feature"));
+    Ok(make_gcs_backend(config))
 }
 
 fn create_azure_storage(opt: &Opt) -> Result<StorageBackend> {
@@ -212,10 +168,7 @@ fn create_azure_storage(opt: &Opt) -> Result<StorageBackend> {
     if let Some(prefix) = &opt.prefix {
         config.prefix = prefix.to_string();
     }
-    #[cfg(feature = "cloud-azure")]
-    return Ok(make_azblob_backend(config));
-    #[cfg(not(feature = "cloud-azure"))]
-    return Err(Error::new(ErrorKind::Other, "missing feature"));
+    Ok(make_azblob_backend(config))
 }
 
 fn process() -> Result<()> {
@@ -228,7 +181,6 @@ fn process() -> Result<()> {
             StorageType::S3 => create_s3_storage(&opt)?,
             StorageType::GCS => create_gcs_storage(&opt)?,
             StorageType::Azure => create_azure_storage(&opt)?,
-            StorageType::Cloud => create_cloud_storage(&opt)?,
         }),
         Default::default(),
     )?;

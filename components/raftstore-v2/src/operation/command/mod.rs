@@ -43,7 +43,7 @@ use raftstore::{
         },
         msg::ErrorCallback,
         util::{self, check_flashback_state},
-        Config, Transport, WriteCallback,
+        Config, ProposalContext, Transport, WriteCallback,
     },
     Error, Result,
 };
@@ -202,7 +202,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             // progress less error-prone.
             if !(admin_type.is_some()
                 && (admin_type.unwrap() == AdminCmdType::ChangePeer
-                    || admin_type.unwrap() == AdminCmdType::ChangePeerV2))
+                    || admin_type.unwrap() == AdminCmdType::ChangePeerV2
+                    || admin_type.unwrap() == AdminCmdType::RollbackMerge))
             {
                 return Err(Error::RecoveryInProgress(self.region_id()));
             }
@@ -239,7 +240,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         store_ctx: &mut StoreContext<EK, ER, T>,
         data: Vec<u8>,
     ) -> Result<u64> {
-        self.propose_with_ctx(store_ctx, data, vec![])
+        self.propose_with_ctx(store_ctx, data, ProposalContext::empty())
     }
 
     #[inline]
@@ -247,12 +248,12 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         &mut self,
         store_ctx: &mut StoreContext<EK, ER, T>,
         data: Vec<u8>,
-        proposal_ctx: Vec<u8>,
+        proposal_ctx: ProposalContext,
     ) -> Result<u64> {
         // Should not propose normal in force leader state.
         // In `pre_propose_raft_command`, it rejects all the requests expect
         // conf-change if in force leader state.
-        if self.has_force_leader() {
+        if self.has_force_leader() && proposal_ctx != ProposalContext::ROLLBACK_MERGE {
             store_ctx.raft_metrics.invalid_proposal.force_leader.inc();
             panic!(
                 "[{}] {} propose normal in force leader state {:?}",
@@ -274,7 +275,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             });
         }
         let last_index = self.raft_group().raft.raft_log.last_index();
-        self.raft_group_mut().propose(proposal_ctx, data)?;
+        self.raft_group_mut().propose(proposal_ctx.to_vec(), data)?;
         if self.raft_group().raft.raft_log.last_index() == last_index {
             // The message is dropped silently, this usually due to leader absence
             // or transferring leader. Both cases can be considered as NotLeader error.
@@ -455,6 +456,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         if is_leader {
             self.retry_pending_prepare_merge(ctx, apply_res.applied_index);
         }
+        if !apply_res.sst_applied_index.is_empty() {
+            self.storage_mut()
+                .apply_trace_mut()
+                .on_sst_ingested(&apply_res.sst_applied_index);
+        }
         self.on_data_modified(apply_res.modifications);
         self.handle_read_on_apply(
             ctx,
@@ -475,6 +481,12 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             self.set_has_ready();
         }
         self.check_unsafe_recovery_state(ctx);
+    }
+
+    pub fn post_propose_fail(&mut self, cmd_type: AdminCmdType) {
+        if cmd_type == AdminCmdType::PrepareMerge {
+            self.post_prepare_merge_fail();
+        }
     }
 }
 
@@ -583,6 +595,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
         fail::fail_point!("APPLY_COMMITTED_ENTRIES");
         fail::fail_point!("on_handle_apply_1003", self.peer_id() == 1003, |_| {});
         fail::fail_point!("on_handle_apply_2", self.peer_id() == 2, |_| {});
+        fail::fail_point!("on_handle_apply", |_| {});
         fail::fail_point!("on_handle_apply_store_1", self.store_id() == 1, |_| {});
         let now = std::time::Instant::now();
         let apply_wait_time = APPLY_TASK_WAIT_TIME_HISTOGRAM.local();
@@ -865,6 +878,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
         apply_res.modifications = *self.modifications_mut();
         apply_res.metrics = mem::take(&mut self.metrics);
         apply_res.bucket_stat = self.buckets.clone();
+        apply_res.sst_applied_index = self.take_sst_applied_index();
         let written_bytes = apply_res.metrics.written_bytes;
 
         let skip_report = || -> bool {
