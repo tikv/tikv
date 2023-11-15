@@ -837,6 +837,8 @@ def graph_panel_histogram_quantiles(
     yaxes: YAxes,
     metric: str,
     label_selectors: list[str] = [],
+    by_labels: list[str] = [],
+    hide_avg=False,
     hide_count=False,
 ) -> Panel:
     """
@@ -848,6 +850,13 @@ def graph_panel_histogram_quantiles(
         - avg
         - count
     """
+
+    def legend(prefix, labels):
+        if not labels:
+            return prefix
+        else:
+            return "-".join([prefix] + ["{{%s}}" % lb for lb in labels])
+
     return graph_panel(
         title=title,
         description=description,
@@ -858,32 +867,35 @@ def graph_panel_histogram_quantiles(
                     0.9999,
                     f"{metric}",
                     label_selectors=label_selectors,
+                    by_labels=by_labels,
                 ),
-                legend_format=r"99.99%",
+                legend_format=legend("99.99%", by_labels),
             ),
             target(
                 expr=expr_histogram_quantile(
                     0.99,
                     f"{metric}",
                     label_selectors=label_selectors,
+                    by_labels=by_labels,
                 ),
-                legend_format=r"99%",
+                legend_format=legend("99%", by_labels),
             ),
             target(
                 expr=expr_histogram_avg(
                     metric,
                     label_selectors=label_selectors,
-                    by_labels=[],  # override default by instance.
+                    by_labels=by_labels,
                 ),
-                legend_format="avg",
+                legend_format=legend("avg", by_labels),
+                hide=hide_avg,
             ),
             target(
                 expr=expr_sum_rate(
                     f"{metric}_count",
                     label_selectors=label_selectors,
-                    by_labels=[],  # override default by instance.
+                    by_labels=by_labels,
                 ),
-                legend_format="count",
+                legend_format=legend("count", by_labels),
                 hide=hide_count,
             ),
         ],
@@ -914,6 +926,7 @@ def heatmap_panel_graph_panel_histogram_quantile_pairs(
     yaxis_format: str,
     metric: str,
     label_selectors=[],
+    graph_by_labels=[],
 ) -> list[Panel]:
     return [
         heatmap_panel(
@@ -928,6 +941,7 @@ def heatmap_panel_graph_panel_histogram_quantile_pairs(
             description=graph_description,
             metric=f"{metric}",
             yaxes=yaxes(left_format=yaxis_format),
+            by_labels=graph_by_labels,
             hide_count=True,
         ),
     ]
@@ -4472,6 +4486,320 @@ def Task() -> RowPanel:
     return layout.row_panel
 
 
+def CoprocessorOverview() -> RowPanel:
+    layout = Layout(title="Coprocessor Overview")
+    layout.row(
+        heatmap_panel_graph_panel_histogram_quantile_pairs(
+            heatmap_title="Request duration",
+            heatmap_description="The time consumed to handle coprocessor read requests",
+            graph_title="Request duration",
+            graph_description="The time consumed to handle coprocessor read requests",
+            yaxis_format=UNITS.SECONDS,
+            metric="tikv_coprocessor_request_duration_seconds",
+            graph_by_labels=["req"],
+        ),
+    )
+    layout.row(
+        [
+            graph_panel(
+                title="Total Requests",
+                yaxes=yaxes(left_format=UNITS.OPS_PER_SEC),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_coprocessor_request_duration_seconds_count",
+                            by_labels=["req"],
+                        ),
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="Total Request Errors",
+                yaxes=yaxes(left_format=UNITS.OPS_PER_SEC),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_coprocessor_request_error",
+                            by_labels=["reason"],
+                        ),
+                    ),
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel(
+                title="KV Cursor Operations",
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_coprocessor_scan_keys_sum",
+                            by_labels=["req"],
+                        ),
+                    ),
+                ],
+            ),
+            graph_panel_histogram_quantiles(
+                title="KV Cursor Operations",
+                description="",
+                metric="tikv_coprocessor_scan_keys",
+                yaxes=yaxes(left_format=UNITS.SHORT),
+                by_labels=["req"],
+                hide_count=True,
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel(
+                title="Total RocksDB Perf Statistics",
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_coprocessor_rocksdb_perf",
+                            label_selectors=['metric="internal_delete_skipped_count"'],
+                            by_labels=["req"],
+                        ),
+                        legend_format="delete_skipped-{{req}}",
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="Total Response Size",
+                yaxes=yaxes(left_format=UNITS.BYTES_IEC),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_coprocessor_response_bytes",
+                        ),
+                    ),
+                ],
+            ),
+        ]
+    )
+    return layout.row_panel
+
+
+def CoprocessorDetail() -> RowPanel:
+    layout = Layout(title="Coprocessor Detail")
+    layout.row(
+        [
+            graph_panel_histogram_quantiles(
+                title="Handle duration",
+                description="The time consumed when handling coprocessor requests",
+                yaxes=yaxes(left_format=UNITS.SECONDS),
+                metric="tikv_coprocessor_request_handle_seconds",
+                by_labels=["req"],
+                hide_avg=True,
+                hide_count=True,
+            ),
+            graph_panel_histogram_quantiles(
+                title="Handle duration by store",
+                description="The time consumed to handle coprocessor requests per TiKV instance",
+                yaxes=yaxes(left_format=UNITS.SECONDS),
+                metric="tikv_coprocessor_request_handle_seconds",
+                by_labels=["req", "instance"],
+                hide_avg=True,
+                hide_count=True,
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel_histogram_quantiles(
+                title="Wait duration",
+                description="The time consumed when coprocessor requests are wait for being handled",
+                yaxes=yaxes(left_format=UNITS.SECONDS),
+                metric="tikv_coprocessor_request_wait_seconds",
+                by_labels=["req"],
+                hide_avg=True,
+                hide_count=True,
+            ),
+            graph_panel_histogram_quantiles(
+                title="Wait duration by store",
+                description="The time consumed when coprocessor requests are wait for being handled in each TiKV instance",
+                yaxes=yaxes(left_format=UNITS.SECONDS),
+                metric="tikv_coprocessor_request_wait_seconds",
+                by_labels=["req", "instance"],
+                hide_avg=True,
+                hide_count=True,
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel(
+                title="Total DAG Requests",
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_coprocessor_dag_request_count",
+                            by_labels=["vec_type"],
+                        ),
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="Total DAG Executors",
+                description="The total number of DAG executors",
+                yaxes=yaxes(left_format=UNITS.OPS_PER_SEC),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_coprocessor_executor_count",
+                            by_labels=["type"],
+                        ),
+                    ),
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel(
+                title="Total Ops Details (Table Scan)",
+                yaxes=yaxes(left_format=UNITS.OPS_PER_SEC),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_coprocessor_scan_details",
+                            label_selectors=['req="select"'],
+                            by_labels=["tag"],
+                        ),
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="Total Ops Details (Index Scan)",
+                yaxes=yaxes(left_format=UNITS.OPS_PER_SEC),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_coprocessor_scan_details",
+                            label_selectors=['req="index"'],
+                            by_labels=["tag"],
+                        ),
+                    ),
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel(
+                title="Total Ops Details by CF (Table Scan)",
+                yaxes=yaxes(left_format=UNITS.OPS_PER_SEC),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_coprocessor_scan_details",
+                            label_selectors=['req="select"'],
+                            by_labels=["cf", "tag"],
+                        ),
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="Total Ops Details by CF (Index Scan)",
+                yaxes=yaxes(left_format=UNITS.OPS_PER_MIN),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_coprocessor_scan_details",
+                            label_selectors=['req="index"'],
+                            by_labels=["cf", "tag"],
+                        ),
+                    ),
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        heatmap_panel_graph_panel_histogram_quantile_pairs(
+            heatmap_title="Memory lock checking duration",
+            heatmap_description="The time consumed on checking memory locks for coprocessor requests",
+            graph_title="Memory lock checking duration",
+            graph_description="The time consumed on checking memory locks for coprocessor requests",
+            yaxis_format=UNITS.SECONDS,
+            metric="tikv_coprocessor_mem_lock_check_duration_seconds",
+        ),
+    )
+    return layout.row_panel
+
+
+def Threads() -> RowPanel:
+    layout = Layout(title="Threads")
+    layout.row([])
+    return layout.row_panel
+
+
+def RocksDB() -> RowPanel:
+    layout = Layout(title="RocksDB", repeat="db")
+    layout.row([])
+    return layout.row_panel
+
+
+def RaftEngine() -> RowPanel:
+    layout = Layout(title="Raft Engine")
+    layout.row([])
+    return layout.row_panel
+
+
+def Titan() -> RowPanel:
+    layout = Layout(title="Titan", repeat="titan_db")
+    layout.row([])
+    return layout.row_panel
+
+
+def PessimisticLocking() -> RowPanel:
+    layout = Layout(title="Pessimistic Locking")
+    layout.row([])
+    return layout.row_panel
+
+
+def PointInTimeRestore() -> RowPanel:
+    layout = Layout(title="Point In Time Restore")
+    layout.row([])
+    return layout.row_panel
+
+
+def ResolvedTS() -> RowPanel:
+    layout = Layout(title="Resolved TS")
+    layout.row([])
+    return layout.row_panel
+
+
+def Memory() -> RowPanel:
+    layout = Layout(title="Memory")
+    layout.row([])
+    return layout.row_panel
+
+
+def BackupImport() -> RowPanel:
+    layout = Layout(title="Backup & Import")
+    layout.row([])
+    return layout.row_panel
+
+
+def Encryption() -> RowPanel:
+    layout = Layout(title="Encryption")
+    layout.row([])
+    return layout.row_panel
+
+
+def BackupLog() -> RowPanel:
+    layout = Layout(title="Backup Log")
+    layout.row([])
+    return layout.row_panel
+
+
+def SlowTrendStatistics() -> RowPanel:
+    layout = Layout(title="Slow Trend Statistics")
+    layout.row([])
+    return layout.row_panel
+
+
 #### Metrics Definition End ####
 
 
@@ -4510,5 +4838,19 @@ dashboard = Dashboard(
         GC(),
         Snapshot(),
         Task(),
+        CoprocessorOverview(),
+        CoprocessorDetail(),
+        Threads(),
+        # RocksDB(),
+        # RaftEngine(),
+        # Titan(),
+        # PessimisticLocking(),
+        # PointInTimeRestore(),
+        # ResolvedTS(),
+        # Memory(),
+        # BackupImport(),
+        # Encryption(),
+        # BackupLog(),
+        # SlowTrendStatistics(),
     ],
 ).auto_panel_ids()
