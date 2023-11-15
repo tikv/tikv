@@ -155,7 +155,7 @@ impl Display for Task {
                             .map(|k| log_wrappers::Value::key(k.1.as_slice())),
                     ),
                 )
-                .field("coompact_load_controller", compact_load_controller)
+                .field("compact_load_controller", compact_load_controller)
                 .finish(),
             Task::Compact {
                 ref cf_name,
@@ -343,6 +343,9 @@ where
                 ranges,
                 compact_load_controller,
             } => {
+                // Since periodic full compaction is submitted as a task to the background
+                // worker pool, verify we will not start full compaction if
+                // another full compaction is running in the background.
                 if FULL_COMPACTION_IN_PROCESS.load(Ordering::SeqCst)
                     || FULL_COMPACTION_IN_PROCESS.swap(true, Ordering::SeqCst)
                 {
