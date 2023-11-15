@@ -525,3 +525,29 @@ fn test_cdc_rawkv_resolved_ts() {
     fail::remove(pause_write_fp);
     handle.join().unwrap();
 }
+
+// This case tests pending regions can still get region split/merge
+// notifications.
+#[test]
+fn test_cdc_notify_pending_regions() {
+    let cluster = new_server_cluster(0, 1);
+    cluster.pd_client.disable_default_operator();
+    let mut suite = TestSuiteBuilder::new().cluster(cluster).build();
+    let region = suite.cluster.get_region(&[]);
+    let rid = region.id;
+    let (mut req_tx, _, receive_event) = new_event_feed(suite.get_region_cdc_client(rid));
+
+    fail::cfg("cdc_before_initialize", "pause").unwrap();
+    let mut req = suite.new_changedata_request(rid);
+    req.request_id = 1;
+    block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
+
+    thread::sleep(Duration::from_millis(100));
+    suite.cluster.must_split(&region, b"x");
+    let event = receive_event(false);
+    matches!(
+        event.get_events()[0].event,
+        Some(Event_oneof_event::Error(ref e)) if e.has_region_not_found(),
+    );
+    fail::remove("cdc_before_initialize");
+}
