@@ -78,6 +78,7 @@ engine_traits_tests = { workspace = true }
 error_code = { workspace = true }
 fail = "0.5"
 file_system = { workspace = true }
+fips = { workspace = true }
 flate2 = { version = "1.0", default-features = false, features = ["zlib"] }
 futures = { version = "0.3", features = ["thread-pool", "compat"] }
 futures-executor = "0.3.1"
@@ -111,7 +112,7 @@ notify = "4"
 num-traits = "0.2.14"
 num_cpus = "1"
 online_config = { workspace = true }
-openssl = "0.10"
+openssl = { workspace = true }
 parking_lot = "0.12"
 paste = "1.0"
 pd_client = { workspace = true }
@@ -249,6 +250,7 @@ members = [
   "components/error_code",
   "components/external_storage",
   "components/file_system",
+  "components/fips",
   "components/into_other",
   "components/keys",
   "components/log_wrappers",
@@ -323,6 +325,7 @@ engine_traits_tests = { path = "components/engine_traits_tests", default-feature
 error_code = { path = "components/error_code" }
 external_storage = { path = "components/external_storage" }
 file_system = { path = "components/file_system" }
+fips = { path = "components/fips" }
 gcp = { path = "components/cloud/gcp" }
 into_other = { path = "components/into_other" }
 keys = { path = "components/keys" }
@@ -378,6 +381,8 @@ tokio-timer = { git = "https://github.com/tikv/tokio", branch = "tokio-timer-hot
 tokio-executor = { git = "https://github.com/tikv/tokio", branch = "tokio-timer-hotfix" }
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }
+openssl = "0.10"
+openssl-sys = "0.9"
 
 [profile.dev.package.grpcio-sys]
 debug = false

@@ -49,7 +49,7 @@ kvproto = { workspace = true }
 lazy_static = "1.4"
 log_wrappers = { workspace = true }
 online_config = { workspace = true }
-openssl = "0.10"
+openssl = { workspace = true }
 pd_client = { workspace = true }
 pin-project = "1.0"
 prometheus = { version = "0.13", default-features = false, features = ["nightly"] }

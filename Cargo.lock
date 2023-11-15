@@ -1867,6 +1867,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "fips"
+version = "0.0.1"
+dependencies = [
+ "openssl",
+ "openssl-sys",
+ "slog",
+ "slog-global",
+]
+
+[[package]]
 name = "fix-hidden-lifetime-bug"
 version = "0.2.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6317,6 +6327,7 @@ dependencies = [
  "example_coprocessor_plugin",
  "fail",
  "file_system",
+ "fips",
  "flate2",
  "futures 0.3.15",
  "futures-executor",
@@ -6433,6 +6444,7 @@ dependencies = [
  "engine_traits",
  "error_code",
  "file_system",
+ "fips",
  "futures 0.3.15",
  "gag",
  "grpcio",
@@ -6509,6 +6521,7 @@ dependencies = [
  "clap 2.33.0",
  "encryption_export",
  "engine_traits",
+ "fips",
  "keys",
  "kvproto",
  "raft-engine",
