@@ -107,6 +107,7 @@ use crate::{
             ReadDelegate, RefreshConfigRunner, RefreshConfigTask, RegionRunner, RegionTask,
             SplitCheckTask,
         },
+        worker_metrics::PROCESS_STAT_CPU_USAGE,
         Callback, CasualMessage, CompactThreshold, FullCompactController, GlobalReplicationState,
         InspectedRaftMessage, MergeResultKind, PdTask, PeerMsg, PeerTick, RaftCommand,
         SignificantMsg, SnapManager, StoreMsg, StoreTick,
@@ -121,8 +122,11 @@ pub const ENTRY_CACHE_EVICT_TICK_DURATION: Duration = Duration::from_secs(1);
 pub const MULTI_FILES_SNAPSHOT_FEATURE: Feature = Feature::require(6, 1, 0); // it only makes sense for large region
 
 // Every 30 minutes, check if we can run full compaction. This allows the config
-// setting `periodic_full_compact_start_max_cpu` to be changed dynamically.
+// setting `periodic_full_compact_start_times` to be changed dynamically.
 const PERIODIC_FULL_COMPACT_TICK_INTERVAL_DURATION: Duration = Duration::from_secs(30 * 60);
+// If periodic full compaction is enabled (`periodic_full_compact_start_times`
+// is set), sample load metrics every 30 seconds.
+const LOAD_METRICS_WINDOW_DURATION: Duration = Duration::from_secs(30);
 
 pub struct StoreInfo<EK, ER> {
     pub kv_engine: EK,
@@ -582,6 +586,8 @@ where
     pub pending_latency_inspect: Vec<util::LatencyInspector>,
 
     pub safe_point: Arc<AtomicU64>,
+
+    pub process_stat: Option<ProcessStat>,
 }
 
 impl<EK, ER, T> PollContext<EK, ER, T>
@@ -780,6 +786,7 @@ impl<'a, EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
             StoreTick::CompactLockCf => self.on_compact_lock_cf(),
             StoreTick::CompactCheck => self.on_compact_check_tick(),
             StoreTick::PeriodicFullCompact => self.on_full_compact_tick(),
+            StoreTick::LoadMetricsWindow => self.on_load_metrics_window_tick(),
             StoreTick::ConsistencyCheck => self.on_consistency_check_tick(),
             StoreTick::CleanupImportSst => self.on_cleanup_import_sst_tick(),
         }
@@ -871,6 +878,7 @@ impl<'a, EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
         self.register_cleanup_import_sst_tick();
         self.register_compact_check_tick();
         self.register_full_compact_tick();
+        self.register_load_metrics_window_tick();
         self.register_pd_store_heartbeat_tick();
         self.register_compact_lock_cf_tick();
         self.register_snap_mgr_gc_tick();
@@ -1468,6 +1476,7 @@ where
             sync_write_worker,
             pending_latency_inspect: vec![],
             safe_point: self.safe_point.clone(),
+            process_stat: None,
         };
         ctx.update_ticks_timeout();
         let tag = format!("[store {}]", ctx.store.get_id());
@@ -2450,6 +2459,26 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         }
     }
 
+    fn register_load_metrics_window_tick(&self) {
+        // For now, we will only gather these metrics is periodic full compaction is
+        // enabled.
+        if !self.ctx.cfg.periodic_full_compact_start_times.is_empty() {
+            self.ctx
+                .schedule_store_tick(StoreTick::LoadMetricsWindow, LOAD_METRICS_WINDOW_DURATION)
+        }
+    }
+
+    fn on_load_metrics_window_tick(&mut self) {
+        self.register_load_metrics_window_tick();
+
+        let proc_stat = self
+            .ctx
+            .process_stat
+            .get_or_insert_with(|| ProcessStat::cur_proc_stat().unwrap());
+        let cpu_usage: f64 = proc_stat.cpu_usage().unwrap();
+        PROCESS_STAT_CPU_USAGE.set(cpu_usage);
+    }
+
     fn register_full_compact_tick(&self) {
         if !self.ctx.cfg.periodic_full_compact_start_times.is_empty() {
             self.ctx.schedule_store_tick(
@@ -2525,8 +2554,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
                 return false;
             }
 
-            let mut proc_stats = ProcessStat::cur_proc_stat().unwrap();
-            let cpu_usage = proc_stats.cpu_usage().unwrap();
+            let cpu_usage = PROCESS_STAT_CPU_USAGE.get();
             if cpu_usage > max_start_cpu_usage {
                 warn!(
                     "full compaction may not run at this time, cpu usage is above max";
