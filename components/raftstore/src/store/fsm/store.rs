@@ -2507,6 +2507,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         }
 
         let compact_predicate_fn = self.is_low_load_for_full_compact();
+        // Do not start if the load is high.
         if !compact_predicate_fn() {
             return;
         }
@@ -2517,7 +2518,8 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
             FullCompactController::new(1, 15 * 60, Some(Box::new(compact_predicate_fn)));
 
         // Attempt executing a periodic full compaction.
-        // Note that full compaction will not run if other compaction tasks are running.
+        // Note that full compaction will not run if another full compact tasks has
+        // started.
         if let Err(e) = self.ctx.cleanup_scheduler.schedule(CleanupTask::Compact(
             CompactTask::PeriodicFullCompact {
                 ranges,
@@ -2532,6 +2534,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         }
     }
 
+    /// Use ranges assigned to each region as increments for full compaction.
     fn ranges_for_full_compact(&self) -> Vec<(Vec<u8>, Vec<u8>)> {
         let meta = self.ctx.store_meta.lock().unwrap();
         let mut ranges = Vec::with_capacity(meta.region_ranges.len());
@@ -2545,6 +2548,17 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         ranges
     }
 
+    /// Returns a predicate `Fn` which is evaluated:
+    /// 1. Before full compaction runs: if  `false`, we return and wait for the
+    /// next full compaction tick
+    /// (`PERIODIC_FULL_COMPACT_TICK_INTERVAL_DURATION`) before starting. If
+    /// true, we begin full compaction, which means the first incremental range
+    /// will be compactecd. See: ``StoreFsmDelegate::on_full_compact_tick``
+    /// in this file.
+    ///
+    /// 2. After each incremental range finishes and before next one (if any)
+    /// starts. If `false`, we pause compaction and wait. See:
+    /// `CompactRunner::full_compact` in `worker/compact.rs`.
     fn is_low_load_for_full_compact(&self) -> impl Fn() -> bool {
         let max_start_cpu_usage = self.ctx.cfg.periodic_full_compact_start_max_cpu;
         let global_stat = self.ctx.global_stat.clone();

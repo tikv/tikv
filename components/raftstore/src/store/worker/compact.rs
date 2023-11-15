@@ -51,8 +51,12 @@ pub enum Task {
 type CompactPredicateFn = Box<dyn Fn() -> bool + Send + Sync>;
 
 pub struct FullCompactController {
+    /// Initial delay between retries for ``FullCompactController::pause``.
     pub initial_pause_duration_secs: u64,
+    /// Max delay between retries.
     pub max_pause_duration_secs: u64,
+    /// Predicate function to evaluate that indicates if we can proceed with
+    /// full compaction.
     pub incremental_compaction_pred: Option<CompactPredicateFn>,
 }
 
@@ -84,8 +88,10 @@ impl FullCompactController {
         }
     }
 
-    /// Pause until `incremental_compaction_pred` is true.
-    /// TODO: support a timeout and return an Error if timeout is reached.
+    /// Pause until `incremental_compaction_pred` evaluates to `true`: delay
+    /// using exponential backoff (initial value
+    /// `initial_pause_duration_secs`, max value `max_pause_duration_secs`)
+    /// between retries.
     pub async fn pause(&self) -> Result<(), Error> {
         if self.incremental_compaction_pred.is_none() {
             return Ok(());
@@ -262,6 +268,10 @@ where
                 "finished incremental range full compaction";
                 "remaining" => ranges.len(),
             );
+            // If `predicate_fn` is set and we have more ranges remaining, evaluate
+            // `predicate_fn`. If `true`, proceed to next range; otherwise, pause this task
+            // (see `FullCompactController::pause` for details) until `predicate_fn`
+            // evaluates to true.
             if let Some((next_range, predicate_fn)) = ranges
                 .front()
                 .zip(compact_controller.incremental_compaction_pred.as_ref())
