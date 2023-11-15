@@ -152,7 +152,6 @@ tidb_query_datatype = { workspace = true }
 tikv_kv = { workspace = true }
 tipb_helper = { workspace = true }
 tokio = { version = "1.5", features = ["rt-multi-thread"] }
-bytes = "1.0"
 
 [target.'cfg(all(target_os = "linux", target_arch = "x86_64"))'.dev-dependencies]
 criterion-perf-events = "0.1"

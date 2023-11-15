@@ -11,14 +11,18 @@ use std::{
 
 use bytes::Bytes;
 use collections::HashMap;
-use crossbeam_skiplist::{map::Entry, SkipMap};
-use engine_traits::{CfNamesExt, SnapshotMiscExt, CF_DEFAULT, CF_LOCK, CF_WRITE};
+use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 use slog_global::info;
 use txn_types::Key;
 
 use crate::{key::ByteWiseComparator, IterRef, Skiplist};
 
-pub type MemoryBatch = HashMap<u64, [Vec<(Bytes, Bytes)>; 3]>;
+pub enum ValueType {
+    Put(Bytes),
+    Delete,
+}
+
+pub type MemoryBatch = HashMap<u64, [Vec<(Bytes, ValueType)>; 3]>;
 
 pub fn cf_to_id(cf: &str) -> u8 {
     match cf {
@@ -45,7 +49,7 @@ impl Default for RegionMemoryEngine {
                 )),
                 Arc::new(Skiplist::with_capacity(
                     ByteWiseComparator::default(),
-                    1 << 10,
+                    1 << 30,
                     false,
                 )),
                 Arc::new(Skiplist::with_capacity(
@@ -61,6 +65,12 @@ impl Default for RegionMemoryEngine {
 #[derive(Clone)]
 pub struct LruMemoryEngine {
     pub core: Arc<Mutex<LruMemoryEngineCore>>,
+}
+
+impl Debug for LruMemoryEngine {
+    fn fmt(&self, _: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        Ok(())
+    }
 }
 
 impl Default for LruMemoryEngine {
@@ -97,7 +107,7 @@ impl LruMemoryEngine {
 
     pub fn consume_batch(&self, batch: MemoryBatch) {
         for (id, batch) in batch.into_iter() {
-            let (max_version, regional_engine) = {
+            let (_max_version, regional_engine) = {
                 let mut core = self.core.lock().unwrap();
                 let max_version = core.max_version.clone();
                 if core.engine.get(&id).is_none() {
@@ -109,18 +119,19 @@ impl LruMemoryEngine {
                 let regional_engine = core.engine.entry(id).or_default();
                 (max_version, regional_engine.data.clone())
             };
-            let mut max_ts = max_version.load(Ordering::Acquire);
             batch
                 .into_iter()
                 .zip(regional_engine.into_iter())
                 .for_each(|(kvs, engine)| {
-                    kvs.into_iter().for_each(|(k, v)| {
-                        let ts = Key::decode_ts_from(k.as_slice()).unwrap().0;
-                        max_ts = u64::max(ts, max_ts);
-                        engine.put(k, v);
+                    kvs.into_iter().for_each(|(k, v)| match v {
+                        ValueType::Put(v) => {
+                            engine.put(k, v);
+                        }
+                        ValueType::Delete => {
+                            assert!(engine.remove(k).is_some());
+                        }
                     });
                 });
-            max_version.store(max_ts, Ordering::Release);
         }
     }
 }
@@ -281,8 +292,7 @@ mod test {
     use super::*;
 
     fn key_with_ts(key: &[u8], ts: u64) -> Bytes {
-        let mut key = Key::from_raw(key);
-        let key = key.append_ts((ts).into());
+        let key = Key::from_raw(key).append_ts((ts).into());
         Bytes::from(key.as_encoded().to_vec())
     }
 

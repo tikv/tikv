@@ -48,6 +48,7 @@ use raft::{
     eraftpb::{self, ConfChangeType, MessageType},
     GetEntriesContext, Progress, ReadState, SnapshotStatus, StateRole, INVALID_INDEX, NO_LIMIT,
 };
+use skiplist::memory_engine::LruMemoryEngine;
 use smallvec::SmallVec;
 use tikv_alloc::trace::TraceEvent;
 use tikv_util::{
@@ -4090,6 +4091,7 @@ where
         regions: Vec<metapb::Region>,
         new_split_regions: HashMap<u64, apply::NewSplitPeer>,
         share_source_region_size: bool,
+        memory_engine: Option<LruMemoryEngine>,
     ) {
         fail_point!("on_split", self.ctx.store_id() == 3, |_| {});
 
@@ -4172,6 +4174,20 @@ where
         if meta.region_ranges.remove(&last_key).is_none() {
             panic!("{} original region should exist", self.fsm.peer.tag);
         }
+
+        if let Some(ref memory_engine) = memory_engine {
+            let mut memory_engine = memory_engine.core.lock().unwrap();
+            let skip_list = memory_engine.engine.entry(region_id).or_default().clone();
+            for region in &regions {
+                if region.get_id() == region_id {
+                    continue;
+                }
+                memory_engine
+                    .engine
+                    .insert(region.get_id(), skip_list.clone());
+            }
+        }
+
         for (new_region, locks) in regions.into_iter().zip(region_locks) {
             let new_region_id = new_region.get_id();
 
@@ -5120,11 +5136,13 @@ where
                     regions,
                     new_split_regions,
                     share_source_region_size,
+                    memory_engine,
                 } => self.on_ready_split_region(
                     derived,
                     regions,
                     new_split_regions,
                     share_source_region_size,
+                    memory_engine,
                 ),
                 ExecResult::PrepareMerge { region, state } => {
                     self.on_ready_prepare_merge(region, state)

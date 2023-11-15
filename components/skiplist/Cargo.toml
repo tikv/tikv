@@ -9,7 +9,6 @@ publish = false
 [dependencies]
 bytes = "1.0"
 collections = { workspace = true }
-crossbeam-skiplist = "0.1.1"
 engine_traits = { workspace = true }
 keys = { workspace = true }
 rand = "0.8.4"

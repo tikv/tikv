@@ -53,7 +53,7 @@ use raft::eraftpb::{
 };
 use raft_proto::ConfChangeI;
 use resource_control::{ResourceConsumeType, ResourceController, ResourceMetered};
-use skiplist::memory_engine::{cf_to_id, LruMemoryEngine, MemoryBatch};
+use skiplist::memory_engine::{cf_to_id, LruMemoryEngine, MemoryBatch, ValueType};
 use smallvec::{smallvec, SmallVec};
 use sst_importer::SstImporter;
 use tikv_alloc::trace::TraceEvent;
@@ -275,6 +275,7 @@ pub enum ExecResult<S> {
         derived: Region,
         new_split_regions: HashMap<u64, NewSplitPeer>,
         share_source_region_size: bool,
+        memory_engine: Option<LruMemoryEngine>,
     },
     PrepareMerge {
         region: Region,
@@ -1848,12 +1849,12 @@ where
                     e
                 )
             });
-            if cf != CF_LOCK {
-                if ctx.memory_engine.is_some() {
-                    ctx.memory_batch.entry(self.region.get_id()).or_default()
-                        [cf_to_id(cf) as usize]
-                        .push((Bytes::from(key.to_vec()), Bytes::from(value.to_vec())));
-                }
+            if ctx.memory_engine.is_some() {
+                ctx.memory_batch.entry(self.region.get_id()).or_default()[cf_to_id(cf) as usize]
+                    .push((
+                        Bytes::from(key.to_vec()),
+                        ValueType::Put(Bytes::from(value.to_vec())),
+                    ));
             }
         } else {
             ctx.kv_wb.put(key, value).unwrap_or_else(|e| {
@@ -1868,7 +1869,10 @@ where
             if ctx.memory_engine.is_some() {
                 ctx.memory_batch.entry(self.region.get_id()).or_default()
                     [cf_to_id(CF_DEFAULT) as usize]
-                    .push((Bytes::from(key.to_vec()), Bytes::from(value.to_vec())));
+                    .push((
+                        Bytes::from(key.to_vec()),
+                        ValueType::Put(Bytes::from(value.to_vec())),
+                    ));
             }
         }
         Ok(())
@@ -1915,6 +1919,11 @@ where
             } else {
                 self.metrics.delete_keys_hint += 1;
             }
+
+            if ctx.memory_engine.is_some() {
+                ctx.memory_batch.entry(self.region.get_id()).or_default()[cf_to_id(cf) as usize]
+                    .push((Bytes::from(key.to_vec()), ValueType::Delete {}));
+            }
         } else {
             ctx.kv_wb.delete(key).unwrap_or_else(|e| {
                 panic!(
@@ -1925,6 +1934,12 @@ where
                 )
             });
             self.metrics.delete_keys_hint += 1;
+
+            if ctx.memory_engine.is_some() {
+                ctx.memory_batch.entry(self.region.get_id()).or_default()
+                    [cf_to_id(CF_DEFAULT) as usize]
+                    .push((Bytes::from(key.to_vec()), ValueType::Delete {}));
+            }
         }
 
         Ok(())
@@ -2765,6 +2780,7 @@ where
                 derived,
                 new_split_regions,
                 share_source_region_size,
+                memory_engine: ctx.memory_engine.clone(),
             }),
         ))
     }
@@ -7141,6 +7157,7 @@ mod tests {
             derived: _,
             new_split_regions: _,
             share_source_region_size: _,
+            memory_engine: _,
         } = apply_res.exec_res.front().unwrap()
         {
             let r8 = regions.get(0).unwrap();

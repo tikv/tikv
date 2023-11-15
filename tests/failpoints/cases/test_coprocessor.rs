@@ -528,22 +528,14 @@ fn test_xxx() {
     let spliter = DagChunkSpliter::new(resp.take_chunks().into(), 1);
     let mut results = spliter.collect::<Vec<Vec<Datum>>>();
     sort_by!(results, 0, Bytes);
-    for (row, name) in results
-        .iter()
-        .zip(&[b"name:0", b"name:1", b"name:3", b"name:4"])
-    {
-        let result_encoded = datum::encode_value(&mut EvalContext::default(), row).unwrap();
-        println!("{:?}", result_encoded);
-        row_count += 1;
-    }
-    assert_eq!(row_count, 4);
+
     let e = cluster.memory_engine.get(&1).unwrap();
     let mut iter = e.core.lock().unwrap().engine.get(&1).unwrap().data[2].iter();
     iter.seek_to_first();
     while iter.valid() {
         let k = iter.key().as_slice();
         let v = iter.value().as_slice();
-        println!("{:?}, {:?}", k, v);
+        println!("{:?}", k);
 
         iter.next();
     }

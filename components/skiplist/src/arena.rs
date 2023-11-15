@@ -44,6 +44,10 @@ impl Arena {
         self.len.load(Ordering::SeqCst)
     }
 
+    pub fn cap(&self) -> usize {
+        self.cap.get()
+    }
+
     /// Alloc 8-byte aligned memory.
     pub fn alloc(&self, size: usize) -> usize {
         // Leave enough padding for alignment.

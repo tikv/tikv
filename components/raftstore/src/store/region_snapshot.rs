@@ -149,10 +149,7 @@ where
         update_lower_bound(&mut iter_opt, &self.region);
         update_upper_bound(&mut iter_opt, &self.region);
 
-        let iter = if cf == "lock" || self.memory_snapshot.is_none() || self.region.get_id() <= 50
-        // || self.region.get_id() == 10
-        // || true
-        {
+        let iter = if self.memory_snapshot.is_none() {
             let iter = self
                 .snap
                 .iterator_opt(cf, iter_opt.clone())
@@ -352,8 +349,8 @@ where
     pub fn new(
         iter: Either<MemoryEngineIterator, <S as Iterable>::Iterator>,
         region: Arc<Region>,
-        mut iter_opt: IterOptions,
-        cf: &str,
+        _iter_opt: IterOptions,
+        _cf: &str,
     ) -> RegionIterator<S> {
         // update_lower_bound(&mut iter_opt, &region);
         // update_upper_bound(&mut iter_opt, &region);

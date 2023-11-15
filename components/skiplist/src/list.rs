@@ -1,5 +1,6 @@
 // Copyright 2023 TiKV Project Authors. Licensed under Apache-2.0.
 
+use core::slice::SlicePattern;
 use std::{
     mem, ptr,
     ptr::NonNull,
@@ -59,13 +60,13 @@ struct SkiplistInner {
 }
 
 #[derive(Clone)]
-pub struct Skiplist<C> {
+pub struct Skiplist<C: Clone> {
     inner: Arc<SkiplistInner>,
     c: C,
     allow_concurrent_write: bool,
 }
 
-impl<C> Skiplist<C> {
+impl<C: Clone> Skiplist<C> {
     pub fn with_capacity(c: C, arena_size: usize, allow_concurrent_write: bool) -> Skiplist<C> {
         let arena = Arena::with_capacity(arena_size);
         let head_offset = Node::alloc(&arena, Bytes::new(), Bytes::new(), MAX_HEIGHT - 1);
@@ -190,6 +191,87 @@ impl<C: KeyComparator> Skiplist<C> {
         }
     }
 
+    pub fn split(&self, split_keys: Vec<impl Into<Bytes>>) -> Vec<Skiplist<C>> {
+        let num = split_keys.len();
+        let mut sklists = vec![];
+        let mut iter = self.iter();
+        iter.seek_to_first();
+        for split_key in split_keys {
+            let sk = Skiplist::with_capacity(
+                self.c.clone(),
+                self.inner.arena.cap(),
+                self.allow_concurrent_write,
+            );
+
+            let split_key = split_key.into();
+            while iter.valid()
+                && self.c.compare_key(iter.key().as_slice(), &split_key) == std::cmp::Ordering::Less
+            {
+                sk.put(iter.key().clone(), iter.value().clone());
+                iter.next();
+            }
+            sklists.push(sk);
+        }
+
+        let sk = Skiplist::with_capacity(
+            self.c.clone(),
+            self.inner.arena.cap(),
+            self.allow_concurrent_write,
+        );
+        while iter.valid() {
+            sk.put(iter.key().clone(), iter.value().clone());
+            iter.next();
+        }
+        sklists.push(sk);
+
+        assert_eq!(sklists.len(), num + 1);
+        sklists
+    }
+
+    unsafe fn find_prev_for_level(
+        &self,
+        key: &[u8],
+        mut before: *mut Node,
+        level: usize,
+    ) -> (*mut Node, *mut Node) {
+        loop {
+            let next_offset = (*before).next_offset(level);
+            if next_offset == 0 {
+                return (before, ptr::null_mut());
+            }
+            let next_ptr: *mut Node = self.inner.arena.get_mut(next_offset);
+            let next_node = &*next_ptr;
+            match self.c.compare_key(key, &next_node.key) {
+                std::cmp::Ordering::Equal | std::cmp::Ordering::Less => return (before, next_ptr),
+                _ => before = next_ptr,
+            }
+        }
+    }
+
+    pub fn remove(&self, key: impl Into<Bytes>) -> Option<Bytes> {
+        let key = key.into();
+        let list_height = self.height();
+        let prev = self.inner.head.as_ptr();
+        let mut value = None;
+        let mut cur_max_hight = 0;
+        for i in (0..=list_height).rev() {
+            let (prev, next) = unsafe { self.find_prev_for_level(&key, prev, i) };
+            unsafe {
+                if next != ptr::null_mut()
+                    && self.c.same_key((*next).key.as_slice(), key.as_slice())
+                {
+                    (*prev).tower[i].store((*next).next_offset(i), Ordering::SeqCst);
+                    value = Some((*next).value.clone());
+                }
+                if (*self.inner.head.as_ptr()).next_offset(i) != 0 {
+                    cur_max_hight = usize::max(cur_max_hight, i);
+                }
+            }
+        }
+        self.inner.height.store(cur_max_hight, Ordering::SeqCst);
+        value
+    }
+
     /// Insert the key value pair to skiplist.
     ///
     /// Returns None if the insertion success.
@@ -209,8 +291,9 @@ impl<C: KeyComparator> Skiplist<C> {
             next[i] = n;
             if p == n {
                 unsafe {
-                    // overwrite the value
-                    (*p).value = value;
+                    if (*p).value != value {
+                        panic!("why this can happen");
+                    }
                 }
                 return None;
             }
@@ -386,7 +469,7 @@ impl<C: KeyComparator> Skiplist<C> {
     }
 }
 
-impl<C> AsRef<Skiplist<C>> for Skiplist<C> {
+impl<C: Clone> AsRef<Skiplist<C>> for Skiplist<C> {
     fn as_ref(&self) -> &Skiplist<C> {
         self
     }
@@ -411,10 +494,10 @@ impl Drop for SkiplistInner {
     }
 }
 
-unsafe impl<C: Send> Send for Skiplist<C> {}
-unsafe impl<C: Sync> Sync for Skiplist<C> {}
+unsafe impl<C: Send + Clone> Send for Skiplist<C> {}
+unsafe impl<C: Sync + Clone> Sync for Skiplist<C> {}
 
-pub struct IterRef<T, C>
+pub struct IterRef<T, C: Clone>
 where
     T: AsRef<Skiplist<C>>,
 {
@@ -492,7 +575,7 @@ impl<T: AsRef<Skiplist<C>>, C: KeyComparator> IterRef<T, C> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::FixedLengthSuffixComparator;
+    use crate::{key::ByteWiseComparator, FixedLengthSuffixComparator};
 
     const ARENA_SIZE: usize = 1 << 20;
 
@@ -555,5 +638,100 @@ mod tests {
     fn test_skl_find_near() {
         test_find_near_imp(true);
         test_find_near_imp(false);
+    }
+
+    #[test]
+    fn test_skl_remove() {
+        let sklist = Skiplist::with_capacity(ByteWiseComparator {}, 1 << 20, true);
+        for i in 0..30 {
+            let key = Bytes::from(format!("key{:03}", i));
+            let value = Bytes::from(format!("value{:03}", i));
+            sklist.put(key, value);
+        }
+        // sklist.remove(Bytes::from(b"key004".to_vec()));
+        // sklist.remove(Bytes::from(b"key001".to_vec()));
+        // sklist.remove(Bytes::from(b"key007".to_vec()));
+        // sklist.remove(Bytes::from(b"key027".to_vec()));
+        // sklist.remove(Bytes::from(b"key017".to_vec()));
+        for i in 0..30 {
+            let key = Bytes::from(format!("key{:03}", i));
+            sklist.remove(key);
+        }
+        let mut iter = sklist.iter();
+        iter.seek_to_first();
+        let mut count = 0;
+        while iter.valid() {
+            let key = iter.key();
+            let value = iter.value();
+            println!("{:?}, {:?}", key, value);
+            iter.next();
+            count += 1;
+        }
+        assert!(count == 0);
+
+        for i in 0..20 {
+            let key = Bytes::from(format!("key{:03}", i));
+            let value = Bytes::from(format!("value{:03}", i));
+            sklist.put(key, value);
+        }
+        for i in 7..15 {
+            let key = Bytes::from(format!("key{:03}", i));
+            sklist.remove(key);
+        }
+        let mut iter = sklist.iter();
+        iter.seek_to_first();
+        let mut count = 0;
+        while iter.valid() {
+            let key = iter.key();
+            let value = iter.value();
+            println!("{:?}, {:?}", key, value);
+            iter.next();
+            count += 1;
+        }
+        assert!(count == 12);
+    }
+
+    #[test]
+    fn test_split() {
+        let sklist = Skiplist::with_capacity(ByteWiseComparator {}, 1 << 20, true);
+        for i in 0..100 {
+            let key = Bytes::from(format!("key{:03}", i));
+            let value = Bytes::from(format!("value{:03}", i));
+            sklist.put(key, value);
+        }
+
+        println!("===================");
+        let sks = sklist.split(vec![
+            Bytes::from(b"key040".to_vec()),
+            Bytes::from(b"key060".to_vec()),
+        ]);
+        let mut iter = sks[0].iter();
+        iter.seek_to_first();
+        while iter.valid() {
+            let key = iter.key();
+            let value = iter.value();
+            println!("{:?}, {:?}", key, value);
+            iter.next();
+        }
+
+        println!("===================");
+        let mut iter = sks[1].iter();
+        iter.seek_to_first();
+        while iter.valid() {
+            let key = iter.key();
+            let value = iter.value();
+            println!("{:?}, {:?}", key, value);
+            iter.next();
+        }
+
+        println!("===================");
+        let mut iter = sks[2].iter();
+        iter.seek_to_first();
+        while iter.valid() {
+            let key = iter.key();
+            let value = iter.value();
+            println!("{:?}, {:?}", key, value);
+            iter.next();
+        }
     }
 }
