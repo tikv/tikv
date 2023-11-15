@@ -4875,7 +4875,961 @@ def RaftEngine() -> RowPanel:
 
 def Titan() -> RowPanel:
     layout = Layout(title="Titan", repeat="titan_db")
-    layout.row([])
+    layout.row(
+        [
+            graph_panel(
+                title="Blob file count",
+                targets=[
+                    target(
+                        expr=expr_sum(
+                            "tikv_engine_titandb_num_live_blob_file",
+                            label_selectors=['db="$titan_db"'],
+                            by_labels=[],  # override default by instance.
+                        ),
+                        legend_format="live blob file num",
+                    ),
+                    target(
+                        expr=expr_sum(
+                            "tikv_engine_titandb_num_obsolete_blob_file",
+                            label_selectors=['db="$titan_db"'],
+                            by_labels=[],  # override default by instance.
+                        ),
+                        legend_format="obsolete blob file num",
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="Blob file size",
+                yaxes=yaxes(left_format=UNITS.BYTES_IEC),
+                targets=[
+                    target(
+                        expr=expr_sum(
+                            "tikv_engine_titandb_live_blob_file_size",
+                            label_selectors=['db="$titan_db"'],
+                            by_labels=[],  # override default by instance.
+                        ),
+                        legend_format="live blob file size",
+                    ),
+                    target(
+                        expr=expr_sum(
+                            "tikv_engine_titandb_obsolete_blob_file_size",
+                            label_selectors=['db="$titan_db"'],
+                            by_labels=[],  # override default by instance.
+                        ),
+                        legend_format="obsolete blob file size",
+                    ),
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel(
+                title="Live blob size",
+                yaxes=yaxes(left_format=UNITS.BYTES_IEC),
+                targets=[
+                    target(
+                        expr=expr_sum(
+                            "tikv_engine_titandb_live_blob_size",
+                            label_selectors=['db="$titan_db"'],
+                        ),
+                        legend_format="live blob size",
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="Blob cache hit",
+                description="The hit rate of block cache",
+                yaxes=yaxes(left_format=UNITS.PERCENT_UNIT),
+                targets=[
+                    target(
+                        expr=expr_operator(
+                            expr_sum_rate(
+                                "tikv_engine_blob_cache_efficiency",
+                                label_selectors=[
+                                    'db="$titan_db"',
+                                    'type="blob_cache_hit"',
+                                ],
+                                by_labels=[],  # override default by instance.
+                            ),
+                            "/",
+                            expr_operator(
+                                expr_sum_rate(
+                                    "tikv_engine_blob_cache_efficiency",
+                                    label_selectors=[
+                                        'db="$titan_db"',
+                                        'type="blob_cache_hit"',
+                                    ],
+                                    by_labels=[],  # override default by instance.
+                                ),
+                                "+",
+                                expr_sum_rate(
+                                    "tikv_engine_blob_cache_efficiency",
+                                    label_selectors=[
+                                        'db="$titan_db"',
+                                        'type="blob_cache_miss"',
+                                    ],
+                                    by_labels=[],  # override default by instance.
+                                ),
+                            ),
+                        ),
+                        legend_format="all",
+                    ),
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel(
+                title="Iter touched blob file count",
+                targets=[
+                    target(
+                        expr=expr_avg(
+                            "tikv_engine_blob_iter_touch_blob_file_count",
+                            label_selectors=[
+                                'db="$titan_db"',
+                                'type="blob_iter_touch_blob_file_count_average"',
+                            ],
+                            by_labels=[],  # override default by instance.
+                        ),
+                        legend_format="avg",
+                    ),
+                    target(
+                        expr=expr_avg(
+                            "tikv_engine_blob_iter_touch_blob_file_count",
+                            label_selectors=[
+                                'db="$titan_db"',
+                                'type="blob_iter_touch_blob_file_count_percentile95"',
+                            ],
+                            by_labels=[],  # override default by instance.
+                        ),
+                        legend_format="95%",
+                    ),
+                    target(
+                        expr=expr_avg(
+                            "tikv_engine_blob_iter_touch_blob_file_count",
+                            label_selectors=[
+                                'db="$titan_db"',
+                                'type="blob_iter_touch_blob_file_count_percentile99"',
+                            ],
+                            by_labels=[],  # override default by instance.
+                        ),
+                        legend_format="99%",
+                    ),
+                    target(
+                        expr=expr_max(
+                            "tikv_engine_blob_iter_touch_blob_file_count",
+                            label_selectors=[
+                                'db="$titan_db"',
+                                'type="blob_iter_touch_blob_file_count_max"',
+                            ],
+                            by_labels=[],  # override default by instance.
+                        ),
+                        legend_format="max",
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="Blob cache size",
+                description="The blob cache size.",
+                yaxes=yaxes(left_format=UNITS.BYTES_IEC),
+                targets=[
+                    target(
+                        expr=expr_topk(
+                            20,
+                            "%s"
+                            % expr_avg(
+                                "tikv_engine_blob_cache_size_bytes",
+                                label_selectors=['db="$titan_db"'],
+                                by_labels=["cf", "instance"],
+                            ),
+                        ),
+                        legend_format="{{instance}}-{{cf}}",
+                    ),
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel(
+                title="Blob key size",
+                yaxes=yaxes(left_format=UNITS.BYTES_IEC),
+                targets=[
+                    target(
+                        expr=expr_avg(
+                            "tikv_engine_blob_key_size",
+                            label_selectors=[
+                                'db="$titan_db"',
+                                'type="blob_key_size_average"',
+                            ],
+                            by_labels=[],  # override default by instance.
+                        ),
+                        legend_format="avg",
+                    ),
+                    target(
+                        expr=expr_avg(
+                            "tikv_engine_blob_key_size",
+                            label_selectors=[
+                                'db="$titan_db"',
+                                'type="blob_key_size_percentile95"',
+                            ],
+                            by_labels=[],  # override default by instance.
+                        ),
+                        legend_format="95%",
+                    ),
+                    target(
+                        expr=expr_avg(
+                            "tikv_engine_blob_key_size",
+                            label_selectors=[
+                                'db="$titan_db"',
+                                'type="blob_key_size_percentile99"',
+                            ],
+                            by_labels=[],  # override default by instance.
+                        ),
+                        legend_format="99%",
+                    ),
+                    target(
+                        expr=expr_max(
+                            "tikv_engine_blob_key_size",
+                            label_selectors=[
+                                'db="$titan_db"',
+                                'type="blob_key_size_max"',
+                            ],
+                            by_labels=[],  # override default by instance.
+                        ),
+                        legend_format="max",
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="Blob value size",
+                yaxes=yaxes(left_format=UNITS.BYTES_IEC),
+                targets=[
+                    target(
+                        expr=expr_avg(
+                            "tikv_engine_blob_value_size",
+                            label_selectors=[
+                                'db="$titan_db"',
+                                'type="blob_value_size_average"',
+                            ],
+                            by_labels=[],  # override default by instance.
+                        ),
+                        legend_format="avg",
+                    ),
+                    target(
+                        expr=expr_avg(
+                            "tikv_engine_blob_value_size",
+                            label_selectors=[
+                                'db="$titan_db"',
+                                'type="blob_value_size_percentile95"',
+                            ],
+                            by_labels=[],  # override default by instance.
+                        ),
+                        legend_format="95%",
+                    ),
+                    target(
+                        expr=expr_avg(
+                            "tikv_engine_blob_value_size",
+                            label_selectors=[
+                                'db="$titan_db"',
+                                'type="blob_value_size_percentile99"',
+                            ],
+                            by_labels=[],  # override default by instance.
+                        ),
+                        legend_format="99%",
+                    ),
+                    target(
+                        expr=expr_max(
+                            "tikv_engine_blob_value_size",
+                            label_selectors=[
+                                'db="$titan_db"',
+                                'type="blob_value_size_max"',
+                            ],
+                            by_labels=[],  # override default by instance.
+                        ),
+                        legend_format="max",
+                    ),
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel(
+                title="Blob get operations",
+                yaxes=yaxes(left_format=UNITS.OPS_PER_SEC),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_engine_blob_locate",
+                            label_selectors=[
+                                'db="$titan_db"',
+                                'type="number_blob_get"',
+                            ],
+                            by_labels=[],  # override default by instance.
+                        ),
+                        legend_format="get",
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="Blob get duration",
+                yaxes=yaxes(left_format=UNITS.MICRO_SECONDS),
+                targets=[
+                    target(
+                        expr=expr_avg(
+                            "tikv_engine_blob_get_micros_seconds",
+                            label_selectors=['db="$titan_db"', 'type=~".*_average"'],
+                            by_labels=["type"],
+                        ),
+                        legend_format="avg-{{type}}",
+                    ),
+                    target(
+                        expr=expr_avg(
+                            "tikv_engine_blob_get_micros_seconds",
+                            label_selectors=[
+                                'db="$titan_db"',
+                                'type=~".*_percentile95"',
+                            ],
+                            by_labels=["type"],
+                        ),
+                        legend_format="95%-{{type}}",
+                    ),
+                    target(
+                        expr=expr_avg(
+                            "tikv_engine_blob_get_micros_seconds",
+                            label_selectors=[
+                                'db="$titan_db"',
+                                'type=~".*_percentile99"',
+                            ],
+                            by_labels=["type"],
+                        ),
+                        legend_format="99%-{{type}}",
+                    ),
+                    target(
+                        expr=expr_max(
+                            "tikv_engine_blob_get_micros_seconds",
+                            label_selectors=['db="$titan_db"', 'type=~".*_max"'],
+                            by_labels=["type"],
+                        ),
+                        legend_format="max-{{type}}",
+                    ),
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel(
+                title="Blob file discardable ratio distribution",
+                targets=[
+                    target(
+                        expr=expr_sum(
+                            "tikv_engine_titandb_blob_file_discardable_ratio",
+                            label_selectors=['db="$titan_db"'],
+                            by_labels=["ratio"],
+                        ),
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="Blob iter operations",
+                yaxes=yaxes(left_format=UNITS.OPS_PER_SEC),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_engine_blob_locate",
+                            label_selectors=[
+                                'db="$titan_db"',
+                                'type="number_blob_seek"',
+                            ],
+                            by_labels=[],  # override default by instance.
+                        ),
+                        legend_format="seek",
+                    ),
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_engine_blob_locate",
+                            label_selectors=[
+                                'db="$titan_db"',
+                                'type="number_blob_prev"',
+                            ],
+                            by_labels=[],  # override default by instance.
+                        ),
+                        legend_format="prev",
+                    ),
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_engine_blob_locate",
+                            label_selectors=[
+                                'db="$titan_db"',
+                                'type="number_blob_next"',
+                            ],
+                            by_labels=[],  # override default by instance.
+                        ),
+                        legend_format="next",
+                    ),
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel(
+                title="Blob seek duration",
+                yaxes=yaxes(left_format=UNITS.MICRO_SECONDS),
+                targets=[
+                    target(
+                        expr=expr_avg(
+                            "tikv_engine_blob_seek_micros_seconds",
+                            label_selectors=['db="$titan_db"', 'type=~".*_average"'],
+                            by_labels=[],  # override default by instance.
+                        ),
+                        legend_format="avg",
+                    ),
+                    target(
+                        expr=expr_avg(
+                            "tikv_engine_blob_seek_micros_seconds",
+                            label_selectors=[
+                                'db="$titan_db"',
+                                'type=~".*_percentile95"',
+                            ],
+                            by_labels=[],  # override default by instance.
+                        ),
+                        legend_format="95%",
+                    ),
+                    target(
+                        expr=expr_avg(
+                            "tikv_engine_blob_seek_micros_seconds",
+                            label_selectors=[
+                                'db="$titan_db"',
+                                'type=~".*_percentile99"',
+                            ],
+                            by_labels=[],  # override default by instance.
+                        ),
+                        legend_format="99%",
+                    ),
+                    target(
+                        expr=expr_max(
+                            "tikv_engine_blob_seek_micros_seconds",
+                            label_selectors=['db="$titan_db"', 'type=~".*_max"'],
+                            by_labels=[],  # override default by instance.
+                        ),
+                        legend_format="max",
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="Blob next duration",
+                yaxes=yaxes(left_format=UNITS.MICRO_SECONDS),
+                targets=[
+                    target(
+                        expr=expr_avg(
+                            "tikv_engine_blob_next_micros_seconds",
+                            label_selectors=['db="$titan_db"', 'type=~".*_average"'],
+                            by_labels=[],  # override default by instance.
+                        ),
+                        legend_format="avg",
+                    ),
+                    target(
+                        expr=expr_avg(
+                            "tikv_engine_blob_next_micros_seconds",
+                            label_selectors=[
+                                'db="$titan_db"',
+                                'type=~".*_percentile95"',
+                            ],
+                            by_labels=[],  # override default by instance.
+                        ),
+                        legend_format="95%",
+                    ),
+                    target(
+                        expr=expr_avg(
+                            "tikv_engine_blob_next_micros_seconds",
+                            label_selectors=[
+                                'db="$titan_db"',
+                                'type=~".*_percentile99"',
+                            ],
+                            by_labels=[],  # override default by instance.
+                        ),
+                        legend_format="99%",
+                    ),
+                    target(
+                        expr=expr_max(
+                            "tikv_engine_blob_next_micros_seconds",
+                            label_selectors=['db="$titan_db"', 'type=~".*_max"'],
+                            by_labels=[],  # override default by instance.
+                        ),
+                        legend_format="max",
+                    ),
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel(
+                title="Blob prev duration",
+                yaxes=yaxes(left_format=UNITS.MICRO_SECONDS),
+                targets=[
+                    target(
+                        expr=expr_avg(
+                            "tikv_engine_blob_prev_micros_seconds",
+                            label_selectors=['db="$titan_db"', 'type=~".*_average"'],
+                            by_labels=["type"],
+                        ),
+                        legend_format="avg-{{type}}",
+                    ),
+                    target(
+                        expr=expr_avg(
+                            "tikv_engine_blob_prev_micros_seconds",
+                            label_selectors=[
+                                'db="$titan_db"',
+                                'type=~".*_percentile95"',
+                            ],
+                            by_labels=["type"],
+                        ),
+                        legend_format="95%-{{type}}",
+                    ),
+                    target(
+                        expr=expr_avg(
+                            "tikv_engine_blob_prev_micros_seconds",
+                            label_selectors=[
+                                'db="$titan_db"',
+                                'type=~".*_percentile99"',
+                            ],
+                            by_labels=["type"],
+                        ),
+                        legend_format="99%-{{type}}",
+                    ),
+                    target(
+                        expr=expr_max(
+                            "tikv_engine_blob_prev_micros_seconds",
+                            label_selectors=['db="$titan_db"', 'type=~".*_max"'],
+                            by_labels=["type"],
+                        ),
+                        legend_format="max-{{type}}",
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="Blob keys flow",
+                yaxes=yaxes(left_format=UNITS.BYTES_SEC_IEC),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_engine_blob_flow_bytes",
+                            label_selectors=['db="$titan_db"', 'type=~"keys.*"'],
+                            by_labels=["type"],
+                        ),
+                    ),
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel(
+                title="Blob file read duration",
+                yaxes=yaxes(left_format=UNITS.MICRO_SECONDS),
+                targets=[
+                    target(
+                        expr=expr_avg(
+                            "tikv_engine_blob_file_read_micros_seconds",
+                            label_selectors=[
+                                'db="$titan_db"',
+                                'type="blob_file_read_micros_average"',
+                            ],
+                            by_labels=["type"],
+                        ),
+                        legend_format="avg",
+                    ),
+                    target(
+                        expr=expr_avg(
+                            "tikv_engine_blob_file_read_micros_seconds",
+                            label_selectors=[
+                                'db="$titan_db"',
+                                'type="blob_file_read_micros_percentile99"',
+                            ],
+                            by_labels=["type"],
+                        ),
+                        legend_format="95%",
+                    ),
+                    target(
+                        expr=expr_avg(
+                            "tikv_engine_blob_file_read_micros_seconds",
+                            label_selectors=[
+                                'db="$titan_db"',
+                                'type="blob_file_read_micros_percentile95"',
+                            ],
+                            by_labels=["type"],
+                        ),
+                        legend_format="99%",
+                    ),
+                    target(
+                        expr=expr_max(
+                            "tikv_engine_blob_file_read_micros_seconds",
+                            label_selectors=[
+                                'db="$titan_db"',
+                                'type="blob_file_read_micros_max"',
+                            ],
+                            by_labels=["type"],
+                        ),
+                        legend_format="max",
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="Blob bytes flow",
+                yaxes=yaxes(left_format=UNITS.BYTES_SEC_IEC),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_engine_blob_flow_bytes",
+                            label_selectors=['db="$titan_db"', 'type=~"bytes.*"'],
+                            by_labels=["type"],
+                        ),
+                    ),
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel(
+                title="Blob file write duration",
+                yaxes=yaxes(left_format=UNITS.MICRO_SECONDS),
+                targets=[
+                    target(
+                        expr=expr_avg(
+                            "tikv_engine_blob_file_write_micros_seconds",
+                            label_selectors=[
+                                'db="$titan_db"',
+                                'type="blob_file_write_micros_average"',
+                            ],
+                            by_labels=["type"],
+                        ),
+                        legend_format="avg",
+                    ),
+                    target(
+                        expr=expr_avg(
+                            "tikv_engine_blob_file_write_micros_seconds",
+                            label_selectors=[
+                                'db="$titan_db"',
+                                'type="blob_file_write_micros_percentile99"',
+                            ],
+                            by_labels=["type"],
+                        ),
+                        legend_format="95%",
+                    ),
+                    target(
+                        expr=expr_avg(
+                            "tikv_engine_blob_file_write_micros_seconds",
+                            label_selectors=[
+                                'db="$titan_db"',
+                                'type="blob_file_write_micros_percentile95"',
+                            ],
+                            by_labels=["type"],
+                        ),
+                        legend_format="99%",
+                    ),
+                    target(
+                        expr=expr_max(
+                            "tikv_engine_blob_file_write_micros_seconds",
+                            label_selectors=[
+                                'db="$titan_db"',
+                                'type="blob_file_write_micros_max"',
+                            ],
+                            by_labels=["type"],
+                        ),
+                        legend_format="max",
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="Blob file sync operations",
+                yaxes=yaxes(left_format=UNITS.OPS_PER_SEC),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_engine_blob_file_synced",
+                            label_selectors=['db="$titan_db"'],
+                            by_labels=[],  # override default by instance.
+                        ),
+                        legend_format="sync",
+                    ),
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel(
+                title="Blob GC action",
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_engine_blob_gc_action_count",
+                            label_selectors=['db="$titan_db"'],
+                            by_labels=["type"],
+                        ),
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="Blob file sync duration",
+                yaxes=yaxes(left_format=UNITS.MICRO_SECONDS),
+                targets=[
+                    target(
+                        expr=expr_avg(
+                            "tikv_engine_blob_file_sync_micros_seconds",
+                            label_selectors=[
+                                'db="$titan_db"',
+                                'type="blob_file_sync_micros_average"',
+                            ],
+                            by_labels=["type"],
+                        ),
+                        legend_format="avg",
+                    ),
+                    target(
+                        expr=expr_avg(
+                            "tikv_engine_blob_file_sync_micros_seconds",
+                            label_selectors=[
+                                'db="$titan_db"',
+                                'type="blob_file_sync_micros_percentile95"',
+                            ],
+                            by_labels=["type"],
+                        ),
+                        legend_format="95%",
+                    ),
+                    target(
+                        expr=expr_avg(
+                            "tikv_engine_blob_file_sync_micros_seconds",
+                            label_selectors=[
+                                'db="$titan_db"',
+                                'type="blob_file_sync_micros_percentile99"',
+                            ],
+                            by_labels=["type"],
+                        ),
+                        legend_format="99%",
+                    ),
+                    target(
+                        expr=expr_max(
+                            "tikv_engine_blob_file_sync_micros_seconds",
+                            label_selectors=[
+                                'db="$titan_db"',
+                                'type="blob_file_sync_micros_max"',
+                            ],
+                            by_labels=["type"],
+                        ),
+                        legend_format="max",
+                    ),
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel(
+                title="Blob GC duration",
+                yaxes=yaxes(left_format=UNITS.MICRO_SECONDS),
+                targets=[
+                    target(
+                        expr=expr_avg(
+                            "tikv_engine_blob_gc_micros_seconds",
+                            label_selectors=[
+                                'db="$titan_db"',
+                                'type="blob_gc_micros_average"',
+                            ],
+                            by_labels=["type"],
+                        ),
+                        legend_format="avg",
+                    ),
+                    target(
+                        expr=expr_avg(
+                            "tikv_engine_blob_gc_micros_seconds",
+                            label_selectors=[
+                                'db="$titan_db"',
+                                'type="blob_gc_micros_percentile95"',
+                            ],
+                            by_labels=["type"],
+                        ),
+                        legend_format="95%",
+                    ),
+                    target(
+                        expr=expr_avg(
+                            "tikv_engine_blob_gc_micros_seconds",
+                            label_selectors=[
+                                'db="$titan_db"',
+                                'type="blob_gc_micros_percentile99"',
+                            ],
+                            by_labels=["type"],
+                        ),
+                        legend_format="99%",
+                    ),
+                    target(
+                        expr=expr_max(
+                            "tikv_engine_blob_gc_micros_seconds",
+                            label_selectors=[
+                                'db="$titan_db"',
+                                'type="blob_gc_micros_max"',
+                            ],
+                            by_labels=["type"],
+                        ),
+                        legend_format="max",
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="Blob GC keys flow",
+                yaxes=yaxes(left_format=UNITS.BYTES_SEC_IEC),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_engine_blob_gc_flow_bytes",
+                            label_selectors=['db="$titan_db"', 'type=~"keys.*"'],
+                            by_labels=["type"],
+                        ),
+                    ),
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel(
+                title="Blob GC input file size",
+                yaxes=yaxes(left_format=UNITS.BYTES_IEC),
+                targets=[
+                    target(
+                        expr=expr_avg(
+                            "tikv_engine_blob_gc_input_file",
+                            label_selectors=[
+                                'db="$titan_db"',
+                                'type="blob_gc_input_file_average"',
+                            ],
+                            by_labels=[],  # override default by instance.
+                        ),
+                        legend_format="avg",
+                    ),
+                    target(
+                        expr=expr_avg(
+                            "tikv_engine_blob_gc_input_file",
+                            label_selectors=[
+                                'db="$titan_db"',
+                                'type="blob_gc_input_file_percentile95"',
+                            ],
+                            by_labels=[],  # override default by instance.
+                        ),
+                        legend_format="95%",
+                    ),
+                    target(
+                        expr=expr_avg(
+                            "tikv_engine_blob_gc_input_file",
+                            label_selectors=[
+                                'db="$titan_db"',
+                                'type="blob_gc_input_file_percentile99"',
+                            ],
+                            by_labels=[],  # override default by instance.
+                        ),
+                        legend_format="99%",
+                    ),
+                    target(
+                        expr=expr_max(
+                            "tikv_engine_blob_gc_input_file",
+                            label_selectors=[
+                                'db="$titan_db"',
+                                'type="blob_gc_input_file_max"',
+                            ],
+                            by_labels=[],  # override default by instance.
+                        ),
+                        legend_format="max",
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="Blob GC bytes flow",
+                yaxes=yaxes(left_format=UNITS.BYTES_SEC_IEC),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_engine_blob_gc_flow_bytes",
+                            label_selectors=['db="$titan_db"', 'type=~"bytes.*"'],
+                            by_labels=["type"],
+                        ),
+                    ),
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel(
+                title="Blob GC output file size",
+                yaxes=yaxes(left_format=UNITS.BYTES_IEC),
+                targets=[
+                    target(
+                        expr=expr_avg(
+                            "tikv_engine_blob_gc_output_file",
+                            label_selectors=[
+                                'db="$titan_db"',
+                                'type="blob_gc_output_file_average"',
+                            ],
+                            by_labels=[],  # override default by instance.
+                        ),
+                        legend_format="avg",
+                    ),
+                    target(
+                        expr=expr_avg(
+                            "tikv_engine_blob_gc_output_file",
+                            label_selectors=[
+                                'db="$titan_db"',
+                                'type="blob_gc_output_file_percentile95"',
+                            ],
+                            by_labels=[],  # override default by instance.
+                        ),
+                        legend_format="95%",
+                    ),
+                    target(
+                        expr=expr_avg(
+                            "tikv_engine_blob_gc_output_file",
+                            label_selectors=[
+                                'db="$titan_db"',
+                                'type="blob_gc_output_file_percentile99"',
+                            ],
+                            by_labels=[],  # override default by instance.
+                        ),
+                        legend_format="99%",
+                    ),
+                    target(
+                        expr=expr_max(
+                            "tikv_engine_blob_gc_output_file",
+                            label_selectors=[
+                                'db="$titan_db"',
+                                'type="blob_gc_output_file_max"',
+                            ],
+                            by_labels=[],  # override default by instance.
+                        ),
+                        legend_format="max",
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="Blob GC file count",
+                yaxes=yaxes(left_format=UNITS.OPS_PER_SEC),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_engine_blob_gc_file_count",
+                            label_selectors=['db="$titan_db"'],
+                            by_labels=["type"],
+                        ),
+                    ),
+                ],
+            ),
+        ]
+    )
     return layout.row_panel
 
 
@@ -4970,7 +5924,7 @@ dashboard = Dashboard(
         Threads(),
         # RocksDB(),
         # RaftEngine(),
-        # Titan(),
+        Titan(),
         # PessimisticLocking(),
         # PointInTimeRestore(),
         # ResolvedTS(),
