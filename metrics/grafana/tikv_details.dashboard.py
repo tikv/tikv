@@ -367,6 +367,35 @@ def expr_sum_aggr_over_time(
     )
 
 
+def expr_max_rate(
+    metric: str,
+    label_selectors: list[str] = [],
+    by_labels: list[str] = ["instance"],
+) -> Expr:
+    """
+    Calculate the max of rate of a metric.
+
+    Example:
+
+    max(rate(
+        tikv_thread_voluntary_context_switches
+        {k8s_cluster="$k8s_cluster",tidb_cluster="$tidb_cluster",instance=~"$instance",type!="kv_gc"}
+        [$__rate_interval]
+    )) by (name)
+    """
+    # $__rate_interval is a Grafana variable that is specialized for Prometheus
+    # rate and increase function.
+    # See https://grafana.com/blog/2020/09/28/new-in-grafana-7.2-__rate_interval-for-prometheus-rate-queries-that-just-work/
+    return expr_aggr_func(
+        metric=metric,
+        aggr_op="max",
+        func="rate",
+        label_selectors=label_selectors,
+        range_selector="$__rate_interval",
+        by_labels=by_labels,
+    )
+
+
 def expr_simple(
     metric: str,
     label_selectors: list[str] = [],
@@ -420,6 +449,30 @@ def expr_histogram_quantile(
         metric=f"{sum_rate_of_buckets}",
         aggr_op="histogram_quantile",
         aggr_param=f"{quantile}",
+        label_selectors=[],
+        by_labels=[],
+    ).extra(
+        # Do not attach default label selector again.
+        default_label_selectors=[]
+    )
+
+
+def expr_topk(
+    k: int,
+    metrics: str,
+) -> Expr:
+    """
+    Query topk of a metric.
+
+    Example:
+
+    topk(20, tikv_thread_voluntary_context_switches)
+    """
+    # topk({k}, {metric})
+    return expr_aggr(
+        metric=metrics,
+        aggr_op="topk",
+        aggr_param=f"{k}",
         label_selectors=[],
         by_labels=[],
     ).extra(
@@ -4730,7 +4783,81 @@ def CoprocessorDetail() -> RowPanel:
 
 def Threads() -> RowPanel:
     layout = Layout(title="Threads")
-    layout.row([])
+    layout.row(
+        [
+            graph_panel(
+                title="Threads state",
+                targets=[
+                    target(
+                        expr=expr_sum(
+                            "tikv_threads_state",
+                            by_labels=["instance", "state"],
+                        ),
+                    ),
+                    target(
+                        expr=expr_sum(
+                            "tikv_threads_state",
+                            by_labels=["instance"],
+                        ),
+                        legend_format="{{instance}}-total",
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="Threads IO",
+                yaxes=yaxes(left_format=UNITS.BYTES_SEC_IEC),
+                targets=[
+                    target(
+                        expr=expr_topk(
+                            20,
+                            "%s"
+                            % expr_sum_rate(
+                                "tikv_threads_io_bytes_total",
+                                by_labels=["name", "io"],
+                            ).extra("> 1024"),
+                        ),
+                        legend_format="{{name}}",
+                    ),
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel(
+                title="Thread Voluntary Context Switches",
+                targets=[
+                    target(
+                        expr=expr_topk(
+                            20,
+                            "%s"
+                            % expr_max_rate(
+                                "tikv_thread_voluntary_context_switches",
+                                by_labels=["name"],
+                            ).extra("> 100"),
+                        ),
+                        legend_format="{{name}}",
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="Thread Nonvoluntary Context Switches",
+                targets=[
+                    target(
+                        expr=expr_topk(
+                            20,
+                            "%s"
+                            % expr_max_rate(
+                                "tikv_thread_nonvoluntary_context_switches",
+                                by_labels=["name"],
+                            ).extra("> 100"),
+                        ),
+                        legend_format="{{name}}",
+                    ),
+                ],
+            ),
+        ]
+    )
     return layout.row_panel
 
 
