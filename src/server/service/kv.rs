@@ -943,6 +943,19 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
         let (cb, resp) = paired_future_callback();
         let check_leader_scheduler = self.check_leader_scheduler.clone();
         let task = async move {
+            let delay = (|| -> u64 {
+                fail_point!("check_leader_slow", |x| {
+                    x.map_or(0, |s| s.parse::<u64>().unwrap_or(0))
+                });
+                0
+            })();
+            if delay > 0 {
+                let dur = std::time::Duration::from_millis(delay);
+                let _ = tikv_util::timer::SteadyTimer::default()
+                    .delay(dur)
+                    .compat()
+                    .await;
+            }
             check_leader_scheduler
                 .schedule(CheckLeaderTask::CheckLeader { leaders, cb })
                 .map_err(|e| Error::Other(format!("{}", e).into()))?;

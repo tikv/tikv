@@ -129,7 +129,7 @@ impl AdvanceTsWorker {
                 }
             }
 
-            let regions = leader_resolver.resolve(regions, min_ts).await;
+            let regions = leader_resolver.resolve(regions, min_ts, None).await;
             if !regions.is_empty() {
                 if let Err(e) = scheduler.schedule(Task::ResolvedTsAdvanced {
                     regions,
@@ -275,7 +275,12 @@ impl LeadershipResolver {
     // This function broadcasts a special message to all stores, gets the leader id
     // of them to confirm whether current peer has a quorum which accepts its
     // leadership.
-    pub async fn resolve(&mut self, regions: Vec<u64>, min_ts: TimeStamp) -> Vec<u64> {
+    pub async fn resolve(
+        &mut self,
+        regions: Vec<u64>,
+        min_ts: TimeStamp,
+        timeout: Option<Duration>,
+    ) -> Vec<u64> {
         if regions.is_empty() {
             return regions;
         }
@@ -362,6 +367,10 @@ impl LeadershipResolver {
             .map_or(0, |req| req.regions[0].compute_size());
         let store_count = store_req_map.len();
         let mut check_leader_rpcs = Vec::with_capacity(store_req_map.len());
+        let timeout = match timeout {
+            Some(v) => cmp::min(DEFAULT_CHECK_LEADER_TIMEOUT_DURATION, v),
+            None => DEFAULT_CHECK_LEADER_TIMEOUT_DURATION,
+        };
         for (store_id, req) in store_req_map {
             if req.regions.is_empty() {
                 continue;
@@ -376,9 +385,16 @@ impl LeadershipResolver {
             let rpc = async move {
                 PENDING_CHECK_LEADER_REQ_COUNT.inc();
                 defer!(PENDING_CHECK_LEADER_REQ_COUNT.dec());
-                let client = get_tikv_client(to_store, pd_client, security_mgr, env, tikv_clients)
-                    .await
-                    .map_err(|e| (to_store, e.retryable(), format!("[get tikv client] {}", e)))?;
+                let client = get_tikv_client(
+                    to_store,
+                    pd_client,
+                    security_mgr,
+                    env,
+                    tikv_clients,
+                    timeout,
+                )
+                .await
+                .map_err(|e| (to_store, e.retryable(), format!("[get tikv client] {}", e)))?;
 
                 // Set min_ts in the request.
                 req.set_ts(min_ts.into_inner());
@@ -409,7 +425,6 @@ impl LeadershipResolver {
 
                 PENDING_CHECK_LEADER_REQ_SENT_COUNT.inc();
                 defer!(PENDING_CHECK_LEADER_REQ_SENT_COUNT.dec());
-                let timeout = DEFAULT_CHECK_LEADER_TIMEOUT_DURATION;
                 let resp = tokio::time::timeout(timeout, rpc)
                     .map_err(|e| (to_store, true, format!("[timeout] {}", e)))
                     .await?
@@ -525,6 +540,7 @@ async fn get_tikv_client(
     security_mgr: &SecurityManager,
     env: Arc<Environment>,
     tikv_clients: &Mutex<HashMap<u64, TikvClient>>,
+    timeout: Duration,
 ) -> pd_client::Result<TikvClient> {
     {
         let clients = tikv_clients.lock().await;
@@ -532,7 +548,6 @@ async fn get_tikv_client(
             return Ok(client);
         }
     }
-    let timeout = DEFAULT_CHECK_LEADER_TIMEOUT_DURATION;
     let store = tokio::time::timeout(timeout, pd_client.get_store_async(store_id))
         .await
         .map_err(|e| pd_client::Error::Other(Box::new(e)))
@@ -650,17 +665,23 @@ mod tests {
             .region_read_progress
             .insert(2, Arc::new(progress2));
 
-        leader_resolver.resolve(vec![1, 2], TimeStamp::new(1)).await;
+        leader_resolver
+            .resolve(vec![1, 2], TimeStamp::new(1), None)
+            .await;
         let req = rx.recv_timeout(Duration::from_secs(1)).unwrap();
         assert_eq!(req.regions.len(), 2);
 
         // Checking one region only send 1 region in request.
-        leader_resolver.resolve(vec![1], TimeStamp::new(1)).await;
+        leader_resolver
+            .resolve(vec![1], TimeStamp::new(1), None)
+            .await;
         let req = rx.recv_timeout(Duration::from_secs(1)).unwrap();
         assert_eq!(req.regions.len(), 1);
 
         // Checking zero region does not send request.
-        leader_resolver.resolve(vec![], TimeStamp::new(1)).await;
+        leader_resolver
+            .resolve(vec![], TimeStamp::new(1), None)
+            .await;
         rx.recv_timeout(Duration::from_secs(1)).unwrap_err();
 
         let _ = server.shutdown().await;
