@@ -1904,12 +1904,13 @@ where
                     for tracker in trackers {
                         // Collect the metrics related to commit_log
                         // durations.
+                        let duration = tracker.observe(now, hist, |t| {
+                            t.metrics.commit_not_persisted = !commit_persisted;
+                            &mut t.metrics.wf_commit_log_nanos
+                        });
                         metrics
                             .stat_commit_log
-                            .record(Duration::from_nanos(tracker.observe(now, hist, |t| {
-                                t.metrics.commit_not_persisted = !commit_persisted;
-                                &mut t.metrics.wf_commit_log_nanos
-                            })));
+                            .record(Duration::from_nanos(duration));
                     }
                 }
             }
