@@ -129,7 +129,9 @@ impl AdvanceTsWorker {
                 }
             }
 
-            let regions = leader_resolver.resolve(regions, min_ts, None).await;
+            let regions = leader_resolver
+                .resolve(regions, min_ts, Some(advance_ts_interval))
+                .await;
             if !regions.is_empty() {
                 if let Err(e) = scheduler.schedule(Task::ResolvedTsAdvanced {
                     regions,
