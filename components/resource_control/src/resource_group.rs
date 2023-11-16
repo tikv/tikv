@@ -77,7 +77,10 @@ impl TaskPriority {
 impl From<u32> for TaskPriority {
     fn from(value: u32) -> Self {
         // map the resource group priority value (1,8,16) to (Low,Medium,High)
-        if value < 6 {
+        // 0 means the priority is not set, so map it to medium by default.
+        if value == 0 {
+            Self::Medium
+        } else if value < 6 {
             Self::Low
         } else if value < 11 {
             Self::Medium
