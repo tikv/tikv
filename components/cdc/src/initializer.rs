@@ -35,7 +35,7 @@ use tikv_kv::Iterator;
 use tikv_util::{
     box_err,
     codec::number,
-    debug, error, info,
+    debug, defer, error, info,
     sys::inspector::{self_thread_inspector, ThreadInspector},
     time::{Instant, Limiter},
     warn,
@@ -112,25 +112,6 @@ impl<E: KvEngine> Initializer<E> {
         fail_point!("cdc_before_initialize");
         let _permit = concurrency_semaphore.acquire().await;
 
-        // When downstream_state is Stopped, it means the corresponding delegate
-        // is stopped. The initialization can be safely canceled.
-        //
-        // Acquiring a permit may take some time, it is possible that
-        // initialization can be canceled.
-        if self.downstream_state.load() == DownstreamState::Stopped {
-            info!("cdc async incremental scan canceled";
-                "region_id" => self.region_id,
-                "downstream_id" => ?self.downstream_id,
-                "observe_id" => ?self.observe_id,
-                "conn_id" => ?self.conn_id);
-            return Err(box_err!("scan canceled"));
-        }
-
-        CDC_SCAN_TASKS.with_label_values(&["ongoing"]).inc();
-        tikv_util::defer!({
-            CDC_SCAN_TASKS.with_label_values(&["ongoing"]).dec();
-        });
-
         // To avoid holding too many snapshots and holding them too long,
         // we need to acquire scan concurrency permit before taking snapshot.
         let sched = self.sched.clone();
@@ -185,8 +166,8 @@ impl<E: KvEngine> Initializer<E> {
         mut resp: ReadResponse<impl EngineSnapshot>,
     ) -> Result<()> {
         if let Some(region_snapshot) = resp.snapshot {
-            assert_eq!(self.region_id, region_snapshot.get_region().get_id());
             let region = region_snapshot.get_region().clone();
+            assert_eq!(self.region_id, region.get_id());
             self.async_incremental_scan(region_snapshot, region).await
         } else {
             assert!(
@@ -204,10 +185,27 @@ impl<E: KvEngine> Initializer<E> {
         snap: S,
         region: Region,
     ) -> Result<()> {
-        let downstream_id = self.downstream_id;
+        CDC_SCAN_TASKS.with_label_values(&["ongoing"]).inc();
+        defer!(CDC_SCAN_TASKS.with_label_values(&["ongoing"]).dec());
+
         let region_id = region.get_id();
+        let downstream_id = self.downstream_id;
         let observe_id = self.observe_id;
+        let conn_id = self.conn_id;
         let kv_api = self.kv_api;
+        let on_cancel = || -> Result<()> {
+            info!("cdc async incremental scan canceled";
+                "region_id" => region_id,
+                "downstream_id" => ?downstream_id,
+                "observe_id" => ?observe_id,
+                "conn_id" => ?conn_id);
+            Err(box_err!("scan canceled"))
+        };
+
+        if self.downstream_state.load() == DownstreamState::Stopped {
+            return on_cancel();
+        }
+
         debug!("cdc async incremental scan";
             "region_id" => region_id,
             "downstream_id" => ?downstream_id,
@@ -254,7 +252,6 @@ impl<E: KvEngine> Initializer<E> {
         };
 
         fail_point!("cdc_incremental_scan_start");
-        let conn_id = self.conn_id;
         let mut done = false;
         let start = Instant::now_coarse();
 
@@ -263,15 +260,6 @@ impl<E: KvEngine> Initializer<E> {
             curr_state,
             DownstreamState::Initializing | DownstreamState::Stopped
         ));
-
-        let on_cancel = || -> Result<()> {
-            info!("cdc async incremental scan canceled";
-                "region_id" => region_id,
-                "downstream_id" => ?downstream_id,
-                "observe_id" => ?observe_id,
-                "conn_id" => ?conn_id);
-            Err(box_err!("scan canceled"))
-        };
 
         while !done {
             // When downstream_state is Stopped, it means the corresponding
@@ -1018,6 +1006,14 @@ mod tests {
         let (tx1, rx1) = sync_channel(1);
         let change_cmd = ChangeObserver::from_cdc(1, ObserveHandle::new());
         pool.spawn(async move {
+            // Migrated to 2021 migration. This let statement is probably not needed, see
+            //   https://doc.rust-lang.org/edition-guide/rust-2021/disjoint-capture-in-closures.html
+            let _ = (
+                &initializer,
+                &change_cmd,
+                &raft_router,
+                &concurrency_semaphore,
+            );
             let res = initializer
                 .initialize(change_cmd, raft_router, concurrency_semaphore)
                 .await;
