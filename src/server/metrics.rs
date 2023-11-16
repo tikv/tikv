@@ -609,15 +609,18 @@ pub fn record_request_source_metrics(source: String, duration: Duration) {
     });
 }
 
-impl From<u32> for ResourcePriority {
-    fn from(priority: u32) -> Self {
+impl From<u64> for ResourcePriority {
+    fn from(priority: u64) -> Self {
         // the mapping definition of priority in TIDB repo,
         // see: https://github.com/pingcap/tidb/blob/8b151114546d6a02d8250787a2a3213620e30524/parser/parser.y#L1740-L1752
-        match priority {
-            1 => ResourcePriority::low,
-            8 => ResourcePriority::medium,
-            16 => ResourcePriority::high,
-            _ => ResourcePriority::unknown,
+        if priority == 0 {
+            Self::medium
+        } else if priority < 6 {
+            Self::low
+        } else if priority < 11 {
+            Self::medium
+        } else {
+            Self::high
         }
     }
 }

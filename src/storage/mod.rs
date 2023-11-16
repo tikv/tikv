@@ -786,16 +786,16 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             .get_context()
             .get_resource_control_context()
             .get_resource_group_name();
-        let resource_priority =
-            ResourcePriority::from(self.get_resource_group_priority(resource_group_name));
+        let group_priority = requests[0]
+            .get_context()
+            .get_resource_control_context()
+            .get_override_priority();
+        let resource_priority = ResourcePriority::from(group_priority);
         let resource_limiter = self.resource_manager.as_ref().and_then(|r| {
             r.get_resource_limiter(
                 resource_group_name,
                 requests[0].get_context().get_request_source(),
-                requests[0]
-                    .get_context()
-                    .get_resource_control_context()
-                    .get_override_priority(),
+                group_priority,
             )
         });
         let concurrency_manager = self.concurrency_manager.clone();
@@ -1777,16 +1777,16 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             .get_context()
             .get_resource_control_context()
             .get_resource_group_name();
-        let resource_priority =
-            ResourcePriority::from(self.get_resource_group_priority(resource_group_name));
+        let group_priority = gets[0]
+            .get_context()
+            .get_resource_control_context()
+            .get_override_priority();
+        let resource_priority = ResourcePriority::from(group_priority);
         let resource_limiter = self.resource_manager.as_ref().and_then(|r| {
             r.get_resource_limiter(
                 resource_group_name,
                 gets[0].get_context().get_request_source(),
-                gets[0]
-                    .get_context()
-                    .get_resource_control_context()
-                    .get_override_priority(),
+                group_priority,
             )
         });
         let priority_tag = get_priority_tag(priority);

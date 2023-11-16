@@ -253,14 +253,13 @@ fn future_batch_get_command<E: Engine, L: LockManager, F: KvFormat>(
         .collect();
     let mut resource_priority = ResourcePriority::unknown;
     if !gets.is_empty() {
-        let resource_name = gets
+        let priority = gets
             .first()
             .unwrap()
             .get_context()
             .get_resource_control_context()
-            .get_resource_group_name();
-        resource_priority =
-            ResourcePriority::from(storage.get_resource_group_priority(resource_name));
+            .get_override_priority();
+        resource_priority = ResourcePriority::from(priority);
     }
 
     let res = storage.batch_get_command(
@@ -317,14 +316,13 @@ fn future_batch_raw_get_command<E: Engine, L: LockManager, F: KvFormat>(
         .collect();
     let mut resource_priority = ResourcePriority::unknown;
     if !gets.is_empty() {
-        let resource_name = gets
+        let priority = gets
             .first()
             .unwrap()
             .get_context()
             .get_resource_control_context()
-            .get_resource_group_name();
-        resource_priority =
-            ResourcePriority::from(storage.get_resource_group_priority(resource_name));
+            .get_override_priority();
+        resource_priority = ResourcePriority::from(priority);
     }
 
     let res = storage.raw_batch_get_command(
