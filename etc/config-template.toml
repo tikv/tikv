@@ -927,9 +927,9 @@
 ## default: lz4
 # blob-file-compression = "lz4"
 
-## Set blob file zstd dictionary compression, default(0) will use zstd compression
-## It is recommend to set dictionary size to 4k, 16k, and sample data to train 
-## dictionary is of size 100X dictionary size.
+## Set blob file zstd dictionary compression, default(0) will use zstd compression.
+## It is recommended to set the dictionary size to values such as 4k or 16k. Additionally,
+## the sample data size to train dictionary is of size 100X dictionary size innerly.
 ## It has no effect when `blob-file-compression` is not `zstd`.
 ## default: 0
 # zstd-dict-size = 0
