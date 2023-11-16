@@ -260,12 +260,6 @@ impl<E: Engine, L: LockManager, F: KvFormat> Drop for Storage<E, L, F> {
 }
 
 impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
-    pub fn get_resource_group_priority(&self, resource_group_name: &str) -> u32 {
-        self.resource_manager
-            .as_ref()
-            .map_or(0, |r| r.get_resource_group_priority(resource_group_name))
-    }
-
     /// Create a `Storage` from given engine.
     pub fn from_engine<R: FlowStatsReporter>(
         engine: E,

@@ -614,7 +614,7 @@ impl From<u64> for ResourcePriority {
         // the mapping definition of priority in TIDB repo,
         // see: https://github.com/pingcap/tidb/blob/8b151114546d6a02d8250787a2a3213620e30524/parser/parser.y#L1740-L1752
         if priority == 0 {
-            Self::medium
+            Self::unknown
         } else if priority < 6 {
             Self::low
         } else if priority < 11 {

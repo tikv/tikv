@@ -251,16 +251,14 @@ fn future_batch_get_command<E: Engine, L: LockManager, F: KvFormat>(
         .zip(gets.iter())
         .map(|(id, req)| (*id, req.get_context().get_request_source().to_string()))
         .collect();
-    let mut resource_priority = ResourcePriority::unknown;
-    if !gets.is_empty() {
-        let priority = gets
-            .first()
-            .unwrap()
-            .get_context()
-            .get_resource_control_context()
-            .get_override_priority();
-        resource_priority = ResourcePriority::from(priority);
-    }
+
+    let group_priority = gets
+        .first()
+        .unwrap()
+        .get_context()
+        .get_resource_control_context()
+        .get_override_priority();
+    let resource_priority = ResourcePriority::from(group_priority);
 
     let res = storage.batch_get_command(
         gets,
@@ -314,16 +312,14 @@ fn future_batch_raw_get_command<E: Engine, L: LockManager, F: KvFormat>(
         .zip(gets.iter())
         .map(|(id, req)| (*id, req.get_context().get_request_source().to_string()))
         .collect();
-    let mut resource_priority = ResourcePriority::unknown;
-    if !gets.is_empty() {
-        let priority = gets
-            .first()
-            .unwrap()
-            .get_context()
-            .get_resource_control_context()
-            .get_override_priority();
-        resource_priority = ResourcePriority::from(priority);
-    }
+
+    let group_priority = gets
+        .first()
+        .unwrap()
+        .get_context()
+        .get_resource_control_context()
+        .get_override_priority();
+    let resource_priority = ResourcePriority::from(group_priority);
 
     let res = storage.raw_batch_get_command(
         gets,
