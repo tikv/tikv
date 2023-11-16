@@ -4177,14 +4177,15 @@ where
 
         if let Some(ref memory_engine) = memory_engine {
             let mut memory_engine = memory_engine.core.lock().unwrap();
-            let skip_list = memory_engine.engine.entry(region_id).or_default().clone();
-            for region in &regions {
-                if region.get_id() == region_id {
-                    continue;
+            if let Some(skip_list) = memory_engine.engine.get(&region_id).cloned() {
+                for region in &regions {
+                    if region.get_id() == region_id {
+                        continue;
+                    }
+                    memory_engine
+                        .engine
+                        .insert(region.get_id(), skip_list.clone());
                 }
-                memory_engine
-                    .engine
-                    .insert(region.get_id(), skip_list.clone());
             }
         }
 

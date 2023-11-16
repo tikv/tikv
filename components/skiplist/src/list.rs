@@ -13,6 +13,7 @@ use std::{
 
 use bytes::Bytes;
 use rand::Rng;
+use slog_global::info;
 
 use super::{arena::Arena, KeyComparator, MAX_HEIGHT};
 
@@ -292,7 +293,13 @@ impl<C: KeyComparator> Skiplist<C> {
             if p == n {
                 unsafe {
                     if (*p).value != value {
-                        panic!("why this can happen");
+                        info!(
+                            "Different values with the same key";
+                            "key" => ?key,
+                            "prev_value" => ?((*p).value).as_slice(),
+                            "value" => ?value.as_slice(),
+                        );
+                        // panic!("why this can happen");
                     }
                 }
                 return None;

@@ -367,9 +367,13 @@ impl<S: Snapshot> PointGetter<S> {
     ) -> Result<Value> {
         self.statistics.data.get += 1;
         // TODO: We can avoid this clone.
-        let value = self
-            .snapshot
-            .get_cf(CF_DEFAULT, &user_key.clone().append_ts(write_start_ts))?;
+        let seek_key = user_key.clone().append_ts(write_start_ts);
+        info!(
+            "load_data_from_default_cf";
+            "key" => ?user_key.as_encoded(),
+            "key_ts" => ?seek_key.as_encoded(),
+        );
+        let value = self.snapshot.get_cf(CF_DEFAULT, &seek_key)?;
 
         if let Some(value) = value {
             self.statistics.data.processed_keys += 1;

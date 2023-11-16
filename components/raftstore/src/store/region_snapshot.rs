@@ -11,7 +11,7 @@ use std::{
 
 use engine_traits::{
     util::check_key_in_range, Error as EngineError, IterOptions, Iterable, Iterator, KvEngine,
-    Peekable, RaftEngine, ReadOptions, Result as EngineResult, Snapshot, CF_RAFT,
+    Peekable, RaftEngine, ReadOptions, Result as EngineResult, Snapshot, CF_LOCK, CF_RAFT,
 };
 use fail::fail_point;
 use futures_util::future::Either;
@@ -149,7 +149,7 @@ where
         update_lower_bound(&mut iter_opt, &self.region);
         update_upper_bound(&mut iter_opt, &self.region);
 
-        let iter = if self.memory_snapshot.is_none() {
+        let iter = if self.memory_snapshot.is_none() || cf == CF_LOCK {
             let iter = self
                 .snap
                 .iterator_opt(cf, iter_opt.clone())

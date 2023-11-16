@@ -1829,6 +1829,13 @@ where
         keys::data_key_with_buffer(key, &mut ctx.key_buffer);
         let key = ctx.key_buffer.as_slice();
 
+        // info!(
+        //     "handle_put";
+        //     "cf" => ?req.get_put().get_cf(),
+        //     "key" => ?key,
+        //     "value" => ?value,
+        // );
+
         self.metrics.size_diff_hint += key.len() as i64;
         self.metrics.size_diff_hint += value.len() as i64;
         if !req.get_put().get_cf().is_empty() {
@@ -1849,12 +1856,16 @@ where
                     e
                 )
             });
-            if ctx.memory_engine.is_some() {
-                ctx.memory_batch.entry(self.region.get_id()).or_default()[cf_to_id(cf) as usize]
-                    .push((
-                        Bytes::from(key.to_vec()),
-                        ValueType::Put(Bytes::from(value.to_vec())),
-                    ));
+
+            if cf != CF_LOCK {
+                if ctx.memory_engine.is_some() {
+                    ctx.memory_batch.entry(self.region.get_id()).or_default()
+                        [cf_to_id(cf) as usize]
+                        .push((
+                            Bytes::from(key.to_vec()),
+                            ValueType::Put(Bytes::from(value.to_vec())),
+                        ));
+                }
             }
         } else {
             ctx.kv_wb.put(key, value).unwrap_or_else(|e| {
@@ -1866,6 +1877,7 @@ where
                     e
                 );
             });
+
             if ctx.memory_engine.is_some() {
                 ctx.memory_batch.entry(self.region.get_id()).or_default()
                     [cf_to_id(CF_DEFAULT) as usize]
@@ -1879,13 +1891,11 @@ where
     }
 
     fn handle_delete(&mut self, ctx: &mut ApplyContext<EK>, req: &Request) -> Result<()> {
-        if req.get_delete().get_cf() != CF_LOCK {
-            info!(
-                "handle delete";
-                "region_id" => self.region.get_id(),
-                "cf" => ?req.get_delete().get_cf(),
-            );
-        }
+        // info!(
+        //     "handle delete";
+        //     "region_id" => self.region.get_id(),
+        //     "cf" => ?req.get_delete().get_cf(),
+        // );
 
         PEER_WRITE_CMD_COUNTER.delete.inc();
         let key = req.get_delete().get_key();
@@ -1920,9 +1930,12 @@ where
                 self.metrics.delete_keys_hint += 1;
             }
 
-            if ctx.memory_engine.is_some() {
-                ctx.memory_batch.entry(self.region.get_id()).or_default()[cf_to_id(cf) as usize]
-                    .push((Bytes::from(key.to_vec()), ValueType::Delete {}));
+            if cf != CF_LOCK {
+                if ctx.memory_engine.is_some() {
+                    ctx.memory_batch.entry(self.region.get_id()).or_default()
+                        [cf_to_id(cf) as usize]
+                        .push((Bytes::from(key.to_vec()), ValueType::Delete {}));
+                }
             }
         } else {
             ctx.kv_wb.delete(key).unwrap_or_else(|e| {

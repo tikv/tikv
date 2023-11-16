@@ -45,17 +45,17 @@ impl Default for RegionMemoryEngine {
                 Arc::new(Skiplist::with_capacity(
                     ByteWiseComparator::default(),
                     3 << 30,
-                    false,
+                    true,
                 )),
                 Arc::new(Skiplist::with_capacity(
                     ByteWiseComparator::default(),
                     1 << 30,
-                    false,
+                    true,
                 )),
                 Arc::new(Skiplist::with_capacity(
                     ByteWiseComparator::default(),
                     3 << 30,
-                    false,
+                    true,
                 )),
             ],
         }
@@ -128,7 +128,7 @@ impl LruMemoryEngine {
                             engine.put(k, v);
                         }
                         ValueType::Delete => {
-                            assert!(engine.remove(k).is_some());
+                            engine.remove(k).is_some();
                         }
                     });
                 });
@@ -196,10 +196,13 @@ impl MemoryEngineSnapshot {
             .get(&opts.region_id().unwrap())?
             .data[cf_to_id(cf) as usize]
             .clone();
+        let prefix_same_as_start = opts.prefix_same_as_start();
         let (lower_bound, upper_bound) = opts.build_bounds();
         Some(MemoryEngineIterator {
             cf: String::from(cf),
             valid: false,
+            prefix_same_as_start,
+            prefix: None,
             lower_bound,
             upper_bound,
             iter: regional_engine.iter(),
@@ -210,6 +213,8 @@ impl MemoryEngineSnapshot {
 pub struct MemoryEngineIterator {
     cf: String,
     valid: bool,
+    prefix_same_as_start: bool,
+    prefix: Option<Vec<u8>>,
     iter: IterRef<Skiplist<ByteWiseComparator>, ByteWiseComparator>,
     lower_bound: Option<Vec<u8>>,
     upper_bound: Option<Vec<u8>>,
@@ -232,12 +237,32 @@ impl MemoryEngineIterator {
     pub fn next(&mut self) -> engine_traits::Result<bool> {
         self.iter.next();
         self.valid = self.iter.valid();
+        if let Some(ref upper) = self.upper_bound && self.valid {
+            self.valid = self.key() < upper.as_slice();
+        }
+        if self.valid && self.prefix_same_as_start {
+            let prefix = self.prefix.as_ref().unwrap();
+            let cur_key = self.key();
+            if &cur_key[..cur_key.len() - 8] != prefix.as_slice() {
+                self.valid = false;
+            }
+        }
         Ok(self.valid)
     }
 
     pub fn prev(&mut self) -> engine_traits::Result<bool> {
         self.iter.prev();
         self.valid = self.iter.valid();
+        if let Some(ref lower) = self.lower_bound && self.valid {
+            self.valid = self.key() >= lower.as_slice();
+        }
+        if self.valid && self.prefix_same_as_start {
+            let prefix = self.prefix.as_ref().unwrap();
+            let cur_key = self.key();
+            if &cur_key[..cur_key.len() - 8] != prefix.as_slice() {
+                self.valid = false;
+            }
+        }
         Ok(self.valid)
     }
 
@@ -249,6 +274,18 @@ impl MemoryEngineIterator {
         };
         self.iter.seek(start);
         self.valid = self.iter.valid();
+        if let Some(ref upper)  = self.upper_bound && self.valid {
+            self.valid = self.key() < upper.as_slice();
+        }
+
+        if self.valid && self.prefix_same_as_start {
+            self.prefix = Some(key[..key.len() - 8].to_vec());
+            let cur_key = self.key();
+            if &cur_key[..cur_key.len() - 8] != self.prefix.as_ref().unwrap().as_slice() {
+                self.valid = false;
+            }
+        }
+
         Ok(self.valid)
     }
 
@@ -260,26 +297,56 @@ impl MemoryEngineIterator {
         };
         self.iter.seek_for_prev(end);
         self.valid = self.iter.valid();
+        if let Some(ref lower) = self.lower_bound && self.valid {
+            self.valid = self.key() >= lower.as_slice();
+        }
+
+        if self.valid && self.prefix_same_as_start {
+            self.prefix = Some(key[..key.len() - 8].to_vec());
+            let cur_key = self.key();
+            if &cur_key[..cur_key.len() - 8] != self.prefix.as_ref().unwrap().as_slice() {
+                self.valid = false;
+            }
+        }
+
         Ok(self.valid)
     }
 
     pub fn seek_to_first(&mut self) -> engine_traits::Result<bool> {
-        if let Some(ref lower_bound) = self.lower_bound {
-            self.iter.seek(lower_bound.as_slice());
+        if let Some(lower_bound) = self.lower_bound.clone() {
+            return self.seek(lower_bound.as_slice());
         } else {
             self.iter.seek_to_first()
         }
         self.valid = self.iter.valid();
+        if let Some(ref upper) = self.upper_bound && self.valid {
+            self.valid = self.key() < upper.as_slice();
+        }
+
+        if self.valid && self.prefix_same_as_start {
+            let cur_key = self.key();
+            self.prefix = Some(cur_key[..cur_key.len() - 8].to_vec());
+        }
+
         Ok(self.valid)
     }
 
     pub fn seek_to_last(&mut self) -> engine_traits::Result<bool> {
-        if let Some(ref upper_bound) = self.upper_bound {
-            self.iter.seek(upper_bound.as_slice());
+        if let Some(upper_bound) = self.upper_bound.clone() {
+            return self.seek(upper_bound.as_slice());
         } else {
             self.iter.seek_to_last();
         }
         self.valid = self.iter.valid();
+        if let Some(ref upper) = self.upper_bound && self.valid {
+            self.valid = self.key() < upper.as_slice();
+        }
+
+        if self.valid && self.prefix_same_as_start {
+            let cur_key = self.key();
+            self.prefix = Some(cur_key[..cur_key.len() - 8].to_vec());
+        }
+
         Ok(self.valid)
     }
 
