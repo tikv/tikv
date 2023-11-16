@@ -4869,7 +4869,210 @@ def RocksDB() -> RowPanel:
 
 def RaftEngine() -> RowPanel:
     layout = Layout(title="Raft Engine")
-    layout.row([])
+    layout.row(
+        [
+            graph_panel(
+                title="Operation",
+                description="The count of operations per second",
+                yaxes=yaxes(left_format=UNITS.OPS_PER_SEC),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "raft_engine_write_apply_duration_seconds_count",
+                            by_labels=[],  # override default by instance.
+                        ),
+                        legend_format="write",
+                    ),
+                    target(
+                        expr=expr_sum_rate(
+                            "raft_engine_read_entry_duration_seconds_count",
+                            by_labels=[],  # override default by instance.
+                        ),
+                        legend_format="read_entry",
+                    ),
+                    target(
+                        expr=expr_sum_rate(
+                            "raft_engine_read_message_duration_seconds_count",
+                            by_labels=[],  # override default by instance.
+                        ),
+                        legend_format="read_message",
+                    ),
+                ],
+            ),
+            graph_panel_histogram_quantiles(
+                title="Write Duration",
+                description="The time used in write operation",
+                yaxes=yaxes(left_format=UNITS.SECONDS),
+                metric="raft_engine_write_duration_seconds",
+                hide_count=True,
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel(
+                title="Flow",
+                description="The I/O flow rate",
+                yaxes=yaxes(left_format=UNITS.BYTES_SEC_IEC),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "raft_engine_write_size_sum",
+                            by_labels=[],  # override default by instance.
+                        ),
+                        legend_format="write",
+                    ),
+                    target(
+                        expr=expr_sum_rate(
+                            "raft_engine_background_rewrite_bytes_sum",
+                            by_labels=["type"],
+                        ),
+                        legend_format="rewrite-{{type}}",
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="Write Duration Breakdown (99%)",
+                description="99% duration breakdown of write operation",
+                yaxes=yaxes(left_format=UNITS.SECONDS),
+                targets=[
+                    target(
+                        expr=expr_histogram_quantile(
+                            0.99, "raft_engine_write_preprocess_duration_seconds"
+                        ),
+                        legend_format="wait",
+                    ),
+                    target(
+                        expr=expr_histogram_quantile(
+                            0.99, "raft_engine_write_leader_duration_seconds"
+                        ),
+                        legend_format="wal",
+                    ),
+                    target(
+                        expr=expr_histogram_quantile(
+                            0.99, "raft_engine_write_apply_duration_seconds"
+                        ),
+                        legend_format="apply",
+                    ),
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel_histogram_quantiles(
+                title="Bytes / Written",
+                description="The bytes per write",
+                yaxes=yaxes(left_format=UNITS.BYTES_IEC),
+                metric="raft_engine_write_size",
+                hide_count=True,
+            ),
+            graph_panel(
+                title="WAL Duration Breakdown (999%)",
+                description="999% duration breakdown of WAL write operation",
+                yaxes=yaxes(left_format=UNITS.SECONDS),
+                targets=[
+                    target(
+                        expr=expr_histogram_quantile(
+                            0.999, "raft_engine_write_leader_duration_seconds"
+                        ),
+                        legend_format="total",
+                    ),
+                    target(
+                        expr=expr_histogram_quantile(
+                            0.999, "raft_engine_sync_log_duration_seconds"
+                        ),
+                        legend_format="sync",
+                    ),
+                    target(
+                        expr=expr_histogram_quantile(
+                            0.999, "raft_engine_allocate_log_duration_seconds"
+                        ),
+                        legend_format="allocate",
+                    ),
+                    target(
+                        expr=expr_histogram_quantile(
+                            0.999, "raft_engine_rotate_log_duration_seconds"
+                        ),
+                        legend_format="rotate",
+                    ),
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel(
+                title="File Count",
+                description="The average number of files",
+                yaxes=yaxes(left_format=UNITS.SHORT),
+                targets=[
+                    target(
+                        expr=expr_avg(
+                            "raft_engine_log_file_count",
+                            by_labels=["type"],
+                        ),
+                    ),
+                    target(
+                        expr=expr_avg(
+                            "raft_engine_swap_file_count",
+                            by_labels=[],  # override default by instance.
+                        ),
+                        legend_format="swap",
+                    ),
+                    target(
+                        expr=expr_avg(
+                            "raft_engine_recycled_file_count",
+                            by_labels=["type"],
+                        ),
+                        legend_format="{{type}}-recycle",
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="Other Durations (99%)",
+                description="The 99% duration of operations other than write",
+                yaxes=yaxes(left_format=UNITS.SECONDS, log_base=2),
+                targets=[
+                    target(
+                        expr=expr_histogram_quantile(
+                            0.999, "raft_engine_read_entry_duration_seconds"
+                        ),
+                        legend_format="read_entry",
+                    ),
+                    target(
+                        expr=expr_histogram_quantile(
+                            0.999, "raft_engine_read_message_duration_seconds"
+                        ),
+                        legend_format="read_message",
+                    ),
+                    target(
+                        expr=expr_histogram_quantile(
+                            0.999, "raft_engine_purge_duration_seconds"
+                        ),
+                        legend_format="purge",
+                    ),
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel(
+                title="Entry Count",
+                description="The average number of log entries",
+                yaxes=yaxes(left_format=UNITS.SHORT),
+                targets=[
+                    target(
+                        expr=expr_avg(
+                            "raft_engine_log_entry_count",
+                            by_labels=["type"],
+                        ),
+                    ),
+                ],
+            ),
+        ]
+    )
     return layout.row_panel
 
 
@@ -5923,7 +6126,7 @@ dashboard = Dashboard(
         CoprocessorDetail(),
         Threads(),
         # RocksDB(),
-        # RaftEngine(),
+        RaftEngine(),
         Titan(),
         # PessimisticLocking(),
         # PointInTimeRestore(),
