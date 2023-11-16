@@ -6038,7 +6038,159 @@ def Titan() -> RowPanel:
 
 def PessimisticLocking() -> RowPanel:
     layout = Layout(title="Pessimistic Locking")
-    layout.row([])
+    layout.row(
+        [
+            graph_panel(
+                title="Lock Manager Thread CPU",
+                yaxes=yaxes(left_format=UNITS.PERCENT_UNIT),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_thread_cpu_seconds_total",
+                            label_selectors=['name=~"waiter_manager.*"'],
+                            by_labels=["instance", "name"],
+                        ),
+                    ),
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_thread_cpu_seconds_total",
+                            label_selectors=['name=~"deadlock_detect.*"'],
+                            by_labels=["instance", "name"],
+                        ),
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="Lock Manager Handled tasks",
+                yaxes=yaxes(left_format=UNITS.OPS_PER_SEC),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_lock_manager_task_counter",
+                            by_labels=["type"],
+                        ),
+                    )
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel_histogram_quantiles(
+                title="Waiter lifetime duration",
+                description="",
+                yaxes=yaxes(left_format=UNITS.SECONDS, log_base=2),
+                metric="tikv_lock_manager_waiter_lifetime_duration",
+                hide_count=True,
+            ),
+            graph_panel(
+                title="Lock Waiting Queue",
+                yaxes=yaxes(left_format=UNITS.SHORT),
+                targets=[
+                    target(
+                        expr=expr_sum_aggr_over_time(
+                            "tikv_lock_manager_wait_table_status",
+                            "max",
+                            "30s",
+                            by_labels=["type"],
+                        ),
+                    ),
+                    target(
+                        expr=expr_sum_aggr_over_time(
+                            "tikv_lock_wait_queue_entries_gauge_vec",
+                            "max",
+                            "30s",
+                            by_labels=["type"],
+                        ),
+                    ),
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel_histogram_quantiles(
+                title="Deadlock detect duration",
+                description="",
+                yaxes=yaxes(left_format=UNITS.SECONDS, log_base=2),
+                metric="tikv_lock_manager_detect_duration",
+                hide_count=True,
+            ),
+            graph_panel(
+                title="Detect error",
+                yaxes=yaxes(left_format=UNITS.OPS_PER_SEC),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_lock_manager_error_counter", by_labels=["type"]
+                        ),
+                    )
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel(
+                title="Deadlock detector leader",
+                targets=[
+                    target(
+                        expr=expr_sum_aggr_over_time(
+                            "tikv_lock_manager_detector_leader_heartbeat",
+                            "max",
+                            "30s",
+                        ),
+                    )
+                ],
+            ),
+            graph_panel(
+                title="Total pessimistic locks memory size",
+                yaxes=yaxes(left_format=UNITS.BYTES_IEC),
+                targets=[
+                    target(
+                        expr=expr_simple("tikv_pessimistic_lock_memory_size"),
+                        legend_format="{{instance}}",
+                    )
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel(
+                title="In-memory pessimistic locking result",
+                yaxes=yaxes(left_format=UNITS.OPS_PER_SEC),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_in_memory_pessimistic_locking", by_labels=["result"]
+                        ),
+                    )
+                ],
+            ),
+            graph_panel(
+                title="Pessimistic lock activities",
+                description="The number of active keys and waiters.",
+                targets=[
+                    target(
+                        expr=expr_sum(
+                            "tikv_lock_wait_queue_entries_gauge_vec", by_labels=["type"]
+                        ),
+                    )
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            heatmap_panel(
+                title="Lengths of lock wait queues when transaction enqueues",
+                description="The length includes the entering transaction itself",
+                yaxis=yaxis(format=UNITS.SHORT),
+                metric="tikv_lock_wait_queue_length_bucket",
+            )
+        ]
+    )
     return layout.row_panel
 
 
@@ -6128,7 +6280,7 @@ dashboard = Dashboard(
         # RocksDB(),
         RaftEngine(),
         Titan(),
-        # PessimisticLocking(),
+        PessimisticLocking(),
         # PointInTimeRestore(),
         # ResolvedTS(),
         # Memory(),
