@@ -2573,7 +2573,11 @@ pub struct CdcConfig {
     #[online_config(skip)]
     pub incremental_scan_threads: usize,
     pub incremental_scan_concurrency: usize,
+    /// Limit scan speed based on disk I/O traffic.
     pub incremental_scan_speed_limit: ReadableSize,
+    /// Limit scan speed based on memory accesing traffic.
+    #[doc(hidden)]
+    pub incremental_fetch_speed_limit: ReadableSize,
     /// `TsFilter` can increase speed and decrease resource usage when
     /// incremental content is much less than total content. However in
     /// other cases, `TsFilter` can make performance worse because it needs
@@ -2612,6 +2616,7 @@ impl Default for CdcConfig {
             // TiCDC requires a SSD, the typical write speed of SSD
             // is more than 500MB/s, so 128MB/s is enough.
             incremental_scan_speed_limit: ReadableSize::mb(128),
+            incremental_fetch_speed_limit: ReadableSize::mb(512),
             incremental_scan_ts_filter_ratio: 0.2,
             tso_worker_threads: 1,
             // 512MB memory for CDC sink.

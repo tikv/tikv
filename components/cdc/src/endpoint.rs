@@ -337,6 +337,7 @@ pub struct Endpoint<T, E> {
     workers: Runtime,
     scan_concurrency_semaphore: Arc<Semaphore>,
     scan_speed_limiter: Limiter,
+    fetch_speed_limiter: Limiter,
     max_scan_batch_bytes: usize,
     max_scan_batch_size: usize,
     sink_memory_quota: MemoryQuota,
@@ -393,8 +394,13 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
         let scan_concurrency_semaphore =
             Arc::new(Semaphore::new(config.incremental_scan_concurrency));
         let old_value_cache = OldValueCache::new(config.old_value_cache_memory_quota);
-        let speed_limiter = Limiter::new(if config.incremental_scan_speed_limit.0 > 0 {
+        let scan_speed_limiter = Limiter::new(if config.incremental_scan_speed_limit.0 > 0 {
             config.incremental_scan_speed_limit.0 as f64
+        } else {
+            f64::INFINITY
+        });
+        let fetch_speed_limiter = Limiter::new(if config.incremental_fetch_speed_limit.0 > 0 {
+            config.incremental_fetch_speed_limit.0 as f64
         } else {
             f64::INFINITY
         });
@@ -423,7 +429,8 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
             pd_client,
             tso_worker,
             timer: SteadyTimer::default(),
-            scan_speed_limiter: speed_limiter,
+            scan_speed_limiter,
+            fetch_speed_limiter,
             max_scan_batch_bytes,
             max_scan_batch_size,
             config: config.clone(),
@@ -502,6 +509,15 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
             };
 
             self.scan_speed_limiter.set_speed_limit(new_speed_limit);
+        }
+        if change.get("incremental_fetch_speed_limit").is_some() {
+            let new_speed_limit = if self.config.incremental_fetch_speed_limit.0 > 0 {
+                self.config.incremental_fetch_speed_limit.0 as f64
+            } else {
+                f64::INFINITY
+            };
+
+            self.fetch_speed_limiter.set_speed_limit(new_speed_limit);
         }
     }
 
@@ -732,7 +748,8 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
             sink: conn.get_sink().clone(),
             request_id: request.get_request_id(),
             downstream_state,
-            speed_limiter: self.scan_speed_limiter.clone(),
+            scan_speed_limiter: self.scan_speed_limiter.clone(),
+            fetch_speed_limiter: self.fetch_speed_limiter.clone(),
             max_scan_batch_bytes: self.max_scan_batch_bytes,
             max_scan_batch_size: self.max_scan_batch_size,
             observe_id,
@@ -1644,6 +1661,33 @@ mod tests {
             );
             assert!(
                 (ep.scan_speed_limiter.speed_limit() - ReadableSize::mb(1024).0 as f64).abs()
+                    < f64::EPSILON
+            );
+        }
+
+        // Modify incremental_fetch_speed_limit.
+        {
+            let mut updated_cfg = cfg.clone();
+            {
+                updated_cfg.incremental_fetch_speed_limit = ReadableSize::mb(2048);
+            }
+            let diff = cfg.diff(&updated_cfg);
+
+            assert_eq!(
+                ep.config.incremental_fetch_speed_limit,
+                ReadableSize::mb(512)
+            );
+            assert!(
+                (ep.fetch_speed_limiter.speed_limit() - ReadableSize::mb(512).0 as f64).abs()
+                    < f64::EPSILON
+            );
+            ep.run(Task::ChangeConfig(diff));
+            assert_eq!(
+                ep.config.incremental_fetch_speed_limit,
+                ReadableSize::mb(2048)
+            );
+            assert!(
+                (ep.fetch_speed_limiter.speed_limit() - ReadableSize::mb(2048).0 as f64).abs()
                     < f64::EPSILON
             );
         }
