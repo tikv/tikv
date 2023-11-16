@@ -931,6 +931,7 @@
 ## It is recommend to set dictionary size to 4k, 16k, and sample data to train 
 ## dictionary is of size 100X dictionary size.
 ## It has no effect when `blob-file-compression` is not `zstd`.
+## default: 0
 # zstd-dict-size = 0
 
 ## Specifics cache size for blob records
