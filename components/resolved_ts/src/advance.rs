@@ -168,10 +168,7 @@ pub struct LeadershipResolver {
 
     // store_id -> check leader request, record the request to each stores.
     store_req_map: HashMap<u64, CheckLeaderRequest>,
-    // region_id -> region, cache the information of regions.
-    region_map: HashMap<u64, Vec<Peer>>,
-    // region_id -> peers id, record the responses.
-    resp_map: HashMap<u64, Vec<u64>>,
+    progresses: HashMap<u64, RegionProgress>,
     checking_regions: HashSet<u64>,
     valid_regions: HashSet<u64>,
 
@@ -197,8 +194,7 @@ impl LeadershipResolver {
             region_read_progress,
 
             store_req_map: HashMap::default(),
-            region_map: HashMap::default(),
-            resp_map: HashMap::default(),
+            progresses: HashMap::default(),
             valid_regions: HashSet::default(),
             checking_regions: HashSet::default(),
             last_gc_time: Instant::now_coarse(),
@@ -210,8 +206,7 @@ impl LeadershipResolver {
         let now = Instant::now_coarse();
         if now - self.last_gc_time > self.gc_interval {
             self.store_req_map = HashMap::default();
-            self.region_map = HashMap::default();
-            self.resp_map = HashMap::default();
+            self.progresses = HashMap::default();
             self.valid_regions = HashSet::default();
             self.checking_regions = HashSet::default();
             self.last_gc_time = now;
@@ -223,10 +218,7 @@ impl LeadershipResolver {
             v.regions.clear();
             v.ts = 0;
         }
-        for v in self.region_map.values_mut() {
-            v.clear();
-        }
-        for v in self.resp_map.values_mut() {
+        for v in self.progresses.values_mut() {
             v.clear();
         }
         self.checking_regions.clear();
@@ -291,8 +283,7 @@ impl LeadershipResolver {
 
         let store_id = self.store_id;
         let valid_regions = &mut self.valid_regions;
-        let region_map = &mut self.region_map;
-        let resp_map = &mut self.resp_map;
+        let progresses = &mut self.progresses;
         let store_req_map = &mut self.store_req_map;
         let checking_regions = &mut self.checking_regions;
         for region_id in &regions {
@@ -314,13 +305,13 @@ impl LeadershipResolver {
                 }
                 let leader_info = core.get_leader_info();
 
+                let prog = progresses
+                    .entry(*region_id)
+                    .or_insert_with(|| RegionProgress::new(peer_list.len()));
                 let mut unvotes = 0;
                 for peer in peer_list {
                     if peer.store_id == store_id && peer.id == leader_id {
-                        resp_map
-                            .entry(*region_id)
-                            .or_insert_with(|| Vec::with_capacity(peer_list.len()))
-                            .push(store_id);
+                        prog.resps.push(store_id);
                     } else {
                         // It's still necessary to check leader on learners even if they don't vote
                         // because performing stale read on learners require it.
@@ -338,15 +329,14 @@ impl LeadershipResolver {
                         }
                     }
                 }
+
                 // Check `region_has_quorum` here because `store_map` can be empty,
                 // in which case `region_has_quorum` won't be called any more.
-                if unvotes == 0 && region_has_quorum(peer_list, &resp_map[region_id]) {
+                if unvotes == 0 && region_has_quorum(peer_list, &prog.resps) {
+                    prog.resolved = true;
                     valid_regions.insert(*region_id);
                 } else {
-                    region_map
-                        .entry(*region_id)
-                        .or_insert_with(|| Vec::with_capacity(peer_list.len()))
-                        .extend_from_slice(peer_list);
+                    prog.peers.extend_from_slice(peer_list);
                 }
             }
         });
@@ -360,7 +350,6 @@ impl LeadershipResolver {
             .values()
             .find(|req| !req.regions.is_empty())
             .map_or(0, |req| req.regions[0].compute_size());
-        let store_count = store_req_map.len();
         let mut check_leader_rpcs = Vec::with_capacity(store_req_map.len());
         for (store_id, req) in store_req_map {
             if req.regions.is_empty() {
@@ -426,6 +415,7 @@ impl LeadershipResolver {
                 .with_label_values(&["all"])
                 .observe(start.saturating_elapsed_secs());
         });
+
         let rpc_count = check_leader_rpcs.len();
         for _ in 0..rpc_count {
             // Use `select_all` to avoid the process getting blocked when some
@@ -435,10 +425,16 @@ impl LeadershipResolver {
             match res {
                 Ok((to_store, resp)) => {
                     for region_id in resp.regions {
-                        resp_map
-                            .entry(region_id)
-                            .or_insert_with(|| Vec::with_capacity(store_count))
-                            .push(to_store);
+                        if let Some(prog) = progresses.get_mut(&region_id) {
+                            if prog.resolved {
+                                continue;
+                            }
+                            prog.resps.push(to_store);
+                            if region_has_quorum(&prog.peers, &prog.resps) {
+                                prog.resolved = true;
+                                valid_regions.insert(region_id);
+                            }
+                        }
                     }
                 }
                 Err((to_store, reconnect, err)) => {
@@ -448,24 +444,19 @@ impl LeadershipResolver {
                     }
                 }
             }
-        }
-        for (region_id, prs) in region_map {
-            if prs.is_empty() {
-                // The peer had the leadership before, but now it's no longer
-                // the case. Skip checking the region.
-                continue;
-            }
-            if let Some(resp) = resp_map.get(region_id) {
-                if resp.is_empty() {
-                    // No response, maybe the peer lost leadership.
-                    continue;
-                }
-                if region_has_quorum(prs, resp) {
-                    valid_regions.insert(*region_id);
-                }
+            if valid_regions.len() >= progresses.len() {
+                break;
             }
         }
-        self.valid_regions.drain().collect()
+        let res: Vec<u64> = self.valid_regions.drain().collect();
+        if res.len() != checking_regions.len() {
+            warn!(
+                "check leader returns valid regions different from checking regions";
+                "valid_regions" => res.len(),
+                "checking_regions" => checking_regions.len(),
+            );
+        }
+        res
     }
 }
 
@@ -556,6 +547,27 @@ async fn get_tikv_client(
     clients.insert(store_id, cli.clone());
     RTS_TIKV_CLIENT_INIT_DURATION_HISTOGRAM.observe(start.saturating_elapsed_secs());
     Ok(cli)
+}
+
+struct RegionProgress {
+    resolved: bool,
+    peers: Vec<Peer>,
+    resps: Vec<u64>,
+}
+
+impl RegionProgress {
+    fn new(len: usize) -> Self {
+        RegionProgress {
+            resolved: false,
+            peers: Vec::with_capacity(len),
+            resps: Vec::with_capacity(len),
+        }
+    }
+    fn clear(&mut self) {
+        self.resolved = false;
+        self.peers.clear();
+        self.resps.clear();
+    }
 }
 
 #[cfg(test)]
