@@ -3,9 +3,6 @@
 define_error_codes! {
     "KV:LogBackup:",
 
-    ETCD => ("Etcd",
-        "Error during requesting the meta store(etcd)",
-        "Please check the connectivity between TiKV and PD."),
     PROTO => ("Proto",
         "Error during decode / encoding protocol buffer messages",
         "Please check the version of TiKV / BR are compatible, or whether data is corrupted."

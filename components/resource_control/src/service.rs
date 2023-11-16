@@ -565,7 +565,10 @@ pub mod tests {
             s_clone.report_ru_metrics().await;
         });
         // Mock consume.
-        let bg_limiter = s.manager.get_resource_limiter("background", "br").unwrap();
+        let bg_limiter = s
+            .manager
+            .get_background_resource_limiter("background", "br")
+            .unwrap();
         bg_limiter.consume(
             Duration::from_secs(2),
             IoBytes {
@@ -584,7 +587,7 @@ pub mod tests {
         s.manager.add_resource_group(background_group);
         let new_bg_limiter = s
             .manager
-            .get_resource_limiter("background", "lightning")
+            .get_background_resource_limiter("background", "lightning")
             .unwrap();
         new_bg_limiter.consume(
             Duration::from_secs(5),
