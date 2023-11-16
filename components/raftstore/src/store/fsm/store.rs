@@ -126,7 +126,7 @@ pub const MULTI_FILES_SNAPSHOT_FEATURE: Feature = Feature::require(6, 1, 0); // 
 const PERIODIC_FULL_COMPACT_TICK_INTERVAL_DURATION: Duration = Duration::from_secs(30 * 60);
 // If periodic full compaction is enabled (`periodic_full_compact_start_times`
 // is set), sample load metrics every 30 seconds.
-const LOAD_METRICS_WINDOW_DURATION: Duration = Duration::from_secs(30);
+const LOAD_STATS_WINDOW_DURATION: Duration = Duration::from_secs(30);
 
 pub struct StoreInfo<EK, ER> {
     pub kv_engine: EK,
@@ -2464,7 +2464,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         // enabled.
         if !self.ctx.cfg.periodic_full_compact_start_times.is_empty() {
             self.ctx
-                .schedule_store_tick(StoreTick::LoadMetricsWindow, LOAD_METRICS_WINDOW_DURATION)
+                .schedule_store_tick(StoreTick::LoadMetricsWindow, LOAD_STATS_WINDOW_DURATION)
         }
     }
 
