@@ -1433,4 +1433,20 @@ pub(crate) mod tests {
             &mgr.priority_limiters[1]
         ));
     }
+
+    #[test]
+    fn test_task_priority() {
+        use TaskPriority::*;
+        let cases = [
+            (0, Medium),
+            (1, Low),
+            (7, Medium),
+            (8, Medium),
+            (15, High),
+            (16, High),
+        ];
+        for (value, priority) in cases {
+            assert_eq!(TaskPriority::from(value), priority);
+        }
+    }
 }
