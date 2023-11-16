@@ -13,6 +13,9 @@ use tikv::{
 };
 
 fn main() {
+    // OpenSSL FIPS mode should be enabled at the very start.
+    fips::maybe_enable();
+
     let build_timestamp = option_env!("TIKV_BUILD_TIME");
     let version_info = tikv::tikv_version_info(build_timestamp);
 
@@ -216,6 +219,22 @@ fn main() {
         println!("invalid storage.engine configuration: {}", e);
         process::exit(1)
     }
+
+    // Initialize the async-backtrace.
+    tracing_subscriber::registry()
+        .with(tracing_active_tree::layer::global().clone())
+        .init();
+
+    // Sets the global logger ASAP.
+    // It is okay to use the config w/o `validate()`,
+    // because `initial_logger()` handles various conditions.
+    server::setup::initial_logger(&config);
+
+    // Print version information.
+    tikv::log_tikv_info(build_timestamp);
+
+    // Print OpenSSL FIPS mode status.
+    fips::log_status();
 
     // Init memory related settings.
     config.memory.init();

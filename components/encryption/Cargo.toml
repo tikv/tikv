@@ -28,7 +28,7 @@ hex = "0.4.2"
 kvproto = { workspace = true }
 lazy_static = "1.3"
 online_config = { workspace = true }
-openssl = "0.10"
+openssl = { workspace = true }
 prometheus = { version = "0.13", features = ["nightly"] }
 protobuf = { version = "2.8", features = ["bytes"] }
 rand = "0.8"
