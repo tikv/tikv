@@ -104,12 +104,11 @@ pub struct Config {
     pub max_manual_flush_rate: f64,
     // When a peer is not responding for this time, leader will not keep entry cache for it.
     pub raft_entry_cache_life_time: ReadableDuration,
-    // Deprecated! The configuration has no effect.
-    // They are preserved for compatibility check.
     // When a peer is newly added, reject transferring leader to the peer for a while.
     #[doc(hidden)]
     #[serde(skip_serializing)]
-    #[online_config(skip)]
+    #[online_config(hidden)]
+    #[deprecated = "The configuration has been removed. It has no effect"]
     pub raft_reject_transfer_leader_duration: ReadableDuration,
 
     /// Whether to disable checking quorum for the raft group. This will make
@@ -329,27 +328,26 @@ pub struct Config {
     pub io_reschedule_concurrent_max_count: usize,
     pub io_reschedule_hotpot_duration: ReadableDuration,
 
-    // Deprecated! Batch is done in raft client.
     #[doc(hidden)]
     #[serde(skip_serializing)]
-    #[online_config(skip)]
+    #[online_config(hidden)]
+    #[deprecated = "The configuration has been removed. Batch is done in raft client."]
     pub raft_msg_flush_interval: ReadableDuration,
 
-    // Deprecated! These configuration has been moved to Coprocessor.
-    // They are preserved for compatibility check.
     #[doc(hidden)]
     #[serde(skip_serializing)]
-    #[online_config(skip)]
+    #[online_config(hidden)]
+    #[deprecated = "The configuration has been moved to coprocessor.region_max_size."]
     pub region_max_size: ReadableSize,
     #[doc(hidden)]
     #[serde(skip_serializing)]
-    #[online_config(skip)]
+    #[online_config(hidden)]
+    #[deprecated = "The configuration has been moved to coprocessor.region_split_size."]
     pub region_split_size: ReadableSize,
-    // Deprecated! The time to clean stale peer safely can be decided based on RocksDB snapshot
-    // sequence number.
     #[doc(hidden)]
     #[serde(skip_serializing)]
-    #[online_config(skip)]
+    #[online_config(hidden)]
+    #[deprecated = "The configuration has been removed. The time to clean stale peer safely can be decided based on RocksDB snapshot sequence number."]
     pub clean_stale_peer_delay: ReadableDuration,
 
     // Interval to inspect the latency of raftstore for slow store detection.
@@ -409,6 +407,7 @@ pub struct Config {
 }
 
 impl Default for Config {
+    #[allow(deprecated)]
     fn default() -> Config {
         Config {
             prevote: true,

@@ -133,7 +133,7 @@ pub fn remove_thread_memory_accessor() {
 
 use std::thread::ThreadId;
 
-pub use self::profiling::{activate_prof, deactivate_prof, dump_prof};
+pub use self::profiling::*;
 
 pub fn dump_stats() -> String {
     let mut buf = Vec::with_capacity(1024);
@@ -311,6 +311,21 @@ mod profiling {
     // C string should end with a '\0'.
     const PROF_ACTIVE: &[u8] = b"prof.active\0";
     const PROF_DUMP: &[u8] = b"prof.dump\0";
+    const PROF_RESET: &[u8] = b"prof.reset\0";
+    const OPT_PROF: &[u8] = b"opt.prof\0";
+
+    pub fn set_prof_sample(rate: u64) -> ProfResult<()> {
+        let rate = (rate as f64).log2().ceil() as usize;
+        unsafe {
+            if let Err(e) = tikv_jemalloc_ctl::raw::write(PROF_RESET, rate) {
+                return Err(ProfError::JemallocError(format!(
+                    "failed to set prof sample: {}",
+                    e
+                )));
+            }
+        }
+        Ok(())
+    }
 
     pub fn activate_prof() -> ProfResult<()> {
         unsafe {
@@ -351,22 +366,44 @@ mod profiling {
         Ok(())
     }
 
+    pub fn is_profiling_active() -> bool {
+        match unsafe { tikv_jemalloc_ctl::raw::read(PROF_ACTIVE) } {
+            Err(e) => {
+                panic!("is_profiling_active: {:?}", e);
+            }
+            Ok(prof) => prof,
+        }
+    }
+
+    pub fn is_profiling_enabled() -> bool {
+        match unsafe { tikv_jemalloc_ctl::raw::read(OPT_PROF) } {
+            Err(e) => {
+                // Shouldn't be possible since mem-profiling is set
+                panic!("is_profiling_enabled: {:?}", e);
+            }
+            Ok(prof) => prof,
+        }
+    }
+
     #[cfg(test)]
     mod tests {
         use std::fs;
 
         use tempfile::Builder;
 
-        const OPT_PROF: &[u8] = b"opt.prof\0";
+        use super::*;
 
-        fn is_profiling_on() -> bool {
-            match unsafe { tikv_jemalloc_ctl::raw::read(OPT_PROF) } {
-                Err(e) => {
-                    // Shouldn't be possible since mem-profiling is set
-                    panic!("is_profiling_on: {:?}", e);
-                }
-                Ok(prof) => prof,
-            }
+        #[test]
+        #[ignore = "#ifdef MALLOC_CONF"]
+        fn test_profiling_active() {
+            // Make sure somebody has turned on profiling
+            assert!(is_profiling_enabled(), "set MALLOC_CONF=prof:true");
+            activate_prof().unwrap();
+            assert!(is_profiling_active());
+            deactivate_prof().unwrap();
+            assert!(!is_profiling_active());
+
+            super::set_prof_sample(512 * 1024 * 1024).unwrap();
         }
 
         // Only trigger this test with jemallocs `opt.prof` set to
@@ -382,7 +419,7 @@ mod profiling {
         #[ignore = "#ifdef MALLOC_CONF"]
         fn test_profiling_memory_ifdef_malloc_conf() {
             // Make sure somebody has turned on profiling
-            assert!(is_profiling_on(), "set MALLOC_CONF=prof:true");
+            assert!(is_profiling_enabled(), "set MALLOC_CONF=prof:true");
 
             let dir = Builder::new()
                 .prefix("test_profiling_memory")
@@ -391,11 +428,11 @@ mod profiling {
 
             let os_path = dir.path().to_path_buf().join("test1.dump").into_os_string();
             let path = os_path.into_string().unwrap();
-            super::dump_prof(&path).unwrap();
+            dump_prof(&path).unwrap();
 
             let os_path = dir.path().to_path_buf().join("test2.dump").into_os_string();
             let path = os_path.into_string().unwrap();
-            super::dump_prof(&path).unwrap();
+            dump_prof(&path).unwrap();
 
             let files = fs::read_dir(dir.path()).unwrap().count();
             assert_eq!(files, 2);
@@ -430,5 +467,11 @@ mod profiling {
     }
     pub fn deactivate_prof() -> ProfResult<()> {
         Err(ProfError::MemProfilingNotEnabled)
+    }
+    pub fn set_prof_sample(_rate: u64) -> ProfResult<()> {
+        Err(ProfError::MemProfilingNotEnabled)
+    }
+    pub fn is_profiling_active() -> bool {
+        false
     }
 }

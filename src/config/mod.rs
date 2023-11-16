@@ -82,6 +82,7 @@ use crate::{
     server::{
         gc_worker::{GcConfig, RawCompactionFilterFactory, WriteCompactionFilterFactory},
         lock_manager::Config as PessimisticTxnConfig,
+        status_server::HEAP_PROFILE_ACTIVE,
         ttl::TtlCompactionFilterFactory,
         Config as ServerConfig, CONFIG_ROCKSDB_GAUGE,
     },
@@ -1275,10 +1276,10 @@ pub struct DbConfig {
     #[serde(with = "rocks_config::rate_limiter_mode_serde")]
     #[online_config(skip)]
     pub rate_limiter_mode: DBRateLimiterMode,
-    // deprecated. use rate_limiter_auto_tuned.
-    #[online_config(skip)]
+    #[online_config(hidden)]
     #[doc(hidden)]
     #[serde(skip_serializing)]
+    #[deprecated = "The configuration has been removed. Use `rate_limiter_auto_tuned` instead"]
     pub auto_tuned: Option<bool>,
     pub rate_limiter_auto_tuned: bool,
     pub bytes_per_sync: ReadableSize,
@@ -1330,6 +1331,7 @@ pub struct DbResources {
 }
 
 impl Default for DbConfig {
+    #[allow(deprecated)]
     fn default() -> DbConfig {
         DbConfig {
             wal_recovery_mode: DBRecoveryMode::PointInTime,
@@ -2977,13 +2979,15 @@ pub struct CdcConfig {
     pub old_value_cache_memory_quota: ReadableSize,
 
     // Deprecated! preserved for compatibility check.
-    #[online_config(skip)]
+    #[online_config(hidden)]
     #[doc(hidden)]
     #[serde(skip_serializing)]
+    #[deprecated = "The configuration has been removed."]
     pub old_value_cache_size: usize,
 }
 
 impl Default for CdcConfig {
+    #[allow(deprecated)]
     fn default() -> Self {
         Self {
             min_ts_interval: ReadableDuration::secs(1),
@@ -3226,6 +3230,72 @@ impl ConfigManager for LogConfigManager {
 #[derive(Clone, Serialize, Deserialize, PartialEq, Debug, OnlineConfig)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
+pub struct MemoryConfig {
+    // Whether enable the heap profiling which may have a bit performance overhead about 2% for the
+    // default sample rate.
+    pub enable_heap_profiling: bool,
+
+    // Average interval between allocation samples, as measured in bytes of allocation activity.
+    // Increasing the sampling interval decreases profile fidelity, but also decreases the
+    // computational overhead.
+    // The default sample interval is 512 KB. It only accepts power of two, otherwise it will be
+    // rounded up to the next power of two.
+    pub profiling_sample_per_bytes: ReadableSize,
+}
+
+impl Default for MemoryConfig {
+    fn default() -> Self {
+        Self {
+            enable_heap_profiling: true,
+            profiling_sample_per_bytes: ReadableSize::kb(512),
+        }
+    }
+}
+
+impl MemoryConfig {
+    pub fn init(&self) {
+        if self.enable_heap_profiling {
+            let mut activate = HEAP_PROFILE_ACTIVE.lock().unwrap();
+            if let Err(e) = tikv_alloc::activate_prof() {
+                error!("failed to enable heap profiling"; "err" => ?e);
+                return;
+            }
+            *activate = Some(None);
+            tikv_alloc::set_prof_sample(self.profiling_sample_per_bytes.0).unwrap();
+        }
+    }
+}
+
+pub struct MemoryConfigManager;
+
+impl ConfigManager for MemoryConfigManager {
+    fn dispatch(&mut self, changes: ConfigChange) -> CfgResult<()> {
+        if let Some(ConfigValue::Bool(enable)) = changes.get("enable_heap_profiling") {
+            if *enable {
+                let mut activate = HEAP_PROFILE_ACTIVE.lock().unwrap();
+                // already enabled by HTTP API, do nothing
+                if activate.is_none() {
+                    tikv_alloc::activate_prof()?;
+                    *activate = Some(None);
+                }
+            } else {
+                let mut activate = HEAP_PROFILE_ACTIVE.lock().unwrap();
+                tikv_alloc::deactivate_prof()?;
+                *activate = None;
+            }
+        }
+
+        if let Some(ConfigValue::Size(sample_rate)) = changes.get("profiling_sample_per_bytes") {
+            tikv_alloc::set_prof_sample(*sample_rate).unwrap();
+        }
+        info!("update memory config"; "config" => ?changes);
+        Ok(())
+    }
+}
+
+#[derive(Clone, Serialize, Deserialize, PartialEq, Debug, OnlineConfig)]
+#[serde(default)]
+#[serde(rename_all = "kebab-case")]
 pub struct QuotaConfig {
     pub foreground_cpu_time: usize,
     pub foreground_write_bandwidth: ReadableSize,
@@ -3273,21 +3343,29 @@ pub struct TikvConfig {
     #[online_config(hidden)]
     pub cfg_path: String,
 
-    // Deprecated! These configuration has been moved to LogConfig.
-    // They are preserved for compatibility check.
     #[doc(hidden)]
-    #[online_config(skip)]
+    #[online_config(hidden)]
+    #[serde(skip_serializing)]
+    #[deprecated = "The configuration has been moved to log.level."]
     pub log_level: LogLevel,
     #[doc(hidden)]
-    #[online_config(skip)]
+    #[online_config(hidden)]
+    #[serde(skip_serializing)]
+    #[deprecated = "The configuration has been moved to log.file.filename."]
     pub log_file: String,
     #[doc(hidden)]
-    #[online_config(skip)]
+    #[online_config(hidden)]
+    #[serde(skip_serializing)]
+    #[deprecated = "The configuration has been moved to log.format."]
     pub log_format: LogFormat,
-    #[online_config(skip)]
+    #[online_config(hidden)]
+    #[serde(skip_serializing)]
+    #[deprecated = "The configuration has been moved to log.file.max_days."]
     pub log_rotation_timespan: ReadableDuration,
     #[doc(hidden)]
-    #[online_config(skip)]
+    #[online_config(hidden)]
+    #[serde(skip_serializing)]
+    #[deprecated = "The configuration has been moved to log.file.max_size."]
     pub log_rotation_size: ReadableSize,
 
     #[online_config(skip)]
@@ -3317,6 +3395,9 @@ pub struct TikvConfig {
 
     #[online_config(submodule)]
     pub log: LogConfig,
+
+    #[online_config(submodule)]
+    pub memory: MemoryConfig,
 
     #[online_config(submodule)]
     pub quota: QuotaConfig,
@@ -3395,6 +3476,7 @@ pub struct TikvConfig {
 }
 
 impl Default for TikvConfig {
+    #[allow(deprecated)]
     fn default() -> TikvConfig {
         TikvConfig {
             cfg_path: "".to_owned(),
@@ -3411,6 +3493,7 @@ impl Default for TikvConfig {
             memory_usage_limit: None,
             memory_usage_high_water: 0.9,
             log: LogConfig::default(),
+            memory: MemoryConfig::default(),
             quota: QuotaConfig::default(),
             readpool: ReadPoolConfig::default(),
             server: ServerConfig::default(),
@@ -3473,8 +3556,24 @@ impl TikvConfig {
                 .unwrap()
                 .to_owned();
         }
-        self.raft_store.raftdb_path = self.infer_raft_db_path(None)?;
-        self.raft_engine.config.dir = self.infer_raft_engine_path(None)?;
+
+        match (
+            self.raft_store.raftdb_path.is_empty(),
+            self.raft_engine.config.dir.is_empty(),
+        ) {
+            (false, true) => {
+                // If raftdb_path is specified, raft_engine_path will inherit it, this will be
+                // useful when updating from older version.
+                self.raft_engine.config.dir =
+                    self.infer_raft_engine_path(Some(self.raft_store.raftdb_path.as_str()))?;
+                self.raft_store.raftdb_path = self.infer_raft_db_path(None)?;
+            }
+            _ => {
+                self.raft_store.raftdb_path = self.infer_raft_db_path(None)?;
+                self.raft_engine.config.dir = self.infer_raft_engine_path(None)?;
+            }
+        }
+
         if self.log_backup.temp_path.is_empty() {
             self.log_backup.temp_path =
                 config::canonicalize_sub_path(&self.storage.data_dir, "log-backup-temp")?;
@@ -3789,6 +3888,7 @@ impl TikvConfig {
 
     // As the init of `logger` is very early, this adjust needs to be separated and
     // called immediately after parsing the command line.
+    #[allow(deprecated)]
     pub fn logger_compatible_adjust(&mut self) {
         let default_tikv_cfg = TikvConfig::default();
         let default_log_cfg = LogConfig::default();
@@ -3840,6 +3940,7 @@ impl TikvConfig {
         }
     }
 
+    #[allow(deprecated)]
     pub fn compatible_adjust(&mut self) {
         let default_raft_store = RaftstoreConfig::default();
         let default_coprocessor = CopConfig::default();
@@ -4002,7 +4103,10 @@ impl TikvConfig {
                 last_cfg.raftdb.wal_dir, self.raftdb.wal_dir
             ));
         }
-        if last_raft_engine_dir != self.raft_engine.config.dir {
+
+        if RaftDataStateMachine::raftengine_exists(Path::new(&last_raft_engine_dir))
+            && last_raft_engine_dir != self.raft_engine.config.dir
+        {
             return Err(format!(
                 "raft engine dir have been changed, former is '{}', \
                  current is '{}', please check if it is expected.",
@@ -4447,6 +4551,7 @@ pub enum Module {
     BackupStream,
     Quota,
     Log,
+    Memory,
     Unknown(String),
 }
 
@@ -4475,6 +4580,7 @@ impl From<&str> for Module {
             "resource_metering" => Module::ResourceMetering,
             "quota" => Module::Quota,
             "log" => Module::Log,
+            "memory" => Module::Memory,
             n => Module::Unknown(n.to_owned()),
         }
     }
@@ -4658,6 +4764,21 @@ mod tests {
         },
     };
 
+    fn create_mock_raftdb(path: &Path) {
+        fs::create_dir_all(path).unwrap();
+        fs::File::create(path.join("CURRENT")).unwrap();
+    }
+
+    fn create_mock_raftengine(path: &Path) {
+        fs::create_dir_all(path).unwrap();
+        fs::File::create(path.join("0000000000000001.raftlog")).unwrap();
+    }
+
+    fn create_mock_kv_data(path: &Path) {
+        fs::create_dir_all(path.join("db")).unwrap();
+        fs::File::create(path.join("db").join("CURRENT")).unwrap();
+    }
+
     #[test]
     fn test_case_macro() {
         let h = kebab_case!(HelloWorld);
@@ -4708,7 +4829,8 @@ mod tests {
 
         tikv_cfg.raft_engine.mut_config().dir = "/raft/wal_dir".to_owned();
         tikv_cfg.validate().unwrap();
-        tikv_cfg.check_critical_cfg_with(&last_cfg).unwrap_err();
+        // no actual raft engine data
+        tikv_cfg.check_critical_cfg_with(&last_cfg).unwrap();
 
         last_cfg.raft_engine.mut_config().dir = "/raft/wal_dir".to_owned();
         tikv_cfg.validate().unwrap();
@@ -4759,6 +4881,213 @@ mod tests {
                 );
             }
         }
+
+        let test_dir = tempfile::Builder::new()
+            .tempdir()
+            .unwrap()
+            .into_path()
+            .join("unittest_raft_engine_dir");
+        let data_dir = test_dir.join("data");
+
+        // simulate tikv restart
+        // enable raft engine: true
+        // need dump data from raftdb: false
+        // custom raft dir: true
+        {
+            let raft_dir = test_dir.join("raft");
+            tikv_cfg = TikvConfig::default();
+            last_cfg = TikvConfig::default();
+
+            last_cfg.raft_engine.mut_config().dir = raft_dir.to_str().unwrap().to_owned();
+            last_cfg.raft_store.raftdb_path = data_dir.join("raft").to_str().unwrap().to_owned();
+            last_cfg.storage.data_dir = data_dir.to_str().unwrap().to_owned();
+            tikv_cfg.raft_engine.mut_config().dir = raft_dir.to_str().unwrap().to_owned();
+            tikv_cfg.raft_store.raftdb_path = data_dir.join("raft").to_str().unwrap().to_owned();
+            tikv_cfg.storage.data_dir = data_dir.to_str().unwrap().to_owned();
+
+            create_mock_raftengine(&raft_dir);
+            create_mock_kv_data(&data_dir);
+
+            tikv_cfg.validate().unwrap();
+            tikv_cfg.check_critical_cfg_with(&last_cfg).unwrap();
+            fs::remove_dir_all(&test_dir).unwrap();
+        }
+
+        // simulate tikv restart
+        // enable raft engine: true
+        // need dump data from raftdb: false
+        // custom raft dir: false
+        {
+            tikv_cfg = TikvConfig::default();
+            last_cfg = TikvConfig::default();
+
+            last_cfg.raft_engine.mut_config().dir =
+                data_dir.join("raft-engine").to_str().unwrap().to_owned();
+            last_cfg.raft_store.raftdb_path = data_dir.join("raft").to_str().unwrap().to_owned();
+            last_cfg.storage.data_dir = data_dir.to_str().unwrap().to_owned();
+            tikv_cfg.raft_engine.mut_config().dir =
+                data_dir.join("raft-engine").to_str().unwrap().to_owned();
+            tikv_cfg.raft_store.raftdb_path = data_dir.join("raft").to_str().unwrap().to_owned();
+            tikv_cfg.storage.data_dir = data_dir.to_str().unwrap().to_owned();
+
+            create_mock_kv_data(&data_dir);
+            create_mock_raftengine(&data_dir.join("raft-engine"));
+
+            tikv_cfg.validate().unwrap();
+            tikv_cfg.check_critical_cfg_with(&last_cfg).unwrap();
+            fs::remove_dir_all(&test_dir).unwrap();
+        }
+
+        // simulate tikv update
+        // enable raft engine: true
+        // need dump data from raftdb: true
+        // custom raft dir: false
+        {
+            tikv_cfg = TikvConfig::default();
+            last_cfg = TikvConfig::default();
+
+            last_cfg.raft_engine.mut_config().dir =
+                data_dir.join("raft-engine").to_str().unwrap().to_owned();
+            last_cfg.raft_store.raftdb_path = data_dir.join("raft").to_str().unwrap().to_owned();
+            last_cfg.storage.data_dir = data_dir.to_str().unwrap().to_owned();
+            tikv_cfg.raft_engine.mut_config().dir =
+                data_dir.join("raft-engine").to_str().unwrap().to_owned();
+            tikv_cfg.raft_store.raftdb_path = data_dir.join("raft").to_str().unwrap().to_owned();
+            tikv_cfg.storage.data_dir = data_dir.to_str().unwrap().to_owned();
+
+            create_mock_kv_data(&data_dir);
+            create_mock_raftdb(&data_dir.join("raft"));
+
+            tikv_cfg.validate().unwrap();
+            tikv_cfg.check_critical_cfg_with(&last_cfg).unwrap();
+            fs::remove_dir_all(&test_dir).unwrap();
+        }
+
+        // multi raft engine dir
+        {
+            tikv_cfg = TikvConfig::default();
+            last_cfg = TikvConfig::default();
+
+            last_cfg.raft_engine.mut_config().dir =
+                data_dir.join("raft-engine").to_str().unwrap().to_owned();
+            last_cfg.raft_store.raftdb_path = data_dir.join("raft").to_str().unwrap().to_owned();
+            last_cfg.storage.data_dir = data_dir.to_str().unwrap().to_owned();
+            tikv_cfg.raft_engine.mut_config().dir =
+                data_dir.join("raft-engine").to_str().unwrap().to_owned();
+            tikv_cfg.raft_store.raftdb_path = data_dir.join("raft").to_str().unwrap().to_owned();
+            tikv_cfg.storage.data_dir = data_dir.to_str().unwrap().to_owned();
+
+            create_mock_kv_data(&data_dir);
+            create_mock_raftdb(&data_dir.join("raft"));
+            create_mock_raftengine(&data_dir.join("raft-engine"));
+
+            tikv_cfg.validate().unwrap_err();
+            tikv_cfg.check_critical_cfg_with(&last_cfg).unwrap();
+            fs::remove_dir_all(&test_dir).unwrap();
+        }
+
+        // simulate tikv update with custom raft dir
+        // enable raft engine: true
+        // need dump data from raftdb: true
+        // custom raft dir: false
+        {
+            tikv_cfg = TikvConfig::default();
+            last_cfg = TikvConfig::default();
+
+            last_cfg.raft_engine.mut_config().dir =
+                data_dir.join("raft-engine").to_str().unwrap().to_owned();
+            last_cfg.raft_store.raftdb_path = test_dir.join("raft").to_str().unwrap().to_owned();
+            last_cfg.storage.data_dir = data_dir.to_str().unwrap().to_owned();
+            tikv_cfg.raft_engine.mut_config().dir =
+                test_dir.join("raft-engine").to_str().unwrap().to_owned();
+            tikv_cfg.raft_store.raftdb_path = test_dir.join("raft").to_str().unwrap().to_owned();
+            tikv_cfg.storage.data_dir = data_dir.to_str().unwrap().to_owned();
+
+            create_mock_kv_data(&data_dir);
+            create_mock_raftdb(&test_dir.join("raft"));
+
+            tikv_cfg.validate().unwrap();
+            tikv_cfg.check_critical_cfg_with(&last_cfg).unwrap();
+            fs::remove_dir_all(&test_dir).unwrap();
+        }
+
+        // simulate tikv update with custom raft dir
+        // enable raft engine: true
+        // need dump data from raftdb: true
+        // custom raft dir: false
+        {
+            tikv_cfg = TikvConfig::default();
+            last_cfg = TikvConfig::default();
+
+            last_cfg.raft_engine.mut_config().dir =
+                data_dir.join("raft-engine").to_str().unwrap().to_owned();
+            last_cfg.raft_store.raftdb_path = test_dir.join("raft").to_str().unwrap().to_owned();
+            last_cfg.storage.data_dir = data_dir.to_str().unwrap().to_owned();
+            tikv_cfg.raft_engine.mut_config().dir = "".to_owned();
+            tikv_cfg.raft_store.raftdb_path = test_dir.join("raft").to_str().unwrap().to_owned();
+            tikv_cfg.storage.data_dir = data_dir.to_str().unwrap().to_owned();
+
+            create_mock_kv_data(&data_dir);
+            create_mock_raftdb(&test_dir.join("raft"));
+
+            tikv_cfg.validate().unwrap();
+            assert_eq!(
+                tikv_cfg.raft_engine.config.dir,
+                test_dir.join("raft").join("raft-engine").to_str().unwrap()
+            );
+            tikv_cfg.check_critical_cfg_with(&last_cfg).unwrap();
+            fs::remove_dir_all(&test_dir).unwrap();
+        }
+
+        // simulate tikv downgrade to raftdb
+        // need dump data from raft-engine
+        // custom raft dir: false
+        {
+            tikv_cfg = TikvConfig::default();
+            last_cfg = TikvConfig::default();
+
+            last_cfg.raft_engine.mut_config().dir =
+                data_dir.join("raft-engine").to_str().unwrap().to_owned();
+            last_cfg.raft_store.raftdb_path = data_dir.join("raft").to_str().unwrap().to_owned();
+            last_cfg.storage.data_dir = data_dir.to_str().unwrap().to_owned();
+            last_cfg.raft_engine.enable = true;
+
+            tikv_cfg.raft_engine.mut_config().dir =
+                data_dir.join("raft-engine").to_str().unwrap().to_owned();
+            tikv_cfg.raft_engine.enable = false;
+            tikv_cfg.raft_store.raftdb_path = data_dir.join("raft").to_str().unwrap().to_owned();
+            tikv_cfg.storage.data_dir = data_dir.to_str().unwrap().to_owned();
+
+            create_mock_kv_data(&data_dir);
+            create_mock_raftengine(&data_dir.join("raft-engine"));
+
+            tikv_cfg.validate().unwrap();
+            tikv_cfg.check_critical_cfg_with(&last_cfg).unwrap();
+            fs::remove_dir_all(&test_dir).unwrap();
+        }
+
+        {
+            tikv_cfg = TikvConfig::default();
+            last_cfg = TikvConfig::default();
+
+            last_cfg.raft_engine.mut_config().dir =
+                data_dir.join("raft-engine").to_str().unwrap().to_owned();
+            last_cfg.raft_store.raftdb_path = data_dir.join("raft").to_str().unwrap().to_owned();
+            last_cfg.storage.data_dir = data_dir.to_str().unwrap().to_owned();
+            last_cfg.raft_engine.enable = true;
+
+            tikv_cfg.raft_engine.mut_config().dir = "".to_owned();
+            tikv_cfg.raft_engine.enable = false;
+            tikv_cfg.raft_store.raftdb_path = data_dir.join("raft").to_str().unwrap().to_owned();
+            tikv_cfg.storage.data_dir = data_dir.to_str().unwrap().to_owned();
+
+            create_mock_kv_data(&data_dir);
+            create_mock_raftengine(&data_dir.join("raft-engine"));
+
+            tikv_cfg.validate().unwrap_err();
+            tikv_cfg.check_critical_cfg_with(&last_cfg).unwrap_err();
+            fs::remove_dir_all(&test_dir).unwrap();
+        }
     }
 
     #[test]
@@ -4778,7 +5107,7 @@ mod tests {
         assert_eq!(last_cfg_metadata.modified().unwrap(), first_modified);
 
         // write to file when config is the inequivalent of last one.
-        cfg.log_level = slog::Level::Warning.into();
+        cfg.log.level = slog::Level::Warning.into();
         persist_config(&cfg).unwrap();
         last_cfg_metadata = last_cfg_path.metadata().unwrap();
         assert_ne!(last_cfg_metadata.modified().unwrap(), first_modified);
@@ -5376,7 +5705,7 @@ mod tests {
     }
 
     #[test]
-    fn test_change_logconfig() {
+    fn test_change_log_config() {
         let (cfg, _dir) = TikvConfig::with_tmp().unwrap();
         let cfg_controller = ConfigController::new(cfg);
 
@@ -5396,6 +5725,37 @@ mod tests {
             cfg_controller.get_current().log.level,
             LogLevel(Level::Warning)
         );
+    }
+
+    #[test]
+    #[cfg(feature = "mem-profiling")]
+    fn test_change_memory_config() {
+        let (cfg, _dir) = TikvConfig::with_tmp().unwrap();
+        let cfg_controller = ConfigController::new(cfg);
+
+        cfg_controller.register(Module::Memory, Box::new(MemoryConfigManager));
+        cfg_controller
+            .update_config("memory.enable_heap_profiling", "false")
+            .unwrap();
+        assert_eq!(tikv_alloc::is_profiling_active(), false);
+        cfg_controller
+            .update_config("memory.enable_heap_profiling", "true")
+            .unwrap();
+        assert_eq!(tikv_alloc::is_profiling_active(), true);
+
+        cfg_controller
+            .update_config("memory.profiling_sample_per_bytes", "1MB")
+            .unwrap();
+        assert_eq!(
+            cfg_controller
+                .get_current()
+                .memory
+                .profiling_sample_per_bytes,
+            ReadableSize::mb(1),
+        );
+        cfg_controller
+            .update_config("memory.profiling_sample_per_bytes", "invalid")
+            .unwrap_err();
     }
 
     #[test]
