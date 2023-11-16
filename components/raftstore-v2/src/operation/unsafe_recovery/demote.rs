@@ -75,6 +75,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                     "Unsafe recovery, fail to finish demotion";
                     "err" => ?resp.get_header().get_error(),
                 );
+                *self.unsafe_recovery_state_mut() = Some(UnsafeRecoveryState::Failed);
                 return;
             }
             *self.unsafe_recovery_state_mut() = Some(UnsafeRecoveryState::DemoteFailedVoters {
@@ -100,10 +101,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             failed_voters,
             target_index,
             demote_after_exit,
-        }) = self.unsafe_recovery_state()
-        else {
-            return;
-        };
+        }) = self.unsafe_recovery_state() else { return };
 
         if self.raft_group().raft.raft_log.applied < *target_index {
             return;
@@ -132,6 +130,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                             "Unsafe recovery, fail to exit joint state";
                             "err" => ?resp.get_header().get_error(),
                         );
+                        *self.unsafe_recovery_state_mut()= Some(UnsafeRecoveryState::Failed);
                     }
                 } else {
                     error!(self.logger,

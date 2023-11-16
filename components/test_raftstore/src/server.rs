@@ -113,8 +113,8 @@ impl StoreAddrResolver for AddressMap {
     fn resolve(
         &self,
         store_id: u64,
-        cb: Box<dyn FnOnce(ServerResult<String>) + Send>,
-    ) -> ServerResult<()> {
+        cb: Box<dyn FnOnce(resolve::Result<String>) + Send>,
+    ) -> resolve::Result<()> {
         let addr = self.get(store_id);
         match addr {
             Some(addr) => cb(Ok(addr)),
@@ -451,6 +451,7 @@ impl ServerCluster {
             Arc::clone(&importer),
             None,
             resource_manager.clone(),
+            Arc::new(region_info_accessor.clone()),
         );
 
         // Create deadlock service.
@@ -918,14 +919,8 @@ pub fn must_new_cluster_and_kv_client() -> (Cluster<ServerCluster>, TikvClient, 
 pub fn must_new_cluster_and_kv_client_mul(
     count: usize,
 ) -> (Cluster<ServerCluster>, TikvClient, Context) {
-    must_new_cluster_with_cfg_and_kv_client_mul(count, |_| {})
-}
+    let (cluster, leader, ctx) = must_new_cluster_mul(count);
 
-pub fn must_new_cluster_with_cfg_and_kv_client_mul(
-    count: usize,
-    configure: impl FnMut(&mut Cluster<ServerCluster>),
-) -> (Cluster<ServerCluster>, TikvClient, Context) {
-    let (cluster, leader, ctx) = must_new_and_configure_cluster_mul(count, configure);
     let env = Arc::new(Environment::new(1));
     let channel =
         ChannelBuilder::new(env).connect(&cluster.sim.rl().get_addr(leader.get_store_id()));

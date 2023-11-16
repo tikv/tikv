@@ -19,7 +19,13 @@ use kvproto::{
 };
 pub use node::NodeV2;
 pub use raft_extension::Extension;
-use raftstore::store::{util::encode_start_ts_into_flag_data, RegionSnapshot};
+use raftstore::{
+    store::{
+        cmd_resp, msg::ErrorCallback, util::encode_start_ts_into_flag_data, RaftCmdExtraOpts,
+        RegionSnapshot,
+    },
+    Error,
+};
 use raftstore_v2::{
     router::{
         message::SimpleWrite, CmdResChannelBuilder, CmdResEvent, CmdResStream, PeerMsg, RaftRouter,
@@ -265,6 +271,17 @@ impl<EK: KvEngine, ER: RaftEngine> tikv_kv::Engine for RaftKv2<EK, ER> {
 
         let region_id = ctx.region_id;
         ASYNC_REQUESTS_COUNTER_VEC.write.all.inc();
+
+        let inject_region_not_found = (|| {
+            // If rid is some, only the specified region reports error.
+            // If rid is None, all regions report error.
+            fail_point!("raftkv_early_error_report", |rid| -> bool {
+                rid.and_then(|rid| rid.parse().ok())
+                    .map_or(true, |rid: u64| rid == region_id)
+            });
+            false
+        })();
+
         let begin_instant = Instant::now_coarse();
         let mut header = Box::new(new_request_header(ctx));
         let mut flags = 0;
@@ -299,25 +316,31 @@ impl<EK: KvEngine, ER: RaftEngine> tikv_kv::Engine for RaftKv2<EK, ER> {
             });
         }
         let (ch, sub) = builder.build();
-        let msg = PeerMsg::SimpleWrite(SimpleWrite {
-            header,
-            data,
-            ch,
-            send_time: Instant::now_coarse(),
-        });
-        let res = self
-            .router
-            .store_router()
-            .check_send(region_id, msg)
-            .map_err(tikv_kv::Error::from);
+        let res = if inject_region_not_found {
+            ch.report_error(cmd_resp::new_error(Error::RegionNotFound(region_id)));
+            Err(tikv_kv::Error::from(Error::RegionNotFound(region_id)))
+        } else {
+            let msg = PeerMsg::SimpleWrite(SimpleWrite {
+                header,
+                data,
+                ch,
+                send_time: Instant::now_coarse(),
+                extra_opts: RaftCmdExtraOpts {
+                    deadline: batch.deadline,
+                    disk_full_opt: batch.disk_full_opt,
+                },
+            });
+            self.router
+                .store_router()
+                .check_send(region_id, msg)
+                .map_err(tikv_kv::Error::from)
+        };
         (Transform {
             resp: CmdResStream::new(sub),
             early_err: res.err(),
         })
         .inspect(move |ev| {
-            let WriteEvent::Finished(res) = ev else {
-                return;
-            };
+            let WriteEvent::Finished(res) = ev else { return };
             match res {
                 Ok(()) => {
                     ASYNC_REQUESTS_COUNTER_VEC.write.success.inc();

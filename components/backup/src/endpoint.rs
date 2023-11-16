@@ -12,8 +12,7 @@ use async_channel::SendError;
 use causal_ts::{CausalTsProvider, CausalTsProviderImpl};
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::{name_to_cf, raw_ttl::ttl_current_ts, CfName, KvEngine, SstCompressionType};
-use external_storage::{BackendConfig, HdfsConfig};
-use external_storage_export::{create_storage, ExternalStorage};
+use external_storage::{create_storage, BackendConfig, ExternalStorage, HdfsConfig};
 use futures::{channel::mpsc::*, executor::block_on};
 use kvproto::{
     brpb::*,
@@ -928,7 +927,7 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
         let sst_max_size = self.config_manager.0.read().unwrap().sst_max_size.0;
         let limit = self.softlimit.limit();
         let resource_limiter = self.resource_ctl.as_ref().and_then(|r| {
-            r.get_resource_limiter(&request.resource_group_name, &request.source_tag)
+            r.get_background_resource_limiter(&request.resource_group_name, &request.source_tag)
         });
 
         self.pool.borrow_mut().spawn(async move {
@@ -1302,7 +1301,7 @@ pub mod tests {
     use api_version::{api_v2::RAW_KEY_PREFIX, dispatch_api_version, KvFormat, RawValue};
     use collections::HashSet;
     use engine_traits::MiscExt;
-    use external_storage_export::{make_local_backend, make_noop_backend};
+    use external_storage::{make_local_backend, make_noop_backend};
     use file_system::{IoOp, IoRateLimiter, IoType};
     use futures::{executor::block_on, stream::StreamExt};
     use kvproto::metapb;
@@ -2493,8 +2492,8 @@ pub mod tests {
     fn test_backup_file_name() {
         let region = metapb::Region::default();
         let store_id = 1;
-        let test_cases = ["s3", "local", "gcs", "azure", "hdfs"];
-        let test_target = [
+        let test_cases = vec!["s3", "local", "gcs", "azure", "hdfs"];
+        let test_target = vec![
             "1/0_0_000",
             "1/0_0_000",
             "1_0_0_000",
@@ -2513,7 +2512,7 @@ pub mod tests {
             assert_eq!(target.to_string(), prefix_arr.join(delimiter));
         }
 
-        let test_target = ["1/0_0", "1/0_0", "1_0_0", "1_0_0", "1_0_0"];
+        let test_target = vec!["1/0_0", "1/0_0", "1_0_0", "1_0_0", "1_0_0"];
         for (storage_name, target) in test_cases.iter().zip(test_target.iter()) {
             let key = None;
             let filename = backup_file_name(store_id, &region, key, storage_name);

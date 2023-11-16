@@ -23,14 +23,13 @@
 #![feature(proc_macro_hygiene)]
 #![feature(min_specialization)]
 #![feature(box_patterns)]
-#![feature(extract_if)]
+#![feature(drain_filter)]
 #![feature(deadline_api)]
 #![feature(let_chains)]
 #![feature(read_buf)]
 #![feature(type_alias_impl_trait)]
 #![allow(incomplete_features)]
 #![feature(return_position_impl_trait_in_trait)]
-#![feature(impl_trait_in_assoc_type)]
 
 #[macro_use(fail_point)]
 extern crate fail;
@@ -80,8 +79,12 @@ pub fn tikv_version_info(build_time: Option<&str>) -> String {
 }
 
 /// return the build version of tikv-server
-pub fn tikv_build_version() -> &'static str {
-    env!("CARGO_PKG_VERSION")
+pub fn tikv_build_version() -> String {
+    if fips::can_enable() {
+        format!("{}-{}", env!("CARGO_PKG_VERSION"), "fips")
+    } else {
+        env!("CARGO_PKG_VERSION").to_owned()
+    }
 }
 
 /// Prints the tikv version information to the standard output.

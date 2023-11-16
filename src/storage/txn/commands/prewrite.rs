@@ -24,7 +24,7 @@ use crate::storage::{
     kv::WriteData,
     lock_manager::LockManager,
     mvcc::{
-        has_data_in_range, Error as MvccError, ErrorInner as MvccErrorInner, MvccTxn,
+        has_data_in_range, metrics::*, Error as MvccError, ErrorInner as MvccErrorInner, MvccTxn,
         Result as MvccResult, SnapshotReader, TxnCommitRecord,
     },
     txn::{
@@ -489,6 +489,36 @@ impl<K: PrewriteKind> Prewriter<K> {
         snapshot: impl Snapshot,
         mut context: WriteContext<'_, impl LockManager>,
     ) -> Result<WriteResult> {
+        // Handle special cases about retried prewrite requests for pessimistic
+        // transactions.
+        if let TransactionKind::Pessimistic(_) = self.kind.txn_kind() {
+            if let Some(commit_ts) = context.txn_status_cache.get_no_promote(self.start_ts) {
+                fail_point!("before_prewrite_txn_status_cache_hit");
+                if self.ctx.is_retry_request {
+                    MVCC_PREWRITE_REQUEST_AFTER_COMMIT_COUNTER_VEC
+                        .retry_req
+                        .inc();
+                } else {
+                    MVCC_PREWRITE_REQUEST_AFTER_COMMIT_COUNTER_VEC
+                        .non_retry_req
+                        .inc();
+                }
+                warn!("prewrite request received due to transaction is known to be already committed"; "start_ts" => %self.start_ts, "commit_ts" => %commit_ts);
+                // In normal cases if the transaction is committed, then the key should have
+                // been already prewritten successfully. But in order to
+                // simplify code as well as prevent possible corner cases or
+                // special cases in the future, we disallow skipping constraint
+                // check in this case.
+                // We regard this request as a retried request no matter if it really is (the
+                // original request may arrive later than retried request due to
+                // network latency, in which case we'd better handle it like a
+                // retried request).
+                self.ctx.is_retry_request = true;
+            } else {
+                fail_point!("before_prewrite_txn_status_cache_miss");
+            }
+        }
+
         self.kind
             .can_skip_constraint_check(&mut self.mutations, &snapshot, &mut context)?;
         self.check_max_ts_synced(&snapshot)?;
@@ -748,6 +778,11 @@ impl<K: PrewriteKind> Prewriter<K> {
                 new_acquired_locks,
                 lock_guards,
                 response_policy: ResponsePolicy::OnApplied,
+                known_txn_status: if !one_pc_commit_ts.is_zero() {
+                    vec![(self.start_ts, one_pc_commit_ts)]
+                } else {
+                    vec![]
+                },
             }
         } else {
             // Skip write stage if some keys are locked.
@@ -768,6 +803,7 @@ impl<K: PrewriteKind> Prewriter<K> {
                 new_acquired_locks: vec![],
                 lock_guards: vec![],
                 response_policy: ResponsePolicy::OnApplied,
+                known_txn_status: vec![],
             }
         };
 
@@ -1002,6 +1038,7 @@ mod tests {
                 must_acquire_pessimistic_lock, must_acquire_pessimistic_lock_err, must_commit,
                 must_prewrite_put_err_impl, must_prewrite_put_impl, must_rollback,
             },
+            txn_status_cache::TxnStatusCache,
             Error, ErrorInner,
         },
         types::TxnStatus,
@@ -1647,6 +1684,7 @@ mod tests {
                     statistics: &mut Statistics::default(),
                     async_apply_prewrite: false,
                     raw_ext: None,
+                    txn_status_cache: &TxnStatusCache::new_for_test(),
                 }
             };
         }
@@ -1818,6 +1856,7 @@ mod tests {
                 statistics: &mut statistics,
                 async_apply_prewrite: case.async_apply_prewrite,
                 raw_ext: None,
+                txn_status_cache: &TxnStatusCache::new_for_test(),
             };
             let mut engine = TestEngineBuilder::new().build().unwrap();
             let snap = engine.snapshot(Default::default()).unwrap();
@@ -1853,7 +1892,9 @@ mod tests {
         .unwrap_err();
         assert!(matches!(
             res,
-            Error(box ErrorInner::Mvcc(MvccError(box MvccErrorInner::AlreadyExist { .. })))
+            Error(box ErrorInner::Mvcc(MvccError(
+                box MvccErrorInner::AlreadyExist { .. }
+            )))
         ));
 
         assert_eq!(cm.max_ts().into_inner(), 15);
@@ -1876,7 +1917,9 @@ mod tests {
         .unwrap_err();
         assert!(matches!(
             res,
-            Error(box ErrorInner::Mvcc(MvccError(box MvccErrorInner::WriteConflict { .. })))
+            Error(box ErrorInner::Mvcc(MvccError(
+                box MvccErrorInner::WriteConflict { .. }
+            )))
         ));
     }
 
@@ -1928,6 +1971,7 @@ mod tests {
             statistics: &mut statistics,
             async_apply_prewrite: false,
             raw_ext: None,
+            txn_status_cache: &TxnStatusCache::new_for_test(),
         };
         let snap = engine.snapshot(Default::default()).unwrap();
         let result = cmd.cmd.process_write(snap, context).unwrap();
@@ -1956,6 +2000,7 @@ mod tests {
             statistics: &mut statistics,
             async_apply_prewrite: false,
             raw_ext: None,
+            txn_status_cache: &TxnStatusCache::new_for_test(),
         };
         let snap = engine.snapshot(Default::default()).unwrap();
         let result = cmd.cmd.process_write(snap, context).unwrap();
@@ -2039,6 +2084,7 @@ mod tests {
             statistics: &mut statistics,
             async_apply_prewrite: false,
             raw_ext: None,
+            txn_status_cache: &TxnStatusCache::new_for_test(),
         };
         let snap = engine.snapshot(Default::default()).unwrap();
         let result = cmd.cmd.process_write(snap, context).unwrap();
@@ -2071,6 +2117,7 @@ mod tests {
             statistics: &mut statistics,
             async_apply_prewrite: false,
             raw_ext: None,
+            txn_status_cache: &TxnStatusCache::new_for_test(),
         };
         let snap = engine.snapshot(Default::default()).unwrap();
         let result = cmd.cmd.process_write(snap, context).unwrap();
@@ -2282,9 +2329,9 @@ mod tests {
         .unwrap_err();
         assert!(matches!(
             err,
-            Error(box ErrorInner::Mvcc(MvccError(box MvccErrorInner::PessimisticLockNotFound {
-                ..
-            })))
+            Error(box ErrorInner::Mvcc(MvccError(
+                box MvccErrorInner::PessimisticLockNotFound { .. }
+            )))
         ));
         must_unlocked(&mut engine, b"k2");
         // However conflict still won't be checked if there's a non-retry request
@@ -2341,6 +2388,7 @@ mod tests {
             statistics: &mut statistics,
             async_apply_prewrite: false,
             raw_ext: None,
+            txn_status_cache: &TxnStatusCache::new_for_test(),
         };
         let snap = engine.snapshot(Default::default()).unwrap();
         assert!(prewrite_cmd.cmd.process_write(snap, context).is_err());
@@ -2365,6 +2413,7 @@ mod tests {
             statistics: &mut statistics,
             async_apply_prewrite: false,
             raw_ext: None,
+            txn_status_cache: &TxnStatusCache::new_for_test(),
         };
         let snap = engine.snapshot(Default::default()).unwrap();
         assert!(prewrite_cmd.cmd.process_write(snap, context).is_err());
@@ -2465,9 +2514,9 @@ mod tests {
         let err = prewrite_command(&mut engine, cm.clone(), &mut stat, cmd).unwrap_err();
         assert!(matches!(
             err,
-            Error(box ErrorInner::Mvcc(MvccError(box MvccErrorInner::PessimisticLockNotFound {
-                ..
-            })))
+            Error(box ErrorInner::Mvcc(MvccError(
+                box MvccErrorInner::PessimisticLockNotFound { .. }
+            )))
         ));
         // Passing keys in different order gets the same result:
         let cmd = PrewritePessimistic::with_defaults(
@@ -2488,9 +2537,9 @@ mod tests {
         let err = prewrite_command(&mut engine, cm, &mut stat, cmd).unwrap_err();
         assert!(matches!(
             err,
-            Error(box ErrorInner::Mvcc(MvccError(box MvccErrorInner::PessimisticLockNotFound {
-                ..
-            })))
+            Error(box ErrorInner::Mvcc(MvccError(
+                box MvccErrorInner::PessimisticLockNotFound { .. }
+            )))
         ));
 
         // If the two keys are sent in different requests, it would be the client's duty
@@ -2571,6 +2620,7 @@ mod tests {
             statistics: &mut statistics,
             async_apply_prewrite: false,
             raw_ext: None,
+            txn_status_cache: &TxnStatusCache::new_for_test(),
         };
         let snap = engine.snapshot(Default::default()).unwrap();
         let res = prewrite_cmd.cmd.process_write(snap, context).unwrap();

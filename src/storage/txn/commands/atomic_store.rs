@@ -63,6 +63,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for RawAtomicStore {
             new_acquired_locks: vec![],
             lock_guards: raw_ext.into_iter().map(|r| r.key_guard).collect(),
             response_policy: ResponsePolicy::OnApplied,
+            known_txn_status: vec![],
         })
     }
 }
@@ -77,7 +78,9 @@ mod tests {
 
     use super::*;
     use crate::storage::{
-        lock_manager::MockLockManager, txn::scheduler::get_raw_ext, Statistics, TestEngineBuilder,
+        lock_manager::MockLockManager,
+        txn::{scheduler::get_raw_ext, txn_status_cache::TxnStatusCache},
+        Statistics, TestEngineBuilder,
     };
 
     #[test]
@@ -88,8 +91,8 @@ mod tests {
     fn test_atomic_process_write_impl<F: KvFormat>() {
         let mut engine = TestEngineBuilder::new().build().unwrap();
         let cm = concurrency_manager::ConcurrencyManager::new(1.into());
-        let raw_keys = [b"ra", b"rz"];
-        let raw_values = [b"valuea", b"valuez"];
+        let raw_keys = vec![b"ra", b"rz"];
+        let raw_values = vec![b"valuea", b"valuez"];
         let ts_provider = super::super::test_util::gen_ts_provider(F::TAG);
 
         let mut modifies = vec![];
@@ -116,6 +119,7 @@ mod tests {
             statistics: &mut statistic,
             async_apply_prewrite: false,
             raw_ext,
+            txn_status_cache: &TxnStatusCache::new_for_test(),
         };
         let cmd: Command = cmd.into();
         let write_result = cmd.process_write(snap, context).unwrap();

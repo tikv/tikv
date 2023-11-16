@@ -281,7 +281,7 @@ pub fn request_to_triple(mut req: Request) -> Either<(Vec<u8>, Vec<u8>, CfName),
 /// once meet an error, would report it, with the current file and line (so it
 /// is made as a macro). returns whether it success.
 // Note: perhaps we'd better using std::panic::Location.
-#[macro_export]
+#[macro_export(crate)]
 macro_rules! try_send {
     ($s:expr, $task:expr) => {
         match $s.schedule($task) {
@@ -305,7 +305,7 @@ macro_rules! try_send {
 /// `backup_stream_debug`. because once we enable debug log for all crates, it
 /// would soon get too verbose to read. using this macro now we can enable debug
 /// log level for the crate only (even compile time...).
-#[macro_export]
+#[macro_export(crate)]
 macro_rules! debug {
     ($($t: tt)+) => {
         if cfg!(feature = "backup-stream-debug") {

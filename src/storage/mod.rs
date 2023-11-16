@@ -609,6 +609,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             r.get_resource_limiter(
                 ctx.get_resource_control_context().get_resource_group_name(),
                 ctx.get_request_source(),
+                ctx.get_resource_control_context().get_override_priority(),
             )
         });
         let priority_tag = get_priority_tag(priority);
@@ -782,6 +783,10 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                     .get_resource_control_context()
                     .get_resource_group_name(),
                 requests[0].get_context().get_request_source(),
+                requests[0]
+                    .get_context()
+                    .get_resource_control_context()
+                    .get_override_priority(),
             )
         });
         let concurrency_manager = self.concurrency_manager.clone();
@@ -978,6 +983,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             r.get_resource_limiter(
                 ctx.get_resource_control_context().get_resource_group_name(),
                 ctx.get_request_source(),
+                ctx.get_resource_control_context().get_override_priority(),
             )
         });
         let priority_tag = get_priority_tag(priority);
@@ -1170,6 +1176,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             r.get_resource_limiter(
                 ctx.get_resource_control_context().get_resource_group_name(),
                 ctx.get_request_source(),
+                ctx.get_resource_control_context().get_override_priority(),
             )
         });
         let priority_tag = get_priority_tag(priority);
@@ -1346,6 +1353,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             r.get_resource_limiter(
                 ctx.get_resource_control_context().get_resource_group_name(),
                 ctx.get_request_source(),
+                ctx.get_resource_control_context().get_override_priority(),
             )
         });
         let priority_tag = get_priority_tag(priority);
@@ -1662,6 +1670,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             r.get_resource_limiter(
                 ctx.get_resource_control_context().get_resource_group_name(),
                 ctx.get_request_source(),
+                ctx.get_resource_control_context().get_override_priority(),
             )
         });
         let priority_tag = get_priority_tag(priority);
@@ -1754,6 +1763,10 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                     .get_resource_control_context()
                     .get_resource_group_name(),
                 gets[0].get_context().get_request_source(),
+                gets[0]
+                    .get_context()
+                    .get_resource_control_context()
+                    .get_override_priority(),
             )
         });
         let priority_tag = get_priority_tag(priority);
@@ -1893,6 +1906,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             r.get_resource_limiter(
                 ctx.get_resource_control_context().get_resource_group_name(),
                 ctx.get_request_source(),
+                ctx.get_resource_control_context().get_override_priority(),
             )
         });
         let priority_tag = get_priority_tag(priority);
@@ -1946,7 +1960,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                             key_ranges.push(build_key_range(k.as_encoded(), k.as_encoded(), false));
                             (k, v)
                         })
-                        .filter(|(_, v)| !(v.is_ok() && v.as_ref().unwrap().is_none()))
+                        .filter(|&(_, ref v)| !(v.is_ok() && v.as_ref().unwrap().is_none()))
                         .map(|(k, v)| match v {
                             Ok(v) => {
                                 let (user_key, _) = F::decode_raw_key_owned(k, false).unwrap();
@@ -2399,6 +2413,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             r.get_resource_limiter(
                 ctx.get_resource_control_context().get_resource_group_name(),
                 ctx.get_request_source(),
+                ctx.get_resource_control_context().get_override_priority(),
             )
         });
         let priority_tag = get_priority_tag(priority);
@@ -2536,6 +2551,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             r.get_resource_limiter(
                 ctx.get_resource_control_context().get_resource_group_name(),
                 ctx.get_request_source(),
+                ctx.get_resource_control_context().get_override_priority(),
             )
         });
         let priority_tag = get_priority_tag(priority);
@@ -2698,6 +2714,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             r.get_resource_limiter(
                 ctx.get_resource_control_context().get_resource_group_name(),
                 ctx.get_request_source(),
+                ctx.get_resource_control_context().get_override_priority(),
             )
         });
         let priority_tag = get_priority_tag(priority);
@@ -2879,6 +2896,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             r.get_resource_limiter(
                 ctx.get_resource_control_context().get_resource_group_name(),
                 ctx.get_request_source(),
+                ctx.get_resource_control_context().get_override_priority(),
             )
         });
         let priority_tag = get_priority_tag(priority);
@@ -3326,7 +3344,8 @@ impl<E: Engine, L: LockManager, F: KvFormat> TestStorageBuilder<E, L, F> {
         } else {
             None
         };
-
+        let manager = Arc::new(ResourceGroupManager::default());
+        let resource_ctl = manager.derive_controller("test".into(), false);
         Storage::from_engine(
             self.engine,
             &self.config,
@@ -3344,11 +3363,8 @@ impl<E: Engine, L: LockManager, F: KvFormat> TestStorageBuilder<E, L, F> {
             Arc::new(QuotaLimiter::default()),
             latest_feature_gate(),
             ts_provider,
-            Some(Arc::new(ResourceController::new_for_test(
-                "test".to_owned(),
-                false,
-            ))),
-            None,
+            Some(resource_ctl),
+            Some(manager),
         )
     }
 
@@ -3361,7 +3377,8 @@ impl<E: Engine, L: LockManager, F: KvFormat> TestStorageBuilder<E, L, F> {
             &crate::config::StorageReadPoolConfig::default_for_test(),
             engine.clone(),
         );
-
+        let manager = Arc::new(ResourceGroupManager::default());
+        let resource_ctl = manager.derive_controller("test".into(), false);
         Storage::from_engine(
             engine,
             &self.config,
@@ -3379,16 +3396,14 @@ impl<E: Engine, L: LockManager, F: KvFormat> TestStorageBuilder<E, L, F> {
             Arc::new(QuotaLimiter::default()),
             latest_feature_gate(),
             None,
-            Some(Arc::new(ResourceController::new_for_test(
-                "test".to_owned(),
-                false,
-            ))),
-            None,
+            Some(resource_ctl),
+            Some(manager),
         )
     }
 
     pub fn build_for_resource_controller(
         self,
+        resource_manager: Arc<ResourceGroupManager>,
         resource_controller: Arc<ResourceController>,
     ) -> Result<Storage<TxnTestEngine<E>, L, F>> {
         let engine = TxnTestEngine {
@@ -3418,7 +3433,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> TestStorageBuilder<E, L, F> {
             latest_feature_gate(),
             None,
             Some(resource_controller),
-            None,
+            Some(resource_manager),
         )
     }
 }
@@ -3853,6 +3868,7 @@ mod tests {
                 commands,
                 commands::{AcquirePessimisticLock, Prewrite},
                 tests::must_rollback,
+                txn_status_cache::TxnStatusCache,
                 Error as TxnError, ErrorInner as TxnErrorInner,
             },
             types::{PessimisticLockKeyResult, PessimisticLockResults},
@@ -3884,6 +3900,7 @@ mod tests {
                     statistics: &mut Statistics::default(),
                     async_apply_prewrite: false,
                     raw_ext: None,
+                    txn_status_cache: &TxnStatusCache::new_for_test(),
                 },
             )
             .unwrap();
@@ -3892,9 +3909,9 @@ mod tests {
         let result = block_on(storage.get(Context::default(), Key::from_raw(b"x"), 100.into()));
         assert!(matches!(
             result,
-            Err(Error(box ErrorInner::Txn(txn::Error(box txn::ErrorInner::Mvcc(mvcc::Error(
-                box mvcc::ErrorInner::KeyIsLocked { .. },
-            ))))))
+            Err(Error(box ErrorInner::Txn(txn::Error(
+                box txn::ErrorInner::Mvcc(mvcc::Error(box mvcc::ErrorInner::KeyIsLocked { .. }))
+            ))))
         ));
     }
 
@@ -5744,7 +5761,7 @@ mod tests {
         ];
 
         // Write key-value pairs one by one
-        for (key, value) in &test_data {
+        for &(ref key, ref value) in &test_data {
             storage
                 .raw_put(
                     ctx.clone(),
@@ -5803,7 +5820,7 @@ mod tests {
         let mut total_bytes: u64 = 0;
         let mut is_first = true;
         // Write key-value pairs one by one
-        for (key, value) in &test_data {
+        for &(ref key, ref value) in &test_data {
             storage
                 .raw_put(
                     ctx.clone(),
@@ -6116,7 +6133,7 @@ mod tests {
 
     #[test]
     fn test_raw_batch_put() {
-        for for_cas in [false, true].into_iter() {
+        for for_cas in vec![false, true].into_iter() {
             test_kv_format_impl!(test_raw_batch_put_impl(for_cas));
         }
     }
@@ -6245,7 +6262,7 @@ mod tests {
         ];
 
         // Write key-value pairs one by one
-        for (key, value) in &test_data {
+        for &(ref key, ref value) in &test_data {
             storage
                 .raw_put(
                     ctx.clone(),
@@ -6260,7 +6277,7 @@ mod tests {
         }
 
         // Verify pairs in a batch
-        let keys = test_data.iter().map(|(k, _)| k.clone()).collect();
+        let keys = test_data.iter().map(|&(ref k, _)| k.clone()).collect();
         let results = test_data.into_iter().map(|(k, v)| Some((k, v))).collect();
         expect_multi_values(
             results,
@@ -6292,7 +6309,7 @@ mod tests {
         ];
 
         // Write key-value pairs one by one
-        for (key, value) in &test_data {
+        for &(ref key, ref value) in &test_data {
             storage
                 .raw_put(
                     ctx.clone(),
@@ -6310,7 +6327,7 @@ mod tests {
         let mut ids = vec![];
         let cmds = test_data
             .iter()
-            .map(|(k, _)| {
+            .map(|&(ref k, _)| {
                 let mut req = RawGetRequest::default();
                 req.set_context(ctx.clone());
                 req.set_key(k.clone());
@@ -6331,7 +6348,7 @@ mod tests {
 
     #[test]
     fn test_raw_batch_delete() {
-        for for_cas in [false, true].into_iter() {
+        for for_cas in vec![false, true].into_iter() {
             test_kv_format_impl!(test_raw_batch_delete_impl(for_cas));
         }
     }
@@ -6381,10 +6398,10 @@ mod tests {
         rx.recv().unwrap();
 
         // Verify pairs exist
-        let keys = test_data.iter().map(|(k, _)| k.clone()).collect();
+        let keys = test_data.iter().map(|&(ref k, _)| k.clone()).collect();
         let results = test_data
             .iter()
-            .map(|(k, v)| Some((k.clone(), v.clone())))
+            .map(|&(ref k, ref v)| Some((k.clone(), v.clone())))
             .collect();
         expect_multi_values(
             results,
@@ -6512,7 +6529,7 @@ mod tests {
         // Scan pairs with key only
         let mut results: Vec<Option<KvPair>> = test_data
             .iter()
-            .map(|(k, _)| Some((k.clone(), vec![])))
+            .map(|&(ref k, _)| Some((k.clone(), vec![])))
             .collect();
         expect_multi_values(
             results.clone(),
@@ -6909,7 +6926,7 @@ mod tests {
         rx.recv().unwrap();
 
         // Verify pairs exist
-        let keys = test_data.iter().map(|(k, _)| k.clone()).collect();
+        let keys = test_data.iter().map(|&(ref k, _)| k.clone()).collect();
         let results = test_data.into_iter().map(|(k, v)| Some((k, v))).collect();
         expect_multi_values(
             results,
@@ -10868,5 +10885,508 @@ mod tests {
             .unwrap();
         // Prewrite still succeeds
         rx.recv().unwrap().unwrap();
+    }
+
+    #[test]
+    fn test_prewrite_cached_committed_transaction_do_not_skip_constraint_check() {
+        let storage = TestStorageBuilderApiV1::new(MockLockManager::new())
+            .build()
+            .unwrap();
+        let cm = storage.concurrency_manager.clone();
+        let k1 = Key::from_raw(b"k1");
+        let pk = b"pk";
+        // Simulate the case that the current TiKV instance have a non-unique
+        // index key of a pessimistic transaction. It won't be pessimistic
+        // locked, and prewrite skips constraint checks.
+        // Simulate the case that a prewrite is performed twice, with async
+        // commit enabled, and max_ts changes when the second request arrives.
+
+        // A retrying prewrite request arrives.
+        cm.update_max_ts(20.into());
+        let mut ctx = Context::default();
+        ctx.set_is_retry_request(true);
+        let (tx, rx) = channel();
+        storage
+            .sched_txn_command(
+                commands::PrewritePessimistic::new(
+                    vec![(
+                        Mutation::make_put(k1.clone(), b"v".to_vec()),
+                        SkipPessimisticCheck,
+                    )],
+                    pk.to_vec(),
+                    10.into(),
+                    3000,
+                    10.into(),
+                    1,
+                    11.into(),
+                    0.into(),
+                    Some(vec![]),
+                    false,
+                    AssertionLevel::Off,
+                    vec![],
+                    ctx,
+                ),
+                Box::new(move |res| {
+                    tx.send(res).unwrap();
+                }),
+            )
+            .unwrap();
+
+        let res = rx.recv().unwrap().unwrap();
+        assert_eq!(res.min_commit_ts, 21.into());
+
+        // Commit it.
+        let (tx, rx) = channel();
+        storage
+            .sched_txn_command(
+                commands::Commit::new(vec![k1.clone()], 10.into(), 21.into(), Context::default()),
+                expect_ok_callback(tx, 0),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+
+        // The txn's status is cached
+        assert_eq!(
+            storage
+                .sched
+                .get_txn_status_cache()
+                .get_no_promote(10.into())
+                .unwrap(),
+            21.into()
+        );
+
+        // Check committed; push max_ts to 30
+        assert_eq!(
+            block_on(storage.get(Context::default(), k1.clone(), 30.into()))
+                .unwrap()
+                .0,
+            Some(b"v".to_vec())
+        );
+
+        let (tx, rx) = channel();
+        storage
+            .sched_txn_command(
+                commands::PrewritePessimistic::new(
+                    vec![(
+                        Mutation::make_put(k1.clone(), b"v".to_vec()),
+                        SkipPessimisticCheck,
+                    )],
+                    pk.to_vec(),
+                    10.into(),
+                    3000,
+                    10.into(),
+                    1,
+                    11.into(),
+                    0.into(),
+                    Some(vec![]),
+                    false,
+                    AssertionLevel::Off,
+                    vec![],
+                    Context::default(),
+                ),
+                Box::new(move |res| {
+                    tx.send(res).unwrap();
+                }),
+            )
+            .unwrap();
+        let res = rx.recv().unwrap().unwrap();
+        assert_eq!(res.min_commit_ts, 21.into());
+
+        // Key must not be locked.
+        assert_eq!(
+            block_on(storage.get(Context::default(), k1, 50.into()))
+                .unwrap()
+                .0,
+            Some(b"v".to_vec())
+        );
+    }
+
+    #[test]
+    fn test_updating_txn_status_cache() {
+        let storage = TestStorageBuilderApiV1::new(MockLockManager::new())
+            .build()
+            .unwrap();
+        let cm = storage.concurrency_manager.clone();
+
+        // Commit
+        let (tx, rx) = channel();
+        storage
+            .sched_txn_command(
+                commands::PrewritePessimistic::new(
+                    vec![(
+                        Mutation::make_put(Key::from_raw(b"k1"), b"v1".to_vec()),
+                        SkipPessimisticCheck,
+                    )],
+                    b"k1".to_vec(),
+                    10.into(),
+                    3000,
+                    10.into(),
+                    1,
+                    11.into(),
+                    0.into(),
+                    Some(vec![]),
+                    false,
+                    AssertionLevel::Off,
+                    vec![],
+                    Context::default(),
+                ),
+                expect_ok_callback(tx.clone(), 0),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        assert!(
+            storage
+                .sched
+                .get_txn_status_cache()
+                .get_no_promote(10.into())
+                .is_none()
+        );
+
+        storage
+            .sched_txn_command(
+                commands::Commit::new(
+                    vec![Key::from_raw(b"k1")],
+                    10.into(),
+                    20.into(),
+                    Context::default(),
+                ),
+                expect_ok_callback(tx.clone(), 0),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        assert_eq!(
+            storage
+                .sched
+                .get_txn_status_cache()
+                .get_no_promote(10.into())
+                .unwrap(),
+            20.into()
+        );
+
+        // Unsuccessful commit won't update cache
+        storage
+            .sched_txn_command(
+                commands::Commit::new(
+                    vec![Key::from_raw(b"k2")],
+                    30.into(),
+                    40.into(),
+                    Context::default(),
+                ),
+                expect_fail_callback(tx, 0, |_| ()),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        assert!(
+            storage
+                .sched
+                .get_txn_status_cache()
+                .get_no_promote(30.into())
+                .is_none()
+        );
+
+        // 1PC update
+        let (tx, rx) = channel();
+        cm.update_max_ts(59.into());
+        storage
+            .sched_txn_command(
+                Prewrite::new(
+                    vec![Mutation::make_put(Key::from_raw(b"k3"), b"v3".to_vec())],
+                    b"k3".to_vec(),
+                    50.into(),
+                    3000,
+                    false,
+                    1,
+                    51.into(),
+                    0.into(),
+                    Some(vec![]),
+                    true,
+                    AssertionLevel::Off,
+                    Context::default(),
+                ),
+                Box::new(move |res| {
+                    tx.send(res).unwrap();
+                }),
+            )
+            .unwrap();
+        let res = rx.recv().unwrap().unwrap();
+        assert_eq!(res.one_pc_commit_ts, 60.into());
+        assert_eq!(
+            storage
+                .sched
+                .get_txn_status_cache()
+                .get_no_promote(50.into())
+                .unwrap(),
+            60.into()
+        );
+
+        // Resolve lock commit
+        let (tx, rx) = channel();
+        storage
+            .sched_txn_command(
+                Prewrite::new(
+                    vec![Mutation::make_put(Key::from_raw(b"k4"), b"v4".to_vec())],
+                    b"pk".to_vec(),
+                    70.into(),
+                    3000,
+                    false,
+                    1,
+                    0.into(),
+                    0.into(),
+                    None,
+                    false,
+                    AssertionLevel::Off,
+                    Context::default(),
+                ),
+                expect_ok_callback(tx.clone(), 0),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+
+        storage
+            .sched_txn_command(
+                commands::ResolveLockReadPhase::new(
+                    vec![(TimeStamp::from(70), TimeStamp::from(80))]
+                        .into_iter()
+                        .collect(),
+                    None,
+                    Context::default(),
+                ),
+                expect_ok_callback(tx.clone(), 0),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        assert_eq!(
+            storage
+                .sched
+                .get_txn_status_cache()
+                .get_no_promote(70.into())
+                .unwrap(),
+            80.into()
+        );
+
+        // Resolve lock lite
+        storage
+            .sched_txn_command(
+                Prewrite::new(
+                    vec![Mutation::make_put(Key::from_raw(b"k5"), b"v5".to_vec())],
+                    b"pk".to_vec(),
+                    90.into(),
+                    3000,
+                    false,
+                    1,
+                    0.into(),
+                    0.into(),
+                    None,
+                    false,
+                    AssertionLevel::Off,
+                    Context::default(),
+                ),
+                expect_ok_callback(tx.clone(), 0),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+
+        storage
+            .sched_txn_command(
+                commands::ResolveLockLite::new(
+                    90.into(),
+                    100.into(),
+                    vec![Key::from_raw(b"k5")],
+                    Context::default(),
+                ),
+                expect_ok_callback(tx.clone(), 0),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        assert_eq!(
+            storage
+                .sched
+                .get_txn_status_cache()
+                .get_no_promote(90.into())
+                .unwrap(),
+            100.into()
+        );
+
+        // CheckTxnStatus: uncommitted transaction
+        storage
+            .sched_txn_command(
+                commands::CheckTxnStatus::new(
+                    Key::from_raw(b"k1"),
+                    9.into(),
+                    110.into(),
+                    110.into(),
+                    true,
+                    false,
+                    false,
+                    false,
+                    Context::default(),
+                ),
+                expect_ok_callback(tx.clone(), 0),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        assert!(
+            storage
+                .sched
+                .get_txn_status_cache()
+                .get_no_promote(9.into())
+                .is_none()
+        );
+
+        // CheckTxnStatus: committed transaction
+        storage.sched.get_txn_status_cache().remove(10.into());
+        storage
+            .sched_txn_command(
+                commands::CheckTxnStatus::new(
+                    Key::from_raw(b"k1"),
+                    10.into(),
+                    110.into(),
+                    110.into(),
+                    true,
+                    false,
+                    false,
+                    false,
+                    Context::default(),
+                ),
+                expect_ok_callback(tx.clone(), 0),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        assert_eq!(
+            storage
+                .sched
+                .get_txn_status_cache()
+                .get_no_promote(10.into())
+                .unwrap(),
+            20.into()
+        );
+
+        // CheckSecondaryLocks: uncommitted transaction
+        storage
+            .sched_txn_command(
+                Prewrite::new(
+                    vec![Mutation::make_put(Key::from_raw(b"k6"), b"v6".to_vec())],
+                    b"pk".to_vec(),
+                    120.into(),
+                    3000,
+                    false,
+                    1,
+                    0.into(),
+                    0.into(),
+                    Some(vec![]),
+                    false,
+                    AssertionLevel::Off,
+                    Context::default(),
+                ),
+                expect_ok_callback(tx.clone(), 0),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+
+        // Lock exists but the transaction status is still unknown
+        storage
+            .sched_txn_command(
+                commands::CheckSecondaryLocks::new(
+                    vec![Key::from_raw(b"k6")],
+                    120.into(),
+                    Context::default(),
+                ),
+                expect_ok_callback(tx.clone(), 0),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        assert!(
+            storage
+                .sched
+                .get_txn_status_cache()
+                .get_no_promote(120.into())
+                .is_none()
+        );
+
+        // One of the lock doesn't exist so the transaction becomes rolled-back status.
+        storage
+            .sched_txn_command(
+                commands::CheckSecondaryLocks::new(
+                    vec![Key::from_raw(b"k6"), Key::from_raw(b"k7")],
+                    120.into(),
+                    Context::default(),
+                ),
+                expect_ok_callback(tx.clone(), 0),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        assert!(
+            storage
+                .sched
+                .get_txn_status_cache()
+                .get_no_promote(120.into())
+                .is_none()
+        );
+
+        // CheckSecondaryLocks: committed transaction
+        storage
+            .sched_txn_command(
+                Prewrite::new(
+                    vec![
+                        Mutation::make_put(Key::from_raw(b"k8"), b"v8".to_vec()),
+                        Mutation::make_put(Key::from_raw(b"k9"), b"v9".to_vec()),
+                    ],
+                    b"pk".to_vec(),
+                    130.into(),
+                    3000,
+                    false,
+                    1,
+                    0.into(),
+                    0.into(),
+                    Some(vec![]),
+                    false,
+                    AssertionLevel::Off,
+                    Context::default(),
+                ),
+                expect_ok_callback(tx.clone(), 0),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        // Commit one of the key
+        storage
+            .sched_txn_command(
+                commands::Commit::new(
+                    vec![Key::from_raw(b"k9")],
+                    130.into(),
+                    140.into(),
+                    Context::default(),
+                ),
+                expect_ok_callback(tx.clone(), 0),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        assert_eq!(
+            storage
+                .sched
+                .get_txn_status_cache()
+                .remove(130.into())
+                .unwrap(),
+            140.into()
+        );
+
+        storage
+            .sched_txn_command(
+                commands::CheckSecondaryLocks::new(
+                    vec![Key::from_raw(b"k8"), Key::from_raw(b"k9")],
+                    130.into(),
+                    Context::default(),
+                ),
+                expect_ok_callback(tx, 0),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        assert_eq!(
+            storage
+                .sched
+                .get_txn_status_cache()
+                .get_no_promote(130.into())
+                .unwrap(),
+            140.into()
+        );
     }
 }

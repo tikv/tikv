@@ -423,8 +423,13 @@ impl Delegate {
             downstream.state.store(DownstreamState::Stopped);
             let error_event = error.clone();
             if let Err(err) = downstream.sink_error_event(region_id, error_event) {
-                warn!("cdc broadcast error failed";
+                warn!("cdc send region error failed";
                     "region_id" => region_id, "error" => ?err, "origin_error" => ?error,
+                    "downstream_id" => ?downstream.id, "downstream" => ?downstream.peer,
+                    "request_id" => downstream.req_id, "conn_id" => ?downstream.conn_id);
+            } else {
+                info!("cdc send region error success";
+                    "region_id" => region_id, "origin_error" => ?error,
                     "downstream_id" => ?downstream.id, "downstream" => ?downstream.peer,
                     "request_id" => downstream.req_id, "conn_id" => ?downstream.conn_id);
             }
@@ -1437,7 +1442,7 @@ mod tests {
 
     #[test]
     fn test_observed_range() {
-        for case in [
+        for case in vec![
             (b"".as_slice(), b"".as_slice(), false),
             (b"a", b"", false),
             (b"", b"b", false),

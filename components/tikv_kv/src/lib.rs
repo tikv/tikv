@@ -9,7 +9,6 @@
 #![feature(min_specialization)]
 #![feature(type_alias_impl_trait)]
 #![feature(associated_type_defaults)]
-#![feature(impl_trait_in_assoc_type)]
 
 #[macro_use(fail_point)]
 extern crate fail;
@@ -554,7 +553,7 @@ pub enum ErrorInner {
     Request(ErrorHeader),
     #[error("timeout after {0:?}")]
     Timeout(Duration),
-    #[error("an empty requets")]
+    #[error("an empty request")]
     EmptyRequest,
     #[error("key is locked (backoff or cleanup) {0:?}")]
     KeyIsLocked(kvproto::kvrpcpb::LockInfo),

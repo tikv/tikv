@@ -5,7 +5,10 @@ use std::{
     convert::identity,
     future::Future,
     path::PathBuf,
-    sync::{Arc, Mutex},
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc, Mutex,
+    },
     time::Duration,
 };
 
@@ -20,9 +23,16 @@ use kvproto::{
     errorpb,
     import_sstpb::{
         Error as ImportPbError, ImportSst, Range, RawWriteRequest_oneof_chunk as RawChunk, SstMeta,
-        SwitchMode, WriteRequest_oneof_chunk as Chunk, *,
+        SuspendImportRpcRequest, SuspendImportRpcResponse, SwitchMode,
+        WriteRequest_oneof_chunk as Chunk, *,
     },
     kvrpcpb::Context,
+    metapb::RegionEpoch,
+};
+use raftstore::{
+    coprocessor::{RegionInfo, RegionInfoProvider},
+    store::util::is_epoch_stale,
+    RegionInfoAccessor,
 };
 use raftstore_v2::StoreMeta;
 use resource_control::{with_resource_limiter, ResourceGroupManager};
@@ -35,13 +45,13 @@ use tikv_kv::{
 };
 use tikv_util::{
     config::ReadableSize,
-    future::create_stream_with_buffer,
+    future::{create_stream_with_buffer, paired_future_callback},
     sys::thread::ThreadBuildWrapper,
     time::{Instant, Limiter},
     HandyRwLock,
 };
 use tokio::{runtime::Runtime, time::sleep};
-use txn_types::{Key, WriteRef, WriteType};
+use txn_types::{Key, TimeStamp, WriteRef, WriteType};
 
 use super::{
     make_rpc_error,
@@ -49,6 +59,7 @@ use super::{
 };
 use crate::{
     import::duplicate_detect::DuplicateDetector,
+    send_rpc_response,
     server::CONFIG_ROCKSDB_GAUGE,
     storage::{self, errors::extract_region_error_from_error},
 };
@@ -66,9 +77,9 @@ const REQUEST_WRITE_CONCURRENCY: usize = 16;
 /// bytes. In detail, they are:
 /// - 2 bytes for the request type (Tag+Value).
 /// - 2 bytes for every string or bytes field (Tag+Length), they are:
-/// . + the key field
-/// . + the value field
-/// . + the CF field (None for CF_DEFAULT)
+/// .  + the key field
+/// .  + the value field
+/// .  + the CF field (None for CF_DEFAULT)
 /// - 2 bytes for the embedded message field `PutRequest` (Tag+Length).
 /// - 2 bytes for the request itself (which would be embedded into a
 ///   [`RaftCmdRequest`].)
@@ -80,6 +91,10 @@ const WIRE_EXTRA_BYTES: usize = 12;
 /// [`raft_writer::ThrottledTlsEngineWriter`]. There aren't too many items held
 /// in the writer. So we can run the GC less frequently.
 const WRITER_GC_INTERVAL: Duration = Duration::from_secs(300);
+/// The max time of suspending requests.
+/// This may save us from some client sending insane value to the server.
+const SUSPEND_REQUEST_MAX_SECS: u64 = // 6h
+    6 * 60 * 60;
 
 fn transfer_error(err: storage::Error) -> ImportPbError {
     let mut e = ImportPbError::default();
@@ -115,12 +130,16 @@ pub struct ImportSstService<E: Engine> {
     limiter: Limiter,
     task_slots: Arc<Mutex<HashSet<PathBuf>>>,
     raft_entry_max_size: ReadableSize,
+    region_info_accessor: Arc<RegionInfoAccessor>,
 
     writer: raft_writer::ThrottledTlsEngineWriter,
 
     // it's some iff multi-rocksdb is enabled
     store_meta: Option<Arc<Mutex<StoreMeta<E::Local>>>>,
     resource_manager: Option<Arc<ResourceGroupManager>>,
+
+    // When less than now, don't accept any requests.
+    suspend_req_until: Arc<AtomicU64>,
 }
 
 struct RequestCollector {
@@ -306,6 +325,7 @@ impl<E: Engine> ImportSstService<E> {
         importer: Arc<SstImporter>,
         store_meta: Option<Arc<Mutex<StoreMeta<E::Local>>>>,
         resource_manager: Option<Arc<ResourceGroupManager>>,
+        region_info_accessor: Arc<RegionInfoAccessor>,
     ) -> Self {
         let props = tikv_util::thread_group::current_properties();
         let eng = Mutex::new(engine.clone());
@@ -353,9 +373,11 @@ impl<E: Engine> ImportSstService<E> {
             limiter: Limiter::new(f64::INFINITY),
             task_slots: Arc::new(Mutex::new(HashSet::default())),
             raft_entry_max_size,
+            region_info_accessor,
             writer,
             store_meta,
             resource_manager,
+            suspend_req_until: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -619,6 +641,86 @@ impl<E: Engine> ImportSstService<E> {
 
         Ok(range)
     }
+
+    /// Check whether we should suspend the current request.
+    fn check_suspend(&self) -> Result<()> {
+        let now = TimeStamp::physical_now();
+        let suspend_until = self.suspend_req_until.load(Ordering::SeqCst);
+        if now < suspend_until {
+            Err(Error::Suspended {
+                time_to_lease_expire: Duration::from_millis(suspend_until - now),
+            })
+        } else {
+            Ok(())
+        }
+    }
+
+    /// suspend requests for a period.
+    ///
+    /// # returns
+    ///
+    /// whether for now, the requests has already been suspended.
+    pub fn suspend_requests(&self, for_time: Duration) -> bool {
+        let now = TimeStamp::physical_now();
+        let last_suspend_until = self.suspend_req_until.load(Ordering::SeqCst);
+        let suspended = now < last_suspend_until;
+        let suspend_until = TimeStamp::physical_now() + for_time.as_millis() as u64;
+        self.suspend_req_until
+            .store(suspend_until, Ordering::SeqCst);
+        suspended
+    }
+
+    /// allow all requests to enter.
+    ///
+    /// # returns
+    ///
+    /// whether requests has already been previously suspended.
+    pub fn allow_requests(&self) -> bool {
+        let now = TimeStamp::physical_now();
+        let last_suspend_until = self.suspend_req_until.load(Ordering::SeqCst);
+        let suspended = now < last_suspend_until;
+        self.suspend_req_until.store(0, Ordering::SeqCst);
+        suspended
+    }
+}
+
+fn check_local_region_stale(
+    region_id: u64,
+    epoch: &RegionEpoch,
+    local_region_info: Option<RegionInfo>,
+) -> Result<()> {
+    match local_region_info {
+        Some(local_region_info) => {
+            let local_region_epoch = local_region_info.region.region_epoch.unwrap();
+
+            // when local region epoch is stale, client can retry write later
+            if is_epoch_stale(&local_region_epoch, epoch) {
+                return Err(Error::RequestTooNew(format!(
+                    "request region {} is ahead of local region, local epoch {:?}, request epoch {:?}, please retry write later",
+                    region_id, local_region_epoch, epoch
+                )));
+            }
+            // when local region epoch is ahead, client need to rescan region from PD to get
+            // latest region later
+            if is_epoch_stale(epoch, &local_region_epoch) {
+                return Err(Error::RequestTooOld(format!(
+                    "request region {} is staler than local region, local epoch {:?}, request epoch {:?}",
+                    region_id, local_region_epoch, epoch
+                )));
+            }
+
+            // not match means to rescan
+            Ok(())
+        }
+        None => {
+            // when region not found, we can't tell whether it's stale or ahead, so we just
+            // return the safest case
+            Err(Error::RequestTooOld(format!(
+                "region {} is not found",
+                region_id
+            )))
+        }
+    }
 }
 
 #[macro_export]
@@ -632,6 +734,7 @@ macro_rules! impl_write {
         ) {
             let import = self.importer.clone();
             let tablets = self.tablets.clone();
+            let region_info_accessor = self.region_info_accessor.clone();
             let (rx, buf_driver) =
                 create_stream_with_buffer(stream, self.cfg.rl().stream_channel_window);
             let mut rx = rx.map_err(Error::from);
@@ -640,12 +743,15 @@ macro_rules! impl_write {
             let label = stringify!($fn);
             let resource_manager = self.resource_manager.clone();
             let handle_task = async move {
-                let res = async move {
-                    let first_req = rx.try_next().await?;
+                let (res, rx) = async move {
+                    let first_req = match rx.try_next().await {
+                        Ok(r) => r,
+                        Err(e) => return (Err(e), Some(rx)),
+                    };
                     let (meta, resource_limiter) = match first_req {
                         Some(r) => {
                             let limiter = resource_manager.as_ref().and_then(|m| {
-                                m.get_resource_limiter(
+                                m.get_background_resource_limiter(
                                     r.get_context()
                                         .get_resource_control_context()
                                         .get_resource_group_name(),
@@ -654,18 +760,49 @@ macro_rules! impl_write {
                             });
                             match r.chunk {
                                 Some($chunk_ty::Meta(m)) => (m, limiter),
-                                _ => return Err(Error::InvalidChunk),
+                                _ => return (Err(Error::InvalidChunk), Some(rx)),
                             }
                         }
-                        _ => return Err(Error::InvalidChunk),
+                        _ => return (Err(Error::InvalidChunk), Some(rx)),
                     };
+                    // wait the region epoch on this TiKV to catch up with the epoch
+                    // in request, which comes from PD and represents the majority
+                    // peers' status.
                     let region_id = meta.get_region_id();
+                    let (cb, f) = paired_future_callback();
+                    if let Err(e) = region_info_accessor
+                        .find_region_by_id(region_id, cb)
+                        .map_err(|e| {
+                            // when region not found, we can't tell whether it's stale or ahead, so
+                            // we just return the safest case
+                            Error::RequestTooOld(format!(
+                                "failed to find region {} err {:?}",
+                                region_id, e
+                            ))
+                        })
+                    {
+                        return (Err(e), Some(rx));
+                    };
+                    let res = match f.await {
+                        Ok(r) => r,
+                        Err(e) => return (Err(From::from(e)), Some(rx)),
+                    };
+                    if let Err(e) =
+                        check_local_region_stale(region_id, meta.get_region_epoch(), res)
+                    {
+                        return (Err(e), Some(rx));
+                    };
+
                     let tablet = match tablets.get(region_id) {
                         Some(t) => t,
                         None => {
-                            return Err(Error::Engine(
-                                format!("region {} not found", region_id).into(),
-                            ));
+                            return (
+                                Err(Error::RequestTooOld(format!(
+                                    "region {} not found",
+                                    region_id
+                                ))),
+                                Some(rx),
+                            );
                         }
                     };
 
@@ -673,10 +810,10 @@ macro_rules! impl_write {
                         Ok(w) => w,
                         Err(e) => {
                             error!("build writer failed {:?}", e);
-                            return Err(Error::InvalidChunk);
+                            return (Err(Error::InvalidChunk), Some(rx));
                         }
                     };
-                    let (writer, resource_limiter) = rx
+                    let result = rx
                         .try_fold(
                             (writer, resource_limiter),
                             |(mut writer, limiter), req| async move {
@@ -693,7 +830,11 @@ macro_rules! impl_write {
                                     .map(|w| (w, limiter))
                             },
                         )
-                        .await?;
+                        .await;
+                    let (writer, resource_limiter) = match result {
+                        Ok(r) => r,
+                        Err(e) => return (Err(e), None),
+                    };
 
                     let finish_fn = async {
                         let metas = writer.finish()?;
@@ -702,13 +843,18 @@ macro_rules! impl_write {
                     };
 
                     let metas: Result<_> = with_resource_limiter(finish_fn, resource_limiter).await;
-                    let metas = metas?;
+                    let metas = match metas {
+                        Ok(r) => r,
+                        Err(e) => return (Err(e), None),
+                    };
                     let mut resp = $resp_ty::default();
                     resp.set_metas(metas.into());
-                    Ok(resp)
+                    (Ok(resp), None)
                 }
                 .await;
                 $crate::send_rpc_response!(res, sink, label, timer);
+                // don't drop rx before send response
+                _ = rx;
             };
 
             self.threads.spawn(buf_driver);
@@ -914,7 +1060,7 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
         let tablets = self.tablets.clone();
         let start = Instant::now();
         let resource_limiter = self.resource_manager.as_ref().and_then(|r| {
-            r.get_resource_limiter(
+            r.get_background_resource_limiter(
                 req.get_context()
                     .get_resource_control_context()
                     .get_resource_group_name(),
@@ -993,6 +1139,10 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
     ) {
         let label = "ingest";
         let timer = Instant::now_coarse();
+        if let Err(err) = self.check_suspend() {
+            ctx.spawn(async move { crate::send_rpc_response!(Err(err), sink, label, timer) });
+            return;
+        }
 
         let mut resp = IngestResponse::default();
         let region_id = req.get_context().get_region_id();
@@ -1036,6 +1186,10 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
     ) {
         let label = "multi-ingest";
         let timer = Instant::now_coarse();
+        if let Err(err) = self.check_suspend() {
+            ctx.spawn(async move { crate::send_rpc_response!(Err(err), sink, label, timer) });
+            return;
+        }
 
         let mut resp = IngestResponse::default();
         if let Some(errorpb) = self.check_write_stall(req.get_context().get_region_id()) {
@@ -1240,6 +1394,37 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
         RawChunk,
         new_raw_writer
     );
+
+    fn suspend_import_rpc(
+        &mut self,
+        ctx: RpcContext<'_>,
+        req: SuspendImportRpcRequest,
+        sink: UnarySink<SuspendImportRpcResponse>,
+    ) {
+        let label = "suspend_import_rpc";
+        let timer = Instant::now_coarse();
+
+        if req.should_suspend_imports && req.get_duration_in_secs() > SUSPEND_REQUEST_MAX_SECS {
+            ctx.spawn(async move {
+                send_rpc_response!(Err(Error::Io(
+                    std::io::Error::new(std::io::ErrorKind::InvalidInput,
+                        format!("you are going to suspend the import RPCs too long. (for {} seconds, max acceptable duration is {} seconds)", 
+                        req.get_duration_in_secs(), SUSPEND_REQUEST_MAX_SECS)))), sink, label, timer);
+            });
+            return;
+        }
+
+        let suspended = if req.should_suspend_imports {
+            info!("suspend incoming import RPCs."; "for_second" => req.get_duration_in_secs(), "caller" => req.get_caller());
+            self.suspend_requests(Duration::from_secs(req.get_duration_in_secs()))
+        } else {
+            info!("allow incoming import RPCs."; "caller" => req.get_caller());
+            self.allow_requests()
+        };
+        let mut resp = SuspendImportRpcResponse::default();
+        resp.set_already_suspended(suspended);
+        ctx.spawn(async move { send_rpc_response!(Ok(resp), sink, label, timer) });
+    }
 }
 
 // add error statistics from pb error response
@@ -1299,14 +1484,19 @@ mod test {
     use engine_traits::{CF_DEFAULT, CF_WRITE};
     use kvproto::{
         kvrpcpb::Context,
-        metapb::RegionEpoch,
+        metapb::{Region, RegionEpoch},
         raft_cmdpb::{RaftCmdRequest, Request},
     };
-    use protobuf::Message;
+    use protobuf::{Message, SingularPtrField};
+    use raft::StateRole::Follower;
+    use raftstore::RegionInfo;
     use tikv_kv::{Modify, WriteData};
     use txn_types::{Key, TimeStamp, Write, WriteBatchFlags, WriteType};
 
-    use crate::{import::sst_service::RequestCollector, server::raftkv};
+    use crate::{
+        import::sst_service::{check_local_region_stale, RequestCollector},
+        server::raftkv,
+    };
 
     fn write(key: &[u8], ty: WriteType, commit_ts: u64, start_ts: u64) -> (Vec<u8>, Vec<u8>) {
         let k = Key::from_raw(key).append_ts(TimeStamp::new(commit_ts));
@@ -1589,5 +1779,73 @@ mod test {
             assert!(req_size < 1024, "{}", req_size);
         }
         assert_eq!(total, 100);
+    }
+
+    #[test]
+    fn test_write_rpc_check_region_epoch() {
+        let mut req_epoch = RegionEpoch {
+            conf_ver: 10,
+            version: 10,
+            ..Default::default()
+        };
+        // test for region not found
+        let result = check_local_region_stale(1, &req_epoch, None);
+        assert!(result.is_err());
+        // check error message contains "rescan region later", client will match this
+        // string pattern
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("rescan region later")
+        );
+
+        let mut local_region_info = RegionInfo {
+            region: Region {
+                id: 1,
+                region_epoch: SingularPtrField::some(req_epoch.clone()),
+                ..Default::default()
+            },
+            role: Follower,
+            buckets: 1,
+        };
+        // test the local region epoch is same as request
+        let result = check_local_region_stale(1, &req_epoch, Some(local_region_info.clone()));
+        result.unwrap();
+
+        // test the local region epoch is ahead of request
+        local_region_info
+            .region
+            .region_epoch
+            .as_mut()
+            .unwrap()
+            .conf_ver = 11;
+        let result = check_local_region_stale(1, &req_epoch, Some(local_region_info.clone()));
+        assert!(result.is_err());
+        // check error message contains "rescan region later", client will match this
+        // string pattern
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("rescan region later")
+        );
+
+        req_epoch.conf_ver = 11;
+        let result = check_local_region_stale(1, &req_epoch, Some(local_region_info.clone()));
+        result.unwrap();
+
+        // test the local region epoch is staler than request
+        req_epoch.version = 12;
+        let result = check_local_region_stale(1, &req_epoch, Some(local_region_info));
+        assert!(result.is_err());
+        // check error message contains "retry write later", client will match this
+        // string pattern
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("retry write later")
+        );
     }
 }

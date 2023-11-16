@@ -1567,8 +1567,14 @@ where
                     }
                 }
                 Ok(None) => {
-                    // splitted Region has not yet reported to PD.
-                    // TODO: handle merge
+                    // Splitted region has not yet reported to PD.
+                    //
+                    // Or region has been merged. This case is handled by
+                    // message `MsgCheckStalePeer`, stale peers will be
+                    // removed eventually.
+                    PD_VALIDATE_PEER_COUNTER_VEC
+                        .with_label_values(&["region not found"])
+                        .inc();
                 }
                 Err(e) => {
                     error!("get region failed"; "err" => ?e);
@@ -1704,7 +1710,10 @@ where
 
     fn handle_read_stats(&mut self, mut read_stats: ReadStats) {
         for (region_id, region_info) in read_stats.region_infos.iter_mut() {
-            let peer_stat = self.region_peers.entry(*region_id).or_default();
+            let peer_stat = self
+                .region_peers
+                .entry(*region_id)
+                .or_insert_with(PeerStat::default);
             peer_stat.read_bytes += region_info.flow.read_bytes as u64;
             peer_stat.read_keys += region_info.flow.read_keys as u64;
             self.store_stat.engine_total_bytes_read += region_info.flow.read_bytes as u64;
@@ -1726,7 +1735,10 @@ where
 
     fn handle_write_stats(&mut self, mut write_stats: WriteStats) {
         for (region_id, region_info) in write_stats.region_infos.iter_mut() {
-            let peer_stat = self.region_peers.entry(*region_id).or_default();
+            let peer_stat = self
+                .region_peers
+                .entry(*region_id)
+                .or_insert_with(PeerStat::default);
             peer_stat.query_stats.add_query_stats(&region_info.0);
             self.store_stat
                 .engine_total_query_num
@@ -2084,10 +2096,7 @@ where
                 let f = async move {
                     for split_info in split_infos {
                         let Ok(Some(region)) =
-                            pd_client.get_region_by_id(split_info.region_id).await
-                        else {
-                            continue;
-                        };
+                            pd_client.get_region_by_id(split_info.region_id).await else { continue };
                         // Try to split the region with the given split key.
                         if let Some(split_key) = split_info.split_key {
                             Self::handle_ask_batch_split(
@@ -2152,7 +2161,10 @@ where
                     cpu_usage,
                 ) = {
                     let region_id = hb_task.region.get_id();
-                    let peer_stat = self.region_peers.entry(region_id).or_default();
+                    let peer_stat = self
+                        .region_peers
+                        .entry(region_id)
+                        .or_insert_with(PeerStat::default);
                     peer_stat.approximate_size = approximate_size;
                     peer_stat.approximate_keys = approximate_keys;
 
@@ -2249,7 +2261,9 @@ where
             } => self.handle_update_max_timestamp(region_id, initial_status, txn_ext),
             Task::QueryRegionLeader { region_id } => self.handle_query_region_leader(region_id),
             Task::UpdateSlowScore { id, duration } => {
-                self.slow_score.record(id, duration.sum());
+                // Fine-tuned, `SlowScore` only takes the I/O jitters on the disk into account.
+                self.slow_score
+                    .record(id, duration.delays_on_disk_io(false));
                 self.slow_trend_cause.record(
                     tikv_util::time::duration_to_us(duration.store_wait_duration.unwrap()),
                     Instant::now(),

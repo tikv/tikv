@@ -214,27 +214,12 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 let mut proposal_ctx = ProposalContext::empty();
                 proposal_ctx.insert(ProposalContext::PREPARE_MERGE);
                 let data = req.write_to_bytes().unwrap();
-                self.propose_with_ctx(store_ctx, data, proposal_ctx.to_vec())
+                self.propose_with_ctx(store_ctx, data, proposal_ctx)
             });
         if r.is_ok() {
             self.proposal_control_mut().set_pending_prepare_merge(false);
         } else {
-            // Match v1::post_propose_fail.
-            // If we just failed to propose PrepareMerge, the pessimistic locks status
-            // may become MergingRegion incorrectly. So, we have to revert it here.
-            // Note: The `is_merging` check from v1 is removed because proposed
-            // `PrepareMerge` rejects all writes (in `ProposalControl::check_conflict`).
-            assert!(
-                !self.proposal_control().is_merging(),
-                "{}",
-                SlogFormat(&self.logger)
-            );
-            self.take_merge_context();
-            self.proposal_control_mut().set_pending_prepare_merge(false);
-            let mut pessimistic_locks = self.txn_context().ext().pessimistic_locks.write();
-            if pessimistic_locks.status == LocksStatus::MergingRegion {
-                pessimistic_locks.status = LocksStatus::Normal;
-            }
+            self.post_prepare_merge_fail();
         }
         r
     }
@@ -343,9 +328,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 entry.get_data(),
                 entry.get_index(),
                 entry.get_term(),
-            ) else {
-                continue;
-            };
+            ) else { continue };
             let cmd_type = cmd.get_admin_request().get_cmd_type();
             match cmd_type {
                 AdminCmdType::TransferLeader
@@ -709,6 +692,25 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         self.propose(store_ctx, cmd.write_to_bytes().unwrap())?;
         Ok(())
     }
+
+    pub fn post_prepare_merge_fail(&mut self) {
+        // Match v1::post_propose_fail.
+        // If we just failed to propose PrepareMerge, the pessimistic locks status
+        // may become MergingRegion incorrectly. So, we have to revert it here.
+        // Note: The `is_merging` check from v1 is removed because proposed
+        // `PrepareMerge` rejects all writes (in `ProposalControl::check_conflict`).
+        assert!(
+            !self.proposal_control().is_merging(),
+            "{}",
+            SlogFormat(&self.logger)
+        );
+        self.take_merge_context();
+        self.proposal_control_mut().set_pending_prepare_merge(false);
+        let mut pessimistic_locks = self.txn_context().ext().pessimistic_locks.write();
+        if pessimistic_locks.status == LocksStatus::MergingRegion {
+            pessimistic_locks.status = LocksStatus::Normal;
+        }
+    }
 }
 
 impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
@@ -814,6 +816,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         store_ctx: &mut StoreContext<EK, ER, T>,
         res: PrepareMergeResult,
     ) {
+        fail::fail_point!("on_apply_res_prepare_merge");
+
         let region = res.region_state.get_region().clone();
         {
             let mut meta = store_ctx.store_meta.lock().unwrap();

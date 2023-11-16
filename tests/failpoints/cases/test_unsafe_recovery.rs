@@ -442,6 +442,7 @@ fn test_unsafe_recovery_demotion_reentrancy() {
 }
 
 #[test_case(test_raftstore::new_node_cluster)]
+#[test_case(test_raftstore_v2::new_node_cluster)]
 fn test_unsafe_recovery_rollback_merge() {
     let mut cluster = new_cluster(0, 3);
     cluster.cfg.raft_store.raft_store_max_leader_lease = ReadableDuration::millis(40);
@@ -458,7 +459,7 @@ fn test_unsafe_recovery_rollback_merge() {
     }
 
     // Block merge commit, let go of the merge prepare.
-    fail::cfg("on_schedule_merge_ret_err", "return()").unwrap();
+    fail::cfg("on_schedule_merge", "return()").unwrap();
 
     let region = pd_client.get_region(b"k1").unwrap();
     cluster.must_split(&region, b"k2");
@@ -471,11 +472,15 @@ fn test_unsafe_recovery_rollback_merge() {
     let right_peer_2 = find_peer(&right, nodes[2]).unwrap().to_owned();
     cluster.must_transfer_leader(left.get_id(), left_peer_2);
     cluster.must_transfer_leader(right.get_id(), right_peer_2);
-    cluster.must_try_merge(left.get_id(), right.get_id());
+    cluster.try_merge(left.get_id(), right.get_id());
 
+    let right_peer_0 = find_peer(&right, nodes[0]).unwrap().to_owned();
+    pd_client.must_remove_peer(right.get_id(), right_peer_0);
+    cluster.must_remove_region(nodes[0], right.get_id());
     // Makes the group lose its quorum.
     cluster.stop_node(nodes[1]);
     cluster.stop_node(nodes[2]);
+    fail::remove("on_schedule_merge");
     {
         let put = new_put_cmd(b"k2", b"v2");
         let req = new_request(
@@ -491,7 +496,8 @@ fn test_unsafe_recovery_rollback_merge() {
     }
 
     cluster.must_enter_force_leader(left.get_id(), nodes[0], vec![nodes[1], nodes[2]]);
-    cluster.must_enter_force_leader(right.get_id(), nodes[0], vec![nodes[1], nodes[2]]);
+    // Allow rollback merge to finish.
+    sleep_ms(100);
 
     // Construct recovery plan.
     let mut plan = pdpb::RecoveryPlan::default();
@@ -505,42 +511,33 @@ fn test_unsafe_recovery_rollback_merge() {
     let mut left_demote = pdpb::DemoteFailedVoters::default();
     left_demote.set_region_id(left.get_id());
     left_demote.set_failed_voters(left_demote_peers.into());
-    let right_demote_peers: Vec<metapb::Peer> = right
-        .get_peers()
-        .iter()
-        .filter(|&peer| peer.get_store_id() != nodes[0])
-        .cloned()
-        .collect();
-    let mut right_demote = pdpb::DemoteFailedVoters::default();
-    right_demote.set_region_id(right.get_id());
-    right_demote.set_failed_voters(right_demote_peers.into());
     plan.mut_demotes().push(left_demote);
-    plan.mut_demotes().push(right_demote);
 
     // Triggers the unsafe recovery plan execution.
     pd_client.must_set_unsafe_recovery_plan(nodes[0], plan.clone());
     cluster.must_send_store_heartbeat(nodes[0]);
 
+    let mut store_report = None;
+    for _ in 0..20 {
+        store_report = pd_client.must_get_store_report(nodes[0]);
+        if store_report.is_some() {
+            break;
+        }
+        sleep_ms(100);
+    }
+    assert_ne!(store_report, None);
+    // Demotion is done
     let mut demoted = false;
     for _ in 0..10 {
         let new_left = block_on(pd_client.get_region_by_id(left.get_id()))
             .unwrap()
             .unwrap();
-        let new_right = block_on(pd_client.get_region_by_id(right.get_id()))
-            .unwrap()
-            .unwrap();
         assert_eq!(new_left.get_peers().len(), 3);
-        assert_eq!(new_right.get_peers().len(), 3);
         demoted = new_left
             .get_peers()
             .iter()
             .filter(|peer| peer.get_store_id() != nodes[0])
-            .all(|peer| peer.get_role() == metapb::PeerRole::Learner)
-            && new_right
-                .get_peers()
-                .iter()
-                .filter(|peer| peer.get_store_id() != nodes[0])
-                .all(|peer| peer.get_role() == metapb::PeerRole::Learner);
+            .all(|peer| peer.get_role() == metapb::PeerRole::Learner);
         if demoted {
             break;
         }

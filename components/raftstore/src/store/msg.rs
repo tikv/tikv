@@ -10,7 +10,6 @@ use engine_traits::{CompactedEvent, KvEngine, Snapshot};
 use futures::channel::mpsc::UnboundedSender;
 use kvproto::{
     brpb::CheckAdminResponse,
-    import_sstpb::SstMeta,
     kvrpcpb::{DiskFullOpt, ExtraOp as TxnExtraOp},
     metapb,
     metapb::RegionEpoch,
@@ -169,25 +168,19 @@ where
     }
 
     pub fn has_proposed_cb(&self) -> bool {
-        let Callback::Write { proposed_cb, .. } = self else {
-            return false;
-        };
+        let Callback::Write { proposed_cb, .. } = self else { return false; };
         proposed_cb.is_some()
     }
 
     pub fn invoke_proposed(&mut self) {
-        let Callback::Write { proposed_cb, .. } = self else {
-            return;
-        };
+        let Callback::Write { proposed_cb, .. } = self else { return; };
         if let Some(cb) = proposed_cb.take() {
             cb();
         }
     }
 
     pub fn invoke_committed(&mut self) {
-        let Callback::Write { committed_cb, .. } = self else {
-            return;
-        };
+        let Callback::Write { committed_cb, .. } = self else { return; };
         if let Some(cb) = committed_cb.take() {
             cb();
         }
@@ -201,16 +194,12 @@ where
     }
 
     pub fn take_proposed_cb(&mut self) -> Option<ExtCallback> {
-        let Callback::Write { proposed_cb, .. } = self else {
-            return None;
-        };
+        let Callback::Write { proposed_cb, .. } = self else { return None; };
         proposed_cb.take()
     }
 
     pub fn take_committed_cb(&mut self) -> Option<ExtCallback> {
-        let Callback::Write { committed_cb, .. } = self else {
-            return None;
-        };
+        let Callback::Write { committed_cb, .. } = self else { return None; };
         committed_cb.take()
     }
 }
@@ -268,9 +257,7 @@ impl<S: Snapshot> ReadCallback for Callback<S> {
     }
 
     fn read_tracker(&self) -> Option<TrackerToken> {
-        let Callback::Read { tracker, .. } = self else {
-            return None;
-        };
+        let Callback::Read { tracker, .. } = self else { return None; };
         Some(*tracker)
     }
 }
@@ -448,6 +435,7 @@ impl PeerTick {
 #[derive(Debug, Clone, Copy)]
 pub enum StoreTick {
     CompactCheck,
+    PeriodicFullCompact,
     PdStoreHeartbeat,
     SnapGc,
     CompactLockCf,
@@ -460,6 +448,7 @@ impl StoreTick {
     pub fn tag(self) -> RaftEventDurationType {
         match self {
             StoreTick::CompactCheck => RaftEventDurationType::compact_check,
+            StoreTick::PeriodicFullCompact => RaftEventDurationType::periodic_full_compact,
             StoreTick::PdStoreHeartbeat => RaftEventDurationType::pd_store_heartbeat,
             StoreTick::SnapGc => RaftEventDurationType::snap_gc,
             StoreTick::CompactLockCf => RaftEventDurationType::compact_lock_cf,
@@ -570,12 +559,14 @@ pub enum CasualMessage<EK: KvEngine> {
     /// Approximate size of target region. This message can only be sent by
     /// split-check thread.
     RegionApproximateSize {
-        size: u64,
+        size: Option<u64>,
+        splitable: Option<bool>,
     },
 
     /// Approximate key count of target region.
     RegionApproximateKeys {
-        keys: u64,
+        keys: Option<u64>,
+        splitable: Option<bool>,
     },
     CompactionDeclinedBytes {
         bytes: u64,
@@ -660,11 +651,19 @@ impl<EK: KvEngine> fmt::Debug for CasualMessage<EK> {
                 KeysInfoFormatter(split_keys.iter()),
                 source,
             ),
-            CasualMessage::RegionApproximateSize { size } => {
-                write!(fmt, "Region's approximate size [size: {:?}]", size)
+            CasualMessage::RegionApproximateSize { size, splitable } => {
+                write!(
+                    fmt,
+                    "Region's approximate size [size: {:?}], [splitable: {:?}]",
+                    size, splitable
+                )
             }
-            CasualMessage::RegionApproximateKeys { keys } => {
-                write!(fmt, "Region's approximate keys [keys: {:?}]", keys)
+            CasualMessage::RegionApproximateKeys { keys, splitable } => {
+                write!(
+                    fmt,
+                    "Region's approximate keys [keys: {:?}], [splitable: {:?}",
+                    keys, splitable
+                )
             }
             CasualMessage::CompactionDeclinedBytes { bytes } => {
                 write!(fmt, "compaction declined bytes {}", bytes)
@@ -753,7 +752,7 @@ pub enum PeerMsg<EK: KvEngine> {
     /// Raft message is the message sent between raft nodes in the same
     /// raft group. Messages need to be redirected to raftstore if target
     /// peer doesn't exist.
-    RaftMessage(InspectedRaftMessage),
+    RaftMessage(InspectedRaftMessage, Option<Instant>),
     /// Raft command is the command that is expected to be proposed by the
     /// leader of the target raft group. If it's failed to be sent, callback
     /// usually needs to be called before dropping in case of resource leak.
@@ -791,7 +790,7 @@ impl<EK: KvEngine> ResourceMetered for PeerMsg<EK> {}
 impl<EK: KvEngine> fmt::Debug for PeerMsg<EK> {
     fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            PeerMsg::RaftMessage(_) => write!(fmt, "Raft Message"),
+            PeerMsg::RaftMessage(..) => write!(fmt, "Raft Message"),
             PeerMsg::RaftCommand(_) => write!(fmt, "Raft Command"),
             PeerMsg::Tick(tick) => write! {
                 fmt,
@@ -835,10 +834,6 @@ where
     EK: KvEngine,
 {
     RaftMessage(InspectedRaftMessage),
-
-    ValidateSstResult {
-        invalid_ssts: Vec<SstMeta>,
-    },
 
     // Clear region size and keys for all regions in the range, so we can force them to
     // re-calculate their size later.
@@ -896,7 +891,6 @@ where
                 write!(fmt, "Store {}  is unreachable", store_id)
             }
             StoreMsg::CompactedEvent(ref event) => write!(fmt, "CompactedEvent cf {}", event.cf()),
-            StoreMsg::ValidateSstResult { .. } => write!(fmt, "Validate SST Result"),
             StoreMsg::ClearRegionSizeInRange {
                 ref start_key,
                 ref end_key,

@@ -1,5 +1,5 @@
 use engine_traits::CF_DEFAULT;
-use external_storage_export::LocalStorage;
+use external_storage::LocalStorage;
 use kvproto::import_sstpb::ApplyRequest;
 use tempfile::TempDir;
 
@@ -67,6 +67,6 @@ fn test_apply_twice() {
         &tikv,
         &ctx,
         CF_DEFAULT,
-        default_fst.into_iter().chain(default_snd),
+        default_fst.into_iter().chain(default_snd.into_iter()),
     );
 }

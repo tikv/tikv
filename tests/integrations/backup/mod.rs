@@ -3,7 +3,7 @@
 use std::{fs::File, time::Duration};
 
 use engine_traits::{CF_DEFAULT, CF_WRITE};
-use external_storage_export::{create_storage, make_local_backend};
+use external_storage::{create_storage, make_local_backend};
 use file_system::calc_crc32_bytes;
 use futures::{executor::block_on, AsyncReadExt, StreamExt};
 use kvproto::{
@@ -492,7 +492,6 @@ fn test_backup_raw_meta() {
 }
 
 #[test]
-#[allow(clippy::permissions_set_readonly_false)]
 fn test_invalid_external_storage() {
     let mut suite = TestSuite::new(1, 144 * 1024 * 1024, ApiVersion::V1);
     // Put some data.
