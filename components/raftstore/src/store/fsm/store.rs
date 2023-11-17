@@ -125,8 +125,8 @@ pub const MULTI_FILES_SNAPSHOT_FEATURE: Feature = Feature::require(6, 1, 0); // 
 // setting `periodic_full_compact_start_times` to be changed dynamically.
 const PERIODIC_FULL_COMPACT_TICK_INTERVAL_DURATION: Duration = Duration::from_secs(30 * 60);
 // If periodic full compaction is enabled (`periodic_full_compact_start_times`
-// is set), sample load metrics every 30 seconds.
-const LOAD_STATS_WINDOW_DURATION: Duration = Duration::from_secs(30);
+// is set), sample load metrics every 10 minutes.
+const LOAD_STATS_WINDOW_DURATION: Duration = Duration::from_secs(10 * 60);
 
 pub struct StoreInfo<EK, ER> {
     pub kv_engine: EK,
