@@ -928,7 +928,7 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
         let sst_max_size = self.config_manager.0.read().unwrap().sst_max_size.0;
         let limit = self.softlimit.limit();
         let resource_limiter = self.resource_ctl.as_ref().and_then(|r| {
-            r.get_resource_limiter(&request.resource_group_name, &request.source_tag)
+            r.get_background_resource_limiter(&request.resource_group_name, &request.source_tag)
         });
 
         self.pool.borrow_mut().spawn(async move {

@@ -165,7 +165,11 @@ fn test_connections_register_impl<F: KvFormat>() {
     let mut events = receive_event(false).events.to_vec();
     match events.pop().unwrap().event.unwrap() {
         Event_oneof_event::Error(err) => {
-            assert!(err.has_epoch_not_match(), "{:?}", err);
+            assert!(
+                err.has_epoch_not_match() || err.has_region_not_found(),
+                "{:?}",
+                err
+            );
         }
         other => panic!("unknown event {:?}", other),
     }

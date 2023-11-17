@@ -15,7 +15,6 @@ use std::{
 use engine_traits::{CompactExt, MiscExt, CF_DEFAULT, CF_WRITE};
 use file_system::{set_io_type, IoType};
 use futures::{sink::SinkExt, stream::TryStreamExt, FutureExt, TryFutureExt};
-use futures_executor::block_on;
 use grpcio::{
     ClientStreamingSink, RequestStream, RpcContext, ServerStreamingSink, UnarySink, WriteFlags,
 };
@@ -30,7 +29,11 @@ use kvproto::{
     kvrpcpb::Context,
     metapb::RegionEpoch,
 };
-use raftstore::{coprocessor::RegionInfoProvider, store::util::is_epoch_stale, RegionInfoAccessor};
+use raftstore::{
+    coprocessor::{RegionInfo, RegionInfoProvider},
+    store::util::is_epoch_stale,
+    RegionInfoAccessor,
+};
 use raftstore_v2::StoreMeta;
 use resource_control::{with_resource_limiter, ResourceGroupManager};
 use sst_importer::{
@@ -684,37 +687,26 @@ impl<E: Engine> ImportSstService<E> {
 fn check_local_region_stale(
     region_id: u64,
     epoch: &RegionEpoch,
-    region_info_accessor: Arc<dyn RegionInfoProvider>,
+    local_region_info: Option<RegionInfo>,
 ) -> Result<()> {
-    let (cb, f) = paired_future_callback();
-    region_info_accessor
-        .find_region_by_id(region_id, cb)
-        .map_err(|e| {
-            Error::Engine(format!("failed to find region {} err {:?}", region_id, e).into())
-        })?;
-    match block_on(f)? {
+    match local_region_info {
         Some(local_region_info) => {
             let local_region_epoch = local_region_info.region.region_epoch.unwrap();
 
-            // TODO(lance6717): we should only need to check conf_ver because we require all
-            // peers have SST on the disk, and does not care about which one is
-            // leader. But since check_sst_for_ingestion also checks epoch version,
-            // we just keep it here for now.
-
             // when local region epoch is stale, client can retry write later
             if is_epoch_stale(&local_region_epoch, epoch) {
-                return Err(Error::Engine(
-                    format!("request region {} is ahead of local region, local epoch {:?}, request epoch {:?}, please retry write later",
-                            region_id, local_region_epoch, epoch).into(),
-                ));
+                return Err(Error::RequestTooNew(format!(
+                    "request region {} is ahead of local region, local epoch {:?}, request epoch {:?}, please retry write later",
+                    region_id, local_region_epoch, epoch
+                )));
             }
             // when local region epoch is ahead, client need to rescan region from PD to get
             // latest region later
             if is_epoch_stale(epoch, &local_region_epoch) {
-                return Err(Error::Engine(
-                    format!("request region {} is staler than local region, local epoch {:?}, request epoch {:?}, please rescan region later",
-                            region_id, local_region_epoch, epoch).into(),
-                ));
+                return Err(Error::RequestTooOld(format!(
+                    "request region {} is staler than local region, local epoch {:?}, request epoch {:?}",
+                    region_id, local_region_epoch, epoch
+                )));
             }
 
             // not match means to rescan
@@ -723,13 +715,10 @@ fn check_local_region_stale(
         None => {
             // when region not found, we can't tell whether it's stale or ahead, so we just
             // return the safest case
-            Err(Error::Engine(
-                format!(
-                    "region {} is not found, please rescan region later",
-                    region_id
-                )
-                .into(),
-            ))
+            Err(Error::RequestTooOld(format!(
+                "region {} is not found",
+                region_id
+            )))
         }
     }
 }
@@ -754,12 +743,15 @@ macro_rules! impl_write {
             let label = stringify!($fn);
             let resource_manager = self.resource_manager.clone();
             let handle_task = async move {
-                let res = async move {
-                    let first_req = rx.try_next().await?;
+                let (res, rx) = async move {
+                    let first_req = match rx.try_next().await {
+                        Ok(r) => r,
+                        Err(e) => return (Err(e), Some(rx)),
+                    };
                     let (meta, resource_limiter) = match first_req {
                         Some(r) => {
                             let limiter = resource_manager.as_ref().and_then(|m| {
-                                m.get_resource_limiter(
+                                m.get_background_resource_limiter(
                                     r.get_context()
                                         .get_resource_control_context()
                                         .get_resource_group_name(),
@@ -768,26 +760,49 @@ macro_rules! impl_write {
                             });
                             match r.chunk {
                                 Some($chunk_ty::Meta(m)) => (m, limiter),
-                                _ => return Err(Error::InvalidChunk),
+                                _ => return (Err(Error::InvalidChunk), Some(rx)),
                             }
                         }
-                        _ => return Err(Error::InvalidChunk),
+                        _ => return (Err(Error::InvalidChunk), Some(rx)),
                     };
                     // wait the region epoch on this TiKV to catch up with the epoch
                     // in request, which comes from PD and represents the majority
                     // peers' status.
                     let region_id = meta.get_region_id();
-                    check_local_region_stale(
-                        region_id,
-                        meta.get_region_epoch(),
-                        region_info_accessor,
-                    )?;
+                    let (cb, f) = paired_future_callback();
+                    if let Err(e) = region_info_accessor
+                        .find_region_by_id(region_id, cb)
+                        .map_err(|e| {
+                            // when region not found, we can't tell whether it's stale or ahead, so
+                            // we just return the safest case
+                            Error::RequestTooOld(format!(
+                                "failed to find region {} err {:?}",
+                                region_id, e
+                            ))
+                        })
+                    {
+                        return (Err(e), Some(rx));
+                    };
+                    let res = match f.await {
+                        Ok(r) => r,
+                        Err(e) => return (Err(From::from(e)), Some(rx)),
+                    };
+                    if let Err(e) =
+                        check_local_region_stale(region_id, meta.get_region_epoch(), res)
+                    {
+                        return (Err(e), Some(rx));
+                    };
+
                     let tablet = match tablets.get(region_id) {
                         Some(t) => t,
                         None => {
-                            return Err(Error::Engine(
-                                format!("region {} not found", region_id).into(),
-                            ));
+                            return (
+                                Err(Error::RequestTooOld(format!(
+                                    "region {} not found",
+                                    region_id
+                                ))),
+                                Some(rx),
+                            );
                         }
                     };
 
@@ -795,10 +810,10 @@ macro_rules! impl_write {
                         Ok(w) => w,
                         Err(e) => {
                             error!("build writer failed {:?}", e);
-                            return Err(Error::InvalidChunk);
+                            return (Err(Error::InvalidChunk), Some(rx));
                         }
                     };
-                    let (writer, resource_limiter) = rx
+                    let result = rx
                         .try_fold(
                             (writer, resource_limiter),
                             |(mut writer, limiter), req| async move {
@@ -815,7 +830,11 @@ macro_rules! impl_write {
                                     .map(|w| (w, limiter))
                             },
                         )
-                        .await?;
+                        .await;
+                    let (writer, resource_limiter) = match result {
+                        Ok(r) => r,
+                        Err(e) => return (Err(e), None),
+                    };
 
                     let finish_fn = async {
                         let metas = writer.finish()?;
@@ -824,13 +843,18 @@ macro_rules! impl_write {
                     };
 
                     let metas: Result<_> = with_resource_limiter(finish_fn, resource_limiter).await;
-                    let metas = metas?;
+                    let metas = match metas {
+                        Ok(r) => r,
+                        Err(e) => return (Err(e), None),
+                    };
                     let mut resp = $resp_ty::default();
                     resp.set_metas(metas.into());
-                    Ok(resp)
+                    (Ok(resp), None)
                 }
                 .await;
                 $crate::send_rpc_response!(res, sink, label, timer);
+                // don't drop rx before send response
+                _ = rx;
             };
 
             self.threads.spawn(buf_driver);
@@ -1036,7 +1060,7 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
         let tablets = self.tablets.clone();
         let start = Instant::now();
         let resource_limiter = self.resource_manager.as_ref().and_then(|r| {
-            r.get_resource_limiter(
+            r.get_background_resource_limiter(
                 req.get_context()
                     .get_resource_control_context()
                     .get_resource_group_name(),
@@ -1455,10 +1479,7 @@ fn write_needs_restore(write: &[u8]) -> bool {
 
 #[cfg(test)]
 mod test {
-    use std::{
-        collections::HashMap,
-        sync::{Arc, Mutex},
-    };
+    use std::collections::HashMap;
 
     use engine_traits::{CF_DEFAULT, CF_WRITE};
     use kvproto::{
@@ -1468,10 +1489,7 @@ mod test {
     };
     use protobuf::{Message, SingularPtrField};
     use raft::StateRole::Follower;
-    use raftstore::{
-        coprocessor::{region_info_accessor::Callback, RegionInfoProvider},
-        RegionInfo,
-    };
+    use raftstore::RegionInfo;
     use tikv_kv::{Modify, WriteData};
     use txn_types::{Key, TimeStamp, Write, WriteBatchFlags, WriteType};
 
@@ -1765,31 +1783,13 @@ mod test {
 
     #[test]
     fn test_write_rpc_check_region_epoch() {
-        struct MockRegionInfoProvider {
-            map: Mutex<HashMap<u64, RegionInfo>>,
-        }
-        impl RegionInfoProvider for MockRegionInfoProvider {
-            fn find_region_by_id(
-                &self,
-                region_id: u64,
-                callback: Callback<Option<RegionInfo>>,
-            ) -> Result<(), raftstore::coprocessor::Error> {
-                callback(self.map.lock().unwrap().get(&region_id).cloned());
-                Ok(())
-            }
-        }
-
-        let mock_provider = Arc::new(MockRegionInfoProvider {
-            map: Mutex::new(HashMap::new()),
-        });
-
         let mut req_epoch = RegionEpoch {
             conf_ver: 10,
             version: 10,
             ..Default::default()
         };
         // test for region not found
-        let result = check_local_region_stale(1, &req_epoch, mock_provider.clone());
+        let result = check_local_region_stale(1, &req_epoch, None);
         assert!(result.is_err());
         // check error message contains "rescan region later", client will match this
         // string pattern
@@ -1809,13 +1809,8 @@ mod test {
             role: Follower,
             buckets: 1,
         };
-        mock_provider
-            .map
-            .lock()
-            .unwrap()
-            .insert(1, local_region_info.clone());
         // test the local region epoch is same as request
-        let result = check_local_region_stale(1, &req_epoch, mock_provider.clone());
+        let result = check_local_region_stale(1, &req_epoch, Some(local_region_info.clone()));
         result.unwrap();
 
         // test the local region epoch is ahead of request
@@ -1825,12 +1820,7 @@ mod test {
             .as_mut()
             .unwrap()
             .conf_ver = 11;
-        mock_provider
-            .map
-            .lock()
-            .unwrap()
-            .insert(1, local_region_info.clone());
-        let result = check_local_region_stale(1, &req_epoch, mock_provider.clone());
+        let result = check_local_region_stale(1, &req_epoch, Some(local_region_info.clone()));
         assert!(result.is_err());
         // check error message contains "rescan region later", client will match this
         // string pattern
@@ -1842,12 +1832,12 @@ mod test {
         );
 
         req_epoch.conf_ver = 11;
-        let result = check_local_region_stale(1, &req_epoch, mock_provider.clone());
+        let result = check_local_region_stale(1, &req_epoch, Some(local_region_info.clone()));
         result.unwrap();
 
         // test the local region epoch is staler than request
         req_epoch.version = 12;
-        let result = check_local_region_stale(1, &req_epoch, mock_provider);
+        let result = check_local_region_stale(1, &req_epoch, Some(local_region_info));
         assert!(result.is_err());
         // check error message contains "retry write later", client will match this
         // string pattern

@@ -83,6 +83,7 @@ use crate::{
             flow_controller::FlowController,
             latch::{Latches, Lock},
             sched_pool::{tls_collect_query, tls_collect_scan_details, SchedPool},
+            txn_status_cache::TxnStatusCache,
             Error, ErrorInner, ProcessResult,
         },
         types::StorageCallback,
@@ -293,6 +294,8 @@ struct TxnSchedulerInner<L: LockManager> {
     quota_limiter: Arc<QuotaLimiter>,
     resource_manager: Option<Arc<ResourceGroupManager>>,
     feature_gate: FeatureGate,
+
+    txn_status_cache: TxnStatusCache,
 }
 
 #[inline]
@@ -469,6 +472,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                 reporter,
                 feature_gate.clone(),
                 resource_ctl,
+                resource_manager.clone(),
             ),
             control_mutex: Arc::new(tokio::sync::Mutex::new(false)),
             lock_mgr,
@@ -484,6 +488,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             quota_limiter,
             resource_manager,
             feature_gate,
+            txn_status_cache: TxnStatusCache::new(config.txn_status_cache_capacity),
         });
 
         slow_log!(
@@ -815,6 +820,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         pipelined: bool,
         async_apply_prewrite: bool,
         new_acquired_locks: Vec<kvrpcpb::LockInfo>,
+        known_txn_status: Vec<(TimeStamp, TimeStamp)>,
         tag: CommandKind,
         metadata: TaskMetadata<'_>,
         sched_details: &SchedulerDetails,
@@ -837,6 +843,17 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         debug!("write command finished";
             "cid" => cid, "pipelined" => pipelined, "async_apply_prewrite" => async_apply_prewrite);
         drop(lock_guards);
+
+        if result.is_ok() && !known_txn_status.is_empty() {
+            // Update cache before calling the callback.
+            // Reversing the order can lead to test failures as the cache may still
+            // remain not updated after receiving signal from the callback.
+            let now = std::time::SystemTime::now();
+            for (start_ts, commit_ts) in known_txn_status {
+                self.inner.txn_status_cache.insert(start_ts, commit_ts, now);
+            }
+        }
+
         let tctx = self.inner.dequeue_task_context(cid);
 
         let mut do_wake_up = !tctx.woken_up_resumable_lock_requests.is_empty();
@@ -1220,6 +1237,10 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                     .get_resource_control_context()
                     .get_resource_group_name(),
                 task.cmd.ctx().get_request_source(),
+                task.cmd
+                    .ctx()
+                    .get_resource_control_context()
+                    .get_override_priority(),
             )
         });
         let mut sample = quota_limiter.new_sample(true);
@@ -1258,6 +1279,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                 statistics: &mut sched_details.stat,
                 async_apply_prewrite: self.inner.enable_async_apply_prewrite,
                 raw_ext,
+                txn_status_cache: &self.inner.txn_status_cache,
             };
             let begin_instant = Instant::now();
             let res = unsafe {
@@ -1279,10 +1301,14 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             // TODO: write bytes can be a bit inaccurate due to error requests or in-memory
             // pessimistic locks.
             sample.add_write_bytes(write_bytes);
-            // estimate the cpu time for write by the schdule cpu time and write bytes
-            let expected_dur = (sample.cpu_time() + Duration::from_micros(write_bytes as u64))
-                * SCHEDULER_CPU_TIME_FACTOR;
             if let Some(limiter) = resource_limiter {
+                let expected_dur = if limiter.is_background() {
+                    // estimate the cpu time for write by the schduling cpu time and write bytes
+                    (sample.cpu_time() + Duration::from_micros(write_bytes as u64))
+                        * SCHEDULER_CPU_TIME_FACTOR
+                } else {
+                    sample.cpu_time()
+                };
                 limiter
                     .async_consume(
                         expected_dur,
@@ -1328,6 +1354,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             new_acquired_locks,
             lock_guards,
             response_policy,
+            known_txn_status,
         } = match deadline
             .check()
             .map_err(StorageError::from)
@@ -1406,6 +1433,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                 false,
                 false,
                 new_acquired_locks,
+                known_txn_status,
                 tag,
                 metadata,
                 sched_details,
@@ -1441,6 +1469,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                 false,
                 false,
                 new_acquired_locks,
+                known_txn_status,
                 tag,
                 metadata,
                 sched_details,
@@ -1636,6 +1665,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                         pipelined,
                         is_async_apply_prewrite,
                         new_acquired_locks,
+                        known_txn_status,
                         tag,
                         metadata,
                         sched_details,
@@ -1879,6 +1909,11 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                 .push_lock_wait(entry, Default::default());
         }
     }
+
+    #[cfg(test)]
+    pub fn get_txn_status_cache(&self) -> &TxnStatusCache {
+        &self.inner.txn_status_cache
+    }
 }
 
 pub async fn get_raw_ext(
@@ -2002,6 +2037,8 @@ mod tests {
             enable_async_apply_prewrite: false,
             ..Default::default()
         };
+        let resource_manager = Arc::new(ResourceGroupManager::default());
+        let controller = resource_manager.derive_controller("test".into(), false);
         (
             TxnScheduler::new(
                 engine.clone(),
@@ -2019,11 +2056,8 @@ mod tests {
                 ResourceTagFactory::new_for_test(),
                 Arc::new(QuotaLimiter::default()),
                 latest_feature_gate(),
-                Some(Arc::new(ResourceController::new_for_test(
-                    "test".to_owned(),
-                    true,
-                ))),
-                None,
+                Some(controller),
+                Some(resource_manager),
             ),
             engine,
         )
@@ -2358,6 +2392,8 @@ mod tests {
         };
         let feature_gate = FeatureGate::default();
         feature_gate.set_version("6.0.0").unwrap();
+        let resource_manager = Arc::new(ResourceGroupManager::default());
+        let controller = resource_manager.derive_controller("test".into(), false);
 
         let scheduler = TxnScheduler::new(
             engine,
@@ -2375,11 +2411,8 @@ mod tests {
             ResourceTagFactory::new_for_test(),
             Arc::new(QuotaLimiter::default()),
             feature_gate.clone(),
-            Some(Arc::new(ResourceController::new_for_test(
-                "test".to_owned(),
-                true,
-            ))),
-            None,
+            Some(controller),
+            Some(resource_manager),
         );
         // Use sync mode if pipelined_pessimistic_lock is false.
         assert_eq!(scheduler.pessimistic_lock_mode(), PessimisticLockMode::Sync);

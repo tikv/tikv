@@ -1,9 +1,5 @@
-log-level = "info"
-log-file = ""
-log-format = "text"
 slow-log-file = "slow_foo"
 slow-log-threshold = "1s"
-log-rotation-timespan = "1d"
 panic-when-unexpected-key-or-data = true
 abort-on-panic = true
 memory-usage-limit = "10GB"
@@ -18,6 +14,10 @@ filename = "foo"
 max-size = 1
 max-backups = 2
 max-days = 3
+
+[memory]
+enable-heap-profiling = false 
+profiling-sample-per-bytes = "1MB" 
 
 [readpool.unified]
 min-thread-count = 5
@@ -101,6 +101,7 @@ reserve-space = "10GB"
 reserve-raft-space = "2GB"
 enable-ttl = true
 ttl-check-poll-interval = "0s"
+txn-status-cache-capacity = 1000
 
 [storage.block-cache]
 capacity = "40GB"
@@ -698,6 +699,7 @@ hibernate-regions-compatible = false
 incremental-scan-threads = 3
 incremental-scan-concurrency = 4
 incremental-scan-speed-limit = 7
+incremental-fetch-speed-limit = 8
 incremental-scan-ts-filter-ratio = 0.7
 tso-worker-threads = 2
 old-value-cache-memory-quota = "14MB"
