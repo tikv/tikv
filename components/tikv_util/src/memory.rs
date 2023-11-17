@@ -108,6 +108,10 @@ impl OwnedAllocated {
         self.allocated += bytes;
         Ok(())
     }
+
+    pub fn source(&self) -> &MemoryQuota {
+        &self.from
+    }
 }
 
 impl Drop for OwnedAllocated {
@@ -162,17 +166,6 @@ impl MemoryQuota {
         }
     }
 
-    pub fn alloc_guard_owned(
-        self: Arc<Self>,
-        bytes: usize,
-    ) -> Result<OwnedMemoryQuotaGuard, MemoryQuotaExceeded> {
-        self.alloc(bytes)?;
-        Ok(OwnedMemoryQuotaGuard {
-            allocated: bytes,
-            quota: self,
-        })
-    }
-
     pub fn free(&self, bytes: usize) {
         let mut in_use_bytes = self.in_use.load(Ordering::Relaxed);
         loop {
@@ -188,17 +181,6 @@ impl MemoryQuota {
                 Err(current) => in_use_bytes = current,
             }
         }
-    }
-}
-
-pub struct OwnedMemoryQuotaGuard {
-    allocated: usize,
-    quota: Arc<MemoryQuota>,
-}
-
-impl Drop for OwnedMemoryQuotaGuard {
-    fn drop(&mut self) {
-        self.quota.free(self.allocated)
     }
 }
 

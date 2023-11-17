@@ -34,7 +34,10 @@ use crate::{
 };
 
 const MAX_GET_SNAPSHOT_RETRY: usize = 5;
-const SLOW_DOWN_INITIAL_SCAN_RATIO: f64 = 0.5;
+/// The threshold of slowing down initial scanning.
+/// While the memory usage reaches this ratio, we will consume the result of
+/// initial scanning more frequently.
+const SLOW_DOWN_INITIAL_SCAN_RATIO: f64 = 0.7;
 
 struct ScanResult {
     more: bool,
@@ -111,7 +114,9 @@ impl<S: Snapshot> EventLoader<S> {
                 Some(entry) => {
                     let size = entry.size();
                     batch.push(entry);
-                    if memory_quota.alloc(size).is_err() {
+                    if memory_quota.alloc(size).is_err()
+                        || memory_quota.source().used_ratio() > SLOW_DOWN_INITIAL_SCAN_RATIO
+                    {
                         return Ok(self.out_of_memory());
                     }
                 }

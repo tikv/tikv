@@ -52,7 +52,7 @@ use crate::{
         BasicFlushObserver, CheckpointManager, CheckpointV3FlushObserver, FlushObserver,
         GetCheckpointResult, RegionIdWithVersion, Subscription,
     },
-    errors::{Error, Result},
+    errors::{Error, ReportableResult, Result},
     event_loader::InitialDataLoader,
     future,
     metadata::{store::MetaStore, MetadataClient, MetadataEvent, StreamTask},

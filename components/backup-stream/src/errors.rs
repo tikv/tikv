@@ -1,7 +1,8 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    error::Error as StdError, fmt::Display, io::Error as IoError, result::Result as StdResult,
+    error::Error as StdError, fmt::Display, io::Error as IoError, panic::Location,
+    result::Result as StdResult,
 };
 
 use error_code::ErrorCodeExt;
@@ -129,6 +130,7 @@ where
     Error: From<E>,
 {
     #[inline(always)]
+    #[track_caller]
     fn report_if_err(self, context: impl ToString) {
         if let Err(err) = self {
             Error::from(err).report(context.to_string())
@@ -152,8 +154,9 @@ macro_rules! annotate {
 }
 
 impl Error {
+    #[track_caller]
     pub fn report(&self, context: impl Display) {
-        warn!("backup stream meet error"; "context" => %context, "err" => %self, "verbose_err" => ?self);
+        warn!("backup stream meet error"; "context" => %context, "err" => %self, "verbose_err" => ?self, "position" => ?Location::caller());
         metrics::STREAM_ERROR
             .with_label_values(&[self.kind()])
             .inc()

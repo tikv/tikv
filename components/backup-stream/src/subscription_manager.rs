@@ -841,6 +841,8 @@ mod test {
     fn test_message_delay_and_exit() {
         use std::time::Duration;
 
+        use futures::executor::block_on;
+
         use super::ScanCmd;
         use crate::{subscription_manager::spawn_executors, utils::CallbackWaitGroup};
 
@@ -858,25 +860,21 @@ mod test {
             pool.block_on(tokio::time::timeout(d, rx)).unwrap().unwrap();
         }
 
-        let pool = spawn_executors(
-            FuncInitialScan(|_, _, _| Ok(Statistics::default())),
-            1,
-            tx.clone(),
-        );
+        let pool = spawn_executors(FuncInitialScan(|_, _, _| Ok(Statistics::default())), 1);
         let wg = CallbackWaitGroup::new();
         fail::cfg("execute_scan_command_sleep_100", "return").unwrap();
         for _ in 0..100 {
             let wg = wg.clone();
             assert!(
-                pool._pool
-                    .block_on(pool.request(ScanCmd {
-                        region: Default::default(),
-                        handle: Default::default(),
-                        last_checkpoint: Default::default(),
-                        // Note: Maybe make here a Box<dyn FnOnce()> or some other trait?
-                        _work: wg.work(),
-                    }))
-                    .is_ok()
+                block_on(pool.request(ScanCmd {
+                    region: Default::default(),
+                    handle: Default::default(),
+                    last_checkpoint: Default::default(),
+                    feedback_channel: tx,
+                    // Note: Maybe make here a Box<dyn FnOnce()> or some other trait?
+                    _work: wg.work(),
+                }))
+                .is_ok()
             )
         }
 
