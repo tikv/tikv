@@ -433,7 +433,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
             sink.success(resp).await?;
             GRPC_MSG_HISTOGRAM_STATIC
                 .kv_prepare_flashback_to_version
-                .get(ResourcePriority::unknown)
+                .unknown
                 .observe(elapsed.as_secs_f64());
             record_request_source_metrics(source, elapsed);
             ServerResult::Ok(())
