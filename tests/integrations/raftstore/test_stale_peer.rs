@@ -9,7 +9,6 @@ use kvproto::raft_serverpb::{PeerState, RegionLocalState};
 use pd_client::PdClient;
 use raft::eraftpb::MessageType;
 use test_raftstore::*;
-use test_raftstore_macro::test_case;
 use tikv_util::{config::ReadableDuration, HandyRwLock};
 
 /// A helper function for testing the behaviour of the gc of stale peer
@@ -314,12 +313,11 @@ fn test_stale_learner_with_read_index() {
 }
 
 /// Test if an uninitialized stale peer will be removed after restart.
-#[test_case(test_raftstore::new_node_cluster)]
-// #[test_case(test_raftstore_v2::new_node_cluster)]
+#[test]
 fn test_node_restart_gc_uninitialized_peer_after_merge() {
-    let mut cluster = new_cluster(0, 4);
-    configure_for_merge(&mut cluster.cfg);
-    ignore_merge_target_integrity(&mut cluster.cfg, &cluster.pd_client);
+    let mut cluster = test_raftstore::new_node_cluster(0, 4);
+    configure_for_merge(&mut cluster);
+    ignore_merge_target_integrity(&mut cluster);
     cluster.cfg.raft_store.raft_election_timeout_ticks = 5;
     cluster.cfg.raft_store.raft_store_max_leader_lease = ReadableDuration::millis(40);
     cluster.cfg.raft_store.max_leader_missing_duration = ReadableDuration::millis(150);
