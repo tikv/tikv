@@ -4863,7 +4863,1501 @@ def Threads() -> RowPanel:
 
 def RocksDB() -> RowPanel:
     layout = Layout(title="RocksDB", repeat="db")
-    layout.row([])
+    layout.row(
+        [
+            graph_panel(
+                title="Get operations",
+                description="The count of get operations",
+                yaxes=yaxes(left_format=UNITS.OPS_PER_SEC),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_engine_memtable_efficiency",
+                            label_selectors=[
+                                'db="$db"',
+                                'type="memtable_hit"',
+                            ],
+                            by_labels=[],  # override default by instance.
+                        ),
+                        legend_format="memtable",
+                    ),
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_engine_cache_efficiency",
+                            label_selectors=[
+                                'db="$db"',
+                                'type=~"block_cache_data_hit|block_cache_filter_hit"',
+                            ],
+                            by_labels=[],  # override default by instance.
+                        ),
+                        legend_format="block_cache",
+                    ),
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_engine_get_served",
+                            label_selectors=[
+                                'db="$db"',
+                                'type="get_hit_l0"',
+                            ],
+                            by_labels=[],  # override default by instance.
+                        ),
+                        legend_format="l0",
+                    ),
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_engine_get_served",
+                            label_selectors=[
+                                'db="$db"',
+                                'type="get_hit_l1"',
+                            ],
+                            by_labels=[],  # override default by instance.
+                        ),
+                        legend_format="l1",
+                    ),
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_engine_get_served",
+                            label_selectors=[
+                                'db="$db"',
+                                'type="get_hit_l2_and_up"',
+                            ],
+                            by_labels=[],  # override default by instance.
+                        ),
+                        legend_format="l2_and_up",
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="Get duration",
+                description="The time consumed when executing get operations",
+                yaxes=yaxes(left_format=UNITS.MICRO_SECONDS, log_base=2),
+                targets=[
+                    target(
+                        expr=expr_max(
+                            "tikv_engine_get_micro_seconds",
+                            label_selectors=[
+                                'db="$db"',
+                                'type="get_max"',
+                            ],
+                            by_labels=[],  # override default by instance.
+                        ),
+                        legend_format="max",
+                    ),
+                    target(
+                        expr=expr_avg(
+                            "tikv_engine_get_micro_seconds",
+                            label_selectors=[
+                                'db="$db"',
+                                'type="get_percentile99"',
+                            ],
+                            by_labels=[],  # override default by instance.
+                        ),
+                        legend_format="99%",
+                    ),
+                    target(
+                        expr=expr_avg(
+                            "tikv_engine_get_micro_seconds",
+                            label_selectors=[
+                                'db="$db"',
+                                'type="get_percentile95"',
+                            ],
+                            by_labels=[],  # override default by instance.
+                        ),
+                        legend_format="95%",
+                    ),
+                    target(
+                        expr=expr_avg(
+                            "tikv_engine_get_micro_seconds",
+                            label_selectors=[
+                                'db="$db"',
+                                'type="get_average"',
+                            ],
+                            by_labels=[],  # override default by instance.
+                        ),
+                        legend_format="avg",
+                    ),
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel(
+                title="Seek operations",
+                description="The count of seek operations",
+                yaxes=yaxes(left_format=UNITS.OPS_PER_SEC),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_engine_locate",
+                            label_selectors=[
+                                'db="$db"',
+                                'type="number_db_seek"',
+                            ],
+                            by_labels=[],  # override default by instance.
+                        ),
+                        legend_format="seek",
+                    ),
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_engine_locate",
+                            label_selectors=[
+                                'db="$db"',
+                                'type="number_db_seek_found"',
+                            ],
+                            by_labels=[],  # override default by instance.
+                        ),
+                        legend_format="seek_found",
+                    ),
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_engine_locate",
+                            label_selectors=[
+                                'db="$db"',
+                                'type="number_db_next"',
+                            ],
+                            by_labels=[],  # override default by instance.
+                        ),
+                        legend_format="next",
+                    ),
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_engine_locate",
+                            label_selectors=[
+                                'db="$db"',
+                                'type="number_db_next_found"',
+                            ],
+                            by_labels=[],  # override default by instance.
+                        ),
+                        legend_format="next_found",
+                    ),
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_engine_locate",
+                            label_selectors=[
+                                'db="$db"',
+                                'type="number_db_prev"',
+                            ],
+                            by_labels=[],  # override default by instance.
+                        ),
+                        legend_format="prev",
+                    ),
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_engine_locate",
+                            label_selectors=[
+                                'db="$db"',
+                                'type="number_db_prev_found"',
+                            ],
+                            by_labels=[],  # override default by instance.
+                        ),
+                        legend_format="prev_found",
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="Seek duration",
+                description="The time consumed when executing seek operation",
+                yaxes=yaxes(left_format=UNITS.MICRO_SECONDS, log_base=2),
+                targets=[
+                    target(
+                        expr=expr_max(
+                            "tikv_engine_seek_micro_seconds",
+                            label_selectors=[
+                                'db="$db"',
+                                'type="seek_max"',
+                            ],
+                            by_labels=[],  # override default by instance.
+                        ),
+                        legend_format="max",
+                    ),
+                    target(
+                        expr=expr_avg(
+                            "tikv_engine_seek_micro_seconds",
+                            label_selectors=[
+                                'db="$db"',
+                                'type="seek_percentile99"',
+                            ],
+                            by_labels=[],  # override default by instance.
+                        ),
+                        legend_format="99%",
+                    ),
+                    target(
+                        expr=expr_avg(
+                            "tikv_engine_seek_micro_seconds",
+                            label_selectors=[
+                                'db="$db"',
+                                'type="seek_percentile95"',
+                            ],
+                            by_labels=[],  # override default by instance.
+                        ),
+                        legend_format="95%",
+                    ),
+                    target(
+                        expr=expr_avg(
+                            "tikv_engine_seek_micro_seconds",
+                            label_selectors=[
+                                'db="$db"',
+                                'type="seek_average"',
+                            ],
+                            by_labels=[],  # override default by instance.
+                        ),
+                        legend_format="avg",
+                    ),
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel(
+                title="Write operations",
+                description="The count of write operations",
+                yaxes=yaxes(left_format=UNITS.OPS_PER_SEC),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_engine_write_served",
+                            label_selectors=[
+                                'db="$db"',
+                                'type=~"write_done_by_self|write_done_by_other"',
+                            ],
+                            by_labels=[],  # override default by instance.
+                        ),
+                        legend_format="done",
+                    ),
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_engine_write_served",
+                            label_selectors=[
+                                'db="$db"',
+                                'type="write_timeout"',
+                            ],
+                            by_labels=[],  # override default by instance.
+                        ),
+                        legend_format="timeout",
+                    ),
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_engine_write_served",
+                            label_selectors=[
+                                'db="$db"',
+                                'type="write_with_wal"',
+                            ],
+                            by_labels=[],  # override default by instance.
+                        ),
+                        legend_format="with_wal",
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="Write duration",
+                description="The time consumed when executing write operation",
+                yaxes=yaxes(left_format=UNITS.MICRO_SECONDS, log_base=2),
+                targets=[
+                    target(
+                        expr=expr_max(
+                            "tikv_engine_write_micro_seconds",
+                            label_selectors=[
+                                'db="$db"',
+                                'type="write_max"',
+                            ],
+                            by_labels=[],  # override default by instance.
+                        ),
+                        legend_format="max",
+                    ),
+                    target(
+                        expr=expr_avg(
+                            "tikv_engine_write_micro_seconds",
+                            label_selectors=[
+                                'db="$db"',
+                                'type="write_percentile99"',
+                            ],
+                            by_labels=[],  # override default by instance.
+                        ),
+                        legend_format="99%",
+                    ),
+                    target(
+                        expr=expr_avg(
+                            "tikv_engine_write_micro_seconds",
+                            label_selectors=[
+                                'db="$db"',
+                                'type="write_percentile95"',
+                            ],
+                            by_labels=[],  # override default by instance.
+                        ),
+                        legend_format="95%",
+                    ),
+                    target(
+                        expr=expr_avg(
+                            "tikv_engine_write_micro_seconds",
+                            label_selectors=[
+                                'db="$db"',
+                                'type="write_average"',
+                            ],
+                            by_labels=[],  # override default by instance.
+                        ),
+                        legend_format="avg",
+                    ),
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel(
+                title="WAL sync operations",
+                description="The count of WAL sync operations",
+                yaxes=yaxes(left_format=UNITS.OPS_PER_SEC),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_engine_wal_file_synced",
+                            label_selectors=[
+                                'db="$db"',
+                            ],
+                            by_labels=[],  # override default by instance.
+                        ),
+                        legend_format="sync",
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="Write WAL duration",
+                description="The time consumed when executing write wal operation",
+                yaxes=yaxes(left_format=UNITS.MICRO_SECONDS, log_base=2),
+                targets=[
+                    target(
+                        expr=expr_max(
+                            "tikv_engine_write_wal_time_micro_seconds",
+                            label_selectors=[
+                                'db="$db"',
+                                'type="write_wal_micros_max"',
+                            ],
+                            by_labels=[],  # override default by instance.
+                        ),
+                        legend_format="max",
+                    ),
+                    target(
+                        expr=expr_avg(
+                            "tikv_engine_write_wal_time_micro_seconds",
+                            label_selectors=[
+                                'db="$db"',
+                                'type="write_wal_micros_percentile99"',
+                            ],
+                            by_labels=[],  # override default by instance.
+                        ),
+                        legend_format="99%",
+                    ),
+                    target(
+                        expr=expr_avg(
+                            "tikv_engine_write_wal_time_micro_seconds",
+                            label_selectors=[
+                                'db="$db"',
+                                'type="write_wal_micros_percentile95"',
+                            ],
+                            by_labels=[],  # override default by instance.
+                        ),
+                        legend_format="95%",
+                    ),
+                    target(
+                        expr=expr_avg(
+                            "tikv_engine_write_wal_time_micro_seconds",
+                            label_selectors=[
+                                'db="$db"',
+                                'type="write_wal_micros_average"',
+                            ],
+                            by_labels=[],  # override default by instance.
+                        ),
+                        legend_format="avg",
+                    ),
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel(
+                title="Compaction operations",
+                description="The count of compaction and flush operations",
+                yaxes=yaxes(left_format=UNITS.OPS_PER_SEC),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_engine_event_total",
+                            label_selectors=[
+                                'db="$db"',
+                            ],
+                            by_labels=["type"],
+                        ),
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="WAL sync duration",
+                description="The time consumed when executing WAL sync operation",
+                yaxes=yaxes(left_format=UNITS.MICRO_SECONDS, log_base=10),
+                targets=[
+                    target(
+                        expr=expr_max(
+                            "tikv_engine_wal_file_sync_micro_seconds",
+                            label_selectors=[
+                                'db="$db"',
+                                'type="wal_file_sync_max"',
+                            ],
+                            by_labels=[],  # override default by instance.
+                        ),
+                        legend_format="max",
+                    ),
+                    target(
+                        expr=expr_avg(
+                            "tikv_engine_wal_file_sync_micro_seconds",
+                            label_selectors=[
+                                'db="$db"',
+                                'type="wal_file_sync_percentile99"',
+                            ],
+                            by_labels=[],  # override default by instance.
+                        ),
+                        legend_format="99%",
+                    ),
+                    target(
+                        expr=expr_avg(
+                            "tikv_engine_wal_file_sync_micro_seconds",
+                            label_selectors=[
+                                'db="$db"',
+                                'type="wal_file_sync_percentile95"',
+                            ],
+                            by_labels=[],  # override default by instance.
+                        ),
+                        legend_format="95%",
+                    ),
+                    target(
+                        expr=expr_avg(
+                            "tikv_engine_wal_file_sync_micro_seconds",
+                            label_selectors=[
+                                'db="$db"',
+                                'type="wal_file_sync_average"',
+                            ],
+                            by_labels=[],  # override default by instance.
+                        ),
+                        legend_format="avg",
+                    ),
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel(
+                title="Compaction guard actions",
+                description="Compaction guard actions",
+                yaxes=yaxes(left_format=UNITS.OPS_PER_SEC),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_raftstore_compaction_guard_action_total",
+                            label_selectors=[
+                                'cf=~"default|write"',
+                            ],
+                            by_labels=["cf", " type"],
+                        ),
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="Compaction duration",
+                description="The time consumed when executing the compaction and flush operations",
+                yaxes=yaxes(left_format=UNITS.MICRO_SECONDS, log_base=2),
+                targets=[
+                    target(
+                        expr=expr_max(
+                            "tikv_engine_compaction_time",
+                            label_selectors=[
+                                'db="$db"',
+                                'type="compaction_time_max"',
+                            ],
+                            by_labels=[],  # override default by instance.
+                        ),
+                        legend_format="max",
+                    ),
+                    target(
+                        expr=expr_avg(
+                            "tikv_engine_compaction_time",
+                            label_selectors=[
+                                'db="$db"',
+                                'type="compaction_time_percentile99"',
+                            ],
+                            by_labels=[],  # override default by instance.
+                        ),
+                        legend_format="99%",
+                    ),
+                    target(
+                        expr=expr_avg(
+                            "tikv_engine_compaction_time",
+                            label_selectors=[
+                                'db="$db"',
+                                'type="compaction_time_percentile95"',
+                            ],
+                            by_labels=[],  # override default by instance.
+                        ),
+                        legend_format="95%",
+                    ),
+                    target(
+                        expr=expr_avg(
+                            "tikv_engine_compaction_time",
+                            label_selectors=[
+                                'db="$db"',
+                                'type="compaction_time_average"',
+                            ],
+                            by_labels=[],  # override default by instance.
+                        ),
+                        legend_format="avg",
+                    ),
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel(
+                title="SST read duration",
+                description="The time consumed when reading SST files",
+                yaxes=yaxes(left_format=UNITS.MICRO_SECONDS, log_base=2),
+                targets=[
+                    target(
+                        expr=expr_max(
+                            "tikv_engine_sst_read_micros",
+                            label_selectors=[
+                                'db="$db"',
+                                'type="sst_read_micros_max"',
+                            ],
+                            by_labels=[],  # override default by instance.
+                        ),
+                        legend_format="max",
+                    ),
+                    target(
+                        expr=expr_avg(
+                            "tikv_engine_sst_read_micros",
+                            label_selectors=[
+                                'db="$db"',
+                                'type="sst_read_micros_percentile99"',
+                            ],
+                            by_labels=[],  # override default by instance.
+                        ),
+                        legend_format="99%",
+                    ),
+                    target(
+                        expr=expr_avg(
+                            "tikv_engine_sst_read_micros",
+                            label_selectors=[
+                                'db="$db"',
+                                'type="sst_read_micros_percentile95"',
+                            ],
+                            by_labels=[],  # override default by instance.
+                        ),
+                        legend_format="95%",
+                    ),
+                    target(
+                        expr=expr_avg(
+                            "tikv_engine_sst_read_micros",
+                            label_selectors=[
+                                'db="$db"',
+                                'type="sst_read_micros_average"',
+                            ],
+                            by_labels=[],  # override default by instance.
+                        ),
+                        legend_format="avg",
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="Compaction reason",
+                description=None,
+                yaxes=yaxes(left_format=UNITS.SHORT),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_engine_compaction_reason",
+                            label_selectors=[
+                                'db="$db"',
+                            ],
+                            by_labels=["cf", "reason"],
+                        ),
+                    ),
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel(
+                title="Block cache size",
+                description="The block cache size. Broken down by column family if shared block cache is disabled.",
+                yaxes=yaxes(left_format=UNITS.BYTES_IEC),
+                targets=[
+                    target(
+                        expr=expr_topk(
+                            20,
+                            "%s"
+                            % expr_avg(
+                                "tikv_engine_block_cache_size_bytes",
+                                label_selectors=[
+                                    'db="$db"',
+                                ],
+                                by_labels=["cf", "instance"],
+                            ),
+                        ),
+                        legend_format="{{instance}}-{{cf}}",
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="Memtable hit",
+                description="The hit rate of memtable",
+                yaxes=yaxes(left_format=UNITS.PERCENT_UNIT),
+                targets=[
+                    target(
+                        expr=expr_operator(
+                            expr_sum_rate(
+                                "tikv_engine_memtable_efficiency",
+                                label_selectors=[
+                                    'db="$db"',
+                                    'type="memtable_hit"',
+                                ],
+                                by_labels=[],  # override default by instance.
+                            ),
+                            "/",
+                            expr_operator(
+                                expr_sum_rate(
+                                    "tikv_engine_memtable_efficiency",
+                                    label_selectors=[
+                                        'db="$db"',
+                                        'type="memtable_hit"',
+                                    ],
+                                    by_labels=[],  # override default by instance.
+                                ),
+                                "+",
+                                expr_sum_rate(
+                                    "tikv_engine_memtable_efficiency",
+                                    label_selectors=[
+                                        'db="$db"',
+                                        'type="memtable_miss"',
+                                    ],
+                                    by_labels=[],  # override default by instance.
+                                ),
+                            ),
+                        ),
+                        legend_format="hit",
+                    ),
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel(
+                title="Block cache flow",
+                description="The flow of different kinds of block cache operations",
+                yaxes=yaxes(left_format=UNITS.BYTES_SEC_IEC, log_base=10),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_engine_flow_bytes",
+                            label_selectors=[
+                                'db="$db"',
+                                'type="block_cache_byte_read"',
+                            ],
+                            by_labels=[],  # override default by instance.
+                        ),
+                        legend_format="total_read",
+                    ),
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_engine_flow_bytes",
+                            label_selectors=[
+                                'db="$db"',
+                                'type="block_cache_byte_write"',
+                            ],
+                            by_labels=[],  # override default by instance.
+                        ),
+                        legend_format="total_written",
+                    ),
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_engine_cache_efficiency",
+                            label_selectors=[
+                                'db="$db"',
+                                'type="block_cache_data_bytes_insert"',
+                            ],
+                            by_labels=[],  # override default by instance.
+                        ),
+                        legend_format="data_insert",
+                    ),
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_engine_cache_efficiency",
+                            label_selectors=[
+                                'db="$db"',
+                                'type="block_cache_filter_bytes_insert"',
+                            ],
+                            by_labels=[],  # override default by instance.
+                        ),
+                        legend_format="filter_insert",
+                    ),
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_engine_cache_efficiency",
+                            label_selectors=[
+                                'db="$db"',
+                                'type="block_cache_filter_bytes_evict"',
+                            ],
+                            by_labels=[],  # override default by instance.
+                        ),
+                        legend_format="filter_evict",
+                    ),
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_engine_cache_efficiency",
+                            label_selectors=[
+                                'db="$db"',
+                                'type="block_cache_index_bytes_insert"',
+                            ],
+                            by_labels=[],  # override default by instance.
+                        ),
+                        legend_format="index_insert",
+                    ),
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_engine_cache_efficiency",
+                            label_selectors=[
+                                'db="$db"',
+                                'type="block_cache_index_bytes_evict"',
+                            ],
+                            by_labels=[],  # override default by instance.
+                        ),
+                        legend_format="index_evict",
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="Block cache hit",
+                description="The hit rate of block cache",
+                yaxes=yaxes(left_format=UNITS.PERCENT_UNIT),
+                targets=[
+                    target(
+                        expr=expr_operator(
+                            expr_sum_rate(
+                                "tikv_engine_cache_efficiency",
+                                label_selectors=[
+                                    'db="$db"',
+                                    'type="block_cache_hit"',
+                                ],
+                                by_labels=[],  # override default by instance.
+                            ),
+                            "/",
+                            expr_operator(
+                                expr_sum_rate(
+                                    "tikv_engine_cache_efficiency",
+                                    label_selectors=[
+                                        'db="$db"',
+                                        'type="block_cache_hit"',
+                                    ],
+                                    by_labels=[],  # override default by instance.
+                                ),
+                                "+",
+                                expr_sum_rate(
+                                    "tikv_engine_cache_efficiency",
+                                    label_selectors=[
+                                        'db="$db"',
+                                        'type="block_cache_miss"',
+                                    ],
+                                    by_labels=[],  # override default by instance.
+                                ),
+                            ),
+                        ),
+                        legend_format="all",
+                    ),
+                    target(
+                        expr=expr_operator(
+                            expr_sum_rate(
+                                "tikv_engine_cache_efficiency",
+                                label_selectors=[
+                                    'db="$db"',
+                                    'type="block_cache_data_hit"',
+                                ],
+                                by_labels=[],  # override default by instance.
+                            ),
+                            "/",
+                            expr_operator(
+                                expr_sum_rate(
+                                    "tikv_engine_cache_efficiency",
+                                    label_selectors=[
+                                        'db="$db"',
+                                        'type="block_cache_data_hit"',
+                                    ],
+                                    by_labels=[],  # override default by instance.
+                                ),
+                                "+",
+                                expr_sum_rate(
+                                    "tikv_engine_cache_efficiency",
+                                    label_selectors=[
+                                        'db="$db"',
+                                        'type="block_cache_data_miss"',
+                                    ],
+                                    by_labels=[],  # override default by instance.
+                                ),
+                            ),
+                        ),
+                        legend_format="data",
+                    ),
+                    target(
+                        expr=expr_operator(
+                            expr_sum_rate(
+                                "tikv_engine_cache_efficiency",
+                                label_selectors=[
+                                    'db="$db"',
+                                    'type="block_cache_filter_hit"',
+                                ],
+                                by_labels=[],  # override default by instance.
+                            ),
+                            "/",
+                            expr_operator(
+                                expr_sum_rate(
+                                    "tikv_engine_cache_efficiency",
+                                    label_selectors=[
+                                        'db="$db"',
+                                        'type="block_cache_filter_hit"',
+                                    ],
+                                    by_labels=[],  # override default by instance.
+                                ),
+                                "+",
+                                expr_sum_rate(
+                                    "tikv_engine_cache_efficiency",
+                                    label_selectors=[
+                                        'db="$db"',
+                                        'type="block_cache_filter_miss"',
+                                    ],
+                                    by_labels=[],  # override default by instance.
+                                ),
+                            ),
+                        ),
+                        legend_format="filter",
+                    ),
+                    target(
+                        expr=expr_operator(
+                            expr_sum_rate(
+                                "tikv_engine_cache_efficiency",
+                                label_selectors=[
+                                    'db="$db"',
+                                    'type="block_cache_index_hit"',
+                                ],
+                                by_labels=[],  # override default by instance.
+                            ),
+                            "/",
+                            expr_operator(
+                                expr_sum_rate(
+                                    "tikv_engine_cache_efficiency",
+                                    label_selectors=[
+                                        'db="$db"',
+                                        'type="block_cache_index_hit"',
+                                    ],
+                                    by_labels=[],  # override default by instance.
+                                ),
+                                "+",
+                                expr_sum_rate(
+                                    "tikv_engine_cache_efficiency",
+                                    label_selectors=[
+                                        'db="$db"',
+                                        'type="block_cache_index_miss"',
+                                    ],
+                                    by_labels=[],  # override default by instance.
+                                ),
+                            ),
+                        ),
+                        legend_format="index",
+                    ),
+                    target(
+                        expr=expr_operator(
+                            expr_sum_rate(
+                                "tikv_engine_bloom_efficiency",
+                                label_selectors=[
+                                    'db="$db"',
+                                    'type="bloom_prefix_useful"',
+                                ],
+                                by_labels=[],  # override default by instance.
+                            ),
+                            "/",
+                            expr_sum_rate(
+                                "tikv_engine_bloom_efficiency",
+                                label_selectors=[
+                                    'db="$db"',
+                                    'type="bloom_prefix_checked"',
+                                ],
+                                by_labels=[],  # override default by instance.
+                            ),
+                        ),
+                        legend_format="bloom prefix",
+                    ),
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel(
+                title="Keys flow",
+                description="The flow of different kinds of operations on keys",
+                yaxes=yaxes(left_format=UNITS.OPS_PER_SEC),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_engine_flow_bytes",
+                            label_selectors=[
+                                'db="$db"',
+                                'type="keys_read"',
+                            ],
+                            by_labels=[],  # override default by instance.
+                        ),
+                        legend_format="read",
+                    ),
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_engine_flow_bytes",
+                            label_selectors=[
+                                'db="$db"',
+                                'type="keys_written"',
+                            ],
+                            by_labels=[],  # override default by instance.
+                        ),
+                        legend_format="written",
+                    ),
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_engine_compaction_num_corrupt_keys",
+                            label_selectors=[
+                                'db="$db"',
+                            ],
+                            by_labels=[],  # override default by instance.
+                        ),
+                        legend_format="corrupt",
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="Block cache operations",
+                description="The count of different kinds of block cache operations",
+                yaxes=yaxes(left_format=UNITS.OPS_PER_SEC),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_engine_cache_efficiency",
+                            label_selectors=[
+                                'db="$db"',
+                                'type="block_cache_add"',
+                            ],
+                            by_labels=[],  # override default by instance.
+                        ),
+                        legend_format="total_add",
+                    ),
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_engine_cache_efficiency",
+                            label_selectors=[
+                                'db="$db"',
+                                'type="block_cache_data_add"',
+                            ],
+                            by_labels=[],  # override default by instance.
+                        ),
+                        legend_format="data_add",
+                    ),
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_engine_cache_efficiency",
+                            label_selectors=[
+                                'db="$db"',
+                                'type="block_cache_filter_add"',
+                            ],
+                            by_labels=[],  # override default by instance.
+                        ),
+                        legend_format="filter_add",
+                    ),
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_engine_cache_efficiency",
+                            label_selectors=[
+                                'db="$db"',
+                                'type="block_cache_index_add"',
+                            ],
+                            by_labels=[],  # override default by instance.
+                        ),
+                        legend_format="index_add",
+                    ),
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_engine_cache_efficiency",
+                            label_selectors=[
+                                'db="$db"',
+                                'type="block_cache_add_failures"',
+                            ],
+                            by_labels=[],  # override default by instance.
+                        ),
+                        legend_format="add_failures",
+                    ),
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel(
+                title="Read flow",
+                description="The flow rate of read operations per type",
+                yaxes=yaxes(left_format=UNITS.BYTES_SEC_IEC),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_engine_flow_bytes",
+                            label_selectors=[
+                                'db="$db"',
+                                'type="bytes_read"',
+                            ],
+                            by_labels=[],  # override default by instance.
+                        ),
+                        legend_format="get",
+                    ),
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_engine_flow_bytes",
+                            label_selectors=[
+                                'db="$db"',
+                                'type="iter_bytes_read"',
+                            ],
+                            by_labels=[],  # override default by instance.
+                        ),
+                        legend_format="scan",
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="Total keys",
+                description="The count of keys in each column family",
+                yaxes=yaxes(left_format=UNITS.SHORT),
+                targets=[
+                    target(
+                        expr=expr_sum(
+                            "tikv_engine_estimate_num_keys",
+                            label_selectors=[
+                                'db="$db"',
+                            ],
+                            by_labels=["cf"],
+                        ),
+                    ),
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel(
+                title="Write flow",
+                description="The flow of different kinds of write operations",
+                yaxes=yaxes(left_format=UNITS.BYTES_SEC_IEC),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_engine_flow_bytes",
+                            label_selectors=[
+                                'db="$db"',
+                                'type="wal_file_bytes"',
+                            ],
+                            by_labels=[],  # override default by instance.
+                        ),
+                        legend_format="wal",
+                    ),
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_engine_flow_bytes",
+                            label_selectors=[
+                                'db="$db"',
+                                'type="bytes_written"',
+                            ],
+                            by_labels=[],  # override default by instance.
+                        ),
+                        legend_format="write",
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="Bytes / Read",
+                description="The bytes per read",
+                yaxes=yaxes(left_format=UNITS.BYTES_IEC, log_base=10),
+                targets=[
+                    target(
+                        expr=expr_max(
+                            "tikv_engine_bytes_per_read",
+                            label_selectors=[
+                                'db="$db"',
+                                'type="bytes_per_read_max"',
+                            ],
+                            by_labels=[],  # override default by instance.
+                        ),
+                        legend_format="max",
+                    ),
+                    target(
+                        expr=expr_avg(
+                            "tikv_engine_bytes_per_read",
+                            label_selectors=[
+                                'db="$db"',
+                                'type="bytes_per_read_percentile99"',
+                            ],
+                            by_labels=[],  # override default by instance.
+                        ),
+                        legend_format="99%",
+                    ),
+                    target(
+                        expr=expr_avg(
+                            "tikv_engine_bytes_per_read",
+                            label_selectors=[
+                                'db="$db"',
+                                'type="bytes_per_read_percentile95"',
+                            ],
+                            by_labels=[],  # override default by instance.
+                        ),
+                        legend_format="95%",
+                    ),
+                    target(
+                        expr=expr_avg(
+                            "tikv_engine_bytes_per_read",
+                            label_selectors=[
+                                'db="$db"',
+                                'type="bytes_per_read_average"',
+                            ],
+                            by_labels=[],  # override default by instance.
+                        ),
+                        legend_format="avg",
+                    ),
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel(
+                title="Compaction flow",
+                description="The flow rate of compaction operations per type",
+                yaxes=yaxes(left_format=UNITS.BYTES_SEC_IEC),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_engine_compaction_flow_bytes",
+                            label_selectors=[
+                                'db="$db"',
+                                'type="bytes_read"',
+                            ],
+                            by_labels=[],  # override default by instance.
+                        ),
+                        legend_format="read",
+                    ),
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_engine_compaction_flow_bytes",
+                            label_selectors=[
+                                'db="$db"',
+                                'type="bytes_written"',
+                            ],
+                            by_labels=[],  # override default by instance.
+                        ),
+                        legend_format="written",
+                    ),
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_engine_flow_bytes",
+                            label_selectors=[
+                                'db="$db"',
+                                'type="flush_write_bytes"',
+                            ],
+                            by_labels=[],  # override default by instance.
+                        ),
+                        legend_format="flushed",
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="Bytes / Write",
+                description="The bytes per write",
+                yaxes=yaxes(left_format=UNITS.BYTES_IEC),
+                targets=[
+                    target(
+                        expr=expr_max(
+                            "tikv_engine_bytes_per_write",
+                            label_selectors=['db="$db"', 'type="bytes_per_write_max"'],
+                            by_labels=[],  # override default by instance.
+                        ),
+                        legend_format="max",
+                    ),
+                    target(
+                        expr=expr_avg(
+                            "tikv_engine_bytes_per_write",
+                            label_selectors=[
+                                'db="$db"',
+                                'type="bytes_per_write_percentile99"',
+                            ],
+                            by_labels=[],  # override default by instance.
+                        ),
+                        legend_format="99%",
+                    ),
+                    target(
+                        expr=expr_avg(
+                            "tikv_engine_bytes_per_write",
+                            label_selectors=[
+                                'db="$db"',
+                                'type="bytes_per_write_percentile95"',
+                            ],
+                            by_labels=[],  # override default by instance.
+                        ),
+                        legend_format="95%",
+                    ),
+                    target(
+                        expr=expr_avg(
+                            "tikv_engine_bytes_per_write",
+                            label_selectors=[
+                                'db="$db"',
+                                'type="bytes_per_write_average"',
+                            ],
+                            by_labels=[],  # override default by instance.
+                        ),
+                        legend_format="avg",
+                    ),
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel(
+                title="Read amplification",
+                description="The read amplification per TiKV instance",
+                yaxes=yaxes(left_format=UNITS.SHORT),
+                targets=[
+                    target(
+                        expr=expr_operator(
+                            expr_sum_rate(
+                                "tikv_engine_read_amp_flow_bytes",
+                                label_selectors=[
+                                    'db="$db"',
+                                    'type="read_amp_total_read_bytes"',
+                                ],
+                            ),
+                            "/",
+                            expr_sum_rate(
+                                "tikv_engine_read_amp_flow_bytes",
+                                label_selectors=[
+                                    'db="$db"',
+                                    'type="read_amp_estimate_useful_bytes"',
+                                ],
+                            ),
+                        ),
+                        legend_format="{{instance}}",
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="Compaction pending bytes",
+                description="The pending bytes to be compacted",
+                yaxes=yaxes(left_format=UNITS.BYTES_IEC),
+                targets=[
+                    target(
+                        expr=expr_sum(
+                            "tikv_engine_pending_compaction_bytes",
+                            label_selectors=['db="$db"'],
+                            by_labels=["cf"],
+                        ),
+                        legend_format="{{cf}}",
+                    ),
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel(
+                title="Number of snapshots",
+                description="The number of snapshot of each TiKV instance",
+                yaxes=yaxes(left_format=UNITS.SHORT),
+                targets=[
+                    target(
+                        expr=expr_simple(
+                            "tikv_engine_num_snapshots",
+                            label_selectors=['db="$db"'],
+                        ),
+                        legend_format="{{instance}}",
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="Compression ratio",
+                description="The compression ratio of each level",
+                yaxes=yaxes(left_format=UNITS.SHORT),
+                targets=[
+                    target(
+                        expr=expr_avg(
+                            "tikv_engine_compression_ratio",
+                            label_selectors=['db="$db"'],
+                            by_labels=["cf", "level"],
+                        ),
+                        legend_format="{{cf}}-L{{level}}",
+                    ),
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel(
+                title="Number files at each level",
+                description="The number of SST files for different column families in each level",
+                yaxes=yaxes(left_format=UNITS.SHORT),
+                targets=[
+                    target(
+                        expr=expr_avg(
+                            "tikv_engine_num_files_at_level",
+                            label_selectors=['db="$db"'],
+                            by_labels=["cf", "level"],
+                        ),
+                        legend_format="{{cf}}-L{{level}}",
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="Oldest snapshots duration",
+                description="The time that the oldest unreleased snapshot survivals",
+                yaxes=yaxes(left_format=UNITS.SECONDS),
+                targets=[
+                    target(
+                        expr=expr_simple(
+                            "tikv_engine_oldest_snapshot_duration",
+                            label_selectors=['db="$db"'],
+                        ),
+                        legend_format="{{instance}}",
+                    ),
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel(
+                title="Stall conditions changed of each CF",
+                description="Stall conditions changed of each column family",
+                yaxes=yaxes(left_format=UNITS.SHORT),
+                targets=[
+                    target(
+                        expr=expr_simple(
+                            "tikv_engine_stall_conditions_changed",
+                            label_selectors=['db="$db"'],
+                        ),
+                        legend_format="{{instance}}-{{cf}}-{{type}}",
+                    ),
+                ],
+            ),
+            graph_panel_histogram_quantiles(
+                title="Ingest SST duration seconds",
+                description="The time consumed when ingesting SST files",
+                yaxes=yaxes(left_format=UNITS.SECONDS),
+                metric="tikv_snapshot_ingest_sst_duration_seconds",
+                label_selectors=['db="$db"'],
+                hide_count=True,
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel(
+                title="Write Stall Reason",
+                description=None,
+                yaxes=yaxes(left_format=UNITS.SHORT),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_engine_write_stall_reason",
+                            label_selectors=['db="$db"'],
+                            by_labels=["type"],
+                        ),
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="Write stall duration",
+                description="The time which is caused by write stall",
+                yaxes=yaxes(left_format=UNITS.MICRO_SECONDS),
+                targets=[
+                    target(
+                        expr=expr_max(
+                            "tikv_engine_write_stall",
+                            label_selectors=['db="$db"', 'type="write_stall_max"'],
+                            by_labels=[],  # override default by instance.
+                        ),
+                        legend_format="max",
+                    ),
+                    target(
+                        expr=expr_avg(
+                            "tikv_engine_write_stall",
+                            label_selectors=[
+                                'db="$db"',
+                                'type="write_stall_percentile99"',
+                            ],
+                            by_labels=[],  # override default by instance.
+                        ),
+                        legend_format="99%",
+                    ),
+                    target(
+                        expr=expr_avg(
+                            "tikv_engine_write_stall",
+                            label_selectors=[
+                                'db="$db"',
+                                'type="write_stall_percentile95"',
+                            ],
+                            by_labels=[],  # override default by instance.
+                        ),
+                        legend_format="95%",
+                    ),
+                    target(
+                        expr=expr_avg(
+                            "tikv_engine_write_stall",
+                            label_selectors=['db="$db"', 'type="write_stall_average"'],
+                            by_labels=[],  # override default by instance.
+                        ),
+                        legend_format="avg",
+                    ),
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            heatmap_panel(
+                title="Ingestion picked level",
+                description="The level that the external file ingests into",
+                yaxis=yaxis(format=UNITS.SHORT),
+                metric="tikv_engine_ingestion_picked_level_bucket",
+                label_selectors=['db="$db"'],
+            ),
+            graph_panel(
+                title="Memtable size",
+                description="The memtable size of each column family",
+                yaxes=yaxes(left_format=UNITS.BYTES_IEC),
+                targets=[
+                    target(
+                        expr=expr_avg(
+                            "tikv_engine_memory_bytes",
+                            label_selectors=['db="$db"', 'type="mem-tables-all"'],
+                            by_labels=["cf"],
+                        ),
+                    ),
+                ],
+            ),
+        ]
+    )
     return layout.row_panel
 
 
@@ -6277,7 +7771,7 @@ dashboard = Dashboard(
         CoprocessorOverview(),
         CoprocessorDetail(),
         Threads(),
-        # RocksDB(),
+        RocksDB(),
         RaftEngine(),
         Titan(),
         PessimisticLocking(),
