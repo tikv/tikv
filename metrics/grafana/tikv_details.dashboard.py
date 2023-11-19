@@ -7944,7 +7944,77 @@ def ResolvedTS() -> RowPanel:
 
 def Memory() -> RowPanel:
     layout = Layout(title="Memory")
-    layout.row([])
+    layout.row(
+        [
+            graph_panel(
+                title="Allocator Stats",
+                description=None,
+                yaxes=yaxes(left_format=UNITS.BYTES_IEC),
+                targets=[
+                    target(
+                        expr=expr_sum(
+                            "tikv_allocator_stats", by_labels=["instance", "type"]
+                        )
+                    )
+                ],
+            ),
+            graph_panel(
+                title="Send Allocated(+) / Release Received(-) Bytes Rate",
+                description=None,
+                yaxes=yaxes(left_format=UNITS.BYTES_SEC_IEC),
+                targets=[
+                    target(
+                        expr=expr_operator(
+                            expr_sum_rate(
+                                "tikv_allocator_thread_allocation",
+                                label_selectors=['type="alloc"'],
+                                by_labels=["thread_name"],
+                            ),
+                            "-",
+                            expr_sum_rate(
+                                "tikv_allocator_thread_allocation",
+                                label_selectors=['type="dealloc"'],
+                                by_labels=["thread_name"],
+                            ),
+                        ),
+                        legend_format="{{thread_name}}",
+                    )
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel(
+                title="Newly Allocated Bytes by Thread",
+                description=None,
+                yaxes=yaxes(left_format=UNITS.BYTES_IEC),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_allocator_thread_allocation",
+                            label_selectors=['type="alloc"'],
+                            by_labels=["thread_name"],
+                        ),
+                    )
+                ],
+            ),
+            graph_panel(
+                title="Recently Released Bytes by Thread",
+                description=None,
+                yaxes=yaxes(left_format=UNITS.BYTES_IEC),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_allocator_thread_allocation",
+                            label_selectors=['type="dealloc"'],
+                            by_labels=["thread_name"],
+                        ),
+                    )
+                ],
+            ),
+        ]
+    )
     return layout.row_panel
 
 
@@ -8019,7 +8089,7 @@ dashboard = Dashboard(
         PessimisticLocking(),
         # PointInTimeRestore(),
         ResolvedTS(),
-        # Memory(),
+        Memory(),
         # BackupImport(),
         # Encryption(),
         # BackupLog(),
