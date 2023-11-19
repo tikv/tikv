@@ -498,7 +498,7 @@ impl<E: Engine> ImportSstService<E> {
         let importer = self.importer.clone();
         async move {
             // check api version
-            if !importer.as_ref().check_api_version(&ssts)? {
+            if !importer.as_ref().check_api_version::<E::Local>(&ssts)? {
                 return Err(Error::IncompatibleApiVersion);
             }
 
@@ -838,7 +838,7 @@ macro_rules! impl_write {
 
                     let finish_fn = async {
                         let metas = writer.finish()?;
-                        import.verify_checksum(&metas)?;
+                        import.verify_checksum::<E::Local>(&metas)?;
                         Ok(metas)
                     };
 

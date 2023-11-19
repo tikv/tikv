@@ -11,12 +11,11 @@ use std::{
 
 use api_version::api_v2::TIDB_RANGES_COMPLEMENT;
 use encryption::{DataKeyManager, EncrypterWriter};
-use engine_rocks::{get_env, RocksSstReader};
 use engine_traits::{
-    iter_option, EncryptionKeyManager, IterOptions, Iterator, KvEngine, RefIterable, SstExt,
-    SstMetaInfo, SstReader,
+    iter_option, EncryptionKeyManager, IterOptions, Iterator, KvEngine, RefIterable, SstMetaInfo,
+    SstReader,
 };
-use file_system::{get_io_rate_limiter, sync_dir, File, OpenOptions};
+use file_system::{sync_dir, File, OpenOptions};
 use keys::data_key;
 use kvproto::{import_sstpb::*, kvrpcpb::ApiVersion};
 use tikv_util::time::Instant;
@@ -302,22 +301,26 @@ impl ImportDir {
         Ok(path.save.exists())
     }
 
-    pub fn validate(
+    pub fn validate<E: KvEngine>(
         &self,
         meta: &SstMeta,
         key_manager: Option<Arc<DataKeyManager>>,
     ) -> Result<SstMetaInfo> {
         let path = self.join(meta)?;
         let path_str = path.save.to_str().unwrap();
-        let env = get_env(key_manager, get_io_rate_limiter())?;
-        let sst_reader = RocksSstReader::open_with_env(path_str, Some(env))?;
+        let sst_reader = E::SstReader::open(path_str, key_manager)?;
         // TODO: check the length and crc32 of ingested file.
-        let meta_info = sst_reader.sst_meta_info(meta.to_owned());
+        let (count, size) = sst_reader.kv_count_and_size();
+        let meta_info = SstMetaInfo {
+            total_kvs: count,
+            total_bytes: size,
+            meta: meta.to_owned(),
+        };
         Ok(meta_info)
     }
 
     /// check if api version of sst files are compatible
-    pub fn check_api_version(
+    pub fn check_api_version<E: KvEngine>(
         &self,
         metas: &[SstMeta],
         key_manager: Option<Arc<DataKeyManager>>,
@@ -336,8 +339,7 @@ impl ImportDir {
                 _ => {
                     let path = self.join(meta)?;
                     let path_str = path.save.to_str().unwrap();
-                    let env = get_env(key_manager.clone(), get_io_rate_limiter())?;
-                    let sst_reader = RocksSstReader::open_with_env(path_str, Some(env))?;
+                    let sst_reader = E::SstReader::open(path_str, key_manager.clone())?;
 
                     for &(start, end) in TIDB_RANGES_COMPLEMENT {
                         let opt = iter_option(&data_key(start), &data_key(end), false);
@@ -373,7 +375,7 @@ impl ImportDir {
             .map(|info| info.meta.clone())
             .collect::<Vec<_>>();
         if !self
-            .check_api_version(&meta_vec, key_manager.clone(), api_version)
+            .check_api_version::<E>(&meta_vec, key_manager.clone(), api_version)
             .unwrap()
         {
             panic!("cannot ingest because of incompatible api version");
@@ -401,7 +403,7 @@ impl ImportDir {
         Ok(())
     }
 
-    pub fn verify_checksum(
+    pub fn verify_checksum<E: KvEngine>(
         &self,
         metas: &[SstMeta],
         key_manager: Option<Arc<DataKeyManager>>,
@@ -409,26 +411,22 @@ impl ImportDir {
         for meta in metas {
             let path = self.join(meta)?;
             let path_str = path.save.to_str().unwrap();
-            let env = get_env(key_manager.clone(), get_io_rate_limiter())?;
-            let sst_reader = RocksSstReader::open_with_env(path_str, Some(env))?;
+            let sst_reader = E::SstReader::open(path_str, key_manager.clone())?;
             sst_reader.verify_checksum()?;
         }
         Ok(())
     }
 
-    pub fn load_start_key_by_meta<E: SstExt>(
+    pub fn load_start_key_by_meta<E: KvEngine>(
         &self,
         meta: &SstMeta,
         km: Option<Arc<DataKeyManager>>,
     ) -> Result<Option<Vec<u8>>> {
         let path = self.join(meta)?;
-        let r = match km {
-            Some(km) => E::SstReader::open_encrypted(&path.save.to_string_lossy(), km)?,
-            None => E::SstReader::open(&path.save.to_string_lossy())?,
-        };
+        let reader = E::SstReader::open(&path.save.to_string_lossy(), km)?;
         let opts = IterOptions::new(None, None, false);
-        let mut i = r.iter(opts)?;
-        if !i.seek_to_first()? || !i.valid()? {
+        let mut iter = reader.iter(opts)?;
+        if !iter.seek_to_first()? || !iter.valid()? {
             return Ok(None);
         }
         // Should we warn if the key doesn't start with the prefix key? (Is that
@@ -437,7 +435,7 @@ impl ImportDir {
         // RocksEngine. Perhaps it is better to make the engine to provide
         // decode functions. Anyway we have directly used the RocksSstReader
         // somewhere... This won't make things worse.
-        let real_key = i.key().strip_prefix(keys::DATA_PREFIX_KEY);
+        let real_key = iter.key().strip_prefix(keys::DATA_PREFIX_KEY);
         Ok(real_key.map(ToOwned::to_owned))
     }
 

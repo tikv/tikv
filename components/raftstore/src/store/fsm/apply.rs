@@ -1996,7 +1996,7 @@ where
             return Err(e);
         }
 
-        match ctx.importer.validate(sst) {
+        match ctx.importer.validate::<EK>(sst) {
             Ok(meta_info) => {
                 ctx.pending_ssts.push(meta_info.clone());
                 ssts.push(meta_info)

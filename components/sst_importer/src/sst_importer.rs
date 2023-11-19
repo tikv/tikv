@@ -17,7 +17,6 @@ use std::{
 use collections::HashSet;
 use dashmap::{mapref::entry::Entry, DashMap};
 use encryption::{to_engine_encryption_method, DataKeyManager};
-use engine_rocks::{get_env, RocksSstReader};
 use engine_traits::{
     name_to_cf, util::check_key_in_range, CfName, EncryptionKeyManager, FileEncryptionInfo,
     IterOptions, Iterator, KvEngine, RefIterable, SstCompressionType, SstExt, SstMetaInfo,
@@ -26,7 +25,7 @@ use engine_traits::{
 use external_storage::{
     compression_reader_dispatcher, encrypt_wrap_reader, ExternalStorage, RestoreConfig,
 };
-use file_system::{get_io_rate_limiter, IoType, OpenOptions};
+use file_system::{IoType, OpenOptions};
 use kvproto::{
     brpb::{CipherInfo, StorageBackend},
     import_sstpb::{Range, *},
@@ -345,14 +344,14 @@ impl SstImporter {
         Ok(())
     }
 
-    pub fn validate(&self, meta: &SstMeta) -> Result<SstMetaInfo> {
-        self.dir.validate(meta, self.key_manager.clone())
+    pub fn validate<E: KvEngine>(&self, meta: &SstMeta) -> Result<SstMetaInfo> {
+        self.dir.validate::<E>(meta, self.key_manager.clone())
     }
 
     /// check if api version of sst files are compatible
-    pub fn check_api_version(&self, metas: &[SstMeta]) -> Result<bool> {
+    pub fn check_api_version<E: KvEngine>(&self, metas: &[SstMeta]) -> Result<bool> {
         self.dir
-            .check_api_version(metas, self.key_manager.clone(), self.api_version)
+            .check_api_version::<E>(metas, self.key_manager.clone(), self.api_version)
     }
 
     pub fn ingest<E: KvEngine>(&self, metas: &[SstMetaInfo], engine: &E) -> Result<()> {
@@ -371,8 +370,9 @@ impl SstImporter {
         }
     }
 
-    pub fn verify_checksum(&self, metas: &[SstMeta]) -> Result<()> {
-        self.dir.verify_checksum(metas, self.key_manager.clone())
+    pub fn verify_checksum<E: KvEngine>(&self, metas: &[SstMeta]) -> Result<()> {
+        self.dir
+            .verify_checksum::<E>(metas, self.key_manager.clone())
     }
 
     pub fn exist(&self, meta: &SstMeta) -> bool {
@@ -1140,10 +1140,8 @@ impl SstImporter {
         .await?;
 
         // now validate the SST file.
-        let env = get_env(self.key_manager.clone(), get_io_rate_limiter())?;
-        // Use abstracted SstReader after Env is abstracted.
         let dst_file_name = path.temp.to_str().unwrap();
-        let sst_reader = RocksSstReader::open_with_env(dst_file_name, Some(env))?;
+        let sst_reader = E::SstReader::open(dst_file_name, self.key_manager.clone())?;
         sst_reader.verify_checksum()?;
 
         // undo key rewrite so we could compare with the keys inside SST
@@ -1394,9 +1392,9 @@ impl SstImporter {
     /// (For RocksEngine, that is the key without the 'z' prefix.)
     /// When the SST is empty or the first key cannot be parsed as user key,
     /// return None.
-    pub fn load_start_key_by_meta<S: SstExt>(&self, meta: &SstMeta) -> Result<Option<Vec<u8>>> {
+    pub fn load_start_key_by_meta<E: KvEngine>(&self, meta: &SstMeta) -> Result<Option<Vec<u8>>> {
         self.dir
-            .load_start_key_by_meta::<S>(meta, self.key_manager.clone())
+            .load_start_key_by_meta::<E>(meta, self.key_manager.clone())
     }
 
     pub fn new_txn_writer<E: KvEngine>(&self, db: &E, meta: SstMeta) -> Result<TxnSstWriter<E>> {
