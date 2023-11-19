@@ -638,6 +638,32 @@ def timeseries_panel(
     )
 
 
+def yaxis(format: str, log_base=1) -> YAxis:
+    assert format not in [
+        UNITS.BYTES,
+        UNITS.BITS,
+        UNITS.KILO_BYTES,
+        UNITS.MEGA_BYTES,
+        UNITS.GIGA_BYTES,
+        UNITS.TERA_BYTES,
+        UNITS.PETA_BYTES,
+        UNITS.BYTES_SEC,
+        UNITS.KILO_BYTES_SEC,
+        UNITS.MEGA_BYTES_SEC,
+        UNITS.GIGA_BYTES_SEC,
+        UNITS.TERA_BYTES_SEC,
+        UNITS.PETA_BYTES_SEC,
+    ], "Must not use SI bytes"
+    return YAxis(format=format, logBase=log_base)
+
+
+def yaxes(left_format: str, right_format: Optional[str] = None, log_base=1) -> YAxes:
+    ya = YAxes(left=yaxis(left_format, log_base=log_base))
+    if right_format is not None:
+        ya.right = yaxis(right_format, log_base=log_base)
+    return ya
+
+
 def graph_legend(
     avg=False,
     current=True,
@@ -674,7 +700,7 @@ def graph_panel(
     title: str,
     targets: list[Target],
     description=None,
-    yaxes=YAxes(),
+    yaxes=yaxes(left_format=UNITS.NONE_FORMAT),
     legend=None,
     tooltip=Tooltip(shared=True, valueType="individual"),
     lines=True,
@@ -783,32 +809,6 @@ def series_override(
         spaceLength=space_length,
         transform_negative_y=transform_negative_y,
     )
-
-
-def yaxis(format: str, log_base=1) -> YAxis:
-    assert format not in [
-        UNITS.BYTES,
-        UNITS.BITS,
-        UNITS.KILO_BYTES,
-        UNITS.MEGA_BYTES,
-        UNITS.GIGA_BYTES,
-        UNITS.TERA_BYTES,
-        UNITS.PETA_BYTES,
-        UNITS.BYTES_SEC,
-        UNITS.KILO_BYTES_SEC,
-        UNITS.MEGA_BYTES_SEC,
-        UNITS.GIGA_BYTES_SEC,
-        UNITS.TERA_BYTES_SEC,
-        UNITS.PETA_BYTES_SEC,
-    ], "Must not use SI bytes"
-    return YAxis(format=format, logBase=log_base)
-
-
-def yaxes(left_format: str, right_format: Optional[str] = None, log_base=1) -> YAxes:
-    ya = YAxes(left=yaxis(left_format, log_base=log_base))
-    if right_format is not None:
-        ya.right = yaxis(right_format, log_base=log_base)
-    return ya
 
 
 def heatmap_color() -> HeatmapColor:
@@ -7696,7 +7696,249 @@ def PointInTimeRestore() -> RowPanel:
 
 def ResolvedTS() -> RowPanel:
     layout = Layout(title="Resolved TS")
-    layout.row([])
+    layout.row(
+        [
+            graph_panel(
+                title="Resolved TS Worker CPU",
+                description="The CPU utilization of resolved ts worker",
+                yaxes=yaxes(left_format=UNITS.PERCENT_UNIT),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_thread_cpu_seconds_total",
+                            label_selectors=[
+                                'name=~"resolved_ts.*"',
+                            ],
+                        ),
+                    )
+                ],
+            ),
+            graph_panel(
+                title="Advance ts Worker CPU",
+                description="The CPU utilization of advance ts worker",
+                yaxes=yaxes(left_format=UNITS.PERCENT_UNIT),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_thread_cpu_seconds_total",
+                            label_selectors=[
+                                'name=~"advance_ts.*"',
+                            ],
+                        ),
+                    )
+                ],
+            ),
+            graph_panel(
+                title="Scan lock Worker CPU",
+                description="The CPU utilization of scan lock worker",
+                yaxes=yaxes(left_format=UNITS.PERCENT_UNIT),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_thread_cpu_seconds_total",
+                            label_selectors=[
+                                'name=~"inc_scan.*"',
+                            ],
+                        ),
+                    )
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel(
+                title="Max gap of resolved-ts",
+                description="The gap between resolved ts (the maximum candidate of safe-ts) and current time.",
+                yaxes=yaxes(left_format=UNITS.MILLI_SECONDS),
+                targets=[
+                    target(
+                        expr=expr_sum(
+                            "tikv_resolved_ts_min_resolved_ts_gap_millis",
+                        ),
+                    )
+                ],
+            ),
+            graph_panel(
+                title="Max gap of follower safe-ts",
+                description="The gap between now() and the minimal (non-zero) safe ts for followers",
+                yaxes=yaxes(left_format=UNITS.MILLI_SECONDS),
+                targets=[
+                    target(
+                        expr=expr_sum(
+                            "tikv_resolved_ts_min_follower_safe_ts_gap_millis",
+                        ),
+                    )
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel(
+                title="Min Resolved TS Region",
+                description="The region that has minimal resolved ts",
+                targets=[
+                    target(
+                        expr=expr_sum(
+                            "tikv_resolved_ts_min_resolved_ts_region",
+                        ),
+                    )
+                ],
+            ),
+            graph_panel(
+                title="Min Safe TS Follower Region",
+                description="The region id of the follower that has minimal safe ts",
+                targets=[
+                    target(
+                        expr=expr_sum(
+                            "tikv_resolved_ts_min_follower_safe_ts_region",
+                        ),
+                    )
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            heatmap_panel(
+                title="Check leader duration",
+                description="The time consumed when handle a check leader request",
+                yaxis=yaxis(format=UNITS.SECONDS),
+                metric="tikv_resolved_ts_check_leader_duration_seconds_bucket",
+            ),
+            graph_panel(
+                title="Max gap of resolved-ts in region leaders",
+                description="The gap between resolved ts of leaders and current time",
+                yaxes=yaxes(left_format=UNITS.MILLI_SECONDS),
+                targets=[
+                    target(
+                        expr=expr_sum(
+                            "tikv_resolved_ts_min_leader_resolved_ts_gap_millis",
+                        ),
+                    )
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel(
+                title="99% CheckLeader request region count",
+                description="Bucketed histogram of region count in a check leader request",
+                targets=[
+                    target(
+                        expr=expr_histogram_quantile(
+                            0.99,
+                            "tikv_check_leader_request_item_count",
+                            by_labels=["instance"],
+                        ),
+                        legend_format="{{instance}}",
+                    )
+                ],
+            ),
+            heatmap_panel(
+                title="Initial scan backoff duration",
+                description="The backoff duration before starting initial scan",
+                yaxis=yaxis(format=UNITS.SECONDS),
+                metric="tikv_resolved_ts_initial_scan_backoff_duration_seconds_bucket",
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel(
+                title="Lock heap size",
+                description="Total bytes in memory of resolved-ts observe regions's lock heap",
+                yaxes=yaxes(left_format=UNITS.BYTES_IEC),
+                targets=[
+                    target(
+                        expr=expr_avg(
+                            "tikv_resolved_ts_lock_heap_bytes",
+                        ),
+                    )
+                ],
+            ),
+            graph_panel(
+                title="Min Leader Resolved TS Region",
+                description="The region that its leader has minimal resolved ts.",
+                targets=[
+                    target(
+                        expr=expr_sum(
+                            "tikv_resolved_ts_min_leader_resolved_ts_region",
+                        ),
+                    )
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel(
+                title="Observe region status",
+                description="The status of resolved-ts observe regions",
+                targets=[
+                    target(
+                        expr=expr_sum(
+                            "tikv_resolved_ts_region_resolve_status",
+                            by_labels=["type"],
+                        ),
+                    )
+                ],
+            ),
+            graph_panel(
+                title="Fail advance ts count",
+                description="The count of fail to advance resolved-ts",
+                targets=[
+                    target(
+                        expr=expr_sum_delta(
+                            "tikv_resolved_ts_fail_advance_count",
+                            by_labels=["instance", "reason"],
+                        ),
+                    )
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel(
+                title="99% CheckLeader request size",
+                description="Bucketed histogram of the check leader request size",
+                yaxes=yaxes(left_format=UNITS.BYTES_IEC),
+                targets=[
+                    target(
+                        expr=expr_histogram_quantile(
+                            0.99,
+                            "tikv_check_leader_request_size_bytes",
+                            by_labels=["instance"],
+                        ),
+                        legend_format="{{instance}}",
+                    ),
+                    target(
+                        expr=expr_histogram_quantile(
+                            0.99,
+                            "tikv_check_leader_request_item_count",
+                            by_labels=["instance"],
+                        ),
+                        legend_format="{{instance}}-check-num",
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="Pending command size",
+                description="Total bytes of pending commands in the channel",
+                yaxes=yaxes(left_format=UNITS.BYTES_IEC),
+                targets=[
+                    target(
+                        expr=expr_avg(
+                            "tikv_resolved_ts_channel_penging_cmd_bytes_total",
+                        ),
+                    )
+                ],
+            ),
+        ]
+    )
     return layout.row_panel
 
 
@@ -7776,7 +8018,7 @@ dashboard = Dashboard(
         Titan(),
         PessimisticLocking(),
         # PointInTimeRestore(),
-        # ResolvedTS(),
+        ResolvedTS(),
         # Memory(),
         # BackupImport(),
         # Encryption(),
