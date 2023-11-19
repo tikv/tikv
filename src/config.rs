@@ -1201,6 +1201,9 @@ impl DbConfig {
         opts.set_use_direct_io_for_flush_and_compaction(
             self.use_direct_io_for_flush_and_compaction,
         );
+        info!("build_opt"; "enable_pipelined_write" => self.enable_pipelined_write,
+            "enable_multi_batch_write" => self.enable_multi_batch_write,
+        );
         opts.enable_pipelined_write(self.enable_pipelined_write);
         let enable_multi_batch_write = !self.enable_pipelined_write && !self.enable_unordered_write;
         opts.enable_multi_batch_write(enable_multi_batch_write);

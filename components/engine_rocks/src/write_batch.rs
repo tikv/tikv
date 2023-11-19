@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use engine_traits::{self, Mutable, Result, WriteBatchExt, WriteOptions};
 use rocksdb::{Writable, WriteBatch as RawWriteBatch, DB};
+use tikv_util::info;
 
 use crate::{engine::RocksEngine, options::RocksWriteOptions, r2e, util::get_cf_handle};
 
@@ -130,8 +131,10 @@ impl engine_traits::WriteBatch for RocksWriteBatchVec {
 
     fn should_write_to_engine(&self) -> bool {
         if self.support_write_batch_vec {
+            info!("should_write_to_engine"; "self.index" => self.index);
             self.index >= WRITE_BATCH_MAX_BATCH_NUM
         } else {
+            info!("should_write_to_engine"; "self.wbs[0].count()" => self.wbs[0].count());
             self.wbs[0].count() > RocksEngine::WRITE_BATCH_MAX_KEYS
         }
     }
