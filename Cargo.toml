@@ -383,6 +383,8 @@ tokio-executor = { git = "https://github.com/tikv/tokio", branch = "tokio-timer-
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }
 tracing-active-tree = { git = "https://github.com/tikv/tracing-active-tree.git", features = ["coarsetime"], rev = "a71f8f8148f88ab759deb6d3e1d62d07ab218347" }
+# This `tracing` is only used for `tracing-active-tree`, enable its attributes only.
+tracing = { version = "0.1.39", default-features = false, features = [ "attributes", "std" ] }
 openssl = "0.10"
 openssl-sys = "0.9"
 

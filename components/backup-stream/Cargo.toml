@@ -72,7 +72,7 @@ tikv_util = { workspace = true }
 tokio = { version = "1.5", features = ["rt-multi-thread", "macros", "time", "sync"] }
 tokio-stream = "0.1"
 tokio-util = { version = "0.7", features = ["compat"] }
-tracing = { version = "0.1.39", default-features = false, features = [ "attributes", "std" ] }
+tracing = { workspace = true }
 tracing-active-tree = { workspace = true }
 txn_types = { workspace = true }
 uuid = "0.8"
