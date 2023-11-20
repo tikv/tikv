@@ -998,11 +998,11 @@ mod tests {
         }
 
         let output: Option<Int> = RpnFnScalarEvaluator::new()
-            .push_param(Decimal::from(1 as u64))
-            .push_param(Decimal::from_f64(-2 as f64).unwrap())
+            .push_param(Decimal::from(1_u64))
+            .push_param(Decimal::from_f64(-2_f64).unwrap())
             .evaluate(ScalarFuncSig::IntDivideDecimal)
             .unwrap();
-        assert_eq!(output, None);
+        assert_eq!(output, Some(0));
     }
 
     #[test]
@@ -1014,8 +1014,8 @@ mod tests {
                 Decimal::from_bytes(b"0.1").unwrap().unwrap(),
             ),
             (
-                Decimal::from(1 as u64),
-                Decimal::from_f64(-1 as f64).unwrap(),
+                Decimal::from(1_u64),
+                Decimal::from_f64(-1_f64).unwrap(),
             ),
         ];
 
