@@ -1096,6 +1096,7 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
                     let mut resp = DownloadResponse::default();
                     resp.set_error(error.into());
                     let _ = sink.success(resp);
+                    IMPORT_PENDING_TASKS.with_label_values(&[label]).dec();
                     return
                 }
             };
