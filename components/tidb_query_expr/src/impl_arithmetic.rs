@@ -1016,8 +1016,6 @@ mod tests {
 
             assert!(output.is_err(), "lhs={:?}, rhs={:?}", lhs, rhs);
         }
-
-
     }
 
     #[test]
