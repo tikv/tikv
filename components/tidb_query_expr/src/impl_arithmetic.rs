@@ -467,6 +467,29 @@ fn int_divide_decimal(ctx: &mut EvalContext, lhs: &Decimal, rhs: &Decimal) -> Re
     }
 }
 
+#[rpn_fn(capture = [ctx])]
+#[inline]
+fn int_divide_decimal_unsigned(
+    ctx: &mut EvalContext,
+    lhs: &Decimal,
+    rhs: &Decimal,
+) -> Result<Option<Int>> {
+    let result = arithmetic_with_ctx::<DecimalDivide>(ctx, lhs, rhs)?;
+    if let Some(result) = result {
+        let unsigned_result = result.as_u64();
+        if unsigned_result.is_overflow() {
+            let signed_result = result.as_i64();
+            if signed_result.unwrap() == 0 && signed_result.is_truncated() {
+                return Ok(Some(0));
+            }
+            return Err(Error::overflow("BIGINT UNSIGNED", format!("({} / {})", lhs, rhs)).into());
+        }
+        Ok(Some(unsigned_result.unwrap() as i64))
+    } else {
+        Ok(None)
+    }
+}
+
 pub struct DecimalDivide;
 
 impl ArithmeticOpWithCtx for DecimalDivide {
@@ -973,6 +996,13 @@ mod tests {
 
             assert_eq!(output, expected, "lhs={:?}, rhs={:?}", lhs, rhs);
         }
+
+        let output: Option<Int> = RpnFnScalarEvaluator::new()
+            .push_param(Decimal::from(1 as u64))
+            .push_param(Decimal::from_f64(-2 as f64).unwrap())
+            .evaluate(ScalarFuncSig::IntDivideDecimal)
+            .unwrap();
+        assert_eq!(output, None);
     }
 
     #[test]
@@ -982,6 +1012,10 @@ mod tests {
             (
                 Decimal::from(i64::MAX),
                 Decimal::from_bytes(b"0.1").unwrap().unwrap(),
+            ),
+            (
+                Decimal::from(1 as u64),
+                Decimal::from_f64(-1 as f64).unwrap(),
             ),
         ];
 
