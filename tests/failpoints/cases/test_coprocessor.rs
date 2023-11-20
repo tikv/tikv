@@ -20,7 +20,7 @@ use tidb_query_datatype::{
     expr::EvalContext,
 };
 use tikv_util::HandyRwLock;
-use tipb::SelectResponse;
+use tipb::{AnalyzeColumnsReq, AnalyzeReq, AnalyzeType, SelectResponse};
 use txn_types::{Key, Lock, LockType};
 
 #[test]
@@ -482,4 +482,47 @@ fn test_follower_buckets() {
         wait_refresh_buckets(endpoint, &mut req.clone());
     }
     fail::remove("skip_check_stale_read_safe");
+}
+
+#[test]
+fn test_timeout_check() {
+    let data = vec![(1, Some("name:1"), 1)];
+    let product = ProductTable::new();
+    let (_, endpoint) = init_with_data(&product, &data);
+    let ranges = vec![product.get_record_range_one(1)];
+
+    fail::cfg("copr_before_handle_request", "sleep(5)").unwrap();
+    let test_timeout = |mut req: Request, tp: i64| {
+        req.mut_context().set_max_execution_duration_ms(1);
+        let resp = handle_request(&endpoint, req);
+        assert!(
+            resp.get_other_error().contains("exceeding the deadline"),
+            "request type: {}, resp: {:?}",
+            tp,
+            resp
+        );
+    };
+
+    // DAG
+    {
+        let req = DagSelect::from(&product).build();
+        test_timeout(req, tikv::coprocessor::REQ_TYPE_DAG);
+    }
+
+    // analyze
+    {
+        let mut col_req = AnalyzeColumnsReq::default();
+        col_req.set_columns_info(product.columns_info().into());
+        let mut analy_req = AnalyzeReq::default();
+        analy_req.set_tp(AnalyzeType::TypeColumn);
+        analy_req.set_col_req(col_req);
+        let mut req = Request::default();
+        req.set_start_ts(next_id() as u64);
+        req.set_ranges(ranges.clone().into());
+        req.set_tp(tikv::coprocessor::REQ_TYPE_ANALYZE);
+        req.set_data(analy_req.write_to_bytes().unwrap());
+        test_timeout(req, tikv::coprocessor::REQ_TYPE_ANALYZE);
+    }
+
+    // checksum doesn't check deadline
 }

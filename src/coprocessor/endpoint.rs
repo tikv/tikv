@@ -188,6 +188,14 @@ impl<E: Engine> Endpoint<E> {
             None
         };
 
+        let max_execution_duration_ms = context.get_max_execution_duration_ms();
+        let mut max_handle_duration = self.max_handle_duration;
+        if max_execution_duration_ms > 0
+            && max_execution_duration_ms < max_handle_duration.as_millis() as u64
+        {
+            max_handle_duration = Duration::from_millis(max_execution_duration_ms);
+        }
+
         let mut input = CodedInputStream::from_bytes(&data);
         input.set_recursion_limit(self.recursion_limit);
 
@@ -220,7 +228,7 @@ impl<E: Engine> Endpoint<E> {
                     tag,
                     context,
                     ranges,
-                    self.max_handle_duration,
+                    max_handle_duration,
                     peer,
                     Some(is_desc_scan),
                     start_ts.into(),
@@ -283,7 +291,7 @@ impl<E: Engine> Endpoint<E> {
                     tag,
                     context,
                     ranges,
-                    self.max_handle_duration,
+                    max_handle_duration,
                     peer,
                     None,
                     start_ts.into(),
@@ -328,7 +336,7 @@ impl<E: Engine> Endpoint<E> {
                     tag,
                     context,
                     ranges,
-                    self.max_handle_duration,
+                    max_handle_duration,
                     peer,
                     None,
                     start_ts.into(),

@@ -496,12 +496,12 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
     /// ranges. e.g.: [(k1 -> k2), (k4 -> k5)] may got response (k1, k2, k4)
     /// with IntervalRange like (k1, k4).
     pub async fn handle_request(&mut self) -> Result<(SelectResponse, Option<IntervalRange>)> {
+        fail_point!("copr_before_handle_request");
         let mut chunks = vec![];
         let mut batch_size = Self::batch_initial_size();
         let mut warnings = self.config.new_eval_warnings();
         let mut ctx = EvalContext::new(self.config.clone());
         let mut record_all = 0;
-
         loop {
             let mut chunk = Chunk::default();
             let mut sample = self.quota_limiter.new_sample(true);
