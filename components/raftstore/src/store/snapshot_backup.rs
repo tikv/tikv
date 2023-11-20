@@ -217,7 +217,7 @@ impl Coprocessor for Arc<RejectIngestAndAdmin> {
     }
 
     fn stop(&self) {
-        self.initialized.store(true, Ordering::Release)
+        self.initialized.store(false, Ordering::Release)
     }
 }
 

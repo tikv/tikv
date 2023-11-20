@@ -248,6 +248,7 @@ struct TikvServer<ER: RaftEngine, F: KvFormat> {
     br_snap_recovery_mode: bool, // use for br snapshot recovery
     resolved_ts_scheduler: Option<Scheduler<Task>>,
     grpc_service_mgr: GrpcServiceManager,
+    snap_br_rejector: Option<Arc<RejectIngestAndAdmin>>,
 }
 
 struct TikvEngines<EK: KvEngine, ER: RaftEngine> {
@@ -434,6 +435,7 @@ where
             br_snap_recovery_mode: is_recovering_marked,
             resolved_ts_scheduler: None,
             grpc_service_mgr: GrpcServiceManager::new(tx),
+            snap_br_rejector: None,
         }
     }
 
@@ -818,6 +820,10 @@ where
             )),
         );
 
+        let rejector = Arc::new(RejectIngestAndAdmin::default());
+        rejector.register_to(self.coprocessor_host.as_mut().unwrap());
+        self.snap_br_rejector = Some(rejector);
+
         // Start backup stream
         let backup_stream_scheduler = if self.core.config.log_backup.enable {
             // Create backup stream.
@@ -1163,9 +1169,10 @@ where
         // Backup service.
         let mut backup_worker = Box::new(self.core.background_worker.lazy_build("backup-endpoint"));
         let backup_scheduler = backup_worker.scheduler();
-        let rejector = Arc::new(RejectIngestAndAdmin::default());
-        rejector.register_to(self.coprocessor_host.as_mut().unwrap());
-        let env = backup::disk_snap::Env::with_rejector(Mutex::new(self.router.clone()), rejector);
+        let env = backup::disk_snap::Env::with_rejector(
+            Mutex::new(self.router.clone()),
+            self.snap_br_rejector.take().unwrap(),
+        );
         let backup_service = backup::Service::with_env(backup_scheduler, env);
         if servers
             .server
