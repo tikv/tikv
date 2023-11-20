@@ -1013,10 +1013,7 @@ mod tests {
                 Decimal::from(i64::MAX),
                 Decimal::from_bytes(b"0.1").unwrap().unwrap(),
             ),
-            (
-                Decimal::from(1_u64),
-                Decimal::from_f64(-1_f64).unwrap(),
-            ),
+            (Decimal::from(1_u64), Decimal::from_f64(-1_f64).unwrap()),
         ];
 
         for (lhs, rhs) in test_cases {
