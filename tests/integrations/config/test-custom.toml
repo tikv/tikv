@@ -348,7 +348,7 @@ periodic-compaction-seconds = "10d"
 
 [rocksdb.defaultcf.titan]
 min-blob-size = "2018B"
-blob-file-compression = "zstd"
+blob-file-compression = "lz4"
 zstd-dict-size = "16KB"
 blob-cache-size = "12GB"
 min-gc-batch-size = "12KB"
@@ -609,7 +609,7 @@ max-compactions = 3
 
 [raftdb.defaultcf.titan]
 min-blob-size = "2018B"
-blob-file-compression = "zstd"
+blob-file-compression = "lz4"
 zstd-dict-size = "16KB"
 blob-cache-size = "12GB"
 min-gc-batch-size = "12KB"

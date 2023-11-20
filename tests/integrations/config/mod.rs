@@ -271,19 +271,18 @@ fn test_serde_custom_tikv_config() {
     value.pd = PdConfig::new(vec!["example.com:443".to_owned()]);
     let titan_cf_config = TitanCfConfig {
         min_blob_size: ReadableSize(2018),
-        blob_file_compression: CompressionType::Zstd,
+        blob_file_compression: CompressionType::Lz4,
         zstd_dict_size: ReadableSize::kb(16),
         blob_cache_size: ReadableSize::gb(12),
         min_gc_batch_size: ReadableSize::kb(12),
         max_gc_batch_size: ReadableSize::mb(12),
         discardable_ratio: 0.00156,
-        sample_ratio: None,
         merge_small_file_threshold: ReadableSize::kb(21),
         blob_run_mode: BlobRunMode::Fallback,
         level_merge: true,
         range_merge: true,
         max_sorted_runs: 100,
-        gc_merge_rewrite: false,
+        ..Default::default()
     };
     let titan_db_config = TitanDbConfig {
         enabled: true,
@@ -432,19 +431,18 @@ fn test_serde_custom_tikv_config() {
             force_consistency_checks: true,
             titan: TitanCfConfig {
                 min_blob_size: ReadableSize(1024), // default value
-                blob_file_compression: CompressionType::Lz4,
+                blob_file_compression: CompressionType::Zstd,
                 zstd_dict_size: ReadableSize::kb(0),
                 blob_cache_size: ReadableSize::mb(0),
                 min_gc_batch_size: ReadableSize::mb(16),
                 max_gc_batch_size: ReadableSize::mb(64),
                 discardable_ratio: 0.5,
-                sample_ratio: None,
                 merge_small_file_threshold: ReadableSize::mb(8),
                 blob_run_mode: BlobRunMode::ReadOnly,
                 level_merge: false,
                 range_merge: true,
                 max_sorted_runs: 20,
-                gc_merge_rewrite: false,
+                ..Default::default()
             },
             prop_size_index_distance: 4000000,
             prop_keys_index_distance: 40000,
@@ -507,19 +505,18 @@ fn test_serde_custom_tikv_config() {
             force_consistency_checks: true,
             titan: TitanCfConfig {
                 min_blob_size: ReadableSize(1024), // default value
-                blob_file_compression: CompressionType::Lz4,
+                blob_file_compression: CompressionType::Zstd,
                 zstd_dict_size: ReadableSize::kb(0),
                 blob_cache_size: ReadableSize::mb(0),
                 min_gc_batch_size: ReadableSize::mb(16),
                 max_gc_batch_size: ReadableSize::mb(64),
                 discardable_ratio: 0.5,
-                sample_ratio: None,
                 merge_small_file_threshold: ReadableSize::mb(8),
                 blob_run_mode: BlobRunMode::ReadOnly, // default value
                 level_merge: false,
                 range_merge: true,
                 max_sorted_runs: 20,
-                gc_merge_rewrite: false,
+                ..Default::default()
             },
             prop_size_index_distance: 4000000,
             prop_keys_index_distance: 40000,
@@ -582,19 +579,18 @@ fn test_serde_custom_tikv_config() {
             force_consistency_checks: true,
             titan: TitanCfConfig {
                 min_blob_size: ReadableSize(1024), // default value
-                blob_file_compression: CompressionType::Lz4,
+                blob_file_compression: CompressionType::Zstd,
                 zstd_dict_size: ReadableSize::kb(0),
                 blob_cache_size: ReadableSize::mb(0),
                 min_gc_batch_size: ReadableSize::mb(16),
                 max_gc_batch_size: ReadableSize::mb(64),
                 discardable_ratio: 0.5,
-                sample_ratio: None,
                 merge_small_file_threshold: ReadableSize::mb(8),
                 blob_run_mode: BlobRunMode::ReadOnly, // default value
                 level_merge: false,
                 range_merge: true,
                 max_sorted_runs: 20,
-                gc_merge_rewrite: false,
+                ..Default::default()
             },
             prop_size_index_distance: 4000000,
             prop_keys_index_distance: 40000,
