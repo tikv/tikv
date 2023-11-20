@@ -113,8 +113,8 @@ impl StoreAddrResolver for AddressMap {
     fn resolve(
         &self,
         store_id: u64,
-        cb: Box<dyn FnOnce(ServerResult<String>) + Send>,
-    ) -> ServerResult<()> {
+        cb: Box<dyn FnOnce(resolve::Result<String>) + Send>,
+    ) -> resolve::Result<()> {
         let addr = self.get(store_id);
         match addr {
             Some(addr) => cb(Ok(addr)),
@@ -451,6 +451,7 @@ impl ServerCluster {
             Arc::clone(&importer),
             None,
             resource_manager.clone(),
+            Arc::new(region_info_accessor.clone()),
         );
 
         // Create deadlock service.

@@ -2,7 +2,10 @@
 
 use std::{
     mem,
-    sync::atomic::{AtomicUsize, Ordering},
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    },
 };
 
 use kvproto::{
@@ -75,16 +78,49 @@ impl HeapSize for RaftCmdRequest {
     }
 }
 
+#[derive(Debug)]
+pub struct MemoryQuotaExceeded;
+
+impl std::error::Error for MemoryQuotaExceeded {}
+
+impl_display_as_debug!(MemoryQuotaExceeded);
+
 pub struct MemoryQuota {
-    capacity: AtomicUsize,
     in_use: AtomicUsize,
+    capacity: AtomicUsize,
+}
+
+pub struct OwnedAllocated {
+    allocated: usize,
+    from: Arc<MemoryQuota>,
+}
+
+impl OwnedAllocated {
+    pub fn new(target: Arc<MemoryQuota>) -> Self {
+        Self {
+            allocated: 0,
+            from: target,
+        }
+    }
+
+    pub fn alloc(&mut self, bytes: usize) -> Result<(), MemoryQuotaExceeded> {
+        self.from.alloc(bytes)?;
+        self.allocated += bytes;
+        Ok(())
+    }
+}
+
+impl Drop for OwnedAllocated {
+    fn drop(&mut self) {
+        self.from.free(self.allocated)
+    }
 }
 
 impl MemoryQuota {
     pub fn new(capacity: usize) -> MemoryQuota {
         MemoryQuota {
-            capacity: AtomicUsize::new(capacity),
             in_use: AtomicUsize::new(0),
+            capacity: AtomicUsize::new(capacity),
         }
     }
 
@@ -93,28 +129,28 @@ impl MemoryQuota {
     }
 
     pub fn capacity(&self) -> usize {
-        self.capacity.load(Ordering::Acquire)
+        self.capacity.load(Ordering::Relaxed)
     }
 
     pub fn set_capacity(&self, capacity: usize) {
-        self.capacity.store(capacity, Ordering::Release)
+        self.capacity.store(capacity, Ordering::Relaxed);
     }
 
-    pub fn alloc(&self, bytes: usize) -> bool {
+    pub fn alloc(&self, bytes: usize) -> Result<(), MemoryQuotaExceeded> {
+        let capacity = self.capacity.load(Ordering::Relaxed);
         let mut in_use_bytes = self.in_use.load(Ordering::Relaxed);
-        let capacity = self.capacity.load(Ordering::Acquire);
         loop {
             if in_use_bytes + bytes > capacity {
-                return false;
+                return Err(MemoryQuotaExceeded);
             }
             let new_in_use_bytes = in_use_bytes + bytes;
             match self.in_use.compare_exchange_weak(
                 in_use_bytes,
                 new_in_use_bytes,
-                Ordering::Acquire,
+                Ordering::Relaxed,
                 Ordering::Relaxed,
             ) {
-                Ok(_) => return true,
+                Ok(_) => return Ok(()),
                 Err(current) => in_use_bytes = current,
             }
         }
@@ -128,7 +164,7 @@ impl MemoryQuota {
             match self.in_use.compare_exchange_weak(
                 in_use_bytes,
                 new_in_use_bytes,
-                Ordering::Acquire,
+                Ordering::Relaxed,
                 Ordering::Relaxed,
             ) {
                 Ok(_) => return,
@@ -145,13 +181,13 @@ mod tests {
     #[test]
     fn test_memory_quota() {
         let quota = MemoryQuota::new(100);
-        assert!(quota.alloc(10));
+        quota.alloc(10).unwrap();
         assert_eq!(quota.in_use(), 10);
-        assert!(!quota.alloc(100));
+        quota.alloc(100).unwrap_err();
         assert_eq!(quota.in_use(), 10);
         quota.free(5);
         assert_eq!(quota.in_use(), 5);
-        assert!(quota.alloc(95));
+        quota.alloc(95).unwrap();
         assert_eq!(quota.in_use(), 100);
         quota.free(95);
         assert_eq!(quota.in_use(), 5);
@@ -160,19 +196,40 @@ mod tests {
     #[test]
     fn test_resize_memory_quota() {
         let quota = MemoryQuota::new(100);
-        assert!(quota.alloc(10));
+        quota.alloc(10).unwrap();
         assert_eq!(quota.in_use(), 10);
-        assert!(!quota.alloc(100));
+        quota.alloc(100).unwrap_err();
         assert_eq!(quota.in_use(), 10);
         quota.set_capacity(200);
-        assert!(quota.alloc(100));
+        quota.alloc(100).unwrap();
         assert_eq!(quota.in_use(), 110);
         quota.set_capacity(50);
-        assert!(!quota.alloc(100));
+        quota.alloc(100).unwrap_err();
         assert_eq!(quota.in_use(), 110);
         quota.free(100);
         assert_eq!(quota.in_use(), 10);
-        assert!(quota.alloc(40));
+        quota.alloc(40).unwrap();
         assert_eq!(quota.in_use(), 50);
+    }
+
+    #[test]
+    fn test_allocated() {
+        let quota = Arc::new(MemoryQuota::new(100));
+        let mut allocated = OwnedAllocated::new(Arc::clone(&quota));
+        allocated.alloc(42).unwrap();
+        assert_eq!(quota.in_use(), 42);
+        quota.alloc(59).unwrap_err();
+        allocated.alloc(16).unwrap();
+        assert_eq!(quota.in_use(), 58);
+        let mut allocated2 = OwnedAllocated::new(Arc::clone(&quota));
+        allocated2.alloc(8).unwrap();
+        allocated2.alloc(40).unwrap_err();
+        assert_eq!(quota.in_use(), 66);
+        quota.alloc(4).unwrap();
+        assert_eq!(quota.in_use(), 70);
+        drop(allocated);
+        assert_eq!(quota.in_use(), 12);
+        drop(allocated2);
+        assert_eq!(quota.in_use(), 4);
     }
 }

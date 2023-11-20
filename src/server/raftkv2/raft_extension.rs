@@ -49,6 +49,11 @@ impl<EK: KvEngine, ER: RaftEngine> tikv_kv::RaftExtension for Extension<EK, ER> 
             .send_control(StoreMsg::StoreUnreachable { to_store_id });
     }
 
+    fn report_store_maybe_tombstone(&self, store_id: u64) {
+        self.router
+            .broadcast_normal(|| PeerMsg::StoreMaybeTombstone { store_id });
+    }
+
     fn report_snapshot_status(
         &self,
         region_id: u64,
@@ -71,7 +76,7 @@ impl<EK: KvEngine, ER: RaftEngine> tikv_kv::RaftExtension for Extension<EK, ER> 
         split_keys: Vec<Vec<u8>>,
         source: String,
     ) -> futures::future::BoxFuture<'static, tikv_kv::Result<Vec<kvproto::metapb::Region>>> {
-        let (msg, sub) = PeerMsg::request_split(region_epoch, split_keys, source);
+        let (msg, sub) = PeerMsg::request_split(region_epoch, split_keys, source, true);
         let res = self.router.check_send(region_id, msg);
         Box::pin(async move {
             res?;

@@ -31,7 +31,7 @@ use std::{
     time::Instant,
 };
 
-use engine_traits::{KvEngine, RaftEngine};
+use engine_traits::{KvEngine, RaftEngine, DATA_CFS};
 use error_code::ErrorCodeExt;
 use kvproto::{
     raft_cmdpb::AdminCmdType,
@@ -54,7 +54,8 @@ use tikv_util::{
     log::SlogFormat,
     slog_panic,
     store::find_peer,
-    time::{duration_to_sec, monotonic_raw_now, Duration},
+    sys::disk::DiskUsage,
+    time::{duration_to_sec, monotonic_raw_now, Duration, Instant as TiInstant},
 };
 
 pub use self::{
@@ -247,10 +248,18 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         }
     }
 
+    pub fn on_store_maybe_tombstone(&mut self, store_id: u64) {
+        if !self.is_leader() {
+            return;
+        }
+        self.on_store_maybe_tombstone_gc_peer(store_id);
+    }
+
     pub fn on_raft_message<T: Transport>(
         &mut self,
         ctx: &mut StoreContext<EK, ER, T>,
         mut msg: Box<RaftMessage>,
+        send_time: Option<TiInstant>,
     ) {
         debug!(
             self.logger,
@@ -258,7 +267,15 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             "message_type" => %util::MsgType(&msg),
             "from_peer_id" => msg.get_from_peer().get_id(),
             "to_peer_id" => msg.get_to_peer().get_id(),
+            "disk_usage" => ?msg.disk_usage,
         );
+        if let Some(send_time) = send_time {
+            let process_wait_time = send_time.saturating_elapsed();
+            ctx.raft_metrics
+                .process_wait_time
+                .observe(duration_to_sec(process_wait_time));
+        }
+
         if self.pause_for_replay() && msg.get_message().get_msg_type() == MessageType::MsgAppend {
             ctx.raft_metrics.message_dropped.recovery.inc();
             return;
@@ -280,6 +297,9 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 return;
             }
         }
+
+        self.handle_reported_disk_usage(ctx, &msg);
+
         if msg.get_to_peer().get_store_id() != self.peer().get_store_id() {
             ctx.raft_metrics.message_dropped.mismatch_store_id.inc();
             return;
@@ -418,9 +438,10 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 return;
             }
 
+            let msg_type = msg.get_message().get_msg_type();
             // This can be a message that sent when it's still a follower. Nevertheleast,
             // it's meaningless to continue to handle the request as callbacks are cleared.
-            if msg.get_message().get_msg_type() == MessageType::MsgReadIndex
+            if msg_type == MessageType::MsgReadIndex
                 && self.is_leader()
                 && (msg.get_message().get_from() == raft::INVALID_ID
                     || msg.get_message().get_from() == self.peer_id())
@@ -429,14 +450,18 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 return;
             }
 
-            if msg.get_message().get_msg_type() == MessageType::MsgReadIndex
+            if msg_type == MessageType::MsgReadIndex
                 && self.is_leader()
                 && self.on_step_read_index(ctx, msg.mut_message())
             {
                 // Read index has respond in `on_step_read_index`,
                 // No need to step again.
             } else if let Err(e) = self.raft_group_mut().step(msg.take_message()) {
-                error!(self.logger, "raft step error"; "err" => ?e);
+                error!(self.logger, "raft step error";
+                    "from_peer" => ?msg.get_from_peer(),
+                    "region_epoch" => ?msg.get_region_epoch(),
+                    "message_type" => ?msg_type,
+                    "err" => ?e);
             } else {
                 let committed_index = self.raft_group().raft.raft_log.committed;
                 self.report_commit_log_duration(ctx, pre_committed_index, committed_index);
@@ -503,7 +528,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     ///
     /// If the recipient can't be found, `None` is returned.
     #[inline]
-    fn build_raft_message(&mut self, msg: eraftpb::Message) -> Option<RaftMessage> {
+    fn build_raft_message(
+        &mut self,
+        msg: eraftpb::Message,
+        disk_usage: DiskUsage,
+    ) -> Option<RaftMessage> {
         let to_peer = match self.peer_from_cache(msg.to) {
             Some(p) => p,
             None => {
@@ -518,6 +547,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         };
 
         let mut raft_msg = self.prepare_raft_message();
+        // Fill in the disk usage.
+        raft_msg.set_disk_usage(disk_usage);
 
         raft_msg.set_to_peer(to_peer);
         if msg.from != self.peer().id {
@@ -760,8 +791,9 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 
         if !ready.messages().is_empty() {
             debug_assert!(self.is_leader());
+            let disk_usage = ctx.self_disk_usage;
             for msg in ready.take_messages() {
-                if let Some(msg) = self.build_raft_message(msg) {
+                if let Some(msg) = self.build_raft_message(msg, disk_usage) {
                     self.send_raft_message_on_leader(ctx, msg);
                 }
             }
@@ -790,10 +822,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         self.on_advance_persisted_apply_index(ctx, prev_persisted, &mut write_task);
 
         if !ready.persisted_messages().is_empty() {
+            let disk_usage = ctx.self_disk_usage;
             write_task.messages = ready
                 .take_persisted_messages()
                 .into_iter()
-                .flat_map(|m| self.build_raft_message(m))
+                .flat_map(|m| self.build_raft_message(m, disk_usage))
                 .collect();
         }
         if self.has_pending_messages() {
@@ -896,6 +929,14 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         self.storage_mut()
             .entry_storage_mut()
             .update_cache_persisted(persisted_index);
+        if let Some(idx) = self
+            .storage_mut()
+            .apply_trace_mut()
+            .take_flush_index(ready_number)
+        {
+            let apply_index = self.flush_state().applied_index();
+            self.cleanup_stale_ssts(ctx, DATA_CFS, idx, apply_index);
+        }
 
         if self.is_in_force_leader() {
             // forward commit index, the committed entries will be applied in
@@ -1049,6 +1090,16 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                     // Exit entry cache warmup state when the peer becomes leader.
                     self.entry_storage_mut().clear_entry_cache_warmup_state();
 
+                    if !ctx.store_disk_usages.is_empty() {
+                        self.refill_disk_full_peers(ctx);
+                        debug!(
+                            self.logger,
+                            "become leader refills disk full peers to {:?}",
+                            self.abnormal_peer_context().disk_full_peers();
+                            "region_id" => self.region_id(),
+                        );
+                    }
+
                     self.region_heartbeat_pd(ctx);
                     self.add_pending_tick(PeerTick::CompactLog);
                     self.add_pending_tick(PeerTick::SplitRegionCheck);
@@ -1186,6 +1237,52 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 "progress" => ?buffer,
                 "cache_first_index" => ?self.entry_storage().entry_cache_first_index(),
                 "next_turn_threshold" => ?self.long_uncommitted_threshold(),
+            );
+        }
+    }
+
+    fn handle_reported_disk_usage<T>(
+        &mut self,
+        ctx: &mut StoreContext<EK, ER, T>,
+        msg: &RaftMessage,
+    ) {
+        let store_id = msg.get_from_peer().get_store_id();
+        let peer_id = msg.get_from_peer().get_id();
+        let disk_full_peers = self.abnormal_peer_context().disk_full_peers();
+        let refill_disk_usages = if matches!(msg.disk_usage, DiskUsage::Normal) {
+            ctx.store_disk_usages.remove(&store_id);
+            if !self.is_leader() {
+                return;
+            }
+            disk_full_peers.has(peer_id)
+        } else {
+            ctx.store_disk_usages.insert(store_id, msg.disk_usage);
+            if !self.is_leader() {
+                return;
+            }
+
+            disk_full_peers.is_empty()
+                || disk_full_peers
+                    .get(peer_id)
+                    .map_or(true, |x| x != msg.disk_usage)
+        };
+
+        if refill_disk_usages || self.has_region_merge_proposal {
+            let prev = disk_full_peers.get(peer_id);
+            if Some(msg.disk_usage) != prev {
+                info!(
+                    self.logger,
+                    "reported disk usage changes {:?} -> {:?}", prev, msg.disk_usage;
+                    "region_id" => self.region_id(),
+                    "peer_id" => peer_id,
+                );
+            }
+            self.refill_disk_full_peers(ctx);
+            debug!(
+                self.logger,
+                "raft message refills disk full peers to {:?}",
+                self.abnormal_peer_context().disk_full_peers();
+                "region_id" => self.region_id(),
             );
         }
     }

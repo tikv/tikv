@@ -7,11 +7,9 @@ use std::{
 
 use kvproto::raft_serverpb::{ExtraMessageType, PeerState, RaftMessage};
 use raftstore::errors::Result;
-use test_raftstore::{
-    new_learner_peer, new_peer, sleep_ms, Filter, FilterFactory, Simulator as S1,
-};
+use test_raftstore::{new_learner_peer, new_peer, Filter, FilterFactory, Simulator as S1};
 use test_raftstore_v2::Simulator as S2;
-use tikv_util::{time::Instant, HandyRwLock};
+use tikv_util::{config::ReadableDuration, time::Instant, HandyRwLock};
 
 struct ForwardFactory {
     node_id: u64,
@@ -64,6 +62,7 @@ fn test_gc_peer_tiflash_engine() {
     let mut cluster_v1 = test_raftstore::new_node_cluster(1, 2);
     let mut cluster_v2 = test_raftstore_v2::new_node_cluster(1, 2);
     cluster_v1.cfg.raft_store.enable_v2_compatible_learner = true;
+    cluster_v2.cfg.raft_store.gc_peer_check_interval = ReadableDuration::millis(500);
     cluster_v1.pd_client.disable_default_operator();
     cluster_v2.pd_client.disable_default_operator();
     let r11 = cluster_v1.run_conf_change();
@@ -124,26 +123,14 @@ fn test_gc_peer_tiflash_engine() {
         .must_remove_peer(r21, new_learner_peer(2, 10));
 
     // Make sure leader cleans up removed_records.
-    let start = Instant::now();
-    loop {
-        sleep_ms(500);
-        if cluster_v2
-            .region_local_state(r21, 1)
-            .get_removed_records()
-            .is_empty()
-        {
-            break;
-        }
-        if start.saturating_elapsed() > Duration::from_secs(5) {
-            panic!("timeout");
-        }
-    }
+    cluster_v2.must_empty_region_removed_records(r21);
 }
 
 #[test]
 fn test_gc_removed_peer() {
     let mut cluster = test_raftstore::new_node_cluster(1, 2);
     cluster.cfg.raft_store.enable_v2_compatible_learner = true;
+    cluster.cfg.raft_store.gc_peer_check_interval = ReadableDuration::millis(500);
     cluster.pd_client.disable_default_operator();
     let region_id = cluster.run_conf_change();
 

@@ -1,6 +1,6 @@
 [package]
 name = "tikv"
-version = "7.4.0-alpha"
+version = "7.6.0-alpha"
 authors = ["The TiKV Authors"]
 description = "A distributed transactional key-value database powered by Rust and Raft"
 license = "Apache-2.0"
@@ -21,18 +21,27 @@ snmalloc = ["tikv_alloc/snmalloc"]
 portable = ["engine_rocks/portable"]
 sse = ["engine_rocks/sse"]
 mem-profiling = ["tikv_alloc/mem-profiling"]
-failpoints = ["fail/failpoints", "raftstore/failpoints", "tikv_util/failpoints", "engine_rocks/failpoints"]
-cloud-aws = ["encryption_export/cloud-aws", "sst_importer/cloud-aws"]
-cloud-gcp = ["encryption_export/cloud-gcp", "sst_importer/cloud-gcp"]
-cloud-azure = ["encryption_export/cloud-azure", "sst_importer/cloud-azure"]
+failpoints = ["fail/failpoints", "raftstore/failpoints", "tikv_util/failpoints", "engine_rocks/failpoints", "raft_log_engine/failpoints"]
+cloud-aws = ["encryption_export/cloud-aws"]
+cloud-gcp = ["encryption_export/cloud-gcp"]
+cloud-azure = ["encryption_export/cloud-azure"]
 testexport = ["raftstore/testexport", "api_version/testexport", "causal_ts/testexport", "engine_traits/testexport", "engine_rocks/testexport", "engine_panic/testexport"]
 test-engine-kv-rocksdb = ["engine_test/test-engine-kv-rocksdb"]
 test-engine-raft-raft-engine = ["engine_test/test-engine-raft-raft-engine"]
 test-engines-rocksdb = ["engine_test/test-engines-rocksdb"]
 test-engines-panic = ["engine_test/test-engines-panic"]
-cloud-storage-grpc = ["sst_importer/cloud-storage-grpc"]
-cloud-storage-dylib = ["sst_importer/cloud-storage-dylib"]
 pprof-fp = ["pprof/frame-pointer"]
+openssl-vendored = [
+  "openssl/vendored",
+  "hyper-tls/vendored",
+  # NB: the "openssl" feature does not make grpcio-sys v0.10 depends on
+  # openssl-sys, and it can not find the static openssl built by openssl-sys.
+  # Enabling "grpcio/openssl-vendored" explicitly makes grpcio-sys depends on
+  # openssl-sys and correctly links to the static openssl.
+  "grpcio/openssl-vendored",
+  # NB: Enable SM4 support if OpenSSL is built from source and statically linked.
+  "encryption_export/sm4",
+]
 
 # for testing configure propegate to other crates
 # https://stackoverflow.com/questions/41700543/can-we-share-test-utilites-between-crates
@@ -69,6 +78,7 @@ engine_traits_tests = { workspace = true }
 error_code = { workspace = true }
 fail = "0.5"
 file_system = { workspace = true }
+fips = { workspace = true }
 flate2 = { version = "1.0", default-features = false, features = ["zlib"] }
 futures = { version = "0.3", features = ["thread-pool", "compat"] }
 futures-executor = "0.3.1"
@@ -102,7 +112,7 @@ notify = "4"
 num-traits = "0.2.14"
 num_cpus = "1"
 online_config = { workspace = true }
-openssl = "0.10"
+openssl = { workspace = true }
 parking_lot = "0.12"
 paste = "1.0"
 pd_client = { workspace = true }
@@ -239,8 +249,8 @@ members = [
 #  "components/engine_tirocks",
   "components/error_code",
   "components/external_storage",
-  "components/external_storage/export",
   "components/file_system",
+  "components/fips",
   "components/into_other",
   "components/keys",
   "components/log_wrappers",
@@ -314,8 +324,8 @@ engine_traits = { path = "components/engine_traits" }
 engine_traits_tests = { path = "components/engine_traits_tests", default-features = false }
 error_code = { path = "components/error_code" }
 external_storage = { path = "components/external_storage" }
-external_storage_export = { path = "components/external_storage/export" }
 file_system = { path = "components/file_system" }
+fips = { path = "components/fips" }
 gcp = { path = "components/cloud/gcp" }
 into_other = { path = "components/into_other" }
 keys = { path = "components/keys" }
@@ -334,7 +344,7 @@ resource_metering = { path = "components/resource_metering" }
 security = { path = "components/security" }
 server = { path = "components/server" }
 service = { path = "components/service" }
-snap_recovery = { path = "components/snap_recovery" }
+snap_recovery = { path = "components/snap_recovery", default-features = false }
 sst_importer = { path = "components/sst_importer", default-features = false }
 test_backup = { path = "components/test_backup" }
 test_coprocessor = { path = "components/test_coprocessor", default-features = false }
@@ -362,14 +372,17 @@ tracker = { path = "components/tracker" }
 txn_types = { path = "components/txn_types" }
 # External libs
 raft = { version = "0.7.0", default-features = false, features = ["protobuf-codec"] }
-grpcio = { version = "0.10.4", default-features = false, features = ["openssl-vendored", "protobuf-codec", "nightly"] }
+grpcio = { version = "0.10.4", default-features = false, features = ["openssl", "protobuf-codec", "nightly"] }
 grpcio-health = { version = "0.10.4", default-features = false, features = ["protobuf-codec"] }
 tipb = { git = "https://github.com/pingcap/tipb.git" }
 kvproto = { git = "https://github.com/pingcap/kvproto.git" }
 yatp = { git = "https://github.com/tikv/yatp.git", branch = "master" }
 tokio-timer = { git = "https://github.com/tikv/tokio", branch = "tokio-timer-hotfix" }
+tokio-executor = { git = "https://github.com/tikv/tokio", branch = "tokio-timer-hotfix" }
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }
+openssl = "0.10"
+openssl-sys = "0.9"
 
 [profile.dev.package.grpcio-sys]
 debug = false
@@ -380,10 +393,6 @@ debug = false
 opt-level = 1
 
 [profile.dev.package.libtitan_sys]
-debug = false
-opt-level = 1
-
-[profile.dev.package.tirocks-sys]
 debug = false
 opt-level = 1
 

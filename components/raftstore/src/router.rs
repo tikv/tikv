@@ -1,6 +1,9 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::borrow::Cow;
+use std::{
+    borrow::Cow,
+    sync::{Arc, Mutex},
+};
 
 // #[PerformanceCriticalPath]
 use crossbeam::channel::TrySendError;
@@ -286,11 +289,11 @@ impl<EK: KvEngine, ER: RaftEngine> RaftStoreRouter<EK> for RaftRouter<EK, ER> {
 // duplicated codes.
 
 impl<EK: KvEngine, ER: RaftEngine> crate::coprocessor::StoreHandle for RaftRouter<EK, ER> {
-    fn update_approximate_size(&self, region_id: u64, size: u64) {
+    fn update_approximate_size(&self, region_id: u64, size: Option<u64>, splitable: Option<bool>) {
         if let Err(e) = CasualRouter::send(
             self,
             region_id,
-            CasualMessage::RegionApproximateSize { size },
+            CasualMessage::RegionApproximateSize { size, splitable },
         ) {
             warn!(
                 "failed to send approximate region size";
@@ -301,11 +304,11 @@ impl<EK: KvEngine, ER: RaftEngine> crate::coprocessor::StoreHandle for RaftRoute
         }
     }
 
-    fn update_approximate_keys(&self, region_id: u64, keys: u64) {
+    fn update_approximate_keys(&self, region_id: u64, keys: Option<u64>, splitable: Option<bool>) {
         if let Err(e) = CasualRouter::send(
             self,
             region_id,
-            CasualMessage::RegionApproximateKeys { keys },
+            CasualMessage::RegionApproximateKeys { keys, splitable },
         ) {
             warn!(
                 "failed to send approximate region keys";
@@ -331,6 +334,7 @@ impl<EK: KvEngine, ER: RaftEngine> crate::coprocessor::StoreHandle for RaftRoute
                 split_keys,
                 callback: Callback::None,
                 source,
+                share_source_region_size: true,
             },
         ) {
             warn!(
@@ -403,6 +407,33 @@ where
         region_id: u64,
         callback: Callback<EK::Snapshot>,
     ) -> RaftStoreResult<()>;
+}
+
+impl<EK: KvEngine, T: CdcHandle<EK>> CdcHandle<EK> for Arc<Mutex<T>> {
+    fn capture_change(
+        &self,
+        region_id: u64,
+        region_epoch: metapb::RegionEpoch,
+        change_observer: ChangeObserver,
+        callback: Callback<<EK as KvEngine>::Snapshot>,
+    ) -> RaftStoreResult<()> {
+        Mutex::lock(self).unwrap().capture_change(
+            region_id,
+            region_epoch,
+            change_observer,
+            callback,
+        )
+    }
+
+    fn check_leadership(
+        &self,
+        region_id: u64,
+        callback: Callback<<EK as KvEngine>::Snapshot>,
+    ) -> RaftStoreResult<()> {
+        Mutex::lock(self)
+            .unwrap()
+            .check_leadership(region_id, callback)
+    }
 }
 
 /// A wrapper of SignificantRouter that is specialized for implementing

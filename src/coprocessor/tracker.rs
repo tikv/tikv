@@ -264,8 +264,11 @@ impl<E: Engine> Tracker<E> {
                     .unwrap_or_default()
             });
 
+            let source_stmt = self.req_ctx.context.get_source_stmt();
             with_tls_tracker(|tracker| {
                 info!(#"slow_log", "slow-query";
+                    "connection_id" => source_stmt.get_connection_id(),
+                    "session_alias" => source_stmt.get_session_alias(),
                     "region_id" => &self.req_ctx.context.get_region_id(),
                     "remote_host" => &self.req_ctx.peer,
                     "total_lifetime" => ?self.req_lifetime,
@@ -430,6 +433,36 @@ impl<E: Engine> Drop for Tracker<E> {
         }
         if let TrackerState::ItemFinished(_) = self.current_stage {
             self.on_finish_all_items();
+        }
+
+        if self.current_stage != TrackerState::AllItemFinished
+            && self.req_ctx.deadline.check().is_err()
+        {
+            // record deadline exceeded error log.
+            let total_lifetime = self.request_begin_at.saturating_elapsed();
+            let source_stmt = self.req_ctx.context.get_source_stmt();
+            let first_range = self.req_ctx.ranges.first();
+            let some_table_id = first_range.as_ref().map(|range| {
+                tidb_query_datatype::codec::table::decode_table_id(range.get_start())
+                    .unwrap_or_default()
+            });
+            warn!("query deadline exceeded";
+                "current_stage" => ?self.current_stage,
+                "connection_id" => source_stmt.get_connection_id(),
+                "session_alias" => source_stmt.get_session_alias(),
+                "region_id" => &self.req_ctx.context.get_region_id(),
+                "remote_host" => &self.req_ctx.peer,
+                "total_lifetime" => ?total_lifetime,
+                "wait_time" => ?self.wait_time,
+                "wait_time.schedule" => ?self.schedule_wait_time,
+                "wait_time.snapshot" => ?self.snapshot_wait_time,
+                "handler_build_time" => ?self.handler_build_time,
+                "total_process_time" => ?self.total_process_time,
+                "total_suspend_time" => ?self.total_suspend_time,
+                "txn_start_ts" => self.req_ctx.txn_start_ts,
+                "table_id" => some_table_id,
+                "tag" => self.req_ctx.tag.get_str(),
+            );
         }
     }
 }

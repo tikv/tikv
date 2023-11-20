@@ -12,6 +12,7 @@ use futures::{executor::block_on, SinkExt, StreamExt};
 use grpcio::*;
 use kvproto::{kvrpcpb::*, pdpb::QueryKind, tikvpb::*, tikvpb_grpc::TikvClient};
 use pd_client::PdClient;
+use test_coprocessor::{DagSelect, ProductTable};
 use test_raftstore::*;
 use tikv_util::{config::*, store::QueryStats};
 use txn_types::Key;
@@ -262,19 +263,10 @@ fn test_raw_query_stats_tmpl<F: KvFormat>() {
                     req.set_raw_get(get_req);
                     req
                 });
-                batch_commands(&ctx, &client, get_command, &start_key);
-                assert!(check_split_key(
-                    cluster,
-                    F::encode_raw_key_owned(start_key.clone(), None).into_encoded(),
-                    None
-                ));
-                if check_query_num_read(
-                    cluster,
-                    store_id,
-                    region_id,
-                    QueryKind::Get,
-                    (i + 1) * 1000,
-                ) {
+                if i == 0 {
+                    batch_commands(&ctx, &client, get_command, &start_key);
+                }
+                if check_query_num_read(cluster, store_id, region_id, QueryKind::Get, 1000) {
                     flag = true;
                     break;
                 }
@@ -284,14 +276,16 @@ fn test_raw_query_stats_tmpl<F: KvFormat>() {
     fail::cfg("mock_hotspot_threshold", "return(0)").unwrap();
     fail::cfg("mock_tick_interval", "return(0)").unwrap();
     fail::cfg("mock_collect_tick_interval", "return(0)").unwrap();
-    test_query_num::<F>(raw_get, true);
-    test_query_num::<F>(raw_batch_get, true);
-    test_query_num::<F>(raw_scan, true);
-    test_query_num::<F>(raw_batch_scan, true);
+    test_query_num::<F>(raw_get, true, true);
+    test_query_num::<F>(raw_batch_get, true, true);
+    test_query_num::<F>(raw_scan, true, true);
+    test_query_num::<F>(raw_batch_scan, true, true);
     if F::IS_TTL_ENABLED {
-        test_query_num::<F>(raw_get_key_ttl, true);
+        test_query_num::<F>(raw_get_key_ttl, true, true);
     }
-    test_query_num::<F>(raw_batch_get_command, true);
+    // requests may failed caused by `EpochNotMatch` after split when auto split is
+    // enabled, disable it.
+    test_query_num::<F>(raw_batch_get_command, true, false);
     test_raw_delete_query::<F>();
     fail::remove("mock_tick_interval");
     fail::remove("mock_hotspot_threshold");
@@ -385,19 +379,34 @@ fn test_txn_query_stats_tmpl<F: KvFormat>() {
                     req.set_get(get_req);
                     req
                 });
-                batch_commands(&ctx, &client, get_command, &start_key);
-                assert!(check_split_key(
-                    cluster,
-                    Key::from_raw(&start_key).as_encoded().to_vec(),
-                    None
-                ));
-                if check_query_num_read(
-                    cluster,
-                    store_id,
-                    region_id,
-                    QueryKind::Get,
-                    (i + 1) * 1000,
-                ) {
+                if i == 0 {
+                    batch_commands(&ctx, &client, get_command, &start_key);
+                }
+                if check_query_num_read(cluster, store_id, region_id, QueryKind::Get, 1000) {
+                    flag = true;
+                    break;
+                }
+            }
+            assert!(flag);
+        });
+    let batch_coprocessor: Box<Query> =
+        Box::new(|ctx, cluster, client, store_id, region_id, start_key| {
+            let mut flag = false;
+            for i in 0..3 {
+                let coprocessor: Box<GenRequest> = Box::new(|ctx, _start_key| {
+                    let mut req = BatchCommandsRequestRequest::new();
+                    let table = ProductTable::new();
+                    let mut cop_req = DagSelect::from(&table).build();
+                    cop_req.set_context(ctx.clone());
+                    req.set_coprocessor(cop_req);
+                    req
+                });
+                if i == 0 {
+                    batch_commands(&ctx, &client, coprocessor, &start_key);
+                }
+                // here cannot read any data, so expect is 0. may need fix. here mainly used to
+                // verify the request source is as expect.
+                if check_query_num_read(cluster, store_id, region_id, QueryKind::Coprocessor, 0) {
                     flag = true;
                     break;
                 }
@@ -407,17 +416,22 @@ fn test_txn_query_stats_tmpl<F: KvFormat>() {
     fail::cfg("mock_hotspot_threshold", "return(0)").unwrap();
     fail::cfg("mock_tick_interval", "return(0)").unwrap();
     fail::cfg("mock_collect_tick_interval", "return(0)").unwrap();
-    test_query_num::<F>(get, false);
-    test_query_num::<F>(batch_get, false);
-    test_query_num::<F>(scan, false);
-    test_query_num::<F>(scan_lock, false);
-    test_query_num::<F>(batch_get_command, false);
+    fail::cfg("only_check_source_task_name", "return(test_stats)").unwrap();
+    test_query_num::<F>(get, false, true);
+    test_query_num::<F>(batch_get, false, true);
+    test_query_num::<F>(scan, false, true);
+    test_query_num::<F>(scan_lock, false, true);
+    // requests may failed caused by `EpochNotMatch` after split when auto split is
+    // enabled, disable it.
+    test_query_num::<F>(batch_get_command, false, false);
+    test_query_num::<F>(batch_coprocessor, false, false);
     test_txn_delete_query::<F>();
     test_pessimistic_lock();
     test_rollback();
     fail::remove("mock_tick_interval");
     fail::remove("mock_hotspot_threshold");
     fail::remove("mock_collect_tick_interval");
+    fail::remove("only_check_source_task_name");
 }
 
 fn raw_put<F: KvFormat>(
@@ -501,10 +515,11 @@ fn put(
 }
 
 fn test_pessimistic_lock() {
-    let (cluster, client, ctx) = must_new_and_configure_cluster_and_kv_client(|cluster| {
+    let (cluster, client, mut ctx) = must_new_and_configure_cluster_and_kv_client(|cluster| {
         cluster.cfg.raft_store.pd_store_heartbeat_tick_interval = ReadableDuration::millis(50);
     });
 
+    ctx.set_request_source("test_stats".to_owned());
     let key = b"key2".to_vec();
     let store_id = 1;
     put(&cluster, &client, &ctx, store_id, key.clone());
@@ -541,9 +556,10 @@ fn test_pessimistic_lock() {
 }
 
 pub fn test_rollback() {
-    let (cluster, client, ctx) = must_new_and_configure_cluster_and_kv_client(|cluster| {
+    let (cluster, client, mut ctx) = must_new_and_configure_cluster_and_kv_client(|cluster| {
         cluster.cfg.raft_store.pd_store_heartbeat_tick_interval = ReadableDuration::millis(50);
     });
+    ctx.set_request_source("test_stats".to_owned());
     let key = b"key2".to_vec();
     let store_id = 1;
     put(&cluster, &client, &ctx, store_id, key.clone());
@@ -572,17 +588,23 @@ pub fn test_rollback() {
     ));
 }
 
-fn test_query_num<F: KvFormat>(query: Box<Query>, is_raw_kv: bool) {
+fn test_query_num<F: KvFormat>(query: Box<Query>, is_raw_kv: bool, auto_split: bool) {
     let (mut cluster, client, mut ctx) = must_new_and_configure_cluster_and_kv_client(|cluster| {
         cluster.cfg.raft_store.pd_store_heartbeat_tick_interval = ReadableDuration::millis(50);
-        cluster.cfg.split.qps_threshold = 0;
+        if auto_split {
+            cluster.cfg.split.qps_threshold = Some(0);
+        } else {
+            cluster.cfg.split.qps_threshold = Some(1000000);
+        }
         cluster.cfg.split.split_balance_score = 2.0;
         cluster.cfg.split.split_contained_score = 2.0;
         cluster.cfg.split.detect_times = 1;
         cluster.cfg.split.sample_threshold = 0;
         cluster.cfg.storage.set_api_version(F::TAG);
+        cluster.cfg.server.enable_request_batch = false;
     });
     ctx.set_api_version(F::CLIENT_TAG);
+    ctx.set_request_source("test_stats".to_owned());
 
     let mut k = b"key".to_vec();
     // When a peer becomes leader, it can't read before committing to current term.
@@ -610,6 +632,7 @@ fn test_raw_delete_query<F: KvFormat>() {
             cluster.cfg.storage.set_api_version(F::TAG);
         });
         ctx.set_api_version(F::CLIENT_TAG);
+        ctx.set_request_source("test_stats".to_owned());
 
         raw_put::<F>(&cluster, &client, &ctx, store_id, k.clone());
         // Raw Delete
@@ -635,10 +658,10 @@ fn test_txn_delete_query<F: KvFormat>() {
     let store_id = 1;
 
     {
-        let (cluster, client, ctx) = must_new_and_configure_cluster_and_kv_client(|cluster| {
+        let (cluster, client, mut ctx) = must_new_and_configure_cluster_and_kv_client(|cluster| {
             cluster.cfg.raft_store.pd_store_heartbeat_tick_interval = ReadableDuration::millis(50);
         });
-
+        ctx.set_request_source("test_stats".to_owned());
         put(&cluster, &client, &ctx, store_id, k.clone());
         // DeleteRange
         let mut delete_req = DeleteRangeRequest::default();
@@ -762,4 +785,13 @@ fn batch_commands(
         }
     });
     rx.recv_timeout(Duration::from_secs(10)).unwrap();
+    sleep_ms(100);
+    // triage metrics flush
+    for _ in 0..10 {
+        let mut req = ScanRequest::default();
+        req.set_context(ctx.to_owned());
+        req.start_key = start_key.to_owned();
+        req.end_key = vec![];
+        client.kv_scan(&req).unwrap();
+    }
 }

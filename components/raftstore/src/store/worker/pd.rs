@@ -141,6 +141,7 @@ where
         peer: metapb::Peer,
         // If true, right Region derives origin region_id.
         right_derive: bool,
+        share_source_region_size: bool,
         callback: Callback<EK::Snapshot>,
     },
     AskBatchSplit {
@@ -149,6 +150,7 @@ where
         peer: metapb::Peer,
         // If true, right Region derives origin region_id.
         right_derive: bool,
+        share_source_region_size: bool,
         callback: Callback<EK::Snapshot>,
     },
     AutoSplit {
@@ -658,7 +660,7 @@ where
                 // Register the region CPU records collector.
                 if auto_split_controller
                     .cfg
-                    .region_cpu_overload_threshold_ratio
+                    .region_cpu_overload_threshold_ratio()
                     > 0.0
                 {
                     region_cpu_records_collector =
@@ -1066,6 +1068,7 @@ where
         split_key: Vec<u8>,
         peer: metapb::Peer,
         right_derive: bool,
+        share_source_region_size: bool,
         callback: Callback<EK::Snapshot>,
         task: String,
     ) {
@@ -1087,6 +1090,7 @@ where
                         resp.get_new_region_id(),
                         resp.take_new_peer_ids(),
                         right_derive,
+                        share_source_region_size,
                     );
                     let region_id = region.get_id();
                     let epoch = region.take_region_epoch();
@@ -1121,6 +1125,7 @@ where
         mut split_keys: Vec<Vec<u8>>,
         peer: metapb::Peer,
         right_derive: bool,
+        share_source_region_size: bool,
         callback: Callback<EK::Snapshot>,
         task: String,
         remote: Remote<yatp::task::future::TaskCell>,
@@ -1146,6 +1151,7 @@ where
                         split_keys,
                         resp.take_ids().into(),
                         right_derive,
+                        share_source_region_size,
                     );
                     let region_id = region.get_id();
                     let epoch = region.take_region_epoch();
@@ -1174,6 +1180,7 @@ where
                         split_key: split_keys.pop().unwrap(),
                         peer,
                         right_derive,
+                        share_source_region_size,
                         callback,
                     };
                     if let Err(ScheduleError::Stopped(t)) = scheduler.schedule(task) {
@@ -1352,15 +1359,9 @@ where
         self.store_stat.region_bytes_read.flush();
         self.store_stat.region_keys_read.flush();
 
-        STORE_SIZE_GAUGE_VEC
-            .with_label_values(&["capacity"])
-            .set(capacity as i64);
-        STORE_SIZE_GAUGE_VEC
-            .with_label_values(&["available"])
-            .set(available as i64);
-        STORE_SIZE_GAUGE_VEC
-            .with_label_values(&["used"])
-            .set(used_size as i64);
+        STORE_SIZE_EVENT_INT_VEC.capacity.set(capacity as i64);
+        STORE_SIZE_EVENT_INT_VEC.available.set(available as i64);
+        STORE_SIZE_EVENT_INT_VEC.used.set(used_size as i64);
 
         let slow_score = self.slow_score.get();
         stats.set_slow_score(slow_score as u64);
@@ -1566,8 +1567,14 @@ where
                     }
                 }
                 Ok(None) => {
-                    // splitted Region has not yet reported to PD.
-                    // TODO: handle merge
+                    // Splitted region has not yet reported to PD.
+                    //
+                    // Or region has been merged. This case is handled by
+                    // message `MsgCheckStalePeer`, stale peers will be
+                    // removed eventually.
+                    PD_VALIDATE_PEER_COUNTER_VEC
+                        .with_label_values(&["region not found"])
+                        .inc();
                 }
                 Err(e) => {
                     error!("get region failed"; "err" => ?e);
@@ -1645,6 +1652,7 @@ where
                             split_keys: split_region.take_keys().into(),
                             callback: Callback::None,
                             source: "pd".into(),
+                            share_source_region_size: false,
                         }
                     } else {
                         CasualMessage::HalfSplitRegion {
@@ -2048,12 +2056,14 @@ where
                 split_key,
                 peer,
                 right_derive,
+                share_source_region_size,
                 callback,
             } => self.handle_ask_split(
                 region,
                 split_key,
                 peer,
                 right_derive,
+                share_source_region_size,
                 callback,
                 String::from("ask_split"),
             ),
@@ -2062,6 +2072,7 @@ where
                 split_keys,
                 peer,
                 right_derive,
+                share_source_region_size,
                 callback,
             } => Self::handle_ask_batch_split(
                 self.router.clone(),
@@ -2071,6 +2082,7 @@ where
                 split_keys,
                 peer,
                 right_derive,
+                share_source_region_size,
                 callback,
                 String::from("batch_split"),
                 self.remote.clone(),
@@ -2095,6 +2107,7 @@ where
                                 vec![split_key],
                                 split_info.peer,
                                 true,
+                                false,
                                 Callback::None,
                                 String::from("auto_split"),
                                 remote.clone(),
@@ -2248,7 +2261,9 @@ where
             } => self.handle_update_max_timestamp(region_id, initial_status, txn_ext),
             Task::QueryRegionLeader { region_id } => self.handle_query_region_leader(region_id),
             Task::UpdateSlowScore { id, duration } => {
-                self.slow_score.record(id, duration.sum());
+                // Fine-tuned, `SlowScore` only takes the I/O jitters on the disk into account.
+                self.slow_score
+                    .record(id, duration.delays_on_disk_io(false));
                 self.slow_trend_cause.record(
                     tikv_util::time::duration_to_us(duration.store_wait_duration.unwrap()),
                     Instant::now(),
@@ -2385,6 +2400,7 @@ fn new_split_region_request(
     new_region_id: u64,
     peer_ids: Vec<u64>,
     right_derive: bool,
+    share_source_region_size: bool,
 ) -> AdminRequest {
     let mut req = AdminRequest::default();
     req.set_cmd_type(AdminCmdType::Split);
@@ -2392,6 +2408,8 @@ fn new_split_region_request(
     req.mut_split().set_new_region_id(new_region_id);
     req.mut_split().set_new_peer_ids(peer_ids);
     req.mut_split().set_right_derive(right_derive);
+    req.mut_split()
+        .set_share_source_region_size(share_source_region_size);
     req
 }
 
@@ -2399,10 +2417,13 @@ fn new_batch_split_region_request(
     split_keys: Vec<Vec<u8>>,
     ids: Vec<pdpb::SplitId>,
     right_derive: bool,
+    share_source_region_size: bool,
 ) -> AdminRequest {
     let mut req = AdminRequest::default();
     req.set_cmd_type(AdminCmdType::BatchSplit);
     req.mut_splits().set_right_derive(right_derive);
+    req.mut_splits()
+        .set_share_source_region_size(share_source_region_size);
     let mut requests = Vec::with_capacity(ids.len());
     for (mut id, key) in ids.into_iter().zip(split_keys) {
         let mut split = SplitRequest::default();
@@ -2577,15 +2598,21 @@ fn collect_engine_size<EK: KvEngine, ER: RaftEngine>(
     } else {
         store_info.capacity
     };
-    let used_size = snap_mgr_size
-        + store_info
-            .kv_engine
-            .get_engine_used_size()
-            .expect("kv engine used size")
-        + store_info
-            .raft_engine
-            .get_engine_size()
-            .expect("raft engine used size");
+    let raft_size = store_info
+        .raft_engine
+        .get_engine_size()
+        .expect("raft engine used size");
+
+    let kv_size = store_info
+        .kv_engine
+        .get_engine_used_size()
+        .expect("kv engine used size");
+
+    STORE_SIZE_EVENT_INT_VEC.raft_size.set(raft_size as i64);
+    STORE_SIZE_EVENT_INT_VEC.snap_size.set(snap_mgr_size as i64);
+    STORE_SIZE_EVENT_INT_VEC.kv_size.set(kv_size as i64);
+
+    let used_size = snap_mgr_size + kv_size + raft_size;
     let mut available = capacity.checked_sub(used_size).unwrap_or_default();
     // We only care about rocksdb SST file size, so we should check disk available
     // here.

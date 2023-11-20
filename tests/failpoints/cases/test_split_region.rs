@@ -17,6 +17,7 @@ use kvproto::{
         Mutation, Op, PessimisticLockRequest, PrewriteRequest, PrewriteRequestPessimisticAction::*,
     },
     metapb::Region,
+    pdpb::CheckPolicy,
     raft_serverpb::{PeerState, RaftMessage},
     tikvpb::TikvClient,
 };
@@ -31,6 +32,7 @@ use raftstore::{
     Result,
 };
 use test_raftstore::*;
+use test_raftstore_macro::test_case;
 use tikv::storage::{kv::SnapshotExt, Snapshot};
 use tikv_util::{
     config::{ReadableDuration, ReadableSize},
@@ -344,6 +346,68 @@ impl Filter for PrevoteRangeFilter {
         }
         Ok(())
     }
+}
+
+#[test_case(test_raftstore::new_node_cluster)]
+#[test_case(test_raftstore_v2::new_node_cluster)]
+fn test_region_size_after_split() {
+    let mut cluster = new_cluster(0, 1);
+    cluster.cfg.raft_store.right_derive_when_split = true;
+    cluster.cfg.raft_store.split_region_check_tick_interval = ReadableDuration::millis(100);
+    cluster.cfg.raft_store.pd_heartbeat_tick_interval = ReadableDuration::millis(100);
+    cluster.cfg.raft_store.region_split_check_diff = Some(ReadableSize(10));
+    let region_max_size = 1440;
+    let region_split_size = 960;
+    cluster.cfg.coprocessor.region_max_size = Some(ReadableSize(region_max_size));
+    cluster.cfg.coprocessor.region_split_size = Some(ReadableSize(region_split_size));
+    let pd_client = cluster.pd_client.clone();
+    pd_client.disable_default_operator();
+    let _r = cluster.run_conf_change();
+
+    // insert 20 key value pairs into the cluster.
+    // from 000000001 to 000000020
+    let mut range = 1..;
+    put_till_size(&mut cluster, region_max_size - 100, &mut range);
+    sleep_ms(100);
+    // disable check split.
+    fail::cfg("on_split_region_check_tick", "return").unwrap();
+    let max_key = put_till_size(&mut cluster, region_max_size, &mut range);
+    // split by use key, split region 1 to region 1 and region 2.
+    // region 1: ["000000010",""]
+    // region 2: ["","000000010")
+    let region = pd_client.get_region(&max_key).unwrap();
+    cluster.must_split(&region, b"000000010");
+    let size = cluster
+        .pd_client
+        .get_region_approximate_size(region.get_id())
+        .unwrap_or_default();
+    assert!(size >= region_max_size - 100, "{}", size);
+
+    let region = pd_client.get_region(b"000000009").unwrap();
+    let size1 = cluster
+        .pd_client
+        .get_region_approximate_size(region.get_id())
+        .unwrap_or_default();
+    assert_eq!(0, size1, "{}", size1);
+
+    // split region by size check, the region 1 will be split to region 1 and region
+    // 3. and the region3 will contains one half region size data.
+    let region = pd_client.get_region(&max_key).unwrap();
+    pd_client.split_region(region.clone(), CheckPolicy::Scan, vec![]);
+    sleep_ms(200);
+    let size2 = cluster
+        .pd_client
+        .get_region_approximate_size(region.get_id())
+        .unwrap_or_default();
+    assert!(size > size2, "{}:{}", size, size2);
+    fail::remove("on_split_region_check_tick");
+
+    let region = pd_client.get_region(b"000000010").unwrap();
+    let size3 = cluster
+        .pd_client
+        .get_region_approximate_size(region.get_id())
+        .unwrap_or_default();
+    assert!(size3 > 0, "{}", size3);
 }
 
 // Test if a peer is created from splitting when another initialized peer with
@@ -752,7 +816,7 @@ impl Filter for CollectSnapshotFilter {
 #[test]
 fn test_split_duplicated_batch() {
     let mut cluster = new_node_cluster(0, 3);
-    configure_for_request_snapshot(&mut cluster);
+    configure_for_request_snapshot(&mut cluster.cfg);
     // Disable raft log gc in this test case.
     cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::secs(60);
     // Use one thread to make it more possible to be fetched into one batch.
@@ -1484,4 +1548,66 @@ fn test_split_region_with_no_valid_split_keys() {
     rx.recv_timeout(Duration::from_secs(5)).unwrap();
     rx.recv_timeout(Duration::from_secs(5)).unwrap();
     rx.try_recv().unwrap_err();
+}
+
+/// This test case test if a split failed for some reason,
+/// it can continue run split check and eventually the split will finish
+#[test_case(test_raftstore::new_node_cluster)]
+fn test_split_by_split_check_on_size() {
+    let mut cluster = new_cluster(0, 1);
+    cluster.cfg.raft_store.right_derive_when_split = true;
+    cluster.cfg.raft_store.split_region_check_tick_interval = ReadableDuration::millis(50);
+    cluster.cfg.raft_store.pd_heartbeat_tick_interval = ReadableDuration::millis(100);
+    cluster.cfg.raft_store.region_split_check_diff = Some(ReadableSize(10));
+    let region_max_size = 1440;
+    let region_split_size = 960;
+    cluster.cfg.coprocessor.region_max_size = Some(ReadableSize(region_max_size));
+    cluster.cfg.coprocessor.region_split_size = Some(ReadableSize(region_split_size));
+    let pd_client = cluster.pd_client.clone();
+    pd_client.disable_default_operator();
+    let _r = cluster.run_conf_change();
+
+    // make first split fail
+    // 1*return means it would run "return" action once
+    fail::cfg("fail_pre_propose_split", "1*return").unwrap();
+
+    // Insert region_max_size into the cluster.
+    // It should trigger the split
+    let mut range = 1..;
+    let key = put_till_size(&mut cluster, region_max_size / 2, &mut range);
+    let region = pd_client.get_region(&key).unwrap();
+    put_till_size(&mut cluster, region_max_size / 2 + 100, &mut range);
+    // waiting the split,
+    cluster.wait_region_split(&region);
+}
+
+/// This test case test if a split failed for some reason,
+/// it can continue run split check and eventually the split will finish
+#[test_case(test_raftstore::new_node_cluster)]
+fn test_split_by_split_check_on_keys() {
+    let mut cluster = new_cluster(0, 1);
+    cluster.cfg.raft_store.right_derive_when_split = true;
+    cluster.cfg.raft_store.split_region_check_tick_interval = ReadableDuration::millis(50);
+    cluster.cfg.raft_store.pd_heartbeat_tick_interval = ReadableDuration::millis(100);
+    cluster.cfg.raft_store.region_split_check_diff = Some(ReadableSize(10));
+    let region_max_keys = 15;
+    let region_split_keys = 10;
+    cluster.cfg.coprocessor.region_max_keys = Some(region_max_keys);
+    cluster.cfg.coprocessor.region_split_keys = Some(region_split_keys);
+    let pd_client = cluster.pd_client.clone();
+    pd_client.disable_default_operator();
+    let _r = cluster.run_conf_change();
+
+    // make first split fail
+    // 1*return means it would run "return" action once
+    fail::cfg("fail_pre_propose_split", "1*return").unwrap();
+
+    // Insert region_max_size into the cluster.
+    // It should trigger the split
+    let mut range = 1..;
+    let key = put_till_count(&mut cluster, region_max_keys / 2, &mut range);
+    let region = pd_client.get_region(&key).unwrap();
+    put_till_count(&mut cluster, region_max_keys / 2 + 3, &mut range);
+    // waiting the split,
+    cluster.wait_region_split(&region);
 }

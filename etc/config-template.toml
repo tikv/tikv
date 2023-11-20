@@ -83,6 +83,18 @@
 ## maximum number of old log files to retain
 # max-backups = 0
 
+[memory]
+## Whether enable the heap profiling which may have a bit performance overhead about 2% for the
+## default sample rate.
+# enable-heap-profiling = true
+
+## Average interval between allocation samples, as measured in bytes of allocation activity.
+## Increasing the sampling interval decreases profile fidelity, but also decreases the
+## computational overhead.
+## The default sample interval is 512 KB. It only accepts power of two, otherwise it will be
+## rounded up to the next power of two.
+# profiling-sample-per-bytes = "512KB"
+
 ## Configurations for the single thread pool serving read requests.
 [readpool.unified]
 ## The minimal working thread count of the thread pool.
@@ -926,6 +938,13 @@
 ##   zstd:   kZSTD
 ## default: lz4
 # blob-file-compression = "lz4"
+
+## Set blob file zstd dictionary compression, default(0) will use zstd compression.
+## It is recommended to set the dictionary size to values such as 4k or 16k. Additionally,
+## the sample data size to train dictionary is of size 100X dictionary size innerly.
+## It has no effect when `blob-file-compression` is not `zstd`.
+## default: 0
+# zstd-dict-size = 0
 
 ## Specifics cache size for blob records
 ## default: 0

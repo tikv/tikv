@@ -61,10 +61,16 @@ mod fork_readonly_tikv;
 mod util;
 
 fn main() {
+    // OpenSSL FIPS mode should be enabled at the very start.
+    fips::maybe_enable();
+
     let opt = Opt::from_args();
 
     // Initialize logger.
     init_ctl_logger(&opt.log_level);
+
+    // Print OpenSSL FIPS mode status.
+    fips::log_status();
 
     // Initialize configuration and security manager.
     let cfg_path = opt.config.as_ref();
@@ -1048,7 +1054,7 @@ fn build_rocks_opts(cfg: &TikvConfig) -> engine_rocks::RocksDbOptions {
         .unwrap()
         .map(Arc::new);
     let env = get_env(key_manager, None /* io_rate_limiter */).unwrap();
-    let resource = cfg.rocksdb.build_resources(env);
+    let resource = cfg.rocksdb.build_resources(env, cfg.storage.engine);
     cfg.rocksdb.build_opt(&resource, cfg.storage.engine)
 }
 

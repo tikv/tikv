@@ -37,7 +37,7 @@ nix = "0.24"
 num-traits = "0.2"
 num_cpus = "1"
 online_config = { workspace = true }
-openssl = "0.10"
+openssl = { workspace = true }
 parking_lot_core = "0.9.1"
 pin-project = "1.0"
 prometheus = { version = "0.13", features = ["nightly"] }
@@ -57,7 +57,7 @@ thiserror = "1.0"
 tikv_alloc = { workspace = true }
 time = "0.1"
 tokio = { version = "1.5", features = ["rt-multi-thread"] }
-tokio-executor = "0.1"
+tokio-executor = { workspace = true }
 tokio-timer = { workspace = true }
 tracker = { workspace = true }
 url = "2"

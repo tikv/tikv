@@ -491,8 +491,8 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
         let future = future_copr(&self.copr, Some(ctx.peer()), req);
         let task = async move {
             let resp = future.await?.consume();
-            sink.success(resp).await?;
             let elapsed = begin_instant.saturating_elapsed();
+            sink.success(resp).await?;
             GRPC_MSG_HISTOGRAM_STATIC
                 .coprocessor
                 .observe(elapsed.as_secs_f64());
@@ -529,8 +529,8 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
         let future = future_raw_coprocessor(&self.copr_v2, &self.storage, req);
         let task = async move {
             let resp = future.await?;
-            sink.success(resp).await?;
             let elapsed = begin_instant.saturating_elapsed();
+            sink.success(resp).await?;
             GRPC_MSG_HISTOGRAM_STATIC
                 .raw_coprocessor
                 .observe(elapsed.as_secs_f64());
@@ -580,8 +580,8 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
             if let Err(e) = res {
                 resp.set_error(format!("{}", e));
             }
-            sink.success(resp).await?;
             let elapsed = begin_instant.saturating_elapsed();
+            sink.success(resp).await?;
             GRPC_MSG_HISTOGRAM_STATIC
                 .unsafe_destroy_range
                 .observe(elapsed.as_secs_f64());
@@ -863,10 +863,10 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
                     }
                 }
             }
-            sink.success(resp).await?;
             GRPC_MSG_HISTOGRAM_STATIC
                 .split_region
                 .observe(begin_instant.saturating_elapsed().as_secs_f64());
+            sink.success(resp).await?;
             ServerResult::Ok(())
         }
         .map_err(|e| {
@@ -1015,6 +1015,9 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
                 .schedule(CheckLeaderTask::CheckLeader { leaders, cb })
                 .map_err(|e| Error::Other(format!("{}", e).into()))?;
             let regions = resp.await?;
+            GRPC_MSG_HISTOGRAM_STATIC
+                .check_leader
+                .observe(begin_instant.saturating_elapsed().as_secs_f64());
             let mut resp = CheckLeaderResponse::default();
             resp.set_ts(ts);
             resp.set_regions(regions);
@@ -1026,10 +1029,6 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
                 }
                 return Err(Error::from(e));
             }
-            let elapsed = begin_instant.saturating_elapsed();
-            GRPC_MSG_HISTOGRAM_STATIC
-                .check_leader
-                .observe(elapsed.as_secs_f64());
             ServerResult::Ok(())
         }
         .map_err(move |e| {
@@ -1191,7 +1190,7 @@ fn handle_batch_commands_request<E: Engine, L: LockManager, F: KvFormat>(
                         response_batch_commands_request(id, resp, tx.clone(), begin_instant, GrpcTypeKind::raw_get, source);
                     }
                 },
-                Some(batch_commands_request::request::Cmd::Coprocessor(mut req)) => {
+                Some(batch_commands_request::request::Cmd::Coprocessor(req)) => {
                     let resource_control_ctx = req.get_context().get_resource_control_context();
                     if let Some(resource_manager) = resource_manager {
                         resource_manager.consume_penalty(resource_control_ctx);
@@ -1200,7 +1199,7 @@ fn handle_batch_commands_request<E: Engine, L: LockManager, F: KvFormat>(
                         .with_label_values(&[resource_control_ctx.get_resource_group_name()])
                         .inc();
                     let begin_instant = Instant::now();
-                    let source = req.mut_context().take_request_source();
+                    let source = req.get_context().get_request_source().to_owned();
                     let resp = future_copr(copr, Some(peer.to_string()), req)
                         .map_ok(|resp| {
                             resp.map(oneof!(batch_commands_response::response::Cmd::Coprocessor))
@@ -1225,7 +1224,7 @@ fn handle_batch_commands_request<E: Engine, L: LockManager, F: KvFormat>(
                         String::default(),
                     );
                 }
-                $(Some(batch_commands_request::request::Cmd::$cmd(mut req)) => {
+                $(Some(batch_commands_request::request::Cmd::$cmd(req)) => {
                     let resource_control_ctx = req.get_context().get_resource_control_context();
                     if let Some(resource_manager) = resource_manager {
                         resource_manager.consume_penalty(resource_control_ctx);
@@ -1234,7 +1233,7 @@ fn handle_batch_commands_request<E: Engine, L: LockManager, F: KvFormat>(
                         .with_label_values(&[resource_control_ctx.get_resource_group_name()])
                         .inc();
                     let begin_instant = Instant::now();
-                    let source = req.mut_context().take_request_source();
+                    let source = req.get_context().get_request_source().to_owned();
                     let resp = $future_fn($($arg,)* req)
                         .map_ok(oneof!(batch_commands_response::response::Cmd::$cmd))
                         .map_err(|_| GRPC_MSG_FAIL_COUNTER.$metric_name.inc());

@@ -1,9 +1,5 @@
-log-level = "info"
-log-file = ""
-log-format = "text"
 slow-log-file = "slow_foo"
 slow-log-threshold = "1s"
-log-rotation-timespan = "1d"
 panic-when-unexpected-key-or-data = true
 abort-on-panic = true
 memory-usage-limit = "10GB"
@@ -18,6 +14,10 @@ filename = "foo"
 max-size = 1
 max-backups = 2
 max-days = 3
+
+[memory]
+enable-heap-profiling = false 
+profiling-sample-per-bytes = "1MB" 
 
 [readpool.unified]
 min-thread-count = 5
@@ -101,6 +101,7 @@ reserve-space = "10GB"
 reserve-raft-space = "2GB"
 enable-ttl = true
 ttl-check-poll-interval = "0s"
+txn-status-cache-capacity = 1000
 
 [storage.block-cache]
 capacity = "40GB"
@@ -183,6 +184,7 @@ max-peer-down-duration = "12m"
 max-leader-missing-duration = "12h"
 abnormal-leader-missing-duration = "6h"
 peer-stale-state-check-interval = "2h"
+gc-peer-check-interval = "1d"
 leader-transfer-max-log-lag = 123
 snap-apply-batch-size = "12MB"
 snap-apply-copy-symlink = true
@@ -347,6 +349,7 @@ periodic-compaction-seconds = "10d"
 [rocksdb.defaultcf.titan]
 min-blob-size = "2018B"
 blob-file-compression = "zstd"
+zstd-dict-size = "16KB"
 blob-cache-size = "12GB"
 min-gc-batch-size = "12KB"
 max-gc-batch-size = "12MB"
@@ -607,6 +610,7 @@ max-compactions = 3
 [raftdb.defaultcf.titan]
 min-blob-size = "2018B"
 blob-file-compression = "zstd"
+zstd-dict-size = "16KB"
 blob-cache-size = "12GB"
 min-gc-batch-size = "12KB"
 max-gc-batch-size = "12MB"
@@ -697,6 +701,7 @@ hibernate-regions-compatible = false
 incremental-scan-threads = 3
 incremental-scan-concurrency = 4
 incremental-scan-speed-limit = 7
+incremental-fetch-speed-limit = 8
 incremental-scan-ts-filter-ratio = 0.7
 tso-worker-threads = 2
 old-value-cache-memory-quota = "14MB"
@@ -707,6 +712,7 @@ enable = true
 advance-ts-interval = "5s"
 scan-lock-pool-size = 1
 memory-quota = "1MB"
+incremental-scan-concurrency = 7
 
 [split]
 detect-times = 10
