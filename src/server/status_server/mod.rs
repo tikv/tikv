@@ -61,6 +61,7 @@ use tokio::{
     sync::oneshot::{self, Receiver, Sender},
 };
 use tokio_openssl::SslStream;
+use tracing_active_tree::tree::formating::FormatFlat;
 
 use crate::{
     config::{ConfigController, LogLevel},
@@ -554,7 +555,11 @@ where
     async fn dump_async_trace() -> hyper::Result<Response<Body>> {
         Ok(make_response(
             StatusCode::OK,
-            tracing_active_tree::layer::global().fmt_bytes(),
+            tracing_active_tree::layer::global().fmt_bytes_with(|t, buf| {
+                t.traverse_with(FormatFlat::new(buf)).unwrap_or_else(|err| {
+                    error!("failed to format tree, unreachable!"; "err" => %err);
+                })
+            }),
         ))
     }
 
