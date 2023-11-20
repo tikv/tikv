@@ -518,7 +518,7 @@ fn test_timeout_check() {
         analy_req.set_col_req(col_req);
         let mut req = Request::default();
         req.set_start_ts(next_id() as u64);
-        req.set_ranges(ranges.clone().into());
+        req.set_ranges(ranges.into());
         req.set_tp(tikv::coprocessor::REQ_TYPE_ANALYZE);
         req.set_data(analy_req.write_to_bytes().unwrap());
         test_timeout(req, tikv::coprocessor::REQ_TYPE_ANALYZE);

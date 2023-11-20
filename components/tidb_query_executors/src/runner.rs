@@ -502,6 +502,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
         let mut warnings = self.config.new_eval_warnings();
         let mut ctx = EvalContext::new(self.config.clone());
         let mut record_all = 0;
+
         loop {
             let mut chunk = Chunk::default();
             let mut sample = self.quota_limiter.new_sample(true);
