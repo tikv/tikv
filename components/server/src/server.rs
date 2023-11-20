@@ -122,7 +122,6 @@ use tikv_util::{
     Either,
 };
 use tokio::runtime::Builder;
-use tracing_subscriber::prelude::*;
 
 use crate::{
     common::{ConfiguredRaftEngine, EngineMetricsManager, EnginesResourceInfo, TikvServerCore},

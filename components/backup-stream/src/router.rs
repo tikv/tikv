@@ -63,12 +63,18 @@ use crate::{
 
 const FLUSH_FAILURE_BECOME_FATAL_THRESHOLD: usize = 30;
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub enum TaskSelector {
     ByName(String),
     ByKey(Vec<u8>),
     ByRange(Vec<u8>, Vec<u8>),
     All,
+}
+
+impl std::fmt::Debug for TaskSelector {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.reference().fmt(f)
+    }
 }
 
 impl TaskSelector {
@@ -82,12 +88,30 @@ impl TaskSelector {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy)]
 pub enum TaskSelectorRef<'a> {
     ByName(&'a str),
     ByKey(&'a [u8]),
     ByRange(&'a [u8], &'a [u8]),
     All,
+}
+
+impl<'a> std::fmt::Debug for TaskSelectorRef<'a> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::ByName(name) => f.debug_tuple("ByName").field(name).finish(),
+            Self::ByKey(key) => f
+                .debug_tuple("ByKey")
+                .field(&format_args!("{}", utils::redact(key)))
+                .finish(),
+            Self::ByRange(start, end) => f
+                .debug_tuple("ByRange")
+                .field(&format_args!("{}", utils::redact(start)))
+                .field(&format_args!("{}", utils::redact(end)))
+                .finish(),
+            Self::All => write!(f, "All"),
+        }
+    }
 }
 
 impl<'a> TaskSelectorRef<'a> {

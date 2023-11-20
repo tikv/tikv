@@ -996,6 +996,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "coarsetime"
+version = "0.1.33"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "71367d3385c716342014ad17e3d19f7788ae514885a1f4c24f500260fb365e1a"
+dependencies = [
+ "libc 0.2.146",
+ "once_cell",
+ "wasi 0.11.0+wasi-snapshot-preview1",
+ "wasm-bindgen",
+]
+
+[[package]]
 name = "codec"
 version = "0.0.1"
 dependencies = [
@@ -5211,8 +5223,6 @@ dependencies = [
  "tikv_util",
  "tokio",
  "toml",
- "tracing-active-tree",
- "tracing-subscriber",
  "txn_types",
  "yatp",
 ]
@@ -6549,6 +6559,8 @@ dependencies = [
  "tikv_util",
  "time 0.1.42",
  "toml",
+ "tracing-active-tree",
+ "tracing-subscriber",
 ]
 
 [[package]]
@@ -6875,6 +6887,7 @@ name = "tracing-active-tree"
 version = "0.1.0"
 source = "git+https://github.com/tikv/tracing-active-tree.git?rev=a71f8f8148f88ab759deb6d3e1d62d07ab218347#a71f8f8148f88ab759deb6d3e1d62d07ab218347"
 dependencies = [
+ "coarsetime",
  "dashmap",
  "indextree",
  "lazy_static",
