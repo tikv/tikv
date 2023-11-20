@@ -996,13 +996,6 @@ mod tests {
 
             assert_eq!(output, expected, "lhs={:?}, rhs={:?}", lhs, rhs);
         }
-
-        let output: Option<Int> = RpnFnScalarEvaluator::new()
-            .push_param(Decimal::from(1_u64))
-            .push_param(Decimal::from_f64(-2_f64).unwrap())
-            .evaluate(ScalarFuncSig::IntDivideDecimal)
-            .unwrap();
-        assert_eq!(output, Some(0));
     }
 
     #[test]
@@ -1013,7 +1006,6 @@ mod tests {
                 Decimal::from(i64::MAX),
                 Decimal::from_bytes(b"0.1").unwrap().unwrap(),
             ),
-            (Decimal::from(1_u64), Decimal::from_f64(-1_f64).unwrap()),
         ];
 
         for (lhs, rhs) in test_cases {
@@ -1024,6 +1016,36 @@ mod tests {
 
             assert!(output.is_err(), "lhs={:?}, rhs={:?}", lhs, rhs);
         }
+
+
+    }
+
+    #[test]
+    fn test_int_divide_decimal_unsigned_overflow() {
+        let lft = FieldTypeBuilder::new()
+            .tp(FieldTypeTp::NewDecimal)
+            .flag(FieldTypeFlag::UNSIGNED).build();
+        let rft = FieldTypeBuilder::new()
+            .tp(FieldTypeTp::NewDecimal)
+            .flag(FieldTypeFlag::UNSIGNED).build();
+        let output: Option<Int> = RpnFnScalarEvaluator::new()
+            .push_param_with_field_type(Decimal::from(1), lft)
+            .push_param_with_field_type(Decimal::from_f64(-2_f64).unwrap(), rft)
+            .evaluate(ScalarFuncSig::IntDivideDecimal)
+            .unwrap();
+        assert_eq!(output, Some(0));
+
+        let lft = FieldTypeBuilder::new()
+            .tp(FieldTypeTp::NewDecimal)
+            .flag(FieldTypeFlag::UNSIGNED).build();
+        let rft = FieldTypeBuilder::new()
+            .tp(FieldTypeTp::NewDecimal)
+            .flag(FieldTypeFlag::UNSIGNED).build();
+        let output: Result<Option<Int>> = RpnFnScalarEvaluator::new()
+            .push_param_with_field_type(Decimal::from(1), lft)
+            .push_param_with_field_type(Decimal::from_f64(-1_f64).unwrap(), rft)
+            .evaluate(ScalarFuncSig::IntDivideDecimal);
+        assert!(output.is_err());
     }
 
     #[test]
