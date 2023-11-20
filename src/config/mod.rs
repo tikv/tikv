@@ -148,6 +148,7 @@ pub struct TitanCfConfig {
     #[online_config(skip)]
     #[doc(hidden)]
     #[serde(skip_serializing)]
+    #[deprecated = "Titan doesn't need to sample anymore"]
     pub sample_ratio: Option<f64>,
     #[online_config(skip)]
     pub merge_small_file_threshold: ReadableSize,
@@ -158,18 +159,24 @@ pub struct TitanCfConfig {
     pub range_merge: bool,
     #[online_config(skip)]
     pub max_sorted_runs: i32,
-    // deprecated.
     #[online_config(skip)]
     #[doc(hidden)]
     #[serde(skip_serializing)]
+    #[deprecated = "The feature is removed"]
     pub gc_merge_rewrite: bool,
 }
 
 impl Default for TitanCfConfig {
+    #[allow(deprecated)]
     fn default() -> Self {
         Self {
             min_blob_size: ReadableSize::kb(1), // disable titan default
+<<<<<<< HEAD
             blob_file_compression: CompressionType::Lz4,
+=======
+            blob_file_compression: CompressionType::Zstd,
+            zstd_dict_size: ReadableSize::kb(0),
+>>>>>>> eb7b143771 (titan: update titan to fix incorrect blob file size and change default value (#16020))
             blob_cache_size: ReadableSize::mb(0),
             min_gc_batch_size: ReadableSize::mb(16),
             max_gc_batch_size: ReadableSize::mb(64),
@@ -202,6 +209,7 @@ impl TitanCfConfig {
         opts
     }
 
+    #[allow(deprecated)]
     fn validate(&self) -> Result<(), Box<dyn Error>> {
         if self.gc_merge_rewrite {
             return Err(
@@ -1199,7 +1207,7 @@ impl Default for TitanDbConfig {
             enabled: false,
             dirname: "".to_owned(),
             disable_gc: false,
-            max_background_gc: 4,
+            max_background_gc: 1,
             purge_obsolete_files_period: ReadableDuration::secs(10),
         }
     }
