@@ -169,6 +169,7 @@ pub struct TitanCfConfig {
 }
 
 impl Default for TitanCfConfig {
+    #[allow(deprecated)]
     fn default() -> Self {
         Self {
             min_blob_size: ReadableSize::kb(1), // disable titan default
@@ -215,6 +216,7 @@ impl TitanCfConfig {
         opts
     }
 
+    #[allow(deprecated)]
     fn validate(&self) -> Result<(), Box<dyn Error>> {
         if self.gc_merge_rewrite {
             return Err(
