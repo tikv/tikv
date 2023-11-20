@@ -149,7 +149,7 @@ where
         update_lower_bound(&mut iter_opt, &self.region);
         update_upper_bound(&mut iter_opt, &self.region);
 
-        let iter = if self.memory_snapshot.is_none() || cf == CF_LOCK {
+        let iter = if self.memory_snapshot.is_none() {
             let iter = self
                 .snap
                 .iterator_opt(cf, iter_opt.clone())

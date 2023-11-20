@@ -372,10 +372,23 @@ mod test {
             1,
             [
                 vec![
-                    (key_with_ts(b"zkkkkk1", 1), Bytes::from(b"val1".to_vec())),
-                    (key_with_ts(b"zkkkkk1", 2), Bytes::from(b"val2".to_vec())),
-                    (key_with_ts(b"zkkkkk2", 3), Bytes::from(b"val3".to_vec())),
-                    (key_with_ts(b"zkkkkk3", 4), Bytes::from(b"val4".to_vec())),
+                    (
+                        key_with_ts(b"zkkkkk1", 1),
+                        ValueType::Put(Bytes::from(b"val1".to_vec())),
+                    ),
+                    (
+                        key_with_ts(b"zkkkkk1", 2),
+                        ValueType::Put(Bytes::from(b"val2".to_vec())),
+                    ),
+                    (
+                        key_with_ts(b"zkkkkk2", 3),
+                        ValueType::Put(Bytes::from(b"val3".to_vec())),
+                    ),
+                    (
+                        key_with_ts(b"zkkkkk3", 4),
+                        ValueType::Put(Bytes::from(b"val4".to_vec())),
+                    ),
+                    (key_with_ts(b"zkkkkk2", 3), ValueType::Delete),
                 ],
                 vec![],
                 vec![],

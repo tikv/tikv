@@ -681,6 +681,10 @@ mod tests {
             let value = Bytes::from(format!("value{:03}", i));
             sklist.put(key, value);
         }
+
+        let res = sklist.get(b"key008");
+        println!("{:?}", res);
+
         for i in 7..15 {
             let key = Bytes::from(format!("key{:03}", i));
             sklist.remove(key);
@@ -696,6 +700,10 @@ mod tests {
             count += 1;
         }
         assert!(count == 12);
+
+        let res = sklist.remove(Bytes::from(b"key008".to_vec()));
+        let res = sklist.get(b"key008");
+        println!("{:?}", res);
     }
 
     #[test]
