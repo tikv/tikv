@@ -9,10 +9,11 @@ use kvproto::{
 };
 use test_raftstore::{
     configure_for_lease_read, must_kv_commit, must_kv_have_locks, must_kv_prewrite,
-    must_kv_prewrite_with, must_new_cluster_and_kv_client, must_new_cluster_mul,
-    new_server_cluster, try_kv_prewrite_with, try_kv_prewrite_with_impl,
+    must_kv_prewrite_with, must_new_cluster_mul, new_server_cluster, try_kv_prewrite_with,
+    try_kv_prewrite_with_impl,
 };
 use test_raftstore_macro::test_case;
+use tikv_util::{config::ReadableDuration, HandyRwLock};
 
 #[test_case(test_raftstore::must_new_cluster_and_kv_client)]
 #[test_case(test_raftstore_v2::must_new_cluster_and_kv_client)]
@@ -114,6 +115,7 @@ fn test_undetermined_write_err() {
     // The previous panic hasn't been captured.
     assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(cluster))).is_err());
 }
+
 #[test]
 fn test_stale_read_on_local_leader() {
     let mut cluster = new_server_cluster(0, 1);
