@@ -53433,6 +53433,929 @@
       "transformations": [],
       "transparent": false,
       "type": "row"
+    },
+    {
+      "cacheTimeout": null,
+      "collapsed": true,
+      "datasource": null,
+      "description": null,
+      "editable": true,
+      "error": false,
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": []
+          }
+        }
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "height": null,
+      "hideTimeOverride": false,
+      "id": 386,
+      "interval": null,
+      "links": [],
+      "maxDataPoints": 100,
+      "maxPerRow": null,
+      "minSpan": null,
+      "panels": [
+        {
+          "aliasColors": {},
+          "bars": false,
+          "cacheTimeout": null,
+          "datasource": "${DS_TEST-CLUSTER}",
+          "description": "Total number of encryption data keys in use",
+          "editable": true,
+          "error": false,
+          "fieldConfig": {
+            "defaults": {
+              "thresholds": {
+                "mode": "absolute",
+                "steps": []
+              }
+            }
+          },
+          "fill": 1,
+          "fillGradient": 1,
+          "grid": {
+            "threshold1": null,
+            "threshold1Color": "rgba(216, 200, 27, 0.27)",
+            "threshold2": null,
+            "threshold2Color": "rgba(234, 112, 112, 0.22)"
+          },
+          "gridPos": {
+            "h": 7,
+            "w": 12,
+            "x": 0,
+            "y": 0
+          },
+          "height": null,
+          "hideTimeOverride": false,
+          "id": 387,
+          "interval": null,
+          "isNew": true,
+          "legend": {
+            "alignAsTable": true,
+            "avg": false,
+            "current": true,
+            "hideEmpty": true,
+            "hideZero": true,
+            "max": true,
+            "min": false,
+            "rightSide": true,
+            "show": true,
+            "sideWidth": null,
+            "sort": "max",
+            "sortDesc": true,
+            "total": false,
+            "values": true
+          },
+          "lines": true,
+          "linewidth": 1,
+          "links": [],
+          "maxDataPoints": null,
+          "maxPerRow": null,
+          "minSpan": null,
+          "nullPointMode": "null",
+          "options": {
+            "alertThreshold": true,
+            "dataLinks": []
+          },
+          "percentage": false,
+          "pointradius": 5,
+          "points": false,
+          "renderer": "flot",
+          "repeat": null,
+          "repeatDirection": null,
+          "seriesOverrides": [],
+          "span": null,
+          "stack": false,
+          "steppedLine": false,
+          "targets": [
+            {
+              "datasource": "${DS_TEST-CLUSTER}",
+              "expr": "sum((\n    tikv_encryption_data_key_storage_total\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n)) by (instance) ",
+              "format": "time_series",
+              "hide": false,
+              "instant": false,
+              "interval": "",
+              "intervalFactor": 1,
+              "legendFormat": "{{instance}}",
+              "metric": "",
+              "query": "sum((\n    tikv_encryption_data_key_storage_total\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n)) by (instance) ",
+              "refId": "",
+              "step": 10,
+              "target": ""
+            }
+          ],
+          "thresholds": [],
+          "timeFrom": null,
+          "timeShift": null,
+          "title": "Encryption data keys",
+          "tooltip": {
+            "msResolution": true,
+            "shared": true,
+            "sort": 0,
+            "value_type": "individual"
+          },
+          "transformations": [],
+          "transparent": false,
+          "type": "graph",
+          "xaxis": {
+            "mode": "time",
+            "name": null,
+            "show": true,
+            "values": []
+          },
+          "yaxes": [
+            {
+              "decimals": null,
+              "format": "none",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            },
+            {
+              "decimals": null,
+              "format": "short",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            }
+          ],
+          "yaxis": {
+            "align": false,
+            "alignLevel": 0
+          }
+        },
+        {
+          "aliasColors": {},
+          "bars": false,
+          "cacheTimeout": null,
+          "datasource": "${DS_TEST-CLUSTER}",
+          "description": "Number of files being encrypted",
+          "editable": true,
+          "error": false,
+          "fieldConfig": {
+            "defaults": {
+              "thresholds": {
+                "mode": "absolute",
+                "steps": []
+              }
+            }
+          },
+          "fill": 1,
+          "fillGradient": 1,
+          "grid": {
+            "threshold1": null,
+            "threshold1Color": "rgba(216, 200, 27, 0.27)",
+            "threshold2": null,
+            "threshold2Color": "rgba(234, 112, 112, 0.22)"
+          },
+          "gridPos": {
+            "h": 7,
+            "w": 12,
+            "x": 12,
+            "y": 0
+          },
+          "height": null,
+          "hideTimeOverride": false,
+          "id": 388,
+          "interval": null,
+          "isNew": true,
+          "legend": {
+            "alignAsTable": true,
+            "avg": false,
+            "current": true,
+            "hideEmpty": true,
+            "hideZero": true,
+            "max": true,
+            "min": false,
+            "rightSide": true,
+            "show": true,
+            "sideWidth": null,
+            "sort": "max",
+            "sortDesc": true,
+            "total": false,
+            "values": true
+          },
+          "lines": true,
+          "linewidth": 1,
+          "links": [],
+          "maxDataPoints": null,
+          "maxPerRow": null,
+          "minSpan": null,
+          "nullPointMode": "null",
+          "options": {
+            "alertThreshold": true,
+            "dataLinks": []
+          },
+          "percentage": false,
+          "pointradius": 5,
+          "points": false,
+          "renderer": "flot",
+          "repeat": null,
+          "repeatDirection": null,
+          "seriesOverrides": [],
+          "span": null,
+          "stack": false,
+          "steppedLine": false,
+          "targets": [
+            {
+              "datasource": "${DS_TEST-CLUSTER}",
+              "expr": "sum((\n    tikv_encryption_file_num\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n)) by (instance) ",
+              "format": "time_series",
+              "hide": false,
+              "instant": false,
+              "interval": "",
+              "intervalFactor": 1,
+              "legendFormat": "{{instance}}",
+              "metric": "",
+              "query": "sum((\n    tikv_encryption_file_num\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n)) by (instance) ",
+              "refId": "",
+              "step": 10,
+              "target": ""
+            }
+          ],
+          "thresholds": [],
+          "timeFrom": null,
+          "timeShift": null,
+          "title": "Encrypted files",
+          "tooltip": {
+            "msResolution": true,
+            "shared": true,
+            "sort": 0,
+            "value_type": "individual"
+          },
+          "transformations": [],
+          "transparent": false,
+          "type": "graph",
+          "xaxis": {
+            "mode": "time",
+            "name": null,
+            "show": true,
+            "values": []
+          },
+          "yaxes": [
+            {
+              "decimals": null,
+              "format": "none",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            },
+            {
+              "decimals": null,
+              "format": "short",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            }
+          ],
+          "yaxis": {
+            "align": false,
+            "alignLevel": 0
+          }
+        },
+        {
+          "aliasColors": {},
+          "bars": false,
+          "cacheTimeout": null,
+          "datasource": "${DS_TEST-CLUSTER}",
+          "description": "Flag to indicate if encryption is initialized",
+          "editable": true,
+          "error": false,
+          "fieldConfig": {
+            "defaults": {
+              "thresholds": {
+                "mode": "absolute",
+                "steps": []
+              }
+            }
+          },
+          "fill": 1,
+          "fillGradient": 1,
+          "grid": {
+            "threshold1": null,
+            "threshold1Color": "rgba(216, 200, 27, 0.27)",
+            "threshold2": null,
+            "threshold2Color": "rgba(234, 112, 112, 0.22)"
+          },
+          "gridPos": {
+            "h": 7,
+            "w": 12,
+            "x": 0,
+            "y": 7
+          },
+          "height": null,
+          "hideTimeOverride": false,
+          "id": 389,
+          "interval": null,
+          "isNew": true,
+          "legend": {
+            "alignAsTable": true,
+            "avg": false,
+            "current": true,
+            "hideEmpty": true,
+            "hideZero": true,
+            "max": true,
+            "min": false,
+            "rightSide": true,
+            "show": true,
+            "sideWidth": null,
+            "sort": "max",
+            "sortDesc": true,
+            "total": false,
+            "values": true
+          },
+          "lines": true,
+          "linewidth": 1,
+          "links": [],
+          "maxDataPoints": null,
+          "maxPerRow": null,
+          "minSpan": null,
+          "nullPointMode": "null",
+          "options": {
+            "alertThreshold": true,
+            "dataLinks": []
+          },
+          "percentage": false,
+          "pointradius": 5,
+          "points": false,
+          "renderer": "flot",
+          "repeat": null,
+          "repeatDirection": null,
+          "seriesOverrides": [],
+          "span": null,
+          "stack": false,
+          "steppedLine": false,
+          "targets": [
+            {
+              "datasource": "${DS_TEST-CLUSTER}",
+              "expr": "((\n    tikv_encryption_is_initialized\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n))  ",
+              "format": "time_series",
+              "hide": false,
+              "instant": false,
+              "interval": "",
+              "intervalFactor": 1,
+              "legendFormat": "{{instance}}",
+              "metric": "",
+              "query": "((\n    tikv_encryption_is_initialized\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n))  ",
+              "refId": "",
+              "step": 10,
+              "target": ""
+            }
+          ],
+          "thresholds": [],
+          "timeFrom": null,
+          "timeShift": null,
+          "title": "Encryption initialized",
+          "tooltip": {
+            "msResolution": true,
+            "shared": true,
+            "sort": 0,
+            "value_type": "individual"
+          },
+          "transformations": [],
+          "transparent": false,
+          "type": "graph",
+          "xaxis": {
+            "mode": "time",
+            "name": null,
+            "show": true,
+            "values": []
+          },
+          "yaxes": [
+            {
+              "decimals": null,
+              "format": "none",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            },
+            {
+              "decimals": null,
+              "format": "short",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            }
+          ],
+          "yaxis": {
+            "align": false,
+            "alignLevel": 0
+          }
+        },
+        {
+          "aliasColors": {},
+          "bars": false,
+          "cacheTimeout": null,
+          "datasource": "${DS_TEST-CLUSTER}",
+          "description": "Total size of encryption meta files",
+          "editable": true,
+          "error": false,
+          "fieldConfig": {
+            "defaults": {
+              "thresholds": {
+                "mode": "absolute",
+                "steps": []
+              }
+            }
+          },
+          "fill": 1,
+          "fillGradient": 1,
+          "grid": {
+            "threshold1": null,
+            "threshold1Color": "rgba(216, 200, 27, 0.27)",
+            "threshold2": null,
+            "threshold2Color": "rgba(234, 112, 112, 0.22)"
+          },
+          "gridPos": {
+            "h": 7,
+            "w": 12,
+            "x": 12,
+            "y": 7
+          },
+          "height": null,
+          "hideTimeOverride": false,
+          "id": 390,
+          "interval": null,
+          "isNew": true,
+          "legend": {
+            "alignAsTable": true,
+            "avg": false,
+            "current": true,
+            "hideEmpty": true,
+            "hideZero": true,
+            "max": true,
+            "min": false,
+            "rightSide": true,
+            "show": true,
+            "sideWidth": null,
+            "sort": "max",
+            "sortDesc": true,
+            "total": false,
+            "values": true
+          },
+          "lines": true,
+          "linewidth": 1,
+          "links": [],
+          "maxDataPoints": null,
+          "maxPerRow": null,
+          "minSpan": null,
+          "nullPointMode": "null",
+          "options": {
+            "alertThreshold": true,
+            "dataLinks": []
+          },
+          "percentage": false,
+          "pointradius": 5,
+          "points": false,
+          "renderer": "flot",
+          "repeat": null,
+          "repeatDirection": null,
+          "seriesOverrides": [],
+          "span": null,
+          "stack": false,
+          "steppedLine": false,
+          "targets": [
+            {
+              "datasource": "${DS_TEST-CLUSTER}",
+              "expr": "((\n    tikv_encryption_meta_file_size_bytes\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n))  ",
+              "format": "time_series",
+              "hide": false,
+              "instant": false,
+              "interval": "",
+              "intervalFactor": 1,
+              "legendFormat": "{{name}}-{{instance}}",
+              "metric": "",
+              "query": "((\n    tikv_encryption_meta_file_size_bytes\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n))  ",
+              "refId": "",
+              "step": 10,
+              "target": ""
+            }
+          ],
+          "thresholds": [],
+          "timeFrom": null,
+          "timeShift": null,
+          "title": "Encryption meta files size",
+          "tooltip": {
+            "msResolution": true,
+            "shared": true,
+            "sort": 0,
+            "value_type": "individual"
+          },
+          "transformations": [],
+          "transparent": false,
+          "type": "graph",
+          "xaxis": {
+            "mode": "time",
+            "name": null,
+            "show": true,
+            "values": []
+          },
+          "yaxes": [
+            {
+              "decimals": null,
+              "format": "bytes",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            },
+            {
+              "decimals": null,
+              "format": "short",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            }
+          ],
+          "yaxis": {
+            "align": false,
+            "alignLevel": 0
+          }
+        },
+        {
+          "aliasColors": {},
+          "bars": false,
+          "cacheTimeout": null,
+          "datasource": "${DS_TEST-CLUSTER}",
+          "description": "",
+          "editable": true,
+          "error": false,
+          "fieldConfig": {
+            "defaults": {
+              "thresholds": {
+                "mode": "absolute",
+                "steps": []
+              }
+            }
+          },
+          "fill": 1,
+          "fillGradient": 1,
+          "grid": {
+            "threshold1": null,
+            "threshold1Color": "rgba(216, 200, 27, 0.27)",
+            "threshold2": null,
+            "threshold2Color": "rgba(234, 112, 112, 0.22)"
+          },
+          "gridPos": {
+            "h": 7,
+            "w": 12,
+            "x": 0,
+            "y": 14
+          },
+          "height": null,
+          "hideTimeOverride": false,
+          "id": 391,
+          "interval": null,
+          "isNew": true,
+          "legend": {
+            "alignAsTable": true,
+            "avg": false,
+            "current": true,
+            "hideEmpty": true,
+            "hideZero": true,
+            "max": true,
+            "min": false,
+            "rightSide": true,
+            "show": true,
+            "sideWidth": null,
+            "sort": "max",
+            "sortDesc": true,
+            "total": false,
+            "values": true
+          },
+          "lines": true,
+          "linewidth": 1,
+          "links": [],
+          "maxDataPoints": null,
+          "maxPerRow": null,
+          "minSpan": null,
+          "nullPointMode": "null",
+          "options": {
+            "alertThreshold": true,
+            "dataLinks": []
+          },
+          "percentage": false,
+          "pointradius": 5,
+          "points": false,
+          "renderer": "flot",
+          "repeat": null,
+          "repeatDirection": null,
+          "seriesOverrides": [],
+          "span": null,
+          "stack": false,
+          "steppedLine": false,
+          "targets": [
+            {
+              "datasource": "${DS_TEST-CLUSTER}",
+              "expr": "sum(rate(\n    tikv_coprocessor_rocksdb_perf\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",metric=\"encrypt_data_nanos\"}\n    [$__rate_interval]\n)) by (req) ",
+              "format": "time_series",
+              "hide": false,
+              "instant": false,
+              "interval": "",
+              "intervalFactor": 1,
+              "legendFormat": "encrypt-{{req}}",
+              "metric": "",
+              "query": "sum(rate(\n    tikv_coprocessor_rocksdb_perf\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",metric=\"encrypt_data_nanos\"}\n    [$__rate_interval]\n)) by (req) ",
+              "refId": "",
+              "step": 10,
+              "target": ""
+            },
+            {
+              "datasource": "${DS_TEST-CLUSTER}",
+              "expr": "sum(rate(\n    tikv_coprocessor_rocksdb_perf\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",metric=\"decrypt_data_nanos\"}\n    [$__rate_interval]\n)) by (req) ",
+              "format": "time_series",
+              "hide": false,
+              "instant": false,
+              "interval": "",
+              "intervalFactor": 1,
+              "legendFormat": "decrypt-{{req}}",
+              "metric": "",
+              "query": "sum(rate(\n    tikv_coprocessor_rocksdb_perf\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",metric=\"decrypt_data_nanos\"}\n    [$__rate_interval]\n)) by (req) ",
+              "refId": "",
+              "step": 10,
+              "target": ""
+            }
+          ],
+          "thresholds": [],
+          "timeFrom": null,
+          "timeShift": null,
+          "title": "Encrypt/decrypt data nanos",
+          "tooltip": {
+            "msResolution": true,
+            "shared": true,
+            "sort": 0,
+            "value_type": "individual"
+          },
+          "transformations": [],
+          "transparent": false,
+          "type": "graph",
+          "xaxis": {
+            "mode": "time",
+            "name": null,
+            "show": true,
+            "values": []
+          },
+          "yaxes": [
+            {
+              "decimals": null,
+              "format": "none",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            },
+            {
+              "decimals": null,
+              "format": "short",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            }
+          ],
+          "yaxis": {
+            "align": false,
+            "alignLevel": 0
+          }
+        },
+        {
+          "aliasColors": {},
+          "bars": false,
+          "cacheTimeout": null,
+          "datasource": "${DS_TEST-CLUSTER}",
+          "description": "Writing or reading file duration (second)",
+          "editable": true,
+          "error": false,
+          "fieldConfig": {
+            "defaults": {
+              "thresholds": {
+                "mode": "absolute",
+                "steps": []
+              }
+            }
+          },
+          "fill": 1,
+          "fillGradient": 1,
+          "grid": {
+            "threshold1": null,
+            "threshold1Color": "rgba(216, 200, 27, 0.27)",
+            "threshold2": null,
+            "threshold2Color": "rgba(234, 112, 112, 0.22)"
+          },
+          "gridPos": {
+            "h": 7,
+            "w": 12,
+            "x": 12,
+            "y": 14
+          },
+          "height": null,
+          "hideTimeOverride": false,
+          "id": 392,
+          "interval": null,
+          "isNew": true,
+          "legend": {
+            "alignAsTable": true,
+            "avg": false,
+            "current": true,
+            "hideEmpty": true,
+            "hideZero": true,
+            "max": true,
+            "min": false,
+            "rightSide": true,
+            "show": true,
+            "sideWidth": null,
+            "sort": "max",
+            "sortDesc": true,
+            "total": false,
+            "values": true
+          },
+          "lines": true,
+          "linewidth": 1,
+          "links": [],
+          "maxDataPoints": null,
+          "maxPerRow": null,
+          "minSpan": null,
+          "nullPointMode": "null",
+          "options": {
+            "alertThreshold": true,
+            "dataLinks": []
+          },
+          "percentage": false,
+          "pointradius": 5,
+          "points": false,
+          "renderer": "flot",
+          "repeat": null,
+          "repeatDirection": null,
+          "seriesOverrides": [
+            {
+              "alias": "count",
+              "bars": false,
+              "dashLength": 1,
+              "dashes": true,
+              "fill": 2,
+              "fillBelowTo": null,
+              "lines": true,
+              "spaceLength": 1,
+              "transform": "negative-Y",
+              "yaxis": 2,
+              "zindex": -3
+            },
+            {
+              "alias": "avg",
+              "bars": false,
+              "fill": 7,
+              "fillBelowTo": null,
+              "lines": true,
+              "yaxis": 1,
+              "zindex": 0
+            }
+          ],
+          "span": null,
+          "stack": false,
+          "steppedLine": false,
+          "targets": [
+            {
+              "datasource": "${DS_TEST-CLUSTER}",
+              "expr": "histogram_quantile(0.9999,(\n    sum(rate(\n    tikv_encryption_write_read_file_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) \n    \n    \n))  ",
+              "format": "time_series",
+              "hide": false,
+              "instant": false,
+              "interval": "",
+              "intervalFactor": 1,
+              "legendFormat": "99.99%",
+              "metric": "",
+              "query": "histogram_quantile(0.9999,(\n    sum(rate(\n    tikv_encryption_write_read_file_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) \n    \n    \n))  ",
+              "refId": "",
+              "step": 10,
+              "target": ""
+            },
+            {
+              "datasource": "${DS_TEST-CLUSTER}",
+              "expr": "histogram_quantile(0.99,(\n    sum(rate(\n    tikv_encryption_write_read_file_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) \n    \n    \n))  ",
+              "format": "time_series",
+              "hide": false,
+              "instant": false,
+              "interval": "",
+              "intervalFactor": 1,
+              "legendFormat": "99%",
+              "metric": "",
+              "query": "histogram_quantile(0.99,(\n    sum(rate(\n    tikv_encryption_write_read_file_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) \n    \n    \n))  ",
+              "refId": "",
+              "step": 10,
+              "target": ""
+            },
+            {
+              "datasource": "${DS_TEST-CLUSTER}",
+              "expr": "(sum(rate(\n    tikv_encryption_write_read_file_duration_seconds_sum\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n))   / sum(rate(\n    tikv_encryption_write_read_file_duration_seconds_count\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n))  )",
+              "format": "time_series",
+              "hide": false,
+              "instant": false,
+              "interval": "",
+              "intervalFactor": 1,
+              "legendFormat": "avg",
+              "metric": "",
+              "query": "(sum(rate(\n    tikv_encryption_write_read_file_duration_seconds_sum\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n))   / sum(rate(\n    tikv_encryption_write_read_file_duration_seconds_count\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n))  )",
+              "refId": "",
+              "step": 10,
+              "target": ""
+            },
+            {
+              "datasource": "${DS_TEST-CLUSTER}",
+              "expr": "sum(rate(\n    tikv_encryption_write_read_file_duration_seconds_count\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n))  ",
+              "format": "time_series",
+              "hide": true,
+              "instant": false,
+              "interval": "",
+              "intervalFactor": 1,
+              "legendFormat": "count",
+              "metric": "",
+              "query": "sum(rate(\n    tikv_encryption_write_read_file_duration_seconds_count\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n))  ",
+              "refId": "",
+              "step": 10,
+              "target": ""
+            }
+          ],
+          "thresholds": [],
+          "timeFrom": null,
+          "timeShift": null,
+          "title": "Read/write encryption meta duration",
+          "tooltip": {
+            "msResolution": true,
+            "shared": true,
+            "sort": 0,
+            "value_type": "individual"
+          },
+          "transformations": [],
+          "transparent": false,
+          "type": "graph",
+          "xaxis": {
+            "mode": "time",
+            "name": null,
+            "show": true,
+            "values": []
+          },
+          "yaxes": [
+            {
+              "decimals": null,
+              "format": "s",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            },
+            {
+              "decimals": null,
+              "format": "short",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            }
+          ],
+          "yaxis": {
+            "align": false,
+            "alignLevel": 0
+          }
+        }
+      ],
+      "repeat": null,
+      "repeatDirection": null,
+      "span": null,
+      "targets": [],
+      "timeFrom": null,
+      "timeShift": null,
+      "title": "Encryption",
+      "transformations": [],
+      "transparent": false,
+      "type": "row"
     }
   ],
   "refresh": "1m",

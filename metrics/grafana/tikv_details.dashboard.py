@@ -8026,7 +8026,100 @@ def BackupImport() -> RowPanel:
 
 def Encryption() -> RowPanel:
     layout = Layout(title="Encryption")
-    layout.row([])
+    layout.row(
+        [
+            graph_panel(
+                title="Encryption data keys",
+                description="Total number of encryption data keys in use",
+                targets=[
+                    target(
+                        expr=expr_sum(
+                            "tikv_encryption_data_key_storage_total",
+                        ),
+                        legend_format="{{instance}}",
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="Encrypted files",
+                description="Number of files being encrypted",
+                targets=[
+                    target(
+                        expr=expr_sum(
+                            "tikv_encryption_file_num",
+                        ),
+                        legend_format="{{instance}}",
+                    ),
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel(
+                title="Encryption initialized",
+                description="Flag to indicate if encryption is initialized",
+                targets=[
+                    target(
+                        expr=expr_simple(
+                            "tikv_encryption_is_initialized",
+                        ),
+                        legend_format="{{instance}}",
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="Encryption meta files size",
+                description="Total size of encryption meta files",
+                yaxes=yaxes(left_format=UNITS.BYTES_IEC),
+                targets=[
+                    target(
+                        expr=expr_simple(
+                            "tikv_encryption_meta_file_size_bytes",
+                        ),
+                        legend_format="{{name}}-{{instance}}",
+                    ),
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel(
+                title="Encrypt/decrypt data nanos",
+                description="",
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_coprocessor_rocksdb_perf",
+                            label_selectors=[
+                                'metric="encrypt_data_nanos"',
+                            ],
+                            by_labels=["req"],
+                        ),
+                        legend_format="encrypt-{{req}}",
+                    ),
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_coprocessor_rocksdb_perf",
+                            label_selectors=[
+                                'metric="decrypt_data_nanos"',
+                            ],
+                            by_labels=["req"],
+                        ),
+                        legend_format="decrypt-{{req}}",
+                    ),
+                ],
+            ),
+            graph_panel_histogram_quantiles(
+                title="Read/write encryption meta duration",
+                description="Writing or reading file duration (second)",
+                yaxes=yaxes(left_format=UNITS.SECONDS),
+                metric="tikv_encryption_write_read_file_duration_seconds",
+                hide_count=True,
+            ),
+        ]
+    )
     return layout.row_panel
 
 
@@ -8091,7 +8184,7 @@ dashboard = Dashboard(
         ResolvedTS(),
         Memory(),
         # BackupImport(),
-        # Encryption(),
+        Encryption(),
         # BackupLog(),
         # SlowTrendStatistics(),
     ],
