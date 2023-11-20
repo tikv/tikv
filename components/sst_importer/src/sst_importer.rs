@@ -515,7 +515,6 @@ impl SstImporter {
         cache_key: &str,
         restore_config: external_storage_export::RestoreConfig,
     ) -> Result<()> {
-        let start_read = Instant::now();
         if let Some(p) = dst_file.parent() {
             file_system::create_dir_all(p).or_else(|e| {
                 if e.kind() == io::ErrorKind::AlreadyExists {
@@ -529,6 +528,7 @@ impl SstImporter {
         let ext_storage = self.external_storage_or_cache(backend, cache_key)?;
         let ext_storage = self.wrap_kms(ext_storage, support_kms);
 
+        let start_read = Instant::now();
         let result = ext_storage
             .restore(
                 src_file_name,
@@ -538,6 +538,10 @@ impl SstImporter {
                 restore_config,
             )
             .await;
+        IMPORTER_DOWNLOAD_DURATION
+            .with_label_values(&["read"])
+            .observe(start_read.saturating_elapsed().as_secs_f64());
+
         IMPORTER_DOWNLOAD_BYTES.observe(file_length as _);
         result.map_err(|e| Error::CannotReadExternalStorage {
             url: util::url_for(&ext_storage),
@@ -550,10 +554,6 @@ impl SstImporter {
             .append(true)
             .open(dst_file)?
             .sync_data()?;
-
-        IMPORTER_DOWNLOAD_DURATION
-            .with_label_values(&["read"])
-            .observe(start_read.saturating_elapsed().as_secs_f64());
 
         debug!("downloaded file succeed";
             "name" => src_file_name,

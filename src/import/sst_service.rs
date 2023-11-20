@@ -7,7 +7,7 @@ use std::{
     path::PathBuf,
     sync::{
         atomic::{AtomicU64, Ordering},
-        Arc, Mutex,
+        Arc, Mutex, mpsc,
     },
     time::Duration,
 };
@@ -1048,12 +1048,13 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
     /// Downloads the file and performs key-rewrite for later ingesting.
     fn download(
         &mut self,
-        _ctx: RpcContext<'_>,
+        ctx: RpcContext<'_>,
         req: DownloadRequest,
         sink: UnarySink<DownloadResponse>,
     ) {
         let label = "download";
         let timer = Instant::now_coarse();
+        IMPORT_PENDING_TASKS.with_label_values(&[label]).inc();
         let importer = Arc::clone(&self.importer);
         let limiter = self.limiter.clone();
         let region_id = req.get_sst().get_region_id();
@@ -1068,7 +1069,9 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
             )
         });
 
-        let handle_task = async move {
+        let (tx, rx) = tikv_util::mpsc::unbounded();
+
+        let handle_task = move || {
             // Records how long the download task waits to be scheduled.
             sst_importer::metrics::IMPORTER_DOWNLOAD_DURATION
                 .with_label_values(&["queue"])
@@ -1093,7 +1096,8 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
                     ));
                     let mut resp = DownloadResponse::default();
                     resp.set_error(error.into());
-                    return crate::send_rpc_response!(Ok(resp), sink, label, timer);
+                    tx.send(resp);
+                    return
                 }
             };
 
@@ -1113,17 +1117,22 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
                 resource_limiter,
             );
             let mut resp = DownloadResponse::default();
-            match res.await {
+            match futures::executor::block_on(res) {
                 Ok(range) => match range {
                     Some(r) => resp.set_range(r),
                     None => resp.set_is_empty(true),
                 },
                 Err(e) => resp.set_error(e.into()),
             }
-            crate::send_rpc_response!(Ok(resp), sink, label, timer);
+            tx.send(resp);
         };
-
-        self.threads.spawn(handle_task);
+        self.threads.spawn_blocking(handle_task);
+        let send_task = async move {
+            let s = rx.recv().unwrap();
+            sink.success(s).await;
+        };
+        IMPORT_PENDING_TASKS.with_label_values(&[label]).inc_by(-1);
+        ctx.spawn(send_task);
     }
 
     /// Ingest the file by sending a raft command to raftstore.
