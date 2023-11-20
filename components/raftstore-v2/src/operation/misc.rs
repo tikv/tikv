@@ -6,29 +6,12 @@ use std::collections::{
 };
 
 use engine_traits::{KvEngine, RaftEngine, CF_DEFAULT, CF_WRITE};
-<<<<<<< HEAD
 use slog::{debug, error, info};
 
 use crate::{
     fsm::StoreFsmDelegate,
     router::StoreTick,
     worker::cleanup::{self, CompactThreshold},
-=======
-use raftstore::{
-    store::{CompactThreshold, TabletSnapKey},
-    Result,
-};
-use slog::{debug, error, info};
-
-use crate::{
-    batch::StoreContext,
-    fsm::{Store, StoreFsmDelegate},
-    router::{PeerMsg, StoreTick},
-    worker::{
-        cleanup::{self},
-        tablet,
-    },
->>>>>>> c099e482cb (raftstore: consider duplicated mvcc versions when check compact (#15342))
     CompactTask::CheckAndCompact,
 };
 
