@@ -1069,7 +1069,6 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
             )
         });
 
-        let (tx, rx) = tikv_util::mpsc::unbounded();
 
         let handle_task = move || {
             // Records how long the download task waits to be scheduled.
@@ -1096,7 +1095,7 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
                     ));
                     let mut resp = DownloadResponse::default();
                     resp.set_error(error.into());
-                    tx.send(resp);
+                    let _ = sink.success(resp);
                     return
                 }
             };
@@ -1124,14 +1123,10 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
                 },
                 Err(e) => resp.set_error(e.into()),
             }
-            tx.send(resp);
+            let _ = sink.success(resp);
+            IMPORT_PENDING_TASKS.with_label_values(&[label]).dec();
         };
         self.threads.spawn_blocking(handle_task);
-        let resp = rx.recv().unwrap();
-        ctx.spawn(async move{
-            sink.success(resp).await;
-        });
-        IMPORT_PENDING_TASKS.with_label_values(&[label]).dec();
     }
 
     /// Ingest the file by sending a raft command to raftstore.
