@@ -1127,12 +1127,11 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
             tx.send(resp);
         };
         self.threads.spawn_blocking(handle_task);
-        let send_task = async move {
-            let s = rx.recv().unwrap();
-            sink.success(s).await;
-        };
-        IMPORT_PENDING_TASKS.with_label_values(&[label]).inc_by(-1);
-        ctx.spawn(send_task);
+        let resp = rx.recv().unwrap();
+        ctx.spawn(async move{
+            sink.success(resp).await;
+        });
+        IMPORT_PENDING_TASKS.with_label_values(&[label]).dec();
     }
 
     /// Ingest the file by sending a raft command to raftstore.

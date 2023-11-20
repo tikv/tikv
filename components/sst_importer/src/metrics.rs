@@ -3,7 +3,7 @@
 use prometheus::*;
 
 lazy_static! {
-    pub static ref IMPORT_PENDING_TASKS: IntCounterVec = register_int_counter_vec!(
+    pub static ref IMPORT_PENDING_TASKS: IntGaugeVec = register_int_gauge_vec!(
         "tikv_import_pending_tasks",
         "import download pending tasks",
         &["type"],
