@@ -10,7 +10,10 @@ use std::{
     },
     mem,
     ops::{Deref, DerefMut},
-    sync::{atomic::Ordering, Arc, Mutex},
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc, Mutex,
+    },
     time::{Duration, Instant},
     u64,
 };
@@ -58,7 +61,7 @@ use tikv_util::{
     store::{find_peer, region_on_stores},
     sys as sys_util,
     sys::disk::{get_disk_status, DiskUsage},
-    time::{duration_to_sec, Instant as TiInstant},
+    time::{duration_to_sec, monotonic_raw_now, Instant as TiInstant},
     timer::SteadyTimer,
     warn,
     worker::{LazyWorker, Scheduler, Worker},
@@ -463,10 +466,6 @@ where
         self.update_trace();
     }
 
-    pub fn clear_cache(&self) {
-        self.router.clear_cache();
-    }
-
     fn update_trace(&self) {
         let router_trace = self.router.trace();
         MEMTRACE_RAFT_ROUTER_ALIVE.trace(TraceEvent::Reset(router_trace.alive));
@@ -553,11 +552,13 @@ where
     pub pending_count: usize,
     pub ready_count: usize,
     pub has_ready: bool,
+    /// current_time from monotonic_raw_now.
     pub current_time: Option<Timespec>,
+    /// unsafe_vote_deadline from monotonic_raw_now.
+    pub unsafe_vote_deadline: Option<Timespec>,
     pub raft_perf_context: ER::PerfContext,
     pub kv_perf_context: EK::PerfContext,
     pub tick_batch: Vec<PeerTickBatch>,
-    pub node_start_time: Option<TiInstant>,
     /// Disk usage for the store itself.
     pub self_disk_usage: DiskUsage,
 
@@ -568,6 +569,8 @@ where
     pub write_senders: WriteSenders<EK, ER>,
     pub sync_write_worker: Option<WriteWorker<EK, ER, RaftRouter<EK, ER>, T>>,
     pub pending_latency_inspect: Vec<util::LatencyInspector>,
+
+    pub safe_point: Arc<AtomicU64>,
 }
 
 impl<EK, ER, T> PollContext<EK, ER, T>
@@ -610,6 +613,23 @@ where
         self.tick_batch[PeerTick::RequestVoterReplicatedIndex as usize].wait_duration =
             self.cfg.raft_log_gc_tick_interval.0 * 2;
     }
+
+    // Return None means it has passed unsafe vote period.
+    pub fn maybe_in_unsafe_vote_period(&mut self) -> Option<Duration> {
+        if self.cfg.allow_unsafe_vote_after_start {
+            return None;
+        }
+        let deadline = TiInstant::Monotonic(self.unsafe_vote_deadline?);
+        let current_time =
+            TiInstant::Monotonic(*self.current_time.get_or_insert_with(monotonic_raw_now));
+        let remain_duration = deadline.saturating_duration_since(current_time);
+        if remain_duration > Duration::ZERO {
+            Some(remain_duration)
+        } else {
+            self.unsafe_vote_deadline.take();
+            None
+        }
+    }
 }
 
 impl<EK, ER, T: Transport> PollContext<EK, ER, T>
@@ -650,6 +670,8 @@ where
             "region_id" => region_id,
             "current_region_epoch" => ?cur_epoch,
             "msg_type" => ?msg_type,
+            "to_peer_id" => ?from_peer.get_id(),
+            "to_peer_store_id" => ?from_peer.get_store_id(),
         );
 
         self.raft_metrics.message_dropped.stale_msg.inc();
@@ -668,6 +690,8 @@ where
             error!(?e;
                 "send gc message failed";
                 "region_id" => region_id,
+                "to_peer_id" => ?from_peer.get_id(),
+                "to_peer_store_id" => ?from_peer.get_store_id(),
             );
         }
     }
@@ -1173,6 +1197,8 @@ pub struct RaftPollerBuilder<EK: KvEngine, ER: RaftEngine, T> {
     global_replication_state: Arc<Mutex<GlobalReplicationState>>,
     feature_gate: FeatureGate,
     write_senders: WriteSenders<EK, ER>,
+    safe_point: Arc<AtomicU64>,
+    node_start_time: Timespec, // monotonic_raw_now
 }
 
 impl<EK: KvEngine, ER: RaftEngine, T> RaftPollerBuilder<EK, ER, T> {
@@ -1377,6 +1403,14 @@ where
         } else {
             None
         };
+        let election_timeout = self.cfg.value().raft_base_tick_interval.0
+            * if self.cfg.value().raft_min_election_timeout_ticks != 0 {
+                self.cfg.value().raft_min_election_timeout_ticks as u32
+            } else {
+                self.cfg.value().raft_election_timeout_ticks as u32
+            };
+        let unsafe_vote_deadline =
+            Some(self.node_start_time + time::Duration::from_std(election_timeout).unwrap());
         let mut ctx = PollContext {
             cfg: self.cfg.value().clone(),
             store: self.store.clone(),
@@ -1405,6 +1439,7 @@ where
             ready_count: 0,
             has_ready: false,
             current_time: None,
+            unsafe_vote_deadline,
             raft_perf_context: ER::get_perf_context(
                 self.cfg.value().perf_level,
                 PerfContextKind::RaftstoreStore,
@@ -1414,13 +1449,13 @@ where
                 PerfContextKind::RaftstoreStore,
             ),
             tick_batch: vec![PeerTickBatch::default(); PeerTick::VARIANT_COUNT],
-            node_start_time: Some(TiInstant::now_coarse()),
             feature_gate: self.feature_gate.clone(),
             self_disk_usage: DiskUsage::Normal,
             store_disk_usages: Default::default(),
             write_senders: self.write_senders.clone(),
             sync_write_worker,
             pending_latency_inspect: vec![],
+            safe_point: self.safe_point.clone(),
         };
         ctx.update_ticks_timeout();
         let tag = format!("[store {}]", ctx.store.get_id());
@@ -1472,6 +1507,8 @@ where
             global_replication_state: self.global_replication_state.clone(),
             feature_gate: self.feature_gate.clone(),
             write_senders: self.write_senders.clone(),
+            safe_point: self.safe_point.clone(),
+            node_start_time: self.node_start_time,
         }
     }
 }
@@ -1503,6 +1540,7 @@ pub struct RaftBatchSystem<EK: KvEngine, ER: RaftEngine> {
     router: RaftRouter<EK, ER>,
     workers: Option<Workers<EK, ER>>,
     store_writers: StoreWriters<EK, ER>,
+    node_start_time: Timespec, // monotonic_raw_now
 }
 
 impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
@@ -1544,6 +1582,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         collector_reg_handle: CollectorRegHandle,
         health_service: Option<HealthService>,
         causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
+        safe_point: Arc<AtomicU64>,
     ) -> Result<()> {
         assert!(self.workers.is_none());
         // TODO: we can get cluster meta regularly too later.
@@ -1666,6 +1705,8 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             pending_create_peers: Arc::new(Mutex::new(HashMap::default())),
             feature_gate: pd_client.feature_gate().clone(),
             write_senders: self.store_writers.senders(),
+            safe_point,
+            node_start_time: self.node_start_time,
         };
         let region_peers = builder.init()?;
         self.start_system::<T, C>(
@@ -1794,8 +1835,6 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             warn!("set thread priority for raftstore failed"; "error" => ?e);
         }
         self.workers = Some(workers);
-        // This router will not be accessed again, free all caches.
-        self.router.clear_cache();
         Ok(())
     }
 
@@ -1859,6 +1898,7 @@ pub fn create_raft_batch_system<EK: KvEngine, ER: RaftEngine>(
                 .as_ref()
                 .map(|m| m.derive_controller("store-writer".to_owned(), false)),
         ),
+        node_start_time: monotonic_raw_now(),
     };
     (raft_router, system)
 }
@@ -1907,7 +1947,8 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
             }
             info!(
                 "region doesn't exist yet, wait for it to be split";
-                "region_id" => region_id
+                "region_id" => region_id,
+                "to_peer_id" => msg.get_to_peer().get_id(),
             );
             return Ok(CheckMsgStatus::FirstRequest);
         }
@@ -2328,6 +2369,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
             self.ctx.engines.clone(),
             region_id,
             target.clone(),
+            msg.get_from_peer().clone(),
         )?;
 
         // WARNING: The checking code must be above this line.

@@ -2706,6 +2706,7 @@ pub struct BackupStreamConfig {
     pub initial_scan_pending_memory_quota: ReadableSize,
     #[online_config(skip)]
     pub initial_scan_rate_limit: ReadableSize,
+    pub initial_scan_concurrency: usize,
 }
 
 impl BackupStreamConfig {
@@ -2733,6 +2734,9 @@ impl BackupStreamConfig {
             )
             .into());
         }
+        if self.initial_scan_concurrency == 0 {
+            return Err("the `initial_scan_concurrency` shouldn't be zero".into());
+        }
         Ok(())
     }
 }
@@ -2753,6 +2757,7 @@ impl Default for BackupStreamConfig {
             file_size_limit: ReadableSize::mb(256),
             initial_scan_pending_memory_quota: ReadableSize(quota_size as _),
             initial_scan_rate_limit: ReadableSize::mb(60),
+            initial_scan_concurrency: 6,
         }
     }
 }
@@ -2767,7 +2772,11 @@ pub struct CdcConfig {
     #[online_config(skip)]
     pub incremental_scan_threads: usize,
     pub incremental_scan_concurrency: usize,
+    /// Limit scan speed based on disk I/O traffic.
     pub incremental_scan_speed_limit: ReadableSize,
+    /// Limit scan speed based on memory accesing traffic.
+    #[doc(hidden)]
+    pub incremental_fetch_speed_limit: ReadableSize,
     /// `TsFilter` can increase speed and decrease resource usage when
     /// incremental content is much less than total content. However in
     /// other cases, `TsFilter` can make performance worse because it needs
@@ -2806,6 +2815,7 @@ impl Default for CdcConfig {
             // TiCDC requires a SSD, the typical write speed of SSD
             // is more than 500MB/s, so 128MB/s is enough.
             incremental_scan_speed_limit: ReadableSize::mb(128),
+            incremental_fetch_speed_limit: ReadableSize::mb(512),
             incremental_scan_ts_filter_ratio: 0.2,
             tso_worker_threads: 1,
             // 512MB memory for CDC sink.
@@ -3397,7 +3407,8 @@ impl TikvConfig {
         // on tikv
         self.coprocessor
             .optimize_for(self.storage.engine == EngineType::RaftKv2);
-        self.coprocessor.validate()?;
+        self.coprocessor
+            .validate(self.storage.engine == EngineType::RaftKv2)?;
         self.split
             .optimize_for(self.coprocessor.region_split_size());
         self.raft_store
@@ -5835,21 +5846,25 @@ mod tests {
         let mut default_cfg = TikvConfig::default();
         default_cfg.coprocessor.region_split_size = Some(ReadableSize::mb(500));
         default_cfg.coprocessor.optimize_for(false);
-        default_cfg.coprocessor.validate().unwrap();
+        default_cfg.coprocessor.validate(false).unwrap();
         assert_eq!(
             default_cfg.coprocessor.region_split_size(),
             ReadableSize::mb(500)
         );
+        assert!(!default_cfg.coprocessor.enable_region_bucket());
+        default_cfg.coprocessor.validate(true).unwrap();
         assert!(default_cfg.coprocessor.enable_region_bucket());
 
         let mut default_cfg = TikvConfig::default();
         default_cfg.coprocessor.region_split_size = Some(ReadableSize::mb(500));
         default_cfg.coprocessor.optimize_for(true);
-        default_cfg.coprocessor.validate().unwrap();
+        default_cfg.coprocessor.validate(false).unwrap();
         assert_eq!(
             default_cfg.coprocessor.region_split_size(),
             ReadableSize::mb(500)
         );
+        assert!(!default_cfg.coprocessor.enable_region_bucket());
+        default_cfg.coprocessor.validate(true).unwrap();
         assert!(default_cfg.coprocessor.enable_region_bucket());
     }
 

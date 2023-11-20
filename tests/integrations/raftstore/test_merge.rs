@@ -13,7 +13,6 @@ use raft::eraftpb::{ConfChangeType, MessageType};
 use raftstore::store::{Callback, LocksStatus};
 use test_raftstore::*;
 use test_raftstore_macro::test_case;
-use test_raftstore_v2::Simulator as _;
 use tikv::storage::{kv::SnapshotExt, Snapshot};
 use tikv_util::{config::*, HandyRwLock};
 use txn_types::{Key, PessimisticLock};
@@ -406,6 +405,63 @@ fn test_node_check_merged_message() {
     must_get_equal(&engine3, b"k4", b"v4");
     must_get_none(&engine3, b"k3");
     must_get_none(&engine3, b"v5");
+}
+
+/// Test if an uninitialized stale peer will be handled properly after merge.
+#[test_case(test_raftstore::new_node_cluster)]
+// #[test_case(test_raftstore_v2::new_node_cluster)]
+fn test_node_gc_uninitialized_peer_after_merge() {
+    let mut cluster = new_cluster(0, 4);
+    configure_for_merge(&mut cluster.cfg);
+    ignore_merge_target_integrity(&mut cluster.cfg, &cluster.pd_client);
+    cluster.cfg.raft_store.raft_election_timeout_ticks = 5;
+    cluster.cfg.raft_store.raft_store_max_leader_lease = ReadableDuration::millis(40);
+    cluster.cfg.raft_store.max_leader_missing_duration = ReadableDuration::millis(150);
+    cluster.cfg.raft_store.abnormal_leader_missing_duration = ReadableDuration::millis(100);
+    cluster.cfg.raft_store.peer_stale_state_check_interval = ReadableDuration::millis(100);
+
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+
+    cluster.run_conf_change();
+
+    cluster.must_put(b"k1", b"v1");
+    cluster.must_put(b"k3", b"v3");
+
+    // test if an uninitialized stale peer before conf removal is destroyed
+    // automatically
+    let region = pd_client.get_region(b"k1").unwrap();
+    pd_client.must_add_peer(region.get_id(), new_peer(2, 2));
+    pd_client.must_add_peer(region.get_id(), new_peer(3, 3));
+
+    cluster.must_split(&region, b"k2");
+    let left = pd_client.get_region(b"k1").unwrap();
+    let right = pd_client.get_region(b"k2").unwrap();
+
+    // Block snapshot messages, so that new peers will never be initialized.
+    cluster.add_send_filter(CloneFilterFactory(
+        RegionPacketFilter::new(left.get_id(), 4)
+            .msg_type(MessageType::MsgSnapshot)
+            .direction(Direction::Recv),
+    ));
+    // Add peer (4,4), remove peer (4,4) and then merge regions.
+    // Peer (4,4) will be an an uninitialized stale peer.
+    pd_client.must_add_peer(left.get_id(), new_peer(4, 4));
+    cluster.must_region_exist(left.get_id(), 4);
+    cluster.add_send_filter(IsolationFilterFactory::new(4));
+    pd_client.must_remove_peer(left.get_id(), new_peer(4, 4));
+    pd_client.must_merge(left.get_id(), right.get_id());
+    cluster.clear_send_filters();
+
+    // Wait for the peer (4,4) to be destroyed.
+    sleep_ms(
+        2 * cluster
+            .cfg
+            .raft_store
+            .max_leader_missing_duration
+            .as_millis(),
+    );
+    cluster.must_region_not_exist(left.get_id(), 4);
 }
 
 // Test if a merge handled properly when there is a unfinished slow split before
