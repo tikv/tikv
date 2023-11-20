@@ -974,6 +974,10 @@ where
                 });
             }
             RegionCheckpointOperation::PrepareMinTsForResolve => {
+                if self.observer.is_hibernating() {
+                    metrics::MISC_EVENTS.skip_resolve_no_subscription.inc();
+                    return;
+                }
                 let min_ts = self.pool.block_on(self.prepare_min_ts());
                 let start_time = Instant::now();
                 // We need to reschedule the `Resolve` task to queue, because the subscription

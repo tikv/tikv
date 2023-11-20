@@ -278,6 +278,7 @@ where
                     engines,
                     region,
                     meta_peer,
+                    None,
                 )?,
                 tick_registry: [false; PeerTick::VARIANT_COUNT],
                 missing_ticks: 0,
@@ -308,12 +309,16 @@ where
         engines: Engines<EK, ER>,
         region_id: u64,
         peer: metapb::Peer,
+        create_by_peer: metapb::Peer,
     ) -> Result<SenderFsmPair<EK, ER>> {
         // We will remove tombstone key when apply snapshot
         info!(
             "replicate peer";
             "region_id" => region_id,
             "peer_id" => peer.get_id(),
+            "store_id" => store_id,
+            "create_by_peer_id" => create_by_peer.get_id(),
+            "create_by_peer_store_id" => create_by_peer.get_store_id(),
         );
 
         let mut region = metapb::Region::default();
@@ -332,6 +337,7 @@ where
                     engines,
                     &region,
                     peer,
+                    Some(create_by_peer),
                 )?,
                 tick_registry: [false; PeerTick::VARIANT_COUNT],
                 missing_ticks: 0,
@@ -1039,8 +1045,15 @@ where
                 split_keys,
                 callback,
                 source,
+                share_source_region_size,
             } => {
-                self.on_prepare_split_region(region_epoch, split_keys, callback, &source);
+                self.on_prepare_split_region(
+                    region_epoch,
+                    split_keys,
+                    callback,
+                    &source,
+                    share_source_region_size,
+                );
             }
             CasualMessage::ComputeHashResult {
                 index,
@@ -3881,6 +3894,7 @@ where
         derived: metapb::Region,
         regions: Vec<metapb::Region>,
         new_split_regions: HashMap<u64, apply::NewSplitPeer>,
+        share_source_region_size: bool,
     ) {
         fail_point!("on_split", self.ctx.store_id() == 3, |_| {});
 
@@ -3902,8 +3916,15 @@ where
 
         // Roughly estimate the size and keys for new regions.
         let new_region_count = regions.len() as u64;
-        let estimated_size = self.fsm.peer.approximate_size.map(|v| v / new_region_count);
-        let estimated_keys = self.fsm.peer.approximate_keys.map(|v| v / new_region_count);
+        let mut share_size = None;
+        let mut share_keys = None;
+        // if share_source_region_size is true, it means the new region contains any
+        // data from the origin region
+        if share_source_region_size {
+            share_size = self.fsm.peer.approximate_size.map(|v| v / new_region_count);
+            share_keys = self.fsm.peer.approximate_keys.map(|v| v / new_region_count);
+        }
+
         let mut meta = self.ctx.store_meta.lock().unwrap();
         meta.set_region(
             &self.ctx.coprocessor_host,
@@ -3918,8 +3939,10 @@ where
 
         let is_leader = self.fsm.peer.is_leader();
         if is_leader {
-            self.fsm.peer.approximate_size = estimated_size;
-            self.fsm.peer.approximate_keys = estimated_keys;
+            if share_source_region_size {
+                self.fsm.peer.approximate_size = share_size;
+                self.fsm.peer.approximate_keys = share_keys;
+            }
             self.fsm.peer.heartbeat_pd(self.ctx);
             // Notify pd immediately to let it update the region meta.
             info!(
@@ -4048,8 +4071,8 @@ where
             new_peer.has_ready |= campaigned;
 
             if is_leader {
-                new_peer.peer.approximate_size = estimated_size;
-                new_peer.peer.approximate_keys = estimated_keys;
+                new_peer.peer.approximate_size = share_size;
+                new_peer.peer.approximate_keys = share_keys;
                 *new_peer.peer.txn_ext.pessimistic_locks.write() = locks;
                 // The new peer is likely to become leader, send a heartbeat immediately to
                 // reduce client query miss.
@@ -4250,6 +4273,9 @@ where
 
     fn schedule_merge(&mut self) -> Result<()> {
         fail_point!("on_schedule_merge", |_| Ok(()));
+        fail_point!("on_schedule_merge_ret_err", |_| Err(Error::RegionNotFound(
+            1
+        )));
         let (request, target_id) = {
             let state = self.fsm.peer.pending_merge_state.as_ref().unwrap();
             let expect_region = state.get_target();
@@ -4367,6 +4393,17 @@ where
                 {
                     info!(
                         "failed to schedule merge, rollback";
+                        "region_id" => self.fsm.region_id(),
+                        "peer_id" => self.fsm.peer_id(),
+                        "err" => %e,
+                        "error_code" => %e.error_code(),
+                    );
+                    self.rollback_merge();
+                } else if let Some(ForceLeaderState::ForceLeader { .. }) =
+                    &self.fsm.peer.force_leader
+                {
+                    info!(
+                        "failed to schedule merge, rollback in force leader state";
                         "region_id" => self.fsm.region_id(),
                         "peer_id" => self.fsm.peer_id(),
                         "err" => %e,
@@ -4871,7 +4908,13 @@ where
                     derived,
                     regions,
                     new_split_regions,
-                } => self.on_ready_split_region(derived, regions, new_split_regions),
+                    share_source_region_size,
+                } => self.on_ready_split_region(
+                    derived,
+                    regions,
+                    new_split_regions,
+                    share_source_region_size,
+                ),
                 ExecResult::PrepareMerge { region, state } => {
                     self.on_ready_prepare_merge(region, state)
                 }
@@ -5024,7 +5067,8 @@ where
             // error-prone
             if !(msg.has_admin_request()
                 && (msg.get_admin_request().get_cmd_type() == AdminCmdType::ChangePeer
-                    || msg.get_admin_request().get_cmd_type() == AdminCmdType::ChangePeerV2))
+                    || msg.get_admin_request().get_cmd_type() == AdminCmdType::ChangePeerV2
+                    || msg.get_admin_request().get_cmd_type() == AdminCmdType::RollbackMerge))
             {
                 return Err(Error::RecoveryInProgress(self.region_id()));
             }
@@ -5493,7 +5537,7 @@ where
             return;
         }
 
-        fail_point!("on_split_region_check_tick");
+        fail_point!("on_split_region_check_tick", |_| {});
         self.register_split_region_check_tick();
 
         // To avoid frequent scan, we only add new scan tasks if all previous tasks
@@ -5551,6 +5595,7 @@ where
         split_keys: Vec<Vec<u8>>,
         cb: Callback<EK::Snapshot>,
         source: &str,
+        share_source_region_size: bool,
     ) {
         info!(
             "on split";
@@ -5569,6 +5614,7 @@ where
             split_keys,
             peer: self.fsm.peer.peer.clone(),
             right_derive: self.ctx.cfg.right_derive_when_split,
+            share_source_region_size,
             callback: cb,
         };
         if let Err(ScheduleError::Stopped(t)) = self.ctx.pd_scheduler.schedule(task) {
