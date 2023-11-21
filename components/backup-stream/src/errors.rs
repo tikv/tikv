@@ -5,8 +5,6 @@ use std::{
 };
 
 use error_code::ErrorCodeExt;
-#[cfg(feature = "metastore-etcd")]
-use etcd_client::Error as EtcdError;
 use grpcio::Error as GrpcError;
 use kvproto::{errorpb::Error as StoreError, metapb::*};
 use pd_client::Error as PdError;
@@ -22,9 +20,6 @@ use crate::{endpoint::Task, metrics};
 pub enum Error {
     #[error("gRPC meet error {0}")]
     Grpc(#[from] GrpcError),
-    #[cfg(feature = "metasotre-etcd")]
-    #[error("Etcd meet error {0}")]
-    Etcd(#[from] EtcdErrorExt),
     #[error("Protobuf meet error {0}")]
     Protobuf(#[from] ProtobufError),
     #[error("No such task {task_name:?}")]
@@ -54,30 +49,10 @@ pub enum Error {
     Other(#[from] Box<dyn StdError + Send + Sync + 'static>),
 }
 
-#[cfg(feature = "metastore-etcd")]
-impl From<EtcdError> for Error {
-    fn from(value: EtcdError) -> Self {
-        Self::Etcd(value.into())
-    }
-}
-
-#[cfg(feature = "metastore-etcd")]
-#[derive(ThisError, Debug)]
-pub enum EtcdErrorExt {
-    #[error("{0}")]
-    Normal(#[from] EtcdError),
-    #[error("the watch canceled")]
-    WatchCanceled,
-    #[error("the required revision has been compacted, current is {current}")]
-    RevisionCompacted { current: i64 },
-}
-
 impl ErrorCodeExt for Error {
     fn error_code(&self) -> error_code::ErrorCode {
         use error_code::backup_stream::*;
         match self {
-            #[cfg(feature = "metastore-etcd")]
-            Error::Etcd(_) => ETCD,
             Error::Protobuf(_) => PROTO,
             Error::NoSuchTask { .. } => NO_SUCH_TASK,
             Error::MalformedMetadata(_) => MALFORMED_META,

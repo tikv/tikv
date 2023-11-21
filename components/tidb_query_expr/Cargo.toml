@@ -17,7 +17,7 @@ log_wrappers = { workspace = true }
 match-template = "0.0.1"
 num = { version = "0.3", default-features = false }
 num-traits = "0.2"
-openssl = { version = "0.10" }
+openssl = { workspace = true }
 protobuf = "2"
 rand = "0.8.3"
 regex = "1.1"

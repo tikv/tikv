@@ -6238,7 +6238,6 @@ where
         if source == "bucket" {
             return;
         }
-
         let task = SplitCheckTask::split_check_key_range(
             region.clone(),
             start_key,

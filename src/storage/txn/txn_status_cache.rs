@@ -342,8 +342,6 @@ impl TxnStatusCache {
         );
         let size = slot.size();
         let allocated = slot.internal_allocated_capacity();
-        drop(slot);
-
         // Update statistics.
         // CAUTION: Assuming that only one TxnStatusCache instance is in a TiKV process.
         SCHED_TXN_STATUS_CACHE_SIZE

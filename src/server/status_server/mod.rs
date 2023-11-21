@@ -61,6 +61,7 @@ use tokio::{
     sync::oneshot::{self, Receiver, Sender},
 };
 use tokio_openssl::SslStream;
+use tracing_active_tree::tree::formating::FormatFlat;
 
 use crate::{
     config::{ConfigController, LogLevel},
@@ -551,6 +552,17 @@ impl<R> StatusServer<R>
 where
     R: 'static + Send + RaftExtension + Clone,
 {
+    async fn dump_async_trace() -> hyper::Result<Response<Body>> {
+        Ok(make_response(
+            StatusCode::OK,
+            tracing_active_tree::layer::global().fmt_bytes_with(|t, buf| {
+                t.traverse_with(FormatFlat::new(buf)).unwrap_or_else(|err| {
+                    error!("failed to format tree, unreachable!"; "err" => %err);
+                })
+            }),
+        ))
+    }
+
     async fn handle_pause_grpc(
         mut grpc_service_mgr: GrpcServiceManager,
     ) -> hyper::Result<Response<Body>> {
@@ -805,6 +817,7 @@ where
                             (Method::PUT, "/resume_grpc") => {
                                 Self::handle_resume_grpc(grpc_service_mgr).await
                             }
+                            (Method::GET, "/async_tasks") => Self::dump_async_trace().await,
                             _ => Ok(make_response(StatusCode::NOT_FOUND, "path not found")),
                         }
                     }
