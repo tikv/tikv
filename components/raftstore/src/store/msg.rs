@@ -441,6 +441,7 @@ pub enum StoreTick {
     CompactLockCf,
     ConsistencyCheck,
     CleanupImportSst,
+    PdReportMinResolvedTs,
 }
 
 impl StoreTick {
@@ -454,6 +455,7 @@ impl StoreTick {
             StoreTick::CompactLockCf => RaftEventDurationType::compact_lock_cf,
             StoreTick::ConsistencyCheck => RaftEventDurationType::consistency_check,
             StoreTick::CleanupImportSst => RaftEventDurationType::cleanup_import_sst,
+            StoreTick::PdReportMinResolvedTs => RaftEventDurationType::pd_report_min_resolved_ts,
         }
     }
 }

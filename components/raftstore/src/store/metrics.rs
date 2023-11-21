@@ -216,6 +216,7 @@ make_static_metric! {
         compact_check,
         periodic_full_compact,
         pd_store_heartbeat,
+        pd_report_min_resolved_ts,
         snap_gc,
         compact_lock_cf,
         consistency_check,
