@@ -1070,7 +1070,7 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
         });
 
 
-        let handle_task = move || {
+        let handle_task = async move {
             // Records how long the download task waits to be scheduled.
             sst_importer::metrics::IMPORTER_DOWNLOAD_DURATION
                 .with_label_values(&["queue"])
@@ -1095,7 +1095,7 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
                     ));
                     let mut resp = DownloadResponse::default();
                     resp.set_error(error.into());
-                    let _ = sink.success(resp);
+                    crate::send_rpc_response!(Ok(resp), sink, label, start);
                     IMPORT_PENDING_TASKS.with_label_values(&[label]).dec();
                     return
                 }
@@ -1117,17 +1117,17 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
                 resource_limiter,
             );
             let mut resp = DownloadResponse::default();
-            match futures::executor::block_on(res) {
+            match res.await {
                 Ok(range) => match range {
                     Some(r) => resp.set_range(r),
                     None => resp.set_is_empty(true),
                 },
                 Err(e) => resp.set_error(e.into()),
             }
-            let _ = sink.success(resp);
+            crate::send_rpc_response!(Ok(resp), sink, label, start);
             IMPORT_PENDING_TASKS.with_label_values(&[label]).dec();
         };
-        self.threads.spawn_blocking(handle_task);
+        self.threads.spawn(handle_task);
     }
 
     /// Ingest the file by sending a raft command to raftstore.
