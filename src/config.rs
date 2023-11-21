@@ -4870,7 +4870,7 @@ mod tests {
                 "rocksdb.defaultcf.titan.blob-run-mode".to_string(),
                 run_mode.to_string(),
             )]);
-            cfg_controller.update_without_persist(change).unwrap();
+            cfg_controller.update(change).unwrap();
         }
     }
 
