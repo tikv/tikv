@@ -102,7 +102,7 @@ fn test_wait_apply() {
         let v = suite.cluster.must_get(&k);
         // Due to we have wait to it applied, this write result must be observable.
         assert_eq!(v.as_deref(), Some(b"meow?".as_slice()), "{res:?}");
-        assert!(removed, "{regions_ok:?} {res:?}");
+        assert!(removed, "{:?} {:?}", regions_ok, res);
     }
 
     suite.cluster.clear_send_filters();
