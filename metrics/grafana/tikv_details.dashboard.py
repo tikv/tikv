@@ -7690,7 +7690,261 @@ def PessimisticLocking() -> RowPanel:
 
 def PointInTimeRestore() -> RowPanel:
     layout = Layout(title="Point In Time Restore")
-    layout.row([])
+    layout.row(
+        [
+            graph_panel(
+                title="CPU Usage",
+                description=None,
+                yaxes=yaxes(left_format=UNITS.PERCENT_UNIT),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_thread_cpu_seconds_total",
+                            label_selectors=[
+                                'name=~"sst_.*"',
+                            ],
+                        ),
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="P99 RPC Duration",
+                description=None,
+                yaxes=yaxes(left_format=UNITS.SECONDS, log_base=1),
+                targets=[
+                    target(
+                        expr=expr_histogram_quantile(
+                            0.99,
+                            "tikv_import_rpc_duration",
+                            label_selectors=[
+                                'request="apply"',
+                            ],
+                        ),
+                        legend_format="total-99",
+                    ),
+                    target(
+                        expr=expr_histogram_quantile(
+                            0.99,
+                            "tikv_import_apply_duration",
+                            label_selectors=[
+                                'type=~"queue|exec_download"',
+                            ],
+                            by_labels=["le", "type"],
+                        ),
+                        legend_format="(DL){{type}}-99",
+                    ),
+                    target(
+                        expr=expr_histogram_quantile(
+                            0.99,
+                            "tikv_import_engine_request",
+                            by_labels=["le", "type"],
+                        ),
+                        legend_format="(AP){{type}}-99",
+                    ),
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel(
+                title="Import RPC Ops",
+                description="",
+                yaxes=yaxes(left_format=UNITS.OPS_PER_SEC),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_import_rpc_duration_count",
+                            label_selectors=[
+                                'request="apply"',
+                            ],
+                            by_labels=["instance", "request"],
+                        ),
+                    ),
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_import_rpc_duration_count",
+                            label_selectors=[
+                                'request!="switch_mode"',
+                            ],
+                            by_labels=["request"],
+                        ),
+                        legend_format="total-{{request}}",
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="Cache Events",
+                description=None,
+                yaxes=yaxes(left_format=UNITS.COUNTS_PER_SEC),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_import_apply_cache_event",
+                            label_selectors=[],
+                            by_labels=["type", "instance"],
+                        ),
+                    ),
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            heatmap_panel(
+                title="Overall RPC Duration",
+                description=None,
+                yaxis=yaxis(format=UNITS.SECONDS, log_base=1),
+                metric="tikv_import_rpc_duration_bucket",
+                label_selectors=[
+                    'request="apply"',
+                ],
+            ),
+            heatmap_panel(
+                title="Read File into Memory Duration",
+                description=None,
+                yaxis=yaxis(format=UNITS.SECONDS, log_base=1),
+                metric="tikv_import_apply_duration_bucket",
+                label_selectors=[
+                    'type="exec_download"',
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            heatmap_panel(
+                title="Queuing Time",
+                description=None,
+                yaxis=yaxis(format=UNITS.SECONDS, log_base=1),
+                metric="tikv_import_engine_request_bucket",
+                label_selectors=[
+                    'type="queuing"',
+                ],
+            ),
+            graph_panel(
+                title="Apply Request Throughput",
+                description=None,
+                yaxes=yaxes(left_format=UNITS.BYTES_IEC),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_import_apply_bytes_sum",
+                        ),
+                    ),
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            heatmap_panel(
+                title="Downloaded File Size",
+                description=None,
+                yaxis=yaxis(format=UNITS.BYTES_IEC),
+                metric="tikv_import_download_bytes_bucket",
+            ),
+            heatmap_panel(
+                title="Apply Batch Size",
+                description=None,
+                yaxis=yaxis(format=UNITS.BYTES_IEC),
+                metric="tikv_import_apply_bytes_bucket",
+            ),
+        ]
+    )
+    layout.row(
+        [
+            heatmap_panel(
+                title="Blocked by Concurrency Time",
+                description=None,
+                yaxis=yaxis(format=UNITS.SECONDS, log_base=1),
+                metric="tikv_import_engine_request_bucket",
+                label_selectors=[
+                    'type="get_permit"',
+                ],
+            ),
+            graph_panel(
+                title="Apply Request Speed",
+                description=None,
+                yaxes=yaxes(
+                    left_format=UNITS.OPS_PER_SEC,
+                    log_base=1,
+                ),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_import_applier_event",
+                            label_selectors=[
+                                'type="begin_req"',
+                            ],
+                            by_labels=["instance", "type"],
+                        ),
+                    ),
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel(
+                title="Cached File in Memory",
+                description=None,
+                yaxes=yaxes(left_format=UNITS.BYTES_IEC, log_base=1),
+                targets=[
+                    target(
+                        expr=expr_sum("tikv_import_apply_cached_bytes"),
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="Engine Requests Unfinished",
+                description=None,
+                yaxes=yaxes(
+                    left_format=UNITS.SHORT,
+                    log_base=1,
+                ),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_import_applier_event",
+                            label_selectors=[
+                                'type!="begin_req"',
+                            ],
+                            by_labels=["instance", "type"],
+                        ),
+                    ),
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            heatmap_panel(
+                title="Apply Time",
+                description=None,
+                yaxis=yaxis(format=UNITS.SECONDS, log_base=1),
+                metric="tikv_import_engine_request_bucket",
+                label_selectors=[
+                    'type="apply"',
+                ],
+            ),
+            graph_panel(
+                title="Raft Store Memory Usage",
+                description="",
+                yaxes=yaxes(left_format=UNITS.BYTES_IEC, log_base=1),
+                targets=[
+                    target(
+                        expr=expr_sum(
+                            "tikv_server_mem_trace_sum",
+                            label_selectors=[
+                                'name=~"raftstore-.*"',
+                            ],
+                        ),
+                    ),
+                ],
+            ),
+        ]
+    )
     return layout.row_panel
 
 
@@ -8233,7 +8487,7 @@ dashboard = Dashboard(
         RaftEngine(),
         Titan(),
         PessimisticLocking(),
-        # PointInTimeRestore(),
+        PointInTimeRestore(),
         ResolvedTS(),
         Memory(),
         # BackupImport(),
