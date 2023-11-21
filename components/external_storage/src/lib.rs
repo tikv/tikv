@@ -131,6 +131,7 @@ pub trait ExternalStorage: 'static + Send + Sync {
             file_crypter,
         } = restore_config;
 
+        let start_prepare = Instant::now();
         let reader = {
             let inner = if let Some((off, len)) = range {
                 self.read_part(storage_name, off, len)
@@ -147,6 +148,14 @@ pub trait ExternalStorage: 'static + Send + Sync {
         // (at 8 KB/s for a 2 MB buffer, this means we timeout after 4m16s.)
         let min_read_speed: usize = 8192;
         let input = encrypt_wrap_reader(file_crypter, reader)?;
+        let prepare_elapsed = start_prepare.saturating_elapsed();
+
+        if prepare_elapsed > Duration::from_secs(600) {
+            info!("[debug blocken] prepare download file too slow";
+                "name" => storage_name,
+                "length" => expected_length,
+                "cost" => ?prepare_elapsed);
+        }
 
         read_external_storage_into_file(
             input,
@@ -286,8 +295,9 @@ where
             format!("openssl hasher failed to init: {}", err),
         )
     })?;
-    let mut yield_checker =
-        RescheduleChecker::new(tokio::task::yield_now, Duration::from_millis(10));
+    //let mut yield_checker =
+    //    RescheduleChecker::new(tokio::task::yield_now, Duration::from_millis(10));
+    let start_download = Instant::now();
     loop {
         // separate the speed limiting from actual reading so it won't
         // affect the timeout calculation.
@@ -308,7 +318,14 @@ where
             })?;
         }
         file_length += bytes_read as u64;
-        yield_checker.check().await;
+    //    yield_checker.check().await;
+    }
+
+    let elapsed = start_download.saturating_elapsed();
+    if elapsed > Duration::from_secs(600) {
+        info!("[debug blocken] downloading file too slow";
+            "length" => expected_length,
+            "cost" => ?elapsed);
     }
 
     if expected_length != 0 && expected_length != file_length {
@@ -322,6 +339,7 @@ where
     }
 
     if let Some(expected_s) = expected_sha256 {
+        let start_finish = Instant::now();
         let cal_sha256 = hasher.finish().map_or_else(
             |err| {
                 Err(io::Error::new(
@@ -331,6 +349,12 @@ where
             },
             |bytes| Ok(bytes.to_vec()),
         )?;
+        let elapsed = start_finish.saturating_elapsed();
+        if elapsed > Duration::from_secs(600) {
+            info!("[debug blocken] hash file too slow";
+                "length" => expected_length,
+                "cost" => ?elapsed);
+        }
         if !expected_s.eq(&cal_sha256) {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,

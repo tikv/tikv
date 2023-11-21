@@ -515,6 +515,7 @@ impl SstImporter {
         cache_key: &str,
         restore_config: external_storage_export::RestoreConfig,
     ) -> Result<()> {
+        let start_create = Instant::now();
         if let Some(p) = dst_file.parent() {
             file_system::create_dir_all(p).or_else(|e| {
                 if e.kind() == io::ErrorKind::AlreadyExists {
@@ -527,6 +528,13 @@ impl SstImporter {
 
         let ext_storage = self.external_storage_or_cache(backend, cache_key)?;
         let ext_storage = self.wrap_kms(ext_storage, support_kms);
+        let elapsed = start_create.saturating_elapsed();
+        if elapsed > Duration::from_secs(600) {
+            info!("[debug blocken] create directory too slow";
+                "name" => src_file_name,
+                "length" => file_length,
+                "cost" => ?elapsed);
+        }
 
         let start_read = Instant::now();
         let result = ext_storage
@@ -538,10 +546,17 @@ impl SstImporter {
                 restore_config,
             )
             .await;
+        let elapsed = start_read.saturating_elapsed();
         IMPORTER_DOWNLOAD_DURATION
             .with_label_values(&["read"])
-            .observe(start_read.saturating_elapsed().as_secs_f64());
-
+            .observe(elapsed.as_secs_f64());
+        if elapsed > Duration::from_secs(600) {
+            info!("[debug blocken] download file too slow";
+                "name" => src_file_name,
+                "length" => file_length,
+                "cost" => ?elapsed);
+        }
+        let start_sync = Instant::now();
         IMPORTER_DOWNLOAD_BYTES.observe(file_length as _);
         result.map_err(|e| Error::CannotReadExternalStorage {
             url: util::url_for(&ext_storage),
@@ -559,6 +574,13 @@ impl SstImporter {
             "name" => src_file_name,
             "url"  => %util::url_for(&ext_storage),
         );
+        let elapsed = start_sync.saturating_elapsed();
+        if elapsed > Duration::from_secs(600) {
+            info!("[debug blocken] sync file too slow";
+                "name" => src_file_name,
+                "length" => file_length,
+                "cost" => ?elapsed);
+        }
         Ok(())
     }
 
@@ -1116,6 +1138,7 @@ impl SstImporter {
         engine: E,
         ext: DownloadExt<'_>,
     ) -> Result<Option<Range>> {
+        let start_download = Instant::now();
         let path = self.dir.join_for_write(meta)?;
 
         let file_crypter = crypter.map(|c| FileEncryptionInfo {
@@ -1128,7 +1151,17 @@ impl SstImporter {
             file_crypter,
             ..Default::default()
         };
-
+        let before_elapsed = start_download.saturating_elapsed();
+        IMPORTER_DOWNLOAD_DURATION
+            .with_label_values(&["before"])
+            .observe(before_elapsed.as_secs_f64());
+        if before_elapsed > Duration::from_secs(600) {
+            info!("[debug blocken] before download file too slow";
+                "name" => name,
+                "length" => meta.length,
+                "cost" => ?before_elapsed);
+        }
+        let start_download = Instant::now();
         self.async_download_file_from_external_storage(
             meta.length,
             name,
@@ -1140,7 +1173,18 @@ impl SstImporter {
             restore_config,
         )
         .await?;
-
+        let before_elapsed = start_download.saturating_elapsed();
+        IMPORTER_DOWNLOAD_DURATION
+            .with_label_values(&["download"])
+            .observe(before_elapsed.as_secs_f64());
+        if before_elapsed > Duration::from_secs(600) {
+            info!("[debug blocken] download file too slow";
+                "name" => name,
+                "length" => meta.length,
+                "cost" => ?before_elapsed);
+        }
+        
+        let after_download = Instant::now();
         // now validate the SST file.
         let env = get_env(self.key_manager.clone(), get_io_rate_limiter())?;
         // Use abstracted SstReader after Env is abstracted.
@@ -1189,6 +1233,16 @@ impl SstImporter {
         if req_type == DownloadRequestType::Keyspace {
             range_start = keys::rewrite::encode_bound(range_start);
             range_end = keys::rewrite::encode_bound(range_end);
+        }
+        let after_elapsed = after_download.saturating_elapsed();
+        IMPORTER_DOWNLOAD_DURATION
+            .with_label_values(&["after"])
+            .observe(after_elapsed.as_secs_f64());
+        if after_elapsed > Duration::from_secs(600) {
+            info!("[debug blocken] after download file too slow";
+                "name" => name,
+                "length" => meta.length,
+                "cost" => ?after_elapsed);
         }
 
         let start_rename_rewrite = Instant::now();
