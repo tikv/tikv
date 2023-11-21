@@ -1022,10 +1022,12 @@ mod tests {
     fn test_int_divide_decimal_unsigned_overflow() {
         let lft = FieldTypeBuilder::new()
             .tp(FieldTypeTp::NewDecimal)
-            .flag(FieldTypeFlag::UNSIGNED).build();
+            .flag(FieldTypeFlag::UNSIGNED)
+            .build();
         let rft = FieldTypeBuilder::new()
             .tp(FieldTypeTp::NewDecimal)
-            .flag(FieldTypeFlag::UNSIGNED).build();
+            .flag(FieldTypeFlag::UNSIGNED)
+            .build();
         let output: Option<Int> = RpnFnScalarEvaluator::new()
             .push_param_with_field_type(Decimal::from(1), lft)
             .push_param_with_field_type(Decimal::from_f64(-2_f64).unwrap(), rft)
@@ -1035,10 +1037,12 @@ mod tests {
 
         let lft = FieldTypeBuilder::new()
             .tp(FieldTypeTp::NewDecimal)
-            .flag(FieldTypeFlag::UNSIGNED).build();
+            .flag(FieldTypeFlag::UNSIGNED)
+            .build();
         let rft = FieldTypeBuilder::new()
             .tp(FieldTypeTp::NewDecimal)
-            .flag(FieldTypeFlag::UNSIGNED).build();
+            .flag(FieldTypeFlag::UNSIGNED)
+            .build();
         let output: Result<Option<Int>> = RpnFnScalarEvaluator::new()
             .push_param_with_field_type(Decimal::from(1), lft)
             .push_param_with_field_type(Decimal::from_f64(-1_f64).unwrap(), rft)
