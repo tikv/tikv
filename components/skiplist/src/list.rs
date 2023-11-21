@@ -249,27 +249,75 @@ impl<C: KeyComparator> Skiplist<C> {
         }
     }
 
+    // pub fn remove(&self, key: impl Into<Bytes>) -> Option<Bytes> {
+    //     let key = key.into();
+    //     let list_height = self.height();
+    //     let prev = self.inner.head.as_ptr();
+    //     let mut value = None;
+    //     let mut cur_max_hight = 0;
+    //     for i in (0..=list_height).rev() {
+    //         let (prev, next) = unsafe { self.find_prev_for_level(&key, prev, i)
+    // };         unsafe {
+    //             if next != ptr::null_mut()
+    //                 && self.c.same_key((*next).key.as_slice(), key.as_slice())
+    //             {
+    //                 (*prev).tower[i].store((*next).next_offset(i),
+    // Ordering::SeqCst);                 value = Some((*next).value.clone());
+    //             }
+    //             if (*self.inner.head.as_ptr()).next_offset(i) != 0 {
+    //                 cur_max_hight = usize::max(cur_max_hight, i);
+    //             }
+    //         }
+    //     }
+    //     self.inner.height.store(cur_max_hight, Ordering::SeqCst);
+    //     value
+    // }
+
     pub fn remove(&self, key: impl Into<Bytes>) -> Option<Bytes> {
+        let mut list_height = self.height();
         let key = key.into();
-        let list_height = self.height();
-        let prev = self.inner.head.as_ptr();
         let mut value = None;
-        let mut cur_max_hight = 0;
+        let prev = self.inner.head.as_ptr();
         for i in (0..=list_height).rev() {
-            let (prev, next) = unsafe { self.find_prev_for_level(&key, prev, i) };
-            unsafe {
-                if next != ptr::null_mut()
-                    && self.c.same_key((*next).key.as_slice(), key.as_slice())
-                {
-                    (*prev).tower[i].store((*next).next_offset(i), Ordering::SeqCst);
-                    value = Some((*next).value.clone());
+            if self.allow_concurrent_write {
+                loop {
+                    let (prev, current) = unsafe { self.find_prev_for_level(&key, prev, i) };
+                    unsafe {
+                        if current != ptr::null_mut()
+                            && self.c.same_key((*current).key.as_slice(), key.as_slice())
+                        {
+                            let next_offset = (*current).next_offset(i);
+                            let current_offset = self.inner.arena.offset(current);
+                            match unsafe { &*prev }.tower[i].compare_exchange(
+                                current_offset,
+                                next_offset,
+                                Ordering::SeqCst,
+                                Ordering::SeqCst,
+                            ) {
+                                Ok(_) => {
+                                    value = Some((*current).value.clone());
+                                    break;
+                                }
+                                Err(_) => {}
+                            }
+                        } else {
+                            // Not found in this level
+                            break;
+                        }
+                    }
                 }
-                if (*self.inner.head.as_ptr()).next_offset(i) != 0 {
-                    cur_max_hight = usize::max(cur_max_hight, i);
+            } else {
+                let (prev, current) = unsafe { self.find_prev_for_level(&key, prev, i) };
+                unsafe {
+                    if current != ptr::null_mut()
+                        && self.c.same_key((*current).key.as_slice(), key.as_slice())
+                    {
+                        (*prev).tower[i].store((*current).next_offset(i), Ordering::SeqCst);
+                        value = Some((*current).value.clone());
+                    }
                 }
             }
         }
-        self.inner.height.store(cur_max_hight, Ordering::SeqCst);
         value
     }
 
