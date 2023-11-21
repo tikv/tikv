@@ -2603,8 +2603,11 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
     }
 
     fn report_min_resolved_ts(&self) {
-        let meta = self.ctx.store_meta.lock().unwrap();
-        let min_resolved_ts = meta.region_read_progress().get_min_resolved_ts();
+        let read_progress = {
+            let meta = self.ctx.store_meta.lock().unwrap();
+            meta.region_read_progress().clone()
+        };
+        let min_resolved_ts = read_progress.get_min_resolved_ts();
 
         let task = PdTask::ReportMinResolvedTs {
             store_id: self.fsm.store.id,
