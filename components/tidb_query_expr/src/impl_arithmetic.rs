@@ -1047,7 +1047,7 @@ mod tests {
             .push_param_with_field_type(Decimal::from(1), lft)
             .push_param_with_field_type(Decimal::from_f64(-1_f64).unwrap(), rft)
             .evaluate(ScalarFuncSig::IntDivideDecimal);
-        assert!(output.is_err());
+        assert!(output.is_err(), "should be error");
     }
 
     #[test]
