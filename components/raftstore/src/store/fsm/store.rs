@@ -2515,7 +2515,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         let ranges = self.ranges_for_full_compact();
 
         let compact_load_controller =
-            FullCompactController::new(1, 15 * 60, Some(Box::new(compact_predicate_fn)));
+            FullCompactController::new(1, 15 * 60, Box::new(compact_predicate_fn));
 
         // Attempt executing a periodic full compaction.
         // Note that full compaction will not run if another full compact tasks has

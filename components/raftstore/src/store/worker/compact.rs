@@ -57,7 +57,7 @@ pub struct FullCompactController {
     pub max_pause_duration_secs: u64,
     /// Predicate function to evaluate that indicates if we can proceed with
     /// full compaction.
-    pub incremental_compaction_pred: Option<CompactPredicateFn>,
+    pub incremental_compaction_pred: CompactPredicateFn,
 }
 
 impl fmt::Debug for FullCompactController {
@@ -68,10 +68,6 @@ impl fmt::Debug for FullCompactController {
                 &self.initial_pause_duration_secs,
             )
             .field("max_pause_duration_secs", &self.max_pause_duration_secs)
-            .field(
-                "has_incremental_compaction_pred",
-                &self.incremental_compaction_pred.is_some(),
-            )
             .finish()
     }
 }
@@ -79,7 +75,7 @@ impl FullCompactController {
     pub fn new(
         initial_pause_duration_secs: u64,
         max_pause_duration_secs: u64,
-        incremental_compaction_pred: Option<CompactPredicateFn>,
+        incremental_compaction_pred: CompactPredicateFn,
     ) -> Self {
         Self {
             initial_pause_duration_secs,
@@ -93,19 +89,17 @@ impl FullCompactController {
     /// `initial_pause_duration_secs`, max value `max_pause_duration_secs`)
     /// between retries.
     pub async fn pause(&self) -> Result<(), Error> {
-        if self.incremental_compaction_pred.is_none() {
-            return Ok(());
-        }
         let mut duration_secs = self.initial_pause_duration_secs;
         loop {
-            GLOBAL_TIMER_HANDLE
-                .delay(std::time::Instant::now() + Duration::from_secs(duration_secs))
-                .compat()
-                .await
-                .unwrap();
-            if (self.incremental_compaction_pred.as_ref().unwrap())() {
+            box_try!(
+                GLOBAL_TIMER_HANDLE
+                    .delay(std::time::Instant::now() + Duration::from_secs(duration_secs))
+                    .compat()
+                    .await
+            );
+            if (self.incremental_compaction_pred)() {
                 break;
-            }
+            };
             duration_secs = self.max_pause_duration_secs.max(duration_secs * 2);
         }
         Ok(())
@@ -272,11 +266,8 @@ where
             // `predicate_fn`. If `true`, proceed to next range; otherwise, pause this task
             // (see `FullCompactController::pause` for details) until `predicate_fn`
             // evaluates to true.
-            if let Some((next_range, predicate_fn)) = ranges
-                .front()
-                .zip(compact_controller.incremental_compaction_pred.as_ref())
-            {
-                if !predicate_fn() {
+            if let Some(next_range) = ranges.front() {
+                if !(compact_controller.incremental_compaction_pred)() {
                     warn!("pausing full compaction before next increment";
                     "finished_start_key" => ?range.0.map(log_wrappers::Value::key),
                     "finished_end_key" => ?range.1.map(log_wrappers::Value::key),
@@ -698,7 +689,7 @@ mod tests {
 
         runner.run(Task::PeriodicFullCompact {
             ranges: Vec::new(),
-            compact_load_controller: FullCompactController::new(0, 0, None),
+            compact_load_controller: FullCompactController::new(0, 0, Box::new(|| true)),
         });
         std::thread::sleep(Duration::from_millis(500));
         let stats = engine
@@ -750,7 +741,7 @@ mod tests {
         ];
         runner.run(Task::PeriodicFullCompact {
             ranges,
-            compact_load_controller: FullCompactController::new(1, 5, Some(pred_fn)),
+            compact_load_controller: FullCompactController::new(1, 5, pred_fn),
         });
         let stats = engine
             .get_range_stats(CF_WRITE, &start, &end)
