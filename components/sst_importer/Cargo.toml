@@ -53,6 +53,8 @@ tikv_util = { workspace = true }
 tokio = { version = "1.5", features = ["time", "rt-multi-thread", "macros"] }
 txn_types = { workspace = true }
 uuid = { version = "0.8.1", features = ["serde", "v4"] }
+tracing = { workspace = true }
+tracing-active-tree = { workspace = true }
 
 [dev-dependencies]
 engine_test = { workspace = true }

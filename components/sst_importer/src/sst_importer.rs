@@ -47,6 +47,8 @@ use tokio::{
     runtime::{Handle, Runtime},
     sync::OnceCell,
 };
+use tracing::instrument;
+use tracing_active_tree::frame;
 use txn_types::{Key, TimeStamp, WriteRef};
 
 use crate::{
@@ -395,6 +397,7 @@ impl SstImporter {
     //
     // This method returns the *inclusive* key range (`[start, end]`) of SST
     // file created, or returns None if the SST is empty.
+    #[instrument(skip_all, fields(name, ext))]
     pub async fn download_ext<E: KvEngine>(
         &self,
         meta: &SstMeta,
@@ -504,6 +507,7 @@ impl SstImporter {
         Ok(ext_storage)
     }
 
+    #[instrument(skip_all, fields(file_length, src_file_name, dst = %dst_file.display(), cache_key, restore_config))]
     async fn async_download_file_from_external_storage(
         &self,
         file_length: u64,
@@ -529,15 +533,14 @@ impl SstImporter {
         let ext_storage = self.external_storage_or_cache(backend, cache_key)?;
         let ext_storage = self.wrap_kms(ext_storage, support_kms);
 
-        let result = ext_storage
-            .restore(
-                src_file_name,
-                dst_file.clone(),
-                file_length,
-                speed_limiter,
-                restore_config,
-            )
-            .await;
+        let result = frame!(ext_storage.restore(
+            src_file_name,
+            dst_file.clone(),
+            file_length,
+            speed_limiter,
+            restore_config,
+        ))
+        .await;
         IMPORTER_DOWNLOAD_BYTES.observe(file_length as _);
         result.map_err(|e| Error::CannotReadExternalStorage {
             url: util::url_for(&ext_storage),
@@ -1103,6 +1106,7 @@ impl SstImporter {
         ))
     }
 
+    #[instrument(skip_all)]
     async fn do_download_ext<E: KvEngine>(
         &self,
         meta: &SstMeta,

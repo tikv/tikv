@@ -42,6 +42,8 @@ mod metrics;
 use metrics::EXT_STORAGE_CREATE_HISTOGRAM;
 mod export;
 pub use export::*;
+use tracing::instrument;
+use tracing_active_tree::frame;
 
 pub fn record_storage_create(start: Instant, storage: &dyn ExternalStorage) {
     EXT_STORAGE_CREATE_HISTOGRAM
@@ -112,6 +114,7 @@ pub trait ExternalStorage: 'static + Send + Sync {
     fn read_part(&self, name: &str, off: u64, len: u64) -> ExternalData<'_>;
 
     /// Read from external storage and restore to the given path
+    #[instrument(skip_all, fields(storage_name, expected_length))]
     async fn restore(
         &self,
         storage_name: &str,
@@ -259,6 +262,7 @@ pub fn encrypt_wrap_reader(
     Ok(input)
 }
 
+#[instrument(skip_all, fields(expected_length, min_read_speed))]
 pub async fn read_external_storage_into_file<In, Out>(
     mut input: In,
     mut output: Out,
@@ -287,13 +291,13 @@ where
     loop {
         // separate the speed limiting from actual reading so it won't
         // affect the timeout calculation.
-        let bytes_read = timeout(dur, input.read(&mut buffer))
+        let bytes_read = timeout(dur, frame!(input.read(&mut buffer)))
             .await
             .map_err(|_| io::ErrorKind::TimedOut)??;
         if bytes_read == 0 {
             break;
         }
-        speed_limiter.consume(bytes_read).await;
+        frame!(default; speed_limiter.consume(bytes_read); bytes_read).await;
         output.write_all(&buffer[..bytes_read])?;
         if expected_sha256.is_some() {
             hasher.update(&buffer[..bytes_read]).map_err(|err| {
@@ -304,7 +308,7 @@ where
             })?;
         }
         file_length += bytes_read as u64;
-        yield_checker.check().await;
+        frame!(yield_checker.check()).await;
     }
 
     if expected_length != 0 && expected_length != file_length {

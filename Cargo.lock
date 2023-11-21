@@ -1787,6 +1787,8 @@ dependencies = [
  "tikv_util",
  "tokio",
  "tokio-util",
+ "tracing",
+ "tracing-active-tree",
  "url",
 ]
 
@@ -5511,6 +5513,8 @@ dependencies = [
  "tikv_alloc",
  "tikv_util",
  "tokio",
+ "tracing",
+ "tracing-active-tree",
  "txn_types",
  "uuid 0.8.2",
 ]
