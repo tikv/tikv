@@ -26,7 +26,6 @@ use tikv_util::{
     worker::{Runnable, RunnableWithTimer, Scheduler, Worker},
     yatp_pool::{self, CleanupMethod, FuturePool, PoolTicker, YatpPoolBuilder},
 };
-use tracker::TrackedFuture;
 use yatp::{metrics::MULTILEVEL_LEVEL_ELAPSED, queue::Extras};
 
 use self::metrics::*;
@@ -145,8 +144,9 @@ impl ReadPoolHandle {
                 let group_name = metadata.group_name().to_owned();
                 let mut extras = Extras::new_multilevel(task_id, fixed_level);
                 extras.set_metadata(metadata.to_vec());
+                let running_tasks1 = running_tasks.clone();
                 if let Some(resource_ctl) = resource_ctl {
-                    let fut = TrackedFuture::new(with_resource_limiter(
+                    let fut = with_resource_limiter(
                         ControlledFuture::new(
                             async move {
                                 f.await;
@@ -156,14 +156,20 @@ impl ReadPoolHandle {
                             group_name,
                         ),
                         resource_limiter,
-                    ));
-                    remote.spawn_with_extras(fut, extras)?;
+                    );
+                    remote.spawn_with_extras(fut, extras).map_err(|e| {
+                        running_tasks1.dec();
+                        e
+                    })?;
                 } else {
                     let fut = async move {
                         f.await;
                         running_tasks.dec();
                     };
-                    remote.spawn_with_extras(fut, extras)?;
+                    remote.spawn_with_extras(fut, extras).map_err(|e| {
+                        running_tasks1.dec();
+                        e
+                    })?;
                 }
             }
         }
@@ -764,12 +770,14 @@ mod tests {
         // max running tasks number should be 2*1 = 2
 
         let engine = TestEngineBuilder::new().build().unwrap();
-        let pool = build_yatp_read_pool(
+        let name = "test-yatp-full";
+        let pool = build_yatp_read_pool_with_name(
             &config,
             DummyReporter,
             engine,
             None,
             CleanupMethod::InPlace,
+            name.to_owned(),
             None,
         );
 
@@ -805,6 +813,12 @@ mod tests {
         handle
             .spawn(task4, CommandPri::Normal, 4, TaskMetadata::default(), None)
             .unwrap();
+        assert_eq!(
+            UNIFIED_READ_POOL_RUNNING_TASKS
+                .with_label_values(&[name])
+                .get(),
+            2
+        );
     }
 
     #[test]
