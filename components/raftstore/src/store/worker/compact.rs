@@ -262,9 +262,10 @@ where
                 "finished incremental range full compaction";
                 "remaining" => ranges.len(),
             );
-            // If `predicate_fn` is set and we have more ranges remaining, evaluate
-            // `predicate_fn`. If `true`, proceed to next range; otherwise, pause this task
-            // (see `FullCompactController::pause` for details) until `predicate_fn`
+            // If there is at least one range remaining in `ranges` remaining, evaluate
+            // `compact_controller.incremental_compaction_pred`. If `true`, proceed to next
+            // range; otherwise, pause this task
+            // (see `FullCompactController::pause` for details) until predicate
             // evaluates to true.
             if let Some(next_range) = ranges.front() {
                 if !(compact_controller.incremental_compaction_pred)() {
