@@ -8,7 +8,6 @@ use std::{
     fmt, mem,
     sync::{
         atomic::{AtomicUsize, Ordering},
-        mpsc::SyncSender,
         Arc, Mutex,
     },
     time::{Duration, Instant},
@@ -101,6 +100,7 @@ use crate::{
         memory::{needs_evict_entry_cache, MEMTRACE_RAFT_ENTRIES},
         msg::{CasualMessage, ErrorCallback, PeerMsg, RaftCommand, SignificantMsg, StoreMsg},
         peer_storage::HandleSnapshotResult,
+        snapshot_backup::{AbortReason, SnapshotBrState},
         txn_ext::LocksStatus,
         util::{admin_cmd_epoch_lookup, RegionReadProgress},
         worker::{
@@ -696,40 +696,6 @@ impl UnsafeRecoveryExecutePlanSyncer {
         *self.abort.lock().unwrap() = true;
     }
 }
-// Syncer only send to leader in 2nd BR restore
-#[derive(Clone, Debug)]
-pub struct SnapshotRecoveryWaitApplySyncer {
-    _closure: Arc<InvokeClosureOnDrop>,
-    abort: Arc<Mutex<bool>>,
-}
-
-impl SnapshotRecoveryWaitApplySyncer {
-    pub fn new(region_id: u64, sender: SyncSender<u64>) -> Self {
-        let thread_safe_router = Mutex::new(sender);
-        let abort = Arc::new(Mutex::new(false));
-        let abort_clone = abort.clone();
-        let closure = InvokeClosureOnDrop(Box::new(move || {
-            info!("region {} wait apply finished", region_id);
-            if *abort_clone.lock().unwrap() {
-                warn!("wait apply aborted");
-                return;
-            }
-            let router_ptr = thread_safe_router.lock().unwrap();
-
-            _ = router_ptr.send(region_id).map_err(|_| {
-                warn!("reply waitapply states failure.");
-            });
-        }));
-        SnapshotRecoveryWaitApplySyncer {
-            _closure: Arc::new(closure),
-            abort,
-        }
-    }
-
-    pub fn abort(&self) {
-        *self.abort.lock().unwrap() = true;
-    }
-}
 
 #[derive(Clone, Debug)]
 pub struct UnsafeRecoveryWaitApplySyncer {
@@ -814,19 +780,6 @@ impl UnsafeRecoveryFillOutReportSyncer {
         let mut reports_ptr = self.reports.lock().unwrap();
         (*reports_ptr).push(report);
     }
-}
-
-#[derive(Debug)]
-pub enum SnapshotRecoveryState {
-    // This state is set by the leader peer fsm. Once set, it sync and check leader commit index
-    // and force forward to last index once follower appended and then it also is checked
-    // every time this peer applies a the last index, if the last index is met, this state is
-    // reset / droppeds. The syncer is droped and send the response to the invoker, triggers
-    // the next step of recovery process.
-    WaitLogApplyToLast {
-        target_index: u64,
-        syncer: SnapshotRecoveryWaitApplySyncer,
-    },
 }
 
 #[derive(Debug)]
@@ -1071,7 +1024,7 @@ where
     /// lead_transferee if this peer(leader) is in a leadership transferring.
     pub lead_transferee: u64,
     pub unsafe_recovery_state: Option<UnsafeRecoveryState>,
-    pub snapshot_recovery_state: Option<SnapshotRecoveryState>,
+    pub snapshot_recovery_state: Option<SnapshotBrState>,
 
     last_record_safe_point: u64,
 }
@@ -5201,10 +5154,30 @@ where
     }
 
     pub fn snapshot_recovery_maybe_finish_wait_apply(&mut self, force: bool) {
-        if let Some(SnapshotRecoveryState::WaitLogApplyToLast { target_index, .. }) =
-            &self.snapshot_recovery_state
+        if let Some(SnapshotBrState::WaitLogApplyToLast {
+            target_index,
+            valid_for_term,
+            ..
+        }) = &self.snapshot_recovery_state
         {
-            if self.raft_group.raft.term != self.raft_group.raft.raft_log.last_term() {
+            if valid_for_term
+                .map(|vt| vt != self.raft_group.raft.term)
+                .unwrap_or(false)
+            {
+                info!("leadership changed, aborting syncer because required."; "region_id" => self.region().id);
+                match self.snapshot_recovery_state.take() {
+                    Some(SnapshotBrState::WaitLogApplyToLast {
+                        syncer,
+                        valid_for_term,
+                        ..
+                    }) => {
+                        syncer.abort(AbortReason::TermMismatch {
+                            expected: valid_for_term.unwrap_or_default(),
+                            current: self.raft_group.raft.term,
+                        });
+                    }
+                    _ => unreachable!(),
+                };
                 return;
             }
 

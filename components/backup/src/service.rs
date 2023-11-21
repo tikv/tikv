@@ -1,47 +1,58 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{marker::PhantomData, sync::atomic::*};
+use std::{sync::atomic::*};
 
-use engine_traits::KvEngine;
 use futures::{channel::mpsc, FutureExt, SinkExt, StreamExt, TryFutureExt};
 use grpcio::{self, *};
 use kvproto::brpb::*;
-use raftstore::{
-    router::RaftStoreRouter,
-    store::msg::{PeerMsg, SignificantMsg},
-};
-use tikv_util::{error, info, worker::*};
+use raftstore::store::snapshot_backup::{SnapshotBrHandle, UnimplementedHandle};
+use tikv_util::{error, info, warn, worker::*};
 
 use super::Task;
+use crate::disk_snap::{self, StreamHandleLoop};
 
 /// Service handles the RPC messages for the `Backup` service.
-
-#[derive(Clone)]
-pub struct Service<E, RR> {
+pub struct Service<H: SnapshotBrHandle> {
     scheduler: Scheduler<Task>,
-    router: RR,
-    _phantom: PhantomData<E>,
+    snap_br_env: disk_snap::Env<H>,
 }
 
-impl<E, RR> Service<E, RR>
-where
-    E: KvEngine,
-    RR: RaftStoreRouter<E>,
-{
-    /// Create a new backup service.
-    pub fn new(scheduler: Scheduler<Task>, router: RR) -> Self {
-        Service {
-            scheduler,
-            router,
-            _phantom: PhantomData,
+impl<H: SnapshotBrHandle> Clone for Service<H> {
+    fn clone(&self) -> Self {
+        Self {
+            scheduler: self.scheduler.clone(),
+            snap_br_env: self.snap_br_env.clone(),
         }
     }
 }
 
-impl<E, RR> Backup for Service<E, RR>
+impl Service<UnimplementedHandle> {
+    // Create a new backup service without router, this used for raftstore v2.
+    // because we don't have RaftStoreRouter any more.
+    pub fn new(scheduler: Scheduler<Task>) -> Self {
+        Service {
+            scheduler,
+            snap_br_env: disk_snap::Env::unimplemented_for_v2(),
+        }
+    }
+}
+
+impl<H> Service<H>
 where
-    E: KvEngine,
-    RR: RaftStoreRouter<E>,
+    H: SnapshotBrHandle,
+{
+    // Create a new backup service with router, this used for raftstore v1.
+    pub fn with_env(scheduler: Scheduler<Task>, env: disk_snap::Env<H>) -> Self {
+        Service {
+            scheduler,
+            snap_br_env: env,
+        }
+    }
+}
+
+impl<H> Backup for Service<H>
+where
+    H: SnapshotBrHandle + 'static,
 {
     fn check_pending_admin_op(
         &mut self,
@@ -50,13 +61,19 @@ where
         mut sink: ServerStreamingSink<CheckAdminResponse>,
     ) {
         let (tx, rx) = mpsc::unbounded();
-        self.router.broadcast_normal(|| {
-            PeerMsg::SignificantMsg(SignificantMsg::CheckPendingAdmin(tx.clone()))
-        });
-
+        if let Err(err) = self.snap_br_env.handle.broadcast_check_pending_admin(tx) {
+            ctx.spawn(
+                sink.fail(RpcStatus::with_message(
+                    RpcStatusCode::INTERNAL,
+                    format!("{err}"),
+                ))
+                .map(|_| ()),
+            );
+            return;
+        }
         let send_task = async move {
-            let mut s = rx.map(|resp| Ok((resp, WriteFlags::default())));
-            sink.send_all(&mut s).await?;
+            sink.send_all(&mut rx.map(|resp| Ok((resp, WriteFlags::default()))))
+                .await?;
             sink.close().await?;
             Ok(())
         }
@@ -123,15 +140,27 @@ where
 
         ctx.spawn(send_task);
     }
+
+    fn prepare_snapshot_backup(
+        &mut self,
+        ctx: grpcio::RpcContext<'_>,
+        stream: grpcio::RequestStream<PrepareSnapshotBackupRequest>,
+        sink: grpcio::DuplexSink<PrepareSnapshotBackupResponse>,
+    ) {
+        let l = StreamHandleLoop::new(self.snap_br_env.clone());
+        ctx.spawn(async move {
+            if let Err(err) = l.run(stream, sink.into()).await {
+                warn!("stream closed; perhaps a problem cannot be retried happens"; "reason" => ?err);
+            }
+        })
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use std::{sync::Arc, time::Duration};
 
-    use engine_rocks::RocksEngine;
     use external_storage_export::make_local_backend;
-    use raftstore::router::RaftStoreBlackHole;
     use tikv::storage::txn::tests::{must_commit, must_prewrite_put};
     use tikv_util::worker::{dummy_scheduler, ReceiverWrapper};
     use txn_types::TimeStamp;
@@ -142,8 +171,7 @@ mod tests {
     fn new_rpc_suite() -> (Server, BackupClient, ReceiverWrapper<Task>) {
         let env = Arc::new(EnvBuilder::new().build());
         let (scheduler, rx) = dummy_scheduler();
-        let backup_service =
-            super::Service::<RocksEngine, RaftStoreBlackHole>::new(scheduler, RaftStoreBlackHole);
+        let backup_service = super::Service::new(scheduler);
         let builder =
             ServerBuilder::new(env.clone()).register_service(create_backup(backup_service));
         let mut server = builder.bind("127.0.0.1", 0).build().unwrap();
