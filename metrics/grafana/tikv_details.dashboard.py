@@ -8131,7 +8131,60 @@ def BackupLog() -> RowPanel:
 
 def SlowTrendStatistics() -> RowPanel:
     layout = Layout(title="Slow Trend Statistics")
-    layout.row([])
+    layout.row(
+        [
+            graph_panel(
+                title="Slow Trend",
+                description="The changing trend of the slowness on I/O operations. 'value > 0' means the related store might have a slow trend.",
+                targets=[
+                    target(
+                        expr=expr_sum(
+                            "tikv_raftstore_slow_trend",
+                        ),
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="QPS Changing Trend",
+                description="The changing trend of QPS on each store. 'value < 0' means the QPS has a dropping trend.",
+                targets=[
+                    target(
+                        expr=expr_sum(
+                            "tikv_raftstore_slow_trend_result",
+                        ),
+                    ),
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel(
+                title="AVG Sampling Latency",
+                description="The sampling latency of recent queries. A larger value indicates that the store is more likely to be the slowest store.",
+                yaxes=yaxes(left_format=UNITS.MICRO_SECONDS),
+                targets=[
+                    target(
+                        expr=expr_sum(
+                            "tikv_raftstore_slow_trend_l0",
+                        ),
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="QPS of each store",
+                description="The QPS of each store.",
+                yaxes=yaxes(left_format=UNITS.OPS_PER_SEC),
+                targets=[
+                    target(
+                        expr=expr_sum(
+                            "tikv_raftstore_slow_trend_result_value",
+                        ),
+                    ),
+                ],
+            ),
+        ]
+    )
     return layout.row_panel
 
 
@@ -8186,6 +8239,6 @@ dashboard = Dashboard(
         # BackupImport(),
         Encryption(),
         # BackupLog(),
-        # SlowTrendStatistics(),
+        SlowTrendStatistics(),
     ],
 ).auto_panel_ids()
