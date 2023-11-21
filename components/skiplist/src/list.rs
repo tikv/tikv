@@ -5,7 +5,7 @@ use std::{
     mem, ptr,
     ptr::NonNull,
     sync::{
-        atomic::{AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
         Arc,
     },
     u32,
@@ -16,9 +16,27 @@ use rand::Rng;
 use slog_global::info;
 
 use super::{arena::Arena, KeyComparator, MAX_HEIGHT};
+use crate::arena::{tag, without_tag};
 
 const HEIGHT_INCREASE: u32 = u32::MAX / 3;
 pub const MAX_NODE_SIZE: usize = mem::size_of::<Node>();
+
+/// A search result.
+///
+/// The result indicates whether the key was found, as well as what were the
+/// adjacent nodes to the key on each level of the skip list.
+struct Position {
+    /// Reference to a node with the given key, if found.
+    ///
+    /// If this is `Some` then it will point to the same node as `right[0]`.
+    found: Option<*mut Node>,
+
+    /// Adjacent nodes with smaller keys (predecessors).
+    left: [*mut Node; MAX_HEIGHT + 1],
+
+    /// Adjacent nodes with equal or greater keys (successors).
+    right: [*mut Node; MAX_HEIGHT + 1],
+}
 
 // Uses C layout to make sure tower is at the bottom
 #[derive(Debug)]
@@ -47,6 +65,22 @@ impl Node {
             ptr::write_bytes(node.tower.as_mut_ptr(), 0, height + 1);
         }
         node_offset
+    }
+
+    fn mark_tower(&self) -> bool {
+        let height = self.height;
+
+        for level in (0..height).rev() {
+            let tag = { self.tower[level].fetch_or(1, Ordering::SeqCst) & 1 };
+
+            // If the level 0 pointer was already marked, somebody else removed the node.
+            if level == 0 && tag == 1 {
+                return false;
+            }
+        }
+
+        // We marked the level 0 pointer, therefore we removed the node.
+        true
     }
 
     fn next_offset(&self, height: usize) -> usize {
@@ -171,7 +205,7 @@ impl<C: KeyComparator> Skiplist<C> {
     /// The input "before" tells us where to start looking.
     /// If we found a node with the same key, then we return nodeBefore =
     /// nodeAfter. Otherwise, nodeBefore.key < key < nodeAfter.key.
-    unsafe fn find_splice_for_level(
+    unsafe fn find_splice_for_level_buck(
         &self,
         key: &[u8],
         mut before: *mut Node,
@@ -189,6 +223,92 @@ impl<C: KeyComparator> Skiplist<C> {
                 std::cmp::Ordering::Less => return (before, next_ptr),
                 _ => before = next_ptr,
             }
+        }
+    }
+
+    unsafe fn find_splice_for_level(
+        &self,
+        key: &[u8],
+        mut before: *mut Node,
+        level: usize,
+        for_remove: bool,
+    ) -> (*mut Node, *mut Node) {
+        'search: loop {
+            let mut prev = before;
+            let current_offset = (*prev).next_offset(level);
+
+            let mut help_unlik = true;
+            if tag(current_offset) == 1 {
+                panic!("why here");
+                // before is marked, but we have not idea what is the before of the before
+                help_unlik = false;
+            }
+
+            if without_tag(current_offset) == 0 {
+                return (prev, ptr::null_mut());
+            }
+            let mut current: *mut Node = self.inner.arena.get_mut(current_offset);
+
+            while !current.is_null() {
+                let succ_offset = (*current).tower[level].load(Ordering::SeqCst);
+                if tag(succ_offset) == 1 {
+                    if help_unlik {
+                        // current node is marked, help to unlink
+                        if let Some(c) = self.help_unlink(prev, current_offset, succ_offset, level)
+                        {
+                            if c == 0 {
+                                return (prev, ptr::null_mut());
+                            }
+                            current = self.inner.arena.get_mut(c);
+                            continue;
+                        } else {
+                            // On failure, we cannot do anything reasonable to continue
+                            // searching from the current position. Restart the search.
+                            continue 'search;
+                        }
+                    }
+                }
+
+                match self.c.compare_key(key, &(*current).key) {
+                    std::cmp::Ordering::Equal => {
+                        if for_remove {
+                            return (prev, current);
+                        } else {
+                            return (current, current);
+                        }
+                    }
+                    std::cmp::Ordering::Less => return (prev, current),
+                    _ => {
+                        if without_tag(succ_offset) == 0 {
+                            return (current, ptr::null_mut());
+                        }
+                        prev = current;
+                        current = self.inner.arena.get_mut(succ_offset);
+                    }
+                }
+            }
+
+            return (prev, current);
+        }
+    }
+
+    unsafe fn help_unlink(
+        &self,
+        prev: *mut Node,
+        curr: usize,
+        succ: usize,
+        level: usize,
+    ) -> Option<usize> {
+        // If `succ` is marked, that means `curr` is removed. Let's try
+        // unlinking it from the skip list at this level.
+        match (*prev).tower[level].compare_exchange(
+            curr,
+            without_tag(succ),
+            Ordering::SeqCst,
+            Ordering::SeqCst,
+        ) {
+            Ok(_) => Some(without_tag(succ)),
+            Err(_) => None,
         }
     }
 
@@ -249,39 +369,75 @@ impl<C: KeyComparator> Skiplist<C> {
         }
     }
 
-    // pub fn remove(&self, key: impl Into<Bytes>) -> Option<Bytes> {
-    //     let key = key.into();
-    //     let list_height = self.height();
-    //     let prev = self.inner.head.as_ptr();
-    //     let mut value = None;
-    //     let mut cur_max_hight = 0;
-    //     for i in (0..=list_height).rev() {
-    //         let (prev, next) = unsafe { self.find_prev_for_level(&key, prev, i)
-    // };         unsafe {
-    //             if next != ptr::null_mut()
-    //                 && self.c.same_key((*next).key.as_slice(), key.as_slice())
-    //             {
-    //                 (*prev).tower[i].store((*next).next_offset(i),
-    // Ordering::SeqCst);                 value = Some((*next).value.clone());
-    //             }
-    //             if (*self.inner.head.as_ptr()).next_offset(i) != 0 {
-    //                 cur_max_hight = usize::max(cur_max_hight, i);
-    //             }
-    //         }
-    //     }
-    //     self.inner.height.store(cur_max_hight, Ordering::SeqCst);
-    //     value
-    // }
+    unsafe fn search_for_remove(&self, key: &[u8]) -> Position {
+        let list_height = self.height();
+        let mut list_height = self.height();
+        let mut left = [ptr::null_mut(); MAX_HEIGHT + 1];
+        let mut right = [ptr::null_mut(); MAX_HEIGHT + 1];
+        left[list_height + 1] = self.inner.head.as_ptr();
+        right[list_height + 1] = ptr::null_mut();
+        let mut found = None;
+        for i in (0..=list_height).rev() {
+            let (l, r) = unsafe { self.find_splice_for_level(&key, left[i + 1], i, true) };
+            left[i] = l;
+            right[i] = r;
+            if found.is_none() && self.c.compare_key(key, &(*r).key) == std::cmp::Ordering::Equal {
+                found = Some(r);
+            }
+        }
+
+        Position { found, left, right }
+    }
 
     pub fn remove(&self, key: impl Into<Bytes>) -> Option<Bytes> {
-        let mut list_height = self.height();
+        let list_height = self.height();
+        let key = key.into();
+
+        unsafe {
+            loop {
+                let search = self.search_for_remove(&key);
+
+                let n = search.found?;
+
+                // Try removing the node by marking its tower.
+                if (*n).mark_tower() {
+                    // Unlink the node at each level of the skip list. We could
+                    // do this by simply repeating the search, but it's usually
+                    // faster to unlink it manually using the `left` and `right`
+                    // lists.
+
+                    let node = &(*n);
+                    for level in (0..node.height).rev() {
+                        let succ = without_tag(node.tower[level].load(Ordering::SeqCst));
+                        match (*search.left[level]).tower[level].compare_exchange(
+                            self.inner.arena.offset(node),
+                            succ,
+                            Ordering::SeqCst,
+                            Ordering::SeqCst,
+                        ) {
+                            Ok(_) => {}
+                            Err(_) => {
+                                unimplemented!()
+                            }
+                        }
+                    }
+
+                    return Some((*n).value.clone());
+                }
+            }
+        }
+    }
+
+    pub fn remove_t(&self, key: impl Into<Bytes>) -> Option<Bytes> {
+        let list_height = self.height();
         let key = key.into();
         let mut value = None;
         let prev = self.inner.head.as_ptr();
         for i in (0..=list_height).rev() {
             if self.allow_concurrent_write {
                 loop {
-                    let (prev, current) = unsafe { self.find_prev_for_level(&key, prev, i) };
+                    let (prev, current) =
+                        unsafe { self.find_splice_for_level(&key, prev, i, true) };
                     unsafe {
                         if current != ptr::null_mut()
                             && self.c.same_key((*current).key.as_slice(), key.as_slice())
@@ -307,7 +463,7 @@ impl<C: KeyComparator> Skiplist<C> {
                     }
                 }
             } else {
-                let (prev, current) = unsafe { self.find_prev_for_level(&key, prev, i) };
+                let (prev, current) = unsafe { self.find_splice_for_level(&key, prev, i, true) };
                 unsafe {
                     if current != ptr::null_mut()
                         && self.c.same_key((*current).key.as_slice(), key.as_slice())
@@ -335,7 +491,7 @@ impl<C: KeyComparator> Skiplist<C> {
         prev[list_height + 1] = self.inner.head.as_ptr();
         next[list_height + 1] = ptr::null_mut();
         for i in (0..=list_height).rev() {
-            let (p, n) = unsafe { self.find_splice_for_level(&key, prev[i + 1], i) };
+            let (p, n) = unsafe { self.find_splice_for_level(&key, prev[i + 1], i, false) };
             prev[i] = p;
             next[i] = n;
             if p == n {
@@ -382,7 +538,7 @@ impl<C: KeyComparator> Skiplist<C> {
                     if prev[i].is_null() {
                         assert!(i > 1);
                         let (p, n) = unsafe {
-                            self.find_splice_for_level(&x.key, self.inner.head.as_ptr(), i)
+                            self.find_splice_for_level(&x.key, self.inner.head.as_ptr(), i, false)
                         };
                         prev[i] = p;
                         next[i] = n;
@@ -398,7 +554,8 @@ impl<C: KeyComparator> Skiplist<C> {
                     ) {
                         Ok(_) => break,
                         Err(_) => {
-                            let (p, n) = unsafe { self.find_splice_for_level(&x.key, prev[i], i) };
+                            let (p, n) =
+                                unsafe { self.find_splice_for_level(&x.key, prev[i], i, false) };
                             if p == n {
                                 assert_eq!(i, 0);
                                 if unsafe { &*p }.value != x.value {
@@ -420,8 +577,9 @@ impl<C: KeyComparator> Skiplist<C> {
                 // There is no need to use CAS for single thread writing.
                 if prev[i].is_null() {
                     assert!(i > 1);
-                    let (p, n) =
-                        unsafe { self.find_splice_for_level(&x.key, self.inner.head.as_ptr(), i) };
+                    let (p, n) = unsafe {
+                        self.find_splice_for_level(&x.key, self.inner.head.as_ptr(), i, false)
+                    };
                     prev[i] = p;
                     next[i] = n;
                     assert_ne!(p, n);
@@ -581,6 +739,15 @@ impl<T: AsRef<Skiplist<C>>, C: KeyComparator> IterRef<T, C> {
         unsafe {
             let cursor_offset = (*self.cursor).next_offset(0);
             self.cursor = self.list.as_ref().inner.arena.get_mut(cursor_offset);
+            while !self.cursor.is_null() {
+                let next = (*self.cursor).next_offset(0);
+                if tag(next) == 1 {
+                    // current is marked
+                    self.cursor = self.list.as_ref().inner.arena.get_mut(next);
+                } else {
+                    break;
+                }
+            }
         }
     }
 
@@ -703,11 +870,6 @@ mod tests {
             let value = Bytes::from(format!("value{:03}", i));
             sklist.put(key, value);
         }
-        // sklist.remove(Bytes::from(b"key004".to_vec()));
-        // sklist.remove(Bytes::from(b"key001".to_vec()));
-        // sklist.remove(Bytes::from(b"key007".to_vec()));
-        // sklist.remove(Bytes::from(b"key027".to_vec()));
-        // sklist.remove(Bytes::from(b"key017".to_vec()));
         for i in 0..30 {
             let key = Bytes::from(format!("key{:03}", i));
             sklist.remove(key);
@@ -752,6 +914,54 @@ mod tests {
         let res = sklist.remove(Bytes::from(b"key008".to_vec()));
         let res = sklist.get(b"key008");
         println!("{:?}", res);
+    }
+
+    #[test]
+    fn test_skl_remove2() {
+        let sklist = Skiplist::with_capacity(ByteWiseComparator {}, 1 << 30, true);
+        let mut i = 0;
+        while i < 1000 {
+            let key = Bytes::from(format!("key{:04}", i));
+            let value = Bytes::from(format!("value{:04}", i));
+            sklist.put(key, value);
+            i += 2;
+        }
+
+        let s1 = sklist.clone();
+        let h1 = std::thread::spawn(move || {
+            let mut i = 1;
+            while i < 1000 {
+                let key = Bytes::from(format!("key{:04}", i));
+                let value = Bytes::from(format!("value{:04}", i));
+                s1.put(key, value);
+                i += 2;
+            }
+        });
+
+        let s2 = sklist.clone();
+        let h2 = std::thread::spawn(move || {
+            let mut i = 0;
+            while i < 1000 {
+                let key = Bytes::from(format!("key{:04}", i));
+                s2.remove(key);
+                i += 2;
+            }
+        });
+
+        let _ = h1.join();
+        let _ = h2.join();
+
+        let mut iter = sklist.iter();
+        iter.seek_to_first();
+        let mut count = 0;
+        while iter.valid() {
+            let key = iter.key();
+            let value = iter.value();
+            println!("{:?}, {:?}", key, value);
+            iter.next();
+            count += 1;
+        }
+        println!("{}", count);
     }
 
     #[test]

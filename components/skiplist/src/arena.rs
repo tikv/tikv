@@ -25,6 +25,16 @@ impl Drop for Arena {
     }
 }
 
+static NO_TAG: usize = !((1 << 3) /* alignment */ - 1);
+
+pub fn tag(offset: usize) -> usize {
+    offset & 1
+}
+
+pub fn without_tag(offset: usize) -> usize {
+    offset & NO_TAG
+}
+
 impl Arena {
     pub fn with_capacity(cap: usize) -> Arena {
         let mut buf: Vec<u64> = Vec::with_capacity(cap / 8);
@@ -86,6 +96,7 @@ impl Arena {
     }
 
     pub unsafe fn get_mut<N>(&self, offset: usize) -> *mut N {
+        let offset = without_tag(offset);
         if offset == 0 {
             return ptr::null_mut();
         }

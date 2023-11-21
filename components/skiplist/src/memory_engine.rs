@@ -128,7 +128,7 @@ impl LruMemoryEngine {
                             engine.put(k, v);
                         }
                         ValueType::Delete => {
-                            engine.remove(k).is_some();
+                            let _ = engine.remove(k).is_some();
                         }
                     });
                 });
