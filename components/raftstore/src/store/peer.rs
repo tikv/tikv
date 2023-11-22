@@ -98,6 +98,7 @@ pub enum StaleState {
     Valid,
     ToValidate,
     LeaderMissing,
+    MaybeLeaderMissing,
 }
 
 #[derive(Debug)]
@@ -1629,7 +1630,6 @@ where
             self.leader_missing_time = None;
             return StaleState::Valid;
         }
-        let naive_peer = !self.is_initialized() || !self.raft_group.raft.promotable();
         // Updates the `leader_missing_time` according to the current state.
         //
         // If we are checking this it means we suspect the leader might be missing.
@@ -1649,13 +1649,18 @@ where
                 StaleState::ToValidate
             }
             Some(instant)
-                if instant.saturating_elapsed() >= ctx.cfg.abnormal_leader_missing_duration.0
-                    && !naive_peer =>
+                if instant.saturating_elapsed() >= ctx.cfg.abnormal_leader_missing_duration.0 =>
             {
                 // A peer is considered as in the leader missing state
                 // if it's initialized but is isolated from its leader or
                 // something bad happens that the raft group can not elect a leader.
-                StaleState::LeaderMissing
+                if self.is_initialized() && self.raft_group.raft.promotable() {
+                    StaleState::LeaderMissing
+                } else {
+                    // Uninitialized peer and learner may not have leader info,
+                    // even if there is a valid leader.
+                    StaleState::MaybeLeaderMissing
+                }
             }
             _ => StaleState::Valid,
         }
@@ -4433,7 +4438,14 @@ where
         &mut self,
         ctx: &mut PollContext<EK, ER, T>,
     ) {
+<<<<<<< HEAD
         if self.check_stale_conf_ver < self.region().get_region_epoch().get_conf_ver() {
+=======
+        ctx.raft_metrics.check_stale_peer.inc();
+        if self.check_stale_conf_ver < self.region().get_region_epoch().get_conf_ver()
+            || self.region().get_region_epoch().get_conf_ver() == 0
+        {
+>>>>>>> 86d4a49848 (raftstore: check stale peer on leader missing (#16038))
             self.check_stale_conf_ver = self.region().get_region_epoch().get_conf_ver();
             self.check_stale_peers = self.region().get_peers().to_vec();
         }

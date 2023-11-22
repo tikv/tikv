@@ -3,7 +3,12 @@
 // #[PerformanceCriticalPath]
 use std::sync::{Arc, Mutex};
 
+<<<<<<< HEAD
 use prometheus::local::LocalHistogram;
+=======
+use collections::HashSet;
+use prometheus::local::{LocalHistogram, LocalIntCounter};
+>>>>>>> 86d4a49848 (raftstore: check stale peer on leader missing (#16038))
 use raft::eraftpb::MessageType;
 
 use collections::HashSet;
@@ -434,7 +439,18 @@ pub struct RaftMetrics {
     pub wf_persist_log: LocalHistogram,
     pub wf_commit_log: LocalHistogram,
     pub wf_commit_not_persist_log: LocalHistogram,
+<<<<<<< HEAD
     pub raft_log_gc_skipped: RaftLogGcSkippedMetrics,
+=======
+
+    // local statistics for slowness
+    pub stat_commit_log: RaftCommitLogStatistics,
+
+    pub check_stale_peer: LocalIntCounter,
+    pub leader_missing: Arc<Mutex<HashSet<u64>>>,
+
+    last_flush_time: Instant,
+>>>>>>> 86d4a49848 (raftstore: check stale peer on leader missing (#16038))
 }
 
 impl RaftMetrics {
@@ -458,7 +474,14 @@ impl RaftMetrics {
             wf_persist_log: STORE_WF_PERSIST_LOG_DURATION_HISTOGRAM.local(),
             wf_commit_log: STORE_WF_COMMIT_LOG_DURATION_HISTOGRAM.local(),
             wf_commit_not_persist_log: STORE_WF_COMMIT_NOT_PERSIST_LOG_DURATION_HISTOGRAM.local(),
+<<<<<<< HEAD
             raft_log_gc_skipped: RaftLogGcSkippedMetrics::default(),
+=======
+            stat_commit_log: RaftCommitLogStatistics::default(),
+            check_stale_peer: CHECK_STALE_PEER_COUNTER.local(),
+            leader_missing: Arc::default(),
+            last_flush_time: Instant::now_coarse(),
+>>>>>>> 86d4a49848 (raftstore: check stale peer on leader missing (#16038))
         }
     }
 
@@ -481,6 +504,11 @@ impl RaftMetrics {
             self.wf_commit_log.flush();
             self.wf_commit_not_persist_log.flush();
         }
+<<<<<<< HEAD
+=======
+
+        self.check_stale_peer.flush();
+>>>>>>> 86d4a49848 (raftstore: check stale peer on leader missing (#16038))
         let mut missing = self.leader_missing.lock().unwrap();
         LEADER_MISSING.set(missing.len() as i64);
         missing.clear();
