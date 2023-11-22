@@ -7,7 +7,7 @@ use std::{
     path::PathBuf,
     sync::{
         atomic::{AtomicU64, Ordering},
-        Arc, Mutex, mpsc,
+        mpsc, Arc, Mutex,
     },
     time::Duration,
 };
@@ -1069,7 +1069,6 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
             )
         });
 
-
         let handle_task = async move {
             // Records how long the download task waits to be scheduled.
             sst_importer::metrics::IMPORTER_DOWNLOAD_DURATION
@@ -1097,7 +1096,7 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
                     resp.set_error(error.into());
                     crate::send_rpc_response!(Ok(resp), sink, label, start);
                     IMPORT_PENDING_TASKS.with_label_values(&[label]).dec();
-                    return
+                    return;
                 }
             };
 

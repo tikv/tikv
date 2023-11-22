@@ -308,6 +308,15 @@ where
             })?;
         }
         file_length += bytes_read as u64;
+        if file_length > expected_length {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "read more data than expected read size {}, expected {}",
+                    file_length, expected_length
+                ),
+            ));
+        }
         frame!(yield_checker.check()).await;
     }
 
