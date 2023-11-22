@@ -340,9 +340,9 @@ pub enum BlobRunMode {
 impl From<BlobRunMode> for ConfigValue {
     fn from(mode: BlobRunMode) -> ConfigValue {
         let str_value = match mode {
-            BlobRunMode::Normal => "normal",
-            BlobRunMode::ReadOnly => "read-only",
-            BlobRunMode::Fallback => "fallback",
+            BlobRunMode::Normal => "kNormal",
+            BlobRunMode::ReadOnly => "kReadOnly",
+            BlobRunMode::Fallback => "kFallback",
         };
         ConfigValue::String(str_value.into())
     }
@@ -366,8 +366,11 @@ impl FromStr for BlobRunMode {
             "normal" => Ok(BlobRunMode::Normal),
             "read-only" => Ok(BlobRunMode::ReadOnly),
             "fallback" => Ok(BlobRunMode::Fallback),
+            "kNormal" => Ok(BlobRunMode::Normal),
+            "kReadOnly" => Ok(BlobRunMode::ReadOnly),
+            "kFallback" => Ok(BlobRunMode::Fallback),
             m => Err(format!(
-                "expect: normal, read-only or fallback, got: {:?}",
+                "expect: normal, kNormal, read-only, kReadOnly, kFallback or fallback, got: {:?}",
                 m
             )),
         }
