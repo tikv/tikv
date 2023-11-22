@@ -17,13 +17,15 @@ use prometheus::{IntCounter, IntGauge};
 use tracker::TrackedFuture;
 use yatp::{queue::Extras, task::future};
 
+use crate::resource_control::{priority_from_task_meta, TaskPriority};
+
 pub type ThreadPool = yatp::ThreadPool<future::TaskCell>;
 
 use super::metrics;
 
 #[derive(Clone)]
 struct Env {
-    metrics_running_task_count: IntGauge,
+    metrics_running_task_count_by_priority: [IntGauge; TaskPriority::PRIORITY_COUNT],
     metrics_handled_task_count: IntCounter,
 }
 
@@ -46,8 +48,9 @@ impl crate::AssertSync for FuturePool {}
 impl FuturePool {
     pub fn from_pool(pool: ThreadPool, name: &str, pool_size: usize, max_tasks: usize) -> Self {
         let env = Env {
-            metrics_running_task_count: metrics::FUTUREPOOL_RUNNING_TASK_VEC
-                .with_label_values(&[name]),
+            metrics_running_task_count_by_priority: TaskPriority::priorities().map(|p| {
+                metrics::FUTUREPOOL_RUNNING_TASK_VEC.with_label_values(&[name, p.as_str()])
+            }),
             metrics_handled_task_count: metrics::FUTUREPOOL_HANDLED_TASK_VEC
                 .with_label_values(&[name]),
         };
@@ -69,6 +72,16 @@ impl FuturePool {
 
     pub fn scale_pool_size(&self, thread_count: usize) {
         self.inner.scale_pool_size(thread_count)
+    }
+
+    #[inline]
+    pub fn set_max_tasks_per_worker(&self, tasks_per_thread: usize) {
+        self.inner.set_max_tasks_per_worker(tasks_per_thread);
+    }
+
+    #[inline]
+    pub fn get_max_tasks_count(&self) -> usize {
+        self.inner.max_tasks.load(Ordering::Relaxed)
     }
 
     /// Gets current running task count.
@@ -148,13 +161,25 @@ impl PoolInner {
         self.pool_size.store(thread_count, Ordering::Release);
     }
 
+    fn set_max_tasks_per_worker(&self, max_tasks_per_thread: usize) {
+        let max_tasks = self
+            .pool_size
+            .load(Ordering::Acquire)
+            .saturating_mul(max_tasks_per_thread);
+        self.max_tasks.store(max_tasks, Ordering::Release);
+    }
+
     fn get_running_task_count(&self) -> usize {
         // As long as different future pool has different name prefix, we can safely use
         // the value in metrics.
-        self.env.metrics_running_task_count.get() as usize
+        self.env
+            .metrics_running_task_count_by_priority
+            .iter()
+            .map(|r| r.get())
+            .sum::<i64>() as usize
     }
 
-    fn gate_spawn(&self) -> Result<(), Full> {
+    fn gate_spawn(&self, current_tasks: usize) -> Result<(), Full> {
         fail_point!("future_pool_spawn_full", |_| Err(Full {
             current_tasks: 100,
             max_tasks: 100,
@@ -165,8 +190,7 @@ impl PoolInner {
             return Ok(());
         }
 
-        let current_tasks = self.get_running_task_count();
-        if current_tasks >= max_tasks {
+        if current_tasks >= max_tasks / TaskPriority::PRIORITY_COUNT {
             Err(Full {
                 current_tasks,
                 max_tasks,
@@ -181,9 +205,14 @@ impl PoolInner {
         F: Future + Send + 'static,
     {
         let metrics_handled_task_count = self.env.metrics_handled_task_count.clone();
-        let metrics_running_task_count = self.env.metrics_running_task_count.clone();
+        let task_priority = extras
+            .as_ref()
+            .map(|m| priority_from_task_meta(m.metadata()))
+            .unwrap_or(TaskPriority::Medium);
+        let metrics_running_task_count =
+            self.env.metrics_running_task_count_by_priority[task_priority as usize].clone();
 
-        self.gate_spawn()?;
+        self.gate_spawn(metrics_running_task_count.get() as usize)?;
 
         metrics_running_task_count.inc();
 
@@ -210,9 +239,10 @@ impl PoolInner {
         F::Output: Send,
     {
         let metrics_handled_task_count = self.env.metrics_handled_task_count.clone();
-        let metrics_running_task_count = self.env.metrics_running_task_count.clone();
+        let metrics_running_task_count =
+            self.env.metrics_running_task_count_by_priority[TaskPriority::Medium as usize].clone();
 
-        self.gate_spawn()?;
+        self.gate_spawn(metrics_running_task_count.get() as usize)?;
 
         let (tx, rx) = oneshot::channel();
         metrics_running_task_count.inc();

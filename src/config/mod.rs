@@ -2234,7 +2234,6 @@ pub struct UnifiedReadPoolConfig {
     pub max_thread_count: usize,
     #[online_config(skip)]
     pub stack_size: ReadableSize,
-    #[online_config(skip)]
     pub max_tasks_per_worker: usize,
     pub auto_adjust_pool_size: bool,
     // FIXME: Add more configs when they are effective in yatp

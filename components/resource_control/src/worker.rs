@@ -10,9 +10,10 @@ use std::{
 
 use file_system::{fetch_io_bytes, IoBytes, IoType};
 use prometheus::Histogram;
-use strum::{EnumCount, IntoEnumIterator};
+use strum::EnumCount;
 use tikv_util::{
     debug,
+    resource_control::TaskPriority,
     sys::{cpu_time::ProcessStat, SysQuota},
     time::Instant,
     warn,
@@ -21,13 +22,17 @@ use tikv_util::{
 
 use crate::{
     metrics::*,
-    resource_group::{ResourceGroupManager, TaskPriority},
+    resource_group::ResourceGroupManager,
     resource_limiter::{GroupStatistics, ResourceLimiter, ResourceType},
 };
 
 pub const BACKGROUND_LIMIT_ADJUST_DURATION: Duration = Duration::from_secs(10);
 
 const MICROS_PER_SEC: f64 = 1_000_000.0;
+// the minimal schedule wait duration due to the overhead of queue.
+// We should exclude this cause when calculate the estimated total wait
+// duration.
+const MINIMAL_SCHEDULE_WAIT_SECS: f64 = 0.000_005; //5us
 
 pub struct ResourceUsageStats {
     total_quota: f64,
@@ -303,7 +308,7 @@ struct GroupStats {
 /// In general, caller should call this function in a fixed interval.
 pub struct PriorityLimiterAdjustWorker<R> {
     resource_ctl: Arc<ResourceGroupManager>,
-    trackers: [PriorityLimiterStatsTracker; 3],
+    trackers: [PriorityLimiterStatsTracker; TaskPriority::PRIORITY_COUNT],
     resource_quota_getter: R,
     last_adjust_time: Instant,
     is_last_low_cpu: bool,
@@ -327,10 +332,9 @@ impl<R: ResourceStatsProvider> PriorityLimiterAdjustWorker<R> {
         resource_ctl: Arc<ResourceGroupManager>,
         resource_quota_getter: R,
     ) -> Self {
-        let priorities: [_; 3] = TaskPriority::iter().collect::<Vec<_>>().try_into().unwrap();
         let trackers = resource_ctl
             .get_priority_resource_limiters()
-            .zip(priorities)
+            .zip(TaskPriority::priorities())
             .map(|(l, p)| PriorityLimiterStatsTracker::new(l, p.as_str()));
         Self {
             resource_ctl,
@@ -367,8 +371,8 @@ impl<R: ResourceStatsProvider> PriorityLimiterAdjustWorker<R> {
         }
         self.is_last_single_group = false;
 
-        let stats: [_; 3] =
-            std::array::from_fn(|i| self.trackers[i].get_and_update_last_stats(dur.as_secs_f64()));
+        let stats: [_; TaskPriority::PRIORITY_COUNT] =
+            array::from_fn(|i| self.trackers[i].get_and_update_last_stats(dur.as_secs_f64()));
 
         let process_cpu_stats = match self
             .resource_quota_getter
@@ -415,12 +419,13 @@ impl<R: ResourceStatsProvider> PriorityLimiterAdjustWorker<R> {
             return;
         }
 
-        let real_cpu_total: f64 = stats.iter().map(|s| s.cpu_secs).sum();
+        let cpu_duration: [_; TaskPriority::PRIORITY_COUNT] = array::from_fn(|i| stats[i].cpu_secs);
+        let real_cpu_total: f64 = cpu_duration.iter().sum();
         let expect_pool_cpu_total = real_cpu_total * (process_cpu_stats.total_quota * 0.95)
             / process_cpu_stats.current_used;
         let mut limits = [0.0; 2];
-        let level_expected: [_; 3] =
-            std::array::from_fn(|i| stats[i].cpu_secs + stats[i].wait_secs);
+        let level_expected: [_; TaskPriority::PRIORITY_COUNT] =
+            array::from_fn(|i| stats[i].cpu_secs + stats[i].wait_secs);
         // substract the cpu time usage for priority high.
         let mut expect_cpu_time_total = expect_pool_cpu_total - level_expected[0];
 
@@ -442,8 +447,10 @@ impl<R: ResourceStatsProvider> PriorityLimiterAdjustWorker<R> {
             limits[i - 1] = limit;
             expect_cpu_time_total -= level_expected[i];
         }
-        debug!("adjsut cpu limiter by priority"; "cpu_quota" => process_cpu_stats.total_quota, "process_cpu" => process_cpu_stats.current_used, "expected_cpu" => ?level_expected,
-            "limits" => ?limits, "limit_cpu_total" => expect_pool_cpu_total, "pool_cpu_cost" => real_cpu_total);
+        debug!("adjsut cpu limiter by priority"; "cpu_quota" => process_cpu_stats.total_quota, 
+            "process_cpu" => process_cpu_stats.current_used, "expected_cpu" => ?level_expected,
+            "cpu_costs" => ?cpu_duration, "limits" => ?limits, 
+            "limit_cpu_total" => expect_pool_cpu_total, "pool_cpu_cost" => real_cpu_total);
     }
 }
 
@@ -516,12 +523,15 @@ impl PriorityLimiterStatsTracker {
         let stats_delta = (cur_stats - self.last_stats) / dur_secs;
         self.last_stats = cur_stats;
         let wait_stats: [_; 2] =
-            std::array::from_fn(|i| self.task_wait_dur_trakcers[i].get_and_upate_statistics());
+            array::from_fn(|i| self.task_wait_dur_trakcers[i].get_and_upate_statistics());
         let schedule_wait_dur_secs = wait_stats.iter().map(|s| s.0).sum::<f64>() / dur_secs;
+        let expected_wait_dur_secs = stats_delta.request_count as f64 * MINIMAL_SCHEDULE_WAIT_SECS;
+        let normed_schedule_wait_dur_secs =
+            (schedule_wait_dur_secs - expected_wait_dur_secs).max(0.0);
         LimiterStats {
             cpu_secs: stats_delta.total_consumed as f64 / MICROS_PER_SEC,
             wait_secs: stats_delta.total_wait_dur_us as f64 / MICROS_PER_SEC
-                + schedule_wait_dur_secs,
+                + normed_schedule_wait_dur_secs,
             req_count: stats_delta.request_count,
         }
     }

@@ -1,7 +1,6 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    borrow::Cow,
     cell::Cell,
     cmp::{max, min},
     collections::HashSet,
@@ -22,8 +21,11 @@ use kvproto::{
     resource_manager::{GroupMode, ResourceGroup as PbResourceGroup},
 };
 use parking_lot::{MappedRwLockReadGuard, RwLock, RwLockReadGuard};
-use strum::{EnumCount, EnumIter, IntoEnumIterator};
-use tikv_util::{info, time::Instant};
+use tikv_util::{
+    info,
+    resource_control::{TaskMetadata, TaskPriority, DEFAULT_RESOURCE_GROUP_NAME},
+    time::Instant,
+};
 use yatp::queue::priority::TaskPriorityProvider;
 
 use crate::{metrics::deregister_metrics, resource_limiter::ResourceLimiter};
@@ -34,8 +36,6 @@ const DEFAULT_PRIORITY_PER_READ_TASK: u64 = 50;
 const TASK_EXTRA_FACTOR_BY_LEVEL: [u64; 3] = [0, 20, 100];
 /// duration to update the minimal priority value of each resource group.
 pub const MIN_PRIORITY_UPDATE_INTERVAL: Duration = Duration::from_secs(1);
-/// default resource group name
-const DEFAULT_RESOURCE_GROUP_NAME: &str = "default";
 /// default value of max RU quota.
 const DEFAULT_MAX_RU_QUOTA: u64 = 10_000;
 /// The maximum RU quota that can be configured.
@@ -56,40 +56,6 @@ pub enum ResourceConsumeType {
     IoBytes(u64),
 }
 
-#[derive(Copy, Clone, Eq, PartialEq, EnumCount, EnumIter, Debug)]
-#[repr(usize)]
-pub enum TaskPriority {
-    High = 0,
-    Medium = 1,
-    Low = 2,
-}
-
-impl TaskPriority {
-    pub fn as_str(&self) -> &'static str {
-        match *self {
-            TaskPriority::High => "high",
-            TaskPriority::Medium => "medium",
-            TaskPriority::Low => "low",
-        }
-    }
-}
-
-impl From<u32> for TaskPriority {
-    fn from(value: u32) -> Self {
-        // map the resource group priority value (1,8,16) to (Low,Medium,High)
-        // 0 means the priority is not set, so map it to medium by default.
-        if value == 0 {
-            Self::Medium
-        } else if value < 6 {
-            Self::Low
-        } else if value < 11 {
-            Self::Medium
-        } else {
-            Self::High
-        }
-    }
-}
-
 /// ResourceGroupManager manages the metadata of each resource group.
 pub struct ResourceGroupManager {
     pub(crate) resource_groups: DashMap<String, ResourceGroup>,
@@ -100,24 +66,20 @@ pub struct ResourceGroupManager {
     // resource limiter has changed.
     version_generator: AtomicU64,
     // the shared resource limiter of each priority
-    priority_limiters: [Arc<ResourceLimiter>; TaskPriority::COUNT],
+    priority_limiters: [Arc<ResourceLimiter>; TaskPriority::PRIORITY_COUNT],
 }
 
 impl Default for ResourceGroupManager {
     fn default() -> Self {
-        let priority_limiters = TaskPriority::iter()
-            .map(|p| {
-                Arc::new(ResourceLimiter::new(
-                    p.as_str().to_owned(),
-                    f64::INFINITY,
-                    f64::INFINITY,
-                    0,
-                    false,
-                ))
-            })
-            .collect::<Vec<_>>()
-            .try_into()
-            .unwrap();
+        let priority_limiters = TaskPriority::priorities().map(|p| {
+            Arc::new(ResourceLimiter::new(
+                p.as_str().to_owned(),
+                f64::INFINITY,
+                f64::INFINITY,
+                0,
+                false,
+            ))
+        });
         let manager = Self {
             resource_groups: Default::default(),
             group_count: AtomicU64::new(0),
@@ -385,7 +347,9 @@ impl ResourceGroupManager {
     }
 
     #[inline]
-    pub fn get_priority_resource_limiters(&self) -> [Arc<ResourceLimiter>; 3] {
+    pub fn get_priority_resource_limiters(
+        &self,
+    ) -> [Arc<ResourceLimiter>; TaskPriority::PRIORITY_COUNT] {
         self.priority_limiters.clone()
     }
 }
@@ -668,101 +632,9 @@ impl ResourceController {
     }
 }
 
-const OVERRIDE_PRIORITY_MASK: u8 = 0b1000_0000;
-const RESOURCE_GROUP_NAME_MASK: u8 = 0b0100_0000;
-
-#[derive(Clone, Default)]
-pub struct TaskMetadata<'a> {
-    // The first byte is a bit map to indicate which field exists,
-    // then append override priority if nonzero,
-    // then append resource group name if not default
-    metadata: Cow<'a, [u8]>,
-}
-
-impl<'a> TaskMetadata<'a> {
-    pub fn deep_clone(&self) -> TaskMetadata<'static> {
-        TaskMetadata {
-            metadata: Cow::Owned(self.metadata.to_vec()),
-        }
-    }
-
-    pub fn from_ctx(ctx: &ResourceControlContext) -> Self {
-        let mut mask = 0;
-        let mut buf = vec![];
-        if ctx.override_priority != 0 {
-            mask |= OVERRIDE_PRIORITY_MASK;
-        }
-        if !ctx.resource_group_name.is_empty()
-            && ctx.resource_group_name != DEFAULT_RESOURCE_GROUP_NAME
-        {
-            mask |= RESOURCE_GROUP_NAME_MASK;
-        }
-        if mask == 0 {
-            // if all are default value, no need to write anything to save copy cost
-            return Self {
-                metadata: Cow::Owned(buf),
-            };
-        }
-        buf.push(mask);
-        if mask & OVERRIDE_PRIORITY_MASK != 0 {
-            buf.extend_from_slice(&(ctx.override_priority as u32).to_ne_bytes());
-        }
-        if mask & RESOURCE_GROUP_NAME_MASK != 0 {
-            buf.extend_from_slice(ctx.resource_group_name.as_bytes());
-        }
-        Self {
-            metadata: Cow::Owned(buf),
-        }
-    }
-
-    fn from_bytes(bytes: &'a [u8]) -> Self {
-        Self {
-            metadata: Cow::Borrowed(bytes),
-        }
-    }
-
-    pub fn to_vec(self) -> Vec<u8> {
-        self.metadata.into_owned()
-    }
-
-    pub fn override_priority(&self) -> u32 {
-        if self.metadata.is_empty() {
-            return 0;
-        }
-        if self.metadata[0] & OVERRIDE_PRIORITY_MASK == 0 {
-            return 0;
-        }
-        u32::from_ne_bytes(self.metadata[1..5].try_into().unwrap())
-    }
-
-    pub fn group_name(&self) -> &[u8] {
-        if self.metadata.is_empty() {
-            return DEFAULT_RESOURCE_GROUP_NAME.as_bytes();
-        }
-        if self.metadata[0] & RESOURCE_GROUP_NAME_MASK == 0 {
-            return DEFAULT_RESOURCE_GROUP_NAME.as_bytes();
-        }
-        let start = if self.metadata[0] & OVERRIDE_PRIORITY_MASK != 0 {
-            5
-        } else {
-            1
-        };
-        &self.metadata[start..]
-    }
-}
-
-// return the TaskPriority value from task metadata.
-// This function is used for handling thread pool task waiting metrics.
-pub fn priority_from_task_meta(meta: &[u8]) -> usize {
-    let priority = TaskMetadata::from_bytes(meta).override_priority();
-    // mapping (high(15), medium(8), low(1)) -> (0, 1, 2)
-    debug_assert!(priority <= 16);
-    TaskPriority::from(priority) as usize
-}
-
 impl TaskPriorityProvider for ResourceController {
     fn priority_of(&self, extras: &yatp::queue::Extras) -> u64 {
-        let metadata = TaskMetadata::from_bytes(extras.metadata());
+        let metadata = TaskMetadata::from(extras.metadata());
         self.resource_group(metadata.group_name()).get_priority(
             extras.current_level() as usize,
             if metadata.override_priority() == 0 {
@@ -1336,7 +1208,7 @@ pub(crate) mod tests {
             assert_eq!(metadata.override_priority(), priority);
             assert_eq!(metadata.group_name(), group_name.as_bytes());
             let vec = metadata.to_vec();
-            let metadata1 = TaskMetadata::from_bytes(&vec);
+            let metadata1 = TaskMetadata::from(vec.as_slice());
             assert_eq!(metadata1.override_priority(), priority);
             assert_eq!(metadata1.group_name(), group_name.as_bytes());
         }
