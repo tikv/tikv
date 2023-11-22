@@ -4010,7 +4010,12 @@ impl ConfigController {
 
     pub fn update(&self, change: HashMap<String, String>) -> CfgResult<()> {
         let diff = to_config_change(change.clone())?;
-        self.update_impl(diff, Some(change))
+        self.update_impl(diff, Some(change), true)
+    }
+
+    pub fn update_without_persist(&self, change: HashMap<String, String>) -> CfgResult<()> {
+        let diff = to_config_change(change.clone())?;
+        self.update_impl(diff, Some(change), false)
     }
 
     pub fn update_from_toml_file(&self) -> CfgResult<()> {
@@ -4018,7 +4023,7 @@ impl ConfigController {
         match TikvConfig::from_file(Path::new(&current.cfg_path), None) {
             Ok(incoming) => {
                 let diff = current.diff(&incoming);
-                self.update_impl(diff, None)
+                self.update_impl(diff, None, true)
             }
             Err(e) => Err(e),
         }
@@ -4028,6 +4033,7 @@ impl ConfigController {
         &self,
         mut diff: HashMap<String, ConfigValue>,
         change: Option<HashMap<String, String>>,
+        persist: bool,
     ) -> CfgResult<()> {
         diff = {
             let incoming = self.get_current();
@@ -4062,6 +4068,11 @@ impl ConfigController {
         debug!("all config change had been dispatched"; "change" => ?to_update);
         // we already verified the correctness at the beginning of this function.
         inner.current.update(to_update).unwrap();
+
+        if !persist {
+            return Ok(());
+        }
+
         // Write change to the config file
         if let Some(change) = change {
             let content = {
@@ -4850,7 +4861,31 @@ mod tests {
         let diff = config_value_to_string(diff.into_iter().collect());
         assert_eq!(diff.len(), 1);
         assert_eq!(diff[0].0.as_str(), "blob_run_mode");
-        assert_eq!(diff[0].1.as_str(), "fallback");
+        assert_eq!(diff[0].1.as_str(), "kFallback");
+    }
+
+    #[test]
+    fn test_update_titan_blob_run_mode_config() {
+        let mut tmp_path = tempfile::Builder::new().tempdir().unwrap().into_path();
+        tmp_path.push("data");
+        let mut cfg = TikvConfig::default();
+        cfg.storage.data_dir = String::from(tmp_path.to_str().unwrap());
+        cfg.rocksdb.titan.enabled = true;
+        let (_, cfg_controller, ..) = new_engines::<ApiV1>(cfg);
+        for run_mode in [
+            "kFallback",
+            "kNormal",
+            "kReadOnly",
+            "fallback",
+            "normal",
+            "read-only",
+        ] {
+            let change = HashMap::from([(
+                "rocksdb.defaultcf.titan.blob-run-mode".to_string(),
+                run_mode.to_string(),
+            )]);
+            cfg_controller.update_without_persist(change).unwrap();
+        }
     }
 
     #[test]
