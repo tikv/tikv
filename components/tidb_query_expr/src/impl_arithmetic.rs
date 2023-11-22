@@ -452,16 +452,10 @@ fn int_divide_decimal(ctx: &mut EvalContext, lhs: &Decimal, rhs: &Decimal) -> Re
     let result = arithmetic_with_ctx::<DecimalDivide>(ctx, lhs, rhs)?;
     if let Some(result) = result {
         let result = result.as_i64();
-        Ok(if result.is_truncated() {
-            Some(result.unwrap())
-        } else {
-            result
-                .into_result_with_overflow_err(
-                    ctx,
-                    Error::overflow("BIGINT", format!("({} / {})", lhs, rhs)),
-                )
-                .map(Some)?
-        })
+        if result.is_truncated() {
+            return Ok(Some(result.unwrap()));
+        }
+        Err(Error::overflow("BIGINT", format!("({} / {})", lhs, rhs)).into())
     } else {
         Ok(None)
     }
