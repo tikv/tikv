@@ -2,7 +2,7 @@
 
 use core::slice::SlicePattern;
 use std::{
-    mem, ptr,
+    cmp, mem, ptr,
     ptr::NonNull,
     sync::{
         atomic::{AtomicBool, AtomicUsize, Ordering},
@@ -70,7 +70,7 @@ impl Node {
     fn mark_tower(&self) -> bool {
         let height = self.height;
 
-        for level in (0..height).rev() {
+        for level in (0..=height).rev() {
             let tag = { self.tower[level].fetch_or(1, Ordering::SeqCst) & 1 };
 
             // If the level 0 pointer was already marked, somebody else removed the node.
@@ -369,6 +369,153 @@ impl<C: KeyComparator> Skiplist<C> {
         }
     }
 
+    unsafe fn search_bound(
+        &self,
+        key: &[u8],
+        upper_bound: bool,
+        allow_equal: bool,
+    ) -> Option<*mut Node> {
+        'search: loop {
+            let mut level = self.height() + 1;
+            // Fast loop to skip empty tower levels.
+            while level >= 1 && (*self.inner.head.as_ptr()).next_offset(level - 1) == 0 {
+                level -= 1;
+            }
+
+            let mut found = None;
+            let mut pred = self.inner.head.as_ptr();
+
+            while level >= 1 {
+                level -= 1;
+
+                // Two adjacent nodes at the current level.
+                let mut curr = (*pred).next_offset(level);
+
+                // If `curr` is marked, that means `pred` is removed and we have to restart the
+                // search.
+                if tag(curr) == 1 {
+                    continue 'search;
+                }
+
+                // Iterate through the current level until we reach a node with a key greater
+                // than or equal to `key`.
+                let mut curr_node: *mut Node = self.inner.arena.get_mut(curr);
+                while !curr_node.is_null() {
+                    let succ = (*curr_node).next_offset(level);
+
+                    if tag(succ) == 1 {
+                        if let Some(c) = self.help_unlink(pred, curr, succ, level) {
+                            curr = c;
+                            curr_node = self.inner.arena.get_mut(curr);
+                            continue;
+                        } else {
+                            // On failure, we cannot do anything reasonable to continue
+                            // searching from the current position. Restart the search.
+                            continue 'search;
+                        }
+                    }
+
+                    // If `curr` contains a key that is greater than (or equal)
+                    // to `key`, we're done with this level.
+                    //
+                    // The condition determines whether we should stop the
+                    // search. For the upper
+                    // bound, we return the last node before the condition
+                    // became true. For the lower bound, we
+                    // return the first node after the condition became true.
+                    if upper_bound {
+                        if !below_upper_bound(&self.c, key, &(*curr_node).key, allow_equal) {
+                            break;
+                        }
+                        found = Some(curr_node);
+                    } else {
+                        if above_lower_bound(&self.c, key, &(*curr_node).key, allow_equal) {
+                            found = Some(curr_node);
+                            break;
+                        }
+                    }
+
+                    // Move one step forward.
+                    pred = curr_node;
+                    curr_node = self.inner.arena.get_mut(succ);
+                    curr = succ;
+                }
+            }
+            return found;
+        }
+    }
+
+    unsafe fn search_position(&self, key: &[u8]) -> Position {
+        let mut left = [self.inner.head.as_ptr(); MAX_HEIGHT + 1];
+        let mut right = [ptr::null_mut(); MAX_HEIGHT + 1];
+        let mut found = None;
+        unsafe {
+            'search: loop {
+                let mut level = self.height() + 1;
+                // Fast loop to skip empty tower levels.
+                while level >= 1 && (*self.inner.head.as_ptr()).next_offset(level - 1) == 0 {
+                    level -= 1;
+                }
+
+                let mut pred = self.inner.head.as_ptr();
+
+                while level >= 1 {
+                    level -= 1;
+
+                    // Two adjacent nodes at the current level.
+                    let mut curr = (*pred).next_offset(level);
+
+                    // If `curr` is marked, that means `pred` is removed and we have to restart the
+                    // search.
+                    if tag(curr) == 1 {
+                        continue 'search;
+                    }
+
+                    // Iterate through the current level until we reach a node with a key greater
+                    // than or equal to `key`.
+                    let mut curr_node: *mut Node = self.inner.arena.get_mut(curr);
+                    while !curr_node.is_null() {
+                        let succ = (*curr_node).next_offset(level);
+
+                        if tag(succ) == 1 {
+                            if let Some(c) = self.help_unlink(pred, curr, succ, level) {
+                                // On success, continue searching through the current level.
+                                curr = c;
+                                curr_node = self.inner.arena.get_mut(curr);
+                                continue;
+                            } else {
+                                // On failure, we cannot do anything reasonable to continue
+                                // searching from the current position. Restart the search.
+                                continue 'search;
+                            }
+                        }
+
+                        // If `curr` contains a key that is greater than or equal to `key`, we're
+                        // done with this level.
+                        match self.c.compare_key(&(*curr_node).key, key) {
+                            cmp::Ordering::Greater => break,
+                            cmp::Ordering::Equal => {
+                                found = Some(curr_node);
+                                break;
+                            }
+                            cmp::Ordering::Less => {}
+                        }
+
+                        // Move one step forward.
+                        pred = curr_node;
+                        curr_node = self.inner.arena.get_mut(succ);
+                        curr = succ;
+                    }
+
+                    left[level] = pred;
+                    right[level] = curr_node;
+                }
+
+                return Position { found, left, right };
+            }
+        }
+    }
+
     unsafe fn search_for_remove(&self, key: &[u8]) -> Position {
         let list_height = self.height();
         let mut list_height = self.height();
@@ -390,12 +537,11 @@ impl<C: KeyComparator> Skiplist<C> {
     }
 
     pub fn remove(&self, key: impl Into<Bytes>) -> Option<Bytes> {
-        let list_height = self.height();
         let key = key.into();
 
         unsafe {
             loop {
-                let search = self.search_for_remove(&key);
+                let search = self.search_position(&key);
 
                 let n = search.found?;
 
@@ -405,10 +551,10 @@ impl<C: KeyComparator> Skiplist<C> {
                     // do this by simply repeating the search, but it's usually
                     // faster to unlink it manually using the `left` and `right`
                     // lists.
-
                     let node = &(*n);
-                    for level in (0..node.height).rev() {
+                    for level in (0..=node.height).rev() {
                         let succ = without_tag(node.tower[level].load(Ordering::SeqCst));
+
                         match (*search.left[level]).tower[level].compare_exchange(
                             self.inner.arena.offset(node),
                             succ,
@@ -417,7 +563,9 @@ impl<C: KeyComparator> Skiplist<C> {
                         ) {
                             Ok(_) => {}
                             Err(_) => {
-                                unimplemented!()
+                                // Failed! Just repeat the search to completely unlink the node.
+                                self.search_bound(&key, false, true);
+                                break;
                             }
                         }
                     }
@@ -477,13 +625,153 @@ impl<C: KeyComparator> Skiplist<C> {
         value
     }
 
+    pub fn put(&self, key: impl Into<Bytes>, value: impl Into<Bytes>) -> Option<(Bytes, Bytes)> {
+        let (key, value) = (key.into(), value.into());
+        let mut list_height = self.height();
+        unsafe {
+            let mut search;
+            loop {
+                // First try searching for the key.
+                // Note that the `Ord` implementation for `K` may panic during the search.
+                search = self.search_position(&key);
+                let r = match search.found {
+                    Some(r) => r,
+                    None => break,
+                };
+
+                if (*r).value != value {
+                    info!(
+                        "Different values with the same key";
+                        "key" => ?key,
+                        "prev_value" => ?((*r).value).as_slice(),
+                        "value" => ?value.as_slice(),
+                    );
+                    // If a node with the key was found and we should replace it, mark its tower
+                    // and then repeat the search.
+                    // todo: concurrent issue?
+                    (*r).value = value;
+                }
+                return None;
+            }
+
+            let height = self.random_height();
+            let node_offset = Node::alloc(&self.inner.arena, key, value, height);
+            while height > list_height {
+                match self.inner.height.compare_exchange_weak(
+                    list_height,
+                    height,
+                    Ordering::SeqCst,
+                    Ordering::SeqCst,
+                ) {
+                    Ok(_) => break,
+                    Err(h) => list_height = h,
+                }
+            }
+
+            let n: &mut Node = &mut *self.inner.arena.get_mut(node_offset);
+            loop {
+                // Set the lowest successor of `n` to `search.right[0]`.
+                let right_offset = self.inner.arena.offset(search.right[0]);
+                n.tower[0].store(right_offset, Ordering::SeqCst);
+                // Try installing the new node into the skip list (at level 0).
+                if (*search.left[0]).tower[0]
+                    .compare_exchange(
+                        right_offset,
+                        node_offset,
+                        Ordering::SeqCst,
+                        Ordering::SeqCst,
+                    )
+                    .is_ok()
+                {
+                    break;
+                }
+
+                // We failed. Let's search for the key and try again.
+                search = self.search_position(&n.key);
+
+                if let Some(r) = search.found {
+                    if (*r).value != n.value {
+                        info!(
+                            "Different values with the same key";
+                            "key" => ?n.key,
+                            "prev_value" => ?((*r).value).as_slice(),
+                            "value" => ?n.value.as_slice(),
+                        );
+                        // If a node with the key was found and we should replace it, mark its tower
+                        // and then repeat the search.
+                        // todo: concurrent issue?
+                        panic!("why here");
+                    }
+                    return None;
+                }
+            }
+
+            // Build the rest of the tower above level 0.
+            'build: for level in 1..=height {
+                // Obtain the predecessor and successor at the current level.
+                let pred = search.left[level];
+                let succ = search.right[level];
+                let succ_offset = self.inner.arena.offset(succ);
+
+                // Load the current value of the pointer in the tower at this level.
+                // TODO(Amanieu): can we use relaxed ordering here?
+                let next = n.tower[level].load(Ordering::SeqCst);
+
+                // If the current pointer is marked, that means another thread is already
+                // removing the node we've just inserted. In that case, let's just stop
+                // building the tower.
+                if tag(next) == 1 {
+                    break 'build;
+                }
+
+                if !succ.is_null() && self.c.compare_key(&(*succ).key, &n.key).is_eq() {
+                    search = self.search_position(&n.key);
+                    continue;
+                }
+
+                // Change the pointer at the current level from `next` to `succ`. If this CAS
+                // operation fails, that means another thread has marked the pointer and we
+                // should stop building the tower.
+                if n.tower[level]
+                    .compare_exchange(next, succ_offset, Ordering::SeqCst, Ordering::SeqCst)
+                    .is_err()
+                {
+                    break 'build;
+                }
+
+                // Try installing the new node at the current level.
+                if (*pred).tower[level]
+                    .compare_exchange(succ_offset, node_offset, Ordering::SeqCst, Ordering::SeqCst)
+                    .is_ok()
+                {
+                    // Success! Continue on the next level.
+                    break;
+                }
+
+                // We don't have the most up-to-date search results. Repeat the search.
+                //
+                // If this search panics, we simply stop building the tower without breaking
+                // any invariants. Note that building higher levels is completely optional.
+                // Only the lowest level really matters, and all the higher levels are there
+                // just to make searching faster.
+                search = self.search_position(&n.key);
+            }
+
+            if tag(n.next_offset(height)) == 1 {
+                self.search_bound(&n.key, false, true);
+            }
+
+            None
+        }
+    }
+
     /// Insert the key value pair to skiplist.
     ///
     /// Returns None if the insertion success.
     /// Returns Some(key, vaule) when insertion failed. This happens when the
     /// key already exists and the existed value not equal to the value
     /// passed to this function, returns the passed key and value.
-    pub fn put(&self, key: impl Into<Bytes>, value: impl Into<Bytes>) -> Option<(Bytes, Bytes)> {
+    pub fn put_t(&self, key: impl Into<Bytes>, value: impl Into<Bytes>) -> Option<(Bytes, Bytes)> {
         let (key, value) = (key.into(), value.into());
         let mut list_height = self.height();
         let mut prev = [ptr::null_mut(); MAX_HEIGHT + 1];
@@ -794,6 +1082,46 @@ impl<T: AsRef<Skiplist<C>>, C: KeyComparator> IterRef<T, C> {
     }
 }
 
+/// Helper function to check if a value is above a lower bound
+fn above_lower_bound<C: KeyComparator>(
+    c: &C,
+    bound: &[u8],
+    other: &[u8],
+    allow_equal: bool,
+) -> bool {
+    if allow_equal {
+        match c.compare_key(other, bound) {
+            cmp::Ordering::Greater | cmp::Ordering::Equal => return true,
+            _ => return false,
+        }
+    } else {
+        match c.compare_key(other, bound) {
+            cmp::Ordering::Greater => return true,
+            _ => return false,
+        }
+    }
+}
+
+/// Helper function to check if a value is below an upper bound
+fn below_upper_bound<C: KeyComparator>(
+    c: &C,
+    bound: &[u8],
+    other: &[u8],
+    allow_equal: bool,
+) -> bool {
+    if allow_equal {
+        match c.compare_key(bound, other) {
+            cmp::Ordering::Greater | cmp::Ordering::Equal => return true,
+            _ => return false,
+        }
+    } else {
+        match c.compare_key(bound, other) {
+            cmp::Ordering::Greater => return true,
+            _ => return false,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -920,19 +1248,43 @@ mod tests {
     fn test_skl_remove2() {
         let sklist = Skiplist::with_capacity(ByteWiseComparator {}, 1 << 30, true);
         let mut i = 0;
-        while i < 1000 {
-            let key = Bytes::from(format!("key{:04}", i));
-            let value = Bytes::from(format!("value{:04}", i));
+
+        let num = 100000;
+
+        let s0 = sklist.clone();
+        let h0 = std::thread::spawn(move || {
+            let mut i = num / 2;
+            while i < num {
+                let key = Bytes::from(format!("key{:08}", i));
+                let value = Bytes::from(format!("value{:08}", i));
+                s0.put(key, value);
+                i += 2;
+
+                if i % 10000 == 0 {
+                    println!("progress: {}", i);
+                }
+            }
+        });
+
+        while i < num / 2 {
+            let key = Bytes::from(format!("key{:08}", i));
+            let value = Bytes::from(format!("value{:08}", i));
             sklist.put(key, value);
             i += 2;
+
+            if i % 10000 == 0 {
+                println!("progress: {}", i);
+            }
         }
+
+        let _ = h0.join();
 
         let s1 = sklist.clone();
         let h1 = std::thread::spawn(move || {
             let mut i = 1;
-            while i < 1000 {
-                let key = Bytes::from(format!("key{:04}", i));
-                let value = Bytes::from(format!("value{:04}", i));
+            while i < num / 2 {
+                let key = Bytes::from(format!("key{:08}", i));
+                let value = Bytes::from(format!("value{:08}", i));
                 s1.put(key, value);
                 i += 2;
             }
@@ -940,16 +1292,67 @@ mod tests {
 
         let s2 = sklist.clone();
         let h2 = std::thread::spawn(move || {
+            let mut i = num / 2 + 1;
+            while i < num {
+                let key = Bytes::from(format!("key{:08}", i));
+                let value = Bytes::from(format!("value{:08}", i));
+                s2.put(key, value);
+                i += 2;
+            }
+        });
+
+        let s3 = sklist.clone();
+        let h3 = std::thread::spawn(move || {
             let mut i = 0;
-            while i < 1000 {
-                let key = Bytes::from(format!("key{:04}", i));
-                s2.remove(key);
+            while i < num / 2 {
+                let key = Bytes::from(format!("key{:08}", i));
+                s3.remove(key);
+                i += 2;
+            }
+        });
+
+        let s4 = sklist.clone();
+        let h4 = std::thread::spawn(move || {
+            let mut i = num / 2;
+            while i < num {
+                let key = Bytes::from(format!("key{:08}", i));
+                s4.remove(key);
                 i += 2;
             }
         });
 
         let _ = h1.join();
         let _ = h2.join();
+        let _ = h3.join();
+        let _ = h4.join();
+
+        let mut iter = sklist.iter();
+        iter.seek_to_first();
+        let mut count = 0;
+        while iter.valid() {
+            iter.next();
+            count += 1;
+        }
+        println!("count {}", count);
+    }
+
+    #[test]
+    fn test_skl_remove3() {
+        let sklist = Skiplist::with_capacity(ByteWiseComparator {}, 1 << 30, true);
+        let mut i = 0;
+        while i < 10000 {
+            let key = Bytes::from(format!("key{:05}", i));
+            let value = Bytes::from(format!("value{:05}", i));
+            sklist.put(key, value);
+            i += 1;
+        }
+
+        let mut i = 0;
+        while i < 10000 {
+            let key = Bytes::from(format!("key{:05}", i));
+            sklist.remove(key);
+            i += 1;
+        }
 
         let mut iter = sklist.iter();
         iter.seek_to_first();
