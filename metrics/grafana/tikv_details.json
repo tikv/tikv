@@ -47149,7 +47149,7 @@
           "refId": "StandardVariableQuery"
         },
         "refresh": 1,
-        "regex": "/\btype=\"([^\"]+)\"/",
+        "regex": "/\\btype=\"([^\"]+)\"/",
         "skipUrlSync": false,
         "sort": 1,
         "tagValuesQuery": "",
