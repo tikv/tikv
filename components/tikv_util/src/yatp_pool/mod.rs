@@ -559,7 +559,7 @@ mod tests {
         // Drop the pool so the local metrics are flushed.
         drop(pool);
         let histogram =
-            metrics::YATP_POOL_SCHEDULE_WAIT_DURATION_VEC.with_label_values(&[name, "high"]);
+            metrics::YATP_POOL_SCHEDULE_WAIT_DURATION_VEC.with_label_values(&[name, "medium"]);
         assert_eq!(histogram.get_sample_count() as u32, 6, "{:?}", histogram);
     }
 

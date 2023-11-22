@@ -756,6 +756,8 @@ mod tests {
     use std::{thread, time::Duration};
 
     use futures::channel::oneshot;
+    use futures_executor::block_on;
+    use kvproto::kvrpcpb::ResourceControlContext;
     use raftstore::store::{ReadStats, WriteStats};
     use resource_control::ResourceGroupManager;
 
@@ -775,10 +777,10 @@ mod tests {
         let config = UnifiedReadPoolConfig {
             min_thread_count: 1,
             max_thread_count: 2,
-            max_tasks_per_worker: 1,
+            max_tasks_per_worker: 3,
             ..Default::default()
         };
-        // max running tasks number should be 2*1 = 2
+        // max running tasks number should be 2*3/3 = 2
 
         let engine = TestEngineBuilder::new().build().unwrap();
         let pool = build_yatp_read_pool(
@@ -829,10 +831,10 @@ mod tests {
         let config = UnifiedReadPoolConfig {
             min_thread_count: 1,
             max_thread_count: 2,
-            max_tasks_per_worker: 1,
+            max_tasks_per_worker: 3,
             ..Default::default()
         };
-        // max running tasks number should be 2*1 = 2
+        // max running tasks number should be 2*3/3 = 2
 
         let engine = TestEngineBuilder::new().build().unwrap();
         let pool = build_yatp_read_pool(
@@ -891,10 +893,10 @@ mod tests {
         let config = UnifiedReadPoolConfig {
             min_thread_count: 1,
             max_thread_count: 2,
-            max_tasks_per_worker: 1,
+            max_tasks_per_worker: 3,
             ..Default::default()
         };
-        // max running tasks number should be 2*1 = 2
+        // max running tasks number for each priority should be 2*3/3 = 2
 
         let engine = TestEngineBuilder::new().build().unwrap();
         let pool = build_yatp_read_pool(
@@ -933,6 +935,15 @@ mod tests {
             Err(ReadPoolError::FuturePoolFull(..)) => {}
             _ => panic!("should return full error"),
         }
+
+        // spawn a high-priority task, should not return Full error.
+        let (task_high, tx_h) = gen_task();
+        let mut ctx = ResourceControlContext::default();
+        ctx.override_priority = 16; // high priority
+        let metadata = TaskMetadata::from_ctx(&ctx);
+        let f = handle.spawn_handle(task_high, CommandPri::Normal, 6, metadata, None);
+        tx_h.send(()).unwrap();
+        block_on(f).unwrap();
 
         tx1.send(()).unwrap();
         tx2.send(()).unwrap();
@@ -1017,7 +1028,7 @@ mod tests {
             let config = UnifiedReadPoolConfig {
                 min_thread_count: 1,
                 max_thread_count: 2,
-                max_tasks_per_worker: 1,
+                max_tasks_per_worker: 3,
                 ..Default::default()
             };
 
