@@ -2537,10 +2537,9 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
     /// Use ranges assigned to each region as increments for full compaction.
     fn ranges_for_full_compact(&self) -> Vec<(Vec<u8>, Vec<u8>)> {
         let meta = self.ctx.store_meta.lock().unwrap();
-        let mut ranges = Vec::with_capacity(meta.region_ranges.len());
+        let mut ranges = Vec::with_capacity(meta.regions.len());
 
-        for region_id in meta.region_ranges.values() {
-            let region = &meta.regions[region_id];
+        for region in meta.regions.values() {
             let start_key = keys::enc_start_key(region);
             let end_key = keys::enc_end_key(region);
             ranges.push((start_key, end_key))

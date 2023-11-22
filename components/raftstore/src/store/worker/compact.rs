@@ -269,7 +269,7 @@ where
             // evaluates to true.
             if let Some(next_range) = ranges.front() {
                 if !(compact_controller.incremental_compaction_pred)() {
-                    warn!("pausing full compaction before next increment";
+                    info!("pausing full compaction before next increment";
                     "finished_start_key" => ?range.0.map(log_wrappers::Value::key),
                     "finished_end_key" => ?range.1.map(log_wrappers::Value::key),
                     "next_range_start_key" => ?next_range.0.map(log_wrappers::Value::key),
