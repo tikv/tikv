@@ -437,6 +437,11 @@ impl PeerTick {
 #[derive(Debug, Clone, Copy)]
 pub enum StoreTick {
     CompactCheck,
+<<<<<<< HEAD
+=======
+    PeriodicFullCompact,
+    LoadMetricsWindow,
+>>>>>>> dce0e55ad7 (raftstore: make full compaction incremental, pause when load is high (#15995))
     PdStoreHeartbeat,
     SnapGc,
     CompactLockCf,
@@ -454,6 +459,7 @@ impl StoreTick {
             StoreTick::CompactLockCf => RaftEventDurationType::compact_lock_cf,
             StoreTick::ConsistencyCheck => RaftEventDurationType::consistency_check,
             StoreTick::CleanupImportSst => RaftEventDurationType::cleanup_import_sst,
+            StoreTick::LoadMetricsWindow => RaftEventDurationType::load_metrics_window,
         }
     }
 }

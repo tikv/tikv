@@ -104,9 +104,10 @@ use crate::{
             ReadDelegate, RefreshConfigRunner, RefreshConfigTask, RegionRunner, RegionTask,
             SplitCheckTask,
         },
-        Callback, CasualMessage, CompactThreshold, GlobalReplicationState, InspectedRaftMessage,
-        MergeResultKind, PdTask, PeerMsg, PeerTick, RaftCommand, SignificantMsg, SnapManager,
-        StoreMsg, StoreTick,
+        worker_metrics::PROCESS_STAT_CPU_USAGE,
+        Callback, CasualMessage, CompactThreshold, FullCompactController, GlobalReplicationState,
+        InspectedRaftMessage, MergeResultKind, PdTask, PeerMsg, PeerTick, RaftCommand,
+        SignificantMsg, SnapManager, StoreMsg, StoreTick,
     },
     Error, Result,
 };
@@ -117,6 +118,16 @@ pub const PENDING_MSG_CAP: usize = 100;
 pub const ENTRY_CACHE_EVICT_TICK_DURATION: Duration = Duration::from_secs(1);
 pub const MULTI_FILES_SNAPSHOT_FEATURE: Feature = Feature::require(6, 1, 0); // it only makes sense for large region
 
+<<<<<<< HEAD
+=======
+// Every 30 minutes, check if we can run full compaction. This allows the config
+// setting `periodic_full_compact_start_times` to be changed dynamically.
+const PERIODIC_FULL_COMPACT_TICK_INTERVAL_DURATION: Duration = Duration::from_secs(30 * 60);
+// If periodic full compaction is enabled (`periodic_full_compact_start_times`
+// is set), sample load metrics every 10 minutes.
+const LOAD_STATS_WINDOW_DURATION: Duration = Duration::from_secs(10 * 60);
+
+>>>>>>> dce0e55ad7 (raftstore: make full compaction incremental, pause when load is high (#15995))
 pub struct StoreInfo<EK, ER> {
     pub kv_engine: EK,
     pub raft_engine: ER,
@@ -575,6 +586,8 @@ where
     pub pending_latency_inspect: Vec<util::LatencyInspector>,
 
     pub safe_point: Arc<AtomicU64>,
+
+    pub process_stat: Option<ProcessStat>,
 }
 
 impl<EK, ER, T> PollContext<EK, ER, T>
@@ -772,6 +785,11 @@ impl<'a, EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
             StoreTick::SnapGc => self.on_snap_mgr_gc(),
             StoreTick::CompactLockCf => self.on_compact_lock_cf(),
             StoreTick::CompactCheck => self.on_compact_check_tick(),
+<<<<<<< HEAD
+=======
+            StoreTick::PeriodicFullCompact => self.on_full_compact_tick(),
+            StoreTick::LoadMetricsWindow => self.on_load_metrics_window_tick(),
+>>>>>>> dce0e55ad7 (raftstore: make full compaction incremental, pause when load is high (#15995))
             StoreTick::ConsistencyCheck => self.on_consistency_check_tick(),
             StoreTick::CleanupImportSst => self.on_cleanup_import_sst_tick(),
         }
@@ -862,6 +880,11 @@ impl<'a, EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
         self.fsm.store.start_time = Some(time::get_time());
         self.register_cleanup_import_sst_tick();
         self.register_compact_check_tick();
+<<<<<<< HEAD
+=======
+        self.register_full_compact_tick();
+        self.register_load_metrics_window_tick();
+>>>>>>> dce0e55ad7 (raftstore: make full compaction incremental, pause when load is high (#15995))
         self.register_pd_store_heartbeat_tick();
         self.register_compact_lock_cf_tick();
         self.register_snap_mgr_gc_tick();
@@ -1459,6 +1482,7 @@ where
             sync_write_worker,
             pending_latency_inspect: vec![],
             safe_point: self.safe_point.clone(),
+            process_stat: None,
         };
         ctx.update_ticks_timeout();
         let tag = format!("[store {}]", ctx.store.get_id());
@@ -1616,7 +1640,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         } else {
             None
         };
-
+        let bgworker_remote = background_worker.remote();
         let workers = Workers {
             pd_worker,
             background_worker,
@@ -1654,7 +1678,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             ReadRunner::new(self.router.clone(), engines.raft.clone()),
         );
 
-        let compact_runner = CompactRunner::new(engines.kv.clone());
+        let compact_runner = CompactRunner::new(engines.kv.clone(), bgworker_remote);
         let cleanup_sst_runner = CleanupSstRunner::new(Arc::clone(&importer));
         let gc_snapshot_runner = GcSnapshotRunner::new(
             meta.get_id(),
@@ -2441,6 +2465,130 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         }
     }
 
+<<<<<<< HEAD
+=======
+    fn register_load_metrics_window_tick(&self) {
+        // For now, we will only gather these metrics is periodic full compaction is
+        // enabled.
+        if !self.ctx.cfg.periodic_full_compact_start_times.is_empty() {
+            self.ctx
+                .schedule_store_tick(StoreTick::LoadMetricsWindow, LOAD_STATS_WINDOW_DURATION)
+        }
+    }
+
+    fn on_load_metrics_window_tick(&mut self) {
+        self.register_load_metrics_window_tick();
+
+        let proc_stat = self
+            .ctx
+            .process_stat
+            .get_or_insert_with(|| ProcessStat::cur_proc_stat().unwrap());
+        let cpu_usage: f64 = proc_stat.cpu_usage().unwrap();
+        PROCESS_STAT_CPU_USAGE.set(cpu_usage);
+    }
+
+    fn register_full_compact_tick(&self) {
+        if !self.ctx.cfg.periodic_full_compact_start_times.is_empty() {
+            self.ctx.schedule_store_tick(
+                StoreTick::PeriodicFullCompact,
+                PERIODIC_FULL_COMPACT_TICK_INTERVAL_DURATION,
+            )
+        }
+    }
+
+    fn on_full_compact_tick(&mut self) {
+        self.register_full_compact_tick();
+
+        let local_time = chrono::Local::now();
+        if !self
+            .ctx
+            .cfg
+            .periodic_full_compact_start_times
+            .is_scheduled_this_hour(&local_time)
+        {
+            debug!(
+                "full compaction may not run at this time";
+                "local_time" => ?local_time,
+                "periodic_full_compact_start_times" => ?self.ctx.cfg.periodic_full_compact_start_times,
+            );
+            return;
+        }
+
+        let compact_predicate_fn = self.is_low_load_for_full_compact();
+        // Do not start if the load is high.
+        if !compact_predicate_fn() {
+            return;
+        }
+
+        let ranges = self.ranges_for_full_compact();
+
+        let compact_load_controller =
+            FullCompactController::new(1, 15 * 60, Box::new(compact_predicate_fn));
+
+        // Attempt executing a periodic full compaction.
+        // Note that full compaction will not run if another full compact tasks has
+        // started.
+        if let Err(e) = self.ctx.cleanup_scheduler.schedule(CleanupTask::Compact(
+            CompactTask::PeriodicFullCompact {
+                ranges,
+                compact_load_controller,
+            },
+        )) {
+            error!(
+                "failed to schedule a periodic full compaction";
+                "store_id" => self.fsm.store.id,
+                "err" => ?e
+            );
+        }
+    }
+
+    /// Use ranges assigned to each region as increments for full compaction.
+    fn ranges_for_full_compact(&self) -> Vec<(Vec<u8>, Vec<u8>)> {
+        let meta = self.ctx.store_meta.lock().unwrap();
+        let mut ranges = Vec::with_capacity(meta.regions.len());
+
+        for region in meta.regions.values() {
+            let start_key = keys::enc_start_key(region);
+            let end_key = keys::enc_end_key(region);
+            ranges.push((start_key, end_key))
+        }
+        ranges
+    }
+
+    /// Returns a predicate `Fn` which is evaluated:
+    /// 1. Before full compaction runs: if  `false`, we return and wait for the
+    /// next full compaction tick
+    /// (`PERIODIC_FULL_COMPACT_TICK_INTERVAL_DURATION`) before starting. If
+    /// true, we begin full compaction, which means the first incremental range
+    /// will be compactecd. See: ``StoreFsmDelegate::on_full_compact_tick``
+    /// in this file.
+    ///
+    /// 2. After each incremental range finishes and before next one (if any)
+    /// starts. If `false`, we pause compaction and wait. See:
+    /// `CompactRunner::full_compact` in `worker/compact.rs`.
+    fn is_low_load_for_full_compact(&self) -> impl Fn() -> bool {
+        let max_start_cpu_usage = self.ctx.cfg.periodic_full_compact_start_max_cpu;
+        let global_stat = self.ctx.global_stat.clone();
+        move || {
+            if global_stat.stat.is_busy.load(Ordering::SeqCst) {
+                warn!("full compaction may not run at this time, `is_busy` flag is true",);
+                return false;
+            }
+
+            let cpu_usage = PROCESS_STAT_CPU_USAGE.get();
+            if cpu_usage > max_start_cpu_usage {
+                warn!(
+                    "full compaction may not run at this time, cpu usage is above max";
+                    "cpu_usage" => cpu_usage,
+                    "threshold" => max_start_cpu_usage,
+                );
+                return false;
+            }
+            true
+        }
+    }
+
+>>>>>>> dce0e55ad7 (raftstore: make full compaction incremental, pause when load is high (#15995))
     fn register_compact_check_tick(&self) {
         self.ctx.schedule_store_tick(
             StoreTick::CompactCheck,
