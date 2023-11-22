@@ -16,8 +16,8 @@ max-backups = 2
 max-days = 3
 
 [memory]
-enable-heap-profiling = false 
-profiling-sample-per-bytes = "1MB" 
+enable-heap-profiling = false
+profiling-sample-per-bytes = "1MB"
 
 [readpool.unified]
 min-thread-count = 5
@@ -698,6 +698,7 @@ old-value-cache-size = 0
 hibernate-regions-compatible = false
 incremental-scan-threads = 3
 incremental-scan-concurrency = 4
+incremental-scan-concurrency-limit = 5
 incremental-scan-speed-limit = 7
 incremental-fetch-speed-limit = 8
 incremental-scan-ts-filter-ratio = 0.7
