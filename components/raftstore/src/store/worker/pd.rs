@@ -253,6 +253,20 @@ impl Default for StoreStat {
     }
 }
 
+impl StoreStat {
+    pub(crate) fn is_busy(&self) -> bool {
+        let mut cpu_usage_sum = 0;
+        let mut limits = 0;
+
+        for record in self.store_cpu_usages.iter() {
+            limits += 100;
+            cpu_usage_sum += record.get_value();
+        }
+
+        cpu_usage_sum as f64 >= limits as f64 * 0.6
+    }
+}
+
 #[derive(Default)]
 pub struct PeerStat {
     pub read_bytes: u64,
@@ -864,14 +878,14 @@ impl SlowScore {
         }
     }
 
-    fn record(&mut self, id: u64, duration: Duration) {
+    fn record(&mut self, id: u64, duration: Duration, is_busy: bool) {
         self.last_record_time = Instant::now();
         if id != self.last_tick_id {
             return;
         }
         self.last_tick_finished = true;
         self.total_requests += 1;
-        if duration >= self.inspect_interval {
+        if is_busy && duration >= self.inspect_interval {
             self.timeout_requests += 1;
         }
     }
@@ -2262,8 +2276,11 @@ where
             Task::QueryRegionLeader { region_id } => self.handle_query_region_leader(region_id),
             Task::UpdateSlowScore { id, duration } => {
                 // Fine-tuned, `SlowScore` only takes the I/O jitters on the disk into account.
-                self.slow_score
-                    .record(id, duration.delays_on_disk_io(false));
+                self.slow_score.record(
+                    id,
+                    duration.delays_on_disk_io(false),
+                    self.store_stat.is_busy(),
+                );
                 self.slow_trend_cause.record(
                     tikv_util::time::duration_to_us(duration.store_wait_duration.unwrap()),
                     Instant::now(),
@@ -2306,7 +2323,11 @@ where
             self.update_health_status(ServingStatus::Serving);
         }
         if !self.slow_score.last_tick_finished {
-            self.slow_score.record_timeout();
+            // FIXME: here just use CPU.usage as the reference to represent
+            // whether the store is busy or not. It should be refined.
+            if self.store_stat.is_busy() {
+                self.slow_score.record_timeout();
+            }
             // If the last slow_score already reached abnormal state and was delayed for
             // reporting by `store-heartbeat` to PD, we should report it here manually as
             // a FAKE `store-heartbeat`.
