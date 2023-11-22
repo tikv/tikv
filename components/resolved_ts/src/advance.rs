@@ -369,10 +369,9 @@ impl LeadershipResolver {
             .map_or(0, |req| req.regions[0].compute_size());
         let store_count = store_req_map.len();
         let mut check_leader_rpcs = Vec::with_capacity(store_req_map.len());
-        let timeout = match timeout {
-            Some(v) => cmp::min(DEFAULT_CHECK_LEADER_TIMEOUT_DURATION, v),
-            None => DEFAULT_CHECK_LEADER_TIMEOUT_DURATION,
-        };
+        let timeout = timeout.unwrap_or(DEFAULT_CHECK_LEADER_TIMEOUT_DURATION)
+        .min(DEFAULT_CHECK_LEADER_TIMEOUT_DURATION);
+
         for (store_id, req) in store_req_map {
             if req.regions.is_empty() {
                 continue;
