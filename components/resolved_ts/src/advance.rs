@@ -369,9 +369,7 @@ impl LeadershipResolver {
             .map_or(0, |req| req.regions[0].compute_size());
         let store_count = store_req_map.len();
         let mut check_leader_rpcs = Vec::with_capacity(store_req_map.len());
-        let timeout = timeout
-            .unwrap_or(DEFAULT_CHECK_LEADER_TIMEOUT_DURATION)
-            .min(DEFAULT_CHECK_LEADER_TIMEOUT_DURATION);
+        let timeout = get_min_timeout(timeout, DEFAULT_CHECK_LEADER_TIMEOUT_DURATION);
 
         for (store_id, req) in store_req_map {
             if req.regions.is_empty() {
@@ -484,6 +482,11 @@ impl LeadershipResolver {
         }
         self.valid_regions.drain().collect()
     }
+}
+
+#[inline]
+fn get_min_timeout(timeout: Option<Duration>, default: Duration) -> Duration {
+    timeout.unwrap_or(default).min(default)
 }
 
 fn region_has_quorum(peers: &[Peer], stores: &[u64]) -> bool {
@@ -687,5 +690,25 @@ mod tests {
         rx.recv_timeout(Duration::from_secs(1)).unwrap_err();
 
         let _ = server.shutdown().await;
+    }
+
+    #[test]
+    fn test_get_min_timeout() {
+        assert_eq!(
+            get_min_timeout(None, Duration::from_secs(5)),
+            Duration::from_secs(5)
+        );
+        assert_eq!(
+            get_min_timeout(None, Duration::from_secs(2)),
+            Duration::from_secs(2)
+        );
+        assert_eq!(
+            get_min_timeout(Some(Duration::from_secs(1)), Duration::from_secs(5)),
+            Duration::from_secs(1)
+        );
+        assert_eq!(
+            get_min_timeout(Some(Duration::from_secs(20)), Duration::from_secs(5)),
+            Duration::from_secs(5)
+        );
     }
 }
