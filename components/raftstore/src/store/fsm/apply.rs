@@ -35,6 +35,7 @@ use engine_traits::{
     WriteOptions, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE,
 };
 use fail::fail_point;
+use keys::data_key;
 use kvproto::{
     import_sstpb::SstMeta,
     kvrpcpb::ExtraOp as TxnExtraOp,
@@ -53,7 +54,9 @@ use raft::eraftpb::{
 };
 use raft_proto::ConfChangeI;
 use resource_control::{ResourceConsumeType, ResourceController, ResourceMetered};
-use skiplist::memory_engine::{cf_to_id, LruMemoryEngine, MemoryBatch, ValueType};
+use skiplist::memory_engine::{
+    cf_to_id, LruMemoryEngine, MemoryBatch, RegionMemoryEngine, ValueType,
+};
 use smallvec::{smallvec, SmallVec};
 use sst_importer::SstImporter;
 use tikv_alloc::trace::TraceEvent;
@@ -275,7 +278,7 @@ pub enum ExecResult<S> {
         derived: Region,
         new_split_regions: HashMap<u64, NewSplitPeer>,
         share_source_region_size: bool,
-        memory_engine: Option<LruMemoryEngine>,
+        memory_engines: Option<Vec<RegionMemoryEngine>>,
     },
     PrepareMerge {
         region: Region,
@@ -1881,7 +1884,6 @@ where
     }
 
     fn handle_delete(&mut self, ctx: &mut ApplyContext<EK>, req: &Request) -> Result<()> {
-
         PEER_WRITE_CMD_COUNTER.delete.inc();
         let key = req.get_delete().get_key();
         // region key range has no data prefix, so we must use origin key to check.
@@ -2625,6 +2627,19 @@ where
             regions.push(derived.clone());
         }
 
+        let split_keys: Vec<_> = split_reqs
+            .get_requests()
+            .iter()
+            .map(|req| data_key(req.get_split_key()))
+            .collect();
+
+        let mut split_region_memory_engines = None;
+        if let Some(ref memory_engine) = ctx.memory_engine {
+            let m_engine = memory_engine.core.lock().unwrap();
+            split_region_memory_engines =
+                Some(m_engine.engine.get(&derived.id).unwrap().split(split_keys));
+        }
+
         // Init split regions' meta info
         let mut new_split_regions: HashMap<u64, NewSplitPeer> = HashMap::default();
         for req in split_reqs.get_requests() {
@@ -2775,7 +2790,7 @@ where
                 derived,
                 new_split_regions,
                 share_source_region_size,
-                memory_engine: ctx.memory_engine.clone(),
+                memory_engines: split_region_memory_engines,
             }),
         ))
     }
@@ -7152,7 +7167,7 @@ mod tests {
             derived: _,
             new_split_regions: _,
             share_source_region_size: _,
-            memory_engine: _,
+            memory_engines: _,
         } = apply_res.exec_res.front().unwrap()
         {
             let r8 = regions.get(0).unwrap();

@@ -48,7 +48,7 @@ use raft::{
     eraftpb::{self, ConfChangeType, MessageType},
     GetEntriesContext, Progress, ReadState, SnapshotStatus, StateRole, INVALID_INDEX, NO_LIMIT,
 };
-use skiplist::memory_engine::LruMemoryEngine;
+use skiplist::memory_engine::RegionMemoryEngine;
 use smallvec::SmallVec;
 use tikv_alloc::trace::TraceEvent;
 use tikv_util::{
@@ -4091,7 +4091,7 @@ where
         regions: Vec<metapb::Region>,
         new_split_regions: HashMap<u64, apply::NewSplitPeer>,
         share_source_region_size: bool,
-        memory_engine: Option<LruMemoryEngine>,
+        region_memory_engines: Option<Vec<RegionMemoryEngine>>,
     ) {
         fail_point!("on_split", self.ctx.store_id() == 3, |_| {});
 
@@ -4175,17 +4175,16 @@ where
             panic!("{} original region should exist", self.fsm.peer.tag);
         }
 
-        if let Some(ref memory_engine) = memory_engine {
-            let mut memory_engine = memory_engine.core.lock().unwrap();
-            if let Some(skip_list) = memory_engine.engine.get(&region_id).cloned() {
-                for region in &regions {
-                    if region.get_id() == region_id {
-                        continue;
-                    }
-                    memory_engine
-                        .engine
-                        .insert(region.get_id(), skip_list.clone());
-                }
+        if let Some(ref memory_engine) = self.ctx.memory_engine {
+            let region_memory_engines = region_memory_engines.unwrap();
+            assert_eq!(region_memory_engines.len(), regions.len());
+            let mut m_engine = memory_engine.core.lock().unwrap();
+            for (region, region_memory_engine) in
+                regions.iter().zip(region_memory_engines.into_iter())
+            {
+                m_engine
+                    .engine
+                    .insert(region.get_id(), region_memory_engine);
             }
         }
 
@@ -5137,13 +5136,13 @@ where
                     regions,
                     new_split_regions,
                     share_source_region_size,
-                    memory_engine,
+                    memory_engines,
                 } => self.on_ready_split_region(
                     derived,
                     regions,
                     new_split_regions,
                     share_source_region_size,
-                    memory_engine,
+                    memory_engines,
                 ),
                 ExecResult::PrepareMerge { region, state } => {
                     self.on_ready_prepare_merge(region, state)

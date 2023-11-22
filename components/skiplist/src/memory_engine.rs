@@ -13,7 +13,6 @@ use bytes::Bytes;
 use collections::HashMap;
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 use slog_global::info;
-use txn_types::Key;
 
 use crate::{key::ByteWiseComparator, IterRef, Skiplist};
 
@@ -36,6 +35,29 @@ pub fn cf_to_id(cf: &str) -> u8 {
 #[derive(Clone)]
 pub struct RegionMemoryEngine {
     pub data: [Arc<Skiplist<ByteWiseComparator>>; 3],
+}
+
+impl RegionMemoryEngine {
+    pub fn split(&self, split_key: Vec<Vec<u8>>) -> Vec<RegionMemoryEngine> {
+        let cf1 = self.data[0].split(&split_key);
+        let cf2 = self.data[1].split(&split_key);
+        let cf3 = self.data[2].split(&split_key);
+
+        let mut res = Vec::with_capacity(split_key.len());
+        for ((s1, s2), s3) in cf1.into_iter().zip(cf2.into_iter()).zip(cf3.into_iter()) {
+            res.push(RegionMemoryEngine {
+                data: [Arc::new(s1), Arc::new(s2), Arc::new(s3)],
+            });
+        }
+
+        res
+    }
+}
+
+impl Debug for RegionMemoryEngine {
+    fn fmt(&self, _: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        Ok(())
+    }
 }
 
 impl Default for RegionMemoryEngine {
@@ -143,7 +165,7 @@ unsafe impl Sync for LruMemoryEngine {}
 
 impl LruMemoryEngine {
     pub fn new_snapshot(&self) -> MemoryEngineSnapshot {
-        let snapshot = {
+        let _snapshot = {
             let mut core = self.core.lock().unwrap();
             let snapshot = core.max_version.load(Ordering::Relaxed);
             core.snapshot_list.push(snapshot);
@@ -152,7 +174,7 @@ impl LruMemoryEngine {
 
         MemoryEngineSnapshot {
             engine: self.clone(),
-            snapshot,
+            _snapshot,
         }
     }
 }
@@ -161,7 +183,7 @@ impl LruMemoryEngine {
 #[derive(Clone)]
 pub struct MemoryEngineSnapshot {
     engine: LruMemoryEngine,
-    snapshot: u64,
+    _snapshot: u64,
 }
 
 impl Debug for MemoryEngineSnapshot {
@@ -199,7 +221,7 @@ impl MemoryEngineSnapshot {
         let prefix_same_as_start = opts.prefix_same_as_start();
         let (lower_bound, upper_bound) = opts.build_bounds();
         Some(MemoryEngineIterator {
-            cf: String::from(cf),
+            _cf: String::from(cf),
             valid: false,
             prefix_same_as_start,
             prefix: None,
@@ -211,7 +233,7 @@ impl MemoryEngineSnapshot {
 }
 
 pub struct MemoryEngineIterator {
-    cf: String,
+    _cf: String,
     valid: bool,
     prefix_same_as_start: bool,
     prefix: Option<Vec<u8>>,
@@ -356,12 +378,6 @@ impl MemoryEngineIterator {
 }
 
 mod test {
-    use super::*;
-
-    fn key_with_ts(key: &[u8], ts: u64) -> Bytes {
-        let key = Key::from_raw(key).append_ts((ts).into());
-        Bytes::from(key.as_encoded().to_vec())
-    }
 
     #[test]
     fn test_x() {

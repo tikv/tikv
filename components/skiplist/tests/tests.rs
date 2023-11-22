@@ -11,7 +11,7 @@ use bytes::*;
 use skiplist::*;
 use yatp::task::callback::Handle;
 
-const ARENA_SIZE: usize = 1 << 20;
+const ARENA_SIZE: usize = 1 << 30;
 
 fn new_value(v: usize) -> Bytes {
     Bytes::from(format!("{:05}", v))

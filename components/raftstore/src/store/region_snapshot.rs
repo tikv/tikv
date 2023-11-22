@@ -11,7 +11,7 @@ use std::{
 
 use engine_traits::{
     util::check_key_in_range, Error as EngineError, IterOptions, Iterable, Iterator, KvEngine,
-    Peekable, RaftEngine, ReadOptions, Result as EngineResult, Snapshot, CF_LOCK, CF_RAFT,
+    Peekable, RaftEngine, ReadOptions, Result as EngineResult, Snapshot, CF_RAFT,
 };
 use fail::fail_point;
 use futures_util::future::Either;

@@ -524,7 +524,6 @@ fn test_xxx() {
     req.set_context(ctx);
     let mut resp = handle_select(&endpoint, req);
     // should only have name:0, name:2 and name:1
-    let mut row_count = 0;
     let spliter = DagChunkSpliter::new(resp.take_chunks().into(), 1);
     let mut results = spliter.collect::<Vec<Vec<Datum>>>();
     sort_by!(results, 0, Bytes);
@@ -534,7 +533,6 @@ fn test_xxx() {
     iter.seek_to_first();
     while iter.valid() {
         let k = iter.key().as_slice();
-        let v = iter.value().as_slice();
         println!("{:?}", k);
 
         iter.next();
@@ -560,25 +558,44 @@ fn test_xxxxx() {
     let r2 = cluster.get_region(split_key.as_bytes());
 
     let e = cluster.memory_engine.get(&1).unwrap();
-    let mut iter = e.core.lock().unwrap().engine.get(&r1.get_id()).unwrap().data[2].iter();
+    let mut iter = e
+        .core
+        .lock()
+        .unwrap()
+        .engine
+        .get(&r1.get_id())
+        .unwrap()
+        .data[2]
+        .iter();
     iter.seek_to_first();
+    let mut count = 0;
     while iter.valid() {
         let k = iter.key().as_slice();
-        let v = iter.value().as_slice();
-        println!("{:?}, {:?}", k, v);
-
+        println!("{:?}", String::from_utf8(k[1..6].to_vec()));
+        count += 1;
         iter.next();
     }
+    println!("Count {}", count);
     println!("next region \n");
 
     let e = cluster.memory_engine.get(&1).unwrap();
-    let mut iter = e.core.lock().unwrap().engine.get(&r2.get_id()).unwrap().data[2].iter();
+    let mut iter = e
+        .core
+        .lock()
+        .unwrap()
+        .engine
+        .get(&r2.get_id())
+        .unwrap()
+        .data[2]
+        .iter();
     iter.seek_to_first();
+    count = 0;
     while iter.valid() {
         let k = iter.key().as_slice();
-        let v = iter.value().as_slice();
-        println!("{:?}, {:?}", k, v);
+        println!("{:?}", String::from_utf8(k[1..6].to_vec()));
+        count += 1;
 
         iter.next();
     }
+    println!("Count {}", count);
 }
