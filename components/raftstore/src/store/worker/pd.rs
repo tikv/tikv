@@ -263,6 +263,12 @@ impl StoreStat {
             cpu_usage_sum += record.get_value();
         }
 
+        STORE_STAT_CPU_USAGE
+            .with_label_values(&["cpu_usage"])
+            .set(cpu_usage_sum as i64);
+        STORE_STAT_CPU_USAGE
+            .with_label_values(&["cpu_usage_limit"])
+            .set(limits as i64);
         cpu_usage_sum as f64 >= limits as f64 * 0.6
     }
 }
@@ -878,14 +884,14 @@ impl SlowScore {
         }
     }
 
-    fn record(&mut self, id: u64, duration: Duration, is_busy: bool) {
+    fn record(&mut self, id: u64, duration: Duration, not_busy: bool) {
         self.last_record_time = Instant::now();
         if id != self.last_tick_id {
             return;
         }
         self.last_tick_finished = true;
         self.total_requests += 1;
-        if is_busy && duration >= self.inspect_interval {
+        if not_busy && duration >= self.inspect_interval {
             self.timeout_requests += 1;
         }
     }
@@ -2279,7 +2285,7 @@ where
                 self.slow_score.record(
                     id,
                     duration.delays_on_disk_io(false),
-                    self.store_stat.is_busy(),
+                    !self.store_stat.is_busy(),
                 );
                 self.slow_trend_cause.record(
                     tikv_util::time::duration_to_us(duration.store_wait_duration.unwrap()),
@@ -2325,7 +2331,7 @@ where
         if !self.slow_score.last_tick_finished {
             // FIXME: here just use CPU.usage as the reference to represent
             // whether the store is busy or not. It should be refined.
-            if self.store_stat.is_busy() {
+            if !self.store_stat.is_busy() {
                 self.slow_score.record_timeout();
             }
             // If the last slow_score already reached abnormal state and was delayed for
