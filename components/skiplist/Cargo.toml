@@ -16,6 +16,7 @@ txn_types = { workspace = true }
 yatp = { workspace = true }
 slog = { workspace = true }
 slog-global = { workspace = true }
+kvproto = { workspace = true }
 
 [dev-dependencies]
 criterion = "0.3"

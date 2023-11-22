@@ -269,7 +269,7 @@ fn get_keys_in_region(keys: &mut Peekable<IntoIter<Key>>, region: &Region) -> Ve
     keys_in_region
 }
 
-fn init_snap_ctx(store_id: u64, region: &Region) -> Context {
+pub fn init_snap_ctx(store_id: u64, region: &Region) -> Context {
     let mut ctx = Context::default();
     ctx.region_id = region.id;
     ctx.region_epoch = region.region_epoch.clone();

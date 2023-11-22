@@ -35,9 +35,11 @@ pub fn cf_to_id(cf: &str) -> u8 {
 #[derive(Clone)]
 pub struct RegionMemoryEngine {
     pub data: [Arc<Skiplist<ByteWiseComparator>>; 3],
+    pub safe_point: AtomicU64,
 }
 
 impl RegionMemoryEngine {
+    // todo: concurrency between split and gc?
     pub fn split(&self, split_key: Vec<Vec<u8>>) -> Vec<RegionMemoryEngine> {
         let cf1 = self.data[0].split(&split_key);
         let cf2 = self.data[1].split(&split_key);
@@ -47,6 +49,7 @@ impl RegionMemoryEngine {
         for ((s1, s2), s3) in cf1.into_iter().zip(cf2.into_iter()).zip(cf3.into_iter()) {
             res.push(RegionMemoryEngine {
                 data: [Arc::new(s1), Arc::new(s2), Arc::new(s3)],
+                safe_point: AtomicU64::new(self.safe_point.load(Ordering::SeqCst)),
             });
         }
 
@@ -80,6 +83,7 @@ impl Default for RegionMemoryEngine {
                     true,
                 )),
             ],
+            safe_point: AtomicU64::new(0),
         }
     }
 }
@@ -104,8 +108,7 @@ impl Default for LruMemoryEngine {
 pub struct LruMemoryEngineCore {
     pub engine: HashMap<u64, RegionMemoryEngine>,
     // todo: replace it
-    snapshot_list: Vec<u64>,
-    max_version: Arc<AtomicU64>,
+    pub snapshot_list: HashMap<u64, Vec<u64>>,
 }
 
 impl LruMemoryEngine {
@@ -113,8 +116,7 @@ impl LruMemoryEngine {
         LruMemoryEngine {
             core: Arc::new(Mutex::new(LruMemoryEngineCore {
                 engine: HashMap::default(),
-                snapshot_list: vec![],
-                max_version: Arc::new(AtomicU64::new(0)),
+                snapshot_list: HashMap::default(),
             })),
         }
     }
@@ -129,9 +131,8 @@ impl LruMemoryEngine {
 
     pub fn consume_batch(&self, batch: MemoryBatch) {
         for (id, batch) in batch.into_iter() {
-            let (_max_version, regional_engine) = {
+            let regional_engine = {
                 let mut core = self.core.lock().unwrap();
-                let max_version = core.max_version.clone();
                 if core.engine.get(&id).is_none() {
                     info!(
                         "create region memory engine";
@@ -139,7 +140,7 @@ impl LruMemoryEngine {
                     );
                 }
                 let regional_engine = core.engine.entry(id).or_default();
-                (max_version, regional_engine.data.clone())
+                (regional_engine.data.clone())
             };
             batch
                 .into_iter()

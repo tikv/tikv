@@ -5474,6 +5474,7 @@ dependencies = [
  "criterion",
  "engine_traits",
  "keys",
+ "kvproto",
  "rand 0.8.5",
  "slog",
  "slog-global",

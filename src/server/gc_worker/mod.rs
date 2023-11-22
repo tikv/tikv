@@ -4,6 +4,7 @@ pub mod compaction_filter;
 mod config;
 mod gc_manager;
 mod gc_worker;
+mod m_engine_gc_worker;
 pub mod rawkv_compaction_filter;
 
 // TODO: Use separated error type for GcWorker instead.

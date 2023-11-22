@@ -714,7 +714,7 @@ impl CompactionFilter for WriteCompactionFilter {
     }
 }
 
-fn split_ts(key: &[u8]) -> Result<(&[u8], u64), String> {
+pub fn split_ts(key: &[u8]) -> Result<(&[u8], u64), String> {
     match Key::split_on_ts_for(key) {
         Ok((key, ts)) => Ok((key, ts.into_inner())),
         Err(_) => Err(format!(
@@ -724,7 +724,7 @@ fn split_ts(key: &[u8]) -> Result<(&[u8], u64), String> {
     }
 }
 
-fn parse_write(value: &[u8]) -> Result<WriteRef<'_>, String> {
+pub fn parse_write(value: &[u8]) -> Result<WriteRef<'_>, String> {
     match WriteRef::parse(value) {
         Ok(write) => Ok(write),
         Err(_) => Err(format!(
