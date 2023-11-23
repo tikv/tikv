@@ -7057,7 +7057,7 @@ mod tests {
             cfg.raft_store
                 .region_compact_redundant_rows_percent
                 .unwrap(),
-            100
+            20
         );
 
         let content = r#"
