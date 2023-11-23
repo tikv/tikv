@@ -31,7 +31,7 @@ use tikv::{
     },
 };
 use tikv_util::{store::new_peer, time::ThreadReadId};
-use txn_types::Key;
+use txn_types::{Key, TimeStamp};
 
 use crate::test;
 
@@ -126,6 +126,7 @@ impl LocalReadRouter<RocksEngine> for SyncBenchRouter {
     fn read(
         &mut self,
         _: Option<ThreadReadId>,
+        _: Option<TimeStamp>,
         req: RaftCmdRequest,
         cb: Callback<RocksSnapshot>,
     ) -> Result<()> {

@@ -4814,7 +4814,8 @@ where
             }
         }
 
-        let mut resp = reader.execute(&req, &Arc::new(region), read_index, None);
+        let read_ts = decode_u64(&mut req.get_header().get_flag_data()).ok();
+        let mut resp = reader.execute(read_ts, &req, &Arc::new(region), read_index, None);
         if let Some(snap) = resp.snapshot.as_mut() {
             snap.txn_ext = Some(self.txn_ext.clone());
             snap.bucket_meta = self
@@ -5723,10 +5724,12 @@ where
         Arc::new(self.engines.kv.snapshot())
     }
 
-    fn get_memory_engine_snapshot(&self) -> Option<MemoryEngineSnapshot> {
-        self.memory_engine
-            .as_ref()
-            .map(|engine| engine.new_snapshot())
+    fn get_memory_engine_snapshot(&self, region_id:u64, read_ts: u64) -> Option<MemoryEngineSnapshot> {
+        if let Some(ref engine) = self.memory_engine {
+            engine.new_snapshot(region_id, read_ts)
+        } else {
+            None
+        }
     }
 }
 

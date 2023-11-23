@@ -13,6 +13,7 @@ use kvproto::{metapb, raft_cmdpb::RaftCmdRequest, raft_serverpb::RaftMessage};
 use raft::SnapshotStatus;
 use slog_global::warn;
 use tikv_util::time::ThreadReadId;
+use txn_types::TimeStamp;
 
 use crate::{
     store::{
@@ -122,6 +123,7 @@ where
     fn read(
         &mut self,
         read_id: Option<ThreadReadId>,
+        start_ts: Option<TimeStamp>,
         req: RaftCmdRequest,
         cb: Callback<EK::Snapshot>,
     ) -> RaftStoreResult<()>;
@@ -252,10 +254,11 @@ impl<EK: KvEngine, ER: RaftEngine> LocalReadRouter<EK> for ServerRaftStoreRouter
     fn read(
         &mut self,
         read_id: Option<ThreadReadId>,
+        start_ts: Option<TimeStamp>,
         req: RaftCmdRequest,
         cb: Callback<EK::Snapshot>,
     ) -> RaftStoreResult<()> {
-        self.local_reader.read(read_id, req, cb);
+        self.local_reader.read(read_id, start_ts, req, cb);
         Ok(())
     }
 

@@ -40,6 +40,7 @@ use crate::{
         cmd_resp,
         fsm::store::StoreMeta,
         util::{self, LeaseState, RegionReadProgress, RemoteLease},
+        worker_metrics::SnapStatus::start,
         Callback, CasualMessage, CasualRouter, Peer, ProposalRouter, RaftCommand, ReadCallback,
         ReadResponse, RegionSnapshot, RequestInspector, RequestPolicy, TxnExt,
     },
@@ -61,7 +62,11 @@ pub trait ReadExecutor {
         read_context: &Option<LocalReadContext<'_, Self::Tablet>>,
     ) -> Arc<<Self::Tablet as KvEngine>::Snapshot>;
 
-    fn get_memory_engine_snapshot(&self) -> Option<MemoryEngineSnapshot>;
+    fn get_memory_engine_snapshot(
+        &self,
+        region_id: u64,
+        read_ts: u64,
+    ) -> Option<MemoryEngineSnapshot>;
 
     fn get_value(
         &mut self,
@@ -109,6 +114,7 @@ pub trait ReadExecutor {
 
     fn execute(
         &mut self,
+        start_ts: Option<u64>,
         msg: &RaftCmdRequest,
         region: &Arc<metapb::Region>,
         read_index: Option<u64>,
@@ -136,9 +142,14 @@ pub trait ReadExecutor {
                     }
                 },
                 CmdType::Snap => {
+                    let memory_engine_snapshot = if let Some(start_ts) = start_ts {
+                        self.get_memory_engine_snapshot(region.get_id(), start_ts)
+                    } else {
+                        None
+                    };
                     let snapshot = RegionSnapshot::from_snapshot(
                         self.get_snapshot(&local_read_ctx),
-                        self.get_memory_engine_snapshot(),
+                        memory_engine_snapshot,
                         region.clone(),
                     );
                     response.snapshot = Some(snapshot);
@@ -995,6 +1006,7 @@ where
     /// the read response is returned, otherwise None is returned.
     fn try_local_leader_read(
         &mut self,
+        start_ts: Option<TimeStamp>,
         req: &RaftCmdRequest,
         delegate: &mut CachedReadDelegate<E>,
         read_id: Option<ThreadReadId>,
@@ -1012,7 +1024,13 @@ where
         }
 
         let region = Arc::clone(&delegate.region);
-        let mut response = delegate.execute(req, &region, None, Some(local_read_ctx));
+        let mut response = delegate.execute(
+            start_ts.map(|ts| ts.0),
+            req,
+            &region,
+            None,
+            Some(local_read_ctx),
+        );
         if let Some(snap) = response.snapshot.as_mut() {
             snap.bucket_meta = delegate.bucket_meta.clone();
         }
@@ -1041,7 +1059,7 @@ where
 
         let region = Arc::clone(&delegate.region);
         // Getting the snapshot
-        let mut response = delegate.execute(req, &region, None, Some(local_read_ctx));
+        let mut response = delegate.execute(None, req, &region, None, Some(local_read_ctx));
         if let Some(snap) = response.snapshot.as_mut() {
             snap.bucket_meta = delegate.bucket_meta.clone();
         }
@@ -1056,6 +1074,7 @@ where
     pub fn propose_raft_command(
         &mut self,
         read_id: Option<ThreadReadId>,
+        start_ts: Option<TimeStamp>,
         mut req: RaftCmdRequest,
         cb: Callback<E::Snapshot>,
     ) {
@@ -1067,6 +1086,7 @@ where
                     // Leader can read local if and only if it is in lease.
                     RequestPolicy::ReadLocal => {
                         if let Some(read_resp) = self.try_local_leader_read(
+                            start_ts,
                             &req,
                             &mut delegate,
                             read_id,
@@ -1113,6 +1133,7 @@ where
                                     return;
                                 }
                                 if let Some(read_resp) = self.try_local_leader_read(
+                                    None,
                                     &req,
                                     &mut delegate,
                                     None,
@@ -1194,10 +1215,11 @@ where
     pub fn read(
         &mut self,
         read_id: Option<ThreadReadId>,
+        start_ts: Option<TimeStamp>,
         req: RaftCmdRequest,
         cb: Callback<E::Snapshot>,
     ) {
-        self.propose_raft_command(read_id, req, cb);
+        self.propose_raft_command(read_id, start_ts, req, cb);
         maybe_tls_local_read_metrics_flush();
     }
 
@@ -1235,10 +1257,16 @@ where
         read_context.as_ref().unwrap().snapshot().unwrap()
     }
 
-    fn get_memory_engine_snapshot(&self) -> Option<MemoryEngineSnapshot> {
-        self.memory_engine
-            .as_ref()
-            .map(|engine| engine.new_snapshot())
+    fn get_memory_engine_snapshot(
+        &self,
+        region_id: u64,
+        read_ts: u64,
+    ) -> Option<MemoryEngineSnapshot> {
+        if let Some(ref engine) = self.memory_engine {
+            engine.new_snapshot(region_id, read_ts)
+        } else {
+            None
+        }
     }
 }
 

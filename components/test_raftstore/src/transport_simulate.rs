@@ -23,6 +23,7 @@ use raftstore::{
     DiscardReason, Error, Result as RaftStoreResult, Result,
 };
 use tikv_util::{time::ThreadReadId, Either, HandyRwLock};
+use txn_types::TimeStamp;
 
 pub fn check_messages(msgs: &[RaftMessage]) -> Result<()> {
     if msgs.is_empty() {
@@ -253,10 +254,11 @@ impl<C: LocalReadRouter<RocksEngine>> LocalReadRouter<RocksEngine> for SimulateT
     fn read(
         &mut self,
         read_id: Option<ThreadReadId>,
+        start_ts: Option<TimeStamp>,
         req: RaftCmdRequest,
         cb: Callback<RocksSnapshot>,
     ) -> RaftStoreResult<()> {
-        self.ch.read(read_id, req, cb)
+        self.ch.read(read_id, start_ts, req, cb)
     }
 
     fn release_snapshot_cache(&mut self) {

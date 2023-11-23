@@ -1643,7 +1643,9 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             None
         };
 
-        let memory_gc_worker = memory_engine.map(|_| Worker::new("memory-gc-worker"));
+        let memory_gc_worker = memory_engine
+            .as_ref()
+            .map(|_| Worker::new("memory-gc-worker"));
         let workers = Workers {
             pd_worker,
             background_worker,

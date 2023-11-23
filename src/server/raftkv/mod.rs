@@ -647,7 +647,7 @@ where
         if res.is_ok() {
             res = self
                 .router
-                .read(ctx.read_id, cmd, store_cb)
+                .read(ctx.read_id, ctx.start_ts, cmd, store_cb)
                 .map_err(kv::Error::from);
         }
         async move {
