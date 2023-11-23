@@ -359,6 +359,8 @@ pub struct Config {
     pub slow_trend_unsensitive_cause: f64,
     // The unsensitive(increase it to reduce sensitiveness) of the result-trend detection
     pub slow_trend_unsensitive_result: f64,
+    // The sensitiveness of slowness on network-io.
+    pub slow_trend_network_io_factor: f64,
 
     // Interval to report min resolved ts, if it is zero, it means disabled.
     pub report_min_resolved_ts_interval: ReadableDuration,
@@ -442,7 +444,7 @@ impl Default for Config {
             region_compact_min_tombstones: 10000,
             region_compact_tombstones_percent: 30,
             region_compact_min_redundant_rows: 50000,
-            region_compact_redundant_rows_percent: None,
+            region_compact_redundant_rows_percent: Some(20),
             pd_heartbeat_tick_interval: ReadableDuration::minutes(1),
             pd_store_heartbeat_tick_interval: ReadableDuration::secs(10),
             // Disable periodic full compaction by default.
@@ -524,6 +526,7 @@ impl Default for Config {
             // make it `10.0` to reduce a bit sensitiveness because SpikeFilter is disabled
             slow_trend_unsensitive_cause: 10.0,
             slow_trend_unsensitive_result: 0.5,
+            slow_trend_network_io_factor: 0.0,
             report_min_resolved_ts_interval: ReadableDuration::secs(1),
             check_leader_lease_interval: ReadableDuration::secs(0),
             renew_leader_lease_advance_duration: ReadableDuration::secs(0),
@@ -630,15 +633,6 @@ impl Config {
                 self.region_compact_check_step = Some(5);
             } else {
                 self.region_compact_check_step = Some(100);
-            }
-        }
-
-        if self.region_compact_redundant_rows_percent.is_none() {
-            if raft_kv_v2 {
-                self.region_compact_redundant_rows_percent = Some(20);
-            } else {
-                // Disable redundant rows check in default for v1.
-                self.region_compact_redundant_rows_percent = Some(100);
             }
         }
 
@@ -942,6 +936,12 @@ impl Config {
         if raft_kv_v2 && self.use_delete_range {
             return Err(box_err!(
                 "partitioned-raft-kv doesn't support RocksDB delete range."
+            ));
+        }
+
+        if self.slow_trend_network_io_factor < 0.0 {
+            return Err(box_err!(
+                "slow_trend_network_io_factor must be greater than 0"
             ));
         }
 
