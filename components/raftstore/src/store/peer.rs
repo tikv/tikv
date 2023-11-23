@@ -243,6 +243,7 @@ bitflags! {
         const SPLIT          = 0b0000_0010;
         const PREPARE_MERGE  = 0b0000_0100;
         const COMMIT_MERGE   = 0b0000_1000;
+        const ROLLBACK_MERGE = 0b0001_0000;
     }
 }
 
@@ -1062,7 +1063,10 @@ where
             return;
         }
         self.replication_mode_version = state.status().get_dr_auto_sync().state_id;
-        let enable = state.status().get_dr_auto_sync().get_state() != DrAutoSyncState::Async;
+        let enable = !matches!(
+            state.status().get_dr_auto_sync().get_state(),
+            DrAutoSyncState::Async | DrAutoSyncState::SyncRecover
+        );
         self.raft_group.raft.enable_group_commit(enable);
         self.dr_auto_sync_state = state.status().get_dr_auto_sync().get_state();
     }

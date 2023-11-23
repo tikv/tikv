@@ -7,7 +7,7 @@ use std::{
     path::PathBuf,
     sync::{
         atomic::{AtomicU64, Ordering},
-        Arc, Mutex,
+        mpsc, Arc, Mutex,
     },
     time::Duration,
 };
@@ -1048,12 +1048,13 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
     /// Downloads the file and performs key-rewrite for later ingesting.
     fn download(
         &mut self,
-        _ctx: RpcContext<'_>,
+        ctx: RpcContext<'_>,
         req: DownloadRequest,
         sink: UnarySink<DownloadResponse>,
     ) {
         let label = "download";
         let timer = Instant::now_coarse();
+        IMPORT_PENDING_TASKS.with_label_values(&[label]).inc();
         let importer = Arc::clone(&self.importer);
         let limiter = self.limiter.clone();
         let region_id = req.get_sst().get_region_id();
@@ -1093,7 +1094,9 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
                     ));
                     let mut resp = DownloadResponse::default();
                     resp.set_error(error.into());
-                    return crate::send_rpc_response!(Ok(resp), sink, label, timer);
+                    crate::send_rpc_response!(Ok(resp), sink, label, start);
+                    IMPORT_PENDING_TASKS.with_label_values(&[label]).dec();
+                    return;
                 }
             };
 
@@ -1120,9 +1123,9 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
                 },
                 Err(e) => resp.set_error(e.into()),
             }
-            crate::send_rpc_response!(Ok(resp), sink, label, timer);
+            crate::send_rpc_response!(Ok(resp), sink, label, start);
+            IMPORT_PENDING_TASKS.with_label_values(&[label]).dec();
         };
-
         self.threads.spawn(handle_task);
     }
 

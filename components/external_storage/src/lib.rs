@@ -26,6 +26,7 @@ use futures_util::AsyncReadExt;
 use kvproto::brpb::CompressionType;
 use openssl::hash::{Hasher, MessageDigest};
 use tikv_util::{
+    info,
     future::RescheduleChecker,
     stream::READ_BUF_SIZE,
     time::{Instant, Limiter},
@@ -40,12 +41,10 @@ mod noop;
 pub use noop::NoopStorage;
 mod metrics;
 use metrics::EXT_STORAGE_CREATE_HISTOGRAM;
-#[cfg(feature = "cloud-storage-dylib")]
-pub mod dylib_client;
-#[cfg(feature = "cloud-storage-grpc")]
-pub mod grpc_client;
-#[cfg(any(feature = "cloud-storage-dylib", feature = "cloud-storage-grpc"))]
-pub mod request;
+mod export;
+pub use export::*;
+use tracing::instrument;
+use tracing_active_tree::frame;
 
 pub fn record_storage_create(start: Instant, storage: &dyn ExternalStorage) {
     EXT_STORAGE_CREATE_HISTOGRAM
@@ -116,6 +115,7 @@ pub trait ExternalStorage: 'static + Send + Sync {
     fn read_part(&self, name: &str, off: u64, len: u64) -> ExternalData<'_>;
 
     /// Read from external storage and restore to the given path
+    #[instrument(skip_all, fields(storage_name, expected_length))]
     async fn restore(
         &self,
         storage_name: &str,
@@ -263,6 +263,7 @@ pub fn encrypt_wrap_reader(
     Ok(input)
 }
 
+#[instrument(skip_all, fields(expected_length, min_read_speed))]
 pub async fn read_external_storage_into_file<In, Out>(
     mut input: In,
     mut output: Out,
@@ -288,16 +289,21 @@ where
     })?;
     let mut yield_checker =
         RescheduleChecker::new(tokio::task::yield_now, Duration::from_millis(10));
+    let mut loop_count = 0;
     loop {
+        loop_count += 1;
         // separate the speed limiting from actual reading so it won't
         // affect the timeout calculation.
-        let bytes_read = timeout(dur, input.read(&mut buffer))
+        let bytes_read = timeout(dur, frame!(input.read(&mut buffer)))
             .await
             .map_err(|_| io::ErrorKind::TimedOut)??;
         if bytes_read == 0 {
             break;
         }
-        speed_limiter.consume(bytes_read).await;
+        if loop_count > 1000 {
+            info!("has read bytes {}", bytes_read);
+        }
+        frame!(default; speed_limiter.consume(bytes_read); bytes_read).await;
         output.write_all(&buffer[..bytes_read])?;
         if expected_sha256.is_some() {
             hasher.update(&buffer[..bytes_read]).map_err(|err| {
@@ -308,8 +314,18 @@ where
             })?;
         }
         file_length += bytes_read as u64;
-        yield_checker.check().await;
+        if file_length > expected_length {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "read more data than expected read size {}, expected {}",
+                    file_length, expected_length
+                ),
+            ));
+        }
+        frame!(yield_checker.check()).await;
     }
+    info!("has looped {}", loop_count);
 
     if expected_length != 0 && expected_length != file_length {
         return Err(io::Error::new(

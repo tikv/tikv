@@ -23,23 +23,20 @@ test-engines-panic = [
   "engine_test/test-engines-panic",
 ]
 
-cloud-aws = ["sst_importer/cloud-aws"]
-cloud-gcp = ["sst_importer/cloud-gcp"]
-cloud-azure = ["sst_importer/cloud-azure"]
-
 [dependencies]
 batch-system = { workspace = true }
 bitflags = "1.0.1"
 byteorder = "1.2"
 bytes = "1.0"
 causal_ts = { workspace = true }
+chrono = "0.4"
 collections = { workspace = true }
 concurrency_manager = { workspace = true }
 crc32fast = "1.2"
 crossbeam = "0.8"
 derivative = "2"
 encryption = { workspace = true }
-engine_rocks = { workspace = true, optional = true } 
+engine_rocks = { workspace = true, optional = true }
 
 # Should be [dev-dependencies] but we need to control the features
 # https://github.com/rust-lang/cargo/issues/6915
@@ -62,7 +59,7 @@ log = { version = "0.4", features = ["max_level_trace", "release_max_level_debug
 log_wrappers = { workspace = true }
 memory_trace_macros = { workspace = true }
 online_config = { workspace = true }
-openssl = "0.10"
+openssl = { workspace = true }
 ordered-float = "2.6"
 parking_lot = "0.12"
 pd_client = { workspace = true }

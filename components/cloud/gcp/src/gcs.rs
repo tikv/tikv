@@ -14,7 +14,7 @@ use futures_util::{
 use http::HeaderValue;
 use hyper::{client::HttpConnector, Body, Client, Request, Response, StatusCode};
 use hyper_tls::HttpsConnector;
-pub use kvproto::brpb::{Bucket as InputBucket, CloudDynamic, Gcs as InputConfig};
+pub use kvproto::brpb::{Bucket as InputBucket, Gcs as InputConfig};
 use tame_gcs::{
     common::{PredefinedAcl, StorageClass},
     objects::{InsertObjectOptional, Metadata, Object},
@@ -52,35 +52,6 @@ impl Config {
 
     pub fn missing_credentials() -> io::Error {
         io::Error::new(io::ErrorKind::InvalidInput, "missing credentials")
-    }
-
-    pub fn from_cloud_dynamic(cloud_dynamic: &CloudDynamic) -> io::Result<Config> {
-        let bucket = BucketConf::from_cloud_dynamic(cloud_dynamic)?;
-        let attrs = &cloud_dynamic.attrs;
-        let def = &String::new();
-        let predefined_acl = parse_predefined_acl(attrs.get("predefined_acl").unwrap_or(def))
-            .or_invalid_input("invalid predefined_acl")?;
-        let storage_class = parse_storage_class(&none_to_empty(bucket.storage_class.clone()))
-            .or_invalid_input("invalid storage_class")?;
-
-        let credentials_blob_opt = StringNonEmpty::opt(
-            attrs
-                .get("credentials_blob")
-                .unwrap_or(&"".to_string())
-                .to_string(),
-        );
-        let svc_info = if let Some(cred) = credentials_blob_opt {
-            Some(deserialize_service_account_info(cred)?)
-        } else {
-            None
-        };
-
-        Ok(Config {
-            bucket,
-            predefined_acl,
-            svc_info,
-            storage_class,
-        })
     }
 
     pub fn from_input(input: InputConfig) -> io::Result<Config> {
@@ -239,10 +210,6 @@ impl RetryError for RequestError {
 impl GcsStorage {
     pub fn from_input(input: InputConfig) -> io::Result<Self> {
         Self::new(Config::from_input(input)?)
-    }
-
-    pub fn from_cloud_dynamic(cloud_dynamic: &CloudDynamic) -> io::Result<Self> {
-        Self::new(Config::from_cloud_dynamic(cloud_dynamic)?)
     }
 
     /// Create a new GCS storage for the given config.
@@ -618,17 +585,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_config_round_trip() {
-        let mut input = InputConfig::default();
-        input.set_bucket("bucket".to_owned());
-        input.set_prefix("backup 02/prefix/".to_owned());
-        let c1 = Config::from_input(input.clone()).unwrap();
-        let c2 = Config::from_cloud_dynamic(&cloud_dynamic_from_input(input)).unwrap();
-        assert_eq!(c1.bucket.bucket, c2.bucket.bucket);
-        assert_eq!(c1.bucket.prefix, c2.bucket.prefix);
-    }
-
     enum ThrottleReadState {
         Spawning,
         Emitting,
@@ -705,33 +661,5 @@ mod tests {
             rt.block_on(read_to_end(r, &mut dst)).unwrap();
             assert_eq!(dst.len(), BENCH_READ_SIZE)
         })
-    }
-
-    fn cloud_dynamic_from_input(mut gcs: InputConfig) -> CloudDynamic {
-        let mut bucket = InputBucket::default();
-        if !gcs.endpoint.is_empty() {
-            bucket.endpoint = gcs.take_endpoint();
-        }
-        if !gcs.prefix.is_empty() {
-            bucket.prefix = gcs.take_prefix();
-        }
-        if !gcs.storage_class.is_empty() {
-            bucket.storage_class = gcs.take_storage_class();
-        }
-        if !gcs.bucket.is_empty() {
-            bucket.bucket = gcs.take_bucket();
-        }
-        let mut attrs = std::collections::HashMap::new();
-        if !gcs.predefined_acl.is_empty() {
-            attrs.insert("predefined_acl".to_owned(), gcs.take_predefined_acl());
-        }
-        if !gcs.credentials_blob.is_empty() {
-            attrs.insert("credentials_blob".to_owned(), gcs.take_credentials_blob());
-        }
-        let mut cd = CloudDynamic::default();
-        cd.set_provider_name("gcp".to_owned());
-        cd.set_attrs(attrs);
-        cd.set_bucket(bucket);
-        cd
     }
 }

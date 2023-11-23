@@ -3,6 +3,11 @@
 use prometheus::*;
 
 lazy_static! {
+    pub static ref IMPORT_PENDING_TASKS: IntGaugeVec = register_int_gauge_vec!(
+        "tikv_import_pending_tasks",
+        "import download pending tasks",
+        &["type"],
+    ).unwrap();
     pub static ref IMPORT_RPC_DURATION: HistogramVec = register_histogram_vec!(
         "tikv_import_rpc_duration",
         "Bucketed histogram of import rpc duration",
