@@ -300,7 +300,7 @@ where
         if bytes_read == 0 {
             break;
         }
-        if loop_count > 100 {
+        if loop_count > 1000 {
             info!("has read bytes {}", bytes_read);
         }
         frame!(default; speed_limiter.consume(bytes_read); bytes_read).await;
