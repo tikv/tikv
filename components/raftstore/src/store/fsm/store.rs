@@ -2850,11 +2850,11 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         for (region_id, region) in &meta.regions {
             // Check whether the current region is not found on abnormal stores. If so,
             // this region is not the target to be awaken.
-            if !region_on_stores(&region, &abnormal_stores) {
+            if !region_on_stores(region, &abnormal_stores) {
                 continue;
             }
             let peer = {
-                match find_peer(&region, store_id) {
+                match find_peer(region, store_id) {
                     None => continue,
                     Some(p) => p.clone(),
                 }
