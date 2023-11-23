@@ -440,7 +440,7 @@ impl Default for Config {
             region_compact_min_tombstones: 10000,
             region_compact_tombstones_percent: 30,
             region_compact_min_redundant_rows: 50000,
-            region_compact_redundant_rows_percent: None,
+            region_compact_redundant_rows_percent: Some(20),
             pd_heartbeat_tick_interval: ReadableDuration::minutes(1),
             pd_store_heartbeat_tick_interval: ReadableDuration::secs(10),
             // Disable periodic full compaction by default.
@@ -627,15 +627,6 @@ impl Config {
                 self.region_compact_check_step = Some(5);
             } else {
                 self.region_compact_check_step = Some(100);
-            }
-        }
-
-        if self.region_compact_redundant_rows_percent.is_none() {
-            if raft_kv_v2 {
-                self.region_compact_redundant_rows_percent = Some(20);
-            } else {
-                // Disable redundant rows check in default for v1.
-                self.region_compact_redundant_rows_percent = Some(100);
             }
         }
 
