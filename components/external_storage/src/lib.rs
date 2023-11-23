@@ -26,6 +26,7 @@ use futures_util::AsyncReadExt;
 use kvproto::brpb::CompressionType;
 use openssl::hash::{Hasher, MessageDigest};
 use tikv_util::{
+    info,
     future::RescheduleChecker,
     stream::READ_BUF_SIZE,
     time::{Instant, Limiter},
@@ -288,7 +289,9 @@ where
     })?;
     let mut yield_checker =
         RescheduleChecker::new(tokio::task::yield_now, Duration::from_millis(10));
+    let mut loop_count = 0;
     loop {
+        loop_count += 1;
         // separate the speed limiting from actual reading so it won't
         // affect the timeout calculation.
         let bytes_read = timeout(dur, frame!(input.read(&mut buffer)))
@@ -296,6 +299,9 @@ where
             .map_err(|_| io::ErrorKind::TimedOut)??;
         if bytes_read == 0 {
             break;
+        }
+        if loop_count > 100 {
+            info!("has read bytes {}", bytes_read);
         }
         frame!(default; speed_limiter.consume(bytes_read); bytes_read).await;
         output.write_all(&buffer[..bytes_read])?;
@@ -319,6 +325,7 @@ where
         }
         frame!(yield_checker.check()).await;
     }
+    info!("has looped {}", loop_count);
 
     if expected_length != 0 && expected_length != file_length {
         return Err(io::Error::new(
