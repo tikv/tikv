@@ -59,10 +59,14 @@ use tracker::GLOBAL_TRACKERS;
 use txn_types::{Key, TimeStamp, TxnExtra, TxnExtraScheduler, WriteBatchFlags};
 
 use super::metrics::*;
-use crate::debug;
-use crate::storage::{
-    self, kv,
-    kv::{Engine, Error as KvError, ErrorInner as KvErrorInner, Modify, SnapContext, WriteData},
+use crate::{
+    debug,
+    storage::{
+        self, kv,
+        kv::{
+            Engine, Error as KvError, ErrorInner as KvErrorInner, Modify, SnapContext, WriteData,
+        },
+    },
 };
 
 pub const ASYNC_WRITE_CALLBACK_DROPPED_ERR_MSG: &str = "async write on_applied callback is dropped";
@@ -633,10 +637,7 @@ where
         header.set_flags(flags);
         // Encode `start_ts` in `flag_data` for the check of stale read and flashback.
         if need_encoded_start_ts {
-            encode_start_ts_into_flag_data(
-                &mut header,
-                start_ts,
-            );
+            encode_start_ts_into_flag_data(&mut header, start_ts);
         }
 
         let mut cmd = RaftCmdRequest::default();

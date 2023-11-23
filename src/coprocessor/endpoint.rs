@@ -252,7 +252,9 @@ impl<E: Engine> Endpoint<E> {
                         0 => None,
                         i => Some(i),
                     };
-                    if debug::is_user_table_key(&req_ctx.lower_bound) || debug::is_user_table_key(&req_ctx.upper_bound) {
+                    if debug::is_user_table_key(&req_ctx.lower_bound)
+                        || debug::is_user_table_key(&req_ctx.upper_bound)
+                    {
                         info!(">>> copr build dag handler";
                             "ranges" => ?&req_ctx.ranges,
                             "upper" => hex::encode(&req_ctx.upper_bound),
@@ -453,7 +455,9 @@ impl<E: Engine> Endpoint<E> {
             && tracker.req_ctx.cache_match_version == snapshot.ext().get_data_version()
         {
             // Build a cached request handler instead if cache version is matching.
-            if debug::is_user_table_key(&tracker.req_ctx.lower_bound) || debug::is_user_table_key(&tracker.req_ctx.upper_bound) {
+            if debug::is_user_table_key(&tracker.req_ctx.lower_bound)
+                || debug::is_user_table_key(&tracker.req_ctx.upper_bound)
+            {
                 info!(">>> copr use cached handler";
                     "ranges" => ?&tracker.req_ctx.ranges,
                     "upper" => hex::encode(&tracker.req_ctx.upper_bound),

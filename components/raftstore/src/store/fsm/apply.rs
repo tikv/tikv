@@ -17,12 +17,11 @@ use std::{
         mpsc::SyncSender,
         Arc, Mutex,
     },
+    thread,
     time::Duration,
     usize,
     vec::Drain,
-    thread,
 };
-use rand::Rng;
 
 use batch_system::{
     BasicMailbox, BatchRouter, BatchSystem, Config as BatchSystemConfig, Fsm, HandleResult,
@@ -53,6 +52,7 @@ use raft::eraftpb::{
     ConfChange, ConfChangeType, ConfChangeV2, Entry, EntryType, Snapshot as RaftSnapshot,
 };
 use raft_proto::ConfChangeI;
+use rand::Rng;
 use resource_control::{ResourceConsumeType, ResourceController, ResourceMetered};
 use smallvec::{smallvec, SmallVec};
 use sst_importer::SstImporter;
@@ -1745,7 +1745,7 @@ where
         );
         let n = rand::thread_rng().gen_range(0..9);
         if n < 3 {
-            thread::sleep(Duration::from_millis(10*n));
+            thread::sleep(Duration::from_millis(10 * n));
         }
 
         let requests = req.get_requests();

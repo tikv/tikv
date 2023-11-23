@@ -5,9 +5,9 @@ mod backward;
 mod forward;
 
 use std::ops::Bound;
-use hex;
 
 use engine_traits::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
+use hex;
 use kvproto::kvrpcpb::{ExtraOp, IsolationLevel};
 use txn_types::{
     Key, Lock, LockType, OldValue, TimeStamp, TsSet, Value, Write, WriteRef, WriteType,
@@ -20,12 +20,14 @@ use self::{
         DeltaEntryPolicy, ForwardKvScanner, ForwardScanner, LatestEntryPolicy, LatestKvPolicy,
     },
 };
-use crate::debug;
-use crate::storage::{
-    kv::{CfStatistics, Cursor, CursorBuilder, Iterator, ScanMode, Snapshot, Statistics},
-    mvcc::{default_not_found_error, NewerTsCheckState, Result},
-    need_check_locks,
-    txn::{Result as TxnResult, Scanner as StoreScanner},
+use crate::{
+    debug,
+    storage::{
+        kv::{CfStatistics, Cursor, CursorBuilder, Iterator, ScanMode, Snapshot, Statistics},
+        mvcc::{default_not_found_error, NewerTsCheckState, Result},
+        need_check_locks,
+        txn::{Result as TxnResult, Scanner as StoreScanner},
+    },
 };
 
 pub struct ScannerBuilder<S: Snapshot>(ScannerConfig<S>);

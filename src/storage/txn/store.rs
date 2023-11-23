@@ -4,13 +4,15 @@ use kvproto::kvrpcpb::IsolationLevel;
 use txn_types::{Key, KvPair, LastChange, Lock, OldValue, TimeStamp, TsSet, Value, WriteRef};
 
 use super::{Error, ErrorInner, Result};
-use crate::debug;
-use crate::storage::{
-    kv::{Snapshot, SnapshotExt, Statistics},
-    metrics::*,
-    mvcc::{
-        EntryScanner, Error as MvccError, ErrorInner as MvccErrorInner, NewerTsCheckState,
-        PointGetter, PointGetterBuilder, Scanner as MvccScanner, ScannerBuilder,
+use crate::{
+    debug,
+    storage::{
+        kv::{Snapshot, SnapshotExt, Statistics},
+        metrics::*,
+        mvcc::{
+            EntryScanner, Error as MvccError, ErrorInner as MvccErrorInner, NewerTsCheckState,
+            PointGetter, PointGetterBuilder, Scanner as MvccScanner, ScannerBuilder,
+        },
     },
 };
 
@@ -395,8 +397,12 @@ impl<S: Snapshot> Store for SnapshotStore<S> {
         self.verify_range(&lower_bound, &upper_bound)?;
         if let Some(key) = lower_bound.as_ref().or(upper_bound.as_ref()) {
             if let Some(tid) = debug::extract_user_table_id(key) {
-                let lower = lower_bound.as_ref().map(|key| hex::encode(key.as_encoded().as_slice()));
-                let upper = upper_bound.as_ref().map(|key| hex::encode(key.as_encoded().as_slice()));
+                let lower = lower_bound
+                    .as_ref()
+                    .map(|key| hex::encode(key.as_encoded().as_slice()));
+                let upper = upper_bound
+                    .as_ref()
+                    .map(|key| hex::encode(key.as_encoded().as_slice()));
                 info!(">>> mvcc scan init";
                     "upper" => upper.unwrap_or_default(),
                     "lower" => lower.unwrap_or_default(),
