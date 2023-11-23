@@ -225,6 +225,9 @@ pub struct StoreStat {
     pub store_cpu_usages: RecordPairVec,
     pub store_read_io_rates: RecordPairVec,
     pub store_write_io_rates: RecordPairVec,
+
+    store_cpu_quota: f64, // quota of cpu usage
+    store_cpu_busy_thd: f64,
 }
 
 impl Default for StoreStat {
@@ -249,25 +252,37 @@ impl Default for StoreStat {
             store_cpu_usages: RecordPairVec::default(),
             store_read_io_rates: RecordPairVec::default(),
             store_write_io_rates: RecordPairVec::default(),
+
+            store_cpu_quota: 0.0_f64,
+            store_cpu_busy_thd: 0.8_f64,
         }
     }
 }
 
 impl StoreStat {
-    pub(crate) fn is_busy(&self) -> bool {
+    fn set_cpu_quota(&mut self, cpu_cores: f64, busy_thd: f64) {
+        self.store_cpu_quota = cpu_cores * 100.0;
+        self.store_cpu_busy_thd = busy_thd;
+    }
+
+    fn is_busy(&self) -> bool {
+        if self.store_cpu_quota < 1.0 || self.store_cpu_busy_thd > 1.0 {
+            return false;
+        }
+
         let mut cpu_usage = 0_u64;
 
         for record in self.store_cpu_usages.iter() {
             cpu_usage += record.get_value();
         }
-
         STORE_STAT_CPU_USAGE
             .with_label_values(&["cpu_usage"])
             .set(cpu_usage as i64);
         STORE_STAT_CPU_USAGE
             .with_label_values(&["cpu_usage_limit"])
-            .set(SysQuota::cpu_cores_quota() as i64);
-        (cpu_usage as f64 / SysQuota::cpu_cores_quota()) >= 0.8
+            .set(self.store_cpu_quota as i64);
+
+        (cpu_usage as f64 / self.store_cpu_quota) >= self.store_cpu_busy_thd
     }
 }
 
@@ -1004,6 +1019,8 @@ where
         causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
         grpc_service_manager: GrpcServiceManager,
     ) -> Runner<EK, ER, T> {
+        let mut store_stat = StoreStat::default();
+        store_stat.set_cpu_quota(SysQuota::cpu_cores_quota(), cfg.inspect_cpu_quota_busy_thd);
         let store_heartbeat_interval = cfg.pd_store_heartbeat_tick_interval.0;
         let interval = store_heartbeat_interval / NUM_COLLECT_STORE_INFOS_PER_HEARTBEAT;
         let mut stats_monitor = StatsMonitor::new(
@@ -1028,7 +1045,7 @@ where
             is_hb_receiver_scheduled: false,
             region_peers: HashMap::default(),
             region_buckets: HashMap::default(),
-            store_stat: StoreStat::default(),
+            store_stat,
             start_ts: UnixSecs::now(),
             scheduler,
             store_heartbeat_interval,
