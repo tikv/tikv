@@ -26,10 +26,14 @@ use tikv_util::{
     worker::{Runnable, RunnableWithTimer, Scheduler, Worker},
     yatp_pool::{self, CleanupMethod, FuturePool, PoolTicker, YatpPoolBuilder},
 };
+<<<<<<< HEAD
 use tracker::TrackedFuture;
 use yatp::{
     metrics::MULTILEVEL_LEVEL_ELAPSED, pool::Remote, queue::Extras, task::future::TaskCell,
 };
+=======
+use yatp::{metrics::MULTILEVEL_LEVEL_ELAPSED, queue::Extras};
+>>>>>>> b23787ca7a (readpool: fix pending tasks counter (#16031))
 
 use self::metrics::*;
 use crate::{
@@ -167,6 +171,7 @@ impl ReadPoolHandle {
                 let group_name = metadata.group_name().to_owned();
                 let mut extras = Extras::new_multilevel(task_id, fixed_level);
                 extras.set_metadata(metadata.to_vec());
+<<<<<<< HEAD
                 let task_cell = if let Some(resource_ctl) = resource_ctl {
                     TaskCell::new(
                         TrackedFuture::new(with_resource_limiter(
@@ -192,6 +197,35 @@ impl ReadPoolHandle {
                     )
                 };
                 remote.spawn(task_cell);
+=======
+                let running_tasks1 = running_tasks.clone();
+                if let Some(resource_ctl) = resource_ctl {
+                    let fut = with_resource_limiter(
+                        ControlledFuture::new(
+                            async move {
+                                f.await;
+                                running_tasks.dec();
+                            },
+                            resource_ctl.clone(),
+                            group_name,
+                        ),
+                        resource_limiter,
+                    );
+                    remote.spawn_with_extras(fut, extras).map_err(|e| {
+                        running_tasks1.dec();
+                        e
+                    })?;
+                } else {
+                    let fut = async move {
+                        f.await;
+                        running_tasks.dec();
+                    };
+                    remote.spawn_with_extras(fut, extras).map_err(|e| {
+                        running_tasks1.dec();
+                        e
+                    })?;
+                }
+>>>>>>> b23787ca7a (readpool: fix pending tasks counter (#16031))
             }
         }
         Ok(())
@@ -805,12 +839,14 @@ mod tests {
         // max running tasks number should be 2*1 = 2
 
         let engine = TestEngineBuilder::new().build().unwrap();
-        let pool = build_yatp_read_pool(
+        let name = "test-yatp-full";
+        let pool = build_yatp_read_pool_with_name(
             &config,
             DummyReporter,
             engine,
             None,
             CleanupMethod::InPlace,
+            name.to_owned(),
             None,
         );
 
@@ -846,6 +882,12 @@ mod tests {
         handle
             .spawn(task4, CommandPri::Normal, 4, TaskMetadata::default(), None)
             .unwrap();
+        assert_eq!(
+            UNIFIED_READ_POOL_RUNNING_TASKS
+                .with_label_values(&[name])
+                .get(),
+            2
+        );
     }
 
     #[test]
