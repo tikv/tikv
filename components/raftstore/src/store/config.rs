@@ -399,7 +399,11 @@ impl Default for Config {
             region_compact_min_tombstones: 10000,
             region_compact_tombstones_percent: 30,
             region_compact_min_redundant_rows: 50000,
+<<<<<<< HEAD
             region_compact_redundant_rows_percent: 20,
+=======
+            region_compact_redundant_rows_percent: Some(20),
+>>>>>>> 1b097636c9 (update default value of region_compact_redundant_rows_percent (#16051))
             pd_heartbeat_tick_interval: ReadableDuration::minutes(1),
             pd_store_heartbeat_tick_interval: ReadableDuration::secs(10),
             notify_capacity: 40960,
@@ -572,6 +576,21 @@ impl Config {
                 self.region_compact_check_step = Some(100);
             }
         }
+<<<<<<< HEAD
+=======
+
+        // When use raft kv v2, we can set raft log gc size limit to a smaller value to
+        // avoid too many entry logs in cache.
+        // The snapshot support to increment snapshot sst, so the old snapshot files
+        // still be useful even if needs to sent snapshot again.
+        if self.raft_log_gc_size_limit.is_none() && raft_kv_v2 {
+            self.raft_log_gc_size_limit = Some(ReadableSize::mb(200));
+        }
+
+        if self.raft_log_gc_count_limit.is_none() && raft_kv_v2 {
+            self.raft_log_gc_count_limit = Some(10000);
+        }
+>>>>>>> 1b097636c9 (update default value of region_compact_redundant_rows_percent (#16051))
     }
 
     pub fn validate(

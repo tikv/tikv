@@ -434,6 +434,18 @@
 ## exceeds `region-compact-tombstones-percent`.
 # region-compact-tombstones-percent = 30
 
+<<<<<<< HEAD
+=======
+## The minimum number of duplicated MVCC keys to trigger manual compaction.
+# region-compact-min-redundant-rows = 50000
+
+## The minimum percentage of duplicated MVCC keys to trigger manual compaction.
+## It should be set between 1 and 100. Manual compaction is only triggered when the number of
+## duplicated MVCC keys exceeds `region-compact-min-redundant-rows` and the percentage of duplicated MVCC keys
+## exceeds `region-compact-redundant-rows-percent`.
+# region-compact-redundant-rows-percent = 20
+
+>>>>>>> 1b097636c9 (update default value of region_compact_redundant_rows_percent (#16051))
 ## Interval to check whether to start a manual compaction for Lock Column Family.
 ## If written bytes reach `lock-cf-compact-bytes-threshold` for Lock Column Family, TiKV will
 ## trigger a manual compaction for Lock Column Family.

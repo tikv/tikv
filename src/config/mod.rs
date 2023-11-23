@@ -6177,4 +6177,70 @@ mod tests {
             Some(ReadableSize::gb(1))
         );
     }
+<<<<<<< HEAD
+=======
+
+    #[test]
+    fn test_compact_check_default() {
+        let content = r#"
+            [raftstore]
+            region-compact-check-step = 50
+        "#;
+        let mut cfg: TikvConfig = toml::from_str(content).unwrap();
+        cfg.validate().unwrap();
+        assert_eq!(cfg.raft_store.region_compact_check_step.unwrap(), 50);
+        assert_eq!(
+            cfg.raft_store
+                .region_compact_redundant_rows_percent
+                .unwrap(),
+            20
+        );
+
+        let content = r#"
+            [raftstore]
+            region-compact-check-step = 50
+            [storage]
+            engine = "partitioned-raft-kv"
+        "#;
+        let mut cfg: TikvConfig = toml::from_str(content).unwrap();
+        cfg.validate().unwrap();
+        assert_eq!(cfg.raft_store.region_compact_check_step.unwrap(), 50);
+        assert_eq!(
+            cfg.raft_store
+                .region_compact_redundant_rows_percent
+                .unwrap(),
+            20
+        );
+
+        let content = r#"
+            [raftstore]
+            region-compact-redundant-rows-percent = 50
+        "#;
+        let mut cfg: TikvConfig = toml::from_str(content).unwrap();
+        cfg.validate().unwrap();
+        assert_eq!(cfg.raft_store.region_compact_check_step.unwrap(), 100);
+        assert_eq!(
+            cfg.raft_store
+                .region_compact_redundant_rows_percent
+                .unwrap(),
+            50
+        );
+
+        let content = r#"
+            [raftstore]
+            region-compact-redundant-rows-percent = 50
+            [storage]
+            engine = "partitioned-raft-kv"
+        "#;
+        let mut cfg: TikvConfig = toml::from_str(content).unwrap();
+        cfg.validate().unwrap();
+        assert_eq!(cfg.raft_store.region_compact_check_step.unwrap(), 5);
+        assert_eq!(
+            cfg.raft_store
+                .region_compact_redundant_rows_percent
+                .unwrap(),
+            50
+        );
+    }
+>>>>>>> 1b097636c9 (update default value of region_compact_redundant_rows_percent (#16051))
 }
