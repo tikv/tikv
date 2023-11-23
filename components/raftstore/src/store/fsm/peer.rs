@@ -4175,7 +4175,7 @@ where
             panic!("{} original region should exist", self.fsm.peer.tag);
         }
 
-        if let Some(ref memory_engine) = self.ctx.memory_engine {
+        if let Some(ref memory_engine) = self.ctx.memory_engine && region_memory_engines.is_some() {
             let region_memory_engines = region_memory_engines.unwrap();
             assert_eq!(region_memory_engines.len(), regions.len());
             let mut m_engine = memory_engine.core.lock().unwrap();

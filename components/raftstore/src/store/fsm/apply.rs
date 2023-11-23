@@ -2636,8 +2636,12 @@ where
         let mut split_region_memory_engines = None;
         if let Some(ref memory_engine) = ctx.memory_engine {
             let m_engine = memory_engine.core.lock().unwrap();
-            split_region_memory_engines =
-                Some(m_engine.engine.get(&derived.id).unwrap().split(split_keys));
+
+            // none means no data has been inserted
+            split_region_memory_engines = m_engine
+                .engine
+                .get(&derived.id)
+                .map(|engine| engine.split(split_keys));
         }
 
         // Init split regions' meta info
