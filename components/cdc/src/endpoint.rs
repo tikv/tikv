@@ -2050,7 +2050,6 @@ mod tests {
 
     #[test]
     fn test_too_many_scan_tasks() {
-        test_util::setup_for_ci();
         let cfg = CdcConfig {
             min_ts_interval: ReadableDuration(Duration::from_secs(60)),
             incremental_scan_concurrency: 1,
