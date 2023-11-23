@@ -1,9 +1,5 @@
-log-level = "info"
-log-file = ""
-log-format = "text"
 slow-log-file = "slow_foo"
 slow-log-threshold = "1s"
-log-rotation-timespan = "1d"
 panic-when-unexpected-key-or-data = true
 abort-on-panic = true
 memory-usage-limit = "10GB"
@@ -18,6 +14,10 @@ filename = "foo"
 max-size = 1
 max-backups = 2
 max-days = 3
+
+[memory]
+enable-heap-profiling = false 
+profiling-sample-per-bytes = "1MB" 
 
 [readpool.unified]
 min-thread-count = 5
@@ -348,7 +348,8 @@ periodic-compaction-seconds = "10d"
 
 [rocksdb.defaultcf.titan]
 min-blob-size = "2018B"
-blob-file-compression = "zstd"
+blob-file-compression = "lz4"
+zstd-dict-size = "16KB"
 blob-cache-size = "12GB"
 min-gc-batch-size = "12KB"
 max-gc-batch-size = "12MB"
@@ -608,7 +609,8 @@ max-compactions = 3
 
 [raftdb.defaultcf.titan]
 min-blob-size = "2018B"
-blob-file-compression = "zstd"
+blob-file-compression = "lz4"
+zstd-dict-size = "16KB"
 blob-cache-size = "12GB"
 min-gc-batch-size = "12KB"
 max-gc-batch-size = "12MB"

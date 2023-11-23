@@ -751,7 +751,7 @@ macro_rules! impl_write {
                     let (meta, resource_limiter) = match first_req {
                         Some(r) => {
                             let limiter = resource_manager.as_ref().and_then(|m| {
-                                m.get_resource_limiter(
+                                m.get_background_resource_limiter(
                                     r.get_context()
                                         .get_resource_control_context()
                                         .get_resource_group_name(),
@@ -1060,7 +1060,7 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
         let tablets = self.tablets.clone();
         let start = Instant::now();
         let resource_limiter = self.resource_manager.as_ref().and_then(|r| {
-            r.get_resource_limiter(
+            r.get_background_resource_limiter(
                 req.get_context()
                     .get_resource_control_context()
                     .get_resource_group_name(),

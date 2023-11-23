@@ -1,0 +1,45 @@
+# This Docker image contains a minimal build environment for a FIPS compliant TiKV.
+
+FROM rockylinux:9 as builder
+
+RUN dnf install -y openssl-devel
+
+RUN dnf install -y \
+      gcc \
+      gcc-c++ \
+      make \
+      cmake \
+      perl \
+      git \
+      findutils \
+      curl \
+      python3 --allowerasing && \
+    dnf --enablerepo=crb install -y \
+      libstdc++-static && \
+    dnf clean all
+
+# Install Rustup
+RUN curl https://sh.rustup.rs -sSf | sh -s -- --no-modify-path --default-toolchain none -y
+ENV PATH /root/.cargo/bin/:$PATH
+
+# Checkout TiKV source code.
+WORKDIR /tikv
+COPY .git .git
+ARG GIT_HASH
+RUN git checkout ${GIT_HASH} && git checkout .
+
+# Do not static link OpenSSL.
+ENV ENABLE_FIPS 1
+RUN make build_dist_release
+
+# Export to a clean image
+FROM rockylinux:9-minimal
+
+RUN microdnf install -y openssl
+
+COPY --from=builder /tikv/target/release/tikv-server /tikv-server
+COPY --from=builder /tikv/target/release/tikv-ctl /tikv-ctl
+
+EXPOSE 20160 20180
+
+ENTRYPOINT ["/tikv-server"]

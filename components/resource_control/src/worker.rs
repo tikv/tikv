@@ -9,16 +9,19 @@ use std::{
 };
 
 use file_system::{fetch_io_bytes, IoBytes, IoType};
-use strum::EnumCount;
+use prometheus::Histogram;
+use strum::{EnumCount, IntoEnumIterator};
 use tikv_util::{
+    debug,
     sys::{cpu_time::ProcessStat, SysQuota},
     time::Instant,
     warn,
+    yatp_pool::metrics::YATP_POOL_SCHEDULE_WAIT_DURATION_VEC,
 };
 
 use crate::{
     metrics::*,
-    resource_group::ResourceGroupManager,
+    resource_group::{ResourceGroupManager, TaskPriority},
     resource_limiter::{GroupStatistics, ResourceLimiter, ResourceType},
 };
 
@@ -39,7 +42,7 @@ pub struct SysQuotaGetter {
     process_stat: ProcessStat,
     prev_io_stats: [IoBytes; IoType::COUNT],
     prev_io_ts: Instant,
-    io_bandwidth: u64,
+    io_bandwidth: f64,
 }
 
 impl ResourceStatsProvider for SysQuotaGetter {
@@ -55,7 +58,7 @@ impl ResourceStatsProvider for SysQuotaGetter {
             }
             ResourceType::Io => {
                 let mut stats = ResourceUsageStats {
-                    total_quota: self.io_bandwidth as f64,
+                    total_quota: self.io_bandwidth,
                     current_used: 0.0,
                 };
                 let now = Instant::now_coarse();
@@ -97,7 +100,7 @@ impl GroupQuotaAdjustWorker<SysQuotaGetter> {
             process_stat: ProcessStat::cur_proc_stat().unwrap(),
             prev_io_stats: [IoBytes::default(); IoType::COUNT],
             prev_io_ts: Instant::now_coarse(),
-            io_bandwidth,
+            io_bandwidth: io_bandwidth as f64,
         };
         Self::with_quota_getter(resource_ctl, resource_quota_getter)
     }
@@ -295,6 +298,235 @@ struct GroupStats {
     expect_cost_rate: f64,
 }
 
+/// PriorityLimiterAdjustWorker automically adjust the quota of each priority
+/// limiter based on the statistics data during a certain period of time.
+/// In general, caller should call this function in a fixed interval.
+pub struct PriorityLimiterAdjustWorker<R> {
+    resource_ctl: Arc<ResourceGroupManager>,
+    trackers: [PriorityLimiterStatsTracker; 3],
+    resource_quota_getter: R,
+    last_adjust_time: Instant,
+    is_last_low_cpu: bool,
+    is_last_single_group: bool,
+}
+
+impl PriorityLimiterAdjustWorker<SysQuotaGetter> {
+    pub fn new(resource_ctl: Arc<ResourceGroupManager>) -> Self {
+        let resource_quota_getter = SysQuotaGetter {
+            process_stat: ProcessStat::cur_proc_stat().unwrap(),
+            prev_io_stats: [IoBytes::default(); IoType::COUNT],
+            prev_io_ts: Instant::now_coarse(),
+            io_bandwidth: f64::INFINITY,
+        };
+        Self::with_quota_getter(resource_ctl, resource_quota_getter)
+    }
+}
+
+impl<R: ResourceStatsProvider> PriorityLimiterAdjustWorker<R> {
+    fn with_quota_getter(
+        resource_ctl: Arc<ResourceGroupManager>,
+        resource_quota_getter: R,
+    ) -> Self {
+        let priorities: [_; 3] = TaskPriority::iter().collect::<Vec<_>>().try_into().unwrap();
+        let trackers = resource_ctl
+            .get_priority_resource_limiters()
+            .zip(priorities)
+            .map(|(l, p)| PriorityLimiterStatsTracker::new(l, p.as_str()));
+        Self {
+            resource_ctl,
+            trackers,
+            resource_quota_getter,
+            last_adjust_time: Instant::now_coarse(),
+            is_last_low_cpu: true,
+            is_last_single_group: true,
+        }
+    }
+    pub fn adjust(&mut self) {
+        let now = Instant::now_coarse();
+        let dur = now.saturating_duration_since(self.last_adjust_time);
+        if dur < Duration::from_secs(1) {
+            warn!("adjust duration too small, skip adjustment."; "dur" => ?dur);
+            return;
+        }
+        self.last_adjust_time = now;
+
+        // fast path for only the default resource group which means resource
+        // control is not used at all.
+        let group_count = self.resource_ctl.get_group_count();
+        if group_count == 1 {
+            if self.is_last_single_group {
+                return;
+            }
+            self.is_last_single_group = true;
+            self.trackers.iter().skip(1).for_each(|t| {
+                t.limiter
+                    .get_limiter(ResourceType::Cpu)
+                    .set_rate_limit(f64::INFINITY)
+            });
+            return;
+        }
+        self.is_last_single_group = false;
+
+        let stats: [_; 3] =
+            std::array::from_fn(|i| self.trackers[i].get_and_update_last_stats(dur.as_secs_f64()));
+
+        let process_cpu_stats = match self
+            .resource_quota_getter
+            .get_current_stats(ResourceType::Cpu)
+        {
+            Ok(s) => s,
+            Err(e) => {
+                warn!("get process total cpu failed; skip adjusment."; "err" => ?e);
+                return;
+            }
+        };
+
+        if process_cpu_stats.current_used < process_cpu_stats.total_quota * 0.5 {
+            if self.is_last_low_cpu {
+                return;
+            }
+            self.is_last_low_cpu = true;
+            self.trackers.iter().skip(1).for_each(|t| {
+                t.limiter
+                    .get_limiter(ResourceType::Cpu)
+                    .set_rate_limit(f64::INFINITY);
+                // 0 represent infinity
+                PRIORITY_QUOTA_LIMIT_VEC
+                    .get_metric_with_label_values(&[t.priority])
+                    .unwrap()
+                    .set(0);
+            });
+            return;
+        }
+        self.is_last_low_cpu = false;
+
+        let total_reqs: u64 = stats.iter().map(|s| s.req_count).sum();
+        let max_reqs = stats.iter().map(|s| s.req_count).max().unwrap();
+        // there is only 1 active priority, do not restrict.
+        if total_reqs * 99 / 100 <= max_reqs {
+            self.trackers
+                .iter()
+                .skip(1)
+                .for_each(|t: &PriorityLimiterStatsTracker| {
+                    t.limiter
+                        .get_limiter(ResourceType::Cpu)
+                        .set_rate_limit(f64::INFINITY)
+                });
+            return;
+        }
+
+        let real_cpu_total: f64 = stats.iter().map(|s| s.cpu_secs).sum();
+        let expect_pool_cpu_total = real_cpu_total * (process_cpu_stats.total_quota * 0.95)
+            / process_cpu_stats.current_used;
+        let mut limits = [0.0; 2];
+        let level_expected: [_; 3] =
+            std::array::from_fn(|i| stats[i].cpu_secs + stats[i].wait_secs);
+        // substract the cpu time usage for priority high.
+        let mut expect_cpu_time_total = expect_pool_cpu_total - level_expected[0];
+
+        // still reserve a minimal cpu quota
+        let minimal_quota = process_cpu_stats.total_quota / MICROS_PER_SEC * 0.05;
+        for i in 1..self.trackers.len() {
+            if expect_cpu_time_total < minimal_quota {
+                expect_cpu_time_total = minimal_quota;
+            }
+            let limit = expect_cpu_time_total * MICROS_PER_SEC;
+            self.trackers[i]
+                .limiter
+                .get_limiter(ResourceType::Cpu)
+                .set_rate_limit(limit);
+            PRIORITY_QUOTA_LIMIT_VEC
+                .get_metric_with_label_values(&[self.trackers[i].priority])
+                .unwrap()
+                .set(limit as i64);
+            limits[i - 1] = limit;
+            expect_cpu_time_total -= level_expected[i];
+        }
+        debug!("adjsut cpu limiter by priority"; "cpu_quota" => process_cpu_stats.total_quota, "process_cpu" => process_cpu_stats.current_used, "expected_cpu" => ?level_expected,
+            "limits" => ?limits, "limit_cpu_total" => expect_pool_cpu_total, "pool_cpu_cost" => real_cpu_total);
+    }
+}
+
+#[derive(Debug)]
+struct LimiterStats {
+    // QuotaLimiter consumed cpu secs in total
+    cpu_secs: f64,
+    // QuotaLimiter waited secs in total.
+    wait_secs: f64,
+    // the total number of tasks that are scheduled.
+    req_count: u64,
+}
+
+struct HistogramTracker {
+    metrics: Histogram,
+    last_sum: f64,
+    last_count: u64,
+}
+
+impl HistogramTracker {
+    fn new(metrics: Histogram) -> Self {
+        let last_sum = metrics.get_sample_sum();
+        let last_count = metrics.get_sample_count();
+        Self {
+            metrics,
+            last_sum,
+            last_count,
+        }
+    }
+
+    fn get_and_upate_statistics(&mut self) -> (f64, u64) {
+        let cur_sum = self.metrics.get_sample_sum();
+        let cur_count = self.metrics.get_sample_count();
+        let res = (cur_sum - self.last_sum, cur_count - self.last_count);
+        self.last_sum = cur_sum;
+        self.last_count = cur_count;
+        res
+    }
+}
+
+struct PriorityLimiterStatsTracker {
+    priority: &'static str,
+    limiter: Arc<ResourceLimiter>,
+    last_stats: GroupStatistics,
+    // unified-read-pool and schedule-worker-pool wait duration metrics.
+    task_wait_dur_trakcers: [HistogramTracker; 2],
+}
+
+impl PriorityLimiterStatsTracker {
+    fn new(limiter: Arc<ResourceLimiter>, priority: &'static str) -> Self {
+        let task_wait_dur_trakcers =
+            ["unified-read-pool", "sched-worker-priority"].map(|pool_name| {
+                HistogramTracker::new(
+                    YATP_POOL_SCHEDULE_WAIT_DURATION_VEC
+                        .get_metric_with_label_values(&[pool_name, priority])
+                        .unwrap(),
+                )
+            });
+        let last_stats = limiter.get_limit_statistics(ResourceType::Cpu);
+        Self {
+            priority,
+            limiter,
+            last_stats,
+            task_wait_dur_trakcers,
+        }
+    }
+
+    fn get_and_update_last_stats(&mut self, dur_secs: f64) -> LimiterStats {
+        let cur_stats = self.limiter.get_limit_statistics(ResourceType::Cpu);
+        let stats_delta = (cur_stats - self.last_stats) / dur_secs;
+        self.last_stats = cur_stats;
+        let wait_stats: [_; 2] =
+            std::array::from_fn(|i| self.task_wait_dur_trakcers[i].get_and_upate_statistics());
+        let schedule_wait_dur_secs = wait_stats.iter().map(|s| s.0).sum::<f64>() / dur_secs;
+        LimiterStats {
+            cpu_secs: stats_delta.total_consumed as f64 / MICROS_PER_SEC,
+            wait_secs: stats_delta.total_wait_dur_us as f64 / MICROS_PER_SEC
+                + schedule_wait_dur_secs,
+            req_count: stats_delta.request_count,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::time::Duration;
@@ -340,7 +572,11 @@ mod tests {
         let resource_ctl = Arc::new(ResourceGroupManager::default());
         let rg1 = new_resource_group_ru("test".into(), 1000, 14);
         resource_ctl.add_resource_group(rg1);
-        assert!(resource_ctl.get_resource_limiter("test", "br").is_none());
+        assert!(
+            resource_ctl
+                .get_background_resource_limiter("test", "br")
+                .is_none()
+        );
 
         let test_provider = TestResourceStatsProvider::new(8.0, 10000.0);
         let mut worker =
@@ -351,10 +587,12 @@ mod tests {
         resource_ctl.add_resource_group(default_bg);
         assert!(
             resource_ctl
-                .get_resource_limiter("default", "lightning")
+                .get_background_resource_limiter("default", "lightning")
                 .is_none()
         );
-        let limiter = resource_ctl.get_resource_limiter("default", "br").unwrap();
+        let limiter = resource_ctl
+            .get_background_resource_limiter("default", "br")
+            .unwrap();
         assert!(
             limiter
                 .get_limiter(ResourceType::Cpu)
@@ -513,13 +751,15 @@ mod tests {
         let default =
             new_background_resource_group_ru("default".into(), 2000, 8, vec!["br".into()]);
         resource_ctl.add_resource_group(default);
-        let new_limiter = resource_ctl.get_resource_limiter("default", "br").unwrap();
+        let new_limiter = resource_ctl
+            .get_background_resource_limiter("default", "br")
+            .unwrap();
         assert_eq!(&*new_limiter as *const _, &*limiter as *const _);
 
         let bg = new_background_resource_group_ru("background".into(), 1000, 15, vec!["br".into()]);
         resource_ctl.add_resource_group(bg);
         let bg_limiter = resource_ctl
-            .get_resource_limiter("background", "br")
+            .get_background_resource_limiter("background", "br")
             .unwrap();
 
         reset_quota(&mut worker, 5.0, 7000.0, Duration::from_secs(1));
@@ -581,7 +821,7 @@ mod tests {
             new_background_resource_group_ru("background".into(), 1000, 15, vec!["br".into()]);
         resource_ctl.add_resource_group(new_bg);
         let new_bg_limiter = resource_ctl
-            .get_resource_limiter("background", "br")
+            .get_background_resource_limiter("background", "br")
             .unwrap();
         assert_ne!(&*bg_limiter as *const _, &*new_bg_limiter as *const _);
         assert!(
@@ -649,5 +889,119 @@ mod tests {
                 write: 1800,
             },
         );
+    }
+
+    #[test]
+    fn test_adjust_priority_resource_limiter() {
+        let resource_ctl = Arc::new(ResourceGroupManager::default());
+        let priority_limiters = resource_ctl.get_priority_resource_limiters();
+        let test_provider = TestResourceStatsProvider::new(8.0, f64::INFINITY);
+        let mut worker =
+            PriorityLimiterAdjustWorker::with_quota_getter(resource_ctl.clone(), test_provider);
+
+        let reset_quota = |worker: &mut PriorityLimiterAdjustWorker<TestResourceStatsProvider>,
+                           cpu: f64| {
+            worker.resource_quota_getter.cpu_used = cpu;
+            worker.last_adjust_time = Instant::now_coarse() - Duration::from_secs(10);
+            priority_limiters[1]
+                .get_limiter(ResourceType::Cpu)
+                .set_rate_limit(f64::INFINITY);
+            priority_limiters[2]
+                .get_limiter(ResourceType::Cpu)
+                .set_rate_limit(f64::INFINITY);
+        };
+
+        fn check(val: f64, expected: f64) {
+            assert!(
+                (val.is_infinite() && expected.is_infinite())
+                    || (expected * 0.99 < val && val < expected * 1.01),
+                "actual: {}, expected: {}",
+                val,
+                expected
+            );
+        }
+
+        let check_limiter = |high: f64, medium: f64, low: f64| {
+            check(
+                priority_limiters[0]
+                    .get_limiter(ResourceType::Cpu)
+                    .get_rate_limit(),
+                high * MICROS_PER_SEC,
+            );
+            check(
+                priority_limiters[1]
+                    .get_limiter(ResourceType::Cpu)
+                    .get_rate_limit(),
+                medium * MICROS_PER_SEC,
+            );
+            check(
+                priority_limiters[2]
+                    .get_limiter(ResourceType::Cpu)
+                    .get_rate_limit(),
+                low * MICROS_PER_SEC,
+            );
+        };
+
+        // only default group, always return infinity.
+        reset_quota(&mut worker, 6.4);
+        priority_limiters[1].consume(Duration::from_secs(50), IoBytes::default());
+        worker.adjust();
+        check_limiter(f64::INFINITY, f64::INFINITY, f64::INFINITY);
+
+        let rg1 = new_resource_group_ru("test_high".into(), 1000, 16);
+        resource_ctl.add_resource_group(rg1);
+        let rg2 = new_resource_group_ru("test_low".into(), 2000, 1);
+        resource_ctl.add_resource_group(rg2);
+
+        reset_quota(&mut worker, 6.4);
+        priority_limiters[1].consume(Duration::from_secs(64), IoBytes::default());
+        worker.adjust();
+        check_limiter(f64::INFINITY, f64::INFINITY, f64::INFINITY);
+
+        reset_quota(&mut worker, 6.4);
+        for _i in 0..100 {
+            priority_limiters[0].consume(Duration::from_millis(240), IoBytes::default());
+            priority_limiters[1].consume(Duration::from_millis(400), IoBytes::default());
+        }
+        worker.adjust();
+        check_limiter(f64::INFINITY, 5.2, 1.2);
+
+        reset_quota(&mut worker, 6.4);
+        for _i in 0..100 {
+            priority_limiters[0].consume(Duration::from_millis(120), IoBytes::default());
+            priority_limiters[1].consume(Duration::from_millis(200), IoBytes::default());
+        }
+        worker.adjust();
+        check_limiter(f64::INFINITY, 2.6, 0.6);
+
+        reset_quota(&mut worker, 6.4);
+        for _i in 0..100 {
+            priority_limiters[2].consume(Duration::from_millis(200), IoBytes::default());
+        }
+        worker.adjust();
+        check_limiter(f64::INFINITY, f64::INFINITY, f64::INFINITY);
+
+        reset_quota(&mut worker, 8.0);
+        for _i in 0..100 {
+            priority_limiters[0].consume(Duration::from_millis(240), IoBytes::default());
+            priority_limiters[1].consume(Duration::from_millis(240), IoBytes::default());
+            priority_limiters[2].consume(Duration::from_millis(320), IoBytes::default());
+        }
+        worker.adjust();
+        check_limiter(f64::INFINITY, 5.2, 2.8);
+
+        reset_quota(&mut worker, 6.0);
+        for _i in 0..100 {
+            priority_limiters[0].consume(Duration::from_millis(240), IoBytes::default());
+            priority_limiters[2].consume(Duration::from_millis(360), IoBytes::default());
+        }
+        worker.adjust();
+        check_limiter(f64::INFINITY, 5.2, 5.2);
+
+        // duration too small, unchanged.
+        worker.resource_quota_getter.cpu_used = 6.0;
+        worker.last_adjust_time = Instant::now_coarse() - Duration::from_millis(500);
+        worker.adjust();
+        check_limiter(f64::INFINITY, 5.2, 5.2);
     }
 }
