@@ -733,7 +733,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
             scan_task_counter.fetch_sub(1, Ordering::Relaxed);
         });
         if scan_task_count + 1 > self.config.incremental_scan_concurrency_limit as isize {
-            warn!("cdc rejects registration, too many scan tasks";
+            debug!("cdc rejects registration, too many scan tasks";
                 "region_id" => region_id,
                 "conn_id" => ?conn_id,
                 "req_id" => request_id,
