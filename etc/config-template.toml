@@ -673,8 +673,8 @@
 # enabled = false
 
 ## Maximum number of threads of `Titan` background gc jobs.
-## default: 4
-# max-background-gc = 4
+## default: 1
+# max-background-gc = 1
 
 ## Options for "Default" Column Family, which stores actual user data.
 [rocksdb.defaultcf]
@@ -936,8 +936,8 @@
 ##   lz4:    kLZ4Compression
 ##   lz4hc:  kLZ4HCCompression
 ##   zstd:   kZSTD
-## default: lz4
-# blob-file-compression = "lz4"
+## default: zstd
+# blob-file-compression = "zstd"
 
 ## Set blob file zstd dictionary compression, default(0) will use zstd compression.
 ## It is recommended to set the dictionary size to values such as 4k or 16k. Additionally,
