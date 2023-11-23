@@ -4,6 +4,7 @@ use std::{
     collections::HashMap,
     fmt,
     io::{self, Write},
+    marker::PhantomData,
     path::{Path, PathBuf},
     sync::Arc,
     time::SystemTime,
@@ -215,17 +216,19 @@ impl Drop for ImportFile {
 /// The file being written is stored in `$root/.temp/$file_name`. After writing
 /// is completed, the file is moved to `$root/$file_name`. The file generated
 /// from the ingestion process will be placed in `$root/.clone/$file_name`.
-pub struct ImportDir {
+pub struct ImportDir<E: KvEngine> {
     root_dir: PathBuf,
     temp_dir: PathBuf,
     clone_dir: PathBuf,
+
+    _phantom: PhantomData<E>,
 }
 
-impl ImportDir {
+impl<E: KvEngine> ImportDir<E> {
     const TEMP_DIR: &'static str = ".temp";
     const CLONE_DIR: &'static str = ".clone";
 
-    pub fn new<P: AsRef<Path>>(root: P) -> Result<ImportDir> {
+    pub fn new<P: AsRef<Path>>(root: P) -> Result<Self> {
         let root_dir = root.as_ref().to_owned();
         let temp_dir = root_dir.join(Self::TEMP_DIR);
         let clone_dir = root_dir.join(Self::CLONE_DIR);
@@ -241,6 +244,7 @@ impl ImportDir {
             root_dir,
             temp_dir,
             clone_dir,
+            _phantom: PhantomData,
         })
     }
 
@@ -301,7 +305,7 @@ impl ImportDir {
         Ok(path.save.exists())
     }
 
-    pub fn validate<E: KvEngine>(
+    pub fn validate(
         &self,
         meta: &SstMeta,
         key_manager: Option<Arc<DataKeyManager>>,
@@ -320,7 +324,7 @@ impl ImportDir {
     }
 
     /// check if api version of sst files are compatible
-    pub fn check_api_version<E: KvEngine>(
+    pub fn check_api_version(
         &self,
         metas: &[SstMeta],
         key_manager: Option<Arc<DataKeyManager>>,
@@ -361,7 +365,7 @@ impl ImportDir {
         Ok(true)
     }
 
-    pub fn ingest<E: KvEngine>(
+    pub fn ingest(
         &self,
         metas: &[SstMetaInfo],
         engine: &E,
@@ -375,7 +379,7 @@ impl ImportDir {
             .map(|info| info.meta.clone())
             .collect::<Vec<_>>();
         if !self
-            .check_api_version::<E>(&meta_vec, key_manager.clone(), api_version)
+            .check_api_version(&meta_vec, key_manager.clone(), api_version)
             .unwrap()
         {
             panic!("cannot ingest because of incompatible api version");
@@ -403,7 +407,7 @@ impl ImportDir {
         Ok(())
     }
 
-    pub fn verify_checksum<E: KvEngine>(
+    pub fn verify_checksum(
         &self,
         metas: &[SstMeta],
         key_manager: Option<Arc<DataKeyManager>>,
@@ -417,7 +421,7 @@ impl ImportDir {
         Ok(())
     }
 
-    pub fn load_start_key_by_meta<E: KvEngine>(
+    pub fn load_start_key_by_meta(
         &self,
         meta: &SstMeta,
         km: Option<Arc<DataKeyManager>>,

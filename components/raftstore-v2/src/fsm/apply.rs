@@ -87,7 +87,7 @@ impl<EK: KvEngine, R> ApplyFsm<EK, R> {
         log_recovery: Option<Box<DataTrace>>,
         applied_term: u64,
         buckets: Option<BucketStat>,
-        sst_importer: Arc<SstImporter>,
+        sst_importer: Arc<SstImporter<EK>>,
         coprocessor_host: CoprocessorHost<EK>,
         logger: Logger,
     ) -> (ApplyScheduler, Self) {

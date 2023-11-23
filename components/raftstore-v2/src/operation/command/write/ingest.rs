@@ -138,7 +138,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                 let _ = self.sst_importer().delete(sst);
                 return Err(e);
             }
-            match self.sst_importer().validate::<EK>(sst) {
+            match self.sst_importer().validate(sst) {
                 Ok(meta_info) => {
                     size += meta_info.total_bytes as i64;
                     keys += meta_info.total_kvs;

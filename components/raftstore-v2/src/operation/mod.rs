@@ -36,6 +36,7 @@ pub mod test_util {
         Arc,
     };
 
+    use engine_rocks::RocksEngine;
     use engine_traits::{CfName, CF_DEFAULT};
     use kvproto::{kvrpcpb::ApiVersion, metapb::RegionEpoch, raft_cmdpb::RaftRequestHeader};
     use raft::prelude::{Entry, EntryType};
@@ -46,7 +47,7 @@ pub mod test_util {
     use super::{CatchUpLogs, SimpleWriteReqEncoder};
     use crate::{fsm::ApplyResReporter, router::ApplyRes};
 
-    pub fn create_tmp_importer() -> (TempDir, Arc<SstImporter>) {
+    pub fn create_tmp_importer() -> (TempDir, Arc<SstImporter<RocksEngine>>) {
         let dir = TempDir::new().unwrap();
         let importer = Arc::new(
             SstImporter::new(&Default::default(), dir.path(), None, ApiVersion::V1, true).unwrap(),
