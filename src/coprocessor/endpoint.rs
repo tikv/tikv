@@ -1186,7 +1186,7 @@ mod tests {
         let read_pool = ReadPool::from(
             CoprReadPoolConfig {
                 normal_concurrency: 1,
-                max_tasks_per_worker_normal: 6,
+                max_tasks_per_worker_normal: 2,
                 ..CoprReadPoolConfig::default_for_test()
             }
             .to_yatp_pool_configs()

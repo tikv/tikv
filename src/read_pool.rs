@@ -777,10 +777,10 @@ mod tests {
         let config = UnifiedReadPoolConfig {
             min_thread_count: 1,
             max_thread_count: 2,
-            max_tasks_per_worker: 3,
+            max_tasks_per_worker: 1,
             ..Default::default()
         };
-        // max running tasks number should be 2*3/3 = 2
+        // max running tasks number should be 2*1 = 2
 
         let engine = TestEngineBuilder::new().build().unwrap();
         let pool = build_yatp_read_pool(
@@ -831,10 +831,10 @@ mod tests {
         let config = UnifiedReadPoolConfig {
             min_thread_count: 1,
             max_thread_count: 2,
-            max_tasks_per_worker: 3,
+            max_tasks_per_worker: 1,
             ..Default::default()
         };
-        // max running tasks number should be 2*3/3 = 2
+        // max running tasks number should be 2*1 = 2
 
         let engine = TestEngineBuilder::new().build().unwrap();
         let pool = build_yatp_read_pool(
@@ -893,10 +893,10 @@ mod tests {
         let config = UnifiedReadPoolConfig {
             min_thread_count: 1,
             max_thread_count: 2,
-            max_tasks_per_worker: 3,
+            max_tasks_per_worker: 1,
             ..Default::default()
         };
-        // max running tasks number for each priority should be 2*3/3 = 2
+        // max running tasks number for each priority should be 2*1 = 2
 
         let engine = TestEngineBuilder::new().build().unwrap();
         let pool = build_yatp_read_pool(
@@ -1028,7 +1028,7 @@ mod tests {
             let config = UnifiedReadPoolConfig {
                 min_thread_count: 1,
                 max_thread_count: 2,
-                max_tasks_per_worker: 3,
+                max_tasks_per_worker: 1,
                 ..Default::default()
             };
 

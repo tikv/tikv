@@ -190,7 +190,7 @@ impl PoolInner {
             return Ok(());
         }
 
-        if current_tasks >= max_tasks / TaskPriority::PRIORITY_COUNT {
+        if current_tasks >= max_tasks {
             Err(Full {
                 current_tasks,
                 max_tasks,
@@ -499,7 +499,7 @@ mod tests {
         let read_pool = Builder::new(DefaultTicker {})
             .name_prefix("future_pool_test_full")
             .thread_count(2, 2, 2)
-            .max_tasks(12)
+            .max_tasks(4)
             .build_future_pool();
 
         wait_on_new_thread(
