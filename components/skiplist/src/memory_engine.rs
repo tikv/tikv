@@ -35,7 +35,7 @@ pub fn cf_to_id(cf: &str) -> u8 {
 #[derive(Clone)]
 pub struct RegionMemoryEngine {
     pub data: [Arc<Skiplist<ByteWiseComparator>>; 3],
-    pub safe_point: AtomicU64,
+    pub safe_point: Arc<AtomicU64>,
 }
 
 impl RegionMemoryEngine {
@@ -49,7 +49,7 @@ impl RegionMemoryEngine {
         for ((s1, s2), s3) in cf1.into_iter().zip(cf2.into_iter()).zip(cf3.into_iter()) {
             res.push(RegionMemoryEngine {
                 data: [Arc::new(s1), Arc::new(s2), Arc::new(s3)],
-                safe_point: AtomicU64::new(self.safe_point.load(Ordering::SeqCst)),
+                safe_point: Arc::new(AtomicU64::new(self.safe_point.load(Ordering::SeqCst))),
             });
         }
 
@@ -83,7 +83,7 @@ impl Default for RegionMemoryEngine {
                     true,
                 )),
             ],
-            safe_point: AtomicU64::new(0),
+            safe_point: Arc::new(AtomicU64::new(0)),
         }
     }
 }
@@ -140,7 +140,7 @@ impl LruMemoryEngine {
                     );
                 }
                 let regional_engine = core.engine.entry(id).or_default();
-                (regional_engine.data.clone())
+                regional_engine.data.clone()
             };
             batch
                 .into_iter()
@@ -151,7 +151,7 @@ impl LruMemoryEngine {
                             engine.put(k, v);
                         }
                         ValueType::Delete => {
-                            let _ = engine.remove(k).is_some();
+                            let _ = engine.remove(k.as_slice()).is_some();
                         }
                     });
                 });
@@ -166,16 +166,15 @@ unsafe impl Sync for LruMemoryEngine {}
 
 impl LruMemoryEngine {
     pub fn new_snapshot(&self) -> MemoryEngineSnapshot {
-        let _snapshot = {
-            let mut core = self.core.lock().unwrap();
-            let snapshot = core.max_version.load(Ordering::Relaxed);
-            core.snapshot_list.push(snapshot);
-            snapshot
-        };
+        // let _snapshot = {
+        //     let mut core = self.core.lock().unwrap();
+        //     core.snapshot_list.push(snapshot);
+        //     snapshot
+        // };
 
         MemoryEngineSnapshot {
             engine: self.clone(),
-            _snapshot,
+            _snapshot: 0,
         }
     }
 }
@@ -379,6 +378,14 @@ impl MemoryEngineIterator {
 }
 
 mod test {
+    use bytes::Bytes;
+    use engine_traits::CF_DEFAULT;
+
+    use super::{LruMemoryEngine, MemoryBatch, ValueType};
+
+    fn key_with_ts(key: &[u8], ts: u64) -> Bytes {
+        Bytes::from(format!("{:?}{:08}", key, ts))
+    }
 
     #[test]
     fn test_x() {

@@ -6509,6 +6509,7 @@ dependencies = [
  "backtrace",
  "batch-system",
  "byteorder",
+ "bytes",
  "case_macros",
  "causal_ts",
  "chrono",

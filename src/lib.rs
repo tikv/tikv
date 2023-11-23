@@ -30,6 +30,7 @@
 #![feature(type_alias_impl_trait)]
 #![allow(incomplete_features)]
 #![feature(return_position_impl_trait_in_trait)]
+#![feature(slice_pattern)]
 
 #[macro_use(fail_point)]
 extern crate fail;
@@ -44,6 +45,7 @@ extern crate tikv_util;
 
 #[cfg(test)]
 extern crate test;
+extern crate core;
 
 pub mod config;
 pub mod coprocessor;

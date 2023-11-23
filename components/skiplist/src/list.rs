@@ -448,12 +448,10 @@ impl<C: KeyComparator> Skiplist<C> {
         Position { found, left, right }
     }
 
-    pub fn remove(&self, key: impl Into<Bytes>) -> Option<Bytes> {
-        let key = key.into();
-
+    pub fn remove(&self, key: &[u8]) -> Option<Bytes> {
         unsafe {
             loop {
-                let search = self.search_position(&key);
+                let search = self.search_position(key);
 
                 let n = search.found?;
 
@@ -476,7 +474,7 @@ impl<C: KeyComparator> Skiplist<C> {
                             Ok(_) => {}
                             Err(_) => {
                                 // Failed! Just repeat the search to completely unlink the node.
-                                self.search_bound(&key, false, true);
+                                self.search_bound(key, false, true);
                                 break;
                             }
                         }
@@ -486,54 +484,6 @@ impl<C: KeyComparator> Skiplist<C> {
                 }
             }
         }
-    }
-
-    pub fn remove_t(&self, key: impl Into<Bytes>) -> Option<Bytes> {
-        let list_height = self.height();
-        let key = key.into();
-        let mut value = None;
-        let prev = self.inner.head.as_ptr();
-        for i in (0..=list_height).rev() {
-            if self.allow_concurrent_write {
-                loop {
-                    let (prev, current) = unsafe { self.find_splice_for_level(&key, prev, i) };
-                    unsafe {
-                        if current != ptr::null_mut()
-                            && self.c.same_key((*current).key.as_slice(), key.as_slice())
-                        {
-                            let next_offset = (*current).next_offset(i);
-                            let current_offset = self.inner.arena.offset(current);
-                            match (&*prev).tower[i].compare_exchange(
-                                current_offset,
-                                next_offset,
-                                Ordering::SeqCst,
-                                Ordering::SeqCst,
-                            ) {
-                                Ok(_) => {
-                                    value = Some((*current).value.clone());
-                                    break;
-                                }
-                                Err(_) => {}
-                            }
-                        } else {
-                            // Not found in this level
-                            break;
-                        }
-                    }
-                }
-            } else {
-                let (prev, current) = unsafe { self.find_splice_for_level(&key, prev, i) };
-                unsafe {
-                    if current != ptr::null_mut()
-                        && self.c.same_key((*current).key.as_slice(), key.as_slice())
-                    {
-                        (*prev).tower[i].store((*current).next_offset(i), Ordering::SeqCst);
-                        value = Some((*current).value.clone());
-                    }
-                }
-            }
-        }
-        value
     }
 
     pub fn put(&self, key: impl Into<Bytes>, value: impl Into<Bytes>) -> Option<(Bytes, Bytes)> {
@@ -1132,8 +1082,8 @@ mod tests {
             sklist.put(key, value);
         }
         for i in 0..30 {
-            let key = Bytes::from(format!("key{:03}", i));
-            sklist.remove(key);
+            let key = format!("key{:03}", i);
+            sklist.remove(key.as_bytes());
         }
         let mut iter = sklist.iter();
         iter.seek_to_first();
@@ -1157,8 +1107,8 @@ mod tests {
         println!("{:?}", res);
 
         for i in 7..15 {
-            let key = Bytes::from(format!("key{:03}", i));
-            sklist.remove(key);
+            let key = format!("key{:03}", i);
+            sklist.remove(key.as_bytes());
         }
         let mut iter = sklist.iter();
         iter.seek_to_first();
@@ -1172,27 +1122,39 @@ mod tests {
         }
         assert!(count == 12);
 
-        let res = sklist.remove(Bytes::from(b"key008".to_vec()));
+        let _ = sklist.remove(b"key008");
         let res = sklist.get(b"key008");
         println!("{:?}", res);
     }
 
     #[test]
-    fn test_insert() {
+    fn test_iter_remove() {
         let sklist = Skiplist::with_capacity(ByteWiseComparator {}, 1 << 30, true);
         let mut i = 0;
-
-        let num = 1000000;
+        let num = 10;
         while i < num {
             let key = Bytes::from(format!("key{:08}", i));
             let value = Bytes::from(format!("value{:08}", i));
             sklist.put(key, value);
-            i += 2;
-
-            if i % 10000 == 0 {
-                println!("progress: {}", i);
-            }
+            i += 1;
         }
+
+        let mut iter = sklist.iter();
+        iter.seek_to_first();
+        while iter.valid() {
+            let key = iter.key();
+            sklist.remove(key.as_slice());
+            iter.next();
+        }
+
+        let mut iter = sklist.iter();
+        iter.seek_to_first();
+        let mut count = 0;
+        while iter.valid() {
+            count += 1;
+            iter.next();
+        }
+        assert!(count == 0);
     }
 
     #[test]
@@ -1227,8 +1189,8 @@ mod tests {
         let h3 = std::thread::spawn(move || {
             let mut i = 0;
             while i < num {
-                let key = Bytes::from(format!("key{:08}", i));
-                s3.remove(key);
+                let key = format!("key{:08}", i);
+                s3.remove(key.as_bytes());
                 i += 2;
             }
         });
@@ -1259,8 +1221,8 @@ mod tests {
 
         let mut i = 0;
         while i < 10000 {
-            let key = Bytes::from(format!("key{:05}", i));
-            sklist.remove(key);
+            let key = format!("key{:05}", i);
+            sklist.remove(key.as_bytes());
             i += 1;
         }
 
