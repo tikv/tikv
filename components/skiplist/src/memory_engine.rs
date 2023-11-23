@@ -2,6 +2,7 @@
 
 use core::slice::SlicePattern;
 use std::{
+    collections::BTreeMap,
     fmt::Debug,
     sync::{
         atomic::{AtomicU64, Ordering},
@@ -35,7 +36,8 @@ pub fn cf_to_id(cf: &str) -> u8 {
 #[derive(Clone)]
 pub struct RegionMemoryEngine {
     pub data: [Arc<Skiplist<ByteWiseComparator>>; 3],
-    pub safe_point: Arc<AtomicU64>,
+    // Should be accessed with holding the Lock of LruMemoryEngine
+    pub safe_point: u64,
 }
 
 impl RegionMemoryEngine {
@@ -49,7 +51,7 @@ impl RegionMemoryEngine {
         for ((s1, s2), s3) in cf1.into_iter().zip(cf2.into_iter()).zip(cf3.into_iter()) {
             res.push(RegionMemoryEngine {
                 data: [Arc::new(s1), Arc::new(s2), Arc::new(s3)],
-                safe_point: Arc::new(AtomicU64::new(self.safe_point.load(Ordering::SeqCst))),
+                safe_point: self.safe_point,
             });
         }
 
@@ -83,7 +85,7 @@ impl Default for RegionMemoryEngine {
                     true,
                 )),
             ],
-            safe_point: Arc::new(AtomicU64::new(0)),
+            safe_point: 0,
         }
     }
 }
@@ -108,7 +110,7 @@ impl Default for LruMemoryEngine {
 pub struct LruMemoryEngineCore {
     pub engine: HashMap<u64, RegionMemoryEngine>,
     // todo: replace it
-    pub snapshot_list: HashMap<u64, Vec<u64>>,
+    pub snapshots: HashMap<u64, BTreeMap<u64, u64>>,
 }
 
 impl LruMemoryEngine {
@@ -116,7 +118,7 @@ impl LruMemoryEngine {
         LruMemoryEngine {
             core: Arc::new(Mutex::new(LruMemoryEngineCore {
                 engine: HashMap::default(),
-                snapshot_list: HashMap::default(),
+                snapshots: HashMap::default(),
             })),
         }
     }
@@ -165,25 +167,39 @@ unsafe impl Send for LruMemoryEngine {}
 unsafe impl Sync for LruMemoryEngine {}
 
 impl LruMemoryEngine {
-    pub fn new_snapshot(&self) -> MemoryEngineSnapshot {
-        // let _snapshot = {
-        //     let mut core = self.core.lock().unwrap();
-        //     core.snapshot_list.push(snapshot);
-        //     snapshot
-        // };
+    pub fn new_snapshot(&self, region_id: u64, read_ts: u64) -> Option<MemoryEngineSnapshot> {
+        let mut core = self.core.lock().unwrap();
+        let region_m_engine = core.engine.get(&region_id)?;
+        let safe_point = region_m_engine.safe_point;
 
-        MemoryEngineSnapshot {
-            engine: self.clone(),
-            _snapshot: 0,
+        if read_ts <= safe_point {
+            return None;
         }
+
+        let mut snapshots = core.snapshots.entry(region_id).or_insert(BTreeMap::new());
+        let count = snapshots.get(&read_ts).unwrap_or_else(|| &0) + 1;
+        snapshots.insert(read_ts, count);
+
+        Some(MemoryEngineSnapshot {
+            region_id,
+            engine: self.clone(),
+            snapshot: read_ts,
+        })
     }
 }
 
-// todo(SpadeA): clone and snapshot
-#[derive(Clone)]
 pub struct MemoryEngineSnapshot {
+    region_id: u64,
+    snapshot: u64,
     engine: LruMemoryEngine,
-    _snapshot: u64,
+}
+
+impl Clone for MemoryEngineSnapshot {
+    fn clone(&self) -> Self {
+        self.engine
+            .new_snapshot(self.region_id, self.snapshot)
+            .unwrap()
+    }
 }
 
 impl Debug for MemoryEngineSnapshot {
@@ -194,9 +210,13 @@ impl Debug for MemoryEngineSnapshot {
 
 impl Drop for MemoryEngineSnapshot {
     fn drop(&mut self) {
-        let _core = self.engine.core.lock().unwrap();
-        // core.snapshot_list.remove(self.snapshot);
-        // todo: more cleanup works including gc
+        let mut core = self.engine.core.lock().unwrap();
+        let mut snapshots = core.snapshots.get_mut(&self.region_id).unwrap();
+        let mut count = snapshots.get_mut(&self.snapshot).unwrap();
+        *count -= 1;
+        if *count == 0 {
+            snapshots.remove(&self.snapshot);
+        }
     }
 }
 
@@ -388,7 +408,7 @@ mod test {
     }
 
     #[test]
-    fn test_x() {
+    fn test_basic() {
         let lru = LruMemoryEngine::new();
         lru.new_region(1);
         let mut a = MemoryBatch::default();
@@ -421,7 +441,7 @@ mod test {
 
         lru.consume_batch(a);
 
-        let snapshot = lru.new_snapshot();
+        let snapshot = lru.new_snapshot(1, 0).unwrap();
         let mut opts = engine_traits::IterOptions::default();
         opts.set_region_id(1);
         let mut iter = snapshot.iterator_opt(CF_DEFAULT, opts).unwrap();
@@ -432,5 +452,45 @@ mod test {
             println!("{:?}, {:?}", key, value);
             let _ = iter.next();
         }
+    }
+
+    #[test]
+    fn test_engine_snapshot() {
+        let lru = LruMemoryEngine::new();
+        lru.new_region(1);
+
+        let check_first = |expect: u64| -> bool {
+            let core = lru.core.lock().unwrap();
+            let snapshots = core.snapshots.get(&1).unwrap();
+            if let Some((&s, _)) = snapshots.first_key_value() {
+                return s == expect;
+            } else {
+                return false;
+            }
+        };
+
+        let s1 = lru.new_snapshot(1, 10);
+        let s2 = lru.new_snapshot(1, 10);
+        let s3 = lru.new_snapshot(1, 8);
+        let s4 = lru.new_snapshot(1, 9);
+        assert!(check_first(8));
+
+        drop(s4);
+        assert!(check_first(8));
+
+        drop(s3);
+        assert!(check_first(10));
+
+        drop(s1);
+        assert!(check_first(10));
+
+        drop(s2);
+        assert!(!check_first(10));
+
+        {
+            let mut core = lru.core.lock().unwrap();
+            core.engine.get_mut(&1).unwrap().safe_point = 20;
+        }
+        assert!(lru.new_snapshot(1, 15).is_none());
     }
 }

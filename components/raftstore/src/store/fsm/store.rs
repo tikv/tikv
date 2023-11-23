@@ -48,7 +48,10 @@ use raft::StateRole;
 use resource_control::{channel::unbounded, ResourceGroupManager};
 use resource_metering::CollectorRegHandle;
 use service::service_manager::GrpcServiceManager;
-use skiplist::memory_engine::LruMemoryEngine;
+use skiplist::{
+    gc::{GcRunner, GcTask},
+    memory_engine::LruMemoryEngine,
+};
 use sst_importer::SstImporter;
 use tikv_alloc::trace::TraceEvent;
 use tikv_util::{
@@ -73,6 +76,7 @@ use tikv_util::{
     Either, RingQueue,
 };
 use time::{self, Timespec};
+use txn_types::TimeStamp;
 
 use crate::{
     bytes_capacity,
@@ -528,6 +532,7 @@ where
     pub split_check_scheduler: Scheduler<SplitCheckTask>,
     // handle Compact, CleanupSst task
     pub cleanup_scheduler: Scheduler<CleanupTask>,
+    pub memory_gc_scheduler: Option<Scheduler<GcTask>>,
     pub raftlog_gc_scheduler: Scheduler<RaftlogGcTask>,
     pub raftlog_fetch_scheduler: Scheduler<ReadTask<EK>>,
     pub region_scheduler: Scheduler<RegionTask<EK::Snapshot>>,
@@ -784,6 +789,7 @@ impl<'a, EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
             StoreTick::PeriodicFullCompact => self.on_full_compact_tick(),
             StoreTick::ConsistencyCheck => self.on_consistency_check_tick(),
             StoreTick::CleanupImportSst => self.on_cleanup_import_sst_tick(),
+            StoreTick::MemoryEngineGc => self.on_memory_engine_gc_tick(),
         }
         let elapsed = timer.saturating_elapsed();
         self.ctx
@@ -877,6 +883,7 @@ impl<'a, EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
         self.register_compact_lock_cf_tick();
         self.register_snap_mgr_gc_tick();
         self.register_consistency_check_tick();
+        self.register_memory_engine_gc_tick();
     }
 }
 
@@ -1193,6 +1200,7 @@ pub struct RaftPollerBuilder<EK: KvEngine, ER: RaftEngine, T> {
     consistency_check_scheduler: Scheduler<ConsistencyCheckTask<EK::Snapshot>>,
     split_check_scheduler: Scheduler<SplitCheckTask>,
     cleanup_scheduler: Scheduler<CleanupTask>,
+    memory_gc_scheduler: Option<Scheduler<GcTask>>,
     raftlog_gc_scheduler: Scheduler<RaftlogGcTask>,
     raftlog_fetch_scheduler: Scheduler<ReadTask<EK>>,
     pub region_scheduler: Scheduler<RegionTask<EK::Snapshot>>,
@@ -1436,6 +1444,7 @@ where
             apply_router: self.apply_router.clone(),
             router: self.router.clone(),
             cleanup_scheduler: self.cleanup_scheduler.clone(),
+            memory_gc_scheduler: self.memory_gc_scheduler.clone(),
             raftlog_fetch_scheduler: self.raftlog_fetch_scheduler.clone(),
             raftlog_gc_scheduler: self.raftlog_gc_scheduler.clone(),
             importer: self.importer.clone(),
@@ -1507,6 +1516,7 @@ where
             consistency_check_scheduler: self.consistency_check_scheduler.clone(),
             split_check_scheduler: self.split_check_scheduler.clone(),
             cleanup_scheduler: self.cleanup_scheduler.clone(),
+            memory_gc_scheduler: self.memory_gc_scheduler.clone(),
             raftlog_gc_scheduler: self.raftlog_gc_scheduler.clone(),
             raftlog_fetch_scheduler: self.raftlog_fetch_scheduler.clone(),
             region_scheduler: self.region_scheduler.clone(),
@@ -1538,6 +1548,7 @@ struct Workers<EK: KvEngine, ER: RaftEngine> {
     // background_workers. This is because the underlying compact_range call is a
     // blocking operation, which can take an extensive amount of time.
     cleanup_worker: Worker,
+    memory_gc_worker: Option<Worker>,
     region_worker: Worker,
     // Used for calling `manual_purge` if the specific engine implementation requires it
     // (`need_manual_purge`).
@@ -1632,10 +1643,12 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             None
         };
 
+        let memory_gc_worker = memory_engine.map(|_| Worker::new("memory-gc-worker"));
         let workers = Workers {
             pd_worker,
             background_worker,
             cleanup_worker: Worker::new("cleanup-worker"),
+            memory_gc_worker,
             region_worker: Worker::new("region-worker"),
             purge_worker,
             raftlog_fetch_worker: Worker::new("raftlog-fetch-worker"),
@@ -1687,6 +1700,19 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             .background_worker
             .start("consistency-check", consistency_check_runner);
 
+        let memory_gc_scheduler = if let Some(ref memory_engine) = memory_engine {
+            let memory_gc_runner = GcRunner::new(memory_engine.clone());
+            Some(
+                workers
+                    .memory_gc_worker
+                    .as_ref()
+                    .unwrap()
+                    .start("memory-engine-gc", memory_gc_runner),
+            )
+        } else {
+            None
+        };
+
         self.store_writers.spawn(
             meta.get_id(),
             engines.raft.clone(),
@@ -1706,6 +1732,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             split_check_scheduler,
             region_scheduler,
             pd_scheduler: workers.pd_worker.scheduler(),
+            memory_gc_scheduler,
             consistency_check_scheduler,
             cleanup_scheduler,
             raftlog_gc_scheduler,
@@ -1867,6 +1894,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         let mut workers = self.workers.take().unwrap();
         // Wait all workers finish.
         workers.pd_worker.stop();
+        workers.memory_gc_worker.map(|w| w.stop());
 
         self.apply_system.shutdown();
         MEMTRACE_APPLY_ROUTER_ALIVE.trace(TraceEvent::Reset(0));
@@ -2738,6 +2766,34 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         }
     }
 
+    fn on_memory_engine_gc_tick(&mut self) {
+        if self.ctx.memory_engine.is_none() {
+            return;
+        }
+        self.register_memory_engine_gc_tick();
+
+        let gc_scheduler = self.ctx.memory_gc_scheduler.as_ref().unwrap();
+        if gc_scheduler.is_busy() {
+            info!(
+                "memory engine gc worker is busy, jump to next gc duration";
+                "store_id" => self.fsm.store.id,
+            );
+            return;
+        }
+
+        let safe_point = TimeStamp::physical_now()
+            - Duration::from(self.ctx.cfg.memory_safe_duration).as_millis() as u64;
+        if let Err(e) = gc_scheduler.schedule(GcTask {
+            safe_point: TimeStamp(safe_point),
+        }) {
+            error!(
+                "schedule memory engine gc failed";
+                "store_id" => self.fsm.store.id,
+                "err" => ?e,
+            );
+        }
+    }
+
     fn on_compact_lock_cf(&mut self) {
         // Create a compact lock cf task(compact whole range) and schedule directly.
         let lock_cf_bytes_written = self
@@ -2829,6 +2885,13 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         self.ctx.schedule_store_tick(
             StoreTick::CompactLockCf,
             self.ctx.cfg.lock_cf_compact_interval.0,
+        )
+    }
+
+    fn register_memory_engine_gc_tick(&self) {
+        self.ctx.schedule_store_tick(
+            StoreTick::MemoryEngineGc,
+            self.ctx.cfg.memory_safe_duration.0,
         )
     }
 }

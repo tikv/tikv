@@ -223,6 +223,7 @@ make_static_metric! {
         raft_engine_purge,
         peer_msg,
         store_msg,
+        MemoryEngineGc,
     }
 
     pub label_enum RaftLogGcSkippedReason {

@@ -152,6 +152,8 @@ pub struct Config {
     pub lock_cf_compact_interval: ReadableDuration,
     pub lock_cf_compact_bytes_threshold: ReadableSize,
 
+    pub memory_safe_duration: ReadableDuration,
+
     /// Hours of the day during which we may execute a periodic full compaction.
     /// If not set or empty, periodic full compaction will not run. In toml this
     /// should be a list of timesin "HH:MM" format with an optional timezone
@@ -468,6 +470,7 @@ impl Default for Config {
             },
             clean_stale_ranges_tick: if cfg!(feature = "test") { 1 } else { 10 },
             lock_cf_compact_interval: ReadableDuration::minutes(10),
+            memory_safe_duration: ReadableDuration::minutes(1),
             lock_cf_compact_bytes_threshold: ReadableSize::mb(256),
             // Disable consistency check by default as it will hurt performance.
             // We should turn on this only in our tests.
