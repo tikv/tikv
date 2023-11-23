@@ -41,6 +41,7 @@ const DEFAULT_MAX_RU_QUOTA: u64 = 10_000;
 /// The maximum RU quota that can be configured.
 const MAX_RU_QUOTA: u64 = i32::MAX as u64;
 
+#[cfg(test)]
 const LOW_PRIORITY: u32 = 1;
 const MEDIUM_PRIORITY: u32 = 8;
 #[cfg(test)]
@@ -481,7 +482,9 @@ impl ResourceController {
         let mut max_ru_quota = self.max_ru_quota.lock().unwrap();
         // skip to adjust max ru if it is the "default" group and the ru config eq
         // MAX_RU_QUOTA
-        if ru_quota > *max_ru_quota && (name != b"default" || ru_quota < MAX_RU_QUOTA) {
+        if ru_quota > *max_ru_quota
+            && (name != DEFAULT_RESOURCE_GROUP_NAME.as_bytes() || ru_quota < MAX_RU_QUOTA)
+        {
             *max_ru_quota = ru_quota;
             // adjust all group weight because the current value is too small.
             self.adjust_all_resource_group_factors(ru_quota);
