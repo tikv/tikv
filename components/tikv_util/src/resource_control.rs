@@ -142,3 +142,50 @@ impl From<u32> for TaskPriority {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_task_metadata() {
+        let cases = [
+            ("default", 0u32),
+            ("default", 6u32),
+            ("test", 0u32),
+            ("test", 15u32),
+        ];
+
+        let metadata = TaskMetadata::from_ctx(&ResourceControlContext::default());
+        assert_eq!(metadata.group_name(), b"default");
+        for (group_name, priority) in cases {
+            let metadata = TaskMetadata::from_ctx(&ResourceControlContext {
+                resource_group_name: group_name.to_string(),
+                override_priority: priority as u64,
+                ..Default::default()
+            });
+            assert_eq!(metadata.override_priority(), priority);
+            assert_eq!(metadata.group_name(), group_name.as_bytes());
+            let vec = metadata.to_vec();
+            let metadata1 = TaskMetadata::from(vec.as_slice());
+            assert_eq!(metadata1.override_priority(), priority);
+            assert_eq!(metadata1.group_name(), group_name.as_bytes());
+        }
+    }
+
+    #[test]
+    fn test_task_priority() {
+        use TaskPriority::*;
+        let cases = [
+            (0, Medium),
+            (1, Low),
+            (7, Medium),
+            (8, Medium),
+            (15, High),
+            (16, High),
+        ];
+        for (value, priority) in cases {
+            assert_eq!(TaskPriority::from(value), priority);
+        }
+    }
+}

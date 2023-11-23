@@ -270,14 +270,6 @@ impl ResourceGroupManager {
         self.get_group_count() > 1
     }
 
-    /// return the priority of target resource group.
-    #[inline]
-    pub fn get_resource_group_priority(&self, group: &str) -> u32 {
-        self.resource_groups
-            .get(group)
-            .map_or(LOW_PRIORITY, |g| g.group.priority)
-    }
-
     // Always return the background resource limiter if any;
     // Only return the foregroup limiter when priority is enabled.
     pub fn get_resource_limiter(
@@ -1189,32 +1181,6 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn test_task_metadata() {
-        let cases = [
-            ("default", 0u32),
-            ("default", 6u32),
-            ("test", 0u32),
-            ("test", 15u32),
-        ];
-
-        let metadata = TaskMetadata::from_ctx(&ResourceControlContext::default());
-        assert_eq!(metadata.group_name(), b"default");
-        for (group_name, priority) in cases {
-            let metadata = TaskMetadata::from_ctx(&ResourceControlContext {
-                resource_group_name: group_name.to_string(),
-                override_priority: priority as u64,
-                ..Default::default()
-            });
-            assert_eq!(metadata.override_priority(), priority);
-            assert_eq!(metadata.group_name(), group_name.as_bytes());
-            let vec = metadata.to_vec();
-            let metadata1 = TaskMetadata::from(vec.as_slice());
-            assert_eq!(metadata1.override_priority(), priority);
-            assert_eq!(metadata1.group_name(), group_name.as_bytes());
-        }
-    }
-
-    #[test]
     fn test_get_resource_limiter() {
         let mgr = ResourceGroupManager::default();
 
@@ -1304,21 +1270,5 @@ pub(crate) mod tests {
             &mgr.get_resource_limiter("unknown", "query", 0).unwrap(),
             &mgr.priority_limiters[1]
         ));
-    }
-
-    #[test]
-    fn test_task_priority() {
-        use TaskPriority::*;
-        let cases = [
-            (0, Medium),
-            (1, Low),
-            (7, Medium),
-            (8, Medium),
-            (15, High),
-            (16, High),
-        ];
-        for (value, priority) in cases {
-            assert_eq!(TaskPriority::from(value), priority);
-        }
     }
 }
