@@ -386,7 +386,7 @@ pub struct Endpoint<T, E, S> {
     // Incremental scan
     workers: Runtime,
     // The total number of scan tasks including running and pending.
-    scan_task_count: Arc<AtomicIsize>,
+    scan_task_counter: Arc<AtomicIsize>,
     scan_concurrency_semaphore: Arc<Semaphore>,
     scan_speed_limiter: Limiter,
     fetch_speed_limiter: Limiter,
@@ -480,7 +480,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
             pd_client,
             tso_worker,
             timer: SteadyTimer::default(),
-            scan_task_count: Arc::default(),
+            scan_task_counter: Arc::default(),
             scan_speed_limiter,
             fetch_speed_limiter,
             max_scan_batch_bytes,
@@ -727,7 +727,11 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
             return;
         }
 
-        let scan_task_count = self.scan_task_count.load(Ordering::Relaxed);
+        let scan_task_counter = self.scan_task_counter.clone();
+        let scan_task_count = scan_task_counter.fetch_add(1, Ordering::Relaxed);
+        let release_scan_task_counter = tikv_util::DeferContext::new(move || {
+            scan_task_counter.fetch_sub(1, Ordering::Relaxed);
+        });
         if scan_task_count + 1 > self.config.incremental_scan_concurrency_limit as isize {
             warn!("cdc rejects registration, too many scan tasks";
                 "region_id" => region_id,
@@ -848,13 +852,8 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
         let cdc_handle = self.cdc_handle.clone();
         let concurrency_semaphore = self.scan_concurrency_semaphore.clone();
         let memory_quota = self.sink_memory_quota.clone();
-        let scan_task_count = self.scan_task_count.clone();
-        scan_task_count.fetch_add(1, Ordering::Relaxed);
         self.workers.spawn(async move {
             CDC_SCAN_TASKS.with_label_values(&["total"]).inc();
-            defer!({
-                scan_task_count.fetch_sub(1, Ordering::Relaxed);
-            });
             match init
                 .initialize(change_cmd, cdc_handle, concurrency_semaphore, memory_quota)
                 .await
@@ -871,6 +870,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
                     init.deregister_downstream(e)
                 }
             }
+            drop(release_scan_task_counter);
         });
     }
 
