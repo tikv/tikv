@@ -41,7 +41,7 @@ use tikv_util::{
     box_err, debug, error, info,
     metrics::ThreadInfoStatistics,
     store::QueryStats,
-    sys::thread::StdThreadBuildWrapper,
+    sys::{thread::StdThreadBuildWrapper, SysQuota},
     thd_name,
     time::{Instant as TiInstant, UnixSecs},
     timer::GLOBAL_TIMER_HANDLE,
@@ -255,21 +255,19 @@ impl Default for StoreStat {
 
 impl StoreStat {
     pub(crate) fn is_busy(&self) -> bool {
-        let mut cpu_usage_sum = 0;
-        let mut limits = 0;
+        let mut cpu_usage = 0_u64;
 
         for record in self.store_cpu_usages.iter() {
-            limits += 100;
-            cpu_usage_sum += record.get_value();
+            cpu_usage += record.get_value();
         }
 
         STORE_STAT_CPU_USAGE
             .with_label_values(&["cpu_usage"])
-            .set(cpu_usage_sum as i64);
+            .set(cpu_usage as i64);
         STORE_STAT_CPU_USAGE
             .with_label_values(&["cpu_usage_limit"])
-            .set(limits as i64);
-        cpu_usage_sum as f64 >= limits as f64 * 0.6
+            .set(SysQuota::cpu_cores_quota() as i64);
+        (cpu_usage as f64 / SysQuota::cpu_cores_quota()) >= 0.8
     }
 }
 
