@@ -33030,10 +33030,10 @@
             },
             {
               "exemplar": true,
-              "expr": "histogram_quantile(0.999, sum(rate(raft_engine_write_duration_seconds_bucket{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m])) by (le))",
+              "expr": "histogram_quantile(1.0, sum(rate(raft_engine_write_duration_seconds_bucket{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m])) by (le))",
               "hide": false,
               "interval": "",
-              "legendFormat": "999%",
+              "legendFormat": "Max",
               "refId": "D"
             }
           ],
@@ -33470,7 +33470,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "histogram_quantile(0.999, sum(rate(raft_engine_write_leader_duration_seconds_bucket{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m])) by (le))",
+              "expr": "histogram_quantile(1.0, sum(rate(raft_engine_write_leader_duration_seconds_bucket{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m])) by (le))",
               "hide": false,
               "interval": "",
               "legendFormat": "total",
@@ -33478,7 +33478,7 @@
             },
             {
               "exemplar": true,
-              "expr": "histogram_quantile(0.999, sum(rate(raft_engine_sync_log_duration_seconds_bucket{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m])) by (le))",
+              "expr": "histogram_quantile(1.0, sum(rate(raft_engine_sync_log_duration_seconds_bucket{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m])) by (le))",
               "hide": false,
               "interval": "",
               "legendFormat": "sync",
@@ -33486,7 +33486,7 @@
             },
             {
               "exemplar": true,
-              "expr": "histogram_quantile(0.999, sum(rate(raft_engine_allocate_log_duration_seconds_bucket{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m])) by (le))",
+              "expr": "histogram_quantile(1.0, sum(rate(raft_engine_allocate_log_duration_seconds_bucket{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m])) by (le))",
               "hide": false,
               "interval": "",
               "legendFormat": "allocate",
@@ -33494,7 +33494,7 @@
             },
             {
               "exemplar": true,
-              "expr": "histogram_quantile(0.999, sum(rate(raft_engine_rotate_log_duration_seconds_bucket{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m])) by (le))",
+              "expr": "histogram_quantile(1.0, sum(rate(raft_engine_rotate_log_duration_seconds_bucket{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m])) by (le))",
               "hide": false,
               "interval": "",
               "legendFormat": "rotate",
@@ -33505,7 +33505,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "WAL Duration Breakdown (999%)",
+          "title": "WAL Duration Breakdown (Max)",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -33707,26 +33707,42 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "histogram_quantile(0.99, sum(rate(raft_engine_read_entry_duration_seconds_bucket{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m])) by (le))",
+              "expr": "histogram_quantile(1.0, sum(rate(raft_engine_read_entry_duration_seconds_bucket{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m])) by (le))",
               "hide": false,
               "interval": "",
               "legendFormat": "read_entry",
+              "refId": "A"
+            },
+            {
+              "exemplar": true,
+              "expr": "histogram_quantile(1.0, sum(rate(raft_engine_read_message_duration_seconds_bucket{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m])) by (le))",
+              "hide": false,
+              "interval": "",
+              "legendFormat": "read_message",
               "refId": "B"
             },
             {
               "exemplar": true,
-              "expr": "histogram_quantile(0.99, sum(rate(raft_engine_read_message_duration_seconds_bucket{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m])) by (le))",
+              "expr": "histogram_quantile(1.0, sum(rate(raft_engine_purge_duration_seconds_bucket{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m])) by (le))",
               "hide": false,
               "interval": "",
-              "legendFormat": "read_message",
+              "legendFormat": "purge",
+              "refId": "C"
+            },
+            {
+              "exemplar": true,
+              "expr": "histogram_quantile(1.0, sum(rate(raft_engine_rewrite_append_duration_seconds_bucket{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m])) by (le))",
+              "hide": false,
+              "interval": "",
+              "legendFormat": "purge_append",
               "refId": "D"
             },
             {
               "exemplar": true,
-              "expr": "histogram_quantile(0.99, sum(rate(raft_engine_purge_duration_seconds_bucket{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m])) by (le))",
+              "expr": "histogram_quantile(1.0, sum(rate(raft_engine_rewrite_rewrite_duration_seconds{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m])) by (le))",
               "hide": false,
               "interval": "",
-              "legendFormat": "purge",
+              "legendFormat": "purge_rewrite",
               "refId": "E"
             }
           ],
@@ -33734,7 +33750,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Other Durations (99%)",
+          "title": "Other Durations (Max)",
           "tooltip": {
             "shared": true,
             "sort": 0,
