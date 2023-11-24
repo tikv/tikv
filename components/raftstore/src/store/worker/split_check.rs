@@ -692,5 +692,6 @@ where
         split_keys,
         callback: Callback::None,
         source: source.into(),
+        share_source_region_size: true,
     }
 }

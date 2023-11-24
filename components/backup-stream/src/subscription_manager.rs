@@ -38,7 +38,7 @@ use crate::{
     metrics,
     observer::BackupStreamObserver,
     router::{Router, TaskSelector},
-    subscription_track::{ResolveResult, SubscriptionTracer},
+    subscription_track::{CheckpointType, ResolveResult, SubscriptionTracer},
     try_send,
     utils::{self, CallbackWaitGroup, Work},
     Task,
@@ -422,7 +422,10 @@ where
         mut leader_checker: LeadershipResolver,
     ) {
         while let Some(op) = message_box.recv().await {
-            info!("backup stream: on_modify_observe"; "op" => ?op);
+            // Skip some trivial resolve commands.
+            if !matches!(op, ObserveOp::ResolveRegions { .. }) {
+                info!("backup stream: on_modify_observe"; "op" => ?op);
+            }
             match op {
                 ObserveOp::Start { region } => {
                     fail::fail_point!("delay_on_start_observe");
@@ -492,7 +495,12 @@ where
                     // If there isn't any region observed, the `min_ts` can be used as resolved ts
                     // safely.
                     let rts = min_region.map(|rs| rs.checkpoint).unwrap_or(min_ts);
-                    info!("getting checkpoint"; "defined_by_region" => ?min_region);
+                    if min_region
+                        .map(|mr| mr.checkpoint_type != CheckpointType::MinTs)
+                        .unwrap_or(false)
+                    {
+                        info!("getting non-trivial checkpoint"; "defined_by_region" => ?min_region);
+                    }
                     callback(ResolvedRegions::new(rts, cps));
                 }
             }
