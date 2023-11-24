@@ -4,7 +4,7 @@ use num_traits::identities::Zero;
 use tidb_query_codegen::rpn_fn;
 use tidb_query_common::Result;
 use tidb_query_datatype::{
-    codec::{self, data_type::*, div_i64, div_i64_with_u64, div_u64_with_i64, Error},
+    codec::{self, data_type::*, div_i64, div_i64_with_u64, div_u64_with_i64, mysql::Res, Error},
     expr::EvalContext,
 };
 
@@ -452,10 +452,11 @@ fn int_divide_decimal(ctx: &mut EvalContext, lhs: &Decimal, rhs: &Decimal) -> Re
     let result = arithmetic_with_ctx::<DecimalDivide>(ctx, lhs, rhs)?;
     if let Some(result) = result {
         let result = result.as_i64();
-        if result.is_truncated() {
-            return Ok(Some(result.unwrap()));
+        match result {
+            Res::Ok(i) => Ok(Some(i)),
+            Res::Truncated(_) => Ok(Some(0)),
+            _ => Err(Error::overflow("BIGINT", format!("({} / {})", lhs, rhs)).into()),
         }
-        Err(Error::overflow("BIGINT", format!("({} / {})", lhs, rhs)).into())
     } else {
         Ok(None)
     }
@@ -473,15 +474,15 @@ fn int_divide_decimal_unsigned(
         let unsigned_result = result.as_u64();
         if unsigned_result.is_overflow() {
             let signed_result = result.as_i64();
-            if signed_result.unwrap() == 0 && signed_result.is_truncated() {
-                return Ok(Some(0));
-            }
-            return Err(Error::overflow("BIGINT UNSIGNED", format!("({} / {})", lhs, rhs)).into());
+            return if signed_result.unwrap() == 0 && signed_result.is_truncated() {
+                Ok(Some(0))
+            } else {
+                Err(Error::overflow("BIGINT UNSIGNED", format!("({} / {})", lhs, rhs)).into())
+            };
         }
         Ok(Some(unsigned_result.unwrap() as i64))
-    } else {
-        Ok(None)
     }
+    Ok(None)
 }
 
 pub struct DecimalDivide;
@@ -979,6 +980,7 @@ mod tests {
             // divide by zero
             (Some("0.0"), Some("0.0"), None),
             (None, None, None),
+            (Some("0"), Some("45584"), Some(0)),
         ];
 
         for (lhs, rhs, expected) in test_cases {
