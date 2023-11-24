@@ -533,6 +533,7 @@ pub fn parse_meta_from_path<P: AsRef<Path>>(path: P) -> Result<(SstMeta, i32)> {
 mod test {
     use std::fs;
 
+    use engine_rocks::RocksEngine;
     use engine_traits::CF_DEFAULT;
 
     use super::*;
@@ -583,7 +584,7 @@ mod test {
         use uuid::Uuid;
 
         let tmp = TempDir::new().unwrap();
-        let dir = ImportDir::new(tmp.path()).unwrap();
+        let dir = ImportDir::<RocksEngine>::new(tmp.path()).unwrap();
         let mut meta = SstMeta::default();
         meta.set_uuid(Uuid::new_v4().as_bytes().to_vec());
         let filename_v1 = sst_meta_to_path_v1(&meta).unwrap();
