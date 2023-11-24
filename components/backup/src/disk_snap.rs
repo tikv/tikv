@@ -86,10 +86,7 @@ impl Error {
                 grpcio::RpcStatusCode::UNAVAILABLE,
                 "coprocessor not initialized".to_owned(),
             )),
-            Error::RaftStore(r) => HandleErr::AbortStream(RpcStatus::with_message(
-                grpcio::RpcStatusCode::INTERNAL,
-                format!("encountered unexpected raftstore error {r:?}"),
-            )),
+            Error::RaftStore(r) => HandleErr::SendErrResp(errorpb::Error::from(r)),
             Error::WaitApplyAborted => {
                 HandleErr::SendErrResp({
                     let mut err = errorpb::Error::new();
