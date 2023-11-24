@@ -997,7 +997,7 @@ fn flashback_whole_cluster(
                             key_range_to_finish.remove(&stale_key_range);
                             load_key_range(&pd_client, stale_key_range.0.clone(), stale_key_range.1.clone())
                                 .into_iter().for_each(|(key_range, region_info)| {
-                                // Need to update `key_range_to_prepare` to replace stale key range.
+                                // Need to update `key_range_to_finish` to replace stale key range.
                                 key_range_to_finish.insert(key_range, region_info);
                             });
                         }
