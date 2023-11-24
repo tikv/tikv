@@ -168,6 +168,7 @@ region-compact-min-tombstones = 999
 region-compact-tombstones-percent = 33
 pd-heartbeat-tick-interval = "12m"
 pd-store-heartbeat-tick-interval = "12s"
+pd-report-min-resolved-ts-interval = "233ms"
 snap-mgr-gc-tick-interval = "12m"
 snap-gc-timeout = "12h"
 lock-cf-compact-interval = "12m"
@@ -217,7 +218,12 @@ check-leader-lease-interval = "123ms"
 renew-leader-lease-advance-duration = "456ms"
 reactive-memory-lock-tick-interval = "566ms"
 reactive-memory-lock-timeout-tick = 8
+<<<<<<< HEAD
 report-min-resolved-ts-interval = "233ms"
+=======
+check-long-uncommitted-interval = "1s"
+long-uncommitted-base-threshold = "1s"
+>>>>>>> bc1ae30437 (pd_client: support dynamically modifying `min-resolved-ts` report interval and reduce retry times (#15837))
 report-region-buckets-tick-interval = "1234s"
 max-snapshot-file-raw-size = "10GB"
 unreachable-backoff = "111s"
