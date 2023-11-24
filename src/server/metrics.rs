@@ -612,7 +612,7 @@ pub fn record_request_source_metrics(source: String, duration: Duration) {
 impl From<u64> for ResourcePriority {
     fn from(priority: u64) -> Self {
         // the mapping definition of priority in TIDB repo,
-        // see: https://github.com/pingcap/tidb/blob/8b151114546d6a02d8250787a2a3213620e30524/parser/parser.y#L1740-L1752
+        // see: https://github.com/tikv/tikv/blob/a0dbe2d0b893489015fc99ae73c6646f7989fe32/components/resource_control/src/resource_group.rs#L79-L89
         if priority == 0 {
             Self::unknown
         } else if priority < 6 {
