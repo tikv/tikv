@@ -811,7 +811,6 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
             causal_ts_provider,
             workers.pd.scheduler(),
             auto_split_controller,
-            store_meta.lock().unwrap().region_read_progress.clone(),
             collector_reg_handle,
             grpc_service_mgr,
             self.logger.clone(),
