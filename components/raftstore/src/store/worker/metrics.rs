@@ -165,6 +165,21 @@ lazy_static! {
         "Bucketed histogram of full compaction for the storage."
     )
     .unwrap();
+    pub static ref FULL_COMPACT_INCREMENTAL: Histogram = register_histogram!(
+        "tikv_storage_full_compact_increment_duration_seconds",
+        "Bucketed histogram of full compaction increments for the storage."
+    )
+    .unwrap();
+    pub static ref FULL_COMPACT_PAUSE: Histogram = register_histogram!(
+        "tikv_storage_full_compact_pause_duration_seconds",
+        "Bucketed histogram of full compaction pauses for the storage."
+    )
+    .unwrap();
+    pub static ref PROCESS_STAT_CPU_USAGE: Gauge = register_gauge!(
+        "tikv_storage_process_stat_cpu_usage",
+        "CPU usage measured over a 30 second window",
+    )
+    .unwrap();
     pub static ref REGION_HASH_HISTOGRAM: Histogram = register_histogram!(
         "tikv_raftstore_hash_duration_seconds",
         "Bucketed histogram of raftstore hash computation duration"
