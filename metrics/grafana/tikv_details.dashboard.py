@@ -6,7 +6,7 @@ from grafanalib import formatunits as UNITS
 from grafanalib.core import (
     GRAPH_TOOLTIP_MODE_SHARED_TOOLTIP,
     HIDE_VARIABLE,
-    NULL_AS_NULL,
+    NULL_AS_ZERO,
     SHOW,
     TIME_SERIES_TARGET_FORMAT,
     Dashboard,
@@ -396,6 +396,35 @@ def expr_max_rate(
     )
 
 
+def expr_count_rate(
+    metric: str,
+    label_selectors: list[str] = [],
+    by_labels: list[str] = ["instance"],
+) -> Expr:
+    """
+    Calculate the count of rate of a metric.
+
+    Example:
+
+    count(rate(
+        tikv_thread_cpu_seconds_total
+        {k8s_cluster="$k8s_cluster",tidb_cluster="$tidb_cluster",instance=~"$instance",name=~"sst_.*"}
+        [$__rate_interval]
+    )) by (instance)
+    """
+    # $__rate_interval is a Grafana variable that is specialized for Prometheus
+    # rate and increase function.
+    # See https://grafana.com/blog/2020/09/28/new-in-grafana-7.2-__rate_interval-for-prometheus-rate-queries-that-just-work/
+    return expr_aggr_func(
+        metric=metric,
+        aggr_op="count",
+        func="rate",
+        label_selectors=label_selectors,
+        range_selector="$__rate_interval",
+        by_labels=by_labels,
+    )
+
+
 def expr_simple(
     metric: str,
     label_selectors: list[str] = [],
@@ -739,7 +768,7 @@ def graph_panel(
         fill=fill,
         fillGradient=fill_gradient,
         stack=stack,
-        nullPointMode=NULL_AS_NULL,
+        nullPointMode=NULL_AS_ZERO,
         thresholds=thresholds,
         tooltip=tooltip,
         seriesOverrides=series_overrides,
@@ -8274,7 +8303,410 @@ def Memory() -> RowPanel:
 
 def BackupImport() -> RowPanel:
     layout = Layout(title="Backup & Import")
-    layout.row([])
+    layout.row(
+        [
+            graph_panel(
+                title="Backup CPU Utilization",
+                yaxes=yaxes(left_format=UNITS.PERCENT_UNIT),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_thread_cpu_seconds_total",
+                            label_selectors=[
+                                'name=~"b.*k.*w.*k.*"',
+                            ],
+                        ),
+                        legend_format="backup-{{instance}}",
+                    ),
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_thread_cpu_seconds_total",
+                            label_selectors=[
+                                'name=~"backup_io"',
+                            ],
+                        ),
+                        legend_format="backup-io-{{instance}}",
+                    ),
+                    target(
+                        expr=expr_simple(
+                            "tikv_backup_softlimit",
+                        ),
+                        legend_format="backup-auto-throttle-{{instance}}",
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="Backup Thread Count",
+                targets=[
+                    target(
+                        expr=expr_sum(
+                            "tikv_backup_thread_pool_size",
+                        ),
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="Backup Errors",
+                description="",
+                targets=[
+                    target(
+                        expr=expr_sum_delta(
+                            "tikv_backup_error_counter",
+                            by_labels=["instance", "error"],
+                        ),
+                    ),
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            heatmap_panel(
+                title="Backup Write CF SST Size",
+                yaxis=yaxis(format=UNITS.BYTES_IEC),
+                metric="tikv_backup_range_size_bytes_bucket",
+                label_selectors=['cf="write"'],
+            ),
+            heatmap_panel(
+                title="Backup Default CF SST Size",
+                yaxis=yaxis(format=UNITS.BYTES_IEC),
+                metric="tikv_backup_range_size_bytes_bucket",
+                label_selectors=['cf="default"'],
+            ),
+            graph_panel(
+                title="Backup SST Generation Throughput",
+                yaxes=yaxes(left_format=UNITS.BYTES_SEC_IEC),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_backup_range_size_bytes_sum",
+                            by_labels=[],  # override default by instance.
+                        ),
+                        legend_format="total",
+                    ),
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_backup_range_size_bytes_sum",
+                            by_labels=["instance", "cf"],
+                        ),
+                    ),
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            heatmap_panel(
+                title="Backup Scan SST Duration",
+                yaxis=yaxis(format=UNITS.SECONDS),
+                metric="tikv_backup_range_duration_seconds_bucket",
+                label_selectors=['type="snapshot"'],
+            ),
+            heatmap_panel(
+                title="Backup Scan SST Duration",
+                yaxis=yaxis(format=UNITS.SECONDS),
+                metric="tikv_backup_range_duration_seconds_bucket",
+                label_selectors=['type="scan"'],
+            ),
+            heatmap_panel(
+                title="Backup Save SST Duration",
+                yaxis=yaxis(format=UNITS.SECONDS),
+                metric="tikv_backup_range_duration_seconds_bucket",
+                label_selectors=['type=~"save.*"'],
+            ),
+            graph_panel(
+                title="Backup SST Duration",
+                yaxes=yaxes(left_format=UNITS.SECONDS),
+                targets=[
+                    target(
+                        expr=expr_histogram_quantile(
+                            0.999,
+                            "tikv_backup_range_duration_seconds",
+                            by_labels=["type"],
+                        ),
+                        legend_format="{{type}}-99.9%",
+                    ),
+                    target(
+                        expr=expr_histogram_quantile(
+                            0.99,
+                            "tikv_backup_range_duration_seconds",
+                            by_labels=["type"],
+                        ),
+                        legend_format="{{type}}-99%",
+                    ),
+                    target(
+                        expr=expr_operator(
+                            expr_sum(
+                                "tikv_backup_range_duration_seconds_sum",
+                                by_labels=["type"],
+                            ),
+                            "/",
+                            expr_sum(
+                                "tikv_backup_range_duration_seconds_count",
+                                by_labels=["type"],
+                            ),
+                        ),
+                        legend_format="{{type}}-avg",
+                    ),
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            heatmap_panel(
+                title="External Storage Create Duration",
+                yaxis=yaxis(format=UNITS.SECONDS),
+                metric="tikv_external_storage_create_seconds_bucket",
+            ),
+            graph_panel_histogram_quantiles(
+                title="External Storage Create Duration",
+                description="",
+                yaxes=yaxes(left_format=UNITS.SECONDS),
+                metric="tikv_external_storage_create_seconds",
+                hide_avg=True,
+                hide_count=True,
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel_histogram_quantiles(
+                title="Checksum Request Duration",
+                description="",
+                yaxes=yaxes(left_format=UNITS.SECONDS),
+                metric="tikv_coprocessor_request_duration_seconds",
+                label_selectors=['req=~"analyze.*|checksum.*"'],
+                by_labels=["req"],
+                hide_avg=True,
+                hide_count=True,
+            ),
+            graph_panel(
+                title="IO Utilization",
+                yaxes=yaxes(left_format=UNITS.PERCENT_UNIT),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "node_disk_io_time_seconds_total",
+                            by_labels=["instance", "device"],
+                        ),
+                    ),
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel(
+                title="Import CPU Utilization",
+                yaxes=yaxes(left_format=UNITS.PERCENT_UNIT),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_thread_cpu_seconds_total",
+                            label_selectors=['name=~"sst_.*"'],
+                            by_labels=["instance"],
+                        ),
+                        legend_format="import-{{instance}}",
+                    ),
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_thread_cpu_seconds_total",
+                            label_selectors=['name=~"sst_.*"'],
+                            by_labels=["instance", "tid"],
+                        ).extra("> 0"),
+                        legend_format="import-{{instance}}-{{tid}}",
+                        hide=True,
+                    ),
+                    target(
+                        expr=expr_count_rate(
+                            "tikv_thread_cpu_seconds_total",
+                            label_selectors=['name=~"sst_.*"'],
+                        ),
+                        legend_format="import-count-{{instance}}",
+                        hide=True,
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="Import Thread Count",
+                targets=[
+                    target(
+                        expr=expr_count_rate(
+                            "tikv_thread_cpu_seconds_total",
+                            label_selectors=['name=~"sst_.*"'],
+                            by_labels=["instance"],
+                        ),
+                        legend_format="{{instance}}",
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="Import Errors",
+                targets=[
+                    target(
+                        expr=expr_sum_delta(
+                            "tikv_import_error_counter",
+                            by_labels=["type", "error", "instance"],
+                        ),
+                    ),
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel_histogram_quantiles(
+                title="Import RPC Duration",
+                description="",
+                yaxes=yaxes(left_format=UNITS.SECONDS),
+                metric="tikv_import_rpc_duration",
+                by_labels=["request"],
+                hide_count=True,
+            ),
+            graph_panel(
+                title="Import RPC Ops",
+                yaxes=yaxes(left_format=UNITS.OPS_PER_SEC),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_import_rpc_duration_count",
+                            label_selectors=['request!="switch_mode"'],
+                            by_labels=["request"],
+                        ),
+                    ),
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            heatmap_panel(
+                title="Import Write/Download RPC Duration",
+                yaxis=yaxis(format=UNITS.SECONDS),
+                metric="tikv_import_rpc_duration_bucket",
+                label_selectors=['request=~"download|write"'],
+            ),
+            heatmap_panel(
+                title="Import Wait Duration",
+                yaxis=yaxis(format=UNITS.SECONDS),
+                metric="tikv_import_download_duration_bucket",
+                label_selectors=['type="queue"'],
+            ),
+            heatmap_panel(
+                title="Import Read SST Duration",
+                yaxis=yaxis(format=UNITS.SECONDS),
+                metric="tikv_import_download_duration_bucket",
+                label_selectors=['type="read"'],
+            ),
+            heatmap_panel(
+                title="Import Rewrite SST Duration",
+                yaxis=yaxis(format=UNITS.SECONDS),
+                metric="tikv_import_download_duration_bucket",
+                label_selectors=['type="rewrite"'],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            heatmap_panel(
+                title="Import Ingest RPC Duration",
+                yaxis=yaxis(format=UNITS.SECONDS),
+                metric="tikv_import_rpc_duration_bucket",
+                label_selectors=['request=~"ingest"'],
+            ),
+            heatmap_panel(
+                title="Import Ingest SST Duration",
+                yaxis=yaxis(format=UNITS.SECONDS),
+                metric="tikv_import_ingest_duration_bucket",
+                label_selectors=['type=~"ingest"'],
+            ),
+            heatmap_panel(
+                title="Import Ingest SST Bytes",
+                yaxis=yaxis(format=UNITS.SECONDS),
+                metric="tikv_import_ingest_byte_bucket",
+            ),
+            graph_panel(
+                title="Import Download SST Throughput",
+                yaxes=yaxes(left_format=UNITS.BYTES_SEC_IEC),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_import_download_bytes_sum",
+                        ),
+                    ),
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_import_download_bytes_sum",
+                            by_labels=[],
+                        ),
+                        legend_format="total",
+                    ),
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel(
+                title="Import Local Write keys",
+                targets=[
+                    target(
+                        expr=expr_sum_delta(
+                            "tikv_import_local_write_keys",
+                            by_labels=["type", "instance"],
+                        ),
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="Import Local Write bytes",
+                yaxes=yaxes(left_format=UNITS.BYTES_SEC_IEC),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_import_local_write_bytes",
+                            by_labels=["type", "instance"],
+                        ),
+                    ),
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel(
+                title="TTL Expired",
+                targets=[
+                    target(
+                        expr=expr_sum(
+                            "tikv_backup_raw_expired_count",
+                        ),
+                    ),
+                    target(
+                        expr=expr_sum(
+                            "tikv_backup_raw_expired_count",
+                            by_labels=[],
+                        ),
+                        legend_format="sum",
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="cloud request",
+                description="",
+                yaxes=yaxes(left_format=UNITS.SHORT),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_cloud_request_duration_seconds_count",
+                            by_labels=["cloud", "req"],
+                        ),
+                    ),
+                ],
+            ),
+        ]
+    )
     return layout.row_panel
 
 
@@ -8490,7 +8922,7 @@ dashboard = Dashboard(
         PointInTimeRestore(),
         ResolvedTS(),
         Memory(),
-        # BackupImport(),
+        BackupImport(),
         Encryption(),
         # BackupLog(),
         SlowTrendStatistics(),
