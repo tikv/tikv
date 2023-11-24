@@ -1,14 +1,11 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-<<<<<<< HEAD
 use std::{
+    iter::FromIterator,
     sync::{mpsc, Arc},
     thread,
     time::Duration,
 };
-=======
-use std::{iter::FromIterator, sync::Arc, thread, time::Duration};
->>>>>>> c6adb042c9 (raftstore: Fix group commit is mistakenly enabled in sync recover state (#15830))
 
 use kvproto::replication_modepb::*;
 use pd_client::PdClient;
