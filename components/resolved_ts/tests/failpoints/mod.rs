@@ -63,15 +63,14 @@ fn test_report_min_resolved_ts() {
     fail::cfg("mock_collect_tick_interval", "return(0)").unwrap();
     fail::cfg("mock_min_resolved_ts_interval", "return(0)").unwrap();
     let mut suite = TestSuite::new(1);
-    // default config is 1s
     assert_eq!(
         suite
             .cluster
             .cfg
             .tikv
             .raft_store
-            .report_min_resolved_ts_interval,
-        ReadableDuration::secs(1)
+            .pd_report_min_resolved_ts_interval,
+        ReadableDuration::millis(50)
     );
     let region = suite.cluster.get_region(&[]);
     let ts1 = suite.cluster.pd_client.get_min_resolved_ts();
