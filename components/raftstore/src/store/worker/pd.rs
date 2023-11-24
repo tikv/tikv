@@ -66,7 +66,11 @@ use crate::{
             AutoSplitController, ReadStats, SplitConfigChange, WriteStats,
         },
         Callback, CasualMessage, Config, PeerMsg, RaftCmdExtraOpts, RaftCommand, RaftRouter,
+<<<<<<< HEAD
         RegionReadProgressRegistry, SignificantMsg, SnapManager, StoreInfo, StoreMsg, TxnExt,
+=======
+        SnapManager, StoreInfo, StoreMsg, TxnExt,
+>>>>>>> bc1ae30437 (pd_client: support dynamically modifying `min-resolved-ts` report interval and reduce retry times (#15837))
     },
 };
 
@@ -444,16 +448,6 @@ fn default_collect_tick_interval() -> Duration {
     DEFAULT_COLLECT_TICK_INTERVAL
 }
 
-fn config(interval: Duration) -> Duration {
-    fail_point!("mock_min_resolved_ts_interval", |_| {
-        Duration::from_millis(50)
-    });
-    fail_point!("mock_min_resolved_ts_interval_disable", |_| {
-        Duration::from_millis(0)
-    });
-    interval
-}
-
 #[inline]
 fn convert_record_pairs(m: HashMap<String, u64>) -> RecordPairVec {
     m.into_iter()
@@ -550,14 +544,22 @@ where
     collect_store_infos_interval: Duration,
     load_base_split_check_interval: Duration,
     collect_tick_interval: Duration,
+<<<<<<< HEAD
     report_min_resolved_ts_interval: Duration,
+=======
+    inspect_latency_interval: Duration,
+>>>>>>> bc1ae30437 (pd_client: support dynamically modifying `min-resolved-ts` report interval and reduce retry times (#15837))
 }
 
 impl<T> StatsMonitor<T>
 where
     T: StoreStatsReporter,
 {
+<<<<<<< HEAD
     pub fn new(interval: Duration, report_min_resolved_ts_interval: Duration, reporter: T) -> Self {
+=======
+    pub fn new(interval: Duration, inspect_latency_interval: Duration, reporter: T) -> Self {
+>>>>>>> bc1ae30437 (pd_client: support dynamically modifying `min-resolved-ts` report interval and reduce retry times (#15837))
         StatsMonitor {
             reporter,
             handle: None,
@@ -569,8 +571,17 @@ where
                 DEFAULT_LOAD_BASE_SPLIT_CHECK_INTERVAL,
                 interval,
             ),
+<<<<<<< HEAD
             report_min_resolved_ts_interval: config(report_min_resolved_ts_interval),
             collect_tick_interval: cmp::min(default_collect_tick_interval(), interval),
+=======
+            // Use `inspect_latency_interval` as the minimal limitation for collecting tick.
+            collect_tick_interval: cmp::min(
+                inspect_latency_interval,
+                cmp::min(default_collect_tick_interval(), interval),
+            ),
+            inspect_latency_interval,
+>>>>>>> bc1ae30437 (pd_client: support dynamically modifying `min-resolved-ts` report interval and reduce retry times (#15837))
         }
     }
 
@@ -579,9 +590,7 @@ where
     pub fn start(
         &mut self,
         mut auto_split_controller: AutoSplitController,
-        region_read_progress: RegionReadProgressRegistry,
         collector_reg_handle: CollectorRegHandle,
-        store_id: u64,
     ) -> Result<(), io::Error> {
         if self.collect_tick_interval < default_collect_tick_interval() {
             info!(
@@ -597,8 +606,13 @@ where
         let load_base_split_check_interval = self
             .load_base_split_check_interval
             .div_duration_f64(tick_interval) as u64;
+<<<<<<< HEAD
         let report_min_resolved_ts_interval = self
             .report_min_resolved_ts_interval
+=======
+        let update_latency_stats_interval = self
+            .inspect_latency_interval
+>>>>>>> bc1ae30437 (pd_client: support dynamically modifying `min-resolved-ts` report interval and reduce retry times (#15837))
             .div_duration_f64(tick_interval) as u64;
 
         let (timer_tx, timer_rx) = mpsc::channel();
@@ -655,11 +669,16 @@ where
                             &mut region_cpu_records_collector,
                         );
                     }
+<<<<<<< HEAD
                     if is_enable_tick(timer_cnt, report_min_resolved_ts_interval) {
                         reporter.report_min_resolved_ts(
                             store_id,
                             region_read_progress.get_min_resolved_ts(),
                         );
+=======
+                    if is_enable_tick(timer_cnt, update_latency_stats_interval) {
+                        reporter.update_latency_stats(timer_cnt);
+>>>>>>> bc1ae30437 (pd_client: support dynamically modifying `min-resolved-ts` report interval and reduce retry times (#15837))
                     }
                     timer_cnt += 1;
                 }
@@ -944,7 +963,6 @@ where
         snap_mgr: SnapManager,
         remote: Remote<yatp::task::future::TaskCell>,
         collector_reg_handle: CollectorRegHandle,
-        region_read_progress: RegionReadProgressRegistry,
         health_service: Option<HealthService>,
         coprocessor_host: CoprocessorHost<EK>,
         causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
@@ -953,15 +971,14 @@ where
         let interval = store_heartbeat_interval / NUM_COLLECT_STORE_INFOS_PER_HEARTBEAT;
         let mut stats_monitor = StatsMonitor::new(
             interval,
+<<<<<<< HEAD
             cfg.report_min_resolved_ts_interval.0,
+=======
+            cfg.inspect_interval.0,
+>>>>>>> bc1ae30437 (pd_client: support dynamically modifying `min-resolved-ts` report interval and reduce retry times (#15837))
             WrappedScheduler(scheduler.clone()),
         );
-        if let Err(e) = stats_monitor.start(
-            auto_split_controller,
-            region_read_progress,
-            collector_reg_handle,
-            store_id,
-        ) {
+        if let Err(e) = stats_monitor.start(auto_split_controller, collector_reg_handle) {
             error!("failed to start stats collector, error = {:?}", e);
         }
 
@@ -2560,8 +2577,6 @@ mod tests {
         use engine_test::{kv::KvTestEngine, raft::RaftTestEngine};
         use tikv_util::worker::LazyWorker;
 
-        use crate::store::fsm::StoreMeta;
-
         struct RunnerTest {
             store_stat: Arc<Mutex<StoreStat>>,
             stats_monitor: StatsMonitor<WrappedScheduler<KvTestEngine, RaftTestEngine>>,
@@ -2575,16 +2590,16 @@ mod tests {
             ) -> RunnerTest {
                 let mut stats_monitor = StatsMonitor::new(
                     Duration::from_secs(interval),
+<<<<<<< HEAD
                     Duration::from_secs(0),
+=======
+                    Duration::from_secs(interval),
+>>>>>>> bc1ae30437 (pd_client: support dynamically modifying `min-resolved-ts` report interval and reduce retry times (#15837))
                     WrappedScheduler(scheduler),
                 );
-                let store_meta = Arc::new(Mutex::new(StoreMeta::new(0)));
-                let region_read_progress = store_meta.lock().unwrap().region_read_progress.clone();
                 if let Err(e) = stats_monitor.start(
                     AutoSplitController::default(),
-                    region_read_progress,
                     CollectorRegHandle::new_for_test(),
-                    1,
                 ) {
                     error!("failed to start stats collector, error = {:?}", e);
                 }

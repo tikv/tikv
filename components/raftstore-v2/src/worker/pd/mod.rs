@@ -12,9 +12,17 @@ use engine_traits::{KvEngine, RaftEngine, TabletRegistry};
 use kvproto::{metapb, pdpb};
 use pd_client::{BucketStat, PdClient};
 use raftstore::store::{
+<<<<<<< HEAD
     util::KeysInfoFormatter, AutoSplitController, Config, FlowStatsReporter, PdStatsMonitor,
     ReadStats, RegionReadProgressRegistry, SplitInfo, StoreStatsReporter, TabletSnapManager,
     TxnExt, WriteStats, NUM_COLLECT_STORE_INFOS_PER_HEARTBEAT,
+=======
+    metrics::STORE_INSPECT_DURATION_HISTOGRAM,
+    util::{KeysInfoFormatter, LatencyInspector, RaftstoreDuration},
+    AutoSplitController, Config, FlowStatsReporter, PdStatsMonitor, ReadStats, SplitInfo,
+    StoreStatsReporter, TabletSnapManager, TxnExt, WriteStats,
+    NUM_COLLECT_STORE_INFOS_PER_HEARTBEAT,
+>>>>>>> bc1ae30437 (pd_client: support dynamically modifying `min-resolved-ts` report interval and reduce retry times (#15837))
 };
 use resource_metering::{Collector, CollectorRegHandle, RawRecords};
 use slog::{error, Logger};
@@ -207,13 +215,13 @@ where
         causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
         pd_scheduler: Scheduler<Task>,
         auto_split_controller: AutoSplitController,
-        region_read_progress: RegionReadProgressRegistry,
         collector_reg_handle: CollectorRegHandle,
         logger: Logger,
         shutdown: Arc<AtomicBool>,
         cfg: Arc<VersionTrack<Config>>,
     ) -> Result<Self, std::io::Error> {
         let mut stats_monitor = PdStatsMonitor::new(
+<<<<<<< HEAD
             cfg.value().pd_store_heartbeat_tick_interval.0 / NUM_COLLECT_STORE_INFOS_PER_HEARTBEAT,
             cfg.value().report_min_resolved_ts_interval.0,
             PdReporter::new(pd_scheduler, logger.clone()),
@@ -224,6 +232,14 @@ where
             collector_reg_handle,
             store_id,
         )?;
+=======
+            store_heartbeat_interval / NUM_COLLECT_STORE_INFOS_PER_HEARTBEAT,
+            cfg.value().inspect_interval.0,
+            PdReporter::new(pd_scheduler, logger.clone()),
+        );
+        stats_monitor.start(auto_split_controller, collector_reg_handle)?;
+        let slowness_stats = slowness::SlownessStatistics::new(&cfg.value());
+>>>>>>> bc1ae30437 (pd_client: support dynamically modifying `min-resolved-ts` report interval and reduce retry times (#15837))
         Ok(Self {
             store_id,
             pd_client,
