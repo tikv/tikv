@@ -480,7 +480,7 @@ fn int_divide_decimal_unsigned(
                 Err(Error::overflow("BIGINT UNSIGNED", format!("({} / {})", lhs, rhs)).into())
             };
         }
-        Ok(Some(unsigned_result.unwrap() as i64))
+        return Ok(Some(unsigned_result.unwrap() as i64));
     }
     Ok(None)
 }
