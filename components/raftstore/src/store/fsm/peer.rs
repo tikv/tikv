@@ -2277,7 +2277,6 @@ where
             // Destroy does not need be processed, the state is cleaned up together with peer.
             Some(UnsafeRecoveryState::Destroy { .. })
             | Some(UnsafeRecoveryState::Failed)
-            | Some(UnsafeRecoveryState::WaitInitialize(..))
             | None => {}
         }
     }
