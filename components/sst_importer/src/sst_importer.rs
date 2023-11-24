@@ -17,7 +17,6 @@ use std::{
 use collections::HashSet;
 use dashmap::{mapref::entry::Entry, DashMap};
 use encryption::{to_engine_encryption_method, DataKeyManager};
-use engine_rocks::RocksEngine;
 use engine_traits::{
     name_to_cf, util::check_key_in_range, CfName, EncryptionKeyManager, FileEncryptionInfo,
     IterOptions, Iterator, KvEngine, RefIterable, SstCompressionType, SstExt, SstMetaInfo,
@@ -153,7 +152,7 @@ impl CacheKvFile {
 }
 
 /// SstImporter manages SST files that are waiting for ingesting.
-pub struct SstImporter<E: KvEngine = RocksEngine> {
+pub struct SstImporter<E: KvEngine> {
     dir: ImportDir<E>,
     key_manager: Option<Arc<DataKeyManager>>,
     switcher: Either<ImportModeSwitcher, ImportModeSwitcherV2>,
