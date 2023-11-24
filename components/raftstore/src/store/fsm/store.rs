@@ -107,9 +107,10 @@ use crate::{
             ReadDelegate, RefreshConfigRunner, RefreshConfigTask, RegionRunner, RegionTask,
             SplitCheckTask,
         },
-        Callback, CasualMessage, CompactThreshold, GlobalReplicationState, InspectedRaftMessage,
-        MergeResultKind, PdTask, PeerMsg, PeerTick, RaftCommand, SignificantMsg, SnapManager,
-        StoreMsg, StoreTick,
+        worker_metrics::PROCESS_STAT_CPU_USAGE,
+        Callback, CasualMessage, CompactThreshold, FullCompactController, GlobalReplicationState,
+        InspectedRaftMessage, MergeResultKind, PdTask, PeerMsg, PeerTick, RaftCommand,
+        SignificantMsg, SnapManager, StoreMsg, StoreTick,
     },
     Error, Result,
 };
@@ -121,8 +122,11 @@ pub const ENTRY_CACHE_EVICT_TICK_DURATION: Duration = Duration::from_secs(1);
 pub const MULTI_FILES_SNAPSHOT_FEATURE: Feature = Feature::require(6, 1, 0); // it only makes sense for large region
 
 // Every 30 minutes, check if we can run full compaction. This allows the config
-// setting `periodic_full_compact_start_max_cpu` to be changed dynamically.
+// setting `periodic_full_compact_start_times` to be changed dynamically.
 const PERIODIC_FULL_COMPACT_TICK_INTERVAL_DURATION: Duration = Duration::from_secs(30 * 60);
+// If periodic full compaction is enabled (`periodic_full_compact_start_times`
+// is set), sample load metrics every 10 minutes.
+const LOAD_STATS_WINDOW_DURATION: Duration = Duration::from_secs(10 * 60);
 
 pub struct StoreInfo<EK, ER> {
     pub kv_engine: EK,
@@ -582,6 +586,8 @@ where
     pub pending_latency_inspect: Vec<util::LatencyInspector>,
 
     pub safe_point: Arc<AtomicU64>,
+
+    pub process_stat: Option<ProcessStat>,
 }
 
 impl<EK, ER, T> PollContext<EK, ER, T>
@@ -780,8 +786,10 @@ impl<'a, EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
             StoreTick::CompactLockCf => self.on_compact_lock_cf(),
             StoreTick::CompactCheck => self.on_compact_check_tick(),
             StoreTick::PeriodicFullCompact => self.on_full_compact_tick(),
+            StoreTick::LoadMetricsWindow => self.on_load_metrics_window_tick(),
             StoreTick::ConsistencyCheck => self.on_consistency_check_tick(),
             StoreTick::CleanupImportSst => self.on_cleanup_import_sst_tick(),
+            StoreTick::PdReportMinResolvedTs => self.on_pd_report_min_resolved_ts_tick(),
         }
         let elapsed = timer.saturating_elapsed();
         self.ctx
@@ -839,6 +847,9 @@ impl<'a, EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
                     mut inspector,
                 } => {
                     inspector.record_store_wait(send_time.saturating_elapsed());
+                    inspector.record_store_commit(self.ctx.raft_metrics.stat_commit_log.avg());
+                    // Reset the stat_commit_log and wait it to be refreshed in the next tick.
+                    self.ctx.raft_metrics.stat_commit_log.reset();
                     self.ctx.pending_latency_inspect.push(inspector);
                 }
                 StoreMsg::UnsafeRecoveryReport(report) => self.store_heartbeat_pd(Some(report)),
@@ -871,7 +882,9 @@ impl<'a, EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
         self.register_cleanup_import_sst_tick();
         self.register_compact_check_tick();
         self.register_full_compact_tick();
+        self.register_load_metrics_window_tick();
         self.register_pd_store_heartbeat_tick();
+        self.register_pd_report_min_resolved_ts_tick();
         self.register_compact_lock_cf_tick();
         self.register_snap_mgr_gc_tick();
         self.register_consistency_check_tick();
@@ -1468,6 +1481,7 @@ where
             sync_write_worker,
             pending_latency_inspect: vec![],
             safe_point: self.safe_point.clone(),
+            process_stat: None,
         };
         ctx.update_ticks_timeout();
         let tag = format!("[store {}]", ctx.store.get_id());
@@ -1625,7 +1639,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         } else {
             None
         };
-
+        let bgworker_remote = background_worker.remote();
         let workers = Workers {
             pd_worker,
             background_worker,
@@ -1663,7 +1677,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             ReadRunner::new(self.router.clone(), engines.raft.clone()),
         );
 
-        let compact_runner = CompactRunner::new(engines.kv.clone());
+        let compact_runner = CompactRunner::new(engines.kv.clone(), bgworker_remote);
         let cleanup_sst_runner = CleanupSstRunner::new(Arc::clone(&importer));
         let gc_snapshot_runner = GcSnapshotRunner::new(
             meta.get_id(),
@@ -1690,7 +1704,6 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             &cfg,
         )?;
 
-        let region_read_progress = store_meta.lock().unwrap().region_read_progress.clone();
         let mut builder = RaftPollerBuilder {
             cfg,
             store: meta,
@@ -1727,7 +1740,6 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             mgr,
             pd_client,
             collector_reg_handle,
-            region_read_progress,
             health_service,
             causal_ts_provider,
             snap_generator_pool,
@@ -1746,7 +1758,6 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         snap_mgr: SnapManager,
         pd_client: Arc<C>,
         collector_reg_handle: CollectorRegHandle,
-        region_read_progress: RegionReadProgressRegistry,
         health_service: Option<HealthService>,
         causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
         snap_generator_pool: FuturePool,
@@ -1838,7 +1849,6 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             snap_mgr,
             workers.pd_worker.remote(),
             collector_reg_handle,
-            region_read_progress,
             health_service,
             coprocessor_host,
             causal_ts_provider,
@@ -2450,6 +2460,26 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         }
     }
 
+    fn register_load_metrics_window_tick(&self) {
+        // For now, we will only gather these metrics is periodic full compaction is
+        // enabled.
+        if !self.ctx.cfg.periodic_full_compact_start_times.is_empty() {
+            self.ctx
+                .schedule_store_tick(StoreTick::LoadMetricsWindow, LOAD_STATS_WINDOW_DURATION)
+        }
+    }
+
+    fn on_load_metrics_window_tick(&mut self) {
+        self.register_load_metrics_window_tick();
+
+        let proc_stat = self
+            .ctx
+            .process_stat
+            .get_or_insert_with(|| ProcessStat::cur_proc_stat().unwrap());
+        let cpu_usage: f64 = proc_stat.cpu_usage().unwrap();
+        PROCESS_STAT_CPU_USAGE.set(cpu_usage);
+    }
+
     fn register_full_compact_tick(&self) {
         if !self.ctx.cfg.periodic_full_compact_start_times.is_empty() {
             self.ctx.schedule_store_tick(
@@ -2477,35 +2507,77 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
             return;
         }
 
-        if self.ctx.global_stat.stat.is_busy.load(Ordering::SeqCst) {
-            warn!("full compaction may not run at this time, `is_busy` flag is true",);
+        let compact_predicate_fn = self.is_low_load_for_full_compact();
+        // Do not start if the load is high.
+        if !compact_predicate_fn() {
             return;
         }
 
-        let mut proc_stats = ProcessStat::cur_proc_stat().unwrap();
-        let cpu_usage = proc_stats.cpu_usage().unwrap();
-        let max_start_cpu_usage = self.ctx.cfg.periodic_full_compact_start_max_cpu;
-        if cpu_usage > max_start_cpu_usage {
-            warn!(
-                "full compaction may not run at this time, cpu usage is above max";
-                "cpu_usage" => cpu_usage,
-                "threshold" => max_start_cpu_usage,
-            );
-            return;
-        }
+        let ranges = self.ranges_for_full_compact();
+
+        let compact_load_controller =
+            FullCompactController::new(1, 15 * 60, Box::new(compact_predicate_fn));
 
         // Attempt executing a periodic full compaction.
-        // Note that full compaction will not run if other compaction tasks are running.
-        if let Err(e) = self
-            .ctx
-            .cleanup_scheduler
-            .schedule(CleanupTask::Compact(CompactTask::PeriodicFullCompact))
-        {
+        // Note that full compaction will not run if another full compact tasks has
+        // started.
+        if let Err(e) = self.ctx.cleanup_scheduler.schedule(CleanupTask::Compact(
+            CompactTask::PeriodicFullCompact {
+                ranges,
+                compact_load_controller,
+            },
+        )) {
             error!(
                 "failed to schedule a periodic full compaction";
                 "store_id" => self.fsm.store.id,
                 "err" => ?e
             );
+        }
+    }
+
+    /// Use ranges assigned to each region as increments for full compaction.
+    fn ranges_for_full_compact(&self) -> Vec<(Vec<u8>, Vec<u8>)> {
+        let meta = self.ctx.store_meta.lock().unwrap();
+        let mut ranges = Vec::with_capacity(meta.regions.len());
+
+        for region in meta.regions.values() {
+            let start_key = keys::enc_start_key(region);
+            let end_key = keys::enc_end_key(region);
+            ranges.push((start_key, end_key))
+        }
+        ranges
+    }
+
+    /// Returns a predicate `Fn` which is evaluated:
+    /// 1. Before full compaction runs: if  `false`, we return and wait for the
+    /// next full compaction tick
+    /// (`PERIODIC_FULL_COMPACT_TICK_INTERVAL_DURATION`) before starting. If
+    /// true, we begin full compaction, which means the first incremental range
+    /// will be compactecd. See: ``StoreFsmDelegate::on_full_compact_tick``
+    /// in this file.
+    ///
+    /// 2. After each incremental range finishes and before next one (if any)
+    /// starts. If `false`, we pause compaction and wait. See:
+    /// `CompactRunner::full_compact` in `worker/compact.rs`.
+    fn is_low_load_for_full_compact(&self) -> impl Fn() -> bool {
+        let max_start_cpu_usage = self.ctx.cfg.periodic_full_compact_start_max_cpu;
+        let global_stat = self.ctx.global_stat.clone();
+        move || {
+            if global_stat.stat.is_busy.load(Ordering::SeqCst) {
+                warn!("full compaction may not run at this time, `is_busy` flag is true",);
+                return false;
+            }
+
+            let cpu_usage = PROCESS_STAT_CPU_USAGE.get();
+            if cpu_usage > max_start_cpu_usage {
+                warn!(
+                    "full compaction may not run at this time, cpu usage is above max";
+                    "cpu_usage" => cpu_usage,
+                    "threshold" => max_start_cpu_usage,
+                );
+                return false;
+            }
+            true
         }
     }
 
@@ -2600,6 +2672,25 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
                 "schedule space check task failed";
                 "store_id" => self.fsm.store.id,
                 "err" => ?e,
+            );
+        }
+    }
+
+    fn report_min_resolved_ts(&self) {
+        let read_progress = {
+            let meta = self.ctx.store_meta.lock().unwrap();
+            meta.region_read_progress().clone()
+        };
+        let min_resolved_ts = read_progress.get_min_resolved_ts();
+
+        let task = PdTask::ReportMinResolvedTs {
+            store_id: self.fsm.store.id,
+            min_resolved_ts,
+        };
+        if let Err(e) = self.ctx.pd_scheduler.schedule(task) {
+            error!("failed to send min resolved ts to pd worker";
+                "store_id" => self.fsm.store.id,
+                "err" => ?e
             );
         }
     }
@@ -2710,6 +2801,11 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         self.register_pd_store_heartbeat_tick();
     }
 
+    fn on_pd_report_min_resolved_ts_tick(&mut self) {
+        self.report_min_resolved_ts();
+        self.register_pd_report_min_resolved_ts_tick();
+    }
+
     fn on_snap_mgr_gc(&mut self) {
         // refresh multi_snapshot_files enable flag
         self.ctx.snap_mgr.set_enable_multi_snapshot_files(
@@ -2770,16 +2866,17 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
     fn on_wake_up_regions(&self, abnormal_stores: Vec<u64>) {
         info!("try to wake up all hibernated regions in this store";
             "to_all" => abnormal_stores.is_empty());
+        let store_id = self.ctx.store_id();
         let meta = self.ctx.store_meta.lock().unwrap();
-        for region_id in meta.regions.keys() {
-            let region = &meta.regions[region_id];
+
+        for (region_id, region) in &meta.regions {
             // Check whether the current region is not found on abnormal stores. If so,
             // this region is not the target to be awaken.
             if !region_on_stores(region, &abnormal_stores) {
                 continue;
             }
             let peer = {
-                match find_peer(region, self.ctx.store_id()) {
+                match find_peer(region, store_id) {
                     None => continue,
                     Some(p) => p.clone(),
                 }
@@ -2810,6 +2907,13 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         self.ctx.schedule_store_tick(
             StoreTick::PdStoreHeartbeat,
             self.ctx.cfg.pd_store_heartbeat_tick_interval.0,
+        );
+    }
+
+    fn register_pd_report_min_resolved_ts_tick(&self) {
+        self.ctx.schedule_store_tick(
+            StoreTick::PdReportMinResolvedTs,
+            self.ctx.cfg.pd_report_min_resolved_ts_interval.0,
         );
     }
 

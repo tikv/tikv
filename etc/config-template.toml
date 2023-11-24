@@ -394,6 +394,9 @@
 ## Store heartbeat tick interval for reporting to PD.
 # pd-store-heartbeat-tick-interval = "10s"
 
+## Store min resolved ts tick interval for reporting to PD.
+# pd-report-min-resolved-ts-interval = "1s"
+
 ## The threshold of triggering Region split check.
 ## When Region size change exceeds this config, TiKV will check whether the Region should be split
 ## or not. To reduce the cost of scanning data in the checking process, you can set the value to
@@ -456,7 +459,7 @@
 ## It should be set between 1 and 100. Manual compaction is only triggered when the number of
 ## duplicated MVCC keys exceeds `region-compact-min-redundant-rows` and the percentage of duplicated MVCC keys
 ## exceeds `region-compact-redundant-rows-percent`.
-# region-compact-redundant-rows-percent = 100
+# region-compact-redundant-rows-percent = 20
 
 ## Interval to check whether to start a manual compaction for Lock Column Family.
 ## If written bytes reach `lock-cf-compact-bytes-threshold` for Lock Column Family, TiKV will
@@ -673,8 +676,8 @@
 # enabled = false
 
 ## Maximum number of threads of `Titan` background gc jobs.
-## default: 4
-# max-background-gc = 4
+## default: 1
+# max-background-gc = 1
 
 ## Options for "Default" Column Family, which stores actual user data.
 [rocksdb.defaultcf]
@@ -936,8 +939,15 @@
 ##   lz4:    kLZ4Compression
 ##   lz4hc:  kLZ4HCCompression
 ##   zstd:   kZSTD
-## default: lz4
-# blob-file-compression = "lz4"
+## default: zstd
+# blob-file-compression = "zstd"
+
+## Set blob file zstd dictionary compression, default(0) will use zstd compression.
+## It is recommended to set the dictionary size to values such as 4k or 16k. Additionally,
+## the sample data size to train dictionary is of size 100X dictionary size innerly.
+## It has no effect when `blob-file-compression` is not `zstd`.
+## default: 0
+# zstd-dict-size = 0
 
 ## Specifics cache size for blob records
 ## default: 0

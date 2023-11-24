@@ -127,6 +127,7 @@ pub enum StaleState {
     Valid,
     ToValidate,
     LeaderMissing,
+    MaybeLeaderMissing,
 }
 
 #[derive(Debug)]
@@ -1837,7 +1838,7 @@ where
         let has_snap_task = self.get_store().has_gen_snap_task();
         let pre_commit_index = self.raft_group.raft.raft_log.committed;
         self.raft_group.step(m)?;
-        self.report_commit_log_duration(pre_commit_index, &ctx.raft_metrics);
+        self.report_commit_log_duration(pre_commit_index, &mut ctx.raft_metrics);
 
         let mut for_balance = false;
         if !has_snap_task && self.get_store().has_gen_snap_task() {
@@ -1882,7 +1883,7 @@ where
         }
     }
 
-    fn report_commit_log_duration(&self, pre_commit_index: u64, metrics: &RaftMetrics) {
+    fn report_commit_log_duration(&self, pre_commit_index: u64, metrics: &mut RaftMetrics) {
         if !metrics.waterfall_metrics || self.proposals.is_empty() {
             return;
         }
@@ -1902,10 +1903,15 @@ where
                         &metrics.wf_commit_not_persist_log
                     };
                     for tracker in trackers {
-                        tracker.observe(now, hist, |t| {
+                        // Collect the metrics related to commit_log
+                        // durations.
+                        let duration = tracker.observe(now, hist, |t| {
                             t.metrics.commit_not_persisted = !commit_persisted;
                             &mut t.metrics.wf_commit_log_nanos
                         });
+                        metrics
+                            .stat_commit_log
+                            .record(Duration::from_nanos(duration));
                     }
                 }
             }
@@ -2117,7 +2123,6 @@ where
             self.leader_missing_time = None;
             return StaleState::Valid;
         }
-        let naive_peer = !self.is_initialized() || !self.raft_group.raft.promotable();
         // Updates the `leader_missing_time` according to the current state.
         //
         // If we are checking this it means we suspect the leader might be missing.
@@ -2137,13 +2142,18 @@ where
                 StaleState::ToValidate
             }
             Some(instant)
-                if instant.saturating_elapsed() >= ctx.cfg.abnormal_leader_missing_duration.0
-                    && !naive_peer =>
+                if instant.saturating_elapsed() >= ctx.cfg.abnormal_leader_missing_duration.0 =>
             {
                 // A peer is considered as in the leader missing state
                 // if it's initialized but is isolated from its leader or
                 // something bad happens that the raft group can not elect a leader.
-                StaleState::LeaderMissing
+                if self.is_initialized() && self.raft_group.raft.promotable() {
+                    StaleState::LeaderMissing
+                } else {
+                    // Uninitialized peer and learner may not have leader info,
+                    // even if there is a valid leader.
+                    StaleState::MaybeLeaderMissing
+                }
             }
             _ => StaleState::Valid,
         }
@@ -3120,7 +3130,7 @@ where
             let pre_commit_index = self.raft_group.raft.raft_log.committed;
             self.raft_group.on_persist_ready(self.persisted_number);
             self.report_persist_log_duration(pre_persist_index, &ctx.raft_metrics);
-            self.report_commit_log_duration(pre_commit_index, &ctx.raft_metrics);
+            self.report_commit_log_duration(pre_commit_index, &mut ctx.raft_metrics);
 
             let persist_index = self.raft_group.raft.raft_log.persisted;
             self.mut_store().update_cache_persisted(persist_index);
@@ -3165,7 +3175,7 @@ where
         let pre_commit_index = self.raft_group.raft.raft_log.committed;
         let mut light_rd = self.raft_group.advance_append(ready);
         self.report_persist_log_duration(pre_persist_index, &ctx.raft_metrics);
-        self.report_commit_log_duration(pre_commit_index, &ctx.raft_metrics);
+        self.report_commit_log_duration(pre_commit_index, &mut ctx.raft_metrics);
 
         let persist_index = self.raft_group.raft.raft_log.persisted;
         if self.is_in_force_leader() {
@@ -5440,6 +5450,7 @@ where
         &mut self,
         ctx: &mut PollContext<EK, ER, T>,
     ) {
+        ctx.raft_metrics.check_stale_peer.inc();
         if self.check_stale_conf_ver < self.region().get_region_epoch().get_conf_ver()
             || self.region().get_region_epoch().get_conf_ver() == 0
         {

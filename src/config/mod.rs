@@ -137,6 +137,8 @@ pub struct TitanCfConfig {
     #[online_config(skip)]
     pub blob_file_compression: CompressionType,
     #[online_config(skip)]
+    pub zstd_dict_size: ReadableSize,
+    #[online_config(skip)]
     pub blob_cache_size: ReadableSize,
     #[online_config(skip)]
     pub min_gc_batch_size: ReadableSize,
@@ -148,6 +150,7 @@ pub struct TitanCfConfig {
     #[online_config(skip)]
     #[doc(hidden)]
     #[serde(skip_serializing)]
+    #[deprecated = "Titan doesn't need to sample anymore"]
     pub sample_ratio: Option<f64>,
     #[online_config(skip)]
     pub merge_small_file_threshold: ReadableSize,
@@ -158,18 +161,20 @@ pub struct TitanCfConfig {
     pub range_merge: bool,
     #[online_config(skip)]
     pub max_sorted_runs: i32,
-    // deprecated.
     #[online_config(skip)]
     #[doc(hidden)]
     #[serde(skip_serializing)]
+    #[deprecated = "The feature is removed"]
     pub gc_merge_rewrite: bool,
 }
 
 impl Default for TitanCfConfig {
+    #[allow(deprecated)]
     fn default() -> Self {
         Self {
             min_blob_size: ReadableSize::kb(1), // disable titan default
-            blob_file_compression: CompressionType::Lz4,
+            blob_file_compression: CompressionType::Zstd,
+            zstd_dict_size: ReadableSize::kb(0),
             blob_cache_size: ReadableSize::mb(0),
             min_gc_batch_size: ReadableSize::mb(16),
             max_gc_batch_size: ReadableSize::mb(64),
@@ -190,6 +195,15 @@ impl TitanCfConfig {
         let mut opts = RocksTitanDbOptions::new();
         opts.set_min_blob_size(self.min_blob_size.0);
         opts.set_blob_file_compression(self.blob_file_compression.into());
+        // To try zstd dict compression, set dict size to 4k, sample size to 100X dict
+        // size
+        opts.set_compression_options(
+            -14,                                // window_bits
+            32767,                              // level
+            0,                                  // strategy
+            self.zstd_dict_size.0 as i32,       // zstd dict size
+            self.zstd_dict_size.0 as i32 * 100, // zstd sample size
+        );
         opts.set_blob_cache(self.blob_cache_size.0 as usize, -1, false, 0.0);
         opts.set_min_gc_batch_size(self.min_gc_batch_size.0);
         opts.set_max_gc_batch_size(self.max_gc_batch_size.0);
@@ -202,6 +216,7 @@ impl TitanCfConfig {
         opts
     }
 
+    #[allow(deprecated)]
     fn validate(&self) -> Result<(), Box<dyn Error>> {
         if self.gc_merge_rewrite {
             return Err(
@@ -1199,7 +1214,7 @@ impl Default for TitanDbConfig {
             enabled: false,
             dirname: "".to_owned(),
             disable_gc: false,
-            max_background_gc: 4,
+            max_background_gc: 1,
             purge_obsolete_files_period: ReadableDuration::secs(10),
         }
     }
@@ -5763,7 +5778,28 @@ mod tests {
         let diff = config_value_to_string(diff.into_iter().collect());
         assert_eq!(diff.len(), 1);
         assert_eq!(diff[0].0.as_str(), "blob_run_mode");
-        assert_eq!(diff[0].1.as_str(), "fallback");
+        assert_eq!(diff[0].1.as_str(), "kFallback");
+    }
+
+    #[test]
+    fn test_update_titan_blob_run_mode_config() {
+        let mut cfg = TikvConfig::default();
+        cfg.rocksdb.titan.enabled = true;
+        let (_, cfg_controller, ..) = new_engines::<ApiV1>(cfg);
+        for run_mode in [
+            "kFallback",
+            "kNormal",
+            "kReadOnly",
+            "fallback",
+            "normal",
+            "read-only",
+        ] {
+            let change = HashMap::from([(
+                "rocksdb.defaultcf.titan.blob-run-mode".to_string(),
+                run_mode.to_string(),
+            )]);
+            cfg_controller.update_without_persist(change).unwrap();
+        }
     }
 
     #[test]
@@ -7022,7 +7058,7 @@ mod tests {
             cfg.raft_store
                 .region_compact_redundant_rows_percent
                 .unwrap(),
-            100
+            20
         );
 
         let content = r#"
