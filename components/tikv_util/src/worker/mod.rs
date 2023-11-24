@@ -15,6 +15,7 @@ mod future;
 mod metrics;
 mod pool;
 
+pub use metrics::MEM_ITER_FAILED_REASON;
 pub use pool::{
     dummy_scheduler, Builder, LazyWorker, ReceiverWrapper, Runnable, RunnableWithTimer,
     ScheduleError, Scheduler, Worker,

@@ -455,7 +455,7 @@ impl StoreTick {
             StoreTick::CompactLockCf => RaftEventDurationType::compact_lock_cf,
             StoreTick::ConsistencyCheck => RaftEventDurationType::consistency_check,
             StoreTick::CleanupImportSst => RaftEventDurationType::cleanup_import_sst,
-            StoreTick::MemoryEngineGc => RaftEventDurationType::MemoryEngineGc,
+            StoreTick::MemoryEngineGc => RaftEventDurationType::memory_engine_gc,
         }
     }
 }

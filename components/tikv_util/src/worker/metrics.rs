@@ -16,4 +16,11 @@ lazy_static! {
         &["name"]
     )
     .unwrap();
+
+    pub static ref MEM_ITER_FAILED_REASON: IntCounterVec = register_int_counter_vec!(
+        "mem_iter_failed_reason",
+        "reason of why fail to get the mem snapshot",
+        &["type"]
+    )
+    .unwrap();
 }

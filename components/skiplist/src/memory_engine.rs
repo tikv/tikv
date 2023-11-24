@@ -14,6 +14,7 @@ use bytes::Bytes;
 use collections::HashMap;
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 use slog_global::info;
+use tikv_util::worker::MEM_ITER_FAILED_REASON;
 
 use crate::{key::ByteWiseComparator, IterRef, Skiplist};
 
@@ -173,6 +174,9 @@ impl LruMemoryEngine {
         let safe_point = region_m_engine.safe_point;
 
         if read_ts <= safe_point {
+            MEM_ITER_FAILED_REASON
+                .with_label_values(&["outdated_safe_point"])
+                .inc();
             return None;
         }
 

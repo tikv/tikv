@@ -79,9 +79,20 @@ impl GcRunner {
             if let Some(memory_engine) = core.engine.get_mut(&region_id) {
                 let safe_point = u64::min(safe_point, min_snapshot);
                 if memory_engine.safe_point >= safe_point {
+                    info!(
+                        "safe point not large enough";
+                        "prev" => memory_engine.safe_point,
+                        "current" => safe_point,
+                    );
                     return;
                 }
 
+                info!(
+                    "safe point update";
+                    "prev" => memory_engine.safe_point,
+                    "current" => safe_point,
+                    "region_id" => region_id,
+                );
                 // Only here can modify this.
                 memory_engine.safe_point = safe_point;
 
@@ -120,7 +131,7 @@ impl GcRunner {
             "region_id" => region_id,
             "total_version" => count,
             "outdated_version" => filter.versions,
-            "filtered_version" => filter.total_filtered,
+            "filtered_version" => filter.filtered,
         );
     }
 }

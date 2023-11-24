@@ -2785,9 +2785,8 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
 
         let safe_point = TimeStamp::physical_now()
             - Duration::from(self.ctx.cfg.memory_safe_duration).as_millis() as u64;
-        if let Err(e) = gc_scheduler.schedule(GcTask {
-            safe_point: TimeStamp(safe_point),
-        }) {
+        let safe_point = TimeStamp::compose(safe_point, 0);
+        if let Err(e) = gc_scheduler.schedule(GcTask { safe_point }) {
             error!(
                 "schedule memory engine gc failed";
                 "store_id" => self.fsm.store.id,

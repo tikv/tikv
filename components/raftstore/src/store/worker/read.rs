@@ -28,6 +28,7 @@ use tikv_util::{
     lru::LruCache,
     store::find_peer_by_id,
     time::{monotonic_raw_now, ThreadReadId},
+    worker::MEM_ITER_FAILED_REASON,
 };
 use time::Timespec;
 use tracker::GLOBAL_TRACKERS;
@@ -145,6 +146,9 @@ pub trait ReadExecutor {
                     let memory_engine_snapshot = if let Some(start_ts) = start_ts {
                         self.get_memory_engine_snapshot(region.get_id(), start_ts)
                     } else {
+                        MEM_ITER_FAILED_REASON
+                            .with_label_values(&["no_start_ts"])
+                            .inc();
                         None
                     };
                     let snapshot = RegionSnapshot::from_snapshot(
