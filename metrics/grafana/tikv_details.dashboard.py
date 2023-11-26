@@ -6,9 +6,12 @@ from grafanalib import formatunits as UNITS
 from grafanalib.core import (
     GRAPH_TOOLTIP_MODE_SHARED_TOOLTIP,
     HIDE_VARIABLE,
+    NULL_AS_NULL,
     NULL_AS_ZERO,
     SHOW,
     TIME_SERIES_TARGET_FORMAT,
+    StatValueMappings,
+    StatValueMappingItem,
     Dashboard,
     DataSourceInput,
     Graph,
@@ -245,6 +248,26 @@ def expr_max(
     )
 
 
+def expr_min(
+    metric: str,
+    label_selectors: list[str] = [],
+    by_labels: list[str] = ["instance"],
+) -> Expr:
+    """
+    Calculate the min of a metric.
+
+    Example:
+
+        min((
+            tikv_store_size_bytes
+            {k8s_cluster="$k8s_cluster",tidb_cluster="$tidb_cluster",instance=~"$instance",type!="kv_gc"}
+        )) by (instance)
+    """
+    return expr_aggr(
+        metric, "min", label_selectors=label_selectors, by_labels=by_labels
+    )
+
+
 def expr_aggr_func(
     metric: str,
     aggr_op: str,
@@ -333,6 +356,33 @@ def expr_sum_delta(
         metric=metric,
         aggr_op="sum",
         func="delta",
+        label_selectors=label_selectors,
+        range_selector=range_selector,
+        by_labels=by_labels,
+    )
+
+
+def expr_sum_increase(
+    metric: str,
+    label_selectors: list[str] = [],
+    range_selector: str = "$__rate_interval",
+    by_labels: list[str] = ["instance"],
+) -> Expr:
+    """
+    Calculate the sum of increase of a metric.
+
+    Example:
+
+    sum(increase(
+        tikv_grpc_msg_duration_seconds_count
+        {k8s_cluster="$k8s_cluster",tidb_cluster="$tidb_cluster",instance=~"$instance",type!="kv_gc"}
+        [$__rate_interval]
+    )) by (instance)
+    """
+    return expr_aggr_func(
+        metric=metric,
+        aggr_op="sum",
+        func="increase",
         label_selectors=label_selectors,
         range_selector=range_selector,
         by_labels=by_labels,
@@ -740,6 +790,7 @@ def graph_panel(
     thresholds: list[GraphThreshold] = [],
     series_overrides: list[SeriesOverride] = [],
     data_source=DATASOURCE,
+    null_point_mode=NULL_AS_ZERO,
 ) -> Panel:
     # extraJson add patches grafanalib result.
     extraJson = {}
@@ -768,7 +819,7 @@ def graph_panel(
         fill=fill,
         fillGradient=fill_gradient,
         stack=stack,
-        nullPointMode=NULL_AS_ZERO,
+        nullPointMode=null_point_mode,
         thresholds=thresholds,
         tooltip=tooltip,
         seriesOverrides=series_overrides,
@@ -897,6 +948,9 @@ def stat_panel(
     description=None,
     format=UNITS.NONE_FORMAT,
     graph_mode="none",
+    decimals: Optional[int] = None,
+    mappings: Optional[StatValueMappings] = None,
+    text_mode: str = "auto",
     data_source=DATASOURCE,
 ) -> Panel:
     for target in targets:
@@ -910,6 +964,9 @@ def stat_panel(
         format=format,
         graphMode=graph_mode,
         reduceCalc="lastNotNull",
+        decimals=decimals,
+        mappings=mappings,
+        textMode=text_mode,
     )
 
 
@@ -8811,7 +8868,553 @@ def Encryption() -> RowPanel:
 
 def BackupLog() -> RowPanel:
     layout = Layout(title="Backup Log")
-    layout.row([])
+    layout.row(
+        [
+            stat_panel(
+                title="Endpoint Status",
+                targets=[
+                    target(
+                        expr=expr_simple("tikv_log_backup_enabled"),
+                        legend_format="{{ instance }}",
+                    ),
+                ],
+                mappings=[
+                    StatValueMappings(
+                        StatValueMappingItem("Disabled", "0", "red"),
+                        StatValueMappingItem("Enabled", "1", "green"),
+                    ),
+                ],
+            ),
+            stat_panel(
+                title="Task Status",
+                targets=[
+                    target(
+                        expr=expr_min("tikv_log_backup_task_status"),
+                    ),
+                ],
+                mappings=[
+                    StatValueMappings(
+                        StatValueMappingItem("Running", "0", "green"),
+                        StatValueMappingItem("Paused", "1", "yellow"),
+                        StatValueMappingItem("Error", "2", "red"),
+                    ),
+                ],
+            ),
+            stat_panel(
+                title="Advancer Owner",
+                text_mode="name",
+                targets=[
+                    target(
+                        expr="tidb_log_backup_advancer_owner > 0",
+                        legend_format="{{ instance }}",
+                    ),
+                ],
+            ),
+            stat_panel(
+                title="Average Flush Size",
+                description="The average flush size of last 30mins.",
+                format=UNITS.BYTES_IEC,
+                targets=[
+                    target(
+                        expr=expr_operator(
+                            expr_sum_increase(
+                                "tikv_log_backup_flush_file_size_sum",
+                                range_selector="30m",
+                            ),
+                            "/",
+                            expr_sum_increase(
+                                "tikv_log_backup_flush_duration_sec_count",
+                                label_selectors=['stage=~"save_files"'],
+                                range_selector="30m",
+                            ),
+                        ),
+                        legend_format="{{ instance }}",
+                    ),
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            stat_panel(
+                title="Flushed Files (Last 30m) Per Host",
+                description="The current total flushed file number of this run.",
+                decimals=0,
+                targets=[
+                    target(
+                        expr=expr_sum_delta(
+                            "tikv_log_backup_flush_file_size_count",
+                            range_selector="30m",
+                        ).extra("> 0"),
+                    ),
+                ],
+            ),
+            stat_panel(
+                title="Flush Times (Last 30m)",
+                description="This is the summary of the file count has been flushed, summered by the data each TiKV has flushed since last boot.\n**NOTE: The size may get reduced if some of TiKVs reboot.**",
+                decimals=0,
+                targets=[
+                    target(
+                        expr=expr_sum_delta(
+                            "tikv_log_backup_flush_duration_sec_count",
+                            range_selector="30m",
+                            label_selectors=['stage=~"save_files"'],
+                        ),
+                    ),
+                ],
+            ),
+            stat_panel(
+                title="Total Flushed Size (Last 30m)",
+                description="This is the summary of the size has been flushed, summered by the data each TiKV has flushed since last boot.\n**NOTE: The size may get reduced if some of TiKVs reboot.**",
+                format=UNITS.BYTES_IEC,
+                targets=[
+                    target(
+                        expr=expr_sum_delta(
+                            "tikv_log_backup_flush_file_size_sum",
+                            range_selector="30m",
+                        ),
+                    ),
+                ],
+            ),
+            stat_panel(
+                title="Flush Files (Last 30m)",
+                description="This is the summary of the file count has been flushed, summered by the data each TiKV has flushed since last boot.\n**NOTE: The size may get reduced if some of TiKVs reboot.**",
+                decimals=0,
+                targets=[
+                    target(
+                        expr=expr_sum_delta(
+                            "tikv_log_backup_flush_file_size_count",
+                            range_selector="30m",
+                        ),
+                    ),
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel(
+                title="CPU Usage",
+                description="The CPU utilization of log backup threads. \n**(Note this is the average usage for a period of time, some peak of CPU usage may be lost.)**",
+                yaxes=yaxes(left_format=UNITS.PERCENT_UNIT),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_thread_cpu_seconds_total",
+                            label_selectors=[
+                                'name=~"backup_stream|log-backup-scan(-[0-9]+)?"'
+                            ],
+                        ),
+                    )
+                ],
+            ),
+            graph_panel(
+                title="Handle Event Rate",
+                description="",
+                yaxes=yaxes(left_format=UNITS.OPS_PER_SEC),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_log_backup_handle_kv_batch_sum",
+                        ),
+                    )
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel(
+                title="Initial Scan Generate Event Throughput",
+                description="The data rate of initial scanning emitting events.",
+                yaxes=yaxes(left_format=UNITS.BYTES_SEC_IEC),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_log_backup_incremental_scan_bytes_sum",
+                        ),
+                    )
+                ],
+            ),
+            graph_panel(
+                title="Abnormal Checkpoint TS Lag",
+                description=None,
+                yaxes=yaxes(left_format=UNITS.MILLI_SECONDS),
+                targets=[
+                    target(
+                        expr=expr_operator(
+                            "time() * 1000",
+                            "-",
+                            expr_max(
+                                "tidb_log_backup_last_checkpoint", by_labels=["task"]
+                            ).extra("/ 262144 > 0"),
+                        ),
+                        legend_format="{{ task }}",
+                    ),
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel(
+                title="Memory Of Events",
+                description="The estimated memory usage by the streaming backup module.",
+                yaxes=yaxes(left_format=UNITS.BYTES_IEC),
+                targets=[
+                    target(
+                        expr=expr_sum("tikv_log_backup_heap_memory"),
+                    )
+                ],
+            ),
+            graph_panel(
+                title="Observed Region Count",
+                description="",
+                targets=[
+                    target(
+                        expr=expr_sum("tikv_log_backup_observed_region"),
+                    ),
+                    target(
+                        expr=expr_sum(
+                            "tikv_log_backup_observed_region",
+                        ),
+                        legend_format="{{instance}}-total",
+                    ),
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel(
+                title="Errors",
+                description="The errors met when backing up.\n**They are retryable, don't worry.**",
+                yaxes=yaxes(left_format=UNITS.OPS_PER_MIN),
+                targets=[
+                    target(
+                        expr=expr_sum_delta(
+                            "tikv_log_backup_errors",
+                            range_selector="1m",
+                            by_labels=["type", "instance"],
+                        ),
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="Fatal Errors",
+                description="The errors met when backing up.",
+                yaxes=yaxes(left_format=UNITS.OPS_PER_MIN),
+                targets=[
+                    target(
+                        expr=expr_sum_delta(
+                            "tikv_log_backup_fatal_errors",
+                            range_selector="1m",
+                            by_labels=["type", "instance"],
+                        ),
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="Checkpoint TS of Tasks",
+                description=None,
+                yaxes=yaxes(left_format=UNITS.DATE_TIME_ISO_TODAY),
+                null_point_mode=NULL_AS_NULL,
+                targets=[
+                    target(
+                        expr=expr_max(
+                            "tidb_log_backup_last_checkpoint", by_labels=["task"]
+                        ).extra("/ 262144 > 0"),
+                    ),
+                    target(expr="time() * 1000", legend_format="Current Time"),
+                ],
+                series_overrides=[
+                    series_override(
+                        alias="Current Time",
+                        fill=0,
+                        dashes=True,
+                    ),
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            heatmap_panel(
+                title="Flush Duration",
+                description="The duration of flushing a batch of file.",
+                yaxis=yaxis(format=UNITS.SECONDS),
+                metric="tikv_log_backup_flush_duration_sec_bucket",
+                label_selectors=['stage=~"save_files"'],
+            ),
+            heatmap_panel(
+                title="Initial scanning duration",
+                description="The duration of scanning the initial data from local DB and transform them into apply events.",
+                yaxis=yaxis(format=UNITS.SECONDS),
+                metric="tikv_log_backup_initial_scan_duration_sec_bucket",
+            ),
+            heatmap_panel(
+                title="Convert Raft Event duration",
+                description="The duration of converting a raft request into a apply event.",
+                yaxis=yaxis(format=UNITS.SECONDS),
+                metric="tikv_log_backup_event_handle_duration_sec_bucket",
+                label_selectors=['stage=~"to_stream_event"'],
+            ),
+            heatmap_panel(
+                title="Wait for Lock Duration",
+                description="The duration of waiting the mutex of the controller.",
+                yaxis=yaxis(format=UNITS.SECONDS),
+                metric="tikv_log_backup_event_handle_duration_sec_bucket",
+                label_selectors=['stage=~"get_router_lock"'],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            heatmap_panel(
+                title="Command Batch Size",
+                description="The number of KV-modify of each raft command observed.",
+                yaxis=yaxis(format=UNITS.SHORT),
+                metric="tikv_log_backup_handle_kv_batch_bucket",
+            ),
+            heatmap_panel(
+                title="Save to Temp File Duration",
+                description="The total cost of saving an event into temporary file.",
+                yaxis=yaxis(format=UNITS.SECONDS),
+                metric="tikv_log_backup_event_handle_duration_sec_bucket",
+                label_selectors=['stage=~"save_to_temp_file"'],
+            ),
+            heatmap_panel(
+                title="Write to Temp File Duration",
+                description="The total cost of writing a event into temporary file.\nComparing to the ***Save*** duration, it doesn't contain the time cost of routing the task by range / task.",
+                yaxis=yaxis(format=UNITS.SECONDS),
+                metric="tikv_log_backup_on_event_duration_seconds_bucket",
+                label_selectors=['stage="write_to_tempfile"'],
+            ),
+            heatmap_panel(
+                title="System Write Call Duration",
+                description="The duration of collecting metadata and call the UNIX system call *write* for each event.",
+                yaxis=yaxis(format=UNITS.SECONDS),
+                metric="tikv_log_backup_on_event_duration_seconds_bucket",
+                label_selectors=['stage="syscall_write"'],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel(
+                title="Internal Message Type",
+                description="The internal message type count.",
+                yaxes=yaxes(left_format=UNITS.OPS_PER_SEC, log_base=2),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_log_backup_interal_actor_acting_duration_sec_count",
+                            by_labels=["message"],
+                        ),
+                    )
+                ],
+            ),
+            graph_panel(
+                title="Internal Message Handling Duration (P99)",
+                description="The internal handling message duration.",
+                yaxes=yaxes(left_format=UNITS.SECONDS),
+                targets=[
+                    target(
+                        expr=expr_histogram_quantile(
+                            0.99,
+                            "tikv_log_backup_interal_actor_acting_duration_sec",
+                            by_labels=["message"],
+                        ),
+                        legend_format="{{message}}",
+                    )
+                ],
+            ),
+            graph_panel(
+                title="Internal Message Handling Duration (P90)",
+                description="The internal handling message duration.",
+                yaxes=yaxes(left_format=UNITS.SECONDS),
+                targets=[
+                    target(
+                        expr=expr_histogram_quantile(
+                            0.9,
+                            "tikv_log_backup_interal_actor_acting_duration_sec",
+                            by_labels=["message"],
+                        ),
+                        legend_format="{{message}}",
+                    )
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel(
+                title="Initial Scan RocksDB Throughput",
+                description="The internal read throughput of RocksDB during initial scanning. This panel can roughly present the read through to the hard disk of initial scanning.",
+                yaxes=yaxes(left_format=UNITS.BYTES_SEC_IEC),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_log_backup_initial_scan_operations",
+                            label_selectors=['op=~"read_bytes"'],
+                            by_labels=["cf"],
+                        ),
+                    )
+                ],
+            ),
+            graph_panel(
+                title="Initial Scan RocksDB Operation",
+                description="Misc statistics of RocksDB during initial scanning.",
+                yaxes=yaxes(left_format=UNITS.OPS_PER_SEC),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_log_backup_initial_scan_operations",
+                            label_selectors=['op!~"read_bytes"'],
+                            by_labels=["cf", "op"],
+                        ).extra("> 0"),
+                    )
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel(
+                title="Initial Scanning Trigger Reason",
+                description="The reason of triggering initial scanning.",
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_log_backup_initial_scan_reason",
+                            by_labels=["reason"],
+                        ),
+                    )
+                ],
+            ),
+            graph_panel(
+                title="Region Checkpoint Key Putting",
+                description="",
+                yaxes=yaxes(left_format=UNITS.COUNTS_PER_SEC),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_log_backup_metadata_key_operation",
+                            by_labels=["type"],
+                        ),
+                    )
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            heatmap_panel(
+                title="Request Checkpoint Batch Size",
+                metric="tidb_log_backup_advancer_batch_size_bucket",
+                label_selectors=['type="checkpoint"'],
+            ),
+            heatmap_panel(
+                title="Tick Duration",
+                yaxis=yaxis(format=UNITS.SECONDS),
+                metric="tidb_log_backup_advancer_tick_duration_sec_bucket",
+                label_selectors=['step="tick"'],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel(
+                title="Region Checkpoint Failure Reason",
+                description="The reason of advancer failed to be advanced.",
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tidb_log_backup_region_request_failure",
+                            label_selectors=['reason!="retryable-scan-region"'],
+                            by_labels=["reason"],
+                        ),
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="Request Result",
+                description="The result of getting region checkpoints.",
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tidb_log_backup_region_request",
+                            by_labels=["result"],
+                        ),
+                    ),
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel(
+                title="Tick Duration (P99)",
+                description="The internal handling message duration.",
+                yaxes=yaxes(left_format=UNITS.SECONDS),
+                targets=[
+                    target(
+                        expr=expr_histogram_quantile(
+                            0.99,
+                            "tidb_log_backup_advancer_tick_duration_sec",
+                            by_labels=["step"],
+                        ),
+                        legend_format="{{ step }}",
+                    )
+                ],
+            ),
+            graph_panel(
+                title="Tick Duration (P90)",
+                description="The internal handling message duration.",
+                yaxes=yaxes(left_format=UNITS.SECONDS),
+                targets=[
+                    target(
+                        expr=expr_histogram_quantile(
+                            0.9,
+                            "tidb_log_backup_advancer_tick_duration_sec",
+                            by_labels=["step"],
+                        ),
+                        legend_format="{{ step }}",
+                    )
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel(
+                title="Get Region Operation Count",
+                description="The frequent of getting region level checkpoint.",
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tidb_log_backup_advancer_tick_duration_sec_count",
+                            label_selectors=['step="get-regions-in-range"'],
+                            by_labels=["step", "instance"],
+                        ),
+                    )
+                ],
+            ),
+            graph_panel(
+                title="Try Advance Trigger Time",
+                description="The variant of checkpoint group.",
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tidb_log_backup_advancer_tick_duration_sec_count",
+                            label_selectors=['step="try-advance"'],
+                            by_labels=["step", "instance"],
+                        ),
+                    )
+                ],
+            ),
+        ]
+    )
     return layout.row_panel
 
 
@@ -8924,7 +9527,7 @@ dashboard = Dashboard(
         Memory(),
         BackupImport(),
         Encryption(),
-        # BackupLog(),
+        BackupLog(),
         SlowTrendStatistics(),
     ],
 ).auto_panel_ids()
