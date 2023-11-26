@@ -65,7 +65,8 @@ fn test_witness_update_region_in_local_reader() {
         &kvproto::errorpb::RecoveryInProgress {
             region_id: region.get_id(),
             ..Default::default()
-        }
+        },
+        "{resp:?}"
     );
 
     fail::remove("change_peer_after_update_region_store_3");

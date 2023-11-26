@@ -3754,14 +3754,13 @@ where
             // test_redundant_conf_change_by_snapshot.
         }
 
-        self.update_region(cp.region);
-
         fail_point!("change_peer_after_update_region");
         fail_point!(
             "change_peer_after_update_region_store_3",
             self.store_id() == 3,
             |_| panic!("should not use return")
         );
+        self.update_region(cp.region);
 
         let now = Instant::now();
         let (mut remove_self, mut need_ping) = (false, false);
