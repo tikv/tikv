@@ -2,18 +2,23 @@
 
 set -euo pipefail
 
-# Check if python 3 is installed
-if ! command -v python3 &> /dev/null
-then
-    echo "python3 could not be found"
-    exit
-fi
+docker build -t tikv-dashboard-gen -f - . <<EOF
+FROM pyfound/black:23.11.0
 
-if ! pip3 show grafanalib 1>/dev/null; then
-    pip3 install grafanalib
-fi
+RUN pip install isort grafanalib==v0.7.0
 
-# Disable python bytecode generation.
-export PYTHONDONTWRITEBYTECODE=1
+CMD ["bash"]
+EOF
 
-generate-dashboard -o metrics/grafana/tikv_details1.json metrics/grafana/tikv_details.dashboard.py
+docker run \
+    --rm \
+    -v ./metrics:/metrics \
+    -e PYTHONDONTWRITEBYTECODE=1 \
+    tikv-dashboard-gen \
+    bash -c "\
+        isort /metrics/grafana/tikv_details.dashboard.py && \
+        black /metrics/grafana/tikv_details.dashboard.py && \
+        generate-dashboard \
+            -o /metrics/grafana/tikv_details1.json \
+            /metrics/grafana/tikv_details.dashboard.py
+    "
