@@ -40,8 +40,8 @@ fn test_witness_update_region_in_local_reader() {
 
     cluster.must_put(b"k0", b"v0");
 
-    // update region but the peer is not destroyed yet
-    fail::cfg("change_peer_after_update_region_store_3", "pause").unwrap();
+    // witness region is about to be updated and destroyed but not yet
+    fail::cfg("change_peer_before_update_region_store_3", "pause").unwrap();
 
     cluster
         .pd_client
@@ -65,11 +65,10 @@ fn test_witness_update_region_in_local_reader() {
         &kvproto::errorpb::RecoveryInProgress {
             region_id: region.get_id(),
             ..Default::default()
-        },
-        "{resp:?}"
+        }
     );
 
-    fail::remove("change_peer_after_update_region_store_3");
+    fail::remove("change_peer_before_update_region_store_3");
 }
 
 // This case is almost the same as `test_witness_update_region_in_local_reader`,
