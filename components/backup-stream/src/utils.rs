@@ -356,17 +356,14 @@ pub fn record_cf_stat(cf_name: &str, stat: &CfStatistics) {
 /// failure, send a fatal error to the `doom_messenger`.
 pub fn handle_on_event_result(doom_messenger: &Scheduler<Task>, result: Vec<(String, Result<()>)>) {
     for (task, res) in result.into_iter() {
-        match res {
-            Err(err) => {
-                try_send!(
-                    doom_messenger,
-                    Task::FatalError(
-                        TaskSelector::ByName(task),
-                        Box::new(err.context("failed to record event to local temporary files"))
-                    )
-                );
-            }
-            _ => (),
+        if let Err(err) = res {
+            try_send!(
+                doom_messenger,
+                Task::FatalError(
+                    TaskSelector::ByName(task),
+                    Box::new(err.context("failed to record event to local temporary files"))
+                )
+            );
         }
     }
 }

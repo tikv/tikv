@@ -3,7 +3,7 @@
 use std::{collections::HashSet, result::Result, sync::Arc};
 
 use dashmap::{
-    mapref::{entry::Entry, multiple::RefMulti as DashRefMulti, one::RefMut as DashRefMut},
+    mapref::{entry::Entry, one::RefMut as DashRefMut},
     DashMap,
 };
 use kvproto::metapb::Region;
@@ -16,7 +16,7 @@ use tikv_util::{
 };
 use txn_types::TimeStamp;
 
-use crate::{checkpoint_manager::Subscription, debug, metrics::TRACK_REGION, utils};
+use crate::{debug, metrics::TRACK_REGION, utils};
 
 /// A utility to tracing the regions being subscripted.
 #[derive(Clone, Default, Debug)]

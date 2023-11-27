@@ -13,7 +13,7 @@ use protobuf::ProtobufError;
 use raftstore::Error as RaftStoreError;
 use thiserror::Error as ThisError;
 use tikv::storage::txn::Error as TxnError;
-use tikv_util::{error, memory::MemoryQuotaExceeded, warn, worker::ScheduleError};
+use tikv_util::{error, warn, worker::ScheduleError};
 
 use crate::{endpoint::Task, metrics};
 

@@ -578,7 +578,7 @@ where
             None => {
                 warn!(
                     "the region is register to no task but being observed: maybe stale, skipping";
-                    utils::slog_region(&region),
+                    utils::slog_region(region),
                     "task_status" => ?self.range_router,
                 );
             }
@@ -737,7 +737,7 @@ where
             Some(ch) => ch,
             None => {
                 warn!("log backup subscription manager is shutting down, aborting new scan."; 
-                    utils::slog_region(&region), "handle" => ?handle.id);
+                    utils::slog_region(region), "handle" => ?handle.id);
                 return;
             }
         };
@@ -760,7 +760,6 @@ where
 #[cfg(test)]
 mod test {
     use std::{
-        cell::Cell,
         collections::HashMap,
         sync::{
             atomic::{AtomicBool, Ordering},
@@ -775,26 +774,18 @@ mod test {
         metapb::{Region, RegionEpoch},
     };
     use raftstore::{
-        coprocessor::{
-            region_info_accessor::MockRegionInfoProvider, ObserveHandle, RegionInfoCallback,
-            RegionInfoProvider,
-        },
+        coprocessor::{ObserveHandle, RegionInfoCallback, RegionInfoProvider},
         router::CdcRaftRouter,
-        store::Callback,
-        RegionInfo, RegionInfoAccessor,
+        RegionInfo,
     };
     use test_raftstore::MockRaftStoreRouter;
     use tikv::{config::BackupStreamConfig, storage::Statistics};
-    use tikv_util::{
-        memory::MemoryQuota,
-        worker::{dummy_future_scheduler, dummy_scheduler, ReceiverWrapper, Scheduler},
-    };
+    use tikv_util::{memory::MemoryQuota, worker::dummy_scheduler};
     use tokio::{sync::mpsc::Sender, task::JoinHandle};
     use txn_types::TimeStamp;
 
     use super::{spawn_executors, InitialScan, RegionSubscriptionManager};
     use crate::{
-        checkpoint_manager::SubscriptionManager,
         errors::Error,
         metadata::{store::SlashEtcStore, MetadataClient, StreamTask},
         router::{Router, RouterInner},
@@ -862,6 +853,7 @@ mod test {
 
         let pool = spawn_executors(FuncInitialScan(|_, _, _| Ok(Statistics::default())), 1);
         let wg = CallbackWaitGroup::new();
+        let (tx, _) = tokio::sync::mpsc::channel(1);
         fail::cfg("execute_scan_command_sleep_100", "return").unwrap();
         for _ in 0..100 {
             let wg = wg.clone();
@@ -870,7 +862,7 @@ mod test {
                     region: Default::default(),
                     handle: Default::default(),
                     last_checkpoint: Default::default(),
-                    feedback_channel: tx,
+                    feedback_channel: tx.clone(),
                     // Note: Maybe make here a Box<dyn FnOnce()> or some other trait?
                     _work: wg.work(),
                 }))
@@ -1004,7 +996,7 @@ mod test {
                 regions: regions.clone(),
                 meta_cli,
                 range_router: Router(Arc::new(router)),
-                scheduler: scheduler.clone(),
+                scheduler,
                 subs: subs.clone(),
                 failure_count: Default::default(),
                 memory_manager,
@@ -1032,7 +1024,7 @@ mod test {
                     match output.recv_timeout(Duration::from_millis(10)) {
                         Ok(Some(item)) => match item {
                             Task::ModifyObserve(ob) => tokio::runtime::Handle::current()
-                                .block_on(self_tx.send(dbg!(ob)))
+                                .block_on(self_tx.send(ob))
                                 .unwrap(),
                             Task::FatalError(select, err) => {
                                 panic!(
@@ -1169,7 +1161,7 @@ mod test {
         use ObserveEvent::*;
         let failed = Arc::new(AtomicBool::new(false));
         let mut suite = Suite::new(FuncInitialScan(move |r, _, _| {
-            println!("{:?} is initial scanning!", utils::debug_region(&r));
+            println!("{:?} is initial scanning!", utils::debug_region(r));
             if r.id != 1 || failed.load(Ordering::SeqCst) {
                 return Ok(Statistics::default());
             }

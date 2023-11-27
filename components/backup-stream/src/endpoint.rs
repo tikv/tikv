@@ -5,7 +5,6 @@ use std::{
     collections::HashSet,
     fmt,
     marker::PhantomData,
-    panic::Location,
     sync::{Arc, Mutex},
     time::Duration,
 };
