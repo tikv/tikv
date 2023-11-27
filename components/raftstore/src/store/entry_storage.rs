@@ -1166,7 +1166,18 @@ impl<EK: KvEngine, ER: RaftEngine> EntryStorage<EK, ER> {
                         } else {
                             range.1 == self.last_index() + 1
                         };
-                        assert!(is_valid, "the warmup range should still be valid");
+                        if !is_valid {
+                            error!(
+                                "unexpected warmup state";
+                                "region_id" => self.region_id,
+                                "peer_id" => self.peer_id,
+                                "cache_first" => ?self.entry_cache_first_index(),
+                                "last_index" => self.last_index(),
+                                "warmup_state_high" => range.1,
+                                "last_entry_index" => index,
+                            );
+                            return false;
+                        }
                         entries.truncate((range.1 - range.0) as usize);
                         self.cache.prepend(entries);
                         WARM_UP_ENTRY_CACHE_COUNTER.finished.inc();
