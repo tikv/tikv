@@ -789,6 +789,7 @@ impl<'a, EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
             StoreTick::LoadMetricsWindow => self.on_load_metrics_window_tick(),
             StoreTick::ConsistencyCheck => self.on_consistency_check_tick(),
             StoreTick::CleanupImportSst => self.on_cleanup_import_sst_tick(),
+            StoreTick::PdReportMinResolvedTs => self.on_pd_report_min_resolved_ts_tick(),
         }
         let elapsed = timer.saturating_elapsed();
         self.ctx
@@ -846,6 +847,9 @@ impl<'a, EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
                     mut inspector,
                 } => {
                     inspector.record_store_wait(send_time.saturating_elapsed());
+                    inspector.record_store_commit(self.ctx.raft_metrics.stat_commit_log.avg());
+                    // Reset the stat_commit_log and wait it to be refreshed in the next tick.
+                    self.ctx.raft_metrics.stat_commit_log.reset();
                     self.ctx.pending_latency_inspect.push(inspector);
                 }
                 StoreMsg::UnsafeRecoveryReport(report) => self.store_heartbeat_pd(Some(report)),
@@ -880,6 +884,7 @@ impl<'a, EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
         self.register_full_compact_tick();
         self.register_load_metrics_window_tick();
         self.register_pd_store_heartbeat_tick();
+        self.register_pd_report_min_resolved_ts_tick();
         self.register_compact_lock_cf_tick();
         self.register_snap_mgr_gc_tick();
         self.register_consistency_check_tick();
@@ -1699,7 +1704,6 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             &cfg,
         )?;
 
-        let region_read_progress = store_meta.lock().unwrap().region_read_progress.clone();
         let mut builder = RaftPollerBuilder {
             cfg,
             store: meta,
@@ -1736,7 +1740,6 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             mgr,
             pd_client,
             collector_reg_handle,
-            region_read_progress,
             health_service,
             causal_ts_provider,
             snap_generator_pool,
@@ -1755,7 +1758,6 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         snap_mgr: SnapManager,
         pd_client: Arc<C>,
         collector_reg_handle: CollectorRegHandle,
-        region_read_progress: RegionReadProgressRegistry,
         health_service: Option<HealthService>,
         causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
         snap_generator_pool: FuturePool,
@@ -1847,7 +1849,6 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             snap_mgr,
             workers.pd_worker.remote(),
             collector_reg_handle,
-            region_read_progress,
             health_service,
             coprocessor_host,
             causal_ts_provider,
@@ -2675,6 +2676,25 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         }
     }
 
+    fn report_min_resolved_ts(&self) {
+        let read_progress = {
+            let meta = self.ctx.store_meta.lock().unwrap();
+            meta.region_read_progress().clone()
+        };
+        let min_resolved_ts = read_progress.get_min_resolved_ts();
+
+        let task = PdTask::ReportMinResolvedTs {
+            store_id: self.fsm.store.id,
+            min_resolved_ts,
+        };
+        if let Err(e) = self.ctx.pd_scheduler.schedule(task) {
+            error!("failed to send min resolved ts to pd worker";
+                "store_id" => self.fsm.store.id,
+                "err" => ?e
+            );
+        }
+    }
+
     fn store_heartbeat_pd(&mut self, report: Option<pdpb::StoreReport>) {
         let mut stats = StoreStats::default();
 
@@ -2781,6 +2801,11 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         self.register_pd_store_heartbeat_tick();
     }
 
+    fn on_pd_report_min_resolved_ts_tick(&mut self) {
+        self.report_min_resolved_ts();
+        self.register_pd_report_min_resolved_ts_tick();
+    }
+
     fn on_snap_mgr_gc(&mut self) {
         // refresh multi_snapshot_files enable flag
         self.ctx.snap_mgr.set_enable_multi_snapshot_files(
@@ -2841,16 +2866,17 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
     fn on_wake_up_regions(&self, abnormal_stores: Vec<u64>) {
         info!("try to wake up all hibernated regions in this store";
             "to_all" => abnormal_stores.is_empty());
+        let store_id = self.ctx.store_id();
         let meta = self.ctx.store_meta.lock().unwrap();
-        for region_id in meta.regions.keys() {
-            let region = &meta.regions[region_id];
+
+        for (region_id, region) in &meta.regions {
             // Check whether the current region is not found on abnormal stores. If so,
             // this region is not the target to be awaken.
             if !region_on_stores(region, &abnormal_stores) {
                 continue;
             }
             let peer = {
-                match find_peer(region, self.ctx.store_id()) {
+                match find_peer(region, store_id) {
                     None => continue,
                     Some(p) => p.clone(),
                 }
@@ -2881,6 +2907,13 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         self.ctx.schedule_store_tick(
             StoreTick::PdStoreHeartbeat,
             self.ctx.cfg.pd_store_heartbeat_tick_interval.0,
+        );
+    }
+
+    fn register_pd_report_min_resolved_ts_tick(&self) {
+        self.ctx.schedule_store_tick(
+            StoreTick::PdReportMinResolvedTs,
+            self.ctx.cfg.pd_report_min_resolved_ts_interval.0,
         );
     }
 

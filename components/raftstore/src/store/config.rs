@@ -142,6 +142,7 @@ pub struct Config {
     pub region_compact_redundant_rows_percent: Option<u64>,
     pub pd_heartbeat_tick_interval: ReadableDuration,
     pub pd_store_heartbeat_tick_interval: ReadableDuration,
+    pub pd_report_min_resolved_ts_interval: ReadableDuration,
     pub snap_mgr_gc_tick_interval: ReadableDuration,
     pub snap_gc_timeout: ReadableDuration,
     /// The duration of snapshot waits for region split. It prevents leader from
@@ -357,9 +358,8 @@ pub struct Config {
     pub slow_trend_unsensitive_cause: f64,
     // The unsensitive(increase it to reduce sensitiveness) of the result-trend detection
     pub slow_trend_unsensitive_result: f64,
-
-    // Interval to report min resolved ts, if it is zero, it means disabled.
-    pub report_min_resolved_ts_interval: ReadableDuration,
+    // The sensitiveness of slowness on network-io.
+    pub slow_trend_network_io_factor: f64,
 
     /// Interval to check whether to reactivate in-memory pessimistic lock after
     /// being disabled before transferring leader.
@@ -443,6 +443,7 @@ impl Default for Config {
             region_compact_redundant_rows_percent: Some(20),
             pd_heartbeat_tick_interval: ReadableDuration::minutes(1),
             pd_store_heartbeat_tick_interval: ReadableDuration::secs(10),
+            pd_report_min_resolved_ts_interval: ReadableDuration::secs(1),
             // Disable periodic full compaction by default.
             periodic_full_compact_start_times: ReadableSchedule::default(),
             // If periodic full compaction is enabled, do not start a full compaction
@@ -521,7 +522,7 @@ impl Default for Config {
             // make it `10.0` to reduce a bit sensitiveness because SpikeFilter is disabled
             slow_trend_unsensitive_cause: 10.0,
             slow_trend_unsensitive_result: 0.5,
-            report_min_resolved_ts_interval: ReadableDuration::secs(1),
+            slow_trend_network_io_factor: 0.0,
             check_leader_lease_interval: ReadableDuration::secs(0),
             renew_leader_lease_advance_duration: ReadableDuration::secs(0),
             allow_unsafe_vote_after_start: false,
@@ -933,6 +934,12 @@ impl Config {
             ));
         }
 
+        if self.slow_trend_network_io_factor < 0.0 {
+            return Err(box_err!(
+                "slow_trend_network_io_factor must be greater than 0"
+            ));
+        }
+
         Ok(())
     }
 
@@ -1033,6 +1040,9 @@ impl Config {
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["pd_store_heartbeat_tick_interval"])
             .set(self.pd_store_heartbeat_tick_interval.as_secs_f64());
+        CONFIG_RAFTSTORE_GAUGE
+            .with_label_values(&["pd_report_min_resolved_ts_interval"])
+            .set(self.pd_report_min_resolved_ts_interval.as_secs_f64());
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["snap_mgr_gc_tick_interval"])
             .set(self.snap_mgr_gc_tick_interval.as_secs_f64());
