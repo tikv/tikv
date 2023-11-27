@@ -24,7 +24,7 @@ hyper = "0.14"
 hyper-tls = "0.5"
 kvproto = { workspace = true }
 lazy_static = "1.3"
-md5 = "0.7.0"
+openssl = { workspace = true }
 prometheus = { version = "0.13", default-features = false, features = ["nightly"] }
 rusoto_core = "0.46.0"
 rusoto_credential = "0.46.0"
