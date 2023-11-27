@@ -1,7 +1,7 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath]
-use std::sync::mpsc;
+use std::sync::{mpsc, Mutex};
 
 use crossbeam::channel::{SendError, TrySendError};
 use engine_traits::{KvEngine, RaftEngine, Snapshot};
@@ -46,6 +46,13 @@ where
     fn significant_send(&self, region_id: u64, msg: SignificantMsg<EK::Snapshot>) -> Result<()>;
 }
 
+impl<'a, T: SignificantRouter<EK>, EK: KvEngine> SignificantRouter<EK> for &'a Mutex<T> {
+    #[inline]
+    fn significant_send(&self, region_id: u64, msg: SignificantMsg<EK::Snapshot>) -> Result<()> {
+        Mutex::lock(self).unwrap().significant_send(region_id, msg)
+    }
+}
+
 /// Routes proposal to target region.
 pub trait ProposalRouter<S>
 where
@@ -76,6 +83,13 @@ where
             Err(TrySendError::Full(_)) => Err(Error::Transport(DiscardReason::Full)),
             Err(TrySendError::Disconnected(_)) => Err(Error::RegionNotFound(region_id)),
         }
+    }
+}
+
+impl<'a, EK: KvEngine, T: CasualRouter<EK>> CasualRouter<EK> for &'a Mutex<T> {
+    #[inline]
+    fn send(&self, region_id: u64, msg: CasualMessage<EK>) -> Result<()> {
+        CasualRouter::send(&*Mutex::lock(self).unwrap(), region_id, msg)
     }
 }
 
