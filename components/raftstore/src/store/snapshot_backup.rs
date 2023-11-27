@@ -8,7 +8,7 @@ use std::{
 
 use engine_traits::{KvEngine, RaftEngine};
 use futures::channel::mpsc::UnboundedSender;
-use kvproto::{brpb::CheckAdminResponse, metapb::RegionEpoch};
+use kvproto::{brpb::CheckAdminResponse, metapb::RegionEpoch, raft_cmdpb::AdminCmdType};
 use tikv_util::{box_err, info, warn};
 use tokio::sync::oneshot;
 
@@ -256,13 +256,31 @@ impl AdminObserver for Arc<RejectIngestAndAdmin> {
         if self.allowed() {
             return Ok(());
         }
-        metrics::SNAP_BR_SUSPEND_COMMAND_TYPE
-            .with_label_values(&[&format!("{:?}", admin.get_cmd_type())])
-            .inc();
-        Err(box_err!(
-            "rejecting proposing admin commands while preparing snapshot backup: rejected {:?}",
-            admin
-        ))
+        if matches!(
+            admin.get_cmd_type(),
+            AdminCmdType::Split |
+            AdminCmdType::BatchSplit |
+            // We disable `CompactLog` here because if the log get truncated, 
+            // we may take a long time to send snapshots during restoring.
+            AdminCmdType::CompactLog |
+            // We will allow `Commit/RollbackMerge` here because the 
+            // `wait_pending_admin` will wait until the merge get finished.
+            // If we reject them, they won't be able to see the merge get finished.
+            // And will finally time out.
+            AdminCmdType::PrepareMerge
+            // NOTE: For now, we cannot reject conf change by coprocessors.
+            // the consistency will be kept by disabling the schedulers in PD.
+            // And wait all conf changes finish by wait pending admin commands.
+        ) {
+            metrics::SNAP_BR_SUSPEND_COMMAND_TYPE
+                .with_label_values(&[&format!("{:?}", admin.get_cmd_type())])
+                .inc();
+            return Err(box_err!(
+                "rejecting proposing admin commands while preparing snapshot backup: rejected {:?}",
+                admin
+            ));
+        }
+        Ok(())
     }
 }
 
