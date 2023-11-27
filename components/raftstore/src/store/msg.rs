@@ -529,6 +529,7 @@ pub enum CasualMessage<EK: KvEngine> {
         split_keys: Vec<Vec<u8>>,
         callback: Callback<EK::Snapshot>,
         source: Cow<'static, str>,
+        share_source_region_size: bool,
     },
 
     /// Hash result of ComputeHash command.
