@@ -259,6 +259,7 @@ impl TempFilePool {
         &self.cfg
     }
 
+    #[cfg(test)]
     pub fn mem_used(&self) -> usize {
         self.current.load(Ordering::Acquire)
     }

@@ -212,12 +212,12 @@ where
     }
 
     fn on_fatal_error_of_task(&self, task: &str, err: &Error) -> future![()] {
-        metrics::update_task_status(TaskStatus::Error, &task);
+        metrics::update_task_status(TaskStatus::Error, task);
         let meta_cli = self.get_meta_client();
         let pdc = self.pd_client.clone();
         let store_id = self.store_id;
         let sched = self.scheduler.clone();
-        let safepoint_name = self.pause_guard_id_for_task(&task);
+        let safepoint_name = self.pause_guard_id_for_task(task);
         let safepoint_ttl = self.pause_guard_duration();
         let code = err.error_code().code.to_owned();
         let msg = err.to_string();

@@ -31,9 +31,9 @@ mod all {
         make_record_key, make_split_key_at_record, mutation, run_async_test, SuiteBuilder,
     };
     use crate::make_table_key;
+
     #[test]
     fn failed_register_task() {
-
         let suite = SuiteBuilder::new_named("failed_register_task").build();
         fail::cfg("load_task::error_when_fetching_ranges", "return").unwrap();
         let cli = suite.get_meta_cli();
