@@ -19,6 +19,13 @@ max-size = 1
 max-backups = 2
 max-days = 3
 
+<<<<<<< HEAD
+=======
+[memory]
+enable-heap-profiling = false
+profiling-sample-per-bytes = "1MB"
+
+>>>>>>> 3b30d692c5 (cdc: limit pending scan tasks (#16048))
 [readpool.unified]
 min-thread-count = 5
 max-thread-count = 10
@@ -635,6 +642,7 @@ old-value-cache-size = 0
 hibernate-regions-compatible = false
 incremental-scan-threads = 3
 incremental-scan-concurrency = 4
+incremental-scan-concurrency-limit = 5
 incremental-scan-speed-limit = 7
 incremental-scan-ts-filter-ratio = 0.7
 old-value-cache-memory-quota = "14MB"
