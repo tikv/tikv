@@ -1,26 +1,21 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath]
-use std::{
-    cell::Cell,
-    mem,
-    sync::{
-        atomic::{AtomicBool, AtomicUsize, Ordering},
-        Arc, Mutex,
-    },
+use std::sync::{
+    atomic::{AtomicBool, AtomicUsize, Ordering},
+    Arc,
 };
 
-use collections::HashMap;
 use crossbeam::channel::{SendError, TrySendError};
+use dashmap::DashMap;
 use tikv_util::{
     debug, info,
-    lru::LruCache,
     time::{duration_to_sec, Instant},
     Either,
 };
 
 use crate::{
-    fsm::{Fsm, FsmScheduler, FsmState},
+    fsm::{Fsm, FsmScheduler},
     mailbox::{BasicMailbox, Mailbox},
     metrics::*,
 };
@@ -32,17 +27,13 @@ pub struct RouterTrace {
     pub leak: usize,
 }
 
-struct NormalMailMap<N: Fsm> {
-    map: HashMap<u64, BasicMailbox<N>>,
-    // Count of Mailboxes that is stored in `map`.
-    alive_cnt: Arc<AtomicUsize>,
-}
-
 enum CheckDoResult<T> {
     NotExist,
     Invalid,
     Valid(T),
 }
+
+const ROUTER_SHRINK_SIZE: usize = 1000;
 
 /// Router routes messages to its target FSM's mailbox.
 ///
@@ -59,8 +50,7 @@ enum CheckDoResult<T> {
 /// Normal FSM and control FSM can have different scheduler, but this is not
 /// required.
 pub struct Router<N: Fsm, C: Fsm, Ns, Cs> {
-    normals: Arc<Mutex<NormalMailMap<N>>>,
-    caches: Cell<LruCache<u64, BasicMailbox<N>>>,
+    normals: Arc<DashMap<u64, BasicMailbox<N>>>,
     pub(super) control_box: BasicMailbox<C>,
     // TODO: These two schedulers should be unified as single one. However
     // it's not possible to write FsmScheduler<Fsm=C> + FsmScheduler<Fsm=N>
@@ -90,11 +80,7 @@ where
         state_cnt: Arc<AtomicUsize>,
     ) -> Router<N, C, Ns, Cs> {
         Router {
-            normals: Arc::new(Mutex::new(NormalMailMap {
-                map: HashMap::default(),
-                alive_cnt: Arc::default(),
-            })),
-            caches: Cell::new(LruCache::with_capacity_and_sample(1024, 7)),
+            normals: Arc::new(DashMap::default()),
             control_box,
             normal_scheduler,
             control_scheduler,
@@ -111,72 +97,32 @@ where
     /// A helper function that tries to unify a common access pattern to
     /// mailbox.
     ///
-    /// Generally, when sending a message to a mailbox, cache should be
-    /// check first, if not found, lock should be acquired.
-    ///
     /// Returns None means there is no mailbox inside the normal registry.
     /// Some(None) means there is expected mailbox inside the normal registry
     /// but it returns None after apply the given function. Some(Some) means
-    /// the given function returns Some and cache is updated if it's invalid.
+    /// the given function returns Some.
     #[inline]
     fn check_do<F, R>(&self, addr: u64, mut f: F) -> CheckDoResult<R>
     where
         F: FnMut(&BasicMailbox<N>) -> Option<R>,
     {
-        let caches = unsafe { &mut *self.caches.as_ptr() };
-        let mut connected = true;
-        if let Some(mailbox) = caches.get(&addr) {
-            match f(mailbox) {
-                Some(r) => return CheckDoResult::Valid(r),
-                None => {
-                    connected = false;
-                }
-            }
-        }
-
-        let (cnt, mailbox) = {
-            let mut boxes = self.normals.lock().unwrap();
-            let cnt = boxes.map.len();
-            let b = match boxes.map.get_mut(&addr) {
-                Some(mailbox) => mailbox.clone(),
-                None => {
-                    drop(boxes);
-                    if !connected {
-                        caches.remove(&addr);
-                    }
-                    return CheckDoResult::NotExist;
-                }
-            };
-            (cnt, b)
-        };
-        if cnt > caches.capacity() || cnt < caches.capacity() / 2 {
-            caches.resize(cnt);
-        }
-
-        let res = f(&mailbox);
-        match res {
-            Some(r) => {
-                caches.insert(addr, mailbox);
-                CheckDoResult::Valid(r)
-            }
+        let mailbox = match self.normals.get_mut(&addr) {
+            Some(mailbox) => mailbox,
             None => {
-                if !connected {
-                    caches.remove(&addr);
-                }
-                CheckDoResult::Invalid
+                return CheckDoResult::NotExist;
             }
+        };
+        match f(&mailbox) {
+            Some(r) => CheckDoResult::Valid(r),
+            None => CheckDoResult::Invalid,
         }
     }
 
     /// Register a mailbox with given address.
     pub fn register(&self, addr: u64, mailbox: BasicMailbox<N>) {
-        let mut normals = self.normals.lock().unwrap();
-        if let Some(mailbox) = normals.map.insert(addr, mailbox) {
+        if let Some(mailbox) = self.normals.insert(addr, mailbox) {
             mailbox.close();
         }
-        normals
-            .alive_cnt
-            .store(normals.map.len(), Ordering::Relaxed);
     }
 
     /// Same as send a message and then register the mailbox.
@@ -188,24 +134,22 @@ where
         mailbox: BasicMailbox<N>,
         msg: N::Message,
     ) -> Result<(), (BasicMailbox<N>, N::Message)> {
+        if let Some(mailbox) = self.normals.insert(addr, mailbox.clone()) {
+            mailbox.close();
+        }
         if let Err(SendError(m)) = mailbox.force_send(msg, &self.normal_scheduler) {
+            self.normals.remove(&addr);
             return Err((mailbox, m));
         }
-        self.register(addr, mailbox);
         Ok(())
     }
 
     pub fn register_all(&self, mailboxes: Vec<(u64, BasicMailbox<N>)>) {
-        let mut normals = self.normals.lock().unwrap();
-        normals.map.reserve(mailboxes.len());
         for (addr, mailbox) in mailboxes {
-            if let Some(m) = normals.map.insert(addr, mailbox) {
+            if let Some(m) = self.normals.insert(addr, mailbox) {
                 m.close();
             }
         }
-        normals
-            .alive_cnt
-            .store(normals.map.len(), Ordering::Relaxed);
     }
 
     /// Get the mailbox of specified address.
@@ -277,13 +221,11 @@ where
     pub fn force_send(&self, addr: u64, msg: N::Message) -> Result<(), SendError<N::Message>> {
         match self.send(addr, msg) {
             Ok(()) => Ok(()),
-            Err(TrySendError::Full(m)) => {
-                let caches = unsafe { &mut *self.caches.as_ptr() };
-                caches
-                    .get(&addr)
-                    .unwrap()
-                    .force_send(m, &self.normal_scheduler)
-            }
+            Err(TrySendError::Full(m)) => self
+                .normals
+                .get(&addr)
+                .unwrap()
+                .force_send(m, &self.normal_scheduler),
             Err(TrySendError::Disconnected(m)) => {
                 if self.is_shutdown() {
                     Ok(())
@@ -318,10 +260,9 @@ where
     /// Try to notify all normal FSMs a message.
     pub fn broadcast_normal(&self, mut msg_gen: impl FnMut() -> N::Message) {
         let timer = Instant::now_coarse();
-        let mailboxes = self.normals.lock().unwrap();
-        for mailbox in mailboxes.map.values() {
+        self.normals.iter().for_each(|mailbox| {
             let _ = mailbox.force_send(msg_gen(), &self.normal_scheduler);
-        }
+        });
         BROADCAST_NORMAL_DURATION.observe(duration_to_sec(timer.saturating_elapsed()));
     }
 
@@ -329,12 +270,13 @@ where
     pub fn broadcast_shutdown(&self) {
         info!("broadcasting shutdown");
         self.shutdown.store(true, Ordering::SeqCst);
-        unsafe { &mut *self.caches.as_ptr() }.clear();
-        let mut mailboxes = self.normals.lock().unwrap();
-        for (addr, mailbox) in mailboxes.map.drain() {
+        for e in self.normals.iter() {
+            let addr = e.key();
+            let mailbox = e.value();
             debug!("[region {}] shutdown mailbox", addr);
             mailbox.close();
         }
+        self.normals.clear();
         self.control_box.close();
         self.normal_scheduler.shutdown();
         self.control_scheduler.shutdown();
@@ -342,52 +284,33 @@ where
 
     /// Close the mailbox of address.
     pub fn close(&self, addr: u64) {
-        info!("[region {}] shutdown mailbox", addr);
-        unsafe { &mut *self.caches.as_ptr() }.remove(&addr);
-        let mut mailboxes = self.normals.lock().unwrap();
-        if let Some(mb) = mailboxes.map.remove(&addr) {
+        info!("shutdown mailbox"; "region_id" => addr);
+        if let Some((_, mb)) = self.normals.remove(&addr) {
             mb.close();
         }
-        mailboxes
-            .alive_cnt
-            .store(mailboxes.map.len(), Ordering::Relaxed);
-    }
-
-    pub fn clear_cache(&self) {
-        unsafe { &mut *self.caches.as_ptr() }.clear();
+        if self.normals.capacity() - self.normals.len() > ROUTER_SHRINK_SIZE {
+            self.normals.shrink_to_fit();
+        }
     }
 
     pub fn state_cnt(&self) -> &Arc<AtomicUsize> {
         &self.state_cnt
     }
 
-    pub fn alive_cnt(&self) -> Arc<AtomicUsize> {
-        self.normals.lock().unwrap().alive_cnt.clone()
+    pub fn alive_cnt(&self) -> usize {
+        self.normals.len()
     }
 
     pub fn trace(&self) -> RouterTrace {
-        let alive = self.normals.lock().unwrap().alive_cnt.clone();
+        let alive = self.alive_cnt();
         let total = self.state_cnt.load(Ordering::Relaxed);
-        let alive = alive.load(Ordering::Relaxed);
         // 1 represents the control fsm.
         let leak = if total > alive + 1 {
             total - alive - 1
         } else {
             0
         };
-        let mailbox_unit = mem::size_of::<(u64, BasicMailbox<N>)>();
-        let state_unit = mem::size_of::<FsmState<N>>();
-        // Every message in crossbeam sender needs 8 bytes to store state.
-        let message_unit = mem::size_of::<N::Message>() + 8;
-        // crossbeam unbounded channel sender has a list of blocks. Every block has 31
-        // unit and every sender has at least one sender.
-        let sender_block_unit = 31;
-        RouterTrace {
-            alive: (mailbox_unit * 8 / 7 // hashmap uses 7/8 of allocated memory.
-                + state_unit + message_unit * sender_block_unit)
-                * alive,
-            leak: (state_unit + message_unit * sender_block_unit) * leak,
-        }
+        RouterTrace { alive, leak }
     }
 }
 
@@ -395,7 +318,6 @@ impl<N: Fsm, C: Fsm, Ns: Clone, Cs: Clone> Clone for Router<N, C, Ns, Cs> {
     fn clone(&self) -> Router<N, C, Ns, Cs> {
         Router {
             normals: self.normals.clone(),
-            caches: Cell::new(LruCache::with_capacity_and_sample(1024, 7)),
             control_box: self.control_box.clone(),
             // These two schedulers should be unified as single one. However
             // it's not possible to write FsmScheduler<Fsm=C> + FsmScheduler<Fsm=N>
