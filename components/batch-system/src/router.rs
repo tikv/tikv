@@ -7,17 +7,12 @@ use std::sync::{
 };
 
 use crossbeam::channel::{SendError, TrySendError};
-<<<<<<< HEAD
+use dashmap::DashMap;
 use tikv_util::{
     debug, info,
-    lru::LruCache,
     time::{duration_to_sec, Instant},
     Either,
 };
-=======
-use dashmap::DashMap;
-use tikv_util::{debug, info, time::Instant, Either};
->>>>>>> 40440210d8 (batch-system: use concurrent hashmap to avoid router cache (#15431))
 
 use crate::{
     fsm::{Fsm, FsmScheduler},
@@ -139,12 +134,6 @@ where
         mailbox: BasicMailbox<N>,
         msg: N::Message,
     ) -> Result<(), (BasicMailbox<N>, N::Message)> {
-<<<<<<< HEAD
-        if let Err(SendError(m)) = mailbox.force_send(msg, &self.normal_scheduler) {
-            return Err((mailbox, m));
-        }
-        self.register(addr, mailbox);
-=======
         if let Some(mailbox) = self.normals.insert(addr, mailbox.clone()) {
             mailbox.close();
         }
@@ -152,7 +141,6 @@ where
             self.normals.remove(&addr);
             return Err((mailbox, m));
         }
->>>>>>> 40440210d8 (batch-system: use concurrent hashmap to avoid router cache (#15431))
         Ok(())
     }
 
@@ -274,13 +262,8 @@ where
         let timer = Instant::now_coarse();
         self.normals.iter().for_each(|mailbox| {
             let _ = mailbox.force_send(msg_gen(), &self.normal_scheduler);
-<<<<<<< HEAD
-        }
-        BROADCAST_NORMAL_DURATION.observe(duration_to_sec(timer.saturating_elapsed()));
-=======
         });
-        BROADCAST_NORMAL_DURATION.observe(timer.saturating_elapsed_secs());
->>>>>>> 40440210d8 (batch-system: use concurrent hashmap to avoid router cache (#15431))
+        BROADCAST_NORMAL_DURATION.observe(duration_to_sec(timer.saturating_elapsed()));
     }
 
     /// Try to notify all FSMs that the cluster is being shutdown.
@@ -301,15 +284,8 @@ where
 
     /// Close the mailbox of address.
     pub fn close(&self, addr: u64) {
-<<<<<<< HEAD
-        info!("[region {}] shutdown mailbox", addr);
-        unsafe { &mut *self.caches.as_ptr() }.remove(&addr);
-        let mut mailboxes = self.normals.lock().unwrap();
-        if let Some(mb) = mailboxes.map.remove(&addr) {
-=======
         info!("shutdown mailbox"; "region_id" => addr);
         if let Some((_, mb)) = self.normals.remove(&addr) {
->>>>>>> 40440210d8 (batch-system: use concurrent hashmap to avoid router cache (#15431))
             mb.close();
         }
         if self.normals.capacity() - self.normals.len() > ROUTER_SHRINK_SIZE {
