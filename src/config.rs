@@ -2292,7 +2292,16 @@ pub struct CdcConfig {
     // TODO(hi-rustin): Consider resizing the thread pool based on `incremental_scan_threads`.
     #[online_config(skip)]
     pub incremental_scan_threads: usize,
+    // The number of scan tasks that is allowed to run concurrently.
     pub incremental_scan_concurrency: usize,
+<<<<<<< HEAD:src/config.rs
+=======
+    // The number of scan tasks that is allowed to be created. In other words,
+    // there will be at most `incremental_scan_concurrency_limit - incremental_scan_concurrency`
+    // number of scan tasks that is waitting to run.
+    pub incremental_scan_concurrency_limit: usize,
+    /// Limit scan speed based on disk I/O traffic.
+>>>>>>> 3b30d692c5 (cdc: limit pending scan tasks (#16048)):src/config/mod.rs
     pub incremental_scan_speed_limit: ReadableSize,
     /// `TsFilter` can increase speed and decrease resource usage when incremental content is much
     /// less than total content. However in other cases, `TsFilter` can make performance worse
@@ -2319,6 +2328,8 @@ impl Default for CdcConfig {
             incremental_scan_threads: 4,
             // At most 6 concurrent running tasks.
             incremental_scan_concurrency: 6,
+            // At most 10000 tasks can exist simultaneously.
+            incremental_scan_concurrency_limit: 10000,
             // TiCDC requires a SSD, the typical write speed of SSD
             // is more than 500MB/s, so 128MB/s is enough.
             incremental_scan_speed_limit: ReadableSize::mb(128),
@@ -2346,6 +2357,14 @@ impl CdcConfig {
                 "cdc.incremental-scan-concurrency must be larger than cdc.incremental-scan-threads"
                     .into(),
             );
+        }
+        if self.incremental_scan_concurrency_limit < self.incremental_scan_concurrency {
+            warn!(
+                "cdc.incremental-scan-concurrency-limit must be larger than cdc.incremental-scan-concurrency,
+                change it to {}",
+                self.incremental_scan_concurrency
+            );
+            self.incremental_scan_concurrency_limit = self.incremental_scan_concurrency
         }
         if self.incremental_scan_ts_filter_ratio < 0.0
             || self.incremental_scan_ts_filter_ratio > 1.0
@@ -4644,8 +4663,32 @@ mod tests {
             incremental-scan-concurrency = 1
             incremental-scan-threads = 2
         "#;
+<<<<<<< HEAD:src/config.rs
         let mut cfg: TiKvConfig = toml::from_str(content).unwrap();
         cfg.validate().unwrap_err();
+=======
+        let mut cfg: TikvConfig = toml::from_str(content).unwrap();
+        cfg.validate().unwrap();
+
+        let content = r#"
+            [cdc]
+            incremental-scan-concurrency = 6
+            incremental-scan-concurrency-limit = 0
+        "#;
+        let mut cfg: TikvConfig = toml::from_str(content).unwrap();
+        cfg.validate().unwrap();
+        assert!(cfg.cdc.incremental_scan_concurrency_limit >= cfg.cdc.incremental_scan_concurrency);
+
+        let content = r#"
+            [storage]
+            engine = "partitioned-raft-kv"
+            [cdc]
+            hibernate-regions-compatible = true
+        "#;
+        let mut cfg: TikvConfig = toml::from_str(content).unwrap();
+        cfg.validate().unwrap();
+        assert!(!cfg.cdc.hibernate_regions_compatible);
+>>>>>>> 3b30d692c5 (cdc: limit pending scan tasks (#16048)):src/config/mod.rs
     }
 
     #[test]
