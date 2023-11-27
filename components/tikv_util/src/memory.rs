@@ -1,8 +1,8 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    mem,
-    sync::atomic::{AtomicUsize, Ordering},
+    cmp, mem,
+    sync::atomic::{AtomicIsize, Ordering},
 };
 
 use kvproto::{
@@ -83,31 +83,34 @@ impl std::error::Error for MemoryQuotaExceeded {}
 impl_display_as_debug!(MemoryQuotaExceeded);
 
 pub struct MemoryQuota {
-    in_use: AtomicUsize,
-    capacity: AtomicUsize,
+    in_use: AtomicIsize,
+    capacity: AtomicIsize,
 }
 
 impl MemoryQuota {
     pub fn new(capacity: usize) -> MemoryQuota {
+        let cap = cmp::min(isize::MAX as usize, capacity);
         MemoryQuota {
-            in_use: AtomicUsize::new(0),
-            capacity: AtomicUsize::new(capacity),
+            in_use: AtomicIsize::new(0),
+            capacity: AtomicIsize::new(cap as _),
         }
     }
 
     pub fn in_use(&self) -> usize {
-        self.in_use.load(Ordering::Relaxed)
+        cmp::max(0, self.in_use.load(Ordering::Relaxed)) as _
     }
 
     pub fn capacity(&self) -> usize {
-        self.capacity.load(Ordering::Relaxed)
+        self.capacity.load(Ordering::Relaxed) as _
     }
 
     pub fn set_capacity(&self, capacity: usize) {
-        self.capacity.store(capacity, Ordering::Relaxed);
+        let cap = cmp::min(isize::MAX as usize, capacity) as isize;
+        self.capacity.store(cap, Ordering::Relaxed);
     }
 
     pub fn alloc(&self, bytes: usize) -> Result<(), MemoryQuotaExceeded> {
+        let bytes = bytes as isize;
         let capacity = self.capacity.load(Ordering::Relaxed);
         let mut in_use_bytes = self.in_use.load(Ordering::Relaxed);
         loop {
@@ -118,7 +121,7 @@ impl MemoryQuota {
             match self.in_use.compare_exchange_weak(
                 in_use_bytes,
                 new_in_use_bytes,
-                Ordering::Relaxed,
+                Ordering::SeqCst,
                 Ordering::Relaxed,
             ) {
                 Ok(_) => return Ok(()),
@@ -128,14 +131,15 @@ impl MemoryQuota {
     }
 
     pub fn free(&self, bytes: usize) {
+        let bytes = bytes as isize;
         let mut in_use_bytes = self.in_use.load(Ordering::Relaxed);
         loop {
             // Saturating at the numeric bounds instead of overflowing.
-            let new_in_use_bytes = in_use_bytes - std::cmp::min(bytes, in_use_bytes);
+            let new_in_use_bytes = in_use_bytes - bytes;
             match self.in_use.compare_exchange_weak(
                 in_use_bytes,
                 new_in_use_bytes,
-                Ordering::Relaxed,
+                Ordering::SeqCst,
                 Ordering::Relaxed,
             ) {
                 Ok(_) => return,
