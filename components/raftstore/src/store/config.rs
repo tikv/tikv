@@ -353,8 +353,9 @@ pub struct Config {
 
     // Interval to inspect the latency of raftstore for slow store detection.
     pub inspect_interval: ReadableDuration,
-    // Threshold of CPU quota to inspect the CPU busy.
-    pub inspect_cpu_quota_busy_thd: f64,
+    /// Threshold of CPU utilization to inspect the CPU busy.
+    #[doc(hidden)]
+    pub inspect_cpu_util_busy_thd: f64,
 
     // The unsensitive(increase it to reduce sensitiveness) of the cause-trend detection
     pub slow_trend_unsensitive_cause: f64,
@@ -520,7 +521,7 @@ impl Default for Config {
             region_split_size: ReadableSize(0),
             clean_stale_peer_delay: ReadableDuration::minutes(0),
             inspect_interval: ReadableDuration::millis(500),
-            inspect_cpu_quota_busy_thd: 0.8,
+            inspect_cpu_util_busy_thd: 0.8,
             // The param `slow_trend_unsensitive_cause == 2.0` can yield good results,
             // make it `10.0` to reduce a bit sensitiveness because SpikeFilter is disabled
             slow_trend_unsensitive_cause: 10.0,

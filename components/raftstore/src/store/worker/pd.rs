@@ -1061,7 +1061,7 @@ where
         grpc_service_manager: GrpcServiceManager,
     ) -> Runner<EK, ER, T> {
         let mut store_stat = StoreStat::default();
-        store_stat.set_cpu_quota(SysQuota::cpu_cores_quota(), cfg.inspect_cpu_quota_busy_thd);
+        store_stat.set_cpu_quota(SysQuota::cpu_cores_quota(), cfg.inspect_cpu_util_busy_thd);
         let store_heartbeat_interval = cfg.pd_store_heartbeat_tick_interval.0;
         let interval = store_heartbeat_interval / NUM_COLLECT_STORE_INFOS_PER_HEARTBEAT;
         let mut stats_monitor = StatsMonitor::new(
