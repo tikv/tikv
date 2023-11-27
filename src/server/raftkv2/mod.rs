@@ -202,9 +202,21 @@ impl<EK: KvEngine, ER: RaftEngine> tikv_kv::Engine for RaftKv2<EK, ER> {
         let mut cmd = RaftCmdRequest::default();
         cmd.set_header(header);
         cmd.set_requests(vec![req].into());
-        let f = self.router.snapshot(cmd);
+        let res: tikv_kv::Result<()> = (|| {
+            fail_point!("raftkv_async_snapshot_err", |_| {
+                Err(box_err!("injected error for async_snapshot"))
+            });
+            Ok(())
+        })();
+        let f = if res.is_err() {
+            None
+        } else {
+            Some(self.router.snapshot(cmd))
+        };
+
         async move {
-            let res = f.await;
+            res?;
+            let res = f.unwrap().await;
             match res {
                 Ok(snap) => {
                     let elapse = begin_instant.saturating_elapsed_secs();

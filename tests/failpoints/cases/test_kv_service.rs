@@ -9,14 +9,16 @@ use kvproto::{
 };
 use test_raftstore::{
     configure_for_lease_read, must_kv_commit, must_kv_have_locks, must_kv_prewrite,
-    must_kv_prewrite_with, must_new_cluster_and_kv_client, must_new_cluster_mul,
-    new_server_cluster, try_kv_prewrite_with, try_kv_prewrite_with_impl,
+    must_kv_prewrite_with, must_new_cluster_mul, new_server_cluster, try_kv_prewrite_with,
+    try_kv_prewrite_with_impl,
 };
+use test_raftstore_macro::test_case;
 use tikv_util::{config::ReadableDuration, HandyRwLock};
 
-#[test]
+#[test_case(test_raftstore::must_new_cluster_and_kv_client)]
+#[test_case(test_raftstore_v2::must_new_cluster_and_kv_client)]
 fn test_batch_get_memory_lock() {
-    let (_cluster, client, ctx) = must_new_cluster_and_kv_client();
+    let (_cluster, client, ctx) = new_cluster();
 
     let mut req = BatchGetRequest::default();
     req.set_context(ctx);
@@ -32,9 +34,10 @@ fn test_batch_get_memory_lock() {
     fail::remove("raftkv_async_snapshot_err");
 }
 
-#[test]
+#[test_case(test_raftstore::must_new_cluster_and_kv_client)]
+#[test_case(test_raftstore_v2::must_new_cluster_and_kv_client)]
 fn test_kv_scan_memory_lock() {
-    let (_cluster, client, ctx) = must_new_cluster_and_kv_client();
+    let (_cluster, client, ctx) = new_cluster();
 
     let mut req = ScanRequest::default();
     req.set_context(ctx);
@@ -50,9 +53,10 @@ fn test_kv_scan_memory_lock() {
     fail::remove("raftkv_async_snapshot_err");
 }
 
-#[test]
+#[test_case(test_raftstore::must_new_cluster_mul)]
+#[test_case(test_raftstore_v2::must_new_cluster_mul)]
 fn test_snapshot_not_block_grpc() {
-    let (cluster, leader, ctx) = must_new_cluster_mul(1);
+    let (cluster, leader, ctx) = new_cluster(1);
     let env = Arc::new(Environment::new(1));
     let channel = ChannelBuilder::new(env)
         .keepalive_time(Duration::from_millis(500))
@@ -77,6 +81,8 @@ fn test_snapshot_not_block_grpc() {
     fail::remove("after-snapshot");
 }
 
+// the result notify mechanism is different in raft-v2, so no need to add a
+// equivalent case for v2.
 #[test]
 fn test_undetermined_write_err() {
     let (cluster, leader, ctx) = must_new_cluster_mul(1);
@@ -109,6 +115,7 @@ fn test_undetermined_write_err() {
     // The previous panic hasn't been captured.
     assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(cluster))).is_err());
 }
+
 #[test]
 fn test_stale_read_on_local_leader() {
     let mut cluster = new_server_cluster(0, 1);

@@ -394,6 +394,9 @@
 ## Store heartbeat tick interval for reporting to PD.
 # pd-store-heartbeat-tick-interval = "10s"
 
+## Store min resolved ts tick interval for reporting to PD.
+# pd-report-min-resolved-ts-interval = "1s"
+
 ## The threshold of triggering Region split check.
 ## When Region size change exceeds this config, TiKV will check whether the Region should be split
 ## or not. To reduce the cost of scanning data in the checking process, you can set the value to
@@ -456,7 +459,7 @@
 ## It should be set between 1 and 100. Manual compaction is only triggered when the number of
 ## duplicated MVCC keys exceeds `region-compact-min-redundant-rows` and the percentage of duplicated MVCC keys
 ## exceeds `region-compact-redundant-rows-percent`.
-# region-compact-redundant-rows-percent = 100
+# region-compact-redundant-rows-percent = 20
 
 ## Interval to check whether to start a manual compaction for Lock Column Family.
 ## If written bytes reach `lock-cf-compact-bytes-threshold` for Lock Column Family, TiKV will
