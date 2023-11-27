@@ -894,8 +894,12 @@ impl DataKeyManager {
         Ok(encrypted_file)
     }
 
-    // See comments of `remove_dir` for more details when using this with a
-    // directory.
+    // Can be used with both file and directory. See comments of `remove_dir` for
+    // more details when using this with a directory.
+    //
+    // `physical_fname` is a hint when `fname` was renamed physically.
+    // Depending on the implementation, providing false negative or false
+    // positive value may result in leaking encryption keys.
     pub fn delete_file(&self, fname: &str, physical_fname: Option<&str>) -> IoResult<()> {
         fail_point!("key_manager_fails_before_delete_file", |_| IoResult::Err(
             io::ErrorKind::Other.into()
