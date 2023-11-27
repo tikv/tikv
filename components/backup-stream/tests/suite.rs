@@ -395,6 +395,7 @@ impl Suite {
         MetadataClient::new(self.meta_store.clone(), 0)
     }
 
+    #[allow(dead_code)]
     pub fn dump_slash_etc(&self) {
         self.meta_store.inner.blocking_lock().dump();
     }
