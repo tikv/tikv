@@ -117,10 +117,10 @@ pub use flow_control_factors::*;
 
 pub mod raw;
 
-pub fn get_env(
-    key_manager: Option<std::sync::Arc<::encryption::DataKeyManager>>,
+pub fn get_env<E: engine_traits::EncryptionKeyManager>(
+    key_manager: Option<std::sync::Arc<E>>,
     limiter: Option<std::sync::Arc<::file_system::IoRateLimiter>>,
 ) -> engine_traits::Result<std::sync::Arc<raw::Env>> {
     let env = encryption::get_env(None /* base_env */, key_manager)?;
-    file_system::get_env(Some(env), limiter)
+    file_system::get_env(env, limiter)
 }

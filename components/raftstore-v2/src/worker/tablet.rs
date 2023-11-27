@@ -235,7 +235,7 @@ impl<EK> Task<EK> {
 
 pub struct Runner<EK: KvEngine> {
     tablet_registry: TabletRegistry<EK>,
-    sst_importer: Arc<SstImporter>,
+    sst_importer: Arc<SstImporter<EK>>,
     snap_mgr: TabletSnapManager,
     logger: Logger,
 
@@ -252,7 +252,7 @@ pub struct Runner<EK: KvEngine> {
 impl<EK: KvEngine> Runner<EK> {
     pub fn new(
         tablet_registry: TabletRegistry<EK>,
-        sst_importer: Arc<SstImporter>,
+        sst_importer: Arc<SstImporter<EK>>,
         snap_mgr: TabletSnapManager,
         logger: Logger,
     ) -> Self {

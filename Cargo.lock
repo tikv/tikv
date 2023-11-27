@@ -6556,6 +6556,7 @@ version = "0.1.0"
 dependencies = [
  "backtrace",
  "collections",
+ "encryption",
  "engine_panic",
  "engine_rocks",
  "engine_test",

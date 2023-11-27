@@ -112,7 +112,7 @@ pub struct StoreContext<EK: KvEngine, ER: RaftEngine, T> {
     pub snap_mgr: TabletSnapManager,
     pub global_stat: GlobalStoreStat,
     pub store_stat: LocalStoreStat,
-    pub sst_importer: Arc<SstImporter>,
+    pub sst_importer: Arc<SstImporter<EK>>,
     pub key_manager: Option<Arc<DataKeyManager>>,
 
     /// Inspector for latency inspecting
@@ -366,7 +366,7 @@ struct StorePollerBuilder<EK: KvEngine, ER: RaftEngine, T> {
     shutdown: Arc<AtomicBool>,
     snap_mgr: TabletSnapManager,
     global_stat: GlobalStoreStat,
-    sst_importer: Arc<SstImporter>,
+    sst_importer: Arc<SstImporter<EK>>,
     key_manager: Option<Arc<DataKeyManager>>,
     node_start_time: Timespec, // monotonic_raw_now
 }
@@ -386,7 +386,7 @@ impl<EK: KvEngine, ER: RaftEngine, T> StorePollerBuilder<EK, ER, T> {
         shutdown: Arc<AtomicBool>,
         snap_mgr: TabletSnapManager,
         coprocessor_host: CoprocessorHost<EK>,
-        sst_importer: Arc<SstImporter>,
+        sst_importer: Arc<SstImporter<EK>>,
         key_manager: Option<Arc<DataKeyManager>>,
         node_start_time: Timespec, // monotonic_raw_now
     ) -> Self {
@@ -694,7 +694,7 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
         collector_reg_handle: CollectorRegHandle,
         background: Worker,
         pd_worker: LazyWorker<pd::Task>,
-        sst_importer: Arc<SstImporter>,
+        sst_importer: Arc<SstImporter<EK>>,
         key_manager: Option<Arc<DataKeyManager>>,
         grpc_service_mgr: GrpcServiceManager,
         resource_ctl: Option<Arc<ResourceController>>,
