@@ -10,6 +10,23 @@ abort-on-panic = true
 memory-usage-limit = "10GB"
 memory-usage-high-water= 0.65
 
+<<<<<<< HEAD
+=======
+[log]
+level = "fatal"
+format = "json"
+
+[log.file]
+filename = "foo"
+max-size = 1
+max-backups = 2
+max-days = 3
+
+[memory]
+enable-heap-profiling = false
+profiling-sample-per-bytes = "1MB"
+
+>>>>>>> 3b30d692c5 (cdc: limit pending scan tasks (#16048))
 [readpool.unified]
 min-thread-count = 5
 max-thread-count = 10
@@ -608,6 +625,7 @@ old-value-cache-size = 0
 hibernate-regions-compatible = false
 incremental-scan-threads = 3
 incremental-scan-concurrency = 4
+incremental-scan-concurrency-limit = 5
 incremental-scan-speed-limit = 7
 old-value-cache-memory-quota = "14MB"
 sink-memory-quota = "7MB"
