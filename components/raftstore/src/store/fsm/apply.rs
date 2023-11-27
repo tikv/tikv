@@ -7679,8 +7679,9 @@ mod tests {
 
     // When a peer is removed, it is necessary to update its apply state because
     // this peer may be simultaneously taking a snapshot. An outdated apply state
-    // will invalidate the coprocessor cache assumption and potentially lead to
-    // a violation of linearizability (returning stale cache).
+    // invalidates the coprocessor cache assumption (apply state must match data
+    // in the snapshot) and potentially lead to a violation of linearizability
+    // (returning stale cache).
     #[test]
     fn test_conf_change_remove_node_update_apply_state() {
         let (_path, engine) = create_tmp_engine("test-delegate");
