@@ -454,7 +454,7 @@ fn int_divide_decimal(ctx: &mut EvalContext, lhs: &Decimal, rhs: &Decimal) -> Re
         let result = result.as_i64();
         match result {
             Res::Ok(i) => Ok(Some(i)),
-            Res::Truncated(_) => Ok(Some(0)),
+            Res::Truncated(i) => Ok(Some(i)),
             _ => Err(Error::overflow("BIGINT", format!("({} / {})", lhs, rhs)).into()),
         }
     } else {
