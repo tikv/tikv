@@ -3,8 +3,12 @@
 use std::{error::Error, fmt, marker::PhantomData, sync::Arc};
 
 use engine_traits::KvEngine;
+<<<<<<< HEAD
 use kvproto::{import_sstpb::SstMeta, metapb::Region};
 use pd_client::PdClient;
+=======
+use kvproto::import_sstpb::SstMeta;
+>>>>>>> 88542955b6 (sst_importer: Use generic sst reader for importer (#16059))
 use sst_importer::SstImporter;
 use tikv_util::{error, worker::Runnable};
 
@@ -26,6 +30,7 @@ impl fmt::Display for Task {
     }
 }
 
+<<<<<<< HEAD
 pub struct Runner<EK, C, S>
 where
     EK: KvEngine,
@@ -57,6 +62,15 @@ where
             pd_client,
             _engine: PhantomData,
         }
+=======
+pub struct Runner<E: KvEngine> {
+    importer: Arc<SstImporter<E>>,
+}
+
+impl<E: KvEngine> Runner<E> {
+    pub fn new(importer: Arc<SstImporter<E>>) -> Self {
+        Runner { importer }
+>>>>>>> 88542955b6 (sst_importer: Use generic sst reader for importer (#16059))
     }
 
     /// Deletes SST files from the importer.
@@ -131,12 +145,16 @@ where
     }
 }
 
+<<<<<<< HEAD
 impl<EK, C, S> Runnable for Runner<EK, C, S>
 where
     EK: KvEngine,
     C: PdClient,
     S: StoreRouter<EK>,
 {
+=======
+impl<E: KvEngine> Runnable for Runner<E> {
+>>>>>>> 88542955b6 (sst_importer: Use generic sst reader for importer (#16059))
     type Task = Task;
 
     fn run(&mut self, task: Task) {

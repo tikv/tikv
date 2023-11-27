@@ -362,7 +362,7 @@ where
     tag: String,
     timer: Option<Instant>,
     host: CoprocessorHost<EK>,
-    importer: Arc<SstImporter>,
+    importer: Arc<SstImporter<EK>>,
     region_scheduler: Scheduler<RegionTask<EK::Snapshot>>,
     router: ApplyRouter<EK>,
     notifier: Box<dyn Notifier<EK>>,
@@ -423,7 +423,7 @@ where
     pub fn new(
         tag: String,
         host: CoprocessorHost<EK>,
-        importer: Arc<SstImporter>,
+        importer: Arc<SstImporter<EK>>,
         region_scheduler: Scheduler<RegionTask<EK::Snapshot>>,
         engine: EK,
         router: ApplyRouter<EK>,
@@ -3924,7 +3924,7 @@ pub struct Builder<EK: KvEngine> {
     tag: String,
     cfg: Arc<VersionTrack<Config>>,
     coprocessor_host: CoprocessorHost<EK>,
-    importer: Arc<SstImporter>,
+    importer: Arc<SstImporter<EK>>,
     region_scheduler: Scheduler<RegionTask<<EK as KvEngine>::Snapshot>>,
     engine: EK,
     sender: Box<dyn Notifier<EK>>,
@@ -4310,7 +4310,7 @@ mod tests {
         (path, engine)
     }
 
-    pub fn create_tmp_importer(path: &str) -> (TempDir, Arc<SstImporter>) {
+    pub fn create_tmp_importer(path: &str) -> (TempDir, Arc<SstImporter<KvTestEngine>>) {
         let dir = Builder::new().prefix(path).tempdir().unwrap();
         let importer = Arc::new(
             SstImporter::new(&ImportConfig::default(), dir.path(), None, ApiVersion::V1).unwrap(),

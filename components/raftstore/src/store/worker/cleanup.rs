@@ -36,7 +36,11 @@ where
     S: StoreRouter<E>,
 {
     compact: CompactRunner<E>,
+<<<<<<< HEAD
     cleanup_sst: CleanupSstRunner<E, C, S>,
+=======
+    cleanup_sst: CleanupSstRunner<E>,
+>>>>>>> 88542955b6 (sst_importer: Use generic sst reader for importer (#16059))
     gc_snapshot: GcSnapshotRunner<E, R>,
 }
 
@@ -49,7 +53,11 @@ where
 {
     pub fn new(
         compact: CompactRunner<E>,
+<<<<<<< HEAD
         cleanup_sst: CleanupSstRunner<E, C, S>,
+=======
+        cleanup_sst: CleanupSstRunner<E>,
+>>>>>>> 88542955b6 (sst_importer: Use generic sst reader for importer (#16059))
         gc_snapshot: GcSnapshotRunner<E, R>,
     ) -> Runner<E, R, C, S> {
         Runner {

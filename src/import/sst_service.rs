@@ -54,9 +54,14 @@ where
 {
     cfg: Config,
     engine: E,
+<<<<<<< HEAD
     router: Router,
     threads: ThreadPool,
     importer: Arc<SstImporter>,
+=======
+    threads: Arc<Runtime>,
+    importer: Arc<SstImporter<E::Local>>,
+>>>>>>> 88542955b6 (sst_importer: Use generic sst reader for importer (#16059))
     limiter: Limiter,
     task_slots: Arc<Mutex<HashSet<PathBuf>>>,
     raft_entry_max_size: ReadableSize,
@@ -77,8 +82,17 @@ where
         raft_entry_max_size: ReadableSize,
         router: Router,
         engine: E,
+<<<<<<< HEAD
         importer: Arc<SstImporter>,
     ) -> ImportSstService<E, Router> {
+=======
+        tablets: LocalTablets<E::Local>,
+        importer: Arc<SstImporter<E::Local>>,
+        store_meta: Option<Arc<Mutex<StoreMeta<E::Local>>>>,
+        resource_manager: Option<Arc<ResourceGroupManager>>,
+        region_info_accessor: Arc<RegionInfoAccessor>,
+    ) -> Self {
+>>>>>>> 88542955b6 (sst_importer: Use generic sst reader for importer (#16059))
         let props = tikv_util::thread_group::current_properties();
         let threads = ThreadPoolBuilder::new()
             .pool_size(cfg.num_threads)
@@ -91,7 +105,27 @@ where
             .before_stop(move |_| tikv_alloc::remove_thread_memory_accessor())
             .create()
             .unwrap();
+<<<<<<< HEAD
         importer.start_switch_mode_check(&threads, engine.clone());
+=======
+        if let LocalTablets::Singleton(tablet) = &tablets {
+            importer.start_switch_mode_check(threads.handle(), Some(tablet.clone()));
+        } else {
+            importer.start_switch_mode_check(threads.handle(), None);
+        }
+
+        let writer = raft_writer::ThrottledTlsEngineWriter::default();
+        let gc_handle = writer.clone();
+        threads.spawn(async move {
+            while gc_handle.try_gc() {
+                tokio::time::sleep(WRITER_GC_INTERVAL).await;
+            }
+        });
+
+        let cfg_mgr = ConfigManager::new(cfg);
+        threads.spawn(Self::tick(importer.clone(), cfg_mgr.clone()));
+
+>>>>>>> 88542955b6 (sst_importer: Use generic sst reader for importer (#16059))
         ImportSstService {
             cfg,
             engine,
@@ -101,6 +135,27 @@ where
             limiter: Limiter::new(f64::INFINITY),
             task_slots: Arc::new(Mutex::new(HashSet::default())),
             raft_entry_max_size,
+<<<<<<< HEAD
+=======
+            region_info_accessor,
+            writer,
+            store_meta,
+            resource_manager,
+            suspend_req_until: Arc::new(AtomicU64::new(0)),
+        }
+    }
+
+    pub fn get_config_manager(&self) -> ConfigManager {
+        self.cfg.clone()
+    }
+
+    async fn tick(importer: Arc<SstImporter<E::Local>>, cfg: ConfigManager) {
+        loop {
+            sleep(Duration::from_secs(10)).await;
+
+            importer.update_config_memory_use_ratio(&cfg);
+            importer.shrink_by_tick();
+>>>>>>> 88542955b6 (sst_importer: Use generic sst reader for importer (#16059))
         }
     }
 
@@ -240,6 +295,170 @@ where
             Ok(resp)
         }
     }
+<<<<<<< HEAD
+=======
+
+    async fn apply_imp(
+        mut req: ApplyRequest,
+        importer: Arc<SstImporter<E::Local>>,
+        writer: raft_writer::ThrottledTlsEngineWriter,
+        limiter: Limiter,
+        max_raft_size: usize,
+    ) -> std::result::Result<Option<Range>, ImportPbError> {
+        let mut range: Option<Range> = None;
+
+        let mut collector = RequestCollector::new(max_raft_size / 2);
+        let context = req.take_context();
+        let mut metas = req.take_metas();
+        let mut rules = req.take_rewrite_rules();
+        // For compatibility with old requests.
+        if req.has_meta() {
+            metas.push(req.take_meta());
+            rules.push(req.take_rewrite_rule());
+        }
+        let ext_storage = importer.wrap_kms(
+            importer
+                .external_storage_or_cache(req.get_storage_backend(), req.get_storage_cache_id())?,
+            false,
+        );
+
+        let mut inflight_futures = VecDeque::new();
+
+        let mut tasks = metas.iter().zip(rules.iter()).peekable();
+        while let Some((meta, rule)) = tasks.next() {
+            let buff = importer
+                .read_from_kv_file(
+                    meta,
+                    ext_storage.clone(),
+                    req.get_storage_backend(),
+                    &limiter,
+                )
+                .await?;
+            if let Some(mut r) = importer.do_apply_kv_file(
+                meta.get_start_key(),
+                meta.get_end_key(),
+                meta.get_start_ts(),
+                meta.get_restore_ts(),
+                buff,
+                rule,
+                |k, v| collector.accept_kv(meta.get_cf(), meta.get_is_delete(), k, v),
+            )? {
+                if let Some(range) = range.as_mut() {
+                    range.start = range.take_start().min(r.take_start());
+                    range.end = range.take_end().max(r.take_end());
+                } else {
+                    range = Some(r);
+                }
+            }
+
+            let is_last_task = tasks.peek().is_none();
+            for w in collector.drain_pending_writes(is_last_task) {
+                // Record the start of a task would greatly help us to inspect pending
+                // tasks.
+                APPLIER_EVENT.with_label_values(&["begin_req"]).inc();
+                // SAFETY: we have registered the thread local storage engine into the thread
+                // when creating them.
+                let task = unsafe {
+                    writer
+                        .write::<E>(w, context.clone())
+                        .map_err(transfer_error)
+                };
+                inflight_futures.push_back(
+                    tokio::spawn(task)
+                        .map_err(convert_join_error)
+                        .map(|x| x.and_then(identity)),
+                );
+                if inflight_futures.len() >= REQUEST_WRITE_CONCURRENCY {
+                    inflight_futures.pop_front().unwrap().await?;
+                }
+            }
+        }
+        assert!(collector.is_empty());
+        futures::future::try_join_all(inflight_futures).await?;
+
+        Ok(range)
+    }
+
+    /// Check whether we should suspend the current request.
+    fn check_suspend(&self) -> Result<()> {
+        let now = TimeStamp::physical_now();
+        let suspend_until = self.suspend_req_until.load(Ordering::SeqCst);
+        if now < suspend_until {
+            Err(Error::Suspended {
+                time_to_lease_expire: Duration::from_millis(suspend_until - now),
+            })
+        } else {
+            Ok(())
+        }
+    }
+
+    /// suspend requests for a period.
+    ///
+    /// # returns
+    ///
+    /// whether for now, the requests has already been suspended.
+    pub fn suspend_requests(&self, for_time: Duration) -> bool {
+        let now = TimeStamp::physical_now();
+        let last_suspend_until = self.suspend_req_until.load(Ordering::SeqCst);
+        let suspended = now < last_suspend_until;
+        let suspend_until = TimeStamp::physical_now() + for_time.as_millis() as u64;
+        self.suspend_req_until
+            .store(suspend_until, Ordering::SeqCst);
+        suspended
+    }
+
+    /// allow all requests to enter.
+    ///
+    /// # returns
+    ///
+    /// whether requests has already been previously suspended.
+    pub fn allow_requests(&self) -> bool {
+        let now = TimeStamp::physical_now();
+        let last_suspend_until = self.suspend_req_until.load(Ordering::SeqCst);
+        let suspended = now < last_suspend_until;
+        self.suspend_req_until.store(0, Ordering::SeqCst);
+        suspended
+    }
+}
+
+fn check_local_region_stale(
+    region_id: u64,
+    epoch: &RegionEpoch,
+    local_region_info: Option<RegionInfo>,
+) -> Result<()> {
+    match local_region_info {
+        Some(local_region_info) => {
+            let local_region_epoch = local_region_info.region.region_epoch.unwrap();
+
+            // when local region epoch is stale, client can retry write later
+            if is_epoch_stale(&local_region_epoch, epoch) {
+                return Err(Error::RequestTooNew(format!(
+                    "request region {} is ahead of local region, local epoch {:?}, request epoch {:?}, please retry write later",
+                    region_id, local_region_epoch, epoch
+                )));
+            }
+            // when local region epoch is ahead, client need to rescan region from PD to get
+            // latest region later
+            if is_epoch_stale(epoch, &local_region_epoch) {
+                return Err(Error::RequestTooOld(format!(
+                    "request region {} is staler than local region, local epoch {:?}, request epoch {:?}",
+                    region_id, local_region_epoch, epoch
+                )));
+            }
+
+            // not match means to rescan
+            Ok(())
+        }
+        None => {
+            // when region not found, we can't tell whether it's stale or ahead, so we just
+            // return the safest case
+            Err(Error::RequestTooOld(format!(
+                "region {} is not found",
+                region_id
+            )))
+        }
+    }
+>>>>>>> 88542955b6 (sst_importer: Use generic sst reader for importer (#16059))
 }
 
 #[macro_export]
@@ -557,6 +776,7 @@ where
                 .into_option()
                 .filter(|c| c.cipher_type != EncryptionMethod::Plaintext);
 
+<<<<<<< HEAD
             let res = importer.download::<E>(
                 req.get_sst(),
                 req.get_storage_backend(),
@@ -565,6 +785,35 @@ where
                 cipher,
                 limiter,
                 engine,
+=======
+            let tablet = match tablets.get(region_id) {
+                Some(tablet) => tablet,
+                None => {
+                    let error = sst_importer::Error::Engine(box_err!(
+                        "region {} not found, maybe it's not a replica of this store",
+                        region_id
+                    ));
+                    let mut resp = DownloadResponse::default();
+                    resp.set_error(error.into());
+                    return crate::send_rpc_response!(Ok(resp), sink, label, timer);
+                }
+            };
+
+            let res = with_resource_limiter(
+                importer.download_ext(
+                    req.get_sst(),
+                    req.get_storage_backend(),
+                    req.get_name(),
+                    req.get_rewrite_rule(),
+                    cipher,
+                    limiter,
+                    tablet.into_owned(),
+                    DownloadExt::default()
+                        .cache_key(req.get_storage_cache_id())
+                        .req_type(req.get_request_type()),
+                ),
+                resource_limiter,
+>>>>>>> 88542955b6 (sst_importer: Use generic sst reader for importer (#16059))
             );
             let mut resp = DownloadResponse::default();
             match res {

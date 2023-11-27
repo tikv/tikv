@@ -3,23 +3,31 @@
 use std::{path::PathBuf, rc::Rc, sync::Arc};
 
 use engine_traits::{
+<<<<<<< HEAD
     EncryptionKeyManager, Error, ExternalSstFileInfo, IterOptions, Iterable, Iterator, Result,
     SeekKey, SstCompressionType, SstExt, SstMetaInfo, SstReader, SstWriter, SstWriterBuilder,
     CF_DEFAULT,
+=======
+    Error, ExternalSstFileInfo, IterOptions, Iterator, RefIterable, Result, SstCompressionType,
+    SstExt, SstReader, SstWriter, SstWriterBuilder, CF_DEFAULT,
+>>>>>>> 88542955b6 (sst_importer: Use generic sst reader for importer (#16059))
 };
 use fail::fail_point;
-use kvproto::import_sstpb::SstMeta;
+use file_system::get_io_rate_limiter;
 use rocksdb::{
     rocksdb::supported_compression, ColumnFamilyOptions, DBCompressionType, DBIterator, Env,
     EnvOptions, ExternalSstFileInfo as RawExternalSstFileInfo, SequentialFile, SstFileReader,
     SstFileWriter, DB,
 };
-use tikv_util::box_err;
 
+<<<<<<< HEAD
 use crate::{
     encryption::WrappedEncryptionKeyManager, engine::RocksEngine, options::RocksReadOptions,
     RocksSeekKey,
 };
+=======
+use crate::{engine::RocksEngine, get_env, options::RocksReadOptions, r2e};
+>>>>>>> 88542955b6 (sst_importer: Use generic sst reader for importer (#16059))
 
 impl SstExt for RocksEngine {
     type SstReader = RocksSstReader;
@@ -35,19 +43,6 @@ pub struct RocksSstReader {
 }
 
 impl RocksSstReader {
-    pub fn sst_meta_info(&self, sst: SstMeta) -> SstMetaInfo {
-        let mut meta = SstMetaInfo {
-            total_kvs: 0,
-            total_bytes: 0,
-            meta: sst,
-        };
-        self.inner.read_table_properties(|p| {
-            meta.total_kvs = p.num_entries();
-            meta.total_bytes = p.raw_key_size() + p.raw_value_size();
-        });
-        meta
-    }
-
     pub fn open_with_env(path: &str, env: Option<Arc<Env>>) -> Result<Self> {
         let mut cf_options = ColumnFamilyOptions::new();
         if let Some(env) = env {
@@ -69,20 +64,31 @@ impl RocksSstReader {
 }
 
 impl SstReader for RocksSstReader {
-    fn open(path: &str) -> Result<Self> {
-        Self::open_with_env(path, None)
+    fn open<E: engine_traits::EncryptionKeyManager>(
+        path: &str,
+        mgr: Option<Arc<E>>,
+    ) -> Result<Self> {
+        let env = get_env(mgr, get_io_rate_limiter())?;
+        Self::open_with_env(path, Some(env))
     }
-    fn open_encrypted<E: EncryptionKeyManager>(path: &str, mgr: Arc<E>) -> Result<Self> {
-        let env = Env::new_key_managed_encrypted_env(
-            Arc::default(),
-            WrappedEncryptionKeyManager::new(mgr),
-        )
-        .map_err(|err| Error::Other(box_err!("failed to open encrypted env: {}", err)))?;
-        Self::open_with_env(path, Some(Arc::new(env)))
-    }
+
     fn verify_checksum(&self) -> Result<()> {
+<<<<<<< HEAD
         self.inner.verify_checksum()?;
         Ok(())
+=======
+        self.inner.verify_checksum().map_err(r2e)
+    }
+
+    fn kv_count_and_size(&self) -> (u64, u64) {
+        let mut count = 0;
+        let mut bytes = 0;
+        self.inner.read_table_properties(|p| {
+            count = p.num_entries();
+            bytes = p.raw_key_size() + p.raw_value_size();
+        });
+        (count, bytes)
+>>>>>>> 88542955b6 (sst_importer: Use generic sst reader for importer (#16059))
     }
     fn iter(&self) -> Self::Iterator {
         RocksSstIterator(SstFileReader::iter_rc(self.inner.clone()))

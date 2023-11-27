@@ -454,7 +454,7 @@ where
     pub region_scheduler: Scheduler<RegionTask<EK::Snapshot>>,
     pub apply_router: ApplyRouter<EK>,
     pub router: RaftRouter<EK, ER>,
-    pub importer: Arc<SstImporter>,
+    pub importer: Arc<SstImporter<EK>>,
     pub store_meta: Arc<Mutex<StoreMeta>>,
     pub feature_gate: FeatureGate,
     /// region_id -> (peer_id, is_splitting)
@@ -1058,7 +1058,7 @@ pub struct RaftPollerBuilder<EK: KvEngine, ER: RaftEngine, T> {
     pub region_scheduler: Scheduler<RegionTask<EK::Snapshot>>,
     apply_router: ApplyRouter<EK>,
     pub router: RaftRouter<EK, ER>,
-    pub importer: Arc<SstImporter>,
+    pub importer: Arc<SstImporter<EK>>,
     pub store_meta: Arc<Mutex<StoreMeta>>,
     pub pending_create_peers: Arc<Mutex<HashMap<u64, (u64, bool)>>>,
     snap_mgr: SnapManager,
@@ -1418,8 +1418,13 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         mgr: SnapManager,
         pd_worker: LazyWorker<PdTask<EK, ER>>,
         store_meta: Arc<Mutex<StoreMeta>>,
+<<<<<<< HEAD
         mut coprocessor_host: CoprocessorHost<EK>,
         importer: Arc<SstImporter>,
+=======
+        coprocessor_host: CoprocessorHost<EK>,
+        importer: Arc<SstImporter<EK>>,
+>>>>>>> 88542955b6 (sst_importer: Use generic sst reader for importer (#16059))
         split_check_scheduler: Scheduler<SplitCheckTask>,
         background_worker: Worker,
         auto_split_controller: AutoSplitController,

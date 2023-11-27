@@ -20,12 +20,19 @@ pub trait SstExt: Sized {
 }
 
 /// SstReader is used to read an SST file.
+<<<<<<< HEAD
 pub trait SstReader: Iterable + Sized {
     fn open(path: &str) -> Result<Self>;
     fn open_encrypted<E: EncryptionKeyManager>(path: &str, mgr: Arc<E>) -> Result<Self>;
     fn verify_checksum(&self) -> Result<()>;
     // FIXME: Shouldn't this me a method on Iterable?
     fn iter(&self) -> Self::Iterator;
+=======
+pub trait SstReader: RefIterable + Sized + Send {
+    fn open<E: EncryptionKeyManager>(path: &str, mgr: Option<Arc<E>>) -> Result<Self>;
+    fn verify_checksum(&self) -> Result<()>;
+    fn kv_count_and_size(&self) -> (u64, u64);
+>>>>>>> 88542955b6 (sst_importer: Use generic sst reader for importer (#16059))
 }
 
 /// SstWriter is used to create sst files that can be added to database later.

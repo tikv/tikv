@@ -26,10 +26,20 @@ test-engines-panic = [
 
 [dependencies]
 backtrace = "0.3"
+<<<<<<< HEAD
 engine_panic = { path = "../engine_panic", default-features = false }
 engine_rocks = { path = "../engine_rocks", default-features = false }
 engine_traits = { path = "../engine_traits", default-features = false }
 error_code = { path = "../error_code", default-features = false }
+=======
+collections = { workspace = true }
+encryption = { workspace = true }
+engine_panic = { workspace = true }
+engine_rocks = { workspace = true }
+engine_test = { workspace = true }
+engine_traits = { workspace = true }
+error_code = { workspace = true }
+>>>>>>> 88542955b6 (sst_importer: Use generic sst reader for importer (#16059))
 fail = "0.5"
 file_system = { path = "../file_system" }
 futures = { version = "0.3", features = ["thread-pool", "compat"] }

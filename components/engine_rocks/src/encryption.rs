@@ -2,7 +2,6 @@
 
 use std::{io::Result, sync::Arc};
 
-use encryption::{self, DataKeyManager};
 use engine_traits::{EncryptionKeyManager, EncryptionMethod, FileEncryptionInfo};
 use rocksdb::{
     DBEncryptionMethod, EncryptionKeyManager as DBEncryptionKeyManager,
@@ -12,8 +11,9 @@ use rocksdb::{
 use crate::raw::Env;
 
 // Use engine::Env directly since Env is not abstracted.
-pub(crate) fn get_env(
+pub(crate) fn get_env<E: engine_traits::EncryptionKeyManager>(
     base_env: Option<Arc<Env>>,
+<<<<<<< HEAD
     key_manager: Option<Arc<DataKeyManager>>,
 ) -> std::result::Result<Arc<Env>, String> {
     let base_env = base_env.unwrap_or_else(|| Arc::new(Env::default()));
@@ -22,6 +22,16 @@ pub(crate) fn get_env(
             base_env,
             WrappedEncryptionKeyManager { manager },
         )?))
+=======
+    key_manager: Option<Arc<E>>,
+) -> engine_traits::Result<Option<Arc<Env>>> {
+    if let Some(manager) = key_manager {
+        let base_env = base_env.unwrap_or_else(|| Arc::new(Env::default()));
+        Ok(Some(Arc::new(
+            Env::new_key_managed_encrypted_env(base_env, WrappedEncryptionKeyManager { manager })
+                .map_err(r2e)?,
+        )))
+>>>>>>> 88542955b6 (sst_importer: Use generic sst reader for importer (#16059))
     } else {
         Ok(base_env)
     }

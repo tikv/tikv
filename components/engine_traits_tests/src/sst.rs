@@ -4,6 +4,7 @@
 
 use std::fs;
 
+use encryption::DataKeyManager;
 use engine_test::kv::KvTestEngine;
 use engine_traits::{
     Error, ExternalSstFileInfo, Iterator, Result, SeekKey, SstExt, SstReader, SstWriter,
@@ -48,8 +49,13 @@ fn basic() -> Result<()> {
     sst_writer.put(b"k1", b"v1")?;
     sst_writer.finish()?;
 
+<<<<<<< HEAD
     let sst_reader = <KvTestEngine as SstExt>::SstReader::open(&sst_path)?;
     let mut iter = sst_reader.iter();
+=======
+    let sst_reader = <KvTestEngine as SstExt>::SstReader::open::<DataKeyManager>(&sst_path, None)?;
+    let mut iter = sst_reader.iter(IterOptions::default()).unwrap();
+>>>>>>> 88542955b6 (sst_importer: Use generic sst reader for importer (#16059))
 
     iter.seek(SeekKey::Start)?;
     let key = iter.key();
@@ -77,8 +83,13 @@ fn forward() -> Result<()> {
     sst_writer.put(b"k2", b"v2")?;
     sst_writer.finish()?;
 
+<<<<<<< HEAD
     let sst_reader = <KvTestEngine as SstExt>::SstReader::open(&sst_path)?;
     let mut iter = sst_reader.iter();
+=======
+    let sst_reader = <KvTestEngine as SstExt>::SstReader::open::<DataKeyManager>(&sst_path, None)?;
+    let mut iter = sst_reader.iter(IterOptions::default()).unwrap();
+>>>>>>> 88542955b6 (sst_importer: Use generic sst reader for importer (#16059))
 
     iter.seek(SeekKey::Start)?;
 
@@ -114,8 +125,13 @@ fn reverse() -> Result<()> {
     sst_writer.put(b"k2", b"v2")?;
     sst_writer.finish()?;
 
+<<<<<<< HEAD
     let sst_reader = <KvTestEngine as SstExt>::SstReader::open(&sst_path)?;
     let mut iter = sst_reader.iter();
+=======
+    let sst_reader = <KvTestEngine as SstExt>::SstReader::open::<DataKeyManager>(&sst_path, None)?;
+    let mut iter = sst_reader.iter(IterOptions::default()).unwrap();
+>>>>>>> 88542955b6 (sst_importer: Use generic sst reader for importer (#16059))
 
     iter.seek(SeekKey::End)?;
 
@@ -152,8 +168,13 @@ fn delete() -> Result<()> {
     sst_writer.delete(b"k1")?;
     sst_writer.finish()?;
 
+<<<<<<< HEAD
     let sst_reader = <KvTestEngine as SstExt>::SstReader::open(&sst_path)?;
     let mut iter = sst_reader.iter();
+=======
+    let sst_reader = <KvTestEngine as SstExt>::SstReader::open::<DataKeyManager>(&sst_path, None)?;
+    let mut iter = sst_reader.iter(IterOptions::default()).unwrap();
+>>>>>>> 88542955b6 (sst_importer: Use generic sst reader for importer (#16059))
 
     iter.seek(SeekKey::Start)?;
 
@@ -212,8 +233,13 @@ fn same_key() -> Result<()> {
 
     sst_writer.finish()?;
 
+<<<<<<< HEAD
     let sst_reader = <KvTestEngine as SstExt>::SstReader::open(&sst_path)?;
     let mut iter = sst_reader.iter();
+=======
+    let sst_reader = <KvTestEngine as SstExt>::SstReader::open::<DataKeyManager>(&sst_path, None)?;
+    let mut iter = sst_reader.iter(IterOptions::default()).unwrap();
+>>>>>>> 88542955b6 (sst_importer: Use generic sst reader for importer (#16059))
 
     iter.seek(SeekKey::Start)?;
     let key = iter.key();
@@ -254,8 +280,13 @@ fn reverse_key() -> Result<()> {
 
     sst_writer.finish()?;
 
+<<<<<<< HEAD
     let sst_reader = <KvTestEngine as SstExt>::SstReader::open(&sst_path)?;
     let mut iter = sst_reader.iter();
+=======
+    let sst_reader = <KvTestEngine as SstExt>::SstReader::open::<DataKeyManager>(&sst_path, None)?;
+    let mut iter = sst_reader.iter(IterOptions::default()).unwrap();
+>>>>>>> 88542955b6 (sst_importer: Use generic sst reader for importer (#16059))
 
     iter.seek(SeekKey::Start)?;
     let key = iter.key();

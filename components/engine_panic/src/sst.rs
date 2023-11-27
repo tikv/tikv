@@ -18,19 +18,28 @@ impl SstExt for PanicEngine {
 pub struct PanicSstReader;
 
 impl SstReader for PanicSstReader {
-    fn open(path: &str) -> Result<Self> {
-        panic!()
-    }
-    fn open_encrypted<E: engine_traits::EncryptionKeyManager>(
+    fn open<E: engine_traits::EncryptionKeyManager>(
         path: &str,
-        mgr: Arc<E>,
+        mgr: Option<Arc<E>>,
     ) -> Result<Self> {
         panic!()
     }
     fn verify_checksum(&self) -> Result<()> {
         panic!()
     }
+<<<<<<< HEAD
     fn iter(&self) -> Self::Iterator {
+=======
+    fn kv_count_and_size(&self) -> (u64, u64) {
+        panic!()
+    }
+}
+
+impl RefIterable for PanicSstReader {
+    type Iterator<'a> = PanicSstReaderIterator<'a>;
+
+    fn iter(&self, opts: IterOptions) -> Result<Self::Iterator<'_>> {
+>>>>>>> 88542955b6 (sst_importer: Use generic sst reader for importer (#16059))
         panic!()
     }
 }

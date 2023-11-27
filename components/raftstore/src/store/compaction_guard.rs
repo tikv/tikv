@@ -197,6 +197,11 @@ impl<P: RegionInfoProvider> SstPartitioner for CompactionGuardGenerator<P> {
 mod tests {
     use std::{str, sync::Arc};
 
+<<<<<<< HEAD
+=======
+    use collections::HashMap;
+    use encryption::DataKeyManager;
+>>>>>>> 88542955b6 (sst_importer: Use generic sst reader for importer (#16059))
     use engine_rocks::{
         raw::{BlockBasedOptions, ColumnFamilyOptions, DBCompressionType, DBOptions},
         raw_util::{new_engine_opt, CFOptions},
@@ -403,8 +408,14 @@ mod tests {
     }
 
     fn collect_keys(path: &str) -> Vec<Vec<u8>> {
+<<<<<<< HEAD
         let mut sst_reader = RocksSstReader::open(path).unwrap().iter();
         let mut valid = sst_reader.seek(SeekKey::Start).unwrap();
+=======
+        let reader = RocksSstReader::open::<DataKeyManager>(path, None).unwrap();
+        let mut sst_reader = reader.iter(IterOptions::default()).unwrap();
+        let mut valid = sst_reader.seek_to_first().unwrap();
+>>>>>>> 88542955b6 (sst_importer: Use generic sst reader for importer (#16059))
         let mut ret = vec![];
         while valid {
             ret.push(sst_reader.key().to_owned());
