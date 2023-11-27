@@ -7696,7 +7696,7 @@ mod tests {
         reg.region.set_end_key(b"k5".to_vec());
         reg.region.mut_region_epoch().set_version(3);
         let peers = vec![new_peer(2, 3), new_peer(4, 5), new_learner_peer(6, 7)];
-        reg.region.set_peers(peers.clone().into());
+        reg.region.set_peers(peers.into());
         let (tx, apply_res_rx) = mpsc::channel();
         let sender = Box::new(TestNotifier { tx });
         let coprocessor_host = CoprocessorHost::<KvTestEngine>::default();
@@ -7736,7 +7736,7 @@ mod tests {
                 1,
                 1,
                 vec![put_entry],
-                vec![cb(index_id, 1, capture_tx.clone())],
+                vec![cb(index_id, 1, capture_tx)],
             )),
         );
         let resp = capture_rx.recv_timeout(Duration::from_secs(3)).unwrap();
@@ -7770,7 +7770,7 @@ mod tests {
                 1,
                 1,
                 vec![conf_change],
-                vec![cb_conf_change(index_id, 1, capture_tx.clone())],
+                vec![cb_conf_change(index_id, 1, capture_tx)],
             )),
         );
         let resp = capture_rx.recv_timeout(Duration::from_secs(3)).unwrap();
