@@ -68,7 +68,7 @@ use crate::{
             AutoSplitController, ReadStats, SplitConfigChange, WriteStats,
         },
         Callback, CasualMessage, Config, PeerMsg, RaftCmdExtraOpts, RaftCommand, RaftRouter,
-        RegionReadProgressRegistry, SnapManager, StoreInfo, StoreMsg, TxnExt,
+        SnapManager, StoreInfo, StoreMsg, TxnExt,
     },
 };
 
@@ -483,16 +483,6 @@ fn default_collect_tick_interval() -> Duration {
     DEFAULT_COLLECT_TICK_INTERVAL
 }
 
-fn config(interval: Duration) -> Duration {
-    fail_point!("mock_min_resolved_ts_interval", |_| {
-        Duration::from_millis(50)
-    });
-    fail_point!("mock_min_resolved_ts_interval_disable", |_| {
-        Duration::from_millis(0)
-    });
-    interval
-}
-
 #[inline]
 fn convert_record_pairs(m: HashMap<String, u64>) -> RecordPairVec {
     m.into_iter()
@@ -595,7 +585,6 @@ where
     collect_store_infos_interval: Duration,
     load_base_split_check_interval: Duration,
     collect_tick_interval: Duration,
-    report_min_resolved_ts_interval: Duration,
     inspect_latency_interval: Duration,
 }
 
@@ -603,12 +592,7 @@ impl<T> StatsMonitor<T>
 where
     T: StoreStatsReporter,
 {
-    pub fn new(
-        interval: Duration,
-        report_min_resolved_ts_interval: Duration,
-        inspect_latency_interval: Duration,
-        reporter: T,
-    ) -> Self {
+    pub fn new(interval: Duration, inspect_latency_interval: Duration, reporter: T) -> Self {
         StatsMonitor {
             reporter,
             handle: None,
@@ -620,7 +604,6 @@ where
                 DEFAULT_LOAD_BASE_SPLIT_CHECK_INTERVAL,
                 interval,
             ),
-            report_min_resolved_ts_interval: config(report_min_resolved_ts_interval),
             // Use `inspect_latency_interval` as the minimal limitation for collecting tick.
             collect_tick_interval: cmp::min(
                 inspect_latency_interval,
@@ -635,9 +618,7 @@ where
     pub fn start(
         &mut self,
         mut auto_split_controller: AutoSplitController,
-        region_read_progress: RegionReadProgressRegistry,
         collector_reg_handle: CollectorRegHandle,
-        store_id: u64,
     ) -> Result<(), io::Error> {
         if self.collect_tick_interval
             < cmp::min(
@@ -657,9 +638,6 @@ where
             .div_duration_f64(tick_interval) as u64;
         let load_base_split_check_interval = self
             .load_base_split_check_interval
-            .div_duration_f64(tick_interval) as u64;
-        let report_min_resolved_ts_interval = self
-            .report_min_resolved_ts_interval
             .div_duration_f64(tick_interval) as u64;
         let update_latency_stats_interval = self
             .inspect_latency_interval
@@ -717,12 +695,6 @@ where
                             &reporter,
                             &collector_reg_handle,
                             &mut region_cpu_records_collector,
-                        );
-                    }
-                    if is_enable_tick(timer_cnt, report_min_resolved_ts_interval) {
-                        reporter.report_min_resolved_ts(
-                            store_id,
-                            region_read_progress.get_min_resolved_ts(),
                         );
                     }
                     if is_enable_tick(timer_cnt, update_latency_stats_interval) {
@@ -1083,7 +1055,6 @@ where
         snap_mgr: SnapManager,
         remote: Remote<yatp::task::future::TaskCell>,
         collector_reg_handle: CollectorRegHandle,
-        region_read_progress: RegionReadProgressRegistry,
         health_service: Option<HealthService>,
         coprocessor_host: CoprocessorHost<EK>,
         causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
@@ -1095,16 +1066,10 @@ where
         let interval = store_heartbeat_interval / NUM_COLLECT_STORE_INFOS_PER_HEARTBEAT;
         let mut stats_monitor = StatsMonitor::new(
             interval,
-            cfg.report_min_resolved_ts_interval.0,
             cfg.inspect_interval.0,
             WrappedScheduler(scheduler.clone()),
         );
-        if let Err(e) = stats_monitor.start(
-            auto_split_controller,
-            region_read_progress,
-            collector_reg_handle,
-            store_id,
-        ) {
+        if let Err(e) = stats_monitor.start(auto_split_controller, collector_reg_handle) {
             error!("failed to start stats collector, error = {:?}", e);
         }
 
@@ -2728,8 +2693,6 @@ mod tests {
         use engine_test::{kv::KvTestEngine, raft::RaftTestEngine};
         use tikv_util::worker::LazyWorker;
 
-        use crate::store::fsm::StoreMeta;
-
         struct RunnerTest {
             store_stat: Arc<Mutex<StoreStat>>,
             stats_monitor: StatsMonitor<WrappedScheduler<KvTestEngine, RaftTestEngine>>,
@@ -2743,17 +2706,12 @@ mod tests {
             ) -> RunnerTest {
                 let mut stats_monitor = StatsMonitor::new(
                     Duration::from_secs(interval),
-                    Duration::from_secs(0),
                     Duration::from_secs(interval),
                     WrappedScheduler(scheduler),
                 );
-                let store_meta = Arc::new(Mutex::new(StoreMeta::new(0)));
-                let region_read_progress = store_meta.lock().unwrap().region_read_progress.clone();
                 if let Err(e) = stats_monitor.start(
                     AutoSplitController::default(),
-                    region_read_progress,
                     CollectorRegHandle::new_for_test(),
-                    1,
                 ) {
                     error!("failed to start stats collector, error = {:?}", e);
                 }

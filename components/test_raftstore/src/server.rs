@@ -147,7 +147,7 @@ pub struct ServerCluster {
     addrs: AddressMap,
     pub storages: HashMap<u64, SimulateEngine>,
     pub region_info_accessors: HashMap<u64, RegionInfoAccessor>,
-    pub importers: HashMap<u64, Arc<SstImporter>>,
+    pub importers: HashMap<u64, Arc<SstImporter<RocksEngine>>>,
     pub pending_services: HashMap<u64, PendingServices>,
     pub coprocessor_hooks: HashMap<u64, CopHooks>,
     pub health_services: HashMap<u64, HealthService>,

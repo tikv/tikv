@@ -2,7 +2,6 @@
 
 use std::{io::Result, sync::Arc};
 
-use encryption::{self, DataKeyManager};
 use engine_traits::{EncryptionKeyManager, EncryptionMethod, FileEncryptionInfo};
 use rocksdb::{
     DBEncryptionMethod, EncryptionKeyManager as DBEncryptionKeyManager,
@@ -12,16 +11,16 @@ use rocksdb::{
 use crate::{r2e, raw::Env};
 
 // Use engine::Env directly since Env is not abstracted.
-pub(crate) fn get_env(
+pub(crate) fn get_env<E: engine_traits::EncryptionKeyManager>(
     base_env: Option<Arc<Env>>,
-    key_manager: Option<Arc<DataKeyManager>>,
-) -> engine_traits::Result<Arc<Env>> {
-    let base_env = base_env.unwrap_or_else(|| Arc::new(Env::default()));
+    key_manager: Option<Arc<E>>,
+) -> engine_traits::Result<Option<Arc<Env>>> {
     if let Some(manager) = key_manager {
-        Ok(Arc::new(
+        let base_env = base_env.unwrap_or_else(|| Arc::new(Env::default()));
+        Ok(Some(Arc::new(
             Env::new_key_managed_encrypted_env(base_env, WrappedEncryptionKeyManager { manager })
                 .map_err(r2e)?,
-        ))
+        )))
     } else {
         Ok(base_env)
     }

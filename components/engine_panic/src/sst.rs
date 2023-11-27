@@ -18,16 +18,16 @@ impl SstExt for PanicEngine {
 pub struct PanicSstReader;
 
 impl SstReader for PanicSstReader {
-    fn open(path: &str) -> Result<Self> {
-        panic!()
-    }
-    fn open_encrypted<E: engine_traits::EncryptionKeyManager>(
+    fn open<E: engine_traits::EncryptionKeyManager>(
         path: &str,
-        mgr: Arc<E>,
+        mgr: Option<Arc<E>>,
     ) -> Result<Self> {
         panic!()
     }
     fn verify_checksum(&self) -> Result<()> {
+        panic!()
+    }
+    fn kv_count_and_size(&self) -> (u64, u64) {
         panic!()
     }
 }

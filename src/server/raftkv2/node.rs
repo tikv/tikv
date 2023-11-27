@@ -113,7 +113,7 @@ where
         pd_worker: LazyWorker<PdTask>,
         store_cfg: Arc<VersionTrack<raftstore_v2::Config>>,
         state: &Mutex<GlobalReplicationState>,
-        sst_importer: Arc<SstImporter>,
+        sst_importer: Arc<SstImporter<EK>>,
         key_manager: Option<Arc<DataKeyManager>>,
         grpc_service_mgr: GrpcServiceManager,
     ) -> Result<()>
@@ -218,7 +218,7 @@ where
         background: Worker,
         pd_worker: LazyWorker<PdTask>,
         store_cfg: Arc<VersionTrack<raftstore_v2::Config>>,
-        sst_importer: Arc<SstImporter>,
+        sst_importer: Arc<SstImporter<EK>>,
         key_manager: Option<Arc<DataKeyManager>>,
         grpc_service_mgr: GrpcServiceManager,
     ) -> Result<()>
