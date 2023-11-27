@@ -8,12 +8,10 @@ use std::{
     usize,
 };
 
-use encryption::{
-    from_engine_encryption_method, DataKeyManager, DecrypterReader, EncrypterWriter, Iv,
-};
+use encryption::{DataKeyManager, DecrypterReader, EncrypterWriter, Iv};
 use engine_traits::{
-    CfName, EncryptionKeyManager, Error as EngineError, Iterable, KvEngine, Mutable,
-    SstCompressionType, SstWriter, SstWriterBuilder, WriteBatch,
+    CfName, Error as EngineError, Iterable, KvEngine, Mutable, SstCompressionType, SstWriter,
+    SstWriterBuilder, WriteBatch,
 };
 use kvproto::encryptionpb::EncryptionMethod;
 use tikv_util::{
@@ -60,7 +58,7 @@ where
 
     if let Some(key_mgr) = key_mgr {
         let enc_info = box_try!(key_mgr.new_file(path));
-        let mthd = from_engine_encryption_method(enc_info.method);
+        let mthd = enc_info.method;
         if mthd != EncryptionMethod::Plaintext {
             let writer = box_try!(EncrypterWriter::new(
                 file.take().unwrap(),
@@ -287,7 +285,7 @@ pub fn get_decrypter_reader(
     encryption_key_manager: &DataKeyManager,
 ) -> Result<Box<dyn Read + Send>, Error> {
     let enc_info = box_try!(encryption_key_manager.get_file(file));
-    let mthd = from_engine_encryption_method(enc_info.method);
+    let mthd = enc_info.method;
     debug!(
         "get_decrypter_reader gets enc_info for {:?}, method: {:?}",
         file, mthd

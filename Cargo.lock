@@ -1465,7 +1465,6 @@ dependencies = [
  "crc32fast",
  "crossbeam",
  "derive_more",
- "engine_traits",
  "error_code",
  "fail",
  "file_system",
@@ -1520,6 +1519,7 @@ dependencies = [
 name = "engine_panic"
 version = "0.0.1"
 dependencies = [
+ "encryption",
  "engine_traits",
  "kvproto",
  "raft",
@@ -1612,6 +1612,7 @@ version = "0.0.1"
 dependencies = [
  "case_macros",
  "collections",
+ "encryption",
  "error_code",
  "fail",
  "file_system",
