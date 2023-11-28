@@ -1652,20 +1652,6 @@ impl RaftstoreDuration {
             duration
         }
     }
-
-    #[inline]
-    /// Returns the delayed duration on Network I/O.
-    ///
-    /// Normally, it can be reflected by the duraiton on
-    /// `store_commit_duraiton`.
-    pub fn delays_on_net_io(&self) -> std::time::Duration {
-        // The `store_commit_duration` serves as an indicator for latency
-        // during the duration of transferring Raft logs to peers and appending
-        // logs. In most scenarios, instances of latency fluctuations in the
-        // network are reflected by this duration. Hence, it is selected as a
-        // representative of network latency.
-        self.store_commit_duration.unwrap_or_default()
-    }
 }
 
 /// Used to inspect the latency of all stages of raftstore.
