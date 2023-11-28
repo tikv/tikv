@@ -2151,7 +2151,7 @@
           "bars": false,
           "cacheTimeout": null,
           "datasource": "${DS_TEST-CLUSTER}",
-          "description": "TiKV uptime since the last restart",
+          "description": null,
           "editable": true,
           "error": false,
           "fieldConfig": {
@@ -4235,7 +4235,7 @@
           "xBucketNumber": null,
           "xBucketSize": null,
           "yAxis": {
-            "decimals": null,
+            "decimals": 1,
             "format": "bytes",
             "label": null,
             "logBase": 1,
@@ -4540,7 +4540,7 @@
           "xBucketNumber": null,
           "xBucketSize": null,
           "yAxis": {
-            "decimals": null,
+            "decimals": 1,
             "format": "bytes",
             "label": null,
             "logBase": 1,
@@ -4777,7 +4777,7 @@
           "xBucketNumber": null,
           "xBucketSize": null,
           "yAxis": {
-            "decimals": null,
+            "decimals": 1,
             "format": "none",
             "label": null,
             "logBase": 1,
@@ -15303,7 +15303,7 @@
           "xBucketNumber": null,
           "xBucketSize": null,
           "yAxis": {
-            "decimals": null,
+            "decimals": 1,
             "format": "s",
             "label": null,
             "logBase": 1,
@@ -15608,7 +15608,7 @@
           "xBucketNumber": null,
           "xBucketSize": null,
           "yAxis": {
-            "decimals": null,
+            "decimals": 1,
             "format": "s",
             "label": null,
             "logBase": 1,
@@ -15913,7 +15913,7 @@
           "xBucketNumber": null,
           "xBucketSize": null,
           "yAxis": {
-            "decimals": null,
+            "decimals": 1,
             "format": "s",
             "label": null,
             "logBase": 1,
@@ -16218,7 +16218,7 @@
           "xBucketNumber": null,
           "xBucketSize": null,
           "yAxis": {
-            "decimals": null,
+            "decimals": 1,
             "format": "s",
             "label": null,
             "logBase": 1,
@@ -16523,7 +16523,7 @@
           "xBucketNumber": null,
           "xBucketSize": null,
           "yAxis": {
-            "decimals": null,
+            "decimals": 1,
             "format": "s",
             "label": null,
             "logBase": 1,
@@ -17683,7 +17683,7 @@
           "xBucketNumber": null,
           "xBucketSize": null,
           "yAxis": {
-            "decimals": null,
+            "decimals": 1,
             "format": "s",
             "label": null,
             "logBase": 1,
@@ -17988,7 +17988,7 @@
           "xBucketNumber": null,
           "xBucketSize": null,
           "yAxis": {
-            "decimals": null,
+            "decimals": 1,
             "format": "s",
             "label": null,
             "logBase": 1,
@@ -18293,7 +18293,7 @@
           "xBucketNumber": null,
           "xBucketSize": null,
           "yAxis": {
-            "decimals": null,
+            "decimals": 1,
             "format": "s",
             "label": null,
             "logBase": 1,
@@ -18598,7 +18598,7 @@
           "xBucketNumber": null,
           "xBucketSize": null,
           "yAxis": {
-            "decimals": null,
+            "decimals": 1,
             "format": "s",
             "label": null,
             "logBase": 1,
@@ -18702,7 +18702,7 @@
           "xBucketNumber": null,
           "xBucketSize": null,
           "yAxis": {
-            "decimals": null,
+            "decimals": 1,
             "format": "bytes",
             "label": null,
             "logBase": 1,
@@ -19425,7 +19425,7 @@
           "xBucketNumber": null,
           "xBucketSize": null,
           "yAxis": {
-            "decimals": null,
+            "decimals": 1,
             "format": "s",
             "label": null,
             "logBase": 1,
@@ -19529,7 +19529,7 @@
           "xBucketNumber": null,
           "xBucketSize": null,
           "yAxis": {
-            "decimals": null,
+            "decimals": 1,
             "format": "none",
             "label": null,
             "logBase": 1,
@@ -23442,7 +23442,7 @@
           "xBucketNumber": null,
           "xBucketSize": null,
           "yAxis": {
-            "decimals": null,
+            "decimals": 1,
             "format": "s",
             "label": null,
             "logBase": 1,
@@ -24457,7 +24457,7 @@
           "xBucketNumber": null,
           "xBucketSize": null,
           "yAxis": {
-            "decimals": null,
+            "decimals": 1,
             "format": "s",
             "label": null,
             "logBase": 1,
@@ -24762,7 +24762,7 @@
           "xBucketNumber": null,
           "xBucketSize": null,
           "yAxis": {
-            "decimals": null,
+            "decimals": 1,
             "format": "s",
             "label": null,
             "logBase": 1,
@@ -25067,7 +25067,7 @@
           "xBucketNumber": null,
           "xBucketSize": null,
           "yAxis": {
-            "decimals": null,
+            "decimals": 1,
             "format": "s",
             "label": null,
             "logBase": 1,
@@ -25372,7 +25372,7 @@
           "xBucketNumber": null,
           "xBucketSize": null,
           "yAxis": {
-            "decimals": null,
+            "decimals": 1,
             "format": "s",
             "label": null,
             "logBase": 1,
@@ -25677,7 +25677,7 @@
           "xBucketNumber": null,
           "xBucketSize": null,
           "yAxis": {
-            "decimals": null,
+            "decimals": 1,
             "format": "s",
             "label": null,
             "logBase": 1,
@@ -27041,7 +27041,7 @@
           "xBucketNumber": null,
           "xBucketSize": null,
           "yAxis": {
-            "decimals": null,
+            "decimals": 1,
             "format": "s",
             "label": null,
             "logBase": 1,
@@ -27058,7 +27058,7 @@
           "bars": false,
           "cacheTimeout": null,
           "datasource": "${DS_TEST-CLUSTER}",
-          "description": "The count of pending commands per TiKV instance",
+          "description": null,
           "editable": true,
           "error": false,
           "fieldConfig": {
@@ -29893,7 +29893,7 @@
           "xBucketNumber": null,
           "xBucketSize": null,
           "yAxis": {
-            "decimals": null,
+            "decimals": 1,
             "format": "s",
             "label": null,
             "logBase": 1,
@@ -30586,7 +30586,7 @@
           "xBucketNumber": null,
           "xBucketSize": null,
           "yAxis": {
-            "decimals": null,
+            "decimals": 1,
             "format": "s",
             "label": null,
             "logBase": 1,
@@ -34360,7 +34360,7 @@
           "xBucketNumber": null,
           "xBucketSize": null,
           "yAxis": {
-            "decimals": null,
+            "decimals": 1,
             "format": "s",
             "label": null,
             "logBase": 1,
@@ -37175,7 +37175,7 @@
           "xBucketNumber": null,
           "xBucketSize": null,
           "yAxis": {
-            "decimals": null,
+            "decimals": 1,
             "format": "s",
             "label": null,
             "logBase": 1,
@@ -43882,7 +43882,7 @@
           "xBucketNumber": null,
           "xBucketSize": null,
           "yAxis": {
-            "decimals": null,
+            "decimals": 1,
             "format": "short",
             "label": null,
             "logBase": 1,
@@ -51623,7 +51623,7 @@
           "xBucketNumber": null,
           "xBucketSize": null,
           "yAxis": {
-            "decimals": null,
+            "decimals": 1,
             "format": "short",
             "label": null,
             "logBase": 1,
@@ -52346,7 +52346,7 @@
           "xBucketNumber": null,
           "xBucketSize": null,
           "yAxis": {
-            "decimals": null,
+            "decimals": 1,
             "format": "s",
             "label": null,
             "logBase": 1,
@@ -52450,7 +52450,7 @@
           "xBucketNumber": null,
           "xBucketSize": null,
           "yAxis": {
-            "decimals": null,
+            "decimals": 1,
             "format": "s",
             "label": null,
             "logBase": 1,
@@ -52554,7 +52554,7 @@
           "xBucketNumber": null,
           "xBucketSize": null,
           "yAxis": {
-            "decimals": null,
+            "decimals": 1,
             "format": "s",
             "label": null,
             "logBase": 1,
@@ -52791,7 +52791,7 @@
           "xBucketNumber": null,
           "xBucketSize": null,
           "yAxis": {
-            "decimals": null,
+            "decimals": 1,
             "format": "bytes",
             "label": null,
             "logBase": 1,
@@ -52895,7 +52895,7 @@
           "xBucketNumber": null,
           "xBucketSize": null,
           "yAxis": {
-            "decimals": null,
+            "decimals": 1,
             "format": "bytes",
             "label": null,
             "logBase": 1,
@@ -52999,7 +52999,7 @@
           "xBucketNumber": null,
           "xBucketSize": null,
           "yAxis": {
-            "decimals": null,
+            "decimals": 1,
             "format": "s",
             "label": null,
             "logBase": 1,
@@ -53502,7 +53502,7 @@
           "xBucketNumber": null,
           "xBucketSize": null,
           "yAxis": {
-            "decimals": null,
+            "decimals": 1,
             "format": "s",
             "label": null,
             "logBase": 1,
@@ -54712,7 +54712,7 @@
           "xBucketNumber": null,
           "xBucketSize": null,
           "yAxis": {
-            "decimals": null,
+            "decimals": 1,
             "format": "s",
             "label": null,
             "logBase": 1,
@@ -55082,7 +55082,7 @@
           "xBucketNumber": null,
           "xBucketSize": null,
           "yAxis": {
-            "decimals": null,
+            "decimals": 1,
             "format": "s",
             "label": null,
             "logBase": 1,
@@ -57059,7 +57059,7 @@
           "xBucketNumber": null,
           "xBucketSize": null,
           "yAxis": {
-            "decimals": null,
+            "decimals": 1,
             "format": "bytes",
             "label": null,
             "logBase": 1,
@@ -57163,7 +57163,7 @@
           "xBucketNumber": null,
           "xBucketSize": null,
           "yAxis": {
-            "decimals": null,
+            "decimals": 1,
             "format": "bytes",
             "label": null,
             "logBase": 1,
@@ -57415,7 +57415,7 @@
           "xBucketNumber": null,
           "xBucketSize": null,
           "yAxis": {
-            "decimals": null,
+            "decimals": 1,
             "format": "s",
             "label": null,
             "logBase": 1,
@@ -57519,7 +57519,7 @@
           "xBucketNumber": null,
           "xBucketSize": null,
           "yAxis": {
-            "decimals": null,
+            "decimals": 1,
             "format": "s",
             "label": null,
             "logBase": 1,
@@ -57623,7 +57623,7 @@
           "xBucketNumber": null,
           "xBucketSize": null,
           "yAxis": {
-            "decimals": null,
+            "decimals": 1,
             "format": "s",
             "label": null,
             "logBase": 1,
@@ -57890,7 +57890,7 @@
           "xBucketNumber": null,
           "xBucketSize": null,
           "yAxis": {
-            "decimals": null,
+            "decimals": 1,
             "format": "s",
             "label": null,
             "logBase": 1,
@@ -59292,7 +59292,7 @@
           "xBucketNumber": null,
           "xBucketSize": null,
           "yAxis": {
-            "decimals": null,
+            "decimals": 1,
             "format": "s",
             "label": null,
             "logBase": 1,
@@ -59396,7 +59396,7 @@
           "xBucketNumber": null,
           "xBucketSize": null,
           "yAxis": {
-            "decimals": null,
+            "decimals": 1,
             "format": "s",
             "label": null,
             "logBase": 1,
@@ -59500,7 +59500,7 @@
           "xBucketNumber": null,
           "xBucketSize": null,
           "yAxis": {
-            "decimals": null,
+            "decimals": 1,
             "format": "s",
             "label": null,
             "logBase": 1,
@@ -59604,7 +59604,7 @@
           "xBucketNumber": null,
           "xBucketSize": null,
           "yAxis": {
-            "decimals": null,
+            "decimals": 1,
             "format": "s",
             "label": null,
             "logBase": 1,
@@ -59708,7 +59708,7 @@
           "xBucketNumber": null,
           "xBucketSize": null,
           "yAxis": {
-            "decimals": null,
+            "decimals": 1,
             "format": "s",
             "label": null,
             "logBase": 1,
@@ -59812,7 +59812,7 @@
           "xBucketNumber": null,
           "xBucketSize": null,
           "yAxis": {
-            "decimals": null,
+            "decimals": 1,
             "format": "s",
             "label": null,
             "logBase": 1,
@@ -59916,7 +59916,7 @@
           "xBucketNumber": null,
           "xBucketSize": null,
           "yAxis": {
-            "decimals": null,
+            "decimals": 1,
             "format": "s",
             "label": null,
             "logBase": 1,
@@ -63555,7 +63555,7 @@
           "xBucketNumber": null,
           "xBucketSize": null,
           "yAxis": {
-            "decimals": null,
+            "decimals": 1,
             "format": "s",
             "label": null,
             "logBase": 1,
@@ -63659,7 +63659,7 @@
           "xBucketNumber": null,
           "xBucketSize": null,
           "yAxis": {
-            "decimals": null,
+            "decimals": 1,
             "format": "s",
             "label": null,
             "logBase": 1,
@@ -63763,7 +63763,7 @@
           "xBucketNumber": null,
           "xBucketSize": null,
           "yAxis": {
-            "decimals": null,
+            "decimals": 1,
             "format": "s",
             "label": null,
             "logBase": 1,
@@ -63867,7 +63867,7 @@
           "xBucketNumber": null,
           "xBucketSize": null,
           "yAxis": {
-            "decimals": null,
+            "decimals": 1,
             "format": "s",
             "label": null,
             "logBase": 1,
@@ -63971,7 +63971,7 @@
           "xBucketNumber": null,
           "xBucketSize": null,
           "yAxis": {
-            "decimals": null,
+            "decimals": 1,
             "format": "short",
             "label": null,
             "logBase": 1,
@@ -64075,7 +64075,7 @@
           "xBucketNumber": null,
           "xBucketSize": null,
           "yAxis": {
-            "decimals": null,
+            "decimals": 1,
             "format": "s",
             "label": null,
             "logBase": 1,
@@ -64179,7 +64179,7 @@
           "xBucketNumber": null,
           "xBucketSize": null,
           "yAxis": {
-            "decimals": null,
+            "decimals": 1,
             "format": "s",
             "label": null,
             "logBase": 1,
@@ -64283,7 +64283,7 @@
           "xBucketNumber": null,
           "xBucketSize": null,
           "yAxis": {
-            "decimals": null,
+            "decimals": 1,
             "format": "s",
             "label": null,
             "logBase": 1,
@@ -65318,7 +65318,7 @@
           "xBucketNumber": null,
           "xBucketSize": null,
           "yAxis": {
-            "decimals": null,
+            "decimals": 1,
             "format": "none",
             "label": null,
             "logBase": 1,
@@ -65422,7 +65422,7 @@
           "xBucketNumber": null,
           "xBucketSize": null,
           "yAxis": {
-            "decimals": null,
+            "decimals": 1,
             "format": "s",
             "label": null,
             "logBase": 1,

@@ -407,7 +407,6 @@ def Errors() -> RowPanel:
         [
             graph_panel(
                 title="Critical error",
-                description="TiKV uptime since the last restart",
                 targets=[
                     target(
                         expr=expr_sum_rate(
@@ -2801,7 +2800,6 @@ def FlowControl() -> RowPanel:
             ),
             graph_panel(
                 title="Scheduler throttled CF",
-                description="The count of pending commands per TiKV instance",
                 yaxes=yaxes(left_format=UNITS.OPS_PER_SEC),
                 targets=[
                     target(

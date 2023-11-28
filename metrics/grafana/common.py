@@ -909,6 +909,7 @@ def heatmap_panel(
     yaxis=yaxis(UNITS.NO_FORMAT),
     tooltip=Tooltip(shared=True, valueType="individual"),
     color=heatmap_color(),
+    decimals=1,
     data_source=DATASOURCE,
 ) -> Panel:
     assert metric.endswith(
@@ -921,6 +922,8 @@ def heatmap_panel(
     t.format = "heatmap"
     # Heatmap target legendFormat should be "{{le}}"
     t.legendFormat = "{{le}}"
+    # Overrides yaxis decimal places.
+    yaxis.decimals = decimals
     return Heatmap(
         title=title,
         dataSource=data_source,
