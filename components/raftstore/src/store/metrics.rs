@@ -647,6 +647,11 @@ lazy_static! {
             "Total number of leader missed region."
         ).unwrap();
 
+    pub static ref CHECK_STALE_PEER_COUNTER: IntCounter = register_int_counter!(
+        "tikv_raftstore_check_stale_peer",
+        "Total number of checking stale peers."
+    ).unwrap();
+
     pub static ref INGEST_SST_DURATION_SECONDS: Histogram =
         register_histogram!(
             "tikv_snapshot_ingest_sst_duration_seconds",
