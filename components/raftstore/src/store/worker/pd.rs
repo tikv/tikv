@@ -40,7 +40,7 @@ use tikv_util::{
     box_err, debug, error, info,
     metrics::ThreadInfoStatistics,
     store::QueryStats,
-    sys::thread::StdThreadBuildWrapper,
+    sys::{thread::StdThreadBuildWrapper, SysQuota},
     thd_name,
     time::{Instant as TiInstant, UnixSecs},
     timer::GLOBAL_TIMER_HANDLE,
@@ -220,6 +220,9 @@ pub struct StoreStat {
     pub store_cpu_usages: RecordPairVec,
     pub store_read_io_rates: RecordPairVec,
     pub store_write_io_rates: RecordPairVec,
+
+    store_cpu_quota: f64, // quota of cpu usage
+    store_cpu_busy_thd: f64,
 }
 
 impl Default for StoreStat {
@@ -244,7 +247,37 @@ impl Default for StoreStat {
             store_cpu_usages: RecordPairVec::default(),
             store_read_io_rates: RecordPairVec::default(),
             store_write_io_rates: RecordPairVec::default(),
+
+            store_cpu_quota: 0.0_f64,
+            store_cpu_busy_thd: 0.8_f64,
         }
+    }
+}
+
+impl StoreStat {
+    fn set_cpu_quota(&mut self, cpu_cores: f64, busy_thd: f64) {
+        self.store_cpu_quota = cpu_cores * 100.0;
+        self.store_cpu_busy_thd = busy_thd;
+    }
+
+    fn is_busy(&self) -> bool {
+        if self.store_cpu_quota < 1.0 || self.store_cpu_busy_thd > 1.0 {
+            return false;
+        }
+
+        let mut cpu_usage = 0_u64;
+
+        for record in self.store_cpu_usages.iter() {
+            cpu_usage += record.get_value();
+        }
+        STORE_STAT_CPU_USAGE
+            .with_label_values(&["cpu_usage"])
+            .set(cpu_usage as i64);
+        STORE_STAT_CPU_USAGE
+            .with_label_values(&["cpu_usage_limit"])
+            .set(self.store_cpu_quota as i64);
+
+        (cpu_usage as f64 / self.store_cpu_quota) >= self.store_cpu_busy_thd
     }
 }
 
@@ -792,14 +825,14 @@ impl SlowScore {
         }
     }
 
-    fn record(&mut self, id: u64, duration: Duration) {
+    fn record(&mut self, id: u64, duration: Duration, not_busy: bool) {
         self.last_record_time = Instant::now();
         if id != self.last_tick_id {
             return;
         }
         self.last_tick_finished = true;
         self.total_requests += 1;
-        if duration >= self.inspect_interval {
+        if not_busy && duration >= self.inspect_interval {
             self.timeout_requests += 1;
         }
     }
@@ -943,6 +976,8 @@ where
         coprocessor_host: CoprocessorHost<EK>,
         causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
     ) -> Runner<EK, ER, T> {
+        let mut store_stat = StoreStat::default();
+        store_stat.set_cpu_quota(SysQuota::cpu_cores_quota(), cfg.inspect_cpu_util_thd);
         // Register the region CPU records collector.
         let mut region_cpu_records_collector = None;
         if auto_split_controller
@@ -972,7 +1007,7 @@ where
             is_hb_receiver_scheduled: false,
             region_peers: HashMap::default(),
             region_buckets: HashMap::default(),
-            store_stat: StoreStat::default(),
+            store_stat,
             start_ts: UnixSecs::now(),
             scheduler,
             store_heartbeat_interval,
@@ -2142,7 +2177,14 @@ where
                 txn_ext,
             } => self.handle_update_max_timestamp(region_id, initial_status, txn_ext),
             Task::QueryRegionLeader { region_id } => self.handle_query_region_leader(region_id),
-            Task::UpdateSlowScore { id, duration } => self.slow_score.record(id, duration.sum()),
+            Task::UpdateSlowScore { id, duration } => {
+                // Fine-tuned, `SlowScore` only takes the I/O jitters on the disk into account.
+                self.slow_score.record(
+                    id,
+                    duration.delays_on_disk_io(false),
+                    !self.store_stat.is_busy(),
+                );
+            }
             Task::UpdateRegionCpuCollector(is_register) => {
                 self.handle_update_region_cpu_collector(is_register)
             }
@@ -2177,7 +2219,11 @@ where
             self.update_health_status(ServingStatus::Serving);
         }
         if !self.slow_score.last_tick_finished {
-            self.slow_score.record_timeout();
+            // FIXME: here just use CPU.usage as the reference to represent
+            // whether the store is busy or not. It should be refined.
+            if !self.store_stat.is_busy() {
+                self.slow_score.record_timeout();
+            }
             // If the last slow_score already reached abnormal state and was delayed for
             // reporting by `store-heartbeat` to PD, we should report it here manually as
             // a FAKE `store-heartbeat`.
