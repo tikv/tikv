@@ -1635,7 +1635,7 @@ pub struct RaftstoreDuration {
 impl RaftstoreDuration {
     #[inline]
     pub fn sum(&self) -> std::time::Duration {
-        self.delays_on_disk_io(true) + self.delays_on_net_io()
+        self.delays_on_disk_io(true)
     }
 
     #[inline]
