@@ -860,6 +860,14 @@ def gRPC() -> RowPanel:
                             by_labels=["type"],
                         ),
                     ),
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_grpc_msg_duration_seconds_count",
+                            label_selectors=['type!="kv_gc"'],
+                            by_labels=["type", "priority"],
+                        ),
+                        hide=True,
+                    ),
                 ],
             ),
             graph_panel(
@@ -894,6 +902,16 @@ def gRPC() -> RowPanel:
                         ),
                         legend_format="{{type}}",
                     ),
+                    target(
+                        expr=expr_histogram_quantile(
+                            0.99,
+                            "tikv_grpc_msg_duration_seconds",
+                            label_selectors=['type!="kv_gc"'],
+                            by_labels=["type", "priority"],
+                        ),
+                        legend_format="{{type}}-{{priority}}",
+                        hide=True,
+                    ),
                 ],
             ),
             graph_panel(
@@ -907,6 +925,14 @@ def gRPC() -> RowPanel:
                             by_labels=["type"],
                         ),
                         legend_format="{{type}}",
+                    ),
+                    target(
+                        expr=expr_histogram_avg(
+                            "tikv_grpc_msg_duration_seconds",
+                            by_labels=["type", "priority"],
+                        ),
+                        legend_format="{{type}}-{{priority}}",
+                        hide=True,
                     ),
                 ],
             ),
@@ -2709,14 +2735,14 @@ def Storage() -> RowPanel:
                 title="Full compaction pause duration",
                 description="",
                 yaxes=yaxes(left_format=UNITS.SECONDS),
-                metric="tikv_storage_full_compact_pause_duration_seconds_bucket",
+                metric="tikv_storage_full_compact_pause_duration_seconds",
                 hide_count=True,
             ),
             graph_panel_histogram_quantiles(
                 title="Full compaction per-increment duration",
                 description="",
                 yaxes=yaxes(left_format=UNITS.SECONDS),
-                metric="tikv_storage_full_compact_increment_duration_seconds_bucket",
+                metric="tikv_storage_full_compact_increment_duration_seconds",
                 hide_count=True,
             ),
         ]
