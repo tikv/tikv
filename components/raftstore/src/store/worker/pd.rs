@@ -1533,8 +1533,14 @@ where
                     }
                 }
                 Ok(None) => {
-                    // splitted Region has not yet reported to PD.
-                    // TODO: handle merge
+                    // Splitted region has not yet reported to PD.
+                    //
+                    // Or region has been merged. This case is handled by
+                    // message `MsgCheckStalePeer`, stale peers will be
+                    // removed eventually.
+                    PD_VALIDATE_PEER_COUNTER_VEC
+                        .with_label_values(&["region not found"])
+                        .inc();
                 }
                 Err(e) => {
                     error!("get region failed"; "err" => ?e);
