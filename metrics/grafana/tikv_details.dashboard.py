@@ -7228,7 +7228,14 @@ def ResolvedTS() -> RowPanel:
                             "tikv_resolved_ts_fail_advance_count",
                             by_labels=["instance", "reason"],
                         ),
-                    )
+                    ),
+                    target(
+                        expr=expr_sum_delta(
+                            "tikv_raftstore_check_stale_peer",
+                            by_labels=["instance"],
+                        ),
+                        legend_format="{{instance}}-stale-peer",
+                    ),
                 ],
             ),
         ]
