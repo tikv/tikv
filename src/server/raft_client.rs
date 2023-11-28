@@ -41,6 +41,7 @@ use tikv_util::{
     config::{Tracker, VersionTrack},
     lru::LruCache,
     timer::GLOBAL_TIMER_HANDLE,
+    time::duration_to_sec,
     worker::Scheduler,
 };
 use yatp::{task::future::TaskCell, ThreadPool};
@@ -863,7 +864,11 @@ async fn start<S, R>(
                 .report_store_unreachable(back_end.store_id);
             continue;
         } else {
-            info!("connection established"; "store_id" => back_end.store_id, "addr" => %addr, "cost" => ?begin.elapsed());
+            let wait_conn_duration = begin.elapsed();
+            info!("connection established"; "store_id" => back_end.store_id, "addr" => %addr, "cost" => ?wait_conn_duration);
+            RAFT_CLIENT_WAIT_CONN_READY_DURATION_HISTOGRAM_VEC
+                .with_label_values(&[addr.as_str()])
+                .observe(duration_to_sec(wait_conn_duration));
         }
 
         let client = TikvClient::new(channel);

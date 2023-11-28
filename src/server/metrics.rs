@@ -409,6 +409,13 @@ lazy_static! {
         &["type", "store_id"]
     )
     .unwrap();
+    pub static ref RAFT_CLIENT_WAIT_CONN_READY_DURATION_HISTOGRAM_VEC: HistogramVec = register_histogram_vec!(
+        "tikv_server_raft_client_wait_ready_duration",
+        "Duration of wait raft client connection ready",
+        &["to"],
+        exponential_buckets(5e-5, 2.0, 22).unwrap() // 50us ~ 104s
+    )
+    .unwrap();
     pub static ref RAFT_MESSAGE_FLUSH_COUNTER: RaftMessageFlushCounterVec =
         register_static_int_counter_vec!(
             RaftMessageFlushCounterVec,
