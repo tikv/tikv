@@ -2680,6 +2680,47 @@ def Storage() -> RowPanel:
             label_selectors=['type="snapshot_read_index_confirm"'],
         ),
     )
+    layout.row(
+        [
+            graph_panel(
+                title="Process Stat Cpu Usage",
+                description="CPU usage measured over a 30 second window",
+                yaxes=yaxes(left_format=UNITS.PERCENT_UNIT),
+                targets=[
+                    target(
+                        expr=expr_sum(
+                            "tikv_storage_process_stat_cpu_usage",
+                        ),
+                    ),
+                ],
+            ),
+            graph_panel_histogram_quantiles(
+                title="Full compaction duration seconds",
+                description="",
+                yaxes=yaxes(left_format=UNITS.SECONDS),
+                metric="tikv_storage_full_compact_duration_seconds",
+                hide_count=True,
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel_histogram_quantiles(
+                title="Full compaction pause duration",
+                description="",
+                yaxes=yaxes(left_format=UNITS.SECONDS),
+                metric="tikv_storage_full_compact_pause_duration_seconds_bucket",
+                hide_count=True,
+            ),
+            graph_panel_histogram_quantiles(
+                title="Full compaction per-increment duration",
+                description="",
+                yaxes=yaxes(left_format=UNITS.SECONDS),
+                metric="tikv_storage_full_compact_increment_duration_seconds_bucket",
+                hide_count=True,
+            ),
+        ]
+    )
     return layout.row_panel
 
 
