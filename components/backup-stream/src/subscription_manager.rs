@@ -764,17 +764,16 @@ mod test {
         time::{Duration, Instant},
     };
 
-    use engine_test::kv::KvTestEngine;
+    use engine_test::{kv::KvTestEngine, raft::RaftTestEngine};
     use kvproto::{
         brpb::{Noop, StorageBackend, StreamBackupTaskInfo},
         metapb::{Region, RegionEpoch},
     };
     use raftstore::{
         coprocessor::{ObserveHandle, RegionInfoCallback, RegionInfoProvider},
-        router::CdcRaftRouter,
+        router::{CdcRaftRouter, ServerRaftStoreRouter},
         RegionInfo,
     };
-    use test_raftstore::MockRaftStoreRouter;
     use tikv::{config::BackupStreamConfig, storage::Statistics};
     use tikv_util::{memory::MemoryQuota, worker::dummy_scheduler};
     use tokio::{sync::mpsc::Sender, task::JoinHandle};
@@ -1038,12 +1037,11 @@ mod test {
                     }
                 }
             }));
-            bg_tasks.push(pool.spawn(
-                subs_mgr.region_operator_loop::<KvTestEngine, CdcRaftRouter<KvTestEngine>>(
-                    ob_rx,
-                    BackupStreamResolver::Nop,
-                ),
-            ));
+            bg_tasks.push(
+                pool.spawn(subs_mgr.region_operator_loop::<KvTestEngine, CdcRaftRouter<
+                    ServerRaftStoreRouter<KvTestEngine, RaftTestEngine>,
+                >>(ob_rx, BackupStreamResolver::Nop)),
+            );
 
             Self {
                 rt: pool,
