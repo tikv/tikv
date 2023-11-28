@@ -521,7 +521,7 @@ impl Default for Config {
             region_split_size: ReadableSize(0),
             clean_stale_peer_delay: ReadableDuration::minutes(0),
             inspect_interval: ReadableDuration::millis(500),
-            inspect_cpu_util_thd: 0.6,
+            inspect_cpu_util_thd: 0.4,
             // The param `slow_trend_unsensitive_cause == 2.0` can yield good results,
             // make it `10.0` to reduce a bit sensitiveness because SpikeFilter is disabled
             slow_trend_unsensitive_cause: 10.0,
