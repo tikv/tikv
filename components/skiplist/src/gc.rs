@@ -142,6 +142,7 @@ impl GcRunner {
             "region_id" => region_id,
             "total_version" => count,
             "total_version_again" => count2,
+            "unique_keys" => filter.unique_key,
             "outdated_version" => filter.versions,
             "filtered_version" => filter.filtered,
         );
@@ -173,6 +174,7 @@ struct Filter {
 
     versions: usize,
     filtered: usize,
+    unique_key: usize,
     total_versions: usize,
     total_filtered: usize,
     mvcc_rollback_and_locks: usize,
@@ -188,6 +190,7 @@ impl Filter {
             safe_point,
             default_cf,
             write_cf,
+            unique_key: 0,
             mvcc_key_prefix: vec![],
             versions: 0,
             filtered: 0,
@@ -206,6 +209,7 @@ impl Filter {
 
         self.versions += 1;
         if self.mvcc_key_prefix != mvcc_key_prefix {
+            self.unique_key += 1;
             self.mvcc_key_prefix.clear();
             self.mvcc_key_prefix.extend_from_slice(mvcc_key_prefix);
             self.remove_older = false;
