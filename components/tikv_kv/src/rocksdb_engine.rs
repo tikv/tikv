@@ -9,6 +9,10 @@ use std::{
     time::Duration,
 };
 
+<<<<<<< HEAD
+=======
+use collections::HashMap;
+>>>>>>> d96284cb29 (encryption: remove useless `EncryptionKeyManager` trait (#16086))
 pub use engine_rocks::RocksSnapshot;
 use engine_rocks::{
     get_env, raw::DBOptions, raw_util::CFOptions, RocksEngine as BaseRocksEngine,
@@ -106,7 +110,11 @@ impl RocksEngine {
         let worker = Worker::new("engine-rocksdb");
         let mut db_opts = db_opts.unwrap_or_else(|| DBOptions::new());
         if io_rate_limiter.is_some() {
+<<<<<<< HEAD
             db_opts.set_env(get_env(None /*key_manager*/, io_rate_limiter).unwrap());
+=======
+            db_opts.set_env(get_env(None /* key_manager */, io_rate_limiter).unwrap());
+>>>>>>> d96284cb29 (encryption: remove useless `EncryptionKeyManager` trait (#16086))
         }
 
         let db = Arc::new(engine_rocks::raw_util::new_engine(

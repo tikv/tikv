@@ -2,11 +2,15 @@
 
 use std::{io::Result, sync::Arc};
 
+<<<<<<< HEAD
 use encryption::{self, DataKeyManager};
 use engine_traits::{EncryptionKeyManager, EncryptionMethod, FileEncryptionInfo};
+=======
+use encryption::{DataKeyManager, FileEncryptionInfo};
+use kvproto::encryptionpb::EncryptionMethod;
+>>>>>>> d96284cb29 (encryption: remove useless `EncryptionKeyManager` trait (#16086))
 use rocksdb::{
-    DBEncryptionMethod, EncryptionKeyManager as DBEncryptionKeyManager,
-    FileEncryptionInfo as DBFileEncryptionInfo,
+    DBEncryptionMethod, EncryptionKeyManager, FileEncryptionInfo as DBFileEncryptionInfo,
 };
 
 use crate::raw::Env;
@@ -15,8 +19,12 @@ use crate::raw::Env;
 pub(crate) fn get_env(
     base_env: Option<Arc<Env>>,
     key_manager: Option<Arc<DataKeyManager>>,
+<<<<<<< HEAD
 ) -> std::result::Result<Arc<Env>, String> {
     let base_env = base_env.unwrap_or_else(|| Arc::new(Env::default()));
+=======
+) -> engine_traits::Result<Option<Arc<Env>>> {
+>>>>>>> d96284cb29 (encryption: remove useless `EncryptionKeyManager` trait (#16086))
     if let Some(manager) = key_manager {
         Ok(Arc::new(Env::new_key_managed_encrypted_env(
             base_env,
@@ -27,17 +35,17 @@ pub(crate) fn get_env(
     }
 }
 
-pub struct WrappedEncryptionKeyManager<T: EncryptionKeyManager> {
-    manager: Arc<T>,
+pub struct WrappedEncryptionKeyManager {
+    manager: Arc<DataKeyManager>,
 }
 
-impl<T: EncryptionKeyManager> WrappedEncryptionKeyManager<T> {
-    pub fn new(manager: Arc<T>) -> Self {
+impl WrappedEncryptionKeyManager {
+    pub fn new(manager: Arc<DataKeyManager>) -> Self {
         Self { manager }
     }
 }
 
-impl<T: EncryptionKeyManager> DBEncryptionKeyManager for WrappedEncryptionKeyManager<T> {
+impl EncryptionKeyManager for WrappedEncryptionKeyManager {
     fn get_file(&self, fname: &str) -> Result<DBFileEncryptionInfo> {
         self.manager
             .get_file(fname)

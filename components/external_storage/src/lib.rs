@@ -17,8 +17,12 @@ use std::{
 };
 
 use async_trait::async_trait;
+<<<<<<< HEAD
 use encryption::{encryption_method_from_db_encryption_method, DecrypterReader, Iv};
 use engine_traits::FileEncryptionInfo;
+=======
+use encryption::{DecrypterReader, FileEncryptionInfo, Iv};
+>>>>>>> d96284cb29 (encryption: remove useless `EncryptionKeyManager` trait (#16086))
 use file_system::File;
 use futures_io::AsyncRead;
 use futures_util::AsyncReadExt;
@@ -163,7 +167,11 @@ pub fn encrypt_wrap_reader<'a>(
     let input = match file_crypter {
         Some(x) => Box::new(DecrypterReader::new(
             reader,
+<<<<<<< HEAD
             encryption_method_from_db_encryption_method(x.method),
+=======
+            x.method,
+>>>>>>> d96284cb29 (encryption: remove useless `EncryptionKeyManager` trait (#16086))
             &x.key,
             Iv::from_slice(&x.iv)?,
         )?),

@@ -14,8 +14,14 @@ use derive_more::Deref;
 #[cfg(feature = "cloud-aws")]
 pub use encryption::KmsBackend;
 pub use encryption::{
+<<<<<<< HEAD
     encryption_method_from_db_encryption_method, Backend, DataKeyManager, DataKeyManagerArgs,
     DecrypterReader, EncryptionConfig, Error, FileConfig, Iv, KmsConfig, MasterKeyConfig, Result,
+=======
+    clean_up_dir, clean_up_trash, trash_dir_all, AzureConfig, Backend, DataKeyImporter,
+    DataKeyManager, DataKeyManagerArgs, DecrypterReader, EncryptionConfig, Error, FileConfig, Iv,
+    KmsConfig, MasterKeyConfig, Result,
+>>>>>>> d96284cb29 (encryption: remove useless `EncryptionKeyManager` trait (#16086))
 };
 use encryption::{
     DataKeyPair, EncryptedKey, FileBackend, KmsProvider, PlainKey, PlaintextBackend,

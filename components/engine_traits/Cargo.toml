@@ -15,7 +15,12 @@ file_system = { path = "../file_system", default-features = false }
 kvproto = { git = "https://github.com/pingcap/kvproto.git" }
 log_wrappers = { path = "../log_wrappers" }
 protobuf = "2"
+<<<<<<< HEAD
 raft = { version = "0.7.0", default-features = false, features = ["protobuf-codec"] }
+=======
+raft = { workspace = true }
+encryption = { workspace = true }
+>>>>>>> d96284cb29 (encryption: remove useless `EncryptionKeyManager` trait (#16086))
 serde = "1.0"
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }

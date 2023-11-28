@@ -15,10 +15,15 @@ use std::{
 };
 
 use collections::{HashMap, HashMapEntry as Entry};
+<<<<<<< HEAD
 use encryption::{
     create_aes_ctr_crypter, encryption_method_from_db_encryption_method, DataKeyManager, Iv,
 };
 use engine_traits::{CfName, EncryptionKeyManager, KvEngine, CF_DEFAULT, CF_LOCK, CF_WRITE};
+=======
+use encryption::{create_aes_ctr_crypter, DataKeyManager, Iv};
+use engine_traits::{CfName, KvEngine, CF_DEFAULT, CF_LOCK, CF_WRITE};
+>>>>>>> d96284cb29 (encryption: remove useless `EncryptionKeyManager` trait (#16086))
 use error_code::{self, ErrorCode, ErrorCodeExt};
 use fail::fail_point;
 use file_system::{
@@ -616,7 +621,11 @@ impl Snapshot {
 
                 if let Some(mgr) = &s.mgr.encryption_key_manager {
                     let enc_info = mgr.new_file(&file_paths[idx])?;
+<<<<<<< HEAD
                     let mthd = encryption_method_from_db_encryption_method(enc_info.method);
+=======
+                    let mthd = enc_info.method;
+>>>>>>> d96284cb29 (encryption: remove useless `EncryptionKeyManager` trait (#16086))
                     if mthd != EncryptionMethod::Plaintext {
                         let file_for_recving = cf_file.file_for_recving.last_mut().unwrap();
                         file_for_recving.encrypter = Some(

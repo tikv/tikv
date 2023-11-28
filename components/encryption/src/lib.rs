@@ -12,11 +12,15 @@ mod metrics;
 
 pub use self::{
     config::*,
+<<<<<<< HEAD
     crypter::{
         compat, encryption_method_from_db_encryption_method,
         encryption_method_to_db_encryption_method, verify_encryption_config, AesGcmCrypter, Iv,
         PlainKey,
     },
+=======
+    crypter::{verify_encryption_config, AesGcmCrypter, FileEncryptionInfo, Iv},
+>>>>>>> d96284cb29 (encryption: remove useless `EncryptionKeyManager` trait (#16086))
     encrypted_file::EncryptedFile,
     errors::{Error, Result, RetryCodedError},
     file_dict_file::FileDictionaryFile,

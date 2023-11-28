@@ -9,8 +9,22 @@ use std::{
 
 use encryption::{DataKeyManager, DecrypterReader, EncrypterWriter};
 use engine_traits::{
+<<<<<<< HEAD
     CacheStats, EncryptionKeyManager, EncryptionMethod, RaftEngine, RaftEngineDebug,
     RaftEngineReadOnly, RaftLogBatch as RaftLogBatchTrait, RaftLogGCTask, Result,
+=======
+    CacheStats, PerfContextExt, PerfContextKind, PerfLevel, RaftEngine, RaftEngineDebug,
+    RaftEngineReadOnly, RaftLogBatch as RaftLogBatchTrait, Result, CF_DEFAULT, CF_LOCK, CF_RAFT,
+    CF_WRITE,
+};
+use file_system::{IoOp, IoRateLimiter, IoType, WithIoType};
+use kvproto::{
+    encryptionpb::EncryptionMethod,
+    metapb::Region,
+    raft_serverpb::{
+        RaftApplyState, RaftLocalState, RegionLocalState, StoreIdent, StoreRecoverState,
+    },
+>>>>>>> d96284cb29 (encryption: remove useless `EncryptionKeyManager` trait (#16086))
 };
 use file_system::{IOOp, IORateLimiter, IOType};
 use kvproto::raft_serverpb::RaftLocalState;

@@ -106,14 +106,23 @@ mod raft_engine;
 pub use rocksdb::{set_perf_flags, set_perf_level, PerfContext, PerfFlag, PerfFlags, PerfLevel};
 
 pub mod flow_control_factors;
+use ::encryption::DataKeyManager;
 pub use flow_control_factors::*;
 
 pub mod raw;
 
 pub fn get_env(
+<<<<<<< HEAD
     key_manager: Option<std::sync::Arc<::encryption::DataKeyManager>>,
     limiter: Option<std::sync::Arc<::file_system::IORateLimiter>>,
 ) -> std::result::Result<std::sync::Arc<raw::Env>, String> {
     let env = encryption::get_env(None /*base_env*/, key_manager)?;
     file_system::get_env(Some(env), limiter)
+=======
+    key_manager: Option<std::sync::Arc<DataKeyManager>>,
+    limiter: Option<std::sync::Arc<::file_system::IoRateLimiter>>,
+) -> engine_traits::Result<std::sync::Arc<raw::Env>> {
+    let env = encryption::get_env(None /* base_env */, key_manager)?;
+    file_system::get_env(env, limiter)
+>>>>>>> d96284cb29 (encryption: remove useless `EncryptionKeyManager` trait (#16086))
 }

@@ -10,11 +10,17 @@ use std::{
 
 use api_version::api_v2::TIDB_RANGES_COMPLEMENT;
 use encryption::{DataKeyManager, EncrypterWriter};
+<<<<<<< HEAD
 use engine_rocks::{get_env, RocksSstReader};
 use engine_traits::{
     EncryptionKeyManager, Iterable, Iterator, KvEngine, SstExt, SstMetaInfo, SstReader,
 };
 use file_system::{get_io_rate_limiter, sync_dir, File, OpenOptions};
+=======
+use engine_traits::{iter_option, Iterator, KvEngine, RefIterable, SstMetaInfo, SstReader};
+use file_system::{sync_dir, File, OpenOptions};
+use keys::data_key;
+>>>>>>> d96284cb29 (encryption: remove useless `EncryptionKeyManager` trait (#16086))
 use kvproto::{import_sstpb::*, kvrpcpb::ApiVersion};
 use tikv_util::time::Instant;
 use uuid::{Builder as UuidBuilder, Uuid};

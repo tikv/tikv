@@ -1,8 +1,14 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::fmt::{self, Debug, Formatter};
+
 use byteorder::{BigEndian, ByteOrder};
+<<<<<<< HEAD
 use derive_more::Deref;
 use engine_traits::EncryptionMethod as DBEncryptionMethod;
+=======
+use cloud::kms::PlainKey;
+>>>>>>> d96284cb29 (encryption: remove useless `EncryptionKeyManager` trait (#16086))
 use kvproto::encryptionpb::EncryptionMethod;
 use openssl::symm::{self, Cipher as OCipher};
 use rand::{rngs::OsRng, RngCore};
@@ -10,6 +16,7 @@ use tikv_util::{box_err, impl_display_as_debug};
 
 use crate::{Error, Result};
 
+<<<<<<< HEAD
 pub fn encryption_method_to_db_encryption_method(method: EncryptionMethod) -> DBEncryptionMethod {
     match method {
         EncryptionMethod::Plaintext => DBEncryptionMethod::Plaintext,
@@ -34,6 +41,8 @@ pub fn compat(method: EncryptionMethod) -> EncryptionMethod {
     method
 }
 
+=======
+>>>>>>> d96284cb29 (encryption: remove useless `EncryptionKeyManager` trait (#16086))
 pub fn get_method_key_length(method: EncryptionMethod) -> usize {
     match method {
         EncryptionMethod::Plaintext => 0,
@@ -41,6 +50,40 @@ pub fn get_method_key_length(method: EncryptionMethod) -> usize {
         EncryptionMethod::Aes192Ctr => 24,
         EncryptionMethod::Aes256Ctr => 32,
         unknown => panic!("bad EncryptionMethod {:?}", unknown),
+    }
+}
+
+#[derive(Clone, PartialEq)]
+pub struct FileEncryptionInfo {
+    pub method: EncryptionMethod,
+    pub key: Vec<u8>,
+    pub iv: Vec<u8>,
+}
+impl Default for FileEncryptionInfo {
+    fn default() -> Self {
+        FileEncryptionInfo {
+            method: EncryptionMethod::Unknown,
+            key: vec![],
+            iv: vec![],
+        }
+    }
+}
+
+impl Debug for FileEncryptionInfo {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "FileEncryptionInfo [method={:?}, key=...<{} bytes>, iv=...<{} bytes>]",
+            self.method,
+            self.key.len(),
+            self.iv.len()
+        )
+    }
+}
+
+impl FileEncryptionInfo {
+    pub fn is_empty(&self) -> bool {
+        self.key.is_empty() && self.iv.is_empty()
     }
 }
 

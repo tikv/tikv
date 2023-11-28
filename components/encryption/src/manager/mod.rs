@@ -13,7 +13,10 @@ use std::{
 };
 
 use crossbeam::channel::{self, select, tick};
+<<<<<<< HEAD
 use engine_traits::{EncryptionKeyManager, FileEncryptionInfo};
+=======
+>>>>>>> d96284cb29 (encryption: remove useless `EncryptionKeyManager` trait (#16086))
 use fail::fail_point;
 use file_system::File;
 use kvproto::encryptionpb::{DataKey, EncryptionMethod, FileDictionary, FileInfo, KeyDictionary};
@@ -22,7 +25,11 @@ use tikv_util::{box_err, debug, error, info, thd_name, warn};
 
 use crate::{
     config::EncryptionConfig,
+<<<<<<< HEAD
     crypter::{self, compat, Iv},
+=======
+    crypter::{self, FileEncryptionInfo, Iv},
+>>>>>>> d96284cb29 (encryption: remove useless `EncryptionKeyManager` trait (#16086))
     encrypted_file::EncryptedFile,
     file_dict_file::FileDictionaryFile,
     io::{DecrypterReader, EncrypterWriter},
@@ -632,9 +639,20 @@ impl DataKeyManager {
         };
         EncrypterWriter::new(
             writer,
+<<<<<<< HEAD
             crypter::encryption_method_from_db_encryption_method(file.method),
             &file.key,
             Iv::from_slice(&file.iv)?,
+=======
+            file.method,
+            &file.key,
+            if file.method == EncryptionMethod::Plaintext {
+                debug_assert!(file.iv.is_empty());
+                Iv::Empty
+            } else {
+                Iv::from_slice(&file.iv)?
+            },
+>>>>>>> d96284cb29 (encryption: remove useless `EncryptionKeyManager` trait (#16086))
         )
     }
 
@@ -657,9 +675,20 @@ impl DataKeyManager {
         let file = self.get_file(fname)?;
         DecrypterReader::new(
             reader,
+<<<<<<< HEAD
             crypter::encryption_method_from_db_encryption_method(file.method),
             &file.key,
             Iv::from_slice(&file.iv)?,
+=======
+            file.method,
+            &file.key,
+            if file.method == EncryptionMethod::Plaintext {
+                debug_assert!(file.iv.is_empty());
+                Iv::Empty
+            } else {
+                Iv::from_slice(&file.iv)?
+            },
+>>>>>>> d96284cb29 (encryption: remove useless `EncryptionKeyManager` trait (#16086))
         )
     }
 
@@ -728,6 +757,7 @@ impl DataKeyManager {
                 }
             }
         };
+<<<<<<< HEAD
         let encrypted_file = FileEncryptionInfo {
             key,
             method: crypter::encryption_method_to_db_encryption_method(method),
@@ -735,6 +765,98 @@ impl DataKeyManager {
         };
         Ok(Some(encrypted_file))
     }
+=======
+        let encrypted_file = FileEncryptionInfo { key, method, iv };
+        Ok(Some(encrypted_file))
+    }
+
+    /// Returns initial vector and data key.
+    pub fn get_file_internal(&self, fname: &str) -> IoResult<Option<(Vec<u8>, DataKey)>> {
+        let (key_id, iv) = {
+            match self.dicts.get_file(fname) {
+                Some(file) if file.method != EncryptionMethod::Plaintext => (file.key_id, file.iv),
+                _ => return Ok(None),
+            }
+        };
+        // Fail if key is specified but not found.
+        let k = match self.dicts.key_dict.lock().unwrap().keys.get(&key_id) {
+            Some(k) => k.clone(),
+            None => {
+                return Err(IoError::new(
+                    ErrorKind::NotFound,
+                    format!("key not found for id {}", key_id),
+                ));
+            }
+        };
+        Ok(Some((iv, k)))
+    }
+
+    /// Removes data keys under the directory `logical`. If `physical` is
+    /// present, if means the `logical` directory is already physically renamed
+    /// to `physical`.
+    /// There're two uses of this function:
+    ///
+    /// (1) without `physical`: `remove_dir` is called before
+    /// `fs::remove_dir_all`. User must guarantee that this directory won't be
+    /// read again even if the removal fails or panics.
+    ///
+    /// (2) with `physical`: Use `fs::rename` to rename the directory to trash.
+    /// Then `remove_dir` with `physical` set to the trash directory name.
+    /// Finally remove the trash directory. This is the safest way to delete a
+    /// directory.
+    pub fn remove_dir(&self, logical: &Path, physical: Option<&Path>) -> IoResult<()> {
+        let scan = physical.unwrap_or(logical);
+        debug_assert!(scan.is_dir());
+        if !scan.exists() {
+            return Ok(());
+        }
+        let mut iter = walkdir::WalkDir::new(scan)
+            .into_iter()
+            .filter(|e| e.as_ref().map_or(true, |e| !e.path().is_dir()))
+            .peekable();
+        while let Some(e) = iter.next() {
+            let e = e?;
+            if e.path().is_symlink() {
+                return Err(io::Error::new(
+                    io::ErrorKind::Other,
+                    format!("unexpected symbolic link: {}", e.path().display()),
+                ));
+            }
+            let fname = e.path().to_str().unwrap();
+            let sync = iter.peek().is_none();
+            if let Some(p) = physical {
+                let sub = fname
+                    .strip_prefix(p.to_str().unwrap())
+                    .unwrap()
+                    .trim_start_matches('/');
+                self.dicts
+                    .delete_file(logical.join(sub).to_str().unwrap(), sync)?;
+            } else {
+                self.dicts.delete_file(fname, sync)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Return which method this manager is using.
+    pub fn encryption_method(&self) -> EncryptionMethod {
+        self.method
+    }
+
+    /// For tests.
+    pub fn file_count(&self) -> usize {
+        self.dicts.file_dict.lock().unwrap().files.len()
+    }
+
+    fn shutdown_background_worker(&mut self) {
+        if let Err(e) = self.rotate_tx.send(RotateTask::Terminate) {
+            info!("failed to terminate background rotation, are we shutting down?"; "err" => %e);
+        }
+        if let Some(Err(e)) = self.background_worker.take().map(|w| w.join()) {
+            info!("failed to join background rotation, are we shutting down?"; "err" => ?e);
+        }
+    }
+>>>>>>> d96284cb29 (encryption: remove useless `EncryptionKeyManager` trait (#16086))
 }
 
 impl Drop for DataKeyManager {
@@ -748,9 +870,9 @@ impl Drop for DataKeyManager {
     }
 }
 
-impl EncryptionKeyManager for DataKeyManager {
+impl DataKeyManager {
     // Get key to open existing file.
-    fn get_file(&self, fname: &str) -> IoResult<FileEncryptionInfo> {
+    pub fn get_file(&self, fname: &str) -> IoResult<FileEncryptionInfo> {
         match self.get_file_exists(fname) {
             Ok(Some(result)) => Ok(result),
             Ok(None) => {
@@ -760,7 +882,11 @@ impl EncryptionKeyManager for DataKeyManager {
                 let method = compat(EncryptionMethod::Plaintext);
                 Ok(FileEncryptionInfo {
                     key: vec![],
+<<<<<<< HEAD
                     method: crypter::encryption_method_to_db_encryption_method(method),
+=======
+                    method,
+>>>>>>> d96284cb29 (encryption: remove useless `EncryptionKeyManager` trait (#16086))
                     iv: file.iv,
                 })
             }
@@ -768,19 +894,33 @@ impl EncryptionKeyManager for DataKeyManager {
         }
     }
 
-    fn new_file(&self, fname: &str) -> IoResult<FileEncryptionInfo> {
+    pub fn new_file(&self, fname: &str) -> IoResult<FileEncryptionInfo> {
         let (_, data_key) = self.dicts.current_data_key();
         let key = data_key.get_key().to_owned();
         let file = self.dicts.new_file(fname, self.method)?;
         let encrypted_file = FileEncryptionInfo {
             key,
+<<<<<<< HEAD
             method: crypter::encryption_method_to_db_encryption_method(file.method),
+=======
+            method: file.method,
+>>>>>>> d96284cb29 (encryption: remove useless `EncryptionKeyManager` trait (#16086))
             iv: file.get_iv().to_owned(),
         };
         Ok(encrypted_file)
     }
 
+<<<<<<< HEAD
     fn delete_file(&self, fname: &str) -> IoResult<()> {
+=======
+    // Can be used with both file and directory. See comments of `remove_dir` for
+    // more details when using this with a directory.
+    //
+    // `physical_fname` is a hint when `fname` was renamed physically.
+    // Depending on the implementation, providing false negative or false
+    // positive value may result in leaking encryption keys.
+    pub fn delete_file(&self, fname: &str, physical_fname: Option<&str>) -> IoResult<()> {
+>>>>>>> d96284cb29 (encryption: remove useless `EncryptionKeyManager` trait (#16086))
         fail_point!("key_manager_fails_before_delete_file", |_| IoResult::Err(
             std::io::ErrorKind::Other.into()
         ));
@@ -788,16 +928,48 @@ impl EncryptionKeyManager for DataKeyManager {
         Ok(())
     }
 
+<<<<<<< HEAD
     fn link_file(&self, src_fname: &str, dst_fname: &str) -> IoResult<()> {
         self.dicts.link_file(src_fname, dst_fname)?;
+=======
+    pub fn link_file(&self, src_fname: &str, dst_fname: &str) -> IoResult<()> {
+        let src_path = Path::new(src_fname);
+        let dst_path = Path::new(dst_fname);
+        if src_path.is_dir() {
+            let mut iter = walkdir::WalkDir::new(src_path)
+                .into_iter()
+                .filter(|e| e.as_ref().map_or(true, |e| !e.path().is_dir()))
+                .peekable();
+            while let Some(e) = iter.next() {
+                let e = e?;
+                if e.path().is_symlink() {
+                    return Err(io::Error::new(
+                        io::ErrorKind::Other,
+                        format!("unexpected symbolic link: {}", e.path().display()),
+                    ));
+                }
+                let sub_path = e.path().strip_prefix(src_path).unwrap();
+                let src = e.path().to_str().unwrap();
+                let dst_path = dst_path.join(sub_path);
+                let dst = dst_path.to_str().unwrap();
+                self.dicts.link_file(src, dst, iter.peek().is_none())?;
+            }
+        } else {
+            self.dicts.link_file(src_fname, dst_fname, true)?;
+        }
+>>>>>>> d96284cb29 (encryption: remove useless `EncryptionKeyManager` trait (#16086))
         Ok(())
     }
 }
 
 #[cfg(test)]
 mod tests {
+<<<<<<< HEAD
     use engine_traits::EncryptionMethod as DBEncryptionMethod;
+=======
+>>>>>>> d96284cb29 (encryption: remove useless `EncryptionKeyManager` trait (#16086))
     use file_system::{remove_file, File};
+    use kvproto::encryptionpb::EncryptionMethod;
     use matches::assert_matches;
     use tempfile::TempDir;
     use test_util::create_test_key_file;
@@ -919,7 +1091,11 @@ mod tests {
         let foo3 = manager.get_file("foo").unwrap();
         assert_eq!(foo1, foo3);
         let bar = manager.new_file("bar").unwrap();
+<<<<<<< HEAD
         assert_eq!(bar.method, DBEncryptionMethod::Plaintext);
+=======
+        assert_eq!(bar.method, EncryptionMethod::Plaintext);
+>>>>>>> d96284cb29 (encryption: remove useless `EncryptionKeyManager` trait (#16086))
     }
 
     // When enabling encryption, using insecure master key is not allowed.

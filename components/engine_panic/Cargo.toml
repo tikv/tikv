@@ -6,10 +6,18 @@ edition = "2018"
 publish = false
 
 [dependencies]
+<<<<<<< HEAD
 engine_traits = { path = "../engine_traits", default-features = false }
 kvproto = { git = "https://github.com/pingcap/kvproto.git" }
 raft = { version = "0.7.0", default-features = false, features = ["protobuf-codec"] }
 tikv_alloc = { path = "../tikv_alloc" }
+=======
+engine_traits = { workspace = true }
+kvproto = { workspace = true }
+encryption = { workspace = true }
+raft = { workspace = true }
+tikv_alloc = { workspace = true }
+>>>>>>> d96284cb29 (encryption: remove useless `EncryptionKeyManager` trait (#16086))
 # FIXME: Remove this dep from the engine_traits interface
 tikv_util = { path = "../tikv_util", default-features = false }
 txn_types = { path = "../txn_types", default-features = false }

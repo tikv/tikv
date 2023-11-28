@@ -3,7 +3,11 @@
 use std::path::Path;
 
 use encryption::DataKeyManager;
+<<<<<<< HEAD
 use engine_traits::EncryptionKeyManager;
+=======
+use external_storage::ExternalStorage;
+>>>>>>> d96284cb29 (encryption: remove useless `EncryptionKeyManager` trait (#16086))
 use file_system::File;
 
 use super::Result;
@@ -74,8 +78,13 @@ mod tests {
         RocksTitanDBOptions,
     };
     use engine_traits::{
+<<<<<<< HEAD
         CfName, ColumnFamilyOptions, DBOptions, EncryptionKeyManager, ImportExt, Peekable,
         SstWriter, SstWriterBuilder, TitanDBOptions,
+=======
+        CfName, CfOptions, DbOptions, ImportExt, Peekable, SstWriter, SstWriterBuilder,
+        TitanCfOptions, CF_DEFAULT,
+>>>>>>> d96284cb29 (encryption: remove useless `EncryptionKeyManager` trait (#16086))
     };
     use tempfile::Builder;
     use test_util::encryption::new_test_key_manager;

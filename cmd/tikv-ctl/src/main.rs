@@ -23,11 +23,18 @@ use std::{
 };
 
 use encryption_export::{
+<<<<<<< HEAD
     create_backend, data_key_manager_from_config, encryption_method_from_db_encryption_method,
     DataKeyManager, DecrypterReader, Iv,
 };
 use engine_rocks::get_env;
 use engine_traits::EncryptionKeyManager;
+=======
+    create_backend, data_key_manager_from_config, DataKeyManager, DecrypterReader, Iv,
+};
+use engine_rocks::get_env;
+use engine_traits::Peekable;
+>>>>>>> d96284cb29 (encryption: remove useless `EncryptionKeyManager` trait (#16086))
 use file_system::calc_crc32;
 use futures::executor::block_on;
 use gag::BufferRedirect;
@@ -139,7 +146,11 @@ fn main() {
             let infile1 = Path::new(infile).canonicalize().unwrap();
             let file_info = key_manager.get_file(infile1.to_str().unwrap()).unwrap();
 
+<<<<<<< HEAD
             let mthd = encryption_method_from_db_encryption_method(file_info.method);
+=======
+            let mthd = file_info.method;
+>>>>>>> d96284cb29 (encryption: remove useless `EncryptionKeyManager` trait (#16086))
             if mthd == EncryptionMethod::Plaintext {
                 println!(
                     "{} is not encrypted, skip to decrypt it into {}",

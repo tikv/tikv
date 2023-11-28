@@ -2,6 +2,7 @@
 
 use std::{path::PathBuf, rc::Rc, sync::Arc};
 
+use ::encryption::DataKeyManager;
 use engine_traits::{
     EncryptionKeyManager, Error, ExternalSstFileInfo, IterOptions, Iterable, Iterator, Result,
     SeekKey, SstCompressionType, SstExt, SstMetaInfo, SstReader, SstWriter, SstWriterBuilder,
@@ -69,6 +70,7 @@ impl RocksSstReader {
 }
 
 impl SstReader for RocksSstReader {
+<<<<<<< HEAD
     fn open(path: &str) -> Result<Self> {
         Self::open_with_env(path, None)
     }
@@ -79,6 +81,11 @@ impl SstReader for RocksSstReader {
         )
         .map_err(|err| Error::Other(box_err!("failed to open encrypted env: {}", err)))?;
         Self::open_with_env(path, Some(Arc::new(env)))
+=======
+    fn open(path: &str, mgr: Option<Arc<DataKeyManager>>) -> Result<Self> {
+        let env = get_env(mgr, get_io_rate_limiter())?;
+        Self::open_with_env(path, Some(env))
+>>>>>>> d96284cb29 (encryption: remove useless `EncryptionKeyManager` trait (#16086))
     }
     fn verify_checksum(&self) -> Result<()> {
         self.inner.verify_checksum()?;

@@ -14,8 +14,12 @@ bytes = "1.0"
 crc32fast = "1.2"
 crossbeam = "0.8"
 derive_more = "0.99.3"
+<<<<<<< HEAD
 engine_traits = { path = "../engine_traits", default-features = false }
 error_code = { path = "../error_code", default-features = false }
+=======
+error_code = { workspace = true }
+>>>>>>> d96284cb29 (encryption: remove useless `EncryptionKeyManager` trait (#16086))
 fail = "0.5"
 file_system = { path = "../file_system", default-features = false }
 futures = "0.3"

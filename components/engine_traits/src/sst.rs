@@ -2,9 +2,14 @@
 
 use std::{path::PathBuf, sync::Arc};
 
+use encryption::DataKeyManager;
 use kvproto::import_sstpb::SstMeta;
 
+<<<<<<< HEAD
 use crate::{errors::Result, iterable::Iterable, EncryptionKeyManager};
+=======
+use crate::{errors::Result, RefIterable};
+>>>>>>> d96284cb29 (encryption: remove useless `EncryptionKeyManager` trait (#16086))
 
 #[derive(Clone, Debug)]
 pub struct SstMetaInfo {
@@ -20,9 +25,14 @@ pub trait SstExt: Sized {
 }
 
 /// SstReader is used to read an SST file.
+<<<<<<< HEAD
 pub trait SstReader: Iterable + Sized {
     fn open(path: &str) -> Result<Self>;
     fn open_encrypted<E: EncryptionKeyManager>(path: &str, mgr: Arc<E>) -> Result<Self>;
+=======
+pub trait SstReader: RefIterable + Sized + Send {
+    fn open(path: &str, mgr: Option<Arc<DataKeyManager>>) -> Result<Self>;
+>>>>>>> d96284cb29 (encryption: remove useless `EncryptionKeyManager` trait (#16086))
     fn verify_checksum(&self) -> Result<()>;
     // FIXME: Shouldn't this me a method on Iterable?
     fn iter(&self) -> Self::Iterator;

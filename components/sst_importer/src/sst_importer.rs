@@ -10,6 +10,7 @@ use std::{
     sync::Arc,
 };
 
+<<<<<<< HEAD
 use dashmap::DashMap;
 use encryption::{encryption_method_to_db_encryption_method, DataKeyManager};
 use engine_rocks::{get_env, RocksSstReader};
@@ -17,6 +18,15 @@ use engine_traits::{
     name_to_cf, util::check_key_in_range, CfName, EncryptionKeyManager, FileEncryptionInfo,
     Iterator, KvEngine, SeekKey, SstCompressionType, SstExt, SstMetaInfo, SstReader, SstWriter,
     SstWriterBuilder, CF_DEFAULT, CF_WRITE,
+=======
+use collections::HashSet;
+use dashmap::{mapref::entry::Entry, DashMap};
+use encryption::{DataKeyManager, FileEncryptionInfo};
+use engine_traits::{
+    name_to_cf, util::check_key_in_range, CfName, IterOptions, Iterator, KvEngine, RefIterable,
+    SstCompressionType, SstExt, SstMetaInfo, SstReader, SstWriter, SstWriterBuilder, CF_DEFAULT,
+    CF_WRITE,
+>>>>>>> d96284cb29 (encryption: remove useless `EncryptionKeyManager` trait (#16086))
 };
 use file_system::{get_io_rate_limiter, OpenOptions};
 use futures::executor::ThreadPool;
@@ -463,7 +473,11 @@ impl SstImporter {
         let path = self.dir.join(meta)?;
 
         let file_crypter = crypter.map(|c| FileEncryptionInfo {
+<<<<<<< HEAD
             method: encryption_method_to_db_encryption_method(c.cipher_type),
+=======
+            method: c.cipher_type,
+>>>>>>> d96284cb29 (encryption: remove useless `EncryptionKeyManager` trait (#16086))
             key: c.cipher_key,
             iv: meta.cipher_iv.to_owned(),
         });
@@ -777,10 +791,20 @@ mod tests {
     use std::io;
 
     use engine_traits::{
+<<<<<<< HEAD
         collect, EncryptionMethod, Error as TraitError, ExternalSstFileInfo, Iterable, Iterator,
         SeekKey, SstReader, SstWriter, CF_DEFAULT, DATA_CFS,
+=======
+        collect, Error as TraitError, ExternalSstFileInfo, Iterable, Iterator, RefIterable,
+        SstReader, SstWriter, CF_DEFAULT, DATA_CFS,
+>>>>>>> d96284cb29 (encryption: remove useless `EncryptionKeyManager` trait (#16086))
     };
     use file_system::File;
+<<<<<<< HEAD
+=======
+    use kvproto::encryptionpb::EncryptionMethod;
+    use online_config::{ConfigManager, OnlineConfig};
+>>>>>>> d96284cb29 (encryption: remove useless `EncryptionKeyManager` trait (#16086))
     use openssl::hash::{Hasher, MessageDigest};
     use tempfile::Builder;
     use test_sst_importer::*;

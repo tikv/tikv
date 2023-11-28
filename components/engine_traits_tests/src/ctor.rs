@@ -8,7 +8,11 @@ use engine_test::{
     ctor::{CFOptions, ColumnFamilyOptions, DBOptions, KvEngineConstructorExt},
     kv::KvTestEngine,
 };
+<<<<<<< HEAD
 use engine_traits::{KvEngine, SyncMutable, ALL_CFS};
+=======
+use engine_traits::{KvEngine, Peekable, SyncMutable, ALL_CFS, CF_DEFAULT};
+>>>>>>> d96284cb29 (encryption: remove useless `EncryptionKeyManager` trait (#16086))
 
 use super::tempdir;
 
