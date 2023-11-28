@@ -2,6 +2,7 @@
 
 use std::{path::PathBuf, sync::Arc};
 
+use ::encryption::DataKeyManager;
 use engine_traits::{
     Error, ExternalSstFileInfo, IterOptions, Iterator, RefIterable, Result, SstCompressionType,
     SstExt, SstReader, SstWriter, SstWriterBuilder, CF_DEFAULT,
@@ -47,10 +48,7 @@ impl RocksSstReader {
 }
 
 impl SstReader for RocksSstReader {
-    fn open<E: engine_traits::EncryptionKeyManager>(
-        path: &str,
-        mgr: Option<Arc<E>>,
-    ) -> Result<Self> {
+    fn open(path: &str, mgr: Option<Arc<DataKeyManager>>) -> Result<Self> {
         let env = get_env(mgr, get_io_rate_limiter())?;
         Self::open_with_env(path, Some(env))
     }
