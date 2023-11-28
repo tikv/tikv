@@ -86,6 +86,7 @@ mod all {
             })
         });
         fail::cfg("scan_after_get_snapshot", "off").unwrap();
+        std::thread::sleep(Duration::from_secs(1));
         suite.force_flush_files("frequent_initial_scan");
         suite.wait_for_flush();
         std::thread::sleep(Duration::from_secs(1));
