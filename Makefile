@@ -360,6 +360,7 @@ pre-clippy: unset-override
 clippy: pre-clippy
 	@./scripts/check-redact-log
 	@./scripts/check-log-style
+	@./scripts/check-dashboards
 	@./scripts/check-docker-build
 	@./scripts/check-license
 	@./scripts/clippy-all
