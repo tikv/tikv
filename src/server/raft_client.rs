@@ -814,11 +814,8 @@ async fn start<S, R>(
     let mut last_wake_time = None;
     let backoff_duration = back_end.builder.cfg.value().raft_client_max_backoff.0;
     let mut addr_channel = None;
-    let mut cnt = 0;
-    let begin = Instant::now();
     loop {
-        cnt+=1;
-        let begin_round = Instant::now();
+        let begin = Instant::now();
         maybe_backoff(backoff_duration, &mut last_wake_time).await;
         let f = back_end.resolve();
         let addr = match f.await {
@@ -866,7 +863,7 @@ async fn start<S, R>(
                 .report_store_unreachable(back_end.store_id);
             continue;
         } else {
-            info!("connection established"; "store_id" => back_end.store_id, "addr" => %addr, "round_cost" => ?begin_round.elapsed(), "total_cost" => ?begin.elapsed(), "cnt" => cnt);
+            info!("connection established"; "store_id" => back_end.store_id, "addr" => %addr, "cost" => ?begin.elapsed());
         }
 
         let client = TikvClient::new(channel);
