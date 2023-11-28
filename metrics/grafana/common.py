@@ -610,13 +610,20 @@ def target(
 
 
 def template(
-    name, query, data_source, hide, regex=None, include_all=False, all_value=None
+    name,
+    query,
+    data_source,
+    hide,
+    regex=None,
+    multi=False,
+    include_all=False,
+    all_value=None,
 ) -> Template:
     return Template(
         dataSource=data_source,
         hide=hide,
         label=name,
-        multi=False,
+        multi=multi,
         name=name,
         query=query,
         refresh=2,

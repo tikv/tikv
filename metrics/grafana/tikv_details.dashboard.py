@@ -4,40 +4,39 @@ import sys
 sys.path.append(os.path.dirname(__file__))
 
 from common import (
-    DATASOURCE_INPUT,
     DATASOURCE,
+    DATASOURCE_INPUT,
     Layout,
-    expr_sum,
     expr_avg,
+    expr_count_rate,
+    expr_histogram_avg,
+    expr_histogram_quantile,
     expr_max,
+    expr_max_rate,
     expr_min,
-    expr_sum_rate,
+    expr_operator,
+    expr_simple,
+    expr_sum,
+    expr_sum_aggr_over_time,
     expr_sum_delta,
     expr_sum_increase,
-    expr_sum_aggr_over_time,
-    expr_max_rate,
-    expr_count_rate,
-    expr_simple,
-    expr_operator,
-    expr_histogram_quantile,
+    expr_sum_rate,
     expr_topk,
-    expr_histogram_avg,
-    target,
-    template,
-    yaxis,
-    yaxes,
     graph_legend,
     graph_panel,
-    series_override,
-    heatmap_panel,
-    stat_panel,
     graph_panel_histogram_quantiles,
+    heatmap_panel,
     heatmap_panel_graph_panel_histogram_quantile_pairs,
+    series_override,
+    stat_panel,
+    target,
+    template,
+    yaxes,
+    yaxis,
 )
-
 from grafanalib import formatunits as UNITS
 from grafanalib.core import (
-    GRAPH_TOOLTIP_MODE_SHARED_TOOLTIP,
+    GRAPH_TOOLTIP_MODE_SHARED_CROSSHAIR,
     HIDE_VARIABLE,
     NULL_AS_NULL,
     SHOW,
@@ -72,6 +71,8 @@ def Templates() -> Templating:
                 query='label_values(tikv_engine_block_cache_size_bytes{k8s_cluster="$k8s_cluster", tidb_cluster="$tidb_cluster"}, db)',
                 data_source=DATASOURCE,
                 hide=SHOW,
+                multi=True,
+                include_all=True,
             ),
             template(
                 name="command",
@@ -79,6 +80,7 @@ def Templates() -> Templating:
                 data_source=DATASOURCE,
                 hide=SHOW,
                 regex='/\\btype="([^"]+)"/',
+                multi=True,
                 include_all=True,
             ),
             template(
@@ -94,6 +96,8 @@ def Templates() -> Templating:
                 query='label_values(tikv_engine_titandb_num_live_blob_file{k8s_cluster="$k8s_cluster", tidb_cluster="$tidb_cluster"}, db)',
                 data_source=DATASOURCE,
                 hide=HIDE_VARIABLE,
+                multi=True,
+                include_all=True,
             ),
         ]
     )
@@ -8548,13 +8552,13 @@ def SlowTrendStatistics() -> RowPanel:
 
 
 dashboard = Dashboard(
-    title="Test-Cluster-TiKV-Detailsaa",
-    uid="RDVQiEzZzaa",
+    title="Test-Cluster-TiKV-Details",
+    uid="RDVQiEzZz",
     timezone="browser",
     refresh="1m",
     inputs=[DATASOURCE_INPUT],
     editable=True,
-    graphTooltip=GRAPH_TOOLTIP_MODE_SHARED_TOOLTIP,
+    graphTooltip=GRAPH_TOOLTIP_MODE_SHARED_CROSSHAIR,
     templating=Templates(),
     panels=[
         Duration(),

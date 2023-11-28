@@ -19,6 +19,6 @@ docker run \
         isort --profile black /metrics/grafana/*.py && \
         black /metrics/grafana/*.py && \
         generate-dashboard \
-            -o /metrics/grafana/tikv_details1.json \
+            -o /metrics/grafana/tikv_details.json \
             /metrics/grafana/tikv_details.dashboard.py
     "
