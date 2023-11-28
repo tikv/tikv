@@ -160,7 +160,9 @@ def Duration() -> RowPanel:
                     ),
                     target(
                         expr=expr_histogram_quantile(
-                            0.99, "tikv_coprocessor_request_wait_seconds"
+                            0.99,
+                            "tikv_coprocessor_request_wait_seconds",
+                            ['type="all"'],
                         ),
                         legend_format="Cop Wait .99",
                     ),
@@ -3574,8 +3576,10 @@ def Task() -> RowPanel:
                 description="Current pending and running tasks of future_pool",
                 targets=[
                     target(
-                        expr=expr_sum(
+                        expr=expr_sum_aggr_over_time(
                             "tikv_futurepool_pending_task_total",
+                            "avg",
+                            range_selector="1m",
                             by_labels=["name"],
                         ),
                     ),
@@ -3712,6 +3716,7 @@ def CoprocessorDetail() -> RowPanel:
                 description="The time consumed when coprocessor requests are wait for being handled",
                 yaxes=yaxes(left_format=UNITS.SECONDS),
                 metric="tikv_coprocessor_request_wait_seconds",
+                label_selectors=['type="all"'],
                 by_labels=["req"],
                 hide_avg=True,
                 hide_count=True,
@@ -3721,6 +3726,7 @@ def CoprocessorDetail() -> RowPanel:
                 description="The time consumed when coprocessor requests are wait for being handled in each TiKV instance",
                 yaxes=yaxes(left_format=UNITS.SECONDS),
                 metric="tikv_coprocessor_request_wait_seconds",
+                label_selectors=['type="all"'],
                 by_labels=["req", "instance"],
                 hide_avg=True,
                 hide_count=True,
