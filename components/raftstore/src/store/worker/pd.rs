@@ -266,16 +266,9 @@ impl StoreStat {
         }
 
         let mut cpu_usage = 0_u64;
-
         for record in self.store_cpu_usages.iter() {
             cpu_usage += record.get_value();
         }
-        STORE_STAT_CPU_USAGE
-            .with_label_values(&["cpu_usage"])
-            .set(cpu_usage as i64);
-        STORE_STAT_CPU_USAGE
-            .with_label_values(&["cpu_usage_limit"])
-            .set(self.store_cpu_quota as i64);
 
         (cpu_usage as f64 / self.store_cpu_quota) >= self.store_cpu_busy_thd
     }
