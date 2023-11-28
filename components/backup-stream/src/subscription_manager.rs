@@ -622,7 +622,7 @@ where
                 utils::debug_region(&region),
             )
         });
-        info!("retry observe region"; "region" => %region.get_id(), "failure_count" => %failure_count, "handle" => ?handle.id);
+        info!("retry observe region"; "region" => %region.get_id(), "failure_count" => %failure_count, "handle" => ?handle);
         if failure_count > TRY_START_OBSERVE_MAX_RETRY_TIME {
             return Err(Error::Other(
                 format!(
@@ -680,11 +680,7 @@ where
                 .inc();
             return Ok(false);
         }
-        self.schedule_start_observe(
-            backoff_for_start_observe(failure_count),
-            region,
-            Some(handle),
-        );
+        self.schedule_start_observe(backoff_for_start_observe(failure_count), region, None);
         metrics::INITIAL_SCAN_REASON
             .with_label_values(&["retry"])
             .inc();
