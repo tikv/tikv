@@ -100,6 +100,80 @@ impl RaftCommitLogStatistics {
     }
 }
 
+#[derive(Default)]
+struct LocalHealthStatistics {
+    duration_sum: Duration,
+    count: u64,
+}
+
+impl LocalHealthStatistics {
+    #[inline]
+    fn observe(&mut self, dur: Duration) {
+        self.count += 1;
+        self.duration_sum += dur;
+    }
+
+    #[inline]
+    fn avg(&self) -> Duration {
+        if self.count > 0 {
+            Duration::from_micros(self.duration_sum.as_micros() as u64 / self.count)
+        } else {
+            Duration::default()
+        }
+    }
+
+    #[inline]
+    fn reset(&mut self) {
+        self.count = 0;
+        self.duration_sum = Duration::default();
+    }
+}
+
+#[repr(u8)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IoType {
+    Disk = 0,
+    Network = 1,
+}
+
+#[derive(Default)]
+pub struct HealthStatistics {
+    /// the time for syncing raft logs, represents periodic latency on the disk
+    /// io.
+    sync_log: LocalHealthStatistics,
+    /// the time for committing raft logs, represents the latency of the network
+    /// io.
+    commit_log: LocalHealthStatistics,
+}
+
+impl HealthStatistics {
+    #[inline]
+    pub fn observe(&mut self, dur: Duration, io_type: IoType) {
+        match io_type {
+            IoType::Disk => self.sync_log.observe(dur),
+            IoType::Network => self.commit_log.observe(dur),
+        }
+    }
+
+    #[inline]
+    pub fn avg(&self, io_type: IoType) -> Duration {
+        match io_type {
+            IoType::Disk => self.sync_log.avg(),
+            IoType::Network => self.commit_log.avg(),
+        }
+    }
+
+    #[inline]
+    /// Reset HealthStatistics.
+    ///
+    /// Should be manually reset when the metrics are
+    /// accepted by slowness inspector.
+    pub fn reset(&mut self) {
+        self.sync_log.reset();
+        self.commit_log.reset();
+    }
+}
+
 /// The buffered metrics counters for raft.
 pub struct RaftMetrics {
     // local counter
@@ -133,6 +207,7 @@ pub struct RaftMetrics {
     pub wf_commit_not_persist_log: LocalHistogram,
 
     // local statistics for slowness
+    pub health_stats: HealthStatistics,
     pub stat_commit_log: RaftCommitLogStatistics,
 
     pub check_stale_peer: LocalIntCounter,
@@ -172,6 +247,7 @@ impl RaftMetrics {
             wf_persist_log: STORE_WF_PERSIST_LOG_DURATION_HISTOGRAM.local(),
             wf_commit_log: STORE_WF_COMMIT_LOG_DURATION_HISTOGRAM.local(),
             wf_commit_not_persist_log: STORE_WF_COMMIT_NOT_PERSIST_LOG_DURATION_HISTOGRAM.local(),
+            health_stats: HealthStatistics::default(),
             stat_commit_log: RaftCommitLogStatistics::default(),
             check_stale_peer: CHECK_STALE_PEER_COUNTER.local(),
             leader_missing: Arc::default(),
@@ -303,6 +379,16 @@ impl TimeTracker {
             }
         });
         dur.as_nanos() as u64
+    }
+
+    #[inline]
+    pub fn fetch_metric(&self, tracker_metric: impl FnOnce(&Tracker) -> &u64) -> u64 {
+        GLOBAL_TRACKERS
+            .with_tracker(self.token, |tracker| {
+                let metric = tracker_metric(tracker);
+                *metric
+            })
+            .unwrap_or_default()
     }
 
     #[inline]

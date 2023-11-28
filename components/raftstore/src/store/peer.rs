@@ -71,7 +71,7 @@ use uuid::Uuid;
 
 use super::{
     cmd_resp,
-    local_metrics::RaftMetrics,
+    local_metrics::{IoType, RaftMetrics},
     metrics::*,
     peer_storage::{write_peer_state, CheckApplyingSnapStatus, HandleReadyResult, PeerStorage},
     read_queue::{ReadIndexQueue, ReadIndexRequest},
@@ -1860,7 +1860,7 @@ where
         Ok(())
     }
 
-    fn report_persist_log_duration(&self, pre_persist_index: u64, metrics: &RaftMetrics) {
+    fn report_persist_log_duration(&self, pre_persist_index: u64, metrics: &mut RaftMetrics) {
         if !metrics.waterfall_metrics || self.proposals.is_empty() {
             return;
         }
@@ -1877,6 +1877,11 @@ where
                         tracker.observe(now, &metrics.wf_persist_log, |t| {
                             &mut t.metrics.wf_persist_log_nanos
                         });
+                        let sync_duration =
+                            tracker.fetch_metric(|t| &t.metrics.store_write_wal_nanos);
+                        metrics
+                            .health_stats
+                            .observe(Duration::from_nanos(sync_duration), IoType::Disk);
                     }
                 }
             }
@@ -1909,6 +1914,9 @@ where
                             t.metrics.commit_not_persisted = !commit_persisted;
                             &mut t.metrics.wf_commit_log_nanos
                         });
+                        metrics
+                            .health_stats
+                            .observe(Duration::from_nanos(duration), IoType::Network);
                         metrics
                             .stat_commit_log
                             .record(Duration::from_nanos(duration));
@@ -3129,7 +3137,7 @@ where
             let pre_persist_index = self.raft_group.raft.raft_log.persisted;
             let pre_commit_index = self.raft_group.raft.raft_log.committed;
             self.raft_group.on_persist_ready(self.persisted_number);
-            self.report_persist_log_duration(pre_persist_index, &ctx.raft_metrics);
+            self.report_persist_log_duration(pre_persist_index, &mut ctx.raft_metrics);
             self.report_commit_log_duration(pre_commit_index, &mut ctx.raft_metrics);
 
             let persist_index = self.raft_group.raft.raft_log.persisted;
@@ -3174,7 +3182,7 @@ where
         let pre_persist_index = self.raft_group.raft.raft_log.persisted;
         let pre_commit_index = self.raft_group.raft.raft_log.committed;
         let mut light_rd = self.raft_group.advance_append(ready);
-        self.report_persist_log_duration(pre_persist_index, &ctx.raft_metrics);
+        self.report_persist_log_duration(pre_persist_index, &mut ctx.raft_metrics);
         self.report_commit_log_duration(pre_commit_index, &mut ctx.raft_metrics);
 
         let persist_index = self.raft_group.raft.raft_log.persisted;
