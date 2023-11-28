@@ -1329,6 +1329,32 @@ def TTL() -> RowPanel:
     layout.row(
         [
             graph_panel(
+                title="TTL expire count",
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_ttl_expire_kv_count_total",
+                        ),
+                        legend_format="{{instance}}",
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="TTL expire size",
+                yaxes=yaxes(left_format=UNITS.BYTES_IEC),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_ttl_expire_kv_size_total",
+                        )
+                    ),
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel(
                 title="TTL check progress",
                 yaxes=yaxes(left_format=UNITS.PERCENT_UNIT),
                 targets=[
