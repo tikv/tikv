@@ -126,10 +126,22 @@ impl GcRunner {
             count += 1;
         }
 
+        let mut count2 = 0;
+
+        if filter.filtered > 0 {
+            while iter.valid() {
+                let k = iter.key();
+                let v = iter.value();
+                iter.next();
+                count2 += 1;
+            }
+        }
+
         info!(
             "region gc complete";
             "region_id" => region_id,
             "total_version" => count,
+            "total_version_again" => count2,
             "outdated_version" => filter.versions,
             "filtered_version" => filter.filtered,
         );
