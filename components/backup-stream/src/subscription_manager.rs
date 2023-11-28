@@ -1039,7 +1039,7 @@ mod test {
                 }
             }));
             bg_tasks.push(pool.spawn(
-                subs_mgr.region_operator_loop::<KvTestEngine, CdcRaftRouter<MockRaftStoreRouter>>(
+                subs_mgr.region_operator_loop::<KvTestEngine, CdcRaftRouter<KvTestEngine>>(
                     ob_rx,
                     BackupStreamResolver::Nop,
                 ),
