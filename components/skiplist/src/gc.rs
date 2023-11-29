@@ -127,8 +127,9 @@ impl GcRunner {
         }
 
         let mut count2 = 0;
-
         if filter.filtered > 0 {
+            let mut iter = write_cf_sklist.iter();
+            iter.seek_to_first();
             while iter.valid() {
                 let k = iter.key();
                 let v = iter.value();
