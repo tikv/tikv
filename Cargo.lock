@@ -366,8 +366,13 @@ dependencies = [
 
 [[package]]
 name = "azure_core"
+<<<<<<< HEAD
 version = "0.1.0"
 source = "git+https://github.com/Azure/azure-sdk-for-rust#b3c53f4cec4a6b541e49388b51e696dc892f18a3"
+=======
+version = "0.12.0"
+source = "git+https://github.com/tikv/azure-sdk-for-rust?branch=release-7.5-fips#e3dc3e02573e60e70f00418255c417aa80b8e26b"
+>>>>>>> 1afb327c6d (cloud: update cloud sdk that supports fips 140 for cloud sdk (#16098))
 dependencies = [
  "async-trait",
  "base64",
@@ -392,8 +397,13 @@ dependencies = [
 
 [[package]]
 name = "azure_identity"
+<<<<<<< HEAD
 version = "0.1.0"
 source = "git+https://github.com/Azure/azure-sdk-for-rust#b3c53f4cec4a6b541e49388b51e696dc892f18a3"
+=======
+version = "0.12.0"
+source = "git+https://github.com/tikv/azure-sdk-for-rust?branch=release-7.5-fips#e3dc3e02573e60e70f00418255c417aa80b8e26b"
+>>>>>>> 1afb327c6d (cloud: update cloud sdk that supports fips 140 for cloud sdk (#16098))
 dependencies = [
  "async-timer",
  "async-trait",
@@ -405,14 +415,39 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
+<<<<<<< HEAD
  "thiserror",
+=======
+ "time 0.3.20",
+ "url",
+ "uuid 1.2.1",
+]
+
+[[package]]
+name = "azure_security_keyvault"
+version = "0.12.0"
+source = "git+https://github.com/tikv/azure-sdk-for-rust?branch=release-7.5-fips#e3dc3e02573e60e70f00418255c417aa80b8e26b"
+dependencies = [
+ "async-trait",
+ "azure_core",
+ "const_format",
+ "futures 0.3.15",
+ "serde",
+ "serde_json",
+ "time 0.3.20",
+>>>>>>> 1afb327c6d (cloud: update cloud sdk that supports fips 140 for cloud sdk (#16098))
  "url",
 ]
 
 [[package]]
 name = "azure_storage"
+<<<<<<< HEAD
 version = "0.1.0"
 source = "git+https://github.com/Azure/azure-sdk-for-rust#b3c53f4cec4a6b541e49388b51e696dc892f18a3"
+=======
+version = "0.12.0"
+source = "git+https://github.com/tikv/azure-sdk-for-rust?branch=release-7.5-fips#e3dc3e02573e60e70f00418255c417aa80b8e26b"
+>>>>>>> 1afb327c6d (cloud: update cloud sdk that supports fips 140 for cloud sdk (#16098))
 dependencies = [
  "RustyXML",
  "async-trait",
@@ -421,18 +456,50 @@ dependencies = [
  "bytes",
  "chrono",
  "futures 0.3.15",
+<<<<<<< HEAD
  "http",
+=======
+>>>>>>> 1afb327c6d (cloud: update cloud sdk that supports fips 140 for cloud sdk (#16098))
  "log",
  "md5",
  "once_cell",
+<<<<<<< HEAD
  "ring",
+=======
+ "openssl",
+>>>>>>> 1afb327c6d (cloud: update cloud sdk that supports fips 140 for cloud sdk (#16098))
  "serde",
  "serde-xml-rs",
  "serde_derive",
  "serde_json",
+<<<<<<< HEAD
  "thiserror",
  "url",
  "uuid 0.8.2",
+=======
+ "time 0.3.20",
+ "url",
+ "uuid 1.2.1",
+]
+
+[[package]]
+name = "azure_storage_blobs"
+version = "0.12.0"
+source = "git+https://github.com/tikv/azure-sdk-for-rust?branch=release-7.5-fips#e3dc3e02573e60e70f00418255c417aa80b8e26b"
+dependencies = [
+ "RustyXML",
+ "azure_core",
+ "azure_storage",
+ "bytes",
+ "futures 0.3.15",
+ "log",
+ "serde",
+ "serde_derive",
+ "serde_json",
+ "time 0.3.20",
+ "url",
+ "uuid 1.2.1",
+>>>>>>> 1afb327c6d (cloud: update cloud sdk that supports fips 140 for cloud sdk (#16098))
 ]
 
 [[package]]
@@ -1267,6 +1334,7 @@ dependencies = [
 ]
 
 [[package]]
+<<<<<<< HEAD
 name = "crossbeam-utils"
 version = "0.8.11"
 source = "git+https://github.com/crossbeam-rs/crossbeam?rev=41ed3d948720f26149b2ebeaf58fe8a193134056#41ed3d948720f26149b2ebeaf58fe8a193134056"
@@ -1286,6 +1354,8 @@ dependencies = [
 ]
 
 [[package]]
+=======
+>>>>>>> 1afb327c6d (cloud: update cloud sdk that supports fips 140 for cloud sdk (#16098))
 name = "csv"
 version = "1.1.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2430,6 +2500,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "644f9158b2f133fd50f5fb3242878846d9eb792e445c893805ff0e3824006e35"
 
 [[package]]
+<<<<<<< HEAD
 name = "hmac"
 version = "0.10.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2437,6 +2508,14 @@ checksum = "c1441c6b1e930e2817404b5046f1f989899143a12bf92de603b69f4e0aee1e15"
 dependencies = [
  "crypto-mac",
  "digest",
+=======
+name = "home"
+version = "0.5.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5444c27eef6923071f7ebcc33e3444508466a76f7a2b93da00ed6e19f30c1ddb"
+dependencies = [
+ "windows-sys 0.48.0",
+>>>>>>> 1afb327c6d (cloud: update cloud sdk that supports fips 140 for cloud sdk (#16098))
 ]
 
 [[package]]
@@ -2966,6 +3045,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7ffc5c5338469d4d3ea17d269fa8ea3512ad247247c30bd2df69e68309ed0a08"
 
 [[package]]
+<<<<<<< HEAD
 name = "matchit"
 version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2983,6 +3063,8 @@ dependencies = [
 ]
 
 [[package]]
+=======
+>>>>>>> 1afb327c6d (cloud: update cloud sdk that supports fips 140 for cloud sdk (#16098))
 name = "md5"
 version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4700,7 +4782,7 @@ dependencies = [
 [[package]]
 name = "rusoto_core"
 version = "0.46.0"
-source = "git+https://github.com/tikv/rusoto?branch=gh1482-s3-addr-styles#0d6df7b119c4e757daaa715f261c3150c7ae0a3b"
+source = "git+https://github.com/tikv/rusoto?branch=gh1482-s3-addr-styles#cc733208600bdb15a13940d6930c1fbd4ab604f2"
 dependencies = [
  "async-trait",
  "base64",
@@ -4724,7 +4806,7 @@ dependencies = [
 [[package]]
 name = "rusoto_credential"
 version = "0.46.0"
-source = "git+https://github.com/tikv/rusoto?branch=gh1482-s3-addr-styles#0d6df7b119c4e757daaa715f261c3150c7ae0a3b"
+source = "git+https://github.com/tikv/rusoto?branch=gh1482-s3-addr-styles#cc733208600bdb15a13940d6930c1fbd4ab604f2"
 dependencies = [
  "async-trait",
  "chrono",
@@ -4741,7 +4823,7 @@ dependencies = [
 [[package]]
 name = "rusoto_kms"
 version = "0.46.0"
-source = "git+https://github.com/tikv/rusoto?branch=gh1482-s3-addr-styles#0d6df7b119c4e757daaa715f261c3150c7ae0a3b"
+source = "git+https://github.com/tikv/rusoto?branch=gh1482-s3-addr-styles#cc733208600bdb15a13940d6930c1fbd4ab604f2"
 dependencies = [
  "async-trait",
  "bytes",
@@ -4754,7 +4836,7 @@ dependencies = [
 [[package]]
 name = "rusoto_mock"
 version = "0.46.0"
-source = "git+https://github.com/tikv/rusoto?branch=gh1482-s3-addr-styles#0d6df7b119c4e757daaa715f261c3150c7ae0a3b"
+source = "git+https://github.com/tikv/rusoto?branch=gh1482-s3-addr-styles#cc733208600bdb15a13940d6930c1fbd4ab604f2"
 dependencies = [
  "async-trait",
  "chrono",
@@ -4768,7 +4850,7 @@ dependencies = [
 [[package]]
 name = "rusoto_s3"
 version = "0.46.0"
-source = "git+https://github.com/tikv/rusoto?branch=gh1482-s3-addr-styles#0d6df7b119c4e757daaa715f261c3150c7ae0a3b"
+source = "git+https://github.com/tikv/rusoto?branch=gh1482-s3-addr-styles#cc733208600bdb15a13940d6930c1fbd4ab604f2"
 dependencies = [
  "async-trait",
  "bytes",
@@ -4782,32 +4864,40 @@ dependencies = [
 [[package]]
 name = "rusoto_signature"
 version = "0.46.0"
-source = "git+https://github.com/tikv/rusoto?branch=gh1482-s3-addr-styles#0d6df7b119c4e757daaa715f261c3150c7ae0a3b"
+source = "git+https://github.com/tikv/rusoto?branch=gh1482-s3-addr-styles#cc733208600bdb15a13940d6930c1fbd4ab604f2"
 dependencies = [
  "base64",
  "bytes",
  "chrono",
+<<<<<<< HEAD
  "digest",
  "futures 0.3.15",
  "hex 0.4.2",
  "hmac",
+=======
+ "futures 0.3.15",
+ "hex 0.4.2",
+>>>>>>> 1afb327c6d (cloud: update cloud sdk that supports fips 140 for cloud sdk (#16098))
  "http",
  "hyper",
  "log",
- "md-5",
+ "openssl",
  "percent-encoding",
  "pin-project-lite",
  "rusoto_credential",
  "rustc_version 0.3.3",
  "serde",
+<<<<<<< HEAD
  "sha2",
+=======
+>>>>>>> 1afb327c6d (cloud: update cloud sdk that supports fips 140 for cloud sdk (#16098))
  "tokio",
 ]
 
 [[package]]
 name = "rusoto_sts"
 version = "0.46.0"
-source = "git+https://github.com/tikv/rusoto?branch=gh1482-s3-addr-styles#0d6df7b119c4e757daaa715f261c3150c7ae0a3b"
+source = "git+https://github.com/tikv/rusoto?branch=gh1482-s3-addr-styles#cc733208600bdb15a13940d6930c1fbd4ab604f2"
 dependencies = [
  "async-trait",
  "bytes",
@@ -5568,12 +5658,15 @@ dependencies = [
 ]
 
 [[package]]
+<<<<<<< HEAD
 name = "subtle"
 version = "2.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "343f3f510c2915908f155e94f17220b19ccfacf2a64a2a5d8004f2c3e311e7fd"
 
 [[package]]
+=======
+>>>>>>> 1afb327c6d (cloud: update cloud sdk that supports fips 140 for cloud sdk (#16098))
 name = "symbolic-common"
 version = "10.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"

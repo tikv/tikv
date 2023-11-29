@@ -6,9 +6,19 @@ publish = false
 
 [dependencies]
 async-trait = "0.1"
+<<<<<<< HEAD
 azure_core = { version = "0.1.0", git = "https://github.com/Azure/azure-sdk-for-rust" }
 azure_identity = { version = "0.1.0", git = "https://github.com/Azure/azure-sdk-for-rust" }
 azure_storage = { version = "0.1.0", git = "https://github.com/Azure/azure-sdk-for-rust", default-features = false, features = ["account", "blob"] }
+=======
+# TODO: The azure sdk with the newest version needs the rustc v1.70, but current version of rustc in TiKV is v1.67.
+#     Therefore use the patch to update sdk to support fips 140.
+azure_core = { git = "https://github.com/tikv/azure-sdk-for-rust", branch = "release-7.5-fips" }
+azure_identity = { git = "https://github.com/tikv/azure-sdk-for-rust", branch = "release-7.5-fips" }
+azure_security_keyvault = { git = "https://github.com/tikv/azure-sdk-for-rust", branch = "release-7.5-fips", default-features = false }
+azure_storage = { git = "https://github.com/tikv/azure-sdk-for-rust", branch = "release-7.5-fips", default-features = false }
+azure_storage_blobs = { git = "https://github.com/tikv/azure-sdk-for-rust", branch = "release-7.5-fips" }
+>>>>>>> 1afb327c6d (cloud: update cloud sdk that supports fips 140 for cloud sdk (#16098))
 base64 = "0.13"
 chrono = "0.4"
 cloud = { workspace = true }
