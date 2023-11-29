@@ -20,10 +20,10 @@ use txn_types::{Key, TimeStamp};
 use super::{
     compaction_filter::is_compaction_filter_allowed,
     config::GcWorkerConfigManager,
-    gc_worker::{sync_gc, GcSafePointProvider, GcTask},
+    gc_worker::{schedule_gc, GcSafePointProvider, GcTask},
     Result,
 };
-use crate::{server::metrics::*, tikv_util::sys::thread::StdThreadBuildWrapper};
+use crate::{server::metrics::*, storage::Callback, tikv_util::sys::thread::StdThreadBuildWrapper};
 
 const POLL_SAFE_POINT_INTERVAL_SECS: u64 = 10;
 
@@ -245,6 +245,8 @@ pub(super) struct GcManager<S: GcSafePointProvider, R: RegionInfoProvider, E: Kv
 
     cfg_tracker: GcWorkerConfigManager,
     feature_gate: FeatureGate,
+
+    max_concurrent_tasks: usize,
 }
 
 impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine> GcManager<S, R, E> {
@@ -254,6 +256,7 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine> GcMan
         worker_scheduler: Scheduler<GcTask<E>>,
         cfg_tracker: GcWorkerConfigManager,
         feature_gate: FeatureGate,
+        concurrent_tasks: usize,
     ) -> GcManager<S, R, E> {
         GcManager {
             cfg,
@@ -263,6 +266,7 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine> GcMan
             gc_manager_ctx: GcManagerContext::new(),
             cfg_tracker,
             feature_gate,
+            max_concurrent_tasks: concurrent_tasks,
         }
     }
 
@@ -449,10 +453,31 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine> GcMan
         // The following loop iterates all regions whose leader is on this TiKV and does
         // GC on them. At the same time, check whether safe_point is updated
         // periodically. If it's updated, rewinding will happen.
+
+        let (tx, rx) = mpsc::channel();
+        let cb = Box::new(move |res| {
+            // we don't care error actually.
+            let _ = tx.send(res);
+        });
+        let mut pending_tasks = 0;
         loop {
             self.gc_manager_ctx.check_stopped()?;
             if is_compaction_filter_allowed(&self.cfg_tracker.value(), &self.feature_gate) {
                 return Ok(());
+            }
+
+            if pending_tasks >= self.max_concurrent_tasks {
+                let res = rx.recv().unwrap();
+                pending_tasks -= 1;
+                if let Err(e) = res {
+                    // Ignore the error and continue, since it's useless to retry this.
+                    // TODO: Find a better way to handle errors. Maybe we should retry.
+                    warn!("failed gc"; "err" => ?e);
+                }
+                processed_regions += 1;
+                AUTO_GC_PROCESSED_REGIONS_GAUGE_VEC
+                    .with_label_values(&[PROCESS_TYPE_GC])
+                    .inc();
             }
 
             // Check the current GC progress and determine if we are going to rewind or we
@@ -484,7 +509,7 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine> GcMan
                     // We have worked to the end of the TiKV or our progress has reached `end`, and
                     // we don't need to rewind. In this case, the round of GC has finished.
                     info!("gc_worker: auto gc finishes"; "processed_regions" => processed_regions);
-                    return Ok(());
+                    break;
                 }
             }
 
@@ -494,8 +519,25 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine> GcMan
             // determine if rewinding is needed.
             self.check_if_need_rewind(&progress, &mut need_rewind, &mut end);
 
-            progress = self.gc_next_region(progress.unwrap(), &mut processed_regions)?;
+            progress =
+                self.async_gc_next_region(progress.unwrap(), cb.clone(), &mut pending_tasks)?;
         }
+
+        while pending_tasks > 0 {
+            self.gc_manager_ctx.check_stopped()?;
+            let res = rx.recv().unwrap();
+            pending_tasks -= 1;
+            if let Err(e) = res {
+                // Ignore the error and continue, since it's useless to retry this.
+                // TODO: Find a better way to handle errors. Maybe we should retry.
+                warn!("failed gc"; "err" => ?e);
+            }
+            processed_regions += 1;
+            AUTO_GC_PROCESSED_REGIONS_GAUGE_VEC
+                .with_label_values(&[PROCESS_TYPE_GC])
+                .inc();
+        }
+        Ok(())
     }
 
     /// Checks whether we need to rewind in this round of GC. Only used in
@@ -536,13 +578,14 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine> GcMan
         }
     }
 
-    /// Does GC on the next region after `from_key`. Returns the end key of the
-    /// region it processed. If we have processed to the end of all regions,
-    /// returns `None`.
-    fn gc_next_region(
+    /// Does GC on the next region after `from_key` asynchronously. Returns the
+    /// end key of the region it processed. If we have processed to the end
+    /// of all regions, returns `None`.
+    fn async_gc_next_region(
         &mut self,
         from_key: Key,
-        processed_regions: &mut usize,
+        callback: Callback<()>,
+        pending_tasks: &mut usize,
     ) -> GcManagerResult<Option<Key>> {
         // Get the information of the next region to do GC.
         let (region, next_key) = self.get_next_gc_context(from_key);
@@ -552,17 +595,16 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine> GcMan
         let hex_end = format!("{:?}", log_wrappers::Value::key(region.get_end_key()));
         debug!("trying gc"; "region_id" => region.id, "start_key" => &hex_start, "end_key" => &hex_end);
 
-        if let Err(e) = sync_gc(&self.worker_scheduler, region, self.curr_safe_point()) {
-            // Ignore the error and continue, since it's useless to retry this.
-            // TODO: Find a better way to handle errors. Maybe we should retry.
-            warn!("failed gc"; "start_key" => &hex_start, "end_key" => &hex_end, "err" => ?e);
-        }
-
-        *processed_regions += 1;
-        AUTO_GC_PROCESSED_REGIONS_GAUGE_VEC
-            .with_label_values(&[PROCESS_TYPE_GC])
-            .inc();
-
+        let _ = schedule_gc(
+            &self.worker_scheduler,
+            region,
+            self.curr_safe_point(),
+            callback,
+        )
+        .and_then(|_| {
+            *pending_tasks += 1;
+            Ok(())
+        });
         Ok(next_key)
     }
 
@@ -710,8 +752,16 @@ mod tests {
     impl GcManagerTestUtil {
         pub fn new(regions: BTreeMap<Vec<u8>, RegionInfo>) -> Self {
             let (gc_task_sender, gc_task_receiver) = channel();
-            let worker = WorkerBuilder::new("test-gc-manager").create();
-            let scheduler = worker.start("gc-manager", MockGcRunner { tx: gc_task_sender });
+            let worker = WorkerBuilder::new("test-gc-manager")
+                .thread_count(2)
+                .create();
+            let scheduler = worker.start(
+                "gc-manager",
+                MockGcRunner {
+                    tx: gc_task_sender.clone(),
+                },
+            );
+            worker.start("gc-manager", MockGcRunner { tx: gc_task_sender });
 
             let (safe_point_sender, safe_point_receiver) = channel();
 
@@ -731,6 +781,7 @@ mod tests {
                 scheduler,
                 GcWorkerConfigManager::default(),
                 Default::default(),
+                2,
             );
             Self {
                 gc_manager: Some(gc_manager),
