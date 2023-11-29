@@ -261,7 +261,7 @@ dependencies = [
  "hyper-tls",
  "kvproto",
  "lazy_static",
- "openssl",
+ "md5",
  "prometheus",
  "rusoto_core",
  "rusoto_credential",
@@ -310,7 +310,7 @@ dependencies = [
 [[package]]
 name = "azure_core"
 version = "0.12.0"
-source = "git+https://github.com/Leavrth/azure-sdk-for-rust?branch=release-7.5-fips#0ad801531d02b8544c0776dacfa54de4902a3797"
+source = "git+https://github.com/tikv/azure-sdk-for-rust?branch=release-7.5-fips#e3dc3e02573e60e70f00418255c417aa80b8e26b"
 dependencies = [
  "async-trait",
  "base64 0.21.0",
@@ -336,7 +336,7 @@ dependencies = [
 [[package]]
 name = "azure_identity"
 version = "0.12.0"
-source = "git+https://github.com/Leavrth/azure-sdk-for-rust?branch=release-7.5-fips#0ad801531d02b8544c0776dacfa54de4902a3797"
+source = "git+https://github.com/tikv/azure-sdk-for-rust?branch=release-7.5-fips#e3dc3e02573e60e70f00418255c417aa80b8e26b"
 dependencies = [
  "async-lock",
  "async-trait",
@@ -356,7 +356,7 @@ dependencies = [
 [[package]]
 name = "azure_security_keyvault"
 version = "0.12.0"
-source = "git+https://github.com/Leavrth/azure-sdk-for-rust?branch=release-7.5-fips#0ad801531d02b8544c0776dacfa54de4902a3797"
+source = "git+https://github.com/tikv/azure-sdk-for-rust?branch=release-7.5-fips#e3dc3e02573e60e70f00418255c417aa80b8e26b"
 dependencies = [
  "async-trait",
  "azure_core",
@@ -371,7 +371,7 @@ dependencies = [
 [[package]]
 name = "azure_storage"
 version = "0.12.0"
-source = "git+https://github.com/Leavrth/azure-sdk-for-rust?branch=release-7.5-fips#0ad801531d02b8544c0776dacfa54de4902a3797"
+source = "git+https://github.com/tikv/azure-sdk-for-rust?branch=release-7.5-fips#e3dc3e02573e60e70f00418255c417aa80b8e26b"
 dependencies = [
  "RustyXML",
  "async-trait",
@@ -392,7 +392,7 @@ dependencies = [
 [[package]]
 name = "azure_storage_blobs"
 version = "0.12.0"
-source = "git+https://github.com/Leavrth/azure-sdk-for-rust?branch=release-7.5-fips#0ad801531d02b8544c0776dacfa54de4902a3797"
+source = "git+https://github.com/tikv/azure-sdk-for-rust?branch=release-7.5-fips#e3dc3e02573e60e70f00418255c417aa80b8e26b"
 dependencies = [
  "RustyXML",
  "azure_core",
@@ -2906,6 +2906,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7ffc5c5338469d4d3ea17d269fa8ea3512ad247247c30bd2df69e68309ed0a08"
 
 [[package]]
+name = "md5"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "490cc448043f947bae3cbee9c203358d62dbee0db12107a74be5c30ccfd09771"
+
+[[package]]
 name = "memchr"
 version = "2.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4629,7 +4635,7 @@ dependencies = [
 [[package]]
 name = "rusoto_core"
 version = "0.46.0"
-source = "git+https://github.com/Leavrth/rusoto?branch=support_fips#325145c8084ec4f3a270b52be9dc470ea9623069"
+source = "git+https://github.com/tikv/rusoto?branch=gh1482-s3-addr-styles#cc733208600bdb15a13940d6930c1fbd4ab604f2"
 dependencies = [
  "async-trait",
  "base64 0.13.0",
@@ -4653,7 +4659,7 @@ dependencies = [
 [[package]]
 name = "rusoto_credential"
 version = "0.46.0"
-source = "git+https://github.com/Leavrth/rusoto?branch=support_fips#325145c8084ec4f3a270b52be9dc470ea9623069"
+source = "git+https://github.com/tikv/rusoto?branch=gh1482-s3-addr-styles#cc733208600bdb15a13940d6930c1fbd4ab604f2"
 dependencies = [
  "async-trait",
  "chrono",
@@ -4670,7 +4676,7 @@ dependencies = [
 [[package]]
 name = "rusoto_kms"
 version = "0.46.0"
-source = "git+https://github.com/Leavrth/rusoto?branch=support_fips#325145c8084ec4f3a270b52be9dc470ea9623069"
+source = "git+https://github.com/tikv/rusoto?branch=gh1482-s3-addr-styles#cc733208600bdb15a13940d6930c1fbd4ab604f2"
 dependencies = [
  "async-trait",
  "bytes",
@@ -4683,7 +4689,7 @@ dependencies = [
 [[package]]
 name = "rusoto_mock"
 version = "0.46.0"
-source = "git+https://github.com/Leavrth/rusoto?branch=support_fips#325145c8084ec4f3a270b52be9dc470ea9623069"
+source = "git+https://github.com/tikv/rusoto?branch=gh1482-s3-addr-styles#cc733208600bdb15a13940d6930c1fbd4ab604f2"
 dependencies = [
  "async-trait",
  "chrono",
@@ -4697,7 +4703,7 @@ dependencies = [
 [[package]]
 name = "rusoto_s3"
 version = "0.46.0"
-source = "git+https://github.com/Leavrth/rusoto?branch=support_fips#325145c8084ec4f3a270b52be9dc470ea9623069"
+source = "git+https://github.com/tikv/rusoto?branch=gh1482-s3-addr-styles#cc733208600bdb15a13940d6930c1fbd4ab604f2"
 dependencies = [
  "async-trait",
  "bytes",
@@ -4711,7 +4717,7 @@ dependencies = [
 [[package]]
 name = "rusoto_signature"
 version = "0.46.0"
-source = "git+https://github.com/Leavrth/rusoto?branch=support_fips#325145c8084ec4f3a270b52be9dc470ea9623069"
+source = "git+https://github.com/tikv/rusoto?branch=gh1482-s3-addr-styles#cc733208600bdb15a13940d6930c1fbd4ab604f2"
 dependencies = [
  "base64 0.13.0",
  "bytes",
@@ -4733,7 +4739,7 @@ dependencies = [
 [[package]]
 name = "rusoto_sts"
 version = "0.46.0"
-source = "git+https://github.com/Leavrth/rusoto?branch=support_fips#325145c8084ec4f3a270b52be9dc470ea9623069"
+source = "git+https://github.com/tikv/rusoto?branch=gh1482-s3-addr-styles#cc733208600bdb15a13940d6930c1fbd4ab604f2"
 dependencies = [
  "async-trait",
  "bytes",

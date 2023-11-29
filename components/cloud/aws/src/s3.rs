@@ -17,7 +17,6 @@ use futures_util::{
     stream::TryStreamExt,
 };
 pub use kvproto::brpb::{Bucket as InputBucket, S3 as InputConfig};
-use openssl::hash::{hash, MessageDigest};
 use rusoto_core::{request::DispatchSignedRequest, ByteStream, RusotoError};
 use rusoto_credential::{ProvideAwsCredentials, StaticProvider};
 use rusoto_s3::{util::AddressingStyle, *};
@@ -331,13 +330,12 @@ async fn try_read_exact<R: AsyncRead + ?Sized + Unpin>(
     }
 }
 
-fn get_content_md5<T>(object_lock_enabled: bool, content: &[u8]) -> Result<Option<String>, RusotoError<T>> {
-    if object_lock_enabled {
-        let digest = hash(MessageDigest::md5(), content)
-            .map_err(|e| RusotoError::Validation(format!("failed to create hmac from key: {:?}", e)))?;
-        return Ok(Some(base64::encode(digest)));
-    }
-    Ok(None)
+// NOTICE: the openssl fips doesn't support md5, therefore use md5 pakcage to hash
+fn get_content_md5(object_lock_enabled: bool, content: &[u8]) -> Option<String> {
+    object_lock_enabled.then(|| {
+        let digest = md5::compute(content);
+        base64::encode(digest.0)
+    })
 }
 
 /// Specifies the minimum size to use multi-part upload.
@@ -498,7 +496,7 @@ impl<'client> S3Uploader<'client> {
                     upload_id: self.upload_id.clone(),
                     part_number,
                     content_length: Some(data.len() as i64),
-                    content_md5: get_content_md5(self.object_lock_enabled, data)?,
+                    content_md5: get_content_md5(self.object_lock_enabled, data),
                     body: Some(data.to_vec().into()),
                     ..Default::default()
                 })
@@ -559,7 +557,7 @@ impl<'client> S3Uploader<'client> {
                     ssekms_key_id: self.sse_kms_key_id.as_ref().map(|s| s.to_string()),
                     storage_class: self.storage_class.as_ref().map(|s| s.to_string()),
                     content_length: Some(data.len() as i64),
-                    content_md5: get_content_md5(self.object_lock_enabled, data)?,
+                    content_md5: get_content_md5(self.object_lock_enabled, data),
                     body: Some(data.to_vec().into()),
                     ..Default::default()
                 })
@@ -642,10 +640,10 @@ mod tests {
         // base64 encode md5sum "helloworld"
         let code = "helloworld".to_string();
         let expect = "/F4DjTilcDIIVEHn/nAQsA==".to_string();
-        let actual = get_content_md5::<String>(true, code.as_bytes()).unwrap().unwrap();
+        let actual = get_content_md5(true, code.as_bytes()).unwrap();
         assert_eq!(actual, expect);
 
-        let actual = get_content_md5::<String>(false, b"xxx").unwrap();
+        let actual = get_content_md5(false, b"xxx");
         assert!(actual.is_none())
     }
 
