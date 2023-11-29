@@ -541,7 +541,7 @@ mod tests {
     }
 
     fn collect_keys(path: &str) -> Vec<Vec<u8>> {
-        let reader = RocksSstReader::open(path).unwrap();
+        let reader = RocksSstReader::open(path, None).unwrap();
         let mut sst_reader = reader.iter(IterOptions::default()).unwrap();
         let mut valid = sst_reader.seek_to_first().unwrap();
         let mut ret = vec![];

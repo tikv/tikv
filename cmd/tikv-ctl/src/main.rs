@@ -21,11 +21,10 @@ use std::{
 
 use collections::HashMap;
 use encryption_export::{
-    create_backend, data_key_manager_from_config, from_engine_encryption_method, DataKeyManager,
-    DecrypterReader, Iv,
+    create_backend, data_key_manager_from_config, DataKeyManager, DecrypterReader, Iv,
 };
 use engine_rocks::get_env;
-use engine_traits::{EncryptionKeyManager, Peekable};
+use engine_traits::Peekable;
 use file_system::calc_crc32;
 use futures::{executor::block_on, future::try_join_all};
 use gag::BufferRedirect;
@@ -166,7 +165,7 @@ fn main() {
             let infile1 = Path::new(infile).canonicalize().unwrap();
             let file_info = key_manager.get_file(infile1.to_str().unwrap()).unwrap();
 
-            let mthd = from_engine_encryption_method(file_info.method);
+            let mthd = file_info.method;
             if mthd == EncryptionMethod::Plaintext {
                 println!(
                     "{} is not encrypted, skip to decrypt it into {}",
@@ -912,7 +911,7 @@ fn flashback_whole_cluster(
             .await
             {
                 Ok(res) => {
-                    if let Err(key_range) = res {
+                    if let Err((key_range, _)) = res {
                         // Retry specific key range to prepare flashback.
                         let stale_key_range = (key_range.start_key.clone(), key_range.end_key.clone());
                         let mut key_range_to_prepare = key_range_to_prepare.write().unwrap();
@@ -992,7 +991,21 @@ fn flashback_whole_cluster(
             {
                 Ok(res) => match res {
                     Ok(_) => break,
-                    Err(_) => {
+                    Err((key_range, err)) => {
+                        // Retry `NotLeader` or `RegionNotFound`.
+                        if err.to_string().contains("not leader") || err.to_string().contains("not found") {
+                            // When finished `PrepareFlashback`, the region may change leader in the `flashback in progress`
+                            // Neet to retry specific key range to finish flashback.
+                            let stale_key_range = (key_range.start_key.clone(), key_range.end_key.clone());
+                            let mut key_range_to_finish = key_range_to_finish.write().unwrap();
+                            // Remove stale key range.
+                            key_range_to_finish.remove(&stale_key_range);
+                            load_key_range(&pd_client, stale_key_range.0.clone(), stale_key_range.1.clone())
+                                .into_iter().for_each(|(key_range, region_info)| {
+                                // Need to update `key_range_to_finish` to replace stale key range.
+                                key_range_to_finish.insert(key_range, region_info);
+                            });
+                        }
                         thread::sleep(Duration::from_micros(WAIT_APPLY_FLASHBACK_STATE));
                         continue;
                     }

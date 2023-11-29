@@ -126,7 +126,7 @@ pub struct ImportSstService<E: Engine> {
     tablets: LocalTablets<E::Local>,
     engine: E,
     threads: Arc<Runtime>,
-    importer: Arc<SstImporter>,
+    importer: Arc<SstImporter<E::Local>>,
     limiter: Limiter,
     task_slots: Arc<Mutex<HashSet<PathBuf>>>,
     raft_entry_max_size: ReadableSize,
@@ -322,7 +322,7 @@ impl<E: Engine> ImportSstService<E> {
         raft_entry_max_size: ReadableSize,
         engine: E,
         tablets: LocalTablets<E::Local>,
-        importer: Arc<SstImporter>,
+        importer: Arc<SstImporter<E::Local>>,
         store_meta: Option<Arc<Mutex<StoreMeta<E::Local>>>>,
         resource_manager: Option<Arc<ResourceGroupManager>>,
         region_info_accessor: Arc<RegionInfoAccessor>,
@@ -350,7 +350,7 @@ impl<E: Engine> ImportSstService<E> {
         if let LocalTablets::Singleton(tablet) = &tablets {
             importer.start_switch_mode_check(threads.handle(), Some(tablet.clone()));
         } else {
-            importer.start_switch_mode_check::<E::Local>(threads.handle(), None);
+            importer.start_switch_mode_check(threads.handle(), None);
         }
 
         let writer = raft_writer::ThrottledTlsEngineWriter::default();
@@ -385,7 +385,7 @@ impl<E: Engine> ImportSstService<E> {
         self.cfg.clone()
     }
 
-    async fn tick(importer: Arc<SstImporter>, cfg: ConfigManager) {
+    async fn tick(importer: Arc<SstImporter<E::Local>>, cfg: ConfigManager) {
         loop {
             sleep(Duration::from_secs(10)).await;
 
@@ -563,7 +563,7 @@ impl<E: Engine> ImportSstService<E> {
 
     async fn apply_imp(
         mut req: ApplyRequest,
-        importer: Arc<SstImporter>,
+        importer: Arc<SstImporter<E::Local>>,
         writer: raft_writer::ThrottledTlsEngineWriter,
         limiter: Limiter,
         max_raft_size: usize,
@@ -1098,7 +1098,7 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
             };
 
             let res = with_resource_limiter(
-                importer.download_ext::<E::Local>(
+                importer.download_ext(
                     req.get_sst(),
                     req.get_storage_backend(),
                     req.get_name(),

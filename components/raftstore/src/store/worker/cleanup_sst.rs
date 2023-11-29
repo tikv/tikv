@@ -2,6 +2,7 @@
 
 use std::{fmt, sync::Arc};
 
+use engine_traits::KvEngine;
 use kvproto::import_sstpb::SstMeta;
 use sst_importer::SstImporter;
 use tikv_util::worker::Runnable;
@@ -18,12 +19,12 @@ impl fmt::Display for Task {
     }
 }
 
-pub struct Runner {
-    importer: Arc<SstImporter>,
+pub struct Runner<E: KvEngine> {
+    importer: Arc<SstImporter<E>>,
 }
 
-impl Runner {
-    pub fn new(importer: Arc<SstImporter>) -> Runner {
+impl<E: KvEngine> Runner<E> {
+    pub fn new(importer: Arc<SstImporter<E>>) -> Self {
         Runner { importer }
     }
 
@@ -35,7 +36,7 @@ impl Runner {
     }
 }
 
-impl Runnable for Runner {
+impl<E: KvEngine> Runnable for Runner<E> {
     type Task = Task;
 
     fn run(&mut self, task: Task) {
