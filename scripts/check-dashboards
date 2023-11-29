@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+for sha256 in ./metrics/grafana/*.sha256; do
+    if ! sha256sum -c "$sha256"; then
+        dashboard=$(basename "$sha256" .sha256)
+        echo "Please avoid manually modifying $dashboard"
+        echo "Try ./scripts/gen-tikv-details-dashboard"
+        exit 1
+    fi
+done
+
+echo "Dashboards check passed."

@@ -6639,6 +6639,7 @@ dependencies = [
  "slog-global",
  "slog-json",
  "slog-term",
+ "strum 0.20.0",
  "sysinfo",
  "tempfile",
  "thiserror",
