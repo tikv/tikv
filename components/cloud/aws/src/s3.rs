@@ -330,7 +330,8 @@ async fn try_read_exact<R: AsyncRead + ?Sized + Unpin>(
     }
 }
 
-// NOTICE: the openssl fips doesn't support md5, therefore use md5 pakcage to hash
+// NOTICE: the openssl fips doesn't support md5, therefore use md5 pakcage to
+// hash
 fn get_content_md5(object_lock_enabled: bool, content: &[u8]) -> Option<String> {
     object_lock_enabled.then(|| {
         let digest = md5::compute(content);
