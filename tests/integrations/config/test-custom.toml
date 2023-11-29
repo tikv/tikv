@@ -16,8 +16,8 @@ max-backups = 2
 max-days = 3
 
 [memory]
-enable-heap-profiling = false 
-profiling-sample-per-bytes = "1MB" 
+enable-heap-profiling = false
+profiling-sample-per-bytes = "1MB"
 
 [readpool.unified]
 min-thread-count = 5
@@ -173,6 +173,7 @@ region-compact-min-redundant-rows = 999
 region-compact-redundant-rows-percent = 33
 pd-heartbeat-tick-interval = "12m"
 pd-store-heartbeat-tick-interval = "12s"
+pd-report-min-resolved-ts-interval = "233ms"
 snap-mgr-gc-tick-interval = "12m"
 snap-gc-timeout = "12h"
 snap-wait-split-duration = "12h"
@@ -228,7 +229,6 @@ reactive-memory-lock-tick-interval = "566ms"
 reactive-memory-lock-timeout-tick = 8
 check-long-uncommitted-interval = "1s"
 long-uncommitted-base-threshold = "1s"
-report-min-resolved-ts-interval = "233ms"
 report-region-buckets-tick-interval = "1234s"
 max-snapshot-file-raw-size = "10GB"
 unreachable-backoff = "111s"
@@ -348,7 +348,7 @@ periodic-compaction-seconds = "10d"
 
 [rocksdb.defaultcf.titan]
 min-blob-size = "2018B"
-blob-file-compression = "zstd"
+blob-file-compression = "lz4"
 zstd-dict-size = "16KB"
 blob-cache-size = "12GB"
 min-gc-batch-size = "12KB"
@@ -609,7 +609,7 @@ max-compactions = 3
 
 [raftdb.defaultcf.titan]
 min-blob-size = "2018B"
-blob-file-compression = "zstd"
+blob-file-compression = "lz4"
 zstd-dict-size = "16KB"
 blob-cache-size = "12GB"
 min-gc-batch-size = "12KB"
@@ -700,6 +700,7 @@ old-value-cache-size = 0
 hibernate-regions-compatible = false
 incremental-scan-threads = 3
 incremental-scan-concurrency = 4
+incremental-scan-concurrency-limit = 5
 incremental-scan-speed-limit = 7
 incremental-fetch-speed-limit = 8
 incremental-scan-ts-filter-ratio = 0.7

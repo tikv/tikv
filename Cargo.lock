@@ -31,9 +31,9 @@ checksum = "5d2e7343e7fc9de883d1b0341e0b13970f764c14101234857d2ddafa1cb1cac2"
 
 [[package]]
 name = "afl"
-version = "0.14.3"
+version = "0.14.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "330d7251127b228cb4187ac2373dc37f615d65199f93b5443edeeed839fff5df"
+checksum = "8c80b57a86234ee3e9238f5f2d33d37f8fd5c7ff168c07f2d5147d410e86db33"
 dependencies = [
  "home",
  "libc 0.2.146",
@@ -1465,7 +1465,6 @@ dependencies = [
  "crc32fast",
  "crossbeam",
  "derive_more",
- "engine_traits",
  "error_code",
  "fail",
  "file_system",
@@ -1520,6 +1519,7 @@ dependencies = [
 name = "engine_panic"
 version = "0.0.1"
 dependencies = [
+ "encryption",
  "engine_traits",
  "kvproto",
  "raft",
@@ -1612,6 +1612,7 @@ version = "0.0.1"
 dependencies = [
  "case_macros",
  "collections",
+ "encryption",
  "error_code",
  "fail",
  "file_system",
@@ -2848,7 +2849,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#bd84144327cfb22bee21b6043673d12b90415e24"
+source = "git+https://github.com/tikv/rust-rocksdb.git#c4b7047314a9b27926a1b7b25d2e6d1a37a48d2b"
 dependencies = [
  "bindgen 0.65.1",
  "bzip2-sys",
@@ -2867,7 +2868,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/tikv/rust-rocksdb.git#bd84144327cfb22bee21b6043673d12b90415e24"
+source = "git+https://github.com/tikv/rust-rocksdb.git#c4b7047314a9b27926a1b7b25d2e6d1a37a48d2b"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -3370,9 +3371,9 @@ dependencies = [
 
 [[package]]
 name = "num-integer"
-version = "0.1.44"
+version = "0.1.45"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d2cc698a63b549a70bc047073d2949cce27cd1c7b0a4a862d08a8031bc2801db"
+checksum = "225d3389fb3509a24c93f5c29eb6bde2586b98d9f016636dff58d7c6f7569cd9"
 dependencies = [
  "autocfg",
  "num-traits",
@@ -3380,9 +3381,9 @@ dependencies = [
 
 [[package]]
 name = "num-iter"
-version = "0.1.42"
+version = "0.1.43"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b2021c8337a54d21aca0d59a92577a029af9431cb59b909b03252b9c164fad59"
+checksum = "7d03e6c028c5dc5cac6e2dec0efda81fc887605bb3d884578bb6d6bf7514e252"
 dependencies = [
  "autocfg",
  "num-integer",
@@ -3402,9 +3403,9 @@ dependencies = [
 
 [[package]]
 name = "num-traits"
-version = "0.2.14"
+version = "0.2.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9a64b1ec5cda2586e284722486d802acf1f7dbdc623e2bfc57e65ca1cd099290"
+checksum = "39e3200413f237f41ab11ad6d161bc7239c84dcb631773ccd7de3dfe4b5c267c"
 dependencies = [
  "autocfg",
 ]
@@ -4707,7 +4708,7 @@ dependencies = [
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#bd84144327cfb22bee21b6043673d12b90415e24"
+source = "git+https://github.com/tikv/rust-rocksdb.git#c4b7047314a9b27926a1b7b25d2e6d1a37a48d2b"
 dependencies = [
  "libc 0.2.146",
  "librocksdb_sys",
@@ -6556,6 +6557,7 @@ version = "0.1.0"
 dependencies = [
  "backtrace",
  "collections",
+ "encryption",
  "engine_panic",
  "engine_rocks",
  "engine_test",
@@ -6637,6 +6639,7 @@ dependencies = [
  "slog-global",
  "slog-json",
  "slog-term",
+ "strum 0.20.0",
  "sysinfo",
  "tempfile",
  "thiserror",

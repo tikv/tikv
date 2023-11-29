@@ -13,9 +13,6 @@ use std::{
 };
 
 use crossbeam::channel::{self, select, tick};
-use engine_traits::{
-    EncryptionKeyManager, EncryptionMethod as EtEncryptionMethod, FileEncryptionInfo,
-};
 use fail::fail_point;
 use file_system::File;
 use kvproto::encryptionpb::{DataKey, EncryptionMethod, FileDictionary, FileInfo, KeyDictionary};
@@ -24,7 +21,7 @@ use tikv_util::{box_err, debug, error, info, sys::thread::StdThreadBuildWrapper,
 
 use crate::{
     config::EncryptionConfig,
-    crypter::{self, Iv},
+    crypter::{self, FileEncryptionInfo, Iv},
     encrypted_file::EncryptedFile,
     file_dict_file::FileDictionaryFile,
     io::{DecrypterReader, EncrypterWriter},
@@ -661,9 +658,9 @@ impl DataKeyManager {
         };
         EncrypterWriter::new(
             writer,
-            crypter::from_engine_encryption_method(file.method),
+            file.method,
             &file.key,
-            if file.method == EtEncryptionMethod::Plaintext {
+            if file.method == EncryptionMethod::Plaintext {
                 debug_assert!(file.iv.is_empty());
                 Iv::Empty
             } else {
@@ -691,9 +688,9 @@ impl DataKeyManager {
         let file = self.get_file(fname)?;
         DecrypterReader::new(
             reader,
-            crypter::from_engine_encryption_method(file.method),
+            file.method,
             &file.key,
-            if file.method == EtEncryptionMethod::Plaintext {
+            if file.method == EncryptionMethod::Plaintext {
                 debug_assert!(file.iv.is_empty());
                 Iv::Empty
             } else {
@@ -767,11 +764,7 @@ impl DataKeyManager {
                 }
             }
         };
-        let encrypted_file = FileEncryptionInfo {
-            key,
-            method: crypter::to_engine_encryption_method(method),
-            iv,
-        };
+        let encrypted_file = FileEncryptionInfo { key, method, iv };
         Ok(Some(encrypted_file))
     }
 
@@ -844,8 +837,8 @@ impl DataKeyManager {
     }
 
     /// Return which method this manager is using.
-    pub fn encryption_method(&self) -> engine_traits::EncryptionMethod {
-        crypter::to_engine_encryption_method(self.method)
+    pub fn encryption_method(&self) -> EncryptionMethod {
+        self.method
     }
 
     /// For tests.
@@ -869,9 +862,9 @@ impl Drop for DataKeyManager {
     }
 }
 
-impl EncryptionKeyManager for DataKeyManager {
+impl DataKeyManager {
     // Get key to open existing file.
-    fn get_file(&self, fname: &str) -> IoResult<FileEncryptionInfo> {
+    pub fn get_file(&self, fname: &str) -> IoResult<FileEncryptionInfo> {
         match self.get_file_exists(fname) {
             Ok(Some(result)) => Ok(result),
             Ok(None) => {
@@ -881,7 +874,7 @@ impl EncryptionKeyManager for DataKeyManager {
                 let method = EncryptionMethod::Plaintext;
                 Ok(FileEncryptionInfo {
                     key: vec![],
-                    method: crypter::to_engine_encryption_method(method),
+                    method,
                     iv: file.iv,
                 })
             }
@@ -889,21 +882,25 @@ impl EncryptionKeyManager for DataKeyManager {
         }
     }
 
-    fn new_file(&self, fname: &str) -> IoResult<FileEncryptionInfo> {
+    pub fn new_file(&self, fname: &str) -> IoResult<FileEncryptionInfo> {
         let (_, data_key) = self.dicts.current_data_key();
         let key = data_key.get_key().to_owned();
         let file = self.dicts.new_file(fname, self.method, true)?;
         let encrypted_file = FileEncryptionInfo {
             key,
-            method: crypter::to_engine_encryption_method(file.method),
+            method: file.method,
             iv: file.get_iv().to_owned(),
         };
         Ok(encrypted_file)
     }
 
-    // See comments of `remove_dir` for more details when using this with a
-    // directory.
-    fn delete_file(&self, fname: &str, physical_fname: Option<&str>) -> IoResult<()> {
+    // Can be used with both file and directory. See comments of `remove_dir` for
+    // more details when using this with a directory.
+    //
+    // `physical_fname` is a hint when `fname` was renamed physically.
+    // Depending on the implementation, providing false negative or false
+    // positive value may result in leaking encryption keys.
+    pub fn delete_file(&self, fname: &str, physical_fname: Option<&str>) -> IoResult<()> {
         fail_point!("key_manager_fails_before_delete_file", |_| IoResult::Err(
             io::ErrorKind::Other.into()
         ));
@@ -924,7 +921,7 @@ impl EncryptionKeyManager for DataKeyManager {
         Ok(())
     }
 
-    fn link_file(&self, src_fname: &str, dst_fname: &str) -> IoResult<()> {
+    pub fn link_file(&self, src_fname: &str, dst_fname: &str) -> IoResult<()> {
         let src_path = Path::new(src_fname);
         let dst_path = Path::new(dst_fname);
         if src_path.is_dir() {
@@ -1120,8 +1117,8 @@ impl<'a> Drop for DataKeyImporter<'a> {
 
 #[cfg(test)]
 mod tests {
-    use engine_traits::EncryptionMethod as EtEncryptionMethod;
     use file_system::{remove_file, File};
+    use kvproto::encryptionpb::EncryptionMethod;
     use matches::assert_matches;
     use tempfile::TempDir;
     use test_util::create_test_key_file;
@@ -1243,7 +1240,7 @@ mod tests {
         let foo3 = manager.get_file("foo").unwrap();
         assert_eq!(foo1, foo3);
         let bar = manager.new_file("bar").unwrap();
-        assert_eq!(bar.method, EtEncryptionMethod::Plaintext);
+        assert_eq!(bar.method, EncryptionMethod::Plaintext);
     }
 
     // When enabling encryption, using insecure master key is not allowed.

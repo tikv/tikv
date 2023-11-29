@@ -27,6 +27,7 @@ test-engines-panic = [
 [dependencies]
 backtrace = "0.3"
 collections = { workspace = true }
+encryption = { workspace = true }
 engine_panic = { workspace = true }
 engine_rocks = { workspace = true }
 engine_test = { workspace = true }
