@@ -22,6 +22,8 @@ pub struct GcConfig {
     /// greater than 5.0.0. Change `compaction_filter_skip_version_check`
     /// can enable it by force.
     pub compaction_filter_skip_version_check: bool,
+    /// gc threads count
+    pub thread_count: usize,
 }
 
 impl Default for GcConfig {
@@ -32,6 +34,7 @@ impl Default for GcConfig {
             max_write_bytes_per_sec: ReadableSize(DEFAULT_GC_MAX_WRITE_BYTES_PER_SEC),
             enable_compaction_filter: true,
             compaction_filter_skip_version_check: false,
+            thread_count: 1,
         }
     }
 }

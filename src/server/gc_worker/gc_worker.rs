@@ -1078,7 +1078,7 @@ fn handle_gc_task_schedule_error(e: ScheduleError<GcTask<impl KvEngine>>) -> Res
 }
 
 /// Schedules a `GcTask` to the `GcRunner`.
-fn schedule_gc(
+pub fn schedule_gc(
     scheduler: &Scheduler<GcTask<impl KvEngine>>,
     region: Region,
     safe_point: TimeStamp,
@@ -1171,7 +1171,9 @@ impl<E: Engine> GcWorker<E> {
         feature_gate: FeatureGate,
         region_info_provider: Arc<dyn RegionInfoProvider>,
     ) -> Self {
-        let worker_builder = WorkerBuilder::new("gc-worker").pending_capacity(GC_MAX_PENDING_TASKS);
+        let worker_builder = WorkerBuilder::new("gc-worker")
+            .pending_capacity(GC_MAX_PENDING_TASKS)
+            .thread_count(cfg.thread_count);
         let worker = worker_builder.create().lazy_build("gc-worker");
         let worker_scheduler = worker.scheduler();
         GcWorker {
@@ -1216,6 +1218,7 @@ impl<E: Engine> GcWorker<E> {
             self.scheduler(),
             self.config_manager.clone(),
             self.feature_gate.clone(),
+            self.config_manager.value().thread_count,
         )
         .start()?;
         *handle = Some(new_handle);
@@ -1223,14 +1226,17 @@ impl<E: Engine> GcWorker<E> {
     }
 
     pub fn start(&mut self, store_id: u64) -> Result<()> {
-        let runner = GcRunner::new(
-            store_id,
-            self.engine.clone(),
-            self.flow_info_sender.take().unwrap(),
-            self.config_manager.0.clone().tracker("gc-woker".to_owned()),
-            self.config_manager.value().clone(),
-        );
-        self.worker.lock().unwrap().start(runner);
+        for _ in 0..self.config_manager.value().thread_count {
+            let runner = GcRunner::new(
+                store_id,
+                self.engine.clone(),
+                self.flow_info_sender.clone().unwrap(),
+                self.config_manager.0.clone().tracker("gc-woker".to_owned()),
+                self.config_manager.value().clone(),
+            );
+            self.worker.lock().unwrap().start(runner);
+        }
+        self.flow_info_sender.take().unwrap();
         Ok(())
     }
 
@@ -1631,10 +1637,12 @@ mod tests {
         region2.mut_peers().push(new_peer(store_id, 2));
         region2.set_start_key(split_key.to_vec());
 
+        let mut gc_config = GcConfig::default();
+        gc_config.thread_count = 2;
         let mut gc_worker = GcWorker::new(
             engine,
             tx,
-            GcConfig::default(),
+            gc_config,
             gate,
             Arc::new(MockRegionInfoProvider::new(vec![region1, region2])),
         );
@@ -1807,10 +1815,12 @@ mod tests {
         let mut host = CoprocessorHost::<RocksEngine>::default();
         let ri_provider = RegionInfoAccessor::new(&mut host);
 
+        let mut gc_config = GcConfig::default();
+        gc_config.thread_count = 2;
         let mut gc_worker = GcWorker::new(
             prefixed_engine.clone(),
             tx,
-            GcConfig::default(),
+            gc_config,
             feature_gate,
             Arc::new(ri_provider.clone()),
         );
@@ -2189,10 +2199,12 @@ mod tests {
         let mut region = Region::default();
         region.mut_peers().push(new_peer(store_id, 1));
 
+        let mut gc_config = GcConfig::default();
+        gc_config.thread_count = 2;
         let mut gc_worker = GcWorker::new(
             engine.clone(),
             tx,
-            GcConfig::default(),
+            gc_config,
             gate,
             Arc::new(MockRegionInfoProvider::new(vec![region.clone()])),
         );
