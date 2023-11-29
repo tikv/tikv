@@ -155,7 +155,7 @@ impl QuotaLimiter {
     }
 
     fn consume(&self, value: u64) -> Duration {
-        if value == 0 {
+        if value == 0 && self.limiter.speed_limit().is_infinite() {
             return Duration::ZERO;
         }
         let dur = self.limiter.consume_duration(value as usize);
