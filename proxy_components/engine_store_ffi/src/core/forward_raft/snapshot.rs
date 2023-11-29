@@ -277,7 +277,14 @@ impl<T: Transport + 'static, ER: RaftEngine> ProxyForwarder<T, ER> {
                             let current = SystemTime::now()
                                 .duration_since(SystemTime::UNIX_EPOCH)
                                 .unwrap();
-                            info!("fast path: applied first snapshot {}:{} {}, recover MsgAppend", self.store_id, region_id, peer_id;
+                            info!("fast path: start applied first snapshot {}:{} {}", self.store_id, region_id, peer_id;
+                                "snap_key" => ?snap_key,
+                                "region_id" => region_id,
+                            );
+
+                            self.engine_store_server_helper.apply_fap_snapshot(region_id, peer_id);
+
+                            info!("fast path: finished applied first snapshot {}:{} {}, recover MsgAppend", self.store_id, region_id, peer_id;
                                 "snap_key" => ?snap_key,
                                 "region_id" => region_id,
                                 "cost_snapshot" => current.as_millis() - last,

@@ -26,6 +26,8 @@ pub struct EngineStoreServer {
     pub mock_cfg: MockConfig,
     pub region_states: RefCell<HashMap<RegionId, RegionStats>>,
     pub page_storage: MockPageStorage,
+    // (region_id, peer_id) -> MockRegion
+    pub tmp_fap_regions: HashMap<(RegionId, u64), Box<MockRegion>>,
 }
 
 impl EngineStoreServer {
@@ -37,6 +39,7 @@ impl EngineStoreServer {
             mock_cfg: MockConfig::default(),
             region_states: RefCell::new(Default::default()),
             page_storage: Default::default(),
+            tmp_fap_regions: Default::default(),
         }
     }
 
@@ -352,6 +355,7 @@ pub fn gen_engine_store_server_helper(
         fn_set_pb_msg_by_bytes: Some(ffi_set_pb_msg_by_bytes),
         fn_handle_safe_ts_update: Some(ffi_handle_safe_ts_update),
         fn_fast_add_peer: Some(ffi_fast_add_peer),
+        fn_apply_fap_snapshot: Some(ffi_apply_fap_snapshot),
         ps: PageStorageInterfaces {
             fn_create_write_batch: Some(ffi_mockps_create_write_batch),
             fn_wb_put_page: Some(ffi_mockps_wb_put_page),

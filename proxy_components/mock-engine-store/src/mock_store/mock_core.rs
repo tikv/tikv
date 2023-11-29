@@ -86,7 +86,6 @@ pub fn copy_meta_from<EK: engine_traits::KvEngine, ER: RaftEngine + RaftEngineDe
     copy_raft_state: bool,
 ) -> raftstore::Result<()> {
     let region_id = source.region.get_id();
-
     let mut wb = target_engines.kv.write_batch();
 
     // Can't copy this key, otherwise will cause a bootstrap.
@@ -146,7 +145,9 @@ pub fn copy_data_from(
                     || source.region.get_end_key().is_empty())
             {
                 debug!(
-                    "copy_data_from write to region {} {:?} {:?} S {:?} E {:?}",
+                    "copy_data_from {} to {} write to region {} {:?} {:?} S {:?} E {:?}",
+                    source.peer.get_store_id(),
+                    target.peer.get_store_id(),
                     region_id,
                     k,
                     v,

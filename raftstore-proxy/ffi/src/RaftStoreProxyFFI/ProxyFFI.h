@@ -227,6 +227,12 @@ enum class FastAddPeerStatus : uint32_t {
   FailedInject,
 };
 
+enum class PrehandledSnapshotType : uint8_t {
+  None = 0,
+  Legacy,
+  FAPCheckpoint,
+};
+
 struct FastAddPeerRes {
   FastAddPeerStatus status;
   CppStrWithView apply_state;
@@ -327,6 +333,7 @@ struct EngineStoreServerHelper {
                                        uint64_t);
   void (*fn_release_pre_handled_snapshot)(EngineStoreServerWrap *, RawVoidPtr,
                                           RawCppPtrType);
+  void (*fn_apply_fap_snapshot)(EngineStoreServerWrap *, uint64_t, uint64_t);
   HttpRequestRes (*fn_handle_http_request)(EngineStoreServerWrap *,
                                            BaseBuffView path,
                                            BaseBuffView query,

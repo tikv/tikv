@@ -73,7 +73,7 @@ impl<T: Simulator<TiFlashEngine>> MixedCluster for Cluster<T> {
         panic!(
             "can't get value {:?} for key {}",
             value.map(tikv_util::escape),
-            log_wrappers::hex_encode_upper(key)
+            log_wrappers::hex_encode_upper(key),
         )
     }
     fn run_node(&mut self, node_id: u64) {

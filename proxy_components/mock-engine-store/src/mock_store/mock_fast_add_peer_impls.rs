@@ -9,6 +9,30 @@ use super::{
 };
 use crate::mock_cluster;
 
+pub(crate) unsafe extern "C" fn ffi_apply_fap_snapshot(
+    arg1: *mut interfaces_ffi::EngineStoreServerWrap,
+    region_id: u64,
+    peer_id: u64,
+) {
+    let store = into_engine_store_server_wrap(arg1);
+    let new_region = (*store.engine_store_server)
+        .tmp_fap_regions
+        .remove(&(region_id, peer_id))
+        .unwrap();
+    (*store.engine_store_server)
+        .kvstore
+        .insert(region_id, new_region);
+    let target_region = (*store.engine_store_server)
+        .kvstore
+        .get_mut(&region_id)
+        .unwrap();
+    crate::write_snapshot_to_db_data(
+        &mut (*store.engine_store_server),
+        target_region,
+        String::from("fast-add-peer"),
+    );
+}
+
 #[allow(clippy::redundant_closure_call)]
 pub(crate) unsafe extern "C" fn ffi_fast_add_peer(
     arg1: *mut interfaces_ffi::EngineStoreServerWrap,
@@ -117,26 +141,17 @@ pub(crate) unsafe extern "C" fn ffi_fast_add_peer(
                 ret = Some(failed_add_peer_res(interfaces_ffi::FastAddPeerStatus::WaitForData));
                 return;
             }
+
             // TODO check commit_index and applied_index here
             debug!("recover from remote peer: preparing from {} to {}, check target", from_store, store_id; "region_id" => region_id);
-            let new_region = make_new_region(
+            let mut new_region = make_new_region(
                 Some(new_region_meta.clone()),
                 Some((*store.engine_store_server).id),
             );
-            (*store.engine_store_server)
-                .kvstore
-                .insert(region_id, Box::new(new_region));
             let target_engines = match (*store.engine_store_server).engines.clone() {
                 Some(s) => s,
                 None => {
                     ret = Some(failed_add_peer_res(interfaces_ffi::FastAddPeerStatus::OtherError));
-                    return;
-                }
-            };
-            let target_region = match (*store.engine_store_server).kvstore.get_mut(&region_id) {
-                Some(s) => s,
-                None => {
-                    ret = Some(failed_add_peer_res(interfaces_ffi::FastAddPeerStatus::BadData));
                     return;
                 }
             };
@@ -163,17 +178,13 @@ pub(crate) unsafe extern "C" fn ffi_fast_add_peer(
                 &source_engines,
                 &target_engines,
                 &source_region,
-                target_region,
+                &mut new_region,
             ) {
                 error!("recover from remote peer: inject error {:?}", e; "region_id" => region_id);
                 ret = Some(failed_add_peer_res(interfaces_ffi::FastAddPeerStatus::FailedInject));
                 return;
             }
-            crate::write_snapshot_to_db_data(
-                &mut (*store.engine_store_server),
-                target_region,
-                String::from("fast-add-peer"),
-            );
+
             if fail_after_write {
                 let mut raft_wb = target_engines.raft.log_batch(1024);
                 let mut entries: Vec<raft::eraftpb::Entry> = Default::default();
@@ -199,8 +210,11 @@ pub(crate) unsafe extern "C" fn ffi_fast_add_peer(
             let region_bytes = region_local_state.get_region().write_to_bytes().unwrap();
             let apply_state_ptr = create_cpp_str(Some(apply_state_bytes));
             let region_ptr = create_cpp_str(Some(region_bytes));
+
+            (*store.engine_store_server).tmp_fap_regions.insert((new_region_meta.get_id(), new_peer_id), Box::new(new_region));
             // Check if we have commit_index.
             debug!("recover from remote peer: ok from {} to {}", from_store, store_id; "region_id" => region_id);
+
             ret = Some(interfaces_ffi::FastAddPeerRes {
                 status: interfaces_ffi::FastAddPeerStatus::Ok,
                 apply_state: apply_state_ptr,

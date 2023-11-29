@@ -335,6 +335,13 @@ pub mod root {
             BadData = 4,
             FailedInject = 5,
         }
+        #[repr(u8)]
+        #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
+        pub enum PrehandledSnapshotType {
+            None = 0,
+            Legacy = 1,
+            FAPCheckpoint = 2,
+        }
         #[repr(C)]
         #[derive(Debug)]
         pub struct FastAddPeerRes {
@@ -626,6 +633,13 @@ pub mod root {
                     arg3: root::DB::RawCppPtrType,
                 ),
             >,
+            pub fn_apply_fap_snapshot: ::std::option::Option<
+                unsafe extern "C" fn(
+                    arg1: *mut root::DB::EngineStoreServerWrap,
+                    arg2: u64,
+                    arg3: u64,
+                ),
+            >,
             pub fn_handle_http_request: ::std::option::Option<
                 unsafe extern "C" fn(
                     arg1: *mut root::DB::EngineStoreServerWrap,
@@ -695,7 +709,7 @@ pub mod root {
                 arg3: root::DB::RawVoidPtr,
             ) -> u32;
         }
-        pub const RAFT_STORE_PROXY_VERSION: u64 = 3413295096116791749;
+        pub const RAFT_STORE_PROXY_VERSION: u64 = 8024556142803901851;
         pub const RAFT_STORE_PROXY_MAGIC_NUMBER: u32 = 324508639;
     }
 }

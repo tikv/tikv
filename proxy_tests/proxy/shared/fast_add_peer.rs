@@ -188,7 +188,7 @@ fn test_overlap_last_apply_old() {
 // If a legacy snapshot is applied between fn_fast_add_peer and
 // build_and_send_snapshot, it will override the previous snapshot's data, which
 // is actually newer.
-
+// It if origianlly https://github.com/pingcap/tidb-engine-ext/pull/359 before two-stage fap.
 #[test]
 fn test_overlap_apply_legacy_in_the_middle() {
     let (mut cluster, pd_client) = new_mock_cluster_snap(0, 3);
@@ -275,19 +275,25 @@ fn test_overlap_apply_legacy_in_the_middle() {
             states.in_disk_region_state.get_region().get_peers().len() == 3
         },
     );
-    std::thread::sleep(std::time::Duration::from_millis(1000));
+    std::thread::sleep(std::time::Duration::from_millis(500));
     fail::cfg("fap_ffi_pause_after_fap_call", "pause").unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(500));
     fail::remove("fap_ffi_pause");
 
-    // std::thread::sleep(std::time::Duration::from_millis(5000));
+    iter_ffi_helpers(&cluster, Some(vec![3]), &mut |_, ffi: &mut FFIHelperSet| {
+        assert!(!ffi.engine_store_server.kvstore.contains_key(&1000));
+    });
+
+    // The snapshot for new_one_1000_k1 is in `tmp_fap_regions`.
+    // Raftstore v1 is mono store, so there could be v1 written by old_one_1_k3.
     check_key_ex(
         &cluster,
         b"k1",
-        b"v13",
+        b"v1",
+        Some(false),
         None,
-        Some(true),
         Some(vec![3]),
-        None,
+        Some(new_one_1000_k1.get_id()),
         true,
     );
 
@@ -296,7 +302,6 @@ fn test_overlap_apply_legacy_in_the_middle() {
     fail::remove("fap_mock_add_peer_from_id");
     fail::remove("fap_on_msg_snapshot_1_3003");
 
-    // std::thread::sleep(std::time::Duration::from_millis(5000));
     check_key_ex(
         &cluster,
         b"k1",
@@ -304,21 +309,20 @@ fn test_overlap_apply_legacy_in_the_middle() {
         None,
         Some(true),
         Some(vec![3]),
-        None,
+        Some(new_one_1000_k1.get_id()),
         true,
     );
     // Make FAP continue after the legacy snapshot is applied.
     fail::remove("fap_ffi_pause_after_fap_call");
-    // TODO wait until fap finishes.
-    // std::thread::sleep(std::time::Duration::from_millis(5000));
+    std::thread::sleep(std::time::Duration::from_millis(2000));
     check_key_ex(
         &cluster,
         b"k1",
-        b"v1",
+        b"v13",
         None,
         Some(true),
         Some(vec![3]),
-        None,
+        Some(new_one_1000_k1.get_id()),
         true,
     );
 
@@ -575,7 +579,7 @@ fn simple_fast_add_peer(
     // Re-add peer in store.
     pd_client.must_add_peer(1, new_learner_peer(3, 4));
     // Wait until Learner has applied ConfChange
-    std::thread::sleep(std::time::Duration::from_millis(1000));
+    std::thread::sleep(std::time::Duration::from_millis(2000));
     must_wait_until_cond_node(
         &cluster.cluster_ext,
         1,
