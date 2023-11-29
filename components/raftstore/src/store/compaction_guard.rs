@@ -269,7 +269,6 @@ mod tests {
     use std::{path::Path, str};
 
     use collections::HashMap;
-    use encryption::DataKeyManager;
     use engine_rocks::{
         raw::{BlockBasedOptions, DBCompressionType},
         util::new_engine_opt,
@@ -542,7 +541,7 @@ mod tests {
     }
 
     fn collect_keys(path: &str) -> Vec<Vec<u8>> {
-        let reader = RocksSstReader::open::<DataKeyManager>(path, None).unwrap();
+        let reader = RocksSstReader::open(path, None).unwrap();
         let mut sst_reader = reader.iter(IterOptions::default()).unwrap();
         let mut valid = sst_reader.seek_to_first().unwrap();
         let mut ret = vec![];

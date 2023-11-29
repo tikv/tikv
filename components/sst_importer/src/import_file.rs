@@ -12,9 +12,7 @@ use std::{
 
 use api_version::api_v2::TIDB_RANGES_COMPLEMENT;
 use encryption::{DataKeyManager, EncrypterWriter};
-use engine_traits::{
-    iter_option, EncryptionKeyManager, Iterator, KvEngine, RefIterable, SstMetaInfo, SstReader,
-};
+use engine_traits::{iter_option, Iterator, KvEngine, RefIterable, SstMetaInfo, SstReader};
 use file_system::{sync_dir, File, OpenOptions};
 use keys::data_key;
 use kvproto::{import_sstpb::*, kvrpcpb::ApiVersion};

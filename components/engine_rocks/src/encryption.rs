@@ -2,18 +2,18 @@
 
 use std::{io::Result, sync::Arc};
 
-use engine_traits::{EncryptionKeyManager, EncryptionMethod, FileEncryptionInfo};
+use encryption::{DataKeyManager, FileEncryptionInfo};
+use kvproto::encryptionpb::EncryptionMethod;
 use rocksdb::{
-    DBEncryptionMethod, EncryptionKeyManager as DBEncryptionKeyManager,
-    FileEncryptionInfo as DBFileEncryptionInfo,
+    DBEncryptionMethod, EncryptionKeyManager, FileEncryptionInfo as DBFileEncryptionInfo,
 };
 
 use crate::{r2e, raw::Env};
 
 // Use engine::Env directly since Env is not abstracted.
-pub(crate) fn get_env<E: engine_traits::EncryptionKeyManager>(
+pub(crate) fn get_env(
     base_env: Option<Arc<Env>>,
-    key_manager: Option<Arc<E>>,
+    key_manager: Option<Arc<DataKeyManager>>,
 ) -> engine_traits::Result<Option<Arc<Env>>> {
     if let Some(manager) = key_manager {
         let base_env = base_env.unwrap_or_else(|| Arc::new(Env::default()));
@@ -26,17 +26,17 @@ pub(crate) fn get_env<E: engine_traits::EncryptionKeyManager>(
     }
 }
 
-pub struct WrappedEncryptionKeyManager<T: EncryptionKeyManager> {
-    manager: Arc<T>,
+pub struct WrappedEncryptionKeyManager {
+    manager: Arc<DataKeyManager>,
 }
 
-impl<T: EncryptionKeyManager> WrappedEncryptionKeyManager<T> {
-    pub fn new(manager: Arc<T>) -> Self {
+impl WrappedEncryptionKeyManager {
+    pub fn new(manager: Arc<DataKeyManager>) -> Self {
         Self { manager }
     }
 }
 
-impl<T: EncryptionKeyManager> DBEncryptionKeyManager for WrappedEncryptionKeyManager<T> {
+impl EncryptionKeyManager for WrappedEncryptionKeyManager {
     fn get_file(&self, fname: &str) -> Result<DBFileEncryptionInfo> {
         self.manager
             .get_file(fname)

@@ -4,7 +4,6 @@
 
 use std::fs;
 
-use encryption::DataKeyManager;
 use engine_test::kv::KvTestEngine;
 use engine_traits::{
     Error, ExternalSstFileInfo, IterOptions, Iterator, RefIterable, Result, SstExt, SstReader,
@@ -49,7 +48,7 @@ fn basic() -> Result<()> {
     sst_writer.put(b"k1", b"v1")?;
     sst_writer.finish()?;
 
-    let sst_reader = <KvTestEngine as SstExt>::SstReader::open::<DataKeyManager>(&sst_path, None)?;
+    let sst_reader = <KvTestEngine as SstExt>::SstReader::open(&sst_path, None)?;
     let mut iter = sst_reader.iter(IterOptions::default()).unwrap();
 
     iter.seek_to_first()?;
@@ -78,7 +77,7 @@ fn forward() -> Result<()> {
     sst_writer.put(b"k2", b"v2")?;
     sst_writer.finish()?;
 
-    let sst_reader = <KvTestEngine as SstExt>::SstReader::open::<DataKeyManager>(&sst_path, None)?;
+    let sst_reader = <KvTestEngine as SstExt>::SstReader::open(&sst_path, None)?;
     let mut iter = sst_reader.iter(IterOptions::default()).unwrap();
 
     iter.seek_to_first()?;
@@ -115,7 +114,7 @@ fn reverse() -> Result<()> {
     sst_writer.put(b"k2", b"v2")?;
     sst_writer.finish()?;
 
-    let sst_reader = <KvTestEngine as SstExt>::SstReader::open::<DataKeyManager>(&sst_path, None)?;
+    let sst_reader = <KvTestEngine as SstExt>::SstReader::open(&sst_path, None)?;
     let mut iter = sst_reader.iter(IterOptions::default()).unwrap();
 
     iter.seek_to_last()?;
@@ -153,7 +152,7 @@ fn delete() -> Result<()> {
     sst_writer.delete(b"k1")?;
     sst_writer.finish()?;
 
-    let sst_reader = <KvTestEngine as SstExt>::SstReader::open::<DataKeyManager>(&sst_path, None)?;
+    let sst_reader = <KvTestEngine as SstExt>::SstReader::open(&sst_path, None)?;
     let mut iter = sst_reader.iter(IterOptions::default()).unwrap();
 
     iter.seek_to_first()?;
@@ -207,7 +206,7 @@ fn same_key() -> Result<()> {
 
     sst_writer.finish()?;
 
-    let sst_reader = <KvTestEngine as SstExt>::SstReader::open::<DataKeyManager>(&sst_path, None)?;
+    let sst_reader = <KvTestEngine as SstExt>::SstReader::open(&sst_path, None)?;
     let mut iter = sst_reader.iter(IterOptions::default()).unwrap();
 
     iter.seek_to_first()?;
@@ -249,7 +248,7 @@ fn reverse_key() -> Result<()> {
 
     sst_writer.finish()?;
 
-    let sst_reader = <KvTestEngine as SstExt>::SstReader::open::<DataKeyManager>(&sst_path, None)?;
+    let sst_reader = <KvTestEngine as SstExt>::SstReader::open(&sst_path, None)?;
     let mut iter = sst_reader.iter(IterOptions::default()).unwrap();
 
     iter.seek_to_first()?;

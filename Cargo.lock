@@ -1465,7 +1465,6 @@ dependencies = [
  "crc32fast",
  "crossbeam",
  "derive_more",
- "engine_traits",
  "error_code",
  "fail",
  "file_system",
@@ -1520,6 +1519,7 @@ dependencies = [
 name = "engine_panic"
 version = "0.0.1"
 dependencies = [
+ "encryption",
  "engine_traits",
  "kvproto",
  "raft",
@@ -1612,6 +1612,7 @@ version = "0.0.1"
 dependencies = [
  "case_macros",
  "collections",
+ "encryption",
  "error_code",
  "fail",
  "file_system",
@@ -2848,7 +2849,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#1cdf55ba2fd2b132e8cd549146b96205ba4721ad"
+source = "git+https://github.com/tikv/rust-rocksdb.git#c4b7047314a9b27926a1b7b25d2e6d1a37a48d2b"
 dependencies = [
  "bindgen 0.65.1",
  "bzip2-sys",
@@ -2867,7 +2868,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/tikv/rust-rocksdb.git#1cdf55ba2fd2b132e8cd549146b96205ba4721ad"
+source = "git+https://github.com/tikv/rust-rocksdb.git#c4b7047314a9b27926a1b7b25d2e6d1a37a48d2b"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -4707,7 +4708,7 @@ dependencies = [
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#1cdf55ba2fd2b132e8cd549146b96205ba4721ad"
+source = "git+https://github.com/tikv/rust-rocksdb.git#c4b7047314a9b27926a1b7b25d2e6d1a37a48d2b"
 dependencies = [
  "libc 0.2.146",
  "librocksdb_sys",
