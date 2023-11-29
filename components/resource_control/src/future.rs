@@ -92,7 +92,9 @@ pub struct LimitedFuture<F: Future> {
     #[pin]
     post_delay: OptionalFuture<Compat01As03<Delay>>,
     resource_limiter: Arc<ResourceLimiter>,
-    res: Poll<F::Output>,
+    // if the future is first polled, we need to let it consume a 0 value
+    // to compensate the debt of previously finished tasks.
+    is_first_poll: bool,
 }
 
 impl<F: Future> LimitedFuture<F> {
@@ -102,7 +104,7 @@ impl<F: Future> LimitedFuture<F> {
             pre_delay: None.into(),
             post_delay: None.into(),
             resource_limiter,
-            res: Poll::Pending,
+            is_first_poll: true,
         }
     }
 }
@@ -112,18 +114,31 @@ impl<F: Future> Future for LimitedFuture<F> {
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let mut this = self.project();
-        if !this.post_delay.is_done() {
-            assert!(this.pre_delay.is_done());
+        if *this.is_first_poll {
+            debug_assert!(this.pre_delay.finished && this.post_delay.finished);
+            *this.is_first_poll = false;
+            let wait_dur = this
+                .resource_limiter
+                .consume(Duration::ZERO, IoBytes::default())
+                .min(MAX_WAIT_DURATION);
+            if wait_dur > Duration::ZERO {
+                *this.pre_delay = Some(
+                    GLOBAL_TIMER_HANDLE
+                        .delay(std::time::Instant::now() + wait_dur)
+                        .compat(),
+                )
+                .into();
+            }
+        }
+        if !this.post_delay.finished {
+            assert!(this.pre_delay.finished);
             std::mem::swap(&mut *this.pre_delay, &mut *this.post_delay);
         }
-        if !this.pre_delay.is_done() {
+        if !this.pre_delay.finished {
             let res = this.pre_delay.poll(cx);
             if res.is_pending() {
                 return Poll::Pending;
             }
-        }
-        if this.res.is_ready() {
-            return std::mem::replace(this.res, Poll::Pending);
         }
         // get io stats is very expensive, so we only do so if only io control is
         // enabled.
@@ -158,7 +173,7 @@ impl<F: Future> Future for LimitedFuture<F> {
             IoBytes::default()
         };
         let mut wait_dur = this.resource_limiter.consume(dur, io_bytes);
-        if wait_dur == Duration::ZERO {
+        if res.is_ready() || wait_dur == Duration::ZERO {
             return res;
         }
         if wait_dur > MAX_WAIT_DURATION {
@@ -171,31 +186,24 @@ impl<F: Future> Future for LimitedFuture<F> {
                 .compat(),
         )
         .into();
-        if this.post_delay.poll(cx).is_ready() {
-            return res;
-        }
-        *this.res = res;
+        _ = this.post_delay.poll(cx);
         Poll::Pending
     }
 }
 
 /// `OptionalFuture` is similar to futures::OptionFuture, but provide an extra
-/// `is_done` method.
+/// `finished` flag to determine if the future requires poll.
 #[pin_project]
 struct OptionalFuture<F> {
     #[pin]
     f: Option<F>,
-    done: bool,
+    finished: bool,
 }
 
 impl<F> OptionalFuture<F> {
     fn new(f: Option<F>) -> Self {
-        let done = f.is_none();
-        Self { f, done }
-    }
-
-    fn is_done(&self) -> bool {
-        self.done
+        let finished = f.is_none();
+        Self { f, finished }
     }
 }
 
@@ -212,7 +220,7 @@ impl<F: Future> Future for OptionalFuture<F> {
         let this = self.project();
         match this.f.as_pin_mut() {
             Some(x) => x.poll(cx).map(|r| {
-                *this.done = true;
+                *this.finished = true;
                 Some(r)
             }),
             None => Poll::Ready(None),
