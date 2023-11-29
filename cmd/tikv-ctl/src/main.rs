@@ -1344,7 +1344,7 @@ fn read_cluster_id(config: &TikvConfig) -> Result<u64, String> {
     Ok(ident.cluster_id)
 }
 
-fn validate_storage_data_dir(config: &mut TiKvConfig, data_dir: Option<String>) -> bool {
+fn validate_storage_data_dir(config: &mut TikvConfig, data_dir: Option<String>) -> bool {
     if let Some(data_dir) = data_dir {
         if !Path::new(&data_dir).exists() {
             eprintln!("--data-dir {:?} not exists", data_dir);
