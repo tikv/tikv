@@ -4990,6 +4990,16 @@
               "metric": "tikv_grpc_msg_duration_seconds_bucket",
               "refId": "A",
               "step": 10
+            },
+            {
+              "expr": "sum(rate(tikv_grpc_msg_duration_seconds_count{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", type!=\"kv_gc\"}[1m])) by (type,priority)",
+              "format": "time_series",
+              "intervalFactor": 2,
+              "legendFormat": "{{type}}--{{priority}}",
+              "metric": "tikv_grpc_msg_duration_seconds_bucket",
+              "refId": "B",
+              "step": 10,
+              "hide": true
             }
           ],
           "thresholds": [],
@@ -5200,6 +5210,16 @@
               "legendFormat": "{{type}}",
               "refId": "A",
               "step": 10
+            },
+            {
+              "expr": "histogram_quantile(0.99, sum(rate(tikv_grpc_msg_duration_seconds_bucket{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", type!=\"kv_gc\"}[1m])) by (le, type,priority))",
+              "format": "time_series",
+              "interval": "",
+              "intervalFactor": 2,
+              "legendFormat": "{{type}}--{{priority}}",
+              "refId": "B",
+              "step": 10,
+              "hide": true
             }
           ],
           "thresholds": [],
@@ -5305,6 +5325,16 @@
               "legendFormat": "{{type}}",
               "refId": "A",
               "step": 10
+            },
+            {
+              "expr": "sum(rate(tikv_grpc_msg_duration_seconds_sum{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m])) by (type,priority) / sum(rate(tikv_grpc_msg_duration_seconds_count{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m])) by (type,priority)",
+              "format": "time_series",
+              "interval": "",
+              "intervalFactor": 2,
+              "legendFormat": "{{type}}--{{priority}}",
+              "refId": "B",
+              "step": 10,
+              "hide": true
             }
           ],
           "thresholds": [],
