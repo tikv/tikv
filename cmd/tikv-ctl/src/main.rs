@@ -120,6 +120,9 @@ fn main() {
             }
         }
         Cmd::RaftEngineCtl { args } => {
+            if !validate_storage_data_dir(&mut cfg, opt.data_dir) {
+                return;
+            }
             let key_manager =
                 data_key_manager_from_config(&cfg.security.encryption, &cfg.storage.data_dir)
                     .expect("data_key_manager_from_config should success");
@@ -141,6 +144,9 @@ fn main() {
             dump_snap_meta_file(path);
         }
         Cmd::DecryptFile { file, out_file } => {
+            if !validate_storage_data_dir(&mut cfg, opt.data_dir) {
+                return;
+            }
             let message =
                 "This action will expose sensitive data as plaintext on persistent storage";
             if !warning_prompt(message) {
@@ -189,28 +195,36 @@ fn main() {
             io::copy(&mut reader, &mut outf).unwrap();
             println!("crc32: {}", calc_crc32(outfile).unwrap());
         }
-        Cmd::EncryptionMeta { cmd: subcmd } => match subcmd {
-            EncryptionMetaCmd::DumpKey { ids } => {
-                let message = "This action will expose encryption key(s) as plaintext. Do not output the \
+        Cmd::EncryptionMeta { cmd: subcmd } => {
+            if !validate_storage_data_dir(&mut cfg, opt.data_dir) {
+                return;
+            }
+            match subcmd {
+                EncryptionMetaCmd::DumpKey { ids } => {
+                    let message = "This action will expose encryption key(s) as plaintext. Do not output the \
                     result in file on disk.";
-                if !warning_prompt(message) {
-                    return;
+                    if !warning_prompt(message) {
+                        return;
+                    }
+                    DataKeyManager::dump_key_dict(
+                        create_backend(&cfg.security.encryption.master_key)
+                            .expect("encryption-meta master key creation"),
+                        &cfg.storage.data_dir,
+                        ids,
+                    )
+                    .unwrap();
                 }
-                DataKeyManager::dump_key_dict(
-                    create_backend(&cfg.security.encryption.master_key)
-                        .expect("encryption-meta master key creation"),
-                    &cfg.storage.data_dir,
-                    ids,
-                )
-                .unwrap();
+                EncryptionMetaCmd::DumpFile { path } => {
+                    let path = path
+                        .map(|path| fs::canonicalize(path).unwrap().to_str().unwrap().to_owned());
+                    DataKeyManager::dump_file_dict(&cfg.storage.data_dir, path.as_deref()).unwrap();
+                }
             }
-            EncryptionMetaCmd::DumpFile { path } => {
-                let path =
-                    path.map(|path| fs::canonicalize(path).unwrap().to_str().unwrap().to_owned());
-                DataKeyManager::dump_file_dict(&cfg.storage.data_dir, path.as_deref()).unwrap();
-            }
-        },
+        }
         Cmd::CleanupEncryptionMeta {} => {
+            if !validate_storage_data_dir(&mut cfg, opt.data_dir) {
+                return;
+            }
             let key_manager =
                 match data_key_manager_from_config(&cfg.security.encryption, &cfg.storage.data_dir)
                     .expect("data_key_manager_from_config should success")
@@ -1328,4 +1342,18 @@ fn read_cluster_id(config: &TikvConfig) -> Result<u64, String> {
         .unwrap()
         .unwrap();
     Ok(ident.cluster_id)
+}
+
+fn validate_storage_data_dir(config: &mut TiKvConfig, data_dir: Option<String>) -> bool {
+    if let Some(data_dir) = data_dir {
+        if !Path::new(&data_dir).exists() {
+            eprintln!("--data-dir {:?} not exists", data_dir);
+            return false;
+        }
+        config.storage.data_dir = data_dir;
+    } else if config.storage.data_dir.is_empty() {
+        eprintln!("--data-dir or data-dir in the config file should not be empty");
+        return false;
+    }
+    true
 }
