@@ -17,10 +17,11 @@ use kvproto::{errorpb, kvrpcpb::CommandPri};
 use online_config::{ConfigChange, ConfigManager, ConfigValue, Result as CfgResult};
 use prometheus::{core::Metric, Histogram, IntCounter, IntGauge};
 use resource_control::{
-    with_resource_limiter, ControlledFuture, ResourceController, ResourceLimiter, TaskMetadata,
+    with_resource_limiter, ControlledFuture, ResourceController, ResourceLimiter,
 };
 use thiserror::Error;
 use tikv_util::{
+    resource_control::TaskMetadata,
     sys::{cpu_time::ProcessStat, SysQuota},
     time::Instant,
     worker::{Runnable, RunnableWithTimer, Scheduler, Worker},
@@ -270,6 +271,17 @@ impl ReadPoolHandle {
         }
     }
 
+    pub fn set_max_tasks_per_worker(&self, tasks_per_thread: usize) {
+        match self {
+            ReadPoolHandle::FuturePools { .. } => {
+                unreachable!()
+            }
+            ReadPoolHandle::Yatp { remote, .. } => {
+                remote.set_max_tasks_per_worker(tasks_per_thread);
+            }
+        }
+    }
+
     pub fn get_ewma_time_slice(&self) -> Option<Duration> {
         match self {
             ReadPoolHandle::FuturePools { .. } => None,
@@ -429,7 +441,7 @@ pub fn build_yatp_read_pool<E: Engine, R: FlowStatsReporter>(
     engine: E,
     resource_ctl: Option<Arc<ResourceController>>,
     cleanup_method: CleanupMethod,
-    metric_idx_from_task_meta_fn: Option<Arc<dyn Fn(&[u8]) -> usize + Send + Sync + 'static>>,
+    enable_task_wait_metrics: bool,
 ) -> ReadPool {
     let unified_read_pool_name = get_unified_read_pool_name();
     build_yatp_read_pool_with_name(
@@ -439,7 +451,7 @@ pub fn build_yatp_read_pool<E: Engine, R: FlowStatsReporter>(
         resource_ctl,
         cleanup_method,
         unified_read_pool_name,
-        metric_idx_from_task_meta_fn,
+        enable_task_wait_metrics,
     )
 }
 
@@ -450,10 +462,10 @@ pub fn build_yatp_read_pool_with_name<E: Engine, R: FlowStatsReporter>(
     resource_ctl: Option<Arc<ResourceController>>,
     cleanup_method: CleanupMethod,
     unified_read_pool_name: String,
-    metric_idx_from_task_meta_fn: Option<Arc<dyn Fn(&[u8]) -> usize + Send + Sync + 'static>>,
+    enable_task_wait_metrics: bool,
 ) -> ReadPool {
     let raftkv = Arc::new(Mutex::new(engine));
-    let mut builder = YatpPoolBuilder::new(ReporterTicker { reporter })
+    let builder = YatpPoolBuilder::new(ReporterTicker { reporter })
         .name_prefix(&unified_read_pool_name)
         .cleanup_method(cleanup_method)
         .stack_size(config.stack_size.0 as usize)
@@ -475,12 +487,8 @@ pub fn build_yatp_read_pool_with_name<E: Engine, R: FlowStatsReporter>(
         })
         .before_stop(|| unsafe {
             destroy_tls_engine::<E>();
-        });
-    if let Some(metric_idx_from_task_meta_fn) = metric_idx_from_task_meta_fn {
-        builder = builder
-            .enable_task_wait_metrics()
-            .metric_idx_from_task_meta(metric_idx_from_task_meta_fn);
-    }
+        })
+        .enable_task_wait_metrics(enable_task_wait_metrics);
 
     let pool = if let Some(ref r) = resource_ctl {
         builder.build_priority_pool(r.clone())
@@ -592,6 +600,9 @@ impl Runnable for ReadPoolConfigRunner {
                     self.cur_thread_count = self.core_thread_count;
                 }
             }
+            Task::MaxTasksPerWorker(s) => {
+                self.handle.set_max_tasks_per_worker(s);
+            }
         }
     }
 }
@@ -676,6 +687,7 @@ impl ReadPoolConfigRunner {
 enum Task {
     PoolSize(usize),
     AutoAdjust(bool),
+    MaxTasksPerWorker(usize),
 }
 
 impl std::fmt::Display for Task {
@@ -683,6 +695,7 @@ impl std::fmt::Display for Task {
         match self {
             Task::PoolSize(s) => write!(f, "PoolSize({})", *s),
             Task::AutoAdjust(s) => write!(f, "AutoAdjust({})", *s),
+            Task::MaxTasksPerWorker(s) => write!(f, "MaxTasksPerWorker({})", *s),
         }
     }
 }
@@ -735,6 +748,10 @@ impl ConfigManager for ReadPoolConfigManager {
             if let Some(ConfigValue::Bool(b)) = unified.get("auto_adjust_pool_size") {
                 self.scheduler.schedule(Task::AutoAdjust(*b))?;
             }
+            if let Some(ConfigValue::Usize(max_tasks)) = unified.get("max_tasks_per_worker") {
+                self.scheduler
+                    .schedule(Task::MaxTasksPerWorker(*max_tasks))?;
+            }
         }
         info!(
             "readpool config changed";
@@ -780,6 +797,8 @@ mod tests {
     use std::{thread, time::Duration};
 
     use futures::channel::oneshot;
+    use futures_executor::block_on;
+    use kvproto::kvrpcpb::ResourceControlContext;
     use raftstore::store::{ReadStats, WriteStats};
     use resource_control::ResourceGroupManager;
 
@@ -811,7 +830,12 @@ mod tests {
             engine,
             None,
             CleanupMethod::InPlace,
+<<<<<<< HEAD
             None,
+=======
+            name.to_owned(),
+            false,
+>>>>>>> dd567e6079 (readpool: gate future-pool running tasks per priority (#16049))
         );
 
         let gen_task = || {
@@ -865,7 +889,7 @@ mod tests {
             engine,
             None,
             CleanupMethod::InPlace,
-            None,
+            false,
         );
 
         let gen_task = || {
@@ -918,7 +942,7 @@ mod tests {
             max_tasks_per_worker: 1,
             ..Default::default()
         };
-        // max running tasks number should be 2*1 = 2
+        // max running tasks number for each priority should be 2*1 = 2
 
         let engine = TestEngineBuilder::new().build().unwrap();
         let pool = build_yatp_read_pool(
@@ -927,7 +951,7 @@ mod tests {
             engine,
             None,
             CleanupMethod::InPlace,
-            None,
+            false,
         );
 
         let gen_task = || {
@@ -957,6 +981,15 @@ mod tests {
             Err(ReadPoolError::UnifiedReadPoolFull) => {}
             _ => panic!("should return full error"),
         }
+
+        // spawn a high-priority task, should not return Full error.
+        let (task_high, tx_h) = gen_task();
+        let mut ctx = ResourceControlContext::default();
+        ctx.override_priority = 16; // high priority
+        let metadata = TaskMetadata::from_ctx(&ctx);
+        let f = handle.spawn_handle(task_high, CommandPri::Normal, 6, metadata, None);
+        tx_h.send(()).unwrap();
+        block_on(f).unwrap();
 
         tx1.send(()).unwrap();
         tx2.send(()).unwrap();
@@ -1054,7 +1087,7 @@ mod tests {
                 resource_manager,
                 CleanupMethod::InPlace,
                 name.clone(),
-                None,
+                false,
             );
 
             let gen_task = || {

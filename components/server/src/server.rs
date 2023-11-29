@@ -70,7 +70,7 @@ use raftstore::{
     RaftRouterCompactedEventSender,
 };
 use resolved_ts::{LeadershipResolver, Task};
-use resource_control::{priority_from_task_meta, ResourceGroupManager};
+use resource_control::ResourceGroupManager;
 use security::SecurityManager;
 use service::{service_event::ServiceEvent, service_manager::GrpcServiceManager};
 use snap_recovery::RecoveryService;
@@ -558,7 +558,7 @@ where
                 engines.engine.clone(),
                 resource_ctl,
                 CleanupMethod::Remote(self.core.background_worker.remote()),
-                Some(Arc::new(priority_from_task_meta)),
+                true,
             ))
         } else {
             None
