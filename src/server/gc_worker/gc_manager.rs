@@ -456,19 +456,19 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine> GcMan
 
         let (tx, rx) = mpsc::channel();
         let cb = Box::new(move |res| {
-            // we don't care error actually.
-            let _ = tx.send(res);
+            // send must be successful.
+            tx.send(res).unwrap();
         });
-        let mut pending_tasks = 0;
+        let mut running_tasks = 0;
         loop {
             self.gc_manager_ctx.check_stopped()?;
             if is_compaction_filter_allowed(&self.cfg_tracker.value(), &self.feature_gate) {
                 return Ok(());
             }
 
-            if pending_tasks >= self.max_concurrent_tasks {
+            if running_tasks >= self.max_concurrent_tasks {
                 let res = rx.recv().unwrap();
-                pending_tasks -= 1;
+                running_tasks -= 1;
                 if let Err(e) = res {
                     // Ignore the error and continue, since it's useless to retry this.
                     // TODO: Find a better way to handle errors. Maybe we should retry.
@@ -508,7 +508,10 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine> GcMan
                 if finished {
                     // We have worked to the end of the TiKV or our progress has reached `end`, and
                     // we don't need to rewind. In this case, the round of GC has finished.
-                    info!("gc_worker: auto gc finishes"; "processed_regions" => processed_regions);
+                    info!("gc_worker: all regions task are scheduled";
+                          "processed_regions" => processed_regions,
+                          "running_gc_regions" => running_tasks,
+                    );
                     break;
                 }
             }
@@ -520,13 +523,13 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine> GcMan
             self.check_if_need_rewind(&progress, &mut need_rewind, &mut end);
 
             progress =
-                self.async_gc_next_region(progress.unwrap(), cb.clone(), &mut pending_tasks)?;
+                self.async_gc_next_region(progress.unwrap(), cb.clone(), &mut running_tasks)?;
         }
 
-        while pending_tasks > 0 {
+        while running_tasks > 0 {
             self.gc_manager_ctx.check_stopped()?;
             let res = rx.recv().unwrap();
-            pending_tasks -= 1;
+            running_tasks -= 1;
             if let Err(e) = res {
                 // Ignore the error and continue, since it's useless to retry this.
                 // TODO: Find a better way to handle errors. Maybe we should retry.
@@ -537,6 +540,7 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine> GcMan
                 .with_label_values(&[PROCESS_TYPE_GC])
                 .inc();
         }
+        info!("gc_worker: auto gc finishes"; "processed_regions" => processed_regions);
         Ok(())
     }
 
@@ -585,7 +589,7 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine> GcMan
         &mut self,
         from_key: Key,
         callback: Callback<()>,
-        pending_tasks: &mut usize,
+        running_tasks: &mut usize,
     ) -> GcManagerResult<Option<Key>> {
         // Get the information of the next region to do GC.
         let (region, next_key) = self.get_next_gc_context(from_key);
@@ -601,10 +605,11 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine> GcMan
             self.curr_safe_point(),
             callback,
         )
-        .and_then(|_| {
-            *pending_tasks += 1;
-            Ok(())
+        .map(|_| {
+            *running_tasks += 1;
+            Ok::<(), GcManagerError>(())
         });
+
         Ok(next_key)
     }
 
