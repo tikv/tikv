@@ -2,6 +2,7 @@
 
 use std::{
     collections::VecDeque,
+    convert::TryInto,
     ffi::CString,
     marker::Unpin,
     mem,
@@ -11,9 +12,10 @@ use std::{
         atomic::{AtomicI32, AtomicU8, Ordering},
         Arc, Mutex,
     },
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime},
 };
 
+use byteorder::{BigEndian, ByteOrder};
 use collections::{HashMap, HashSet};
 use crossbeam::queue::ArrayQueue;
 use futures::{
@@ -32,6 +34,7 @@ use kvproto::{
     raft_serverpb::{Done, RaftMessage, RaftSnapshotData},
     tikvpb::{BatchRaftMessage, TikvClient},
 };
+use log_wrappers;
 use protobuf::Message;
 use raft::SnapshotStatus;
 use raftstore::errors::DiscardReason;
@@ -49,6 +52,13 @@ use crate::server::{
     self, load_statistics::ThreadLoadPool, metrics::*, snap::Task as SnapTask, Config,
     StoreAddrResolver,
 };
+
+fn current_millis() -> u64 {
+    SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map(|t| t.as_millis() as u64)
+        .unwrap_or(0)
+}
 
 pub struct MetadataSourceStoreId {}
 
@@ -199,12 +209,22 @@ struct BatchMessageBuffer {
     cfg: Config,
     cfg_tracker: Tracker<Config>,
     loads: Arc<ThreadLoadPool>,
+    target: Option<String>,
 }
 
 impl BatchMessageBuffer {
+    #[cfg(test)]
     fn new(
         global_cfg_track: &Arc<VersionTrack<Config>>,
         loads: Arc<ThreadLoadPool>,
+    ) -> BatchMessageBuffer {
+        Self::new_with_addr(global_cfg_track, loads, None)
+    }
+
+    fn new_with_addr(
+        global_cfg_track: &Arc<VersionTrack<Config>>,
+        loads: Arc<ThreadLoadPool>,
+        target: Option<String>,
     ) -> BatchMessageBuffer {
         let cfg_tracker = Arc::clone(global_cfg_track).tracker("raft-client-buffer".into());
         let cfg = global_cfg_track.value().clone();
@@ -215,6 +235,7 @@ impl BatchMessageBuffer {
             cfg,
             cfg_tracker,
             loads,
+            target,
         }
     }
 
@@ -282,6 +303,25 @@ impl Buffer for BatchMessageBuffer {
     #[inline]
     fn flush(&mut self, sender: &mut ClientCStreamSender<BatchRaftMessage>) -> grpcio::Result<()> {
         let batch = mem::take(&mut self.batch);
+        let now = current_millis();
+        for msg in batch.get_msgs() {
+            let extra_ctx = msg.get_extra_ctx();
+            if extra_ctx.len() != 8 {
+                continue;
+            }
+            let ts = BigEndian::read_u64(extra_ctx);
+            let m = msg.get_message();
+            let typ = m.get_msg_type();
+            let ctx = m.get_context();
+            if ts > 0 && now - ts >= 250 && ctx.len() > 0 {
+                info!(">>> raft_client: send wait too long";
+                    "ctx" => log_wrappers::hex_encode(ctx),
+                    "typ" => ?typ,
+                    "dur" => now - ts,
+                    "to" => self.target.as_deref().unwrap_or("unknown"),
+                );
+            }
+        }
         let res = Pin::new(sender).start_send((
             batch,
             WriteFlags::default().buffer_hint(self.overflowing.is_some()),
@@ -698,6 +738,7 @@ where
             .default_compression_algorithm(cfg.grpc_compression_algorithm())
             .default_gzip_compression_level(cfg.grpc_gzip_compression_level)
             .default_grpc_min_message_size_to_compress(cfg.grpc_min_message_size_to_compress)
+            .dns_min_time_between_resolutions(cfg.raft_client_min_time_between_resolutions.0)
             .max_reconnect_backoff(cfg.raft_client_max_backoff.0)
             .initial_reconnect_backoff(cfg.raft_client_initial_reconnect_backoff.0)
             // hack: so it's different args, grpc will always create a new connection.
@@ -716,7 +757,11 @@ where
             sender: AsyncRaftSender {
                 sender: batch_sink,
                 queue: self.queue.clone(),
-                buffer: BatchMessageBuffer::new(&self.builder.cfg, self.builder.loads.clone()),
+                buffer: BatchMessageBuffer::new_with_addr(
+                    &self.builder.cfg,
+                    self.builder.loads.clone(),
+                    Some(addr.clone()),
+                ),
                 router: self.builder.router.clone(),
                 snap_scheduler: self.builder.snap_scheduler.clone(),
                 addr,
@@ -805,6 +850,7 @@ async fn start<S, R>(
     R: RaftExtension + Unpin + Send + 'static,
 {
     let mut last_wake_time = None;
+    let reuse_channel = back_end.builder.cfg.value().raft_client_reuse_channel;
     let backoff_duration = back_end.builder.cfg.value().raft_client_max_backoff.0;
     let mut addr_channel = None;
     loop {
@@ -834,15 +880,16 @@ async fn start<S, R>(
         };
 
         // reuse channel if the address is the same.
-        if addr_channel
-            .as_ref()
-            .map_or(true, |(_, prev_addr)| prev_addr != &addr)
+        if !reuse_channel
+            || addr_channel
+                .as_ref()
+                .map_or(true, |(_, prev_addr)| prev_addr != &addr)
         {
             addr_channel = Some((back_end.connect(&addr), addr.clone()));
         }
         let channel = addr_channel.as_ref().unwrap().0.clone();
 
-        debug!("connecting to store"; "store_id" => back_end.store_id, "addr" => %addr);
+        info!("connecting to store"; "store_id" => back_end.store_id, "addr" => %addr);
         if !channel.wait_for_connected(backoff_duration).await {
             error!("wait connect timeout"; "store_id" => back_end.store_id, "addr" => addr);
 
@@ -856,12 +903,24 @@ async fn start<S, R>(
                 .report_store_unreachable(back_end.store_id);
             continue;
         } else {
-            debug!("connection established"; "store_id" => back_end.store_id, "addr" => %addr);
+            info!("connection established"; "store_id" => back_end.store_id, "addr" => %addr);
         }
 
         let client = TikvClient::new(channel);
         let f = back_end.batch_call(&client, addr.clone());
+        RAFT_CLIENT_EVENT_TIME_GAUGE
+            .with_label_values(&["open", &addr])
+            .set(current_millis().try_into().unwrap());
+        RAFT_CLIENT_EVENT_COUNTER
+            .with_label_values(&["open", &addr])
+            .inc();
         let mut res = f.await; // block here until the stream call is closed or aborted.
+        RAFT_CLIENT_EVENT_TIME_GAUGE
+            .with_label_values(&["close", &addr])
+            .set(current_millis().try_into().unwrap());
+        RAFT_CLIENT_EVENT_COUNTER
+            .with_label_values(&["close", &addr])
+            .inc();
         if res == Ok(RaftCallRes::Fallback) {
             // If the call is setup successfully, it will never finish. Returning
             // `UnImplemented` means the batch_call is not supported, we are probably
@@ -936,7 +995,7 @@ struct CachedQueue {
 /// ```text
 /// for m in msgs {
 ///     if !raft_client.send(m) {
-///         // handle error.   
+///         // handle error.
 ///     }
 /// }
 /// raft_client.flush();

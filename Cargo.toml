@@ -373,10 +373,10 @@ tipb_helper = { path = "components/tipb_helper" }
 tracker = { path = "components/tracker" }
 txn_types = { path = "components/txn_types" }
 # External libs
-grpcio = { version = "0.10.4", default-features = false, features = ["openssl-vendored", "protobuf-codec", "nightly"] }
-grpcio-health = { version = "0.10.4", default-features = false, features = ["protobuf-codec"] }
-tipb = { git = "https://github.com/pingcap/tipb.git" }
-kvproto = { git = "https://github.com/pingcap/kvproto.git", branch = "release-6.5" }
+grpcio = { git = "https://github.com/zyguan/grpc-rs.git", branch = "dns-resolution", default-features = false, features = ["openssl-vendored", "protobuf-codec", "nightly"] }
+grpcio-health = { git = "https://github.com/zyguan/grpc-rs.git", branch = "dns-resolution", member = "health", default-features = false, features = ["protobuf-codec"] }
+tipb = { git = "https://github.com/zyguan/tipb.git", branch = "debug" }
+kvproto = { git = "https://github.com/zyguan/kvproto.git", branch = "debug" }
 yatp = { git = "https://github.com/tikv/yatp.git", branch = "master" }
 tokio-timer = { git = "https://github.com/tikv/tokio", branch = "tokio-timer-hotfix" }
 

@@ -2353,8 +2353,7 @@ dependencies = [
 [[package]]
 name = "grpcio"
 version = "0.10.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1f2506de56197d01821c2d1d21082d2dcfd6c82d7a1d6e04d33f37aab6130632"
+source = "git+https://github.com/zyguan/grpc-rs.git?branch=dns-resolution#ee742a8161a3ea33ab503642127ddf75323de9b4"
 dependencies = [
  "futures-executor",
  "futures-util",
@@ -2377,8 +2376,7 @@ dependencies = [
 [[package]]
 name = "grpcio-health"
 version = "0.10.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a37eae605cd21f144b7c7fd0e64e57af9f73d132756fef5b706db110c3ec7ea0"
+source = "git+https://github.com/zyguan/grpc-rs.git?branch=dns-resolution#ee742a8161a3ea33ab503642127ddf75323de9b4"
 dependencies = [
  "futures-executor",
  "futures-util",
@@ -2390,8 +2388,7 @@ dependencies = [
 [[package]]
 name = "grpcio-sys"
 version = "0.10.3+1.44.0-patched"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f23adc509a3c4dea990e0ab8d2add4a65389ee69c288b7851d75dd1df7a6d6c6"
+source = "git+https://github.com/zyguan/grpc-rs.git?branch=dns-resolution#ee742a8161a3ea33ab503642127ddf75323de9b4"
 dependencies = [
  "bindgen 0.59.2",
  "cc",
@@ -2830,7 +2827,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git?branch=release-6.5#aeff3660bea4784b51a2c7eb000838c290775712"
+source = "git+https://github.com/zyguan/kvproto.git?branch=debug#4fa380fe30cc93de6f8c65568647a794b82b603d"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
@@ -6722,7 +6719,7 @@ dependencies = [
 [[package]]
 name = "tipb"
 version = "0.0.1"
-source = "git+https://github.com/pingcap/tipb.git#c6b7a5a1623bb2766a502301ecc3ac8f98cc7c79"
+source = "git+https://github.com/zyguan/tipb.git?branch=debug#d6c5452838d1783f27781d9d12d7d549c6a7d88f"
 dependencies = [
  "futures 0.3.15",
  "grpcio",

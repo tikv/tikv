@@ -39,7 +39,7 @@ crc32fast = "1.2"
 crossbeam = "0.8"
 derivative = "2"
 encryption = { workspace = true }
-engine_rocks = { workspace = true, optional = true } 
+engine_rocks = { workspace = true, optional = true }
 
 # Should be [dev-dependencies] but we need to control the features
 # https://github.com/rust-lang/cargo/issues/6915
@@ -52,7 +52,7 @@ fs2 = "0.4"
 futures = "0.3"
 futures-util = { version = "0.3.1", default-features = false, features = ["io"] }
 getset = "0.1"
-grpcio-health = { version = "0.10", default-features = false, features = ["protobuf-codec"] }
+grpcio-health = { workspace = true, default-features = false, features = ["protobuf-codec"] }
 into_other = { workspace = true }
 itertools = "0.10"
 keys = { workspace = true }

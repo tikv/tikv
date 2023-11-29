@@ -92,9 +92,10 @@ pub struct Config {
     pub raft_client_grpc_send_msg_buffer: usize,
     #[online_config(skip)]
     pub raft_client_queue_size: usize,
-    // Test only
-    #[doc(hidden)]
-    #[serde(skip_serializing)]
+    #[online_config(skip)]
+    pub raft_client_reuse_channel: bool,
+    #[online_config(skip)]
+    pub raft_client_min_time_between_resolutions: ReadableDuration,
     #[online_config(skip)]
     pub raft_client_max_backoff: ReadableDuration,
     // Test only
@@ -221,6 +222,8 @@ impl Default for Config {
             max_grpc_send_msg_len: DEFAULT_MAX_GRPC_SEND_MSG_LEN,
             raft_client_grpc_send_msg_buffer: 512 * 1024,
             raft_client_queue_size: 8192,
+            raft_client_reuse_channel: true,
+            raft_client_min_time_between_resolutions: ReadableDuration::secs(10),
             raft_client_max_backoff: ReadableDuration::secs(5),
             raft_client_initial_reconnect_backoff: ReadableDuration::secs(1),
             raft_msg_max_batch_size: 128,

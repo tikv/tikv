@@ -11,7 +11,7 @@ use std::{
         mpsc::SyncSender,
         Arc, Mutex,
     },
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime},
     u64, usize,
 };
 
@@ -57,7 +57,7 @@ use smallvec::SmallVec;
 use tikv_alloc::trace::TraceEvent;
 use tikv_util::{
     box_err,
-    codec::number::decode_u64,
+    codec::number::{decode_u64, NumberEncoder},
     debug, error, info,
     sys::disk::DiskUsage,
     time::{duration_to_sec, monotonic_raw_now, Instant as TiInstant, InstantExt},
@@ -3339,12 +3339,20 @@ where
         RAFT_READ_INDEX_PENDING_COUNT.sub(read.cmds().len() as i64);
         let time = monotonic_raw_now();
         for (req, cb, mut read_index) in read.take_cmds().drain(..) {
+            let mut confirm_wait_ms = 0u64;
             cb.read_tracker().map(|tracker| {
                 GLOBAL_TRACKERS.with_tracker(*tracker, |t| {
                     t.metrics.read_index_confirm_wait_nanos =
                         (time - read.propose_time).to_std().unwrap().as_nanos() as u64;
+                    confirm_wait_ms = t.metrics.read_index_confirm_wait_nanos / 1_000_000;
                 })
             });
+            if confirm_wait_ms >= 300 {
+                info!(">>> read_index: confirm wait too long";
+                    "dur" => confirm_wait_ms,
+                    "id" => log_wrappers::hex_encode(read.id.as_bytes()),
+                );
+            }
             // leader reports key is locked
             if let Some(locked) = read.locked.take() {
                 let mut response = raft_cmdpb::Response::default();
@@ -5380,6 +5388,18 @@ where
 
     fn prepare_raft_message(&self) -> RaftMessage {
         let mut send_msg = RaftMessage::default();
+        let mut buf = Vec::with_capacity(8);
+        if buf
+            .encode_u64(
+                SystemTime::now()
+                    .duration_since(SystemTime::UNIX_EPOCH)
+                    .map(|t| t.as_millis() as u64)
+                    .unwrap_or(0),
+            )
+            .is_ok()
+        {
+            send_msg.set_extra_ctx(buf);
+        }
         send_msg.set_region_id(self.region_id);
         // set current epoch
         send_msg.set_region_epoch(self.region().get_region_epoch().clone());

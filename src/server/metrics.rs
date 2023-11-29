@@ -440,6 +440,18 @@ lazy_static! {
         &["type"],
     )
     .unwrap();
+    pub static ref RAFT_CLIENT_EVENT_COUNTER: IntCounterVec = register_int_counter_vec!(
+        "tikv_raft_client_event_total",
+        "Total number of raft client events",
+        &["name", "addr"],
+    )
+    .unwrap();
+    pub static ref RAFT_CLIENT_EVENT_TIME_GAUGE: IntGaugeVec = register_int_gauge_vec!(
+        "tikv_raft_client_event_time",
+        "The epoch time (in ms) of the latest raft client event",
+        &["name", "addr"]
+    )
+    .unwrap();
 }
 
 make_auto_flush_static_metric! {
