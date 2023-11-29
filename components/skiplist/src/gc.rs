@@ -145,7 +145,9 @@ impl GcRunner {
             "total_version_again" => count2,
             "unique_keys" => filter.unique_key,
             "outdated_version" => filter.versions,
+            "outdated_delete_version" => filter.delete_versions,
             "filtered_version" => filter.filtered,
+            "max_duplicate_version" => filter.max_duplicate_version,
         );
     }
 }
@@ -173,12 +175,23 @@ struct Filter {
     default_cf: Arc<Skiplist<ByteWiseComparator>>,
     write_cf: Arc<Skiplist<ByteWiseComparator>>,
 
+    cached_delete_key: Option<Vec<u8>>,
+
     versions: usize,
+    delete_versions: usize,
     filtered: usize,
     unique_key: usize,
-    total_versions: usize,
-    total_filtered: usize,
+    max_duplicate_version: usize,
+    cur_duplicate_version: usize,
     mvcc_rollback_and_locks: usize,
+}
+
+impl Drop for Filter {
+    fn drop(&mut self) {
+        if let Some(cached_delete_key) = self.cached_delete_key.take() {
+            self.write_cf.remove(cached_delete_key.as_slice());
+        }
+    }
 }
 
 impl Filter {
@@ -193,11 +206,13 @@ impl Filter {
             write_cf,
             unique_key: 0,
             mvcc_key_prefix: vec![],
+            delete_versions: 0,
             versions: 0,
             filtered: 0,
-            total_filtered: 0,
-            total_versions: 0,
+            cached_delete_key: None,
             mvcc_rollback_and_locks: 0,
+            max_duplicate_version: 0,
+            cur_duplicate_version: 0,
             remove_older: false,
         }
     }
@@ -210,10 +225,18 @@ impl Filter {
 
         self.versions += 1;
         if self.mvcc_key_prefix != mvcc_key_prefix {
+            self.cur_duplicate_version = 1;
             self.unique_key += 1;
             self.mvcc_key_prefix.clear();
             self.mvcc_key_prefix.extend_from_slice(mvcc_key_prefix);
             self.remove_older = false;
+            if let Some(cached_delete_key) = self.cached_delete_key.take() {
+                self.write_cf.remove(cached_delete_key.as_slice());
+            }
+        } else {
+            self.cur_duplicate_version += 1;
+            self.max_duplicate_version =
+                usize::max(self.max_duplicate_version, self.cur_duplicate_version);
         }
 
         let mut filtered = self.remove_older;
@@ -224,7 +247,14 @@ impl Filter {
                     self.mvcc_rollback_and_locks += 1;
                     filtered = true;
                 }
-                WriteType::Put | WriteType::Delete => self.remove_older = true,
+                WriteType::Put => self.remove_older = true,
+                WriteType::Delete => {
+                    self.delete_versions += 1;
+                    self.remove_older = true;
+                    
+                    // need to delete at last to avoid order versions appear
+                    self.cached_delete_key = Some(key.to_vec());
+                }
             }
         }
 

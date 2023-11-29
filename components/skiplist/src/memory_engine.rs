@@ -145,6 +145,8 @@ impl LruMemoryEngine {
                 let regional_engine = core.engine.entry(id).or_default();
                 regional_engine.data.clone()
             };
+
+            let mut i = 0;
             batch
                 .into_iter()
                 .zip(regional_engine.into_iter())
@@ -157,6 +159,7 @@ impl LruMemoryEngine {
                             let _ = engine.remove(k.as_slice()).is_some();
                         }
                     });
+                    i += 1;
                 });
         }
     }

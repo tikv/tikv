@@ -13,7 +13,7 @@ use std::{
 
 use bytes::Bytes;
 use rand::Rng;
-use slog_global::info;
+use slog_global::{info, debug};
 
 use super::{arena::Arena, KeyComparator, MAX_HEIGHT};
 use crate::arena::{tag, without_tag};
@@ -501,7 +501,7 @@ impl<C: KeyComparator> Skiplist<C> {
                 };
 
                 if (*r).value != value {
-                    info!(
+                    debug!(
                         "Different values with the same key";
                         "key" => ?key,
                         "prev_value" => ?((*r).value).as_slice(),
@@ -552,7 +552,7 @@ impl<C: KeyComparator> Skiplist<C> {
 
                 if let Some(r) = search.found {
                     if (*r).value != n.value {
-                        info!(
+                        debug!(
                             "Different values with the same key";
                             "key" => ?n.key,
                             "prev_value" => ?((*r).value).as_slice(),
@@ -653,7 +653,7 @@ impl<C: KeyComparator> Skiplist<C> {
             if p == n {
                 unsafe {
                     if (*p).value != value {
-                        info!(
+                        debug!(
                             "Different values with the same key";
                             "key" => ?key,
                             "prev_value" => ?((*p).value).as_slice(),
