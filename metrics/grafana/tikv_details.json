@@ -922,7 +922,7 @@
           "targets": [
             {
               "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "sum(rate(\n    process_cpu_seconds_total\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (instance) ",
+              "expr": "sum(rate(\n    process_cpu_seconds_total\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",job=~\".*tikv\"}\n    [$__rate_interval]\n)) by (instance) ",
               "format": "time_series",
               "hide": false,
               "instant": false,
@@ -930,7 +930,7 @@
               "intervalFactor": 1,
               "legendFormat": "{{instance}}",
               "metric": "",
-              "query": "sum(rate(\n    process_cpu_seconds_total\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (instance) ",
+              "query": "sum(rate(\n    process_cpu_seconds_total\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",job=~\".*tikv\"}\n    [$__rate_interval]\n)) by (instance) ",
               "refId": "",
               "step": 10,
               "target": ""
@@ -1055,7 +1055,7 @@
           "targets": [
             {
               "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "sum((\n    process_resident_memory_bytes\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n)) by (instance) ",
+              "expr": "sum((\n    process_resident_memory_bytes\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",job=~\".*tikv\"}\n    \n)) by (instance) ",
               "format": "time_series",
               "hide": false,
               "instant": false,
@@ -1063,7 +1063,7 @@
               "intervalFactor": 1,
               "legendFormat": "{{instance}}",
               "metric": "",
-              "query": "sum((\n    process_resident_memory_bytes\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n)) by (instance) ",
+              "query": "sum((\n    process_resident_memory_bytes\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",job=~\".*tikv\"}\n    \n)) by (instance) ",
               "refId": "",
               "step": 10,
               "target": ""
@@ -1915,7 +1915,7 @@
               "datasource": "${DS_TEST-CLUSTER}",
               "expr": "sum((\n    tikv_raftstore_region_count\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type=\"buckets\"}\n    \n)) by (instance) ",
               "format": "time_series",
-              "hide": false,
+              "hide": true,
               "instant": false,
               "interval": "",
               "intervalFactor": 1,
@@ -2046,7 +2046,7 @@
           "targets": [
             {
               "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "(time() - ((\n    process_start_time_seconds\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n))  )",
+              "expr": "(time() - ((\n    process_start_time_seconds\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",job=~\".*tikv\"}\n    \n))  )",
               "format": "time_series",
               "hide": false,
               "instant": false,
@@ -2054,7 +2054,7 @@
               "intervalFactor": 1,
               "legendFormat": "{{instance}}",
               "metric": "",
-              "query": "(time() - ((\n    process_start_time_seconds\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n))  )",
+              "query": "(time() - ((\n    process_start_time_seconds\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",job=~\".*tikv\"}\n    \n))  )",
               "refId": "",
               "step": 10,
               "target": ""
