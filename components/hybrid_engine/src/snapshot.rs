@@ -66,7 +66,6 @@ where
     EK: KvEngine,
     EM: MemoryEngine,
 {
-    // The trait is not supported and should not be called by `in-memory engine`
     type DbVector = EK::DbVector;
 
     fn get_value_opt(&self, opts: &ReadOptions, key: &[u8]) -> Result<Option<Self::DbVector>> {
