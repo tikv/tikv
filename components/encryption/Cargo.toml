@@ -18,7 +18,6 @@ cloud = { workspace = true }
 crc32fast = "1.2"
 crossbeam = "0.8"
 derive_more = "0.99.3"
-engine_traits = { workspace = true }
 error_code = { workspace = true }
 fail = "0.5"
 file_system = { workspace = true }

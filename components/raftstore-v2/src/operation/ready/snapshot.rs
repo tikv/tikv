@@ -30,10 +30,7 @@ use std::{
 };
 
 use encryption_export::DataKeyManager;
-use engine_traits::{
-    EncryptionKeyManager, KvEngine, RaftEngine, RaftLogBatch, TabletContext, TabletRegistry,
-    ALL_CFS,
-};
+use engine_traits::{KvEngine, RaftEngine, RaftLogBatch, TabletContext, TabletRegistry, ALL_CFS};
 use fail::fail_point;
 use kvproto::{
     metapb::PeerRole,

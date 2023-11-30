@@ -10,12 +10,13 @@ use std::{
 use codec::number::NumberCodec;
 use encryption::{DataKeyManager, DecrypterReader, EncrypterWriter};
 use engine_traits::{
-    CacheStats, EncryptionKeyManager, EncryptionMethod, PerfContextExt, PerfContextKind, PerfLevel,
-    RaftEngine, RaftEngineDebug, RaftEngineReadOnly, RaftLogBatch as RaftLogBatchTrait, Result,
-    CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE,
+    CacheStats, PerfContextExt, PerfContextKind, PerfLevel, RaftEngine, RaftEngineDebug,
+    RaftEngineReadOnly, RaftLogBatch as RaftLogBatchTrait, Result, CF_DEFAULT, CF_LOCK, CF_RAFT,
+    CF_WRITE,
 };
 use file_system::{IoOp, IoRateLimiter, IoType, WithIoType};
 use kvproto::{
+    encryptionpb::EncryptionMethod,
     metapb::Region,
     raft_serverpb::{
         RaftApplyState, RaftLocalState, RegionLocalState, StoreIdent, StoreRecoverState,
