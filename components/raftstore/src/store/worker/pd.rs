@@ -2381,7 +2381,7 @@ where
                         duration.store_process_duration.unwrap(),
                     ));
                 STORE_INSPECT_DURATION_HISTOGRAM
-                    .with_label_values(&["store_write"])
+                    .with_label_values(&["store_wait"])
                     .observe(tikv_util::time::duration_to_sec(
                         duration.store_write_duration.unwrap(),
                     ));
