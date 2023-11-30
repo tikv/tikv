@@ -389,7 +389,7 @@ impl BackupRange {
         // Incremental backup needs to output delete records.
         let incremental = !begin_ts.is_zero();
         let mut scanner = snap_store
-            .entry_scanner(start_key, end_key, begin_ts, incremental)
+            .entry_scanner(start_key, end_key, false, begin_ts, incremental)
             .unwrap();
 
         let start_scan = Instant::now();
@@ -413,15 +413,12 @@ impl BackupRange {
 
             let entries = batch.drain();
             if writer.need_split_keys() {
-                let this_end_key = entries.as_slice().get(0).map_or_else(
-                    || Err(Error::Other(box_err!("get entry error: nothing in batch"))),
-                    |x| {
-                        x.to_key().map(|k| k.into_raw().unwrap()).map_err(|e| {
-                            error!(?e; "backup save file failed");
-                            Error::Other(box_err!("Decode error: {:?}", e))
-                        })
-                    },
-                )?;
+                let this_end_key = match entries.as_slice().get(0) {
+                    Some(x) => x.to_key().into_raw().unwrap(),
+                    None => {
+                        return Err(Error::Other(box_err!("get entry error: nothing in batch")));
+                    }
+                };
                 let this_start_key = next_file_start_key.clone();
                 let msg = InMemBackupFiles {
                     files: KvWriter::Txn(writer),
