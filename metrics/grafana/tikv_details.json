@@ -48513,7 +48513,13 @@
     }
   ],
   "refresh": "1m",
+<<<<<<< HEAD
   "schemaVersion": 27,
+=======
+  "rows": [],
+  "schemaVersion": 14,
+  "sharedCrosshair": false,
+>>>>>>> 98d83f4c81 (metrics/grafana: set shared crosshair tooltip (#16106))
   "style": "dark",
   "tags": [],
   "templating": {
