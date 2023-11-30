@@ -119,7 +119,7 @@ impl<F: Future> Future for LimitedFuture<F> {
             *this.is_first_poll = false;
             let wait_dur = this
                 .resource_limiter
-                .consume(Duration::ZERO, IoBytes::default())
+                .consume(Duration::ZERO, IoBytes::default(), true)
                 .min(MAX_WAIT_DURATION);
             if wait_dur > Duration::ZERO {
                 *this.pre_delay = Some(
@@ -172,8 +172,10 @@ impl<F: Future> Future for LimitedFuture<F> {
         } else {
             IoBytes::default()
         };
-        let mut wait_dur = this.resource_limiter.consume(dur, io_bytes);
-        if res.is_ready() || wait_dur == Duration::ZERO {
+        let mut wait_dur = this
+            .resource_limiter
+            .consume(dur, io_bytes, res.is_pending());
+        if wait_dur == Duration::ZERO || res.is_ready() {
             return res;
         }
         if wait_dur > MAX_WAIT_DURATION {
@@ -320,7 +322,7 @@ mod tests {
         let delta = new_stats - stats;
         let dur = start.saturating_elapsed();
         assert_eq!(delta.total_consumed, 150);
-        assert_eq!(delta.total_wait_dur_us, 150_000);
+        assert!(delta.total_wait_dur_us >= 140_000 && delta.total_wait_dur_us <= 160_000);
         assert!(dur >= Duration::from_millis(150) && dur <= Duration::from_millis(160));
 
         // fetch io bytes failed, consumed value is 0.
@@ -328,7 +330,10 @@ mod tests {
         {
             fail::cfg("failed_to_get_thread_io_bytes_stats", "1*return").unwrap();
             spawn_and_wait(&pool, empty(), resource_limiter.clone());
-            assert_eq!(resource_limiter.get_limit_statistics(Io), new_stats);
+            assert_eq!(
+                resource_limiter.get_limit_statistics(Io).total_consumed,
+                new_stats.total_consumed
+            );
             fail::remove("failed_to_get_thread_io_bytes_stats");
         }
     }
