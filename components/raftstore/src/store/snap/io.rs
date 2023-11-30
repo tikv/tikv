@@ -10,14 +10,15 @@ use std::{
 
 use encryption::{DataKeyManager, DecrypterReader, EncrypterWriter, Iv};
 use engine_traits::{
-    CfName, Error as EngineError, Iterable, KvEngine, Mutable, SstCompressionType, SstWriter,
-    SstWriterBuilder, WriteBatch,
+    CfName, Error as EngineError, Iterable, KvEngine, Mutable, SstCompressionType, SstReader,
+    SstWriter, SstWriterBuilder, WriteBatch,
 };
+use fail::fail_point;
 use kvproto::encryptionpb::EncryptionMethod;
 use tikv_util::{
     box_try,
     codec::bytes::{BytesEncoder, CompactBytesFromFileDecoder},
-    debug, info,
+    debug, error, info,
     time::{Instant, Limiter},
 };
 
@@ -114,6 +115,7 @@ pub fn build_sst_cf_file_list<E>(
     end_key: &[u8],
     raw_size_per_file: u64,
     io_limiter: &Limiter,
+    key_mgr: Option<Arc<DataKeyManager>>,
 ) -> Result<BuildStatistics, Error>
 where
     E: KvEngine,
@@ -130,6 +132,47 @@ where
         .to_string();
     let sst_writer = RefCell::new(create_sst_file_writer::<E>(engine, cf, &path)?);
     let mut file_length: usize = 0;
+
+    let finish_sst_writer = |sst_writer: E::SstWriter,
+                             path: String,
+                             key_mgr: Option<Arc<DataKeyManager>>|
+     -> Result<(), Error> {
+        sst_writer.finish()?;
+        (|| {
+            fail_point!("ingest_sst_file_corruption", |_| {
+                static CALLED: std::sync::atomic::AtomicBool =
+                    std::sync::atomic::AtomicBool::new(false);
+                if CALLED
+                    .compare_exchange(
+                        false,
+                        true,
+                        std::sync::atomic::Ordering::SeqCst,
+                        std::sync::atomic::Ordering::SeqCst,
+                    )
+                    .is_err()
+                {
+                    return;
+                }
+                // overwrite the file to break checksum
+                let mut f = OpenOptions::new().write(true).open(path.clone()).unwrap();
+                f.write_all(b"x").unwrap();
+            });
+        })();
+
+        let sst_reader = E::SstReader::open(&path, key_mgr)?;
+        if let Err(e) = sst_reader.verify_checksum() {
+            // use sst reader to verify block checksum, it would detect corrupted SST due to
+            // memory bit-flip
+            error!(
+                "failed to pass block checksum verification";
+                "file" => path,
+                "err" => ?e,
+            );
+            return Err(io::Error::new(io::ErrorKind::InvalidData, e).into());
+        }
+        File::open(path.clone()).and_then(|f| f.sync_all())?;
+        Ok(())
+    };
 
     let instant = Instant::now();
     box_try!(snap.scan(cf, start_key, end_key, false, |key, value| {
@@ -149,8 +192,7 @@ where
             match result {
                 Ok(new_sst_writer) => {
                     let old_writer = sst_writer.replace(new_sst_writer);
-                    box_try!(old_writer.finish());
-                    box_try!(File::open(prev_path).and_then(|f| f.sync_all()));
+                    box_try!(finish_sst_writer(old_writer, prev_path, key_mgr.clone()));
                 }
                 Err(e) => {
                     let io_error = io::Error::new(io::ErrorKind::Other, e);
@@ -176,9 +218,8 @@ where
         Ok(true)
     }));
     if stats.key_count > 0 {
+        box_try!(finish_sst_writer(sst_writer.into_inner(), path, key_mgr));
         cf_file.add_file(file_id);
-        box_try!(sst_writer.into_inner().finish());
-        box_try!(File::open(path).and_then(|f| f.sync_all()));
         info!(
             "build_sst_cf_file_list builds {} files in cf {}. Total keys {}, total size {}. raw_size_per_file {}, total takes {:?}",
             file_id + 1,
