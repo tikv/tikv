@@ -8566,7 +8566,6 @@ dashboard = Dashboard(
     refresh="1m",
     inputs=[DATASOURCE_INPUT],
     editable=True,
-    graphTooltip=GRAPH_TOOLTIP_MODE_SHARED_CROSSHAIR,
     templating=Templates(),
     panels=[
         Duration(),
@@ -8609,4 +8608,8 @@ dashboard = Dashboard(
         BackupLog(),
         SlowTrendStatistics(),
     ],
+    # Set 14 or larger to support shared crosshair or shared tooltip.
+    # See https://github.com/grafana/grafana/blob/v10.2.2/public/app/features/dashboard/state/DashboardMigrator.ts#L443-L445
+    schemaVersion=14,
+    graphTooltip=GRAPH_TOOLTIP_MODE_SHARED_CROSSHAIR,
 ).auto_panel_ids()
