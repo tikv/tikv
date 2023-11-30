@@ -265,22 +265,15 @@ impl StoreStat {
         self.store_cpu_busy_thd = busy_thd;
     }
 
-    fn is_busy(&self) -> bool {
+    fn maybe_busy(&self) -> bool {
         if self.store_cpu_quota < 1.0 || self.store_cpu_busy_thd > 1.0 {
             return false;
         }
 
         let mut cpu_usage = 0_u64;
-
         for record in self.store_cpu_usages.iter() {
             cpu_usage += record.get_value();
         }
-        STORE_STAT_CPU_USAGE
-            .with_label_values(&["cpu_usage"])
-            .set(cpu_usage as i64);
-        STORE_STAT_CPU_USAGE
-            .with_label_values(&["cpu_usage_limit"])
-            .set(self.store_cpu_quota as i64);
 
         (cpu_usage as f64 / self.store_cpu_quota) >= self.store_cpu_busy_thd
     }
@@ -2307,7 +2300,7 @@ where
                 self.slow_score.record(
                     id,
                     duration.delays_on_disk_io(false),
-                    !self.store_stat.is_busy(),
+                    !self.store_stat.maybe_busy(),
                 );
                 self.slow_trend.record(duration);
             }
@@ -2348,9 +2341,10 @@ where
             self.update_health_status(ServingStatus::Serving);
         }
         if !self.slow_score.last_tick_finished {
-            // FIXME: here just use CPU.usage as the reference to represent
-            // whether the store is busy or not. It should be refined.
-            if !self.store_stat.is_busy() {
+            // If the last tick is not finished, it means that the current store might
+            // be busy on handling requests or delayed on I/O operations. And only when
+            // the current store is not busy, it should record the last_tick as a timeout.
+            if !self.store_stat.maybe_busy() {
                 self.slow_score.record_timeout();
             }
             // If the last slow_score already reached abnormal state and was delayed for
@@ -2387,14 +2381,9 @@ where
                         duration.store_process_duration.unwrap(),
                     ));
                 STORE_INSPECT_DURATION_HISTOGRAM
-                    .with_label_values(&["store_wait"])
+                    .with_label_values(&["store_write"])
                     .observe(tikv_util::time::duration_to_sec(
-                        duration.store_wait_duration.unwrap(),
-                    ));
-                STORE_INSPECT_DURATION_HISTOGRAM
-                    .with_label_values(&["store_sync"])
-                    .observe(tikv_util::time::duration_to_sec(
-                        duration.store_sync_duration.unwrap(),
+                        duration.store_write_duration.unwrap(),
                     ));
                 STORE_INSPECT_DURATION_HISTOGRAM
                     .with_label_values(&["store_commit"])

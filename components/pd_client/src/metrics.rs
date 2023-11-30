@@ -158,10 +158,4 @@ lazy_static! {
         "Total number of pending tso requests"
     )
     .unwrap();
-    pub static ref STORE_STAT_CPU_USAGE: IntGaugeVec = register_int_gauge_vec!(
-        "tikv_store_stat_cpu_usage",
-        "The status of store CPU usage",
-        &["type"]
-    )
-    .unwrap();
 }

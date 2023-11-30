@@ -1877,11 +1877,6 @@ where
                         tracker.observe(now, &metrics.wf_persist_log, |t| {
                             &mut t.metrics.wf_persist_log_nanos
                         });
-                        let sync_duration =
-                            tracker.fetch_metric(|t| &t.metrics.store_write_wal_nanos);
-                        metrics
-                            .health_stats
-                            .observe(Duration::from_nanos(sync_duration), IoType::Disk);
                     }
                 }
             }
@@ -1914,12 +1909,15 @@ where
                             t.metrics.commit_not_persisted = !commit_persisted;
                             &mut t.metrics.wf_commit_log_nanos
                         });
+                        // Normally, commit_log_duration both contains the duraiton on persisting
+                        // raft logs and transferring raft logs to other nodes. Therefore, it can
+                        // reflects slowness of the node on I/Os, whatever the reason is.
+                        // Here, health_stats uses the recorded commit_log_duration as the
+                        // latency to perspect whether there exists jitters on network. It's not
+                        // accurate, but it's proved that it's a good approximation.
                         metrics
                             .health_stats
                             .observe(Duration::from_nanos(duration), IoType::Network);
-                        metrics
-                            .stat_commit_log
-                            .record(Duration::from_nanos(duration));
                     }
                 }
             }

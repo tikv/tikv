@@ -853,14 +853,8 @@ impl<'a, EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
                             .health_stats
                             .avg(InspectIoType::Network),
                     );
-                    inspector.record_store_sync(
-                        self.ctx.raft_metrics.health_stats.avg(InspectIoType::Disk),
-                    );
+                    // Reset the health_stats and wait it to be refreshed in the next tick.
                     self.ctx.raft_metrics.health_stats.reset();
-                    // FIXME: wait to be cleared if HealthStatistics is ready.
-                    // inspector.record_store_commit(self.ctx.raft_metrics.stat_commit_log.avg());
-                    // Reset the stat_commit_log and wait it to be refreshed in the next tick.
-                    // self.ctx.raft_metrics.stat_commit_log.reset();
                     self.ctx.pending_latency_inspect.push(inspector);
                 }
                 StoreMsg::UnsafeRecoveryReport(report) => self.store_heartbeat_pd(Some(report)),
