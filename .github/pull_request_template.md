@@ -22,13 +22,13 @@ For more info, check https://github.com/tikv/tikv/blob/master/CONTRIBUTING.md#li
 
 Issue Number: Close #xxx
 
-What's Changed:
-
 <!--
 You could use "commit message" code block to add more description to the final commit message.
 For more info, check https://github.com/tikv/tikv/blob/master/CONTRIBUTING.md#format-of-the-commit-message.
 -->
+What's Changed:
 ```commit-message
+
 ```
 
 ### Related changes
@@ -62,5 +62,5 @@ If this PR will be picked to release branch, then a release note is probably req
 -->
 
 ```release-note
-None
+
 ```
