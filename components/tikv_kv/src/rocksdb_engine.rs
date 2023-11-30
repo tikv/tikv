@@ -12,7 +12,6 @@ use std::{
 };
 
 use collections::HashMap;
-use encryption::DataKeyManager;
 pub use engine_rocks::RocksSnapshot;
 use engine_rocks::{
     get_env, RocksCfOptions, RocksDbOptions, RocksEngine as BaseRocksEngine, RocksEngineIterator,
@@ -128,9 +127,7 @@ impl RocksEngine {
         let worker = Worker::new("engine-rocksdb");
         let mut db_opts = db_opts.unwrap_or_default();
         if io_rate_limiter.is_some() {
-            db_opts.set_env(
-                get_env::<DataKeyManager>(None /* key_manager */, io_rate_limiter).unwrap(),
-            );
+            db_opts.set_env(get_env(None /* key_manager */, io_rate_limiter).unwrap());
         }
 
         let db = engine_rocks::util::new_engine_opt(&path, db_opts, cfs_opts)?;

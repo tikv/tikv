@@ -16,11 +16,11 @@ use std::{
 
 use collections::HashSet;
 use dashmap::{mapref::entry::Entry, DashMap};
-use encryption::{to_engine_encryption_method, DataKeyManager};
+use encryption::{DataKeyManager, FileEncryptionInfo};
 use engine_traits::{
-    name_to_cf, util::check_key_in_range, CfName, EncryptionKeyManager, FileEncryptionInfo,
-    IterOptions, Iterator, KvEngine, RefIterable, SstCompressionType, SstExt, SstMetaInfo,
-    SstReader, SstWriter, SstWriterBuilder, CF_DEFAULT, CF_WRITE,
+    name_to_cf, util::check_key_in_range, CfName, IterOptions, Iterator, KvEngine, RefIterable,
+    SstCompressionType, SstExt, SstMetaInfo, SstReader, SstWriter, SstWriterBuilder, CF_DEFAULT,
+    CF_WRITE,
 };
 use external_storage::{
     compression_reader_dispatcher, encrypt_wrap_reader, ExternalStorage, RestoreConfig,
@@ -1116,7 +1116,7 @@ impl<E: KvEngine> SstImporter<E> {
         let path = self.dir.join_for_write(meta)?;
 
         let file_crypter = crypter.map(|c| FileEncryptionInfo {
-            method: to_engine_encryption_method(c.cipher_type),
+            method: c.cipher_type,
             key: c.cipher_key,
             iv: meta.cipher_iv.to_owned(),
         });
@@ -1479,11 +1479,12 @@ mod tests {
 
     use engine_rocks::get_env;
     use engine_traits::{
-        collect, EncryptionMethod, Error as TraitError, ExternalSstFileInfo, Iterable, Iterator,
-        RefIterable, SstReader, SstWriter, CF_DEFAULT, DATA_CFS,
+        collect, Error as TraitError, ExternalSstFileInfo, Iterable, Iterator, RefIterable,
+        SstReader, SstWriter, CF_DEFAULT, DATA_CFS,
     };
     use external_storage::read_external_storage_info_buff;
     use file_system::File;
+    use kvproto::encryptionpb::EncryptionMethod;
     use online_config::{ConfigManager, OnlineConfig};
     use openssl::hash::{Hasher, MessageDigest};
     use tempfile::Builder;

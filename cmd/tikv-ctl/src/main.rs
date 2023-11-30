@@ -21,11 +21,10 @@ use std::{
 
 use collections::HashMap;
 use encryption_export::{
-    create_backend, data_key_manager_from_config, from_engine_encryption_method, DataKeyManager,
-    DecrypterReader, Iv,
+    create_backend, data_key_manager_from_config, DataKeyManager, DecrypterReader, Iv,
 };
 use engine_rocks::get_env;
-use engine_traits::{EncryptionKeyManager, Peekable};
+use engine_traits::Peekable;
 use file_system::calc_crc32;
 use futures::{executor::block_on, future::try_join_all};
 use gag::BufferRedirect;
@@ -166,7 +165,7 @@ fn main() {
             let infile1 = Path::new(infile).canonicalize().unwrap();
             let file_info = key_manager.get_file(infile1.to_str().unwrap()).unwrap();
 
-            let mthd = from_engine_encryption_method(file_info.method);
+            let mthd = file_info.method;
             if mthd == EncryptionMethod::Plaintext {
                 println!(
                     "{} is not encrypted, skip to decrypt it into {}",
