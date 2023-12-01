@@ -2378,22 +2378,12 @@ where
                 STORE_INSPECT_DURATION_HISTOGRAM
                     .with_label_values(&["store_process"])
                     .observe(tikv_util::time::duration_to_sec(
-                        duration.store_process_duration.unwrap(),
+                        duration.store_process_duration.unwrap_or_default(),
                     ));
                 STORE_INSPECT_DURATION_HISTOGRAM
                     .with_label_values(&["store_wait"])
                     .observe(tikv_util::time::duration_to_sec(
-                        duration.store_wait_duration.unwrap(),
-                    ));
-                STORE_INSPECT_DURATION_HISTOGRAM
-                    .with_label_values(&["store_write"])
-                    .observe(tikv_util::time::duration_to_sec(
-                        duration.store_write_duration.unwrap(),
-                    ));
-                STORE_INSPECT_DURATION_HISTOGRAM
-                    .with_label_values(&["store_commit"])
-                    .observe(tikv_util::time::duration_to_sec(
-                        duration.store_commit_duration.unwrap(),
+                        duration.store_wait_duration.unwrap_or_default(),
                     ));
 
                 STORE_INSPECT_DURATION_HISTOGRAM
