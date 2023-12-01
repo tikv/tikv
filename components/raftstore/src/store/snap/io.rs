@@ -466,6 +466,7 @@ mod tests {
                         &keys::data_key(b"z"),
                         *max_file_size,
                         &limiter,
+                        None,
                     )
                     .unwrap();
                     if stats.key_count == 0 {
