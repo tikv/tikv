@@ -247,6 +247,7 @@ def Cluster() -> RowPanel:
                     target(
                         expr=expr_sum_rate(
                             "process_cpu_seconds_total",
+                            label_selectors=['job=~".*tikv"'],
                         ),
                     ),
                 ],
@@ -257,7 +258,10 @@ def Cluster() -> RowPanel:
                 yaxes=yaxes(left_format=UNITS.BYTES_IEC),
                 targets=[
                     target(
-                        expr=expr_sum("process_resident_memory_bytes"),
+                        expr=expr_sum(
+                            "process_resident_memory_bytes",
+                            label_selectors=['job=~".*tikv"'],
+                        ),
                     ),
                 ],
             ),
@@ -376,6 +380,7 @@ def Cluster() -> RowPanel:
                             label_selectors=['type="buckets"'],
                         ),
                         legend_format=r"{{instance}}-buckets",
+                        hide=True,
                     ),
                 ],
             ),
@@ -390,7 +395,12 @@ def Cluster() -> RowPanel:
                 targets=[
                     target(
                         expr=expr_operator(
-                            "time()", "-", expr_simple("process_start_time_seconds")
+                            "time()",
+                            "-",
+                            expr_simple(
+                                "process_start_time_seconds",
+                                label_selectors=['job=~".*tikv"'],
+                            ),
                         ),
                         legend_format=r"{{instance}}",
                     ),
@@ -8556,7 +8566,6 @@ dashboard = Dashboard(
     refresh="1m",
     inputs=[DATASOURCE_INPUT],
     editable=True,
-    graphTooltip=GRAPH_TOOLTIP_MODE_SHARED_CROSSHAIR,
     templating=Templates(),
     panels=[
         Duration(),
@@ -8599,4 +8608,8 @@ dashboard = Dashboard(
         BackupLog(),
         SlowTrendStatistics(),
     ],
+    # Set 14 or larger to support shared crosshair or shared tooltip.
+    # See https://github.com/grafana/grafana/blob/v10.2.2/public/app/features/dashboard/state/DashboardMigrator.ts#L443-L445
+    schemaVersion=14,
+    graphTooltip=GRAPH_TOOLTIP_MODE_SHARED_CROSSHAIR,
 ).auto_panel_ids()

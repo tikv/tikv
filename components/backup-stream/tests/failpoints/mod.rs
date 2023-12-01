@@ -30,6 +30,32 @@ mod all {
     use super::{
         make_record_key, make_split_key_at_record, mutation, run_async_test, SuiteBuilder,
     };
+    use crate::make_table_key;
+
+    #[test]
+    fn failed_register_task() {
+        let suite = SuiteBuilder::new_named("failed_register_task").build();
+        fail::cfg("load_task::error_when_fetching_ranges", "return").unwrap();
+        let cli = suite.get_meta_cli();
+        block_on(cli.insert_task_with_range(
+            &suite.simple_task("failed_register_task"),
+            &[(&make_table_key(1, b""), &make_table_key(2, b""))],
+        ))
+        .unwrap();
+
+        for _ in 0..10 {
+            if block_on(cli.get_last_error_of("failed_register_task", 1))
+                .unwrap()
+                .is_some()
+            {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+
+        suite.dump_slash_etc();
+        panic!("No error uploaded when failed to comminate to PD.");
+    }
 
     #[test]
     fn basic() {
@@ -192,7 +218,8 @@ mod all {
         suite.must_split(&make_split_key_at_record(1, 42));
         std::thread::sleep(Duration::from_secs(2));
 
-        let error = run_async_test(suite.get_meta_cli().get_last_error("retry_abort", 1)).unwrap();
+        let error =
+            run_async_test(suite.get_meta_cli().get_last_error_of("retry_abort", 1)).unwrap();
         let error = error.expect("no error uploaded");
         error
             .get_error_message()
