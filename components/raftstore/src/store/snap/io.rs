@@ -154,7 +154,7 @@ where
                     return;
                 }
                 // overwrite the file to break checksum
-                let mut f = OpenOptions::new().write(true).open(path.clone()).unwrap();
+                let mut f = OpenOptions::new().write(true).open(&path).unwrap();
                 f.write_all(b"x").unwrap();
             });
         })();
@@ -163,6 +163,7 @@ where
         if let Err(e) = sst_reader.verify_checksum() {
             // use sst reader to verify block checksum, it would detect corrupted SST due to
             // memory bit-flip
+            fs::remove_file(&path)?;
             error!(
                 "failed to pass block checksum verification";
                 "file" => path,
@@ -170,7 +171,7 @@ where
             );
             return Err(io::Error::new(io::ErrorKind::InvalidData, e).into());
         }
-        File::open(path.clone()).and_then(|f| f.sync_all())?;
+        File::open(&path).and_then(|f| f.sync_all())?;
         Ok(())
     };
 
