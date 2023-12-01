@@ -183,8 +183,6 @@ mod all {
     }
     #[test]
     fn test_retry_abort() {
-        test_util::init_log_for_test();
-
         let mut suite = SuiteBuilder::new_named("retry_abort").nodes(1).build();
         defer! {
             fail::list().into_iter().for_each(|(name, _)| fail::remove(name))

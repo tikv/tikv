@@ -7,7 +7,7 @@ use futures::FutureExt;
 use kvproto::metapb::Region;
 use raft::StateRole;
 use raftstore::{
-    coprocessor::{ObserveHandle, ObserveId, RegionInfoProvider},
+    coprocessor::{ObserveHandle, RegionInfoProvider},
     router::CdcHandle,
     store::fsm::ChangeObserver,
 };
@@ -207,7 +207,7 @@ impl ScanCmd {
 
 async fn scan_executor_loop(init: impl InitialScan, mut cmds: Receiver<ScanCmd>) {
     while let Some(cmd) = cmds.recv().await {
-        debug!("handling initial scan request"; "region_id" => %cmd.region.get_id());
+        debug!("handling initial scan request"; utils::slog_region(&cmd.region));
         metrics::PENDING_INITIAL_SCAN_LEN
             .with_label_values(&["queuing"])
             .dec();
@@ -299,7 +299,7 @@ pub struct RegionSubscriptionManager<S, R> {
     scheduler: Scheduler<Task>,
     subs: SubscriptionTracer,
 
-    failure_count: HashMap<ObserveId, u8>,
+    failure_count: HashMap<u64, u8>,
     memory_manager: Arc<MemoryQuota>,
 
     messenger: WeakSender<ObserveOp>,
@@ -369,6 +369,16 @@ where
         tokio::time::timeout(timeout, self.scans.wait()).map(|result| result.is_err())
     }
 
+    fn issue_fatal_of(&self, region: &Region, err: Error) {
+        try_send!(
+            self.scheduler,
+            Task::FatalError(
+                TaskSelector::ByRange(region.start_key.to_owned(), region.end_key.to_owned()),
+                Box::new(err)
+            )
+        );
+    }
+
     /// the handler loop.
     async fn region_operator_loop<E, RT>(
         mut self,
@@ -413,51 +423,7 @@ where
                     handle,
                     err,
                 } => {
-                    let err = match err {
-                        None => {
-                            self.failure_count.remove(&handle.id);
-                            let sub = self.subs.get_subscription_of(region.id);
-                            if let Some(mut sub) = sub {
-                                if sub.value().handle.id == handle.id {
-                                    sub.value_mut().resolver.phase_one_done();
-                                }
-                            }
-                            continue;
-                        }
-                        Some(err) => {
-                            if !should_retry(&err) {
-                                self.failure_count.remove(&handle.id);
-                                self.subs.deregister_region_if(&region, |sub, _| {
-                                    sub.handle.id == handle.id
-                                });
-                                continue;
-                            }
-                            err
-                        }
-                    };
-                    let (start, end) = (
-                        region.get_start_key().to_owned(),
-                        region.get_end_key().to_owned(),
-                    );
-                    let hnd_id = handle.id;
-                    *self.failure_count.entry(hnd_id).or_insert(0) += 1;
-                    match self.retry_observe(region, handle).await {
-                        Ok(has_resent_req) => {
-                            if !has_resent_req {
-                                self.failure_count.remove(&hnd_id);
-                            }
-                        }
-                        Err(e) => {
-                            let msg = Task::FatalError(
-                                TaskSelector::ByRange(start, end),
-                                Box::new(Error::Contextual {
-                                    context: format!("retry meet error, origin error is {}", err),
-                                    inner_error: Box::new(e),
-                                }),
-                            );
-                            try_send!(self.scheduler, msg);
-                        }
-                    }
+                    self.on_observe_result(region, handle, err).await;
                 }
                 ObserveOp::ResolveRegions { callback, min_ts } => {
                     let now = Instant::now();
@@ -485,6 +451,55 @@ where
                 } => {
                     self.on_high_memory_usage(inconsistent_region_id).await;
                 }
+            }
+        }
+    }
+
+    async fn on_observe_result(
+        &mut self,
+        region: Region,
+        handle: ObserveHandle,
+        err: Option<Box<Error>>,
+    ) {
+        let err = match err {
+            None => {
+                self.failure_count.remove(&region.id);
+                let sub = self.subs.get_subscription_of(region.id);
+                if let Some(mut sub) = sub {
+                    if sub.value().handle.id == handle.id {
+                        sub.value_mut().resolver.phase_one_done();
+                    }
+                }
+                return;
+            }
+            Some(err) => {
+                if !should_retry(&err) {
+                    self.failure_count.remove(&region.id);
+                    self.subs
+                        .deregister_region_if(&region, |sub, _| sub.handle.id == handle.id);
+                    return;
+                }
+                err
+            }
+        };
+
+        let region_id = region.id;
+        *self.failure_count.entry(region_id).or_insert(0) += 1;
+        match self.retry_observe(region.clone(), handle).await {
+            Ok(has_resent_req) => {
+                if !has_resent_req {
+                    self.failure_count.remove(&region_id);
+                }
+            }
+            Err(e) => {
+                self.issue_fatal_of(
+                    &region,
+                    e.context(format_args!(
+                        "retry encountered error, origin error is {}",
+                        err
+                    )),
+                );
+                self.failure_count.remove(&region_id);
             }
         }
     }
@@ -554,6 +569,7 @@ where
                     }
                     .await;
                     if let Err(e) = r {
+                        warn!("failed to refresh region: will retry."; "err" => %e, utils::slog_region(region));
                         try_send!(
                             self.scheduler,
                             Task::ModifyObserve(ObserveOp::NotifyStartObserveResult {
@@ -599,6 +615,17 @@ where
     }
 
     async fn start_observe(&self, region: Region, handle: ObserveHandle) {
+        match self.check_not_stale(&region, &handle).await {
+            Ok(false) => {
+                warn!("stale start observe command."; utils::slog_region(&region), "handle" => ?handle);
+                return;
+            }
+            Err(err) => {
+                self.issue_fatal_of(&region, err.context("failed to check stale"));
+                return;
+            }
+            _ => {}
+        }
         self.subs.add_pending_region(&region);
         let res = self.try_start_observe(&region, handle.clone()).await;
         if let Err(err) = res {
@@ -614,8 +641,73 @@ where
         }
     }
 
+    async fn check_not_stale(&self, region: &Region, handle: &ObserveHandle) -> Result<bool> {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        self.regions
+            .find_region_by_id(
+                region.get_id(),
+                Box::new(move |item| {
+                    tx.send(item)
+                        .expect("BUG: failed to send to newly created channel.");
+                }),
+            )
+            .map_err(|err| {
+                annotate!(
+                    err,
+                    "failed to send request to region info accessor, server maybe too too too busy. (region id = {})",
+                    region.get_id()
+                )
+            })?;
+        let new_region_info = rx
+            .await
+            .map_err(|err| annotate!(err, "BUG?: unexpected channel message dropped."))?;
+        if new_region_info.is_none() {
+            metrics::SKIP_RETRY
+                .with_label_values(&["region-absent"])
+                .inc();
+            return Ok(false);
+        }
+        let new_region_info = new_region_info.unwrap();
+        if new_region_info.role != StateRole::Leader {
+            metrics::SKIP_RETRY.with_label_values(&["not-leader"]).inc();
+            return Ok(false);
+        }
+        if raftstore::store::util::compare_region_epoch(
+            region.get_region_epoch(),
+            &new_region_info.region,
+            true,
+            true,
+            false,
+        )
+        .is_err()
+        {
+            metrics::SKIP_RETRY
+                .with_label_values(&["epoch-not-match"])
+                .inc();
+            return Ok(false);
+        }
+        // Note: we may fail before we insert the region info to the subscription map.
+        // At that time, the command isn't steal and we should retry it.
+        let mut exists = false;
+        let removed = self.subs.deregister_region_if(region, |old, _| {
+            exists = true;
+            let should_remove = old.handle().id == handle.id;
+            if !should_remove {
+                warn!("stale retry command"; utils::slog_region(region), "handle" => ?handle, "old_handle" => ?old.handle());
+            }
+            should_remove
+        });
+        if !removed && exists {
+            metrics::SKIP_RETRY
+                .with_label_values(&["stale-command"])
+                .inc();
+            return Ok(false);
+        }
+        Ok(true)
+    }
+
     async fn retry_observe(&self, region: Region, handle: ObserveHandle) -> Result<bool> {
-        let failure_count = *self.failure_count.get(&handle.id).unwrap_or_else(|| {
+        let failure_count = *self.failure_count.get(&region.id).unwrap_or_else(|| {
             panic!(
                 "the handle {:?} for region {:?} should be retry, but not and failure record.",
                 handle,
@@ -633,51 +725,8 @@ where
             ));
         }
 
-        let (tx, rx) = crossbeam::channel::bounded(1);
-        self.regions
-            .find_region_by_id(
-                region.get_id(),
-                Box::new(move |item| {
-                    tx.send(item)
-                        .expect("BUG: failed to send to newly created channel.");
-                }),
-            )
-            .map_err(|err| {
-                annotate!(
-                    err,
-                    "failed to send request to region info accessor, server maybe too too too busy. (region id = {})",
-                    region.get_id()
-                )
-            })?;
-        let new_region_info = rx
-            .recv()
-            .map_err(|err| annotate!(err, "BUG?: unexpected channel message dropped."))?;
-        if new_region_info.is_none() {
-            metrics::SKIP_RETRY
-                .with_label_values(&["region-absent"])
-                .inc();
-            return Ok(false);
-        }
-        let new_region_info = new_region_info.unwrap();
-        if new_region_info.role != StateRole::Leader {
-            metrics::SKIP_RETRY.with_label_values(&["not-leader"]).inc();
-            return Ok(false);
-        }
-        // Note: we may fail before we insert the region info to the subscription map.
-        // At that time, the command isn't steal and we should retry it.
-        let mut exists = false;
-        let removed = self.subs.deregister_region_if(&region, |old, _| {
-            exists = true;
-            let should_remove = old.handle().id == handle.id;
-            if !should_remove {
-                warn!("stale retry command"; utils::slog_region(&region), "handle" => ?handle, "old_handle" => ?old.handle());
-            }
-            should_remove
-        });
-        if !removed && exists {
-            metrics::SKIP_RETRY
-                .with_label_values(&["stale-command"])
-                .inc();
+        let should_retry = self.check_not_stale(&region, &handle).await?;
+        if !should_retry {
             return Ok(false);
         }
         self.schedule_start_observe(backoff_for_start_observe(failure_count), region, None);
@@ -786,7 +835,7 @@ mod test {
         router::{Router, RouterInner},
         subscription_manager::{OOM_BACKOFF_BASE, OOM_BACKOFF_JITTER_SECS},
         subscription_track::{CheckpointType, SubscriptionTracer},
-        utils::{self, CallbackWaitGroup},
+        utils::CallbackWaitGroup,
         BackupStreamResolver, ObserveOp, Task,
     };
 
@@ -1155,7 +1204,6 @@ mod test {
         use ObserveEvent::*;
         let failed = Arc::new(AtomicBool::new(false));
         let mut suite = Suite::new(FuncInitialScan(move |r, _, _| {
-            println!("{:?} is initial scanning!", utils::debug_region(r));
             if r.id != 1 || failed.load(Ordering::SeqCst) {
                 return Ok(Statistics::default());
             }
