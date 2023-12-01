@@ -2,6 +2,9 @@
 
 use std::fmt::Debug;
 
-use crate::Iterable;
+use crate::{Iterable, WriteBatchExt};
 
-pub trait MemoryEngine: Debug + Clone + Iterable + Unpin + Send + Sync + 'static {}
+pub trait MemoryEngine:
+    WriteBatchExt + Iterable + Debug + Clone + Unpin + Send + Sync + 'static
+{
+}
