@@ -931,3 +931,84 @@ fn test_snapshot_complete_recover_raft_tick() {
     cluster.must_put(b"k0500", b"val");
     assert_eq!(cluster.must_get(b"k0500").unwrap(), b"val".to_vec());
 }
+<<<<<<< HEAD
+=======
+
+#[test]
+fn test_snapshot_send_failed() {
+    let mut cluster = test_raftstore_v2::new_server_cluster(1, 2);
+    configure_for_snapshot(&mut cluster.cfg);
+    cluster.cfg.raft_store.snap_gc_timeout = ReadableDuration::millis(300);
+    cluster.cfg.raft_store.snap_mgr_gc_tick_interval = ReadableDuration::millis(100);
+    cluster.cfg.raft_store.pd_heartbeat_tick_interval = ReadableDuration::millis(100);
+    let pd_client = cluster.pd_client.clone();
+    // Disable default max peer number check.
+    pd_client.disable_default_operator();
+    let r1 = cluster.run_conf_change();
+    cluster.must_put(b"zk1", b"v1");
+    let (send_tx, send_rx) = mpsc::sync_channel(1);
+    // only send one MessageType::MsgSnapshot message
+    cluster.add_send_filter(CloneFilterFactory(
+        RegionPacketFilter::new(r1, 1)
+            .allow(1)
+            .direction(Direction::Send)
+            .msg_type(MessageType::MsgSnapshot)
+            .set_msg_callback(Arc::new(move |m: &RaftMessage| {
+                if m.get_message().get_msg_type() == MessageType::MsgSnapshot {
+                    let _ = send_tx.try_send(());
+                }
+            })),
+    ));
+    // peer2 will interrupt in receiving snapshot
+    fail::cfg("receiving_snapshot_net_error", "return()").unwrap();
+    pd_client.must_add_peer(r1, new_learner_peer(2, 2));
+
+    // ready to send notify.
+    send_rx.recv_timeout(Duration::from_secs(3)).unwrap();
+    // need to wait receiver handle the snapshot request
+    sleep_ms(100);
+
+    // peer2 can't receive any snapshot, so it doesn't have any key valuse.
+    // but the receiving_count should be zero if receiving snapshot is failed.
+    let engine2 = cluster.get_engine(2);
+    must_get_none(&engine2, b"zk1");
+    assert_eq!(cluster.get_snap_mgr(2).stats().receiving_count, 0);
+    let mgr = cluster.get_snap_mgr(1);
+    assert!(!mgr.list_snapshot().unwrap().is_empty());
+
+    // clear fail point and wait snapshot finish.
+    fail::remove("receiving_snapshot_net_error");
+    cluster.clear_send_filters();
+    let (sender, receiver) = mpsc::channel();
+    let sync_sender = Mutex::new(sender);
+    fail::cfg_callback("receiving_snapshot_net_error", move || {
+        let sender = sync_sender.lock().unwrap();
+        sender.send(true).unwrap();
+    })
+    .unwrap();
+    receiver.recv_timeout(Duration::from_secs(3)).unwrap();
+    must_get_equal(&engine2, b"zk1", b"v1");
+
+    // remove peer and check snapshot should be deleted.
+    pd_client.must_remove_peer(r1, new_peer(2, 2));
+    sleep_ms(100);
+    assert!(mgr.list_snapshot().unwrap().is_empty());
+}
+
+#[test]
+/// Test a corrupted snapshot can be detected and retry to generate a new one.
+fn test_retry_corrupted_snapshot() {
+    let mut cluster = new_node_cluster(0, 3);
+    let pd_client = cluster.pd_client.clone();
+    pd_client.disable_default_operator();
+
+    let r = cluster.run_conf_change();
+    cluster.must_put(b"k1", b"v1");
+    must_get_none(&cluster.get_engine(3), b"k1");
+    pd_client.must_add_peer(r, new_peer(2, 2));
+    fail::cfg("inject_sst_file_corruption", "return").unwrap();
+    pd_client.must_add_peer(r, new_peer(3, 3));
+
+    must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
+}
+>>>>>>> ca8c70d9a0 (raftstore: Verify checksum right after SST files are generated (#16107))
