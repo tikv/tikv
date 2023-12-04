@@ -288,7 +288,8 @@ impl<Store: MetaStore> MetadataClient<Store> {
     pub async fn get_last_error(&self, name: &str) -> Result<Option<StreamBackupError>> {
         let key = MetaKey::last_errors_of(name);
 
-        let r = self.meta_store.get_latest(Keys::Prefix(key)).await?.inner;
+        let s = self.meta_store.snapshot().await?;
+        let r = s.get(Keys::Key(key)).await?;
         if r.is_empty() {
             return Ok(None);
         }
