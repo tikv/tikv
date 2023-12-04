@@ -13,7 +13,8 @@ rules=(
 )
 
 # rocksdb properties are std hashmap.
-allow_list="engine_rocks.*properties.rs|test_sst_importer"
+# collections depends on tikv_alloc
+allow_list="engine_rocks.*properties.rs|test_sst_importer|tikv_alloc"
 
 for rule in "${rules[@]}"; do
     if grep -r -n --color=always \

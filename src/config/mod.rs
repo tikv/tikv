@@ -5809,10 +5809,11 @@ mod tests {
             "normal",
             "read-only",
         ] {
-            let change = HashMap::from([(
+            let mut change = HashMap::new();
+            change.insert(
                 "rocksdb.defaultcf.titan.blob-run-mode".to_string(),
                 run_mode.to_string(),
-            )]);
+            );
             cfg_controller.update_without_persist(change).unwrap();
         }
     }

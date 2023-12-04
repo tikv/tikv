@@ -594,7 +594,7 @@ mod tests {
     }
 
     fn to_hash_map(row: &RowColsDict) -> HashMap<i64, Vec<u8>> {
-        let mut data = HashMap::with_capacity_and_hasher(row.cols.len(), Default::default());
+        let mut data = HashMap::with_capacity(row.cols.len());
         if row.is_empty() {
             return data;
         }

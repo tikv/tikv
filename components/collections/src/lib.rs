@@ -35,7 +35,7 @@ where
     fn index(&self, key: &Q) -> &V {
         self.base
             .get(key)
-            .expect(&format!("no entry found for key: {:?}", key))
+            .unwrap_or_else(|| panic!("no entry found for key: {:?}", key))
     }
 }
 
