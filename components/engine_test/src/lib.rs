@@ -127,7 +127,7 @@ pub mod kv {
         }
 
         fn destroy_tablet(&self, _ctx: TabletContext, path: &Path) -> Result<()> {
-            encryption::trash_dir_all(path, self.db_opt.key_manager.as_deref())?;
+            encryption::trash_dir_all(path, self.db_opt.get_key_manager().as_deref())?;
             Ok(())
         }
 
@@ -202,13 +202,17 @@ pub mod ctor {
 
     #[derive(Clone, Default)]
     pub struct DbOptions {
-        pub(crate) key_manager: Option<Arc<DataKeyManager>>,
+        key_manager: Option<Arc<DataKeyManager>>,
         rate_limiter: Option<Arc<IoRateLimiter>>,
         state_storage: Option<Arc<dyn StateStorage>>,
         enable_multi_batch_write: bool,
     }
 
     impl DbOptions {
+        pub fn get_key_manager(&self) -> Option<Arc<DataKeyManager>> {
+            self.key_manager.clone()
+        }
+
         pub fn set_key_manager(&mut self, key_manager: Option<Arc<DataKeyManager>>) {
             self.key_manager = key_manager;
         }
