@@ -3349,8 +3349,15 @@ where
         self.delegate.destroy(ctx);
     }
 
+<<<<<<< HEAD
     /// Handles peer destroy. When a peer is destroyed, the corresponding apply delegate should be removed too.
     fn handle_destroy<W: WriteBatch<EK>>(&mut self, ctx: &mut ApplyContext<EK, W>, d: Destroy) {
+=======
+    /// Handles peer destroy. When a peer is destroyed, the corresponding apply
+    /// delegate should be removed too.
+    fn handle_destroy(&mut self, ctx: &mut ApplyContext<EK>, d: Destroy) {
+        fail_point!("on_apply_handle_destroy");
+>>>>>>> 3544ed36b0 (raftstore: fix a panic cause by peer destroy racing (#16112))
         assert_eq!(d.region_id, self.delegate.region_id());
         if d.merge_from_snapshot {
             assert_eq!(self.delegate.stopped, false);
