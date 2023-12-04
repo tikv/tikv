@@ -139,7 +139,7 @@ where
      -> Result<(), Error> {
         sst_writer.finish()?;
         (|| {
-            fail_point!("ingest_sst_file_corruption", |_| {
+            fail_point!("inject_sst_file_corruption", |_| {
                 static CALLED: std::sync::atomic::AtomicBool =
                     std::sync::atomic::AtomicBool::new(false);
                 if CALLED
@@ -467,7 +467,7 @@ mod tests {
                         &keys::data_key(b"z"),
                         *max_file_size,
                         &limiter,
-                        db_opt.as_ref().map(|opt| opt.get_key_manager()).flatten(),
+                        db_opt.as_ref().and_then(|opt| opt.get_key_manager()),
                     )
                     .unwrap();
                     if stats.key_count == 0 {

@@ -1004,7 +1004,7 @@ fn test_retry_corrupted_snapshot() {
     cluster.must_put(b"k1", b"v1");
     must_get_none(&cluster.get_engine(3), b"k1");
     pd_client.must_add_peer(r, new_peer(2, 2));
-    fail::cfg("ingest_sst_file_corruption", "return").unwrap();
+    fail::cfg("inject_sst_file_corruption", "return").unwrap();
     pd_client.must_add_peer(r, new_peer(3, 3));
 
     must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
