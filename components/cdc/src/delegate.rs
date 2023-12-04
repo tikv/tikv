@@ -206,9 +206,9 @@ impl Downstream {
         self.sink_error_event(region_id, err_event)
     }
 
-    pub fn sink_server_is_busy(&self, region_id: u64) -> Result<()> {
+    pub fn sink_server_is_busy(&self, region_id: u64, reason: String) -> Result<()> {
         let mut err_event = EventError::default();
-        err_event.mut_server_is_busy().reason = "too many pending incremental scans".to_owned();
+        err_event.mut_server_is_busy().reason = reason;
         self.sink_error_event(region_id, err_event)
     }
 

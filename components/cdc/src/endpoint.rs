@@ -742,7 +742,8 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
             );
             // To avoid OOM (e.g., https://github.com/tikv/tikv/issues/16035),
             // TiKV needs to reject and return error immediately.
-            let _ = downstream.sink_server_is_busy(region_id);
+            let _ = downstream
+                .sink_server_is_busy(region_id, "too many pending incremental scans".to_owned());
             return;
         }
 
