@@ -66821,7 +66821,7 @@
   ],
   "refresh": "1m",
   "rows": [],
-  "schemaVersion": 12,
+  "schemaVersion": 14,
   "sharedCrosshair": false,
   "style": "dark",
   "tags": [],
