@@ -20,11 +20,13 @@ use bytes::Bytes;
 use collections::{HashMap, HashSet};
 use crossbeam::{atomic::AtomicCell, channel::TrySendError};
 use engine_traits::{
-    Engines, KvEngine, PerfContext, RaftEngine, Snapshot, WriteBatch, WriteOptions, CF_LOCK,
+    Engines, KvEngine, PerfContext, RaftEngine, Snapshot, WriteBatch, WriteOptions, CF_DEFAULT,
+    CF_LOCK, CF_WRITE,
 };
 use error_code::ErrorCodeExt;
 use fail::fail_point;
 use getset::{Getters, MutGetters};
+use keys::{enc_end_key, enc_start_key};
 use kvproto::{
     errorpb,
     kvrpcpb::{DiskFullOpt, ExtraOp as TxnExtraOp},
@@ -82,7 +84,10 @@ use super::{
     DestroyPeerJob, LocalReadContext,
 };
 use crate::{
-    coprocessor::{CoprocessorHost, RegionChangeEvent, RegionChangeReason, RoleChange},
+    coprocessor::{
+        split_observer::NO_VALID_SPLIT_KEY, CoprocessorHost, RegionChangeEvent, RegionChangeReason,
+        RoleChange,
+    },
     errors::RAFTSTORE_IS_BUSY,
     router::RaftStoreRouter,
     store::{
@@ -99,8 +104,8 @@ use crate::{
         txn_ext::LocksStatus,
         util::{admin_cmd_epoch_lookup, RegionReadProgress},
         worker::{
-            HeartbeatTask, RaftlogGcTask, ReadDelegate, ReadExecutor, ReadProgress, RegionTask,
-            SplitCheckTask,
+            CleanupTask, CompactTask, HeartbeatTask, RaftlogGcTask, ReadDelegate, ReadExecutor,
+            ReadProgress, RegionTask, SplitCheckTask,
         },
         Callback, Config, GlobalReplicationState, PdTask, ReadCallback, ReadIndexContext,
         ReadResponse, TxnExt, WriteCallback, RAFT_INIT_LOG_INDEX,
@@ -903,6 +908,8 @@ where
     pub peer_heartbeats: HashMap<u64, Instant>,
     /// Record the waiting data status of each follower or learner peer.
     pub wait_data_peers: Vec<u64>,
+    /// This peer is created by a raft message from `create_by_peer`.
+    create_by_peer: Option<metapb::Peer>,
 
     proposals: ProposalQueue<Callback<EK::Snapshot>>,
     leader_missing_time: Option<Instant>,
@@ -1097,6 +1104,8 @@ where
     pub lead_transferee: u64,
     pub unsafe_recovery_state: Option<UnsafeRecoveryState>,
     pub snapshot_recovery_state: Option<SnapshotRecoveryState>,
+
+    last_record_safe_point: u64,
 }
 
 impl<EK, ER> Peer<EK, ER>
@@ -1113,6 +1122,7 @@ where
         region: &metapb::Region,
         peer: metapb::Peer,
         wait_data: bool,
+        create_by_peer: Option<metapb::Peer>,
     ) -> Result<Peer<EK, ER>> {
         let peer_id = peer.get_id();
         if peer_id == raft::INVALID_ID {
@@ -1167,6 +1177,7 @@ where
             peer_cache: RefCell::new(HashMap::default()),
             peer_heartbeats: HashMap::default(),
             wait_data_peers: Vec::default(),
+            create_by_peer,
             peers_start_pending_time: vec![],
             down_peer_ids: vec![],
             size_diff_hint: 0,
@@ -1231,6 +1242,7 @@ where
                 REGION_READ_PROGRESS_CAP,
                 peer_id,
             )),
+            last_record_safe_point: 0,
             memtrace_raft_entries: 0,
             write_router: WriteRouter::new(tag),
             unpersisted_readies: VecDeque::default(),
@@ -4405,7 +4417,70 @@ where
         poll_ctx: &mut PollContext<EK, ER, T>,
         req: &mut RaftCmdRequest,
     ) -> Result<ProposalContext> {
-        poll_ctx.coprocessor_host.pre_propose(self.region(), req)?;
+        poll_ctx
+            .coprocessor_host
+            .pre_propose(self.region(), req)
+            .map_err(|e| {
+                // If the error of prepropose contains str `NO_VALID_SPLIT_KEY`, it may mean the
+                // split_key of the split request is the region start key which
+                // means we may have so many potential duplicate mvcc versions
+                // that we can not manage to get a valid split key. So, we
+                // trigger a compaction to handle it.
+                if e.to_string().contains(NO_VALID_SPLIT_KEY) {
+                    let safe_ts = (|| {
+                        fail::fail_point!("safe_point_inject", |t| {
+                            t.unwrap().parse::<u64>().unwrap()
+                        });
+                        poll_ctx.safe_point.load(Ordering::Relaxed)
+                    })();
+                    if safe_ts <= self.last_record_safe_point {
+                        debug!(
+                            "skip schedule compact range due to safe_point not updated";
+                            "region_id" => self.region_id,
+                            "safe_point" => safe_ts,
+                        );
+                        return e;
+                    }
+
+                    let start_key = enc_start_key(self.region());
+                    let end_key = enc_end_key(self.region());
+
+                    let mut all_scheduled = true;
+                    for cf in [CF_WRITE, CF_DEFAULT] {
+                        let task = CompactTask::Compact {
+                            cf_name: String::from(cf),
+                            start_key: Some(start_key.clone()),
+                            end_key: Some(end_key.clone()),
+                        };
+
+                        if let Err(e) = poll_ctx
+                            .cleanup_scheduler
+                            .schedule(CleanupTask::Compact(task))
+                        {
+                            error!(
+                                "schedule compact range task failed";
+                                "region_id" => self.region_id,
+                                "cf" => ?cf,
+                                "err" => ?e,
+                            );
+                            all_scheduled = false;
+                            break;
+                        }
+                    }
+
+                    if all_scheduled {
+                        info!(
+                            "schedule compact range due to no valid split keys";
+                            "region_id" => self.region_id,
+                            "safe_point" => safe_ts,
+                            "region_start_key" => log_wrappers::Value::key(&start_key),
+                            "region_end_key" => log_wrappers::Value::key(&end_key),
+                        );
+                        self.last_record_safe_point = safe_ts;
+                    }
+                }
+                e
+            })?;
         let mut ctx = ProposalContext::empty();
 
         if get_sync_log_from_request(req) {
@@ -5518,9 +5593,16 @@ where
         &mut self,
         ctx: &mut PollContext<EK, ER, T>,
     ) {
-        if self.check_stale_conf_ver < self.region().get_region_epoch().get_conf_ver() {
+        if self.check_stale_conf_ver < self.region().get_region_epoch().get_conf_ver()
+            || self.region().get_region_epoch().get_conf_ver() == 0
+        {
             self.check_stale_conf_ver = self.region().get_region_epoch().get_conf_ver();
             self.check_stale_peers = self.region().get_peers().to_vec();
+            if let Some(create_by_peer) = self.create_by_peer.as_ref() {
+                // Push create_by_peer in case the peer is removed before
+                // initialization which has no peer in region.
+                self.check_stale_peers.push(create_by_peer.clone());
+            }
         }
         for peer in &self.check_stale_peers {
             if peer.get_id() == self.peer_id() {
