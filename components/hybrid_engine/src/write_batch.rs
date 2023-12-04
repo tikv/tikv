@@ -1,6 +1,8 @@
 // Copyright 2023 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine_traits::{KvEngine, MemoryEngine, Mutable, WriteBatch, WriteBatchExt, WriteOptions, Result};
+use engine_traits::{
+    KvEngine, MemoryEngine, Mutable, Result, WriteBatch, WriteBatchExt, WriteOptions,
+};
 
 use crate::engine::HybridEngine;
 

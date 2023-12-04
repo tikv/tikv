@@ -10,7 +10,7 @@ where
     EM: MemoryEngine,
 {
     type CfOptions = EK::CfOptions;
-    
+
     fn get_options_cf(&self, cf: &str) -> Result<Self::CfOptions> {
         self.disk_engine.get_options_cf(cf)
     }
