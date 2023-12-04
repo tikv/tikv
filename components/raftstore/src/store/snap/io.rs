@@ -467,7 +467,7 @@ mod tests {
                         &keys::data_key(b"z"),
                         *max_file_size,
                         &limiter,
-                        None,
+                        db_opt.as_ref().map(|opt| opt.get_key_manager()).flatten(),
                     )
                     .unwrap();
                     if stats.key_count == 0 {
