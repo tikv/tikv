@@ -742,10 +742,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
             );
             // To avoid OOM (e.g., https://github.com/tikv/tikv/issues/16035),
             // TiKV needs to reject and return error immediately.
-            //
-            // TODO: TiKV is supposed to return a "busy" error, but for the sake
-            // of compatibility, it returns a "region not found" error.
-            let _ = downstream.sink_region_not_found(region_id);
+            let _ = downstream.sink_server_is_busy(region_id);
             return;
         }
 

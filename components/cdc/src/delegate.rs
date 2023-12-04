@@ -206,6 +206,12 @@ impl Downstream {
         self.sink_error_event(region_id, err_event)
     }
 
+    pub fn sink_server_is_busy(&self, region_id: u64) -> Result<()> {
+        let mut err_event = EventError::default();
+        err_event.mut_server_is_busy().reason = "too many pending incremental scans".to_owned();
+        self.sink_error_event(region_id, err_event)
+    }
+
     pub fn set_sink(&mut self, sink: Sink) {
         self.sink = Some(sink);
     }
