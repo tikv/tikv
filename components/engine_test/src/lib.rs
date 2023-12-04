@@ -150,6 +150,7 @@ pub mod kv {
         }
     }
 
+<<<<<<< HEAD
     impl TabletFactory<KvTestEngine> for TestTabletFactory {
         fn create_shared_db(&self) -> Result<KvTestEngine> {
             let tablet_path = self.tablet_path(0, 0);
@@ -207,6 +208,10 @@ pub mod kv {
 
         #[inline]
         fn destroy_tablet(&self, _id: u64, _suffix: u64) -> engine_traits::Result<()> {
+=======
+        fn destroy_tablet(&self, _ctx: TabletContext, path: &Path) -> Result<()> {
+            encryption::trash_dir_all(path, self.db_opt.get_key_manager().as_deref())?;
+>>>>>>> ca8c70d9a0 (raftstore: Verify checksum right after SST files are generated (#16107))
             Ok(())
         }
 
@@ -489,6 +494,10 @@ pub mod ctor {
     }
 
     impl DbOptions {
+        pub fn get_key_manager(&self) -> Option<Arc<DataKeyManager>> {
+            self.key_manager.clone()
+        }
+
         pub fn set_key_manager(&mut self, key_manager: Option<Arc<DataKeyManager>>) {
             self.key_manager = key_manager;
         }
