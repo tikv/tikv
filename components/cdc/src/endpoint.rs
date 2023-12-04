@@ -2125,7 +2125,7 @@ mod tests {
             let event = e.event.take().unwrap();
             match event {
                 Event_oneof_event::Error(err) => {
-                    assert!(err.has_region_not_found());
+                    assert!(err.has_server_is_busy());
                 }
                 other => panic!("unknown event {:?}", other),
             }
