@@ -21,9 +21,9 @@ mod all {
     use tikv_util::defer;
 
     use crate::{
-        make_record_key, make_split_key_at_record, mutation, run_async_test, SuiteBuilder,
+        make_record_key, make_split_key_at_record, make_table_key, mutation, run_async_test,
+        SuiteBuilder,
     };
-    use crate::make_table_key;
 
     #[test]
     fn failed_register_task() {
