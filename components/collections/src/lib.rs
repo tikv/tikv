@@ -298,3 +298,18 @@ where
         Ok(HashMap { base })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_index_panic() {
+        let map: HashMap<String, usize> = HashMap::new();
+        let result = std::panic::catch_unwind(|| {
+            let _ = map["KeyNotFound;&="];
+        });
+        let panic_msg = result.unwrap_err().downcast::<String>().unwrap();
+        assert!(panic_msg.contains("KeyNotFound;&="), "{:?}", panic_msg);
+    }
+}
