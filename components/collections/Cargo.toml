@@ -6,4 +6,5 @@ publish = false
 
 [dependencies]
 fxhash = "0.2.1"
+serde = { version = "1.0" }
 tikv_alloc = { workspace = true }
