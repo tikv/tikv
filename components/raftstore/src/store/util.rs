@@ -3,7 +3,7 @@
 // #[PerformanceCriticalPath]
 use std::{
     cmp,
-    collections::{HashMap, VecDeque},
+    collections::VecDeque,
     fmt,
     fmt::{Debug, Display},
     option::Option,
@@ -14,7 +14,7 @@ use std::{
     u64,
 };
 
-use collections::HashSet;
+use collections::{HashMap, HashSet};
 use engine_traits::KvEngine;
 use kvproto::{
     kvrpcpb::{self, KeyRange, LeaderInfo},

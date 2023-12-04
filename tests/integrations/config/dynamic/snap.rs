@@ -5,6 +5,7 @@ use std::{
     time::Duration,
 };
 
+use collections::HashMap;
 use engine_rocks::RocksEngine;
 use grpcio::{EnvBuilder, ResourceQuota};
 use raft_log_engine::RaftLogEngine;
@@ -93,7 +94,7 @@ fn test_update_server_config() {
     let mut svr_cfg = config.server.clone();
     // dispatch updated config
     let change = {
-        let mut m = std::collections::HashMap::new();
+        let mut m = HashMap::new();
         m.insert(
             "server.snap-io-max-bytes-per-sec".to_owned(),
             "512MB".to_owned(),

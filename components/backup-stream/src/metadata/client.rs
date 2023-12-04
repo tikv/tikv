@@ -1,7 +1,8 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{cmp::Ordering, collections::HashMap, fmt::Debug, path::Path, sync::Arc};
+use std::{cmp::Ordering, fmt::Debug, path::Path, sync::Arc};
 
+use collections::HashMap;
 use dashmap::DashMap;
 use kvproto::{
     brpb::{StreamBackupError, StreamBackupTaskInfo},

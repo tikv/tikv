@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+# This script checks if collection types in TiKV.
+set -euo pipefail
+
+function error_msg() {
+    echo "Prefer collections::HashMap" >&2
+}
+
+rules=(
+    "\{collections::.*HashMap[^<:E]"
+    " {2,}collections::.*HashMap[^<:E]"
+    "std::collections::.*HashMap[^<:E]"
+)
+
+# rocksdb properties are std hashmap.
+allow_list="engine_rocks.*properties.rs|test_sst_importer"
+
+for rule in "${rules[@]}"; do
+    if grep -r -n --color=always \
+        -E "$rule" \
+        --include \*.rs \
+        --exclude-dir target . \
+        | grep -v -E "$allow_list";
+    then
+        error_msg
+        exit 1
+    fi
+done
+
+echo "Collection type check passed."

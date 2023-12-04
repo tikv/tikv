@@ -2,7 +2,6 @@
 
 use std::{
     borrow::Cow,
-    collections::HashMap,
     fs::File,
     io::{self, BufReader, ErrorKind, Read},
     ops::Bound,
@@ -14,7 +13,7 @@ use std::{
     time::{Duration, SystemTime},
 };
 
-use collections::HashSet;
+use collections::{HashMap, HashSet};
 use dashmap::{mapref::entry::Entry, DashMap};
 use encryption::{DataKeyManager, FileEncryptionInfo};
 use engine_traits::{

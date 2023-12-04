@@ -240,7 +240,7 @@ fn diff(fields: &Punctuated<Field, Comma>, crate_name: &Ident) -> Result<TokenSt
     Ok(quote! {
         #[allow(clippy::float_cmp)]
         fn diff(&self, mut #incoming: &Self) -> #crate_name::ConfigChange {
-            let mut #diff_ident = std::collections::HashMap::default();
+            let mut #diff_ident = collections::HashMap::default();
             #(#diff_fields)*
             #diff_ident
         }
@@ -281,7 +281,7 @@ fn typed(fields: &Punctuated<Field, Comma>, crate_name: &Ident) -> Result<TokenS
     }
     Ok(quote! {
         fn typed(&self) -> #crate_name::ConfigChange {
-            let mut #typed_ident = std::collections::HashMap::default();
+            let mut #typed_ident = collections::HashMap::default();
             #(#typed_fields)*
             #typed_ident
         }

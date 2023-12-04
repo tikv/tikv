@@ -1,8 +1,9 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{cmp::min, collections::HashMap, sync::Arc, time::Duration, u64};
+use std::{cmp::min, sync::Arc, time::Duration, u64};
 
 use batch_system::Config as BatchSystemConfig;
+use collections::HashMap;
 use engine_traits::{perf_level_serde, PerfLevel};
 use lazy_static::lazy_static;
 use online_config::{ConfigChange, ConfigManager, ConfigValue, OnlineConfig};

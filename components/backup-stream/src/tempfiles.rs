@@ -3,7 +3,6 @@
 //! log backup.
 
 use std::{
-    collections::HashMap,
     convert::identity,
     fs::File as SyncOsFile,
     path::{Path, PathBuf},
@@ -15,6 +14,7 @@ use std::{
     task::{ready, Context, Poll},
 };
 
+use collections::HashMap;
 use futures::TryFutureExt;
 use kvproto::brpb::CompressionType;
 use tikv_util::warn;

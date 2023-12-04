@@ -2,12 +2,13 @@
 
 use std::{
     cmp::{min, Ordering},
-    collections::{BinaryHeap, HashMap, HashSet},
+    collections::{BinaryHeap, HashSet},
     slice::{Iter, IterMut},
     sync::{mpsc::Receiver, Arc},
     time::{Duration, SystemTime},
 };
 
+use collections::HashMap;
 use kvproto::{
     kvrpcpb::KeyRange,
     metapb::{self, Peer},

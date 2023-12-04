@@ -10,6 +10,7 @@ base64 = "0.13"
 bstr = "0.2.8"
 byteorder = "1.2"
 codec = { workspace = true }
+collections = { workspace = true }
 file_system = { workspace = true }
 flate2 = { version = "=1.0.11", default-features = false, features = ["zlib"] }
 hex = "0.4"

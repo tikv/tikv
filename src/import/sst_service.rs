@@ -1,7 +1,7 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    collections::{HashMap, HashSet, VecDeque},
+    collections::{HashSet, VecDeque},
     convert::identity,
     future::Future,
     path::PathBuf,
@@ -12,6 +12,7 @@ use std::{
     time::Duration,
 };
 
+use collections::HashMap;
 use engine_traits::{CompactExt, MiscExt, CF_DEFAULT, CF_WRITE};
 use file_system::{set_io_type, IoType};
 use futures::{sink::SinkExt, stream::TryStreamExt, FutureExt, TryFutureExt};
@@ -184,8 +185,8 @@ impl RequestCollector {
     }
 
     fn accept_kv(&mut self, cf: &str, is_delete: bool, k: Vec<u8>, v: Vec<u8>) {
-        debug!("Accepting KV."; "cf" => %cf, 
-            "key" => %log_wrappers::Value::key(&k), 
+        debug!("Accepting KV."; "cf" => %cf,
+            "key" => %log_wrappers::Value::key(&k),
             "value" => %log_wrappers::Value::key(&v));
         // Need to skip the empty key/value that could break the transaction or cause
         // data corruption. see details at https://github.com/pingcap/tiflow/issues/5468.
@@ -1408,7 +1409,7 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
             ctx.spawn(async move {
                 send_rpc_response!(Err(Error::Io(
                     std::io::Error::new(std::io::ErrorKind::InvalidInput,
-                        format!("you are going to suspend the import RPCs too long. (for {} seconds, max acceptable duration is {} seconds)", 
+                        format!("you are going to suspend the import RPCs too long. (for {} seconds, max acceptable duration is {} seconds)",
                         req.get_duration_in_secs(), SUSPEND_REQUEST_MAX_SECS)))), sink, label, timer);
             });
             return;
@@ -1479,8 +1480,7 @@ fn write_needs_restore(write: &[u8]) -> bool {
 
 #[cfg(test)]
 mod test {
-    use std::collections::HashMap;
-
+    use collections::HashMap;
     use engine_traits::{CF_DEFAULT, CF_WRITE};
     use kvproto::{
         kvrpcpb::Context,

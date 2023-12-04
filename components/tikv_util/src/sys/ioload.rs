@@ -1,6 +1,8 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{collections::HashMap, fs::File, io::Read};
+use std::{fs::File, io::Read};
+
+use collections::HashMap;
 
 /// IoLoad represents current system block devices IO statistics
 #[derive(Debug)]

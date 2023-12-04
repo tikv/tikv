@@ -1,12 +1,8 @@
 // Copyright 2023 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{
-    cell::Cell,
-    collections::{BTreeMap, HashMap},
-    ops::Bound,
-    sync::Arc,
-};
+use std::{cell::Cell, collections::BTreeMap, ops::Bound, sync::Arc};
 
+use collections::HashMap;
 use futures::lock::Mutex;
 use tokio::sync::mpsc::{self, Sender};
 use tokio_stream::wrappers::ReceiverStream;

@@ -13,7 +13,6 @@
 
 use std::{
     cmp,
-    collections::HashMap,
     marker::PhantomData,
     path::{Path, PathBuf},
     str::FromStr,
@@ -33,6 +32,7 @@ use backup_stream::{
 };
 use causal_ts::CausalTsProviderImpl;
 use cdc::CdcConfigManager;
+use collections::HashMap;
 use concurrency_manager::ConcurrencyManager;
 use engine_rocks::{from_rocks_compression_type, RocksEngine, RocksStatistics};
 use engine_traits::{Engines, KvEngine, MiscExt, RaftEngine, TabletRegistry, CF_DEFAULT, CF_WRITE};
@@ -1566,8 +1566,9 @@ fn pre_start() {
 
 #[cfg(test)]
 mod test {
-    use std::{collections::HashMap, sync::Arc};
+    use std::sync::Arc;
 
+    use collections::HashMap;
     use engine_rocks::raw::Env;
     use engine_traits::{
         FlowControlFactorsExt, MiscExt, SyncMutable, TabletContext, TabletRegistry, CF_DEFAULT,

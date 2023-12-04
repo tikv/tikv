@@ -12,7 +12,6 @@
 //! connection subscribe changes instead of altering it themselves.
 
 use std::{
-    collections::HashMap,
     fmt::Debug,
     pin::Pin,
     sync::{
@@ -23,6 +22,7 @@ use std::{
     u64,
 };
 
+use collections::HashMap;
 use fail::fail_point;
 use futures::{
     compat::{Compat, Future01CompatExt},

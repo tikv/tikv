@@ -302,8 +302,9 @@ pub fn get_decrypter_reader(
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::HashMap, path::PathBuf};
+    use std::path::PathBuf;
 
+    use collections::HashMap;
     use engine_test::kv::KvTestEngine;
     use engine_traits::CF_DEFAULT;
     use tempfile::Builder;

@@ -1345,7 +1345,7 @@ impl<T> Tracker<T> {
     }
 }
 
-use std::collections::HashMap;
+use collections::HashMap;
 
 /// TomlLine use to parse one line content of a toml file
 #[derive(Debug)]

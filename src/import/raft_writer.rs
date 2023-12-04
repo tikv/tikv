@@ -2,11 +2,9 @@
 //! This module contains types for asynchronously applying the write batches
 //! into the storage.
 
-use std::{
-    collections::HashMap,
-    sync::{Arc, Mutex},
-};
+use std::sync::{Arc, Mutex};
 
+use collections::HashMap;
 use futures::{Future, Stream, StreamExt};
 use kvproto::kvrpcpb::Context;
 use sst_importer::metrics::{APPLIER_ENGINE_REQUEST_DURATION, APPLIER_EVENT, IMPORTER_APPLY_BYTES};

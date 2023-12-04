@@ -1,12 +1,12 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    collections::HashMap,
     hash::Hash,
     marker::{PhantomData, Send, Sized},
 };
 
 use codec::prelude::NumberDecoder;
+use collections::HashMap;
 use tidb_query_codegen::rpn_fn;
 use tidb_query_common::{Error, Result};
 use tidb_query_datatype::{

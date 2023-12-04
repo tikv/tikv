@@ -181,6 +181,10 @@ where
 }
 
 impl<K, V> HashMap<K, V> {
+    pub fn new() -> HashMap<K, V> {
+        HashMap::default()
+    }
+
     pub fn is_empty(&self) -> bool {
         self.base.is_empty()
     }

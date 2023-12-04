@@ -1,11 +1,8 @@
 // Copyright 2023 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{
-    collections::{HashMap, HashSet},
-    sync::Arc,
-    time::Duration,
-};
+use std::{collections::HashSet, sync::Arc, time::Duration};
 
+use collections::HashMap;
 use futures::{compat::Future01CompatExt, StreamExt};
 use kvproto::{
     pdpb::EventType,

@@ -2,13 +2,13 @@
 
 use std::{
     cmp::min,
-    collections::HashMap,
     fmt,
     marker::PhantomData,
     sync::{Arc, Mutex, MutexGuard},
     time::Duration,
 };
 
+use collections::HashMap;
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::KvEngine;
 use futures::channel::oneshot::{channel, Receiver, Sender};

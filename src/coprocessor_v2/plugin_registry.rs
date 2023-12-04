@@ -1,7 +1,7 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashSet,
     ffi::{OsStr, OsString},
     ops::Range,
     path::{Path, PathBuf},
@@ -10,6 +10,7 @@ use std::{
     time::Duration,
 };
 
+use collections::HashMap;
 use coprocessor_plugin_api::{allocator::HostAllocatorPtr, util::*, *};
 use libloading::{Error as DylibError, Library, Symbol};
 use notify::{DebouncedEvent, RecursiveMode, Watcher};

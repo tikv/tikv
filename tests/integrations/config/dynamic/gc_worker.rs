@@ -77,7 +77,7 @@ fn test_gc_worker_config_update() {
 
     // Update gc worker config
     let change = {
-        let mut change = std::collections::HashMap::new();
+        let mut change = collections::HashMap::new();
         change.insert("gc.ratio-threshold".to_owned(), "1.23".to_owned());
         change.insert("gc.batch-keys".to_owned(), "1234".to_owned());
         change.insert("gc.max-write-bytes-per-sec".to_owned(), "1KB".to_owned());

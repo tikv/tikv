@@ -1,7 +1,6 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::collections::HashMap;
-
+use collections::HashMap;
 use kvproto::{
     metapb::{self, PeerRole},
     raft_serverpb,

@@ -1209,7 +1209,7 @@ impl AnalyzeMixedResult {
 
 #[cfg(test)]
 mod tests {
-    use ::std::collections::HashMap;
+    use collections::HashMap;
     use tidb_query_datatype::codec::{datum, datum::Datum};
 
     use super::*;

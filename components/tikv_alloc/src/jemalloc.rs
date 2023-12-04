@@ -3,13 +3,13 @@
 // The implementation of this crate when jemalloc is turned on
 
 use std::{
-    collections::HashMap,
     ptr::{self, NonNull},
     slice,
     sync::Mutex,
     thread,
 };
 
+use collections::HashMap;
 use libc::{self, c_char, c_void};
 use tikv_jemalloc_ctl::{epoch, stats, Error};
 use tikv_jemalloc_sys::malloc_stats_print;

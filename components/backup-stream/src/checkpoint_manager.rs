@@ -1,7 +1,8 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{cell::RefCell, collections::HashMap, sync::Arc, time::Duration};
+use std::{cell::RefCell, sync::Arc, time::Duration};
 
+use collections::HashMap;
 use futures::{
     channel::mpsc::{self as async_mpsc, Receiver, Sender},
     future::BoxFuture,
@@ -553,11 +554,11 @@ where
 pub mod tests {
     use std::{
         assert_matches,
-        collections::HashMap,
         sync::{Arc, Mutex, RwLock},
         time::Duration,
     };
 
+    use collections::HashMap;
     use futures::{future::ok, Sink};
     use grpcio::{RpcStatus, RpcStatusCode};
     use kvproto::{logbackuppb::SubscribeFlushEventResponse, metapb::*};

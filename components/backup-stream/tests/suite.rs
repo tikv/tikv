@@ -1,7 +1,7 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashSet,
     fmt::Display,
     path::{Path, PathBuf},
     sync::Arc,
@@ -21,6 +21,7 @@ use backup_stream::{
     utils, BackupStreamResolver, Endpoint, GetCheckpointResult, RegionCheckpointOperation,
     RegionSet, Service, Task,
 };
+use collections::HashMap;
 use futures::{executor::block_on, AsyncWriteExt, Future, Stream, StreamExt};
 use grpcio::{ChannelBuilder, Server, ServerBuilder};
 use kvproto::{

@@ -1,13 +1,8 @@
 // Copyright 2023 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{
-    array,
-    collections::{HashMap, HashSet},
-    io::Result as IoResult,
-    sync::Arc,
-    time::Duration,
-};
+use std::{array, collections::HashSet, io::Result as IoResult, sync::Arc, time::Duration};
 
+use collections::HashMap;
 use file_system::{fetch_io_bytes, IoBytes, IoType};
 use prometheus::Histogram;
 use strum::EnumCount;
@@ -447,9 +442,9 @@ impl<R: ResourceStatsProvider> PriorityLimiterAdjustWorker<R> {
             limits[i - 1] = limit;
             expect_cpu_time_total -= level_expected[i];
         }
-        debug!("adjsut cpu limiter by priority"; "cpu_quota" => process_cpu_stats.total_quota, 
+        debug!("adjsut cpu limiter by priority"; "cpu_quota" => process_cpu_stats.total_quota,
             "process_cpu" => process_cpu_stats.current_used, "expected_cpu" => ?level_expected,
-            "cpu_costs" => ?cpu_duration, "limits" => ?limits, 
+            "cpu_costs" => ?cpu_duration, "limits" => ?limits,
             "limit_cpu_total" => expect_pool_cpu_total, "pool_cpu_cost" => real_cpu_total);
     }
 }

@@ -115,7 +115,7 @@ impl TestSuite {
 
     pub fn must_change_advance_ts_interval(&self, store_id: u64, new_interval: Duration) {
         let change = {
-            let mut c = std::collections::HashMap::default();
+            let mut c = HashMap::default();
             c.insert(
                 "advance_ts_interval".to_owned(),
                 ConfigValue::Duration(new_interval.as_millis() as u64),
@@ -127,7 +127,7 @@ impl TestSuite {
 
     pub fn must_change_memory_quota(&self, store_id: u64, bytes: u64) {
         let change = {
-            let mut c = std::collections::HashMap::default();
+            let mut c = HashMap::default();
             c.insert("memory_quota".to_owned(), ConfigValue::Size(bytes));
             c
         };

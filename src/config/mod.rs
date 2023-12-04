@@ -9,7 +9,7 @@ mod configurable;
 
 use std::{
     cmp,
-    collections::{HashMap, HashSet},
+    collections::HashSet,
     convert::TryFrom,
     error::Error,
     fs, i32,
@@ -22,6 +22,7 @@ use std::{
 
 use api_version::ApiV1Ttl;
 use causal_ts::Config as CausalTsConfig;
+use collections::HashMap;
 pub use configurable::{loop_registry, ConfigRes, ConfigurableDb};
 use encryption_export::DataKeyManager;
 use engine_rocks::{

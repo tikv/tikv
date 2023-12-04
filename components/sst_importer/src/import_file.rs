@@ -1,7 +1,6 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    collections::HashMap,
     fmt,
     io::{self, Write},
     marker::PhantomData,
@@ -11,6 +10,7 @@ use std::{
 };
 
 use api_version::api_v2::TIDB_RANGES_COMPLEMENT;
+use collections::HashMap;
 use encryption::{DataKeyManager, EncrypterWriter};
 use engine_traits::{iter_option, Iterator, KvEngine, RefIterable, SstMetaInfo, SstReader};
 use file_system::{sync_dir, File, OpenOptions};

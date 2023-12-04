@@ -1,13 +1,14 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashSet,
     fs::read_to_string,
     mem::MaybeUninit,
     num::IntErrorKind,
     path::{Path, PathBuf},
 };
 
+use collections::HashMap;
 use num_traits::Bounded;
 use procfs::process::{MountInfo, Process};
 

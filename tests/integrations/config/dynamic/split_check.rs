@@ -6,6 +6,7 @@ use std::{
     time::Duration,
 };
 
+use collections::HashMap;
 use engine_rocks::RocksEngine;
 use engine_traits::CF_DEFAULT;
 use raftstore::{
@@ -78,7 +79,7 @@ fn test_update_split_check_config() {
     });
 
     let change = {
-        let mut m = std::collections::HashMap::new();
+        let mut m = HashMap::new();
         m.insert(
             "coprocessor.split_region_on_table".to_owned(),
             "true".to_owned(),

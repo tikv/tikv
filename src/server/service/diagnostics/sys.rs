@@ -1,7 +1,8 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{collections::HashMap, string::ToString};
+use std::string::ToString;
 
+use collections::HashMap;
 use kvproto::diagnosticspb::{ServerInfoItem, ServerInfoPair};
 use tikv_util::sys::{cpu_time::LinuxStyleCpuTime, ioload, SysQuota, *};
 use walkdir::WalkDir;

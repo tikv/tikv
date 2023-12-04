@@ -70,8 +70,9 @@ impl Backend for PlaintextBackend {
 
 #[cfg(test)]
 pub mod tests {
-    use std::{collections::HashMap, sync::Mutex};
+    use std::sync::Mutex;
 
+    use collections::HashMap;
     use lazy_static::lazy_static;
 
     use super::{Backend, *};

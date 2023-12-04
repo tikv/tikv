@@ -1,11 +1,11 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    collections::HashMap,
     sync::{mpsc::sync_channel, Mutex},
     time::Duration,
 };
 
+use collections::HashMap;
 use engine_traits::{MiscExt, Peekable};
 use raft::prelude::MessageType;
 use test_raftstore::*;

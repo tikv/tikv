@@ -1151,10 +1151,10 @@ fn client_accept_gzip(req: &Request<Body>) -> bool {
 // Decode different type of json value to string value
 fn decode_json(
     data: &[u8],
-) -> std::result::Result<std::collections::HashMap<String, String>, Box<dyn std::error::Error>> {
+) -> std::result::Result<HashMap<String, String>, Box<dyn std::error::Error>> {
     let json: Value = serde_json::from_slice(data)?;
     if let Value::Object(map) = json {
-        let mut dst = std::collections::HashMap::new();
+        let mut dst = HashMap::new();
         for (k, v) in map.into_iter() {
             let v = match v {
                 Value::Bool(v) => format!("{}", v),

@@ -1,7 +1,8 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{collections::HashMap, io::Write};
+use std::io::Write;
 
+use collections::HashMap;
 use kvproto::pdpb;
 use lazy_static::lazy_static;
 use prometheus::{proto::MetricType, *};

@@ -1,11 +1,11 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    iter::FromIterator,
     sync::{atomic::AtomicU64, mpsc, Arc, Mutex},
     time::Duration,
 };
 
+use collections::HashMap;
 use concurrency_manager::ConcurrencyManager;
 use engine_rocks::RocksEngine;
 use engine_traits::{Engines, ALL_CFS, CF_DEFAULT};
@@ -144,11 +144,10 @@ where
     rx.recv_timeout(Duration::from_secs(3)).unwrap();
 }
 
-fn new_changes(cfgs: Vec<(&str, &str)>) -> std::collections::HashMap<String, String> {
-    std::collections::HashMap::from_iter(
-        cfgs.into_iter()
-            .map(|kv| (kv.0.to_owned(), kv.1.to_owned())),
-    )
+fn new_changes(cfgs: Vec<(&str, &str)>) -> HashMap<String, String> {
+    cfgs.into_iter()
+        .map(|kv| (kv.0.to_owned(), kv.1.to_owned()))
+        .collect()
 }
 
 #[test]

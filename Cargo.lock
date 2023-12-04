@@ -480,6 +480,7 @@ dependencies = [
  "async-trait",
  "bytes",
  "chrono",
+ "collections",
  "concurrency_manager",
  "crossbeam",
  "crossbeam-channel",
@@ -1413,6 +1414,7 @@ dependencies = [
  "byteorder",
  "bytes",
  "cloud",
+ "collections",
  "crc32fast",
  "crossbeam",
  "derive_more",
@@ -3389,6 +3391,7 @@ name = "online_config"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "collections",
  "online_config_derive",
  "serde",
  "serde_derive",
@@ -3399,6 +3402,7 @@ dependencies = [
 name = "online_config_derive"
 version = "0.1.0"
 dependencies = [
+ "collections",
  "proc-macro2",
  "quote",
  "syn 1.0.103",
@@ -6169,6 +6173,7 @@ dependencies = [
  "byteorder",
  "chrono",
  "codec",
+ "collections",
  "file_system",
  "flate2",
  "hex 0.4.2",

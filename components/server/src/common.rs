@@ -2,9 +2,7 @@
 //! This mod is exported to make convenience for creating TiKV-like servers.
 
 use std::{
-    cmp,
-    collections::HashMap,
-    env, fmt,
+    cmp, env, fmt,
     net::SocketAddr,
     path::{Path, PathBuf},
     sync::{
@@ -15,6 +13,7 @@ use std::{
     u64,
 };
 
+use collections::HashMap;
 use encryption_export::{data_key_manager_from_config, DataKeyManager};
 use engine_rocks::{
     flush_engine_statistics,

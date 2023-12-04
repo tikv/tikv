@@ -4,7 +4,7 @@ use core::pin::Pin;
 use std::{
     borrow::Borrow,
     cell::RefCell,
-    collections::{hash_map::RandomState, BTreeMap, HashMap},
+    collections::BTreeMap,
     ops::{Bound, RangeBounds},
     path::Path,
     sync::{
@@ -16,6 +16,7 @@ use std::{
 };
 
 use async_compression::{tokio::write::ZstdEncoder, Level};
+use collections::HashMap;
 use engine_rocks::ReadPerfInstant;
 use engine_traits::{CfName, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use futures::{ready, task::Poll, FutureExt};
@@ -99,7 +100,7 @@ pub type Slot<T> = Mutex<T>;
 
 /// SlotMap is a trivial concurrent map which sharding over each key.
 /// NOTE: Maybe we can use dashmap for replacing the RwLock.
-pub type SlotMap<K, V, S = RandomState> = RwLock<HashMap<K, Slot<V>, S>>;
+pub type SlotMap<K, V> = RwLock<HashMap<K, Slot<V>>>;
 
 /// Like `..=val`(a.k.a. `RangeToInclusive`), but allows `val` being a reference
 /// to DSTs.
@@ -768,7 +769,7 @@ impl<'a> slog::KV for SlogRegion<'a> {
 }
 
 /// A shortcut for making an opaque future type for return type or argument
-/// type, which is sendable and not borrowing any variables.  
+/// type, which is sendable and not borrowing any variables.
 ///
 /// `future![T]` == `impl Future<Output = T> + Send + 'static`
 #[macro_export]

@@ -29,6 +29,7 @@ async-compression = { version = "0.3.14", features = ["tokio", "zstd"] }
 async-trait = { version = "0.1" }
 bytes = "1"
 chrono = "0.4"
+collections = { workspace = true }
 concurrency_manager = { workspace = true }
 crossbeam = "0.8"
 crossbeam-channel = "0.5"

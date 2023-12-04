@@ -1,12 +1,12 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    collections::HashMap,
     fs::File,
     io::{Read, Write},
     sync::{Arc, Mutex},
 };
 
+use collections::HashMap;
 use online_config::{ConfigChange, OnlineConfig};
 use raftstore::store::Config as RaftstoreConfig;
 use tikv::config::*;
@@ -105,12 +105,12 @@ fn test_write_update_to_file() {
 block-cache-size = "10GB"
 
 [rocksdb.lockcf]
-## this config will not update even it has the same last 
+## this config will not update even it has the same last
 ## name as `rocksdb.defaultcf.block-cache-size`
 block-cache-size = "512MB"
 
 [coprocessor]
-## the update to `coprocessor.region-split-keys`, which do not show up 
+## the update to `coprocessor.region-split-keys`, which do not show up
 ## as key-value pair after [coprocessor], will be written at the end of [coprocessor]
 
 [gc]
@@ -167,12 +167,12 @@ pd-heartbeat-tick-interval = "1h"
 block-cache-size = "1GB"
 
 [rocksdb.lockcf]
-## this config will not update even it has the same last 
+## this config will not update even it has the same last
 ## name as `rocksdb.defaultcf.block-cache-size`
 block-cache-size = "512MB"
 
 [coprocessor]
-## the update to `coprocessor.region-split-keys`, which do not show up 
+## the update to `coprocessor.region-split-keys`, which do not show up
 ## as key-value pair after [coprocessor], will be written at the end of [coprocessor]
 
 region-split-keys = 10000

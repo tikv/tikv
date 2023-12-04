@@ -1,7 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    collections::HashMap,
     mem,
     sync::{
         atomic::AtomicBool,
@@ -12,6 +11,7 @@ use std::{
     time::Duration,
 };
 
+use collections::HashMap;
 use futures::executor::block_on;
 use kvproto::raft_serverpb::RaftMessage;
 use pd_client::PdClient;

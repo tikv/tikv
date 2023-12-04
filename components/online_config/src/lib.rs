@@ -1,11 +1,9 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{
-    collections::HashMap,
-    fmt::{self, Debug, Display, Formatter},
-};
+use std::fmt::{self, Debug, Display, Formatter};
 
 use chrono::{FixedOffset, NaiveTime};
+use collections::HashMap;
 pub use online_config_derive::*;
 
 pub type ConfigChange = HashMap<String, ConfigValue>;
