@@ -104,6 +104,41 @@ pub mod kv {
     ) -> Result<KvTestEngine> {
         KvTestEngine::new_kv_engine_opt(path, db_opt, cfs_opts)
     }
+<<<<<<< HEAD
+=======
+
+    #[derive(Clone)]
+    pub struct TestTabletFactory {
+        db_opt: DbOptions,
+        cf_opts: Vec<(&'static str, KvTestCfOptions)>,
+    }
+
+    impl TestTabletFactory {
+        pub fn new(db_opt: DbOptions, cf_opts: Vec<(&'static str, KvTestCfOptions)>) -> Self {
+            Self { db_opt, cf_opts }
+        }
+    }
+
+    impl TabletFactory<KvTestEngine> for TestTabletFactory {
+        fn open_tablet(&self, ctx: TabletContext, path: &Path) -> Result<KvTestEngine> {
+            KvTestEngine::new_tablet(
+                path.to_str().unwrap(),
+                ctx,
+                self.db_opt.clone(),
+                self.cf_opts.clone(),
+            )
+        }
+
+        fn destroy_tablet(&self, _ctx: TabletContext, path: &Path) -> Result<()> {
+            encryption::trash_dir_all(path, self.db_opt.get_key_manager().as_deref())?;
+            Ok(())
+        }
+
+        fn exists(&self, path: &Path) -> bool {
+            KvTestEngine::exists(path.to_str().unwrap_or_default())
+        }
+    }
+>>>>>>> ca8c70d9a0 (raftstore: Verify checksum right after SST files are generated (#16107))
 }
 
 /// Create a storage engine with a concrete type. This should ultimately be the
@@ -166,12 +201,27 @@ pub mod ctor {
     }
 
     #[derive(Clone, Default)]
+<<<<<<< HEAD
     pub struct DBOptions {
         key_manager: Option<Arc<DataKeyManager>>,
         rate_limiter: Option<Arc<IORateLimiter>>,
     }
 
     impl DBOptions {
+=======
+    pub struct DbOptions {
+        key_manager: Option<Arc<DataKeyManager>>,
+        rate_limiter: Option<Arc<IoRateLimiter>>,
+        state_storage: Option<Arc<dyn StateStorage>>,
+        enable_multi_batch_write: bool,
+    }
+
+    impl DbOptions {
+        pub fn get_key_manager(&self) -> Option<Arc<DataKeyManager>> {
+            self.key_manager.clone()
+        }
+
+>>>>>>> ca8c70d9a0 (raftstore: Verify checksum right after SST files are generated (#16107))
         pub fn set_key_manager(&mut self, key_manager: Option<Arc<DataKeyManager>>) {
             self.key_manager = key_manager;
         }
