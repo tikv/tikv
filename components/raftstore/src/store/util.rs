@@ -1200,7 +1200,7 @@ impl RegionReadProgressRegistry {
             .unwrap()
             .iter()
             .map(|(_, rrp)| rrp.resolved_ts())
-            //TODO: the uninitialized peer should be taken into consideration instead of skipping it(accuracy issue).
+            //TODO: the uninitialized peer should be taken into consideration instead of skipping it(https://github.com/tikv/tikv/issues/15506).
             .filter(|ts| *ts != 0) // ts == 0 means the peer is uninitialized,
             .min()
             .unwrap_or(0)
