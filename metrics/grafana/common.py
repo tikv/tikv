@@ -1084,6 +1084,7 @@ def heatmap_panel_graph_panel_histogram_quantile_pairs(
             description=graph_description,
             metric=f"{metric}",
             yaxes=yaxes(left_format=yaxis_format),
+            label_selectors=label_selectors,
             by_labels=graph_by_labels,
             hide_count=True,
         ),
