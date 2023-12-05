@@ -90,7 +90,7 @@ use crate::{
             ApplyBatchSystem, ApplyNotifier, ApplyPollerBuilder, ApplyRes, ApplyRouter,
             ApplyTaskRes,
         },
-        local_metrics::RaftMetrics,
+        local_metrics::{IoType as InspectIoType, RaftMetrics},
         memory::*,
         metrics::*,
         peer_storage,
@@ -831,6 +831,14 @@ impl<'a, EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
                     mut inspector,
                 } => {
                     inspector.record_store_wait(send_time.saturating_elapsed());
+                    inspector.record_store_commit(
+                        self.ctx
+                            .raft_metrics
+                            .health_stats
+                            .avg(InspectIoType::Network),
+                    );
+                    // Reset the health_stats and wait it to be refreshed in the next tick.
+                    self.ctx.raft_metrics.health_stats.reset();
                     self.ctx.pending_latency_inspect.push(inspector);
                 }
                 StoreMsg::UnsafeRecoveryReport(report) => self.store_heartbeat_pd(Some(report)),
