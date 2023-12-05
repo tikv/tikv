@@ -1,8 +1,5 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-<<<<<<< HEAD
-use std::mem;
-=======
 use std::{
     mem,
     sync::{
@@ -10,7 +7,6 @@ use std::{
         Arc,
     },
 };
->>>>>>> 6a2c9733a8 (log-backup: use row-level memory usage statistic for initial scan (#15872))
 
 use kvproto::{
     encryptionpb::EncryptionMeta,
@@ -75,8 +71,6 @@ impl HeapSize for RaftCmdRequest {
             + mem::size_of_val(&self.status_request)
     }
 }
-<<<<<<< HEAD
-=======
 
 #[derive(Debug)]
 pub struct MemoryQuotaExceeded;
@@ -233,4 +227,3 @@ mod tests {
         assert_eq!(quota.in_use(), 4);
     }
 }
->>>>>>> 6a2c9733a8 (log-backup: use row-level memory usage statistic for initial scan (#15872))
