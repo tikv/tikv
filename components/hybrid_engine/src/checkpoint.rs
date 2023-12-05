@@ -1,4 +1,4 @@
-// Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
+// Copyright 2023 TiKV Project Authors. Licensed under Apache-2.0.
 
 use engine_traits::{Checkpointable, KvEngine, MemoryEngine, Result};
 
@@ -12,10 +12,11 @@ where
     type Checkpointer = EK::Checkpointer;
 
     fn new_checkpointer(&self) -> Result<Self::Checkpointer> {
-        unimplemented!()
+        self.disk_engine().new_checkpointer()
     }
 
     fn merge(&self, dbs: &[&Self]) -> Result<()> {
-        unimplemented!()
+        let disk_dbs: Vec<_> = dbs.iter().map(|&db| db.disk_engine()).collect();
+        self.disk_engine().merge(&disk_dbs)
     }
 }

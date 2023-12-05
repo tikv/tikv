@@ -17,7 +17,7 @@ where
         start_key: &[u8],
         end_key: &[u8],
     ) -> Option<MvccProperties> {
-        self.disk_engine
+        self.disk_engine()
             .get_mvcc_properties_cf(cf, safe_point, start_key, end_key)
     }
 }

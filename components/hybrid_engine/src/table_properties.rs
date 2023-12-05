@@ -16,6 +16,6 @@ where
         cf: &str,
         ranges: &[Range<'_>],
     ) -> Result<Self::TablePropertiesCollection> {
-        self.disk_engine.table_properties_collection(cf, ranges)
+        self.disk_engine().table_properties_collection(cf, ranges)
     }
 }

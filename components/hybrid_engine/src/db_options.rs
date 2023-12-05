@@ -12,10 +12,10 @@ where
     type DbOptions = EK::DbOptions;
 
     fn get_db_options(&self) -> Self::DbOptions {
-        self.disk_engine.get_db_options()
+        self.disk_engine().get_db_options()
     }
 
     fn set_db_options(&self, options: &[(&str, &str)]) -> Result<()> {
-        self.disk_engine.set_db_options(options)
+        self.disk_engine().set_db_options(options)
     }
 }

@@ -10,14 +10,14 @@ where
     EM: MemoryEngine,
 {
     fn get_cf_num_files_at_level(&self, cf: &str, level: usize) -> Result<Option<u64>> {
-        self.disk_engine.get_cf_num_files_at_level(cf, level)
+        self.disk_engine().get_cf_num_files_at_level(cf, level)
     }
 
     fn get_cf_num_immutable_mem_table(&self, cf: &str) -> Result<Option<u64>> {
-        self.disk_engine.get_cf_num_immutable_mem_table(cf)
+        self.disk_engine().get_cf_num_immutable_mem_table(cf)
     }
 
     fn get_cf_pending_compaction_bytes(&self, cf: &str) -> Result<Option<u64>> {
-        self.disk_engine.get_cf_pending_compaction_bytes(cf)
+        self.disk_engine().get_cf_pending_compaction_bytes(cf)
     }
 }

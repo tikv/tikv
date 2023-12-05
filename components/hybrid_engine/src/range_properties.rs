@@ -10,7 +10,7 @@ where
     EM: MemoryEngine,
 {
     fn get_range_approximate_keys(&self, range: Range<'_>, large_threshold: u64) -> Result<u64> {
-        self.disk_engine
+        self.disk_engine()
             .get_range_approximate_keys(range, large_threshold)
     }
 
@@ -20,12 +20,12 @@ where
         range: Range<'_>,
         large_threshold: u64,
     ) -> Result<u64> {
-        self.disk_engine
+        self.disk_engine()
             .get_range_approximate_keys_cf(cfname, range, large_threshold)
     }
 
     fn get_range_approximate_size(&self, range: Range<'_>, large_threshold: u64) -> Result<u64> {
-        self.disk_engine
+        self.disk_engine()
             .get_range_approximate_size(range, large_threshold)
     }
 
@@ -35,7 +35,7 @@ where
         range: Range<'_>,
         large_threshold: u64,
     ) -> Result<u64> {
-        self.disk_engine
+        self.disk_engine()
             .get_range_approximate_size_cf(cfname, range, large_threshold)
     }
 
@@ -44,7 +44,7 @@ where
         range: Range<'_>,
         key_count: usize,
     ) -> Result<Vec<Vec<u8>>> {
-        self.disk_engine
+        self.disk_engine()
             .get_range_approximate_split_keys(range, key_count)
     }
 
@@ -54,7 +54,7 @@ where
         range: Range<'_>,
         key_count: usize,
     ) -> Result<Vec<Vec<u8>>> {
-        self.disk_engine
+        self.disk_engine()
             .get_range_approximate_split_keys_cf(cfname, range, key_count)
     }
 }

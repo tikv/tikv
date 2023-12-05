@@ -4,14 +4,41 @@ use engine_traits::{KvEngine, MemoryEngine, Peekable, ReadOptions, Result, SyncM
 
 use crate::snapshot::HybridSnapshot;
 
+/// This engine is structured with both a disk engine and an in-memory engine.
+/// The disk engine houses the complete database data, whereas the in-memory
+/// engine functions as a region cache, selectively caching certain regions to
+/// enhance read performance. For the regions that are cached, in-memory engine
+/// retains all data that has not been garbage collected.
 #[derive(Clone, Debug)]
 pub struct HybridEngine<EK, EM>
 where
     EK: KvEngine,
     EM: MemoryEngine,
 {
-    pub disk_engine: EK,
-    pub memory_engine: EM,
+    disk_engine: EK,
+    memory_engine: EM,
+}
+
+impl<EK, EM> HybridEngine<EK, EM>
+where
+    EK: KvEngine,
+    EM: MemoryEngine,
+{
+    pub fn disk_engine(&self) -> &EK {
+        &self.disk_engine
+    }
+
+    pub fn mut_disk_engine(&mut self) -> &mut EK {
+        &mut self.disk_engine
+    }
+
+    pub fn memory_engine(&self) -> &EM {
+        &self.memory_engine
+    }
+
+    pub fn mut_memory_engine(&mut self) -> &mut EM {
+        &mut self.memory_engine
+    }
 }
 
 impl<EK, EM> KvEngine for HybridEngine<EK, EM>

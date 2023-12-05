@@ -12,7 +12,7 @@ where
     type CompactedEvent = EK::CompactedEvent;
 
     fn auto_compactions_is_disabled(&self) -> Result<bool> {
-        self.disk_engine.auto_compactions_is_disabled()
+        self.disk_engine().auto_compactions_is_disabled()
     }
 
     fn compact_range_cf(
@@ -23,7 +23,7 @@ where
         exclusive_manual: bool,
         max_subcompactions: u32,
     ) -> Result<()> {
-        self.disk_engine.compact_range_cf(
+        self.disk_engine().compact_range_cf(
             cf,
             start_key,
             end_key,
@@ -39,7 +39,7 @@ where
         end: Option<&[u8]>,
         output_level: Option<i32>,
     ) -> Result<()> {
-        self.disk_engine
+        self.disk_engine()
             .compact_files_in_range_cf(cf, start, end, output_level)
     }
 
@@ -49,7 +49,7 @@ where
         end: Option<&[u8]>,
         output_level: Option<i32>,
     ) -> Result<()> {
-        self.disk_engine
+        self.disk_engine()
             .compact_files_in_range(start, end, output_level)
     }
 
@@ -61,11 +61,11 @@ where
         max_subcompactions: u32,
         exclude_l0: bool,
     ) -> Result<()> {
-        self.disk_engine
+        self.disk_engine()
             .compact_files_cf(cf, files, output_level, max_subcompactions, exclude_l0)
     }
 
     fn check_in_range(&self, start: Option<&[u8]>, end: Option<&[u8]>) -> Result<()> {
-        self.disk_engine.check_in_range(start, end)
+        self.disk_engine().check_in_range(start, end)
     }
 }

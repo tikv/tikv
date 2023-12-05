@@ -15,7 +15,7 @@ where
         start_key: &[u8],
         end_key: &[u8],
     ) -> Result<Vec<(String, TtlProperties)>> {
-        self.disk_engine
+        self.disk_engine()
             .get_range_ttl_properties_cf(cf, start_key, end_key)
     }
 }

@@ -10,6 +10,6 @@ where
     EM: MemoryEngine,
 {
     fn cf_names(&self) -> Vec<&str> {
-        self.disk_engine.cf_names()
+        self.disk_engine().cf_names()
     }
 }
