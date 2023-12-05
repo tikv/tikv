@@ -3849,6 +3849,7 @@ where
                     .get_mut(&target_region_id)
                     .unwrap()
                     .remove(&region_id);
+                meta.destroyed_region_for_snap.remove(&region_id);
                 info!("peer has destroyed, clean up for incoming overlapped snapshot";
                     "region_id" => region_id,
                     "peer_id" => self.fsm.peer_id(),
