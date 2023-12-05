@@ -31,6 +31,7 @@ use protobuf::Message;
 use raftstore::coprocessor::CmdBatch;
 use slog_global::debug;
 use tidb_query_datatype::codec::table::decode_table_id;
+use tikv::config::BackupStreamConfig;
 use tikv_util::{
     box_err,
     codec::stream_event::EventEncoder,
@@ -341,9 +342,9 @@ pub struct RouterInner {
     /// too many temporary files.
     scheduler: Scheduler<Task>,
     /// The size limit of temporary file per task.
-    temp_file_size_limit: u64,
+    temp_file_size_limit: AtomicU64,
     /// The max duration the local data can be pending.
-    max_flush_interval: Duration,
+    max_flush_interval: SyncRwLock<Duration>,
 }
 
 impl std::fmt::Debug for RouterInner {
@@ -368,9 +369,15 @@ impl RouterInner {
             tasks: Mutex::new(HashMap::default()),
             prefix,
             scheduler,
-            temp_file_size_limit,
-            max_flush_interval,
+            temp_file_size_limit: AtomicU64::new(temp_file_size_limit),
+            max_flush_interval: SyncRwLock::new(max_flush_interval),
         }
+    }
+
+    pub fn udpate_config(&self, config: &BackupStreamConfig) {
+        *self.max_flush_interval.write().unwrap() = config.max_flush_interval.0;
+        self.temp_file_size_limit
+            .store(config.file_size_limit.0, Ordering::SeqCst);
     }
 
     /// Find the task for a region. If `end_key` is empty, search from start_key
@@ -430,7 +437,6 @@ impl RouterInner {
         let stream_task = StreamTaskInfo::new(
             prefix_path,
             task,
-            self.max_flush_interval,
             ranges.clone(),
             merged_file_size_limit,
             compression_type,
@@ -507,6 +513,7 @@ impl RouterInner {
     async fn on_event(&self, task: String, events: ApplyEvents) -> Result<()> {
         let task_info = self.get_task_info(&task).await?;
         task_info.on_events(events).await?;
+        let file_size_limit = self.temp_file_size_limit.load(Ordering::SeqCst);
 
         // When this event make the size of temporary files exceeds the size limit, make
         // a flush. Note that we only flush if the size is less than the limit before
@@ -515,10 +522,10 @@ impl RouterInner {
             "backup stream statics size";
             "task" => ?task,
             "next_size" => task_info.total_size(),
-            "size_limit" => self.temp_file_size_limit,
+            "size_limit" => file_size_limit,
         );
         let cur_size = task_info.total_size();
-        if cur_size > self.temp_file_size_limit && !task_info.is_flushing() {
+        if cur_size > file_size_limit && !task_info.is_flushing() {
             info!("try flushing task"; "task" => %task, "size" => %cur_size);
             if task_info.set_flushing_status_cas(false, true).is_ok() {
                 if let Err(e) = self.scheduler.schedule(Task::Flush(task)) {
@@ -592,6 +599,8 @@ impl RouterInner {
 
     /// tick aims to flush log/meta to extern storage periodically.
     pub async fn tick(&self) {
+        let max_flush_interval = self.max_flush_interval.rl().to_owned();
+
         for (name, task_info) in self.tasks.lock().await.iter() {
             if let Err(e) = self
                 .scheduler
@@ -602,7 +611,9 @@ impl RouterInner {
 
             // if stream task need flush this time, schedule Task::Flush, or update time
             // justly.
-            if task_info.should_flush() && task_info.set_flushing_status_cas(false, true).is_ok() {
+            if task_info.should_flush(&max_flush_interval)
+                && task_info.set_flushing_status_cas(false, true).is_ok()
+            {
                 info!(
                     "backup stream trigger flush task by tick";
                     "task" => ?task_info,
@@ -766,8 +777,6 @@ pub struct StreamTaskInfo {
     flushing_meta_files: RwLock<Vec<(TempFileKey, DataFile, DataFileInfo)>>,
     /// last_flush_ts represents last time this task flushed to storage.
     last_flush_time: AtomicPtr<Instant>,
-    /// flush_interval represents the tick interval of flush, setting by users.
-    flush_interval: Duration,
     /// The min resolved TS of all regions involved.
     min_resolved_ts: TimeStamp,
     /// Total size of all temporary files in byte.
@@ -828,7 +837,6 @@ impl StreamTaskInfo {
     pub async fn new(
         temp_dir: PathBuf,
         task: StreamTask,
-        flush_interval: Duration,
         ranges: Vec<(Vec<u8>, Vec<u8>)>,
         merged_file_size_limit: u64,
         compression_type: CompressionType,
@@ -849,7 +857,6 @@ impl StreamTaskInfo {
             flushing_files: RwLock::default(),
             flushing_meta_files: RwLock::default(),
             last_flush_time: AtomicPtr::new(Box::into_raw(Box::new(Instant::now()))),
-            flush_interval,
             total_size: AtomicUsize::new(0),
             flushing: AtomicBool::new(false),
             flush_fail_count: AtomicUsize::new(0),
@@ -951,12 +958,11 @@ impl StreamTaskInfo {
         unsafe { Box::from_raw(ptr) };
     }
 
-    pub fn should_flush(&self) -> bool {
+    pub fn should_flush(&self, flush_interval: &Duration) -> bool {
         // When it doesn't flush since 0.8x of auto-flush interval, we get ready to
         // start flushing. So that we will get a buffer for the cost of actual
         // flushing.
-        self.get_last_flush_time().saturating_elapsed_secs()
-            >= self.flush_interval.as_secs_f64() * 0.8
+        self.get_last_flush_time().saturating_elapsed_secs() >= flush_interval.as_secs_f64() * 0.8
     }
 
     pub fn is_flushing(&self) -> bool {
@@ -1524,15 +1530,17 @@ mod tests {
     use external_storage::{ExternalData, NoopStorage};
     use futures::AsyncReadExt;
     use kvproto::brpb::{Local, Noop, StorageBackend, StreamBackupTaskInfo};
+    use online_config::{ConfigManager, OnlineConfig};
     use tikv_util::{
         codec::number::NumberEncoder,
+        config::ReadableDuration,
         worker::{dummy_scheduler, ReceiverWrapper},
     };
     use tokio::fs::File;
     use txn_types::{Write, WriteType};
 
     use super::*;
-    use crate::utils;
+    use crate::{config::BackupStreamConfigManager, utils};
 
     #[derive(Debug)]
     struct KvEventsBuilder {
@@ -1848,7 +1856,6 @@ mod tests {
         let task = StreamTaskInfo::new(
             tmp_dir.path().to_path_buf(),
             stream_task,
-            Duration::from_secs(300),
             vec![(vec![], vec![])],
             merged_file_size_limit,
             CompressionType::Zstd,
@@ -2038,6 +2045,12 @@ mod tests {
         let (task, _path) = task("cleanup_test".to_owned()).await?;
         must_register_table(&router, task, 1).await;
         write_simple_data(&router).await;
+        let tempfiles = router
+            .get_task_info("cleanup_test")
+            .await
+            .unwrap()
+            .temp_file_pool
+            .clone();
         router
             .get_task_info("cleanup_test")
             .await?
@@ -2046,6 +2059,7 @@ mod tests {
         write_simple_data(&router).await;
         let mut w = walkdir::WalkDir::new(&tmp).into_iter();
         assert!(w.next().is_some(), "the temp files doesn't created");
+        assert!(tempfiles.mem_used() > 0, "the temp files doesn't created.");
         drop(router);
         let w = walkdir::WalkDir::new(&tmp)
             .into_iter()
@@ -2062,6 +2076,11 @@ mod tests {
             w.is_empty(),
             "the temp files should be removed, but it is {:?}",
             w
+        );
+        assert_eq!(
+            tempfiles.mem_used(),
+            0,
+            "the temp files hasn't been cleared."
         );
         Ok(())
     }
@@ -2207,7 +2226,6 @@ mod tests {
         let task = StreamTaskInfo::new(
             tmp_dir.path().to_path_buf(),
             stream_task,
-            Duration::from_secs(300),
             vec![(vec![], vec![])],
             0x100000,
             CompressionType::Zstd,
@@ -2322,6 +2340,58 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn test_update_config() {
+        let (sched, rx) = dummy_scheduler();
+        let cfg = BackupStreamConfig::default();
+        let router = Arc::new(RouterInner::new(
+            PathBuf::new(),
+            sched.clone(),
+            1,
+            cfg.max_flush_interval.0,
+        ));
+
+        let mut cfg_manager = BackupStreamConfigManager::new(sched, cfg.clone());
+
+        let _new_cfg = BackupStreamConfig {
+            max_flush_interval: ReadableDuration::minutes(2),
+            ..Default::default()
+        };
+
+        let changed = cfg.diff(&_new_cfg);
+        cfg_manager.dispatch(changed).unwrap();
+
+        let cmds = collect_recv(rx);
+        assert_eq!(cmds.len(), 1);
+        match &cmds[0] {
+            Task::ChangeConfig(cfg) => {
+                assert!(matches!(cfg, _new_cfg));
+                router.udpate_config(cfg);
+                assert_eq!(
+                    router.max_flush_interval.rl().to_owned(),
+                    _new_cfg.max_flush_interval.0
+                );
+            }
+            _ => panic!("unexpected cmd!"),
+        }
+    }
+
+    #[test]
+    fn test_udpate_invalid_config() {
+        let cfg = BackupStreamConfig::default();
+        let (sched, _) = dummy_scheduler();
+        let mut cfg_manager = BackupStreamConfigManager::new(sched, cfg.clone());
+
+        let new_cfg = BackupStreamConfig {
+            max_flush_interval: ReadableDuration::secs(0),
+            ..Default::default()
+        };
+
+        let changed = cfg.diff(&new_cfg);
+        let r = cfg_manager.dispatch(changed);
+        assert!(r.is_err());
+    }
+
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn test_flush_on_events_race() -> Result<()> {
         let (tx, _rx) = dummy_scheduler();
@@ -2333,7 +2403,6 @@ mod tests {
             1000,
             Duration::from_secs(300),
         ));
-
         let (task, _path) = task("race".to_owned()).await?;
         must_register_table(router.as_ref(), task, 1).await;
         router
