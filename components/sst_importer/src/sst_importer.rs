@@ -1312,6 +1312,9 @@ impl SstImporter {
             Ok(Some(final_range))
         } else {
             // nothing is written: prevents finishing the SST at all.
+            // also delete the empty sst file that is created when creating sst_writer
+            drop(sst_writer);
+            let _ = file_system::remove_file(&path.save);
             Ok(None)
         }
     }
