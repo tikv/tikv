@@ -44,6 +44,9 @@ impl GcConfig {
         if self.batch_keys == 0 {
             return Err("gc.batch_keys should not be 0".into());
         }
+        if self.thread_count == 0 {
+            return Err("gc.thread_count should not be 0".into());
+        }
         Ok(())
     }
 }

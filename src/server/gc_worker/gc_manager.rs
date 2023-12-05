@@ -4,7 +4,7 @@ use std::{
     cmp::Ordering,
     sync::{
         atomic::{AtomicU64, Ordering as AtomicOrdering},
-        mpsc, Arc,
+        mpsc, Arc, Condvar, Mutex,
     },
     thread::{self, Builder as ThreadBuilder, JoinHandle},
     time::Duration,
@@ -446,7 +446,16 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine> GcMan
         let mut progress = Some(Key::from_encoded(BEGIN_KEY.to_vec()));
 
         // Records how many region we have GC-ed.
-        let mut processed_regions = 0;
+        let mut scheduled_regions = 0;
+        let task_controller = Arc::new((Mutex::new(0), Condvar::new()));
+        let (lock, cvar) = &*task_controller;
+        let maybe_wait = |max_tasks| {
+            let mut current_tasks: std::sync::MutexGuard<'_, usize> = lock.lock().unwrap();
+            while *current_tasks > max_tasks {
+                // Wait until the number of current tasks is below the limit
+                current_tasks = cvar.wait(current_tasks).unwrap();
+            }
+        };
 
         info!("gc_worker: auto gc starts"; "safe_point" => self.curr_safe_point());
 
@@ -454,30 +463,10 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine> GcMan
         // GC on them. At the same time, check whether safe_point is updated
         // periodically. If it's updated, rewinding will happen.
 
-        let (tx, rx) = mpsc::channel();
-        let cb = Box::new(move |res| {
-            // send must be successful.
-            tx.send(res).unwrap();
-        });
-        let mut running_tasks = 0;
         loop {
             self.gc_manager_ctx.check_stopped()?;
             if is_compaction_filter_allowed(&self.cfg_tracker.value(), &self.feature_gate) {
                 return Ok(());
-            }
-
-            if running_tasks >= self.max_concurrent_tasks {
-                let res = rx.recv().unwrap();
-                running_tasks -= 1;
-                if let Err(e) = res {
-                    // Ignore the error and continue, since it's useless to retry this.
-                    // TODO: Find a better way to handle errors. Maybe we should retry.
-                    warn!("failed gc"; "err" => ?e);
-                }
-                processed_regions += 1;
-                AUTO_GC_PROCESSED_REGIONS_GAUGE_VEC
-                    .with_label_values(&[PROCESS_TYPE_GC])
-                    .inc();
             }
 
             // Check the current GC progress and determine if we are going to rewind or we
@@ -487,9 +476,9 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine> GcMan
                     // We have worked to the end and we need to rewind. Restart from beginning.
                     progress = Some(Key::from_encoded(BEGIN_KEY.to_vec()));
                     need_rewind = false;
-                    info!("gc_worker: auto gc rewinds"; "processed_regions" => processed_regions);
+                    info!("gc_worker: auto gc rewinds"; "scheduled_regions" => scheduled_regions);
 
-                    processed_regions = 0;
+                    scheduled_regions = 0;
                     // Set the metric to zero to show that rewinding has happened.
                     AUTO_GC_PROCESSED_REGIONS_GAUGE_VEC
                         .with_label_values(&[PROCESS_TYPE_GC])
@@ -509,38 +498,37 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine> GcMan
                     // We have worked to the end of the TiKV or our progress has reached `end`, and
                     // we don't need to rewind. In this case, the round of GC has finished.
                     info!("gc_worker: all regions task are scheduled";
-                          "processed_regions" => processed_regions,
-                          "running_gc_regions" => running_tasks,
+                          "processed_regions" => scheduled_regions,
                     );
                     break;
                 }
             }
-
             assert!(progress.is_some());
 
             // Before doing GC, check whether safe_point is updated periodically to
             // determine if rewinding is needed.
             self.check_if_need_rewind(&progress, &mut need_rewind, &mut end);
 
-            progress =
-                self.async_gc_next_region(progress.unwrap(), cb.clone(), &mut running_tasks)?;
+            let controller: Arc<(Mutex<usize>, Condvar)> = Arc::clone(&task_controller);
+            let cb = Box::new(move |_res| {
+                let (lock, cvar) = &*controller;
+                let mut current_tasks = lock.lock().unwrap();
+                *current_tasks -= 1;
+                cvar.notify_one();
+                AUTO_GC_PROCESSED_REGIONS_GAUGE_VEC
+                    .with_label_values(&[PROCESS_TYPE_GC])
+                    .inc();
+            });
+            maybe_wait(self.max_concurrent_tasks - 1);
+            let mut current_tasks = lock.lock().unwrap();
+            progress = self.async_gc_next_region(progress.unwrap(), cb, &mut *current_tasks)?;
+            scheduled_regions += 1;
         }
 
-        while running_tasks > 0 {
-            self.gc_manager_ctx.check_stopped()?;
-            let res = rx.recv().unwrap();
-            running_tasks -= 1;
-            if let Err(e) = res {
-                // Ignore the error and continue, since it's useless to retry this.
-                // TODO: Find a better way to handle errors. Maybe we should retry.
-                warn!("failed gc"; "err" => ?e);
-            }
-            processed_regions += 1;
-            AUTO_GC_PROCESSED_REGIONS_GAUGE_VEC
-                .with_label_values(&[PROCESS_TYPE_GC])
-                .inc();
-        }
-        info!("gc_worker: auto gc finishes"; "processed_regions" => processed_regions);
+        // wait for all tasks finished
+        maybe_wait(0);
+        info!("gc_worker: auto gc finishes"; "processed_regions" => scheduled_regions);
+
         Ok(())
     }
 
