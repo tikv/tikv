@@ -522,7 +522,7 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine> GcMan
             });
             maybe_wait(self.max_concurrent_tasks - 1);
             let mut current_tasks = lock.lock().unwrap();
-            progress = self.async_gc_next_region(progress.unwrap(), cb, &mut *current_tasks)?;
+            progress = self.async_gc_next_region(progress.unwrap(), cb, &mut current_tasks)?;
             scheduled_regions += 1;
         }
 
