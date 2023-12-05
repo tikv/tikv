@@ -68,35 +68,81 @@ impl RaftSendMessageMetrics {
     }
 }
 
+/// Buffered statistics for recording local raftstore message duration.
+///
+/// As it's only used for recording local raftstore message duration,
+/// and it will be manually reset preiodically, so it's not necessary
+/// to use `LocalHistogram`.
 #[derive(Default)]
-pub struct RaftCommitLogStatistics {
-    pub last_commit_log_duration_sum: Duration,
-    pub last_commit_log_count_sum: u64,
+struct LocalHealthStatistics {
+    duration_sum: Duration,
+    count: u64,
 }
 
-impl RaftCommitLogStatistics {
+impl LocalHealthStatistics {
     #[inline]
-    pub fn record(&mut self, dur: Duration) {
-        self.last_commit_log_count_sum += 1;
-        self.last_commit_log_duration_sum += dur;
+    fn observe(&mut self, dur: Duration) {
+        self.count += 1;
+        self.duration_sum += dur;
     }
 
     #[inline]
-    pub fn avg(&self) -> Duration {
-        if self.last_commit_log_count_sum > 0 {
-            Duration::from_micros(
-                self.last_commit_log_duration_sum.as_micros() as u64
-                    / self.last_commit_log_count_sum,
-            )
+    fn avg(&self) -> Duration {
+        if self.count > 0 {
+            Duration::from_micros(self.duration_sum.as_micros() as u64 / self.count)
         } else {
             Duration::default()
         }
     }
 
     #[inline]
+    fn reset(&mut self) {
+        self.count = 0;
+        self.duration_sum = Duration::default();
+    }
+}
+
+#[repr(u8)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IoType {
+    Disk = 0,
+    Network = 1,
+}
+
+/// Buffered statistics for recording the health of raftstore.
+#[derive(Default)]
+pub struct HealthStatistics {
+    // represents periodic latency on the disk io.
+    disk_io_dur: LocalHealthStatistics,
+    // represents the latency of the network io.
+    network_io_dur: LocalHealthStatistics,
+}
+
+impl HealthStatistics {
+    #[inline]
+    pub fn observe(&mut self, dur: Duration, io_type: IoType) {
+        match io_type {
+            IoType::Disk => self.disk_io_dur.observe(dur),
+            IoType::Network => self.network_io_dur.observe(dur),
+        }
+    }
+
+    #[inline]
+    pub fn avg(&self, io_type: IoType) -> Duration {
+        match io_type {
+            IoType::Disk => self.disk_io_dur.avg(),
+            IoType::Network => self.network_io_dur.avg(),
+        }
+    }
+
+    #[inline]
+    /// Reset HealthStatistics.
+    ///
+    /// Should be manually reset when the metrics are
+    /// accepted by slowness inspector.
     pub fn reset(&mut self) {
-        self.last_commit_log_count_sum = 0;
-        self.last_commit_log_duration_sum = Duration::default();
+        self.disk_io_dur.reset();
+        self.network_io_dur.reset();
     }
 }
 
@@ -133,7 +179,7 @@ pub struct RaftMetrics {
     pub wf_commit_not_persist_log: LocalHistogram,
 
     // local statistics for slowness
-    pub stat_commit_log: RaftCommitLogStatistics,
+    pub health_stats: HealthStatistics,
 
     pub check_stale_peer: LocalIntCounter,
     pub leader_missing: Arc<Mutex<HashSet<u64>>>,
@@ -172,7 +218,7 @@ impl RaftMetrics {
             wf_persist_log: STORE_WF_PERSIST_LOG_DURATION_HISTOGRAM.local(),
             wf_commit_log: STORE_WF_COMMIT_LOG_DURATION_HISTOGRAM.local(),
             wf_commit_not_persist_log: STORE_WF_COMMIT_NOT_PERSIST_LOG_DURATION_HISTOGRAM.local(),
-            stat_commit_log: RaftCommitLogStatistics::default(),
+            health_stats: HealthStatistics::default(),
             check_stale_peer: CHECK_STALE_PEER_COUNTER.local(),
             leader_missing: Arc::default(),
             last_flush_time: Instant::now_coarse(),
