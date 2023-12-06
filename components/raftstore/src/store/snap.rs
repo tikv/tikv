@@ -15,8 +15,8 @@ use std::{
 };
 
 use collections::{HashMap, HashMapEntry as Entry};
-use encryption::{create_aes_ctr_crypter, from_engine_encryption_method, DataKeyManager, Iv};
-use engine_traits::{CfName, EncryptionKeyManager, KvEngine, CF_DEFAULT, CF_LOCK, CF_WRITE};
+use encryption::{create_aes_ctr_crypter, DataKeyManager, Iv};
+use engine_traits::{CfName, KvEngine, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use error_code::{self, ErrorCode, ErrorCodeExt};
 use fail::fail_point;
 use file_system::{
@@ -88,6 +88,12 @@ pub enum Error {
 
 impl From<io::Error> for Error {
     fn from(e: io::Error) -> Self {
+        Error::Other(Box::new(e))
+    }
+}
+
+impl From<engine_traits::Error> for Error {
+    fn from(e: engine_traits::Error) -> Self {
         Error::Other(Box::new(e))
     }
 }
@@ -614,7 +620,7 @@ impl Snapshot {
 
                 if let Some(mgr) = &s.mgr.encryption_key_manager {
                     let enc_info = mgr.new_file(&file_paths[idx])?;
-                    let mthd = from_engine_encryption_method(enc_info.method);
+                    let mthd = enc_info.method;
                     if mthd != EncryptionMethod::Plaintext {
                         let file_for_recving = cf_file.file_for_recving.last_mut().unwrap();
                         file_for_recving.encrypter = Some(
@@ -873,8 +879,13 @@ impl Snapshot {
             self.switch_to_cf_file(cf)?;
             let cf_file = &mut self.cf_files[self.cf_index];
             let cf_stat = if plain_file_used(cf_file.cf) {
-                let key_mgr = self.mgr.encryption_key_manager.as_ref();
-                snap_io::build_plain_cf_file::<EK>(cf_file, key_mgr, kv_snap, &begin_key, &end_key)?
+                snap_io::build_plain_cf_file::<EK>(
+                    cf_file,
+                    self.mgr.encryption_key_manager.as_ref(),
+                    kv_snap,
+                    &begin_key,
+                    &end_key,
+                )?
             } else {
                 snap_io::build_sst_cf_file_list::<EK>(
                     cf_file,
@@ -885,6 +896,7 @@ impl Snapshot {
                     self.mgr
                         .get_actual_max_per_file_size(allow_multi_files_snapshot),
                     &self.mgr.limiter,
+                    self.mgr.encryption_key_manager.clone(),
                 )?
             };
             SNAPSHOT_LIMIT_GENERATE_BYTES.inc_by(cf_stat.total_size as u64);
@@ -1212,7 +1224,7 @@ impl Snapshot {
 
                 if file_for_recving.written_size != cf_file.size[i] {
                     return Err(io::Error::new(
-                        ErrorKind::Other,
+                        ErrorKind::InvalidData,
                         format!(
                             "snapshot file {} for cf {} size mismatches, \
                             real size {}, expected size {}",
@@ -1227,7 +1239,7 @@ impl Snapshot {
                 let checksum = file_for_recving.write_digest.finalize();
                 if checksum != cf_file.checksum[i] {
                     return Err(io::Error::new(
-                        ErrorKind::Other,
+                        ErrorKind::InvalidData,
                         format!(
                             "snapshot file {} for cf {} checksum \
                             mismatches, real checksum {}, expected \
