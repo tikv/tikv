@@ -1469,7 +1469,7 @@
           "targets": [
             {
               "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "sum(rate(\n    tikv_grpc_msg_duration_seconds_count\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type!=\"kv_gc\"}\n    [$__rate_interval]\n)) by (instance) ",
+              "expr": "sum(rate(\n    tikv_grpc_msg_duration_seconds_count\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type!=\"kv_gc\"}\n    [$__rate_interval]\n)) by (instance, type) ",
               "format": "time_series",
               "hide": false,
               "instant": false,
@@ -1477,7 +1477,7 @@
               "intervalFactor": 1,
               "legendFormat": "{{instance}}-{{type}}",
               "metric": "",
-              "query": "sum(rate(\n    tikv_grpc_msg_duration_seconds_count\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type!=\"kv_gc\"}\n    [$__rate_interval]\n)) by (instance) ",
+              "query": "sum(rate(\n    tikv_grpc_msg_duration_seconds_count\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type!=\"kv_gc\"}\n    [$__rate_interval]\n)) by (instance, type) ",
               "refId": "",
               "step": 10,
               "target": ""
