@@ -4726,7 +4726,11 @@ where
 
         if let Err(err) = ctx.coprocessor_host.pre_propose(self.region(), &mut req) {
             warn!("Coprocessor rejected proposing conf change."; "err" => ?err, "region_id" => self.region_id, "peer_id" => self.peer.get_id());
-            return Err(box_err!("{} rejected by coprocessor(reason = {})", self.tag, err));
+            return Err(box_err!(
+                "{} rejected by coprocessor(reason = {})",
+                self.tag,
+                err
+            ));
         }
 
         if let Some(index) = self
