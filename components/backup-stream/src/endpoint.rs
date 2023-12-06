@@ -947,7 +947,8 @@ where
             .block_on(self.region_operator.send(op))
             .map_err(|err| {
                 Error::Other(
-                    format!("cannot send to region operator, are we shutting down? ({err})").into(),
+                    box_err!("cannot send to region operator, are we shutting down? ({err})")
+                        .into(),
                 )
             })
             .report_if_err("during on_modify_observe");

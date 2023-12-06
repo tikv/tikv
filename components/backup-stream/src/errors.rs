@@ -156,7 +156,9 @@ macro_rules! annotate {
 impl Error {
     #[track_caller]
     pub fn report(&self, context: impl Display) {
-        warn!("backup stream meet error"; "context" => %context, "err" => %self, "verbose_err" => ?self, "position" => ?Location::caller());
+        warn!("backup stream meet error"; "context" => %context, "err" => %self, 
+            "verbose_err" => ?self,
+            "position" => ?Location::caller());
         metrics::STREAM_ERROR
             .with_label_values(&[self.kind()])
             .inc()

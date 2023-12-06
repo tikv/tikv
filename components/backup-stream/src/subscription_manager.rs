@@ -524,7 +524,7 @@ where
 
     fn schedule_start_observe(
         &self,
-        after: Duration,
+        backoff: Duration,
         region: Region,
         handle: Option<ObserveHandle>,
     ) {
@@ -537,7 +537,7 @@ where
         }
         let tx = tx.unwrap();
         tokio::spawn(async move {
-            tokio::time::sleep(after).await;
+            tokio::time::sleep(backoff).await;
             let handle = handle.unwrap_or_else(|| ObserveHandle::new());
             if let Err(err) = tx.send(ObserveOp::Start { region, handle }).await {
                 warn!("log backup failed to schedule start observe."; "err" => %err);
@@ -671,15 +671,10 @@ where
             metrics::SKIP_RETRY.with_label_values(&["not-leader"]).inc();
             return Ok(false);
         }
-        if raftstore::store::util::compare_region_epoch(
+        if raftstore::store::util::is_epoch_stale(
             region.get_region_epoch(),
             &new_region_info.region,
-            true,
-            true,
-            false,
-        )
-        .is_err()
-        {
+        ) {
             metrics::SKIP_RETRY
                 .with_label_values(&["epoch-not-match"])
                 .inc();
