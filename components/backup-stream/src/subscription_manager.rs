@@ -484,7 +484,6 @@ where
         };
 
         let region_id = region.id;
-        *self.failure_count.entry(region_id).or_insert(0) += 1;
         match self.retry_observe(region.clone(), handle).await {
             Ok(has_resent_req) => {
                 if !has_resent_req {
@@ -706,14 +705,11 @@ where
         Ok(true)
     }
 
-    async fn retry_observe(&self, region: Region, handle: ObserveHandle) -> Result<bool> {
-        let failure_count = *self.failure_count.get(&region.id).unwrap_or_else(|| {
-            panic!(
-                "the handle {:?} for region {:?} should be retry, but not and failure record.",
-                handle,
-                utils::debug_region(&region),
-            )
-        });
+    async fn retry_observe(&mut self, region: Region, handle: ObserveHandle) -> Result<bool> {
+        let failure_count = self.failure_count.entry(region.id).or_insert(0);
+        *failure_count += 1;
+        let failure_count = *failure_count;
+
         info!("retry observe region"; "region" => %region.get_id(), "failure_count" => %failure_count, "handle" => ?handle);
         if failure_count > TRY_START_OBSERVE_MAX_RETRY_TIME {
             return Err(Error::Other(

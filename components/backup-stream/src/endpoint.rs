@@ -215,7 +215,6 @@ where
             .pool
             .block_on(self.range_router.select_task(select.reference()));
         warn!("fatal error reporting"; "selector" => ?select, "selected" => ?tasks, "err" => %err);
-        println!("fatal error reporting. {select:?} {tasks:?} {err}");
         for task in tasks {
             // Let's pause the task first.
             self.unload_task(&task);
