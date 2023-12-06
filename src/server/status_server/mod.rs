@@ -1132,13 +1132,11 @@ mod tests {
 
     #[test]
     fn test_status_service() {
-        let temp_dir = tempfile::TempDir::new().unwrap();
         let mut status_server = StatusServer::new(
             1,
             ConfigController::default(),
             Arc::new(SecurityConfig::default()),
             MockRouter,
-            temp_dir.path().to_path_buf(),
             None,
             GrpcServiceManager::dummy(),
         )
@@ -1182,13 +1180,11 @@ mod tests {
 
     #[test]
     fn test_config_endpoint() {
-        let temp_dir = tempfile::TempDir::new().unwrap();
         let mut status_server = StatusServer::new(
             1,
             ConfigController::default(),
             Arc::new(SecurityConfig::default()),
             MockRouter,
-            temp_dir.path().to_path_buf(),
             None,
             GrpcServiceManager::dummy(),
         )
@@ -1241,7 +1237,6 @@ mod tests {
                 ConfigController::new(config),
                 Arc::new(SecurityConfig::default()),
                 MockRouter,
-                temp_dir.path().to_path_buf(),
                 None,
                 GrpcServiceManager::dummy(),
             )
@@ -1299,13 +1294,11 @@ mod tests {
     #[test]
     fn test_status_service_fail_endpoints() {
         let _guard = fail::FailScenario::setup();
-        let temp_dir = tempfile::TempDir::new().unwrap();
         let mut status_server = StatusServer::new(
             1,
             ConfigController::default(),
             Arc::new(SecurityConfig::default()),
             MockRouter,
-            temp_dir.path().to_path_buf(),
             None,
             GrpcServiceManager::dummy(),
         )
@@ -1417,13 +1410,11 @@ mod tests {
     #[test]
     fn test_status_service_fail_endpoints_can_trigger_fails() {
         let _guard = fail::FailScenario::setup();
-        let temp_dir = tempfile::TempDir::new().unwrap();
         let mut status_server = StatusServer::new(
             1,
             ConfigController::default(),
             Arc::new(SecurityConfig::default()),
             MockRouter,
-            temp_dir.path().to_path_buf(),
             None,
             GrpcServiceManager::dummy(),
         )
@@ -1463,13 +1454,11 @@ mod tests {
     #[test]
     fn test_status_service_fail_endpoints_should_give_404_when_failpoints_are_disable() {
         let _guard = fail::FailScenario::setup();
-        let temp_dir = tempfile::TempDir::new().unwrap();
         let mut status_server = StatusServer::new(
             1,
             ConfigController::default(),
             Arc::new(SecurityConfig::default()),
             MockRouter,
-            temp_dir.path().to_path_buf(),
             None,
             GrpcServiceManager::dummy(),
         )
@@ -1501,13 +1490,11 @@ mod tests {
     }
 
     fn do_test_security_status_service(allowed_cn: HashSet<String>, expected: bool) {
-        let temp_dir = tempfile::TempDir::new().unwrap();
         let mut status_server = StatusServer::new(
             1,
             ConfigController::default(),
             Arc::new(new_security_cfg(Some(allowed_cn))),
             MockRouter,
-            temp_dir.path().to_path_buf(),
             None,
             GrpcServiceManager::dummy(),
         )
@@ -1608,13 +1595,11 @@ mod tests {
     #[test]
     fn test_pprof_profile_service() {
         let _test_guard = TEST_PROFILE_MUTEX.lock().unwrap();
-        let temp_dir = tempfile::TempDir::new().unwrap();
         let mut status_server = StatusServer::new(
             1,
             ConfigController::default(),
             Arc::new(SecurityConfig::default()),
             MockRouter,
-            temp_dir.path().to_path_buf(),
             None,
             GrpcServiceManager::dummy(),
         )
@@ -1643,13 +1628,11 @@ mod tests {
     #[test]
     fn test_pprof_symbol_service() {
         let _test_guard = TEST_PROFILE_MUTEX.lock().unwrap();
-        let temp_dir = tempfile::TempDir::new().unwrap();
         let mut status_server = StatusServer::new(
             1,
             ConfigController::default(),
             Arc::new(SecurityConfig::default()),
             MockRouter,
-            temp_dir.path().to_path_buf(),
             None,
             GrpcServiceManager::dummy(),
         )
@@ -1696,13 +1679,11 @@ mod tests {
     #[test]
     fn test_metrics() {
         let _test_guard = TEST_PROFILE_MUTEX.lock().unwrap();
-        let temp_dir = tempfile::TempDir::new().unwrap();
         let mut status_server = StatusServer::new(
             1,
             ConfigController::default(),
             Arc::new(SecurityConfig::default()),
             MockRouter,
-            temp_dir.path().to_path_buf(),
             None,
             GrpcServiceManager::dummy(),
         )
@@ -1753,13 +1734,11 @@ mod tests {
 
     #[test]
     fn test_change_log_level() {
-        let temp_dir = tempfile::TempDir::new().unwrap();
         let mut status_server = StatusServer::new(
             1,
             ConfigController::default(),
             Arc::new(SecurityConfig::default()),
             MockRouter,
-            temp_dir.path().to_path_buf(),
             None,
             GrpcServiceManager::dummy(),
         )
@@ -1809,13 +1788,11 @@ mod tests {
         let cfgs = [TikvConfig::default(), multi_rocks_cfg];
         let resp_strs = ["raft-kv", "partitioned-raft-kv"];
         for (cfg, resp_str) in IntoIterator::into_iter(cfgs).zip(resp_strs) {
-            let temp_dir = tempfile::TempDir::new().unwrap();
             let mut status_server = StatusServer::new(
                 1,
                 ConfigController::new(cfg),
                 Arc::new(SecurityConfig::default()),
                 MockRouter,
-                temp_dir.path().to_path_buf(),
                 None,
                 GrpcServiceManager::dummy(),
             )
@@ -1848,13 +1825,11 @@ mod tests {
         multi_rocks_cfg.storage.engine = EngineType::RaftKv2;
         let cfgs = [TikvConfig::default(), multi_rocks_cfg];
         for cfg in IntoIterator::into_iter(cfgs) {
-            let temp_dir = tempfile::TempDir::new().unwrap();
             let mut status_server = StatusServer::new(
                 1,
                 ConfigController::new(cfg),
                 Arc::new(SecurityConfig::default()),
                 MockRouter,
-                temp_dir.path().to_path_buf(),
                 None,
                 GrpcServiceManager::dummy(),
             )

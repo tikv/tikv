@@ -209,12 +209,6 @@ mod test_utils {
         pub static ref TEST_PROFILE_MUTEX: Mutex<()> = Mutex::new(());
     }
 
-    pub fn activate_prof() -> ProfResult<()> {
-        Ok(())
-    }
-    pub fn deactivate_prof() -> ProfResult<()> {
-        Ok(())
-    }
     pub fn dump_prof(_: &str) -> ProfResult<()> {
         Ok(())
     }
@@ -222,18 +216,10 @@ mod test_utils {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::mpsc::sync_channel;
-
-    use futures::{channel::mpsc, executor::block_on, SinkExt};
+    use futures::executor::block_on;
     use tokio::runtime;
 
     use super::*;
-
-    #[test]
-    fn test_last_change_epoch() {
-        let f = tempfile::tempfile().unwrap();
-        assert!(last_change_epoch(&f.metadata().unwrap()) > 0);
-    }
 
     #[test]
     fn test_extract_thread_name() {
