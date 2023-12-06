@@ -590,17 +590,24 @@ fn do_div_mod_impl(
     rhs: &Decimal,
     mut frac_incr: u8,
     do_mod: bool,
+    result_frac_cnt: Option<u8>,
 ) -> Option<Res<Decimal>> {
     let r_frac_cnt = word_cnt!(rhs.frac_cnt) * DIGITS_PER_WORD;
     let (r_idx, r_prec) = rhs.remove_leading_zeroes(rhs.int_cnt + r_frac_cnt);
     if r_prec == 0 {
+        // short-circuit everything: rhs == 0
         return None;
     }
 
     let l_frac_cnt = word_cnt!(lhs.frac_cnt) * DIGITS_PER_WORD;
     let (l_idx, l_prec) = lhs.remove_leading_zeroes(lhs.int_cnt + l_frac_cnt);
     if l_prec == 0 {
-        return Some(Res::Ok(Decimal::zero()));
+        // short-circuit everything: lhs == 0
+        if let Some(result_frac) = result_frac_cnt {
+            return Some(Res::Ok(Decimal::new(0, result_frac, false)));
+        } else {
+            return Some(Res::Ok(Decimal::zero()));
+        }
     }
 
     frac_incr = frac_incr.saturating_sub(l_frac_cnt - lhs.frac_cnt + r_frac_cnt - rhs.frac_cnt);
@@ -784,8 +791,9 @@ fn do_div_mod_impl(
     Some(res)
 }
 
+#[allow(dead_code)]
 fn do_div_mod(lhs: &Decimal, rhs: &Decimal, frac_incr: u8, do_mod: bool) -> Option<Res<Decimal>> {
-    do_div_mod_impl(lhs, rhs, frac_incr, do_mod)
+    do_div_mod_impl(lhs, rhs, frac_incr, do_mod, None)
 }
 
 /// `do_mul` multiplies two decimals.
@@ -1704,7 +1712,7 @@ impl Decimal {
     fn div(&self, rhs: &Decimal, frac_incr: u8) -> Option<Res<Decimal>> {
         let result_frac_cnt =
             cmp::min(self.result_frac_cnt.saturating_add(frac_incr), MAX_FRACTION);
-        let mut res = do_div_mod(self, rhs, frac_incr, false);
+        let mut res = do_div_mod_impl(self, rhs, frac_incr, false, Some(result_frac_cnt));
         if let Some(ref mut dec) = res {
             dec.result_frac_cnt = result_frac_cnt;
         }
@@ -2362,7 +2370,7 @@ impl<'a, 'b> Rem<&'a Decimal> for &'b Decimal {
     type Output = Option<Res<Decimal>>;
     fn rem(self, rhs: &'a Decimal) -> Self::Output {
         let result_frac_cnt = cmp::max(self.result_frac_cnt, rhs.result_frac_cnt);
-        let mut res = do_div_mod_impl(self, rhs, 0, true);
+        let mut res = do_div_mod_impl(self, rhs, 0, true, Some(result_frac_cnt));
         if let Some(ref mut dec) = res {
             dec.result_frac_cnt = result_frac_cnt;
         }
@@ -3545,17 +3553,28 @@ mod tests {
             assert_eq!(res, rem_exp.map(|s| s.to_owned()));
         }
 
-        let div_cases = vec![(
-            "-43791957044243810000000000000000000000000000000000000000000000000000000000000",
-            "-0.0000000000000000000000000000000000000000000000000012867433602814482",
-            Res::Overflow(
-                "34033171179267041433424155279291553259014210153022524070386565694757521640",
+        let div_cases = vec![
+            (
+                "-43791957044243810000000000000000000000000000000000000000000000000000000000000",
+                "-0.0000000000000000000000000000000000000000000000000012867433602814482",
+                Res::Overflow(
+                    "34033171179267041433424155279291553259014210153022524070386565694757521640",
+                ),
             ),
-        )];
-        for (lhs_str, rhs_str, rem_exp) in div_cases {
+            ("0", "0.5", Res::Ok("0.0000")),
+        ];
+        for (lhs_str, rhs_str, div_exp) in div_cases {
             let lhs: Decimal = lhs_str.parse().unwrap();
             let rhs: Decimal = rhs_str.parse().unwrap();
             let res = (&lhs / &rhs).unwrap().map(|d| d.to_string());
+            assert_eq!(res, div_exp.map(|s| s.to_owned()))
+        }
+
+        let rem_cases = vec![("0", "0.5", Res::Ok("0.0"))];
+        for (lhs_str, rhs_str, rem_exp) in rem_cases {
+            let lhs: Decimal = lhs_str.parse().unwrap();
+            let rhs: Decimal = rhs_str.parse().unwrap();
+            let res = (lhs % rhs).unwrap().map(|d| d.to_string());
             assert_eq!(res, rem_exp.map(|s| s.to_owned()))
         }
     }

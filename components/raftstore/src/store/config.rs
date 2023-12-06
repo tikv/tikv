@@ -95,6 +95,16 @@ pub struct Config {
     #[online_config(skip)]
     pub raft_reject_transfer_leader_duration: ReadableDuration,
 
+    /// Whether to disable checking quorum for the raft group. This will make
+    /// leader lease unavailable.
+    /// It cannot be changed in the config file, the only way to change it is
+    /// programmatically change the config structure during bootstrapping
+    /// the cluster.
+    #[doc(hidden)]
+    #[serde(skip)]
+    #[online_config(skip)]
+    pub unsafe_disable_check_quorum: bool,
+
     // Interval (ms) to check region whether need to be split or not.
     pub split_region_check_tick_interval: ReadableDuration,
     /// When size change of region exceed the diff since last check, it
@@ -172,6 +182,15 @@ pub struct Config {
     // Check if leader lease will expire at `current_time + renew_leader_lease_advance_duration`.
     // It will be set to raft_store_max_leader_lease/4 by default.
     pub renew_leader_lease_advance_duration: ReadableDuration,
+
+    // Set true to allow handling request vote messages within one election time
+    // after TiKV start.
+    //
+    // Note: set to true may break leader lease. It should only be true in tests.
+    #[doc(hidden)]
+    #[serde(skip)]
+    #[online_config(skip)]
+    pub allow_unsafe_vote_after_start: bool,
 
     // Right region derive origin region id when split.
     #[online_config(hidden)]
@@ -457,6 +476,7 @@ impl Default for Config {
             report_min_resolved_ts_interval: ReadableDuration::secs(1),
             check_leader_lease_interval: ReadableDuration::secs(0),
             renew_leader_lease_advance_duration: ReadableDuration::secs(0),
+            allow_unsafe_vote_after_start: false,
             report_region_buckets_tick_interval: ReadableDuration::secs(10),
             max_snapshot_file_raw_size: ReadableSize::mb(100),
             unreachable_backoff: ReadableDuration::secs(10),
@@ -465,6 +485,7 @@ impl Default for Config {
             // TODO: make its value reasonable
             check_request_snapshot_interval: ReadableDuration::minutes(1),
             enable_v2_compatible_learner: false,
+            unsafe_disable_check_quorum: false,
         }
     }
 }
@@ -567,6 +588,12 @@ impl Config {
             warn!(
                 "Election timeout ticks needs to be same across all the cluster, \
                  otherwise it may lead to inconsistency."
+            );
+        }
+        if self.allow_unsafe_vote_after_start {
+            warn!(
+                "allow_unsafe_vote_after_start need to be false, otherwise \
+                it may lead to inconsistency"
             );
         }
 
@@ -908,8 +935,8 @@ impl Config {
             .with_label_values(&["region_compact_min_redundant_rows"])
             .set(self.region_compact_min_redundant_rows as f64);
         CONFIG_RAFTSTORE_GAUGE
-            .with_label_values(&["region_compact_tombstones_percent"])
-            .set(self.region_compact_tombstones_percent as f64);
+            .with_label_values(&["region_compact_redundant_rows_percent"])
+            .set(self.region_compact_redundant_rows_percent as f64);
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["pd_heartbeat_tick_interval"])
             .set(self.pd_heartbeat_tick_interval.as_secs_f64());

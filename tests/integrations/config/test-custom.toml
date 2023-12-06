@@ -336,6 +336,8 @@ prepopulate-block-cache = "flush-only"
 format-version = 5
 checksum = "xxh3"
 max-compactions = 3
+ttl = "10d"
+periodic-compaction-seconds = "10d"
 
 [rocksdb.defaultcf.titan]
 min-blob-size = "2018B"
@@ -399,6 +401,8 @@ prepopulate-block-cache = "flush-only"
 format-version = 5
 checksum = "xxh3"
 max-compactions = 3
+ttl = "10d"
+periodic-compaction-seconds = "10d"
 
 [rocksdb.lockcf]
 block-size = "12KB"
@@ -449,6 +453,8 @@ prepopulate-block-cache = "flush-only"
 format-version = 5
 checksum = "xxh3"
 max-compactions = 3
+ttl = "10d"
+periodic-compaction-seconds = "10d"
 
 [rocksdb.raftcf]
 block-size = "12KB"
@@ -499,6 +505,8 @@ prepopulate-block-cache = "flush-only"
 format-version = 5
 checksum = "xxh3"
 max-compactions = 3
+ttl = "10d"
+periodic-compaction-seconds = "10d"
 
 [raftdb]
 wal-recovery-mode = "skip-any-corrupted-records"
@@ -675,6 +683,7 @@ hibernate-regions-compatible = false
 incremental-scan-threads = 3
 incremental-scan-concurrency = 4
 incremental-scan-speed-limit = 7
+incremental-fetch-speed-limit = 8
 incremental-scan-ts-filter-ratio = 0.7
 tso-worker-threads = 2
 old-value-cache-memory-quota = "14MB"

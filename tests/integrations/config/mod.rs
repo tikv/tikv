@@ -218,6 +218,7 @@ fn test_serde_custom_tikv_config() {
         consistency_check_interval: ReadableDuration::secs(12),
         report_region_flow_interval: ReadableDuration::minutes(12),
         raft_store_max_leader_lease: ReadableDuration::secs(12),
+        allow_unsafe_vote_after_start: false,
         right_derive_when_split: false,
         allow_remove_leader: true,
         merge_max_log_gap: 3,
@@ -263,6 +264,7 @@ fn test_serde_custom_tikv_config() {
         slow_trend_unsensitive_cause: 10.0,
         slow_trend_unsensitive_result: 0.5,
         enable_v2_compatible_learner: false,
+        unsafe_disable_check_quorum: false,
     };
     value.pd = PdConfig::new(vec!["example.com:443".to_owned()]);
     let titan_cf_config = TitanCfConfig {
@@ -378,6 +380,8 @@ fn test_serde_custom_tikv_config() {
             format_version: 5,
             checksum: ChecksumType::XXH3,
             max_compactions: 3,
+            ttl: Some(ReadableDuration::days(10)),
+            periodic_compaction_seconds: Some(ReadableDuration::days(10)),
         },
         writecf: WriteCfConfig {
             block_size: ReadableSize::kb(12),
@@ -447,6 +451,8 @@ fn test_serde_custom_tikv_config() {
             format_version: 5,
             checksum: ChecksumType::XXH3,
             max_compactions: 3,
+            ttl: Some(ReadableDuration::days(10)),
+            periodic_compaction_seconds: Some(ReadableDuration::days(10)),
         },
         lockcf: LockCfConfig {
             block_size: ReadableSize::kb(12),
@@ -516,6 +522,8 @@ fn test_serde_custom_tikv_config() {
             format_version: 5,
             checksum: ChecksumType::XXH3,
             max_compactions: 3,
+            ttl: Some(ReadableDuration::days(10)),
+            periodic_compaction_seconds: Some(ReadableDuration::days(10)),
         },
         raftcf: RaftCfConfig {
             block_size: ReadableSize::kb(12),
@@ -585,6 +593,8 @@ fn test_serde_custom_tikv_config() {
             format_version: 5,
             checksum: ChecksumType::XXH3,
             max_compactions: 3,
+            ttl: Some(ReadableDuration::days(10)),
+            periodic_compaction_seconds: Some(ReadableDuration::days(10)),
         },
         titan: titan_db_config.clone(),
     };
@@ -669,6 +679,8 @@ fn test_serde_custom_tikv_config() {
             format_version: 5,
             checksum: ChecksumType::XXH3,
             max_compactions: 3,
+            ttl: None,
+            periodic_compaction_seconds: None,
         },
         titan: titan_db_config,
     };
@@ -786,6 +798,7 @@ fn test_serde_custom_tikv_config() {
         initial_scan_pending_memory_quota: ReadableSize::kb(2),
         initial_scan_rate_limit: ReadableSize::mb(3),
         min_ts_interval: ReadableDuration::secs(2),
+        ..Default::default()
     };
     value.import = ImportConfig {
         num_threads: 123,
@@ -814,6 +827,7 @@ fn test_serde_custom_tikv_config() {
         incremental_scan_threads: 3,
         incremental_scan_concurrency: 4,
         incremental_scan_speed_limit: ReadableSize(7),
+        incremental_fetch_speed_limit: ReadableSize(8),
         incremental_scan_ts_filter_ratio: 0.7,
         tso_worker_threads: 2,
         old_value_cache_memory_quota: ReadableSize::mb(14),
