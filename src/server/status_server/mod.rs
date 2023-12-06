@@ -651,20 +651,20 @@ where
                             (Method::GET, "/status") => Ok(Response::default()),
                             (Method::GET, "/debug/pprof/heap_list") => {
                                 return Ok(make_response(
-                                    StatusCode::NOT_IMPLEMENTED,
-                                    "deprecated",
+                                    StatusCode::NOT_FOUND,
+                                    "Deprecated, heap profiling is always enabled by default, just use /debug/pprof/heap to get the heap profile when needed",
                                 ));
                             }
                             (Method::GET, "/debug/pprof/heap_activate") => {
                                 return Ok(make_response(
-                                    StatusCode::NOT_IMPLEMENTED,
-                                    "deprecated",
+                                    StatusCode::NOT_FOUND,
+                                    "Deprecated, use config `memory.enable_heap_profiling` to toggle",
                                 ));
                             }
                             (Method::GET, "/debug/pprof/heap_deactivate") => {
                                 return Ok(make_response(
-                                    StatusCode::NOT_IMPLEMENTED,
-                                    "deprecated",
+                                    StatusCode::NOT_FOUND,
+                                    "Deprecated, use config `memory.enable_heap_profiling` to toggle",
                                 ));
                             }
                             (Method::GET, "/debug/pprof/heap") => {
