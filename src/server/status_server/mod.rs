@@ -6,7 +6,6 @@ use std::{
     env::args,
     error::Error as StdError,
     net::SocketAddr,
-    path::PathBuf,
     pin::Pin,
     str::{self, FromStr},
     sync::Arc,
@@ -18,7 +17,7 @@ use async_stream::stream;
 use collections::HashMap;
 use flate2::{write::GzEncoder, Compression};
 use futures::{
-    compat::{Compat01As03, Stream01CompatExt},
+    compat::Compat01As03,
     future::{ok, poll_fn},
     prelude::*,
 };
@@ -40,7 +39,6 @@ use openssl::{
     x509::X509,
 };
 use pin_project::pin_project;
-pub use profile::HEAP_PROFILE_ACTIVE;
 use profile::*;
 use prometheus::TEXT_FORMAT;
 use regex::Regex;
@@ -57,7 +55,7 @@ use tikv_util::{
 };
 use tokio::{
     io::{AsyncRead, AsyncWrite},
-    runtime::{Builder, Handle, Runtime},
+    runtime::{Builder, Runtime},
     sync::oneshot::{self, Receiver, Sender},
 };
 use tokio_openssl::SslStream;
@@ -91,7 +89,6 @@ pub struct StatusServer<R> {
     cfg_controller: ConfigController,
     router: R,
     security_config: Arc<SecurityConfig>,
-    store_path: PathBuf,
     resource_manager: Option<Arc<ResourceGroupManager>>,
     grpc_service_mgr: GrpcServiceManager,
 }
@@ -105,7 +102,6 @@ where
         cfg_controller: ConfigController,
         security_config: Arc<SecurityConfig>,
         router: R,
-        store_path: PathBuf,
         resource_manager: Option<Arc<ResourceGroupManager>>,
         grpc_service_mgr: GrpcServiceManager,
     ) -> Result<Self> {
@@ -128,80 +124,9 @@ where
             cfg_controller,
             router,
             security_config,
-            store_path,
             resource_manager,
             grpc_service_mgr,
         })
-    }
-
-    fn list_heap_prof(_req: Request<Body>) -> hyper::Result<Response<Body>> {
-        let profiles = match list_heap_profiles() {
-            Ok(s) => s,
-            Err(e) => return Ok(make_response(StatusCode::INTERNAL_SERVER_ERROR, e)),
-        };
-
-        let text = profiles
-            .into_iter()
-            .map(|(f, ct)| format!("{}\t\t{}", f, ct))
-            .collect::<Vec<_>>()
-            .join("\n")
-            .into_bytes();
-
-        let response = Response::builder()
-            .header("Content-Type", mime::TEXT_PLAIN.to_string())
-            .header("Content-Length", text.len())
-            .body(text.into())
-            .unwrap();
-        Ok(response)
-    }
-
-    async fn activate_heap_prof(
-        req: Request<Body>,
-        store_path: PathBuf,
-    ) -> hyper::Result<Response<Body>> {
-        let query = req.uri().query().unwrap_or("");
-        let query_pairs: HashMap<_, _> = url::form_urlencoded::parse(query.as_bytes()).collect();
-
-        let interval: u64 = match query_pairs.get("interval") {
-            Some(val) => match val.parse() {
-                Ok(val) => val,
-                Err(err) => return Ok(make_response(StatusCode::BAD_REQUEST, err.to_string())),
-            },
-            None => 0,
-        };
-
-        let period = if interval == 0 {
-            None
-        } else {
-            let interval = Duration::from_secs(interval);
-            Some(
-                GLOBAL_TIMER_HANDLE
-                    .interval(Instant::now() + interval, interval)
-                    .compat()
-                    .map_ok(|_| ())
-                    .map_err(|_| TIMER_CANCELED.to_owned())
-                    .into_stream(),
-            )
-        };
-        let (tx, rx) = oneshot::channel();
-        let callback = move || tx.send(()).unwrap_or_default();
-        let res = Handle::current().spawn(activate_heap_profile(period, store_path, callback));
-        if rx.await.is_ok() {
-            let msg = "activate heap profile success";
-            Ok(make_response(StatusCode::OK, msg))
-        } else {
-            let errmsg = format!("{:?}", res.await);
-            Ok(make_response(StatusCode::INTERNAL_SERVER_ERROR, errmsg))
-        }
-    }
-
-    fn deactivate_heap_prof(_req: Request<Body>) -> hyper::Result<Response<Body>> {
-        let body = if deactivate_heap_profile() {
-            "deactivate heap profile success"
-        } else {
-            "no heap profile is running"
-        };
-        Ok(make_response(StatusCode::OK, body))
     }
 
     async fn dump_heap_prof_to_resp(req: Request<Body>) -> hyper::Result<Response<Body>> {
@@ -210,38 +135,16 @@ where
 
         let use_jeprof = query_pairs.get("jeprof").map(|x| x.as_ref()) == Some("true");
 
-        let result = if let Some(name) = query_pairs.get("name") {
-            let re = Regex::new(HEAP_PROFILE_REGEX).unwrap();
-            if !re.is_match(name) {
-                let errmsg = format!("heap profile name {} is invalid", name);
-                return Ok(make_response(StatusCode::BAD_REQUEST, errmsg));
-            }
-            let profiles = match list_heap_profiles() {
-                Ok(s) => s,
+        let result = {
+            let path = match dump_one_heap_profile() {
+                Ok(path) => path,
                 Err(e) => return Ok(make_response(StatusCode::INTERNAL_SERVER_ERROR, e)),
             };
-            if profiles.iter().any(|(f, _)| f == name) {
-                let dir = match heap_profiles_dir() {
-                    Some(path) => path,
-                    None => {
-                        return Ok(make_response(
-                            StatusCode::INTERNAL_SERVER_ERROR,
-                            "heap profile is not active",
-                        ));
-                    }
-                };
-                let path = dir.join(name.as_ref());
-                if use_jeprof {
-                    jeprof_heap_profile(path.to_str().unwrap())
-                } else {
-                    read_file(path.to_str().unwrap())
-                }
+            if use_jeprof {
+                jeprof_heap_profile(path.to_str().unwrap())
             } else {
-                let errmsg = format!("heap profile {} not found", name);
-                return Ok(make_response(StatusCode::BAD_REQUEST, errmsg));
+                read_file(path.to_str().unwrap())
             }
-        } else {
-            dump_one_heap_profile()
         };
 
         match result {
@@ -692,7 +595,6 @@ where
         let security_config = self.security_config.clone();
         let cfg_controller = self.cfg_controller.clone();
         let router = self.router.clone();
-        let store_path = self.store_path.clone();
         let resource_manager = self.resource_manager.clone();
         let grpc_service_mgr = self.grpc_service_mgr.clone();
         // Start to serve.
@@ -701,7 +603,6 @@ where
             let security_config = security_config.clone();
             let cfg_controller = cfg_controller.clone();
             let router = router.clone();
-            let store_path = store_path.clone();
             let resource_manager = resource_manager.clone();
             let grpc_service_mgr = grpc_service_mgr.clone();
             async move {
@@ -711,7 +612,6 @@ where
                     let security_config = security_config.clone();
                     let cfg_controller = cfg_controller.clone();
                     let router = router.clone();
-                    let store_path = store_path.clone();
                     let resource_manager = resource_manager.clone();
                     let grpc_service_mgr = grpc_service_mgr.clone();
                     async move {
@@ -749,12 +649,23 @@ where
                                 Self::handle_get_metrics(req, &cfg_controller)
                             }
                             (Method::GET, "/status") => Ok(Response::default()),
-                            (Method::GET, "/debug/pprof/heap_list") => Self::list_heap_prof(req),
+                            (Method::GET, "/debug/pprof/heap_list") => {
+                                return Ok(make_response(
+                                    StatusCode::NOT_IMPLEMENTED,
+                                    "deprecated",
+                                ));
+                            }
                             (Method::GET, "/debug/pprof/heap_activate") => {
-                                Self::activate_heap_prof(req, store_path).await
+                                return Ok(make_response(
+                                    StatusCode::NOT_IMPLEMENTED,
+                                    "deprecated",
+                                ));
                             }
                             (Method::GET, "/debug/pprof/heap_deactivate") => {
-                                Self::deactivate_heap_prof(req)
+                                return Ok(make_response(
+                                    StatusCode::NOT_IMPLEMENTED,
+                                    "deprecated",
+                                ));
                             }
                             (Method::GET, "/debug/pprof/heap") => {
                                 Self::dump_heap_prof_to_resp(req).await
