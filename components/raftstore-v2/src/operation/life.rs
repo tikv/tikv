@@ -45,6 +45,7 @@ use raftstore::{
             life::{build_peer_destroyed_report, forward_destroy_to_source_peer},
             Proposal,
         },
+        local_metrics::IoType as InspectIoType,
         metrics::RAFT_PEER_PENDING_DURATION,
         util, DiskFullPeers, Transport, WriteTask,
     },
@@ -579,9 +580,9 @@ impl Store {
     {
         // Record the last statistics of commit-log-duration and store-write-duration.
         inspector.record_store_wait(start_ts.saturating_elapsed());
-        inspector.record_store_commit(ctx.raft_metrics.stat_commit_log.avg());
-        // Reset the stat_commit_log and wait it to be refreshed in the next tick.
-        ctx.raft_metrics.stat_commit_log.reset();
+        inspector.record_store_commit(ctx.raft_metrics.health_stats.avg(InspectIoType::Network));
+        // Reset the health_stats and wait it to be refreshed in the next tick.
+        ctx.raft_metrics.health_stats.reset();
         ctx.pending_latency_inspect.push(inspector);
     }
 }

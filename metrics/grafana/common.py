@@ -940,6 +940,9 @@ def heatmap_panel(
         # the resolution is too high.
         # See: https://grafana.com/blog/2020/06/23/how-to-visualize-prometheus-histograms-in-grafana/
         maxDataPoints=512,
+        # Fix grafana heatmap migration panic if options is null.
+        # See: https://github.com/grafana/grafana/blob/v9.5.14/public/app/plugins/panel/heatmap/migrations.ts#L17
+        options={},
     )
 
 
@@ -1081,6 +1084,7 @@ def heatmap_panel_graph_panel_histogram_quantile_pairs(
             description=graph_description,
             metric=f"{metric}",
             yaxes=yaxes(left_format=yaxis_format),
+            label_selectors=label_selectors,
             by_labels=graph_by_labels,
             hide_count=True,
         ),
