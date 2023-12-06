@@ -1563,13 +1563,11 @@ mod tests {
     #[test]
     #[ignore]
     fn test_pprof_heap_service() {
-        let temp_dir = tempfile::TempDir::new().unwrap();
         let mut status_server = StatusServer::new(
             1,
             ConfigController::default(),
             Arc::new(SecurityConfig::default()),
             MockRouter,
-            temp_dir.path().to_path_buf(),
             None,
             GrpcServiceManager::dummy(),
         )
