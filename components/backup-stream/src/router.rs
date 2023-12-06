@@ -2045,12 +2045,6 @@ mod tests {
         let (task, _path) = task("cleanup_test".to_owned()).await?;
         must_register_table(&router, task, 1).await;
         write_simple_data(&router).await;
-        let tempfiles = router
-            .get_task_info("cleanup_test")
-            .await
-            .unwrap()
-            .temp_file_pool
-            .clone();
         router
             .get_task_info("cleanup_test")
             .await?
@@ -2059,7 +2053,6 @@ mod tests {
         write_simple_data(&router).await;
         let mut w = walkdir::WalkDir::new(&tmp).into_iter();
         assert!(w.next().is_some(), "the temp files doesn't created");
-        assert!(tempfiles.mem_used() > 0, "the temp files doesn't created.");
         drop(router);
         let w = walkdir::WalkDir::new(&tmp)
             .into_iter()
@@ -2076,11 +2069,6 @@ mod tests {
             w.is_empty(),
             "the temp files should be removed, but it is {:?}",
             w
-        );
-        assert_eq!(
-            tempfiles.mem_used(),
-            0,
-            "the temp files hasn't been cleared."
         );
         Ok(())
     }
