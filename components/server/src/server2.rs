@@ -1296,7 +1296,6 @@ where
                 self.cfg_controller.clone().unwrap(),
                 Arc::new(self.core.config.security.clone()),
                 self.engines.as_ref().unwrap().engine.raft_extension(),
-                self.core.store_path.clone(),
                 self.resource_manager.clone(),
                 self.grpc_service_mgr.clone(),
             ) {
