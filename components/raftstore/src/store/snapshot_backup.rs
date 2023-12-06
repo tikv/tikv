@@ -141,6 +141,12 @@ impl RejectIngestAndAdmin {
         info!("registered reject ingest and admin coprocessor to TiKV.");
     }
 
+    pub fn remained_secs(&self) -> u64 {
+        self.until
+            .load(Ordering::Acquire)
+            .saturating_sub(epoch_second_coarse())
+    }
+
     pub fn allowed(&self) -> bool {
         let mut v = self.until.load(Ordering::Acquire);
         if v == 0 {
@@ -267,20 +273,37 @@ impl AdminObserver for Arc<RejectIngestAndAdmin> {
             // `wait_pending_admin` will wait until the merge get finished.
             // If we reject them, they won't be able to see the merge get finished.
             // And will finally time out.
-            AdminCmdType::PrepareMerge
-            // NOTE: For now, we cannot reject conf change by coprocessors.
-            // the consistency will be kept by disabling the schedulers in PD.
-            // And wait all conf changes finish by wait pending admin commands.
+            AdminCmdType::PrepareMerge |
+            AdminCmdType::ChangePeer |
+            AdminCmdType::ChangePeerV2
         ) {
             metrics::SNAP_BR_SUSPEND_COMMAND_TYPE
                 .with_label_values(&[&format!("{:?}", admin.get_cmd_type())])
                 .inc();
             return Err(box_err!(
-                "rejecting proposing admin commands while preparing snapshot backup: rejected {:?}",
-                admin
+                "rejecting proposing admin commands while preparing snapshot backup: rejected {:?} retry after {} seconds",
+                admin,
+                self.remained_secs()
             ));
         }
         Ok(())
+    }
+
+    fn pre_transfer_leader(
+        &self,
+        _ctx: &mut crate::coprocessor::ObserverContext<'_>,
+        _tr: &kvproto::raft_cmdpb::TransferLeaderRequest,
+    ) -> crate::coprocessor::Result<()> {
+        if self.allowed() {
+            return Ok(());
+        }
+        metrics::SNAP_BR_SUSPEND_COMMAND_TYPE
+            .with_label_values(&["TransferLeader"])
+            .inc();
+        return Err(box_err!(
+            "rejecting transfer leader while preparing snapshot backup: retry after {} seconds",
+            self.remained_secs()
+        ));
     }
 }
 

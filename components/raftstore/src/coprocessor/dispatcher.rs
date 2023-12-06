@@ -672,6 +672,10 @@ impl<E: KvEngine> CoprocessorHost<E> {
         );
     }
 
+    pub fn pre_transfer_leader(&self, r: &Region, tr: &TransferLeaderRequest) -> Result<()> {
+        try_loop_ob!(r, &self.registry.admin_observers, pre_transfer_leader, tr)
+    }
+
     pub fn post_apply_snapshot(
         &self,
         region: &Region,
