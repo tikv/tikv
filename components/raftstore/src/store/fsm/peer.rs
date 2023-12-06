@@ -964,7 +964,9 @@ where
         let term = self.fsm.peer.raft_group.raft.term;
         if let Some(e) = &req.expected_epoch {
             if let Err(err) = compare_region_epoch(e, self.region(), true, true, true) {
-                warn!("epoch not match for wait apply, aborting."; "err" => %err);
+                warn!("epoch not match for wait apply, aborting."; "err" => %err, 
+                    "peer" => self.fsm.peer.peer_id(), 
+                    "region" => self.fsm.peer.region().get_id());
                 let mut pberr = errorpb::Error::from(err);
                 req.syncer
                     .abort(AbortReason::EpochNotMatch(pberr.take_epoch_not_match()));

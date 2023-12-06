@@ -23,7 +23,6 @@ fn test_basic() {
 }
 
 #[test]
-
 fn test_wait_apply() {
     test_util::init_log_for_test();
     let mut suite = Suite::new(3);

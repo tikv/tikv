@@ -1,3 +1,4 @@
+// Copyright 2023 TiKV Project Authors. Licensed under Apache-2.0.
 //! This module contains things about disk snapshot.
 
 use std::{
