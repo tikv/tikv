@@ -377,7 +377,7 @@ fn to_case(case: usize, ch: i32) -> i32 {
             lo = m + 1;
         }
     }
-    return ch;
+    ch
 }
 
 pub fn unicode_to_upper(ch: char) -> Option<char> {
@@ -386,9 +386,10 @@ pub fn unicode_to_upper(ch: char) -> Option<char> {
         if 'a' as i32 <= r && r <= 'z' as i32 {
             r -= ('a' as i32) - ('A' as i32);
         }
-        return char::from_u32(r as u32);
+        char::from_u32(r as u32)
+    } else {
+        char::from_u32(to_case(UPPER_CASE, r) as u32)
     }
-    return char::from_u32(to_case(UPPER_CASE, r) as u32);
 }
 
 pub fn unicode_to_lower(ch: char) -> Option<char> {
@@ -397,9 +398,10 @@ pub fn unicode_to_lower(ch: char) -> Option<char> {
         if 'A' as i32 <= r && r <= 'Z' as i32 {
             r += ('a' as i32) - ('A' as i32);
         }
-        return char::from_u32(r as u32);
+        char::from_u32(r as u32)
+    } else {
+        char::from_u32(to_case(LOWER_CASE, r) as u32)
     }
-    return char::from_u32(to_case(LOWER_CASE, r) as u32);
 }
 
 pub fn unicode_to_title(ch: char) -> Option<char> {
@@ -408,9 +410,10 @@ pub fn unicode_to_title(ch: char) -> Option<char> {
         if 'a' as i32 <= r && r <= 'z' as i32 {
             r -= ('a' as i32) - ('A' as i32);
         }
-        return char::from_u32(r as u32);
+        char::from_u32(r as u32)
+    } else {
+        char::from_u32(to_case(TITLE_CASE, r) as u32)
     }
-    return char::from_u32(to_case(TITLE_CASE, r) as u32);
 }
 
 #[cfg(test)]
