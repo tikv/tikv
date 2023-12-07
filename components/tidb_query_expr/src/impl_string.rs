@@ -2925,10 +2925,26 @@ mod tests {
     fn test_gbk_lower_upper() {
         // Test GBK string case
         let cases = vec![
-            (ScalarFuncSig::LowerUtf8, "àáèéêìíòóùúüāēěīńňōūǎǐǒǔǖǘǚǜⅪⅫ".as_bytes().to_vec(), "àáèéêìíòóùúüāēěīńňōūǎǐǒǔǖǘǚǜⅪⅫ".as_bytes().to_vec()),
-            (ScalarFuncSig::UpperUtf8, "àáèéêìíòóùúüāēěīńňōūǎǐǒǔǖǘǚǜⅪⅫ".as_bytes().to_vec(), "àáèéêìíòóùúüāēěīńňōūǎǐǒǔǖǘǚǜⅪⅫ".as_bytes().to_vec()),
-            (ScalarFuncSig::LowerUtf8, "İİIIÅI".as_bytes().to_vec(), "iiiiåi".as_bytes().to_vec()),
-            (ScalarFuncSig::UpperUtf8, "ßßåı".as_bytes().to_vec(), "ßßÅI".as_bytes().to_vec()),
+            (
+                ScalarFuncSig::LowerUtf8,
+                "àáèéêìíòóùúüāēěīńňōūǎǐǒǔǖǘǚǜⅪⅫ".as_bytes().to_vec(),
+                "àáèéêìíòóùúüāēěīńňōūǎǐǒǔǖǘǚǜⅪⅫ".as_bytes().to_vec(),
+            ),
+            (
+                ScalarFuncSig::UpperUtf8,
+                "àáèéêìíòóùúüāēěīńňōūǎǐǒǔǖǘǚǜⅪⅫ".as_bytes().to_vec(),
+                "àáèéêìíòóùúüāēěīńňōūǎǐǒǔǖǘǚǜⅪⅫ".as_bytes().to_vec(),
+            ),
+            (
+                ScalarFuncSig::LowerUtf8,
+                "İİIIÅI".as_bytes().to_vec(),
+                "iiiiåi".as_bytes().to_vec(),
+            ),
+            (
+                ScalarFuncSig::UpperUtf8,
+                "ßßåı".as_bytes().to_vec(),
+                "ßßÅI".as_bytes().to_vec(),
+            ),
         ];
         for (s, input, output) in cases {
             let result = RpnFnScalarEvaluator::new()
@@ -2941,12 +2957,8 @@ mod tests {
                 )
                 .evaluate(s)
                 .unwrap();
-            assert_eq!(
-                result,
-                Some(output),
-            );
+            assert_eq!(result, Some(output),);
         }
-
     }
 
     #[test]

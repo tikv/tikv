@@ -2,15 +2,15 @@
 
 mod ascii;
 mod gbk;
-mod utf8;
 mod unicode_letter;
+mod utf8;
 
 use std::str;
 
 pub use ascii::*;
 pub use gbk::*;
-pub use utf8::*;
 pub use unicode_letter::*;
+pub use utf8::*;
 
 use super::Encoding;
 use crate::codec::{

@@ -1,7 +1,7 @@
 // Copyright 2023 TiKV Project Authors. Licensed under Apache-2.0.
 
-/// In order to keep the same behavoir as TiDB that uses go standard library to implement lower and upper functions.
-/// Below code is ported from https://github.com/golang/go/blob/go1.21.3/src/unicode/letter.go.
+/// In order to keep the same behavoir as TiDB that uses go standard library to
+/// implement lower and upper functions. Below code is ported from https://github.com/golang/go/blob/go1.21.3/src/unicode/letter.go.
 const UPPER_CASE: usize = 0;
 const LOWER_CASE: usize = 1;
 const TITLE_CASE: usize = 2;
@@ -344,8 +344,7 @@ static CASE_TABLE: &[(i32, i32, [i32; MAX_CASE])] = &[
     (0x1E922, 0x1E943, [-34, 0, -34]),
 ];
 
-fn to_case(case: usize, ch: i32) -> i32
-{
+fn to_case(case: usize, ch: i32) -> i32 {
     if case >= MAX_CASE {
         return REPLACEMENT_CHAR;
     }
@@ -360,8 +359,8 @@ fn to_case(case: usize, ch: i32) -> i32
             if delta > MAX_RUNE {
                 // In an Upper-Lower sequence, which always starts with
                 // an UpperCase letter, the real deltas always look like:
-                //	{0, 1, 0}    UpperCase (Lower is next)
-                //	{-1, 0, -1}  LowerCase (Upper, Title are previous)
+                // 	{0, 1, 0}    UpperCase (Lower is next)
+                // 	{-1, 0, -1}  LowerCase (Upper, Title are previous)
                 // The characters at even offsets from the beginning of the
                 // sequence are upper case; the ones at odd offsets are lower.
                 // The correct mapping can be done by clearing or setting the low
@@ -385,7 +384,7 @@ pub fn unicode_to_upper(ch: char) -> Option<char> {
     let mut r = ch as i32;
     if r < MAX_ASCII {
         if 'a' as i32 <= r && r <= 'z' as i32 {
-            r -= ('a' as i32) - ('A' as i32);  
+            r -= ('a' as i32) - ('A' as i32);
         }
         return char::from_u32(r as u32);
     }
@@ -396,7 +395,7 @@ pub fn unicode_to_lower(ch: char) -> Option<char> {
     let mut r = ch as i32;
     if r < MAX_ASCII {
         if 'A' as i32 <= r && r <= 'Z' as i32 {
-            r += ('a' as i32) - ('A' as i32);  
+            r += ('a' as i32) - ('A' as i32);
         }
         return char::from_u32(r as u32);
     }
@@ -407,7 +406,7 @@ pub fn unicode_to_title(ch: char) -> Option<char> {
     let mut r = ch as i32;
     if r < MAX_ASCII {
         if 'a' as i32 <= r && r <= 'z' as i32 {
-            r -= ('a' as i32) - ('A' as i32);  
+            r -= ('a' as i32) - ('A' as i32);
         }
         return char::from_u32(r as u32);
     }
@@ -419,127 +418,129 @@ mod tests {
     use super::*;
 
     static CASE_TEST: &[(usize, u32, u32)] = &[
-	    // ASCII (special-cased so test carefully)
-	    (UPPER_CASE, '\n' as u32, '\n' as u32),
-	    (UPPER_CASE, 'a' as u32, 'A' as u32),
-	    (UPPER_CASE, 'A' as u32, 'A' as u32),
-	    (UPPER_CASE, '7' as u32, '7' as u32),
-	    (LOWER_CASE, '\n' as u32, '\n' as u32),
-	    (LOWER_CASE, 'a' as u32, 'a' as u32),
-	    (LOWER_CASE, 'A' as u32, 'a' as u32),
-	    (LOWER_CASE, '7' as u32, '7' as u32),
-	    (TITLE_CASE, '\n' as u32, '\n' as u32),
-	    (TITLE_CASE, 'a' as u32, 'A' as u32),
-	    (TITLE_CASE, 'A' as u32, 'A' as u32),
-	    (TITLE_CASE, '7' as u32, '7' as u32),
-
-	    // Latin-1: easy to read the tests!
-	    (UPPER_CASE, 0x80, 0x80),
-	    (UPPER_CASE, 'Å' as u32, 'Å' as u32),
-	    (UPPER_CASE, 'å' as u32, 'Å' as u32),
-	    (LOWER_CASE, 0x80, 0x80),
-	    (LOWER_CASE, 'Å' as u32, 'å' as u32),
-	    (LOWER_CASE, 'å' as u32, 'å' as u32),
-	    (TITLE_CASE, 0x80, 0x80),
-	    (TITLE_CASE, 'Å' as u32, 'Å' as u32),
-	    (TITLE_CASE, 'å' as u32, 'Å' as u32),
-
-	    // 0131;LATIN SMALL LETTER DOTLESS I;Ll;0;L;;;;;N;;;0049;;0049
+        // ASCII (special-cased so test carefully)
+        (UPPER_CASE, '\n' as u32, '\n' as u32),
+        (UPPER_CASE, 'a' as u32, 'A' as u32),
+        (UPPER_CASE, 'A' as u32, 'A' as u32),
+        (UPPER_CASE, '7' as u32, '7' as u32),
+        (LOWER_CASE, '\n' as u32, '\n' as u32),
+        (LOWER_CASE, 'a' as u32, 'a' as u32),
+        (LOWER_CASE, 'A' as u32, 'a' as u32),
+        (LOWER_CASE, '7' as u32, '7' as u32),
+        (TITLE_CASE, '\n' as u32, '\n' as u32),
+        (TITLE_CASE, 'a' as u32, 'A' as u32),
+        (TITLE_CASE, 'A' as u32, 'A' as u32),
+        (TITLE_CASE, '7' as u32, '7' as u32),
+        // Latin-1: easy to read the tests!
+        (UPPER_CASE, 0x80, 0x80),
+        (UPPER_CASE, 'Å' as u32, 'Å' as u32),
+        (UPPER_CASE, 'å' as u32, 'Å' as u32),
+        (LOWER_CASE, 0x80, 0x80),
+        (LOWER_CASE, 'Å' as u32, 'å' as u32),
+        (LOWER_CASE, 'å' as u32, 'å' as u32),
+        (TITLE_CASE, 0x80, 0x80),
+        (TITLE_CASE, 'Å' as u32, 'Å' as u32),
+        (TITLE_CASE, 'å' as u32, 'Å' as u32),
+        // 0131;LATIN SMALL LETTER DOTLESS I;Ll;0;L;;;;;N;;;0049;;0049
         (UPPER_CASE, 0x0130, 'İ' as u32),
         (LOWER_CASE, 0x0130, 'i' as u32),
-	    (UPPER_CASE, 0x0131, 'I' as u32),
-	    (LOWER_CASE, 0x0131, 0x0131),
-	    (TITLE_CASE, 0x0131, 'I' as u32),
-
-	    // 0133;LATIN SMALL LIGATURE IJ;Ll;0;L;<compat> 0069 006A;;;;N;LATIN SMALL LETTER I J;;0132;;0132
-	    (UPPER_CASE, 0x0133, 0x0132),
-	    (LOWER_CASE, 0x0133, 0x0133),
-	    (TITLE_CASE, 0x0133, 0x0132),
-
-	    // 212A;KELVIN SIGN;Lu;0;L;004B;;;;N;DEGREES KELVIN;;;006B;
-	    (UPPER_CASE, 0x212A, 0x212A),
-	    (LOWER_CASE, 0x212A, 'k' as u32),
-	    (TITLE_CASE, 0x212A, 0x212A),
-
-	    // From an UpperLower sequence
-	    // A640;CYRILLIC CAPITAL LETTER ZEMLYA;Lu;0;L;;;;;N;;;;A641;
-	    (UPPER_CASE, 0xA640, 0xA640),
-	    (LOWER_CASE, 0xA640, 0xA641),
-	    (TITLE_CASE, 0xA640, 0xA640),
-	    // A641;CYRILLIC SMALL LETTER ZEMLYA;Ll;0;L;;;;;N;;;A640;;A640
-	    (UPPER_CASE, 0xA641, 0xA640),
-	    (LOWER_CASE, 0xA641, 0xA641),
-	    (TITLE_CASE, 0xA641, 0xA640),
-	    // A64E;CYRILLIC CAPITAL LETTER NEUTRAL YER;Lu;0;L;;;;;N;;;;A64F;
-	    (UPPER_CASE, 0xA64E, 0xA64E),
-	    (LOWER_CASE, 0xA64E, 0xA64F),
-	    (TITLE_CASE, 0xA64E, 0xA64E),
-	    // A65F;CYRILLIC SMALL LETTER YN;Ll;0;L;;;;;N;;;A65E;;A65E
-	    (UPPER_CASE, 0xA65F, 0xA65E),
-	    (LOWER_CASE, 0xA65F, 0xA65F),
-	    (TITLE_CASE, 0xA65F, 0xA65E),
-
-	    // From another UpperLower sequence
-	    // 0139;LATIN CAPITAL LETTER L WITH ACUTE;Lu;0;L;004C 0301;;;;N;LATIN CAPITAL LETTER L ACUTE;;;013A;
-	    (UPPER_CASE, 0x0139, 0x0139),
-	    (LOWER_CASE, 0x0139, 0x013A),
-	    (TITLE_CASE, 0x0139, 0x0139),
-	    // 013F;LATIN CAPITAL LETTER L WITH MIDDLE DOT;Lu;0;L;<compat> 004C 00B7;;;;N;;;;0140;
-	    (UPPER_CASE, 0x013f, 0x013f),
-	    (LOWER_CASE, 0x013f, 0x0140),
-	    (TITLE_CASE, 0x013f, 0x013f),
-	    // 0148;LATIN SMALL LETTER N WITH CARON;Ll;0;L;006E 030C;;;;N;LATIN SMALL LETTER N HACEK;;0147;;0147
-	    (UPPER_CASE, 0x0148, 0x0147),
-	    (LOWER_CASE, 0x0148, 0x0148),
-	    (TITLE_CASE, 0x0148, 0x0147),
-
-	    // Lowercase lower than uppercase.
-	    // AB78;CHEROKEE SMALL LETTER GE;Ll;0;L;;;;;N;;;13A8;;13A8
-	    (UPPER_CASE, 0xab78, 0x13a8),
-	    (LOWER_CASE, 0xab78, 0xab78),
-	    (TITLE_CASE, 0xab78, 0x13a8),
-	    (UPPER_CASE, 0x13a8, 0x13a8),
-	    (LOWER_CASE, 0x13a8, 0xab78),
-	    (TITLE_CASE, 0x13a8, 0x13a8),
-
-	    // Last block in the 5.1.0 table
-	    // 10400;DESERET CAPITAL LETTER LONG I;Lu;0;L;;;;;N;;;;10428;
-	    (UPPER_CASE, 0x10400, 0x10400),
-	    (LOWER_CASE, 0x10400, 0x10428),
-	    (TITLE_CASE, 0x10400, 0x10400),
-	    // 10427;DESERET CAPITAL LETTER EW;Lu;0;L;;;;;N;;;;1044F;
-	    (UPPER_CASE, 0x10427, 0x10427),
-	    (LOWER_CASE, 0x10427, 0x1044F),
-	    (TITLE_CASE, 0x10427, 0x10427),
-	    // 10428;DESERET SMALL LETTER LONG I;Ll;0;L;;;;;N;;;10400;;10400
-	    (UPPER_CASE, 0x10428, 0x10400),
-	    (LOWER_CASE, 0x10428, 0x10428),
-	    (TITLE_CASE, 0x10428, 0x10400),
-	    // 1044F;DESERET SMALL LETTER EW;Ll;0;L;;;;;N;;;10427;;10427
-	    (UPPER_CASE, 0x1044F, 0x10427),
-	    (LOWER_CASE, 0x1044F, 0x1044F),
-	    (TITLE_CASE, 0x1044F, 0x10427),
-
-	    // First one not in the 5.1.0 table
-	    // 10450;SHAVIAN LETTER PEEP;Lo;0;L;;;;;N;;;;;
-	    (UPPER_CASE, 0x10450, 0x10450),
-	    (LOWER_CASE, 0x10450, 0x10450),
-	    (TITLE_CASE, 0x10450, 0x10450),
-
-	    // Non-letters with case.
-	    (LOWER_CASE, 0x2161, 0x2171),
-	    (UPPER_CASE, 0x0345, 0x0399),
+        (UPPER_CASE, 0x0131, 'I' as u32),
+        (LOWER_CASE, 0x0131, 0x0131),
+        (TITLE_CASE, 0x0131, 'I' as u32),
+        // 0133;LATIN SMALL LIGATURE IJ;Ll;0;L;<compat> 0069 006A;;;;N;LATIN SMALL LETTER I
+        // J;;0132;;0132
+        (UPPER_CASE, 0x0133, 0x0132),
+        (LOWER_CASE, 0x0133, 0x0133),
+        (TITLE_CASE, 0x0133, 0x0132),
+        // 212A;KELVIN SIGN;Lu;0;L;004B;;;;N;DEGREES KELVIN;;;006B;
+        (UPPER_CASE, 0x212A, 0x212A),
+        (LOWER_CASE, 0x212A, 'k' as u32),
+        (TITLE_CASE, 0x212A, 0x212A),
+        // From an UpperLower sequence
+        // A640;CYRILLIC CAPITAL LETTER ZEMLYA;Lu;0;L;;;;;N;;;;A641;
+        (UPPER_CASE, 0xA640, 0xA640),
+        (LOWER_CASE, 0xA640, 0xA641),
+        (TITLE_CASE, 0xA640, 0xA640),
+        // A641;CYRILLIC SMALL LETTER ZEMLYA;Ll;0;L;;;;;N;;;A640;;A640
+        (UPPER_CASE, 0xA641, 0xA640),
+        (LOWER_CASE, 0xA641, 0xA641),
+        (TITLE_CASE, 0xA641, 0xA640),
+        // A64E;CYRILLIC CAPITAL LETTER NEUTRAL YER;Lu;0;L;;;;;N;;;;A64F;
+        (UPPER_CASE, 0xA64E, 0xA64E),
+        (LOWER_CASE, 0xA64E, 0xA64F),
+        (TITLE_CASE, 0xA64E, 0xA64E),
+        // A65F;CYRILLIC SMALL LETTER YN;Ll;0;L;;;;;N;;;A65E;;A65E
+        (UPPER_CASE, 0xA65F, 0xA65E),
+        (LOWER_CASE, 0xA65F, 0xA65F),
+        (TITLE_CASE, 0xA65F, 0xA65E),
+        // From another UpperLower sequence
+        // 0139;LATIN CAPITAL LETTER L WITH ACUTE;Lu;0;L;004C 0301;;;;N;LATIN CAPITAL LETTER L
+        // ACUTE;;;013A;
+        (UPPER_CASE, 0x0139, 0x0139),
+        (LOWER_CASE, 0x0139, 0x013A),
+        (TITLE_CASE, 0x0139, 0x0139),
+        // 013F;LATIN CAPITAL LETTER L WITH MIDDLE DOT;Lu;0;L;<compat> 004C 00B7;;;;N;;;;0140;
+        (UPPER_CASE, 0x013f, 0x013f),
+        (LOWER_CASE, 0x013f, 0x0140),
+        (TITLE_CASE, 0x013f, 0x013f),
+        // 0148;LATIN SMALL LETTER N WITH CARON;Ll;0;L;006E 030C;;;;N;LATIN SMALL LETTER N
+        // HACEK;;0147;;0147
+        (UPPER_CASE, 0x0148, 0x0147),
+        (LOWER_CASE, 0x0148, 0x0148),
+        (TITLE_CASE, 0x0148, 0x0147),
+        // Lowercase lower than uppercase.
+        // AB78;CHEROKEE SMALL LETTER GE;Ll;0;L;;;;;N;;;13A8;;13A8
+        (UPPER_CASE, 0xab78, 0x13a8),
+        (LOWER_CASE, 0xab78, 0xab78),
+        (TITLE_CASE, 0xab78, 0x13a8),
+        (UPPER_CASE, 0x13a8, 0x13a8),
+        (LOWER_CASE, 0x13a8, 0xab78),
+        (TITLE_CASE, 0x13a8, 0x13a8),
+        // Last block in the 5.1.0 table
+        // 10400;DESERET CAPITAL LETTER LONG I;Lu;0;L;;;;;N;;;;10428;
+        (UPPER_CASE, 0x10400, 0x10400),
+        (LOWER_CASE, 0x10400, 0x10428),
+        (TITLE_CASE, 0x10400, 0x10400),
+        // 10427;DESERET CAPITAL LETTER EW;Lu;0;L;;;;;N;;;;1044F;
+        (UPPER_CASE, 0x10427, 0x10427),
+        (LOWER_CASE, 0x10427, 0x1044F),
+        (TITLE_CASE, 0x10427, 0x10427),
+        // 10428;DESERET SMALL LETTER LONG I;Ll;0;L;;;;;N;;;10400;;10400
+        (UPPER_CASE, 0x10428, 0x10400),
+        (LOWER_CASE, 0x10428, 0x10428),
+        (TITLE_CASE, 0x10428, 0x10400),
+        // 1044F;DESERET SMALL LETTER EW;Ll;0;L;;;;;N;;;10427;;10427
+        (UPPER_CASE, 0x1044F, 0x10427),
+        (LOWER_CASE, 0x1044F, 0x1044F),
+        (TITLE_CASE, 0x1044F, 0x10427),
+        // First one not in the 5.1.0 table
+        // 10450;SHAVIAN LETTER PEEP;Lo;0;L;;;;;N;;;;;
+        (UPPER_CASE, 0x10450, 0x10450),
+        (LOWER_CASE, 0x10450, 0x10450),
+        (TITLE_CASE, 0x10450, 0x10450),
+        // Non-letters with case.
+        (LOWER_CASE, 0x2161, 0x2171),
+        (UPPER_CASE, 0x0345, 0x0399),
     ];
 
     #[test]
     fn test_case() {
         for &(case, input, output) in CASE_TEST {
             if case == UPPER_CASE {
-                assert_eq!(unicode_to_upper(char::from_u32(input).unwrap()).unwrap() as u32, output); 
+                assert_eq!(
+                    unicode_to_upper(char::from_u32(input).unwrap()).unwrap() as u32,
+                    output
+                );
             } else if case == LOWER_CASE {
-                assert_eq!(unicode_to_lower(char::from_u32(input).unwrap()).unwrap() as u32, output); 
+                assert_eq!(
+                    unicode_to_lower(char::from_u32(input).unwrap()).unwrap() as u32,
+                    output
+                );
             } else {
-                assert_eq!(unicode_to_title(char::from_u32(input).unwrap()).unwrap() as u32, output); 
+                assert_eq!(
+                    unicode_to_title(char::from_u32(input).unwrap()).unwrap() as u32,
+                    output
+                );
             }
         }
     }
