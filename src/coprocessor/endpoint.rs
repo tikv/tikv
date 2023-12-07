@@ -2015,7 +2015,13 @@ mod tests {
     fn test_make_error_response() {
         let resp = make_error_response(Error::DeadlineExceeded);
         let region_err = resp.get_region_error();
-        assert_eq!(region_err.get_server_is_busy().reason, "deadline is exceeded".to_string());
-        assert_eq!(region_err.get_message(), "Coprocessor task terminated due to exceeding the deadline");
+        assert_eq!(
+            region_err.get_server_is_busy().reason,
+            "deadline is exceeded".to_string()
+        );
+        assert_eq!(
+            region_err.get_message(),
+            "Coprocessor task terminated due to exceeding the deadline"
+        );
     }
 }
