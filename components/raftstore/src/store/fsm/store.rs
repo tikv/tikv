@@ -90,7 +90,7 @@ use crate::{
             ApplyBatchSystem, ApplyNotifier, ApplyPollerBuilder, ApplyRes, ApplyRouter,
             ApplyTaskRes,
         },
-        local_metrics::{IoType as InspectIoType, RaftMetrics},
+        local_metrics::RaftMetrics,
         memory::*,
         metrics::*,
         peer_storage,
