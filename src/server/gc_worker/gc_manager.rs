@@ -449,6 +449,10 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine> GcMan
         // Records how many region we have GC-ed.
         let mut scheduled_regions = 0;
         let task_controller = Arc::new((Mutex::new(0), Condvar::new()));
+        // the task_controller is the <mutex,Condvar> combination to control the number
+        // of tasks The mutex is used for protecting the number of current
+        // tasks, while the condvar is used for notifying/get notified when the
+        // number of current tasks is changed.
         let (lock, cvar) = &*task_controller;
         let maybe_wait = |max_tasks| {
             let mut current_tasks: std::sync::MutexGuard<'_, usize> = lock.lock().unwrap();
