@@ -224,6 +224,14 @@ impl<T: Display + Send + 'static> LazyWorker<T> {
     pub fn remote(&self) -> Remote<yatp::task::future::TaskCell> {
         self.worker.remote.clone()
     }
+
+    pub fn pool_size(&self) -> usize {
+        self.worker.pool_size()
+    }
+
+    pub fn pool(&self) -> FuturePool {
+        self.worker.pool()
+    }
 }
 
 pub struct ReceiverWrapper<T: Display + Send> {
@@ -458,6 +466,14 @@ impl Worker {
 
     pub fn remote(&self) -> Remote<yatp::task::future::TaskCell> {
         self.remote.clone()
+    }
+
+    pub fn pool_size(&self) -> usize {
+        self.pool.get_pool_size()
+    }
+
+    pub fn pool(&self) -> FuturePool {
+        self.pool.clone()
     }
 
     fn start_impl<R: Runnable + 'static>(

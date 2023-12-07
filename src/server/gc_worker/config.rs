@@ -3,7 +3,10 @@
 use std::sync::Arc;
 
 use online_config::{ConfigChange, ConfigManager, OnlineConfig};
-use tikv_util::config::{ReadableSize, VersionTrack};
+use tikv_util::{
+    config::{ReadableSize, VersionTrack},
+    yatp_pool::FuturePool,
+};
 
 const DEFAULT_GC_RATIO_THRESHOLD: f64 = 1.1;
 pub const DEFAULT_GC_BATCH_KEYS: usize = 512;
@@ -52,7 +55,7 @@ impl GcConfig {
 }
 
 #[derive(Clone, Default)]
-pub struct GcWorkerConfigManager(pub Arc<VersionTrack<GcConfig>>);
+pub struct GcWorkerConfigManager(pub Arc<VersionTrack<GcConfig>>, pub Option<FuturePool>);
 
 impl ConfigManager for GcWorkerConfigManager {
     fn dispatch(
@@ -61,6 +64,16 @@ impl ConfigManager for GcWorkerConfigManager {
     ) -> std::result::Result<(), Box<dyn std::error::Error>> {
         {
             let change = change.clone();
+            if let Some(pool) = self.1.as_ref() {
+                if let Some(v) = change.get("thread_count") {
+                    let pool_size: usize = v.into();
+                    pool.scale_pool_size(pool_size);
+                    info!(
+                        "GC worker thread count is changed";
+                        "new_thread_count" => pool_size,
+                    );
+                }
+            }
             self.0
                 .update(move |cfg: &mut GcConfig| cfg.update(change))?;
         }
