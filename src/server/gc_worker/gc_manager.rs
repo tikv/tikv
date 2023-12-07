@@ -526,6 +526,7 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine> GcMan
         }
 
         // wait for all tasks finished
+        self.gc_manager_ctx.check_stopped()?;
         maybe_wait(0);
         info!("gc_worker: auto gc finishes"; "processed_regions" => scheduled_regions);
 
