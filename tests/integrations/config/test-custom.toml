@@ -655,7 +655,6 @@ old-value-cache-size = 0
 hibernate-regions-compatible = false
 incremental-scan-threads = 3
 incremental-scan-concurrency = 4
-incremental-scan-concurrency-limit = 5
 incremental-scan-speed-limit = 7
 incremental-fetch-speed-limit = 8
 incremental-scan-ts-filter-ratio = 0.7

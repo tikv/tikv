@@ -5,10 +5,7 @@ use std::{
     cmp::{Ord, Ordering as CmpOrdering, PartialOrd, Reverse},
     collections::BinaryHeap,
     fmt,
-    sync::{
-        atomic::{AtomicIsize, Ordering},
-        Arc, Mutex as StdMutex,
-    },
+    sync::{Arc, Mutex as StdMutex},
     time::Duration,
 };
 
@@ -338,8 +335,6 @@ pub struct Endpoint<T, E> {
 
     // Incremental scan
     workers: Runtime,
-    // The total number of scan tasks including running and pending.
-    scan_task_counter: Arc<AtomicIsize>,
     scan_concurrency_semaphore: Arc<Semaphore>,
     scan_speed_limiter: Limiter,
     fetch_speed_limiter: Limiter,
@@ -434,7 +429,6 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
             pd_client,
             tso_worker,
             timer: SteadyTimer::default(),
-            scan_task_counter: Arc::default(),
             scan_speed_limiter,
             fetch_speed_limiter,
             max_scan_batch_bytes,
@@ -665,27 +659,6 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
             return;
         }
 
-        let scan_task_counter = self.scan_task_counter.clone();
-        let scan_task_count = scan_task_counter.fetch_add(1, Ordering::Relaxed);
-        let release_scan_task_counter = tikv_util::DeferContext::new(move || {
-            scan_task_counter.fetch_sub(1, Ordering::Relaxed);
-        });
-        if scan_task_count + 1 > self.config.incremental_scan_concurrency_limit as isize {
-            debug!("cdc rejects registration, too many scan tasks";
-                "region_id" => region_id,
-                "conn_id" => ?conn_id,
-                "scan_task_count" => scan_task_count,
-                "incremental_scan_concurrency_limit" => self.config.incremental_scan_concurrency_limit,
-            );
-            // To avoid OOM (e.g., https://github.com/tikv/tikv/issues/16035),
-            // TiKV needs to reject and return error immediately.
-            //
-            // TODO: TiKV is supposed to return a "busy" error, but for the sake
-            // of compatibility, it returns a "region not found" error.
-            let _ = downstream.sink_region_not_found(region_id);
-            return;
-        }
-
         let txn_extra_op = match self.store_meta.lock().unwrap().readers.get(&region_id) {
             Some(reader) => reader.txn_extra_op.clone(),
             None => {
@@ -804,7 +777,6 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
                     init.deregister_downstream(e)
                 }
             }
-            drop(release_scan_task_counter);
         });
     }
 
@@ -1949,96 +1921,6 @@ mod tests {
             }
             other => panic!("unexpected task {:?}", other),
         }
-    }
-
-    #[test]
-    fn test_too_many_scan_tasks() {
-        let cfg = CdcConfig {
-            min_ts_interval: ReadableDuration(Duration::from_secs(60)),
-            incremental_scan_concurrency: 1,
-            incremental_scan_concurrency_limit: 1,
-            ..Default::default()
-        };
-        let mut suite = mock_endpoint(&cfg, None, ApiVersion::V1);
-
-        // Pause scan task runtime.
-        suite.endpoint.workers = Builder::new_multi_thread()
-            .worker_threads(1)
-            .build()
-            .unwrap();
-        let (pause_tx, pause_rx) = std::sync::mpsc::channel::<()>();
-        suite.endpoint.workers.spawn(async move {
-            let _ = pause_rx.recv();
-        });
-
-        suite.add_region(1, 100);
-        let quota = MemoryQuota::new(usize::MAX);
-        let (tx, mut rx) = channel::channel(1, quota);
-        let mut rx = rx.drain();
-
-        let conn = Conn::new(tx, String::new());
-        let conn_id = conn.get_id();
-        suite.run(Task::OpenConn { conn });
-
-        // Enable batch resolved ts in the test.
-        let version = FeatureGate::batch_resolved_ts();
-
-        let mut req_header = Header::default();
-        req_header.set_cluster_id(0);
-        let mut req = ChangeDataRequest::default();
-        req.set_region_id(1);
-        req.set_request_id(1);
-        let region_epoch = req.get_region_epoch().clone();
-        let downstream = Downstream::new(
-            "".to_string(),
-            region_epoch.clone(),
-            1,
-            conn_id,
-            ChangeDataRequestKvApi::TiDb,
-            false,
-        );
-        suite.run(Task::Register {
-            request: req.clone(),
-            downstream,
-            conn_id,
-            version: version.clone(),
-        });
-        assert_eq!(suite.endpoint.capture_regions.len(), 1);
-
-        // Test too many scan tasks error.
-        req.set_request_id(2);
-        let downstream = Downstream::new(
-            "".to_string(),
-            region_epoch,
-            2,
-            conn_id,
-            ChangeDataRequestKvApi::TiDb,
-            false,
-        );
-        suite.run(Task::Register {
-            request: req.clone(),
-            downstream,
-            conn_id,
-            version,
-        });
-        let cdc_event = channel::recv_timeout(&mut rx, Duration::from_millis(500))
-            .unwrap()
-            .unwrap();
-        if let CdcEvent::Event(mut e) = cdc_event.0 {
-            assert_eq!(e.region_id, 1);
-            assert_eq!(e.request_id, 2);
-            let event = e.event.take().unwrap();
-            match event {
-                Event_oneof_event::Error(err) => {
-                    assert!(err.has_region_not_found());
-                }
-                other => panic!("unknown event {:?}", other),
-            }
-        } else {
-            panic!("unknown cdc event {:?}", cdc_event);
-        }
-
-        drop(pause_tx);
     }
 
     #[test]
