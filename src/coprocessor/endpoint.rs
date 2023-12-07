@@ -832,7 +832,12 @@ macro_rules! make_error_response_common {
             }
             Error::DeadlineExceeded => {
                 $tag = "deadline_exceeded";
-                $resp.set_other_error($e.to_string());
+                let mut server_is_busy_err = errorpb::ServerIsBusy::default();
+                server_is_busy_err.set_reason(storage::errors::DEADLINE_EXCEEDED.to_owned());
+                let mut errorpb = errorpb::Error::default();
+                errorpb.set_message($e.to_string());
+                errorpb.set_server_is_busy(server_is_busy_err);
+                $resp.set_region_error(errorpb);
             }
             Error::MaxPendingTasksExceeded => {
                 $tag = "max_pending_tasks_exceeded";
@@ -2004,5 +2009,13 @@ mod tests {
 
         let resp = block_on(copr.parse_and_handle_unary_request(req, None));
         assert_eq!(resp.get_locked().get_key(), b"key");
+    }
+
+    #[test]
+    fn test_make_error_response() {
+        let resp = make_error_response(Error::DeadlineExceeded);
+        let region_err = resp.get_region_error();
+        assert_eq!(region_err.get_server_is_busy().reason, "deadline is exceeded".to_string());
+        assert_eq!(region_err.get_message(), "Coprocessor task terminated due to exceeding the deadline");
     }
 }

@@ -222,7 +222,7 @@ impl Display for ErrorHeaderKind {
 
 const SCHEDULER_IS_BUSY: &str = "scheduler is busy";
 const GC_WORKER_IS_BUSY: &str = "gc worker is busy";
-const DEADLINE_EXCEEDED: &str = "deadline is exceeded";
+pub const DEADLINE_EXCEEDED: &str = "deadline is exceeded";
 
 /// Get the `ErrorHeaderKind` enum that corresponds to the error in the protobuf
 /// message. Returns `ErrorHeaderKind::Other` if no match found.
