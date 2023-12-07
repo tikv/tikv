@@ -429,7 +429,7 @@ codegen-units = 4
 
 [profile.test]
 opt-level = 0
-debug = 0
+debug = 2
 codegen-units = 16
 lto = false
 incremental = true

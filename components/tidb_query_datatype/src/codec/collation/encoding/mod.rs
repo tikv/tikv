@@ -3,12 +3,14 @@
 mod ascii;
 mod gbk;
 mod utf8;
+mod unicode_letter;
 
 use std::str;
 
 pub use ascii::*;
 pub use gbk::*;
 pub use utf8::*;
+pub use unicode_letter::*;
 
 use super::Encoding;
 use crate::codec::{

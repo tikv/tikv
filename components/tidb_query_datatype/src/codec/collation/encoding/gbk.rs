@@ -29,10 +29,9 @@ impl Encoding for EncodingGbk {
     // GBK lower and upper follows https://dev.mysql.com/worklog/task/?id=4583.
     fn lower(s: &str, writer: BytesWriter) -> BytesGuard {
         let res = s.chars().flat_map(|ch| {
-            let c = ch as u32;
-            match c {
-                0x216A..=0x216B => char::from_u32(c),
-                _ => char::from_u32(c).unwrap().to_lowercase().next(),
+            match ch as u32 {
+                0x216A..=0x216B => Some(ch),
+                _ => unicode_to_lower(ch),
             }
         });
         writer.write_from_char_iter(res)
@@ -41,8 +40,7 @@ impl Encoding for EncodingGbk {
     #[inline]
     fn upper(s: &str, writer: BytesWriter) -> BytesGuard {
         let res = s.chars().flat_map(|ch| {
-            let c = ch as u32;
-            match c {
+            match ch as u32 {
                 0x00E0..=0x00E1
                 | 0x00E8..=0x00EA
                 | 0x00EC..=0x00ED
@@ -64,8 +62,8 @@ impl Encoding for EncodingGbk {
                 | 0x01D6
                 | 0x01D8
                 | 0x01DA
-                | 0x01DC => char::from_u32(c),
-                _ => char::from_u32(c).unwrap().to_uppercase().next(),
+                | 0x01DC => Some(ch),
+                _ => unicode_to_upper(ch),
             }
         });
         writer.write_from_char_iter(res)
