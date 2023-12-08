@@ -11,5 +11,7 @@ pub trait MemoryEngine:
 {
     type Snapshot: Snapshot;
 
-    fn snapshot(&self, region_id: u64, read_ts: u64) -> Self::Snapshot;
+    // If None is returned, the memory engine is currently not readable for this
+    // region or read_ts.
+    fn snapshot(&self, region_id: u64, read_ts: u64) -> Option<Self::Snapshot>;
 }
