@@ -287,6 +287,14 @@ impl From<Error> for errorpb::Error {
                 e.set_store_peer_id(store_peer_id);
                 errorpb.set_mismatch_peer_id(e);
             }
+            Error::DeadlineExceeded => {
+                // Following logic are same with
+                // tikv::storage::errors::make_deadline_exceeded_busy_error.
+                // Since use tikv::storage will have cyclic package dependency.
+                let mut server_is_busy_err = errorpb::ServerIsBusy::default();
+                server_is_busy_err.set_reason("deadline is exceeded".to_string());
+                errorpb.set_server_is_busy(server_is_busy_err);
+            }
             _ => {}
         };
 
@@ -348,5 +356,22 @@ impl ErrorCodeExt for Error {
 
             Error::Other(_) | Error::RegionNotRegistered { .. } => error_code::raftstore::UNKNOWN,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use kvproto::errorpb;
+
+    use crate::Error;
+
+    #[test]
+    fn test_deadline_exceeded_error() {
+        let err: errorpb::Error = Error::DeadlineExceeded.into();
+        assert_eq!(
+            err.get_server_is_busy().reason,
+            "deadline is exceeded".to_string()
+        );
+        assert_eq!(err.get_message(), "Deadline is exceeded");
     }
 }
