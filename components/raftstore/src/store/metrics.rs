@@ -262,13 +262,10 @@ make_static_metric! {
 
     pub label_enum SnapshotBrWaitApplyEventType {
         sent,
-
         accepted,
-
         term_not_match,
         epoch_not_match,
         duplicated,
-
         finished,
     }
 
