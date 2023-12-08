@@ -82,7 +82,6 @@ use crate::{
     server::{
         gc_worker::{GcConfig, RawCompactionFilterFactory, WriteCompactionFilterFactory},
         lock_manager::Config as PessimisticTxnConfig,
-        status_server::HEAP_PROFILE_ACTIVE,
         ttl::TtlCompactionFilterFactory,
         Config as ServerConfig, CONFIG_ROCKSDB_GAUGE,
     },
@@ -3272,12 +3271,10 @@ impl Default for MemoryConfig {
 impl MemoryConfig {
     pub fn init(&self) {
         if self.enable_heap_profiling {
-            let mut activate = HEAP_PROFILE_ACTIVE.lock().unwrap();
             if let Err(e) = tikv_alloc::activate_prof() {
                 error!("failed to enable heap profiling"; "err" => ?e);
                 return;
             }
-            *activate = Some(None);
             tikv_alloc::set_prof_sample(self.profiling_sample_per_bytes.0).unwrap();
         }
     }
@@ -3289,16 +3286,9 @@ impl ConfigManager for MemoryConfigManager {
     fn dispatch(&mut self, changes: ConfigChange) -> CfgResult<()> {
         if let Some(ConfigValue::Bool(enable)) = changes.get("enable_heap_profiling") {
             if *enable {
-                let mut activate = HEAP_PROFILE_ACTIVE.lock().unwrap();
-                // already enabled by HTTP API, do nothing
-                if activate.is_none() {
-                    tikv_alloc::activate_prof()?;
-                    *activate = Some(None);
-                }
+                tikv_alloc::activate_prof()?;
             } else {
-                let mut activate = HEAP_PROFILE_ACTIVE.lock().unwrap();
                 tikv_alloc::deactivate_prof()?;
-                *activate = None;
             }
         }
 
