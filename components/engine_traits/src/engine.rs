@@ -63,7 +63,13 @@ pub trait KvEngine:
     /// Some KvEngines need to do some transforms before apply data from
     /// snapshot. These procedures can be batched in background if there are
     /// more than one incoming snapshots, thus not blocking applying thread.
-    fn can_apply_snapshot(&self, _is_timeout: bool, _new_batch: bool, _region_id: u64) -> bool {
+    fn can_apply_snapshot(
+        &self,
+        _is_timeout: bool,
+        _new_batch: bool,
+        _region_id: u64,
+        _queue_size: usize,
+    ) -> bool {
         true
     }
 
