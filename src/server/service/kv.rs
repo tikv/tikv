@@ -43,8 +43,9 @@ use crate::{
     coprocessor::Endpoint,
     coprocessor_v2, forward_duplex, forward_unary, log_net_error,
     server::{
-        gc_worker::GcWorker, load_statistics::ThreadLoadPool, metrics::*, snap::Task as SnapTask,
-        Error, MetadataSourceStoreId, Proxy, Result as ServerResult,
+        gc_worker::GcWorker, load_statistics::ThreadLoadPool, metrics::*,
+        observe_read_index_duration, snap::Task as SnapTask, Error, MetadataSourceStoreId, Proxy,
+        Result as ServerResult,
     },
     storage::{
         self,
@@ -659,6 +660,8 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
         let source_store_id = Self::get_store_id_from_metadata(&ctx);
         let message_received =
             source_store_id.map(|x| MESSAGE_RECV_BY_STORE.with_label_values(&[&format!("{}", x)]));
+        let read_index_histogram = source_store_id
+            .map(|x| READ_INDEX_RECV_HEARTBEAT_DURATION.with_label_values(&[&format!("{}", x)]));
         info!(
             "batch_raft RPC is called, new gRPC stream established";
             "source_store_id" => ?source_store_id,
@@ -674,6 +677,9 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
                 let len = batch_msg.get_msgs().len();
                 RAFT_MESSAGE_RECV_COUNTER.inc_by(len as u64);
                 RAFT_MESSAGE_BATCH_SIZE.observe(len as f64);
+                if let Some(ref h) = read_index_histogram {
+                    observe_read_index_duration(h, &batch_msg, MessageType::MsgHeartbeatResponse)
+                }
                 let reject = needs_reject_raft_append(reject_messages_on_memory_ratio);
                 for msg in batch_msg.take_msgs().into_iter() {
                     if let Err(err @ RaftStoreError::StoreNotMatch { .. }) =

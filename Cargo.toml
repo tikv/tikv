@@ -174,7 +174,7 @@ toml = "0.5"
 tracker = { workspace = true }
 txn_types = { workspace = true }
 url = "2"
-uuid = { version = "0.8.1", features = ["serde", "v4"] }
+uuid = { version = "1.6.1", features = ["serde", "v4", "v7"] }
 walkdir = "2"
 yatp = { workspace = true }
 

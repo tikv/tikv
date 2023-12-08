@@ -440,6 +440,20 @@ lazy_static! {
         &["type"],
     )
     .unwrap();
+    pub static ref READ_INDEX_SEND_HEARTBEAT_DURATION: HistogramVec = register_histogram_vec!(
+        "tikv_server_read_index_send_heartbeat_duration_seconds",
+        "Duration of sending raft heartbeat with read index context",
+        &["store"],
+        exponential_buckets(0.002, 2.0, 18).unwrap()
+    )
+    .unwrap();
+    pub static ref READ_INDEX_RECV_HEARTBEAT_DURATION: HistogramVec = register_histogram_vec!(
+        "tikv_server_read_index_recv_heartbeat_duration_seconds",
+        "Duration of receiving raft heartbeat with read index context",
+        &["store"],
+        exponential_buckets(0.005, 2.0, 18).unwrap()
+    )
+    .unwrap();
 }
 
 make_auto_flush_static_metric! {

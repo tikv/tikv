@@ -461,7 +461,7 @@ const SST_SUFFIX: &str = ".sst";
 pub fn sst_meta_to_path(meta: &SstMeta) -> Result<PathBuf> {
     Ok(PathBuf::from(format!(
         "{}_{}_{}_{}_{}{}",
-        UuidBuilder::from_slice(meta.get_uuid())?.build(),
+        UuidBuilder::from_slice(meta.get_uuid())?.into_uuid(),
         meta.get_region_id(),
         meta.get_region_epoch().get_conf_ver(),
         meta.get_region_epoch().get_version(),

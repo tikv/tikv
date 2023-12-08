@@ -89,7 +89,7 @@ time = "0.1"
 tokio = { version = "1.5", features = ["sync", "rt-multi-thread"] }
 tracker = { workspace = true }
 txn_types = { workspace = true }
-uuid = { version = "0.8.1", features = ["serde", "v4"] }
+uuid = { version = "1.6.1", features = ["serde", "v4", "v7"] }
 yatp = { workspace = true }
 
 [dev-dependencies]

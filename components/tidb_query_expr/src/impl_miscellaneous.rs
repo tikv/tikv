@@ -189,8 +189,8 @@ pub fn is_ipv6(addr: Option<BytesRef>) -> Result<Option<Int>> {
 #[inline]
 pub fn uuid() -> Result<Option<Bytes>> {
     let result = Uuid::new_v4();
-    let mut buf = vec![0; uuid::adapter::Hyphenated::LENGTH];
-    result.to_hyphenated().encode_lower(&mut buf);
+    let mut buf = vec![0; uuid::fmt::Hyphenated::LENGTH];
+    uuid::fmt::Hyphenated::from_uuid(result).encode_lower(&mut buf);
     Ok(Some(buf))
 }
 
