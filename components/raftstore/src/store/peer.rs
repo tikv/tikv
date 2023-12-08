@@ -126,6 +126,7 @@ pub enum StaleState {
     Valid,
     ToValidate,
     LeaderMissing,
+    MaybeLeaderMissing,
 }
 
 #[derive(Debug)]
@@ -1284,7 +1285,10 @@ where
             return;
         }
         self.replication_mode_version = state.status().get_dr_auto_sync().state_id;
-        let enable = state.status().get_dr_auto_sync().get_state() != DrAutoSyncState::Async;
+        let enable = !matches!(
+            state.status().get_dr_auto_sync().get_state(),
+            DrAutoSyncState::Async | DrAutoSyncState::SyncRecover
+        );
         self.raft_group.raft.enable_group_commit(enable);
         self.dr_auto_sync_state = state.status().get_dr_auto_sync().get_state();
     }
@@ -1293,29 +1297,32 @@ where
     pub fn switch_replication_mode(&mut self, state: &Mutex<GlobalReplicationState>) {
         self.replication_sync = false;
         let guard = state.lock().unwrap();
-        let enable_group_commit = if guard.status().get_mode() == ReplicationMode::Majority {
-            self.replication_mode_version = 0;
-            self.dr_auto_sync_state = DrAutoSyncState::Async;
-            false
-        } else {
-            self.dr_auto_sync_state = guard.status().get_dr_auto_sync().get_state();
-            self.replication_mode_version = guard.status().get_dr_auto_sync().state_id;
-            match guard.status().get_dr_auto_sync().get_state() {
-                // SyncRecover will enable group commit after it catches up logs.
-                DrAutoSyncState::Async | DrAutoSyncState::SyncRecover => false,
-                _ => true,
-            }
-        };
+        let (enable_group_commit, calculate_group_id) =
+            if guard.status().get_mode() == ReplicationMode::Majority {
+                self.replication_mode_version = 0;
+                self.dr_auto_sync_state = DrAutoSyncState::Async;
+                (false, false)
+            } else {
+                self.dr_auto_sync_state = guard.status().get_dr_auto_sync().get_state();
+                self.replication_mode_version = guard.status().get_dr_auto_sync().state_id;
+                match guard.status().get_dr_auto_sync().get_state() {
+                    // SyncRecover will enable group commit after it catches up logs.
+                    DrAutoSyncState::Async => (false, false),
+                    DrAutoSyncState::SyncRecover => (false, true),
+                    _ => (true, true),
+                }
+            };
         drop(guard);
-        self.switch_group_commit(enable_group_commit, state);
+        self.switch_group_commit(enable_group_commit, calculate_group_id, state);
     }
 
     fn switch_group_commit(
         &mut self,
         enable_group_commit: bool,
+        calculate_group_id: bool,
         state: &Mutex<GlobalReplicationState>,
     ) {
-        if enable_group_commit {
+        if enable_group_commit || calculate_group_id {
             let mut guard = state.lock().unwrap();
             let ids = mem::replace(
                 guard.calculate_commit_group(
@@ -2320,7 +2327,6 @@ where
             self.leader_missing_time = None;
             return StaleState::Valid;
         }
-        let naive_peer = !self.is_initialized() || !self.raft_group.raft.promotable();
         // Updates the `leader_missing_time` according to the current state.
         //
         // If we are checking this it means we suspect the leader might be missing.
@@ -2340,13 +2346,18 @@ where
                 StaleState::ToValidate
             }
             Some(instant)
-                if instant.saturating_elapsed() >= ctx.cfg.abnormal_leader_missing_duration.0
-                    && !naive_peer =>
+                if instant.saturating_elapsed() >= ctx.cfg.abnormal_leader_missing_duration.0 =>
             {
                 // A peer is considered as in the leader missing state
                 // if it's initialized but is isolated from its leader or
                 // something bad happens that the raft group can not elect a leader.
-                StaleState::LeaderMissing
+                if self.is_initialized() && self.raft_group.raft.promotable() {
+                    StaleState::LeaderMissing
+                } else {
+                    // Uninitialized peer and learner may not have leader info,
+                    // even if there is a valid leader.
+                    StaleState::MaybeLeaderMissing
+                }
             }
             _ => StaleState::Valid,
         }
@@ -5411,7 +5422,7 @@ where
                     // should enable group commit to promise `IntegrityOverLabel`. then safe
                     // to switch to the `Sync` phase.
                     if self.dr_auto_sync_state == DrAutoSyncState::SyncRecover {
-                        self.switch_group_commit(true, &ctx.global_replication_state)
+                        self.switch_group_commit(true, true, &ctx.global_replication_state)
                     }
                     self.replication_sync = true;
                 }
@@ -5593,6 +5604,7 @@ where
         &mut self,
         ctx: &mut PollContext<EK, ER, T>,
     ) {
+        ctx.raft_metrics.check_stale_peer.inc();
         if self.check_stale_conf_ver < self.region().get_region_epoch().get_conf_ver()
             || self.region().get_region_epoch().get_conf_ver() == 0
         {

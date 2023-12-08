@@ -635,15 +635,22 @@ fn field<T: Evaluable + EvaluableRet + PartialEq>(args: &[Option<&T>]) -> Result
 
 #[rpn_fn(nullable, varg, min_args = 1)]
 #[inline]
-fn field_bytes(args: &[Option<BytesRef>]) -> Result<Option<Int>> {
+fn field_bytes<C: Collator>(args: &[Option<BytesRef>]) -> Result<Option<Int>> {
     Ok(Some(match args[0] {
         // As per the MySQL doc, if the first argument is NULL, this function always returns 0.
         None => 0,
-        Some(val) => args
-            .iter()
-            .skip(1)
-            .position(|&i| i == Some(val))
-            .map_or(0, |pos| (pos + 1) as i64),
+        Some(val) => {
+            for (pos, arg) in args.iter().enumerate().skip(1) {
+                if arg.is_none() {
+                    continue;
+                }
+                match C::sort_compare(val, arg.unwrap()) {
+                    Ok(Ordering::Equal) => return Ok(Some(pos as i64)),
+                    _ => continue,
+                }
+            }
+            0
+        }
     }))
 }
 
@@ -3214,6 +3221,7 @@ mod tests {
                     Some(b"baz".to_vec()),
                 ],
                 Some(1),
+                Collation::Utf8Mb4Bin,
             ),
             (
                 vec![
@@ -3223,6 +3231,7 @@ mod tests {
                     Some(b"hello".to_vec()),
                 ],
                 Some(0),
+                Collation::Utf8Mb4Bin,
             ),
             (
                 vec![
@@ -3232,6 +3241,7 @@ mod tests {
                     Some(b"hello".to_vec()),
                 ],
                 Some(3),
+                Collation::Utf8Mb4Bin,
             ),
             (
                 vec![
@@ -3244,6 +3254,7 @@ mod tests {
                     Some(b"Hello".to_vec()),
                 ],
                 Some(6),
+                Collation::Utf8Mb4Bin,
             ),
             (
                 vec![
@@ -3252,14 +3263,37 @@ mod tests {
                     Some(b"Hello World!".to_vec()),
                 ],
                 Some(0),
+                Collation::Utf8Mb4Bin,
             ),
-            (vec![None, None, Some(b"Hello World!".to_vec())], Some(0)),
-            (vec![Some(b"Hello World!".to_vec())], Some(0)),
+            (
+                vec![None, None, Some(b"Hello World!".to_vec())],
+                Some(0),
+                Collation::Utf8Mb4Bin,
+            ),
+            (
+                vec![Some(b"Hello World!".to_vec())],
+                Some(0),
+                Collation::Utf8Mb4Bin,
+            ),
+            (
+                vec![
+                    Some(b"a".to_vec()),
+                    Some(b"A".to_vec()),
+                    Some(b"a".to_vec()),
+                ],
+                Some(1),
+                Collation::Utf8Mb4GeneralCi,
+            ),
         ];
 
-        for (args, expect_output) in test_cases {
+        for (args, expect_output, collation) in test_cases {
             let output = RpnFnScalarEvaluator::new()
                 .push_params(args)
+                .return_field_type(
+                    FieldTypeBuilder::new()
+                        .tp(FieldTypeTp::Long)
+                        .collation(collation),
+                )
                 .evaluate(ScalarFuncSig::FieldString)
                 .unwrap();
             assert_eq!(output, expect_output);
