@@ -55,9 +55,12 @@ where
     H: SnapshotBrHandle + 'static,
 {
     /// Check a region whether there is pending admin requests(including pending
-    /// merging). In older versions of disk snapshot backup, this will be
-    /// called after we paused all scheduler. This is kept for compatibility
-    /// with previous versions.
+    /// merging).
+    /// 
+    /// In older versions of disk snapshot backup, this will be called after we
+    /// paused all scheduler.
+    ///
+    /// This is kept for compatibility with previous versions.
     fn check_pending_admin_op(
         &mut self,
         ctx: RpcContext<'_>,
@@ -149,10 +152,11 @@ where
     /// Generally there will be some steps for the client to do:
     /// 1. Establish a `prepare_snapshot_backup` connection.
     /// 2. Send a initial `UpdateLease`. And we should update the lease
-    /// periodically. 3. Send `WaitApply` to each leader peer in this store.
+    /// periodically.
+    /// 3. Send `WaitApply` to each leader peer in this store.
     /// 4. Once `WaitApply` for all regions have done, we can take disk
-    /// snapshot. 5. Once all snapshots have been taken, send `Finalize` to
-    /// stop.
+    /// snapshot.
+    /// 5. Once all snapshots have been taken, send `Finalize` to stop.
     fn prepare_snapshot_backup(
         &mut self,
         ctx: grpcio::RpcContext<'_>,
