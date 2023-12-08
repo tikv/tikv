@@ -516,6 +516,8 @@ where
             }
             Err(Error::Abort) => {
                 warn!("applying snapshot is aborted"; "region_id" => region_id);
+                self.coprocessor_host
+                    .cancel_apply_snapshot(region_id, peer_id);
                 assert_eq!(
                     status.swap(JOB_STATUS_CANCELLED, Ordering::SeqCst),
                     JOB_STATUS_CANCELLING
@@ -753,10 +755,12 @@ where
             }
             if let Some(Task::Apply { region_id, .. }) = self.pending_applies.front() {
                 fail_point!("handle_new_pending_applies", |_| {});
-                if !self
-                    .engine
-                    .can_apply_snapshot(is_timeout, new_batch, *region_id)
-                {
+                if !self.engine.can_apply_snapshot(
+                    is_timeout,
+                    new_batch,
+                    *region_id,
+                    self.pending_applies.len(),
+                ) {
                     // KvEngine can't apply snapshot for other reasons.
                     break;
                 }
@@ -1303,6 +1307,7 @@ pub(crate) mod tests {
             obs.pre_apply_hash.load(Ordering::SeqCst),
             obs.post_apply_hash.load(Ordering::SeqCst)
         );
+        assert_eq!(obs.cancel_apply.load(Ordering::SeqCst), 0);
 
         // the pending apply task should be finished and snapshots are ingested.
         // note that when ingest sst, it may flush memtable if overlap,
@@ -1432,6 +1437,7 @@ pub(crate) mod tests {
         pub post_apply_count: Arc<AtomicUsize>,
         pub pre_apply_hash: Arc<AtomicUsize>,
         pub post_apply_hash: Arc<AtomicUsize>,
+        pub cancel_apply: Arc<AtomicUsize>,
     }
 
     impl Coprocessor for MockApplySnapshotObserver {}
@@ -1467,6 +1473,10 @@ pub(crate) mod tests {
 
         fn should_pre_apply_snapshot(&self) -> bool {
             true
+        }
+
+        fn cancel_apply_snapshot(&self, _: u64, _: u64) {
+            self.cancel_apply.fetch_add(1, Ordering::SeqCst);
         }
     }
 }
