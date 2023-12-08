@@ -222,7 +222,7 @@ impl Display for ErrorHeaderKind {
 
 const SCHEDULER_IS_BUSY: &str = "scheduler is busy";
 const GC_WORKER_IS_BUSY: &str = "gc worker is busy";
-pub const DEADLINE_EXCEEDED: &str = "deadline is exceeded";
+const DEADLINE_EXCEEDED: &str = "deadline is exceeded";
 
 /// Get the `ErrorHeaderKind` enum that corresponds to the error in the protobuf
 /// message. Returns `ErrorHeaderKind::Other` if no match found.
@@ -318,14 +318,19 @@ pub fn extract_region_error_from_error(e: &Error) -> Option<errorpb::Error> {
             Some(err)
         }
         Error(box ErrorInner::DeadlineExceeded) => {
-            let mut err = errorpb::Error::default();
-            let mut server_is_busy_err = errorpb::ServerIsBusy::default();
-            server_is_busy_err.set_reason(DEADLINE_EXCEEDED.to_owned());
-            err.set_server_is_busy(server_is_busy_err);
+            let mut err = make_deadline_exceeded_busy_error();
             Some(err)
         }
         _ => None,
     }
+}
+
+pub fn make_deadline_exceeded_busy_error() -> errorpb::Error {
+    let mut err = errorpb::Error::default();
+    let mut server_is_busy_err = errorpb::ServerIsBusy::default();
+    server_is_busy_err.set_reason(DEADLINE_EXCEEDED.to_owned());
+    err.set_server_is_busy(server_is_busy_err);
+    err
 }
 
 pub fn extract_region_error<T>(res: &Result<T>) -> Option<errorpb::Error> {

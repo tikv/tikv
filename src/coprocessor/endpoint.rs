@@ -31,6 +31,7 @@ use crate::{
     storage::{
         self,
         kv::{self, with_tls_engine, SnapContext},
+        make_deadline_exceeded_busy_error,
         mvcc::Error as MvccError,
         need_check_locks, need_check_locks_in_replica_read, Engine, Snapshot, SnapshotStore,
     },
@@ -832,12 +833,9 @@ macro_rules! make_error_response_common {
             }
             Error::DeadlineExceeded => {
                 $tag = "deadline_exceeded";
-                let mut server_is_busy_err = errorpb::ServerIsBusy::default();
-                server_is_busy_err.set_reason(storage::errors::DEADLINE_EXCEEDED.to_owned());
-                let mut errorpb = errorpb::Error::default();
-                errorpb.set_message($e.to_string());
-                errorpb.set_server_is_busy(server_is_busy_err);
-                $resp.set_region_error(errorpb);
+                let mut err = make_deadline_exceeded_busy_error();
+                err.set_message($e.to_string());
+                $resp.set_region_error(err);
             }
             Error::MaxPendingTasksExceeded => {
                 $tag = "max_pending_tasks_exceeded";
