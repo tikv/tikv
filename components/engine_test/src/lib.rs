@@ -129,17 +129,13 @@ pub mod kv {
         }
 
         fn destroy_tablet(&self, _ctx: TabletContext, path: &Path) -> Result<()> {
-<<<<<<< HEAD
             let tombstone_path = path.with_extension(TOMBSTONE_SUFFIX);
             let _ = std::fs::remove_dir_all(&tombstone_path);
             std::fs::rename(path, &tombstone_path)?;
-            if let Some(m) = &self.db_opt.key_manager {
+            if let Some(m) = &self.db_opt.get_key_manager() {
                 m.remove_dir(path, Some(&tombstone_path))?;
             }
             std::fs::remove_dir_all(tombstone_path)?;
-=======
-            encryption::trash_dir_all(path, self.db_opt.get_key_manager().as_deref())?;
->>>>>>> ca8c70d9a0 (raftstore: Verify checksum right after SST files are generated (#16107))
             Ok(())
         }
 
