@@ -444,7 +444,7 @@ impl Default for Config {
             apply_yield_duration: ReadableDuration::millis(500),
             apply_yield_write_size: ReadableSize::kb(32),
             perf_level: PerfLevel::Uninitialized,
-            evict_cache_on_memory_ratio: 0.0,
+            evict_cache_on_memory_ratio: 0.1,
             cmd_batch: true,
             cmd_batch_concurrent_ready_max_count: 1,
             raft_write_size_limit: ReadableSize::mb(1),
@@ -935,8 +935,8 @@ impl Config {
             .with_label_values(&["region_compact_min_redundant_rows"])
             .set(self.region_compact_min_redundant_rows as f64);
         CONFIG_RAFTSTORE_GAUGE
-            .with_label_values(&["region_compact_tombstones_percent"])
-            .set(self.region_compact_tombstones_percent as f64);
+            .with_label_values(&["region_compact_redundant_rows_percent"])
+            .set(self.region_compact_redundant_rows_percent as f64);
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["pd_heartbeat_tick_interval"])
             .set(self.pd_heartbeat_tick_interval.as_secs_f64());
