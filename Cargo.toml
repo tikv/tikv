@@ -352,8 +352,8 @@ resource_metering = { path = "components/resource_metering" }
 security = { path = "components/security" }
 server = { path = "components/server" }
 service = { path = "components/service" }
-snap_recovery = { path = "components/snap_recovery" }
-sst_importer = { path = "components/sst_importer" }
+snap_recovery = { path = "components/snap_recovery", default-features = false }
+sst_importer = { path = "components/sst_importer", default-features = false }
 test_backup = { path = "components/test_backup" }
 test_coprocessor = { path = "components/test_coprocessor", default-features = false }
 example_coprocessor_plugin = { path = "components/test_coprocessor_plugin/example_plugin" }
