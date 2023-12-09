@@ -2942,9 +2942,9 @@ dependencies = [
 
 [[package]]
 name = "memmap2"
-version = "0.7.0"
+version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "180d4b35be83d33392d1d1bfbd2ae1eca7ff5de1a94d3fc87faaa99a069e7cbd"
+checksum = "deaba38d7abf1d4cca21cc89e932e542ba2b9258664d2a9ef0e61512039c9375"
 dependencies = [
  "libc 0.2.146",
 ]
@@ -4022,7 +4022,7 @@ dependencies = [
 [[package]]
 name = "raft-engine"
 version = "0.4.1"
-source = "git+https://github.com/tikv/raft-engine.git#fa56f891fdf0b1cb5b7849b7bee3c5dadbb96103"
+source = "git+https://github.com/tikv/raft-engine.git#e8de5d75ae40b0eec8736321f9dedb1662feb69d"
 dependencies = [
  "byteorder",
  "crc32fast",
@@ -4036,7 +4036,7 @@ dependencies = [
  "libc 0.2.146",
  "log",
  "lz4-sys",
- "memmap2 0.7.0",
+ "memmap2 0.9.0",
  "nix 0.26.2",
  "num-derive 0.4.0",
  "num-traits",
@@ -4056,7 +4056,7 @@ dependencies = [
 [[package]]
 name = "raft-engine-ctl"
 version = "0.4.1"
-source = "git+https://github.com/tikv/raft-engine.git#fa56f891fdf0b1cb5b7849b7bee3c5dadbb96103"
+source = "git+https://github.com/tikv/raft-engine.git#e8de5d75ae40b0eec8736321f9dedb1662feb69d"
 dependencies = [
  "clap 3.1.6",
  "env_logger 0.10.0",
