@@ -34,6 +34,12 @@ pub trait HeapSize {
     }
 }
 
+impl HeapSize for [u8] {
+    fn heap_size(&self) -> usize {
+        self.len() * mem::size_of::<u8>()
+    }
+}
+
 impl HeapSize for Region {
     fn heap_size(&self) -> usize {
         let mut size = self.start_key.capacity() + self.end_key.capacity();
@@ -79,11 +85,6 @@ impl std::error::Error for MemoryQuotaExceeded {}
 
 impl_display_as_debug!(MemoryQuotaExceeded);
 
-pub struct MemoryQuota {
-    in_use: AtomicUsize,
-    capacity: AtomicUsize,
-}
-
 pub struct OwnedAllocated {
     allocated: usize,
     from: Arc<MemoryQuota>,
@@ -108,6 +109,11 @@ impl Drop for OwnedAllocated {
     fn drop(&mut self) {
         self.from.free(self.allocated)
     }
+}
+
+pub struct MemoryQuota {
+    in_use: AtomicUsize,
+    capacity: AtomicUsize,
 }
 
 impl MemoryQuota {
