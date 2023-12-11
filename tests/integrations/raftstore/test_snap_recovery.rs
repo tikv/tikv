@@ -1,8 +1,8 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
-use futures::{compat::Future01CompatExt, executor::block_on, future::TryFutureExt, StreamExt};
+use futures::{executor::block_on, StreamExt};
 use raft::eraftpb::MessageType;
 use raftstore::store::{
     snapshot_backup::SnapshotBrWaitApplyRequest, PeerMsg, SignificantMsg, SnapshotBrWaitApplySyncer,
