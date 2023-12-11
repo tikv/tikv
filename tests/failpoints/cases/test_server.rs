@@ -2,7 +2,7 @@
 
 use std::{sync::Arc, thread, time::Duration};
 
-use grpcio::{ChannelBuilder, Environment, ServerBuilder};
+use grpcio::{ChannelBuilder, Environment, ServerBuilder, ServerCredentials};
 use grpcio_health::{create_health, proto::HealthCheckRequest, HealthClient, ServingStatus};
 use pd_client::PdClient;
 use raft::eraftpb::MessageType;
@@ -115,10 +115,13 @@ fn test_serving_status() {
     let service = cluster.sim.rl().health_services.get(&1).unwrap().clone();
     let builder =
         ServerBuilder::new(Arc::new(Environment::new(1))).register_service(create_health(service));
-    let mut server = builder.bind("127.0.0.1", 0).build().unwrap();
+    let mut server = builder.build().unwrap();
+    let addr = "127.0.0.1";
+    let port = server
+        .add_listening_port(format!("{}:{}", addr, 0), ServerCredentials::Insecure())
+        .unwrap();
     server.start();
 
-    let (addr, port) = server.bind_addrs().next().unwrap();
     let ch =
         ChannelBuilder::new(Arc::new(Environment::new(1))).connect(&format!("{}:{}", addr, port));
     let client = HealthClient::new(ch);

@@ -608,9 +608,11 @@ mod tests {
         let (tx, rx) = channel();
         let tikv_service = MockTikv { req_tx: tx };
         let builder = ServerBuilder::new(env.clone()).register_service(create_tikv(tikv_service));
-        let mut server = builder.bind("127.0.0.1", 0).build().unwrap();
-        server.start();
-        let (_, port) = server.bind_addrs().next().unwrap();
+        let mut server = builder.build().unwrap();
+        let addr = "127.0.0.1";
+        let port = server
+            .add_listening_port(format!("{}:{}", addr, 0), ServerCredentials::Insecure())
+            .unwrap();
         let addr = format!("127.0.0.1:{}", port);
         let channel = ChannelBuilder::new(env).connect(&addr);
         let client = TikvClient::new(channel);

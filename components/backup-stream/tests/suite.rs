@@ -22,7 +22,7 @@ use backup_stream::{
     RegionSet, Service, Task,
 };
 use futures::{executor::block_on, AsyncWriteExt, Future, Stream, StreamExt};
-use grpcio::{ChannelBuilder, Server, ServerBuilder};
+use grpcio::{ChannelBuilder, Server, ServerBuilder, ServerCredentials};
 use kvproto::{
     brpb::{CompressionType, Local, Metadata, StorageBackend},
     kvrpcpb::*,
@@ -37,6 +37,7 @@ use tempdir::TempDir;
 use test_pd_client::TestPdClient;
 use test_raftstore::{new_server_cluster, Cluster, ServerCluster};
 use test_util::retry;
+use tidb_query_datatype::builder;
 use tikv::config::BackupStreamConfig;
 use tikv_util::{
     codec::{
@@ -342,9 +343,11 @@ impl Suite {
         let serv = Service::new(endpoint.scheduler());
         let builder =
             ServerBuilder::new(self.env.clone()).register_service(create_log_backup(serv));
-        let mut server = builder.bind("127.0.0.1", 0).build().unwrap();
+        let mut server = builder.build().unwrap();
+        let port = server
+            .add_listening_port(format!("127.0.0.1:{}", 0), ServerCredentials::insecure())
+            .unwrap();
         server.start();
-        let (_, port) = server.bind_addrs().next().unwrap();
         let addr = format!("127.0.0.1:{}", port);
         let channel = ChannelBuilder::new(self.env.clone()).connect(&addr);
         println!("connecting channel to {} for store {}", addr, id);

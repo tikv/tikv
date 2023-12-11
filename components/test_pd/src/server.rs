@@ -30,6 +30,7 @@ use crate::mocker::etcd::{EtcdClient, Keys, KvEventType, MetaKey};
 
 pub struct Server<C: PdMocker> {
     server: Option<GrpcServer>,
+    addrs: Vec<(String, u16)>,
     mocker: PdMock<C>,
 }
 
@@ -68,6 +69,7 @@ impl<C: PdMocker + Send + Sync + 'static> Server<C> {
         };
         let mut server = Server {
             server: None,
+            addrs: vec![],
             mocker,
         };
         server.start(mgr, eps);
@@ -84,25 +86,31 @@ impl<C: PdMocker + Send + Sync + 'static> Server<C> {
                 .name_prefix(thd_name!("mock-server"))
                 .build(),
         );
-        let mut sb = ServerBuilder::new(env)
-            .register_service(pd)
-            .register_service(meta_store)
-            .register_service(resource_manager);
-        for (host, port) in eps {
-            sb = mgr.bind(sb, &host, port);
-        }
-
-        let mut server = sb.build().unwrap();
-        {
-            let addrs: Vec<String> = server
-                .bind_addrs()
-                .map(|(host, port)| format!("{}:{}", host, port))
-                .collect();
+        assert!(!eps.is_empty());
+        let mut addrs: Vec<String> = vec![];
+        let mut server = {
+            let sb = ServerBuilder::new(env)
+                .register_service(pd)
+                .register_service(meta_store)
+                .register_service(resource_manager);
+            // Build the server.
+            let (host, port) = eps[0].clone();
+            let (mut server, port) = mgr.bind(sb, &host, port);
+            addrs.push(format!("{}:{}", host, port));
+            // Add other listening ports.
+            for (host, port) in eps.iter().skip(1) {
+                let port = server
+                    .add_listening_port(format!("{}:{}", host, port), mgr.gen_credentials())
+                    .unwrap();
+                addrs.push(format!("{}:{}", host, port));
+                self.addrs.push((host.clone(), port));
+            }
             self.mocker.default_handler.set_endpoints(addrs.clone());
             if let Some(case) = self.mocker.case.as_ref() {
-                case.set_endpoints(addrs);
+                case.set_endpoints(addrs.clone());
             }
-        }
+            server
+        };
 
         server.start();
         self.server = Some(server);
@@ -118,12 +126,7 @@ impl<C: PdMocker + Send + Sync + 'static> Server<C> {
     }
 
     pub fn bind_addrs(&self) -> Vec<(String, u16)> {
-        self.server
-            .as_ref()
-            .unwrap()
-            .bind_addrs()
-            .map(|(host, port)| (host.clone(), port))
-            .collect()
+        self.addrs.clone()
     }
 }
 
