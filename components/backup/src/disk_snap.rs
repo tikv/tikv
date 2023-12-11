@@ -28,14 +28,19 @@ use raftstore::store::{
     },
     SnapshotBrWaitApplySyncer,
 };
-use tikv_util::warn;
-use tokio::sync::oneshot;
+use tikv_util::{sys::thread::ThreadBuildWrapper, warn, Either};
+use tokio::{
+    runtime::{Handle, Runtime},
+    sync::oneshot,
+};
 use tokio_stream::Stream;
+
+const DEFAULT_RT_THREADS: usize = 2;
 
 type Result<T> = std::result::Result<T, Error>;
 
 enum Error {
-    NotInitialized,
+    Uninitialized,
     LeaseExpired,
     WaitApplyAborted,
     RaftStore(raftstore::Error),
@@ -63,7 +68,7 @@ impl ResultSink {
         match result {
             // Note: should we batch here?
             Ok(item) => self.0.send((item, WriteFlags::default())).await?,
-            Err(err) => match err.how_to_handle() {
+            Err(err) => match err.into() {
                 HandleErr::AbortStream(status) => {
                     self.0.fail(status.clone()).await?;
                     return Err(grpcio::Error::RpcFinished(Some(status)));
@@ -80,10 +85,10 @@ impl ResultSink {
     }
 }
 
-impl Error {
-    fn how_to_handle(self) -> HandleErr {
-        match self {
-            Error::NotInitialized => HandleErr::AbortStream(RpcStatus::with_message(
+impl From<Error> for HandleErr {
+    fn from(value: Error) -> Self {
+        match value {
+            Error::Uninitialized => HandleErr::AbortStream(RpcStatus::with_message(
                 grpcio::RpcStatusCode::UNAVAILABLE,
                 "coprocessor not initialized".to_owned(),
             )),
@@ -108,6 +113,7 @@ pub struct Env<SR: SnapshotBrHandle> {
     pub(crate) handle: Arc<SR>,
     rejector: Arc<RejectIngestAndAdmin>,
     active_stream: Arc<AtomicU64>,
+    runtime: Either<Handle, Arc<Runtime>>,
 }
 
 impl<SR: SnapshotBrHandle> Clone for Env<SR> {
@@ -116,6 +122,7 @@ impl<SR: SnapshotBrHandle> Clone for Env<SR> {
             handle: Arc::clone(&self.handle),
             rejector: Arc::clone(&self.rejector),
             active_stream: Arc::clone(&self.active_stream),
+            runtime: self.runtime.clone(),
         }
     }
 }
@@ -128,22 +135,55 @@ impl Env<UnimplementedHandle> {
             }),
             rejector: Default::default(),
             active_stream: Arc::new(AtomicU64::new(0)),
+            runtime: Either::Right(Self::default_runtime()),
         }
     }
 }
 
 impl<SR: SnapshotBrHandle> Env<SR> {
+    fn default_runtime() -> Arc<Runtime> {
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(DEFAULT_RT_THREADS)
+            .enable_all()
+            .with_sys_hooks()
+            .thread_name("snap_br_backup_prepare")
+            .build()
+            .unwrap();
+        Arc::new(rt)
+    }
+
+    pub fn handle(&self) -> &Handle {
+        match &self.runtime {
+            Either::Left(h) => h,
+            Either::Right(rt) => rt.handle(),
+        }
+    }
+
     pub fn with_rejector(handle: SR, rejector: Arc<RejectIngestAndAdmin>) -> Self {
         Self {
             handle: Arc::new(handle),
             rejector,
             active_stream: Arc::new(AtomicU64::new(0)),
+            runtime: Either::Right(Self::default_runtime()),
+        }
+    }
+
+    pub fn with_rejector_and_runtime(
+        handle: SR,
+        rejector: Arc<RejectIngestAndAdmin>,
+        runtime: Handle,
+    ) -> Self {
+        Self {
+            handle: Arc::new(handle),
+            rejector,
+            active_stream: Arc::new(AtomicU64::new(0)),
+            runtime: Either::Left(runtime),
         }
     }
 
     fn check_initialized(&self) -> Result<()> {
         if !self.rejector.connected() {
-            return Err(Error::NotInitialized);
+            return Err(Error::Uninitialized);
         }
         Ok(())
     }

@@ -17,7 +17,7 @@ use tikv::coprocessor::checksum_crc64_xor;
 use tikv_util::HandyRwLock;
 use txn_types::TimeStamp;
 
-pub mod disk_snap;
+mod disk_snap;
 
 fn assert_same_file_name(s1: String, s2: String) {
     let tokens1: Vec<&str> = s1.split('_').collect();

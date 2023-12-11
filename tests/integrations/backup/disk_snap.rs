@@ -15,7 +15,7 @@ fn test_basic() {
     let mut call = suite.prepare_backup(1);
     call.prepare(60);
     let resp = suite.try_split(b"k");
-    println!("{:?}", resp.response.get_header().get_error());
+    debug!("Failed to split"; "err" => ?resp.response.get_header().get_error());
     must_contains_error(
         &resp.response,
         "rejecting proposing admin commands while preparing snapshot backup",
@@ -25,7 +25,10 @@ fn test_basic() {
 #[test]
 fn test_wait_apply() {
     test_util::init_log_for_test();
-    let mut suite = Suite::new(3);
+    let mut suite = Suite::new_with_cfg(3, |cfg| {
+        // Prevent leader transferring.
+        cfg.raft_store.raft_election_timeout_ticks = 9999999;
+    });
     for key in 'a'..'k' {
         suite.split(&[key as u8]);
     }
@@ -75,7 +78,6 @@ fn test_wait_apply() {
         )
         .unwrap();
     }
-    // Hacking: assume all leaders are in one store.
     let mut call = suite.prepare_backup(ld_sid.unwrap());
     call.prepare(60);
 

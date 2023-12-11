@@ -8,7 +8,7 @@ use raftstore::store::{
     snapshot_backup::SnapshotBrWaitApplyRequest, PeerMsg, SignificantMsg, SnapshotBrWaitApplySyncer,
 };
 use test_raftstore::*;
-use tikv_util::HandyRwLock;
+use tikv_util::{future::block_on_timeout, HandyRwLock};
 use tokio::sync::oneshot;
 
 #[test]
@@ -107,12 +107,7 @@ fn test_snap_wait_apply() {
 
     // we expect recv timeout because the leader peer on store 1 cannot finished the
     // apply. so the wait apply will timeout.
-    block_on(
-        tikv_util::timer::GLOBAL_TIMER_HANDLE
-            .timeout(rx.compat(), Instant::now() + Duration::from_secs(1))
-            .compat(),
-    )
-    .unwrap_err();
+    block_on_timeout(rx, Duration::from_secs(1)).unwrap_err();
 
     // clear filter so we can make wait apply finished.
     cluster.clear_send_filters();

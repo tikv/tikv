@@ -107,6 +107,10 @@ impl Suite {
     }
 
     pub fn new(node_count: u64) -> Self {
+        Self::new_with_cfg(node_count, |_| {})
+    }
+
+    pub fn new_with_cfg(node_count: u64, cfg: impl FnOnce(&mut Config)) -> Self {
         let cluster = new_server_cluster(42, node_count as usize);
         let grpc_env = Arc::new(Environment::new(1));
         let mut suite = Suite {
@@ -117,6 +121,7 @@ impl Suite {
         for id in 1..=node_count {
             suite.crate_node(id);
         }
+        cfg(&mut suite.cluster.cfg);
         suite.cluster.run();
         for id in 1..=node_count {
             suite.start_backup(id);

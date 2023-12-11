@@ -922,26 +922,26 @@ lazy_static! {
     ).unwrap();
 
     pub static ref SNAP_BR_SUSPEND_COMMAND_TYPE: IntCounterVec = register_int_counter_vec!(
-        "tikv_snap_br_suspend_command_type",
+        "tikv_raftstore_snap_br_suspend_command_type",
         "The statistic of rejecting some admin commands being proposed.",
         &["type"]
     ).unwrap();
 
     pub static ref SNAP_BR_WAIT_APPLY_EVENT: SnapshotBrWaitApplyEvent = register_static_int_counter_vec!(
         SnapshotBrWaitApplyEvent,
-        "tikv_snap_br_wait_apply_event",
+        "tikv_raftstore_snap_br_wait_apply_event",
         "The events of wait apply issued by snapshot br.",
         &["event"]
     ).unwrap();
 
     pub static ref SNAP_BR_SUSPEND_COMMAND_LEASE_UNTIL: IntGauge = register_int_gauge!(
-        "tikv_snap_br_suspend_command_lease_until",
+        "tikv_raftstore_snap_br_suspend_command_lease_until",
         "The lease that snapshot br holds of rejecting some type of commands. (In unix timestamp.)"
     ).unwrap();
 
     pub static ref SNAP_BR_LEASE_EVENT: SnapshotBrLeaseEvent = register_static_int_counter_vec!(
         SnapshotBrLeaseEvent,
-        "tikv_snap_br_lease_event",
+        "tikv_raftstore_snap_br_lease_event",
         "The events of the lease to denying new admin commands being proposed by snapshot br.",
         &["event"]
     ).unwrap();
