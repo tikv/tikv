@@ -56,7 +56,7 @@ where
 {
     /// Check a region whether there is pending admin requests(including pending
     /// merging).
-    /// 
+    ///
     /// In older versions of disk snapshot backup, this will be called after we
     /// paused all scheduler.
     ///
