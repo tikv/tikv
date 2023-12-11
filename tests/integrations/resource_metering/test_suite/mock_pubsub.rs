@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use grpcio::{ChannelBuilder, Environment, Server, ServerBuilder};
+use grpcio::{ChannelBuilder, Environment, Server, ServerBuilder, ServerCredentials};
 use kvproto::resource_usage_agent::create_resource_metering_pub_sub;
 use resource_metering::{DataSinkRegHandle, PubSubService};
 
@@ -24,7 +24,7 @@ impl MockPubSubServer {
             .register_service(create_resource_metering_pub_sub(ps));
         let mut server = server_builder.build().unwrap();
         let _ = server
-            .add_listening_port(format!("127.0.0.1:{}", 0), ServerCredentials::Insecure())
+            .add_listening_port(format!("127.0.0.1:{}", port), ServerCredentials::insecure())
             .expect("failed to build mock resource metering publisher server");
         server
     }

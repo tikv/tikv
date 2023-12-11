@@ -574,7 +574,7 @@ mod tests {
         time::Duration,
     };
 
-    use grpcio::{self, ChannelBuilder, EnvBuilder, Server, ServerBuilder};
+    use grpcio::{self, ChannelBuilder, EnvBuilder, Server, ServerBuilder, ServerCredentials};
     use kvproto::{metapb::Region, tikvpb::Tikv, tikvpb_grpc::create_tikv};
     use pd_client::PdClient;
     use raftstore::store::util::RegionReadProgress;
@@ -611,7 +611,7 @@ mod tests {
         let mut server = builder.build().unwrap();
         let addr = "127.0.0.1";
         let port = server
-            .add_listening_port(format!("{}:{}", addr, 0), ServerCredentials::Insecure())
+            .add_listening_port(format!("{}:{}", addr, 0), ServerCredentials::insecure())
             .unwrap();
         let addr = format!("127.0.0.1:{}", port);
         let channel = ChannelBuilder::new(env).connect(&addr);

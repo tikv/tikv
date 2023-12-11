@@ -118,7 +118,7 @@ fn test_serving_status() {
     let mut server = builder.build().unwrap();
     let addr = "127.0.0.1";
     let port = server
-        .add_listening_port(format!("{}:{}", addr, 0), ServerCredentials::Insecure())
+        .add_listening_port(format!("{}:{}", addr, 0), ServerCredentials::insecure())
         .unwrap();
     server.start();
 

@@ -525,7 +525,9 @@ mod tests {
     use std::{sync::Arc, time::Duration};
 
     use futures::{executor::block_on, SinkExt};
-    use grpcio::{self, ChannelBuilder, EnvBuilder, Server, ServerBuilder, WriteFlags};
+    use grpcio::{
+        self, ChannelBuilder, EnvBuilder, Server, ServerBuilder, ServerCredentials, WriteFlags,
+    };
     use kvproto::cdcpb::{create_change_data, ChangeDataClient, ResolvedTs};
     use tikv_util::future::block_on_timeout;
 
@@ -537,10 +539,12 @@ mod tests {
         let (scheduler, rx) = dummy_scheduler();
         let cdc_service = Service::new(scheduler, memory_quota);
         let env = Arc::new(EnvBuilder::new().build());
+        let builder =
+            ServerBuilder::new(env.clone()).register_service(create_change_data(cdc_service));
         let mut server = builder.build().unwrap();
         let addr = "127.0.0.1";
         let port = server
-            .add_listening_port(format!("{}:{}", addr, 0), ServerCredentials::Insecure())
+            .add_listening_port(format!("{}:{}", addr, 0), ServerCredentials::insecure())
             .unwrap();
         let addr = format!("127.0.0.1:{}", port);
         let channel = ChannelBuilder::new(env).connect(&addr);

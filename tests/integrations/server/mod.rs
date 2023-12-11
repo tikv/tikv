@@ -28,7 +28,7 @@ where
         .max_send_message_len(-1)
         .build_args();
 
-    let mut sb = ServerBuilder::new(Arc::clone(&env))
+    let sb = ServerBuilder::new(Arc::clone(&env))
         .channel_args(channel_args)
         .register_service(create_tikv(kv));
     let (server, _) = security_mgr.bind(sb, ip, port);

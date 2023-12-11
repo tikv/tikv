@@ -37,7 +37,6 @@ use tempdir::TempDir;
 use test_pd_client::TestPdClient;
 use test_raftstore::{new_server_cluster, Cluster, ServerCluster};
 use test_util::retry;
-use tidb_query_datatype::builder;
 use tikv::config::BackupStreamConfig;
 use tikv_util::{
     codec::{
