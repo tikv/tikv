@@ -19,7 +19,9 @@ use resource_metering::{FutureExt, ResourceTagFactory, StreamExt};
 use tidb_query_common::execute_stats::ExecSummary;
 use tikv_alloc::trace::MemoryTraceGuard;
 use tikv_kv::SnapshotExt;
-use tikv_util::{quota_limiter::QuotaLimiter, time::Instant};
+use tikv_util::{
+    deadline::set_deadline_exceeded_busy_error, quota_limiter::QuotaLimiter, time::Instant,
+};
 use tipb::{AnalyzeReq, AnalyzeType, ChecksumRequest, ChecksumScanOn, DagRequest, ExecType};
 use tokio::sync::Semaphore;
 use txn_types::Lock;
@@ -30,7 +32,6 @@ use crate::{
     server::Config,
     storage::{
         self,
-        errors::make_deadline_exceeded_busy_error,
         kv::{self, with_tls_engine, SnapContext},
         mvcc::Error as MvccError,
         need_check_locks, need_check_locks_in_replica_read, Engine, Snapshot, SnapshotStore,
@@ -833,7 +834,8 @@ macro_rules! make_error_response_common {
             }
             Error::DeadlineExceeded => {
                 $tag = "deadline_exceeded";
-                let mut err = make_deadline_exceeded_busy_error();
+                let mut err = errorpb::Error::default();
+                set_deadline_exceeded_busy_error(&mut err);
                 err.set_message($e.to_string());
                 $resp.set_region_error(err);
             }

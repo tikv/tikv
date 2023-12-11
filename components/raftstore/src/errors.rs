@@ -7,7 +7,10 @@ use error_code::{self, ErrorCode, ErrorCodeExt};
 use kvproto::{errorpb, metapb, raft_serverpb};
 use protobuf::ProtobufError;
 use thiserror::Error;
-use tikv_util::{codec, deadline::DeadlineError};
+use tikv_util::{
+    codec,
+    deadline::{set_deadline_exceeded_busy_error, DeadlineError},
+};
 
 use super::{coprocessor::Error as CopError, store::SnapError};
 
@@ -288,12 +291,7 @@ impl From<Error> for errorpb::Error {
                 errorpb.set_mismatch_peer_id(e);
             }
             Error::DeadlineExceeded => {
-                // Following logic are same with
-                // tikv::storage::errors::make_deadline_exceeded_busy_error.
-                // Since use tikv::storage will have cyclic package dependency.
-                let mut server_is_busy_err = errorpb::ServerIsBusy::default();
-                server_is_busy_err.set_reason("deadline is exceeded".to_string());
-                errorpb.set_server_is_busy(server_is_busy_err);
+                set_deadline_exceeded_busy_error(&mut errorpb);
             }
             _ => {}
         };
