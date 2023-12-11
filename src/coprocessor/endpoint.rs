@@ -1941,7 +1941,11 @@ mod tests {
 
             let resp = block_on(copr.handle_unary_request(config, handler_builder)).unwrap();
             assert_eq!(resp.get_data().len(), 0);
-            assert!(!resp.get_other_error().is_empty());
+            let region_err = resp.get_region_error();
+            assert_eq!(
+                region_err.get_server_is_busy().reason,
+                "deadline is exceeded".to_string()
+            );
         }
 
         {
@@ -1958,7 +1962,11 @@ mod tests {
 
             let resp = block_on(copr.handle_unary_request(config, handler_builder)).unwrap();
             assert_eq!(resp.get_data().len(), 0);
-            assert!(!resp.get_other_error().is_empty());
+            let region_err = resp.get_region_error();
+            assert_eq!(
+                region_err.get_server_is_busy().reason,
+                "deadline is exceeded".to_string()
+            );
         }
     }
 
