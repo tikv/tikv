@@ -318,6 +318,7 @@ pub fn extract_region_error_from_error(e: &Error) -> Option<errorpb::Error> {
         }
         Error(box ErrorInner::DeadlineExceeded) => {
             let mut err = errorpb::Error::default();
+            err.set_message(e.to_string());
             set_deadline_exceeded_busy_error(&mut err);
             Some(err)
         }
