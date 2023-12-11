@@ -94,9 +94,10 @@ impl<C: PdMocker + Send + Sync + 'static> Server<C> {
                 .register_service(meta_store)
                 .register_service(resource_manager);
             // Build the server.
-            let (host, port) = eps[0].clone();
-            let (mut server, port) = mgr.bind(sb, &host, port);
+            let (host, port) = &eps[0];
+            let (mut server, port) = mgr.bind(sb, host, *port);
             addrs.push(format!("{}:{}", host, port));
+            self.addrs.push((host.clone(), port));
             // Add other listening ports.
             for (host, port) in eps.iter().skip(1) {
                 let port = server
