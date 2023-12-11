@@ -29,6 +29,7 @@ cloud-azure = [
 ]
 cloud-storage-grpc = ["backup/cloud-storage-grpc"]
 cloud-storage-dylib = ["backup/cloud-storage-dylib"]
+openssl-vendored = ["tikv/openssl-vendored"]
 test-engine-kv-rocksdb = [
   "tikv/test-engine-kv-rocksdb"
 ]
@@ -58,6 +59,7 @@ engine_rocks = { workspace = true }
 engine_traits = { workspace = true }
 error_code = { workspace = true }
 file_system = { workspace = true }
+fips = { workspace = true }
 futures = "0.3"
 gag = "1.0"
 grpcio = { workspace = true }

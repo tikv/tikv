@@ -10,6 +10,9 @@ use server::setup::{ensure_no_unrecognized_config, validate_and_persist_config};
 use tikv::config::{to_flatten_config_info, TikvConfig};
 
 fn main() {
+    // OpenSSL FIPS mode should be enabled at the very start.
+    fips::maybe_enable();
+
     let build_timestamp = option_env!("TIKV_BUILD_TIME");
     let version_info = tikv::tikv_version_info(build_timestamp);
 
@@ -206,6 +209,17 @@ fn main() {
         println!("{}", serde_json::to_string_pretty(&result).unwrap());
         process::exit(0);
     }
+
+    // Sets the global logger ASAP.
+    // It is okay to use the config w/o `validate()`,
+    // because `initial_logger()` handles various conditions.
+    server::setup::initial_logger(&config);
+
+    // Print version information.
+    tikv::log_tikv_info(build_timestamp);
+
+    // Print OpenSSL FIPS mode status.
+    fips::log_status();
 
     let (service_event_tx, service_event_rx) = tikv_util::mpsc::unbounded(); // pipe for controling service
     server::server::run_tikv(config, service_event_tx, service_event_rx);

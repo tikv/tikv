@@ -356,6 +356,7 @@ dependencies = [
  "kvproto",
  "lazy_static",
  "oauth2",
+ "openssl",
  "regex",
  "slog",
  "slog-global",
@@ -1927,6 +1928,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "fips"
+version = "0.0.1"
+dependencies = [
+ "openssl",
+ "openssl-sys",
+ "slog",
+ "slog-global",
+]
+
+[[package]]
 name = "fixedbitset"
 version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2839,7 +2850,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git?branch=tikv-6.5#ef9b4fcf7489584d469723ba894644714b406c0d"
+source = "git+https://github.com/tikv/rust-rocksdb.git?branch=tikv-6.5#91f362ac1db42341a2e85df8b42cd0690aee69b0"
 dependencies = [
  "bindgen 0.57.0",
  "bzip2-sys",
@@ -2858,7 +2869,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/tikv/rust-rocksdb.git?branch=tikv-6.5#ef9b4fcf7489584d469723ba894644714b406c0d"
+source = "git+https://github.com/tikv/rust-rocksdb.git?branch=tikv-6.5#91f362ac1db42341a2e85df8b42cd0690aee69b0"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -4691,7 +4702,7 @@ dependencies = [
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git?branch=tikv-6.5#ef9b4fcf7489584d469723ba894644714b406c0d"
+source = "git+https://github.com/tikv/rust-rocksdb.git?branch=tikv-6.5#91f362ac1db42341a2e85df8b42cd0690aee69b0"
 dependencies = [
  "libc 0.2.139",
  "librocksdb_sys",
@@ -6220,6 +6231,7 @@ dependencies = [
  "example_coprocessor_plugin",
  "fail",
  "file_system",
+ "fips",
  "flate2",
  "futures 0.3.15",
  "futures-executor",
@@ -6334,6 +6346,7 @@ dependencies = [
  "engine_traits",
  "error_code",
  "file_system",
+ "fips",
  "futures 0.3.15",
  "gag",
  "grpcio",
@@ -6408,6 +6421,7 @@ version = "0.0.1"
 dependencies = [
  "cc",
  "clap 2.33.0",
+ "fips",
  "serde_json",
  "server",
  "tikv",
