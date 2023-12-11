@@ -12,7 +12,7 @@ use engine_traits::{
 
 use crate::engine_iterator::HybridEngineIterator;
 
-pub struct HybridSnapshot<EK, EM>
+pub struct HybridEngineSnapshot<EK, EM>
 where
     EK: KvEngine,
     EM: MemoryEngine,
@@ -22,14 +22,14 @@ where
     phantom: PhantomData<EM>,
 }
 
-impl<EK, EM> Snapshot for HybridSnapshot<EK, EM>
+impl<EK, EM> Snapshot for HybridEngineSnapshot<EK, EM>
 where
     EK: KvEngine,
     EM: MemoryEngine,
 {
 }
 
-impl<EK, EM> Debug for HybridSnapshot<EK, EM>
+impl<EK, EM> Debug for HybridEngineSnapshot<EK, EM>
 where
     EK: KvEngine,
     EM: MemoryEngine,
@@ -39,7 +39,7 @@ where
     }
 }
 
-impl<EK, EM> Drop for HybridSnapshot<EK, EM>
+impl<EK, EM> Drop for HybridEngineSnapshot<EK, EM>
 where
     EK: KvEngine,
     EM: MemoryEngine,
@@ -49,7 +49,7 @@ where
     }
 }
 
-impl<EK, EM> Iterable for HybridSnapshot<EK, EM>
+impl<EK, EM> Iterable for HybridEngineSnapshot<EK, EM>
 where
     EK: KvEngine,
     EM: MemoryEngine,
@@ -61,7 +61,7 @@ where
     }
 }
 
-impl<EK, EM> Peekable for HybridSnapshot<EK, EM>
+impl<EK, EM> Peekable for HybridEngineSnapshot<EK, EM>
 where
     EK: KvEngine,
     EM: MemoryEngine,
@@ -82,7 +82,7 @@ where
     }
 }
 
-impl<EK, EM> CfNamesExt for HybridSnapshot<EK, EM>
+impl<EK, EM> CfNamesExt for HybridEngineSnapshot<EK, EM>
 where
     EK: KvEngine,
     EM: MemoryEngine,
@@ -92,7 +92,7 @@ where
     }
 }
 
-impl<EK, EM> SnapshotMiscExt for HybridSnapshot<EK, EM>
+impl<EK, EM> SnapshotMiscExt for HybridEngineSnapshot<EK, EM>
 where
     EK: KvEngine,
     EM: MemoryEngine,

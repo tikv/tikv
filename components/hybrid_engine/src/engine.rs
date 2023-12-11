@@ -2,7 +2,7 @@
 
 use engine_traits::{KvEngine, MemoryEngine, Peekable, ReadOptions, Result, SyncMutable};
 
-use crate::snapshot::HybridSnapshot;
+use crate::snapshot::HybridEngineSnapshot;
 
 /// This engine is structured with both a disk engine and an in-memory engine.
 /// The disk engine houses the complete database data, whereas the in-memory
@@ -46,7 +46,7 @@ where
     EK: KvEngine,
     EM: MemoryEngine,
 {
-    type Snapshot = HybridSnapshot<EK, EM>;
+    type Snapshot = HybridEngineSnapshot<EK, EM>;
 
     fn snapshot(&self) -> Self::Snapshot {
         unimplemented!()

@@ -4,7 +4,7 @@ use engine_traits::{KvEngine, MemoryEngine, Result, SstCompressionType, SstExt, 
 
 use crate::engine::HybridEngine;
 
-pub struct HybridSstWriteBuilder {}
+pub struct HybridEngineSstWriteBuilder {}
 
 impl<EK, EM> SstExt for HybridEngine<EK, EM>
 where
@@ -13,10 +13,10 @@ where
 {
     type SstReader = EK::SstReader;
     type SstWriter = EK::SstWriter;
-    type SstWriterBuilder = HybridSstWriteBuilder;
+    type SstWriterBuilder = HybridEngineSstWriteBuilder;
 }
 
-impl<EK, EM> SstWriterBuilder<HybridEngine<EK, EM>> for HybridSstWriteBuilder
+impl<EK, EM> SstWriterBuilder<HybridEngine<EK, EM>> for HybridEngineSstWriteBuilder
 where
     EK: KvEngine,
     EM: MemoryEngine,

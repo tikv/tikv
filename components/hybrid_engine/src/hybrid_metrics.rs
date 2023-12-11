@@ -4,9 +4,9 @@ use engine_traits::{KvEngine, MemoryEngine, StatisticsReporter};
 
 use crate::engine::HybridEngine;
 
-pub struct HybridStatisticsReporter {}
+pub struct HybridEngineStatisticsReporter {}
 
-impl<EK, EM> StatisticsReporter<HybridEngine<EK, EM>> for HybridStatisticsReporter
+impl<EK, EM> StatisticsReporter<HybridEngine<EK, EM>> for HybridEngineStatisticsReporter
 where
     EK: KvEngine,
     EM: MemoryEngine,

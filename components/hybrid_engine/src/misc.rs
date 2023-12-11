@@ -2,14 +2,14 @@
 
 use engine_traits::{KvEngine, MemoryEngine, MiscExt, Result};
 
-use crate::{engine::HybridEngine, hybrid_metrics::HybridStatisticsReporter};
+use crate::{engine::HybridEngine, hybrid_metrics::HybridEngineStatisticsReporter};
 
 impl<EK, EM> MiscExt for HybridEngine<EK, EM>
 where
     EK: KvEngine,
     EM: MemoryEngine,
 {
-    type StatisticsReporter = HybridStatisticsReporter;
+    type StatisticsReporter = HybridEngineStatisticsReporter;
 
     fn flush_cf(&self, cf: &str, wait: bool) -> Result<()> {
         unimplemented!()

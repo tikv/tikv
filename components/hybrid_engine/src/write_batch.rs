@@ -6,7 +6,7 @@ use engine_traits::{
 
 use crate::engine::HybridEngine;
 
-pub struct HybridWriteBatch<EK: KvEngine> {
+pub struct HybridEngineWriteBatch<EK: KvEngine> {
     _disk_write_batch: EK::WriteBatch,
     // todo: in-memory engine write batch
 }
@@ -16,7 +16,7 @@ where
     EK: KvEngine,
     EM: MemoryEngine,
 {
-    type WriteBatch = HybridWriteBatch<EK>;
+    type WriteBatch = HybridEngineWriteBatch<EK>;
     const WRITE_BATCH_MAX_KEYS: usize = EK::WRITE_BATCH_MAX_KEYS;
 
     fn write_batch(&self) -> Self::WriteBatch {
@@ -28,7 +28,7 @@ where
     }
 }
 
-impl<EK: KvEngine> WriteBatch for HybridWriteBatch<EK> {
+impl<EK: KvEngine> WriteBatch for HybridEngineWriteBatch<EK> {
     fn write_opt(&mut self, _: &WriteOptions) -> Result<u64> {
         unimplemented!()
     }
@@ -74,7 +74,7 @@ impl<EK: KvEngine> WriteBatch for HybridWriteBatch<EK> {
     }
 }
 
-impl<EK: KvEngine> Mutable for HybridWriteBatch<EK> {
+impl<EK: KvEngine> Mutable for HybridEngineWriteBatch<EK> {
     fn put(&mut self, _key: &[u8], _value: &[u8]) -> Result<()> {
         unimplemented!()
     }
