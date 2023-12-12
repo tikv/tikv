@@ -2444,6 +2444,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9a3a5bfb195931eeb336b2a7b4d761daec841b97f947d34394601737a7bba5e4"
 
 [[package]]
+name = "hybrid_engine"
+version = "0.0.1"
+dependencies = [
+ "engine_traits",
+ "tikv_util",
+ "txn_types",
+]
+
+[[package]]
 name = "hyper"
 version = "0.14.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6240,6 +6249,7 @@ dependencies = [
  "grpcio-health",
  "hex 0.4.2",
  "http",
+ "hybrid_engine",
  "hyper",
  "hyper-openssl",
  "hyper-tls",
