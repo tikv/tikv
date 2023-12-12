@@ -4,9 +4,10 @@
 //! meeting FIPS 140 requirements.
 //!
 //! This crate provides a set of cryptographic functionalities, including
-//! [mention specific algorithms or features]. It has been meticulously crafted
+//! RNG (random number generator). It has been meticulously crafted
 //! to adhere to the FIPS 140 standards, ensuring a secure and compliant
 //! environment for cryptographic operations in regulated environments.
+// TODO: add message digest.
 
 pub mod fips;
 pub mod rand;
