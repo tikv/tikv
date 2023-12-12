@@ -136,10 +136,11 @@ where
         let use_jeprof = query_pairs.get("jeprof").map(|x| x.as_ref()) == Some("true");
 
         let result = {
-            let path = match dump_one_heap_profile() {
-                Ok(path) => path,
+            let file = match dump_one_heap_profile() {
+                Ok(file) => file,
                 Err(e) => return Ok(make_response(StatusCode::INTERNAL_SERVER_ERROR, e)),
             };
+            let path = file.path();
             if use_jeprof {
                 jeprof_heap_profile(path.to_str().unwrap())
             } else {
@@ -1561,7 +1562,6 @@ mod tests {
 
     #[cfg(feature = "mem-profiling")]
     #[test]
-    #[ignore]
     fn test_pprof_heap_service() {
         let mut status_server = StatusServer::new(
             1,
