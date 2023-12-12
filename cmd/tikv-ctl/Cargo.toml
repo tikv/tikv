@@ -49,12 +49,12 @@ clap = "2.32"
 collections = { workspace = true }
 concurrency_manager = { workspace = true }
 crossbeam = "0.8"
+crypto = { workspace = true }
 encryption_export = { workspace = true }
 engine_rocks = { workspace = true }
 engine_traits = { workspace = true }
 error_code = { workspace = true }
 file_system = { workspace = true }
-fips = { workspace = true }
 futures = "0.3"
 gag = "1.0"
 grpcio = { workspace = true }
