@@ -1,6 +1,6 @@
 // Copyright 2023 TiKV Project Authors. Licensed under Apache-2.0.
 
-//! Utilities for cryptographically strong  random number generation.
+//! Utilities for cryptographically strong random number generation.
 
 use openssl::{error::ErrorStack, rand};
 
