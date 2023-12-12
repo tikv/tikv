@@ -1277,6 +1277,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "crypto"
+version = "0.0.1"
+dependencies = [
+ "openssl",
+ "openssl-sys",
+ "slog",
+ "slog-global",
+]
+
+[[package]]
 name = "csv"
 version = "1.1.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1449,6 +1459,7 @@ dependencies = [
  "bytes",
  "crc32fast",
  "crossbeam",
+ "crypto",
  "derive_more",
  "engine_traits",
  "error_code",
@@ -1464,7 +1475,6 @@ dependencies = [
  "openssl",
  "prometheus",
  "protobuf",
- "rand 0.8.5",
  "serde",
  "serde_derive",
  "slog",
@@ -1915,16 +1925,6 @@ dependencies = [
  "lazy_static",
  "libc 0.2.139",
  "winapi 0.3.9",
-]
-
-[[package]]
-name = "fips"
-version = "0.0.1"
-dependencies = [
- "openssl",
- "openssl-sys",
- "slog",
- "slog-global",
 ]
 
 [[package]]
@@ -5149,7 +5149,6 @@ dependencies = [
  "raft",
  "raft_log_engine",
  "raftstore",
- "rand 0.8.5",
  "resolved_ts",
  "resource_metering",
  "security",
@@ -6131,6 +6130,7 @@ dependencies = [
  "byteorder",
  "chrono",
  "codec",
+ "crypto",
  "file_system",
  "flate2",
  "hex 0.4.2",
@@ -6142,7 +6142,6 @@ dependencies = [
  "panic_hook",
  "profiler",
  "protobuf",
- "rand 0.8.5",
  "regex",
  "safemem",
  "serde",
@@ -6180,6 +6179,7 @@ dependencies = [
  "crc32fast",
  "crc64fast",
  "crossbeam",
+ "crypto",
  "dashmap",
  "encryption_export",
  "engine_panic",
@@ -6191,7 +6191,6 @@ dependencies = [
  "example_coprocessor_plugin",
  "fail",
  "file_system",
- "fips",
  "flate2",
  "futures 0.3.15",
  "futures-executor",
@@ -6301,12 +6300,12 @@ dependencies = [
  "collections",
  "concurrency_manager",
  "crossbeam",
+ "crypto",
  "encryption_export",
  "engine_rocks",
  "engine_traits",
  "error_code",
  "file_system",
- "fips",
  "futures 0.3.15",
  "gag",
  "grpcio",
@@ -6324,7 +6323,6 @@ dependencies = [
  "raft-engine-ctl",
  "raft_log_engine",
  "raftstore",
- "rand 0.8.5",
  "regex",
  "security",
  "serde_json",
@@ -6381,7 +6379,7 @@ version = "0.0.1"
 dependencies = [
  "cc",
  "clap 2.33.0",
- "fips",
+ "crypto",
  "serde_json",
  "server",
  "tikv",

@@ -1,11 +1,11 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use byteorder::{BigEndian, ByteOrder};
+use crypto::rand;
 use derive_more::Deref;
 use engine_traits::EncryptionMethod as EtEncryptionMethod;
 use kvproto::encryptionpb::EncryptionMethod;
 use openssl::symm::{self, Cipher as OCipher};
-use rand::{rngs::OsRng, RngCore};
 use tikv_util::{box_err, impl_display_as_debug};
 
 use crate::{Error, Result};
@@ -57,17 +57,17 @@ pub enum Iv {
 
 impl Iv {
     /// Generate a random IV for AES-GCM.
-    pub fn new_gcm() -> Iv {
+    pub fn new_gcm() -> Result<Iv> {
         let mut iv = [0u8; GCM_IV_12];
-        OsRng.fill_bytes(&mut iv);
-        Iv::Gcm(iv)
+        rand::rand_bytes(&mut iv)?;
+        Ok(Iv::Gcm(iv))
     }
 
     /// Generate a random IV for AES-CTR.
-    pub fn new_ctr() -> Iv {
+    pub fn new_ctr() -> Result<Iv> {
         let mut iv = [0u8; CTR_IV_16];
-        OsRng.fill_bytes(&mut iv);
-        Iv::Ctr(iv)
+        rand::rand_bytes(&mut iv)?;
+        Ok(Iv::Ctr(iv))
     }
 
     pub fn from_slice(src: &[u8]) -> Result<Iv> {
@@ -228,9 +228,9 @@ mod tests {
         let mut ivs = Vec::with_capacity(100);
         for c in 0..100 {
             if c % 2 == 0 {
-                ivs.push(Iv::new_ctr());
+                ivs.push(Iv::new_ctr().unwrap());
             } else {
-                ivs.push(Iv::new_gcm());
+                ivs.push(Iv::new_gcm().unwrap());
             }
         }
         ivs.dedup_by(|a, b| a.as_slice() == b.as_slice());

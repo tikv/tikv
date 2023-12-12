@@ -54,12 +54,12 @@ clap = "2.32"
 collections = { workspace = true }
 concurrency_manager = { workspace = true }
 crossbeam = "0.8"
+crypto = { workspace = true }
 encryption_export = { workspace = true }
 engine_rocks = { workspace = true }
 engine_traits = { workspace = true }
 error_code = { workspace = true }
 file_system = { workspace = true }
-fips = { workspace = true }
 futures = "0.3"
 gag = "1.0"
 grpcio = { workspace = true }
@@ -77,7 +77,6 @@ raft-engine = { git = "https://github.com/tikv/raft-engine.git" }
 raft-engine-ctl = { git = "https://github.com/tikv/raft-engine.git" }
 raft_log_engine = { workspace = true }
 raftstore = { workspace = true }
-rand = "0.8"
 regex = "1"
 security = { workspace = true }
 serde_json = "1.0"

@@ -91,6 +91,7 @@ coprocessor_plugin_api = { workspace = true }
 crc32fast = "1.2"
 crc64fast = "0.1"
 crossbeam = "0.8"
+crypto = { workspace = true }
 dashmap = "5"
 encryption_export = { workspace = true }
 engine_panic = { workspace = true }
@@ -101,7 +102,6 @@ engine_traits_tests = { workspace = true }
 error_code = { workspace = true }
 fail = "0.5"
 file_system = { workspace = true }
-fips = { workspace = true }
 flate2 = { version = "1.0", default-features = false, features = ["zlib"] }
 futures = { version = "0.3", features = ["thread-pool", "compat"] }
 futures-executor = "0.3.1"
@@ -262,6 +262,7 @@ members = [
   "components/collections",
   "components/concurrency_manager",
   "components/coprocessor_plugin_api",
+  "components/crypto",
   "components/encryption",
   "components/encryption/export",
   "components/engine_rocks_helper",
@@ -272,7 +273,6 @@ members = [
   "components/external_storage",
   "components/external_storage/export",
   "components/file_system",
-  "components/fips",
   "components/into_other",
   "components/keys",
   "components/log_wrappers",
@@ -345,7 +345,7 @@ error_code = { path = "components/error_code" }
 external_storage = { path = "components/external_storage" }
 external_storage_export = { path = "components/external_storage/export" }
 file_system = { path = "components/file_system" }
-fips = { path = "components/fips" }
+crypto = { path = "components/crypto" }
 gcp = { path = "components/cloud/gcp" }
 into_other = { path = "components/into_other" }
 keys = { path = "components/keys" }

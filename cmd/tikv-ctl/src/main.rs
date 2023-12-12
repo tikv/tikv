@@ -19,6 +19,7 @@ use std::{
 };
 
 use collections::HashMap;
+use crypto::fips;
 use encryption_export::{
     create_backend, data_key_manager_from_config, from_engine_encryption_method, DataKeyManager,
     DecrypterReader, Iv,
