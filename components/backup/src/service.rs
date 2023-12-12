@@ -5,36 +5,17 @@ use std::sync::atomic::*;
 use futures::{channel::mpsc, FutureExt, SinkExt, StreamExt, TryFutureExt};
 use grpcio::{self, *};
 use kvproto::brpb::*;
-use raftstore::store::snapshot_backup::{SnapshotBrHandle, UnimplementedHandle};
+use raftstore::store::snapshot_backup::SnapshotBrHandle;
 use tikv_util::{error, info, warn, worker::*};
 
 use super::Task;
 use crate::disk_snap::{self, StreamHandleLoop};
 
 /// Service handles the RPC messages for the `Backup` service.
+#[derive(Clone)]
 pub struct Service<H: SnapshotBrHandle> {
     scheduler: Scheduler<Task>,
     snap_br_env: disk_snap::Env<H>,
-}
-
-impl<H: SnapshotBrHandle> Clone for Service<H> {
-    fn clone(&self) -> Self {
-        Self {
-            scheduler: self.scheduler.clone(),
-            snap_br_env: self.snap_br_env.clone(),
-        }
-    }
-}
-
-impl Service<UnimplementedHandle> {
-    // Create a new backup service without router, this used for raftstore v2.
-    // because we don't have RaftStoreRouter any more.
-    pub fn new(scheduler: Scheduler<Task>) -> Self {
-        Service {
-            scheduler,
-            snap_br_env: disk_snap::Env::unimplemented_for_v2(),
-        }
-    }
 }
 
 impl<H> Service<H>
@@ -164,11 +145,14 @@ where
         sink: grpcio::DuplexSink<PrepareSnapshotBackupResponse>,
     ) {
         let l = StreamHandleLoop::new(self.snap_br_env.clone());
-        ctx.spawn(async move {
+        // Note: should we disconnect here once there are more than one stream...?
+        // Generally once two streams enter here, one may exit
+        info!("A new prepare snapshot backup stream created!"; "peer" => %ctx.peer(), "stream_count" => %self.snap_br_env.active_stream());
+        self.snap_br_env.handle().spawn(async move {
             if let Err(err) = l.run(stream, sink.into()).await {
                 warn!("stream closed; perhaps a problem cannot be retried happens"; "reason" => ?err);
             }
-        })
+        });
     }
 }
 
@@ -182,12 +166,42 @@ mod tests {
     use txn_types::TimeStamp;
 
     use super::*;
-    use crate::endpoint::tests::*;
+    use crate::{disk_snap::Env, endpoint::tests::*};
+
+    #[derive(Clone)]
+    struct PanicHandle;
+
+    impl SnapshotBrHandle for PanicHandle {
+        fn send_wait_apply(
+            &self,
+            _region: u64,
+            _req: raftstore::store::snapshot_backup::SnapshotBrWaitApplyRequest,
+        ) -> raftstore::Result<()> {
+            panic!("this case shouldn't call this!")
+        }
+
+        fn broadcast_wait_apply(
+            &self,
+            _req: raftstore::store::snapshot_backup::SnapshotBrWaitApplyRequest,
+        ) -> raftstore::Result<()> {
+            panic!("this case shouldn't call this!")
+        }
+
+        fn broadcast_check_pending_admin(
+            &self,
+            _tx: mpsc::UnboundedSender<CheckAdminResponse>,
+        ) -> raftstore::Result<()> {
+            panic!("this case shouldn't call this!")
+        }
+    }
 
     fn new_rpc_suite() -> (Server, BackupClient, ReceiverWrapper<Task>) {
         let env = Arc::new(EnvBuilder::new().build());
         let (scheduler, rx) = dummy_scheduler();
-        let backup_service = super::Service::new(scheduler);
+        let backup_service = super::Service::with_env(
+            scheduler,
+            Env::with_rejector(PanicHandle, Default::default()),
+        );
         let builder =
             ServerBuilder::new(env.clone()).register_service(create_backup(backup_service));
         let mut server = builder.bind("127.0.0.1", 0).build().unwrap();

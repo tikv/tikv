@@ -1181,7 +1181,7 @@ where
             self.resource_manager.clone(),
         );
         let env = backup::disk_snap::Env::with_rejector_and_runtime(
-            Mutex::new(self.router.clone()),
+            Arc::new(Mutex::new(self.router.clone())),
             self.snap_br_rejector.take().unwrap(),
             backup_endpoint.io_pool_handle().clone(),
         );

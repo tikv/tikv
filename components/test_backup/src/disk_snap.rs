@@ -63,7 +63,7 @@ impl Suite {
     fn start_backup(&mut self, id: u64) {
         let (sched, _) = dummy_scheduler();
         let w = self.cluster.sim.wl();
-        let router = Mutex::new(w.get_router(id).unwrap());
+        let router = Arc::new(Mutex::new(w.get_router(id).unwrap()));
         let env = BEnv::with_rejector(router, self.nodes[&id].rejector.clone());
         let service = backup::Service::with_env(sched, env);
         let builder = ServerBuilder::new(Arc::clone(&self.grpc_env))

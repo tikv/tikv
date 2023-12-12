@@ -55,7 +55,7 @@ impl SnapshotBrWaitApplyRequest {
     }
 }
 
-pub trait SnapshotBrHandle: Sync + Send {
+pub trait SnapshotBrHandle: Sync + Send + Clone {
     fn send_wait_apply(&self, region: u64, req: SnapshotBrWaitApplyRequest) -> crate::Result<()>;
     fn broadcast_wait_apply(&self, req: SnapshotBrWaitApplyRequest) -> crate::Result<()>;
     fn broadcast_check_pending_admin(
@@ -64,7 +64,7 @@ pub trait SnapshotBrHandle: Sync + Send {
     ) -> crate::Result<()>;
 }
 
-impl<EK: KvEngine, ER: RaftEngine> SnapshotBrHandle for Mutex<RaftRouter<EK, ER>> {
+impl<EK: KvEngine, ER: RaftEngine> SnapshotBrHandle for Arc<Mutex<RaftRouter<EK, ER>>> {
     fn send_wait_apply(&self, region: u64, req: SnapshotBrWaitApplyRequest) -> crate::Result<()> {
         let msg = SignificantMsg::SnapshotBrWaitApply(req);
         metrics::SNAP_BR_WAIT_APPLY_EVENT.sent.inc();
@@ -88,36 +88,6 @@ impl<EK: KvEngine, ER: RaftEngine> SnapshotBrHandle for Mutex<RaftRouter<EK, ER>
             PeerMsg::SignificantMsg(SignificantMsg::CheckPendingAdmin(tx.clone()))
         });
         Ok(())
-    }
-}
-
-pub struct UnimplementedHandle {
-    pub reason: String,
-}
-
-impl SnapshotBrHandle for UnimplementedHandle {
-    fn send_wait_apply(&self, _region: u64, _req: SnapshotBrWaitApplyRequest) -> crate::Result<()> {
-        Err(crate::Error::Other(box_err!(
-            "send_wait_apply not implemented; note: {}",
-            self.reason
-        )))
-    }
-
-    fn broadcast_wait_apply(&self, _req: SnapshotBrWaitApplyRequest) -> crate::Result<()> {
-        Err(crate::Error::Other(box_err!(
-            "broadcast_wait_apply not implemented; note: {}",
-            self.reason
-        )))
-    }
-
-    fn broadcast_check_pending_admin(
-        &self,
-        _tx: UnboundedSender<CheckAdminResponse>,
-    ) -> crate::Result<()> {
-        Err(crate::Error::Other(box_err!(
-            "broadcast_check_pending_admin not implemented; note: {}",
-            self.reason
-        )))
     }
 }
 

@@ -2,7 +2,10 @@
 //! This module contains things about disk snapshot.
 
 use std::{
-    sync::{atomic::AtomicU64, Arc},
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc,
+    },
     task::Poll,
     time::Duration,
 };
@@ -23,9 +26,7 @@ use kvproto::{
     metapb::Region,
 };
 use raftstore::store::{
-    snapshot_backup::{
-        RejectIngestAndAdmin, SnapshotBrHandle, SnapshotBrWaitApplyRequest, UnimplementedHandle,
-    },
+    snapshot_backup::{RejectIngestAndAdmin, SnapshotBrHandle, SnapshotBrWaitApplyRequest},
     SnapshotBrWaitApplySyncer,
 };
 use tikv_util::{sys::thread::ThreadBuildWrapper, warn, Either};
@@ -109,35 +110,12 @@ impl From<Error> for HandleErr {
     }
 }
 
+#[derive(Clone)]
 pub struct Env<SR: SnapshotBrHandle> {
-    pub(crate) handle: Arc<SR>,
+    pub(crate) handle: SR,
     rejector: Arc<RejectIngestAndAdmin>,
     active_stream: Arc<AtomicU64>,
     runtime: Either<Handle, Arc<Runtime>>,
-}
-
-impl<SR: SnapshotBrHandle> Clone for Env<SR> {
-    fn clone(&self) -> Self {
-        Self {
-            handle: Arc::clone(&self.handle),
-            rejector: Arc::clone(&self.rejector),
-            active_stream: Arc::clone(&self.active_stream),
-            runtime: self.runtime.clone(),
-        }
-    }
-}
-
-impl Env<UnimplementedHandle> {
-    pub fn unimplemented_for_v2() -> Self {
-        Self {
-            handle: Arc::new(UnimplementedHandle {
-                reason: "RaftStoreV2 doesn't support snapshot backup.".to_owned(),
-            }),
-            rejector: Default::default(),
-            active_stream: Arc::new(AtomicU64::new(0)),
-            runtime: Either::Right(Self::default_runtime()),
-        }
-    }
 }
 
 impl<SR: SnapshotBrHandle> Env<SR> {
@@ -152,6 +130,10 @@ impl<SR: SnapshotBrHandle> Env<SR> {
         Arc::new(rt)
     }
 
+    pub fn active_stream(&self) -> u64 {
+        self.active_stream.load(Ordering::SeqCst)
+    }
+
     pub fn handle(&self) -> &Handle {
         match &self.runtime {
             Either::Left(h) => h,
@@ -161,7 +143,7 @@ impl<SR: SnapshotBrHandle> Env<SR> {
 
     pub fn with_rejector(handle: SR, rejector: Arc<RejectIngestAndAdmin>) -> Self {
         Self {
-            handle: Arc::new(handle),
+            handle,
             rejector,
             active_stream: Arc::new(AtomicU64::new(0)),
             runtime: Either::Right(Self::default_runtime()),
@@ -174,7 +156,7 @@ impl<SR: SnapshotBrHandle> Env<SR> {
         runtime: Handle,
     ) -> Self {
         Self {
-            handle: Arc::new(handle),
+            handle,
             rejector,
             active_stream: Arc::new(AtomicU64::new(0)),
             runtime: Either::Left(runtime),
@@ -218,6 +200,12 @@ pub struct StreamHandleLoop<SR: SnapshotBrHandle + 'static> {
     env: Env<SR>,
 }
 
+impl<SR: SnapshotBrHandle + 'static> Drop for StreamHandleLoop<SR> {
+    fn drop(&mut self) {
+        self.env.active_stream.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
 enum StreamHandleEvent {
     Req(PReq),
     WaitApplyDone(Region, Result<()>),
@@ -226,6 +214,7 @@ enum StreamHandleEvent {
 
 impl<SR: SnapshotBrHandle + 'static> StreamHandleLoop<SR> {
     pub fn new(env: Env<SR>) -> Self {
+        env.active_stream.fetch_add(1, Ordering::SeqCst);
         Self {
             env,
             pending_regions: vec![],
@@ -239,7 +228,7 @@ impl<SR: SnapshotBrHandle + 'static> StreamHandleLoop<SR> {
 
         let (tx, rx) = oneshot::channel();
         let syncer = SnapshotBrWaitApplySyncer::new(region.id, tx);
-        let handle = Arc::clone(&self.env.handle);
+        let handle = self.env.handle.clone();
         let region = region.clone();
         let epoch = region.get_region_epoch().clone();
         let id = region.get_id();
