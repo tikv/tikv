@@ -5,9 +5,9 @@ use std::{collections::HashSet, time::Duration};
 use kvproto::raft_cmdpb::{CmdType, PutRequest, RaftCmdRequest, Request};
 use raft::prelude::MessageType;
 use raftstore::store::Callback;
-use test_backup::disk_snap::{assert_success, must_wait_apply_success, Suite};
+use test_backup::disk_snap::{assert_failure, assert_success, must_wait_apply_success, Suite};
 use test_raftstore::{must_contains_error, Direction, RegionPacketFilter, Simulator};
-use tikv_util::HandyRwLock;
+use tikv_util::{config::ReadableDuration, HandyRwLock};
 
 #[test]
 fn test_basic() {
@@ -23,12 +23,21 @@ fn test_basic() {
 }
 
 #[test]
+fn test_prepare_merge() {
+    let mut suite = Suite::new(1);
+    suite.split(b"k");
+    let source = suite.cluster.get_region(b"a");
+    let target = suite.cluster.get_region(b"z");
+    assert_ne!(source.id, target.id);
+    let mut call = suite.prepare_backup(1);
+    call.prepare(60);
+    let resp = suite.cluster.try_merge(source.id, target.id);
+    assert_failure(&resp);
+}
+
+#[test]
 fn test_wait_apply() {
-    test_util::init_log_for_test();
-    let mut suite = Suite::new_with_cfg(3, |cfg| {
-        // Prevent leader transferring.
-        cfg.raft_store.raft_election_timeout_ticks = 9999999;
-    });
+    let mut suite = Suite::new(3);
     for key in 'a'..'k' {
         suite.split(&[key as u8]);
     }

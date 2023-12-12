@@ -1,11 +1,20 @@
 // Copyright 2023 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::time::Duration;
-
-use test_backup::disk_snap::{assert_success, Suite};
-
+// FIXME: Now, for making sure there isn't a regression after the advanced
+// prepare patch (anyway it is just a patch...), we won't reject the
+// `CommitMerge` command, or the client may fall into an eternal wait over it
+// while waiting pending admin command finish.
+//
+// Omitting rejecting the command won't break the consistency (at least won't
+// make things worse), but will break the case: this case itself wants to prove
+// that the `CommitMerge` won't be proposed.
 #[test]
+#[cfg(FALSE)]
 fn test_merge() {
+    use std::time::Duration;
+
+    use test_backup::disk_snap::{assert_success, Suite};
+
     let mut suite = Suite::new(1);
     suite.split(b"k");
     let mut source = suite.cluster.get_region(b"a");
