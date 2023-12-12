@@ -591,6 +591,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     }
 
     #[inline]
+    pub fn get_peer_heartbeats(&self) -> &HashMap<u64, Instant> {
+        &self.peer_heartbeats
+    }
+
+    #[inline]
     pub fn has_peer(&self, peer_id: u64) -> bool {
         self.region()
             .get_peers()
