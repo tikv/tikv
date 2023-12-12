@@ -188,6 +188,7 @@ impl<SR: SnapshotBrHandle> Env<SR> {
 
     fn reset(&self) -> PResp {
         let rejected = !self.rejector.allowed();
+        self.rejector.reset();
         let mut event = PResp::new();
         event.set_ty(PEvnT::UpdateLeaseResult);
         event.set_last_lease_is_valid(rejected);

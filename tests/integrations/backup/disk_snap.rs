@@ -2,11 +2,15 @@
 
 use std::{collections::HashSet, time::Duration};
 
+use futures::executor::block_on;
 use kvproto::raft_cmdpb::{CmdType, PutRequest, RaftCmdRequest, Request};
 use raft::prelude::MessageType;
 use raftstore::store::Callback;
-use test_backup::disk_snap::{assert_failure, assert_success, must_wait_apply_success, Suite};
+use test_backup::disk_snap::{
+    assert_failure, assert_failure_because, assert_success, must_wait_apply_success, Suite,
+};
 use test_raftstore::{must_contains_error, Direction, RegionPacketFilter, Simulator};
+use test_util::eventually;
 use tikv_util::HandyRwLock;
 
 #[test]
@@ -20,6 +24,78 @@ fn test_basic() {
         &resp.response,
         "rejecting proposing admin commands while preparing snapshot backup",
     );
+}
+
+#[test]
+fn test_conf_change() {
+    let mut suite = Suite::new(4);
+    let the_region = suite.cluster.get_region(b"");
+    let last_peer = the_region.peers.last().unwrap();
+    let res = block_on(
+        suite
+            .cluster
+            .async_remove_peer(the_region.get_id(), last_peer.clone())
+            .unwrap(),
+    );
+    assert_success(&res);
+    eventually(Duration::from_millis(100), Duration::from_secs(2), || {
+        let r = suite.cluster.get_region(b"");
+        r.peers.iter().any(|p| p.id == last_peer.id)
+    });
+    let mut calls = vec![];
+    for i in 1..=4 {
+        let mut call = suite.prepare_backup(i);
+        call.prepare(60);
+        calls.push(call);
+    }
+
+    let the_region = suite.cluster.get_region(b"");
+    let res2 = block_on(
+        suite
+            .cluster
+            .async_remove_peer(the_region.get_id(), last_peer.clone())
+            .unwrap(),
+    );
+    assert_failure_because(&res2, "rejected by coprocessor");
+    let last_peer = the_region.peers.last().unwrap();
+    calls.into_iter().for_each(|c| assert!(c.send_finalize()));
+    let res3 = block_on(
+        suite
+            .cluster
+            .async_remove_peer(the_region.get_id(), last_peer.clone())
+            .unwrap(),
+    );
+    assert_success(&res3);
+    eventually(Duration::from_millis(100), Duration::from_secs(2), || {
+        let r = suite.cluster.get_region(b"");
+        r.peers.iter().any(|p| p.id == last_peer.id)
+    });
+}
+
+#[test]
+fn test_transfer_leader() {
+    let mut suite = Suite::new(3);
+    let mut calls = vec![];
+    for i in 1..=3 {
+        let mut call = suite.prepare_backup(i);
+        call.prepare(60);
+        calls.push(call);
+    }
+    let region = suite.cluster.get_region(b"");
+    let leader = suite.cluster.leader_of_region(region.get_id()).unwrap();
+    let new_leader = region.peers.iter().find(|r| r.id != leader.id).unwrap();
+    let res = suite
+        .cluster
+        .try_transfer_leader(region.id, new_leader.clone());
+    assert_failure_because(
+        &res,
+        "rejecting transfer leader while preparing snapshot backup",
+    );
+    calls.into_iter().for_each(|c| assert!(c.send_finalize()));
+    let res = suite
+        .cluster
+        .try_transfer_leader(region.id, new_leader.clone());
+    assert_success(&res);
 }
 
 #[test]

@@ -3,6 +3,7 @@
 use std::{
     collections::{HashMap, HashSet},
     sync::{Arc, Mutex},
+    time::Duration,
 };
 
 use backup::disk_snap::Env as BEnv;
@@ -25,7 +26,11 @@ use kvproto::{
 };
 use raftstore::store::{snapshot_backup::RejectIngestAndAdmin, Callback, WriteResponse};
 use test_raftstore::*;
-use tikv_util::{future::paired_future_callback, worker::dummy_scheduler, HandyRwLock};
+use tikv_util::{
+    future::{block_on_timeout, paired_future_callback},
+    worker::dummy_scheduler,
+    HandyRwLock,
+};
 
 pub struct Node {
     service: Option<Server>,
@@ -179,6 +184,28 @@ impl PrepareBackup {
         })
     }
 
+    pub fn send_finalize(mut self) -> bool {
+        block_on(self.tx.send({
+            let mut req = PrepareSnapshotBackupRequest::new();
+            req.set_ty(PrepareSnapshotBackupRequestType::Finish);
+            (req, WriteFlags::default())
+        }))
+        .unwrap();
+        block_on_timeout(
+            async {
+                while let Some(item) = self.rx.next().await {
+                    let item = item.unwrap();
+                    if item.ty == PrepareSnapshotBackupEventType::UpdateLeaseResult {
+                        return item.last_lease_is_valid;
+                    }
+                }
+                false
+            },
+            Duration::from_secs(2),
+        )
+        .expect("take too long to finalize the stream")
+    }
+
     pub fn next(&mut self) -> PrepareSnapshotBackupResponse {
         block_on(self.rx.next()).unwrap().unwrap()
     }
@@ -199,4 +226,17 @@ pub fn assert_success(resp: &RaftCmdResponse) {
 #[track_caller]
 pub fn assert_failure(resp: &RaftCmdResponse) {
     assert!(resp.get_header().has_error(), "{:?}", resp);
+}
+
+#[track_caller]
+pub fn assert_failure_because(resp: &RaftCmdResponse, reason_contains: &str) {
+    assert!(resp.get_header().has_error(), "{:?}", resp);
+    assert!(
+        resp.get_header()
+            .get_error()
+            .get_message()
+            .contains(reason_contains),
+        "{:?}",
+        resp
+    );
 }
