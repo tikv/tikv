@@ -52,6 +52,7 @@ prometheus-static-metric = "0.5"
 protobuf = { version = "2.8", features = ["bytes"] }
 raft = { workspace = true }
 raftstore = { workspace = true }
+rand = "0.7.3"
 resolved_ts = { workspace = true }
 security = { workspace = true }
 semver = "1.0"

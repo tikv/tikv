@@ -18,7 +18,7 @@ use concurrency_manager::ConcurrencyManager;
 use crossbeam::atomic::AtomicCell;
 use engine_traits::KvEngine;
 use fail::fail_point;
-use futures::compat::Future01CompatExt;
+use futures::{channel::mpsc as futures_mpsc, compat::Future01CompatExt, lock::Mutex, StreamExt};
 use grpcio::Environment;
 use kvproto::{
     cdcpb::{
@@ -36,6 +36,7 @@ use raftstore::{
     router::CdcHandle,
     store::fsm::{store::StoreRegionMeta, ChangeObserver},
 };
+use rand::Rng;
 use resolved_ts::{resolve_by_raft, LeadershipResolver, Resolver};
 use security::SecurityManager;
 use tikv::{
@@ -62,7 +63,7 @@ use txn_types::{TimeStamp, TxnExtra, TxnExtraScheduler};
 use crate::{
     channel::{CdcEvent, SendError},
     delegate::{on_init_downstream, Delegate, Downstream, DownstreamId, DownstreamState},
-    initializer::Initializer,
+    initializer::{InitializeTask, Initializer},
     metrics::*,
     old_value::{OldValueCache, OldValueCallback},
     service::{validate_kv_api, Conn, ConnId, FeatureGate},
@@ -384,7 +385,7 @@ pub struct Endpoint<T, E, S> {
     api_version: ApiVersion,
 
     // Incremental scan
-    workers: Runtime,
+    _workers: Runtime,
     // The total number of scan tasks including running and pending.
     scan_task_counter: Arc<AtomicIsize>,
     scan_concurrency_semaphore: Arc<Semaphore>,
@@ -398,6 +399,8 @@ pub struct Endpoint<T, E, S> {
     resolved_region_heap: RefCell<ResolvedRegionHeap>,
 
     causal_ts_provider: Option<Arc<CausalTsProviderImpl>>,
+
+    initialize_queue: futures_mpsc::UnboundedSender<InitializeTask<T, E>>,
 
     // Metrics and logging.
     current_ts: TimeStamp,
@@ -472,6 +475,26 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
             region_read_progress,
             store_resolver_gc_interval,
         );
+
+        let (tx, mut rx) = futures_mpsc::unbounded::<InitializeTask<T, E>>();
+        let init_tasks = Arc::new(Mutex::new(vec![]));
+        let init_tasks_p = init_tasks.clone();
+        let (consume_tx, mut consume_rx) = futures_mpsc::unbounded();
+        workers.spawn(async move {
+            while let Some(task) = rx.next().await {
+                init_tasks_p.lock().await.push(task);
+                let _ = consume_tx.unbounded_send(());
+            }
+            drop(consume_tx);
+        });
+        workers.spawn(async move {
+            while let Some(_) = consume_rx.next().await {
+                let mut tasks = init_tasks.lock().await;
+                let offset = rand::thread_rng().gen_range(0, tasks.len());
+                tasks.swap_remove(offset).run().await;
+            }
+        });
+
         let ep = Endpoint {
             cluster_id,
             capture_regions: HashMap::default(),
@@ -488,7 +511,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
             config: config.clone(),
             raftstore_v2,
             api_version,
-            workers,
+            _workers: workers,
             scan_concurrency_semaphore,
             cdc_handle,
             tablets,
@@ -508,6 +531,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
             warn_resolved_ts_repeat_count: WARN_RESOLVED_TS_COUNT_THRESHOLD,
             current_ts: TimeStamp::zero(),
             causal_ts_provider,
+            initialize_queue: tx,
         };
         ep.register_min_ts_event(leader_resolver, Instant::now());
         ep
@@ -729,9 +753,9 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
 
         let scan_task_counter = self.scan_task_counter.clone();
         let scan_task_count = scan_task_counter.fetch_add(1, Ordering::Relaxed);
-        let release_scan_task_counter = tikv_util::DeferContext::new(move || {
+        let release_scan_task_counter = tikv_util::DeferContext::new(Box::new(move || {
             scan_task_counter.fetch_sub(1, Ordering::Relaxed);
-        });
+        }) as _);
         if scan_task_count + 1 > self.config.incremental_scan_concurrency_limit as isize {
             debug!("cdc rejects registration, too many scan tasks";
                 "region_id" => region_id,
@@ -821,10 +845,9 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
             );
         };
 
-        let change_cmd = ChangeObserver::from_cdc(region_id, delegate.handle.clone());
         let observed_range = downstream_.observed_range;
         let region_epoch = request.take_region_epoch();
-        let mut init = Initializer {
+        let init = Initializer {
             tablet: self.tablets.get(region_id).map(|t| t.into_owned()),
             sched,
             observed_range,
@@ -837,6 +860,8 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
             downstream_state,
             scan_speed_limiter: self.scan_speed_limiter.clone(),
             fetch_speed_limiter: self.fetch_speed_limiter.clone(),
+            concurrency_semaphore: self.scan_concurrency_semaphore.clone(),
+            memory_quota: self.sink_memory_quota.clone(),
             max_scan_batch_bytes: self.max_scan_batch_bytes,
             max_scan_batch_size: self.max_scan_batch_size,
             observe_id,
@@ -847,28 +872,12 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
             filter_loop,
         };
 
-        let cdc_handle = self.cdc_handle.clone();
-        let concurrency_semaphore = self.scan_concurrency_semaphore.clone();
-        let memory_quota = self.sink_memory_quota.clone();
-        self.workers.spawn(async move {
-            CDC_SCAN_TASKS.with_label_values(&["total"]).inc();
-            match init
-                .initialize(change_cmd, cdc_handle, concurrency_semaphore, memory_quota)
-                .await
-            {
-                Ok(()) => {
-                    CDC_SCAN_TASKS.with_label_values(&["finish"]).inc();
-                }
-                Err(e) => {
-                    CDC_SCAN_TASKS.with_label_values(&["abort"]).inc();
-                    error!(
-                        "cdc initialize fail: {}", e; "region_id" => region_id,
-                        "conn_id" => ?init.conn_id, "request_id" => init.request_id,
-                    );
-                    init.deregister_downstream(e)
-                }
-            }
-            drop(release_scan_task_counter);
+        CDC_SCAN_TASKS.with_label_values(&["total"]).inc();
+        let _ = self.initialize_queue.unbounded_send(InitializeTask {
+            init,
+            change_cmd: ChangeObserver::from_cdc(region_id, delegate.handle.clone()),
+            cdc_handle: self.cdc_handle.clone(),
+            scan_release: release_scan_task_counter,
         });
     }
 
@@ -1325,6 +1334,10 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta + Send> Runnable
             },
             Task::ChangeConfig(change) => self.on_change_cfg(change),
         }
+    }
+
+    fn shutdown(&mut self) {
+        self.initialize_queue.close_channel();
     }
 }
 
@@ -2057,12 +2070,12 @@ mod tests {
         let mut suite = mock_endpoint(&cfg, None, ApiVersion::V1);
 
         // Pause scan task runtime.
-        suite.endpoint.workers = Builder::new_multi_thread()
+        suite.endpoint._workers = Builder::new_multi_thread()
             .worker_threads(1)
             .build()
             .unwrap();
         let (pause_tx, pause_rx) = std::sync::mpsc::channel::<()>();
-        suite.endpoint.workers.spawn(async move {
+        suite.endpoint._workers.spawn(async move {
             let _ = pause_rx.recv();
         });
 
