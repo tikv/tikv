@@ -546,6 +546,7 @@ mod tests {
         let port = server
             .add_listening_port(format!("{}:{}", addr, 0), ServerCredentials::insecure())
             .unwrap();
+        server.start();
         let addr = format!("127.0.0.1:{}", port);
         let channel = ChannelBuilder::new(env).connect(&addr);
         let client = ChangeDataClient::new(channel);

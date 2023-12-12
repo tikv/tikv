@@ -108,7 +108,7 @@ impl<C: PdMocker + Send + Sync + 'static> Server<C> {
             }
             self.mocker.default_handler.set_endpoints(addrs.clone());
             if let Some(case) = self.mocker.case.as_ref() {
-                case.set_endpoints(addrs.clone());
+                case.set_endpoints(addrs);
             }
             server
         };
