@@ -7,7 +7,7 @@ use raft::prelude::MessageType;
 use raftstore::store::Callback;
 use test_backup::disk_snap::{assert_failure, assert_success, must_wait_apply_success, Suite};
 use test_raftstore::{must_contains_error, Direction, RegionPacketFilter, Simulator};
-use tikv_util::{config::ReadableDuration, HandyRwLock};
+use tikv_util::HandyRwLock;
 
 #[test]
 fn test_basic() {
