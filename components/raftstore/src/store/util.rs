@@ -1133,7 +1133,7 @@ pub fn check_remove_node(
     // max heartbeats missed to qualify being a slow peer
     const MAX_MISSED_HEARTBEATS: u32 = 8;
     let mut slow_peer_count: u32 = 0;
-    for (_id, last_heartbeat) in peer_heartbeat {
+    for last_heartbeat in peer_heartbeat.values() {
         if last_heartbeat.elapsed() > MAX_MISSED_HEARTBEATS * cfg.raft_heartbeat_interval() {
             slow_peer_count += 1;
         }
@@ -2579,10 +2579,8 @@ mod tests {
             std::time::Instant::now() - std::time::Duration::from_secs(1),
         );
 
-        // Call the function under test
-        let result = check_remove_node(&cfg, &change_peers, &peer_heartbeat);
-        // Assert that the function returns Ok
-        assert!(result.is_ok());
+        // Call the function under test and assert that the function returns Ok
+        let result = check_remove_node(&cfg, &change_peers, &peer_heartbeat).unwrap();
 
         // now make one peer slow
         if let Some(peer_heartbeat) = peer_heartbeat.get_mut(&3) {
