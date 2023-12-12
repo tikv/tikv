@@ -1,20 +1,20 @@
 // Copyright 2023 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine_traits::{Iterator, KvEngine, MemoryEngine, Result};
+use engine_traits::{Iterator, KvEngine, RegionCacheEngine, Result};
 use tikv_util::Either;
 
-pub struct HybridEngineIterator<EK, EM>
+pub struct HybridEngineIterator<EK, EC>
 where
     EK: KvEngine,
-    EM: MemoryEngine,
+    EC: RegionCacheEngine,
 {
-    iter: Either<EK::Iterator, EM::Iterator>,
+    iter: Either<EK::Iterator, EC::Iterator>,
 }
 
-impl<EK, EM> Iterator for HybridEngineIterator<EK, EM>
+impl<EK, EC> Iterator for HybridEngineIterator<EK, EC>
 where
     EK: KvEngine,
-    EM: MemoryEngine,
+    EC: RegionCacheEngine,
 {
     fn seek(&mut self, _key: &[u8]) -> Result<bool> {
         unimplemented!()

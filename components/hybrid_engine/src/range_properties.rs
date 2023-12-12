@@ -1,13 +1,13 @@
 // Copyright 2023 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine_traits::{KvEngine, MemoryEngine, Range, RangePropertiesExt, Result};
+use engine_traits::{KvEngine, RegionCacheEngine, Range, RangePropertiesExt, Result};
 
 use crate::engine::HybridEngine;
 
-impl<EK, EM> RangePropertiesExt for HybridEngine<EK, EM>
+impl<EK, EC> RangePropertiesExt for HybridEngine<EK, EC>
 where
     EK: KvEngine,
-    EM: MemoryEngine,
+    EC: RegionCacheEngine,
 {
     fn get_range_approximate_keys(&self, range: Range<'_>, large_threshold: u64) -> Result<u64> {
         self.disk_engine()

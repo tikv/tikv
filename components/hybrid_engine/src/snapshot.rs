@@ -6,65 +6,65 @@ use std::{
 };
 
 use engine_traits::{
-    CfNamesExt, IterOptions, Iterable, KvEngine, MemoryEngine, Peekable, ReadOptions, Result,
+    CfNamesExt, IterOptions, Iterable, KvEngine, RegionCacheEngine, Peekable, ReadOptions, Result,
     Snapshot, SnapshotMiscExt,
 };
 
 use crate::engine_iterator::HybridEngineIterator;
 
-pub struct HybridEngineSnapshot<EK, EM>
+pub struct HybridEngineSnapshot<EK, EC>
 where
     EK: KvEngine,
-    EM: MemoryEngine,
+    EC: RegionCacheEngine,
 {
     disk_snap: EK::Snapshot,
 
-    phantom: PhantomData<EM>,
+    phantom: PhantomData<EC>,
 }
 
-impl<EK, EM> Snapshot for HybridEngineSnapshot<EK, EM>
+impl<EK, EC> Snapshot for HybridEngineSnapshot<EK, EC>
 where
     EK: KvEngine,
-    EM: MemoryEngine,
+    EC: RegionCacheEngine,
 {
 }
 
-impl<EK, EM> Debug for HybridEngineSnapshot<EK, EM>
+impl<EK, EC> Debug for HybridEngineSnapshot<EK, EC>
 where
     EK: KvEngine,
-    EM: MemoryEngine,
+    EC: RegionCacheEngine,
 {
     fn fmt(&self, fmt: &mut Formatter<'_>) -> fmt::Result {
         write!(fmt, "Hybrid Engine Snapshot Impl")
     }
 }
 
-impl<EK, EM> Drop for HybridEngineSnapshot<EK, EM>
+impl<EK, EC> Drop for HybridEngineSnapshot<EK, EC>
 where
     EK: KvEngine,
-    EM: MemoryEngine,
+    EC: RegionCacheEngine,
 {
     fn drop(&mut self) {
         unimplemented!()
     }
 }
 
-impl<EK, EM> Iterable for HybridEngineSnapshot<EK, EM>
+impl<EK, EC> Iterable for HybridEngineSnapshot<EK, EC>
 where
     EK: KvEngine,
-    EM: MemoryEngine,
+    EC: RegionCacheEngine,
 {
-    type Iterator = HybridEngineIterator<EK, EM>;
+    type Iterator = HybridEngineIterator<EK, EC>;
 
     fn iterator_opt(&self, cf: &str, opts: IterOptions) -> Result<Self::Iterator> {
         unimplemented!()
     }
 }
 
-impl<EK, EM> Peekable for HybridEngineSnapshot<EK, EM>
+impl<EK, EC> Peekable for HybridEngineSnapshot<EK, EC>
 where
     EK: KvEngine,
-    EM: MemoryEngine,
+    EC: RegionCacheEngine,
 {
     type DbVector = EK::DbVector;
 
@@ -82,20 +82,20 @@ where
     }
 }
 
-impl<EK, EM> CfNamesExt for HybridEngineSnapshot<EK, EM>
+impl<EK, EC> CfNamesExt for HybridEngineSnapshot<EK, EC>
 where
     EK: KvEngine,
-    EM: MemoryEngine,
+    EC: RegionCacheEngine,
 {
     fn cf_names(&self) -> Vec<&str> {
         self.disk_snap.cf_names()
     }
 }
 
-impl<EK, EM> SnapshotMiscExt for HybridEngineSnapshot<EK, EM>
+impl<EK, EC> SnapshotMiscExt for HybridEngineSnapshot<EK, EC>
 where
     EK: KvEngine,
-    EM: MemoryEngine,
+    EC: RegionCacheEngine,
 {
     fn sequence_number(&self) -> u64 {
         unimplemented!()

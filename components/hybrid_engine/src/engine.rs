@@ -1,28 +1,29 @@
 // Copyright 2023 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine_traits::{KvEngine, MemoryEngine, Peekable, ReadOptions, Result, SyncMutable};
+use engine_traits::{KvEngine, Peekable, ReadOptions, RegionCacheEngine, Result, SyncMutable};
 
 use crate::snapshot::HybridEngineSnapshot;
 
-/// This engine is structured with both a disk engine and an in-memory engine.
-/// The disk engine houses the complete database data, whereas the in-memory
-/// engine functions as a region cache, selectively caching certain regions to
-/// enhance read performance. For the regions that are cached, in-memory engine
-/// retains all data that has not been garbage collected.
+/// This engine is structured with both a disk engine and an region cache
+/// engine. The disk engine houses the complete database data, whereas the
+/// region cache engine functions as a region cache, selectively caching certain
+/// regions (in a better performance storage device such as NVME or RAM) to
+/// enhance read performance. For the regions that are cached, region cache
+/// engine retains all data that has not been garbage collected.
 #[derive(Clone, Debug)]
-pub struct HybridEngine<EK, EM>
+pub struct HybridEngine<EK, EC>
 where
     EK: KvEngine,
-    EM: MemoryEngine,
+    EC: RegionCacheEngine,
 {
     disk_engine: EK,
-    memory_engine: EM,
+    region_cache_engine: EC,
 }
 
-impl<EK, EM> HybridEngine<EK, EM>
+impl<EK, EC> HybridEngine<EK, EC>
 where
     EK: KvEngine,
-    EM: MemoryEngine,
+    EC: RegionCacheEngine,
 {
     pub fn disk_engine(&self) -> &EK {
         &self.disk_engine
@@ -32,22 +33,22 @@ where
         &mut self.disk_engine
     }
 
-    pub fn memory_engine(&self) -> &EM {
-        &self.memory_engine
+    pub fn region_cache_engine(&self) -> &EC {
+        &self.region_cache_engine
     }
 
-    pub fn mut_memory_engine(&mut self) -> &mut EM {
-        &mut self.memory_engine
+    pub fn mut_region_cache_engine(&mut self) -> &mut EC {
+        &mut self.region_cache_engine
     }
 }
 
 // todo: implement KvEngine methods as well as it's super traits.
-impl<EK, EM> KvEngine for HybridEngine<EK, EM>
+impl<EK, EC> KvEngine for HybridEngine<EK, EC>
 where
     EK: KvEngine,
-    EM: MemoryEngine,
+    EC: RegionCacheEngine,
 {
-    type Snapshot = HybridEngineSnapshot<EK, EM>;
+    type Snapshot = HybridEngineSnapshot<EK, EC>;
 
     fn snapshot(&self) -> Self::Snapshot {
         unimplemented!()
@@ -67,10 +68,10 @@ where
     }
 }
 
-impl<EK, EM> Peekable for HybridEngine<EK, EM>
+impl<EK, EC> Peekable for HybridEngine<EK, EC>
 where
     EK: KvEngine,
-    EM: MemoryEngine,
+    EC: RegionCacheEngine,
 {
     type DbVector = EK::DbVector;
 
@@ -88,10 +89,10 @@ where
     }
 }
 
-impl<EK, EM> SyncMutable for HybridEngine<EK, EM>
+impl<EK, EC> SyncMutable for HybridEngine<EK, EC>
 where
     EK: KvEngine,
-    EM: MemoryEngine,
+    EC: RegionCacheEngine,
 {
     fn put(&self, key: &[u8], value: &[u8]) -> Result<()> {
         unimplemented!()

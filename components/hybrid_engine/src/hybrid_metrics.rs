@@ -1,21 +1,21 @@
 // Copyright 2023 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine_traits::{KvEngine, MemoryEngine, StatisticsReporter};
+use engine_traits::{KvEngine, RegionCacheEngine, StatisticsReporter};
 
 use crate::engine::HybridEngine;
 
 pub struct HybridEngineStatisticsReporter {}
 
-impl<EK, EM> StatisticsReporter<HybridEngine<EK, EM>> for HybridEngineStatisticsReporter
+impl<EK, EC> StatisticsReporter<HybridEngine<EK, EC>> for HybridEngineStatisticsReporter
 where
     EK: KvEngine,
-    EM: MemoryEngine,
+    EC: RegionCacheEngine,
 {
     fn new(name: &str) -> Self {
         unimplemented!()
     }
 
-    fn collect(&mut self, engine: &HybridEngine<EK, EM>) {
+    fn collect(&mut self, engine: &HybridEngine<EK, EC>) {
         unimplemented!()
     }
 

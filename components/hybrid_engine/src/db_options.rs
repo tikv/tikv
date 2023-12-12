@@ -1,13 +1,13 @@
 // Copyright 2023 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine_traits::{DbOptionsExt, KvEngine, MemoryEngine, Result};
+use engine_traits::{DbOptionsExt, KvEngine, RegionCacheEngine, Result};
 
 use crate::engine::HybridEngine;
 
-impl<EK, EM> DbOptionsExt for HybridEngine<EK, EM>
+impl<EK, EC> DbOptionsExt for HybridEngine<EK, EC>
 where
     EK: KvEngine,
-    EM: MemoryEngine,
+    EC: RegionCacheEngine,
 {
     type DbOptions = EK::DbOptions;
 
