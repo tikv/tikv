@@ -91,18 +91,10 @@ impl<EK: KvEngine, ER: RaftEngine> SnapshotBrHandle for Arc<Mutex<RaftRouter<EK,
     }
 }
 
+#[derive(Default)]
 pub struct RejectIngestAndAdmin {
     until: AtomicU64,
     initialized: AtomicBool,
-}
-
-impl Default for RejectIngestAndAdmin {
-    fn default() -> Self {
-        Self {
-            until: AtomicU64::new(0),
-            initialized: AtomicBool::new(false),
-        }
-    }
 }
 
 impl RejectIngestAndAdmin {
