@@ -1,6 +1,6 @@
 // Copyright 2023 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine_traits::{KvEngine, RegionCacheEngine, PerfContextExt, PerfContextKind};
+use engine_traits::{KvEngine, PerfContextExt, PerfContextKind, RegionCacheEngine};
 
 use crate::engine::HybridEngine;
 

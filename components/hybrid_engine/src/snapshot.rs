@@ -6,7 +6,7 @@ use std::{
 };
 
 use engine_traits::{
-    CfNamesExt, IterOptions, Iterable, KvEngine, RegionCacheEngine, Peekable, ReadOptions, Result,
+    CfNamesExt, IterOptions, Iterable, KvEngine, Peekable, ReadOptions, RegionCacheEngine, Result,
     Snapshot, SnapshotMiscExt,
 };
 

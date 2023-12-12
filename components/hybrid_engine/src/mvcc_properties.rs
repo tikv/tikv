@@ -1,6 +1,6 @@
 // Copyright 2023 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine_traits::{KvEngine, RegionCacheEngine, MvccProperties, MvccPropertiesExt};
+use engine_traits::{KvEngine, MvccProperties, MvccPropertiesExt, RegionCacheEngine};
 use txn_types::TimeStamp;
 
 use crate::engine::HybridEngine;

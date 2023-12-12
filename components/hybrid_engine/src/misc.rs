@@ -1,6 +1,6 @@
 // Copyright 2023 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine_traits::{KvEngine, RegionCacheEngine, MiscExt, Result};
+use engine_traits::{KvEngine, MiscExt, RegionCacheEngine, Result};
 
 use crate::{engine::HybridEngine, hybrid_metrics::HybridEngineStatisticsReporter};
 
