@@ -194,7 +194,7 @@ pub fn random_bytes(_ctx: &mut EvalContext, arg: Option<&Int>) -> Result<Option<
             let len = *arg as usize;
             let mut rand_bytes = vec![0; len];
             rand::rand_bytes(&mut rand_bytes).map_err(|_| {
-                EvaluateError::Other(format!("SSL library can't generate random bytes"))
+                EvaluateError::Other("SSL library can't generate random bytes".to_owned())
             })?;
             Ok(Some(rand_bytes))
         }
