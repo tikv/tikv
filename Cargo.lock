@@ -1247,6 +1247,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "crypto"
+version = "0.0.1"
+dependencies = [
+ "openssl",
+ "openssl-sys",
+ "slog",
+ "slog-global",
+]
+
+[[package]]
 name = "csv"
 version = "1.1.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1414,6 +1424,7 @@ dependencies = [
  "cloud",
  "crc32fast",
  "crossbeam",
+ "crypto",
  "derive_more",
  "error_code",
  "fail",
@@ -1428,7 +1439,6 @@ dependencies = [
  "openssl",
  "prometheus",
  "protobuf",
- "rand 0.8.5",
  "serde",
  "serde_derive",
  "slog",
@@ -1815,16 +1825,6 @@ dependencies = [
  "lazy_static",
  "libc 0.2.146",
  "winapi 0.3.9",
-]
-
-[[package]]
-name = "fips"
-version = "0.0.1"
-dependencies = [
- "openssl",
- "openssl-sys",
- "slog",
- "slog-global",
 ]
 
 [[package]]
@@ -2442,6 +2442,15 @@ name = "humantime"
 version = "2.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9a3a5bfb195931eeb336b2a7b4d761daec841b97f947d34394601737a7bba5e4"
+
+[[package]]
+name = "hybrid_engine"
+version = "0.0.1"
+dependencies = [
+ "engine_traits",
+ "tikv_util",
+ "txn_types",
+]
 
 [[package]]
 name = "hyper"
@@ -5107,7 +5116,6 @@ dependencies = [
  "raft_log_engine",
  "raftstore",
  "raftstore-v2",
- "rand 0.8.5",
  "resolved_ts",
  "resource_control",
  "resource_metering",
@@ -6168,6 +6176,7 @@ dependencies = [
  "byteorder",
  "chrono",
  "codec",
+ "crypto",
  "file_system",
  "flate2",
  "hex 0.4.2",
@@ -6179,7 +6188,6 @@ dependencies = [
  "panic_hook",
  "profiler",
  "protobuf",
- "rand 0.8.5",
  "regex",
  "safemem",
  "serde",
@@ -6217,6 +6225,7 @@ dependencies = [
  "crc32fast",
  "crc64fast",
  "crossbeam",
+ "crypto",
  "dashmap",
  "encryption_export",
  "engine_panic",
@@ -6228,7 +6237,6 @@ dependencies = [
  "example_coprocessor_plugin",
  "fail",
  "file_system",
- "fips",
  "flate2",
  "futures 0.3.15",
  "futures-executor",
@@ -6240,6 +6248,7 @@ dependencies = [
  "grpcio-health",
  "hex 0.4.2",
  "http",
+ "hybrid_engine",
  "hyper",
  "hyper-openssl",
  "hyper-tls",
@@ -6340,12 +6349,12 @@ dependencies = [
  "collections",
  "concurrency_manager",
  "crossbeam",
+ "crypto",
  "encryption_export",
  "engine_rocks",
  "engine_traits",
  "error_code",
  "file_system",
- "fips",
  "futures 0.3.15",
  "gag",
  "grpcio",
@@ -6363,7 +6372,6 @@ dependencies = [
  "raft-engine-ctl",
  "raft_log_engine",
  "raftstore",
- "rand 0.8.5",
  "regex",
  "security",
  "serde_json",
@@ -6420,9 +6428,9 @@ version = "0.0.1"
 dependencies = [
  "cc",
  "clap 2.33.0",
+ "crypto",
  "encryption_export",
  "engine_traits",
- "fips",
  "keys",
  "kvproto",
  "raft-engine",
