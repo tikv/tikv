@@ -214,7 +214,7 @@ impl PrepareBackup {
 #[track_caller]
 pub fn must_wait_apply_success(res: &PrepareSnapshotBackupResponse) -> u64 {
     assert!(!res.has_error(), "{res:?}");
-    assert_eq!(res.ty, PrepareSnapshotBackupEventType::WaitApplyDone,);
+    assert_eq!(res.ty, PrepareSnapshotBackupEventType::WaitApplyDone);
     res.get_region().id
 }
 

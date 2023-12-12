@@ -40,7 +40,7 @@ fn test_conf_change() {
     assert_success(&res);
     eventually(Duration::from_millis(100), Duration::from_secs(2), || {
         let r = suite.cluster.get_region(b"");
-        r.peers.iter().any(|p| p.id == last_peer.id)
+        !r.peers.iter().any(|p| p.id == last_peer.id)
     });
     let mut calls = vec![];
     for i in 1..=4 {
@@ -68,7 +68,7 @@ fn test_conf_change() {
     assert_success(&res3);
     eventually(Duration::from_millis(100), Duration::from_secs(2), || {
         let r = suite.cluster.get_region(b"");
-        r.peers.iter().any(|p| p.id == last_peer.id)
+        !r.peers.iter().any(|p| p.id == last_peer.id)
     });
 }
 
