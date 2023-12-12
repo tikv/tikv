@@ -293,11 +293,22 @@ where
 
     /// Build gRPC server and bind to address.
     pub fn build_and_bind(&mut self) -> Result<SocketAddr> {
-        let sb = self.builder_or_server.take().unwrap().left().unwrap();
-        let (server, addr) = self.builder_factory.bind(sb)?;
-        self.local_addr = addr;
-        self.builder_or_server = Some(Either::Right(server));
-        Ok(addr)
+        match self.builder_or_server.take() {
+            Some(Either::Left(builder)) => {
+                let (server, addr) = self.builder_factory.bind(builder)?;
+                self.local_addr = addr;
+                self.builder_or_server = Some(Either::Right(server));
+            }
+            Some(Either::Right(server)) => {
+                self.builder_or_server = Some(Either::Right(server));
+            }
+            None => {
+                return Err(Error::Other(box_err!(
+                    "failed to build and bind the grpc server."
+                )));
+            }
+        }
+        Ok(self.local_addr)
     }
 
     fn start_grpc(&mut self) {
