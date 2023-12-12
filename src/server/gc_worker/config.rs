@@ -26,7 +26,7 @@ pub struct GcConfig {
     /// can enable it by force.
     pub compaction_filter_skip_version_check: bool,
     /// gc threads count
-    pub thread_count: usize,
+    pub num_threads: usize,
 }
 
 impl Default for GcConfig {
@@ -37,7 +37,7 @@ impl Default for GcConfig {
             max_write_bytes_per_sec: ReadableSize(DEFAULT_GC_MAX_WRITE_BYTES_PER_SEC),
             enable_compaction_filter: true,
             compaction_filter_skip_version_check: false,
-            thread_count: 1,
+            num_threads: 1,
         }
     }
 }
@@ -47,7 +47,7 @@ impl GcConfig {
         if self.batch_keys == 0 {
             return Err("gc.batch_keys should not be 0".into());
         }
-        if self.thread_count == 0 {
+        if self.num_threads == 0 {
             return Err("gc.thread_count should not be 0".into());
         }
         Ok(())
@@ -65,7 +65,7 @@ impl ConfigManager for GcWorkerConfigManager {
         {
             let change = change.clone();
             if let Some(pool) = self.1.as_ref() {
-                if let Some(v) = change.get("thread_count") {
+                if let Some(v) = change.get("num_threads") {
                     let pool_size: usize = v.into();
                     pool.scale_pool_size(pool_size);
                     info!(
