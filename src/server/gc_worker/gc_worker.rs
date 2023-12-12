@@ -1219,7 +1219,7 @@ impl<E: Engine> GcWorker<E> {
     ) -> Self {
         let worker_builder = WorkerBuilder::new("gc-worker")
             .pending_capacity(GC_MAX_PENDING_TASKS)
-            .thread_count(cfg.thread_count);
+            .thread_count(cfg.num_threads);
         let worker = worker_builder.create().lazy_build("gc-worker");
         let worker_scheduler = worker.scheduler();
         GcWorker {
@@ -1267,7 +1267,7 @@ impl<E: Engine> GcWorker<E> {
             self.scheduler(),
             self.config_manager.clone(),
             self.feature_gate.clone(),
-            self.config_manager.value().thread_count,
+            self.config_manager.value().num_threads,
         )
         .start()?;
         *handle = Some(new_handle);
@@ -1695,7 +1695,7 @@ mod tests {
         region2.set_start_key(split_key.to_vec());
 
         let mut gc_config = GcConfig::default();
-        gc_config.thread_count = 2;
+        gc_config.num_threads = 2;
         let mut gc_worker = GcWorker::new(
             engine,
             tx,
@@ -1873,7 +1873,7 @@ mod tests {
         let ri_provider = RegionInfoAccessor::new(&mut host);
 
         let mut gc_config = GcConfig::default();
-        gc_config.thread_count = 2;
+        gc_config.num_threads = 2;
         let mut gc_worker = GcWorker::new(
             prefixed_engine.clone(),
             tx,
@@ -2267,7 +2267,7 @@ mod tests {
         region.mut_peers().push(new_peer(store_id, 1));
 
         let mut gc_config = GcConfig::default();
-        gc_config.thread_count = 2;
+        gc_config.num_threads = 2;
         let mut gc_worker = GcWorker::new(
             engine.clone(),
             tx,
@@ -2830,7 +2830,7 @@ mod tests {
         let gate = FeatureGate::default();
         gate.set_version("5.0.0").unwrap();
         let mut gc_config = GcConfig::default();
-        gc_config.thread_count = 1;
+        gc_config.num_threads = 1;
         let gc_worker = GcWorker::new(
             engine,
             tx,
@@ -2839,10 +2839,16 @@ mod tests {
             Arc::new(MockRegionInfoProvider::new(vec![])),
         );
         let mut config_change = ConfigChange::new();
-        config_change.insert(String::from("thread_count"), ConfigValue::Usize(5));
+        config_change.insert(String::from("num_threads"), ConfigValue::Usize(5));
         let mut cfg_manager = gc_worker.get_config_manager();
         cfg_manager.dispatch(config_change).unwrap();
 
         assert_eq!(gc_worker.get_worker_thread_count(), 5);
+
+        let mut config_change = ConfigChange::new();
+        config_change.insert(String::from("num_threads"), ConfigValue::Usize(2));
+        cfg_manager.dispatch(config_change).unwrap();
+
+        assert_eq!(gc_worker.get_worker_thread_count(), 2);
     }
 }
