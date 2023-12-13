@@ -204,6 +204,9 @@ rusoto_mock = { git = "https://github.com/tikv/rusoto", branch = "gh1482-s3-addr
 rusoto_s3 = { git = "https://github.com/tikv/rusoto", branch = "gh1482-s3-addr-styles" }
 rusoto_sts = { git = "https://github.com/tikv/rusoto", branch = "gh1482-s3-addr-styles" }
 
+# NOTICE: use openssl for signature to support fips 140
+tame-oauth = { git = "https://github.com/tikv/tame-oauth", branch = "fips" }
+
 snappy-sys = { git = "https://github.com/busyjay/rust-snappy.git", branch = "static-link" }
 
 # remove this when https://github.com/danburkert/fs2-rs/pull/42 is merged.
