@@ -11,3 +11,4 @@ testexport = []
 engine_traits = { workspace = true }
 txn_types = { workspace = true }
 tikv_util = { workspace = true }
+engine_rocks = { workspace = true }
