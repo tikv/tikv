@@ -1458,6 +1458,16 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                         Some(ScanMode::Forward),
                         !ctx.get_not_fill_cache(),
                     );
+                    let memory_locks = reader
+                        .load_in_memory_pessimisitic_lock_range(
+                            start_key.as_ref(),
+                            end_key.as_ref(),
+                            |_, lock| lock.start_ts <= max_ts,
+                            limit,
+                        )
+                        .map_err(txn::Error::from);
+                    let (memory_lock_kv_pairs, _) = memory_locks?;
+
                     let result = reader
                         .scan_locks(
                             start_key.as_ref(),
@@ -1468,7 +1478,12 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                         .map_err(txn::Error::from);
                     statistics.add(&reader.statistics);
                     let (kv_pairs, _) = result?;
-                    let mut locks = Vec::with_capacity(kv_pairs.len());
+                    let mut locks = Vec::with_capacity(kv_pairs.len() + memory_lock_kv_pairs.len());
+                    for (key, lock) in memory_lock_kv_pairs {
+                        let lock_info =
+                            lock.into_lock_info(key.into_raw().map_err(txn::Error::from)?);
+                        locks.push(lock_info);
+                    }
                     for (key, lock) in kv_pairs {
                         let lock_info =
                             lock.into_lock_info(key.into_raw().map_err(txn::Error::from)?);
@@ -7394,6 +7409,99 @@ mod tests {
             ))
             .unwrap(),
         );
+    }
+
+    #[test]
+    fn test_scan_lock_with_memory_lock() {
+        let storage = TestStorageBuilderApiV1::new(MockLockManager::new())
+            .build()
+            .unwrap();
+        let (tx, rx) = channel();
+        storage
+            .sched_txn_command(
+                commands::AcquirePessimisticLock::new(
+                    vec![(Key::from_raw(b"a"), false), (Key::from_raw(b"b"), false)],
+                    b"a".to_vec(),
+                    20.into(),
+                    3000,
+                    true,
+                    20.into(),
+                    Some(WaitTimeout::Millis(1000)),
+                    false,
+                    21.into(),
+                    false,
+                    false,
+                    false,
+                    Context::default(),
+                ),
+                expect_ok_callback(tx.clone(), 0),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        storage
+            .sched_txn_command(
+                commands::Prewrite::with_defaults(
+                    vec![
+                        Mutation::make_put(Key::from_raw(b"x"), b"foo".to_vec()),
+                        Mutation::make_put(Key::from_raw(b"y"), b"foo".to_vec()),
+                        Mutation::make_put(Key::from_raw(b"z"), b"foo".to_vec()),
+                    ],
+                    b"x".to_vec(),
+                    10.into(),
+                ),
+                expect_ok_callback(tx, 0),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+
+        let (lock_a, lock_b, lock_x, lock_y, lock_z) = (
+            {
+                let mut lock = LockInfo::default();
+                lock.set_primary_lock(b"a".to_vec());
+                lock.set_lock_version(20);
+                lock.set_lock_for_update_ts(20);
+                lock.set_key(b"a".to_vec());
+                lock.set_min_commit_ts(21);
+                lock.set_lock_type(Op::PessimisticLock);
+                lock.set_lock_ttl(3000);
+                lock
+            },
+            {
+                let mut lock = LockInfo::default();
+                lock.set_primary_lock(b"a".to_vec());
+                lock.set_lock_version(20);
+                lock.set_lock_for_update_ts(20);
+                lock.set_key(b"b".to_vec());
+                lock.set_min_commit_ts(21);
+                lock.set_lock_type(Op::PessimisticLock);
+                lock.set_lock_ttl(3000);
+                lock
+            },
+            {
+                let mut lock = LockInfo::default();
+                lock.set_primary_lock(b"x".to_vec());
+                lock.set_lock_version(10);
+                lock.set_key(b"x".to_vec());
+                lock
+            },
+            {
+                let mut lock = LockInfo::default();
+                lock.set_primary_lock(b"x".to_vec());
+                lock.set_lock_version(10);
+                lock.set_key(b"y".to_vec());
+                lock
+            },
+            {
+                let mut lock = LockInfo::default();
+                lock.set_primary_lock(b"x".to_vec());
+                lock.set_lock_version(10);
+                lock.set_key(b"z".to_vec());
+                lock
+            },
+        );
+        let res =
+            block_on(storage.scan_lock(Context::default(), 101.into(), None, None, 10)).unwrap();
+        assert_eq!(res, vec![lock_a, lock_b, lock_x, lock_y, lock_z,]);
     }
 
     #[test]
