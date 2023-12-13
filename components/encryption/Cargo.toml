@@ -16,6 +16,7 @@ byteorder = "1.2"
 bytes = "1.0"
 crc32fast = "1.2"
 crossbeam = "0.8"
+crypto = { workspace = true }
 derive_more = "0.99.3"
 engine_traits = { workspace = true }
 error_code = { workspace = true }
@@ -30,7 +31,9 @@ online_config = { workspace = true }
 openssl = { workspace = true }
 prometheus = { version = "0.13", features = ["nightly"] }
 protobuf = { version = "2.8", features = ["bytes"] }
-rand = "0.8"
+# For simplicity and compliance with FIPS 140 requirements for random number
+# generation, do not use the 'rand' crate in encryption-related code.
+# rand = "*"
 serde = "1.0"
 serde_derive = "1.0"
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }

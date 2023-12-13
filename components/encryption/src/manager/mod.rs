@@ -13,6 +13,7 @@ use std::{
 };
 
 use crossbeam::channel::{self, select, tick};
+use crypto::rand;
 use engine_traits::{
     EncryptionKeyManager, EncryptionMethod as EtEncryptionMethod, FileEncryptionInfo,
 };
@@ -196,7 +197,7 @@ impl Dicts {
     fn new_file(&self, fname: &str, method: EncryptionMethod) -> Result<FileInfo> {
         let mut file_dict_file = self.file_dict_file.lock().unwrap();
         let iv = if method != EncryptionMethod::Plaintext {
-            Iv::new_ctr()
+            Iv::new_ctr()?
         } else {
             Iv::Empty
         };
@@ -345,7 +346,9 @@ impl Dicts {
         // Generate new data key.
         let generate_limit = 10;
         for _ in 0..generate_limit {
-            let (key_id, key) = generate_data_key(method);
+            let Ok((key_id, key)) = generate_data_key(method) else {
+                continue;
+            };
             if key_id == 0 {
                 // 0 is invalid
                 continue;
@@ -417,14 +420,12 @@ fn run_background_rotate_work(
     }
 }
 
-fn generate_data_key(method: EncryptionMethod) -> (u64, Vec<u8>) {
-    use rand::{rngs::OsRng, RngCore};
-
-    let key_id = OsRng.next_u64();
+pub(crate) fn generate_data_key(method: EncryptionMethod) -> Result<(u64, Vec<u8>)> {
+    let key_id = rand::rand_u64()?;
     let key_length = crypter::get_method_key_length(method);
     let mut key = vec![0; key_length];
-    OsRng.fill_bytes(&mut key);
-    (key_id, key)
+    rand::rand_bytes(&mut key)?;
+    Ok((key_id, key))
 }
 
 pub struct DataKeyManager {
