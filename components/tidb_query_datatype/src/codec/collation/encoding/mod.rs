@@ -2,12 +2,14 @@
 
 mod ascii;
 mod gbk;
+mod unicode_letter;
 mod utf8;
 
 use std::str;
 
 pub use ascii::*;
 pub use gbk::*;
+pub use unicode_letter::*;
 pub use utf8::*;
 
 use super::Encoding;

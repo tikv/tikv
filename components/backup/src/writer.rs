@@ -121,7 +121,7 @@ impl<W: SstWriter + 'static> Writer<W> {
             .with_label_values(&[cf.into()])
             .inc_by(self.total_kvs);
         let file_name = format!("{}_{}.sst", name, cf);
-        let iv = Iv::new_ctr();
+        let iv = Iv::new_ctr().map_err(|e| Error::Other(box_err!("new IV error: {:?}", e)))?;
         let encrypter_reader =
             EncrypterReader::new(sst_reader, cipher.cipher_type, &cipher.cipher_key, iv)
                 .map_err(|e| Error::Other(box_err!("new EncrypterReader error: {:?}", e)))?;

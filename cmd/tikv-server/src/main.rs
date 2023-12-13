@@ -5,6 +5,7 @@
 use std::{path::Path, process};
 
 use clap::{crate_authors, App, Arg};
+use crypto::fips;
 use serde_json::{Map, Value};
 use server::setup::{ensure_no_unrecognized_config, validate_and_persist_config};
 use tikv::{
