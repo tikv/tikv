@@ -2,7 +2,7 @@
 
 use std::{
     i32,
-    net::SocketAddr,
+    net::{IpAddr, SocketAddr},
     str::FromStr,
     sync::Arc,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
@@ -113,7 +113,7 @@ where
         let addr = SocketAddr::from_str(&self.cfg.value().addr)?;
         let ip: String = format!("{}", addr.ip());
         let (server, port) = self.security_mgr.bind(sb, &ip, addr.port());
-        let addr = SocketAddr::from_str(&format!("{}:{}", ip, port))?;
+        let addr = SocketAddr::new(IpAddr::from_str(&ip)?, port);
         Ok((server, addr))
     }
 }

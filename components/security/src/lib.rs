@@ -7,6 +7,8 @@ use std::{
     error::Error,
     fs::{self, File},
     io::Read,
+    net::{IpAddr, SocketAddr},
+    str::FromStr,
     sync::{Arc, Mutex},
     time::SystemTime,
 };
@@ -183,7 +185,10 @@ impl SecurityManager {
     }
 
     pub fn bind(&self, mut sb: ServerBuilder, addr: &str, port: u16) -> (Server, u16) {
-        let addr = format!("{}:{}", addr, port);
+        let addr = format!(
+            "{}",
+            SocketAddr::new(IpAddr::from_str(&addr).unwrap(), port)
+        );
         let creds = self.gen_credentials();
         if !self.cfg.ca_path.is_empty() && !self.cfg.cert_allowed_cn.is_empty() {
             let cn_checker = CnChecker {
