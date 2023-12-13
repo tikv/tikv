@@ -28,8 +28,10 @@ use engine_traits::{
 use error_code::ErrorCodeExt;
 use file_system::{get_io_rate_limiter, set_io_rate_limiter, BytesFetcher, File, IoBudgetAdjustor};
 use grpcio::Environment;
+use hybrid_engine::HybridEngine;
 use pd_client::{PdClient, RpcClient};
 use raft_log_engine::RaftLogEngine;
+use region_cache_memory_engine::RegionCacheMemoryEngine;
 use security::SecurityManager;
 use tikv::{
     config::{ConfigController, DbConfigManger, DbType, TikvConfig},
@@ -692,6 +694,22 @@ impl Stop for Worker {
 impl<T: fmt::Display + Send + 'static> Stop for LazyWorker<T> {
     fn stop(self: Box<Self>) {
         self.stop_worker();
+    }
+}
+
+pub trait KvEngineBuilder: KvEngine {
+    fn build(disk_engine: RocksEngine) -> Self;
+}
+
+impl KvEngineBuilder for RocksEngine {
+    fn build(disk_engine: RocksEngine) -> Self {
+        disk_engine
+    }
+}
+
+impl KvEngineBuilder for HybridEngine<RocksEngine, RegionCacheMemoryEngine> {
+    fn build(_disk_engine: RocksEngine) -> Self {
+        unimplemented!()
     }
 }
 

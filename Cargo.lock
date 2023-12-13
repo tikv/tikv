@@ -2447,6 +2447,7 @@ checksum = "9a3a5bfb195931eeb336b2a7b4d761daec841b97f947d34394601737a7bba5e4"
 name = "hybrid_engine"
 version = "0.0.1"
 dependencies = [
+ "engine_rocks",
  "engine_traits",
  "tikv_util",
  "txn_types",
@@ -4440,6 +4441,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "49b3de9ec5dc0a3417da371aab17d729997c15010e7fd24ff707773a33bddb64"
 
 [[package]]
+name = "region_cache_memory_engine"
+version = "0.0.1"
+dependencies = [
+ "collections",
+ "engine_traits",
+ "skiplist-rs",
+]
+
+[[package]]
 name = "remove_dir_all"
 version = "0.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5104,6 +5114,7 @@ dependencies = [
  "grpcio",
  "grpcio-health",
  "hex 0.4.2",
+ "hybrid_engine",
  "keys",
  "kvproto",
  "libc 0.2.146",
@@ -5116,6 +5127,7 @@ dependencies = [
  "raft_log_engine",
  "raftstore",
  "raftstore-v2",
+ "region_cache_memory_engine",
  "resolved_ts",
  "resource_control",
  "resource_metering",
@@ -5194,6 +5206,16 @@ name = "siphasher"
 version = "0.3.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fa8f3741c7372e75519bd9346068370c9cdaabcc1f9599cbcf2a2719352286b7"
+
+[[package]]
+name = "skiplist-rs"
+version = "0.1.0"
+source = "git+https://github.com/tikv/skiplist-rs.git?branch=main#618af619d9348ef89eaa71c5f6fbddbd9a5c09bf"
+dependencies = [
+ "bytes",
+ "rand 0.8.5",
+ "slog",
+]
 
 [[package]]
 name = "slab"
@@ -6290,6 +6312,7 @@ dependencies = [
  "raftstore-v2",
  "rand 0.7.3",
  "regex",
+ "region_cache_memory_engine",
  "reqwest",
  "resource_control",
  "resource_metering",
@@ -6821,7 +6844,7 @@ version = "1.6.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "97fee6b57c6a41524a810daee9286c02d7752c4253064d0b05472833a438f675"
 dependencies = [
- "cfg-if 1.0.0",
+ "cfg-if 0.1.10",
  "static_assertions",
 ]
 
