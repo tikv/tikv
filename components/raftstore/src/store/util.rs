@@ -2579,7 +2579,7 @@ mod tests {
         );
 
         // Call the function under test and assert that the function returns Ok
-        let result = check_remove_node(&cfg, &change_peers, &peer_heartbeat).unwrap();
+        check_remove_node(&cfg, &change_peers, &peer_heartbeat).unwrap();
 
         // now make one peer slow
         if let Some(peer_heartbeat) = peer_heartbeat.get_mut(&3) {
