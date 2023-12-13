@@ -98,6 +98,16 @@ impl SnapshotList {
         let count = self.0.get(&read_ts).unwrap_or(&0) + 1;
         self.0.insert(read_ts, count);
     }
+
+    fn reclaim_snapshot(&mut self, read_ts: u64) {
+        let count = *self.0.get(&read_ts).unwrap();
+        assert!(count >= 1);
+        if count == 1 {
+            self.0.remove(&read_ts).unwrap();
+        } else {
+            self.0.insert(read_ts, count - 1);
+        }
+    }
 }
 
 #[derive(Default)]
@@ -179,7 +189,8 @@ impl RegionCacheEngine for RegionCacheMemoryEngine {
         Some(RegionCacheSnapshot {
             region_id,
             snapshot_ts: read_ts,
-            engine: core.engine.get(&region_id).unwrap().clone(),
+            region_memory_engine: core.engine.get(&region_id).unwrap().clone(),
+            engine: self.clone(),
         })
     }
 }
@@ -417,7 +428,16 @@ impl Mutable for RegionCacheWriteBatch {
 pub struct RegionCacheSnapshot {
     region_id: u64,
     snapshot_ts: u64,
-    engine: RegionMemoryEngine,
+    region_memory_engine: RegionMemoryEngine,
+    engine: RegionCacheMemoryEngine,
+}
+
+impl Drop for RegionCacheSnapshot {
+    fn drop(&mut self) {
+        let mut core = self.engine.core.lock().unwrap();
+        let meta = core.region_metas.get_mut(&self.region_id).unwrap();
+        meta.snapshot_list.reclaim_snapshot(self.snapshot_ts);
+    }
 }
 
 impl Snapshot for RegionCacheSnapshot {}
@@ -426,7 +446,7 @@ impl Iterable for RegionCacheSnapshot {
     type Iterator = RegionCacheIterator;
 
     fn iterator_opt(&self, cf: &str, opts: IterOptions) -> Result<Self::Iterator> {
-        let iter = self.engine.data[cf_to_id(cf)].iter();
+        let iter = self.region_memory_engine.data[cf_to_id(cf)].iter();
         let prefix_same_as_start = opts.prefix_same_as_start();
         let (lower_bound, upper_bound) = opts.build_bounds();
         Ok(RegionCacheIterator {
@@ -454,7 +474,7 @@ impl Peekable for RegionCacheSnapshot {
         cf: &str,
         key: &[u8],
     ) -> Result<Option<Self::DbVector>> {
-        Ok(self.engine.data[cf_to_id(cf)]
+        Ok(self.region_memory_engine.data[cf_to_id(cf)]
             .get(key)
             .cloned()
             .map(|v| RegionCacheDbVector(v)))
@@ -513,17 +533,29 @@ mod tests {
 
         let verify_snapshot_count = |snapshot_ts, count| {
             let core = engine.core.lock().unwrap();
-            assert_eq!(
-                *core
-                    .region_metas
-                    .get(&1)
-                    .unwrap()
-                    .snapshot_list
-                    .0
-                    .get(&snapshot_ts)
-                    .unwrap(),
-                count
-            );
+            if count > 0 {
+                assert_eq!(
+                    *core
+                        .region_metas
+                        .get(&1)
+                        .unwrap()
+                        .snapshot_list
+                        .0
+                        .get(&snapshot_ts)
+                        .unwrap(),
+                    count
+                );
+            } else {
+                assert!(
+                    core.region_metas
+                        .get(&1)
+                        .unwrap()
+                        .snapshot_list
+                        .0
+                        .get(&snapshot_ts)
+                        .is_none()
+                )
+            }
         };
 
         assert!(engine.snapshot(1, 5).is_none());
@@ -532,19 +564,30 @@ mod tests {
             let mut core = engine.core.lock().unwrap();
             core.region_metas.get_mut(&1).unwrap().can_read = true;
         }
-        let _s1 = engine.snapshot(1, 5).unwrap();
+        let s1 = engine.snapshot(1, 5).unwrap();
 
         {
             let mut core = engine.core.lock().unwrap();
             core.region_metas.get_mut(&1).unwrap().safe_ts = 5;
         }
         assert!(engine.snapshot(1, 5).is_none());
-        let _s2 = engine.snapshot(1, 10).unwrap();
+        let s2 = engine.snapshot(1, 10).unwrap();
 
         verify_snapshot_count(5, 1);
         verify_snapshot_count(10, 1);
-        let _s3 = engine.snapshot(1, 10).unwrap();
+        let s3 = engine.snapshot(1, 10).unwrap();
         verify_snapshot_count(10, 2);
+
+        drop(s1);
+        verify_snapshot_count(5, 0);
+        drop(s2);
+        verify_snapshot_count(10, 1);
+        let s4 = engine.snapshot(1, 10).unwrap();
+        verify_snapshot_count(10, 2);
+        drop(s4);
+        verify_snapshot_count(10, 1);
+        drop(s3);
+        verify_snapshot_count(10, 0);
     }
 
     fn construct_key(i: i32) -> String {
