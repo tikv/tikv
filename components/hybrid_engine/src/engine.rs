@@ -42,6 +42,19 @@ where
     }
 }
 
+impl<EK, EC> HybridEngine<EK, EC>
+where
+    EK: KvEngine,
+    EC: RegionCacheEngine,
+{
+    pub fn new(disk_engine: EK, region_cache_engine: EC) -> Self {
+        Self {
+            disk_engine,
+            region_cache_engine,
+        }
+    }
+}
+
 // todo: implement KvEngine methods as well as it's super traits.
 impl<EK, EC> KvEngine for HybridEngine<EK, EC>
 where
