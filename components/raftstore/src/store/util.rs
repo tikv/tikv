@@ -1014,7 +1014,7 @@ pub fn check_conf_change(
     ignore_safety: bool,
     peer_heartbeat: &collections::HashMap<u64, std::time::Instant>,
 ) -> Result<()> {
-    check_remove_node(cfg, change_peers, peer_heartbeat)?;
+    check_remove_node(cfg, change_peers, leader.get_id(), peer_heartbeat)?;
     let current_progress = node.status().progress.unwrap().clone();
     let mut after_progress = current_progress.clone();
     let cc_v2 = cc.as_v2();
@@ -1128,13 +1128,16 @@ pub fn check_conf_change(
 pub fn check_remove_node(
     cfg: &Config,
     change_peers: &[ChangePeerRequest],
+    leader_id: u64,
     peer_heartbeat: &collections::HashMap<u64, std::time::Instant>,
 ) -> Result<()> {
     // max heartbeats missed to qualify being a slow peer
     const MAX_MISSED_HEARTBEATS: u32 = 8;
     let mut slow_peer_count: u32 = 0;
-    for last_heartbeat in peer_heartbeat.values() {
-        if last_heartbeat.elapsed() > MAX_MISSED_HEARTBEATS * cfg.raft_heartbeat_interval() {
+    for (id, last_heartbeat) in peer_heartbeat {
+        if *id != leader_id
+            && last_heartbeat.elapsed() > MAX_MISSED_HEARTBEATS * cfg.raft_heartbeat_interval()
+        {
             slow_peer_count += 1;
         }
     }
@@ -2580,7 +2583,7 @@ mod tests {
         );
 
         // Call the function under test and assert that the function returns Ok
-        check_remove_node(&cfg, &change_peers, &peer_heartbeat).unwrap();
+        check_remove_node(&cfg, &change_peers, 1, &peer_heartbeat).unwrap();
 
         // now make one peer slow
         if let Some(peer_heartbeat) = peer_heartbeat.get_mut(&3) {
@@ -2588,7 +2591,7 @@ mod tests {
         }
 
         // Call the function under test
-        let result = check_remove_node(&cfg, &change_peers, &peer_heartbeat);
+        let result = check_remove_node(&cfg, &change_peers, 1, &peer_heartbeat);
         // Assert that the function returns failed
         assert!(result.is_err());
 
@@ -2599,7 +2602,7 @@ mod tests {
         })
         .into();
         // Call the function under test
-        check_remove_node(&cfg, &change_peers, &peer_heartbeat).unwrap();
+        check_remove_node(&cfg, &change_peers, 1, &peer_heartbeat).unwrap();
 
         // there's no remove node, it's fine with slow peers.
         change_peers[0] = ChangePeerRequest {
@@ -2612,6 +2615,6 @@ mod tests {
             ..Default::default()
         };
         // Call the function under test
-        check_remove_node(&cfg, &change_peers, &peer_heartbeat).unwrap();
+        check_remove_node(&cfg, &change_peers, 1, &peer_heartbeat).unwrap();
     }
 }
