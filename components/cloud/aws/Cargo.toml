@@ -38,7 +38,7 @@ tikv_util = { workspace = true }
 # better to not use slog-global, but pass in the logger
 tokio = { version = "1.5", features = ["time"] }
 url = "2.0"
-uuid = { version = "0.8", features = ["v4"] }
+uuid = { version = "1.6.1", features = ["serde", "v4", "v7"] }
 
 [dev-dependencies]
 futures = "0.3"

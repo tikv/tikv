@@ -11,7 +11,7 @@ use std::{
         atomic::{AtomicI32, AtomicU8, Ordering},
         Arc, Mutex,
     },
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime},
 };
 
 use collections::{HashMap, HashSet};
@@ -32,9 +32,10 @@ use kvproto::{
     raft_serverpb::{Done, RaftMessage, RaftSnapshotData},
     tikvpb::{BatchRaftMessage, TikvClient},
 };
+use prometheus::Histogram;
 use protobuf::Message;
-use raft::SnapshotStatus;
-use raftstore::errors::DiscardReason;
+use raft::{eraftpb::MessageType, SnapshotStatus};
+use raftstore::{errors::DiscardReason, store::ReadIndexContext};
 use security::SecurityManager;
 use tikv_kv::RaftExtension;
 use tikv_util::{
@@ -68,6 +69,25 @@ impl MetadataSourceStoreId {
 static CONN_ID: AtomicI32 = AtomicI32::new(0);
 
 const _ON_RESOLVE_FP: &str = "transport_snapshot_on_resolve";
+
+pub(crate) fn observe_read_index_duration(h: &Histogram, b: &BatchRaftMessage, t: MessageType) {
+    let mut now = Duration::ZERO;
+    for msg in b.get_msgs() {
+        let m = msg.get_message();
+        let typ = m.get_msg_type();
+        let ctx = m.get_context();
+        if typ == t && ctx.len() > 0 {
+            if let Some(ts) = ReadIndexContext::get_ts_from_id(ctx) {
+                if now.is_zero() {
+                    now = SystemTime::UNIX_EPOCH
+                        .elapsed()
+                        .expect("clock may have gone backwards");
+                }
+                h.observe(now.saturating_sub(ts).as_secs_f64());
+            }
+        }
+    }
+}
 
 #[repr(u8)]
 enum ConnState {
@@ -199,6 +219,9 @@ struct BatchMessageBuffer {
     cfg: Config,
     cfg_tracker: Tracker<Config>,
     loads: Arc<ThreadLoadPool>,
+
+    // client metrics
+    read_index_histogram: Option<Histogram>,
 }
 
 impl BatchMessageBuffer {
@@ -215,7 +238,13 @@ impl BatchMessageBuffer {
             cfg,
             cfg_tracker,
             loads,
+            read_index_histogram: None,
         }
+    }
+
+    fn with_read_index_histogram(mut self, histogram: Histogram) -> Self {
+        self.read_index_histogram = Some(histogram);
+        self
     }
 
     #[inline]
@@ -282,6 +311,9 @@ impl Buffer for BatchMessageBuffer {
     #[inline]
     fn flush(&mut self, sender: &mut ClientCStreamSender<BatchRaftMessage>) -> grpcio::Result<()> {
         let batch = mem::take(&mut self.batch);
+        if let Some(ref h) = self.read_index_histogram {
+            observe_read_index_duration(h, &batch, MessageType::MsgHeartbeat);
+        }
         let res = Pin::new(sender).start_send((
             batch,
             WriteFlags::default().buffer_hint(self.overflowing.is_some()),
@@ -712,11 +744,15 @@ where
         let (batch_sink, batch_stream) = client.batch_raft_opt(self.get_call_option()).unwrap();
 
         let (tx, rx) = oneshot::channel();
+        let read_index_histogram =
+            READ_INDEX_SEND_HEARTBEAT_DURATION.with_label_values(&[&format!("{}", self.store_id)]);
+        let buffer = BatchMessageBuffer::new(&self.builder.cfg, self.builder.loads.clone())
+            .with_read_index_histogram(read_index_histogram);
         let mut call = RaftCall {
             sender: AsyncRaftSender {
                 sender: batch_sink,
                 queue: self.queue.clone(),
-                buffer: BatchMessageBuffer::new(&self.builder.cfg, self.builder.loads.clone()),
+                buffer,
                 router: self.builder.router.clone(),
                 snap_scheduler: self.builder.snap_scheduler.clone(),
                 addr,
@@ -936,7 +972,7 @@ struct CachedQueue {
 /// ```text
 /// for m in msgs {
 ///     if !raft_client.send(m) {
-///         // handle error.   
+///         // handle error.
 ///     }
 /// }
 /// raft_client.flush();

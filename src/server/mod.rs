@@ -26,6 +26,7 @@ pub mod ttl;
 
 pub use engine_factory::{KvEngineFactory, KvEngineFactoryBuilder};
 
+pub(crate) use self::raft_client::observe_read_index_duration;
 #[cfg(any(test, feature = "testexport"))]
 pub use self::server::test_router::TestRaftStoreRouter;
 pub use self::{

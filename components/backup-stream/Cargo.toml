@@ -72,10 +72,10 @@ tikv_kv = { workspace = true }
 tikv_util = { workspace = true }
 tokio = { version = "1.5", features = ["rt-multi-thread", "macros", "time", "sync"] }
 tokio-stream = "0.1"
-tokio-util = { version = "0.7", features = ["compat"] } 
+tokio-util = { version = "0.7", features = ["compat"] }
 tonic = "0.8"
 txn_types = { workspace = true }
-uuid = "0.8"
+uuid = { version = "1.6.1", features = ["serde", "v4", "v7"] }
 yatp = { workspace = true }
 
 [dev-dependencies]
