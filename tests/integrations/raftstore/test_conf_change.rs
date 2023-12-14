@@ -866,8 +866,9 @@ fn test_conf_change_fast() {
 
 #[test_case(test_raftstore::new_node_cluster)]
 #[test_case(test_raftstore::new_server_cluster)]
+#[test_case(test_raftstore_v2::new_node_cluster)]
 fn test_remove_node_on_partition() {
-    let count = 6;
+    let count = 3;
     let mut cluster = new_cluster(0, count);
     let pd_client = Arc::clone(&cluster.pd_client);
     // Disable default max peer number check.
@@ -887,10 +888,12 @@ fn test_remove_node_on_partition() {
     // sleep for 10 heartbeat interval
     thread::sleep(cluster.cfg.raft_store.raft_heartbeat_interval() * 10);
     pd_client.remove_peer(r1, new_peer(2, 2));
+    cluster.must_put(b"k1", b"v1");
     thread::sleep(Duration::from_millis(500));
     // remove peer 2 should not work
     pd_client.must_have_peer(r1, new_peer(2, 2));
 
     // remove peer 3 should work
     pd_client.must_remove_peer(r1, new_peer(3, 3));
+    cluster.must_put(b"k3", b"v3");
 }
