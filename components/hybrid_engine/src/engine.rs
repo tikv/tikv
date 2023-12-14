@@ -1,6 +1,8 @@
 // Copyright 2023 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine_traits::{KvEngine, Peekable, ReadOptions, RegionCacheEngine, Result, SyncMutable};
+use engine_traits::{
+    KvEngine, Peekable, ReadOptions, RegionCacheEngine, Result, SnapCtx, SyncMutable,
+};
 
 use crate::snapshot::HybridEngineSnapshot;
 
@@ -42,6 +44,19 @@ where
     }
 }
 
+impl<EK, EC> HybridEngine<EK, EC>
+where
+    EK: KvEngine,
+    EC: RegionCacheEngine,
+{
+    pub fn new(disk_engine: EK, region_cache_engine: EC) -> Self {
+        Self {
+            disk_engine,
+            region_cache_engine,
+        }
+    }
+}
+
 // todo: implement KvEngine methods as well as it's super traits.
 impl<EK, EC> KvEngine for HybridEngine<EK, EC>
 where
@@ -50,7 +65,7 @@ where
 {
     type Snapshot = HybridEngineSnapshot<EK, EC>;
 
-    fn snapshot(&self) -> Self::Snapshot {
+    fn snapshot(&self, _: Option<SnapCtx>) -> Self::Snapshot {
         unimplemented!()
     }
 

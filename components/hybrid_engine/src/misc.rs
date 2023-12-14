@@ -124,4 +124,9 @@ where
     fn get_accumulated_flush_count_cf(cf: &str) -> Result<u64> {
         unimplemented!()
     }
+
+    type DiskEngine = EK::DiskEngine;
+    fn get_disk_engine(&self) -> &Self::DiskEngine {
+        self.disk_engine().get_disk_engine()
+    }
 }

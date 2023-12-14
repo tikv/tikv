@@ -2447,6 +2447,7 @@ checksum = "9a3a5bfb195931eeb336b2a7b4d761daec841b97f947d34394601737a7bba5e4"
 name = "hybrid_engine"
 version = "0.0.1"
 dependencies = [
+ "engine_rocks",
  "engine_traits",
  "tikv_util",
  "txn_types",
@@ -4440,6 +4441,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "49b3de9ec5dc0a3417da371aab17d729997c15010e7fd24ff707773a33bddb64"
 
 [[package]]
+name = "region_cache_memory_engine"
+version = "0.0.1"
+dependencies = [
+ "bytes",
+ "collections",
+ "engine_traits",
+ "skiplist-rs",
+ "tikv_util",
+]
+
+[[package]]
 name = "remove_dir_all"
 version = "0.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4617,21 +4629,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 1.0.103",
-]
-
-[[package]]
-name = "ring"
-version = "0.16.16"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b72b84d47e8ec5a4f2872e8262b8f8256c5be1c938a7d6d3a867a3ba8f722f74"
-dependencies = [
- "cc",
- "libc 0.2.146",
- "once_cell",
- "spin",
- "untrusted",
- "web-sys",
- "winapi 0.3.9",
 ]
 
 [[package]]
@@ -5104,6 +5101,7 @@ dependencies = [
  "grpcio",
  "grpcio-health",
  "hex 0.4.2",
+ "hybrid_engine",
  "keys",
  "kvproto",
  "libc 0.2.146",
@@ -5116,6 +5114,7 @@ dependencies = [
  "raft_log_engine",
  "raftstore",
  "raftstore-v2",
+ "region_cache_memory_engine",
  "resolved_ts",
  "resource_control",
  "resource_metering",
@@ -5194,6 +5193,16 @@ name = "siphasher"
 version = "0.3.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fa8f3741c7372e75519bd9346068370c9cdaabcc1f9599cbcf2a2719352286b7"
+
+[[package]]
+name = "skiplist-rs"
+version = "0.1.0"
+source = "git+https://github.com/tikv/skiplist-rs.git?branch=main#618af619d9348ef89eaa71c5f6fbddbd9a5c09bf"
+dependencies = [
+ "bytes",
+ "rand 0.8.5",
+ "slog",
+]
 
 [[package]]
 name = "slab"
@@ -5355,12 +5364,6 @@ dependencies = [
  "libc 0.2.146",
  "winapi 0.3.9",
 ]
-
-[[package]]
-name = "spin"
-version = "0.5.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6e63cff320ae2c57904679ba7cb63280a3dc4613885beafb148ee7bf9aa9042d"
 
 [[package]]
 name = "sst_importer"
@@ -5600,15 +5603,14 @@ dependencies = [
 [[package]]
 name = "tame-oauth"
 version = "0.4.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9435c9348e480fad0f2215d5602e2dfad03df8a6398c4e7ceaeaa42758f26a8a"
+source = "git+https://github.com/tikv/tame-oauth?branch=fips#176e3c69e9b5cd04b4248824ae6ee38ef57385be"
 dependencies = [
  "base64 0.13.0",
  "chrono",
  "http",
  "lock_api",
+ "openssl",
  "parking_lot 0.11.1",
- "ring",
  "serde",
  "serde_json",
  "twox-hash",
@@ -6290,6 +6292,7 @@ dependencies = [
  "raftstore-v2",
  "rand 0.7.3",
  "regex",
+ "region_cache_memory_engine",
  "reqwest",
  "resource_control",
  "resource_metering",
@@ -6821,7 +6824,7 @@ version = "1.6.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "97fee6b57c6a41524a810daee9286c02d7752c4253064d0b05472833a438f675"
 dependencies = [
- "cfg-if 1.0.0",
+ "cfg-if 0.1.10",
  "static_assertions",
 ]
 
@@ -6904,12 +6907,6 @@ name = "unicode-xid"
 version = "0.2.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f962df74c8c05a667b5ee8bcf162993134c104e96440b663c8daa176dc772d8c"
-
-[[package]]
-name = "untrusted"
-version = "0.7.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a156c684c91ea7d62626509bce3cb4e1d9ed5c4d978f7b4352658f96a4c26b4a"
 
 [[package]]
 name = "url"

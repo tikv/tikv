@@ -2639,7 +2639,7 @@ pub mod tests {
             .tempdir()
             .unwrap();
         let db = get_db(src_db_dir.path(), None, None).unwrap();
-        let snapshot = db.snapshot();
+        let snapshot = db.snapshot(None);
 
         let src_dir = Builder::new()
             .prefix("test-snap-file-db-src")
@@ -2747,7 +2747,7 @@ pub mod tests {
             .tempdir()
             .unwrap();
         let db = get_db(db_dir.path(), None, None).unwrap();
-        let snapshot = db.snapshot();
+        let snapshot = db.snapshot(None);
 
         let dir = Builder::new()
             .prefix("test-snap-validation")
@@ -2900,7 +2900,7 @@ pub mod tests {
             .tempdir()
             .unwrap();
         let db: KvTestEngine = open_test_db(db_dir.path(), None, None).unwrap();
-        let snapshot = db.snapshot();
+        let snapshot = db.snapshot(None);
 
         let dir = Builder::new()
             .prefix("test-snap-corruption")
@@ -2975,7 +2975,7 @@ pub mod tests {
             .tempdir()
             .unwrap();
         let db: KvTestEngine = open_test_db_with_100keys(db_dir.path(), None, None).unwrap();
-        let snapshot = db.snapshot();
+        let snapshot = db.snapshot(None);
 
         let dir = Builder::new()
             .prefix("test-snap-corruption-meta")
@@ -3056,7 +3056,7 @@ pub mod tests {
             .tempdir()
             .unwrap();
         let db: KvTestEngine = open_test_db(db_dir.path(), None, None).unwrap();
-        let snapshot = db.snapshot();
+        let snapshot = db.snapshot(None);
         let key1 = SnapKey::new(1, 1, 1);
         let mgr_core = create_manager_core(&path, u64::MAX);
         let mut s1 = Snapshot::new_for_building(&path, &key1, &mgr_core).unwrap();
@@ -3127,7 +3127,7 @@ pub mod tests {
             .tempdir()
             .unwrap();
         let db: KvTestEngine = open_test_db(src_db_dir.path(), None, None).unwrap();
-        let snapshot = db.snapshot();
+        let snapshot = db.snapshot(None);
 
         let key = SnapKey::new(1, 1, 1);
         let region = gen_test_region(1, 1, 1);
@@ -3209,7 +3209,7 @@ pub mod tests {
             .max_total_size(max_total_size)
             .build::<_>(snapfiles_path.path().to_str().unwrap());
         snap_mgr.init().unwrap();
-        let snapshot = engine.kv.snapshot();
+        let snapshot = engine.kv.snapshot(None);
 
         // Add an oldest snapshot for receiving.
         let recv_key = SnapKey::new(100, 100, 100);
@@ -3334,7 +3334,7 @@ pub mod tests {
             .tempdir()
             .unwrap();
         let db: KvTestEngine = open_test_db(kv_dir.path(), None, None).unwrap();
-        let snapshot = db.snapshot();
+        let snapshot = db.snapshot(None);
         let key = SnapKey::new(1, 1, 1);
         let region = gen_test_region(1, 1, 1);
 
