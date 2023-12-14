@@ -10,7 +10,7 @@ fn snapshot_get_value() {
 
     db.engine.put(b"a", b"aa").unwrap();
 
-    let snap = db.engine.snapshot();
+    let snap = db.engine.snapshot(None);
 
     let value = snap.get_value(b"a").unwrap();
     let value = value.unwrap();
@@ -26,7 +26,7 @@ fn snapshot_get_value_after_put() {
 
     db.engine.put(b"a", b"aa").unwrap();
 
-    let snap = db.engine.snapshot();
+    let snap = db.engine.snapshot(None);
 
     db.engine.put(b"a", b"aaa").unwrap();
 
@@ -41,7 +41,7 @@ fn snapshot_get_value_cf() {
 
     db.engine.put_cf(CF_WRITE, b"a", b"aa").unwrap();
 
-    let snap = db.engine.snapshot();
+    let snap = db.engine.snapshot(None);
 
     let value = snap.get_value_cf(CF_WRITE, b"a").unwrap();
     let value = value.unwrap();
@@ -57,7 +57,7 @@ fn snapshot_get_value_cf_after_put() {
 
     db.engine.put_cf(CF_WRITE, b"a", b"aa").unwrap();
 
-    let snap = db.engine.snapshot();
+    let snap = db.engine.snapshot(None);
 
     db.engine.put_cf(CF_WRITE, b"a", b"aaa").unwrap();
 

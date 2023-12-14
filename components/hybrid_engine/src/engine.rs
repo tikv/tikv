@@ -1,6 +1,8 @@
 // Copyright 2023 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine_traits::{KvEngine, Peekable, ReadOptions, RegionCacheEngine, Result, SyncMutable};
+use engine_traits::{
+    KvEngine, Peekable, ReadOptions, RegionCacheEngine, Result, SnapCtx, SyncMutable,
+};
 
 use crate::snapshot::HybridEngineSnapshot;
 
@@ -63,7 +65,7 @@ where
 {
     type Snapshot = HybridEngineSnapshot<EK, EC>;
 
-    fn snapshot(&self) -> Self::Snapshot {
+    fn snapshot(&self, _: Option<SnapCtx>) -> Self::Snapshot {
         unimplemented!()
     }
 

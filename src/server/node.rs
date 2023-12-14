@@ -291,7 +291,7 @@ where
         };
         if should_check {
             // Check if there are only TiDB data in the engine
-            let snapshot = engines.kv.snapshot();
+            let snapshot = engines.kv.snapshot(None);
             for cf in DATA_CFS {
                 for (start, end) in TIDB_RANGES_COMPLEMENT {
                     let mut unexpected_data_key = None;

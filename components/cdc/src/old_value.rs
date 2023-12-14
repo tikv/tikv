@@ -308,7 +308,7 @@ mod tests {
         value: Option<Value>,
     ) -> Statistics {
         let key = key.clone().append_ts(ts.into());
-        let snapshot = Arc::new(kv_engine.snapshot());
+        let snapshot = Arc::new(kv_engine.snapshot(None));
         let mut cursor = new_write_cursor_on_key(&snapshot, &key);
         let load_default = Either::Left(&snapshot);
         let mut stats = Statistics::default();
@@ -527,7 +527,7 @@ mod tests {
             must_commit(&mut engine, &key, 200, 201);
         }
 
-        let snapshot = Arc::new(kv_engine.snapshot());
+        let snapshot = Arc::new(kv_engine.snapshot(None));
         let mut cursor = new_old_value_cursor(&snapshot, CF_WRITE);
         let mut default_cursor = new_old_value_cursor(&snapshot, CF_DEFAULT);
         let mut load_default = |use_default_cursor: bool| {
@@ -598,7 +598,7 @@ mod tests {
         }
 
         let key = format!("zkey-{:0>3}", 0).into_bytes();
-        let snapshot = Arc::new(kv_engine.snapshot());
+        let snapshot = Arc::new(kv_engine.snapshot(None));
         let perf_instant = ReadPerfInstant::new();
         let value = get_old_value(
             &snapshot,

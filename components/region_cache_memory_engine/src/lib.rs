@@ -2,6 +2,8 @@
 
 #![allow(dead_code)]
 #![allow(unused_variables)]
+#![feature(let_chains)]
+#![feature(slice_pattern)]
 
 mod engine;
 pub use engine::RegionCacheMemoryEngine;
