@@ -213,8 +213,8 @@ where
             security_mgr.clone(),
             health_service.clone(),
         ));
-        let builder = builder_factory.create_builder(env.clone())?;
-        let (server, addr) = builder_factory.bind(builder)?;
+        let builder = Either::Left(builder_factory.create_builder(env.clone())?);
+        let addr = SocketAddr::from_str(&cfg.value().addr)?;
 
         let mem_quota = ResourceQuota::new(Some("ServerMemQuota"))
             .resize_memory(cfg.value().grpc_memory_pool_quota.0 as usize);
@@ -235,7 +235,7 @@ where
 
         let svr = Server {
             env: Arc::clone(&env),
-            builder_or_server: Some(Either::Right(server)),
+            builder_or_server: Some(builder),
             grpc_mem_quota: mem_quota,
             local_addr: addr,
             trans,
@@ -293,22 +293,11 @@ where
 
     /// Build gRPC server and bind to address.
     pub fn build_and_bind(&mut self) -> Result<SocketAddr> {
-        match self.builder_or_server.take() {
-            Some(Either::Left(builder)) => {
-                let (server, addr) = self.builder_factory.bind(builder)?;
-                self.local_addr = addr;
-                self.builder_or_server = Some(Either::Right(server));
-            }
-            Some(Either::Right(server)) => {
-                self.builder_or_server = Some(Either::Right(server));
-            }
-            None => {
-                return Err(Error::Other(box_err!(
-                    "failed to build and bind the grpc server."
-                )));
-            }
-        }
-        Ok(self.local_addr)
+        let sb = self.builder_or_server.take().unwrap().left().unwrap();
+        let (server, addr) = self.builder_factory.bind(sb)?;
+        self.local_addr = addr;
+        self.builder_or_server = Some(Either::Right(server));
+        Ok(addr)
     }
 
     fn start_grpc(&mut self) {
