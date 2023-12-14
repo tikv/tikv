@@ -62,7 +62,7 @@ impl RegionMemoryEngine {
 
 impl Default for RegionMemoryEngine {
     fn default() -> Self {
-        RegionMemoryEngine::with_capacity(ReadableSize::mb(1).0)
+        RegionMemoryEngine::with_capacity(ReadableSize::mb(1).0 as usize)
     }
 }
 
