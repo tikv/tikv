@@ -4448,6 +4448,7 @@ dependencies = [
  "collections",
  "engine_traits",
  "skiplist-rs",
+ "tikv_util",
 ]
 
 [[package]]

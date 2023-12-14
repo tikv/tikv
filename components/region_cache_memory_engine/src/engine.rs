@@ -16,6 +16,7 @@ use engine_traits::{
     CF_DEFAULT, CF_LOCK, CF_WRITE,
 };
 use skiplist_rs::{ByteWiseComparator, IterRef, Skiplist};
+use tikv_util::config::ReadableSize;
 
 fn cf_to_id(cf: &str) -> usize {
     match cf {
@@ -61,7 +62,7 @@ impl RegionMemoryEngine {
 
 impl Default for RegionMemoryEngine {
     fn default() -> Self {
-        RegionMemoryEngine::with_capacity(1 << 20)
+        RegionMemoryEngine::with_capacity(ReadableSize::mb(1).0)
     }
 }
 

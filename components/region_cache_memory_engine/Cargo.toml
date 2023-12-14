@@ -12,3 +12,4 @@ engine_traits = { workspace = true }
 collections = { workspace = true }
 skiplist-rs = { git = "https://github.com/tikv/skiplist-rs.git", branch = "main" }
 bytes = "1.0"
+tikv_util = { workspace = true }
