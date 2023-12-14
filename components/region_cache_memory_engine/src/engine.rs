@@ -61,25 +61,7 @@ impl RegionMemoryEngine {
 
 impl Default for RegionMemoryEngine {
     fn default() -> Self {
-        RegionMemoryEngine {
-            data: [
-                Arc::new(Skiplist::with_capacity(
-                    ByteWiseComparator::default(),
-                    1 << 20,
-                    true,
-                )),
-                Arc::new(Skiplist::with_capacity(
-                    ByteWiseComparator::default(),
-                    1 << 20,
-                    true,
-                )),
-                Arc::new(Skiplist::with_capacity(
-                    ByteWiseComparator::default(),
-                    1 << 20,
-                    true,
-                )),
-            ],
-        }
+        RegionMemoryEngine::with_capacity(1 << 20)
     }
 }
 
