@@ -2,20 +2,31 @@
 
 use std::{sync::Arc, time::Duration};
 
+use engine_rocks::RocksEngine;
 use kvproto::{kvrpcpb::Op, metapb::Peer};
 use pd_client::PdClient;
 use raft::eraftpb::MessageType;
 use test_pd_client::TestPdClient;
 use test_raftstore::*;
 
-fn prepare_for_stale_read(leader: Peer) -> (Cluster<ServerCluster>, Arc<TestPdClient>, PeerClient) {
+fn prepare_for_stale_read(
+    leader: Peer,
+) -> (
+    Cluster<RocksEngine, ServerCluster<RocksEngine>>,
+    Arc<TestPdClient>,
+    PeerClient,
+) {
     prepare_for_stale_read_before_run(leader, None)
 }
 
 fn prepare_for_stale_read_before_run(
     leader: Peer,
     before_run: Option<Box<dyn Fn(&mut Config)>>,
-) -> (Cluster<ServerCluster>, Arc<TestPdClient>, PeerClient) {
+) -> (
+    Cluster<RocksEngine, ServerCluster<RocksEngine>>,
+    Arc<TestPdClient>,
+    PeerClient,
+) {
     let mut cluster = new_server_cluster(0, 3);
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_operator();
