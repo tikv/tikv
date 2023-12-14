@@ -638,12 +638,15 @@ mod tests {
         }
 
         let mut iter_opt = IterOptions::default();
+        let snapshot = engine.snapshot(1, 10).unwrap();
+        // boundaries are not set
+        assert!(snapshot.iterator_opt("lock", iter_opt.clone()).is_err());
+
         let lower_bound = construct_key(1);
         let upper_bound = construct_key(100);
         iter_opt.set_upper_bound(upper_bound.as_bytes(), 0);
         iter_opt.set_lower_bound(lower_bound.as_bytes(), 0);
 
-        let snapshot = engine.snapshot(1, 10).unwrap();
         let mut iter = snapshot.iterator_opt("lock", iter_opt.clone()).unwrap();
         assert!(!iter.seek_to_first().unwrap());
 
