@@ -27,7 +27,7 @@ use kvproto::{
 use protobuf::{self, CodedInputStream, Message};
 use raft::{
     eraftpb::{self, ConfChangeType, ConfState, Entry, EntryType, MessageType, Snapshot},
-    Changer, ProgressTracker, RawNode, INVALID_INDEX,
+    Changer, RawNode, INVALID_INDEX,
 };
 use raft_proto::ConfChangeI;
 use tikv_util::{
@@ -1015,13 +1015,6 @@ pub fn check_conf_change(
     peer_heartbeat: &collections::HashMap<u64, std::time::Instant>,
 ) -> Result<()> {
     let current_progress = node.status().progress.unwrap().clone();
-    check_remove_node(
-        cfg,
-        change_peers,
-        leader.get_id(),
-        peer_heartbeat,
-        &current_progress,
-    )?;
     let mut after_progress = current_progress.clone();
     let cc_v2 = cc.as_v2();
     let mut changer = Changer::new(&after_progress);
@@ -1103,6 +1096,7 @@ pub fn check_conf_change(
         return Err(box_err!("multiple changes that only effect learner"));
     }
 
+    check_remove_node(cfg, change_peers, leader.get_id(), peer_heartbeat)?;
     if !ignore_safety {
         let promoted_commit_index = after_progress.maximal_committed_index().0;
         let first_index = node.raft.raft_log.first_index();
@@ -1136,22 +1130,22 @@ fn check_remove_node(
     change_peers: &[ChangePeerRequest],
     leader_id: u64,
     peer_heartbeat: &collections::HashMap<u64, std::time::Instant>,
-    progress: &ProgressTracker,
 ) -> Result<()> {
     // max heartbeats missed to qualify being a slow peer
     const MAX_MISSED_HEARTBEATS: u32 = 8;
-    let mut normal_peers = HashSet::default();
     let mut slow_peer_count = 0;
+    let mut normal_peer_count = 0;
     for (id, last_heartbeat) in peer_heartbeat {
         if *id == leader_id
             || last_heartbeat.elapsed() <= MAX_MISSED_HEARTBEATS * cfg.raft_heartbeat_interval()
         {
-            normal_peers.insert(*id);
+            normal_peer_count += 1;
         } else {
             slow_peer_count += 1;
         }
     }
 
+    let mut normal_peers_to_remove = vec![];
     for cp in change_peers {
         let (change_type, peer) = (cp.get_change_type(), cp.get_peer());
         if change_type == ConfChangeType::RemoveNode {
@@ -1159,18 +1153,20 @@ fn check_remove_node(
                 // peer itself is *not* slow peer, but current slow peer is >= total peers/2
                 if last_heartbeat.elapsed() <= MAX_MISSED_HEARTBEATS * cfg.raft_heartbeat_interval()
                 {
-                    normal_peers.remove(&peer.get_id());
-                    if !progress.has_quorum(&normal_peers) {
-                        return Err(box_err!(
-                            "ignore conf change command because RemoveNode on peer {} may lead to unavailability. There're {} slow peers and {} normal peers",
-                            peer.get_id(),
-                            slow_peer_count,
-                            normal_peers.len()
-                        ));
-                    }
+                    normal_peer_count -= 1;
+                    normal_peers_to_remove.push(peer.get_id());
                 }
             }
         }
+    }
+
+    if slow_peer_count >= normal_peer_count {
+        return Err(box_err!(
+            "ignore conf change command because RemoveNode on peer {:?} may lead to unavailability. There're {} slow peers and {} normal peers",
+            &normal_peers_to_remove,
+            slow_peer_count,
+            normal_peer_count
+        ));
     }
 
     Ok(())
@@ -1924,7 +1920,6 @@ mod tests {
     use engine_test::kv::KvTestEngine;
     use kvproto::{
         metapb::{self, RegionEpoch},
-        pdpb::ChangePeer,
         raft_cmdpb::AdminRequest,
     };
     use protobuf::Message as _;
@@ -2562,7 +2557,6 @@ mod tests {
     fn test_check_conf_change_upon_slow_peers() {
         // Create a sample configuration
         let cfg = Config::default();
-        let mut progress = ProgressTracker::with_capacity(3, 0, 100);
         // Initialize change_peers
         let mut change_peers = vec![
             ChangePeerRequest {
@@ -2599,39 +2593,8 @@ mod tests {
             std::time::Instant::now() - std::time::Duration::from_secs(1),
         );
 
-        progress.record_vote(1, true);
-        progress.record_vote(2, true);
-        progress.record_vote(3, true);
-
-        for i in 1..=3 {
-            let mut changes = vec![];
-            let mut cp = ChangePeer::default();
-            cp.set_change_type(ConfChangeType::AddNode);
-            cp.set_peer(metapb::Peer {
-                id: i,
-                ..Default::default()
-            });
-            changes.push(cp);
-            let change_peer_reqs = changes
-                .into_iter()
-                .map(|mut c| {
-                    let mut cp = ChangePeerRequest::default();
-                    cp.set_change_type(c.get_change_type());
-                    cp.set_peer(c.take_peer());
-                    cp
-                })
-                .collect();
-            let mut cp_req = ChangePeerV2Request::default();
-            cp_req.set_changes(change_peer_reqs);
-
-            let cc_v2 = (&cp_req).to_confchange(vec![]);
-            let mut changer = Changer::new(&progress);
-            let (conf, changes) = changer.simple(&cc_v2.changes).unwrap();
-            progress.apply_conf(conf, changes, 1);
-        }
-
         // Call the function under test and assert that the function returns Ok
-        check_remove_node(&cfg, &change_peers, 1, &peer_heartbeat, &progress).unwrap();
+        check_remove_node(&cfg, &change_peers, 1, &peer_heartbeat).unwrap();
 
         // now make one peer slow
         if let Some(peer_heartbeat) = peer_heartbeat.get_mut(&3) {
@@ -2639,7 +2602,7 @@ mod tests {
         }
 
         // Call the function under test
-        let result = check_remove_node(&cfg, &change_peers, 1, &peer_heartbeat, &progress);
+        let result = check_remove_node(&cfg, &change_peers, 1, &peer_heartbeat);
         // Assert that the function returns failed
         assert!(result.is_err());
 
@@ -2650,7 +2613,7 @@ mod tests {
         })
         .into();
         // Call the function under test
-        check_remove_node(&cfg, &change_peers, 1, &peer_heartbeat, &progress).unwrap();
+        check_remove_node(&cfg, &change_peers, 1, &peer_heartbeat).unwrap();
 
         // there's no remove node, it's fine with slow peers.
         change_peers[0] = ChangePeerRequest {
@@ -2663,6 +2626,6 @@ mod tests {
             ..Default::default()
         };
         // Call the function under test
-        check_remove_node(&cfg, &change_peers, 1, &peer_heartbeat, &progress).unwrap();
+        check_remove_node(&cfg, &change_peers, 1, &peer_heartbeat).unwrap();
     }
 }
