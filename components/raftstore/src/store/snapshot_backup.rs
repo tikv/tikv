@@ -93,7 +93,7 @@ impl<EK: KvEngine, ER: RaftEngine> SnapshotBrHandle for Arc<Mutex<RaftRouter<EK,
 
 #[derive(Default)]
 pub struct RejectIngestAndAdmin {
-    until: AtomicU64,
+    before: AtomicU64,
     initialized: AtomicBool,
 }
 
@@ -106,20 +106,20 @@ impl RejectIngestAndAdmin {
     }
 
     pub fn remained_secs(&self) -> u64 {
-        self.until
+        self.before
             .load(Ordering::Acquire)
             .saturating_sub(epoch_second_coarse())
     }
 
     pub fn allowed(&self) -> bool {
-        let mut v = self.until.load(Ordering::Acquire);
+        let mut v = self.before.load(Ordering::Acquire);
         if v == 0 {
             return true;
         }
         let mut expired = v < epoch_second_coarse();
         while expired {
             match self
-                .until
+                .before
                 .compare_exchange(v, 0, Ordering::SeqCst, Ordering::SeqCst)
             {
                 Ok(_) => {
@@ -137,7 +137,7 @@ impl RejectIngestAndAdmin {
         expired
     }
 
-    pub fn connected(&self) -> bool {
+    pub fn initialized(&self) -> bool {
         self.initialized.load(Ordering::Acquire)
     }
 
@@ -146,26 +146,25 @@ impl RejectIngestAndAdmin {
     /// # Returns
     ///
     /// Whether previously there is a lease.
-    pub fn heartbeat(&self, lease: Duration) -> bool {
-        let mut v = self.until.load(Ordering::SeqCst);
+    pub fn update_lease(&self, lease: Duration) -> bool {
+        let mut v = self.before.load(Ordering::SeqCst);
         let now = epoch_second_coarse();
         let new_lease = now + lease.as_secs();
         let last_lease_valid = v > now;
-        loop {
-            match self
-                .until
-                .compare_exchange(v, new_lease, Ordering::SeqCst, Ordering::SeqCst)
-            {
-                Ok(_) => break,
-                Err(new_val) => {
-                    if new_val > new_lease {
-                        break;
-                    }
-                    v = new_val;
+        while v < new_lease {
+            let res = self
+                .before
+                .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |v| {
+                    if v > new_lease { None } else { Some(new_lease) }
+                });
+            match res {
+                Ok(_) => {
+                    metrics::SNAP_BR_SUSPEND_COMMAND_LEASE_UNTIL.set(new_lease as _);
+                    break;
                 }
+                Err(prev) => v = prev,
             }
         }
-        metrics::SNAP_BR_SUSPEND_COMMAND_LEASE_UNTIL.set(new_lease as _);
         if last_lease_valid {
             metrics::SNAP_BR_LEASE_EVENT.renew.inc();
         } else {
@@ -175,7 +174,7 @@ impl RejectIngestAndAdmin {
     }
 
     pub fn reset(&self) {
-        self.until.store(0, Ordering::SeqCst);
+        self.before.store(0, Ordering::SeqCst);
         metrics::SNAP_BR_SUSPEND_COMMAND_LEASE_UNTIL.set(0);
         metrics::SNAP_BR_LEASE_EVENT.reset.inc();
     }

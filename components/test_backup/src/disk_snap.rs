@@ -69,7 +69,7 @@ impl Suite {
         let (sched, _) = dummy_scheduler();
         let w = self.cluster.sim.wl();
         let router = Arc::new(Mutex::new(w.get_router(id).unwrap()));
-        let env = BEnv::with_rejector(router, self.nodes[&id].rejector.clone());
+        let env = BEnv::new(router, self.nodes[&id].rejector.clone(), None);
         let service = backup::Service::with_env(sched, env);
         let builder = ServerBuilder::new(Arc::clone(&self.grpc_env))
             .register_service(brpb::create_backup(service));

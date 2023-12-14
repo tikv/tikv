@@ -917,7 +917,7 @@ where
         let backup_scheduler = backup_worker.scheduler();
         let backup_service = backup::Service::with_env(
             backup_scheduler,
-            Env::with_rejector(DiskSnapBackupHandle, Default::default()),
+            Env::new(DiskSnapBackupHandle, Default::default(), None),
         );
         if servers
             .server

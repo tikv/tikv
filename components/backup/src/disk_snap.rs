@@ -141,30 +141,21 @@ impl<SR: SnapshotBrHandle> Env<SR> {
         }
     }
 
-    pub fn with_rejector(handle: SR, rejector: Arc<RejectIngestAndAdmin>) -> Self {
+    pub fn new(handle: SR, rejector: Arc<RejectIngestAndAdmin>, runtime: Option<Handle>) -> Self {
+        let runtime = match runtime {
+            None => Either::Right(Self::default_runtime()),
+            Some(rt) => Either::Left(rt),
+        };
         Self {
             handle,
             rejector,
             active_stream: Arc::new(AtomicU64::new(0)),
-            runtime: Either::Right(Self::default_runtime()),
-        }
-    }
-
-    pub fn with_rejector_and_runtime(
-        handle: SR,
-        rejector: Arc<RejectIngestAndAdmin>,
-        runtime: Handle,
-    ) -> Self {
-        Self {
-            handle,
-            rejector,
-            active_stream: Arc::new(AtomicU64::new(0)),
-            runtime: Either::Left(runtime),
+            runtime,
         }
     }
 
     fn check_initialized(&self) -> Result<()> {
-        if !self.rejector.connected() {
+        if !self.rejector.initialized() {
             return Err(Error::Uninitialized);
         }
         Ok(())
@@ -182,7 +173,7 @@ impl<SR: SnapshotBrHandle> Env<SR> {
         self.check_initialized()?;
         let mut event = PResp::new();
         event.set_ty(PEvnT::UpdateLeaseResult);
-        event.set_last_lease_is_valid(self.rejector.heartbeat(lease_dur));
+        event.set_last_lease_is_valid(self.rejector.update_lease(lease_dur));
         Ok(event)
     }
 

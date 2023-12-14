@@ -200,7 +200,7 @@ mod tests {
         let (scheduler, rx) = dummy_scheduler();
         let backup_service = super::Service::with_env(
             scheduler,
-            Env::with_rejector(PanicHandle, Default::default()),
+            Env::new(PanicHandle, Default::default(), None),
         );
         let builder =
             ServerBuilder::new(env.clone()).register_service(create_backup(backup_service));

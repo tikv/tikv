@@ -1180,10 +1180,10 @@ where
             self.causal_ts_provider.clone(),
             self.resource_manager.clone(),
         );
-        let env = backup::disk_snap::Env::with_rejector_and_runtime(
+        let env = backup::disk_snap::Env::new(
             Arc::new(Mutex::new(self.router.clone())),
             self.snap_br_rejector.take().unwrap(),
-            backup_endpoint.io_pool_handle().clone(),
+            Some(backup_endpoint.io_pool_handle().clone()),
         );
         let backup_service = backup::Service::with_env(backup_scheduler, env);
         if servers
