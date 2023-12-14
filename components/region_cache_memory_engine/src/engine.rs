@@ -173,7 +173,7 @@ impl RegionCacheMemoryEngine {
 impl RegionCacheEngine for RegionCacheMemoryEngine {
     type Snapshot = RegionCacheSnapshot;
 
-    // todo(SpadeA): add sequence number from disk engine
+    // todo(SpadeA): add sequence number logic
     fn snapshot(&self, region_id: u64, read_ts: u64) -> Option<Self::Snapshot> {
         let mut core = self.core.lock().unwrap();
         let region_meta = core.region_metas.get_mut(&region_id)?;
@@ -418,6 +418,7 @@ impl Iterable for RegionCacheSnapshot {
             valid: false,
             prefix_same_as_start,
             prefix: None,
+            // only support with lower/upper bound set
             lower_bound: lower_bound.unwrap(),
             upper_bound: upper_bound.unwrap(),
             iter,
