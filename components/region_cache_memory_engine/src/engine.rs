@@ -158,25 +158,7 @@ impl RegionCacheEngine for RegionCacheMemoryEngine {
 
     // todo(SpadeA): add sequence number logic
     fn snapshot(&self, region_id: u64, read_ts: u64) -> Option<Self::Snapshot> {
-        let mut core = self.core.lock().unwrap();
-        let region_meta = core.region_metas.get_mut(&region_id)?;
-        if !region_meta.can_read {
-            return None;
-        }
-
-        if read_ts <= region_meta.safe_ts {
-            // todo(SpadeA): add metrics for it
-            return None;
-        }
-
-        region_meta.snapshot_list.new_snapshot(read_ts);
-
-        Some(RegionCacheSnapshot {
-            region_id,
-            snapshot_ts: read_ts,
-            region_memory_engine: core.engine.get(&region_id).unwrap().clone(),
-            engine: self.clone(),
-        })
+        RegionCacheSnapshot::new(self.clone(), region_id, read_ts)
     }
 }
 
@@ -377,6 +359,30 @@ pub struct RegionCacheSnapshot {
     snapshot_ts: u64,
     region_memory_engine: RegionMemoryEngine,
     engine: RegionCacheMemoryEngine,
+}
+
+impl RegionCacheSnapshot {
+    pub fn new(engine: RegionCacheMemoryEngine, region_id: u64, read_ts: u64) -> Option<Self> {
+        let mut core = engine.core.lock().unwrap();
+        let region_meta = core.region_metas.get_mut(&region_id)?;
+        if !region_meta.can_read {
+            return None;
+        }
+
+        if read_ts <= region_meta.safe_ts {
+            // todo(SpadeA): add metrics for it
+            return None;
+        }
+
+        region_meta.snapshot_list.new_snapshot(read_ts);
+
+        Some(RegionCacheSnapshot {
+            region_id,
+            snapshot_ts: read_ts,
+            region_memory_engine: core.engine.get(&region_id).unwrap().clone(),
+            engine: engine.clone(),
+        })
+    }
 }
 
 impl Drop for RegionCacheSnapshot {
