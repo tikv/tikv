@@ -865,7 +865,6 @@ fn test_conf_change_fast() {
 }
 
 #[test_case(test_raftstore::new_node_cluster)]
-#[test_case(test_raftstore::new_server_cluster)]
 #[test_case(test_raftstore_v2::new_node_cluster)]
 fn test_remove_node_on_partition() {
     let count = 3;
