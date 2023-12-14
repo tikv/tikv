@@ -89,6 +89,7 @@ impl Debug for RegionMemoryEngine {
     }
 }
 
+// read_ts -> ref_count
 #[derive(Default)]
 struct SnapshotList(BTreeMap<u64, u64>);
 
@@ -99,13 +100,13 @@ impl SnapshotList {
         self.0.insert(read_ts, count);
     }
 
-    fn reclaim_snapshot(&mut self, read_ts: u64) {
-        let count = *self.0.get(&read_ts).unwrap();
-        assert!(count >= 1);
-        if count == 1 {
+    fn remove_snapshot(&mut self, read_ts: u64) {
+        let count = self.0.get_mut(&read_ts).unwrap();
+        assert!(*count >= 1);
+        if *count == 1 {
             self.0.remove(&read_ts).unwrap();
         } else {
-            self.0.insert(read_ts, count - 1);
+            *count -= 1;
         }
     }
 }
@@ -172,6 +173,7 @@ impl RegionCacheMemoryEngine {
 impl RegionCacheEngine for RegionCacheMemoryEngine {
     type Snapshot = RegionCacheSnapshot;
 
+    // todo(SpadeA): add sequence number from disk engine
     fn snapshot(&self, region_id: u64, read_ts: u64) -> Option<Self::Snapshot> {
         let mut core = self.core.lock().unwrap();
         let region_meta = core.region_metas.get_mut(&region_id)?;
@@ -219,8 +221,8 @@ pub struct RegionCacheIterator {
     prefix: Option<Vec<u8>>,
     iter: IterRef<Skiplist<ByteWiseComparator>, ByteWiseComparator>,
     // The lower bound is inclusive while the upper bound is exclusive if set
-    lower_bound: Option<Vec<u8>>,
-    upper_bound: Option<Vec<u8>>,
+    lower_bound: Vec<u8>,
+    upper_bound: Vec<u8>,
 }
 
 impl Iterable for RegionCacheMemoryEngine {
@@ -247,11 +249,9 @@ impl Iterator for RegionCacheIterator {
     }
 
     fn next(&mut self) -> Result<bool> {
+        assert!(self.valid);
         self.iter.next();
-        self.valid = self.iter.valid();
-        if let Some(ref upper) = self.upper_bound && self.valid {
-            self.valid = self.key() < upper.as_slice();
-        }
+        self.valid = self.iter.valid() && self.iter.key().as_slice() < self.upper_bound.as_slice();
 
         if self.valid && self.prefix_same_as_start {
             // todo(SpadeA): support prefix seek
@@ -261,11 +261,9 @@ impl Iterator for RegionCacheIterator {
     }
 
     fn prev(&mut self) -> Result<bool> {
+        assert!(self.valid);
         self.iter.prev();
-        self.valid = self.iter.valid();
-        if let Some(ref lower) = self.lower_bound && self.valid {
-            self.valid = self.key() >= lower.as_slice();
-        }
+        self.valid = self.iter.valid() && self.iter.key().as_slice() >= self.lower_bound.as_slice();
         if self.valid && self.prefix_same_as_start {
             // todo(SpadeA): support prefix seek
             unimplemented!()
@@ -274,16 +272,13 @@ impl Iterator for RegionCacheIterator {
     }
 
     fn seek(&mut self, key: &[u8]) -> Result<bool> {
-        let start = if let Some(ref lower_bound) = self.lower_bound && key < lower_bound.as_slice() {
-            lower_bound
+        let seek_key = if key < self.lower_bound.as_slice() {
+            self.lower_bound.as_slice()
         } else {
             key
         };
-        self.iter.seek(start);
-        self.valid = self.iter.valid();
-        if let Some(ref upper)  = self.upper_bound && self.valid {
-            self.valid = self.key() < upper.as_slice();
-        }
+        self.iter.seek(seek_key);
+        self.valid = self.iter.valid() && self.iter.key().as_slice() < self.upper_bound.as_slice();
 
         if self.valid && self.prefix_same_as_start {
             // todo(SpadeA): support prefix seek
@@ -294,16 +289,13 @@ impl Iterator for RegionCacheIterator {
     }
 
     fn seek_for_prev(&mut self, key: &[u8]) -> Result<bool> {
-        let end = if let Some(ref upper_bound) = self.upper_bound && key > upper_bound.as_slice() {
-            upper_bound
+        let end = if key > self.upper_bound.as_slice() {
+            self.upper_bound.as_slice()
         } else {
             key
         };
         self.iter.seek_for_prev(end);
-        self.valid = self.iter.valid();
-        if let Some(ref lower) = self.lower_bound && self.valid {
-            self.valid = self.key() >= lower.as_slice();
-        }
+        self.valid = self.iter.valid() && self.iter.key().as_slice() >= self.lower_bound.as_slice();
 
         if self.valid && self.prefix_same_as_start {
             // todo(SpadeA): support prefix seek
@@ -314,41 +306,13 @@ impl Iterator for RegionCacheIterator {
     }
 
     fn seek_to_first(&mut self) -> Result<bool> {
-        if let Some(lower_bound) = self.lower_bound.clone() {
-            return self.seek(lower_bound.as_slice());
-        } else {
-            self.iter.seek_to_first()
-        }
-        self.valid = self.iter.valid();
-        if let Some(ref upper) = self.upper_bound && self.valid {
-            self.valid = self.key() < upper.as_slice();
-        }
-
-        if self.valid && self.prefix_same_as_start {
-            // todo(SpadeA): support prefix seek
-            unimplemented!()
-        }
-
-        Ok(self.valid)
+        let lower_bound = self.lower_bound.clone();
+        self.seek(lower_bound.as_slice())
     }
 
     fn seek_to_last(&mut self) -> Result<bool> {
-        if let Some(upper_bound) = self.upper_bound.clone() {
-            return self.seek(upper_bound.as_slice());
-        } else {
-            self.iter.seek_to_last();
-        }
-        self.valid = self.iter.valid();
-        if let Some(ref upper) = self.upper_bound && self.valid {
-            self.valid = self.key() < upper.as_slice();
-        }
-
-        if self.valid && self.prefix_same_as_start {
-            // todo(SpadeA): support prefix seek
-            unimplemented!()
-        }
-
-        Ok(self.valid)
+        let upper_bound = self.upper_bound.clone();
+        self.seek_for_prev(upper_bound.as_slice())
     }
 
     fn valid(&self) -> Result<bool> {
@@ -436,7 +400,7 @@ impl Drop for RegionCacheSnapshot {
     fn drop(&mut self) {
         let mut core = self.engine.core.lock().unwrap();
         let meta = core.region_metas.get_mut(&self.region_id).unwrap();
-        meta.snapshot_list.reclaim_snapshot(self.snapshot_ts);
+        meta.snapshot_list.remove_snapshot(self.snapshot_ts);
     }
 }
 
@@ -454,8 +418,8 @@ impl Iterable for RegionCacheSnapshot {
             valid: false,
             prefix_same_as_start,
             prefix: None,
-            lower_bound,
-            upper_bound,
+            lower_bound: lower_bound.unwrap(),
+            upper_bound: upper_bound.unwrap(),
             iter,
         })
     }
@@ -687,6 +651,10 @@ mod tests {
         }
 
         let mut iter_opt = IterOptions::default();
+        let lower_bound = construct_key(1);
+        let upper_bound = construct_key(100);
+        iter_opt.set_upper_bound(upper_bound.as_bytes(), 0);
+        iter_opt.set_lower_bound(lower_bound.as_bytes(), 0);
 
         let snapshot = engine.snapshot(1, 10).unwrap();
         let mut iter = snapshot.iterator_opt("lock", iter_opt.clone()).unwrap();
@@ -716,21 +684,21 @@ mod tests {
         iter_opt.set_lower_bound(lower_bound.as_bytes(), 0);
         let mut iter = snapshot.iterator_opt("write", iter_opt).unwrap();
 
-        iter.seek_to_first().unwrap();
+        assert!(iter.seek_to_first().unwrap());
         verify_key_values(&mut iter, step, 21, 40);
 
         // seek a key that is below the lower bound is the same with seek_to_first
         let seek_key = construct_key(11);
-        iter.seek(seek_key.as_bytes()).unwrap();
+        assert!(iter.seek(seek_key.as_bytes()).unwrap());
         verify_key_values(&mut iter, step, 21, 40);
 
         // seek a key that is larger or equal to upper bound won't get any key
         let seek_key = construct_key(40);
-        iter.seek(seek_key.as_bytes()).unwrap();
+        assert!(!iter.seek(seek_key.as_bytes()).unwrap());
         assert!(!iter.valid().unwrap());
 
         let seek_key = construct_key(22);
-        iter.seek(seek_key.as_bytes()).unwrap();
+        assert!(iter.seek(seek_key.as_bytes()).unwrap());
         verify_key_values(&mut iter, step, 23, 40);
     }
 
@@ -750,20 +718,24 @@ mod tests {
         step = -step;
 
         let mut iter_opt = IterOptions::default();
+        let lower_bound = construct_key(1);
+        let upper_bound = construct_key(100);
+        iter_opt.set_upper_bound(upper_bound.as_bytes(), 0);
+        iter_opt.set_lower_bound(lower_bound.as_bytes(), 0);
 
         let snapshot = engine.snapshot(1, 10).unwrap();
         let mut iter = snapshot.iterator_opt("write", iter_opt.clone()).unwrap();
-        iter.seek_to_last().unwrap();
+        assert!(iter.seek_to_last().unwrap());
         verify_key_values(&mut iter, step, 99, i32::MIN);
 
         // seek key that is in the skiplist
         let seek_key = construct_key(81);
-        iter.seek_for_prev(seek_key.as_bytes()).unwrap();
+        assert!(iter.seek_for_prev(seek_key.as_bytes()).unwrap());
         verify_key_values(&mut iter, step, 81, i32::MIN);
 
         // seek key that is in the skiplist
         let seek_key = construct_key(80);
-        iter.seek_for_prev(seek_key.as_bytes()).unwrap();
+        assert!(iter.seek_for_prev(seek_key.as_bytes()).unwrap());
         verify_key_values(&mut iter, step, 79, i32::MIN);
 
         let lower_bound = construct_key(20);
@@ -772,21 +744,21 @@ mod tests {
         iter_opt.set_lower_bound(lower_bound.as_bytes(), 0);
         let mut iter = snapshot.iterator_opt("write", iter_opt).unwrap();
 
-        iter.seek_to_last().unwrap();
+        assert!(iter.seek_to_last().unwrap());
         verify_key_values(&mut iter, step, 39, 20);
 
         // seek a key that is above the upper bound is the same with seek_to_last
         let seek_key = construct_key(45);
-        iter.seek_for_prev(seek_key.as_bytes()).unwrap();
+        assert!(iter.seek_for_prev(seek_key.as_bytes()).unwrap());
         verify_key_values(&mut iter, step, 39, 20);
 
         // seek a key that is less than the lower bound won't get any key
         let seek_key = construct_key(19);
-        iter.seek_for_prev(seek_key.as_bytes()).unwrap();
+        assert!(!iter.seek_for_prev(seek_key.as_bytes()).unwrap());
         assert!(!iter.valid().unwrap());
 
         let seek_key = construct_key(38);
-        iter.seek_for_prev(seek_key.as_bytes()).unwrap();
+        assert!(iter.seek_for_prev(seek_key.as_bytes()).unwrap());
         verify_key_values(&mut iter, step, 37, 20);
     }
 }
