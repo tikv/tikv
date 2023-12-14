@@ -11,7 +11,7 @@ use std::{
 use bytes::Bytes;
 use collections::HashMap;
 use engine_traits::{
-    CfNamesExt, DbVector, IterOptions, Iterable, Iterator, Mutable, Peekable, ReadOptions,
+    CfNamesExt, DbVector, Error, IterOptions, Iterable, Iterator, Mutable, Peekable, ReadOptions,
     RegionCacheEngine, Result, Snapshot, SnapshotMiscExt, WriteBatch, WriteBatchExt, WriteOptions,
     CF_DEFAULT, CF_LOCK, CF_WRITE,
 };
@@ -413,12 +413,15 @@ impl Iterable for RegionCacheSnapshot {
         let iter = self.region_memory_engine.data[cf_to_id(cf)].iter();
         let prefix_same_as_start = opts.prefix_same_as_start();
         let (lower_bound, upper_bound) = opts.build_bounds();
+        // only support with lower/upper bound set
+        if lower_bound.is_none() || upper_bound.is_none() {
+            return Err(Error::CacheNotAvailable);
+        }
         Ok(RegionCacheIterator {
             cf: String::from(cf),
             valid: false,
             prefix_same_as_start,
             prefix: None,
-            // only support with lower/upper bound set
             lower_bound: lower_bound.unwrap(),
             upper_bound: upper_bound.unwrap(),
             iter,
