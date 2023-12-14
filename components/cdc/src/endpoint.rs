@@ -488,7 +488,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
             drop(consume_tx);
         });
         workers.spawn(async move {
-            while let Some(_) = consume_rx.next().await {
+            while consume_rx.next().await.is_some() {
                 let mut tasks = init_tasks.lock().await;
                 let offset = rand::thread_rng().gen_range(0, tasks.len());
                 tasks.swap_remove(offset).run().await;
