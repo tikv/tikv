@@ -11,5 +11,5 @@ define_error_codes!(
     CODEC => ("Codec", "", ""),
     DATALOSS => ("DataLoss", "", ""),
     DATACOMPACTED => ("DataCompacted", "", ""),
-    CACHE_NOT_AVAILABLE => ("CacheNotAvailable", "", "")
+    BOUNDARY_NOT_SET => ("BoundaryNotSet", "", "")
 );

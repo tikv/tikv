@@ -415,7 +415,7 @@ impl Iterable for RegionCacheSnapshot {
         let (lower_bound, upper_bound) = opts.build_bounds();
         // only support with lower/upper bound set
         if lower_bound.is_none() || upper_bound.is_none() {
-            return Err(Error::CacheNotAvailable);
+            return Err(Error::BoundaryNotSet);
         }
         Ok(RegionCacheIterator {
             cf: String::from(cf),

@@ -149,8 +149,8 @@ pub enum Error {
     EntriesUnavailable,
     #[error("The entries of region is compacted")]
     EntriesCompacted,
-    #[error("The region is not available in the region cache engine")]
-    CacheNotAvailable,
+    #[error("Iterator of RegionCacheSnapshot is only supported with boundary set")]
+    BoundaryNotSet,
 }
 
 pub type Result<T> = result::Result<T, Error>;
@@ -167,7 +167,7 @@ impl ErrorCodeExt for Error {
             Error::Other(_) => error_code::UNKNOWN,
             Error::EntriesUnavailable => error_code::engine::DATALOSS,
             Error::EntriesCompacted => error_code::engine::DATACOMPACTED,
-            Error::CacheNotAvailable => error_code::engine::CACHE_NOT_AVAILABLE,
+            Error::BoundaryNotSet => error_code::engine::BOUNDARY_NOT_SET,
         }
     }
 }
