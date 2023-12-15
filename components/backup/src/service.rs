@@ -198,10 +198,8 @@ mod tests {
     fn new_rpc_suite() -> (Server, BackupClient, ReceiverWrapper<Task>) {
         let env = Arc::new(EnvBuilder::new().build());
         let (scheduler, rx) = dummy_scheduler();
-        let backup_service = super::Service::with_env(
-            scheduler,
-            Env::new(PanicHandle, Default::default(), None),
-        );
+        let backup_service =
+            super::Service::with_env(scheduler, Env::new(PanicHandle, Default::default(), None));
         let builder =
             ServerBuilder::new(env.clone()).register_service(create_backup(backup_service));
         let mut server = builder.bind("127.0.0.1", 0).build().unwrap();
