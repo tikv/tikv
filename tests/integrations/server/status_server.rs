@@ -45,7 +45,6 @@ fn test_region_meta_endpoint() {
         ConfigController::default(),
         Arc::new(SecurityConfig::default()),
         router,
-        std::env::temp_dir(),
         None,
         GrpcServiceManager::dummy(),
     )
