@@ -1160,7 +1160,7 @@ fn check_remove_node(
         }
     }
 
-    if slow_peer_count >= normal_peer_count {
+    if slow_peer_count > 0 && slow_peer_count >= normal_peer_count {
         return Err(box_err!(
             "ignore conf change command because RemoveNode on peer {:?} may lead to unavailability. There're {} slow peers and {} normal peers",
             &normal_peers_to_remove,
