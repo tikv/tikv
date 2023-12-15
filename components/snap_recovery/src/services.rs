@@ -42,7 +42,7 @@ use raftstore::{
 };
 use thiserror::Error;
 use tikv_util::sys::thread::{StdThreadBuildWrapper, ThreadBuildWrapper};
-use tokio::sync::oneshot;
+use tokio::sync::oneshot::{self, Sender};
 
 use crate::{
     data_resolver::DataResolverManager,
@@ -225,8 +225,8 @@ where
     // a new wait apply syncer share with all regions,
     // when all region reached the target index, share reference decreased to 0,
     // trigger closure to send finish info back.
-    pub fn wait_apply_last(router: RaftRouter<EK, ER>, sender: SyncSender<u64>) {
-        let wait_apply = SnapshotRecoveryWaitApplySyncer::new(0, sender);
+    pub fn wait_apply_last(router: RaftRouter<EK, ER>, sender: Sender<u64>) {
+        let wait_apply = SnapshotBrWaitApplySyncer::new(0, sender);
         router.broadcast_normal(|| {
             PeerMsg::SignificantMsg(SignificantMsg::SnapshotBrWaitApply(
                 SnapshotBrWaitApplyRequest::relaxed(wait_apply.clone()),
