@@ -1096,7 +1096,7 @@ pub fn check_conf_change(
         return Err(box_err!("multiple changes that only effect learner"));
     }
 
-    check_remove_node(cfg, change_peers, leader.get_id(), peer_heartbeat)?;
+    check_remove_or_demote_voter(cfg, change_peers, leader.get_id(), peer_heartbeat)?;
     if !ignore_safety {
         let promoted_commit_index = after_progress.maximal_committed_index().0;
         let first_index = node.raft.raft_log.first_index();
@@ -1125,7 +1125,7 @@ pub fn check_conf_change(
     }
 }
 
-fn check_remove_node(
+fn check_remove_or_demote_voter(
     cfg: &Config,
     change_peers: &[ChangePeerRequest],
     leader_id: u64,
@@ -1148,7 +1148,12 @@ fn check_remove_node(
     let mut normal_peers_to_remove = vec![];
     for cp in change_peers {
         let (change_type, peer) = (cp.get_change_type(), cp.get_peer());
-        if change_type == ConfChangeType::RemoveNode {
+        if change_type == ConfChangeType::RemoveNode
+            || change_type == ConfChangeType::AddLearnerNode
+        {
+            // If the change_type is AddLearnerNode and the last heartbeat is found, it
+            // means it's a demote from voter as AddLearnerNode on existing learner node is
+            // not allowed.
             if let Some(last_heartbeat) = peer_heartbeat.get(&peer.get_id()) {
                 // peer itself is *not* slow peer, but current slow peer is >= total peers/2
                 if last_heartbeat.elapsed() <= MAX_MISSED_HEARTBEATS * cfg.raft_heartbeat_interval()
@@ -1160,9 +1165,17 @@ fn check_remove_node(
         }
     }
 
-    if slow_peer_count > 0 && slow_peer_count >= normal_peer_count {
+    // only block the conf change when there's chance to improve the availability
+    // For example, if there's no normal peers actuall, then we still allow the
+    // option to finish as there's no choice.
+    // We only block the operation when normal peers are going to be removed and it
+    // could lead to slow peers more than normal peers
+    if normal_peers_to_remove.len() > 0
+        && slow_peer_count > 0
+        && slow_peer_count >= normal_peer_count
+    {
         return Err(box_err!(
-            "ignore conf change command because RemoveNode on peer {:?} may lead to unavailability. There're {} slow peers and {} normal peers",
+            "ignore conf change command because RemoveNode or Demote a voter on peers {:?} may lead to unavailability. There're {} slow peers and {} normal peers",
             &normal_peers_to_remove,
             slow_peer_count,
             normal_peer_count
@@ -2558,7 +2571,7 @@ mod tests {
         // Create a sample configuration
         let cfg = Config::default();
         // Initialize change_peers
-        let mut change_peers = vec![
+        let change_peers = vec![
             ChangePeerRequest {
                 change_type: eraftpb::ConfChangeType::RemoveNode,
                 peer: Some(metapb::Peer {
@@ -2569,9 +2582,9 @@ mod tests {
                 ..Default::default()
             },
             ChangePeerRequest {
-                change_type: eraftpb::ConfChangeType::AddNode,
+                change_type: eraftpb::ConfChangeType::AddLearnerNode,
                 peer: Some(metapb::Peer {
-                    id: 4,
+                    id: 2,
                     ..Default::default()
                 })
                 .into(),
@@ -2579,53 +2592,56 @@ mod tests {
             },
         ];
 
-        let mut peer_heartbeat = collections::HashMap::default();
-        peer_heartbeat.insert(
-            1,
-            std::time::Instant::now() - std::time::Duration::from_secs(1),
-        );
-        peer_heartbeat.insert(
-            2,
-            std::time::Instant::now() - std::time::Duration::from_secs(1),
-        );
-        peer_heartbeat.insert(
-            3,
-            std::time::Instant::now() - std::time::Duration::from_secs(1),
-        );
+        for i in 0..change_peers.len() {
+            // Call the function under test and assert that the function returns failed
+            let mut cp = vec![change_peers[i].clone()];
+            let mut peer_heartbeat = collections::HashMap::default();
+            peer_heartbeat.insert(
+                1,
+                std::time::Instant::now() - std::time::Duration::from_secs(1),
+            );
+            peer_heartbeat.insert(
+                2,
+                std::time::Instant::now() - std::time::Duration::from_secs(1),
+            );
+            peer_heartbeat.insert(
+                3,
+                std::time::Instant::now() - std::time::Duration::from_secs(1),
+            );
+            // Call the function under test and assert that the function returns Ok
+            check_remove_or_demote_voter(&cfg, &cp, 1, &peer_heartbeat).unwrap();
 
-        // Call the function under test and assert that the function returns Ok
-        check_remove_node(&cfg, &change_peers, 1, &peer_heartbeat).unwrap();
+            // now make one peer slow
+            if let Some(peer_heartbeat) = peer_heartbeat.get_mut(&3) {
+                *peer_heartbeat = std::time::Instant::now() - std::time::Duration::from_secs(100);
+            }
 
-        // now make one peer slow
-        if let Some(peer_heartbeat) = peer_heartbeat.get_mut(&3) {
-            *peer_heartbeat = std::time::Instant::now() - std::time::Duration::from_secs(100);
-        }
+            // Call the function under test
+            let result = check_remove_or_demote_voter(&cfg, &cp, 1, &peer_heartbeat);
+            // Assert that the function returns failed
+            assert!(result.is_err());
 
-        // Call the function under test
-        let result = check_remove_node(&cfg, &change_peers, 1, &peer_heartbeat);
-        // Assert that the function returns failed
-        assert!(result.is_err());
-
-        // remove the slow peer instead
-        change_peers[0].peer = Some(metapb::Peer {
-            id: 3,
-            ..Default::default()
-        })
-        .into();
-        // Call the function under test
-        check_remove_node(&cfg, &change_peers, 1, &peer_heartbeat).unwrap();
-
-        // there's no remove node, it's fine with slow peers.
-        change_peers[0] = ChangePeerRequest {
-            change_type: eraftpb::ConfChangeType::AddNode,
-            peer: Some(metapb::Peer {
-                id: 2,
+            // remove the slow peer instead
+            cp[0].peer = Some(metapb::Peer {
+                id: 3,
                 ..Default::default()
             })
-            .into(),
-            ..Default::default()
-        };
-        // Call the function under test
-        check_remove_node(&cfg, &change_peers, 1, &peer_heartbeat).unwrap();
+            .into();
+            // Call the function under test
+            check_remove_or_demote_voter(&cfg, &cp, 1, &peer_heartbeat).unwrap();
+
+            // there's no remove node, it's fine with slow peers.
+            cp[0] = ChangePeerRequest {
+                change_type: eraftpb::ConfChangeType::AddNode,
+                peer: Some(metapb::Peer {
+                    id: 2,
+                    ..Default::default()
+                })
+                .into(),
+                ..Default::default()
+            };
+            // Call the function under test
+            check_remove_or_demote_voter(&cfg, &cp, 1, &peer_heartbeat).unwrap();
+        }
     }
 }
