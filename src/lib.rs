@@ -23,7 +23,7 @@
 #![feature(proc_macro_hygiene)]
 #![feature(min_specialization)]
 #![feature(box_patterns)]
-#![feature(drain_filter)]
+#![feature(extract_if)]
 #![feature(deadline_api)]
 #![feature(let_chains)]
 #![feature(read_buf)]

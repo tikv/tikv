@@ -84,7 +84,7 @@ pub struct PeerPessimisticLocks {
     ///   likely to be proposed successfully, while the leader will need at
     ///   least another round to receive the transfer leader message from the
     ///   transferee.
-    ///  
+    ///
     /// - Split region The lock with the deleted mark SHOULD be moved to new
     ///   regions on region split. Considering the following cases with
     ///   different orders: 1. Propose write -> propose split -> apply write ->
@@ -244,7 +244,7 @@ impl PeerPessimisticLocks {
         // Locks that are marked deleted still need to be moved to the new regions,
         // and the deleted mark should also be cleared.
         // Refer to the comment in `PeerPessimisticLocks` for details.
-        let removed_locks = self.map.drain_filter(|key, _| {
+        let removed_locks = self.map.extract_if(|key, _| {
             let key = &**key.as_encoded();
             let (start_key, end_key) = (derived.get_start_key(), derived.get_end_key());
             key < start_key || (!end_key.is_empty() && key >= end_key)

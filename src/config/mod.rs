@@ -2064,7 +2064,7 @@ impl<T: ConfigurableDb + Send + Sync> ConfigManager for DbConfigManger<T> {
         self.cfg.update(change.clone())?;
         let change_str = format!("{:?}", change);
         let mut change: Vec<(String, ConfigValue)> = change.into_iter().collect();
-        let cf_config = change.drain_filter(|(name, _)| name.ends_with("cf"));
+        let cf_config = change.extract_if(|(name, _)| name.ends_with("cf"));
         for (cf_name, cf_change) in cf_config {
             if let ConfigValue::Module(mut cf_change) = cf_change {
                 // defaultcf -> default
@@ -2098,7 +2098,7 @@ impl<T: ConfigurableDb + Send + Sync> ConfigManager for DbConfigManger<T> {
         }
 
         if let Some(rate_bytes_config) = change
-            .drain_filter(|(name, _)| name == "rate_bytes_per_sec")
+            .extract_if(|(name, _)| name == "rate_bytes_per_sec")
             .next()
         {
             let rate_bytes_per_sec: ReadableSize = rate_bytes_config.1.into();
@@ -2107,7 +2107,7 @@ impl<T: ConfigurableDb + Send + Sync> ConfigManager for DbConfigManger<T> {
         }
 
         if let Some(rate_bytes_config) = change
-            .drain_filter(|(name, _)| name == "rate_limiter_auto_tuned")
+            .extract_if(|(name, _)| name == "rate_limiter_auto_tuned")
             .next()
         {
             let rate_limiter_auto_tuned: bool = rate_bytes_config.1.into();
@@ -2116,7 +2116,7 @@ impl<T: ConfigurableDb + Send + Sync> ConfigManager for DbConfigManger<T> {
         }
 
         if let Some(size) = change
-            .drain_filter(|(name, _)| name == "write_buffer_limit")
+            .extract_if(|(name, _)| name == "write_buffer_limit")
             .next()
         {
             let size: ReadableSize = size.1.into();
@@ -2124,14 +2124,14 @@ impl<T: ConfigurableDb + Send + Sync> ConfigManager for DbConfigManger<T> {
         }
 
         if let Some(f) = change
-            .drain_filter(|(name, _)| name == "write_buffer_flush_oldest_first")
+            .extract_if(|(name, _)| name == "write_buffer_flush_oldest_first")
             .next()
         {
             self.db.set_flush_oldest_first(f.1.into())?;
         }
 
         if let Some(background_jobs_config) = change
-            .drain_filter(|(name, _)| name == "max_background_jobs")
+            .extract_if(|(name, _)| name == "max_background_jobs")
             .next()
         {
             let max_background_jobs: i32 = background_jobs_config.1.into();
@@ -2139,7 +2139,7 @@ impl<T: ConfigurableDb + Send + Sync> ConfigManager for DbConfigManger<T> {
         }
 
         if let Some(background_subcompactions_config) = change
-            .drain_filter(|(name, _)| name == "max_sub_compactions")
+            .extract_if(|(name, _)| name == "max_sub_compactions")
             .next()
         {
             let max_subcompactions: u32 = background_subcompactions_config.1.into();
@@ -2148,7 +2148,7 @@ impl<T: ConfigurableDb + Send + Sync> ConfigManager for DbConfigManger<T> {
         }
 
         if let Some(background_flushes_config) = change
-            .drain_filter(|(name, _)| name == "max_background_flushes")
+            .extract_if(|(name, _)| name == "max_background_flushes")
             .next()
         {
             let max_background_flushes: i32 = background_flushes_config.1.into();
