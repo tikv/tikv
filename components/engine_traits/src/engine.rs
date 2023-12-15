@@ -42,7 +42,7 @@ pub trait KvEngine:
     ///
     /// SnapCtx will only be used by some type of trait implementors (ex:
     /// HybridEngine)
-    fn snapshot(&self, snap_ctx: Option<SnapCtx>) -> Self::Snapshot;
+    fn snapshot(&self, snap_ctx: Option<SnapshotContext>) -> Self::Snapshot;
 
     /// Syncs any writes to disk
     fn sync(&self) -> Result<()>;
@@ -83,7 +83,7 @@ pub trait KvEngine:
 }
 
 #[derive(Debug, Clone)]
-pub struct SnapCtx {
+pub struct SnapshotContext {
     pub region_id: u64,
     pub read_ts: u64,
 }

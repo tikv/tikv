@@ -473,7 +473,7 @@ impl CfNamesExt for RegionCacheSnapshot {
 
 impl SnapshotMiscExt for RegionCacheSnapshot {
     fn sequence_number(&self) -> u64 {
-        self.snapshot_ts
+        self.sequence_number
     }
 }
 

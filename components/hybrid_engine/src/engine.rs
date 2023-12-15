@@ -1,7 +1,7 @@
 // Copyright 2023 TiKV Project Authors. Licensed under Apache-2.0.
 
 use engine_traits::{
-    KvEngine, Peekable, ReadOptions, RegionCacheEngine, Result, SnapCtx, SnapshotMiscExt,
+    KvEngine, Peekable, ReadOptions, RegionCacheEngine, Result, SnapshotContext, SnapshotMiscExt,
     SyncMutable,
 };
 
@@ -66,7 +66,7 @@ where
 {
     type Snapshot = HybridEngineSnapshot<EK, EC>;
 
-    fn snapshot(&self, ctx: Option<SnapCtx>) -> Self::Snapshot {
+    fn snapshot(&self, ctx: Option<SnapshotContext>) -> Self::Snapshot {
         let disk_snap = self.disk_engine.snapshot(ctx.clone());
         let region_cache_snap = if let Some(ctx) = ctx {
             self.region_cache_engine.snapshot(
@@ -150,7 +150,7 @@ where
 #[cfg(test)]
 mod tests {
     use engine_rocks::util::new_engine;
-    use engine_traits::{KvEngine, SnapCtx, CF_DEFAULT, CF_LOCK, CF_WRITE};
+    use engine_traits::{KvEngine, SnapshotContext, CF_DEFAULT, CF_LOCK, CF_WRITE};
     use region_cache_memory_engine::RegionCacheMemoryEngine;
     use tempfile::Builder;
 
@@ -174,21 +174,21 @@ mod tests {
 
         let hybrid_engine = HybridEngine::new(disk_engine, memory_engine.clone());
         let s = hybrid_engine.snapshot(None);
-        assert!(s.snap().is_left());
+        assert!(!s.region_cache_snapshot_available());
 
-        let mut snap_ctx = SnapCtx {
+        let mut snap_ctx = SnapshotContext {
             read_ts: 15,
             region_id: 1,
         };
         let s = hybrid_engine.snapshot(Some(snap_ctx.clone()));
-        assert!(s.snap().is_right());
+        assert!(s.region_cache_snapshot_available());
 
         {
             let mut core = memory_engine.core().lock().unwrap();
             core.mut_region_meta(1).unwrap().set_can_read(false);
         }
         let s = hybrid_engine.snapshot(Some(snap_ctx.clone()));
-        assert!(s.snap().is_left());
+        assert!(!s.region_cache_snapshot_available());
 
         {
             let mut core = memory_engine.core().lock().unwrap();
@@ -196,6 +196,6 @@ mod tests {
         }
         snap_ctx.read_ts = 5;
         let s = hybrid_engine.snapshot(Some(snap_ctx));
-        assert!(s.snap().is_left());
+        assert!(!s.region_cache_snapshot_available());
     }
 }

@@ -22,7 +22,7 @@ use std::{
 
 use collections::{HashMap, HashSet};
 use concurrency_manager::ConcurrencyManager;
-use engine_traits::{CfName, KvEngine, MvccProperties, SnapCtx, Snapshot};
+use engine_traits::{CfName, KvEngine, MvccProperties, Snapshot, SnapshotContext};
 use futures::{future::BoxFuture, task::AtomicWaker, Future, Stream, StreamExt, TryFutureExt};
 use kvproto::{
     errorpb,
@@ -644,7 +644,7 @@ where
         }));
         let tracker = store_cb.read_tracker().unwrap();
 
-        let snap_ctx = ctx.start_ts.map(|ts| SnapCtx {
+        let snap_ctx = ctx.start_ts.map(|ts| SnapshotContext {
             read_ts: ts.into_inner(),
             region_id: ctx.pb_ctx.get_region_id(),
         });

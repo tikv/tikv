@@ -6,7 +6,6 @@ use engine_traits::{
     CfNamesExt, IterOptions, Iterable, KvEngine, Peekable, ReadOptions, RegionCacheEngine, Result,
     Snapshot, SnapshotMiscExt,
 };
-use tikv_util::Either;
 
 use crate::engine_iterator::HybridEngineIterator;
 
@@ -31,12 +30,8 @@ where
         }
     }
 
-    pub fn snap(&self) -> Either<&EK::Snapshot, &EC::Snapshot> {
-        if self.region_cache_snap.is_none() {
-            Either::Left(&self.disk_snap)
-        } else {
-            Either::Right(self.region_cache_snap.as_ref().unwrap())
-        }
+    pub fn region_cache_snapshot_available(&self) -> bool {
+        self.region_cache_snap.is_some()
     }
 }
 

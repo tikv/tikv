@@ -18,7 +18,7 @@ use encryption_export::DataKeyManager;
 use engine_rocks::{RocksEngine, RocksSnapshot, RocksStatistics};
 use engine_test::raft::RaftTestEngine;
 use engine_traits::{
-    CompactExt, Engines, Iterable, MiscExt, Mutable, Peekable, RaftEngineReadOnly, SnapCtx,
+    CompactExt, Engines, Iterable, MiscExt, Mutable, Peekable, RaftEngineReadOnly, SnapshotContext,
     SyncMutable, WriteBatch, WriteBatchExt, CF_DEFAULT, CF_RAFT,
 };
 use file_system::IoRateLimiter;
@@ -119,7 +119,7 @@ pub trait Simulator {
 
     fn read(
         &mut self,
-        snap_ctx: Option<SnapCtx>,
+        snap_ctx: Option<SnapshotContext>,
         batch_id: Option<ThreadReadId>,
         request: RaftCmdRequest,
         timeout: Duration,
@@ -133,7 +133,7 @@ pub trait Simulator {
 
     fn async_read(
         &mut self,
-        snap_ctx: Option<SnapCtx>,
+        snap_ctx: Option<SnapshotContext>,
         node_id: u64,
         batch_id: Option<ThreadReadId>,
         request: RaftCmdRequest,
@@ -444,7 +444,7 @@ impl<T: Simulator> Cluster<T> {
 
     pub fn read(
         &self,
-        snap_ctx: Option<SnapCtx>,
+        snap_ctx: Option<SnapshotContext>,
         batch_id: Option<ThreadReadId>,
         request: RaftCmdRequest,
         timeout: Duration,
