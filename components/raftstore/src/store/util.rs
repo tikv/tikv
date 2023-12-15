@@ -1170,7 +1170,7 @@ fn check_remove_or_demote_voter(
     // option to finish as there's no choice.
     // We only block the operation when normal peers are going to be removed and it
     // could lead to slow peers more than normal peers
-    if normal_peers_to_remove.len() > 0
+    if !normal_peers_to_remove.is_empty()
         && slow_peer_count > 0
         && slow_peer_count >= normal_peer_count
     {
