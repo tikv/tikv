@@ -342,8 +342,8 @@ impl ResourceGroupManager {
     #[inline]
     pub fn get_priority_resource_limiters(
         &self,
-    ) -> [Arc<ResourceLimiter>; TaskPriority::PRIORITY_COUNT] {
-        self.priority_limiters.clone()
+    ) -> &[Arc<ResourceLimiter>; TaskPriority::PRIORITY_COUNT] {
+        &self.priority_limiters
     }
 }
 
@@ -606,8 +606,8 @@ impl ResourceController {
             });
         if near_overflow {
             let end = Instant::now_coarse();
-            info!("all resource groups' virtual time are near overflow, do reset"; 
-                "min" => min_vt, "max" => max_vt, "dur" => ?end.duration_since(start), 
+            info!("all resource groups' virtual time are near overflow, do reset";
+                "min" => min_vt, "max" => max_vt, "dur" => ?end.duration_since(start),
                 "reset_dur" => ?end.duration_since(self.last_rest_vt_time.get()));
             max_vt -= RESET_VT_THRESHOLD;
             self.last_rest_vt_time.set(end);
