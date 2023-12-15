@@ -2548,7 +2548,7 @@ mod tests {
                 last_valid_ts: Timespec::new(0, 0),
                 txn_extra_op: Arc::new(AtomicCell::new(TxnExtraOp::default())),
                 txn_ext: Arc::new(TxnExt::default()),
-                read_progress: read_progress.clone(),
+                read_progress,
                 pending_remove: false,
                 wait_data: false,
                 track_ver: TrackVer::new(),
@@ -2560,8 +2560,8 @@ mod tests {
         let mut cmd = RaftCmdRequest::default();
         let mut header = RaftRequestHeader::default();
         header.set_region_id(1);
-        header.set_peer(leader2.clone());
-        header.set_region_epoch(epoch13.clone());
+        header.set_peer(leader2);
+        header.set_region_epoch(epoch13);
         header.set_term(term6);
         cmd.set_header(header);
         let mut req = Request::default();
