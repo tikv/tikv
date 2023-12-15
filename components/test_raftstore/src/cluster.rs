@@ -18,8 +18,8 @@ use encryption_export::DataKeyManager;
 use engine_rocks::{RocksEngine, RocksSnapshot, RocksStatistics};
 use engine_test::raft::RaftTestEngine;
 use engine_traits::{
-    CompactExt, Engines, Iterable, MiscExt, Mutable, Peekable, RaftEngineReadOnly, SyncMutable,
-    WriteBatch, WriteBatchExt, CF_DEFAULT, CF_RAFT,
+    CompactExt, Engines, Iterable, MiscExt, Mutable, Peekable, RaftEngineReadOnly, SnapCtx,
+    SyncMutable, WriteBatch, WriteBatchExt, CF_DEFAULT, CF_RAFT,
 };
 use file_system::IoRateLimiter;
 use futures::{self, channel::oneshot, executor::block_on, future::BoxFuture, StreamExt};
@@ -119,19 +119,21 @@ pub trait Simulator {
 
     fn read(
         &mut self,
+        snap_ctx: Option<SnapCtx>,
         batch_id: Option<ThreadReadId>,
         request: RaftCmdRequest,
         timeout: Duration,
     ) -> Result<RaftCmdResponse> {
         let node_id = request.get_header().get_peer().get_store_id();
         let (cb, mut rx) = make_cb(&request);
-        self.async_read(node_id, batch_id, request, cb);
+        self.async_read(snap_ctx, node_id, batch_id, request, cb);
         rx.recv_timeout(timeout)
             .map_err(|_| Error::Timeout(format!("request timeout for {:?}", timeout)))
     }
 
     fn async_read(
         &mut self,
+        snap_ctx: Option<SnapCtx>,
         node_id: u64,
         batch_id: Option<ThreadReadId>,
         request: RaftCmdRequest,
@@ -442,11 +444,16 @@ impl<T: Simulator> Cluster<T> {
 
     pub fn read(
         &self,
+        snap_ctx: Option<SnapCtx>,
         batch_id: Option<ThreadReadId>,
         request: RaftCmdRequest,
         timeout: Duration,
     ) -> Result<RaftCmdResponse> {
-        match self.sim.wl().read(batch_id, request.clone(), timeout) {
+        match self
+            .sim
+            .wl()
+            .read(snap_ctx, batch_id, request.clone(), timeout)
+        {
             Err(e) => {
                 warn!("failed to read {:?}: {:?}", request, e);
                 Err(e)
@@ -470,7 +477,7 @@ impl<T: Simulator> Cluster<T> {
             }
         }
         let ret = if is_read {
-            self.sim.wl().read(None, request.clone(), timeout)
+            self.sim.wl().read(None, None, request.clone(), timeout)
         } else {
             self.sim.rl().call_command(request.clone(), timeout)
         };

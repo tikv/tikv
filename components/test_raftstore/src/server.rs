@@ -15,7 +15,7 @@ use concurrency_manager::ConcurrencyManager;
 use encryption_export::DataKeyManager;
 use engine_rocks::{RocksEngine, RocksSnapshot};
 use engine_test::raft::RaftTestEngine;
-use engine_traits::{Engines, MiscExt};
+use engine_traits::{Engines, MiscExt, SnapCtx};
 use futures::executor::block_on;
 use grpcio::{ChannelBuilder, EnvBuilder, Environment, Error as GrpcError, Service};
 use grpcio_health::HealthService;
@@ -740,6 +740,7 @@ impl Simulator for ServerCluster {
 
     fn async_read(
         &mut self,
+        snap_ctx: Option<SnapCtx>,
         node_id: u64,
         batch_id: Option<ThreadReadId>,
         request: RaftCmdRequest,
@@ -753,7 +754,9 @@ impl Simulator for ServerCluster {
                 cb.invoke_with_response(resp);
             }
             Some(meta) => {
-                meta.sim_router.read(batch_id, request, cb).unwrap();
+                meta.sim_router
+                    .read(snap_ctx, batch_id, request, cb)
+                    .unwrap();
             }
         };
     }

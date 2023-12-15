@@ -5,7 +5,7 @@ use std::sync::{Arc, RwLock};
 use collections::HashSet;
 use crossbeam::channel::TrySendError;
 use engine_rocks::{RocksEngine, RocksSnapshot};
-use engine_traits::{KvEngine, ALL_CFS, CF_DEFAULT};
+use engine_traits::{KvEngine, SnapCtx, ALL_CFS, CF_DEFAULT};
 use futures::future::FutureExt;
 use kvproto::{
     kvrpcpb::{Context, ExtraOp as TxnExtraOp},
@@ -121,6 +121,7 @@ impl RaftStoreRouter<RocksEngine> for SyncBenchRouter {
 impl LocalReadRouter<RocksEngine> for SyncBenchRouter {
     fn read(
         &mut self,
+        _: Option<SnapCtx>,
         _: Option<ThreadReadId>,
         req: RaftCmdRequest,
         cb: Callback<RocksSnapshot>,

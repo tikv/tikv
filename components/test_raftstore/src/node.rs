@@ -10,7 +10,7 @@ use concurrency_manager::ConcurrencyManager;
 use encryption_export::DataKeyManager;
 use engine_rocks::{RocksEngine, RocksSnapshot};
 use engine_test::raft::RaftTestEngine;
-use engine_traits::{Engines, MiscExt, Peekable};
+use engine_traits::{Engines, MiscExt, Peekable, SnapCtx};
 use kvproto::{
     kvrpcpb::ApiVersion,
     metapb,
@@ -462,6 +462,7 @@ impl Simulator for NodeCluster {
 
     fn async_read(
         &mut self,
+        snap_ctx: Option<SnapCtx>,
         node_id: u64,
         batch_id: Option<ThreadReadId>,
         request: RaftCmdRequest,
@@ -483,7 +484,7 @@ impl Simulator for NodeCluster {
         }
         let mut guard = self.trans.core.lock().unwrap();
         let router = guard.routers.get_mut(&node_id).unwrap();
-        router.read(batch_id, request, cb).unwrap();
+        router.read(snap_ctx, batch_id, request, cb).unwrap();
     }
 
     fn send_raft_msg(&mut self, msg: raft_serverpb::RaftMessage) -> Result<()> {

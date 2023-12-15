@@ -12,6 +12,7 @@ use std::{
 use collections::{HashMap, HashSet};
 use crossbeam::channel::TrySendError;
 use engine_rocks::{RocksEngine, RocksSnapshot};
+use engine_traits::SnapCtx;
 use kvproto::{raft_cmdpb::RaftCmdRequest, raft_serverpb::RaftMessage};
 use raft::eraftpb::MessageType;
 use raftstore::{
@@ -252,11 +253,12 @@ impl<C: RaftStoreRouter<RocksEngine>> RaftStoreRouter<RocksEngine> for SimulateT
 impl<C: LocalReadRouter<RocksEngine>> LocalReadRouter<RocksEngine> for SimulateTransport<C> {
     fn read(
         &mut self,
+        snap_ctx: Option<SnapCtx>,
         read_id: Option<ThreadReadId>,
         req: RaftCmdRequest,
         cb: Callback<RocksSnapshot>,
     ) -> RaftStoreResult<()> {
-        self.ch.read(read_id, req, cb)
+        self.ch.read(snap_ctx, read_id, req, cb)
     }
 
     fn release_snapshot_cache(&mut self) {

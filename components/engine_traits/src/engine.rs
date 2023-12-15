@@ -82,6 +82,7 @@ pub trait KvEngine:
     fn inner_refcount(&self) -> usize;
 }
 
+#[derive(Debug, Clone)]
 pub struct SnapCtx {
     pub region_id: u64,
     pub read_ts: u64,

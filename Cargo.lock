@@ -2449,6 +2449,8 @@ version = "0.0.1"
 dependencies = [
  "engine_rocks",
  "engine_traits",
+ "region_cache_memory_engine",
+ "tempfile",
  "tikv_util",
  "txn_types",
 ]

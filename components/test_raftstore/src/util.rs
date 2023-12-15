@@ -447,7 +447,7 @@ pub fn read_on_peer<T: Simulator>(
         read_quorum,
     );
     request.mut_header().set_peer(peer);
-    cluster.read(None, request, timeout)
+    cluster.read(None, None, request, timeout)
 }
 
 pub fn async_read_on_peer<T: Simulator>(
@@ -469,7 +469,10 @@ pub fn async_read_on_peer<T: Simulator>(
     request.mut_header().set_replica_read(replica_read);
     let (tx, mut rx) = future::bounded(1, future::WakePolicy::Immediately);
     let cb = Callback::read(Box::new(move |resp| drop(tx.send(resp.response))));
-    cluster.sim.wl().async_read(node_id, None, request, cb);
+    cluster
+        .sim
+        .wl()
+        .async_read(None, node_id, None, request, cb);
     Box::pin(async move {
         let fut = rx.next();
         fut.await.unwrap()
@@ -500,7 +503,7 @@ pub fn batch_read_on_peer<T: Simulator>(
         cluster
             .sim
             .wl()
-            .async_read(node_id, batch_id.clone(), request, cb);
+            .async_read(None, node_id, batch_id.clone(), request, cb);
         len += 1;
     }
     while results.len() < len {
@@ -524,7 +527,7 @@ pub fn read_index_on_peer<T: Simulator>(
         read_quorum,
     );
     request.mut_header().set_peer(peer);
-    cluster.read(None, request, timeout)
+    cluster.read(None, None, request, timeout)
 }
 
 pub fn async_read_index_on_peer<T: Simulator>(
@@ -549,7 +552,10 @@ pub fn async_read_index_on_peer<T: Simulator>(
     request.mut_header().set_peer(peer);
     let (tx, mut rx) = future::bounded(1, future::WakePolicy::Immediately);
     let cb = Callback::read(Box::new(move |resp| drop(tx.send(resp.response))));
-    cluster.sim.wl().async_read(node_id, None, request, cb);
+    cluster
+        .sim
+        .wl()
+        .async_read(None, node_id, None, request, cb);
     Box::pin(async move {
         let fut = rx.next();
         fut.await.unwrap()

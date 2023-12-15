@@ -12,7 +12,7 @@ use std::{
 };
 
 use crossbeam::{atomic::AtomicCell, channel::TrySendError};
-use engine_traits::{KvEngine, Peekable, RaftEngine};
+use engine_traits::{KvEngine, Peekable, RaftEngine, SnapCtx};
 use fail::fail_point;
 use kvproto::{
     errorpb,
@@ -226,9 +226,16 @@ where
         }
     }
 
-    /// Update the snapshot in the `snap_cache` if the read_id is None or does
-    /// not match.
-    fn maybe_update_snapshot(&mut self, engine: &E, delegate_last_valid_ts: Timespec) -> bool {
+    // Update the snapshot in the `snap_cache` if the read_id is None or does
+    // not match.
+    // snap_ctx is used (if not None) to acquire the snapshot of the relevant region
+    // from region cache engine
+    fn maybe_update_snapshot(
+        &mut self,
+        engine: &E,
+        snap_ctx: Option<SnapCtx>,
+        delegate_last_valid_ts: Timespec,
+    ) -> bool {
         // When the read_id is None, it means the `snap_cache` has been cleared
         // before and the `cached_read_id` of it is None because only a consecutive
         // requests will have the same cache and the cache will be cleared after the
@@ -242,7 +249,7 @@ where
             }
 
             self.snap_cache.cached_read_id = self.read_id.clone();
-            self.snap_cache.snapshot = Some(Arc::new(engine.snapshot(None)));
+            self.snap_cache.snapshot = Some(Arc::new(engine.snapshot(snap_ctx)));
 
             // Ensures the snapshot is acquired before getting the time
             atomic::fence(atomic::Ordering::Release);
@@ -250,7 +257,7 @@ where
         } else {
             // read_id being None means the snapshot acquired will only be used in this
             // request
-            self.snapshot = Some(Arc::new(engine.snapshot(None)));
+            self.snapshot = Some(Arc::new(engine.snapshot(snap_ctx)));
 
             // Ensures the snapshot is acquired before getting the time
             atomic::fence(atomic::Ordering::Release);
@@ -984,6 +991,7 @@ where
         &mut self,
         req: &RaftCmdRequest,
         delegate: &mut CachedReadDelegate<E>,
+        snap_ctx: Option<SnapCtx>,
         read_id: Option<ThreadReadId>,
         snap_updated: &mut bool,
         last_valid_ts: Timespec,
@@ -991,7 +999,7 @@ where
         let mut local_read_ctx = LocalReadContext::new(&mut self.snap_cache, read_id);
 
         (*snap_updated) =
-            local_read_ctx.maybe_update_snapshot(delegate.get_tablet(), last_valid_ts);
+            local_read_ctx.maybe_update_snapshot(delegate.get_tablet(), snap_ctx, last_valid_ts);
 
         let snapshot_ts = local_read_ctx.snapshot_ts().unwrap();
         if !delegate.is_in_leader_lease(snapshot_ts) {
@@ -1024,7 +1032,7 @@ where
         // Stale read does not use cache, so we pass None for read_id
         let mut local_read_ctx = LocalReadContext::new(&mut self.snap_cache, None);
         (*snap_updated) =
-            local_read_ctx.maybe_update_snapshot(delegate.get_tablet(), last_valid_ts);
+            local_read_ctx.maybe_update_snapshot(delegate.get_tablet(), None, last_valid_ts);
 
         let region = Arc::clone(&delegate.region);
         // Getting the snapshot
@@ -1042,6 +1050,7 @@ where
 
     pub fn propose_raft_command(
         &mut self,
+        snap_ctx: Option<SnapCtx>,
         read_id: Option<ThreadReadId>,
         mut req: RaftCmdRequest,
         cb: Callback<E::Snapshot>,
@@ -1056,6 +1065,7 @@ where
                         if let Some(read_resp) = self.try_local_leader_read(
                             &req,
                             &mut delegate,
+                            snap_ctx,
                             read_id,
                             &mut snap_updated,
                             last_valid_ts,
@@ -1102,6 +1112,7 @@ where
                                 if let Some(read_resp) = self.try_local_leader_read(
                                     &req,
                                     &mut delegate,
+                                    None,
                                     None,
                                     &mut snap_updated,
                                     last_valid_ts,
@@ -1180,11 +1191,12 @@ where
     #[inline]
     pub fn read(
         &mut self,
+        snap_ctx: Option<SnapCtx>,
         read_id: Option<ThreadReadId>,
         req: RaftCmdRequest,
         cb: Callback<E::Snapshot>,
     ) {
-        self.propose_raft_command(read_id, req, cb);
+        self.propose_raft_command(snap_ctx, read_id, req, cb);
         maybe_tls_local_read_metrics_flush();
     }
 
@@ -1352,6 +1364,7 @@ mod tests {
     ) {
         reader.propose_raft_command(
             None,
+            None,
             cmd.clone(),
             Callback::read(Box::new(|resp| {
                 panic!("unexpected invoke, {:?}", resp);
@@ -1379,7 +1392,7 @@ mod tests {
         task: RaftCommand<KvTestSnapshot>,
         read_id: Option<ThreadReadId>,
     ) {
-        reader.propose_raft_command(read_id, task.request, task.callback);
+        reader.propose_raft_command(None, read_id, task.request, task.callback);
         assert_eq!(rx.try_recv().unwrap_err(), TryRecvError::Empty);
     }
 
@@ -1513,6 +1526,7 @@ mod tests {
             .set_store_id(store_id + 1);
         reader.propose_raft_command(
             None,
+            None,
             cmd_store_id,
             Callback::read(Box::new(move |resp: ReadResponse<KvTestSnapshot>| {
                 let err = resp.response.get_header().get_error();
@@ -1536,6 +1550,7 @@ mod tests {
             .mut_peer()
             .set_id(leader2.get_id() + 1);
         reader.propose_raft_command(
+            None,
             None,
             cmd_peer_id,
             Callback::read(Box::new(move |resp: ReadResponse<KvTestSnapshot>| {
@@ -1561,6 +1576,7 @@ mod tests {
         let mut cmd_term = cmd.clone();
         cmd_term.mut_header().set_term(term6 - 2);
         reader.propose_raft_command(
+            None,
             None,
             cmd_term,
             Callback::read(Box::new(move |resp: ReadResponse<KvTestSnapshot>| {
@@ -1597,8 +1613,9 @@ mod tests {
         );
 
         // Channel full.
-        reader.propose_raft_command(None, cmd.clone(), Callback::None);
+        reader.propose_raft_command(None, None, cmd.clone(), Callback::None);
         reader.propose_raft_command(
+            None,
             None,
             cmd.clone(),
             Callback::read(Box::new(move |resp: ReadResponse<KvTestSnapshot>| {
@@ -1631,6 +1648,7 @@ mod tests {
                 .update(Progress::applied_term(term6 + 3));
         }
         reader.propose_raft_command(
+            None,
             None,
             cmd9.clone(),
             Callback::read(Box::new(|resp| {
@@ -2007,7 +2025,7 @@ mod tests {
 
         let compare_ts = monotonic_raw_now();
         // Case 1: snap_cache_context.read_id is None
-        assert!(read_context.maybe_update_snapshot(&db, Timespec::new(0, 0)));
+        assert!(read_context.maybe_update_snapshot(&db, None, Timespec::new(0, 0)));
         assert!(read_context.snapshot_ts().unwrap() > compare_ts);
         assert_eq!(
             read_context
@@ -2022,7 +2040,7 @@ mod tests {
         // snap_cache_context is *not* created with read_id, so calling
         // `maybe_update_snapshot` again will update the snapshot
         let compare_ts = monotonic_raw_now();
-        assert!(read_context.maybe_update_snapshot(&db, Timespec::new(0, 0)));
+        assert!(read_context.maybe_update_snapshot(&db, None, Timespec::new(0, 0)));
         assert!(read_context.snapshot_ts().unwrap() > compare_ts);
 
         let read_id = ThreadReadId::new();
@@ -2032,7 +2050,7 @@ mod tests {
         let compare_ts = monotonic_raw_now();
         // Case 2: snap_cache_context.read_id is not None but not equals to the
         // snap_cache.cached_read_id
-        assert!(read_context.maybe_update_snapshot(&db, Timespec::new(0, 0)));
+        assert!(read_context.maybe_update_snapshot(&db, None, Timespec::new(0, 0)));
         assert!(read_context.snapshot_ts().unwrap() > compare_ts);
         let snap_ts = read_context.snapshot_ts().unwrap();
         assert_eq!(
@@ -2050,7 +2068,7 @@ mod tests {
         // `maybe_update_snapshot` again will *not* update the snapshot
         // Case 3: snap_cache_context.read_id is not None and equals to the
         // snap_cache.cached_read_id
-        assert!(!read_context.maybe_update_snapshot(&db2, Timespec::new(0, 0)));
+        assert!(!read_context.maybe_update_snapshot(&db2, None, Timespec::new(0, 0)));
         assert_eq!(read_context.snapshot_ts().unwrap(), snap_ts);
         assert_eq!(
             read_context
@@ -2065,7 +2083,7 @@ mod tests {
         // Case 4: delegate.last_valid_ts is larger than create_time of read_id
         let mut last_valid_ts = read_id_clone.create_time;
         last_valid_ts = last_valid_ts.add(Duration::nanoseconds(1));
-        assert!(read_context.maybe_update_snapshot(&db2, last_valid_ts));
+        assert!(read_context.maybe_update_snapshot(&db2, None, last_valid_ts));
         assert!(read_context.snapshot_ts().unwrap() > snap_ts);
         assert!(
             read_context
