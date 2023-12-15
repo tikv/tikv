@@ -524,6 +524,8 @@ pub fn new_node_cluster(id: u64, count: usize) -> Cluster<RocksEngine, NodeClust
     Cluster::new(id, count, sim, pd_client, ApiVersion::V1)
 }
 
+// the hybrid engine with disk engine "RocksEngine" and region cache engine
+// "RegionCacheMemoryEngine" is used in the node cluster.
 pub fn new_node_cluster_with_hybrid_engine(
     id: u64,
     count: usize,

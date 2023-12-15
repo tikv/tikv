@@ -864,6 +864,8 @@ pub fn new_server_cluster(
     Cluster::new(id, count, sim, pd_client, ApiVersion::V1)
 }
 
+// the hybrid engine with disk engine "RocksEngine" and region cache engine
+// "RegionCacheMemoryEngine" is used in the server cluster.
 pub fn new_server_cluster_with_hybrid_engine(
     id: u64,
     count: usize,
