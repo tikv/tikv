@@ -524,6 +524,15 @@ pub fn new_node_cluster(id: u64, count: usize) -> Cluster<RocksEngine, NodeClust
     Cluster::new(id, count, sim, pd_client, ApiVersion::V1)
 }
 
+pub fn new_node_cluster_with_hybrid_engine(
+    id: u64,
+    count: usize,
+) -> Cluster<HybridEngineImpl, NodeCluster<HybridEngineImpl>> {
+    let pd_client = Arc::new(TestPdClient::new(id, false));
+    let sim = Arc::new(RwLock::new(NodeCluster::new(Arc::clone(&pd_client))));
+    Cluster::new(id, count, sim, pd_client, ApiVersion::V1)
+}
+
 // This cluster does not support batch split, we expect it to transfer the
 // `BatchSplit` request to `split` request
 pub fn new_incompatible_node_cluster(

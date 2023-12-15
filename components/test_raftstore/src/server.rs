@@ -864,6 +864,15 @@ pub fn new_server_cluster(
     Cluster::new(id, count, sim, pd_client, ApiVersion::V1)
 }
 
+pub fn new_server_cluster_with_hybrid_engine(
+    id: u64,
+    count: usize,
+) -> Cluster<HybridEngineImpl, ServerCluster<HybridEngineImpl>> {
+    let pd_client = Arc::new(TestPdClient::new(id, false));
+    let sim = Arc::new(RwLock::new(ServerCluster::new(Arc::clone(&pd_client))));
+    Cluster::new(id, count, sim, pd_client, ApiVersion::V1)
+}
+
 pub fn new_server_cluster_with_api_ver(
     id: u64,
     count: usize,
