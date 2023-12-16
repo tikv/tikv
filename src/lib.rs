@@ -28,6 +28,7 @@
 #![feature(let_chains)]
 #![feature(read_buf)]
 #![feature(type_alias_impl_trait)]
+#![feature(impl_trait_in_assoc_type)]
 #![allow(incomplete_features)]
 #![feature(return_position_impl_trait_in_trait)]
 
