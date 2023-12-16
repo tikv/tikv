@@ -155,7 +155,7 @@ pub trait Debugger {
         start: &[u8],
         end: &[u8],
         limit: u64,
-    ) -> Result<impl Iterator<Item = raftstore::Result<(Vec<u8>, MvccInfo)>> + Send>;
+    ) -> Result<impl Iterator<Item = raftstore::Result<(Vec<u8>, MvccInfo)>> + Send + 'static>;
 
     /// Compact the cf[start..end) in the db.
     fn compact(
@@ -887,7 +887,7 @@ where
         start: &[u8],
         end: &[u8],
         limit: u64,
-    ) -> Result<impl Iterator<Item = raftstore::Result<(Vec<u8>, MvccInfo)>> + Send> {
+    ) -> Result<impl Iterator<Item = raftstore::Result<(Vec<u8>, MvccInfo)>> + Send + 'static> {
         if end.is_empty() && limit == 0 {
             return Err(Error::InvalidArgument("no limit and to_key".to_owned()));
         }

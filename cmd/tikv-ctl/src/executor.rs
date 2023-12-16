@@ -13,7 +13,7 @@ use engine_traits::{
     CF_WRITE, DATA_CFS,
 };
 use file_system::read_dir;
-use futures::{executor::block_on, future, stream, Stream, StreamExt, TryStreamExt};
+use futures::{executor::block_on, future, stream::{self, BoxStream}, Stream, StreamExt, TryStreamExt};
 use grpcio::{ChannelBuilder, Environment};
 use kvproto::{
     debugpb::{Db as DbType, *},
@@ -55,7 +55,7 @@ pub const METRICS_ROCKSDB_RAFT: &str = "rocksdb_raft";
 pub const METRICS_JEMALLOC: &str = "jemalloc";
 pub const LOCK_FILE_ERROR: &str = "IO error: While lock file";
 
-type MvccInfoStream = Pin<Box<dyn Stream<Item = result::Result<(Vec<u8>, MvccInfo), String>>>>;
+type MvccInfoStream = BoxStream<'static, result::Result<(Vec<u8>, MvccInfo), String>>;
 
 fn get_engine_type(dir: &str) -> EngineType {
     let mut entries = read_dir(dir).unwrap();

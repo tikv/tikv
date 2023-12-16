@@ -766,7 +766,6 @@ fn async_commit_timestamps(
         #[cfg(not(feature = "failpoints"))]
         let injected_fallback = false;
 
-        let max_commit_ts = max_commit_ts;
         if (!max_commit_ts.is_zero() && min_commit_ts > max_commit_ts) || injected_fallback {
             warn!("commit_ts is too large, fallback to normal 2PC";
                 "key" => log_wrappers::Value::key(key.as_encoded()),

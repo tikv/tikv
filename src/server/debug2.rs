@@ -721,7 +721,7 @@ impl<ER: RaftEngine> Debugger for DebuggerImplV2<ER> {
         start: &[u8],
         end: &[u8],
         limit: u64,
-    ) -> Result<impl Iterator<Item = raftstore::Result<(Vec<u8>, MvccInfo)>> + Send> {
+    ) -> Result<impl Iterator<Item = raftstore::Result<(Vec<u8>, MvccInfo)>> + Send + 'static> {
         if end.is_empty() && limit == 0 {
             return Err(Error::InvalidArgument("no limit and to_key".to_owned()));
         }
