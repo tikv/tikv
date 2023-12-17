@@ -11,6 +11,7 @@ pub mod msg;
 mod peer;
 mod read_queue;
 pub mod region_meta;
+pub mod snapshot_backup;
 pub mod transport;
 #[macro_use]
 pub mod util;
@@ -56,7 +57,6 @@ pub use self::{
     peer::{
         can_amend_read, get_sync_log_from_request, propose_read_index, should_renew_lease, Peer,
         PeerStat, ProposalContext, ProposalQueue, RequestInspector, RequestPolicy,
-        SnapshotRecoveryWaitApplySyncer,
     },
     peer_storage::{
         clear_meta, do_snapshot, write_initial_apply_state, write_initial_raft_state,
@@ -72,6 +72,7 @@ pub use self::{
         ApplyOptions, CfFile, Error as SnapError, SnapEntry, SnapKey, SnapManager,
         SnapManagerBuilder, Snapshot, SnapshotStatistics, TabletSnapKey, TabletSnapManager,
     },
+    snapshot_backup::SnapshotBrWaitApplySyncer,
     transport::{CasualRouter, ProposalRouter, SignificantRouter, StoreRouter, Transport},
     txn_ext::{LocksStatus, PeerPessimisticLocks, PessimisticLockPair, TxnExt},
     util::{RegionReadProgress, RegionReadProgressRegistry},

@@ -17,6 +17,7 @@ use std::{
     env,
     sync::atomic::{AtomicU16, Ordering},
     thread,
+    time::Duration,
 };
 
 use rand::Rng;
@@ -116,5 +117,23 @@ pub fn temp_dir(prefix: impl Into<Option<&'static str>>, prefer_mem: bool) -> te
             builder.tempdir_in(dir).unwrap()
         }
         _ => builder.tempdir().unwrap(),
+    }
+}
+
+#[track_caller]
+pub fn eventually(tick: Duration, total: Duration, mut check: impl FnMut() -> bool) {
+    let start = std::time::Instant::now();
+    loop {
+        if check() {
+            return;
+        }
+        if start.elapsed() < total {
+            std::thread::sleep(tick);
+            continue;
+        }
+        panic!(
+            "failed to pass the check after {:?} elapsed",
+            start.elapsed()
+        );
     }
 }

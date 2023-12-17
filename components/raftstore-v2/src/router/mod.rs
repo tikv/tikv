@@ -19,3 +19,4 @@ pub use self::{
         ReadResponse,
     },
 };
+pub use super::operation::DiskSnapBackupHandle;

@@ -1,12 +1,15 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::time::Duration;
+use std::{future::Future, time::Duration};
 
-use futures::StreamExt;
+use futures::{executor::block_on, StreamExt};
 use raft::eraftpb::MessageType;
-use raftstore::store::{PeerMsg, SignificantMsg, SnapshotRecoveryWaitApplySyncer};
+use raftstore::store::{
+    snapshot_backup::SnapshotBrWaitApplyRequest, PeerMsg, SignificantMsg, SnapshotBrWaitApplySyncer,
+};
 use test_raftstore::*;
 use tikv_util::HandyRwLock;
+use tokio::sync::oneshot;
 
 #[test]
 fn test_check_pending_admin() {
@@ -94,17 +97,17 @@ fn test_snap_wait_apply() {
 
     let router = cluster.sim.wl().get_router(1).unwrap();
 
-    let (tx, rx) = std::sync::mpsc::sync_channel(1);
-
+    let (tx, rx) = oneshot::channel();
+    let syncer = SnapshotBrWaitApplySyncer::new(1, tx);
     router.broadcast_normal(|| {
-        PeerMsg::SignificantMsg(SignificantMsg::SnapshotRecoveryWaitApply(
-            SnapshotRecoveryWaitApplySyncer::new(1, tx.clone()),
+        PeerMsg::SignificantMsg(SignificantMsg::SnapshotBrWaitApply(
+            SnapshotBrWaitApplyRequest::relaxed(syncer.clone()),
         ))
     });
 
     // we expect recv timeout because the leader peer on store 1 cannot finished the
     // apply. so the wait apply will timeout.
-    rx.recv_timeout(Duration::from_secs(1)).unwrap_err();
+    block_on_timeout(rx, Duration::from_secs(1)).unwrap_err();
 
     // clear filter so we can make wait apply finished.
     cluster.clear_send_filters();
@@ -112,13 +115,26 @@ fn test_snap_wait_apply() {
 
     // after clear the filter the leader peer on store 1 can finsihed the wait
     // apply.
-    let (tx, rx) = std::sync::mpsc::sync_channel(1);
+    let (tx, rx) = oneshot::channel();
+    let syncer = SnapshotBrWaitApplySyncer::new(1, tx);
     router.broadcast_normal(|| {
-        PeerMsg::SignificantMsg(SignificantMsg::SnapshotRecoveryWaitApply(
-            SnapshotRecoveryWaitApplySyncer::new(1, tx.clone()),
+        PeerMsg::SignificantMsg(SignificantMsg::SnapshotBrWaitApply(
+            SnapshotBrWaitApplyRequest::relaxed(syncer.clone()),
         ))
     });
+    drop(syncer);
 
     // we expect recv the region id from rx.
-    assert_eq!(rx.recv(), Ok(1));
+    assert_eq!(block_on(rx), Ok(1));
+}
+
+fn block_on_timeout<T>(
+    rx: impl Future<Output = T>,
+    from_secs: Duration,
+) -> Result<T, /* For matching the signature */ ()> {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_time()
+        .build()
+        .unwrap()
+        .block_on(async move { tokio::time::timeout(from_secs, rx).await.map_err(|_| ()) })
 }
