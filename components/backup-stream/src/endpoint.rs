@@ -946,10 +946,10 @@ where
         self.pool
             .block_on(self.region_operator.send(op))
             .map_err(|err| {
-                Error::Other(
-                    box_err!("cannot send to region operator, are we shutting down? ({err})")
-                        .into(),
-                )
+                Error::Other(box_err!(
+                    "cannot send to region operator, are we shutting down? ({})",
+                    err
+                ))
             })
             .report_if_err("during on_modify_observe");
     }

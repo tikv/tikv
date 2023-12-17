@@ -673,7 +673,7 @@ where
         }
         if raftstore::store::util::is_epoch_stale(
             region.get_region_epoch(),
-            &new_region_info.region,
+            new_region_info.region.get_region_epoch(),
         ) {
             metrics::SKIP_RETRY
                 .with_label_values(&["epoch-not-match"])
