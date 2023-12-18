@@ -209,7 +209,7 @@ impl<R: ResourceStatsProvider> GroupQuotaAdjustWorker<R> {
                 total_stats
             };
             BACKGROUND_RESOURCE_CONSUMPTION
-                .with_label_values(&[&g.name, resource_type.as_str()])
+                .with_label_values(&[&g.name, &g.name, resource_type.as_str()])
                 .inc_by(stats_delta.total_consumed);
             let stats_per_sec = stats_delta / dur_secs;
             background_consumed_total += stats_per_sec.total_consumed as f64;
@@ -267,7 +267,7 @@ impl<R: ResourceStatsProvider> GroupQuotaAdjustWorker<R> {
                     .max(available_resource_rate / total_ru_quota * g.ru_quota);
                 g.limiter.get_limiter(resource_type).set_rate_limit(limit);
                 BACKGROUND_QUOTA_LIMIT_VEC
-                    .with_label_values(&[&g.name, resource_type.as_str()])
+                    .with_label_values(&[&g.name, &g.name, resource_type.as_str()])
                     .set(limit as i64);
                 available_resource_rate -= limit;
                 total_ru_quota -= g.ru_quota;
@@ -287,7 +287,7 @@ impl<R: ResourceStatsProvider> GroupQuotaAdjustWorker<R> {
                 .min(available_resource_rate / total_ru_quota * g.ru_quota);
             g.limiter.get_limiter(resource_type).set_rate_limit(limit);
             BACKGROUND_QUOTA_LIMIT_VEC
-                .with_label_values(&[&g.name, resource_type.as_str()])
+                .with_label_values(&[&g.name, &g.name, resource_type.as_str()])
                 .set(limit as i64);
             available_resource_rate -= limit;
             total_ru_quota -= g.ru_quota;

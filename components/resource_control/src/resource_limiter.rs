@@ -78,7 +78,7 @@ impl ResourceLimiter {
         let wait_dur = cpu_dur.max(io_dur);
         if wait_dur > Duration::ZERO {
             BACKGROUND_TASKS_WAIT_DURATION
-                .with_label_values(&[&self.name])
+                .with_label_values(&[&self.name, &self.name])
                 .inc_by(wait_dur.as_micros() as u64);
         }
 
