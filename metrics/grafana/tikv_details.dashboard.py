@@ -316,6 +316,7 @@ def Cluster() -> RowPanel:
                         expr=expr_sum_rate(
                             "tikv_grpc_msg_duration_seconds_count",
                             label_selectors=['type!="kv_gc"'],
+                            by_labels=["instance", "type"],
                         ),
                         legend_format=r"{{instance}}-{{type}}",
                     ),

@@ -162,7 +162,7 @@ mod tests {
             index: 10,
             context: vec![ConsistencyCheckMethod::Raw as u8],
             region: region.clone(),
-            snap: db.snapshot(),
+            snap: db.snapshot(None),
         });
         let mut checksum_bytes = vec![];
         checksum_bytes.write_u32::<BigEndian>(sum).unwrap();
