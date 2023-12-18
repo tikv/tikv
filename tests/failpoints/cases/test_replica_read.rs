@@ -7,7 +7,6 @@ use std::{
 };
 
 use crossbeam::channel;
-use engine_rocks::RocksEngine;
 use engine_traits::RaftEngineReadOnly;
 use futures::executor::block_on;
 use kvproto::raft_serverpb::{PeerState, RaftMessage, RegionLocalState};
@@ -316,7 +315,7 @@ fn test_read_after_cleanup_range_for_snap() {
     request.mut_header().set_peer(p3);
     request.mut_header().set_replica_read(true);
     // Send follower read request to peer 3
-    let (cb1, mut rx1) = make_cb::<RocksEngine>(&request);
+    let (cb1, mut rx1) = make_cb_rocks(&request);
     cluster
         .sim
         .rl()
@@ -620,7 +619,7 @@ fn test_batch_read_index_after_transfer_leader() {
         let mut req = new_request(1, epoch, vec![new_read_index_cmd()], true);
         req.mut_header().set_peer(new_peer(2, 2));
 
-        let (cb, rx) = make_cb::<RocksEngine>(&req);
+        let (cb, rx) = make_cb_rocks(&req);
         cluster.sim.rl().async_command_on_node(2, req, cb).unwrap();
         resps.push(rx);
     }

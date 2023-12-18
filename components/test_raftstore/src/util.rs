@@ -13,7 +13,9 @@ use collections::HashMap;
 use encryption_export::{
     data_key_manager_from_config, DataKeyManager, FileConfig, MasterKeyConfig,
 };
-use engine_rocks::{config::BlobRunMode, RocksCompactedEvent, RocksEngine, RocksStatistics};
+use engine_rocks::{
+    config::BlobRunMode, RocksCompactedEvent, RocksEngine, RocksSnapshot, RocksStatistics,
+};
 use engine_test::raft::RaftTestEngine;
 use engine_traits::{
     CfName, CfNamesExt, Engines, Iterable, KvEngine, Peekable, RaftEngineDebug, RaftEngineReadOnly,
@@ -398,6 +400,12 @@ pub fn check_raft_cmd_request(cmd: &RaftCmdRequest) -> bool {
     }
     assert!(is_read ^ is_write, "Invalid RaftCmdRequest: {:?}", cmd);
     is_read
+}
+
+pub fn make_cb_rocks(
+    cmd: &RaftCmdRequest,
+) -> (Callback<RocksSnapshot>, future::Receiver<RaftCmdResponse>) {
+    make_cb::<RocksEngine>(cmd)
 }
 
 pub fn make_cb<EK: KvEngine>(
