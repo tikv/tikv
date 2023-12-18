@@ -865,7 +865,12 @@ async fn start<S, R>(
             continue;
         } else {
             let wait_conn_duration = begin.elapsed();
-            info!("connection established"; "store_id" => back_end.store_id, "addr" => %addr, "cost" => ?wait_conn_duration, "msg-count" => ?back_end.queue.len());
+            info!("connection established";
+                "store_id" => back_end.store_id,
+                "addr" => %addr,
+                "cost" => ?wait_conn_duration,
+                "msg_count" => ?back_end.queue.len(),
+            );
             RAFT_CLIENT_WAIT_CONN_READY_DURATION_HISTOGRAM_VEC
                 .with_label_values(&[addr.as_str()])
                 .observe(duration_to_sec(wait_conn_duration));
