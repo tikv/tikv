@@ -11,7 +11,7 @@ use std::{
 use api_version::{dispatch_api_version, keyspace::KvPair, ApiV1, KvFormat, RawValue};
 use backup::Task;
 use collections::HashMap;
-use engine_rocks::RocksEngine;
+use engine_test::kv::KvTestEngine as KTE;
 use engine_traits::{CfName, IterOptions, CF_DEFAULT, CF_WRITE, DATA_KEY_PREFIX_LEN};
 use external_storage::make_local_backend;
 use futures::{channel::mpsc as future_mpsc, executor::block_on};
@@ -42,7 +42,7 @@ use txn_types::TimeStamp;
 pub mod disk_snap;
 
 pub struct TestSuite {
-    pub cluster: Cluster<RocksEngine, ServerCluster<RocksEngine>>,
+    pub cluster: Cluster<KTE, ServerCluster<KTE>>,
     pub endpoints: HashMap<u64, LazyWorker<Task>>,
     pub tikv_cli: TikvClient,
     pub context: Context,
