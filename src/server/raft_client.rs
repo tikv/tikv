@@ -40,8 +40,8 @@ use tikv_kv::RaftExtension;
 use tikv_util::{
     config::{Tracker, VersionTrack},
     lru::LruCache,
-    timer::GLOBAL_TIMER_HANDLE,
     time::duration_to_sec,
+    timer::GLOBAL_TIMER_HANDLE,
     worker::Scheduler,
 };
 use yatp::{task::future::TaskCell, ThreadPool};
