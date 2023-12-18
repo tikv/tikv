@@ -2,20 +2,21 @@
 
 use core::slice::SlicePattern;
 use std::{
+    cmp,
     collections::BTreeMap,
     fmt::{self, Debug},
     ops::Deref,
     sync::{Arc, Mutex},
 };
 
-use bytes::Bytes;
+use bytes::{BufMut, Bytes, BytesMut};
 use collections::HashMap;
 use engine_traits::{
     CfNamesExt, DbVector, Error, IterOptions, Iterable, Iterator, Mutable, Peekable, ReadOptions,
     RegionCacheEngine, Result, Snapshot, SnapshotMiscExt, WriteBatch, WriteBatchExt, WriteOptions,
     CF_DEFAULT, CF_LOCK, CF_WRITE,
 };
-use skiplist_rs::{ByteWiseComparator, IterRef, Skiplist};
+use skiplist_rs::{IterRef, KeyComparator, Skiplist};
 use tikv_util::config::ReadableSize;
 
 fn cf_to_id(cf: &str) -> usize {
@@ -27,13 +28,78 @@ fn cf_to_id(cf: &str) -> usize {
     }
 }
 
+const ENC_KEY_SEQ_LENGTH: usize = std::mem::size_of::<u64>();
+
+#[inline]
+fn encode_key(key: &[u8], seq: u64) -> Bytes {
+    let mut encoded_key = BytesMut::with_capacity(key.len() + ENC_KEY_SEQ_LENGTH);
+    encoded_key.put(key);
+    encoded_key.put_u64(seq);
+    encoded_key.freeze()
+}
+
+#[inline]
+fn decode_key(encoded_key: &[u8]) -> (&[u8], u64) {
+    debug_assert!(encoded_key.len() >= ENC_KEY_SEQ_LENGTH);
+    let seq_offset = encoded_key.len() - ENC_KEY_SEQ_LENGTH;
+    (
+        &encoded_key[..seq_offset],
+        u64::from_be_bytes(
+            encoded_key[seq_offset..seq_offset + ENC_KEY_SEQ_LENGTH]
+                .try_into()
+                .unwrap(),
+        ),
+    )
+}
+
+#[inline]
+fn encode_for_seek_key(key: &[u8], seq: u64) -> Vec<u8> {
+    let mut seek_key = Vec::with_capacity(key.len() + ENC_KEY_SEQ_LENGTH);
+    seek_key.extend_from_slice(&key);
+    seek_key.put_u64(seq);
+    seek_key
+}
+
+#[derive(Default, Debug, Clone, Copy)]
+pub struct InternalKeyComparator {}
+
+impl InternalKeyComparator {
+    fn same_key(lhs: &[u8], rhs: &[u8]) -> bool {
+        let (user_k_1, _) = decode_key(lhs);
+        let (user_k_2, _) = decode_key(rhs);
+        user_k_1 == user_k_2
+    }
+}
+
+impl KeyComparator for InternalKeyComparator {
+    fn compare_key(&self, lhs: &[u8], rhs: &[u8]) -> cmp::Ordering {
+        let (user_k_1, seq1) = decode_key(lhs);
+        let (user_k_2, seq2) = decode_key(rhs);
+        let r = user_k_1.cmp(user_k_2);
+        if r.is_eq() {
+            if seq1 > seq2 {
+                return cmp::Ordering::Less;
+            } else if seq1 < seq2 {
+                return cmp::Ordering::Greater;
+            } else {
+                return cmp::Ordering::Equal;
+            }
+        }
+        r
+    }
+
+    fn same_key(&self, lhs: &[u8], rhs: &[u8]) -> bool {
+        InternalKeyComparator::same_key(lhs, rhs)
+    }
+}
+
 /// RegionMemoryEngine stores data for a specific cached region
 ///
 /// todo: The skiplist used here currently is for test purpose. Replace it
 /// with a formal implementation.
 #[derive(Clone)]
 pub struct RegionMemoryEngine {
-    data: [Arc<Skiplist<ByteWiseComparator>>; 3],
+    data: [Arc<Skiplist<InternalKeyComparator>>; 3],
 }
 
 impl RegionMemoryEngine {
@@ -41,17 +107,17 @@ impl RegionMemoryEngine {
         RegionMemoryEngine {
             data: [
                 Arc::new(Skiplist::with_capacity(
-                    ByteWiseComparator::default(),
+                    InternalKeyComparator::default(),
                     arena_size,
                     true,
                 )),
                 Arc::new(Skiplist::with_capacity(
-                    ByteWiseComparator::default(),
+                    InternalKeyComparator::default(),
                     arena_size,
                     true,
                 )),
                 Arc::new(Skiplist::with_capacity(
-                    ByteWiseComparator::default(),
+                    InternalKeyComparator::default(),
                     arena_size,
                     true,
                 )),
@@ -107,10 +173,26 @@ pub struct RegionMemoryMeta {
     safe_ts: u64,
 }
 
+impl RegionMemoryMeta {
+    pub fn set_can_read(&mut self, can_read: bool) {
+        self.can_read = can_read;
+    }
+
+    pub fn set_safe_ts(&mut self, safe_ts: u64) {
+        self.safe_ts = safe_ts;
+    }
+}
+
 #[derive(Default)]
 pub struct RegionCacheMemoryEngineCore {
     engine: HashMap<u64, RegionMemoryEngine>,
     region_metas: HashMap<u64, RegionMemoryMeta>,
+}
+
+impl RegionCacheMemoryEngineCore {
+    pub fn mut_region_meta(&mut self, region_id: u64) -> Option<&mut RegionMemoryMeta> {
+        self.region_metas.get_mut(&region_id)
+    }
 }
 
 /// The RegionCacheMemoryEngine serves as a region cache, storing hot regions in
@@ -135,6 +217,12 @@ pub struct RegionCacheMemoryEngine {
     core: Arc<Mutex<RegionCacheMemoryEngineCore>>,
 }
 
+impl RegionCacheMemoryEngine {
+    pub fn core(&self) -> &Arc<Mutex<RegionCacheMemoryEngineCore>> {
+        &self.core
+    }
+}
+
 impl Debug for RegionCacheMemoryEngine {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "Region Cache Memory Engine")
@@ -157,8 +245,8 @@ impl RegionCacheEngine for RegionCacheMemoryEngine {
     type Snapshot = RegionCacheSnapshot;
 
     // todo(SpadeA): add sequence number logic
-    fn snapshot(&self, region_id: u64, read_ts: u64) -> Option<Self::Snapshot> {
-        RegionCacheSnapshot::new(self.clone(), region_id, read_ts)
+    fn snapshot(&self, region_id: u64, read_ts: u64, seq_num: u64) -> Option<Self::Snapshot> {
+        RegionCacheSnapshot::new(self.clone(), region_id, read_ts, seq_num)
     }
 }
 
@@ -184,28 +272,76 @@ pub struct RegionCacheIterator {
     valid: bool,
     prefix_same_as_start: bool,
     prefix: Option<Vec<u8>>,
-    iter: IterRef<Skiplist<ByteWiseComparator>, ByteWiseComparator>,
+    iter: IterRef<Skiplist<InternalKeyComparator>, InternalKeyComparator>,
     // The lower bound is inclusive while the upper bound is exclusive if set
     lower_bound: Vec<u8>,
     upper_bound: Vec<u8>,
+    // A snapshot sequence number passed from RocksEngine Snapshot to guarantee suitable
+    // visibility.
+    sequence_number: u64,
+
+    saved_user_key: Vec<u8>,
 }
 
 impl Iterable for RegionCacheMemoryEngine {
     type Iterator = RegionCacheIterator;
-
-    fn iterator(&self, cf: &str) -> Result<Self::Iterator> {
-        unimplemented!()
-    }
 
     fn iterator_opt(&self, cf: &str, opts: IterOptions) -> Result<Self::Iterator> {
         unimplemented!()
     }
 }
 
+impl RegionCacheIterator {
+    fn find_next_visible_key(&mut self, mut skip_saved_key: bool) {
+        while self.iter.valid() {
+            let (user_key, seq_num) = decode_key(self.iter.key().as_slice());
+
+            if user_key >= self.upper_bound.as_slice() {
+                break;
+            }
+
+            if self.prefix_same_as_start {
+                // todo(SpadeA): support prefix seek
+                unimplemented!()
+            }
+
+            if self.is_visible(seq_num) {
+                if skip_saved_key && user_key == self.saved_user_key.as_slice() {
+                    // the user key has been met before, skip it.
+                } else {
+                    self.saved_user_key.clear();
+                    self.saved_user_key.extend_from_slice(user_key);
+                    self.valid = true;
+                    return;
+                }
+            } else if skip_saved_key && user_key > self.saved_user_key.as_slice() {
+                // user key changed, so no need to skip it
+                skip_saved_key = false;
+            }
+
+            self.iter.next();
+        }
+
+        self.valid = false;
+    }
+
+    fn is_visible(&self, seq: u64) -> bool {
+        seq <= self.sequence_number
+    }
+
+    fn seek_internal(&mut self, key: &[u8]) -> Result<bool> {
+        self.iter.seek(key);
+        if self.iter.valid() {
+            self.find_next_visible_key(false);
+        }
+        Ok(self.valid)
+    }
+}
+
 impl Iterator for RegionCacheIterator {
     fn key(&self) -> &[u8] {
         assert!(self.valid);
-        self.iter.key().as_slice()
+        &self.saved_user_key
     }
 
     fn value(&self) -> &[u8] {
@@ -216,11 +352,9 @@ impl Iterator for RegionCacheIterator {
     fn next(&mut self) -> Result<bool> {
         assert!(self.valid);
         self.iter.next();
-        self.valid = self.iter.valid() && self.iter.key().as_slice() < self.upper_bound.as_slice();
-
-        if self.valid && self.prefix_same_as_start {
-            // todo(SpadeA): support prefix seek
-            unimplemented!()
+        self.valid = self.iter.valid();
+        if self.valid {
+            self.find_next_visible_key(true);
         }
         Ok(self.valid)
     }
@@ -242,15 +376,9 @@ impl Iterator for RegionCacheIterator {
         } else {
             key
         };
-        self.iter.seek(seek_key);
-        self.valid = self.iter.valid() && self.iter.key().as_slice() < self.upper_bound.as_slice();
 
-        if self.valid && self.prefix_same_as_start {
-            // todo(SpadeA): support prefix seek
-            unimplemented!()
-        }
-
-        Ok(self.valid)
+        let seek_key = encode_for_seek_key(seek_key, self.sequence_number);
+        self.seek_internal(&seek_key)
     }
 
     fn seek_for_prev(&mut self, key: &[u8]) -> Result<bool> {
@@ -271,8 +399,8 @@ impl Iterator for RegionCacheIterator {
     }
 
     fn seek_to_first(&mut self) -> Result<bool> {
-        let lower_bound = self.lower_bound.clone();
-        self.seek(lower_bound.as_slice())
+        let seek_key = encode_for_seek_key(&self.lower_bound, self.sequence_number);
+        self.seek_internal(&seek_key)
     }
 
     fn seek_to_last(&mut self) -> Result<bool> {
@@ -357,12 +485,20 @@ impl Mutable for RegionCacheWriteBatch {
 pub struct RegionCacheSnapshot {
     region_id: u64,
     snapshot_ts: u64,
+    // Sequence number is shared between RegionCacheEngine and disk KvEnigne to
+    // provide atomic write
+    sequence_number: u64,
     region_memory_engine: RegionMemoryEngine,
     engine: RegionCacheMemoryEngine,
 }
 
 impl RegionCacheSnapshot {
-    pub fn new(engine: RegionCacheMemoryEngine, region_id: u64, read_ts: u64) -> Option<Self> {
+    pub fn new(
+        engine: RegionCacheMemoryEngine,
+        region_id: u64,
+        read_ts: u64,
+        seq_num: u64,
+    ) -> Option<Self> {
         let mut core = engine.core.lock().unwrap();
         let region_meta = core.region_metas.get_mut(&region_id)?;
         if !region_meta.can_read {
@@ -379,6 +515,7 @@ impl RegionCacheSnapshot {
         Some(RegionCacheSnapshot {
             region_id,
             snapshot_ts: read_ts,
+            sequence_number: seq_num,
             region_memory_engine: core.engine.get(&region_id).unwrap().clone(),
             engine: engine.clone(),
         })
@@ -414,6 +551,8 @@ impl Iterable for RegionCacheSnapshot {
             lower_bound: lower_bound.unwrap(),
             upper_bound: upper_bound.unwrap(),
             iter,
+            sequence_number: self.sequence_number,
+            saved_user_key: vec![],
         })
     }
 }
@@ -431,10 +570,16 @@ impl Peekable for RegionCacheSnapshot {
         cf: &str,
         key: &[u8],
     ) -> Result<Option<Self::DbVector>> {
-        Ok(self.region_memory_engine.data[cf_to_id(cf)]
-            .get(key)
-            .cloned()
-            .map(|v| RegionCacheDbVector(v)))
+        let seq = self.sequence_number;
+        let mut iter = self.region_memory_engine.data[cf_to_id(cf)].iter();
+        let seek_key = encode_for_seek_key(key, self.sequence_number);
+
+        iter.seek(&seek_key);
+        if iter.valid() && InternalKeyComparator::same_key(iter.key(), &seek_key) {
+            return Ok(Some(RegionCacheDbVector(iter.value().clone())));
+        }
+
+        Ok(None)
     }
 }
 
@@ -446,7 +591,7 @@ impl CfNamesExt for RegionCacheSnapshot {
 
 impl SnapshotMiscExt for RegionCacheSnapshot {
     fn sequence_number(&self) -> u64 {
-        self.snapshot_ts
+        self.sequence_number
     }
 }
 
@@ -472,15 +617,15 @@ impl<'a> PartialEq<&'a [u8]> for RegionCacheDbVector {
 #[cfg(test)]
 mod tests {
     use core::ops::Range;
-    use std::{iter::StepBy, sync::Arc};
+    use std::{iter::StepBy, ops::Deref, sync::Arc};
 
     use bytes::Bytes;
     use engine_traits::{
         IterOptions, Iterable, Iterator, Peekable, ReadOptions, RegionCacheEngine,
     };
-    use skiplist_rs::{ByteWiseComparator, Skiplist};
+    use skiplist_rs::Skiplist;
 
-    use super::{cf_to_id, RegionCacheIterator};
+    use super::{cf_to_id, encode_key, InternalKeyComparator, RegionCacheIterator};
     use crate::RegionCacheMemoryEngine;
 
     #[test]
@@ -515,31 +660,31 @@ mod tests {
             }
         };
 
-        assert!(engine.snapshot(1, 5).is_none());
+        assert!(engine.snapshot(1, 5, u64::MAX).is_none());
 
         {
             let mut core = engine.core.lock().unwrap();
             core.region_metas.get_mut(&1).unwrap().can_read = true;
         }
-        let s1 = engine.snapshot(1, 5).unwrap();
+        let s1 = engine.snapshot(1, 5, u64::MAX).unwrap();
 
         {
             let mut core = engine.core.lock().unwrap();
             core.region_metas.get_mut(&1).unwrap().safe_ts = 5;
         }
-        assert!(engine.snapshot(1, 5).is_none());
-        let s2 = engine.snapshot(1, 10).unwrap();
+        assert!(engine.snapshot(1, 5, u64::MAX).is_none());
+        let s2 = engine.snapshot(1, 10, u64::MAX).unwrap();
 
         verify_snapshot_count(5, 1);
         verify_snapshot_count(10, 1);
-        let s3 = engine.snapshot(1, 10).unwrap();
+        let s3 = engine.snapshot(1, 10, u64::MAX).unwrap();
         verify_snapshot_count(10, 2);
 
         drop(s1);
         verify_snapshot_count(5, 0);
         drop(s2);
         verify_snapshot_count(10, 1);
-        let s4 = engine.snapshot(1, 10).unwrap();
+        let s4 = engine.snapshot(1, 10, u64::MAX).unwrap();
         verify_snapshot_count(10, 2);
         drop(s4);
         verify_snapshot_count(10, 1);
@@ -548,19 +693,38 @@ mod tests {
     }
 
     fn construct_key(i: i32) -> String {
-        format!("key-{:08}", i)
+        format!("key-{:08}", !i)
     }
 
     fn construct_value(i: i32) -> String {
         format!("value-{:08}", i)
     }
 
-    fn fill_data_in_skiplist(sl: Arc<Skiplist<ByteWiseComparator>>, range: StepBy<Range<i32>>) {
+    fn fill_data_in_skiplist(sl: Arc<Skiplist<InternalKeyComparator>>, range: StepBy<Range<i32>>) {
+        let mut seq = 1;
         for i in range {
             let key = construct_key(i);
             let val = construct_value(i);
-            sl.put(Bytes::from(key), Bytes::from(val));
+            let key = encode_key(key.as_bytes(), seq);
+            sl.put(key, Bytes::from(val));
+            seq += 1;
         }
+    }
+
+    fn construct_mvcc_key(key: &str, mvcc: u64) -> String {
+        format!("{}-{}", key, !mvcc)
+    }
+
+    fn put_key_val(
+        sl: &Arc<Skiplist<InternalKeyComparator>>,
+        key: &str,
+        val: &'static str,
+        mvcc: u64,
+        seq: u64,
+    ) {
+        let key = construct_mvcc_key(key, mvcc);
+        let key = encode_key(key.as_bytes(), seq);
+        sl.put(key, Bytes::from(val));
     }
 
     fn verify_key_value(k: &[u8], v: &[u8], i: i32) {
@@ -609,7 +773,7 @@ mod tests {
             fill_data_in_skiplist(sl, (1..100).step_by(1));
         }
 
-        let snapshot = engine.snapshot(1, 10).unwrap();
+        let snapshot = engine.snapshot(1, 10, u64::MAX).unwrap();
         let opts = ReadOptions::default();
         for i in 1..100 {
             let k = construct_key(i);
@@ -644,7 +808,7 @@ mod tests {
         }
 
         let mut iter_opt = IterOptions::default();
-        let snapshot = engine.snapshot(1, 10).unwrap();
+        let snapshot = engine.snapshot(1, 10, u64::MAX).unwrap();
         // boundaries are not set
         assert!(snapshot.iterator_opt("lock", iter_opt.clone()).is_err());
 
@@ -719,7 +883,7 @@ mod tests {
         iter_opt.set_upper_bound(upper_bound.as_bytes(), 0);
         iter_opt.set_lower_bound(lower_bound.as_bytes(), 0);
 
-        let snapshot = engine.snapshot(1, 10).unwrap();
+        let snapshot = engine.snapshot(1, 10, u64::MAX).unwrap();
         let mut iter = snapshot.iterator_opt("write", iter_opt.clone()).unwrap();
         assert!(iter.seek_to_last().unwrap());
         verify_key_values(&mut iter, step, 99, i32::MIN);
@@ -756,5 +920,128 @@ mod tests {
         let seek_key = construct_key(38);
         assert!(iter.seek_for_prev(seek_key.as_bytes()).unwrap());
         verify_key_values(&mut iter, step, 37, 20);
+    }
+
+    #[test]
+    fn test_seq_visibility() {
+        let engine = RegionCacheMemoryEngine::default();
+        engine.new_region(1);
+        let step: i32 = 2;
+
+        {
+            let mut core = engine.core.lock().unwrap();
+            core.region_metas.get_mut(&1).unwrap().can_read = true;
+            core.region_metas.get_mut(&1).unwrap().safe_ts = 5;
+            let sl = core.engine.get_mut(&1).unwrap().data[cf_to_id("write")].clone();
+
+            put_key_val(&sl, "aaa", "va1", 10, 1);
+            put_key_val(&sl, "aaa", "va2", 10, 3);
+            put_key_val(&sl, "aaa", "va3", 10, 4);
+
+            put_key_val(&sl, "bbb", "vb1", 10, 2);
+            put_key_val(&sl, "bbb", "vb2", 10, 4);
+
+            put_key_val(&sl, "ccc", "vc1", 10, 2);
+            put_key_val(&sl, "ccc", "vc2", 10, 4);
+            put_key_val(&sl, "ccc", "vc3", 10, 5);
+            put_key_val(&sl, "ccc", "vc4", 10, 6);
+        }
+
+        let mut iter_opt = IterOptions::default();
+        let lower_bound = "";
+        let upper_bound = "z";
+        iter_opt.set_upper_bound(upper_bound.as_bytes(), 0);
+        iter_opt.set_lower_bound(lower_bound.as_bytes(), 0);
+
+        // seq num 1
+        let snapshot = engine.snapshot(1, u64::MAX, 1).unwrap();
+        let mut iter = snapshot.iterator_opt("write", iter_opt.clone()).unwrap();
+        iter.seek_to_first().unwrap();
+        assert_eq!(iter.value(), b"va1");
+        assert!(!iter.next().unwrap());
+        let key = construct_mvcc_key("aaa", 10);
+        assert_eq!(
+            snapshot
+                .get_value_cf("write", key.as_bytes())
+                .unwrap()
+                .unwrap()
+                .deref(),
+            "va1".as_bytes()
+        );
+        let key = construct_mvcc_key("bbb", 10);
+        assert!(
+            snapshot
+                .get_value_cf("write", key.as_bytes())
+                .unwrap()
+                .is_none()
+        );
+        let key = construct_mvcc_key("ccc", 10);
+        assert!(
+            snapshot
+                .get_value_cf("write", key.as_bytes())
+                .unwrap()
+                .is_none()
+        );
+
+        // seq num 2
+        let snapshot = engine.snapshot(1, u64::MAX, 2).unwrap();
+        let mut iter = snapshot.iterator_opt("write", iter_opt.clone()).unwrap();
+        iter.seek_to_first().unwrap();
+        assert_eq!(iter.value(), b"va1");
+        iter.next().unwrap();
+        assert_eq!(iter.value(), b"vb1");
+        iter.next().unwrap();
+        assert_eq!(iter.value(), b"vc1");
+        assert!(!iter.next().unwrap());
+
+        // seq num 5
+        let snapshot = engine.snapshot(1, u64::MAX, 5).unwrap();
+        let mut iter = snapshot.iterator_opt("write", iter_opt.clone()).unwrap();
+        iter.seek_to_first().unwrap();
+        assert_eq!(iter.value(), b"va3");
+        iter.next().unwrap();
+        assert_eq!(iter.value(), b"vb2");
+        iter.next().unwrap();
+        assert_eq!(iter.value(), b"vc3");
+        assert!(!iter.next().unwrap());
+
+        // seq num 6
+        let snapshot = engine.snapshot(1, u64::MAX, 6).unwrap();
+        let mut iter = snapshot.iterator_opt("write", iter_opt.clone()).unwrap();
+        iter.seek_to_first().unwrap();
+        assert_eq!(iter.value(), b"va3");
+        iter.next().unwrap();
+        assert_eq!(iter.value(), b"vb2");
+        iter.next().unwrap();
+        assert_eq!(iter.value(), b"vc4");
+        assert!(!iter.next().unwrap());
+
+        let key = construct_mvcc_key("aaa", 10);
+        assert_eq!(
+            snapshot
+                .get_value_cf("write", key.as_bytes())
+                .unwrap()
+                .unwrap()
+                .deref(),
+            "va3".as_bytes()
+        );
+        let key = construct_mvcc_key("bbb", 10);
+        assert_eq!(
+            snapshot
+                .get_value_cf("write", key.as_bytes())
+                .unwrap()
+                .unwrap()
+                .deref(),
+            "vb2".as_bytes()
+        );
+        let key = construct_mvcc_key("ccc", 10);
+        assert_eq!(
+            snapshot
+                .get_value_cf("write", key.as_bytes())
+                .unwrap()
+                .unwrap()
+                .deref(),
+            "vc4".as_bytes()
+        );
     }
 }
