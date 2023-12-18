@@ -4,18 +4,21 @@ use lazy_static::*;
 use prometheus::*;
 
 lazy_static! {
+    // TODO: deprecate the "name" label in v8.0.
     pub static ref BACKGROUND_QUOTA_LIMIT_VEC: IntGaugeVec = register_int_gauge_vec!(
         "tikv_resource_control_background_quota_limiter",
         "The quota limiter of background resource groups per resource type",
         &["name", "resource_group", "type"]
     )
     .unwrap();
+    // TODO: deprecate the "name" label in v8.0.
     pub static ref BACKGROUND_RESOURCE_CONSUMPTION: IntCounterVec = register_int_counter_vec!(
         "tikv_resource_control_background_resource_consumption",
         "Total resource consumed of background resource groups per resource type",
         &["name", "resource_group", "type"]
     )
     .unwrap();
+    // TODO: deprecate the "name" label in v8.0.
     pub static ref BACKGROUND_TASKS_WAIT_DURATION: IntCounterVec = register_int_counter_vec!(
         "tikv_resource_control_background_task_wait_duration",
         "Total wait duration of background tasks per resource group",

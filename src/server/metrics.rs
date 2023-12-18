@@ -217,6 +217,7 @@ lazy_static! {
         &["type"]
     )
     .unwrap();
+    // TODO: deprecate the "name" label in v8.0.
     pub static ref GRPC_RESOURCE_GROUP_COUNTER_VEC: IntCounterVec = register_int_counter_vec!(
         "tikv_grpc_resource_group_total",
         "Total number of handle grpc message for each resource group",
