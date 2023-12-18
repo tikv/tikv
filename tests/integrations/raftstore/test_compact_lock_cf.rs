@@ -1,17 +1,21 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine_rocks::raw::DBStatisticsTickerType;
+use engine_rocks::{raw::DBStatisticsTickerType, RocksEngine};
 use engine_traits::{MiscExt, CF_LOCK};
 use test_raftstore::*;
 use tikv_util::config::*;
 
-fn flush<T: Simulator>(cluster: &mut Cluster<T>) {
+fn flush<T: Simulator<RocksEngine>>(cluster: &mut Cluster<RocksEngine, T>) {
     for engines in cluster.engines.values() {
         engines.kv.flush_cf(CF_LOCK, true).unwrap();
     }
 }
 
-fn flush_then_check<T: Simulator>(cluster: &mut Cluster<T>, interval: u64, written: bool) {
+fn flush_then_check<T: Simulator<RocksEngine>>(
+    cluster: &mut Cluster<RocksEngine, T>,
+    interval: u64,
+    written: bool,
+) {
     flush(cluster);
     // Wait for compaction.
     sleep_ms(interval * 2);
@@ -26,7 +30,7 @@ fn flush_then_check<T: Simulator>(cluster: &mut Cluster<T>, interval: u64, writt
     }
 }
 
-fn test_compact_lock_cf<T: Simulator>(cluster: &mut Cluster<T>) {
+fn test_compact_lock_cf<T: Simulator<RocksEngine>>(cluster: &mut Cluster<RocksEngine, T>) {
     let interval = 500;
     // Set lock_cf_compact_interval.
     cluster.cfg.raft_store.lock_cf_compact_interval = ReadableDuration::millis(interval);

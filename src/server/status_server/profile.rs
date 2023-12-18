@@ -2,7 +2,6 @@
 use std::{
     fs::File,
     io::{Read, Write},
-    path::PathBuf,
     pin::Pin,
     process::{Command, Stdio},
     sync::Mutex,
@@ -83,11 +82,11 @@ impl<I, T> Future for ProfileRunner<I, T> {
 }
 
 /// Trigger a heap profile and return the content.
-pub fn dump_one_heap_profile() -> Result<PathBuf, String> {
+pub fn dump_one_heap_profile() -> Result<NamedTempFile, String> {
     let f = NamedTempFile::new().map_err(|e| format!("create tmp file fail: {}", e))?;
     let path = f.path();
     dump_prof(path.to_str().unwrap()).map_err(|e| format!("dump_prof: {}", e))?;
-    Ok(path.to_owned())
+    Ok(f)
 }
 
 /// Trigger one cpu profile.

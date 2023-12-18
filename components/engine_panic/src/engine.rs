@@ -1,7 +1,7 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use engine_traits::{
-    IterOptions, Iterable, Iterator, KvEngine, Peekable, ReadOptions, Result, SyncMutable,
+    IterOptions, Iterable, Iterator, KvEngine, Peekable, ReadOptions, Result, SnapCtx, SyncMutable,
     WriteOptions,
 };
 
@@ -13,7 +13,7 @@ pub struct PanicEngine;
 impl KvEngine for PanicEngine {
     type Snapshot = PanicSnapshot;
 
-    fn snapshot(&self) -> Self::Snapshot {
+    fn snapshot(&self, _: Option<SnapCtx>) -> Self::Snapshot {
         panic!()
     }
     fn sync(&self) -> Result<()> {
