@@ -2070,10 +2070,6 @@ mod tests {
         let mut suite = mock_endpoint(&cfg, None, ApiVersion::V1);
 
         // Pause scan task runtime.
-        suite.endpoint._workers = Builder::new_multi_thread()
-            .worker_threads(1)
-            .build()
-            .unwrap();
         let (pause_tx, pause_rx) = std::sync::mpsc::channel::<()>();
         suite.endpoint._workers.spawn(async move {
             let _ = pause_rx.recv();
