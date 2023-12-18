@@ -247,7 +247,7 @@ impl PeerPessimisticLocks {
         // There is no drain_filter for BtreeMap, so extra clone are needed.
         let mut removed_locks = Vec::new();
         self.map.retain(|key, value| {
-            let encoded_key = &**key.as_encoded();
+            let encoded_key = key.as_encoded().as_slice();
             let (start_key, end_key) = (derived.get_start_key(), derived.get_end_key());
             if encoded_key < start_key || (!end_key.is_empty() && encoded_key >= end_key) {
                 removed_locks.push((key.clone(), value.clone()));
