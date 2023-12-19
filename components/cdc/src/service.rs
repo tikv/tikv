@@ -610,7 +610,7 @@ mod tests {
             .unwrap()
             .unwrap()
             .unwrap();
-        assert!(block_on_timeout(send(), Duration::from_millis(100)).is_err());
+        block_on_timeout(send(), Duration::from_millis(100)).unwrap_err();
         // After all pending messages are counsumed, sink should be able to send again.
         loop {
             let res = recv_timeout(&mut rx, Duration::from_millis(100));
