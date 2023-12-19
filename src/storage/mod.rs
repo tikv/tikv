@@ -7418,95 +7418,122 @@ mod tests {
 
     #[test]
     fn test_scan_lock_with_memory_lock() {
-        let storage = TestStorageBuilderApiV1::new(MockLockManager::new())
-            .build()
-            .unwrap();
-        let (tx, rx) = channel();
-        storage
-            .sched_txn_command(
-                commands::AcquirePessimisticLock::new(
-                    vec![(Key::from_raw(b"a"), false), (Key::from_raw(b"b"), false)],
-                    b"a".to_vec(),
-                    20.into(),
-                    3000,
-                    true,
-                    20.into(),
-                    Some(WaitTimeout::Millis(1000)),
-                    false,
-                    21.into(),
-                    false,
-                    false,
-                    false,
-                    Context::default(),
-                ),
-                expect_ok_callback(tx.clone(), 0),
-            )
-            .unwrap();
-        rx.recv().unwrap();
-        storage
-            .sched_txn_command(
-                commands::Prewrite::with_defaults(
-                    vec![
-                        Mutation::make_put(Key::from_raw(b"x"), b"foo".to_vec()),
-                        Mutation::make_put(Key::from_raw(b"y"), b"foo".to_vec()),
-                        Mutation::make_put(Key::from_raw(b"z"), b"foo".to_vec()),
-                    ],
-                    b"x".to_vec(),
-                    10.into(),
-                ),
-                expect_ok_callback(tx, 0),
-            )
-            .unwrap();
-        rx.recv().unwrap();
+        for in_memory_pessimistic_lock_enabled in [false, true] {
+            let txn_ext = Arc::new(TxnExt::default());
+            let lock_mgr = MockLockManager::new();
+            let storage = TestStorageBuilderApiV1::new(lock_mgr.clone())
+                .pipelined_pessimistic_lock(in_memory_pessimistic_lock_enabled)
+                .in_memory_pessimistic_lock(in_memory_pessimistic_lock_enabled)
+                .build_for_txn(txn_ext.clone())
+                .unwrap();
+            let (tx, rx) = channel();
+            storage
+                .sched_txn_command(
+                    commands::AcquirePessimisticLock::new(
+                        vec![(Key::from_raw(b"a"), false), (Key::from_raw(b"b"), false)],
+                        b"a".to_vec(),
+                        20.into(),
+                        3000,
+                        true,
+                        20.into(),
+                        Some(WaitTimeout::Millis(1000)),
+                        false,
+                        21.into(),
+                        false,
+                        false,
+                        false,
+                        Context::default(),
+                    ),
+                    expect_ok_callback(tx.clone(), 0),
+                )
+                .unwrap();
+            rx.recv().unwrap();
+            if in_memory_pessimistic_lock_enabled {
+                // Check if the lock exists in the memory buffer.
+                let pessimistic_locks = txn_ext.pessimistic_locks.read();
+                let lock = pessimistic_locks.get(&Key::from_raw(b"a")).unwrap();
+                assert_eq!(
+                    lock,
+                    &(
+                        PessimisticLock {
+                            primary: Box::new(*b"a"),
+                            start_ts: 20.into(),
+                            ttl: 3000,
+                            for_update_ts: 20.into(),
+                            min_commit_ts: 21.into(),
+                            last_change: LastChange::NotExist,
+                            is_locked_with_conflict: false,
+                        },
+                        false
+                    )
+                );
+            }
 
-        let (lock_a, lock_b, lock_x, lock_y, lock_z) = (
-            {
-                let mut lock = LockInfo::default();
-                lock.set_primary_lock(b"a".to_vec());
-                lock.set_lock_version(20);
-                lock.set_lock_for_update_ts(20);
-                lock.set_key(b"a".to_vec());
-                lock.set_min_commit_ts(21);
-                lock.set_lock_type(Op::PessimisticLock);
-                lock.set_lock_ttl(3000);
-                lock
-            },
-            {
-                let mut lock = LockInfo::default();
-                lock.set_primary_lock(b"a".to_vec());
-                lock.set_lock_version(20);
-                lock.set_lock_for_update_ts(20);
-                lock.set_key(b"b".to_vec());
-                lock.set_min_commit_ts(21);
-                lock.set_lock_type(Op::PessimisticLock);
-                lock.set_lock_ttl(3000);
-                lock
-            },
-            {
-                let mut lock = LockInfo::default();
-                lock.set_primary_lock(b"x".to_vec());
-                lock.set_lock_version(10);
-                lock.set_key(b"x".to_vec());
-                lock
-            },
-            {
-                let mut lock = LockInfo::default();
-                lock.set_primary_lock(b"x".to_vec());
-                lock.set_lock_version(10);
-                lock.set_key(b"y".to_vec());
-                lock
-            },
-            {
-                let mut lock = LockInfo::default();
-                lock.set_primary_lock(b"x".to_vec());
-                lock.set_lock_version(10);
-                lock.set_key(b"z".to_vec());
-                lock
-            },
-        );
-        let res =
-            block_on(storage.scan_lock(Context::default(), 101.into(), None, None, 10)).unwrap();
-        assert_eq!(res, vec![lock_a, lock_b, lock_x, lock_y, lock_z,]);
+            storage
+                .sched_txn_command(
+                    commands::Prewrite::with_defaults(
+                        vec![
+                            Mutation::make_put(Key::from_raw(b"x"), b"foo".to_vec()),
+                            Mutation::make_put(Key::from_raw(b"y"), b"foo".to_vec()),
+                            Mutation::make_put(Key::from_raw(b"z"), b"foo".to_vec()),
+                        ],
+                        b"x".to_vec(),
+                        10.into(),
+                    ),
+                    expect_ok_callback(tx, 0),
+                )
+                .unwrap();
+            rx.recv().unwrap();
+
+            let (lock_a, lock_b, lock_x, lock_y, lock_z) = (
+                {
+                    let mut lock = LockInfo::default();
+                    lock.set_primary_lock(b"a".to_vec());
+                    lock.set_lock_version(20);
+                    lock.set_lock_for_update_ts(20);
+                    lock.set_key(b"a".to_vec());
+                    lock.set_min_commit_ts(21);
+                    lock.set_lock_type(Op::PessimisticLock);
+                    lock.set_lock_ttl(3000);
+                    lock
+                },
+                {
+                    let mut lock = LockInfo::default();
+                    lock.set_primary_lock(b"a".to_vec());
+                    lock.set_lock_version(20);
+                    lock.set_lock_for_update_ts(20);
+                    lock.set_key(b"b".to_vec());
+                    lock.set_min_commit_ts(21);
+                    lock.set_lock_type(Op::PessimisticLock);
+                    lock.set_lock_ttl(3000);
+                    lock
+                },
+                {
+                    let mut lock = LockInfo::default();
+                    lock.set_primary_lock(b"x".to_vec());
+                    lock.set_lock_version(10);
+                    lock.set_key(b"x".to_vec());
+                    lock
+                },
+                {
+                    let mut lock = LockInfo::default();
+                    lock.set_primary_lock(b"x".to_vec());
+                    lock.set_lock_version(10);
+                    lock.set_key(b"y".to_vec());
+                    lock
+                },
+                {
+                    let mut lock = LockInfo::default();
+                    lock.set_primary_lock(b"x".to_vec());
+                    lock.set_lock_version(10);
+                    lock.set_key(b"z".to_vec());
+                    lock
+                },
+            );
+            let res = block_on(storage.scan_lock(Context::default(), 101.into(), None, None, 10))
+                .unwrap();
+            assert_eq!(res, vec![lock_a, lock_b, lock_x, lock_y, lock_z,]);
+        }
     }
 
     #[test]

@@ -10,6 +10,7 @@ use kvproto::{
 };
 use raftstore::store::{LocksStatus, PeerPessimisticLocks};
 use tikv_kv::{SnapshotExt, SEEK_BOUND};
+use tikv_util::time::Instant;
 use txn_types::{
     Key, LastChange, Lock, OldValue, PessimisticLock, TimeStamp, Value, Write, WriteRef, WriteType,
 };
@@ -20,6 +21,7 @@ use crate::storage::{
     },
     mvcc::{
         default_not_found_error,
+        metrics::SCAN_LOCK_READ_TIME_VEC,
         reader::{OverlappedWrite, TxnCommitRecord},
         Result,
     },
@@ -287,11 +289,23 @@ impl<S: EngineSnapshot> MvccReader<S> {
         F: Fn(&Key, &PessimisticLock) -> bool,
     {
         if let Some(txn_ext) = self.snapshot.ext().get_txn_ext() {
-            let locks = txn_ext.pessimistic_locks.read();
-            self.check_term_version_status(&locks)?;
+            let begin_instant = Instant::now();
+            let res = match self.check_term_version_status(&txn_ext.pessimistic_locks.read()) {
+                Ok(_) => {
+                    // Scan locks within the specified range and filter by max_ts.
+                    Ok(txn_ext
+                        .pessimistic_locks
+                        .read()
+                        .scan_locks(start_key, end_key, filter, scan_limit))
+                }
+                Err(e) => Err(e),
+            };
+            let elapsed = begin_instant.saturating_elapsed();
+            SCAN_LOCK_READ_TIME_VEC
+                .resolve_lock
+                .observe(elapsed.as_secs_f64());
 
-            // Scan locks within the specified range and filter by max_ts.
-            Ok(locks.scan_locks(start_key, end_key, filter, scan_limit))
+            res
         } else {
             Ok((vec![], false))
         }
