@@ -360,7 +360,6 @@ impl Service {
             downstream,
             conn_id,
         };
-        println!("[Warning] Try to register the conn: {:?}", conn_id);
         scheduler.schedule(task).map_err(|e| format!("{:?}", e))
     }
 
@@ -381,7 +380,6 @@ impl Service {
                 request_id: request.request_id,
             })
         };
-        println!("[Warning] Try to de-register the conn: {:?}", conn_id);
         scheduler.schedule(task).map_err(|e| format!("{:?}", e))
     }
 
