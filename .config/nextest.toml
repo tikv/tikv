@@ -1,4 +1,4 @@
-[[profile.default.override]]
+[profile.default]
 test-threads = 4
 
 [profile.ci]
