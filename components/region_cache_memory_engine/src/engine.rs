@@ -80,12 +80,16 @@ impl KeyComparator for InternalKeyComparator {
         let (user_k_2, seq2) = decode_key(rhs);
         let r = user_k_1.cmp(user_k_2);
         if r.is_eq() {
-            if seq1 > seq2 {
-                return cmp::Ordering::Less;
-            } else if seq1 < seq2 {
-                return cmp::Ordering::Greater;
-            } else {
-                return cmp::Ordering::Equal;
+            match seq1.cmp(&seq2) {
+                cmp::Ordering::Greater => {
+                    return cmp::Ordering::Less;
+                }
+                cmp::Ordering::Less => {
+                    return cmp::Ordering::Greater;
+                }
+                cmp::Ordering::Equal => {
+                    return cmp::Ordering::Equal;
+                }
             }
         }
         r
