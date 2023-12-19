@@ -41,7 +41,9 @@ mod all {
             suite.flushed_files.path(),
             round1.union(&round2).map(Vec::as_slice),
         );
-        suite.cluster.shutdown();
+        // FIXME: after upgrading grpcio to 0.13.0, the conflicts on releasing blocking
+        // obj in an async thread appears.
+        std::mem::forget(suite);
     }
 
     /// This test tests whether we can handle some weird transactions and their
