@@ -2790,7 +2790,7 @@ fn test_mvcc_scan_memory_and_cf_locks() {
         }
     }
 
-    // Scan lock, the pessimistic and prewrite
+    // Scan lock, the pessimistic and prewrite results are returned.
     for scan_limit in [0, 512, num_keys, num_keys * 2] {
         let scan_ts = 20;
         let scan_lock_max_version = scan_ts;
@@ -2828,7 +2828,7 @@ fn test_mvcc_scan_memory_and_cf_locks() {
     assert!(!scan_lock_resp.has_region_error());
     assert_eq!(scan_lock_resp.locks.len(), 0);
 
-    // Rollback the prewrite locks.
+    // Roll back the prewrite locks.
     let rollback_start_version = start_ts;
     let mut rollback_req = BatchRollbackRequest::default();
     rollback_req.set_context(ctx.clone());
@@ -2854,7 +2854,7 @@ fn test_mvcc_scan_memory_and_cf_locks() {
         assert_eq!(lock_info.lock_type, Op::PessimisticLock);
     }
 
-    // Pessimistic rollback all the locsk.
+    // Pessimistic rollabck all the locks. Scan lock should return empty result.
     let mut pessimsitic_rollback_req = PessimisticRollbackRequest::default();
     pessimsitic_rollback_req.start_version = start_ts;
     pessimsitic_rollback_req.for_update_ts = start_ts;
