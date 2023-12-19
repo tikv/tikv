@@ -43,7 +43,6 @@ use tikv_util::{
     worker::Scheduler,
     Either,
 };
-use tokio::sync::Semaphore;
 use txn_types::{Key, KvPair, Lock, LockType, OldValue, TimeStamp};
 
 use crate::{
@@ -92,7 +91,6 @@ pub(crate) struct Initializer<E> {
 
     pub(crate) scan_speed_limiter: Limiter,
     pub(crate) fetch_speed_limiter: Limiter,
-    pub(crate) concurrency_semaphore: Arc<Semaphore>,
     pub(crate) memory_quota: Arc<MemoryQuota>,
 
     pub(crate) max_scan_batch_bytes: usize,
@@ -113,11 +111,7 @@ impl<E: KvEngine> Initializer<E> {
         cdc_handle: T,
     ) -> Result<()> {
         fail_point!("cdc_before_initialize");
-        let concurrency_semaphore = self.concurrency_semaphore.clone();
-        let _permit = concurrency_semaphore.acquire().await;
 
-        // To avoid holding too many snapshots and holding them too long,
-        // we need to acquire scan concurrency permit before taking snapshot.
         let sched = self.sched.clone();
         let region_id = self.region_id;
         let region_epoch = self.region_epoch.clone();
@@ -567,6 +561,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine> InitializeTask<T, E> {
             cdc_handle,
             scan_release,
         } = self;
+
         match init.initialize(change_cmd, cdc_handle).await {
             Ok(()) => CDC_SCAN_TASKS.with_label_values(&["finish"]).inc(),
             Err(e) => {
@@ -578,6 +573,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine> InitializeTask<T, E> {
                 init.deregister_downstream(e);
             }
         }
+        println!("finishes initialize");
         drop(scan_release);
     }
 }
@@ -587,7 +583,7 @@ mod tests {
     use std::{
         collections::BTreeMap,
         fmt::Display,
-        sync::mpsc::{channel, sync_channel, Receiver, RecvTimeoutError, Sender},
+        sync::mpsc::{channel, Receiver, RecvTimeoutError, Sender},
         time::Duration,
     };
 
@@ -684,7 +680,6 @@ mod tests {
             checkpoint_ts: 1.into(),
             scan_speed_limiter: Limiter::new(scan_limit as _),
             fetch_speed_limiter: Limiter::new(fetch_limit as _),
-            concurrency_semaphore: Arc::new(Semaphore::new(1)),
             memory_quota: Arc::new(MemoryQuota::new(usize::MAX)),
             max_scan_batch_bytes: 1024 * 1024,
             max_scan_batch_size: 1024,
@@ -1037,47 +1032,14 @@ mod tests {
     fn test_initializer_initialize_impl(kv_api: ChangeDataRequestKvApi) {
         let total_bytes = 1;
         let buffer = 1;
-        let (mut worker, pool, mut initializer, _rx, _drain) =
+        let (mut worker, _pool, mut initializer, _rx, _drain) =
             mock_initializer(total_bytes, total_bytes, buffer, None, kv_api, false);
 
         let change_cmd = ChangeObserver::from_cdc(1, ObserveHandle::new());
         let raft_router = CdcRaftRouter(MockRaftStoreRouter::new());
-        let concurrency_semaphore = initializer.concurrency_semaphore.clone();
 
         initializer.downstream_state.store(DownstreamState::Stopped);
         block_on(initializer.initialize(change_cmd, raft_router.clone())).unwrap_err();
-
-        let (tx, rx) = sync_channel(1);
-        let concurrency_semaphore_ = concurrency_semaphore.clone();
-        pool.spawn(async move {
-            let _permit = concurrency_semaphore_.acquire().await;
-            tx.send(()).unwrap();
-            tx.send(()).unwrap();
-            tx.send(()).unwrap();
-        });
-        rx.recv_timeout(Duration::from_millis(200)).unwrap();
-
-        let (tx1, rx1) = sync_channel(1);
-        let change_cmd = ChangeObserver::from_cdc(1, ObserveHandle::new());
-        pool.spawn(async move {
-            // Migrated to 2021 migration. This let statement is probably not needed, see
-            //   https://doc.rust-lang.org/edition-guide/rust-2021/disjoint-capture-in-closures.html
-            let _ = (
-                &initializer,
-                &change_cmd,
-                &raft_router,
-                &concurrency_semaphore,
-            );
-            let res = initializer.initialize(change_cmd, raft_router).await;
-            tx1.send(res).unwrap();
-        });
-        // Must timeout because there is no enough permit.
-        rx1.recv_timeout(Duration::from_millis(200)).unwrap_err();
-
-        // Release the permit
-        rx.recv_timeout(Duration::from_millis(200)).unwrap();
-        let res = rx1.recv_timeout(Duration::from_millis(200)).unwrap();
-        res.unwrap_err();
 
         worker.stop();
     }
