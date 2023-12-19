@@ -6137,7 +6137,7 @@ dependencies = [
 
 [[package]]
 name = "tikv"
-version = "6.5.6"
+version = "6.5.6-fips"
 dependencies = [
  "anyhow",
  "api_version",
