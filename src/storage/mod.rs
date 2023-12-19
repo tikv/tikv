@@ -1468,7 +1468,6 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                         )
                         .map_err(txn::Error::from);
                     let (memory_lock_kv_pairs, _) = memory_locks?;
-
                     let result = reader
                         .scan_locks(
                             start_key.as_ref(),
@@ -1479,6 +1478,9 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                         .map_err(txn::Error::from);
                     statistics.add(&reader.statistics);
                     let (kv_pairs, _) = result?;
+
+                    // Merge the results from in-memory pessimistic locks and the lock cf.
+                    // The result order is decided by the key.
                     let memory_lock_iter = memory_lock_kv_pairs.into_iter();
                     let lock_iter = kv_pairs.into_iter();
                     let merged_iter = memory_lock_iter
