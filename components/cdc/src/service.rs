@@ -360,6 +360,7 @@ impl Service {
             downstream,
             conn_id,
         };
+        println!("[Warning] Try to register the conn: {:?}", conn_id);
         scheduler.schedule(task).map_err(|e| format!("{:?}", e))
     }
 
@@ -380,6 +381,7 @@ impl Service {
                 request_id: request.request_id,
             })
         };
+        println!("[Warning] Try to de-register the conn: {:?}", conn_id);
         scheduler.schedule(task).map_err(|e| format!("{:?}", e))
     }
 
@@ -602,14 +604,21 @@ mod tests {
         // Fill gRPC window.
         let window_size = must_fill_window();
         assert_ne!(window_size, 0);
-        // After receiving a message, sink should be able to send again.
+        // After fully filling gRPC window, sink is not valid until all pending
+        // messages are consumed.
         recv_timeout(&mut rx, Duration::from_millis(100))
             .unwrap()
             .unwrap()
             .unwrap();
-        block_on_timeout(send(), Duration::from_millis(100))
-            .unwrap()
-            .unwrap();
+        assert!(block_on_timeout(send(), Duration::from_millis(100)).is_err());
+        // After all pending messages are counsumed, sink should be able to send again.
+        loop {
+            let res = recv_timeout(&mut rx, Duration::from_millis(100));
+            if res.is_err() {
+                break;
+            }
+            res.unwrap().unwrap().unwrap();
+        }
         // gRPC client may update window size after receiving a message,
         // though server should not be able to send messages infinitely.
         let window_size = must_fill_window();
