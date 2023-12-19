@@ -535,7 +535,8 @@ mod tests {
         let filter_pass_key2 =
             |key: &Key, _lock: &PessimisticLock| key.as_encoded().starts_with(b"key2");
 
-        // start_key, end_key, filter, expected results, limit, has more.
+        // Case parameter: start_key, end_key, filter, limit, expected results, expected
+        // has more.
         type LockFilter = fn(&Key, &PessimisticLock) -> bool;
         let cases: [(
             Option<Key>,
