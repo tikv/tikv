@@ -1858,6 +1858,17 @@ def RaftIO() -> RowPanel:
         )
     )
     layout.row(
+        heatmap_panel_graph_panel_histogram_quantile_pairs(
+            heatmap_title="Raft Client Wait Connection Ready Duration",
+            heatmap_description="The time consumed for Raft Client wait connection ready",
+            graph_title="99% Raft Client Wait Connection Ready Duration",
+            graph_description="The time consumed for Raft Client wait connection ready per TiKV instance",
+            yaxis_format=UNITS.SECONDS,
+            metric="tikv_server_raft_client_wait_ready_duration",
+            graph_by_labels=["to"],
+        )
+    )
+    layout.row(
         [
             graph_panel(
                 title="Store io task reschedule",
