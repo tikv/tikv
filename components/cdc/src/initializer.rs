@@ -1039,7 +1039,7 @@ mod tests {
         let raft_router = CdcRaftRouter(MockRaftStoreRouter::new());
 
         initializer.downstream_state.store(DownstreamState::Stopped);
-        block_on(initializer.initialize(change_cmd, raft_router.clone())).unwrap_err();
+        block_on(initializer.initialize(change_cmd, raft_router)).unwrap_err();
 
         worker.stop();
     }
