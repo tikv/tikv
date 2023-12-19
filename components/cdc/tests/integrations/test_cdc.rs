@@ -247,6 +247,9 @@ fn test_cdc_rawkv_basic() {
         }
         other => panic!("unknown event {:?}", other),
     }
+    // FIXME: after upgrading the grpcio lib, the releasing of suite will encounter
+    // the error "Cannot drop a runtime in a context where blocking is not allowed"
+    std::mem::forget(suite);
 }
 
 #[test]
