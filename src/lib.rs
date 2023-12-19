@@ -80,7 +80,7 @@ pub fn tikv_version_info(build_time: Option<&str>) -> String {
 
 /// return the build version of tikv-server
 pub fn tikv_build_version() -> String {
-    if fips::can_enable() {
+    if crypto::fips::can_enable() {
         format!("{}-{}", env!("CARGO_PKG_VERSION"), "fips")
     } else {
         env!("CARGO_PKG_VERSION").to_owned()

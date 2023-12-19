@@ -67,7 +67,7 @@ use raftstore_v2::{
     StateStorage,
 };
 use resolved_ts::Task;
-use resource_control::{priority_from_task_meta, ResourceGroupManager};
+use resource_control::ResourceGroupManager;
 use security::SecurityManager;
 use service::{service_event::ServiceEvent, service_manager::GrpcServiceManager};
 use tikv::{
@@ -255,7 +255,7 @@ struct TikvEngines<EK: KvEngine, ER: RaftEngine> {
 struct Servers<EK: KvEngine, ER: RaftEngine> {
     lock_mgr: LockManager,
     server: LocalServer<EK, ER>,
-    importer: Arc<SstImporter>,
+    importer: Arc<SstImporter<EK>>,
     rsmeter_pubsub_service: resource_metering::PubSubService,
 }
 
@@ -460,7 +460,7 @@ where
                 engines.engine.clone(),
                 resource_ctl,
                 CleanupMethod::Remote(self.core.background_worker.remote()),
-                Some(Arc::new(priority_from_task_meta)),
+                true,
             ))
         } else {
             None
@@ -1296,7 +1296,6 @@ where
                 self.cfg_controller.clone().unwrap(),
                 Arc::new(self.core.config.security.clone()),
                 self.engines.as_ref().unwrap().engine.raft_extension(),
-                self.core.store_path.clone(),
                 self.resource_manager.clone(),
                 self.grpc_service_mgr.clone(),
             ) {

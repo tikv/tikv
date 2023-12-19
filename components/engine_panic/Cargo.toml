@@ -11,6 +11,7 @@ testexport = []
 [dependencies]
 engine_traits = { workspace = true }
 kvproto = { workspace = true }
+encryption = { workspace = true }
 raft = { workspace = true }
 tikv_alloc = { workspace = true }
 # FIXME: Remove this dep from the engine_traits interface

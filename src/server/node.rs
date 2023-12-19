@@ -167,7 +167,7 @@ where
         pd_worker: LazyWorker<PdTask<EK, ER>>,
         store_meta: Arc<Mutex<StoreMeta>>,
         coprocessor_host: CoprocessorHost<EK>,
-        importer: Arc<SstImporter>,
+        importer: Arc<SstImporter<EK>>,
         split_check_scheduler: Scheduler<SplitCheckTask>,
         auto_split_controller: AutoSplitController,
         concurrency_manager: ConcurrencyManager,
@@ -291,7 +291,7 @@ where
         };
         if should_check {
             // Check if there are only TiDB data in the engine
-            let snapshot = engines.kv.snapshot();
+            let snapshot = engines.kv.snapshot(None);
             for cf in DATA_CFS {
                 for (start, end) in TIDB_RANGES_COMPLEMENT {
                     let mut unexpected_data_key = None;
@@ -455,7 +455,7 @@ where
         pd_worker: LazyWorker<PdTask<EK, ER>>,
         store_meta: Arc<Mutex<StoreMeta>>,
         coprocessor_host: CoprocessorHost<EK>,
-        importer: Arc<SstImporter>,
+        importer: Arc<SstImporter<EK>>,
         split_check_scheduler: Scheduler<SplitCheckTask>,
         auto_split_controller: AutoSplitController,
         concurrency_manager: ConcurrencyManager,

@@ -21,6 +21,7 @@ use backup_stream::{
     utils, BackupStreamResolver, Endpoint, GetCheckpointResult, RegionCheckpointOperation,
     RegionSet, Service, Task,
 };
+use engine_rocks::RocksEngine;
 use futures::{executor::block_on, AsyncWriteExt, Future, Stream, StreamExt};
 use grpcio::{ChannelBuilder, Server, ServerBuilder};
 use kvproto::{
@@ -249,7 +250,7 @@ impl<S: MetaStore> MetaStore for ErrorStore<S> {
 pub struct Suite {
     pub endpoints: HashMap<u64, LazyWorker<Task>>,
     pub meta_store: ErrorStore<SlashEtcStore>,
-    pub cluster: Cluster<ServerCluster>,
+    pub cluster: Cluster<RocksEngine, ServerCluster<RocksEngine>>,
     tikv_cli: HashMap<u64, TikvClient>,
     log_backup_cli: HashMap<u64, LogBackupClient>,
     obs: HashMap<u64, BackupStreamObserver>,
@@ -393,6 +394,11 @@ impl Suite {
 
     pub fn get_meta_cli(&self) -> MetadataClient<impl MetaStore> {
         MetadataClient::new(self.meta_store.clone(), 0)
+    }
+
+    #[allow(dead_code)]
+    pub fn dump_slash_etc(&self) {
+        self.meta_store.inner.blocking_lock().dump();
     }
 
     pub fn must_split(&mut self, key: &[u8]) {
