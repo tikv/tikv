@@ -80,6 +80,7 @@ use engine_traits::{
     raw_ttl::ttl_to_expire_ts, CfName, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS, DATA_CFS_LEN,
 };
 use futures::{future::Either, prelude::*};
+use itertools::Itertools;
 use kvproto::{
     kvrpcpb::{
         ApiVersion, ChecksumAlgorithm, CommandPri, Context, GetRequest, IsolationLevel, KeyRange,
@@ -1478,13 +1479,15 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                         .map_err(txn::Error::from);
                     statistics.add(&reader.statistics);
                     let (kv_pairs, _) = result?;
-                    let mut locks = Vec::with_capacity(kv_pairs.len() + memory_lock_kv_pairs.len());
-                    for (key, lock) in memory_lock_kv_pairs {
-                        let lock_info =
-                            lock.into_lock_info(key.into_raw().map_err(txn::Error::from)?);
-                        locks.push(lock_info);
-                    }
-                    for (key, lock) in kv_pairs {
+                    let memory_lock_iter = memory_lock_kv_pairs.into_iter();
+                    let lock_iter = kv_pairs.into_iter();
+                    let merged_iter = memory_lock_iter
+                        .merge_by(lock_iter, |(memory_key, _), (key, _)| memory_key <= key);
+                    let mut locks = Vec::with_capacity(limit);
+                    for (key, lock) in merged_iter {
+                        if limit > 0 && locks.len() >= limit {
+                            break;
+                        }
                         let lock_info =
                             lock.into_lock_info(key.into_raw().map_err(txn::Error::from)?);
                         locks.push(lock_info);
