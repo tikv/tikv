@@ -4,6 +4,7 @@ use core::slice::SlicePattern;
 use std::{
     cmp,
     collections::BTreeMap,
+    convert,
     fmt::{self, Debug},
     ops::Deref,
     sync::{Arc, Mutex},
@@ -40,8 +41,8 @@ fn readable_user_key(user_key: &[u8]) -> String {
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum ValueType {
-    Deletion,
-    Value,
+    Deletion = 0,
+    Value = 1,
 }
 
 // See `compare` of InternalKeyComparator, for the same user key and same
@@ -49,19 +50,13 @@ enum ValueType {
 const VALUE_TYPE_FOR_SEEK: ValueType = ValueType::Value;
 const VALUE_TYPE_FOR_SEEK_FOR_PREV: ValueType = ValueType::Deletion;
 
-impl ValueType {
-    fn encode(&self) -> u8 {
-        match self {
-            ValueType::Deletion => 0,
-            ValueType::Value => 1,
-        }
-    }
-
-    fn decode(i: u8) -> Self {
-        match i {
-            0 => ValueType::Deletion,
-            1 => ValueType::Value,
-            _ => panic!("invalid"),
+impl TryFrom<u8> for ValueType {
+    type Error = String;
+    fn try_from(value: u8) -> std::prelude::v1::Result<Self, Self::Error> {
+        match value {
+            0 => Ok(ValueType::Deletion),
+            1 => Ok(ValueType::Value),
+            _ => panic!("invalid value"),
         }
     }
 }
@@ -74,9 +69,15 @@ pub struct InternalKey<'a> {
 
 const ENC_KEY_SEQ_LENGTH: usize = std::mem::size_of::<u64>();
 
+impl<'a> From<&'a [u8]> for InternalKey<'a> {
+    fn from(encoded_key: &'a [u8]) -> Self {
+        decode_key(encoded_key)
+    }
+}
+
 #[inline]
 fn decode_key<'a>(encoded_key: &'a [u8]) -> InternalKey<'a> {
-    debug_assert!(encoded_key.len() >= ENC_KEY_SEQ_LENGTH);
+    assert!(encoded_key.len() >= ENC_KEY_SEQ_LENGTH);
     let seq_offset = encoded_key.len() - ENC_KEY_SEQ_LENGTH;
     let num = u64::from_be_bytes(
         encoded_key[seq_offset..seq_offset + ENC_KEY_SEQ_LENGTH]
@@ -84,7 +85,7 @@ fn decode_key<'a>(encoded_key: &'a [u8]) -> InternalKey<'a> {
             .unwrap(),
     );
     let sequence = num >> 8;
-    let v_type = ValueType::decode((num & 0xff) as u8);
+    let v_type = ((num & 0xff) as u8).try_into().unwrap();
     InternalKey {
         user_key: &encoded_key[..seq_offset],
         v_type,
@@ -92,6 +93,12 @@ fn decode_key<'a>(encoded_key: &'a [u8]) -> InternalKey<'a> {
     }
 }
 
+/// Format for an internal key (used by the skip list.)
+/// ```
+/// contents:      key of size n     | value type | sequence number shifted by 8 bits
+/// byte position:         0 ..  n-1 | n          |  n + 1 .. n + 7
+/// ```
+/// value type 0 encodes deletion, value type 1 encodes value.
 #[inline]
 fn encode_key_internal<T: BufMut>(
     key: &[u8],
@@ -99,9 +106,10 @@ fn encode_key_internal<T: BufMut>(
     v_type: ValueType,
     f: impl FnOnce(usize) -> T,
 ) -> T {
+    assert_eq!(seq >> ((ENC_KEY_SEQ_LENGTH - 1) * 8), 0);
     let mut e = f(key.len() + ENC_KEY_SEQ_LENGTH);
     e.put(key);
-    e.put_u64((seq << 8) | v_type.encode() as u64);
+    e.put_u64((seq << 8) | v_type as u64);
     e
 }
 
