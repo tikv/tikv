@@ -11,12 +11,13 @@ use std::{
 use engine_traits::{KvEngine, RaftEngine};
 use futures::channel::mpsc::UnboundedSender;
 use kvproto::{brpb::CheckAdminResponse, metapb::RegionEpoch, raft_cmdpb::AdminCmdType};
-use tikv_util::{box_err, info, warn};
+use tikv_util::{info, warn};
 use tokio::sync::oneshot;
 
 use super::{metrics, PeerMsg, RaftRouter, SignificantMsg, SignificantRouter};
 use crate::coprocessor::{
-    AdminObserver, BoxAdminObserver, BoxQueryObserver, Coprocessor, CoprocessorHost, QueryObserver,
+    AdminObserver, BoxAdminObserver, BoxQueryObserver, Coprocessor, CoprocessorHost,
+    Error as CopError, QueryObserver,
 };
 
 fn epoch_second_coarse() -> u64 {
@@ -109,6 +110,15 @@ impl RejectIngestAndAdmin {
         self.before
             .load(Ordering::Acquire)
             .saturating_sub(epoch_second_coarse())
+    }
+
+    fn reject(&self) -> CopError {
+        CopError::RequireDelay {
+            after: Duration::from_secs(self.remained_secs()),
+            reason:
+                "[Suspended] Preparing disk snapshot backup, ingests and some of admin commands are suspended."
+                    .to_owned(),
+        }
     }
 
     pub fn allowed(&self) -> bool {
@@ -207,9 +217,7 @@ impl QueryObserver for Arc<RejectIngestAndAdmin> {
                 metrics::SNAP_BR_SUSPEND_COMMAND_TYPE
                     .with_label_values(&["Ingest"])
                     .inc();
-                return Err(box_err!(
-                    "trying to propose ingest while preparing snapshot backup, abort it"
-                ));
+                return Err(self.reject());
             }
         }
         Ok(())
@@ -243,11 +251,7 @@ impl AdminObserver for Arc<RejectIngestAndAdmin> {
             metrics::SNAP_BR_SUSPEND_COMMAND_TYPE
                 .with_label_values(&[&format!("{:?}", admin.get_cmd_type())])
                 .inc();
-            return Err(box_err!(
-                "rejecting proposing admin commands while preparing snapshot backup: rejected {:?} retry after {} seconds",
-                admin,
-                self.remained_secs()
-            ));
+            return Err(self.reject());
         }
         Ok(())
     }
@@ -263,10 +267,7 @@ impl AdminObserver for Arc<RejectIngestAndAdmin> {
         metrics::SNAP_BR_SUSPEND_COMMAND_TYPE
             .with_label_values(&["TransferLeader"])
             .inc();
-        return Err(box_err!(
-            "rejecting transfer leader while preparing snapshot backup: retry after {} seconds",
-            self.remained_secs()
-        ));
+        Err(self.reject())
     }
 }
 

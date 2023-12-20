@@ -20,10 +20,7 @@ fn test_basic() {
     call.prepare(60);
     let resp = suite.try_split(b"k");
     debug!("Failed to split"; "err" => ?resp.response.get_header().get_error());
-    must_contains_error(
-        &resp.response,
-        "rejecting proposing admin commands while preparing snapshot backup",
-    );
+    must_contains_error(&resp.response, "[Suspended] Preparing disk snapshot backup");
 }
 
 #[test]
@@ -89,10 +86,7 @@ fn test_transfer_leader() {
     let res = suite
         .cluster
         .try_transfer_leader(region.id, new_leader.clone());
-    assert_failure_because(
-        &res,
-        "rejecting transfer leader while preparing snapshot backup",
-    );
+    assert_failure_because(&res, "[Suspended] Preparing disk snapshot backup");
     calls.into_iter().for_each(|c| assert!(c.send_finalize()));
     let res = suite
         .cluster
