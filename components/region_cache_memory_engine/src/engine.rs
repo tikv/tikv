@@ -475,10 +475,12 @@ impl RegionCacheIterator {
     // ready to be presented to the user through value().
     fn find_value_for_current_key(&mut self) -> bool {
         assert!(self.iter.valid());
-        let mut find_valid_value = false;
+        let mut last_key_entry_type = ValueType::Deletion;
         while self.iter.valid() {
             let InternalKey {
-                user_key, sequence, ..
+                user_key,
+                sequence,
+                v_type,
             } = decode_key(self.iter.key());
 
             if !self.is_visible(sequence) || self.saved_user_key != user_key {
@@ -486,13 +488,20 @@ impl RegionCacheIterator {
                 break;
             }
 
-            find_valid_value = true;
-            self.pinned_value = Some(self.iter.value().clone());
+            last_key_entry_type = v_type;
+            match v_type {
+                ValueType::Value => {
+                    self.pinned_value = Some(self.iter.value().clone());
+                }
+                ValueType::Deletion => {
+                    self.pinned_value.take();
+                }
+            }
 
             self.iter.prev();
         }
 
-        self.valid = find_valid_value;
+        self.valid = last_key_entry_type == ValueType::Value;
         self.iter.valid()
     }
 
@@ -1068,17 +1077,10 @@ mod tests {
         let mut iter = snapshot.iterator_opt("default", iter_opt.clone()).unwrap();
         assert!(!iter.seek_to_first().unwrap());
 
-        // No bounds, no deletion (seq_num 150)
+        // Not restricted by bounds, no deletion (seq_num 150)
         {
             let snapshot = engine.snapshot(1, 10, 150).unwrap();
             let mut iter = snapshot.iterator_opt("write", iter_opt.clone()).unwrap();
-            iter.seek_to_first().unwrap();
-
-            while iter.valid().unwrap() {
-                let key = decode_mvcc_version(iter.key());
-                iter.next().unwrap();
-            }
-
             iter.seek_to_first().unwrap();
             verify_key_values(
                 &mut iter,
@@ -1105,7 +1107,7 @@ mod tests {
             );
         }
 
-        // No bounds, some deletions (seq_num 230)
+        // Not restricted by bounds, some deletions (seq_num 230)
         {
             let snapshot = engine.snapshot(1, 10, 230).unwrap();
             let mut iter = snapshot.iterator_opt("write", iter_opt.clone()).unwrap();
@@ -1222,52 +1224,83 @@ mod tests {
             core.region_metas.get_mut(&1).unwrap().can_read = true;
             core.region_metas.get_mut(&1).unwrap().safe_ts = 5;
             let sl = core.engine.get_mut(&1).unwrap().data[cf_to_id("write")].clone();
-            fill_data_in_skiplist(sl, (1..100).step_by(step as usize), 1);
+            fill_data_in_skiplist(sl.clone(), (1..100).step_by(step as usize), 1);
+            delete_data_in_skiplist(sl, (1..100).step_by(step as usize), 200);
         }
 
         let mut iter_opt = IterOptions::default();
-        let lower_bound = construct_key(1);
-        let upper_bound = construct_key(100);
+        let lower_bound = construct_key(99);
+        let upper_bound = construct_key(0);
         iter_opt.set_upper_bound(&upper_bound, 0);
         iter_opt.set_lower_bound(&lower_bound, 0);
 
-        let snapshot = engine.snapshot(1, 10, u64::MAX).unwrap();
-        let mut iter = snapshot.iterator_opt("write", iter_opt.clone()).unwrap();
-        assert!(iter.seek_to_last().unwrap());
-        // verify_key_values(&mut iter, step, 99, i32::MIN);
+        // Not restricted by bounds, no deletion (seq_num 150)
+        {
+            let snapshot = engine.snapshot(1, 10, 150).unwrap();
+            let mut iter = snapshot.iterator_opt("write", iter_opt.clone()).unwrap();
+            assert!(iter.seek_to_last().unwrap());
+            verify_key_values(
+                &mut iter,
+                (1..100).step_by(step as usize).into_iter(),
+                false,
+            );
 
-        // seek key that is in the skiplist
-        let seek_key = construct_key(81);
-        assert!(iter.seek_for_prev(&seek_key).unwrap());
-        // verify_key_values(&mut iter, step, 81, i32::MIN);
+            // seek key that is in the skiplist
+            let seek_key = construct_key(81);
+            assert!(iter.seek_for_prev(&seek_key).unwrap());
+            verify_key_values(
+                &mut iter,
+                (81..100).step_by(step as usize).into_iter(),
+                false,
+            );
 
-        // seek key that is in the skiplist
-        let seek_key = construct_key(80);
-        assert!(iter.seek_for_prev(&seek_key).unwrap());
-        // verify_key_values(&mut iter, step, 79, i32::MIN);
+            // seek key that is in the skiplist
+            let seek_key = construct_key(80);
+            assert!(iter.seek_for_prev(&seek_key).unwrap());
+            verify_key_values(
+                &mut iter,
+                (81..100).step_by(step as usize).into_iter(),
+                false,
+            );
+        }
 
-        let lower_bound = construct_key(20);
-        let upper_bound = construct_key(39);
+        let lower_bound = construct_key(40);
+        let upper_bound = construct_key(20);
         iter_opt.set_upper_bound(&upper_bound, 0);
         iter_opt.set_lower_bound(&lower_bound, 0);
-        let mut iter = snapshot.iterator_opt("write", iter_opt).unwrap();
+        {
+            let snapshot = engine.snapshot(1, 10, 150).unwrap();
+            let mut iter = snapshot.iterator_opt("write", iter_opt).unwrap();
 
-        assert!(iter.seek_to_last().unwrap());
-        // verify_key_values(&mut iter, step, 37, 20);
+            assert!(iter.seek_to_last().unwrap());
+            verify_key_values(
+                &mut iter,
+                (21..41).step_by(step as usize).into_iter(),
+                false,
+            );
 
-        // seek a key that is above the upper bound is the same with seek_to_last
-        let seek_key = construct_key(45);
-        assert!(iter.seek_for_prev(&seek_key).unwrap());
-        // verify_key_values(&mut iter, step, 37, 20);
+            // seek a key that is above the upper bound is the same with seek_to_last
+            let seek_key = construct_key(19);
+            assert!(iter.seek_for_prev(&seek_key).unwrap());
+            verify_key_values(
+                &mut iter,
+                (21..41).step_by(step as usize).into_iter(),
+                false,
+            );
 
-        // seek a key that is less than the lower bound won't get any key
-        let seek_key = construct_key(19);
-        assert!(!iter.seek_for_prev(&seek_key).unwrap());
-        assert!(!iter.valid().unwrap());
+            // seek a key that is less than the lower bound won't get any key
+            let seek_key = construct_key(45);
+            assert!(!iter.seek_for_prev(&seek_key).unwrap());
+            assert!(!iter.valid().unwrap());
 
-        let seek_key = construct_key(36);
-        assert!(iter.seek_for_prev(&seek_key).unwrap());
-        // verify_key_values(&mut iter, step, 35, 20);
+            let seek_key = construct_key(26);
+            assert!(iter.seek_for_prev(&seek_key).unwrap());
+            verify_key_values(
+                &mut iter,
+                (27..41).step_by(step as usize).into_iter(),
+                false,
+            );
+        }
     }
 
     #[test]
