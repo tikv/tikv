@@ -62,6 +62,7 @@ pub enum HandleRes<T> {
 }
 
 pub struct Cursors<S: Snapshot> {
+    snapshot: S,
     lock: Option<Cursor<S::Iter>>,
     write: Cursor<S::Iter>,
     /// `default cursor` is lazy created only when it's needed.
@@ -91,6 +92,7 @@ impl<S: Snapshot> Cursors<S> {
                 }
             }
         }
+        statistics.write.over_seek_bound += 1;
 
         // We have not found another user key for now, so we directly `seek()`.
         // After that, we must pointing to another key, or out of bound.
@@ -137,6 +139,7 @@ impl<S: Snapshot, P: ScanPolicy<S>> ForwardScanner<S, P> {
             lock: lock_cursor,
             write: write_cursor,
             default: default_cursor,
+            snapshot: cfg.snapshot.clone(),
         };
         ForwardScanner {
             met_newer_ts_data: if cfg.check_has_newer_ts_data {
@@ -314,7 +317,6 @@ impl<S: Snapshot, P: ScanPolicy<S>> ForwardScanner<S, P> {
         // and if we have not reached where we want, we use `seek()`.
 
         // Whether we have *not* reached where we want by `next()`.
-        let mut needs_seek = true;
 
         for i in 0..SEEK_BOUND {
             if i > 0 {
@@ -333,8 +335,7 @@ impl<S: Snapshot, P: ScanPolicy<S>> ForwardScanner<S, P> {
                 let key_commit_ts = Key::decode_ts_from(current_key)?;
                 if key_commit_ts <= self.cfg.ts {
                     // Founded, don't need to seek again.
-                    needs_seek = false;
-                    break;
+                    return Ok(true);
                 } else if self.met_newer_ts_data == NewerTsCheckState::NotMetYet {
                     self.met_newer_ts_data = NewerTsCheckState::Met;
                 }
@@ -356,24 +357,22 @@ impl<S: Snapshot, P: ScanPolicy<S>> ForwardScanner<S, P> {
                 }
             }
         }
-        // If we have not found `${user_key}_${ts}` in a few `next()`, directly
-        // `seek()`.
-        if needs_seek {
-            // `user_key` must have reserved space here, so its clone has reserved space
-            // too. So no reallocation happens in `append_ts`.
-            self.cursors.write.seek(
-                &user_key.clone().append_ts(self.cfg.ts),
-                &mut self.statistics.write,
-            )?;
-            if !self.cursors.write.valid()? {
-                // Key space ended.
-                return Ok(false);
-            }
-            let current_key = self.cursors.write.key(&mut self.statistics.write);
-            if !Key::is_user_key_eq(current_key, user_key.as_encoded().as_slice()) {
-                // Meet another key.
-                return Ok(false);
-            }
+        self.statistics.write.over_seek_bound += 1;
+
+        // `user_key` must have reserved space here, so its clone has reserved space
+        // too. So no reallocation happens in `append_ts`.
+        self.cursors.write.seek(
+            &user_key.clone().append_ts(self.cfg.ts),
+            &mut self.statistics.write,
+        )?;
+        if !self.cursors.write.valid()? {
+            // Key space ended.
+            return Ok(false);
+        }
+        let current_key = self.cursors.write.key(&mut self.statistics.write);
+        if !Key::is_user_key_eq(current_key, user_key.as_encoded().as_slice()) {
+            // Meet another key.
+            return Ok(false);
         }
         Ok(true)
     }
@@ -465,6 +464,7 @@ impl<S: Snapshot> ScanPolicy<S> for LatestKvPolicy {
                                 &current_user_key,
                                 start_ts,
                                 statistics,
+                                &cursors.snapshot,
                             )?;
                             break Some(value);
                         }
@@ -581,6 +581,7 @@ impl<S: Snapshot> ScanPolicy<S> for LatestEntryPolicy {
                             &current_user_key,
                             start_ts,
                             statistics,
+                            &cfg.snapshot,
                         )?;
                         let default_key = default_cursor.key(&mut statistics.data).to_vec();
                         (default_key, default_value)
@@ -714,6 +715,7 @@ impl<S: Snapshot> ScanPolicy<S> for DeltaEntryPolicy {
                     &current_user_key,
                     lock.ts,
                     statistics,
+                    &cfg.snapshot,
                 )
                 .map(|v| {
                     let key = default_cursor.key(&mut statistics.data).to_vec();
@@ -737,6 +739,7 @@ impl<S: Snapshot> ScanPolicy<S> for DeltaEntryPolicy {
                     self.from_ts,
                     cfg.hint_min_ts,
                     statistics,
+                    &cfg.snapshot,
                 )?;
             }
             load_default_res.map(|default| {
@@ -808,6 +811,7 @@ impl<S: Snapshot> ScanPolicy<S> for DeltaEntryPolicy {
                     &current_user_key,
                     start_ts,
                     statistics,
+                    &cfg.snapshot,
                 )?;
                 let key = default_cursor.key(&mut statistics.data).to_vec();
                 (key, value)
@@ -834,6 +838,7 @@ impl<S: Snapshot> ScanPolicy<S> for DeltaEntryPolicy {
                     self.from_ts,
                     cfg.hint_min_ts,
                     statistics,
+                    &cfg.snapshot,
                 )?;
             }
 

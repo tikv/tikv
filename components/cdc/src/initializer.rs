@@ -51,7 +51,7 @@ use crate::{
     delegate::{post_init_downstream, Delegate, DownstreamId, DownstreamState, ObservedRange},
     endpoint::Deregister,
     metrics::*,
-    old_value::{near_seek_old_value, new_old_value_cursor, OldValueCursors},
+    old_value::{near_seek_old_value, OldValueCursors},
     service::ConnId,
     Error, Result, Task,
 };
@@ -229,9 +229,7 @@ impl<E: KvEngine> Initializer<E> {
         let mut scanner = if kv_api == ChangeDataRequestKvApi::TiDb {
             if self.ts_filter_is_helpful(&snap) {
                 hint_min_ts = Some(self.checkpoint_ts);
-                let wc = new_old_value_cursor(&snap, CF_WRITE);
-                let dc = new_old_value_cursor(&snap, CF_DEFAULT);
-                old_value_cursors = Some(OldValueCursors::new(wc, dc));
+                old_value_cursors = Some(OldValueCursors::new(snap.clone()));
             }
 
             // Time range: (checkpoint_ts, max]
@@ -311,16 +309,21 @@ impl<E: KvEngine> Initializer<E> {
     fn do_scan<S: Snapshot>(
         &self,
         scanner: &mut Scanner<S>,
-        mut old_value_cursors: Option<&mut OldValueCursors<S::Iter>>,
+        mut old_value_cursors: Option<&mut OldValueCursors<S>>,
         entries: &mut Vec<Option<KvEntry>>,
     ) -> Result<ScanStat> {
         let mut read_old_value = |v: &mut OldValue, stats: &mut Statistics| -> Result<()> {
-            let (wc, dc) = match old_value_cursors {
-                Some(ref mut x) => (&mut x.write, &mut x.default),
-                None => return Ok(()),
+            let Some(cursors) = old_value_cursors.as_mut() else {
+                return Ok(());
             };
             if let OldValue::SeekWrite(ref key) = v {
-                match near_seek_old_value(key, wc, Either::<&S, _>::Right(dc), stats)? {
+                match near_seek_old_value(
+                    key,
+                    &mut cursors.write,
+                    Either::Right(&mut cursors.default),
+                    stats,
+                    &cursors.snapshot,
+                )? {
                     Some(x) => *v = OldValue::value(x),
                     None => *v = OldValue::None,
                 }
@@ -384,7 +387,7 @@ impl<E: KvEngine> Initializer<E> {
     async fn scan_batch<S: Snapshot>(
         &self,
         scanner: &mut Scanner<S>,
-        old_value_cursors: Option<&mut OldValueCursors<S::Iter>>,
+        old_value_cursors: Option<&mut OldValueCursors<S>>,
         resolver: Option<&mut Resolver>,
     ) -> Result<Vec<Option<KvEntry>>> {
         let mut entries = Vec::with_capacity(self.max_scan_batch_size);

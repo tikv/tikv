@@ -8,7 +8,7 @@ use tikv::storage::{
     mvcc::near_load_data_by_write, Cursor, CursorBuilder, ScanMode, Snapshot as EngineSnapshot,
     Statistics,
 };
-use tikv_kv::Iterator;
+use tikv_kv::Snapshot;
 use tikv_util::{
     config::ReadableSize,
     lru::{LruCache, SizePolicy},
@@ -151,7 +151,13 @@ pub fn get_old_value<S: EngineSnapshot>(
     old_value_cache.miss_count += 1;
     let key = key.truncate_ts().unwrap().append_ts(query_ts);
     let mut cursor = new_write_cursor_on_key(snapshot, &key);
-    let value = near_seek_old_value(&key, &mut cursor, Either::Left(snapshot), statistics)?;
+    let value = near_seek_old_value(
+        &key,
+        &mut cursor,
+        Either::Left(snapshot),
+        statistics,
+        snapshot,
+    )?;
     if value.is_none() {
         old_value_cache.miss_none_count += 1;
     }
@@ -182,6 +188,7 @@ pub fn near_seek_old_value<S: EngineSnapshot>(
     write_cursor: &mut Cursor<S::Iter>,
     load_from_cf_data: Either<&S, &mut Cursor<S::Iter>>,
     statistics: &mut Statistics,
+    snapshot: &S,
 ) -> Result<Option<Value>> {
     let start = Instant::now();
     tikv_util::defer!(
@@ -213,6 +220,7 @@ pub fn near_seek_old_value<S: EngineSnapshot>(
                                     &key,
                                     write.start_ts,
                                     statistics,
+                                    snapshot,
                                 )?),
                             }
                         }
@@ -235,14 +243,21 @@ pub fn near_seek_old_value<S: EngineSnapshot>(
     }
 }
 
-pub struct OldValueCursors<I: Iterator> {
-    pub write: Cursor<I>,
-    pub default: Cursor<I>,
+pub struct OldValueCursors<S: Snapshot> {
+    pub snapshot: S,
+    pub write: Cursor<S::Iter>,
+    pub default: Cursor<S::Iter>,
 }
 
-impl<I: Iterator> OldValueCursors<I> {
-    pub fn new(write: Cursor<I>, default: Cursor<I>) -> Self {
-        OldValueCursors { write, default }
+impl<S: Snapshot> OldValueCursors<S> {
+    pub fn new(snapshot: S) -> Self {
+        let write = new_old_value_cursor(&snapshot, CF_WRITE);
+        let default = new_old_value_cursor(&snapshot, CF_DEFAULT);
+        OldValueCursors {
+            snapshot,
+            write,
+            default,
+        }
     }
 }
 

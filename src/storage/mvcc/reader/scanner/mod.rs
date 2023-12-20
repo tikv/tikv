@@ -20,7 +20,9 @@ use self::{
     },
 };
 use crate::storage::{
-    kv::{CfStatistics, Cursor, CursorBuilder, Iterator, ScanMode, Snapshot, Statistics},
+    kv::{
+        CfStatistics, Cursor, CursorBuilder, Iterator, LoadDataHint, ScanMode, Snapshot, Statistics,
+    },
     mvcc::{default_not_found_error, NewerTsCheckState, Result},
     need_check_locks,
     txn::{Result as TxnResult, Scanner as StoreScanner},
@@ -353,17 +355,34 @@ impl<S: Snapshot> ScannerConfig<S> {
 ///
 /// Panics if key in default CF does not exist. This means there is a data
 /// corruption.
-pub fn near_load_data_by_write<I>(
-    default_cursor: &mut Cursor<I>, // TODO: make it `ForwardCursor`.
+pub fn near_load_data_by_write<S>(
+    default_cursor: &mut Cursor<S::Iter>, // TODO: make it `ForwardCursor`.
     user_key: &Key,
     write_start_ts: TimeStamp,
     statistics: &mut Statistics,
+    snapshot: &S,
 ) -> Result<Value>
 where
-    I: Iterator,
+    S: Snapshot,
 {
     let seek_key = user_key.clone().append_ts(write_start_ts);
-    default_cursor.near_seek(&seek_key, &mut statistics.data)?;
+    match statistics.load_data_hint() {
+        LoadDataHint::NearSeek => default_cursor.near_seek(&seek_key, &mut statistics.data)?,
+        LoadDataHint::Seek => default_cursor.seek(&seek_key, &mut statistics.data)?,
+        LoadDataHint::Get => {
+            let value = snapshot.get_cf(&CF_DEFAULT, &seek_key)?;
+            statistics.data.get += 1;
+            if let Some(v) = value {
+                statistics.data.processed_keys += 1;
+                return Ok(v);
+            }
+            return Err(default_not_found_error(
+                user_key.clone().append_ts(write_start_ts).into_encoded(),
+                "near_load_data_by_write",
+            ));
+        }
+    };
+
     if !default_cursor.valid()?
         || default_cursor.key(&mut statistics.data) != seek_key.as_encoded().as_slice()
     {
@@ -378,17 +397,35 @@ where
 
 /// Similar to `near_load_data_by_write`, but accepts a `BackwardCursor` and use
 /// `near_seek_for_prev` internally.
-fn near_reverse_load_data_by_write<I>(
-    default_cursor: &mut Cursor<I>, // TODO: make it `BackwardCursor`.
+fn near_reverse_load_data_by_write<S>(
+    default_cursor: &mut Cursor<S::Iter>, // TODO: make it `BackwardCursor`.
     user_key: &Key,
     write_start_ts: TimeStamp,
     statistics: &mut Statistics,
+    snapshot: &S,
 ) -> Result<Value>
 where
-    I: Iterator,
+    S: Snapshot,
 {
     let seek_key = user_key.clone().append_ts(write_start_ts);
-    default_cursor.near_seek_for_prev(&seek_key, &mut statistics.data)?;
+    match statistics.reverse_load_data_hint() {
+        LoadDataHint::NearSeek => {
+            default_cursor.near_seek_for_prev(&seek_key, &mut statistics.data)?
+        }
+        LoadDataHint::Seek => default_cursor.seek_for_prev(&seek_key, &mut statistics.data)?,
+        LoadDataHint::Get => {
+            let value = snapshot.get_cf(&CF_DEFAULT, &seek_key)?;
+            statistics.data.get += 1;
+            if let Some(v) = value {
+                statistics.data.processed_keys += 1;
+                return Ok(v);
+            }
+            return Err(default_not_found_error(
+                user_key.clone().append_ts(write_start_ts).into_encoded(),
+                "near_reverse_load_data_by_write",
+            ));
+        }
+    };
     if !default_cursor.valid()?
         || default_cursor.key(&mut statistics.data) != seek_key.as_encoded().as_slice()
     {
@@ -498,17 +535,18 @@ where
 /// key-value pairs with less `commit_ts` than `ts_filter`. So if the got value
 /// has a less timestamp than `ts_filter`, it should be replaced by None because
 /// the real wanted value can have been filtered.
-pub fn seek_for_valid_value<I>(
-    write_cursor: &mut Cursor<I>,
-    default_cursor: &mut Cursor<I>,
+pub fn seek_for_valid_value<S>(
+    write_cursor: &mut Cursor<S::Iter>,
+    default_cursor: &mut Cursor<S::Iter>,
     user_key: &Key,
     after_ts: TimeStamp,
     gc_fence_limit: TimeStamp,
     ts_filter: Option<TimeStamp>,
     statistics: &mut Statistics,
+    snapshot: &S,
 ) -> Result<OldValue>
 where
-    I: Iterator,
+    S: Snapshot,
 {
     let seek_after = || {
         let seek_after = user_key.clone().append_ts(after_ts);
@@ -528,7 +566,13 @@ where
             let value = if let Some(v) = write.short_value {
                 v
             } else {
-                near_load_data_by_write(default_cursor, user_key, write.start_ts, statistics)?
+                near_load_data_by_write(
+                    default_cursor,
+                    user_key,
+                    write.start_ts,
+                    statistics,
+                    snapshot,
+                )?
             };
             return Ok(OldValue::Value { value });
         }
@@ -540,10 +584,10 @@ where
     }
 }
 
-pub(crate) fn load_data_by_lock<S: Snapshot, I: Iterator>(
+pub(crate) fn load_data_by_lock<S: Snapshot>(
     current_user_key: &Key,
     cfg: &ScannerConfig<S>,
-    default_cursor: &mut Cursor<I>,
+    default_cursor: &mut Cursor<S::Iter>,
     lock: Lock,
     statistics: &mut Statistics,
 ) -> Result<Option<Value>> {
@@ -564,6 +608,7 @@ pub(crate) fn load_data_by_lock<S: Snapshot, I: Iterator>(
                             current_user_key,
                             lock.ts,
                             statistics,
+                            &cfg.snapshot,
                         )
                     } else {
                         near_load_data_by_write(
@@ -571,6 +616,7 @@ pub(crate) fn load_data_by_lock<S: Snapshot, I: Iterator>(
                             current_user_key,
                             lock.ts,
                             statistics,
+                            &cfg.snapshot,
                         )
                     }?;
                     Ok(Some(value))

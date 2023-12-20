@@ -62,8 +62,8 @@ pub use self::{
     raft_extension::{FakeExtension, RaftExtension},
     rocksdb_engine::{RocksEngine, RocksSnapshot},
     stats::{
-        CfStatistics, FlowStatistics, FlowStatsReporter, StageLatencyStats, Statistics,
-        StatisticsSummary, RAW_VALUE_TOMBSTONE,
+        CfStatistics, FlowStatistics, FlowStatsReporter, LoadDataHint, StageLatencyStats,
+        Statistics, StatisticsSummary, RAW_VALUE_TOMBSTONE,
     },
 };
 

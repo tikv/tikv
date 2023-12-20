@@ -3838,7 +3838,7 @@ pub mod test_util {
 }
 
 /// All statistics related to KvGet/KvBatchGet.
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default)]
 pub struct KvGetStatistics {
     pub stats: Statistics,
     pub latency_stats: StageLatencyStats,
