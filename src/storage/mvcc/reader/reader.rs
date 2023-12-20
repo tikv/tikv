@@ -8,9 +8,16 @@ use kvproto::{
     errorpb::{self, EpochNotMatch, FlashbackInProgress, StaleCommand},
     kvrpcpb::Context,
 };
-use raftstore::store::LocksStatus;
+use raftstore::store::{LocksStatus, PeerPessimisticLocks};
 use tikv_kv::{SnapshotExt, SEEK_BOUND};
+<<<<<<< HEAD
 use txn_types::{Key, Lock, OldValue, TimeStamp, Value, Write, WriteRef, WriteType};
+=======
+use tikv_util::time::Instant;
+use txn_types::{
+    Key, LastChange, Lock, OldValue, PessimisticLock, TimeStamp, Value, Write, WriteRef, WriteType,
+};
+>>>>>>> d7959b8194 (txn: change memory pessimsitic lock to btree map and support scan (#16180))
 
 use crate::storage::{
     kv::{
@@ -18,6 +25,7 @@ use crate::storage::{
     },
     mvcc::{
         default_not_found_error,
+        metrics::SCAN_LOCK_READ_TIME_VEC,
         reader::{OverlappedWrite, TxnCommitRecord},
         Result,
     },
@@ -251,44 +259,76 @@ impl<S: EngineSnapshot> MvccReader<S> {
         Ok(res)
     }
 
-    fn load_in_memory_pessimistic_lock(&self, key: &Key) -> Result<Option<Lock>> {
-        self.snapshot
-            .ext()
-            .get_txn_ext()
-            .and_then(|txn_ext| {
-                // If the term or region version has changed, do not read the lock table.
-                // Instead, just return a StaleCommand or EpochNotMatch error, so the
-                // client will not receive a false error because the lock table has been
-                // cleared.
-                let locks = txn_ext.pessimistic_locks.read();
-                if self.term != 0 && locks.term != self.term {
-                    let mut err = errorpb::Error::default();
-                    err.set_stale_command(StaleCommand::default());
-                    return Some(Err(KvError::from(err).into()));
-                }
-                if self.version != 0 && locks.version != self.version {
-                    let mut err = errorpb::Error::default();
-                    // We don't know the current regions. Just return an empty EpochNotMatch error.
-                    err.set_epoch_not_match(EpochNotMatch::default());
-                    return Some(Err(KvError::from(err).into()));
-                }
-                // If the region is in the flashback state, it should not be allowed to read the
-                // locks.
-                if locks.status == LocksStatus::IsInFlashback && !self.allow_in_flashback {
-                    let mut err = errorpb::Error::default();
-                    err.set_flashback_in_progress(FlashbackInProgress::default());
-                    return Some(Err(KvError::from(err).into()));
-                }
+    fn check_term_version_status(&self, locks: &PeerPessimisticLocks) -> Result<()> {
+        // If the term or region version has changed, do not read the lock table.
+        // Instead, just return a StaleCommand or EpochNotMatch error, so the
+        // client will not receive a false error because the lock table has been
+        // cleared.
+        if self.term != 0 && locks.term != self.term {
+            let mut err = errorpb::Error::default();
+            err.set_stale_command(StaleCommand::default());
+            return Err(KvError::from(err).into());
+        }
+        if self.version != 0 && locks.version != self.version {
+            let mut err = errorpb::Error::default();
+            err.set_epoch_not_match(EpochNotMatch::default());
+            return Err(KvError::from(err).into());
+        }
+        if locks.status == LocksStatus::IsInFlashback && !self.allow_in_flashback {
+            let mut err = errorpb::Error::default();
+            err.set_flashback_in_progress(FlashbackInProgress::default());
+            return Err(KvError::from(err).into());
+        }
+        Ok(())
+    }
 
-                locks.get(key).map(|(lock, _)| {
-                    // For write commands that are executed in serial, it should be impossible
-                    // to read a deleted lock.
-                    // For read commands in the scheduler, it should read the lock marked deleted
-                    // because the lock is not actually deleted from the underlying storage.
-                    Ok(lock.to_lock())
-                })
-            })
-            .transpose()
+    pub fn load_in_memory_pessimisitic_lock_range<F>(
+        &self,
+        start_key: Option<&Key>,
+        end_key: Option<&Key>,
+        filter: F,
+        scan_limit: usize,
+    ) -> Result<(Vec<(Key, Lock)>, bool)>
+    where
+        F: Fn(&Key, &PessimisticLock) -> bool,
+    {
+        if let Some(txn_ext) = self.snapshot.ext().get_txn_ext() {
+            let begin_instant = Instant::now();
+            let res = match self.check_term_version_status(&txn_ext.pessimistic_locks.read()) {
+                Ok(_) => {
+                    // Scan locks within the specified range and filter by max_ts.
+                    Ok(txn_ext
+                        .pessimistic_locks
+                        .read()
+                        .scan_locks(start_key, end_key, filter, scan_limit))
+                }
+                Err(e) => Err(e),
+            };
+            let elapsed = begin_instant.saturating_elapsed();
+            SCAN_LOCK_READ_TIME_VEC
+                .resolve_lock
+                .observe(elapsed.as_secs_f64());
+
+            res
+        } else {
+            Ok((vec![], false))
+        }
+    }
+
+    fn load_in_memory_pessimistic_lock(&self, key: &Key) -> Result<Option<Lock>> {
+        if let Some(txn_ext) = self.snapshot.ext().get_txn_ext() {
+            let locks = txn_ext.pessimistic_locks.read();
+            self.check_term_version_status(&locks)?;
+            Ok(locks.get(key).map(|(lock, _)| {
+                // For write commands that are executed in serial, it should be impossible
+                // to read a deleted lock.
+                // For read commands in the scheduler, it should read the lock marked deleted
+                // because the lock is not actually deleted from the underlying storage.
+                lock.to_lock()
+            }))
+        } else {
+            Ok(None)
+        }
     }
 
     fn get_scan_mode(&self, allow_backward: bool) -> ScanMode {
