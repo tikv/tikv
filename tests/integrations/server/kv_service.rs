@@ -2025,3 +2025,388 @@ fn test_storage_with_quota_limiter_disable() {
 
     assert!(begin.elapsed() < Duration::from_millis(500));
 }
+<<<<<<< HEAD
+=======
+
+#[test_case(test_raftstore::must_new_and_configure_cluster_and_kv_client)]
+#[test_case(test_raftstore_v2::must_new_and_configure_cluster_and_kv_client)]
+fn test_commands_write_detail() {
+    let (cluster, client, ctx) = new_cluster(|cluster| {
+        cluster.cfg.pessimistic_txn.pipelined = false;
+        cluster.cfg.pessimistic_txn.in_memory = false;
+    });
+    let (k, v) = (b"key".to_vec(), b"value".to_vec());
+
+    let check_scan_detail = |sc: &ScanDetailV2| {
+        assert!(sc.get_get_snapshot_nanos() > 0);
+    };
+    let check_write_detail = |wd: &WriteDetail| {
+        assert!(wd.get_persist_log_nanos() > 0);
+        assert!(wd.get_raft_db_write_leader_wait_nanos() > 0);
+        assert!(wd.get_raft_db_sync_log_nanos() > 0);
+        assert!(wd.get_raft_db_write_memtable_nanos() > 0);
+        assert!(wd.get_commit_log_nanos() > 0);
+        assert!(wd.get_apply_batch_wait_nanos() > 0);
+        assert!(wd.get_apply_log_nanos() > 0);
+        // Mutex has been removed from write path.
+        // Ref https://github.com/facebook/rocksdb/pull/7516
+        // assert!(wd.get_apply_mutex_lock_nanos() > 0);
+
+        // MultiRocksDB does not have wal
+        if cluster.cfg.storage.engine == EngineType::RaftKv {
+            assert!(wd.get_apply_write_wal_nanos() > 0);
+        }
+        assert!(wd.get_apply_write_memtable_nanos() > 0);
+        assert!(wd.get_process_nanos() > 0);
+    };
+
+    let mut mutation = Mutation::default();
+    mutation.set_op(Op::PessimisticLock);
+    mutation.set_key(k.clone());
+
+    let mut pessimistic_lock_req = PessimisticLockRequest::default();
+    pessimistic_lock_req.set_context(ctx.clone());
+    pessimistic_lock_req.set_mutations(vec![mutation.clone()].into());
+    pessimistic_lock_req.set_start_version(20);
+    pessimistic_lock_req.set_for_update_ts(20);
+    pessimistic_lock_req.set_primary_lock(k.clone());
+    pessimistic_lock_req.set_lock_ttl(3000);
+    let pessimistic_lock_resp = client.kv_pessimistic_lock(&pessimistic_lock_req).unwrap();
+    check_scan_detail(
+        pessimistic_lock_resp
+            .get_exec_details_v2()
+            .get_scan_detail_v2(),
+    );
+    check_write_detail(
+        pessimistic_lock_resp
+            .get_exec_details_v2()
+            .get_write_detail(),
+    );
+
+    let mut prewrite_req = PrewriteRequest::default();
+    mutation.set_op(Op::Put);
+    mutation.set_value(v);
+    prewrite_req.set_mutations(vec![mutation].into());
+    prewrite_req.set_pessimistic_actions(vec![DoPessimisticCheck]);
+    prewrite_req.set_context(ctx.clone());
+    prewrite_req.set_primary_lock(k.clone());
+    prewrite_req.set_start_version(20);
+    prewrite_req.set_for_update_ts(20);
+    prewrite_req.set_lock_ttl(3000);
+    let prewrite_resp = client.kv_prewrite(&prewrite_req).unwrap();
+    check_scan_detail(prewrite_resp.get_exec_details_v2().get_scan_detail_v2());
+    check_write_detail(prewrite_resp.get_exec_details_v2().get_write_detail());
+
+    let mut commit_req = CommitRequest::default();
+    commit_req.set_context(ctx.clone());
+    commit_req.set_keys(vec![k.clone()].into());
+    commit_req.set_start_version(20);
+    commit_req.set_commit_version(30);
+    let commit_resp = client.kv_commit(&commit_req).unwrap();
+    check_scan_detail(commit_resp.get_exec_details_v2().get_scan_detail_v2());
+    check_write_detail(commit_resp.get_exec_details_v2().get_write_detail());
+
+    let mut txn_heartbeat_req = TxnHeartBeatRequest::default();
+    txn_heartbeat_req.set_context(ctx.clone());
+    txn_heartbeat_req.set_primary_lock(k.clone());
+    txn_heartbeat_req.set_start_version(20);
+    txn_heartbeat_req.set_advise_lock_ttl(1000);
+    let txn_heartbeat_resp = client.kv_txn_heart_beat(&txn_heartbeat_req).unwrap();
+    check_scan_detail(
+        txn_heartbeat_resp
+            .get_exec_details_v2()
+            .get_scan_detail_v2(),
+    );
+    assert!(
+        txn_heartbeat_resp
+            .get_exec_details_v2()
+            .get_write_detail()
+            .get_process_nanos()
+            > 0
+    );
+
+    let mut check_txn_status_req = CheckTxnStatusRequest::default();
+    check_txn_status_req.set_context(ctx);
+    check_txn_status_req.set_primary_key(k);
+    check_txn_status_req.set_lock_ts(20);
+    check_txn_status_req.set_rollback_if_not_exist(true);
+    let check_txn_status_resp = client.kv_check_txn_status(&check_txn_status_req).unwrap();
+    check_scan_detail(
+        check_txn_status_resp
+            .get_exec_details_v2()
+            .get_scan_detail_v2(),
+    );
+    assert!(
+        check_txn_status_resp
+            .get_exec_details_v2()
+            .get_write_detail()
+            .get_process_nanos()
+            > 0
+    );
+}
+
+#[test_case(test_raftstore::must_new_cluster_and_kv_client)]
+#[test_case(test_raftstore_v2::must_new_cluster_and_kv_client)]
+fn test_rpc_wall_time() {
+    let (_cluster, client, ctx) = new_cluster();
+    let k = b"key".to_vec();
+    let mut get_req = GetRequest::default();
+    get_req.set_context(ctx);
+    get_req.key = k;
+    get_req.version = 10;
+    let get_resp = client.kv_get(&get_req).unwrap();
+    assert!(
+        get_resp
+            .get_exec_details_v2()
+            .get_time_detail_v2()
+            .get_total_rpc_wall_time_ns()
+            > 0
+    );
+    assert_eq!(
+        get_resp
+            .get_exec_details_v2()
+            .get_time_detail_v2()
+            .get_total_rpc_wall_time_ns(),
+        get_resp
+            .get_exec_details_v2()
+            .get_time_detail()
+            .get_total_rpc_wall_time_ns()
+    );
+
+    let (mut sender, receiver) = client.batch_commands().unwrap();
+    let mut batch_req = BatchCommandsRequest::default();
+    for i in 0..3 {
+        let mut req = batch_commands_request::Request::default();
+        req.cmd = Some(batch_commands_request::request::Cmd::Get(get_req.clone()));
+        batch_req.mut_requests().push(req);
+        batch_req.mut_request_ids().push(i);
+    }
+    block_on(sender.send((batch_req, WriteFlags::default()))).unwrap();
+    block_on(sender.close()).unwrap();
+
+    let (tx, rx) = mpsc::sync_channel(1);
+    thread::spawn(move || {
+        let mut responses = Vec::new();
+        for r in block_on(
+            receiver
+                .map(move |b| b.unwrap().take_responses())
+                .collect::<Vec<_>>(),
+        ) {
+            responses.extend(r.into_vec());
+        }
+        tx.send(responses).unwrap();
+    });
+    let responses = rx.recv_timeout(Duration::from_secs(1)).unwrap();
+    assert_eq!(responses.len(), 3);
+    for resp in responses {
+        assert!(
+            resp.get_get()
+                .get_exec_details_v2()
+                .get_time_detail_v2()
+                .get_total_rpc_wall_time_ns()
+                > 0
+        );
+    }
+}
+
+#[test_case(test_raftstore::must_new_cluster_and_kv_client)]
+#[test_case(test_raftstore_v2::must_new_cluster_and_kv_client)]
+fn test_pessimistic_lock_execution_tracking() {
+    let (_cluster, client, ctx) = new_cluster();
+    let (k, v) = (b"k1".to_vec(), b"k2".to_vec());
+
+    // Add a prewrite lock.
+    let mut mutation = Mutation::default();
+    mutation.set_op(Op::Put);
+    mutation.set_key(k.clone());
+    mutation.set_value(v);
+    must_kv_prewrite(&client, ctx.clone(), vec![mutation], k.clone(), 10);
+
+    let block_duration = Duration::from_millis(300);
+    let client_clone = client.clone();
+    let ctx_clone = ctx.clone();
+    let k_clone = k.clone();
+    let handle = thread::spawn(move || {
+        thread::sleep(block_duration);
+        must_kv_commit(&client_clone, ctx_clone, vec![k_clone], 10, 30, 30);
+    });
+
+    let resp = kv_pessimistic_lock(&client, ctx, vec![k], 20, 20, false);
+    assert!(
+        resp.get_exec_details_v2()
+            .get_write_detail()
+            .get_pessimistic_lock_wait_nanos()
+            > 0,
+        "resp lock wait time={:?}, block_duration={:?}",
+        resp.get_exec_details_v2()
+            .get_write_detail()
+            .get_pessimistic_lock_wait_nanos(),
+        block_duration
+    );
+
+    handle.join().unwrap();
+}
+
+#[test_case(test_raftstore::must_new_cluster_and_kv_client)]
+#[test_case(test_raftstore_v2::must_new_cluster_and_kv_client)]
+fn test_mvcc_scan_memory_and_cf_locks() {
+    let (cluster, client, ctx) = new_cluster();
+
+    // Create both pessimistic and prewrite locks.
+    // The peer in memory limit is 512KiB, generate 1KiB key for pessimistic lock.
+    // So Writing 512 pessimistic locks may exceed the memory limit and later
+    // pessimistic locks would be written to the lock cf.
+    let byte_slice: &[u8] = &[b'k'; 512];
+    let start_ts = 11;
+    let prewrite_start_ts = start_ts - 1;
+    let num_keys = 1040;
+    let prewrite_primary_key = b"prewrite_primary";
+    let val = b"value";
+    let format_key = |i| format!("{:?}{:04}", byte_slice, i).as_bytes().to_vec();
+    for i in 0..num_keys {
+        let key = format_key(i);
+        if i % 2 == 0 {
+            must_kv_pessimistic_lock(&client, ctx.clone(), key, start_ts);
+        } else {
+            let mut mutation = Mutation::default();
+            mutation.set_op(Op::Put);
+            mutation.set_key(key);
+            mutation.set_value(val.to_vec());
+            must_kv_prewrite_with(
+                &client,
+                ctx.clone(),
+                vec![mutation],
+                vec![],
+                prewrite_primary_key.to_vec(),
+                start_ts - 1,
+                0,
+                false,
+                false,
+            );
+        }
+    }
+    // Ensure the pessimistic locks are written to the memory. The first key should
+    // be written into the memory and the last key should be put to lock cf as
+    // memory limit is exceeded.
+    let engine = cluster.get_engine(1);
+    let cf_res = engine
+        .get_value_cf(
+            CF_LOCK,
+            keys::data_key(Key::from_raw(format_key(0).as_slice()).as_encoded()).as_slice(),
+        )
+        .unwrap();
+    assert!(cf_res.is_none());
+    let cf_res = engine
+        .get_value_cf(
+            CF_LOCK,
+            keys::data_key(Key::from_raw(format_key(num_keys - 2).as_slice()).as_encoded())
+                .as_slice(),
+        )
+        .unwrap();
+    assert!(cf_res.is_some());
+
+    // Scan lock, the pessimistic and prewrite results are returned.
+    // When limit is 0 or it's larger than num_keys, all keys should be returned.
+    // When limit is less than 512, in-memory pessimistic locks and prewrite locks
+    // should be returned.
+    // When limit is larger than 512, in-memory and lock cf pessimistic locks and
+    // prewrite locks should be returned.
+    for scan_limit in [0, 128, 256, 512, num_keys, num_keys * 2] {
+        let scan_ts = 20;
+        let scan_lock_max_version = scan_ts;
+        let mut scan_lock_req = ScanLockRequest::default();
+        scan_lock_req.set_context(ctx.clone());
+        scan_lock_req.max_version = scan_lock_max_version;
+        scan_lock_req.limit = scan_limit as u32;
+        let scan_lock_resp = client.kv_scan_lock(&scan_lock_req).unwrap();
+        assert!(!scan_lock_resp.has_region_error());
+        let expected_key_num = if scan_limit == 0 || scan_limit >= num_keys {
+            num_keys
+        } else {
+            scan_limit
+        };
+        assert_eq!(scan_lock_resp.locks.len(), expected_key_num);
+
+        for (i, lock_info) in (0..expected_key_num).zip(scan_lock_resp.locks.iter()) {
+            let key = format_key(i);
+            if i % 2 == 0 {
+                assert_eq!(lock_info.lock_type, Op::PessimisticLock);
+                assert_eq!(lock_info.lock_version, start_ts);
+                assert_eq!(lock_info.key, key);
+            } else {
+                assert_eq!(
+                    lock_info.lock_type,
+                    Op::Put,
+                    "i={:?} lock_info={:?} expected_key_num={:?}, scan_limit={:?}",
+                    i,
+                    lock_info,
+                    expected_key_num,
+                    scan_limit
+                );
+                assert_eq!(lock_info.primary_lock, prewrite_primary_key);
+                assert_eq!(lock_info.lock_version, prewrite_start_ts);
+                assert_eq!(lock_info.key, key);
+            }
+        }
+    }
+
+    // Scan with smaller ts returns empty result.
+    let mut scan_lock_req = ScanLockRequest::default();
+    scan_lock_req.set_context(ctx.clone());
+    scan_lock_req.max_version = prewrite_start_ts - 1;
+    let scan_lock_resp = client.kv_scan_lock(&scan_lock_req).unwrap();
+    assert!(!scan_lock_resp.has_region_error());
+    assert_eq!(scan_lock_resp.locks.len(), 0);
+
+    // Roll back the prewrite locks.
+    let rollback_start_version = prewrite_start_ts;
+    let mut rollback_req = BatchRollbackRequest::default();
+    rollback_req.set_context(ctx.clone());
+    rollback_req.start_version = rollback_start_version;
+    let keys = (0..num_keys)
+        .filter(|i| i % 2 != 0)
+        .map(|i| format_key(i))
+        .collect();
+    rollback_req.set_keys(keys);
+    let rollback_resp = client.kv_batch_rollback(&rollback_req).unwrap();
+    assert!(!rollback_resp.has_region_error());
+    assert!(!rollback_resp.has_error());
+
+    // Scan lock again after removing prewrite locks.
+    let mut scan_lock_req = ScanLockRequest::default();
+    scan_lock_req.set_context(ctx.clone());
+    scan_lock_req.max_version = start_ts + 1;
+    let scan_lock_resp = client.kv_scan_lock(&scan_lock_req).unwrap();
+    assert!(!scan_lock_resp.has_region_error());
+    assert_eq!(scan_lock_resp.locks.len(), num_keys / 2);
+    for (i, lock_info) in (0..num_keys / 2).zip(scan_lock_resp.locks.iter()) {
+        let key = format_key(i * 2);
+        assert_eq!(lock_info.lock_version, start_ts);
+        assert_eq!(lock_info.key, key);
+        assert_eq!(lock_info.lock_type, Op::PessimisticLock);
+    }
+
+    // Pessimistic rollabck all the locks. Scan lock should return empty result.
+    let mut pessimsitic_rollback_req = PessimisticRollbackRequest::default();
+    pessimsitic_rollback_req.start_version = start_ts;
+    pessimsitic_rollback_req.for_update_ts = start_ts;
+    pessimsitic_rollback_req.set_context(ctx.clone());
+    let keys = (0..num_keys)
+        .filter(|i| i % 2 == 0)
+        .map(|i| format_key(i))
+        .collect();
+    pessimsitic_rollback_req.set_keys(keys);
+    let pessimistic_rollback_resp = client
+        .kv_pessimistic_rollback(&pessimsitic_rollback_req)
+        .unwrap();
+    assert!(!pessimistic_rollback_resp.has_region_error());
+
+    // Scan lock again after all the cleanup.
+    let mut scan_lock_req = ScanLockRequest::default();
+    scan_lock_req.set_context(ctx);
+    scan_lock_req.max_version = start_ts + 1;
+    let scan_lock_resp = client.kv_scan_lock(&scan_lock_req).unwrap();
+    assert!(!scan_lock_resp.has_region_error());
+    assert_eq!(scan_lock_resp.locks.len(), 0);
+}
+>>>>>>> d7959b8194 (txn: change memory pessimsitic lock to btree map and support scan (#16180))

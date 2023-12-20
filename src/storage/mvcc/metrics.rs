@@ -36,6 +36,11 @@ make_static_metric! {
         write_not_loaded_skip
     }
 
+    pub label_enum ScanLockReadTimeSource {
+        resolve_lock,
+        pessimistic_rollback,
+    }
+
     pub struct MvccConflictCounterVec: IntCounter {
         "type" => MvccConflictKind,
     }
@@ -51,6 +56,20 @@ make_static_metric! {
     pub struct MvccPrewriteAssertionPerfCounterVec: IntCounter {
         "type" => MvccPrewriteAssertionPerfKind,
     }
+<<<<<<< HEAD
+=======
+
+    pub struct MvccPrewriteRequestAfterCommitCounterVec: IntCounter {
+        "type" => {
+            non_retry_req,
+            retry_req,
+        },
+    }
+
+    pub struct ScanLockReadTimeVec: Histogram {
+        "type" => ScanLockReadTimeSource,
+    }
+>>>>>>> d7959b8194 (txn: change memory pessimsitic lock to btree map and support scan (#16180))
 }
 
 lazy_static! {
@@ -107,4 +126,12 @@ lazy_static! {
             &["type"]
         ).unwrap()
     };
+    pub static ref SCAN_LOCK_READ_TIME_VEC: ScanLockReadTimeVec = register_static_histogram_vec!(
+        ScanLockReadTimeVec,
+        "tikv_storage_mvcc_scan_lock_read_duration_seconds",
+        "Bucketed histogram of memory lock read lock hold for scan lock",
+        &["type"],
+        exponential_buckets(0.00001, 2.0, 20).unwrap()
+    )
+    .unwrap();
 }
