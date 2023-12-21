@@ -2957,7 +2957,6 @@ mod tests {
                 .evaluate::<Time>(ScalarFuncSig::CastDurationAsTime)
                 .unwrap()
                 .unwrap();
-            println!("{}", now);
             let chrono_today = chrono::Utc::now();
             let today = now.checked_sub(&mut ctx, duration).unwrap();
 
