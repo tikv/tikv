@@ -8568,6 +8568,37 @@ def SlowTrendStatistics() -> RowPanel:
     return layout.row_panel
 
 
+def StatusServer() -> RowPanel:
+    layout = Layout(title="Status Server")
+    layout.row(
+        [
+            graph_panel_histogram_quantiles(
+                title="Status API Request Duration",
+                description="The 99 quantile durtion of status server API requests",
+                metric="tikv_status_server_request_duration_seconds",
+                yaxes=yaxes(left_format=UNITS.SECONDS),
+                by_labels=["path"],
+                hide_p9999=True,
+                hide_count=True,
+                hide_avg=True,
+            ),
+            graph_panel(
+                title="Status API Request (op/s)",
+                yaxes=yaxes(left_format=UNITS.OPS_PER_SEC),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_status_server_request_duration_seconds_count",
+                            by_labels=["path"],
+                        ),
+                    ),
+                ],
+            ),
+        ]
+    )
+    return layout.row_panel
+
+
 #### Metrics Definition End ####
 
 
@@ -8619,6 +8650,7 @@ dashboard = Dashboard(
         Encryption(),
         BackupLog(),
         SlowTrendStatistics(),
+        StatusServer(),
     ],
     # Set 14 or larger to support shared crosshair or shared tooltip.
     # See https://github.com/grafana/grafana/blob/v10.2.2/public/app/features/dashboard/state/DashboardMigrator.ts#L443-L445
