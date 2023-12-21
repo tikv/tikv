@@ -981,6 +981,7 @@ def graph_panel_histogram_quantiles(
     metric: str,
     label_selectors: list[str] = [],
     by_labels: list[str] = [],
+    hide_p9999=False,
     hide_avg=False,
     hide_count=False,
 ) -> Panel:
@@ -1013,6 +1014,7 @@ def graph_panel_histogram_quantiles(
                     by_labels=by_labels,
                 ),
                 legend_format=legend("99.99%", by_labels),
+                hide=hide_p9999,
             ),
             target(
                 expr=expr_histogram_quantile(

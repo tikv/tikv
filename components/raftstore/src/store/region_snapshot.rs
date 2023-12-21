@@ -59,7 +59,7 @@ where
     where
         EK: KvEngine,
     {
-        RegionSnapshot::from_snapshot(Arc::new(db.snapshot()), Arc::new(region))
+        RegionSnapshot::from_snapshot(Arc::new(db.snapshot(None)), Arc::new(region))
     }
 
     pub fn from_snapshot(snap: Arc<S>, region: Arc<Region>) -> RegionSnapshot<S> {
@@ -174,6 +174,11 @@ where
     #[inline]
     pub fn get_end_key(&self) -> &[u8] {
         self.region.get_end_key()
+    }
+
+    #[cfg(test)]
+    pub fn snap(&self) -> Arc<S> {
+        self.snap.clone()
     }
 }
 
