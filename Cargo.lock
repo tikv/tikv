@@ -2780,7 +2780,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/Connor1996/rust-rocksdb?branch=reduce-lock#724e7bce517fb869fea2c9354d9ef04a31438788"
+source = "git+https://github.com/Connor1996/rust-rocksdb?branch=reduce-lock#eca081aeb47140e596b20da664e4da4ff532aa96"
 dependencies = [
  "bindgen 0.65.1",
  "bzip2-sys",
@@ -2799,7 +2799,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/Connor1996/rust-rocksdb?branch=reduce-lock#724e7bce517fb869fea2c9354d9ef04a31438788"
+source = "git+https://github.com/Connor1996/rust-rocksdb?branch=reduce-lock#eca081aeb47140e596b20da664e4da4ff532aa96"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -4628,7 +4628,7 @@ dependencies = [
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/Connor1996/rust-rocksdb?branch=reduce-lock#724e7bce517fb869fea2c9354d9ef04a31438788"
+source = "git+https://github.com/Connor1996/rust-rocksdb?branch=reduce-lock#eca081aeb47140e596b20da664e4da4ff532aa96"
 dependencies = [
  "libc 0.2.146",
  "librocksdb_sys",
