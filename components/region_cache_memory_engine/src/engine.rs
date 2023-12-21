@@ -107,10 +107,26 @@ pub struct RegionMemoryMeta {
     safe_ts: u64,
 }
 
+impl RegionMemoryMeta {
+    pub fn set_can_read(&mut self, can_read: bool) {
+        self.can_read = can_read;
+    }
+
+    pub fn set_safe_ts(&mut self, safe_ts: u64) {
+        self.safe_ts = safe_ts;
+    }
+}
+
 #[derive(Default)]
 pub struct RegionCacheMemoryEngineCore {
     engine: HashMap<u64, RegionMemoryEngine>,
     region_metas: HashMap<u64, RegionMemoryMeta>,
+}
+
+impl RegionCacheMemoryEngineCore {
+    pub fn mut_region_meta(&mut self, region_id: u64) -> Option<&mut RegionMemoryMeta> {
+        self.region_metas.get_mut(&region_id)
+    }
 }
 
 /// The RegionCacheMemoryEngine serves as a region cache, storing hot regions in
@@ -135,6 +151,12 @@ pub struct RegionCacheMemoryEngine {
     core: Arc<Mutex<RegionCacheMemoryEngineCore>>,
 }
 
+impl RegionCacheMemoryEngine {
+    pub fn core(&self) -> &Arc<Mutex<RegionCacheMemoryEngineCore>> {
+        &self.core
+    }
+}
+
 impl Debug for RegionCacheMemoryEngine {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "Region Cache Memory Engine")
@@ -157,8 +179,8 @@ impl RegionCacheEngine for RegionCacheMemoryEngine {
     type Snapshot = RegionCacheSnapshot;
 
     // todo(SpadeA): add sequence number logic
-    fn snapshot(&self, region_id: u64, read_ts: u64) -> Option<Self::Snapshot> {
-        RegionCacheSnapshot::new(self.clone(), region_id, read_ts)
+    fn snapshot(&self, region_id: u64, read_ts: u64, seq_num: u64) -> Option<Self::Snapshot> {
+        RegionCacheSnapshot::new(self.clone(), region_id, read_ts, seq_num)
     }
 }
 
@@ -192,10 +214,6 @@ pub struct RegionCacheIterator {
 
 impl Iterable for RegionCacheMemoryEngine {
     type Iterator = RegionCacheIterator;
-
-    fn iterator(&self, cf: &str) -> Result<Self::Iterator> {
-        unimplemented!()
-    }
 
     fn iterator_opt(&self, cf: &str, opts: IterOptions) -> Result<Self::Iterator> {
         unimplemented!()
@@ -357,12 +375,20 @@ impl Mutable for RegionCacheWriteBatch {
 pub struct RegionCacheSnapshot {
     region_id: u64,
     snapshot_ts: u64,
+    // Sequence number is shared between RegionCacheEngine and disk KvEnigne to
+    // provide atomic write
+    sequence_number: u64,
     region_memory_engine: RegionMemoryEngine,
     engine: RegionCacheMemoryEngine,
 }
 
 impl RegionCacheSnapshot {
-    pub fn new(engine: RegionCacheMemoryEngine, region_id: u64, read_ts: u64) -> Option<Self> {
+    pub fn new(
+        engine: RegionCacheMemoryEngine,
+        region_id: u64,
+        read_ts: u64,
+        seq_num: u64,
+    ) -> Option<Self> {
         let mut core = engine.core.lock().unwrap();
         let region_meta = core.region_metas.get_mut(&region_id)?;
         if !region_meta.can_read {
@@ -379,6 +405,7 @@ impl RegionCacheSnapshot {
         Some(RegionCacheSnapshot {
             region_id,
             snapshot_ts: read_ts,
+            sequence_number: seq_num,
             region_memory_engine: core.engine.get(&region_id).unwrap().clone(),
             engine: engine.clone(),
         })
@@ -446,7 +473,7 @@ impl CfNamesExt for RegionCacheSnapshot {
 
 impl SnapshotMiscExt for RegionCacheSnapshot {
     fn sequence_number(&self) -> u64 {
-        self.snapshot_ts
+        self.sequence_number
     }
 }
 
@@ -515,31 +542,31 @@ mod tests {
             }
         };
 
-        assert!(engine.snapshot(1, 5).is_none());
+        assert!(engine.snapshot(1, 5, u64::MAX).is_none());
 
         {
             let mut core = engine.core.lock().unwrap();
             core.region_metas.get_mut(&1).unwrap().can_read = true;
         }
-        let s1 = engine.snapshot(1, 5).unwrap();
+        let s1 = engine.snapshot(1, 5, u64::MAX).unwrap();
 
         {
             let mut core = engine.core.lock().unwrap();
             core.region_metas.get_mut(&1).unwrap().safe_ts = 5;
         }
-        assert!(engine.snapshot(1, 5).is_none());
-        let s2 = engine.snapshot(1, 10).unwrap();
+        assert!(engine.snapshot(1, 5, u64::MAX).is_none());
+        let s2 = engine.snapshot(1, 10, u64::MAX).unwrap();
 
         verify_snapshot_count(5, 1);
         verify_snapshot_count(10, 1);
-        let s3 = engine.snapshot(1, 10).unwrap();
+        let s3 = engine.snapshot(1, 10, u64::MAX).unwrap();
         verify_snapshot_count(10, 2);
 
         drop(s1);
         verify_snapshot_count(5, 0);
         drop(s2);
         verify_snapshot_count(10, 1);
-        let s4 = engine.snapshot(1, 10).unwrap();
+        let s4 = engine.snapshot(1, 10, u64::MAX).unwrap();
         verify_snapshot_count(10, 2);
         drop(s4);
         verify_snapshot_count(10, 1);
@@ -609,7 +636,7 @@ mod tests {
             fill_data_in_skiplist(sl, (1..100).step_by(1));
         }
 
-        let snapshot = engine.snapshot(1, 10).unwrap();
+        let snapshot = engine.snapshot(1, 10, u64::MAX).unwrap();
         let opts = ReadOptions::default();
         for i in 1..100 {
             let k = construct_key(i);
@@ -644,7 +671,7 @@ mod tests {
         }
 
         let mut iter_opt = IterOptions::default();
-        let snapshot = engine.snapshot(1, 10).unwrap();
+        let snapshot = engine.snapshot(1, 10, u64::MAX).unwrap();
         // boundaries are not set
         assert!(snapshot.iterator_opt("lock", iter_opt.clone()).is_err());
 
@@ -719,7 +746,7 @@ mod tests {
         iter_opt.set_upper_bound(upper_bound.as_bytes(), 0);
         iter_opt.set_lower_bound(lower_bound.as_bytes(), 0);
 
-        let snapshot = engine.snapshot(1, 10).unwrap();
+        let snapshot = engine.snapshot(1, 10, u64::MAX).unwrap();
         let mut iter = snapshot.iterator_opt("write", iter_opt.clone()).unwrap();
         assert!(iter.seek_to_last().unwrap());
         verify_key_values(&mut iter, step, 99, i32::MIN);
