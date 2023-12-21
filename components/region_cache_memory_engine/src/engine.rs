@@ -19,8 +19,8 @@ use skiplist_rs::{IterRef, Skiplist};
 use tikv_util::config::ReadableSize;
 
 use crate::keys::{
-    decode_key, encode_seek_key, encode_seek_key_for_bound, InternalKey, InternalKeyComparator,
-    ValueType, VALUE_TYPE_FOR_SEEK, VALUE_TYPE_FOR_SEEK_FOR_PREV,
+    decode_key, encode_seek_key, InternalKey, InternalKeyComparator, ValueType,
+    VALUE_TYPE_FOR_SEEK, VALUE_TYPE_FOR_SEEK_FOR_PREV,
 };
 
 fn cf_to_id(cf: &str) -> usize {
@@ -455,12 +455,8 @@ impl Iterator for RegionCacheIterator {
 
     fn seek_to_first(&mut self) -> Result<bool> {
         self.direction = Direction::Forward;
-        let seek_key = encode_seek_key_for_bound(
-            &self.lower_bound,
-            u64::MAX,
-            self.sequence_number,
-            VALUE_TYPE_FOR_SEEK,
-        );
+        let seek_key =
+            encode_seek_key(&self.lower_bound, self.sequence_number, VALUE_TYPE_FOR_SEEK);
         self.seek_internal(&seek_key)
     }
 
