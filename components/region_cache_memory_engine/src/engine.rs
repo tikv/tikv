@@ -28,12 +28,6 @@ fn cf_to_id(cf: &str) -> usize {
     }
 }
 
-// todo: remove it
-fn decode_mvcc_version(user_key: &[u8]) -> u64 {
-    let idx = user_key.len() - ENC_KEY_SEQ_LENGTH;
-    !u64::from_be_bytes(user_key[idx..idx + ENC_KEY_SEQ_LENGTH].try_into().unwrap())
-}
-
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum ValueType {
     Deletion = 0,
@@ -71,7 +65,7 @@ impl<'a> From<&'a [u8]> for InternalKey<'a> {
 }
 
 #[inline]
-fn decode_key<'a>(encoded_key: &'a [u8]) -> InternalKey<'a> {
+fn decode_key(encoded_key: &[u8]) -> InternalKey<'_> {
     assert!(encoded_key.len() >= ENC_KEY_SEQ_LENGTH);
     let seq_offset = encoded_key.len() - ENC_KEY_SEQ_LENGTH;
     let num = u64::from_be_bytes(
@@ -379,9 +373,6 @@ impl RegionCacheIterator {
                 v_type,
             } = decode_key(self.iter.key().as_slice());
 
-            let readable = decode_mvcc_version(user_key);
-            println!("{}, {}, {:?}", readable, sequence, v_type);
-
             if user_key >= self.upper_bound.as_slice() {
                 break;
             }
@@ -536,9 +527,6 @@ impl Iterator for RegionCacheIterator {
 
     fn next(&mut self) -> Result<bool> {
         assert!(self.valid);
-        if self.direction == Direction::Uninit {
-            self.direction = Direction::Forward;
-        }
         assert!(self.direction == Direction::Forward);
         self.iter.next();
         self.valid = self.iter.valid();
@@ -550,15 +538,13 @@ impl Iterator for RegionCacheIterator {
 
     fn prev(&mut self) -> Result<bool> {
         assert!(self.valid);
-        if self.direction == Direction::Uninit {
-            self.direction = Direction::Backward;
-        }
         assert!(self.direction == Direction::Backward);
         self.prev_internal();
         Ok(self.valid)
     }
 
     fn seek(&mut self, key: &[u8]) -> Result<bool> {
+        self.direction = Direction::Forward;
         let seek_key = if key < self.lower_bound.as_slice() {
             self.lower_bound.as_slice()
         } else {
@@ -570,6 +556,7 @@ impl Iterator for RegionCacheIterator {
     }
 
     fn seek_for_prev(&mut self, key: &[u8]) -> Result<bool> {
+        self.direction = Direction::Backward;
         let seek_key = if key > self.upper_bound.as_slice() {
             encode_seek_key(
                 self.upper_bound.as_slice(),
@@ -584,12 +571,14 @@ impl Iterator for RegionCacheIterator {
     }
 
     fn seek_to_first(&mut self) -> Result<bool> {
+        self.direction = Direction::Forward;
         let seek_key =
             encode_seek_key(&self.lower_bound, self.sequence_number, VALUE_TYPE_FOR_SEEK);
         self.seek_internal(&seek_key)
     }
 
     fn seek_to_last(&mut self) -> Result<bool> {
+        self.direction = Direction::Backward;
         let seek_key = encode_seek_key(&self.upper_bound, u64::MAX, VALUE_TYPE_FOR_SEEK_FOR_PREV);
         self.seek_for_prev_internal(&seek_key)
     }
@@ -823,7 +812,7 @@ mod tests {
     use skiplist_rs::Skiplist;
 
     use super::{cf_to_id, encode_key, InternalKeyComparator, RegionCacheIterator, ValueType};
-    use crate::{engine::decode_mvcc_version, RegionCacheMemoryEngine};
+    use crate::RegionCacheMemoryEngine;
 
     #[test]
     fn test_snapshot() {
@@ -921,9 +910,7 @@ mod tests {
     ) {
         for i in range {
             let key = construct_key(i);
-            let mvcc = decode_mvcc_version(&key);
             let key = encode_key(&key, seq, ValueType::Deletion);
-            println!("delete key {}, {}", mvcc, seq);
             sl.put(key, Bytes::default());
             seq += 1;
         }
@@ -939,13 +926,19 @@ mod tests {
     fn put_key_val(
         sl: &Arc<Skiplist<InternalKeyComparator>>,
         key: &str,
-        val: &'static str,
+        val: &str,
         mvcc: u64,
         seq: u64,
     ) {
         let key = construct_mvcc_key(key, mvcc);
         let key = encode_key(&key, seq, ValueType::Value);
-        sl.put(key, Bytes::from(val));
+        sl.put(key, Bytes::from(val.to_owned()));
+    }
+
+    fn delete_key(sl: &Arc<Skiplist<InternalKeyComparator>>, key: &str, mvcc: u64, seq: u64) {
+        let key = construct_mvcc_key(key, mvcc);
+        let key = encode_key(&key, seq, ValueType::Deletion);
+        sl.put(key, Bytes::default());
     }
 
     fn verify_key_value(k: &[u8], v: &[u8], i: u64) {
@@ -992,7 +985,7 @@ mod tests {
         {
             let snapshot = engine.snapshot(1, 10, 60).unwrap();
             for i in 1..50 {
-                let k = construct_key(i as u64);
+                let k = construct_key(i);
                 let v = snapshot
                     .get_value_cf_opt(&opts, "write", &k)
                     .unwrap()
@@ -1035,7 +1028,7 @@ mod tests {
                 );
             }
             for i in 32..50 {
-                let k = construct_key(i as u64);
+                let k = construct_key(i);
                 let v = snapshot
                     .get_value_cf_opt(&opts, "write", &k)
                     .unwrap()
@@ -1082,29 +1075,17 @@ mod tests {
             let snapshot = engine.snapshot(1, 10, 150).unwrap();
             let mut iter = snapshot.iterator_opt("write", iter_opt.clone()).unwrap();
             iter.seek_to_first().unwrap();
-            verify_key_values(
-                &mut iter,
-                (1..100).step_by(step as usize).rev().into_iter(),
-                true,
-            );
+            verify_key_values(&mut iter, (1..100).step_by(step as usize).rev(), true);
 
             // seek key that is in the skiplist
             let seek_key = construct_key(11);
             iter.seek(&seek_key).unwrap();
-            verify_key_values(
-                &mut iter,
-                (1..12).step_by(step as usize).rev().into_iter(),
-                true,
-            );
+            verify_key_values(&mut iter, (1..12).step_by(step as usize).rev(), true);
 
             // seek key that is not in the skiplist
             let seek_key = construct_key(12);
             iter.seek(&seek_key).unwrap();
-            verify_key_values(
-                &mut iter,
-                (1..12).step_by(step as usize).rev().into_iter(),
-                true,
-            );
+            verify_key_values(&mut iter, (1..12).step_by(step as usize).rev(), true);
         }
 
         // Not restricted by bounds, some deletions (seq_num 230)
@@ -1112,11 +1093,7 @@ mod tests {
             let snapshot = engine.snapshot(1, 10, 230).unwrap();
             let mut iter = snapshot.iterator_opt("write", iter_opt.clone()).unwrap();
             iter.seek_to_first().unwrap();
-            verify_key_values(
-                &mut iter,
-                (63..100).step_by(step as usize).rev().into_iter(),
-                true,
-            );
+            verify_key_values(&mut iter, (63..100).step_by(step as usize).rev(), true);
 
             // sequence can see the deletion
             {
@@ -1153,20 +1130,12 @@ mod tests {
             let mut iter = snapshot.iterator_opt("write", iter_opt.clone()).unwrap();
 
             assert!(iter.seek_to_first().unwrap());
-            verify_key_values(
-                &mut iter,
-                (21..41).step_by(step as usize).rev().into_iter(),
-                true,
-            );
+            verify_key_values(&mut iter, (21..41).step_by(step as usize).rev(), true);
 
             // seek a key that is below the lower bound is the same with seek_to_first
             let seek_key = construct_key(41);
             assert!(iter.seek(&seek_key).unwrap());
-            verify_key_values(
-                &mut iter,
-                (21..41).step_by(step as usize).rev().into_iter(),
-                true,
-            );
+            verify_key_values(&mut iter, (21..41).step_by(step as usize).rev(), true);
 
             // seek a key that is larger or equal to upper bound won't get any key
             let seek_key = construct_key(11);
@@ -1175,11 +1144,7 @@ mod tests {
 
             let seek_key = construct_key(32);
             assert!(iter.seek(&seek_key).unwrap());
-            verify_key_values(
-                &mut iter,
-                (21..32).step_by(step as usize).rev().into_iter(),
-                true,
-            );
+            verify_key_values(&mut iter, (21..32).step_by(step as usize).rev(), true);
         }
 
         // with bounds, some deletions (seq_num 215)
@@ -1239,29 +1204,17 @@ mod tests {
             let snapshot = engine.snapshot(1, 10, 150).unwrap();
             let mut iter = snapshot.iterator_opt("write", iter_opt.clone()).unwrap();
             assert!(iter.seek_to_last().unwrap());
-            verify_key_values(
-                &mut iter,
-                (1..100).step_by(step as usize).into_iter(),
-                false,
-            );
+            verify_key_values(&mut iter, (1..100).step_by(step as usize), false);
 
             // seek key that is in the skiplist
             let seek_key = construct_key(81);
             assert!(iter.seek_for_prev(&seek_key).unwrap());
-            verify_key_values(
-                &mut iter,
-                (81..100).step_by(step as usize).into_iter(),
-                false,
-            );
+            verify_key_values(&mut iter, (81..100).step_by(step as usize), false);
 
             // seek key that is in the skiplist
             let seek_key = construct_key(80);
             assert!(iter.seek_for_prev(&seek_key).unwrap());
-            verify_key_values(
-                &mut iter,
-                (81..100).step_by(step as usize).into_iter(),
-                false,
-            );
+            verify_key_values(&mut iter, (81..100).step_by(step as usize), false);
         }
 
         let lower_bound = construct_key(40);
@@ -1273,20 +1226,12 @@ mod tests {
             let mut iter = snapshot.iterator_opt("write", iter_opt).unwrap();
 
             assert!(iter.seek_to_last().unwrap());
-            verify_key_values(
-                &mut iter,
-                (21..41).step_by(step as usize).into_iter(),
-                false,
-            );
+            verify_key_values(&mut iter, (21..41).step_by(step as usize), false);
 
             // seek a key that is above the upper bound is the same with seek_to_last
             let seek_key = construct_key(19);
             assert!(iter.seek_for_prev(&seek_key).unwrap());
-            verify_key_values(
-                &mut iter,
-                (21..41).step_by(step as usize).into_iter(),
-                false,
-            );
+            verify_key_values(&mut iter, (21..41).step_by(step as usize), false);
 
             // seek a key that is less than the lower bound won't get any key
             let seek_key = construct_key(45);
@@ -1295,11 +1240,7 @@ mod tests {
 
             let seek_key = construct_key(26);
             assert!(iter.seek_for_prev(&seek_key).unwrap());
-            verify_key_values(
-                &mut iter,
-                (27..41).step_by(step as usize).into_iter(),
-                false,
-            );
+            verify_key_values(&mut iter, (27..41).step_by(step as usize), false);
         }
     }
 
@@ -1317,7 +1258,8 @@ mod tests {
 
             put_key_val(&sl, "aaa", "va1", 10, 1);
             put_key_val(&sl, "aaa", "va2", 10, 3);
-            put_key_val(&sl, "aaa", "va3", 10, 4);
+            delete_key(&sl, "aaa", 10, 4);
+            put_key_val(&sl, "aaa", "va4", 10, 6);
 
             put_key_val(&sl, "bbb", "vb1", 10, 2);
             put_key_val(&sl, "bbb", "vb2", 10, 4);
@@ -1325,7 +1267,7 @@ mod tests {
             put_key_val(&sl, "ccc", "vc1", 10, 2);
             put_key_val(&sl, "ccc", "vc2", 10, 4);
             put_key_val(&sl, "ccc", "vc3", 10, 5);
-            put_key_val(&sl, "ccc", "vc4", 10, 6);
+            delete_key(&sl, "ccc", 10, 6);
         }
 
         let mut iter_opt = IterOptions::default();
@@ -1380,8 +1322,6 @@ mod tests {
             let snapshot = engine.snapshot(1, u64::MAX, 5).unwrap();
             let mut iter = snapshot.iterator_opt("write", iter_opt.clone()).unwrap();
             iter.seek_to_first().unwrap();
-            assert_eq!(iter.value(), b"va3");
-            iter.next().unwrap();
             assert_eq!(iter.value(), b"vb2");
             iter.next().unwrap();
             assert_eq!(iter.value(), b"vc3");
@@ -1393,11 +1333,9 @@ mod tests {
             let snapshot = engine.snapshot(1, u64::MAX, 6).unwrap();
             let mut iter = snapshot.iterator_opt("write", iter_opt.clone()).unwrap();
             iter.seek_to_first().unwrap();
-            assert_eq!(iter.value(), b"va3");
+            assert_eq!(iter.value(), b"va4");
             iter.next().unwrap();
             assert_eq!(iter.value(), b"vb2");
-            iter.next().unwrap();
-            assert_eq!(iter.value(), b"vc4");
             assert!(!iter.next().unwrap());
 
             let key = construct_mvcc_key("aaa", 10);
@@ -1407,10 +1345,10 @@ mod tests {
                     .unwrap()
                     .unwrap()
                     .deref(),
-                "va3".as_bytes()
+                "va4".as_bytes()
             );
             assert!(iter.seek(&key).unwrap());
-            assert_eq!(iter.value(), "va3".as_bytes());
+            assert_eq!(iter.value(), "va4".as_bytes());
 
             let key = construct_mvcc_key("bbb", 10);
             assert_eq!(
@@ -1425,16 +1363,8 @@ mod tests {
             assert_eq!(iter.value(), "vb2".as_bytes());
 
             let key = construct_mvcc_key("ccc", 10);
-            assert_eq!(
-                snapshot
-                    .get_value_cf("write", &key)
-                    .unwrap()
-                    .unwrap()
-                    .deref(),
-                "vc4".as_bytes()
-            );
-            assert!(iter.seek(&key).unwrap());
-            assert_eq!(iter.value(), "vc4".as_bytes());
+            assert!(snapshot.get_value_cf("write", &key).unwrap().is_none());
+            assert!(!iter.seek(&key).unwrap());
         }
     }
 
@@ -1453,14 +1383,15 @@ mod tests {
             put_key_val(&sl, "aaa", "va1", 10, 2);
             put_key_val(&sl, "aaa", "va2", 10, 4);
             put_key_val(&sl, "aaa", "va3", 10, 5);
-            put_key_val(&sl, "aaa", "va4", 10, 6);
+            delete_key(&sl, "aaa", 10, 6);
 
             put_key_val(&sl, "bbb", "vb1", 10, 2);
             put_key_val(&sl, "bbb", "vb2", 10, 4);
 
             put_key_val(&sl, "ccc", "vc1", 10, 1);
             put_key_val(&sl, "ccc", "vc2", 10, 3);
-            put_key_val(&sl, "ccc", "vc3", 10, 4);
+            delete_key(&sl, "ccc", 10, 4);
+            put_key_val(&sl, "ccc", "vc4", 10, 6);
         }
 
         let mut iter_opt = IterOptions::default();
@@ -1505,8 +1436,6 @@ mod tests {
             let snapshot = engine.snapshot(1, u64::MAX, 5).unwrap();
             let mut iter = snapshot.iterator_opt("write", iter_opt.clone()).unwrap();
             iter.seek_to_last().unwrap();
-            assert_eq!(iter.value(), b"vc3");
-            iter.prev().unwrap();
             assert_eq!(iter.value(), b"vb2");
             iter.prev().unwrap();
             assert_eq!(iter.value(), b"va3");
@@ -1518,24 +1447,152 @@ mod tests {
             let snapshot = engine.snapshot(1, u64::MAX, 6).unwrap();
             let mut iter = snapshot.iterator_opt("write", iter_opt.clone()).unwrap();
             iter.seek_to_last().unwrap();
-            assert_eq!(iter.value(), b"vc3");
+            assert_eq!(iter.value(), b"vc4");
             iter.prev().unwrap();
             assert_eq!(iter.value(), b"vb2");
-            iter.prev().unwrap();
-            assert_eq!(iter.value(), b"va4");
             assert!(!iter.prev().unwrap());
 
             let key = construct_mvcc_key("ccc", 10);
             assert!(iter.seek_for_prev(&key).unwrap());
-            assert_eq!(iter.value(), "vc3".as_bytes());
+            assert_eq!(iter.value(), "vc4".as_bytes());
 
             let key = construct_mvcc_key("bbb", 10);
             assert!(iter.seek_for_prev(&key).unwrap());
             assert_eq!(iter.value(), "vb2".as_bytes());
 
             let key = construct_mvcc_key("aaa", 10);
-            assert!(iter.seek_for_prev(&key).unwrap());
-            assert_eq!(iter.value(), "va4".as_bytes());
+            assert!(!iter.seek_for_prev(&key).unwrap());
+        }
+    }
+
+    #[test]
+    fn test_iter_use_skip() {
+        let mut iter_opt = IterOptions::default();
+        let lower_bound = b"";
+        let upper_bound = b"z";
+        iter_opt.set_upper_bound(upper_bound, 0);
+        iter_opt.set_lower_bound(lower_bound, 0);
+
+        // backward, all put
+        {
+            let engine = RegionCacheMemoryEngine::default();
+            engine.new_region(1);
+            let sl = {
+                let mut core = engine.core.lock().unwrap();
+                core.region_metas.get_mut(&1).unwrap().can_read = true;
+                core.region_metas.get_mut(&1).unwrap().safe_ts = 5;
+                core.engine.get_mut(&1).unwrap().data[cf_to_id("write")].clone()
+            };
+
+            for seq in 2..50 {
+                put_key_val(&sl, "a", "val", 10, 1);
+                for i in 2..50 {
+                    let v = construct_value(i);
+                    put_key_val(&sl, "b", v.as_str(), 10, i);
+                }
+
+                let snapshot = engine.snapshot(1, 10, seq).unwrap();
+                let mut iter = snapshot.iterator_opt("write", iter_opt.clone()).unwrap();
+                assert!(iter.seek_to_last().unwrap());
+                let k = construct_mvcc_key("b", 10);
+                let v = construct_value(seq);
+                assert_eq!(iter.key(), &k);
+                assert_eq!(iter.value(), v.as_bytes());
+
+                assert!(iter.prev().unwrap());
+                let k = construct_mvcc_key("a", 10);
+                assert_eq!(iter.key(), &k);
+                assert_eq!(iter.value(), b"val");
+                assert!(!iter.prev().unwrap());
+                assert!(!iter.valid().unwrap());
+            }
+        }
+
+        // backward, all deletes
+        {
+            let engine = RegionCacheMemoryEngine::default();
+            engine.new_region(1);
+            let sl = {
+                let mut core = engine.core.lock().unwrap();
+                core.region_metas.get_mut(&1).unwrap().can_read = true;
+                core.region_metas.get_mut(&1).unwrap().safe_ts = 5;
+                core.engine.get_mut(&1).unwrap().data[cf_to_id("write")].clone()
+            };
+
+            for seq in 2..50 {
+                put_key_val(&sl, "a", "val", 10, 1);
+                for i in 2..50 {
+                    delete_key(&sl, "b", 10, i);
+                }
+
+                let snapshot = engine.snapshot(1, 10, seq).unwrap();
+                let mut iter = snapshot.iterator_opt("write", iter_opt.clone()).unwrap();
+                assert!(iter.seek_to_last().unwrap());
+                let k = construct_mvcc_key("a", 10);
+                assert_eq!(iter.key(), &k);
+                assert_eq!(iter.value(), b"val");
+                assert!(!iter.prev().unwrap());
+                assert!(!iter.valid().unwrap());
+            }
+        }
+
+        // backward, all deletes except for last put, last put's seq
+        {
+            let engine = RegionCacheMemoryEngine::default();
+            engine.new_region(1);
+            let sl = {
+                let mut core = engine.core.lock().unwrap();
+                core.region_metas.get_mut(&1).unwrap().can_read = true;
+                core.region_metas.get_mut(&1).unwrap().safe_ts = 5;
+                core.engine.get_mut(&1).unwrap().data[cf_to_id("write")].clone()
+            };
+            put_key_val(&sl, "a", "val", 10, 1);
+            for i in 2..50 {
+                delete_key(&sl, "b", 10, i);
+            }
+            let v = construct_value(50);
+            put_key_val(&sl, "b", v.as_str(), 10, 50);
+            let snapshot = engine.snapshot(1, 10, 50).unwrap();
+            let mut iter = snapshot.iterator_opt("write", iter_opt.clone()).unwrap();
+            assert!(iter.seek_to_last().unwrap());
+            let k = construct_mvcc_key("b", 10);
+            let v = construct_value(50);
+            assert_eq!(iter.key(), &k);
+            assert_eq!(iter.value(), v.as_bytes());
+
+            assert!(iter.prev().unwrap());
+            let k = construct_mvcc_key("a", 10);
+            assert_eq!(iter.key(), &k);
+            assert_eq!(iter.value(), b"val");
+            assert!(!iter.prev().unwrap());
+            assert!(!iter.valid().unwrap());
+        }
+
+        // all deletes except for last put, deletions' seq
+        {
+            let engine = RegionCacheMemoryEngine::default();
+            engine.new_region(1);
+            let sl = {
+                let mut core = engine.core.lock().unwrap();
+                core.region_metas.get_mut(&1).unwrap().can_read = true;
+                core.region_metas.get_mut(&1).unwrap().safe_ts = 5;
+                core.engine.get_mut(&1).unwrap().data[cf_to_id("write")].clone()
+            };
+            for seq in 2..50 {
+                for i in 2..50 {
+                    delete_key(&sl, "b", 10, i);
+                }
+                let v = construct_value(50);
+                put_key_val(&sl, "b", v.as_str(), 10, 50);
+
+                let snapshot = engine.snapshot(1, 10, seq).unwrap();
+                let mut iter = snapshot.iterator_opt("write", iter_opt.clone()).unwrap();
+                assert!(!iter.seek_to_first().unwrap());
+                assert!(!iter.valid().unwrap());
+
+                assert!(!iter.seek_to_last().unwrap());
+                assert!(!iter.valid().unwrap());
+            }
         }
     }
 }
