@@ -189,9 +189,15 @@ impl<E: Engine, L: LockManager, F: KvFormat> Service<E, L, F> {
 
 macro_rules! handle_request {
     ($fn_name: ident, $future_name: ident, $req_ty: ident, $resp_ty: ident) => {
-        handle_request!($fn_name, $future_name, $req_ty, $resp_ty, no_time_detail);
+        handle_request!($fn_name, $future_name, $req_ty, $resp_ty, no_time_detail, has_perf_feedback);
     };
-    ($fn_name: ident, $future_name: ident, $req_ty: ident, $resp_ty: ident, $time_detail: tt) => {
+    ($fn_name: ident, $future_name: ident, $req_ty: ident, $resp_ty: ident, no_perf_feedback) => {
+        handle_request!($fn_name, $future_name, $req_ty, $resp_ty, no_time_detail, no_perf_feedback);
+    };
+    ($fn_name: ident, $future_name: ident, $req_ty: ident, $resp_ty: ident, has_time_detail) => {
+        handle_request!($fn_name, $future_name, $req_ty, $resp_ty, has_time_detail, has_perf_feedback);
+    };
+    ($fn_name: ident, $future_name: ident, $req_ty: ident, $resp_ty: ident, $time_detail: tt, $perf_feedback: tt) => {
         fn $fn_name(&mut self, ctx: RpcContext<'_>, req: $req_ty, sink: UnarySink<$resp_ty>) {
             forward_unary!(self.proxy, $fn_name, ctx, req, sink);
             let begin_instant = Instant::now();
@@ -208,9 +214,11 @@ macro_rules! handle_request {
                     .inc();
             let resp = $future_name(&self.storage, req);
             let task = async move {
-                let resp = resp.await?;
+                #[allow(unused_mut)]
+                let mut resp = resp.await?;
                 let elapsed = begin_instant.saturating_elapsed();
                 set_total_time!(resp, elapsed, $time_detail);
+                set_perf_feedback!(resp, $perf_feedback);
                 sink.success(resp).await?;
                 GRPC_MSG_HISTOGRAM_STATIC
                     .$fn_name
@@ -235,7 +243,6 @@ macro_rules! handle_request {
 macro_rules! set_total_time {
     ($resp:ident, $duration:expr,no_time_detail) => {};
     ($resp:ident, $duration:expr,has_time_detail) => {
-        let mut $resp = $resp;
         $resp
             .mut_exec_details_v2()
             .mut_time_detail()
@@ -244,6 +251,14 @@ macro_rules! set_total_time {
             .mut_exec_details_v2()
             .mut_time_detail_v2()
             .set_total_rpc_wall_time_ns($duration.as_nanos() as u64);
+    };
+}
+
+macro_rules! set_perf_feedback {
+    ($resp:ident,no_perf_feedback) => {};
+    ($resp:ident,has_perf_feedback) => {
+        let feedback = ResponseFeedbackInformation::default();
+        $resp.set_response_feedback(feedback);
     };
 }
 
@@ -402,7 +417,8 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
         raw_checksum,
         future_raw_checksum,
         RawChecksumRequest,
-        RawChecksumResponse
+        RawChecksumResponse,
+        no_perf_feedback
     );
 
     fn kv_import(&mut self, _: RpcContext<'_>, _: ImportRequest, _: UnarySink<ImportResponse>) {
