@@ -370,7 +370,7 @@ where
         LoadDataHint::NearSeek => default_cursor.near_seek(&seek_key, &mut statistics.data)?,
         LoadDataHint::Seek => default_cursor.seek(&seek_key, &mut statistics.data)?,
         LoadDataHint::Get => {
-            let value = snapshot.get_cf(&CF_DEFAULT, &seek_key)?;
+            let value = snapshot.get_cf(CF_DEFAULT, &seek_key)?;
             statistics.data.get += 1;
             if let Some(v) = value {
                 statistics.data.processed_keys += 1;
@@ -414,7 +414,7 @@ where
         }
         LoadDataHint::Seek => default_cursor.seek_for_prev(&seek_key, &mut statistics.data)?,
         LoadDataHint::Get => {
-            let value = snapshot.get_cf(&CF_DEFAULT, &seek_key)?;
+            let value = snapshot.get_cf(CF_DEFAULT, &seek_key)?;
             statistics.data.get += 1;
             if let Some(v) = value {
                 statistics.data.processed_keys += 1;

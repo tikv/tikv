@@ -327,7 +327,8 @@ mod tests {
         let mut cursor = new_write_cursor_on_key(&snapshot, &key);
         let load_default = Either::Left(&snapshot);
         let mut stats = Statistics::default();
-        let v = near_seek_old_value(&key, &mut cursor, load_default, &mut stats).unwrap();
+        let v =
+            near_seek_old_value(&key, &mut cursor, load_default, &mut stats, &snapshot).unwrap();
         assert_eq!(v, value);
         stats
     }
@@ -560,7 +561,7 @@ mod tests {
                 let raw_key = format!("key-{:0>3}", i).into_bytes();
                 let key = Key::from_raw(&raw_key).append_ts(150.into());
                 let ld = load_default(use_default_cursor);
-                let v = near_seek_old_value(&key, &mut cursor, ld, &mut stats).unwrap();
+                let v = near_seek_old_value(&key, &mut cursor, ld, &mut stats, &snapshot).unwrap();
                 assert!(v.map_or(false, |x| x == value()));
             }
             assert_eq!(stats.write.seek, 1);
@@ -579,7 +580,7 @@ mod tests {
                 let raw_key = format!("key-{:0>3}", i).into_bytes();
                 let key = Key::from_raw(&raw_key).append_ts(150.into());
                 let ld = load_default(use_default_cursor);
-                let v = near_seek_old_value(&key, &mut cursor, ld, &mut stats).unwrap();
+                let v = near_seek_old_value(&key, &mut cursor, ld, &mut stats, &snapshot).unwrap();
                 assert!(v.map_or(false, |x| x == value()));
             }
             assert_eq!(stats.write.seek, 2);
