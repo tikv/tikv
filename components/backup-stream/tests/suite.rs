@@ -33,7 +33,7 @@ use protobuf::parse_from_bytes;
 use raftstore::RegionInfoAccessor;
 use tempdir::TempDir;
 use test_pd_client::TestPdClient;
-use test_raftstore::{new_server_cluster, Cluster, ServerCluster, SimulateTransport};
+use test_raftstore::{new_server_cluster, Cluster, ServerCluster};
 use test_util::retry;
 use tikv::config::BackupStreamConfig;
 use tikv_util::{
@@ -52,12 +52,6 @@ pub type TestEndpoint = Endpoint<
     ErrorStore<SlashEtcStore>,
     RegionInfoAccessor,
     engine_test::kv::KvTestEngine,
-    SimulateTransport<
-        raftstore::router::ServerRaftStoreRouter<
-            engine_test::kv::KvTestEngine,
-            engine_test::raft::RaftTestEngine,
-        >,
-    >,
     TestPdClient,
 >;
 
