@@ -1612,7 +1612,7 @@ mod tests {
             mysql::{
                 charset::*,
                 decimal::{max_decimal, max_or_min_dec},
-                Decimal, Duration, Json, RoundMode, Time, TimeType, MAX_FSP, MIN_FSP, Tz
+                Decimal, Duration, Json, RoundMode, Time, TimeType, Tz, MAX_FSP, MIN_FSP,
             },
         },
         expr::{EvalConfig, EvalContext, Flag},
@@ -2942,7 +2942,7 @@ mod tests {
             let duration = Duration::parse(&mut ctx, case, MAX_FSP).unwrap();
 
             let mut cfg2 = EvalConfig::default();
-            cfg2.tz = Tz::from_tz_name("Asia/Shanghai").unwrap();
+            cfg2.tz = Tz::from_tz_name("Asia/Tokyo").unwrap();
             let ctx2 = EvalContext::new(Arc::new(cfg2));
 
             let now = RpnFnScalarEvaluator::new()
