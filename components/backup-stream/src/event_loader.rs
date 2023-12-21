@@ -5,7 +5,7 @@ use std::{marker::PhantomData, sync::Arc, time::Duration};
 use engine_traits::{KvEngine, CF_DEFAULT, CF_WRITE};
 use kvproto::{kvrpcpb::ExtraOp, metapb::Region, raft_cmdpb::CmdType};
 use raftstore::{
-    coprocessor::{ObserveHandle},
+    coprocessor::ObserveHandle,
     store::{fsm::ChangeObserver, Callback, SignificantMsg, SignificantRouter},
 };
 use tikv::storage::{
