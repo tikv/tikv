@@ -68,26 +68,40 @@ pub fn decode_key(encoded_key: &[u8]) -> InternalKey<'_> {
 #[inline]
 pub fn encode_key_internal<T: BufMut>(
     key: &[u8],
+    mvcc: Option<u64>,
     seq: u64,
     v_type: ValueType,
     f: impl FnOnce(usize) -> T,
 ) -> T {
     assert!(seq == u64::MAX || seq >> ((ENC_KEY_SEQ_LENGTH - 1) * 8) == 0);
-    let mut e = f(key.len() + ENC_KEY_SEQ_LENGTH);
+    let mvcc_len = if mvcc.is_some() {
+        ENC_KEY_SEQ_LENGTH
+    } else {
+        0
+    };
+    let mut e = f(key.len() + ENC_KEY_SEQ_LENGTH + mvcc_len);
     e.put(key);
+    if let Some(mvcc) = mvcc {
+        e.put_u64(!mvcc);
+    }
     e.put_u64((seq << 8) | v_type as u64);
     e
 }
 
 #[inline]
 pub fn encode_key(key: &[u8], seq: u64, v_type: ValueType) -> Bytes {
-    let e = encode_key_internal::<BytesMut>(key, seq, v_type, BytesMut::with_capacity);
+    let e = encode_key_internal::<BytesMut>(key, None, seq, v_type, BytesMut::with_capacity);
     e.freeze()
 }
 
 #[inline]
 pub fn encode_seek_key(key: &[u8], seq: u64, v_type: ValueType) -> Vec<u8> {
-    encode_key_internal::<Vec<_>>(key, seq, v_type, Vec::with_capacity)
+    encode_key_internal::<Vec<_>>(key, None, seq, v_type, Vec::with_capacity)
+}
+
+#[inline]
+pub fn encode_seek_key_for_bound(key: &[u8], mvcc: u64, seq: u64, v_type: ValueType) -> Vec<u8> {
+    encode_key_internal::<Vec<_>>(key, Some(mvcc), seq, v_type, Vec::with_capacity)
 }
 
 #[derive(Default, Debug, Clone, Copy)]
