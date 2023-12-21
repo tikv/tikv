@@ -3,7 +3,7 @@
 use std::{any::Any, sync::Arc};
 
 use engine_traits::{
-    IterOptions, Iterable, KvEngine, Peekable, ReadOptions, Result, SnapCtx, SyncMutable,
+    IterOptions, Iterable, KvEngine, Peekable, ReadOptions, Result, SnapshotContext, SyncMutable,
 };
 use rocksdb::{DBIterator, Writable, DB};
 
@@ -184,7 +184,7 @@ impl RocksEngine {
 impl KvEngine for RocksEngine {
     type Snapshot = RocksSnapshot;
 
-    fn snapshot(&self, _: Option<SnapCtx>) -> RocksSnapshot {
+    fn snapshot(&self, _: Option<SnapshotContext>) -> RocksSnapshot {
         RocksSnapshot::new(self.db.clone())
     }
 

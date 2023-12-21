@@ -12,6 +12,10 @@ where
     type Iterator = HybridEngineIterator<EK, EC>;
 
     fn iterator_opt(&self, cf: &str, opts: IterOptions) -> Result<Self::Iterator> {
-        unimplemented!()
+        // Iterator of region cache engine should only be created from the
+        // snapshot of it
+        self.disk_engine()
+            .iterator_opt(cf, opts)
+            .map(|iter| HybridEngineIterator::disk_engine_iterator(iter))
     }
 }

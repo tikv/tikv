@@ -2449,6 +2449,8 @@ version = "0.0.1"
 dependencies = [
  "engine_rocks",
  "engine_traits",
+ "region_cache_memory_engine",
+ "tempfile",
  "tikv_util",
  "txn_types",
 ]
@@ -4137,6 +4139,7 @@ dependencies = [
  "futures-util",
  "getset",
  "grpcio-health",
+ "hybrid_engine",
  "into_other",
  "itertools",
  "keys",
@@ -4157,6 +4160,7 @@ dependencies = [
  "raft",
  "raft-proto",
  "rand 0.8.5",
+ "region_cache_memory_engine",
  "resource_control",
  "resource_metering",
  "serde",
