@@ -432,10 +432,13 @@ impl Worker {
         let _ = self.pool.spawn(f);
     }
 
-    fn delay_notify<T: Display + Send + 'static>(tx: UnboundedSender<Msg<T>>, timeout: Duration) {
-        if timeout.is_zero() {
+    fn delay_notify<T: Display + Send + 'static>(
+        tx: Option<UnboundedSender<Msg<T>>>,
+        timeout: Duration,
+    ) {
+        let Some(tx) = tx else {
             return;
-        }
+        };
         let now = Instant::now();
         let f = GLOBAL_TIMER_HANDLE
             .delay(now + timeout)
@@ -504,6 +507,7 @@ impl Worker {
     {
         let counter = self.counter.clone();
         let timeout = runner.get_interval();
+        let tx = if !timeout.is_zero() { Some(tx) } else { None };
         Self::delay_notify(tx.clone(), timeout);
         let _ = self.pool.spawn(async move {
             let mut handle = RunnableWrapper { inner: runner };
