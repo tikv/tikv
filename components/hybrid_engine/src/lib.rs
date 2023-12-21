@@ -24,3 +24,4 @@ mod ttl_properties;
 mod write_batch;
 
 pub use engine::HybridEngine;
+pub use snapshot::HybridEngineSnapshot;
