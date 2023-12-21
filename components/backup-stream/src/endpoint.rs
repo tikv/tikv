@@ -907,7 +907,8 @@ where
     }
 
     // FIXME: while picking #15541, v6.5.x doesn't support online config change.
-    // This stub was kept so once online config change has been picked, we can
+    // This stub was kept so once online config change has been picked, we can reuse
+    // this.
     #[allow(dead_code)]
     fn on_update_change_config(&mut self, cfg: BackupStreamConfig) {
         let concurrency_diff =
