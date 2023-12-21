@@ -3,8 +3,8 @@
 use std::{cmp, error::Error as StdError, i32, result, sync::Arc, thread, time::Duration};
 
 use encryption_export::data_key_manager_from_config;
-use engine_rocks::{util::new_engine_opt, RocksEngine};
-use engine_traits::{Engines, Error as EngineError, Peekable, RaftEngine, SyncMutable};
+use engine_rocks::util::new_engine_opt;
+use engine_traits::{Engines, Error as EngineError, KvEngine, RaftEngine};
 use kvproto::{metapb, raft_serverpb::StoreIdent};
 use pd_client::{Error as PdError, PdClient};
 use raft_log_engine::RaftLogEngine;
@@ -251,21 +251,21 @@ pub trait LocalEngineService {
 }
 
 // init engine and read local engine info
-pub struct LocalEngines<ER: RaftEngine> {
-    engines: Engines<RocksEngine, ER>,
+pub struct LocalEngines<EK: KvEngine, ER: RaftEngine> {
+    engines: Engines<EK, ER>,
 }
 
-impl<ER: RaftEngine> LocalEngines<ER> {
-    pub fn new(engines: Engines<RocksEngine, ER>) -> LocalEngines<ER> {
+impl<EK: KvEngine, ER: RaftEngine> LocalEngines<EK, ER> {
+    pub fn new(engines: Engines<EK, ER>) -> LocalEngines<EK, ER> {
         LocalEngines { engines }
     }
 
-    pub fn get_engine(&self) -> &Engines<RocksEngine, ER> {
+    pub fn get_engine(&self) -> &Engines<EK, ER> {
         &self.engines
     }
 }
 
-impl<ER: RaftEngine> LocalEngineService for LocalEngines<ER> {
+impl<EK: KvEngine, ER: RaftEngine> LocalEngineService for LocalEngines<EK, ER> {
     fn set_cluster_id(&self, cluster_id: u64) {
         let res = self
             .get_engine()

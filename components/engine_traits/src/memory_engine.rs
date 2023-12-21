@@ -13,5 +13,7 @@ pub trait RegionCacheEngine:
 
     // If None is returned, the RegionCacheEngine is currently not readable for this
     // region or read_ts.
-    fn snapshot(&self, region_id: u64, read_ts: u64) -> Option<Self::Snapshot>;
+    // Sequence number is shared between RegionCacheEngine and disk KvEnigne to
+    // provide atomic write
+    fn snapshot(&self, region_id: u64, read_ts: u64, seq_num: u64) -> Option<Self::Snapshot>;
 }

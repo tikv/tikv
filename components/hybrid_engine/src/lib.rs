@@ -22,3 +22,6 @@ mod sst;
 mod table_properties;
 mod ttl_properties;
 mod write_batch;
+
+pub use engine::HybridEngine;
+pub use snapshot::HybridEngineSnapshot;

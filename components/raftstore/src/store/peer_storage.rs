@@ -372,7 +372,7 @@ where
 
     #[inline]
     pub fn raw_snapshot(&self) -> EK::Snapshot {
-        self.engines.kv.snapshot()
+        self.engines.kv.snapshot(None)
     }
 
     #[inline]
@@ -1607,7 +1607,7 @@ pub mod tests {
             .unwrap()
             .unwrap();
         gen_task.generate_and_schedule_snapshot::<KvTestEngine>(
-            engines.kv.clone().snapshot(),
+            engines.kv.clone().snapshot(None),
             entry.get_term(),
             apply_state,
             sched,

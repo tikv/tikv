@@ -3,6 +3,7 @@
 use std::{sync::Arc, thread, time::Duration};
 
 use causal_ts::{CausalTsProvider, CausalTsProviderImpl};
+use engine_rocks::RocksEngine;
 use futures::executor::block_on;
 use grpcio::{ChannelBuilder, Environment};
 use kvproto::{
@@ -14,7 +15,7 @@ use test_raftstore::*;
 use tikv_util::{time::Instant, HandyRwLock};
 
 struct TestSuite {
-    pub cluster: Cluster<ServerCluster>,
+    pub cluster: Cluster<RocksEngine, ServerCluster<RocksEngine>>,
     api_version: ApiVersion,
 }
 
