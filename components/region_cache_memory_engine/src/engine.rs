@@ -45,7 +45,7 @@ impl TryFrom<u8> for ValueType {
         match value {
             0 => Ok(ValueType::Deletion),
             1 => Ok(ValueType::Value),
-            _ => panic!("invalid value"),
+            _ => Err(format!("invalid value: {}", value)),
         }
     }
 }
@@ -347,7 +347,7 @@ pub struct RegionCacheIterator {
     saved_user_key: Vec<u8>,
     // This is only used by backwawrd iteration where the value we want may not be pointed by the
     // `iter`
-    pinned_value: Option<Bytes>,
+    saved_value: Option<Bytes>,
 
     direction: Direction,
 }
@@ -482,10 +482,10 @@ impl RegionCacheIterator {
             last_key_entry_type = v_type;
             match v_type {
                 ValueType::Value => {
-                    self.pinned_value = Some(self.iter.value().clone());
+                    self.saved_value = Some(self.iter.value().clone());
                 }
                 ValueType::Deletion => {
-                    self.pinned_value.take();
+                    self.saved_value.take();
                 }
             }
 
@@ -519,8 +519,8 @@ impl Iterator for RegionCacheIterator {
 
     fn value(&self) -> &[u8] {
         assert!(self.valid);
-        if self.pinned_value.is_some() {
-            return self.pinned_value.as_ref().unwrap().as_slice();
+        if self.saved_value.is_some() {
+            return self.saved_value.as_ref().unwrap().as_slice();
         }
         self.iter.value().as_slice()
     }
@@ -728,7 +728,7 @@ impl Iterable for RegionCacheSnapshot {
             iter,
             sequence_number: self.sequence_number,
             saved_user_key: vec![],
-            pinned_value: None,
+            saved_value: None,
             direction: Direction::Uninit,
         })
     }
