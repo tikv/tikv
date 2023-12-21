@@ -706,10 +706,6 @@ impl Config {
                 limit
             ));
         }
-        if self.store_batch_system.low_priority_pool_size > 0 {
-            // The store thread pool doesn't need a low-priority thread currently.
-            self.store_batch_system.low_priority_pool_size = 0;
-        }
         if let Some(size) = self.store_batch_system.max_batch_size {
             if size == 0 || size > 10240 {
                 return Err(box_err!(
