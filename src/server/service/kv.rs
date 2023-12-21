@@ -204,7 +204,7 @@ macro_rules! handle_request {
                 resource_group_priority= ResourcePriority::from(resource_control_ctx.override_priority);
             }
             GRPC_RESOURCE_GROUP_COUNTER_VEC
-                    .with_label_values(&[resource_control_ctx.get_resource_group_name()])
+                    .with_label_values(&[resource_control_ctx.get_resource_group_name(), resource_control_ctx.get_resource_group_name()])
                     .inc();
             let resp = $future_name(&self.storage, req);
             let task = async move {
@@ -493,7 +493,10 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
         }
 
         GRPC_RESOURCE_GROUP_COUNTER_VEC
-            .with_label_values(&[resource_control_ctx.get_resource_group_name()])
+            .with_label_values(&[
+                resource_control_ctx.get_resource_group_name(),
+                resource_control_ctx.get_resource_group_name(),
+            ])
             .inc();
 
         let begin_instant = Instant::now();
@@ -535,7 +538,10 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
                 ResourcePriority::from(resource_control_ctx.override_priority);
         }
         GRPC_RESOURCE_GROUP_COUNTER_VEC
-            .with_label_values(&[resource_control_ctx.get_resource_group_name()])
+            .with_label_values(&[
+                resource_control_ctx.get_resource_group_name(),
+                resource_control_ctx.get_resource_group_name(),
+            ])
             .inc();
 
         let begin_instant = Instant::now();
@@ -629,7 +635,10 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
                 ResourcePriority::from(resource_control_ctx.override_priority);
         }
         GRPC_RESOURCE_GROUP_COUNTER_VEC
-            .with_label_values(&[resource_control_ctx.get_resource_group_name()])
+            .with_label_values(&[
+                resource_control_ctx.get_resource_group_name(),
+                resource_control_ctx.get_resource_group_name(),
+            ])
             .inc();
 
         let mut stream = self
@@ -1185,7 +1194,7 @@ fn handle_batch_commands_request<E: Engine, L: LockManager, F: KvFormat>(
                     }
 
                     GRPC_RESOURCE_GROUP_COUNTER_VEC
-                        .with_label_values(&[ resource_control_ctx.get_resource_group_name()])
+                        .with_label_values(&[ resource_control_ctx.get_resource_group_name(), resource_control_ctx.get_resource_group_name()])
                         .inc();
                     if batcher.as_mut().map_or(false, |req_batch| {
                         req_batch.can_batch_get(&req)
@@ -1208,7 +1217,7 @@ fn handle_batch_commands_request<E: Engine, L: LockManager, F: KvFormat>(
                         resource_group_priority = ResourcePriority::from(resource_control_ctx.override_priority);
                     }
                     GRPC_RESOURCE_GROUP_COUNTER_VEC
-                    .with_label_values(&[resource_control_ctx.get_resource_group_name()])
+                    .with_label_values(&[resource_control_ctx.get_resource_group_name(), resource_control_ctx.get_resource_group_name()])
                     .inc();
                     if batcher.as_mut().map_or(false, |req_batch| {
                         req_batch.can_batch_raw_get(&req)
@@ -1231,7 +1240,7 @@ fn handle_batch_commands_request<E: Engine, L: LockManager, F: KvFormat>(
                         resource_group_priority = ResourcePriority::from(resource_control_ctx.override_priority );
                     }
                     GRPC_RESOURCE_GROUP_COUNTER_VEC
-                    .with_label_values(&[resource_control_ctx.get_resource_group_name()])
+                    .with_label_values(&[resource_control_ctx.get_resource_group_name(), resource_control_ctx.get_resource_group_name()])
                     .inc();
                     let begin_instant = Instant::now();
                     let source = req.get_context().get_request_source().to_owned();
@@ -1268,7 +1277,7 @@ fn handle_batch_commands_request<E: Engine, L: LockManager, F: KvFormat>(
                         resource_group_priority = ResourcePriority::from(resource_control_ctx.override_priority);
                     }
                     GRPC_RESOURCE_GROUP_COUNTER_VEC
-                        .with_label_values(&[resource_control_ctx.get_resource_group_name()])
+                        .with_label_values(&[resource_control_ctx.get_resource_group_name(), resource_control_ctx.get_resource_group_name()])
                         .inc();
                     let begin_instant = Instant::now();
                     let source = req.get_context().get_request_source().to_owned();
