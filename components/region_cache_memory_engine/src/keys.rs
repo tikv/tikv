@@ -59,8 +59,6 @@ pub fn decode_key(encoded_key: &[u8]) -> InternalKey<'_> {
     }
 }
 
-// Different with `decode_key`, `decode_key2` returns the suffix u64 as a whole
-// instead of parsing it to be sequence and value type
 #[inline]
 pub fn extract_user_key_and_suffix_u64(encoded_key: &[u8]) -> (&[u8], u64) {
     assert!(encoded_key.len() >= ENC_KEY_SEQ_LENGTH);
