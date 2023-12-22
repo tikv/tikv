@@ -28,6 +28,7 @@ use raftstore::{
 use slog::{debug, Logger};
 use tikv_util::{box_err, codec::number::decode_u64, time::monotonic_raw_now, Either};
 use time::Timespec;
+use tracker::{get_tls_tracker_token, GLOBAL_TRACKERS};
 use txn_types::WriteBatchFlags;
 
 use crate::{
@@ -208,7 +209,7 @@ where
                     ReadRequestPolicy::ReadLocal => {
                         let region = Arc::clone(&delegate.region);
                         let snap = RegionSnapshot::from_snapshot(
-                            Arc::new(delegate.cached_tablet.cache().snapshot()),
+                            Arc::new(delegate.cached_tablet.cache().snapshot(None)),
                             region,
                         );
 
@@ -239,7 +240,7 @@ where
 
                         let region = Arc::clone(&delegate.region);
                         let snap = RegionSnapshot::from_snapshot(
-                            Arc::new(delegate.cached_tablet.cache().snapshot()),
+                            Arc::new(delegate.cached_tablet.cache().snapshot(None)),
                             region,
                         );
 
@@ -263,7 +264,7 @@ where
 
                         let region = Arc::clone(&delegate.region);
                         let snap = RegionSnapshot::from_snapshot(
-                            Arc::new(delegate.cached_tablet.cache().snapshot()),
+                            Arc::new(delegate.cached_tablet.cache().snapshot(None)),
                             region,
                         );
 
@@ -335,7 +336,12 @@ where
 
         async move {
             let (mut fut, mut reader) = match res {
-                Either::Left(Ok(snap)) => return Ok(snap),
+                Either::Left(Ok(snap)) => {
+                    GLOBAL_TRACKERS.with_tracker(get_tls_tracker_token(), |t| {
+                        t.metrics.local_read = true;
+                    });
+                    return Ok(snap);
+                }
                 Either::Left(Err(e)) => return Err(e),
                 Either::Right((fut, reader)) => (fut, reader),
             };
@@ -579,6 +585,10 @@ impl<'r> SnapRequestInspector<'r> {
                 "LocalReader can only serve for exactly one Snap request"
             ));
         }
+
+        fail::fail_point!("perform_read_index", |_| Ok(ReadRequestPolicy::ReadIndex));
+
+        fail::fail_point!("perform_read_local", |_| Ok(ReadRequestPolicy::ReadLocal));
 
         let flags = WriteBatchFlags::from_bits_check(req.get_header().get_flags());
         if flags.contains(WriteBatchFlags::STALE_READ) {

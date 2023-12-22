@@ -7,7 +7,7 @@ use engine_traits::{
     CfName, ExternalSstFileInfo, KvEngine, SstCompressionType, SstExt, SstWriter, SstWriterBuilder,
     CF_DEFAULT, CF_WRITE,
 };
-use external_storage_export::{ExternalStorage, UnpinReader};
+use external_storage::{ExternalStorage, UnpinReader};
 use file_system::Sha256Reader;
 use futures_util::io::AllowStdIo;
 use kvproto::{
@@ -121,7 +121,7 @@ impl<W: SstWriter + 'static> Writer<W> {
             .with_label_values(&[cf.into()])
             .inc_by(self.total_kvs);
         let file_name = format!("{}_{}.sst", name, cf);
-        let iv = Iv::new_ctr();
+        let iv = Iv::new_ctr().map_err(|e| Error::Other(box_err!("new IV error: {:?}", e)))?;
         let encrypter_reader =
             EncrypterReader::new(sst_reader, cipher.cipher_type, &cipher.cipher_key, iv)
                 .map_err(|e| Error::Other(box_err!("new EncrypterReader error: {:?}", e)))?;
@@ -485,9 +485,8 @@ mod tests {
             .build()
             .unwrap();
         let db = rocks.get_rocksdb();
-        let backend = external_storage_export::make_local_backend(temp.path());
-        let storage =
-            external_storage_export::create_storage(&backend, Default::default()).unwrap();
+        let backend = external_storage::make_local_backend(temp.path());
+        let storage = external_storage::create_storage(&backend, Default::default()).unwrap();
 
         // Test empty file.
         let mut r = kvproto::metapb::Region::default();

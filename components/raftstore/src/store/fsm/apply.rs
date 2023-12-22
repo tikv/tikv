@@ -272,6 +272,7 @@ pub enum ExecResult<S> {
         regions: Vec<Region>,
         derived: Region,
         new_split_regions: HashMap<u64, NewSplitPeer>,
+        share_source_region_size: bool,
     },
     PrepareMerge {
         region: Region,
@@ -391,7 +392,7 @@ where
     tag: String,
     timer: Option<Instant>,
     host: CoprocessorHost<EK>,
-    importer: Arc<SstImporter>,
+    importer: Arc<SstImporter<EK>>,
     region_scheduler: Scheduler<RegionTask<EK::Snapshot>>,
     router: ApplyRouter<EK>,
     notifier: Box<dyn Notifier<EK>>,
@@ -474,7 +475,7 @@ where
     pub fn new(
         tag: String,
         host: CoprocessorHost<EK>,
-        importer: Arc<SstImporter>,
+        importer: Arc<SstImporter<EK>>,
         region_scheduler: Scheduler<RegionTask<EK::Snapshot>>,
         engine: EK,
         router: ApplyRouter<EK>,
@@ -661,9 +662,7 @@ where
         results: VecDeque<ExecResult<EK::Snapshot>>,
     ) {
         if self.host.pre_persist(&delegate.region, true, None) {
-            if !delegate.pending_remove {
-                delegate.maybe_write_apply_state(self);
-            }
+            delegate.maybe_write_apply_state(self);
             self.commit_opt(delegate, false);
         } else {
             debug!("do not persist when finish_for";
@@ -678,7 +677,7 @@ where
             exec_res: results,
             metrics: mem::take(&mut delegate.metrics),
             applied_term: delegate.applied_term,
-            bucket_stat: delegate.buckets.clone().map(Box::new),
+            bucket_stat: delegate.buckets.clone(),
         });
         if !self.kv_wb().is_empty() {
             // Pending writes not flushed, need to set seqno to following ApplyRes later
@@ -2114,14 +2113,14 @@ where
 
         match change_type {
             ConfChangeType::AddNode => {
-                let add_ndoe_fp = || {
+                let add_node_fp = || {
                     fail_point!(
                         "apply_on_add_node_1_2",
                         self.id() == 2 && self.region_id() == 1,
                         |_| {}
                     )
                 };
-                add_ndoe_fp();
+                add_node_fp();
 
                 PEER_ADMIN_CMD_COUNTER_VEC
                     .with_label_values(&["add_peer", "all"])
@@ -2516,6 +2515,9 @@ where
         admin_req
             .mut_splits()
             .set_right_derive(split.get_right_derive());
+        admin_req
+            .mut_split()
+            .set_share_source_region_size(split.get_share_source_region_size());
         admin_req.mut_splits().mut_requests().push(split);
         // This method is executed only when there are unapplied entries after being
         // restarted. So there will be no callback, it's OK to return a response
@@ -2560,6 +2562,7 @@ where
         derived.mut_region_epoch().set_version(new_version);
 
         let right_derive = split_reqs.get_right_derive();
+        let share_source_region_size = split_reqs.get_share_source_region_size();
         let mut regions = Vec::with_capacity(new_region_cnt + 1);
         // Note that the split requests only contain ids for new regions, so we need
         // to handle new regions and old region separately.
@@ -2724,6 +2727,7 @@ where
                 regions,
                 derived,
                 new_split_regions,
+                share_source_region_size,
             }),
         ))
     }
@@ -3240,7 +3244,7 @@ where
                     // open files in rocksdb.
                     // TODO: figure out another way to do consistency check without snapshot
                     // or short life snapshot.
-                    snap: ctx.engine.snapshot(),
+                    snap: ctx.engine.snapshot(None),
                 })
             },
         ))
@@ -3868,7 +3872,7 @@ where
     pub applied_term: u64,
     pub exec_res: VecDeque<ExecResult<S>>,
     pub metrics: ApplyMetrics,
-    pub bucket_stat: Option<Box<BucketStat>>,
+    pub bucket_stat: Option<BucketStat>,
     pub write_seqno: Vec<SequenceNumber>,
 }
 
@@ -4070,6 +4074,7 @@ where
     /// Handles peer destroy. When a peer is destroyed, the corresponding apply
     /// delegate should be removed too.
     fn handle_destroy(&mut self, ctx: &mut ApplyContext<EK>, d: Destroy) {
+        fail_point!("on_apply_handle_destroy");
         assert_eq!(d.region_id, self.delegate.region_id());
         if d.merge_from_snapshot {
             assert_eq!(self.delegate.stopped, false);
@@ -4193,7 +4198,7 @@ where
         }
 
         if let Err(e) = snap_task.generate_and_schedule_snapshot::<EK>(
-            apply_ctx.engine.snapshot(),
+            apply_ctx.engine.snapshot(None),
             self.delegate.applied_term,
             self.delegate.apply_state.clone(),
             &apply_ctx.region_scheduler,
@@ -4265,7 +4270,7 @@ where
                 ReadResponse {
                     response: Default::default(),
                     snapshot: Some(RegionSnapshot::from_snapshot(
-                        Arc::new(apply_ctx.engine.snapshot()),
+                        Arc::new(apply_ctx.engine.snapshot(None)),
                         Arc::new(self.delegate.region.clone()),
                     )),
                     txn_extra_op: TxnExtraOp::Noop,
@@ -4655,7 +4660,7 @@ pub struct Builder<EK: KvEngine> {
     tag: String,
     cfg: Arc<VersionTrack<Config>>,
     coprocessor_host: CoprocessorHost<EK>,
-    importer: Arc<SstImporter>,
+    importer: Arc<SstImporter<EK>>,
     region_scheduler: Scheduler<RegionTask<<EK as KvEngine>::Snapshot>>,
     engine: EK,
     sender: Box<dyn Notifier<EK>>,
@@ -5056,7 +5061,7 @@ mod tests {
         (path, engine)
     }
 
-    pub fn create_tmp_importer(path: &str) -> (TempDir, Arc<SstImporter>) {
+    pub fn create_tmp_importer(path: &str) -> (TempDir, Arc<SstImporter<KvTestEngine>>) {
         let dir = Builder::new().prefix(path).tempdir().unwrap();
         let importer = Arc::new(
             SstImporter::new(
@@ -5526,6 +5531,21 @@ mod tests {
         )
     }
 
+    fn cb_conf_change<S: Snapshot>(
+        idx: u64,
+        term: u64,
+        tx: Sender<RaftCmdResponse>,
+    ) -> Proposal<Callback<S>> {
+        proposal(
+            true,
+            idx,
+            term,
+            Callback::write(Box::new(move |resp: WriteResponse| {
+                tx.send(resp.response).unwrap();
+            })),
+        )
+    }
+
     struct EntryBuilder {
         entry: Entry,
         req: RaftCmdRequest,
@@ -5653,6 +5673,14 @@ mod tests {
             self
         }
 
+        fn conf_change(mut self, changes: Vec<ChangePeerRequest>) -> EntryBuilder {
+            let mut req = AdminRequest::default();
+            req.set_cmd_type(AdminCmdType::ChangePeerV2);
+            req.mut_change_peer_v2().set_changes(changes.into());
+            self.req.set_admin_request(req);
+            self
+        }
+
         fn build(mut self) -> Entry {
             self.entry
                 .set_data(self.req.write_to_bytes().unwrap().into());
@@ -5739,7 +5767,6 @@ mod tests {
                 self.header.clone(),
                 bin,
                 1000,
-                false,
             );
             let (bytes, _) = req_encoder.encode();
             self.entry.set_data(bytes.into());
@@ -6924,7 +6951,7 @@ mod tests {
         router.schedule_task(1, Msg::apply(apply2));
 
         let res = fetch_apply_res(&rx);
-        let bucket_version = res.bucket_stat.unwrap().as_ref().meta.version;
+        let bucket_version = res.bucket_stat.unwrap().meta.version;
 
         assert_eq!(bucket_version, 2);
 
@@ -7088,6 +7115,7 @@ mod tests {
             regions,
             derived: _,
             new_split_regions: _,
+            share_source_region_size: _,
         } = apply_res.exec_res.front().unwrap()
         {
             let r8 = regions.get(0).unwrap();
@@ -7646,6 +7674,125 @@ mod tests {
             },
         );
         rx.recv_timeout(Duration::from_millis(500)).unwrap();
+
+        system.shutdown();
+    }
+
+    // When a peer is removed, it is necessary to update its apply state because
+    // this peer may be simultaneously taking a snapshot. An outdated apply state
+    // invalidates the coprocessor cache assumption (apply state must match data
+    // in the snapshot) and potentially lead to a violation of linearizability
+    // (returning stale cache).
+    #[test]
+    fn test_conf_change_remove_node_update_apply_state() {
+        let (_path, engine) = create_tmp_engine("test-delegate");
+        let (_import_dir, importer) = create_tmp_importer("test-delegate");
+        let peer_id = 3;
+        let mut reg = Registration {
+            id: peer_id,
+            term: 1,
+            ..Default::default()
+        };
+        reg.region.set_id(1);
+        reg.region.set_end_key(b"k5".to_vec());
+        reg.region.mut_region_epoch().set_version(3);
+        let peers = vec![new_peer(2, 3), new_peer(4, 5), new_learner_peer(6, 7)];
+        reg.region.set_peers(peers.into());
+        let (tx, apply_res_rx) = mpsc::channel();
+        let sender = Box::new(TestNotifier { tx });
+        let coprocessor_host = CoprocessorHost::<KvTestEngine>::default();
+        let (region_scheduler, _) = dummy_scheduler();
+        let cfg = Arc::new(VersionTrack::new(Config::default()));
+        let (router, mut system) = create_apply_batch_system(&cfg.value(), None);
+        let pending_create_peers = Arc::new(Mutex::new(HashMap::default()));
+        let builder = super::Builder::<KvTestEngine> {
+            tag: "test-store".to_owned(),
+            cfg,
+            sender,
+            importer,
+            region_scheduler,
+            coprocessor_host,
+            engine: engine.clone(),
+            router: router.clone(),
+            store_id: 2,
+            pending_create_peers,
+        };
+        system.spawn("test-conf-change".to_owned(), builder);
+
+        router.schedule_task(1, Msg::Registration(reg.dup()));
+
+        let mut index_id = 1;
+        let epoch = reg.region.get_region_epoch().to_owned();
+
+        // Write some data.
+        let (capture_tx, capture_rx) = mpsc::channel();
+        let put_entry = EntryBuilder::new(index_id, 1)
+            .put(b"k1", b"v1")
+            .epoch(epoch.get_conf_ver(), epoch.get_version())
+            .build();
+        router.schedule_task(
+            1,
+            Msg::apply(apply(
+                peer_id,
+                1,
+                1,
+                vec![put_entry],
+                vec![cb(index_id, 1, capture_tx)],
+            )),
+        );
+        let resp = capture_rx.recv_timeout(Duration::from_secs(3)).unwrap();
+        assert!(!resp.get_header().has_error(), "{:?}", resp);
+        let initial_state: RaftApplyState = engine
+            .get_msg_cf(CF_RAFT, &keys::apply_state_key(1))
+            .unwrap()
+            .unwrap();
+        assert_ne!(initial_state.get_applied_index(), 0);
+        match apply_res_rx.recv_timeout(Duration::from_secs(3)) {
+            Ok(PeerMsg::ApplyRes {
+                res: TaskRes::Apply(apply_res),
+            }) => assert_eq!(apply_res.apply_state, initial_state),
+            e => panic!("unexpected result: {:?}", e),
+        }
+        index_id += 1;
+
+        // Remove itself.
+        let (capture_tx, capture_rx) = mpsc::channel();
+        let mut remove_node = ChangePeerRequest::default();
+        remove_node.set_change_type(ConfChangeType::RemoveNode);
+        remove_node.set_peer(new_peer(2, 3));
+        let conf_change = EntryBuilder::new(index_id, 1)
+            .conf_change(vec![remove_node])
+            .epoch(epoch.get_conf_ver(), epoch.get_version())
+            .build();
+        router.schedule_task(
+            1,
+            Msg::apply(apply(
+                peer_id,
+                1,
+                1,
+                vec![conf_change],
+                vec![cb_conf_change(index_id, 1, capture_tx)],
+            )),
+        );
+        let resp = capture_rx.recv_timeout(Duration::from_secs(3)).unwrap();
+        assert!(!resp.get_header().has_error(), "{:?}", resp);
+
+        let apply_state: RaftApplyState = engine
+            .get_msg_cf(CF_RAFT, &keys::apply_state_key(1))
+            .unwrap()
+            .unwrap();
+        match apply_res_rx.recv_timeout(Duration::from_secs(3)) {
+            Ok(PeerMsg::ApplyRes {
+                res: TaskRes::Apply(apply_res),
+            }) => assert_eq!(apply_res.apply_state, apply_state),
+            e => panic!("unexpected result: {:?}", e),
+        }
+        assert!(
+            apply_state.get_applied_index() > initial_state.get_applied_index(),
+            "\n{:?}\n{:?}",
+            apply_state,
+            initial_state
+        );
 
         system.shutdown();
     }

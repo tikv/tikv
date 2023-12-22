@@ -1,13 +1,9 @@
-log-level = "info"
-log-file = ""
-log-format = "text"
 slow-log-file = "slow_foo"
 slow-log-threshold = "1s"
-log-rotation-timespan = "1d"
 panic-when-unexpected-key-or-data = true
 abort-on-panic = true
 memory-usage-limit = "10GB"
-memory-usage-high-water= 0.65
+memory-usage-high-water = 0.65
 
 [log]
 level = "fatal"
@@ -18,6 +14,10 @@ filename = "foo"
 max-size = 1
 max-backups = 2
 max-days = 3
+
+[memory]
+enable-heap-profiling = false
+profiling-sample-per-bytes = "1MB"
 
 [readpool.unified]
 min-thread-count = 5
@@ -101,6 +101,7 @@ reserve-space = "10GB"
 reserve-raft-space = "2GB"
 enable-ttl = true
 ttl-check-poll-interval = "0s"
+txn-status-cache-capacity = 1000
 
 [storage.block-cache]
 capacity = "40GB"
@@ -133,9 +134,7 @@ export-priority = "high"
 other-priority = "low"
 
 [pd]
-endpoints = [
-    "example.com:443",
-]
+endpoints = ["example.com:443"]
 
 [metric]
 job = "tikv_1"
@@ -172,6 +171,7 @@ region-compact-min-redundant-rows = 999
 region-compact-redundant-rows-percent = 33
 pd-heartbeat-tick-interval = "12m"
 pd-store-heartbeat-tick-interval = "12s"
+pd-report-min-resolved-ts-interval = "233ms"
 snap-mgr-gc-tick-interval = "12m"
 snap-gc-timeout = "12h"
 snap-wait-split-duration = "12h"
@@ -183,6 +183,7 @@ max-peer-down-duration = "12m"
 max-leader-missing-duration = "12h"
 abnormal-leader-missing-duration = "6h"
 peer-stale-state-check-interval = "2h"
+gc-peer-check-interval = "1d"
 leader-transfer-max-log-lag = 123
 snap-apply-batch-size = "12MB"
 snap-apply-copy-symlink = true
@@ -220,13 +221,13 @@ waterfall-metrics = true
 io-reschedule-concurrent-max-count = 1234
 io-reschedule-hotpot-duration = "4321s"
 inspect-interval = "444ms"
+inspect-cpu-util-thd = 0.666
 check-leader-lease-interval = "123ms"
 renew-leader-lease-advance-duration = "456ms"
 reactive-memory-lock-tick-interval = "566ms"
 reactive-memory-lock-timeout-tick = 8
 check-long-uncommitted-interval = "1s"
 long-uncommitted-base-threshold = "1s"
-report-min-resolved-ts-interval = "233ms"
 report-region-buckets-tick-interval = "1234s"
 max-snapshot-file-raw-size = "10GB"
 unreachable-backoff = "111s"
@@ -300,15 +301,7 @@ bloom-filter-bits-per-key = 123
 block-based-bloom-filter = true
 ribbon-filter-above-level = 1
 read-amp-bytes-per-bit = 0
-compression-per-level = [
-    "no",
-    "no",
-    "zstd",
-    "zstd",
-    "no",
-    "zstd",
-    "lz4",
-]
+compression-per-level = ["no", "no", "zstd", "zstd", "no", "zstd", "lz4"]
 bottommost-level-compression = "disable"
 bottommost-zstd-compression-dict-size = 1024
 bottommost-zstd-compression-sample-size = 1024
@@ -346,7 +339,8 @@ periodic-compaction-seconds = "10d"
 
 [rocksdb.defaultcf.titan]
 min-blob-size = "2018B"
-blob-file-compression = "zstd"
+blob-file-compression = "lz4"
+zstd-dict-size = "16KB"
 blob-cache-size = "12GB"
 min-gc-batch-size = "12KB"
 max-gc-batch-size = "12MB"
@@ -371,15 +365,7 @@ bloom-filter-bits-per-key = 123
 block-based-bloom-filter = true
 ribbon-filter-above-level = 1
 read-amp-bytes-per-bit = 0
-compression-per-level = [
-    "no",
-    "no",
-    "zstd",
-    "zstd",
-    "no",
-    "zstd",
-    "lz4",
-]
+compression-per-level = ["no", "no", "zstd", "zstd", "no", "zstd", "lz4"]
 write-buffer-size = "1MB"
 max-write-buffer-number = 12
 min-write-buffer-number-to-merge = 12
@@ -425,16 +411,9 @@ bloom-filter-bits-per-key = 123
 block-based-bloom-filter = true
 ribbon-filter-above-level = 1
 read-amp-bytes-per-bit = 0
-compression-per-level = [
-    "no",
-    "no",
-    "zstd",
-    "zstd",
-    "no",
-    "zstd",
-    "lz4",
-]
+compression-per-level = ["no", "no", "zstd", "zstd", "no", "zstd", "lz4"]
 write-buffer-size = "1MB"
+write-buffer-limit = "16MB"
 max-write-buffer-number = 12
 min-write-buffer-number-to-merge = 12
 max-bytes-for-level-base = "12KB"
@@ -479,15 +458,7 @@ bloom-filter-bits-per-key = 123
 block-based-bloom-filter = true
 ribbon-filter-above-level = 1
 read-amp-bytes-per-bit = 0
-compression-per-level = [
-    "no",
-    "no",
-    "zstd",
-    "zstd",
-    "no",
-    "zstd",
-    "lz4",
-]
+compression-per-level = ["no", "no", "zstd", "zstd", "no", "zstd", "lz4"]
 write-buffer-size = "1MB"
 max-write-buffer-number = 12
 min-write-buffer-number-to-merge = 12
@@ -565,15 +536,7 @@ bloom-filter-bits-per-key = 123
 block-based-bloom-filter = true
 ribbon-filter-above-level = 1
 read-amp-bytes-per-bit = 0
-compression-per-level = [
-    "no",
-    "no",
-    "zstd",
-    "zstd",
-    "no",
-    "zstd",
-    "lz4",
-]
+compression-per-level = ["no", "no", "zstd", "zstd", "no", "zstd", "lz4"]
 write-buffer-size = "1MB"
 max-write-buffer-number = 12
 min-write-buffer-number-to-merge = 12
@@ -605,7 +568,8 @@ max-compactions = 3
 
 [raftdb.defaultcf.titan]
 min-blob-size = "2018B"
-blob-file-compression = "zstd"
+blob-file-compression = "lz4"
+zstd-dict-size = "16KB"
 blob-cache-size = "12GB"
 min-gc-batch-size = "12KB"
 max-gc-batch-size = "12MB"
@@ -633,9 +597,7 @@ ca-path = "invalid path"
 cert-path = "invalid path"
 key-path = "invalid path"
 redact-info-log = true
-cert-allowed-cn = [
-    "example.tikv.com",
-]
+cert-allowed-cn = ["example.tikv.com"]
 
 [security.encryption]
 data-encryption-method = "aes128-ctr"
@@ -681,11 +643,12 @@ batch-keys = 256
 max-write-bytes-per-sec = "10MB"
 enable-compaction-filter = false
 compaction-filter-skip-version-check = true
+num-threads = 2
 
 [pessimistic-txn]
-enabled = false # test backward compatibility
+enabled = false                # test backward compatibility
 wait-for-lock-timeout = "10ms"
-wake-up-delay-duration = 100 # test backward compatibility
+wake-up-delay-duration = 100   # test backward compatibility
 pipelined = false
 in-memory = false
 
@@ -695,7 +658,9 @@ old-value-cache-size = 0
 hibernate-regions-compatible = false
 incremental-scan-threads = 3
 incremental-scan-concurrency = 4
+incremental-scan-concurrency-limit = 5
 incremental-scan-speed-limit = 7
+incremental-fetch-speed-limit = 8
 incremental-scan-ts-filter-ratio = 0.7
 tso-worker-threads = 2
 old-value-cache-memory-quota = "14MB"
@@ -705,6 +670,8 @@ sink-memory-quota = "7MB"
 enable = true
 advance-ts-interval = "5s"
 scan-lock-pool-size = 1
+memory-quota = "1MB"
+incremental-scan-concurrency = 7
 
 [split]
 detect-times = 10

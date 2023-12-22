@@ -12,9 +12,9 @@ required-features = ["failpoints", "testexport"]
 [features]
 default = ["failpoints", "testexport", "test-engine-kv-rocksdb", "cloud-aws", "cloud-gcp", "cloud-azure"]
 failpoints = ["fail/failpoints", "tikv/failpoints"]
-cloud-aws = ["external_storage_export/cloud-aws"]
-cloud-gcp = ["external_storage_export/cloud-gcp"]
-cloud-azure = ["external_storage_export/cloud-azure"]
+cloud-aws = ["encryption_export/cloud-aws"]
+cloud-gcp = ["encryption_export/cloud-gcp"]
+cloud-azure = ["encryption_export/cloud-azure"]
 testexport = ["raftstore/testexport", "raftstore-v2/testexport", "tikv/testexport", "engine_tiflash/testexport", "engine_store_ffi/testexport"]
 profiling = ["profiler/profiling"]
 
@@ -44,7 +44,7 @@ snmalloc = ["tikv/snmalloc"]
 mem-profiling = ["tikv/mem-profiling"]
 sse = ["tikv/sse"]
 portable = ["tikv/portable"]
-
+openssl-vendored = ["tikv/openssl-vendored"]
 enable-pagestorage = []
 
 [dependencies]
@@ -57,6 +57,7 @@ collections = { workspace = true }
 crc64fast = "0.1"
 crossbeam = "0.8"
 encryption = { workspace = true }
+encryption_export = { workspace = true }
 engine_rocks_helper = { workspace = true }
 engine_store_ffi = { workspace = true, default-features = false }
 engine_test = { workspace = true, default-features = false }
@@ -65,7 +66,7 @@ error_code = { workspace = true }
 fail = "0.5"
 file_system = { workspace = true }
 futures = "0.3"
-grpcio = { workspace = true }
+grpcio = { version = "0.10", default-features = false, features = ["openssl-vendored", "protobuf-codec"] }
 grpcio-health = { version = "0.10", default-features = false }
 kvproto = { workspace = true }
 libc = "0.2"
@@ -117,7 +118,6 @@ criterion-cpu-time = "0.1"
 engine_rocks = { workspace = true }
 engine_test = { workspace = true }
 engine_traits = { workspace = true }
-external_storage_export = { workspace = true }
 file_system = { workspace = true }
 hex = "0.4"
 hyper = { version = "0.14", default-features = false, features = ["runtime"] }

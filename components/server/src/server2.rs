@@ -32,7 +32,7 @@ use backup_stream::{
     BackupStreamResolver,
 };
 use causal_ts::CausalTsProviderImpl;
-use cdc::{CdcConfigManager, MemoryQuota};
+use cdc::CdcConfigManager;
 use concurrency_manager::ConcurrencyManager;
 use engine_rocks::{from_rocks_compression_type, RocksEngine, RocksStatistics};
 use engine_traits::{Engines, KvEngine, MiscExt, RaftEngine, TabletRegistry, CF_DEFAULT, CF_WRITE};
@@ -73,7 +73,7 @@ use service::{service_event::ServiceEvent, service_manager::GrpcServiceManager};
 use tikv::{
     config::{
         loop_registry, ConfigController, ConfigurableDb, DbConfigManger, DbType, LogConfigManager,
-        TikvConfig,
+        MemoryConfigManager, TikvConfig,
     },
     coprocessor::{self, MEMTRACE_ROOT as MEMTRACE_COPROCESSOR},
     coprocessor_v2,
@@ -103,9 +103,11 @@ use tikv::{
         Engine, Storage,
     },
 };
+use tikv_alloc::{add_thread_memory_accessor, remove_thread_memory_accessor};
 use tikv_util::{
     check_environment_variables,
     config::VersionTrack,
+    memory::MemoryQuota,
     mpsc as TikvMpsc,
     quota_limiter::{QuotaLimitConfigManager, QuotaLimiter},
     sys::{disk, path_in_diff_mount_point, register_memory_usage_high_water, SysQuota},
@@ -192,15 +194,6 @@ pub fn run_tikv(
     service_event_tx: TikvMpsc::Sender<ServiceEvent>,
     service_event_rx: TikvMpsc::Receiver<ServiceEvent>,
 ) {
-    // Sets the global logger ASAP.
-    // It is okay to use the config w/o `validate()`,
-    // because `initial_logger()` handles various conditions.
-    initial_logger(&config);
-
-    // Print version information.
-    let build_timestamp = option_env!("TIKV_BUILD_TIME");
-    tikv::log_tikv_info(build_timestamp);
-
     // Print resource quota.
     SysQuota::log_quota();
     CPU_CORES_QUOTA_GAUGE.set(SysQuota::cpu_cores_quota());
@@ -243,7 +236,7 @@ struct TikvServer<ER: RaftEngine> {
     env: Arc<Environment>,
     cdc_worker: Option<Box<LazyWorker<cdc::Task>>>,
     cdc_scheduler: Option<Scheduler<cdc::Task>>,
-    cdc_memory_quota: Option<MemoryQuota>,
+    cdc_memory_quota: Option<Arc<MemoryQuota>>,
     backup_stream_scheduler: Option<tikv_util::worker::Scheduler<backup_stream::Task>>,
     sst_worker: Option<Box<LazyWorker<String>>>,
     quota_limiter: Arc<QuotaLimiter>,
@@ -262,7 +255,7 @@ struct TikvEngines<EK: KvEngine, ER: RaftEngine> {
 struct Servers<EK: KvEngine, ER: RaftEngine> {
     lock_mgr: LockManager,
     server: LocalServer<EK, ER>,
-    importer: Arc<SstImporter>,
+    importer: Arc<SstImporter<EK>>,
     rsmeter_pubsub_service: resource_metering::PubSubService,
 }
 
@@ -288,6 +281,13 @@ where
             EnvBuilder::new()
                 .cq_count(config.server.grpc_concurrency)
                 .name_prefix(thd_name!(GRPC_THREAD_PREFIX))
+                .after_start(|| {
+                    // SAFETY: we will call `remove_thread_memory_accessor` at before_stop.
+                    unsafe { add_thread_memory_accessor() };
+                })
+                .before_stop(|| {
+                    remove_thread_memory_accessor();
+                })
                 .build(),
         );
         let pd_client = TikvServerCore::connect_to_pd_cluster(
@@ -432,6 +432,7 @@ where
         );
 
         cfg_controller.register(tikv::config::Module::Log, Box::new(LogConfigManager));
+        cfg_controller.register(tikv::config::Module::Memory, Box::new(MemoryConfigManager));
 
         let lock_mgr = LockManager::new(&self.core.config.pessimistic_txn);
         cfg_controller.register(
@@ -459,6 +460,7 @@ where
                 engines.engine.clone(),
                 resource_ctl,
                 CleanupMethod::Remote(self.core.background_worker.remote()),
+                true,
             ))
         } else {
             None
@@ -637,7 +639,9 @@ where
             Box::new(CdcConfigManager(cdc_scheduler.clone())),
         );
         // Start cdc endpoint.
-        let cdc_memory_quota = MemoryQuota::new(self.core.config.cdc.sink_memory_quota.0 as _);
+        let cdc_memory_quota = Arc::new(MemoryQuota::new(
+            self.core.config.cdc.sink_memory_quota.0 as _,
+        ));
         let cdc_endpoint = cdc::Endpoint::new(
             self.core.config.server.cluster_id,
             &self.core.config.cdc,
@@ -937,6 +941,7 @@ where
         backup_worker.start(backup_endpoint);
 
         // Import SST service.
+        let region_info_accessor = self.region_info_accessor.as_ref().unwrap().clone();
         let import_service = ImportSstService::new(
             self.core.config.import.clone(),
             self.core.config.raft_store.raft_entry_max_size,
@@ -945,6 +950,7 @@ where
             servers.importer.clone(),
             Some(self.router.as_ref().unwrap().store_meta().clone()),
             self.resource_manager.clone(),
+            Arc::new(region_info_accessor),
         );
         let import_cfg_mgr = import_service.get_config_manager();
 
@@ -1290,7 +1296,6 @@ where
                 self.cfg_controller.clone().unwrap(),
                 Arc::new(self.core.config.security.clone()),
                 self.engines.as_ref().unwrap().engine.raft_extension(),
-                self.core.store_path.clone(),
                 self.resource_manager.clone(),
                 self.grpc_service_mgr.clone(),
             ) {
@@ -1482,7 +1487,11 @@ impl<CER: ConfiguredRaftEngine> TikvServer<CER> {
         let cfg_controller = self.cfg_controller.as_mut().unwrap();
         cfg_controller.register(
             tikv::config::Module::Rocksdb,
-            Box::new(DbConfigManger::new(registry.clone(), DbType::Kv)),
+            Box::new(DbConfigManger::new(
+                cfg_controller.get_current().rocksdb,
+                registry.clone(),
+                DbType::Kv,
+            )),
         );
         self.tablet_registry = Some(registry.clone());
         raft_engine.register_config(cfg_controller);

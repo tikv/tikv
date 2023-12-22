@@ -34,6 +34,7 @@ nortcheck = ["engine_rocks/nortcheck", "engine_tiflash/nortcheck"]
 backup-stream-debug = ["backup-stream/backup-stream-debug"]
 testexport = ["engine_tiflash/testexport", "engine_store_ffi/testexport", "tikv/testexport"]
 pprof-fp = ["tikv/pprof-fp"]
+openssl-vendored = ["tikv/openssl-vendored", "openssl/vendored"]
 
 [dependencies]
 api_version = { workspace = true }
@@ -74,7 +75,7 @@ mime = "0.3.13"
 nix = "0.23"
 online_config = { workspace = true }
 
-openssl = "0.10"
+openssl = { workspace = true }
 pd_client = { workspace = true, default-features = false }
 pin-project = "1.0"
 pprof = { version = "0.11", default-features = false, features = ["flamegraph", "protobuf-codec", "cpp"] }

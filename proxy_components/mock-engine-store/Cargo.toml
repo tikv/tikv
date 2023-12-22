@@ -31,6 +31,7 @@ test-engines-panic = [
   "proxy_server/test-engines-panic",
 ]
 testexport = ["proxy_server/testexport"]
+openssl-vendored = ["tikv/openssl-vendored", "openssl/vendored"]
 
 [dependencies]
 api_version = { workspace = true, default-features = false }
@@ -40,6 +41,7 @@ collections = { workspace = true }
 concurrency_manager = { workspace = true, default-features = false }
 crossbeam = "0.8"
 encryption = { workspace = true, default-features = false }
+openssl = { workspace = true } # TODO only for feature
 encryption_export = { workspace = true, default-features = false }
 engine_rocks = { workspace = true, default-features = false }
 engine_store_ffi = { workspace = true, default-features = false }

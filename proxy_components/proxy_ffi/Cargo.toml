@@ -23,8 +23,14 @@ test-engines-panic = [
   "engine_test/test-engines-panic",
 ]
 
+# TODO use encryption/openssl-vendored if later supports
+openssl-vendored = [
+  "openssl/vendored"
+]
+
 [dependencies]
 encryption = { workspace = true, default-features = false }
+openssl = { workspace = true } # TODO only for feature
 engine_rocks = { workspace = true, default-features = false }
 engine_traits = { workspace = true, default-features = false }
 engine_test = { workspace = true, default-features = false }

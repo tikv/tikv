@@ -4,20 +4,15 @@ version = "0.0.1"
 edition = "2021"
 publish = false
 
-[features]
-default = ["cloud-aws", "cloud-gcp", "cloud-azure"]
-cloud-aws = ["external_storage_export/cloud-aws"]
-cloud-gcp = ["external_storage_export/cloud-gcp"]
-cloud-azure = ["external_storage_export/cloud-azure"]
-
 [dependencies]
 api_version = { workspace = true }
 backup = { workspace = true }
 collections = { workspace = true }
 concurrency_manager = { workspace = true }
 crc64fast = "0.1"
+engine_rocks = { workspace = true }
 engine_traits = { workspace = true }
-external_storage_export = { workspace = true }
+external_storage ={ workspace = true }
 file_system = { workspace = true }
 futures = "0.3"
 futures-executor = "0.3"

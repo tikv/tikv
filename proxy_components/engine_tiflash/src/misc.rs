@@ -444,6 +444,11 @@ impl MiscExt for RocksEngine {
             .get();
         Ok(n)
     }
+
+    type DiskEngine = RocksEngine;
+    fn get_disk_engine(&self) -> &Self::DiskEngine {
+        self
+    }
 }
 
 #[cfg(test)]

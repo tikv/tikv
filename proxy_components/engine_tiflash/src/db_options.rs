@@ -112,6 +112,14 @@ impl DbOptions for RocksDbOptions {
     fn set_titandb_options(&mut self, opts: &Self::TitanDbOptions) {
         self.0.set_titandb_options(opts.as_raw())
     }
+
+    fn get_flush_size(&self) -> Result<u64> {
+        if let Some(m) = self.0.get_write_buffer_manager() {
+            return Ok(m.flush_size() as u64);
+        }
+
+        Err(box_err!("write buffer manager not found"))
+    }
 }
 
 pub struct RocksTitanDbOptions(RawTitanDBOptions);

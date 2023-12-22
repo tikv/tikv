@@ -100,6 +100,14 @@ impl DbOptions for RocksDbOptions {
         Ok(())
     }
 
+    fn get_flush_size(&self) -> Result<u64> {
+        if let Some(m) = self.0.get_write_buffer_manager() {
+            return Ok(m.flush_size() as u64);
+        }
+
+        Err(box_err!("write buffer manager not found"))
+    }
+
     fn set_flush_oldest_first(&mut self, f: bool) -> Result<()> {
         if let Some(m) = self.0.get_write_buffer_manager() {
             m.set_flush_oldest_first(f);

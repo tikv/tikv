@@ -17,10 +17,11 @@ use kvproto::{errorpb, kvrpcpb::CommandPri};
 use online_config::{ConfigChange, ConfigManager, ConfigValue, Result as CfgResult};
 use prometheus::{core::Metric, Histogram, IntCounter, IntGauge};
 use resource_control::{
-    with_resource_limiter, ControlledFuture, ResourceController, ResourceLimiter, TaskMetadata,
+    with_resource_limiter, ControlledFuture, ResourceController, ResourceLimiter,
 };
 use thiserror::Error;
 use tikv_util::{
+    resource_control::TaskMetadata,
     sys::{cpu_time::ProcessStat, SysQuota},
     time::Instant,
     worker::{Runnable, RunnableWithTimer, Scheduler, Worker},
@@ -270,6 +271,21 @@ impl ReadPoolHandle {
         }
     }
 
+    pub fn set_max_tasks_per_worker(&mut self, tasks_per_thread: usize) {
+        match self {
+            ReadPoolHandle::FuturePools { .. } => {
+                unreachable!()
+            }
+            ReadPoolHandle::Yatp {
+                max_tasks,
+                pool_size,
+                ..
+            } => {
+                *max_tasks = tasks_per_thread.saturating_mul(*pool_size);
+            }
+        }
+    }
+
     pub fn get_ewma_time_slice(&self) -> Option<Duration> {
         match self {
             ReadPoolHandle::FuturePools { .. } => None,
@@ -312,6 +328,10 @@ impl ReadPoolHandle {
         let mut busy_err = errorpb::ServerIsBusy::default();
         busy_err.set_reason("estimated wait time exceeds threshold".to_owned());
         busy_err.estimated_wait_ms = u32::try_from(estimated_wait.as_millis()).unwrap_or(u32::MAX);
+        warn!("Already many pending tasks in the read queue, task is rejected";
+            "busy_threshold" => ?&busy_threshold,
+            "busy_err" => ?&busy_err,
+        );
         Err(busy_err)
     }
 }
@@ -429,6 +449,7 @@ pub fn build_yatp_read_pool<E: Engine, R: FlowStatsReporter>(
     engine: E,
     resource_ctl: Option<Arc<ResourceController>>,
     cleanup_method: CleanupMethod,
+    enable_task_wait_metrics: bool,
 ) -> ReadPool {
     let unified_read_pool_name = get_unified_read_pool_name();
     build_yatp_read_pool_with_name(
@@ -438,6 +459,7 @@ pub fn build_yatp_read_pool<E: Engine, R: FlowStatsReporter>(
         resource_ctl,
         cleanup_method,
         unified_read_pool_name,
+        enable_task_wait_metrics,
     )
 }
 
@@ -448,6 +470,7 @@ pub fn build_yatp_read_pool_with_name<E: Engine, R: FlowStatsReporter>(
     resource_ctl: Option<Arc<ResourceController>>,
     cleanup_method: CleanupMethod,
     unified_read_pool_name: String,
+    enable_task_wait_metrics: bool,
 ) -> ReadPool {
     let raftkv = Arc::new(Mutex::new(engine));
     let builder = YatpPoolBuilder::new(ReporterTicker { reporter })
@@ -472,7 +495,9 @@ pub fn build_yatp_read_pool_with_name<E: Engine, R: FlowStatsReporter>(
         })
         .before_stop(|| unsafe {
             destroy_tls_engine::<E>();
-        });
+        })
+        .enable_task_wait_metrics(enable_task_wait_metrics);
+
     let pool = if let Some(ref r) = resource_ctl {
         builder.build_priority_pool(r.clone())
     } else {
@@ -583,6 +608,9 @@ impl Runnable for ReadPoolConfigRunner {
                     self.cur_thread_count = self.core_thread_count;
                 }
             }
+            Task::MaxTasksPerWorker(s) => {
+                self.handle.set_max_tasks_per_worker(s);
+            }
         }
     }
 }
@@ -667,6 +695,7 @@ impl ReadPoolConfigRunner {
 enum Task {
     PoolSize(usize),
     AutoAdjust(bool),
+    MaxTasksPerWorker(usize),
 }
 
 impl std::fmt::Display for Task {
@@ -674,6 +703,7 @@ impl std::fmt::Display for Task {
         match self {
             Task::PoolSize(s) => write!(f, "PoolSize({})", *s),
             Task::AutoAdjust(s) => write!(f, "AutoAdjust({})", *s),
+            Task::MaxTasksPerWorker(s) => write!(f, "MaxTasksPerWorker({})", *s),
         }
     }
 }
@@ -725,6 +755,10 @@ impl ConfigManager for ReadPoolConfigManager {
             }
             if let Some(ConfigValue::Bool(b)) = unified.get("auto_adjust_pool_size") {
                 self.scheduler.schedule(Task::AutoAdjust(*b))?;
+            }
+            if let Some(ConfigValue::Usize(max_tasks)) = unified.get("max_tasks_per_worker") {
+                self.scheduler
+                    .schedule(Task::MaxTasksPerWorker(*max_tasks))?;
             }
         }
         info!(
@@ -796,8 +830,16 @@ mod tests {
         // max running tasks number should be 2*1 = 2
 
         let engine = TestEngineBuilder::new().build().unwrap();
-        let pool =
-            build_yatp_read_pool(&config, DummyReporter, engine, None, CleanupMethod::InPlace);
+        let name = "test-yatp-full";
+        let pool = build_yatp_read_pool_with_name(
+            &config,
+            DummyReporter,
+            engine,
+            None,
+            CleanupMethod::InPlace,
+            name.to_owned(),
+            false,
+        );
 
         let gen_task = || {
             let (tx, rx) = oneshot::channel::<()>();
@@ -831,6 +873,12 @@ mod tests {
         handle
             .spawn(task4, CommandPri::Normal, 4, TaskMetadata::default(), None)
             .unwrap();
+        assert_eq!(
+            UNIFIED_READ_POOL_RUNNING_TASKS
+                .with_label_values(&[name])
+                .get(),
+            2
+        );
     }
 
     #[test]
@@ -844,8 +892,14 @@ mod tests {
         // max running tasks number should be 2*1 = 2
 
         let engine = TestEngineBuilder::new().build().unwrap();
-        let pool =
-            build_yatp_read_pool(&config, DummyReporter, engine, None, CleanupMethod::InPlace);
+        let pool = build_yatp_read_pool(
+            &config,
+            DummyReporter,
+            engine,
+            None,
+            CleanupMethod::InPlace,
+            false,
+        );
 
         let gen_task = || {
             let (tx, rx) = oneshot::channel::<()>();
@@ -897,11 +951,17 @@ mod tests {
             max_tasks_per_worker: 1,
             ..Default::default()
         };
-        // max running tasks number should be 2*1 = 2
+        // max running tasks number for each priority should be 2*1 = 2
 
         let engine = TestEngineBuilder::new().build().unwrap();
-        let pool =
-            build_yatp_read_pool(&config, DummyReporter, engine, None, CleanupMethod::InPlace);
+        let pool = build_yatp_read_pool(
+            &config,
+            DummyReporter,
+            engine,
+            None,
+            CleanupMethod::InPlace,
+            false,
+        );
 
         let gen_task = || {
             let (tx, rx) = oneshot::channel::<()>();
@@ -930,6 +990,9 @@ mod tests {
             Err(ReadPoolError::UnifiedReadPoolFull) => {}
             _ => panic!("should return full error"),
         }
+
+        // TODO: move running task by priority to read_pool.
+        // spawn a high-priority task, should not return Full error.
 
         tx1.send(()).unwrap();
         tx2.send(()).unwrap();
@@ -1027,6 +1090,7 @@ mod tests {
                 resource_manager,
                 CleanupMethod::InPlace,
                 name.clone(),
+                false,
             );
 
             let gen_task = || {

@@ -471,6 +471,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         // Only leaders need to update applied_term.
         if progress_to_be_updated && self.is_leader() {
             if applied_term == self.term() {
+                fail::fail_point!("on_applied_current_term");
                 ctx.coprocessor_host
                     .on_applied_current_term(StateRole::Leader, self.region());
             }

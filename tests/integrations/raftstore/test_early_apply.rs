@@ -2,6 +2,7 @@
 
 use std::time::Duration;
 
+use engine_rocks::RocksEngine;
 use engine_traits::{RaftEngine, RaftEngineDebug};
 use kvproto::raft_serverpb::RaftLocalState;
 use raft::eraftpb::MessageType;
@@ -43,10 +44,14 @@ enum DataLost {
     AllLost,
 }
 
-fn test<A, C>(cluster: &mut Cluster<NodeCluster>, action: A, check: C, mode: DataLost)
-where
-    A: FnOnce(&mut Cluster<NodeCluster>),
-    C: FnOnce(&mut Cluster<NodeCluster>),
+fn test<A, C>(
+    cluster: &mut Cluster<RocksEngine, NodeCluster<RocksEngine>>,
+    action: A,
+    check: C,
+    mode: DataLost,
+) where
+    A: FnOnce(&mut Cluster<RocksEngine, NodeCluster<RocksEngine>>),
+    C: FnOnce(&mut Cluster<RocksEngine, NodeCluster<RocksEngine>>),
 {
     let filter = match mode {
         DataLost::AllLost | DataLost::LeaderCommit => RegionPacketFilter::new(1, 1)
@@ -109,7 +114,7 @@ fn test_early_apply(mode: DataLost) {
     let mut cluster = new_node_cluster(0, 3);
     cluster.pd_client.disable_default_operator();
     // So compact log will not be triggered automatically.
-    configure_for_request_snapshot(&mut cluster);
+    configure_for_request_snapshot(&mut cluster.cfg);
     cluster.run();
     if mode == DataLost::LeaderCommit || mode == DataLost::AllLost {
         cluster.must_transfer_leader(1, new_peer(1, 1));
@@ -175,7 +180,7 @@ fn test_update_internal_apply_index() {
     let mut cluster = new_node_cluster(0, 4);
     cluster.pd_client.disable_default_operator();
     // So compact log will not be triggered automatically.
-    configure_for_request_snapshot(&mut cluster);
+    configure_for_request_snapshot(&mut cluster.cfg);
     cluster.run();
     cluster.must_transfer_leader(1, new_peer(3, 3));
     cluster.must_put(b"k1", b"v1");

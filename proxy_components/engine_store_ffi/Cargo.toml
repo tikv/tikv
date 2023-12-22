@@ -23,9 +23,14 @@ test-engines-panic = [
   "engine_test/test-engines-panic",
 ]
 
-cloud-aws = ["sst_importer/cloud-aws"]
-cloud-gcp = ["sst_importer/cloud-gcp"]
-cloud-azure = ["sst_importer/cloud-azure"]
+cloud-aws = ["encryption_export/cloud-aws"]
+cloud-gcp = ["encryption_export/cloud-gcp"]
+cloud-azure = ["encryption_export/cloud-azure"]
+
+# TODO use encryption/openssl-vendored if later supports
+openssl-vendored = [
+  "openssl/vendored"
+]
 
 [dependencies]
 batch-system = { workspace = true, default-features = false }
@@ -36,7 +41,7 @@ collections = { workspace = true }
 crossbeam = "0.8"
 derivative = "2"
 encryption = { workspace = true, default-features = false }
-
+openssl = { workspace = true } # TODO only for feature
 engine_rocks = { workspace = true, default-features = false }
 # Should be [dev-dependencies] but we need to control the features
 # https://github.com/rust-lang/cargo/issues/6915

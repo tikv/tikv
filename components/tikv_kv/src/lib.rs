@@ -553,7 +553,7 @@ pub enum ErrorInner {
     Request(ErrorHeader),
     #[error("timeout after {0:?}")]
     Timeout(Duration),
-    #[error("an empty requets")]
+    #[error("an empty request")]
     EmptyRequest,
     #[error("key is locked (backoff or cleanup) {0:?}")]
     KeyIsLocked(kvproto::kvrpcpb::LockInfo),

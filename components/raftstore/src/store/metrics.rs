@@ -214,7 +214,10 @@ make_static_metric! {
 
     pub label_enum RaftEventDurationType {
         compact_check,
+        periodic_full_compact,
+        load_metrics_window,
         pd_store_heartbeat,
+        pd_report_min_resolved_ts,
         snap_gc,
         compact_lock_cf,
         consistency_check,
@@ -551,6 +554,13 @@ lazy_static! {
             exponential_buckets(0.00001, 2.0, 26).unwrap()
         ).unwrap();
 
+    pub static ref RAFT_MESSAGE_WAIT_TIME_HISTOGRAM: Histogram =
+        register_histogram!(
+            "tikv_raftstore_raft_msg_wait_time_duration_secs",
+            "Bucketed histogram of raft message wait time duration.",
+            exponential_buckets(0.00001, 2.0, 26).unwrap()
+        ).unwrap();
+
     pub static ref PEER_GC_RAFT_LOG_COUNTER: IntCounter =
         register_int_counter!(
             "tikv_raftstore_gc_raft_log_total",
@@ -650,6 +660,11 @@ lazy_static! {
             "tikv_raftstore_leader_missing",
             "Total number of leader missed region."
         ).unwrap();
+
+    pub static ref CHECK_STALE_PEER_COUNTER: IntCounter = register_int_counter!(
+        "tikv_raftstore_check_stale_peer",
+        "Total number of checking stale peers."
+    ).unwrap();
 
     pub static ref INGEST_SST_DURATION_SECONDS: Histogram =
         register_histogram!(

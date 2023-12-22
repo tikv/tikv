@@ -19,7 +19,9 @@ use resource_metering::{FutureExt, ResourceTagFactory, StreamExt};
 use tidb_query_common::execute_stats::ExecSummary;
 use tikv_alloc::trace::MemoryTraceGuard;
 use tikv_kv::SnapshotExt;
-use tikv_util::{quota_limiter::QuotaLimiter, time::Instant};
+use tikv_util::{
+    deadline::set_deadline_exceeded_busy_error, quota_limiter::QuotaLimiter, time::Instant,
+};
 use tipb::{AnalyzeReq, AnalyzeType, ChecksumRequest, ChecksumScanOn, DagRequest, ExecType};
 use tokio::sync::Semaphore;
 use txn_types::Lock;
@@ -511,6 +513,10 @@ impl<E: Engine> Endpoint<E> {
                     .get_resource_control_context()
                     .get_resource_group_name(),
                 req_ctx.context.get_request_source(),
+                req_ctx
+                    .context
+                    .get_resource_control_context()
+                    .get_override_priority(),
             )
         });
         // box the tracker so that moving it is cheap.
@@ -544,8 +550,9 @@ impl<E: Engine> Endpoint<E> {
         if let Err(busy_err) = self.read_pool.check_busy_threshold(Duration::from_millis(
             req.get_context().get_busy_threshold_ms() as u64,
         )) {
-            let mut resp = coppb::Response::default();
-            resp.mut_region_error().set_server_is_busy(busy_err);
+            let mut pb_error = errorpb::Error::new();
+            pb_error.set_server_is_busy(busy_err);
+            let resp = make_error_response(Error::Region(pb_error));
             return Either::Left(async move { resp.into() });
         }
 
@@ -756,6 +763,10 @@ impl<E: Engine> Endpoint<E> {
                     .get_resource_control_context()
                     .get_resource_group_name(),
                 req_ctx.context.get_request_source(),
+                req_ctx
+                    .context
+                    .get_resource_control_context()
+                    .get_override_priority(),
             )
         });
         let key_ranges = req_ctx
@@ -810,77 +821,62 @@ impl<E: Engine> Endpoint<E> {
     }
 }
 
+macro_rules! make_error_response_common {
+    ($resp:expr, $tag:expr, $e:expr) => {{
+        match $e {
+            Error::Region(e) => {
+                $tag = storage::get_tag_from_header(&e);
+                $resp.set_region_error(e);
+            }
+            Error::Locked(info) => {
+                $tag = "meet_lock";
+                $resp.set_locked(info);
+            }
+            Error::DeadlineExceeded => {
+                $tag = "deadline_exceeded";
+                let mut err = errorpb::Error::default();
+                set_deadline_exceeded_busy_error(&mut err);
+                err.set_message($e.to_string());
+                $resp.set_region_error(err);
+            }
+            Error::MaxPendingTasksExceeded => {
+                $tag = "max_pending_tasks_exceeded";
+                let mut server_is_busy_err = errorpb::ServerIsBusy::default();
+                server_is_busy_err.set_reason($e.to_string());
+                let mut errorpb = errorpb::Error::default();
+                errorpb.set_message($e.to_string());
+                errorpb.set_server_is_busy(server_is_busy_err);
+                $resp.set_region_error(errorpb);
+            }
+            Error::Other(_) => {
+                $tag = "other";
+                warn!("unexpected other error encountered processing coprocessor task";
+                    "error" => ?&$e,
+                );
+                $resp.set_other_error($e.to_string());
+            }
+        };
+        COPR_REQ_ERROR.with_label_values(&[$tag]).inc();
+    }};
+}
+
 fn make_error_batch_response(batch_resp: &mut coppb::StoreBatchTaskResponse, e: Error) {
-    warn!(
+    debug!(
         "batch cop task error-response";
         "err" => %e
     );
     let tag;
-    match e {
-        Error::Region(e) => {
-            tag = storage::get_tag_from_header(&e);
-            batch_resp.set_region_error(e);
-        }
-        Error::Locked(info) => {
-            tag = "meet_lock";
-            batch_resp.set_locked(info);
-        }
-        Error::DeadlineExceeded => {
-            tag = "deadline_exceeded";
-            batch_resp.set_other_error(e.to_string());
-        }
-        Error::MaxPendingTasksExceeded => {
-            tag = "max_pending_tasks_exceeded";
-            let mut server_is_busy_err = errorpb::ServerIsBusy::default();
-            server_is_busy_err.set_reason(e.to_string());
-            let mut errorpb = errorpb::Error::default();
-            errorpb.set_message(e.to_string());
-            errorpb.set_server_is_busy(server_is_busy_err);
-            batch_resp.set_region_error(errorpb);
-        }
-        Error::Other(_) => {
-            tag = "other";
-            batch_resp.set_other_error(e.to_string());
-        }
-    };
-    COPR_REQ_ERROR.with_label_values(&[tag]).inc();
+    make_error_response_common!(batch_resp, tag, e);
 }
 
 fn make_error_response(e: Error) -> coppb::Response {
-    warn!(
+    debug!(
         "error-response";
         "err" => %e
     );
-    let mut resp = coppb::Response::default();
     let tag;
-    match e {
-        Error::Region(e) => {
-            tag = storage::get_tag_from_header(&e);
-            resp.set_region_error(e);
-        }
-        Error::Locked(info) => {
-            tag = "meet_lock";
-            resp.set_locked(info);
-        }
-        Error::DeadlineExceeded => {
-            tag = "deadline_exceeded";
-            resp.set_other_error(e.to_string());
-        }
-        Error::MaxPendingTasksExceeded => {
-            tag = "max_pending_tasks_exceeded";
-            let mut server_is_busy_err = errorpb::ServerIsBusy::default();
-            server_is_busy_err.set_reason(e.to_string());
-            let mut errorpb = errorpb::Error::default();
-            errorpb.set_message(e.to_string());
-            errorpb.set_server_is_busy(server_is_busy_err);
-            resp.set_region_error(errorpb);
-        }
-        Error::Other(_) => {
-            tag = "other";
-            resp.set_other_error(e.to_string());
-        }
-    };
-    COPR_REQ_ERROR.with_label_values(&[tag]).inc();
+    let mut resp = coppb::Response::default();
+    make_error_response_common!(resp, tag, e);
     resp
 }
 
@@ -1945,7 +1941,11 @@ mod tests {
 
             let resp = block_on(copr.handle_unary_request(config, handler_builder)).unwrap();
             assert_eq!(resp.get_data().len(), 0);
-            assert!(!resp.get_other_error().is_empty());
+            let region_err = resp.get_region_error();
+            assert_eq!(
+                region_err.get_server_is_busy().reason,
+                "deadline is exceeded".to_string()
+            );
         }
 
         {
@@ -1962,7 +1962,11 @@ mod tests {
 
             let resp = block_on(copr.handle_unary_request(config, handler_builder)).unwrap();
             assert_eq!(resp.get_data().len(), 0);
-            assert!(!resp.get_other_error().is_empty());
+            let region_err = resp.get_region_error();
+            assert_eq!(
+                region_err.get_server_is_busy().reason,
+                "deadline is exceeded".to_string()
+            );
         }
     }
 
@@ -2013,5 +2017,19 @@ mod tests {
 
         let resp = block_on(copr.parse_and_handle_unary_request(req, None));
         assert_eq!(resp.get_locked().get_key(), b"key");
+    }
+
+    #[test]
+    fn test_make_error_response() {
+        let resp = make_error_response(Error::DeadlineExceeded);
+        let region_err = resp.get_region_error();
+        assert_eq!(
+            region_err.get_server_is_busy().reason,
+            "deadline is exceeded".to_string()
+        );
+        assert_eq!(
+            region_err.get_message(),
+            "Coprocessor task terminated due to exceeding the deadline"
+        );
     }
 }

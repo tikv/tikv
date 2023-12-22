@@ -15,7 +15,7 @@ fs2 = "0.4"
 lazy_static = "1.3"
 libc = "0.2"
 online_config = { workspace = true }
-openssl = "0.10"
+openssl = { workspace = true }
 parking_lot = "0.12"
 prometheus = { version = "0.13", features = ["nightly"] }
 prometheus-static-metric = "0.5"

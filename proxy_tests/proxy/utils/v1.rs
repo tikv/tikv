@@ -9,6 +9,7 @@ pub use mock_engine_store::mock_cluster::v1::{
     },
     Cluster, Simulator,
 };
+use mock_engine_store::mock_cluster::TiFlashEngine;
 use rand::seq::SliceRandom;
 use sst_importer::SstImporter;
 use test_sst_importer::gen_sst_file_with_kvs;
@@ -90,7 +91,10 @@ pub fn new_split_region_cluster(count: u64) -> (Cluster<NodeCluster>, Arc<TestPd
     (cluster, pd_client)
 }
 
-pub fn create_tmp_importer(cfg: &MixedClusterConfig, kv_path: &str) -> (PathBuf, Arc<SstImporter>) {
+pub fn create_tmp_importer(
+    cfg: &MixedClusterConfig,
+    kv_path: &str,
+) -> (PathBuf, Arc<SstImporter<TiFlashEngine>>) {
     let dir = Path::new(kv_path).join("import-sst");
     let importer = {
         Arc::new(

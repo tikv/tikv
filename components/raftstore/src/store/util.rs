@@ -160,6 +160,20 @@ pub fn new_empty_snapshot(
     snapshot
 }
 
+pub fn gen_bucket_version(term: u64, current_version: u64) -> u64 {
+    //   term       logical counter
+    // |-----------|-----------|
+    //  high bits     low bits
+    // term: given 10s election timeout, the 32 bit means 1362 year running time
+    let current_version_term = current_version >> 32;
+    let bucket_version: u64 = if current_version_term == term {
+        current_version + 1
+    } else {
+        term << 32
+    };
+    bucket_version
+}
+
 const STR_CONF_CHANGE_ADD_NODE: &str = "AddNode";
 const STR_CONF_CHANGE_REMOVE_NODE: &str = "RemoveNode";
 const STR_CONF_CHANGE_ADDLEARNER_NODE: &str = "AddLearner";
@@ -306,7 +320,7 @@ pub fn compare_region_epoch(
     // tells TiDB with a epoch not match error contains the latest target Region
     // info, TiDB updates its region cache and sends requests to TiKV B,
     // and TiKV B has not applied commit merge yet, since the region epoch in
-    // request is higher than TiKV B, the request must be denied due to epoch
+    // request is higher than TiKV B, the request must be suspended due to epoch
     // not match, so it does not read on a stale snapshot, thus avoid the
     // KeyNotInRegion error.
     let current_epoch = region.get_region_epoch();
@@ -1179,14 +1193,15 @@ impl RegionReadProgressRegistry {
     }
 
     // Get the minimum `resolved_ts` which could ensure that there will be no more
-    // locks whose `start_ts` is greater than it.
+    // locks whose `commit_ts` is smaller than it.
     pub fn get_min_resolved_ts(&self) -> u64 {
         self.registry
             .lock()
             .unwrap()
             .iter()
             .map(|(_, rrp)| rrp.resolved_ts())
-            .filter(|ts| *ts != 0) // ts == 0 means the peer is uninitialized
+            //TODO: the uninitialized peer should be taken into consideration instead of skipping it(https://github.com/tikv/tikv/issues/15506).
+            .filter(|ts| *ts != 0) // ts == 0 means the peer is uninitialized,
             .min()
             .unwrap_or(0)
     }
@@ -1439,7 +1454,6 @@ impl RegionReadProgress {
         self.safe_ts()
     }
 
-    // Dump the `LeaderInfo` and the peer list
     pub fn get_core(&self) -> MutexGuard<'_, RegionReadProgressCore> {
         self.core.lock().unwrap()
     }
@@ -1720,13 +1734,38 @@ pub struct RaftstoreDuration {
 }
 
 impl RaftstoreDuration {
+    #[inline]
     pub fn sum(&self) -> std::time::Duration {
-        self.store_wait_duration.unwrap_or_default()
-            + self.store_process_duration.unwrap_or_default()
+        self.delays_on_disk_io(true) + self.delays_on_net_io()
+    }
+
+    #[inline]
+    /// Returns the delayed duration on Disk I/O.
+    pub fn delays_on_disk_io(&self, include_wait_duration: bool) -> std::time::Duration {
+        let duration = self.store_process_duration.unwrap_or_default()
             + self.store_write_duration.unwrap_or_default()
-            + self.store_commit_duration.unwrap_or_default()
-            + self.apply_wait_duration.unwrap_or_default()
-            + self.apply_process_duration.unwrap_or_default()
+            + self.apply_process_duration.unwrap_or_default();
+        if include_wait_duration {
+            duration
+                + self.store_wait_duration.unwrap_or_default()
+                + self.apply_wait_duration.unwrap_or_default()
+        } else {
+            duration
+        }
+    }
+
+    #[inline]
+    /// Returns the delayed duration on Network I/O.
+    ///
+    /// Normally, it can be reflected by the duraiton on
+    /// `store_commit_duraiton`.
+    pub fn delays_on_net_io(&self) -> std::time::Duration {
+        // The `store_commit_duration` serves as an indicator for latency
+        // during the duration of transferring Raft logs to peers and appending
+        // logs. In most scenarios, instances of latency fluctuations in the
+        // network are reflected by this duration. Hence, it is selected as a
+        // representative of network latency.
+        self.store_commit_duration.unwrap_or_default()
     }
 }
 

@@ -122,6 +122,19 @@ ENABLE_FEATURES += cloud-gcp
 ENABLE_FEATURES += cloud-azure
 endif
 
+export DOCKER_FILE ?= Dockerfile
+export DOCKER_IMAGE_NAME ?= pingcap/tikv
+export DOCKER_IMAGE_TAG ?= latest
+export DEV_DOCKER_IMAGE_NAME ?= pingcap/tikv_dev
+export ENABLE_FIPS ?= 0
+
+ifeq ($(ENABLE_FIPS),1)
+DOCKER_IMAGE_TAG := ${DOCKER_IMAGE_TAG}-fips
+DOCKER_FILE := ${DOCKER_FILE}.FIPS
+else
+ENABLE_FEATURES += openssl-vendored
+endif
+
 PROJECT_DIR:=$(shell dirname $(realpath $(lastword $(MAKEFILE_LIST))))
 
 BIN_PATH = $(CURDIR)/bin
@@ -134,10 +147,6 @@ export PROXY_BUILD_TIME := $(shell date -u '+%Y-%m-%d %H:%M:%S')
 export PROXY_BUILD_RUSTC_VERSION := $(shell rustc --version 2> /dev/null || echo ${BUILD_INFO_RUSTC_FALLBACK})
 export PROXY_BUILD_GIT_HASH ?= $(shell git rev-parse HEAD 2> /dev/null || echo ${BUILD_INFO_GIT_FALLBACK})
 export PROXY_BUILD_GIT_BRANCH ?= $(shell git rev-parse --abbrev-ref HEAD 2> /dev/null || echo ${BUILD_INFO_GIT_FALLBACK})
-
-export DOCKER_IMAGE_NAME ?= "pingcap/tikv"
-export DOCKER_IMAGE_TAG ?= "latest"
-export DEV_DOCKER_IMAGE_NAME ?= "pingcap/tikv_dev"
 
 # Turn on cargo pipelining to add more build parallelism. This has shown decent
 # speedups in TiKV.
@@ -154,6 +163,9 @@ export CARGO_BUILD_PIPELINING=true
 ifeq ($(TIKV_BUILD_RUSTC_TARGET),aarch64-unknown-linux-gnu)
 export RUSTFLAGS := $(RUSTFLAGS) -Ctarget-feature=-outline-atomics
 endif
+
+# If both python and python3 are installed, it will choose python as a preferred option.
+PYTHON := $(shell command -v python 2> /dev/null || command -v python3 2> /dev/null)
 
 # Almost all the rules in this Makefile are PHONY
 # Declaring a rule as PHONY could improve correctness

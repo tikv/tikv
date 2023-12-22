@@ -3,8 +3,7 @@
 use std::path::Path;
 
 use encryption::DataKeyManager;
-use engine_traits::EncryptionKeyManager;
-use external_storage_export::ExternalStorage;
+use external_storage::ExternalStorage;
 use file_system::File;
 
 use super::Result;
@@ -127,8 +126,8 @@ mod tests {
         RocksTitanDbOptions,
     };
     use engine_traits::{
-        CfName, CfOptions, DbOptions, EncryptionKeyManager, ImportExt, Peekable, SstWriter,
-        SstWriterBuilder, TitanCfOptions, CF_DEFAULT,
+        CfName, CfOptions, DbOptions, ImportExt, Peekable, SstWriter, SstWriterBuilder,
+        TitanCfOptions, CF_DEFAULT,
     };
     use tempfile::Builder;
     use test_util::encryption::new_test_key_manager;

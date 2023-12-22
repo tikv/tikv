@@ -372,7 +372,7 @@ where
 
     #[inline]
     pub fn raw_snapshot(&self) -> EK::Snapshot {
-        self.engines.kv.snapshot()
+        self.engines.kv.snapshot(None)
     }
 
     #[inline]
@@ -1017,6 +1017,9 @@ where
         // The `region` is updated after persisting in order to stay consistent with the
         // one in `StoreMeta::regions` (will be updated soon).
         // See comments in `apply_snapshot` for more details.
+        (|| {
+            fail_point!("before_set_region_on_peer_3", self.peer_id == 3, |_| {});
+        })();
         self.set_region(res.region.clone());
     }
 }
@@ -1604,7 +1607,7 @@ pub mod tests {
             .unwrap()
             .unwrap();
         gen_task.generate_and_schedule_snapshot::<KvTestEngine>(
-            engines.kv.clone().snapshot(),
+            engines.kv.clone().snapshot(None),
             entry.get_term(),
             apply_state,
             sched,

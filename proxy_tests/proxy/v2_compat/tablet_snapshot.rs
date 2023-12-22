@@ -336,20 +336,22 @@ fn test_handle_snapshot() {
         .pd_client
         .must_add_peer(r21, new_learner_peer(2, 10));
 
-    let factory1 = ForwardFactory {
+    let factory1 = ForwardFactoryV1 {
         node_id: 1,
         chain_send: Arc::new(move |m| {
             info!("send to trans2"; "msg" => ?m);
             let _ = trans2.lock().unwrap().send_raft_message(Box::new(m));
         }),
+        keep_msg: true,
     };
     cluster_v1.add_send_filter(factory1);
-    let factory2 = ForwardFactory {
+    let factory2 = ForwardFactoryV2 {
         node_id: 2,
         chain_send: Arc::new(move |m| {
             info!("send to trans1"; "msg" => ?m);
             let _ = trans1.lock().unwrap().send_raft_message(m);
         }),
+        keep_msg: true,
     };
     cluster_v2.add_send_filter(factory2);
 

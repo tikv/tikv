@@ -1,6 +1,7 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 #![feature(let_chains)]
+#![feature(trait_alias)]
 
 #[macro_use]
 extern crate lazy_static;

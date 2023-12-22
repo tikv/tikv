@@ -9,9 +9,9 @@ use cloud::kms::Config as CloudConfig;
 #[cfg(feature = "cloud-aws")]
 pub use encryption::KmsBackend;
 pub use encryption::{
-    clean_up_dir, clean_up_trash, from_engine_encryption_method, trash_dir_all, AzureConfig,
-    Backend, DataKeyImporter, DataKeyManager, DataKeyManagerArgs, DecrypterReader,
-    EncryptionConfig, Error, FileConfig, Iv, KmsConfig, MasterKeyConfig, Result,
+    clean_up_dir, clean_up_trash, trash_dir_all, AzureConfig, Backend, DataKeyImporter,
+    DataKeyManager, DataKeyManagerArgs, DecrypterReader, EncryptionConfig, Error, FileConfig, Iv,
+    KmsConfig, MasterKeyConfig, Result,
 };
 use encryption::{cloud_convert_error, FileBackend, PlaintextBackend};
 use tikv_util::{box_err, error, info};

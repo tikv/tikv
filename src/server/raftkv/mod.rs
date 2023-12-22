@@ -22,7 +22,7 @@ use std::{
 
 use collections::{HashMap, HashSet};
 use concurrency_manager::ConcurrencyManager;
-use engine_traits::{CfName, KvEngine, MvccProperties, Snapshot};
+use engine_traits::{CfName, KvEngine, MvccProperties, Snapshot, SnapshotContext};
 use futures::{future::BoxFuture, task::AtomicWaker, Future, Stream, StreamExt, TryFutureExt};
 use kvproto::{
     errorpb,
@@ -644,10 +644,15 @@ where
         }));
         let tracker = store_cb.read_tracker().unwrap();
 
+        let snap_ctx = ctx.start_ts.map(|ts| SnapshotContext {
+            read_ts: ts.into_inner(),
+            region_id: ctx.pb_ctx.get_region_id(),
+        });
+
         if res.is_ok() {
             res = self
                 .router
-                .read(ctx.read_id, cmd, store_cb)
+                .read(snap_ctx, ctx.read_id, cmd, store_cb)
                 .map_err(kv::Error::from);
         }
         async move {
@@ -683,7 +688,7 @@ where
                                     tracker.metrics.read_index_propose_wait_nanos as f64
                                         / 1_000_000_000.0,
                                 );
-                            // snapshot may be hanlded by lease read in raftstore
+                            // snapshot may be handled by lease read in raftstore
                             if tracker.metrics.read_index_confirm_wait_nanos > 0 {
                                 ASYNC_REQUESTS_DURATIONS_VEC
                                     .snapshot_read_index_confirm

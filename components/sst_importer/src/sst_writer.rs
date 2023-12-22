@@ -301,7 +301,7 @@ mod tests {
     use crate::{Config, SstImporter};
 
     // Return the temp dir path to avoid it drop out of the scope.
-    fn new_writer<W, F: Fn(&SstImporter, &RocksEngine, SstMeta) -> Result<W>>(
+    fn new_writer<W, F: Fn(&SstImporter<RocksEngine>, &RocksEngine, SstMeta) -> Result<W>>(
         f: F,
         api_version: ApiVersion,
     ) -> (W, TempDir) {
@@ -310,7 +310,8 @@ mod tests {
 
         let importer_dir = tempfile::tempdir().unwrap();
         let cfg = Config::default();
-        let importer = SstImporter::new(&cfg, &importer_dir, None, api_version, false).unwrap();
+        let importer =
+            SstImporter::<RocksEngine>::new(&cfg, &importer_dir, None, api_version, false).unwrap();
         let db_path = importer_dir.path().join("db");
         let db = new_test_engine(db_path.to_str().unwrap(), DATA_CFS);
         (f(&importer, &db, meta).unwrap(), importer_dir)

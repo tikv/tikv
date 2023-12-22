@@ -142,13 +142,13 @@ impl Default for ChannelTransport {
     }
 }
 
-type SimulateChannelTransport = SimulateTransport<ChannelTransport>;
+type SimulateChannelTransport<EK> = SimulateTransport<ChannelTransport<EK>, EK>;
 
 pub struct NodeCluster {
     trans: ChannelTransport,
     pd_client: Arc<TestPdClient>,
     nodes: HashMap<u64, NodeV2<TestPdClient, RocksEngine, RaftTestEngine>>,
-    simulate_trans: HashMap<u64, SimulateChannelTransport>,
+    simulate_trans: HashMap<u64, SimulateChannelTransport<TiFlashEngine>>,
     concurrency_managers: HashMap<u64, ConcurrencyManager>,
     // snap_mgrs: HashMap<u64, TabletSnapManager>,
 }

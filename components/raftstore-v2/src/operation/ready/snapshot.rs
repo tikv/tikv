@@ -30,10 +30,7 @@ use std::{
 };
 
 use encryption_export::DataKeyManager;
-use engine_traits::{
-    EncryptionKeyManager, KvEngine, RaftEngine, RaftLogBatch, TabletContext, TabletRegistry,
-    ALL_CFS,
-};
+use engine_traits::{KvEngine, RaftEngine, RaftLogBatch, TabletContext, TabletRegistry, ALL_CFS};
 use fail::fail_point;
 use kvproto::{
     metapb::PeerRole,
@@ -343,10 +340,12 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             }
             self.schedule_apply_fsm(ctx);
             if self.remove_tombstone_tablets(snapshot_index) {
+                let counter = self.remember_persisted_tablet_index();
                 let _ = ctx
                     .schedulers
                     .tablet
                     .schedule(tablet::Task::destroy(region_id, snapshot_index));
+                counter.store(snapshot_index, Ordering::Relaxed);
             }
             if let Some(msg) = self.split_pending_append_mut().take_append_message() {
                 let _ = ctx.router.send_raft_message(msg);

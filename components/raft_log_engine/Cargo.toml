@@ -4,6 +4,9 @@ version = "0.0.1"
 publish = false
 edition = "2021"
 
+[features]
+failpoints = ["raft-engine/failpoints"]
+
 [dependencies]
 codec = { workspace = true }
 encryption = { workspace = true }

@@ -10,7 +10,7 @@ use concurrency_manager::ConcurrencyManager;
 use encryption_export::DataKeyManager;
 use engine_rocks::RocksSnapshot;
 use engine_store_ffi::core::DebugStruct;
-use engine_traits::{Engines, MiscExt, Peekable};
+use engine_traits::{Engines, MiscExt, Peekable, SnapshotContext};
 use kvproto::{
     metapb,
     raft_cmdpb::*,
@@ -56,7 +56,10 @@ use super::{
 
 pub struct ChannelTransportCore {
     snap_paths: HashMap<u64, (SnapManager, TempDir)>,
-    routers: HashMap<u64, SimulateTransport<ServerRaftStoreRouter<TiFlashEngine, ProxyRaftEngine>>>,
+    routers: HashMap<
+        u64,
+        SimulateTransport<ServerRaftStoreRouter<TiFlashEngine, ProxyRaftEngine>, TiFlashEngine>,
+    >,
 }
 
 #[derive(Clone)]
@@ -179,19 +182,18 @@ impl Transport for ChannelTransport {
     fn flush(&mut self) {}
 }
 
-type SimulateChannelTransport = SimulateTransport<ChannelTransport>;
-
+type SimulateChannelTransport<EK> = SimulateTransport<ChannelTransport, EK>;
 pub struct NodeCluster {
     trans: ChannelTransport,
     pd_client: Arc<TestPdClient>,
     nodes: HashMap<u64, Node<TestPdClient, TiFlashEngine, ProxyRaftEngine>>,
     snap_mgrs: HashMap<u64, SnapManager>,
     cfg_controller: Option<ConfigController>,
-    simulate_trans: HashMap<u64, SimulateChannelTransport>,
+    simulate_trans: HashMap<u64, SimulateChannelTransport<TiFlashEngine>>,
     concurrency_managers: HashMap<u64, ConcurrencyManager>,
     #[allow(clippy::type_complexity)]
     post_create_coprocessor_host: Option<Box<dyn Fn(u64, &mut CoprocessorHost<TiFlashEngine>)>>,
-    pub importer: Option<Arc<SstImporter>>,
+    pub importer: Option<Arc<SstImporter<TiFlashEngine>>>,
 }
 
 impl std::panic::UnwindSafe for NodeCluster {}
@@ -217,7 +219,8 @@ impl NodeCluster {
     pub fn get_node_router(
         &self,
         node_id: u64,
-    ) -> SimulateTransport<ServerRaftStoreRouter<TiFlashEngine, ProxyRaftEngine>> {
+    ) -> SimulateTransport<ServerRaftStoreRouter<TiFlashEngine, ProxyRaftEngine>, TiFlashEngine>
+    {
         self.trans
             .core
             .lock()
@@ -525,10 +528,11 @@ impl Simulator<TiFlashEngine> for NodeCluster {
 
     fn async_read(
         &mut self,
+        snap_ctx: Option<SnapshotContext>,
         node_id: u64,
         batch_id: Option<ThreadReadId>,
         request: RaftCmdRequest,
-        cb: Callback<RocksSnapshot>,
+        cb: Callback<<engine_tiflash::MixedModeEngine as engine_traits::KvEngine>::Snapshot>,
     ) {
         if !self
             .trans
@@ -546,7 +550,7 @@ impl Simulator<TiFlashEngine> for NodeCluster {
         }
         let mut guard = self.trans.core.lock().unwrap();
         let router = guard.routers.get_mut(&node_id).unwrap();
-        router.read(batch_id, request, cb).unwrap();
+        router.read(snap_ctx, batch_id, request, cb).unwrap();
     }
 
     fn send_raft_msg(&mut self, msg: raft_serverpb::RaftMessage) -> Result<()> {

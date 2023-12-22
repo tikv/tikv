@@ -70,6 +70,11 @@ impl ConfigurableDb for ProxyRocksEngine {
         opt.set_flush_size(f).map_err(Box::from)
     }
 
+    fn set_cf_flush_size(&self, cf: &str, f: usize) -> ConfigRes {
+        let mut cf_option = self.inner.get_options_cf(cf)?;
+        cf_option.set_flush_size(f).map_err(Box::from)
+    }
+
     fn set_flush_oldest_first(&self, f: bool) -> ConfigRes {
         let mut opt = self.get_db_options();
         opt.set_flush_oldest_first(f).map_err(Box::from)

@@ -16,10 +16,10 @@ use kvproto::{
     },
     kvrpcpb::ApiVersion,
 };
-use tikv_util::{error, info, warn, worker::*};
+use tikv_util::{error, info, memory::MemoryQuota, warn, worker::*};
 
 use crate::{
-    channel::{channel, MemoryQuota, Sink, CDC_CHANNLE_CAPACITY},
+    channel::{channel, Sink, CDC_CHANNLE_CAPACITY},
     delegate::{Downstream, DownstreamId, DownstreamState, ObservedRange},
     endpoint::{Deregister, Task},
 };
@@ -244,14 +244,14 @@ impl EventFeedHeaders {
 #[derive(Clone)]
 pub struct Service {
     scheduler: Scheduler<Task>,
-    memory_quota: MemoryQuota,
+    memory_quota: Arc<MemoryQuota>,
 }
 
 impl Service {
     /// Create a ChangeData service.
     ///
     /// It requires a scheduler of an `Endpoint` in order to schedule tasks.
-    pub fn new(scheduler: Scheduler<Task>, memory_quota: MemoryQuota) -> Service {
+    pub fn new(scheduler: Scheduler<Task>, memory_quota: Arc<MemoryQuota>) -> Service {
         Service {
             scheduler,
             memory_quota,
@@ -304,6 +304,13 @@ impl Service {
         scheduler.schedule(task).map_err(|e| format!("{:?}", e))
     }
 
+    // ### Command types:
+    // * Register registers a region. 1) both `request_id` and `region_id` must be
+    //   specified; 2) `request_id` can be 0 but `region_id` can not.
+    // * Deregister deregisters some regions in one same `request_id` or just one
+    //   region. 1) if both `request_id` and `region_id` are specified, just
+    //   deregister the region; 2) if only `request_id` is specified, all region
+    //   subscriptions with the same `request_id` will be deregistered.
     fn handle_request(
         scheduler: &Scheduler<Task>,
         peer: &str,
@@ -361,10 +368,18 @@ impl Service {
         request: ChangeDataRequest,
         conn_id: ConnId,
     ) -> Result<(), String> {
-        let task = Task::Deregister(Deregister::Request {
-            conn_id,
-            request_id: request.request_id,
-        });
+        let task = if request.region_id != 0 {
+            Task::Deregister(Deregister::Region {
+                conn_id,
+                request_id: request.request_id,
+                region_id: request.region_id,
+            })
+        } else {
+            Task::Deregister(Deregister::Request {
+                conn_id,
+                request_id: request.request_id,
+            })
+        };
         scheduler.schedule(task).map_err(|e| format!("{:?}", e))
     }
 
@@ -518,7 +533,7 @@ mod tests {
     use crate::channel::{recv_timeout, CdcEvent};
 
     fn new_rpc_suite(capacity: usize) -> (Server, ChangeDataClient, ReceiverWrapper<Task>) {
-        let memory_quota = MemoryQuota::new(capacity);
+        let memory_quota = Arc::new(MemoryQuota::new(capacity));
         let (scheduler, rx) = dummy_scheduler();
         let cdc_service = Service::new(scheduler, memory_quota);
         let env = Arc::new(EnvBuilder::new().build());

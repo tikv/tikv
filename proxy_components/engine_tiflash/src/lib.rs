@@ -128,5 +128,5 @@ pub fn get_env(
     limiter: Option<std::sync::Arc<::file_system::IoRateLimiter>>,
 ) -> engine_traits::Result<std::sync::Arc<raw::Env>> {
     let env = encryption::get_env(None /* base_env */, key_manager)?;
-    file_system::get_env(Some(env), limiter)
+    file_system::get_env(env, limiter)
 }

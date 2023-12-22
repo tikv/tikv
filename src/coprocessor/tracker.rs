@@ -6,8 +6,10 @@ use ::tracker::{get_tls_tracker_token, with_tls_tracker};
 use engine_traits::{PerfContext, PerfContextExt, PerfContextKind};
 use kvproto::{kvrpcpb, kvrpcpb::ScanDetailV2};
 use pd_client::BucketMeta;
+use protobuf::Message;
 use tikv_kv::Engine;
 use tikv_util::time::{self, Duration, Instant};
+use tipb::ResourceGroupTag;
 use txn_types::Key;
 
 use super::metrics::*;
@@ -264,8 +266,16 @@ impl<E: Engine> Tracker<E> {
                     .unwrap_or_default()
             });
 
+            let source_stmt = self.req_ctx.context.get_source_stmt();
             with_tls_tracker(|tracker| {
+                let mut req_tag = ResourceGroupTag::new();
+                req_tag
+                    .merge_from_bytes(&tracker.req_info.resource_group_tag)
+                    .unwrap_or_default();
                 info!(#"slow_log", "slow-query";
+                    "connection_id" => source_stmt.get_connection_id(),
+                    "session_alias" => source_stmt.get_session_alias(),
+                    "query_digest" => hex::encode(req_tag.get_sql_digest()),
                     "region_id" => &self.req_ctx.context.get_region_id(),
                     "remote_host" => &self.req_ctx.peer,
                     "total_lifetime" => ?self.req_lifetime,
@@ -350,20 +360,24 @@ impl<E: Engine> Tracker<E> {
             false
         };
 
-        tls_collect_query(
-            region_id,
-            peer,
-            start_key.as_encoded(),
-            end_key.as_encoded(),
-            reverse_scan,
-        );
-        tls_collect_read_flow(
-            self.req_ctx.context.get_region_id(),
-            Some(start_key.as_encoded()),
-            Some(end_key.as_encoded()),
-            &total_storage_stats,
-            self.buckets.as_ref(),
-        );
+        // only collect metrics for select and index, exclude transient read flow such
+        // like analyze and checksum.
+        if self.req_ctx.tag == ReqTag::select || self.req_ctx.tag == ReqTag::index {
+            tls_collect_query(
+                region_id,
+                peer,
+                start_key.as_encoded(),
+                end_key.as_encoded(),
+                reverse_scan,
+            );
+            tls_collect_read_flow(
+                self.req_ctx.context.get_region_id(),
+                Some(start_key.as_encoded()),
+                Some(end_key.as_encoded()),
+                &total_storage_stats,
+                self.buckets.as_ref(),
+            );
+        }
         self.current_stage = TrackerState::Tracked;
     }
 
@@ -427,6 +441,36 @@ impl<E: Engine> Drop for Tracker<E> {
         if let TrackerState::ItemFinished(_) = self.current_stage {
             self.on_finish_all_items();
         }
+
+        if self.current_stage != TrackerState::AllItemFinished
+            && self.req_ctx.deadline.check().is_err()
+        {
+            // record deadline exceeded error log.
+            let total_lifetime = self.request_begin_at.saturating_elapsed();
+            let source_stmt = self.req_ctx.context.get_source_stmt();
+            let first_range = self.req_ctx.ranges.first();
+            let some_table_id = first_range.as_ref().map(|range| {
+                tidb_query_datatype::codec::table::decode_table_id(range.get_start())
+                    .unwrap_or_default()
+            });
+            warn!("query deadline exceeded";
+                "current_stage" => ?self.current_stage,
+                "connection_id" => source_stmt.get_connection_id(),
+                "session_alias" => source_stmt.get_session_alias(),
+                "region_id" => &self.req_ctx.context.get_region_id(),
+                "remote_host" => &self.req_ctx.peer,
+                "total_lifetime" => ?total_lifetime,
+                "wait_time" => ?self.wait_time,
+                "wait_time.schedule" => ?self.schedule_wait_time,
+                "wait_time.snapshot" => ?self.snapshot_wait_time,
+                "handler_build_time" => ?self.handler_build_time,
+                "total_process_time" => ?self.total_process_time,
+                "total_suspend_time" => ?self.total_suspend_time,
+                "txn_start_ts" => self.req_ctx.txn_start_ts,
+                "table_id" => some_table_id,
+                "tag" => self.req_ctx.tag.get_str(),
+            );
+        }
     }
 }
 
@@ -443,69 +487,86 @@ mod tests {
 
     #[test]
     fn test_track() {
-        let mut context = kvrpcpb::Context::default();
-        context.set_region_id(1);
-
-        let mut req_ctx = ReqContext::new(
-            ReqTag::test,
-            context,
-            vec![],
-            Duration::from_secs(0),
-            None,
-            None,
-            TimeStamp::max(),
-            None,
-            PerfLevel::EnableCount,
-        );
-        req_ctx.lower_bound = vec![
-            116, 128, 0, 0, 0, 0, 0, 0, 184, 95, 114, 128, 0, 0, 0, 0, 0, 70, 67,
-        ];
-        req_ctx.upper_bound = vec![
-            116, 128, 0, 0, 0, 0, 0, 0, 184, 95, 114, 128, 0, 0, 0, 0, 0, 70, 167,
-        ];
-        let mut track: Tracker<RocksEngine> = Tracker::new(req_ctx, Duration::default());
-        let mut bucket = BucketMeta::default();
-        bucket.region_id = 1;
-        bucket.version = 1;
-        bucket.keys = vec![
-            vec![
-                116, 128, 0, 0, 0, 0, 0, 0, 255, 179, 95, 114, 128, 0, 0, 0, 0, 255, 0, 175, 155,
-                0, 0, 0, 0, 0, 250,
-            ],
-            vec![
-                116, 128, 0, 255, 255, 255, 255, 255, 255, 254, 0, 0, 0, 0, 0, 0, 0, 248,
-            ],
-        ];
-        bucket.sizes = vec![10];
-        track.buckets = Some(Arc::new(bucket));
-
-        let mut stat = Statistics::default();
-        stat.write.flow_stats.read_keys = 10;
-        track.total_storage_stats = stat;
-
-        track.track();
-        drop(track);
-        TLS_COP_METRICS.with(|m| {
-            assert_eq!(
-                10,
-                m.borrow()
-                    .local_read_stats()
-                    .region_infos
-                    .get(&1)
-                    .unwrap()
-                    .flow
-                    .read_keys
+        let check = move |tag: ReqTag, flow: u64| {
+            let mut context = kvrpcpb::Context::default();
+            context.set_region_id(1);
+            let mut req_ctx = ReqContext::new(
+                tag,
+                context,
+                vec![],
+                Duration::from_secs(0),
+                None,
+                None,
+                TimeStamp::max(),
+                None,
+                PerfLevel::EnableCount,
             );
-            assert_eq!(
-                vec![10],
-                m.borrow()
-                    .local_read_stats()
-                    .region_buckets
-                    .get(&1)
-                    .unwrap()
-                    .stats
-                    .read_keys
-            );
-        });
+
+            req_ctx.lower_bound = vec![
+                116, 128, 0, 0, 0, 0, 0, 0, 184, 95, 114, 128, 0, 0, 0, 0, 0, 70, 67,
+            ];
+            req_ctx.upper_bound = vec![
+                116, 128, 0, 0, 0, 0, 0, 0, 184, 95, 114, 128, 0, 0, 0, 0, 0, 70, 167,
+            ];
+            let mut track: Tracker<RocksEngine> = Tracker::new(req_ctx, Duration::default());
+            let mut bucket = BucketMeta::default();
+            bucket.region_id = 1;
+            bucket.version = 1;
+            bucket.keys = vec![
+                vec![
+                    116, 128, 0, 0, 0, 0, 0, 0, 255, 179, 95, 114, 128, 0, 0, 0, 0, 255, 0, 175,
+                    155, 0, 0, 0, 0, 0, 250,
+                ],
+                vec![
+                    116, 128, 0, 255, 255, 255, 255, 255, 255, 254, 0, 0, 0, 0, 0, 0, 0, 248,
+                ],
+            ];
+            bucket.sizes = vec![10];
+            track.buckets = Some(Arc::new(bucket));
+
+            let mut stat = Statistics::default();
+            stat.write.flow_stats.read_keys = 10;
+            track.total_storage_stats = stat;
+
+            track.track();
+            drop(track);
+            TLS_COP_METRICS.with(|m| {
+                if flow > 0 {
+                    assert_eq!(
+                        flow as usize,
+                        m.borrow()
+                            .local_read_stats()
+                            .region_infos
+                            .get(&1)
+                            .unwrap()
+                            .flow
+                            .read_keys
+                    );
+                    assert_eq!(
+                        flow,
+                        m.borrow()
+                            .local_read_stats()
+                            .region_buckets
+                            .get(&1)
+                            .unwrap()
+                            .stats
+                            .read_keys[0]
+                    );
+                } else {
+                    assert!(m.borrow().local_read_stats().region_infos.get(&1).is_none());
+                    assert!(
+                        m.borrow()
+                            .local_read_stats()
+                            .region_buckets
+                            .get(&1)
+                            .is_none()
+                    );
+                }
+
+                m.borrow_mut().clear();
+            });
+        };
+        check(ReqTag::select, 10);
+        check(ReqTag::analyze_full_sampling, 0);
     }
 }

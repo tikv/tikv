@@ -15,7 +15,7 @@ use concurrency_manager::ConcurrencyManager;
 use encryption_export::DataKeyManager;
 use engine_rocks::RocksSnapshot;
 use engine_store_ffi::core::DebugStruct;
-use engine_traits::{Engines, MiscExt};
+use engine_traits::{Engines, MiscExt, SnapshotContext};
 use futures::executor::block_on;
 use grpcio::{ChannelBuilder, EnvBuilder, Environment, Error as GrpcError, Service};
 use grpcio_health::HealthService;
@@ -83,12 +83,13 @@ use transport_simulate::SimulateTransport;
 use txn_types::TxnExtraScheduler;
 
 use super::{common::*, Cluster, Simulator, *};
+use crate::mock_cluster::v1::transport_simulate::Filter;
 
 type SimulateStoreTransport =
-    SimulateTransport<ServerRaftStoreRouter<TiFlashEngine, ProxyRaftEngine>>;
+    SimulateTransport<ServerRaftStoreRouter<TiFlashEngine, ProxyRaftEngine>, TiFlashEngine>;
 type SimulateRaftExtension = <SimulateEngine as Engine>::RaftExtension;
 type SimulateServerTransport =
-    SimulateTransport<ServerTransport<SimulateRaftExtension, PdStoreAddrResolver>>;
+    SimulateTransport<ServerTransport<SimulateRaftExtension, PdStoreAddrResolver>, TiFlashEngine>;
 
 pub type SimulateEngine = RaftKv<TiFlashEngine, SimulateStoreTransport>;
 
@@ -112,8 +113,8 @@ impl StoreAddrResolver for AddressMap {
     fn resolve(
         &self,
         store_id: u64,
-        cb: Box<dyn FnOnce(ServerResult<String>) + Send>,
-    ) -> ServerResult<()> {
+        cb: Box<dyn FnOnce(resolve::Result<String>) + Send>,
+    ) -> resolve::Result<()> {
         let addr = self.get(store_id);
         match addr {
             Some(addr) => cb(Ok(addr)),
@@ -146,7 +147,7 @@ pub struct ServerCluster {
     addrs: AddressMap,
     pub storages: HashMap<u64, SimulateEngine>,
     pub region_info_accessors: HashMap<u64, RegionInfoAccessor>,
-    pub importers: HashMap<u64, Arc<SstImporter>>,
+    pub importers: HashMap<u64, Arc<SstImporter<TiFlashEngine>>>,
     pub pending_services: HashMap<u64, PendingServices>,
     pub coprocessor_hooks: HashMap<u64, CopHooks>,
     pub health_services: HashMap<u64, HealthService>,
@@ -396,6 +397,7 @@ impl ServerCluster {
             Arc::clone(&importer),
             None,
             None, // TODO resource_ctl
+            Arc::new(region_info_accessor.clone()),
         );
 
         let check_leader_runner =
@@ -724,10 +726,11 @@ impl Simulator<TiFlashEngine> for ServerCluster {
 
     fn async_read(
         &mut self,
+        snap_ctx: Option<SnapshotContext>,
         node_id: u64,
         batch_id: Option<ThreadReadId>,
         request: RaftCmdRequest,
-        cb: Callback<RocksSnapshot>,
+        cb: Callback<<engine_tiflash::MixedModeEngine as engine_traits::KvEngine>::Snapshot>,
     ) {
         match self.metas.get_mut(&node_id) {
             None => {
@@ -737,7 +740,9 @@ impl Simulator<TiFlashEngine> for ServerCluster {
                 cb.invoke_with_response(resp);
             }
             Some(meta) => {
-                meta.sim_router.read(batch_id, request, cb).unwrap();
+                meta.sim_router
+                    .read(snap_ctx, batch_id, request, cb)
+                    .unwrap();
             }
         };
     }
@@ -782,26 +787,13 @@ impl Simulator<TiFlashEngine> for ServerCluster {
         self.call_command_on_node(node_id, request, timeout)
     }
 
-    fn read(
-        &mut self,
-        batch_id: Option<ThreadReadId>,
-        request: RaftCmdRequest,
-        timeout: Duration,
-    ) -> Result<RaftCmdResponse> {
-        let node_id = request.get_header().get_peer().get_store_id();
-        let (cb, mut rx) = test_raftstore::make_cb(&request);
-        self.async_read(node_id, batch_id, request, cb);
-        rx.recv_timeout(timeout)
-            .map_err(|_| RaftError::Timeout(format!("request timeout for {:?}", timeout)))
-    }
-
     fn call_command_on_node(
         &self,
         node_id: u64,
         request: RaftCmdRequest,
         timeout: Duration,
     ) -> Result<RaftCmdResponse> {
-        let (cb, mut rx) = test_raftstore::make_cb(&request);
+        let (cb, mut rx) = test_raftstore::make_cb::<TiFlashEngine>(&request);
 
         match self.async_command_on_node(node_id, request, cb) {
             Ok(()) => {}
@@ -815,11 +807,11 @@ impl Simulator<TiFlashEngine> for ServerCluster {
             .map_err(|e| RaftError::Timeout(format!("request timeout for {:?}: {:?}", timeout, e)))
     }
 
-    fn add_send_filter(&mut self, _node_id: u64, _filter: Box<dyn test_raftstore::Filter>) {
+    fn add_send_filter(&mut self, _node_id: u64, _filter: Box<dyn Filter>) {
         todo!()
     }
 
-    fn add_recv_filter(&mut self, _node_id: u64, _filter: Box<dyn test_raftstore::Filter>) {
+    fn add_recv_filter(&mut self, _node_id: u64, _filter: Box<dyn Filter>) {
         todo!()
     }
 }
