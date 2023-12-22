@@ -4,6 +4,7 @@
 use std::ops::Bound;
 
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
+use itertools::Itertools;
 use kvproto::{
     errorpb::{self, EpochNotMatch, FlashbackInProgress, StaleCommand},
     kvrpcpb::Context,
@@ -21,7 +22,7 @@ use crate::storage::{
     },
     mvcc::{
         default_not_found_error,
-        metrics::SCAN_LOCK_READ_TIME_VEC,
+        metrics::{ScanLockReadTimeSource, SCAN_LOCK_READ_TIME_VEC},
         reader::{OverlappedWrite, TxnCommitRecord},
         Result,
     },
@@ -278,12 +279,52 @@ impl<S: EngineSnapshot> MvccReader<S> {
         Ok(())
     }
 
-    pub fn load_in_memory_pessimisitic_lock_range<F>(
+    pub fn scan_pessimistic_locks_with_memory<F1, F2>(
+        &mut self,
+        start_key: Option<&Key>,
+        end_key: Option<&Key>,
+        filter_memory: F1,
+        filter_lock_cf: F2,
+        limit: usize,
+        source: ScanLockReadTimeSource,
+    ) -> Result<(Vec<(Key, Lock)>, bool)>
+    where
+        F1: Fn(&Key, &PessimisticLock) -> bool,
+        F2: Fn(&Lock) -> bool,
+    {
+        let (memory_locks, memory_has_remain) = self.load_in_memory_pessimistic_lock_range(
+            start_key,
+            end_key,
+            filter_memory,
+            limit,
+            source,
+        )?;
+        let (kv_pairs, kv_pair_has_remain) =
+            self.scan_locks(start_key, end_key, filter_lock_cf, limit)?;
+        // Merge the results from in-memory pessimistic locks and the lock cf.
+        // The result order is decided by the key.
+        let memory_lock_iter = memory_locks.into_iter();
+        let lock_iter = kv_pairs.into_iter();
+        let merged_iter =
+            memory_lock_iter.merge_by(lock_iter, |(memory_key, _), (key, _)| memory_key <= key);
+        let mut locks = Vec::with_capacity(limit);
+        for (key, lock) in merged_iter {
+            if limit > 0 && locks.len() >= limit {
+                break;
+            }
+            locks.push((key, lock));
+        }
+
+        Ok((locks, memory_has_remain || kv_pair_has_remain))
+    }
+
+    pub fn load_in_memory_pessimistic_lock_range<F>(
         &self,
         start_key: Option<&Key>,
         end_key: Option<&Key>,
         filter: F,
         scan_limit: usize,
+        source: ScanLockReadTimeSource,
     ) -> Result<(Vec<(Key, Lock)>, bool)>
     where
         F: Fn(&Key, &PessimisticLock) -> bool,
@@ -302,7 +343,7 @@ impl<S: EngineSnapshot> MvccReader<S> {
             };
             let elapsed = begin_instant.saturating_elapsed();
             SCAN_LOCK_READ_TIME_VEC
-                .resolve_lock
+                .get(source)
                 .observe(elapsed.as_secs_f64());
 
             res

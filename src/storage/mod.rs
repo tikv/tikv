@@ -80,7 +80,6 @@ use engine_traits::{
     raw_ttl::ttl_to_expire_ts, CfName, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS, DATA_CFS_LEN,
 };
 use futures::{future::Either, prelude::*};
-use itertools::Itertools;
 use kvproto::{
     kvrpcpb::{
         ApiVersion, ChecksumAlgorithm, CommandPri, Context, GetRequest, IsolationLevel, KeyRange,
@@ -128,7 +127,7 @@ use crate::{
         kv::{with_tls_engine, Modify, WriteData},
         lock_manager::{LockManager, MockLockManager},
         metrics::{CommandKind, *},
-        mvcc::{MvccReader, PointGetterBuilder},
+        mvcc::{metrics::ScanLockReadTimeSource::resolve_lock, MvccReader, PointGetterBuilder},
         txn::{
             commands::{RawAtomicStore, RawCompareAndSwap, TypedCommand},
             flow_controller::{EngineFlowController, FlowController},
@@ -1459,37 +1458,20 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                         Some(ScanMode::Forward),
                         !ctx.get_not_fill_cache(),
                     );
-                    let memory_locks = reader
-                        .load_in_memory_pessimisitic_lock_range(
+                    let read_res = reader
+                        .scan_pessimistic_locks_with_memory(
                             start_key.as_ref(),
                             end_key.as_ref(),
                             |_, lock| lock.start_ts <= max_ts,
-                            limit,
-                        )
-                        .map_err(txn::Error::from);
-                    let (memory_lock_kv_pairs, _) = memory_locks?;
-                    let result = reader
-                        .scan_locks(
-                            start_key.as_ref(),
-                            end_key.as_ref(),
                             |lock| lock.ts <= max_ts,
                             limit,
+                            resolve_lock,
                         )
                         .map_err(txn::Error::from);
                     statistics.add(&reader.statistics);
-                    let (kv_pairs, _) = result?;
-
-                    // Merge the results from in-memory pessimistic locks and the lock cf.
-                    // The result order is decided by the key.
-                    let memory_lock_iter = memory_lock_kv_pairs.into_iter();
-                    let lock_iter = kv_pairs.into_iter();
-                    let merged_iter = memory_lock_iter
-                        .merge_by(lock_iter, |(memory_key, _), (key, _)| memory_key <= key);
-                    let mut locks = Vec::with_capacity(limit);
-                    for (key, lock) in merged_iter {
-                        if limit > 0 && locks.len() >= limit {
-                            break;
-                        }
+                    let (read_locks, _) = read_res?;
+                    let mut locks = Vec::with_capacity(read_locks.len());
+                    for (key, lock) in read_locks.into_iter() {
                         let lock_info =
                             lock.into_lock_info(key.into_raw().map_err(txn::Error::from)?);
                         locks.push(lock_info);
@@ -3729,24 +3711,118 @@ pub mod test_util {
         )
     }
 
+    pub fn acquire_pessimistic_lock<E: Engine, L: LockManager, F: KvFormat>(
+        storage: &Storage<E, L, F>,
+        key: Key,
+        start_ts: u64,
+        for_update_ts: u64,
+    ) {
+        acquire_pessimistic_lock_impl(
+            storage,
+            vec![(key, false)],
+            start_ts,
+            for_update_ts,
+            false,
+            false,
+        )
+    }
+
+    fn acquire_pessimistic_lock_impl<E: Engine, L: LockManager, F: KvFormat>(
+        storage: &Storage<E, L, F>,
+        keys: Vec<(Key, bool)>,
+        start_ts: u64,
+        for_update_ts: u64,
+        return_values: bool,
+        check_existence: bool,
+    ) {
+        let (tx, rx) = channel();
+        storage
+            .sched_txn_command(
+                new_acquire_pessimistic_lock_command(
+                    keys,
+                    start_ts,
+                    for_update_ts,
+                    return_values,
+                    check_existence,
+                ),
+                expect_ok_callback(tx, 0),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+    }
+
+    #[cfg(test)]
+    pub fn prewrite_lock<E: Engine, L: LockManager, F: KvFormat>(
+        storage: &Storage<E, L, F>,
+        key: Key,
+        primary_key: &[u8],
+        value: &[u8],
+        start_ts: u64,
+    ) {
+        let (tx, rx) = channel();
+        storage
+            .sched_txn_command(
+                commands::Prewrite::with_defaults(
+                    vec![txn_types::Mutation::make_put(key, value.to_vec())],
+                    primary_key.to_vec(),
+                    start_ts.into(),
+                ),
+                expect_ok_callback(tx, 0),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+    }
+
     pub fn delete_pessimistic_lock<E: Engine, L: LockManager, F: KvFormat>(
         storage: &Storage<E, L, F>,
         key: Key,
         start_ts: u64,
         for_update_ts: u64,
     ) {
+        delete_pessimistic_lock_impl(storage, Some(key), start_ts, for_update_ts)
+    }
+
+    pub fn delete_pessimistic_lock_with_scan_first<E: Engine, L: LockManager, F: KvFormat>(
+        storage: &Storage<E, L, F>,
+        start_ts: u64,
+        for_update_ts: u64,
+    ) {
+        delete_pessimistic_lock_impl(storage, None, start_ts, for_update_ts)
+    }
+
+    fn delete_pessimistic_lock_impl<E: Engine, L: LockManager, F: KvFormat>(
+        storage: &Storage<E, L, F>,
+        key: Option<Key>,
+        start_ts: u64,
+        for_update_ts: u64,
+    ) {
         let (tx, rx) = channel();
-        storage
-            .sched_txn_command(
-                commands::PessimisticRollback::new(
-                    vec![key],
-                    start_ts.into(),
-                    for_update_ts.into(),
-                    Context::default(),
-                ),
-                expect_ok_callback(tx, 0),
-            )
-            .unwrap();
+        if let Some(key) = key {
+            storage
+                .sched_txn_command(
+                    commands::PessimisticRollback::new(
+                        vec![key],
+                        start_ts.into(),
+                        for_update_ts.into(),
+                        None,
+                        Context::default(),
+                    ),
+                    expect_ok_callback(tx, 0),
+                )
+                .unwrap();
+        } else {
+            storage
+                .sched_txn_command(
+                    commands::PessimisticRollbackReadPhase::new(
+                        start_ts.into(),
+                        for_update_ts.into(),
+                        None,
+                        Context::default(),
+                    ),
+                    expect_ok_callback(tx, 0),
+                )
+                .unwrap();
+        };
         rx.recv().unwrap();
     }
 
@@ -3914,7 +3990,7 @@ mod tests {
                 CancellationCallback, DiagnosticContext, KeyLockWaitInfo, LockDigest,
                 LockWaitToken, UpdateWaitForEvent, WaitTimeout,
             },
-            mvcc::LockType,
+            mvcc::{tests::must_locked, LockType},
             txn::{
                 commands,
                 commands::{AcquirePessimisticLock, Prewrite},
@@ -9590,6 +9666,7 @@ mod tests {
                     keys.clone(),
                     50.into(),
                     50.into(),
+                    None,
                     Context::default(),
                 ),
                 expect_ok_callback(tx.clone(), 0),
@@ -11559,5 +11636,72 @@ mod tests {
                 .unwrap(),
             140.into()
         );
+    }
+
+    #[test]
+    fn test_pessimistic_rollback_with_scan_first() {
+        use crate::storage::txn::tests::must_pessimistic_locked;
+        let mut storage = TestStorageBuilderApiV1::new(MockLockManager::new())
+            .build()
+            .unwrap();
+        let format_key = |prefix: char, i: usize| format!("{}{:04}", prefix, i).as_bytes().to_vec();
+
+        // Basic case, two keys could be rolled back within one pessimistic rollback
+        // request.
+        let k1 = format_key('k', 1);
+        let k2 = format_key('k', 2);
+        let start_ts = 10;
+        let for_update_ts = 10;
+        acquire_pessimistic_lock(
+            &storage,
+            Key::from_raw(k1.as_slice()),
+            start_ts,
+            for_update_ts,
+        );
+        acquire_pessimistic_lock(
+            &storage,
+            Key::from_raw(k2.as_slice()),
+            start_ts,
+            for_update_ts,
+        );
+        must_pessimistic_locked(&mut storage.engine, k1.as_slice(), start_ts, for_update_ts);
+        delete_pessimistic_lock_with_scan_first(&storage, start_ts, for_update_ts);
+        must_unlocked(&mut storage.engine, k1.as_slice());
+        must_unlocked(&mut storage.engine, k2.as_slice());
+
+        // Acquire pessimistic locks for more than 256 keys.
+        // Only pessimistic locks should be rolled back.
+        let start_ts = 11;
+        let for_update_ts = 11;
+        let num_keys = 400;
+        let prewrite_primary_key = format_key('k', 1);
+        for i in 0..num_keys {
+            let key = format_key('k', i);
+            if i % 2 == 0 {
+                acquire_pessimistic_lock(
+                    &storage,
+                    Key::from_raw(key.as_slice()),
+                    start_ts,
+                    for_update_ts,
+                );
+            } else {
+                prewrite_lock(
+                    &storage,
+                    Key::from_raw(key.as_slice()),
+                    prewrite_primary_key.as_slice(),
+                    b"value",
+                    start_ts,
+                );
+            }
+        }
+        delete_pessimistic_lock_with_scan_first(&storage, start_ts, for_update_ts);
+        for i in 0..num_keys {
+            let key = format_key('k', i);
+            if i % 2 == 0 {
+                must_unlocked(&mut storage.engine, key.as_slice());
+            } else {
+                must_locked(&mut storage.engine, key.as_slice(), start_ts);
+            }
+        }
     }
 }
