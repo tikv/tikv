@@ -6852,7 +6852,16 @@ def PessimisticLocking() -> RowPanel:
                 description="The length includes the entering transaction itself",
                 yaxis=yaxis(format=UNITS.SHORT),
                 metric="tikv_lock_wait_queue_length_bucket",
-            )
+            ),
+            graph_panel_histogram_quantiles(
+                title="In-memory scan lock read duration",
+                description="The duration scan in-memory pessimistic locks with read lock",
+                yaxes=yaxes(left_format=UNITS.SECONDS, log_base=2),
+                metric="tikv_storage_mvcc_scan_lock_read_duration_seconds",
+                by_labels=["type"],
+                hide_count=True,
+                hide_avg=True,
+            ),
         ]
     )
     return layout.row_panel
