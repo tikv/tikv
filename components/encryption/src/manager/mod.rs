@@ -13,9 +13,7 @@ use std::{
 };
 
 use crossbeam::channel::{self, select, tick};
-use engine_traits::{
-    EncryptionKeyManager, EncryptionMethod as EtEncryptionMethod, FileEncryptionInfo,
-};
+use crypto::rand;
 use fail::fail_point;
 use file_system::File;
 use kvproto::encryptionpb::{DataKey, EncryptionMethod, FileDictionary, FileInfo, KeyDictionary};
@@ -24,7 +22,7 @@ use tikv_util::{box_err, debug, error, info, sys::thread::StdThreadBuildWrapper,
 
 use crate::{
     config::EncryptionConfig,
-    crypter::{self, Iv},
+    crypter::{self, FileEncryptionInfo, Iv},
     encrypted_file::EncryptedFile,
     file_dict_file::FileDictionaryFile,
     io::{DecrypterReader, EncrypterWriter},
@@ -203,7 +201,7 @@ impl Dicts {
     fn new_file(&self, fname: &str, method: EncryptionMethod, sync: bool) -> Result<FileInfo> {
         let mut file_dict_file = self.file_dict_file.lock().unwrap();
         let iv = if method != EncryptionMethod::Plaintext {
-            Iv::new_ctr()
+            Iv::new_ctr()?
         } else {
             Iv::Empty
         };
@@ -351,7 +349,9 @@ impl Dicts {
 
         // Generate new data key.
         for _ in 0..GENERATE_DATA_KEY_LIMIT {
-            let (key_id, key) = generate_data_key(method);
+            let Ok((key_id, key)) = generate_data_key(method) else {
+                continue;
+            };
             if key_id == 0 {
                 // 0 is invalid
                 continue;
@@ -439,14 +439,12 @@ fn run_background_rotate_work(
     }
 }
 
-fn generate_data_key(method: EncryptionMethod) -> (u64, Vec<u8>) {
-    use rand::{rngs::OsRng, RngCore};
-
-    let key_id = OsRng.next_u64();
+pub(crate) fn generate_data_key(method: EncryptionMethod) -> Result<(u64, Vec<u8>)> {
+    let key_id = rand::rand_u64()?;
     let key_length = crypter::get_method_key_length(method);
     let mut key = vec![0; key_length];
-    OsRng.fill_bytes(&mut key);
-    (key_id, key)
+    rand::rand_bytes(&mut key)?;
+    Ok((key_id, key))
 }
 
 pub struct DataKeyManager {
@@ -661,9 +659,9 @@ impl DataKeyManager {
         };
         EncrypterWriter::new(
             writer,
-            crypter::from_engine_encryption_method(file.method),
+            file.method,
             &file.key,
-            if file.method == EtEncryptionMethod::Plaintext {
+            if file.method == EncryptionMethod::Plaintext {
                 debug_assert!(file.iv.is_empty());
                 Iv::Empty
             } else {
@@ -691,9 +689,9 @@ impl DataKeyManager {
         let file = self.get_file(fname)?;
         DecrypterReader::new(
             reader,
-            crypter::from_engine_encryption_method(file.method),
+            file.method,
             &file.key,
-            if file.method == EtEncryptionMethod::Plaintext {
+            if file.method == EncryptionMethod::Plaintext {
                 debug_assert!(file.iv.is_empty());
                 Iv::Empty
             } else {
@@ -767,11 +765,7 @@ impl DataKeyManager {
                 }
             }
         };
-        let encrypted_file = FileEncryptionInfo {
-            key,
-            method: crypter::to_engine_encryption_method(method),
-            iv,
-        };
+        let encrypted_file = FileEncryptionInfo { key, method, iv };
         Ok(Some(encrypted_file))
     }
 
@@ -844,8 +838,8 @@ impl DataKeyManager {
     }
 
     /// Return which method this manager is using.
-    pub fn encryption_method(&self) -> engine_traits::EncryptionMethod {
-        crypter::to_engine_encryption_method(self.method)
+    pub fn encryption_method(&self) -> EncryptionMethod {
+        self.method
     }
 
     /// For tests.
@@ -869,9 +863,9 @@ impl Drop for DataKeyManager {
     }
 }
 
-impl EncryptionKeyManager for DataKeyManager {
+impl DataKeyManager {
     // Get key to open existing file.
-    fn get_file(&self, fname: &str) -> IoResult<FileEncryptionInfo> {
+    pub fn get_file(&self, fname: &str) -> IoResult<FileEncryptionInfo> {
         match self.get_file_exists(fname) {
             Ok(Some(result)) => Ok(result),
             Ok(None) => {
@@ -881,7 +875,7 @@ impl EncryptionKeyManager for DataKeyManager {
                 let method = EncryptionMethod::Plaintext;
                 Ok(FileEncryptionInfo {
                     key: vec![],
-                    method: crypter::to_engine_encryption_method(method),
+                    method,
                     iv: file.iv,
                 })
             }
@@ -889,21 +883,25 @@ impl EncryptionKeyManager for DataKeyManager {
         }
     }
 
-    fn new_file(&self, fname: &str) -> IoResult<FileEncryptionInfo> {
+    pub fn new_file(&self, fname: &str) -> IoResult<FileEncryptionInfo> {
         let (_, data_key) = self.dicts.current_data_key();
         let key = data_key.get_key().to_owned();
         let file = self.dicts.new_file(fname, self.method, true)?;
         let encrypted_file = FileEncryptionInfo {
             key,
-            method: crypter::to_engine_encryption_method(file.method),
+            method: file.method,
             iv: file.get_iv().to_owned(),
         };
         Ok(encrypted_file)
     }
 
-    // See comments of `remove_dir` for more details when using this with a
-    // directory.
-    fn delete_file(&self, fname: &str, physical_fname: Option<&str>) -> IoResult<()> {
+    // Can be used with both file and directory. See comments of `remove_dir` for
+    // more details when using this with a directory.
+    //
+    // `physical_fname` is a hint when `fname` was renamed physically.
+    // Depending on the implementation, providing false negative or false
+    // positive value may result in leaking encryption keys.
+    pub fn delete_file(&self, fname: &str, physical_fname: Option<&str>) -> IoResult<()> {
         fail_point!("key_manager_fails_before_delete_file", |_| IoResult::Err(
             io::ErrorKind::Other.into()
         ));
@@ -924,7 +922,7 @@ impl EncryptionKeyManager for DataKeyManager {
         Ok(())
     }
 
-    fn link_file(&self, src_fname: &str, dst_fname: &str) -> IoResult<()> {
+    pub fn link_file(&self, src_fname: &str, dst_fname: &str) -> IoResult<()> {
         let src_path = Path::new(src_fname);
         let dst_path = Path::new(dst_fname);
         if src_path.is_dir() {
@@ -1006,8 +1004,7 @@ impl<'a> DataKeyImporter<'a> {
             if key_id.is_none() {
                 for _ in 0..GENERATE_DATA_KEY_LIMIT {
                     // Match `generate_data_key`.
-                    use rand::{rngs::OsRng, RngCore};
-                    let id = OsRng.next_u64();
+                    let id = rand::rand_u64()?;
                     if let Entry::Vacant(e) = key_dict.keys.entry(id) {
                         key_id = Some(id);
                         e.insert(new_key);
@@ -1120,8 +1117,8 @@ impl<'a> Drop for DataKeyImporter<'a> {
 
 #[cfg(test)]
 mod tests {
-    use engine_traits::EncryptionMethod as EtEncryptionMethod;
     use file_system::{remove_file, File};
+    use kvproto::encryptionpb::EncryptionMethod;
     use matches::assert_matches;
     use tempfile::TempDir;
     use test_util::create_test_key_file;
@@ -1243,7 +1240,7 @@ mod tests {
         let foo3 = manager.get_file("foo").unwrap();
         assert_eq!(foo1, foo3);
         let bar = manager.new_file("bar").unwrap();
-        assert_eq!(bar.method, EtEncryptionMethod::Plaintext);
+        assert_eq!(bar.method, EncryptionMethod::Plaintext);
     }
 
     // When enabling encryption, using insecure master key is not allowed.
@@ -1861,11 +1858,11 @@ mod tests {
             )
             .unwrap();
         // different key
-        let (_, key2) = generate_data_key(EncryptionMethod::Aes192Ctr);
+        let (_, key2) = generate_data_key(EncryptionMethod::Aes192Ctr).unwrap();
         importer
             .add(
                 "2",
-                Iv::new_ctr().as_slice().to_owned(),
+                Iv::new_ctr().unwrap().as_slice().to_owned(),
                 DataKey {
                     key: key2.clone(),
                     method: EncryptionMethod::Aes192Ctr,
@@ -1899,7 +1896,7 @@ mod tests {
         importer
             .add(
                 "2",
-                Iv::new_ctr().as_slice().to_owned(),
+                Iv::new_ctr().unwrap().as_slice().to_owned(),
                 DataKey {
                     key: key2.clone(),
                     method: EncryptionMethod::Aes192Ctr,
@@ -1921,7 +1918,7 @@ mod tests {
         let tmp_dir = tempfile::TempDir::new().unwrap();
         let manager = new_key_manager_def(&tmp_dir, Some(EncryptionMethod::Aes192Ctr)).unwrap();
 
-        let (_, key) = generate_data_key(EncryptionMethod::Aes192Ctr);
+        let (_, key) = generate_data_key(EncryptionMethod::Aes192Ctr).unwrap();
         let file0 = manager.new_file("0").unwrap();
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)

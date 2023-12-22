@@ -34,6 +34,7 @@ pprof-fp = ["tikv/pprof-fp"]
 
 [dependencies]
 clap = "2.32"
+crypto = { workspace = true }
 encryption_export = { workspace = true }
 engine_traits = { workspace = true }
 keys = { workspace = true }

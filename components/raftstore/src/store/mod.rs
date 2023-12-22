@@ -86,9 +86,9 @@ pub use self::{
     worker::{
         metrics as worker_metrics, need_compact, AutoSplitController, BatchComponent, Bucket,
         BucketRange, BucketStatsInfo, CachedReadDelegate, CheckLeaderRunner, CheckLeaderTask,
-        CompactThreshold, FlowStatistics, FlowStatsReporter, KeyEntry, LocalReadContext,
-        LocalReader, LocalReaderCore, PdStatsMonitor, PdTask, ReadDelegate, ReadExecutor,
-        ReadExecutorProvider, ReadProgress, ReadStats, RefreshConfigTask, RegionTask,
+        CompactThreshold, FlowStatistics, FlowStatsReporter, FullCompactController, KeyEntry,
+        LocalReadContext, LocalReader, LocalReaderCore, PdStatsMonitor, PdTask, ReadDelegate,
+        ReadExecutor, ReadExecutorProvider, ReadProgress, ReadStats, RefreshConfigTask, RegionTask,
         SplitCheckRunner, SplitCheckTask, SplitConfig, SplitConfigManager, SplitInfo,
         StoreMetaDelegate, StoreStatsReporter, TrackVer, WriteStats, WriterContoller,
         BIG_REGION_CPU_OVERLOAD_THRESHOLD_RATIO, DEFAULT_BIG_REGION_BYTE_THRESHOLD,

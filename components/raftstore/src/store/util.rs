@@ -1193,14 +1193,15 @@ impl RegionReadProgressRegistry {
     }
 
     // Get the minimum `resolved_ts` which could ensure that there will be no more
-    // locks whose `start_ts` is greater than it.
+    // locks whose `commit_ts` is smaller than it.
     pub fn get_min_resolved_ts(&self) -> u64 {
         self.registry
             .lock()
             .unwrap()
             .iter()
             .map(|(_, rrp)| rrp.resolved_ts())
-            .filter(|ts| *ts != 0) // ts == 0 means the peer is uninitialized
+            //TODO: the uninitialized peer should be taken into consideration instead of skipping it(https://github.com/tikv/tikv/issues/15506).
+            .filter(|ts| *ts != 0) // ts == 0 means the peer is uninitialized,
             .min()
             .unwrap_or(0)
     }
@@ -1733,13 +1734,38 @@ pub struct RaftstoreDuration {
 }
 
 impl RaftstoreDuration {
+    #[inline]
     pub fn sum(&self) -> std::time::Duration {
-        self.store_wait_duration.unwrap_or_default()
-            + self.store_process_duration.unwrap_or_default()
+        self.delays_on_disk_io(true) + self.delays_on_net_io()
+    }
+
+    #[inline]
+    /// Returns the delayed duration on Disk I/O.
+    pub fn delays_on_disk_io(&self, include_wait_duration: bool) -> std::time::Duration {
+        let duration = self.store_process_duration.unwrap_or_default()
             + self.store_write_duration.unwrap_or_default()
-            + self.store_commit_duration.unwrap_or_default()
-            + self.apply_wait_duration.unwrap_or_default()
-            + self.apply_process_duration.unwrap_or_default()
+            + self.apply_process_duration.unwrap_or_default();
+        if include_wait_duration {
+            duration
+                + self.store_wait_duration.unwrap_or_default()
+                + self.apply_wait_duration.unwrap_or_default()
+        } else {
+            duration
+        }
+    }
+
+    #[inline]
+    /// Returns the delayed duration on Network I/O.
+    ///
+    /// Normally, it can be reflected by the duraiton on
+    /// `store_commit_duraiton`.
+    pub fn delays_on_net_io(&self) -> std::time::Duration {
+        // The `store_commit_duration` serves as an indicator for latency
+        // during the duration of transferring Raft logs to peers and appending
+        // logs. In most scenarios, instances of latency fluctuations in the
+        // network are reflected by this duration. Hence, it is selected as a
+        // representative of network latency.
+        self.store_commit_duration.unwrap_or_default()
     }
 }
 

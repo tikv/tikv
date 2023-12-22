@@ -19,7 +19,7 @@ use futures::{
     future::FutureExt,
     stream::StreamExt,
 };
-use prometheus::IntGauge;
+use prometheus::{IntCounter, IntGauge};
 use yatp::Remote;
 
 use super::metrics::*;
@@ -90,6 +90,29 @@ impl<R: Runnable + 'static> Drop for RunnableWrapper<R> {
 enum Msg<T: Display + Send> {
     Task(T),
     Timeout,
+}
+
+// A wrapper of Runnable that implements RunnableWithTimer with no timeout.
+struct NoTimeoutRunnableWrapper<T: Runnable>(T);
+
+impl<T: Runnable> Runnable for NoTimeoutRunnableWrapper<T> {
+    type Task = T::Task;
+    fn run(&mut self, task: Self::Task) {
+        self.0.run(task)
+    }
+    fn on_tick(&mut self) {
+        self.0.on_tick()
+    }
+    fn shutdown(&mut self) {
+        self.0.shutdown()
+    }
+}
+
+impl<T: Runnable> RunnableWithTimer for NoTimeoutRunnableWrapper<T> {
+    fn on_timeout(&mut self) {}
+    fn get_interval(&self) -> Duration {
+        Duration::ZERO
+    }
 }
 
 /// Scheduler provides interface to schedule task to underlying workers.
@@ -174,6 +197,7 @@ pub struct LazyWorker<T: Display + Send + 'static> {
     worker: Worker,
     receiver: Option<UnboundedReceiver<Msg<T>>>,
     metrics_pending_task_count: IntGauge,
+    metrics_handled_task_count: IntCounter,
 }
 
 impl<T: Display + Send + 'static> LazyWorker<T> {
@@ -184,12 +208,8 @@ impl<T: Display + Send + 'static> LazyWorker<T> {
     }
 
     pub fn start<R: 'static + Runnable<Task = T>>(&mut self, runner: R) -> bool {
-        if let Some(receiver) = self.receiver.take() {
-            self.worker
-                .start_impl(runner, receiver, self.metrics_pending_task_count.clone());
-            return true;
-        }
-        false
+        let no_timeout_runner = NoTimeoutRunnableWrapper(runner);
+        self.start_with_timer(no_timeout_runner)
     }
 
     pub fn start_with_timer<R: 'static + RunnableWithTimer<Task = T>>(
@@ -202,6 +222,7 @@ impl<T: Display + Send + 'static> LazyWorker<T> {
                 self.scheduler.sender.clone(),
                 receiver,
                 self.metrics_pending_task_count.clone(),
+                self.metrics_handled_task_count.clone(),
             );
             return true;
         }
@@ -223,6 +244,14 @@ impl<T: Display + Send + 'static> LazyWorker<T> {
 
     pub fn remote(&self) -> Remote<yatp::task::future::TaskCell> {
         self.worker.remote()
+    }
+
+    pub fn pool_size(&self) -> usize {
+        self.worker.pool_size()
+    }
+
+    pub fn pool(&self) -> FuturePool {
+        self.worker.pool()
     }
 }
 
@@ -332,15 +361,8 @@ impl Worker {
         name: S,
         runner: R,
     ) -> Scheduler<R::Task> {
-        let (tx, rx) = unbounded();
-        let metrics_pending_task_count = WORKER_PENDING_TASK_VEC.with_label_values(&[&name.into()]);
-        self.start_impl(runner, rx, metrics_pending_task_count.clone());
-        Scheduler::new(
-            tx,
-            self.counter.clone(),
-            self.pending_capacity,
-            metrics_pending_task_count,
-        )
+        let no_timeout_runner = NoTimeoutRunnableWrapper(runner);
+        self.start_with_timer(name, no_timeout_runner)
     }
 
     pub fn start_with_timer<R: RunnableWithTimer + 'static, S: Into<String>>(
@@ -349,8 +371,16 @@ impl Worker {
         runner: R,
     ) -> Scheduler<R::Task> {
         let (tx, rx) = unbounded();
-        let metrics_pending_task_count = WORKER_PENDING_TASK_VEC.with_label_values(&[&name.into()]);
-        self.start_with_timer_impl(runner, tx.clone(), rx, metrics_pending_task_count.clone());
+        let name = name.into();
+        let metrics_pending_task_count = WORKER_PENDING_TASK_VEC.with_label_values(&[&name]);
+        let metrics_handled_task_count = WORKER_HANDLED_TASK_VEC.with_label_values(&[&name]);
+        self.start_with_timer_impl(
+            runner,
+            tx.clone(),
+            rx,
+            metrics_pending_task_count.clone(),
+            metrics_handled_task_count,
+        );
         Scheduler::new(
             tx,
             self.counter.clone(),
@@ -402,7 +432,13 @@ impl Worker {
         let _ = self.pool.spawn(f);
     }
 
-    fn delay_notify<T: Display + Send + 'static>(tx: UnboundedSender<Msg<T>>, timeout: Duration) {
+    fn delay_notify<T: Display + Send + 'static>(
+        tx: Option<UnboundedSender<Msg<T>>>,
+        timeout: Duration,
+    ) {
+        let Some(tx) = tx else {
+            return;
+        };
         let now = Instant::now();
         let f = GLOBAL_TIMER_HANDLE
             .delay(now + timeout)
@@ -418,7 +454,9 @@ impl Worker {
         name: S,
     ) -> LazyWorker<T> {
         let (tx, rx) = unbounded();
-        let metrics_pending_task_count = WORKER_PENDING_TASK_VEC.with_label_values(&[&name.into()]);
+        let name = name.into();
+        let metrics_pending_task_count = WORKER_PENDING_TASK_VEC.with_label_values(&[&name]);
+        let metrics_handled_task_count = WORKER_HANDLED_TASK_VEC.with_label_values(&[&name]);
         LazyWorker {
             receiver: Some(rx),
             worker: self.clone(),
@@ -429,6 +467,7 @@ impl Worker {
                 metrics_pending_task_count.clone(),
             ),
             metrics_pending_task_count,
+            metrics_handled_task_count,
         }
     }
 
@@ -448,26 +487,12 @@ impl Worker {
         self.pool.remote().clone()
     }
 
-    fn start_impl<R: Runnable + 'static>(
-        &self,
-        runner: R,
-        mut receiver: UnboundedReceiver<Msg<R::Task>>,
-        metrics_pending_task_count: IntGauge,
-    ) {
-        let counter = self.counter.clone();
-        let _ = self.pool.spawn(async move {
-            let mut handle = RunnableWrapper { inner: runner };
-            while let Some(msg) = receiver.next().await {
-                match msg {
-                    Msg::Task(task) => {
-                        handle.inner.run(task);
-                        counter.fetch_sub(1, Ordering::SeqCst);
-                        metrics_pending_task_count.dec();
-                    }
-                    Msg::Timeout => (),
-                }
-            }
-        });
+    pub fn pool_size(&self) -> usize {
+        self.pool.get_pool_size()
+    }
+
+    pub fn pool(&self) -> FuturePool {
+        self.pool.clone()
     }
 
     fn start_with_timer_impl<R>(
@@ -476,11 +501,13 @@ impl Worker {
         tx: UnboundedSender<Msg<R::Task>>,
         mut receiver: UnboundedReceiver<Msg<R::Task>>,
         metrics_pending_task_count: IntGauge,
+        metrics_handled_task_count: IntCounter,
     ) where
         R: RunnableWithTimer + 'static,
     {
         let counter = self.counter.clone();
         let timeout = runner.get_interval();
+        let tx = if !timeout.is_zero() { Some(tx) } else { None };
         Self::delay_notify(tx.clone(), timeout);
         let _ = self.pool.spawn(async move {
             let mut handle = RunnableWrapper { inner: runner };
@@ -490,6 +517,7 @@ impl Worker {
                         handle.inner.run(task);
                         counter.fetch_sub(1, Ordering::SeqCst);
                         metrics_pending_task_count.dec();
+                        metrics_handled_task_count.inc();
                     }
                     Msg::Timeout => {
                         handle.inner.on_timeout();
@@ -577,5 +605,8 @@ mod tests {
         // The worker need some time to trigger shutdown.
         std::thread::sleep(Duration::from_millis(50));
         assert_eq!(12, count.load(atomic::Ordering::SeqCst));
+
+        // Handled task must be 3.
+        assert_eq!(3, worker.metrics_handled_task_count.get());
     }
 }

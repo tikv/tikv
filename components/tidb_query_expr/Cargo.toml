@@ -10,6 +10,7 @@ base64 = "0.13"
 bstr = "0.2.8"
 byteorder = "1.2"
 codec = { workspace = true }
+crypto = { workspace = true }
 file_system = { workspace = true }
 flate2 = { version = "=1.0.11", default-features = false, features = ["zlib"] }
 hex = "0.4"
@@ -17,9 +18,8 @@ log_wrappers = { workspace = true }
 match-template = "0.0.1"
 num = { version = "0.3", default-features = false }
 num-traits = "0.2"
-openssl = { version = "0.10" }
+openssl = { workspace = true }
 protobuf = "2"
-rand = "0.8.3"
 regex = "1.1"
 safemem = { version = "0.3", default-features = false }
 serde = "1.0"

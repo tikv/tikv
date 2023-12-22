@@ -17,6 +17,7 @@ use yatp::{
 };
 
 use crate::{
+    resource_control::{priority_from_task_meta, TaskPriority},
     thread_group::GroupProperties,
     time::{Duration, Instant},
     timer::GLOBAL_TIMER_HANDLE,
@@ -166,9 +167,7 @@ pub struct YatpPoolRunner<T: PoolTicker> {
 
     // Statistics about the schedule wait duration.
     // local histogram for high,medium,low priority tasks.
-    schedule_wait_durations: [LocalHistogram; 3],
-    // return the index of `schedule_wait_durations` from task metadata.
-    metric_idx_from_task_meta: Arc<dyn Fn(&[u8]) -> usize + Send + Sync>,
+    schedule_wait_durations: [LocalHistogram; TaskPriority::PRIORITY_COUNT],
 }
 
 impl<T: PoolTicker> Runner for YatpPoolRunner<T> {
@@ -193,7 +192,7 @@ impl<T: PoolTicker> Runner for YatpPoolRunner<T> {
     fn handle(&mut self, local: &mut Local<Self::TaskCell>, mut task_cell: Self::TaskCell) -> bool {
         let extras = task_cell.mut_extras();
         if let Some(schedule_time) = extras.schedule_time() {
-            let idx = (*self.metric_idx_from_task_meta)(extras.metadata());
+            let idx = priority_from_task_meta(extras.metadata()) as usize;
             self.schedule_wait_durations[idx].observe(schedule_time.elapsed().as_secs_f64());
         }
         let finished = self.inner.handle(local, task_cell);
@@ -232,8 +231,7 @@ impl<T: PoolTicker> YatpPoolRunner<T> {
         after_start: Option<Arc<dyn Fn() + Send + Sync>>,
         before_stop: Option<Arc<dyn Fn() + Send + Sync>>,
         before_pause: Option<Arc<dyn Fn() + Send + Sync>>,
-        schedule_wait_durations: [Histogram; 3],
-        metric_idx_from_task_meta: Arc<dyn Fn(&[u8]) -> usize + Send + Sync>,
+        schedule_wait_durations: [Histogram; TaskPriority::PRIORITY_COUNT],
     ) -> Self {
         YatpPoolRunner {
             inner,
@@ -243,7 +241,6 @@ impl<T: PoolTicker> YatpPoolRunner<T> {
             before_stop,
             before_pause,
             schedule_wait_durations: schedule_wait_durations.map(|m| m.local()),
-            metric_idx_from_task_meta,
         }
     }
 }
@@ -356,8 +353,8 @@ impl<T: PoolTicker> YatpPoolBuilder<T> {
         self
     }
 
-    pub fn enable_task_wait_metrics(mut self) -> Self {
-        self.enable_task_wait_metrics = true;
+    pub fn enable_task_wait_metrics(mut self, enable: bool) -> Self {
+        self.enable_task_wait_metrics = enable;
         self
     }
 
@@ -394,7 +391,7 @@ impl<T: PoolTicker> YatpPoolBuilder<T> {
         FuturePool::from_pool(pool, &name, size, task)
     }
 
-    fn build_single_level_pool(self) -> ThreadPool<TaskCell> {
+    pub fn build_single_level_pool(self) -> ThreadPool<TaskCell> {
         let (builder, runner) = self.create_builder();
         builder.build_with_queue_and_runner(
             yatp::queue::QueueType::SingleLevel,
@@ -402,18 +399,7 @@ impl<T: PoolTicker> YatpPoolBuilder<T> {
         )
     }
 
-    pub fn build_multi_level_future_pool(self) -> FuturePool {
-        let name = self
-            .name_prefix
-            .clone()
-            .unwrap_or_else(|| "yatp_pool".to_string());
-        let size = self.core_thread_count;
-        let task = self.max_tasks;
-        let pool = self.build_multi_level_pool();
-        FuturePool::from_pool(pool, &name, size, task)
-    }
-
-    fn build_multi_level_pool(self) -> ThreadPool<TaskCell> {
+    pub fn build_multi_level_pool(self) -> ThreadPool<TaskCell> {
         let name = self
             .name_prefix
             .clone()
@@ -506,15 +492,13 @@ impl<T: PoolTicker> YatpPoolBuilder<T> {
         let before_stop = self.before_stop.take();
         let before_pause = self.before_pause.take();
         let schedule_wait_durations = if self.enable_task_wait_metrics {
-            ["high", "medium", "low"].map(|p| {
-                metrics::YATP_POOL_SCHEDULE_WAIT_DURATION_VEC.with_label_values(&[&name, p])
+            TaskPriority::priorities().map(|p| {
+                metrics::YATP_POOL_SCHEDULE_WAIT_DURATION_VEC
+                    .with_label_values(&[&name, p.as_str()])
             })
         } else {
             std::array::from_fn(|_| Histogram::with_opts(HistogramOpts::new("_", "_")).unwrap())
         };
-        let metric_idx_from_task_meta = self
-            .metric_idx_from_task_meta
-            .unwrap_or_else(|| Arc::new(|_| 0));
         let read_pool_runner = YatpPoolRunner::new(
             Default::default(),
             self.ticker.clone(),
@@ -522,7 +506,6 @@ impl<T: PoolTicker> YatpPoolBuilder<T> {
             before_stop,
             before_pause,
             schedule_wait_durations,
-            metric_idx_from_task_meta,
         );
         (builder, read_pool_runner)
     }
@@ -545,7 +528,7 @@ mod tests {
         let name = "test_record_schedule_wait_duration";
         let pool = YatpPoolBuilder::new(DefaultTicker::default())
             .name_prefix(name)
-            .enable_task_wait_metrics()
+            .enable_task_wait_metrics(true)
             .build_single_level_pool();
         let (tx, rx) = mpsc::channel();
         for _ in 0..3 {
@@ -565,7 +548,7 @@ mod tests {
         // Drop the pool so the local metrics are flushed.
         drop(pool);
         let histogram =
-            metrics::YATP_POOL_SCHEDULE_WAIT_DURATION_VEC.with_label_values(&[name, "high"]);
+            metrics::YATP_POOL_SCHEDULE_WAIT_DURATION_VEC.with_label_values(&[name, "medium"]);
         assert_eq!(histogram.get_sample_count() as u32, 6, "{:?}", histogram);
     }
 

@@ -17,8 +17,8 @@ bytes = "1.0"
 cloud = { workspace = true }
 crc32fast = "1.2"
 crossbeam = "0.8"
+crypto = { workspace = true }
 derive_more = "0.99.3"
-engine_traits = { workspace = true }
 error_code = { workspace = true }
 fail = "0.5"
 file_system = { workspace = true }
@@ -28,10 +28,12 @@ hex = "0.4.2"
 kvproto = { workspace = true }
 lazy_static = "1.3"
 online_config = { workspace = true }
-openssl = "0.10"
+openssl = { workspace = true }
 prometheus = { version = "0.13", features = ["nightly"] }
 protobuf = { version = "2.8", features = ["bytes"] }
-rand = "0.8"
+# For simplicity and compliance with FIPS 140 requirements for random number
+# generation, do not use the 'rand' crate in encryption-related code.
+# rand = "*"
 serde = "1.0"
 serde_derive = "1.0"
 slog = { workspace = true }
