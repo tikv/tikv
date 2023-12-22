@@ -15475,7 +15475,7 @@
           "thresholds": [],
           "timeFrom": null,
           "timeShift": null,
-          "title": "99% Process ready duration per server",
+          "title": "Process ready duration per server",
           "tooltip": {
             "msResolution": true,
             "shared": true,
@@ -15780,7 +15780,7 @@
           "thresholds": [],
           "timeFrom": null,
           "timeShift": null,
-          "title": "99% Store write loop duration per server",
+          "title": "Store write loop duration per server",
           "tooltip": {
             "msResolution": true,
             "shared": true,
@@ -16085,7 +16085,7 @@
           "thresholds": [],
           "timeFrom": null,
           "timeShift": null,
-          "title": "99% Commit log duration per server",
+          "title": "Commit log duration per server",
           "tooltip": {
             "msResolution": true,
             "shared": true,
@@ -16390,7 +16390,7 @@
           "thresholds": [],
           "timeFrom": null,
           "timeShift": null,
-          "title": "99% Commit log duration per server",
+          "title": "Commit log duration per server",
           "tooltip": {
             "msResolution": true,
             "shared": true,
@@ -16695,7 +16695,7 @@
           "thresholds": [],
           "timeFrom": null,
           "timeShift": null,
-          "title": "99% Apply log duration per server",
+          "title": "Apply log duration per server",
           "tooltip": {
             "msResolution": true,
             "shared": true,
@@ -17000,7 +17000,7 @@
           "thresholds": [],
           "timeFrom": null,
           "timeShift": null,
-          "title": "99% Raft Message Wait Flush Duration",
+          "title": "Raft Message Wait Flush Duration",
           "tooltip": {
             "msResolution": true,
             "shared": true,
@@ -17305,7 +17305,7 @@
           "thresholds": [],
           "timeFrom": null,
           "timeShift": null,
-          "title": "99% Raft Client Wait Connection Ready Duration",
+          "title": "Raft Client Wait Connection Ready Duration",
           "tooltip": {
             "msResolution": true,
             "shared": true,
