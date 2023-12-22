@@ -17,7 +17,7 @@ use engine_traits::{
     CF_DEFAULT, CF_LOCK, CF_WRITE,
 };
 use skiplist_rs::{IterRef, Skiplist};
-use tikv_util::config::ReadableSize;
+use tikv_util::{config::ReadableSize, box_err};
 
 use crate::keys::{
     decode_key, encode_seek_key, InternalKey, InternalKeyComparator, ValueType,
@@ -190,8 +190,26 @@ impl RegionCacheEngine for RegionCacheMemoryEngine {
     }
 }
 
-// todo: fill fields needed
-pub struct RegionCacheWriteBatch;
+/// RegionCacheWriteBatch maintains its own in-memory buffer.
+#[derive(Default, Clone, Debug)]
+pub struct RegionCacheWriteBatch {
+    buffer: Vec<RegionCacheWriteBatchEntry>,
+    sequence_number: Option<u64>,
+}
+
+impl RegionCacheWriteBatch {
+
+    pub fn with_capacity(cap: usize) -> Self {
+        Self { buffer: Vec::with_capacity(cap), sequence_number: None }
+    }
+}
+
+#[derive(Clone, Debug)]
+struct RegionCacheWriteBatchEntry {
+    cf: String,
+    key: Bytes,
+    mutation: (),
+}
 
 impl WriteBatchExt for RegionCacheMemoryEngine {
     type WriteBatch = RegionCacheWriteBatch;
@@ -199,11 +217,11 @@ impl WriteBatchExt for RegionCacheMemoryEngine {
     const WRITE_BATCH_MAX_KEYS: usize = 256;
 
     fn write_batch(&self) -> Self::WriteBatch {
-        RegionCacheWriteBatch {}
+        RegionCacheWriteBatch::default()
     }
 
-    fn write_batch_with_cap(&self, _: usize) -> Self::WriteBatch {
-        RegionCacheWriteBatch {}
+    fn write_batch_with_cap(&self, cap: usize) -> Self::WriteBatch {
+        RegionCacheWriteBatch::with_capacity(cap)
     }
 }
 
@@ -531,6 +549,14 @@ impl WriteBatch for RegionCacheWriteBatch {
 
     fn merge(&mut self, _: Self) -> Result<()> {
         unimplemented!()
+    }
+
+    fn set_sequence_number(&mut self, seq: u64) -> Result<()> {
+        if let Some(seqno) = self.sequence_number {
+            return Err(box_err!("Sequence number {} already set", seqno))
+        };
+        self.sequence_number = Some(seq);
+        Ok(())
     }
 }
 

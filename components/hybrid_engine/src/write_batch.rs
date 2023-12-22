@@ -3,12 +3,13 @@
 use engine_traits::{
     KvEngine, Mutable, RegionCacheEngine, Result, WriteBatch, WriteBatchExt, WriteOptions,
 };
+use region_cache_memory_engine::RegionCacheMemoryEngine;
 
 use crate::engine::HybridEngine;
 
 pub struct HybridEngineWriteBatch<EK: KvEngine> {
-    _disk_write_batch: EK::WriteBatch,
-    // todo: region_cache_engine write batch
+    disk_write_batch: EK::WriteBatch,
+    cache_write_batch: <RegionCacheMemoryEngine as WriteBatchExt>::WriteBatch,
 }
 
 impl<EK, EC> WriteBatchExt for HybridEngine<EK, EC>
@@ -29,12 +30,18 @@ where
 }
 
 impl<EK: KvEngine> WriteBatch for HybridEngineWriteBatch<EK> {
-    fn write_opt(&mut self, _: &WriteOptions) -> Result<u64> {
-        unimplemented!()
+    fn write_opt(&mut self, opts: &WriteOptions) -> Result<u64> {
+        self.write_callback_opt(opts, |_| ())
     }
 
-    fn write_callback_opt(&mut self, _opts: &WriteOptions, _cb: impl FnMut()) -> Result<u64> {
-        unimplemented!()
+    fn write_callback_opt(&mut self, opts: &WriteOptions, mut cb: impl FnMut(u64)) -> Result<u64> {
+        self.disk_write_batch.write_callback_opt(opts, |s| {
+            self.cache_write_batch.set_sequence_number(s).unwrap();
+            self.cache_write_batch.write_opt(opts).unwrap();
+        }).map(|s| {
+            cb(s);
+            s
+        })
     }
 
     fn data_size(&self) -> usize {
