@@ -1467,10 +1467,31 @@ mod tests {
         ERR_DATA_OUT_OF_RANGE, ERR_DATA_TOO_LONG, ERR_TRUNCATE_WRONG_VALUE, ERR_UNKNOWN,
         WARN_DATA_TRUNCATED,
     };
+<<<<<<< HEAD
     use tidb_query_datatype::codec::mysql::charset::*;
     use tidb_query_datatype::codec::mysql::decimal::{max_decimal, max_or_min_dec};
     use tidb_query_datatype::codec::mysql::{
         Decimal, Duration, Json, RoundMode, Time, TimeType, MAX_FSP, MIN_FSP,
+=======
+
+    use tidb_query_datatype::{
+        builder::FieldTypeBuilder,
+        codec::{
+            convert::produce_dec_with_specified_tp,
+            data_type::{Bytes, Int, Real},
+            error::{
+                ERR_DATA_OUT_OF_RANGE, ERR_DATA_TOO_LONG, ERR_TRUNCATE_WRONG_VALUE, ERR_UNKNOWN,
+                WARN_DATA_TRUNCATED,
+            },
+            mysql::{
+                charset::*,
+                decimal::{max_decimal, max_or_min_dec},
+                Decimal, Duration, Json, RoundMode, Time, TimeType, Tz, MAX_FSP, MIN_FSP,
+            },
+        },
+        expr::{EvalConfig, EvalContext, Flag},
+        Collation, FieldTypeFlag, FieldTypeTp, UNSPECIFIED_LENGTH,
+>>>>>>> 669dc7925f (expression: `cast_duration_as_time` should not consider time zone (#16212))
     };
     use tidb_query_datatype::expr::Flag;
     use tidb_query_datatype::expr::{EvalConfig, EvalContext};
@@ -2763,13 +2784,20 @@ mod tests {
     fn test_cast_duration_as_time() {
         use chrono::Datelike;
 
-        let cases = vec!["11:30:45.123456", "-35:30:46"];
+        let cases = vec!["11:30:45.123456", "-35:30:46", "25:59:59.999999"];
 
         for case in cases {
-            let mut ctx = EvalContext::default();
-
+            let mut cfg = EvalConfig::default();
+            cfg.tz = Tz::from_tz_name("America/New_York").unwrap();
+            let mut ctx = EvalContext::new(Arc::new(cfg));
             let duration = Duration::parse(&mut ctx, case, MAX_FSP).unwrap();
+
+            let mut cfg2 = EvalConfig::default();
+            cfg2.tz = Tz::from_tz_name("Asia/Tokyo").unwrap();
+            let ctx2 = EvalContext::new(Arc::new(cfg2));
+
             let now = RpnFnScalarEvaluator::new()
+                .context(ctx2)
                 .push_param(duration)
                 .return_field_type(
                     FieldTypeBuilder::new()
