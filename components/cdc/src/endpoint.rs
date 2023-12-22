@@ -51,12 +51,9 @@ use tikv_util::{
     time::{Instant, Limiter, SlowTimer},
     timer::SteadyTimer,
     warn,
-    worker::{Runnable, RunnableWithTimer, ScheduleError, Scheduler},
+    worker::{Runnable, RunnableWithTimer, RuntimeWrapper, ScheduleError, Scheduler},
 };
-use tokio::{
-    runtime::{Builder, Runtime},
-    sync::Semaphore,
-};
+use tokio::{runtime::Builder, sync::Semaphore};
 use txn_types::{TimeStamp, TxnExtra, TxnExtraScheduler};
 
 use crate::{
@@ -373,7 +370,7 @@ pub struct Endpoint<T, E, S> {
 
     pd_client: Arc<dyn PdClient>,
     timer: SteadyTimer,
-    tso_worker: Runtime,
+    tso_worker: RuntimeWrapper,
     store_meta: Arc<StdMutex<S>>,
     /// The concurrency manager for transactions. It's needed for CDC to check
     /// locks when calculating resolved_ts.
@@ -384,7 +381,7 @@ pub struct Endpoint<T, E, S> {
     api_version: ApiVersion,
 
     // Incremental scan
-    workers: Runtime,
+    workers: RuntimeWrapper,
     // The total number of scan tasks including running and pending.
     scan_task_counter: Arc<AtomicIsize>,
     scan_concurrency_semaphore: Arc<Semaphore>,
@@ -426,19 +423,23 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
         sink_memory_quota: Arc<MemoryQuota>,
         causal_ts_provider: Option<Arc<CausalTsProviderImpl>>,
     ) -> Endpoint<T, E, S> {
-        let workers = Builder::new_multi_thread()
-            .thread_name("cdcwkr")
-            .worker_threads(config.incremental_scan_threads)
-            .with_sys_hooks()
-            .build()
-            .unwrap();
-        let tso_worker = Builder::new_multi_thread()
-            .thread_name("tso")
-            .worker_threads(config.tso_worker_threads)
-            .enable_time()
-            .with_sys_hooks()
-            .build()
-            .unwrap();
+        let workers = RuntimeWrapper::from_runtime(
+            Builder::new_multi_thread()
+                .thread_name("cdcwkr")
+                .worker_threads(config.incremental_scan_threads)
+                .with_sys_hooks()
+                .build()
+                .unwrap(),
+        );
+        let tso_worker = RuntimeWrapper::from_runtime(
+            Builder::new_multi_thread()
+                .thread_name("tso")
+                .worker_threads(config.tso_worker_threads)
+                .enable_time()
+                .with_sys_hooks()
+                .build()
+                .unwrap(),
+        );
 
         // Initialized for the first time, subsequent adjustments will be made based on
         // configuration updates.
@@ -2057,10 +2058,12 @@ mod tests {
         let mut suite = mock_endpoint(&cfg, None, ApiVersion::V1);
 
         // Pause scan task runtime.
-        suite.endpoint.workers = Builder::new_multi_thread()
-            .worker_threads(1)
-            .build()
-            .unwrap();
+        suite.endpoint.workers = RuntimeWrapper::from_runtime(
+            Builder::new_multi_thread()
+                .worker_threads(1)
+                .build()
+                .unwrap(),
+        );
         let (pause_tx, pause_rx) = std::sync::mpsc::channel::<()>();
         suite.endpoint.workers.spawn(async move {
             let _ = pause_rx.recv();

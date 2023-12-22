@@ -52,10 +52,11 @@ use tikv_util::{
     logger::set_log_level,
     metrics::{dump, dump_to},
     timer::GLOBAL_TIMER_HANDLE,
+    worker::RuntimeWrapper,
 };
 use tokio::{
     io::{AsyncRead, AsyncWrite},
-    runtime::{Builder, Runtime},
+    runtime::Builder,
     sync::oneshot::{self, Receiver, Sender},
 };
 use tokio_openssl::SslStream;
@@ -82,7 +83,7 @@ struct LogLevelRequest {
 }
 
 pub struct StatusServer<R> {
-    thread_pool: Runtime,
+    thread_pool: RuntimeWrapper,
     tx: Sender<()>,
     rx: Option<Receiver<()>>,
     addr: Option<SocketAddr>,
@@ -105,7 +106,7 @@ where
         resource_manager: Option<Arc<ResourceGroupManager>>,
         grpc_service_mgr: GrpcServiceManager,
     ) -> Result<Self> {
-        let thread_pool = Builder::new_multi_thread()
+        let rt = Builder::new_multi_thread()
             .enable_all()
             .worker_threads(status_thread_pool_size)
             .thread_name("status-server")
@@ -117,7 +118,7 @@ where
 
         let (tx, rx) = oneshot::channel::<()>();
         Ok(StatusServer {
-            thread_pool,
+            thread_pool: RuntimeWrapper::from_runtime(rt),
             tx,
             rx: Some(rx),
             addr: None,
@@ -440,7 +441,8 @@ where
 
     pub fn stop(self) {
         let _ = self.tx.send(());
-        self.thread_pool.shutdown_timeout(Duration::from_secs(3));
+        let mut thread_pool = self.thread_pool;
+        thread_pool.shutdown(Some(Duration::from_secs(3)));
     }
 
     // Return listening address, this may only be used for outer test

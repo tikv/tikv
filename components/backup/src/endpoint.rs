@@ -41,9 +41,8 @@ use tikv_util::{
     store::find_peer,
     time::{Instant, Limiter},
     warn,
-    worker::Runnable,
+    worker::{Runnable, RuntimeWrapper},
 };
-use tokio::runtime::Runtime;
 use txn_types::{Key, Lock, TimeStamp};
 
 use crate::{
@@ -703,7 +702,7 @@ impl SoftLimitKeeper {
 pub struct Endpoint<E: Engine, R: RegionInfoProvider + Clone + 'static> {
     store_id: u64,
     pool: RefCell<ControlThreadPool>,
-    io_pool: Runtime,
+    io_pool: RuntimeWrapper,
     tablets: LocalTablets<E::Local>,
     config_manager: ConfigManager,
     concurrency_manager: ConcurrencyManager,
@@ -878,7 +877,7 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
             region_info,
             pool: RefCell::new(pool),
             tablets,
-            io_pool: rt,
+            io_pool: RuntimeWrapper::from_runtime(rt),
             softlimit,
             config_manager,
             concurrency_manager,

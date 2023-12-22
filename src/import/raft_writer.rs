@@ -173,8 +173,8 @@ mod test {
     use kvproto::kvrpcpb::Context;
     use tempfile::TempDir;
     use tikv_kv::{Engine, Modify, RocksEngine, SnapContext, Snapshot, WriteData, WriteEvent};
-    use tikv_util::sys::thread::ThreadBuildWrapper;
-    use tokio::runtime::{Builder, Runtime};
+    use tikv_util::{sys::thread::ThreadBuildWrapper, worker::RuntimeWrapper};
+    use tokio::runtime::Builder;
     use txn_types::{Key, TimeStamp, Write, WriteType};
 
     use super::ThrottledTlsEngineWriter;
@@ -182,7 +182,7 @@ mod test {
 
     struct Suite {
         handle: ThrottledTlsEngineWriter,
-        rt: Runtime,
+        rt: RuntimeWrapper,
         eng: RocksEngine,
 
         tso: u64,
@@ -270,7 +270,7 @@ mod test {
             ThrottledTlsEngineWriter::with_max_concurrency_per_region(max_pending_raft_cmd);
         Suite {
             handle,
-            rt,
+            rt: RuntimeWrapper::from_runtime(rt),
             eng,
             tso: 1u64,
             mirror,

@@ -25,7 +25,8 @@ use tikv::{
         TestStorageBuilderApiV1,
     },
 };
-use tokio::runtime::{self, Runtime};
+use tikv_util::worker::RuntimeWrapper;
+use tokio::runtime::{self};
 use txn_types::{Key, TimeStamp};
 
 pub struct TestSuite {
@@ -40,7 +41,7 @@ pub struct TestSuite {
     rx: Receiver<Vec<ResourceUsageRecord>>,
 
     env: Arc<Environment>,
-    pub rt: Runtime,
+    pub rt: RuntimeWrapper,
     cancel_workload: Option<oneshot::Sender<()>>,
     wait_for_cancel: Option<oneshot::Receiver<()>>,
 
@@ -92,10 +93,12 @@ impl TestSuite {
 
         let (tx, rx) = unbounded();
 
-        let rt = runtime::Builder::new_multi_thread()
-            .worker_threads(4)
-            .build()
-            .unwrap();
+        let rt = RuntimeWrapper::from_runtime(
+            runtime::Builder::new_multi_thread()
+                .worker_threads(4)
+                .build()
+                .unwrap(),
+        );
 
         Self {
             pubsub_server_port,

@@ -15,7 +15,11 @@ use raftstore::{
 };
 use tikv::storage::Statistics;
 use tikv_util::{
-    box_err, debug, info, sys::thread::ThreadBuildWrapper, time::Instant, warn, worker::Scheduler,
+    box_err, debug, info,
+    sys::thread::ThreadBuildWrapper,
+    time::Instant,
+    warn,
+    worker::{RuntimeWrapper, Scheduler},
 };
 use tokio::sync::mpsc::{channel, error::SendError, Receiver, Sender};
 use txn_types::TimeStamp;
@@ -35,8 +39,6 @@ use crate::{
     utils::{self, CallbackWaitGroup, Work},
     Task,
 };
-
-type ScanPool = tokio::runtime::Runtime;
 
 const INITIAL_SCAN_FAILURE_MAX_RETRY_TIME: usize = 10;
 
@@ -250,7 +252,7 @@ fn spawn_executors(
     number: usize,
 ) -> ScanPoolHandle {
     let (tx, rx) = tokio::sync::mpsc::channel(MESSAGE_BUFFER_SIZE);
-    let pool = create_scan_pool(number);
+    let pool = create_runtime_wrapper(number);
     pool.spawn(async move {
         scan_executor_loop(init, rx).await;
     });
@@ -263,7 +265,7 @@ struct ScanPoolHandle {
     // `InitialScan`, which will get the type information a mass.
     tx: Sender<ScanCmd>,
 
-    _pool: ScanPool,
+    _pool: RuntimeWrapper,
 }
 
 impl ScanPoolHandle {
@@ -322,8 +324,8 @@ where
 }
 
 /// Create a pool for doing initial scanning.
-fn create_scan_pool(num_threads: usize) -> ScanPool {
-    tokio::runtime::Builder::new_multi_thread()
+fn create_runtime_wrapper(num_threads: usize) -> RuntimeWrapper {
+    let runtime = tokio::runtime::Builder::new_multi_thread()
         .with_sys_and_custom_hooks(
             move || {
                 file_system::set_io_type(file_system::IoType::Replication);
@@ -334,7 +336,8 @@ fn create_scan_pool(num_threads: usize) -> ScanPool {
         .enable_time()
         .worker_threads(num_threads)
         .build()
-        .unwrap()
+        .unwrap();
+    RuntimeWrapper::from_runtime(runtime)
 }
 
 impl<S, R, PDC> RegionSubscriptionManager<S, R, PDC>

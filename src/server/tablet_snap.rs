@@ -63,10 +63,10 @@ use tikv_kv::RaftExtension;
 use tikv_util::{
     config::{ReadableSize, Tracker, VersionTrack},
     time::Instant,
-    worker::Runnable,
+    worker::{Runnable, RuntimeWrapper},
     DeferContext, Either,
 };
-use tokio::runtime::{Builder as RuntimeBuilder, Runtime};
+use tokio::runtime::Builder as RuntimeBuilder;
 
 use super::{
     metrics::*,
@@ -806,7 +806,7 @@ pub struct TabletRunner<B, R: RaftExtension + 'static> {
     env: Arc<Environment>,
     snap_mgr: TabletSnapManager,
     security_mgr: Arc<SecurityManager>,
-    pool: Runtime,
+    pool: RuntimeWrapper,
     raft_router: R,
     cfg_tracker: Tracker<Config>,
     cfg: Config,
@@ -832,16 +832,17 @@ impl<B, R: RaftExtension> TabletRunner<B, R> {
         } else {
             f64::INFINITY
         });
+        let rt = RuntimeBuilder::new_multi_thread()
+            .thread_name(thd_name!("tablet-snap-sender"))
+            .with_sys_hooks()
+            .worker_threads(DEFAULT_POOL_SIZE)
+            .build()
+            .unwrap();
 
         let snap_worker = TabletRunner {
             env,
             snap_mgr,
-            pool: RuntimeBuilder::new_multi_thread()
-                .thread_name(thd_name!("tablet-snap-sender"))
-                .with_sys_hooks()
-                .worker_threads(DEFAULT_POOL_SIZE)
-                .build()
-                .unwrap(),
+            pool: RuntimeWrapper::from_runtime(rt),
             raft_router: r,
             security_mgr,
             cfg_tracker,

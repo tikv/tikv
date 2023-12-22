@@ -35,10 +35,10 @@ use tikv_util::{
     sys::thread::ThreadBuildWrapper,
     time::{Instant, SlowTimer},
     timer::SteadyTimer,
-    worker::Scheduler,
+    worker::{RuntimeWrapper, Scheduler},
 };
 use tokio::{
-    runtime::{Builder, Runtime},
+    runtime::Builder,
     sync::{Mutex, Notify},
 };
 use txn_types::TimeStamp;
@@ -53,7 +53,7 @@ pub struct AdvanceTsWorker {
     pd_client: Arc<dyn PdClient>,
     advance_ts_interval: Duration,
     timer: SteadyTimer,
-    worker: Runtime,
+    worker: RuntimeWrapper,
     scheduler: Scheduler<Task>,
     /// The concurrency manager for transactions. It's needed for CDC to check
     /// locks when calculating resolved_ts.
@@ -70,7 +70,7 @@ impl AdvanceTsWorker {
         scheduler: Scheduler<Task>,
         concurrency_manager: ConcurrencyManager,
     ) -> Self {
-        let worker = Builder::new_multi_thread()
+        let rt = Builder::new_multi_thread()
             .thread_name("advance-ts")
             .worker_threads(1)
             .enable_time()
@@ -80,7 +80,7 @@ impl AdvanceTsWorker {
         Self {
             scheduler,
             pd_client,
-            worker,
+            worker: RuntimeWrapper::from_runtime(rt),
             advance_ts_interval,
             timer: SteadyTimer::default(),
             concurrency_manager,

@@ -38,10 +38,10 @@ use tikv_kv::RaftExtension;
 use tikv_util::{
     config::{Tracker, VersionTrack},
     time::{Instant, UnixSecs},
-    worker::Runnable,
+    worker::{Runnable, RuntimeWrapper},
     DeferContext,
 };
-use tokio::runtime::{Builder as RuntimeBuilder, Runtime};
+use tokio::runtime::Builder as RuntimeBuilder;
 
 use super::{metrics::*, Config, Error, Result};
 use crate::{server::tablet_snap::NoSnapshotCache, tikv_util::sys::thread::ThreadBuildWrapper};
@@ -357,7 +357,7 @@ fn recv_snap<R: RaftExtension + 'static>(
 pub struct Runner<R: RaftExtension> {
     env: Arc<Environment>,
     snap_mgr: SnapManager,
-    pool: Runtime,
+    pool: RuntimeWrapper,
     raft_router: R,
     security_mgr: Arc<SecurityManager>,
     cfg_tracker: Tracker<Config>,
@@ -379,15 +379,16 @@ impl<R: RaftExtension + 'static> Runner<R> {
     ) -> Self {
         let cfg_tracker = cfg.clone().tracker("snap-sender".to_owned());
         let config = cfg.value().clone();
+        let rt = RuntimeBuilder::new_multi_thread()
+            .thread_name(thd_name!("snap-sender"))
+            .with_sys_hooks()
+            .worker_threads(DEFAULT_POOL_SIZE)
+            .build()
+            .unwrap();
         let snap_worker = Runner {
             env,
             snap_mgr,
-            pool: RuntimeBuilder::new_multi_thread()
-                .thread_name(thd_name!("snap-sender"))
-                .with_sys_hooks()
-                .worker_threads(DEFAULT_POOL_SIZE)
-                .build()
-                .unwrap(),
+            pool: RuntimeWrapper::from_runtime(rt),
             raft_router: r,
             security_mgr,
             cfg_tracker,

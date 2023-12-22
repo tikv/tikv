@@ -33,7 +33,7 @@ use tikv_util::{
     sys::thread::ThreadBuildWrapper,
     time::{Instant, Limiter},
     warn,
-    worker::{Runnable, Scheduler},
+    worker::{Runnable, RuntimeWrapper, Scheduler},
     HandyRwLock,
 };
 use tokio::{
@@ -85,7 +85,7 @@ pub struct Endpoint<S, R, E: KvEngine, PDC> {
     // Note: some of fields are public so test cases are able to access them.
     pub range_router: Router,
     observer: BackupStreamObserver,
-    pool: Runtime,
+    pool: RuntimeWrapper,
     region_operator: RegionSubscriptionManager<S, R, PDC>,
     failover_time: Option<Instant>,
     // We holds the config before, even it is useless for now,
@@ -182,7 +182,7 @@ where
             range_router,
             scheduler,
             observer,
-            pool,
+            pool: RuntimeWrapper::from_runtime(pool),
             store_id,
             regions: accessor,
             engine: PhantomData,
