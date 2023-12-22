@@ -1859,6 +1859,17 @@ def RaftIO() -> RowPanel:
     )
     layout.row(
         heatmap_panel_graph_panel_histogram_quantile_pairs(
+            heatmap_title="Raft Message Wait Flush Duration",
+            heatmap_description="The time consumed for Raft Message wait flush",
+            graph_title="99% Raft Message Wait Flush Duration",
+            graph_description="The time consumed for Raft Message wait flush per TiKV instance",
+            yaxis_format=UNITS.SECONDS,
+            metric="tikv_server_raft_message_wait_flush_duration_seconds",
+            graph_by_labels=["instance"],
+        )
+    )
+    layout.row(
+        heatmap_panel_graph_panel_histogram_quantile_pairs(
             heatmap_title="Raft Client Wait Connection Ready Duration",
             heatmap_description="The time consumed for Raft Client wait connection ready",
             graph_title="99% Raft Client Wait Connection Ready Duration",

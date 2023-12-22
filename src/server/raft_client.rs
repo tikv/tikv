@@ -8,7 +8,7 @@ use std::{
     pin::Pin,
     result,
     sync::{
-        atomic::{AtomicI32, AtomicU8, Ordering},
+        atomic::{AtomicI32, AtomicPtr, AtomicU8, Ordering},
         Arc, Mutex,
     },
     time::{Duration, Instant},
@@ -97,6 +97,7 @@ impl From<u8> for ConnState {
 struct Queue {
     buf: ArrayQueue<RaftMessage>,
     conn_state: AtomicU8,
+    begin_wait: AtomicPtr<Instant>,
     waker: Mutex<Option<Waker>>,
 }
 
@@ -106,6 +107,7 @@ impl Queue {
         Queue {
             buf: ArrayQueue::new(cap),
             conn_state: AtomicU8::new(ConnState::Established as u8),
+            begin_wait: AtomicPtr::new(std::ptr::null_mut()),
             waker: Mutex::new(None),
         }
     }
@@ -119,7 +121,10 @@ impl Queue {
     fn push(&self, msg: RaftMessage) -> Result<(), DiscardReason> {
         match self.conn_state.load(Ordering::SeqCst).into() {
             ConnState::Established => match self.buf.push(msg) {
-                Ok(()) => Ok(()),
+                Ok(()) => {
+                    self.record_begin_wait();
+                    Ok(())
+                }
                 Err(_) => Err(DiscardReason::Full),
             },
             ConnState::Paused => Err(DiscardReason::Paused),
@@ -166,6 +171,24 @@ impl Queue {
             }
             self.buf.pop()
         })
+    }
+
+    #[inline]
+    fn record_begin_wait(&self) {
+        if self.begin_wait.load(Ordering::SeqCst).is_null() {
+            self.begin_wait
+                .store(Box::into_raw(Box::new(Instant::now())), Ordering::SeqCst);
+        }
+    }
+
+    #[inline]
+    fn take_begin_wait(&self) -> Option<Instant> {
+        let p = self.begin_wait.swap(std::ptr::null_mut(), Ordering::SeqCst);
+        if !p.is_null() {
+            unsafe { Some(*Box::from_raw(p)) }
+        } else {
+            None
+        }
     }
 }
 
@@ -539,6 +562,9 @@ where
                 // So either enough messages are batched up or don't need to wait or wait
                 // timeouts.
                 s.flush_timeout.take();
+                if let Some(begin_wait) = s.queue.take_begin_wait() {
+                    RAFT_MESSAGE_WAIT_FLUSH_HISTOGRAM.observe(begin_wait.elapsed().as_secs_f64());
+                }
                 ready!(Poll::Ready(s.buffer.flush(&mut s.sender)))?;
                 continue;
             }

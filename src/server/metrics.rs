@@ -425,6 +425,12 @@ lazy_static! {
             &["reason"]
         )
         .unwrap();
+    pub static ref RAFT_MESSAGE_WAIT_FLUSH_HISTOGRAM: Histogram = register_histogram!(
+        "tikv_server_raft_message_wait_flush_duration_seconds",
+        "Bucketed histogram of server wait raft message flush duration",
+        exponential_buckets(0.00001, 2.0, 25).unwrap() // 10us ~ 167s
+    )
+    .unwrap();
     pub static ref CONFIG_ROCKSDB_GAUGE: GaugeVec = register_gauge_vec!(
         "tikv_config_rocksdb",
         "Config information of rocksdb",
