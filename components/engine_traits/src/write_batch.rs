@@ -74,9 +74,9 @@ pub trait WriteBatch: Mutable {
     fn write_opt(&mut self, opts: &WriteOptions) -> Result<u64>;
 
     // TODO: it should be `FnOnce`.
-    fn write_callback_opt(&mut self, opts: &WriteOptions, mut cb: impl FnMut()) -> Result<u64> {
+    fn write_callback_opt(&mut self, opts: &WriteOptions, mut cb: impl FnMut(u64)) -> Result<u64> {
         let seq = self.write_opt(opts)?;
-        cb();
+        cb(seq);
         Ok(seq)
     }
 
@@ -123,4 +123,9 @@ pub trait WriteBatch: Mutable {
 
     /// Merge another WriteBatch to itself
     fn merge(&mut self, src: Self) -> Result<()>;
+
+    /// Set a custom sequence number for all of the writes in this batch. Used by [`HybridEngine`]
+    fn set_sequence_number(&mut self, _seq: u64) -> Result<()> {
+        unimplemented!()
+    }
 }

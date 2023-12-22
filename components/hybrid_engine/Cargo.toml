@@ -12,8 +12,7 @@ engine_traits = { workspace = true }
 txn_types = { workspace = true }
 tikv_util = { workspace = true }
 engine_rocks = { workspace = true }
+region_cache_memory_engine = { workspace = true }
 
 [dev-dependencies]
-engine_rocks = { workspace = true }
-region_cache_memory_engine = { workspace = true }
 tempfile = "3.0"
