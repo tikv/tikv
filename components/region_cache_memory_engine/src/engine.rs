@@ -402,10 +402,11 @@ impl Iterator for RegionCacheIterator {
 
     fn value(&self) -> &[u8] {
         assert!(self.valid);
-        if self.saved_value.is_some() {
-            return self.saved_value.as_ref().unwrap().as_slice();
+        if let Some(saved_value) = self.saved_value.as_ref() {
+            saved_value.as_slice()
+        } else {
+            self.iter.value().as_slice()
         }
-        self.iter.value().as_slice()
     }
 
     fn next(&mut self) -> Result<bool> {
@@ -638,17 +639,15 @@ impl Peekable for RegionCacheSnapshot {
         if !iter.valid() {
             return Ok(None);
         }
-        let InternalKey {
-            user_key,
-            v_type,
-            sequence,
-        } = decode_key(iter.key());
 
-        if user_key == key && v_type == ValueType::Value {
-            return Ok(Some(RegionCacheDbVector(iter.value().clone())));
+        match decode_key(iter.key()) {
+            InternalKey {
+                user_key,
+                v_type: ValueType::Value,
+                ..
+            } if user_key == key => Ok(Some(RegionCacheDbVector(iter.value().clone()))),
+            _ => Ok(None),
         }
-
-        Ok(None)
     }
 }
 
