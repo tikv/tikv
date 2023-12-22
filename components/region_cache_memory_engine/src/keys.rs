@@ -78,6 +78,9 @@ pub fn extract_user_key_and_suffix_u64(encoded_key: &[u8]) -> (&[u8], u64) {
 /// byte position:         0 ..  n-1 | n          |  n + 1 .. n + 7
 /// ```
 /// value type 0 encodes deletion, value type 1 encodes value.
+///
+/// It follows the pattern of RocksDB, where the most 8 significant bits of u64
+/// will not used by sequence number.
 #[inline]
 pub fn encode_key_internal<T: BufMut>(
     key: &[u8],
