@@ -59,6 +59,21 @@ pub fn decode_key(encoded_key: &[u8]) -> InternalKey<'_> {
     }
 }
 
+// Different with `decode_key`, `decode_key2` returns the suffix u64 as a whole
+// instead of parsing it to be sequence and value type
+#[inline]
+pub fn extract_user_key_and_suffix_u64(encoded_key: &[u8]) -> (&[u8], u64) {
+    assert!(encoded_key.len() >= ENC_KEY_SEQ_LENGTH);
+    let seq_offset = encoded_key.len() - ENC_KEY_SEQ_LENGTH;
+    let num = u64::from_be_bytes(
+        encoded_key[seq_offset..seq_offset + ENC_KEY_SEQ_LENGTH]
+            .try_into()
+            .unwrap(),
+    );
+
+    (&encoded_key[..seq_offset], num)
+}
+
 /// Format for an internal key (used by the skip list.)
 /// ```
 /// contents:      key of size n     | value type | sequence number shifted by 8 bits
@@ -103,11 +118,11 @@ impl InternalKeyComparator {
 
 impl KeyComparator for InternalKeyComparator {
     fn compare_key(&self, lhs: &[u8], rhs: &[u8]) -> cmp::Ordering {
-        let k_1 = decode_key(lhs);
-        let k_2 = decode_key(rhs);
-        let r = k_1.user_key.cmp(k_2.user_key);
+        let (k_1, s_1) = extract_user_key_and_suffix_u64(lhs);
+        let (k_2, s_2) = extract_user_key_and_suffix_u64(rhs);
+        let r = k_1.cmp(k_2);
         if r.is_eq() {
-            match k_1.sequence.cmp(&k_2.sequence) {
+            match s_1.cmp(&s_2) {
                 cmp::Ordering::Greater => {
                     return cmp::Ordering::Less;
                 }
@@ -124,5 +139,56 @@ impl KeyComparator for InternalKeyComparator {
 
     fn same_key(&self, lhs: &[u8], rhs: &[u8]) -> bool {
         InternalKeyComparator::same_key(lhs, rhs)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use bytes::BufMut;
+    use skiplist_rs::KeyComparator;
+
+    use super::{InternalKeyComparator, ValueType};
+    use crate::keys::encode_key;
+
+    fn construct_key(i: u64, mvcc: u64) -> Vec<u8> {
+        let k = format!("k{:08}", i);
+        let mut key = k.as_bytes().to_vec();
+        // mvcc version should be make bit-wise reverse so that k-100 is less than k-99
+        key.put_u64(!mvcc);
+        key
+    }
+
+    #[test]
+    fn test_compare_key() {
+        let c = InternalKeyComparator::default();
+        let k = construct_key(1, 10);
+        // key1: k1_10_10_val
+        let key1 = encode_key(&k, 10, ValueType::Value);
+        // key2: k1_10_10_del
+        let key2 = encode_key(&k, 10, ValueType::Deletion);
+        assert!(c.compare_key(&key1, &key2).is_le());
+
+        // key2: k1_10_0_val
+        let key2 = encode_key(&k, 0, ValueType::Value);
+        assert!(c.compare_key(&key1, &key2).is_le());
+
+        // key1: k1_10_MAX_val
+        let key1 = encode_key(&k, u64::MAX, ValueType::Value);
+        assert!(c.compare_key(&key1, &key2).is_le());
+
+        let k = construct_key(1, 0);
+        // key2: k1_0_10_val
+        let key2 = encode_key(&k, 10, ValueType::Value);
+        assert!(c.compare_key(&key1, &key2).is_le());
+
+        // key1: k1_MAX_0_val
+        let k = construct_key(1, u64::MAX);
+        let key1 = encode_key(&k, 0, ValueType::Value);
+        assert!(c.compare_key(&key1, &key2).is_le());
+
+        let k = construct_key(2, u64::MAX);
+        // key2: k2_MAX_MAX_val
+        let key2 = encode_key(&k, u64::MAX, ValueType::Value);
+        assert!(c.compare_key(&key1, &key2).is_le());
     }
 }
