@@ -11641,66 +11641,97 @@ mod tests {
     #[test]
     fn test_pessimistic_rollback_with_scan_first() {
         use crate::storage::txn::tests::must_pessimistic_locked;
-        let mut storage = TestStorageBuilderApiV1::new(MockLockManager::new())
-            .build()
-            .unwrap();
         let format_key = |prefix: char, i: usize| format!("{}{:04}", prefix, i).as_bytes().to_vec();
-
-        // Basic case, two keys could be rolled back within one pessimistic rollback
-        // request.
         let k1 = format_key('k', 1);
         let k2 = format_key('k', 2);
         let start_ts = 10;
         let for_update_ts = 10;
-        acquire_pessimistic_lock(
-            &storage,
-            Key::from_raw(k1.as_slice()),
-            start_ts,
-            for_update_ts,
-        );
-        acquire_pessimistic_lock(
-            &storage,
-            Key::from_raw(k2.as_slice()),
-            start_ts,
-            for_update_ts,
-        );
-        must_pessimistic_locked(&mut storage.engine, k1.as_slice(), start_ts, for_update_ts);
-        delete_pessimistic_lock_with_scan_first(&storage, start_ts, for_update_ts);
-        must_unlocked(&mut storage.engine, k1.as_slice());
-        must_unlocked(&mut storage.engine, k2.as_slice());
+        for enable_in_memory_lock in [false, true] {
+            let txn_ext = Arc::new(TxnExt::default());
+            let mut storage = TestStorageBuilderApiV1::new(MockLockManager::new())
+                .pipelined_pessimistic_lock(enable_in_memory_lock)
+                .in_memory_pessimistic_lock(enable_in_memory_lock)
+                .build_for_txn(txn_ext.clone())
+                .unwrap();
 
-        // Acquire pessimistic locks for more than 256 keys.
-        // Only pessimistic locks should be rolled back.
-        let start_ts = 11;
-        let for_update_ts = 11;
-        let num_keys = 400;
-        let prewrite_primary_key = format_key('k', 1);
-        for i in 0..num_keys {
-            let key = format_key('k', i);
-            if i % 2 == 0 {
-                acquire_pessimistic_lock(
-                    &storage,
-                    Key::from_raw(key.as_slice()),
-                    start_ts,
-                    for_update_ts,
-                );
-            } else {
-                prewrite_lock(
-                    &storage,
-                    Key::from_raw(key.as_slice()),
-                    prewrite_primary_key.as_slice(),
-                    b"value",
-                    start_ts,
-                );
+            // Basic case, two keys could be rolled back within one pessimistic rollback
+            // request.
+            acquire_pessimistic_lock(
+                &storage,
+                Key::from_raw(k1.as_slice()),
+                start_ts,
+                for_update_ts,
+            );
+            acquire_pessimistic_lock(
+                &storage,
+                Key::from_raw(k2.as_slice()),
+                start_ts,
+                for_update_ts,
+            );
+            must_pessimistic_locked(&mut storage.engine, k1.as_slice(), start_ts, for_update_ts);
+            delete_pessimistic_lock_with_scan_first(&storage, start_ts, for_update_ts);
+            must_unlocked(&mut storage.engine, k1.as_slice());
+            must_unlocked(&mut storage.engine, k2.as_slice());
+
+            // Acquire pessimistic locks for more than 256 keys.
+            // Only pessimistic locks should be rolled back.
+            let start_ts = 11;
+            let for_update_ts = 11;
+            let num_keys = 400;
+            let prewrite_primary_key = format_key('k', 1);
+            for i in 0..num_keys {
+                let key = format_key('k', i);
+                if i % 2 == 0 {
+                    acquire_pessimistic_lock(
+                        &storage,
+                        Key::from_raw(key.as_slice()),
+                        start_ts,
+                        for_update_ts,
+                    );
+                } else {
+                    prewrite_lock(
+                        &storage,
+                        Key::from_raw(key.as_slice()),
+                        prewrite_primary_key.as_slice(),
+                        b"value",
+                        start_ts,
+                    );
+                }
             }
-        }
-        delete_pessimistic_lock_with_scan_first(&storage, start_ts, for_update_ts);
-        for i in 0..num_keys {
-            let key = format_key('k', i);
-            if i % 2 == 0 {
-                must_unlocked(&mut storage.engine, key.as_slice());
-            } else {
-                must_locked(&mut storage.engine, key.as_slice(), start_ts);
+            {
+                let pessimistic_locks = txn_ext.pessimistic_locks.read();
+                if enable_in_memory_lock {
+                    let k0 = format_key('k', 0);
+                    let lock = pessimistic_locks
+                        .get(&Key::from_raw(k0.as_slice()))
+                        .unwrap();
+                    assert_eq!(
+                        lock,
+                        &(
+                            PessimisticLock {
+                                primary: Box::new(*b"k0000"),
+                                start_ts: start_ts.into(),
+                                ttl: 3000,
+                                for_update_ts: for_update_ts.into(),
+                                min_commit_ts: (for_update_ts + 1).into(),
+                                last_change: LastChange::NotExist,
+                                is_locked_with_conflict: false,
+                            },
+                            false
+                        )
+                    );
+                } else {
+                    assert_eq!(pessimistic_locks.len(), 0);
+                }
+            }
+            delete_pessimistic_lock_with_scan_first(&storage, start_ts, for_update_ts);
+            for i in 0..num_keys {
+                let key = format_key('k', i);
+                if i % 2 == 0 {
+                    must_unlocked(&mut storage.engine, key.as_slice());
+                } else {
+                    must_locked(&mut storage.engine, key.as_slice(), start_ts);
+                }
             }
         }
     }
