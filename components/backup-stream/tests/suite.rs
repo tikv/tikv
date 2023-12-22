@@ -30,9 +30,7 @@ use kvproto::{
     tikvpb::*,
 };
 use pd_client::PdClient;
-use protobuf::parse_from_bytes;
-use raftstore::{router::CdcRaftRouter, RegionInfoAccessor};
-use resolved_ts::LeadershipResolver;
+use raftstore::RegionInfoAccessor;
 use tempdir::TempDir;
 use test_pd_client::TestPdClient;
 use test_raftstore::{new_server_cluster, Cluster, ServerCluster};
