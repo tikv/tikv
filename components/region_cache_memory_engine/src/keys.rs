@@ -4,6 +4,7 @@ use std::cmp;
 
 use bytes::{BufMut, Bytes, BytesMut};
 use skiplist_rs::KeyComparator;
+use txn_types::{Key, TimeStamp};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ValueType {
@@ -33,7 +34,7 @@ pub struct InternalKey<'a> {
     pub sequence: u64,
 }
 
-const ENC_KEY_SEQ_LENGTH: usize = std::mem::size_of::<u64>();
+pub const ENC_KEY_SEQ_LENGTH: usize = std::mem::size_of::<u64>();
 
 impl<'a> From<&'a [u8]> for InternalKey<'a> {
     fn from(encoded_key: &'a [u8]) -> Self {
@@ -104,6 +105,17 @@ pub fn encode_key(key: &[u8], seq: u64, v_type: ValueType) -> Bytes {
 #[inline]
 pub fn encode_seek_key(key: &[u8], seq: u64, v_type: ValueType) -> Vec<u8> {
     encode_key_internal::<Vec<_>>(key, seq, v_type, Vec::with_capacity)
+}
+
+#[inline]
+pub fn encoding_for_filter(mvcc_prefix: &[u8], start_ts: TimeStamp) -> Vec<u8> {
+    let mut default_key = Vec::with_capacity(mvcc_prefix.len() + 2 * ENC_KEY_SEQ_LENGTH);
+    default_key.extend_from_slice(mvcc_prefix);
+    let mut default_key = Key::from_encoded(default_key)
+        .append_ts(start_ts)
+        .into_encoded();
+    default_key.put_u64((u64::MAX << 8) | VALUE_TYPE_FOR_SEEK as u64);
+    default_key
 }
 
 #[derive(Default, Debug, Clone, Copy)]

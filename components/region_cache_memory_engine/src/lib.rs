@@ -6,5 +6,6 @@
 #![feature(slice_pattern)]
 
 mod engine;
+mod gc;
 pub mod keys;
 pub use engine::RegionCacheMemoryEngine;

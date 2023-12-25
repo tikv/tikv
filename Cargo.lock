@@ -4450,9 +4450,14 @@ version = "0.0.1"
 dependencies = [
  "bytes",
  "collections",
+ "engine_rocks",
  "engine_traits",
+ "log_wrappers",
  "skiplist-rs",
+ "slog",
+ "slog-global",
  "tikv_util",
+ "txn_types",
 ]
 
 [[package]]
