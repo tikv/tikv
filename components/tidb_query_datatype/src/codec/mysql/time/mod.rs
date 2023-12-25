@@ -1349,10 +1349,7 @@ impl Time {
     ) -> Result<Self> {
         let dur = chrono::Duration::nanoseconds(duration.to_nanos());
 
-        let time = Utc::today()
-            .and_hms(0, 0, 0)
-            .checked_add_signed(dur)
-            .map(|utc| utc.with_timezone(&ctx.cfg.tz));
+        let time = Utc::today().and_hms(0, 0, 0).checked_add_signed(dur);
 
         let time = time.ok_or::<Error>(box_err!("parse from duration {} overflows", duration))?;
 
