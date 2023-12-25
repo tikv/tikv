@@ -1,7 +1,9 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
+mod metrics;
 /// Provides profilers for TiKV.
 mod profile;
+
 use std::{
     env::args,
     error::Error as StdError,
@@ -33,6 +35,7 @@ use hyper::{
     Body, Method, Request, Response, Server, StatusCode,
 };
 use kvproto::resource_manager::ResourceGroup;
+use metrics::STATUS_REQUEST_DURATION;
 use online_config::OnlineConfig;
 use openssl::{
     ssl::{Ssl, SslAcceptor, SslContext, SslFiletype, SslMethod, SslVerifyMode},
@@ -647,7 +650,9 @@ where
                             ));
                         }
 
-                        match (method, path.as_ref()) {
+                        let mut is_unknown_path = false;
+                        let start = Instant::now();
+                        let res = match (method.clone(), path.as_ref()) {
                             (Method::GET, "/metrics") => {
                                 Self::handle_get_metrics(req, &cfg_controller)
                             }
@@ -719,8 +724,21 @@ where
                             (Method::PUT, "/resume_grpc") => {
                                 Self::handle_resume_grpc(grpc_service_mgr).await
                             }
-                            _ => Ok(make_response(StatusCode::NOT_FOUND, "path not found")),
-                        }
+                            _ => {
+                                is_unknown_path = true;
+                                Ok(make_response(StatusCode::NOT_FOUND, "path not found"))
+                            },
+                        };
+                        // Using "unknown" for unknown paths to void creating high cardinality.
+                        let path_label = if is_unknown_path {
+                            "unknown".to_owned()
+                        } else {
+                            path
+                        };
+                        STATUS_REQUEST_DURATION
+                            .with_label_values(&[method.as_str(), &path_label])
+                            .observe(start.elapsed().as_secs_f64());
+                        res
                     }
                 }))
             }
