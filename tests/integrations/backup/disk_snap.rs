@@ -47,7 +47,7 @@ fn test_conf_change() {
     }
 
     // Make sure the change has been synchronized to all stores.
-    std::thread::sleep(Duation::from_millis(500));
+    std::thread::sleep(Duration::from_millis(500));
     let the_region = suite.cluster.get_region(b"");
     let res2 = block_on(
         suite
