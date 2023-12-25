@@ -1227,7 +1227,7 @@ where
             self.snap_br_rejector.take().unwrap(),
             Some(backup_endpoint.io_pool_handle().clone()),
         );
-        let backup_service = backup::Service::with_env(backup_scheduler, env);
+        let backup_service = backup::Service::new(backup_scheduler, env);
         if servers
             .server
             .register_service(create_backup(backup_service))

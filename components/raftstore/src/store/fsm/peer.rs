@@ -1008,7 +1008,7 @@ where
 
         self.fsm.peer.snapshot_recovery_state = Some(SnapshotBrState::WaitLogApplyToLast {
             target_index,
-            valid_for_term: Some(term),
+            valid_for_term: req.abort_when_term_change.then_some(term),
             syncer: req.syncer,
         });
         self.fsm

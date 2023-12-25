@@ -131,28 +131,6 @@ pub struct Env<SR: SnapshotBrHandle> {
 }
 
 impl<SR: SnapshotBrHandle> Env<SR> {
-    fn default_runtime() -> Arc<Runtime> {
-        let rt = tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(DEFAULT_RT_THREADS)
-            .enable_all()
-            .with_sys_hooks()
-            .thread_name("snap_br_backup_prepare")
-            .build()
-            .unwrap();
-        Arc::new(rt)
-    }
-
-    pub fn active_stream(&self) -> u64 {
-        self.active_stream.load(Ordering::SeqCst)
-    }
-
-    pub fn handle(&self) -> &Handle {
-        match &self.runtime {
-            Either::Left(h) => h,
-            Either::Right(rt) => rt.handle(),
-        }
-    }
-
     pub fn new(handle: SR, rejector: Arc<RejectIngestAndAdmin>, runtime: Option<Handle>) -> Self {
         let runtime = match runtime {
             None => Either::Right(Self::default_runtime()),
@@ -163,6 +141,17 @@ impl<SR: SnapshotBrHandle> Env<SR> {
             rejector,
             active_stream: Arc::new(AtomicU64::new(0)),
             runtime,
+        }
+    }
+
+    pub fn active_stream(&self) -> u64 {
+        self.active_stream.load(Ordering::SeqCst)
+    }
+
+    pub fn handle(&self) -> &Handle {
+        match &self.runtime {
+            Either::Left(h) => h,
+            Either::Right(rt) => rt.handle(),
         }
     }
 
@@ -196,6 +185,17 @@ impl<SR: SnapshotBrHandle> Env<SR> {
         event.set_ty(PEvnT::UpdateLeaseResult);
         event.set_last_lease_is_valid(rejected);
         event
+    }
+
+    fn default_runtime() -> Arc<Runtime> {
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(DEFAULT_RT_THREADS)
+            .enable_all()
+            .with_sys_hooks()
+            .thread_name("snap_br_backup_prepare")
+            .build()
+            .unwrap();
+        Arc::new(rt)
     }
 }
 

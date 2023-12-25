@@ -22,8 +22,8 @@ impl<H> Service<H>
 where
     H: SnapshotBrHandle,
 {
-    // Create a new backup service with router, this used for raftstore v1.
-    pub fn with_env(scheduler: Scheduler<Task>, env: disk_snap::Env<H>) -> Self {
+    /// Create a new backup service.
+    pub fn new(scheduler: Scheduler<Task>, env: disk_snap::Env<H>) -> Self {
         Service {
             scheduler,
             snap_br_env: env,
@@ -199,7 +199,7 @@ mod tests {
         let env = Arc::new(EnvBuilder::new().build());
         let (scheduler, rx) = dummy_scheduler();
         let backup_service =
-            super::Service::with_env(scheduler, Env::new(PanicHandle, Default::default(), None));
+            super::Service::new(scheduler, Env::new(PanicHandle, Default::default(), None));
         let builder =
             ServerBuilder::new(env.clone()).register_service(create_backup(backup_service));
         let mut server = builder.bind("127.0.0.1", 0).build().unwrap();

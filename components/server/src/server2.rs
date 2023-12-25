@@ -915,7 +915,7 @@ where
         // Backup service.
         let mut backup_worker = Box::new(self.core.background_worker.lazy_build("backup-endpoint"));
         let backup_scheduler = backup_worker.scheduler();
-        let backup_service = backup::Service::with_env(
+        let backup_service = backup::Service::new(
             backup_scheduler,
             Env::new(DiskSnapBackupHandle, Default::default(), None),
         );
