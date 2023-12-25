@@ -332,6 +332,7 @@ where
                 .after_start(|| {
                     // SAFETY: we will call `remove_thread_memory_accessor` at before_stop.
                     unsafe { add_thread_memory_accessor() };
+                    tikv_alloc::thread_allocate_exclusive_arena();
                 })
                 .before_stop(|| {
                     remove_thread_memory_accessor();
