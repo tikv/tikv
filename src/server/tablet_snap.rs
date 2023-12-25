@@ -839,7 +839,7 @@ impl<B, R: RaftExtension> TabletRunner<B, R> {
             .build()
             .unwrap();
 
-        let snap_worker = TabletRunner {
+        TabletRunner {
             env,
             snap_mgr,
             pool: RuntimeWrapper::from_runtime(rt),
@@ -849,8 +849,7 @@ impl<B, R: RaftExtension> TabletRunner<B, R> {
             cfg: config,
             cache_builder,
             limiter,
-        };
-        snap_worker
+        }
     }
 
     fn refresh_cfg(&mut self) {

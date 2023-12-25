@@ -547,7 +547,9 @@ impl Deref for RuntimeWrapper {
 
 impl Drop for RuntimeWrapper {
     fn drop(&mut self) {
-        self.shutdown(None);
+        if let Some(rt) = self.0.take() {
+            rt.shutdown_background();
+        }
     }
 }
 
@@ -628,62 +630,44 @@ mod tests {
         assert_eq!(12, count.load(atomic::Ordering::SeqCst));
     }
 
-    #[tokio::test]
-    async fn test_runtime_wrapper_creation() {
-        let rt = tokio::runtime::Runtime::new().expect("Failed to create runtime");
-        let wrapper = RuntimeWrapper::from_runtime(rt);
-        // Ensure the wrapper is created successfully
-        assert!(wrapper.is_running());
-    }
-
-    #[tokio::test]
-    async fn test_runtime_wrapper_shutdown() {
+    #[test]
+    fn test_runtime_wrapper_shutdown() {
         let rt = tokio::runtime::Runtime::new().expect("Failed to create runtime");
         let mut wrapper = RuntimeWrapper::from_runtime(rt);
 
+        let count = Arc::new(AtomicU64::default());
         // Run an asynchronous task to ensure the runtime is busy
-        let task = tokio::spawn(async {
+        let obj = count.clone();
+        block_on(wrapper.spawn(async move {
             // Simulate some asynchronous work
-            sleep(Duration::from_millis(100)).await;
-        });
-        // Sleep to allow the asynchronous task to start
-        sleep(Duration::from_millis(10)).await;
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            obj.store(100, atomic::Ordering::SeqCst);
+        }))
+        .unwrap();
         // Ensure the runtime is properly shut down
         wrapper.shutdown(None);
-        assert!(!wrapper.is_running());
-        // Ensure the asynchronous task is completed
-        let _ = task.await.expect("Failed to await task");
+        assert_eq!(count.load(atomic::Ordering::SeqCst), 100);
     }
 
-    #[tokio::test]
-    async fn test_runtime_wrapper_shutdown_with_timeout() {
+    #[test]
+    fn test_runtime_wrapper_shutdown_with_timeout() {
         let rt = tokio::runtime::Runtime::new().expect("Failed to create runtime");
         let mut wrapper = RuntimeWrapper::from_runtime(rt);
 
+        let count = Arc::new(AtomicU64::default());
         // Run an asynchronous task to ensure the runtime is busy
-        let task = tokio::spawn(async {
+        let obj = count.clone();
+        let _ = wrapper.spawn(async move {
             // Simulate some asynchronous work
-            sleep(Duration::from_secs(2)).await;
+            tokio::task::spawn_blocking(move || {
+                std::thread::sleep(Duration::from_secs(10_000));
+                obj.store(100, atomic::Ordering::SeqCst);
+            });
         });
-        // Sleep to allow the asynchronous task to start
-        sleep(Duration::from_millis(10)).await;
         // Shutdown the runtime with a short timeout
-        wrapper.shutdown(Some(Duration::from_millis(100)));
-        // Ensure the runtime is properly shut down
-        assert!(!wrapper.is_running());
-        // Ensure the asynchronous task is not completed due to the short timeout
-        assert!(task.await.is_err());
-    }
-
-    #[tokio::test]
-    async fn test_runtime_wrapper_drop() {
-        let rt = tokio::runtime::Runtime::new().expect("Failed to create runtime");
-        {
-            let wrapper = RuntimeWrapper::from_runtime(rt);
-            // Ensure the runtime is running within the scope
-            assert!(wrapper.is_running());
-        }
-        // Ensure the runtime is properly shut down on drop
-        assert!(!rt.is_running());
+        wrapper.shutdown(Some(Duration::from_millis(10)));
+        // Ensure the asynchronous task is not completed due to the short
+        // timeout
+        assert_ne!(count.load(atomic::Ordering::SeqCst), 100);
     }
 }

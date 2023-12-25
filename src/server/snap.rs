@@ -385,7 +385,7 @@ impl<R: RaftExtension + 'static> Runner<R> {
             .worker_threads(DEFAULT_POOL_SIZE)
             .build()
             .unwrap();
-        let snap_worker = Runner {
+        Runner {
             env,
             snap_mgr,
             pool: RuntimeWrapper::from_runtime(rt),
@@ -395,8 +395,7 @@ impl<R: RaftExtension + 'static> Runner<R> {
             cfg: config,
             sending_count: Arc::new(AtomicUsize::new(0)),
             recving_count: Arc::new(AtomicUsize::new(0)),
-        };
-        snap_worker
+        }
     }
 
     fn refresh_cfg(&mut self) {
