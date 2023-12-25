@@ -5193,6 +5193,7 @@ where
                         ..
                     }) => {
                         syncer.abort(AbortReason::TermMismatch {
+                            region_id: self.region().get_id(),
                             expected: valid_for_term.unwrap_or_default(),
                             current: self.raft_group.raft.term,
                         });

@@ -271,46 +271,88 @@ impl AdminObserver for Arc<RejectIngestAndAdmin> {
     }
 }
 
+#[derive(Debug)]
+struct SyncerCore {
+    report_id: u64,
+    feedback: Option<oneshot::Sender<SyncReport>>,
+}
+
+#[derive(Debug, PartialEq)]
+pub struct SyncReport {
+    pub report_id: u64,
+    pub aborted: Option<AbortReason>,
+}
+
+impl SyncerCore {
+    fn new(report_id: u64, feedback: oneshot::Sender<SyncReport>) -> Self {
+        Self {
+            report_id,
+            feedback: Some(feedback),
+        }
+    }
+
+    fn aborted(&self) -> bool {
+        self.feedback.is_some()
+    }
+
+    /// Abort this syncer.
+    /// This will fire a message right now.
+    /// And disable all clones of this syncer.
+    ///
+    /// # Panic
+    ///
+    /// Panics if this syncer has already been aborted.
+    /// You may check [`SyncerCore::aborted`] before calling this.
+    fn abort(&mut self, reason: AbortReason) {
+        let ch = self.feedback.take().unwrap();
+        let report = SyncReport {
+            report_id: self.report_id,
+            aborted: Some(reason),
+        };
+        if let Err(report) = ch.send(report) {
+            warn!("reply waitapply states failure."; "report" => ?report);
+        }
+    }
+
+    fn make_success_result(&self) -> SyncReport {
+        SyncReport {
+            report_id: self.report_id,
+            aborted: None,
+        }
+    }
+}
+
+impl Drop for SyncerCore {
+    fn drop(&mut self) {
+        if let Some(ch) = self.feedback.take() {
+            let report = self.make_success_result();
+            if let Err(report) = ch.send(report) {
+                warn!("reply waitapply states failure."; "report" => ?report);
+            }
+            metrics::SNAP_BR_WAIT_APPLY_EVENT.finished.inc()
+        } else {
+            warn!("wait apply aborted."; "report" => self.report_id);
+        }
+    }
+}
+
 /// A syncer for wait apply.
 /// The sender used for constructing this structure will:
 /// Be closed, if the `abort` has been called.
 /// Send the report id to the caller, if all replicas of this Syncer has been
 /// dropped.
-#[derive(Clone, Debug)]
-pub struct SnapshotBrWaitApplySyncer {
-    channel: Option<Arc<Mutex<Option<oneshot::Sender<u64>>>>>,
-    report_id: u64,
-}
-
-impl Drop for SnapshotBrWaitApplySyncer {
-    fn drop(&mut self) {
-        let chan = self
-            .channel
-            .take()
-            .expect("channel taken, maybe dropped twice");
-        if let Ok(ch) = Arc::try_unwrap(chan) {
-            if let Some(ch) = ch.into_inner().unwrap() {
-                if ch.send(self.report_id).is_err() {
-                    warn!("reply waitapply states failure."; "report" => self.report_id);
-                }
-                metrics::SNAP_BR_WAIT_APPLY_EVENT.finished.inc()
-            } else {
-                warn!("wait apply aborted."; "report" => self.report_id);
-            }
-        }
-    }
-}
+#[derive(Debug, Clone)]
+pub struct SnapshotBrWaitApplySyncer(Arc<Mutex<SyncerCore>>);
 
 impl SnapshotBrWaitApplySyncer {
-    pub fn new(report_id: u64, sender: oneshot::Sender<u64>) -> Self {
-        Self {
-            report_id,
-            channel: Some(Arc::new(Mutex::new(Some(sender)))),
-        }
+    pub fn new(report_id: u64, sender: oneshot::Sender<SyncReport>) -> Self {
+        let core = SyncerCore::new(report_id, sender);
+        Self(Arc::new(Mutex::new(core)))
     }
 
     pub fn abort(self, reason: AbortReason) {
-        warn!("aborting wait apply."; "reason" => ?reason, "id" => %self.report_id);
+        let mut core = self.0.lock().unwrap();
+        warn!("aborting wait apply."; "reason" => ?reason, "id" => %core.report_id, "already_aborted" => %core.aborted());
         match reason {
             AbortReason::EpochNotMatch(_) => {
                 metrics::SNAP_BR_WAIT_APPLY_EVENT.epoch_not_match.inc()
@@ -320,14 +362,20 @@ impl SnapshotBrWaitApplySyncer {
             }
             AbortReason::Duplicated => metrics::SNAP_BR_WAIT_APPLY_EVENT.duplicated.inc(),
         }
-        self.channel.as_ref().unwrap().lock().unwrap().take();
+        if !core.aborted() {
+            core.abort(reason);
+        }
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum AbortReason {
     EpochNotMatch(kvproto::errorpb::EpochNotMatch),
-    TermMismatch { expected: u64, current: u64 },
+    TermMismatch {
+        expected: u64,
+        current: u64,
+        region_id: u64,
+    },
     Duplicated,
 }
 

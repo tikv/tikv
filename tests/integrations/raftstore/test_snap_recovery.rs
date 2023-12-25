@@ -5,7 +5,8 @@ use std::time::Duration;
 use futures::{executor::block_on, StreamExt};
 use raft::eraftpb::MessageType;
 use raftstore::store::{
-    snapshot_backup::SnapshotBrWaitApplyRequest, PeerMsg, SignificantMsg, SnapshotBrWaitApplySyncer,
+    snapshot_backup::{SnapshotBrWaitApplyRequest, SyncReport},
+    PeerMsg, SignificantMsg, SnapshotBrWaitApplySyncer,
 };
 use test_raftstore::*;
 use tikv_util::{future::block_on_timeout, HandyRwLock};
@@ -125,5 +126,11 @@ fn test_snap_wait_apply() {
     drop(syncer);
 
     // we expect recv the region id from rx.
-    assert_eq!(block_on(rx), Ok(1));
+    assert_eq!(
+        block_on(rx),
+        Ok(SyncReport {
+            report_id: 1,
+            aborted: None
+        })
+    );
 }

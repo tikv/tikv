@@ -35,7 +35,7 @@ use raftstore::{
     store::{
         fsm::RaftRouter,
         msg::{PeerMsg, SignificantMsg},
-        snapshot_backup::SnapshotBrWaitApplyRequest,
+        snapshot_backup::{SnapshotBrWaitApplyRequest, SyncReport},
         transport::SignificantRouter,
         SnapshotBrWaitApplySyncer,
     },
@@ -225,7 +225,7 @@ where
     // a new wait apply syncer share with all regions,
     // when all region reached the target index, share reference decreased to 0,
     // trigger closure to send finish info back.
-    pub fn wait_apply_last(router: RaftRouter<EK, ER>, sender: Sender<u64>) {
+    pub fn wait_apply_last(router: RaftRouter<EK, ER>, sender: Sender<SyncReport>) {
         let wait_apply = SnapshotBrWaitApplySyncer::new(0, sender);
         router.broadcast_normal(|| {
             PeerMsg::SignificantMsg(SignificantMsg::SnapshotBrWaitApply(
@@ -361,23 +361,21 @@ where
                         "err" => ?e,
                     );
                 }
-                rx_apply.push(Some(rx));
+                rx_apply.push(rx);
             }
 
             // leader apply to last log
             for (rid, rx) in leaders.iter().zip(rx_apply) {
-                if let Some(rx) = rx {
-                    CURRENT_WAIT_APPLY_LEADER.set(*rid as _);
-                    match rx.await {
-                        Ok(region_id) => {
-                            debug!("leader apply to last log"; "region_id" => region_id);
-                        }
-                        Err(e) => {
-                            error!("leader failed to apply to last log"; "error" => ?e);
-                        }
+                CURRENT_WAIT_APPLY_LEADER.set(*rid as _);
+                match rx.await {
+                    Ok(_) => {
+                        debug!("leader apply to last log"; "region_id" => rid);
                     }
-                    REGION_EVENT_COUNTER.finish_wait_leader_apply.inc();
+                    Err(e) => {
+                        error!("leader failed to apply to last log"; "error" => ?e);
+                    }
                 }
+                REGION_EVENT_COUNTER.finish_wait_leader_apply.inc();
             }
             CURRENT_WAIT_APPLY_LEADER.set(0);
 
@@ -426,7 +424,7 @@ where
             RecoveryService::wait_apply_last(router, tx);
             match rx.await {
                 Ok(id) => {
-                    info!("follower apply to last log"; "id" => id);
+                    info!("follower apply to last log"; "report" => ?id);
                 }
                 Err(e) => {
                     error!("follower failed to apply to last log"; "error" => ?e);

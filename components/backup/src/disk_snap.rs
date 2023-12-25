@@ -22,11 +22,13 @@ use kvproto::{
         PrepareSnapshotBackupEventType as PEvnT, PrepareSnapshotBackupRequest as PReq,
         PrepareSnapshotBackupRequestType as PReqT, PrepareSnapshotBackupResponse as PResp,
     },
-    errorpb,
+    errorpb::{self, NotLeader},
     metapb::Region,
 };
 use raftstore::store::{
-    snapshot_backup::{RejectIngestAndAdmin, SnapshotBrHandle, SnapshotBrWaitApplyRequest},
+    snapshot_backup::{
+        AbortReason, RejectIngestAndAdmin, SnapshotBrHandle, SnapshotBrWaitApplyRequest,
+    },
     SnapshotBrWaitApplySyncer,
 };
 use tikv_util::{sys::thread::ThreadBuildWrapper, warn, Either};
@@ -43,7 +45,10 @@ type Result<T> = std::result::Result<T, Error>;
 enum Error {
     Uninitialized,
     LeaseExpired,
-    WaitApplyAborted,
+    /// Wait apply has been aborted.
+    /// When the `reason` is `None`, implies the request itself has been
+    /// canceled (seldom) due to message lost or something.
+    WaitApplyAborted(Option<AbortReason>),
     RaftStore(raftstore::Error),
 }
 
@@ -94,13 +99,20 @@ impl From<Error> for HandleErr {
                 "coprocessor not initialized".to_owned(),
             )),
             Error::RaftStore(r) => HandleErr::SendErrResp(errorpb::Error::from(r)),
-            Error::WaitApplyAborted => {
-                HandleErr::SendErrResp({
-                    let mut err = errorpb::Error::new();
-                    err.set_message("wait apply has been aborted, perhaps epoch not match or leadership changed".to_owned());
-                    err
-                })
-            }
+            Error::WaitApplyAborted(reason) => HandleErr::SendErrResp({
+                let mut err = errorpb::Error::new();
+                err.set_message(format!("wait apply has been aborted, perhaps epoch not match or leadership changed, note = {:?}", reason));
+                match reason {
+                    Some(AbortReason::EpochNotMatch(enm)) => err.set_epoch_not_match(enm),
+                    Some(AbortReason::TermMismatch { region_id, .. }) => err.set_not_leader({
+                        let mut nl = NotLeader::new();
+                        nl.set_region_id(region_id);
+                        nl
+                    }),
+                    _ => {}
+                }
+                err
+            }),
             Error::LeaseExpired => HandleErr::AbortStream(RpcStatus::with_message(
                 grpcio::RpcStatusCode::FAILED_PRECONDITION,
                 "the lease has expired, you may not send `wait_apply` because it is no meaning"
@@ -230,7 +242,12 @@ impl<SR: SnapshotBrHandle + 'static> StreamHandleLoop<SR> {
         Box::pin(
             async move {
                 send_res?;
-                rx.await.map_err(|_| Error::WaitApplyAborted).map(|_| ())
+                rx.await
+                    .map_err(|_| Error::WaitApplyAborted(None))
+                    .and_then(|report| match report.aborted {
+                        Some(reason) => Err(Error::WaitApplyAborted(Some(reason))),
+                        None => Ok(()),
+                    })
             }
             .map(move |res| (region, res)),
         )
