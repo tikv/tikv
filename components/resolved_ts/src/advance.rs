@@ -51,6 +51,7 @@ const DEFAULT_GRPC_MIN_MESSAGE_SIZE_TO_COMPRESS: usize = 4096;
 
 pub struct AdvanceTsWorker {
     pd_client: Arc<dyn PdClient>,
+    advance_ts_interval: Duration,
     timer: SteadyTimer,
     worker: Runtime,
     scheduler: Scheduler<Task>,
@@ -64,6 +65,7 @@ pub struct AdvanceTsWorker {
 
 impl AdvanceTsWorker {
     pub fn new(
+        advance_ts_interval: Duration,
         pd_client: Arc<dyn PdClient>,
         scheduler: Scheduler<Task>,
         concurrency_manager: ConcurrencyManager,
@@ -79,6 +81,7 @@ impl AdvanceTsWorker {
             scheduler,
             pd_client,
             worker,
+            advance_ts_interval,
             timer: SteadyTimer::default(),
             concurrency_manager,
             last_pd_tso: Arc::new(std::sync::Mutex::new(None)),
@@ -101,7 +104,7 @@ impl AdvanceTsWorker {
         let timeout = self.timer.delay(advance_ts_interval);
         let min_timeout = self.timer.delay(cmp::min(
             DEFAULT_CHECK_LEADER_TIMEOUT_DURATION,
-            advance_ts_interval,
+            self.advance_ts_interval,
         ));
 
         let last_pd_tso = self.last_pd_tso.clone();
