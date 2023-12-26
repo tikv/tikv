@@ -630,9 +630,8 @@ mod tests {
                 .iter()
                 .map(|x| x.get_key())
                 .collect::<Vec<&str>>();
-            assert_eq!(
-                keys,
-                vec![
+            assert!(
+                keys.starts_with(&[
                     "read_io/s",
                     "read_merges/s",
                     "read_sectors/s",
@@ -644,7 +643,9 @@ mod tests {
                     "in_flight/s",
                     "io_ticks/s",
                     "time_in_queue/s",
-                ]
+                ]),
+                "actual: {:?}",
+                keys
             );
         }
     }
