@@ -197,6 +197,10 @@ impl engine_traits::WriteBatch for RocksWriteBatchVec {
         }
         Ok(())
     }
+
+    fn set_sequence_number(&mut self, _seq: u64) -> Result<()> {
+        unimplemented!()
+    }
 }
 
 impl Mutable for RocksWriteBatchVec {

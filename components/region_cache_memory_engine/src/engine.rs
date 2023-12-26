@@ -17,10 +17,10 @@ use engine_traits::{
     CF_DEFAULT, CF_LOCK, CF_WRITE,
 };
 use skiplist_rs::{IterRef, Skiplist};
-use tikv_util::{config::ReadableSize, box_err};
+use tikv_util::{box_err, config::ReadableSize};
 
 use crate::keys::{
-    decode_key, encode_seek_key, InternalKey, InternalKeyComparator, ValueType,
+    decode_key, encode_key, encode_seek_key, InternalKey, InternalKeyComparator, ValueType,
     VALUE_TYPE_FOR_SEEK, VALUE_TYPE_FOR_SEEK_FOR_PREV,
 };
 
@@ -190,25 +190,74 @@ impl RegionCacheEngine for RegionCacheMemoryEngine {
     }
 }
 
+type RegionCacheMemoryEngineCorePtr = Arc<Mutex<RegionCacheMemoryEngineCore>>;
+
 /// RegionCacheWriteBatch maintains its own in-memory buffer.
-#[derive(Default, Clone, Debug)]
+#[derive(Clone)]
 pub struct RegionCacheWriteBatch {
     buffer: Vec<RegionCacheWriteBatchEntry>,
     sequence_number: Option<u64>,
+    core: RegionCacheMemoryEngineCorePtr,
 }
 
 impl RegionCacheWriteBatch {
-
-    pub fn with_capacity(cap: usize) -> Self {
-        Self { buffer: Vec::with_capacity(cap), sequence_number: None }
+    pub fn new(core: &RegionCacheMemoryEngineCorePtr) -> Self {
+        Self {
+            buffer: Vec::new(),
+            sequence_number: None,
+            core: Arc::clone(core),
+        }
     }
+    pub fn with_capacity(core: &RegionCacheMemoryEngineCorePtr, cap: usize) -> Self {
+        Self {
+            buffer: Vec::with_capacity(cap),
+            sequence_number: None,
+            core: Arc::clone(core),
+        }
+    }
+
+    #[inline]
+    fn write_impl(&mut self, seq: u64) {
+        let mut core = self.core.lock().unwrap();
+        let mut sl_cb = |s: String, key: Bytes, value: Bytes| {
+            let sl = core.engine.get_mut(&1).unwrap();
+        };
+        for entry in self.buffer.iter() {
+            entry.append_entry(seq, &mut sl_cb)
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+enum RegionCacheWriteBatchMutation {
+    InsertOrUpdate(Bytes),
+    Delete,
 }
 
 #[derive(Clone, Debug)]
 struct RegionCacheWriteBatchEntry {
     cf: String,
     key: Bytes,
-    mutation: (),
+    mutation: RegionCacheWriteBatchMutation,
+}
+
+impl RegionCacheWriteBatchEntry {
+    pub fn append_entry<F>(&self, seq: u64, mut f: F)
+    where
+        F: FnMut(String, Bytes, Bytes),
+    {
+        let (key, value) = match &self.mutation {
+            RegionCacheWriteBatchMutation::InsertOrUpdate(value) => {
+                let key = encode_key(&self.key, seq, ValueType::Value);
+                (key, value.clone())
+            }
+            RegionCacheWriteBatchMutation::Delete => {
+                let key = encode_key(&self.key, seq, ValueType::Deletion);
+                (key, Bytes::default())
+            }
+        };
+        f(self.cf.clone(), key, value)
+    }
 }
 
 impl WriteBatchExt for RegionCacheMemoryEngine {
@@ -217,11 +266,11 @@ impl WriteBatchExt for RegionCacheMemoryEngine {
     const WRITE_BATCH_MAX_KEYS: usize = 256;
 
     fn write_batch(&self) -> Self::WriteBatch {
-        RegionCacheWriteBatch::default()
+        RegionCacheWriteBatch::new(&self.core)
     }
 
     fn write_batch_with_cap(&self, cap: usize) -> Self::WriteBatch {
-        RegionCacheWriteBatch::with_capacity(cap)
+        RegionCacheWriteBatch::with_capacity(&self.core, cap)
     }
 }
 
@@ -512,7 +561,12 @@ impl Iterator for RegionCacheIterator {
 
 impl WriteBatch for RegionCacheWriteBatch {
     fn write_opt(&mut self, _: &WriteOptions) -> Result<u64> {
-        unimplemented!()
+        self.sequence_number
+            .map(|seq| {
+                self.write_impl(seq);
+                seq
+            })
+            .ok_or(box_err!("Sequence number not set"))
     }
 
     fn data_size(&self) -> usize {
@@ -532,7 +586,7 @@ impl WriteBatch for RegionCacheWriteBatch {
     }
 
     fn clear(&mut self) {
-        unimplemented!()
+        self.buffer.clear()
     }
 
     fn set_save_point(&mut self) {
@@ -553,10 +607,14 @@ impl WriteBatch for RegionCacheWriteBatch {
 
     fn set_sequence_number(&mut self, seq: u64) -> Result<()> {
         if let Some(seqno) = self.sequence_number {
-            return Err(box_err!("Sequence number {} already set", seqno))
+            return Err(box_err!("Sequence number {} already set", seqno));
         };
         self.sequence_number = Some(seq);
         Ok(())
+    }
+
+    fn write(&mut self) -> Result<u64> {
+        self.write_opt(&WriteOptions::default())
     }
 }
 
@@ -565,8 +623,8 @@ impl Mutable for RegionCacheWriteBatch {
         unimplemented!()
     }
 
-    fn put_cf(&mut self, _: &str, _: &[u8], _: &[u8]) -> Result<()> {
-        unimplemented!()
+    fn put_cf(&mut self, key: &str, value: &[u8], _: &[u8]) -> Result<()> {
+        todo!()
     }
 
     fn delete(&mut self, _: &[u8]) -> Result<()> {

@@ -124,8 +124,7 @@ pub trait WriteBatch: Mutable {
     /// Merge another WriteBatch to itself
     fn merge(&mut self, src: Self) -> Result<()>;
 
-    /// Set a custom sequence number for all of the writes in this batch. Used by [`HybridEngine`]
-    fn set_sequence_number(&mut self, _seq: u64) -> Result<()> {
-        unimplemented!()
-    }
+    /// Set a custom sequence number for all of the writes in this batch. Used
+    /// by [`HybridEngine`]
+    fn set_sequence_number(&mut self, _seq: u64) -> Result<()>;
 }
