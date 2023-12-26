@@ -645,7 +645,11 @@ fn test_suspend_import() {
     let write_res = write(sst_range);
     let sst = write_res.unwrap().metas;
     let res = multi_ingest(&sst);
-    assert!(res.unwrap().get_error().has_server_is_busy(), "{:?}", res);
+    assert!(
+        res.as_ref().unwrap().get_error().has_server_is_busy(),
+        "{:?}",
+        res
+    );
     std::thread::sleep(Duration::from_secs(1));
     multi_ingest(&sst).unwrap();
 

@@ -46,16 +46,16 @@ testexport = ["raftstore/testexport", "tikv/testexport", "pd_client/testexport"]
 profiling = ["profiler/profiling"]
 
 test-engine-kv-rocksdb = [
-  "raftstore/test-engine-kv-rocksdb", "test_backup/test-engine-kv-rocksdb"
+  "raftstore/test-engine-kv-rocksdb"
 ]
 test-engine-raft-raft-engine = [
-  "raftstore/test-engine-raft-raft-engine", "test_backup/test-engine-raft-raft-engine"
+  "raftstore/test-engine-raft-raft-engine"
 ]
 test-engines-rocksdb = [
-  "raftstore/test-engines-rocksdb", "test_backup/test-engines-rocksdb"
+  "raftstore/test-engines-rocksdb"
 ]
 test-engines-panic = [
-  "raftstore/test-engines-panic", "test_backup/test-engines-panic"
+  "raftstore/test-engines-panic"
 ]
 jemalloc = ["tikv/jemalloc"]
 mimalloc = ["tikv/mimalloc"]

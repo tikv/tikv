@@ -5685,7 +5685,7 @@ dependencies = [
  "collections",
  "concurrency_manager",
  "crc64fast",
- "engine_test",
+ "engine_rocks",
  "engine_traits",
  "external_storage",
  "file_system",

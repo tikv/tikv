@@ -7,7 +7,7 @@ use std::{
 };
 
 use backup::disk_snap::Env as BEnv;
-use engine_test::kv::KvTestEngine as KTE;
+use engine_rocks::RocksEngine as KTE;
 use futures_executor::block_on;
 use futures_util::{
     sink::SinkExt,

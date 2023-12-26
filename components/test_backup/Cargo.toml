@@ -5,19 +5,6 @@ edition = "2021"
 publish = false
 
 [features]
-default = ["test-engine-kv-rocksdb", "test-engine-raft-raft-engine"]
-test-engine-kv-rocksdb = [
-  "engine_test/test-engine-kv-rocksdb"
-]
-test-engine-raft-raft-engine = [
-  "engine_test/test-engine-raft-raft-engine"
-]
-test-engines-rocksdb = [
-  "engine_test/test-engines-rocksdb",
-]
-test-engines-panic = [
-  "engine_test/test-engines-panic",
-]
 
 [dependencies]
 api_version = { workspace = true }
@@ -25,7 +12,7 @@ backup = { workspace = true }
 collections = { workspace = true }
 concurrency_manager = { workspace = true }
 crc64fast = "0.1"
-engine_test = { workspace = true }
+engine_rocks = { workspace = true }
 engine_traits = { workspace = true }
 external_storage ={ workspace = true }
 file_system = { workspace = true }
