@@ -192,7 +192,9 @@ impl Filter {
                     self.delete_versions += 1;
                     self.remove_older = true;
 
-                    // need to delete at last to avoid older versions appear
+                    // The first mvcc type below safe point is the mvcc delete. We should delay to
+                    // remove it until all the following same user key has been deleted to avoid
+                    // older version apper.
                     self.cached_delete_key = Some(key.to_vec());
                 }
             }
@@ -397,7 +399,7 @@ pub mod tests {
         assert_eq!(3, element_count(&default));
         assert_eq!(3, element_count(&write));
 
-        let mut worker = GcRunner::new(engine.clone());
+        let mut worker = GcRunner::new(engine);
 
         // gc will not remove the latest mvcc put below safe point
         worker.gc_region(1, 14);
