@@ -1810,7 +1810,7 @@ def RaftIO() -> RowPanel:
         heatmap_panel_graph_panel_histogram_quantile_pairs(
             heatmap_title="Process ready duration",
             heatmap_description="The time consumed for peer processes to be ready in Raft",
-            graph_title="99% Process ready duration per server",
+            graph_title="Process ready duration per server",
             graph_description="The time consumed for peer processes to be ready in Raft",
             yaxis_format=UNITS.SECONDS,
             metric="tikv_raftstore_raft_process_duration_secs",
@@ -1821,7 +1821,7 @@ def RaftIO() -> RowPanel:
         heatmap_panel_graph_panel_histogram_quantile_pairs(
             heatmap_title="Store write loop duration",
             heatmap_description="The time duration of store write loop when store-io-pool-size is not zero.",
-            graph_title="99% Store write loop duration per server",
+            graph_title="Store write loop duration per server",
             graph_description="The time duration of store write loop on each TiKV instance when store-io-pool-size is not zero.",
             yaxis_format=UNITS.SECONDS,
             metric="tikv_raftstore_store_write_loop_duration_seconds",
@@ -1831,7 +1831,7 @@ def RaftIO() -> RowPanel:
         heatmap_panel_graph_panel_histogram_quantile_pairs(
             heatmap_title="Append log duration",
             heatmap_description="The time consumed when Raft appends log",
-            graph_title="99% Commit log duration per server",
+            graph_title="Commit log duration per server",
             graph_description="The time consumed when Raft commits log on each TiKV instance",
             yaxis_format=UNITS.SECONDS,
             metric="tikv_raftstore_append_log_duration_seconds",
@@ -1841,7 +1841,7 @@ def RaftIO() -> RowPanel:
         heatmap_panel_graph_panel_histogram_quantile_pairs(
             heatmap_title="Commit log duration",
             heatmap_description="The time consumed when Raft commits log",
-            graph_title="99% Commit log duration per server",
+            graph_title="Commit log duration per server",
             graph_description="The time consumed when Raft commits log on each TiKV instance",
             yaxis_format=UNITS.SECONDS,
             metric="tikv_raftstore_commit_log_duration_seconds",
@@ -1851,7 +1851,7 @@ def RaftIO() -> RowPanel:
         heatmap_panel_graph_panel_histogram_quantile_pairs(
             heatmap_title="Apply log duration",
             heatmap_description="The time consumed when Raft applies log",
-            graph_title="99% Apply log duration per server",
+            graph_title="Apply log duration per server",
             graph_description="The time consumed for Raft to apply logs per TiKV instance",
             yaxis_format=UNITS.SECONDS,
             metric="tikv_raftstore_apply_log_duration_seconds",
@@ -1859,9 +1859,19 @@ def RaftIO() -> RowPanel:
     )
     layout.row(
         heatmap_panel_graph_panel_histogram_quantile_pairs(
+            heatmap_title="Raft Message Wait Flush Duration",
+            heatmap_description="The time consumed for Raft Message wait flush",
+            graph_title="Raft Message Wait Flush Duration",
+            graph_description="The time consumed for Raft Message wait flush per TiKV instance",
+            yaxis_format=UNITS.SECONDS,
+            metric="tikv_server_raft_message_wait_flush_duration_seconds",
+        )
+    )
+    layout.row(
+        heatmap_panel_graph_panel_histogram_quantile_pairs(
             heatmap_title="Raft Client Wait Connection Ready Duration",
             heatmap_description="The time consumed for Raft Client wait connection ready",
-            graph_title="99% Raft Client Wait Connection Ready Duration",
+            graph_title="Raft Client Wait Connection Ready Duration",
             graph_description="The time consumed for Raft Client wait connection ready per TiKV instance",
             yaxis_format=UNITS.SECONDS,
             metric="tikv_server_raft_client_wait_ready_duration",
