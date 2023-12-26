@@ -1894,15 +1894,17 @@ impl Debug for ReplayGuard {
     }
 }
 
-impl ReplayGuard {
-    pub fn new() -> Self {
+impl Default for ReplayGuard {
+    fn default() -> Self {
         Self {
             normal_peers: AtomicUsize::new(0),
             paused_peers: AtomicUsize::new(0),
             timer: std::time::Instant::now(),
         }
     }
+}
 
+impl ReplayGuard {
     pub fn inc_normal_peer(&self) {
         self.normal_peers.fetch_add(1, AtomicOrdering::Relaxed);
     }

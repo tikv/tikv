@@ -1815,7 +1815,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         // Make sure Msg::Start is the first message each FSM received.
         for addr in address {
             self.router
-                .force_send(addr, PeerMsg::Start(Some(Arc::new(ReplayGuard::new()))))
+                .force_send(addr, PeerMsg::Start(Some(Arc::new(ReplayGuard::default()))))
                 .unwrap();
         }
         self.router

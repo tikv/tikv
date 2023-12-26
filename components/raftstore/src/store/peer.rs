@@ -5671,7 +5671,9 @@ where
             self.set_replay_guard(Some(grd));
             true
         } else {
-            guard.map(|grd| grd.inc_normal_peer());
+            if let Some(guard) = guard {
+                guard.inc_normal_peer();
+            }
             false
         }
     }
