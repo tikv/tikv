@@ -67,7 +67,7 @@ use raftstore::{
             RaftBatchSystem, RaftRouter, StoreMeta, MULTI_FILES_SNAPSHOT_FEATURE, PENDING_MSG_CAP,
         },
         memory::MEMTRACE_ROOT as MEMTRACE_RAFTSTORE,
-        snapshot_backup::RejectIngestAndAdmin,
+        snapshot_backup::PrepareDiskSnapObserver,
         AutoSplitController, CheckLeaderRunner, LocalReader, SnapManager, SnapManagerBuilder,
         SplitCheckRunner, SplitConfigManager, StoreMetaDelegate,
     },
@@ -288,7 +288,7 @@ where
     br_snap_recovery_mode: bool, // use for br snapshot recovery
     resolved_ts_scheduler: Option<Scheduler<Task>>,
     grpc_service_mgr: GrpcServiceManager,
-    snap_br_rejector: Option<Arc<RejectIngestAndAdmin>>,
+    snap_br_rejector: Option<Arc<PrepareDiskSnapObserver>>,
 }
 
 struct TikvEngines<EK: KvEngine, ER: RaftEngine> {
@@ -859,7 +859,7 @@ where
             )),
         );
 
-        let rejector = Arc::new(RejectIngestAndAdmin::default());
+        let rejector = Arc::new(PrepareDiskSnapObserver::default());
         rejector.register_to(self.coprocessor_host.as_mut().unwrap());
         self.snap_br_rejector = Some(rejector);
 

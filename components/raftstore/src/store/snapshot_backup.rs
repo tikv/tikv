@@ -93,12 +93,12 @@ impl<EK: KvEngine, ER: RaftEngine> SnapshotBrHandle for Arc<Mutex<RaftRouter<EK,
 }
 
 #[derive(Default)]
-pub struct RejectIngestAndAdmin {
+pub struct PrepareDiskSnapObserver {
     before: AtomicU64,
     initialized: AtomicBool,
 }
 
-impl RejectIngestAndAdmin {
+impl PrepareDiskSnapObserver {
     pub fn register_to(self: &Arc<Self>, coprocessor_host: &mut CoprocessorHost<impl KvEngine>) {
         let reg = &mut coprocessor_host.registry;
         reg.register_query_observer(0, BoxQueryObserver::new(Arc::clone(self)));
@@ -190,7 +190,7 @@ impl RejectIngestAndAdmin {
     }
 }
 
-impl Coprocessor for Arc<RejectIngestAndAdmin> {
+impl Coprocessor for Arc<PrepareDiskSnapObserver> {
     fn start(&self) {
         self.initialized.store(true, Ordering::Release)
     }
@@ -200,7 +200,7 @@ impl Coprocessor for Arc<RejectIngestAndAdmin> {
     }
 }
 
-impl QueryObserver for Arc<RejectIngestAndAdmin> {
+impl QueryObserver for Arc<PrepareDiskSnapObserver> {
     fn pre_propose_query(
         &self,
         cx: &mut crate::coprocessor::ObserverContext<'_>,
@@ -224,7 +224,7 @@ impl QueryObserver for Arc<RejectIngestAndAdmin> {
     }
 }
 
-impl AdminObserver for Arc<RejectIngestAndAdmin> {
+impl AdminObserver for Arc<PrepareDiskSnapObserver> {
     fn pre_propose_admin(
         &self,
         _: &mut crate::coprocessor::ObserverContext<'_>,
@@ -292,25 +292,22 @@ impl SyncerCore {
     }
 
     fn aborted(&self) -> bool {
-        self.feedback.is_some()
+        self.feedback.is_none()
     }
 
     /// Abort this syncer.
     /// This will fire a message right now.
     /// And disable all clones of this syncer.
-    ///
-    /// # Panic
-    ///
-    /// Panics if this syncer has already been aborted.
-    /// You may check [`SyncerCore::aborted`] before calling this.
+    /// If already aborted, this will do nothing.
     fn abort(&mut self, reason: AbortReason) {
-        let ch = self.feedback.take().unwrap();
-        let report = SyncReport {
-            report_id: self.report_id,
-            aborted: Some(reason),
-        };
-        if let Err(report) = ch.send(report) {
-            warn!("reply waitapply states failure."; "report" => ?report);
+        if let Some(ch) = self.feedback.take() {
+            let report = SyncReport {
+                report_id: self.report_id,
+                aborted: Some(reason),
+            };
+            if let Err(report) = ch.send(report) {
+                warn!("reply waitapply states failure."; "report" => ?report);
+            }
         }
     }
 
@@ -362,9 +359,7 @@ impl SnapshotBrWaitApplySyncer {
             }
             AbortReason::Duplicated => metrics::SNAP_BR_WAIT_APPLY_EVENT.duplicated.inc(),
         }
-        if !core.aborted() {
-            core.abort(reason);
-        }
+        core.abort(reason);
     }
 }
 

@@ -25,7 +25,7 @@ use kvproto::{
     metapb::Region,
     raft_cmdpb::RaftCmdResponse,
 };
-use raftstore::store::{snapshot_backup::RejectIngestAndAdmin, Callback, WriteResponse};
+use raftstore::store::{snapshot_backup::PrepareDiskSnapObserver, Callback, WriteResponse};
 use test_raftstore::*;
 use tikv_util::{
     future::{block_on_timeout, paired_future_callback},
@@ -35,7 +35,7 @@ use tikv_util::{
 
 pub struct Node {
     service: Option<Server>,
-    pub rejector: Arc<RejectIngestAndAdmin>,
+    pub rejector: Arc<PrepareDiskSnapObserver>,
     pub backup_client: Option<brpb::BackupClient>,
 }
 
@@ -47,7 +47,7 @@ pub struct Suite {
 
 impl Suite {
     fn crate_node(&mut self, id: u64) {
-        let rej = Arc::new(RejectIngestAndAdmin::default());
+        let rej = Arc::new(PrepareDiskSnapObserver::default());
         let rej2 = rej.clone();
         let mut w = self.cluster.sim.wl();
         w.coprocessor_hooks

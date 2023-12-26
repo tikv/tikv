@@ -27,7 +27,7 @@ use kvproto::{
 };
 use raftstore::store::{
     snapshot_backup::{
-        AbortReason, RejectIngestAndAdmin, SnapshotBrHandle, SnapshotBrWaitApplyRequest,
+        AbortReason, PrepareDiskSnapObserver, SnapshotBrHandle, SnapshotBrWaitApplyRequest,
     },
     SnapshotBrWaitApplySyncer,
 };
@@ -125,13 +125,17 @@ impl From<Error> for HandleErr {
 #[derive(Clone)]
 pub struct Env<SR: SnapshotBrHandle> {
     pub(crate) handle: SR,
-    rejector: Arc<RejectIngestAndAdmin>,
+    rejector: Arc<PrepareDiskSnapObserver>,
     active_stream: Arc<AtomicU64>,
     runtime: Either<Handle, Arc<Runtime>>,
 }
 
 impl<SR: SnapshotBrHandle> Env<SR> {
-    pub fn new(handle: SR, rejector: Arc<RejectIngestAndAdmin>, runtime: Option<Handle>) -> Self {
+    pub fn new(
+        handle: SR,
+        rejector: Arc<PrepareDiskSnapObserver>,
+        runtime: Option<Handle>,
+    ) -> Self {
         let runtime = match runtime {
             None => Either::Right(Self::default_runtime()),
             Some(rt) => Either::Left(rt),
