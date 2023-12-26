@@ -507,7 +507,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     // we may have skipped scheduling raft tick when start due to noticable gap
     // between commit index and apply index. We should scheduling it when raft log
     // apply catches up.
-    pub fn try_compelete_recovery(&mut self) {
+    pub fn try_complete_recovery(&mut self) {
         if self.pause_for_replay()
             && self.storage().entry_storage().commit_index()
                 <= self.storage().entry_storage().applied_index()

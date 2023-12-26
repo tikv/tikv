@@ -8,7 +8,7 @@ use std::{
     fmt::{Debug, Display},
     option::Option,
     sync::{
-        atomic::{AtomicBool, AtomicU64, Ordering as AtomicOrdering},
+        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering as AtomicOrdering},
         Arc, Mutex, MutexGuard,
     },
     u64,
@@ -1864,6 +1864,63 @@ pub fn validate_split_region(
         check_key_in_region(key, region)?;
     }
     Ok(())
+}
+
+pub const PAUSE_FOR_REPLAY_GAP: u64 = 128;
+
+/// Used for recording the replay status of the Store.
+///
+/// Only when all the peers in this store are in sync with the leader,
+/// the replay is completed. Otherwise, the store is still in the
+/// process of replaying, which has the following implications:
+///
+/// * The store is busy on replaying, occupying heavy resources on
+/// Disk I/O and CPU. And it will delay the start of the new peer.
+/// * The store is not able to serve read requests until the replay
+/// is completed.
+pub struct ReplayGuard {
+    normal_peers: AtomicUsize,
+    paused_peers: AtomicUsize,
+    timer: std::time::Instant,
+}
+
+impl Debug for ReplayGuard {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ReplayGuard")
+            .field("normal_peers", &self.normal_peers)
+            .field("paused_peers", &self.paused_peers)
+            .field("timer", &self.timer)
+            .finish()
+    }
+}
+
+impl ReplayGuard {
+    pub fn new() -> Self {
+        Self {
+            normal_peers: AtomicUsize::new(0),
+            paused_peers: AtomicUsize::new(0),
+            timer: std::time::Instant::now(),
+        }
+    }
+
+    pub fn inc_normal_peer(&self) {
+        self.normal_peers.fetch_add(1, AtomicOrdering::Relaxed);
+    }
+
+    pub fn inc_paused_peer(&self) {
+        self.paused_peers.fetch_add(1, AtomicOrdering::Relaxed);
+    }
+}
+
+impl Drop for ReplayGuard {
+    fn drop(&mut self) {
+        info!(
+            "The raft log replay completed";
+            "normal_peers" => self.normal_peers.load(AtomicOrdering::Relaxed),
+            "paused_peers" => self.paused_peers.load(AtomicOrdering::Relaxed),
+            "elapsed" => ?self.timer.elapsed()
+        );
+    }
 }
 
 #[cfg(test)]

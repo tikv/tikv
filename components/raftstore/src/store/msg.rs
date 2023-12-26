@@ -26,7 +26,9 @@ use smallvec::{smallvec, SmallVec};
 use tikv_util::{deadline::Deadline, escape, memory::HeapSize, time::Instant};
 use tracker::{get_tls_tracker_token, TrackerToken};
 
-use super::{local_metrics::TimeTracker, region_meta::RegionMeta, FetchedLogs, RegionSnapshot};
+use super::{
+    local_metrics::TimeTracker, region_meta::RegionMeta, FetchedLogs, RegionSnapshot, ReplayGuard,
+};
 use crate::store::{
     fsm::apply::{CatchUpLogs, ChangeObserver, TaskRes as ApplyTaskRes},
     metrics::RaftEventDurationType,
@@ -773,7 +775,7 @@ pub enum PeerMsg<EK: KvEngine> {
     /// group.
     SignificantMsg(SignificantMsg<EK::Snapshot>),
     /// Start the FSM.
-    Start,
+    Start(Option<std::sync::Arc<ReplayGuard>>),
     /// A message only used to notify a peer.
     Noop,
     Persisted {
@@ -803,7 +805,7 @@ impl<EK: KvEngine> fmt::Debug for PeerMsg<EK> {
             },
             PeerMsg::SignificantMsg(msg) => write!(fmt, "{:?}", msg),
             PeerMsg::ApplyRes { res } => write!(fmt, "ApplyRes {:?}", res),
-            PeerMsg::Start => write!(fmt, "Startup"),
+            PeerMsg::Start(guard) => write!(fmt, "Startup {:?}", guard),
             PeerMsg::Noop => write!(fmt, "Noop"),
             PeerMsg::Persisted {
                 peer_id,

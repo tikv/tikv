@@ -45,7 +45,7 @@ use raftstore::{
         fsm::store::StoreRegionMeta,
         local_metrics::IoType,
         needs_evict_entry_cache,
-        util::{self, is_first_append_entry, is_initial_msg},
+        util::{self, is_first_append_entry, is_initial_msg, PAUSE_FOR_REPLAY_GAP},
         worker_metrics::SNAP_COUNTER,
         FetchedLogs, ReadProgress, Transport, WriteCallback, WriteTask,
     },
@@ -72,8 +72,6 @@ use crate::{
     router::{PeerMsg, PeerTick},
     worker::tablet,
 };
-
-const PAUSE_FOR_REPLAY_GAP: u64 = 128;
 
 pub struct ReplayWatch {
     normal_peers: AtomicUsize,
@@ -819,7 +817,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         self.merge_state_changes_to(&mut write_task);
         self.storage_mut()
             .handle_raft_ready(ctx, &mut ready, &mut write_task);
-        self.try_compelete_recovery();
+        self.try_complete_recovery();
         self.on_advance_persisted_apply_index(ctx, prev_persisted, &mut write_task);
 
         if !ready.persisted_messages().is_empty() {

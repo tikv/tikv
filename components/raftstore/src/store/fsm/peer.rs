@@ -62,6 +62,7 @@ use tikv_util::{
 };
 use tracker::GLOBAL_TRACKERS;
 use txn_types::WriteBatchFlags;
+use util::ReplayGuard;
 
 use self::memtrace::*;
 use super::life::forward_destroy_to_source_peer;
@@ -686,7 +687,7 @@ where
                 }
                 PeerMsg::SignificantMsg(msg) => self.on_significant_msg(msg),
                 PeerMsg::CasualMessage(msg) => self.on_casual_msg(msg),
-                PeerMsg::Start => self.start(),
+                PeerMsg::Start(guard) => self.start(guard),
                 PeerMsg::HeartbeatPd => {
                     if self.fsm.peer.is_leader() {
                         self.register_pd_heartbeat_tick()
@@ -1246,8 +1247,13 @@ where
         }
     }
 
-    fn start(&mut self) {
-        self.register_raft_base_tick();
+    fn start(&mut self, guard: Option<Arc<ReplayGuard>>) {
+        // TODO: add the pause strategy here, to avoid directly send RaftTick
+        // when trying to apply the raft_logs, which will hang up the raftstore
+        // for a long period when recovery.
+        if !self.fsm.peer.maybe_pause_for_replay(guard) {
+            self.register_raft_base_tick();
+        }
         self.register_raft_gc_log_tick();
         self.register_pd_heartbeat_tick();
         self.register_split_region_check_tick();
@@ -2334,6 +2340,9 @@ where
                     .peer
                     .region_buckets_info_mut()
                     .add_bucket_flow(&res.bucket_stat);
+                // TODO: check whether current peer has finished the apply
+                // stage.
+                self.fsm.peer.try_complete_recovery();
 
                 self.fsm.has_ready |= self.fsm.peer.post_apply(
                     self.ctx,
@@ -2532,15 +2541,18 @@ where
             return Ok(());
         }
 
-        if MessageType::MsgAppend == msg_type
-            && self.fsm.peer.wait_data
-            && self.fsm.peer.should_reject_msgappend
-        {
-            debug!("skip {:?} because of non-witness waiting data", msg_type;
-                   "region_id" => self.region_id(), "peer_id" => self.fsm.peer_id()
-            );
-            self.ctx.raft_metrics.message_dropped.non_witness.inc();
-            return Ok(());
+        if MessageType::MsgAppend == msg_type {
+            if self.fsm.peer.pause_for_replay() {
+                self.ctx.raft_metrics.message_dropped.recovery.inc();
+                return Ok(());
+            }
+            if self.fsm.peer.wait_data && self.fsm.peer.should_reject_msgappend {
+                debug!("skip {:?} because of non-witness waiting data", msg_type;
+                       "region_id" => self.region_id(), "peer_id" => self.fsm.peer_id()
+                );
+                self.ctx.raft_metrics.message_dropped.non_witness.inc();
+                return Ok(());
+            }
         }
 
         if !self.validate_raft_msg(&msg) {
@@ -4306,7 +4318,7 @@ where
             self.ctx.router.register(new_region_id, mailbox);
             self.ctx
                 .router
-                .force_send(new_region_id, PeerMsg::Start)
+                .force_send(new_region_id, PeerMsg::Start(None))
                 .unwrap();
 
             if !campaigned {

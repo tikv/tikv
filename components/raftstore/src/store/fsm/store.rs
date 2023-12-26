@@ -99,7 +99,7 @@ use crate::{
         peer_storage,
         transport::Transport,
         util,
-        util::{is_initial_msg, RegionReadProgressRegistry},
+        util::{is_initial_msg, RegionReadProgressRegistry, ReplayGuard},
         worker::{
             AutoSplitController, CleanupRunner, CleanupSstRunner, CleanupSstTask, CleanupTask,
             CompactRunner, CompactTask, ConsistencyCheckRunner, ConsistencyCheckTask,
@@ -1814,7 +1814,9 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
 
         // Make sure Msg::Start is the first message each FSM received.
         for addr in address {
-            self.router.force_send(addr, PeerMsg::Start).unwrap();
+            self.router
+                .force_send(addr, PeerMsg::Start(Some(Arc::new(ReplayGuard::new()))))
+                .unwrap();
         }
         self.router
             .send_control(StoreMsg::Start {
@@ -2427,7 +2429,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         self.ctx.router.register(region_id, mailbox);
         self.ctx
             .router
-            .force_send(region_id, PeerMsg::Start)
+            .force_send(region_id, PeerMsg::Start(None))
             .unwrap();
         Ok(true)
     }
@@ -3272,7 +3274,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         self.ctx.router.register(region.get_id(), mailbox);
         self.ctx
             .router
-            .force_send(region.get_id(), PeerMsg::Start)
+            .force_send(region.get_id(), PeerMsg::Start(None))
             .unwrap();
     }
 }
