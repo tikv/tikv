@@ -95,5 +95,7 @@ yatp = { workspace = true }
 encryption_export = { workspace = true }
 engine_panic = { workspace = true }
 engine_rocks = { workspace = true }
+hybrid_engine = { workspace = true }
 panic_hook = { workspace = true }
+region_cache_memory_engine = { workspace = true }
 test_sst_importer = { workspace = true }
