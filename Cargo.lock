@@ -4450,6 +4450,7 @@ version = "0.0.1"
 dependencies = [
  "bytes",
  "collections",
+ "engine_rocks",
  "engine_traits",
  "skiplist-rs",
  "tikv_util",
