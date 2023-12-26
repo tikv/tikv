@@ -2737,7 +2737,6 @@ where
             }
         };
         // After handling ready, the metrics of `send_to_queue` should be updated.
-        self.try_complete_recovery();
 
         let ready_number = ready.number();
         let persisted_msgs = ready.take_persisted_messages();
@@ -5625,29 +5624,6 @@ where
     #[inline]
     pub fn pause_for_replay(&self) -> bool {
         self.replay_guard.is_some()
-    }
-
-    #[inline]
-    // we may have skipped scheduling raft tick when start due to noticable gap
-    // between commit index and apply index. We should scheduling it when raft log
-    // apply catches up.
-    pub fn try_complete_recovery(&mut self) {
-        let peer_storage = self.get_store();
-        if self.pause_for_replay() && peer_storage.commit_index() <= peer_storage.applied_index() {
-            info!(
-                "recovery completed";
-                "region_id" => self.region_id,
-                "peer_id" => self.peer_id(),
-                "apply_index" =>  peer_storage.applied_index()
-            );
-            self.set_replay_guard(None);
-            // Flush to avoid recover again and again.
-            // ctx.apply_router.send(ApplyTask::ManualFlush);
-            // if let Some(scheduler) = self.apply_scheduler() {
-            //     scheduler.send();
-            // }
-            // self.add_pending_tick(PeerTick::Raft);
-        }
     }
 
     pub fn maybe_pause_for_replay(&mut self, guard: Option<Arc<ReplayGuard>>) -> bool {

@@ -754,6 +754,7 @@ where
             }
             self.fsm.batch_req_builder.request = Some(cmd);
         }
+        self.try_complete_recovery();
     }
 
     /// Flushes all pending raft commands for immediate execution.
@@ -2342,7 +2343,7 @@ where
                     .add_bucket_flow(&res.bucket_stat);
                 // TODO: check whether current peer has finished the apply
                 // stage.
-                self.fsm.peer.try_complete_recovery();
+                self.try_complete_recovery();
 
                 self.fsm.has_ready |= self.fsm.peer.post_apply(
                     self.ctx,
@@ -6765,6 +6766,32 @@ where
         self.fsm.peer.consistency_state.index = expected_index;
         self.fsm.peer.consistency_state.hash = expected_hash;
         true
+    }
+
+    #[inline]
+    // we may have skipped scheduling raft tick when start due to noticable gap
+    // between commit index and apply index. We should scheduling it when raft log
+    // apply catches up.
+    pub fn try_complete_recovery(&mut self) {
+        let peer_storage = self.fsm.peer.get_store();
+        if self.fsm.peer.pause_for_replay()
+            && peer_storage.commit_index() <= peer_storage.applied_index()
+        {
+            info!(
+                "recovery completed";
+                "region_id" => self.fsm.region_id(),
+                "peer_id" => self.fsm.peer_id(),
+                "apply_index" =>  peer_storage.applied_index()
+            );
+            self.fsm.peer.set_replay_guard(None);
+            // Flush to avoid recover again and again.
+            // ctx.apply_router.send(ApplyTask::ManualFlush);
+            // if let Some(scheduler) = self.apply_scheduler() {
+            //     scheduler.send();
+            // }
+            // self.add_pending_tick(PeerTick::Raft);
+            self.register_raft_base_tick();
+        }
     }
 }
 
