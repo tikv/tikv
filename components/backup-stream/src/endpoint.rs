@@ -213,7 +213,6 @@ where
         self.meta_client.clone()
     }
 
-    #[instrument(skip(self, err))]
     fn on_fatal_error_of_task(&self, task: &str, err: &Error) -> future![()] {
         metrics::update_task_status(TaskStatus::Error, task);
         let meta_cli = self.get_meta_client();
@@ -224,28 +223,28 @@ where
         let safepoint_ttl = self.pause_guard_duration();
         let code = err.error_code().code.to_owned();
         let msg = err.to_string();
-        let task = task.to_owned();
-        async move {
+        let t = task.to_owned();
+        let f = async move {
             let err_fut = async {
-                let safepoint = meta_cli.global_progress_of_task(&task).await?;
+                let safepoint = meta_cli.global_progress_of_task(&t).await?;
                 pdc.update_service_safe_point(
                     safepoint_name,
                     TimeStamp::new(safepoint.saturating_sub(1)),
                     safepoint_ttl,
                 )
                 .await?;
-                meta_cli.pause(&task).await?;
+                meta_cli.pause(&t).await?;
                 let mut last_error = StreamBackupError::new();
                 last_error.set_error_code(code);
                 last_error.set_error_message(msg.clone());
                 last_error.set_store_id(store_id);
                 last_error.set_happen_at(TimeStamp::physical_now());
-                meta_cli.report_last_error(&task, last_error).await?;
+                meta_cli.report_last_error(&t, last_error).await?;
                 Result::Ok(())
             };
             if let Err(err_report) = err_fut.await {
                 err_report.report(format_args!("failed to upload error {}", err_report));
-                let name = task.to_owned();
+                let name = t.to_owned();
                 // Let's retry reporting after 5s.
                 tokio::task::spawn(async move {
                     tokio::time::sleep(Duration::from_secs(5)).await;
@@ -258,7 +257,8 @@ where
                     );
                 });
             }
-        }
+        };
+        tracing_active_tree::frame!("on_fatal_error_of_task"; f; %err, %task)
     }
 
     fn on_fatal_error(&self, select: TaskSelector, err: Box<Error>) {
