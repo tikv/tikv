@@ -277,6 +277,34 @@ pub mod tests {
         }
     }
 
+    fn delete_data(
+        key: &[u8],
+        ts: u64,
+        seq_num: u64,
+        write_cf: &Arc<Skiplist<InternalKeyComparator>>,
+    ) {
+        let write_k = Key::from_raw(key)
+            .append_ts(TimeStamp::new(ts))
+            .into_encoded();
+        let write_k = encode_key(&write_k, seq_num, ValueType::Value);
+        let write_v = Write::new(WriteType::Delete, TimeStamp::new(ts), None);
+        write_cf.put(write_k, Bytes::from(write_v.as_ref().to_bytes()));
+    }
+
+    fn rollback_data(
+        key: &[u8],
+        ts: u64,
+        seq_num: u64,
+        write_cf: &Arc<Skiplist<InternalKeyComparator>>,
+    ) {
+        let write_k = Key::from_raw(key)
+            .append_ts(TimeStamp::new(ts))
+            .into_encoded();
+        let write_k = encode_key(&write_k, seq_num, ValueType::Value);
+        let write_v = Write::new(WriteType::Rollback, TimeStamp::new(ts), None);
+        write_cf.put(write_k, Bytes::from(write_v.as_ref().to_bytes()));
+    }
+
     fn element_count(sklist: &Arc<Skiplist<InternalKeyComparator>>) -> u64 {
         let mut count = 0;
         let mut iter = sklist.iter();
@@ -300,8 +328,9 @@ pub mod tests {
         put_data(b"key2", b"value23", 30, 35, 16, false, &default, &write);
         put_data(b"key3", b"value31", 20, 25, 18, false, &default, &write);
         put_data(b"key3", b"value32", 30, 35, 20, false, &default, &write);
+        delete_data(b"key3", 40, 22, &write);
         assert_eq!(6, element_count(&default));
-        assert_eq!(6, element_count(&write));
+        assert_eq!(7, element_count(&write));
 
         let mut filter = Filter::new(50, default.clone(), write.clone());
         let mut count = 0;
@@ -314,10 +343,10 @@ pub mod tests {
             count += 1;
             iter.next();
         }
-        assert_eq!(count, 6);
+        assert_eq!(count, 7);
 
         assert_eq!(3, element_count(&write));
-        assert_eq!(3, element_count(&default));
+        assert_eq!(2, element_count(&default));
 
         let encode_key = |key, ts| {
             let key = Key::from_raw(key);
@@ -331,7 +360,7 @@ pub mod tests {
         assert!(write.get(&key).is_some());
 
         let key = encode_key(b"key3", TimeStamp::new(35));
-        assert!(write.get(&key).is_some());
+        assert!(write.get(&key).is_none());
 
         let key = encode_key(b"key1", TimeStamp::new(10));
         assert!(default.get(&key).is_some());
@@ -340,7 +369,61 @@ pub mod tests {
         assert!(default.get(&key).is_some());
 
         let key = encode_key(b"key3", TimeStamp::new(30));
+        assert!(default.get(&key).is_none());
+    }
+
+    #[test]
+    fn test_gc() {
+        let engine = RegionCacheMemoryEngine::default();
+        engine.new_region(1);
+        let (write, default) = {
+            let mut core = engine.core().lock().unwrap();
+            let region_m_engine = core.region_memory_engine(1).unwrap();
+            core.mut_region_meta(1).unwrap().set_can_read(true);
+            (
+                region_m_engine.cf_handle(CF_WRITE),
+                region_m_engine.cf_handle(CF_DEFAULT),
+            )
+        };
+
+        let encode_key = |key, ts| {
+            let key = Key::from_raw(key);
+            encoding_for_filter(key.as_encoded(), ts)
+        };
+
+        put_data(b"key1", b"value1", 10, 11, 10, false, &default, &write);
+        put_data(b"key1", b"value2", 12, 13, 12, false, &default, &write);
+        put_data(b"key1", b"value3", 14, 15, 14, false, &default, &write);
+        assert_eq!(3, element_count(&default));
+        assert_eq!(3, element_count(&write));
+
+        let mut worker = GcRunner::new(engine.clone());
+
+        // gc will not remove the latest mvcc put below safe point
+        worker.gc_region(1, 14);
+        assert_eq!(2, element_count(&default));
+        assert_eq!(2, element_count(&write));
+
+        worker.gc_region(1, 16);
+        assert_eq!(1, element_count(&default));
+        assert_eq!(1, element_count(&write));
+
+        // rollback will not make the first older version be filtered
+        rollback_data(b"key1", 17, 16, &write);
+        worker.gc_region(1, 17);
+        assert_eq!(1, element_count(&default));
+        assert_eq!(1, element_count(&write));
+        let key = encode_key(b"key1", TimeStamp::new(15));
+        assert!(write.get(&key).is_some());
+        let key = encode_key(b"key1", TimeStamp::new(14));
         assert!(default.get(&key).is_some());
+
+        // unlike in WriteCompactionFilter, the latest mvcc delete below safe point will
+        // be filtered
+        delete_data(b"key1", 19, 18, &write);
+        worker.gc_region(1, 19);
+        assert_eq!(0, element_count(&write));
+        assert_eq!(0, element_count(&default));
     }
 
     #[test]
