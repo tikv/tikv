@@ -104,6 +104,11 @@ lazy_static! {
         "Total bytes in memory of resolved-ts observed regions's lock heap"
     )
     .unwrap();
+    pub static ref RTS_LOCK_QUOTA_IN_USE_BYTES_GAUGE: IntGauge = register_int_gauge!(
+        "tikv_resolved_ts_memory_quota_in_use_bytes",
+        "Total bytes in memory of resolved-ts observed regions's lock heap"
+    )
+    .unwrap();
     pub static ref RTS_REGION_RESOLVE_STATUS_GAUGE_VEC: IntGaugeVec = register_int_gauge_vec!(
         "tikv_resolved_ts_region_resolve_status",
         "The status of resolved-ts observed regions",
@@ -168,6 +173,12 @@ lazy_static! {
     pub static ref RTS_MIN_FOLLOWER_RESOLVED_TS_DURATION_TO_LAST_CONSUME_LEADER: IntGauge = register_int_gauge!(
         "tikv_resolved_ts_min_follower_resolved_ts_duration_to_last_consume_leader",
         "The duration since last check_leader() in the follower region with min resolved ts. -1 denotes None."
+    )
+    .unwrap();
+    pub static ref RTS_INITIAL_SCAN_BACKOFF_DURATION_HISTOGRAM: Histogram = register_histogram!(
+        "tikv_resolved_ts_initial_scan_backoff_duration_seconds",
+        "Bucketed histogram of resolved-ts initial scan backoff duration",
+        exponential_buckets(0.1, 2.0, 16).unwrap(),
     )
     .unwrap();
 }
