@@ -9,6 +9,12 @@ use txn_types::TimeStamp;
 
 use crate::metrics::RTS_RESOLVED_FAIL_ADVANCE_VEC;
 
+<<<<<<< HEAD
+=======
+const MAX_NUMBER_OF_LOCKS_IN_LOG: usize = 10;
+pub(crate) const ON_DROP_WARN_HEAP_SIZE: usize = 64 * 1024 * 1024; // 64MB
+
+>>>>>>> 1c21d07f2b (resolved_ts: track pending lock memory usage (#15452))
 // Resolver resolves timestamps that guarantee no more commit will happen before
 // the timestamp.
 pub struct Resolver {
@@ -27,6 +33,54 @@ pub struct Resolver {
     min_ts: TimeStamp,
     // Whether the `Resolver` is stopped
     stopped: bool,
+<<<<<<< HEAD
+=======
+
+    // The memory quota for the `Resolver` and its lock keys and timestamps.
+    memory_quota: Arc<MemoryQuota>,
+}
+
+impl std::fmt::Debug for Resolver {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let far_lock = self.lock_ts_heap.iter().next();
+        let mut dt = f.debug_tuple("Resolver");
+        dt.field(&format_args!("region={}", self.region_id));
+
+        if let Some((ts, keys)) = far_lock {
+            dt.field(&format_args!(
+                "oldest_lock={:?}",
+                keys.iter()
+                    // We must use Display format here or the redact won't take effect.
+                    .map(|k| format!("{}", log_wrappers::Value::key(k)))
+                    .collect::<Vec<_>>()
+            ));
+            dt.field(&format_args!("oldest_lock_ts={:?}", ts));
+        }
+
+        dt.finish()
+    }
+}
+
+impl Drop for Resolver {
+    fn drop(&mut self) {
+        // Free memory quota used by locks_by_key.
+        let mut bytes = 0;
+        let num_locks = self.num_locks();
+        for key in self.locks_by_key.keys() {
+            bytes += self.lock_heap_size(key);
+        }
+        if bytes > ON_DROP_WARN_HEAP_SIZE {
+            warn!("drop huge resolver";
+                "region_id" => self.region_id,
+                "bytes" => bytes,
+                "num_locks" => num_locks,
+                "memory_quota_in_use" => self.memory_quota.in_use(),
+                "memory_quota_capacity" => self.memory_quota.capacity(),
+            );
+        }
+        self.memory_quota.free(bytes);
+    }
+>>>>>>> 1c21d07f2b (resolved_ts: track pending lock memory usage (#15452))
 }
 
 impl Resolver {
