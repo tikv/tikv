@@ -193,8 +193,8 @@ impl Filter {
                     self.remove_older = true;
 
                     // The first mvcc type below safe point is the mvcc delete. We should delay to
-                    // remove it until all the following same user key has been deleted to avoid
-                    // older version apper.
+                    // remove it until all the followings with the same user key have been deleted
+                    // to avoid older version apper.
                     self.cached_delete_key = Some(key.to_vec());
                 }
             }
