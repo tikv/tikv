@@ -22,7 +22,16 @@ use raftstore::store::util::{self, RegionReadProgress, RegionReadProgressRegistr
 use raftstore::store::RegionSnapshot;
 use security::SecurityManager;
 use tikv::config::ResolvedTsConfig;
+<<<<<<< HEAD
 use tikv_util::worker::{Runnable, RunnableWithTimer, Scheduler};
+=======
+use tikv_util::{
+    memory::MemoryQuota,
+    warn,
+    worker::{Runnable, RunnableWithTimer, Scheduler},
+};
+use tokio::sync::Notify;
+>>>>>>> 503648f183 (*: add memory quota to resolved_ts::Resolver (#15400))
 use txn_types::{Key, TimeStamp};
 
 use crate::advance::AdvanceTsWorker;
@@ -67,9 +76,9 @@ struct ObserveRegion {
 }
 
 impl ObserveRegion {
-    fn new(meta: Region, rrp: Arc<RegionReadProgress>) -> Self {
+    fn new(meta: Region, rrp: Arc<RegionReadProgress>, memory_quota: Arc<MemoryQuota>) -> Self {
         ObserveRegion {
-            resolver: Resolver::with_read_progress(meta.id, Some(rrp)),
+            resolver: Resolver::with_read_progress(meta.id, Some(rrp), memory_quota),
             meta,
             handle: ObserveHandle::new(),
             resolver_status: ResolverStatus::Pending {
@@ -80,6 +89,13 @@ impl ObserveRegion {
         }
     }
 
+<<<<<<< HEAD
+=======
+    fn read_progress(&self) -> &Arc<RegionReadProgress> {
+        self.resolver.read_progress().unwrap()
+    }
+
+>>>>>>> 503648f183 (*: add memory quota to resolved_ts::Resolver (#15400))
     fn track_change_log(&mut self, change_logs: &[ChangeLog]) -> std::result::Result<(), String> {
         match &mut self.resolver_status {
             ResolverStatus::Pending {
@@ -172,6 +188,7 @@ impl ObserveRegion {
                             }
                         },
                         ChangeLog::Rows { rows, index } => {
+<<<<<<< HEAD
                             rows.iter().for_each(|row| match row {
                                 ChangeRow::Prewrite { key, start_ts, .. } => self
                                     .resolver
@@ -182,6 +199,31 @@ impl ObserveRegion {
                                 // One pc command do not contains any lock, so just skip it
                                 ChangeRow::OnePc { .. } => {}
                             });
+=======
+                            for row in rows {
+                                match row {
+                                    ChangeRow::Prewrite { key, start_ts, .. } => {
+                                        if !self.resolver.track_lock(
+                                            *start_ts,
+                                            key.to_raw().unwrap(),
+                                            Some(*index),
+                                        ) {
+                                            return Err("memory quota exceed".to_owned());
+                                        }
+                                    }
+                                    ChangeRow::Commit { key, .. } => self
+                                        .resolver
+                                        .untrack_lock(&key.to_raw().unwrap(), Some(*index)),
+                                    // One pc command do not contains any lock, so just skip it
+                                    ChangeRow::OnePc { .. } => {
+                                        self.resolver.update_tracked_index(*index);
+                                    }
+                                    ChangeRow::IngestSsT => {
+                                        self.resolver.update_tracked_index(*index);
+                                    }
+                                }
+                            }
+>>>>>>> 503648f183 (*: add memory quota to resolved_ts::Resolver (#15400))
                         }
                     }
                 }
@@ -190,7 +232,10 @@ impl ObserveRegion {
         Ok(())
     }
 
-    fn track_scan_locks(&mut self, entries: Vec<ScanEntry>, apply_index: u64) {
+    /// Track locks in incoming scan entries.
+    /// Return false if resolver exceeds memory quota.
+    #[must_use]
+    fn track_scan_locks(&mut self, entries: Vec<ScanEntry>, apply_index: u64) -> bool {
         for es in entries {
             match es {
                 ScanEntry::Lock(locks) => {
@@ -198,8 +243,13 @@ impl ObserveRegion {
                         panic!("region {:?} resolver has ready", self.meta.id)
                     }
                     for (key, lock) in locks {
-                        self.resolver
-                            .track_lock(lock.ts, key.to_raw().unwrap(), Some(apply_index));
+                        if !self.resolver.track_lock(
+                            lock.ts,
+                            key.to_raw().unwrap(),
+                            Some(apply_index),
+                        ) {
+                            return false;
+                        }
                     }
                 }
                 ScanEntry::None => {
@@ -212,18 +262,25 @@ impl ObserveRegion {
                                 tracked_index,
                                 ..
                             } => {
-                                locks.into_iter().for_each(|lock| match lock {
-                                    PendingLock::Track { key, start_ts } => {
-                                        self.resolver.track_lock(
-                                            start_ts,
-                                            key.to_raw().unwrap(),
-                                            Some(tracked_index),
-                                        )
+                                for lock in locks {
+                                    match lock {
+                                        PendingLock::Track { key, start_ts } => {
+                                            if !self.resolver.track_lock(
+                                                start_ts,
+                                                key.to_raw().unwrap(),
+                                                Some(tracked_index),
+                                            ) {
+                                                return false;
+                                            }
+                                        }
+                                        PendingLock::Untrack { key, .. } => {
+                                            self.resolver.untrack_lock(
+                                                &key.to_raw().unwrap(),
+                                                Some(tracked_index),
+                                            )
+                                        }
                                     }
-                                    PendingLock::Untrack { key, .. } => self
-                                        .resolver
-                                        .untrack_lock(&key.to_raw().unwrap(), Some(tracked_index)),
-                                });
+                                }
                                 tracked_index
                             }
                             ResolverStatus::Ready => {
@@ -241,14 +298,21 @@ impl ObserveRegion {
                 ScanEntry::TxnEntry(_) => panic!("unexpected entry type"),
             }
         }
+        true
     }
 }
 
 pub struct Endpoint<T, E: KvEngine, C> {
     store_id: Option<u64>,
     cfg: ResolvedTsConfig,
+<<<<<<< HEAD
     cfg_version: usize,
     store_meta: Arc<Mutex<StoreMeta>>,
+=======
+    memory_quota: Arc<MemoryQuota>,
+    advance_notify: Arc<Notify>,
+    store_meta: Arc<Mutex<S>>,
+>>>>>>> 503648f183 (*: add memory quota to resolved_ts::Resolver (#15400))
     region_read_progress: RegionReadProgressRegistry,
     regions: HashMap<u64, ObserveRegion>,
     scanner_pool: ScannerPool<T, E>,
@@ -292,7 +356,13 @@ where
         let ep = Self {
             store_id,
             cfg: cfg.clone(),
+<<<<<<< HEAD
             cfg_version: 0,
+=======
+            // TODO: add memory quota to config.
+            memory_quota: Arc::new(MemoryQuota::new(std::usize::MAX)),
+            advance_notify: Arc::new(Notify::new()),
+>>>>>>> 503648f183 (*: add memory quota to resolved_ts::Resolver (#15400))
             scheduler,
             store_meta,
             region_read_progress,
@@ -315,7 +385,7 @@ where
                     "register observe region";
                     "region" => ?region
                 );
-                ObserveRegion::new(region.clone(), read_progress)
+                ObserveRegion::new(region.clone(), read_progress, self.memory_quota.clone())
             } else {
                 warn!(
                     "try register unexit region";
@@ -502,6 +572,7 @@ where
     ) {
         let size = cmd_batch.iter().map(|b| b.size()).sum::<usize>();
         RTS_CHANNEL_PENDING_CMD_BYTES.sub(size as i64);
+<<<<<<< HEAD
         let logs = cmd_batch
             .into_iter()
             .filter_map(|batch| {
@@ -527,6 +598,21 @@ where
                                 "current" => ?observe_region.handle.id,
                             );
                         }
+=======
+        for batch in cmd_batch {
+            if batch.is_empty() {
+                continue;
+            }
+            if let Some(observe_region) = self.regions.get_mut(&batch.region_id) {
+                let observe_id = batch.rts_id;
+                let region_id = observe_region.meta.id;
+                if observe_region.handle.id == observe_id {
+                    let logs = ChangeLog::encode_change_log(region_id, batch);
+                    if let Err(e) = observe_region.track_change_log(&logs) {
+                        // TODO: handle memory quota exceed, for now, quota is set to usize::MAX.
+                        drop(observe_region);
+                        self.re_register_region(region_id, observe_id, e);
+>>>>>>> 503648f183 (*: add memory quota to resolved_ts::Resolver (#15400))
                     }
                 }
                 None
@@ -548,7 +634,8 @@ where
         match self.regions.get_mut(&region_id) {
             Some(observe_region) => {
                 if observe_region.handle.id == observe_id {
-                    observe_region.track_scan_locks(entries, apply_index);
+                    // TODO: handle memory quota exceed, for now, quota is set to usize::MAX.
+                    assert!(observe_region.track_scan_locks(entries, apply_index));
                 }
             }
             None => {
@@ -804,6 +891,58 @@ where
                 }
             }
         }
+<<<<<<< HEAD
+=======
+        // approximate a TSO from PD. It is better than local timestamp when clock skew
+        // exists.
+        let now: u64 = self
+            .advance_worker
+            .last_pd_tso
+            .try_lock()
+            .map(|opt| {
+                opt.map(|(pd_ts, instant)| {
+                    pd_ts.physical() + instant.saturating_elapsed().as_millis() as u64
+                })
+                .unwrap_or_else(|| TimeStamp::physical_now())
+            })
+            .unwrap_or_else(|_| TimeStamp::physical_now());
+
+        RTS_MIN_SAFE_TS.set(oldest_safe_ts as i64);
+        RTS_MIN_SAFE_TS_REGION.set(oldest_safe_ts_region as i64);
+        let safe_ts_gap = now.saturating_sub(TimeStamp::from(oldest_safe_ts).physical());
+        if safe_ts_gap
+            > self.cfg.advance_ts_interval.as_millis()
+                + DEFAULT_CHECK_LEADER_TIMEOUT_DURATION.as_millis() as u64
+                + SLOW_LOG_GRACE_PERIOD_MS
+        {
+            let mut lock_num = None;
+            let mut min_start_ts = None;
+            if let Some(ob) = self.regions.get(&oldest_safe_ts_region) {
+                min_start_ts = ob
+                    .resolver
+                    .locks()
+                    .keys()
+                    .next()
+                    .cloned()
+                    .map(TimeStamp::into_inner);
+                lock_num = Some(ob.resolver.num_locks());
+            }
+            info!(
+                "the max gap of safe-ts is large";
+                "gap" => safe_ts_gap,
+                "oldest_safe_ts" => ?oldest_safe_ts,
+                "region_id" => oldest_safe_ts_region,
+                "advance_ts_interval" => ?self.cfg.advance_ts_interval,
+                "lock_num" => lock_num,
+                "min_start_ts" => min_start_ts,
+            );
+        }
+        RTS_MIN_SAFE_TS_GAP.set(safe_ts_gap as i64);
+        RTS_MIN_SAFE_TS_DUATION_TO_UPDATE_SAFE_TS.set(oldest_duration_to_last_update_ms);
+        RTS_MIN_SAFE_TS_DURATION_TO_LAST_CONSUME_LEADER
+            .set(oldest_duration_to_last_consume_leader_ms);
+
+>>>>>>> 503648f183 (*: add memory quota to resolved_ts::Resolver (#15400))
         RTS_MIN_RESOLVED_TS_REGION.set(oldest_region as i64);
         RTS_MIN_RESOLVED_TS.set(oldest_ts as i64);
         RTS_ZERO_RESOLVED_TS.set(zero_ts_count as i64);
