@@ -194,10 +194,23 @@ pub struct Statistics {
 
     // When getting data from default cf, we can check write cf statistics to decide which method
     // should be used to get the data.
-    load_data_hinter: LoadDataHinter,
+    load_data_hint: LoadDataHintStatistics,
 }
 
-const BACKOFF_LIMIT: usize = 128;
+#[derive(Default, Debug)]
+struct LoadDataHintStatistics {
+    last_write_next: usize,
+    last_write_next_tombstone: usize,
+    last_write_seek: usize,
+    last_write_seek_tombstone: usize,
+
+    last_write_prev: usize,
+    last_write_prev_tombstone: usize,
+    last_write_seek_for_prev: usize,
+    last_write_seek_for_prev_tombstone: usize,
+
+    last_hint: LoadDataHint,
+}
 
 #[derive(Default, PartialEq, Debug, Clone)]
 pub enum LoadDataHint {
@@ -207,123 +220,66 @@ pub enum LoadDataHint {
     Get,
 }
 
-#[derive(Default, Debug)]
-struct LoadDataHinter {
-    last_write_next: usize,
-    last_write_next_tombstone: usize,
-    last_write_seek: usize,
-    last_write_seek_tombstone: usize,
-    last_write_seek_for_prev: usize,
-    last_write_seek_for_prev_tombstone: usize,
+impl Statistics {
+    pub fn load_data_hint(&mut self) -> LoadDataHint {
+        let stats = &mut self.load_data_hint;
+        let next_overhead = self.write.next - stats.last_write_next + self.write.next_tombstone
+            - stats.last_write_next_tombstone;
 
-    last_default_next_tombstone: usize,
-    last_default_next: usize,
-    last_default_seek_tombstone: usize,
-    last_default_seek: usize,
-
-    last_hint: LoadDataHint,
-
-    backoff: usize,
-    avoid_next_times: usize,
-}
-
-impl LoadDataHinter {
-    fn should_avoid_next(&mut self) -> bool {
-        if self.avoid_next_times > 0 {
-            self.avoid_next_times -= 1;
-            true
-        } else {
-            false
-        }
-    }
-
-    pub fn load_data_hint(&mut self, default: &CfStatistics, write: &CfStatistics) -> LoadDataHint {
-        let next_overhead = write.next - self.last_write_next + write.next_tombstone
-            - self.last_write_next_tombstone;
-
-        if self.last_hint == LoadDataHint::NearSeek {
-            if default.next_tombstone - self.last_default_next_tombstone > SEEK_BOUND as usize {
-                self.backoff += 2;
-                if self.backoff > BACKOFF_LIMIT {
-                    self.backoff = BACKOFF_LIMIT;
-                }
-                self.avoid_next_times = self.backoff;
+        let hint = if self.write.seek != stats.last_write_seek
+            || next_overhead > SEEK_BOUND as usize
+        {
+            if self.write.seek_tombstone - stats.last_write_seek_tombstone > SEEK_BOUND as usize {
+                // if tombstones are too many, we should use get to get rid of them.
+                LoadDataHint::Get
             } else {
-                self.backoff /= 8;
+                // otherwise, we can use seek to get the data. Seek is faster than get for
+                // continuous values.
+                LoadDataHint::Seek
             }
-        }
-
-        let hint = {
-            // The write cf uses seek or encounters too many versions, it's possibly for
-            // default cf as well, so use seek or get directly for default cf
-            if write.seek != self.last_write_seek || next_overhead > SEEK_BOUND as usize {
-                if write.seek_tombstone - self.last_write_seek_tombstone > SEEK_BOUND as usize {
-                    // if tombstones are too many, we should use get to get rid of them.
-                    LoadDataHint::Get
-                } else {
-                    // otherwise, we can use seek to get the data. Seek is faster than get for
-                    // continuous values.
-                    LoadDataHint::Seek
-                }
-            // Previous default cf's next encounters too many tombstone, so it's
-            // likely that following keys have some tombstones as they may in
-            // the same SST which is not compacted recently,
-            // so use seek or get directly for default cf for a while with
-            // backoff.
-            } else if self.should_avoid_next() {
-                if default.seek_tombstone - self.last_default_seek_tombstone > SEEK_BOUND as usize {
-                    LoadDataHint::Get
-                } else {
-                    LoadDataHint::Seek
-                }
+        } else if stats.last_hint == LoadDataHint::Get {
             // If last hint is get, using near_seek is meaningless as default
             // iter is not advanced for the last round, so use seek
             // directly.
-            } else if self.last_hint == LoadDataHint::Get {
-                LoadDataHint::Seek
-            } else {
-                // The next valid key may around current position, so use near seek which calls
-                // next() multiple times before calling seek()
-                LoadDataHint::NearSeek
-            }
+            LoadDataHint::Seek
+        } else {
+            // The next valid key may around current position, so use near seek which calls
+            // next() multiple times before calling seek()
+            LoadDataHint::NearSeek
         };
-        self.last_hint = hint.clone();
-        self.last_write_seek = write.seek;
-        self.last_write_seek_tombstone = write.seek_tombstone;
-        self.last_write_next = write.next;
-        self.last_write_next_tombstone = write.next_tombstone;
-
-        self.last_default_next_tombstone = default.next_tombstone;
-        self.last_default_next = default.next;
-        self.last_default_seek_tombstone = default.seek_tombstone;
-        self.last_default_seek = default.seek;
+        stats.last_write_next = self.write.next;
+        stats.last_write_next_tombstone = self.write.next_tombstone;
+        stats.last_write_seek = self.write.seek;
+        stats.last_write_seek_tombstone = self.write.seek_tombstone;
+        stats.last_hint = hint.clone();
         hint
-    }
-}
-
-impl Statistics {
-    pub fn load_data_hint(&mut self) -> LoadDataHint {
-        self.load_data_hinter
-            .load_data_hint(&self.data, &self.write)
     }
 
     pub fn reverse_load_data_hint(&mut self) -> LoadDataHint {
-        // TODO: update
-        let hint = if self.write.seek_for_prev != self.load_data_hinter.last_write_seek_for_prev {
-            if self.write.seek_for_prev_tombstone
-                - self.load_data_hinter.last_write_seek_for_prev_tombstone
+        let stats = &mut self.load_data_hint;
+        let prev_overhead = self.write.prev - stats.last_write_prev + self.write.prev_tombstone
+            - stats.last_write_prev_tombstone;
+
+        let hint = if self.write.seek_for_prev != stats.last_write_seek_for_prev
+            || prev_overhead > SEEK_BOUND as usize
+        {
+            if self.write.seek_for_prev_tombstone - stats.last_write_seek_for_prev_tombstone
                 > SEEK_BOUND as usize
             {
                 LoadDataHint::Get
             } else {
                 LoadDataHint::Seek
             }
+        } else if stats.last_hint == LoadDataHint::Get {
+            LoadDataHint::Seek
         } else {
             LoadDataHint::NearSeek
         };
-        self.load_data_hinter.last_write_seek_for_prev = self.write.seek_for_prev;
-        self.load_data_hinter.last_write_seek_for_prev_tombstone =
-            self.write.seek_for_prev_tombstone;
+        stats.last_write_prev = self.write.prev;
+        stats.last_write_prev_tombstone = self.write.prev_tombstone;
+        stats.last_write_seek_for_prev = self.write.seek_for_prev;
+        stats.last_write_seek_for_prev_tombstone = self.write.seek_for_prev_tombstone;
+        stats.last_hint = hint.clone();
         hint
     }
 
