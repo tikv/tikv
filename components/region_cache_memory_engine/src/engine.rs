@@ -103,12 +103,9 @@ impl SnapshotList {
         }
     }
 
-    // returns a min snapshot or u64::MAX if no shapshot is held
-    pub fn min_snapshot(&self) -> u64 {
-        self.0
-            .first_key_value()
-            .map(|(ts, _)| *ts)
-            .unwrap_or(u64::MAX)
+    // returns the min snapshot_ts (read_ts) if there's any
+    pub fn min_snapshot_ts(&self) -> Option<u64> {
+        self.0.first_key_value().map(|(ts, _)| *ts)
     }
 }
 
@@ -131,6 +128,9 @@ impl RegionMemoryMeta {
     }
 
     pub fn set_safe_ts(&mut self, safe_ts: u64) {
+        if let Some(ts) = self.snapshot_list.min_snapshot_ts() {
+            assert!(safe_ts <= ts);
+        }
         self.safe_ts = safe_ts;
     }
 

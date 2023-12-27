@@ -59,7 +59,10 @@ impl GcRunner {
         let (region_m_engine, safe_ts) = {
             let mut core = self.memory_engine.core().lock().unwrap();
             let Some(region_meta) = core.mut_region_meta(region_id) else { return };
-            let min_snapshot = region_meta.snapshot_list().min_snapshot();
+            let min_snapshot = region_meta
+                .snapshot_list()
+                .min_snapshot_ts()
+                .unwrap_or(u64::MAX);
             let safe_ts = u64::min(safe_ts, min_snapshot);
 
             if safe_ts < region_meta.safe_ts() {
