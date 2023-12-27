@@ -1156,7 +1156,7 @@ pub mod tests {
             (Bound::Unbounded, Bound::Excluded(8), vec![2u64, 4, 6, 8]),
         ];
 
-        for (_, &(min, max, ref res)) in tests.iter().enumerate() {
+        for &(min, max, ref res) in tests.iter() {
             let mut iopt = IterOptions::default();
             iopt.set_hint_min_ts(min);
             iopt.set_hint_max_ts(max);

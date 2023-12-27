@@ -504,7 +504,7 @@ mod tests {
             .collect();
 
         let mut kvs: Vec<(&[u8], &[u8])> = vec![];
-        for (_, key) in keys.iter().enumerate() {
+        for key in keys.iter() {
             kvs.push((key.as_slice(), b"value"));
         }
         for &(k, v) in kvs.as_slice() {

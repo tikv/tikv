@@ -2210,7 +2210,7 @@ fn test_batch_request() {
     ];
     let prepare_req =
         |cluster: &mut Cluster<ServerCluster>, ranges: &Vec<HandleRange>| -> Request {
-            let original_range = ranges.get(0).unwrap();
+            let original_range = ranges.first().unwrap();
             let key_range = product.get_record_range(original_range.start, original_range.end);
             let region_key = Key::from_raw(&key_range.start);
             let mut req = DagSelect::from(&product)

@@ -894,9 +894,7 @@ fn test_node_merge_update_region() {
     let origin_leader = cluster.leader_of_region(left.get_id()).unwrap();
     let new_leader = left
         .get_peers()
-        .iter()
-        .cloned()
-        .find(|p| p.get_id() != origin_leader.get_id())
+        .iter().find(|&p| p.get_id() != origin_leader.get_id()).cloned()
         .unwrap();
 
     // Make sure merge is done in the new_leader.

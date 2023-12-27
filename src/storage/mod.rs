@@ -2126,7 +2126,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         })
     }
 
-    fn check_ttl_valid(key_cnt: usize, ttls: &Vec<u64>) -> Result<()> {
+    fn check_ttl_valid(key_cnt: usize, ttls: &[u64]) -> Result<()> {
         if !F::IS_TTL_ENABLED {
             if ttls.iter().any(|&x| x != 0) {
                 return Err(Error::from(ErrorInner::TtlNotEnabled));

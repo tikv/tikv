@@ -791,8 +791,7 @@ Some invalid logs 2: Welcome to TiKV - test-filter"#
             s.collect::<Vec<SearchLogResponse>>()
                 .await
                 .into_iter()
-                .map(|mut resp| resp.take_messages().into_iter())
-                .flatten()
+                .flat_map(|mut resp| resp.take_messages().into_iter())
                 .map(|msg| msg.get_time())
                 .collect::<Vec<i64>>()
         });
