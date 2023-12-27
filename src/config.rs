@@ -2512,6 +2512,7 @@ pub struct BackupStreamConfig {
     pub initial_scan_pending_memory_quota: ReadableSize,
     #[online_config(skip)]
     pub initial_scan_rate_limit: ReadableSize,
+    pub initial_scan_concurrency: usize,
 }
 
 impl BackupStreamConfig {
@@ -2539,6 +2540,9 @@ impl BackupStreamConfig {
             )
             .into());
         }
+        if self.initial_scan_concurrency == 0 {
+            return Err("the `initial_scan_concurrency` shouldn't be zero".into());
+        }
         Ok(())
     }
 }
@@ -2559,6 +2563,7 @@ impl Default for BackupStreamConfig {
             file_size_limit: ReadableSize::mb(256),
             initial_scan_pending_memory_quota: ReadableSize(quota_size as _),
             initial_scan_rate_limit: ReadableSize::mb(60),
+            initial_scan_concurrency: 6,
         }
     }
 }
@@ -2677,6 +2682,8 @@ pub struct ResolvedTsConfig {
     pub advance_ts_interval: ReadableDuration,
     #[online_config(skip)]
     pub scan_lock_pool_size: usize,
+    pub memory_quota: ReadableSize,
+    pub incremental_scan_concurrency: usize,
 }
 
 impl ResolvedTsConfig {
@@ -2697,6 +2704,8 @@ impl Default for ResolvedTsConfig {
             enable: true,
             advance_ts_interval: ReadableDuration::secs(20),
             scan_lock_pool_size: 2,
+            memory_quota: ReadableSize::mb(256),
+            incremental_scan_concurrency: 6,
         }
     }
 }
