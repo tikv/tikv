@@ -42,3 +42,7 @@ pub unsafe fn add_thread_memory_accessor() {}
 pub fn remove_thread_memory_accessor() {}
 
 pub fn iterate_thread_allocation_stats(_f: impl FnMut(&str, u64, u64)) {}
+
+pub fn iterate_arena_allocation_stats(_f: impl FnMut(&str, u64, u64, u64)) {}
+
+pub fn thread_allocate_exclusive_arena() {}

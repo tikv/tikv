@@ -25,8 +25,7 @@ pub const fn allocator() -> Allocator {
 lazy_static! {
     static ref THREAD_MEMORY_MAP: Mutex<HashMap<ThreadId, MemoryStatsAccessor>> =
         Mutex::new(HashMap::new());
-    static ref THREAD_ARENA_MAP: Mutex<HashMap<ThreadId, u64>> =
-        Mutex::new(HashMap::new());
+    static ref THREAD_ARENA_MAP: Mutex<HashMap<String, u64>> = Mutex::new(HashMap::new());
 }
 
 /// The struct for tracing the statistic of another thread.
@@ -221,20 +220,18 @@ pub fn iterate_thread_allocation_stats(mut f: impl FnMut(&str, u64, u64)) {
 
 /// Iterate over the allocation stat.
 /// Format of the callback: `(name, allocated, deallocated)`.
-pub fn iterate_arena_allocation_stats(mut f: impl FnMut(&str, u64, u64)) {
+pub fn iterate_arena_allocation_stats(mut f: impl FnMut(&str, u64, u64, u64)) {
     // Given we have called `epoch::advance()` in `fetch_stats`, we (magically!)
     // skip advancing the epoch here.
-    let thread_memory_map = THREAD_ARENA_MAP.lock().unwrap();
+    let thread_arena_map = THREAD_ARENA_MAP.lock().unwrap();
     let mut collected = HashMap::<&str, (u64, u64)>::with_capacity(thread_memory_map.len());
-    for (_, accessor) in thread_memory_map.iter() {
-        let ent = collected
-            .entry(trim_yatp_suffix(&accessor.thread_name))
-            .or_default();
-        ent.0 += accessor.get_allocated();
-        ent.1 += accessor.get_deallocated();
+    for (name, index) in thread_memory_map.iter() {
+        let stats = fetch_arena_stats(index);
+        let ent = collected.entry(trim_yatp_suffix(name)).or_default();
+        ent += stats;
     }
     for (name, val) in collected {
-        f(name, val.0, val.1)
+        f(name, val.0, val.1, val.2)
     }
 }
 
@@ -354,6 +351,10 @@ mod profiling {
                 )));
             }
         }
+        THREAD_ARENA_MAP
+            .lock()
+            .unwrap()
+            .insert(thread::current().name().unwrap_or("unknown"), index);
         Ok(())
     }
 

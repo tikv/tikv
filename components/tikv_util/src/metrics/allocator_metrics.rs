@@ -55,6 +55,17 @@ impl Collector for AllocStatsCollector {
                     .set(stat.1 as i64);
             }
         }
+        tikv_alloc::iterate_arena_allocation_stats(|name, resident, mapped, retained| {
+            self.allocation
+                .with_label_values(&["resident", name])
+                .set(resident as _);
+            self.allocation
+                .with_label_values(&["mapped", name])
+                .set(mapped as _);
+            self.allocation
+                .with_label_values(&["retained", name])
+                .set(retained as _);
+        });
         tikv_alloc::iterate_thread_allocation_stats(|name, alloc, dealloc| {
             self.allocation
                 .with_label_values(&["alloc", name])
