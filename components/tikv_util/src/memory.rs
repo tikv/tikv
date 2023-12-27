@@ -2,7 +2,10 @@
 
 use std::{
     mem,
-    sync::atomic::{AtomicUsize, Ordering},
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    },
 };
 
 use kvproto::{
@@ -145,6 +148,32 @@ impl MemoryQuota {
     }
 }
 
+pub struct OwnedAllocated {
+    allocated: usize,
+    from: Arc<MemoryQuota>,
+}
+
+impl OwnedAllocated {
+    pub fn new(target: Arc<MemoryQuota>) -> Self {
+        Self {
+            allocated: 0,
+            from: target,
+        }
+    }
+
+    pub fn alloc(&mut self, bytes: usize) -> Result<(), MemoryQuotaExceeded> {
+        self.from.alloc(bytes)?;
+        self.allocated += bytes;
+        Ok(())
+    }
+}
+
+impl Drop for OwnedAllocated {
+    fn drop(&mut self) {
+        self.from.free(self.allocated)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -181,5 +210,26 @@ mod tests {
         assert_eq!(quota.in_use(), 10);
         quota.alloc(40).unwrap();
         assert_eq!(quota.in_use(), 50);
+    }
+
+    #[test]
+    fn test_allocated() {
+        let quota = Arc::new(MemoryQuota::new(100));
+        let mut allocated = OwnedAllocated::new(Arc::clone(&quota));
+        allocated.alloc(42).unwrap();
+        assert_eq!(quota.in_use(), 42);
+        quota.alloc(59).unwrap_err();
+        allocated.alloc(16).unwrap();
+        assert_eq!(quota.in_use(), 58);
+        let mut allocated2 = OwnedAllocated::new(Arc::clone(&quota));
+        allocated2.alloc(8).unwrap();
+        allocated2.alloc(40).unwrap_err();
+        assert_eq!(quota.in_use(), 66);
+        quota.alloc(4).unwrap();
+        assert_eq!(quota.in_use(), 70);
+        drop(allocated);
+        assert_eq!(quota.in_use(), 12);
+        drop(allocated2);
+        assert_eq!(quota.in_use(), 4);
     }
 }
