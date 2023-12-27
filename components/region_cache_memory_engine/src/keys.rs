@@ -29,6 +29,7 @@ impl TryFrom<u8> for ValueType {
 }
 
 pub struct InternalKey<'a> {
+    // key with mvcc version
     pub user_key: &'a [u8],
     pub v_type: ValueType,
     pub sequence: u64,
