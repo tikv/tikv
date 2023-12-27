@@ -204,8 +204,8 @@ impl Filter {
             return Ok(());
         }
         self.filtered += 1;
-        self.handle_filtered_write(write)?;
         self.write_cf_handle.remove(key);
+        self.handle_filtered_write(write)?;
 
         Ok(())
     }
@@ -215,11 +215,11 @@ impl Filter {
             // todo(SpadeA): We don't know the sequence number of the key in the skiplist so
             // we cannot delete it directly. So we encoding a key with MAX sequence number
             // so we can find the mvcc key with sequence number in the skiplist by using
-            // get_with_key and delete it with the result key. It involes two seeks. Maybe
-            // we can provide the API to delete the mvcc keys with all sequence
-            // numbers.
+            // get_with_key and delete it with the result key. It involes more than one
+            // seek(both get and remove invovle seek). Maybe we can provide the API to
+            // delete the mvcc keys with all sequence numbers.
             let default_key = encoding_for_filter(&self.mvcc_key_prefix, write.start_ts);
-            if let Some((key, val)) = self.default_cf_handle.get_with_key(&default_key) {
+            while let Some((key, val)) = self.default_cf_handle.get_with_key(&default_key) {
                 self.default_cf_handle.remove(key.as_slice());
             }
         }
@@ -327,12 +327,14 @@ pub mod tests {
         put_data(b"key1", b"value1", 10, 15, 10, false, &default, &write);
         put_data(b"key2", b"value21", 10, 15, 12, false, &default, &write);
         put_data(b"key2", b"value22", 20, 25, 14, false, &default, &write);
+        // mock repeate apply
+        put_data(b"key2", b"value22", 20, 25, 15, false, &default, &write);
         put_data(b"key2", b"value23", 30, 35, 16, false, &default, &write);
         put_data(b"key3", b"value31", 20, 25, 18, false, &default, &write);
         put_data(b"key3", b"value32", 30, 35, 20, false, &default, &write);
         delete_data(b"key3", 40, 22, &write);
-        assert_eq!(6, element_count(&default));
-        assert_eq!(7, element_count(&write));
+        assert_eq!(7, element_count(&default));
+        assert_eq!(8, element_count(&write));
 
         let mut filter = Filter::new(50, default.clone(), write.clone());
         let mut count = 0;
@@ -345,7 +347,7 @@ pub mod tests {
             count += 1;
             iter.next();
         }
-        assert_eq!(count, 7);
+        assert_eq!(count, 8);
 
         assert_eq!(3, element_count(&write));
         assert_eq!(2, element_count(&default));
