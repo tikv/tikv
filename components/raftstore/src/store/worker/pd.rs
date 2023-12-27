@@ -1748,7 +1748,7 @@ where
             let peer_stat = self
                 .region_peers
                 .entry(*region_id)
-                .or_insert_with(PeerStat::default);
+                .or_default();
             peer_stat.read_bytes += region_info.flow.read_bytes as u64;
             peer_stat.read_keys += region_info.flow.read_keys as u64;
             self.store_stat.engine_total_bytes_read += region_info.flow.read_bytes as u64;
@@ -1773,7 +1773,7 @@ where
             let peer_stat = self
                 .region_peers
                 .entry(*region_id)
-                .or_insert_with(PeerStat::default);
+                .or_default();
             peer_stat.query_stats.add_query_stats(&region_info.0);
             self.store_stat
                 .engine_total_query_num
@@ -2199,7 +2199,7 @@ where
                     let peer_stat = self
                         .region_peers
                         .entry(region_id)
-                        .or_insert_with(PeerStat::default);
+                        .or_default();
                     peer_stat.approximate_size = approximate_size;
                     peer_stat.approximate_keys = approximate_keys;
 

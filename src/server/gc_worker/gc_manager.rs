@@ -856,7 +856,7 @@ mod tests {
 
         // Following code asserts gc_tasks == expected_gc_tasks.
         assert_eq!(gc_tasks.len(), expected_gc_tasks.len());
-        let all_passed = gc_tasks.into_iter().zip(expected_gc_tasks.into_iter()).all(
+        let all_passed = gc_tasks.into_iter().zip(expected_gc_tasks).all(
             |((region, safe_point), (expect_region, expect_safe_point))| {
                 region == expect_region && safe_point == expect_safe_point.into()
             },
@@ -933,9 +933,7 @@ mod tests {
 
     #[test]
     fn test_auto_gc_rewinding() {
-        for regions in vec![
-            // First region starts with empty and last region ends with empty.
-            vec![
+        for regions in [vec![
                 (b"".to_vec(), b"1".to_vec(), 1),
                 (b"1".to_vec(), b"2".to_vec(), 2),
                 (b"3".to_vec(), b"4".to_vec(), 3),
@@ -947,8 +945,7 @@ mod tests {
                 (b"1".to_vec(), b"2".to_vec(), 2),
                 (b"3".to_vec(), b"4".to_vec(), 3),
                 (b"7".to_vec(), b"8".to_vec(), 4),
-            ],
-        ] {
+            ]] {
             test_auto_gc(
                 regions.clone(),
                 vec![233, 234],

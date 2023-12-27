@@ -100,7 +100,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             });
         let peer = match peers.len() {
             0 => transfer_leader.get_peer(),
-            1 => peers.get(0).unwrap(),
+            1 => peers.first().unwrap(),
             _ => peers.choose(&mut rand::thread_rng()).unwrap(),
         };
 

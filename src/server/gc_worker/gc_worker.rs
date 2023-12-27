@@ -693,7 +693,7 @@ impl<E: Engine> GcRunnerCore<E> {
         let stats = self
             .stats_map
             .entry(key_mode)
-            .or_insert_with(Default::default);
+            .or_default();
         stats
     }
 
@@ -2335,7 +2335,6 @@ mod tests {
 
         fn generate_keys(start: u64, end: u64) -> Vec<Key> {
             (start..end)
-                .into_iter()
                 .map(|i| {
                     let key = format!("k{:02}", i);
                     Key::from_raw(key.as_bytes())

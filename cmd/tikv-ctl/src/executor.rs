@@ -1,7 +1,7 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    borrow::ToOwned, cmp::Ordering, path::Path, pin::Pin, result, str, string::ToString, sync::Arc,
+    borrow::ToOwned, cmp::Ordering, path::Path, result, str, string::ToString, sync::Arc,
     time::Duration,
 };
 
@@ -13,7 +13,7 @@ use engine_traits::{
     CF_WRITE, DATA_CFS,
 };
 use file_system::read_dir;
-use futures::{executor::block_on, future, stream::{self, BoxStream}, Stream, StreamExt, TryStreamExt};
+use futures::{executor::block_on, future, stream::{self, BoxStream}, StreamExt, TryStreamExt};
 use grpcio::{ChannelBuilder, Environment};
 use kvproto::{
     debugpb::{Db as DbType, *},

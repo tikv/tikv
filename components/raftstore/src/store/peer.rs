@@ -549,8 +549,7 @@ pub fn can_amend_read<C>(
         LeaseState::Valid | LeaseState::Expired => {
             if let Some(read) = last_pending_read {
                 let is_read_index_request = req
-                    .get_requests()
-                    .get(0)
+                    .get_requests().first()
                     .map(|req| req.has_read_index())
                     .unwrap_or_default();
                 // A read index request or a read with addition request always needs the
@@ -4653,7 +4652,7 @@ where
             });
         let peer = match peers.len() {
             0 => transfer_leader.get_peer(),
-            1 => peers.get(0).unwrap(),
+            1 => peers.first().unwrap(),
             _ => peers.choose(&mut rand::thread_rng()).unwrap(),
         };
 
@@ -5973,14 +5972,12 @@ mod tests {
         admin_req.clear_transfer_leader();
         req.clear_admin_request();
 
-        for (op, policy) in vec![
-            (CmdType::Get, RequestPolicy::ReadLocal),
+        for (op, policy) in [(CmdType::Get, RequestPolicy::ReadLocal),
             (CmdType::Snap, RequestPolicy::ReadLocal),
             (CmdType::Put, RequestPolicy::ProposeNormal),
             (CmdType::Delete, RequestPolicy::ProposeNormal),
             (CmdType::DeleteRange, RequestPolicy::ProposeNormal),
-            (CmdType::IngestSst, RequestPolicy::ProposeNormal),
-        ] {
+            (CmdType::IngestSst, RequestPolicy::ProposeNormal)] {
             let mut request = raft_cmdpb::Request::default();
             request.set_cmd_type(op);
             req.set_requests(vec![request].into());
@@ -6126,7 +6123,7 @@ mod tests {
 
         // (1, 4) and (1, 5) is not committed
         let entries = vec![(1, 1), (1, 2), (1, 3), (1, 4), (1, 5), (2, 6), (2, 7)];
-        let committed = vec![(1, 1), (1, 2), (1, 3), (2, 6), (2, 7)];
+        let committed = [(1, 1), (1, 2), (1, 3), (2, 6), (2, 7)];
         for (index, term) in entries.clone() {
             if term != 1 {
                 continue;

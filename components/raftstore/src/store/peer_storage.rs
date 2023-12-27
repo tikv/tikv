@@ -96,7 +96,7 @@ impl PartialEq for SnapState {
             (&SnapState::Relax, &SnapState::Relax)
             | (&SnapState::ApplyAborted, &SnapState::ApplyAborted)
             | (&SnapState::Generating { .. }, &SnapState::Generating { .. }) => true,
-            (&SnapState::Applying(ref b1), &SnapState::Applying(ref b2)) => {
+            (SnapState::Applying(b1), SnapState::Applying(b2)) => {
                 b1.load(Ordering::Relaxed) == b2.load(Ordering::Relaxed)
             }
             _ => false,

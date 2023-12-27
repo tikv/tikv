@@ -333,7 +333,6 @@ fn is_option_type(ty: &Type) -> bool {
         let idents_of_path = path
             .segments
             .iter()
-            .into_iter()
             .fold(String::new(), |mut acc, v| {
                 acc.push_str(&v.ident.to_string());
                 acc.push('|');

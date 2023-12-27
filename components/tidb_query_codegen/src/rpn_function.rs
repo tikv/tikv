@@ -1742,7 +1742,7 @@ mod tests_normal {
         let result = l
             .clone()
             .into_iter()
-            .eq_by(r.clone().into_iter(), |x, y| match x {
+            .eq_by(r.clone(), |x, y| match x {
                 TokenTree::Ident(x) => matches!(y, TokenTree::Ident(y) if x == y),
                 TokenTree::Literal(x) => {
                     matches!(y, TokenTree::Literal(y) if x.to_string() == y.to_string())

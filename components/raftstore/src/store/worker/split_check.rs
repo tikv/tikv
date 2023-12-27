@@ -500,7 +500,7 @@ impl<EK: KvEngine, S: StoreHandle> Runner<EK, S> {
         region: &Region,
         bucket_ranges: &Vec<BucketRange>,
     ) {
-        for (mut bucket, bucket_range) in &mut buckets.iter_mut().zip(bucket_ranges) {
+        for (bucket, bucket_range) in &mut buckets.iter_mut().zip(bucket_ranges) {
             let mut bucket_region = region.clone();
             bucket_region.set_start_key(bucket_range.0.clone());
             bucket_region.set_end_key(bucket_range.1.clone());

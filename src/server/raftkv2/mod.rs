@@ -250,8 +250,7 @@ impl<EK: KvEngine, ER: RaftEngine> tikv_kv::Engine for RaftKv2<EK, ER> {
                 }
                 Err(mut resp) => {
                     if resp
-                        .get_responses()
-                        .get(0)
+                        .get_responses().first()
                         .map_or(false, |r| r.get_read_index().has_locked())
                     {
                         let locked = resp.mut_responses()[0].mut_read_index().take_locked();

@@ -1874,7 +1874,6 @@ pub mod tests {
             // At most 12 ops per-case.
             let ops_count = rg.gen::<u8>() % 12;
             let ops = (0..ops_count)
-                .into_iter()
                 .enumerate()
                 .map(|(i, _)| {
                     if i == 0 {

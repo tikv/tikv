@@ -2495,7 +2495,7 @@ mod tests {
         // region 3 to conn b.
         let mut conn_rxs = vec![];
         let quota = Arc::new(MemoryQuota::new(usize::MAX));
-        for region_ids in vec![vec![1, 2], vec![3]] {
+        for region_ids in [vec![1, 2], vec![3]] {
             let (tx, rx) = channel::channel(1, quota.clone());
             conn_rxs.push(rx);
             let conn = Conn::new(tx, String::new());

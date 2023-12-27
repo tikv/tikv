@@ -774,7 +774,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 flushed = true;
 
                 let flush_state = self.flush_state().clone();
-                let mut apply_trace = self.storage_mut().apply_trace_mut();
+                let apply_trace = self.storage_mut().apply_trace_mut();
 
                 let flushed_indexes = flush_state.as_ref().flushed_index();
                 for i in 0..flushed_indexes.len() {

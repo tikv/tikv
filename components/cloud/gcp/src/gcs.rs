@@ -14,7 +14,7 @@ use futures_util::{
 use http::HeaderValue;
 use hyper::{client::HttpConnector, Body, Client, Request, Response, StatusCode};
 use hyper_tls::HttpsConnector;
-pub use kvproto::brpb::{Bucket as InputBucket, Gcs as InputConfig};
+pub use kvproto::brpb::{Gcs as InputConfig};
 use tame_gcs::{
     common::{PredefinedAcl, StorageClass},
     objects::{InsertObjectOptional, Metadata, Object},

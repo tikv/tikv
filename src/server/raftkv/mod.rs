@@ -661,8 +661,7 @@ where
             };
             match res {
                 Ok(CmdRes::Resp(mut r)) => {
-                    let e = if r
-                        .get(0)
+                    let e = if r.first()
                         .map(|resp| resp.get_read_index().has_locked())
                         .unwrap_or(false)
                     {

@@ -1982,7 +1982,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                             key_ranges.push(build_key_range(k.as_encoded(), k.as_encoded(), false));
                             (k, v)
                         })
-                        .filter(|&(_, ref v)| !(v.is_ok() && v.as_ref().unwrap().is_none()))
+                        .filter(|(_, v)| !(v.is_ok() && v.as_ref().unwrap().is_none()))
                         .map(|(k, v)| match v {
                             Ok(v) => {
                                 let (user_key, _) = F::decode_raw_key_owned(k, false).unwrap();
@@ -5792,7 +5792,7 @@ mod tests {
         ];
 
         // Write key-value pairs one by one
-        for &(ref key, ref value) in &test_data {
+        for (key, value) in &test_data {
             storage
                 .raw_put(
                     ctx.clone(),
@@ -5851,7 +5851,7 @@ mod tests {
         let mut total_bytes: u64 = 0;
         let mut is_first = true;
         // Write key-value pairs one by one
-        for &(ref key, ref value) in &test_data {
+        for (key, value) in &test_data {
             storage
                 .raw_put(
                     ctx.clone(),
@@ -6293,7 +6293,7 @@ mod tests {
         ];
 
         // Write key-value pairs one by one
-        for &(ref key, ref value) in &test_data {
+        for (key, value) in &test_data {
             storage
                 .raw_put(
                     ctx.clone(),
@@ -6308,7 +6308,7 @@ mod tests {
         }
 
         // Verify pairs in a batch
-        let keys = test_data.iter().map(|&(ref k, _)| k.clone()).collect();
+        let keys = test_data.iter().map(|(k, _)| k.clone()).collect();
         let results = test_data.into_iter().map(|(k, v)| Some((k, v))).collect();
         expect_multi_values(
             results,
@@ -6340,7 +6340,7 @@ mod tests {
         ];
 
         // Write key-value pairs one by one
-        for &(ref key, ref value) in &test_data {
+        for (key, value) in &test_data {
             storage
                 .raw_put(
                     ctx.clone(),
@@ -6358,7 +6358,7 @@ mod tests {
         let mut ids = vec![];
         let cmds = test_data
             .iter()
-            .map(|&(ref k, _)| {
+            .map(|(k, _)| {
                 let mut req = RawGetRequest::default();
                 req.set_context(ctx.clone());
                 req.set_key(k.clone());
@@ -6429,10 +6429,10 @@ mod tests {
         rx.recv().unwrap();
 
         // Verify pairs exist
-        let keys = test_data.iter().map(|&(ref k, _)| k.clone()).collect();
+        let keys = test_data.iter().map(|(k, _)| k.clone()).collect();
         let results = test_data
             .iter()
-            .map(|&(ref k, ref v)| Some((k.clone(), v.clone())))
+            .map(|(k, v)| Some((k.clone(), v.clone())))
             .collect();
         expect_multi_values(
             results,
@@ -6560,7 +6560,7 @@ mod tests {
         // Scan pairs with key only
         let mut results: Vec<Option<KvPair>> = test_data
             .iter()
-            .map(|&(ref k, _)| Some((k.clone(), vec![])))
+            .map(|(k, _)| Some((k.clone(), vec![])))
             .collect();
         expect_multi_values(
             results.clone(),
@@ -6957,7 +6957,7 @@ mod tests {
         rx.recv().unwrap();
 
         // Verify pairs exist
-        let keys = test_data.iter().map(|&(ref k, _)| k.clone()).collect();
+        let keys = test_data.iter().map(|(k, _)| k.clone()).collect();
         let results = test_data.into_iter().map(|(k, v)| Some((k, v))).collect();
         expect_multi_values(
             results,

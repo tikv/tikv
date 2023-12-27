@@ -7118,7 +7118,7 @@ mod tests {
             share_source_region_size: _,
         } = apply_res.exec_res.front().unwrap()
         {
-            let r8 = regions.get(0).unwrap();
+            let r8 = regions.first().unwrap();
             let r1 = regions.get(1).unwrap();
             assert_eq!(r8.get_id(), 8);
             assert_eq!(r1.get_id(), 1);

@@ -362,18 +362,16 @@ impl DetectTable {
 
 /// The role of the detector.
 #[derive(Debug, PartialEq, Clone, Copy)]
+#[derive(Default)]
 pub enum Role {
     /// The node is the leader of the detector.
     Leader,
     /// The node is a follower of the leader.
+    #[default]
     Follower,
 }
 
-impl Default for Role {
-    fn default() -> Role {
-        Role::Follower
-    }
-}
+
 
 impl From<StateRole> for Role {
     fn from(role: StateRole) -> Role {

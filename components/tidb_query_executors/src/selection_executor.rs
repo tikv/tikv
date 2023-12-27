@@ -537,11 +537,8 @@ mod tests {
             })
             .collect();
 
-        for predicates in vec![
-            // Swap predicates should produce same results.
-            vec![predicate[0](), predicate[1]()],
-            vec![predicate[1](), predicate[0]()],
-        ] {
+        for predicates in [vec![predicate[0](), predicate[1]()],
+            vec![predicate[1](), predicate[0]()]] {
             let src_exec = make_src_executor_using_fixture_2();
             let mut exec = BatchSelectionExecutor::new_for_test(src_exec, predicates);
 
@@ -572,11 +569,8 @@ mod tests {
             })
             .collect();
 
-        for predicates in vec![
-            // Swap predicates should produce same results.
-            vec![predicate[0](), predicate[1](), predicate[2]()],
-            vec![predicate[1](), predicate[2](), predicate[0]()],
-        ] {
+        for predicates in [vec![predicate[0](), predicate[1](), predicate[2]()],
+            vec![predicate[1](), predicate[2](), predicate[0]()]] {
             let src_exec = make_src_executor_using_fixture_2();
             let mut exec = BatchSelectionExecutor::new_for_test(src_exec, predicates);
 

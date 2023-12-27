@@ -357,8 +357,7 @@ where
                             assert!(
                                 res.get_header().has_error()
                                     || res
-                                        .get_responses()
-                                        .get(0)
+                                        .get_responses().first()
                                         .map_or(false, |r| r.get_read_index().has_locked()),
                                 "{:?}",
                                 res

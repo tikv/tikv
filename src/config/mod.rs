@@ -1529,7 +1529,7 @@ impl DbConfig {
             opts.set_paranoid_checks(b);
         }
         if for_engine == EngineType::RaftKv {
-            opts.set_info_log(RocksdbLogger::default());
+            opts.set_info_log(RocksdbLogger);
         }
         opts.set_info_log_level(self.info_log_level.into());
         if self.titan.enabled {
@@ -1907,7 +1907,7 @@ impl RaftDbConfig {
         opts.set_max_log_file_size(self.info_log_max_size.0);
         opts.set_log_file_time_to_roll(self.info_log_roll_time.as_secs());
         opts.set_keep_log_file_num(self.info_log_keep_log_file_num);
-        opts.set_info_log(RaftDbLogger::default());
+        opts.set_info_log(RaftDbLogger);
         opts.set_info_log_level(self.info_log_level.into());
         opts.set_max_subcompactions(self.max_sub_compactions);
         opts.set_writable_file_max_buffer_size(self.writable_file_max_buffer_size.0 as i32);

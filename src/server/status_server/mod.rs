@@ -202,7 +202,7 @@ where
     }
 
     async fn get_cmdline(_req: Request<Body>) -> hyper::Result<Response<Body>> {
-        let args = args().into_iter().fold(String::new(), |mut a, b| {
+        let args = args().fold(String::new(), |mut a, b| {
             a.push_str(&b);
             a.push('\x00');
             a
