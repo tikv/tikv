@@ -5,7 +5,7 @@ use std::{
     time::Duration,
 };
 
-use engine_rocks::RocksSnapshot;
+use engine_rocks::{RocksEngine, RocksSnapshot};
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
 use raft::eraftpb::MessageType;
 use raftstore::store::msg::*;
@@ -61,7 +61,7 @@ impl CbReceivers {
 fn make_cb(cmd: &RaftCmdRequest) -> (Callback<RocksSnapshot>, CbReceivers) {
     let (proposed_tx, proposed_rx) = mpsc::channel();
     let (committed_tx, committed_rx) = mpsc::channel();
-    let (cb, applied_rx) = make_cb_ext(
+    let (cb, applied_rx) = make_cb_ext::<RocksEngine>(
         cmd,
         Some(Box::new(move || proposed_tx.send(()).unwrap())),
         Some(Box::new(move || committed_tx.send(()).unwrap())),
@@ -76,7 +76,10 @@ fn make_cb(cmd: &RaftCmdRequest) -> (Callback<RocksSnapshot>, CbReceivers) {
     )
 }
 
-fn make_write_req(cluster: &mut Cluster<NodeCluster>, k: &[u8]) -> RaftCmdRequest {
+fn make_write_req(
+    cluster: &mut Cluster<RocksEngine, NodeCluster<RocksEngine>>,
+    k: &[u8],
+) -> RaftCmdRequest {
     let r = cluster.get_region(k);
     let mut req = new_request(
         r.get_id(),
