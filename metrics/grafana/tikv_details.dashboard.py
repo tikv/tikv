@@ -1813,6 +1813,7 @@ def RaftIO() -> RowPanel:
             graph_title="99% Process ready duration per server",
             graph_description="The time consumed for peer processes to be ready in Raft",
             graph_by_labels=["instance"],
+            graph_hides=["count", "avg"],
             yaxis_format=UNITS.SECONDS,
             metric="tikv_raftstore_raft_process_duration_secs",
             label_selectors=['type="ready"'],
@@ -1825,6 +1826,7 @@ def RaftIO() -> RowPanel:
             graph_title="99% Store write loop duration per server",
             graph_description="The time duration of store write loop on each TiKV instance when store-io-pool-size is not zero.",
             graph_by_labels=["instance"],
+            graph_hides=["count", "avg"],
             yaxis_format=UNITS.SECONDS,
             metric="tikv_raftstore_store_write_loop_duration_seconds",
         )
@@ -1836,6 +1838,7 @@ def RaftIO() -> RowPanel:
             graph_title="99% Commit log duration per server",
             graph_description="The time consumed when Raft commits log on each TiKV instance",
             graph_by_labels=["instance"],
+            graph_hides=["count", "avg"],
             yaxis_format=UNITS.SECONDS,
             metric="tikv_raftstore_append_log_duration_seconds",
         )
@@ -1847,6 +1850,7 @@ def RaftIO() -> RowPanel:
             graph_title="99% Commit log duration per server",
             graph_description="The time consumed when Raft commits log on each TiKV instance",
             graph_by_labels=["instance"],
+            graph_hides=["count", "avg"],
             yaxis_format=UNITS.SECONDS,
             metric="tikv_raftstore_commit_log_duration_seconds",
         )
@@ -1858,6 +1862,7 @@ def RaftIO() -> RowPanel:
             graph_title="99% Apply log duration per server",
             graph_description="The time consumed for Raft to apply logs per TiKV instance",
             graph_by_labels=["instance"],
+            graph_hides=["count", "avg"],
             yaxis_format=UNITS.SECONDS,
             metric="tikv_raftstore_apply_log_duration_seconds",
         )
@@ -1984,6 +1989,7 @@ def RaftPropose() -> RowPanel:
             graph_title="99% Propose wait duration per server",
             graph_description="The wait time of each proposal in each TiKV instance",
             graph_by_labels=["instance"],
+            graph_hides=["count", "avg"],
             yaxis_format=UNITS.SECONDS,
             metric="tikv_raftstore_request_wait_time_duration_secs",
         )
@@ -1995,6 +2001,7 @@ def RaftPropose() -> RowPanel:
             graph_title="99% Store write wait duration per server",
             graph_description="The wait time of each store write task in each TiKV instance",
             graph_by_labels=["instance"],
+            graph_hides=["count", "avg"],
             yaxis_format=UNITS.SECONDS,
             metric="tikv_raftstore_store_write_task_wait_duration_secs",
         )
@@ -2006,6 +2013,7 @@ def RaftPropose() -> RowPanel:
             graph_title="99% Apply wait duration per server",
             graph_description="The wait time of each apply task in each TiKV instance",
             graph_by_labels=["instance"],
+            graph_hides=["count", "avg"],
             yaxis_format=UNITS.SECONDS,
             metric="tikv_raftstore_apply_wait_time_duration_secs",
         )
