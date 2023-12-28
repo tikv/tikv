@@ -1819,6 +1819,7 @@ where
         let (key, value) = (req.get_put().get_key(), req.get_put().get_value());
         // region key range has no data prefix, so we must use origin key to check.
         util::check_key_in_region(key, &self.region)?;
+        let region_id = self.region_id();
         if let Some(s) = self.buckets.as_mut() {
             s.write_key(key, value.len() as u64);
         }
@@ -1836,26 +1837,30 @@ where
                 self.metrics.lock_cf_written_bytes += value.len() as u64;
             }
             // TODO: check whether cf exists or not.
-            ctx.kv_wb.put_cf(cf, key, value).unwrap_or_else(|e| {
-                panic!(
-                    "{} failed to write ({}, {}) to cf {}: {:?}",
-                    self.tag,
-                    log_wrappers::Value::key(key),
-                    log_wrappers::Value::value(value),
-                    cf,
-                    e
-                )
-            });
+            ctx.kv_wb
+                .put_region_cf(region_id, cf, key, value)
+                .unwrap_or_else(|e| {
+                    panic!(
+                        "{} failed to write ({}, {}) to cf {}: {:?}",
+                        self.tag,
+                        log_wrappers::Value::key(key),
+                        log_wrappers::Value::value(value),
+                        cf,
+                        e
+                    )
+                });
         } else {
-            ctx.kv_wb.put(key, value).unwrap_or_else(|e| {
-                panic!(
-                    "{} failed to write ({}, {}): {:?}",
-                    self.tag,
-                    log_wrappers::Value::key(key),
-                    log_wrappers::Value::value(value),
-                    e
-                );
-            });
+            ctx.kv_wb
+                .put_region(region_id, key, value)
+                .unwrap_or_else(|e| {
+                    panic!(
+                        "{} failed to write ({}, {}): {:?}",
+                        self.tag,
+                        log_wrappers::Value::key(key),
+                        log_wrappers::Value::value(value),
+                        e
+                    );
+                });
         }
         Ok(())
     }
@@ -1865,6 +1870,7 @@ where
         let key = req.get_delete().get_key();
         // region key range has no data prefix, so we must use origin key to check.
         util::check_key_in_region(key, &self.region)?;
+        let region_id = self.region_id();
         if let Some(s) = self.buckets.as_mut() {
             s.write_key(key, 0);
         }
@@ -1878,14 +1884,16 @@ where
         if !req.get_delete().get_cf().is_empty() {
             let cf = req.get_delete().get_cf();
             // TODO: check whether cf exists or not.
-            ctx.kv_wb.delete_cf(cf, key).unwrap_or_else(|e| {
-                panic!(
-                    "{} failed to delete {}: {}",
-                    self.tag,
-                    log_wrappers::Value::key(key),
-                    e
-                )
-            });
+            ctx.kv_wb
+                .delete_region_cf(region_id, cf, key)
+                .unwrap_or_else(|e| {
+                    panic!(
+                        "{} failed to delete {}: {}",
+                        self.tag,
+                        log_wrappers::Value::key(key),
+                        e
+                    )
+                });
 
             if cf == CF_LOCK {
                 // delete is a kind of write for RocksDB.
@@ -1894,7 +1902,7 @@ where
                 self.metrics.delete_keys_hint += 1;
             }
         } else {
-            ctx.kv_wb.delete(key).unwrap_or_else(|e| {
+            ctx.kv_wb.delete_region(region_id, key).unwrap_or_else(|e| {
                 panic!(
                     "{} failed to delete {}: {}",
                     self.tag,

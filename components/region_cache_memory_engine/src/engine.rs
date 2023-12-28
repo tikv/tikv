@@ -219,8 +219,8 @@ impl RegionCacheWriteBatch {
     #[inline]
     fn write_impl(&mut self, seq: u64) {
         let mut core = self.core.lock().unwrap();
-        let mut sl_cb = |s: String, key: Bytes, value: Bytes| {
-            let sl = core.engine.get_mut(&1).unwrap();
+        let mut sl_cb = |region_id: u64, s: String, key: Bytes, value: Bytes| {
+            let sl = core.engine.get_mut(&region_id).unwrap();
         };
         for entry in self.buffer.iter() {
             entry.append_entry(seq, &mut sl_cb)
@@ -238,13 +238,14 @@ enum RegionCacheWriteBatchMutation {
 struct RegionCacheWriteBatchEntry {
     cf: String,
     key: Bytes,
+    region_id: u64,
     mutation: RegionCacheWriteBatchMutation,
 }
 
 impl RegionCacheWriteBatchEntry {
     pub fn append_entry<F>(&self, seq: u64, mut f: F)
     where
-        F: FnMut(String, Bytes, Bytes),
+        F: FnMut(u64, String, Bytes, Bytes),
     {
         let (key, value) = match &self.mutation {
             RegionCacheWriteBatchMutation::InsertOrUpdate(value) => {
@@ -256,7 +257,7 @@ impl RegionCacheWriteBatchEntry {
                 (key, Bytes::default())
             }
         };
-        f(self.cf.clone(), key, value)
+        f(self.region_id, self.cf.clone(), key, value)
     }
 }
 
@@ -620,19 +621,27 @@ impl WriteBatch for RegionCacheWriteBatch {
 
 impl Mutable for RegionCacheWriteBatch {
     fn put(&mut self, _: &[u8], _: &[u8]) -> Result<()> {
-        unimplemented!()
+        Err(box_err!(
+            "Do not call put directly on RegionCacheWriteBatch, region id must be specified."
+        ))
     }
 
     fn put_cf(&mut self, key: &str, value: &[u8], _: &[u8]) -> Result<()> {
-        todo!()
+        Err(box_err!(
+            "Do not call put_cf directly on RegionCacheWriteBatch, region id must be specified."
+        ))
     }
 
     fn delete(&mut self, _: &[u8]) -> Result<()> {
-        unimplemented!()
+        Err(box_err!(
+            "Do not call delete directly on RegionCacheWriteBatch, region id must be specified."
+        ))
     }
 
     fn delete_cf(&mut self, _: &str, _: &[u8]) -> Result<()> {
-        unimplemented!()
+        Err(box_err!(
+            "Do not call delete_cf directly on RegionCacheWriteBatch, region id must be specified."
+        ))
     }
 
     fn delete_range(&mut self, _: &[u8], _: &[u8]) -> Result<()> {
@@ -641,6 +650,34 @@ impl Mutable for RegionCacheWriteBatch {
 
     fn delete_range_cf(&mut self, _: &str, _: &[u8], _: &[u8]) -> Result<()> {
         unimplemented!()
+    }
+
+    fn put_region(&mut self, region_id: u64, key: &[u8], value: &[u8]) -> Result<()> {
+        self.put_region_cf(region_id, CF_DEFAULT, key, value)
+    }
+
+    fn put_region_cf(&mut self, region_id: u64, cf: &str, key: &[u8], value: &[u8]) -> Result<()> {
+        self.buffer.push(RegionCacheWriteBatchEntry {
+            key: Bytes::copy_from_slice(key),
+            cf: cf.to_owned(),
+            region_id,
+            mutation: RegionCacheWriteBatchMutation::InsertOrUpdate(Bytes::copy_from_slice(value)),
+        });
+        Ok(())
+    }
+
+    fn delete_region(&mut self, region_id: u64, key: &[u8]) -> Result<()> {
+        self.delete_region_cf(region_id, CF_DEFAULT, key)
+    }
+
+    fn delete_region_cf(&mut self, region_id: u64, cf: &str, key: &[u8]) -> Result<()> {
+        self.buffer.push(RegionCacheWriteBatchEntry {
+            key: Bytes::copy_from_slice(key),
+            cf: cf.to_owned(),
+            region_id,
+            mutation: RegionCacheWriteBatchMutation::Delete,
+        });
+        Ok(())
     }
 }
 

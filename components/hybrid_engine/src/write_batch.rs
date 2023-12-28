@@ -43,7 +43,8 @@ impl<EK: KvEngine, EC: RegionCacheEngine> WriteBatch for HybridEngineWriteBatch<
         self.disk_write_batch
             .write_callback_opt(opts, |s| {
                 self.cache_write_batch.set_sequence_number(s).unwrap();
-                self.cache_write_batch.write_opt(opts).unwrap();
+                let seq = self.cache_write_batch.write_opt(opts).unwrap();
+                debug_assert_eq!(seq, s);
             })
             .map(|s| {
                 cb(s);
@@ -115,5 +116,27 @@ impl<EK: KvEngine, EC: RegionCacheEngine> Mutable for HybridEngineWriteBatch<EK,
 
     fn delete_range_cf(&mut self, _cf: &str, _begin_key: &[u8], _end_key: &[u8]) -> Result<()> {
         unimplemented!()
+    }
+
+    fn put_region(&mut self, region_id: u64, key: &[u8], value: &[u8]) -> Result<()> {
+        self.disk_write_batch.put_region(region_id, key, value)?;
+        self.cache_write_batch.put_region(region_id, key, value)
+    }
+
+    fn put_region_cf(&mut self, region_id: u64, cf: &str, key: &[u8], value: &[u8]) -> Result<()> {
+        self.disk_write_batch
+            .put_region_cf(region_id, cf, key, value)?;
+        self.cache_write_batch
+            .put_region_cf(region_id, cf, key, value)
+    }
+
+    fn delete_region(&mut self, region_id: u64, key: &[u8]) -> Result<()> {
+        self.disk_write_batch.delete_region(region_id, key)?;
+        self.cache_write_batch.delete_region(region_id, key)
+    }
+
+    fn delete_region_cf(&mut self, region_id: u64, cf: &str, key: &[u8]) -> Result<()> {
+        self.disk_write_batch.delete_region_cf(region_id, cf, key)?;
+        self.cache_write_batch.delete_region_cf(region_id, cf, key)
     }
 }
