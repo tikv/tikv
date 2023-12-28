@@ -781,9 +781,9 @@ def Server() -> RowPanel:
                         expr=expr_histogram_quantile(
                             0.99,
                             "tikv_yatp_pool_schedule_wait_duration",
-                            by_labels=["name"],
+                            by_labels=["name", "priority"],
                         ),
-                        legend_format="{{name}}",
+                        legend_format="{{name}}-{{priority}}",
                     ),
                 ],
                 thresholds=[GraphThreshold(value=1.0)],
@@ -796,9 +796,9 @@ def Server() -> RowPanel:
                     target(
                         expr=expr_histogram_avg(
                             "tikv_yatp_pool_schedule_wait_duration",
-                            by_labels=["name"],
+                            by_labels=["name", "priority"],
                         ),
-                        legend_format="{{name}}",
+                        legend_format="{{name}}-{{priority}}",
                     ),
                 ],
                 thresholds=[GraphThreshold(value=1.0)],
@@ -2600,7 +2600,9 @@ def UnifiedReadPool() -> RowPanel:
                             "tikv_unified_read_pool_running_tasks",
                             "avg",
                             "1m",
+                            by_labels=["priority"],
                         ),
+                        legend_format="{{priority}}",
                     ),
                 ],
             ),
