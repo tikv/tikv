@@ -604,6 +604,55 @@ impl std::fmt::Debug for PessimisticLock {
     }
 }
 
+/// TxnLock is a wrapper for in-memory pessimistic locks and storage locks.
+#[derive(PartialEq, Clone)]
+pub enum TxnLock<'a> {
+    InMemoryLock(&'a PessimisticLock),
+    PersistedLock(&'a Lock),
+}
+
+impl<'a> TxnLock<'a> {
+    pub fn get_start_ts(&self) -> TimeStamp {
+        match self {
+            TxnLock::InMemoryLock(pessimistic_lock) => pessimistic_lock.start_ts,
+            TxnLock::PersistedLock(lock) => lock.ts,
+        }
+    }
+
+    pub fn get_for_update_ts(&self) -> TimeStamp {
+        match self {
+            TxnLock::InMemoryLock(pessimistic_lock) => pessimistic_lock.for_update_ts,
+            TxnLock::PersistedLock(lock) => lock.for_update_ts,
+        }
+    }
+
+    pub fn is_pessimistic_lock(&self) -> bool {
+        match self {
+            TxnLock::InMemoryLock(_) => true,
+            TxnLock::PersistedLock(lock) => lock.is_pessimistic_lock(),
+        }
+    }
+
+    pub fn get_lock_type(&self) -> LockType {
+        match self {
+            TxnLock::InMemoryLock(_) => LockType::Pessimistic,
+            TxnLock::PersistedLock(lock) => lock.lock_type,
+        }
+    }
+}
+
+impl<'a> From<&'a PessimisticLock> for TxnLock<'a> {
+    fn from(in_memory_pessimistic_lock: &'a PessimisticLock) -> Self {
+        Self::InMemoryLock(in_memory_pessimistic_lock)
+    }
+}
+
+impl<'a> From<&'a Lock> for TxnLock<'a> {
+    fn from(lock: &'a Lock) -> Self {
+        Self::PersistedLock(lock)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

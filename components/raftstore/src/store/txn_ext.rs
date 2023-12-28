@@ -10,7 +10,7 @@ use kvproto::metapb;
 use lazy_static::lazy_static;
 use parking_lot::RwLock;
 use prometheus::{register_int_gauge, IntGauge};
-use txn_types::{Key, Lock, PessimisticLock};
+use txn_types::{Key, Lock, PessimisticLock, TxnLock};
 
 /// Transaction extensions related to a peer.
 #[derive(Default)]
@@ -282,7 +282,7 @@ impl PeerPessimisticLocks {
         limit: usize,
     ) -> (Vec<(Key, Lock)>, bool)
     where
-        F: Fn(&Key, &PessimisticLock) -> bool,
+        F: Fn(&Key, TxnLock<'_>) -> bool,
     {
         if let (Some(start_key), Some(end_key)) = (start, end) {
             assert!(end_key >= start_key);
@@ -293,7 +293,7 @@ impl PeerPessimisticLocks {
             end.map_or(Bound::Unbounded, |k| Bound::Excluded(k)),
         ));
         while let Some((key, (lock, _))) = iter.next() {
-            if filter(key, lock) {
+            if filter(key, lock.into()) {
                 locks.push((key.clone(), lock.clone().into_lock()));
             }
             if limit > 0 && locks.len() >= limit {
@@ -531,13 +531,18 @@ mod tests {
             pessimistic_lock.into_lock()
         }
 
-        let filter_pass_all = |_key: &Key, _lock: &PessimisticLock| true;
-        let filter_pass_key2 =
-            |key: &Key, _lock: &PessimisticLock| key.as_encoded().starts_with(b"key2");
+        type LockFilter = fn(&Key, TxnLock<'_>) -> bool;
+
+        fn filter_pass_all(_: &Key, _: TxnLock<'_>) -> bool {
+            true
+        }
+
+        fn filter_pass_key2(key: &Key, _: TxnLock<'_>) -> bool {
+            key.as_encoded().starts_with(b"key2")
+        }
 
         // Case parameter: start_key, end_key, filter, limit, expected results, expected
         // has more.
-        type LockFilter = fn(&Key, &PessimisticLock) -> bool;
         let cases: [(
             Option<Key>,
             Option<Key>,

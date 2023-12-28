@@ -4,7 +4,6 @@
 use std::ops::Bound;
 
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
-use itertools::Itertools;
 use kvproto::{
     errorpb::{self, EpochNotMatch, FlashbackInProgress, StaleCommand},
     kvrpcpb::Context,
@@ -13,7 +12,7 @@ use raftstore::store::{LocksStatus, PeerPessimisticLocks};
 use tikv_kv::{SnapshotExt, SEEK_BOUND};
 use tikv_util::time::Instant;
 use txn_types::{
-    Key, LastChange, Lock, OldValue, PessimisticLock, TimeStamp, Value, Write, WriteRef, WriteType,
+    Key, LastChange, Lock, OldValue, TimeStamp, TxnLock, Value, Write, WriteRef, WriteType,
 };
 
 use crate::storage::{
@@ -154,6 +153,10 @@ pub struct MvccReader<S: EngineSnapshot> {
     version: u64,
 
     allow_in_flashback: bool,
+
+    // Whether the lock cursor is seeked to the [start, end) range. It's only used in
+    // `next_pair_from_storage`.
+    lock_cursor_seeked: bool,
 }
 
 impl<S: EngineSnapshot> MvccReader<S> {
@@ -173,6 +176,7 @@ impl<S: EngineSnapshot> MvccReader<S> {
             term: 0,
             version: 0,
             allow_in_flashback: false,
+            lock_cursor_seeked: false,
         }
     }
 
@@ -192,6 +196,7 @@ impl<S: EngineSnapshot> MvccReader<S> {
             term: ctx.get_term(),
             version: ctx.get_region_epoch().get_version(),
             allow_in_flashback: false,
+            lock_cursor_seeked: false,
         }
     }
 
@@ -279,43 +284,122 @@ impl<S: EngineSnapshot> MvccReader<S> {
         Ok(())
     }
 
-    pub fn scan_pessimistic_locks_with_memory<F1, F2>(
+    fn next_pair_from_storage<F>(
         &mut self,
         start_key: Option<&Key>,
         end_key: Option<&Key>,
-        filter_memory: F1,
-        filter_lock_cf: F2,
+        filter: F,
+    ) -> Result<Option<(Key, Lock)>>
+    where
+        F: Fn(&Key, TxnLock<'_>) -> bool,
+    {
+        self.create_lock_cursor()?;
+        let cursor = self.lock_cursor.as_mut().unwrap();
+        if !self.lock_cursor_seeked {
+            let ok = match start_key {
+                Some(x) => cursor.seek(x, &mut self.statistics.lock)?,
+                None => cursor.seek_to_first(&mut self.statistics.lock),
+            };
+            if !ok {
+                return Ok(None);
+            }
+            self.lock_cursor_seeked = true;
+        }
+
+        while cursor.valid()? {
+            let key = Key::from_encoded_slice(cursor.key(&mut self.statistics.lock));
+            if let Some(end) = end_key {
+                if key >= *end {
+                    return Ok(None);
+                }
+            }
+            let lock = Lock::parse(cursor.value(&mut self.statistics.lock))?;
+            if filter(&key, TxnLock::PersistedLock(&lock)) {
+                return Ok(Some((key, lock)));
+            }
+            cursor.next(&mut self.statistics.lock);
+        }
+        Ok(None)
+    }
+
+    /// Scan all types of locks(pessimitic, prewrite) satisfying `filter`
+    /// condition from both in-memory pessimitic lock table and the storage
+    /// within [start_key, end_key) .
+    pub fn scan_locks<F>(
+        &mut self,
+        start_key: Option<&Key>,
+        end_key: Option<&Key>,
+        filter: F,
         limit: usize,
         source: ScanLockReadTimeSource,
     ) -> Result<(Vec<(Key, Lock)>, bool)>
     where
-        F1: Fn(&Key, &PessimisticLock) -> bool,
-        F2: Fn(&Lock) -> bool,
+        F: Fn(&Key, TxnLock<'_>) -> bool,
     {
-        let (memory_locks, memory_has_remain) = self.load_in_memory_pessimistic_lock_range(
-            start_key,
-            end_key,
-            filter_memory,
-            limit,
-            source,
-        )?;
-        let (kv_pairs, kv_pair_has_remain) =
-            self.scan_locks(start_key, end_key, filter_lock_cf, limit)?;
-        // Merge the results from in-memory pessimistic locks and the lock cf.
-        // The result order is decided by the key.
-        let memory_lock_iter = memory_locks.into_iter();
-        let lock_iter = kv_pairs.into_iter();
-        let merged_iter =
-            memory_lock_iter.merge_by(lock_iter, |(memory_key, _), (key, _)| memory_key <= key);
-        let mut locks = Vec::with_capacity(limit);
-        for (key, lock) in merged_iter {
-            if limit > 0 && locks.len() >= limit {
+        let (memory_locks, _) =
+            self.load_in_memory_pessimistic_lock_range(start_key, end_key, &filter, limit, source)?;
+        if memory_locks.is_empty() {
+            return self.scan_locks_from_storage(start_key, end_key, &filter, limit);
+        }
+        let mut memory_iter = memory_locks.into_iter();
+        let mut locks = Vec::with_capacity(limit.min(memory_iter.len()));
+        let mut next_pair_from_memory = || -> Option<(Key, Lock)> {
+            if let Some((key, lock)) = memory_iter.next() {
+                if filter(&key, (&lock).into()) {
+                    Some((key, lock))
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        };
+
+        let mut memory_pair = next_pair_from_memory();
+        let mut storage_pair = self.next_pair_from_storage(start_key, end_key, &filter)?;
+        loop {
+            if memory_pair.is_none() || storage_pair.is_none() {
                 break;
             }
-            locks.push((key, lock));
+            let (memory_key, _) = memory_pair.as_ref().unwrap();
+            let (storage_key, _) = storage_pair.as_ref().unwrap();
+            if storage_key <= memory_key {
+                locks.push(storage_pair.take().unwrap());
+                storage_pair = self.next_pair_from_storage(start_key, end_key, &filter)?;
+            } else {
+                locks.push(memory_pair.take().unwrap());
+                memory_pair = next_pair_from_memory();
+            }
+            if locks.len() == limit {
+                return Ok((locks, true));
+            }
         }
 
-        Ok((locks, memory_has_remain || kv_pair_has_remain))
+        if memory_pair.is_none() {
+            while let Some((storage_key, storage_lock)) =
+                self.next_pair_from_storage(start_key, end_key, &filter)?
+            {
+                locks.push((storage_key, storage_lock));
+                if locks.len() == limit {
+                    return Ok((
+                        locks,
+                        self.next_pair_from_storage(start_key, end_key, &filter)?
+                            .is_some(),
+                    ));
+                }
+            }
+        } else if storage_pair.is_none() {
+            while let Some((memory_key, memory_lock)) = next_pair_from_memory() {
+                locks.push((memory_key, memory_lock));
+                if locks.len() == limit {
+                    return Ok((locks, next_pair_from_memory().is_some()));
+                }
+            }
+        } else {
+            unreachable!()
+        }
+
+        Ok((locks, false))
     }
 
     pub fn load_in_memory_pessimistic_lock_range<F>(
@@ -327,7 +411,7 @@ impl<S: EngineSnapshot> MvccReader<S> {
         source: ScanLockReadTimeSource,
     ) -> Result<(Vec<(Key, Lock)>, bool)>
     where
-        F: Fn(&Key, &PessimisticLock) -> bool,
+        F: Fn(&Key, TxnLock<'_>) -> bool,
     {
         if let Some(txn_ext) = self.snapshot.ext().get_txn_ext() {
             let begin_instant = Instant::now();
@@ -621,13 +705,13 @@ impl<S: EngineSnapshot> MvccReader<S> {
         Ok(None)
     }
 
-    /// Scan locks that satisfies `filter(lock)` returns true in the key range
+    /// Scan locks that satisfies `filter(lock)` from storage in the key range
     /// [start, end). At most `limit` locks will be returned. If `limit` is
     /// set to `0`, it means unlimited.
     ///
     /// The return type is `(locks, has_remain)`. `has_remain` indicates whether
     /// there MAY be remaining locks that can be scanned.
-    pub fn scan_locks<F>(
+    pub fn scan_locks_from_storage<F>(
         &mut self,
         start: Option<&Key>,
         end: Option<&Key>,
@@ -635,7 +719,7 @@ impl<S: EngineSnapshot> MvccReader<S> {
         limit: usize,
     ) -> Result<(Vec<(Key, Lock)>, bool)>
     where
-        F: Fn(&Lock) -> bool,
+        F: Fn(&Key, TxnLock<'_>) -> bool,
     {
         self.create_lock_cursor()?;
         let cursor = self.lock_cursor.as_mut().unwrap();
@@ -658,7 +742,7 @@ impl<S: EngineSnapshot> MvccReader<S> {
             }
 
             let lock = Lock::parse(cursor.value(&mut self.statistics.lock))?;
-            if filter(&lock) {
+            if filter(&key, TxnLock::PersistedLock(&lock)) {
                 locks.push((key, lock));
                 if limit > 0 && locks.len() == limit {
                     has_remain = true;
@@ -1801,10 +1885,10 @@ pub mod tests {
             let snap = RegionSnapshot::<RocksSnapshot>::from_raw(db.clone(), region.clone());
             let mut reader = MvccReader::new(snap, None, false);
             let res = reader
-                .scan_locks(
+                .scan_locks_from_storage(
                     start_key.as_ref(),
                     end_key.as_ref(),
-                    |l| l.ts <= 10.into(),
+                    |_, l| l.get_start_ts() <= 10.into(),
                     limit,
                 )
                 .unwrap();

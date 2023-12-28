@@ -42,16 +42,13 @@ impl<S: Snapshot> ReadCommand<S> for PessimisticRollbackReadPhase {
         let tag = self.tag();
         let mut reader = MvccReader::new_with_ctx(snapshot, Some(ScanMode::Forward), &self.ctx);
         let res = reader
-            .scan_pessimistic_locks_with_memory(
+            .scan_locks(
                 self.scan_key.as_ref(),
                 None,
                 |_, lock| {
-                    lock.start_ts == self.start_ts && lock.for_update_ts <= self.for_update_ts
-                },
-                |lock| {
-                    lock.ts == self.start_ts
+                    lock.get_start_ts() == self.start_ts
                         && lock.is_pessimistic_lock()
-                        && lock.for_update_ts <= self.for_update_ts
+                        && lock.get_for_update_ts() <= self.for_update_ts
                 },
                 RESOLVE_LOCK_BATCH_SIZE,
                 pessimistic_rollback,

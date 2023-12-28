@@ -1459,11 +1459,10 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                         !ctx.get_not_fill_cache(),
                     );
                     let read_res = reader
-                        .scan_pessimistic_locks_with_memory(
+                        .scan_locks(
                             start_key.as_ref(),
                             end_key.as_ref(),
-                            |_, lock| lock.start_ts <= max_ts,
-                            |lock| lock.ts <= max_ts,
+                            |_, lock| lock.get_start_ts() <= max_ts,
                             limit,
                             resolve_lock,
                         )
