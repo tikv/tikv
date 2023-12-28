@@ -342,7 +342,7 @@ mod profiling {
     // Set exclusive arena for the current thread to avoid contention.
     pub fn thread_allocate_exclusive_arena() -> ProfResult<()> {
         unsafe {
-            let index = tikv_jemalloc_ctl::raw::read(ARENAS_CREATE)
+            let index : u32 = tikv_jemalloc_ctl::raw::read(ARENAS_CREATE)
                 .map_err(|e| ProfError::JemallocError(format!("failed to create arena: {}", e)))?;
             if let Err(e) = tikv_jemalloc_ctl::raw::write(THREAD_ARENA, index) {
                 return Err(ProfError::JemallocError(format!(
@@ -350,10 +350,13 @@ mod profiling {
                     e
                 )));
             }
-            super::THREAD_ARENA_MAP
-            .lock()
-            .unwrap()
-            .insert(std::thread::current().name().unwrap_or("unknown").to_string(), index);
+            super::THREAD_ARENA_MAP.lock().unwrap().insert(
+                std::thread::current()
+                    .name()
+                    .unwrap_or("unknown")
+                    .to_string(),
+                index as usize,
+            );
         }
         Ok(())
     }
