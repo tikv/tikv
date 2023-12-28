@@ -211,13 +211,15 @@ impl<E: KvEngine> Initializer<E> {
         }
 
         self.observed_range.update_region_key_range(&region);
+        let start_key = Key::from_encoded_slice(&self.observed_range.start_key_encoded);
+        let end_key = Key::from_encoded_slice(&self.observed_range.end_key_encoded);
         debug!("cdc async incremental scan";
             "region_id" => region_id,
             "downstream_id" => ?downstream_id,
             "observe_id" => ?self.observe_id,
             "all_key_covered" => ?self.observed_range.all_key_covered,
-            "start_key" => log_wrappers::Value::key(snap.lower_bound().unwrap_or_default()),
-            "end_key" => log_wrappers::Value::key(snap.upper_bound().unwrap_or_default()));
+            "start_key" => log_wrappers::Value::key(start_key.as_encoded()),
+            "end_key" => log_wrappers::Value::key(end_key.as_encoded()));
 
         let mut resolver = if self.build_resolver {
             Some(Resolver::new(region_id, memory_quota))
@@ -237,7 +239,7 @@ impl<E: KvEngine> Initializer<E> {
             // Time range: (checkpoint_ts, max]
             let txnkv_scanner = ScannerBuilder::new(snap, TimeStamp::max())
                 .fill_cache(false)
-                .range(None, None)
+                .range(Some(start_key), Some(end_key))
                 .hint_min_ts(hint_min_ts)
                 .build_delta_scanner(self.checkpoint_ts, TxnExtraOp::ReadOldValue)
                 .unwrap();
