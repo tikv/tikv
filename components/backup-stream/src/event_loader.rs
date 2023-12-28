@@ -3,77 +3,48 @@
 use std::{marker::PhantomData, sync::Arc, time::Duration};
 
 use engine_traits::{KvEngine, CF_DEFAULT, CF_WRITE};
-use futures::executor::block_on;
 use kvproto::{kvrpcpb::ExtraOp, metapb::Region, raft_cmdpb::CmdType};
 use raftstore::{
-    coprocessor::{ObserveHandle, RegionInfoProvider},
-    router::RaftStoreRouter,
-    store::{fsm::ChangeObserver, Callback, SignificantMsg},
+    coprocessor::ObserveHandle,
+    store::{fsm::ChangeObserver, Callback, SignificantMsg, SignificantRouter},
 };
 use tikv::storage::{
     kv::StatisticsSummary,
     mvcc::{DeltaScanner, ScannerBuilder},
-    txn::{EntryBatch, TxnEntry, TxnEntryScanner},
+    txn::{TxnEntry, TxnEntryScanner},
     Snapshot, Statistics,
 };
 use tikv_util::{
     box_err,
+    memory::{MemoryQuota, OwnedAllocated},
     time::{Instant, Limiter},
     worker::Scheduler,
 };
-use tokio::{
-    runtime::Handle,
-    sync::{OwnedSemaphorePermit, Semaphore},
-};
+use tokio::sync::Semaphore;
 use txn_types::{Key, Lock, TimeStamp};
 
 use crate::{
     annotate, debug,
-    endpoint::ObserveOp,
     errors::{ContextualResultExt, Error, Result},
     metrics,
     router::{ApplyEvent, ApplyEvents, Router},
     subscription_track::{Ref, RefMut, SubscriptionTracer, TwoPhaseResolver},
-    try_send,
-    utils::{self, RegionPager},
-    Task,
+    utils, Task,
 };
 
 const MAX_GET_SNAPSHOT_RETRY: usize = 3;
 
-#[derive(Clone)]
-pub struct PendingMemoryQuota(Arc<Semaphore>);
-
-impl std::fmt::Debug for PendingMemoryQuota {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("PendingMemoryQuota")
-            .field("remain", &self.0.available_permits())
-            .field("total", &self.0)
-            .finish()
-    }
-}
-
-pub struct PendingMemory(OwnedSemaphorePermit);
-
-impl PendingMemoryQuota {
-    pub fn new(quota: usize) -> Self {
-        Self(Arc::new(Semaphore::new(quota)))
-    }
-
-    pub fn pending(&self, size: usize) -> PendingMemory {
-        PendingMemory(
-            Handle::current()
-                .block_on(self.0.clone().acquire_many_owned(size as _))
-                .expect("BUG: the semaphore is closed unexpectedly."),
-        )
-    }
+struct ScanResult {
+    more: bool,
+    out_of_memory: bool,
+    statistics: Statistics,
 }
 
 /// EventLoader transforms data from the snapshot into ApplyEvent.
 pub struct EventLoader<S: Snapshot> {
     scanner: DeltaScanner<S>,
     // pooling the memory.
-    entry_batch: EntryBatch,
+    entry_batch: Vec<TxnEntry>,
 }
 
 const ENTRY_BATCH_SIZE: usize = 1024;
@@ -102,20 +73,48 @@ impl<S: Snapshot> EventLoader<S> {
 
         Ok(Self {
             scanner,
-            entry_batch: EntryBatch::with_capacity(ENTRY_BATCH_SIZE),
+            entry_batch: Vec::with_capacity(ENTRY_BATCH_SIZE),
         })
+    }
+
+    fn scan_result(&mut self, more: bool) -> ScanResult {
+        ScanResult {
+            more,
+            out_of_memory: false,
+            statistics: self.scanner.take_statistics(),
+        }
+    }
+
+    fn out_of_memory(&mut self) -> ScanResult {
+        ScanResult {
+            more: true,
+            out_of_memory: true,
+            statistics: self.scanner.take_statistics(),
+        }
     }
 
     /// Scan a batch of events from the snapshot, and save them into the
     /// internal buffer.
-    fn fill_entries(&mut self) -> Result<Statistics> {
+    fn fill_entries(&mut self, memory_quota: &mut OwnedAllocated) -> Result<ScanResult> {
         assert!(
             self.entry_batch.is_empty(),
-            "EventLoader: the entry batch isn't empty when filling entries, which is error-prone, please call `omit_entries` first. (len = {})",
+            "EventLoader: the entry batch isn't empty when filling entries, which is error-prone, please call `emit_entries_to` first. (len = {})",
             self.entry_batch.len()
         );
-        self.scanner.scan_entries(&mut self.entry_batch)?;
-        Ok(self.scanner.take_statistics())
+        let batch = &mut self.entry_batch;
+        while batch.len() < batch.capacity() {
+            match self.scanner.next_entry()? {
+                Some(entry) => {
+                    let size = entry.size();
+                    batch.push(entry);
+                    if memory_quota.alloc(size).is_err() {
+                        return Ok(self.out_of_memory());
+                    }
+                }
+                None => return Ok(self.scan_result(false)),
+            }
+        }
+        Ok(self.scan_result(true))
     }
 
     /// Drain the internal buffer, converting them to the [`ApplyEvents`],
@@ -125,7 +124,7 @@ impl<S: Snapshot> EventLoader<S> {
         result: &mut ApplyEvents,
         resolver: &mut TwoPhaseResolver,
     ) -> Result<()> {
-        for entry in self.entry_batch.drain() {
+        for entry in self.entry_batch.drain(..) {
             match entry {
                 TxnEntry::Prewrite {
                     default: (key, value),
@@ -175,57 +174,110 @@ impl<S: Snapshot> EventLoader<S> {
 }
 
 /// The context for loading incremental data between range.
-/// Like [`cdc::Initializer`], but supports initialize over range.
+/// Like [`cdc::Initializer`].
 /// Note: maybe we can merge those two structures?
-/// Note': maybe extract more fields to trait so it would be easier to test.
 #[derive(Clone)]
-pub struct InitialDataLoader<E, R, RT> {
+pub struct InitialDataLoader<E: KvEngine, H> {
     // Note: maybe we can make it an abstract thing like `EventSink` with
     //       method `async (KvEvent) -> Result<()>`?
     pub(crate) sink: Router,
     pub(crate) tracing: SubscriptionTracer,
     pub(crate) scheduler: Scheduler<Task>,
-    // Note: this is only for `init_range`, maybe make it an argument?
-    pub(crate) regions: R,
-    // Note: Maybe move those fields about initial scanning into some trait?
-    pub(crate) router: RT,
-    pub(crate) quota: PendingMemoryQuota,
-    pub(crate) limit: Limiter,
 
-    pub(crate) handle: Handle,
+    pub(crate) quota: Arc<MemoryQuota>,
+    pub(crate) limit: Limiter,
+    // If there are too many concurrent initial scanning, the limit of disk speed or pending memory
+    // quota will probably be triggered. Then the whole scanning will be pretty slow. And when
+    // we are holding a iterator for a long time, the memtable may not be able to be flushed.
+    // Using this to restrict the possibility of that.
+    concurrency_limit: Arc<Semaphore>,
+
+    cdc_handle: H,
+
     _engine: PhantomData<E>,
 }
 
-impl<E, R, RT> InitialDataLoader<E, R, RT>
+impl<E, H> InitialDataLoader<E, H>
 where
     E: KvEngine,
-    R: RegionInfoProvider + Clone + 'static,
-    RT: RaftStoreRouter<E>,
+    H: SignificantRouter<E> + Sync,
 {
     pub fn new(
-        router: RT,
-        regions: R,
         sink: Router,
         tracing: SubscriptionTracer,
         sched: Scheduler<Task>,
-        quota: PendingMemoryQuota,
-        handle: Handle,
+        quota: Arc<MemoryQuota>,
         limiter: Limiter,
+        cdc_handle: H,
+        concurrency_limit: Arc<Semaphore>,
     ) -> Self {
         Self {
-            router,
-            regions,
             sink,
             tracing,
             scheduler: sched,
             _engine: PhantomData,
             quota,
-            handle,
+            cdc_handle,
+            concurrency_limit,
             limit: limiter,
         }
     }
 
-    pub fn observe_over_with_retry(
+    pub async fn capture_change(
+        &self,
+        region: &Region,
+        cmd: ChangeObserver,
+    ) -> Result<impl Snapshot> {
+        let (callback, fut) =
+            tikv_util::future::paired_future_callback::<std::result::Result<_, Error>>();
+
+        self.cdc_handle
+            .significant_send(
+                region.get_id(),
+                SignificantMsg::CaptureChange {
+                    region_epoch: region.get_region_epoch().clone(),
+                    cmd,
+                    callback: Callback::read(Box::new(|snapshot| {
+                        if snapshot.response.get_header().has_error() {
+                            callback(Err(Error::RaftRequest(
+                                snapshot.response.get_header().get_error().clone(),
+                            )));
+                            return;
+                        }
+                        if let Some(snap) = snapshot.snapshot {
+                            callback(Ok(snap));
+                            return;
+                        }
+                        callback(Err(Error::Other(box_err!(
+                            "PROBABLY BUG: the response contains neither error nor snapshot"
+                        ))))
+                    })),
+                },
+            )
+            .context(format_args!(
+                "failed to register the observer to region {}",
+                region.get_id()
+            ))?;
+
+        let snap = fut
+            .await
+            .map_err(|err| {
+                annotate!(
+                    err,
+                    "message 'CaptureChange' dropped for region {}",
+                    region.id
+                )
+            })
+            .flatten()
+            .context(format_args!(
+                "failed to get initial snapshot: failed to get the snapshot (region_id = {})",
+                region.get_id(),
+            ))?;
+        // Note: maybe warp the snapshot via `RegionSnapshot`?
+        Ok(snap)
+    }
+
+    pub async fn observe_over_with_retry(
         &self,
         region: &Region,
         mut cmd: impl FnMut() -> ChangeObserver,
@@ -233,7 +285,7 @@ where
         let mut last_err = None;
         for _ in 0..MAX_GET_SNAPSHOT_RETRY {
             let c = cmd();
-            let r = self.observe_over(region, c);
+            let r = self.capture_change(region, c).await;
             match r {
                 Ok(s) => {
                     return Ok(s);
@@ -265,71 +317,12 @@ where
                     if !can_retry {
                         break;
                     }
-                    std::thread::sleep(Duration::from_millis(500));
+                    tokio::time::sleep(Duration::from_secs(1)).await;
                     continue;
                 }
             }
         }
         Err(last_err.expect("BUG: max retry time exceed but no error"))
-    }
-
-    /// Start observe over some region.
-    /// This will register the region to the raftstore as observing,
-    /// and return the current snapshot of that region.
-    fn observe_over(&self, region: &Region, cmd: ChangeObserver) -> Result<impl Snapshot> {
-        // There are 2 ways for getting the initial snapshot of a region:
-        // - the BR method: use the interface in the RaftKv interface, read the
-        //   key-values directly.
-        // - the CDC method: use the raftstore message `SignificantMsg::CaptureChange`
-        //   to register the region to CDC observer and get a snapshot at the same time.
-        // Registering the observer to the raftstore is necessary because we should only
-        // listen events from leader. In CDC, the change observer is
-        // per-delegate(i.e. per-region), we can create the command per-region here too.
-
-        let (callback, fut) =
-            tikv_util::future::paired_future_callback::<std::result::Result<_, Error>>();
-        self.router
-            .significant_send(
-                region.id,
-                SignificantMsg::CaptureChange {
-                    cmd,
-                    region_epoch: region.get_region_epoch().clone(),
-                    callback: Callback::read(Box::new(|snapshot| {
-                        if snapshot.response.get_header().has_error() {
-                            callback(Err(Error::RaftRequest(
-                                snapshot.response.get_header().get_error().clone(),
-                            )));
-                            return;
-                        }
-                        if let Some(snap) = snapshot.snapshot {
-                            callback(Ok(snap));
-                            return;
-                        }
-                        callback(Err(Error::Other(box_err!(
-                            "PROBABLY BUG: the response contains neither error nor snapshot"
-                        ))))
-                    })),
-                },
-            )
-            .context(format_args!(
-                "failed to register the observer to region {}",
-                region.get_id()
-            ))?;
-        let snap = block_on(fut)
-            .map_err(|err| {
-                annotate!(
-                    err,
-                    "message 'CaptureChange' dropped for region {}",
-                    region.id
-                )
-            })
-            .flatten()
-            .context(format_args!(
-                "failed to get initial snapshot: failed to get the snapshot (region_id = {})",
-                region.get_id(),
-            ))?;
-        // Note: maybe warp the snapshot via `RegionSnapshot`?
-        Ok(snap)
     }
 
     fn with_resolver<T: 'static>(
@@ -381,7 +374,7 @@ where
         f(v.value_mut().resolver())
     }
 
-    fn scan_and_async_send(
+    async fn scan_and_async_send(
         &self,
         region: &Region,
         handle: &ObserveHandle,
@@ -397,44 +390,48 @@ where
             let mut events = ApplyEvents::with_capacity(1024, region.id);
             // Note: the call of `fill_entries` is the only step which would read the disk.
             //       we only need to record the disk throughput of this.
-            let (stat, disk_read) =
-                utils::with_record_read_throughput(|| event_loader.fill_entries());
-            // We must use the size of entry batch here to check whether we have progress.
-            // Or we may exit too early if there are only records:
-            // - can be inlined to `write` CF (hence it won't be written to default CF)
-            // - are prewritten. (hence it will only contains `Prewrite` records).
-            // In this condition, ALL records generate no ApplyEvent(only lock change),
-            // and we would exit after the first run of loop :(
-            let no_progress = event_loader.entry_batch.is_empty();
-            let stat = stat?;
+            let mut allocated = OwnedAllocated::new(Arc::clone(&self.quota));
+            let (res, disk_read) =
+                utils::with_record_read_throughput(|| event_loader.fill_entries(&mut allocated));
+            let res = res?;
             self.with_resolver(region, handle, |r| {
                 event_loader.emit_entries_to(&mut events, r)
             })?;
-            if no_progress {
-                metrics::INITIAL_SCAN_DURATION.observe(start.saturating_elapsed_secs());
-                return Ok(stats.stat);
-            }
-            stats.add_statistics(&stat);
+            stats.add_statistics(&res.statistics);
             let region_id = region.get_id();
             let sink = self.sink.clone();
             let event_size = events.size();
             let sched = self.scheduler.clone();
-            let permit = self.quota.pending(event_size);
-            self.limit.blocking_consume(disk_read as _);
+            self.limit.consume(disk_read as _).await;
             debug!("sending events to router"; "size" => %event_size, "region" => %region_id);
             metrics::INCREMENTAL_SCAN_SIZE.observe(event_size as f64);
             metrics::INCREMENTAL_SCAN_DISK_READ.inc_by(disk_read as f64);
             metrics::HEAP_MEMORY.add(event_size as _);
+            fail::fail_point!("scan_and_async_send::about_to_consume");
             join_handles.push(tokio::spawn(async move {
                 utils::handle_on_event_result(&sched, sink.on_events(events).await);
                 metrics::HEAP_MEMORY.sub(event_size as _);
+                drop(allocated);
                 debug!("apply event done"; "size" => %event_size, "region" => %region_id);
-                drop(permit);
             }));
+            if !res.more {
+                metrics::INITIAL_SCAN_DURATION.observe(start.saturating_elapsed_secs());
+                return Ok(stats.stat);
+            }
+            if res.out_of_memory {
+                futures::future::try_join_all(join_handles.drain(..))
+                    .await
+                    .map_err(|err| {
+                        annotate!(
+                            err,
+                            "failed to join tokio runtime during out-of-memory-quota"
+                        )
+                    })?;
+            }
         }
     }
 
-    pub fn do_initial_scan(
+    pub async fn do_initial_scan(
         &self,
         region: &Region,
         // We are using this handle for checking whether the initial scan is stale.
@@ -442,18 +439,25 @@ where
         start_ts: TimeStamp,
         snap: impl Snapshot,
     ) -> Result<Statistics> {
-        let _guard = self.handle.enter();
         let tr = self.tracing.clone();
         let region_id = region.get_id();
 
         let mut join_handles = Vec::with_capacity(8);
 
+        let permit = self
+            .concurrency_limit
+            .acquire()
+            .await
+            .expect("BUG: semaphore closed");
         // It is ok to sink more data than needed. So scan to +inf TS for convenance.
         let event_loader = EventLoader::load_from(snap, start_ts, TimeStamp::max(), region)?;
-        let stats = self.scan_and_async_send(region, &handle, event_loader, &mut join_handles)?;
+        let stats = self
+            .scan_and_async_send(region, &handle, event_loader, &mut join_handles)
+            .await?;
+        drop(permit);
 
-        Handle::current()
-            .block_on(futures::future::try_join_all(join_handles))
+        futures::future::try_join_all(join_handles)
+            .await
             .map_err(|err| annotate!(err, "tokio runtime failed to join consuming threads"))?;
 
         Self::with_resolver_by(&tr, region, &handle, |r| {
@@ -467,39 +471,17 @@ where
 
         Ok(stats)
     }
-
-    /// initialize a range: it simply scan the regions with leader role and send
-    /// them to [`initialize_region`].
-    pub fn initialize_range(&self, start_key: Vec<u8>, end_key: Vec<u8>) -> Result<()> {
-        let mut pager = RegionPager::scan_from(self.regions.clone(), start_key, end_key);
-        loop {
-            let regions = pager.next_page(8)?;
-            debug!("scanning for entries in region."; "regions" => ?regions);
-            if regions.is_empty() {
-                break;
-            }
-            for r in regions {
-                // Note: Even we did the initial scanning, and blocking resolved ts from
-                // advancing, if the next_backup_ts was updated in some extreme condition, there
-                // is still little chance to lost data: For example, if a region cannot elect
-                // the leader for long time. (say, net work partition) At that time, we have
-                // nowhere to record the lock status of this region.
-                try_send!(
-                    self.scheduler,
-                    Task::ModifyObserve(ObserveOp::Start { region: r.region })
-                );
-            }
-        }
-        Ok(())
-    }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use futures::executor::block_on;
     use kvproto::metapb::*;
     use tikv::storage::{txn::tests::*, TestEngineBuilder};
     use tikv_kv::SnapContext;
+    use tikv_util::memory::{MemoryQuota, OwnedAllocated};
     use txn_types::TimeStamp;
 
     use super::EventLoader;
@@ -529,10 +511,13 @@ mod tests {
 
         let snap = block_on(async { tikv_kv::snapshot(&mut engine, SnapContext::default()).await })
             .unwrap();
+        let quota_inf = Arc::new(MemoryQuota::new(usize::MAX));
         let mut loader =
             EventLoader::load_from(snap, TimeStamp::zero(), TimeStamp::max(), &r).unwrap();
 
-        let (r, data_load) = with_record_read_throughput(|| loader.fill_entries());
+        let (r, data_load) = with_record_read_throughput(|| {
+            loader.fill_entries(&mut OwnedAllocated::new(quota_inf))
+        });
         r.unwrap();
         let mut events = ApplyEvents::with_capacity(1024, 42);
         let mut res = TwoPhaseResolver::new(42, None);

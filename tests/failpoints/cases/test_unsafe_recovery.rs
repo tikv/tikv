@@ -527,3 +527,155 @@ fn test_unsafe_recovery_create_destroy_reentrancy() {
     assert_eq!(reported_region.get_peers()[0].get_id(), 102);
     fail::remove("on_handle_apply_store_1");
 }
+
+#[test]
+fn test_unsafe_recovery_rollback_merge() {
+    let mut cluster = new_server_cluster(0, 3);
+    cluster.cfg.raft_store.raft_store_max_leader_lease = ReadableDuration::millis(40);
+    cluster.cfg.raft_store.merge_check_tick_interval = ReadableDuration::millis(20);
+    cluster.run();
+    let nodes = Vec::from_iter(cluster.get_node_ids());
+    assert_eq!(nodes.len(), 3);
+
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+
+    for i in 0..10 {
+        cluster.must_put(format!("k{}", i).as_bytes(), b"v");
+    }
+
+    // Block merge commit, let go of the merge prepare.
+    fail::cfg("on_schedule_merge", "return()").unwrap();
+
+    let region = pd_client.get_region(b"k1").unwrap();
+    cluster.must_split(&region, b"k2");
+
+    let left = pd_client.get_region(b"k1").unwrap();
+    let right = pd_client.get_region(b"k2").unwrap();
+
+    // Makes the leadership definite.
+    let left_peer_2 = find_peer(&left, nodes[2]).unwrap().to_owned();
+    let right_peer_2 = find_peer(&right, nodes[2]).unwrap().to_owned();
+    cluster.must_transfer_leader(left.get_id(), left_peer_2);
+    cluster.must_transfer_leader(right.get_id(), right_peer_2);
+    cluster.must_try_merge(left.get_id(), right.get_id());
+
+    // Makes the group lose its quorum.
+    cluster.stop_node(nodes[1]);
+    cluster.stop_node(nodes[2]);
+    {
+        let put = new_put_cmd(b"k2", b"v2");
+        let req = new_request(
+            region.get_id(),
+            region.get_region_epoch().clone(),
+            vec![put],
+            true,
+        );
+        // marjority is lost, can't propose command successfully.
+        cluster
+            .call_command_on_leader(req, Duration::from_millis(10))
+            .unwrap_err();
+    }
+
+    cluster.must_enter_force_leader(left.get_id(), nodes[0], vec![nodes[1], nodes[2]]);
+    cluster.must_enter_force_leader(right.get_id(), nodes[0], vec![nodes[1], nodes[2]]);
+
+    // Construct recovery plan.
+    let mut plan = pdpb::RecoveryPlan::default();
+
+    let left_demote_peers: Vec<metapb::Peer> = left
+        .get_peers()
+        .iter()
+        .filter(|&peer| peer.get_store_id() != nodes[0])
+        .cloned()
+        .collect();
+    let mut left_demote = pdpb::DemoteFailedVoters::default();
+    left_demote.set_region_id(left.get_id());
+    left_demote.set_failed_voters(left_demote_peers.into());
+    let right_demote_peers: Vec<metapb::Peer> = right
+        .get_peers()
+        .iter()
+        .filter(|&peer| peer.get_store_id() != nodes[0])
+        .cloned()
+        .collect();
+    let mut right_demote = pdpb::DemoteFailedVoters::default();
+    right_demote.set_region_id(right.get_id());
+    right_demote.set_failed_voters(right_demote_peers.into());
+    plan.mut_demotes().push(left_demote);
+    plan.mut_demotes().push(right_demote);
+
+    // Triggers the unsafe recovery plan execution.
+    pd_client.must_set_unsafe_recovery_plan(nodes[0], plan.clone());
+    cluster.must_send_store_heartbeat(nodes[0]);
+
+    // Can't propose demotion as it's in merging mode
+    let mut store_report = None;
+    for _ in 0..20 {
+        store_report = pd_client.must_get_store_report(nodes[0]);
+        if store_report.is_some() {
+            break;
+        }
+        sleep_ms(100);
+    }
+    assert_ne!(store_report, None);
+    let has_force_leader = store_report
+        .unwrap()
+        .get_peer_reports()
+        .iter()
+        .any(|p| p.get_is_force_leader());
+    // Force leader is not exited due to demotion failure
+    assert!(has_force_leader);
+
+    fail::remove("on_schedule_merge");
+    fail::cfg("on_schedule_merge_ret_err", "return()").unwrap();
+
+    // Make sure merge check is scheduled, and rollback merge is triggered
+    sleep_ms(50);
+
+    // Re-triggers the unsafe recovery plan execution.
+    pd_client.must_set_unsafe_recovery_plan(nodes[0], plan);
+    cluster.must_send_store_heartbeat(nodes[0]);
+    let mut store_report = None;
+    for _ in 0..20 {
+        store_report = pd_client.must_get_store_report(nodes[0]);
+        if store_report.is_some() {
+            break;
+        }
+        sleep_ms(100);
+    }
+    assert_ne!(store_report, None);
+    // No force leader
+    for peer_report in store_report.unwrap().get_peer_reports() {
+        assert!(!peer_report.get_is_force_leader());
+    }
+
+    // Demotion is done
+    let mut demoted = false;
+    for _ in 0..10 {
+        let new_left = block_on(pd_client.get_region_by_id(left.get_id()))
+            .unwrap()
+            .unwrap();
+        let new_right = block_on(pd_client.get_region_by_id(right.get_id()))
+            .unwrap()
+            .unwrap();
+        assert_eq!(new_left.get_peers().len(), 3);
+        assert_eq!(new_right.get_peers().len(), 3);
+        demoted = new_left
+            .get_peers()
+            .iter()
+            .filter(|peer| peer.get_store_id() != nodes[0])
+            .all(|peer| peer.get_role() == metapb::PeerRole::Learner)
+            && new_right
+                .get_peers()
+                .iter()
+                .filter(|peer| peer.get_store_id() != nodes[0])
+                .all(|peer| peer.get_role() == metapb::PeerRole::Learner);
+        if demoted {
+            break;
+        }
+        sleep_ms(100);
+    }
+    assert_eq!(demoted, true);
+
+    fail::remove("on_schedule_merge_ret_err");
+}
