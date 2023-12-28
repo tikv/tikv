@@ -12,25 +12,26 @@ use crate::{
     RegionCacheMemoryEngine,
 };
 
-type RegionCacheMemoryEngineCorePtr = Arc<Mutex<RegionCacheMemoryEngineCore>>;
+// Type alias for shared memory engine core handle.
+type SharedMemoryEngineCore = Arc<Mutex<RegionCacheMemoryEngineCore>>;
 
 /// RegionCacheWriteBatch maintains its own in-memory buffer.
 #[derive(Clone)]
 pub struct RegionCacheWriteBatch {
     buffer: Vec<RegionCacheWriteBatchEntry>,
     sequence_number: Option<u64>,
-    core: RegionCacheMemoryEngineCorePtr,
+    core: SharedMemoryEngineCore,
 }
 
 impl RegionCacheWriteBatch {
-    pub fn new(core: &RegionCacheMemoryEngineCorePtr) -> Self {
+    pub fn new(core: &SharedMemoryEngineCore) -> Self {
         Self {
             buffer: Vec::new(),
             sequence_number: None,
             core: Arc::clone(core),
         }
     }
-    pub fn with_capacity(core: &RegionCacheMemoryEngineCorePtr, cap: usize) -> Self {
+    pub fn with_capacity(core: &SharedMemoryEngineCore, cap: usize) -> Self {
         Self {
             buffer: Vec::with_capacity(cap),
             sequence_number: None,
@@ -113,11 +114,11 @@ impl WriteBatch for RegionCacheWriteBatch {
     }
 
     fn count(&self) -> usize {
-        unimplemented!()
+        self.buffer.len()
     }
 
     fn is_empty(&self) -> bool {
-        unimplemented!()
+        self.buffer.is_empty()
     }
 
     fn should_write_to_engine(&self) -> bool {
@@ -125,7 +126,8 @@ impl WriteBatch for RegionCacheWriteBatch {
     }
 
     fn clear(&mut self) {
-        self.buffer.clear()
+        self.buffer.clear();
+        let _ = self.sequence_number.take();
     }
 
     fn set_save_point(&mut self) {
@@ -215,6 +217,34 @@ impl Mutable for RegionCacheWriteBatch {
             region_id,
             mutation: RegionCacheWriteBatchMutation::Delete,
         });
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use engine_traits::{Peekable, RegionCacheEngine};
+
+    use super::*;
+
+    #[test]
+    fn test_basic() -> Result<()> {
+        let engine = RegionCacheMemoryEngine::default();
+        engine.new_region(1);
+        {
+            let mut core = engine.core.lock().unwrap();
+            core.mut_region_meta(1).unwrap().set_can_read(true);
+        }
+        let mut wb = engine.write_batch();
+        let i = 0;
+        let key = format!("k{:08}", i);
+        let value = format!("v{:08}", i);
+        wb.put_region(1, key.as_bytes(), value.as_bytes())?;
+        wb.set_sequence_number(1)?;
+        wb.write_opt(&WriteOptions::default())?;
+        let snap = engine.snapshot(1, 5, u64::MAX).unwrap();
+        let v = snap.get_value(key.as_bytes())?;
+        assert_eq!(v.unwrap(), value.as_bytes());
         Ok(())
     }
 }
