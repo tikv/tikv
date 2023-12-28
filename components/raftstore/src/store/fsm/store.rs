@@ -1139,13 +1139,13 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
         }
         dur = self.timer.saturating_elapsed();
         if self.poll_ctx.has_ready {
-            if !self.poll_ctx.store_stat.is_busy {
+            if !self.poll_ctx.store_stat.raftstore_busy {
                 let election_timeout = Duration::from_millis(
                     self.poll_ctx.cfg.raft_base_tick_interval.as_millis()
                         * self.poll_ctx.cfg.raft_election_timeout_ticks as u64,
                 );
                 if dur >= election_timeout {
-                    self.poll_ctx.store_stat.is_busy = true;
+                    self.poll_ctx.store_stat.raftstore_busy = true;
                 }
             }
 
@@ -2570,7 +2570,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         let max_start_cpu_usage = self.ctx.cfg.periodic_full_compact_start_max_cpu;
         let global_stat = self.ctx.global_stat.clone();
         move || {
-            if global_stat.stat.is_busy.load(Ordering::SeqCst) {
+            if global_stat.stat.raftstore_busy.load(Ordering::SeqCst) {
                 warn!("full compaction may not run at this time, `is_busy` flag is true",);
                 return false;
             }
@@ -2746,13 +2746,25 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
                 .swap(0, Ordering::Relaxed),
         );
 
-        stats.set_is_busy(
-            self.ctx
-                .global_stat
-                .stat
-                .is_busy
-                .swap(false, Ordering::Relaxed),
-        );
+        let raftstore_busy = self
+            .ctx
+            .global_stat
+            .stat
+            .raftstore_busy
+            .swap(false, Ordering::Relaxed);
+        let applystore_busy = self
+            .ctx
+            .global_stat
+            .stat
+            .applystore_busy
+            .swap(false, Ordering::Relaxed);
+        STORE_RAFT_PROCESS_BUSY_GAUGE_VEC
+            .with_label_values(&["raftstore_busy"])
+            .set(raftstore_busy as i64);
+        STORE_RAFT_PROCESS_BUSY_GAUGE_VEC
+            .with_label_values(&["applystore_busy"])
+            .set(applystore_busy as i64);
+        stats.set_is_busy(raftstore_busy || applystore_busy);
 
         let mut query_stats = QueryStats::default();
         query_stats.set_put(
