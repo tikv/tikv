@@ -525,7 +525,9 @@ mod tests {
     use std::{sync::Arc, time::Duration};
 
     use futures::{executor::block_on, SinkExt};
-    use grpcio::{self, ChannelBuilder, EnvBuilder, Server, ServerBuilder, WriteFlags};
+    use grpcio::{
+        self, ChannelBuilder, EnvBuilder, Server, ServerBuilder, ServerCredentials, WriteFlags,
+    };
     use kvproto::cdcpb::{create_change_data, ChangeDataClient, ResolvedTs};
     use tikv_util::future::block_on_timeout;
 
@@ -539,9 +541,12 @@ mod tests {
         let env = Arc::new(EnvBuilder::new().build());
         let builder =
             ServerBuilder::new(env.clone()).register_service(create_change_data(cdc_service));
-        let mut server = builder.bind("127.0.0.1", 0).build().unwrap();
+        let mut server = builder.build().unwrap();
+        let addr = "127.0.0.1";
+        let port = server
+            .add_listening_port(format!("{}:{}", addr, 0), ServerCredentials::insecure())
+            .unwrap();
         server.start();
-        let (_, port) = server.bind_addrs().next().unwrap();
         let addr = format!("127.0.0.1:{}", port);
         let channel = ChannelBuilder::new(env).connect(&addr);
         let client = ChangeDataClient::new(channel);
@@ -597,14 +602,21 @@ mod tests {
         // Fill gRPC window.
         let window_size = must_fill_window();
         assert_ne!(window_size, 0);
-        // After receiving a message, sink should be able to send again.
+        // After fully filling gRPC window, sink is not valid until all pending
+        // messages are consumed.
         recv_timeout(&mut rx, Duration::from_millis(100))
             .unwrap()
             .unwrap()
             .unwrap();
-        block_on_timeout(send(), Duration::from_millis(100))
-            .unwrap()
-            .unwrap();
+        block_on_timeout(send(), Duration::from_millis(100)).unwrap_err();
+        // After all pending messages are counsumed, sink should be able to send again.
+        loop {
+            let res = recv_timeout(&mut rx, Duration::from_millis(100));
+            if res.is_err() {
+                break;
+            }
+            res.unwrap().unwrap().unwrap();
+        }
         // gRPC client may update window size after receiving a message,
         // though server should not be able to send messages infinitely.
         let window_size = must_fill_window();

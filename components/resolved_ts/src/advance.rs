@@ -35,10 +35,10 @@ use tikv_util::{
     sys::thread::ThreadBuildWrapper,
     time::{Instant, SlowTimer},
     timer::SteadyTimer,
-    worker::Scheduler,
+    worker::{RuntimeWrapper, Scheduler},
 };
 use tokio::{
-    runtime::{Builder, Runtime},
+    runtime::Builder,
     sync::{Mutex, Notify},
 };
 use txn_types::TimeStamp;
@@ -52,7 +52,7 @@ const DEFAULT_GRPC_MIN_MESSAGE_SIZE_TO_COMPRESS: usize = 4096;
 pub struct AdvanceTsWorker {
     pd_client: Arc<dyn PdClient>,
     timer: SteadyTimer,
-    worker: Runtime,
+    worker: RuntimeWrapper,
     scheduler: Scheduler<Task>,
     /// The concurrency manager for transactions. It's needed for CDC to check
     /// locks when calculating resolved_ts.
@@ -68,7 +68,7 @@ impl AdvanceTsWorker {
         scheduler: Scheduler<Task>,
         concurrency_manager: ConcurrencyManager,
     ) -> Self {
-        let worker = Builder::new_multi_thread()
+        let rt = Builder::new_multi_thread()
             .thread_name("advance-ts")
             .worker_threads(1)
             .enable_time()
@@ -78,7 +78,7 @@ impl AdvanceTsWorker {
         Self {
             scheduler,
             pd_client,
-            worker,
+            worker: RuntimeWrapper::from_runtime(rt),
             timer: SteadyTimer::default(),
             concurrency_manager,
             last_pd_tso: Arc::new(std::sync::Mutex::new(None)),
@@ -571,7 +571,7 @@ mod tests {
         time::Duration,
     };
 
-    use grpcio::{self, ChannelBuilder, EnvBuilder, Server, ServerBuilder};
+    use grpcio::{self, ChannelBuilder, EnvBuilder, Server, ServerBuilder, ServerCredentials};
     use kvproto::{metapb::Region, tikvpb::Tikv, tikvpb_grpc::create_tikv};
     use pd_client::PdClient;
     use raftstore::store::util::RegionReadProgress;
@@ -605,9 +605,12 @@ mod tests {
         let (tx, rx) = channel();
         let tikv_service = MockTikv { req_tx: tx };
         let builder = ServerBuilder::new(env.clone()).register_service(create_tikv(tikv_service));
-        let mut server = builder.bind("127.0.0.1", 0).build().unwrap();
+        let mut server = builder.build().unwrap();
+        let addr = "127.0.0.1";
+        let port = server
+            .add_listening_port(format!("{}:{}", addr, 0), ServerCredentials::insecure())
+            .unwrap();
         server.start();
-        let (_, port) = server.bind_addrs().next().unwrap();
         let addr = format!("127.0.0.1:{}", port);
         let channel = ChannelBuilder::new(env).connect(&addr);
         let client = TikvClient::new(channel);

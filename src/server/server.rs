@@ -54,7 +54,8 @@ pub const READPOOL_NORMAL_THREAD_PREFIX: &str = "store-read-norm";
 pub const STATS_THREAD_PREFIX: &str = "transport-stats";
 
 pub trait GrpcBuilderFactory {
-    fn create_builder(&self, env: Arc<Environment>) -> Result<ServerBuilder>;
+    fn create_builder(&mut self, env: Arc<Environment>) -> Result<ServerBuilder>;
+    fn bind(&mut self, sb: ServerBuilder) -> Result<(GrpcServer, SocketAddr)>;
 }
 
 struct BuilderFactory<S: Tikv + Send + Clone + 'static> {
@@ -87,9 +88,7 @@ impl<S> GrpcBuilderFactory for BuilderFactory<S>
 where
     S: Tikv + Send + Clone + 'static,
 {
-    fn create_builder(&self, env: Arc<Environment>) -> Result<ServerBuilder> {
-        let addr = SocketAddr::from_str(&self.cfg.value().addr)?;
-        let ip: String = format!("{}", addr.ip());
+    fn create_builder(&mut self, env: Arc<Environment>) -> Result<ServerBuilder> {
         let mem_quota = ResourceQuota::new(Some("ServerMemQuota"))
             .resize_memory(self.cfg.value().grpc_memory_pool_quota.0 as usize);
         let channel_args = ChannelBuilder::new(Arc::clone(&env))
@@ -107,7 +106,15 @@ where
             .channel_args(channel_args)
             .register_service(create_tikv(self.kv_service.clone()))
             .register_service(create_health(self.health_service.clone()));
-        Ok(self.security_mgr.bind(sb, &ip, addr.port()))
+        Ok(sb)
+    }
+
+    fn bind(&mut self, sb: ServerBuilder) -> Result<(GrpcServer, SocketAddr)> {
+        let addr = SocketAddr::from_str(&self.cfg.value().addr)?;
+        let ip: String = format!("{}", addr.ip());
+        let (server, port) = self.security_mgr.bind(sb, &ip, addr.port());
+        let addr = SocketAddr::new(IpAddr::from_str(&ip)?, port);
+        Ok((server, addr))
     }
 }
 
@@ -200,17 +207,17 @@ where
             cfg.value().reject_messages_on_memory_ratio,
             resource_manager,
         );
-        let builder_factory = Box::new(BuilderFactory::new(
+        let mut builder_factory = Box::new(BuilderFactory::new(
             kv_service,
             cfg.clone(),
             security_mgr.clone(),
             health_service.clone(),
         ));
-
+        let builder = Either::Left(builder_factory.create_builder(env.clone())?);
         let addr = SocketAddr::from_str(&cfg.value().addr)?;
+
         let mem_quota = ResourceQuota::new(Some("ServerMemQuota"))
             .resize_memory(cfg.value().grpc_memory_pool_quota.0 as usize);
-        let builder = Either::Left(builder_factory.create_builder(env.clone())?);
 
         let conn_builder = ConnectionBuilder::new(
             env.clone(),
@@ -287,9 +294,7 @@ where
     /// Build gRPC server and bind to address.
     pub fn build_and_bind(&mut self) -> Result<SocketAddr> {
         let sb = self.builder_or_server.take().unwrap().left().unwrap();
-        let server = sb.build()?;
-        let (host, port) = server.bind_addrs().next().unwrap();
-        let addr = SocketAddr::new(IpAddr::from_str(host)?, port);
+        let (server, addr) = self.builder_factory.bind(sb)?;
         self.local_addr = addr;
         self.builder_or_server = Some(Either::Right(server));
         Ok(addr)

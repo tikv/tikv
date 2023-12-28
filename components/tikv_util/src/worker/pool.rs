@@ -5,6 +5,7 @@ use std::{
     error::Error,
     fmt::{self, Debug, Display, Formatter},
     future::Future,
+    ops::Deref,
     sync::{
         atomic::{AtomicBool, AtomicUsize, Ordering},
         Arc,
@@ -530,6 +531,40 @@ impl Worker {
     }
 }
 
+/// RuntimeWrapper is a safe wrapper of tokio::runtime::Runtime, which can be
+/// safely introduced and used by callers. It's recommended to use
+/// RuntimeWrapper rather than directly use tokio::runtime::Runtime.
+pub struct RuntimeWrapper(Option<tokio::runtime::Runtime>);
+
+impl RuntimeWrapper {
+    #[inline]
+    pub fn from_runtime(rt: tokio::runtime::Runtime) -> Self {
+        Self(Some(rt))
+    }
+
+    #[inline]
+    pub fn shutdown(&mut self, timeout: Option<Duration>) {
+        let duration = timeout.unwrap_or(Duration::from_nanos(0));
+        self.0.take().unwrap().shutdown_timeout(duration);
+    }
+}
+
+impl Deref for RuntimeWrapper {
+    type Target = tokio::runtime::Runtime;
+
+    fn deref(&self) -> &Self::Target {
+        self.0.as_ref().unwrap()
+    }
+}
+
+impl Drop for RuntimeWrapper {
+    fn drop(&mut self) {
+        if let Some(rt) = self.0.take() {
+            rt.shutdown_background();
+        }
+    }
+}
+
 mod tests {
 
     use std::{
@@ -608,5 +643,46 @@ mod tests {
 
         // Handled task must be 3.
         assert_eq!(3, worker.metrics_handled_task_count.get());
+    }
+
+    #[test]
+    fn test_runtime_wrapper_shutdown() {
+        let rt = tokio::runtime::Runtime::new().expect("Failed to create runtime");
+        let mut wrapper = RuntimeWrapper::from_runtime(rt);
+
+        let count = Arc::new(AtomicU64::default());
+        // Run an asynchronous task to ensure the runtime is busy
+        let obj = count.clone();
+        block_on(wrapper.spawn(async move {
+            // Simulate some asynchronous work
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            obj.store(100, atomic::Ordering::SeqCst);
+        }))
+        .unwrap();
+        // Ensure the runtime is properly shut down
+        wrapper.shutdown(None);
+        assert_eq!(count.load(atomic::Ordering::SeqCst), 100);
+    }
+
+    #[test]
+    fn test_runtime_wrapper_shutdown_with_timeout() {
+        let rt = tokio::runtime::Runtime::new().expect("Failed to create runtime");
+        let mut wrapper = RuntimeWrapper::from_runtime(rt);
+
+        let count = Arc::new(AtomicU64::default());
+        // Run an asynchronous task to ensure the runtime is busy
+        let obj = count.clone();
+        let _ = wrapper.spawn(async move {
+            // Simulate some asynchronous work
+            tokio::task::spawn_blocking(move || {
+                std::thread::sleep(Duration::from_secs(10_000));
+                obj.store(100, atomic::Ordering::SeqCst);
+            });
+        });
+        // Shutdown the runtime with a short timeout
+        wrapper.shutdown(Some(Duration::from_millis(10)));
+        // Ensure the asynchronous task is not completed due to the short
+        // timeout
+        assert_ne!(count.load(atomic::Ordering::SeqCst), 100);
     }
 }

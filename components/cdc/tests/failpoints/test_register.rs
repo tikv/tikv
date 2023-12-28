@@ -286,7 +286,7 @@ fn test_merge_impl<F: KvFormat>() {
 }
 
 #[test]
-fn est_connections_registertest_deregister_pending_downstream() {
+fn test_connections_registertest_deregister_pending_downstream() {
     test_kv_format_impl!(test_deregister_pending_downstream_impl<ApiV1 ApiV2>);
 }
 

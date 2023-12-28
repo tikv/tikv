@@ -158,9 +158,12 @@ mod tests {
         let backup_service = super::Service::<RocksEngine, RocksEngine>::new(scheduler);
         let builder =
             ServerBuilder::new(env.clone()).register_service(create_backup(backup_service));
-        let mut server = builder.bind("127.0.0.1", 0).build().unwrap();
+        let mut server = builder.build().unwrap();
+        let addr = "127.0.0.1";
+        let port = server
+            .add_listening_port(format!("{}:{}", addr, 0), ServerCredentials::insecure())
+            .unwrap();
         server.start();
-        let (_, port) = server.bind_addrs().next().unwrap();
         let addr = format!("127.0.0.1:{}", port);
         let channel = ChannelBuilder::new(env).connect(&addr);
         let client = BackupClient::new(channel);

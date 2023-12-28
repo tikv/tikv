@@ -7,6 +7,8 @@ use std::{
     error::Error,
     fs::{self, File},
     io::Read,
+    net::{IpAddr, SocketAddr},
+    str::FromStr,
     sync::{Arc, Mutex},
     time::SystemTime,
 };
@@ -15,8 +17,8 @@ use collections::HashSet;
 use encryption::EncryptionConfig;
 use grpcio::{
     CertificateRequestType, Channel, ChannelBuilder, ChannelCredentialsBuilder, CheckResult,
-    RpcContext, RpcStatus, RpcStatusCode, ServerBuilder, ServerChecker, ServerCredentialsBuilder,
-    ServerCredentialsFetcher,
+    RpcContext, RpcStatus, RpcStatusCode, Server, ServerBuilder, ServerChecker, ServerCredentials,
+    ServerCredentialsBuilder, ServerCredentialsFetcher,
 };
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Default)]
@@ -163,31 +165,37 @@ impl SecurityManager {
                 .root_cert(ca)
                 .cert(cert, key)
                 .build();
-            cb.secure_connect(addr, cred)
+            cb.set_credentials(cred).connect(addr)
         }
     }
 
-    pub fn bind(&self, mut sb: ServerBuilder, addr: &str, port: u16) -> ServerBuilder {
+    pub fn gen_credentials(&self) -> ServerCredentials {
         if self.cfg.ca_path.is_empty() {
-            sb.bind(addr, port)
+            ServerCredentials::insecure()
         } else {
-            if !self.cfg.cert_allowed_cn.is_empty() {
-                let cn_checker = CnChecker {
-                    allowed_cn: Arc::new(self.cfg.cert_allowed_cn.clone()),
-                };
-                sb = sb.add_checker(cn_checker);
-            }
             let fetcher = Box::new(Fetcher {
                 cfg: self.cfg.clone(),
                 last_modified_time: Arc::new(Mutex::new(None)),
             });
-            sb.bind_with_fetcher(
-                addr,
-                port,
+            ServerCredentials::with_fetcher(
                 fetcher,
                 CertificateRequestType::RequestAndRequireClientCertificateAndVerify,
             )
         }
+    }
+
+    pub fn bind(&self, mut sb: ServerBuilder, addr: &str, port: u16) -> (Server, u16) {
+        let addr = format!("{}", SocketAddr::new(IpAddr::from_str(addr).unwrap(), port));
+        let creds = self.gen_credentials();
+        if !self.cfg.ca_path.is_empty() && !self.cfg.cert_allowed_cn.is_empty() {
+            let cn_checker = CnChecker {
+                allowed_cn: Arc::new(self.cfg.cert_allowed_cn.clone()),
+            };
+            sb = sb.add_checker(cn_checker);
+        }
+        let mut server = sb.build().unwrap();
+        let port = server.add_listening_port(addr, creds).unwrap();
+        (server, port)
     }
 
     pub fn get_config(&self) -> &SecurityConfig {

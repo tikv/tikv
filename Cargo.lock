@@ -2226,16 +2226,16 @@ dependencies = [
 
 [[package]]
 name = "grpcio"
-version = "0.10.4"
+version = "0.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1f2506de56197d01821c2d1d21082d2dcfd6c82d7a1d6e04d33f37aab6130632"
+checksum = "9e398946b5721d72478eb647260a1b7c1d5f70f0de35399846c3913bd369a33e"
 dependencies = [
  "futures-executor",
  "futures-util",
  "grpcio-sys",
  "libc 0.2.146",
  "log",
- "parking_lot 0.11.1",
+ "parking_lot 0.12.1",
  "protobuf",
 ]
 
@@ -2250,9 +2250,9 @@ dependencies = [
 
 [[package]]
 name = "grpcio-health"
-version = "0.10.4"
+version = "0.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a37eae605cd21f144b7c7fd0e64e57af9f73d132756fef5b706db110c3ec7ea0"
+checksum = "b10ab95750a1f45c99cc5fc22c6299f0a65c5d73788b5cac5d1d056e4dc249d0"
 dependencies = [
  "futures-executor",
  "futures-util",
@@ -2263,9 +2263,9 @@ dependencies = [
 
 [[package]]
 name = "grpcio-sys"
-version = "0.10.3+1.44.0-patched"
+version = "0.13.0+1.56.2-patched"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f23adc509a3c4dea990e0ab8d2add4a65389ee69c288b7851d75dd1df7a6d6c6"
+checksum = "b3dae9132320ae1b03ea55b5ddc88ca72a31fb85fa631a241a40157f5feffe43"
 dependencies = [
  "bindgen 0.59.2",
  "cc",

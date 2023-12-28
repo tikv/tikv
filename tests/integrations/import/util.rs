@@ -97,17 +97,16 @@ pub fn open_cluster_and_tikv_import_client(
     let ch = {
         let env = Arc::new(Environment::new(1));
         let node = ctx.get_peer().get_store_id();
-        let builder = ChannelBuilder::new(env)
+        let mut builder = ChannelBuilder::new(env)
             .http2_max_ping_strikes(i32::MAX) // For pings without data from clients.
             .keepalive_time(cluster.cfg.server.grpc_keepalive_time.into())
             .keepalive_timeout(cluster.cfg.server.grpc_keepalive_timeout.into());
 
         if cfg.security != SecurityConfig::default() {
             let creds = test_util::new_channel_cred();
-            builder.secure_connect(&cluster.sim.rl().get_addr(node), creds)
-        } else {
-            builder.connect(&cluster.sim.rl().get_addr(node))
+            builder = builder.set_credentials(creds);
         }
+        builder.connect(&cluster.sim.rl().get_addr(node))
     };
     let tikv = TikvClient::new(ch.clone());
     let import = ImportSstClient::new(ch);
@@ -137,17 +136,16 @@ pub fn open_cluster_and_tikv_import_client_v2(
     let ch = {
         let env = Arc::new(Environment::new(1));
         let node = ctx.get_peer().get_store_id();
-        let builder = ChannelBuilder::new(env)
+        let mut builder = ChannelBuilder::new(env)
             .http2_max_ping_strikes(i32::MAX) // For pings without data from clients.
             .keepalive_time(cluster.cfg.server.grpc_keepalive_time.into())
             .keepalive_timeout(cluster.cfg.server.grpc_keepalive_timeout.into());
 
         if cfg.security != SecurityConfig::default() {
             let creds = test_util::new_channel_cred();
-            builder.secure_connect(&cluster.sim.rl().get_addr(node), creds)
-        } else {
-            builder.connect(&cluster.sim.rl().get_addr(node))
+            builder = builder.set_credentials(creds);
         }
+        builder.connect(&cluster.sim.rl().get_addr(node))
     };
     let tikv = TikvClient::new(ch.clone());
     let import = ImportSstClient::new(ch);

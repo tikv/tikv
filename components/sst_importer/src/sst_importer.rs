@@ -40,12 +40,10 @@ use tikv_util::{
     future::RescheduleChecker,
     sys::{thread::ThreadBuildWrapper, SysQuota},
     time::{Instant, Limiter},
+    worker::RuntimeWrapper,
     Either, HandyRwLock,
 };
-use tokio::{
-    runtime::{Handle, Runtime},
-    sync::OnceCell,
-};
+use tokio::{runtime::Handle, sync::OnceCell};
 use txn_types::{Key, TimeStamp, WriteRef};
 
 use crate::{
@@ -162,7 +160,7 @@ pub struct SstImporter<E: KvEngine> {
 
     cached_storage: CacheMap<StorageBackend>,
     // We need to keep reference to the runtime so background tasks won't be dropped.
-    _download_rt: Runtime,
+    _download_rt: RuntimeWrapper,
     file_locks: Arc<DashMap<String, (CacheKvFile, Instant)>>,
     mem_use: Arc<AtomicU64>,
     mem_limit: Arc<AtomicU64>,
@@ -216,7 +214,7 @@ impl<E: KvEngine> SstImporter<E> {
             compression_types: HashMap::with_capacity(2),
             file_locks: Arc::new(DashMap::default()),
             cached_storage,
-            _download_rt: download_rt,
+            _download_rt: RuntimeWrapper::from_runtime(download_rt),
             mem_use: Arc::new(AtomicU64::new(0)),
             mem_limit: Arc::new(AtomicU64::new(memory_limit)),
         })
