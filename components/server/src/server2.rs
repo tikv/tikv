@@ -291,8 +291,8 @@ where
             EnvBuilder::new()
                 .cq_count(config.server.grpc_concurrency)
                 .name_prefix(thd_name!(GRPC_THREAD_PREFIX))
-                .after_start(|| {
-                    tikv_util::thread_group::set_properties(props);
+                .after_start(move || {
+                    tikv_util::thread_group::set_properties(props.clone());
 
                     // SAFETY: we will call `remove_thread_memory_accessor` at before_stop.
                     unsafe { add_thread_memory_accessor() };
