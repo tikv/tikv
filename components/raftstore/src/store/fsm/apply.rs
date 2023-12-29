@@ -1819,7 +1819,7 @@ where
         let (key, value) = (req.get_put().get_key(), req.get_put().get_value());
         // region key range has no data prefix, so we must use origin key to check.
         util::check_key_in_region(key, &self.region)?;
-        let region_id = self.region_id();
+        let region_id = 1; // Simplify everything.
         if let Some(s) = self.buckets.as_mut() {
             s.write_key(key, value.len() as u64);
         }
@@ -1870,7 +1870,7 @@ where
         let key = req.get_delete().get_key();
         // region key range has no data prefix, so we must use origin key to check.
         util::check_key_in_region(key, &self.region)?;
-        let region_id = self.region_id();
+        let region_id = 1; // simplify
         if let Some(s) = self.buckets.as_mut() {
             s.write_key(key, 0);
         }

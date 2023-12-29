@@ -710,8 +710,15 @@ impl KvEngineBuilder for RocksEngine {
 }
 
 impl KvEngineBuilder for HybridEngine<RocksEngine, RegionCacheMemoryEngine> {
-    fn build(_disk_engine: RocksEngine) -> Self {
-        unimplemented!()
+    fn build(disk_engine: RocksEngine) -> Self {
+        let cache_engine = RegionCacheMemoryEngine::default();
+        // TODO this needs to be done for all regions
+        cache_engine.new_region(1);
+        {
+            let mut core = cache_engine.core().lock().unwrap();
+            core.mut_region_meta(1).unwrap().set_can_read(true);
+        }
+        HybridEngine::new(disk_engine, cache_engine)
     }
 }
 

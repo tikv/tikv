@@ -1,8 +1,8 @@
 // Copyright 2023 TiKV Project Authors. Licensed under Apache-2.0.
 
 use engine_traits::{
-    KvEngine, Peekable, ReadOptions, RegionCacheEngine, Result, SnapshotContext, SnapshotMiscExt,
-    SyncMutable,
+    KvEngine, Mutable, Peekable, ReadOptions, RegionCacheEngine, Result, SnapshotContext,
+    SnapshotMiscExt, SyncMutable, WriteBatch, WriteBatchExt, WriteOptions,
 };
 
 use crate::snapshot::HybridEngineSnapshot;
@@ -123,27 +123,45 @@ where
     EC: RegionCacheEngine,
 {
     fn put(&self, key: &[u8], value: &[u8]) -> Result<()> {
-        unimplemented!()
+        let mut batch = self.write_batch_with_cap(1);
+        batch.put_region(1, key, value)?;
+        let _ = batch.write_opt(&WriteOptions::default())?;
+        Ok(())
     }
 
     fn put_cf(&self, cf: &str, key: &[u8], value: &[u8]) -> Result<()> {
-        unimplemented!()
+        let mut batch = self.write_batch_with_cap(1);
+        batch.put_region_cf(1, cf, key, value)?;
+        let _ = batch.write_opt(&WriteOptions::default())?;
+        Ok(())
     }
 
     fn delete(&self, key: &[u8]) -> Result<()> {
-        unimplemented!()
+        let mut batch = self.write_batch_with_cap(1);
+        batch.delete_region(1, key)?;
+        let _ = batch.write_opt(&WriteOptions::default())?;
+        Ok(())
     }
 
     fn delete_cf(&self, cf: &str, key: &[u8]) -> Result<()> {
-        unimplemented!()
+        let mut batch = self.write_batch_with_cap(1);
+        batch.delete_region(1, key)?;
+        let _ = batch.write_opt(&WriteOptions::default())?;
+        Ok(())
     }
 
     fn delete_range(&self, begin_key: &[u8], end_key: &[u8]) -> Result<()> {
-        unimplemented!()
+        let mut batch = self.write_batch_with_cap(1);
+        batch.delete_range(begin_key, end_key)?;
+        let _ = batch.write_opt(&WriteOptions::default())?;
+        Ok(())
     }
 
     fn delete_range_cf(&self, cf: &str, begin_key: &[u8], end_key: &[u8]) -> Result<()> {
-        unimplemented!()
+        let mut batch = self.write_batch_with_cap(1);
+        batch.delete_range_cf(cf, begin_key, end_key)?;
+        let _ = batch.write_opt(&WriteOptions::default())?;
+        Ok(())
     }
 }
 

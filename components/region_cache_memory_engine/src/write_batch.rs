@@ -147,9 +147,9 @@ impl WriteBatch for RegionCacheWriteBatch {
     }
 
     fn set_sequence_number(&mut self, seq: u64) -> Result<()> {
-        if let Some(seqno) = self.sequence_number {
-            return Err(box_err!("Sequence number {} already set", seqno));
-        };
+        // if let Some(seqno) = self.sequence_number {
+        //     return Err(box_err!("Sequence number {} already set", seqno));
+        // };
         self.sequence_number = Some(seq);
         Ok(())
     }

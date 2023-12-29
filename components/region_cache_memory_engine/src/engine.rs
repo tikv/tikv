@@ -13,7 +13,7 @@ use collections::HashMap;
 use engine_rocks::{raw::SliceTransform, util::FixedSuffixSliceTransform};
 use engine_traits::{
     CfNamesExt, DbVector, Error, IterOptions, Iterable, Iterator, Peekable, ReadOptions,
-    RegionCacheEngine, Result, Snapshot, SnapshotMiscExt, CF_DEFAULT, CF_LOCK, CF_WRITE,
+    RegionCacheEngine, Result, Snapshot, SnapshotMiscExt, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE,
 };
 use skiplist_rs::{IterRef, Skiplist};
 use tikv_util::config::ReadableSize;
@@ -28,6 +28,7 @@ pub(crate) fn cf_to_id(cf: &str) -> usize {
         CF_DEFAULT => 0,
         CF_LOCK => 1,
         CF_WRITE => 2,
+        CF_RAFT => 3,
         _ => panic!("unrecognized cf {}", cf),
     }
 }
@@ -38,13 +39,18 @@ pub(crate) fn cf_to_id(cf: &str) -> usize {
 /// with a formal implementation.
 #[derive(Clone)]
 pub struct RegionMemoryEngine {
-    pub(crate) data: [Arc<Skiplist<InternalKeyComparator>>; 3],
+    pub(crate) data: [Arc<Skiplist<InternalKeyComparator>>; 4],
 }
 
 impl RegionMemoryEngine {
     pub fn with_capacity(arena_size: usize) -> Self {
         RegionMemoryEngine {
             data: [
+                Arc::new(Skiplist::with_capacity(
+                    InternalKeyComparator::default(),
+                    arena_size,
+                    true,
+                )),
                 Arc::new(Skiplist::with_capacity(
                     InternalKeyComparator::default(),
                     arena_size,

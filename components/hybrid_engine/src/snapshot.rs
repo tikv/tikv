@@ -7,8 +7,6 @@ use engine_traits::{
     Snapshot, SnapshotMiscExt,
 };
 
-use crate::engine_iterator::HybridEngineIterator;
-
 pub struct HybridEngineSnapshot<EK, EC>
 where
     EK: KvEngine,
@@ -57,10 +55,10 @@ where
     EK: KvEngine,
     EC: RegionCacheEngine,
 {
-    type Iterator = HybridEngineIterator<EK, EC>;
+    type Iterator = <<EK as KvEngine>::Snapshot as Iterable>::Iterator;
 
     fn iterator_opt(&self, cf: &str, opts: IterOptions) -> Result<Self::Iterator> {
-        unimplemented!()
+        self.disk_snap.iterator_opt(cf, opts)
     }
 }
 
@@ -69,10 +67,10 @@ where
     EK: KvEngine,
     EC: RegionCacheEngine,
 {
-    type DbVector = EK::DbVector;
+    type DbVector = <<EK as KvEngine>::Snapshot as Peekable>::DbVector;
 
     fn get_value_opt(&self, opts: &ReadOptions, key: &[u8]) -> Result<Option<Self::DbVector>> {
-        unimplemented!()
+        self.disk_snap.get_value_opt(opts, key)
     }
 
     fn get_value_cf_opt(
@@ -81,7 +79,7 @@ where
         cf: &str,
         key: &[u8],
     ) -> Result<Option<Self::DbVector>> {
-        unimplemented!()
+        self.disk_snap.get_value_cf_opt(opts, cf, key)
     }
 }
 

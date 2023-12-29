@@ -53,38 +53,39 @@ impl<EK: KvEngine, EC: RegionCacheEngine> WriteBatch for HybridEngineWriteBatch<
     }
 
     fn data_size(&self) -> usize {
-        unimplemented!()
+        self.disk_write_batch.data_size()
     }
 
     fn count(&self) -> usize {
-        unimplemented!()
+        self.disk_write_batch.count()
     }
 
     fn is_empty(&self) -> bool {
-        unimplemented!()
+        self.disk_write_batch.is_empty()
     }
 
     fn should_write_to_engine(&self) -> bool {
-        unimplemented!()
+        self.disk_write_batch.should_write_to_engine()
     }
 
     fn clear(&mut self) {
-        unimplemented!()
+        self.disk_write_batch.clear();
+        self.cache_write_batch.clear()
     }
 
     fn set_save_point(&mut self) {
-        unimplemented!()
+        self.disk_write_batch.set_save_point()
     }
 
     fn pop_save_point(&mut self) -> Result<()> {
-        unimplemented!()
+        self.disk_write_batch.pop_save_point()
     }
 
     fn rollback_to_save_point(&mut self) -> Result<()> {
-        unimplemented!()
+        self.disk_write_batch.rollback_to_save_point()
     }
 
-    fn merge(&mut self, _other: Self) -> Result<()> {
+    fn merge(&mut self, other: Self) -> Result<()> {
         unimplemented!()
     }
 
@@ -94,28 +95,29 @@ impl<EK: KvEngine, EC: RegionCacheEngine> WriteBatch for HybridEngineWriteBatch<
 }
 
 impl<EK: KvEngine, EC: RegionCacheEngine> Mutable for HybridEngineWriteBatch<EK, EC> {
-    fn put(&mut self, _key: &[u8], _value: &[u8]) -> Result<()> {
-        unimplemented!()
+    fn put(&mut self, key: &[u8], value: &[u8]) -> Result<()> {
+        self.put_region(1, key, value)
     }
 
-    fn put_cf(&mut self, _cf: &str, _key: &[u8], _value: &[u8]) -> Result<()> {
-        unimplemented!()
+    fn put_cf(&mut self, cf: &str, key: &[u8], value: &[u8]) -> Result<()> {
+        self.put_region_cf(1, cf, key, value)
     }
 
-    fn delete(&mut self, _key: &[u8]) -> Result<()> {
-        unimplemented!()
+    fn delete(&mut self, key: &[u8]) -> Result<()> {
+        self.delete_region(1, key)
     }
 
-    fn delete_cf(&mut self, _cf: &str, _key: &[u8]) -> Result<()> {
-        unimplemented!()
+    fn delete_cf(&mut self, cf: &str, key: &[u8]) -> Result<()> {
+        self.delete_region_cf(1, cf, key)
     }
 
-    fn delete_range(&mut self, _begin_key: &[u8], _end_key: &[u8]) -> Result<()> {
-        unimplemented!()
+    fn delete_range(&mut self, begin_key: &[u8], end_key: &[u8]) -> Result<()> {
+        self.disk_write_batch.delete_range(begin_key, end_key)
     }
 
-    fn delete_range_cf(&mut self, _cf: &str, _begin_key: &[u8], _end_key: &[u8]) -> Result<()> {
-        unimplemented!()
+    fn delete_range_cf(&mut self, cf: &str, begin_key: &[u8], end_key: &[u8]) -> Result<()> {
+        self.disk_write_batch
+            .delete_range_cf(cf, begin_key, end_key)
     }
 
     fn put_region(&mut self, region_id: u64, key: &[u8], value: &[u8]) -> Result<()> {
