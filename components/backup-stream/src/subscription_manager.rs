@@ -535,6 +535,7 @@ where
         handle: Option<ObserveHandle>,
     ) {
         let tx = self.messenger.upgrade();
+        let region_id = region.id;
         if tx.is_none() {
             warn!(
                 "log backup subscription manager: cannot upgrade self-sender, are we shutting down?"
@@ -542,15 +543,17 @@ where
             return;
         }
         let tx = tx.unwrap();
-        tokio::spawn(async move {
+        let scheduled = async move {
             tokio::time::sleep(backoff).await;
             let handle = handle.unwrap_or_else(|| ObserveHandle::new());
             if let Err(err) = tx.send(ObserveOp::Start { region, handle }).await {
                 warn!("log backup failed to schedule start observe."; "err" => %err);
             }
-        });
+        };
+        tokio::spawn(root!("scheduled_subscription"; scheduled; "after" = ?backoff, region_id));
     }
 
+    #[instrument(skip_all, fields(id = region.id))]
     async fn refresh_resolver(&self, region: &Region) {
         let need_refresh_all = !self.subs.try_update_region(region);
 
