@@ -215,7 +215,9 @@ make_static_metric! {
     pub label_enum RaftEventDurationType {
         compact_check,
         periodic_full_compact,
+        load_metrics_window,
         pd_store_heartbeat,
+        pd_report_min_resolved_ts,
         snap_gc,
         compact_lock_cf,
         consistency_check,
@@ -658,6 +660,11 @@ lazy_static! {
             "tikv_raftstore_leader_missing",
             "Total number of leader missed region."
         ).unwrap();
+
+    pub static ref CHECK_STALE_PEER_COUNTER: IntCounter = register_int_counter!(
+        "tikv_raftstore_check_stale_peer",
+        "Total number of checking stale peers."
+    ).unwrap();
 
     pub static ref INGEST_SST_DURATION_SECONDS: Histogram =
         register_histogram!(

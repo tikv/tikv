@@ -18,6 +18,8 @@ use tikv_util::{
     warn, worker::Scheduler,
 };
 use tokio::sync::mpsc::{channel, error::SendError, Receiver, Sender, WeakSender};
+use tracing::instrument;
+use tracing_active_tree::root;
 use txn_types::TimeStamp;
 
 use crate::{
@@ -186,6 +188,7 @@ where
 
 impl ScanCmd {
     /// execute the initial scanning via the specificated [`InitialDataLoader`].
+    #[instrument(skip_all)]
     async fn exec_by(&self, initial_scan: impl InitialScan) -> Result<()> {
         let Self {
             region,
@@ -221,7 +224,9 @@ async fn scan_executor_loop(init: impl InitialScan, mut cmds: Receiver<ScanCmd>)
         }
 
         let init = init.clone();
-        tokio::task::spawn(async move {
+        let id = cmd.region.id;
+        let handle_id = cmd.handle.id;
+        tokio::task::spawn(root!("exec_initial_scan"; async move {
             metrics::PENDING_INITIAL_SCAN_LEN
                 .with_label_values(&["executing"])
                 .inc();
@@ -243,7 +248,7 @@ async fn scan_executor_loop(init: impl InitialScan, mut cmds: Receiver<ScanCmd>)
             metrics::PENDING_INITIAL_SCAN_LEN
                 .with_label_values(&["executing"])
                 .dec();
-        });
+        }; region = id, handle = ?handle_id));
     }
 }
 
@@ -380,6 +385,7 @@ where
     }
 
     /// the handler loop.
+    #[instrument(skip_all)]
     async fn region_operator_loop<E, RT>(
         mut self,
         mut message_box: Receiver<ObserveOp>,
@@ -588,6 +594,7 @@ where
         }
     }
 
+    #[instrument(skip_all)]
     async fn try_start_observe(&self, region: &Region, handle: ObserveHandle) -> Result<()> {
         match self.find_task_by_region(region) {
             None => {
@@ -640,6 +647,7 @@ where
         }
     }
 
+    #[instrument(skip_all)]
     async fn check_not_stale(&self, region: &Region, handle: &ObserveHandle) -> Result<bool> {
         let (tx, rx) = tokio::sync::oneshot::channel();
         self.regions
@@ -727,6 +735,7 @@ where
         Ok(true)
     }
 
+    #[instrument(skip_all)]
     async fn get_last_checkpoint_of(&self, task: &str, region: &Region) -> Result<TimeStamp> {
         fail::fail_point!("get_last_checkpoint_of", |hint| Err(Error::Other(
             box_err!(
@@ -747,6 +756,7 @@ where
         Ok(cp.ts)
     }
 
+    #[instrument(skip_all)]
     async fn spawn_scan(&self, cmd: ScanCmd) {
         // we should not spawn initial scanning tasks to the tokio blocking pool
         // because it is also used for converting sync File I/O to async. (for now!)
@@ -761,6 +771,7 @@ where
         }
     }
 
+    #[instrument(skip_all)]
     async fn observe_over_with_initial_data_from_checkpoint(
         &self,
         region: &Region,

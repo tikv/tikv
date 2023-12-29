@@ -44,6 +44,8 @@ use tokio::{
     sync::{Mutex, RwLock},
 };
 use tokio_util::compat::TokioAsyncReadCompatExt;
+use tracing::instrument;
+use tracing_active_tree::frame;
 use txn_types::{Key, Lock, TimeStamp, WriteRef};
 
 use super::errors::Result;
@@ -61,12 +63,18 @@ use crate::{
 
 const FLUSH_FAILURE_BECOME_FATAL_THRESHOLD: usize = 30;
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub enum TaskSelector {
     ByName(String),
     ByKey(Vec<u8>),
     ByRange(Vec<u8>, Vec<u8>),
     All,
+}
+
+impl std::fmt::Debug for TaskSelector {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.reference().fmt(f)
+    }
 }
 
 impl TaskSelector {
@@ -80,12 +88,30 @@ impl TaskSelector {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy)]
 pub enum TaskSelectorRef<'a> {
     ByName(&'a str),
     ByKey(&'a [u8]),
     ByRange(&'a [u8], &'a [u8]),
     All,
+}
+
+impl<'a> std::fmt::Debug for TaskSelectorRef<'a> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::ByName(name) => f.debug_tuple("ByName").field(name).finish(),
+            Self::ByKey(key) => f
+                .debug_tuple("ByKey")
+                .field(&format_args!("{}", utils::redact(key)))
+                .finish(),
+            Self::ByRange(start, end) => f
+                .debug_tuple("ByRange")
+                .field(&format_args!("{}", utils::redact(start)))
+                .field(&format_args!("{}", utils::redact(end)))
+                .finish(),
+            Self::All => write!(f, "All"),
+        }
+    }
 }
 
 impl<'a> TaskSelectorRef<'a> {
@@ -453,8 +479,7 @@ impl RouterInner {
         let cfg = self.tempfile_config_for_task(&task);
         let stream_task =
             StreamTaskInfo::new(task, ranges.clone(), merged_file_size_limit, cfg).await?;
-        self.tasks
-            .lock()
+        frame!(self.tasks.lock())
             .await
             .insert(task_name.clone(), Arc::new(stream_task));
 
@@ -481,7 +506,7 @@ impl RouterInner {
     }
 
     pub async fn unregister_task(&self, task_name: &str) -> Option<StreamBackupTaskInfo> {
-        self.tasks.lock().await.remove(task_name).map(|t| {
+        frame!(self.tasks.lock()).await.remove(task_name).map(|t| {
             info!(
                 "backup stream unregister task";
                 "task" => task_name,
@@ -497,8 +522,9 @@ impl RouterInner {
         r.get_value_by_point(key).cloned()
     }
 
+    #[instrument(skip(self))]
     pub async fn select_task(&self, selector: TaskSelectorRef<'_>) -> Vec<String> {
-        let s = self.tasks.lock().await;
+        let s = frame!(self.tasks.lock()).await;
         s.iter()
             .filter(|(name, info)| {
                 selector.matches(
@@ -524,8 +550,9 @@ impl RouterInner {
         tasks.insert(task_name.to_owned(), Arc::new(raw));
     }
 
+    #[instrument(skip(self))]
     pub async fn get_task_info(&self, task_name: &str) -> Result<Arc<StreamTaskInfo>> {
-        let task_info = match self.tasks.lock().await.get(task_name) {
+        let task_info = match frame!(self.tasks.lock()).await.get(task_name) {
             Some(t) => t.clone(),
             None => {
                 info!("backup stream no task"; "task" => ?task_name);
@@ -537,6 +564,7 @@ impl RouterInner {
         Ok(task_info)
     }
 
+    #[instrument(skip_all, fields(task))]
     async fn on_event(&self, task: String, events: ApplyEvents) -> Result<()> {
         let task_info = self.get_task_info(&task).await?;
         task_info.on_events(events).await?;
@@ -585,6 +613,7 @@ impl RouterInner {
 
     /// flush the specified task, once once success, return the min resolved ts
     /// of this flush. returns `None` if failed.
+    #[instrument(skip(self, resolve_to))]
     pub async fn do_flush(
         &self,
         task_name: &str,
@@ -621,6 +650,7 @@ impl RouterInner {
         }
     }
 
+    #[instrument(skip(self))]
     pub async fn update_global_checkpoint(
         &self,
         task_name: &str,
@@ -634,6 +664,7 @@ impl RouterInner {
     }
 
     /// tick aims to flush log/meta to extern storage periodically.
+    #[instrument(skip_all)]
     pub async fn tick(&self) {
         let max_flush_interval = self.max_flush_interval.rl().to_owned();
 
@@ -832,6 +863,28 @@ pub struct StreamTaskInfo {
     temp_file_pool: Arc<TempFilePool>,
 }
 
+impl Drop for StreamTaskInfo {
+    fn drop(&mut self) {
+        let (success, failed): (Vec<_>, Vec<_>) = self
+            .flushing_files
+            .get_mut()
+            .drain(..)
+            .chain(self.flushing_meta_files.get_mut().drain(..))
+            .map(|(_, f, _)| f.inner.path().to_owned())
+            .map(|p| self.temp_file_pool.remove(&p))
+            .partition(|r| *r);
+        info!("stream task info dropped[1/2], removing flushing_temp files"; "success" => %success.len(), "failure" => %failed.len());
+        let (success, failed): (Vec<_>, Vec<_>) = self
+            .files
+            .get_mut()
+            .drain()
+            .map(|(_, f)| f.into_inner().inner.path().to_owned())
+            .map(|p| self.temp_file_pool.remove(&p))
+            .partition(|r| *r);
+        info!("stream task info dropped[2/2], removing temp files"; "success" => %success.len(), "failure" => %failed.len());
+    }
+}
+
 impl std::fmt::Debug for StreamTaskInfo {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("StreamTaskInfo")
@@ -876,16 +929,19 @@ impl StreamTaskInfo {
         })
     }
 
+    #[instrument(skip(self, events), fields(event_len = events.len()))]
     async fn on_events_of_key(&self, key: TempFileKey, events: ApplyEvents) -> Result<()> {
         fail::fail_point!("before_generate_temp_file");
-        if let Some(f) = self.files.read().await.get(&key) {
-            self.total_size
-                .fetch_add(f.lock().await.on_events(events).await?, Ordering::SeqCst);
+        if let Some(f) = frame!(self.files.read()).await.get(&key) {
+            self.total_size.fetch_add(
+                frame!(f.lock()).await.on_events(events).await?,
+                Ordering::SeqCst,
+            );
             return Ok(());
         }
 
         // slow path: try to insert the element.
-        let mut w = self.files.write().await;
+        let mut w = frame!(self.files.write()).await;
         // double check before insert. there may be someone already insert that
         // when we are waiting for the write lock.
         // silence the lint advising us to use the `Entry` API which may introduce
@@ -898,14 +954,17 @@ impl StreamTaskInfo {
         }
 
         let f = w.get(&key).unwrap();
-        self.total_size
-            .fetch_add(f.lock().await.on_events(events).await?, Ordering::SeqCst);
+        self.total_size.fetch_add(
+            frame!(f.lock()).await.on_events(events).await?,
+            Ordering::SeqCst,
+        );
         fail::fail_point!("after_write_to_file");
         Ok(())
     }
 
     /// Append a event to the files. This wouldn't trigger `fsync` syscall.
     /// i.e. No guarantee of persistence.
+    #[instrument(skip_all)]
     pub async fn on_events(&self, kv: ApplyEvents) -> Result<()> {
         use futures::FutureExt;
         let now = Instant::now_coarse();
@@ -931,6 +990,7 @@ impl StreamTaskInfo {
     }
 
     /// Flush all template files and generate corresponding metadata.
+    #[instrument(skip_all)]
     pub async fn generate_metadata(&self, store_id: u64) -> Result<MetadataInfo> {
         let mut w = self.flushing_files.write().await;
         let mut wm = self.flushing_meta_files.write().await;
@@ -980,6 +1040,7 @@ impl StreamTaskInfo {
     }
 
     /// move need-flushing files to flushing_files.
+    #[instrument(skip_all)]
     pub async fn move_to_flushing_files(&self) -> Result<&Self> {
         // if flushing_files is not empty, which represents this flush is a retry
         // operation.
@@ -989,9 +1050,9 @@ impl StreamTaskInfo {
             return Ok(self);
         }
 
-        let mut w = self.files.write().await;
-        let mut fw = self.flushing_files.write().await;
-        let mut fw_meta = self.flushing_meta_files.write().await;
+        let mut w = frame!(self.files.write()).await;
+        let mut fw = frame!(self.flushing_files.write()).await;
+        let mut fw_meta = frame!(self.flushing_meta_files.write()).await;
         for (k, v) in w.drain() {
             // we should generate file metadata(calculate sha256) when moving file.
             // because sha256 calculation is a unsafe move operation.
@@ -1008,6 +1069,7 @@ impl StreamTaskInfo {
         Ok(self)
     }
 
+    #[instrument(skip_all)]
     pub async fn clear_flushing_files(&self) {
         for (_, data_file, _) in self.flushing_files.write().await.drain(..) {
             debug!("removing data file"; "size" => %data_file.file_size, "name" => %data_file.inner.path().display());
@@ -1027,6 +1089,7 @@ impl StreamTaskInfo {
         }
     }
 
+    #[instrument(skip_all)]
     async fn merge_and_flush_log_files_to(
         storage: Arc<dyn ExternalStorage>,
         files: &mut [(TempFileKey, DataFile, DataFileInfo)],
@@ -1111,6 +1174,7 @@ impl StreamTaskInfo {
         Ok(())
     }
 
+    #[instrument(skip_all)]
     pub async fn flush_log(&self, metadata: &mut MetadataInfo) -> Result<()> {
         let storage = self.storage.clone();
         self.merge_log(metadata, storage.clone(), &self.flushing_files, false)
@@ -1120,6 +1184,7 @@ impl StreamTaskInfo {
         Ok(())
     }
 
+    #[instrument(skip_all)]
     async fn merge_log(
         &self,
         metadata: &mut MetadataInfo,
@@ -1164,6 +1229,7 @@ impl StreamTaskInfo {
         Ok(())
     }
 
+    #[instrument(skip_all)]
     pub async fn flush_meta(&self, metadata_info: MetadataInfo) -> Result<()> {
         if !metadata_info.file_groups.is_empty() {
             let meta_path = metadata_info.path_to_meta();
@@ -1192,6 +1258,7 @@ impl StreamTaskInfo {
     /// The caller can try to advance the resolved ts and provide it to the
     /// function, and we would use `max(resolved_ts_provided,
     /// resolved_ts_from_file)`.
+    #[instrument(skip_all)]
     pub async fn do_flush(
         &self,
         store_id: u64,
@@ -1281,6 +1348,7 @@ impl StreamTaskInfo {
         Ok(())
     }
 
+    #[instrument(skip_all)]
     pub async fn update_global_checkpoint(
         &self,
         global_checkpoint: u64,
@@ -1415,6 +1483,7 @@ impl DataFile {
     }
 
     /// Add a new KV pair to the file, returning its size.
+    #[instrument(skip_all)]
     async fn on_events(&mut self, events: ApplyEvents) -> Result<usize> {
         let now = Instant::now_coarse();
         let mut total_size = 0;
@@ -2091,6 +2160,12 @@ mod tests {
         let (task, _path) = task("cleanup_test".to_owned()).await?;
         must_register_table(&router, task, 1).await;
         write_simple_data(&router).await;
+        let tempfiles = router
+            .get_task_info("cleanup_test")
+            .await
+            .unwrap()
+            .temp_file_pool
+            .clone();
         router
             .get_task_info("cleanup_test")
             .await?
@@ -2099,6 +2174,7 @@ mod tests {
         write_simple_data(&router).await;
         let mut w = walkdir::WalkDir::new(&tmp).into_iter();
         assert!(w.next().is_some(), "the temp files doesn't created");
+        assert!(tempfiles.mem_used() > 0, "the temp files doesn't created.");
         drop(router);
         let w = walkdir::WalkDir::new(&tmp)
             .into_iter()
@@ -2115,6 +2191,11 @@ mod tests {
             w.is_empty(),
             "the temp files should be removed, but it is {:?}",
             w
+        );
+        assert_eq!(
+            tempfiles.mem_used(),
+            0,
+            "the temp files hasn't been cleared."
         );
         Ok(())
     }

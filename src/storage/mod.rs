@@ -80,6 +80,7 @@ use engine_traits::{
     raw_ttl::ttl_to_expire_ts, CfName, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS, DATA_CFS_LEN,
 };
 use futures::{future::Either, prelude::*};
+use itertools::Itertools;
 use kvproto::{
     kvrpcpb::{
         ApiVersion, ChecksumAlgorithm, CommandPri, Context, GetRequest, IsolationLevel, KeyRange,
@@ -121,7 +122,7 @@ pub use self::{
 use self::{kv::SnapContext, test_util::latest_feature_gate};
 use crate::{
     read_pool::{ReadPool, ReadPoolHandle},
-    server::lock_manager::waiter_manager,
+    server::{lock_manager::waiter_manager, metrics::ResourcePriority},
     storage::{
         config::Config,
         kv::{with_tls_engine, Modify, WriteData},
@@ -776,17 +777,20 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         let priority = requests[0].get_context().get_priority();
         let metadata =
             TaskMetadata::from_ctx(requests[0].get_context().get_resource_control_context());
+        let resource_group_name = requests[0]
+            .get_context()
+            .get_resource_control_context()
+            .get_resource_group_name();
+        let group_priority = requests[0]
+            .get_context()
+            .get_resource_control_context()
+            .get_override_priority();
+        let resource_priority = ResourcePriority::from(group_priority);
         let resource_limiter = self.resource_manager.as_ref().and_then(|r| {
             r.get_resource_limiter(
-                requests[0]
-                    .get_context()
-                    .get_resource_control_context()
-                    .get_resource_group_name(),
+                resource_group_name,
                 requests[0].get_context().get_request_source(),
-                requests[0]
-                    .get_context()
-                    .get_resource_control_context()
-                    .get_override_priority(),
+                group_priority,
             )
         });
         let concurrency_manager = self.concurrency_manager.clone();
@@ -862,7 +866,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                             snap_ctx
                         }
                         Err(e) => {
-                            consumer.consume(id, Err(e), begin_instant, source);
+                            consumer.consume(id, Err(e), begin_instant, source, resource_priority);
                             continue;
                         }
                     };
@@ -901,7 +905,13 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                     ) = req_snap;
                     let snap_res = snap.await;
                     if let Err(e) = deadline.check() {
-                        consumer.consume(id, Err(Error::from(e)), begin_instant, source);
+                        consumer.consume(
+                            id,
+                            Err(Error::from(e)),
+                            begin_instant,
+                            source,
+                            resource_priority,
+                        );
                         continue;
                     }
 
@@ -933,6 +943,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                                             .map(|v| (v, stat)),
                                         begin_instant,
                                         source,
+                                        resource_priority,
                                     );
                                 }
                                 Err(e) => {
@@ -941,12 +952,13 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                                         Err(Error::from(txn::Error::from(e))),
                                         begin_instant,
                                         source,
+                                        resource_priority,
                                     );
                                 }
                             }
                         }),
                         Err(e) => {
-                            consumer.consume(id, Err(e), begin_instant, source);
+                            consumer.consume(id, Err(e), begin_instant, source, resource_priority);
                         }
                     }
                 }
@@ -1447,6 +1459,15 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                         Some(ScanMode::Forward),
                         !ctx.get_not_fill_cache(),
                     );
+                    let memory_locks = reader
+                        .load_in_memory_pessimisitic_lock_range(
+                            start_key.as_ref(),
+                            end_key.as_ref(),
+                            |_, lock| lock.start_ts <= max_ts,
+                            limit,
+                        )
+                        .map_err(txn::Error::from);
+                    let (memory_lock_kv_pairs, _) = memory_locks?;
                     let result = reader
                         .scan_locks(
                             start_key.as_ref(),
@@ -1457,8 +1478,18 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                         .map_err(txn::Error::from);
                     statistics.add(&reader.statistics);
                     let (kv_pairs, _) = result?;
-                    let mut locks = Vec::with_capacity(kv_pairs.len());
-                    for (key, lock) in kv_pairs {
+
+                    // Merge the results from in-memory pessimistic locks and the lock cf.
+                    // The result order is decided by the key.
+                    let memory_lock_iter = memory_lock_kv_pairs.into_iter();
+                    let lock_iter = kv_pairs.into_iter();
+                    let merged_iter = memory_lock_iter
+                        .merge_by(lock_iter, |(memory_key, _), (key, _)| memory_key <= key);
+                    let mut locks = Vec::with_capacity(limit);
+                    for (key, lock) in merged_iter {
+                        if limit > 0 && locks.len() >= limit {
+                            break;
+                        }
                         let lock_info =
                             lock.into_lock_info(key.into_raw().map_err(txn::Error::from)?);
                         locks.push(lock_info);
@@ -1756,17 +1787,20 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         // all requests in a batch have the same region, epoch, term, replica_read
         let priority = gets[0].get_context().get_priority();
         let metadata = TaskMetadata::from_ctx(gets[0].get_context().get_resource_control_context());
+        let resource_group_name = gets[0]
+            .get_context()
+            .get_resource_control_context()
+            .get_resource_group_name();
+        let group_priority = gets[0]
+            .get_context()
+            .get_resource_control_context()
+            .get_override_priority();
+        let resource_priority = ResourcePriority::from(group_priority);
         let resource_limiter = self.resource_manager.as_ref().and_then(|r| {
             r.get_resource_limiter(
-                gets[0]
-                    .get_context()
-                    .get_resource_control_context()
-                    .get_resource_group_name(),
+                resource_group_name,
                 gets[0].get_context().get_request_source(),
-                gets[0]
-                    .get_context()
-                    .get_resource_control_context()
-                    .get_override_priority(),
+                group_priority,
             )
         });
         let priority_tag = get_priority_tag(priority);
@@ -1848,6 +1882,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                                             .map_err(Error::from),
                                         begin_instant,
                                         ctx.take_request_source(),
+                                        resource_priority,
                                     );
                                     tls_collect_read_flow(
                                         ctx.get_region_id(),
@@ -1863,12 +1898,19 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                                         Err(e),
                                         begin_instant,
                                         ctx.take_request_source(),
+                                        resource_priority,
                                     );
                                 }
                             }
                         }
                         Err(e) => {
-                            consumer.consume(id, Err(e), begin_instant, ctx.take_request_source());
+                            consumer.consume(
+                                id,
+                                Err(e),
+                                begin_instant,
+                                ctx.take_request_source(),
+                                resource_priority,
+                            );
                         }
                     }
                 }
@@ -3445,6 +3487,7 @@ pub trait ResponseBatchConsumer<ConsumeResponse: Sized>: Send {
         res: Result<ConsumeResponse>,
         begin: Instant,
         request_source: String,
+        resource_priority: ResourcePriority,
     );
 }
 
@@ -3745,6 +3788,7 @@ pub mod test_util {
             res: Result<(Option<Vec<u8>>, Statistics)>,
             _: Instant,
             _source: String,
+            _resource_priority: ResourcePriority,
         ) {
             self.data.lock().unwrap().push(GetResult {
                 id,
@@ -3754,7 +3798,14 @@ pub mod test_util {
     }
 
     impl ResponseBatchConsumer<Option<Vec<u8>>> for GetConsumer {
-        fn consume(&self, id: u64, res: Result<Option<Vec<u8>>>, _: Instant, _source: String) {
+        fn consume(
+            &self,
+            id: u64,
+            res: Result<Option<Vec<u8>>>,
+            _: Instant,
+            _source: String,
+            _resource_priority: ResourcePriority,
+        ) {
             self.data.lock().unwrap().push(GetResult { id, res });
         }
     }
@@ -7363,6 +7414,126 @@ mod tests {
             ))
             .unwrap(),
         );
+    }
+
+    #[test]
+    fn test_scan_lock_with_memory_lock() {
+        for in_memory_pessimistic_lock_enabled in [false, true] {
+            let txn_ext = Arc::new(TxnExt::default());
+            let lock_mgr = MockLockManager::new();
+            let storage = TestStorageBuilderApiV1::new(lock_mgr.clone())
+                .pipelined_pessimistic_lock(in_memory_pessimistic_lock_enabled)
+                .in_memory_pessimistic_lock(in_memory_pessimistic_lock_enabled)
+                .build_for_txn(txn_ext.clone())
+                .unwrap();
+            let (tx, rx) = channel();
+            storage
+                .sched_txn_command(
+                    commands::AcquirePessimisticLock::new(
+                        vec![(Key::from_raw(b"a"), false), (Key::from_raw(b"b"), false)],
+                        b"a".to_vec(),
+                        20.into(),
+                        3000,
+                        true,
+                        20.into(),
+                        Some(WaitTimeout::Millis(1000)),
+                        false,
+                        21.into(),
+                        false,
+                        false,
+                        false,
+                        Context::default(),
+                    ),
+                    expect_ok_callback(tx.clone(), 0),
+                )
+                .unwrap();
+            rx.recv().unwrap();
+            if in_memory_pessimistic_lock_enabled {
+                // Check if the lock exists in the memory buffer.
+                let pessimistic_locks = txn_ext.pessimistic_locks.read();
+                let lock = pessimistic_locks.get(&Key::from_raw(b"a")).unwrap();
+                assert_eq!(
+                    lock,
+                    &(
+                        PessimisticLock {
+                            primary: Box::new(*b"a"),
+                            start_ts: 20.into(),
+                            ttl: 3000,
+                            for_update_ts: 20.into(),
+                            min_commit_ts: 21.into(),
+                            last_change: LastChange::NotExist,
+                            is_locked_with_conflict: false,
+                        },
+                        false
+                    )
+                );
+            }
+
+            storage
+                .sched_txn_command(
+                    commands::Prewrite::with_defaults(
+                        vec![
+                            Mutation::make_put(Key::from_raw(b"x"), b"foo".to_vec()),
+                            Mutation::make_put(Key::from_raw(b"y"), b"foo".to_vec()),
+                            Mutation::make_put(Key::from_raw(b"z"), b"foo".to_vec()),
+                        ],
+                        b"x".to_vec(),
+                        10.into(),
+                    ),
+                    expect_ok_callback(tx, 0),
+                )
+                .unwrap();
+            rx.recv().unwrap();
+
+            let (lock_a, lock_b, lock_x, lock_y, lock_z) = (
+                {
+                    let mut lock = LockInfo::default();
+                    lock.set_primary_lock(b"a".to_vec());
+                    lock.set_lock_version(20);
+                    lock.set_lock_for_update_ts(20);
+                    lock.set_key(b"a".to_vec());
+                    lock.set_min_commit_ts(21);
+                    lock.set_lock_type(Op::PessimisticLock);
+                    lock.set_lock_ttl(3000);
+                    lock
+                },
+                {
+                    let mut lock = LockInfo::default();
+                    lock.set_primary_lock(b"a".to_vec());
+                    lock.set_lock_version(20);
+                    lock.set_lock_for_update_ts(20);
+                    lock.set_key(b"b".to_vec());
+                    lock.set_min_commit_ts(21);
+                    lock.set_lock_type(Op::PessimisticLock);
+                    lock.set_lock_ttl(3000);
+                    lock
+                },
+                {
+                    let mut lock = LockInfo::default();
+                    lock.set_primary_lock(b"x".to_vec());
+                    lock.set_lock_version(10);
+                    lock.set_key(b"x".to_vec());
+                    lock
+                },
+                {
+                    let mut lock = LockInfo::default();
+                    lock.set_primary_lock(b"x".to_vec());
+                    lock.set_lock_version(10);
+                    lock.set_key(b"y".to_vec());
+                    lock
+                },
+                {
+                    let mut lock = LockInfo::default();
+                    lock.set_primary_lock(b"x".to_vec());
+                    lock.set_lock_version(10);
+                    lock.set_key(b"z".to_vec());
+                    lock
+                },
+            );
+            let res = block_on(storage.scan_lock(Context::default(), 101.into(), None, None, 10))
+                .unwrap();
+            assert_eq!(res, vec![lock_a, lock_b, lock_x, lock_y, lock_z,]);
+        }
     }
 
     #[test]

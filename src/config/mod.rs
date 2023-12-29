@@ -82,7 +82,6 @@ use crate::{
     server::{
         gc_worker::{GcConfig, RawCompactionFilterFactory, WriteCompactionFilterFactory},
         lock_manager::Config as PessimisticTxnConfig,
-        status_server::HEAP_PROFILE_ACTIVE,
         ttl::TtlCompactionFilterFactory,
         Config as ServerConfig, CONFIG_ROCKSDB_GAUGE,
     },
@@ -137,6 +136,8 @@ pub struct TitanCfConfig {
     #[online_config(skip)]
     pub blob_file_compression: CompressionType,
     #[online_config(skip)]
+    pub zstd_dict_size: ReadableSize,
+    #[online_config(skip)]
     pub blob_cache_size: ReadableSize,
     #[online_config(skip)]
     pub min_gc_batch_size: ReadableSize,
@@ -148,6 +149,7 @@ pub struct TitanCfConfig {
     #[online_config(skip)]
     #[doc(hidden)]
     #[serde(skip_serializing)]
+    #[deprecated = "Titan doesn't need to sample anymore"]
     pub sample_ratio: Option<f64>,
     #[online_config(skip)]
     pub merge_small_file_threshold: ReadableSize,
@@ -158,18 +160,20 @@ pub struct TitanCfConfig {
     pub range_merge: bool,
     #[online_config(skip)]
     pub max_sorted_runs: i32,
-    // deprecated.
     #[online_config(skip)]
     #[doc(hidden)]
     #[serde(skip_serializing)]
+    #[deprecated = "The feature is removed"]
     pub gc_merge_rewrite: bool,
 }
 
 impl Default for TitanCfConfig {
+    #[allow(deprecated)]
     fn default() -> Self {
         Self {
             min_blob_size: ReadableSize::kb(1), // disable titan default
-            blob_file_compression: CompressionType::Lz4,
+            blob_file_compression: CompressionType::Zstd,
+            zstd_dict_size: ReadableSize::kb(0),
             blob_cache_size: ReadableSize::mb(0),
             min_gc_batch_size: ReadableSize::mb(16),
             max_gc_batch_size: ReadableSize::mb(64),
@@ -190,6 +194,15 @@ impl TitanCfConfig {
         let mut opts = RocksTitanDbOptions::new();
         opts.set_min_blob_size(self.min_blob_size.0);
         opts.set_blob_file_compression(self.blob_file_compression.into());
+        // To try zstd dict compression, set dict size to 4k, sample size to 100X dict
+        // size
+        opts.set_compression_options(
+            -14,                                // window_bits
+            32767,                              // level
+            0,                                  // strategy
+            self.zstd_dict_size.0 as i32,       // zstd dict size
+            self.zstd_dict_size.0 as i32 * 100, // zstd sample size
+        );
         opts.set_blob_cache(self.blob_cache_size.0 as usize, -1, false, 0.0);
         opts.set_min_gc_batch_size(self.min_gc_batch_size.0);
         opts.set_max_gc_batch_size(self.max_gc_batch_size.0);
@@ -202,6 +215,7 @@ impl TitanCfConfig {
         opts
     }
 
+    #[allow(deprecated)]
     fn validate(&self) -> Result<(), Box<dyn Error>> {
         if self.gc_merge_rewrite {
             return Err(
@@ -1199,7 +1213,7 @@ impl Default for TitanDbConfig {
             enabled: false,
             dirname: "".to_owned(),
             disable_gc: false,
-            max_background_gc: 4,
+            max_background_gc: 1,
             purge_obsolete_files_period: ReadableDuration::secs(10),
         }
     }
@@ -2219,7 +2233,6 @@ pub struct UnifiedReadPoolConfig {
     pub max_thread_count: usize,
     #[online_config(skip)]
     pub stack_size: ReadableSize,
-    #[online_config(skip)]
     pub max_tasks_per_worker: usize,
     pub auto_adjust_pool_size: bool,
     // FIXME: Add more configs when they are effective in yatp
@@ -2941,7 +2954,12 @@ pub struct CdcConfig {
     // TODO(hi-rustin): Consider resizing the thread pool based on `incremental_scan_threads`.
     #[online_config(skip)]
     pub incremental_scan_threads: usize,
+    // The number of scan tasks that is allowed to run concurrently.
     pub incremental_scan_concurrency: usize,
+    // The number of scan tasks that is allowed to be created. In other words,
+    // there will be at most `incremental_scan_concurrency_limit - incremental_scan_concurrency`
+    // number of scan tasks that is waitting to run.
+    pub incremental_scan_concurrency_limit: usize,
     /// Limit scan speed based on disk I/O traffic.
     pub incremental_scan_speed_limit: ReadableSize,
     /// Limit scan speed based on memory accesing traffic.
@@ -2984,6 +3002,8 @@ impl Default for CdcConfig {
             incremental_scan_threads: 4,
             // At most 6 concurrent running tasks.
             incremental_scan_concurrency: 6,
+            // At most 10000 tasks can exist simultaneously.
+            incremental_scan_concurrency_limit: 10000,
             // TiCDC requires a SSD, the typical write speed of SSD
             // is more than 500MB/s, so 128MB/s is enough.
             incremental_scan_speed_limit: ReadableSize::mb(128),
@@ -3024,6 +3044,14 @@ impl CdcConfig {
                 self.incremental_scan_threads
             );
             self.incremental_scan_concurrency = self.incremental_scan_threads
+        }
+        if self.incremental_scan_concurrency_limit < self.incremental_scan_concurrency {
+            warn!(
+                "cdc.incremental-scan-concurrency-limit must be larger than cdc.incremental-scan-concurrency,
+                change it to {}",
+                self.incremental_scan_concurrency
+            );
+            self.incremental_scan_concurrency_limit = self.incremental_scan_concurrency
         }
         if self.incremental_scan_ts_filter_ratio < 0.0
             || self.incremental_scan_ts_filter_ratio > 1.0
@@ -3243,12 +3271,10 @@ impl Default for MemoryConfig {
 impl MemoryConfig {
     pub fn init(&self) {
         if self.enable_heap_profiling {
-            let mut activate = HEAP_PROFILE_ACTIVE.lock().unwrap();
             if let Err(e) = tikv_alloc::activate_prof() {
                 error!("failed to enable heap profiling"; "err" => ?e);
                 return;
             }
-            *activate = Some(None);
             tikv_alloc::set_prof_sample(self.profiling_sample_per_bytes.0).unwrap();
         }
     }
@@ -3260,16 +3286,9 @@ impl ConfigManager for MemoryConfigManager {
     fn dispatch(&mut self, changes: ConfigChange) -> CfgResult<()> {
         if let Some(ConfigValue::Bool(enable)) = changes.get("enable_heap_profiling") {
             if *enable {
-                let mut activate = HEAP_PROFILE_ACTIVE.lock().unwrap();
-                // already enabled by HTTP API, do nothing
-                if activate.is_none() {
-                    tikv_alloc::activate_prof()?;
-                    *activate = Some(None);
-                }
+                tikv_alloc::activate_prof()?;
             } else {
-                let mut activate = HEAP_PROFILE_ACTIVE.lock().unwrap();
                 tikv_alloc::deactivate_prof()?;
-                *activate = None;
             }
         }
 
@@ -3381,6 +3400,9 @@ pub struct TikvConfig {
     #[online_config(skip)]
     pub memory_usage_high_water: f64,
 
+    // Memory quota used for in-memory engine. 0 means not enable it.
+    pub region_cache_memory_limit: ReadableSize,
+
     #[online_config(submodule)]
     pub log: LogConfig,
 
@@ -3480,6 +3502,7 @@ impl Default for TikvConfig {
             abort_on_panic: false,
             memory_usage_limit: None,
             memory_usage_high_water: 0.9,
+            region_cache_memory_limit: ReadableSize::mb(0),
             log: LogConfig::default(),
             memory: MemoryConfig::default(),
             quota: QuotaConfig::default(),
@@ -5763,7 +5786,28 @@ mod tests {
         let diff = config_value_to_string(diff.into_iter().collect());
         assert_eq!(diff.len(), 1);
         assert_eq!(diff[0].0.as_str(), "blob_run_mode");
-        assert_eq!(diff[0].1.as_str(), "fallback");
+        assert_eq!(diff[0].1.as_str(), "kFallback");
+    }
+
+    #[test]
+    fn test_update_titan_blob_run_mode_config() {
+        let mut cfg = TikvConfig::default();
+        cfg.rocksdb.titan.enabled = true;
+        let (_, cfg_controller, ..) = new_engines::<ApiV1>(cfg);
+        for run_mode in [
+            "kFallback",
+            "kNormal",
+            "kReadOnly",
+            "fallback",
+            "normal",
+            "read-only",
+        ] {
+            let change = HashMap::from([(
+                "rocksdb.defaultcf.titan.blob-run-mode".to_string(),
+                run_mode.to_string(),
+            )]);
+            cfg_controller.update_without_persist(change).unwrap();
+        }
     }
 
     #[test]
@@ -6771,6 +6815,15 @@ mod tests {
         cfg.validate().unwrap();
 
         let content = r#"
+            [cdc]
+            incremental-scan-concurrency = 6
+            incremental-scan-concurrency-limit = 0
+        "#;
+        let mut cfg: TikvConfig = toml::from_str(content).unwrap();
+        cfg.validate().unwrap();
+        assert!(cfg.cdc.incremental_scan_concurrency_limit >= cfg.cdc.incremental_scan_concurrency);
+
+        let content = r#"
             [storage]
             engine = "partitioned-raft-kv"
             [cdc]
@@ -7022,7 +7075,7 @@ mod tests {
             cfg.raft_store
                 .region_compact_redundant_rows_percent
                 .unwrap(),
-            100
+            20
         );
 
         let content = r#"

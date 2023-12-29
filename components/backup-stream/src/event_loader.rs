@@ -22,6 +22,8 @@ use tikv_util::{
     worker::Scheduler,
 };
 use tokio::sync::Semaphore;
+use tracing::instrument;
+use tracing_active_tree::frame;
 use txn_types::{Key, Lock, TimeStamp};
 
 use crate::{
@@ -236,6 +238,7 @@ where
         }
     }
 
+    #[instrument(skip_all)]
     pub async fn capture_change(
         &self,
         region: &Region,
@@ -288,6 +291,7 @@ where
         Ok(snap)
     }
 
+    #[instrument(skip_all)]
     pub async fn observe_over_with_retry(
         &self,
         region: &Region,
@@ -385,6 +389,7 @@ where
         f(v.value_mut().resolver())
     }
 
+    #[instrument(skip_all)]
     async fn scan_and_async_send(
         &self,
         region: &Region,
@@ -442,6 +447,7 @@ where
         }
     }
 
+    #[instrument(skip_all)]
     pub async fn do_initial_scan(
         &self,
         region: &Region,
@@ -452,11 +458,10 @@ where
     ) -> Result<Statistics> {
         let mut join_handles = Vec::with_capacity(8);
 
-        let permit = self
-            .concurrency_limit
-            .acquire()
+        let permit = frame!(self.concurrency_limit.acquire())
             .await
             .expect("BUG: semaphore closed");
+
         // It is ok to sink more data than needed. So scan to +inf TS for convenance.
         let event_loader = EventLoader::load_from(snap, start_ts, TimeStamp::max(), region)?;
         let stats = self
@@ -464,7 +469,7 @@ where
             .await?;
         drop(permit);
 
-        futures::future::try_join_all(join_handles)
+        frame!(futures::future::try_join_all(join_handles))
             .await
             .map_err(|err| annotate!(err, "tokio runtime failed to join consuming threads"))?;
 

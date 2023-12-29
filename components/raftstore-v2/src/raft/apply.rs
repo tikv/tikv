@@ -76,7 +76,7 @@ pub struct Apply<EK: KvEngine, R> {
 
     res_reporter: R,
     read_scheduler: Scheduler<ReadTask<EK>>,
-    sst_importer: Arc<SstImporter>,
+    sst_importer: Arc<SstImporter<EK>>,
     observe: Observe,
     coprocessor_host: CoprocessorHost<EK>,
 
@@ -102,7 +102,7 @@ impl<EK: KvEngine, R> Apply<EK, R> {
         log_recovery: Option<Box<DataTrace>>,
         applied_term: u64,
         buckets: Option<BucketStat>,
-        sst_importer: Arc<SstImporter>,
+        sst_importer: Arc<SstImporter<EK>>,
         coprocessor_host: CoprocessorHost<EK>,
         tablet_scheduler: Scheduler<TabletTask<EK>>,
         high_priority_pool: FuturePool,
@@ -335,7 +335,7 @@ impl<EK: KvEngine, R> Apply<EK, R> {
     }
 
     #[inline]
-    pub fn sst_importer(&self) -> &SstImporter {
+    pub fn sst_importer(&self) -> &SstImporter<EK> {
         &self.sst_importer
     }
 
