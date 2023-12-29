@@ -605,7 +605,7 @@ impl std::fmt::Debug for PessimisticLock {
 }
 
 /// TxnLock is a wrapper for in-memory pessimistic locks and storage locks.
-#[derive(PartialEq, Clone)]
+#[derive(PartialEq, Clone, Debug)]
 pub enum TxnLock<'a> {
     InMemoryLock(&'a PessimisticLock),
     PersistedLock(&'a Lock),

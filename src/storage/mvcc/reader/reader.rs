@@ -304,6 +304,8 @@ impl<S: EngineSnapshot> MvccReader<S> {
                 return Ok(None);
             }
             self.lock_cursor_seeked = true;
+        } else {
+            cursor.next(&mut self.statistics.lock);
         }
 
         while cursor.valid()? {
@@ -336,67 +338,48 @@ impl<S: EngineSnapshot> MvccReader<S> {
     where
         F: Fn(&Key, TxnLock<'_>) -> bool,
     {
-        let (memory_locks, _) =
+        let (memory_locks, memory_has_remain) =
             self.load_in_memory_pessimistic_lock_range(start_key, end_key, &filter, limit, source)?;
         if memory_locks.is_empty() {
             return self.scan_locks_from_storage(start_key, end_key, &filter, limit);
         }
+        let mut locks = Vec::with_capacity(limit.min(memory_locks.len()));
         let mut memory_iter = memory_locks.into_iter();
-        let mut locks = Vec::with_capacity(limit.min(memory_iter.len()));
-        let mut next_pair_from_memory = || -> Option<(Key, Lock)> {
-            if let Some((key, lock)) = memory_iter.next() {
-                if filter(&key, (&lock).into()) {
-                    Some((key, lock))
-                } else {
-                    None
-                }
-            } else {
-                None
-            }
-        };
-
-        let mut memory_pair = next_pair_from_memory();
+        let mut memory_pair = memory_iter.next();
         let mut storage_pair = self.next_pair_from_storage(start_key, end_key, &filter)?;
-        loop {
-            if memory_pair.is_none() || storage_pair.is_none() {
-                break;
-            }
-            let (memory_key, _) = memory_pair.as_ref().unwrap();
-            let (storage_key, _) = storage_pair.as_ref().unwrap();
+        while let (Some((memory_key, _)), Some((storage_key, _))) =
+            (memory_pair.as_ref(), storage_pair.as_ref())
+        {
             if storage_key <= memory_key {
                 locks.push(storage_pair.take().unwrap());
                 storage_pair = self.next_pair_from_storage(start_key, end_key, &filter)?;
             } else {
                 locks.push(memory_pair.take().unwrap());
-                memory_pair = next_pair_from_memory();
+                memory_pair = memory_iter.next();
             }
-            if locks.len() == limit {
+            if limit > 0 && locks.len() == limit {
                 return Ok((locks, true));
             }
         }
 
-        if memory_pair.is_none() {
-            while let Some((storage_key, storage_lock)) =
-                self.next_pair_from_storage(start_key, end_key, &filter)?
-            {
-                locks.push((storage_key, storage_lock));
-                if locks.len() == limit {
-                    return Ok((
-                        locks,
-                        self.next_pair_from_storage(start_key, end_key, &filter)?
-                            .is_some(),
-                    ));
-                }
+        while let Some(pair) = memory_pair.take() {
+            locks.push(pair);
+            if limit > 0 && locks.len() == limit {
+                return Ok((locks, memory_iter.next().is_some() || memory_has_remain));
             }
-        } else if storage_pair.is_none() {
-            while let Some((memory_key, memory_lock)) = next_pair_from_memory() {
-                locks.push((memory_key, memory_lock));
-                if locks.len() == limit {
-                    return Ok((locks, next_pair_from_memory().is_some()));
-                }
+            memory_pair = memory_iter.next();
+        }
+
+        while let Some(pair) = storage_pair.take() {
+            locks.push(pair);
+            if limit > 0 && locks.len() == limit {
+                let has_more = self
+                    .next_pair_from_storage(start_key, end_key, &filter)?
+                    .is_some()
+                    || memory_has_remain;
+                return Ok((locks, has_more));
             }
-        } else {
-            unreachable!()
+            storage_pair = self.next_pair_from_storage(start_key, end_key, &filter)?;
         }
 
         Ok((locks, false))

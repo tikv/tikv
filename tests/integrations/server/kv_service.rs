@@ -2926,7 +2926,7 @@ fn test_mvcc_scan_memory_and_cf_locks() {
 #[test_case(test_raftstore::must_new_and_configure_cluster)]
 #[test_case(test_raftstore_v2::must_new_and_configure_cluster)]
 fn test_pessimistic_rollback_with_read_first() {
-    for enable_in_memory_lock in [false, true] {
+    for enable_in_memory_lock in [true, false] {
         let (cluster, leader, ctx) = new_cluster(|cluster| {
             cluster.cfg.pessimistic_txn.pipelined = enable_in_memory_lock;
             cluster.cfg.pessimistic_txn.in_memory = enable_in_memory_lock;
@@ -2998,7 +2998,7 @@ fn test_pessimistic_rollback_with_read_first() {
             }
         }
 
-        // Pessimitic roll back one key.
+        // Pessimistic roll back one key.
         must_kv_pessimistic_rollback(&client, ctx.clone(), format_key('k', 0), start_ts, start_ts);
         must_lock_cnt(
             &client,

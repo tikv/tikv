@@ -11645,7 +11645,7 @@ mod tests {
         let k2 = format_key('k', 2);
         let start_ts = 10;
         let for_update_ts = 10;
-        for enable_in_memory_lock in [false, true] {
+        for enable_in_memory_lock in [true, false] {
             let txn_ext = Arc::new(TxnExt::default());
             let mut storage = TestStorageBuilderApiV1::new(MockLockManager::new())
                 .pipelined_pessimistic_lock(enable_in_memory_lock)
