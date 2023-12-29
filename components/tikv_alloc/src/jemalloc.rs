@@ -25,8 +25,8 @@ pub const fn allocator() -> Allocator {
 lazy_static! {
     static ref THREAD_MEMORY_MAP: Mutex<HashMap<ThreadId, MemoryStatsAccessor>> =
         Mutex::new(HashMap::new());
-    // thread name -> arena index
-    static ref THREAD_ARENA_MAP: Mutex<HashMap<String, usize>> = Mutex::new(HashMap::new());
+    // thread id -> (thread name, arena index)
+    static ref THREAD_ARENA_MAP: Mutex<HashMap<ThreadId, (String, usize)>> = Mutex::new(HashMap::new());
 }
 
 /// The struct for tracing the statistic of another thread.
@@ -226,7 +226,7 @@ pub fn iterate_arena_allocation_stats(mut f: impl FnMut(&str, u64, u64, u64)) {
     // skip advancing the epoch here.
     let thread_arena_map = THREAD_ARENA_MAP.lock().unwrap();
     let mut collected = HashMap::<&str, (u64, u64, u64)>::with_capacity(thread_arena_map.len());
-    for (name, index) in thread_arena_map.iter() {
+    for (_, (name, index)) in thread_arena_map.iter() {
         let stats = fetch_arena_stats(*index);
         let ent = collected.entry(trim_yatp_suffix(name)).or_default();
         ent.0 += stats.0;
@@ -340,7 +340,7 @@ mod profiling {
     // Set exclusive arena for the current thread to avoid contention.
     pub fn thread_allocate_exclusive_arena() -> ProfResult<()> {
         unsafe {
-            let index : u32 = tikv_jemalloc_ctl::raw::read(ARENAS_CREATE)
+            let index: u32 = tikv_jemalloc_ctl::raw::read(ARENAS_CREATE)
                 .map_err(|e| ProfError::JemallocError(format!("failed to create arena: {}", e)))?;
             if let Err(e) = tikv_jemalloc_ctl::raw::write(THREAD_ARENA, index) {
                 return Err(ProfError::JemallocError(format!(
@@ -349,11 +349,14 @@ mod profiling {
                 )));
             }
             super::THREAD_ARENA_MAP.lock().unwrap().insert(
-                std::thread::current()
-                    .name()
-                    .unwrap_or("unknown")
-                    .to_string(),
-                index as usize,
+                std::thread::current().id(),
+                (
+                    std::thread::current()
+                        .name()
+                        .unwrap_or("unknown")
+                        .to_string(),
+                    index as usize,
+                ),
             );
         }
         Ok(())
