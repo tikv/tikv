@@ -381,7 +381,7 @@ impl RouterInner {
         }
     }
 
-    pub fn udpate_config(&self, config: &BackupStreamConfig) {
+    pub fn update_config(&self, config: &BackupStreamConfig) {
         *self.max_flush_interval.write().unwrap() = config.max_flush_interval.0;
         self.temp_file_size_limit
             .store(config.file_size_limit.0, Ordering::SeqCst);
@@ -2441,7 +2441,7 @@ mod tests {
         match &cmds[0] {
             Task::ChangeConfig(cfg) => {
                 assert!(matches!(cfg, _new_cfg));
-                router.udpate_config(cfg);
+                router.update_config(cfg);
                 assert_eq!(
                     router.max_flush_interval.rl().to_owned(),
                     _new_cfg.max_flush_interval.0
