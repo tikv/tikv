@@ -321,7 +321,7 @@ mod tests {
     }
 }
 
-// #[cfg(feature = "mem-profiling")]
+#[cfg(feature = "mem-profiling")]
 mod profiling {
     use std::ffi::CString;
 
@@ -336,8 +336,6 @@ mod profiling {
     const OPT_PROF: &[u8] = b"opt.prof\0";
     const ARENAS_CREATE: &[u8] = b"arenas.create\0";
     const THREAD_ARENA: &[u8] = b"thread.arena\0";
-
-    // const BACKGROUND_THREAD: &[u8] = b"background_thread\0";
 
     // Set exclusive arena for the current thread to avoid contention.
     pub fn thread_allocate_exclusive_arena() -> ProfResult<()> {
