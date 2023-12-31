@@ -437,6 +437,14 @@ where
 const DEFAULT_LOAD_BASE_SPLIT_CHECK_INTERVAL: Duration = Duration::from_secs(1);
 const DEFAULT_COLLECT_TICK_INTERVAL: Duration = Duration::from_secs(1);
 
+fn default_load_base_split_check_interval() -> Duration {
+    fail_point!("mock_load_base_split_check_interval", |t| {
+        let t = t.unwrap().parse::<u64>().unwrap();
+        Duration::from_millis(t)
+    });
+    DEFAULT_LOAD_BASE_SPLIT_CHECK_INTERVAL
+}
+
 fn default_collect_tick_interval() -> Duration {
     fail_point!("mock_collect_tick_interval", |_| {
         Duration::from_millis(1)
@@ -566,7 +574,7 @@ where
             cpu_stats_sender: None,
             collect_store_infos_interval: interval,
             load_base_split_check_interval: cmp::min(
-                DEFAULT_LOAD_BASE_SPLIT_CHECK_INTERVAL,
+                default_load_base_split_check_interval(),
                 interval,
             ),
             report_min_resolved_ts_interval: config(report_min_resolved_ts_interval),

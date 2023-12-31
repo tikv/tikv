@@ -5280,10 +5280,14 @@ where
         let allow_replica_read = read_only && msg.get_header().get_replica_read();
         let flags = WriteBatchFlags::from_bits_check(msg.get_header().get_flags());
         let allow_stale_read = read_only && flags.contains(WriteBatchFlags::STALE_READ);
+        let split_region = msg.has_admin_request()
+            && msg.get_admin_request().get_cmd_type() == AdminCmdType::BatchSplit;
         if !self.fsm.peer.is_leader()
             && !is_read_index_request
             && !allow_replica_read
             && !allow_stale_read
+            // allow proposal split command at non leader, raft layer will forward it to leader.
+            && !split_region
         {
             self.ctx.raft_metrics.invalid_proposal.not_leader.inc();
             let leader = self.fsm.peer.get_peer_from_cache(leader_id);
