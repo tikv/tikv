@@ -285,7 +285,7 @@ impl Recorder {
     }
 
     fn update_peer(&mut self, peer: &Peer) {
-        if self.peer != *peer {
+        if self.peer != *peer && peer.get_id() != 0 {
             self.peer = peer.clone();
         }
     }
@@ -845,6 +845,7 @@ impl AutoSplitController {
                         "qps" => qps,
                         "byte" => byte,
                         "cpu_usage" => cpu_usage,
+                        "peer" => ?recorder.peer,
                     );
                     self.recorders.remove(&region_id);
                 } else if is_unified_read_pool_busy && is_region_busy {
