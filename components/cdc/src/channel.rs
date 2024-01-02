@@ -1,6 +1,13 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{fmt, sync::Arc, time::Duration};
+use std::{
+    fmt,
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    },
+    time::Duration,
+};
 
 use futures::{
     channel::mpsc::{
@@ -190,16 +197,22 @@ impl EventBatcher {
 pub fn channel(buffer: usize, memory_quota: Arc<MemoryQuota>) -> (Sink, Drain) {
     let (unbounded_sender, unbounded_receiver) = unbounded();
     let (bounded_sender, bounded_receiver) = bounded(buffer);
+    let unbounded_sender_len = Arc::new(AtomicUsize::new(0));
+    let bounded_sender_len = Arc::new(AtomicUsize::new(0));
     (
         Sink {
             unbounded_sender,
             bounded_sender,
             memory_quota: memory_quota.clone(),
+            unbounded_sender_len: unbounded_sender_len.clone(),
+            bounded_sender_len: bounded_sender_len.clone(),
         },
         Drain {
             unbounded_receiver,
             bounded_receiver,
             memory_quota,
+            unbounded_sender_len,
+            bounded_sender_len,
         },
     )
 }
@@ -249,6 +262,8 @@ pub struct Sink {
     unbounded_sender: UnboundedSender<(CdcEvent, usize)>,
     bounded_sender: Sender<(CdcEvent, usize)>,
     memory_quota: Arc<MemoryQuota>,
+    unbounded_sender_len: Arc<AtomicUsize>,
+    bounded_sender_len: Arc<AtomicUsize>,
 }
 
 impl Sink {
@@ -258,11 +273,13 @@ impl Sink {
         if bytes != 0 {
             self.memory_quota.alloc(bytes)?;
         }
+        self.unbounded_sender_len.fetch_add(1, Ordering::Release);
         match self.unbounded_sender.unbounded_send((event, bytes)) {
             Ok(_) => Ok(()),
             Err(e) => {
                 // Free quota if send fails.
                 self.memory_quota.free(bytes);
+                self.unbounded_sender_len.fetch_sub(1, Ordering::Release);
                 Err(SendError::from(e))
             }
         }
@@ -277,10 +294,12 @@ impl Sink {
         }
         self.memory_quota.alloc(total_bytes as _)?;
         for event in events {
+            self.bounded_sender_len.fetch_add(1, Ordering::Release);
             let bytes = event.size() as usize;
             if let Err(e) = self.bounded_sender.feed((event, bytes)).await {
                 // Free quota if send fails.
                 self.memory_quota.free(total_bytes as _);
+                self.bounded_sender_len.fetch_sub(1, Ordering::Release);
                 return Err(SendError::from(e));
             }
         }
@@ -291,27 +310,42 @@ impl Sink {
         }
         Ok(())
     }
+
+    pub fn unbounded_sender_len(&self) -> usize {
+        self.unbounded_sender_len.load(Ordering::Acquire)
+    }
+
+    pub fn bounded_sender_len(&self) -> usize {
+        self.bounded_sender_len.load(Ordering::Acquire)
+    }
 }
 
 pub struct Drain {
     unbounded_receiver: UnboundedReceiver<(CdcEvent, usize)>,
     bounded_receiver: Receiver<(CdcEvent, usize)>,
     memory_quota: Arc<MemoryQuota>,
+    unbounded_sender_len: Arc<AtomicUsize>,
+    bounded_sender_len: Arc<AtomicUsize>,
 }
 
 impl<'a> Drain {
     pub fn drain(&'a mut self) -> impl Stream<Item = (CdcEvent, usize)> + 'a {
-        stream::select(&mut self.bounded_receiver, &mut self.unbounded_receiver).map(
-            |(mut event, size)| {
-                if let CdcEvent::Barrier(ref mut barrier) = event {
-                    if let Some(barrier) = barrier.take() {
-                        // Unset barrier when it is received.
-                        barrier(());
-                    }
+        let unbounded = (&mut self.unbounded_receiver).map(|(x, y)| (1, x, y));
+        let bounded = (&mut self.bounded_receiver).map(|(x, y)| (2, x, y));
+        stream::select(bounded, unbounded).map(|(tag, mut event, size)| {
+            if tag == 1 {
+                self.unbounded_sender_len.fetch_sub(1, Ordering::Release);
+            } else {
+                self.bounded_sender_len.fetch_sub(1, Ordering::Release);
+            }
+            if let CdcEvent::Barrier(ref mut barrier) = event {
+                if let Some(barrier) = barrier.take() {
+                    // Unset barrier when it is received.
+                    barrier(());
                 }
-                (event, size)
-            },
-        )
+            }
+            (event, size)
+        })
     }
 
     // Forwards contents to the sink, simulates StreamExt::forward.
