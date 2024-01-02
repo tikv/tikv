@@ -2581,7 +2581,7 @@ where
 
         let engine_split_result = ctx
             .engine
-            .batch_split(&keys.iter().map(|k| k.clone()).collect());
+            .batch_split(derived.get_id(), &keys.iter().map(|k| k.clone()).collect());
 
         // Init split regions' meta info
         let mut new_split_regions: HashMap<u64, NewSplitPeer> = HashMap::default();

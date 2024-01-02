@@ -4144,7 +4144,10 @@ where
             RegionChangeReason::Split,
         );
         self.fsm.peer.post_split();
-        self.ctx.engines.kv.on_batch_split(engine_split_result);
+        self.ctx
+            .engines
+            .kv
+            .on_batch_split(derived.get_id(), engine_split_result);
         let is_leader = self.fsm.peer.is_leader();
         if is_leader {
             if share_source_region_size {
@@ -5133,7 +5136,7 @@ where
                     regions,
                     new_split_regions,
                     share_source_region_size,
-                    engine_split_result
+                    engine_split_result,
                 ),
                 ExecResult::PrepareMerge { region, state } => {
                     self.on_ready_prepare_merge(region, state)

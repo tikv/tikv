@@ -4471,6 +4471,7 @@ dependencies = [
  "engine_traits",
  "skiplist-rs",
  "tikv_util",
+ "uuid 0.8.2",
 ]
 
 [[package]]

@@ -4,20 +4,17 @@ use engine_traits::{BatchSplit, KvEngine, RegionCacheEngine};
 
 use crate::HybridEngine;
 
-#[derive(Debug)]
-pub struct HybridEngineSplitResult {}
-
 impl<EK, EC> BatchSplit for HybridEngine<EK, EC>
 where
     EK: KvEngine,
     EC: RegionCacheEngine,
 {
-    type SplitResult = HybridEngineSplitResult;
-    fn batch_split(&self, keys: &Vec<Vec<u8>>) -> Self::SplitResult {
+    type SplitResult = EC::Snapshot;
+    fn batch_split(&self, region_id: u64, keys: &Vec<Vec<u8>>) -> Self::SplitResult {
         unimplemented!()
     }
 
-    fn on_batch_split(&self, split_result: Self::SplitResult) {
+    fn on_batch_split(&self, region_id: u64, split_result: Self::SplitResult) {
         unimplemented!()
     }
 }

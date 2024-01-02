@@ -10,9 +10,9 @@ pub struct DummySplitResult;
 impl BatchSplit for RocksEngine {
     type SplitResult = DummySplitResult;
 
-    fn batch_split(&self, _: &Vec<Vec<u8>>) -> Self::SplitResult {
+    fn batch_split(&self, _: u64, _: &Vec<Vec<u8>>) -> Self::SplitResult {
         DummySplitResult {}
     }
 
-    fn on_batch_split(&self, _: Self::SplitResult) {}
+    fn on_batch_split(&self, _: u64, _: Self::SplitResult) {}
 }

@@ -17,6 +17,7 @@ use engine_traits::{
     WriteOptions, CF_DEFAULT, CF_LOCK, CF_WRITE,
 };
 use skiplist_rs::{IterRef, MemoryLimiter, Skiplist};
+use uuid::Uuid;
 
 use crate::keys::{
     decode_key, encode_seek_key, InternalKey, InternalKeyComparator, ValueType,
@@ -33,7 +34,7 @@ fn cf_to_id(cf: &str) -> usize {
 }
 
 // todo: implement memory limiter
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct GlobalMemoryLimiter {}
 
 impl MemoryLimiter for GlobalMemoryLimiter {
@@ -55,6 +56,7 @@ impl MemoryLimiter for GlobalMemoryLimiter {
 #[derive(Clone)]
 pub struct RegionMemoryEngine {
     data: [Arc<Skiplist<InternalKeyComparator, GlobalMemoryLimiter>>; 3],
+    global_limiter: GlobalMemoryLimiter,
 }
 
 impl RegionMemoryEngine {
@@ -71,10 +73,29 @@ impl RegionMemoryEngine {
                 )),
                 Arc::new(Skiplist::new(
                     InternalKeyComparator::default(),
-                    global_limiter,
+                    global_limiter.clone(),
                 )),
             ],
+            global_limiter,
         }
+    }
+
+    fn batch_split(&self, keys: &Vec<Vec<u8>>) -> Vec<RegionMemoryEngine> {
+        let skiplists: Vec<_> = self.data.iter().map(|s| s.split_skiplist(keys)).collect();
+        assert_eq!(skiplists.len(), 3);
+        let mut memory_engines = vec![];
+        for i in 0..keys.len() + 1 {
+            memory_engines.push(RegionMemoryEngine {
+                data: [
+                    Arc::new(skiplists[0][i].clone()),
+                    Arc::new(skiplists[1][i].clone()),
+                    Arc::new(skiplists[2][i].clone()),
+                ],
+                global_limiter: self.global_limiter.clone(),
+            });
+        }
+
+        memory_engines
     }
 }
 
@@ -85,7 +106,7 @@ impl Debug for RegionMemoryEngine {
 }
 
 // read_ts -> ref_count
-#[derive(Default)]
+#[derive(Default, Clone)]
 struct SnapshotList(BTreeMap<u64, u64>);
 
 impl SnapshotList {
@@ -95,14 +116,21 @@ impl SnapshotList {
         self.0.insert(read_ts, count);
     }
 
-    fn remove_snapshot(&mut self, read_ts: u64) {
-        let count = self.0.get_mut(&read_ts).unwrap();
+    fn remove_snapshot(&mut self, read_ts: u64, snapshot_on_split: bool) {
+        let Some(count) = self.0.get_mut(&read_ts) else {
+            assert!(snapshot_on_split);
+            return;
+        };
         assert!(*count >= 1);
         if *count == 1 {
             self.0.remove(&read_ts).unwrap();
         } else {
             *count -= 1;
         }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.0.is_empty()
     }
 }
 
@@ -129,10 +157,25 @@ impl RegionMemoryMeta {
     }
 }
 
+// SnapshotsOnSplit records the snapshots at the time of batch split and the
+// splitted RegionMemoryEngine.
+//
+// Say A1 is splitted into A2, B, and C.
+// After the split, A2, B, and C is responsible for dropping elements that may
+// still be accessed by A1 due to the snapshots acquired before split. So we
+// records these snapshots here and hold clone of A1, B, and C to avoid they
+// dropping elements. After the snapshots are all freed, we free the clones.
+pub struct SnapshotRecordsOnSplit {
+    uuid: Uuid,
+    snapshots: SnapshotList,
+    region_memory_engines: Vec<RegionMemoryEngine>,
+}
+
 #[derive(Default)]
 pub struct RegionCacheMemoryEngineCore {
     engine: HashMap<u64, RegionMemoryEngine>,
     region_metas: HashMap<u64, RegionMemoryMeta>,
+    snapshot_records_on_split: HashMap<u64, HashMap<Uuid, SnapshotRecordsOnSplit>>,
 }
 
 impl RegionCacheMemoryEngineCore {
@@ -158,7 +201,7 @@ impl RegionCacheMemoryEngineCore {
 /// will be read. If there's a need to read keys that may have been filtered by
 /// RegionCacheMemoryEngine (as indicated by read_ts and safe_point of the
 /// cached region), we resort to using a the disk engine's snapshot instead.
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct RegionCacheMemoryEngine {
     core: Arc<Mutex<RegionCacheMemoryEngineCore>>,
     memory_limiter: GlobalMemoryLimiter,
@@ -201,17 +244,37 @@ impl RegionCacheEngine for RegionCacheMemoryEngine {
 }
 
 #[derive(Debug)]
-pub struct MemorySplitResult;
+pub struct MemorySplitResult {
+    split_memory_engines: Vec<RegionMemoryEngine>,
+}
 
 impl BatchSplit for RegionCacheMemoryEngine {
     type SplitResult = MemorySplitResult;
 
-    fn batch_split(&self, keys: &Vec<Vec<u8>>) -> Self::SplitResult {
-        unimplemented!()
+    fn batch_split(&self, region_id: u64, keys: &Vec<Vec<u8>>) -> Self::SplitResult {
+        let core = self.core.lock().unwrap();
+        let meta = core.region_metas.get(&region_id).unwrap();
+        let memory_engine = core.engine.get(&region_id).unwrap();
+        MemorySplitResult {
+            split_memory_engines: memory_engine.batch_split(keys),
+        }
     }
 
-    fn on_batch_split(&self, split_result: Self::SplitResult) {
-        unimplemented!()
+    fn on_batch_split(&self, region_id: u64, split_result: Self::SplitResult) {
+        let mut core = self.core.lock().unwrap();
+        let meta = core.region_metas.get(&region_id).unwrap();
+        let record_snapshots = meta.snapshot_list.clone();
+        let uuid = Uuid::new_v4();
+        let records = SnapshotRecordsOnSplit {
+            uuid,
+            snapshots: record_snapshots,
+            region_memory_engines: split_result.split_memory_engines,
+        };
+        let region_records = core
+            .snapshot_records_on_split
+            .entry(region_id)
+            .or_insert(HashMap::default());
+        region_records.insert(uuid, records);
     }
 }
 
@@ -634,7 +697,25 @@ impl Drop for RegionCacheSnapshot {
     fn drop(&mut self) {
         let mut core = self.engine.core.lock().unwrap();
         let meta = core.region_metas.get_mut(&self.region_id).unwrap();
-        meta.snapshot_list.remove_snapshot(self.snapshot_ts);
+        meta.snapshot_list.remove_snapshot(self.snapshot_ts, false);
+
+        if let Some(snapshot_records) = core.snapshot_records_on_split.get_mut(&self.region_id) {
+            let freeable: Vec<_> = snapshot_records
+                .iter_mut()
+                .filter_map(|(k, v)| {
+                    v.snapshots.remove_snapshot(self.snapshot_ts, true);
+                    if v.snapshots.is_empty() {
+                        Some(k.clone())
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+
+            for uuid in freeable {
+                snapshot_records.remove(&uuid);
+            }
+        }
     }
 }
 
@@ -748,7 +829,7 @@ mod tests {
     };
     use skiplist_rs::Skiplist;
 
-    use super::{cf_to_id, RegionCacheIterator};
+    use super::{cf_to_id, GlobalMemoryLimiter, RegionCacheIterator};
     use crate::{
         keys::{encode_key, InternalKeyComparator, ValueType},
         RegionCacheMemoryEngine,
@@ -836,7 +917,7 @@ mod tests {
     }
 
     fn fill_data_in_skiplist(
-        sl: Arc<Skiplist<InternalKeyComparator>>,
+        sl: Arc<Skiplist<InternalKeyComparator, GlobalMemoryLimiter>>,
         key_range: StepBy<Range<u64>>,
         mvcc_range: Range<u64>,
         mut start_seq: u64,
@@ -853,7 +934,7 @@ mod tests {
     }
 
     fn delete_data_in_skiplist(
-        sl: Arc<Skiplist<InternalKeyComparator>>,
+        sl: Arc<Skiplist<InternalKeyComparator, GlobalMemoryLimiter>>,
         key_range: StepBy<Range<u64>>,
         mvcc_range: Range<u64>,
         mut seq: u64,
@@ -876,7 +957,7 @@ mod tests {
     }
 
     fn put_key_val(
-        sl: &Arc<Skiplist<InternalKeyComparator>>,
+        sl: &Arc<Skiplist<InternalKeyComparator, GlobalMemoryLimiter>>,
         key: &str,
         val: &str,
         mvcc: u64,
@@ -887,7 +968,12 @@ mod tests {
         sl.put(key, Bytes::from(val.to_owned()));
     }
 
-    fn delete_key(sl: &Arc<Skiplist<InternalKeyComparator>>, key: &str, mvcc: u64, seq: u64) {
+    fn delete_key(
+        sl: &Arc<Skiplist<InternalKeyComparator, GlobalMemoryLimiter>>,
+        key: &str,
+        mvcc: u64,
+        seq: u64,
+    ) {
         let key = construct_mvcc_key(key, mvcc);
         let key = encode_key(&key, seq, ValueType::Deletion);
         sl.put(key, Bytes::default());
@@ -1517,14 +1603,15 @@ mod tests {
                 core.engine.get_mut(&1).unwrap().data[cf_to_id("write")].clone()
             };
 
+            let mut s = 1;
             for seq in 2..50 {
-                put_key_val(&sl, "a", "val", 10, 1);
+                put_key_val(&sl, "a", "val", 10, s + 1);
                 for i in 2..50 {
                     let v = construct_value(i, i);
-                    put_key_val(&sl, "b", v.as_str(), 10, i);
+                    put_key_val(&sl, "b", v.as_str(), 10, s + i);
                 }
 
-                let snapshot = engine.snapshot(1, 10, seq).unwrap();
+                let snapshot = engine.snapshot(1, 10, s + seq).unwrap();
                 let mut iter = snapshot.iterator_opt("write", iter_opt.clone()).unwrap();
                 assert!(iter.seek_to_last().unwrap());
                 let k = construct_mvcc_key("b", 10);
@@ -1538,6 +1625,7 @@ mod tests {
                 assert_eq!(iter.value(), b"val");
                 assert!(!iter.prev().unwrap());
                 assert!(!iter.valid().unwrap());
+                s += 100;
             }
         }
 
@@ -1552,13 +1640,14 @@ mod tests {
                 core.engine.get_mut(&1).unwrap().data[cf_to_id("write")].clone()
             };
 
+            let mut s = 1;
             for seq in 2..50 {
-                put_key_val(&sl, "a", "val", 10, 1);
+                put_key_val(&sl, "a", "val", 10, s + 1);
                 for i in 2..50 {
-                    delete_key(&sl, "b", 10, i);
+                    delete_key(&sl, "b", 10, s + i);
                 }
 
-                let snapshot = engine.snapshot(1, 10, seq).unwrap();
+                let snapshot = engine.snapshot(1, 10, s + seq).unwrap();
                 let mut iter = snapshot.iterator_opt("write", iter_opt.clone()).unwrap();
                 assert!(iter.seek_to_last().unwrap());
                 let k = construct_mvcc_key("a", 10);
@@ -1566,6 +1655,7 @@ mod tests {
                 assert_eq!(iter.value(), b"val");
                 assert!(!iter.prev().unwrap());
                 assert!(!iter.valid().unwrap());
+                s += 100;
             }
         }
 
@@ -1611,20 +1701,23 @@ mod tests {
                 core.region_metas.get_mut(&1).unwrap().safe_ts = 5;
                 core.engine.get_mut(&1).unwrap().data[cf_to_id("write")].clone()
             };
+            let mut s = 1;
             for seq in 2..50 {
                 for i in 2..50 {
-                    delete_key(&sl, "b", 10, i);
+                    delete_key(&sl, "b", 10, s + i);
                 }
                 let v = construct_value(50, 50);
-                put_key_val(&sl, "b", v.as_str(), 10, 50);
+                put_key_val(&sl, "b", v.as_str(), 10, s + 50);
 
-                let snapshot = engine.snapshot(1, 10, seq).unwrap();
+                let snapshot = engine.snapshot(1, 10, s + seq).unwrap();
                 let mut iter = snapshot.iterator_opt("write", iter_opt.clone()).unwrap();
                 assert!(!iter.seek_to_first().unwrap());
                 assert!(!iter.valid().unwrap());
 
                 assert!(!iter.seek_to_last().unwrap());
                 assert!(!iter.valid().unwrap());
+
+                s += 100;
             }
         }
     }

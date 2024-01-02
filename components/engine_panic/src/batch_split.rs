@@ -9,11 +9,11 @@ pub struct PanicSplitResult;
 
 impl BatchSplit for PanicEngine {
     type SplitResult = PanicSplitResult;
-    fn batch_split(&self, keys: &Vec<Vec<u8>>) -> Self::SplitResult {
+    fn batch_split(&self, region_id: u64, keys: &Vec<Vec<u8>>) -> Self::SplitResult {
         panic!()
     }
 
-    fn on_batch_split(&self, split_result: Self::SplitResult) {
+    fn on_batch_split(&self, region_id: u64, split_result: Self::SplitResult) {
         panic!()
     }
 }

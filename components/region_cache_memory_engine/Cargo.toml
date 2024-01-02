@@ -14,3 +14,5 @@ skiplist-rs = { git = "https://github.com/SpadeA-Tang/skiplist-rs.git", branch =
 bytes = "1.0"
 tikv_util = { workspace = true }
 engine_rocks = { workspace = true }
+uuid = { version = "0.8.1", features = ["v4"] }
+
