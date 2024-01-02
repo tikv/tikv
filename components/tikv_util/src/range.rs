@@ -107,7 +107,11 @@ impl<K: Ord, V: Clone> SegmentMap<K, V> {
 
     // get_vaules retrive and clone the value into a vector.
     pub fn get_values(&self) -> Vec<V> {
-        self.0.values().map(|v| &v.item).cloned().collect::<Vec<V>>()
+        self.0
+            .values()
+            .map(|v| &v.item)
+            .cloned()
+            .collect::<Vec<V>>()
     }
 
     /// Like `get_by_point`, but omit the segment.
@@ -150,6 +154,7 @@ impl<K: Ord, V: Clone> SegmentMap<K, V> {
                  <K as Borrow<R>>::borrow(&end.range_end) > range.1
                      || <K as Borrow<R>>::borrow(start) > range.0
              });
+
         covered_by_the_range.map(|(k, v)| (k, &v.range_end, &v.item))
     }
 

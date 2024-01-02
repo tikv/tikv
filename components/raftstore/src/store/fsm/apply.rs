@@ -792,11 +792,11 @@ pub fn notify_stale_req_with_msg(term: u64, msg: String, cb: impl ErrorCallback)
 }
 
 /// Checks if ingest is needed to be flushed before handling the command.
-fn should_flush_pending_ssts_to_engine<EK: KvEngine>(
-    apply_ctx: &mut ApplyContext<EK>,
+fn should_flush_pending_ssts_to_engine(
+    pending_ssts: &SegmentMap<Vec<u8>, SstMetaInfo>,
     cmd: &RaftCmdRequest,
 ) -> bool {
-    if apply_ctx.pending_ssts.is_empty() {
+    if pending_ssts.is_empty() {
         // no pending ssts
         return false;
     }
@@ -809,7 +809,7 @@ fn should_flush_pending_ssts_to_engine<EK: KvEngine>(
                 ingest_req.get_sst().get_range().get_start(),
                 ingest_req.get_sst().get_range().get_end(),
             );
-            if apply_ctx.pending_ssts.is_overlapping((start, end)) {
+            if pending_ssts.is_overlapping((start, end)) {
                 return true;
             }
         }
@@ -1255,7 +1255,7 @@ where
                     self.last_flush_applied_index != self.apply_state.get_applied_index();
                 if has_unflushed_data
                     && (should_write_to_engine(&cmd)
-                        || should_flush_pending_ssts_to_engine(apply_ctx, &cmd))
+                        || should_flush_pending_ssts_to_engine(&apply_ctx.pending_ssts, &cmd))
                     || apply_ctx.kv_wb().should_write_to_engine()
                         && apply_ctx.host.pre_persist(&self.region, false, Some(&cmd))
                 {
@@ -2026,8 +2026,20 @@ where
                     meta_info.meta.get_range().get_start(),
                     meta_info.meta.get_range().get_end(),
                 );
-                ctx.pending_ssts
-                    .insert((start.to_vec(), end.to_vec()), meta_info.clone());
+                if !ctx
+                    .pending_ssts
+                    .insert((start.to_vec(), end.to_vec()), meta_info.clone())
+                {
+                    // unreachable here, because we already check the overlap in
+                    // handle_raft_entry_normal.
+                    error!("ingest overlapped";
+                        "region_id" => self.region_id(),
+                        "peer_id" => self.id(),
+                        "sst" => ?sst,
+                        "region" => ?&self.region,
+                    );
+                    return Err(box_err!("ingest overlapped {:?}", sst));
+                }
                 ssts.push(meta_info)
             }
             Err(e) => {
@@ -5050,6 +5062,7 @@ mod tests {
     use engine_test::kv::{new_engine, KvTestEngine, KvTestSnapshot};
     use engine_traits::{Peekable as PeekableTrait, SyncMutable, WriteBatchExt};
     use kvproto::{
+        import_sstpb::Range,
         kvrpcpb::ApiVersion,
         metapb::{self, RegionEpoch},
         raft_cmdpb::*,
@@ -5229,6 +5242,81 @@ mod tests {
         // Normal command
         let req = RaftCmdRequest::default();
         assert_eq!(should_sync_log(&req), false);
+    }
+
+    #[test]
+    fn test_should_flush_pending_ssts_to_engine() {
+        // ingest sst command
+        let mut req = Request::default();
+        req.set_cmd_type(CmdType::IngestSst);
+        let mut ingest = IngestSstRequest::default();
+        let s = vec![3];
+        let e = vec![6];
+        let mut range = Range::default();
+        range.set_start(s);
+        range.set_end(e);
+        let mut meta = SstMeta::default();
+        meta.set_range(range);
+        ingest.set_sst(meta);
+        req.set_ingest_sst(ingest);
+        req.set_cmd_type(CmdType::IngestSst);
+        let mut cmd = RaftCmdRequest::default();
+        cmd.mut_requests().push(req);
+
+        // mock pending ssts
+        let mut segment_map = SegmentMap::default();
+
+        // case #1: no pending ssts, should not flush
+        assert_eq!(
+            should_flush_pending_ssts_to_engine(&segment_map, &cmd),
+            false
+        );
+
+        let s1 = vec![];
+        let e1 = vec![2];
+        let mut sst1 = SstMetaInfo::default();
+        let mut range = Range::default();
+        range.set_start(s1.clone());
+        range.set_end(e1.clone());
+        sst1.meta.set_range(range);
+        segment_map.insert((s1, e1), sst1);
+
+        // case #2: no overlap range ssts, should not flush
+        assert_eq!(
+            should_flush_pending_ssts_to_engine(&segment_map, &cmd),
+            false
+        );
+
+        let s2 = vec![7];
+        let e2 = vec![];
+        let mut sst2 = SstMetaInfo::default();
+        let mut range = Range::default();
+        range.set_start(s2.clone());
+        range.set_end(e2.clone());
+        sst2.meta.set_range(range);
+        segment_map.insert((s2, e2), sst2);
+
+        // case #3: no overlap range ssts, should not flush
+        assert_eq!(
+            should_flush_pending_ssts_to_engine(&segment_map, &cmd),
+            false
+        );
+
+        let s3 = vec![2];
+        let e3 = vec![4];
+        let mut sst3 = SstMetaInfo::default();
+        let mut range = Range::default();
+        range.set_start(s3.clone());
+        range.set_end(e3.clone());
+        sst3.meta.set_range(range);
+        segment_map.insert((s3, e3), sst3);
+
+        // case #4: overlapped range ssts with [3, 6], should flush
+        assert_eq!(
+            should_flush_pending_ssts_to_engine(&segment_map, &cmd),
+            true
+        );
+        // assert_eq!(&segment_map.get_values(), &vec![sst1, sst2, sst3]);
     }
 
     #[test]
