@@ -4503,7 +4503,12 @@ where
         }
 
         match req.get_admin_request().get_cmd_type() {
-            AdminCmdType::Split | AdminCmdType::BatchSplit => ctx.insert(ProposalContext::SPLIT),
+            AdminCmdType::Split | AdminCmdType::BatchSplit => {
+                ctx.insert(ProposalContext::SPLIT);
+                if !self.is_leader() {
+                    poll_ctx.raft_metrics.propose.non_leader_split.inc();
+                }
+            }
             AdminCmdType::PrepareMerge => {
                 self.pre_propose_prepare_merge(poll_ctx, req)?;
                 ctx.insert(ProposalContext::PREPARE_MERGE);

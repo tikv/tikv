@@ -5286,7 +5286,7 @@ where
             && !is_read_index_request
             && !allow_replica_read
             && !allow_stale_read
-            // allow proposal split command at non leader, raft layer will forward it to leader.
+            // allow proposal split command at non-leader, raft layer will forward it to leader.
             && !split_region
         {
             self.ctx.raft_metrics.invalid_proposal.not_leader.inc();
