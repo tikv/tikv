@@ -6,13 +6,12 @@ use engine_traits::KvEngine;
 use kvproto::metapb::Region;
 use raft::StateRole;
 use raftstore::coprocessor::*;
-use tikv_util::{worker::Scheduler, HandyRwLock};
+use tikv_util::{worker::Scheduler, HandyRwLock, range::SegmentSet};
 
 use crate::{
     debug,
     endpoint::{ObserveOp, Task},
     try_send,
-    utils::SegmentSet,
 };
 
 /// An Observer for Backup Stream.

@@ -790,6 +790,17 @@ pub fn notify_stale_req_with_msg(term: u64, msg: String, cb: impl ErrorCallback)
     cb.report_error(resp);
 }
 
+/// Checks if ingest is needed to be flushed before handling the command.
+fn should_flush_pending_ssts_to_engine<EK:KvEngine>(apply_ctx: &mut ApplyContext<EK>, cmd: &RaftCmdRequest) -> bool {
+    for req in cmd.get_requests() {
+        if req.has_ingest_sst() {
+            // TODO check the range overlapped
+            return apply_ctx.pending_ssts.len() > 0 
+        }
+    }
+    false
+}
+
 /// Checks if a write is needed to be issued before handling the command.
 fn should_write_to_engine(cmd: &RaftCmdRequest) -> bool {
     if cmd.has_admin_request() {
@@ -807,9 +818,6 @@ fn should_write_to_engine(cmd: &RaftCmdRequest) -> bool {
     // must write the current write batch to the engine first.
     for req in cmd.get_requests() {
         if req.has_delete_range() {
-            return true;
-        }
-        if req.has_ingest_sst() {
             return true;
         }
     }
@@ -1230,7 +1238,8 @@ where
                 let mut has_unflushed_data =
                     self.last_flush_applied_index != self.apply_state.get_applied_index();
                 if (has_unflushed_data && should_write_to_engine(&cmd)
-                    || apply_ctx.kv_wb().should_write_to_engine())
+                    || apply_ctx.kv_wb().should_write_to_engine()
+                    || should_flush_pending_ssts_to_engine(apply_ctx, &cmd))
                     && apply_ctx.host.pre_persist(&self.region, false, Some(&cmd))
                 {
                     apply_ctx.commit(self);

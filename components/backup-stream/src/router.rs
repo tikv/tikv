@@ -34,6 +34,7 @@ use tikv_util::{
     codec::stream_event::EventEncoder,
     config::ReadableSize,
     error, info,
+    range::SegmentMap,
     time::{Instant, Limiter},
     warn,
     worker::Scheduler,
@@ -58,7 +59,7 @@ use crate::{
     subscription_track::TwoPhaseResolver,
     tempfiles::{self, TempFilePool},
     try_send,
-    utils::{self, CompressionWriter, FilesReader, SegmentMap, SlotMap, StopWatch},
+    utils::{self, CompressionWriter, FilesReader, SlotMap, StopWatch},
 };
 
 const FLUSH_FAILURE_BECOME_FATAL_THRESHOLD: usize = 30;
