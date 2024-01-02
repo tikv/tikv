@@ -18,6 +18,8 @@ use tikv_util::{
     box_err, debug, info, sys::thread::ThreadBuildWrapper, time::Instant, warn, worker::Scheduler,
 };
 use tokio::sync::mpsc::{channel, error::SendError, Receiver, Sender};
+use tracing::instrument;
+use tracing_active_tree::root;
 use txn_types::TimeStamp;
 
 use crate::{
@@ -176,6 +178,7 @@ where
 
 impl ScanCmd {
     /// execute the initial scanning via the specificated [`InitialDataLoader`].
+    #[instrument(skip_all)]
     async fn exec_by(&self, initial_scan: impl InitialScan) -> Result<()> {
         let Self {
             region,
@@ -195,6 +198,7 @@ impl ScanCmd {
     }
 
     /// execute the command, when meeting error, retrying.
+    #[instrument(skip_all)]
     async fn exec_by_with_retry(self, init: impl InitialScan) {
         let mut retry_time = INITIAL_SCAN_FAILURE_MAX_RETRY_TIME;
         loop {
@@ -232,7 +236,9 @@ async fn scan_executor_loop(init: impl InitialScan, mut cmds: Receiver<ScanCmd>)
         }
 
         let init = init.clone();
-        tokio::task::spawn(async move {
+        let id = cmd.region.id;
+        let handle_id = cmd.handle.id;
+        tokio::task::spawn(root!("exec_initial_scan"; async move {
             metrics::PENDING_INITIAL_SCAN_LEN
                 .with_label_values(&["executing"])
                 .inc();
@@ -240,7 +246,7 @@ async fn scan_executor_loop(init: impl InitialScan, mut cmds: Receiver<ScanCmd>)
             metrics::PENDING_INITIAL_SCAN_LEN
                 .with_label_values(&["executing"])
                 .dec();
-        });
+        }; region = id, handle = ?handle_id));
     }
 }
 
@@ -251,9 +257,9 @@ fn spawn_executors(
 ) -> ScanPoolHandle {
     let (tx, rx) = tokio::sync::mpsc::channel(MESSAGE_BUFFER_SIZE);
     let pool = create_scan_pool(number);
-    pool.spawn(async move {
+    pool.spawn(root!("scan_executor_loop"; async move {
         scan_executor_loop(init, rx).await;
-    });
+    }));
     ScanPoolHandle { tx, _pool: pool }
 }
 
@@ -397,6 +403,7 @@ where
     }
 
     /// the handler loop.
+    #[instrument(skip_all)]
     async fn region_operator_loop<E, RT>(
         self,
         mut message_box: Receiver<ObserveOp>,
@@ -532,6 +539,7 @@ where
         }
     }
 
+    #[instrument(skip_all)]
     async fn try_start_observe(&self, region: &Region, handle: ObserveHandle) -> Result<()> {
         match self.find_task_by_region(region) {
             None => {
@@ -559,6 +567,7 @@ where
         Ok(())
     }
 
+    #[instrument(skip_all)]
     async fn start_observe(&self, region: Region) {
         self.start_observe_with_failure_count(region, 0).await
     }
@@ -569,7 +578,7 @@ where
         self.subs.add_pending_region(&region);
         if let Err(err) = self.try_start_observe(&region, handle.clone()).await {
             warn!("failed to start observe, would retry"; "err" => %err, utils::slog_region(&region));
-            tokio::spawn(async move {
+            tokio::spawn(root!("retry_start_observe"; async move {
                 #[cfg(not(feature = "failpoints"))]
                 let delay = backoff_for_start_observe(has_failed_for);
                 #[cfg(feature = "failpoints")]
@@ -593,7 +602,7 @@ where
                         has_failed_for: has_failed_for + 1
                     })
                 )
-            });
+            }));
         }
     }
 
@@ -668,6 +677,7 @@ where
         Ok(())
     }
 
+    #[instrument(skip_all)]
     async fn get_last_checkpoint_of(&self, task: &str, region: &Region) -> Result<TimeStamp> {
         fail::fail_point!("get_last_checkpoint_of", |hint| Err(Error::Other(
             box_err!(
@@ -688,6 +698,7 @@ where
         Ok(cp.ts)
     }
 
+    #[instrument(skip_all)]
     async fn spawn_scan(&self, cmd: ScanCmd) {
         // we should not spawn initial scanning tasks to the tokio blocking pool
         // because it is also used for converting sync File I/O to async. (for now!)
@@ -702,6 +713,7 @@ where
         }
     }
 
+    #[instrument(skip_all)]
     async fn observe_over_with_initial_data_from_checkpoint(
         &self,
         region: &Region,

@@ -658,12 +658,8 @@ where
             let meta = store_meta.lock().unwrap();
             (meta.region_read_progress().clone(), meta.store_id())
         };
-        let advance_worker = AdvanceTsWorker::new(
-            cfg.advance_ts_interval.0,
-            pd_client.clone(),
-            scheduler.clone(),
-            concurrency_manager,
-        );
+        let advance_worker =
+            AdvanceTsWorker::new(pd_client.clone(), scheduler.clone(), concurrency_manager);
         let scanner_pool = ScannerPool::new(cfg.scan_lock_pool_size, cdc_handle);
         let store_resolver_gc_interval = Duration::from_secs(60);
         let leader_resolver = LeadershipResolver::new(

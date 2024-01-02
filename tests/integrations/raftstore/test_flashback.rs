@@ -555,9 +555,11 @@ trait ClusterI {
     ) -> raftstore::Result<RaftCmdResponse>;
 }
 
-impl ClusterI for Cluster<NodeCluster> {
+impl ClusterI for Cluster<RocksEngine, NodeCluster<RocksEngine>> {
     fn region_local_state(&self, region_id: u64, store_id: u64) -> RegionLocalState {
-        Cluster::<NodeCluster>::region_local_state(self, region_id, store_id)
+        Cluster::<RocksEngine, NodeCluster<RocksEngine>>::region_local_state(
+            self, region_id, store_id,
+        )
     }
     fn query_leader(
         &self,
@@ -565,14 +567,16 @@ impl ClusterI for Cluster<NodeCluster> {
         region_id: u64,
         timeout: Duration,
     ) -> Option<metapb::Peer> {
-        Cluster::<NodeCluster>::query_leader(self, store_id, region_id, timeout)
+        Cluster::<RocksEngine, NodeCluster<RocksEngine>>::query_leader(
+            self, store_id, region_id, timeout,
+        )
     }
     fn call_command(
         &self,
         request: RaftCmdRequest,
         timeout: Duration,
     ) -> raftstore::Result<RaftCmdResponse> {
-        Cluster::<NodeCluster>::call_command(self, request, timeout)
+        Cluster::<RocksEngine, NodeCluster<RocksEngine>>::call_command(self, request, timeout)
     }
 }
 

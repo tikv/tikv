@@ -981,6 +981,7 @@ def graph_panel_histogram_quantiles(
     metric: str,
     label_selectors: list[str] = [],
     by_labels: list[str] = [],
+    hide_p9999=False,
     hide_avg=False,
     hide_count=False,
 ) -> Panel:
@@ -1013,6 +1014,7 @@ def graph_panel_histogram_quantiles(
                     by_labels=by_labels,
                 ),
                 legend_format=legend("99.99%", by_labels),
+                hide=hide_p9999,
             ),
             target(
                 expr=expr_histogram_quantile(
@@ -1070,7 +1072,16 @@ def heatmap_panel_graph_panel_histogram_quantile_pairs(
     metric: str,
     label_selectors=[],
     graph_by_labels=[],
+    graph_hides: list[str] = ["count"],
 ) -> list[Panel]:
+    hide_count = False
+    hide_avg = False
+    for hide in graph_hides:
+        if hide == "count":
+            hide_count = True
+        elif hide == "avg":
+            hide_avg = True
+
     return [
         heatmap_panel(
             title=heatmap_title,
@@ -1086,6 +1097,7 @@ def heatmap_panel_graph_panel_histogram_quantile_pairs(
             yaxes=yaxes(left_format=yaxis_format),
             label_selectors=label_selectors,
             by_labels=graph_by_labels,
-            hide_count=True,
+            hide_count=hide_count,
+            hide_avg=hide_avg,
         ),
     ]
