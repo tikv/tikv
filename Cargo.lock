@@ -5229,7 +5229,7 @@ checksum = "fa8f3741c7372e75519bd9346068370c9cdaabcc1f9599cbcf2a2719352286b7"
 [[package]]
 name = "skiplist-rs"
 version = "0.1.0"
-source = "git+https://github.com/SpadeA-Tang/skiplist-rs.git?branch=link-head#88194fc0151b43c1b49c4e31b45db2f3e9a82c72"
+source = "git+https://github.com/SpadeA-Tang/skiplist-rs.git?branch=link-head#bd969200b8aa8bb1a5953e166c9debd70d9785f0"
 dependencies = [
  "bytes",
  "rand 0.8.5",
@@ -6890,7 +6890,7 @@ version = "1.6.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "97fee6b57c6a41524a810daee9286c02d7752c4253064d0b05472833a438f675"
 dependencies = [
- "cfg-if 0.1.10",
+ "cfg-if 1.0.0",
  "static_assertions",
 ]
 

@@ -84,7 +84,7 @@ impl RegionMemoryEngine {
         let skiplists: Vec<_> = self.data.iter().map(|s| s.split_skiplist(keys)).collect();
         assert_eq!(skiplists.len(), 3);
         let mut memory_engines = vec![];
-        for i in 0..keys.len() + 1 {
+        for i in 0..keys.len() {
             memory_engines.push(RegionMemoryEngine {
                 data: [
                     Arc::new(skiplists[0][i].clone()),
@@ -245,18 +245,27 @@ impl RegionCacheEngine for RegionCacheMemoryEngine {
 
 #[derive(Debug)]
 pub struct MemorySplitResult {
-    split_memory_engines: Vec<RegionMemoryEngine>,
+    split_memory_engines: Vec<(u64, RegionMemoryEngine)>,
 }
 
 impl BatchSplit for RegionCacheMemoryEngine {
     type SplitResult = MemorySplitResult;
 
-    fn batch_split(&self, region_id: u64, keys: &Vec<Vec<u8>>) -> Self::SplitResult {
+    fn batch_split(
+        &self,
+        region_id: u64,
+        splitted_region_id: Vec<u64>,
+        keys: &Vec<Vec<u8>>,
+    ) -> Self::SplitResult {
         let core = self.core.lock().unwrap();
         let meta = core.region_metas.get(&region_id).unwrap();
         let memory_engine = core.engine.get(&region_id).unwrap();
+        let split_memory_engines: Vec<_> = splitted_region_id
+            .into_iter()
+            .zip(memory_engine.batch_split(keys).into_iter())
+            .collect();
         MemorySplitResult {
-            split_memory_engines: memory_engine.batch_split(keys),
+            split_memory_engines,
         }
     }
 
@@ -265,11 +274,32 @@ impl BatchSplit for RegionCacheMemoryEngine {
         let meta = core.region_metas.get(&region_id).unwrap();
         let record_snapshots = meta.snapshot_list.clone();
         let uuid = Uuid::new_v4();
+
+        for (id, e) in &split_result.split_memory_engines {
+            if *id != region_id {
+                assert!(core.engine.get(id).is_none());
+                assert!(core.region_metas.get(id).is_none());
+                core.engine.insert(*id, e.clone());
+                core.region_metas.insert(*id, RegionMemoryMeta::default());
+            } else {
+                core.engine.insert(*id, e.clone());
+            }
+        }
+
+        if record_snapshots.is_empty() {
+            return;
+        }
+
         let records = SnapshotRecordsOnSplit {
             uuid,
             snapshots: record_snapshots,
-            region_memory_engines: split_result.split_memory_engines,
+            region_memory_engines: split_result
+                .split_memory_engines
+                .into_iter()
+                .map(|(_, e)| e)
+                .collect(),
         };
+
         let region_records = core
             .snapshot_records_on_split
             .entry(region_id)
@@ -825,7 +855,7 @@ mod tests {
 
     use bytes::{BufMut, Bytes};
     use engine_traits::{
-        IterOptions, Iterable, Iterator, Peekable, ReadOptions, RegionCacheEngine,
+        BatchSplit, IterOptions, Iterable, Iterator, Peekable, ReadOptions, RegionCacheEngine,
     };
     use skiplist_rs::Skiplist;
 
@@ -1785,5 +1815,55 @@ mod tests {
             }
             assert_eq!(start, 20);
         }
+    }
+
+    #[test]
+    fn test_batch_split() {
+        let engine = RegionCacheMemoryEngine::default();
+        engine.new_region(1);
+
+        {
+            let mut core = engine.core.lock().unwrap();
+            core.region_metas.get_mut(&1).unwrap().can_read = true;
+            core.region_metas.get_mut(&1).unwrap().safe_ts = 5;
+            let sl = core.engine.get_mut(&1).unwrap().data[cf_to_id("write")].clone();
+
+            for i in 0..9 {
+                let user_key = construct_key(i, 10);
+                let internal_key = encode_key(&user_key, 10, ValueType::Value);
+                let v = format!("v{:02}{:02}", i, 10);
+                sl.put(internal_key, v);
+            }
+        }
+
+        let s1 = engine.snapshot(1, 10, 10).unwrap();
+        let s2 = engine.snapshot(1, 20, 20).unwrap();
+        let s3 = engine.snapshot(1, 30, 30).unwrap();
+
+        let split_keys = vec![
+            construct_user_key(0),
+            construct_user_key(3),
+            construct_user_key(6),
+        ];
+        let sr = engine.batch_split(1, vec![1, 2, 3], &split_keys);
+        engine.on_batch_split(1, sr);
+
+        println!(
+            "count {}",
+            Arc::strong_count(&s1.region_memory_engine.data[0])
+        );
+
+        drop(s1);
+
+        println!(
+            "count {}",
+            Arc::strong_count(&s2.region_memory_engine.data[0])
+        );
+
+        drop(s2);
+        println!(
+            "count {}",
+            Arc::strong_count(&s3.region_memory_engine.data[0])
+        );
     }
 }
