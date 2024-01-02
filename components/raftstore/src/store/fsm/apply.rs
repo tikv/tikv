@@ -61,6 +61,7 @@ use tikv_util::{
     debug, error, info,
     memory::HeapSize,
     mpsc::{loose_bounded, LooseBoundedSender, Receiver},
+    range::SegmentMap,
     safe_panic, slow_log,
     store::{find_peer, find_peer_by_id, find_peer_mut, is_learner, remove_peer},
     time::{duration_to_sec, Instant},
@@ -445,7 +446,7 @@ where
     yield_high_latency_operation: bool,
 
     /// The ssts waiting to be ingested in `write_to_db`.
-    pending_ssts: Vec<SstMetaInfo>,
+    pending_ssts: SegmentMap<Vec<u8>, SstMetaInfo>,
 
     /// The pending inspector should be cleaned at the end of a write.
     pending_latency_inspect: Vec<LatencyInspector>,
@@ -515,7 +516,7 @@ where
             pending_create_peers,
             priority,
             yield_high_latency_operation: cfg.apply_batch_system.low_priority_pool_size > 0,
-            pending_ssts: vec![],
+            pending_ssts: SegmentMap::default(),
             pending_latency_inspect: vec![],
             apply_wait: APPLY_TASK_WAIT_TIME_HISTOGRAM.local(),
             apply_time: APPLY_TIME_HISTOGRAM.local(),
@@ -572,14 +573,14 @@ where
         if !self.pending_ssts.is_empty() {
             let tag = self.tag.clone();
             self.importer
-                .ingest(&self.pending_ssts, &self.engine)
+                .ingest(&self.pending_ssts.into_values(), &self.engine)
                 .unwrap_or_else(|e| {
                     panic!(
                         "{} failed to ingest ssts {:?}: {:?}",
                         tag, self.pending_ssts, e
                     );
                 });
-            self.pending_ssts = vec![];
+            self.pending_ssts.clear();
         }
         if !self.kv_wb_mut().is_empty() {
             self.perf_context.start_observe();
@@ -791,11 +792,22 @@ pub fn notify_stale_req_with_msg(term: u64, msg: String, cb: impl ErrorCallback)
 }
 
 /// Checks if ingest is needed to be flushed before handling the command.
-fn should_flush_pending_ssts_to_engine<EK:KvEngine>(apply_ctx: &mut ApplyContext<EK>, cmd: &RaftCmdRequest) -> bool {
+fn should_flush_pending_ssts_to_engine<EK: KvEngine>(
+    apply_ctx: &mut ApplyContext<EK>,
+    cmd: &RaftCmdRequest,
+) -> bool {
     for req in cmd.get_requests() {
         if req.has_ingest_sst() {
-            // TODO check the range overlapped
-            return apply_ctx.pending_ssts.len() > 0 
+            // once there is an ingest sst file overlapped with currenct pending ssts.
+            // we need flush it to storage.
+            let ingest_req = req.get_ingest_sst();
+            let (start, end) = (
+                ingest_req.get_sst().get_range().get_start(),
+                ingest_req.get_sst().get_range().get_end(),
+            );
+            if apply_ctx.pending_ssts.is_overlapping((start, end)) {
+                return true;
+            }
         }
     }
     false
@@ -2005,7 +2017,8 @@ where
 
         match ctx.importer.validate(sst) {
             Ok(meta_info) => {
-                ctx.pending_ssts.push(meta_info.clone());
+                let (start, end) = (meta_info.meta.range.start, meta_info.meta.range.end);
+                ctx.pending_ssts.insert((start, end), meta_info.clone());
                 ssts.push(meta_info)
             }
             Err(e) => {

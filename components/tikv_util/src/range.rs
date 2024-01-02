@@ -1,10 +1,11 @@
 // Copyright 2023 TiKV Project Authors. Licensed under Apache-2.0.
 
 /// This mod provide some utility types and functions for resource control.
-
 use std::borrow::Borrow;
-use std::collections::BTreeMap;
-use std::ops::{Bound,RangeBounds};
+use std::{
+    collections::BTreeMap,
+    ops::{Bound, RangeBounds},
+};
 
 /// Like `..=val`(a.k.a. `RangeToInclusive`), but allows `val` being a reference
 /// to DSTs.
@@ -103,6 +104,14 @@ impl<K: Ord, V> SegmentMap<K, V> {
         self.get_by_point(point).map(|(_, _, v)| v)
     }
 
+    pub fn into_values<R>(self) -> Vec<V>
+    where
+        K: Borrow<R>,
+        R: Ord + ?Sized,
+    {
+        self.0.into_values().collect()
+    }
+
     /// Like `get_by_point`, but omit the segment.
     pub fn get_interval_by_point<R>(&self, point: &R) -> Option<(&K, &K)>
     where
@@ -165,30 +174,39 @@ impl<K: Ord, V> SegmentMap<K, V> {
     }
 }
 
-
-
 #[cfg(test)]
-mod tests{
-#[test]
-fn test_segment_tree() {
-    let mut tree = SegmentMap::default();
-    assert!(tree.add((1, 4)));
-    assert!(tree.add((4, 8)));
-    assert!(tree.add((42, 46)));
-    assert!(!tree.add((3, 8)));
-    assert!(tree.insert((47, 88), "hello".to_owned()));
-    assert_eq!(
-        tree.get_value_by_point(&49).map(String::as_str),
-        Some("hello")
-    );
-    assert_eq!(tree.get_interval_by_point(&3), Some((&1, &4)));
-    assert_eq!(tree.get_interval_by_point(&7), Some((&4, &8)));
-    assert_eq!(tree.get_interval_by_point(&90), None);
-    assert!(tree.is_overlapping((&1, &3)));
-    assert!(tree.is_overlapping((&7, &9)));
-    assert!(!tree.is_overlapping((&8, &42)));
-    assert!(!tree.is_overlapping((&9, &10)));
-    assert!(tree.is_overlapping((&2, &10)));
-    assert!(tree.is_overlapping((&0, &9999999)));
-}
+mod tests {
+    #[test]
+    fn test_segment_tree() {
+        let mut tree = SegmentMap::default();
+        assert!(tree.add((1, 4)));
+        assert!(tree.add((4, 8)));
+        assert!(tree.add((42, 46)));
+        assert!(!tree.add((3, 8)));
+        assert!(tree.insert((47, 88), "hello".to_owned()));
+        assert_eq!(
+            tree.get_value_by_point(&49).map(String::as_str),
+            Some("hello")
+        );
+        assert_eq!(tree.get_interval_by_point(&3), Some((&1, &4)));
+        assert_eq!(tree.get_interval_by_point(&7), Some((&4, &8)));
+        assert_eq!(tree.get_interval_by_point(&90), None);
+        assert!(tree.is_overlapping((&1, &3)));
+        assert!(tree.is_overlapping((&7, &9)));
+        assert!(!tree.is_overlapping((&8, &42)));
+        assert!(!tree.is_overlapping((&9, &10)));
+        assert!(tree.is_overlapping((&2, &10)));
+        assert!(tree.is_overlapping((&0, &9999999)));
+    }
+
+    #[test]
+    fn test_values() {
+        let mut tree = SegmentMap::default();
+        assert!(tree.add((1, 4)));
+        assert!(tree.add((4, 8)));
+        assert!(tree.add((42, 46)));
+        assert!(!tree.add((3, 8)));
+        assert!(tree.insert((47, 88), "hello".to_owned()));
+        assert!(tree.get_all_values(), vec!["hello"])
+    }
 }

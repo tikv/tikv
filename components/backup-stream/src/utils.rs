@@ -99,7 +99,6 @@ pub type Slot<T> = Mutex<T>;
 /// NOTE: Maybe we can use dashmap for replacing the RwLock.
 pub type SlotMap<K, V, S = RandomState> = RwLock<HashMap<K, Slot<V>, S>>;
 
-
 /// transform a [`RaftCmdRequest`] to `(key, value, cf)` triple.
 /// once it contains a write request, extract it, and return `Left((key, value,
 /// cf))`, otherwise return the request itself via `Right`.
@@ -652,6 +651,7 @@ mod test {
     use futures::executor::block_on;
     use kvproto::metapb::{Region, RegionEpoch};
     use tokio::io::{AsyncWriteExt, BufReader};
+
     use crate::utils::{is_in_range, CallbackWaitGroup};
 
     #[test]

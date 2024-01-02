@@ -6,7 +6,7 @@ use engine_traits::KvEngine;
 use kvproto::metapb::Region;
 use raft::StateRole;
 use raftstore::coprocessor::*;
-use tikv_util::{worker::Scheduler, HandyRwLock, range::SegmentSet};
+use tikv_util::{range::SegmentSet, worker::Scheduler, HandyRwLock};
 
 use crate::{
     debug,
