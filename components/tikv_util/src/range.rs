@@ -3,6 +3,7 @@
 /// This mod provide some utility types and functions for resource control.
 use std::borrow::Borrow;
 use std::{
+    clone::Clone,
     collections::BTreeMap,
     ops::{Bound, RangeBounds},
 };
@@ -34,7 +35,7 @@ impl<'a, T: ?Sized> RangeBounds<T> for RangeToExclusiveRef<'a, T> {
 }
 
 #[derive(Default, Debug, Clone)]
-pub struct SegmentMap<K: Ord, V>(BTreeMap<K, SegmentValue<K, V>>);
+pub struct SegmentMap<K: Ord, V: Clone>(BTreeMap<K, SegmentValue<K, V>>);
 
 #[derive(Clone, Debug)]
 pub struct SegmentValue<R, T> {
@@ -49,7 +50,7 @@ pub struct SegmentValue<R, T> {
 /// So it can contains overlapping segments.
 pub type SegmentSet<T> = SegmentMap<T, ()>;
 
-impl<K: Ord, V: Default> SegmentMap<K, V> {
+impl<K: Ord, V: Clone + Default> SegmentMap<K, V> {
     /// Try to add a element into the segment tree, with default value.
     /// (This is useful when using the segment tree as a `Set`, i.e.
     /// `SegmentMap<T, ()>`)
@@ -61,7 +62,7 @@ impl<K: Ord, V: Default> SegmentMap<K, V> {
     }
 }
 
-impl<K: Ord, V> SegmentMap<K, V> {
+impl<K: Ord, V: Clone> SegmentMap<K, V> {
     /// Remove all records in the map.
     pub fn clear(&mut self) {
         self.0.clear();
@@ -104,12 +105,9 @@ impl<K: Ord, V> SegmentMap<K, V> {
         self.get_by_point(point).map(|(_, _, v)| v)
     }
 
-    pub fn into_values<R>(self) -> Vec<V>
-    where
-        K: Borrow<R>,
-        R: Ord + ?Sized,
-    {
-        self.0.into_values().collect()
+    // get_vaules retrive and clone the value into a vector.
+    pub fn get_values(&self) -> Vec<V> {
+        self.0.values().map(|v| v.item).cloned().collect::<Vec<V>>()
     }
 
     /// Like `get_by_point`, but omit the segment.
@@ -176,6 +174,7 @@ impl<K: Ord, V> SegmentMap<K, V> {
 
 #[cfg(test)]
 mod tests {
+    use crate::range::SegmentMap;
     #[test]
     fn test_segment_tree() {
         let mut tree = SegmentMap::default();
@@ -207,6 +206,6 @@ mod tests {
         assert!(tree.add((42, 46)));
         assert!(!tree.add((3, 8)));
         assert!(tree.insert((47, 88), "hello".to_owned()));
-        assert!(tree.get_all_values(), vec!["hello"])
+        assert_eq!(tree.get_values(), vec!["hello"])
     }
 }

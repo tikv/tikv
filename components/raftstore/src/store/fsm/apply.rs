@@ -573,7 +573,7 @@ where
         if !self.pending_ssts.is_empty() {
             let tag = self.tag.clone();
             self.importer
-                .ingest(&self.pending_ssts.into_values(), &self.engine)
+                .ingest(&self.pending_ssts.get_values(), &self.engine)
                 .unwrap_or_else(|e| {
                     panic!(
                         "{} failed to ingest ssts {:?}: {:?}",
@@ -796,6 +796,10 @@ fn should_flush_pending_ssts_to_engine<EK: KvEngine>(
     apply_ctx: &mut ApplyContext<EK>,
     cmd: &RaftCmdRequest,
 ) -> bool {
+    if apply_ctx.pending_ssts.is_empty() {
+        // no pending ssts
+        return false;
+    }
     for req in cmd.get_requests() {
         if req.has_ingest_sst() {
             // once there is an ingest sst file overlapped with currenct pending ssts.
@@ -1249,10 +1253,11 @@ where
                 }
                 let mut has_unflushed_data =
                     self.last_flush_applied_index != self.apply_state.get_applied_index();
-                if (has_unflushed_data && should_write_to_engine(&cmd)
+                if has_unflushed_data
+                    && (should_write_to_engine(&cmd)
+                        || should_flush_pending_ssts_to_engine(apply_ctx, &cmd))
                     || apply_ctx.kv_wb().should_write_to_engine()
-                    || should_flush_pending_ssts_to_engine(apply_ctx, &cmd))
-                    && apply_ctx.host.pre_persist(&self.region, false, Some(&cmd))
+                        && apply_ctx.host.pre_persist(&self.region, false, Some(&cmd))
                 {
                     apply_ctx.commit(self);
                     if self.metrics.written_bytes >= apply_ctx.yield_msg_size
@@ -2017,8 +2022,12 @@ where
 
         match ctx.importer.validate(sst) {
             Ok(meta_info) => {
-                let (start, end) = (meta_info.meta.range.start, meta_info.meta.range.end);
-                ctx.pending_ssts.insert((start, end), meta_info.clone());
+                let (start, end) = (
+                    meta_info.meta.get_range().get_start(),
+                    meta_info.meta.get_range().get_end(),
+                );
+                ctx.pending_ssts
+                    .insert((start.to_vec(), end.to_vec()), meta_info.clone());
                 ssts.push(meta_info)
             }
             Err(e) => {
@@ -5215,7 +5224,6 @@ mod tests {
         req.set_ingest_sst(IngestSstRequest::default());
         let mut cmd = RaftCmdRequest::default();
         cmd.mut_requests().push(req);
-        assert_eq!(should_write_to_engine(&cmd), true);
         assert_eq!(should_sync_log(&cmd), true);
 
         // Normal command
@@ -5231,10 +5239,10 @@ mod tests {
             .set_cmd_type(AdminCmdType::ComputeHash);
         assert_eq!(should_write_to_engine(&req), true);
 
-        // IngestSst command
+        // Delet range command
         let mut req = Request::default();
-        req.set_cmd_type(CmdType::IngestSst);
-        req.set_ingest_sst(IngestSstRequest::default());
+        req.set_cmd_type(CmdType::DeleteRange);
+        req.set_delete_range(DeleteRange::default());
         let mut cmd = RaftCmdRequest::default();
         cmd.mut_requests().push(req);
         assert_eq!(should_write_to_engine(&cmd), true);

@@ -7,7 +7,7 @@ use kvproto::import_sstpb::SstMeta;
 
 use crate::{errors::Result, RefIterable};
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Default, Debug)]
 pub struct SstMetaInfo {
     pub total_bytes: u64,
     pub total_kvs: u64,
