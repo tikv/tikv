@@ -151,13 +151,7 @@ pub fn get_old_value<S: EngineSnapshot>(
     old_value_cache.miss_count += 1;
     let key = key.truncate_ts().unwrap().append_ts(query_ts);
     let mut cursor = new_write_cursor_on_key(snapshot, &key);
-    let value = near_seek_old_value(
-        &key,
-        &mut cursor,
-        Either::Left(snapshot),
-        statistics,
-        snapshot,
-    )?;
+    let value = near_seek_old_value(&key, &mut cursor, Either::Left(snapshot), statistics)?;
     if value.is_none() {
         old_value_cache.miss_none_count += 1;
     }
@@ -188,7 +182,6 @@ pub fn near_seek_old_value<S: EngineSnapshot>(
     write_cursor: &mut Cursor<S::Iter>,
     load_from_cf_data: Either<&S, &mut Cursor<S::Iter>>,
     statistics: &mut Statistics,
-    snapshot: &S,
 ) -> Result<Option<Value>> {
     let start = Instant::now();
     tikv_util::defer!(
@@ -220,7 +213,6 @@ pub fn near_seek_old_value<S: EngineSnapshot>(
                                     &key,
                                     write.start_ts,
                                     statistics,
-                                    snapshot,
                                 )?),
                             }
                         }
@@ -244,20 +236,15 @@ pub fn near_seek_old_value<S: EngineSnapshot>(
 }
 
 pub struct OldValueCursors<S: Snapshot> {
-    pub snapshot: S,
     pub write: Cursor<S::Iter>,
     pub default: Cursor<S::Iter>,
 }
 
 impl<S: Snapshot> OldValueCursors<S> {
-    pub fn new(snapshot: S) -> Self {
-        let write = new_old_value_cursor(&snapshot, CF_WRITE);
-        let default = new_old_value_cursor(&snapshot, CF_DEFAULT);
-        OldValueCursors {
-            snapshot,
-            write,
-            default,
-        }
+    pub fn new(snapshot: &S) -> Self {
+        let write = new_old_value_cursor(snapshot, CF_WRITE);
+        let default = new_old_value_cursor(snapshot, CF_DEFAULT);
+        OldValueCursors { write, default }
     }
 }
 
@@ -327,8 +314,7 @@ mod tests {
         let mut cursor = new_write_cursor_on_key(&snapshot, &key);
         let load_default = Either::Left(&snapshot);
         let mut stats = Statistics::default();
-        let v =
-            near_seek_old_value(&key, &mut cursor, load_default, &mut stats, &snapshot).unwrap();
+        let v = near_seek_old_value(&key, &mut cursor, load_default, &mut stats).unwrap();
         assert_eq!(v, value);
         stats
     }
@@ -561,7 +547,7 @@ mod tests {
                 let raw_key = format!("key-{:0>3}", i).into_bytes();
                 let key = Key::from_raw(&raw_key).append_ts(150.into());
                 let ld = load_default(use_default_cursor);
-                let v = near_seek_old_value(&key, &mut cursor, ld, &mut stats, &snapshot).unwrap();
+                let v = near_seek_old_value(&key, &mut cursor, ld, &mut stats).unwrap();
                 assert!(v.map_or(false, |x| x == value()));
             }
             assert_eq!(stats.write.seek, 1);
@@ -580,7 +566,7 @@ mod tests {
                 let raw_key = format!("key-{:0>3}", i).into_bytes();
                 let key = Key::from_raw(&raw_key).append_ts(150.into());
                 let ld = load_default(use_default_cursor);
-                let v = near_seek_old_value(&key, &mut cursor, ld, &mut stats, &snapshot).unwrap();
+                let v = near_seek_old_value(&key, &mut cursor, ld, &mut stats).unwrap();
                 assert!(v.map_or(false, |x| x == value()));
             }
             assert_eq!(stats.write.seek, 2);

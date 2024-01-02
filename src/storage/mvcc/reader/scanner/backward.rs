@@ -435,7 +435,6 @@ impl<S: Snapshot> BackwardKvScanner<S> {
                     user_key,
                     write.start_ts,
                     &mut self.statistics,
-                    &self.cfg.snapshot,
                 )?;
                 Ok(value)
             }

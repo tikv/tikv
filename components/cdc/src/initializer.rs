@@ -229,7 +229,7 @@ impl<E: KvEngine> Initializer<E> {
         let mut scanner = if kv_api == ChangeDataRequestKvApi::TiDb {
             if self.ts_filter_is_helpful(&snap) {
                 hint_min_ts = Some(self.checkpoint_ts);
-                old_value_cursors = Some(OldValueCursors::new(snap.clone()));
+                old_value_cursors = Some(OldValueCursors::new(&snap));
             }
 
             // Time range: (checkpoint_ts, max]
@@ -320,9 +320,8 @@ impl<E: KvEngine> Initializer<E> {
                 match near_seek_old_value(
                     key,
                     &mut cursors.write,
-                    Either::Right(&mut cursors.default),
+                    Either::<&S, _>::Right(&mut cursors.default),
                     stats,
-                    &cursors.snapshot,
                 )? {
                     Some(x) => *v = OldValue::value(x),
                     None => *v = OldValue::None,

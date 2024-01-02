@@ -8,7 +8,6 @@ use kvproto::kvrpcpb::{ScanDetail, ScanDetailV2, ScanInfo};
 pub use raftstore::store::{FlowStatistics, FlowStatsReporter};
 
 use super::metrics::{GcKeysCF, GcKeysDetail};
-use crate::SEEK_BOUND;
 
 const STAT_PROCESSED_KEYS: &str = "processed_keys";
 const STAT_GET: &str = "get";
@@ -199,17 +198,7 @@ pub struct Statistics {
 
 #[derive(Default, Debug)]
 struct LoadDataHintStatistics {
-    last_write_next: usize,
-    last_write_next_tombstone: usize,
-    last_write_seek: usize,
-    last_write_seek_tombstone: usize,
-
-    last_write_prev: usize,
-    last_write_prev_tombstone: usize,
-    last_write_seek_for_prev: usize,
-    last_write_seek_for_prev_tombstone: usize,
-
-    last_hint: LoadDataHint,
+    last_write_over_seek_bound: usize,
 }
 
 #[derive(Default, PartialEq, Debug, Clone)]
@@ -217,69 +206,23 @@ pub enum LoadDataHint {
     #[default]
     NearSeek,
     Seek,
-    Get,
 }
 
 impl Statistics {
+    // Use write cf stats to decide load action for default cf
     pub fn load_data_hint(&mut self) -> LoadDataHint {
         let stats = &mut self.load_data_hint;
-        let next_overhead = self.write.next - stats.last_write_next + self.write.next_tombstone
-            - stats.last_write_next_tombstone;
 
-        let hint = if self.write.seek != stats.last_write_seek
-            || next_overhead > SEEK_BOUND as usize
-        {
-            if self.write.seek_tombstone - stats.last_write_seek_tombstone > SEEK_BOUND as usize {
-                // if tombstones are too many, we should use get to get rid of them.
-                LoadDataHint::Get
-            } else {
-                // otherwise, we can use seek to get the data. Seek is faster than get for
-                // continuous values.
-                LoadDataHint::Seek
-            }
-        } else if stats.last_hint == LoadDataHint::Get {
-            // If last hint is get, using near_seek is meaningless as default
-            // iter is not advanced for the last round, so use seek
-            // directly.
+        let hint = if self.write.over_seek_bound != stats.last_write_over_seek_bound {
+            // otherwise, we can use seek to get the data. Seek is faster than get for
+            // continuous values.
             LoadDataHint::Seek
         } else {
             // The next valid key may around current position, so use near seek which calls
             // next() multiple times before calling seek()
             LoadDataHint::NearSeek
         };
-        stats.last_write_next = self.write.next;
-        stats.last_write_next_tombstone = self.write.next_tombstone;
-        stats.last_write_seek = self.write.seek;
-        stats.last_write_seek_tombstone = self.write.seek_tombstone;
-        stats.last_hint = hint.clone();
-        hint
-    }
-
-    pub fn reverse_load_data_hint(&mut self) -> LoadDataHint {
-        let stats = &mut self.load_data_hint;
-        let prev_overhead = self.write.prev - stats.last_write_prev + self.write.prev_tombstone
-            - stats.last_write_prev_tombstone;
-
-        let hint = if self.write.seek_for_prev != stats.last_write_seek_for_prev
-            || prev_overhead > SEEK_BOUND as usize
-        {
-            if self.write.seek_for_prev_tombstone - stats.last_write_seek_for_prev_tombstone
-                > SEEK_BOUND as usize
-            {
-                LoadDataHint::Get
-            } else {
-                LoadDataHint::Seek
-            }
-        } else if stats.last_hint == LoadDataHint::Get {
-            LoadDataHint::Seek
-        } else {
-            LoadDataHint::NearSeek
-        };
-        stats.last_write_prev = self.write.prev;
-        stats.last_write_prev_tombstone = self.write.prev_tombstone;
-        stats.last_write_seek_for_prev = self.write.seek_for_prev;
-        stats.last_write_seek_for_prev_tombstone = self.write.seek_for_prev_tombstone;
-        stats.last_hint = hint.clone();
+        stats.last_write_over_seek_bound = self.write.over_seek_bound;
         hint
     }
 

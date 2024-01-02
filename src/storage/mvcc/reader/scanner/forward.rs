@@ -62,7 +62,6 @@ pub enum HandleRes<T> {
 }
 
 pub struct Cursors<S: Snapshot> {
-    snapshot: S,
     lock: Option<Cursor<S::Iter>>,
     write: Cursor<S::Iter>,
     /// `default cursor` is lazy created only when it's needed.
@@ -139,7 +138,6 @@ impl<S: Snapshot, P: ScanPolicy<S>> ForwardScanner<S, P> {
             lock: lock_cursor,
             write: write_cursor,
             default: default_cursor,
-            snapshot: cfg.snapshot.clone(),
         };
         ForwardScanner {
             met_newer_ts_data: if cfg.check_has_newer_ts_data {
@@ -464,7 +462,6 @@ impl<S: Snapshot> ScanPolicy<S> for LatestKvPolicy {
                                 &current_user_key,
                                 start_ts,
                                 statistics,
-                                &cursors.snapshot,
                             )?;
                             break Some(value);
                         }
@@ -581,7 +578,6 @@ impl<S: Snapshot> ScanPolicy<S> for LatestEntryPolicy {
                             &current_user_key,
                             start_ts,
                             statistics,
-                            &cfg.snapshot,
                         )?;
                         let default_key = default_cursor.key(&mut statistics.data).to_vec();
                         (default_key, default_value)
@@ -715,7 +711,6 @@ impl<S: Snapshot> ScanPolicy<S> for DeltaEntryPolicy {
                     &current_user_key,
                     lock.ts,
                     statistics,
-                    &cfg.snapshot,
                 )
                 .map(|v| {
                     let key = default_cursor.key(&mut statistics.data).to_vec();
@@ -739,7 +734,6 @@ impl<S: Snapshot> ScanPolicy<S> for DeltaEntryPolicy {
                     self.from_ts,
                     cfg.hint_min_ts,
                     statistics,
-                    &cfg.snapshot,
                 )?;
             }
             load_default_res.map(|default| {
@@ -811,7 +805,6 @@ impl<S: Snapshot> ScanPolicy<S> for DeltaEntryPolicy {
                     &current_user_key,
                     start_ts,
                     statistics,
-                    &cfg.snapshot,
                 )?;
                 let key = default_cursor.key(&mut statistics.data).to_vec();
                 (key, value)
@@ -838,7 +831,6 @@ impl<S: Snapshot> ScanPolicy<S> for DeltaEntryPolicy {
                     self.from_ts,
                     cfg.hint_min_ts,
                     statistics,
-                    &cfg.snapshot,
                 )?;
             }
 
