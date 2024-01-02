@@ -214,6 +214,14 @@ lazy_static! {
 
     pub static ref CDC_ROCKSDB_PERF_COUNTER_STATIC: PerfCounter =
         auto_flush_from!(CDC_ROCKSDB_PERF_COUNTER, PerfCounter);
+
+    pub static ref CDC_PENDING_OUTPUT_EVENTS: HistogramVec = register_histogram_vec!(
+        "tikv_cdc_pending_output_events",
+        "The histogram of output event counts for every connected peer",
+        &["peer", "tag"],
+        exponential_buckets(1.0, 2.0, 20).unwrap(),
+    )
+    .unwrap();
 }
 
 thread_local! {
