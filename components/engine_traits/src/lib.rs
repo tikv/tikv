@@ -314,6 +314,8 @@ mod checkpoint;
 pub use crate::checkpoint::*;
 mod memory_engine;
 pub use memory_engine::RegionCacheEngine;
+mod batch_split;
+pub use batch_split::BatchSplit;
 
 // These modules contain more general traits, some of which may be implemented
 // by multiple types.

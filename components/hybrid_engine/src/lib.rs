@@ -2,6 +2,7 @@
 #![allow(dead_code)]
 #![allow(unused_variables)]
 
+mod batch_split;
 mod cf_names;
 mod cf_options;
 mod checkpoint;

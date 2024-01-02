@@ -261,7 +261,7 @@ pub struct SwitchWitness {
 }
 
 #[derive(Debug)]
-pub enum ExecResult<S> {
+pub enum ExecResult<EK: KvEngine> {
     ChangePeer(ChangePeer),
     CompactLog {
         state: RaftTruncatedState,
@@ -273,6 +273,7 @@ pub enum ExecResult<S> {
         derived: Region,
         new_split_regions: HashMap<u64, NewSplitPeer>,
         share_source_region_size: bool,
+        engine_split_result: EK::SplitResult,
     },
     PrepareMerge {
         region: Region,
@@ -291,7 +292,7 @@ pub enum ExecResult<S> {
         region: Region,
         index: u64,
         context: Vec<u8>,
-        snap: S,
+        snap: EK::Snapshot,
     },
     VerifyHash {
         index: u64,
@@ -321,11 +322,11 @@ pub enum ExecResult<S> {
 
 /// The possible returned value when applying logs.
 #[derive(Debug)]
-pub enum ApplyResult<S> {
+pub enum ApplyResult<EK: KvEngine> {
     None,
     Yield,
     /// Additional result that needs to be sent back to raftstore.
-    Res(ExecResult<S>),
+    Res(ExecResult<EK>),
     /// It is unable to apply the `CommitMerge` until the source peer
     /// has applied to the required position and sets the atomic boolean
     /// to true.
@@ -380,7 +381,7 @@ impl<S: Snapshot> ApplyCallbackBatch<S> {
 }
 
 pub trait Notifier<EK: KvEngine>: Send {
-    fn notify(&self, apply_res: Vec<ApplyRes<EK::Snapshot>>);
+    fn notify(&self, apply_res: Vec<ApplyRes<EK>>);
     fn notify_one(&self, region_id: u64, msg: PeerMsg<EK>);
     fn clone_box(&self) -> Box<dyn Notifier<EK>>;
 }
@@ -398,7 +399,7 @@ where
     notifier: Box<dyn Notifier<EK>>,
     engine: EK,
     applied_batch: ApplyCallbackBatch<EK::Snapshot>,
-    apply_res: Vec<ApplyRes<EK::Snapshot>>,
+    apply_res: Vec<ApplyRes<EK>>,
     exec_log_index: u64,
     exec_log_term: u64,
 
@@ -659,7 +660,7 @@ where
     pub fn finish_for(
         &mut self,
         delegate: &mut ApplyDelegate<EK>,
-        results: VecDeque<ExecResult<EK::Snapshot>>,
+        results: VecDeque<ExecResult<EK>>,
     ) {
         if self.host.pre_persist(&delegate.region, true, None) {
             delegate.maybe_write_apply_state(self);
@@ -1199,7 +1200,7 @@ where
         &mut self,
         apply_ctx: &mut ApplyContext<EK>,
         entry: &Entry,
-    ) -> ApplyResult<EK::Snapshot> {
+    ) -> ApplyResult<EK> {
         fail_point!(
             "yield_apply_first_region",
             self.region.get_start_key().is_empty() && !self.region.get_end_key().is_empty(),
@@ -1283,7 +1284,7 @@ where
         &mut self,
         apply_ctx: &mut ApplyContext<EK>,
         entry: &Entry,
-    ) -> ApplyResult<EK::Snapshot> {
+    ) -> ApplyResult<EK> {
         // Although conf change can't yield in normal case, it is convenient to
         // simulate yield before applying a conf change log.
         fail_point!("yield_apply_conf_change_3", self.id() == 3, |_| {
@@ -1362,7 +1363,7 @@ where
         index: u64,
         term: u64,
         req: RaftCmdRequest,
-    ) -> ApplyResult<EK::Snapshot> {
+    ) -> ApplyResult<EK> {
         if index == 0 {
             panic!(
                 "{} processing raft command needs a none zero index",
@@ -1418,7 +1419,7 @@ where
         index: u64,
         term: u64,
         req: RaftCmdRequest,
-    ) -> (Cmd, ApplyResult<EK::Snapshot>, bool) {
+    ) -> (Cmd, ApplyResult<EK>, bool) {
         // if pending remove, apply should be aborted already.
         assert!(!self.pending_remove);
 
@@ -1656,7 +1657,7 @@ where
         &mut self,
         ctx: &mut ApplyContext<EK>,
         req: &RaftCmdRequest,
-    ) -> Result<(RaftCmdResponse, ApplyResult<EK::Snapshot>)> {
+    ) -> Result<(RaftCmdResponse, ApplyResult<EK>)> {
         // Include region for epoch not match after merge may cause key not in range.
         let include_region =
             req.get_header().get_region_epoch().get_version() >= self.last_merge_version;
@@ -1682,7 +1683,7 @@ where
         &mut self,
         ctx: &mut ApplyContext<EK>,
         req: &RaftCmdRequest,
-    ) -> Result<(RaftCmdResponse, ApplyResult<EK::Snapshot>)> {
+    ) -> Result<(RaftCmdResponse, ApplyResult<EK>)> {
         let request = req.get_admin_request();
         let cmd_type = request.get_cmd_type();
         if cmd_type != AdminCmdType::CompactLog && cmd_type != AdminCmdType::CommitMerge {
@@ -1730,7 +1731,7 @@ where
         &mut self,
         ctx: &mut ApplyContext<EK>,
         req: &RaftCmdRequest,
-    ) -> Result<(RaftCmdResponse, ApplyResult<EK::Snapshot>)> {
+    ) -> Result<(RaftCmdResponse, ApplyResult<EK>)> {
         fail_point!(
             "on_apply_write_cmd",
             cfg!(release) || self.id() == 3,
@@ -2076,7 +2077,7 @@ where
         &mut self,
         ctx: &mut ApplyContext<EK>,
         request: &AdminRequest,
-    ) -> Result<(AdminResponse, ApplyResult<EK::Snapshot>)> {
+    ) -> Result<(AdminResponse, ApplyResult<EK>)> {
         assert!(request.has_change_peer());
         let request = request.get_change_peer();
         let peer = request.get_peer();
@@ -2276,7 +2277,7 @@ where
         &mut self,
         ctx: &mut ApplyContext<EK>,
         request: &AdminRequest,
-    ) -> Result<(AdminResponse, ApplyResult<EK::Snapshot>)> {
+    ) -> Result<(AdminResponse, ApplyResult<EK>)> {
         assert!(request.has_change_peer_v2());
         let changes = request.get_change_peer_v2().get_change_peers().to_vec();
 
@@ -2504,7 +2505,7 @@ where
         &mut self,
         ctx: &mut ApplyContext<EK>,
         req: &AdminRequest,
-    ) -> Result<(AdminResponse, ApplyResult<EK::Snapshot>)> {
+    ) -> Result<(AdminResponse, ApplyResult<EK>)> {
         info!(
             "split is deprecated, redirect to use batch split";
             "region_id" => self.region_id(),
@@ -2529,7 +2530,7 @@ where
         &mut self,
         ctx: &mut ApplyContext<EK>,
         req: &AdminRequest,
-    ) -> Result<(AdminResponse, ApplyResult<EK::Snapshot>)> {
+    ) -> Result<(AdminResponse, ApplyResult<EK>)> {
         fail_point!("apply_before_split");
         fail_point!(
             "apply_before_split_1_3",
@@ -2577,6 +2578,10 @@ where
             derived.set_end_key(keys.front().unwrap().to_vec());
             regions.push(derived.clone());
         }
+
+        let engine_split_result = ctx
+            .engine
+            .batch_split(&keys.iter().map(|k| k.clone()).collect());
 
         // Init split regions' meta info
         let mut new_split_regions: HashMap<u64, NewSplitPeer> = HashMap::default();
@@ -2728,6 +2733,7 @@ where
                 derived,
                 new_split_regions,
                 share_source_region_size,
+                engine_split_result,
             }),
         ))
     }
@@ -2736,7 +2742,7 @@ where
         &mut self,
         ctx: &mut ApplyContext<EK>,
         req: &AdminRequest,
-    ) -> Result<(AdminResponse, ApplyResult<EK::Snapshot>)> {
+    ) -> Result<(AdminResponse, ApplyResult<EK>)> {
         fail_point!("apply_before_prepare_merge");
         fail_point!(
             "apply_before_prepare_merge_2_3",
@@ -2816,7 +2822,7 @@ where
         &mut self,
         ctx: &mut ApplyContext<EK>,
         req: &AdminRequest,
-    ) -> Result<(AdminResponse, ApplyResult<EK::Snapshot>)> {
+    ) -> Result<(AdminResponse, ApplyResult<EK>)> {
         {
             fail_point!("apply_before_commit_merge");
             let apply_before_commit_merge = || {
@@ -2950,7 +2956,7 @@ where
         &mut self,
         ctx: &mut ApplyContext<EK>,
         req: &AdminRequest,
-    ) -> Result<(AdminResponse, ApplyResult<EK::Snapshot>)> {
+    ) -> Result<(AdminResponse, ApplyResult<EK>)> {
         fail_point!("apply_before_rollback_merge");
 
         PEER_ADMIN_CMD_COUNTER.rollback_merge.all.inc();
@@ -2993,7 +2999,7 @@ where
         &self,
         ctx: &mut ApplyContext<EK>,
         req: &AdminRequest,
-    ) -> Result<(AdminResponse, ApplyResult<EK::Snapshot>)> {
+    ) -> Result<(AdminResponse, ApplyResult<EK>)> {
         // Modify flashback fields in region state.
         let mut region = self.region.clone();
         match req.get_cmd_type() {
@@ -3042,7 +3048,7 @@ where
         &mut self,
         voter_replicated_index: u64,
         voter_replicated_term: u64,
-    ) -> Result<(bool, Option<ExecResult<EK::Snapshot>>)> {
+    ) -> Result<(bool, Option<ExecResult<EK>>)> {
         PEER_ADMIN_CMD_COUNTER.compact.all.inc();
         let first_index = entry_storage::first_index(&self.apply_state);
 
@@ -3106,10 +3112,7 @@ where
         }
     }
 
-    fn exec_compact_log(
-        &mut self,
-        req: &AdminRequest,
-    ) -> Result<(AdminResponse, ApplyResult<EK::Snapshot>)> {
+    fn exec_compact_log(&mut self, req: &AdminRequest) -> Result<(AdminResponse, ApplyResult<EK>)> {
         PEER_ADMIN_CMD_COUNTER.compact.all.inc();
 
         let mut compact_index = req.get_compact_log().get_compact_index();
@@ -3212,7 +3215,7 @@ where
         &mut self,
         req: &AdminRequest,
         term: u64,
-    ) -> Result<(AdminResponse, ApplyResult<EK::Snapshot>)> {
+    ) -> Result<(AdminResponse, ApplyResult<EK>)> {
         PEER_ADMIN_CMD_COUNTER.transfer_leader.all.inc();
         let resp = AdminResponse::default();
 
@@ -3229,7 +3232,7 @@ where
         &self,
         ctx: &ApplyContext<EK>,
         req: &AdminRequest,
-    ) -> Result<(AdminResponse, ApplyResult<EK::Snapshot>)> {
+    ) -> Result<(AdminResponse, ApplyResult<EK>)> {
         let resp = AdminResponse::default();
         Ok((
             resp,
@@ -3254,7 +3257,7 @@ where
         &self,
         _: &ApplyContext<EK>,
         req: &AdminRequest,
-    ) -> Result<(AdminResponse, ApplyResult<EK::Snapshot>)> {
+    ) -> Result<(AdminResponse, ApplyResult<EK>)> {
         let resp = AdminResponse::default();
         if self.peer.is_witness {
             return Ok((resp, ApplyResult::None));
@@ -3277,7 +3280,7 @@ where
         &mut self,
         ctx: &mut ApplyContext<EK>,
         request: &AdminRequest,
-    ) -> Result<(AdminResponse, ApplyResult<EK::Snapshot>)> {
+    ) -> Result<(AdminResponse, ApplyResult<EK>)> {
         fail_point!(
             "before_exec_batch_switch_witness",
             self.id() == 2,
@@ -3863,25 +3866,25 @@ pub struct ApplyMetrics {
 }
 
 #[derive(Debug)]
-pub struct ApplyRes<S>
+pub struct ApplyRes<EK>
 where
-    S: Snapshot,
+    EK: KvEngine,
 {
     pub region_id: u64,
     pub apply_state: RaftApplyState,
     pub applied_term: u64,
-    pub exec_res: VecDeque<ExecResult<S>>,
+    pub exec_res: VecDeque<ExecResult<EK>>,
     pub metrics: ApplyMetrics,
     pub bucket_stat: Option<BucketStat>,
     pub write_seqno: Vec<SequenceNumber>,
 }
 
 #[derive(Debug)]
-pub enum TaskRes<S>
+pub enum TaskRes<EK>
 where
-    S: Snapshot,
+    EK: KvEngine,
 {
-    Apply(ApplyRes<S>),
+    Apply(ApplyRes<EK>),
     Destroy {
         // ID of region that has been destroyed.
         region_id: u64,
@@ -5099,7 +5102,7 @@ mod tests {
     }
 
     impl<EK: KvEngine> Notifier<EK> for TestNotifier<EK> {
-        fn notify(&self, apply_res: Vec<ApplyRes<EK::Snapshot>>) {
+        fn notify(&self, apply_res: Vec<ApplyRes<EK>>) {
             for r in apply_res {
                 let res = TaskRes::Apply(r);
                 let _ = self.tx.send(PeerMsg::ApplyRes { res });
@@ -5291,9 +5294,7 @@ mod tests {
         notify2.send(()).unwrap();
     }
 
-    fn fetch_apply_res<E>(
-        receiver: &::std::sync::mpsc::Receiver<PeerMsg<E>>,
-    ) -> ApplyRes<E::Snapshot>
+    fn fetch_apply_res<E>(receiver: &::std::sync::mpsc::Receiver<PeerMsg<E>>) -> ApplyRes<E>
     where
         E: KvEngine,
     {

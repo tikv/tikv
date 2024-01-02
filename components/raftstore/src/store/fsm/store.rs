@@ -350,7 +350,7 @@ where
     EK: KvEngine,
     ER: RaftEngine,
 {
-    fn notify(&self, apply_res: Vec<ApplyRes<EK::Snapshot>>) {
+    fn notify(&self, apply_res: Vec<ApplyRes<EK>>) {
         for r in apply_res {
             let region_id = r.region_id;
             if let Err(e) = self.router.force_send(

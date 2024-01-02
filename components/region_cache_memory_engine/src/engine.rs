@@ -12,12 +12,11 @@ use bytes::Bytes;
 use collections::HashMap;
 use engine_rocks::{raw::SliceTransform, util::FixedSuffixSliceTransform};
 use engine_traits::{
-    CfNamesExt, DbVector, Error, IterOptions, Iterable, Iterator, Mutable, Peekable, ReadOptions,
-    RegionCacheEngine, Result, Snapshot, SnapshotMiscExt, WriteBatch, WriteBatchExt, WriteOptions,
-    CF_DEFAULT, CF_LOCK, CF_WRITE,
+    BatchSplit, CfNamesExt, DbVector, Error, IterOptions, Iterable, Iterator, Mutable, Peekable,
+    ReadOptions, RegionCacheEngine, Result, Snapshot, SnapshotMiscExt, WriteBatch, WriteBatchExt,
+    WriteOptions, CF_DEFAULT, CF_LOCK, CF_WRITE,
 };
-use skiplist_rs::{IterRef, Skiplist};
-use tikv_util::config::ReadableSize;
+use skiplist_rs::{IterRef, MemoryLimiter, Skiplist};
 
 use crate::keys::{
     decode_key, encode_seek_key, InternalKey, InternalKeyComparator, ValueType,
@@ -33,42 +32,49 @@ fn cf_to_id(cf: &str) -> usize {
     }
 }
 
+// todo: implement memory limiter
+#[derive(Clone)]
+pub struct GlobalMemoryLimiter {}
+
+impl MemoryLimiter for GlobalMemoryLimiter {
+    fn acquire(&self, n: usize) -> bool {
+        true
+    }
+
+    fn mem_usage(&self) -> usize {
+        0
+    }
+
+    fn reclaim(&self, n: usize) {}
+}
+
 /// RegionMemoryEngine stores data for a specific cached region
 ///
 /// todo: The skiplist used here currently is for test purpose. Replace it
 /// with a formal implementation.
 #[derive(Clone)]
 pub struct RegionMemoryEngine {
-    data: [Arc<Skiplist<InternalKeyComparator>>; 3],
+    data: [Arc<Skiplist<InternalKeyComparator, GlobalMemoryLimiter>>; 3],
 }
 
 impl RegionMemoryEngine {
-    pub fn with_capacity(arena_size: usize) -> Self {
+    pub fn new(global_limiter: GlobalMemoryLimiter) -> Self {
         RegionMemoryEngine {
             data: [
-                Arc::new(Skiplist::with_capacity(
+                Arc::new(Skiplist::new(
                     InternalKeyComparator::default(),
-                    arena_size,
-                    true,
+                    global_limiter.clone(),
                 )),
-                Arc::new(Skiplist::with_capacity(
+                Arc::new(Skiplist::new(
                     InternalKeyComparator::default(),
-                    arena_size,
-                    true,
+                    global_limiter.clone(),
                 )),
-                Arc::new(Skiplist::with_capacity(
+                Arc::new(Skiplist::new(
                     InternalKeyComparator::default(),
-                    arena_size,
-                    true,
+                    global_limiter,
                 )),
             ],
         }
-    }
-}
-
-impl Default for RegionMemoryEngine {
-    fn default() -> Self {
-        RegionMemoryEngine::with_capacity(ReadableSize::mb(1).0 as usize)
     }
 }
 
@@ -152,9 +158,10 @@ impl RegionCacheMemoryEngineCore {
 /// will be read. If there's a need to read keys that may have been filtered by
 /// RegionCacheMemoryEngine (as indicated by read_ts and safe_point of the
 /// cached region), we resort to using a the disk engine's snapshot instead.
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct RegionCacheMemoryEngine {
     core: Arc<Mutex<RegionCacheMemoryEngineCore>>,
+    memory_limiter: GlobalMemoryLimiter,
 }
 
 impl RegionCacheMemoryEngine {
@@ -175,7 +182,10 @@ impl RegionCacheMemoryEngine {
 
         assert!(core.engine.get(&region_id).is_none());
         assert!(core.region_metas.get(&region_id).is_none());
-        core.engine.insert(region_id, RegionMemoryEngine::default());
+        core.engine.insert(
+            region_id,
+            RegionMemoryEngine::new(self.memory_limiter.clone()),
+        );
         core.region_metas
             .insert(region_id, RegionMemoryMeta::default());
     }
@@ -187,6 +197,21 @@ impl RegionCacheEngine for RegionCacheMemoryEngine {
     // todo(SpadeA): add sequence number logic
     fn snapshot(&self, region_id: u64, read_ts: u64, seq_num: u64) -> Option<Self::Snapshot> {
         RegionCacheSnapshot::new(self.clone(), region_id, read_ts, seq_num)
+    }
+}
+
+#[derive(Debug)]
+pub struct MemorySplitResult;
+
+impl BatchSplit for RegionCacheMemoryEngine {
+    type SplitResult = MemorySplitResult;
+
+    fn batch_split(&self, keys: &Vec<Vec<u8>>) -> Self::SplitResult {
+        unimplemented!()
+    }
+
+    fn on_batch_split(&self, split_result: Self::SplitResult) {
+        unimplemented!()
     }
 }
 
@@ -217,7 +242,11 @@ enum Direction {
 pub struct RegionCacheIterator {
     cf: String,
     valid: bool,
-    iter: IterRef<Skiplist<InternalKeyComparator>, InternalKeyComparator>,
+    iter: IterRef<
+        Skiplist<InternalKeyComparator, GlobalMemoryLimiter>,
+        InternalKeyComparator,
+        GlobalMemoryLimiter,
+    >,
     // The lower bound is inclusive while the upper bound is exclusive if set
     // Note: bounds (region boundaries) have no mvcc versions
     lower_bound: Vec<u8>,

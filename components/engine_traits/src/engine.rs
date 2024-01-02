@@ -2,7 +2,7 @@
 
 use std::{fmt::Debug, str};
 
-use crate::*;
+use crate::{batch_split::BatchSplit, *};
 
 // FIXME: Revisit the remaining types and methods on KvEngine. Some of these are
 // here for lack of somewhere better to put them at the time of writing.
@@ -33,6 +33,7 @@ pub trait KvEngine:
     + Debug
     + Unpin
     + Checkpointable
+    + BatchSplit
     + 'static
 {
     /// A consistent read-only snapshot of the database

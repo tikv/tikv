@@ -766,7 +766,7 @@ pub enum PeerMsg<EK: KvEngine> {
     Tick(PeerTick),
     /// Result of applying committed entries. The message can't be lost.
     ApplyRes {
-        res: ApplyTaskRes<EK::Snapshot>,
+        res: ApplyTaskRes<EK>,
     },
     /// Message that can't be lost but rarely created. If they are lost, real
     /// bad things happen like some peers will be considered dead in the

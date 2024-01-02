@@ -2,12 +2,12 @@
 
 use std::fmt::Debug;
 
-use crate::{Iterable, Snapshot, WriteBatchExt};
+use crate::{batch_split::BatchSplit, Iterable, Snapshot, WriteBatchExt};
 
 /// RegionCacheEngine works as a region cache caching some regions (in Memory or
 /// NVME for instance) to improve the read performance.
 pub trait RegionCacheEngine:
-    WriteBatchExt + Iterable + Debug + Clone + Unpin + Send + Sync + 'static
+    WriteBatchExt + Iterable + BatchSplit + Debug + Clone + Unpin + Send + Sync + 'static
 {
     type Snapshot: Snapshot;
 

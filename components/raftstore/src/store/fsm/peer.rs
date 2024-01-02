@@ -2312,7 +2312,7 @@ where
         }
     }
 
-    fn on_apply_res(&mut self, res: ApplyTaskRes<EK::Snapshot>) {
+    fn on_apply_res(&mut self, res: ApplyTaskRes<EK>) {
         fail_point!("on_apply_res", |_| {});
         match res {
             ApplyTaskRes::Apply(mut res) => {
@@ -4095,6 +4095,7 @@ where
         regions: Vec<metapb::Region>,
         new_split_regions: HashMap<u64, apply::NewSplitPeer>,
         share_source_region_size: bool,
+        engine_split_result: EK::SplitResult,
     ) {
         fail_point!("on_split", self.ctx.store_id() == 3, |_| {});
 
@@ -4143,7 +4144,7 @@ where
             RegionChangeReason::Split,
         );
         self.fsm.peer.post_split();
-
+        self.ctx.engines.kv.on_batch_split(engine_split_result);
         let is_leader = self.fsm.peer.is_leader();
         if is_leader {
             if share_source_region_size {
@@ -5106,7 +5107,7 @@ where
 
     fn on_ready_result(
         &mut self,
-        exec_results: &mut VecDeque<ExecResult<EK::Snapshot>>,
+        exec_results: &mut VecDeque<ExecResult<EK>>,
         metrics: &ApplyMetrics,
     ) {
         // handle executing committed log results
@@ -5126,11 +5127,13 @@ where
                     regions,
                     new_split_regions,
                     share_source_region_size,
+                    engine_split_result,
                 } => self.on_ready_split_region(
                     derived,
                     regions,
                     new_split_regions,
                     share_source_region_size,
+                    engine_split_result
                 ),
                 ExecResult::PrepareMerge { region, state } => {
                     self.on_ready_prepare_merge(region, state)
