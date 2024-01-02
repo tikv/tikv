@@ -3,6 +3,7 @@
 // TODO(mornyx): crate doc.
 
 #![feature(hash_extract_if)]
+#![allow(internal_features)]
 #![feature(core_intrinsics)]
 
 use std::{

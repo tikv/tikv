@@ -425,7 +425,7 @@ fn test_txn_query_stats_tmpl<F: KvFormat>() {
     // enabled, disable it.
     test_query_num::<F>(batch_get_command, false, false);
     test_query_num::<F>(batch_coprocessor, false, false);
-    test_txn_delete_query::<F>();
+    test_txn_delete_query();
     test_pessimistic_lock();
     test_rollback();
     fail::remove("mock_tick_interval");
@@ -434,7 +434,7 @@ fn test_txn_query_stats_tmpl<F: KvFormat>() {
     fail::remove("only_check_source_task_name");
 }
 
-fn raw_put<F: KvFormat>(
+fn raw_put(
     _cluster: &Cluster<ServerCluster>,
     client: &TikvClient,
     ctx: &Context,
@@ -613,7 +613,7 @@ fn test_query_num<F: KvFormat>(query: Box<Query>, is_raw_kv: bool, auto_split: b
     let store_id = 1;
     if is_raw_kv {
         k = b"r_key".to_vec(); // "r" is key prefix of RawKV.
-        raw_put::<F>(&cluster, &client, &ctx, store_id, k.clone());
+        raw_put(&cluster, &client, &ctx, store_id, k.clone());
     } else {
         k = b"x_key".to_vec(); // "x" is key prefix of TxnKV.
         put(&cluster, &client, &ctx, store_id, k.clone());
@@ -634,7 +634,7 @@ fn test_raw_delete_query<F: KvFormat>() {
         ctx.set_api_version(F::CLIENT_TAG);
         ctx.set_request_source("test_stats".to_owned());
 
-        raw_put::<F>(&cluster, &client, &ctx, store_id, k.clone());
+        raw_put(&cluster, &client, &ctx, store_id, k.clone());
         // Raw Delete
         let mut delete_req = RawDeleteRequest::default();
         delete_req.set_context(ctx.clone());
@@ -642,7 +642,7 @@ fn test_raw_delete_query<F: KvFormat>() {
         client.raw_delete(&delete_req).unwrap();
         // skip raw kv write query check
 
-        raw_put::<F>(&cluster, &client, &ctx, store_id, k.clone());
+        raw_put(&cluster, &client, &ctx, store_id, k.clone());
         // Raw DeleteRange
         let mut delete_req = RawDeleteRangeRequest::default();
         delete_req.set_context(ctx);
@@ -653,7 +653,7 @@ fn test_raw_delete_query<F: KvFormat>() {
     }
 }
 
-fn test_txn_delete_query<F: KvFormat>() {
+fn test_txn_delete_query() {
     let k = b"t_key".to_vec();
     let store_id = 1;
 
