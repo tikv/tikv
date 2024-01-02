@@ -107,7 +107,7 @@ impl<K: Ord, V: Clone> SegmentMap<K, V> {
 
     // get_vaules retrive and clone the value into a vector.
     pub fn get_values(&self) -> Vec<V> {
-        self.0.values().map(|v| v.item).cloned().collect::<Vec<V>>()
+        self.0.values().map(|v| &v.item).cloned().collect::<Vec<V>>()
     }
 
     /// Like `get_by_point`, but omit the segment.
