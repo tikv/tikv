@@ -12,7 +12,8 @@ use raftstore::store::{LocksStatus, PeerPessimisticLocks};
 use tikv_kv::{SnapshotExt, SEEK_BOUND};
 use tikv_util::time::Instant;
 use txn_types::{
-    Key, LastChange, Lock, OldValue, TimeStamp, TxnLock, Value, Write, WriteRef, WriteType,
+    Key, LastChange, Lock, OldValue, PessimisticLock, TimeStamp, TxnLockRef, Value, Write,
+    WriteRef, WriteType,
 };
 
 use crate::storage::{
@@ -153,10 +154,6 @@ pub struct MvccReader<S: EngineSnapshot> {
     version: u64,
 
     allow_in_flashback: bool,
-
-    // Whether the lock cursor is seeked to the [start, end) range. It's only used in
-    // `next_pair_from_storage`.
-    lock_cursor_seeked: bool,
 }
 
 impl<S: EngineSnapshot> MvccReader<S> {
@@ -176,7 +173,6 @@ impl<S: EngineSnapshot> MvccReader<S> {
             term: 0,
             version: 0,
             allow_in_flashback: false,
-            lock_cursor_seeked: false,
         }
     }
 
@@ -196,7 +192,6 @@ impl<S: EngineSnapshot> MvccReader<S> {
             term: ctx.get_term(),
             version: ctx.get_region_epoch().get_version(),
             allow_in_flashback: false,
-            lock_cursor_seeked: false,
         }
     }
 
@@ -284,46 +279,6 @@ impl<S: EngineSnapshot> MvccReader<S> {
         Ok(())
     }
 
-    fn next_pair_from_storage<F>(
-        &mut self,
-        start_key: Option<&Key>,
-        end_key: Option<&Key>,
-        filter: F,
-    ) -> Result<Option<(Key, Lock)>>
-    where
-        F: Fn(&Key, TxnLock<'_>) -> bool,
-    {
-        self.create_lock_cursor()?;
-        let cursor = self.lock_cursor.as_mut().unwrap();
-        if !self.lock_cursor_seeked {
-            let ok = match start_key {
-                Some(x) => cursor.seek(x, &mut self.statistics.lock)?,
-                None => cursor.seek_to_first(&mut self.statistics.lock),
-            };
-            if !ok {
-                return Ok(None);
-            }
-            self.lock_cursor_seeked = true;
-        } else {
-            cursor.next(&mut self.statistics.lock);
-        }
-
-        while cursor.valid()? {
-            let key = Key::from_encoded_slice(cursor.key(&mut self.statistics.lock));
-            if let Some(end) = end_key {
-                if key >= *end {
-                    return Ok(None);
-                }
-            }
-            let lock = Lock::parse(cursor.value(&mut self.statistics.lock))?;
-            if filter(&key, TxnLock::PersistedLock(&lock)) {
-                return Ok(Some((key, lock)));
-            }
-            cursor.next(&mut self.statistics.lock);
-        }
-        Ok(None)
-    }
-
     /// Scan all types of locks(pessimitic, prewrite) satisfying `filter`
     /// condition from both in-memory pessimitic lock table and the storage
     /// within [start_key, end_key) .
@@ -336,53 +291,82 @@ impl<S: EngineSnapshot> MvccReader<S> {
         source: ScanLockReadTimeSource,
     ) -> Result<(Vec<(Key, Lock)>, bool)>
     where
-        F: Fn(&Key, TxnLock<'_>) -> bool,
+        F: Fn(&Key, TxnLockRef<'_>) -> bool,
     {
-        let (memory_locks, memory_has_remain) =
-            self.load_in_memory_pessimistic_lock_range(start_key, end_key, &filter, limit, source)?;
+        let (memory_locks, memory_has_remain) = self.load_in_memory_pessimistic_lock_range(
+            start_key,
+            end_key,
+            |k, l| filter(k, l.into()),
+            limit,
+            source,
+        )?;
         if memory_locks.is_empty() {
             return self.scan_locks_from_storage(start_key, end_key, &filter, limit);
         }
+
+        let mut lock_cursor_seeked = false;
+        let mut next_pair_from_storage = || -> Result<Option<(Key, Lock)>> {
+            self.create_lock_cursor()?;
+            let cursor = self.lock_cursor.as_mut().unwrap();
+            if !lock_cursor_seeked {
+                let ok = match start_key {
+                    Some(x) => cursor.seek(x, &mut self.statistics.lock)?,
+                    None => cursor.seek_to_first(&mut self.statistics.lock),
+                };
+                if !ok {
+                    return Ok(None);
+                }
+                lock_cursor_seeked = true;
+            } else {
+                cursor.next(&mut self.statistics.lock);
+            }
+
+            while cursor.valid()? {
+                let key = Key::from_encoded_slice(cursor.key(&mut self.statistics.lock));
+                if let Some(end) = end_key {
+                    if key >= *end {
+                        return Ok(None);
+                    }
+                }
+                let lock = Lock::parse(cursor.value(&mut self.statistics.lock))?;
+                if filter(&key, TxnLockRef::Persisted(&lock)) {
+                    return Ok(Some((key, lock)));
+                }
+                cursor.next(&mut self.statistics.lock);
+            }
+            Ok(None)
+        };
+
         let mut locks = Vec::with_capacity(limit.min(memory_locks.len()));
         let mut memory_iter = memory_locks.into_iter();
         let mut memory_pair = memory_iter.next();
-        let mut storage_pair = self.next_pair_from_storage(start_key, end_key, &filter)?;
-        while let (Some((memory_key, _)), Some((storage_key, _))) =
-            (memory_pair.as_ref(), storage_pair.as_ref())
-        {
-            if storage_key <= memory_key {
-                locks.push(storage_pair.take().unwrap());
-                storage_pair = self.next_pair_from_storage(start_key, end_key, &filter)?;
-            } else {
-                locks.push(memory_pair.take().unwrap());
-                memory_pair = memory_iter.next();
+        let mut storage_pair = next_pair_from_storage()?;
+        let has_remain = loop {
+            match (memory_pair.as_ref(), storage_pair.as_ref()) {
+                (Some((memory_key, _)), Some((storage_key, _))) => {
+                    if storage_key <= memory_key {
+                        locks.push(storage_pair.take().unwrap());
+                        storage_pair = next_pair_from_storage()?;
+                    } else {
+                        locks.push(memory_pair.take().unwrap());
+                        memory_pair = memory_iter.next();
+                    }
+                }
+                (Some(_), None) => {
+                    locks.push(memory_pair.take().unwrap());
+                    memory_pair = memory_iter.next();
+                }
+                (None, Some(_)) => {
+                    locks.push(storage_pair.take().unwrap());
+                    storage_pair = next_pair_from_storage()?;
+                }
+                (None, None) => break memory_has_remain,
             }
-            if limit > 0 && locks.len() == limit {
-                return Ok((locks, true));
+            if limit > 0 && locks.len() >= limit {
+                break memory_pair.is_some() || storage_pair.is_some() || memory_has_remain;
             }
-        }
-
-        while let Some(pair) = memory_pair.take() {
-            locks.push(pair);
-            if limit > 0 && locks.len() == limit {
-                return Ok((locks, memory_iter.next().is_some() || memory_has_remain));
-            }
-            memory_pair = memory_iter.next();
-        }
-
-        while let Some(pair) = storage_pair.take() {
-            locks.push(pair);
-            if limit > 0 && locks.len() == limit {
-                let has_more = self
-                    .next_pair_from_storage(start_key, end_key, &filter)?
-                    .is_some()
-                    || memory_has_remain;
-                return Ok((locks, has_more));
-            }
-            storage_pair = self.next_pair_from_storage(start_key, end_key, &filter)?;
-        }
-
-        Ok((locks, false))
+        };
+        Ok((locks, has_remain))
     }
 
     pub fn load_in_memory_pessimistic_lock_range<F>(
@@ -394,7 +378,7 @@ impl<S: EngineSnapshot> MvccReader<S> {
         source: ScanLockReadTimeSource,
     ) -> Result<(Vec<(Key, Lock)>, bool)>
     where
-        F: Fn(&Key, TxnLock<'_>) -> bool,
+        F: Fn(&Key, &PessimisticLock) -> bool,
     {
         if let Some(txn_ext) = self.snapshot.ext().get_txn_ext() {
             let begin_instant = Instant::now();
@@ -702,7 +686,7 @@ impl<S: EngineSnapshot> MvccReader<S> {
         limit: usize,
     ) -> Result<(Vec<(Key, Lock)>, bool)>
     where
-        F: Fn(&Key, TxnLock<'_>) -> bool,
+        F: Fn(&Key, TxnLockRef<'_>) -> bool,
     {
         self.create_lock_cursor()?;
         let cursor = self.lock_cursor.as_mut().unwrap();
@@ -725,7 +709,7 @@ impl<S: EngineSnapshot> MvccReader<S> {
             }
 
             let lock = Lock::parse(cursor.value(&mut self.statistics.lock))?;
-            if filter(&key, TxnLock::PersistedLock(&lock)) {
+            if filter(&key, TxnLockRef::Persisted(&lock)) {
                 locks.push((key, lock));
                 if limit > 0 && locks.len() == limit {
                     has_remain = true;

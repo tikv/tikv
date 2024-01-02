@@ -1392,6 +1392,7 @@ pub fn must_kv_have_locks(
         assert_eq!(lock_info.get_lock_for_update_ts(), *expected_for_update_ts);
     }
 }
+
 /// Scan scan_limit number of locks within [start_key, end_key), the returned
 /// lock number should equal the input expected_cnt.
 pub fn must_lock_cnt(
