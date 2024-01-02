@@ -28,45 +28,39 @@ impl Encoding for EncodingGbk {
     #[inline]
     // GBK lower and upper follows https://dev.mysql.com/worklog/task/?id=4583.
     fn lower(s: &str, writer: BytesWriter) -> BytesGuard {
-        let res = s.chars().flat_map(|ch| {
-            let c = ch as u32;
-            match c {
-                0x216A..=0x216B => char::from_u32(c),
-                _ => char::from_u32(c).unwrap().to_lowercase().next(),
-            }
+        let res = s.chars().flat_map(|ch| match ch as u32 {
+            0x216A..=0x216B => Some(ch),
+            _ => unicode_to_lower(ch),
         });
         writer.write_from_char_iter(res)
     }
 
     #[inline]
     fn upper(s: &str, writer: BytesWriter) -> BytesGuard {
-        let res = s.chars().flat_map(|ch| {
-            let c = ch as u32;
-            match c {
-                0x00E0..=0x00E1
-                | 0x00E8..=0x00EA
-                | 0x00EC..=0x00ED
-                | 0x00F2..=0x00F3
-                | 0x00F9..=0x00FA
-                | 0x00FC
-                | 0x0101
-                | 0x0113
-                | 0x011B
-                | 0x012B
-                | 0x0144
-                | 0x0148
-                | 0x014D
-                | 0x016B
-                | 0x01CE
-                | 0x01D0
-                | 0x01D2
-                | 0x01D4
-                | 0x01D6
-                | 0x01D8
-                | 0x01DA
-                | 0x01DC => char::from_u32(c),
-                _ => char::from_u32(c).unwrap().to_uppercase().next(),
-            }
+        let res = s.chars().flat_map(|ch| match ch as u32 {
+            0x00E0..=0x00E1
+            | 0x00E8..=0x00EA
+            | 0x00EC..=0x00ED
+            | 0x00F2..=0x00F3
+            | 0x00F9..=0x00FA
+            | 0x00FC
+            | 0x0101
+            | 0x0113
+            | 0x011B
+            | 0x012B
+            | 0x0144
+            | 0x0148
+            | 0x014D
+            | 0x016B
+            | 0x01CE
+            | 0x01D0
+            | 0x01D2
+            | 0x01D4
+            | 0x01D6
+            | 0x01D8
+            | 0x01DA
+            | 0x01DC => Some(ch),
+            _ => unicode_to_upper(ch),
         });
         writer.write_from_char_iter(res)
     }

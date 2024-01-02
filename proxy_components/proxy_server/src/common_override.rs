@@ -96,7 +96,11 @@ impl ConfiguredRaftEngine for engine_rocks::RocksEngine {
     fn register_config(&self, cfg_controller: &mut ConfigController) {
         cfg_controller.register(
             tikv::config::Module::Raftdb,
-            Box::new(DbConfigManger::new(self.clone(), DbType::Raft)),
+            Box::new(DbConfigManger::new(
+                cfg_controller.get_current().rocksdb,
+                self.clone(),
+                DbType::Raft,
+            )),
         );
     }
 }
@@ -146,8 +150,9 @@ impl ConfiguredRaftEngine for PSLogEngine {
         _key_manager: &Option<Arc<DataKeyManager>>,
         _block_cache: &Cache,
     ) -> (Self, Option<Arc<RocksStatistics>>) {
-        // create a dummy file in raft engine dir to pass initial config check
-        let raft_engine_path = _config.raft_engine.config().dir + "/ps_engine";
+        // Create a dummy file in raft engine dir to pass initial config check
+        // See raftengine_exists.
+        let raft_engine_path = _config.raft_engine.config().dir + "/ps_engine.raftlog";
         let path = Path::new(&raft_engine_path);
         if !path.exists() {
             File::create(path).unwrap();

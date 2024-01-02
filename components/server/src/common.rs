@@ -28,8 +28,10 @@ use engine_traits::{
 use error_code::ErrorCodeExt;
 use file_system::{get_io_rate_limiter, set_io_rate_limiter, BytesFetcher, File, IoBudgetAdjustor};
 use grpcio::Environment;
+use hybrid_engine::HybridEngine;
 use pd_client::{PdClient, RpcClient};
 use raft_log_engine::RaftLogEngine;
+use region_cache_memory_engine::RegionCacheMemoryEngine;
 use security::SecurityManager;
 use tikv::{
     config::{ConfigController, DbConfigManger, DbType, TikvConfig},
@@ -695,6 +697,22 @@ impl<T: fmt::Display + Send + 'static> Stop for LazyWorker<T> {
     }
 }
 
+pub trait KvEngineBuilder: KvEngine {
+    fn build(disk_engine: RocksEngine) -> Self;
+}
+
+impl KvEngineBuilder for RocksEngine {
+    fn build(disk_engine: RocksEngine) -> Self {
+        disk_engine
+    }
+}
+
+impl KvEngineBuilder for HybridEngine<RocksEngine, RegionCacheMemoryEngine> {
+    fn build(_disk_engine: RocksEngine) -> Self {
+        unimplemented!()
+    }
+}
+
 pub trait ConfiguredRaftEngine: RaftEngine {
     fn build(
         _: &TikvConfig,
@@ -762,7 +780,11 @@ impl ConfiguredRaftEngine for RocksEngine {
     fn register_config(&self, cfg_controller: &mut ConfigController) {
         cfg_controller.register(
             tikv::config::Module::Raftdb,
-            Box::new(DbConfigManger::new(self.clone(), DbType::Raft)),
+            Box::new(DbConfigManger::new(
+                cfg_controller.get_current().rocksdb,
+                self.clone(),
+                DbType::Raft,
+            )),
         );
     }
 }

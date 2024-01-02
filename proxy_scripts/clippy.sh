@@ -1,7 +1,7 @@
 set -uxeo pipefail
 export ENGINE_LABEL_VALUE=tiflash
 export RUST_BACKTRACE=full
-export ENGINE_FEATURES="test-engine-kv-rocksdb test-engine-raft-raft-engine testexport"
+export ENGINE_FEATURES="test-engine-kv-rocksdb test-engine-raft-raft-engine testexport openssl-vendored"
 rustup component add clippy
 # TODO We use --manifest-path as a wordaround.
 cargo clippy --package proxy_ffi --features "$ENGINE_FEATURES" --manifest-path proxy_components/proxy_ffi/Cargo.toml --no-deps -- -Dwarnings -A clippy::result_large_err -A clippy::clone_on_copy -A clippy::upper_case_acronyms -A clippy::missing_safety_doc

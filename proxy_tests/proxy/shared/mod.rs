@@ -1,6 +1,7 @@
 // Copyright 2023 TiKV Project Authors. Licensed under Apache-2.0.
 
 mod config;
+mod encryption;
 mod engine;
 mod fast_add_peer;
 mod ffi;

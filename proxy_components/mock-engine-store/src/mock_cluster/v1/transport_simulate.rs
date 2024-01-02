@@ -1,4 +1,4 @@
-// Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
+// Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
     marker::PhantomData,
@@ -11,7 +11,7 @@ use std::{
 
 use collections::{HashMap, HashSet};
 use crossbeam::channel::TrySendError;
-use engine_rocks::RocksSnapshot;
+use engine_traits::{KvEngine, SnapshotContext};
 use kvproto::{raft_cmdpb::RaftCmdRequest, raft_serverpb::RaftMessage};
 use raft::eraftpb::MessageType;
 use raftstore::{
@@ -22,11 +22,7 @@ use raftstore::{
     },
     DiscardReason, Error, Result as RaftStoreResult, Result,
 };
-// Exported for v2_compat tests.
-pub use test_raftstore::FilterFactory;
 use tikv_util::{error, time::ThreadReadId, Either, HandyRwLock};
-
-use super::common::*;
 
 pub fn check_messages(msgs: &[RaftMessage]) -> Result<()> {
     if msgs.is_empty() {
@@ -36,7 +32,15 @@ pub fn check_messages(msgs: &[RaftMessage]) -> Result<()> {
     }
 }
 
-pub use test_raftstore::Filter;
+pub trait Filter: Send + Sync {
+    /// `before` is run before sending the messages.
+    fn before(&self, msgs: &mut Vec<RaftMessage>) -> Result<()>;
+    /// `after` is run after sending the messages,
+    /// so that the returned value could be changed if necessary.
+    fn after(&self, res: Result<()>) -> Result<()> {
+        res
+    }
+}
 
 /// Emits a notification for each given message type that it sees.
 #[allow(dead_code)]
@@ -136,16 +140,19 @@ impl Filter for DelayFilter {
 }
 
 #[derive(Clone)]
-pub struct SimulateTransport<C> {
+pub struct SimulateTransport<C, EK: KvEngine> {
     filters: Arc<RwLock<Vec<Box<dyn Filter>>>>,
     ch: C,
+
+    _p: PhantomData<EK>,
 }
 
-impl<C> SimulateTransport<C> {
-    pub fn new(ch: C) -> SimulateTransport<C> {
+impl<C, EK: KvEngine> SimulateTransport<C, EK> {
+    pub fn new(ch: C) -> SimulateTransport<C, EK> {
         SimulateTransport {
             filters: Arc::new(RwLock::new(vec![])),
             ch,
+            _p: PhantomData,
         }
     }
 
@@ -158,8 +165,7 @@ impl<C> SimulateTransport<C> {
     }
 }
 
-#[allow(clippy::significant_drop_in_scrutinee)]
-fn filter_send<H>(
+pub fn filter_send<H>(
     filters: &Arc<RwLock<Vec<Box<dyn Filter>>>>,
     msg: RaftMessage,
     mut h: H,
@@ -186,14 +192,13 @@ where
             }
         }
     }
-    let l = filters[..taken].iter().rev();
-    for filter in l {
+    for filter in filters[..taken].iter().rev() {
         res = filter.after(res);
     }
     res
 }
 
-impl<C: Transport> Transport for SimulateTransport<C> {
+impl<EK: KvEngine, C: Transport> Transport for SimulateTransport<C, EK> {
     fn send(&mut self, m: RaftMessage) -> Result<()> {
         let ch = &mut self.ch;
         filter_send(&self.filters, m, |m| ch.send(m))
@@ -212,49 +217,52 @@ impl<C: Transport> Transport for SimulateTransport<C> {
     }
 }
 
-impl<C: RaftStoreRouter<TiFlashEngine>> StoreRouter<TiFlashEngine> for SimulateTransport<C> {
-    fn send(&self, msg: StoreMsg<TiFlashEngine>) -> Result<()> {
+impl<EK: KvEngine, C: RaftStoreRouter<EK>> StoreRouter<EK> for SimulateTransport<C, EK> {
+    fn send(&self, msg: StoreMsg<EK>) -> Result<()> {
         StoreRouter::send(&self.ch, msg)
     }
 }
 
-impl<C: RaftStoreRouter<TiFlashEngine>> ProposalRouter<RocksSnapshot> for SimulateTransport<C> {
+impl<EK: KvEngine, C: RaftStoreRouter<EK>> ProposalRouter<<EK as KvEngine>::Snapshot>
+    for SimulateTransport<C, EK>
+{
     fn send(
         &self,
-        cmd: RaftCommand<RocksSnapshot>,
-    ) -> std::result::Result<(), TrySendError<RaftCommand<RocksSnapshot>>> {
-        ProposalRouter::<RocksSnapshot>::send(&self.ch, cmd)
+        cmd: RaftCommand<<EK as KvEngine>::Snapshot>,
+    ) -> std::result::Result<(), TrySendError<RaftCommand<<EK as KvEngine>::Snapshot>>> {
+        ProposalRouter::<<EK as KvEngine>::Snapshot>::send(&self.ch, cmd)
     }
 }
 
-impl<C: RaftStoreRouter<TiFlashEngine>> CasualRouter<TiFlashEngine> for SimulateTransport<C> {
-    fn send(&self, region_id: u64, msg: CasualMessage<TiFlashEngine>) -> Result<()> {
-        CasualRouter::<TiFlashEngine>::send(&self.ch, region_id, msg)
+impl<EK: KvEngine, C: RaftStoreRouter<EK>> CasualRouter<EK> for SimulateTransport<C, EK> {
+    fn send(&self, region_id: u64, msg: CasualMessage<EK>) -> Result<()> {
+        CasualRouter::<EK>::send(&self.ch, region_id, msg)
     }
 }
 
-impl<C: RaftStoreRouter<TiFlashEngine>> SignificantRouter<TiFlashEngine> for SimulateTransport<C> {
-    fn significant_send(&self, region_id: u64, msg: SignificantMsg<RocksSnapshot>) -> Result<()> {
+impl<EK: KvEngine, C: RaftStoreRouter<EK>> SignificantRouter<EK> for SimulateTransport<C, EK> {
+    fn significant_send(&self, region_id: u64, msg: SignificantMsg<EK::Snapshot>) -> Result<()> {
         self.ch.significant_send(region_id, msg)
     }
 }
 
-impl<C: RaftStoreRouter<TiFlashEngine>> RaftStoreRouter<TiFlashEngine> for SimulateTransport<C> {
+impl<EK: KvEngine, C: RaftStoreRouter<EK>> RaftStoreRouter<EK> for SimulateTransport<C, EK> {
     fn send_raft_msg(&self, msg: RaftMessage) -> Result<()> {
         filter_send(&self.filters, msg, |m| self.ch.send_raft_msg(m))
     }
 
-    fn broadcast_normal(&self, _: impl FnMut() -> PeerMsg<TiFlashEngine>) {}
+    fn broadcast_normal(&self, _: impl FnMut() -> PeerMsg<EK>) {}
 }
 
-impl<C: LocalReadRouter<TiFlashEngine>> LocalReadRouter<TiFlashEngine> for SimulateTransport<C> {
+impl<EK: KvEngine, C: LocalReadRouter<EK>> LocalReadRouter<EK> for SimulateTransport<C, EK> {
     fn read(
         &mut self,
+        snap_ctx: Option<SnapshotContext>,
         read_id: Option<ThreadReadId>,
         req: RaftCmdRequest,
-        cb: Callback<RocksSnapshot>,
+        cb: Callback<EK::Snapshot>,
     ) -> RaftStoreResult<()> {
-        self.ch.read(read_id, req, cb)
+        self.ch.read(snap_ctx, read_id, req, cb)
     }
 
     fn release_snapshot_cache(&mut self) {
@@ -262,9 +270,9 @@ impl<C: LocalReadRouter<TiFlashEngine>> LocalReadRouter<TiFlashEngine> for Simul
     }
 }
 
-// pub trait FilterFactory {
-//     fn generate(&self, node_id: u64) -> Vec<Box<dyn Filter>>;
-// }
+pub trait FilterFactory {
+    fn generate(&self, node_id: u64) -> Vec<Box<dyn Filter>>;
+}
 
 #[derive(Default)]
 pub struct DefaultFilterFactory<F: Filter + Default>(PhantomData<F>);
@@ -374,7 +382,6 @@ pub struct RegionPacketFilter {
     drop_type: Vec<MessageType>,
     skip_type: Vec<MessageType>,
     dropped_messages: Option<Arc<Mutex<Vec<RaftMessage>>>>,
-    #[allow(clippy::type_complexity)]
     msg_callback: Option<Arc<dyn Fn(&RaftMessage) + Send + Sync>>,
 }
 
@@ -510,7 +517,7 @@ impl Filter for SnapshotFilter {
 /// simultaneous delivery of multiple snapshots from different peers. It
 /// collects the snapshots from different peers and drop the subsequent
 /// snapshots from the same peers. Currently, if there are more than 1 snapshots
-/// in this filter, all the snapshots will be dilivered at once.
+/// in this filter, all the snapshots will be delivered at once.
 pub struct CollectSnapshotFilter {
     dropped: AtomicBool,
     stale: AtomicBool,
@@ -777,7 +784,6 @@ impl RandomLatencyFilter {
 }
 
 impl Filter for RandomLatencyFilter {
-    #[allow(clippy::significant_drop_in_scrutinee)]
     fn before(&self, msgs: &mut Vec<RaftMessage>) -> Result<()> {
         let mut to_send = vec![];
         let mut to_delay = vec![];
@@ -831,18 +837,18 @@ impl Filter for LeaseReadFilter {
 
 #[derive(Clone)]
 pub struct DropMessageFilter {
-    ty: MessageType,
+    retain: Arc<dyn Fn(&RaftMessage) -> bool + Sync + Send>,
 }
 
 impl DropMessageFilter {
-    pub fn new(ty: MessageType) -> DropMessageFilter {
-        DropMessageFilter { ty }
+    pub fn new(retain: Arc<dyn Fn(&RaftMessage) -> bool + Sync + Send>) -> DropMessageFilter {
+        DropMessageFilter { retain }
     }
 }
 
 impl Filter for DropMessageFilter {
     fn before(&self, msgs: &mut Vec<RaftMessage>) -> Result<()> {
-        msgs.retain(|m| m.get_message().get_msg_type() != self.ty);
+        msgs.retain(|m| (self.retain)(m));
         Ok(())
     }
 }

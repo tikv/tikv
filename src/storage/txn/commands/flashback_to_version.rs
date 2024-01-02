@@ -185,6 +185,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for FlashbackToVersion {
             new_acquired_locks: vec![],
             lock_guards: vec![],
             response_policy: ResponsePolicy::OnApplied,
+            known_txn_status: vec![],
         })
     }
 }

@@ -1,5 +1,4 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
-
 use std::borrow::ToOwned;
 
 use clap::ArgMatches;
@@ -37,11 +36,15 @@ pub fn overwrite_config_with_cmd_args(
     println!("arg matches is {:?}", matches);
     if let Some(level) = matches.value_of("log-level") {
         config.log.level = logger::get_level_by_string(level).unwrap().into();
+        // For backward compating
+        #[allow(deprecated)]
         config.log_level = slog::Level::Info.into();
     }
 
     if let Some(file) = matches.value_of("log-file") {
         config.log.file.filename = file.to_owned();
+        // For backward compating
+        #[allow(deprecated)]
         config.log_file = "".to_owned();
     }
 

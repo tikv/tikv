@@ -10,6 +10,7 @@
 use std::time::Instant;
 
 use engine_traits::{KvEngine, RaftEngine, RaftLogBatch};
+use fail::fail_point;
 use kvproto::{
     metapb::{self, PeerRole},
     raft_cmdpb::{AdminRequest, AdminResponse, ChangePeerRequest, RaftCmdRequest},
@@ -392,6 +393,14 @@ impl<EK: KvEngine, R> Apply<EK, R> {
 
         match change_type {
             ConfChangeType::AddNode => {
+                let add_node_fp = || {
+                    fail_point!(
+                        "apply_on_add_node_1_2",
+                        self.peer_id() == 2 && self.region_id() == 1,
+                        |_| {}
+                    )
+                };
+                add_node_fp();
                 PEER_ADMIN_CMD_COUNTER_VEC
                     .with_label_values(&["add_peer", "all"])
                     .inc();
@@ -595,15 +604,22 @@ impl<EK: KvEngine, R> Apply<EK, R> {
             "update gc peer";
             "index" => log_index,
             "updates" => ?updates,
-            "gc_peers" => ?removed_records,
-            "merged_peers" => ?merged_records
+            "removed_records" => ?removed_records,
+            "merged_records" => ?merged_records
         );
         removed_records.retain(|p| !updates.contains(&p.get_id()));
         merged_records.retain_mut(|r| {
-            let mut sources: Vec<_> = r.take_source_peers().into();
-            sources.retain(|p| !updates.contains(&p.get_id()));
-            r.set_source_peers(sources.into());
-            !r.get_source_peers().is_empty()
+            // Clean up source peers if they acknowledge GcPeerRequest.
+            let mut source_peers: Vec<_> = r.take_source_peers().into();
+            source_peers.retain(|p| !updates.contains(&p.get_id()));
+            r.set_source_peers(source_peers.into());
+            // Clean up source removed records (peers) if they acknowledge GcPeerRequest.
+            let mut source_removed_records: Vec<_> = r.take_source_removed_records().into();
+            source_removed_records.retain(|p| !updates.contains(&p.get_id()));
+            r.set_source_removed_records(source_removed_records.into());
+            // Clean up merged records if all source peers and source removed records are
+            // empty.
+            !r.get_source_peers().is_empty() || !r.get_source_removed_records().is_empty()
         });
         self.region_state_mut()
             .set_removed_records(removed_records.into());

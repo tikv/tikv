@@ -37,7 +37,7 @@ engine_traits = { workspace = true }
 fail = "0.5"
 file_system = { workspace = true }
 futures = "0.3"
-grpcio = { workspace = true }
+grpcio = { version = "0.10", default-features = false, features = ["openssl-vendored", "protobuf-codec"] }
 grpcio-health = { version = "0.10", default-features = false, features = ["protobuf-codec"] }
 keys = { workspace = true }
 kvproto = { git = "https://github.com/pingcap/kvproto.git" }

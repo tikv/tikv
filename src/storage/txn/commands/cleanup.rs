@@ -80,6 +80,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for Cleanup {
             new_acquired_locks,
             lock_guards: vec![],
             response_policy: ResponsePolicy::OnApplied,
+            known_txn_status: vec![],
         })
     }
 }

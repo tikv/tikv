@@ -121,6 +121,10 @@ impl CompactExt for RocksEngine {
         db.compact_files_cf(handle, &opts, &files, output_level)
             .map_err(r2e)
     }
+
+    fn check_in_range(&self, start: Option<&[u8]>, end: Option<&[u8]>) -> Result<()> {
+        self.as_inner().check_in_range(start, end).map_err(r2e)
+    }
 }
 
 #[cfg(test)]

@@ -21,7 +21,10 @@ use raftstore::{
 };
 use sst_importer::SstImporter;
 
-use crate::core::{DebugStruct, PackedEnvs, ProxyForwarder};
+use crate::{
+    core::{DebugStruct, PackedEnvs, ProxyForwarder},
+    TiFlashEngine,
+};
 
 // TiFlash observer's priority should be higher than all other observers, to
 // avoid being bypassed.
@@ -38,7 +41,7 @@ impl<T: Transport + 'static, ER: RaftEngine> TiFlashObserver<T, ER> {
         store_id: u64,
         engine: engine_tiflash::MixedModeEngine,
         raft_engine: ER,
-        sst_importer: Arc<SstImporter>,
+        sst_importer: Arc<SstImporter<TiFlashEngine>>,
         trans: T,
         snap_mgr: SnapManager,
         packed_envs: PackedEnvs,

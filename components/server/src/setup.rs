@@ -74,7 +74,6 @@ fn make_engine_log_path(path: &str, sub_path: &str, filename: &str) -> String {
     })
 }
 
-#[allow(dead_code)]
 pub fn initial_logger(config: &TikvConfig) {
     fail::fail_point!("mock_force_uninitial_logger", |_| {
         LOG_INITIALIZED.store(false, Ordering::SeqCst);
@@ -245,12 +244,10 @@ pub fn initial_metric(cfg: &MetricConfig) {
 pub fn overwrite_config_with_cmd_args(config: &mut TikvConfig, matches: &ArgMatches<'_>) {
     if let Some(level) = matches.value_of("log-level") {
         config.log.level = logger::get_level_by_string(level).unwrap().into();
-        config.log_level = slog::Level::Info.into();
     }
 
     if let Some(file) = matches.value_of("log-file") {
         config.log.file.filename = file.to_owned();
-        config.log_file = "".to_owned();
     }
 
     if let Some(addr) = matches.value_of("addr") {

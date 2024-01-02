@@ -36,6 +36,11 @@ test-engines-panic = [
   "engine_test/test-engines-panic",
 ]
 
+# TODO use encryption/openssl-vendored if later supports
+openssl-vendored = [
+  "openssl/vendored"
+]
+
 [dependencies]
 api_version = { workspace = true, default-features = false }
 case_macros = { workspace = true }
@@ -43,6 +48,7 @@ collections = { workspace = true, default-features = false }
 
 derive_more = "0.99.3"
 encryption = { workspace = true, default-features = false }
+openssl = { workspace = true } # TODO only for feature
 engine_rocks = { workspace = true, default-features = false }
 engine_traits = { workspace = true, default-features = false }
 # TODO: Imported for `test-` features to make cargo clippy happy.

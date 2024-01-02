@@ -12,7 +12,7 @@ use std::{
 pub(crate) use details::RocksEngine;
 pub use details::RocksEngine as MixedModeEngine;
 use engine_rocks::RocksSnapshot;
-use engine_traits::{Checkpointable, Checkpointer, Error, KvEngine, Result};
+use engine_traits::{Checkpointable, Checkpointer, Error, KvEngine, Result, SnapshotContext};
 use rocksdb::DB;
 
 use crate::{
@@ -126,8 +126,8 @@ impl RocksEngine {
 impl KvEngine for RocksEngine {
     type Snapshot = RocksSnapshot;
 
-    fn snapshot(&self) -> RocksSnapshot {
-        self.rocks.snapshot()
+    fn snapshot(&self, x: Option<SnapshotContext>) -> RocksSnapshot {
+        self.rocks.snapshot(x)
     }
 
     fn sync(&self) -> Result<()> {

@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use serde_with::with_prefix;
 use tikv_util::{
     box_err,
-    config::{ReadableDuration, ReadableSize, VersionTrack},
+    config::{ReadableDuration, ReadableSchedule, ReadableSize, VersionTrack},
     error, info,
     sys::SysQuota,
     warn,
@@ -104,12 +104,11 @@ pub struct Config {
     pub max_manual_flush_rate: f64,
     // When a peer is not responding for this time, leader will not keep entry cache for it.
     pub raft_entry_cache_life_time: ReadableDuration,
-    // Deprecated! The configuration has no effect.
-    // They are preserved for compatibility check.
     // When a peer is newly added, reject transferring leader to the peer for a while.
     #[doc(hidden)]
     #[serde(skip_serializing)]
-    #[online_config(skip)]
+    #[online_config(hidden)]
+    #[deprecated = "The configuration has been removed. It has no effect"]
     pub raft_reject_transfer_leader_duration: ReadableDuration,
 
     /// Whether to disable checking quorum for the raft group. This will make
@@ -140,9 +139,10 @@ pub struct Config {
     pub region_compact_min_redundant_rows: u64,
     /// Minimum percentage of redundant rows to trigger manual compaction.
     /// Should between 1 and 100.
-    pub region_compact_redundant_rows_percent: u64,
+    pub region_compact_redundant_rows_percent: Option<u64>,
     pub pd_heartbeat_tick_interval: ReadableDuration,
     pub pd_store_heartbeat_tick_interval: ReadableDuration,
+    pub pd_report_min_resolved_ts_interval: ReadableDuration,
     pub snap_mgr_gc_tick_interval: ReadableDuration,
     pub snap_gc_timeout: ReadableDuration,
     /// The duration of snapshot waits for region split. It prevents leader from
@@ -151,6 +151,15 @@ pub struct Config {
     pub snap_wait_split_duration: ReadableDuration,
     pub lock_cf_compact_interval: ReadableDuration,
     pub lock_cf_compact_bytes_threshold: ReadableSize,
+
+    /// Hours of the day during which we may execute a periodic full compaction.
+    /// If not set or empty, periodic full compaction will not run. In toml this
+    /// should be a list of timesin "HH:MM" format with an optional timezone
+    /// offset. If no timezone is specified, local timezone is used. E.g.,
+    /// `["23:00 +0000", "03:00 +0700"]` or `["23:00", "03:00"]`.
+    pub periodic_full_compact_start_times: ReadableSchedule,
+    /// Do not start a full compaction if cpu utilization exceeds this number.
+    pub periodic_full_compact_start_max_cpu: f64,
 
     #[online_config(skip)]
     pub notify_capacity: usize,
@@ -169,6 +178,9 @@ pub struct Config {
     /// and try to alert monitoring systems, if there is any.
     pub abnormal_leader_missing_duration: ReadableDuration,
     pub peer_stale_state_check_interval: ReadableDuration,
+    /// Interval to check GC peers.
+    #[doc(hidden)]
+    pub gc_peer_check_interval: ReadableDuration,
 
     #[online_config(hidden)]
     pub leader_transfer_max_log_lag: u64,
@@ -317,39 +329,40 @@ pub struct Config {
     pub io_reschedule_concurrent_max_count: usize,
     pub io_reschedule_hotpot_duration: ReadableDuration,
 
-    // Deprecated! Batch is done in raft client.
     #[doc(hidden)]
     #[serde(skip_serializing)]
-    #[online_config(skip)]
+    #[online_config(hidden)]
+    #[deprecated = "The configuration has been removed. Batch is done in raft client."]
     pub raft_msg_flush_interval: ReadableDuration,
 
-    // Deprecated! These configuration has been moved to Coprocessor.
-    // They are preserved for compatibility check.
     #[doc(hidden)]
     #[serde(skip_serializing)]
-    #[online_config(skip)]
+    #[online_config(hidden)]
+    #[deprecated = "The configuration has been moved to coprocessor.region_max_size."]
     pub region_max_size: ReadableSize,
     #[doc(hidden)]
     #[serde(skip_serializing)]
-    #[online_config(skip)]
+    #[online_config(hidden)]
+    #[deprecated = "The configuration has been moved to coprocessor.region_split_size."]
     pub region_split_size: ReadableSize,
-    // Deprecated! The time to clean stale peer safely can be decided based on RocksDB snapshot
-    // sequence number.
     #[doc(hidden)]
     #[serde(skip_serializing)]
-    #[online_config(skip)]
+    #[online_config(hidden)]
+    #[deprecated = "The configuration has been removed. The time to clean stale peer safely can be decided based on RocksDB snapshot sequence number."]
     pub clean_stale_peer_delay: ReadableDuration,
 
     // Interval to inspect the latency of raftstore for slow store detection.
     pub inspect_interval: ReadableDuration,
+    /// Threshold of CPU utilization to inspect for slow store detection.
+    #[doc(hidden)]
+    pub inspect_cpu_util_thd: f64,
 
     // The unsensitive(increase it to reduce sensitiveness) of the cause-trend detection
     pub slow_trend_unsensitive_cause: f64,
     // The unsensitive(increase it to reduce sensitiveness) of the result-trend detection
     pub slow_trend_unsensitive_result: f64,
-
-    // Interval to report min resolved ts, if it is zero, it means disabled.
-    pub report_min_resolved_ts_interval: ReadableDuration,
+    // The sensitiveness of slowness on network-io.
+    pub slow_trend_network_io_factor: f64,
 
     /// Interval to check whether to reactivate in-memory pessimistic lock after
     /// being disabled before transferring leader.
@@ -397,6 +410,7 @@ pub struct Config {
 }
 
 impl Default for Config {
+    #[allow(deprecated)]
     fn default() -> Config {
         Config {
             prevote: true,
@@ -429,9 +443,15 @@ impl Default for Config {
             region_compact_min_tombstones: 10000,
             region_compact_tombstones_percent: 30,
             region_compact_min_redundant_rows: 50000,
-            region_compact_redundant_rows_percent: 20,
+            region_compact_redundant_rows_percent: Some(20),
             pd_heartbeat_tick_interval: ReadableDuration::minutes(1),
             pd_store_heartbeat_tick_interval: ReadableDuration::secs(10),
+            pd_report_min_resolved_ts_interval: ReadableDuration::secs(1),
+            // Disable periodic full compaction by default.
+            periodic_full_compact_start_times: ReadableSchedule::default(),
+            // If periodic full compaction is enabled, do not start a full compaction
+            // if the CPU utilization is over 10%.
+            periodic_full_compact_start_max_cpu: 0.1,
             notify_capacity: 40960,
             snap_mgr_gc_tick_interval: ReadableDuration::minutes(1),
             snap_gc_timeout: ReadableDuration::hours(4),
@@ -500,16 +520,22 @@ impl Default for Config {
             region_max_size: ReadableSize(0),
             region_split_size: ReadableSize(0),
             clean_stale_peer_delay: ReadableDuration::minutes(0),
-            inspect_interval: ReadableDuration::millis(500),
+            inspect_interval: ReadableDuration::millis(100),
+            // The default value of `inspect_cpu_util_thd` is 0.4, which means
+            // when the cpu utilization is greater than 40%, the store might be
+            // regarded as a slow node if there exists delayed inspected messages.
+            // It's good enough for most cases to reduce the false positive rate.
+            inspect_cpu_util_thd: 0.4,
             // The param `slow_trend_unsensitive_cause == 2.0` can yield good results,
             // make it `10.0` to reduce a bit sensitiveness because SpikeFilter is disabled
             slow_trend_unsensitive_cause: 10.0,
             slow_trend_unsensitive_result: 0.5,
-            report_min_resolved_ts_interval: ReadableDuration::secs(1),
+            slow_trend_network_io_factor: 0.0,
             check_leader_lease_interval: ReadableDuration::secs(0),
             renew_leader_lease_advance_duration: ReadableDuration::secs(0),
             allow_unsafe_vote_after_start: false,
             report_region_buckets_tick_interval: ReadableDuration::secs(10),
+            gc_peer_check_interval: ReadableDuration::secs(60),
             max_snapshot_file_raw_size: ReadableSize::mb(100),
             unreachable_backoff: ReadableDuration::secs(10),
             // TODO: make its value reasonable
@@ -579,6 +605,10 @@ impl Config {
 
     pub fn region_compact_check_step(&self) -> u64 {
         self.region_compact_check_step.unwrap()
+    }
+
+    pub fn region_compact_redundant_rows_percent(&self) -> u64 {
+        self.region_compact_redundant_rows_percent.unwrap()
     }
 
     #[inline]
@@ -766,6 +796,15 @@ impl Config {
             ));
         }
 
+        let region_compact_redundant_rows_percent =
+            self.region_compact_redundant_rows_percent.unwrap();
+        if !(1..=100).contains(&region_compact_redundant_rows_percent) {
+            return Err(box_err!(
+                "region-compact-redundant-rows-percent must between 1 and 100, current value is {}",
+                region_compact_redundant_rows_percent
+            ));
+        }
+
         if self.local_read_batch_size == 0 {
             return Err(box_err!("local-read-batch-size must be greater than 0"));
         }
@@ -903,6 +942,12 @@ impl Config {
             ));
         }
 
+        if self.slow_trend_network_io_factor < 0.0 {
+            return Err(box_err!(
+                "slow_trend_network_io_factor must be greater than 0"
+            ));
+        }
+
         Ok(())
     }
 
@@ -992,14 +1037,20 @@ impl Config {
             .with_label_values(&["region_compact_min_redundant_rows"])
             .set(self.region_compact_min_redundant_rows as f64);
         CONFIG_RAFTSTORE_GAUGE
-            .with_label_values(&["region_compact_tombstones_percent"])
-            .set(self.region_compact_tombstones_percent as f64);
+            .with_label_values(&["region_compact_redundant_rows_percent"])
+            .set(
+                self.region_compact_redundant_rows_percent
+                    .unwrap_or_default() as f64,
+            );
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["pd_heartbeat_tick_interval"])
             .set(self.pd_heartbeat_tick_interval.as_secs_f64());
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["pd_store_heartbeat_tick_interval"])
             .set(self.pd_store_heartbeat_tick_interval.as_secs_f64());
+        CONFIG_RAFTSTORE_GAUGE
+            .with_label_values(&["pd_report_min_resolved_ts_interval"])
+            .set(self.pd_report_min_resolved_ts_interval.as_secs_f64());
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["snap_mgr_gc_tick_interval"])
             .set(self.snap_mgr_gc_tick_interval.as_secs_f64());
@@ -1035,6 +1086,9 @@ impl Config {
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["leader_transfer_max_log_lag"])
             .set(self.leader_transfer_max_log_lag as f64);
+        CONFIG_RAFTSTORE_GAUGE
+            .with_label_values(&["gc_peer_check_interval"])
+            .set(self.gc_peer_check_interval.as_secs_f64());
 
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["snap_apply_batch_size"])

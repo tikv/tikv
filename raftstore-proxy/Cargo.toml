@@ -34,6 +34,7 @@ nortcheck = ["proxy_server/nortcheck"]
 backup-stream-debug = ["proxy_server/backup-stream-debug"]
 
 pprof-fp = ["proxy_server/pprof-fp"]
+openssl-vendored = ["proxy_server/openssl-vendored"]
 
 [lib]
 name = "raftstore_proxy"

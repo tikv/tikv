@@ -1,0 +1,15 @@
+[package]
+name = "region_cache_memory_engine"
+version = "0.0.1"
+edition = "2021"
+publish = false
+
+[features]
+testexport = []
+
+[dependencies]
+bytes = "1.0"
+collections = { workspace = true }
+engine_traits = { workspace = true }
+skiplist-rs = { git = "https://github.com/tikv/skiplist-rs.git", branch = "main" }
+tikv_util = { workspace = true }

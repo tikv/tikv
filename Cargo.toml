@@ -1,6 +1,6 @@
 [package]
 name = "tikv"
-version = "7.4.0-alpha"
+version = "7.6.0-alpha"
 authors = ["The TiKV Authors"]
 description = "A distributed transactional key-value database powered by Rust and Raft"
 license = "Apache-2.0"
@@ -21,18 +21,27 @@ snmalloc = ["tikv_alloc/snmalloc"]
 portable = ["engine_rocks/portable"]
 sse = ["engine_rocks/sse"]
 mem-profiling = ["tikv_alloc/mem-profiling"]
-failpoints = ["fail/failpoints", "raftstore/failpoints", "tikv_util/failpoints", "engine_rocks/failpoints"]
-cloud-aws = ["encryption_export/cloud-aws", "sst_importer/cloud-aws"]
-cloud-gcp = ["encryption_export/cloud-gcp", "sst_importer/cloud-gcp"]
-cloud-azure = ["encryption_export/cloud-azure", "sst_importer/cloud-azure"]
-testexport = ["raftstore/testexport", "api_version/testexport", "causal_ts/testexport", "engine_traits/testexport", "engine_rocks/testexport", "engine_panic/testexport"]
+failpoints = ["fail/failpoints", "raftstore/failpoints", "tikv_util/failpoints", "engine_rocks/failpoints", "raft_log_engine/failpoints"]
+cloud-aws = ["encryption_export/cloud-aws"]
+cloud-gcp = ["encryption_export/cloud-gcp"]
+cloud-azure = ["encryption_export/cloud-azure"]
+testexport = ["raftstore/testexport", "api_version/testexport", "causal_ts/testexport", "engine_traits/testexport", "engine_rocks/testexport", "engine_panic/testexport", "hybrid_engine/testexport"]
 test-engine-kv-rocksdb = ["engine_test/test-engine-kv-rocksdb"]
 test-engine-raft-raft-engine = ["engine_test/test-engine-raft-raft-engine"]
 test-engines-rocksdb = ["engine_test/test-engines-rocksdb"]
 test-engines-panic = ["engine_test/test-engines-panic"]
-cloud-storage-grpc = ["sst_importer/cloud-storage-grpc"]
-cloud-storage-dylib = ["sst_importer/cloud-storage-dylib"]
 pprof-fp = ["pprof/frame-pointer"]
+openssl-vendored = [
+  "openssl/vendored",
+  "hyper-tls/vendored",
+  # NB: the "openssl" feature does not make grpcio-sys v0.10 depends on
+  # openssl-sys, and it can not find the static openssl built by openssl-sys.
+  # Enabling "grpcio/openssl-vendored" explicitly makes grpcio-sys depends on
+  # openssl-sys and correctly links to the static openssl.
+  "grpcio/openssl-vendored",
+  # NB: Enable SM4 support if OpenSSL is built from source and statically linked.
+  "encryption_export/sm4",
+]
 
 # for testing configure propegate to other crates
 # https://stackoverflow.com/questions/41700543/can-we-share-test-utilites-between-crates
@@ -59,6 +68,7 @@ coprocessor_plugin_api = { workspace = true }
 crc32fast = "1.2"
 crc64fast = "0.1"
 crossbeam = "0.8"
+crypto = { workspace = true }
 dashmap = "5"
 encryption_export = { workspace = true }
 engine_panic = { workspace = true }
@@ -80,6 +90,7 @@ grpcio = { workspace = true }
 grpcio-health = { workspace = true }
 hex = "0.4"
 http = "0"
+hybrid_engine = { workspace = true }
 hyper = { version = "0.14", features = ["full"] }
 hyper-tls = "0.5"
 into_other = { workspace = true }
@@ -102,7 +113,7 @@ notify = "4"
 num-traits = "0.2.14"
 num_cpus = "1"
 online_config = { workspace = true }
-openssl = "0.10"
+openssl = { workspace = true }
 parking_lot = "0.12"
 paste = "1.0"
 pd_client = { workspace = true }
@@ -118,6 +129,7 @@ raftstore = { workspace = true, features = ["engine_rocks"] }
 raftstore-v2 = { workspace = true }
 rand = "0.7.3"
 regex = "1.3"
+region_cache_memory_engine = { workspace = true }
 resource_control = { workspace = true }
 resource_metering = { workspace = true }
 rev_lines = "0.2.1"
@@ -182,12 +194,16 @@ protobuf = { git = "https://github.com/pingcap/rust-protobuf", branch = "v2.8" }
 protobuf-codegen = { git = "https://github.com/pingcap/rust-protobuf", branch = "v2.8" }
 
 # TODO: remove this replacement after rusoto_s3 truly supports virtual-host style (https://github.com/rusoto/rusoto/pull/1823).
+# UPDATE: use openssl for signature to support fips 140
 rusoto_core = { git = "https://github.com/tikv/rusoto", branch = "gh1482-s3-addr-styles" }
 rusoto_credential = { git = "https://github.com/tikv/rusoto", branch = "gh1482-s3-addr-styles" }
 rusoto_kms = { git = "https://github.com/tikv/rusoto", branch = "gh1482-s3-addr-styles" }
 rusoto_mock = { git = "https://github.com/tikv/rusoto", branch = "gh1482-s3-addr-styles" }
 rusoto_s3 = { git = "https://github.com/tikv/rusoto", branch = "gh1482-s3-addr-styles" }
 rusoto_sts = { git = "https://github.com/tikv/rusoto", branch = "gh1482-s3-addr-styles" }
+
+# NOTICE: use openssl for signature to support fips 140
+tame-oauth = { git = "https://github.com/tikv/tame-oauth", branch = "fips" }
 
 snappy-sys = { git = "https://github.com/busyjay/rust-snappy.git", branch = "static-link" }
 
@@ -231,6 +247,7 @@ members = [
   "components/collections",
   "components/concurrency_manager",
   "components/coprocessor_plugin_api",
+  "components/crypto",
   "components/encryption",
   "components/encryption/export",
   "components/engine_rocks_helper",
@@ -239,7 +256,6 @@ members = [
 #  "components/engine_tirocks",
   "components/error_code",
   "components/external_storage",
-  "components/external_storage/export",
   "components/file_system",
   "components/into_other",
   "components/keys",
@@ -318,14 +334,16 @@ encryption = { path = "components/encryption" }
 encryption_export = { path = "components/encryption/export" }
 engine_panic = { path = "components/engine_panic" }
 engine_rocks = { path = "components/engine_rocks" }
+hybrid_engine = { path = "components/hybrid_engine" }
+region_cache_memory_engine = { path = "components/region_cache_memory_engine" }
 engine_rocks_helper = { path = "components/engine_rocks_helper" }
 engine_test = { path = "components/engine_test", default-features = false }
 engine_traits = { path = "components/engine_traits" }
 engine_traits_tests = { path = "components/engine_traits_tests", default-features = false }
 error_code = { path = "components/error_code" }
 external_storage = { path = "components/external_storage" }
-external_storage_export = { path = "components/external_storage/export" }
 file_system = { path = "components/file_system" }
+crypto = { path = "components/crypto" }
 gcp = { path = "components/cloud/gcp" }
 into_other = { path = "components/into_other" }
 keys = { path = "components/keys" }
@@ -344,7 +362,7 @@ resource_metering = { path = "components/resource_metering" }
 security = { path = "components/security" }
 server = { path = "components/server" }
 service = { path = "components/service" }
-snap_recovery = { path = "components/snap_recovery" }
+snap_recovery = { path = "components/snap_recovery", default-features = false }
 sst_importer = { path = "components/sst_importer", default-features = false }
 test_backup = { path = "components/test_backup" }
 test_coprocessor = { path = "components/test_coprocessor", default-features = false }
@@ -372,14 +390,17 @@ tracker = { path = "components/tracker" }
 txn_types = { path = "components/txn_types" }
 # External libs
 raft = { version = "0.7.0", default-features = false, features = ["protobuf-codec"] }
-grpcio = { version = "0.10.4", default-features = false, features = ["openssl-vendored", "protobuf-codec", "nightly"] }
+grpcio = { version = "0.10.4", default-features = false, features = ["openssl", "protobuf-codec", "nightly"] }
 grpcio-health = { version = "0.10.4", default-features = false, features = ["protobuf-codec"] }
 tipb = { git = "https://github.com/pingcap/tipb.git" }
 kvproto = { git = "https://github.com/pingcap/kvproto.git" }
 yatp = { git = "https://github.com/tikv/yatp.git", branch = "master" }
 tokio-timer = { git = "https://github.com/tikv/tokio", branch = "tokio-timer-hotfix" }
+tokio-executor = { git = "https://github.com/tikv/tokio", branch = "tokio-timer-hotfix" }
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }
+openssl = "0.10"
+openssl-sys = "0.9"
 
 # TiFlash libs
 engine_store_ffi = { path = "proxy_components/engine_store_ffi", default-features = false }
@@ -398,10 +419,6 @@ debug = false
 opt-level = 1
 
 [profile.dev.package.libtitan_sys]
-debug = false
-opt-level = 1
-
-[profile.dev.package.tirocks-sys]
 debug = false
 opt-level = 1
 

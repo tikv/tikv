@@ -37,7 +37,7 @@ use pd_client::PdClient;
 use raftstore::{
     store::{
         cmd_resp, initial_region, region_meta::RegionMeta, util::check_key_in_region, Bucket,
-        BucketRange, Callback, RegionSnapshot, TabletSnapManager, WriteResponse,
+        BucketRange, Callback, RaftCmdExtraOpts, RegionSnapshot, TabletSnapManager, WriteResponse,
         INIT_EPOCH_CONF_VER, INIT_EPOCH_VER,
     },
     Error, Result,
@@ -51,7 +51,7 @@ use tempfile::TempDir;
 use test_pd_client::TestPdClient;
 use test_raftstore::{
     check_raft_cmd_request, is_error_response, new_admin_request, new_delete_cmd,
-    new_delete_range_cmd, new_get_cf_cmd, new_peer, new_prepare_merge, new_put_cf_cmd,
+    new_delete_range_cmd, new_get_cf_cmd, new_peer, new_prepare_merge, new_put_cf_cmd, new_put_cmd,
     new_region_detail_cmd, new_region_leader_cmd, new_request, new_status_request, new_store,
     new_tikv_config_with_api_ver, new_transfer_leader_cmd, sleep_ms, Config, Filter, FilterFactory,
     PartitionFilterFactory, RawEngine,
@@ -68,6 +68,9 @@ use tikv_util::{
     HandyRwLock,
 };
 use txn_types::WriteBatchFlags;
+
+// MAX duration waiting for releasing store metas, default: 10s.
+const MAX_WAIT_RELEASE_INTERVAL: u32 = 1000;
 
 // We simulate 3 or 5 nodes, each has a store.
 // Sometimes, we use fixed id to test, which means the id
@@ -285,7 +288,16 @@ pub trait Simulator<EK: KvEngine> {
     fn async_command_on_node(
         &mut self,
         node_id: u64,
+        request: RaftCmdRequest,
+    ) -> BoxFuture<'static, RaftCmdResponse> {
+        self.async_command_on_node_with_opts(node_id, request, RaftCmdExtraOpts::default())
+    }
+
+    fn async_command_on_node_with_opts(
+        &mut self,
+        node_id: u64,
         mut request: RaftCmdRequest,
+        opts: RaftCmdExtraOpts,
     ) -> BoxFuture<'static, RaftCmdResponse> {
         let region_id = request.get_header().get_region_id();
 
@@ -316,7 +328,11 @@ pub trait Simulator<EK: KvEngine> {
                     _ => unreachable!(),
                 }
             }
-            PeerMsg::simple_write(Box::new(request.take_header()), write_encoder.encode())
+            PeerMsg::simple_write_with_opt(
+                Box::new(request.take_header()),
+                write_encoder.encode(),
+                opts,
+            )
         };
 
         self.async_peer_msg_on_node(node_id, region_id, msg)
@@ -1263,6 +1279,43 @@ impl<T: Simulator<EK>, EK: KvEngine> Cluster<T, EK> {
         panic!("find no region for {}", log_wrappers::hex_encode_upper(key));
     }
 
+    pub fn async_request(
+        &mut self,
+        mut req: RaftCmdRequest,
+    ) -> BoxFuture<'static, RaftCmdResponse> {
+        let region_id = req.get_header().get_region_id();
+        let leader = self.leader_of_region(region_id).unwrap();
+        req.mut_header().set_peer(leader.clone());
+        self.sim
+            .wl()
+            .async_command_on_node(leader.get_store_id(), req)
+    }
+
+    pub fn async_request_with_opts(
+        &mut self,
+        mut req: RaftCmdRequest,
+        opts: RaftCmdExtraOpts,
+    ) -> Result<BoxFuture<'static, RaftCmdResponse>> {
+        let region_id = req.get_header().get_region_id();
+        let leader = self.leader_of_region(region_id).unwrap();
+        req.mut_header().set_peer(leader.clone());
+        Ok(self
+            .sim
+            .wl()
+            .async_command_on_node_with_opts(leader.get_store_id(), req, opts))
+    }
+
+    pub fn async_put(
+        &mut self,
+        key: &[u8],
+        value: &[u8],
+    ) -> Result<BoxFuture<'static, RaftCmdResponse>> {
+        let mut region = self.get_region(key);
+        let reqs = vec![new_put_cmd(key, value)];
+        let put = new_request(region.get_id(), region.take_region_epoch(), reqs, false);
+        Ok(self.async_request(put))
+    }
+
     pub fn must_put(&mut self, key: &[u8], value: &[u8]) {
         self.must_put_cf(CF_DEFAULT, key, value);
     }
@@ -1666,6 +1719,50 @@ impl<T: Simulator<EK>, EK: KvEngine> Cluster<T, EK> {
         }
     }
 
+    pub fn must_empty_region_removed_records(&mut self, region_id: u64) {
+        let timer = Instant::now();
+        loop {
+            thread::sleep(Duration::from_millis(100));
+
+            let leader = match self.leader_of_region(region_id) {
+                None => continue,
+                Some(l) => l,
+            };
+            let region_state = self.region_local_state(region_id, leader.get_store_id());
+            if region_state.get_removed_records().is_empty() {
+                return;
+            }
+            if timer.saturating_elapsed() > Duration::from_secs(5) {
+                panic!(
+                    "merged records and removed records must be empty, {:?}",
+                    region_state
+                );
+            }
+        }
+    }
+
+    pub fn must_empty_region_merged_records(&mut self, region_id: u64) {
+        let timer = Instant::now();
+        loop {
+            thread::sleep(Duration::from_millis(100));
+
+            let leader = match self.leader_of_region(region_id) {
+                None => continue,
+                Some(l) => l,
+            };
+            let region_state = self.region_local_state(region_id, leader.get_store_id());
+            if region_state.get_merged_records().is_empty() {
+                return;
+            }
+            if timer.saturating_elapsed() > Duration::from_secs(5) {
+                panic!(
+                    "merged records and removed records must be empty, {:?}",
+                    region_state
+                );
+            }
+        }
+    }
+
     pub fn get_snap_dir(&self, node_id: u64) -> String {
         self.sim.rl().get_snap_dir(node_id)
     }
@@ -1780,15 +1877,17 @@ impl<T: Simulator<EK>, EK: KvEngine> Cluster<T, EK> {
         }
         self.leaders.clear();
         for store_meta in self.store_metas.values() {
-            while Arc::strong_count(store_meta) != 1 {
+            // Limits the loop count of checking.
+            let mut idx = 0;
+            while Arc::strong_count(store_meta) != 1 && idx < MAX_WAIT_RELEASE_INTERVAL {
                 std::thread::sleep(Duration::from_millis(10));
+                idx += 1;
             }
         }
         self.store_metas.clear();
         for sst_worker in self.sst_workers.drain(..) {
             sst_worker.stop_worker();
         }
-
         debug!("all nodes are shut down.");
     }
 

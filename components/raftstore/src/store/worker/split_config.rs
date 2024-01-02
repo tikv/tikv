@@ -68,18 +68,18 @@ pub fn get_sample_num() -> usize {
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct SplitConfig {
-    pub qps_threshold: usize,
+    pub qps_threshold: Option<usize>,
     pub split_balance_score: f64,
     pub split_contained_score: f64,
     pub detect_times: u64,
     pub sample_num: usize,
     pub sample_threshold: u64,
-    pub byte_threshold: usize,
+    pub byte_threshold: Option<usize>,
     #[doc(hidden)]
     pub grpc_thread_cpu_overload_threshold_ratio: f64,
     #[doc(hidden)]
     pub unified_read_pool_thread_cpu_overload_threshold_ratio: f64,
-    pub region_cpu_overload_threshold_ratio: f64,
+    pub region_cpu_overload_threshold_ratio: Option<f64>,
     // deprecated.
     #[online_config(skip)]
     #[doc(hidden)]
@@ -95,18 +95,18 @@ pub struct SplitConfig {
 impl Default for SplitConfig {
     fn default() -> SplitConfig {
         SplitConfig {
-            qps_threshold: DEFAULT_QPS_THRESHOLD,
+            qps_threshold: None,
             split_balance_score: DEFAULT_SPLIT_BALANCE_SCORE,
             split_contained_score: DEFAULT_SPLIT_CONTAINED_SCORE,
             detect_times: DEFAULT_DETECT_TIMES,
             sample_num: DEFAULT_SAMPLE_NUM,
             sample_threshold: DEFAULT_SAMPLE_THRESHOLD,
-            byte_threshold: DEFAULT_BYTE_THRESHOLD,
+            byte_threshold: None,
             grpc_thread_cpu_overload_threshold_ratio:
                 DEFAULT_GRPC_THREAD_CPU_OVERLOAD_THRESHOLD_RATIO,
             unified_read_pool_thread_cpu_overload_threshold_ratio:
                 DEFAULT_UNIFIED_READ_POOL_THREAD_CPU_OVERLOAD_THRESHOLD_RATIO,
-            region_cpu_overload_threshold_ratio: REGION_CPU_OVERLOAD_THRESHOLD_RATIO,
+            region_cpu_overload_threshold_ratio: None,
             size_threshold: None, // deprecated.
             key_threshold: None,  // deprecated.
         }
@@ -124,7 +124,7 @@ impl SplitConfig {
                 ("split_balance_score or split_contained_score should be between 0 and 1.").into(),
             );
         }
-        if self.sample_num >= self.qps_threshold {
+        if self.sample_num >= self.qps_threshold() {
             return Err(
                 ("sample_num should be less than qps_threshold for load-base-split.").into(),
             );
@@ -133,20 +133,52 @@ impl SplitConfig {
             || self.grpc_thread_cpu_overload_threshold_ratio < 0.0
             || self.unified_read_pool_thread_cpu_overload_threshold_ratio > 1.0
             || self.unified_read_pool_thread_cpu_overload_threshold_ratio < 0.0
-            || self.region_cpu_overload_threshold_ratio > 1.0
-            || self.region_cpu_overload_threshold_ratio < 0.0
+            || self.region_cpu_overload_threshold_ratio() > 1.0
+            || self.region_cpu_overload_threshold_ratio() < 0.0
         {
             return Err(("threshold ratio should be between 0 and 1.").into());
         }
         Ok(())
     }
 
+    pub fn qps_threshold(&self) -> usize {
+        self.qps_threshold.unwrap_or(DEFAULT_QPS_THRESHOLD)
+    }
+
+    pub fn byte_threshold(&self) -> usize {
+        self.byte_threshold.unwrap_or(DEFAULT_BYTE_THRESHOLD)
+    }
+
+    pub fn region_cpu_overload_threshold_ratio(&self) -> f64 {
+        self.region_cpu_overload_threshold_ratio
+            .unwrap_or(REGION_CPU_OVERLOAD_THRESHOLD_RATIO)
+    }
+
     pub fn optimize_for(&mut self, region_size: ReadableSize) {
         const LARGE_REGION_SIZE_IN_MB: u64 = 4096;
-        if region_size.as_mb() >= LARGE_REGION_SIZE_IN_MB {
-            self.qps_threshold = DEFAULT_BIG_REGION_QPS_THRESHOLD;
-            self.region_cpu_overload_threshold_ratio = BIG_REGION_CPU_OVERLOAD_THRESHOLD_RATIO;
-            self.byte_threshold = DEFAULT_BIG_REGION_BYTE_THRESHOLD;
+        let big_size = region_size.as_mb() >= LARGE_REGION_SIZE_IN_MB;
+        if self.qps_threshold.is_none() {
+            self.qps_threshold = Some(if big_size {
+                DEFAULT_BIG_REGION_QPS_THRESHOLD
+            } else {
+                DEFAULT_QPS_THRESHOLD
+            });
+        }
+
+        if self.byte_threshold.is_none() {
+            self.byte_threshold = Some(if big_size {
+                DEFAULT_BIG_REGION_BYTE_THRESHOLD
+            } else {
+                DEFAULT_BYTE_THRESHOLD
+            });
+        }
+
+        if self.region_cpu_overload_threshold_ratio.is_none() {
+            self.region_cpu_overload_threshold_ratio = Some(if big_size {
+                BIG_REGION_CPU_OVERLOAD_THRESHOLD_RATIO
+            } else {
+                REGION_CPU_OVERLOAD_THRESHOLD_RATIO
+            });
         }
     }
 }

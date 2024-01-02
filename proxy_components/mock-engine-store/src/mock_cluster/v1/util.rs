@@ -75,7 +75,7 @@ pub fn create_tiflash_test_engine(
     let kv_path_str = kv_path.to_str().unwrap();
 
     let kv_db_opt = cfg.rocksdb.build_opt(
-        &cfg.rocksdb.build_resources(env.clone()),
+        &cfg.rocksdb.build_resources(env.clone(), cfg.storage.engine),
         cfg.storage.engine,
     );
 

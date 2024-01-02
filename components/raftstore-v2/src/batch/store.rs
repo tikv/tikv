@@ -1,7 +1,6 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    cmp,
     ops::{Deref, DerefMut},
     path::Path,
     sync::{
@@ -48,7 +47,7 @@ use tikv_util::{
     box_err,
     config::{Tracker, VersionTrack},
     log::SlogFormat,
-    sys::SysQuota,
+    sys::{disk::get_disk_status, SysQuota},
     time::{duration_to_sec, monotonic_raw_now, Instant as TiInstant, Limiter},
     timer::{SteadyTimer, GLOBAL_TIMER_HANDLE},
     worker::{Builder, LazyWorker, Scheduler, Worker},
@@ -105,11 +104,15 @@ pub struct StoreContext<EK: KvEngine, ER: RaftEngine, T> {
 
     /// Disk usage for the store itself.
     pub self_disk_usage: DiskUsage,
+    // TODO: how to remove offlined stores?
+    /// Disk usage for other stores. The store itself is not included.
+    /// Only contains items which is not `DiskUsage::Normal`.
+    pub store_disk_usages: HashMap<u64, DiskUsage>,
 
     pub snap_mgr: TabletSnapManager,
     pub global_stat: GlobalStoreStat,
     pub store_stat: LocalStoreStat,
-    pub sst_importer: Arc<SstImporter>,
+    pub sst_importer: Arc<SstImporter<EK>>,
     pub key_manager: Option<Arc<DataKeyManager>>,
 
     /// Inspector for latency inspecting
@@ -140,7 +143,7 @@ impl<EK: KvEngine, ER: RaftEngine, T> StoreContext<EK, ER, T> {
         self.tick_batch[PeerTick::CheckLongUncommitted as usize].wait_duration =
             self.cfg.check_long_uncommitted_interval.0;
         self.tick_batch[PeerTick::GcPeer as usize].wait_duration =
-            60 * cmp::min(Duration::from_secs(1), self.cfg.raft_base_tick_interval.0);
+            self.cfg.gc_peer_check_interval.0;
     }
 
     // Return None means it has passed unsafe vote period.
@@ -229,6 +232,7 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport + 'static> PollHandler<PeerFsm<E
         if self.store_msg_buf.capacity() == 0 || self.peer_msg_buf.capacity() == 0 {
             self.apply_buf_capacity();
         }
+        self.poll_ctx.self_disk_usage = get_disk_status(self.poll_ctx.store_id);
         // Apply configuration changes.
         if let Some(cfg) = self.cfg_tracker.any_new().map(|c| c.clone()) {
             let last_messages_per_tick = self.messages_per_tick();
@@ -362,7 +366,7 @@ struct StorePollerBuilder<EK: KvEngine, ER: RaftEngine, T> {
     shutdown: Arc<AtomicBool>,
     snap_mgr: TabletSnapManager,
     global_stat: GlobalStoreStat,
-    sst_importer: Arc<SstImporter>,
+    sst_importer: Arc<SstImporter<EK>>,
     key_manager: Option<Arc<DataKeyManager>>,
     node_start_time: Timespec, // monotonic_raw_now
 }
@@ -382,7 +386,7 @@ impl<EK: KvEngine, ER: RaftEngine, T> StorePollerBuilder<EK, ER, T> {
         shutdown: Arc<AtomicBool>,
         snap_mgr: TabletSnapManager,
         coprocessor_host: CoprocessorHost<EK>,
-        sst_importer: Arc<SstImporter>,
+        sst_importer: Arc<SstImporter<EK>>,
         key_manager: Option<Arc<DataKeyManager>>,
         node_start_time: Timespec, // monotonic_raw_now
     ) -> Self {
@@ -562,6 +566,7 @@ where
             apply_pool: self.apply_pool.clone(),
             high_priority_pool: self.high_priority_pool.clone(),
             self_disk_usage: DiskUsage::Normal,
+            store_disk_usages: Default::default(),
             snap_mgr: self.snap_mgr.clone(),
             coprocessor_host: self.coprocessor_host.clone(),
             global_stat: self.global_stat.clone(),
@@ -689,7 +694,7 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
         collector_reg_handle: CollectorRegHandle,
         background: Worker,
         pd_worker: LazyWorker<pd::Task>,
-        sst_importer: Arc<SstImporter>,
+        sst_importer: Arc<SstImporter<EK>>,
         key_manager: Option<Arc<DataKeyManager>>,
         grpc_service_mgr: GrpcServiceManager,
         resource_ctl: Option<Arc<ResourceController>>,
@@ -806,7 +811,6 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
             causal_ts_provider,
             workers.pd.scheduler(),
             auto_split_controller,
-            store_meta.lock().unwrap().region_read_progress.clone(),
             collector_reg_handle,
             grpc_service_mgr,
             self.logger.clone(),
@@ -985,16 +989,16 @@ impl<EK: KvEngine, ER: RaftEngine> StoreRouter<EK, ER> {
         msg: Box<RaftMessage>,
     ) -> std::result::Result<(), TrySendError<Box<RaftMessage>>> {
         let id = msg.get_region_id();
-        let peer_msg = PeerMsg::RaftMessage(msg);
+        let peer_msg = PeerMsg::RaftMessage(msg, Some(TiInstant::now()));
         let store_msg = match self.router.try_send(id, peer_msg) {
             Either::Left(Ok(())) => return Ok(()),
-            Either::Left(Err(TrySendError::Full(PeerMsg::RaftMessage(m)))) => {
+            Either::Left(Err(TrySendError::Full(PeerMsg::RaftMessage(m, _)))) => {
                 return Err(TrySendError::Full(m));
             }
-            Either::Left(Err(TrySendError::Disconnected(PeerMsg::RaftMessage(m)))) => {
+            Either::Left(Err(TrySendError::Disconnected(PeerMsg::RaftMessage(m, _)))) => {
                 return Err(TrySendError::Disconnected(m));
             }
-            Either::Right(PeerMsg::RaftMessage(m)) => StoreMsg::RaftMessage(m),
+            Either::Right(PeerMsg::RaftMessage(m, _)) => StoreMsg::RaftMessage(m),
             _ => unreachable!(),
         };
         match self.router.send_control(store_msg) {

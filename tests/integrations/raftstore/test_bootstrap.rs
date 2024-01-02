@@ -6,6 +6,7 @@ use std::{
 };
 
 use concurrency_manager::ConcurrencyManager;
+use engine_rocks::RocksEngine;
 use engine_traits::{
     DbOptionsExt, Engines, MiscExt, Peekable, RaftEngine, RaftEngineReadOnly, ALL_CFS, CF_DEFAULT,
     CF_LOCK, CF_RAFT, CF_WRITE,
@@ -27,7 +28,7 @@ use tikv_util::{
     worker::{dummy_scheduler, Builder as WorkerBuilder, LazyWorker},
 };
 
-fn test_bootstrap_idempotent<T: Simulator>(cluster: &mut Cluster<T>) {
+fn test_bootstrap_idempotent<T: Simulator<RocksEngine>>(cluster: &mut Cluster<RocksEngine, T>) {
     // assume that there is a node  bootstrap the cluster and add region in pd
     // successfully
     cluster.add_first_region().unwrap();
@@ -49,7 +50,8 @@ fn test_node_bootstrap_with_prepared_data() {
     let cfg = new_tikv_config(0);
 
     let (_, system) = fsm::create_raft_batch_system(&cfg.raft_store, &None);
-    let simulate_trans = SimulateTransport::new(ChannelTransport::new());
+    let simulate_trans =
+        SimulateTransport::<_, RocksEngine>::new(ChannelTransport::<RocksEngine>::new());
     let tmp_path = Builder::new().prefix("test_cluster").tempdir().unwrap();
     let engine =
         engine_rocks::util::new_engine(tmp_path.path().to_str().unwrap(), ALL_CFS).unwrap();
@@ -216,7 +218,7 @@ fn test_flush_before_stop() {
     let region = cluster.get_region(b"k60");
     cluster.must_split(&region, b"k070");
 
-    fail::cfg("flush_before_cluse_threshold", "return(10)").unwrap();
+    fail::cfg("flush_before_close_threshold", "return(10)").unwrap();
 
     for i in 0..100 {
         let key = format!("k{:03}", i);
@@ -250,6 +252,36 @@ fn test_flush_before_stop() {
             Ok(())
         })
         .unwrap();
+}
+
+// test flush_before_close will not flush forever
+#[test]
+fn test_flush_before_stop2() {
+    use test_raftstore_v2::*;
+
+    let mut cluster = new_server_cluster(0, 3);
+    cluster.run();
+
+    fail::cfg("flush_before_close_threshold", "return(10)").unwrap();
+    fail::cfg("on_flush_completed", "return").unwrap();
+
+    for i in 0..20 {
+        let key = format!("k{:03}", i);
+        cluster.must_put_cf(CF_WRITE, key.as_bytes(), b"val");
+        cluster.must_put_cf(CF_LOCK, key.as_bytes(), b"val");
+    }
+
+    let router = cluster.get_router(1).unwrap();
+    let raft_engine = cluster.get_raft_engine(1);
+
+    let (tx, rx) = sync_channel(1);
+    let msg = PeerMsg::FlushBeforeClose { tx };
+    router.force_send(1, msg).unwrap();
+
+    rx.recv().unwrap();
+
+    let admin_flush = raft_engine.get_flushed_index(1, CF_RAFT).unwrap().unwrap();
+    assert!(admin_flush < 10);
 }
 
 // We cannot use a flushed index to call `maybe_advance_admin_flushed`
@@ -301,7 +333,7 @@ fn test_flush_index_exceed_last_modified() {
         )
         .unwrap();
 
-    fail::cfg("flush_before_cluse_threshold", "return(1)").unwrap();
+    fail::cfg("flush_before_close_threshold", "return(1)").unwrap();
     let router = cluster.get_router(1).unwrap();
     let (tx, rx) = sync_channel(1);
     let msg = PeerMsg::FlushBeforeClose { tx };

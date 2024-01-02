@@ -41,7 +41,9 @@ fn iter_empty_engine() {
 #[test]
 fn iter_empty_snapshot() {
     let db = default_engine();
-    iter_empty(&db.engine, |e| e.snapshot().iterator(CF_DEFAULT).unwrap());
+    iter_empty(&db.engine, |e| {
+        e.snapshot(None).iterator(CF_DEFAULT).unwrap()
+    });
 }
 
 fn iter_forward<E, I, IF>(e: &E, i: IF)
@@ -99,7 +101,9 @@ fn iter_forward_engine() {
 #[test]
 fn iter_forward_snapshot() {
     let db = default_engine();
-    iter_forward(&db.engine, |e| e.snapshot().iterator(CF_DEFAULT).unwrap());
+    iter_forward(&db.engine, |e| {
+        e.snapshot(None).iterator(CF_DEFAULT).unwrap()
+    });
 }
 
 fn iter_reverse<E, I, IF>(e: &E, i: IF)
@@ -157,7 +161,9 @@ fn iter_reverse_engine() {
 #[test]
 fn iter_reverse_snapshot() {
     let db = default_engine();
-    iter_reverse(&db.engine, |e| e.snapshot().iterator(CF_DEFAULT).unwrap());
+    iter_reverse(&db.engine, |e| {
+        e.snapshot(None).iterator(CF_DEFAULT).unwrap()
+    });
 }
 
 fn seek_to_key_then_forward<E, I, IF>(e: &E, i: IF)
@@ -198,7 +204,9 @@ fn seek_to_key_then_forward_engine() {
 #[test]
 fn seek_to_key_then_forward_snapshot() {
     let db = default_engine();
-    seek_to_key_then_forward(&db.engine, |e| e.snapshot().iterator(CF_DEFAULT).unwrap());
+    seek_to_key_then_forward(&db.engine, |e| {
+        e.snapshot(None).iterator(CF_DEFAULT).unwrap()
+    });
 }
 
 fn seek_to_key_then_reverse<E, I, IF>(e: &E, i: IF)
@@ -239,7 +247,9 @@ fn seek_to_key_then_reverse_engine() {
 #[test]
 fn seek_to_key_then_reverse_snapshot() {
     let db = default_engine();
-    seek_to_key_then_reverse(&db.engine, |e| e.snapshot().iterator(CF_DEFAULT).unwrap());
+    seek_to_key_then_reverse(&db.engine, |e| {
+        e.snapshot(None).iterator(CF_DEFAULT).unwrap()
+    });
 }
 
 fn iter_forward_then_reverse<E, I, IF>(e: &E, i: IF)
@@ -300,7 +310,9 @@ fn iter_forward_then_reverse_engine() {
 #[test]
 fn iter_forward_then_reverse_snapshot() {
     let db = default_engine();
-    iter_forward_then_reverse(&db.engine, |e| e.snapshot().iterator(CF_DEFAULT).unwrap());
+    iter_forward_then_reverse(&db.engine, |e| {
+        e.snapshot(None).iterator(CF_DEFAULT).unwrap()
+    });
 }
 
 fn iter_reverse_then_forward<E, I, IF>(e: &E, i: IF)
@@ -361,7 +373,9 @@ fn iter_reverse_then_forward_engine() {
 #[test]
 fn iter_reverse_then_forward_snapshot() {
     let db = default_engine();
-    iter_reverse_then_forward(&db.engine, |e| e.snapshot().iterator(CF_DEFAULT).unwrap());
+    iter_reverse_then_forward(&db.engine, |e| {
+        e.snapshot(None).iterator(CF_DEFAULT).unwrap()
+    });
 }
 
 // When seek finds an exact key then seek_for_prev behaves just like seek
@@ -405,7 +419,9 @@ fn seek_for_prev_engine() {
 #[test]
 fn seek_for_prev_snapshot() {
     let db = default_engine();
-    seek_for_prev(&db.engine, |e| e.snapshot().iterator(CF_DEFAULT).unwrap());
+    seek_for_prev(&db.engine, |e| {
+        e.snapshot(None).iterator(CF_DEFAULT).unwrap()
+    });
 }
 
 // When Seek::Key doesn't find an exact match,
@@ -440,7 +456,9 @@ fn seek_key_miss_engine() {
 #[test]
 fn seek_key_miss_snapshot() {
     let db = default_engine();
-    seek_key_miss(&db.engine, |e| e.snapshot().iterator(CF_DEFAULT).unwrap());
+    seek_key_miss(&db.engine, |e| {
+        e.snapshot(None).iterator(CF_DEFAULT).unwrap()
+    });
 }
 
 fn seek_key_prev_miss<E, I, IF>(e: &E, i: IF)
@@ -472,5 +490,7 @@ fn seek_key_prev_miss_engine() {
 #[test]
 fn seek_key_prev_miss_snapshot() {
     let db = default_engine();
-    seek_key_prev_miss(&db.engine, |e| e.snapshot().iterator(CF_DEFAULT).unwrap());
+    seek_key_prev_miss(&db.engine, |e| {
+        e.snapshot(None).iterator(CF_DEFAULT).unwrap()
+    });
 }

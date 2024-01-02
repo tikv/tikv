@@ -517,7 +517,11 @@ impl<CER: ConfiguredRaftEngine, F: KvFormat> TiKvServer<CER, F> {
         let cfg_controller = self.cfg_controller.as_mut().unwrap();
         cfg_controller.register(
             tikv::config::Module::Rocksdb,
-            Box::new(DbConfigManger::new(proxy_rocks_engine, DbType::Kv)),
+            Box::new(DbConfigManger::new(
+                cfg_controller.get_current().rocksdb,
+                proxy_rocks_engine,
+                DbType::Kv,
+            )),
         );
 
         let reg = TabletRegistry::new(
@@ -580,7 +584,7 @@ struct Servers<EK: KvEngine, ER: RaftEngine, F: KvFormat> {
     lock_mgr: LockManager,
     server: LocalServer<EK, ER>,
     node: Node<RpcClient, EK, ER>,
-    importer: Arc<SstImporter>,
+    importer: Arc<SstImporter<TiFlashEngine>>,
     debugger: DebuggerImpl<ER, RaftKv<EK, ServerRaftStoreRouter<EK, ER>>, LockManager, F>,
 }
 
@@ -867,6 +871,7 @@ impl<ER: RaftEngine, F: KvFormat> TiKvServer<ER, F> {
                 engines.engine.clone(),
                 resource_ctl,
                 CleanupMethod::Remote(self.core.background_worker.remote()),
+                true,
             ))
         } else {
             None
@@ -1370,7 +1375,9 @@ impl<ER: RaftEngine, F: KvFormat> TiKvServer<ER, F> {
             servers.importer.clone(),
             None,
             self.resource_manager.clone(),
+            Arc::new(self.region_info_accessor.clone()),
         );
+
         if servers
             .server
             .register_service(create_import_sst(import_service))

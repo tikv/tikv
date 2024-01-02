@@ -10,6 +10,7 @@ use std::{
 
 use collections::{HashMap, HashSet};
 use encryption::DataKeyManager;
+use engine_traits::SnapshotContext;
 // mock cluster
 use engine_traits::{Engines, KvEngine, CF_DEFAULT};
 use file_system::IoRateLimiter;
@@ -45,7 +46,7 @@ use test_pd_client::TestPdClient;
 use test_raftstore::{
     is_error_response, make_cb, new_admin_request, new_delete_cmd, new_peer, new_put_cf_cmd,
     new_region_leader_cmd, new_request, new_status_request, new_store, new_tikv_config,
-    new_transfer_leader_cmd, sleep_ms, FilterFactory,
+    new_transfer_leader_cmd, sleep_ms,
 };
 use tikv::server::Result as ServerResult;
 use tikv_util::{
@@ -57,7 +58,11 @@ use tikv_util::{
 use tokio::sync::oneshot;
 use txn_types::WriteBatchFlags;
 
-use super::{common::*, transport_simulate::Filter, util::*};
+use super::{
+    common::*,
+    transport_simulate::{Filter, FilterFactory},
+    util::*,
+};
 
 // We simulate 3 or 5 nodes, each has a store.
 // Sometimes, we use fixed id to test, which means the id
@@ -113,23 +118,25 @@ pub trait Simulator<EK: KvEngine> {
 
     fn read(
         &mut self,
+        snap_ctx: Option<SnapshotContext>,
         batch_id: Option<ThreadReadId>,
         request: RaftCmdRequest,
         timeout: Duration,
     ) -> Result<RaftCmdResponse> {
         let node_id = request.get_header().get_peer().get_store_id();
-        let (cb, mut rx) = make_cb(&request);
-        self.async_read(node_id, batch_id, request, cb);
+        let (cb, mut rx) = make_cb::<EK>(&request);
+        self.async_read(snap_ctx, node_id, batch_id, request, cb);
         rx.recv_timeout(timeout)
             .map_err(|_| Error::Timeout(format!("request timeout for {:?}", timeout)))
     }
 
     fn async_read(
         &mut self,
+        snap_ctx: Option<SnapshotContext>,
         node_id: u64,
         batch_id: Option<ThreadReadId>,
         request: RaftCmdRequest,
-        cb: Callback<engine_rocks::RocksSnapshot>,
+        cb: Callback<EK::Snapshot>,
     );
 
     fn call_command_on_node(
@@ -138,7 +145,7 @@ pub trait Simulator<EK: KvEngine> {
         request: RaftCmdRequest,
         timeout: Duration,
     ) -> Result<RaftCmdResponse> {
-        let (cb, mut rx) = make_cb(&request);
+        let (cb, mut rx) = make_cb::<TiFlashEngine>(&request);
 
         match self.async_command_on_node(node_id, request, cb) {
             Ok(()) => {}
@@ -397,7 +404,7 @@ impl<T: Simulator<TiFlashEngine>> Cluster<T> {
             }
         }
         let ret = if is_read {
-            self.sim.wl().read(None, request.clone(), timeout)
+            self.sim.wl().read(None, None, request.clone(), timeout)
         } else {
             self.sim.rl().call_command(request.clone(), timeout)
         };
@@ -946,6 +953,7 @@ impl<T: Simulator<TiFlashEngine>> Cluster<T> {
                 split_keys: vec![split_key],
                 callback: cb,
                 source: "test".into(),
+                share_source_region_size: false,
             },
         )
         .unwrap();
