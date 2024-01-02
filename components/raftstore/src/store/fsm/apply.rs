@@ -5242,7 +5242,7 @@ mod tests {
         // Delet range command
         let mut req = Request::default();
         req.set_cmd_type(CmdType::DeleteRange);
-        req.set_delete_range(DeleteRange::default());
+        req.set_delete_range(DeleteRangeRequest::default());
         let mut cmd = RaftCmdRequest::default();
         cmd.mut_requests().push(req);
         assert_eq!(should_write_to_engine(&cmd), true);
