@@ -48,7 +48,7 @@ mod misc;
 pub use crate::misc::*;
 pub mod range_properties;
 mod snapshot;
-pub use crate::{snapshot::*};
+pub use crate::snapshot::*;
 mod sst;
 pub use crate::sst::*;
 mod sst_partitioner;
@@ -114,7 +114,6 @@ pub use rocksdb::{
 
 pub mod flow_control_factors;
 use ::encryption::DataKeyManager;
-
 
 pub mod raw;
 

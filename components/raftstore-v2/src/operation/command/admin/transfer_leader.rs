@@ -50,21 +50,21 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     /// to target follower first to ensures it's ready to become leader.
     /// After that the real transfer leader process begin.
     ///
-    /// 1. pre_transfer_leader on leader:
-    ///     Leader will send a MsgTransferLeader to follower.
-    /// 2. execute_transfer_leader on follower
-    ///     If follower passes all necessary checks, it will reply an
-    ///     ACK with type MsgTransferLeader and its promised applied index.
-    /// 3. ready_to_transfer_leader on leader:
-    ///     Leader checks if it's appropriate to transfer leadership. If it
-    ///     does, it calls raft transfer_leader API to do the remaining work.
+    /// 1. pre_transfer_leader on leader: Leader will send a MsgTransferLeader
+    ///    to follower.
+    /// 2. execute_transfer_leader on follower If follower passes all necessary
+    ///    checks, it will reply an ACK with type MsgTransferLeader and its
+    ///    promised applied index.
+    /// 3. ready_to_transfer_leader on leader: Leader checks if it's appropriate
+    ///    to transfer leadership. If it does, it calls raft transfer_leader API
+    ///    to do the remaining work.
     ///
     /// Additional steps when there are remaining pessimistic
     /// locks to propose (detected in function on_transfer_leader_msg).
     ///    1. Leader firstly proposes pessimistic locks and then proposes a
     ///       TransferLeader command.
-    ///    2. The follower applies the TransferLeader command and replies an
-    ///       ACK with special context TRANSFER_LEADER_COMMAND_REPLY_CTX.
+    ///    2. The follower applies the TransferLeader command and replies an ACK
+    ///       with special context TRANSFER_LEADER_COMMAND_REPLY_CTX.
     ///
     /// See also: tikv/rfcs#37.
     pub fn propose_transfer_leader<T>(

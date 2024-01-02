@@ -675,7 +675,7 @@ impl<Store: MetaStore> MetadataClient<Store> {
         let cp = match r.len() {
             0 => {
                 let global_cp = self.global_checkpoint_of(task).await?;
-                
+
                 match global_cp {
                     None => self.get_task_start_ts_checkpoint(task).await?,
                     Some(cp) => cp,

@@ -3,7 +3,7 @@
 use std::sync::{Arc, RwLock};
 
 use engine_traits::{KvEngine, RaftEngine};
-use futures::future::{FutureExt, BoxFuture};
+use futures::future::{BoxFuture, FutureExt};
 use kvproto::{
     raft_cmdpb::{RaftCmdRequest, RaftCmdResponse},
     raft_serverpb::RaftMessage,

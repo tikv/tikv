@@ -451,8 +451,7 @@ impl From<kvrpcpb::Mutation> for Mutation {
 
 /// `OldValue` is used by cdc to read the previous value associated with some
 /// key during the prewrite process.
-#[derive(Debug, Clone, PartialEq)]
-#[derive(Default)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub enum OldValue {
     /// A real `OldValue`.
     Value { value: Value },
@@ -467,8 +466,6 @@ pub enum OldValue {
     /// the give position to take a look.
     SeekWrite(Key),
 }
-
-
 
 impl OldValue {
     pub fn value(value: Value) -> Self {
@@ -588,8 +585,7 @@ impl WriteBatchFlags {
 /// The position info of the last actual write (PUT or DELETE) of a LOCK record.
 /// Note that if the last change is a DELETE, its LastChange can be either
 /// Exist(which points to it) or NotExist.
-#[derive(Clone, Eq, PartialEq, Debug)]
-#[derive(Default)]
+#[derive(Clone, Eq, PartialEq, Debug, Default)]
 pub enum LastChange {
     #[default]
     Unknown,
@@ -646,8 +642,6 @@ impl LastChange {
         }
     }
 }
-
-
 
 #[cfg(test)]
 mod tests {

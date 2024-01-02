@@ -8,7 +8,8 @@ use crate::{
     recorder::{
         localstorage::{LocalStorage, SharedTagInfos},
         SubRecorder,
-    }, RawRecords,
+    },
+    RawRecords,
 };
 
 /// An implementation of [SubRecorder] for collecting cpu statistics.

@@ -275,7 +275,7 @@ fn get_keys_in_region(keys: &mut Peekable<IntoIter<Key>>, region: &Region) -> Ve
     let mut keys_in_region = Vec::new();
 
     loop {
-        let Some(key) = keys.peek() else {break};
+        let Some(key) = keys.peek() else { break };
         let key = key.as_encoded().as_slice();
 
         if key < region.get_start_key() {
@@ -690,10 +690,7 @@ impl<E: Engine> GcRunnerCore<E> {
     }
 
     pub fn mut_stats(&mut self, key_mode: GcKeyMode) -> &mut Statistics {
-        let stats = self
-            .stats_map
-            .entry(key_mode)
-            .or_default();
+        let stats = self.stats_map.entry(key_mode).or_default();
         stats
     }
 

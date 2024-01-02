@@ -144,10 +144,7 @@ pub struct RangeProperties {
 
 impl RangeProperties {
     pub fn get(&self, key: &[u8]) -> &RangeOffsets {
-        let idx = self
-            .offsets
-            .binary_search_by_key(&key, |(k, _)| k)
-            .unwrap();
+        let idx = self.offsets.binary_search_by_key(&key, |(k, _)| k).unwrap();
         &self.offsets[idx].1
     }
 
@@ -225,10 +222,7 @@ impl RangeProperties {
         start_key: &[u8],
         end_key: &[u8],
     ) -> Vec<(Vec<u8>, RangeOffsets)> {
-        let start_offset = match self
-            .offsets
-            .binary_search_by_key(&start_key, |(k, _)| k)
-        {
+        let start_offset = match self.offsets.binary_search_by_key(&start_key, |(k, _)| k) {
             Ok(idx) => {
                 if idx == self.offsets.len() - 1 {
                     return vec![];

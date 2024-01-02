@@ -827,7 +827,9 @@ fn test_node_split_update_region_right_derive() {
     let origin_leader = cluster.leader_of_region(right.get_id()).unwrap();
     let new_leader = right
         .get_peers()
-        .iter().find(|&p| p.get_id() != origin_leader.get_id()).cloned()
+        .iter()
+        .find(|&p| p.get_id() != origin_leader.get_id())
+        .cloned()
         .unwrap();
 
     // Make sure split is done in the new_leader.

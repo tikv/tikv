@@ -6536,8 +6536,10 @@ mod tests {
             "cast_decimal_as_duration",
         );
 
-        let values = [Decimal::from_bytes(b"9995959").unwrap().unwrap(),
-            Decimal::from_bytes(b"-9995959").unwrap().unwrap()];
+        let values = [
+            Decimal::from_bytes(b"9995959").unwrap().unwrap(),
+            Decimal::from_bytes(b"-9995959").unwrap().unwrap(),
+        ];
         let values_ref: Vec<&Decimal> = values.iter().collect();
         test_as_duration_overflow_helper(
             "cast_decimal_as_duration",

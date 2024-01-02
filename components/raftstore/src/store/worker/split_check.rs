@@ -250,14 +250,22 @@ impl BucketStatsInfo {
         // The bucket ranges is none when the region buckets is also none.
         // So this condition indicates that the region buckets needs to refresh not
         // renew.
-        if let Some(bucket_ranges) = bucket_ranges&&self.bucket_stat.is_some(){
+        if let Some(bucket_ranges) = bucket_ranges
+            && self.bucket_stat.is_some()
+        {
             assert_eq!(buckets.len(), bucket_ranges.len());
-            change_bucket_version=self.update_buckets(cfg, next_bucket_version, buckets, region_epoch,  &bucket_ranges);
-        }else{
+            change_bucket_version = self.update_buckets(
+                cfg,
+                next_bucket_version,
+                buckets,
+                region_epoch,
+                &bucket_ranges,
+            );
+        } else {
             change_bucket_version = true;
             // when the region buckets is none, the exclusive buckets includes all the
             // bucket keys.
-           self.init_buckets(cfg, next_bucket_version, buckets, region_epoch, region);
+            self.init_buckets(cfg, next_bucket_version, buckets, region_epoch, region);
         }
         change_bucket_version
     }

@@ -13,7 +13,12 @@ use engine_traits::{
     CF_WRITE, DATA_CFS,
 };
 use file_system::read_dir;
-use futures::{executor::block_on, future, stream::{self, BoxStream}, StreamExt, TryStreamExt};
+use futures::{
+    executor::block_on,
+    future,
+    stream::{self, BoxStream},
+    StreamExt, TryStreamExt,
+};
 use grpcio::{ChannelBuilder, Environment};
 use kvproto::{
     debugpb::{Db as DbType, *},
@@ -62,7 +67,9 @@ fn get_engine_type(dir: &str) -> EngineType {
     let mut engine1 = false;
     let mut engine2 = false;
     while let Some(Ok(e)) = entries.next() {
-        if let Ok(ty) = e.file_type() && ty.is_dir() {
+        if let Ok(ty) = e.file_type()
+            && ty.is_dir()
+        {
             if e.file_name() == "tablets" {
                 engine2 = true;
             } else if e.file_name() == "db" {

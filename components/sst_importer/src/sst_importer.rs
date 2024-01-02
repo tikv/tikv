@@ -383,8 +383,8 @@ impl<E: KvEngine> SstImporter<E> {
     // This method is blocking. It performs the following transformations before
     // writing to disk:
     //
-    //  1. only KV pairs in the *inclusive* range (`[start, end]`) are used.
-    //     (set the range to `["", ""]` to import everything).
+    //  1. only KV pairs in the *inclusive* range (`[start, end]`) are used. (set
+    //     the range to `["", ""]` to import everything).
     //  2. keys are rewritten according to the given rewrite rule.
     //
     // Both the range and rewrite keys are specified using origin keys. However,
@@ -2057,7 +2057,6 @@ mod tests {
         )
         .unwrap();
         let ext_storage = {
-            
             importer.wrap_kms(
                 importer.external_storage_or_cache(&backend, "").unwrap(),
                 false,

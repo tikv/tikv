@@ -395,7 +395,8 @@ fn test_read_index_retry_lock_checking() {
     assert!(
         !resp.get_header().has_error()
             && resp
-                .get_responses().first()
+                .get_responses()
+                .first()
                 .map_or(true, |r| !r.get_read_index().has_locked()),
         "{:?}",
         resp,

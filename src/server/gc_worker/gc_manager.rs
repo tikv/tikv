@@ -586,7 +586,9 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine> GcMan
     ) -> GcManagerResult<Option<Key>> {
         // Get the information of the next region to do GC.
         let (region, next_key) = self.get_next_gc_context(from_key);
-        let Some(region) = region else { return Ok(None) };
+        let Some(region) = region else {
+            return Ok(None);
+        };
 
         let hex_start = format!("{:?}", log_wrappers::Value::key(region.get_start_key()));
         let hex_end = format!("{:?}", log_wrappers::Value::key(region.get_end_key()));
@@ -933,7 +935,8 @@ mod tests {
 
     #[test]
     fn test_auto_gc_rewinding() {
-        for regions in [vec![
+        for regions in [
+            vec![
                 (b"".to_vec(), b"1".to_vec(), 1),
                 (b"1".to_vec(), b"2".to_vec(), 2),
                 (b"3".to_vec(), b"4".to_vec(), 3),
@@ -945,7 +948,8 @@ mod tests {
                 (b"1".to_vec(), b"2".to_vec(), 2),
                 (b"3".to_vec(), b"4".to_vec(), 3),
                 (b"7".to_vec(), b"8".to_vec(), 4),
-            ]] {
+            ],
+        ] {
             test_auto_gc(
                 regions.clone(),
                 vec![233, 234],

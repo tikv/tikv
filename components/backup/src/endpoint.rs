@@ -2493,11 +2493,13 @@ pub mod tests {
         let region = metapb::Region::default();
         let store_id = 1;
         let test_cases = ["s3", "local", "gcs", "azure", "hdfs"];
-        let test_target = ["1/0_0_000",
+        let test_target = [
+            "1/0_0_000",
             "1/0_0_000",
             "1_0_0_000",
             "1_0_0_000",
-            "1_0_0_000"];
+            "1_0_0_000",
+        ];
 
         let delimiter = "_";
         for (storage_name, target) in test_cases.iter().zip(test_target.iter()) {

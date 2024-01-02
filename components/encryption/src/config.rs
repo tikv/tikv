@@ -158,8 +158,6 @@ pub enum MasterKeyConfig {
     },
 }
 
-
-
 mod encryption_method_serde {
     use std::fmt;
 
