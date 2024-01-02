@@ -2131,8 +2131,15 @@ where
 
                 let f = async move {
                     for split_info in split_infos {
-                        let Ok(Some(region)) =
-                            pd_client.get_region_by_id(split_info.region_id).await else { continue };
+                        let Ok(Some((region, leader))) =
+                            pd_client.get_region_leader_by_id(split_info.region_id).await else { continue };
+                        if leader.get_id() != split_info.peer.get_id() {
+                            info!("load base split region on non-leader";
+                                "region_id" => region.get_id(),
+                                "peer_id" => split_info.peer.get_id(),
+                                "leader_id" => leader.get_id(),
+                            );
+                        }
                         // Try to split the region with the given split key.
                         if let Some(split_key) = split_info.split_key {
                             Self::handle_ask_batch_split(
