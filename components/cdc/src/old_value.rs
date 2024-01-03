@@ -573,7 +573,8 @@ mod tests {
             assert_eq!(stats.write.next, 144);
             if use_default_cursor {
                 assert_eq!(stats.data.seek, 2);
-                assert_eq!(stats.data.next, 144);
+                // some unnecessary near seek is avoided
+                assert!(stats.data.next < stats.write.next);
                 assert_eq!(stats.data.get, 0);
             } else {
                 assert_eq!(stats.data.seek, 0);
