@@ -793,15 +793,20 @@ pub fn notify_stale_req_with_msg(term: u64, msg: String, cb: impl ErrorCallback)
 
 /// Checks if ingest is needed to be flushed before handling the command.
 fn should_flush_pending_ssts_to_engine(
+    has_pending_writes: bool,
     pending_ssts: &SegmentMap<Vec<u8>, SstMetaInfo>,
     cmd: &RaftCmdRequest,
 ) -> bool {
-    if pending_ssts.is_empty() {
-        // no pending ssts
-        return false;
-    }
     for req in cmd.get_requests() {
         if req.has_ingest_sst() {
+            if has_pending_writes {
+                // have to flush if there is pending write.
+                return true;
+            }
+            if pending_ssts.is_empty() {
+                // no pending ssts
+                return false;
+            }
             // once there is an ingest sst file overlapped with currenct pending ssts.
             // we need flush it to storage.
             let ingest_req = req.get_ingest_sst();
@@ -1255,7 +1260,11 @@ where
                     self.last_flush_applied_index != self.apply_state.get_applied_index();
                 if has_unflushed_data
                     && (should_write_to_engine(&cmd)
-                        || should_flush_pending_ssts_to_engine(&apply_ctx.pending_ssts, &cmd))
+                        || should_flush_pending_ssts_to_engine(
+                            !apply_ctx.kv_wb().is_empty(),
+                            &apply_ctx.pending_ssts,
+                            &cmd,
+                        ))
                     || apply_ctx.kv_wb().should_write_to_engine()
                         && apply_ctx.host.pre_persist(&self.region, false, Some(&cmd))
                 {
@@ -1401,6 +1410,7 @@ where
 
         apply_ctx.host.pre_apply(&self.region, &req);
         let (mut cmd, exec_result, should_write) = self.apply_raft_cmd(apply_ctx, index, term, req);
+        println!("process raft cmd: {}", should_write);
         if let ApplyResult::WaitMergeSource(_) = exec_result {
             return exec_result;
         }
@@ -2030,15 +2040,15 @@ where
                     .pending_ssts
                     .insert((start.to_vec(), end.to_vec()), meta_info.clone())
                 {
-                    // unreachable here, because we already check the overlap in
-                    // handle_raft_entry_normal.
+                    // even if we had a check during handle_raft_committed_entry
+                    // it still has possibility that multiple ssts are overlapped in one apply entry.
                     error!("ingest overlapped";
                         "region_id" => self.region_id(),
                         "peer_id" => self.id(),
                         "sst" => ?sst,
                         "region" => ?&self.region,
                     );
-                    return Err(box_err!("ingest overlapped {:?}", sst));
+                    return Err(box_err!("ingest overlapped sst"));
                 }
                 ssts.push(meta_info)
             }
@@ -5253,8 +5263,8 @@ mod tests {
         let s = vec![3];
         let e = vec![6];
         let mut range = Range::default();
-        range.set_start(s);
-        range.set_end(e);
+        range.set_start(s.clone());
+        range.set_end(e.clone());
         let mut meta = SstMeta::default();
         meta.set_range(range);
         ingest.set_sst(meta);
@@ -5266,10 +5276,16 @@ mod tests {
         // mock pending ssts
         let mut segment_map = SegmentMap::default();
 
-        // case #1: no pending ssts, should not flush
+        // case #1.1: no pending ssts, should not flush
         assert_eq!(
-            should_flush_pending_ssts_to_engine(&segment_map, &cmd),
+            should_flush_pending_ssts_to_engine(false, &segment_map, &cmd),
             false
+        );
+
+        // case #1.2: no pending ssts but has write, should flush
+        assert_eq!(
+            should_flush_pending_ssts_to_engine(true, &segment_map, &cmd),
+            true
         );
 
         let s1 = vec![];
@@ -5283,7 +5299,7 @@ mod tests {
 
         // case #2: no overlap range ssts, should not flush
         assert_eq!(
-            should_flush_pending_ssts_to_engine(&segment_map, &cmd),
+            should_flush_pending_ssts_to_engine(false, &segment_map, &cmd),
             false
         );
 
@@ -5298,7 +5314,7 @@ mod tests {
 
         // case #3: no overlap range ssts, should not flush
         assert_eq!(
-            should_flush_pending_ssts_to_engine(&segment_map, &cmd),
+            should_flush_pending_ssts_to_engine(false, &segment_map, &cmd),
             false
         );
 
@@ -5313,10 +5329,14 @@ mod tests {
 
         // case #4: overlapped range ssts with [3, 6], should flush
         assert_eq!(
-            should_flush_pending_ssts_to_engine(&segment_map, &cmd),
+            should_flush_pending_ssts_to_engine(false, &segment_map, &cmd),
             true
         );
-        // assert_eq!(&segment_map.get_values(), &vec![sst1, sst2, sst3]);
+
+        let sst = SstMetaInfo::default();
+        let inserted = segment_map.insert((s, e), sst);
+        // insert has a check to prevent overlapped ssts.
+        assert_eq!(inserted, false);
     }
 
     #[test]
