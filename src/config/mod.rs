@@ -145,12 +145,6 @@ pub struct TitanCfConfig {
     pub max_gc_batch_size: ReadableSize,
     #[online_config(skip)]
     pub discardable_ratio: f64,
-    // deprecated.
-    #[online_config(skip)]
-    #[doc(hidden)]
-    #[serde(skip_serializing)]
-    #[deprecated = "Titan doesn't need to sample anymore"]
-    pub sample_ratio: Option<f64>,
     #[online_config(skip)]
     pub merge_small_file_threshold: ReadableSize,
     pub blob_run_mode: BlobRunMode,
@@ -160,18 +154,24 @@ pub struct TitanCfConfig {
     pub range_merge: bool,
     #[online_config(skip)]
     pub max_sorted_runs: i32,
+
     #[online_config(skip)]
     #[doc(hidden)]
     #[serde(skip_serializing)]
     #[deprecated = "The feature is removed"]
     pub gc_merge_rewrite: bool,
+    #[online_config(skip)]
+    #[doc(hidden)]
+    #[serde(skip_serializing)]
+    #[deprecated = "Titan doesn't need to sample anymore"]
+    pub sample_ratio: Option<f64>,
 }
 
 impl Default for TitanCfConfig {
     #[allow(deprecated)]
     fn default() -> Self {
         Self {
-            min_blob_size: ReadableSize::kb(1), // disable titan default
+            min_blob_size: ReadableSize::kb(1),
             blob_file_compression: CompressionType::Zstd,
             zstd_dict_size: ReadableSize::kb(0),
             blob_cache_size: ReadableSize::mb(0),
@@ -1196,8 +1196,6 @@ impl RaftCfConfig {
 #[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
-// Note that Titan is still an experimental feature. Once enabled, it can't fall
-// back. Forced fallback may result in data loss.
 pub struct TitanDbConfig {
     pub enabled: bool,
     pub dirname: String,
@@ -1210,7 +1208,7 @@ pub struct TitanDbConfig {
 impl Default for TitanDbConfig {
     fn default() -> Self {
         Self {
-            enabled: false,
+            enabled: false, // Enabled only for newly created cluster
             dirname: "".to_owned(),
             disable_gc: false,
             max_background_gc: 1,
@@ -1382,7 +1380,7 @@ impl Default for DbConfig {
 }
 
 impl DbConfig {
-    pub fn optimize_for(&mut self, engine: EngineType) {
+    pub fn optimize_for(&mut self, engine: EngineType, kv_data_exists: bool) {
         match engine {
             EngineType::RaftKv => {
                 self.allow_concurrent_memtable_write.get_or_insert(true);
@@ -1393,6 +1391,9 @@ impl DbConfig {
                 self.writecf.enable_compaction_guard.get_or_insert(true);
                 if self.lockcf.write_buffer_size.is_none() {
                     self.lockcf.write_buffer_size = Some(ReadableSize::mb(32));
+                }
+                if !kv_data_exists && self.titan.enabled == false {
+                    self.titan.enabled = true;
                 }
             }
             EngineType::RaftKv2 => {
@@ -3663,7 +3664,8 @@ impl TikvConfig {
         .validate(kv_data_exists)?;
 
         // Optimize.
-        self.rocksdb.optimize_for(self.storage.engine);
+        self.rocksdb
+            .optimize_for(self.storage.engine, kv_data_exists);
         self.coprocessor
             .optimize_for(self.storage.engine == EngineType::RaftKv2);
         self.split
@@ -4171,6 +4173,7 @@ impl TikvConfig {
         path: &Path,
         unrecognized_keys: Option<&mut Vec<String>>,
     ) -> Result<Self, Box<dyn Error>> {
+        println!("path: {:?}", path);
         let s = fs::read_to_string(path)?;
         let mut deserializer = toml::Deserializer::new(&s);
         let mut cfg = if let Some(keys) = unrecognized_keys {
@@ -4741,6 +4744,7 @@ mod tests {
     use grpcio::ResourceQuota;
     use itertools::Itertools;
     use kvproto::kvrpcpb::CommandPri;
+    use raft_log_engine::RaftLogEngine;
     use raftstore::{
         coprocessor::{
             config::{RAFTSTORE_V2_SPLIT_SIZE, SPLIT_SIZE},
@@ -5404,7 +5408,7 @@ mod tests {
             .rocksdb
             .build_resources(Arc::default(), cfg.storage.engine);
         let engine = RocksDBEngine::new(
-            &cfg.storage.data_dir,
+            &cfg.infer_kv_engine_path(None).unwrap(),
             Some(cfg.rocksdb.build_opt(&resource, cfg.storage.engine)),
             cfg.rocksdb.build_cf_opts(
                 &cfg.rocksdb
@@ -5415,6 +5419,12 @@ mod tests {
                 cfg.storage.engine,
             ),
             None,
+        )
+        .unwrap();
+        let mut raft_cfg = cfg.raft_engine.config.clone();
+        raft_cfg.dir = cfg.infer_raft_engine_path(None).unwrap();
+        let _raft_db = RaftLogEngine::new(
+            raft_cfg, None, None, // io_rate_limiter
         )
         .unwrap();
         let storage =
@@ -5824,6 +5834,36 @@ mod tests {
             None => unreachable!(),
             Some(TtlCheckerTask::UpdatePollInterval(d)) => assert_eq!(d, Duration::from_secs(10)),
         }
+    }
+
+    #[test]
+    fn test_titan_auto_enable() {
+        // Do not auto enable titan for existing instances
+        let (cfg, dir) = TikvConfig::with_tmp().unwrap();
+        persist_config(&cfg).unwrap();
+        let (storage, ..) = new_engines::<ApiV1>(cfg);
+        drop(storage);
+        let mut cfg = TikvConfig::from_file(&dir.path().join(LAST_CONFIG_FILE), None).unwrap();
+        assert_eq!(cfg.rocksdb.titan.enabled, false);
+        cfg.validate().unwrap();
+        assert_eq!(cfg.rocksdb.titan.enabled, false);
+        let (_storage, cfg_controller, ..) = new_engines::<ApiV1>(cfg);
+        assert_eq!(cfg_controller.get_current().rocksdb.titan.enabled, false);
+        drop(dir);
+
+        // Auto enable titan for new instances
+        let (mut cfg, dir) = TikvConfig::with_tmp().unwrap();
+        assert_eq!(cfg.rocksdb.titan.enabled, false);
+        cfg.validate().unwrap();
+        persist_config(&cfg).unwrap();
+        assert_eq!(cfg.rocksdb.titan.enabled, true);
+        let (storage, cfg_controller, ..) = new_engines::<ApiV1>(cfg);
+        assert_eq!(cfg_controller.get_current().rocksdb.titan.enabled, true);
+        drop(storage);
+        // The config is persisted
+        let cfg = TikvConfig::from_file(&dir.path().join(LAST_CONFIG_FILE), None).unwrap();
+        assert_eq!(cfg.rocksdb.titan.enabled, true);
+        drop(dir);
     }
 
     #[test]
