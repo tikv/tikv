@@ -215,10 +215,12 @@ impl Statistics {
         let stats = &mut self.load_data_hint;
 
         let hint = if self.write.over_seek_bound != stats.last_write_over_seek_bound {
+            // Over seek bound indicates the next valid key may be far away from current
+            // position, so use seek directly
             LoadDataHint::Seek
         } else {
-            // The next valid key may around current position, so use near seek which calls
-            // next() multiple times before calling seek()
+            // The next valid key may be around current position, so use near seek which
+            // calls next() multiple times before calling seek()
             LoadDataHint::NearSeek
         };
         stats.last_write_over_seek_bound = self.write.over_seek_bound;
