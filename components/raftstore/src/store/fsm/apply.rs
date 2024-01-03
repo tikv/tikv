@@ -2039,8 +2039,8 @@ where
                     .pending_ssts
                     .insert((start.to_vec(), end.to_vec()), meta_info.clone())
                 {
-                    // even if we had a check during handle_raft_committed_entry
-                    // it still has possibility that multiple ssts are overlapped in one apply entry.
+                    // we had a check during handle_raft_committed_entry
+                    // so this error is unreachable, due to there is no batched ingest ssts.
                     error!("ingest overlapped";
                         "region_id" => self.region_id(),
                         "peer_id" => self.id(),
