@@ -1410,7 +1410,6 @@ where
 
         apply_ctx.host.pre_apply(&self.region, &req);
         let (mut cmd, exec_result, should_write) = self.apply_raft_cmd(apply_ctx, index, term, req);
-        println!("process raft cmd: {}", should_write);
         if let ApplyResult::WaitMergeSource(_) = exec_result {
             return exec_result;
         }
