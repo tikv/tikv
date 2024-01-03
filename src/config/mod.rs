@@ -1392,7 +1392,7 @@ impl DbConfig {
                 if self.lockcf.write_buffer_size.is_none() {
                     self.lockcf.write_buffer_size = Some(ReadableSize::mb(32));
                 }
-                if !kv_data_exists && self.titan.enabled == false {
+                if !kv_data_exists && !self.titan.enabled {
                     self.titan.enabled = true;
                 }
             }
