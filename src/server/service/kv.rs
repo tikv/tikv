@@ -1164,11 +1164,7 @@ fn handle_batch_commands_request<E: Engine, L: LockManager, F: KvFormat>(
                         resource_manager.consume_penalty(resource_control_ctx);
                     }
                     GRPC_RESOURCE_GROUP_COUNTER_VEC
-<<<<<<< HEAD
-                        .with_label_values(&[resource_control_ctx.get_resource_group_name()])
-=======
-                        .with_label_values(&[ resource_control_ctx.get_resource_group_name(), resource_control_ctx.get_resource_group_name()])
->>>>>>> fe80806fca (metrics: change resource group label name (#16192))
+                        .with_label_values(&[resource_control_ctx.get_resource_group_name(), resource_control_ctx.get_resource_group_name()])
                         .inc();
                     if batcher.as_mut().map_or(false, |req_batch| {
                         req_batch.can_batch_get(&req)
@@ -1189,8 +1185,8 @@ fn handle_batch_commands_request<E: Engine, L: LockManager, F: KvFormat>(
                         resource_manager.consume_penalty(resource_control_ctx);
                     }
                     GRPC_RESOURCE_GROUP_COUNTER_VEC
-                    .with_label_values(&[resource_control_ctx.get_resource_group_name(), resource_control_ctx.get_resource_group_name()])
-                    .inc();
+                        .with_label_values(&[resource_control_ctx.get_resource_group_name(), resource_control_ctx.get_resource_group_name()])
+                        .inc();
                     if batcher.as_mut().map_or(false, |req_batch| {
                         req_batch.can_batch_raw_get(&req)
                     }) {
@@ -1210,13 +1206,8 @@ fn handle_batch_commands_request<E: Engine, L: LockManager, F: KvFormat>(
                         resource_manager.consume_penalty(resource_control_ctx);
                     }
                     GRPC_RESOURCE_GROUP_COUNTER_VEC
-<<<<<<< HEAD
-                        .with_label_values(&[resource_control_ctx.get_resource_group_name()])
+                        .with_label_values(&[resource_control_ctx.get_resource_group_name(), resource_control_ctx.get_resource_group_name()])
                         .inc();
-=======
-                    .with_label_values(&[resource_control_ctx.get_resource_group_name(), resource_control_ctx.get_resource_group_name()])
-                    .inc();
->>>>>>> fe80806fca (metrics: change resource group label name (#16192))
                     let begin_instant = Instant::now();
                     let source = req.get_context().get_request_source().to_owned();
                     let resp = future_copr(copr, Some(peer.to_string()), req)
