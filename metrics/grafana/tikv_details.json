@@ -15930,7 +15930,7 @@
           "bars": false,
           "cacheTimeout": null,
           "datasource": "${DS_TEST-CLUSTER}",
-          "description": "The time consumed when Raft commits log on each TiKV instance",
+          "description": "The time consumed when Raft appends log on each TiKV instance",
           "editable": true,
           "error": false,
           "fieldConfig": {
@@ -16085,7 +16085,7 @@
           "thresholds": [],
           "timeFrom": null,
           "timeShift": null,
-          "title": "99% Commit log duration per server",
+          "title": "99% Append log duration per server",
           "tooltip": {
             "msResolution": true,
             "shared": true,

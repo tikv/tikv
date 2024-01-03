@@ -1835,8 +1835,8 @@ def RaftIO() -> RowPanel:
         heatmap_panel_graph_panel_histogram_quantile_pairs(
             heatmap_title="Append log duration",
             heatmap_description="The time consumed when Raft appends log",
-            graph_title="99% Commit log duration per server",
-            graph_description="The time consumed when Raft commits log on each TiKV instance",
+            graph_title="99% Append log duration per server",
+            graph_description="The time consumed when Raft appends log on each TiKV instance",
             graph_by_labels=["instance"],
             graph_hides=["count", "avg"],
             yaxis_format=UNITS.SECONDS,
