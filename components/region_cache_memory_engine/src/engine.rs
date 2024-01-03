@@ -20,8 +20,8 @@ use skiplist_rs::{IterRef, MemoryLimiter, Skiplist};
 use uuid::Uuid;
 
 use crate::keys::{
-    decode_key, encode_seek_key, InternalKey, InternalKeyComparator, ValueType,
-    VALUE_TYPE_FOR_SEEK, VALUE_TYPE_FOR_SEEK_FOR_PREV,
+    decode_key, encode_seek_key, encode_seek_key_in_place, InternalKey, InternalKeyComparator,
+    ValueType, VALUE_TYPE_FOR_SEEK, VALUE_TYPE_FOR_SEEK_FOR_PREV,
 };
 
 fn cf_to_id(cf: &str) -> usize {
@@ -145,6 +145,7 @@ pub struct RegionMemoryMeta {
     // Request with read_ts below it is not eligible for granting snapshot.
     // Note: different region can have different safe_ts.
     safe_ts: u64,
+    evicted: bool,
 }
 
 impl RegionMemoryMeta {
@@ -232,6 +233,26 @@ impl RegionCacheMemoryEngine {
         core.region_metas
             .insert(region_id, RegionMemoryMeta::default());
     }
+
+    pub fn evict(&self, region_id: u64) {
+        let mut core = self.core.lock().unwrap();
+        assert!(core.engine.get(&region_id).is_some());
+        assert!(core.region_metas.get(&region_id).is_some());
+        let mut meta = core.region_metas.get_mut(&region_id).unwrap();
+        meta.can_read = false;
+        meta.evicted = true;
+
+        let eviction = if meta.snapshot_list.is_empty() {
+            core.region_metas.remove(&region_id);
+            Some(core.engine.remove(&region_id).unwrap())
+        } else {
+            None
+        };
+
+        // unlock before drop the skipplist
+        drop(core);
+        drop(eviction);
+    }
 }
 
 impl RegionCacheEngine for RegionCacheMemoryEngine {
@@ -255,14 +276,20 @@ impl BatchSplit for RegionCacheMemoryEngine {
         &self,
         region_id: u64,
         splitted_region_id: Vec<u64>,
-        keys: &Vec<Vec<u8>>,
+        keys: Vec<Vec<u8>>,
     ) -> Self::SplitResult {
         let core = self.core.lock().unwrap();
         let meta = core.region_metas.get(&region_id).unwrap();
         let memory_engine = core.engine.get(&region_id).unwrap();
+
+        // split key does not have mvcc suffix, we need to add it for key comparison
+        let keys = keys
+            .into_iter()
+            .map(|k| encode_seek_key_in_place(k, u64::MAX, VALUE_TYPE_FOR_SEEK))
+            .collect();
         let split_memory_engines: Vec<_> = splitted_region_id
             .into_iter()
-            .zip(memory_engine.batch_split(keys).into_iter())
+            .zip(memory_engine.batch_split(&keys).into_iter())
             .collect();
         MemorySplitResult {
             split_memory_engines,
@@ -280,7 +307,9 @@ impl BatchSplit for RegionCacheMemoryEngine {
                 assert!(core.engine.get(id).is_none());
                 assert!(core.region_metas.get(id).is_none());
                 core.engine.insert(*id, e.clone());
-                core.region_metas.insert(*id, RegionMemoryMeta::default());
+                let mut meta = RegionMemoryMeta::default();
+                meta.can_read = true;
+                core.region_metas.insert(*id, meta);
             } else {
                 core.engine.insert(*id, e.clone());
             }
@@ -746,6 +775,17 @@ impl Drop for RegionCacheSnapshot {
                 snapshot_records.remove(&uuid);
             }
         }
+
+        let meta = core.region_metas.get(&self.region_id).unwrap();
+        let eviction = if meta.snapshot_list.is_empty() && meta.evicted {
+            core.region_metas.remove(&self.region_id);
+            Some(core.engine.remove(&self.region_id).unwrap())
+        } else {
+            None
+        };
+
+        // unlock before drop the skipplist
+        drop(core);
     }
 }
 
@@ -1819,51 +1859,133 @@ mod tests {
 
     #[test]
     fn test_batch_split() {
-        let engine = RegionCacheMemoryEngine::default();
-        engine.new_region(1);
+        for _ in 0..500 {
+            println!();
+            println!();
+            println!();
+            let engine = RegionCacheMemoryEngine::default();
+            engine.new_region(1);
 
-        {
-            let mut core = engine.core.lock().unwrap();
-            core.region_metas.get_mut(&1).unwrap().can_read = true;
-            core.region_metas.get_mut(&1).unwrap().safe_ts = 5;
-            let sl = core.engine.get_mut(&1).unwrap().data[cf_to_id("write")].clone();
+            {
+                let mut core = engine.core.lock().unwrap();
+                core.region_metas.get_mut(&1).unwrap().can_read = true;
+                core.region_metas.get_mut(&1).unwrap().safe_ts = 5;
+                let s1 = core.engine.get_mut(&1).unwrap().data[cf_to_id("write")].clone();
 
-            for i in 0..9 {
-                let user_key = construct_key(i, 10);
-                let internal_key = encode_key(&user_key, 10, ValueType::Value);
-                let v = format!("v{:02}{:02}", i, 10);
-                sl.put(internal_key, v);
+                for i in 0..9 {
+                    let user_key = construct_key(i, 10);
+                    let internal_key = encode_key(&user_key, 10, ValueType::Value);
+                    let v = format!("v{:02}{:02}", i, 10);
+                    s1.put(internal_key.clone(), v.clone());
+                }
+            }
+
+            let s1 = engine.snapshot(1, 10, 10).unwrap();
+
+            let split_keys = vec![
+                construct_user_key(0),
+                construct_user_key(3),
+                construct_user_key(6),
+            ];
+            let sr = engine.batch_split(1, vec![1, 2, 3], split_keys);
+            engine.on_batch_split(1, sr);
+
+            // s1 should be the last clone of the original region 1
+            assert_eq!(Arc::strong_count(&s1.region_memory_engine.data[0]), 1);
+            drop(s1);
+
+            let mut iter_opt = IterOptions::default();
+            let lower = construct_user_key(3);
+            let upper = construct_user_key(6);
+            iter_opt.set_lower_bound(&lower, 0);
+            iter_opt.set_upper_bound(&upper, 0);
+
+            {
+                let s = engine.snapshot(2, 10, 10).unwrap();
+                let mut iter = s.iterator_opt("write", iter_opt.clone()).unwrap();
+                iter.seek_to_first().unwrap();
+                for i in 3..6 {
+                    let user_key = construct_key(i, 10);
+                    let k = iter.key();
+                    assert_eq!(k, &user_key);
+                    iter.next().unwrap();
+                }
+
+                assert_eq!(Arc::strong_count(&s.region_memory_engine.data[0]), 2);
+                engine.evict(2);
+            }
+            assert!(engine.snapshot(2, 10, 10).is_none());
+
+            let lower = construct_user_key(0);
+            let upper = construct_user_key(3);
+            iter_opt.set_lower_bound(&lower, 0);
+            iter_opt.set_upper_bound(&upper, 0);
+            {
+                let s = engine.snapshot(1, 10, 10).unwrap();
+                let mut iter = s.iterator_opt("write", iter_opt.clone()).unwrap();
+                if !iter.seek_to_first().unwrap() {
+                    assert!(iter.seek_to_first().unwrap());
+                }
+                for i in 0..3 {
+                    let user_key = construct_key(i, 10);
+                    let k = iter.key();
+                    assert_eq!(k, &user_key);
+                    iter.next().unwrap();
+                }
+                engine.evict(1);
+            }
+
+            println!("aaa");
+
+            let lower = construct_user_key(6);
+            let upper = construct_user_key(9);
+            iter_opt.set_lower_bound(&lower, 0);
+            iter_opt.set_upper_bound(&upper, 0);
+            {
+                let s = engine.snapshot(3, 10, 10).unwrap();
+                let mut iter = s.iterator_opt("write", iter_opt.clone()).unwrap();
+                iter.seek_to_first().unwrap();
+                for i in 6..9 {
+                    let user_key = construct_key(i, 10);
+                    let k = iter.key();
+                    assert_eq!(k, &user_key);
+                    iter.next().unwrap();
+                }
+            }
+
+            // split again
+            let split_keys = vec![construct_user_key(6), construct_user_key(8)];
+            let split_res = engine.batch_split(3, vec![4, 3], split_keys);
+            engine.on_batch_split(3, split_res);
+            println!("bbb");
+            let lower = construct_user_key(8);
+            let upper = construct_user_key(9);
+            iter_opt.set_lower_bound(&lower, 0);
+            iter_opt.set_upper_bound(&upper, 0);
+            {
+                let s = engine.snapshot(3, 10, 10).unwrap();
+                let mut iter = s.iterator_opt("write", iter_opt.clone()).unwrap();
+                iter.seek_to_first().unwrap();
+                let user_key = construct_key(8, 10);
+                let k = iter.key();
+                assert_eq!(k, &user_key);
+            }
+
+            let lower = construct_user_key(6);
+            let upper = construct_user_key(8);
+            iter_opt.set_lower_bound(&lower, 0);
+            iter_opt.set_upper_bound(&upper, 0);
+            {
+                let s3 = engine.snapshot(4, 10, 10).unwrap();
+                let mut iter = s3.iterator_opt("write", iter_opt.clone()).unwrap();
+                iter.seek_to_first().unwrap();
+                for i in 6..8 {
+                    let user_key = construct_key(i, 10);
+                    let k = iter.key();
+                    assert_eq!(k, &user_key);
+                    iter.next().unwrap();
+                }
             }
         }
-
-        let s1 = engine.snapshot(1, 10, 10).unwrap();
-        let s2 = engine.snapshot(1, 20, 20).unwrap();
-        let s3 = engine.snapshot(1, 30, 30).unwrap();
-
-        let split_keys = vec![
-            construct_user_key(0),
-            construct_user_key(3),
-            construct_user_key(6),
-        ];
-        let sr = engine.batch_split(1, vec![1, 2, 3], &split_keys);
-        engine.on_batch_split(1, sr);
-
-        println!(
-            "count {}",
-            Arc::strong_count(&s1.region_memory_engine.data[0])
-        );
-
-        drop(s1);
-
-        println!(
-            "count {}",
-            Arc::strong_count(&s2.region_memory_engine.data[0])
-        );
-
-        drop(s2);
-        println!(
-            "count {}",
-            Arc::strong_count(&s3.region_memory_engine.data[0])
-        );
     }
 }

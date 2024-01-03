@@ -106,6 +106,13 @@ pub fn encode_seek_key(key: &[u8], seq: u64, v_type: ValueType) -> Vec<u8> {
     encode_key_internal::<Vec<_>>(key, seq, v_type, Vec::with_capacity)
 }
 
+#[inline]
+pub fn encode_seek_key_in_place(mut key: Vec<u8>, seq: u64, v_type: ValueType) -> Vec<u8> {
+    assert!(seq == u64::MAX || seq >> ((ENC_KEY_SEQ_LENGTH - 1) * 8) == 0);
+    key.put_u64((seq << 8) | v_type as u64);
+    key
+}
+
 #[derive(Default, Debug, Clone, Copy)]
 pub struct InternalKeyComparator {}
 
