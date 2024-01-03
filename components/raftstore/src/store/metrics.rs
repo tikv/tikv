@@ -190,6 +190,7 @@ make_static_metric! {
         conf_change,
         batch,
         dropped_read_index,
+        non_leader_split,
     }
 
     pub label_enum RaftInvalidProposal {

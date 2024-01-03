@@ -449,6 +449,14 @@ where
 const DEFAULT_LOAD_BASE_SPLIT_CHECK_INTERVAL: Duration = Duration::from_secs(1);
 const DEFAULT_COLLECT_TICK_INTERVAL: Duration = Duration::from_secs(1);
 
+fn default_load_base_split_check_interval() -> Duration {
+    fail_point!("mock_load_base_split_check_interval", |t| {
+        let t = t.unwrap().parse::<u64>().unwrap();
+        Duration::from_millis(t)
+    });
+    DEFAULT_LOAD_BASE_SPLIT_CHECK_INTERVAL
+}
+
 fn default_collect_tick_interval() -> Duration {
     fail_point!("mock_collect_tick_interval", |_| {
         Duration::from_millis(1)
@@ -512,7 +520,7 @@ where
             cpu_stats_sender: None,
             collect_store_infos_interval: interval,
             load_base_split_check_interval: cmp::min(
-                DEFAULT_LOAD_BASE_SPLIT_CHECK_INTERVAL,
+                default_load_base_split_check_interval(),
                 interval,
             ),
             report_min_resolved_ts_interval: config(report_min_resolved_ts_interval),
@@ -1972,6 +1980,7 @@ where
 
                 let f = async move {
                     for split_info in split_infos {
+<<<<<<< HEAD
                         if let Ok(Some(region)) =
                             pd_client.get_region_by_id(split_info.region_id).await
                         {
@@ -1989,6 +1998,52 @@ where
                                     Callback::None,
                                     String::from("auto_split"),
                                     remote.clone(),
+=======
+                        let Ok(Some((region, leader))) =
+                            pd_client.get_region_leader_by_id(split_info.region_id).await else { continue };
+                        if leader.get_id() != split_info.peer.get_id() {
+                            info!("load base split region on non-leader";
+                                "region_id" => region.get_id(),
+                                "peer_id" => split_info.peer.get_id(),
+                                "leader_id" => leader.get_id(),
+                            );
+                        }
+                        // Try to split the region with the given split key.
+                        if let Some(split_key) = split_info.split_key {
+                            Self::handle_ask_batch_split(
+                                router.clone(),
+                                scheduler.clone(),
+                                pd_client.clone(),
+                                region,
+                                vec![split_key],
+                                split_info.peer,
+                                true,
+                                false,
+                                Callback::None,
+                                String::from("auto_split"),
+                                remote.clone(),
+                            );
+                        // Try to split the region on half within the given key
+                        // range if there is no `split_key` been given.
+                        } else if split_info.start_key.is_some() && split_info.end_key.is_some() {
+                            let start_key = split_info.start_key.unwrap();
+                            let end_key = split_info.end_key.unwrap();
+                            let region_id = region.get_id();
+                            let msg = CasualMessage::HalfSplitRegion {
+                                region_epoch: region.get_region_epoch().clone(),
+                                start_key: Some(start_key.clone()),
+                                end_key: Some(end_key.clone()),
+                                policy: pdpb::CheckPolicy::Scan,
+                                source: "auto_split",
+                                cb: Callback::None,
+                            };
+                            if let Err(e) = router.send(region_id, PeerMsg::CasualMessage(msg)) {
+                                error!("send auto half split request failed";
+                                    "region_id" => region_id,
+                                    "start_key" => log_wrappers::Value::key(&start_key),
+                                    "end_key" => log_wrappers::Value::key(&end_key),
+                                    "err" => ?e,
+>>>>>>> defc9338fd (raftstore: fix load base split cannot works in pure follower/stale read scenario (#16261))
                                 );
                                 return;
                             }
