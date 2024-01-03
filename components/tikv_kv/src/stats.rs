@@ -198,6 +198,7 @@ pub struct Statistics {
 
 #[derive(Default, Debug)]
 struct LoadDataHintStatistics {
+    // The value of `over_seek_bound` when the last time calling `load_data_hint()`.
     last_write_over_seek_bound: usize,
 }
 
@@ -214,8 +215,6 @@ impl Statistics {
         let stats = &mut self.load_data_hint;
 
         let hint = if self.write.over_seek_bound != stats.last_write_over_seek_bound {
-            // otherwise, we can use seek to get the data. Seek is faster than get for
-            // continuous values.
             LoadDataHint::Seek
         } else {
             // The next valid key may around current position, so use near seek which calls

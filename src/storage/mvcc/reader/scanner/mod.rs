@@ -344,7 +344,8 @@ impl<S: Snapshot> ScannerConfig<S> {
 /// Reads user key's value in default CF according to the given write CF value
 /// (`write`).
 ///
-/// Internally, there will be a `near_seek` operation.
+/// Internally, there will be a `near_seek` or `seek` operation depending on
+/// write CF stats.
 ///
 /// Notice that the value may be already carried in the `write` (short value).
 /// In this case, you should not call this function.
