@@ -608,9 +608,6 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
                 conn.iter_downstreams(|_, region_id, downstream_id, _| {
                     self.deregister_downstream(region_id, downstream_id, None);
                 });
-                let peer = conn.get_peer();
-                drop(CDC_PENDING_OUTPUT_EVENTS.remove_label_values(&[peer, TAG_DELTA_CHANGE]));
-                drop(CDC_PENDING_OUTPUT_EVENTS.remove_label_values(&[peer, TAG_INCREMENTAL_SCAN]));
             }
             Deregister::Request {
                 conn_id,
@@ -1343,17 +1340,6 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta + Send> Runnable
 
         self.old_value_cache.flush_metrics();
         CDC_SINK_BYTES.set(self.sink_memory_quota.in_use() as i64);
-
-        for conn in self.connections.values() {
-            let x = conn.get_sink().unbounded_sender_len();
-            let y = conn.get_sink().bounded_sender_len();
-            CDC_PENDING_OUTPUT_EVENTS
-                .with_label_values(&[conn.get_peer(), TAG_DELTA_CHANGE])
-                .observe(x as _);
-            CDC_PENDING_OUTPUT_EVENTS
-                .with_label_values(&[conn.get_peer(), TAG_INCREMENTAL_SCAN])
-                .observe(y as _);
-        }
     }
 
     fn get_interval(&self) -> Duration {
