@@ -1,5 +1,5 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 
 use api_version::ApiV2;
 use crossbeam::atomic::AtomicCell;
@@ -38,7 +38,7 @@ use tikv_util::{
     debug, defer, error, info,
     memory::MemoryQuota,
     sys::inspector::{self_thread_inspector, ThreadInspector},
-    time::{Instant, Limiter},
+    time::{duration_to_sec, Instant, Limiter},
     warn,
     worker::Scheduler,
     Either,
@@ -260,6 +260,7 @@ impl<E: KvEngine> Initializer<E> {
         fail_point!("cdc_incremental_scan_start");
         let mut done = false;
         let start = Instant::now_coarse();
+        let mut sink_time = Duration::default();
 
         let curr_state = self.downstream_state.load();
         assert!(matches!(
@@ -282,7 +283,9 @@ impl<E: KvEngine> Initializer<E> {
             }
             debug!("cdc scan entries"; "len" => entries.len(), "region_id" => region_id);
             fail_point!("before_schedule_incremental_scan");
+            let start_sink = Instant::now_coarse();
             self.sink_scan_events(entries, done).await?;
+            sink_time += start_sink.saturating_elapsed();
         }
 
         fail_point!("before_post_incremental_scan");
@@ -302,6 +305,7 @@ impl<E: KvEngine> Initializer<E> {
         }
 
         CDC_SCAN_DURATION_HISTOGRAM.observe(takes.as_secs_f64());
+        CDC_SCAN_SINK_DURATION_HISTOGRAM.observe(duration_to_sec(sink_time));
         Ok(())
     }
 

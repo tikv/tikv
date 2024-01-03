@@ -88,6 +88,11 @@ lazy_static! {
         exponential_buckets(0.005, 2.0, 20).unwrap()
     )
     .unwrap();
+    pub static ref CDC_SCAN_SINK_DURATION_HISTOGRAM: Histogram = register_histogram!(
+        "tikv_cdc_scan_sink_duration_seconds",
+        "Bucketed histogram of cdc async scan sink time duration",
+    )
+    .unwrap();
     pub static ref CDC_SCAN_BYTES: IntCounter = register_int_counter!(
         "tikv_cdc_scan_bytes_total",
         "Total fetched bytes of CDC incremental scan"
