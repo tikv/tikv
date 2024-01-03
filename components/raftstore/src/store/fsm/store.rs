@@ -2333,7 +2333,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
                 break;
             }
 
-            debug!(
+            info!(
                 "msg is overlapped with exist region";
                 "region_id" => region_id,
                 "msg" => ?msg,
