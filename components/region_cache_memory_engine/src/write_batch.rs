@@ -83,6 +83,15 @@ impl RegionCacheWriteBatchEntry {
         };
         f(self.region_id, self.cf.clone(), key, value)
     }
+
+    pub fn data_size(&self) -> usize {
+        let key_size = self.key.len() + std::mem::size_of::<u64>();
+        let value_size = match &self.mutation {
+            RegionCacheWriteBatchMutation::InsertOrUpdate(value) => value.len(),
+            RegionCacheWriteBatchMutation::Delete => 0,
+        };
+        key_size + value_size
+    }
 }
 
 impl WriteBatchExt for RegionCacheMemoryEngine {
@@ -110,7 +119,7 @@ impl WriteBatch for RegionCacheWriteBatch {
     }
 
     fn data_size(&self) -> usize {
-        unimplemented!()
+        self.buffer.iter().map(|e| e.data_size()).sum()
     }
 
     fn count(&self) -> usize {
@@ -142,11 +151,13 @@ impl WriteBatch for RegionCacheWriteBatch {
         unimplemented!()
     }
 
-    fn merge(&mut self, _: Self) -> Result<()> {
-        unimplemented!()
+    fn merge(&mut self, mut other: Self) -> Result<()> {
+        self.buffer.append(&mut other.buffer);
+        Ok(())
     }
 
     fn set_sequence_number(&mut self, seq: u64) -> Result<()> {
+        // TODO (afeinberg): figure out why this is called twice.
         // if let Some(seqno) = self.sequence_number {
         //     return Err(box_err!("Sequence number {} already set", seqno));
         // };

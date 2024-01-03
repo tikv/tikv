@@ -86,7 +86,8 @@ impl<EK: KvEngine, EC: RegionCacheEngine> WriteBatch for HybridEngineWriteBatch<
     }
 
     fn merge(&mut self, other: Self) -> Result<()> {
-        unimplemented!()
+        self.disk_write_batch.merge(other.disk_write_batch)?;
+        self.cache_write_batch.merge(other.cache_write_batch)
     }
 
     fn set_sequence_number(&mut self, _seq: u64) -> Result<()> {
