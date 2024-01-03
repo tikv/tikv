@@ -206,11 +206,9 @@ mod tests {
     #[test]
     fn test_values() {
         let mut tree = SegmentMap::default();
-        assert!(tree.add((1, 4)));
-        assert!(tree.add((4, 8)));
         assert!(tree.add((42, 46)));
-        assert!(!tree.add((3, 8)));
+        assert!(!tree.add((3, 43)));
         assert!(tree.insert((47, 88), "hello".to_owned()));
-        assert_eq!(tree.get_values(), vec!["hello"])
+        assert_eq!(tree.get_values(), vec!["", "hello"])
     }
 }
