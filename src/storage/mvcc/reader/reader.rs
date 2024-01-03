@@ -330,6 +330,7 @@ impl<S: EngineSnapshot> MvccReader<S> {
                 }
                 let lock = Lock::parse(cursor.value(&mut self.statistics.lock))?;
                 if filter(&key, TxnLockRef::Persisted(&lock)) {
+                    self.statistics.lock.processed_keys += 1;
                     return Ok(Some((key, lock)));
                 }
                 cursor.next(&mut self.statistics.lock);
