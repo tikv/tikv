@@ -502,7 +502,8 @@ mod tests {
             (Some(hex("0A000509")), Some(b"10.0.5.9".to_vec())),
             (
                 Some(hex("00000000000000000000000001020304")),
-                Some(b"::1.2.3.4".to_vec()),
+                // See https://github.com/rust-lang/libs-team/issues/239
+                Some(b"::102:304".to_vec()),
             ),
             (
                 Some(hex("00000000000000000000FFFF01020304")),
@@ -529,12 +530,12 @@ mod tests {
             (None, None),
         ];
 
-        for (input, expect_output) in test_cases {
+        for (i, (input, expect_output)) in test_cases.into_iter().enumerate() {
             let output = RpnFnScalarEvaluator::new()
                 .push_param(input)
                 .evaluate::<Bytes>(ScalarFuncSig::Inet6Ntoa)
                 .unwrap();
-            assert_eq!(output, expect_output);
+            assert_eq!(output, expect_output, "case {}", i);
         }
     }
 
