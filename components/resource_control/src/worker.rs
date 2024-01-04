@@ -334,11 +334,9 @@ impl<R: ResourceStatsProvider> PriorityLimiterAdjustWorker<R> {
     ) -> Self {
         let limiters = resource_ctl.get_priority_resource_limiters();
         let priorities = TaskPriority::priorities();
-        let trackers = [
-            PriorityLimiterStatsTracker::new(limiters[0].clone(), priorities[0].as_str()),
-            PriorityLimiterStatsTracker::new(limiters[1].clone(), priorities[1].as_str()),
-            PriorityLimiterStatsTracker::new(limiters[2].clone(), priorities[2].as_str()),
-        ];
+        let trackers = std::array::from_fn(|i| {
+            PriorityLimiterStatsTracker::new(limiters[i].clone(), priorities[i].as_str())
+        });
         Self {
             resource_ctl,
             trackers,

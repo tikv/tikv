@@ -52,7 +52,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     ///
     /// 1. pre_transfer_leader on leader: Leader will send a MsgTransferLeader
     ///    to follower.
-    /// 2. execute_transfer_leader on follower If follower passes all necessary
+    /// 2. execute_transfer_leader on follower: If follower passes all necessary
     ///    checks, it will reply an ACK with type MsgTransferLeader and its
     ///    promised applied index.
     /// 3. ready_to_transfer_leader on leader: Leader checks if it's appropriate
