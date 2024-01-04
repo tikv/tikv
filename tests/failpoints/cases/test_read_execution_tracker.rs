@@ -2,7 +2,9 @@
 
 use kvproto::kvrpcpb::*;
 use test_coprocessor::{init_with_data, DagSelect, ProductTable};
-use test_raftstore::{kv_batch_read, kv_read, must_kv_commit, must_kv_prewrite};
+use test_raftstore::{
+    configure_for_lease_read, kv_batch_read, kv_read, must_kv_commit, must_kv_prewrite,
+};
 use test_raftstore_macro::test_case;
 use tikv_util::config::ReadableDuration;
 
@@ -13,6 +15,7 @@ fn test_read_execution_tracking() {
         // set a small renew duration to avoid trigger pre-renew that can affact the
         // metrics.
         c.cfg.tikv.raft_store.renew_leader_lease_advance_duration = ReadableDuration::millis(1);
+        configure_for_lease_read(&mut c.cfg, Some(50), Some(10_000));
     });
     let (k1, v1) = (b"k1".to_vec(), b"v1".to_vec());
     let (k2, v2) = (b"k2".to_vec(), b"v2".to_vec());
