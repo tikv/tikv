@@ -4173,7 +4173,6 @@ impl TikvConfig {
         path: &Path,
         unrecognized_keys: Option<&mut Vec<String>>,
     ) -> Result<Self, Box<dyn Error>> {
-        println!("path: {:?}", path);
         let s = fs::read_to_string(path)?;
         let mut deserializer = toml::Deserializer::new(&s);
         let mut cfg = if let Some(keys) = unrecognized_keys {
