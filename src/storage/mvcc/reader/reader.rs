@@ -237,7 +237,7 @@ impl<S: EngineSnapshot> MvccReader<S> {
         }
 
         if self.scan_mode.is_some() {
-            self.create_lock_cursor()?;
+            self.create_lock_cursor_if_not_exist()?;
         }
 
         let res = if let Some(ref mut cursor) = self.lock_cursor {
@@ -301,12 +301,21 @@ impl<S: EngineSnapshot> MvccReader<S> {
             source,
         )?;
         if memory_locks.is_empty() {
-            return self.scan_locks_from_storage(start_key, end_key, &filter, limit);
+            return self.scan_locks_from_storage(
+                start_key,
+                end_key,
+                |k, l| filter(k, l.into()),
+                limit,
+            );
         }
 
         let mut lock_cursor_seeked = false;
+        let mut storage_iteration_finished = false;
         let mut next_pair_from_storage = || -> Result<Option<(Key, Lock)>> {
-            self.create_lock_cursor()?;
+            if storage_iteration_finished {
+                return Ok(None);
+            }
+            self.create_lock_cursor_if_not_exist()?;
             let cursor = self.lock_cursor.as_mut().unwrap();
             if !lock_cursor_seeked {
                 let ok = match start_key {
@@ -314,6 +323,7 @@ impl<S: EngineSnapshot> MvccReader<S> {
                     None => cursor.seek_to_first(&mut self.statistics.lock),
                 };
                 if !ok {
+                    storage_iteration_finished = true;
                     return Ok(None);
                 }
                 lock_cursor_seeked = true;
@@ -325,6 +335,7 @@ impl<S: EngineSnapshot> MvccReader<S> {
                 let key = Key::from_encoded_slice(cursor.key(&mut self.statistics.lock));
                 if let Some(end) = end_key {
                     if key >= *end {
+                        storage_iteration_finished = true;
                         return Ok(None);
                     }
                 }
@@ -335,6 +346,7 @@ impl<S: EngineSnapshot> MvccReader<S> {
                 }
                 cursor.next(&mut self.statistics.lock);
             }
+            storage_iteration_finished = true;
             Ok(None)
         };
 
@@ -641,7 +653,7 @@ impl<S: EngineSnapshot> MvccReader<S> {
         Ok(())
     }
 
-    fn create_lock_cursor(&mut self) -> Result<()> {
+    fn create_lock_cursor_if_not_exist(&mut self) -> Result<()> {
         if self.lock_cursor.is_none() {
             let cursor = CursorBuilder::new(&self.snapshot, CF_LOCK)
                 .fill_cache(self.fill_cache)
@@ -687,9 +699,9 @@ impl<S: EngineSnapshot> MvccReader<S> {
         limit: usize,
     ) -> Result<(Vec<(Key, Lock)>, bool)>
     where
-        F: Fn(&Key, TxnLockRef<'_>) -> bool,
+        F: Fn(&Key, &Lock) -> bool,
     {
-        self.create_lock_cursor()?;
+        self.create_lock_cursor_if_not_exist()?;
         let cursor = self.lock_cursor.as_mut().unwrap();
         let ok = match start {
             Some(x) => cursor.seek(x, &mut self.statistics.lock)?,
@@ -710,7 +722,7 @@ impl<S: EngineSnapshot> MvccReader<S> {
             }
 
             let lock = Lock::parse(cursor.value(&mut self.statistics.lock))?;
-            if filter(&key, TxnLockRef::Persisted(&lock)) {
+            if filter(&key, &lock) {
                 locks.push((key, lock));
                 if limit > 0 && locks.len() == limit {
                     has_remain = true;
@@ -1856,7 +1868,7 @@ pub mod tests {
                 .scan_locks_from_storage(
                     start_key.as_ref(),
                     end_key.as_ref(),
-                    |_, l| l.get_start_ts() <= 10.into(),
+                    |_, l| l.ts <= 10.into(),
                     limit,
                 )
                 .unwrap();

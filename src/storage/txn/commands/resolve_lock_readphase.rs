@@ -51,7 +51,7 @@ impl<S: Snapshot> ReadCommand<S> for ResolveLockReadPhase {
         let result = reader.scan_locks_from_storage(
             self.scan_key.as_ref(),
             None,
-            |_, lock| txn_status.contains_key(&lock.get_start_ts()),
+            |_, lock| txn_status.contains_key(&lock.ts),
             RESOLVE_LOCK_BATCH_SIZE,
         );
         statistics.add(&reader.statistics);

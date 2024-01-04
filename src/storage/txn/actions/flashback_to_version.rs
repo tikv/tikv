@@ -20,7 +20,7 @@ pub fn flashback_to_version_read_lock(
         Some(&next_lock_key),
         end_key,
         // Skip the `prewrite_lock`. This lock will appear when retrying prepare
-        |_, lock| lock.get_start_ts() != flashback_start_ts,
+        |_, lock| lock.ts != flashback_start_ts,
         FLASHBACK_BATCH_SIZE,
     );
     let (key_locks, _) = result?;

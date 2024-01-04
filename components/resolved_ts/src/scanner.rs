@@ -232,7 +232,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine> ScannerPool<T, E> {
             .scan_locks_from_storage(
                 start,
                 None,
-                |_, lock| matches!(lock.get_lock_type(), LockType::Put | LockType::Delete),
+                |_, lock| matches!(lock.lock_type, LockType::Put | LockType::Delete),
                 DEFAULT_SCAN_BATCH_SIZE,
             )
             .map_err(|e| Error::Other(box_err!("{:?}", e)))?;
