@@ -9,11 +9,11 @@ where
     EK: KvEngine,
     EC: RegionCacheEngine,
 {
-    type SplitResult = EC::Snapshot;
+    type SplitResult = EC::SplitResult;
     fn batch_split(
         &self,
         region_id: u64,
-        splitted_region_id: Vec<u64>,
+        splitted_region_ids: Vec<u64>,
         keys: Vec<Vec<u8>>,
     ) -> Self::SplitResult {
         self.region_cache_engine()
