@@ -297,13 +297,13 @@ macro_rules! impl_from_future_send_error {
 
 impl_from_future_send_error! {
     FuturesSendError,
-    TrySendError<(CdcEvent, usize)>,
+    TrySendError<(Instant, CdcEvent, usize)>,
 }
 
 #[derive(Clone)]
 pub struct Sink {
-    unbounded_sender: UnboundedSender<(CdcEvent, usize)>,
-    bounded_sender: Sender<(CdcEvent, usize)>,
+    unbounded_sender: UnboundedSender<(Instant, CdcEvent, usize)>,
+    bounded_sender: Sender<(Instant, CdcEvent, usize)>,
     memory_quota: MemoryQuota,
 }
 
@@ -314,7 +314,8 @@ impl Sink {
         if bytes != 0 && !self.memory_quota.alloc(bytes) {
             return Err(SendError::Congested);
         }
-        match self.unbounded_sender.unbounded_send((event, bytes)) {
+        let now = Instant::now_coarse();
+        match self.unbounded_sender.unbounded_send((now, event, bytes)) {
             Ok(_) => Ok(()),
             Err(e) => {
                 // Free quota if send fails.
@@ -334,9 +335,11 @@ impl Sink {
         if !self.memory_quota.alloc(total_bytes as _) {
             return Err(SendError::Congested);
         }
+
+        let now = Instant::now_coarse();
         for event in events {
             let bytes = event.size() as usize;
-            if let Err(e) = self.bounded_sender.feed((event, bytes)).await {
+            if let Err(e) = self.bounded_sender.feed((now, event, bytes)).await {
                 // Free quota if send fails.
                 self.memory_quota.free(total_bytes as _);
                 return Err(SendError::from(e));
@@ -352,15 +355,16 @@ impl Sink {
 }
 
 pub struct Drain {
-    unbounded_receiver: UnboundedReceiver<(CdcEvent, usize)>,
-    bounded_receiver: Receiver<(CdcEvent, usize)>,
+    unbounded_receiver: UnboundedReceiver<(Instant, CdcEvent, usize)>,
+    bounded_receiver: Receiver<(Instant, CdcEvent, usize)>,
     memory_quota: MemoryQuota,
 }
 
 impl<'a> Drain {
     pub fn drain(&'a mut self) -> impl Stream<Item = (CdcEvent, usize)> + 'a {
         stream::select(&mut self.bounded_receiver, &mut self.unbounded_receiver).map(
-            |(mut event, size)| {
+            |(start, mut event, size)| {
+                CDC_EVENTS_PENDING_DURATION.observe(start.saturating_elapsed_secs() * 1000.0);
                 if let CdcEvent::Barrier(ref mut barrier) = event {
                     if let Some(barrier) = barrier.take() {
                         // Unset barrier when it is received.
