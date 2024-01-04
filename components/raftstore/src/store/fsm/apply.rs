@@ -6226,16 +6226,14 @@ mod tests {
         // nomral put command, so the first apple_res.exec_res should be empty.
         let apply_res = fetch_apply_res(&rx);
         assert!(apply_res.exec_res.is_empty());
-        // The region was rescheduled low-priority becasuee of ingest command,
+        // The region was rescheduled low-priority because of ingest command,
         // only put entry has been applied;
         let apply_res = fetch_apply_res(&rx);
         assert_eq!(apply_res.applied_term, 3);
         assert_eq!(apply_res.apply_state.get_applied_index(), 9);
         // The region will yield after timeout.
-        let apply_res = fetch_apply_res(&rx);
-        assert_eq!(apply_res.applied_term, 3);
-        assert_eq!(apply_res.apply_state.get_applied_index(), 10);
-        // The third entry should be applied now.
+        // The second and third entry should be applied now. because we batch ingest ssts.
+        // so apply result notifier will trigger once. and the apply index should be 11.
         let apply_res = fetch_apply_res(&rx);
         assert_eq!(apply_res.applied_term, 3);
         assert_eq!(apply_res.apply_state.get_applied_index(), 11);
@@ -6577,10 +6575,8 @@ mod tests {
         assert_eq!(apply_res.applied_term, 3);
         assert_eq!(apply_res.apply_state.get_applied_index(), 9);
         // The region will yield after timeout.
-        let apply_res = fetch_apply_res(&rx);
-        assert_eq!(apply_res.applied_term, 3);
-        assert_eq!(apply_res.apply_state.get_applied_index(), 10);
-        // The third entry should be applied now.
+        // The second and third entry should be applied now. because we batch ingest ssts.
+        // so apply result notifier will trigger once. and the apply index should be 11.
         let apply_res = fetch_apply_res(&rx);
         assert_eq!(apply_res.applied_term, 3);
         assert_eq!(apply_res.apply_state.get_applied_index(), 11);
