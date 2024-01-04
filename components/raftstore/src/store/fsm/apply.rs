@@ -791,7 +791,7 @@ pub fn notify_stale_req_with_msg(term: u64, msg: String, cb: impl ErrorCallback)
 }
 
 /// Checks if a write is needed to be issued before handling the command.
-fn should_write_to_engine(cmd: &RaftCmdRequest) -> bool {
+fn should_write_to_engine(has_pending_writes: bool, cmd: &RaftCmdRequest) -> bool {
     if cmd.has_admin_request() {
         match cmd.get_admin_request().get_cmd_type() {
             // ComputeHash require an up to date snapshot.
@@ -809,7 +809,7 @@ fn should_write_to_engine(cmd: &RaftCmdRequest) -> bool {
         if req.has_delete_range() {
             return true;
         }
-        if req.has_ingest_sst() {
+        if req.has_ingest_sst() && has_pending_writes {
             return true;
         }
     }
@@ -1229,7 +1229,8 @@ where
                 }
                 let mut has_unflushed_data =
                     self.last_flush_applied_index != self.apply_state.get_applied_index();
-                if (has_unflushed_data && should_write_to_engine(&cmd)
+                if (has_unflushed_data
+                    && should_write_to_engine(!apply_ctx.kv_wb().is_empty(), &cmd)
                     || apply_ctx.kv_wb().should_write_to_engine())
                     && apply_ctx.host.pre_persist(&self.region, false, Some(&cmd))
                 {
@@ -5193,7 +5194,7 @@ mod tests {
         req.set_ingest_sst(IngestSstRequest::default());
         let mut cmd = RaftCmdRequest::default();
         cmd.mut_requests().push(req);
-        assert_eq!(should_write_to_engine(&cmd), true);
+        assert_eq!(should_write_to_engine(true, &cmd), true);
         assert_eq!(should_sync_log(&cmd), true);
 
         // Normal command
@@ -5207,7 +5208,17 @@ mod tests {
         let mut req = RaftCmdRequest::default();
         req.mut_admin_request()
             .set_cmd_type(AdminCmdType::ComputeHash);
-        assert_eq!(should_write_to_engine(&req), true);
+        assert_eq!(should_write_to_engine(true, &req), true);
+        assert_eq!(should_write_to_engine(false, &req), true);
+
+        // DeleteRange command
+        let mut req = Request::default();
+        req.set_cmd_type(CmdType::DeleteRange);
+        req.set_delete_range(DeleteRangeRequest::default());
+        let mut cmd = RaftCmdRequest::default();
+        cmd.mut_requests().push(req);
+        assert_eq!(should_write_to_engine(true, &cmd), true);
+        assert_eq!(should_write_to_engine(false, &cmd), true);
 
         // IngestSst command
         let mut req = Request::default();
@@ -5215,7 +5226,8 @@ mod tests {
         req.set_ingest_sst(IngestSstRequest::default());
         let mut cmd = RaftCmdRequest::default();
         cmd.mut_requests().push(req);
-        assert_eq!(should_write_to_engine(&cmd), true);
+        assert_eq!(should_write_to_engine(true, &cmd), true);
+        assert_eq!(should_write_to_engine(false, &cmd), false);
     }
 
     #[test]
