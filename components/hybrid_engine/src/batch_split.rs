@@ -10,11 +10,18 @@ where
     EC: RegionCacheEngine,
 {
     type SplitResult = EC::Snapshot;
-    fn batch_split(&self, region_id: u64, keys: Vec<Vec<u8>>) -> Self::SplitResult {
-        unimplemented!()
+    fn batch_split(
+        &self,
+        region_id: u64,
+        splitted_region_id: Vec<u64>,
+        keys: Vec<Vec<u8>>,
+    ) -> Self::SplitResult {
+        self.region_cache_engine()
+            .batch_split(region_id, splitted_region_ids, keys)
     }
 
     fn on_batch_split(&self, region_id: u64, split_result: Self::SplitResult) {
-        unimplemented!()
+        self.region_cache_engine()
+            .on_batch_split(region_id, split_result)
     }
 }

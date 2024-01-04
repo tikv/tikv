@@ -16,7 +16,7 @@ use engine_traits::{
     ReadOptions, RegionCacheEngine, Result, Snapshot, SnapshotMiscExt, WriteBatch, WriteBatchExt,
     WriteOptions, CF_DEFAULT, CF_LOCK, CF_WRITE,
 };
-use skiplist_rs::{IterRef, MemoryLimiter, Skiplist};
+use skiplist_rs::{AllocationRecorder, IterRef, MemoryLimiter, Skiplist};
 use uuid::Uuid;
 
 use crate::keys::{
@@ -35,7 +35,9 @@ fn cf_to_id(cf: &str) -> usize {
 
 // todo: implement memory limiter
 #[derive(Clone, Default)]
-pub struct GlobalMemoryLimiter {}
+pub struct GlobalMemoryLimiter {
+    recorder: Arc<Mutex<HashMap<usize, usize>>>,
+}
 
 impl MemoryLimiter for GlobalMemoryLimiter {
     fn acquire(&self, n: usize) -> bool {
@@ -47,6 +49,19 @@ impl MemoryLimiter for GlobalMemoryLimiter {
     }
 
     fn reclaim(&self, n: usize) {}
+}
+
+impl AllocationRecorder for GlobalMemoryLimiter {
+    fn alloc(&self, addr: usize, size: usize) {
+        let mut recorder = self.recorder.lock().unwrap();
+        assert!(!recorder.contains_key(&addr));
+        recorder.insert(addr, size);
+    }
+
+    fn free(&self, addr: usize, size: usize) {
+        let mut recorder = self.recorder.lock().unwrap();
+        assert_eq!(recorder.remove(&addr).unwrap(), size);
+    }
 }
 
 /// RegionMemoryEngine stores data for a specific cached region
@@ -176,6 +191,10 @@ pub struct SnapshotRecordsOnSplit {
 pub struct RegionCacheMemoryEngineCore {
     engine: HashMap<u64, RegionMemoryEngine>,
     region_metas: HashMap<u64, RegionMemoryMeta>,
+    // The snapshot records of the skiplist when the batch split is executed. The records avoid us
+    // freeing the elements that the snapshots may read.
+    // There's possible that before the previous recorded snapshots are freed, a new batch split
+    // command is executed. So we use a uuid to distinguish them.
     snapshot_records_on_split: HashMap<u64, HashMap<Uuid, SnapshotRecordsOnSplit>>,
 }
 
@@ -272,6 +291,11 @@ pub struct MemorySplitResult {
 impl BatchSplit for RegionCacheMemoryEngine {
     type SplitResult = MemorySplitResult;
 
+    // "splitted_region_ids" include all regions' id including the dervied where
+    // the derived region id cloud be at front and end depending on whether
+    // right_derive is enabled.
+    //
+    // "keys" should be [region_start_key, split keys...]
     fn batch_split(
         &self,
         region_id: u64,
@@ -329,10 +353,7 @@ impl BatchSplit for RegionCacheMemoryEngine {
                 .collect(),
         };
 
-        let region_records = core
-            .snapshot_records_on_split
-            .entry(region_id)
-            .or_insert(HashMap::default());
+        let region_records = core.snapshot_records_on_split.entry(region_id).or_default();
         region_records.insert(uuid, records);
     }
 }
@@ -764,7 +785,7 @@ impl Drop for RegionCacheSnapshot {
                 .filter_map(|(k, v)| {
                     v.snapshots.remove_snapshot(self.snapshot_ts, true);
                     if v.snapshots.is_empty() {
-                        Some(k.clone())
+                        Some(*k)
                     } else {
                         None
                     }
@@ -1859,10 +1880,7 @@ mod tests {
 
     #[test]
     fn test_batch_split() {
-        for _ in 0..500 {
-            println!();
-            println!();
-            println!();
+        for _ in 0..2000 {
             let engine = RegionCacheMemoryEngine::default();
             engine.new_region(1);
 
@@ -1872,10 +1890,10 @@ mod tests {
                 core.region_metas.get_mut(&1).unwrap().safe_ts = 5;
                 let s1 = core.engine.get_mut(&1).unwrap().data[cf_to_id("write")].clone();
 
-                for i in 0..9 {
+                for i in 0..90 {
                     let user_key = construct_key(i, 10);
                     let internal_key = encode_key(&user_key, 10, ValueType::Value);
-                    let v = format!("v{:02}{:02}", i, 10);
+                    let v = format!("v{:04}{:04}", i, 10);
                     s1.put(internal_key.clone(), v.clone());
                 }
             }
@@ -1884,8 +1902,8 @@ mod tests {
 
             let split_keys = vec![
                 construct_user_key(0),
-                construct_user_key(3),
-                construct_user_key(6),
+                construct_user_key(30),
+                construct_user_key(60),
             ];
             let sr = engine.batch_split(1, vec![1, 2, 3], split_keys);
             engine.on_batch_split(1, sr);
@@ -1895,21 +1913,21 @@ mod tests {
             drop(s1);
 
             let mut iter_opt = IterOptions::default();
-            let lower = construct_user_key(3);
-            let upper = construct_user_key(6);
+            let lower = construct_user_key(30);
+            let upper = construct_user_key(60);
             iter_opt.set_lower_bound(&lower, 0);
             iter_opt.set_upper_bound(&upper, 0);
-
             {
                 let s = engine.snapshot(2, 10, 10).unwrap();
                 let mut iter = s.iterator_opt("write", iter_opt.clone()).unwrap();
                 iter.seek_to_first().unwrap();
-                for i in 3..6 {
+                for i in 30..60 {
                     let user_key = construct_key(i, 10);
                     let k = iter.key();
                     assert_eq!(k, &user_key);
                     iter.next().unwrap();
                 }
+                assert!(!iter.valid().unwrap());
 
                 assert_eq!(Arc::strong_count(&s.region_memory_engine.data[0]), 2);
                 engine.evict(2);
@@ -1917,7 +1935,7 @@ mod tests {
             assert!(engine.snapshot(2, 10, 10).is_none());
 
             let lower = construct_user_key(0);
-            let upper = construct_user_key(3);
+            let upper = construct_user_key(30);
             iter_opt.set_lower_bound(&lower, 0);
             iter_opt.set_upper_bound(&upper, 0);
             {
@@ -1926,65 +1944,69 @@ mod tests {
                 if !iter.seek_to_first().unwrap() {
                     assert!(iter.seek_to_first().unwrap());
                 }
-                for i in 0..3 {
+                for i in 0..30 {
                     let user_key = construct_key(i, 10);
                     let k = iter.key();
                     assert_eq!(k, &user_key);
                     iter.next().unwrap();
                 }
+                assert!(!iter.valid().unwrap());
                 engine.evict(1);
             }
 
-            println!("aaa");
-
-            let lower = construct_user_key(6);
-            let upper = construct_user_key(9);
+            let lower = construct_user_key(60);
+            let upper = construct_user_key(90);
             iter_opt.set_lower_bound(&lower, 0);
             iter_opt.set_upper_bound(&upper, 0);
             {
                 let s = engine.snapshot(3, 10, 10).unwrap();
                 let mut iter = s.iterator_opt("write", iter_opt.clone()).unwrap();
                 iter.seek_to_first().unwrap();
-                for i in 6..9 {
+                for i in 60..90 {
                     let user_key = construct_key(i, 10);
                     let k = iter.key();
                     assert_eq!(k, &user_key);
                     iter.next().unwrap();
                 }
+                assert!(!iter.valid().unwrap());
             }
 
             // split again
-            let split_keys = vec![construct_user_key(6), construct_user_key(8)];
+            let split_keys = vec![construct_user_key(60), construct_user_key(80)];
             let split_res = engine.batch_split(3, vec![4, 3], split_keys);
             engine.on_batch_split(3, split_res);
-            println!("bbb");
-            let lower = construct_user_key(8);
-            let upper = construct_user_key(9);
+            let lower = construct_user_key(80);
+            let upper = construct_user_key(90);
             iter_opt.set_lower_bound(&lower, 0);
             iter_opt.set_upper_bound(&upper, 0);
             {
                 let s = engine.snapshot(3, 10, 10).unwrap();
                 let mut iter = s.iterator_opt("write", iter_opt.clone()).unwrap();
                 iter.seek_to_first().unwrap();
-                let user_key = construct_key(8, 10);
-                let k = iter.key();
-                assert_eq!(k, &user_key);
+                for i in 80..90 {
+                    let user_key = construct_key(i, 10);
+                    let k = iter.key();
+                    assert_eq!(k, &user_key);
+                    iter.next().unwrap();
+                }
+                assert!(!iter.valid().unwrap());
             }
 
-            let lower = construct_user_key(6);
-            let upper = construct_user_key(8);
+            let lower = construct_user_key(60);
+            let upper = construct_user_key(80);
             iter_opt.set_lower_bound(&lower, 0);
             iter_opt.set_upper_bound(&upper, 0);
             {
                 let s3 = engine.snapshot(4, 10, 10).unwrap();
                 let mut iter = s3.iterator_opt("write", iter_opt.clone()).unwrap();
                 iter.seek_to_first().unwrap();
-                for i in 6..8 {
+                for i in 60..80 {
                     let user_key = construct_key(i, 10);
                     let k = iter.key();
                     assert_eq!(k, &user_key);
                     iter.next().unwrap();
                 }
+                assert!(!iter.valid().unwrap());
             }
         }
     }

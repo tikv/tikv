@@ -4147,7 +4147,7 @@ where
         self.ctx
             .engines
             .kv
-            .on_batch_split(derived.get_id(), engine_split_result);
+            .on_batch_split(region_id, engine_split_result);
         let is_leader = self.fsm.peer.is_leader();
         if is_leader {
             if share_source_region_size {

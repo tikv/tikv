@@ -2374,10 +2374,10 @@ where
                         (exist_peer.get_role(), exist_peer.get_id(), peer.get_id());
 
                     if exist_id != incoming_id // Add peer with different id to the same store
-                            // The peer is already the requested role
-                            || (role, change_type) == (PeerRole::Voter, ConfChangeType::AddNode)
-                            || (role, change_type) == (PeerRole::Learner, ConfChangeType::AddLearnerNode)
-                            || exist_peer.get_is_witness() != peer.get_is_witness()
+                        // The peer is already the requested role
+                        || (role, change_type) == (PeerRole::Voter, ConfChangeType::AddNode)
+                        || (role, change_type) == (PeerRole::Learner, ConfChangeType::AddLearnerNode)
+                        || exist_peer.get_is_witness() != peer.get_is_witness()
                     {
                         error!(
                             "can't add duplicated peer";
@@ -2549,6 +2549,7 @@ where
             .iter()
             .map(|req| req.get_split_key().to_vec())
             .collect();
+        let mut engine_split_keys = keys.clone();
 
         info!(
             "split region";
@@ -2578,10 +2579,7 @@ where
             derived.set_end_key(keys.front().unwrap().to_vec());
             regions.push(derived.clone());
         }
-
-        let engine_split_result = ctx
-            .engine
-            .batch_split(derived.get_id(), &keys.iter().map(|k| k.clone()).collect());
+        engine_split_keys.push_front(derived.get_start_key().to_vec());
 
         // Init split regions' meta info
         let mut new_split_regions: HashMap<u64, NewSplitPeer> = HashMap::default();
@@ -2613,6 +2611,12 @@ where
             derived.set_start_key(keys.pop_front().unwrap());
             regions.push(derived.clone());
         }
+
+        let engine_split_result = ctx.engine.batch_split(
+            derived.get_id(),
+            regions.iter().map(|r| r.get_id()).collect(),
+            engine_split_keys.into_iter().collect(),
+        );
 
         // Generally, a peer is created in pending_create_peers when it is
         // created by raft_message (or by split here) and removed from
@@ -5021,6 +5025,7 @@ mod tests {
     use engine_panic::PanicEngine;
     use engine_test::kv::{new_engine, KvTestEngine, KvTestSnapshot};
     use engine_traits::{Peekable as PeekableTrait, SyncMutable, WriteBatchExt};
+    use hybrid_engine::HybridEngine;
     use kvproto::{
         kvrpcpb::ApiVersion,
         metapb::{self, RegionEpoch},
@@ -5028,6 +5033,7 @@ mod tests {
     };
     use protobuf::Message;
     use raft::eraftpb::{ConfChange, ConfChangeV2};
+    use region_cache_memory_engine::RegionCacheMemoryEngine;
     use sst_importer::Config as ImportConfig;
     use tempfile::{Builder, TempDir};
     use test_sst_importer::*;
@@ -5065,6 +5071,27 @@ mod tests {
     }
 
     pub fn create_tmp_importer(path: &str) -> (TempDir, Arc<SstImporter<KvTestEngine>>) {
+        let dir = Builder::new().prefix(path).tempdir().unwrap();
+        let importer = Arc::new(
+            SstImporter::new(
+                &ImportConfig::default(),
+                dir.path(),
+                None,
+                ApiVersion::V1,
+                false,
+            )
+            .unwrap(),
+        );
+        (dir, importer)
+    }
+
+    #[allow(dead_code)]
+    pub fn create_tmp_importer_hybrid(
+        path: &str,
+    ) -> (
+        TempDir,
+        Arc<SstImporter<HybridEngine<KvTestEngine, RegionCacheMemoryEngine>>>,
+    ) {
         let dir = Builder::new().prefix(path).tempdir().unwrap();
         let importer = Arc::new(
             SstImporter::new(
@@ -7117,6 +7144,7 @@ mod tests {
             derived: _,
             new_split_regions: _,
             share_source_region_size: _,
+            engine_split_result: _,
         } = apply_res.exec_res.front().unwrap()
         {
             let r8 = regions.get(0).unwrap();
@@ -8001,5 +8029,44 @@ mod tests {
         // case: pass the validation
         let req = new_batch_split_request(vec![b"k06".to_vec(), b"k07".to_vec(), b"k08".to_vec()]);
         validate_batch_split(&req, &region).unwrap();
+    }
+
+    // todo(SpadeA): complete this test after the hybrid engine write flow is
+    // finished
+    #[test]
+    fn test_split_of_hybrid_engine() {
+        // let (_import_dir, importer) =
+        // create_tmp_importer_hybrid("test-hybrid-engine-test");
+        // let (_path, engine) = create_tmp_engine("test-hybrid-engine-test");
+        // let memory_engine = RegionCacheMemoryEngine::default();
+        // let hybrid_engine = HybridEngine::new(engine, memory_engine);
+
+        // let cfg = Config::default();
+        // let (router, mut system) = create_apply_batch_system(&cfg, None);
+        // let pending_create_peers = Arc::new(Mutex::new(HashMap::default()));
+        // let (region_scheduler, _) = dummy_scheduler();
+
+        // let mut host = CoprocessorHost::<_>::default();
+        // let mut obs = ApplyObserver::default();
+        // let (sink, cmdbatch_rx) = mpsc::channel();
+        // obs.cmd_sink = Some(Arc::new(Mutex::new(sink)));
+        // host.registry
+        //     .register_cmd_observer(1, BoxCmdObserver::new(obs));
+
+        // let (tx, rx) = mpsc::channel();
+        // let sender = Box::new(TestNotifier { tx });
+        // let builder = super::Builder::<HybridEngine<_, _>> {
+        //     tag: "test-store".to_owned(),
+        //     cfg: Arc::new(VersionTrack::new(cfg)),
+        //     sender,
+        //     importer,
+        //     region_scheduler,
+        //     coprocessor_host: host,
+        //     engine: hybrid_engine.clone(),
+        //     router: router.clone(),
+        //     store_id: 2,
+        //     pending_create_peers,
+        // };
+        // system.spawn("test-hybrid-engine-test".to_owned(), builder);
     }
 }
