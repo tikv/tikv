@@ -792,7 +792,7 @@ pub fn notify_stale_req_with_msg(term: u64, msg: String, cb: impl ErrorCallback)
 }
 
 /// Checks if a write is needed to be issued before handling the command.
-fn should_write_to_engine(cmd: &RaftCmdRequest) -> bool {
+fn should_write_to_engine(has_pending_writes: bool, cmd: &RaftCmdRequest) -> bool {
     if cmd.has_admin_request() {
         match cmd.get_admin_request().get_cmd_type() {
             // ComputeHash require an up to date snapshot.
@@ -808,6 +808,9 @@ fn should_write_to_engine(cmd: &RaftCmdRequest) -> bool {
     // must write the current write batch to the engine first.
     for req in cmd.get_requests() {
         if req.has_delete_range() {
+            return true;
+        }
+        if req.has_ingest_sst() && has_pending_writes {
             return true;
         }
     }
@@ -1235,7 +1238,8 @@ where
                 }
                 let mut has_unflushed_data =
                     self.last_flush_applied_index != self.apply_state.get_applied_index();
-                if (has_unflushed_data && should_write_to_engine(&cmd)
+                if (has_unflushed_data
+                    && should_write_to_engine(!apply_ctx.kv_wb().is_empty(), &cmd)
                     || apply_ctx.kv_wb().should_write_to_engine())
                     && apply_ctx.host.pre_persist(&self.region, false, Some(&cmd))
                 {
@@ -5200,7 +5204,7 @@ mod tests {
         req.set_ingest_sst(IngestSstRequest::default());
         let mut cmd = RaftCmdRequest::default();
         cmd.mut_requests().push(req);
-        assert_eq!(should_write_to_engine(&cmd), true);
+        assert_eq!(should_write_to_engine(true, &cmd), true);
         assert_eq!(should_sync_log(&cmd), true);
 
         // Normal command
@@ -5214,7 +5218,17 @@ mod tests {
         let mut req = RaftCmdRequest::default();
         req.mut_admin_request()
             .set_cmd_type(AdminCmdType::ComputeHash);
-        assert_eq!(should_write_to_engine(&req), true);
+        assert_eq!(should_write_to_engine(true, &req), true);
+        assert_eq!(should_write_to_engine(false, &req), true);
+
+        // DeleteRange command
+        let mut req = Request::default();
+        req.set_cmd_type(CmdType::DeleteRange);
+        req.set_delete_range(DeleteRangeRequest::default());
+        let mut cmd = RaftCmdRequest::default();
+        cmd.mut_requests().push(req);
+        assert_eq!(should_write_to_engine(true, &cmd), true);
+        assert_eq!(should_write_to_engine(false, &cmd), true);
 
         // IngestSst command
         let mut req = Request::default();
@@ -5222,7 +5236,8 @@ mod tests {
         req.set_ingest_sst(IngestSstRequest::default());
         let mut cmd = RaftCmdRequest::default();
         cmd.mut_requests().push(req);
-        assert_eq!(should_write_to_engine(&cmd), true);
+        assert_eq!(should_write_to_engine(true, &cmd), true);
+        assert_eq!(should_write_to_engine(false, &cmd), false);
     }
 
     #[test]
@@ -6221,16 +6236,15 @@ mod tests {
         // nomral put command, so the first apple_res.exec_res should be empty.
         let apply_res = fetch_apply_res(&rx);
         assert!(apply_res.exec_res.is_empty());
-        // The region was rescheduled low-priority becasuee of ingest command,
+        // The region was rescheduled low-priority because of ingest command,
         // only put entry has been applied;
         let apply_res = fetch_apply_res(&rx);
         assert_eq!(apply_res.applied_term, 3);
         assert_eq!(apply_res.apply_state.get_applied_index(), 9);
         // The region will yield after timeout.
-        let apply_res = fetch_apply_res(&rx);
-        assert_eq!(apply_res.applied_term, 3);
-        assert_eq!(apply_res.apply_state.get_applied_index(), 10);
-        // The third entry should be applied now.
+        // The second and third entry should be applied now. because we batch ingest
+        // ssts. so apply result notifier will trigger once. and the apply index
+        // should be 11.
         let apply_res = fetch_apply_res(&rx);
         assert_eq!(apply_res.applied_term, 3);
         assert_eq!(apply_res.apply_state.get_applied_index(), 11);
@@ -6572,10 +6586,9 @@ mod tests {
         assert_eq!(apply_res.applied_term, 3);
         assert_eq!(apply_res.apply_state.get_applied_index(), 9);
         // The region will yield after timeout.
-        let apply_res = fetch_apply_res(&rx);
-        assert_eq!(apply_res.applied_term, 3);
-        assert_eq!(apply_res.apply_state.get_applied_index(), 10);
-        // The third entry should be applied now.
+        // The second and third entry should be applied now. because we batch ingest
+        // ssts. so apply result notifier will trigger once. and the apply index
+        // should be 11.
         let apply_res = fetch_apply_res(&rx);
         assert_eq!(apply_res.applied_term, 3);
         assert_eq!(apply_res.apply_state.get_applied_index(), 11);
