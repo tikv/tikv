@@ -555,7 +555,8 @@ where
                 delegate.unfinished_write_seqno.push(seqno);
             }
             self.prepare_for(delegate);
-            delegate.last_flush_applied_index = delegate.apply_state.get_applied_index()
+            delegate.last_flush_applied_index = delegate.apply_state.get_applied_index();
+            delegate.has_pending_ssts = false;
         }
         self.kv_wb_last_bytes = self.kv_wb().data_size() as u64;
         self.kv_wb_last_keys = self.kv_wb().count() as u64;
@@ -809,9 +810,6 @@ fn should_write_to_engine(cmd: &RaftCmdRequest) -> bool {
         if req.has_delete_range() {
             return true;
         }
-        if req.has_ingest_sst() {
-            return true;
-        }
     }
 
     false
@@ -1043,6 +1041,8 @@ where
     buckets: Option<BucketStat>,
 
     unfinished_write_seqno: Vec<SequenceNumber>,
+
+    has_pending_ssts: bool,
 }
 
 impl<EK> ApplyDelegate<EK>
@@ -1077,6 +1077,7 @@ where
             trace: ApplyMemoryTrace::default(),
             buckets: None,
             unfinished_write_seqno: vec![],
+            has_pending_ssts: false,
         }
     }
 
@@ -1226,6 +1227,11 @@ where
                 };
                 if apply_ctx.yield_high_latency_operation && has_high_latency_operation(&cmd) {
                     self.priority = Priority::Low;
+                }
+                if self.has_pending_ssts {
+                    // we are in low priority handler and to avoid overlapped ssts with same region
+                    // just return Yield
+                    return ApplyResult::Yield;
                 }
                 let mut has_unflushed_data =
                     self.last_flush_applied_index != self.apply_state.get_applied_index();
@@ -2004,7 +2010,7 @@ where
                 panic!("{} ingest {:?}: {:?}", self.tag, sst, e);
             }
         };
-
+        self.has_pending_ssts = true;
         Ok(())
     }
 }
@@ -4645,6 +4651,7 @@ where
         self.apply_ctx.flush();
         for fsm in fsms.iter_mut().flatten() {
             fsm.delegate.last_flush_applied_index = fsm.delegate.apply_state.get_applied_index();
+            fsm.delegate.has_pending_ssts = false;
             fsm.delegate.update_memory_trace(&mut self.trace_event);
         }
         MEMTRACE_APPLYS.trace(mem::take(&mut self.trace_event));
