@@ -233,21 +233,25 @@ impl AdminObserver for Arc<PrepareDiskSnapObserver> {
         if self.allowed() {
             return Ok(());
         }
-        if matches!(
+        // NOTE: We should disable `CompactLog` here because if the log get truncated,
+        // we may take a long time to send snapshots during restoring.
+        //
+        // However it may impact the TP workload if we are preparing for a long time.
+        // With this risk, we need more evidence of its adventage to reject CompactLogs.
+        let should_reject = matches!(
             admin.get_cmd_type(),
             AdminCmdType::Split |
             AdminCmdType::BatchSplit |
-            // We disable `CompactLog` here because if the log get truncated, 
-            // we may take a long time to send snapshots during restoring.
-            AdminCmdType::CompactLog |
             // We will allow `Commit/RollbackMerge` here because the 
             // `wait_pending_admin` will wait until the merge get finished.
             // If we reject them, they won't be able to see the merge get finished.
             // And will finally time out.
             AdminCmdType::PrepareMerge |
             AdminCmdType::ChangePeer |
-            AdminCmdType::ChangePeerV2
-        ) {
+            AdminCmdType::ChangePeerV2 |
+            AdminCmdType::BatchSwitchWitness
+        );
+        if should_reject {
             metrics::SNAP_BR_SUSPEND_COMMAND_TYPE
                 .with_label_values(&[&format!("{:?}", admin.get_cmd_type())])
                 .inc();
