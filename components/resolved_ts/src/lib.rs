@@ -10,6 +10,11 @@
 //!   3. Resolved TS must be advanced by the region leader after it has applied on its term.
 
 #![feature(box_patterns)]
+<<<<<<< HEAD
+=======
+#![feature(result_flattening)]
+#![feature(let_chains)]
+>>>>>>> 87b2fe35ae (resolved_ts: shrink resolver lock map (#15484))
 
 #[macro_use]
 extern crate tikv_util;
