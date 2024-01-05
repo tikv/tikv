@@ -270,6 +270,7 @@ fn add_write_permission<P: AsRef<Path>>(path: P) -> Result<(), String> {
     let mut pmt = std::fs::metadata(path)
         .map_err(|e| format!("metadata({}): {}", path.display(), e))?
         .permissions();
+    #[allow(clippy::permissions_set_readonly_false)]
     pmt.set_readonly(false);
     std::fs::set_permissions(path, pmt)
         .map_err(|e| format!("set_permissions({}): {}", path.display(), e))
