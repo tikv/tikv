@@ -123,6 +123,7 @@ make_auto_flush_static_metric! {
         region_not_initialized,
         is_applying_snapshot,
     }
+<<<<<<< HEAD
     pub label_enum RaftEventDurationType {
         compact_check,
         pd_store_heartbeat,
@@ -132,6 +133,8 @@ make_auto_flush_static_metric! {
         cleanup_import_sst,
         raft_engine_purge,
     }
+=======
+>>>>>>> 497ae1b0a1 (raft_client: Report store unreachable once until being connected again (#13677))
 
     pub label_enum CompactionGuardAction {
         init,
@@ -140,6 +143,7 @@ make_auto_flush_static_metric! {
         skip_partition,
     }
 
+<<<<<<< HEAD
     pub label_enum SendStatus {
         accept,
         drop,
@@ -157,6 +161,8 @@ make_auto_flush_static_metric! {
     pub struct RaftInvalidProposalCount : LocalIntCounter {
         "type" => RaftInvalidProposal
     }
+=======
+>>>>>>> 497ae1b0a1 (raft_client: Report store unreachable once until being connected again (#13677))
     pub struct RaftEntryFetches : LocalIntCounter {
         "type" => RaftEntryType
     }
@@ -204,8 +210,98 @@ make_auto_flush_static_metric! {
         "type" => CompactionGuardAction,
     }
 
+<<<<<<< HEAD
     pub struct RaftLogGcSkippedVec: LocalIntCounter {
         "reason" => RaftLogGcSkippedReason,
+=======
+    pub label_enum SendStatus {
+        accept,
+        drop,
+    }
+
+    pub label_enum RaftDroppedMessage {
+        mismatch_store_id,
+        mismatch_region_epoch,
+        stale_msg,
+        region_overlap,
+        region_no_peer,
+        region_tombstone_peer,
+        region_nonexistent,
+        applying_snap,
+        disk_full,
+    }
+
+    pub label_enum ProposalType {
+        all,
+        local_read,
+        read_index,
+        unsafe_read_index,
+        normal,
+        transfer_leader,
+        conf_change,
+        batch,
+        dropped_read_index,
+    }
+
+    pub label_enum RaftInvalidProposal {
+        mismatch_store_id,
+        region_not_found,
+        not_leader,
+        mismatch_peer_id,
+        stale_command,
+        epoch_not_match,
+        read_index_no_leader,
+        region_not_initialized,
+        is_applying_snapshot,
+        force_leader,
+        flashback_in_progress,
+        flashback_not_prepared
+    }
+
+    pub label_enum RaftEventDurationType {
+        compact_check,
+        pd_store_heartbeat,
+        snap_gc,
+        compact_lock_cf,
+        consistency_check,
+        cleanup_import_sst,
+        raft_engine_purge,
+        peer_msg,
+        store_msg,
+    }
+
+    pub label_enum RaftLogGcSkippedReason {
+        reserve_log,
+        compact_idx_too_small,
+        threshold_limit,
+    }
+
+    pub label_enum LoadBaseSplitEventType {
+        // Workload fits the QPS threshold or byte threshold.
+        load_fit,
+        // Workload fits the CPU threshold.
+        cpu_load_fit,
+        // The statistical key is empty.
+        empty_statistical_key,
+        // Split info has been collected, ready to split.
+        ready_to_split,
+        // Split info has not been collected yet, not ready to split.
+        not_ready_to_split,
+        // The number of sampled keys does not meet the threshold.
+        no_enough_sampled_key,
+        // The number of sampled keys located on left and right does not meet the threshold.
+        no_enough_lr_key,
+        // The number of balanced keys does not meet the score.
+        no_balance_key,
+        // The number of contained keys does not meet the score.
+        no_uncross_key,
+        // Split info for the top hot CPU region has been collected, ready to split.
+        ready_to_split_cpu_top,
+        // Hottest key range for the top hot CPU region could not be found.
+        empty_hottest_key_range,
+        // The top hot CPU region could not be split.
+        unable_to_split_cpu_top,
+>>>>>>> 497ae1b0a1 (raft_client: Report store unreachable once until being connected again (#13677))
     }
 }
 
@@ -216,6 +312,42 @@ make_static_metric! {
             hibernated,
         },
     }
+<<<<<<< HEAD
+=======
+
+    pub struct RaftReadyCounterVec : LocalIntCounter {
+        "type" => RaftReadyType,
+    }
+
+    pub struct RaftSentMessageCounterVec : LocalIntCounter {
+        "type" => RaftSentMessageCounterType,
+        "status" => SendStatus,
+    }
+
+    pub struct RaftDroppedMessageCounterVec : LocalIntCounter {
+        "type" => RaftDroppedMessage,
+    }
+
+    pub struct RaftProposalCounterVec: LocalIntCounter {
+        "type" => ProposalType,
+    }
+
+    pub struct RaftInvalidProposalCounterVec : LocalIntCounter {
+        "type" => RaftInvalidProposal
+    }
+
+    pub struct RaftEventDurationVec : LocalHistogram {
+        "type" => RaftEventDurationType
+    }
+
+    pub struct RaftLogGcSkippedCounterVec: LocalIntCounter {
+        "reason" => RaftLogGcSkippedReason,
+    }
+
+    pub struct LoadBaseSplitEventCounterVec: IntCounter {
+        "type" => LoadBaseSplitEventType,
+    }
+>>>>>>> 497ae1b0a1 (raft_client: Report store unreachable once until being connected again (#13677))
 }
 
 lazy_static! {
@@ -570,8 +702,13 @@ lazy_static! {
             &["type"],
             exponential_buckets(0.001, 1.59, 20).unwrap() // max 10s
         ).unwrap();
-    pub static ref RAFT_EVENT_DURATION: RaftEventDuration =
-        auto_flush_from!(RAFT_EVENT_DURATION_VEC, RaftEventDuration);
+
+    pub static ref PEER_MSG_LEN: Histogram =
+        register_histogram!(
+            "tikv_raftstore_peer_msg_len",
+            "Length of peer msg.",
+            exponential_buckets(1.0, 2.0, 20).unwrap() // max 1000s
+        ).unwrap();
 
     pub static ref RAFT_READ_INDEX_PENDING_DURATION: Histogram =
         register_histogram!(

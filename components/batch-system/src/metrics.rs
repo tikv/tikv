@@ -10,4 +10,11 @@ lazy_static! {
         &["type"]
     )
     .unwrap();
+
+    pub static ref BROADCAST_NORMAL_DURATION: Histogram =
+    register_histogram!(
+        "tikv_broadcast_normal_duration_seconds",
+        "Duration of broadcasting normals.",
+        exponential_buckets(0.001, 1.59, 20).unwrap() // max 10s
+    ).unwrap();
 }
