@@ -2022,6 +2022,10 @@ mod tests {
                 )
             });
             assert_eq!(actual, expected);
+            let actual = format!("{}", expected)
+                .parse::<ReadableOffsetTime>()
+                .unwrap();
+            assert_eq!(actual, expected);
         }
         let (encoded, actual) = (
             "23:00 +00:00",
