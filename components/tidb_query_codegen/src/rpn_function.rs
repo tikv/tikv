@@ -1739,27 +1739,24 @@ mod tests_normal {
 
     /// Compare TokenStream with all white chars trimmed.
     fn assert_token_stream_equal(l: TokenStream, r: TokenStream) {
-        let result = l
-            .clone()
-            .into_iter()
-            .eq_by(r.clone().into_iter(), |x, y| match x {
-                TokenTree::Ident(x) => matches!(y, TokenTree::Ident(y) if x == y),
-                TokenTree::Literal(x) => {
-                    matches!(y, TokenTree::Literal(y) if x.to_string() == y.to_string())
-                }
-                TokenTree::Punct(x) => {
-                    matches!(y, TokenTree::Punct(y) if x.to_string() == y.to_string())
-                }
-                TokenTree::Group(x) => {
-                    if let TokenTree::Group(y) = y {
-                        assert_token_stream_equal(x.stream(), y.stream());
+        let result = l.clone().into_iter().eq_by(r.clone(), |x, y| match x {
+            TokenTree::Ident(x) => matches!(y, TokenTree::Ident(y) if x == y),
+            TokenTree::Literal(x) => {
+                matches!(y, TokenTree::Literal(y) if x.to_string() == y.to_string())
+            }
+            TokenTree::Punct(x) => {
+                matches!(y, TokenTree::Punct(y) if x.to_string() == y.to_string())
+            }
+            TokenTree::Group(x) => {
+                if let TokenTree::Group(y) = y {
+                    assert_token_stream_equal(x.stream(), y.stream());
 
-                        true
-                    } else {
-                        false
-                    }
+                    true
+                } else {
+                    false
                 }
-            });
+            }
+        });
 
         assert!(result, "expect: {:#?}, actual: {:#?}", &l, &r);
     }

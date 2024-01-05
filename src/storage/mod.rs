@@ -80,6 +80,7 @@ use engine_traits::{
     raw_ttl::ttl_to_expire_ts, CfName, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS, DATA_CFS_LEN,
 };
 use futures::{future::Either, prelude::*};
+use itertools::Itertools;
 use kvproto::{
     kvrpcpb::{
         ApiVersion, ChecksumAlgorithm, CommandPri, Context, GetRequest, IsolationLevel, KeyRange,
@@ -1458,6 +1459,15 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                         Some(ScanMode::Forward),
                         !ctx.get_not_fill_cache(),
                     );
+                    let memory_locks = reader
+                        .load_in_memory_pessimisitic_lock_range(
+                            start_key.as_ref(),
+                            end_key.as_ref(),
+                            |_, lock| lock.start_ts <= max_ts,
+                            limit,
+                        )
+                        .map_err(txn::Error::from);
+                    let (memory_lock_kv_pairs, _) = memory_locks?;
                     let result = reader
                         .scan_locks(
                             start_key.as_ref(),
@@ -1468,8 +1478,18 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                         .map_err(txn::Error::from);
                     statistics.add(&reader.statistics);
                     let (kv_pairs, _) = result?;
-                    let mut locks = Vec::with_capacity(kv_pairs.len());
-                    for (key, lock) in kv_pairs {
+
+                    // Merge the results from in-memory pessimistic locks and the lock cf.
+                    // The result order is decided by the key.
+                    let memory_lock_iter = memory_lock_kv_pairs.into_iter();
+                    let lock_iter = kv_pairs.into_iter();
+                    let merged_iter = memory_lock_iter
+                        .merge_by(lock_iter, |(memory_key, _), (key, _)| memory_key <= key);
+                    let mut locks = Vec::with_capacity(limit);
+                    for (key, lock) in merged_iter {
+                        if limit > 0 && locks.len() >= limit {
+                            break;
+                        }
                         let lock_info =
                             lock.into_lock_info(key.into_raw().map_err(txn::Error::from)?);
                         locks.push(lock_info);
@@ -1982,7 +2002,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                             key_ranges.push(build_key_range(k.as_encoded(), k.as_encoded(), false));
                             (k, v)
                         })
-                        .filter(|&(_, ref v)| !(v.is_ok() && v.as_ref().unwrap().is_none()))
+                        .filter(|(_, v)| !(v.is_ok() && v.as_ref().unwrap().is_none()))
                         .map(|(k, v)| match v {
                             Ok(v) => {
                                 let (user_key, _) = F::decode_raw_key_owned(k, false).unwrap();
@@ -2126,7 +2146,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         })
     }
 
-    fn check_ttl_valid(key_cnt: usize, ttls: &Vec<u64>) -> Result<()> {
+    fn check_ttl_valid(key_cnt: usize, ttls: &[u64]) -> Result<()> {
         if !F::IS_TTL_ENABLED {
             if ttls.iter().any(|&x| x != 0) {
                 return Err(Error::from(ErrorInner::TtlNotEnabled));
@@ -3940,9 +3960,9 @@ mod tests {
         let result = block_on(storage.get(Context::default(), Key::from_raw(b"x"), 100.into()));
         assert!(matches!(
             result,
-            Err(Error(box ErrorInner::Txn(txn::Error(
-                box txn::ErrorInner::Mvcc(mvcc::Error(box mvcc::ErrorInner::KeyIsLocked { .. }))
-            ))))
+            Err(Error(box ErrorInner::Txn(txn::Error(box txn::ErrorInner::Mvcc(mvcc::Error(
+                box mvcc::ErrorInner::KeyIsLocked { .. },
+            ))))))
         ));
     }
 
@@ -5792,7 +5812,7 @@ mod tests {
         ];
 
         // Write key-value pairs one by one
-        for &(ref key, ref value) in &test_data {
+        for (key, value) in &test_data {
             storage
                 .raw_put(
                     ctx.clone(),
@@ -5851,7 +5871,7 @@ mod tests {
         let mut total_bytes: u64 = 0;
         let mut is_first = true;
         // Write key-value pairs one by one
-        for &(ref key, ref value) in &test_data {
+        for (key, value) in &test_data {
             storage
                 .raw_put(
                     ctx.clone(),
@@ -6293,7 +6313,7 @@ mod tests {
         ];
 
         // Write key-value pairs one by one
-        for &(ref key, ref value) in &test_data {
+        for (key, value) in &test_data {
             storage
                 .raw_put(
                     ctx.clone(),
@@ -6308,7 +6328,7 @@ mod tests {
         }
 
         // Verify pairs in a batch
-        let keys = test_data.iter().map(|&(ref k, _)| k.clone()).collect();
+        let keys = test_data.iter().map(|(k, _)| k.clone()).collect();
         let results = test_data.into_iter().map(|(k, v)| Some((k, v))).collect();
         expect_multi_values(
             results,
@@ -6340,7 +6360,7 @@ mod tests {
         ];
 
         // Write key-value pairs one by one
-        for &(ref key, ref value) in &test_data {
+        for (key, value) in &test_data {
             storage
                 .raw_put(
                     ctx.clone(),
@@ -6358,7 +6378,7 @@ mod tests {
         let mut ids = vec![];
         let cmds = test_data
             .iter()
-            .map(|&(ref k, _)| {
+            .map(|(k, _)| {
                 let mut req = RawGetRequest::default();
                 req.set_context(ctx.clone());
                 req.set_key(k.clone());
@@ -6429,10 +6449,10 @@ mod tests {
         rx.recv().unwrap();
 
         // Verify pairs exist
-        let keys = test_data.iter().map(|&(ref k, _)| k.clone()).collect();
+        let keys = test_data.iter().map(|(k, _)| k.clone()).collect();
         let results = test_data
             .iter()
-            .map(|&(ref k, ref v)| Some((k.clone(), v.clone())))
+            .map(|(k, v)| Some((k.clone(), v.clone())))
             .collect();
         expect_multi_values(
             results,
@@ -6560,7 +6580,7 @@ mod tests {
         // Scan pairs with key only
         let mut results: Vec<Option<KvPair>> = test_data
             .iter()
-            .map(|&(ref k, _)| Some((k.clone(), vec![])))
+            .map(|(k, _)| Some((k.clone(), vec![])))
             .collect();
         expect_multi_values(
             results.clone(),
@@ -6957,7 +6977,7 @@ mod tests {
         rx.recv().unwrap();
 
         // Verify pairs exist
-        let keys = test_data.iter().map(|&(ref k, _)| k.clone()).collect();
+        let keys = test_data.iter().map(|(k, _)| k.clone()).collect();
         let results = test_data.into_iter().map(|(k, v)| Some((k, v))).collect();
         expect_multi_values(
             results,
@@ -7394,6 +7414,126 @@ mod tests {
             ))
             .unwrap(),
         );
+    }
+
+    #[test]
+    fn test_scan_lock_with_memory_lock() {
+        for in_memory_pessimistic_lock_enabled in [false, true] {
+            let txn_ext = Arc::new(TxnExt::default());
+            let lock_mgr = MockLockManager::new();
+            let storage = TestStorageBuilderApiV1::new(lock_mgr.clone())
+                .pipelined_pessimistic_lock(in_memory_pessimistic_lock_enabled)
+                .in_memory_pessimistic_lock(in_memory_pessimistic_lock_enabled)
+                .build_for_txn(txn_ext.clone())
+                .unwrap();
+            let (tx, rx) = channel();
+            storage
+                .sched_txn_command(
+                    commands::AcquirePessimisticLock::new(
+                        vec![(Key::from_raw(b"a"), false), (Key::from_raw(b"b"), false)],
+                        b"a".to_vec(),
+                        20.into(),
+                        3000,
+                        true,
+                        20.into(),
+                        Some(WaitTimeout::Millis(1000)),
+                        false,
+                        21.into(),
+                        false,
+                        false,
+                        false,
+                        Context::default(),
+                    ),
+                    expect_ok_callback(tx.clone(), 0),
+                )
+                .unwrap();
+            rx.recv().unwrap();
+            if in_memory_pessimistic_lock_enabled {
+                // Check if the lock exists in the memory buffer.
+                let pessimistic_locks = txn_ext.pessimistic_locks.read();
+                let lock = pessimistic_locks.get(&Key::from_raw(b"a")).unwrap();
+                assert_eq!(
+                    lock,
+                    &(
+                        PessimisticLock {
+                            primary: Box::new(*b"a"),
+                            start_ts: 20.into(),
+                            ttl: 3000,
+                            for_update_ts: 20.into(),
+                            min_commit_ts: 21.into(),
+                            last_change: LastChange::NotExist,
+                            is_locked_with_conflict: false,
+                        },
+                        false
+                    )
+                );
+            }
+
+            storage
+                .sched_txn_command(
+                    commands::Prewrite::with_defaults(
+                        vec![
+                            Mutation::make_put(Key::from_raw(b"x"), b"foo".to_vec()),
+                            Mutation::make_put(Key::from_raw(b"y"), b"foo".to_vec()),
+                            Mutation::make_put(Key::from_raw(b"z"), b"foo".to_vec()),
+                        ],
+                        b"x".to_vec(),
+                        10.into(),
+                    ),
+                    expect_ok_callback(tx, 0),
+                )
+                .unwrap();
+            rx.recv().unwrap();
+
+            let (lock_a, lock_b, lock_x, lock_y, lock_z) = (
+                {
+                    let mut lock = LockInfo::default();
+                    lock.set_primary_lock(b"a".to_vec());
+                    lock.set_lock_version(20);
+                    lock.set_lock_for_update_ts(20);
+                    lock.set_key(b"a".to_vec());
+                    lock.set_min_commit_ts(21);
+                    lock.set_lock_type(Op::PessimisticLock);
+                    lock.set_lock_ttl(3000);
+                    lock
+                },
+                {
+                    let mut lock = LockInfo::default();
+                    lock.set_primary_lock(b"a".to_vec());
+                    lock.set_lock_version(20);
+                    lock.set_lock_for_update_ts(20);
+                    lock.set_key(b"b".to_vec());
+                    lock.set_min_commit_ts(21);
+                    lock.set_lock_type(Op::PessimisticLock);
+                    lock.set_lock_ttl(3000);
+                    lock
+                },
+                {
+                    let mut lock = LockInfo::default();
+                    lock.set_primary_lock(b"x".to_vec());
+                    lock.set_lock_version(10);
+                    lock.set_key(b"x".to_vec());
+                    lock
+                },
+                {
+                    let mut lock = LockInfo::default();
+                    lock.set_primary_lock(b"x".to_vec());
+                    lock.set_lock_version(10);
+                    lock.set_key(b"y".to_vec());
+                    lock
+                },
+                {
+                    let mut lock = LockInfo::default();
+                    lock.set_primary_lock(b"x".to_vec());
+                    lock.set_lock_version(10);
+                    lock.set_key(b"z".to_vec());
+                    lock
+                },
+            );
+            let res = block_on(storage.scan_lock(Context::default(), 101.into(), None, None, 10))
+                .unwrap();
+            assert_eq!(res, vec![lock_a, lock_b, lock_x, lock_y, lock_z,]);
+        }
     }
 
     #[test]

@@ -7,6 +7,7 @@ publish = false
 
 [features]
 default = ["test-engine-kv-rocksdb", "test-engine-raft-raft-engine", "cloud-aws", "cloud-gcp", "cloud-azure"]
+trace-async-tasks = ["dep:tracing-active-tree", "dep:tracing-subscriber"]
 trace-tablet-lifetime = ["tikv/trace-tablet-lifetime"]
 tcmalloc = ["server/tcmalloc"]
 jemalloc = ["server/jemalloc"]
@@ -46,6 +47,8 @@ server = { workspace = true }
 tikv = { workspace = true }
 tikv_util = { workspace = true }
 toml = "0.5"
+tracing-active-tree = { workspace = true, optional = true }
+tracing-subscriber = { version = "0.3.17", default-features = false, features = [ "registry", "smallvec" ], optional = true }
 
 [build-dependencies]
 cc = "1.0"

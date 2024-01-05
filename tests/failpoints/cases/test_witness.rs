@@ -3,6 +3,7 @@
 use std::{iter::FromIterator, sync::Arc, time::Duration};
 
 use collections::HashMap;
+use engine_rocks::RocksEngine;
 use futures::executor::block_on;
 use kvproto::{metapb, raft_serverpb::RaftApplyState};
 use pd_client::PdClient;
@@ -52,7 +53,7 @@ fn test_witness_update_region_in_local_reader() {
     request.mut_header().set_replica_read(true);
 
     let resp = cluster
-        .read(None, request.clone(), Duration::from_millis(100))
+        .read(None, None, request.clone(), Duration::from_millis(100))
         .unwrap();
     assert_eq!(
         resp.get_header().get_error().get_is_witness(),
@@ -104,7 +105,7 @@ fn test_witness_not_reported_while_disabled() {
     request.mut_header().set_replica_read(true);
 
     let resp = cluster
-        .read(None, request.clone(), Duration::from_millis(100))
+        .read(None, None, request.clone(), Duration::from_millis(100))
         .unwrap();
     assert!(resp.get_header().has_error());
     assert!(!resp.get_header().get_error().has_is_witness());
@@ -491,7 +492,7 @@ fn test_non_witness_replica_read() {
     request.mut_header().set_replica_read(true);
 
     let resp = cluster
-        .read(None, request, Duration::from_millis(100))
+        .read(None, None, request, Duration::from_millis(100))
         .unwrap();
     assert_eq!(
         resp.get_header().get_error().get_is_witness(),
@@ -516,13 +517,13 @@ fn test_non_witness_replica_read() {
     request.mut_header().set_replica_read(true);
 
     let resp = cluster
-        .read(None, request, Duration::from_millis(100))
+        .read(None, None, request, Duration::from_millis(100))
         .unwrap();
     assert_eq!(resp.get_header().has_error(), false);
 }
 
-fn must_get_error_is_witness<T: Simulator>(
-    cluster: &mut Cluster<T>,
+fn must_get_error_is_witness<T: Simulator<RocksEngine>>(
+    cluster: &mut Cluster<RocksEngine, T>,
     region: &metapb::Region,
     cmd: kvproto::raft_cmdpb::Request,
 ) {

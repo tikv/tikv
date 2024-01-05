@@ -895,8 +895,8 @@ fn test_node_merge_update_region() {
     let new_leader = left
         .get_peers()
         .iter()
+        .find(|&p| p.get_id() != origin_leader.get_id())
         .cloned()
-        .find(|p| p.get_id() != origin_leader.get_id())
         .unwrap();
 
     // Make sure merge is done in the new_leader.
@@ -1552,7 +1552,7 @@ fn test_merge_pessimistic_locks_when_gap_is_too_large() {
     let large_bytes = vec![b'v'; 32 << 10]; // 32 KiB
     // 4 * 32 KiB = 128 KiB > raft_entry_max_size
     for _ in 0..4 {
-        cluster.async_put(b"k1", &large_bytes).unwrap();
+        let _ = cluster.async_put(b"k1", &large_bytes).unwrap();
     }
 
     cluster.merge_region(left.id, right.id, Callback::None);

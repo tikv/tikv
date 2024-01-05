@@ -40,6 +40,7 @@ use tikv_kv::RaftExtension;
 use tikv_util::{
     config::{Tracker, VersionTrack},
     lru::LruCache,
+    time::duration_to_sec,
     timer::GLOBAL_TIMER_HANDLE,
     worker::Scheduler,
 };
@@ -56,7 +57,7 @@ use crate::server::{
 pub struct MetadataSourceStoreId {}
 
 impl MetadataSourceStoreId {
-    pub const KEY: &str = "source_store_id";
+    pub const KEY: &'static str = "source_store_id";
 
     pub fn parse(value: &[u8]) -> u64 {
         let value = std::str::from_utf8(value).unwrap();
@@ -814,7 +815,13 @@ async fn start<S, R>(
     let mut last_wake_time = None;
     let backoff_duration = back_end.builder.cfg.value().raft_client_max_backoff.0;
     let mut addr_channel = None;
+    let mut begin = None;
+    let mut try_count = 0;
     loop {
+        if begin.is_none() {
+            begin = Some(Instant::now());
+        }
+        try_count += 1;
         maybe_backoff(backoff_duration, &mut last_wake_time).await;
         let f = back_end.resolve();
         let addr = match f.await {
@@ -862,7 +869,19 @@ async fn start<S, R>(
                 .report_store_unreachable(back_end.store_id);
             continue;
         } else {
-            debug!("connection established"; "store_id" => back_end.store_id, "addr" => %addr);
+            let wait_conn_duration = begin.unwrap_or_else(Instant::now).elapsed();
+            info!("connection established";
+                "store_id" => back_end.store_id,
+                "addr" => %addr,
+                "cost" => ?wait_conn_duration,
+                "msg_count" => ?back_end.queue.len(),
+                "try_count" => try_count,
+            );
+            RAFT_CLIENT_WAIT_CONN_READY_DURATION_HISTOGRAM_VEC
+                .with_label_values(&[addr.as_str()])
+                .observe(duration_to_sec(wait_conn_duration));
+            begin = None;
+            try_count = 0;
         }
 
         let client = TikvClient::new(channel);

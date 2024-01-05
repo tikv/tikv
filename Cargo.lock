@@ -530,6 +530,8 @@ dependencies = [
  "tokio",
  "tokio-stream",
  "tokio-util",
+ "tracing",
+ "tracing-active-tree",
  "txn_types",
  "url",
  "uuid 0.8.2",
@@ -891,9 +893,9 @@ dependencies = [
 
 [[package]]
 name = "chrono-tz"
-version = "0.5.1"
+version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e0e430fad0384e4defc3dc6b1223d1b886087a8bf9b7080e5ae027f73851ea15"
+checksum = "2554a3155fec064362507487171dcc4edc3df60cb10f3a1fb10ed8094822b120"
 dependencies = [
  "chrono",
  "parse-zoneinfo",
@@ -981,6 +983,18 @@ version = "0.1.48"
 source = "git+https://github.com/rust-lang/cmake-rs#00e6b220342a8b0ec4548071928ade38fd5f691b"
 dependencies = [
  "cc",
+]
+
+[[package]]
+name = "coarsetime"
+version = "0.1.33"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "71367d3385c716342014ad17e3d19f7788ae514885a1f4c24f500260fb365e1a"
+dependencies = [
+ "libc 0.2.146",
+ "once_cell",
+ "wasi 0.11.0+wasi-snapshot-preview1",
+ "wasm-bindgen",
 ]
 
 [[package]]
@@ -2449,6 +2463,8 @@ version = "0.0.1"
 dependencies = [
  "engine_rocks",
  "engine_traits",
+ "region_cache_memory_engine",
+ "tempfile",
  "tikv_util",
  "txn_types",
 ]
@@ -2540,6 +2556,12 @@ dependencies = [
  "autocfg",
  "hashbrown 0.9.1",
 ]
+
+[[package]]
+name = "indextree"
+version = "4.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c40411d0e5c63ef1323c3d09ce5ec6d84d71531e18daed0743fccea279d7deb6"
 
 [[package]]
 name = "infer"
@@ -2790,7 +2812,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#c4b7047314a9b27926a1b7b25d2e6d1a37a48d2b"
+source = "git+https://github.com/tikv/rust-rocksdb.git#d877018095b44b2933969fe7caf5c3e0cd86be5b"
 dependencies = [
  "bindgen 0.65.1",
  "bzip2-sys",
@@ -2809,7 +2831,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/tikv/rust-rocksdb.git#c4b7047314a9b27926a1b7b25d2e6d1a37a48d2b"
+source = "git+https://github.com/tikv/rust-rocksdb.git#d877018095b44b2933969fe7caf5c3e0cd86be5b"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -2865,12 +2887,9 @@ dependencies = [
 
 [[package]]
 name = "log"
-version = "0.4.14"
+version = "0.4.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "51b9bbe6c47d51fc3e1a9b945965946b4c44142ab8792c50835a980d362c2710"
-dependencies = [
- "cfg-if 1.0.0",
-]
+checksum = "b5e6163cb8c49088c2c36f57875e58ccd8c87c7427f7fbd50ea6710b2f3f2e8f"
 
 [[package]]
 name = "log_wrappers"
@@ -3567,9 +3586,9 @@ dependencies = [
 
 [[package]]
 name = "parse-zoneinfo"
-version = "0.2.0"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "089a398ccdcdd77b8c38909d5a1e4b67da1bc4c9dbfe6d5b536c828eddb779e5"
+checksum = "c705f256449c60da65e11ff6626e0c16a0a0b96aaa348de61376b249bc340f41"
 dependencies = [
  "regex",
 ]
@@ -4137,6 +4156,7 @@ dependencies = [
  "futures-util",
  "getset",
  "grpcio-health",
+ "hybrid_engine",
  "into_other",
  "itertools",
  "keys",
@@ -4157,6 +4177,7 @@ dependencies = [
  "raft",
  "raft-proto",
  "rand 0.8.5",
+ "region_cache_memory_engine",
  "resource_control",
  "resource_metering",
  "serde",
@@ -4446,6 +4467,7 @@ version = "0.0.1"
 dependencies = [
  "bytes",
  "collections",
+ "engine_rocks",
  "engine_traits",
  "skiplist-rs",
  "tikv_util",
@@ -4634,7 +4656,7 @@ dependencies = [
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#c4b7047314a9b27926a1b7b25d2e6d1a37a48d2b"
+source = "git+https://github.com/tikv/rust-rocksdb.git#d877018095b44b2933969fe7caf5c3e0cd86be5b"
 dependencies = [
  "libc 0.2.146",
  "librocksdb_sys",
@@ -5158,6 +5180,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "sharded-slab"
+version = "0.1.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f40ca3c46823713e0d4209592e8d6e826aa57e928f09752619fc696c499637f6"
+dependencies = [
+ "lazy_static",
+]
+
+[[package]]
 name = "shlex"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5277,9 +5308,9 @@ dependencies = [
 
 [[package]]
 name = "smallvec"
-version = "1.8.0"
+version = "1.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f2dd574626839106c320a323308629dcb1acfc96e32a8cba364ddc61ac23ee83"
+checksum = "942b4a808e05215192e39f4ab80813e599068285906cc91aa64f923db842bd5a"
 
 [[package]]
 name = "smartstring"
@@ -5685,6 +5716,7 @@ dependencies = [
  "collections",
  "concurrency_manager",
  "crc64fast",
+ "engine_rocks",
  "engine_traits",
  "external_storage",
  "file_system",
@@ -5784,6 +5816,7 @@ dependencies = [
  "futures 0.3.15",
  "grpcio",
  "grpcio-health",
+ "hybrid_engine",
  "keys",
  "kvproto",
  "lazy_static",
@@ -5793,6 +5826,7 @@ dependencies = [
  "raft",
  "raftstore",
  "rand 0.8.5",
+ "region_cache_memory_engine",
  "resolved_ts",
  "resource_control",
  "resource_metering",
@@ -5887,6 +5921,7 @@ version = "0.0.1"
 dependencies = [
  "api_version",
  "collections",
+ "engine_rocks",
  "futures 0.3.15",
  "kvproto",
  "pd_client",
@@ -6330,6 +6365,7 @@ dependencies = [
  "tokio-openssl",
  "tokio-timer",
  "toml",
+ "tracing-active-tree",
  "tracker",
  "txn_types",
  "url",
@@ -6444,6 +6480,8 @@ dependencies = [
  "tikv_util",
  "time 0.1.42",
  "toml",
+ "tracing-active-tree",
+ "tracing-subscriber",
 ]
 
 [[package]]
@@ -6758,34 +6796,59 @@ checksum = "b6bc1c9ce2b5135ac7f93c72918fc37feb872bdc6a5533a8b85eb4b86bfdae52"
 
 [[package]]
 name = "tracing"
-version = "0.1.25"
+version = "0.1.40"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "01ebdc2bb4498ab1ab5f5b73c5803825e60199229ccba0698170e3be0e7f959f"
+checksum = "c3523ab5a71916ccf420eebdf5521fcef02141234bbc0b8a49f2fdc4544364ef"
 dependencies = [
- "cfg-if 1.0.0",
  "pin-project-lite",
  "tracing-attributes",
  "tracing-core",
 ]
 
 [[package]]
+name = "tracing-active-tree"
+version = "0.1.0"
+source = "git+https://github.com/tikv/tracing-active-tree.git?rev=a71f8f8148f88ab759deb6d3e1d62d07ab218347#a71f8f8148f88ab759deb6d3e1d62d07ab218347"
+dependencies = [
+ "coarsetime",
+ "dashmap",
+ "indextree",
+ "lazy_static",
+ "smallvec",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "tracing-attributes"
-version = "0.1.21"
+version = "0.1.27"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cc6b8ad3567499f98a1db7a752b07a7c8c7c7c34c332ec00effb2b0027974b7c"
+checksum = "34704c8d6ebcbc939824180af020566b01a7c01f80641264eba0999f6c2b6be7"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 1.0.103",
+ "syn 2.0.18",
 ]
 
 [[package]]
 name = "tracing-core"
-version = "0.1.17"
+version = "0.1.32"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f50de3927f93d202783f4513cda820ab47ef17f624b03c096e86ef00c67e6b5f"
+checksum = "c06d3da6113f116aaee68e4d601191614c9053067f9ab7f6edbcb161237daa54"
 dependencies = [
- "lazy_static",
+ "once_cell",
+]
+
+[[package]]
+name = "tracing-subscriber"
+version = "0.3.18"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ad0f048c97dbd9faa9b7df56362b8ebcaa52adb06b498c050d2f4e32f90a7a8b"
+dependencies = [
+ "sharded-slab",
+ "smallvec",
+ "thread_local",
+ "tracing-core",
 ]
 
 [[package]]
@@ -6824,7 +6887,7 @@ version = "1.6.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "97fee6b57c6a41524a810daee9286c02d7752c4253064d0b05472833a438f675"
 dependencies = [
- "cfg-if 0.1.10",
+ "cfg-if 1.0.0",
  "static_assertions",
 ]
 

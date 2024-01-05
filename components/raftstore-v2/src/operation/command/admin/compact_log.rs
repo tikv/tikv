@@ -527,9 +527,10 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             && let Some(index) = self.compact_log_index()
         {
             // Raft Engine doesn't care about first index.
-            if let Err(e) = store_ctx
-                .engine
-                .gc(self.region_id(), 0, index, self.state_changes_mut())
+            if let Err(e) =
+                store_ctx
+                    .engine
+                    .gc(self.region_id(), 0, index, self.state_changes_mut())
             {
                 error!(self.logger, "failed to compact raft logs"; "err" => ?e);
             }
@@ -571,13 +572,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 && old_persisted < self.entry_storage().truncated_index() + 1
                 && let Some(index) = self.compact_log_index()
             {
-                let batch = task.extra_write.ensure_v2(|| self.entry_storage().raft_engine().log_batch(0));
+                let batch = task
+                    .extra_write
+                    .ensure_v2(|| self.entry_storage().raft_engine().log_batch(0));
                 // Raft Engine doesn't care about first index.
-                if let Err(e) =
-                store_ctx
-                    .engine
-                    .gc(self.region_id(), 0, index, batch)
-                {
+                if let Err(e) = store_ctx.engine.gc(self.region_id(), 0, index, batch) {
                     error!(self.logger, "failed to compact raft logs"; "err" => ?e);
                 }
             }

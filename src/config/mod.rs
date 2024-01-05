@@ -145,12 +145,6 @@ pub struct TitanCfConfig {
     pub max_gc_batch_size: ReadableSize,
     #[online_config(skip)]
     pub discardable_ratio: f64,
-    // deprecated.
-    #[online_config(skip)]
-    #[doc(hidden)]
-    #[serde(skip_serializing)]
-    #[deprecated = "Titan doesn't need to sample anymore"]
-    pub sample_ratio: Option<f64>,
     #[online_config(skip)]
     pub merge_small_file_threshold: ReadableSize,
     pub blob_run_mode: BlobRunMode,
@@ -160,18 +154,24 @@ pub struct TitanCfConfig {
     pub range_merge: bool,
     #[online_config(skip)]
     pub max_sorted_runs: i32,
+
     #[online_config(skip)]
     #[doc(hidden)]
     #[serde(skip_serializing)]
     #[deprecated = "The feature is removed"]
     pub gc_merge_rewrite: bool,
+    #[online_config(skip)]
+    #[doc(hidden)]
+    #[serde(skip_serializing)]
+    #[deprecated = "Titan doesn't need to sample anymore"]
+    pub sample_ratio: Option<f64>,
 }
 
 impl Default for TitanCfConfig {
     #[allow(deprecated)]
     fn default() -> Self {
         Self {
-            min_blob_size: ReadableSize::kb(1), // disable titan default
+            min_blob_size: ReadableSize::kb(1),
             blob_file_compression: CompressionType::Zstd,
             zstd_dict_size: ReadableSize::kb(0),
             blob_cache_size: ReadableSize::mb(0),
@@ -1196,8 +1196,6 @@ impl RaftCfConfig {
 #[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
-// Note that Titan is still an experimental feature. Once enabled, it can't fall
-// back. Forced fallback may result in data loss.
 pub struct TitanDbConfig {
     pub enabled: bool,
     pub dirname: String,
@@ -1210,7 +1208,7 @@ pub struct TitanDbConfig {
 impl Default for TitanDbConfig {
     fn default() -> Self {
         Self {
-            enabled: false,
+            enabled: false, // Enabled only for newly created cluster
             dirname: "".to_owned(),
             disable_gc: false,
             max_background_gc: 1,
@@ -1382,7 +1380,7 @@ impl Default for DbConfig {
 }
 
 impl DbConfig {
-    pub fn optimize_for(&mut self, engine: EngineType) {
+    pub fn optimize_for(&mut self, engine: EngineType, kv_data_exists: bool) {
         match engine {
             EngineType::RaftKv => {
                 self.allow_concurrent_memtable_write.get_or_insert(true);
@@ -1393,6 +1391,9 @@ impl DbConfig {
                 self.writecf.enable_compaction_guard.get_or_insert(true);
                 if self.lockcf.write_buffer_size.is_none() {
                     self.lockcf.write_buffer_size = Some(ReadableSize::mb(32));
+                }
+                if !kv_data_exists && !self.titan.enabled {
+                    self.titan.enabled = true;
                 }
             }
             EngineType::RaftKv2 => {
@@ -1529,7 +1530,7 @@ impl DbConfig {
             opts.set_paranoid_checks(b);
         }
         if for_engine == EngineType::RaftKv {
-            opts.set_info_log(RocksdbLogger::default());
+            opts.set_info_log(RocksdbLogger);
         }
         opts.set_info_log_level(self.info_log_level.into());
         if self.titan.enabled {
@@ -1552,29 +1553,26 @@ impl DbConfig {
 
     pub fn build_cf_resources(&self, cache: Cache) -> CfResources {
         let mut compaction_thread_limiters = HashMap::new();
-        if let Some(n) = self.defaultcf.max_compactions && n > 0 {
-            compaction_thread_limiters.insert(
-                CF_DEFAULT,
-                ConcurrentTaskLimiter::new(CF_DEFAULT, n),
-            );
+        if let Some(n) = self.defaultcf.max_compactions
+            && n > 0
+        {
+            compaction_thread_limiters
+                .insert(CF_DEFAULT, ConcurrentTaskLimiter::new(CF_DEFAULT, n));
         }
-        if let Some(n) = self.writecf.max_compactions && n > 0 {
-            compaction_thread_limiters.insert(
-                CF_WRITE,
-                ConcurrentTaskLimiter::new(CF_WRITE, n),
-            );
+        if let Some(n) = self.writecf.max_compactions
+            && n > 0
+        {
+            compaction_thread_limiters.insert(CF_WRITE, ConcurrentTaskLimiter::new(CF_WRITE, n));
         }
-        if let Some(n) = self.lockcf.max_compactions && n > 0 {
-            compaction_thread_limiters.insert(
-                CF_LOCK,
-                ConcurrentTaskLimiter::new(CF_LOCK, n),
-            );
+        if let Some(n) = self.lockcf.max_compactions
+            && n > 0
+        {
+            compaction_thread_limiters.insert(CF_LOCK, ConcurrentTaskLimiter::new(CF_LOCK, n));
         }
-        if let Some(n) = self.raftcf.max_compactions && n > 0 {
-            compaction_thread_limiters.insert(
-                CF_RAFT,
-                ConcurrentTaskLimiter::new(CF_RAFT, n),
-            );
+        if let Some(n) = self.raftcf.max_compactions
+            && n > 0
+        {
+            compaction_thread_limiters.insert(CF_RAFT, ConcurrentTaskLimiter::new(CF_RAFT, n));
         }
         let mut write_buffer_managers = HashMap::default();
         self.lockcf.write_buffer_limit.map(|limit| {
@@ -1756,7 +1754,9 @@ impl Default for RaftDefaultCfConfig {
 
 impl RaftDefaultCfConfig {
     pub fn build_opt(&self, cache: &Cache) -> RocksCfOptions {
-        let limiter = if let Some(n) = self.max_compactions && n > 0 {
+        let limiter = if let Some(n) = self.max_compactions
+            && n > 0
+        {
             Some(ConcurrentTaskLimiter::new(CF_DEFAULT, n))
         } else {
             None
@@ -1907,7 +1907,7 @@ impl RaftDbConfig {
         opts.set_max_log_file_size(self.info_log_max_size.0);
         opts.set_log_file_time_to_roll(self.info_log_roll_time.as_secs());
         opts.set_keep_log_file_num(self.info_log_keep_log_file_num);
-        opts.set_info_log(RaftDbLogger::default());
+        opts.set_info_log(RaftDbLogger);
         opts.set_info_log_level(self.info_log_level.into());
         opts.set_max_subcompactions(self.max_sub_compactions);
         opts.set_writable_file_max_buffer_size(self.writable_file_max_buffer_size.0 as i32);
@@ -2064,7 +2064,7 @@ impl<T: ConfigurableDb + Send + Sync> ConfigManager for DbConfigManger<T> {
         self.cfg.update(change.clone())?;
         let change_str = format!("{:?}", change);
         let mut change: Vec<(String, ConfigValue)> = change.into_iter().collect();
-        let cf_config = change.drain_filter(|(name, _)| name.ends_with("cf"));
+        let cf_config = change.extract_if(|(name, _)| name.ends_with("cf"));
         for (cf_name, cf_change) in cf_config {
             if let ConfigValue::Module(mut cf_change) = cf_change {
                 // defaultcf -> default
@@ -2098,7 +2098,7 @@ impl<T: ConfigurableDb + Send + Sync> ConfigManager for DbConfigManger<T> {
         }
 
         if let Some(rate_bytes_config) = change
-            .drain_filter(|(name, _)| name == "rate_bytes_per_sec")
+            .extract_if(|(name, _)| name == "rate_bytes_per_sec")
             .next()
         {
             let rate_bytes_per_sec: ReadableSize = rate_bytes_config.1.into();
@@ -2107,7 +2107,7 @@ impl<T: ConfigurableDb + Send + Sync> ConfigManager for DbConfigManger<T> {
         }
 
         if let Some(rate_bytes_config) = change
-            .drain_filter(|(name, _)| name == "rate_limiter_auto_tuned")
+            .extract_if(|(name, _)| name == "rate_limiter_auto_tuned")
             .next()
         {
             let rate_limiter_auto_tuned: bool = rate_bytes_config.1.into();
@@ -2116,7 +2116,7 @@ impl<T: ConfigurableDb + Send + Sync> ConfigManager for DbConfigManger<T> {
         }
 
         if let Some(size) = change
-            .drain_filter(|(name, _)| name == "write_buffer_limit")
+            .extract_if(|(name, _)| name == "write_buffer_limit")
             .next()
         {
             let size: ReadableSize = size.1.into();
@@ -2124,14 +2124,14 @@ impl<T: ConfigurableDb + Send + Sync> ConfigManager for DbConfigManger<T> {
         }
 
         if let Some(f) = change
-            .drain_filter(|(name, _)| name == "write_buffer_flush_oldest_first")
+            .extract_if(|(name, _)| name == "write_buffer_flush_oldest_first")
             .next()
         {
             self.db.set_flush_oldest_first(f.1.into())?;
         }
 
         if let Some(background_jobs_config) = change
-            .drain_filter(|(name, _)| name == "max_background_jobs")
+            .extract_if(|(name, _)| name == "max_background_jobs")
             .next()
         {
             let max_background_jobs: i32 = background_jobs_config.1.into();
@@ -2139,7 +2139,7 @@ impl<T: ConfigurableDb + Send + Sync> ConfigManager for DbConfigManger<T> {
         }
 
         if let Some(background_subcompactions_config) = change
-            .drain_filter(|(name, _)| name == "max_sub_compactions")
+            .extract_if(|(name, _)| name == "max_sub_compactions")
             .next()
         {
             let max_subcompactions: u32 = background_subcompactions_config.1.into();
@@ -2148,7 +2148,7 @@ impl<T: ConfigurableDb + Send + Sync> ConfigManager for DbConfigManger<T> {
         }
 
         if let Some(background_flushes_config) = change
-            .drain_filter(|(name, _)| name == "max_background_flushes")
+            .extract_if(|(name, _)| name == "max_background_flushes")
             .next()
         {
             let max_background_flushes: i32 = background_flushes_config.1.into();
@@ -3663,7 +3663,8 @@ impl TikvConfig {
         .validate(kv_data_exists)?;
 
         // Optimize.
-        self.rocksdb.optimize_for(self.storage.engine);
+        self.rocksdb
+            .optimize_for(self.storage.engine, kv_data_exists);
         self.coprocessor
             .optimize_for(self.storage.engine == EngineType::RaftKv2);
         self.split
@@ -4042,7 +4043,12 @@ impl TikvConfig {
             && let Some(b) = self.rocksdb.writecf.block_cache_size
             && let Some(c) = self.rocksdb.lockcf.block_cache_size
         {
-            let d = self.raftdb.defaultcf.block_cache_size.map(|s| s.0).unwrap_or_default();
+            let d = self
+                .raftdb
+                .defaultcf
+                .block_cache_size
+                .map(|s| s.0)
+                .unwrap_or_default();
             let sum = a.0 + b.0 + c.0 + d;
             self.storage.block_cache.capacity = Some(ReadableSize(sum));
         }
@@ -4741,6 +4747,7 @@ mod tests {
     use grpcio::ResourceQuota;
     use itertools::Itertools;
     use kvproto::kvrpcpb::CommandPri;
+    use raft_log_engine::RaftLogEngine;
     use raftstore::{
         coprocessor::{
             config::{RAFTSTORE_V2_SPLIT_SIZE, SPLIT_SIZE},
@@ -5404,7 +5411,7 @@ mod tests {
             .rocksdb
             .build_resources(Arc::default(), cfg.storage.engine);
         let engine = RocksDBEngine::new(
-            &cfg.storage.data_dir,
+            &cfg.infer_kv_engine_path(None).unwrap(),
             Some(cfg.rocksdb.build_opt(&resource, cfg.storage.engine)),
             cfg.rocksdb.build_cf_opts(
                 &cfg.rocksdb
@@ -5415,6 +5422,12 @@ mod tests {
                 cfg.storage.engine,
             ),
             None,
+        )
+        .unwrap();
+        let mut raft_cfg = cfg.raft_engine.config.clone();
+        raft_cfg.dir = cfg.infer_raft_engine_path(None).unwrap();
+        let _raft_db = RaftLogEngine::new(
+            raft_cfg, None, None, // io_rate_limiter
         )
         .unwrap();
         let storage =
@@ -5824,6 +5837,36 @@ mod tests {
             None => unreachable!(),
             Some(TtlCheckerTask::UpdatePollInterval(d)) => assert_eq!(d, Duration::from_secs(10)),
         }
+    }
+
+    #[test]
+    fn test_titan_auto_enable() {
+        // Do not auto enable titan for existing instances
+        let (cfg, dir) = TikvConfig::with_tmp().unwrap();
+        persist_config(&cfg).unwrap();
+        let (storage, ..) = new_engines::<ApiV1>(cfg);
+        drop(storage);
+        let mut cfg = TikvConfig::from_file(&dir.path().join(LAST_CONFIG_FILE), None).unwrap();
+        assert_eq!(cfg.rocksdb.titan.enabled, false);
+        cfg.validate().unwrap();
+        assert_eq!(cfg.rocksdb.titan.enabled, false);
+        let (_storage, cfg_controller, ..) = new_engines::<ApiV1>(cfg);
+        assert_eq!(cfg_controller.get_current().rocksdb.titan.enabled, false);
+        drop(dir);
+
+        // Auto enable titan for new instances
+        let (mut cfg, dir) = TikvConfig::with_tmp().unwrap();
+        assert_eq!(cfg.rocksdb.titan.enabled, false);
+        cfg.validate().unwrap();
+        persist_config(&cfg).unwrap();
+        assert_eq!(cfg.rocksdb.titan.enabled, true);
+        let (storage, cfg_controller, ..) = new_engines::<ApiV1>(cfg);
+        assert_eq!(cfg_controller.get_current().rocksdb.titan.enabled, true);
+        drop(storage);
+        // The config is persisted
+        let cfg = TikvConfig::from_file(&dir.path().join(LAST_CONFIG_FILE), None).unwrap();
+        assert_eq!(cfg.rocksdb.titan.enabled, true);
+        drop(dir);
     }
 
     #[test]

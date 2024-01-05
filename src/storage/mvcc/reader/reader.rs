@@ -8,9 +8,12 @@ use kvproto::{
     errorpb::{self, EpochNotMatch, FlashbackInProgress, StaleCommand},
     kvrpcpb::Context,
 };
-use raftstore::store::LocksStatus;
+use raftstore::store::{LocksStatus, PeerPessimisticLocks};
 use tikv_kv::{SnapshotExt, SEEK_BOUND};
-use txn_types::{Key, LastChange, Lock, OldValue, TimeStamp, Value, Write, WriteRef, WriteType};
+use tikv_util::time::Instant;
+use txn_types::{
+    Key, LastChange, Lock, OldValue, PessimisticLock, TimeStamp, Value, Write, WriteRef, WriteType,
+};
 
 use crate::storage::{
     kv::{
@@ -18,6 +21,7 @@ use crate::storage::{
     },
     mvcc::{
         default_not_found_error,
+        metrics::SCAN_LOCK_READ_TIME_VEC,
         reader::{OverlappedWrite, TxnCommitRecord},
         Result,
     },
@@ -251,44 +255,76 @@ impl<S: EngineSnapshot> MvccReader<S> {
         Ok(res)
     }
 
-    fn load_in_memory_pessimistic_lock(&self, key: &Key) -> Result<Option<Lock>> {
-        self.snapshot
-            .ext()
-            .get_txn_ext()
-            .and_then(|txn_ext| {
-                // If the term or region version has changed, do not read the lock table.
-                // Instead, just return a StaleCommand or EpochNotMatch error, so the
-                // client will not receive a false error because the lock table has been
-                // cleared.
-                let locks = txn_ext.pessimistic_locks.read();
-                if self.term != 0 && locks.term != self.term {
-                    let mut err = errorpb::Error::default();
-                    err.set_stale_command(StaleCommand::default());
-                    return Some(Err(KvError::from(err).into()));
-                }
-                if self.version != 0 && locks.version != self.version {
-                    let mut err = errorpb::Error::default();
-                    // We don't know the current regions. Just return an empty EpochNotMatch error.
-                    err.set_epoch_not_match(EpochNotMatch::default());
-                    return Some(Err(KvError::from(err).into()));
-                }
-                // If the region is in the flashback state, it should not be allowed to read the
-                // locks.
-                if locks.status == LocksStatus::IsInFlashback && !self.allow_in_flashback {
-                    let mut err = errorpb::Error::default();
-                    err.set_flashback_in_progress(FlashbackInProgress::default());
-                    return Some(Err(KvError::from(err).into()));
-                }
+    fn check_term_version_status(&self, locks: &PeerPessimisticLocks) -> Result<()> {
+        // If the term or region version has changed, do not read the lock table.
+        // Instead, just return a StaleCommand or EpochNotMatch error, so the
+        // client will not receive a false error because the lock table has been
+        // cleared.
+        if self.term != 0 && locks.term != self.term {
+            let mut err = errorpb::Error::default();
+            err.set_stale_command(StaleCommand::default());
+            return Err(KvError::from(err).into());
+        }
+        if self.version != 0 && locks.version != self.version {
+            let mut err = errorpb::Error::default();
+            err.set_epoch_not_match(EpochNotMatch::default());
+            return Err(KvError::from(err).into());
+        }
+        if locks.status == LocksStatus::IsInFlashback && !self.allow_in_flashback {
+            let mut err = errorpb::Error::default();
+            err.set_flashback_in_progress(FlashbackInProgress::default());
+            return Err(KvError::from(err).into());
+        }
+        Ok(())
+    }
 
-                locks.get(key).map(|(lock, _)| {
-                    // For write commands that are executed in serial, it should be impossible
-                    // to read a deleted lock.
-                    // For read commands in the scheduler, it should read the lock marked deleted
-                    // because the lock is not actually deleted from the underlying storage.
-                    Ok(lock.to_lock())
-                })
-            })
-            .transpose()
+    pub fn load_in_memory_pessimisitic_lock_range<F>(
+        &self,
+        start_key: Option<&Key>,
+        end_key: Option<&Key>,
+        filter: F,
+        scan_limit: usize,
+    ) -> Result<(Vec<(Key, Lock)>, bool)>
+    where
+        F: Fn(&Key, &PessimisticLock) -> bool,
+    {
+        if let Some(txn_ext) = self.snapshot.ext().get_txn_ext() {
+            let begin_instant = Instant::now();
+            let res = match self.check_term_version_status(&txn_ext.pessimistic_locks.read()) {
+                Ok(_) => {
+                    // Scan locks within the specified range and filter by max_ts.
+                    Ok(txn_ext
+                        .pessimistic_locks
+                        .read()
+                        .scan_locks(start_key, end_key, filter, scan_limit))
+                }
+                Err(e) => Err(e),
+            };
+            let elapsed = begin_instant.saturating_elapsed();
+            SCAN_LOCK_READ_TIME_VEC
+                .resolve_lock
+                .observe(elapsed.as_secs_f64());
+
+            res
+        } else {
+            Ok((vec![], false))
+        }
+    }
+
+    fn load_in_memory_pessimistic_lock(&self, key: &Key) -> Result<Option<Lock>> {
+        if let Some(txn_ext) = self.snapshot.ext().get_txn_ext() {
+            let locks = txn_ext.pessimistic_locks.read();
+            self.check_term_version_status(&locks)?;
+            Ok(locks.get(key).map(|(lock, _)| {
+                // For write commands that are executed in serial, it should be impossible
+                // to read a deleted lock.
+                // For read commands in the scheduler, it should read the lock marked deleted
+                // because the lock is not actually deleted from the underlying storage.
+                lock.to_lock()
+            }))
+        } else {
+            Ok(None)
+        }
     }
 
     fn get_scan_mode(&self, allow_backward: bool) -> ScanMode {
@@ -418,11 +454,10 @@ impl<S: EngineSnapshot> MvccReader<S> {
                                 estimated_versions_to_last_change,
                             } if estimated_versions_to_last_change >= SEEK_BOUND => {
                                 let key_with_ts = key.clone().append_ts(commit_ts);
-                                let Some(value) = self
-                                        .snapshot
-                                        .get_cf(CF_WRITE, &key_with_ts)? else {
-                                        return Ok(None);
-                                    };
+                                let Some(value) = self.snapshot.get_cf(CF_WRITE, &key_with_ts)?
+                                else {
+                                    return Ok(None);
+                                };
                                 self.statistics.write.get += 1;
                                 let write = WriteRef::parse(&value)?.to_owned();
                                 assert!(
@@ -1156,7 +1191,7 @@ pub mod tests {
             (Bound::Unbounded, Bound::Excluded(8), vec![2u64, 4, 6, 8]),
         ];
 
-        for (_, &(min, max, ref res)) in tests.iter().enumerate() {
+        for &(min, max, ref res) in tests.iter() {
             let mut iopt = IterOptions::default();
             iopt.set_hint_min_ts(min);
             iopt.set_hint_max_ts(max);
@@ -2421,7 +2456,7 @@ pub mod tests {
         engine.commit(k, 1, 2);
 
         // Write enough LOCK recrods
-        for start_ts in (6..30).into_iter().step_by(2) {
+        for start_ts in (6..30).step_by(2) {
             engine.lock(k, start_ts, start_ts + 1);
         }
 
@@ -2430,7 +2465,7 @@ pub mod tests {
         engine.commit(k, 45, 46);
 
         // Write enough LOCK recrods
-        for start_ts in (50..80).into_iter().step_by(2) {
+        for start_ts in (50..80).step_by(2) {
             engine.lock(k, start_ts, start_ts + 1);
         }
 
@@ -2485,7 +2520,7 @@ pub mod tests {
         let k = b"k";
 
         // Write enough LOCK recrods
-        for start_ts in (6..30).into_iter().step_by(2) {
+        for start_ts in (6..30).step_by(2) {
             engine.lock(k, start_ts, start_ts + 1);
         }
 
@@ -2522,7 +2557,7 @@ pub mod tests {
 
         engine.put(k, 1, 2);
         // 10 locks were put
-        for start_ts in (6..30).into_iter().step_by(2) {
+        for start_ts in (6..30).step_by(2) {
             engine.lock(k, start_ts, start_ts + 1);
         }
 
@@ -2549,7 +2584,7 @@ pub mod tests {
         feature_gate.set_version("6.1.0").unwrap();
         set_tls_feature_gate(feature_gate);
         engine.delete(k, 51, 52);
-        for start_ts in (56..80).into_iter().step_by(2) {
+        for start_ts in (56..80).step_by(2) {
             engine.lock(k, start_ts, start_ts + 1);
         }
         let feature_gate = FeatureGate::default();
@@ -2581,7 +2616,7 @@ pub mod tests {
         let k = b"k";
         engine.put(k, 1, 2);
 
-        for start_ts in (6..30).into_iter().step_by(2) {
+        for start_ts in (6..30).step_by(2) {
             engine.lock(k, start_ts, start_ts + 1);
         }
         engine.rollback(k, 30);

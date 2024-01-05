@@ -7,12 +7,16 @@ use std::{
     time::Duration,
 };
 
+use engine_rocks::RocksEngine;
 use engine_traits::{Peekable, CF_DEFAULT, CF_WRITE};
+use grpcio::{ChannelBuilder, Environment};
 use keys::data_key;
 use kvproto::{
+    kvrpcpb::{Context, Op},
     metapb, pdpb,
     raft_cmdpb::*,
     raft_serverpb::{ExtraMessageType, RaftMessage},
+    tikvpb_grpc::TikvClient,
 };
 use pd_client::PdClient;
 use raft::eraftpb::MessageType;
@@ -235,6 +239,89 @@ fn test_auto_split_region() {
         .unwrap();
     assert!(resp.get_header().has_error());
     assert!(resp.get_header().get_error().has_key_not_in_region());
+}
+
+#[test_case(test_raftstore::new_server_cluster)]
+fn test_load_base_auto_split_with_follower_read() {
+    fail::cfg("mock_tick_interval", "return(0)").unwrap();
+    fail::cfg("mock_collect_tick_interval", "return(0)").unwrap();
+    fail::cfg("mock_load_base_split_check_interval", "return(100)").unwrap();
+    fail::cfg("mock_region_is_busy", "return(0)").unwrap();
+    fail::cfg("mock_unified_read_pool_is_busy", "return(0)").unwrap();
+    let count = 2;
+    let mut cluster = new_cluster(0, count);
+    cluster.cfg.split.qps_threshold = Some(10);
+    cluster.cfg.split.byte_threshold = Some(1);
+    cluster.cfg.split.sample_threshold = 10;
+    cluster.cfg.split.detect_times = 2;
+    cluster.cfg.split.split_balance_score = 0.5;
+    cluster.run();
+    let pd_client = Arc::clone(&cluster.pd_client);
+    let target = pd_client.get_region(b"").unwrap();
+    let leader = cluster.leader_of_region(target.get_id()).unwrap();
+    let follower = target
+        .get_peers()
+        .iter()
+        .find(|p| p.get_id() != leader.get_id())
+        .unwrap()
+        .clone();
+
+    let env: Arc<Environment> = Arc::new(Environment::new(1));
+    let new_client = |peer: metapb::Peer| {
+        let cli = TikvClient::new(
+            ChannelBuilder::new(env.clone())
+                .connect(&cluster.sim.rl().get_addr(peer.get_store_id())),
+        );
+        let epoch = cluster.get_region_epoch(target.get_id());
+        let mut ctx = Context::default();
+        ctx.set_region_id(target.get_id());
+        ctx.set_peer(peer);
+        ctx.set_region_epoch(epoch);
+        PeerClient { cli, ctx }
+    };
+    let mut region1 = pd_client.get_region(b"k1").unwrap();
+    let mut region2 = pd_client.get_region(b"k3").unwrap();
+    assert_eq!(region1.get_id(), region2.get_id());
+
+    let leader_client = new_client(leader);
+    let commit_ts1 = leader_client.must_kv_write(
+        &pd_client,
+        vec![new_mutation(Op::Put, &b"k1"[..], &b"v1"[..])],
+        b"k1".to_vec(),
+    );
+    let commit_ts2 = leader_client.must_kv_write(
+        &pd_client,
+        vec![new_mutation(Op::Put, &b"k2"[..], &b"v2"[..])],
+        b"k2".to_vec(),
+    );
+    let commit_ts3 = leader_client.must_kv_write(
+        &pd_client,
+        vec![new_mutation(Op::Put, &b"k3"[..], &b"v3"[..])],
+        b"k3".to_vec(),
+    );
+    let mut follower_client = new_client(follower);
+    follower_client.ctx.set_replica_read(true);
+    for i in 0..100 {
+        follower_client.kv_read(b"k1".to_vec(), commit_ts1 + i);
+        follower_client.kv_read(b"k2".to_vec(), commit_ts2 + i);
+        follower_client.kv_read(b"k3".to_vec(), commit_ts3 + i);
+    }
+    thread::sleep(Duration::from_millis(100));
+    follower_client.kv_read(b"k3".to_vec(), commit_ts3);
+    for _ in 1..250 {
+        region1 = pd_client.get_region(b"k0").unwrap();
+        region2 = pd_client.get_region(b"k4").unwrap();
+        if region1.get_id() != region2.get_id() {
+            break;
+        }
+        thread::sleep(Duration::from_millis(20))
+    }
+    assert_ne!(region1.get_id(), region2.get_id());
+    fail::remove("mock_tick_interval");
+    fail::remove("mock_region_is_busy");
+    fail::remove("mock_collect_tick_interval");
+    fail::remove("mock_unified_read_pool_is_busy");
+    fail::remove("mock_load_base_split_check_interval");
 }
 
 // A filter that disable commitment by heartbeat.
@@ -629,7 +716,10 @@ fn test_node_split_region_after_reboot_with_config_change() {
     }
 }
 
-fn test_split_epoch_not_match<T: Simulator>(cluster: &mut Cluster<T>, right_derive: bool) {
+fn test_split_epoch_not_match<T: Simulator<RocksEngine>>(
+    cluster: &mut Cluster<RocksEngine, T>,
+    right_derive: bool,
+) {
     cluster.cfg.raft_store.right_derive_when_split = right_derive;
     cluster.run();
     let pd_client = Arc::clone(&cluster.pd_client);
@@ -824,8 +914,8 @@ fn test_node_split_update_region_right_derive() {
     let new_leader = right
         .get_peers()
         .iter()
+        .find(|&p| p.get_id() != origin_leader.get_id())
         .cloned()
-        .find(|p| p.get_id() != origin_leader.get_id())
         .unwrap();
 
     // Make sure split is done in the new_leader.
