@@ -3650,9 +3650,9 @@ impl TikvConfig {
                         // return an error.
                         return Err(format!(
                             "check: titandb-data-dir-empty; err: \"{}\"; \
-                                hint: You have disabled titan when its data directory is not empty. \
-                                To properly shutdown titan, please enter fallback blob-run-mode and \
-                                wait till titandb files are all safely ingested.",
+                            hint: You have disabled titan when its data directory is not empty. \
+                            To properly shutdown titan, please enter fallback blob-run-mode and \
+                            wait till titandb files are all safely ingested.",
                             e
                         )
                         .into());
