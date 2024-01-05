@@ -287,7 +287,7 @@ fn test_serde_custom_tikv_config() {
         ..Default::default()
     };
     let titan_db_config = TitanDbConfig {
-        enabled: true,
+        enabled: Some(true),
         dirname: "bar".to_owned(),
         disable_gc: false,
         max_background_gc: 9,

@@ -84,7 +84,7 @@ pub struct PeerPessimisticLocks {
     ///   likely to be proposed successfully, while the leader will need at
     ///   least another round to receive the transfer leader message from the
     ///   transferee.
-    ///  
+    ///
     /// - Split region The lock with the deleted mark SHOULD be moved to new
     ///   regions on region split. Considering the following cases with
     ///   different orders: 1. Propose write -> propose split -> apply write ->

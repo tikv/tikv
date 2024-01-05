@@ -756,7 +756,7 @@ fn test_proposal_concurrent_with_conf_change_and_transfer_leader() {
 
     let handle = std::thread::spawn(move || {
         let mut mutations = vec![];
-        for key in vec![b"key3".to_vec(), b"key4".to_vec()] {
+        for key in [b"key3".to_vec(), b"key4".to_vec()] {
             let mut mutation = kvproto::kvrpcpb::Mutation::default();
             mutation.set_op(Op::Put);
             mutation.set_key(key);

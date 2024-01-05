@@ -772,7 +772,7 @@ pub fn configure_for_enable_titan<EK: KvEngineWithRocks, T: Simulator<EK>>(
     cluster: &mut Cluster<EK, T>,
     min_blob_size: ReadableSize,
 ) {
-    cluster.cfg.rocksdb.titan.enabled = true;
+    cluster.cfg.rocksdb.titan.enabled = Some(true);
     cluster.cfg.rocksdb.titan.purge_obsolete_files_period = ReadableDuration::secs(1);
     cluster.cfg.rocksdb.titan.max_background_gc = 10;
     cluster.cfg.rocksdb.defaultcf.titan.min_blob_size = min_blob_size;
@@ -783,7 +783,7 @@ pub fn configure_for_enable_titan<EK: KvEngineWithRocks, T: Simulator<EK>>(
 pub fn configure_for_disable_titan<EK: KvEngineWithRocks, T: Simulator<EK>>(
     cluster: &mut Cluster<EK, T>,
 ) {
-    cluster.cfg.rocksdb.titan.enabled = false;
+    cluster.cfg.rocksdb.titan.enabled = Some(false);
 }
 
 pub fn configure_for_encryption<EK: KvEngineWithRocks, T: Simulator<EK>>(
