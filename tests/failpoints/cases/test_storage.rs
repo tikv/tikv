@@ -1633,9 +1633,7 @@ fn test_before_propose_deadline() {
     assert!(
         matches!(
             res,
-            Err(StorageError(box StorageErrorInner::Kv(KvError(
-                box KvErrorInner::Request(_),
-            ))))
+            Err(StorageError(box StorageErrorInner::Kv(KvError(box KvErrorInner::Request(_)))))
         ),
         "actual: {:?}",
         res

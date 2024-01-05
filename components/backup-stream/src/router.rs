@@ -407,7 +407,7 @@ impl RouterInner {
         }
     }
 
-    pub fn udpate_config(&self, config: &BackupStreamConfig) {
+    pub fn update_config(&self, config: &BackupStreamConfig) {
         *self.max_flush_interval.write().unwrap() = config.max_flush_interval.0;
         self.temp_file_size_limit
             .store(config.file_size_limit.0, Ordering::SeqCst);
@@ -567,15 +567,6 @@ impl RouterInner {
         let task_info = self.get_task_info(&task).await?;
         task_info.on_events(events).await?;
         let file_size_limit = self.temp_file_size_limit.load(Ordering::SeqCst);
-        #[cfg(features = "failpoints")]
-        {
-            let delayed = (|| {
-                fail::fail_point!("router_on_event_delay_ms", |v| {
-                    v.and_then(|v| v.parse::<u64>().ok()).unwrap_or(0)
-                })
-            })();
-            tokio::time::sleep(Duration::from_millis(delayed)).await;
-        }
 
         // When this event make the size of temporary files exceeds the size limit, make
         // a flush. Note that we only flush if the size is less than the limit before
@@ -1023,7 +1014,9 @@ impl StreamTaskInfo {
             .last_flush_time
             .swap(Box::into_raw(Box::new(Instant::now())), Ordering::SeqCst);
         // manual gc last instant
-        unsafe { Box::from_raw(ptr) };
+        unsafe {
+            let _ = Box::from_raw(ptr);
+        };
     }
 
     pub fn should_flush(&self, flush_interval: &Duration) -> bool {
@@ -2488,7 +2481,7 @@ mod tests {
         match &cmds[0] {
             Task::ChangeConfig(cfg) => {
                 assert!(matches!(cfg, _new_cfg));
-                router.udpate_config(cfg);
+                router.update_config(cfg);
                 assert_eq!(
                     router.max_flush_interval.rl().to_owned(),
                     _new_cfg.max_flush_interval.0
