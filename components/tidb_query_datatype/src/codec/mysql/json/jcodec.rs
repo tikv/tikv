@@ -28,9 +28,9 @@ pub trait JsonEncoder: NumberEncoder {
     }
 
     // See `appendBinaryObject` in TiDB `types/json/binary.go`
-    fn write_json_obj_from_keys_values<'a>(
+    fn write_json_obj_from_keys_values(
         &mut self,
-        mut entries: Vec<(&[u8], JsonRef<'a>)>,
+        mut entries: Vec<(&[u8], JsonRef<'_>)>,
     ) -> Result<()> {
         entries.sort_by(|a, b| a.0.cmp(b.0));
         // object: element-count size key-entry* value-entry* key* value*
@@ -122,7 +122,7 @@ pub trait JsonEncoder: NumberEncoder {
     }
 
     // See `appendBinaryArray` in TiDB `types/json/binary.go`
-    fn write_json_ref_array<'a>(&mut self, data: &[JsonRef<'a>]) -> Result<()> {
+    fn write_json_ref_array(&mut self, data: &[JsonRef<'_>]) -> Result<()> {
         let element_count = data.len();
         let value_entries_len = VALUE_ENTRY_LEN * element_count;
         let values_len = data.iter().fold(0, |acc, v| acc + v.encoded_len());
@@ -167,7 +167,7 @@ pub trait JsonEncoder: NumberEncoder {
     }
 
     // See `appendBinaryValElem` in TiDB `types/json/binary.go`
-    fn write_value_entry<'a>(&mut self, value_offset: &mut u32, v: &JsonRef<'a>) -> Result<()> {
+    fn write_value_entry(&mut self, value_offset: &mut u32, v: &JsonRef<'_>) -> Result<()> {
         let tp = v.get_type();
         self.write_u8(tp as u8)?;
         match tp {

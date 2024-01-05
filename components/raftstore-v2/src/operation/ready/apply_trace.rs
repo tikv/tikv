@@ -287,7 +287,10 @@ impl ApplyTrace {
                 }
             })
             .max();
-        if let Some(m) = last_modified && m >= self.admin.flushed + 4096000 && m >= self.last_flush_trigger + 4096000 {
+        if let Some(m) = last_modified
+            && m >= self.admin.flushed + 4096000
+            && m >= self.last_flush_trigger + 4096000
+        {
             self.last_flush_trigger = m;
             true
         } else {
@@ -774,7 +777,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 flushed = true;
 
                 let flush_state = self.flush_state().clone();
-                let mut apply_trace = self.storage_mut().apply_trace_mut();
+                let apply_trace = self.storage_mut().apply_trace_mut();
 
                 let flushed_indexes = flush_state.as_ref().flushed_index();
                 for i in 0..flushed_indexes.len() {

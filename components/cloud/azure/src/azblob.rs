@@ -24,7 +24,7 @@ use futures_util::{
     stream::StreamExt,
     TryStreamExt,
 };
-pub use kvproto::brpb::{AzureBlobStorage as InputConfig, AzureCustomerKey, Bucket as InputBucket};
+pub use kvproto::brpb::{AzureBlobStorage as InputConfig, AzureCustomerKey};
 use oauth2::{ClientId, ClientSecret};
 use tikv_util::{
     debug,
