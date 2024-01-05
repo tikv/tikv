@@ -9,7 +9,7 @@ use std::{
 };
 
 use bytes::Bytes;
-use collections::HashMap;
+use collections::{HashMap, HashSet};
 use engine_rocks::{raw::SliceTransform, util::FixedSuffixSliceTransform};
 use engine_traits::{
     BatchSplit, CfNamesExt, DbVector, Error, IterOptions, Iterable, Iterator, Mutable, Peekable,
@@ -96,7 +96,11 @@ impl RegionMemoryEngine {
     }
 
     fn batch_split(&self, keys: &Vec<Vec<u8>>) -> Vec<RegionMemoryEngine> {
-        let skiplists: Vec<_> = self.data.iter().map(|s| s.split_skiplist(keys)).collect();
+        let skiplists: Vec<_> = self
+            .data
+            .iter()
+            .map(|s| s.new_headers_to_list(keys))
+            .collect();
         assert_eq!(skiplists.len(), 3);
         let mut memory_engines = vec![];
         for i in 0..keys.len() {
@@ -112,6 +116,10 @@ impl RegionMemoryEngine {
 
         memory_engines
     }
+
+    fn trim(&self, end_key: &[u8]) {
+        self.data.iter().map(|s| s.cut(end_key));
+    }
 }
 
 impl Debug for RegionMemoryEngine {
@@ -122,26 +130,26 @@ impl Debug for RegionMemoryEngine {
 
 // read_ts -> ref_count
 #[derive(Default, Clone)]
-struct SnapshotList(BTreeMap<u64, u64>);
+struct SnapshotList(BTreeMap<(u64, Uuid), u64>);
 
 impl SnapshotList {
-    fn new_snapshot(&mut self, read_ts: u64) {
+    fn new_snapshot(&mut self, read_ts: u64, uuid: Uuid) {
         // snapshot with this ts may be granted before
-        let count = self.0.get(&read_ts).unwrap_or(&0) + 1;
-        self.0.insert(read_ts, count);
+        let count = self.0.get(&(read_ts, uuid)).unwrap_or(&0) + 1;
+        self.0.insert((read_ts, uuid), count);
     }
 
-    fn remove_snapshot(&mut self, read_ts: u64, snapshot_on_split: bool) {
-        let Some(count) = self.0.get_mut(&read_ts) else {
-            assert!(snapshot_on_split);
-            return;
+    fn remove_snapshot(&mut self, read_ts: u64, uuid: Uuid) -> bool {
+        let Some(count) = self.0.get_mut(&(read_ts, uuid)) else {
+            return false;
         };
         assert!(*count >= 1);
         if *count == 1 {
-            self.0.remove(&read_ts).unwrap();
+            self.0.remove(&(read_ts, uuid)).unwrap();
         } else {
             *count -= 1;
         }
+        return true;
     }
 
     fn is_empty(&self) -> bool {
@@ -161,6 +169,8 @@ pub struct RegionMemoryMeta {
     // Note: different region can have different safe_ts.
     safe_ts: u64,
     evicted: bool,
+    juniority: u64,
+    uuid: Uuid,
 }
 
 impl RegionMemoryMeta {
@@ -183,8 +193,82 @@ impl RegionMemoryMeta {
 // dropping elements. After the snapshots are all freed, we free the clones.
 pub struct SnapshotRecordsOnSplit {
     uuid: Uuid,
+    juniority: u64,
     snapshots: SnapshotList,
-    region_memory_engines: Vec<RegionMemoryEngine>,
+    child_uuids: Vec<(u64, Uuid)>,
+    region_memory_engines: Vec<(u64, RegionMemoryEngine)>,
+    split_keys: Vec<Vec<u8>>,
+}
+
+#[derive(Default)]
+pub struct RegionsSnapshotRecordsOnSplit(HashMap<u64, HashMap<Uuid, SnapshotRecordsOnSplit>>);
+
+impl RegionsSnapshotRecordsOnSplit {
+    fn drop_recoded_snapshot(&mut self, snapshot: &RegionCacheSnapshot) {
+        let child_uuids = {
+            let snapshot_records = self.0.get_mut(&snapshot.region_id).unwrap();
+            let record = snapshot_records.get_mut(&snapshot.uuid).unwrap();
+            assert!(
+                record
+                    .snapshots
+                    .remove_snapshot(snapshot.snapshot_ts, snapshot.uuid)
+            );
+
+            if !record.snapshots.is_empty() {
+                return;
+            }
+
+            // all recorded snapshots have been dropped, so we can do cut
+            assert_eq!(Arc::strong_count(&snapshot.region_memory_engine.data[0]), 1);
+            snapshot.region_memory_engine.trim(&record.split_keys[0]);
+            for i in 0..record.region_memory_engines.len() - 1 {
+                record.region_memory_engines[i]
+                    .1
+                    .trim(&record.split_keys[i + 1]);
+            }
+
+            if record.juniority == 0 {
+                record.child_uuids.to_owned()
+            } else {
+                return;
+            }
+        };
+
+        for (id, uuid) in child_uuids {
+            self.may_clean_up_child(id, uuid);
+        }
+
+        self.0
+            .get_mut(&snapshot.region_id)
+            .unwrap()
+            .remove(&snapshot.uuid)
+            .unwrap();
+    }
+
+    fn may_clean_up_child(&mut self, region_id: u64, child_uuid: Uuid) {
+        let Some(snapshot_records) = self.0.get_mut(&region_id) else { return };
+        let Some(record) = snapshot_records.get_mut(&child_uuid) else { return };
+        assert_eq!(record.juniority, 1);
+        record.juniority -= 1;
+
+        let child_uuids = {
+            if record.snapshots.is_empty() {
+                record.child_uuids.to_owned()
+            } else {
+                return;
+            }
+        };
+
+        for (id, uuid) in child_uuids {
+            self.may_clean_up_child(id, uuid);
+        }
+
+        self.0
+            .get_mut(&region_id)
+            .unwrap()
+            .remove(&child_uuid)
+            .unwrap();
+    }
 }
 
 #[derive(Default)]
@@ -195,7 +279,7 @@ pub struct RegionCacheMemoryEngineCore {
     // freeing the elements that the snapshots may read.
     // There's possible that before the previous recorded snapshots are freed, a new batch split
     // command is executed. So we use a uuid to distinguish them.
-    snapshot_records_on_split: HashMap<u64, HashMap<Uuid, SnapshotRecordsOnSplit>>,
+    snapshot_records_on_split: RegionsSnapshotRecordsOnSplit,
 }
 
 impl RegionCacheMemoryEngineCore {
@@ -286,6 +370,7 @@ impl RegionCacheEngine for RegionCacheMemoryEngine {
 #[derive(Debug)]
 pub struct MemorySplitResult {
     split_memory_engines: Vec<(u64, RegionMemoryEngine)>,
+    split_keys: Vec<Vec<u8>>,
 }
 
 impl BatchSplit for RegionCacheMemoryEngine {
@@ -317,44 +402,58 @@ impl BatchSplit for RegionCacheMemoryEngine {
             .collect();
         MemorySplitResult {
             split_memory_engines,
+            split_keys: keys,
         }
     }
 
     fn on_batch_split(&self, region_id: u64, split_result: Self::SplitResult) {
         let mut core = self.core.lock().unwrap();
-        let meta = core.region_metas.get(&region_id).unwrap();
+        let mut meta = core.region_metas.get_mut(&region_id).unwrap();
         let record_snapshots = meta.snapshot_list.clone();
-        let uuid = Uuid::new_v4();
+        let parent_juniority = meta.juniority;
+        let parent_uuid = meta.uuid;
+        meta.juniority += 1;
 
+        let mut old_engine = None;
+        let mut child_uuids = vec![];
         for (id, e) in &split_result.split_memory_engines {
-            if *id != region_id {
-                assert!(core.engine.get(id).is_none());
-                assert!(core.region_metas.get(id).is_none());
-                core.engine.insert(*id, e.clone());
-                let mut meta = RegionMemoryMeta::default();
-                meta.can_read = true;
-                core.region_metas.insert(*id, meta);
-            } else {
-                core.engine.insert(*id, e.clone());
+            let uuid = Uuid::new_v4();
+            assert!(core.engine.get(id).is_none());
+            assert!(core.region_metas.get(id).is_none());
+            core.engine.insert(*id, e.clone());
+            let mut meta = RegionMemoryMeta::default();
+            meta.can_read = true;
+            meta.juniority = parent_juniority + 1;
+            meta.uuid = uuid;
+            if let Some(e) = core.region_metas.insert(*id, meta) {
+                assert!(old_engine.is_none());
+                old_engine = Some(e);
             }
+            child_uuids.push((*id, uuid));
         }
 
-        if record_snapshots.is_empty() {
+        if record_snapshots.is_empty() && parent_juniority == 0 {
+            for (id, _) in &split_result.split_memory_engines {
+                core.region_metas.get_mut(id).unwrap().juniority -= 1;
+            }
             return;
         }
 
         let records = SnapshotRecordsOnSplit {
-            uuid,
+            uuid: parent_uuid,
+            child_uuids,
+            juniority: parent_juniority,
             snapshots: record_snapshots,
-            region_memory_engines: split_result
-                .split_memory_engines
-                .into_iter()
-                .map(|(_, e)| e)
-                .collect(),
+            split_keys: split_result.split_keys,
+            region_memory_engines: split_result.split_memory_engines,
         };
 
-        let region_records = core.snapshot_records_on_split.entry(region_id).or_default();
-        region_records.insert(uuid, records);
+        let region_records = core
+            .snapshot_records_on_split
+            .0
+            .entry(region_id)
+            .or_default();
+        region_records.insert(parent_uuid, records);
     }
 }
 
@@ -736,6 +835,7 @@ impl Mutable for RegionCacheWriteBatch {
 pub struct RegionCacheSnapshot {
     region_id: u64,
     snapshot_ts: u64,
+    uuid: Uuid,
     // Sequence number is shared between RegionCacheEngine and disk KvEnigne to
     // provide atomic write
     sequence_number: u64,
@@ -761,10 +861,13 @@ impl RegionCacheSnapshot {
             return None;
         }
 
-        region_meta.snapshot_list.new_snapshot(read_ts);
+        region_meta
+            .snapshot_list
+            .new_snapshot(read_ts, region_meta.uuid);
 
         Some(RegionCacheSnapshot {
             region_id,
+            uuid: region_meta.uuid,
             snapshot_ts: read_ts,
             sequence_number: seq_num,
             region_memory_engine: core.engine.get(&region_id).unwrap().clone(),
@@ -777,25 +880,18 @@ impl Drop for RegionCacheSnapshot {
     fn drop(&mut self) {
         let mut core = self.engine.core.lock().unwrap();
         let meta = core.region_metas.get_mut(&self.region_id).unwrap();
-        meta.snapshot_list.remove_snapshot(self.snapshot_ts, false);
 
-        if let Some(snapshot_records) = core.snapshot_records_on_split.get_mut(&self.region_id) {
-            let freeable: Vec<_> = snapshot_records
-                .iter_mut()
-                .filter_map(|(k, v)| {
-                    v.snapshots.remove_snapshot(self.snapshot_ts, true);
-                    if v.snapshots.is_empty() {
-                        Some(*k)
-                    } else {
-                        None
-                    }
-                })
-                .collect();
-
-            for uuid in freeable {
-                snapshot_records.remove(&uuid);
-            }
+        // if uuid is not equal, it means the current region is a derived region in the
+        // split and the snapshot is granted before the split
+        if self.uuid == meta.uuid {
+            assert!(
+                meta.snapshot_list
+                    .remove_snapshot(self.snapshot_ts, self.uuid)
+            );
+            return;
         }
+
+        core.snapshot_records_on_split.drop_recoded_snapshot(&self);
 
         let meta = core.region_metas.get(&self.region_id).unwrap();
         let eviction = if meta.snapshot_list.is_empty() && meta.evicted {
@@ -972,22 +1068,23 @@ mod tests {
         }
         assert!(engine.snapshot(1, 5, u64::MAX).is_none());
         let s2 = engine.snapshot(1, 10, u64::MAX).unwrap();
+        let uuid = s2.uuid;
 
-        verify_snapshot_count(5, 1);
-        verify_snapshot_count(10, 1);
+        verify_snapshot_count((5, uuid), 1);
+        verify_snapshot_count((10, uuid), 1);
         let s3 = engine.snapshot(1, 10, u64::MAX).unwrap();
-        verify_snapshot_count(10, 2);
+        verify_snapshot_count((10, uuid), 2);
 
         drop(s1);
-        verify_snapshot_count(5, 0);
+        verify_snapshot_count((5, uuid), 0);
         drop(s2);
-        verify_snapshot_count(10, 1);
+        verify_snapshot_count((10, uuid), 1);
         let s4 = engine.snapshot(1, 10, u64::MAX).unwrap();
-        verify_snapshot_count(10, 2);
+        verify_snapshot_count((10, uuid), 2);
         drop(s4);
-        verify_snapshot_count(10, 1);
+        verify_snapshot_count((10, uuid), 1);
         drop(s3);
-        verify_snapshot_count(10, 0);
+        verify_snapshot_count((10, uuid), 0);
     }
 
     fn construct_user_key(i: u64) -> Vec<u8> {
