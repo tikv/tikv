@@ -6669,6 +6669,7 @@ mod tests {
         default_cfg.rocksdb.lockcf.write_buffer_size = Some(ReadableSize::mb(32));
         default_cfg.raftdb.defaultcf.target_file_size_base = Some(ReadableSize::mb(8));
         default_cfg.raft_store.region_compact_check_step = Some(100);
+        default_cfg.rocksdb.titan.enabled = Some(true);
 
         // Other special cases.
         cfg.pd.retry_max_count = default_cfg.pd.retry_max_count; // Both -1 and isize::MAX are the same.
