@@ -291,7 +291,7 @@ impl SyncerCore {
         }
     }
 
-    fn aborted(&self) -> bool {
+    fn is_aborted(&self) -> bool {
         self.feedback.is_none()
     }
 
@@ -349,12 +349,12 @@ impl SnapshotBrWaitApplySyncer {
 
     pub fn abort(self, reason: AbortReason) {
         let mut core = self.0.lock().unwrap();
-        warn!("aborting wait apply."; "reason" => ?reason, "id" => %core.report_id, "already_aborted" => %core.aborted());
+        warn!("aborting wait apply."; "reason" => ?reason, "id" => %core.report_id, "already_aborted" => %core.is_aborted());
         match reason {
             AbortReason::EpochNotMatch(_) => {
                 metrics::SNAP_BR_WAIT_APPLY_EVENT.epoch_not_match.inc()
             }
-            AbortReason::TermMismatch { .. } => {
+            AbortReason::StaleCommand { .. } => {
                 metrics::SNAP_BR_WAIT_APPLY_EVENT.term_not_match.inc()
             }
             AbortReason::Duplicated => metrics::SNAP_BR_WAIT_APPLY_EVENT.duplicated.inc(),
@@ -366,9 +366,9 @@ impl SnapshotBrWaitApplySyncer {
 #[derive(Debug, PartialEq)]
 pub enum AbortReason {
     EpochNotMatch(kvproto::errorpb::EpochNotMatch),
-    TermMismatch {
-        expected: u64,
-        current: u64,
+    StaleCommand {
+        expected_term: u64,
+        current_term: u64,
         region_id: u64,
     },
     Duplicated,

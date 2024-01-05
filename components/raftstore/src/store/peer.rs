@@ -4728,7 +4728,11 @@ where
         }
 
         if let Err(err) = ctx.coprocessor_host.pre_propose(self.region(), &mut req) {
-            warn!("Coprocessor rejected proposing conf change."; "err" => ?err, "region_id" => self.region_id, "peer_id" => self.peer.get_id());
+            warn!("Coprocessor rejected proposing conf change.";
+                "err" => ?err,
+                "region_id" => self.region_id,
+                "peer_id" => self.peer.get_id(),
+            );
             return Err(box_err!(
                 "{} rejected by coprocessor(reason = {})",
                 self.tag,
@@ -5192,10 +5196,10 @@ where
                         valid_for_term,
                         ..
                     }) => {
-                        syncer.abort(AbortReason::TermMismatch {
+                        syncer.abort(AbortReason::StaleCommand {
                             region_id: self.region().get_id(),
-                            expected: valid_for_term.unwrap_or_default(),
-                            current: self.raft_group.raft.term,
+                            expected_term: valid_for_term.unwrap_or_default(),
+                            current_term: self.raft_group.raft.term,
                         });
                     }
                     _ => unreachable!(),

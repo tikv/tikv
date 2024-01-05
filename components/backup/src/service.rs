@@ -48,32 +48,35 @@ where
         _req: CheckAdminRequest,
         mut sink: ServerStreamingSink<CheckAdminResponse>,
     ) {
-        let (tx, rx) = mpsc::unbounded();
-        if let Err(err) = self.snap_br_env.handle.broadcast_check_pending_admin(tx) {
-            ctx.spawn(
-                sink.fail(RpcStatus::with_message(
-                    RpcStatusCode::INTERNAL,
-                    format!("{err}"),
-                ))
-                .map(|_| ()),
-            );
-            return;
-        }
-        let send_task = async move {
+        let handle = self.snap_br_env.handle.clone();
+        let tokio_handle = self.snap_br_env.get_async_runtime().clone();
+        let peer = ctx.peer();
+        let task = async move {
+            let (tx, rx) = mpsc::unbounded();
+            if let Err(err) = handle.broadcast_check_pending_admin(tx) {
+                return sink
+                    .fail(RpcStatus::with_message(
+                        RpcStatusCode::INTERNAL,
+                        format!("{err}"),
+                    ))
+                    .await;
+            }
             sink.send_all(&mut rx.map(|resp| Ok((resp, WriteFlags::default()))))
                 .await?;
             sink.close().await?;
             Ok(())
-        }
-        .map(|res: Result<()>| match res {
-            Ok(_) => {
-                info!("check admin closed");
-            }
-            Err(e) => {
-                error!("check admin canceled"; "error" => ?e);
+        };
+
+        tokio_handle.spawn(async move {
+            match task.await {
+                Err(err) => {
+                    warn!("check admin canceled"; "peer" => %peer, "err" => %err);
+                }
+                Ok(()) => {
+                    info!("check admin closed"; "peer" => %peer);
+                }
             }
         });
-        ctx.spawn(send_task);
     }
 
     fn backup(
@@ -147,8 +150,11 @@ where
         let l = StreamHandleLoop::new(self.snap_br_env.clone());
         // Note: should we disconnect here once there are more than one stream...?
         // Generally once two streams enter here, one may exit
-        info!("A new prepare snapshot backup stream created!"; "peer" => %ctx.peer(), "stream_count" => %self.snap_br_env.active_stream());
-        self.snap_br_env.handle().spawn(async move {
+        info!("A new prepare snapshot backup stream created!";
+            "peer" => %ctx.peer(),
+            "stream_count" => %self.snap_br_env.active_stream(),
+        );
+        self.snap_br_env.get_async_runtime().spawn(async move {
             if let Err(err) = l.run(stream, sink.into()).await {
                 warn!("stream closed; perhaps a problem cannot be retried happens"; "reason" => ?err);
             }

@@ -22,7 +22,7 @@ use kvproto::{
         PrepareSnapshotBackupEventType as PEvnT, PrepareSnapshotBackupRequest as PReq,
         PrepareSnapshotBackupRequestType as PReqT, PrepareSnapshotBackupResponse as PResp,
     },
-    errorpb::{self, NotLeader},
+    errorpb::{self, StaleCommand},
     metapb::Region,
 };
 use raftstore::store::{
@@ -104,11 +104,9 @@ impl From<Error> for HandleErr {
                 err.set_message(format!("wait apply has been aborted, perhaps epoch not match or leadership changed, note = {:?}", reason));
                 match reason {
                     Some(AbortReason::EpochNotMatch(enm)) => err.set_epoch_not_match(enm),
-                    Some(AbortReason::TermMismatch { region_id, .. }) => err.set_not_leader({
-                        let mut nl = NotLeader::new();
-                        nl.set_region_id(region_id);
-                        nl
-                    }),
+                    Some(AbortReason::StaleCommand { .. }) => {
+                        err.set_stale_command(StaleCommand::new())
+                    }
                     _ => {}
                 }
                 err
@@ -127,6 +125,8 @@ pub struct Env<SR: SnapshotBrHandle> {
     pub(crate) handle: SR,
     rejector: Arc<PrepareDiskSnapObserver>,
     active_stream: Arc<AtomicU64>,
+    // Left: a shared tokio runtime.
+    // Right: a hosted runtime(usually for test cases).
     runtime: Either<Handle, Arc<Runtime>>,
 }
 
@@ -152,7 +152,7 @@ impl<SR: SnapshotBrHandle> Env<SR> {
         self.active_stream.load(Ordering::SeqCst)
     }
 
-    pub fn handle(&self) -> &Handle {
+    pub fn get_async_runtime(&self) -> &Handle {
         match &self.runtime {
             Either::Left(h) => h,
             Either::Right(rt) => rt.handle(),

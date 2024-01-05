@@ -9,7 +9,7 @@
 // make things worse), but will break the case: this case itself wants to prove
 // that the `CommitMerge` won't be proposed.
 #[test]
-#[cfg(FALSE)]
+#[ignore = "See the comment of `test_merge`"]
 fn test_merge() {
     use std::time::Duration;
 

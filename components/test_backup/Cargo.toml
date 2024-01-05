@@ -4,8 +4,6 @@ version = "0.0.1"
 edition = "2021"
 publish = false
 
-[features]
-
 [dependencies]
 api_version = { workspace = true }
 backup = { workspace = true }
