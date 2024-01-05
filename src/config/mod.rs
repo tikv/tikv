@@ -1197,7 +1197,7 @@ impl RaftCfConfig {
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct TitanDbConfig {
-    pub enabled: bool,
+    pub enabled: Option<bool>,
     pub dirname: String,
     pub disable_gc: bool,
     pub max_background_gc: i32,
@@ -1208,7 +1208,7 @@ pub struct TitanDbConfig {
 impl Default for TitanDbConfig {
     fn default() -> Self {
         Self {
-            enabled: false, // Enabled only for newly created cluster
+            enabled: None, // Enabled only for newly created cluster
             dirname: "".to_owned(),
             disable_gc: false,
             max_background_gc: 1,
@@ -1380,7 +1380,12 @@ impl Default for DbConfig {
 }
 
 impl DbConfig {
-    pub fn optimize_for(&mut self, engine: EngineType, kv_data_exists: bool) {
+    pub fn optimize_for(
+        &mut self,
+        engine: EngineType,
+        kv_data_exists: bool,
+        is_titan_dir_empty: bool,
+    ) {
         match engine {
             EngineType::RaftKv => {
                 self.allow_concurrent_memtable_write.get_or_insert(true);
@@ -1392,8 +1397,14 @@ impl DbConfig {
                 if self.lockcf.write_buffer_size.is_none() {
                     self.lockcf.write_buffer_size = Some(ReadableSize::mb(32));
                 }
-                if !kv_data_exists && !self.titan.enabled {
-                    self.titan.enabled = true;
+                if self.titan.enabled.is_none() {
+                    // If the user doesn't specify titan.enabled, we enable it by default for newly
+                    // created clusters.
+                    if kv_data_exists && is_titan_dir_empty {
+                        self.titan.enabled = Some(false);
+                    } else {
+                        self.titan.enabled = Some(true);
+                    }
                 }
             }
             EngineType::RaftKv2 => {
@@ -1533,7 +1544,7 @@ impl DbConfig {
             opts.set_info_log(RocksdbLogger::default());
         }
         opts.set_info_log_level(self.info_log_level.into());
-        if self.titan.enabled {
+        if let Some(true) = self.titan.enabled {
             opts.set_titandb_options(&self.titan.build_opts());
         }
         opts.set_env(shared.env.clone());
@@ -1647,7 +1658,7 @@ impl DbConfig {
             return Err("raftcf does not support cf based write buffer manager".into());
         }
         if self.enable_unordered_write {
-            if self.titan.enabled {
+            if let Some(true) = self.titan.enabled {
                 return Err("RocksDB.unordered_write does not support Titan".into());
             }
             self.enable_pipelined_write = false;
@@ -1922,7 +1933,7 @@ impl RaftDbConfig {
         opts.set_bytes_per_sync(self.bytes_per_sync.0);
         opts.set_wal_bytes_per_sync(self.wal_bytes_per_sync.0);
         // TODO maybe create a new env for raft engine
-        if self.titan.enabled {
+        if let Some(true) = self.titan.enabled {
             opts.set_titandb_options(&self.titan.build_opts());
         }
         opts.set_env(env);
@@ -1936,7 +1947,7 @@ impl RaftDbConfig {
     fn validate(&mut self) -> Result<(), Box<dyn Error>> {
         self.defaultcf.validate()?;
         if self.enable_unordered_write {
-            if self.titan.enabled {
+            if let Some(true) = self.titan.enabled {
                 return Err("raftdb: unordered_write is not compatible with Titan".into());
             }
             if self.enable_pipelined_write {
@@ -3595,6 +3606,8 @@ impl TikvConfig {
         if self.raft_engine.config.dir == self.raft_store.raftdb_path {
             return Err("raft_engine.config.dir can't be same as raft_store.raftdb_path".into());
         }
+        // Newly created dbs will be optimized with certain options. e.g. Titan.
+        let mut is_titan_dir_empty = true;
         let kv_data_exists = match self.storage.engine {
             EngineType::RaftKv => {
                 let kv_db_path = self.infer_kv_engine_path(None)?;
@@ -3623,21 +3636,23 @@ impl TikvConfig {
                     }
                 }
                 // Check blob file dir is empty when titan is disabled
-                if !self.rocksdb.titan.enabled {
-                    let titandb_path = if self.rocksdb.titan.dirname.is_empty() {
-                        Path::new(&kv_db_path).join("titandb")
-                    } else {
-                        Path::new(&self.rocksdb.titan.dirname).to_path_buf()
-                    };
-                    if let Err(e) = tikv_util::config::check_data_dir_empty(
-                        titandb_path.to_str().unwrap(),
-                        "blob",
-                    ) {
+                let titandb_path = if self.rocksdb.titan.dirname.is_empty() {
+                    Path::new(&kv_db_path).join("titandb")
+                } else {
+                    Path::new(&self.rocksdb.titan.dirname).to_path_buf()
+                };
+                if let Err(e) =
+                    tikv_util::config::check_data_dir_empty(titandb_path.to_str().unwrap(), "blob")
+                {
+                    is_titan_dir_empty = false;
+                    if let Some(false) = self.rocksdb.titan.enabled {
+                        // If Titan is disabled explicitly but Titan's data directory is not empty,
+                        // return an error.
                         return Err(format!(
                             "check: titandb-data-dir-empty; err: \"{}\"; \
-                            hint: You have disabled titan when its data directory is not empty. \
-                            To properly shutdown titan, please enter fallback blob-run-mode and \
-                            wait till titandb files are all safely ingested.",
+                                hint: You have disabled titan when its data directory is not empty. \
+                                To properly shutdown titan, please enter fallback blob-run-mode and \
+                                wait till titandb files are all safely ingested.",
                             e
                         )
                         .into());
@@ -3665,7 +3680,7 @@ impl TikvConfig {
 
         // Optimize.
         self.rocksdb
-            .optimize_for(self.storage.engine, kv_data_exists);
+            .optimize_for(self.storage.engine, kv_data_exists, is_titan_dir_empty);
         self.coprocessor
             .optimize_for(self.storage.engine == EngineType::RaftKv2);
         self.split
@@ -3709,7 +3724,7 @@ impl TikvConfig {
                     self.raft_engine.config.purge_threshold,
                 );
             }
-            if self.rocksdb.titan.enabled {
+            if let Some(true) = self.rocksdb.titan.enabled {
                 return Err("partitioned-raft-kv doesn't support titan.".into());
             }
             if self.raft_store.enable_v2_compatible_learner {
@@ -5801,7 +5816,7 @@ mod tests {
     #[test]
     fn test_update_titan_blob_run_mode_config() {
         let mut cfg = TikvConfig::default();
-        cfg.rocksdb.titan.enabled = true;
+        cfg.rocksdb.titan.enabled = Some(true);
         let (_, cfg_controller, ..) = new_engines::<ApiV1>(cfg);
         for run_mode in [
             "kFallback",
@@ -5843,25 +5858,34 @@ mod tests {
         let (storage, ..) = new_engines::<ApiV1>(cfg);
         drop(storage);
         let mut cfg = TikvConfig::from_file(&dir.path().join(LAST_CONFIG_FILE), None).unwrap();
-        assert_eq!(cfg.rocksdb.titan.enabled, false);
+        // titan.enabled is not specified.
+        assert_eq!(cfg.rocksdb.titan.enabled, None);
         cfg.validate().unwrap();
-        assert_eq!(cfg.rocksdb.titan.enabled, false);
+        // Config optimized with titan.enabled = false, since it is an existing
+        // instance.
+        assert_eq!(cfg.rocksdb.titan.enabled, Some(false));
         let (_storage, cfg_controller, ..) = new_engines::<ApiV1>(cfg);
-        assert_eq!(cfg_controller.get_current().rocksdb.titan.enabled, false);
+        assert_eq!(
+            cfg_controller.get_current().rocksdb.titan.enabled,
+            Some(false)
+        );
         drop(dir);
 
         // Auto enable titan for new instances
         let (mut cfg, dir) = TikvConfig::with_tmp().unwrap();
-        assert_eq!(cfg.rocksdb.titan.enabled, false);
+        assert_eq!(cfg.rocksdb.titan.enabled, None);
         cfg.validate().unwrap();
         persist_config(&cfg).unwrap();
-        assert_eq!(cfg.rocksdb.titan.enabled, true);
+        assert_eq!(cfg.rocksdb.titan.enabled, Some(true));
         let (storage, cfg_controller, ..) = new_engines::<ApiV1>(cfg);
-        assert_eq!(cfg_controller.get_current().rocksdb.titan.enabled, true);
+        assert_eq!(
+            cfg_controller.get_current().rocksdb.titan.enabled,
+            Some(true)
+        );
         drop(storage);
         // The config is persisted
         let cfg = TikvConfig::from_file(&dir.path().join(LAST_CONFIG_FILE), None).unwrap();
-        assert_eq!(cfg.rocksdb.titan.enabled, true);
+        assert_eq!(cfg.rocksdb.titan.enabled, Some(true));
         drop(dir);
     }
 

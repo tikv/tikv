@@ -4428,7 +4428,7 @@ mod tests {
     fn test_scan_with_key_only() {
         let db_config = crate::config::DbConfig {
             titan: TitanDbConfig {
-                enabled: true,
+                enabled: Some(true),
                 ..Default::default()
             },
             ..Default::default()

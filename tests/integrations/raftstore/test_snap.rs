@@ -236,7 +236,7 @@ fn test_concurrent_snap() {
     // Test that the handling of snapshot is correct when there are multiple
     // snapshots which have overlapped region ranges arrive at the same
     // raftstore.
-    cluster.cfg.rocksdb.titan.enabled = true;
+    cluster.cfg.rocksdb.titan.enabled = Some(true);
     // Disable raft log gc in this test case.
     cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::secs(60);
     // For raftstore v2, after split, follower delays first messages (see

@@ -448,7 +448,7 @@ const RESERVED_OPEN_FDS: u64 = 1000;
 pub fn check_system_config(config: &TikvConfig) {
     info!("beginning system configuration check");
     let mut rocksdb_max_open_files = config.rocksdb.max_open_files;
-    if config.rocksdb.titan.enabled {
+    if let Some(true) = config.rocksdb.titan.enabled {
         // Titan engine maintains yet another pool of blob files and uses the same max
         // number of open files setup as rocksdb does. So we double the max required
         // open files here
