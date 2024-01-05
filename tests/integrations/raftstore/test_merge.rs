@@ -21,7 +21,7 @@ use txn_types::{Key, LastChange, PessimisticLock};
 #[test_case(test_raftstore::new_node_cluster)]
 fn test_node_base_merge() {
     let mut cluster = new_cluster(0, 3);
-    cluster.cfg.rocksdb.titan.enabled = true;
+    cluster.cfg.rocksdb.titan.enabled = Some(true);
     configure_for_merge(&mut cluster.cfg);
 
     cluster.run();
@@ -106,7 +106,7 @@ fn test_node_base_merge() {
 fn test_node_base_merge_v2() {
     let mut cluster = new_cluster(0, 3);
     // TODO: v2 doesn't support titan yet.
-    // cluster.cfg.rocksdb.titan.enabled = true;
+    // cluster.cfg.rocksdb.titan.enabled = Some(true);
     configure_for_merge(&mut cluster.cfg);
 
     cluster.run();
