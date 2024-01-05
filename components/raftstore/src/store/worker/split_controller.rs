@@ -178,7 +178,7 @@ impl Samples {
     // evaluate the samples according to the given key range, it will update the
     // sample's left, right and contained counter.
     fn evaluate(&mut self, key_range: &KeyRange) {
-        for mut sample in self.0.iter_mut() {
+        for sample in self.0.iter_mut() {
             let order_start = if key_range.start_key.is_empty() {
                 Ordering::Greater
             } else {
@@ -285,7 +285,7 @@ impl Recorder {
     }
 
     fn update_peer(&mut self, peer: &Peer) {
-        if self.peer != *peer {
+        if self.peer != *peer && peer.get_id() != 0 {
             self.peer = peer.clone();
         }
     }
@@ -452,7 +452,9 @@ impl ReadStats {
         region_info.flow.add(data);
         // the bucket of the follower only have the version info and not needs to be
         // recorded the hot bucket.
-        if let Some(buckets) = buckets && !buckets.sizes.is_empty() {
+        if let Some(buckets) = buckets
+            && !buckets.sizes.is_empty()
+        {
             let bucket_stat = self
                 .region_buckets
                 .entry(region_id)
@@ -496,10 +498,7 @@ pub struct WriteStats {
 
 impl WriteStats {
     pub fn add_query_num(&mut self, region_id: u64, kind: QueryKind) {
-        let query_stats = self
-            .region_infos
-            .entry(region_id)
-            .or_insert_with(QueryStats::default);
+        let query_stats = self.region_infos.entry(region_id).or_default();
         query_stats.add_query_num(kind, 1);
     }
 
@@ -845,6 +844,7 @@ impl AutoSplitController {
                         "qps" => qps,
                         "byte" => byte,
                         "cpu_usage" => cpu_usage,
+                        "peer" => ?recorder.peer,
                     );
                     self.recorders.remove(&region_id);
                 } else if is_unified_read_pool_busy && is_region_busy {
@@ -988,8 +988,8 @@ mod tests {
 
     #[test]
     fn test_prefix_sum() {
-        let v = vec![1, 2, 3, 4, 5, 6, 7, 8, 9];
-        let expect = vec![1, 3, 6, 10, 15, 21, 28, 36, 45];
+        let v = [1, 2, 3, 4, 5, 6, 7, 8, 9];
+        let expect = [1, 3, 6, 10, 15, 21, 28, 36, 45];
         let pre = prefix_sum(v.iter(), |x| *x);
         for i in 0..v.len() {
             assert_eq!(expect[i], pre[i]);
