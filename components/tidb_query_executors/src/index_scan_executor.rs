@@ -611,8 +611,8 @@ impl IndexScanExecutorImpl {
     }
 
     #[inline]
-    fn build_operations<'a, 'b>(
-        &'b self,
+    fn build_operations<'a>(
+        &self,
         mut key_payload: &'a [u8],
         index_value: &'a [u8],
     ) -> Result<(DecodeHandleOp<'a>, DecodePartitionIdOp<'a>, RestoreData<'a>)> {

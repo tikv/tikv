@@ -413,7 +413,7 @@ impl BackupRange {
 
             let entries = batch.drain();
             if writer.need_split_keys() {
-                let this_end_key = entries.as_slice().get(0).map_or_else(
+                let this_end_key = entries.as_slice().first().map_or_else(
                     || Err(Error::Other(box_err!("get entry error: nothing in batch"))),
                     |x| {
                         x.to_key().map(|k| k.into_raw().unwrap()).map_err(|e| {
@@ -2492,8 +2492,8 @@ pub mod tests {
     fn test_backup_file_name() {
         let region = metapb::Region::default();
         let store_id = 1;
-        let test_cases = vec!["s3", "local", "gcs", "azure", "hdfs"];
-        let test_target = vec![
+        let test_cases = ["s3", "local", "gcs", "azure", "hdfs"];
+        let test_target = [
             "1/0_0_000",
             "1/0_0_000",
             "1_0_0_000",
@@ -2512,7 +2512,7 @@ pub mod tests {
             assert_eq!(target.to_string(), prefix_arr.join(delimiter));
         }
 
-        let test_target = vec!["1/0_0", "1/0_0", "1_0_0", "1_0_0", "1_0_0"];
+        let test_target = ["1/0_0", "1/0_0", "1_0_0", "1_0_0", "1_0_0"];
         for (storage_name, target) in test_cases.iter().zip(test_target.iter()) {
             let key = None;
             let filename = backup_file_name(store_id, &region, key, storage_name);

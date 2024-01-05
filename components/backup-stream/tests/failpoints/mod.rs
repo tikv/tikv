@@ -284,7 +284,6 @@ mod all {
             .build();
         let keys = run_async_test(suite.write_records(0, 128, 1));
         let failed = Arc::new(AtomicBool::new(false));
-        fail::cfg("router_on_event_delay_ms", "6*return(1000)").unwrap();
         fail::cfg_callback("scan_and_async_send::about_to_consume", {
             let failed = failed.clone();
             move || {
