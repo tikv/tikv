@@ -41,12 +41,13 @@ use raftstore::{
 use resource_control::ResourceController;
 use resource_metering::CollectorRegHandle;
 use service::service_manager::GrpcServiceManager;
-use slog::{warn, Logger};
+use slog::{info, warn, Logger};
 use sst_importer::SstImporter;
 use tikv_util::{
     box_err,
     config::{Tracker, VersionTrack},
     log::SlogFormat,
+    synchronizer::InvokeClosureOnDrop,
     sys::{disk::get_disk_status, SysQuota},
     time::{duration_to_sec, monotonic_raw_now, Instant as TiInstant, Limiter},
     timer::{SteadyTimer, GLOBAL_TIMER_HANDLE},
@@ -62,7 +63,7 @@ use crate::{
         ReplayWatch, SharedReadTablet, MERGE_IN_PROGRESS_PREFIX, MERGE_SOURCE_PREFIX, SPLIT_PREFIX,
     },
     raft::Storage,
-    router::{PeerMsg, PeerTick, StoreMsg},
+    router::{PeerMsg, PeerTick, StoreMsg, StoreTick},
     worker::{cleanup, pd, refresh_config, tablet},
     Error, Result,
 };
@@ -929,14 +930,36 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
         }
         router.register_all(mailboxes);
 
+        let router_for_cb = Mutex::new(router.clone());
+        let cb_logger = self.logger.clone();
+        // The callback will be called once all the references are dropped. It is
+        // referenced by all the peers that have unfinished replay work and
+        // store state machine before the StoreMsg::Start message is handled.
+        // This is to guarantee that the first store heartbeat to PD is sent after
+        // store state machine and all the peers are ready.
+        let replay_finished_cb = Arc::new(InvokeClosureOnDrop(Some(Box::new(move || {
+            info!(cb_logger, "scheduling store heartbeat");
+            let router = router_for_cb.lock().unwrap();
+            if !router.is_shutdown() {
+                router
+                    .force_send_control(StoreMsg::Tick(StoreTick::PdStoreHeartbeat))
+                    .unwrap();
+            }
+        }))));
+
         // Make sure Msg::Start is the first message each FSM received.
-        let watch = Arc::new(ReplayWatch::new(self.logger.clone()));
+        let watch = Arc::new(ReplayWatch::new(
+            self.logger.clone(),
+            replay_finished_cb.clone(),
+        ));
         for addr in address {
             router
                 .force_send(addr, PeerMsg::Start(Some(watch.clone())))
                 .unwrap();
         }
-        router.send_control(StoreMsg::Start).unwrap();
+        router
+            .send_control(StoreMsg::Start(replay_finished_cb))
+            .unwrap();
         Ok(())
     }
 

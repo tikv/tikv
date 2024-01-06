@@ -4209,6 +4209,7 @@ dependencies = [
  "batch-system",
  "bytes",
  "causal_ts",
+ "chrono",
  "collections",
  "concurrency_manager",
  "crossbeam",

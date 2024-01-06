@@ -55,6 +55,7 @@ use tikv_util::{
     log::SlogFormat,
     slog_panic,
     store::find_peer,
+    synchronizer::InvokeClosureOnDrop,
     sys::disk::DiskUsage,
     time::{duration_to_sec, monotonic_raw_now, Duration, Instant as TiInstant},
 };
@@ -73,13 +74,17 @@ use crate::{
     worker::tablet,
 };
 
-const PAUSE_FOR_REPLAY_GAP: u64 = 128;
+const PAUSE_FOR_REPLAY_GAP: u64 = 0;
 
 pub struct ReplayWatch {
     normal_peers: AtomicUsize,
     paused_peers: AtomicUsize,
     logger: Logger,
     timer: Instant,
+    // Holds a reference to the InvokeClosureOnDrop until the replay is finished.
+    // All the peers who have replay works to do reference the same object, it acts like a join
+    // handle.
+    _replay_finished_cb: Arc<InvokeClosureOnDrop>,
 }
 
 impl Debug for ReplayWatch {
@@ -94,12 +99,13 @@ impl Debug for ReplayWatch {
 }
 
 impl ReplayWatch {
-    pub fn new(logger: Logger) -> Self {
+    pub fn new(logger: Logger, replay_finished_cb: Arc<InvokeClosureOnDrop>) -> Self {
         Self {
             normal_peers: AtomicUsize::new(0),
             paused_peers: AtomicUsize::new(0),
             logger,
             timer: Instant::now(),
+            _replay_finished_cb: replay_finished_cb,
         }
     }
 

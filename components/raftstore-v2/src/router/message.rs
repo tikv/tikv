@@ -19,7 +19,7 @@ use raftstore::store::{
     UnsafeRecoveryForceLeaderSyncer, UnsafeRecoveryWaitApplySyncer,
 };
 use resource_control::ResourceMetered;
-use tikv_util::time::Instant;
+use tikv_util::{synchronizer::InvokeClosureOnDrop, time::Instant};
 
 use super::response_channel::{
     AnyResChannel, CmdResChannel, CmdResSubscriber, DebugInfoChannel, QueryResChannel,
@@ -375,7 +375,7 @@ pub enum StoreMsg {
     RaftMessage(Box<RaftMessage>),
     SplitInit(Box<SplitInit>),
     Tick(StoreTick),
-    Start,
+    Start(Arc<InvokeClosureOnDrop>),
     StoreUnreachable {
         to_store_id: u64,
     },
