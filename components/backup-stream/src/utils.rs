@@ -281,7 +281,7 @@ pub fn request_to_triple(mut req: Request) -> Either<(Vec<u8>, Vec<u8>, CfName),
 /// once meet an error, would report it, with the current file and line (so it
 /// is made as a macro). returns whether it success.
 // Note: perhaps we'd better using std::panic::Location.
-#[macro_export(crate)]
+#[macro_export]
 macro_rules! try_send {
     ($s:expr, $task:expr) => {
         match $s.schedule($task) {
