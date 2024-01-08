@@ -121,7 +121,7 @@ impl RegionMemoryEngine {
         memory_engines
     }
 
-    fn trim(&self, end_key: &[u8]) {
+    fn cut(&self, end_key: &[u8]) {
         let _ = self.data.iter().for_each(|s| s.cut(end_key));
     }
 }
@@ -208,18 +208,18 @@ pub struct SnapshotRecordsOnSplit {
     resolved_split: bool,
     snapshots: SnapshotList,
     child_uuids: Vec<(u64, Uuid)>,
-    region_memory_engines: Vec<(u64, RegionMemoryEngine)>,
+    child_engines: Vec<(u64, RegionMemoryEngine)>,
     split_keys: Vec<Vec<u8>>,
 }
 
-fn trim_regions(
+fn cut_regions(
     parent_engine: RegionMemoryEngine,
     child_engines: Vec<RegionMemoryEngine>,
     split_keys: &Vec<Vec<u8>>,
 ) {
-    parent_engine.trim(&split_keys[0]);
+    parent_engine.cut(&split_keys[0]);
     for i in 0..split_keys.len() - 1 {
-        child_engines[i].trim(&split_keys[i + 1]);
+        child_engines[i].cut(&split_keys[i + 1]);
     }
 }
 
@@ -245,10 +245,10 @@ impl RegionsSnapshotRecordsOnSplit {
 
             // all recorded snapshots have been dropped, so we can do cut
             assert_eq!(Arc::strong_count(&snapshot.region_memory_engine.data[0]), 1);
-            trim_regions(
+            cut_regions(
                 snapshot.region_memory_engine.clone(),
                 record
-                    .region_memory_engines
+                    .child_engines
                     .iter()
                     .map(|(_, e)| e.clone())
                     .collect::<Vec<_>>(),
@@ -258,7 +258,7 @@ impl RegionsSnapshotRecordsOnSplit {
             (
                 record.child_uuids.to_owned(),
                 record
-                    .region_memory_engines
+                    .child_engines
                     .iter()
                     .map(|(_, e)| e.clone())
                     .collect::<Vec<_>>(),
@@ -267,7 +267,12 @@ impl RegionsSnapshotRecordsOnSplit {
 
         for ((id, uuid), engine) in child_uuids.into_iter().zip(engines.into_iter()) {
             split_resolved_regions.push((id, uuid));
-            self.may_resolve_split_status_of_child(id, uuid, engine, &mut split_resolved_regions);
+            self.resolve_split_status_of_child_and_may_cut(
+                id,
+                uuid,
+                engine,
+                &mut split_resolved_regions,
+            );
         }
 
         self.0
@@ -279,25 +284,26 @@ impl RegionsSnapshotRecordsOnSplit {
         split_resolved_regions
     }
 
-    // may_resolve_split_status_of_child is called when parent region has released
-    // all snapshots acquired before split. If it's child is also a parent region,
-    // the child's split status should be updated and the trim operation should be
-    // executed.
-    fn may_resolve_split_status_of_child(
+    // `resolve_split_status_of_child_and_may_cut` is called when the parent region
+    // has finished `cut`, thus changes all it's children's resolved_split be
+    // true. It's child_region may also execute batch_split and is ready to
+    // perform `cut ` except for waiting resolved_split being changed to true.
+    // This is done recursively.
+    fn resolve_split_status_of_child_and_may_cut(
         &mut self,
-        region_id: u64,
+        child_region_id: u64,
         child_uuid: Uuid,
         child_engine: RegionMemoryEngine,
         split_resolved_regions: &mut Vec<(u64, Uuid)>,
     ) {
-        let Some(snapshot_records) = self.0.get_mut(&region_id) else { return };
+        let Some(snapshot_records) = self.0.get_mut(&child_region_id) else { return };
         let Some(record) = snapshot_records.get_mut(&child_uuid) else { return };
         record.resolved_split = true;
         if record.snapshots.is_empty() {
-            trim_regions(
+            cut_regions(
                 child_engine,
                 record
-                    .region_memory_engines
+                    .child_engines
                     .iter()
                     .map(|(_, e)| e.clone())
                     .collect(),
@@ -308,15 +314,20 @@ impl RegionsSnapshotRecordsOnSplit {
                 .child_uuids
                 .to_owned()
                 .into_iter()
-                .zip(record.region_memory_engines.to_owned().into_iter())
+                .zip(record.child_engines.to_owned().into_iter())
             {
-                assert!(id != region_id || uuid != child_uuid);
+                assert!(id != child_region_id || uuid != child_uuid);
                 split_resolved_regions.push((id, uuid));
-                self.may_resolve_split_status_of_child(id, uuid, engine, split_resolved_regions);
+                self.resolve_split_status_of_child_and_may_cut(
+                    id,
+                    uuid,
+                    engine,
+                    split_resolved_regions,
+                );
             }
 
             self.0
-                .get_mut(&region_id)
+                .get_mut(&child_region_id)
                 .unwrap()
                 .remove(&child_uuid)
                 .unwrap();
@@ -490,7 +501,7 @@ impl BatchSplit for RegionCacheMemoryEngine {
                 core.region_metas.get_mut(id).unwrap().resolved_split = true;
             }
 
-            trim_regions(
+            cut_regions(
                 old_engine.unwrap(),
                 split_result
                     .split_memory_engines
@@ -508,7 +519,7 @@ impl BatchSplit for RegionCacheMemoryEngine {
             resolved_split: parent_resolved_split,
             snapshots: record_snapshots,
             split_keys: split_result.split_keys,
-            region_memory_engines: split_result.split_memory_engines,
+            child_engines: split_result.split_memory_engines,
         };
 
         let region_records = core
