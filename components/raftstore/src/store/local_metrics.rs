@@ -4,7 +4,7 @@
 use std::sync::{Arc, Mutex};
 
 use collections::HashSet;
-use prometheus::local::{LocalHistogram, LocalIntCounter};
+use prometheus::local::LocalHistogram;
 use raft::eraftpb::MessageType;
 use tikv_util::time::{Duration, Instant};
 use tracker::{Tracker, TrackerToken, GLOBAL_TRACKERS};
@@ -97,7 +97,6 @@ pub struct RaftMetrics {
     pub wf_commit_log: LocalHistogram,
     pub wf_commit_not_persist_log: LocalHistogram,
 
-    pub check_stale_peer: LocalIntCounter,
     pub leader_missing: Arc<Mutex<HashSet<u64>>>,
 
     last_flush_time: Instant,
@@ -133,7 +132,6 @@ impl RaftMetrics {
             wf_persist_log: STORE_WF_PERSIST_LOG_DURATION_HISTOGRAM.local(),
             wf_commit_log: STORE_WF_COMMIT_LOG_DURATION_HISTOGRAM.local(),
             wf_commit_not_persist_log: STORE_WF_COMMIT_NOT_PERSIST_LOG_DURATION_HISTOGRAM.local(),
-            check_stale_peer: CHECK_STALE_PEER_COUNTER.local(),
             leader_missing: Arc::default(),
             last_flush_time: Instant::now_coarse(),
         }
@@ -172,7 +170,6 @@ impl RaftMetrics {
             self.wf_commit_not_persist_log.flush();
         }
 
-        self.check_stale_peer.flush();
         let mut missing = self.leader_missing.lock().unwrap();
         LEADER_MISSING.set(missing.len() as i64);
         missing.clear();
