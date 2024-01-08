@@ -239,7 +239,8 @@ impl<E: KvEngine> Initializer<E> {
             // Time range: (checkpoint_ts, max]
             let txnkv_scanner = ScannerBuilder::new(snap, TimeStamp::max())
                 .fill_cache(false)
-                .range(Some(start_key), Some(end_key))
+                .range(None, None)
+                // .range(Some(start_key), Some(end_key))
                 .hint_min_ts(hint_min_ts)
                 .build_delta_scanner(self.checkpoint_ts, TxnExtraOp::ReadOldValue)
                 .unwrap();
@@ -399,6 +400,7 @@ impl<E: KvEngine> Initializer<E> {
             disk_read,
             perf_delta,
         } = self.do_scan(scanner, old_value_cursors, &mut entries)?;
+        println!("perf_delta: {:?}", perf_delta);
 
         TLS_CDC_PERF_STATS.with(|x| *x.borrow_mut() += perf_delta);
         tls_flush_perf_stats();
@@ -1082,5 +1084,57 @@ mod tests {
         res.unwrap_err();
 
         worker.stop();
+    }
+
+    #[test]
+    fn test_initialize_scan_range() {
+        let mut engine = TestEngineBuilder::new().build_without_cache().unwrap();
+        let ka = Key::from_raw(b"aaa");
+        let km = Key::from_raw(b"mmm");
+        let ky = Key::from_raw(b"yyy");
+        let kz = Key::from_raw(b"zzz");
+        let mut zka = vec![b'z'];
+        zka.extend_from_slice(ka.as_encoded());
+        let mut zky = vec![b'z'];
+        zky.extend_from_slice(ky.as_encoded());
+
+        must_prewrite_put(&mut engine, &zka, b"value", b"zkey", 100);
+        must_commit(&mut engine, &zka, 100, 110);
+        for cf in &[CF_WRITE, CF_DEFAULT] {
+            let kv = engine.kv_engine().unwrap();
+            kv.flush_cf(cf, true).unwrap();
+        }
+        must_prewrite_put(&mut engine, &zky, b"value", b"zkey", 100);
+        must_commit(&mut engine, &zky, 100, 110);
+        for cf in &[CF_WRITE, CF_DEFAULT] {
+            let kv = engine.kv_engine().unwrap();
+            kv.flush_cf(cf, true).unwrap();
+        }
+
+        let (mut _worker, pool, mut initializer, _rx, mut drain) = mock_initializer(
+            usize::MAX,
+            usize::MAX,
+            1000,
+            engine.kv_engine(),
+            ChangeDataRequestKvApi::TiDb,
+            false,
+        );
+        initializer.observed_range = ObservedRange::new(km.into_encoded(), kz.into_encoded()).unwrap();
+
+        let th = pool.spawn(async move {
+            initializer.async_incremental_scan(
+                engine.snapshot(Default::default()).unwrap(),
+                Region::default(),
+                Arc::new(MemoryQuota::new(usize::MAX)),
+            ).await.unwrap();
+            println!("scan finish");
+            TLS_CDC_PERF_STATS.with(|x| {
+                println!("perf stat: {:?}", x.borrow());
+            })
+        });
+        while let Some((event, _)) = block_on(drain.drain().next()) {
+            println!("event: {:?}", event);
+        }
+        block_on(th).unwrap();
     }
 }
