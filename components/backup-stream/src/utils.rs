@@ -305,7 +305,7 @@ macro_rules! try_send {
 /// `backup_stream_debug`. because once we enable debug log for all crates, it
 /// would soon get too verbose to read. using this macro now we can enable debug
 /// log level for the crate only (even compile time...).
-#[macro_export(crate)]
+#[macro_export]
 macro_rules! debug {
     ($($t: tt)+) => {
         if cfg!(feature = "backup-stream-debug") {
@@ -769,7 +769,7 @@ impl<'a> slog::KV for SlogRegion<'a> {
 }
 
 /// A shortcut for making an opaque future type for return type or argument
-/// type, which is sendable and not borrowing any variables.  
+/// type, which is sendable and not borrowing any variables.
 ///
 /// `future![T]` == `impl Future<Output = T> + Send + 'static`
 #[macro_export]

@@ -140,7 +140,7 @@ where
 
 /// Like `errors.Annotate` in Go.
 /// Wrap an unknown error with [`Error::Other`].
-#[macro_export(crate)]
+#[macro_export]
 macro_rules! annotate {
     ($inner: expr, $message: expr) => {
         {
@@ -288,6 +288,7 @@ mod test {
         })
     }
 
+    #[allow(clippy::unnecessary_literal_unwrap)]
     #[bench]
     // 773 ns/iter (+/- 8)
     fn baseline(b: &mut test::Bencher) {

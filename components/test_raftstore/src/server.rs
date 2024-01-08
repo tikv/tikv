@@ -954,8 +954,18 @@ pub fn must_new_cluster_and_kv_client_mul(
     TikvClient,
     Context,
 ) {
-    let (cluster, leader, ctx) = must_new_cluster_mul(count);
+    must_new_cluster_with_cfg_and_kv_client_mul(count, |_| {})
+}
 
+pub fn must_new_cluster_with_cfg_and_kv_client_mul(
+    count: usize,
+    configure: impl FnMut(&mut Cluster<RocksEngine, ServerCluster<RocksEngine>>),
+) -> (
+    Cluster<RocksEngine, ServerCluster<RocksEngine>>,
+    TikvClient,
+    Context,
+) {
+    let (cluster, leader, ctx) = must_new_and_configure_cluster_mul(count, configure);
     let env = Arc::new(Environment::new(1));
     let channel =
         ChannelBuilder::new(env).connect(&cluster.sim.rl().get_addr(leader.get_store_id()));

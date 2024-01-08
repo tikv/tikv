@@ -36,7 +36,7 @@ pub trait HeapSize {
 
 impl HeapSize for [u8] {
     fn heap_size(&self) -> usize {
-        self.len() * mem::size_of::<u8>()
+        std::mem::size_of_val(self)
     }
 }
 
