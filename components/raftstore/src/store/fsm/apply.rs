@@ -6242,9 +6242,10 @@ mod tests {
         assert_eq!(apply_res.applied_term, 3);
         assert_eq!(apply_res.apply_state.get_applied_index(), 9);
         // The region will yield after timeout.
-        // The second and third entry should be applied now. because we batch ingest
-        // ssts. so apply result notifier will trigger once. and the apply index
-        // should be 11.
+        let apply_res = fetch_apply_res(&rx);
+        assert_eq!(apply_res.applied_term, 3);
+        assert_eq!(apply_res.apply_state.get_applied_index(), 10);
+        // The third entry should be applied now.
         let apply_res = fetch_apply_res(&rx);
         assert_eq!(apply_res.applied_term, 3);
         assert_eq!(apply_res.apply_state.get_applied_index(), 11);
@@ -6586,9 +6587,10 @@ mod tests {
         assert_eq!(apply_res.applied_term, 3);
         assert_eq!(apply_res.apply_state.get_applied_index(), 9);
         // The region will yield after timeout.
-        // The second and third entry should be applied now. because we batch ingest
-        // ssts. so apply result notifier will trigger once. and the apply index
-        // should be 11.
+        let apply_res = fetch_apply_res(&rx);
+        assert_eq!(apply_res.applied_term, 3);
+        assert_eq!(apply_res.apply_state.get_applied_index(), 10);
+        // The third entry should be applied now.
         let apply_res = fetch_apply_res(&rx);
         assert_eq!(apply_res.applied_term, 3);
         assert_eq!(apply_res.apply_state.get_applied_index(), 11);
@@ -6873,8 +6875,8 @@ mod tests {
             assert!(!resp.get_header().has_error(), "{:?}", resp);
         }
         let mut res = fetch_apply_res(&rx);
-        // There may be one or two ApplyRes which depends on whether these two apply
-        // msgs are batched together.
+        // There are five entries [put, ingest, put, ingest, put] in one region.
+        // so the apply results should be notified at index 2/4.
         if res.apply_state.get_applied_index() == 2 {
             res = fetch_apply_res(&rx);
         }
