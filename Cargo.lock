@@ -5229,7 +5229,7 @@ checksum = "fa8f3741c7372e75519bd9346068370c9cdaabcc1f9599cbcf2a2719352286b7"
 [[package]]
 name = "skiplist-rs"
 version = "0.1.0"
-source = "git+https://github.com/SpadeA-Tang/skiplist-rs.git?branch=cut#56990a5d8cfb7589f38fbcb9f6081b95bc3f0223"
+source = "git+https://github.com/SpadeA-Tang/skiplist-rs.git?branch=cut#1f5d2d2bea52aaef1893ab46810fe675b32fbd19"
 dependencies = [
  "bytes",
  "rand 0.8.5",

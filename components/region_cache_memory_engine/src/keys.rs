@@ -4,6 +4,7 @@ use std::cmp;
 
 use bytes::{BufMut, Bytes, BytesMut};
 use skiplist_rs::KeyComparator;
+use tikv_util::codec::number::NumberEncoder;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ValueType {
@@ -107,10 +108,13 @@ pub fn encode_seek_key(key: &[u8], seq: u64, v_type: ValueType) -> Vec<u8> {
 }
 
 #[inline]
-pub fn encode_seek_key_in_place(mut key: Vec<u8>, seq: u64, v_type: ValueType) -> Vec<u8> {
-    assert!(seq == u64::MAX || seq >> ((ENC_KEY_SEQ_LENGTH - 1) * 8) == 0);
-    key.put_u64((seq << 8) | v_type as u64);
-    key
+pub fn encode_split_key(key: &[u8]) -> Vec<u8> {
+    // 8 for mvcc, 8 for sequence number
+    let mut encoded_key = Vec::with_capacity(key.len() + 16);
+    encoded_key.extend_from_slice(key);
+    encoded_key.encode_u64_desc(u64::MAX).unwrap();
+    encoded_key.put_u64((u64::MAX << 8) | VALUE_TYPE_FOR_SEEK as u64);
+    encoded_key
 }
 
 #[derive(Default, Debug, Clone, Copy)]

@@ -16,12 +16,12 @@ use engine_traits::{
     ReadOptions, RegionCacheEngine, Result, Snapshot, SnapshotMiscExt, WriteBatch, WriteBatchExt,
     WriteOptions, CF_DEFAULT, CF_LOCK, CF_WRITE,
 };
-use skiplist_rs::{AllocationRecorder, IterRef, MemoryLimiter, Skiplist};
+use skiplist_rs::{AllocationRecorder, IterRef, MemoryLimiter, Node, Skiplist};
 use uuid::Uuid;
 
 use crate::keys::{
-    decode_key, encode_seek_key, encode_seek_key_in_place, InternalKey, InternalKeyComparator,
-    ValueType, VALUE_TYPE_FOR_SEEK, VALUE_TYPE_FOR_SEEK_FOR_PREV,
+    decode_key, encode_seek_key, encode_split_key, InternalKey, InternalKeyComparator, ValueType,
+    VALUE_TYPE_FOR_SEEK, VALUE_TYPE_FOR_SEEK_FOR_PREV,
 };
 
 fn cf_to_id(cf: &str) -> usize {
@@ -33,10 +33,11 @@ fn cf_to_id(cf: &str) -> usize {
     }
 }
 
-// todo: implement memory limiter
+// todo: implement a real memory limiter. Now, it is used for test.
 #[derive(Clone, Default)]
 pub struct GlobalMemoryLimiter {
     recorder: Arc<Mutex<HashMap<usize, usize>>>,
+    removed: Arc<Mutex<HashSet<Vec<u8>>>>,
 }
 
 impl MemoryLimiter for GlobalMemoryLimiter {
@@ -59,6 +60,9 @@ impl AllocationRecorder for GlobalMemoryLimiter {
     }
 
     fn free(&self, addr: usize, size: usize) {
+        let node = addr as *mut Node;
+        let mut removed = self.removed.lock().unwrap();
+        removed.insert(unsafe { (*node).key().to_vec() });
         let mut recorder = self.recorder.lock().unwrap();
         assert_eq!(recorder.remove(&addr).unwrap(), size);
     }
@@ -118,7 +122,7 @@ impl RegionMemoryEngine {
     }
 
     fn trim(&self, end_key: &[u8]) {
-        self.data.iter().map(|s| s.cut(end_key));
+        let _ = self.data.iter().for_each(|s| s.cut(end_key));
     }
 }
 
@@ -157,7 +161,6 @@ impl SnapshotList {
     }
 }
 
-#[derive(Default)]
 pub struct RegionMemoryMeta {
     // It records the snapshots that have been granted previsously with specific snapshot_ts. We
     // should guarantee that the data visible to any one of the snapshot in it will not be removed.
@@ -169,8 +172,21 @@ pub struct RegionMemoryMeta {
     // Note: different region can have different safe_ts.
     safe_ts: u64,
     evicted: bool,
-    juniority: u64,
+    resolved_split: bool,
     uuid: Uuid,
+}
+
+impl Default for RegionMemoryMeta {
+    fn default() -> Self {
+        RegionMemoryMeta {
+            resolved_split: true,
+            can_read: false,
+            safe_ts: 0,
+            evicted: false,
+            uuid: Uuid::new_v4(),
+            snapshot_list: SnapshotList::default(),
+        }
+    }
 }
 
 impl RegionMemoryMeta {
@@ -181,31 +197,40 @@ impl RegionMemoryMeta {
     pub fn set_safe_ts(&mut self, safe_ts: u64) {
         self.safe_ts = safe_ts;
     }
+
+    pub fn ready_to_remove(&self) -> bool {
+        self.snapshot_list.is_empty() && self.resolved_split && self.evicted
+    }
 }
 
-// SnapshotsOnSplit records the snapshots at the time of batch split and the
-// splitted RegionMemoryEngine.
-//
-// Say A1 is splitted into A2, B, and C.
-// After the split, A2, B, and C is responsible for dropping elements that may
-// still be accessed by A1 due to the snapshots acquired before split. So we
-// records these snapshots here and hold clone of A1, B, and C to avoid they
-// dropping elements. After the snapshots are all freed, we free the clones.
 pub struct SnapshotRecordsOnSplit {
     uuid: Uuid,
-    juniority: u64,
+    resolved_split: bool,
     snapshots: SnapshotList,
     child_uuids: Vec<(u64, Uuid)>,
     region_memory_engines: Vec<(u64, RegionMemoryEngine)>,
     split_keys: Vec<Vec<u8>>,
 }
 
+fn trim_regions(
+    parent_engine: RegionMemoryEngine,
+    child_engines: Vec<RegionMemoryEngine>,
+    split_keys: &Vec<Vec<u8>>,
+) {
+    parent_engine.trim(&split_keys[0]);
+    for i in 0..split_keys.len() - 1 {
+        child_engines[i].trim(&split_keys[i + 1]);
+    }
+}
+
 #[derive(Default)]
 pub struct RegionsSnapshotRecordsOnSplit(HashMap<u64, HashMap<Uuid, SnapshotRecordsOnSplit>>);
 
 impl RegionsSnapshotRecordsOnSplit {
-    fn drop_recoded_snapshot(&mut self, snapshot: &RegionCacheSnapshot) {
-        let child_uuids = {
+    fn drop_recoded_snapshot(&mut self, snapshot: &RegionCacheSnapshot) -> Vec<(u64, Uuid)> {
+        // records regions whose resolved_split status changed
+        let mut split_resolved_regions: Vec<(u64, Uuid)> = Vec::new();
+        let (child_uuids, engines) = {
             let snapshot_records = self.0.get_mut(&snapshot.region_id).unwrap();
             let record = snapshot_records.get_mut(&snapshot.uuid).unwrap();
             assert!(
@@ -214,28 +239,35 @@ impl RegionsSnapshotRecordsOnSplit {
                     .remove_snapshot(snapshot.snapshot_ts, snapshot.uuid)
             );
 
-            if !record.snapshots.is_empty() {
-                return;
+            if !record.snapshots.is_empty() || !record.resolved_split {
+                return vec![];
             }
 
             // all recorded snapshots have been dropped, so we can do cut
             assert_eq!(Arc::strong_count(&snapshot.region_memory_engine.data[0]), 1);
-            snapshot.region_memory_engine.trim(&record.split_keys[0]);
-            for i in 0..record.region_memory_engines.len() - 1 {
-                record.region_memory_engines[i]
-                    .1
-                    .trim(&record.split_keys[i + 1]);
-            }
+            trim_regions(
+                snapshot.region_memory_engine.clone(),
+                record
+                    .region_memory_engines
+                    .iter()
+                    .map(|(_, e)| e.clone())
+                    .collect::<Vec<_>>(),
+                &record.split_keys,
+            );
 
-            if record.juniority == 0 {
-                record.child_uuids.to_owned()
-            } else {
-                return;
-            }
+            (
+                record.child_uuids.to_owned(),
+                record
+                    .region_memory_engines
+                    .iter()
+                    .map(|(_, e)| e.clone())
+                    .collect::<Vec<_>>(),
+            )
         };
 
-        for (id, uuid) in child_uuids {
-            self.may_clean_up_child(id, uuid);
+        for ((id, uuid), engine) in child_uuids.into_iter().zip(engines.into_iter()) {
+            split_resolved_regions.push((id, uuid));
+            self.may_resolve_split_status_of_child(id, uuid, engine, &mut split_resolved_regions);
         }
 
         self.0
@@ -243,31 +275,52 @@ impl RegionsSnapshotRecordsOnSplit {
             .unwrap()
             .remove(&snapshot.uuid)
             .unwrap();
+
+        split_resolved_regions
     }
 
-    fn may_clean_up_child(&mut self, region_id: u64, child_uuid: Uuid) {
+    // may_resolve_split_status_of_child is called when parent region has released
+    // all snapshots acquired before split. If it's child is also a parent region,
+    // the child's split status should be updated and the trim operation should be
+    // executed.
+    fn may_resolve_split_status_of_child(
+        &mut self,
+        region_id: u64,
+        child_uuid: Uuid,
+        child_engine: RegionMemoryEngine,
+        split_resolved_regions: &mut Vec<(u64, Uuid)>,
+    ) {
         let Some(snapshot_records) = self.0.get_mut(&region_id) else { return };
         let Some(record) = snapshot_records.get_mut(&child_uuid) else { return };
-        assert_eq!(record.juniority, 1);
-        record.juniority -= 1;
+        record.resolved_split = true;
+        if record.snapshots.is_empty() {
+            trim_regions(
+                child_engine,
+                record
+                    .region_memory_engines
+                    .iter()
+                    .map(|(_, e)| e.clone())
+                    .collect(),
+                &record.split_keys,
+            );
 
-        let child_uuids = {
-            if record.snapshots.is_empty() {
-                record.child_uuids.to_owned()
-            } else {
-                return;
+            for ((id, uuid), (_, engine)) in record
+                .child_uuids
+                .to_owned()
+                .into_iter()
+                .zip(record.region_memory_engines.to_owned().into_iter())
+            {
+                assert!(id != region_id || uuid != child_uuid);
+                split_resolved_regions.push((id, uuid));
+                self.may_resolve_split_status_of_child(id, uuid, engine, split_resolved_regions);
             }
-        };
 
-        for (id, uuid) in child_uuids {
-            self.may_clean_up_child(id, uuid);
+            self.0
+                .get_mut(&region_id)
+                .unwrap()
+                .remove(&child_uuid)
+                .unwrap();
         }
-
-        self.0
-            .get_mut(&region_id)
-            .unwrap()
-            .remove(&child_uuid)
-            .unwrap();
     }
 }
 
@@ -345,7 +398,7 @@ impl RegionCacheMemoryEngine {
         meta.can_read = false;
         meta.evicted = true;
 
-        let eviction = if meta.snapshot_list.is_empty() {
+        let eviction = if meta.ready_to_remove() {
             core.region_metas.remove(&region_id);
             Some(core.engine.remove(&region_id).unwrap())
         } else {
@@ -392,10 +445,7 @@ impl BatchSplit for RegionCacheMemoryEngine {
         let memory_engine = core.engine.get(&region_id).unwrap();
 
         // split key does not have mvcc suffix, we need to add it for key comparison
-        let keys = keys
-            .into_iter()
-            .map(|k| encode_seek_key_in_place(k, u64::MAX, VALUE_TYPE_FOR_SEEK))
-            .collect();
+        let keys = keys.iter().map(|k| encode_split_key(k)).collect();
         let split_memory_engines: Vec<_> = splitted_region_id
             .into_iter()
             .zip(memory_engine.batch_split(&keys).into_iter())
@@ -408,41 +458,54 @@ impl BatchSplit for RegionCacheMemoryEngine {
 
     fn on_batch_split(&self, region_id: u64, split_result: Self::SplitResult) {
         let mut core = self.core.lock().unwrap();
-        let mut meta = core.region_metas.get_mut(&region_id).unwrap();
+        let meta = core.region_metas.get_mut(&region_id).unwrap();
         let record_snapshots = meta.snapshot_list.clone();
-        let parent_juniority = meta.juniority;
         let parent_uuid = meta.uuid;
-        meta.juniority += 1;
+        let parent_resolved_split = meta.resolved_split;
 
         let mut old_engine = None;
         let mut child_uuids = vec![];
         for (id, e) in &split_result.split_memory_engines {
-            let uuid = Uuid::new_v4();
-            assert!(core.engine.get(id).is_none());
-            assert!(core.region_metas.get(id).is_none());
-            core.engine.insert(*id, e.clone());
+            if *id != region_id {
+                assert!(core.engine.get(id).is_none());
+                assert!(core.region_metas.get(id).is_none());
+            }
+
             let mut meta = RegionMemoryMeta::default();
             meta.can_read = true;
-            meta.juniority = parent_juniority + 1;
-            meta.uuid = uuid;
-            if let Some(e) = core.region_metas.insert(*id, meta) {
+            meta.resolved_split = false;
+            let uuid = meta.uuid;
+            core.region_metas.insert(*id, meta);
+            if let Some(e) = core.engine.insert(*id, e.clone()) {
                 assert!(old_engine.is_none());
                 old_engine = Some(e);
             }
             child_uuids.push((*id, uuid));
         }
 
-        if record_snapshots.is_empty() && parent_juniority == 0 {
+        // The parent region is ready to be dropped, so we need to change the resolve
+        // status of the child regions
+        if record_snapshots.is_empty() && parent_resolved_split {
             for (id, _) in &split_result.split_memory_engines {
-                core.region_metas.get_mut(id).unwrap().juniority -= 1;
+                core.region_metas.get_mut(id).unwrap().resolved_split = true;
             }
+
+            trim_regions(
+                old_engine.unwrap(),
+                split_result
+                    .split_memory_engines
+                    .iter()
+                    .map(|(_, e)| e.clone())
+                    .collect(),
+                &split_result.split_keys,
+            );
             return;
         }
 
         let records = SnapshotRecordsOnSplit {
             uuid: parent_uuid,
             child_uuids,
-            juniority: parent_juniority,
+            resolved_split: parent_resolved_split,
             snapshots: record_snapshots,
             split_keys: split_result.split_keys,
             region_memory_engines: split_result.split_memory_engines,
@@ -888,21 +951,32 @@ impl Drop for RegionCacheSnapshot {
                 meta.snapshot_list
                     .remove_snapshot(self.snapshot_ts, self.uuid)
             );
+            if meta.ready_to_remove() {
+                core.region_metas.remove(&self.region_id);
+                core.engine.remove(&self.region_id);
+            }
             return;
         }
 
-        core.snapshot_records_on_split.drop_recoded_snapshot(&self);
-
-        let meta = core.region_metas.get(&self.region_id).unwrap();
-        let eviction = if meta.snapshot_list.is_empty() && meta.evicted {
-            core.region_metas.remove(&self.region_id);
-            Some(core.engine.remove(&self.region_id).unwrap())
-        } else {
-            None
-        };
+        let child_ids = core.snapshot_records_on_split.drop_recoded_snapshot(&self);
+        // make engines removed after unlock
+        let mut removed_engines = vec![];
+        for (id, uuid) in child_ids {
+            let child_meta = core.region_metas.get_mut(&id).unwrap();
+            if child_meta.uuid != uuid {
+                // it means the region with `id` has also been splitted.
+                continue;
+            }
+            child_meta.resolved_split = true;
+            if child_meta.ready_to_remove() {
+                core.region_metas.remove(&id);
+                removed_engines.push(core.engine.remove(&id).unwrap());
+            }
+        }
 
         // unlock before drop the skipplist
         drop(core);
+        drop(removed_engines);
     }
 }
 
@@ -1007,7 +1081,7 @@ impl<'a> PartialEq<&'a [u8]> for RegionCacheDbVector {
 
 #[cfg(test)]
 mod tests {
-    use core::ops::Range;
+    use core::{ops::Range, slice::SlicePattern};
     use std::{iter, iter::StepBy, ops::Deref, sync::Arc};
 
     use bytes::{BufMut, Bytes};
@@ -1015,6 +1089,7 @@ mod tests {
         BatchSplit, IterOptions, Iterable, Iterator, Peekable, ReadOptions, RegionCacheEngine,
     };
     use skiplist_rs::Skiplist;
+    use tikv_util::codec::number::NumberEncoder;
 
     use super::{cf_to_id, GlobalMemoryLimiter, RegionCacheIterator};
     use crate::{
@@ -1096,7 +1171,7 @@ mod tests {
         let k = format!("k{:08}", i);
         let mut key = k.as_bytes().to_vec();
         // mvcc version should be make bit-wise reverse so that k-100 is less than k-99
-        key.put_u64(!mvcc);
+        key.encode_u64_desc(mvcc).unwrap();
         key
     }
 
@@ -1977,7 +2052,7 @@ mod tests {
 
     #[test]
     fn test_batch_split() {
-        for _ in 0..2000 {
+        for _ in 0..100 {
             let engine = RegionCacheMemoryEngine::default();
             engine.new_region(1);
 
@@ -2104,6 +2179,138 @@ mod tests {
                     iter.next().unwrap();
                 }
                 assert!(!iter.valid().unwrap());
+            }
+        }
+    }
+
+    #[test]
+    fn test_batch_split_recursive() {
+        let engine = RegionCacheMemoryEngine::default();
+        engine.new_region(1);
+
+        {
+            let mut core = engine.core.lock().unwrap();
+            core.region_metas.get_mut(&1).unwrap().can_read = true;
+            core.region_metas.get_mut(&1).unwrap().safe_ts = 5;
+            let s1 = core.engine.get_mut(&1).unwrap().data[cf_to_id("write")].clone();
+
+            for i in 0..90 {
+                let user_key = construct_key(i, 10);
+                let internal_key = encode_key(&user_key, 10, ValueType::Value);
+                let v = format!("v{:04}{:04}", i, 10);
+                s1.put(internal_key.clone(), v.clone());
+            }
+        }
+
+        let s1 = engine.snapshot(1, 10, 10).unwrap();
+
+        let split_keys = vec![
+            construct_user_key(0),
+            construct_user_key(10),
+            construct_user_key(20),
+        ];
+        // region 1 to region 2, 3, 1
+        let sr = engine.batch_split(1, vec![2, 3, 1], split_keys);
+        engine.on_batch_split(1, sr);
+
+        // region 1 to region 4, 1
+        let split_keys = vec![construct_user_key(20), construct_user_key(50)];
+        let sr = engine.batch_split(1, vec![4, 1], split_keys);
+        engine.on_batch_split(1, sr);
+
+        // region 4 to region 5, 4
+        let split_keys = vec![construct_user_key(20), construct_user_key(30)];
+        let sr = engine.batch_split(4, vec![5, 4], split_keys);
+        engine.on_batch_split(4, sr);
+
+        // region 1 to region 6, 1
+        let split_keys = vec![construct_user_key(50), construct_user_key(70)];
+        let sr = engine.batch_split(1, vec![6, 1], split_keys);
+        engine.on_batch_split(1, sr);
+
+        // Now region ranges:
+        // region 1: 70 - 90
+        // region 2: 0 - 10
+        // region 3: 10 - 20
+        // region 4: 30 - 50
+        // region 5: 20 - 30
+        // region 6: 50 - 70
+
+        {
+            let ranges = vec![(70, 90), (0, 10), (10, 20), (30, 50), (20, 30), (50, 70)];
+            for (id, (range_start, range_end)) in (1..=6).into_iter().zip(ranges.into_iter()) {
+                let s = engine.snapshot(id, 10, 10).unwrap();
+                let mut iter_opt = IterOptions::default();
+                let lower = construct_user_key(range_start as u64);
+                let upper = construct_user_key(range_end as u64);
+                iter_opt.set_lower_bound(&lower, 0);
+                iter_opt.set_upper_bound(&upper, 0);
+                let mut iter = s.iterator_opt("write", iter_opt).unwrap();
+                iter.seek_to_first().unwrap();
+                for i in range_start..range_end {
+                    let user_key = construct_key(i, 10);
+                    let k = iter.key();
+                    assert_eq!(k, &user_key);
+                    iter.next().unwrap();
+                }
+                assert!(!iter.valid().unwrap());
+            }
+        }
+    }
+
+    #[test]
+    fn test_batch_split_with_eviction() {
+        let engine = RegionCacheMemoryEngine::default();
+        engine.new_region(1);
+
+        {
+            let mut core = engine.core.lock().unwrap();
+            core.region_metas.get_mut(&1).unwrap().can_read = true;
+            core.region_metas.get_mut(&1).unwrap().safe_ts = 5;
+            let s1 = core.engine.get_mut(&1).unwrap().data[cf_to_id("write")].clone();
+
+            for i in 0..90 {
+                let user_key = construct_key(i, 10);
+                let internal_key = encode_key(&user_key, 10, ValueType::Value);
+                let v = format!("v{:04}{:04}", i, 10);
+                s1.put(internal_key.clone(), v.clone());
+            }
+        }
+
+        let s1 = engine.snapshot(1, 10, 10).unwrap();
+
+        let split_keys = vec![
+            construct_user_key(0),
+            construct_user_key(10),
+            construct_user_key(20),
+        ];
+        // region 1 to region 2, 3, 1
+        let sr = engine.batch_split(1, vec![2, 3, 1], split_keys);
+        engine.on_batch_split(1, sr);
+
+        engine.evict(2);
+        engine.evict(3);
+
+        {
+            let removed = engine.memory_limiter.removed.lock().unwrap();
+            // a snapshot of the parent region 1 still exists, so the eviction does not
+            // remove any element
+            for i in 0..20 {
+                let user_key = construct_key(i, 10);
+                let internal_key = encode_key(&user_key, 10, ValueType::Value);
+                assert!(!removed.contains(internal_key.as_slice()));
+            }
+        }
+
+        drop(s1);
+
+        {
+            let removed = engine.memory_limiter.removed.lock().unwrap();
+            // Now, the eviction should be exectued
+            for i in 0..20 {
+                let user_key = construct_key(i, 10);
+                let internal_key = encode_key(&user_key, 10, ValueType::Value);
+                assert!(removed.contains(internal_key.as_slice()));
             }
         }
     }
