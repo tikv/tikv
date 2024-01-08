@@ -35,13 +35,15 @@ impl<EK: KvEngine> WriteBatch for HybridEngineWriteBatch<EK> {
     }
 
     fn write_callback_opt(&mut self, opts: &WriteOptions, mut cb: impl FnMut(u64)) -> Result<u64> {
-        self.disk_write_batch.write_callback_opt(opts, |s| {
-            self.cache_write_batch.set_sequence_number(s).unwrap();
-            self.cache_write_batch.write_opt(opts).unwrap();
-        }).map(|s| {
-            cb(s);
-            s
-        })
+        self.disk_write_batch
+            .write_callback_opt(opts, |s| {
+                self.cache_write_batch.set_sequence_number(s).unwrap();
+                self.cache_write_batch.write_opt(opts).unwrap();
+            })
+            .map(|s| {
+                cb(s);
+                s
+            })
     }
 
     fn data_size(&self) -> usize {

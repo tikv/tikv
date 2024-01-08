@@ -17,7 +17,7 @@ use engine_traits::{
     CF_DEFAULT, CF_LOCK, CF_WRITE,
 };
 use skiplist_rs::{IterRef, Skiplist};
-use tikv_util::{config::ReadableSize, box_err};
+use tikv_util::{box_err, config::ReadableSize};
 
 use crate::keys::{
     decode_key, encode_seek_key, InternalKey, InternalKeyComparator, ValueType,
@@ -198,9 +198,11 @@ pub struct RegionCacheWriteBatch {
 }
 
 impl RegionCacheWriteBatch {
-
     pub fn with_capacity(cap: usize) -> Self {
-        Self { buffer: Vec::with_capacity(cap), sequence_number: None }
+        Self {
+            buffer: Vec::with_capacity(cap),
+            sequence_number: None,
+        }
     }
 }
 
@@ -553,7 +555,7 @@ impl WriteBatch for RegionCacheWriteBatch {
 
     fn set_sequence_number(&mut self, seq: u64) -> Result<()> {
         if let Some(seqno) = self.sequence_number {
-            return Err(box_err!("Sequence number {} already set", seqno))
+            return Err(box_err!("Sequence number {} already set", seqno));
         };
         self.sequence_number = Some(seq);
         Ok(())
