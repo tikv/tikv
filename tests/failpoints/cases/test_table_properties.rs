@@ -39,7 +39,7 @@ fn test_check_need_gc() {
     let builder = TestEngineBuilder::new().path(dir.path());
     let engine = builder
         .api_version(ApiVersion::V2)
-        .build_with_cfg(&cfg)
+        .build_with_cfg(&cfg, true)
         .unwrap();
     let raw_engine = engine.get_rocksdb();
     let mut gc_runner = TestGcRunner::new(0);
@@ -179,7 +179,7 @@ fn test_skip_gc_by_check() {
     let builder = TestEngineBuilder::new().path(dir.path());
     let engine = builder
         .api_version(ApiVersion::V2)
-        .build_with_cfg(&cfg)
+        .build_with_cfg(&cfg, true)
         .unwrap();
     let raw_engine = engine.get_rocksdb();
     let mut gc_runner = TestGcRunner::new(0);

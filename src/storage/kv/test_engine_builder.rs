@@ -72,8 +72,12 @@ impl TestEngineBuilder {
         self.do_build(&cfg_rocksdb, true)
     }
 
-    pub fn build_with_cfg(self, cfg_rocksdb: &crate::config::DbConfig) -> Result<RocksEngine> {
-        self.do_build(cfg_rocksdb, true)
+    pub fn build_with_cfg(
+        self,
+        cfg_rocksdb: &crate::config::DbConfig,
+        enable_block_cache: bool,
+    ) -> Result<RocksEngine> {
+        self.do_build(cfg_rocksdb, enable_block_cache)
     }
 
     pub fn build_without_cache(self) -> Result<RocksEngine> {
@@ -90,6 +94,7 @@ impl TestEngineBuilder {
             None => TEMP_DIR.to_owned(),
             Some(p) => p.to_str().unwrap().to_owned(),
         };
+        println!("RocksEngine path: {:?}", path);
         let api_version = self.api_version;
         let cfs = self.cfs.unwrap_or_else(|| ALL_CFS.to_vec());
         let mut cache_opt = BlockCacheConfig::default();
@@ -126,7 +131,9 @@ impl TestEngineBuilder {
                 _ => (*cf, RocksCfOptions::default()),
             })
             .collect();
-        let engine = RocksEngine::new(&path, None, cfs_opts, self.io_rate_limiter)?;
+        let resources = cfg_rocksdb.build_resources(Default::default(), EngineType::RaftKv);
+        let db_opts = cfg_rocksdb.build_opt(&resources, EngineType::RaftKv);
+        let engine = RocksEngine::new(&path, Some(db_opts), cfs_opts, self.io_rate_limiter)?;
         Ok(engine)
     }
 }

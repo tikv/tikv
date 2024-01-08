@@ -586,7 +586,7 @@ mod tests {
         let mut cfg = DbConfig::default();
         cfg.writecf.disable_auto_compactions = true;
         cfg.writecf.pin_l0_filter_and_index_blocks = false;
-        let mut engine = TestEngineBuilder::new().build_with_cfg(&cfg).unwrap();
+        let mut engine = TestEngineBuilder::new().build_with_cfg(&cfg, true).unwrap();
         let kv_engine = engine.get_rocksdb();
 
         // Key must start with `z` to pass `TsFilter`'s check.

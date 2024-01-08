@@ -507,6 +507,7 @@ impl<E: KvEngine> Initializer<E> {
     }
 
     fn ts_filter_is_helpful<S: Snapshot>(&self, snap: &S) -> bool {
+        println!("ts_filter_is_helpful is called");
         if self.ts_filter_ratio < f64::EPSILON {
             return false;
         }
@@ -522,6 +523,7 @@ impl<E: KvEngine> Initializer<E> {
             Ok(collection) => collection,
             Err(_) => return false,
         };
+        println!("gets collection");
 
         let hint_min_ts = self.checkpoint_ts.into_inner();
         let (mut total_count, mut filtered_count, mut tables) = (0, 0, 0);
@@ -529,6 +531,8 @@ impl<E: KvEngine> Initializer<E> {
             tables += 1;
             if let Some((_, keys)) = prop.approximate_size_and_keys(&start_key, &end_key) {
                 total_count += keys;
+                let max_ts = Self::parse_u64_prop(prop, PROP_MAX_TS);
+                println!("table property max ts: {:?}", max_ts);
                 if Self::parse_u64_prop(prop, PROP_MAX_TS)
                     .map_or(false, |max_ts| max_ts < hint_min_ts)
                 {
@@ -540,6 +544,7 @@ impl<E: KvEngine> Initializer<E> {
 
         let valid_count = total_count - filtered_count;
         let use_ts_filter = valid_count as f64 <= total_count as f64 * self.ts_filter_ratio;
+        println!("total_count: {}, valid_count: {}", total_count, valid_count);
         info!("cdc incremental scan uses ts filter: {}", use_ts_filter;
             "region_id" => self.region_id,
             "hint_min_ts" => hint_min_ts,
@@ -563,11 +568,15 @@ mod tests {
     use std::{
         collections::BTreeMap,
         fmt::Display,
-        sync::mpsc::{channel, sync_channel, Receiver, RecvTimeoutError, Sender},
+        sync::{
+            mpsc::{channel, sync_channel, Receiver, RecvTimeoutError, Sender},
+            Arc,
+        },
         time::Duration,
     };
 
-    use engine_rocks::RocksEngine;
+    use tikv_util::config::ReadableSize;
+    use engine_rocks::{RocksEngine, RocksSnapshot, BlobRunMode};
     use engine_traits::{MiscExt, CF_WRITE};
     use futures::{executor::block_on, StreamExt};
     use kvproto::{
@@ -577,13 +586,19 @@ mod tests {
     use raftstore::{coprocessor::ObserveHandle, router::CdcRaftRouter, store::RegionSnapshot};
     use resolved_ts::TxnLocks;
     use test_raftstore::MockRaftStoreRouter;
-    use tikv::storage::{
-        kv::Engine,
-        txn::tests::{
-            must_acquire_pessimistic_lock, must_commit, must_prewrite_delete, must_prewrite_put,
-            must_prewrite_put_with_txn_soucre,
+    use tikv::{
+        config::DbConfig,
+        storage::{
+            kv::Engine,
+            txn::{
+                tests::{
+                    must_acquire_pessimistic_lock, must_commit, must_prewrite_delete,
+                    must_prewrite_put, must_prewrite_put_with_txn_soucre,
+                },
+                TxnEntry, TxnEntryScanner,
+            },
+            TestEngineBuilder,
         },
-        TestEngineBuilder,
     };
     use tikv_util::{
         memory::MemoryQuota,
@@ -1080,5 +1095,75 @@ mod tests {
         res.unwrap_err();
 
         worker.stop();
+    }
+
+    #[test]
+    fn test_scanner() {
+        let mut cfg = DbConfig::default();
+        cfg.titan.enabled = Some(true);
+        cfg.defaultcf.titan.blob_run_mode = BlobRunMode::Normal;
+        cfg.defaultcf.titan.min_blob_size = ReadableSize(0);
+        cfg.writecf.titan.blob_run_mode = BlobRunMode::Normal;
+        cfg.writecf.titan.min_blob_size = ReadableSize(0);
+        cfg.lockcf.titan.blob_run_mode = BlobRunMode::Normal;
+        cfg.lockcf.titan.min_blob_size = ReadableSize(0);
+        let mut engine = TestEngineBuilder::new()
+            .build_with_cfg(&cfg, false)
+            .unwrap();
+
+        let v_suffix = |suffix: usize| -> Vec<u8> {
+            let suffix = suffix.to_string().into_bytes();
+            let mut v = Vec::with_capacity(1000 + suffix.len());
+            (0..100).for_each(|_| v.extend_from_slice(b"vvvvvvvvvv"));
+            v.extend_from_slice(&suffix);
+            v
+        };
+
+        must_prewrite_put(&mut engine, b"zkey", &v_suffix(100), b"zkey", 100);
+        must_commit(&mut engine, b"zkey", 100, 110);
+        for cf in &[CF_WRITE, CF_DEFAULT] {
+            engine.kv_engine().unwrap().flush_cf(cf, true).unwrap();
+        }
+        must_prewrite_put(&mut engine, b"zkey", &v_suffix(150), b"zkey", 150);
+        must_commit(&mut engine, b"zkey", 150, 160);
+        for cf in &[CF_WRITE, CF_DEFAULT] {
+            engine.kv_engine().unwrap().flush_cf(cf, true).unwrap();
+        }
+
+        let (mut worker, pool, mut initializer, _rx, mut drain) =
+            mock_initializer(usize::MAX, usize::MAX, 1000, engine.kv_engine(),  ChangeDataRequestKvApi::TiDb,
+                             false);
+        initializer.checkpoint_ts = 120.into();
+        let snap = engine.snapshot(Default::default()).unwrap();
+        println!("ts filter is helpful: {}",initializer.ts_filter_is_helpful(&snap));
+
+        let th = pool.spawn(async move {
+            let memory_quota = Arc::new(MemoryQuota::new(usize::MAX));
+            initializer
+                .async_incremental_scan(snap, Region::default(), memory_quota)
+                .await
+                .unwrap();
+        });
+        while let Some((event, _)) = block_on(drain.drain().next()) {
+            println!("event: {:?}", event);
+            for entry in event.event().get_entries().get_entries() {
+                println!("entry: {:?}", entry);
+            }
+        }
+        block_on(th).unwrap();
+        worker.stop();
+
+        /************
+        if let TxnEntry::Commit {
+            default,
+            mut old_value,
+            ..
+        } = entry
+        {
+            assert_eq!(default.1, v_suffix(150));
+            read_old_value(&mut old_value);
+            assert_eq!(old_value.finalized(), Some(v_suffix(100)));
+        }
+        ************/
     }
 }
