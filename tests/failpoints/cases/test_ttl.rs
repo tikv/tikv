@@ -36,7 +36,7 @@ fn test_ttl_checker_impl<F: KvFormat>() {
     let builder = TestEngineBuilder::new()
         .path(dir.path())
         .api_version(F::TAG);
-    let engine = builder.build_with_cfg(&cfg).unwrap();
+    let engine = builder.build_with_cfg(&cfg, true).unwrap();
     let kvdb = engine.get_rocksdb();
 
     // Make all entries earlier than safe point.
@@ -145,7 +145,7 @@ fn test_ttl_compaction_filter_impl<F: KvFormat>() {
     let builder = TestEngineBuilder::new()
         .path(dir.path())
         .api_version(F::TAG);
-    let engine = builder.build_with_cfg(&cfg).unwrap();
+    let engine = builder.build_with_cfg(&cfg, true).unwrap();
     let kvdb = engine.get_rocksdb();
 
     let key1 = b"zr\0key1";
