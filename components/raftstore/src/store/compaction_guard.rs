@@ -247,7 +247,7 @@ impl<P: RegionInfoProvider> SstPartitioner for CompactionGuardGenerator<P> {
     }
 }
 
-fn seek_to(all_data: &Vec<Vec<u8>>, target_key: &[u8], from_pos: usize) -> usize {
+fn seek_to(all_data: &[Vec<u8>], target_key: &[u8], from_pos: usize) -> usize {
     let mut pos = from_pos;
     let mut skip_count = 0;
     while pos < all_data.len() && all_data[pos].as_slice() <= target_key {

@@ -217,7 +217,7 @@ mod test {
 
     #[test]
     fn test_failure() {
-        let leaders = vec![1, 2, 3];
+        let leaders = [1, 2, 3];
         let mut store = MockStore::default();
         store.regions = leaders.iter().copied().collect();
         let mut lk = LeaderKeeper::<RocksEngine, _>::new(store, vec![1, 2, 3, 4]);

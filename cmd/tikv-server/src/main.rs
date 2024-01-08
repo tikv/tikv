@@ -221,6 +221,15 @@ fn main() {
         process::exit(1)
     }
 
+    // Initialize the async-backtrace.
+    #[cfg(feature = "trace-async-tasks")]
+    {
+        use tracing_subscriber::prelude::*;
+        tracing_subscriber::registry()
+            .with(tracing_active_tree::layer::global().clone())
+            .init();
+    }
+
     // Sets the global logger ASAP.
     // It is okay to use the config w/o `validate()`,
     // because `initial_logger()` handles various conditions.

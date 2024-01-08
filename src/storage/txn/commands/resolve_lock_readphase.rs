@@ -48,10 +48,10 @@ impl<S: Snapshot> ReadCommand<S> for ResolveLockReadPhase {
         let tag = self.tag();
         let (ctx, txn_status) = (self.ctx, self.txn_status);
         let mut reader = MvccReader::new_with_ctx(snapshot, Some(ScanMode::Forward), &ctx);
-        let result = reader.scan_locks(
+        let result = reader.scan_locks_from_storage(
             self.scan_key.as_ref(),
             None,
-            |lock| txn_status.contains_key(&lock.ts),
+            |_, lock| txn_status.contains_key(&lock.ts),
             RESOLVE_LOCK_BATCH_SIZE,
         );
         statistics.add(&reader.statistics);
