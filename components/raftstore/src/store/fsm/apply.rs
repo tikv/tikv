@@ -6865,7 +6865,10 @@ mod tests {
         let mut res = fetch_apply_res(&rx);
         // There may be one or two ApplyRes which depends on whether these two apply
         // msgs are batched together.
-        if res.apply_state.get_applied_index() == 3 {
+        if res.apply_state.get_applied_index() == 2 {
+            res = fetch_apply_res(&rx);
+        }
+        if res.apply_state.get_applied_index() == 4 {
             res = fetch_apply_res(&rx);
         }
         assert_eq!(res.apply_state.get_applied_index(), 5);
