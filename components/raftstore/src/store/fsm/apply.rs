@@ -2007,6 +2007,7 @@ where
         match ctx.importer.validate(sst) {
             Ok(meta_info) => {
                 ctx.pending_ssts.push(meta_info.clone());
+                self.has_pending_ssts = true;
                 ssts.push(meta_info)
             }
             Err(e) => {
@@ -2015,7 +2016,6 @@ where
                 panic!("{} ingest {:?}: {:?}", self.tag, sst, e);
             }
         };
-        self.has_pending_ssts = true;
         Ok(())
     }
 }
