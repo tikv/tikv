@@ -1562,14 +1562,15 @@ mod tests {
                 core.engine.get_mut(&1).unwrap().data[cf_to_id("write")].clone()
             };
 
+            let mut s = 1;
             for seq in 2..50 {
-                put_key_val(&sl, "a", "val", 10, 1);
+                put_key_val(&sl, "a", "val", 10, s + 1);
                 for i in 2..50 {
                     let v = construct_value(i, i);
-                    put_key_val(&sl, "b", v.as_str(), 10, i);
+                    put_key_val(&sl, "b", v.as_str(), 10, s + i);
                 }
 
-                let snapshot = engine.snapshot(1, 10, seq).unwrap();
+                let snapshot = engine.snapshot(1, 10, s + seq).unwrap();
                 let mut iter = snapshot.iterator_opt("write", iter_opt.clone()).unwrap();
                 assert!(iter.seek_to_last().unwrap());
                 let k = construct_mvcc_key("b", 10);
@@ -1583,6 +1584,7 @@ mod tests {
                 assert_eq!(iter.value(), b"val");
                 assert!(!iter.prev().unwrap());
                 assert!(!iter.valid().unwrap());
+                s += 100;
             }
         }
 
@@ -1597,13 +1599,14 @@ mod tests {
                 core.engine.get_mut(&1).unwrap().data[cf_to_id("write")].clone()
             };
 
+            let mut s = 1;
             for seq in 2..50 {
-                put_key_val(&sl, "a", "val", 10, 1);
+                put_key_val(&sl, "a", "val", 10, s + 1);
                 for i in 2..50 {
-                    delete_key(&sl, "b", 10, i);
+                    delete_key(&sl, "b", 10, s + i);
                 }
 
-                let snapshot = engine.snapshot(1, 10, seq).unwrap();
+                let snapshot = engine.snapshot(1, 10, s + seq).unwrap();
                 let mut iter = snapshot.iterator_opt("write", iter_opt.clone()).unwrap();
                 assert!(iter.seek_to_last().unwrap());
                 let k = construct_mvcc_key("a", 10);
@@ -1611,6 +1614,7 @@ mod tests {
                 assert_eq!(iter.value(), b"val");
                 assert!(!iter.prev().unwrap());
                 assert!(!iter.valid().unwrap());
+                s += 100;
             }
         }
 
@@ -1656,20 +1660,23 @@ mod tests {
                 core.region_metas.get_mut(&1).unwrap().safe_ts = 5;
                 core.engine.get_mut(&1).unwrap().data[cf_to_id("write")].clone()
             };
+            let mut s = 1;
             for seq in 2..50 {
                 for i in 2..50 {
-                    delete_key(&sl, "b", 10, i);
+                    delete_key(&sl, "b", 10, s + i);
                 }
                 let v = construct_value(50, 50);
-                put_key_val(&sl, "b", v.as_str(), 10, 50);
+                put_key_val(&sl, "b", v.as_str(), 10, s + 50);
 
-                let snapshot = engine.snapshot(1, 10, seq).unwrap();
+                let snapshot = engine.snapshot(1, 10, s + seq).unwrap();
                 let mut iter = snapshot.iterator_opt("write", iter_opt.clone()).unwrap();
                 assert!(!iter.seek_to_first().unwrap());
                 assert!(!iter.valid().unwrap());
 
                 assert!(!iter.seek_to_last().unwrap());
                 assert!(!iter.valid().unwrap());
+
+                s += 100;
             }
         }
     }
