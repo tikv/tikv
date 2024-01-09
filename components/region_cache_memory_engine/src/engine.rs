@@ -68,6 +68,12 @@ impl AllocationRecorder for GlobalMemoryLimiter {
     }
 }
 
+impl Drop for GlobalMemoryLimiter {
+    fn drop(&mut self) {
+        assert!(self.recorder.lock().unwrap().is_empty());
+    }
+}
+
 /// RegionMemoryEngine stores data for a specific cached region
 ///
 /// todo: The skiplist used here currently is for test purpose. Replace it
@@ -75,11 +81,11 @@ impl AllocationRecorder for GlobalMemoryLimiter {
 #[derive(Clone)]
 pub struct RegionMemoryEngine {
     data: [Arc<Skiplist<InternalKeyComparator, GlobalMemoryLimiter>>; 3],
-    global_limiter: GlobalMemoryLimiter,
+    global_limiter: Arc<GlobalMemoryLimiter>,
 }
 
 impl RegionMemoryEngine {
-    pub fn new(global_limiter: GlobalMemoryLimiter) -> Self {
+    pub fn new(global_limiter: Arc<GlobalMemoryLimiter>) -> Self {
         RegionMemoryEngine {
             data: [
                 Arc::new(Skiplist::new(
@@ -375,7 +381,7 @@ impl RegionCacheMemoryEngineCore {
 #[derive(Clone, Default)]
 pub struct RegionCacheMemoryEngine {
     core: Arc<Mutex<RegionCacheMemoryEngineCore>>,
-    memory_limiter: GlobalMemoryLimiter,
+    memory_limiter: Arc<GlobalMemoryLimiter>,
 }
 
 impl RegionCacheMemoryEngine {
