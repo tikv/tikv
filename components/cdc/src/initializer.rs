@@ -1090,7 +1090,7 @@ mod tests {
     }
 
     #[test]
-    fn test_scanner() {
+    fn test_scanner_with_titan() {
         let mut cfg = DbConfig::default();
         cfg.titan.enabled = Some(true);
         cfg.defaultcf.titan.blob_run_mode = BlobRunMode::Normal;
@@ -1099,9 +1099,7 @@ mod tests {
         cfg.writecf.titan.min_blob_size = ReadableSize(0);
         cfg.lockcf.titan.blob_run_mode = BlobRunMode::Normal;
         cfg.lockcf.titan.min_blob_size = ReadableSize(0);
-        let mut engine = TestEngineBuilder::new()
-            .build_with_cfg(&cfg, true)
-            .unwrap();
+        let mut engine = TestEngineBuilder::new().build_with_cfg(&cfg).unwrap();
 
         must_prewrite_put(&mut engine, b"zkey", b"value", b"zkey", 100);
         must_commit(&mut engine, b"zkey", 100, 110);
