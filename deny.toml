@@ -77,7 +77,7 @@ ignore = [
 [licenses]
 unlicensed = "allow" # FIXME: Deny it.
 copyleft = "deny"
-private = { ignore = true }
+private = { ignore = false }
 # Allow licenses in Category A
 allow = [
     "0BSD",
