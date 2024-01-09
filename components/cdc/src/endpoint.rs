@@ -18,7 +18,10 @@ use concurrency_manager::ConcurrencyManager;
 use crossbeam::atomic::AtomicCell;
 use engine_traits::KvEngine;
 use fail::fail_point;
-use futures::compat::Future01CompatExt;
+use futures::{
+    channel::mpsc as futures_mpsc, compat::Future01CompatExt, executor::block_on, lock::Mutex,
+    StreamExt,
+};
 use grpcio::Environment;
 use kvproto::{
     cdcpb::{
@@ -36,6 +39,7 @@ use raftstore::{
     router::CdcHandle,
     store::fsm::{store::StoreRegionMeta, ChangeObserver},
 };
+use rand::Rng;
 use resolved_ts::{resolve_by_raft, LeadershipResolver, Resolver};
 use security::SecurityManager;
 use tikv::{
@@ -62,7 +66,7 @@ use txn_types::{TimeStamp, TxnExtra, TxnExtraScheduler};
 use crate::{
     channel::{CdcEvent, SendError},
     delegate::{on_init_downstream, Delegate, Downstream, DownstreamId, DownstreamState},
-    initializer::Initializer,
+    initializer::{InitializeTask, Initializer},
     metrics::*,
     old_value::{OldValueCache, OldValueCallback},
     service::{validate_kv_api, Conn, ConnId, FeatureGate},
@@ -385,9 +389,11 @@ pub struct Endpoint<T, E, S> {
 
     // Incremental scan
     workers: Runtime,
+    initialize_queue: Option<futures_mpsc::UnboundedSender<InitializeTask<T, E>>>,
+    scan_concurrency_semaphore: Arc<Mutex<Arc<Semaphore>>>,
+
     // The total number of scan tasks including running and pending.
     scan_task_counter: Arc<AtomicIsize>,
-    scan_concurrency_semaphore: Arc<Semaphore>,
     scan_speed_limiter: Limiter,
     fetch_speed_limiter: Limiter,
     max_scan_batch_bytes: usize,
@@ -442,8 +448,6 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
 
         // Initialized for the first time, subsequent adjustments will be made based on
         // configuration updates.
-        let scan_concurrency_semaphore =
-            Arc::new(Semaphore::new(config.incremental_scan_concurrency));
         let old_value_cache = OldValueCache::new(config.old_value_cache_memory_quota);
         let scan_speed_limiter = Limiter::new(if config.incremental_scan_speed_limit.0 > 0 {
             config.incremental_scan_speed_limit.0 as f64
@@ -472,7 +476,8 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
             region_read_progress,
             store_resolver_gc_interval,
         );
-        let ep = Endpoint {
+
+        let mut ep = Endpoint {
             cluster_id,
             capture_regions: HashMap::default(),
             connections: HashMap::default(),
@@ -489,7 +494,10 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
             raftstore_v2,
             api_version,
             workers,
-            scan_concurrency_semaphore,
+            initialize_queue: None,
+            scan_concurrency_semaphore: Arc::new(Mutex::new(Arc::new(Semaphore::new(
+                config.incremental_scan_concurrency,
+            )))),
             cdc_handle,
             tablets,
             observer,
@@ -509,8 +517,50 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
             current_ts: TimeStamp::zero(),
             causal_ts_provider,
         };
+        ep.spawn_incremental_scan_dispatcher();
         ep.register_min_ts_event(leader_resolver, Instant::now());
         ep
+    }
+
+    fn spawn_incremental_scan_dispatcher(&mut self) {
+        let (tx, mut rx) = futures_mpsc::unbounded::<InitializeTask<T, E>>();
+        let init_tasks = Arc::new(Mutex::new(vec![]));
+        let (consume_tx, mut consume_rx) = futures_mpsc::unbounded();
+
+        let init_tasks_cloned = init_tasks.clone();
+        self.workers.spawn(async move {
+            while let Some(task) = rx.next().await {
+                init_tasks_cloned.lock().await.push(task);
+                consume_tx.unbounded_send(()).unwrap();
+            }
+            drop(consume_tx);
+        });
+
+        let scan_concurrency_semaphore_cloned = self.scan_concurrency_semaphore.clone();
+        let handle = self.workers.handle().clone();
+        self.workers.spawn(async move {
+            while consume_rx.next().await.is_some() {
+                let task = {
+                    let mut tasks = init_tasks.lock().await;
+                    let offset = rand::thread_rng().gen_range(0, tasks.len());
+                    tasks.swap_remove(offset)
+                };
+
+                // To avoid holding too many snapshots and holding them too long,
+                // we need to acquire scan concurrency permit before taking snapshot.
+                let semaphore = scan_concurrency_semaphore_cloned.lock().await.clone();
+                let _permit = semaphore.acquire().await;
+                handle.spawn(async move { task.run().await });
+            }
+        });
+
+        self.initialize_queue = Some(tx);
+    }
+
+    #[cfg(test)]
+    fn available_incremental_scan_permits(&self) -> usize {
+        let guard = block_on(self.scan_concurrency_semaphore.lock());
+        guard.available_permits()
     }
 
     fn on_change_cfg(&mut self, change: ConfigChange) {
@@ -544,8 +594,8 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
         // Maybe the limit will be exceeded for a while after the concurrency becomes
         // smaller, but it is acceptable.
         if change.get("incremental_scan_concurrency").is_some() {
-            self.scan_concurrency_semaphore =
-                Arc::new(Semaphore::new(self.config.incremental_scan_concurrency))
+            let mut guard = block_on(self.scan_concurrency_semaphore.lock());
+            *guard = Arc::new(Semaphore::new(self.config.incremental_scan_concurrency));
         }
 
         if change.get("sink_memory_quota").is_some() {
@@ -729,9 +779,9 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
 
         let scan_task_counter = self.scan_task_counter.clone();
         let scan_task_count = scan_task_counter.fetch_add(1, Ordering::Relaxed);
-        let release_scan_task_counter = tikv_util::DeferContext::new(move || {
+        let release_scan_task_counter = tikv_util::DeferContext::new(Box::new(move || {
             scan_task_counter.fetch_sub(1, Ordering::Relaxed);
-        });
+        }) as _);
         if scan_task_count + 1 > self.config.incremental_scan_concurrency_limit as isize {
             debug!("cdc rejects registration, too many scan tasks";
                 "region_id" => region_id,
@@ -821,10 +871,9 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
             );
         };
 
-        let change_cmd = ChangeObserver::from_cdc(region_id, delegate.handle.clone());
         let observed_range = downstream_.observed_range;
         let region_epoch = request.take_region_epoch();
-        let mut init = Initializer {
+        let init = Initializer {
             tablet: self.tablets.get(region_id).map(|t| t.into_owned()),
             sched,
             observed_range,
@@ -837,6 +886,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
             downstream_state,
             scan_speed_limiter: self.scan_speed_limiter.clone(),
             fetch_speed_limiter: self.fetch_speed_limiter.clone(),
+            memory_quota: self.sink_memory_quota.clone(),
             max_scan_batch_bytes: self.max_scan_batch_bytes,
             max_scan_batch_size: self.max_scan_batch_size,
             observe_id,
@@ -847,28 +897,13 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
             filter_loop,
         };
 
-        let cdc_handle = self.cdc_handle.clone();
-        let concurrency_semaphore = self.scan_concurrency_semaphore.clone();
-        let memory_quota = self.sink_memory_quota.clone();
-        self.workers.spawn(async move {
-            CDC_SCAN_TASKS.with_label_values(&["total"]).inc();
-            match init
-                .initialize(change_cmd, cdc_handle, concurrency_semaphore, memory_quota)
-                .await
-            {
-                Ok(()) => {
-                    CDC_SCAN_TASKS.with_label_values(&["finish"]).inc();
-                }
-                Err(e) => {
-                    CDC_SCAN_TASKS.with_label_values(&["abort"]).inc();
-                    error!(
-                        "cdc initialize fail: {}", e; "region_id" => region_id,
-                        "conn_id" => ?init.conn_id, "request_id" => init.request_id,
-                    );
-                    init.deregister_downstream(e)
-                }
-            }
-            drop(release_scan_task_counter);
+        CDC_SCAN_TASKS.with_label_values(&["total"]).inc();
+        let tx = self.initialize_queue.as_ref().unwrap();
+        let _ = tx.unbounded_send(InitializeTask {
+            init,
+            change_cmd: ChangeObserver::from_cdc(region_id, delegate.handle.clone()),
+            cdc_handle: self.cdc_handle.clone(),
+            scan_release: release_scan_task_counter,
         });
     }
 
@@ -1326,6 +1361,12 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta + Send> Runnable
             Task::ChangeConfig(change) => self.on_change_cfg(change),
         }
     }
+
+    fn shutdown(&mut self) {
+        if let Some(tx) = self.initialize_queue.as_ref() {
+            tx.close_channel();
+        }
+    }
 }
 
 impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta + Send> RunnableWithTimer
@@ -1758,7 +1799,7 @@ mod tests {
             let diff = cfg.diff(&updated_cfg);
             ep.run(Task::ChangeConfig(diff));
             assert_eq!(ep.config.incremental_scan_concurrency, 4);
-            assert_eq!(ep.scan_concurrency_semaphore.available_permits(), 4);
+            assert_eq!(ep.available_incremental_scan_permits(), 4);
 
             {
                 // Correct update.
@@ -1767,7 +1808,7 @@ mod tests {
             let diff = cfg.diff(&updated_cfg);
             ep.run(Task::ChangeConfig(diff));
             assert_eq!(ep.config.incremental_scan_concurrency, 8);
-            assert_eq!(ep.scan_concurrency_semaphore.available_permits(), 8);
+            assert_eq!(ep.available_incremental_scan_permits(), 8);
         }
 
         // Modify sink_memory_quota.
@@ -2057,10 +2098,6 @@ mod tests {
         let mut suite = mock_endpoint(&cfg, None, ApiVersion::V1);
 
         // Pause scan task runtime.
-        suite.endpoint.workers = Builder::new_multi_thread()
-            .worker_threads(1)
-            .build()
-            .unwrap();
         let (pause_tx, pause_rx) = std::sync::mpsc::channel::<()>();
         suite.endpoint.workers.spawn(async move {
             let _ = pause_rx.recv();
