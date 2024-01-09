@@ -1100,7 +1100,7 @@ mod tests {
         cfg.lockcf.titan.blob_run_mode = BlobRunMode::Normal;
         cfg.lockcf.titan.min_blob_size = ReadableSize(0);
         let mut engine = TestEngineBuilder::new()
-            .build_with_cfg(&cfg, false)
+            .build_with_cfg(&cfg, true)
             .unwrap();
 
         must_prewrite_put(&mut engine, b"zkey", b"value", b"zkey", 100);
