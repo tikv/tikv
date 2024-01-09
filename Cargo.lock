@@ -5228,7 +5228,7 @@ checksum = "fa8f3741c7372e75519bd9346068370c9cdaabcc1f9599cbcf2a2719352286b7"
 [[package]]
 name = "skiplist-rs"
 version = "0.1.0"
-source = "git+https://github.com/tikv/skiplist-rs.git?branch=main#3cc4da483c1ed8c5cdf71c49d52e4216fc0257d2"
+source = "git+https://github.com/tikv/skiplist-rs.git?branch=main#b1e1d4ff0ae0603df1f18a63888cbd6c3fac991a"
 dependencies = [
  "bytes",
  "rand 0.8.5",
