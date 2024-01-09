@@ -5228,11 +5228,13 @@ checksum = "fa8f3741c7372e75519bd9346068370c9cdaabcc1f9599cbcf2a2719352286b7"
 [[package]]
 name = "skiplist-rs"
 version = "0.1.0"
-source = "git+https://github.com/tikv/skiplist-rs.git?branch=main#618af619d9348ef89eaa71c5f6fbddbd9a5c09bf"
+source = "git+https://github.com/tikv/skiplist-rs.git?branch=main#3cc4da483c1ed8c5cdf71c49d52e4216fc0257d2"
 dependencies = [
  "bytes",
  "rand 0.8.5",
  "slog",
+ "tikv-jemalloc-ctl",
+ "tikv-jemallocator",
 ]
 
 [[package]]

@@ -9,15 +9,14 @@ use std::{
 };
 
 use bytes::Bytes;
-use collections::HashMap;
+use collections::{HashMap, HashSet};
 use engine_rocks::{raw::SliceTransform, util::FixedSuffixSliceTransform};
 use engine_traits::{
     CfNamesExt, DbVector, Error, IterOptions, Iterable, Iterator, Mutable, Peekable, ReadOptions,
     RegionCacheEngine, Result, Snapshot, SnapshotMiscExt, WriteBatch, WriteBatchExt, WriteOptions,
     CF_DEFAULT, CF_LOCK, CF_WRITE,
 };
-use skiplist_rs::{IterRef, Skiplist};
-use tikv_util::config::ReadableSize;
+use skiplist_rs::{AllocationRecorder, IterRef, MemoryLimiter, Node, Skiplist};
 
 use crate::keys::{
     decode_key, encode_seek_key, InternalKey, InternalKeyComparator, ValueType,
@@ -33,42 +32,70 @@ fn cf_to_id(cf: &str) -> usize {
     }
 }
 
+// todo: implement a real memory limiter. Now, it is used for test.
+#[derive(Clone, Default)]
+pub struct GlobalMemoryLimiter {
+    recorder: Arc<Mutex<HashMap<usize, usize>>>,
+    removed: Arc<Mutex<HashSet<Vec<u8>>>>,
+}
+
+impl MemoryLimiter for GlobalMemoryLimiter {
+    fn acquire(&self, n: usize) -> bool {
+        true
+    }
+
+    fn mem_usage(&self) -> usize {
+        0
+    }
+
+    fn reclaim(&self, n: usize) {}
+}
+
+impl AllocationRecorder for GlobalMemoryLimiter {
+    fn alloc(&self, addr: usize, size: usize) {
+        let mut recorder = self.recorder.lock().unwrap();
+        assert!(!recorder.contains_key(&addr));
+        recorder.insert(addr, size);
+    }
+
+    fn free(&self, addr: usize, size: usize) {
+        let node = addr as *mut Node;
+        let mut removed = self.removed.lock().unwrap();
+        removed.insert(unsafe { (*node).key().to_vec() });
+        let mut recorder = self.recorder.lock().unwrap();
+        assert_eq!(recorder.remove(&addr).unwrap(), size);
+    }
+}
+
 /// RegionMemoryEngine stores data for a specific cached region
 ///
 /// todo: The skiplist used here currently is for test purpose. Replace it
 /// with a formal implementation.
 #[derive(Clone)]
 pub struct RegionMemoryEngine {
-    data: [Arc<Skiplist<InternalKeyComparator>>; 3],
+    data: [Arc<Skiplist<InternalKeyComparator, GlobalMemoryLimiter>>; 3],
+    global_limiter: GlobalMemoryLimiter,
 }
 
 impl RegionMemoryEngine {
-    pub fn with_capacity(arena_size: usize) -> Self {
+    pub fn new(global_limiter: GlobalMemoryLimiter) -> Self {
         RegionMemoryEngine {
             data: [
-                Arc::new(Skiplist::with_capacity(
+                Arc::new(Skiplist::new(
                     InternalKeyComparator::default(),
-                    arena_size,
-                    true,
+                    global_limiter.clone(),
                 )),
-                Arc::new(Skiplist::with_capacity(
+                Arc::new(Skiplist::new(
                     InternalKeyComparator::default(),
-                    arena_size,
-                    true,
+                    global_limiter.clone(),
                 )),
-                Arc::new(Skiplist::with_capacity(
+                Arc::new(Skiplist::new(
                     InternalKeyComparator::default(),
-                    arena_size,
-                    true,
+                    global_limiter.clone(),
                 )),
             ],
+            global_limiter,
         }
-    }
-}
-
-impl Default for RegionMemoryEngine {
-    fn default() -> Self {
-        RegionMemoryEngine::with_capacity(ReadableSize::mb(1).0 as usize)
     }
 }
 
@@ -98,6 +125,10 @@ impl SnapshotList {
             *count -= 1;
         }
     }
+
+    fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
 }
 
 #[derive(Default)]
@@ -111,6 +142,7 @@ pub struct RegionMemoryMeta {
     // Request with read_ts below it is not eligible for granting snapshot.
     // Note: different region can have different safe_ts.
     safe_ts: u64,
+    evicted: bool,
 }
 
 impl RegionMemoryMeta {
@@ -120,6 +152,10 @@ impl RegionMemoryMeta {
 
     pub fn set_safe_ts(&mut self, safe_ts: u64) {
         self.safe_ts = safe_ts;
+    }
+
+    pub fn ready_to_remove(&self) -> bool {
+        self.snapshot_list.is_empty() && self.evicted
     }
 }
 
@@ -155,6 +191,7 @@ impl RegionCacheMemoryEngineCore {
 #[derive(Clone, Default)]
 pub struct RegionCacheMemoryEngine {
     core: Arc<Mutex<RegionCacheMemoryEngineCore>>,
+    memory_limiter: GlobalMemoryLimiter,
 }
 
 impl RegionCacheMemoryEngine {
@@ -175,9 +212,32 @@ impl RegionCacheMemoryEngine {
 
         assert!(core.engine.get(&region_id).is_none());
         assert!(core.region_metas.get(&region_id).is_none());
-        core.engine.insert(region_id, RegionMemoryEngine::default());
+        core.engine.insert(
+            region_id,
+            RegionMemoryEngine::new(self.memory_limiter.clone()),
+        );
         core.region_metas
             .insert(region_id, RegionMemoryMeta::default());
+    }
+
+    pub fn evict(&self, region_id: u64) {
+        let mut core = self.core.lock().unwrap();
+        assert!(core.engine.get(&region_id).is_some());
+        assert!(core.region_metas.get(&region_id).is_some());
+        let meta = core.region_metas.get_mut(&region_id).unwrap();
+        meta.can_read = false;
+        meta.evicted = true;
+
+        let eviction = if meta.ready_to_remove() {
+            core.region_metas.remove(&region_id);
+            Some(core.engine.remove(&region_id).unwrap())
+        } else {
+            None
+        };
+
+        // unlock before drop the skipplist
+        drop(core);
+        drop(eviction);
     }
 }
 
@@ -217,7 +277,11 @@ enum Direction {
 pub struct RegionCacheIterator {
     cf: String,
     valid: bool,
-    iter: IterRef<Skiplist<InternalKeyComparator>, InternalKeyComparator>,
+    iter: IterRef<
+        Skiplist<InternalKeyComparator, GlobalMemoryLimiter>,
+        InternalKeyComparator,
+        GlobalMemoryLimiter,
+    >,
     // The lower bound is inclusive while the upper bound is exclusive if set
     // Note: bounds (region boundaries) have no mvcc versions
     lower_bound: Vec<u8>,
@@ -606,6 +670,11 @@ impl Drop for RegionCacheSnapshot {
         let mut core = self.engine.core.lock().unwrap();
         let meta = core.region_metas.get_mut(&self.region_id).unwrap();
         meta.snapshot_list.remove_snapshot(self.snapshot_ts);
+
+        if meta.ready_to_remove() {
+            core.region_metas.remove(&self.region_id);
+            core.engine.remove(&self.region_id);
+        }
     }
 }
 
@@ -710,7 +779,7 @@ impl<'a> PartialEq<&'a [u8]> for RegionCacheDbVector {
 
 #[cfg(test)]
 mod tests {
-    use core::ops::Range;
+    use core::{ops::Range, slice::SlicePattern};
     use std::{iter, iter::StepBy, ops::Deref, sync::Arc};
 
     use bytes::{BufMut, Bytes};
@@ -719,7 +788,7 @@ mod tests {
     };
     use skiplist_rs::Skiplist;
 
-    use super::{cf_to_id, RegionCacheIterator};
+    use super::{cf_to_id, GlobalMemoryLimiter, RegionCacheIterator};
     use crate::{
         keys::{encode_key, InternalKeyComparator, ValueType},
         RegionCacheMemoryEngine,
@@ -807,7 +876,7 @@ mod tests {
     }
 
     fn fill_data_in_skiplist(
-        sl: Arc<Skiplist<InternalKeyComparator>>,
+        sl: Arc<Skiplist<InternalKeyComparator, GlobalMemoryLimiter>>,
         key_range: StepBy<Range<u64>>,
         mvcc_range: Range<u64>,
         mut start_seq: u64,
@@ -824,7 +893,7 @@ mod tests {
     }
 
     fn delete_data_in_skiplist(
-        sl: Arc<Skiplist<InternalKeyComparator>>,
+        sl: Arc<Skiplist<InternalKeyComparator, GlobalMemoryLimiter>>,
         key_range: StepBy<Range<u64>>,
         mvcc_range: Range<u64>,
         mut seq: u64,
@@ -847,7 +916,7 @@ mod tests {
     }
 
     fn put_key_val(
-        sl: &Arc<Skiplist<InternalKeyComparator>>,
+        sl: &Arc<Skiplist<InternalKeyComparator, GlobalMemoryLimiter>>,
         key: &str,
         val: &str,
         mvcc: u64,
@@ -858,7 +927,12 @@ mod tests {
         sl.put(key, Bytes::from(val.to_owned()));
     }
 
-    fn delete_key(sl: &Arc<Skiplist<InternalKeyComparator>>, key: &str, mvcc: u64, seq: u64) {
+    fn delete_key(
+        sl: &Arc<Skiplist<InternalKeyComparator, GlobalMemoryLimiter>>,
+        key: &str,
+        mvcc: u64,
+        seq: u64,
+    ) {
         let key = construct_mvcc_key(key, mvcc);
         let key = encode_key(&key, seq, ValueType::Deletion);
         sl.put(key, Bytes::default());
@@ -1662,6 +1736,90 @@ mod tests {
                 iter.prev().unwrap();
             }
             assert_eq!(start, 20);
+        }
+    }
+
+    #[test]
+    fn test_eviction() {
+        // case 1: eviction when there's no snapshot
+        {
+            let engine = RegionCacheMemoryEngine::default();
+            engine.new_region(1);
+
+            {
+                let mut core = engine.core.lock().unwrap();
+                core.region_metas.get_mut(&1).unwrap().can_read = true;
+                core.region_metas.get_mut(&1).unwrap().safe_ts = 5;
+                let s1 = core.engine.get_mut(&1).unwrap().data[cf_to_id("write")].clone();
+
+                for i in 0..10 {
+                    let user_key = construct_key(i, 10);
+                    let internal_key = encode_key(&user_key, 10, ValueType::Value);
+                    let v = format!("v{:04}{:04}", i, 10);
+                    s1.put(internal_key.clone(), v.clone());
+                }
+            }
+
+            engine.evict(1);
+            let removed = engine.memory_limiter.removed.lock().unwrap();
+            for i in 0..10 {
+                let user_key = construct_key(i, 10);
+                let internal_key = encode_key(&user_key, 10, ValueType::Value);
+                assert!(removed.contains(internal_key.as_slice()));
+            }
+        }
+
+        // case 2: eviction when there are some snapshots
+        {
+            let engine = RegionCacheMemoryEngine::default();
+            engine.new_region(1);
+
+            {
+                let mut core = engine.core.lock().unwrap();
+                core.region_metas.get_mut(&1).unwrap().can_read = true;
+                core.region_metas.get_mut(&1).unwrap().safe_ts = 5;
+                let s1 = core.engine.get_mut(&1).unwrap().data[cf_to_id("write")].clone();
+
+                for i in 0..10 {
+                    let user_key = construct_key(i, 10);
+                    let internal_key = encode_key(&user_key, 10, ValueType::Value);
+                    let v = format!("v{:04}{:04}", i, 10);
+                    s1.put(internal_key.clone(), v.clone());
+                }
+            }
+            let s1 = engine.snapshot(1, 10, 10);
+            let s2 = engine.snapshot(1, 20, 20);
+            engine.evict(1);
+
+            {
+                let removed = engine.memory_limiter.removed.lock().unwrap();
+                for i in 0..10 {
+                    let user_key = construct_key(i, 10);
+                    let internal_key = encode_key(&user_key, 10, ValueType::Value);
+                    assert!(!removed.contains(internal_key.as_slice()));
+                }
+            }
+
+            drop(s1);
+            {
+                // the region still can not be removed
+                let removed = engine.memory_limiter.removed.lock().unwrap();
+                for i in 0..10 {
+                    let user_key = construct_key(i, 10);
+                    let internal_key = encode_key(&user_key, 10, ValueType::Value);
+                    assert!(!removed.contains(internal_key.as_slice()));
+                }
+            }
+
+            drop(s2);
+            {
+                let removed = engine.memory_limiter.removed.lock().unwrap();
+                for i in 0..10 {
+                    let user_key = construct_key(i, 10);
+                    let internal_key = encode_key(&user_key, 10, ValueType::Value);
+                    assert!(removed.contains(internal_key.as_slice()));
+                }
+            }
         }
     }
 }
