@@ -247,14 +247,14 @@ const KVDB_DEFAULT_BACKGROUND_JOB_LIMITS: BackgroundJobLimits = BackgroundJobLim
     max_background_jobs: 9,
     max_background_flushes: 3,
     max_sub_compactions: 3,
-    max_titan_background_gc: 4,
+    max_titan_background_gc: 1,
 };
 
 const RAFTDB_DEFAULT_BACKGROUND_JOB_LIMITS: BackgroundJobLimits = BackgroundJobLimits {
     max_background_jobs: 4,
     max_background_flushes: 1,
     max_sub_compactions: 2,
-    max_titan_background_gc: 4,
+    max_titan_background_gc: 1,
 };
 
 // `defaults` serves as an upper bound for returning limits.
@@ -1858,6 +1858,7 @@ impl Default for RaftDbConfig {
         let bg_job_limits =
             get_background_job_limits(EngineType::RaftKv, &RAFTDB_DEFAULT_BACKGROUND_JOB_LIMITS);
         let titan_config = TitanDbConfig {
+            enabled: Some(false),
             max_background_gc: bg_job_limits.max_titan_background_gc as i32,
             ..Default::default()
         };
@@ -6471,7 +6472,7 @@ mod tests {
                     max_background_jobs: 2,
                     max_background_flushes: 1,
                     max_sub_compactions: 1,
-                    max_titan_background_gc: 2,
+                    max_titan_background_gc: 1,
                 }
             );
             assert_eq!(
@@ -6484,7 +6485,7 @@ mod tests {
                     max_background_jobs: 2,
                     max_background_flushes: 1,
                     max_sub_compactions: 1,
-                    max_titan_background_gc: 2,
+                    max_titan_background_gc: 1,
                 }
             );
         }
@@ -6500,7 +6501,7 @@ mod tests {
                 max_background_jobs: 3,
                 max_background_flushes: 1,
                 max_sub_compactions: 1,
-                max_titan_background_gc: 4,
+                max_titan_background_gc: 1,
             }
         );
         assert_eq!(
@@ -6513,7 +6514,7 @@ mod tests {
                 max_background_jobs: 2,
                 max_background_flushes: 1,
                 max_sub_compactions: 1,
-                max_titan_background_gc: 4,
+                max_titan_background_gc: 1,
             }
         );
         assert_eq!(
@@ -6526,7 +6527,7 @@ mod tests {
                 max_background_jobs: 3,
                 max_background_flushes: 1,
                 max_sub_compactions: 1,
-                max_titan_background_gc: 4,
+                max_titan_background_gc: 1,
             }
         );
         // cpu num = 8
@@ -6540,7 +6541,7 @@ mod tests {
                 max_background_jobs: 7,
                 max_background_flushes: 2,
                 max_sub_compactions: 3,
-                max_titan_background_gc: 4,
+                max_titan_background_gc: 1,
             }
         );
         assert_eq!(
@@ -6553,7 +6554,7 @@ mod tests {
                 max_background_jobs: 4,
                 max_background_flushes: 2,
                 max_sub_compactions: 1,
-                max_titan_background_gc: 4,
+                max_titan_background_gc: 1,
             }
         );
         assert_eq!(
@@ -6583,7 +6584,7 @@ mod tests {
                 max_background_jobs: 6,
                 max_background_flushes: 3,
                 max_sub_compactions: 2,
-                max_titan_background_gc: 4,
+                max_titan_background_gc: 1,
             }
         );
         assert_eq!(
