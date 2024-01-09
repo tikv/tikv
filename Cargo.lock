@@ -2763,7 +2763,11 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
+<<<<<<< HEAD
 source = "git+https://github.com/pingcap/kvproto.git?branch=release-7.1#f4a2db6417b657c65ea5d65374c954e3afa5acf0"
+=======
+source = "git+https://github.com/pingcap/kvproto.git#4f28b82c78601a0819f02b1e903603735ec60fe9"
+>>>>>>> 5f5431a953 (raft_log_engine: update to latest version. (#16294))
 dependencies = [
  "futures 0.3.15",
  "grpcio",
@@ -3002,7 +3006,20 @@ version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "057a3db23999c867821a7a59feb06a578fcb03685e983dff90daf9e7d24ac08f"
 dependencies = [
+<<<<<<< HEAD
  "libc 0.2.139",
+=======
+ "libc 0.2.146",
+]
+
+[[package]]
+name = "memmap2"
+version = "0.9.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "45fd3a57831bf88bc63f8cebc0cf956116276e97fef3966103e96416209f7c92"
+dependencies = [
+ "libc 0.2.146",
+>>>>>>> 5f5431a953 (raft_log_engine: update to latest version. (#16294))
 ]
 
 [[package]]
@@ -4119,8 +4136,13 @@ dependencies = [
 
 [[package]]
 name = "raft-engine"
+<<<<<<< HEAD
 version = "0.3.0"
 source = "git+https://github.com/tikv/raft-engine.git#39f4db451295dbd8b30db4f94f220182c2c65be9"
+=======
+version = "0.4.1"
+source = "git+https://github.com/tikv/raft-engine.git#e505d631c8c6d63f7fc63d83ea6e8fb88cf970a5"
+>>>>>>> 5f5431a953 (raft_log_engine: update to latest version. (#16294))
 dependencies = [
  "byteorder",
  "crc32fast",
@@ -4134,7 +4156,11 @@ dependencies = [
  "libc 0.2.139",
  "log",
  "lz4-sys",
+<<<<<<< HEAD
  "memmap2",
+=======
+ "memmap2 0.9.3",
+>>>>>>> 5f5431a953 (raft_log_engine: update to latest version. (#16294))
  "nix 0.26.2",
  "num-derive",
  "num-traits",
@@ -7447,7 +7473,11 @@ checksum = "541b12c998c5b56aa2b4e6f18f03664eef9a4fd0a246a55594efae6cc2d964b5"
 [[package]]
 name = "yatp"
 version = "0.0.1"
+<<<<<<< HEAD
 source = "git+https://github.com/tikv/yatp.git?branch=master#5523a9a6a4d0d6242bdb02b0a344f7ee1477b39b"
+=======
+source = "git+https://github.com/tikv/yatp.git?branch=master#793be4d789d4bd15292fe4d06e38063b4ec9d48e"
+>>>>>>> 5f5431a953 (raft_log_engine: update to latest version. (#16294))
 dependencies = [
  "crossbeam-deque",
  "crossbeam-skiplist",
