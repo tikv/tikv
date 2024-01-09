@@ -127,7 +127,7 @@ fn test_early_apply(mode: DataLost) {
     test(
         &mut cluster,
         |c| {
-            c.async_put(b"k2", b"v2").unwrap();
+            let _ = c.async_put(b"k2", b"v2").unwrap();
         },
         |c| must_get_equal(&c.get_engine(1), b"k2", b"v2"),
         mode,
@@ -145,7 +145,7 @@ fn test_early_apply(mode: DataLost) {
         test(
             &mut cluster,
             |c| {
-                c.async_remove_peer(1, new_peer(1, 1)).unwrap();
+                let _ = c.async_remove_peer(1, new_peer(1, 1)).unwrap();
             },
             |c| must_get_none(&c.get_engine(1), b"k2"),
             mode,
@@ -191,8 +191,8 @@ fn test_update_internal_apply_index() {
         .direction(Direction::Recv);
     cluster.add_send_filter(CloneFilterFactory(filter));
     let last_index = cluster.raft_local_state(1, 1).get_last_index();
-    cluster.async_remove_peer(1, new_peer(4, 4)).unwrap();
-    cluster.async_put(b"k2", b"v2").unwrap();
+    let _ = cluster.async_remove_peer(1, new_peer(4, 4)).unwrap();
+    let _ = cluster.async_put(b"k2", b"v2").unwrap();
     let mut snaps = Vec::new();
     for id in 1..3 {
         cluster.wait_last_index(1, id, last_index + 2, Duration::from_secs(3));

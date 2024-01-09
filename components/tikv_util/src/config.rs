@@ -625,7 +625,7 @@ fn parse_offset(offset_str: &str) -> Result<FixedOffset, String> {
 
 impl fmt::Display for ReadableOffsetTime {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{} {}", self.0, self.1)
+        write!(f, "{} {}", self.0.format("%H:%M"), self.1)
     }
 }
 
@@ -2022,12 +2022,27 @@ mod tests {
                 )
             });
             assert_eq!(actual, expected);
+            let actual = format!("{}", expected)
+                .parse::<ReadableOffsetTime>()
+                .unwrap();
+            assert_eq!(actual, expected);
         }
+        let (encoded, actual) = (
+            "23:00 +00:00",
+            ReadableOffsetTime(
+                NaiveTime::from_hms_opt(23, 00, 00).unwrap(),
+                FixedOffset::east_opt(0).unwrap(),
+            ),
+        );
+        let actual = format!("{}", actual);
+        let expected = encoded.to_owned();
+        assert_eq!(actual, expected);
+
         let time = ReadableOffsetTime(
             NaiveTime::from_hms_opt(9, 30, 00).unwrap(),
             FixedOffset::west_opt(0).unwrap(),
         );
-        assert_eq!(format!("{}", time), "09:30:00 +00:00");
+        assert_eq!(format!("{}", time), "09:30 +00:00");
         let dt = DateTime::parse_from_rfc3339("2023-10-27T09:39:57-00:00").unwrap();
         assert!(time.hour_matches(&dt));
         assert!(!time.hour_minutes_matches(&dt));

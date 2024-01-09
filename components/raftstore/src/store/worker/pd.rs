@@ -469,6 +469,14 @@ where
 const DEFAULT_LOAD_BASE_SPLIT_CHECK_INTERVAL: Duration = Duration::from_secs(1);
 const DEFAULT_COLLECT_TICK_INTERVAL: Duration = Duration::from_secs(1);
 
+fn default_load_base_split_check_interval() -> Duration {
+    fail_point!("mock_load_base_split_check_interval", |t| {
+        let t = t.unwrap().parse::<u64>().unwrap();
+        Duration::from_millis(t)
+    });
+    DEFAULT_LOAD_BASE_SPLIT_CHECK_INTERVAL
+}
+
 fn default_collect_tick_interval() -> Duration {
     fail_point!("mock_collect_tick_interval", |_| {
         Duration::from_millis(1)
@@ -594,7 +602,7 @@ where
             cpu_stats_sender: None,
             collect_store_infos_interval: interval,
             load_base_split_check_interval: cmp::min(
-                DEFAULT_LOAD_BASE_SPLIT_CHECK_INTERVAL,
+                default_load_base_split_check_interval(),
                 interval,
             ),
             // Use `inspect_latency_interval` as the minimal limitation for collecting tick.
@@ -1745,10 +1753,7 @@ where
 
     fn handle_read_stats(&mut self, mut read_stats: ReadStats) {
         for (region_id, region_info) in read_stats.region_infos.iter_mut() {
-            let peer_stat = self
-                .region_peers
-                .entry(*region_id)
-                .or_insert_with(PeerStat::default);
+            let peer_stat = self.region_peers.entry(*region_id).or_default();
             peer_stat.read_bytes += region_info.flow.read_bytes as u64;
             peer_stat.read_keys += region_info.flow.read_keys as u64;
             self.store_stat.engine_total_bytes_read += region_info.flow.read_bytes as u64;
@@ -1770,10 +1775,7 @@ where
 
     fn handle_write_stats(&mut self, mut write_stats: WriteStats) {
         for (region_id, region_info) in write_stats.region_infos.iter_mut() {
-            let peer_stat = self
-                .region_peers
-                .entry(*region_id)
-                .or_insert_with(PeerStat::default);
+            let peer_stat = self.region_peers.entry(*region_id).or_default();
             peer_stat.query_stats.add_query_stats(&region_info.0);
             self.store_stat
                 .engine_total_query_num
@@ -2130,8 +2132,19 @@ where
 
                 let f = async move {
                     for split_info in split_infos {
-                        let Ok(Some(region)) =
-                            pd_client.get_region_by_id(split_info.region_id).await else { continue };
+                        let Ok(Some((region, leader))) = pd_client
+                            .get_region_leader_by_id(split_info.region_id)
+                            .await
+                        else {
+                            continue;
+                        };
+                        if leader.get_id() != split_info.peer.get_id() {
+                            info!("load base split region on non-leader";
+                                "region_id" => region.get_id(),
+                                "peer_id" => split_info.peer.get_id(),
+                                "leader_id" => leader.get_id(),
+                            );
+                        }
                         // Try to split the region with the given split key.
                         if let Some(split_key) = split_info.split_key {
                             Self::handle_ask_batch_split(
@@ -2196,10 +2209,7 @@ where
                     cpu_usage,
                 ) = {
                     let region_id = hb_task.region.get_id();
-                    let peer_stat = self
-                        .region_peers
-                        .entry(region_id)
-                        .or_insert_with(PeerStat::default);
+                    let peer_stat = self.region_peers.entry(region_id).or_default();
                     peer_stat.approximate_size = approximate_size;
                     peer_stat.approximate_keys = approximate_keys;
 

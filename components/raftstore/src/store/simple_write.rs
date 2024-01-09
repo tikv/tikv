@@ -563,13 +563,17 @@ mod tests {
             SimpleWriteReqDecoder::new(decoder_fallback, &logger, &bytes, 0, 0).unwrap();
         assert_eq!(*decoder.header(), *header);
         let write = decoder.next().unwrap();
-        let SimpleWrite::Put(put) = write else { panic!("should be put") };
+        let SimpleWrite::Put(put) = write else {
+            panic!("should be put")
+        };
         assert_eq!(put.cf, CF_DEFAULT);
         assert_eq!(put.key, b"key");
         assert_eq!(put.value, b"");
 
         let write = decoder.next().unwrap();
-        let SimpleWrite::Delete(delete) = write else { panic!("should be delete") };
+        let SimpleWrite::Delete(delete) = write else {
+            panic!("should be delete")
+        };
         assert_eq!(delete.cf, CF_WRITE);
         assert_eq!(delete.key, &delete_key);
         assert_matches!(decoder.next(), None);
@@ -577,14 +581,18 @@ mod tests {
         let (bytes, _) = req_encoder2.encode();
         decoder = SimpleWriteReqDecoder::new(decoder_fallback, &logger, &bytes, 0, 0).unwrap();
         let write = decoder.next().unwrap();
-        let SimpleWrite::DeleteRange(dr) = write else { panic!("should be delete range") };
+        let SimpleWrite::DeleteRange(dr) = write else {
+            panic!("should be delete range")
+        };
         assert_eq!(dr.cf, CF_LOCK);
         assert_eq!(dr.start_key, b"key");
         assert_eq!(dr.end_key, b"key");
         assert!(dr.notify_only);
 
         let write = decoder.next().unwrap();
-        let SimpleWrite::DeleteRange(dr) = write else { panic!("should be delete range") };
+        let SimpleWrite::DeleteRange(dr) = write else {
+            panic!("should be delete range")
+        };
         assert_eq!(dr.cf, "cf");
         assert_eq!(dr.start_key, b"key");
         assert_eq!(dr.end_key, b"key");
@@ -609,7 +617,9 @@ mod tests {
         let mut decoder =
             SimpleWriteReqDecoder::new(decoder_fallback, &logger, &bytes, 0, 0).unwrap();
         let write = decoder.next().unwrap();
-        let SimpleWrite::Ingest(ssts) = write else { panic!("should be ingest") };
+        let SimpleWrite::Ingest(ssts) = write else {
+            panic!("should be ingest")
+        };
         assert_eq!(exp, ssts);
         assert_matches!(decoder.next(), None);
     }
@@ -696,7 +706,9 @@ mod tests {
             SimpleWriteReqDecoder::new(decoder_fallback, &logger, &bytes, 0, 0).unwrap();
         assert_eq!(*decoder.header(), *header);
         let req = decoder.next().unwrap();
-        let SimpleWrite::Put(put) = req else { panic!("should be put") };
+        let SimpleWrite::Put(put) = req else {
+            panic!("should be put")
+        };
         assert_eq!(put.cf, CF_DEFAULT);
         assert_eq!(put.key, b"key");
         assert_eq!(put.value, b"");
