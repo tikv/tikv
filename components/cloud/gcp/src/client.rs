@@ -4,7 +4,6 @@ use std::{convert::TryInto, fmt::Display, io, result::Result as StdResult, sync:
 
 use hyper::{client::HttpConnector, Body, Client, Request, Response, StatusCode};
 use hyper_tls::HttpsConnector;
-pub use kvproto::brpb::{Bucket as InputBucket, Gcs as InputConfig};
 use serde::Deserialize;
 use tame_oauth::gcp::{
     end_user::EndUserCredentialsInner, service_account::ServiceAccountProviderInner,

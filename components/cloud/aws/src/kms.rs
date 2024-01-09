@@ -219,6 +219,7 @@ mod tests {
                 endpoint: String::new(),
             },
             azure: None,
+            gcp: None,
         };
 
         let dispatcher =
@@ -263,6 +264,7 @@ mod tests {
                 endpoint: String::new(),
             },
             azure: None,
+            gcp: None,
         };
 
         // IncorrectKeyException

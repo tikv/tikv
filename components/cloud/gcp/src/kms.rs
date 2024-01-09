@@ -257,7 +257,7 @@ struct DecryptResp {
 }
 
 fn check_crc32(data: &[u8], expected: u32) -> StdResult<(), Crc32Error> {
-    let crc = crc32c::crc32c(&data);
+    let crc = crc32c::crc32c(data);
     if crc != expected {
         return Err(Crc32Error { expected, got: crc });
     }
@@ -303,7 +303,7 @@ mod serde_base64_bytes {
         D::Error: serde::de::Error,
     {
         let v = String::deserialize(deserializer)?;
-        base64::decode(&v)
+        base64::decode(v)
             .map_err(|e| serde::de::Error::custom(format!("base64 decode failed: {:?}", e,)))
     }
 
@@ -371,8 +371,7 @@ mod tests {
                 }),
             };
 
-            let res = GcpKms::new(cfg);
-            assert!(res.is_err());
+            _ = GcpKms::new(cfg).unwrap_err();
         }
 
         for key in [
