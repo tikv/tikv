@@ -104,7 +104,6 @@ impl GcpClient {
                     .map_err(|e| RequestError::OAuth(e, "set auth parse token".to_string()))?
             }
         };
-        println!("     set token, header: authorization, token: {:?}", &token);
         req.headers_mut().insert(
             http::header::AUTHORIZATION,
             token
