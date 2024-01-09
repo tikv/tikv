@@ -295,7 +295,7 @@ mod tests {
         };
 
         let kms_config_gcp = EncryptionConfig {
-            master_key: MasterKeyConfig::Kms { 
+            master_key: MasterKeyConfig::Kms {
                 config: KmsConfig {
                     key_id: "key_id".to_owned(),
                     region: "region".to_owned(),
@@ -365,7 +365,11 @@ mod tests {
             [master-key.gcp]
             credential-file-path = '/tmp/credential.json'
         "#;
-        for (kms_cfg, kms_str) in [(kms_config, kms_str), (kms_config_azure, kms_str_azure), (kms_config_gcp, kms_str_gcp)] {
+        for (kms_cfg, kms_str) in [
+            (kms_config, kms_str),
+            (kms_config_azure, kms_str_azure),
+            (kms_config_gcp, kms_str_gcp),
+        ] {
             let cfg: EncryptionConfig = toml::from_str(kms_str).unwrap();
             assert_eq!(
                 cfg,
