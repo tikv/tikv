@@ -395,16 +395,15 @@ impl<S: EngineSnapshot> MvccReader<S> {
     {
         if let Some(txn_ext) = self.snapshot.ext().get_txn_ext() {
             let begin_instant = Instant::now();
-            let res = match self.check_term_version_status(&txn_ext.pessimistic_locks.read()) {
+            let pessimistic_locks_guard = txn_ext.pessimistic_locks.read();
+            let res = match self.check_term_version_status(&pessimistic_locks_guard) {
                 Ok(_) => {
-                    // Scan locks within the specified range and filter by max_ts.
-                    Ok(txn_ext
-                        .pessimistic_locks
-                        .read()
-                        .scan_locks(start_key, end_key, filter, scan_limit))
+                    // Scan locks within the specified range and filter.
+                    Ok(pessimistic_locks_guard.scan_locks(start_key, end_key, filter, scan_limit))
                 }
                 Err(e) => Err(e),
             };
+            drop(pessimistic_locks_guard);
             let elapsed = begin_instant.saturating_elapsed();
             SCAN_LOCK_READ_TIME_VEC
                 .get(source)
