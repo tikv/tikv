@@ -958,6 +958,7 @@ where
                 "applied_index" => self.fsm.peer.raft_group.raft.raft_log.applied,
                 "pending_remove" => self.fsm.peer.pending_remove,
                 "voter" => self.fsm.peer.raft_group.raft.vote,
+                "epoch" => ?self.region().get_region_epoch(),
             );
 
             // do some sanity check, for follower, leader already apply to last log,
@@ -976,6 +977,7 @@ where
                 "peer_id" => self.fsm.peer_id(),
                 "target_index" => target_index,
                 "applied_index" => self.fsm.peer.raft_group.raft.raft_log.applied,
+                "epoch" => ?self.region().get_region_epoch(),
             );
         }
 
