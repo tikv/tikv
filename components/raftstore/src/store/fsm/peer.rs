@@ -967,6 +967,7 @@ where
         }
 
         let target_index = self.fsm.peer.raft_group.raft.raft_log.last_index();
+        let applied_index = self.fsm.peer.raft_group.raft.raft_log.applied;
         let term = self.fsm.peer.raft_group.raft.term;
         if let Some(e) = &req.expected_epoch {
             if let Err(err) = compare_region_epoch(e, self.region(), true, true, true) {
@@ -980,6 +981,20 @@ where
             }
         }
 
+        // trivial case: no need to wait apply -- already the latest.
+        // Return directly for avoiding to print tons of logs.
+        if target_index == applied_index {
+            debug!(
+                "skip trivial case of waiting apply.";
+                "region_id" => self.region_id(),
+                "peer_id" => self.fsm.peer_id(),
+                "target_index" => target_index,
+                "applied_index" => applied_index,
+            );
+            SNAP_BR_WAIT_APPLY_EVENT.trivial.inc();
+            return;
+        }
+
         // during the snapshot recovery, broadcast waitapply, some peer may stale
         if !self.fsm.peer.is_leader() {
             info!(
@@ -987,7 +1002,7 @@ where
                 "region_id" => self.region_id(),
                 "peer_id" => self.fsm.peer_id(),
                 "target_index" => target_index,
-                "applied_index" => self.fsm.peer.raft_group.raft.raft_log.applied,
+                "applied_index" => applied_index,
                 "pending_remove" => self.fsm.peer.pending_remove,
                 "voter" => self.fsm.peer.raft_group.raft.vote,
             );
@@ -997,7 +1012,8 @@ where
             // case#2 if peer is suppose to remove
             if self.fsm.peer.raft_group.raft.vote == 0 || self.fsm.peer.pending_remove {
                 info!(
-                    "this peer is never vote before or pending remove, it should be skip to wait apply"
+                    "this peer is never vote before or pending remove, it should be skip to wait apply";
+                    "region" => %self.region_id(),
                 );
                 return;
             }
@@ -1007,7 +1023,7 @@ where
                 "region_id" => self.region_id(),
                 "peer_id" => self.fsm.peer_id(),
                 "target_index" => target_index,
-                "applied_index" => self.fsm.peer.raft_group.raft.raft_log.applied,
+                "applied_index" => applied_index,
             );
         }
         SNAP_BR_WAIT_APPLY_EVENT.accepted.inc();

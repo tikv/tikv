@@ -272,7 +272,9 @@ impl<SR: SnapshotBrHandle + 'static> StreamHandleLoop<SR> {
                     });
             match selected {
                 Some((i, region)) => {
-                    self.pending_regions.swap_remove(i);
+                    // We have polled the future (and make sure it has ready) before, it is
+                    // safe to drop this future directly.
+                    let _ = self.pending_regions.swap_remove(i);
                     region.into()
                 }
                 None => Poll::Pending,
