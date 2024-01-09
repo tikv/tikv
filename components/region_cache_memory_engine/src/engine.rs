@@ -172,7 +172,9 @@ pub struct RegionMemoryMeta {
     // Note: different region can have different safe_ts.
     safe_ts: u64,
     evicted: bool,
+    // It indicated whether the region is splitted by a region that has not executed `cut` yet
     resolved_split: bool,
+    splitting: bool,
     uuid: Uuid,
 }
 
@@ -184,6 +186,7 @@ impl Default for RegionMemoryMeta {
             safe_ts: 0,
             evicted: false,
             uuid: Uuid::new_v4(),
+            splitting: false,
             snapshot_list: SnapshotList::default(),
         }
     }
@@ -199,7 +202,7 @@ impl RegionMemoryMeta {
     }
 
     pub fn ready_to_remove(&self) -> bool {
-        self.snapshot_list.is_empty() && self.resolved_split && self.evicted
+        self.snapshot_list.is_empty() && self.resolved_split && self.evicted && !self.splitting
     }
 }
 
@@ -451,8 +454,9 @@ impl BatchSplit for RegionCacheMemoryEngine {
         splitted_region_id: Vec<u64>,
         keys: Vec<Vec<u8>>,
     ) -> Self::SplitResult {
-        let core = self.core.lock().unwrap();
-        let meta = core.region_metas.get(&region_id).unwrap();
+        let mut core = self.core.lock().unwrap();
+        let meta = core.region_metas.get_mut(&region_id).unwrap();
+        meta.splitting = true;
         let memory_engine = core.engine.get(&region_id).unwrap();
 
         // split key does not have mvcc suffix, we need to add it for key comparison
@@ -470,9 +474,10 @@ impl BatchSplit for RegionCacheMemoryEngine {
     fn on_batch_split(&self, region_id: u64, split_result: Self::SplitResult) {
         let mut core = self.core.lock().unwrap();
         let meta = core.region_metas.get_mut(&region_id).unwrap();
-        let record_snapshots = meta.snapshot_list.clone();
+        let parent_snapshots = meta.snapshot_list.clone();
         let parent_uuid = meta.uuid;
         let parent_resolved_split = meta.resolved_split;
+        let parent_evicted = meta.evicted;
 
         let mut old_engine = None;
         let mut child_uuids = vec![];
@@ -496,7 +501,7 @@ impl BatchSplit for RegionCacheMemoryEngine {
 
         // The parent region is ready to be dropped, so we need to change the resolve
         // status of the child regions
-        if record_snapshots.is_empty() && parent_resolved_split {
+        if parent_snapshots.is_empty() && parent_resolved_split {
             for (id, _) in &split_result.split_memory_engines {
                 core.region_metas.get_mut(id).unwrap().resolved_split = true;
             }
@@ -510,6 +515,12 @@ impl BatchSplit for RegionCacheMemoryEngine {
                     .collect(),
                 &split_result.split_keys,
             );
+
+            if parent_evicted {
+                core.region_metas.remove(&region_id);
+                core.engine.remove(&region_id);
+            }
+
             return;
         }
 
@@ -517,7 +528,7 @@ impl BatchSplit for RegionCacheMemoryEngine {
             uuid: parent_uuid,
             child_uuids,
             resolved_split: parent_resolved_split,
-            snapshots: record_snapshots,
+            snapshots: parent_snapshots,
             split_keys: split_result.split_keys,
             child_engines: split_result.split_memory_engines,
         };
@@ -2269,8 +2280,44 @@ mod tests {
         }
     }
 
+    // test the derived region is evicted during the split
     #[test]
-    fn test_batch_split_with_eviction() {
+    fn test_batch_split_with_eviction_1() {
+        let engine = RegionCacheMemoryEngine::default();
+        engine.new_region(1);
+        {
+            let mut core = engine.core.lock().unwrap();
+            core.region_metas.get_mut(&1).unwrap().can_read = true;
+            core.region_metas.get_mut(&1).unwrap().safe_ts = 5;
+            let s1 = core.engine.get_mut(&1).unwrap().data[cf_to_id("write")].clone();
+
+            for i in 0..10 {
+                let user_key = construct_key(i, 10);
+                let internal_key = encode_key(&user_key, 10, ValueType::Value);
+                let v = format!("v{:04}{:04}", i, 10);
+                s1.put(internal_key.clone(), v.clone());
+            }
+        }
+        let split_keys = vec![construct_user_key(0), construct_user_key(5)];
+
+        let sr = engine.batch_split(1, vec![1, 2], split_keys);
+        engine.evict(1);
+        engine.on_batch_split(1, sr);
+
+        // now, the cut should be performed and the derived region 1 should be
+        // removed
+        let removed = engine.memory_limiter.removed.lock().unwrap();
+        for i in 0..5 {
+            let user_key = construct_key(i, 10);
+            let internal_key = encode_key(&user_key, 10, ValueType::Value);
+            assert!(removed.contains(internal_key.as_slice()));
+        }
+    }
+
+    // Test the spliited regions are evicted before cut. They are only be removed
+    // when the cut is done.
+    #[test]
+    fn test_batch_split_with_eviction_2() {
         let engine = RegionCacheMemoryEngine::default();
         engine.new_region(1);
 
