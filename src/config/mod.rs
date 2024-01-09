@@ -1397,7 +1397,7 @@ impl DbConfig {
                 if self.lockcf.write_buffer_size.is_none() {
                     self.lockcf.write_buffer_size = Some(ReadableSize::mb(32));
                 }
-                if self.titan.enabled.is_none() && storage_config.enable_ttl {
+                if self.titan.enabled.is_none() {
                     // If the user doesn't specify titan.enabled, we enable it by default for newly
                     // created clusters.
                     if (kv_data_exists && is_titan_dir_empty) || storage_config.enable_ttl {
