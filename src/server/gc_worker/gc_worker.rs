@@ -2022,7 +2022,7 @@ mod tests {
         cfg.defaultcf.dynamic_level_bytes = false;
         let dir = tempfile::TempDir::new().unwrap();
         let builder = TestEngineBuilder::new().path(dir.path());
-        let engine = builder.build_with_cfg(&cfg, true).unwrap();
+        let engine = builder.build_with_cfg(&cfg).unwrap();
         let mut prefixed_engine = PrefixedEngine(engine);
 
         let (tx, _rx) = mpsc::channel();

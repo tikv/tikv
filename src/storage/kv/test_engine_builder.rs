@@ -72,12 +72,8 @@ impl TestEngineBuilder {
         self.do_build(&cfg_rocksdb, true)
     }
 
-    pub fn build_with_cfg(
-        self,
-        cfg_rocksdb: &crate::config::DbConfig,
-        enable_block_cache: bool,
-    ) -> Result<RocksEngine> {
-        self.do_build(cfg_rocksdb, enable_block_cache)
+    pub fn build_with_cfg(self, cfg_rocksdb: &crate::config::DbConfig) -> Result<RocksEngine> {
+        self.do_build(cfg_rocksdb, true)
     }
 
     pub fn build_without_cache(self) -> Result<RocksEngine> {

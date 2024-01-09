@@ -1129,7 +1129,7 @@ pub mod tests {
         cfg.writecf.dynamic_level_bytes = false;
         let dir = tempfile::TempDir::new().unwrap();
         let builder = TestEngineBuilder::new().path(dir.path());
-        let mut engine = builder.build_with_cfg(&cfg, true).unwrap();
+        let mut engine = builder.build_with_cfg(&cfg).unwrap();
         let raw_engine = engine.get_rocksdb();
         let value = vec![b'v'; 512];
         let mut gc_runner = TestGcRunner::new(0);
@@ -1198,7 +1198,7 @@ pub mod tests {
 
         let dir = tempfile::TempDir::new().unwrap();
         let builder = TestEngineBuilder::new().path(dir.path());
-        let mut engine = builder.build_with_cfg(&cfg, true).unwrap();
+        let mut engine = builder.build_with_cfg(&cfg).unwrap();
         let raw_engine = engine.get_rocksdb();
         let mut gc_runner = TestGcRunner::new(0);
 
