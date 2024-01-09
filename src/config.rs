@@ -1154,7 +1154,128 @@ impl Default for DbConfig {
 }
 
 impl DbConfig {
+<<<<<<< HEAD:src/config.rs
     pub fn build_opt(&self) -> RocksDbOptions {
+=======
+    pub fn optimize_for(
+        &mut self,
+        storage_config: &StorageConfig,
+        kv_data_exists: bool,
+        is_titan_dir_empty: bool,
+    ) {
+        match storage_config.engine {
+            EngineType::RaftKv => {
+                self.allow_concurrent_memtable_write.get_or_insert(true);
+                self.max_total_wal_size.get_or_insert(ReadableSize::gb(4));
+                self.stats_dump_period
+                    .get_or_insert(ReadableDuration::minutes(10));
+                self.defaultcf.enable_compaction_guard.get_or_insert(true);
+                self.writecf.enable_compaction_guard.get_or_insert(true);
+                if self.lockcf.write_buffer_size.is_none() {
+                    self.lockcf.write_buffer_size = Some(ReadableSize::mb(32));
+                }
+                if self.titan.enabled.is_none() {
+                    // If the user doesn't specify titan.enabled, we enable it by default for newly
+                    // created clusters.
+                    if (kv_data_exists && is_titan_dir_empty) || storage_config.enable_ttl {
+                        self.titan.enabled = Some(false);
+                    } else {
+                        self.titan.enabled = Some(true);
+                    }
+                }
+            }
+            EngineType::RaftKv2 => {
+                self.enable_multi_batch_write.get_or_insert(false);
+                self.allow_concurrent_memtable_write.get_or_insert(false);
+                let total_mem = SysQuota::memory_limit_in_bytes() as f64;
+                // purge-threshold is set to twice the limit. Too large limit will cause trouble
+                // to raft log replay.
+                self.write_buffer_limit.get_or_insert(ReadableSize(cmp::min(
+                    (total_mem * WRITE_BUFFER_MEMORY_LIMIT_RATE) as u64,
+                    WRITE_BUFFER_MEMORY_LIMIT_MAX,
+                )));
+                self.max_total_wal_size.get_or_insert(ReadableSize(1));
+                self.stats_dump_period
+                    .get_or_insert(ReadableDuration::minutes(0));
+                // In RaftKv2, every region uses its own rocksdb instance, it's actually the
+                // even stricter compaction guard, so use the same output file size base.
+                self.writecf
+                    .target_file_size_base
+                    .get_or_insert(self.writecf.compaction_guard_max_output_file_size);
+                self.defaultcf
+                    .target_file_size_base
+                    .get_or_insert(self.defaultcf.compaction_guard_max_output_file_size);
+                self.defaultcf.disable_write_stall = true;
+                self.writecf.disable_write_stall = true;
+                self.lockcf.disable_write_stall = true;
+                self.raftcf.disable_write_stall = true;
+                // Initially only allow one compaction. Pace up when pending bytes is high. This
+                // strategy is consistent with single RocksDB.
+                self.defaultcf.max_compactions.get_or_insert(1);
+                self.writecf.max_compactions.get_or_insert(1);
+                self.lockcf
+                    .write_buffer_size
+                    .get_or_insert(ReadableSize::mb(32));
+                self.lockcf
+                    .write_buffer_limit
+                    .get_or_insert(DEFAULT_LOCK_BUFFER_MEMORY_LIMIT);
+            }
+        }
+        let bg_job_limits =
+            get_background_job_limits(storage_config.engine, &KVDB_DEFAULT_BACKGROUND_JOB_LIMITS);
+        if self.max_background_jobs == 0 {
+            self.max_background_jobs = bg_job_limits.max_background_jobs as i32;
+        }
+        if self.max_background_flushes == 0 {
+            self.max_background_flushes = bg_job_limits.max_background_flushes as i32;
+        }
+        if self.max_sub_compactions == 0 {
+            self.max_sub_compactions = bg_job_limits.max_sub_compactions;
+        }
+        if self.titan.max_background_gc == 0 {
+            self.titan.max_background_gc = bg_job_limits.max_titan_background_gc as i32;
+        }
+    }
+
+    pub fn build_resources(&self, env: Arc<Env>, engine: EngineType) -> DbResources {
+        let rate_limiter = if self.rate_bytes_per_sec.0 > 0 {
+            // for raft-v2, we use a longer window to make the compaction io smoother
+            let (tune_per_secs, window_size, recent_size) = match engine {
+                // 1s tune duraion, long term window is 5m, short term window is 30s.
+                // this is the default settings.
+                EngineType::RaftKv => (1, 300, 30),
+                // 5s tune duraion, long term window is 1h, short term window is 5m
+                EngineType::RaftKv2 => (5, 720, 60),
+            };
+            Some(Arc::new(RateLimiter::new_writeampbased_with_auto_tuned(
+                self.rate_bytes_per_sec.0 as i64,
+                (self.rate_limiter_refill_period.as_millis() * 1000) as i64,
+                10, // fairness
+                self.rate_limiter_mode,
+                self.rate_limiter_auto_tuned,
+                tune_per_secs,
+                window_size,
+                recent_size,
+            )))
+        } else {
+            None
+        };
+        DbResources {
+            env,
+            statistics: Arc::new(RocksStatistics::new_titan()),
+            rate_limiter,
+            write_buffer_manager: self.write_buffer_limit.map(|limit| {
+                Arc::new(WriteBufferManager::new(
+                    limit.0 as usize,
+                    self.write_buffer_stall_ratio,
+                    self.write_buffer_flush_oldest_first,
+                ))
+            }),
+        }
+    }
+
+    pub fn build_opt(&self, shared: &DbResources, for_engine: EngineType) -> RocksDbOptions {
+>>>>>>> 65308d6728 (engine: calculate table properties correctly for Titan (#16320)):src/config/mod.rs
         let mut opts = RocksDbOptions::default();
         opts.set_wal_recovery_mode(self.wal_recovery_mode);
         if !self.wal_dir.is_empty() {
@@ -3125,10 +3246,31 @@ impl TikvConfig {
         )
         .validate(RocksEngine::exists(&kv_db_path))?;
 
+<<<<<<< HEAD:src/config.rs
         // Check blob file dir is empty when titan is disabled
         if !self.rocksdb.titan.enabled {
             let titandb_path = if self.rocksdb.titan.dirname.is_empty() {
                 Path::new(&kv_db_path).join("titandb")
+=======
+        // Optimize.
+        self.rocksdb
+            .optimize_for(&self.storage, kv_data_exists, is_titan_dir_empty);
+        self.coprocessor
+            .optimize_for(self.storage.engine == EngineType::RaftKv2);
+        self.split
+            .optimize_for(self.coprocessor.region_split_size());
+        self.raft_store
+            .optimize_for(self.storage.engine == EngineType::RaftKv2);
+        self.server
+            .optimize_for(self.coprocessor.region_split_size());
+        if self.storage.engine == EngineType::RaftKv2 {
+            self.raft_store.store_io_pool_size = cmp::max(self.raft_store.store_io_pool_size, 1);
+        }
+        if self.storage.block_cache.capacity.is_none() {
+            let total_mem = SysQuota::memory_limit_in_bytes();
+            let capacity = if self.storage.engine == EngineType::RaftKv2 {
+                (total_mem as f64) * RAFTSTORE_V2_BLOCK_CACHE_RATE
+>>>>>>> 65308d6728 (engine: calculate table properties correctly for Titan (#16320)):src/config/mod.rs
             } else {
                 Path::new(&self.rocksdb.titan.dirname).to_path_buf()
             };
@@ -3314,6 +3456,11 @@ impl TikvConfig {
                 "memory_usage_limit:{:?} > recommanded:{:?}, maybe page cache isn't enough",
                 limit, default,
             );
+        }
+
+        // Validate feature TTL with Titan configuration.
+        if matches!(self.rocksdb.titan.enabled, Some(true)) && self.storage.enable_ttl {
+            return Err("Titan is unavailable for feature TTL".to_string().into());
         }
 
         Ok(())
@@ -4232,6 +4379,7 @@ mod tests {
 
         // Check api version.
         {
+            tikv_cfg.rocksdb.titan.enabled = Some(false);
             let cases = [
                 (ApiVersion::V1, ApiVersion::V1, true),
                 (ApiVersion::V1, ApiVersion::V1ttl, false),
@@ -5281,6 +5429,41 @@ mod tests {
         cfg.storage.block_cache.capacity = Some(ReadableSize(system * 3 / 4));
         cfg.validate().unwrap();
         assert_eq!(cfg.memory_usage_limit.unwrap(), ReadableSize(system));
+<<<<<<< HEAD:src/config.rs
+=======
+
+        // Test raftstore.enable-partitioned-raft-kv-compatible-learner.
+        let mut cfg = TikvConfig::default();
+        cfg.raft_store.enable_v2_compatible_learner = true;
+        cfg.storage.engine = EngineType::RaftKv2;
+        cfg.validate().unwrap();
+        assert!(!cfg.raft_store.enable_v2_compatible_learner);
+
+        // Ribbon filter and format version.
+        let mut cfg = TikvConfig::default();
+        cfg.rocksdb.writecf.ribbon_filter_above_level = Some(6);
+        cfg.rocksdb.writecf.format_version = None;
+        cfg.validate().unwrap_err();
+        cfg.rocksdb.writecf.format_version = Some(3);
+        cfg.validate().unwrap_err();
+        cfg.rocksdb.writecf.format_version = Some(5);
+        cfg.validate().unwrap();
+
+        let mut valid_cfg = TikvConfig::default();
+        valid_cfg.storage.api_version = 2;
+        valid_cfg.storage.enable_ttl = true;
+        valid_cfg.rocksdb.titan.enabled = None;
+        valid_cfg.validate().unwrap();
+
+        let mut invalid_cfg = TikvConfig::default();
+        invalid_cfg.storage.api_version = 2;
+        invalid_cfg.storage.enable_ttl = true;
+        invalid_cfg.rocksdb.titan.enabled = Some(true);
+        assert_eq!(
+            invalid_cfg.validate().unwrap_err().to_string(),
+            "Titan is unavailable for feature TTL"
+        );
+>>>>>>> 65308d6728 (engine: calculate table properties correctly for Titan (#16320)):src/config/mod.rs
     }
 
     #[test]
