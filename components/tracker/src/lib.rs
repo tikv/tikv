@@ -125,6 +125,8 @@ pub enum RequestType {
     CoprocessorDag,
     CoprocessorAnalyze,
     CoprocessorChecksum,
+    KvFlush,
+    KvBufferBatchGet,
 }
 
 #[derive(Debug, Default, Clone)]

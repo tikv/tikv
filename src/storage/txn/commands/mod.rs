@@ -14,6 +14,7 @@ pub(crate) mod commit;
 pub(crate) mod compare_and_swap;
 pub(crate) mod flashback_to_version;
 pub(crate) mod flashback_to_version_read_phase;
+pub(crate) mod flush;
 pub(crate) mod mvcc_by_key;
 pub(crate) mod mvcc_by_start_ts;
 pub(crate) mod pause;
@@ -48,6 +49,7 @@ pub use flashback_to_version_read_phase::{
     new_flashback_rollback_lock_cmd, new_flashback_write_cmd, FlashbackToVersionReadPhase,
     FlashbackToVersionState,
 };
+pub use flush::Flush;
 use kvproto::kvrpcpb::*;
 pub use mvcc_by_key::MvccByKey;
 pub use mvcc_by_start_ts::MvccByStartTs;
@@ -111,6 +113,7 @@ pub enum Command {
     RawAtomicStore(RawAtomicStore),
     FlashbackToVersionReadPhase(FlashbackToVersionReadPhase),
     FlashbackToVersion(FlashbackToVersion),
+    Flush(Flush),
 }
 
 /// A `Command` with its return type, reified as the generic parameter `T`.
@@ -408,6 +411,17 @@ impl From<FlashbackToVersionRequest> for TypedCommand<()> {
     }
 }
 
+impl From<FlushRequest> for TypedCommand<Vec<StorageResult<()>>> {
+    fn from(mut req: FlushRequest) -> Self {
+        Flush::new(
+            req.get_start_ts().into(),
+            req.take_primary_key(),
+            req.take_mutations().into_iter().map(Into::into).collect(),
+            req.take_context(),
+        )
+    }
+}
+
 /// Represents for a scheduler command, when should the response sent to the
 /// client. For most cases, the response should be sent after the result being
 /// successfully applied to the storage (if needed). But in some special cases,
@@ -593,7 +607,8 @@ pub struct WriteContext<'a, L: LockManager> {
     pub extra_op: ExtraOp,
     pub statistics: &'a mut Statistics,
     pub async_apply_prewrite: bool,
-    pub raw_ext: Option<RawExt>, // use for apiv2
+    pub raw_ext: Option<RawExt>,
+    // use for apiv2
     pub txn_status_cache: &'a TxnStatusCache,
 }
 
@@ -655,6 +670,7 @@ impl Command {
             Command::RawAtomicStore(t) => t,
             Command::FlashbackToVersionReadPhase(t) => t,
             Command::FlashbackToVersion(t) => t,
+            Command::Flush(t) => t,
         }
     }
 
@@ -682,6 +698,7 @@ impl Command {
             Command::RawAtomicStore(t) => t,
             Command::FlashbackToVersionReadPhase(t) => t,
             Command::FlashbackToVersion(t) => t,
+            Command::Flush(t) => t,
         }
     }
 
@@ -723,6 +740,7 @@ impl Command {
             Command::RawCompareAndSwap(t) => t.process_write(snapshot, context),
             Command::RawAtomicStore(t) => t.process_write(snapshot, context),
             Command::FlashbackToVersion(t) => t.process_write(snapshot, context),
+            Command::Flush(t) => t.process_write(snapshot, context),
             _ => panic!("unsupported write command"),
         }
     }

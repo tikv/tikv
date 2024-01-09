@@ -132,7 +132,7 @@ use crate::{
             commands::{RawAtomicStore, RawCompareAndSwap, TypedCommand},
             flow_controller::{EngineFlowController, FlowController},
             scheduler::TxnScheduler,
-            Command, ErrorInner as TxnError,
+            Command, Error as TxnError, ErrorInner as TxnErrorInner,
         },
         types::StorageCallbackType,
     },
@@ -682,13 +682,13 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                             false,
                         );
                         snap_store
-                    .get(&key, &mut statistics)
-                    // map storage::txn::Error -> storage::Error
-                    .map_err(Error::from)
-                    .map(|r| {
-                        KV_COMMAND_KEYREAD_HISTOGRAM_STATIC.get(CMD).observe(1_f64);
-                        r
-                    })
+                            .get(&key, &mut statistics)
+                            // map storage::txn::Error -> storage::Error
+                            .map_err(Error::from)
+                            .map(|r| {
+                                KV_COMMAND_KEYREAD_HISTOGRAM_STATIC.get(CMD).observe(1_f64);
+                                r
+                            })
                     });
                     metrics::tls_collect_scan_details(CMD, &statistics);
                     metrics::tls_collect_read_flow(
@@ -976,6 +976,179 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         )
     }
 
+    pub fn buffer_batch_get(
+        &self,
+        ctx: Context,
+        keys: Vec<Key>,
+        start_ts: TimeStamp,
+    ) -> impl Future<Output = Result<(Vec<Result<KvPair>>, KvGetStatistics)>> {
+        let stage_begin_ts = Instant::now();
+        let deadline = Self::get_deadline(&ctx);
+        const CMD: CommandKind = CommandKind::buffer_batch_get;
+        let priority = ctx.get_priority();
+        let metadata = TaskMetadata::from_ctx(ctx.get_resource_control_context());
+        let resource_limiter = self.resource_manager.as_ref().and_then(|r| {
+            r.get_resource_limiter(
+                ctx.get_resource_control_context().get_resource_group_name(),
+                ctx.get_request_source(),
+                ctx.get_resource_control_context().get_override_priority(),
+            )
+        });
+        let priority_tag = get_priority_tag(priority);
+        let key_ranges = keys
+            .iter()
+            .map(|k| (k.as_encoded().to_vec(), k.as_encoded().to_vec()))
+            .collect();
+        let resource_tag = self
+            .resource_tag_factory
+            .new_tag_with_key_ranges(&ctx, key_ranges);
+        let concurrency_manager = self.concurrency_manager.clone();
+        let api_version = self.api_version;
+        let busy_threshold = Duration::from_millis(ctx.busy_threshold_ms as u64);
+        let quota_limiter = self.quota_limiter.clone();
+        let mut sample = quota_limiter.new_sample(true);
+        self.read_pool_spawn_with_busy_check(
+            busy_threshold,
+            async move {
+                let stage_scheduled_ts = Instant::now();
+                let mut key_ranges = vec![];
+                for key in &keys {
+                    key_ranges.push(build_key_range(key.as_encoded(), key.as_encoded(), false));
+                }
+                tls_collect_query_batch(
+                    ctx.get_region_id(),
+                    ctx.get_peer(),
+                    key_ranges,
+                    QueryKind::Get,
+                );
+
+                KV_COMMAND_COUNTER_VEC_STATIC.get(CMD).inc();
+                SCHED_COMMANDS_PRI_COUNTER_VEC_STATIC
+                    .get(priority_tag)
+                    .inc();
+
+                deadline.check()?;
+
+                Self::check_api_version(
+                    api_version,
+                    ctx.api_version,
+                    CMD,
+                    keys.iter().map(Key::as_encoded),
+                )?;
+
+                let command_duration = Instant::now();
+
+                let snap_ctx = prepare_snap_ctx(
+                    &ctx,
+                    &keys,
+                    start_ts,
+                    // buffer_batch_get doesn't read locks from other txns
+                    &TsSet::Empty,
+                    &concurrency_manager,
+                    CMD,
+                )?;
+                let snapshot =
+                    Self::with_tls_engine(|engine| Self::snapshot(engine, snap_ctx)).await?;
+                {
+                    deadline.check()?;
+                    let begin_instant = Instant::now();
+
+                    let stage_snap_recv_ts = begin_instant;
+                    let (result, stats) = Self::with_perf_context(CMD, || {
+                        let _guard = sample.observe_cpu();
+                        let mut reader = MvccReader::new(
+                            snapshot,
+                            Some(ScanMode::Forward),
+                            !ctx.get_not_fill_cache(),
+                        );
+                        // TODO: metrics
+                        // TODO: refactor: reuse functions in PointGetter
+                        let result: Vec<Result<KvPair>> = keys
+                            .into_iter()
+                            .filter_map(|k| {
+                                let pair: Option<std::result::Result<KvPair, _>> =
+                                    match reader.load_lock(&k) {
+                                        Ok(None) => None,
+                                        Ok(Some(lock)) => {
+                                            if lock.ts != start_ts {
+                                                None
+                                            } else {
+                                                match lock.short_value {
+                                                    Some(v) => Some(Ok((k.into_raw().unwrap(), v))),
+                                                    None => match reader.get_value(&k, start_ts) {
+                                                        Ok(Some(data)) => {
+                                                            Some(Ok((k.into_raw().unwrap(), data)))
+                                                        }
+                                                        Ok(None) => None,
+                                                        Err(e) => Some(Err(e)),
+                                                    },
+                                                }
+                                            }
+                                        }
+                                        Err(e) => Some(Err(e)),
+                                    };
+                                pair.map(|r| r.map_err(|e| Error::from(TxnError::from(e))))
+                            })
+                            .collect();
+                        (result, reader.statistics)
+                    });
+                    metrics::tls_collect_scan_details(CMD, &stats);
+                    let now = Instant::now();
+                    SCHED_PROCESSING_READ_HISTOGRAM_STATIC
+                        .get(CMD)
+                        .observe(duration_to_sec(
+                            now.saturating_duration_since(begin_instant),
+                        ));
+                    SCHED_HISTOGRAM_VEC_STATIC.get(CMD).observe(duration_to_sec(
+                        now.saturating_duration_since(command_duration),
+                    ));
+
+                    let read_bytes = stats.cf_statistics(CF_DEFAULT).flow_stats.read_bytes
+                        + stats.cf_statistics(CF_LOCK).flow_stats.read_bytes
+                        + stats.cf_statistics(CF_WRITE).flow_stats.read_bytes;
+                    sample.add_read_bytes(read_bytes);
+                    let quota_delay = quota_limiter.consume_sample(sample, true).await;
+                    if !quota_delay.is_zero() {
+                        TXN_COMMAND_THROTTLE_TIME_COUNTER_VEC_STATIC
+                            .get(CMD)
+                            .inc_by(quota_delay.as_micros() as u64);
+                    }
+
+                    let stage_finished_ts = Instant::now();
+                    let schedule_wait_time =
+                        stage_scheduled_ts.saturating_duration_since(stage_begin_ts);
+                    let snapshot_wait_time =
+                        stage_snap_recv_ts.saturating_duration_since(stage_scheduled_ts);
+                    let wait_wall_time =
+                        stage_snap_recv_ts.saturating_duration_since(stage_begin_ts);
+                    let process_wall_time =
+                        stage_finished_ts.saturating_duration_since(stage_snap_recv_ts);
+                    with_tls_tracker(|tracker| {
+                        tracker.metrics.read_pool_schedule_wait_nanos =
+                            schedule_wait_time.as_nanos() as u64;
+                    });
+                    let latency_stats = StageLatencyStats {
+                        schedule_wait_time_ns: duration_to_ms(schedule_wait_time),
+                        snapshot_wait_time_ns: duration_to_ms(snapshot_wait_time),
+                        wait_wall_time_ns: duration_to_ms(wait_wall_time),
+                        process_wall_time_ns: duration_to_ms(process_wall_time),
+                    };
+                    Ok((
+                        result,
+                        KvGetStatistics {
+                            stats,
+                            latency_stats,
+                        },
+                    ))
+                }
+            }
+            .in_resource_metering_tag(resource_tag),
+            priority,
+            thread_rng().next_u64(),
+            metadata,
+            resource_limiter,
+        )
+    }
     /// Get values of a set of keys in a batch from the snapshot.
     ///
     /// Only writes that are committed before `start_ts` are visible.
@@ -2033,7 +2206,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                     SCHED_STAGE_COUNTER_VEC.get(tag).snapshot_ok.inc();
                     if !snapshot.ext().is_max_ts_synced() {
                         return Err(Error::from(txn::Error::from(
-                            TxnError::MaxTimestampNotSynced {
+                            TxnErrorInner::MaxTimestampNotSynced {
                                 region_id: ctx.get_region_id(),
                                 start_ts: TimeStamp::zero(),
                             },
@@ -4929,7 +5102,7 @@ mod tests {
                 Some(b"cc".to_vec()),
                 None,
                 Some(b"aa".to_vec()),
-                Some(b"bb".to_vec())
+                Some(b"bb".to_vec()),
             ]
         );
     }
@@ -6910,7 +7083,7 @@ mod tests {
         ]);
         // TODO: refactor to use `Api` parameter.
         assert_eq!(
-            <StorageApiV1<RocksEngine, MockLockManager>>::check_key_ranges(&ranges, false,),
+            <StorageApiV1<RocksEngine, MockLockManager>>::check_key_ranges(&ranges, false),
             true
         );
 
@@ -6920,7 +7093,7 @@ mod tests {
             (b"c".to_vec(), vec![]),
         ]);
         assert_eq!(
-            <StorageApiV1<RocksEngine, MockLockManager>>::check_key_ranges(&ranges, false,),
+            <StorageApiV1<RocksEngine, MockLockManager>>::check_key_ranges(&ranges, false),
             true
         );
 
@@ -6930,7 +7103,7 @@ mod tests {
             (b"c3".to_vec(), b"c".to_vec()),
         ]);
         assert_eq!(
-            <StorageApiV1<RocksEngine, MockLockManager>>::check_key_ranges(&ranges, false,),
+            <StorageApiV1<RocksEngine, MockLockManager>>::check_key_ranges(&ranges, false),
             false
         );
 
@@ -6942,7 +7115,7 @@ mod tests {
             (b"a".to_vec(), vec![]),
         ]);
         assert_eq!(
-            <StorageApiV1<RocksEngine, MockLockManager>>::check_key_ranges(&ranges, false,),
+            <StorageApiV1<RocksEngine, MockLockManager>>::check_key_ranges(&ranges, false),
             false
         );
 
@@ -6952,7 +7125,7 @@ mod tests {
             (b"c3".to_vec(), b"c".to_vec()),
         ]);
         assert_eq!(
-            <StorageApiV1<RocksEngine, MockLockManager>>::check_key_ranges(&ranges, true,),
+            <StorageApiV1<RocksEngine, MockLockManager>>::check_key_ranges(&ranges, true),
             true
         );
 
@@ -6962,7 +7135,7 @@ mod tests {
             (b"a3".to_vec(), vec![]),
         ]);
         assert_eq!(
-            <StorageApiV1<RocksEngine, MockLockManager>>::check_key_ranges(&ranges, true,),
+            <StorageApiV1<RocksEngine, MockLockManager>>::check_key_ranges(&ranges, true),
             true
         );
 
@@ -6972,7 +7145,7 @@ mod tests {
             (b"c".to_vec(), b"c3".to_vec()),
         ]);
         assert_eq!(
-            <StorageApiV1<RocksEngine, MockLockManager>>::check_key_ranges(&ranges, true,),
+            <StorageApiV1<RocksEngine, MockLockManager>>::check_key_ranges(&ranges, true),
             false
         );
 
@@ -6982,7 +7155,7 @@ mod tests {
             (b"c3".to_vec(), vec![]),
         ]);
         assert_eq!(
-            <StorageApiV1<RocksEngine, MockLockManager>>::check_key_ranges(&ranges, true,),
+            <StorageApiV1<RocksEngine, MockLockManager>>::check_key_ranges(&ranges, true),
             false
         );
     }
@@ -7607,7 +7780,7 @@ mod tests {
             );
             let res = block_on(storage.scan_lock(Context::default(), 101.into(), None, None, 10))
                 .unwrap();
-            assert_eq!(res, vec![lock_a, lock_b, lock_x, lock_y, lock_z,]);
+            assert_eq!(res, vec![lock_a, lock_b, lock_x, lock_y, lock_z]);
         }
     }
 
@@ -7796,7 +7969,7 @@ mod tests {
                 lock_c.clone(),
                 lock_x.clone(),
                 lock_y.clone(),
-                lock_z
+                lock_z,
             ]
         );
 
@@ -7824,7 +7997,7 @@ mod tests {
                 lock_b.clone(),
                 lock_c.clone(),
                 lock_x.clone(),
-                lock_y.clone()
+                lock_y.clone(),
             ]
         );
 
@@ -7875,7 +8048,7 @@ mod tests {
                 lock_b.clone(),
                 lock_c.clone(),
                 lock_x.clone(),
-                lock_y.clone()
+                lock_y.clone(),
             ]
         );
         drop(guard);
@@ -10250,6 +10423,7 @@ mod tests {
             .unwrap();
         assert!(rx.recv().unwrap() > 10);
     }
+
     // this test shows that the scheduler take `response_policy` in `WriteResult`
     // serious, ie. call the callback at expected stage when writing to the
     // engine

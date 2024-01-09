@@ -3036,3 +3036,69 @@ fn test_pessimistic_rollback_with_read_first() {
         );
     }
 }
+
+#[test_case(test_raftstore::must_new_cluster_and_kv_client)]
+#[test_case(test_raftstore_v2::must_new_cluster_and_kv_client)]
+fn test_pipelined_dml_flush() {
+    let (_cluster, client, ctx) = new_cluster();
+    let (k, v) = (b"key".to_vec(), b"value".to_vec());
+    let pk = b"primary".to_vec();
+    let mut flush_req = FlushRequest::default();
+    flush_req.set_mutations(
+        vec![
+            Mutation {
+                op: Op::Put,
+                key: pk.clone(),
+                value: v.clone(),
+                ..Default::default()
+            },
+            Mutation {
+                op: Op::Put,
+                key: k.clone(),
+                value: v.clone(),
+                ..Default::default()
+            },
+        ]
+        .into(),
+    );
+    flush_req.set_context(ctx.clone());
+    flush_req.set_start_ts(1);
+    flush_req.set_primary_key(pk.clone());
+    let flush_resp = client.kv_flush(&flush_req).unwrap();
+    assert!(!flush_resp.has_region_error());
+    assert!(flush_resp.get_errors().len() == 0);
+
+    let mut batch_get_req = BufferBatchGetRequest::default();
+    batch_get_req.set_context(ctx.clone());
+    batch_get_req.set_keys(vec![k.clone()].into());
+    batch_get_req.set_version(1);
+    let batch_get_resp = client.kv_buffer_batch_get(&batch_get_req).unwrap();
+    assert!(!batch_get_resp.has_region_error());
+    let pairs = batch_get_resp.get_pairs();
+    assert_eq!(pairs.len(), 1);
+    assert!(!pairs[0].has_error());
+    assert_eq!(pairs[0].get_key(), k.as_slice());
+    assert_eq!(pairs[0].get_value(), v.as_slice());
+
+    let mut commit_req = CommitRequest::default();
+    commit_req.set_context(ctx.clone());
+    commit_req.set_start_version(1);
+    commit_req.set_commit_version(2);
+    commit_req.set_keys(vec![pk.clone(), k.clone()].into());
+    let commit_resp = client.kv_commit(&commit_req).unwrap();
+    assert!(!commit_resp.has_region_error());
+    assert!(!commit_resp.has_error(), "{:?}", commit_resp.get_error());
+
+    let mut get_req = GetRequest::default();
+    get_req.set_context(ctx);
+    get_req.set_key(k);
+    get_req.set_version(10);
+    let get_resp = client.kv_get(&get_req).unwrap();
+    assert!(!get_resp.has_region_error());
+    assert!(
+        !get_resp.has_error(),
+        "get error {:?}",
+        get_resp.get_error()
+    );
+    assert_eq!(get_resp.get_value(), v);
+}
