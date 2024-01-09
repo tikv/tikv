@@ -19,8 +19,8 @@ use encryption_export::DataKeyManager;
 use engine_rocks::{RocksCompactedEvent, RocksEngine, RocksStatistics};
 use engine_test::raft::RaftTestEngine;
 use engine_traits::{
-    Engines, Iterable, KvEngine, Mutable, Peekable, RaftEngineReadOnly, SyncMutable, WriteBatch,
-    CF_DEFAULT, CF_RAFT,
+    Engines, Iterable, KvEngine, Mutable, Peekable, RaftEngineReadOnly, SnapshotContext,
+    SyncMutable, WriteBatch, CF_DEFAULT, CF_RAFT,
 };
 use file_system::IoRateLimiter;
 use futures::{self, channel::oneshot, executor::block_on, future::BoxFuture, StreamExt};
@@ -123,19 +123,21 @@ pub trait Simulator<EK: KvEngine> {
 
     fn read(
         &mut self,
+        snap_ctx: Option<SnapshotContext>,
         batch_id: Option<ThreadReadId>,
         request: RaftCmdRequest,
         timeout: Duration,
     ) -> Result<RaftCmdResponse> {
         let node_id = request.get_header().get_peer().get_store_id();
         let (cb, mut rx) = make_cb::<EK>(&request);
-        self.async_read(node_id, batch_id, request, cb);
+        self.async_read(snap_ctx, node_id, batch_id, request, cb);
         rx.recv_timeout(timeout)
             .map_err(|_| Error::Timeout(format!("request timeout for {:?}", timeout)))
     }
 
     fn async_read(
         &mut self,
+        snap_ctx: Option<SnapshotContext>,
         node_id: u64,
         batch_id: Option<ThreadReadId>,
         request: RaftCmdRequest,
@@ -450,11 +452,16 @@ where
 
     pub fn read(
         &self,
+        snap_ctx: Option<SnapshotContext>,
         batch_id: Option<ThreadReadId>,
         request: RaftCmdRequest,
         timeout: Duration,
     ) -> Result<RaftCmdResponse> {
-        match self.sim.wl().read(batch_id, request.clone(), timeout) {
+        match self
+            .sim
+            .wl()
+            .read(snap_ctx, batch_id, request.clone(), timeout)
+        {
             Err(e) => {
                 warn!("failed to read {:?}: {:?}", request, e);
                 Err(e)
@@ -478,7 +485,7 @@ where
             }
         }
         let ret = if is_read {
-            self.sim.wl().read(None, request.clone(), timeout)
+            self.sim.wl().read(None, None, request.clone(), timeout)
         } else {
             self.sim.rl().call_command(request.clone(), timeout)
         };
@@ -1298,7 +1305,9 @@ where
                     engine_traits::CF_RAFT,
                     &keys::region_state_key(region_id),
                 )
-                .unwrap() && state.get_state() == peer_state {
+                .unwrap()
+                && state.get_state() == peer_state
+            {
                 return;
             }
             sleep_ms(10);

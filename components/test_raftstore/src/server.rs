@@ -15,7 +15,7 @@ use concurrency_manager::ConcurrencyManager;
 use encryption_export::DataKeyManager;
 use engine_rocks::RocksEngine;
 use engine_test::raft::RaftTestEngine;
-use engine_traits::{Engines, KvEngine};
+use engine_traits::{Engines, KvEngine, SnapshotContext};
 use futures::executor::block_on;
 use grpcio::{ChannelBuilder, EnvBuilder, Environment, Error as GrpcError, Service};
 use grpcio_health::HealthService;
@@ -737,6 +737,7 @@ impl<EK: KvEngineWithRocks> Simulator<EK> for ServerCluster<EK> {
 
     fn async_read(
         &mut self,
+        snap_ctx: Option<SnapshotContext>,
         node_id: u64,
         batch_id: Option<ThreadReadId>,
         request: RaftCmdRequest,
@@ -750,7 +751,9 @@ impl<EK: KvEngineWithRocks> Simulator<EK> for ServerCluster<EK> {
                 cb.invoke_with_response(resp);
             }
             Some(meta) => {
-                meta.sim_router.read(batch_id, request, cb).unwrap();
+                meta.sim_router
+                    .read(snap_ctx, batch_id, request, cb)
+                    .unwrap();
             }
         };
     }
@@ -951,8 +954,18 @@ pub fn must_new_cluster_and_kv_client_mul(
     TikvClient,
     Context,
 ) {
-    let (cluster, leader, ctx) = must_new_cluster_mul(count);
+    must_new_cluster_with_cfg_and_kv_client_mul(count, |_| {})
+}
 
+pub fn must_new_cluster_with_cfg_and_kv_client_mul(
+    count: usize,
+    configure: impl FnMut(&mut Cluster<RocksEngine, ServerCluster<RocksEngine>>),
+) -> (
+    Cluster<RocksEngine, ServerCluster<RocksEngine>>,
+    TikvClient,
+    Context,
+) {
+    let (cluster, leader, ctx) = must_new_and_configure_cluster_mul(count, configure);
     let env = Arc::new(Environment::new(1));
     let channel =
         ChannelBuilder::new(env).connect(&cluster.sim.rl().get_addr(leader.get_store_id()));

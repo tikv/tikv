@@ -520,6 +520,7 @@ fn test_invalid_external_storage() {
     let resps = block_on(rx.collect::<Vec<_>>());
     assert!(resps[0].has_error());
 
+    #[allow(clippy::permissions_set_readonly_false)]
     perms.set_readonly(false);
     f.set_permissions(perms).unwrap();
 

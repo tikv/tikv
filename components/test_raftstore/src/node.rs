@@ -10,7 +10,7 @@ use concurrency_manager::ConcurrencyManager;
 use encryption_export::DataKeyManager;
 use engine_rocks::RocksEngine;
 use engine_test::raft::RaftTestEngine;
-use engine_traits::{Engines, KvEngine};
+use engine_traits::{Engines, KvEngine, SnapshotContext};
 use kvproto::{
     kvrpcpb::ApiVersion,
     metapb,
@@ -278,7 +278,7 @@ impl<EK: KvEngine> Simulator<EK> for NodeCluster<EK> {
             (snap_mgr, Some(tmp))
         } else {
             let trans = self.trans.core.lock().unwrap();
-            let &(ref snap_mgr, _) = &trans.snap_paths[&node_id];
+            let (snap_mgr, _) = &trans.snap_paths[&node_id];
             (snap_mgr.clone(), None)
         };
 
@@ -459,6 +459,7 @@ impl<EK: KvEngine> Simulator<EK> for NodeCluster<EK> {
 
     fn async_read(
         &mut self,
+        snap_ctx: Option<SnapshotContext>,
         node_id: u64,
         batch_id: Option<ThreadReadId>,
         request: RaftCmdRequest,
@@ -480,7 +481,7 @@ impl<EK: KvEngine> Simulator<EK> for NodeCluster<EK> {
         }
         let mut guard = self.trans.core.lock().unwrap();
         let router = guard.routers.get_mut(&node_id).unwrap();
-        router.read(batch_id, request, cb).unwrap();
+        router.read(snap_ctx, batch_id, request, cb).unwrap();
     }
 
     fn send_raft_msg(&mut self, msg: raft_serverpb::RaftMessage) -> Result<()> {

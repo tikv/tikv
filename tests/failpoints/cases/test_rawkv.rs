@@ -209,7 +209,7 @@ fn test_leader_transfer() {
 #[test]
 fn test_region_merge() {
     let mut suite = TestSuite::new(3, ApiVersion::V2);
-    let keys = vec![b"rk0", b"rk1", b"rk2", b"rk3", b"rk4", b"rk5"];
+    let keys = [b"rk0", b"rk1", b"rk2", b"rk3", b"rk4", b"rk5"];
 
     suite.must_raw_put(keys[1], b"v1");
     suite.must_raw_put(keys[3], b"v3");
