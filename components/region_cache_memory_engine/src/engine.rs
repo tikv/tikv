@@ -2073,6 +2073,90 @@ mod tests {
     }
 
     #[test]
+    fn test_eviction() {
+        // case 1: eviction when there's no snapshot
+        {
+            let engine = RegionCacheMemoryEngine::default();
+            engine.new_region(1);
+
+            {
+                let mut core = engine.core.lock().unwrap();
+                core.region_metas.get_mut(&1).unwrap().can_read = true;
+                core.region_metas.get_mut(&1).unwrap().safe_ts = 5;
+                let s1 = core.engine.get_mut(&1).unwrap().data[cf_to_id("write")].clone();
+
+                for i in 0..10 {
+                    let user_key = construct_key(i, 10);
+                    let internal_key = encode_key(&user_key, 10, ValueType::Value);
+                    let v = format!("v{:04}{:04}", i, 10);
+                    s1.put(internal_key.clone(), v.clone());
+                }
+            }
+
+            engine.evict(1);
+            let removed = engine.memory_limiter.removed.lock().unwrap();
+            for i in 0..10 {
+                let user_key = construct_key(i, 10);
+                let internal_key = encode_key(&user_key, 10, ValueType::Value);
+                assert!(removed.contains(internal_key.as_slice()));
+            }
+        }
+
+        // case 2: eviction when there are some snapshots
+        {
+            let engine = RegionCacheMemoryEngine::default();
+            engine.new_region(1);
+
+            {
+                let mut core = engine.core.lock().unwrap();
+                core.region_metas.get_mut(&1).unwrap().can_read = true;
+                core.region_metas.get_mut(&1).unwrap().safe_ts = 5;
+                let s1 = core.engine.get_mut(&1).unwrap().data[cf_to_id("write")].clone();
+
+                for i in 0..10 {
+                    let user_key = construct_key(i, 10);
+                    let internal_key = encode_key(&user_key, 10, ValueType::Value);
+                    let v = format!("v{:04}{:04}", i, 10);
+                    s1.put(internal_key.clone(), v.clone());
+                }
+            }
+            let s1 = engine.snapshot(1, 10, 10);
+            let s2 = engine.snapshot(1, 20, 20);
+            engine.evict(1);
+
+            {
+                let removed = engine.memory_limiter.removed.lock().unwrap();
+                for i in 0..10 {
+                    let user_key = construct_key(i, 10);
+                    let internal_key = encode_key(&user_key, 10, ValueType::Value);
+                    assert!(!removed.contains(internal_key.as_slice()));
+                }
+            }
+
+            drop(s1);
+            {
+                // the region still can not be removed
+                let removed = engine.memory_limiter.removed.lock().unwrap();
+                for i in 0..10 {
+                    let user_key = construct_key(i, 10);
+                    let internal_key = encode_key(&user_key, 10, ValueType::Value);
+                    assert!(!removed.contains(internal_key.as_slice()));
+                }
+            }
+
+            drop(s2);
+            {
+                let removed = engine.memory_limiter.removed.lock().unwrap();
+                for i in 0..10 {
+                    let user_key = construct_key(i, 10);
+                    let internal_key = encode_key(&user_key, 10, ValueType::Value);
+                    assert!(removed.contains(internal_key.as_slice()));
+                }
+            }
+        }
+    }
+
+    #[test]
     fn test_batch_split() {
         for _ in 0..100 {
             let engine = RegionCacheMemoryEngine::default();
@@ -2280,7 +2364,7 @@ mod tests {
         }
     }
 
-    // test the derived region is evicted during the split
+    // Test the parent/derived region is evicted during the split
     #[test]
     fn test_batch_split_with_eviction_1() {
         let engine = RegionCacheMemoryEngine::default();
@@ -2346,6 +2430,8 @@ mod tests {
         let sr = engine.batch_split(1, vec![2, 3, 1], split_keys);
         engine.on_batch_split(1, sr);
 
+        // Although region 2/3 does not have any snapshot, the eviction does not remove
+        // the region as they are unresolved split regions
         engine.evict(2);
         engine.evict(3);
 
@@ -2362,10 +2448,89 @@ mod tests {
 
         drop(s1);
 
+        // Region 2/3 are resolved split regions, so they are removed now.
         {
             let removed = engine.memory_limiter.removed.lock().unwrap();
             // Now, the eviction should be exectued
             for i in 0..20 {
+                let user_key = construct_key(i, 10);
+                let internal_key = encode_key(&user_key, 10, ValueType::Value);
+                assert!(removed.contains(internal_key.as_slice()));
+            }
+        }
+    }
+
+    #[test]
+    fn test_batch_split_recursive_with_eviction() {
+        let engine = RegionCacheMemoryEngine::default();
+        engine.new_region(1);
+
+        {
+            let mut core = engine.core.lock().unwrap();
+            core.region_metas.get_mut(&1).unwrap().can_read = true;
+            core.region_metas.get_mut(&1).unwrap().safe_ts = 5;
+            let s1 = core.engine.get_mut(&1).unwrap().data[cf_to_id("write")].clone();
+
+            for i in 0..90 {
+                let user_key = construct_key(i, 10);
+                let internal_key = encode_key(&user_key, 10, ValueType::Value);
+                let v = format!("v{:04}{:04}", i, 10);
+                s1.put(internal_key.clone(), v.clone());
+            }
+        }
+
+        let s1 = engine.snapshot(1, 10, 10).unwrap();
+
+        let split_keys = vec![
+            construct_user_key(0),
+            construct_user_key(10),
+            construct_user_key(20),
+        ];
+        // region 1_1 to region 2, 3, 1_2
+        let sr = engine.batch_split(1, vec![2, 3, 1], split_keys);
+        engine.on_batch_split(1, sr);
+
+        // region 1_2 to region 4_1, 1_3
+        let split_keys = vec![construct_user_key(20), construct_user_key(50)];
+        let sr = engine.batch_split(1, vec![4, 1], split_keys);
+        engine.on_batch_split(1, sr);
+
+        let s4 = engine.snapshot(4, 10, 10).unwrap();
+
+        // region 4_1 to region 5, 4_2
+        let split_keys = vec![construct_user_key(20), construct_user_key(30)];
+        let sr = engine.batch_split(4, vec![5, 4], split_keys);
+        engine.on_batch_split(4, sr);
+
+        // Now region ranges:
+        // region 1_3: 50 - 90
+        // region 2: 0 - 10
+        // region 3: 10 - 20
+        // region 4_2: 30 - 50
+        // region 5: 20 - 30
+
+        engine.evict(5);
+        drop(s4);
+        // although region 5 is evicted and the only snapshot of it's parent region s4
+        // is dropped, region 5 will not be removed as it's not a resolved split region
+        {
+            let removed = engine.memory_limiter.removed.lock().unwrap();
+            // Now, the eviction should be exectued
+            for i in 20..30 {
+                let user_key = construct_key(i, 10);
+                let internal_key = encode_key(&user_key, 10, ValueType::Value);
+                assert!(!removed.contains(internal_key.as_slice()));
+            }
+        }
+
+        // drop s1 makes region 1_1 ready to cut which makes region 1_2 be a resolved
+        // split region which in turns makes region 4_1 a resolved split region and thus
+        // the same for region 5.
+        drop(s1);
+        {
+            let removed = engine.memory_limiter.removed.lock().unwrap();
+            // Now, the eviction should be exectued
+            for i in 20..30 {
                 let user_key = construct_key(i, 10);
                 let internal_key = encode_key(&user_key, 10, ValueType::Value);
                 assert!(removed.contains(internal_key.as_slice()));
