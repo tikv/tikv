@@ -110,14 +110,8 @@ impl TestEngineBuilder {
                 _ => (*cf, RocksCfOptions::default()),
             })
             .collect();
-<<<<<<< HEAD
-        let engine =
-            RocksEngine::new(&path, None, cfs_opts, cache.is_some(), self.io_rate_limiter)?;
-=======
-        let resources = cfg_rocksdb.build_resources(Default::default(), EngineType::RaftKv);
-        let db_opts = cfg_rocksdb.build_opt(&resources, EngineType::RaftKv);
-        let engine = RocksEngine::new(&path, Some(db_opts), cfs_opts, self.io_rate_limiter)?;
->>>>>>> 65308d6728 (engine: calculate table properties correctly for Titan (#16320))
+        let db_opts = cfg_rocksdb.build_opt();
+        let engine = RocksEngine::new(&path, Some(db_opts), cfs_opts, true, self.io_rate_limiter)?;
         Ok(engine)
     }
 }

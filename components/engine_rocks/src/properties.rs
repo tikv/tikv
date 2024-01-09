@@ -454,7 +454,6 @@ impl TablePropertiesCollector for MvccPropertiesCollector {
         if self.row_versions > self.props.max_row_versions {
             self.props.max_row_versions = self.row_versions;
         }
-
         if entry_type != DBEntryType::BlobIndex {
             if self.key_mode == KeyMode::Raw {
                 let decode_raw_value = ApiV2::decode_raw_value(value);
