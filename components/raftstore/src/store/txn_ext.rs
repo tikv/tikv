@@ -531,13 +531,18 @@ mod tests {
             pessimistic_lock.into_lock()
         }
 
-        let filter_pass_all = |_key: &Key, _lock: &PessimisticLock| true;
-        let filter_pass_key2 =
-            |key: &Key, _lock: &PessimisticLock| key.as_encoded().starts_with(b"key2");
+        type LockFilter = fn(&Key, &PessimisticLock) -> bool;
+
+        fn filter_pass_all(_: &Key, _: &PessimisticLock) -> bool {
+            true
+        }
+
+        fn filter_pass_key2(key: &Key, _: &PessimisticLock) -> bool {
+            key.as_encoded().starts_with(b"key2")
+        }
 
         // Case parameter: start_key, end_key, filter, limit, expected results, expected
         // has more.
-        type LockFilter = fn(&Key, &PessimisticLock) -> bool;
         let cases: [(
             Option<Key>,
             Option<Key>,
