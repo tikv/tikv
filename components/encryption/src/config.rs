@@ -266,6 +266,7 @@ mod tests {
                     endpoint: "endpoint".to_owned(),
                     vendor: "".to_owned(),
                     azure: None,
+                    gcp: None,
                 },
             },
             previous_master_key: MasterKeyConfig::Plaintext,
@@ -287,10 +288,28 @@ mod tests {
                         hsm_url: "hsm_url".to_owned(),
                         ..AzureConfig::default()
                     }),
+                    gcp: None,
                 },
             },
             ..kms_config.clone()
         };
+
+        let kms_config_gcp = EncryptionConfig {
+            master_key: MasterKeyConfig::Kms { 
+                config: KmsConfig {
+                    key_id: "key_id".to_owned(),
+                    region: "region".to_owned(),
+                    endpoint: "endpoint".to_owned(),
+                    vendor: "gcp".to_owned(),
+                    azure: None,
+                    gcp: Some(GcpConfig {
+                        credential_file_path: Some("/tmp/credential.json".into()),
+                    }),
+                },
+            },
+            ..kms_config.clone()
+        };
+
         // KMS with default(aws).
         let kms_str = r#"
             data-encryption-method = "aes128-ctr"
@@ -329,7 +348,24 @@ mod tests {
             [previous-master-key]
             type = 'plaintext'
         "#;
-        for (kms_cfg, kms_str) in [(kms_config, kms_str), (kms_config_azure, kms_str_azure)] {
+        // KMS with gcp
+        let kms_str_gcp = r#"
+            data-encryption-method = 'aes128-ctr'
+            data-key-rotation-period = '14d'
+            enable-file-dictionary-log = true
+            file-dictionary-rewrite-threshold = 1000000
+
+            [master-key]
+            type = 'kms'
+            key-id = 'key_id'
+            region = 'region'
+            endpoint = 'endpoint'
+            vendor = 'gcp'
+
+            [master-key.gcp]
+            credential-file-path = '/tmp/credential.json'
+        "#;
+        for (kms_cfg, kms_str) in [(kms_config, kms_str), (kms_config_azure, kms_str_azure), (kms_config_gcp, kms_str_gcp)] {
             let cfg: EncryptionConfig = toml::from_str(kms_str).unwrap();
             assert_eq!(
                 cfg,
