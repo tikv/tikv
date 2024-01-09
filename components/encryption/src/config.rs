@@ -1,6 +1,6 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use cloud::kms::SubConfigAzure;
+use cloud::kms::{SubConfigAzure, SubConfigGcp};
 use kvproto::encryptionpb::{EncryptionMethod, MasterKeyKms};
 use online_config::OnlineConfig;
 use serde_derive::{Deserialize, Serialize};
@@ -84,6 +84,16 @@ impl std::fmt::Debug for AzureConfig {
     }
 }
 
+// TODO: the representation of GCP KMS to users needs to be discussed.
+#[derive(Clone, Default, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+#[serde(rename_all = "kebab-case")]
+pub struct GcpConfig {
+    // user credential file path.
+    // only service account and authorized user are supported.
+    pub credential_file_path: Option<String>,
+}
+
 #[derive(Clone, Default, Debug, Serialize, Deserialize, PartialEq, OnlineConfig)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
@@ -95,6 +105,9 @@ pub struct KmsConfig {
     // followings are used for Azure Kms
     #[online_config(skip)]
     pub azure: Option<AzureConfig>,
+    // Gcp Kms configuration.
+    #[online_config(skip)]
+    pub gcp: Option<GcpConfig>,
 }
 
 impl KmsConfig {
@@ -131,6 +144,20 @@ impl KmsConfig {
             ..MasterKeyKms::default()
         };
         (mk, azure_kms_cfg)
+    }
+
+    pub fn convert_to_gcp_config(self) -> (MasterKeyKms, SubConfigGcp) {
+        let gcp_cfg = SubConfigGcp {
+            credential_file_path: self.gcp.unwrap().credential_file_path,
+        };
+        let mk = MasterKeyKms {
+            key_id: self.key_id,
+            region: self.region,
+            endpoint: self.endpoint,
+            vendor: self.vendor,
+            ..MasterKeyKms::default()
+        };
+        (mk, gcp_cfg)
     }
 }
 

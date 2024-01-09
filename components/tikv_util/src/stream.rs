@@ -142,8 +142,8 @@ where
     F: Future<Output = Result<T, E>>,
     E: RetryError,
 {
-    const MAX_RETRY_DELAY: Duration = Duration::from_secs(32);
-    const MAX_RETRY_TIMES: usize = 14;
+    const MAX_RETRY_DELAY: Duration = Duration::from_secs(5);
+    const MAX_RETRY_TIMES: usize = 2;
     let max_retry_times = (|| {
         fail::fail_point!("retry_count", |t| t
             .and_then(|v| v.parse::<usize>().ok())
