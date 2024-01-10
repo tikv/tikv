@@ -30,7 +30,6 @@ use tikv_util::{
 use txn_types::{Key, Write, WriteType};
 
 #[test]
-#[ignore]
 fn test_turnoff_titan() {
     let mut cluster = new_node_cluster(0, 3);
     cluster.cfg.rocksdb.defaultcf.disable_auto_compactions = true;
