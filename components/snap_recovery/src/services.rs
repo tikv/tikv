@@ -7,7 +7,6 @@ use std::{
     result,
     sync::{
         atomic::{AtomicBool, Ordering},
-        mpsc::{sync_channel, SyncSender},
         Arc, Mutex,
     },
     thread::Builder,
@@ -36,12 +35,14 @@ use raftstore::{
     store::{
         fsm::RaftRouter,
         msg::{PeerMsg, SignificantMsg},
+        snapshot_backup::{SnapshotBrWaitApplyRequest, SyncReport},
         transport::SignificantRouter,
-        SnapshotRecoveryWaitApplySyncer,
+        SnapshotBrWaitApplySyncer,
     },
 };
 use thiserror::Error;
 use tikv_util::sys::thread::{StdThreadBuildWrapper, ThreadBuildWrapper};
+use tokio::sync::oneshot::{self, Sender};
 
 use crate::{
     data_resolver::DataResolverManager,
@@ -224,11 +225,11 @@ where
     // a new wait apply syncer share with all regions,
     // when all region reached the target index, share reference decreased to 0,
     // trigger closure to send finish info back.
-    pub fn wait_apply_last(router: RaftRouter<EK, ER>, sender: SyncSender<u64>) {
-        let wait_apply = SnapshotRecoveryWaitApplySyncer::new(0, sender);
+    pub fn wait_apply_last(router: RaftRouter<EK, ER>, sender: Sender<SyncReport>) {
+        let wait_apply = SnapshotBrWaitApplySyncer::new(0, sender);
         router.broadcast_normal(|| {
-            PeerMsg::SignificantMsg(SignificantMsg::SnapshotRecoveryWaitApply(
-                wait_apply.clone(),
+            PeerMsg::SignificantMsg(SignificantMsg::SnapshotBrWaitApply(
+                SnapshotBrWaitApplyRequest::relaxed(wait_apply.clone()),
             ))
         });
     }
@@ -345,12 +346,14 @@ where
             // wait apply to the last log
             let mut rx_apply = Vec::with_capacity(leaders.len());
             for &region_id in &leaders {
-                let (tx, rx) = sync_channel(1);
+                let (tx, rx) = oneshot::channel();
                 REGION_EVENT_COUNTER.start_wait_leader_apply.inc();
-                let wait_apply = SnapshotRecoveryWaitApplySyncer::new(region_id, tx.clone());
+                let wait_apply = SnapshotBrWaitApplySyncer::new(region_id, tx);
                 if let Err(e) = raft_router.get_mut().unwrap().significant_send(
                     region_id,
-                    SignificantMsg::SnapshotRecoveryWaitApply(wait_apply.clone()),
+                    SignificantMsg::SnapshotBrWaitApply(SnapshotBrWaitApplyRequest::relaxed(
+                        wait_apply.clone(),
+                    )),
                 ) {
                     error!(
                         "failed to send wait apply";
@@ -358,27 +361,21 @@ where
                         "err" => ?e,
                     );
                 }
-                rx_apply.push(Some(rx));
+                rx_apply.push(rx);
             }
 
             // leader apply to last log
             for (rid, rx) in leaders.iter().zip(rx_apply) {
-                if let Some(rx) = rx {
-                    CURRENT_WAIT_APPLY_LEADER.set(*rid as _);
-                    // FIXME: we cannot the former RPC when we get stuck at here.
-                    // Perhaps we need to make `SnapshotRecoveryWaitApplySyncer` be able to support
-                    // asynchronous channels. But for now, waiting seems won't cause live lock, so
-                    // we are keeping it unchanged.
-                    match rx.recv() {
-                        Ok(region_id) => {
-                            debug!("leader apply to last log"; "region_id" => region_id);
-                        }
-                        Err(e) => {
-                            error!("leader failed to apply to last log"; "error" => ?e);
-                        }
+                CURRENT_WAIT_APPLY_LEADER.set(*rid as _);
+                match rx.await {
+                    Ok(_) => {
+                        debug!("leader apply to last log"; "region_id" => rid);
                     }
-                    REGION_EVENT_COUNTER.finish_wait_leader_apply.inc();
+                    Err(e) => {
+                        error!("leader failed to apply to last log"; "error" => ?e);
+                    }
                 }
+                REGION_EVENT_COUNTER.finish_wait_leader_apply.inc();
             }
             CURRENT_WAIT_APPLY_LEADER.set(0);
 
@@ -420,14 +417,11 @@ where
         info!("wait_apply start");
         let task = async move {
             let now = Instant::now();
-            // FIXME: this function will exit once the first region finished apply.
-            // BUT for the flashback resolve KV implementation, that is fine because the
-            // raft log stats is consistent.
-            let (tx, rx) = sync_channel(1);
-            RecoveryService::wait_apply_last(router, tx.clone());
-            match rx.recv() {
+            let (tx, rx) = oneshot::channel();
+            RecoveryService::wait_apply_last(router, tx);
+            match rx.await {
                 Ok(id) => {
-                    info!("follower apply to last log"; "error" => id);
+                    info!("follower apply to last log"; "report" => ?id);
                 }
                 Err(e) => {
                     error!("follower failed to apply to last log"; "error" => ?e);
