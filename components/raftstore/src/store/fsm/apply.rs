@@ -2476,8 +2476,8 @@ where
             "region_id" => self.region_id(),
             "peer_id" => self.id(),
             "changes" => ?changes,
-            "original region" => ?&self.region,
-            "current region" => ?&region,
+            "original_region" => ?&self.region,
+            "current_region" => ?&region,
         );
         Ok(region)
     }
@@ -3345,8 +3345,8 @@ where
             "region_id" => self.region_id(),
             "peer_id" => self.id(),
             "switches" => ?switches,
-            "original region" => ?&self.region,
-            "current region" => ?&region,
+            "original_region" => ?&self.region,
+            "current_region" => ?&region,
         );
 
         let state = if self.pending_remove {

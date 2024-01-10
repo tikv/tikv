@@ -6339,7 +6339,7 @@ where
                         .send_extra_message(msg, &mut self.ctx.trans, &peer);
                     debug!(
                         "check peer availability";
-                        "target peer id" => *peer_id,
+                        "target_peer_id" => *peer_id,
                     );
                 }
                 None => invalid_peers.push(*peer_id),
