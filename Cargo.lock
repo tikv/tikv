@@ -2747,7 +2747,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#96c40585233f176393213dbd4c04d76259bad8f9"
+source = "git+https://github.com/pingcap/kvproto.git#4f28b82c78601a0819f02b1e903603735ec60fe9"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
@@ -2812,7 +2812,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#d877018095b44b2933969fe7caf5c3e0cd86be5b"
+source = "git+https://github.com/tikv/rust-rocksdb.git#73ba736143699fa623486c335527dd2a284bd0df"
 dependencies = [
  "bindgen 0.65.1",
  "bzip2-sys",
@@ -2831,7 +2831,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/tikv/rust-rocksdb.git#d877018095b44b2933969fe7caf5c3e0cd86be5b"
+source = "git+https://github.com/tikv/rust-rocksdb.git#73ba736143699fa623486c335527dd2a284bd0df"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -2971,9 +2971,9 @@ dependencies = [
 
 [[package]]
 name = "memmap2"
-version = "0.7.0"
+version = "0.9.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "180d4b35be83d33392d1d1bfbd2ae1eca7ff5de1a94d3fc87faaa99a069e7cbd"
+checksum = "45fd3a57831bf88bc63f8cebc0cf956116276e97fef3966103e96416209f7c92"
 dependencies = [
  "libc 0.2.146",
 ]
@@ -4051,7 +4051,7 @@ dependencies = [
 [[package]]
 name = "raft-engine"
 version = "0.4.1"
-source = "git+https://github.com/tikv/raft-engine.git#fa56f891fdf0b1cb5b7849b7bee3c5dadbb96103"
+source = "git+https://github.com/tikv/raft-engine.git#e505d631c8c6d63f7fc63d83ea6e8fb88cf970a5"
 dependencies = [
  "byteorder",
  "crc32fast",
@@ -4065,7 +4065,7 @@ dependencies = [
  "libc 0.2.146",
  "log",
  "lz4-sys",
- "memmap2 0.7.0",
+ "memmap2 0.9.3",
  "nix 0.26.2",
  "num-derive 0.4.0",
  "num-traits",
@@ -4656,7 +4656,7 @@ dependencies = [
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#d877018095b44b2933969fe7caf5c3e0cd86be5b"
+source = "git+https://github.com/tikv/rust-rocksdb.git#73ba736143699fa623486c335527dd2a284bd0df"
 dependencies = [
  "libc 0.2.146",
  "librocksdb_sys",
@@ -7436,7 +7436,7 @@ checksum = "541b12c998c5b56aa2b4e6f18f03664eef9a4fd0a246a55594efae6cc2d964b5"
 [[package]]
 name = "yatp"
 version = "0.0.1"
-source = "git+https://github.com/tikv/yatp.git?branch=master#5572a78702572087cab8ddcdd1fe30e5bf76ae42"
+source = "git+https://github.com/tikv/yatp.git?branch=master#793be4d789d4bd15292fe4d06e38063b4ec9d48e"
 dependencies = [
  "crossbeam-deque",
  "crossbeam-skiplist",
