@@ -89,8 +89,9 @@ impl std::fmt::Debug for AzureConfig {
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct GcpConfig {
-    // user credential file path.
-    // only service account and authorized user are supported.
+    /// User credential file path. Currently, only service account and
+    /// authorized user are supported. If set to None, will try to build the
+    /// `TokenProvider` following the "Google Default Credentials" flow.
     pub credential_file_path: Option<String>,
 }
 

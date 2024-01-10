@@ -1,6 +1,6 @@
 // Copyright 2024 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{fmt, result::Result as StdResult};
+use std::{fmt, io::Error as IoError, result::Result as StdResult};
 
 use async_trait::async_trait;
 use cloud::{
@@ -22,15 +22,24 @@ use crate::{
     STORAGE_VENDOR_NAME_GCP,
 };
 
+// generated random encryption data key length.
 const DEFAULT_DATAKEY_SIZE: usize = 32;
-
+// google kms endpoint.
 const GCP_KMS_ENDPOINT: &str = "https://cloudkms.googleapis.com/v1/";
 
-// the gcp ksm encrypt key pattern:
-//   projects/{project_name}/locations/{location}/keyRings/{key_ring}/
-// cryptoKeys/{key}
+/// The encryption key_id pattern of gcp ksm:
+///   projects/{project_name}/locations/{location}/keyRings/{key_ring}/
+/// cryptoKeys/{key}
 const KEY_ID_PATTERN: &str =
     r"^projects/([^/]+)/locations/([^/]+)/keyRings/([^/]+)/cryptoKeys/([^/]+)/?$";
+
+// following are related kms api method names:
+const METHOD_ENCRYPT: &str = "encrypt";
+const METHOD_DECRYPT: &str = "decrypt";
+const METHOD_GEN_RANDOM_BYTES: &str = "generateRandomBytes";
+
+// gen random key protection level, we always use HMS(Hardware Security Module).
+const RANDOMIZE_PROTECTION_LEVEL: &str = "HSM";
 
 pub struct GcpKms {
     config: Config,
@@ -77,10 +86,10 @@ impl GcpKms {
         })
     }
 
-    async fn do_json_requet<Q, R>(
+    async fn do_json_request<Q, R>(
         &self,
-        label: &'static str,
-        url: String,
+        key_name: &str,
+        method: &'static str,
         data: Q,
     ) -> std::result::Result<R, RequestError>
     where
@@ -88,6 +97,7 @@ impl GcpKms {
         R: for<'a> Deserialize<'a> + Send + Sync,
     {
         let begin = Instant::now_coarse();
+        let url = self.format_call_url(key_name, method);
         let resp = retry(
             || async {
                 let req_builder = http::Request::builder().header(
@@ -112,11 +122,11 @@ impl GcpKms {
                     .make_request(req, tame_gcs::Scopes::CloudPlatform)
                     .await
             },
-            label,
+            method,
         )
         .await?;
         metrics::CLOUD_REQUEST_HISTOGRAM_VEC
-            .with_label_values(&["gcp", label])
+            .with_label_values(&["gcp", method])
             .observe(begin.saturating_elapsed_secs());
         if !resp.status().is_success() {
             return Err(RequestError::Gcs(tame_gcs::Error::HttpStatus(
@@ -163,14 +173,10 @@ impl KmsProvider for GcpKms {
             ciphertext: data_key.clone().into_inner(),
             ciphertext_crc32c: crc32c::crc32c(data_key.as_raw()),
         };
-        let method_name = "decrypt";
-        let uri = self.format_call_url(self.config.key_id.as_str(), method_name);
-        let resp: DecryptResp = match self.do_json_requet(method_name, uri, decrypt_req).await {
-            Ok(r) => r,
-            Err(e) => {
-                return Err(CloudError::Io(e.into()));
-            }
-        };
+        let resp: DecryptResp = self
+            .do_json_request(self.config.key_id.as_str(), METHOD_DECRYPT, decrypt_req)
+            .await
+            .map_err(|e| IoError::from(e))?;
         check_crc32(&resp.plaintext, resp.plaintext_crc32c)?;
         Ok(resp.plaintext)
     }
@@ -178,35 +184,22 @@ impl KmsProvider for GcpKms {
     async fn generate_data_key(&self) -> Result<DataKeyPair> {
         let random_bytes_req = GenRandomBytesReq {
             length_bytes: DEFAULT_DATAKEY_SIZE,
-            protection_level: "HSM".into(),
+            protection_level: RANDOMIZE_PROTECTION_LEVEL.into(),
         };
-        let method_name = "generateRandomBytes";
-        let uri = self.format_call_url(&self.location, method_name);
-        let rb_resp: GenRandomBytesResp = match self
-            .do_json_requet(method_name, uri, random_bytes_req)
+        let rb_resp: GenRandomBytesResp = self
+            .do_json_request(&self.location, METHOD_GEN_RANDOM_BYTES, random_bytes_req)
             .await
-        {
-            Ok(r) => r,
-            Err(e) => {
-                return Err(CloudError::Io(e.into()));
-            }
-        };
+            .map_err(|e| IoError::from(e))?;
         check_crc32(&rb_resp.data, rb_resp.data_crc32c)?;
 
-        let crc = crc32c::crc32c(&rb_resp.data);
         let encrypt_request = EncryptRequest {
             plaintext: rb_resp.data.clone(),
-            plaintext_crc32c: crc,
+            plaintext_crc32c: crc32c::crc32c(&rb_resp.data),
         };
-        let method_name = "encrypt";
-        let uri = self.format_call_url(self.config.key_id.as_str(), method_name);
-
-        let resp: EncryptResp = match self.do_json_requet(method_name, uri, encrypt_request).await {
-            Ok(r) => r,
-            Err(e) => {
-                return Err(CloudError::Io(e.into()));
-            }
-        };
+        let resp: EncryptResp = self
+            .do_json_request(self.config.key_id.as_str(), METHOD_ENCRYPT, encrypt_request)
+            .await
+            .map_err(|e| IoError::from(e))?;
         check_crc32(&resp.ciphertext, resp.ciphertext_crc32c)?;
 
         to_data_key(resp, rb_resp.data)
@@ -224,8 +217,6 @@ struct EncryptRequest {
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct EncryptResp {
-    // TODO: to verity resp key name.
-    // name: String,
     #[serde(with = "serde_base64_bytes")]
     ciphertext: Vec<u8>,
     #[serde(deserialize_with = "deseralize_u32_from_str")]
@@ -356,7 +347,8 @@ mod tests {
         for bad_key in [
             "abc",
             "projects/test-project/locations/us-west-2/keyRings/tikv-gpc-kms-test/cryptoKeys/gl-dev-test//",
-            "projects/test-project/locations/nam8/keyRings/tikv-gpc-kms-test/cryptoKeys/gl-dev-test/cryptoKeyVersions/1",
+            // key with version
+            "projects/test-project/locations/us-west-2/keyRings/tikv-gpc-kms-test/cryptoKeys/gl-dev-test/cryptoKeyVersions/1",
         ] {
             let cfg = Config {
                 key_id: KeyId::new(bad_key.into()).unwrap(),
@@ -375,8 +367,8 @@ mod tests {
         }
 
         for key in [
-            "projects/test-project/locations/nam8/keyRings/tikv-gpc-kms-test/cryptoKeys/gl-dev-test",
-            "projects/test-project/locations/nam8/keyRings/tikv-gpc-kms-test/cryptoKeys/gl-dev-test/",
+            "projects/test-project/locations/us-east-1/keyRings/tikv-gpc-kms-test/cryptoKeys/test",
+            "projects/test-project/locations/us-east-1/keyRings/tikv-gpc-kms-test/cryptoKeys/test/",
         ] {
             let cfg = Config {
                 key_id: KeyId::new(key.into()).unwrap(),
@@ -392,10 +384,10 @@ mod tests {
             };
 
             let res = GcpKms::new(cfg).unwrap();
-            assert_eq!(&res.location, "projects/test-project/locations/nam8");
+            assert_eq!(&res.location, "projects/test-project/locations/us-east-1");
             assert_eq!(
                 res.config.key_id.as_str(),
-                "projects/test-project/locations/nam8/keyRings/tikv-gpc-kms-test/cryptoKeys/gl-dev-test"
+                "projects/test-project/locations/us-east-1/keyRings/tikv-gpc-kms-test/cryptoKeys/test"
             );
         }
     }
