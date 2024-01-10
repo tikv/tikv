@@ -4169,7 +4169,6 @@ dependencies = [
  "slog-global",
  "tempfile",
  "tikv_util",
- "time 0.1.43",
  "tracker",
 ]
 
@@ -6000,6 +5999,7 @@ name = "test_util"
 version = "0.0.1"
 dependencies = [
  "backtrace",
+ "chrono",
  "collections",
  "encryption_export",
  "fail",
@@ -6445,7 +6445,6 @@ dependencies = [
  "backup",
  "cc",
  "cdc",
- "chrono",
  "clap 2.33.0",
  "collections",
  "concurrency_manager",
