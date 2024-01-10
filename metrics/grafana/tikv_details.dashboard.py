@@ -250,12 +250,6 @@ def Cluster() -> RowPanel:
                             label_selectors=['job=~".*tikv"'],
                         ),
                     ),
-                    target(
-                        expr=expr_simple(
-                            "tikv_server_cpu_cores_quota",
-                            label_selectors=['job=~".*tikv"'],
-                        ),
-                    ),
                 ],
             ),
             graph_panel(
@@ -266,12 +260,6 @@ def Cluster() -> RowPanel:
                     target(
                         expr=expr_sum(
                             "process_resident_memory_bytes",
-                            label_selectors=['job=~".*tikv"'],
-                        ),
-                    ),
-                    target(
-                        expr=expr_simple(
-                            "tikv_server_memory_quota_bytes",
                             label_selectors=['job=~".*tikv"'],
                         ),
                     ),
