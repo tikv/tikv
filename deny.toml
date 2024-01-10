@@ -44,7 +44,7 @@ multiple-versions = "allow"
 vulnerability = "deny"
 unmaintained = "allow" # FIXME: Deny it.
 unsound = "allow" # FIXME: Deny it.
-yanked = "allow" # FIXME: Deny it.
+yanked = "deny"
 notice = "warn"
 ignore = [
     # Ignore time 0.1 RUSTSEC-2020-0071 as 1) we have taken measures (see
