@@ -609,10 +609,18 @@ fn test_suspend_import() {
     );
     let write_res = write(sst_range);
     write_res.unwrap();
-    let ingest_res = ingest(&sst);
-    assert_to_string_contains!(ingest_res.unwrap_err(), "Suspended");
-    let multi_ingest_res = multi_ingest(&[sst.clone()]);
-    assert_to_string_contains!(multi_ingest_res.unwrap_err(), "Suspended");
+    let ingest_res = ingest(&sst).unwrap();
+    assert!(
+        ingest_res.get_error().has_server_is_busy(),
+        "{:?}",
+        ingest_res
+    );
+    let multi_ingest_res = multi_ingest(&[sst.clone()]).unwrap();
+    assert!(
+        multi_ingest_res.get_error().has_server_is_busy(),
+        "{:?}",
+        multi_ingest_res
+    );
 
     assert!(
         import
@@ -637,7 +645,11 @@ fn test_suspend_import() {
     let write_res = write(sst_range);
     let sst = write_res.unwrap().metas;
     let res = multi_ingest(&sst);
-    assert_to_string_contains!(res.unwrap_err(), "Suspended");
+    assert!(
+        res.as_ref().unwrap().get_error().has_server_is_busy(),
+        "{:?}",
+        res
+    );
     std::thread::sleep(Duration::from_secs(1));
     multi_ingest(&sst).unwrap();
 
