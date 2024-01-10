@@ -2,6 +2,7 @@
 
 use std::{marker::PhantomData, sync::atomic::*};
 
+<<<<<<< HEAD
 use engine_traits::KvEngine;
 use futures::{channel::mpsc, FutureExt, SinkExt, StreamExt, TryFutureExt};
 use grpcio::{self, *};
@@ -11,12 +12,21 @@ use raftstore::{
     store::msg::{PeerMsg, SignificantMsg},
 };
 use tikv_util::{error, info, worker::*};
+=======
+use futures::{channel::mpsc, FutureExt, SinkExt, StreamExt, TryFutureExt};
+use grpcio::{self, *};
+use kvproto::brpb::*;
+use raftstore::store::snapshot_backup::SnapshotBrHandle;
+use tikv_util::{error, info, warn, worker::*};
+>>>>>>> 956c9f377d (snapshot_backup: enhanced prepare stage (#15946))
 
 use super::Task;
+use crate::disk_snap::{self, StreamHandleLoop};
 
 /// Service handles the RPC messages for the `Backup` service.
 
 #[derive(Clone)]
+<<<<<<< HEAD
 pub struct Service<E, RR> {
     scheduler: Scheduler<Task>,
     router: RR,
@@ -34,21 +44,51 @@ where
             scheduler,
             router,
             _phantom: PhantomData,
+=======
+pub struct Service<H: SnapshotBrHandle> {
+    scheduler: Scheduler<Task>,
+    snap_br_env: disk_snap::Env<H>,
+}
+
+impl<H> Service<H>
+where
+    H: SnapshotBrHandle,
+{
+    /// Create a new backup service.
+    pub fn new(scheduler: Scheduler<Task>, env: disk_snap::Env<H>) -> Self {
+        Service {
+            scheduler,
+            snap_br_env: env,
+>>>>>>> 956c9f377d (snapshot_backup: enhanced prepare stage (#15946))
         }
     }
 }
 
+<<<<<<< HEAD
 impl<E, RR> Backup for Service<E, RR>
 where
     E: KvEngine,
     RR: RaftStoreRouter<E>,
+=======
+impl<H> Backup for Service<H>
+where
+    H: SnapshotBrHandle + 'static,
+>>>>>>> 956c9f377d (snapshot_backup: enhanced prepare stage (#15946))
 {
+    /// Check a region whether there is pending admin requests(including pending
+    /// merging).
+    ///
+    /// In older versions of disk snapshot backup, this will be called after we
+    /// paused all scheduler.
+    ///
+    /// This is kept for compatibility with previous versions.
     fn check_pending_admin_op(
         &mut self,
         ctx: RpcContext<'_>,
         _req: CheckAdminRequest,
         mut sink: ServerStreamingSink<CheckAdminResponse>,
     ) {
+<<<<<<< HEAD
         let (tx, rx) = mpsc::unbounded();
         self.router.broadcast_normal(|| {
             PeerMsg::SignificantMsg(SignificantMsg::CheckPendingAdmin(tx.clone()))
@@ -69,6 +109,37 @@ where
             }
         });
         ctx.spawn(send_task);
+=======
+        let handle = self.snap_br_env.handle.clone();
+        let tokio_handle = self.snap_br_env.get_async_runtime().clone();
+        let peer = ctx.peer();
+        let task = async move {
+            let (tx, rx) = mpsc::unbounded();
+            if let Err(err) = handle.broadcast_check_pending_admin(tx) {
+                return sink
+                    .fail(RpcStatus::with_message(
+                        RpcStatusCode::INTERNAL,
+                        format!("{err}"),
+                    ))
+                    .await;
+            }
+            sink.send_all(&mut rx.map(|resp| Ok((resp, WriteFlags::default()))))
+                .await?;
+            sink.close().await?;
+            Ok(())
+        };
+
+        tokio_handle.spawn(async move {
+            match task.await {
+                Err(err) => {
+                    warn!("check admin canceled"; "peer" => %peer, "err" => %err);
+                }
+                Ok(()) => {
+                    info!("check admin closed"; "peer" => %peer);
+                }
+            }
+        });
+>>>>>>> 956c9f377d (snapshot_backup: enhanced prepare stage (#15946))
     }
 
     fn backup(
@@ -123,27 +194,91 @@ where
 
         ctx.spawn(send_task);
     }
+
+    /// The new method for preparing a disk snapshot backup.
+    /// Generally there will be some steps for the client to do:
+    /// 1. Establish a `prepare_snapshot_backup` connection.
+    /// 2. Send a initial `UpdateLease`. And we should update the lease
+    /// periodically.
+    /// 3. Send `WaitApply` to each leader peer in this store.
+    /// 4. Once `WaitApply` for all regions have done, we can take disk
+    /// snapshot.
+    /// 5. Once all snapshots have been taken, send `Finalize` to stop.
+    fn prepare_snapshot_backup(
+        &mut self,
+        ctx: grpcio::RpcContext<'_>,
+        stream: grpcio::RequestStream<PrepareSnapshotBackupRequest>,
+        sink: grpcio::DuplexSink<PrepareSnapshotBackupResponse>,
+    ) {
+        let l = StreamHandleLoop::new(self.snap_br_env.clone());
+        // Note: should we disconnect here once there are more than one stream...?
+        // Generally once two streams enter here, one may exit
+        info!("A new prepare snapshot backup stream created!";
+            "peer" => %ctx.peer(),
+            "stream_count" => %self.snap_br_env.active_stream(),
+        );
+        self.snap_br_env.get_async_runtime().spawn(async move {
+            if let Err(err) = l.run(stream, sink.into()).await {
+                warn!("stream closed; perhaps a problem cannot be retried happens"; "reason" => ?err);
+            }
+        });
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use std::{sync::Arc, time::Duration};
 
+<<<<<<< HEAD
     use engine_rocks::RocksEngine;
     use external_storage_export::make_local_backend;
     use raftstore::router::RaftStoreBlackHole;
+=======
+    use external_storage::make_local_backend;
+>>>>>>> 956c9f377d (snapshot_backup: enhanced prepare stage (#15946))
     use tikv::storage::txn::tests::{must_commit, must_prewrite_put};
     use tikv_util::worker::{dummy_scheduler, ReceiverWrapper};
     use txn_types::TimeStamp;
 
     use super::*;
-    use crate::endpoint::tests::*;
+    use crate::{disk_snap::Env, endpoint::tests::*};
+
+    #[derive(Clone)]
+    struct PanicHandle;
+
+    impl SnapshotBrHandle for PanicHandle {
+        fn send_wait_apply(
+            &self,
+            _region: u64,
+            _req: raftstore::store::snapshot_backup::SnapshotBrWaitApplyRequest,
+        ) -> raftstore::Result<()> {
+            panic!("this case shouldn't call this!")
+        }
+
+        fn broadcast_wait_apply(
+            &self,
+            _req: raftstore::store::snapshot_backup::SnapshotBrWaitApplyRequest,
+        ) -> raftstore::Result<()> {
+            panic!("this case shouldn't call this!")
+        }
+
+        fn broadcast_check_pending_admin(
+            &self,
+            _tx: mpsc::UnboundedSender<CheckAdminResponse>,
+        ) -> raftstore::Result<()> {
+            panic!("this case shouldn't call this!")
+        }
+    }
 
     fn new_rpc_suite() -> (Server, BackupClient, ReceiverWrapper<Task>) {
         let env = Arc::new(EnvBuilder::new().build());
         let (scheduler, rx) = dummy_scheduler();
         let backup_service =
+<<<<<<< HEAD
             super::Service::<RocksEngine, RaftStoreBlackHole>::new(scheduler, RaftStoreBlackHole);
+=======
+            super::Service::new(scheduler, Env::new(PanicHandle, Default::default(), None));
+>>>>>>> 956c9f377d (snapshot_backup: enhanced prepare stage (#15946))
         let builder =
             ServerBuilder::new(env.clone()).register_service(create_backup(backup_service));
         let mut server = builder.bind("127.0.0.1", 0).build().unwrap();
