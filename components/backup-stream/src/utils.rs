@@ -978,9 +978,9 @@ mod test {
     #[test]
     fn test_recorder() {
         use engine_traits::{Iterable, KvEngine, Mutable, WriteBatch, WriteBatchExt, CF_DEFAULT};
-        use tempdir::TempDir;
+        use tempfile::TempDir;
 
-        let p = TempDir::new("test_db").unwrap();
+        let p = TempDir::new().unwrap();
         let engine =
             engine_rocks::util::new_engine(p.path().to_str().unwrap(), &[CF_DEFAULT]).unwrap();
         let mut wb = engine.write_batch();
@@ -1025,12 +1025,12 @@ mod test {
 
     #[tokio::test]
     async fn test_files_reader() {
-        use tempdir::TempDir;
+        use tempfile::TempDir;
         use tokio::{fs::File, io::AsyncReadExt};
 
         use super::FilesReader;
 
-        let dir = TempDir::new("test_files").unwrap();
+        let dir = TempDir::new().unwrap();
         let files_num = 5;
         let mut files_path = Vec::new();
         let mut expect_content = String::new();
@@ -1063,12 +1063,12 @@ mod test {
     #[tokio::test]
     async fn test_compression_writer() {
         use kvproto::brpb::CompressionType;
-        use tempdir::TempDir;
+        use tempfile::TempDir;
         use tokio::{fs::File, io::AsyncReadExt};
 
         use super::compression_writer_dispatcher;
 
-        let dir = TempDir::new("test_files").unwrap();
+        let dir = TempDir::new().unwrap();
         let content = "test for compression writer. try to write to local path, and read it back.";
 
         // uncompressed writer
