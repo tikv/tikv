@@ -417,9 +417,6 @@ where
         info!("wait_apply start");
         let task = async move {
             let now = Instant::now();
-            // FIXME: this function will exit once the first region finished apply.
-            // BUT for the flashback resolve KV implementation, that is fine because the
-            // raft log stats is consistent.
             let (tx, rx) = oneshot::channel();
             RecoveryService::wait_apply_last(router, tx);
             match rx.await {
