@@ -1,0 +1,77 @@
+# To comply with FIPS 140-2, we should not use crypto algorithms implemented in
+# rust, instead we should delegate these operation to OpenSSL, including
+# symmetric encryption, asymmetric encryption, hash functions,
+# key establishment, digital signatures and random number generators.
+[bans]
+deny = [
+    # Hash functions
+    # We allow md5 for AWS S3 object lock feature which requires
+    # computting object's md5.
+    { name = "md5" , wrappers = [ "aws" ] },
+    { name = "md-5" },
+    { name = "sha1" },
+    { name = "sha-1" },
+    # We allow sha2 for oauth2 crate, because it does use sha2 in TiKV use case.
+    { name = "sha2", wrappers = [ "oauth2" ] },
+    { name = "sha3" },
+    # Symmetric encryption
+    { name = "aes" },
+    { name = "aes-gcm" },
+    { name = "aes-gcm-siv" },
+    { name = "chacha20poly1305" },
+    # Asymmetric encryption
+    { name = "elliptic-curves" },
+    { name = "rsa" },
+    # Digital signatures
+    { name = "dsa" },
+    { name = "ecdsa" },
+    { name = "ed25519" },
+    # Message authentication codes
+    { name = "hamc" },
+    # We prefer the system native TLS or OpenSSL.
+    { name = "rustls" },
+    { name = "ring" },
+    # Ban trait crates from RustCrypto.
+    { name = "aead" },
+    { name = "cipher" },
+    { name = "digest", wrappers = [ "sha2" ] },
+    { name = "password-hash" },
+    { name = "signature" },
+]
+multiple-versions = "allow"
+
+[advisories]
+vulnerability = "allow" # FIXME: Deny it.
+unmaintained = "allow" # FIXME: Deny it.
+unsound = "allow" # FIXME: Deny it.
+yanked = "allow" # FIXME: Deny it.
+notice = "warn"
+
+[licenses]
+unlicensed = "allow" # FIXME: Deny it.
+copyleft = "deny"
+private = { ignore = true }
+allow = [
+    "0BSD",
+    "Apache-2.0",
+    "BSD-3-Clause",
+    "CC0-1.0",
+    "ISC",
+    "MIT",
+    "MPL-2.0",
+    "Zlib",
+]
+exceptions = [
+    # unicode-ident includes data generated from Unicode Character Database
+    # which is licensed under Unicode-DFS-2016.
+    # See https://github.com/dtolnay/unicode-ident/pull/4
+    { name = "unicode-ident", allow = ["Unicode-DFS-2016"] },
+    # FIXME: Remove this crate.
+    { name = "mnt", allow = ["LGPL-3.0"] },
+    { name = "inferno", allow = ["CDDL-1.0"] },
+]
+
+[sources]
+unknown-git = "allow" # FIXME: Deny it.
+unknown-registry = "deny"
+allow-org = { github = ["tikv"] }
