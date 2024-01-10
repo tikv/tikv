@@ -247,14 +247,14 @@ const KVDB_DEFAULT_BACKGROUND_JOB_LIMITS: BackgroundJobLimits = BackgroundJobLim
     max_background_jobs: 9,
     max_background_flushes: 3,
     max_sub_compactions: 3,
-    max_titan_background_gc: 4,
+    max_titan_background_gc: 1,
 };
 
 const RAFTDB_DEFAULT_BACKGROUND_JOB_LIMITS: BackgroundJobLimits = BackgroundJobLimits {
     max_background_jobs: 4,
     max_background_flushes: 1,
     max_sub_compactions: 2,
-    max_titan_background_gc: 4,
+    max_titan_background_gc: 1,
 };
 
 // `defaults` serves as an upper bound for returning limits.
@@ -1382,11 +1382,11 @@ impl Default for DbConfig {
 impl DbConfig {
     pub fn optimize_for(
         &mut self,
-        engine: EngineType,
+        storage_config: &StorageConfig,
         kv_data_exists: bool,
         is_titan_dir_empty: bool,
     ) {
-        match engine {
+        match storage_config.engine {
             EngineType::RaftKv => {
                 self.allow_concurrent_memtable_write.get_or_insert(true);
                 self.max_total_wal_size.get_or_insert(ReadableSize::gb(4));
@@ -1400,7 +1400,7 @@ impl DbConfig {
                 if self.titan.enabled.is_none() {
                     // If the user doesn't specify titan.enabled, we enable it by default for newly
                     // created clusters.
-                    if kv_data_exists && is_titan_dir_empty {
+                    if (kv_data_exists && is_titan_dir_empty) || storage_config.enable_ttl {
                         self.titan.enabled = Some(false);
                     } else {
                         self.titan.enabled = Some(true);
@@ -1444,7 +1444,8 @@ impl DbConfig {
                     .get_or_insert(DEFAULT_LOCK_BUFFER_MEMORY_LIMIT);
             }
         }
-        let bg_job_limits = get_background_job_limits(engine, &KVDB_DEFAULT_BACKGROUND_JOB_LIMITS);
+        let bg_job_limits =
+            get_background_job_limits(storage_config.engine, &KVDB_DEFAULT_BACKGROUND_JOB_LIMITS);
         if self.max_background_jobs == 0 {
             self.max_background_jobs = bg_job_limits.max_background_jobs as i32;
         }
@@ -1857,6 +1858,7 @@ impl Default for RaftDbConfig {
         let bg_job_limits =
             get_background_job_limits(EngineType::RaftKv, &RAFTDB_DEFAULT_BACKGROUND_JOB_LIMITS);
         let titan_config = TitanDbConfig {
+            enabled: Some(false),
             max_background_gc: bg_job_limits.max_titan_background_gc as i32,
             ..Default::default()
         };
@@ -3679,7 +3681,7 @@ impl TikvConfig {
 
         // Optimize.
         self.rocksdb
-            .optimize_for(self.storage.engine, kv_data_exists, is_titan_dir_empty);
+            .optimize_for(&self.storage, kv_data_exists, is_titan_dir_empty);
         self.coprocessor
             .optimize_for(self.storage.engine == EngineType::RaftKv2);
         self.split
@@ -3909,6 +3911,11 @@ impl TikvConfig {
         self.resource_metering.validate()?;
         self.quota.validate()?;
         self.causal_ts.validate()?;
+
+        // Validate feature TTL with Titan configuration.
+        if matches!(self.rocksdb.titan.enabled, Some(true)) && self.storage.enable_ttl {
+            return Err("Titan is unavailable for feature TTL".to_string().into());
+        }
 
         Ok(())
     }
@@ -4893,6 +4900,7 @@ mod tests {
 
         // Check api version.
         {
+            tikv_cfg.rocksdb.titan.enabled = Some(false);
             let cases = [
                 (ApiVersion::V1, ApiVersion::V1, true),
                 (ApiVersion::V1, ApiVersion::V1ttl, false),
@@ -6292,6 +6300,21 @@ mod tests {
         cfg.validate().unwrap_err();
         cfg.rocksdb.writecf.format_version = Some(5);
         cfg.validate().unwrap();
+
+        let mut valid_cfg = TikvConfig::default();
+        valid_cfg.storage.api_version = 2;
+        valid_cfg.storage.enable_ttl = true;
+        valid_cfg.rocksdb.titan.enabled = None;
+        valid_cfg.validate().unwrap();
+
+        let mut invalid_cfg = TikvConfig::default();
+        invalid_cfg.storage.api_version = 2;
+        invalid_cfg.storage.enable_ttl = true;
+        invalid_cfg.rocksdb.titan.enabled = Some(true);
+        assert_eq!(
+            invalid_cfg.validate().unwrap_err().to_string(),
+            "Titan is unavailable for feature TTL"
+        );
     }
 
     #[test]
@@ -6449,7 +6472,7 @@ mod tests {
                     max_background_jobs: 2,
                     max_background_flushes: 1,
                     max_sub_compactions: 1,
-                    max_titan_background_gc: 2,
+                    max_titan_background_gc: 1,
                 }
             );
             assert_eq!(
@@ -6462,7 +6485,7 @@ mod tests {
                     max_background_jobs: 2,
                     max_background_flushes: 1,
                     max_sub_compactions: 1,
-                    max_titan_background_gc: 2,
+                    max_titan_background_gc: 1,
                 }
             );
         }
@@ -6478,7 +6501,7 @@ mod tests {
                 max_background_jobs: 3,
                 max_background_flushes: 1,
                 max_sub_compactions: 1,
-                max_titan_background_gc: 4,
+                max_titan_background_gc: 1,
             }
         );
         assert_eq!(
@@ -6491,7 +6514,7 @@ mod tests {
                 max_background_jobs: 2,
                 max_background_flushes: 1,
                 max_sub_compactions: 1,
-                max_titan_background_gc: 4,
+                max_titan_background_gc: 1,
             }
         );
         assert_eq!(
@@ -6504,7 +6527,7 @@ mod tests {
                 max_background_jobs: 3,
                 max_background_flushes: 1,
                 max_sub_compactions: 1,
-                max_titan_background_gc: 4,
+                max_titan_background_gc: 1,
             }
         );
         // cpu num = 8
@@ -6518,7 +6541,7 @@ mod tests {
                 max_background_jobs: 7,
                 max_background_flushes: 2,
                 max_sub_compactions: 3,
-                max_titan_background_gc: 4,
+                max_titan_background_gc: 1,
             }
         );
         assert_eq!(
@@ -6531,7 +6554,7 @@ mod tests {
                 max_background_jobs: 4,
                 max_background_flushes: 2,
                 max_sub_compactions: 1,
-                max_titan_background_gc: 4,
+                max_titan_background_gc: 1,
             }
         );
         assert_eq!(
@@ -6561,7 +6584,7 @@ mod tests {
                 max_background_jobs: 6,
                 max_background_flushes: 3,
                 max_sub_compactions: 2,
-                max_titan_background_gc: 4,
+                max_titan_background_gc: 1,
             }
         );
         assert_eq!(
