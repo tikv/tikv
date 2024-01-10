@@ -3277,6 +3277,11 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
     }
 }
 
+/// Create a dummy store meta for tests.
+pub fn dummy_store_meta() -> Arc<Mutex<StoreMeta>> {
+    Arc::new(Mutex::new(StoreMeta::new(1)))
+}
+
 #[cfg(test)]
 mod tests {
     use engine_rocks::{RangeOffsets, RangeProperties, RocksCompactedEvent};

@@ -73,7 +73,7 @@ use tracker::GLOBAL_TRACKERS;
 use uuid::Builder as UuidBuilder;
 
 use self::memtrace::*;
-use super::metrics::*;
+use super::{metrics::*, StoreMeta};
 use crate::{
     bytes_capacity,
     coprocessor::{
@@ -4686,6 +4686,7 @@ pub struct Builder<EK: KvEngine> {
     router: ApplyRouter<EK>,
     store_id: u64,
     pending_create_peers: Arc<Mutex<HashMap<u64, (u64, bool)>>>,
+    store_meta: Arc<Mutex<StoreMeta>>,
 }
 
 impl<EK: KvEngine> Builder<EK> {
@@ -4705,6 +4706,7 @@ impl<EK: KvEngine> Builder<EK> {
             router,
             store_id: builder.store.get_id(),
             pending_create_peers: builder.pending_create_peers.clone(),
+            store_meta: builder.store_meta.clone(),
         }
     }
 }
@@ -4755,6 +4757,7 @@ where
             router: self.router.clone(),
             store_id: self.store_id,
             pending_create_peers: self.pending_create_peers.clone(),
+            store_meta: self.store_meta.clone(),
         }
     }
 }
@@ -5059,6 +5062,7 @@ mod tests {
     use crate::{
         coprocessor::*,
         store::{
+            fsm::dummy_store_meta,
             msg::WriteResponse,
             peer_storage::RAFT_INIT_LOG_INDEX,
             simple_write::{SimpleWriteEncoder, SimpleWriteReqEncoder},
@@ -5397,6 +5401,7 @@ mod tests {
             router: router.clone(),
             store_id: 1,
             pending_create_peers,
+            store_meta: dummy_store_meta(),
         };
         system.spawn("test-basic".to_owned(), builder);
 
@@ -5973,6 +5978,7 @@ mod tests {
             router: router.clone(),
             store_id: 1,
             pending_create_peers,
+            store_meta: dummy_store_meta(),
         };
         system.spawn("test-handle-raft".to_owned(), builder);
 
@@ -6314,6 +6320,7 @@ mod tests {
             router: router.clone(),
             store_id: 1,
             pending_create_peers,
+            store_meta: dummy_store_meta(),
         };
         system.spawn("test-handle-raft".to_owned(), builder);
 
@@ -6657,6 +6664,7 @@ mod tests {
             router: router.clone(),
             store_id: 1,
             pending_create_peers,
+            store_meta: dummy_store_meta(),
         };
         system.spawn("test-handle-raft".to_owned(), builder);
 
@@ -6748,6 +6756,7 @@ mod tests {
             router: router.clone(),
             store_id: 1,
             pending_create_peers,
+            store_meta: dummy_store_meta(),
         };
         system.spawn("test-ingest".to_owned(), builder);
 
@@ -6931,6 +6940,7 @@ mod tests {
             router: router.clone(),
             store_id: 1,
             pending_create_peers,
+            store_meta: dummy_store_meta(),
         };
         system.spawn("test-bucket".to_owned(), builder);
 
@@ -7024,6 +7034,7 @@ mod tests {
             router: router.clone(),
             store_id: 1,
             pending_create_peers,
+            store_meta: dummy_store_meta(),
         };
         system.spawn("test-exec-observer".to_owned(), builder);
 
@@ -7249,6 +7260,7 @@ mod tests {
             router: router.clone(),
             store_id: 1,
             pending_create_peers,
+            store_meta: dummy_store_meta(),
         };
         system.spawn("test-handle-raft".to_owned(), builder);
 
@@ -7529,6 +7541,7 @@ mod tests {
             router: router.clone(),
             store_id: 2,
             pending_create_peers,
+            store_meta: dummy_store_meta(),
         };
         system.spawn("test-split".to_owned(), builder);
 
@@ -7749,6 +7762,7 @@ mod tests {
             router: router.clone(),
             store_id: 2,
             pending_create_peers,
+            store_meta: dummy_store_meta(),
         };
         system.spawn("test-conf-change".to_owned(), builder);
 
@@ -7874,6 +7888,7 @@ mod tests {
             router: router.clone(),
             store_id: 1,
             pending_create_peers,
+            store_meta: dummy_store_meta(),
         };
         system.spawn("flashback_need_to_be_applied".to_owned(), builder);
 
