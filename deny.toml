@@ -41,7 +41,7 @@ deny = [
 multiple-versions = "allow"
 
 [advisories]
-vulnerability = "allow" # FIXME: Deny it.
+vulnerability = "deny"
 unmaintained = "allow" # FIXME: Deny it.
 unsound = "allow" # FIXME: Deny it.
 yanked = "allow" # FIXME: Deny it.
