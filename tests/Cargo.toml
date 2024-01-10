@@ -55,10 +55,10 @@ test-engine-raft-raft-engine = [
   "raftstore/test-engine-raft-raft-engine"
 ]
 test-engines-rocksdb = [
-  "raftstore/test-engines-rocksdb",
+  "raftstore/test-engines-rocksdb"
 ]
 test-engines-panic = [
-  "raftstore/test-engines-panic",
+  "raftstore/test-engines-panic"
 ]
 jemalloc = ["tikv/jemalloc"]
 mimalloc = ["tikv/mimalloc"]
@@ -139,7 +139,7 @@ resource_metering = { workspace = true }
 security = { workspace = true }
 serde_json = "1.0"
 sst_importer = { workspace = true }
-test_backup = { workspace = true }
+test_backup = { workspace = true, default-features = false }
 test_coprocessor = { workspace = true }
 test_pd = { workspace = true }
 test_pd_client = { workspace = true }
