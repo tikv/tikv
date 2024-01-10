@@ -887,14 +887,17 @@ checksum = "baf1de4339761588bc0619e3cbc0120ee582ebb74b53b4efbf79117bd2da40fd"
 
 [[package]]
 name = "chrono"
-version = "0.4.11"
+version = "0.4.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "80094f509cf8b5ae86a4966a39b3ff66cd7e2a3e594accec3743ff3fabeab5b2"
+checksum = "6127248204b9aba09a362f6c930ef6a78f2c1b2215f8a7b398c06e1083f17af0"
 dependencies = [
+ "js-sys",
  "num-integer",
  "num-traits",
  "serde",
- "time 0.1.42",
+ "time 0.1.43",
+ "wasm-bindgen",
+ "winapi 0.3.9",
 ]
 
 [[package]]
@@ -1542,7 +1545,7 @@ dependencies = [
  "tempfile",
  "tikv_alloc",
  "tikv_util",
- "time 0.1.42",
+ "time 0.1.43",
  "toml",
  "tracker",
  "txn_types",
@@ -1837,7 +1840,7 @@ checksum = "1d34cfa13a63ae058bfa601fe9e313bbdb3746427c1459185464ce0fcf62e1e8"
 dependencies = [
  "cfg-if 1.0.0",
  "libc 0.2.146",
- "redox_syscall 0.2.11",
+ "redox_syscall",
  "winapi 0.3.9",
 ]
 
@@ -3588,7 +3591,7 @@ dependencies = [
  "cfg-if 1.0.0",
  "instant",
  "libc 0.2.146",
- "redox_syscall 0.2.11",
+ "redox_syscall",
  "smallvec",
  "winapi 0.3.9",
 ]
@@ -3601,7 +3604,7 @@ checksum = "28141e0cc4143da2443301914478dc976a61ffdb3f043058310c70df2fed8954"
 dependencies = [
  "cfg-if 1.0.0",
  "libc 0.2.146",
- "redox_syscall 0.2.11",
+ "redox_syscall",
  "smallvec",
  "windows-sys 0.32.0",
 ]
@@ -4145,7 +4148,7 @@ dependencies = [
  "slog-global",
  "tempfile",
  "tikv_util",
- "time 0.1.42",
+ "time 0.1.43",
  "tracker",
 ]
 
@@ -4216,7 +4219,7 @@ dependencies = [
  "tidb_query_datatype",
  "tikv_alloc",
  "tikv_util",
- "time 0.1.42",
+ "time 0.1.43",
  "tokio",
  "tracker",
  "txn_types",
@@ -4266,7 +4269,7 @@ dependencies = [
  "test_util",
  "thiserror",
  "tikv_util",
- "time 0.1.42",
+ "time 0.1.43",
  "tracker",
  "txn_types",
  "walkdir",
@@ -4434,12 +4437,6 @@ dependencies = [
 
 [[package]]
 name = "redox_syscall"
-version = "0.1.56"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2439c63f3f6139d1b57529d16bc3b8bb855230c8efcc5d3a896c8bea7c3b1e84"
-
-[[package]]
-name = "redox_syscall"
 version = "0.2.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8380fe0152551244f0747b1bf41737e0f8a74f97a14ccefd1148187271634f3c"
@@ -4454,7 +4451,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "528532f3d801c87aec9def2add9ca802fe569e44a544afe633765267840abe64"
 dependencies = [
  "getrandom 0.2.3",
- "redox_syscall 0.2.11",
+ "redox_syscall",
 ]
 
 [[package]]
@@ -5704,7 +5701,7 @@ dependencies = [
  "cfg-if 1.0.0",
  "libc 0.2.146",
  "rand 0.8.5",
- "redox_syscall 0.2.11",
+ "redox_syscall",
  "remove_dir_all",
  "winapi 0.3.9",
 ]
@@ -5973,7 +5970,7 @@ dependencies = [
  "slog-global",
  "tempfile",
  "tikv_util",
- "time 0.1.42",
+ "time 0.1.43",
 ]
 
 [[package]]
@@ -6053,7 +6050,7 @@ dependencies = [
  "tikv",
  "tikv_kv",
  "tikv_util",
- "time 0.1.42",
+ "time 0.1.43",
  "tipb",
  "tipb_helper",
  "tokio",
@@ -6152,7 +6149,7 @@ dependencies = [
  "serde_json",
  "thiserror",
  "tikv_util",
- "time 0.1.42",
+ "time 0.1.43",
  "yatp",
 ]
 
@@ -6257,7 +6254,7 @@ dependencies = [
  "tidb_query_common",
  "tidb_query_datatype",
  "tikv_util",
- "time 0.1.42",
+ "time 0.1.43",
  "tipb",
  "tipb_helper",
  "twoway",
@@ -6382,7 +6379,7 @@ dependencies = [
  "tikv_alloc",
  "tikv_kv",
  "tikv_util",
- "time 0.1.42",
+ "time 0.1.43",
  "tipb",
  "tokio",
  "tokio-openssl",
@@ -6446,7 +6443,7 @@ dependencies = [
  "tikv",
  "tikv_alloc",
  "tikv_util",
- "time 0.1.42",
+ "time 0.1.43",
  "tokio",
  "toml",
  "txn_types",
@@ -6501,7 +6498,7 @@ dependencies = [
  "server",
  "tikv",
  "tikv_util",
- "time 0.1.42",
+ "time 0.1.43",
  "toml",
  "tracing-active-tree",
  "tracing-subscriber",
@@ -6616,7 +6613,7 @@ dependencies = [
  "tempfile",
  "thiserror",
  "tikv_alloc",
- "time 0.1.42",
+ "time 0.1.43",
  "tokio",
  "tokio-executor",
  "tokio-timer",
@@ -6629,12 +6626,11 @@ dependencies = [
 
 [[package]]
 name = "time"
-version = "0.1.42"
+version = "0.1.43"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "db8dcfca086c1143c9270ac42a2bbd8a7ee477b78ac8e45b19abfb0cbede4b6f"
+checksum = "ca8a50ef2360fbd1eeb0ecd46795a87a19024eb4b53c5dc916ca1fd95fe62438"
 dependencies = [
  "libc 0.2.146",
- "redox_syscall 0.1.56",
  "winapi 0.3.9",
 ]
 
