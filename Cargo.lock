@@ -6699,14 +6699,13 @@ dependencies = [
 
 [[package]]
 name = "tokio"
-version = "1.21.2"
+version = "1.25.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a9e03c497dc955702ba729190dc4aac6f2a0ce97f913e5b1b5912fc5039d9099"
+checksum = "8666f87015685834a42aa61a391303d3bee0b1442dd9cf93e3adf4cbaf8de75a"
 dependencies = [
  "autocfg",
  "bytes",
  "libc 0.2.146",
- "memchr",
  "mio 0.8.5",
  "num_cpus",
  "parking_lot 0.12.1",
@@ -6714,7 +6713,7 @@ dependencies = [
  "signal-hook-registry",
  "socket2",
  "tokio-macros",
- "winapi 0.3.9",
+ "windows-sys 0.42.0",
 ]
 
 [[package]]
