@@ -199,9 +199,8 @@ rusoto_kms = { git = "https://github.com/tikv/rusoto", branch = "gh1482-s3-addr-
 rusoto_mock = { git = "https://github.com/tikv/rusoto", branch = "gh1482-s3-addr-styles" }
 rusoto_s3 = { git = "https://github.com/tikv/rusoto", branch = "gh1482-s3-addr-styles" }
 rusoto_sts = { git = "https://github.com/tikv/rusoto", branch = "gh1482-s3-addr-styles" }
-
 # NOTICE: use openssl for signature to support fips 140
-tame-oauth = { git = "https://github.com/tikv/tame-oauth", branch = "fips" }
+tame-oauth = { git = "https://github.com/tikv/tame-oauth", branch = "fips-0.9" }
 
 snappy-sys = { git = "https://github.com/busyjay/rust-snappy.git", branch = "static-link" }
 
@@ -355,7 +354,7 @@ server = { path = "components/server" }
 service = { path = "components/service" }
 snap_recovery = { path = "components/snap_recovery", default-features = false }
 sst_importer = { path = "components/sst_importer", default-features = false }
-test_backup = { path = "components/test_backup" }
+test_backup = { path = "components/test_backup", default-features = false }
 test_coprocessor = { path = "components/test_coprocessor", default-features = false }
 example_coprocessor_plugin = { path = "components/test_coprocessor_plugin/example_plugin" }
 test_pd = { path = "components/test_pd" }

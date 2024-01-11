@@ -639,6 +639,7 @@ pub fn must_error_read_on_peer<EK: KvEngineWithRocks, T: Simulator<EK>>(
     }
 }
 
+#[track_caller]
 pub fn must_contains_error(resp: &RaftCmdResponse, msg: &str) {
     let header = resp.get_header();
     assert!(header.has_error());
