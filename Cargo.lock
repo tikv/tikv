@@ -1443,7 +1443,7 @@ dependencies = [
 [[package]]
 name = "encoding_rs"
 version = "0.8.29"
-source = "git+https://github.com/xiongjiwei/encoding_rs.git?rev=68e0bc5a72a37a78228d80cd98047326559cf43c#68e0bc5a72a37a78228d80cd98047326559cf43c"
+source = "git+https://github.com/tikv/encoding_rs.git?rev=68e0bc5a72a37a78228d80cd98047326559cf43c#68e0bc5a72a37a78228d80cd98047326559cf43c"
 dependencies = [
  "cfg-if 1.0.0",
 ]
@@ -1950,7 +1950,7 @@ dependencies = [
 [[package]]
 name = "fs2"
 version = "0.4.3"
-source = "git+https://github.com/tabokie/fs2-rs?branch=tikv#cd503764a19a99d74c1ab424dd13d6bcd093fcae"
+source = "git+https://github.com/tikv/fs2-rs?branch=tikv#cd503764a19a99d74c1ab424dd13d6bcd093fcae"
 dependencies = [
  "libc 0.2.151",
  "winapi 0.3.9",
@@ -2872,7 +2872,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#73ba736143699fa623486c335527dd2a284bd0df"
+source = "git+https://github.com/tikv/rust-rocksdb.git#c247909c279e89b3eabb4f200d580ee50f27fda6"
 dependencies = [
  "bindgen 0.65.1",
  "bzip2-sys",
@@ -2891,7 +2891,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/tikv/rust-rocksdb.git#73ba736143699fa623486c335527dd2a284bd0df"
+source = "git+https://github.com/tikv/rust-rocksdb.git#c247909c279e89b3eabb4f200d580ee50f27fda6"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -4733,7 +4733,7 @@ dependencies = [
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#73ba736143699fa623486c335527dd2a284bd0df"
+source = "git+https://github.com/tikv/rust-rocksdb.git#c247909c279e89b3eabb4f200d580ee50f27fda6"
 dependencies = [
  "libc 0.2.151",
  "librocksdb_sys",
@@ -5352,7 +5352,7 @@ dependencies = [
 [[package]]
 name = "slog-global"
 version = "0.1.0"
-source = "git+https://github.com/breeswish/slog-global.git?rev=d592f88e4dbba5eb439998463054f1a44fbf17b9#d592f88e4dbba5eb439998463054f1a44fbf17b9"
+source = "git+https://github.com/tikv/slog-global.git?rev=d592f88e4dbba5eb439998463054f1a44fbf17b9#d592f88e4dbba5eb439998463054f1a44fbf17b9"
 dependencies = [
  "arc-swap",
  "lazy_static",
@@ -5451,7 +5451,7 @@ dependencies = [
 [[package]]
 name = "snappy-sys"
 version = "0.1.0"
-source = "git+https://github.com/busyjay/rust-snappy.git?branch=static-link#8c12738bad811397600455d6982aff754ea2ac44"
+source = "git+https://github.com/tikv/rust-snappy.git?branch=static-link#8c12738bad811397600455d6982aff754ea2ac44"
 dependencies = [
  "cmake",
  "libc 0.2.151",
@@ -6238,7 +6238,7 @@ dependencies = [
  "codec",
  "collections",
  "crc32fast",
- "encoding_rs 0.8.29 (git+https://github.com/xiongjiwei/encoding_rs.git?rev=68e0bc5a72a37a78228d80cd98047326559cf43c)",
+ "encoding_rs 0.8.29 (git+https://github.com/tikv/encoding_rs.git?rev=68e0bc5a72a37a78228d80cd98047326559cf43c)",
  "error_code",
  "hex 0.4.2",
  "kvproto",
@@ -6974,7 +6974,7 @@ version = "1.6.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "97fee6b57c6a41524a810daee9286c02d7752c4253064d0b05472833a438f675"
 dependencies = [
- "cfg-if 0.1.10",
+ "cfg-if 1.0.0",
  "static_assertions",
 ]
 

@@ -202,10 +202,10 @@ rusoto_sts = { git = "https://github.com/tikv/rusoto", branch = "gh1482-s3-addr-
 # NOTICE: use openssl for signature to support fips 140
 tame-oauth = { git = "https://github.com/tikv/tame-oauth", branch = "fips-0.9" }
 
-snappy-sys = { git = "https://github.com/busyjay/rust-snappy.git", branch = "static-link" }
+snappy-sys = { git = "https://github.com/tikv/rust-snappy.git", branch = "static-link" }
 
 # remove this when https://github.com/danburkert/fs2-rs/pull/42 is merged.
-fs2 = { git = "https://github.com/tabokie/fs2-rs", branch = "tikv" }
+fs2 = { git = "https://github.com/tikv/fs2-rs", branch = "tikv" }
 
 # Remove this when a new version is release. We need to solve rust-lang/cmake-rs#143.
 cmake = { git = "https://github.com/rust-lang/cmake-rs" }
@@ -394,7 +394,7 @@ yatp = { git = "https://github.com/tikv/yatp.git", branch = "master" }
 tokio-timer = { git = "https://github.com/tikv/tokio", branch = "tokio-timer-hotfix" }
 tokio-executor = { git = "https://github.com/tikv/tokio", branch = "tokio-timer-hotfix" }
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
-slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }
+slog-global = { version = "0.1", git = "https://github.com/tikv/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }
 tracing-active-tree = { git = "https://github.com/tikv/tracing-active-tree.git", features = ["coarsetime"], rev = "a71f8f8148f88ab759deb6d3e1d62d07ab218347" }
 # This `tracing` is only used for `tracing-active-tree`, enable its attributes only.
 tracing = { version = "0.1.39", default-features = false, features = [ "attributes", "std" ] }

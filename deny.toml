@@ -82,6 +82,6 @@ exceptions = [
 ]
 
 [sources]
-unknown-git = "allow" # FIXME: Deny it.
+unknown-git = "deny"
 unknown-registry = "deny"
-allow-org = { github = ["tikv"] }
+allow-org = { github = ["tikv", "pingcap", "rust-lang"] }
