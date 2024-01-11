@@ -4,7 +4,6 @@ use std::{
     future::Future,
     marker::PhantomData,
     pin::Pin,
-    sync::atomic::{AtomicBool, Ordering},
     task::{Context, Poll},
     time::Duration,
 };
@@ -127,7 +126,13 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::{sync::Arc, thread};
+    use std::{
+        sync::{
+            atomic::{AtomicBool, Ordering},
+            Arc,
+        },
+        thread,
+    };
 
     use futures::future::FutureExt;
     use tokio::{
