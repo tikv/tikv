@@ -1,31 +1,34 @@
 // Copyright 2023 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine_traits::{
-    KvEngine, Mutable, RegionCacheEngine, Result, WriteBatch, WriteBatchExt, WriteOptions,
-};
-use region_cache_memory_engine::RegionCacheMemoryEngine;
+use engine_traits::{KvEngine, Mutable, Result, WriteBatch, WriteBatchExt, WriteOptions};
+use region_cache_memory_engine::{RegionCacheMemoryEngine, RegionCacheWriteBatch};
 
 use crate::engine::HybridEngine;
 
 pub struct HybridEngineWriteBatch<EK: KvEngine> {
     disk_write_batch: EK::WriteBatch,
-    cache_write_batch: <RegionCacheMemoryEngine as WriteBatchExt>::WriteBatch,
+    cache_write_batch: RegionCacheWriteBatch,
 }
 
-impl<EK, EC> WriteBatchExt for HybridEngine<EK, EC>
+impl<EK> WriteBatchExt for HybridEngine<EK, RegionCacheMemoryEngine>
 where
     EK: KvEngine,
-    EC: RegionCacheEngine,
 {
     type WriteBatch = HybridEngineWriteBatch<EK>;
     const WRITE_BATCH_MAX_KEYS: usize = EK::WRITE_BATCH_MAX_KEYS;
 
     fn write_batch(&self) -> Self::WriteBatch {
-        unimplemented!()
+        HybridEngineWriteBatch {
+            disk_write_batch: self.disk_engine().write_batch(),
+            cache_write_batch: self.region_cache_engine().write_batch(),
+        }
     }
 
-    fn write_batch_with_cap(&self, _: usize) -> Self::WriteBatch {
-        unimplemented!()
+    fn write_batch_with_cap(&self, cap: usize) -> Self::WriteBatch {
+        HybridEngineWriteBatch {
+            disk_write_batch: self.disk_engine().write_batch_with_cap(cap),
+            cache_write_batch: self.region_cache_engine().write_batch_with_cap(cap),
+        }
     }
 }
 
@@ -106,5 +109,46 @@ impl<EK: KvEngine> Mutable for HybridEngineWriteBatch<EK> {
 
     fn delete_range_cf(&mut self, _cf: &str, _begin_key: &[u8], _end_key: &[u8]) -> Result<()> {
         unimplemented!()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use engine_rocks::util::new_engine;
+    use engine_traits::{WriteBatchExt, CF_DEFAULT, CF_LOCK, CF_WRITE};
+    use region_cache_memory_engine::RegionCacheMemoryEngine;
+    use tempfile::Builder;
+
+    use crate::HybridEngine;
+
+    #[test]
+    fn test_region_cache_memory_engine() {
+        let path = Builder::new().prefix("temp").tempdir().unwrap();
+        let disk_engine = new_engine(
+            path.path().to_str().unwrap(),
+            &[CF_DEFAULT, CF_LOCK, CF_WRITE],
+        )
+        .unwrap();
+        let memory_engine = RegionCacheMemoryEngine::default();
+        memory_engine.new_region(1);
+        {
+            let mut core = memory_engine.core().lock().unwrap();
+            core.mut_region_meta(1).unwrap().set_can_read(true);
+            core.mut_region_meta(1).unwrap().set_safe_ts(10);
+        }
+
+        let hybrid_engine =
+            HybridEngine::<_, RegionCacheMemoryEngine>::new(disk_engine, memory_engine.clone());
+        let mut write_batch = hybrid_engine.write_batch();
+        write_batch
+            .cache_write_batch
+            .set_sequence_number(0)
+            .unwrap(); // First call ok.
+        assert!(
+            write_batch
+                .cache_write_batch
+                .set_sequence_number(0)
+                .is_err()
+        ); // Second call err.
     }
 }

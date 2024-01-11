@@ -12,12 +12,11 @@ use bytes::Bytes;
 use collections::HashMap;
 use engine_rocks::{raw::SliceTransform, util::FixedSuffixSliceTransform};
 use engine_traits::{
-    CfNamesExt, DbVector, Error, IterOptions, Iterable, Iterator, Mutable, Peekable, ReadOptions,
-    RegionCacheEngine, Result, Snapshot, SnapshotMiscExt, WriteBatch, WriteBatchExt, WriteOptions,
-    CF_DEFAULT, CF_LOCK, CF_WRITE,
+    CfNamesExt, DbVector, Error, IterOptions, Iterable, Iterator, Peekable, ReadOptions,
+    RegionCacheEngine, Result, Snapshot, SnapshotMiscExt, CF_DEFAULT, CF_LOCK, CF_WRITE,
 };
 use skiplist_rs::{IterRef, Skiplist};
-use tikv_util::{box_err, config::ReadableSize};
+use tikv_util::config::ReadableSize;
 
 use crate::keys::{
     decode_key, encode_seek_key, InternalKey, InternalKeyComparator, ValueType,
@@ -187,43 +186,6 @@ impl RegionCacheEngine for RegionCacheMemoryEngine {
     // todo(SpadeA): add sequence number logic
     fn snapshot(&self, region_id: u64, read_ts: u64, seq_num: u64) -> Option<Self::Snapshot> {
         RegionCacheSnapshot::new(self.clone(), region_id, read_ts, seq_num)
-    }
-}
-
-/// RegionCacheWriteBatch maintains its own in-memory buffer.
-#[derive(Default, Clone, Debug)]
-pub struct RegionCacheWriteBatch {
-    buffer: Vec<RegionCacheWriteBatchEntry>,
-    sequence_number: Option<u64>,
-}
-
-impl RegionCacheWriteBatch {
-    pub fn with_capacity(cap: usize) -> Self {
-        Self {
-            buffer: Vec::with_capacity(cap),
-            sequence_number: None,
-        }
-    }
-}
-
-#[derive(Clone, Debug)]
-struct RegionCacheWriteBatchEntry {
-    cf: String,
-    key: Bytes,
-    mutation: (),
-}
-
-impl WriteBatchExt for RegionCacheMemoryEngine {
-    type WriteBatch = RegionCacheWriteBatch;
-    // todo: adjust it
-    const WRITE_BATCH_MAX_KEYS: usize = 256;
-
-    fn write_batch(&self) -> Self::WriteBatch {
-        RegionCacheWriteBatch::default()
-    }
-
-    fn write_batch_with_cap(&self, cap: usize) -> Self::WriteBatch {
-        RegionCacheWriteBatch::with_capacity(cap)
     }
 }
 
@@ -509,82 +471,6 @@ impl Iterator for RegionCacheIterator {
 
     fn valid(&self) -> Result<bool> {
         Ok(self.valid)
-    }
-}
-
-impl WriteBatch for RegionCacheWriteBatch {
-    fn write_opt(&mut self, _: &WriteOptions) -> Result<u64> {
-        unimplemented!()
-    }
-
-    fn data_size(&self) -> usize {
-        unimplemented!()
-    }
-
-    fn count(&self) -> usize {
-        unimplemented!()
-    }
-
-    fn is_empty(&self) -> bool {
-        unimplemented!()
-    }
-
-    fn should_write_to_engine(&self) -> bool {
-        unimplemented!()
-    }
-
-    fn clear(&mut self) {
-        unimplemented!()
-    }
-
-    fn set_save_point(&mut self) {
-        unimplemented!()
-    }
-
-    fn pop_save_point(&mut self) -> Result<()> {
-        unimplemented!()
-    }
-
-    fn rollback_to_save_point(&mut self) -> Result<()> {
-        unimplemented!()
-    }
-
-    fn merge(&mut self, _: Self) -> Result<()> {
-        unimplemented!()
-    }
-
-    fn set_sequence_number(&mut self, seq: u64) -> Result<()> {
-        if let Some(seqno) = self.sequence_number {
-            return Err(box_err!("Sequence number {} already set", seqno));
-        };
-        self.sequence_number = Some(seq);
-        Ok(())
-    }
-}
-
-impl Mutable for RegionCacheWriteBatch {
-    fn put(&mut self, _: &[u8], _: &[u8]) -> Result<()> {
-        unimplemented!()
-    }
-
-    fn put_cf(&mut self, _: &str, _: &[u8], _: &[u8]) -> Result<()> {
-        unimplemented!()
-    }
-
-    fn delete(&mut self, _: &[u8]) -> Result<()> {
-        unimplemented!()
-    }
-
-    fn delete_cf(&mut self, _: &str, _: &[u8]) -> Result<()> {
-        unimplemented!()
-    }
-
-    fn delete_range(&mut self, _: &[u8], _: &[u8]) -> Result<()> {
-        unimplemented!()
-    }
-
-    fn delete_range_cf(&mut self, _: &str, _: &[u8], _: &[u8]) -> Result<()> {
-        unimplemented!()
     }
 }
 
