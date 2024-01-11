@@ -73,7 +73,7 @@ use tracker::GLOBAL_TRACKERS;
 use uuid::Builder as UuidBuilder;
 
 use self::memtrace::*;
-use super::metrics::*;
+use super::{metrics::*, StoreMeta};
 use crate::{
     bytes_capacity,
     coprocessor::{
@@ -1819,6 +1819,7 @@ where
         let (key, value) = (req.get_put().get_key(), req.get_put().get_value());
         // region key range has no data prefix, so we must use origin key to check.
         util::check_key_in_region(key, &self.region)?;
+        let region_id = 1; // Simplify everything.
         if let Some(s) = self.buckets.as_mut() {
             s.write_key(key, value.len() as u64);
         }
@@ -1836,26 +1837,30 @@ where
                 self.metrics.lock_cf_written_bytes += value.len() as u64;
             }
             // TODO: check whether cf exists or not.
-            ctx.kv_wb.put_cf(cf, key, value).unwrap_or_else(|e| {
-                panic!(
-                    "{} failed to write ({}, {}) to cf {}: {:?}",
-                    self.tag,
-                    log_wrappers::Value::key(key),
-                    log_wrappers::Value::value(value),
-                    cf,
-                    e
-                )
-            });
+            ctx.kv_wb
+                .put_region_cf(region_id, cf, key, value)
+                .unwrap_or_else(|e| {
+                    panic!(
+                        "{} failed to write ({}, {}) to cf {}: {:?}",
+                        self.tag,
+                        log_wrappers::Value::key(key),
+                        log_wrappers::Value::value(value),
+                        cf,
+                        e
+                    )
+                });
         } else {
-            ctx.kv_wb.put(key, value).unwrap_or_else(|e| {
-                panic!(
-                    "{} failed to write ({}, {}): {:?}",
-                    self.tag,
-                    log_wrappers::Value::key(key),
-                    log_wrappers::Value::value(value),
-                    e
-                );
-            });
+            ctx.kv_wb
+                .put_region(region_id, key, value)
+                .unwrap_or_else(|e| {
+                    panic!(
+                        "{} failed to write ({}, {}): {:?}",
+                        self.tag,
+                        log_wrappers::Value::key(key),
+                        log_wrappers::Value::value(value),
+                        e
+                    );
+                });
         }
         Ok(())
     }
@@ -1865,6 +1870,7 @@ where
         let key = req.get_delete().get_key();
         // region key range has no data prefix, so we must use origin key to check.
         util::check_key_in_region(key, &self.region)?;
+        let region_id = 1; // simplify
         if let Some(s) = self.buckets.as_mut() {
             s.write_key(key, 0);
         }
@@ -1878,14 +1884,16 @@ where
         if !req.get_delete().get_cf().is_empty() {
             let cf = req.get_delete().get_cf();
             // TODO: check whether cf exists or not.
-            ctx.kv_wb.delete_cf(cf, key).unwrap_or_else(|e| {
-                panic!(
-                    "{} failed to delete {}: {}",
-                    self.tag,
-                    log_wrappers::Value::key(key),
-                    e
-                )
-            });
+            ctx.kv_wb
+                .delete_region_cf(region_id, cf, key)
+                .unwrap_or_else(|e| {
+                    panic!(
+                        "{} failed to delete {}: {}",
+                        self.tag,
+                        log_wrappers::Value::key(key),
+                        e
+                    )
+                });
 
             if cf == CF_LOCK {
                 // delete is a kind of write for RocksDB.
@@ -1894,7 +1902,7 @@ where
                 self.metrics.delete_keys_hint += 1;
             }
         } else {
-            ctx.kv_wb.delete(key).unwrap_or_else(|e| {
+            ctx.kv_wb.delete_region(region_id, key).unwrap_or_else(|e| {
                 panic!(
                     "{} failed to delete {}: {}",
                     self.tag,
@@ -4678,6 +4686,7 @@ pub struct Builder<EK: KvEngine> {
     router: ApplyRouter<EK>,
     store_id: u64,
     pending_create_peers: Arc<Mutex<HashMap<u64, (u64, bool)>>>,
+    store_meta: Arc<Mutex<StoreMeta>>,
 }
 
 impl<EK: KvEngine> Builder<EK> {
@@ -4697,6 +4706,7 @@ impl<EK: KvEngine> Builder<EK> {
             router,
             store_id: builder.store.get_id(),
             pending_create_peers: builder.pending_create_peers.clone(),
+            store_meta: builder.store_meta.clone(),
         }
     }
 }
@@ -4747,6 +4757,7 @@ where
             router: self.router.clone(),
             store_id: self.store_id,
             pending_create_peers: self.pending_create_peers.clone(),
+            store_meta: self.store_meta.clone(),
         }
     }
 }
@@ -5051,6 +5062,7 @@ mod tests {
     use crate::{
         coprocessor::*,
         store::{
+            fsm::dummy_store_meta,
             msg::WriteResponse,
             peer_storage::RAFT_INIT_LOG_INDEX,
             simple_write::{SimpleWriteEncoder, SimpleWriteReqEncoder},
@@ -5389,6 +5401,7 @@ mod tests {
             router: router.clone(),
             store_id: 1,
             pending_create_peers,
+            store_meta: dummy_store_meta(),
         };
         system.spawn("test-basic".to_owned(), builder);
 
@@ -5965,6 +5978,7 @@ mod tests {
             router: router.clone(),
             store_id: 1,
             pending_create_peers,
+            store_meta: dummy_store_meta(),
         };
         system.spawn("test-handle-raft".to_owned(), builder);
 
@@ -6306,6 +6320,7 @@ mod tests {
             router: router.clone(),
             store_id: 1,
             pending_create_peers,
+            store_meta: dummy_store_meta(),
         };
         system.spawn("test-handle-raft".to_owned(), builder);
 
@@ -6649,6 +6664,7 @@ mod tests {
             router: router.clone(),
             store_id: 1,
             pending_create_peers,
+            store_meta: dummy_store_meta(),
         };
         system.spawn("test-handle-raft".to_owned(), builder);
 
@@ -6740,6 +6756,7 @@ mod tests {
             router: router.clone(),
             store_id: 1,
             pending_create_peers,
+            store_meta: dummy_store_meta(),
         };
         system.spawn("test-ingest".to_owned(), builder);
 
@@ -6923,6 +6940,7 @@ mod tests {
             router: router.clone(),
             store_id: 1,
             pending_create_peers,
+            store_meta: dummy_store_meta(),
         };
         system.spawn("test-bucket".to_owned(), builder);
 
@@ -7016,6 +7034,7 @@ mod tests {
             router: router.clone(),
             store_id: 1,
             pending_create_peers,
+            store_meta: dummy_store_meta(),
         };
         system.spawn("test-exec-observer".to_owned(), builder);
 
@@ -7241,6 +7260,7 @@ mod tests {
             router: router.clone(),
             store_id: 1,
             pending_create_peers,
+            store_meta: dummy_store_meta(),
         };
         system.spawn("test-handle-raft".to_owned(), builder);
 
@@ -7521,6 +7541,7 @@ mod tests {
             router: router.clone(),
             store_id: 2,
             pending_create_peers,
+            store_meta: dummy_store_meta(),
         };
         system.spawn("test-split".to_owned(), builder);
 
@@ -7741,6 +7762,7 @@ mod tests {
             router: router.clone(),
             store_id: 2,
             pending_create_peers,
+            store_meta: dummy_store_meta(),
         };
         system.spawn("test-conf-change".to_owned(), builder);
 
@@ -7866,6 +7888,7 @@ mod tests {
             router: router.clone(),
             store_id: 1,
             pending_create_peers,
+            store_meta: dummy_store_meta(),
         };
         system.spawn("flashback_need_to_be_applied".to_owned(), builder);
 

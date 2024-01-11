@@ -12,9 +12,8 @@ use bytes::Bytes;
 use collections::HashMap;
 use engine_rocks::{raw::SliceTransform, util::FixedSuffixSliceTransform};
 use engine_traits::{
-    CfNamesExt, DbVector, Error, IterOptions, Iterable, Iterator, Mutable, Peekable, ReadOptions,
-    RegionCacheEngine, Result, Snapshot, SnapshotMiscExt, WriteBatch, WriteBatchExt, WriteOptions,
-    CF_DEFAULT, CF_LOCK, CF_WRITE,
+    CfNamesExt, DbVector, Error, IterOptions, Iterable, Iterator, Peekable, ReadOptions,
+    RegionCacheEngine, Result, Snapshot, SnapshotMiscExt, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE,
 };
 use skiplist_rs::{IterRef, Skiplist};
 use tikv_util::config::ReadableSize;
@@ -24,11 +23,12 @@ use crate::keys::{
     VALUE_TYPE_FOR_SEEK, VALUE_TYPE_FOR_SEEK_FOR_PREV,
 };
 
-fn cf_to_id(cf: &str) -> usize {
+pub(crate) fn cf_to_id(cf: &str) -> usize {
     match cf {
         CF_DEFAULT => 0,
         CF_LOCK => 1,
         CF_WRITE => 2,
+        CF_RAFT => 3,
         _ => panic!("unrecognized cf {}", cf),
     }
 }
@@ -39,13 +39,18 @@ fn cf_to_id(cf: &str) -> usize {
 /// with a formal implementation.
 #[derive(Clone)]
 pub struct RegionMemoryEngine {
-    data: [Arc<Skiplist<InternalKeyComparator>>; 3],
+    pub(crate) data: [Arc<Skiplist<InternalKeyComparator>>; 4],
 }
 
 impl RegionMemoryEngine {
     pub fn with_capacity(arena_size: usize) -> Self {
         RegionMemoryEngine {
             data: [
+                Arc::new(Skiplist::with_capacity(
+                    InternalKeyComparator::default(),
+                    arena_size,
+                    true,
+                )),
                 Arc::new(Skiplist::with_capacity(
                     InternalKeyComparator::default(),
                     arena_size,
@@ -125,7 +130,7 @@ impl RegionMemoryMeta {
 
 #[derive(Default)]
 pub struct RegionCacheMemoryEngineCore {
-    engine: HashMap<u64, RegionMemoryEngine>,
+    pub(crate) engine: HashMap<u64, RegionMemoryEngine>,
     region_metas: HashMap<u64, RegionMemoryMeta>,
 }
 
@@ -154,7 +159,7 @@ impl RegionCacheMemoryEngineCore {
 /// cached region), we resort to using a the disk engine's snapshot instead.
 #[derive(Clone, Default)]
 pub struct RegionCacheMemoryEngine {
-    core: Arc<Mutex<RegionCacheMemoryEngineCore>>,
+    pub(crate) core: Arc<Mutex<RegionCacheMemoryEngineCore>>,
 }
 
 impl RegionCacheMemoryEngine {
@@ -187,23 +192,6 @@ impl RegionCacheEngine for RegionCacheMemoryEngine {
     // todo(SpadeA): add sequence number logic
     fn snapshot(&self, region_id: u64, read_ts: u64, seq_num: u64) -> Option<Self::Snapshot> {
         RegionCacheSnapshot::new(self.clone(), region_id, read_ts, seq_num)
-    }
-}
-
-// todo: fill fields needed
-pub struct RegionCacheWriteBatch;
-
-impl WriteBatchExt for RegionCacheMemoryEngine {
-    type WriteBatch = RegionCacheWriteBatch;
-    // todo: adjust it
-    const WRITE_BATCH_MAX_KEYS: usize = 256;
-
-    fn write_batch(&self) -> Self::WriteBatch {
-        RegionCacheWriteBatch {}
-    }
-
-    fn write_batch_with_cap(&self, _: usize) -> Self::WriteBatch {
-        RegionCacheWriteBatch {}
     }
 }
 
@@ -489,74 +477,6 @@ impl Iterator for RegionCacheIterator {
 
     fn valid(&self) -> Result<bool> {
         Ok(self.valid)
-    }
-}
-
-impl WriteBatch for RegionCacheWriteBatch {
-    fn write_opt(&mut self, _: &WriteOptions) -> Result<u64> {
-        unimplemented!()
-    }
-
-    fn data_size(&self) -> usize {
-        unimplemented!()
-    }
-
-    fn count(&self) -> usize {
-        unimplemented!()
-    }
-
-    fn is_empty(&self) -> bool {
-        unimplemented!()
-    }
-
-    fn should_write_to_engine(&self) -> bool {
-        unimplemented!()
-    }
-
-    fn clear(&mut self) {
-        unimplemented!()
-    }
-
-    fn set_save_point(&mut self) {
-        unimplemented!()
-    }
-
-    fn pop_save_point(&mut self) -> Result<()> {
-        unimplemented!()
-    }
-
-    fn rollback_to_save_point(&mut self) -> Result<()> {
-        unimplemented!()
-    }
-
-    fn merge(&mut self, _: Self) -> Result<()> {
-        unimplemented!()
-    }
-}
-
-impl Mutable for RegionCacheWriteBatch {
-    fn put(&mut self, _: &[u8], _: &[u8]) -> Result<()> {
-        unimplemented!()
-    }
-
-    fn put_cf(&mut self, _: &str, _: &[u8], _: &[u8]) -> Result<()> {
-        unimplemented!()
-    }
-
-    fn delete(&mut self, _: &[u8]) -> Result<()> {
-        unimplemented!()
-    }
-
-    fn delete_cf(&mut self, _: &str, _: &[u8]) -> Result<()> {
-        unimplemented!()
-    }
-
-    fn delete_range(&mut self, _: &[u8], _: &[u8]) -> Result<()> {
-        unimplemented!()
-    }
-
-    fn delete_range_cf(&mut self, _: &str, _: &[u8], _: &[u8]) -> Result<()> {
-        unimplemented!()
     }
 }
 

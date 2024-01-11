@@ -52,6 +52,9 @@ impl WriteBatch for PanicWriteBatch {
     fn merge(&mut self, src: Self) -> Result<()> {
         panic!()
     }
+    fn set_sequence_number(&mut self, seqno: u64) -> Result<()> {
+        panic!()
+    }
 }
 
 impl Mutable for PanicWriteBatch {

@@ -24,15 +24,34 @@ pub trait Mutable: Send {
     /// Write a key/value in the default column family
     fn put(&mut self, key: &[u8], value: &[u8]) -> Result<()>;
 
+    /// Write a key/value in the default column family of the specified region.
+    fn put_region(&mut self, _region_id: u64, key: &[u8], value: &[u8]) -> Result<()> {
+        self.put(key, value)
+    }
+
     /// Write a key/value in a given column family
     fn put_cf(&mut self, cf: &str, key: &[u8], value: &[u8]) -> Result<()>;
+
+    /// Write a key/value in a given column family for a given region id.
+    fn put_region_cf(&mut self, _region_id: u64, cf: &str, key: &[u8], value: &[u8]) -> Result<()> {
+        self.put_cf(cf, key, value)
+    }
 
     /// Delete a key/value in the default column family
     fn delete(&mut self, key: &[u8]) -> Result<()>;
 
+    ///
+    fn delete_region(&mut self, _region_id: u64, key: &[u8]) -> Result<()> {
+        self.delete(key)
+    }
+
     /// Delete a key/value in a given column family
     fn delete_cf(&mut self, cf: &str, key: &[u8]) -> Result<()>;
 
+    ///
+    fn delete_region_cf(&mut self, _region_id: u64, cf: &str, key: &[u8]) -> Result<()> {
+        self.delete_cf(cf, key)
+    }
     /// Delete a range of key/values in the default column family
     fn delete_range(&mut self, begin_key: &[u8], end_key: &[u8]) -> Result<()>;
 
@@ -74,9 +93,9 @@ pub trait WriteBatch: Mutable {
     fn write_opt(&mut self, opts: &WriteOptions) -> Result<u64>;
 
     // TODO: it should be `FnOnce`.
-    fn write_callback_opt(&mut self, opts: &WriteOptions, mut cb: impl FnMut()) -> Result<u64> {
+    fn write_callback_opt(&mut self, opts: &WriteOptions, mut cb: impl FnMut(u64)) -> Result<u64> {
         let seq = self.write_opt(opts)?;
-        cb();
+        cb(seq);
         Ok(seq)
     }
 
@@ -123,4 +142,8 @@ pub trait WriteBatch: Mutable {
 
     /// Merge another WriteBatch to itself
     fn merge(&mut self, src: Self) -> Result<()>;
+
+    /// Set a custom sequence number for all of the writes in this batch. Used
+    /// by [`HybridEngine`]
+    fn set_sequence_number(&mut self, _seq: u64) -> Result<()>;
 }
