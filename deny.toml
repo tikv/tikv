@@ -43,7 +43,7 @@ multiple-versions = "allow"
 [advisories]
 vulnerability = "deny"
 unmaintained = "allow" # FIXME: Deny it.
-unsound = "allow" # FIXME: Deny it.
+unsound = "deny"
 yanked = "deny"
 notice = "warn"
 ignore = [
@@ -55,6 +55,12 @@ ignore = [
     # requiresd by TiKV.
     # See https://github.com/time-rs/time/blob/8067540c/CHANGELOG.md#L703
     "RUSTSEC-2020-0071",
+    # Ingore RUSTSEC-2023-0072 as we bans the unsound `X509StoreRef::objects`.
+    #
+    # Note: Upgrading rust-openssl the latest version do fix the issue but it
+    # also upgrade the OpenSSL to v3.x which causes performance degradation.
+    # See https://github.com/openssl/openssl/issues/17064
+    "RUSTSEC-2023-0072"
 ]
 
 [licenses]
