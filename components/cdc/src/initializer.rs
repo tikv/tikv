@@ -213,8 +213,22 @@ impl<E: KvEngine> Initializer<E> {
         }
 
         self.observed_range.update_region_key_range(&region);
-        let start_key = Key::from_encoded_slice(&self.observed_range.start_key_encoded);
-        let end_key = Key::from_encoded_slice(&self.observed_range.end_key_encoded);
+
+        // Be compatible with old TiCDC clients, which won't give `observed_range`.
+        let (start_key, end_key): (Key, Key);
+        if self.observed_range.start_key_encoded < region.start_key {
+            start_key = Key::from_encoded_slice(&region.start_key);
+        } else {
+            start_key = Key::from_encoded_slice(&self.observed_range.start_key_encoded);
+        }
+        if self.observed_range.end_key_encoded.is_empty()
+            || self.observed_range.end_key_encoded > region.end_key && !region.end_key.is_empty()
+        {
+            end_key = Key::from_encoded_slice(&region.end_key);
+        } else {
+            end_key = Key::from_encoded_slice(&self.observed_range.end_key_encoded)
+        }
+
         debug!("cdc async incremental scan";
             "region_id" => region_id,
             "downstream_id" => ?downstream_id,
@@ -231,7 +245,7 @@ impl<E: KvEngine> Initializer<E> {
 
         let (mut hint_min_ts, mut old_value_cursors) = (None, None);
         let mut scanner = if kv_api == ChangeDataRequestKvApi::TiDb {
-            if self.ts_filter_is_helpful() {
+            if self.ts_filter_is_helpful(&start_key, &end_key) {
                 hint_min_ts = Some(self.checkpoint_ts);
                 let wc = new_old_value_cursor(&snap, CF_WRITE);
                 let dc = new_old_value_cursor(&snap, CF_DEFAULT);
@@ -241,7 +255,6 @@ impl<E: KvEngine> Initializer<E> {
             // Time range: (checkpoint_ts, max]
             let txnkv_scanner = ScannerBuilder::new(snap, TimeStamp::max())
                 .fill_cache(false)
-                // .range(None, None)
                 .range(Some(start_key), Some(end_key))
                 .hint_min_ts(hint_min_ts)
                 .build_delta_scanner(self.checkpoint_ts, TxnExtraOp::ReadOldValue)
@@ -516,15 +529,13 @@ impl<E: KvEngine> Initializer<E> {
         }
     }
 
-    fn ts_filter_is_helpful(&self) -> bool {
+    fn ts_filter_is_helpful(&self, start_key: &Key, end_key: &Key) -> bool {
         if self.ts_filter_ratio < f64::EPSILON {
             return false;
         }
+        let start_key = data_key(start_key.as_encoded());
+        let end_key = data_end_key(end_key.as_encoded());
 
-        let start_key = data_key(&self.observed_range.start_key_encoded);
-        let end_key = data_end_key(&self.observed_range.end_key_encoded);
-        // let start_key = data_key(snap.lower_bound().unwrap_or_default());
-        // let end_key = data_end_key(snap.upper_bound().unwrap_or_default());
         let range = Range::new(&start_key, &end_key);
         let tablet = match self.tablet.as_ref() {
             Some(t) => t,
