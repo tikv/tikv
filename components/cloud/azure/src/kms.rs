@@ -9,7 +9,7 @@ use azure_identity::{
 };
 use azure_security_keyvault::{prelude::*, KeyClient};
 use cloud::{
-    error::{Error as CloudError, KmsError, Result, OtherError},
+    error::{Error as CloudError, KmsError, OtherError, Result},
     kms::{Config, CryptographyType, DataKeyPair, EncryptedKey, KeyId, KmsProvider, PlainKey},
 };
 use tikv_util::box_err;
@@ -139,9 +139,9 @@ impl AzureKms {
             );
             Self::new_with_credentials(config, keyvault_credential, hsm_credential)
         } else {
-            Err(CloudError::KmsError(KmsError::Other(
-                OtherError::from_box(box_err!("invalid configurations for Azure KMS")),
-            )))
+            Err(CloudError::KmsError(KmsError::Other(OtherError::from_box(
+                box_err!("invalid configurations for Azure KMS"),
+            ))))
         }
     }
 }

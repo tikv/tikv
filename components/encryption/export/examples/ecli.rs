@@ -136,7 +136,11 @@ fn create_azure_backend(
     azure_cfg.client_secret = cmd.secret.to_owned();
     azure_cfg.client_certificate_path = credential_file.cloned();
     if let Some(credential_file) = credential_file {
-        verify_credential(credential_file)?;
+        let ini = Ini::load_from_file(credential_file)
+            .map_err(|e| Error::Other(box_err!("Failed to parse credential file as ini: {}", e)))?;
+        let _props = ini
+            .section(Some("default"))
+            .ok_or_else(|| Error::Other(box_err!("fail to parse section")))?;
     }
     create_cloud_backend(&config)
 }
@@ -153,15 +157,6 @@ fn create_gcp_backend(
     config.key_id = cmd.key_id.to_owned();
     config.vendor = STORAGE_VENDOR_NAME_GCP.to_owned();
     create_cloud_backend(&config)
-}
-
-fn verify_credential(p: &String) -> Result<()> {
-    let ini = Ini::load_from_file(p)
-        .map_err(|e| Error::Other(box_err!("Failed to parse credential file as ini: {}", e)))?;
-    let _props = ini
-        .section(Some("default"))
-        .ok_or_else(|| Error::Other(box_err!("fail to parse section")))?;
-    Ok(())
 }
 
 #[allow(irrefutable_let_patterns)]

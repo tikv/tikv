@@ -4,7 +4,7 @@ use std::ops::Deref;
 
 use async_trait::async_trait;
 use cloud::{
-    error::{Error, KmsError, Result, OtherError},
+    error::{Error, KmsError, OtherError, Result},
     kms::{Config, CryptographyType, DataKeyPair, EncryptedKey, KeyId, KmsProvider, PlainKey},
 };
 use rusoto_core::{request::DispatchSignedRequest, RusotoError};

@@ -5,7 +5,7 @@ use derive_more::Deref;
 use kvproto::encryptionpb::MasterKeyKms;
 use tikv_util::box_err;
 
-use crate::error::{Error, KmsError, Result, OtherError};
+use crate::error::{Error, KmsError, OtherError, Result};
 
 #[derive(Debug, Clone)]
 pub struct Location {
