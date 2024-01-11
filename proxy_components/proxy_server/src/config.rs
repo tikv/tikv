@@ -429,6 +429,10 @@ pub fn address_proxy_config(config: &mut TikvConfig, proxy_config: &ProxyConfig)
 
     config.raft_store.enable_v2_compatible_learner =
         proxy_config.raft_store.enable_v2_compatible_learner;
+
+    if proxy_config.engine_store.enable_fast_add_peer && !proxy_config.engine_store.enable_unips {
+        fatal!("fast add peer can only work when using unips");
+    }
 }
 
 pub fn validate_and_persist_config(config: &mut TikvConfig, persist: bool) {

@@ -162,6 +162,10 @@ pub unsafe extern "C" fn ffi_apply_pre_handled_snapshot(
 
     let region_id = region_meta.region.as_ref().unwrap().region.id;
 
+    (*store.engine_store_server)
+        .tmp_fap_regions
+        .remove(&region_id);
+
     let _ = &(*store.engine_store_server)
         .kvstore
         .insert(region_id, Box::new(region_meta.region.take().unwrap()));

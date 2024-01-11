@@ -11,6 +11,7 @@ use crate::mixed_engine::write_batch::RocksWriteBatchVec;
 pub trait ElementaryWriteBatch: Send {
     fn as_any(&self) -> &dyn std::any::Any;
 
+    // If it uses default write batch(usually rocksdb's wb)
     fn use_default(&self) -> bool;
 
     fn put(&mut self, key: &[u8], value: &[u8]) -> Result<()>;

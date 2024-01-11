@@ -73,6 +73,11 @@ pub fn log_check_double_write(_: &RocksWriteBatchVec) -> bool {
 
 #[cfg(any(test, feature = "testexport"))]
 pub fn log_check_double_write(batch: &RocksWriteBatchVec) -> bool {
+    if !batch.element_wb.use_default() {
+        // This is check if we don't use unips.
+        // It will print out dummy infomation when using unips.
+        return false;
+    }
     check_double_write(batch);
     // TODO(tiflash) re-support this tracker.
     let mut e = true;

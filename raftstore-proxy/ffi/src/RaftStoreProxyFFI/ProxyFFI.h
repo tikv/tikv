@@ -225,6 +225,7 @@ enum class FastAddPeerStatus : uint32_t {
   NoSuitable,
   BadData,
   FailedInject,
+  Canceled,  // Cancel from outside the FAP workers
 };
 
 enum class PrehandledSnapshotType : uint8_t {
@@ -237,6 +238,12 @@ struct FastAddPeerRes {
   FastAddPeerStatus status;
   CppStrWithView apply_state;
   CppStrWithView region;
+};
+
+enum class FapSnapshotState : uint32_t {
+  NotFound,
+  Persisted,
+  Other,
 };
 
 enum class ConfigJsonType : uint64_t { ProxyConfigAddressed = 1 };
@@ -333,7 +340,8 @@ struct EngineStoreServerHelper {
                                        uint64_t);
   void (*fn_release_pre_handled_snapshot)(EngineStoreServerWrap *, RawVoidPtr,
                                           RawCppPtrType);
-  void (*fn_apply_fap_snapshot)(EngineStoreServerWrap *, uint64_t, uint64_t);
+  uint8_t (*fn_apply_fap_snapshot)(EngineStoreServerWrap *, uint64_t, uint64_t,
+                                   uint8_t);
   HttpRequestRes (*fn_handle_http_request)(EngineStoreServerWrap *,
                                            BaseBuffView path,
                                            BaseBuffView query,
@@ -351,6 +359,11 @@ struct EngineStoreServerHelper {
                                    uint64_t leader_safe_ts);
   FastAddPeerRes (*fn_fast_add_peer)(EngineStoreServerWrap *,
                                      uint64_t region_id, uint64_t new_peer_id);
+  FapSnapshotState (*fn_query_fap_snapshot_state)(EngineStoreServerWrap *,
+                                                  uint64_t region_id,
+                                                  uint64_t new_peer_id);
+  void (*fn_clear_fap_snapshot)(EngineStoreServerWrap *, uint64_t region_id);
+  bool (*fn_kvstore_region_exists)(EngineStoreServerWrap *, uint64_t region_id);
 };
 
 #ifdef __cplusplus

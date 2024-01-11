@@ -1,6 +1,7 @@
+// Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
+
 use proxy_ffi::interfaces_ffi::SSTReaderPtr;
 
-// Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 use crate::{
     core::{common::*, PrehandleTask, ProxyForwarder, PtrWrapper},
     fatal,
@@ -71,14 +72,10 @@ fn retrieve_sst_files(peer_id: u64, snap: &store::Snapshot) -> Vec<SSTInfo> {
         }
     }
     if sst_views.is_empty() {
+        // This logic should not happen here.
         info!("meet a empty snapshot, maybe error or no data";
             "peer_id" => peer_id
         );
-        // #[cfg(any(test, feature = "testexport"))]
-        // {
-        //     // TODO make all tests in proxy without an empty snapshot.
-        //     panic!("meet a empty snapshot")
-        // }
     }
     sst_views
 }
@@ -139,36 +136,19 @@ impl<T: Transport + 'static, ER: RaftEngine> ProxyForwarder<T, ER> {
             return;
         });
 
-        let mut should_skip = false;
-        #[allow(clippy::collapsible_if)]
-        if self.packed_envs.engine_store_cfg.enable_fast_add_peer {
-            if self.get_cached_manager().access_cached_region_info_mut(
-                region_id,
-                |info: MapEntry<u64, Arc<CachedRegionInfo>>| match info {
-                    MapEntry::Occupied(o) => {
-                        let is_first_snapshot = !o.get().inited_or_fallback.load(Ordering::SeqCst);
-                        if is_first_snapshot {
-                            info!("fast path: prehandle first snapshot {}:{} {}", self.store_id, region_id, peer_id;
-                                "snap_key" => ?snap_key,
-                                "region_id" => region_id,
-                            );
-                            should_skip = true;
-                        }
-                    }
-                    MapEntry::Vacant(_) => {
-                        // Compat no fast add peer logic
-                        // panic!("unknown snapshot!");
-                    }
-                },
-            ).is_err() {
-                fatal!("post_apply_snapshot poisoned")
-            };
-        }
+        defer!({
+            fail::fail_point!("on_ob_cancel_after_pre_handle_snapshot", |_| {
+                self.cancel_apply_snapshot(region_id, peer_id)
+            });
+        });
 
-        if should_skip {
+        if self.pre_apply_snapshot_for_fap_snapshot(ob_region, peer_id, snap_key) {
             return;
         }
 
+        fail::fail_point!("fap_core_no_prehandle", |_| {
+            return;
+        });
         match self.apply_snap_pool.as_ref() {
             Some(p) => {
                 let (sender, receiver) = mpsc::channel();
@@ -239,10 +219,6 @@ impl<T: Transport + 'static, ER: RaftEngine> ProxyForwarder<T, ER> {
                 );
             }
         }
-
-        fail::fail_point!("on_ob_cancel_after_pre_handle_snapshot", |_| {
-            self.cancel_apply_snapshot(region_id, peer_id)
-        });
     }
 
     pub fn post_apply_snapshot(
@@ -256,6 +232,11 @@ impl<T: Transport + 'static, ER: RaftEngine> ProxyForwarder<T, ER> {
             return;
         });
         let region_id = ob_region.get_id();
+        if self.post_apply_snapshot_for_fap_snapshot(ob_region, peer_id, snap_key) {
+            // Already handled as an fap snapshot.
+            return;
+        }
+
         info!("post apply snapshot";
             "peer_id" => ?peer_id,
             "snap_key" => ?snap_key,
@@ -263,52 +244,6 @@ impl<T: Transport + 'static, ER: RaftEngine> ProxyForwarder<T, ER> {
             "region" => ?ob_region,
             "pending" => self.engine.proxy_ext.pending_applies_count.load(Ordering::SeqCst),
         );
-        let mut should_skip = false;
-        #[allow(clippy::collapsible_if)]
-        if self.packed_envs.engine_store_cfg.enable_fast_add_peer {
-            if self.get_cached_manager().access_cached_region_info_mut(
-                region_id,
-                |info: MapEntry<u64, Arc<CachedRegionInfo>>| match info {
-                    MapEntry::Occupied(mut o) => {
-                        let is_first_snapshot = !o.get().inited_or_fallback.load(Ordering::SeqCst);
-                        if is_first_snapshot {
-                            let last = o.get().snapshot_inflight.load(Ordering::SeqCst);
-                            let total = o.get().fast_add_peer_start.load(Ordering::SeqCst);
-                            let current = SystemTime::now()
-                                .duration_since(SystemTime::UNIX_EPOCH)
-                                .unwrap();
-                            info!("fast path: start applied first snapshot {}:{} {}", self.store_id, region_id, peer_id;
-                                "snap_key" => ?snap_key,
-                                "region_id" => region_id,
-                            );
-
-                            self.engine_store_server_helper.apply_fap_snapshot(region_id, peer_id);
-
-                            info!("fast path: finished applied first snapshot {}:{} {}, recover MsgAppend", self.store_id, region_id, peer_id;
-                                "snap_key" => ?snap_key,
-                                "region_id" => region_id,
-                                "cost_snapshot" => current.as_millis() - last,
-                                "cost_total" => current.as_millis() - total,
-                            );
-                            should_skip = true;
-                            o.get_mut().snapshot_inflight.store(0, Ordering::SeqCst);
-                            o.get_mut().fast_add_peer_start.store(0, Ordering::SeqCst);
-                            o.get_mut().inited_or_fallback.store(true, Ordering::SeqCst);
-                        }
-                    }
-                    MapEntry::Vacant(_) => {
-                        // Compat no fast add peer logic
-                        // panic!("unknown snapshot!");
-                    }
-                },
-            ).is_err() {
-                fatal!("post_apply_snapshot poisoned")
-            };
-        }
-
-        if should_skip {
-            return;
-        }
 
         let snap = match snap {
             None => return,
@@ -344,10 +279,8 @@ impl<T: Transport + 'static, ER: RaftEngine> ProxyForwarder<T, ER> {
                             "pending" => self.engine.proxy_ext.pending_applies_count.load(Ordering::SeqCst),
                         );
                         // We must fetch snapshot here, as a consumer.
-                        if !should_skip {
-                            self.engine_store_server_helper
-                                .apply_pre_handled_snapshot(snap_ptr.0);
-                        }
+                        self.engine_store_server_helper
+                            .apply_pre_handled_snapshot(snap_ptr.0);
                         false
                     }
                     Err(_) => {
@@ -398,7 +331,7 @@ impl<T: Transport + 'static, ER: RaftEngine> ProxyForwarder<T, ER> {
             }
         };
 
-        if need_retry && !should_skip {
+        if need_retry {
             // Blocking pre handle.
             let ssts = retrieve_sst_files(peer_id, snap);
             let ptr = pre_handle_snapshot_impl(
@@ -444,6 +377,9 @@ impl<T: Transport + 'static, ER: RaftEngine> ProxyForwarder<T, ER> {
             let ctx = lock.deref_mut();
             ctx.tracer.remove(&region_id)
         };
+
+        // We don't clear fap snapshot, because applying could be resumed after restart.
+        // Once resumed, the fap snapshot could be reused.
         if let Some(t) = maybe_prehandle_task {
             // If `cancel_applying_snap` is called, applying snapshot is cancelled.
             // It will happen only if the peer is scheduled away.

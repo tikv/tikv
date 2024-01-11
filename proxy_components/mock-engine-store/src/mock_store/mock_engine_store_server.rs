@@ -27,7 +27,7 @@ pub struct EngineStoreServer {
     pub region_states: RefCell<HashMap<RegionId, RegionStats>>,
     pub page_storage: MockPageStorage,
     // (region_id, peer_id) -> MockRegion
-    pub tmp_fap_regions: HashMap<(RegionId, u64), Box<MockRegion>>,
+    pub tmp_fap_regions: HashMap<RegionId, Box<MockRegion>>,
 }
 
 impl EngineStoreServer {
@@ -82,6 +82,15 @@ impl EngineStoreServer {
             region.apply_state = Default::default();
             // We don't clear applied_term.
         }
+        self.engines
+            .as_mut()
+            .unwrap()
+            .kv
+            .proxy_ext
+            .cached_region_info_manager
+            .as_ref()
+            .unwrap()
+            .clear();
     }
 
     // False alarm
@@ -356,6 +365,9 @@ pub fn gen_engine_store_server_helper(
         fn_handle_safe_ts_update: Some(ffi_handle_safe_ts_update),
         fn_fast_add_peer: Some(ffi_fast_add_peer),
         fn_apply_fap_snapshot: Some(ffi_apply_fap_snapshot),
+        fn_query_fap_snapshot_state: Some(ffi_query_fap_snapshot_state),
+        fn_kvstore_region_exists: Some(ffi_kvstore_region_exists),
+        fn_clear_fap_snapshot: Some(ffi_clear_fap_snapshot),
         ps: PageStorageInterfaces {
             fn_create_write_batch: Some(ffi_mockps_create_write_batch),
             fn_wb_put_page: Some(ffi_mockps_wb_put_page),
@@ -533,11 +545,14 @@ unsafe extern "C" fn ffi_atomic_update_proxy(
 
 unsafe extern "C" fn ffi_handle_destroy(
     arg1: *mut interfaces_ffi::EngineStoreServerWrap,
-    arg2: u64,
+    region_id: u64,
 ) {
     let store = into_engine_store_server_wrap(arg1);
-    debug!("ffi_handle_destroy {}", arg2);
-    (*store.engine_store_server).kvstore.remove(&arg2);
+    debug!("ffi_handle_destroy {}", region_id);
+    (*store.engine_store_server)
+        .tmp_fap_regions
+        .remove(&region_id);
+    (*store.engine_store_server).kvstore.remove(&region_id);
 }
 
 unsafe extern "C" fn ffi_handle_safe_ts_update(

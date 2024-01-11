@@ -334,6 +334,7 @@ pub mod root {
             NoSuitable = 3,
             BadData = 4,
             FailedInject = 5,
+            Canceled = 6,
         }
         #[repr(u8)]
         #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
@@ -348,6 +349,13 @@ pub mod root {
             pub status: root::DB::FastAddPeerStatus,
             pub apply_state: root::DB::CppStrWithView,
             pub region: root::DB::CppStrWithView,
+        }
+        #[repr(u32)]
+        #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
+        pub enum FapSnapshotState {
+            NotFound = 0,
+            Persisted = 1,
+            Other = 2,
         }
         #[repr(u64)]
         #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
@@ -638,7 +646,8 @@ pub mod root {
                     arg1: *mut root::DB::EngineStoreServerWrap,
                     arg2: u64,
                     arg3: u64,
-                ),
+                    arg4: u8,
+                ) -> u8,
             >,
             pub fn_handle_http_request: ::std::option::Option<
                 unsafe extern "C" fn(
@@ -701,6 +710,22 @@ pub mod root {
                     new_peer_id: u64,
                 ) -> root::DB::FastAddPeerRes,
             >,
+            pub fn_query_fap_snapshot_state: ::std::option::Option<
+                unsafe extern "C" fn(
+                    arg1: *mut root::DB::EngineStoreServerWrap,
+                    region_id: u64,
+                    new_peer_id: u64,
+                ) -> root::DB::FapSnapshotState,
+            >,
+            pub fn_clear_fap_snapshot: ::std::option::Option<
+                unsafe extern "C" fn(arg1: *mut root::DB::EngineStoreServerWrap, region_id: u64),
+            >,
+            pub fn_kvstore_region_exists: ::std::option::Option<
+                unsafe extern "C" fn(
+                    arg1: *mut root::DB::EngineStoreServerWrap,
+                    region_id: u64,
+                ) -> bool,
+            >,
         }
         extern "C" {
             pub fn ffi_get_server_info_from_proxy(
@@ -709,7 +734,7 @@ pub mod root {
                 arg3: root::DB::RawVoidPtr,
             ) -> u32;
         }
-        pub const RAFT_STORE_PROXY_VERSION: u64 = 8024556142803901851;
+        pub const RAFT_STORE_PROXY_VERSION: u64 = 14498963167462351742;
         pub const RAFT_STORE_PROXY_MAGIC_NUMBER: u32 = 324508639;
     }
 }

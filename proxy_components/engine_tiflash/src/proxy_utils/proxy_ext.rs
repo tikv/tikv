@@ -50,6 +50,9 @@ impl Default for ProxyEngineExt {
 }
 
 impl ProxyEngineExt {
+    fn clear(&mut self) {
+        self.cached_region_info_manager = Some(Arc::new(crate::CachedRegionInfoManager::new()));
+    }
     // The whole point is:
     // 1. When `handle_pending_applies` is called by `on_timeout`, we can handle at
     // least one.

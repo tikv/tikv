@@ -303,7 +303,7 @@ fn test_parse_tablet_snapshot() {
     test_parse_snap(10);
 }
 
-// This test won't run, since we don;t have transport for snapshot data.
+// This test won't run, since we don't have transport for snapshot data.
 // #[test]
 fn test_handle_snapshot() {
     let mut cluster_v2 = test_raftstore_v2::new_node_cluster(1, 2);

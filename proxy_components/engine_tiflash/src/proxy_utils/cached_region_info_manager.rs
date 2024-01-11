@@ -19,11 +19,14 @@ pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 pub struct CachedRegionInfo {
     pub replicated_or_created: AtomicBool,
     // TiKV assumes a region's learner peer is added through snapshot.
-    // If this field is false, will try fast path when meet MsgAppend.
-    // If this field is true, it means this peer is inited or will be inited by a TiKV snapshot.
-    // NOTE If we want a fallback, then we must set inited_or_fallback to true,
-    // Otherwise, a normal snapshot will be neglect in `post_apply_snapshot` and cause data loss.
+    // If `inited_or_fallback=false`, will try fast path when meet MsgAppend.
+    // If `inited_or_fallback=true`, it fap is finished or fallback.
+    // NOTE After `apply_snapshot`, `is_initialized` will return true, but `inited_or_fallback` is
+    // false. If fap fallbacks, we must set inited_or_fallback to true,
+    // Otherwise, a tikv snapshot will be neglect in `post_apply_snapshot` and cause data loss.
     pub inited_or_fallback: AtomicBool,
+    // If set to non-zero, a fap is sent and not handled.
+    // If set to zero, the state is UNKNOWN. Could be handled, or restarted.
     pub snapshot_inflight: portable_atomic::AtomicU128,
     pub fast_add_peer_start: portable_atomic::AtomicU128,
 }
@@ -51,6 +54,17 @@ impl CachedRegionInfoManager {
         i ^ (i >> 30) ^ (i >> 60)
     }
 
+    pub fn clear(&self) {
+        for i in 0..CACHED_REGION_INFO_SLOT_COUNT {
+            self.cached_region_info
+                .get(i)
+                .unwrap()
+                .write()
+                .expect("poisoned")
+                .clear();
+        }
+    }
+
     // This is not a trivial default.
     #[allow(clippy::new_without_default)]
     pub fn new() -> Self {
@@ -67,6 +81,18 @@ impl CachedRegionInfoManager {
     fn slot_index(id: u64) -> usize {
         debug_assert!(CACHED_REGION_INFO_SLOT_COUNT.is_power_of_two());
         Self::hash_u64(id) as usize & (CACHED_REGION_INFO_SLOT_COUNT - 1)
+    }
+
+    pub fn contains(&self, region_id: u64) -> bool {
+        let slot_id = Self::slot_index(region_id);
+        let guard = match self.cached_region_info.get(slot_id).unwrap().read() {
+            Ok(g) => g,
+            Err(_) => panic!("contains poisoned!"),
+        };
+        if guard.get(&region_id).is_some() {
+            return true;
+        }
+        false
     }
 
     pub fn access_cached_region_info_mut<F: FnMut(MapEntry<u64, Arc<CachedRegionInfo>>)>(
@@ -118,20 +144,6 @@ impl CachedRegionInfoManager {
         }
     }
 
-    pub fn set_inited_or_fallback(&self, region_id: u64, v: bool) -> Result<()> {
-        self.access_cached_region_info_mut(
-            region_id,
-            |info: MapEntry<u64, Arc<CachedRegionInfo>>| match info {
-                MapEntry::Occupied(mut o) => {
-                    o.get_mut().inited_or_fallback.store(v, Ordering::SeqCst);
-                }
-                MapEntry::Vacant(_) => {
-                    tikv_util::safe_panic!("not inited!");
-                }
-            },
-        )
-    }
-
     pub fn set_snapshot_inflight(&self, region_id: u64, v: u128) -> Result<()> {
         self.access_cached_region_info_mut(
             region_id,
@@ -150,8 +162,23 @@ impl CachedRegionInfoManager {
         // TODO clean local, and prepare to request snapshot from TiKV as a trivial
         // procedure.
         fail::fail_point!("fap_core_no_fallback", |_| {});
-        if self.set_inited_or_fallback(region_id, true).is_err() {
-            tikv_util::safe_panic!("set_inited_or_fallback");
+        if self
+            .access_cached_region_info_mut(
+                region_id,
+                |info: MapEntry<u64, Arc<CachedRegionInfo>>| match info {
+                    MapEntry::Occupied(mut o) => {
+                        o.get_mut().inited_or_fallback.store(true, Ordering::SeqCst);
+                        o.get_mut().snapshot_inflight.store(0, Ordering::SeqCst);
+                        o.get_mut().fast_add_peer_start.store(0, Ordering::SeqCst);
+                    }
+                    MapEntry::Vacant(_) => {
+                        tikv_util::safe_panic!("not inited!");
+                    }
+                },
+            )
+            .is_err()
+        {
+            tikv_util::safe_panic!("fallback_to_slow_path");
         }
     }
 }

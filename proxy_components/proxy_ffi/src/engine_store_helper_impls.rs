@@ -220,9 +220,37 @@ impl EngineStoreServerHelper {
         }
     }
 
-    pub fn apply_fap_snapshot(&self, region_id: u64, peer_id: u64) {
+    pub fn apply_fap_snapshot(&self, region_id: u64, peer_id: u64, assert_exist: bool) -> bool {
         debug_assert!(self.fn_apply_fap_snapshot.is_some());
-        unsafe { (self.fn_apply_fap_snapshot.into_inner())(self.inner, region_id, peer_id) }
+        unsafe {
+            (self.fn_apply_fap_snapshot.into_inner())(
+                self.inner,
+                region_id,
+                peer_id,
+                assert_exist as u8,
+            ) != 0
+        }
+    }
+
+    pub fn query_fap_snapshot_state(
+        &self,
+        region_id: u64,
+        new_peer_id: u64,
+    ) -> interfaces_ffi::FapSnapshotState {
+        debug_assert!(self.fn_query_fap_snapshot_state.is_some());
+        unsafe {
+            (self.fn_query_fap_snapshot_state.into_inner())(self.inner, region_id, new_peer_id)
+        }
+    }
+
+    pub fn kvstore_region_exist(&self, region_id: u64) -> bool {
+        debug_assert!(self.fn_kvstore_region_exists.is_some());
+        unsafe { (self.fn_kvstore_region_exists.into_inner())(self.inner, region_id) }
+    }
+
+    pub fn clear_fap_snapshot(&self, region_id: u64) {
+        debug_assert!(self.fn_clear_fap_snapshot.is_some());
+        unsafe { (self.fn_clear_fap_snapshot.into_inner())(self.inner, region_id) }
     }
 
     pub fn handle_ingest_sst(
