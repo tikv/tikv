@@ -5,7 +5,7 @@ use derive_more::Deref;
 use kvproto::encryptionpb::MasterKeyKms;
 use tikv_util::box_err;
 
-use crate::error::{Error, KmsError, Result};
+use crate::error::{Error, KmsError, Result, OtherError};
 
 #[derive(Debug, Clone)]
 pub struct Location {
@@ -158,11 +158,13 @@ impl PlainKey {
     pub fn new(key: Vec<u8>, t: CryptographyType) -> Result<Self> {
         let limitation = t.target_key_size();
         if limitation > 0 && key.len() != limitation {
-            Err(Error::KmsError(KmsError::Other(box_err!(
-                "encryption method and key length mismatch, expect {} get
+            Err(Error::KmsError(KmsError::Other(OtherError::from_box(
+                box_err!(
+                    "encryption method and key length mismatch, expect {} get
                     {}",
-                limitation,
-                key.len()
+                    limitation,
+                    key.len()
+                ),
             ))))
         } else {
             Ok(Self { key, tag: t })

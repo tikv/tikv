@@ -1,6 +1,6 @@
 // Copyright 2024 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{fmt, io::Error as IoError, result::Result as StdResult};
+use std::{fmt, result::Result as StdResult};
 
 use async_trait::async_trait;
 use cloud::{
@@ -14,11 +14,10 @@ use hyper::Body;
 use regex::Regex;
 use serde::{Deserialize, Deserializer, Serialize};
 use tame_gcs::error::HttpStatusError;
-use tikv_util::{box_err, time::Instant};
+use tikv_util::{box_err, stream::RetryError, time::Instant};
 
 use crate::{
     client::{GcpClient, RequestError},
-    utils::retry,
     STORAGE_VENDOR_NAME_GCP,
 };
 
@@ -38,7 +37,8 @@ const METHOD_ENCRYPT: &str = "encrypt";
 const METHOD_DECRYPT: &str = "decrypt";
 const METHOD_GEN_RANDOM_BYTES: &str = "generateRandomBytes";
 
-// gen random key protection level, we always use HMS(Hardware Security Module).
+/// Protection level of the generated random key, always using HSM(Hardware
+/// Security Module).
 const RANDOMIZE_PROTECTION_LEVEL: &str = "HSM";
 
 pub struct GcpKms {
@@ -98,33 +98,23 @@ impl GcpKms {
     {
         let begin = Instant::now_coarse();
         let url = self.format_call_url(key_name, method);
-        let resp = retry(
-            || async {
-                let req_builder = http::Request::builder().header(
-                    http::header::CONTENT_TYPE,
-                    http::header::HeaderValue::from_static("application/json"),
-                );
+        let req_builder = http::Request::builder().header(
+            http::header::CONTENT_TYPE,
+            http::header::HeaderValue::from_static("application/json"),
+        );
 
-                let body = serde_json::to_string(&data).unwrap();
-                let req = match req_builder
-                    .method(Method::POST)
-                    .uri(url.clone())
-                    .body(Body::from(body))
-                {
-                    Ok(r) => r,
-                    Err(e) => {
-                        return Err(RequestError::Gcs(tame_gcs::error::Error::Http(
-                            tame_gcs::error::HttpError(e),
-                        )));
-                    }
-                };
-                self.client
-                    .make_request(req, tame_gcs::Scopes::CloudPlatform)
-                    .await
-            },
-            method,
-        )
-        .await?;
+        let body = serde_json::to_string(&data).unwrap();
+        let req = req_builder
+            .method(Method::POST)
+            .uri(url.clone())
+            .body(Body::from(body))
+            .map_err(|e| {
+                RequestError::Gcs(tame_gcs::error::Error::Http(tame_gcs::error::HttpError(e)))
+            })?;
+        let resp = self
+            .client
+            .make_request(req, tame_gcs::Scopes::CloudPlatform)
+            .await?;
         metrics::CLOUD_REQUEST_HISTOGRAM_VEC
             .with_label_values(&["gcp", method])
             .observe(begin.saturating_elapsed_secs());
@@ -176,7 +166,7 @@ impl KmsProvider for GcpKms {
         let resp: DecryptResp = self
             .do_json_request(self.config.key_id.as_str(), METHOD_DECRYPT, decrypt_req)
             .await
-            .map_err(|e| IoError::from(e))?;
+            .map_err(|e| KmsError::Other(e.into()))?;
         check_crc32(&resp.plaintext, resp.plaintext_crc32c)?;
         Ok(resp.plaintext)
     }
@@ -189,7 +179,7 @@ impl KmsProvider for GcpKms {
         let rb_resp: GenRandomBytesResp = self
             .do_json_request(&self.location, METHOD_GEN_RANDOM_BYTES, random_bytes_req)
             .await
-            .map_err(|e| IoError::from(e))?;
+            .map_err(|e| KmsError::Other(e.into()))?;
         check_crc32(&rb_resp.data, rb_resp.data_crc32c)?;
 
         let encrypt_request = EncryptRequest {
@@ -199,7 +189,7 @@ impl KmsProvider for GcpKms {
         let resp: EncryptResp = self
             .do_json_request(self.config.key_id.as_str(), METHOD_ENCRYPT, encrypt_request)
             .await
-            .map_err(|e| IoError::from(e))?;
+            .map_err(|e| KmsError::Other(e.into()))?;
         check_crc32(&resp.ciphertext, resp.ciphertext_crc32c)?;
 
         to_data_key(resp, rb_resp.data)
@@ -255,22 +245,17 @@ fn check_crc32(data: &[u8], expected: u32) -> StdResult<(), Crc32Error> {
     Ok(())
 }
 
+#[derive(Debug)]
 pub struct Crc32Error {
     expected: u32,
     got: u32,
-}
-
-impl fmt::Debug for Crc32Error {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self)
-    }
 }
 
 impl fmt::Display for Crc32Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "crc32 mismatch, expected: {}, got: {}",
+            "crc32c mismatch, expected: {}, got: {}",
             self.expected, self.got
         )
     }
@@ -278,9 +263,15 @@ impl fmt::Display for Crc32Error {
 
 impl std::error::Error for Crc32Error {}
 
+impl RetryError for Crc32Error {
+    fn is_retryable(&self) -> bool {
+        true
+    }
+}
+
 impl From<Crc32Error> for CloudError {
     fn from(e: Crc32Error) -> Self {
-        Self::KmsError(KmsError::Other(Box::new(e)))
+        Self::KmsError(KmsError::Other(e.into()))
     }
 }
 
@@ -323,7 +314,8 @@ where
 #[serde(rename_all = "camelCase")]
 struct GenRandomBytesReq {
     length_bytes: usize,
-    // TODO: Change to enum
+    // we always use "HSM" currently, maybe export it as
+    // a config in the future.
     protection_level: String,
 }
 

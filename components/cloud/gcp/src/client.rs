@@ -1,6 +1,12 @@
 // Copyright 2024 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{convert::TryInto, fmt::Display, io, result::Result as StdResult, sync::Arc};
+use std::{
+    convert::TryInto,
+    fmt::{self, Display},
+    io,
+    result::Result as StdResult,
+    sync::Arc,
+};
 
 use hyper::{client::HttpConnector, Body, Client, Request, Response, StatusCode};
 use hyper_tls::HttpsConnector;
@@ -184,6 +190,14 @@ pub enum RequestError {
     Gcs(tame_gcs::Error),
     InvalidEndpoint(http::uri::InvalidUri),
 }
+
+impl Display for RequestError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{:?}", self)
+    }
+}
+
+impl std::error::Error for RequestError {}
 
 impl From<http::uri::InvalidUri> for RequestError {
     fn from(err: http::uri::InvalidUri) -> Self {
