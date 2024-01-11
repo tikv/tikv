@@ -1655,6 +1655,12 @@ impl DbConfig {
         if self.raftcf.write_buffer_limit.is_some() {
             return Err("raftcf does not support cf based write buffer manager".into());
         }
+        if self.writecf.titan.blob_run_mode != BlobRunMode::ReadOnly {
+            return Err(
+                "writecf does not support enable Titan due to compaction filter incompatibility"
+                    .into(),
+            );
+        }
         if self.enable_unordered_write {
             if let Some(true) = self.titan.enabled {
                 return Err("RocksDB.unordered_write does not support Titan".into());

@@ -18,7 +18,7 @@ use tikv_util::{
 use super::timestamp::TimeStamp;
 
 // Short value max len must <= 255.
-pub const SHORT_VALUE_MAX_LEN: usize = 255;
+pub const SHORT_VALUE_MAX_LEN: usize = 1;
 pub const SHORT_VALUE_PREFIX: u8 = b'v';
 
 pub fn is_short_value(value: &[u8]) -> bool {
