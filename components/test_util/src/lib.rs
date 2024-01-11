@@ -119,8 +119,6 @@ pub fn temp_dir(prefix: impl Into<Option<&'static str>>, prefer_mem: bool) -> te
         _ => builder.tempdir().unwrap(),
     }
 }
-<<<<<<< HEAD
-=======
 
 /// Compare two structs and provide more helpful debug difference.
 #[track_caller]
@@ -174,4 +172,3 @@ pub fn eventually(tick: Duration, total: Duration, mut check: impl FnMut() -> bo
         );
     }
 }
->>>>>>> 956c9f377d (snapshot_backup: enhanced prepare stage (#15946))

@@ -91,17 +91,8 @@ use crate::{
         region_meta::RegionMeta,
         snapshot_backup::{AbortReason, SnapshotBrState, SnapshotBrWaitApplyRequest},
         transport::Transport,
-<<<<<<< HEAD
         util,
         util::{KeysInfoFormatter, LeaseState},
-=======
-        unsafe_recovery::{
-            exit_joint_request, ForceLeaderState, UnsafeRecoveryExecutePlanSyncer,
-            UnsafeRecoveryFillOutReportSyncer, UnsafeRecoveryForceLeaderSyncer,
-            UnsafeRecoveryState, UnsafeRecoveryWaitApplySyncer,
-        },
-        util::{self, compare_region_epoch, KeysInfoFormatter, LeaseState},
->>>>>>> 956c9f377d (snapshot_backup: enhanced prepare stage (#15946))
         worker::{
             new_change_peer_v2_request, Bucket, BucketRange, CleanupTask, ConsistencyCheckTask,
             GcSnapshotTask, RaftlogGcTask, ReadDelegate, ReadProgress, RegionTask, SplitCheckTask,

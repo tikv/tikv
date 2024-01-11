@@ -2,23 +2,11 @@
 
 use std::{marker::PhantomData, sync::atomic::*};
 
-<<<<<<< HEAD
-use engine_traits::KvEngine;
-use futures::{channel::mpsc, FutureExt, SinkExt, StreamExt, TryFutureExt};
-use grpcio::{self, *};
-use kvproto::brpb::*;
-use raftstore::{
-    router::RaftStoreRouter,
-    store::msg::{PeerMsg, SignificantMsg},
-};
-use tikv_util::{error, info, worker::*};
-=======
 use futures::{channel::mpsc, FutureExt, SinkExt, StreamExt, TryFutureExt};
 use grpcio::{self, *};
 use kvproto::brpb::*;
 use raftstore::store::snapshot_backup::SnapshotBrHandle;
 use tikv_util::{error, info, warn, worker::*};
->>>>>>> 956c9f377d (snapshot_backup: enhanced prepare stage (#15946))
 
 use super::Task;
 use crate::disk_snap::{self, StreamHandleLoop};
@@ -26,25 +14,6 @@ use crate::disk_snap::{self, StreamHandleLoop};
 /// Service handles the RPC messages for the `Backup` service.
 
 #[derive(Clone)]
-<<<<<<< HEAD
-pub struct Service<E, RR> {
-    scheduler: Scheduler<Task>,
-    router: RR,
-    _phantom: PhantomData<E>,
-}
-
-impl<E, RR> Service<E, RR>
-where
-    E: KvEngine,
-    RR: RaftStoreRouter<E>,
-{
-    /// Create a new backup service.
-    pub fn new(scheduler: Scheduler<Task>, router: RR) -> Self {
-        Service {
-            scheduler,
-            router,
-            _phantom: PhantomData,
-=======
 pub struct Service<H: SnapshotBrHandle> {
     scheduler: Scheduler<Task>,
     snap_br_env: disk_snap::Env<H>,
@@ -59,21 +28,13 @@ where
         Service {
             scheduler,
             snap_br_env: env,
->>>>>>> 956c9f377d (snapshot_backup: enhanced prepare stage (#15946))
         }
     }
 }
 
-<<<<<<< HEAD
-impl<E, RR> Backup for Service<E, RR>
-where
-    E: KvEngine,
-    RR: RaftStoreRouter<E>,
-=======
 impl<H> Backup for Service<H>
 where
     H: SnapshotBrHandle + 'static,
->>>>>>> 956c9f377d (snapshot_backup: enhanced prepare stage (#15946))
 {
     /// Check a region whether there is pending admin requests(including pending
     /// merging).
@@ -88,28 +49,6 @@ where
         _req: CheckAdminRequest,
         mut sink: ServerStreamingSink<CheckAdminResponse>,
     ) {
-<<<<<<< HEAD
-        let (tx, rx) = mpsc::unbounded();
-        self.router.broadcast_normal(|| {
-            PeerMsg::SignificantMsg(SignificantMsg::CheckPendingAdmin(tx.clone()))
-        });
-
-        let send_task = async move {
-            let mut s = rx.map(|resp| Ok((resp, WriteFlags::default())));
-            sink.send_all(&mut s).await?;
-            sink.close().await?;
-            Ok(())
-        }
-        .map(|res: Result<()>| match res {
-            Ok(_) => {
-                info!("check admin closed");
-            }
-            Err(e) => {
-                error!("check admin canceled"; "error" => ?e);
-            }
-        });
-        ctx.spawn(send_task);
-=======
         let handle = self.snap_br_env.handle.clone();
         let tokio_handle = self.snap_br_env.get_async_runtime().clone();
         let peer = ctx.peer();
@@ -139,7 +78,6 @@ where
                 }
             }
         });
->>>>>>> 956c9f377d (snapshot_backup: enhanced prepare stage (#15946))
     }
 
     fn backup(
@@ -229,13 +167,7 @@ where
 mod tests {
     use std::{sync::Arc, time::Duration};
 
-<<<<<<< HEAD
-    use engine_rocks::RocksEngine;
     use external_storage_export::make_local_backend;
-    use raftstore::router::RaftStoreBlackHole;
-=======
-    use external_storage::make_local_backend;
->>>>>>> 956c9f377d (snapshot_backup: enhanced prepare stage (#15946))
     use tikv::storage::txn::tests::{must_commit, must_prewrite_put};
     use tikv_util::worker::{dummy_scheduler, ReceiverWrapper};
     use txn_types::TimeStamp;
@@ -274,11 +206,7 @@ mod tests {
         let env = Arc::new(EnvBuilder::new().build());
         let (scheduler, rx) = dummy_scheduler();
         let backup_service =
-<<<<<<< HEAD
-            super::Service::<RocksEngine, RaftStoreBlackHole>::new(scheduler, RaftStoreBlackHole);
-=======
             super::Service::new(scheduler, Env::new(PanicHandle, Default::default(), None));
->>>>>>> 956c9f377d (snapshot_backup: enhanced prepare stage (#15946))
         let builder =
             ServerBuilder::new(env.clone()).register_service(create_backup(backup_service));
         let mut server = builder.bind("127.0.0.1", 0).build().unwrap();

@@ -907,13 +907,8 @@ where
             return;
         }
 
-<<<<<<< HEAD
         let mut resp = IngestResponse::default();
         if let Some(errorpb) = self.check_write_stall() {
-=======
-        let region_id = req.get_context().get_region_id();
-        if let Some(errorpb) = self.check_write_stall(region_id) {
->>>>>>> 956c9f377d (snapshot_backup: enhanced prepare stage (#15946))
             resp.set_error(errorpb);
             ctx.spawn(
                 sink.success(resp)
@@ -960,12 +955,8 @@ where
             return;
         }
 
-<<<<<<< HEAD
         let mut resp = IngestResponse::default();
         if let Some(errorpb) = self.check_write_stall() {
-=======
-        if let Some(errorpb) = self.check_write_stall(req.get_context().get_region_id()) {
->>>>>>> 956c9f377d (snapshot_backup: enhanced prepare stage (#15946))
             resp.set_error(errorpb);
             ctx.spawn(
                 sink.success(resp)

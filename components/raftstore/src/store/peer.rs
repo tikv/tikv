@@ -103,10 +103,6 @@ use crate::{
         peer_storage::HandleSnapshotResult,
         snapshot_backup::{AbortReason, SnapshotBrState},
         txn_ext::LocksStatus,
-<<<<<<< HEAD
-=======
-        unsafe_recovery::{ForceLeaderState, UnsafeRecoveryState},
->>>>>>> 956c9f377d (snapshot_backup: enhanced prepare stage (#15946))
         util::{admin_cmd_epoch_lookup, RegionReadProgress},
         worker::{
             CleanupTask, CompactTask, HeartbeatTask, RaftlogGcTask, ReadDelegate, ReadExecutor,

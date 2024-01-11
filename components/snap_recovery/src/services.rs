@@ -218,13 +218,8 @@ impl<ER: RaftEngine> RecoveryService<ER> {
     // a new wait apply syncer share with all regions,
     // when all region reached the target index, share reference decreased to 0,
     // trigger closure to send finish info back.
-<<<<<<< HEAD
-    pub fn wait_apply_last(router: RaftRouter<RocksEngine, ER>, sender: SyncSender<u64>) {
-        let wait_apply = SnapshotRecoveryWaitApplySyncer::new(0, sender);
-=======
     pub fn wait_apply_last(router: RaftRouter<EK, ER>, sender: Sender<SyncReport>) {
         let wait_apply = SnapshotBrWaitApplySyncer::new(0, sender);
->>>>>>> 956c9f377d (snapshot_backup: enhanced prepare stage (#15946))
         router.broadcast_normal(|| {
             PeerMsg::SignificantMsg(SignificantMsg::SnapshotBrWaitApply(
                 SnapshotBrWaitApplyRequest::relaxed(wait_apply.clone()),

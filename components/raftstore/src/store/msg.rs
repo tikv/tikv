@@ -33,17 +33,11 @@ use super::{
 use crate::store::{
     fsm::apply::{CatchUpLogs, ChangeObserver, TaskRes as ApplyTaskRes},
     metrics::RaftEventDurationType,
-<<<<<<< HEAD
     peer::{
-        SnapshotRecoveryWaitApplySyncer, UnsafeRecoveryExecutePlanSyncer,
-        UnsafeRecoveryFillOutReportSyncer, UnsafeRecoveryForceLeaderSyncer,
-        UnsafeRecoveryWaitApplySyncer,
-=======
-    unsafe_recovery::{
         UnsafeRecoveryExecutePlanSyncer, UnsafeRecoveryFillOutReportSyncer,
         UnsafeRecoveryForceLeaderSyncer, UnsafeRecoveryWaitApplySyncer,
->>>>>>> 956c9f377d (snapshot_backup: enhanced prepare stage (#15946))
     },
+    snapshot_backup::SnapshotBrWaitApplySyncer,
     util::{KeysInfoFormatter, LatencyInspector},
     worker::{Bucket, BucketRange},
     SnapKey,

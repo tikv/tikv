@@ -76,15 +76,6 @@ pub use self::{
     snapshot_backup::SnapshotBrWaitApplySyncer,
     transport::{CasualRouter, ProposalRouter, SignificantRouter, StoreRouter, Transport},
     txn_ext::{LocksStatus, PeerPessimisticLocks, PessimisticLockPair, TxnExt},
-<<<<<<< HEAD
-=======
-    unsafe_recovery::{
-        demote_failed_voters_request, exit_joint_request, ForceLeaderState,
-        UnsafeRecoveryExecutePlanSyncer, UnsafeRecoveryFillOutReportSyncer,
-        UnsafeRecoveryForceLeaderSyncer, UnsafeRecoveryHandle, UnsafeRecoveryState,
-        UnsafeRecoveryWaitApplySyncer,
-    },
->>>>>>> 956c9f377d (snapshot_backup: enhanced prepare stage (#15946))
     util::{RegionReadProgress, RegionReadProgressRegistry},
     worker::{
         metrics::TLS_LOCAL_READ_METRICS, AutoSplitController, Bucket, BucketRange,

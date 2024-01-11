@@ -263,25 +263,6 @@ impl From<Error> for errorpb::Error {
                 e.set_region_id(region_id);
                 errorpb.set_flashback_not_prepared(e);
             }
-<<<<<<< HEAD
-=======
-            Error::IsWitness(region_id) => {
-                let mut e = errorpb::IsWitness::default();
-                e.set_region_id(region_id);
-                errorpb.set_is_witness(e);
-            }
-            Error::MismatchPeerId {
-                request_peer_id,
-                store_peer_id,
-            } => {
-                let mut e = errorpb::MismatchPeerId::default();
-                e.set_request_peer_id(request_peer_id);
-                e.set_store_peer_id(store_peer_id);
-                errorpb.set_mismatch_peer_id(e);
-            }
-            Error::DeadlineExceeded => {
-                set_deadline_exceeded_busy_error(&mut errorpb);
-            }
             Error::Coprocessor(CopError::RequireDelay {
                 after,
                 reason: hint,
@@ -291,7 +272,6 @@ impl From<Error> for errorpb::Error {
                 e.set_reason(hint);
                 errorpb.set_server_is_busy(e);
             }
->>>>>>> 956c9f377d (snapshot_backup: enhanced prepare stage (#15946))
             _ => {}
         };
 
