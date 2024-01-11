@@ -2178,6 +2178,7 @@ dependencies = [
  "hyper",
  "hyper-tls",
  "kvproto",
+ "lazy_static",
  "matches",
  "pin-project",
  "regex",

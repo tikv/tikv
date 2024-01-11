@@ -11,6 +11,7 @@ use cloud::{
 use futures_util::stream::StreamExt;
 use http::Method;
 use hyper::Body;
+use lazy_static::lazy_static;
 use regex::Regex;
 use serde::{Deserialize, Deserializer, Serialize};
 use tame_gcs::error::HttpStatusError;
@@ -26,12 +27,6 @@ const DEFAULT_DATAKEY_SIZE: usize = 32;
 // google kms endpoint.
 const GCP_KMS_ENDPOINT: &str = "https://cloudkms.googleapis.com/v1/";
 
-/// The encryption key_id pattern of gcp ksm:
-///   projects/{project_name}/locations/{location}/keyRings/{key_ring}/
-/// cryptoKeys/{key}
-const KEY_ID_PATTERN: &str =
-    r"^projects/([^/]+)/locations/([^/]+)/keyRings/([^/]+)/cryptoKeys/([^/]+)/?$";
-
 // following are related kms api method names:
 const METHOD_ENCRYPT: &str = "encrypt";
 const METHOD_DECRYPT: &str = "decrypt";
@@ -40,6 +35,17 @@ const METHOD_GEN_RANDOM_BYTES: &str = "generateRandomBytes";
 /// Protection level of the generated random key, always using HSM(Hardware
 /// Security Module).
 const RANDOMIZE_PROTECTION_LEVEL: &str = "HSM";
+
+/// The encryption key_id pattern of gcp ksm:
+///   projects/{project_name}/locations/{location}/keyRings/{key_ring}/
+/// cryptoKeys/{key}
+const KEY_ID_PATTERN: &str =
+    r"^projects/([^/]+)/locations/([^/]+)/keyRings/([^/]+)/cryptoKeys/([^/]+)/?$";
+
+lazy_static! {
+    //The encryption key_id pattern regexp.
+    static ref KEY_ID_REGEX: Regex = Regex::new(KEY_ID_PATTERN).unwrap();
+}
 
 pub struct GcpKms {
     config: Config,
@@ -52,8 +58,7 @@ pub struct GcpKms {
 impl GcpKms {
     pub fn new(mut config: Config) -> Result<Self> {
         assert!(config.gcp.is_some());
-        let re = Regex::new(KEY_ID_PATTERN).unwrap();
-        if !re.is_match(&config.key_id) {
+        if !KEY_ID_REGEX.is_match(&config.key_id) {
             return Err(CloudError::KmsError(KmsError::WrongMasterKey(box_err!(
                 "invalid key: '{}'",
                 &config.key_id
