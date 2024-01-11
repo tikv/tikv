@@ -2380,6 +2380,15 @@ checksum = "d7afe4a420e3fe79967a00898cc1f4db7c8a49a9333a29f8a4bd76a253d5cd04"
 
 [[package]]
 name = "hashbrown"
+version = "0.12.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8a9ee70c43aaf417c914396645a0fa852624801b24ebb7ae78fe8272889ac888"
+dependencies = [
+ "ahash 0.7.4",
+]
+
+[[package]]
+name = "hashbrown"
 version = "0.13.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "43a3c133739dddd0d2990f9a4bdf8eb4b21ef50e4851ca85ab661199821d510e"
@@ -4131,14 +4140,14 @@ dependencies = [
 [[package]]
 name = "raft-engine"
 version = "0.3.0"
-source = "git+https://github.com/tikv/raft-engine.git#39f4db451295dbd8b30db4f94f220182c2c65be9"
+source = "git+https://github.com/tikv/raft-engine.git?branch=tikv-6.5#895ca932caee427a731ee02e898daf9f2a89d348"
 dependencies = [
  "byteorder",
  "crc32fast",
  "crossbeam",
  "fail",
  "fs2",
- "hashbrown 0.13.2",
+ "hashbrown 0.12.3",
  "hex 0.4.2",
  "if_chain",
  "lazy_static",
@@ -4163,13 +4172,45 @@ dependencies = [
 ]
 
 [[package]]
-name = "raft-engine-ctl"
+name = "raft-engine"
 version = "0.3.0"
 source = "git+https://github.com/tikv/raft-engine.git#39f4db451295dbd8b30db4f94f220182c2c65be9"
 dependencies = [
+ "byteorder",
+ "crc32fast",
+ "crossbeam",
+ "fail",
+ "fs2",
+ "hashbrown 0.13.2",
+ "hex 0.4.2",
+ "if_chain",
+ "lazy_static",
+ "libc 0.2.139",
+ "log",
+ "lz4-sys",
+ "nix 0.26.2",
+ "num-derive",
+ "num-traits",
+ "parking_lot 0.12.0",
+ "prometheus",
+ "prometheus-static-metric",
+ "protobuf",
+ "rayon",
+ "scopeguard",
+ "serde",
+ "serde_repr",
+ "strum 0.24.1",
+ "thiserror",
+]
+
+[[package]]
+name = "raft-engine-ctl"
+version = "0.3.0"
+source = "git+https://github.com/tikv/raft-engine.git?branch=tikv-6.5#895ca932caee427a731ee02e898daf9f2a89d348"
+dependencies = [
  "clap 3.1.6",
  "env_logger 0.10.0",
- "raft-engine",
+ "raft-engine 0.3.0 (git+https://github.com/tikv/raft-engine.git?branch=tikv-6.5)",
 ]
 
 [[package]]
@@ -4195,7 +4236,7 @@ dependencies = [
  "online_config",
  "protobuf",
  "raft",
- "raft-engine",
+ "raft-engine 0.3.0 (git+https://github.com/tikv/raft-engine.git?branch=tikv-6.5)",
  "serde",
  "serde_derive",
  "slog",
@@ -6347,7 +6388,7 @@ dependencies = [
  "prometheus",
  "protobuf",
  "raft",
- "raft-engine",
+ "raft-engine 0.3.0 (git+https://github.com/tikv/raft-engine.git)",
  "raft-engine-ctl",
  "raft_log_engine",
  "raftstore",
