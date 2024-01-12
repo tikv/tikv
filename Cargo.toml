@@ -315,9 +315,12 @@ batch-system = { path = "components/batch-system" }
 case_macros = { path = "components/case_macros" }
 causal_ts = { path = "components/causal_ts" }
 cdc = { path = "components/cdc", default-features = false }
-# Do not enable default features that implicitly enables oldtime which is
+# Do not enable default-features because it implicitly enables oldtime which is
 # vulnerable to RUSTSEC-2020-0071, see more in deny.toml.
 chrono = { version = "0.4", default-features = false }
+# Do not enable default-features because it implicitly enables the unsound
+# "atty" crate, see more about RUSTSEC-2021-0145 in deny.toml.
+clap = { version = "2.32", default-features = false, features = ["suggestions", "vec_map"] }
 cloud = { path = "components/cloud" }
 codec = { path = "components/codec" }
 collections = { path = "components/collections" }

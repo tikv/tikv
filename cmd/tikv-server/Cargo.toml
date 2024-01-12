@@ -34,7 +34,7 @@ nortcheck = ["server/nortcheck"]
 pprof-fp = ["tikv/pprof-fp"]
 
 [dependencies]
-clap = "2.32"
+clap = { workspace = true }
 crypto = { workspace = true }
 encryption_export = { workspace = true }
 engine_traits = { workspace = true }

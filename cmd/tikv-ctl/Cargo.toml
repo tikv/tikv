@@ -44,7 +44,7 @@ nortcheck = ["engine_rocks/nortcheck"]
 api_version = { workspace = true }
 backup = { workspace = true }
 cdc = { workspace = true }
-clap = "2.32"
+clap = { workspace = true }
 collections = { workspace = true }
 concurrency_manager = { workspace = true }
 crossbeam = "0.8"
