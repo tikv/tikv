@@ -4,17 +4,35 @@ use tikv_util::box_err;
 
 use crate::RegionCacheMemoryEngine;
 
+type ApplyEncodedEntryCb = Box<dyn FnMut(&str, Bytes, Bytes) -> Result<()> + Send + Sync>;
+
 /// RegionCacheWriteBatch maintains its own in-memory buffer.
-#[derive(Default, Clone, Debug)]
 pub struct RegionCacheWriteBatch {
     buffer: Vec<RegionCacheWriteBatchEntry>,
+    apply_cb: ApplyEncodedEntryCb,
     sequence_number: Option<u64>,
 }
 
+impl std::fmt::Debug for RegionCacheWriteBatch {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RegionCacheWriteBatch")
+            .field("buffer", &self.buffer)
+            .finish()
+    }
+}
 impl RegionCacheWriteBatch {
-    pub fn with_capacity(cap: usize) -> Self {
+    pub fn new(apply_cb: ApplyEncodedEntryCb) -> Self {
+        Self {
+            buffer: Vec::new(),
+            apply_cb,
+            sequence_number: None,
+        }
+    }
+
+    pub fn with_capacity(apply_cb: ApplyEncodedEntryCb, cap: usize) -> Self {
         Self {
             buffer: Vec::with_capacity(cap),
+            apply_cb,
             sequence_number: None,
         }
     }
@@ -31,23 +49,34 @@ impl RegionCacheWriteBatch {
 }
 
 #[derive(Clone, Debug)]
+enum CacheWriteBatchEntryMutation {
+    InsertOrUpdate(Bytes),
+    Delete,
+}
+
+#[derive(Clone, Debug)]
 struct RegionCacheWriteBatchEntry {
     cf: String,
     key: Bytes,
-    mutation: (), // TODO,
+    mutation: CacheWriteBatchEntryMutation,
 }
 
+impl RegionCacheMemoryEngine {
+    fn apply_cb(&self) -> ApplyEncodedEntryCb {
+        Box::new(|_cf, _key, _value| Ok(()))
+    }
+}
 impl WriteBatchExt for RegionCacheMemoryEngine {
     type WriteBatch = RegionCacheWriteBatch;
     // todo: adjust it
     const WRITE_BATCH_MAX_KEYS: usize = 256;
 
     fn write_batch(&self) -> Self::WriteBatch {
-        RegionCacheWriteBatch::default()
+        RegionCacheWriteBatch::new(self.apply_cb())
     }
 
     fn write_batch_with_cap(&self, cap: usize) -> Self::WriteBatch {
-        RegionCacheWriteBatch::with_capacity(cap)
+        RegionCacheWriteBatch::with_capacity(self.apply_cb(), cap)
     }
 }
 
