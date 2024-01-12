@@ -44,7 +44,6 @@ nortcheck = ["engine_rocks/nortcheck"]
 api_version = { workspace = true }
 backup = { workspace = true }
 cdc = { workspace = true }
-chrono = "0.4"
 clap = "2.32"
 collections = { workspace = true }
 concurrency_manager = { workspace = true }
@@ -89,7 +88,7 @@ txn_types = { workspace = true }
 
 [build-dependencies]
 cc = "1.0"
-time = "0.1"
+time = { workspace = true }
 
 [target.'cfg(unix)'.dependencies]
 signal-hook = "0.3"

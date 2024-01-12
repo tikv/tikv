@@ -1594,7 +1594,7 @@ mod tests {
     use futures::AsyncReadExt;
     use kvproto::brpb::{Local, Noop, StorageBackend, StreamBackupTaskInfo};
     use online_config::{ConfigManager, OnlineConfig};
-    use tempdir::TempDir;
+    use tempfile::TempDir;
     use tikv_util::{
         codec::number::NumberEncoder,
         config::ReadableDuration,
@@ -2426,7 +2426,7 @@ mod tests {
 
         let file_name = format!("{}", uuid::Uuid::new_v4());
         let file_path = Path::new(&file_name);
-        let tempfile = TempDir::new("test_est_len_in_flush").unwrap();
+        let tempfile = TempDir::new().unwrap();
         let cfg = make_tempfiles_cfg(tempfile.path());
         let pool = Arc::new(TempFilePool::new(cfg).unwrap());
         let mut f = pool.open_for_write(file_path).unwrap();

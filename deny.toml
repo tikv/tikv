@@ -41,11 +41,21 @@ deny = [
 multiple-versions = "allow"
 
 [advisories]
-vulnerability = "allow" # FIXME: Deny it.
+vulnerability = "deny"
 unmaintained = "allow" # FIXME: Deny it.
 unsound = "allow" # FIXME: Deny it.
 yanked = "allow" # FIXME: Deny it.
 notice = "warn"
+ignore = [
+    # Ignore time 0.1 RUSTSEC-2020-0071 as 1) we have taken measures (see
+    # clippy.toml) to mitigate the issue and 2) time 0.1 has no fix availble.
+    #
+    # Note: Upgrading to time 0.3 do fix the issue but it's an imcompatible
+    # versoin which removes some necessary APIs (`time::precise_time_ns`) that
+    # requiresd by TiKV.
+    # See https://github.com/time-rs/time/blob/8067540c/CHANGELOG.md#L703
+    "RUSTSEC-2020-0071",
+]
 
 [licenses]
 unlicensed = "allow" # FIXME: Deny it.

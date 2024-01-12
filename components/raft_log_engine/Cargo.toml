@@ -24,7 +24,6 @@ serde_derive = "1.0"
 slog = { workspace = true }
 slog-global = { workspace = true }
 tikv_util = { workspace = true }
-time = "0.1"
 tracker = { workspace = true }
 
 [dev-dependencies]
