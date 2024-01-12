@@ -29,7 +29,7 @@ fn test_merge() {
     // Manually "apply" the prepare merge on region epoch.
     source.mut_region_epoch().set_conf_ver(2);
     source.mut_region_epoch().set_version(3);
-    call.wait_apply([&source, &target].into_iter().cloned());
+    call.wait_apply([&source, &target].iter().cloned().cloned());
     let source = suite.cluster.get_region(b"a");
     let target = suite.cluster.get_region(b"z");
     assert_ne!(source.id, target.id);

@@ -2,7 +2,6 @@
 
 use std::{collections::HashSet, time::Duration};
 
-use futures::executor::block_on;
 use kvproto::raft_cmdpb::{CmdType, PutRequest, RaftCmdRequest, Request};
 use raft::prelude::MessageType;
 use raftstore::store::Callback;
@@ -28,12 +27,12 @@ fn test_conf_change() {
     let mut suite = Suite::new(4);
     let the_region = suite.cluster.get_region(b"");
     let last_peer = the_region.peers.last().unwrap();
-    let res = block_on(
-        suite
-            .cluster
-            .async_remove_peer(the_region.get_id(), last_peer.clone())
-            .unwrap(),
-    );
+    let res = suite
+        .cluster
+        .async_remove_peer(the_region.get_id(), last_peer.clone())
+        .unwrap()
+        .recv()
+        .unwrap();
     assert_success(&res);
     eventually(Duration::from_millis(100), Duration::from_secs(2), || {
         let r = suite.cluster.get_region(b"");
@@ -49,21 +48,23 @@ fn test_conf_change() {
     // Make sure the change has been synchronized to all stores.
     std::thread::sleep(Duration::from_millis(500));
     let the_region = suite.cluster.get_region(b"");
-    let res2 = block_on(
-        suite
-            .cluster
-            .async_remove_peer(the_region.get_id(), last_peer.clone())
-            .unwrap(),
-    );
+    let res2 = suite
+        .cluster
+        .async_remove_peer(the_region.get_id(), last_peer.clone())
+        .unwrap()
+        .recv()
+        .unwrap();
+
     assert_failure_because(&res2, "rejected by coprocessor");
     let last_peer = the_region.peers.last().unwrap();
     calls.into_iter().for_each(|c| assert!(c.send_finalize()));
-    let res3 = block_on(
-        suite
-            .cluster
-            .async_remove_peer(the_region.get_id(), last_peer.clone())
-            .unwrap(),
-    );
+    let res3 = suite
+        .cluster
+        .async_remove_peer(the_region.get_id(), last_peer.clone())
+        .unwrap()
+        .recv()
+        .unwrap();
+
     assert_success(&res3);
     eventually(Duration::from_millis(100), Duration::from_secs(2), || {
         let r = suite.cluster.get_region(b"");
@@ -184,7 +185,7 @@ fn test_wait_apply() {
         let v = suite.cluster.must_get(&k);
         // Due to we have wait to it applied, this write result must be observable.
         assert_eq!(v.as_deref(), Some(b"meow?".as_slice()), "{res:?}");
-        assert!(removed, "{regions_ok:?} {res:?}");
+        assert!(removed, "{:?} {:?}", regions_ok, res);
     }
 
     suite.cluster.clear_send_filters();
