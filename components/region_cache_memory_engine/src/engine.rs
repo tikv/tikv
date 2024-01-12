@@ -1753,8 +1753,7 @@ mod tests {
     }
 
     #[test]
-    fn test_eviction() {
-        // case 1: eviction when there's no snapshot
+    fn test_eviction_without_snapshot() {
         {
             let engine = RegionCacheMemoryEngine::default();
             engine.new_region(1);
@@ -1781,8 +1780,10 @@ mod tests {
                 assert!(removed.contains(internal_key.as_slice()));
             }
         }
+    }
 
-        // case 2: eviction when there are some snapshots
+    #[test]
+    fn test_eviction_with_snapshot() {
         {
             let engine = RegionCacheMemoryEngine::default();
             engine.new_region(1);
