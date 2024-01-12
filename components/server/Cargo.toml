@@ -38,7 +38,7 @@ backup = { workspace = true }
 backup-stream = { workspace = true }
 causal_ts = { workspace = true }
 cdc = { workspace = true }
-chrono = "0.4"
+chrono = { workspace = true }
 clap = "2.32"
 collections = { workspace = true }
 concurrency_manager = { workspace = true }

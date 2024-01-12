@@ -52,4 +52,4 @@ tracing-subscriber = { version = "0.3.17", default-features = false, features = 
 
 [build-dependencies]
 cc = "1.0"
-time = "0.1"
+time = { workspace = true }
