@@ -381,7 +381,7 @@ tracker = { path = "components/tracker" }
 txn_types = { path = "components/txn_types" }
 # External libs
 raft = { version = "0.7.0", default-features = false, features = ["protobuf-codec"] }
-grpcio = { version = "0.10.4", default-features = false, features = ["openssl", "protobuf-codec", "nightly"] }
+grpcio = { version = "0.10.4", default-features = false, features = ["openssl-vendored", "protobuf-codec", "nightly"] }
 grpcio-health = { version = "0.10.4", default-features = false, features = ["protobuf-codec"] }
 tipb = { git = "https://github.com/pingcap/tipb.git" }
 kvproto = { git = "https://github.com/pingcap/kvproto.git" }
