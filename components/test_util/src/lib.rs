@@ -122,7 +122,7 @@ pub fn temp_dir(prefix: impl Into<Option<&'static str>>, prefer_mem: bool) -> te
 
 /// Compare two structs and provide more helpful debug difference.
 #[track_caller]
-pub fn assert_eq_debug<C: PartialEq + Debug>(lhs: &C, rhs: &C) {
+pub fn assert_eq_debug<C: PartialEq + std::fmt::Debug>(lhs: &C, rhs: &C) {
     if lhs == rhs {
         return;
     }

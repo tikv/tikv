@@ -31,7 +31,7 @@ use raftstore::store::{
     },
     SnapshotBrWaitApplySyncer,
 };
-use tikv_util::{sys::thread::ThreadBuildWrapper, warn, Either};
+use tikv_util::{warn, Either};
 use tokio::{
     runtime::{Handle, Runtime},
     sync::oneshot,
@@ -195,7 +195,6 @@ impl<SR: SnapshotBrHandle> Env<SR> {
         let rt = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(DEFAULT_RT_THREADS)
             .enable_all()
-            .with_sys_hooks()
             .thread_name("snap_br_backup_prepare")
             .build()
             .unwrap();

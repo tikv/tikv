@@ -7,7 +7,6 @@ use std::{
 };
 
 use backup::disk_snap::Env as BEnv;
-use engine_rocks::RocksEngine as KTE;
 use futures_executor::block_on;
 use futures_util::{
     sink::SinkExt,
@@ -40,7 +39,7 @@ pub struct Node {
 }
 
 pub struct Suite {
-    pub cluster: Cluster<KTE, ServerCluster<KTE>>,
+    pub cluster: Cluster<ServerCluster>,
     pub nodes: HashMap<u64, Node>,
     grpc_env: Arc<Environment>,
 }
@@ -170,8 +169,8 @@ impl PrepareBackup {
             while !regions.is_empty() {
                 let resp = self.rx.next().await.unwrap().unwrap();
                 assert_eq!(resp.ty, PrepareSnapshotBackupEventType::WaitApplyDone);
-                assert!(!resp.has_error(), "{resp:?}");
-                assert!(regions.remove(&resp.get_region().id), "{regions:?}");
+                assert!(!resp.has_error(), "{:?}", resp);
+                assert!(regions.remove(&resp.get_region().id), "{:?}", regions);
             }
         });
     }
@@ -214,7 +213,7 @@ impl PrepareBackup {
 
 #[track_caller]
 pub fn must_wait_apply_success(res: &PrepareSnapshotBackupResponse) -> u64 {
-    assert!(!res.has_error(), "{res:?}");
+    assert!(!res.has_error(), "{:?}", res);
     assert_eq!(res.ty, PrepareSnapshotBackupEventType::WaitApplyDone);
     res.get_region().id
 }

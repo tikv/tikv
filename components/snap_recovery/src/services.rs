@@ -18,7 +18,7 @@ use engine_rocks::{
     util::get_cf_handle,
     RocksEngine,
 };
-use engine_traits::{CfNamesExt, CfOptionsExt, Engines, Peekable, RaftEngine};
+use engine_traits::{CfNamesExt, CfOptionsExt, Engines, KvEngine, Peekable, RaftEngine};
 use futures::{
     channel::mpsc,
     executor::{ThreadPool, ThreadPoolBuilder},
@@ -218,7 +218,7 @@ impl<ER: RaftEngine> RecoveryService<ER> {
     // a new wait apply syncer share with all regions,
     // when all region reached the target index, share reference decreased to 0,
     // trigger closure to send finish info back.
-    pub fn wait_apply_last(router: RaftRouter<EK, ER>, sender: Sender<SyncReport>) {
+    pub fn wait_apply_last<EK: KvEngine>(router: RaftRouter<EK, ER>, sender: Sender<SyncReport>) {
         let wait_apply = SnapshotBrWaitApplySyncer::new(0, sender);
         router.broadcast_normal(|| {
             PeerMsg::SignificantMsg(SignificantMsg::SnapshotBrWaitApply(
