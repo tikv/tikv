@@ -1,6 +1,6 @@
 [package]
 name = "tikv"
-version = "7.6.0-alpha"
+version = "8.0.0-alpha"
 authors = ["The TiKV Authors"]
 description = "A distributed transactional key-value database powered by Rust and Raft"
 license = "Apache-2.0"
@@ -199,9 +199,8 @@ rusoto_kms = { git = "https://github.com/tikv/rusoto", branch = "gh1482-s3-addr-
 rusoto_mock = { git = "https://github.com/tikv/rusoto", branch = "gh1482-s3-addr-styles" }
 rusoto_s3 = { git = "https://github.com/tikv/rusoto", branch = "gh1482-s3-addr-styles" }
 rusoto_sts = { git = "https://github.com/tikv/rusoto", branch = "gh1482-s3-addr-styles" }
-
 # NOTICE: use openssl for signature to support fips 140
-tame-oauth = { git = "https://github.com/tikv/tame-oauth", branch = "fips" }
+tame-oauth = { git = "https://github.com/tikv/tame-oauth", branch = "fips-0.9" }
 
 snappy-sys = { git = "https://github.com/busyjay/rust-snappy.git", branch = "static-link" }
 
