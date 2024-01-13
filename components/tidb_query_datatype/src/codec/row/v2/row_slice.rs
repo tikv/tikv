@@ -233,10 +233,11 @@ impl RowSlice<'_> {
             RowSlice::Big {
                 offsets, values, ..
             } => {
-                if non_null_col_num == 0 {
-                    return values.slice;
-                }
-                let last_slice_idx = offsets.get(non_null_col_num - 1).unwrap() as usize;
+                let last_slice_idx = if non_null_col_num == 0 {
+                    0
+                } else {
+                    offsets.get(non_null_col_num - 1).unwrap() as usize
+                };
                 let slice = values.slice;
                 *values = LeBytes::new(&slice[..last_slice_idx]);
                 &slice[last_slice_idx..]
@@ -244,10 +245,11 @@ impl RowSlice<'_> {
             RowSlice::Small {
                 offsets, values, ..
             } => {
-                if non_null_col_num == 0 {
-                    return values.slice;
-                }
-                let last_slice_idx = offsets.get(non_null_col_num - 1).unwrap() as usize;
+                let last_slice_idx = if non_null_col_num == 0 {
+                    0
+                } else {
+                    offsets.get(non_null_col_num - 1).unwrap() as usize
+                };
                 let slice = values.slice;
                 *values = LeBytes::new(&slice[..last_slice_idx]);
                 &slice[last_slice_idx..]
