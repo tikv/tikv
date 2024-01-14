@@ -12,6 +12,7 @@ mimalloc = ["tikv/mimalloc"]
 snmalloc = ["tikv/snmalloc"]
 portable = ["tikv/portable"]
 sse = ["tikv/sse"]
+memory-engine = []
 mem-profiling = ["tikv/mem-profiling"]
 failpoints = ["tikv/failpoints"]
 cloud-aws = ["encryption_export/cloud-aws"]
@@ -38,7 +39,7 @@ backup = { workspace = true }
 backup-stream = { workspace = true }
 causal_ts = { workspace = true }
 cdc = { workspace = true }
-chrono = "0.4"
+chrono = { workspace = true }
 clap = "2.32"
 collections = { workspace = true }
 concurrency_manager = { workspace = true }

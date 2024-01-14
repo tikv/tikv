@@ -7,4 +7,6 @@
 
 mod engine;
 pub mod keys;
+mod write_batch;
 pub use engine::RegionCacheMemoryEngine;
+pub use write_batch::RegionCacheWriteBatch;

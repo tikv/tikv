@@ -34,7 +34,7 @@ use kvproto::{
 use pd_client::PdClient;
 use raftstore::{router::CdcRaftRouter, RegionInfoAccessor};
 use resolved_ts::LeadershipResolver;
-use tempdir::TempDir;
+use tempfile::TempDir;
 use test_pd_client::TestPdClient;
 use test_raftstore::{new_server_cluster, Cluster, ServerCluster};
 use test_util::retry;
@@ -187,8 +187,8 @@ impl SuiteBuilder {
             env: Arc::new(grpcio::Environment::new(1)),
             cluster,
 
-            temp_files: TempDir::new("temp").unwrap(),
-            flushed_files: TempDir::new("flush").unwrap(),
+            temp_files: TempDir::new().unwrap(),
+            flushed_files: TempDir::new().unwrap(),
             case_name: case,
         };
         for id in 1..=(n as u64) {
