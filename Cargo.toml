@@ -1,6 +1,6 @@
 [package]
 name = "tikv"
-version = "7.6.0-alpha"
+version = "8.0.0-alpha"
 authors = ["The TiKV Authors"]
 description = "A distributed transactional key-value database powered by Rust and Raft"
 license = "Apache-2.0"
@@ -60,7 +60,7 @@ batch-system = { workspace = true }
 byteorder = "1.2"
 case_macros = { workspace = true }
 causal_ts = { workspace = true }
-chrono = "0.4"
+chrono = { workspace = true }
 codec = { workspace = true }
 collections = { workspace = true }
 concurrency_manager = { workspace = true }
@@ -158,7 +158,7 @@ tidb_query_expr = { workspace = true }
 tikv_alloc = { workspace = true }
 tikv_kv = { workspace = true }
 tikv_util = { workspace = true }
-time = "0.1"
+time = { workspace = true }
 tipb = { workspace = true }
 tokio = { version = "1.17", features = ["full"] }
 tokio-openssl = "0.6"
@@ -199,9 +199,8 @@ rusoto_kms = { git = "https://github.com/tikv/rusoto", branch = "gh1482-s3-addr-
 rusoto_mock = { git = "https://github.com/tikv/rusoto", branch = "gh1482-s3-addr-styles" }
 rusoto_s3 = { git = "https://github.com/tikv/rusoto", branch = "gh1482-s3-addr-styles" }
 rusoto_sts = { git = "https://github.com/tikv/rusoto", branch = "gh1482-s3-addr-styles" }
-
 # NOTICE: use openssl for signature to support fips 140
-tame-oauth = { git = "https://github.com/tikv/tame-oauth", branch = "fips" }
+tame-oauth = { git = "https://github.com/tikv/tame-oauth", branch = "fips-0.9" }
 
 snappy-sys = { git = "https://github.com/busyjay/rust-snappy.git", branch = "static-link" }
 
@@ -316,6 +315,9 @@ batch-system = { path = "components/batch-system" }
 case_macros = { path = "components/case_macros" }
 causal_ts = { path = "components/causal_ts" }
 cdc = { path = "components/cdc", default-features = false }
+# Do not enable default features that implicitly enables oldtime which is
+# vulnerable to RUSTSEC-2020-0071, see more in deny.toml.
+chrono = { version = "0.4", default-features = false }
 cloud = { path = "components/cloud" }
 codec = { path = "components/codec" }
 collections = { path = "components/collections" }
@@ -377,6 +379,7 @@ tikv_alloc = { path = "components/tikv_alloc" }
 tikv_kv = { path = "components/tikv_kv", default-features = false }
 tikv_util = { path = "components/tikv_util" }
 tipb_helper = { path = "components/tipb_helper" }
+time = { version = "0.1" }
 tracker = { path = "components/tracker" }
 txn_types = { path = "components/txn_types" }
 # External libs
