@@ -2055,6 +2055,47 @@ fn test_buckets() {
 }
 
 #[test]
+<<<<<<< HEAD
+=======
+fn test_select_v2_format_with_checksum() {
+    let data = vec![
+        (1, Some("name:0"), 2),
+        (2, Some("name:4"), 3),
+        (4, Some("name:3"), 1),
+        (5, Some("name:1"), 4),
+        (9, Some("name:8"), 7),
+        (10, Some("name:6"), 8),
+    ];
+
+    let product = ProductTable::new();
+    for extra_checksum in [None, Some(132423)] {
+        // The row value encoded with checksum bytes should have no impact on cop task
+        // processing and related result chunk filling.
+        let (mut store, endpoint) =
+            init_data_with_commit_v2_checksum(&product, &data, true, extra_checksum);
+        store.insert_all_null_row(&product, Context::default(), true, extra_checksum);
+        let req = DagSelect::from(&product).build();
+        let mut resp = handle_select(&endpoint, req);
+        let mut spliter = DagChunkSpliter::new(resp.take_chunks().into(), 3);
+        let first_row = spliter.next().unwrap();
+        assert_eq!(first_row[0], Datum::I64(0));
+        assert_eq!(first_row[1], Datum::Null);
+        assert_eq!(first_row[2], Datum::Null);
+        for (row, (id, name, cnt)) in spliter.zip(data.clone()) {
+            let name_datum = name.map(|s| s.as_bytes()).into();
+            let expected_encoded = datum::encode_value(
+                &mut EvalContext::default(),
+                &[Datum::I64(id), name_datum, cnt.into()],
+            )
+            .unwrap();
+            let result_encoded = datum::encode_value(&mut EvalContext::default(), &row).unwrap();
+            assert_eq!(result_encoded, &*expected_encoded);
+        }
+    }
+}
+
+#[test]
+>>>>>>> 67c7fa1d7d (cop: fix the scan panic when checksum is enabled (#16373))
 fn test_batch_request() {
     let data = vec![
         (1, Some("name:0"), 2),

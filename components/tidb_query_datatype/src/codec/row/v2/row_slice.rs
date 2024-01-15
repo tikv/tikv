@@ -166,6 +166,57 @@ impl RowSlice<'_> {
             Ok(None)
         }
     }
+<<<<<<< HEAD
+=======
+
+    #[inline]
+    // Return the checksum byte slice, remove it from the `values` field of
+    // `RowSlice`.
+    pub fn cut_checksum_bytes(&mut self, non_null_col_num: usize) -> &[u8] {
+        match self {
+            RowSlice::Big {
+                offsets, values, ..
+            } => {
+                let last_slice_idx = if non_null_col_num == 0 {
+                    0
+                } else {
+                    offsets.get(non_null_col_num - 1).unwrap() as usize
+                };
+                let slice = values.slice;
+                *values = LeBytes::new(&slice[..last_slice_idx]);
+                &slice[last_slice_idx..]
+            }
+            RowSlice::Small {
+                offsets, values, ..
+            } => {
+                let last_slice_idx = if non_null_col_num == 0 {
+                    0
+                } else {
+                    offsets.get(non_null_col_num - 1).unwrap() as usize
+                };
+                let slice = values.slice;
+                *values = LeBytes::new(&slice[..last_slice_idx]);
+                &slice[last_slice_idx..]
+            }
+        }
+    }
+
+    #[inline]
+    pub fn get_checksum(&self) -> Option<Checksum> {
+        match self {
+            RowSlice::Big { checksum, .. } => *checksum,
+            RowSlice::Small { checksum, .. } => *checksum,
+        }
+    }
+
+    #[inline]
+    fn set_checksum(&mut self, checksum_input: Option<Checksum>) {
+        match self {
+            RowSlice::Big { checksum, .. } => *checksum = checksum_input,
+            RowSlice::Small { checksum, .. } => *checksum = checksum_input,
+        }
+    }
+>>>>>>> 67c7fa1d7d (cop: fix the scan panic when checksum is enabled (#16373))
 }
 
 /// Decodes `len` number of ints from `buf` in little endian
