@@ -23,7 +23,7 @@ use crate::keys::{
     VALUE_TYPE_FOR_SEEK, VALUE_TYPE_FOR_SEEK_FOR_PREV,
 };
 
-fn cf_to_id(cf: &str) -> usize {
+pub(crate) fn cf_to_id(cf: &str) -> usize {
     match cf {
         CF_DEFAULT => 0,
         CF_LOCK => 1,
@@ -38,7 +38,7 @@ fn cf_to_id(cf: &str) -> usize {
 /// with a formal implementation.
 #[derive(Clone)]
 pub struct RegionMemoryEngine {
-    data: [Arc<Skiplist<InternalKeyComparator>>; 3],
+    pub(crate) data: [Arc<Skiplist<InternalKeyComparator>>; 3],
 }
 
 impl RegionMemoryEngine {

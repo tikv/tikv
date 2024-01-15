@@ -3,6 +3,7 @@ use engine_traits::{Mutable, Result, WriteBatch, WriteBatchExt, WriteOptions, CF
 use tikv_util::box_err;
 
 use crate::{
+    engine::{cf_to_id, RegionMemoryEngine},
     keys::{encode_key, ValueType},
     RegionCacheMemoryEngine,
 };
@@ -104,7 +105,7 @@ impl RegionCacheWriteBatchEntry {
         Self {
             cf: cf.to_owned(),
             key: Bytes::copy_from_slice(key),
-            mutation: CacheWriteBatchEntryMutation::PutValue(Bytes::copy_from_slice(key)),
+            mutation: CacheWriteBatchEntryMutation::PutValue(Bytes::copy_from_slice(value)),
         }
     }
 
@@ -112,7 +113,7 @@ impl RegionCacheWriteBatchEntry {
         Self {
             cf: cf.to_owned(),
             key: Bytes::copy_from_slice(key),
-            mutation: CacheWriteBatchEntryMutation::Deletion(Bytes::copy_from_slice(key)),
+            mutation: CacheWriteBatchEntryMutation::Deletion,
         }
     }
 
@@ -131,6 +132,18 @@ impl RegionCacheMemoryEngine {
         Box::new(|_cf, _key, _value| Ok(()))
     }
 }
+
+impl From<&RegionMemoryEngine> for RegionCacheWriteBatch {
+    fn from(engine: &RegionMemoryEngine) -> Self {
+        let engine_clone = engine.clone();
+        let apply_cb = Box::new(move |cf: &'_ str, key, value| {
+            engine_clone.data[cf_to_id(cf)].put(key, value);
+            Ok(())
+        });
+        RegionCacheWriteBatch::new(apply_cb)
+    }
+}
+
 impl WriteBatchExt for RegionCacheMemoryEngine {
     type WriteBatch = RegionCacheWriteBatch;
     // todo: adjust it
@@ -148,7 +161,7 @@ impl WriteBatchExt for RegionCacheMemoryEngine {
 impl WriteBatch for RegionCacheWriteBatch {
     fn write_opt(&mut self, _: &WriteOptions) -> Result<u64> {
         self.sequence_number
-            .map(|seq| self.write_impl(seq).and_then(|()| Ok(seq)))
+            .map(|seq| self.write_impl(seq).map(|()| seq))
             .transpose()
             .map(|o| o.ok_or_else(|| box_err!("sequence_number must be set!")))?
     }
@@ -231,5 +244,24 @@ impl Mutable for RegionCacheWriteBatch {
 
     fn delete_range_cf(&mut self, _: &str, _: &[u8], _: &[u8]) -> Result<()> {
         unimplemented!()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use engine_traits::WriteBatch;
+
+    use super::*;
+
+    #[test]
+    fn test_put_one_kv() {
+        let engine = RegionMemoryEngine::default();
+        let mut wb = RegionCacheWriteBatch::from(&engine);
+        wb.put(b"aaa", b"bbb").unwrap();
+        wb.set_sequence_number(1).unwrap();
+        assert_eq!(wb.write().unwrap(), 1);
+        let sl = engine.data[cf_to_id(CF_DEFAULT)].clone();
+        let actual = sl.get(&encode_key(b"aaa", 1, ValueType::Value)).unwrap();
+        assert_eq!(&b"bbb"[..], actual)
     }
 }
