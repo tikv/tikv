@@ -67,6 +67,7 @@ use raftstore::{
             RaftBatchSystem, RaftRouter, StoreMeta, MULTI_FILES_SNAPSHOT_FEATURE, PENDING_MSG_CAP,
         },
         memory::MEMTRACE_ROOT as MEMTRACE_RAFTSTORE,
+        snapshot_backup::PrepareDiskSnapObserver,
         AutoSplitController, CheckLeaderRunner, LocalReader, SnapManager, SnapManagerBuilder,
         SplitCheckRunner, SplitConfigManager, StoreMetaDelegate,
     },
@@ -220,28 +221,32 @@ pub fn run_tikv(
 
     dispatch_api_version!(config.storage.api_version(), {
         if !config.raft_engine.enable {
-            if config.region_cache_memory_limit == ReadableSize(0) {
-                run_impl::<RocksEngine, RocksEngine, API>(
+            if cfg!(feature = "memory-engine")
+                && config.region_cache_memory_limit != ReadableSize(0)
+            {
+                run_impl::<HybridEngine<RocksEngine, RegionCacheMemoryEngine>, RocksEngine, API>(
                     config,
                     service_event_tx,
                     service_event_rx,
                 )
             } else {
-                run_impl::<HybridEngine<RocksEngine, RangeCacheMemoryEngine>, RocksEngine, API>(
+                run_impl::<RocksEngine, RocksEngine, API>(
                     config,
                     service_event_tx,
                     service_event_rx,
                 )
             }
         } else {
-            if config.region_cache_memory_limit == ReadableSize(0) {
-                run_impl::<RocksEngine, RaftLogEngine, API>(
+            if cfg!(feature = "memory-engine")
+                && config.region_cache_memory_limit != ReadableSize(0)
+            {
+                run_impl::<HybridEngine<RocksEngine, RegionCacheMemoryEngine>, RaftLogEngine, API>(
                     config,
                     service_event_tx,
                     service_event_rx,
                 )
             } else {
-                run_impl::<HybridEngine<RocksEngine, RangeCacheMemoryEngine>, RaftLogEngine, API>(
+                run_impl::<RocksEngine, RaftLogEngine, API>(
                     config,
                     service_event_tx,
                     service_event_rx,
@@ -287,6 +292,7 @@ where
     br_snap_recovery_mode: bool, // use for br snapshot recovery
     resolved_ts_scheduler: Option<Scheduler<Task>>,
     grpc_service_mgr: GrpcServiceManager,
+    snap_br_rejector: Option<Arc<PrepareDiskSnapObserver>>,
 }
 
 struct TikvEngines<EK: KvEngine, ER: RaftEngine> {
@@ -477,6 +483,7 @@ where
             br_snap_recovery_mode: is_recovering_marked,
             resolved_ts_scheduler: None,
             grpc_service_mgr: GrpcServiceManager::new(tx),
+            snap_br_rejector: None,
         }
     }
 
@@ -859,6 +866,10 @@ where
             )),
         );
 
+        let rejector = Arc::new(PrepareDiskSnapObserver::default());
+        rejector.register_to(self.coprocessor_host.as_mut().unwrap());
+        self.snap_br_rejector = Some(rejector);
+
         // Start backup stream
         let backup_stream_scheduler = if self.core.config.log_backup.enable {
             // Create backup stream.
@@ -1207,16 +1218,6 @@ where
         // Backup service.
         let mut backup_worker = Box::new(self.core.background_worker.lazy_build("backup-endpoint"));
         let backup_scheduler = backup_worker.scheduler();
-        let backup_service =
-            backup::Service::<EK, ER>::with_router(backup_scheduler, self.router.clone());
-        if servers
-            .server
-            .register_service(create_backup(backup_service))
-            .is_some()
-        {
-            fatal!("failed to register backup service");
-        }
-
         let backup_endpoint = backup::Endpoint::new(
             servers.node.id(),
             engines.engine.clone(),
@@ -1228,6 +1229,20 @@ where
             self.causal_ts_provider.clone(),
             self.resource_manager.clone(),
         );
+        let env = backup::disk_snap::Env::new(
+            Arc::new(Mutex::new(self.router.clone())),
+            self.snap_br_rejector.take().unwrap(),
+            Some(backup_endpoint.io_pool_handle().clone()),
+        );
+        let backup_service = backup::Service::new(backup_scheduler, env);
+        if servers
+            .server
+            .register_service(create_backup(backup_service))
+            .is_some()
+        {
+            fatal!("failed to register backup service");
+        }
+
         self.cfg_controller.as_mut().unwrap().register(
             tikv::config::Module::Backup,
             Box::new(backup_endpoint.get_config_manager()),

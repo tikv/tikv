@@ -29,14 +29,14 @@ tidb_query_codegen = { workspace = true }
 tidb_query_common = { workspace = true }
 tidb_query_datatype = { workspace = true }
 tikv_util = { workspace = true }
-time = "0.1"
+time = { workspace = true }
 tipb = { workspace = true }
 twoway = "0.2.0"
 uuid = { version = "0.8.1", features = ["v4"] }
 
 [dev-dependencies]
 bstr = "0.2.8"
-chrono = "0.4"
+chrono = { workspace = true }
 panic_hook = { workspace = true }
 profiler = { workspace = true }
 tipb_helper = { workspace = true }

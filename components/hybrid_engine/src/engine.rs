@@ -1,8 +1,8 @@
 // Copyright 2023 TiKV Project Authors. Licensed under Apache-2.0.
 
 use engine_traits::{
-    KvEngine, Peekable, ReadOptions, RangeCacheEngine, Result, SnapshotContext, SnapshotMiscExt,
-    SyncMutable,
+    KvEngine, Peekable, RangeCacheEngine, ReadOptions, Result, SnapshotContext, SnapshotMiscExt,
+    SyncMutable, WriteBatchExt,
 };
 
 use crate::snapshot::HybridEngineSnapshot;
@@ -63,17 +63,15 @@ impl<EK, EC> KvEngine for HybridEngine<EK, EC>
 where
     EK: KvEngine,
     EC: RangeCacheEngine,
+    HybridEngine<EK, EC>: WriteBatchExt,
 {
     type Snapshot = HybridEngineSnapshot<EK, EC>;
 
     fn snapshot(&self, ctx: Option<SnapshotContext>) -> Self::Snapshot {
         let disk_snap = self.disk_engine.snapshot(ctx.clone());
         let region_cache_snap = if let Some(ctx) = ctx {
-            self.region_cache_engine.snapshot(
-                ctx.region_id,
-                ctx.read_ts,
-                disk_snap.sequence_number(),
-            )
+            self.region_cache_engine
+                .snapshot(ctx.range, ctx.read_ts, disk_snap.sequence_number())
         } else {
             None
         };
@@ -149,8 +147,10 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use engine_rocks::util::new_engine;
-    use engine_traits::{KvEngine, SnapshotContext, CF_DEFAULT, CF_LOCK, CF_WRITE};
+    use engine_traits::{KvEngine, SnapshotContext, CF_DEFAULT, CF_LOCK, CF_WRITE, CacheRange};
     use region_cache_memory_engine::RangeCacheMemoryEngine;
     use tempfile::Builder;
 
@@ -164,12 +164,13 @@ mod tests {
             &[CF_DEFAULT, CF_LOCK, CF_WRITE],
         )
         .unwrap();
-        let memory_engine = RangeCacheMemoryEngine::default();
-        memory_engine.new_region(1);
+        let memory_engine = RangeCacheMemoryEngine::new(Arc::default());
+        let range = CacheRange::new(b"k00".to_vec(), b"k10".to_vec());
+        memory_engine.new_range(range.clone());
         {
             let mut core = memory_engine.core().lock().unwrap();
-            core.mut_region_meta(1).unwrap().set_can_read(true);
-            core.mut_region_meta(1).unwrap().set_safe_ts(10);
+            core.mut_range_manager().set_range_readable(&range, true);
+            core.mut_range_manager().set_safe_ts(&range, 10);
         }
 
         let hybrid_engine = HybridEngine::new(disk_engine, memory_engine.clone());
@@ -178,21 +179,21 @@ mod tests {
 
         let mut snap_ctx = SnapshotContext {
             read_ts: 15,
-            region_id: 1,
+            range: range.clone(),
         };
         let s = hybrid_engine.snapshot(Some(snap_ctx.clone()));
         assert!(s.region_cache_snapshot_available());
 
         {
             let mut core = memory_engine.core().lock().unwrap();
-            core.mut_region_meta(1).unwrap().set_can_read(false);
+            core.mut_range_manager().set_range_readable(&range, false);
         }
         let s = hybrid_engine.snapshot(Some(snap_ctx.clone()));
         assert!(!s.region_cache_snapshot_available());
 
         {
             let mut core = memory_engine.core().lock().unwrap();
-            core.mut_region_meta(1).unwrap().set_can_read(true);
+            core.mut_range_manager().set_range_readable(&range, true);
         }
         snap_ctx.read_ts = 5;
         let s = hybrid_engine.snapshot(Some(snap_ctx));

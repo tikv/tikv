@@ -71,7 +71,7 @@ impl RangeManager {
         }
     }
 
-    pub(crate) fn set_range_readable(&mut self, range: &CacheRange, set_readable: bool) {
+    pub fn set_range_readable(&mut self, range: &CacheRange, set_readable: bool) {
         let range_key = self
             .ranges
             .keys()
@@ -82,7 +82,7 @@ impl RangeManager {
         meta.set_range_readable(range, set_readable);
     }
 
-    pub(crate) fn set_safe_ts(&mut self, range: &CacheRange, safe_ts: u64) -> bool {
+    pub fn set_safe_ts(&mut self, range: &CacheRange, safe_ts: u64) -> bool {
         if let Some(meta) = self.ranges.get_mut(range) {
             meta.safe_ts = safe_ts;
             true
