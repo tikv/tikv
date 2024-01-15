@@ -696,7 +696,7 @@ impl<'a> PartialEq<&'a [u8]> for RegionCacheDbVector {
 
 #[cfg(test)]
 mod tests {
-    use core::{ops::Range, slice::SlicePattern};
+    use core::ops::Range;
     use std::{iter, iter::StepBy, ops::Deref, sync::Arc};
 
     use bytes::{BufMut, Bytes};

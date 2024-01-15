@@ -3,7 +3,7 @@
 use std::fmt::{self, Debug, Formatter};
 
 use engine_traits::{
-    CfNamesExt, IterOptions, Iterable, KvEngine, Peekable, ReadOptions, RangeCacheEngine, Result,
+    CfNamesExt, IterOptions, Iterable, KvEngine, Peekable, RangeCacheEngine, ReadOptions, Result,
     Snapshot, SnapshotMiscExt,
 };
 

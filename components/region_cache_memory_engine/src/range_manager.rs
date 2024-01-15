@@ -28,7 +28,7 @@ impl RangeMeta {
 
     pub(crate) fn set_range_readable(&mut self, range: &CacheRange, set_readable: bool) {
         if set_readable {
-            assert!(self.ranges_unreadable.remove(&range));
+            assert!(self.ranges_unreadable.remove(range));
         } else {
             self.ranges_unreadable.insert(range.clone());
         }
@@ -184,33 +184,28 @@ impl RangeManager {
         let mut meta = self.ranges.remove(&range_key).unwrap();
 
         let range_snapshot_list2 = meta.range_snapshot_list.split_off(&range_key);
-        // range overlap assertion check
-        range_snapshot_list2
-            .keys()
-            .into_iter()
-            .next()
-            .map(|r| assert!(!r.overlaps(range)));
-        meta.range_snapshot_list
-            .keys()
-            .last()
-            .map(|r| assert!(!r.overlaps(range)));
         let evicted2 = meta.ranges_evcited.split_off(&range_key);
-        // range overlap assertion check
-        evicted2.iter().next().map(|r| assert!(!r.overlaps(&range)));
-        meta.ranges_evcited
-            .iter()
-            .last()
-            .map(|r| assert!(!r.overlaps(range)));
         let unreadable2 = meta.ranges_unreadable.split_off(&range_key);
+
         // range overlap assertion check
-        unreadable2
-            .iter()
-            .next()
-            .map(|r| assert!(!r.overlaps(&range)));
-        meta.ranges_unreadable
-            .iter()
-            .last()
-            .map(|r| assert!(!r.overlaps(range)));
+        if let Some(r) = range_snapshot_list2.keys().next() {
+            assert!(!r.overlaps(range));
+        }
+        if let Some(r) = meta.range_snapshot_list.keys().last() {
+            assert!(!r.overlaps(range));
+        }
+        if let Some(r) = evicted2.iter().next() {
+            assert!(!r.overlaps(range));
+        }
+        if let Some(r) = meta.ranges_evcited.iter().last() {
+            assert!(!r.overlaps(range));
+        }
+        if let Some(r) = unreadable2.iter().next() {
+            assert!(!r.overlaps(range));
+        }
+        if let Some(r) = meta.ranges_unreadable.iter().last() {
+            assert!(!r.overlaps(range));
+        }
 
         let (r1, r2) = range_key.split_off(range);
         let safe_ts = meta.safe_ts;

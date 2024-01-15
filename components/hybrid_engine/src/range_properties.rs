@@ -1,6 +1,6 @@
 // Copyright 2023 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine_traits::{KvEngine, Range, RangePropertiesExt, RangeCacheEngine, Result};
+use engine_traits::{KvEngine, Range, RangeCacheEngine, RangePropertiesExt, Result};
 
 use crate::engine::HybridEngine;
 

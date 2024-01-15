@@ -1289,7 +1289,7 @@ mod tests {
 
     use crossbeam::channel::TrySendError;
     use engine_test::kv::{KvTestEngine, KvTestSnapshot};
-    use engine_traits::{MiscExt, Peekable, SyncMutable, ALL_CFS};
+    use engine_traits::{CacheRange, MiscExt, Peekable, SyncMutable, ALL_CFS};
     use hybrid_engine::{HybridEngine, HybridEngineSnapshot};
     use kvproto::{metapb::RegionEpoch, raft_cmdpb::*};
     use region_cache_memory_engine::RangeCacheMemoryEngine;
@@ -2476,7 +2476,7 @@ mod tests {
         let disk_engine =
             engine_test::kv::new_engine(path.path().to_str().unwrap(), ALL_CFS).unwrap();
         let (ch, rx, _) = HybridEngineMockRouter::new();
-        let memory_engine = RangeCacheMemoryEngine::default();
+        let memory_engine = RangeCacheMemoryEngine::new(Arc::default());
         let engine = HybridEngine::new(disk_engine, memory_engine.clone());
         let mut reader = LocalReader::new(
             engine.clone(),
@@ -2571,16 +2571,17 @@ mod tests {
         let s = get_snapshot(None, &mut reader, cmd.clone(), &rx);
         assert!(!s.region_cache_snapshot_available());
 
-        memory_engine.new_region(1);
+        let range = CacheRange::from_region(&region1);
+        memory_engine.new_range(range.clone());
         {
             let mut core = memory_engine.core().lock().unwrap();
-            core.mut_region_meta(1).unwrap().set_can_read(true);
-            core.mut_region_meta(1).unwrap().set_safe_ts(10);
+            core.mut_range_manager().set_range_readable(&range, true);
+            core.mut_range_manager().set_safe_ts(&range, 10);
         }
 
         let mut snap_ctx = SnapshotContext {
             read_ts: 15,
-            region_id: 1,
+            range: Some(range.clone()),
         };
 
         let s = get_snapshot(Some(snap_ctx.clone()), &mut reader, cmd.clone(), &rx);
@@ -2588,14 +2589,14 @@ mod tests {
 
         {
             let mut core = memory_engine.core().lock().unwrap();
-            core.mut_region_meta(1).unwrap().set_can_read(false);
+            core.mut_range_manager().set_range_readable(&range, false);
         }
         let s = get_snapshot(Some(snap_ctx.clone()), &mut reader, cmd.clone(), &rx);
         assert!(!s.region_cache_snapshot_available());
 
         {
             let mut core = memory_engine.core().lock().unwrap();
-            core.mut_region_meta(1).unwrap().set_can_read(true);
+            core.mut_range_manager().set_range_readable(&range, true);
         }
         snap_ctx.read_ts = 5;
         assert!(!s.region_cache_snapshot_available());

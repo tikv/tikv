@@ -224,7 +224,7 @@ pub fn run_tikv(
             if cfg!(feature = "memory-engine")
                 && config.region_cache_memory_limit != ReadableSize(0)
             {
-                run_impl::<HybridEngine<RocksEngine, RegionCacheMemoryEngine>, RocksEngine, API>(
+                run_impl::<HybridEngine<RocksEngine, RangeCacheMemoryEngine>, RocksEngine, API>(
                     config,
                     service_event_tx,
                     service_event_rx,
@@ -240,7 +240,7 @@ pub fn run_tikv(
             if cfg!(feature = "memory-engine")
                 && config.region_cache_memory_limit != ReadableSize(0)
             {
-                run_impl::<HybridEngine<RocksEngine, RegionCacheMemoryEngine>, RaftLogEngine, API>(
+                run_impl::<HybridEngine<RocksEngine, RangeCacheMemoryEngine>, RaftLogEngine, API>(
                     config,
                     service_event_tx,
                     service_event_rx,

@@ -2,6 +2,9 @@
 
 use std::{cmp, fmt::Debug};
 
+use keys::{enc_end_key, enc_start_key};
+use kvproto::metapb;
+
 use crate::{Iterable, Snapshot, WriteBatchExt};
 
 /// RegionCacheEngine works as a region cache caching some regions (in Memory or
@@ -28,6 +31,13 @@ impl CacheRange {
     pub fn new(start: Vec<u8>, end: Vec<u8>) -> Self {
         Self { start, end }
     }
+
+    pub fn from_region(region: &metapb::Region) -> Self {
+        Self {
+            start: enc_start_key(region),
+            end: enc_end_key(region),
+        }
+    }
 }
 
 impl PartialOrd for CacheRange {
@@ -44,7 +54,7 @@ impl PartialOrd for CacheRange {
             return Some(cmp::Ordering::Equal);
         }
 
-        return None;
+        None
     }
 }
 
