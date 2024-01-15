@@ -1154,8 +1154,8 @@ fn decode_default(value: Vec<u8>, row: &mut EventRow, has_value: &mut bool) {
 /// Observed key range.
 #[derive(Clone, Default)]
 pub struct ObservedRange {
-    start_key_encoded: Vec<u8>,
-    end_key_encoded: Vec<u8>,
+    pub(crate) start_key_encoded: Vec<u8>,
+    pub(crate) end_key_encoded: Vec<u8>,
     start_key_raw: Vec<u8>,
     end_key_raw: Vec<u8>,
     pub(crate) all_key_covered: bool,
