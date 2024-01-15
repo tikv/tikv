@@ -221,28 +221,32 @@ pub fn run_tikv(
 
     dispatch_api_version!(config.storage.api_version(), {
         if !config.raft_engine.enable {
-            if config.region_cache_memory_limit == ReadableSize(0) {
-                run_impl::<RocksEngine, RocksEngine, API>(
+            if cfg!(feature = "memory-engine")
+                && config.region_cache_memory_limit != ReadableSize(0)
+            {
+                run_impl::<HybridEngine<RocksEngine, RegionCacheMemoryEngine>, RocksEngine, API>(
                     config,
                     service_event_tx,
                     service_event_rx,
                 )
             } else {
-                run_impl::<HybridEngine<RocksEngine, RegionCacheMemoryEngine>, RocksEngine, API>(
+                run_impl::<RocksEngine, RocksEngine, API>(
                     config,
                     service_event_tx,
                     service_event_rx,
                 )
             }
         } else {
-            if config.region_cache_memory_limit == ReadableSize(0) {
-                run_impl::<RocksEngine, RaftLogEngine, API>(
+            if cfg!(feature = "memory-engine")
+                && config.region_cache_memory_limit != ReadableSize(0)
+            {
+                run_impl::<HybridEngine<RocksEngine, RegionCacheMemoryEngine>, RaftLogEngine, API>(
                     config,
                     service_event_tx,
                     service_event_rx,
                 )
             } else {
-                run_impl::<HybridEngine<RocksEngine, RegionCacheMemoryEngine>, RaftLogEngine, API>(
+                run_impl::<RocksEngine, RaftLogEngine, API>(
                     config,
                     service_event_tx,
                     service_event_rx,
