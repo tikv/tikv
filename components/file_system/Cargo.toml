@@ -29,7 +29,6 @@ tikv_util = { workspace = true }
 tokio = { version = "1.5", features = ["time"] }
 
 [dev-dependencies]
-maligned = "0.2.1"
 tempfile = "3.0"
 
 [target.'cfg(target_os = "linux")'.dependencies]
