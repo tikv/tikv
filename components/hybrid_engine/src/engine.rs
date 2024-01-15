@@ -2,7 +2,7 @@
 
 use engine_traits::{
     KvEngine, Peekable, ReadOptions, RegionCacheEngine, Result, SnapshotContext, SnapshotMiscExt,
-    SyncMutable,
+    SyncMutable, WriteBatchExt,
 };
 
 use crate::snapshot::HybridEngineSnapshot;
@@ -63,6 +63,7 @@ impl<EK, EC> KvEngine for HybridEngine<EK, EC>
 where
     EK: KvEngine,
     EC: RegionCacheEngine,
+    HybridEngine<EK, EC>: WriteBatchExt,
 {
     type Snapshot = HybridEngineSnapshot<EK, EC>;
 
