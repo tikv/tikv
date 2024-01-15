@@ -1,7 +1,7 @@
 // Copyright 2023 TiKV Project Authors. Licensed under Apache-2.0.
 
 use engine_traits::{
-    KvEngine, Mutable, RegionCacheEngine, Result, WriteBatch, WriteBatchExt, WriteOptions,
+    KvEngine, Mutable, RangeCacheEngine, Result, WriteBatch, WriteBatchExt, WriteOptions,
 };
 
 use crate::engine::HybridEngine;
@@ -14,7 +14,7 @@ pub struct HybridEngineWriteBatch<EK: KvEngine> {
 impl<EK, EC> WriteBatchExt for HybridEngine<EK, EC>
 where
     EK: KvEngine,
-    EC: RegionCacheEngine,
+    EC: RangeCacheEngine,
 {
     type WriteBatch = HybridEngineWriteBatch<EK>;
     const WRITE_BATCH_MAX_KEYS: usize = EK::WRITE_BATCH_MAX_KEYS;

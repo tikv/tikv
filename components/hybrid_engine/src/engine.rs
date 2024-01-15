@@ -1,7 +1,7 @@
 // Copyright 2023 TiKV Project Authors. Licensed under Apache-2.0.
 
 use engine_traits::{
-    KvEngine, Peekable, ReadOptions, RegionCacheEngine, Result, SnapshotContext, SnapshotMiscExt,
+    KvEngine, Peekable, ReadOptions, RangeCacheEngine, Result, SnapshotContext, SnapshotMiscExt,
     SyncMutable,
 };
 
@@ -17,7 +17,7 @@ use crate::snapshot::HybridEngineSnapshot;
 pub struct HybridEngine<EK, EC>
 where
     EK: KvEngine,
-    EC: RegionCacheEngine,
+    EC: RangeCacheEngine,
 {
     disk_engine: EK,
     region_cache_engine: EC,
@@ -26,7 +26,7 @@ where
 impl<EK, EC> HybridEngine<EK, EC>
 where
     EK: KvEngine,
-    EC: RegionCacheEngine,
+    EC: RangeCacheEngine,
 {
     pub fn disk_engine(&self) -> &EK {
         &self.disk_engine
@@ -48,7 +48,7 @@ where
 impl<EK, EC> HybridEngine<EK, EC>
 where
     EK: KvEngine,
-    EC: RegionCacheEngine,
+    EC: RangeCacheEngine,
 {
     pub fn new(disk_engine: EK, region_cache_engine: EC) -> Self {
         Self {
@@ -62,7 +62,7 @@ where
 impl<EK, EC> KvEngine for HybridEngine<EK, EC>
 where
     EK: KvEngine,
-    EC: RegionCacheEngine,
+    EC: RangeCacheEngine,
 {
     type Snapshot = HybridEngineSnapshot<EK, EC>;
 
@@ -97,7 +97,7 @@ where
 impl<EK, EC> Peekable for HybridEngine<EK, EC>
 where
     EK: KvEngine,
-    EC: RegionCacheEngine,
+    EC: RangeCacheEngine,
 {
     type DbVector = EK::DbVector;
 
@@ -120,7 +120,7 @@ where
 impl<EK, EC> SyncMutable for HybridEngine<EK, EC>
 where
     EK: KvEngine,
-    EC: RegionCacheEngine,
+    EC: RangeCacheEngine,
 {
     fn put(&self, key: &[u8], value: &[u8]) -> Result<()> {
         unimplemented!()
@@ -151,7 +151,7 @@ where
 mod tests {
     use engine_rocks::util::new_engine;
     use engine_traits::{KvEngine, SnapshotContext, CF_DEFAULT, CF_LOCK, CF_WRITE};
-    use region_cache_memory_engine::RegionCacheMemoryEngine;
+    use region_cache_memory_engine::RangeCacheMemoryEngine;
     use tempfile::Builder;
 
     use crate::HybridEngine;
@@ -164,7 +164,7 @@ mod tests {
             &[CF_DEFAULT, CF_LOCK, CF_WRITE],
         )
         .unwrap();
-        let memory_engine = RegionCacheMemoryEngine::default();
+        let memory_engine = RangeCacheMemoryEngine::default();
         memory_engine.new_region(1);
         {
             let mut core = memory_engine.core().lock().unwrap();

@@ -7,4 +7,5 @@
 
 mod engine;
 pub mod keys;
-pub use engine::RegionCacheMemoryEngine;
+pub use engine::RangeCacheMemoryEngine;
+pub mod range_manager;

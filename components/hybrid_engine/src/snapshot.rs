@@ -3,7 +3,7 @@
 use std::fmt::{self, Debug, Formatter};
 
 use engine_traits::{
-    CfNamesExt, IterOptions, Iterable, KvEngine, Peekable, ReadOptions, RegionCacheEngine, Result,
+    CfNamesExt, IterOptions, Iterable, KvEngine, Peekable, ReadOptions, RangeCacheEngine, Result,
     Snapshot, SnapshotMiscExt,
 };
 
@@ -12,7 +12,7 @@ use crate::engine_iterator::HybridEngineIterator;
 pub struct HybridEngineSnapshot<EK, EC>
 where
     EK: KvEngine,
-    EC: RegionCacheEngine,
+    EC: RangeCacheEngine,
 {
     disk_snap: EK::Snapshot,
     region_cache_snap: Option<EC::Snapshot>,
@@ -21,7 +21,7 @@ where
 impl<EK, EC> HybridEngineSnapshot<EK, EC>
 where
     EK: KvEngine,
-    EC: RegionCacheEngine,
+    EC: RangeCacheEngine,
 {
     pub fn new(disk_snap: EK::Snapshot, region_cache_snap: Option<EC::Snapshot>) -> Self {
         HybridEngineSnapshot {
@@ -38,14 +38,14 @@ where
 impl<EK, EC> Snapshot for HybridEngineSnapshot<EK, EC>
 where
     EK: KvEngine,
-    EC: RegionCacheEngine,
+    EC: RangeCacheEngine,
 {
 }
 
 impl<EK, EC> Debug for HybridEngineSnapshot<EK, EC>
 where
     EK: KvEngine,
-    EC: RegionCacheEngine,
+    EC: RangeCacheEngine,
 {
     fn fmt(&self, fmt: &mut Formatter<'_>) -> fmt::Result {
         write!(fmt, "Hybrid Engine Snapshot Impl")
@@ -55,7 +55,7 @@ where
 impl<EK, EC> Iterable for HybridEngineSnapshot<EK, EC>
 where
     EK: KvEngine,
-    EC: RegionCacheEngine,
+    EC: RangeCacheEngine,
 {
     type Iterator = HybridEngineIterator<EK, EC>;
 
@@ -67,7 +67,7 @@ where
 impl<EK, EC> Peekable for HybridEngineSnapshot<EK, EC>
 where
     EK: KvEngine,
-    EC: RegionCacheEngine,
+    EC: RangeCacheEngine,
 {
     type DbVector = EK::DbVector;
 
@@ -88,7 +88,7 @@ where
 impl<EK, EC> CfNamesExt for HybridEngineSnapshot<EK, EC>
 where
     EK: KvEngine,
-    EC: RegionCacheEngine,
+    EC: RangeCacheEngine,
 {
     fn cf_names(&self) -> Vec<&str> {
         self.disk_snap.cf_names()
@@ -98,7 +98,7 @@ where
 impl<EK, EC> SnapshotMiscExt for HybridEngineSnapshot<EK, EC>
 where
     EK: KvEngine,
-    EC: RegionCacheEngine,
+    EC: RangeCacheEngine,
 {
     fn sequence_number(&self) -> u64 {
         self.disk_snap.sequence_number()

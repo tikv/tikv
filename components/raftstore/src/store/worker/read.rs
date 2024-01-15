@@ -1292,7 +1292,7 @@ mod tests {
     use engine_traits::{MiscExt, Peekable, SyncMutable, ALL_CFS};
     use hybrid_engine::{HybridEngine, HybridEngineSnapshot};
     use kvproto::{metapb::RegionEpoch, raft_cmdpb::*};
-    use region_cache_memory_engine::RegionCacheMemoryEngine;
+    use region_cache_memory_engine::RangeCacheMemoryEngine;
     use tempfile::{Builder, TempDir};
     use tikv_util::{codec::number::NumberEncoder, time::monotonic_raw_now};
     use time::Duration;
@@ -2418,8 +2418,8 @@ mod tests {
         );
     }
 
-    type HybridTestEnigne = HybridEngine<KvTestEngine, RegionCacheMemoryEngine>;
-    type HybridEngineTestSnapshot = HybridEngineSnapshot<KvTestEngine, RegionCacheMemoryEngine>;
+    type HybridTestEnigne = HybridEngine<KvTestEngine, RangeCacheMemoryEngine>;
+    type HybridEngineTestSnapshot = HybridEngineSnapshot<KvTestEngine, RangeCacheMemoryEngine>;
 
     struct HybridEngineMockRouter {
         p_router: SyncSender<RaftCommand<HybridEngineTestSnapshot>>,
@@ -2470,13 +2470,13 @@ mod tests {
         TempDir,
         LocalReader<HybridTestEnigne, HybridEngineMockRouter>,
         Receiver<RaftCommand<HybridEngineTestSnapshot>>,
-        RegionCacheMemoryEngine,
+        RangeCacheMemoryEngine,
     ) {
         let path = Builder::new().prefix(path).tempdir().unwrap();
         let disk_engine =
             engine_test::kv::new_engine(path.path().to_str().unwrap(), ALL_CFS).unwrap();
         let (ch, rx, _) = HybridEngineMockRouter::new();
-        let memory_engine = RegionCacheMemoryEngine::default();
+        let memory_engine = RangeCacheMemoryEngine::default();
         let engine = HybridEngine::new(disk_engine, memory_engine.clone());
         let mut reader = LocalReader::new(
             engine.clone(),

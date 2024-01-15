@@ -72,7 +72,7 @@ use raftstore::{
     },
     RaftRouterCompactedEventSender,
 };
-use region_cache_memory_engine::RegionCacheMemoryEngine;
+use region_cache_memory_engine::RangeCacheMemoryEngine;
 use resolved_ts::{LeadershipResolver, Task};
 use resource_control::ResourceGroupManager;
 use security::SecurityManager;
@@ -227,7 +227,7 @@ pub fn run_tikv(
                     service_event_rx,
                 )
             } else {
-                run_impl::<HybridEngine<RocksEngine, RegionCacheMemoryEngine>, RocksEngine, API>(
+                run_impl::<HybridEngine<RocksEngine, RangeCacheMemoryEngine>, RocksEngine, API>(
                     config,
                     service_event_tx,
                     service_event_rx,
@@ -241,7 +241,7 @@ pub fn run_tikv(
                     service_event_rx,
                 )
             } else {
-                run_impl::<HybridEngine<RocksEngine, RegionCacheMemoryEngine>, RaftLogEngine, API>(
+                run_impl::<HybridEngine<RocksEngine, RangeCacheMemoryEngine>, RaftLogEngine, API>(
                     config,
                     service_event_tx,
                     service_event_rx,
