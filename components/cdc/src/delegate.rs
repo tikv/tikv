@@ -1145,6 +1145,73 @@ fn decode_default(value: Vec<u8>, row: &mut EventRow, has_value: &mut bool) {
     *has_value = true;
 }
 
+<<<<<<< HEAD
+=======
+/// Observed key range.
+#[derive(Clone, Default)]
+pub struct ObservedRange {
+    pub(crate) start_key_encoded: Vec<u8>,
+    pub(crate) end_key_encoded: Vec<u8>,
+    start_key_raw: Vec<u8>,
+    end_key_raw: Vec<u8>,
+    pub(crate) all_key_covered: bool,
+}
+
+impl ObservedRange {
+    pub fn new(start_key_encoded: Vec<u8>, end_key_encoded: Vec<u8>) -> Result<ObservedRange> {
+        let start_key_raw = Key::from_encoded(start_key_encoded.clone())
+            .into_raw()
+            .map_err(|e| Error::Other(e.into()))?;
+        let end_key_raw = Key::from_encoded(end_key_encoded.clone())
+            .into_raw()
+            .map_err(|e| Error::Other(e.into()))?;
+        Ok(ObservedRange {
+            start_key_encoded,
+            end_key_encoded,
+            start_key_raw,
+            end_key_raw,
+            all_key_covered: false,
+        })
+    }
+
+    #[allow(clippy::collapsible_if)]
+    pub fn update_region_key_range(&mut self, region: &Region) {
+        // Check observed key range in region.
+        if self.start_key_encoded <= region.start_key {
+            if self.end_key_encoded.is_empty()
+                || (region.end_key <= self.end_key_encoded && !region.end_key.is_empty())
+            {
+                // Observed range covers the region.
+                self.all_key_covered = true;
+            }
+        }
+    }
+
+    fn is_key_in_range(&self, start_key: &[u8], end_key: &[u8], key: &[u8]) -> bool {
+        if self.all_key_covered {
+            return true;
+        }
+        if start_key <= key && (key < end_key || end_key.is_empty()) {
+            return true;
+        }
+        false
+    }
+
+    pub fn contains_encoded_key(&self, key: &[u8]) -> bool {
+        self.is_key_in_range(&self.start_key_encoded, &self.end_key_encoded, key)
+    }
+
+    pub fn filter_entries(&self, mut entries: Vec<EventRow>) -> Vec<EventRow> {
+        if self.all_key_covered {
+            return entries;
+        }
+        // Entry's key is in raw key format.
+        entries.retain(|e| self.is_key_in_range(&self.start_key_raw, &self.end_key_raw, &e.key));
+        entries
+    }
+}
+
+>>>>>>> 31cdbb6d92 (cdc: incremental scans use correct specified ranges (#16252))
 #[cfg(test)]
 mod tests {
     use std::cell::Cell;
