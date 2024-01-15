@@ -3166,15 +3166,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "mnt"
-version = "0.3.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1587ebb20a5b04738f16cffa7e2526f1b8496b84f92920facd518362ff1559eb"
-dependencies = [
- "libc 0.2.151",
-]
-
-[[package]]
 name = "more-asserts"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6645,7 +6636,6 @@ dependencies = [
  "libc 0.2.151",
  "log",
  "log_wrappers",
- "mnt",
  "nix 0.24.1",
  "num-traits",
  "num_cpus",
