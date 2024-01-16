@@ -12,6 +12,7 @@ use std::{
 };
 
 use collections::HashMap;
+use engine_rocks::RocksEngine;
 use engine_traits::{Checkpointer, KvEngine, RaftEngineDebug};
 use file_system::{IoOp, IoType};
 use futures::executor::block_on;
@@ -39,8 +40,11 @@ use tikv_util::{
     HandyRwLock,
 };
 
-fn test_huge_snapshot<T: Simulator>(cluster: &mut Cluster<T>, max_snapshot_file_size: u64) {
-    cluster.cfg.rocksdb.titan.enabled = true;
+fn test_huge_snapshot<T: Simulator<RocksEngine>>(
+    cluster: &mut Cluster<RocksEngine, T>,
+    max_snapshot_file_size: u64,
+) {
+    cluster.cfg.rocksdb.titan.enabled = Some(true);
     cluster.cfg.raft_store.raft_log_gc_count_limit = Some(1000);
     cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(10);
     cluster.cfg.raft_store.snap_apply_batch_size = ReadableSize(500);
@@ -232,7 +236,7 @@ fn test_concurrent_snap() {
     // Test that the handling of snapshot is correct when there are multiple
     // snapshots which have overlapped region ranges arrive at the same
     // raftstore.
-    cluster.cfg.rocksdb.titan.enabled = true;
+    cluster.cfg.rocksdb.titan.enabled = Some(true);
     // Disable raft log gc in this test case.
     cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::secs(60);
     // For raftstore v2, after split, follower delays first messages (see
@@ -285,7 +289,7 @@ fn test_concurrent_snap_v2() {
     // Test that the handling of snapshot is correct when there are multiple
     // snapshots which have overlapped region ranges arrive at the same
     // raftstore.
-    // cluster.cfg.rocksdb.titan.enabled = true;
+    // cluster.cfg.rocksdb.titan.enabled = Some(true);
     // Disable raft log gc in this test case.
     cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::secs(60);
     // For raftstore v2, after split, follower delays first messages (see
@@ -619,7 +623,7 @@ fn test_gen_during_heavy_recv() {
     let snap = do_snapshot(
         snap_mgr.clone(),
         &engine,
-        engine.snapshot(),
+        engine.snapshot(None),
         r2,
         snap_term,
         snap_apply_state,

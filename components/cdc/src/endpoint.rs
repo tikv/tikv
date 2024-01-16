@@ -742,10 +742,8 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
             );
             // To avoid OOM (e.g., https://github.com/tikv/tikv/issues/16035),
             // TiKV needs to reject and return error immediately.
-            //
-            // TODO: TiKV is supposed to return a "busy" error, but for the sake
-            // of compatibility, it returns a "region not found" error.
-            let _ = downstream.sink_region_not_found(region_id);
+            let _ = downstream
+                .sink_server_is_busy(region_id, "too many pending incremental scans".to_owned());
             return;
         }
 
@@ -2128,7 +2126,7 @@ mod tests {
             let event = e.event.take().unwrap();
             match event {
                 Event_oneof_event::Error(err) => {
-                    assert!(err.has_region_not_found());
+                    assert!(err.has_server_is_busy());
                 }
                 other => panic!("unknown event {:?}", other),
             }
@@ -2497,7 +2495,7 @@ mod tests {
         // region 3 to conn b.
         let mut conn_rxs = vec![];
         let quota = Arc::new(MemoryQuota::new(usize::MAX));
-        for region_ids in vec![vec![1, 2], vec![3]] {
+        for region_ids in [vec![1, 2], vec![3]] {
             let (tx, rx) = channel::channel(1, quota.clone());
             conn_rxs.push(rx);
             let conn = Conn::new(tx, String::new());

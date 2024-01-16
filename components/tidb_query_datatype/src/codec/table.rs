@@ -319,7 +319,7 @@ pub fn decode_row(
     cols: &HashMap<i64, ColumnInfo>,
 ) -> Result<HashMap<i64, Datum>> {
     let mut values = datum::decode(data)?;
-    if values.get(0).map_or(true, |d| *d == Datum::Null) {
+    if values.first().map_or(true, |d| *d == Datum::Null) {
         return Ok(HashMap::default());
     }
     if values.len() & 1 == 1 {
@@ -528,7 +528,7 @@ pub fn generate_index_data_for_test(
     let mut expect_row = HashMap::default();
     let mut v: Vec<_> = indice
         .iter()
-        .map(|&(ref cid, ref value)| {
+        .map(|(cid, value)| {
             expect_row.insert(
                 *cid,
                 datum::encode_key(&mut EvalContext::default(), &[value.clone()]).unwrap(),

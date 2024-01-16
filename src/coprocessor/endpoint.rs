@@ -19,7 +19,9 @@ use resource_metering::{FutureExt, ResourceTagFactory, StreamExt};
 use tidb_query_common::execute_stats::ExecSummary;
 use tikv_alloc::trace::MemoryTraceGuard;
 use tikv_kv::SnapshotExt;
-use tikv_util::{quota_limiter::QuotaLimiter, time::Instant};
+use tikv_util::{
+    deadline::set_deadline_exceeded_busy_error, quota_limiter::QuotaLimiter, time::Instant,
+};
 use tipb::{AnalyzeReq, AnalyzeType, ChecksumRequest, ChecksumScanOn, DagRequest, ExecType};
 use tokio::sync::Semaphore;
 use txn_types::Lock;
@@ -422,15 +424,16 @@ impl<E: Engine> Endpoint<E> {
 
         // Check if the buckets version is latest.
         // skip if request don't carry this bucket version.
-        if let Some(ref buckets) = latest_buckets&&
-            buckets.version > tracker.req_ctx.context.buckets_version &&
-            tracker.req_ctx.context.buckets_version!=0 {
-                let mut bucket_not_match = errorpb::BucketVersionNotMatch::default();
-                bucket_not_match.set_version(buckets.version);
-                bucket_not_match.set_keys(buckets.keys.clone().into());
-                let mut err = errorpb::Error::default();
-                err.set_bucket_version_not_match(bucket_not_match);
-                return Err(Error::Region(err));
+        if let Some(ref buckets) = latest_buckets
+            && buckets.version > tracker.req_ctx.context.buckets_version
+            && tracker.req_ctx.context.buckets_version != 0
+        {
+            let mut bucket_not_match = errorpb::BucketVersionNotMatch::default();
+            bucket_not_match.set_version(buckets.version);
+            bucket_not_match.set_keys(buckets.keys.clone().into());
+            let mut err = errorpb::Error::default();
+            err.set_bucket_version_not_match(bucket_not_match);
+            return Err(Error::Region(err));
         }
         // When snapshot is retrieved, deadline may exceed.
         tracker.on_snapshot_finished();
@@ -832,7 +835,10 @@ macro_rules! make_error_response_common {
             }
             Error::DeadlineExceeded => {
                 $tag = "deadline_exceeded";
-                $resp.set_other_error($e.to_string());
+                let mut err = errorpb::Error::default();
+                set_deadline_exceeded_busy_error(&mut err);
+                err.set_message($e.to_string());
+                $resp.set_region_error(err);
             }
             Error::MaxPendingTasksExceeded => {
                 $tag = "max_pending_tasks_exceeded";
@@ -1936,7 +1942,11 @@ mod tests {
 
             let resp = block_on(copr.handle_unary_request(config, handler_builder)).unwrap();
             assert_eq!(resp.get_data().len(), 0);
-            assert!(!resp.get_other_error().is_empty());
+            let region_err = resp.get_region_error();
+            assert_eq!(
+                region_err.get_server_is_busy().reason,
+                "deadline is exceeded".to_string()
+            );
         }
 
         {
@@ -1953,7 +1963,11 @@ mod tests {
 
             let resp = block_on(copr.handle_unary_request(config, handler_builder)).unwrap();
             assert_eq!(resp.get_data().len(), 0);
-            assert!(!resp.get_other_error().is_empty());
+            let region_err = resp.get_region_error();
+            assert_eq!(
+                region_err.get_server_is_busy().reason,
+                "deadline is exceeded".to_string()
+            );
         }
     }
 
@@ -2004,5 +2018,19 @@ mod tests {
 
         let resp = block_on(copr.parse_and_handle_unary_request(req, None));
         assert_eq!(resp.get_locked().get_key(), b"key");
+    }
+
+    #[test]
+    fn test_make_error_response() {
+        let resp = make_error_response(Error::DeadlineExceeded);
+        let region_err = resp.get_region_error();
+        assert_eq!(
+            region_err.get_server_is_busy().reason,
+            "deadline is exceeded".to_string()
+        );
+        assert_eq!(
+            region_err.get_message(),
+            "Coprocessor task terminated due to exceeding the deadline"
+        );
     }
 }

@@ -206,6 +206,12 @@ impl Downstream {
         self.sink_error_event(region_id, err_event)
     }
 
+    pub fn sink_server_is_busy(&self, region_id: u64, reason: String) -> Result<()> {
+        let mut err_event = EventError::default();
+        err_event.mut_server_is_busy().reason = reason;
+        self.sink_error_event(region_id, err_event)
+    }
+
     pub fn set_sink(&mut self, sink: Sink) {
         self.sink = Some(sink);
     }
@@ -1158,8 +1164,8 @@ fn decode_default(value: Vec<u8>, row: &mut EventRow, has_value: &mut bool) {
 /// Observed key range.
 #[derive(Clone, Default)]
 pub struct ObservedRange {
-    start_key_encoded: Vec<u8>,
-    end_key_encoded: Vec<u8>,
+    pub(crate) start_key_encoded: Vec<u8>,
+    pub(crate) end_key_encoded: Vec<u8>,
     start_key_raw: Vec<u8>,
     end_key_raw: Vec<u8>,
     pub(crate) all_key_covered: bool,

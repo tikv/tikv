@@ -41,7 +41,7 @@ use tikv_util::{
     box_err, debug, error, info,
     metrics::ThreadInfoStatistics,
     store::QueryStats,
-    sys::thread::StdThreadBuildWrapper,
+    sys::{thread::StdThreadBuildWrapper, SysQuota},
     thd_name,
     time::{Instant as TiInstant, UnixSecs},
     timer::GLOBAL_TIMER_HANDLE,
@@ -225,6 +225,9 @@ pub struct StoreStat {
     pub store_cpu_usages: RecordPairVec,
     pub store_read_io_rates: RecordPairVec,
     pub store_write_io_rates: RecordPairVec,
+
+    store_cpu_quota: f64, // quota of cpu usage
+    store_cpu_busy_thd: f64,
 }
 
 impl Default for StoreStat {
@@ -249,7 +252,30 @@ impl Default for StoreStat {
             store_cpu_usages: RecordPairVec::default(),
             store_read_io_rates: RecordPairVec::default(),
             store_write_io_rates: RecordPairVec::default(),
+
+            store_cpu_quota: 0.0_f64,
+            store_cpu_busy_thd: 0.8_f64,
         }
+    }
+}
+
+impl StoreStat {
+    fn set_cpu_quota(&mut self, cpu_cores: f64, busy_thd: f64) {
+        self.store_cpu_quota = cpu_cores * 100.0;
+        self.store_cpu_busy_thd = busy_thd;
+    }
+
+    fn maybe_busy(&self) -> bool {
+        if self.store_cpu_quota < 1.0 || self.store_cpu_busy_thd > 1.0 {
+            return false;
+        }
+
+        let mut cpu_usage = 0_u64;
+        for record in self.store_cpu_usages.iter() {
+            cpu_usage += record.get_value();
+        }
+
+        (cpu_usage as f64 / self.store_cpu_quota) >= self.store_cpu_busy_thd
     }
 }
 
@@ -836,14 +862,14 @@ impl SlowScore {
         }
     }
 
-    fn record(&mut self, id: u64, duration: Duration) {
+    fn record(&mut self, id: u64, duration: Duration, not_busy: bool) {
         self.last_record_time = Instant::now();
         if id != self.last_tick_id {
             return;
         }
         self.last_tick_finished = true;
         self.total_requests += 1;
-        if duration >= self.inspect_interval {
+        if not_busy && duration >= self.inspect_interval {
             self.timeout_requests += 1;
         }
     }
@@ -1027,6 +1053,8 @@ where
         causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
         grpc_service_manager: GrpcServiceManager,
     ) -> Runner<EK, ER, T> {
+        let mut store_stat = StoreStat::default();
+        store_stat.set_cpu_quota(SysQuota::cpu_cores_quota(), cfg.inspect_cpu_util_thd);
         let store_heartbeat_interval = cfg.pd_store_heartbeat_tick_interval.0;
         let interval = store_heartbeat_interval / NUM_COLLECT_STORE_INFOS_PER_HEARTBEAT;
         let mut stats_monitor = StatsMonitor::new(
@@ -1045,7 +1073,7 @@ where
             is_hb_receiver_scheduled: false,
             region_peers: HashMap::default(),
             region_buckets: HashMap::default(),
-            store_stat: StoreStat::default(),
+            store_stat,
             start_ts: UnixSecs::now(),
             scheduler,
             store_heartbeat_interval,
@@ -1717,10 +1745,7 @@ where
 
     fn handle_read_stats(&mut self, mut read_stats: ReadStats) {
         for (region_id, region_info) in read_stats.region_infos.iter_mut() {
-            let peer_stat = self
-                .region_peers
-                .entry(*region_id)
-                .or_insert_with(PeerStat::default);
+            let peer_stat = self.region_peers.entry(*region_id).or_default();
             peer_stat.read_bytes += region_info.flow.read_bytes as u64;
             peer_stat.read_keys += region_info.flow.read_keys as u64;
             self.store_stat.engine_total_bytes_read += region_info.flow.read_bytes as u64;
@@ -1742,10 +1767,7 @@ where
 
     fn handle_write_stats(&mut self, mut write_stats: WriteStats) {
         for (region_id, region_info) in write_stats.region_infos.iter_mut() {
-            let peer_stat = self
-                .region_peers
-                .entry(*region_id)
-                .or_insert_with(PeerStat::default);
+            let peer_stat = self.region_peers.entry(*region_id).or_default();
             peer_stat.query_stats.add_query_stats(&region_info.0);
             self.store_stat
                 .engine_total_query_num
@@ -2103,7 +2125,10 @@ where
                 let f = async move {
                     for split_info in split_infos {
                         let Ok(Some(region)) =
-                            pd_client.get_region_by_id(split_info.region_id).await else { continue };
+                            pd_client.get_region_by_id(split_info.region_id).await
+                        else {
+                            continue;
+                        };
                         // Try to split the region with the given split key.
                         if let Some(split_key) = split_info.split_key {
                             Self::handle_ask_batch_split(
@@ -2168,10 +2193,7 @@ where
                     cpu_usage,
                 ) = {
                     let region_id = hb_task.region.get_id();
-                    let peer_stat = self
-                        .region_peers
-                        .entry(region_id)
-                        .or_insert_with(PeerStat::default);
+                    let peer_stat = self.region_peers.entry(region_id).or_default();
                     peer_stat.approximate_size = approximate_size;
                     peer_stat.approximate_keys = approximate_keys;
 
@@ -2269,8 +2291,11 @@ where
             Task::QueryRegionLeader { region_id } => self.handle_query_region_leader(region_id),
             Task::UpdateSlowScore { id, duration } => {
                 // Fine-tuned, `SlowScore` only takes the I/O jitters on the disk into account.
-                self.slow_score
-                    .record(id, duration.delays_on_disk_io(false));
+                self.slow_score.record(
+                    id,
+                    duration.delays_on_disk_io(false),
+                    !self.store_stat.maybe_busy(),
+                );
                 self.slow_trend.record(duration);
             }
             Task::RegionCpuRecords(records) => self.handle_region_cpu_records(records),
@@ -2310,7 +2335,12 @@ where
             self.update_health_status(ServingStatus::Serving);
         }
         if !self.slow_score.last_tick_finished {
-            self.slow_score.record_timeout();
+            // If the last tick is not finished, it means that the current store might
+            // be busy on handling requests or delayed on I/O operations. And only when
+            // the current store is not busy, it should record the last_tick as a timeout.
+            if !self.store_stat.maybe_busy() {
+                self.slow_score.record_timeout();
+            }
             // If the last slow_score already reached abnormal state and was delayed for
             // reporting by `store-heartbeat` to PD, we should report it here manually as
             // a FAKE `store-heartbeat`.
@@ -2342,17 +2372,17 @@ where
                 STORE_INSPECT_DURATION_HISTOGRAM
                     .with_label_values(&["store_process"])
                     .observe(tikv_util::time::duration_to_sec(
-                        duration.store_process_duration.unwrap(),
+                        duration.store_process_duration.unwrap_or_default(),
                     ));
                 STORE_INSPECT_DURATION_HISTOGRAM
                     .with_label_values(&["store_wait"])
                     .observe(tikv_util::time::duration_to_sec(
-                        duration.store_wait_duration.unwrap(),
+                        duration.store_wait_duration.unwrap_or_default(),
                     ));
                 STORE_INSPECT_DURATION_HISTOGRAM
                     .with_label_values(&["store_commit"])
                     .observe(tikv_util::time::duration_to_sec(
-                        duration.store_commit_duration.unwrap(),
+                        duration.store_commit_duration.unwrap_or_default(),
                     ));
 
                 STORE_INSPECT_DURATION_HISTOGRAM

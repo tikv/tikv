@@ -124,8 +124,7 @@ pub fn is_vote_msg(msg: &eraftpb::Message) -> bool {
 /// peer or not.
 // There could be two cases:
 // 1. Target peer already exists but has not established communication with leader yet
-// 2. Target peer is added newly due to member change or region split, but it's not
-//    created yet
+// 2. Target peer is added newly due to member change or region split, but it's not created yet
 // For both cases the region start key and end key are attached in RequestVote and
 // Heartbeat message for the store of that peer to check whether to create a new peer
 // when receiving these messages, or just to wait for a pending region split to perform
@@ -365,8 +364,7 @@ pub fn check_flashback_state(
 ) -> Result<()> {
     // The admin flashback cmd could be proposed/applied under any state.
     if let Some(ty) = admin_type
-        && (ty == AdminCmdType::PrepareFlashback
-            || ty == AdminCmdType::FinishFlashback)
+        && (ty == AdminCmdType::PrepareFlashback || ty == AdminCmdType::FinishFlashback)
     {
         return Ok(());
     }
@@ -1193,14 +1191,15 @@ impl RegionReadProgressRegistry {
     }
 
     // Get the minimum `resolved_ts` which could ensure that there will be no more
-    // locks whose `start_ts` is greater than it.
+    // locks whose `commit_ts` is smaller than it.
     pub fn get_min_resolved_ts(&self) -> u64 {
         self.registry
             .lock()
             .unwrap()
             .iter()
             .map(|(_, rrp)| rrp.resolved_ts())
-            .filter(|ts| *ts != 0) // ts == 0 means the peer is uninitialized
+            //TODO: the uninitialized peer should be taken into consideration instead of skipping it(https://github.com/tikv/tikv/issues/15506).
+            .filter(|ts| *ts != 0) // ts == 0 means the peer is uninitialized,
             .min()
             .unwrap_or(0)
     }
@@ -1298,7 +1297,9 @@ impl RegionReadProgress {
     }
 
     pub fn notify_advance_resolved_ts(&self) {
-        if let Ok(core) = self.core.try_lock() && let Some(advance_notify) = &core.advance_notify {
+        if let Ok(core) = self.core.try_lock()
+            && let Some(advance_notify) = &core.advance_notify
+        {
             advance_notify.notify_waiters();
         }
     }

@@ -353,6 +353,9 @@ pub struct Config {
 
     // Interval to inspect the latency of raftstore for slow store detection.
     pub inspect_interval: ReadableDuration,
+    /// Threshold of CPU utilization to inspect for slow store detection.
+    #[doc(hidden)]
+    pub inspect_cpu_util_thd: f64,
 
     // The unsensitive(increase it to reduce sensitiveness) of the cause-trend detection
     pub slow_trend_unsensitive_cause: f64,
@@ -504,12 +507,12 @@ impl Default for Config {
             reactive_memory_lock_tick_interval: ReadableDuration::secs(2),
             reactive_memory_lock_timeout_tick: 5,
             check_long_uncommitted_interval: ReadableDuration::secs(10),
-            /// In some cases, such as rolling upgrade, some regions' commit log
-            /// duration can be 12 seconds. Before #13078 is merged,
-            /// the commit log duration can be 2.8 minutes. So maybe
-            /// 20s is a relatively reasonable base threshold. Generally,
-            /// the log commit duration is less than 1s. Feel free to adjust
-            /// this config :)
+            // In some cases, such as rolling upgrade, some regions' commit log
+            // duration can be 12 seconds. Before #13078 is merged,
+            // the commit log duration can be 2.8 minutes. So maybe
+            // 20s is a relatively reasonable base threshold. Generally,
+            // the log commit duration is less than 1s. Feel free to adjust
+            // this config :)
             long_uncommitted_base_threshold: ReadableDuration::secs(20),
             max_entry_cache_warmup_duration: ReadableDuration::secs(1),
 
@@ -517,7 +520,12 @@ impl Default for Config {
             region_max_size: ReadableSize(0),
             region_split_size: ReadableSize(0),
             clean_stale_peer_delay: ReadableDuration::minutes(0),
-            inspect_interval: ReadableDuration::millis(500),
+            inspect_interval: ReadableDuration::millis(100),
+            // The default value of `inspect_cpu_util_thd` is 0.4, which means
+            // when the cpu utilization is greater than 40%, the store might be
+            // regarded as a slow node if there exists delayed inspected messages.
+            // It's good enough for most cases to reduce the false positive rate.
+            inspect_cpu_util_thd: 0.4,
             // The param `slow_trend_unsensitive_cause == 2.0` can yield good results,
             // make it `10.0` to reduce a bit sensitiveness because SpikeFilter is disabled
             slow_trend_unsensitive_cause: 10.0,

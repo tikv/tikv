@@ -7,7 +7,6 @@ use std::{
     result,
     sync::{
         atomic::{AtomicBool, Ordering},
-        mpsc::{sync_channel, SyncSender},
         Arc, Mutex,
     },
     thread::Builder,
@@ -19,7 +18,7 @@ use engine_rocks::{
     util::get_cf_handle,
     RocksEngine,
 };
-use engine_traits::{CfNamesExt, CfOptionsExt, Engines, Peekable, RaftEngine};
+use engine_traits::{CfNamesExt, CfOptionsExt, Engines, KvEngine, RaftEngine};
 use futures::{
     channel::mpsc,
     executor::{ThreadPool, ThreadPoolBuilder},
@@ -36,12 +35,14 @@ use raftstore::{
     store::{
         fsm::RaftRouter,
         msg::{PeerMsg, SignificantMsg},
+        snapshot_backup::{SnapshotBrWaitApplyRequest, SyncReport},
         transport::SignificantRouter,
-        SnapshotRecoveryWaitApplySyncer,
+        SnapshotBrWaitApplySyncer,
     },
 };
 use thiserror::Error;
 use tikv_util::sys::thread::{StdThreadBuildWrapper, ThreadBuildWrapper};
+use tokio::sync::oneshot::{self, Sender};
 
 use crate::{
     data_resolver::DataResolverManager,
@@ -67,11 +68,16 @@ pub enum Error {
     #[error("{0:?}")]
     Other(#[from] Box<dyn StdError + Sync + Send>),
 }
+
 /// Service handles the recovery messages from backup restore.
 #[derive(Clone)]
-pub struct RecoveryService<ER: RaftEngine> {
-    engines: Engines<RocksEngine, ER>,
-    router: RaftRouter<RocksEngine, ER>,
+pub struct RecoveryService<EK, ER>
+where
+    EK: KvEngine<DiskEngine = RocksEngine>,
+    ER: RaftEngine,
+{
+    engines: Engines<EK, ER>,
+    router: RaftRouter<EK, ER>,
     threads: ThreadPool,
 
     /// The handle to last call of recover region RPC.
@@ -113,13 +119,14 @@ impl RecoverRegionState {
     }
 }
 
-impl<ER: RaftEngine> RecoveryService<ER> {
+impl<EK, ER> RecoveryService<EK, ER>
+where
+    EK: KvEngine<DiskEngine = RocksEngine>,
+    ER: RaftEngine,
+{
     /// Constructs a new `Service` with `Engines`, a `RaftStoreRouter` and a
     /// `thread pool`.
-    pub fn new(
-        engines: Engines<RocksEngine, ER>,
-        router: RaftRouter<RocksEngine, ER>,
-    ) -> RecoveryService<ER> {
+    pub fn new(engines: Engines<EK, ER>, router: RaftRouter<EK, ER>) -> RecoveryService<EK, ER> {
         let props = tikv_util::thread_group::current_properties();
         let threads = ThreadPoolBuilder::new()
             .pool_size(4)
@@ -136,7 +143,7 @@ impl<ER: RaftEngine> RecoveryService<ER> {
         // config rocksdb l0 to optimize the restore
         // also for massive data applied during the restore, it easy to reach the write
         // stop
-        let db = engines.kv.clone();
+        let db: &RocksEngine = engines.kv.get_disk_engine();
         for cf_name in db.cf_names() {
             Self::set_db_options(cf_name, db.clone()).expect("set db option failure");
         }
@@ -218,11 +225,11 @@ impl<ER: RaftEngine> RecoveryService<ER> {
     // a new wait apply syncer share with all regions,
     // when all region reached the target index, share reference decreased to 0,
     // trigger closure to send finish info back.
-    pub fn wait_apply_last(router: RaftRouter<RocksEngine, ER>, sender: SyncSender<u64>) {
-        let wait_apply = SnapshotRecoveryWaitApplySyncer::new(0, sender);
+    pub fn wait_apply_last(router: RaftRouter<EK, ER>, sender: Sender<SyncReport>) {
+        let wait_apply = SnapshotBrWaitApplySyncer::new(0, sender);
         router.broadcast_normal(|| {
-            PeerMsg::SignificantMsg(SignificantMsg::SnapshotRecoveryWaitApply(
-                wait_apply.clone(),
+            PeerMsg::SignificantMsg(SignificantMsg::SnapshotBrWaitApply(
+                SnapshotBrWaitApplyRequest::relaxed(wait_apply.clone()),
             ))
         });
     }
@@ -261,7 +268,11 @@ fn compact(engine: RocksEngine) -> Result<()> {
     Ok(())
 }
 
-impl<ER: RaftEngine> RecoverData for RecoveryService<ER> {
+impl<EK, ER> RecoverData for RecoveryService<EK, ER>
+where
+    EK: KvEngine<DiskEngine = RocksEngine>,
+    ER: RaftEngine,
+{
     // 1. br start to ready region meta
     fn read_region_meta(
         &mut self,
@@ -335,12 +346,14 @@ impl<ER: RaftEngine> RecoverData for RecoveryService<ER> {
             // wait apply to the last log
             let mut rx_apply = Vec::with_capacity(leaders.len());
             for &region_id in &leaders {
-                let (tx, rx) = sync_channel(1);
+                let (tx, rx) = oneshot::channel();
                 REGION_EVENT_COUNTER.start_wait_leader_apply.inc();
-                let wait_apply = SnapshotRecoveryWaitApplySyncer::new(region_id, tx.clone());
+                let wait_apply = SnapshotBrWaitApplySyncer::new(region_id, tx);
                 if let Err(e) = raft_router.get_mut().unwrap().significant_send(
                     region_id,
-                    SignificantMsg::SnapshotRecoveryWaitApply(wait_apply.clone()),
+                    SignificantMsg::SnapshotBrWaitApply(SnapshotBrWaitApplyRequest::relaxed(
+                        wait_apply.clone(),
+                    )),
                 ) {
                     error!(
                         "failed to send wait apply";
@@ -348,27 +361,21 @@ impl<ER: RaftEngine> RecoverData for RecoveryService<ER> {
                         "err" => ?e,
                     );
                 }
-                rx_apply.push(Some(rx));
+                rx_apply.push(rx);
             }
 
             // leader apply to last log
             for (rid, rx) in leaders.iter().zip(rx_apply) {
-                if let Some(rx) = rx {
-                    CURRENT_WAIT_APPLY_LEADER.set(*rid as _);
-                    // FIXME: we cannot the former RPC when we get stuck at here.
-                    // Perhaps we need to make `SnapshotRecoveryWaitApplySyncer` be able to support
-                    // asynchronous channels. But for now, waiting seems won't cause live lock, so
-                    // we are keeping it unchanged.
-                    match rx.recv() {
-                        Ok(region_id) => {
-                            debug!("leader apply to last log"; "region_id" => region_id);
-                        }
-                        Err(e) => {
-                            error!("leader failed to apply to last log"; "error" => ?e);
-                        }
+                CURRENT_WAIT_APPLY_LEADER.set(*rid as _);
+                match rx.await {
+                    Ok(_) => {
+                        debug!("leader apply to last log"; "region_id" => rid);
                     }
-                    REGION_EVENT_COUNTER.finish_wait_leader_apply.inc();
+                    Err(e) => {
+                        error!("leader failed to apply to last log"; "error" => ?e);
+                    }
                 }
+                REGION_EVENT_COUNTER.finish_wait_leader_apply.inc();
             }
             CURRENT_WAIT_APPLY_LEADER.set(0);
 
@@ -410,14 +417,11 @@ impl<ER: RaftEngine> RecoverData for RecoveryService<ER> {
         info!("wait_apply start");
         let task = async move {
             let now = Instant::now();
-            // FIXME: this function will exit once the first region finished apply.
-            // BUT for the flashback resolve KV implementation, that is fine because the
-            // raft log stats is consistent.
-            let (tx, rx) = sync_channel(1);
-            RecoveryService::wait_apply_last(router, tx.clone());
-            match rx.recv() {
+            let (tx, rx) = oneshot::channel();
+            RecoveryService::wait_apply_last(router, tx);
+            match rx.await {
                 Ok(id) => {
-                    info!("follower apply to last log"; "error" => id);
+                    info!("follower apply to last log"; "report" => ?id);
                 }
                 Err(e) => {
                     error!("follower failed to apply to last log"; "error" => ?e);
@@ -444,10 +448,14 @@ impl<ER: RaftEngine> RecoverData for RecoveryService<ER> {
         // implement a resolve/delete data funciton
         let resolved_ts = req.get_resolved_ts();
         let (tx, rx) = mpsc::unbounded();
-        let resolver = DataResolverManager::new(self.engines.kv.clone(), tx, resolved_ts.into());
+        let resolver = DataResolverManager::new(
+            self.engines.kv.get_disk_engine().clone(),
+            tx,
+            resolved_ts.into(),
+        );
         info!("start to resolve kv data");
         resolver.start();
-        let db = self.engines.kv.clone();
+        let db = self.engines.kv.get_disk_engine().clone();
         let store_id = self.get_store_id();
         let send_task = async move {
             let id = store_id?;

@@ -95,7 +95,7 @@ fn test_send_raft_channel_full() {
     fail::cfg(on_batch_raft_stream_drop_by_err_fp, "panic").unwrap();
 
     // send request while channel full should not cause the connection drop
-    cluster.async_put(b"k2", b"v2").unwrap();
+    let _ = cluster.async_put(b"k2", b"v2").unwrap();
 
     fail::remove(send_raft_message_full_fp);
     cluster.must_put(b"k3", b"v3");

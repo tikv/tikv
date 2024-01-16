@@ -150,7 +150,7 @@ fn test_delete_files_in_range_for_titan() {
     // Set configs and create engines
     let mut cfg = TikvConfig::default();
     let cache = cfg.storage.block_cache.build_shared_cache();
-    cfg.rocksdb.titan.enabled = true;
+    cfg.rocksdb.titan.enabled = Some(true);
     cfg.rocksdb.titan.disable_gc = true;
     cfg.rocksdb.titan.purge_obsolete_files_period = ReadableDuration::secs(1);
     cfg.rocksdb.defaultcf.disable_auto_compactions = true;
@@ -371,11 +371,12 @@ fn test_delete_files_in_range_for_titan() {
     build_sst_cf_file_list::<RocksEngine>(
         &mut cf_file,
         &engines.kv,
-        &engines.kv.snapshot(),
+        &engines.kv.snapshot(None),
         b"",
         b"{",
         u64::MAX,
         &limiter,
+        None,
     )
     .unwrap();
     let mut cf_file_write = CfFile::new(
@@ -387,11 +388,12 @@ fn test_delete_files_in_range_for_titan() {
     build_sst_cf_file_list::<RocksEngine>(
         &mut cf_file_write,
         &engines.kv,
-        &engines.kv.snapshot(),
+        &engines.kv.snapshot(None),
         b"",
         b"{",
         u64::MAX,
         &limiter,
+        None,
     )
     .unwrap();
 

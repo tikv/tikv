@@ -250,14 +250,22 @@ impl BucketStatsInfo {
         // The bucket ranges is none when the region buckets is also none.
         // So this condition indicates that the region buckets needs to refresh not
         // renew.
-        if let Some(bucket_ranges) = bucket_ranges&&self.bucket_stat.is_some(){
+        if let Some(bucket_ranges) = bucket_ranges
+            && self.bucket_stat.is_some()
+        {
             assert_eq!(buckets.len(), bucket_ranges.len());
-            change_bucket_version=self.update_buckets(cfg, next_bucket_version, buckets, region_epoch,  &bucket_ranges);
-        }else{
+            change_bucket_version = self.update_buckets(
+                cfg,
+                next_bucket_version,
+                buckets,
+                region_epoch,
+                &bucket_ranges,
+            );
+        } else {
             change_bucket_version = true;
             // when the region buckets is none, the exclusive buckets includes all the
             // bucket keys.
-           self.init_buckets(cfg, next_bucket_version, buckets, region_epoch, region);
+            self.init_buckets(cfg, next_bucket_version, buckets, region_epoch, region);
         }
         change_bucket_version
     }
@@ -500,7 +508,7 @@ impl<EK: KvEngine, S: StoreHandle> Runner<EK, S> {
         region: &Region,
         bucket_ranges: &Vec<BucketRange>,
     ) {
-        for (mut bucket, bucket_range) in &mut buckets.iter_mut().zip(bucket_ranges) {
+        for (bucket, bucket_range) in &mut buckets.iter_mut().zip(bucket_ranges) {
             let mut bucket_region = region.clone();
             bucket_region.set_start_key(bucket_range.0.clone());
             bucket_region.set_end_key(bucket_range.1.clone());

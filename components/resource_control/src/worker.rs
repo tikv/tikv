@@ -332,10 +332,11 @@ impl<R: ResourceStatsProvider> PriorityLimiterAdjustWorker<R> {
         resource_ctl: Arc<ResourceGroupManager>,
         resource_quota_getter: R,
     ) -> Self {
-        let trackers = resource_ctl
-            .get_priority_resource_limiters()
-            .zip(TaskPriority::priorities())
-            .map(|(l, p)| PriorityLimiterStatsTracker::new(l, p.as_str()));
+        let limiters = resource_ctl.get_priority_resource_limiters();
+        let priorities = TaskPriority::priorities();
+        let trackers = std::array::from_fn(|i| {
+            PriorityLimiterStatsTracker::new(limiters[i].clone(), priorities[i].as_str())
+        });
         Self {
             resource_ctl,
             trackers,
@@ -447,9 +448,9 @@ impl<R: ResourceStatsProvider> PriorityLimiterAdjustWorker<R> {
             limits[i - 1] = limit;
             expect_cpu_time_total -= level_expected[i];
         }
-        debug!("adjsut cpu limiter by priority"; "cpu_quota" => process_cpu_stats.total_quota, 
+        debug!("adjsut cpu limiter by priority"; "cpu_quota" => process_cpu_stats.total_quota,
             "process_cpu" => process_cpu_stats.current_used, "expected_cpu" => ?level_expected,
-            "cpu_costs" => ?cpu_duration, "limits" => ?limits, 
+            "cpu_costs" => ?cpu_duration, "limits" => ?limits,
             "limit_cpu_total" => expect_pool_cpu_total, "pool_cpu_cost" => real_cpu_total);
     }
 }
@@ -700,6 +701,7 @@ mod tests {
                 read: 1000,
                 write: 1000,
             },
+            true,
         );
         worker.adjust_quota();
         check_limiter(
@@ -729,6 +731,7 @@ mod tests {
                 read: 1000,
                 write: 1000,
             },
+            true,
         );
         worker.adjust_quota();
         check_limiter(
@@ -747,6 +750,7 @@ mod tests {
                 read: 5000,
                 write: 5000,
             },
+            true,
         );
         worker.adjust_quota();
         check_limiter(
@@ -798,6 +802,7 @@ mod tests {
                 read: 600,
                 write: 600,
             },
+            true,
         );
         bg_limiter.consume(
             Duration::from_millis(1800),
@@ -805,6 +810,7 @@ mod tests {
                 read: 900,
                 write: 900,
             },
+            true,
         );
         worker.adjust_quota();
         check_limiter(
@@ -873,6 +879,7 @@ mod tests {
                 read: 600,
                 write: 600,
             },
+            true,
         );
         new_bg_limiter.consume(
             Duration::from_millis(1800),
@@ -880,6 +887,7 @@ mod tests {
                 read: 900,
                 write: 900,
             },
+            true,
         );
 
         worker.adjust_quota();
@@ -954,7 +962,7 @@ mod tests {
 
         // only default group, always return infinity.
         reset_quota(&mut worker, 6.4);
-        priority_limiters[1].consume(Duration::from_secs(50), IoBytes::default());
+        priority_limiters[1].consume(Duration::from_secs(50), IoBytes::default(), true);
         worker.adjust();
         check_limiter(f64::INFINITY, f64::INFINITY, f64::INFINITY);
 
@@ -964,46 +972,46 @@ mod tests {
         resource_ctl.add_resource_group(rg2);
 
         reset_quota(&mut worker, 6.4);
-        priority_limiters[1].consume(Duration::from_secs(64), IoBytes::default());
+        priority_limiters[1].consume(Duration::from_secs(64), IoBytes::default(), true);
         worker.adjust();
         check_limiter(f64::INFINITY, f64::INFINITY, f64::INFINITY);
 
         reset_quota(&mut worker, 6.4);
         for _i in 0..100 {
-            priority_limiters[0].consume(Duration::from_millis(240), IoBytes::default());
-            priority_limiters[1].consume(Duration::from_millis(400), IoBytes::default());
+            priority_limiters[0].consume(Duration::from_millis(240), IoBytes::default(), true);
+            priority_limiters[1].consume(Duration::from_millis(400), IoBytes::default(), true);
         }
         worker.adjust();
         check_limiter(f64::INFINITY, 5.2, 1.2);
 
         reset_quota(&mut worker, 6.4);
         for _i in 0..100 {
-            priority_limiters[0].consume(Duration::from_millis(120), IoBytes::default());
-            priority_limiters[1].consume(Duration::from_millis(200), IoBytes::default());
+            priority_limiters[0].consume(Duration::from_millis(120), IoBytes::default(), true);
+            priority_limiters[1].consume(Duration::from_millis(200), IoBytes::default(), true);
         }
         worker.adjust();
         check_limiter(f64::INFINITY, 2.6, 0.6);
 
         reset_quota(&mut worker, 6.4);
         for _i in 0..100 {
-            priority_limiters[2].consume(Duration::from_millis(200), IoBytes::default());
+            priority_limiters[2].consume(Duration::from_millis(200), IoBytes::default(), true);
         }
         worker.adjust();
         check_limiter(f64::INFINITY, f64::INFINITY, f64::INFINITY);
 
         reset_quota(&mut worker, 8.0);
         for _i in 0..100 {
-            priority_limiters[0].consume(Duration::from_millis(240), IoBytes::default());
-            priority_limiters[1].consume(Duration::from_millis(240), IoBytes::default());
-            priority_limiters[2].consume(Duration::from_millis(320), IoBytes::default());
+            priority_limiters[0].consume(Duration::from_millis(240), IoBytes::default(), true);
+            priority_limiters[1].consume(Duration::from_millis(240), IoBytes::default(), true);
+            priority_limiters[2].consume(Duration::from_millis(320), IoBytes::default(), true);
         }
         worker.adjust();
         check_limiter(f64::INFINITY, 5.2, 2.8);
 
         reset_quota(&mut worker, 6.0);
         for _i in 0..100 {
-            priority_limiters[0].consume(Duration::from_millis(240), IoBytes::default());
-            priority_limiters[2].consume(Duration::from_millis(360), IoBytes::default());
+            priority_limiters[0].consume(Duration::from_millis(240), IoBytes::default(), true);
+            priority_limiters[2].consume(Duration::from_millis(360), IoBytes::default(), true);
         }
         worker.adjust();
         check_limiter(f64::INFINITY, 5.2, 5.2);

@@ -16,7 +16,7 @@ use futures_util::{
     io::{AsyncRead, AsyncReadExt},
     stream::TryStreamExt,
 };
-pub use kvproto::brpb::{Bucket as InputBucket, S3 as InputConfig};
+pub use kvproto::brpb::S3 as InputConfig;
 use rusoto_core::{request::DispatchSignedRequest, ByteStream, RusotoError};
 use rusoto_credential::{ProvideAwsCredentials, StaticProvider};
 use rusoto_s3::{util::AddressingStyle, *};
@@ -330,7 +330,7 @@ async fn try_read_exact<R: AsyncRead + ?Sized + Unpin>(
     }
 }
 
-// NOTICE: the openssl fips doesn't support md5, therefore use md5 pakcage to
+// NOTICE: the openssl fips doesn't support md5, therefore use md5 package to
 // hash
 fn get_content_md5(object_lock_enabled: bool, content: &[u8]) -> Option<String> {
     object_lock_enabled.then(|| {
