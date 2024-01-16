@@ -293,6 +293,15 @@ impl From<Error> for errorpb::Error {
             Error::DeadlineExceeded => {
                 set_deadline_exceeded_busy_error(&mut errorpb);
             }
+            Error::Coprocessor(CopError::RequireDelay {
+                after,
+                reason: hint,
+            }) => {
+                let mut e = errorpb::ServerIsBusy::new();
+                e.set_backoff_ms(after.as_millis() as _);
+                e.set_reason(hint);
+                errorpb.set_server_is_busy(e);
+            }
             _ => {}
         };
 
