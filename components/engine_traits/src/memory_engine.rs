@@ -7,7 +7,7 @@ use kvproto::metapb;
 
 use crate::{Iterable, Snapshot, WriteBatchExt};
 
-/// RangeCaheEngine works as a region cache caching some regions (in Memory or
+/// RangeCaheEngine works as a range cache caching some ranges (in Memory or
 /// NVME for instance) to improve the read performance.
 pub trait RangeCacheEngine:
     WriteBatchExt + Iterable + Debug + Clone + Unpin + Send + Sync + 'static

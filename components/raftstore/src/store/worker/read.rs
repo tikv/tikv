@@ -12,7 +12,7 @@ use std::{
 };
 
 use crossbeam::{atomic::AtomicCell, channel::TrySendError};
-use engine_traits::{KvEngine, Peekable, RaftEngine, SnapshotContext};
+use engine_traits::{CacheRange, KvEngine, Peekable, RaftEngine, SnapshotContext};
 use fail::fail_point;
 use kvproto::{
     errorpb,
@@ -1058,13 +1058,17 @@ where
 
     pub fn propose_raft_command(
         &mut self,
-        snap_ctx: Option<SnapshotContext>,
+        mut snap_ctx: Option<SnapshotContext>,
         read_id: Option<ThreadReadId>,
         mut req: RaftCmdRequest,
         cb: Callback<E::Snapshot>,
     ) {
         match self.pre_propose_raft_command(&req) {
             Ok(Some((mut delegate, policy))) => {
+                if let Some(ref mut ctx) = snap_ctx {
+                    ctx.set_range(CacheRange::from_region(&delegate.region))
+                }
+
                 let mut snap_updated = false;
                 let last_valid_ts = delegate.last_valid_ts;
                 let mut response = match policy {
@@ -2581,7 +2585,7 @@ mod tests {
 
         let mut snap_ctx = SnapshotContext {
             read_ts: 15,
-            range: Some(range.clone()),
+            range: None,
         };
 
         let s = get_snapshot(Some(snap_ctx.clone()), &mut reader, cmd.clone(), &rx);

@@ -76,10 +76,7 @@ impl Drop for GlobalMemoryLimiter {
     }
 }
 
-/// RegionMemoryEngine stores data for a specific cached region
-///
-/// todo: The skiplist used here currently is for test purpose. Replace it
-/// with a formal implementation.
+/// A single global set of skiplists shared by all cached ranges
 #[derive(Clone)]
 pub struct SkiplistEngine {
     data: [Arc<Skiplist<InternalKeyComparator, GlobalMemoryLimiter>>; 3],
@@ -112,7 +109,7 @@ impl SkiplistEngine {
 
 impl Debug for SkiplistEngine {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "Region Memory Engine")
+        write!(f, "Range Memory Engine")
     }
 }
 
@@ -146,34 +143,6 @@ impl SnapshotList {
     }
 }
 
-#[derive(Default)]
-pub struct RegionMemoryMeta {
-    // It records the snapshots that have been granted previsously with specific snapshot_ts. We
-    // should guarantee that the data visible to any one of the snapshot in it will not be removed.
-    snapshot_list: SnapshotList,
-    // It indicates whether the region is readable. False means integrity of the data in this
-    // cached region is not satisfied due to being evicted for instance.
-    can_read: bool,
-    // Request with read_ts below it is not eligible for granting snapshot.
-    // Note: different region can have different safe_ts.
-    safe_ts: u64,
-    evicted: bool,
-}
-
-impl RegionMemoryMeta {
-    pub fn set_can_read(&mut self, can_read: bool) {
-        self.can_read = can_read;
-    }
-
-    pub fn set_safe_ts(&mut self, safe_ts: u64) {
-        self.safe_ts = safe_ts;
-    }
-
-    pub fn ready_to_remove(&self) -> bool {
-        self.snapshot_list.is_empty() && self.evicted
-    }
-}
-
 pub struct RangeCacheMemoryEngineCore {
     engine: SkiplistEngine,
     range_manager: RangeManager,
@@ -196,14 +165,14 @@ impl RangeCacheMemoryEngineCore {
     }
 }
 
-/// The RangeCaheMemoryEngine serves as a region cache, storing hot regions in
+/// The RangeCaheMemoryEngine serves as a range cache, storing hot ranges in
 /// the leaders' store. Incoming writes that are written to disk engine (now,
 /// RocksDB) are also written to the RangeCaheMemoryEngine, leading to a
-/// mirrored data set in the cached regions with the disk engine.
+/// mirrored data set in the cached ranges with the disk engine.
 ///
-/// A load/evict unit manages the memory, deciding which regions should be
+/// A load/evict unit manages the memory, deciding which ranges should be
 /// evicted when the memory used by the RangeCaheMemoryEngine reaches a
-/// certain limit, and determining which regions should be loaded when there is
+/// certain limit, and determining which ranges should be loaded when there is
 /// spare memory capacity.
 ///
 /// The safe point lifetime differs between RangeCaheMemoryEngine and the disk
@@ -247,7 +216,7 @@ impl RangeCacheMemoryEngine {
 
 impl Debug for RangeCacheMemoryEngine {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "Region Cache Memory Engine")
+        write!(f, "Range Cache Memory Engine")
     }
 }
 

@@ -177,6 +177,8 @@ mod tests {
         range_mgr.set_safe_ts(&r1, 5);
         assert!(!range_mgr.range_snapshot(&r1, 5));
         assert!(range_mgr.range_snapshot(&r1, 8));
+        let tmp_r = CacheRange::new(b"k00".to_vec(), b"k04".to_vec());
+        assert!(!range_mgr.range_snapshot(&tmp_r, 8));
         assert!(range_mgr.range_snapshot(&r1, 10));
         range_mgr.set_range_readable(&r1_1, false);
         assert!(!range_mgr.range_snapshot(&r1_1, 10));
