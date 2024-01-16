@@ -2871,7 +2871,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#c4b7047314a9b27926a1b7b25d2e6d1a37a48d2b"
+source = "git+https://github.com/tikv/rust-rocksdb.git#c247909c279e89b3eabb4f200d580ee50f27fda6"
 dependencies = [
  "bindgen 0.65.1",
  "bzip2-sys",
@@ -5444,7 +5444,7 @@ dependencies = [
 [[package]]
 name = "snappy-sys"
 version = "0.1.0"
-source = "git+https://github.com/busyjay/rust-snappy.git?branch=static-link#8c12738bad811397600455d6982aff754ea2ac44"
+source = "git+https://github.com/tikv/rust-snappy.git?branch=static-link#8c12738bad811397600455d6982aff754ea2ac44"
 dependencies = [
  "cmake",
  "libc 0.2.151",
@@ -7653,8 +7653,3 @@ dependencies = [
  "cc",
  "libc 0.2.151",
 ]
-
-[[patch.unused]]
-name = "snappy-sys"
-version = "0.1.0"
-source = "git+https://github.com/tikv/rust-snappy.git?branch=static-link#8c12738bad811397600455d6982aff754ea2ac44"
