@@ -24,6 +24,13 @@ impl RangeMeta {
             .append(&mut other.range_snapshot_list);
         self.ranges_evcited.append(&mut other.ranges_evcited);
         self.ranges_unreadable.append(&mut other.ranges_unreadable);
+
+        // merge safe_ts to the min of them if not 0
+        if self.safe_ts != 0 && other.safe_ts != 0 {
+            self.safe_ts = u64::min(self.safe_ts, other.safe_ts);
+        } else if other.safe_ts != 0 {
+            self.safe_ts = other.safe_ts;
+        }
     }
 
     pub(crate) fn set_range_readable(&mut self, range: &CacheRange, set_readable: bool) {
@@ -51,7 +58,7 @@ impl RangeManager {
             let left_sib = sibling < range;
             let mut sib_meta = self.ranges.remove(&sibling).unwrap();
             sib_meta.ranges_unreadable.insert(range.clone());
-            let range = CacheRange::merge(sibling, range);
+            let mut range = CacheRange::merge(sibling, range);
 
             // if sibling found above is the left sibling of the range, there could be a
             // right sibling
@@ -61,6 +68,7 @@ impl RangeManager {
                 {
                     let right_sib_meta = self.ranges.remove(&right_sibling).unwrap();
                     sib_meta.merge_meta(right_sib_meta);
+                    range = CacheRange::merge(range, right_sibling);
                 }
             }
             self.ranges.insert(range, sib_meta);
@@ -84,6 +92,9 @@ impl RangeManager {
 
     pub fn set_safe_ts(&mut self, range: &CacheRange, safe_ts: u64) -> bool {
         if let Some(meta) = self.ranges.get_mut(range) {
+            if meta.safe_ts > safe_ts {
+                return false;
+            }
             meta.safe_ts = safe_ts;
             true
         } else {
@@ -92,29 +103,7 @@ impl RangeManager {
     }
 
     pub(crate) fn overlap_with_range(&self, range: &CacheRange) -> bool {
-        false
-    }
-
-    pub(crate) fn range_readable(&self, range: &CacheRange, read_ts: u64) -> bool {
-        let Some(range_key) = self.ranges.keys().find(|&r| r.contains(range)) else {
-            return false;
-        };
-        let meta = self.ranges.get(range_key).unwrap();
-
-        if read_ts <= meta.safe_ts {
-            // todo(SpadeA): add metrics for it
-            return false;
-        }
-
-        if meta.ranges_evcited.iter().any(|r| r.overlaps(range)) {
-            return false;
-        }
-
-        if meta.ranges_unreadable.iter().any(|r| r.overlaps(range)) {
-            return false;
-        }
-
-        true
+        self.ranges.keys().any(|r| r.overlaps(&range))
     }
 
     pub(crate) fn range_snapshot(&mut self, range: &CacheRange, read_ts: u64) -> bool {
@@ -159,68 +148,62 @@ impl RangeManager {
         }
     }
 
-    // A range is evictable if:
-    // 1. it is marked as evicted (so it's in the ranges_evicted)
-    // 2. there's no snapshot whose range overlap with it
     pub(crate) fn range_evictable(&self, range: &CacheRange) -> bool {
-        let range_key = self.ranges.keys().find(|&r| r.contains(range)).unwrap();
-        let meta = self.ranges.get(range_key).unwrap();
-        if meta.ranges_evcited.get(range).is_none() {
-            return false;
-        }
-
-        return !meta.range_snapshot_list.keys().any(|r| r.overlaps(range));
+        unimplemented!()
     }
 
     // Evict a range which results in a split of the range containing it. Meta
     // should also be splitted.
     pub(crate) fn evict_range(&mut self, range: &CacheRange) {
-        let range_key = self
-            .ranges
-            .keys()
-            .find(|&r| r.contains(range))
-            .unwrap()
-            .clone();
-        let mut meta = self.ranges.remove(&range_key).unwrap();
-
-        let range_snapshot_list2 = meta.range_snapshot_list.split_off(&range_key);
-        let evicted2 = meta.ranges_evcited.split_off(&range_key);
-        let unreadable2 = meta.ranges_unreadable.split_off(&range_key);
-
-        // range overlap assertion check
-        if let Some(r) = range_snapshot_list2.keys().next() {
-            assert!(!r.overlaps(range));
-        }
-        if let Some(r) = meta.range_snapshot_list.keys().last() {
-            assert!(!r.overlaps(range));
-        }
-        if let Some(r) = evicted2.iter().next() {
-            assert!(!r.overlaps(range));
-        }
-        if let Some(r) = meta.ranges_evcited.iter().last() {
-            assert!(!r.overlaps(range));
-        }
-        if let Some(r) = unreadable2.iter().next() {
-            assert!(!r.overlaps(range));
-        }
-        if let Some(r) = meta.ranges_unreadable.iter().last() {
-            assert!(!r.overlaps(range));
-        }
-
-        let (r1, r2) = range_key.split_off(range);
-        let safe_ts = meta.safe_ts;
-        self.ranges.insert(r1, meta);
-        self.ranges.insert(
-            r2,
-            RangeMeta {
-                range_snapshot_list: range_snapshot_list2,
-                ranges_evcited: evicted2,
-                ranges_unreadable: unreadable2,
-                safe_ts,
-            },
-        );
+        unimplemented!()
     }
 }
 
 #[cfg(test)]
-mod tests {}
+mod tests {
+    use engine_traits::CacheRange;
+
+    use super::RangeManager;
+
+    #[test]
+    fn test_range_manager() {
+        let mut range_mgr = RangeManager::default();
+        let r1 = CacheRange::new(b"k00".to_vec(), b"k03".to_vec());
+        let r1_1 = CacheRange::new(b"k00".to_vec(), b"k01".to_vec());
+        let r1_2 = CacheRange::new(b"k01".to_vec(), b"k02".to_vec());
+
+        range_mgr.new_range(r1.clone());
+        range_mgr.set_range_readable(&r1, true);
+        range_mgr.set_safe_ts(&r1, 5);
+        assert!(!range_mgr.range_snapshot(&r1, 5));
+        assert!(range_mgr.range_snapshot(&r1, 8));
+        assert!(range_mgr.range_snapshot(&r1, 10));
+        range_mgr.set_range_readable(&r1_1, false);
+        assert!(!range_mgr.range_snapshot(&r1_1, 10));
+        range_mgr.set_range_readable(&r1_2, false);
+        assert!(!range_mgr.range_snapshot(&r1_2, 10));
+
+        let r2 = CacheRange::new(b"k05".to_vec(), b"k10".to_vec());
+        let r2_1 = CacheRange::new(b"k05".to_vec(), b"k07".to_vec());
+        let r2_2 = CacheRange::new(b"k07".to_vec(), b"k08".to_vec());
+        range_mgr.new_range(r2.clone());
+        range_mgr.set_range_readable(&r2, true);
+        range_mgr.set_safe_ts(&r2, 3);
+        assert!(range_mgr.range_snapshot(&r2, 10));
+        range_mgr.set_range_readable(&r2_1, false);
+        range_mgr.set_range_readable(&r2_2, false);
+
+        let r3 = CacheRange::new(b"k03".to_vec(), b"k05".to_vec());
+        // it makes all ranges merged
+        range_mgr.new_range(r3.clone());
+        range_mgr.set_range_readable(&r3, true);
+        let r = CacheRange::new(b"k00".to_vec(), b"k10".to_vec());
+        assert_eq!(range_mgr.ranges.len(), 1);
+        let meta = range_mgr.ranges.get(&r).unwrap();
+        assert_eq!(meta.safe_ts, 3);
+        assert_eq!(meta.ranges_unreadable.len(), 4);
+        assert_eq!(meta.range_snapshot_list.len(), 2);
+        assert_eq!(meta.range_snapshot_list.get(&r1).unwrap().len(), 2);
+        assert_eq!(meta.range_snapshot_list.get(&r2).unwrap().len(), 1);
+    }
+}

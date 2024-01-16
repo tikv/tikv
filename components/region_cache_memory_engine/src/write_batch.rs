@@ -6,12 +6,12 @@ use crate::RangeCacheMemoryEngine;
 
 /// RegionCacheWriteBatch maintains its own in-memory buffer.
 #[derive(Default, Clone, Debug)]
-pub struct RegionCacheWriteBatch {
-    buffer: Vec<RegionCacheWriteBatchEntry>,
+pub struct RangeCacheWriteBatch {
+    buffer: Vec<RangeCacheWriteBatchEntry>,
     sequence_number: Option<u64>,
 }
 
-impl RegionCacheWriteBatch {
+impl RangeCacheWriteBatch {
     pub fn with_capacity(cap: usize) -> Self {
         Self {
             buffer: Vec::with_capacity(cap),
@@ -31,27 +31,27 @@ impl RegionCacheWriteBatch {
 }
 
 #[derive(Clone, Debug)]
-struct RegionCacheWriteBatchEntry {
+struct RangeCacheWriteBatchEntry {
     cf: String,
     key: Bytes,
     mutation: (), // TODO,
 }
 
 impl WriteBatchExt for RangeCacheMemoryEngine {
-    type WriteBatch = RegionCacheWriteBatch;
+    type WriteBatch = RangeCacheWriteBatch;
     // todo: adjust it
     const WRITE_BATCH_MAX_KEYS: usize = 256;
 
     fn write_batch(&self) -> Self::WriteBatch {
-        RegionCacheWriteBatch::default()
+        RangeCacheWriteBatch::default()
     }
 
     fn write_batch_with_cap(&self, cap: usize) -> Self::WriteBatch {
-        RegionCacheWriteBatch::with_capacity(cap)
+        RangeCacheWriteBatch::with_capacity(cap)
     }
 }
 
-impl WriteBatch for RegionCacheWriteBatch {
+impl WriteBatch for RangeCacheWriteBatch {
     fn write_opt(&mut self, _: &WriteOptions) -> Result<u64> {
         unimplemented!()
     }
@@ -93,7 +93,7 @@ impl WriteBatch for RegionCacheWriteBatch {
     }
 }
 
-impl Mutable for RegionCacheWriteBatch {
+impl Mutable for RangeCacheWriteBatch {
     fn put(&mut self, _: &[u8], _: &[u8]) -> Result<()> {
         unimplemented!()
     }

@@ -1,13 +1,13 @@
 // Copyright 2023 TiKV Project Authors. Licensed under Apache-2.0.
 
 use engine_traits::{KvEngine, Mutable, Result, WriteBatch, WriteBatchExt, WriteOptions};
-use region_cache_memory_engine::{RangeCacheMemoryEngine, RegionCacheWriteBatch};
+use region_cache_memory_engine::{RangeCacheMemoryEngine, RangeCacheWriteBatch};
 
 use crate::engine::HybridEngine;
 
 pub struct HybridEngineWriteBatch<EK: KvEngine> {
     disk_write_batch: EK::WriteBatch,
-    cache_write_batch: RegionCacheWriteBatch,
+    cache_write_batch: RangeCacheWriteBatch,
 }
 
 impl<EK> WriteBatchExt for HybridEngine<EK, RangeCacheMemoryEngine>

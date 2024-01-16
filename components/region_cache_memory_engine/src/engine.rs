@@ -106,13 +106,7 @@ impl SkiplistEngine {
     }
 
     fn evict_range(&self, range: &CacheRange) {
-        // self.data.iter().map(|sl| {
-        //     let iter = sl.iter();
-        //     iter.seek(&range.start);
-        //     while iter.valid() && iter.key() < &range.end {
-        //         sl.remove(iter.key());
-        //     }
-        // })
+        unimplemented!()
     }
 }
 
@@ -145,6 +139,10 @@ impl SnapshotList {
 
     pub(crate) fn is_empty(&self) -> bool {
         self.0.is_empty()
+    }
+
+    pub(crate) fn len(&self) -> usize {
+        self.0.keys().len()
     }
 }
 
@@ -237,8 +235,7 @@ impl RangeCacheMemoryEngine {
     }
 
     pub fn evict_range(&mut self, range: &CacheRange) {
-        let mut core = self.core.lock().unwrap();
-        core.range_manager.evict_range(range);
+        unimplemented!()
     }
 }
 
@@ -589,9 +586,8 @@ impl Drop for RangeCacheSnapshot {
         let mut core = self.engine.core.lock().unwrap();
         core.range_manager
             .remove_range_snapshot(&self.range, self.snapshot_ts);
-        if core.range_manager.range_evictable(&self.range) {
-            core.range_manager.evict_range(&self.range);
-        }
+
+        // todo: may evict range
     }
 }
 
