@@ -2,6 +2,7 @@
 //! This module contains things about disk snapshot.
 
 use std::{
+    future::Pending,
     sync::{
         atomic::{AtomicU64, Ordering},
         Arc,
@@ -14,9 +15,9 @@ use futures::future;
 use futures_util::{
     future::{BoxFuture, FutureExt},
     sink::SinkExt,
-    stream::StreamExt,
+    stream::{AbortHandle, Abortable, StreamExt},
 };
-use grpcio::{RpcStatus, WriteFlags};
+use grpcio::{RpcStatus, RpcStatusCode, WriteFlags};
 use kvproto::{
     brpb::{
         PrepareSnapshotBackupEventType as PEvnT, PrepareSnapshotBackupRequest as PReq,
@@ -205,6 +206,7 @@ impl<SR: SnapshotBrHandle> Env<SR> {
 pub struct StreamHandleLoop<SR: SnapshotBrHandle + 'static> {
     pending_regions: Vec<BoxFuture<'static, (Region, Result<()>)>>,
     env: Env<SR>,
+    aborted: Abortable<Pending<()>>,
 }
 
 impl<SR: SnapshotBrHandle + 'static> Drop for StreamHandleLoop<SR> {
@@ -217,15 +219,19 @@ enum StreamHandleEvent {
     Req(PReq),
     WaitApplyDone(Region, Result<()>),
     ConnectionGone(Option<grpcio::Error>),
+    Abort,
 }
 
 impl<SR: SnapshotBrHandle + 'static> StreamHandleLoop<SR> {
-    pub fn new(env: Env<SR>) -> Self {
+    pub fn new(env: Env<SR>) -> (Self, AbortHandle) {
+        let (aborted, handle) = futures_util::future::abortable(std::future::pending());
         env.active_stream.fetch_add(1, Ordering::SeqCst);
-        Self {
+        let this = Self {
             env,
+            aborted,
             pending_regions: vec![],
-        }
+        };
+        return (this, handle);
     }
 
     fn async_wait_apply(&mut self, region: &Region) -> BoxFuture<'static, (Region, Result<()>)> {
@@ -260,20 +266,19 @@ impl<SR: SnapshotBrHandle + 'static> StreamHandleLoop<SR> {
         &mut self,
         input: &mut (impl Stream<Item = grpcio::Result<PReq>> + Unpin),
     ) -> StreamHandleEvent {
+        let pending_regions = &mut self.pending_regions;
         let wait_applies = future::poll_fn(|cx| {
-            let selected =
-                self.pending_regions
-                    .iter_mut()
-                    .enumerate()
-                    .find_map(|(i, fut)| match fut.poll_unpin(cx) {
-                        Poll::Ready(r) => Some((i, r)),
-                        Poll::Pending => None,
-                    });
+            let selected = pending_regions.iter_mut().enumerate().find_map(|(i, fut)| {
+                match fut.poll_unpin(cx) {
+                    Poll::Ready(r) => Some((i, r)),
+                    Poll::Pending => None,
+                }
+            });
             match selected {
                 Some((i, region)) => {
                     // We have polled the future (and make sure it has ready) before, it is
                     // safe to drop this future directly.
-                    let _ = self.pending_regions.swap_remove(i);
+                    let _ = pending_regions.swap_remove(i);
                     region.into()
                 }
                 None => Poll::Pending,
@@ -290,6 +295,9 @@ impl<SR: SnapshotBrHandle + 'static> StreamHandleLoop<SR> {
                     Some(Err(err)) => StreamHandleEvent::ConnectionGone(Some(err)),
                     None => StreamHandleEvent::ConnectionGone(None)
                 }
+            }
+            _ = &mut self.aborted => {
+                StreamHandleEvent::Abort
             }
         }
     }
@@ -346,6 +354,16 @@ impl<SR: SnapshotBrHandle + 'static> StreamHandleLoop<SR> {
                         None => Ok(()),
                         Some(err) => Err(err),
                     };
+                }
+                StreamHandleEvent::Abort => {
+                    warn!("Aborted disk snapshot prepare loop by the server.");
+                    return sink
+                        .0
+                        .fail(RpcStatus::with_message(
+                            RpcStatusCode::CANCELLED,
+                            "the loop has been aborted by server".to_string(),
+                        ))
+                        .await;
                 }
             }
         }
