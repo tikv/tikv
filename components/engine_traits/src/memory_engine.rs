@@ -7,16 +7,16 @@ use kvproto::metapb;
 
 use crate::{Iterable, Snapshot, WriteBatchExt};
 
-/// RegionCacheEngine works as a region cache caching some regions (in Memory or
+/// RangeCaheEngine works as a region cache caching some regions (in Memory or
 /// NVME for instance) to improve the read performance.
 pub trait RangeCacheEngine:
     WriteBatchExt + Iterable + Debug + Clone + Unpin + Send + Sync + 'static
 {
     type Snapshot: Snapshot;
 
-    // If None is returned, the RegionCacheEngine is currently not readable for this
+    // If None is returned, the RangeCaheEngine is currently not readable for this
     // region or read_ts.
-    // Sequence number is shared between RegionCacheEngine and disk KvEnigne to
+    // Sequence number is shared between RangeCaheEngine and disk KvEnigne to
     // provide atomic write
     fn snapshot(&self, range: CacheRange, read_ts: u64, seq_num: u64) -> Option<Self::Snapshot>;
 }

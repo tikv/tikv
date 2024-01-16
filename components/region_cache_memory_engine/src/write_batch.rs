@@ -4,7 +4,7 @@ use tikv_util::box_err;
 
 use crate::RangeCacheMemoryEngine;
 
-/// RegionCacheWriteBatch maintains its own in-memory buffer.
+/// RangeCaheWriteBatch maintains its own in-memory buffer.
 #[derive(Default, Clone, Debug)]
 pub struct RangeCacheWriteBatch {
     buffer: Vec<RangeCacheWriteBatchEntry>,
