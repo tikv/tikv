@@ -469,6 +469,14 @@ where
 const DEFAULT_LOAD_BASE_SPLIT_CHECK_INTERVAL: Duration = Duration::from_secs(1);
 const DEFAULT_COLLECT_TICK_INTERVAL: Duration = Duration::from_secs(1);
 
+fn default_load_base_split_check_interval() -> Duration {
+    fail_point!("mock_load_base_split_check_interval", |t| {
+        let t = t.unwrap().parse::<u64>().unwrap();
+        Duration::from_millis(t)
+    });
+    DEFAULT_LOAD_BASE_SPLIT_CHECK_INTERVAL
+}
+
 fn default_collect_tick_interval() -> Duration {
     fail_point!("mock_collect_tick_interval", |_| {
         Duration::from_millis(1)
@@ -594,7 +602,7 @@ where
             cpu_stats_sender: None,
             collect_store_infos_interval: interval,
             load_base_split_check_interval: cmp::min(
-                DEFAULT_LOAD_BASE_SPLIT_CHECK_INTERVAL,
+                default_load_base_split_check_interval(),
                 interval,
             ),
             // Use `inspect_latency_interval` as the minimal limitation for collecting tick.
@@ -1160,6 +1168,7 @@ where
         callback: Callback<EK::Snapshot>,
         task: String,
         remote: Remote<yatp::task::future::TaskCell>,
+        leader: Option<metapb::Peer>,
     ) {
         if split_keys.is_empty() {
             info!("empty split key, skip ask batch split";
@@ -1186,15 +1195,26 @@ where
                     );
                     let region_id = region.get_id();
                     let epoch = region.take_region_epoch();
-                    send_admin_request(
-                        &router,
-                        region_id,
-                        epoch,
-                        peer,
-                        req,
-                        callback,
-                        Default::default(),
-                    );
+                    if let Some(leader) = leader {
+                        if leader.get_id() != peer.get_id() && peer.get_id() != raft::INVALID_ID {
+                            warn!("current peer is not same as the specified leader, try to redirect to leader to batch split";
+                                "region_id" => region_id,
+                                "leader" => ?leader,
+                                "peer" => ?peer);
+                            redirect_split_request(&router, region_id, leader, req);
+                        }
+                    } else {
+                        // directly try to split on the specified peer
+                        send_admin_request(
+                            &router,
+                            region_id,
+                            epoch,
+                            peer,
+                            req,
+                            callback,
+                            Default::default(),
+                        );
+                    }
                 }
                 // When rolling update, there might be some old version tikvs that don't support
                 // batch split in cluster. In this situation, PD version check would refuse
@@ -2115,6 +2135,7 @@ where
                 callback,
                 String::from("batch_split"),
                 self.remote.clone(),
+                None,
             ),
             Task::AutoSplit { split_infos } => {
                 let pd_client = self.pd_client.clone();
@@ -2124,11 +2145,19 @@ where
 
                 let f = async move {
                     for split_info in split_infos {
-                        let Ok(Some(region)) =
-                            pd_client.get_region_by_id(split_info.region_id).await
+                        let Ok(Some((region, leader))) = pd_client
+                            .get_region_leader_by_id(split_info.region_id)
+                            .await
                         else {
                             continue;
                         };
+                        if leader.get_id() != split_info.peer.get_id() {
+                            info!("load base split region on non-leader";
+                                "region_id" => region.get_id(),
+                                "peer_id" => split_info.peer.get_id(),
+                                "leader_id" => leader.get_id(),
+                            );
+                        }
                         // Try to split the region with the given split key.
                         if let Some(split_key) = split_info.split_key {
                             Self::handle_ask_batch_split(
@@ -2143,6 +2172,7 @@ where
                                 Callback::None,
                                 String::from("auto_split"),
                                 remote.clone(),
+                                Some(leader),
                             );
                         // Try to split the region on half within the given key
                         // range if there is no `split_key` been given.
@@ -2533,6 +2563,24 @@ fn send_admin_request<EK, ER>(
         error!(
             "send request failed";
             "region_id" => region_id, "cmd_type" => ?cmd_type, "err" => ?e,
+        );
+    }
+}
+
+fn redirect_split_request<EK, ER>(
+    router: &RaftRouter<EK, ER>,
+    region_id: u64,
+    to_peer: metapb::Peer,
+    request: AdminRequest,
+) where
+    EK: KvEngine,
+    ER: RaftEngine,
+{
+    let casual_msg = CasualMessage::RedirectSplitRegion { request, to_peer };
+    if let Err(e) = router.send(region_id, PeerMsg::CasualMessage(casual_msg)) {
+        error!(
+            "send extra raft message failed";
+            "region_id" => region_id, "err" => ?e,
         );
     }
 }

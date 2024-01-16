@@ -285,7 +285,7 @@ impl Recorder {
     }
 
     fn update_peer(&mut self, peer: &Peer) {
-        if self.peer != *peer {
+        if self.peer != *peer && peer.get_id() != 0 {
             self.peer = peer.clone();
         }
     }
@@ -310,6 +310,9 @@ impl Recorder {
         let sampled_key_ranges = sample(config.sample_num, self.key_ranges.clone(), |x| x);
         let mut samples = Samples::from(sampled_key_ranges);
         let recorded_key_ranges: Vec<&KeyRange> = self.key_ranges.iter().flatten().collect();
+        info!("load base split collect";
+            "sampled_key_ranges_length" => samples.0.len(),
+            "recorded_key_ranges_length" => recorded_key_ranges.len());
         // Because we need to observe the number of `no_enough_key` of all the actual
         // keys, so we do this check after the samples are calculated.
         if (recorded_key_ranges.len() as u64) < config.sample_threshold {
@@ -374,7 +377,7 @@ impl RegionInfo {
     }
 
     fn update_peer(&mut self, peer: &Peer) {
-        if self.peer != *peer {
+        if self.peer != *peer && peer.get_id() != 0 {
             self.peer = peer.clone();
         }
     }

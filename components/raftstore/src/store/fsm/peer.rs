@@ -1248,6 +1248,15 @@ where
                 let _ = self.fsm.peer.raft_group.campaign();
                 self.fsm.has_ready = true;
             }
+            CasualMessage::RedirectSplitRegion { request, to_peer } => {
+                let mut extra = ExtraMessage::default();
+                extra.set_type(ExtraMessageType::MsgRedirectAdminRequest);
+                extra.set_admin_request(request.write_to_bytes().unwrap());
+                info!("redirect split region command"; "to_peer" => ?to_peer, "from_peer" => ? self.fsm.peer.peer, "region_id" => self.region_id());
+                self.fsm
+                    .peer
+                    .send_extra_message(extra, &mut self.ctx.trans, &to_peer);
+            }
         }
     }
 
@@ -2921,6 +2930,53 @@ where
                 // it needs to response GcPeerResponse.
                 if self.ctx.cfg.enable_v2_compatible_learner {
                     self.on_gc_peer_request(msg);
+                }
+            }
+            ExtraMessageType::MsgRedirectAdminRequest => {
+                info!("receive redirect admin request";
+                    "region_id" => self.region_id(),
+                    "peer_id" => self.fsm.peer_id(),
+                    "is_leader" => self.fsm.peer.is_leader(),
+                );
+                if self.fsm.peer.is_leader() {
+                    let mut admin = AdminRequest::default();
+                    if let Err(e) = admin.merge_from_bytes(msg.get_extra_msg().get_admin_request())
+                    {
+                        error!(
+                            "failed to parse redirect admin request";
+                            "region_id" => self.region_id(),
+                            "peer_id" => self.fsm.peer_id(),
+                            "err" => ?e,
+                        );
+                        return;
+                    }
+                    let mut request = new_admin_request(self.fsm.region_id(), msg.take_to_peer());
+                    request.set_admin_request(admin);
+                    request
+                        .mut_header()
+                        .set_region_epoch(self.fsm.peer.region().get_region_epoch().clone());
+
+                    // only supportbatch split now.
+                    if request.get_admin_request().get_cmd_type() != AdminCmdType::BatchSplit {
+                        error!(
+                            "MsgRedirectAdminRequest only support batch split now";
+                            "region_id" => self.region_id(),
+                        );
+                        return;
+                    }
+
+                    let msg = PeerMsg::RaftCommand(RaftCommand::new(request, Callback::None));
+                    self.ctx
+                        .router
+                        .send(self.fsm.region_id(), msg)
+                        .unwrap_or_else(|e| {
+                            error!(
+                                "failed to send admin request";
+                                "region_id" => self.region_id(),
+                                "peer_id" => self.fsm.peer_id(),
+                                "err" => ?e,
+                            );
+                        });
                 }
             }
             // It's v2 only message and ignore does no harm.
