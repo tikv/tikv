@@ -52,7 +52,7 @@ ignore = [
     #
     # NB: Upgrading to time 0.3 do fix the issue but it's an imcompatible
     # versoin which removes some necessary APIs (`time::precise_time_ns`) that
-    # requiresd by TiKV.
+    # are required by TiKV.
     # See https://github.com/time-rs/time/blob/8067540c/CHANGELOG.md#L703
     "RUSTSEC-2020-0071",
     # Ignore RUSTSEC-2023-0072 as we bans the unsound `X509StoreRef::objects`.
@@ -75,7 +75,7 @@ ignore = [
 # under certain conditions.
 # See https://www.apache.org/legal/resolved.html.
 [licenses]
-unlicensed = "allow" # FIXME: Deny it.
+unlicensed = "deny"
 copyleft = "deny"
 private = { ignore = false }
 # Allow licenses in Category A
