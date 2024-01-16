@@ -45,6 +45,7 @@ impl ResourceManagerService {
 
 const RETRY_INTERVAL: Duration = Duration::from_secs(1); // to consistent with pd_client
 const BACKGROUND_RU_REPORT_DURATION: Duration = Duration::from_secs(5);
+const CLEAN_ACTIVE_RESOURCE_GROUP_DURATION: Duration = Duration::from_secs(5);
 
 impl ResourceManagerService {
     pub async fn watch_resource_groups(&mut self) {
@@ -193,6 +194,20 @@ impl ResourceManagerService {
         }
     }
 
+    pub async fn clean_active_resource_group(&self) {
+        loop {
+            self.manager.resource_group_counter.retain(|_, counter| {
+                let active = counter.load(std::sync::atomic::Ordering::SeqCst) > 0;
+                counter.store(0, std::sync::atomic::Ordering::SeqCst);
+                active
+            });
+            let _ = GLOBAL_TIMER_HANDLE
+                .delay(std::time::Instant::now() + CLEAN_ACTIVE_RESOURCE_GROUP_DURATION)
+                .compat()
+                .await;
+        }
+    }
+
     // report ru metrics periodically.
     pub async fn report_ru_metrics(&self) {
         let mut last_group_statistics_map: HashMap<String, ReportStatistic> = HashMap::new();
@@ -279,7 +294,6 @@ impl ResourceManagerService {
                 report_consumption.set_read_bytes(io_consumed.0 as f64);
                 report_consumption.set_write_bytes(io_consumed.1 as f64);
                 report_consumption.set_total_cpu_time_ms(cpu_consumed as f64);
-
                 all_reqs.push(req);
             }
 

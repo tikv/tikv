@@ -75,8 +75,13 @@ pub fn start_periodic_tasks(
         worker.adjust_quota();
         priority_worker.adjust();
     });
+    let resource_mgr_service_clone = resource_mgr_service.clone();
     // spawn a task to periodically upload resource usage statistics to PD.
     bg_worker.spawn_async_task(async move {
-        resource_mgr_service.report_ru_metrics().await;
+        resource_mgr_service_clone.report_ru_metrics().await;
+    });
+
+    bg_worker.spawn_async_task(async move {
+        resource_mgr_service.clean_active_resource_group().await;
     });
 }

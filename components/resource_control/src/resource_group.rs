@@ -68,6 +68,7 @@ pub struct ResourceGroupManager {
     version_generator: AtomicU64,
     // the shared resource limiter of each priority
     priority_limiters: [Arc<ResourceLimiter>; TaskPriority::PRIORITY_COUNT],
+    pub(crate) resource_group_counter: DashMap<String, AtomicU64>,
 }
 
 impl Default for ResourceGroupManager {
@@ -87,6 +88,7 @@ impl Default for ResourceGroupManager {
             registry: Default::default(),
             version_generator: AtomicU64::new(0),
             priority_limiters,
+            resource_group_counter: Default::default(),
         };
 
         // init the default resource group by default.
@@ -344,6 +346,16 @@ impl ResourceGroupManager {
         &self,
     ) -> &[Arc<ResourceLimiter>; TaskPriority::PRIORITY_COUNT] {
         &self.priority_limiters
+    }
+
+    pub fn active_resource_group(&self, name: &str) -> u64 {
+        if let Some(counter) = self.resource_group_counter.get(name) {
+            counter.fetch_add(1, Ordering::Relaxed);
+        } else {
+            self.resource_group_counter
+                .insert(name.to_owned(), AtomicU64::new(1));
+        }
+        self.resource_group_counter.len() as u64
     }
 }
 
