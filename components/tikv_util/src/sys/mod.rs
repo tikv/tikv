@@ -287,7 +287,7 @@ mqueue /dev/mqueue mqueue rw,relatime 0 0
 ";
         let reader = mounts.as_bytes();
         let check = |path: &str, expected: Option<&str>| {
-            let mp = get_path_mount_point(Box::new(reader), &Path::new(path));
+            let mp = get_path_mount_point(Box::new(reader), Path::new(path));
             if let Some(expected) = expected {
                 assert!(
                     mp.as_ref().unwrap().starts_with(expected),
