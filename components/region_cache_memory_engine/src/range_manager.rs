@@ -103,7 +103,7 @@ impl RangeManager {
     }
 
     pub(crate) fn overlap_with_range(&self, range: &CacheRange) -> bool {
-        self.ranges.keys().any(|r| r.overlaps(&range))
+        self.ranges.keys().any(|r| r.overlaps(range))
     }
 
     pub(crate) fn range_snapshot(&mut self, range: &CacheRange, read_ts: u64) -> bool {
