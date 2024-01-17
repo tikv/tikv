@@ -6,6 +6,23 @@ use engine_traits::CacheRange;
 
 use crate::engine::SnapshotList;
 
+//  RangeManager: range [k1-k10]
+//  range_snapshot_list: [k1-k10]
+//
+//  batch split k1-k5 k5-k10
+// 
+//  RangeManager: range [k1-k10]
+//  range_snapshot_list: [k1-k10, k1-k5]
+//  
+// 
+//  RangeManager: range [ k1-k5,        k5-k10 -- evict ]
+//  k1-k5 range_snapshot_list: [k1-k10, k1-k5]
+// 
+// 
+// range_snapshot_list: [k1-k10, k1-k3, k3-k5]
+// ranges_evicted: [k3-k5]
+// 
+//  k1-k3  
 #[derive(Debug, Default)]
 pub struct RangeMeta {
     range_snapshot_list: BTreeMap<CacheRange, SnapshotList>,

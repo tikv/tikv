@@ -97,7 +97,6 @@ impl CacheRange {
 
     // r1 and r2 should be unoverlap
     pub fn merge(r1: CacheRange, r2: CacheRange) -> CacheRange {
-        assert!(!r1.overlaps(&r2));
         assert!(r1.is_sibling(&r2));
         let CacheRange { start: s1, end: e1 } = r1;
         let CacheRange { start: s2, end: e2 } = r2;
