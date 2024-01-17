@@ -11,7 +11,7 @@ use chrono::Local;
 use clap::ArgMatches;
 use collections::HashMap;
 use fail;
-use tikv::config::{check_critical_config, persist_config, MetricConfig, TikvConfig};
+use tikv::config::{get_last_config, persist_config, MetricConfig, TikvConfig};
 use tikv_util::{self, config, logger};
 
 // A workaround for checking if log is initialized.
@@ -303,15 +303,29 @@ pub fn overwrite_config_with_cmd_args(config: &mut TikvConfig, matches: &ArgMatc
     }
 }
 
-#[allow(dead_code)]
 pub fn validate_and_persist_config(config: &mut TikvConfig, persist: bool) {
+    // Check current critical configurations with last time, if there are some
+    // changes, user must guarantee relevant works have been done.
+    let mut last_cfg = get_last_config(&config.storage.data_dir);
+    if let Some(last_cfg) = &mut last_cfg {
+        last_cfg.compatible_adjust();
+        if let Err(e) = last_cfg.validate() {
+            warn!("last_tikv.toml is invalid but ignored: {:?}", e);
+        }
+    }
+
     config.compatible_adjust();
     if let Err(e) = config.validate() {
         fatal!("invalid configuration: {}", e);
     }
+    if let Err(e) = config.optional_default_cfg_adjust_with(&last_cfg) {
+        fatal!("failed to adjust optional default configuration: {}", e);
+    }
 
-    if let Err(e) = check_critical_config(config) {
-        fatal!("critical config check failed: {}", e);
+    if let Some(ref last_cfg) = last_cfg {
+        if let Err(e) = config.check_critical_cfg_with(&last_cfg) {
+            fatal!("critical config check failed: {}", e);
+        }
     }
 
     if persist {

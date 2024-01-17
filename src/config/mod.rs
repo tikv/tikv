@@ -132,7 +132,7 @@ fn bloom_filter_ratio(et: EngineType) -> f64 {
 #[serde(rename_all = "kebab-case")]
 pub struct TitanCfConfig {
     #[online_config(skip)]
-    pub min_blob_size: ReadableSize,
+    pub min_blob_size: Option<ReadableSize>,
     #[online_config(skip)]
     pub blob_file_compression: CompressionType,
     #[online_config(skip)]
@@ -171,7 +171,8 @@ impl Default for TitanCfConfig {
     #[allow(deprecated)]
     fn default() -> Self {
         Self {
-            min_blob_size: ReadableSize::kb(1),
+            min_blob_size: None, /* 32KB for newly created instances, 1KB for old instances.
+                                  * The logic is in `optional_default_cfg_adjust_with` */
             blob_file_compression: CompressionType::Zstd,
             zstd_dict_size: ReadableSize::kb(0),
             blob_cache_size: ReadableSize::mb(0),
@@ -192,7 +193,7 @@ impl Default for TitanCfConfig {
 impl TitanCfConfig {
     fn build_opts(&self) -> RocksTitanDbOptions {
         let mut opts = RocksTitanDbOptions::new();
-        opts.set_min_blob_size(self.min_blob_size.0);
+        opts.set_min_blob_size(self.min_blob_size.unwrap().0);
         opts.set_blob_file_compression(self.blob_file_compression.into());
         // To try zstd dict compression, set dict size to 4k, sample size to 100X dict
         // size
@@ -560,7 +561,7 @@ macro_rules! write_into_metrics {
         // Titan specific metrics.
         $metrics
             .with_label_values(&[$tag, "titan_min_blob_size"])
-            .set($cf.titan.min_blob_size.0 as f64);
+            .set($cf.titan.min_blob_size.unwrap().0 as f64);
         $metrics
             .with_label_values(&[$tag, "titan_blob_cache_size"])
             .set($cf.titan.blob_cache_size.0 as f64);
@@ -1380,12 +1381,7 @@ impl Default for DbConfig {
 }
 
 impl DbConfig {
-    pub fn optimize_for(
-        &mut self,
-        storage_config: &StorageConfig,
-        kv_data_exists: bool,
-        is_titan_dir_empty: bool,
-    ) {
+    pub fn optimize_for(&mut self, storage_config: &StorageConfig) {
         match storage_config.engine {
             EngineType::RaftKv => {
                 self.allow_concurrent_memtable_write.get_or_insert(true);
@@ -1396,15 +1392,6 @@ impl DbConfig {
                 self.writecf.enable_compaction_guard.get_or_insert(true);
                 if self.lockcf.write_buffer_size.is_none() {
                     self.lockcf.write_buffer_size = Some(ReadableSize::mb(32));
-                }
-                if self.titan.enabled.is_none() {
-                    // If the user doesn't specify titan.enabled, we enable it by default for newly
-                    // created clusters.
-                    if (kv_data_exists && is_titan_dir_empty) || storage_config.enable_ttl {
-                        self.titan.enabled = Some(false);
-                    } else {
-                        self.titan.enabled = Some(true);
-                    }
                 }
             }
             EngineType::RaftKv2 => {
@@ -1654,6 +1641,12 @@ impl DbConfig {
         self.titan.validate()?;
         if self.raftcf.write_buffer_limit.is_some() {
             return Err("raftcf does not support cf based write buffer manager".into());
+        }
+        if self.writecf.titan.blob_run_mode != BlobRunMode::ReadOnly {
+            return Err(
+                "writecf does not support enable Titan due to compaction filter incompatibility"
+                    .into(),
+            );
         }
         if self.enable_unordered_write {
             if let Some(true) = self.titan.enabled {
@@ -3571,6 +3564,86 @@ impl TikvConfig {
         config::canonicalize_sub_path(data_dir, DEFAULT_ROCKSDB_SUB_DIR)
     }
 
+    fn titan_data_exists(&self) -> Result<bool, Box<dyn Error>> {
+        let exist = match self.storage.engine {
+            EngineType::RaftKv => {
+                let kv_db_path = self.infer_kv_engine_path(None)?;
+                // Check blob file dir is empty when titan is disabled
+                let titandb_path = if self.rocksdb.titan.dirname.is_empty() {
+                    Path::new(&kv_db_path).join("titandb")
+                } else {
+                    Path::new(&self.rocksdb.titan.dirname).to_path_buf()
+                };
+                if let Err(e) =
+                    tikv_util::config::check_data_dir_empty(titandb_path.to_str().unwrap(), "blob")
+                {
+                    if let Some(false) = self.rocksdb.titan.enabled {
+                        // If Titan is disabled explicitly but Titan's data directory is not empty,
+                        // return an error.
+                        return Err(format!(
+                            "check: titandb-data-dir-empty; err: \"{}\"; \
+                    hint: You have disabled titan when its data directory is not empty. \
+                    To properly shutdown titan, please enter fallback blob-run-mode and \
+                    wait till titandb files are all safely ingested.",
+                            e
+                        )
+                        .into());
+                    }
+                    false
+                } else {
+                    true
+                }
+            }
+            EngineType::RaftKv2 => false,
+        };
+        Ok(exist)
+    }
+
+    fn kv_data_exists(&self) -> Result<bool, Box<dyn Error>> {
+        let kv_data_exists = match self.storage.engine {
+            EngineType::RaftKv => {
+                let kv_db_path = self.infer_kv_engine_path(None)?;
+                let kv_db_wal_path = if self.rocksdb.wal_dir.is_empty() {
+                    config::canonicalize_path(&kv_db_path)?
+                } else {
+                    config::canonicalize_path(&self.rocksdb.wal_dir)?
+                };
+                if self.raft_engine.enable {
+                    if kv_db_path == self.raft_engine.config.dir {
+                        return Err("raft-engine.dir can't be same as storage.data_dir/db".into());
+                    }
+                } else {
+                    if kv_db_path == self.raft_store.raftdb_path {
+                        return Err(
+                            "raft_store.raftdb_path can't be same as storage.data_dir/db".into(),
+                        );
+                    }
+                    let raft_db_wal_path = if self.raftdb.wal_dir.is_empty() {
+                        config::canonicalize_path(&self.raft_store.raftdb_path)?
+                    } else {
+                        config::canonicalize_path(&self.raftdb.wal_dir)?
+                    };
+                    if kv_db_wal_path == raft_db_wal_path {
+                        return Err("raftdb.wal_dir can't be same as rocksdb.wal_dir".into());
+                    }
+                }
+
+                RocksEngine::exists(&kv_db_path)
+            }
+            EngineType::RaftKv2 => {
+                if !self.rocksdb.wal_dir.is_empty() {
+                    return Err(
+                        "partitioned-raft-kv doesn't support configuring rocksdb.wal-dir".into(),
+                    );
+                }
+                Path::new(&self.storage.data_dir)
+                    .join(DEFAULT_TABLET_SUB_DIR)
+                    .exists()
+            }
+        };
+        Ok(kv_data_exists)
+    }
+
     pub fn validate(&mut self) -> Result<(), Box<dyn Error>> {
         // Setting up data paths.
         if self.cfg_path.is_empty() {
@@ -3608,70 +3681,7 @@ impl TikvConfig {
             return Err("raft_engine.config.dir can't be same as raft_store.raftdb_path".into());
         }
         // Newly created dbs will be optimized with certain options. e.g. Titan.
-        let mut is_titan_dir_empty = true;
-        let kv_data_exists = match self.storage.engine {
-            EngineType::RaftKv => {
-                let kv_db_path = self.infer_kv_engine_path(None)?;
-                let kv_db_wal_path = if self.rocksdb.wal_dir.is_empty() {
-                    config::canonicalize_path(&kv_db_path)?
-                } else {
-                    config::canonicalize_path(&self.rocksdb.wal_dir)?
-                };
-                if self.raft_engine.enable {
-                    if kv_db_path == self.raft_engine.config.dir {
-                        return Err("raft-engine.dir can't be same as storage.data_dir/db".into());
-                    }
-                } else {
-                    if kv_db_path == self.raft_store.raftdb_path {
-                        return Err(
-                            "raft_store.raftdb_path can't be same as storage.data_dir/db".into(),
-                        );
-                    }
-                    let raft_db_wal_path = if self.raftdb.wal_dir.is_empty() {
-                        config::canonicalize_path(&self.raft_store.raftdb_path)?
-                    } else {
-                        config::canonicalize_path(&self.raftdb.wal_dir)?
-                    };
-                    if kv_db_wal_path == raft_db_wal_path {
-                        return Err("raftdb.wal_dir can't be same as rocksdb.wal_dir".into());
-                    }
-                }
-                // Check blob file dir is empty when titan is disabled
-                let titandb_path = if self.rocksdb.titan.dirname.is_empty() {
-                    Path::new(&kv_db_path).join("titandb")
-                } else {
-                    Path::new(&self.rocksdb.titan.dirname).to_path_buf()
-                };
-                if let Err(e) =
-                    tikv_util::config::check_data_dir_empty(titandb_path.to_str().unwrap(), "blob")
-                {
-                    is_titan_dir_empty = false;
-                    if let Some(false) = self.rocksdb.titan.enabled {
-                        // If Titan is disabled explicitly but Titan's data directory is not empty,
-                        // return an error.
-                        return Err(format!(
-                            "check: titandb-data-dir-empty; err: \"{}\"; \
-                            hint: You have disabled titan when its data directory is not empty. \
-                            To properly shutdown titan, please enter fallback blob-run-mode and \
-                            wait till titandb files are all safely ingested.",
-                            e
-                        )
-                        .into());
-                    }
-                }
-                RocksEngine::exists(&kv_db_path)
-            }
-            EngineType::RaftKv2 => {
-                if !self.rocksdb.wal_dir.is_empty() {
-                    return Err(
-                        "partitioned-raft-kv doesn't support configuring rocksdb.wal-dir".into(),
-                    );
-                }
-                Path::new(&self.storage.data_dir)
-                    .join(DEFAULT_TABLET_SUB_DIR)
-                    .exists()
-            }
-        };
+        let kv_data_exists = self.kv_data_exists()?;
         RaftDataStateMachine::new(
             &self.storage.data_dir,
             &self.raft_store.raftdb_path,
@@ -3680,8 +3690,7 @@ impl TikvConfig {
         .validate(kv_data_exists)?;
 
         // Optimize.
-        self.rocksdb
-            .optimize_for(&self.storage, kv_data_exists, is_titan_dir_empty);
+        self.rocksdb.optimize_for(&self.storage);
         self.coprocessor
             .optimize_for(self.storage.engine == EngineType::RaftKv2);
         self.split
@@ -3974,6 +3983,39 @@ impl TikvConfig {
         }
     }
 
+    pub fn optional_default_cfg_adjust_with(
+        &mut self,
+        last_cfg: &Option<Self>,
+    ) -> Result<(), Box<dyn Error>> {
+        let kv_data_exists = self.kv_data_exists()?;
+        let is_titan_dir_empty = self.titan_data_exists()?;
+
+        match self.storage.engine {
+            EngineType::RaftKv => {
+                if self.rocksdb.titan.enabled.is_none() {
+                    // If the user doesn't specify titan.enabled, we enable it by default for newly
+                    // created clusters.
+                    if (kv_data_exists && is_titan_dir_empty) || self.storage.enable_ttl {
+                        self.rocksdb.titan.enabled = Some(false);
+                    } else {
+                        self.rocksdb.titan.enabled = Some(true);
+                    }
+                }
+                if self.rocksdb.defaultcf.titan.min_blob_size.is_none() {
+                    // get blob size from last config
+                    self.rocksdb.defaultcf.titan.min_blob_size = last_cfg
+                        .as_ref()
+                        .and_then(|cfg| cfg.rocksdb.defaultcf.titan.min_blob_size)
+                        .or(Some(ReadableSize::kb(32)));
+                }
+            }
+            EngineType::RaftKv2 => {
+                self.rocksdb.titan.enabled = Some(false);
+            }
+        }
+        Ok(())
+    }
+
     #[allow(deprecated)]
     pub fn compatible_adjust(&mut self) {
         let default_raft_store = RaftstoreConfig::default();
@@ -4258,25 +4300,7 @@ impl TikvConfig {
     }
 }
 
-/// Prevents launching with an incompatible configuration
-///
-/// Loads the previously-loaded configuration from `last_tikv.toml`,
-/// compares key configuration items and fails if they are not
-/// identical.
-pub fn check_critical_config(config: &TikvConfig) -> Result<(), String> {
-    // Check current critical configurations with last time, if there are some
-    // changes, user must guarantee relevant works have been done.
-    if let Some(mut cfg) = get_last_config(&config.storage.data_dir) {
-        cfg.compatible_adjust();
-        if let Err(e) = cfg.validate() {
-            warn!("last_tikv.toml is invalid but ignored: {:?}", e);
-        }
-        config.check_critical_cfg_with(&cfg)?;
-    }
-    Ok(())
-}
-
-fn get_last_config(data_dir: &str) -> Option<TikvConfig> {
+pub fn get_last_config(data_dir: &str) -> Option<TikvConfig> {
     let store_path = Path::new(data_dir);
     let last_cfg_path = store_path.join(LAST_CONFIG_FILE);
     if last_cfg_path.exists() {
