@@ -165,22 +165,22 @@ impl RangeCacheMemoryEngineCore {
     }
 }
 
-/// The RangeCaheMemoryEngine serves as a range cache, storing hot ranges in
+/// The RangeCacheMemoryEngine serves as a range cache, storing hot ranges in
 /// the leaders' store. Incoming writes that are written to disk engine (now,
-/// RocksDB) are also written to the RangeCaheMemoryEngine, leading to a
+/// RocksDB) are also written to the RangeCacheMemoryEngine, leading to a
 /// mirrored data set in the cached ranges with the disk engine.
 ///
 /// A load/evict unit manages the memory, deciding which ranges should be
-/// evicted when the memory used by the RangeCaheMemoryEngine reaches a
+/// evicted when the memory used by the RangeCacheMemoryEngine reaches a
 /// certain limit, and determining which ranges should be loaded when there is
 /// spare memory capacity.
 ///
-/// The safe point lifetime differs between RangeCaheMemoryEngine and the disk
-/// engine, often being much shorter in RangeCaheMemoryEngine. This means that
-/// RangeCaheMemoryEngine may filter out some keys that still exist in the
+/// The safe point lifetime differs between RangeCacheMemoryEngine and the disk
+/// engine, often being much shorter in RangeCacheMemoryEngine. This means that
+/// RangeCacheMemoryEngine may filter out some keys that still exist in the
 /// disk engine, thereby improving read performance as fewer duplicated keys
 /// will be read. If there's a need to read keys that may have been filtered by
-/// RangeCaheMemoryEngine (as indicated by read_ts and safe_point of the
+/// RangeCacheMemoryEngine (as indicated by read_ts and safe_point of the
 /// cached region), we resort to using a the disk engine's snapshot instead.
 #[derive(Clone)]
 pub struct RangeCacheMemoryEngine {
@@ -521,7 +521,7 @@ impl Iterator for RangeCacheIterator {
 pub struct RangeCacheSnapshot {
     range: CacheRange,
     snapshot_ts: u64,
-    // Sequence number is shared between RangeCaheEngine and disk KvEnigne to
+    // Sequence number is shared between RangeCacheEngine and disk KvEnigne to
     // provide atomic write
     sequence_number: u64,
     skiplist_engine: SkiplistEngine,
@@ -596,7 +596,7 @@ impl Iterable for RangeCacheSnapshot {
 }
 
 impl Peekable for RangeCacheSnapshot {
-    type DbVector = RangeCaheDbVector;
+    type DbVector = RangeCacheDbVector;
 
     fn get_value_opt(&self, opts: &ReadOptions, key: &[u8]) -> Result<Option<Self::DbVector>> {
         self.get_value_cf_opt(opts, CF_DEFAULT, key)
@@ -622,7 +622,7 @@ impl Peekable for RangeCacheSnapshot {
                 user_key,
                 v_type: ValueType::Value,
                 ..
-            } if user_key == key => Ok(Some(RangeCaheDbVector(iter.value().clone()))),
+            } if user_key == key => Ok(Some(RangeCacheDbVector(iter.value().clone()))),
             _ => Ok(None),
         }
     }
@@ -641,9 +641,9 @@ impl SnapshotMiscExt for RangeCacheSnapshot {
 }
 
 #[derive(Debug)]
-pub struct RangeCaheDbVector(Bytes);
+pub struct RangeCacheDbVector(Bytes);
 
-impl Deref for RangeCaheDbVector {
+impl Deref for RangeCacheDbVector {
     type Target = [u8];
 
     fn deref(&self) -> &[u8] {
@@ -651,9 +651,9 @@ impl Deref for RangeCaheDbVector {
     }
 }
 
-impl DbVector for RangeCaheDbVector {}
+impl DbVector for RangeCacheDbVector {}
 
-impl<'a> PartialEq<&'a [u8]> for RangeCaheDbVector {
+impl<'a> PartialEq<&'a [u8]> for RangeCacheDbVector {
     fn eq(&self, rhs: &&[u8]) -> bool {
         self.0.as_slice() == *rhs
     }

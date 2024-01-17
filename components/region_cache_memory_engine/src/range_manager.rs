@@ -9,7 +9,7 @@ use crate::engine::SnapshotList;
 #[derive(Debug, Default)]
 pub struct RangeMeta {
     range_snapshot_list: BTreeMap<CacheRange, SnapshotList>,
-    ranges_evcited: BTreeSet<CacheRange>,
+    ranges_evicted: BTreeSet<CacheRange>,
     ranges_unreadable: BTreeSet<CacheRange>,
     safe_ts: u64,
 }
@@ -22,7 +22,7 @@ impl RangeMeta {
     pub(crate) fn merge_meta(&mut self, mut other: RangeMeta) {
         self.range_snapshot_list
             .append(&mut other.range_snapshot_list);
-        self.ranges_evcited.append(&mut other.ranges_evcited);
+        self.ranges_evicted.append(&mut other.ranges_evicted);
         self.ranges_unreadable.append(&mut other.ranges_unreadable);
 
         // merge safe_ts to the min of them if not 0
@@ -117,7 +117,7 @@ impl RangeManager {
             return false;
         }
 
-        if meta.ranges_evcited.iter().any(|r| r.overlaps(range)) {
+        if meta.ranges_evicted.iter().any(|r| r.overlaps(range)) {
             return false;
         }
 

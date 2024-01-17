@@ -149,7 +149,7 @@ pub enum Error {
     EntriesUnavailable,
     #[error("The entries of region is compacted")]
     EntriesCompacted,
-    #[error("Iterator of RangeCaheSnapshot is only supported with boundary set")]
+    #[error("Iterator of RangeCacheSnapshot is only supported with boundary set")]
     BoundaryNotSet,
 }
 
