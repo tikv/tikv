@@ -28,7 +28,7 @@ use tracker::{get_tls_tracker_token, TrackerToken};
 
 use super::{
     local_metrics::TimeTracker, region_meta::RegionMeta,
-    snapshot_backup::SnapshotBrWaitApplyRequest, FetchedLogs, RegionSnapshot, ReplayGuard,
+    snapshot_backup::SnapshotBrWaitApplyRequest, FetchedLogs, RegionSnapshot,
 };
 use crate::store::{
     fsm::apply::{CatchUpLogs, ChangeObserver, TaskRes as ApplyTaskRes},
@@ -790,7 +790,7 @@ pub enum PeerMsg<EK: KvEngine> {
     /// group.
     SignificantMsg(SignificantMsg<EK::Snapshot>),
     /// Start the FSM.
-    Start(Option<std::sync::Arc<ReplayGuard>>),
+    Start,
     /// A message only used to notify a peer.
     Noop,
     Persisted {
@@ -820,7 +820,7 @@ impl<EK: KvEngine> fmt::Debug for PeerMsg<EK> {
             },
             PeerMsg::SignificantMsg(msg) => write!(fmt, "{:?}", msg),
             PeerMsg::ApplyRes { res } => write!(fmt, "ApplyRes {:?}", res),
-            PeerMsg::Start(guard) => write!(fmt, "Startup {:?}", guard),
+            PeerMsg::Start => write!(fmt, "Startup"),
             PeerMsg::Noop => write!(fmt, "Noop"),
             PeerMsg::Persisted {
                 peer_id,

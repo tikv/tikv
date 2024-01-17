@@ -8,7 +8,7 @@ use std::{
     fmt::{Debug, Display},
     option::Option,
     sync::{
-        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering as AtomicOrdering},
+        atomic::{AtomicBool, AtomicU64, Ordering as AtomicOrdering},
         Arc, Mutex, MutexGuard,
     },
     u64,

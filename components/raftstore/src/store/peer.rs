@@ -889,7 +889,7 @@ where
     /// lead_transferee if this peer(leader) is in a leadership transferring.
     pub lead_transferee: u64,
     pub unsafe_recovery_state: Option<UnsafeRecoveryState>,
-    pub snapshot_recovery_state: Option<SnapshotRecoveryState>,
+    pub snapshot_recovery_state: Option<SnapshotBrState>,
 
     last_record_safe_point: u64,
 

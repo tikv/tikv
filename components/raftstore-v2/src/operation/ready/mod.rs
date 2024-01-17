@@ -73,6 +73,8 @@ use crate::{
     worker::tablet,
 };
 
+const PAUSE_FOR_REPLAY_GAP: u64 = 128;
+
 pub struct ReplayWatch {
     normal_peers: AtomicUsize,
     paused_peers: AtomicUsize,
