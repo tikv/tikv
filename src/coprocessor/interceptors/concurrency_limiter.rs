@@ -53,6 +53,9 @@ where
 enum LimitationState<'a> {
     NotLimited,
     Acquiring,
+    // TODO: false positive unused variant `SemaphorePermit`.
+    // remove this after the rust compiler fix this.
+    #[allow(dead_code)]
     Acuqired(SemaphorePermit<'a>),
 }
 

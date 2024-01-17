@@ -13,7 +13,7 @@ mod stub {
     }
 
     thread_local! {
-        static IO_TYPE: Cell<IoType> = Cell::new(IoType::Other);
+        static IO_TYPE: Cell<IoType> = const {Cell::new(IoType::Other)};
     }
 
     pub fn set_io_type(new_io_type: IoType) {
