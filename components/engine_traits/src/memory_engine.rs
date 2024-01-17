@@ -82,28 +82,24 @@ impl CacheRange {
         self.start == other.end || self.end == other.start
     }
 
-    pub fn split_off(&self, key: &CacheRange) -> (CacheRange, CacheRange) {
-        (
-            CacheRange {
+    pub fn split_off(&self, key: &CacheRange) -> (Option<CacheRange>, Option<CacheRange>) {
+        let left = if self.start != key.start {
+            Some(CacheRange {
                 start: self.start.clone(),
                 end: key.start.clone(),
-            },
-            CacheRange {
+            })
+        } else {
+            None
+        };
+        let right = if self.end != key.end {
+            Some(CacheRange {
                 start: key.end.clone(),
                 end: self.end.clone(),
-            },
-        )
-    }
-
-    // r1 and r2 should be unoverlap
-    pub fn merge(r1: CacheRange, r2: CacheRange) -> CacheRange {
-        assert!(r1.is_sibling(&r2));
-        let CacheRange { start: s1, end: e1 } = r1;
-        let CacheRange { start: s2, end: e2 } = r2;
-        if s1 < s2 {
-            CacheRange { start: s1, end: e2 }
+            })
         } else {
-            CacheRange { start: s2, end: e1 }
-        }
+            None
+        };
+
+        (left, right)
     }
 }

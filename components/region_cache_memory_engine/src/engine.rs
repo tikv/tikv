@@ -16,15 +16,17 @@ use engine_traits::{
     RangeCacheEngine, ReadOptions, Result, Snapshot, SnapshotMiscExt, CF_DEFAULT, CF_LOCK,
     CF_WRITE,
 };
-use skiplist_rs::{AllocationRecorder, IterRef, MemoryLimiter, Node, Skiplist};
+use skiplist_rs::{AllocationRecorder, IterRef, MemoryLimiter, Node, Skiplist, MIB};
 
 use crate::{
     keys::{
         decode_key, encode_seek_key, InternalKey, InternalKeyComparator, ValueType,
-        VALUE_TYPE_FOR_SEEK, VALUE_TYPE_FOR_SEEK_FOR_PREV,
+        VALUE_TYPE_FOR_SEEK, VALUE_TYPE_FOR_SEEK_FOR_PREV, encode_key_for_eviction,
     },
     range_manager::RangeManager,
 };
+
+const EVICTION_KEY_BUFFER_LIMIT: usize = 5 * MIB as usize;
 
 fn cf_to_id(cf: &str) -> usize {
     match cf {
@@ -102,8 +104,34 @@ impl SkiplistEngine {
         }
     }
 
-    fn evict_range(&self, range: &CacheRange) {
-        unimplemented!()
+    // todo(SpadeA): do it asychronously
+    fn delete_range(&self, range: &CacheRange) {
+        self.data.iter().for_each(|d| {
+            let mut key_buffer: Vec<Bytes> = vec![];
+            let mut key_buffer_size = 0;
+            let (start, end) = encode_key_for_eviction(range);
+
+            let mut iter = d.iter();
+            iter.seek(&start);
+            while iter.valid() && iter.key() < &end {
+                if key_buffer_size + iter.key().len() >= EVICTION_KEY_BUFFER_LIMIT {
+                    for key in key_buffer.drain(..) {
+                        d.remove(key.as_slice());
+                    }
+                    iter = d.iter();
+                    iter.seek(&start);
+                    continue;
+                }
+
+                key_buffer_size += iter.key().len();
+                key_buffer.push(iter.key().clone());
+                iter.next();
+            }
+
+            for key in key_buffer {
+                d.remove(key.as_slice());
+            }
+        });
     }
 }
 
@@ -518,12 +546,29 @@ impl Iterator for RangeCacheIterator {
 }
 
 #[derive(Clone, Debug)]
-pub struct RangeCacheSnapshot {
-    range: CacheRange,
-    snapshot_ts: u64,
+pub struct RagneCacheSnapshotMeta {
+    pub(crate) range_id: u64,
+    pub(crate) range: CacheRange,
+    pub(crate) snapshot_ts: u64,
     // Sequence number is shared between RangeCacheEngine and disk KvEnigne to
     // provide atomic write
-    sequence_number: u64,
+    pub(crate) sequence_number: u64,
+}
+
+impl RagneCacheSnapshotMeta {
+    fn new(range_id: u64, range: CacheRange, snapshot_ts: u64, sequence_number: u64) -> Self {
+        Self {
+            range_id,
+            range,
+            snapshot_ts,
+            sequence_number,
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct RangeCacheSnapshot {
+    snapshot_meta: RagneCacheSnapshotMeta,
     skiplist_engine: SkiplistEngine,
     engine: RangeCacheMemoryEngine,
 }
@@ -536,27 +581,27 @@ impl RangeCacheSnapshot {
         seq_num: u64,
     ) -> Option<Self> {
         let mut core = engine.core.lock().unwrap();
-        if !core.range_manager.range_snapshot(&range, read_ts) {
-            return None;
+        if let Some(range_id) = core.range_manager.range_snapshot(&range, read_ts) {
+            return Some(RangeCacheSnapshot {
+                snapshot_meta: RagneCacheSnapshotMeta::new(range_id, range, read_ts, seq_num),
+                skiplist_engine: core.engine.clone(),
+                engine: engine.clone(),
+            });
         }
 
-        Some(RangeCacheSnapshot {
-            range,
-            snapshot_ts: read_ts,
-            sequence_number: seq_num,
-            skiplist_engine: core.engine.clone(),
-            engine: engine.clone(),
-        })
+        None
     }
 }
 
 impl Drop for RangeCacheSnapshot {
     fn drop(&mut self) {
         let mut core = self.engine.core.lock().unwrap();
-        core.range_manager
-            .remove_range_snapshot(&self.range, self.snapshot_ts);
-
-        // todo: may evict range
+        for range_removable in core
+            .range_manager
+            .remove_range_snapshot(&self.snapshot_meta)
+        {
+            core.engine.delete_range(&self.snapshot_meta.range);
+        }
     }
 }
 
@@ -586,7 +631,7 @@ impl Iterable for RangeCacheSnapshot {
             lower_bound: lower_bound.unwrap(),
             upper_bound: upper_bound.unwrap(),
             iter,
-            sequence_number: self.sequence_number,
+            sequence_number: self.sequence_number(),
             saved_user_key: vec![],
             saved_value: None,
             direction: Direction::Uninit,
@@ -608,9 +653,9 @@ impl Peekable for RangeCacheSnapshot {
         cf: &str,
         key: &[u8],
     ) -> Result<Option<Self::DbVector>> {
-        let seq = self.sequence_number;
+        let seq = self.sequence_number();
         let mut iter = self.skiplist_engine.data[cf_to_id(cf)].iter();
-        let seek_key = encode_seek_key(key, self.sequence_number, VALUE_TYPE_FOR_SEEK);
+        let seek_key = encode_seek_key(key, self.sequence_number(), VALUE_TYPE_FOR_SEEK);
 
         iter.seek(&seek_key);
         if !iter.valid() {
@@ -636,7 +681,7 @@ impl CfNamesExt for RangeCacheSnapshot {
 
 impl SnapshotMiscExt for RangeCacheSnapshot {
     fn sequence_number(&self) -> u64 {
-        self.sequence_number
+        self.snapshot_meta.sequence_number
     }
 }
 
@@ -692,8 +737,6 @@ mod tests {
                         .get(&range)
                         .unwrap()
                         .range_snapshot_list()
-                        .get(&range)
-                        .unwrap()
                         .0
                         .get(&snapshot_ts)
                         .unwrap(),
@@ -706,8 +749,6 @@ mod tests {
                         .get(&range)
                         .unwrap()
                         .range_snapshot_list()
-                        .get(&range)
-                        .unwrap()
                         .0
                         .get(&snapshot_ts)
                         .is_none()
