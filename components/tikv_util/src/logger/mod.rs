@@ -6,7 +6,6 @@ mod formatter;
 use std::{
     env, fmt,
     io::{self, BufWriter},
-    num::NonZeroU64,
     path::{Path, PathBuf},
     sync::{
         atomic::{AtomicUsize, Ordering},
@@ -16,10 +15,7 @@ use std::{
 };
 
 use log::{self, SetLoggerError};
-use slog::{
-    self, slog_o, Drain, FnValue, Key, OwnedKV, OwnedKVList, PushFnValue, Record,
-    SendSyncRefUnwindSafeKV, KV,
-};
+use slog::{self, slog_o, Drain, FnValue, Key, OwnedKVList, PushFnValue, Record, KV};
 pub use slog::{FilterFn, Level};
 use slog_async::{Async, AsyncGuard, OverflowStrategy};
 use slog_term::{Decorator, PlainDecorator, RecordDecorator};
@@ -76,6 +72,28 @@ where
         }
     };
 
+    fn build_log_drain<I>(
+        drain: I,
+        threshold: u64,
+        filter: impl FilterFn,
+    ) -> impl Drain<Ok = (), Err = slog::Never>
+    where
+        I: Drain<Ok = (), Err = slog::Never>,
+    {
+        let drain = SlowLogFilter {
+            threshold,
+            inner: drain,
+        };
+        let filtered = GlobalLevelFilter::new(drain.filter(filter).fuse());
+        // ThreadIDrain discards all previous `slog::OwnedKVList`, it should be
+        // placed as the first Drain that receives `slog::Record`.
+        //
+        // NB: slog macros (slog::info!() and others) only produce one
+        // `slog::Record`, `slog::OwnedKVList` are provided by `slog::Drain` and
+        // `slog::Logger`.
+        ThreadIDrain(filtered)
+    }
+
     let (logger, guard) = if use_async {
         let (async_log, guard) = Async::new(LogAndFuse(drain))
             .chan_size(SLOG_CHANNEL_SIZE)
@@ -83,21 +101,12 @@ where
             .thread_name(thd_name!("slogger"))
             .build_with_guard();
         let drain = async_log.fuse();
-        let drain = SlowLogFilter {
-            threshold: slow_threshold,
-            inner: drain,
-        };
-        let filtered = GlobalLevelFilter::new(drain.filter(filter).fuse());
-
-        (slog::Logger::root(filtered, get_values()), Some(guard))
+        let drain = build_log_drain(drain, slow_threshold, filter);
+        (slog::Logger::root(drain, slog_o!()), Some(guard))
     } else {
         let drain = LogAndFuse(Mutex::new(drain));
-        let drain = SlowLogFilter {
-            threshold: slow_threshold,
-            inner: drain,
-        };
-        let filtered = GlobalLevelFilter::new(drain.filter(filter).fuse());
-        (slog::Logger::root(filtered, get_values()), None)
+        let drain = build_log_drain(drain, slow_threshold, filter);
+        (slog::Logger::root(drain, slog_o!()), None)
     };
 
     set_global_logger(level, init_stdlog, logger, guard)
@@ -632,16 +641,20 @@ fn write_log_fields(
     Ok(())
 }
 
-fn format_thread_id(thread_id: NonZeroU64) -> String {
-    format!("{:#0x}", thread_id)
-}
+struct ThreadIDrain<D: Drain>(pub D);
 
-fn get_values() -> OwnedKV<impl SendSyncRefUnwindSafeKV> {
-    slog_o!(
-        "thread_id" => FnValue(|_| {
-            format_thread_id(std::thread::current().id().as_u64())
-        })
-    )
+impl<D> Drain for ThreadIDrain<D>
+where
+    D: Drain,
+{
+    type Ok = D::Ok;
+    type Err = D::Err;
+    fn log(&self, record: &Record<'_>, _: &OwnedKVList) -> Result<Self::Ok, Self::Err> {
+        self.0.log(
+            record,
+            &OwnedKVList::from(slog::o!("thread_id" => std::thread::current().id().as_u64().get())),
+        )
+    }
 }
 
 struct Serializer<'a> {
@@ -695,7 +708,7 @@ impl<'a> slog::Serializer for Serializer<'a> {
 
 #[cfg(test)]
 mod tests {
-    use std::{cell::RefCell, io, io::Write, str::from_utf8, sync::RwLock, time::Duration};
+    use std::{cell::RefCell, io, io::Write, str::from_utf8, sync::Arc, time::Duration};
 
     use chrono::DateTime;
     use regex::Regex;
@@ -704,19 +717,13 @@ mod tests {
 
     use super::*;
 
-    // Due to the requirements of `Logger::root*` on a writer with a 'static
-    // lifetime we need to make a Thread Local,
-    // and implement a custom writer.
-    thread_local! {
-        static BUFFER: RefCell<Vec<u8>> = RefCell::new(Vec::new());
-    }
-    struct TestWriter;
+    struct TestWriter(Arc<Mutex<Vec<u8>>>);
     impl Write for TestWriter {
         fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-            BUFFER.with(|buffer| buffer.borrow_mut().write(buf))
+            self.0.lock().unwrap().write(buf)
         }
         fn flush(&mut self) -> io::Result<()> {
-            BUFFER.with(|buffer| buffer.borrow_mut().flush())
+            self.0.lock().unwrap().flush()
         }
     }
 
@@ -775,13 +782,15 @@ mod tests {
 
     #[test]
     fn test_log_format_text() {
-        let decorator = PlainSyncDecorator::new(TestWriter);
+        let buffer: Arc<Mutex<Vec<u8>>> = Arc::default();
+        let decorator = PlainSyncDecorator::new(TestWriter(buffer.clone()));
         let drain = TikvFormat::new(decorator, true).fuse();
-        let logger = slog::Logger::root_typed(drain, get_values()).into_erased();
+        let drain = ThreadIDrain(drain);
+        let logger = slog::Logger::root_typed(drain, slog_o!()).into_erased();
 
         log_format_cases(logger);
 
-        let thread_id = format_thread_id(std::thread::current().id().as_u64());
+        let thread_id = std::thread::current().id().as_u64();
         let expect = format!(
             r#"[2019/01/15 13:40:39.619 +08:00] [INFO] [mod.rs:469] [] [thread_id={0}]
 [2019/01/15 13:40:39.619 +08:00] [INFO] [mod.rs:469] [Welcome] [thread_id={0}]
@@ -797,43 +806,48 @@ mod tests {
             thread_id
         );
 
-        BUFFER.with(|buffer| {
-            let mut buffer = buffer.borrow_mut();
-            let output = from_utf8(&buffer).unwrap();
-            assert_eq!(output.lines().count(), expect.lines().count());
+        let buffer = buffer.lock().unwrap();
+        let output = from_utf8(&buffer).unwrap();
+        assert_eq!(
+            output.lines().count(),
+            expect.lines().count(),
+            "{}\n===\n{}",
+            output,
+            expect
+        );
 
-            let re = Regex::new(r"(?P<datetime>\[.*?\])\s(?P<level>\[.*?\])\s(?P<source_file>\[.*?\])\s(?P<msg>\[.*?\])\s?(?P<kvs>\[.*\])?").unwrap();
+        let re = Regex::new(r"(?P<datetime>\[.*?\])\s(?P<level>\[.*?\])\s(?P<source_file>\[.*?\])\s(?P<msg>\[.*?\])\s?(?P<kvs>\[.*\])?").unwrap();
 
-            for (output_line, expect_line) in output.lines().zip(expect.lines()) {
-                let expect_segments = re.captures(expect_line).unwrap();
-                let output_segments = re.captures(output_line).unwrap();
+        for (output_line, expect_line) in output.lines().zip(expect.lines()) {
+            let expect_segments = re.captures(expect_line).unwrap();
+            let output_segments = re.captures(output_line).unwrap();
 
-                validate_log_datetime(peel(&output_segments["datetime"]));
+            validate_log_datetime(peel(&output_segments["datetime"]));
 
-                assert!(validate_log_source_file(
-                    peel(&expect_segments["source_file"]),
-                    peel(&output_segments["source_file"])
-                ));
-                assert_eq!(expect_segments["level"], output_segments["level"]);
-                assert_eq!(expect_segments["msg"], output_segments["msg"]);
-                assert_eq!(
-                    expect_segments.name("kvs").map(|s| s.as_str()),
-                    output_segments.name("kvs").map(|s| s.as_str())
-                );
-            }
-            buffer.clear();
-        });
+            assert!(validate_log_source_file(
+                peel(&expect_segments["source_file"]),
+                peel(&output_segments["source_file"])
+            ));
+            assert_eq!(expect_segments["level"], output_segments["level"]);
+            assert_eq!(expect_segments["msg"], output_segments["msg"]);
+            assert_eq!(
+                expect_segments.name("kvs").map(|s| s.as_str()),
+                output_segments.name("kvs").map(|s| s.as_str())
+            );
+        }
     }
 
     #[test]
     fn test_log_format_json() {
         use serde_json::{from_str, Value};
-        let drain = Mutex::new(json_format(TestWriter, true)).map(slog::Fuse);
-        let logger = slog::Logger::root_typed(drain, get_values()).into_erased();
+        let buffer: Arc<Mutex<Vec<u8>>> = Arc::default();
+        let drain = Mutex::new(json_format(TestWriter(buffer.clone()), true)).map(slog::Fuse);
+        let drain = ThreadIDrain(drain);
+        let logger = slog::Logger::root_typed(drain, slog_o!()).into_erased();
 
         log_format_cases(logger);
 
-        let thread_id = format_thread_id(std::thread::current().id().as_u64());
+        let thread_id = std::thread::current().id().as_u64();
         let expect = format!(
             r#"{{"time":"2020/05/16 15:49:52.449 +08:00","level":"INFO","caller":"mod.rs:469","message":"","thread_id":"{0}"}}
 {{"time":"2020/05/16 15:49:52.450 +08:00","level":"INFO","caller":"mod.rs:469","message":"Welcome","thread_id":"{0}"}}
@@ -849,47 +863,42 @@ mod tests {
             thread_id
         );
 
-        BUFFER.with(|buffer| {
-            let mut buffer = buffer.borrow_mut();
-            let output = from_utf8(&buffer).unwrap();
-            assert_eq!(output.lines().count(), expect.lines().count());
+        let buffer = buffer.lock().unwrap();
+        let output = from_utf8(&buffer).unwrap();
+        assert_eq!(output.lines().count(), expect.lines().count());
 
-            for (output_line, expect_line) in output.lines().zip(expect.lines()) {
-                let mut expect_json = from_str::<Value>(expect_line).unwrap();
-                let mut output_json = from_str::<Value>(output_line).unwrap();
+        for (output_line, expect_line) in output.lines().zip(expect.lines()) {
+            let mut expect_json = from_str::<Value>(expect_line).unwrap();
+            let mut output_json = from_str::<Value>(output_line).unwrap();
 
-                validate_log_datetime(output_json["time"].take().as_str().unwrap());
-                // Remove time field to bypass timestamp mismatch.
-                let _ = expect_json["time"].take();
+            validate_log_datetime(output_json["time"].take().as_str().unwrap());
+            // Remove time field to bypass timestamp mismatch.
+            let _ = expect_json["time"].take();
 
-                validate_log_source_file(
-                    output_json["caller"].take().as_str().unwrap(),
-                    expect_json["caller"].take().as_str().unwrap(),
-                );
+            validate_log_source_file(
+                output_json["caller"].take().as_str().unwrap(),
+                expect_json["caller"].take().as_str().unwrap(),
+            );
 
-                assert_eq!(expect_json, output_json);
-            }
-            buffer.clear();
-        });
+            assert_eq!(expect_json, output_json);
+        }
     }
 
     #[test]
     fn test_global_level_filter() {
-        let decorator = PlainSyncDecorator::new(TestWriter);
+        let buffer: Arc<Mutex<Vec<u8>>> = Arc::default();
+        let decorator = PlainSyncDecorator::new(TestWriter(buffer.clone()));
         let drain = TikvFormat::new(decorator, true).fuse();
         let logger =
             slog::Logger::root_typed(GlobalLevelFilter::new(drain), slog_o!()).into_erased();
 
         let expected = "[2019/01/15 13:40:39.619 +08:00] [INFO] [mod.rs:871] [Welcome]\n";
         let check_log = |log: &str| {
-            BUFFER.with(|buffer| {
-                let mut buffer = buffer.borrow_mut();
-                let output = from_utf8(&buffer).unwrap();
-                // only check the log len here as some field like timestamp, location may
-                // change.
-                assert_eq!(output.len(), log.len());
-                buffer.clear();
-            });
+            let buffer = buffer.lock().unwrap();
+            let output = from_utf8(&buffer).unwrap();
+            // only check the log len here as some field like timestamp, location may
+            // change.
+            assert_eq!(output.len(), log.len());
         };
 
         set_log_level(Level::Info);
@@ -1095,49 +1104,5 @@ mod tests {
                 );
             }
         });
-    }
-
-    static THREAD_SAFE_BUFFER: RwLock<Vec<u8>> = RwLock::new(Vec::new());
-
-    struct ThreadSafeWriter;
-    impl Write for ThreadSafeWriter {
-        fn write(&mut self, data: &[u8]) -> io::Result<usize> {
-            let mut buffer = THREAD_SAFE_BUFFER.write().unwrap();
-            buffer.write(data)
-        }
-
-        fn flush(&mut self) -> io::Result<()> {
-            let mut buffer = THREAD_SAFE_BUFFER.write().unwrap();
-            buffer.flush()
-        }
-    }
-
-    #[test]
-    fn test_threadid() {
-        let drain = TikvFormat::new(PlainSyncDecorator::new(ThreadSafeWriter), true).fuse();
-        let logger = slog::Logger::root_typed(drain, get_values()).into_erased();
-
-        slog_info!(logger, "Hello from the first thread");
-        let this_threadid = thread::current().id().as_u64();
-        let this_threadid = format_thread_id(this_threadid);
-
-        let handle = thread::spawn(move || {
-            slog_info!(logger, "Hello from the second thread");
-        });
-        let other_threadid = handle.thread().id().as_u64();
-        let other_threadid = format_thread_id(other_threadid);
-        handle.join().unwrap();
-
-        let expected = vec![this_threadid, other_threadid];
-
-        let re = Regex::new(r"\[thread_id=(.*?)\]").unwrap();
-        let buffer = THREAD_SAFE_BUFFER.read().unwrap();
-        let output = from_utf8(&buffer).unwrap();
-        let actual: Vec<&str> = output
-            .lines()
-            .map(|line| re.captures(line).unwrap())
-            .map(|captures| captures.get(1).unwrap().as_str())
-            .collect();
-        assert_eq!(expected, actual);
     }
 }
