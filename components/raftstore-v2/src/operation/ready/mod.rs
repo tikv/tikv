@@ -45,7 +45,7 @@ use raftstore::{
         fsm::store::StoreRegionMeta,
         local_metrics::IoType,
         needs_evict_entry_cache,
-        util::{self, is_first_append_entry, is_initial_msg, PAUSE_FOR_REPLAY_GAP},
+        util::{self, is_first_append_entry, is_initial_msg},
         worker_metrics::SNAP_COUNTER,
         FetchedLogs, ReadProgress, Transport, WriteCallback, WriteTask,
     },

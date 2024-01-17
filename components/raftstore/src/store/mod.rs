@@ -84,7 +84,7 @@ pub use self::{
         UnsafeRecoveryForceLeaderSyncer, UnsafeRecoveryHandle, UnsafeRecoveryState,
         UnsafeRecoveryWaitApplySyncer,
     },
-    util::{RegionReadProgress, RegionReadProgressRegistry, ReplayGuard, PAUSE_FOR_REPLAY_GAP},
+    util::{RegionReadProgress, RegionReadProgressRegistry},
     worker::{
         metrics as worker_metrics, need_compact, AutoSplitController, BatchComponent, Bucket,
         BucketRange, BucketStatsInfo, CachedReadDelegate, CheckLeaderRunner, CheckLeaderTask,

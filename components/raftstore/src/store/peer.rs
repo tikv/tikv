@@ -104,7 +104,7 @@ use crate::{
         snapshot_backup::{AbortReason, SnapshotBrState},
         txn_ext::LocksStatus,
         unsafe_recovery::{ForceLeaderState, UnsafeRecoveryState},
-        util::{admin_cmd_epoch_lookup, RegionReadProgress, ReplayGuard, PAUSE_FOR_REPLAY_GAP},
+        util::{admin_cmd_epoch_lookup, RegionReadProgress},
         worker::{
             CleanupTask, CompactTask, HeartbeatTask, RaftlogGcTask, ReadDelegate, ReadExecutor,
             ReadProgress, RegionTask, SplitCheckTask,
@@ -1038,7 +1038,6 @@ where
             lead_transferee: raft::INVALID_ID,
             unsafe_recovery_state: None,
             snapshot_recovery_state: None,
-            replay_guard: None,
             pending_recovery: true,
         };
 
@@ -5667,44 +5666,6 @@ where
     /// tick.
     pub fn post_raft_group_tick(&mut self) {
         self.lead_transferee = self.raft_group.raft.lead_transferee.unwrap_or_default();
-    }
-
-    #[inline]
-    pub fn set_replay_guard(&mut self, guard: Option<Arc<ReplayGuard>>) {
-        self.replay_guard = guard;
-    }
-
-    #[inline]
-    pub fn pause_for_replay(&self) -> bool {
-        self.replay_guard.is_some()
-    }
-
-    pub fn maybe_pause_for_replay(&mut self, guard: Option<Arc<ReplayGuard>>) -> bool {
-        let peer_storage = self.get_store();
-        let committed_index = peer_storage.commit_index();
-        let applied_index = peer_storage.applied_index();
-        if committed_index > applied_index + PAUSE_FOR_REPLAY_GAP {
-            // If there are too many the missing logs, we need to skip ticking otherwise
-            // it may block the raftstore thread for a long time in reading logs for
-            // election timeout.
-            info!("pause for replay";
-                "region_id" => self.region_id,
-                "peer_id" => self.peer_id(),
-                "applied" => applied_index,
-                "committed" => committed_index);
-
-            // when committed_index > applied_index + PAUSE_FOR_REPLAY_GAP, the peer must be
-            // created from StoreSystem on TiKV Start
-            let grd = guard.unwrap();
-            grd.inc_paused_peer();
-            self.set_replay_guard(Some(grd));
-            true
-        } else {
-            if let Some(guard) = guard {
-                guard.inc_normal_peer();
-            }
-            false
-        }
     }
 }
 
