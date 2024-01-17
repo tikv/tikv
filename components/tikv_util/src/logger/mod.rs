@@ -1013,10 +1013,10 @@ mod tests {
     }
 
     thread_local! {
-        static NORMAL_BUFFER: RefCell<Vec<u8>> = RefCell::new(Vec::new());
-        static ROCKSDB_BUFFER: RefCell<Vec<u8>> = RefCell::new(Vec::new());
-        static SLOW_BUFFER: RefCell<Vec<u8>> = RefCell::new(Vec::new());
-        static RAFTDB_BUFFER: RefCell<Vec<u8>> = RefCell::new(Vec::new());
+        static NORMAL_BUFFER: RefCell<Vec<u8>> = const {RefCell::new(Vec::new())};
+        static ROCKSDB_BUFFER: RefCell<Vec<u8>> = const {RefCell::new(Vec::new())};
+        static SLOW_BUFFER: RefCell<Vec<u8>> = const {RefCell::new(Vec::new())};
+        static RAFTDB_BUFFER: RefCell<Vec<u8>> = const {RefCell::new(Vec::new())};
     }
 
     struct NormalWriter;

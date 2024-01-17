@@ -12,7 +12,7 @@ use pin_project::pin_project;
 use crate::{slab::TrackerToken, Tracker, GLOBAL_TRACKERS, INVALID_TRACKER_TOKEN};
 
 thread_local! {
-    static TLS_TRACKER_TOKEN: Cell<TrackerToken> = Cell::new(INVALID_TRACKER_TOKEN);
+    static TLS_TRACKER_TOKEN: Cell<TrackerToken> = const { Cell::new(INVALID_TRACKER_TOKEN) };
 }
 
 pub fn set_tls_tracker_token(token: TrackerToken) {
