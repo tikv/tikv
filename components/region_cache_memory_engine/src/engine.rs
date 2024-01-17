@@ -20,8 +20,8 @@ use skiplist_rs::{AllocationRecorder, IterRef, MemoryLimiter, Node, Skiplist, MI
 
 use crate::{
     keys::{
-        decode_key, encode_seek_key, InternalKey, InternalKeyComparator, ValueType,
-        VALUE_TYPE_FOR_SEEK, VALUE_TYPE_FOR_SEEK_FOR_PREV, encode_key_for_eviction,
+        decode_key, encode_key_for_eviction, encode_seek_key, InternalKey, InternalKeyComparator,
+        ValueType, VALUE_TYPE_FOR_SEEK, VALUE_TYPE_FOR_SEEK_FOR_PREV,
     },
     range_manager::RangeManager,
 };
@@ -232,7 +232,10 @@ impl RangeCacheMemoryEngine {
     }
 
     pub fn evict_range(&mut self, range: &CacheRange) {
-        unimplemented!()
+        let mut core = self.core.lock().unwrap();
+        if core.range_manager.evict_range(range) {
+            core.engine.delete_range(range);
+        }
     }
 }
 
@@ -706,7 +709,7 @@ impl<'a> PartialEq<&'a [u8]> for RangeCacheDbVector {
 
 #[cfg(test)]
 mod tests {
-    use core::ops::Range;
+    use core::{ops::Range, slice::SlicePattern};
     use std::{iter, iter::StepBy, ops::Deref, sync::Arc};
 
     use bytes::{BufMut, Bytes};
@@ -715,9 +718,9 @@ mod tests {
     };
     use skiplist_rs::Skiplist;
 
-    use super::{cf_to_id, GlobalMemoryLimiter, RangeCacheIterator};
+    use super::{cf_to_id, GlobalMemoryLimiter, RangeCacheIterator, SkiplistEngine};
     use crate::{
-        keys::{encode_key, InternalKeyComparator, ValueType},
+        keys::{decode_key, encode_key, InternalKeyComparator, ValueType},
         RangeCacheMemoryEngine,
     };
 
@@ -897,6 +900,7 @@ mod tests {
         key_range: I,
         mvcc_range: J,
         foward: bool,
+        ended: bool,
     ) {
         for i in key_range {
             for mvcc in mvcc_range.clone() {
@@ -910,7 +914,10 @@ mod tests {
                 }
             }
         }
-        assert!(!iter.valid().unwrap());
+
+        if ended {
+            assert!(!iter.valid().unwrap());
+        }
     }
 
     #[test]
@@ -1034,6 +1041,7 @@ mod tests {
                 (1..100).step_by(step as usize),
                 (1..10).rev(),
                 true,
+                true,
             );
 
             // seek key that is in the skiplist
@@ -1044,6 +1052,7 @@ mod tests {
                 (11..100).step_by(step as usize),
                 (1..10).rev(),
                 true,
+                true,
             );
 
             // seek key that is not in the skiplist
@@ -1053,6 +1062,7 @@ mod tests {
                 &mut iter,
                 (13..100).step_by(step as usize),
                 (1..10).rev(),
+                true,
                 true,
             );
         }
@@ -1066,6 +1076,7 @@ mod tests {
                 &mut iter,
                 (63..100).step_by(step as usize),
                 (1..10).rev(),
+                true,
                 true,
             );
 
@@ -1111,6 +1122,7 @@ mod tests {
                 (21..40).step_by(step as usize),
                 (1..10).rev(),
                 true,
+                true,
             );
 
             // seek a key that is below the lower bound is the same with seek_to_first
@@ -1120,6 +1132,7 @@ mod tests {
                 &mut iter,
                 (21..40).step_by(step as usize),
                 (1..10).rev(),
+                true,
                 true,
             );
 
@@ -1134,6 +1147,7 @@ mod tests {
                 &mut iter,
                 (33..40).step_by(step as usize),
                 (1..10).rev(),
+                true,
                 true,
             );
         }
@@ -1203,6 +1217,7 @@ mod tests {
                 (1..100).step_by(step as usize).rev(),
                 1..10,
                 false,
+                true,
             );
 
             // seek key that is in the skiplist
@@ -1213,6 +1228,7 @@ mod tests {
                 (1..82).step_by(step as usize).rev(),
                 1..10,
                 false,
+                true,
             );
 
             // seek key that is in the skiplist
@@ -1223,6 +1239,7 @@ mod tests {
                 (1..80).step_by(step as usize).rev(),
                 1..10,
                 false,
+                true,
             );
         }
 
@@ -1240,6 +1257,7 @@ mod tests {
                 (21..38).step_by(step as usize).rev(),
                 1..10,
                 false,
+                true,
             );
 
             // seek a key that is above the upper bound is the same with seek_to_last
@@ -1250,6 +1268,7 @@ mod tests {
                 (21..38).step_by(step as usize).rev(),
                 1..10,
                 false,
+                true,
             );
 
             // seek a key that is less than the lower bound won't get any key
@@ -1264,6 +1283,7 @@ mod tests {
                 (21..26).step_by(step as usize).rev(),
                 1..10,
                 false,
+                true,
             );
         }
     }
@@ -1692,6 +1712,149 @@ mod tests {
                 iter.prev().unwrap();
             }
             assert_eq!(start, 20);
+        }
+    }
+
+    #[test]
+    fn test_skiplist_engine_evict_range() {
+        let sl_engine = SkiplistEngine::new(Arc::default());
+        sl_engine.data.iter().for_each(|sl| {
+            fill_data_in_skiplist(sl.clone(), (1..60).step_by(1 as usize), 1..2, 1);
+        });
+
+        let evict_range = CacheRange::new(construct_user_key(20), construct_user_key(40));
+        sl_engine.delete_range(&evict_range);
+        sl_engine.data.iter().for_each(|sl| {
+            let mut iter = sl.iter();
+            iter.seek_to_first();
+            for i in 1..20 {
+                let internal_key = decode_key(iter.key());
+                let expected_key = construct_key(i, 1);
+                assert_eq!(internal_key.user_key, &expected_key);
+                iter.next();
+            }
+
+            for i in 40..60 {
+                let internal_key = decode_key(iter.key());
+                let expected_key = construct_key(i, 1);
+                assert_eq!(internal_key.user_key, &expected_key);
+                iter.next();
+            }
+            assert!(!iter.valid());
+        });
+    }
+
+    #[test]
+    fn test_evict_range_without_snapshot() {
+        let mut engine = RangeCacheMemoryEngine::new(Arc::default());
+        let range = CacheRange::new(construct_user_key(0), construct_user_key(30));
+        let evict_range = CacheRange::new(construct_user_key(10), construct_user_key(20));
+        engine.new_range(range.clone());
+
+        {
+            let mut core = engine.core.lock().unwrap();
+            core.range_manager.set_range_readable(&range, true);
+            core.range_manager.set_safe_ts(&range, 5);
+            let sl = core.engine.data[cf_to_id("write")].clone();
+            for i in 0..30 {
+                let user_key = construct_key(i, 10);
+                let internal_key = encode_key(&user_key, 10, ValueType::Value);
+                let v = construct_value(i, 10);
+                sl.put(internal_key.clone(), v.clone());
+            }
+        }
+
+        engine.evict_range(&evict_range);
+        assert!(engine.snapshot(range.clone(), 10, 200).is_none());
+        assert!(engine.snapshot(evict_range, 10, 200).is_none());
+
+        {
+            let removed = engine.memory_limiter.removed.lock().unwrap();
+            for i in 10..20 {
+                let user_key = construct_key(i, 10);
+                let internal_key = encode_key(&user_key, 10, ValueType::Value);
+                assert!(removed.contains(internal_key.as_slice()));
+            }
+        }
+
+        let r_left = CacheRange::new(construct_user_key(0), construct_user_key(10));
+        let r_right = CacheRange::new(construct_user_key(20), construct_user_key(30));
+        let snap_left = engine.snapshot(r_left, 10, 200).unwrap();
+
+        let mut iter_opt = IterOptions::default();
+        let lower_bound = construct_user_key(0);
+        let upper_bound = construct_user_key(10);
+        iter_opt.set_upper_bound(&upper_bound, 0);
+        iter_opt.set_lower_bound(&lower_bound, 0);
+        let mut iter = snap_left.iterator_opt("write", iter_opt.clone()).unwrap();
+        iter.seek_to_first().unwrap();
+        verify_key_values(&mut iter, (0..10).step_by(1 as usize), 10..11, true, true);
+
+        let lower_bound = construct_user_key(20);
+        let upper_bound = construct_user_key(30);
+        iter_opt.set_upper_bound(&upper_bound, 0);
+        iter_opt.set_lower_bound(&lower_bound, 0);
+        let mut iter = snap_left.iterator_opt("write", iter_opt).unwrap();
+        iter.seek_to_first().unwrap();
+        verify_key_values(&mut iter, (20..30).step_by(1 as usize), 10..11, true, true);
+    }
+
+    #[test]
+    fn test_evict_range_with_snapshot() {
+        let mut engine = RangeCacheMemoryEngine::new(Arc::default());
+        let range = CacheRange::new(construct_user_key(0), construct_user_key(30));
+        let evict_range = CacheRange::new(construct_user_key(10), construct_user_key(20));
+        engine.new_range(range.clone());
+        {
+            let mut core = engine.core.lock().unwrap();
+            core.range_manager.set_range_readable(&range, true);
+            core.range_manager.set_safe_ts(&range, 5);
+            let sl = core.engine.data[cf_to_id("write")].clone();
+            for i in 0..30 {
+                let user_key = construct_key(i, 10);
+                let internal_key = encode_key(&user_key, 10, ValueType::Value);
+                let v = construct_value(i, 10);
+                sl.put(internal_key.clone(), v.clone());
+            }
+        }
+
+        let s1 = engine.snapshot(range.clone(), 10, 10);
+        let s2 = engine.snapshot(range, 20, 20);
+        engine.evict_range(&evict_range);
+        let range_left = CacheRange::new(construct_user_key(0), construct_user_key(10));
+        let s3 = engine.snapshot(range_left, 20, 20).unwrap();
+        let range_right = CacheRange::new(construct_user_key(20), construct_user_key(30));
+        let s4 = engine.snapshot(range_right, 20, 20).unwrap();
+
+        drop(s3);
+        let range_left_eviction = CacheRange::new(construct_user_key(0), construct_user_key(5));
+        engine.evict_range(&range_left_eviction);
+
+        {
+            let removed = engine.memory_limiter.removed.lock().unwrap();
+            assert!(removed.is_empty());
+        }
+
+        drop(s1);
+        {
+            let removed = engine.memory_limiter.removed.lock().unwrap();
+            for i in 10..20 {
+                let user_key = construct_key(i, 10);
+                let internal_key = encode_key(&user_key, 10, ValueType::Value);
+                assert!(!removed.contains(internal_key.as_slice()));
+            }
+        }
+
+        drop(s2);
+        // s2 is dropped, so the range of `evict_range` is removed. The snapshot of s3
+        // and s4 does not prevent it as they are not overlapped.
+        {
+            let removed = engine.memory_limiter.removed.lock().unwrap();
+            for i in 10..20 {
+                let user_key = construct_key(i, 10);
+                let internal_key = encode_key(&user_key, 10, ValueType::Value);
+                assert!(removed.contains(internal_key.as_slice()));
+            }
         }
     }
 }

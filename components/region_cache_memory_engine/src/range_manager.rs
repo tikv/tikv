@@ -51,13 +51,27 @@ impl IdAllocator {
     }
 }
 
-/// RangeManger manges the ranges for RangeCacheMemoryEngine.
+// RangeManger manges the ranges for RangeCacheMemoryEngine. Every new ranges
+// (whether created by new_range or by splitted due to eviction) has an unique
+// id so that range + id can exactly locate the position.
+// When an eviction occured, say we now have k1-k10 in self.ranges and the
+// eviction range is k3-k5. k1-k10 will be splitted to three ranges: k1-k3,
+// k3-k5, and k5-k10.
+// k1-k3 and k5-k10 will be new ranges inserted in self.ranges with meta dervied
+// from meta of k1-k10 (only safe_ts and can_read will be derived). k1-k10 will
+// be removed from self.ranges and inserted to self.historical_ranges. Then,
+// k3-k5 will be in the self.evicted_ranges. Now, we cannot remove the data of
+// k3-k5 as there may be some snapshot of k1-k10. After these snapshot are
+// dropped, k3-k5 can be acutally removed.
 #[derive(Default)]
 pub struct RangeManager {
     // Each new range will increment it by one.
     id_allocator: IdAllocator,
+    // Range before an eviction. It is recorded due to some undropped snapshot, which block the
+    // evicted range deleting the relevant data.
     historical_ranges: BTreeMap<CacheRange, RangeMeta>,
     evicted_ranges: BTreeSet<CacheRange>,
+    // ranges that are cached now
     ranges: BTreeMap<CacheRange, RangeMeta>,
 }
 
@@ -93,7 +107,7 @@ impl RangeManager {
         self.ranges.keys().any(|r| r.overlaps(range))
     }
 
-    // Acquire a snapshot of the `range` with `reaed_ts`. If the range is not
+    // Acquire a snapshot of the `range` with `read_ts`. If the range is not
     // accessable, None will be returned. Otherwise, the range id will be returned.
     pub(crate) fn range_snapshot(&mut self, range: &CacheRange, read_ts: u64) -> Option<u64> {
         let Some(range_key) = self.ranges.keys().find(|&r| r.contains(range)).cloned() else {
@@ -162,20 +176,17 @@ impl RangeManager {
         vec![]
     }
 
-    pub(crate) fn range_evictable(&self, range: &CacheRange) -> bool {
-        unimplemented!()
-    }
-
-    pub(crate) fn evict_range(&mut self, range: &CacheRange) {
+    // return whether the range can be already removed
+    pub(crate) fn evict_range(&mut self, evict_range: &CacheRange) -> bool {
         let range_key = self
             .ranges
             .keys()
-            .find(|&r| r.contains(range))
+            .find(|&r| r.contains(evict_range))
             .unwrap()
             .clone();
         let meta = self.ranges.remove(&range_key).unwrap();
-        let (left_range, right_range) = range_key.split_off(&range);
-        assert!((left_range.is_some() || right_range.is_some()) || &range_key == range);
+        let (left_range, right_range) = range_key.split_off(&evict_range);
+        assert!((left_range.is_some() || right_range.is_some()) || &range_key == evict_range);
 
         if let Some(left_range) = left_range {
             let left_meta = RangeMeta::derive_from(self.id_allocator.allocate_id(), &meta);
@@ -187,8 +198,18 @@ impl RangeManager {
             self.ranges.insert(right_range, right_meta);
         }
 
-        self.evicted_ranges.insert(range.clone());
-        self.historical_ranges.insert(range_key, meta);
+        self.evicted_ranges.insert(evict_range.clone());
+
+        if !meta.range_snapshot_list.is_empty() {
+            self.historical_ranges.insert(range_key, meta);
+            return false;
+        }
+
+        // we also need to check with previous historical_ranges
+        !self
+            .historical_ranges
+            .keys()
+            .any(|r| r.overlaps(evict_range))
     }
 }
 
@@ -227,9 +248,13 @@ mod tests {
         assert!(meta2.can_read && meta3.can_read);
 
         // evict a range with accurate match
+        range_mgr.range_snapshot(&r_left, 10);
         range_mgr.evict_range(&r_left);
         assert!(range_mgr.historical_ranges.get(&r_left).is_some());
         assert!(range_mgr.evicted_ranges.contains(&r_left));
         assert!(range_mgr.ranges.get(&r_left).is_none());
+
+        assert!(!range_mgr.evict_range(&r_right));
+        assert!(range_mgr.historical_ranges.get(&r_right).is_none());
     }
 }
