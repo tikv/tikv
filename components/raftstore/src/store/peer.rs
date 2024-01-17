@@ -892,6 +892,8 @@ where
     pub snapshot_recovery_state: Option<SnapshotRecoveryState>,
 
     last_record_safe_point: u64,
+
+    pub pending_recovery: bool,
 }
 
 impl<EK, ER> Peer<EK, ER>
@@ -1037,6 +1039,7 @@ where
             unsafe_recovery_state: None,
             snapshot_recovery_state: None,
             replay_guard: None,
+            pending_recovery: true,
         };
 
         // If this region has only one peer and I am the one, campaign directly.
@@ -2678,9 +2681,10 @@ where
 
         if let Some(hs) = ready.hs() {
             let pre_commit_index = self.get_store().commit_index();
-            assert!(hs.get_commit() >= pre_commit_index);
+            let cur_commit_index = hs.get_commit();
+            assert!(cur_commit_index >= pre_commit_index);
             if self.is_leader() {
-                self.on_leader_commit_idx_changed(pre_commit_index, hs.get_commit());
+                self.on_leader_commit_idx_changed(pre_commit_index, cur_commit_index);
             }
         }
 

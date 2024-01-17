@@ -180,6 +180,8 @@ pub struct StoreMeta {
     pub region_read_progress: RegionReadProgressRegistry,
     /// record sst_file_name -> (sst_smallest_key, sst_largest_key)
     pub damaged_ranges: HashMap<String, (Vec<u8>, Vec<u8>)>,
+    /// record peers in recovery progress
+    pub pending_recovery_peers: HashSet<u64>,
 }
 
 impl StoreRegionMeta for StoreMeta {
@@ -230,6 +232,7 @@ impl StoreMeta {
             destroyed_region_for_snap: HashMap::default(),
             region_read_progress: RegionReadProgressRegistry::new(),
             damaged_ranges: HashMap::default(),
+            pending_recovery_peers: HashSet::default(),
         }
     }
 
@@ -629,6 +632,10 @@ where
         // TODO: make it reasonable
         self.tick_batch[PeerTick::RequestVoterReplicatedIndex as usize].wait_duration =
             self.cfg.raft_log_gc_tick_interval.0 * 2;
+        // Keep PeerTick::CheckPeerCompleteRecovery timeout same with checking
+        // uncommited interval
+        self.tick_batch[PeerTick::CheckPeerCompleteRecovery as usize].wait_duration =
+            self.cfg.check_long_uncommitted_interval.0;
     }
 
     // Return None means it has passed unsafe vote period.
@@ -2728,7 +2735,8 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
             .with_label_values(&["receiving"])
             .set(snap_stats.receiving_count as i64);
 
-        stats.set_start_time(self.fsm.store.start_time.unwrap().sec as u32);
+        let start_time = self.fsm.store.start_time.unwrap().sec as u32;
+        stats.set_start_time(start_time);
 
         // report store write flow to pd
         stats.set_bytes_written(
@@ -2746,25 +2754,51 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
                 .swap(0, Ordering::Relaxed),
         );
 
-        let raftstore_busy = self
-            .ctx
-            .global_stat
-            .stat
-            .raftstore_busy
-            .swap(false, Ordering::Relaxed);
-        let applystore_busy = self
-            .ctx
-            .global_stat
-            .stat
-            .applystore_busy
-            .swap(false, Ordering::Relaxed);
-        STORE_RAFT_PROCESS_BUSY_GAUGE_VEC
-            .with_label_values(&["raftstore_busy"])
-            .set(raftstore_busy as i64);
-        STORE_RAFT_PROCESS_BUSY_GAUGE_VEC
-            .with_label_values(&["applystore_busy"])
-            .set(applystore_busy as i64);
-        stats.set_is_busy(raftstore_busy || applystore_busy);
+        let pending_recovery = {
+            let in_start = (time::get_time().sec as u32).saturating_sub(start_time) <= 5 * 60;
+            let target_count = ((1_f64 - self.ctx.cfg.min_recovery_ready_region_ratio)
+                * stats.get_region_count() as f64) as usize;
+            let pending_count = self
+                .ctx
+                .store_meta
+                .lock()
+                .unwrap()
+                .pending_recovery_peers
+                .len();
+            STORE_RAFT_PROCESS_BUSY_GAUGE_VEC
+                .with_label_values(&["apply_pending_count"])
+                .set(pending_count as i64);
+            in_start && pending_count < target_count
+        };
+        if pending_recovery {
+            stats.set_is_busy(true);
+            STORE_RAFT_PROCESS_BUSY_GAUGE_VEC
+                .with_label_values(&["raftstore_busy"])
+                .set(1_i64);
+            STORE_RAFT_PROCESS_BUSY_GAUGE_VEC
+                .with_label_values(&["applystore_busy"])
+                .set(1_i64);
+        } else {
+            let raftstore_busy = self
+                .ctx
+                .global_stat
+                .stat
+                .raftstore_busy
+                .swap(false, Ordering::Relaxed);
+            let applystore_busy = self
+                .ctx
+                .global_stat
+                .stat
+                .applystore_busy
+                .swap(false, Ordering::Relaxed);
+            STORE_RAFT_PROCESS_BUSY_GAUGE_VEC
+                .with_label_values(&["raftstore_busy"])
+                .set(raftstore_busy as i64);
+            STORE_RAFT_PROCESS_BUSY_GAUGE_VEC
+                .with_label_values(&["applystore_busy"])
+                .set(applystore_busy as i64);
+            stats.set_is_busy(raftstore_busy || applystore_busy);
+        }
 
         let mut query_stats = QueryStats::default();
         query_stats.set_put(

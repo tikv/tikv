@@ -407,6 +407,13 @@ pub struct Config {
     #[online_config(hidden)]
     #[serde(alias = "enable-partitioned-raft-kv-compatible-learner")]
     pub enable_v2_compatible_learner: bool,
+
+    /// The minimal ratio of region finishing recovery. Only when
+    /// the count of regions which finish recovery exceed the
+    /// threshold, can the raftstore supply service for service.
+    #[doc(hidden)]
+    #[online_config(hidden)]
+    pub min_recovery_ready_region_ratio: f64,
 }
 
 impl Default for Config {
@@ -544,6 +551,7 @@ impl Default for Config {
             check_request_snapshot_interval: ReadableDuration::minutes(1),
             enable_v2_compatible_learner: false,
             unsafe_disable_check_quorum: false,
+            min_recovery_ready_region_ratio: 0.99,
         }
     }
 }

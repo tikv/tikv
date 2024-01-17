@@ -1280,6 +1280,7 @@ where
             PeerTick::CheckPeersAvailability => self.on_check_peers_availability(),
             PeerTick::RequestSnapshot => self.on_request_snapshot_tick(),
             PeerTick::RequestVoterReplicatedIndex => self.on_request_voter_replicated_index(),
+            PeerTick::CheckPeerCompleteRecovery => self.on_check_peer_complete_recovery(),
         }
     }
 
@@ -1313,6 +1314,7 @@ where
         if self.fsm.peer.is_witness() {
             self.register_pull_voter_replicated_index_tick();
         }
+        self.register_check_peer_complete_recovery();
     }
 
     fn on_gc_snap(&mut self, snaps: Vec<(SnapKey, bool)>) {
@@ -6564,6 +6566,50 @@ where
 
     fn register_report_region_buckets_tick(&mut self) {
         self.schedule_tick(PeerTick::ReportBuckets)
+    }
+
+    fn register_check_peer_complete_recovery(&mut self) {
+        self.schedule_tick(PeerTick::CheckPeerCompleteRecovery)
+    }
+
+    fn on_check_peer_complete_recovery(&mut self) {
+        if !self.fsm.peer.pending_recovery {
+            return;
+        }
+
+        // If the peer is newly added or created, no need to check the recovery status.
+        let peer_id = self.fsm.peer.peer_id();
+        let is_newly_added_peer = self
+            .fsm
+            .peer
+            .raft_group
+            .raft
+            .prs()
+            .get(peer_id)
+            .map_or(false, |pr| pr.matched == 0);
+        if is_newly_added_peer {
+            self.fsm.peer.pending_recovery = false;
+            return;
+        }
+
+        // If the peer has large unapplied logs, this peer should be recorded until
+        // the lag reaches the given threshold.
+        let applied_idx = self.fsm.peer.get_store().applied_index();
+        let last_idx = self.fsm.peer.get_store().last_index();
+        if last_idx >= applied_idx + self.ctx.cfg.leader_transfer_max_log_lag {
+            let mut meta = self.ctx.store_meta.lock().unwrap();
+            meta.pending_recovery_peers.insert(peer_id);
+        } else if self.fsm.peer.pending_recovery {
+            // Already finish recovery, no needs to keep the tick.
+            {
+                let mut meta = self.ctx.store_meta.lock().unwrap();
+                meta.pending_recovery_peers.remove(&peer_id);
+            }
+            self.fsm.peer.pending_recovery = false;
+        }
+        if self.fsm.peer.pending_recovery {
+            self.register_check_peer_complete_recovery();
+        }
     }
 }
 

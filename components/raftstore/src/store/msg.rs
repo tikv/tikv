@@ -400,6 +400,7 @@ pub enum PeerTick {
     CheckPeersAvailability = 11,
     RequestSnapshot = 12,
     RequestVoterReplicatedIndex = 13,
+    CheckPeerCompleteRecovery = 14,
 }
 
 impl PeerTick {
@@ -422,6 +423,7 @@ impl PeerTick {
             PeerTick::CheckPeersAvailability => "check_peers_availability",
             PeerTick::RequestSnapshot => "request_snapshot",
             PeerTick::RequestVoterReplicatedIndex => "request_voter_replicated_index",
+            PeerTick::CheckPeerCompleteRecovery => "check_peer_complete_recovery",
         }
     }
 
@@ -441,6 +443,7 @@ impl PeerTick {
             PeerTick::CheckPeersAvailability,
             PeerTick::RequestSnapshot,
             PeerTick::RequestVoterReplicatedIndex,
+            PeerTick::CheckPeerCompleteRecovery,
         ];
         TICKS
     }
