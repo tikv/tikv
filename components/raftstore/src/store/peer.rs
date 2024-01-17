@@ -2738,7 +2738,6 @@ where
                 panic!("{} failed to handle raft ready: {:?}", self.tag, e)
             }
         };
-        // After handling ready, the metrics of `send_to_queue` should be updated.
 
         let ready_number = ready.number();
         let persisted_msgs = ready.take_persisted_messages();
