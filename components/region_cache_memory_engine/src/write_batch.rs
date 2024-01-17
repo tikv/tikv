@@ -273,7 +273,7 @@ mod tests {
         wb.set_save_point();
         wb.put(b"aaa", b"ccc").unwrap();
         wb.put(b"ccc", b"ddd").unwrap();
-        let _ = wb.rollback_to_save_point().unwrap();
+        wb.rollback_to_save_point().unwrap();
         wb.set_sequence_number(1).unwrap();
         assert_eq!(wb.write().unwrap(), 1);
         let sl = engine.data[cf_to_id(CF_DEFAULT)].clone();
