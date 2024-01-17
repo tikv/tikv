@@ -84,14 +84,16 @@ where
             threshold,
             inner: drain,
         };
-        let filtered = GlobalLevelFilter::new(drain.filter(filter).fuse());
-        // ThreadIDrain discards all previous `slog::OwnedKVList`, it should be
-        // placed as the first Drain that receives `slog::Record`.
+        // ThreadIDrain discards all previous `slog::OwnedKVList`, anything that
+        // wraps it should not pass `slog::OwnedKVList`.
         //
         // NB: slog macros (slog::info!() and others) only produce one
         // `slog::Record`, `slog::OwnedKVList` are provided by `slog::Drain` and
         // `slog::Logger`.
-        ThreadIDrain(filtered)
+        let drain = ThreadIDrain(drain);
+        // Let GlobalLevelFilter wrap ThreadIDrain, so that it saves getting
+        // thread id for flittered logs.
+        GlobalLevelFilter::new(drain.filter(filter).fuse())
     }
 
     let (logger, guard) = if use_async {
@@ -650,9 +652,10 @@ where
     type Ok = D::Ok;
     type Err = D::Err;
     fn log(&self, record: &Record<'_>, _: &OwnedKVList) -> Result<Self::Ok, Self::Err> {
+        let thread_id = std::thread::current().id().as_u64().get();
         self.0.log(
             record,
-            &OwnedKVList::from(slog::o!("thread_id" => std::thread::current().id().as_u64().get())),
+            &OwnedKVList::from(slog::o!("thread_id" => thread_id)),
         )
     }
 }
@@ -849,16 +852,16 @@ mod tests {
 
         let thread_id = std::thread::current().id().as_u64();
         let expect = format!(
-            r#"{{"time":"2020/05/16 15:49:52.449 +08:00","level":"INFO","caller":"mod.rs:469","message":"","thread_id":"{0}"}}
-{{"time":"2020/05/16 15:49:52.450 +08:00","level":"INFO","caller":"mod.rs:469","message":"Welcome","thread_id":"{0}"}}
-{{"time":"2020/05/16 15:49:52.450 +08:00","level":"INFO","caller":"mod.rs:470","message":"Welcome TiKV","thread_id":"{0}"}}
-{{"time":"2020/05/16 15:49:52.450 +08:00","level":"INFO","caller":"mod.rs:471","message":"欢迎","thread_id":"{0}"}}
-{{"time":"2020/05/16 15:49:52.450 +08:00","level":"INFO","caller":"mod.rs:472","message":"欢迎 TiKV","thread_id":"{0}"}}
-{{"time":"2020/05/16 15:49:52.450 +08:00","level":"INFO","caller":"mod.rs:455","message":"failed to fetch URL","backoff":"3s","attempt":3,"url":"http://example.com","thread_id":"{0}"}}
-{{"time":"2020/05/16 15:49:52.450 +08:00","level":"INFO","caller":"mod.rs:460","message":"failed to \"fetch\" [URL]: http://example.com","thread_id":"{0}"}}
-{{"time":"2020/05/16 15:49:52.450 +08:00","level":"DEBUG","caller":"mod.rs:463","message":"Slow query","process keys":1500,"duration":"123ns","sql":"SELECT * FROM TABLE WHERE ID=\"abc\"","thread_id":"{0}"}}
-{{"time":"2020/05/16 15:49:52.450 +08:00","level":"WARN","caller":"mod.rs:473","message":"Type","Other":null,"Score":null,"Counter":null,"thread_id":"{0}"}}
-{{"time":"2020/05/16 15:49:52.451 +08:00","level":"INFO","caller":"mod.rs:391","message":"more type tests","str_array":"[\"💖\", \"�\", \"☺☻☹\", \"日a本b語ç日ð本Ê語þ日¥本¼語i日©\", \"日a本b語ç日ð本Ê語þ日¥本¼語i日©日a本b語ç日ð本Ê語þ日¥本¼語i日©日a本b語ç日ð本Ê語þ日¥本¼語i日©\", \"\\\\x80\\\\x80\\\\x80\\\\x80\", \"<car><mirror>XML</mirror></car>\"]","u8":34,"is_None":null,"is_false":false,"is_true":true,"store ids":"[1, 2, 3]","url-peers":"[\"peer1\", \"peer 2\"]","urls":"[\"http://xxx.com:2347\", \"http://xxx.com:2432\"]","field2":"in quote","field1":"no_quote","thread_id":"{0}"}}
+            r#"{{"time":"2020/05/16 15:49:52.449 +08:00","level":"INFO","caller":"mod.rs:469","message":"","thread_id":{0}}}
+{{"time":"2020/05/16 15:49:52.450 +08:00","level":"INFO","caller":"mod.rs:469","message":"Welcome","thread_id":{0}}}
+{{"time":"2020/05/16 15:49:52.450 +08:00","level":"INFO","caller":"mod.rs:470","message":"Welcome TiKV","thread_id":{0}}}
+{{"time":"2020/05/16 15:49:52.450 +08:00","level":"INFO","caller":"mod.rs:471","message":"欢迎","thread_id":{0}}}
+{{"time":"2020/05/16 15:49:52.450 +08:00","level":"INFO","caller":"mod.rs:472","message":"欢迎 TiKV","thread_id":{0}}}
+{{"time":"2020/05/16 15:49:52.450 +08:00","level":"INFO","caller":"mod.rs:455","message":"failed to fetch URL","backoff":"3s","attempt":3,"url":"http://example.com","thread_id":{0}}}
+{{"time":"2020/05/16 15:49:52.450 +08:00","level":"INFO","caller":"mod.rs:460","message":"failed to \"fetch\" [URL]: http://example.com","thread_id":{0}}}
+{{"time":"2020/05/16 15:49:52.450 +08:00","level":"DEBUG","caller":"mod.rs:463","message":"Slow query","process keys":1500,"duration":"123ns","sql":"SELECT * FROM TABLE WHERE ID=\"abc\"","thread_id":{0}}}
+{{"time":"2020/05/16 15:49:52.450 +08:00","level":"WARN","caller":"mod.rs:473","message":"Type","Other":null,"Score":null,"Counter":null,"thread_id":{0}}}
+{{"time":"2020/05/16 15:49:52.451 +08:00","level":"INFO","caller":"mod.rs:391","message":"more type tests","str_array":"[\"💖\", \"�\", \"☺☻☹\", \"日a本b語ç日ð本Ê語þ日¥本¼語i日©\", \"日a本b語ç日ð本Ê語þ日¥本¼語i日©日a本b語ç日ð本Ê語þ日¥本¼語i日©日a本b語ç日ð本Ê語þ日¥本¼語i日©\", \"\\\\x80\\\\x80\\\\x80\\\\x80\", \"<car><mirror>XML</mirror></car>\"]","u8":34,"is_None":null,"is_false":false,"is_true":true,"store ids":"[1, 2, 3]","url-peers":"[\"peer1\", \"peer 2\"]","urls":"[\"http://xxx.com:2347\", \"http://xxx.com:2432\"]","field2":"in quote","field1":"no_quote","thread_id":{0}}}
 "#,
             thread_id
         );
@@ -894,11 +897,12 @@ mod tests {
 
         let expected = "[2019/01/15 13:40:39.619 +08:00] [INFO] [mod.rs:871] [Welcome]\n";
         let check_log = |log: &str| {
-            let buffer = buffer.lock().unwrap();
+            let mut buffer = buffer.lock().unwrap();
             let output = from_utf8(&buffer).unwrap();
             // only check the log len here as some field like timestamp, location may
             // change.
             assert_eq!(output.len(), log.len());
+            buffer.clear();
         };
 
         set_log_level(Level::Info);
