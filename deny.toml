@@ -52,7 +52,7 @@ ignore = [
     #
     # NB: Upgrading to time 0.3 do fix the issue but it's an imcompatible
     # versoin which removes some necessary APIs (`time::precise_time_ns`) that
-    # requiresd by TiKV.
+    # are required by TiKV.
     # See https://github.com/time-rs/time/blob/8067540c/CHANGELOG.md#L703
     "RUSTSEC-2020-0071",
     # Ignore RUSTSEC-2023-0072 as we bans the unsound `X509StoreRef::objects`.
@@ -70,10 +70,15 @@ ignore = [
     "RUSTSEC-2021-0145",
 ]
 
+# TiKV is licensed under Apache 2.0, according to ASF 3RD PARTY LICENSE POLICY,
+# TiKV can include licenses in Category A, and include licenses in Category B
+# under certain conditions.
+# See https://www.apache.org/legal/resolved.html.
 [licenses]
-unlicensed = "allow" # FIXME: Deny it.
+unlicensed = "deny"
 copyleft = "deny"
-private = { ignore = true }
+private = { ignore = false }
+# Allow licenses in Category A
 allow = [
     "0BSD",
     "Apache-2.0",
@@ -81,7 +86,6 @@ allow = [
     "CC0-1.0",
     "ISC",
     "MIT",
-    "MPL-2.0",
     "Zlib",
 ]
 exceptions = [
@@ -89,8 +93,10 @@ exceptions = [
     # which is licensed under Unicode-DFS-2016.
     # See https://github.com/dtolnay/unicode-ident/pull/4
     { name = "unicode-ident", allow = ["Unicode-DFS-2016"] },
-    # FIXME: Remove this crate.
-    { name = "mnt", allow = ["LGPL-3.0"] },
+
+    # Allow licenses in Category B explicitly, make their usage more prominent.
+    { name = "slog-json", allow = ["MPL-2.0"] },
+    { name = "smartstring", allow = ["MPL-2.0"] },
     { name = "inferno", allow = ["CDDL-1.0"] },
 ]
 
