@@ -1719,7 +1719,7 @@ mod tests {
     fn test_skiplist_engine_evict_range() {
         let sl_engine = SkiplistEngine::new(Arc::default());
         sl_engine.data.iter().for_each(|sl| {
-            fill_data_in_skiplist(sl.clone(), (1..60).step_by(1 as usize), 1..2, 1);
+            fill_data_in_skiplist(sl.clone(), (1..60).step_by(1), 1..2, 1);
         });
 
         let evict_range = CacheRange::new(construct_user_key(20), construct_user_key(40));
@@ -1788,7 +1788,7 @@ mod tests {
         iter_opt.set_lower_bound(&lower_bound, 0);
         let mut iter = snap_left.iterator_opt("write", iter_opt.clone()).unwrap();
         iter.seek_to_first().unwrap();
-        verify_key_values(&mut iter, (0..10).step_by(1 as usize), 10..11, true, true);
+        verify_key_values(&mut iter, (0..10).step_by(1), 10..11, true, true);
 
         let lower_bound = construct_user_key(20);
         let upper_bound = construct_user_key(30);
@@ -1796,7 +1796,7 @@ mod tests {
         iter_opt.set_lower_bound(&lower_bound, 0);
         let mut iter = snap_left.iterator_opt("write", iter_opt).unwrap();
         iter.seek_to_first().unwrap();
-        verify_key_values(&mut iter, (20..30).step_by(1 as usize), 10..11, true, true);
+        verify_key_values(&mut iter, (20..30).step_by(1), 10..11, true, true);
     }
 
     #[test]

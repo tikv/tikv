@@ -86,13 +86,13 @@ impl RangeManager {
     }
 
     pub fn set_range_readable(&mut self, range: &CacheRange, set_readable: bool) {
-        if let Some(meta) = self.ranges.get_mut(&range) {
+        if let Some(meta) = self.ranges.get_mut(range) {
             meta.can_read = true;
         }
     }
 
     pub fn set_safe_ts(&mut self, range: &CacheRange, safe_ts: u64) -> bool {
-        if let Some(meta) = self.ranges.get_mut(&range) {
+        if let Some(meta) = self.ranges.get_mut(range) {
             if meta.safe_ts > safe_ts {
                 return false;
             }
@@ -155,10 +155,10 @@ impl RangeManager {
                     !self
                         .historical_ranges
                         .keys()
-                        .any(|r| r.overlaps(&evicted_range))
+                        .any(|r| r.overlaps(evicted_range))
                 })
-                .map(|r| r.clone())
-                .collect();
+                .cloned()
+                .collect::<Vec<_>>();
         }
 
         // It must belong to the `self.ranges` if not found in `self.historical_ranges`
@@ -185,7 +185,7 @@ impl RangeManager {
             .unwrap()
             .clone();
         let meta = self.ranges.remove(&range_key).unwrap();
-        let (left_range, right_range) = range_key.split_off(&evict_range);
+        let (left_range, right_range) = range_key.split_off(evict_range);
         assert!((left_range.is_some() || right_range.is_some()) || &range_key == evict_range);
 
         if let Some(left_range) = left_range {
