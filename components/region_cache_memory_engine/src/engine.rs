@@ -106,10 +106,10 @@ pub struct RegionMemoryMeta {
     snapshot_list: SnapshotList,
     // It indicates whether the region is readable. False means integrity of the data in this
     // cached region is not satisfied due to being evicted for instance.
-    can_read: bool,
+    pub(crate) can_read: bool,
     // Request with read_ts below it is not eligible for granting snapshot.
     // Note: different region can have different safe_ts.
-    safe_ts: u64,
+    pub(crate) safe_ts: u64,
 }
 
 impl RegionMemoryMeta {
@@ -124,8 +124,8 @@ impl RegionMemoryMeta {
 
 #[derive(Default)]
 pub struct RegionCacheMemoryEngineCore {
-    engine: HashMap<u64, RegionMemoryEngine>,
-    region_metas: HashMap<u64, RegionMemoryMeta>,
+    pub(crate) engine: HashMap<u64, RegionMemoryEngine>,
+    pub(crate) region_metas: HashMap<u64, RegionMemoryMeta>,
 }
 
 impl RegionCacheMemoryEngineCore {
@@ -153,7 +153,7 @@ impl RegionCacheMemoryEngineCore {
 /// cached region), we resort to using a the disk engine's snapshot instead.
 #[derive(Clone, Default)]
 pub struct RegionCacheMemoryEngine {
-    core: Arc<Mutex<RegionCacheMemoryEngineCore>>,
+    pub(crate) core: Arc<Mutex<RegionCacheMemoryEngineCore>>,
 }
 
 impl RegionCacheMemoryEngine {

@@ -249,12 +249,12 @@ impl Mutable for RegionCacheWriteBatch {
 
 #[cfg(test)]
 mod tests {
-    use engine_traits::WriteBatch;
+    use engine_traits::{Peekable, RegionCacheEngine, WriteBatch};
 
     use super::*;
 
     #[test]
-    fn test_put_one_kv() {
+    fn test_write_to_skiplist() {
         let engine = RegionMemoryEngine::default();
         let mut wb = RegionCacheWriteBatch::from(&engine);
         wb.put(b"aaa", b"bbb").unwrap();
@@ -263,5 +263,49 @@ mod tests {
         let sl = engine.data[cf_to_id(CF_DEFAULT)].clone();
         let actual = sl.get(&encode_key(b"aaa", 1, ValueType::Value)).unwrap();
         assert_eq!(&b"bbb"[..], actual)
+    }
+
+    #[test]
+    fn test_savepoints() {
+        let engine = RegionMemoryEngine::default();
+        let mut wb = RegionCacheWriteBatch::from(&engine);
+        wb.put(b"aaa", b"bbb").unwrap();
+        wb.set_save_point();
+        wb.put(b"aaa", b"ccc").unwrap();
+        wb.put(b"ccc", b"ddd").unwrap();
+        let _ = wb.rollback_to_save_point().unwrap();
+        wb.set_sequence_number(1).unwrap();
+        assert_eq!(wb.write().unwrap(), 1);
+        let sl = engine.data[cf_to_id(CF_DEFAULT)].clone();
+        let actual = sl.get(&encode_key(b"aaa", 1, ValueType::Value)).unwrap();
+        assert_eq!(&b"bbb"[..], actual);
+        assert!(sl.get(&encode_key(b"ccc", 1, ValueType::Value)).is_none())
+    }
+
+    #[test]
+    fn test_put_write_clear_delete_put_write() {
+        let engine = RegionCacheMemoryEngine::default();
+        engine.new_region(1);
+        let engine_for_writes = {
+            let mut core = engine.core.lock().unwrap();
+            core.region_metas.get_mut(&1).unwrap().can_read = true;
+            core.region_metas.get_mut(&1).unwrap().safe_ts = 10;
+            core.engine.get_mut(&1).unwrap().clone()
+        };
+        let mut wb = RegionCacheWriteBatch::from(&engine_for_writes);
+        wb.put(b"aaa", b"bbb").unwrap();
+        wb.set_sequence_number(1).unwrap();
+        _ = wb.write().unwrap();
+        wb.clear();
+        wb.put(b"bbb", b"ccc").unwrap();
+        wb.delete(b"aaa").unwrap();
+        wb.set_sequence_number(2).unwrap();
+        _ = wb.write().unwrap();
+        let snapshot = engine.snapshot(1, u64::MAX, 2).unwrap();
+        assert_eq!(
+            snapshot.get_value(&b"bbb"[..]).unwrap().unwrap(),
+            &b"ccc"[..]
+        );
+        assert!(snapshot.get_value(&b"aaa"[..]).unwrap().is_none())
     }
 }
