@@ -1252,7 +1252,7 @@ where
                 let mut extra = ExtraMessage::default();
                 extra.set_type(ExtraMessageType::MsgRedirectAdminRequest);
                 extra.set_admin_request(request.write_to_bytes().unwrap());
-                info!("redirect split region command"; "to_peer" => ?to_peer, "from_peer" => ? self.fsm.peer.peer, "region_id" => self.region_id());
+                info!("try redirect split command to another peer"; "to_peer" => ?to_peer, "from_peer" => ? self.fsm.peer.peer, "region_id" => self.region_id());
                 self.fsm
                     .peer
                     .send_extra_message(extra, &mut self.ctx.trans, &to_peer);
@@ -2956,7 +2956,7 @@ where
                         .mut_header()
                         .set_region_epoch(self.fsm.peer.region().get_region_epoch().clone());
 
-                    // only supportbatch split now.
+                    // only support batch split now.
                     if request.get_admin_request().get_cmd_type() != AdminCmdType::BatchSplit {
                         error!(
                             "MsgRedirectAdminRequest only support batch split now";

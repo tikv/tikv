@@ -1202,19 +1202,19 @@ where
                                 "leader" => ?leader,
                                 "peer" => ?peer);
                             redirect_split_request(&router, region_id, leader, req);
+                            return;
                         }
-                    } else {
-                        // directly try to split on the specified peer
-                        send_admin_request(
-                            &router,
-                            region_id,
-                            epoch,
-                            peer,
-                            req,
-                            callback,
-                            Default::default(),
-                        );
                     }
+                    // directly try to split on the specified peer
+                    send_admin_request(
+                        &router,
+                        region_id,
+                        epoch,
+                        peer,
+                        req,
+                        callback,
+                        Default::default(),
+                    );
                 }
                 // When rolling update, there might be some old version tikvs that don't support
                 // batch split in cluster. In this situation, PD version check would refuse
