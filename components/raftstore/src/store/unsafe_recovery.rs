@@ -235,8 +235,6 @@ pub fn start_unsafe_recovery_report(
     router.broadcast_wait_apply(wait_apply);
 }
 
-// avoid dead code check for the inner drop guard.
-#[allow(dead_code)]
 #[derive(Clone, Debug)]
 pub struct UnsafeRecoveryForceLeaderSyncer(Arc<InvokeClosureOnDrop>);
 
