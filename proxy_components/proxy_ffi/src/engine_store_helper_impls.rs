@@ -377,6 +377,12 @@ impl EngineStoreServerHelper {
         debug_assert!(self.fn_fast_add_peer.is_some());
         unsafe { (self.fn_fast_add_peer.into_inner())(self.inner, region_id, new_peer_id) }
     }
+
+    pub fn get_lock_by_key(&self, region_id: u64, key: &[u8]) -> Vec<u8> {
+        unsafe { (self.fn_get_lock_by_key.into_inner())(self.inner, region_id, key.into()) }
+            .to_slice()
+            .to_vec()
+    }
 }
 
 // PageStorage specific

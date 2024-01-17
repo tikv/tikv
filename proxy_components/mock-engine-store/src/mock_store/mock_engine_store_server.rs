@@ -364,6 +364,7 @@ pub fn gen_engine_store_server_helper(
         fn_set_pb_msg_by_bytes: Some(ffi_set_pb_msg_by_bytes),
         fn_handle_safe_ts_update: Some(ffi_handle_safe_ts_update),
         fn_fast_add_peer: Some(ffi_fast_add_peer),
+        fn_get_lock_by_key: Some(ffi_get_lock_by_key),
         fn_apply_fap_snapshot: Some(ffi_apply_fap_snapshot),
         fn_query_fap_snapshot_state: Some(ffi_query_fap_snapshot_state),
         fn_kvstore_region_exists: Some(ffi_kvstore_region_exists),
@@ -584,5 +585,27 @@ unsafe extern "C" fn ffi_handle_compute_store_stats(
         engine_keys_written: 0,
         engine_bytes_read: 0,
         engine_keys_read: 0,
+    }
+}
+
+unsafe extern "C" fn ffi_get_lock_by_key(
+    arg1: *const interfaces_ffi::EngineStoreServerWrap,
+    region_id: u64,
+    key: interfaces_ffi::BaseBuffView,
+) -> interfaces_ffi::BaseBuffView {
+    let store = into_engine_store_server_wrap(arg1);
+    match (*store.engine_store_server).kvstore.get(&region_id) {
+        Some(e) => {
+            let cf_index = interfaces_ffi::ColumnFamilyType::Lock as usize;
+            let value = e.data[cf_index].get(key.to_slice()).unwrap().as_ptr();
+            interfaces_ffi::BaseBuffView {
+                data: value as *const i8,
+                len: 0,
+            }
+        }
+        None => interfaces_ffi::BaseBuffView {
+            data: std::ptr::null(),
+            len: 0,
+        },
     }
 }
