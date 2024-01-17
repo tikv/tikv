@@ -639,6 +639,7 @@ pub fn must_error_read_on_peer<EK: KvEngineWithRocks, T: Simulator<EK>>(
     }
 }
 
+#[track_caller]
 pub fn must_contains_error(resp: &RaftCmdResponse, msg: &str) {
     let header = resp.get_header();
     assert!(header.has_error());
@@ -772,7 +773,7 @@ pub fn configure_for_enable_titan<EK: KvEngineWithRocks, T: Simulator<EK>>(
     cluster: &mut Cluster<EK, T>,
     min_blob_size: ReadableSize,
 ) {
-    cluster.cfg.rocksdb.titan.enabled = true;
+    cluster.cfg.rocksdb.titan.enabled = Some(true);
     cluster.cfg.rocksdb.titan.purge_obsolete_files_period = ReadableDuration::secs(1);
     cluster.cfg.rocksdb.titan.max_background_gc = 10;
     cluster.cfg.rocksdb.defaultcf.titan.min_blob_size = min_blob_size;
@@ -783,7 +784,7 @@ pub fn configure_for_enable_titan<EK: KvEngineWithRocks, T: Simulator<EK>>(
 pub fn configure_for_disable_titan<EK: KvEngineWithRocks, T: Simulator<EK>>(
     cluster: &mut Cluster<EK, T>,
 ) {
-    cluster.cfg.rocksdb.titan.enabled = false;
+    cluster.cfg.rocksdb.titan.enabled = Some(false);
 }
 
 pub fn configure_for_encryption<EK: KvEngineWithRocks, T: Simulator<EK>>(
@@ -1313,6 +1314,21 @@ pub fn must_kv_pessimistic_rollback(
     assert!(resp.errors.is_empty(), "{:?}", resp.get_errors());
 }
 
+pub fn must_kv_pessimistic_rollback_with_scan_first(
+    client: &TikvClient,
+    ctx: Context,
+    ts: u64,
+    for_update_ts: u64,
+) {
+    let mut req = PessimisticRollbackRequest::default();
+    req.set_context(ctx);
+    req.start_version = ts;
+    req.for_update_ts = for_update_ts;
+    let resp = client.kv_pessimistic_rollback(&req).unwrap();
+    assert!(!resp.has_region_error(), "{:?}", resp.get_region_error());
+    assert!(resp.errors.is_empty(), "{:?}", resp.get_errors());
+}
+
 pub fn must_check_txn_status(
     client: &TikvClient,
     ctx: Context,
@@ -1376,6 +1392,43 @@ pub fn must_kv_have_locks(
         assert_eq!(lock_info.get_lock_version(), *expected_start_ts);
         assert_eq!(lock_info.get_lock_for_update_ts(), *expected_for_update_ts);
     }
+}
+
+/// Scan scan_limit number of locks within [start_key, end_key), the returned
+/// lock number should equal the input expected_cnt.
+pub fn must_lock_cnt(
+    client: &TikvClient,
+    ctx: Context,
+    ts: u64,
+    start_key: &[u8],
+    end_key: &[u8],
+    lock_type: Op,
+    expected_cnt: usize,
+    scan_limit: usize,
+) {
+    let mut req = ScanLockRequest::default();
+    req.set_context(ctx);
+    req.set_limit(scan_limit as u32);
+    req.set_start_key(start_key.to_vec());
+    req.set_end_key(end_key.to_vec());
+    req.set_max_version(ts);
+    let resp = client.kv_scan_lock(&req).unwrap();
+    assert!(!resp.has_region_error(), "{:?}", resp.get_region_error());
+    assert!(resp.error.is_none(), "{:?}", resp.get_error());
+
+    let lock_cnt = resp
+        .locks
+        .iter()
+        .filter(|lock_info| lock_info.get_lock_type() == lock_type)
+        .count();
+
+    assert_eq!(
+        lock_cnt,
+        expected_cnt,
+        "lock count not match, expected: {:?}; got: {:?}",
+        expected_cnt,
+        resp.locks.len()
+    );
 }
 
 pub fn get_tso(pd_client: &TestPdClient) -> u64 {

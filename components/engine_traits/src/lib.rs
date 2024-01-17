@@ -253,8 +253,7 @@
 #![feature(assert_matches)]
 #![feature(linked_list_cursors)]
 #![feature(let_chains)]
-#![feature(str_split_as_str)]
-#![feature(drain_filter)]
+#![feature(str_split_remainder)]
 
 #[macro_use(fail_point)]
 extern crate fail;

@@ -1,6 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-#![feature(once_cell)]
+#![feature(lazy_cell)]
 #![feature(let_chains)]
 
 #[macro_use]
@@ -796,12 +796,18 @@ fn compact_whole_cluster(
     threads: u32,
     bottommost: BottommostLevelCompaction,
 ) {
-    let stores = pd_client
+    let all_stores = pd_client
         .get_all_stores(true) // Exclude tombstone stores.
         .unwrap_or_else(|e| perror_and_exit("Get all cluster stores from PD failed", e));
 
+    let tikv_stores = all_stores.iter().filter(|s| {
+        !s.get_labels()
+            .iter()
+            .any(|l| l.get_key() == "engine" && l.get_value() == "tiflash")
+    });
+
     let mut handles = Vec::new();
-    for s in stores {
+    for s in tikv_stores {
         let cfg = cfg.clone();
         let mgr = Arc::clone(&mgr);
         let addr = s.address.clone();

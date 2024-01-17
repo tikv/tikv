@@ -1336,26 +1336,30 @@ pub mod tests {
         };
 
         // Test the initial data structure size.
-        let (tx, rx) = mpsc::sync_channel(8);
+        let (tx, rx) = mpsc::sync_channel(1);
+        let check_mem_size_change = |expect: i64| {
+            assert_eq!(rx.try_recv().unwrap(), expect);
+            rx.try_recv().unwrap_err();
+        };
         let mut cache = EntryCache::new_with_cb(move |c: i64| tx.send(c).unwrap());
-        assert_eq!(rx.try_recv().unwrap(), 896);
+        check_mem_size_change(0);
 
         cache.append(
             0,
             0,
             &[new_padded_entry(101, 1, 1), new_padded_entry(102, 1, 2)],
         );
-        assert_eq!(rx.try_recv().unwrap(), 3);
+        check_mem_size_change(419);
 
         cache.prepend(vec![new_padded_entry(100, 1, 1)]);
-        assert_eq!(rx.try_recv().unwrap(), 1);
+        check_mem_size_change(1);
         cache.persisted = 100;
         cache.compact_to(101);
-        assert_eq!(rx.try_recv().unwrap(), -1);
+        check_mem_size_change(-1);
 
         // Test size change for one overlapped entry.
         cache.append(0, 0, &[new_padded_entry(102, 2, 3)]);
-        assert_eq!(rx.try_recv().unwrap(), 1);
+        check_mem_size_change(1);
 
         // Test size change for all overlapped entries.
         cache.append(
@@ -1363,42 +1367,42 @@ pub mod tests {
             0,
             &[new_padded_entry(101, 3, 4), new_padded_entry(102, 3, 5)],
         );
-        assert_eq!(rx.try_recv().unwrap(), 5);
+        check_mem_size_change(5);
 
         cache.append(0, 0, &[new_padded_entry(103, 3, 6)]);
-        assert_eq!(rx.try_recv().unwrap(), 6);
+        check_mem_size_change(6);
 
         // Test trace a dangle entry.
         let cached_entries = CachedEntries::new(vec![new_padded_entry(100, 1, 1)]);
         cache.trace_cached_entries(cached_entries);
-        assert_eq!(rx.try_recv().unwrap(), 1);
+        check_mem_size_change(97);
 
         // Test trace an entry which is still in cache.
         let cached_entries = CachedEntries::new(vec![new_padded_entry(102, 3, 5)]);
         cache.trace_cached_entries(cached_entries);
-        assert_eq!(rx.try_recv().unwrap(), 0);
+        check_mem_size_change(0);
 
         // Test compare `cached_last` with `trunc_to_idx` in `EntryCache::append_impl`.
         cache.append(0, 0, &[new_padded_entry(103, 4, 7)]);
-        assert_eq!(rx.try_recv().unwrap(), 1);
+        check_mem_size_change(1);
 
         // Test compact one traced dangle entry and one entry in cache.
         cache.persisted = 101;
         cache.compact_to(102);
-        assert_eq!(rx.try_recv().unwrap(), -5);
+        check_mem_size_change(-5);
 
         // Test compact the last traced dangle entry.
         cache.persisted = 102;
         cache.compact_to(103);
-        assert_eq!(rx.try_recv().unwrap(), -5);
+        check_mem_size_change(-5);
 
         // Test compact all entries.
         cache.persisted = 103;
         cache.compact_to(104);
-        assert_eq!(rx.try_recv().unwrap(), -7);
+        check_mem_size_change(-7);
 
         drop(cache);
-        assert_eq!(rx.try_recv().unwrap(), -896);
+        check_mem_size_change(-512);
     }
 
     #[test]

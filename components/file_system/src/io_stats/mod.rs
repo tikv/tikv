@@ -47,6 +47,14 @@ mod proc;
 #[cfg(all(target_os = "linux", not(feature = "bcc-iosnoop")))]
 pub use proc::*;
 
+// A struct assists testing IO stats.
+//
+// O_DIRECT requires I/O to be 512-byte aligned.
+// See https://man7.org/linux/man-pages/man2/open.2.html#NOTES
+#[cfg(test)]
+#[repr(align(512))]
+pub(crate) struct A512<const SZ: usize>(pub [u8; SZ]);
+
 #[cfg(test)]
 mod tests {
     use tikv_util::sys::thread::StdThreadBuildWrapper;

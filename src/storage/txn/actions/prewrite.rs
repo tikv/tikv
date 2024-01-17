@@ -351,7 +351,9 @@ impl<'a> PrewriteMutation<'a> {
                 .into());
             }
 
-            if let Some(ts) = expected_for_update_ts && lock.for_update_ts != ts {
+            if let Some(ts) = expected_for_update_ts
+                && lock.for_update_ts != ts
+            {
                 // The constraint on for_update_ts of the pessimistic lock is violated.
                 // Consider the following case:
                 //
@@ -362,8 +364,8 @@ impl<'a> PrewriteMutation<'a> {
                 //    pessimistic lock.
                 // 3. Another transaction `T2` writes the key and committed.
                 // 4. The key then receives a stale pessimistic lock request of `T1` that has
-                //    been received in step 1 (maybe because of retrying due to network issue
-                //    in step 1). Since it allows locking with conflict, though there's a newer
+                //    been received in step 1 (maybe because of retrying due to network issue in
+                //    step 1). Since it allows locking with conflict, though there's a newer
                 //    version that's later than the request's `for_update_ts`, the request can
                 //    still acquire the lock. However no one will check the response, which
                 //    tells the latest commit_ts it met.
@@ -766,7 +768,6 @@ fn async_commit_timestamps(
         #[cfg(not(feature = "failpoints"))]
         let injected_fallback = false;
 
-        let max_commit_ts = max_commit_ts;
         if (!max_commit_ts.is_zero() && min_commit_ts > max_commit_ts) || injected_fallback {
             warn!("commit_ts is too large, fallback to normal 2PC";
                 "key" => log_wrappers::Value::key(key.as_encoded()),
@@ -1875,7 +1876,6 @@ pub mod tests {
             // At most 12 ops per-case.
             let ops_count = rg.gen::<u8>() % 12;
             let ops = (0..ops_count)
-                .into_iter()
                 .enumerate()
                 .map(|(i, _)| {
                     if i == 0 {

@@ -34,7 +34,7 @@ fn test_async_io_commit_without_leader_persist() {
     fail::cfg(raft_before_save_on_store_1_fp, "pause").unwrap();
 
     for i in 2..10 {
-        cluster
+        let _ = cluster
             .async_put(format!("k{}", i).as_bytes(), b"v1")
             .unwrap();
     }
@@ -79,7 +79,7 @@ fn test_async_io_delay_destroy_after_conf_change() {
     fail::cfg(raft_before_save_on_store_1_fp, "pause").unwrap();
 
     for i in 2..10 {
-        cluster
+        let _ = cluster
             .async_put(format!("k{}", i).as_bytes(), b"v")
             .unwrap();
     }
