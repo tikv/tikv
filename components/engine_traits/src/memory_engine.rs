@@ -70,16 +70,16 @@ impl Ord for CacheRange {
 
 impl CacheRange {
     // todo: need to consider ""?
-    pub fn contains(&self, other: &CacheRange) -> bool {
+    pub fn contains_range(&self, other: &CacheRange) -> bool {
         self.start <= other.start && self.end >= other.end
+    }
+
+    pub fn contains_key(&self, key: &[u8]) -> bool {
+        self.start <= key && key < self.end
     }
 
     pub fn overlaps(&self, other: &CacheRange) -> bool {
         self.start < other.end && other.start < self.end
-    }
-
-    pub fn is_sibling(&self, other: &CacheRange) -> bool {
-        self.start == other.end || self.end == other.start
     }
 
     pub fn split_off(&self, key: &CacheRange) -> (Option<CacheRange>, Option<CacheRange>) {

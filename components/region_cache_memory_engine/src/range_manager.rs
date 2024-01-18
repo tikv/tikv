@@ -10,9 +10,8 @@ use crate::engine::{RagneCacheSnapshotMeta, SnapshotList};
 pub struct RangeMeta {
     id: u64,
     range_snapshot_list: SnapshotList,
-    evicted: bool,
     can_read: bool,
-    safe_ts: u64,
+    safe_point: u64,
 }
 
 impl RangeMeta {
@@ -20,9 +19,8 @@ impl RangeMeta {
         Self {
             id,
             range_snapshot_list: SnapshotList::default(),
-            evicted: false,
             can_read: false,
-            safe_ts: 0,
+            safe_point: 0,
         }
     }
 
@@ -30,9 +28,8 @@ impl RangeMeta {
         Self {
             id,
             range_snapshot_list: SnapshotList::default(),
-            evicted: false,
             can_read: r.can_read,
-            safe_ts: r.safe_ts,
+            safe_point: r.safe_point,
         }
     }
 
@@ -81,26 +78,30 @@ impl RangeManager {
     }
 
     pub(crate) fn new_range(&mut self, range: CacheRange) {
+        assert!(!self.overlap_with_range(&range));
         let range_meta = RangeMeta::new(self.id_allocator.allocate_id());
         self.ranges.insert(range, range_meta);
     }
 
     pub fn set_range_readable(&mut self, range: &CacheRange, set_readable: bool) {
-        if let Some(meta) = self.ranges.get_mut(range) {
-            meta.can_read = true;
-        }
+        let meta = self.ranges.get_mut(range).unwrap();
+        meta.can_read = true;
     }
 
     pub fn set_safe_ts(&mut self, range: &CacheRange, safe_ts: u64) -> bool {
         if let Some(meta) = self.ranges.get_mut(range) {
-            if meta.safe_ts > safe_ts {
+            if meta.safe_point > safe_ts {
                 return false;
             }
-            meta.safe_ts = safe_ts;
+            meta.safe_point = safe_ts;
             true
         } else {
             false
         }
+    }
+
+    pub fn contains(&self, key: &[u8]) -> bool {
+        self.ranges.keys().any(|r| r.contains_key(key))
     }
 
     pub(crate) fn overlap_with_range(&self, range: &CacheRange) -> bool {
@@ -110,12 +111,17 @@ impl RangeManager {
     // Acquire a snapshot of the `range` with `read_ts`. If the range is not
     // accessable, None will be returned. Otherwise, the range id will be returned.
     pub(crate) fn range_snapshot(&mut self, range: &CacheRange, read_ts: u64) -> Option<u64> {
-        let Some(range_key) = self.ranges.keys().find(|&r| r.contains(range)).cloned() else {
+        let Some(range_key) = self
+            .ranges
+            .keys()
+            .find(|&r| r.contains_range(range))
+            .cloned()
+        else {
             return None;
         };
         let meta = self.ranges.get_mut(&range_key).unwrap();
 
-        if read_ts <= meta.safe_ts || meta.evicted || !meta.can_read {
+        if read_ts <= meta.safe_point || !meta.can_read {
             // todo(SpadeA): add metrics for it
             return None;
         }
@@ -137,7 +143,7 @@ impl RangeManager {
             .historical_ranges
             .iter()
             .find(|&(range, meta)| {
-                range.contains(&snapshot_meta.range) && meta.id == snapshot_meta.range_id
+                range.contains_range(&snapshot_meta.range) && meta.id == snapshot_meta.range_id
             })
             .map(|(r, _)| r.clone())
         {
@@ -166,7 +172,7 @@ impl RangeManager {
             .ranges
             .iter()
             .find(|&(range, meta)| {
-                range.contains(&snapshot_meta.range) && meta.id == snapshot_meta.range_id
+                range.contains_range(&snapshot_meta.range) && meta.id == snapshot_meta.range_id
             })
             .map(|(r, _)| r.clone())
             .unwrap();
@@ -181,7 +187,7 @@ impl RangeManager {
         let range_key = self
             .ranges
             .keys()
-            .find(|&r| r.contains(evict_range))
+            .find(|&r| r.contains_range(evict_range))
             .unwrap()
             .clone();
         let meta = self.ranges.remove(&range_key).unwrap();
@@ -244,7 +250,7 @@ mod tests {
         assert!(range_mgr.ranges.get(&r1).is_none());
         let meta2 = range_mgr.ranges.get(&r_left).unwrap();
         let meta3 = range_mgr.ranges.get(&r_right).unwrap();
-        assert!(meta1.safe_ts == meta2.safe_ts && meta1.safe_ts == meta3.safe_ts);
+        assert!(meta1.safe_point == meta2.safe_point && meta1.safe_point == meta3.safe_point);
         assert!(meta2.can_read && meta3.can_read);
 
         // evict a range with accurate match

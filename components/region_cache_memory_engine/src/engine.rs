@@ -104,7 +104,6 @@ impl SkiplistEngine {
         }
     }
 
-    // todo(SpadeA): do it asychronously
     fn delete_range(&self, range: &CacheRange) {
         self.data.iter().for_each(|d| {
             let mut key_buffer: Vec<Bytes> = vec![];
@@ -227,7 +226,6 @@ impl RangeCacheMemoryEngine {
 
     pub fn new_range(&self, range: CacheRange) {
         let mut core = self.core.lock().unwrap();
-        assert!(!core.range_manager.overlap_with_range(&range));
         core.range_manager.new_range(range);
     }
 
@@ -603,6 +601,7 @@ impl Drop for RangeCacheSnapshot {
             .range_manager
             .remove_range_snapshot(&self.snapshot_meta)
         {
+            // todo: schedule it to a separate thread
             core.engine.delete_range(&self.snapshot_meta.range);
         }
     }
