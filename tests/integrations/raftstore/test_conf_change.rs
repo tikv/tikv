@@ -874,6 +874,8 @@ fn test_remove_node_on_partition() {
     pd_client.disable_default_operator();
     cluster.cfg.raft_store.raft_heartbeat_ticks = 1;
     cluster.cfg.raft_store.raft_base_tick_interval = ReadableDuration::millis(10);
+    cluster.cfg.raft_store.raft_election_timeout_ticks = 3;
+    cluster.cfg.raft_store.raft_store_max_leader_lease = ReadableDuration::millis(20);
     let r1 = cluster.run_conf_change();
 
     cluster.must_put(b"k0", b"v0");
@@ -884,8 +886,10 @@ fn test_remove_node_on_partition() {
 
     // peer 3 isolation
     cluster.add_send_filter(IsolationFilterFactory::new(3));
-    // sleep for 10 heartbeat interval
-    thread::sleep(cluster.cfg.raft_store.raft_heartbeat_interval() * 10);
+    // sleep for 13 heartbeat interval (>12 should be ok)
+    let sleep_time = cluster.cfg.raft_store.raft_base_tick_interval.0
+        * (4 * cluster.cfg.raft_store.raft_election_timeout_ticks as u32 + 1);
+    thread::sleep(sleep_time);
     pd_client.remove_peer(r1, new_peer(2, 2));
     cluster.must_put(b"k1", b"v1");
     thread::sleep(Duration::from_millis(500));
