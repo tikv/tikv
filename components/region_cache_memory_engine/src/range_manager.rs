@@ -24,6 +24,15 @@ impl RangeMeta {
         }
     }
 
+    pub(crate) fn safe_point(&self) -> u64 {
+        self.safe_point
+    }
+
+    pub(crate) fn set_safe_point(&mut self, safe_point: u64) {
+        assert!(self.safe_point <= safe_point);
+        self.safe_point = safe_point;
+    }
+
     fn derive_from(id: u64, r: &RangeMeta) -> Self {
         Self {
             id,
@@ -86,6 +95,10 @@ impl RangeManager {
     pub fn set_range_readable(&mut self, range: &CacheRange, set_readable: bool) {
         let meta = self.ranges.get_mut(range).unwrap();
         meta.can_read = set_readable;
+    }
+
+    pub fn mut_range_meta(&mut self, range: &CacheRange) -> Option<&mut RangeMeta> {
+        self.ranges.get_mut(range)
     }
 
     pub fn set_safe_ts(&mut self, range: &CacheRange, safe_ts: u64) -> bool {

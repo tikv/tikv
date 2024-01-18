@@ -3,14 +3,14 @@
 use core::slice::SlicePattern;
 use std::{fmt::Display, sync::Arc};
 
-use engine_traits::{CF_DEFAULT, CF_WRITE};
+use engine_traits::{CacheRange, CF_DEFAULT, CF_WRITE};
 use skiplist_rs::Skiplist;
 use slog_global::{info, warn};
 use txn_types::{Key, WriteRef, WriteType};
 
 use crate::{
-    engine::GlobalMemoryLimiter,
     keys::{decode_key, encoding_for_filter, InternalKey, InternalKeyComparator},
+    memory_limiter::GlobalMemoryLimiter,
     RangeCacheMemoryEngine,
 };
 
@@ -56,23 +56,23 @@ impl GcRunner {
         Self { memory_engine }
     }
 
-    fn gc_region(&mut self, region_id: u64, safe_ts: u64) {
-        let (region_m_engine, safe_ts) = {
+    fn gc_range(&mut self, range: &CacheRange, safe_point: u64) {
+        let (skiplist_engine, safe_ts) = {
             let mut core = self.memory_engine.core().lock().unwrap();
-            let Some(region_meta) = core.mut_region_meta(region_id) else {
+            let Some(range_meta) = core.mut_range_manager().mut_range_meta(range) else {
                 return;
             };
-            let min_snapshot = region_meta
-                .snapshot_list()
+            let min_snapshot = range_meta
+                .range_snapshot_list()
                 .min_snapshot_ts()
                 .unwrap_or(u64::MAX);
-            let safe_ts = u64::min(safe_ts, min_snapshot);
+            let safe_point = u64::min(safe_point, min_snapshot);
 
-            if safe_ts < region_meta.safe_ts() {
+            if safe_point < range_meta.safe_point() {
                 info!(
                     "safe point not large enough";
-                    "prev" => region_meta.safe_ts(),
-                    "current" => safe_ts,
+                    "prev" => range_meta.safe_point(),
+                    "current" => safe_point,
                 );
                 return;
             }
@@ -80,16 +80,16 @@ impl GcRunner {
             // todo: change it to debug!
             info!(
                 "safe point update";
-                "prev" => region_meta.safe_ts(),
-                "current" => safe_ts,
-                "region_id" => region_id,
+                "prev" => range_meta.safe_point(),
+                "current" => safe_point,
+                "range" => ?range,
             );
-            region_meta.set_safe_ts(safe_ts);
-            (core.engine(), safe_ts)
+            range_meta.set_safe_point(safe_point);
+            (core.engine(), safe_point)
         };
 
-        let write_cf_handle = region_m_engine.cf_handle(CF_WRITE);
-        let default_cf_handle = region_m_engine.cf_handle(CF_DEFAULT);
+        let write_cf_handle = skiplist_engine.cf_handle(CF_WRITE);
+        let default_cf_handle = skiplist_engine.cf_handle(CF_DEFAULT);
         let mut filter = Filter::new(safe_ts, default_cf_handle, write_cf_handle.clone());
 
         let mut iter = write_cf_handle.iter();
@@ -110,7 +110,7 @@ impl GcRunner {
 
         info!(
             "region gc complete";
-            "region_id" => region_id,
+            "range" => ?range,
             "total_version" => count,
             "unique_keys" => filter.unique_key,
             "outdated_version" => filter.versions,
@@ -239,15 +239,16 @@ pub mod tests {
     use std::sync::Arc;
 
     use bytes::Bytes;
-    use engine_traits::{RangeCacheEngine, CF_DEFAULT, CF_WRITE};
+    use engine_traits::{CacheRange, RangeCacheEngine, CF_DEFAULT, CF_WRITE};
     use skiplist_rs::Skiplist;
     use txn_types::{Key, TimeStamp, Write, WriteType};
 
     use super::Filter;
     use crate::{
-        engine::{GlobalMemoryLimiter, RegionMemoryEngine},
+        engine::SkiplistEngine,
         gc::GcRunner,
         keys::{encode_key, encoding_for_filter, InternalKeyComparator, ValueType},
+        memory_limiter::GlobalMemoryLimiter,
         RangeCacheMemoryEngine,
     };
 
@@ -326,9 +327,9 @@ pub mod tests {
 
     #[test]
     fn test_filter() {
-        let region_m_engine = RegionMemoryEngine::default();
-        let write = region_m_engine.cf_handle(CF_WRITE);
-        let default = region_m_engine.cf_handle(CF_DEFAULT);
+        let skiplist_engine = SkiplistEngine::new(Arc::default());
+        let write = skiplist_engine.cf_handle(CF_WRITE);
+        let default = skiplist_engine.cf_handle(CF_DEFAULT);
 
         put_data(b"key1", b"value1", 10, 15, 10, false, &default, &write);
         put_data(b"key2", b"value21", 10, 15, 12, false, &default, &write);
@@ -384,12 +385,13 @@ pub mod tests {
 
     #[test]
     fn test_gc() {
-        let engine = RangeCacheMemoryEngine::default();
-        engine.new_region(1);
+        let engine = RangeCacheMemoryEngine::new(Arc::default());
+        let range = CacheRange::new(b"".to_vec(), b"z".to_vec());
+        engine.new_range(range.clone());
         let (write, default) = {
             let mut core = engine.core().lock().unwrap();
             let region_m_engine = core.engine();
-            core.mut_region_meta(1).unwrap().set_can_read(true);
+            core.mut_range_manager().set_range_readable(&range, true);
             (
                 region_m_engine.cf_handle(CF_WRITE),
                 region_m_engine.cf_handle(CF_DEFAULT),
@@ -410,17 +412,17 @@ pub mod tests {
         let mut worker = GcRunner::new(engine);
 
         // gc will not remove the latest mvcc put below safe point
-        worker.gc_region(1, 14);
+        worker.gc_range(&range, 14);
         assert_eq!(2, element_count(&default));
         assert_eq!(2, element_count(&write));
 
-        worker.gc_region(1, 16);
+        worker.gc_range(&range, 16);
         assert_eq!(1, element_count(&default));
         assert_eq!(1, element_count(&write));
 
         // rollback will not make the first older version be filtered
         rollback_data(b"key1", 17, 16, &write);
-        worker.gc_region(1, 17);
+        worker.gc_range(&range, 17);
         assert_eq!(1, element_count(&default));
         assert_eq!(1, element_count(&write));
         let key = encode_key(b"key1", TimeStamp::new(15));
@@ -431,19 +433,20 @@ pub mod tests {
         // unlike in WriteCompactionFilter, the latest mvcc delete below safe point will
         // be filtered
         delete_data(b"key1", 19, 18, &write);
-        worker.gc_region(1, 19);
+        worker.gc_range(&range, 19);
         assert_eq!(0, element_count(&write));
         assert_eq!(0, element_count(&default));
     }
 
     #[test]
     fn test_snapshot_block_gc() {
-        let engine = RangeCacheMemoryEngine::default();
-        engine.new_region(1);
+        let engine = RangeCacheMemoryEngine::new(Arc::default());
+        let range = CacheRange::new(b"".to_vec(), b"z".to_vec());
+        engine.new_range(range.clone());
         let (write, default) = {
             let mut core = engine.core().lock().unwrap();
             let region_m_engine = core.engine();
-            core.mut_region_meta(1).unwrap().set_can_read(true);
+            core.mut_range_manager().set_range_readable(&range, true);
             (
                 region_m_engine.cf_handle(CF_WRITE),
                 region_m_engine.cf_handle(CF_DEFAULT),
@@ -460,27 +463,27 @@ pub mod tests {
         assert_eq!(6, element_count(&write));
 
         let mut worker = GcRunner::new(engine.clone());
-        let s1 = engine.snapshot(1, 10, u64::MAX);
-        let s2 = engine.snapshot(1, 11, u64::MAX);
-        let s3 = engine.snapshot(1, 20, u64::MAX);
+        let s1 = engine.snapshot(range.clone(), 10, u64::MAX);
+        let s2 = engine.snapshot(range.clone(), 11, u64::MAX);
+        let s3 = engine.snapshot(range.clone(), 20, u64::MAX);
 
         // nothing will be removed due to snapshot 5
-        worker.gc_region(1, 30);
+        worker.gc_range(&range, 30);
         assert_eq!(6, element_count(&default));
         assert_eq!(6, element_count(&write));
 
         drop(s1);
-        worker.gc_region(1, 30);
+        worker.gc_range(&range, 30);
         assert_eq!(5, element_count(&default));
         assert_eq!(5, element_count(&write));
 
         drop(s2);
-        worker.gc_region(1, 30);
+        worker.gc_range(&range, 30);
         assert_eq!(4, element_count(&default));
         assert_eq!(4, element_count(&write));
 
         drop(s3);
-        worker.gc_region(1, 30);
+        worker.gc_range(&range, 30);
         assert_eq!(3, element_count(&default));
         assert_eq!(3, element_count(&write));
     }

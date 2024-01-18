@@ -9,20 +9,20 @@ use std::{
 };
 
 use bytes::Bytes;
-use collections::{HashMap, HashSet};
 use engine_rocks::{raw::SliceTransform, util::FixedSuffixSliceTransform};
 use engine_traits::{
     CacheRange, CfNamesExt, DbVector, Error, IterOptions, Iterable, Iterator, Peekable,
     RangeCacheEngine, ReadOptions, Result, Snapshot, SnapshotMiscExt, CF_DEFAULT, CF_LOCK,
     CF_WRITE,
 };
-use skiplist_rs::{AllocationRecorder, IterRef, MemoryLimiter, Node, Skiplist, MIB};
+use skiplist_rs::{IterRef, Skiplist, MIB};
 
 use crate::{
     keys::{
         decode_key, encode_key_for_eviction, encode_seek_key, InternalKey, InternalKeyComparator,
         ValueType, VALUE_TYPE_FOR_SEEK, VALUE_TYPE_FOR_SEEK_FOR_PREV,
     },
+    memory_limiter::GlobalMemoryLimiter,
     range_manager::RangeManager,
 };
 
@@ -34,47 +34,6 @@ pub(crate) fn cf_to_id(cf: &str) -> usize {
         CF_LOCK => 1,
         CF_WRITE => 2,
         _ => panic!("unrecognized cf {}", cf),
-    }
-}
-
-// todo: implement a real memory limiter. Now, it is used for test.
-#[derive(Clone, Default)]
-pub struct GlobalMemoryLimiter {
-    recorder: Arc<Mutex<HashMap<usize, usize>>>,
-    removed: Arc<Mutex<HashSet<Vec<u8>>>>,
-}
-
-impl MemoryLimiter for GlobalMemoryLimiter {
-    fn acquire(&self, n: usize) -> bool {
-        true
-    }
-
-    fn mem_usage(&self) -> usize {
-        0
-    }
-
-    fn reclaim(&self, n: usize) {}
-}
-
-impl AllocationRecorder for GlobalMemoryLimiter {
-    fn alloc(&self, addr: usize, size: usize) {
-        let mut recorder = self.recorder.lock().unwrap();
-        assert!(!recorder.contains_key(&addr));
-        recorder.insert(addr, size);
-    }
-
-    fn free(&self, addr: usize, size: usize) {
-        let node = addr as *mut Node;
-        let mut removed = self.removed.lock().unwrap();
-        removed.insert(unsafe { (*node).key().to_vec() });
-        let mut recorder = self.recorder.lock().unwrap();
-        assert_eq!(recorder.remove(&addr).unwrap(), size);
-    }
-}
-
-impl Drop for GlobalMemoryLimiter {
-    fn drop(&mut self) {
-        assert!(self.recorder.lock().unwrap().is_empty());
     }
 }
 
@@ -190,25 +149,6 @@ impl RangeCacheMemoryEngineCore {
             engine: SkiplistEngine::new(limiter),
             range_manager: RangeManager::default(),
         }
-    }
-
-    pub fn set_safe_ts(&mut self, safe_ts: u64) {
-        if let Some(ts) = self.snapshot_list.min_snapshot_ts() {
-            assert!(safe_ts <= ts);
-        }
-        self.safe_ts = safe_ts;
-    }
-
-    pub fn safe_ts(&self) -> u64 {
-        self.safe_ts
-    }
-
-    pub fn can_read(&self) -> bool {
-        self.can_read
-    }
-
-    pub fn snapshot_list(&self) -> &SnapshotList {
-        &self.snapshot_list
     }
 
     pub fn engine(&self) -> SkiplistEngine {
