@@ -26,7 +26,7 @@ use crate::{
     range_manager::RangeManager,
 };
 
-const EVICTION_KEY_BUFFER_LIMIT: usize = 5 * MIB as usize;
+pub(crate) const EVICTION_KEY_BUFFER_LIMIT: usize = 5 * MIB as usize;
 
 pub(crate) fn cf_to_id(cf: &str) -> usize {
     match cf {

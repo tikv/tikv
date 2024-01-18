@@ -9,6 +9,7 @@ use slog_global::{info, warn};
 use txn_types::{Key, WriteRef, WriteType};
 
 use crate::{
+    engine::EVICTION_KEY_BUFFER_LIMIT,
     keys::{decode_key, encoding_for_filter, InternalKey, InternalKeyComparator},
     memory_limiter::GlobalMemoryLimiter,
     RangeCacheMemoryEngine,
@@ -129,6 +130,8 @@ struct Filter {
     default_cf_handle: Arc<Skiplist<InternalKeyComparator, GlobalMemoryLimiter>>,
     write_cf_handle: Arc<Skiplist<InternalKeyComparator, GlobalMemoryLimiter>>,
 
+    filtered_write_key_size: usize,
+    filtered_write_key_buffer: Vec<Vec<u8>>,
     cached_delete_key: Option<Vec<u8>>,
 
     versions: usize,
@@ -143,6 +146,7 @@ impl Drop for Filter {
         if let Some(cached_delete_key) = self.cached_delete_key.take() {
             self.write_cf_handle.remove(cached_delete_key.as_slice());
         }
+        self.remove_filtered_key();
     }
 }
 
@@ -157,6 +161,8 @@ impl Filter {
             default_cf_handle,
             write_cf_handle,
             unique_key: 0,
+            filtered_write_key_size: 0,
+            filtered_write_key_buffer: Vec::with_capacity(100),
             mvcc_key_prefix: vec![],
             delete_versions: 0,
             versions: 0,
@@ -181,9 +187,7 @@ impl Filter {
             self.mvcc_key_prefix.clear();
             self.mvcc_key_prefix.extend_from_slice(mvcc_key_prefix);
             self.remove_older = false;
-            if let Some(cached_delete_key) = self.cached_delete_key.take() {
-                self.write_cf_handle.remove(&cached_delete_key);
-            }
+            self.remove_cached_delete_key();
         }
 
         let mut filtered = self.remove_older;
@@ -211,10 +215,34 @@ impl Filter {
             return Ok(());
         }
         self.filtered += 1;
-        self.write_cf_handle.remove(key);
+        self.filter_write_cf_key(key);
         self.handle_filtered_write(write)?;
 
         Ok(())
+    }
+
+    fn remove_cached_delete_key(&mut self) {
+        if let Some(cached_delete_key) = self.cached_delete_key.take() {
+            // remove the older versions first
+            self.remove_filtered_key();
+            self.write_cf_handle.remove(&cached_delete_key);
+        }
+    }
+
+    fn filter_write_cf_key(&mut self, key: &[u8]) {
+        if self.filtered_write_key_size + key.len() >= EVICTION_KEY_BUFFER_LIMIT {
+            self.remove_filtered_key();
+        }
+
+        self.filtered_write_key_buffer.push(key.to_vec());
+        self.filtered_write_key_size += key.len();
+    }
+
+    fn remove_filtered_key(&mut self) {
+        self.filtered_write_key_size = 0;
+        for key in self.filtered_write_key_buffer.drain(..) {
+            self.write_cf_handle.remove(&key);
+        }
     }
 
     fn handle_filtered_write(&mut self, write: WriteRef<'_>) -> std::result::Result<(), String> {
@@ -356,8 +384,9 @@ pub mod tests {
             iter.next();
         }
         assert_eq!(count, 8);
+        drop(filter);
 
-        assert_eq!(3, element_count(&write));
+        assert_eq!(2, element_count(&write));
         assert_eq!(2, element_count(&default));
 
         let encode_key = |key, ts| {
