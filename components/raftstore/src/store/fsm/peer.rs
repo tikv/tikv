@@ -2939,7 +2939,7 @@ where
     }
 
     fn reset_raft_tick(&mut self, state: GroupState) {
-        info!(
+        debug!(
             "reset raft tick to {:?}", state;
             "region_id"=> self.fsm.region_id(),
             "peer_id" => self.fsm.peer_id(),
