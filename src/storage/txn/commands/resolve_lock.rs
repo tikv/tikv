@@ -55,6 +55,11 @@ command! {
             scan_key: Option<Key>,
             key_locks: Vec<(Key, Lock)>,
         }
+        in_heap => {
+            txn_status,
+            scan_key,
+            // TODO: key_locks,
+        }
 }
 
 impl CommandExt for ResolveLock {

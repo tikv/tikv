@@ -58,6 +58,9 @@ command! {
         content => {
             items: Vec<ResumedPessimisticLockItem>,
         }
+        in_heap => {
+            // TODO: account heap size for items
+        }
 }
 
 impl CommandExt for AcquirePessimisticLockResumed {

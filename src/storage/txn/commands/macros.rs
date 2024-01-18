@@ -37,7 +37,7 @@ macro_rules! command {
             content => {
                 $($(#[$inner_doc:meta])* $arg: ident : $arg_ty: ty,)*
             }
-            $(in_heap => { $($arg_in_heap: ident)+ })?
+            $(in_heap => { $($arg_in_heap: ident,)* })?
     ) => {
         command! {
             $(#[$outer_doc])*
@@ -46,7 +46,7 @@ macro_rules! command {
                 content => {
                     $($(#[$inner_doc])* $arg: $arg_ty,)*
                 }
-                $(in_heap => { $($arg_in_heap)+ })?
+                $(in_heap => { $($arg_in_heap,)* })?
         }
 
         impl std::fmt::Display for $cmd {
@@ -74,7 +74,7 @@ macro_rules! command {
             content => {
                 $($(#[$inner_doc:meta])* $arg: ident : $arg_ty: ty,)*
             }
-            $(in_heap => { $($arg_in_heap: ident)+ })?
+            $(in_heap => { $($arg_in_heap: ident,)* })?
     ) => {
         $(#[$outer_doc])*
         pub struct $cmd {
@@ -105,8 +105,10 @@ macro_rules! command {
 
         impl tikv_util::memory::HeapSize for $cmd {
             fn heap_size(&self) -> usize {
-                std::mem::size_of<$cmd>()
-                    $( +  )+
+                std::mem::size_of::<$cmd>()
+                $(
+                    $( + self.$arg_in_heap.heap_size() )*
+                )?
             }
         }
     }
@@ -183,14 +185,6 @@ macro_rules! gen_lock {
 macro_rules! property {
     ($property:ident) => {
         fn $property(&self) -> bool {
-            true
-        }
-    };
-}
-
-macro_rules! heap_size {
-    ($property:ident) => {
-        fn $heap_size(&self) -> bool {
             true
         }
     };
