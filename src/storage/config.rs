@@ -91,6 +91,7 @@ pub struct Config {
     pub block_cache: BlockCacheConfig,
     #[online_config(submodule)]
     pub io_rate_limit: IoRateLimitConfig,
+    pub memory_quota: ReadableSize,
 }
 
 impl Default for Config {
@@ -119,6 +120,9 @@ impl Default for Config {
             block_cache: BlockCacheConfig::default(),
             io_rate_limit: IoRateLimitConfig::default(),
             background_error_recovery_window: ReadableDuration::hours(1),
+            // TODO: revise default memory value.
+            // On TiDB Cloud, the min memory spec is 16G, the default is 32G.
+            memory_quota: ReadableSize::gb(1),
         }
     }
 }

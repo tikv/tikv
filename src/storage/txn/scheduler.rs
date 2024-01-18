@@ -52,7 +52,9 @@ use resource_control::{ResourceController, ResourceGroupManager, TaskMetadata};
 use resource_metering::{FutureExt, ResourceTagFactory};
 use smallvec::{smallvec, SmallVec};
 use tikv_kv::{Modify, Snapshot, SnapshotExt, WriteData, WriteEvent};
-use tikv_util::{quota_limiter::QuotaLimiter, time::Instant, timer::GLOBAL_TIMER_HANDLE};
+use tikv_util::{
+    memory::MemoryQuota, quota_limiter::QuotaLimiter, time::Instant, timer::GLOBAL_TIMER_HANDLE,
+};
 use tracker::{get_tls_tracker_token, set_tls_tracker_token, TrackerToken, GLOBAL_TRACKERS};
 use txn_types::TimeStamp;
 
@@ -296,6 +298,8 @@ struct TxnSchedulerInner<L: LockManager> {
     feature_gate: FeatureGate,
 
     txn_status_cache: TxnStatusCache,
+
+    memory_quota: Arc<MemoryQuota>,
 }
 
 #[inline]
@@ -489,6 +493,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             resource_manager,
             feature_gate,
             txn_status_cache: TxnStatusCache::new(config.txn_status_cache_capacity),
+            memory_quota: Arc::new(MemoryQuota::new(config.memory_quota.0 as _)),
         });
 
         slow_log!(
@@ -510,8 +515,12 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
     }
 
     pub(in crate::storage) fn run_cmd(&self, cmd: Command, callback: StorageCallback) {
+        // let mem_size = cmd.heap_size();
+        let mem_size = 0;
         // write flow control
-        if cmd.need_flow_control() && self.inner.too_busy(cmd.ctx().region_id) {
+        if cmd.need_flow_control() && self.inner.too_busy(cmd.ctx().region_id)
+            || self.inner.memory_quota.alloc(mem_size).is_err()
+        {
             SCHED_TOO_BUSY_COUNTER_VEC.get(cmd.tag()).inc();
             callback.execute(ProcessResult::Failed {
                 err: StorageError::from(StorageErrorInner::SchedTooBusy),
