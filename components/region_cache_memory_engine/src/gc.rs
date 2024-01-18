@@ -14,6 +14,7 @@ use crate::{
     RangeCacheMemoryEngine,
 };
 
+// Split a ts encoded key, return the user key and timestamp.
 fn split_ts(key: &[u8]) -> Result<(&[u8], u64), String> {
     match Key::split_on_ts_for(key) {
         Ok((key, ts)) => Ok((key, ts.into_inner())),
