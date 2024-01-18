@@ -432,7 +432,7 @@ fn test_serde_custom_tikv_config() {
             hard_pending_compaction_bytes_limit: Some(ReadableSize::gb(12)),
             force_consistency_checks: true,
             titan: TitanCfConfig {
-                min_blob_size: ReadableSize(1024), // default value
+                min_blob_size: None, // default value
                 blob_file_compression: CompressionType::Zstd,
                 zstd_dict_size: ReadableSize::kb(0),
                 blob_cache_size: ReadableSize::mb(0),
@@ -506,7 +506,7 @@ fn test_serde_custom_tikv_config() {
             hard_pending_compaction_bytes_limit: Some(ReadableSize::gb(12)),
             force_consistency_checks: true,
             titan: TitanCfConfig {
-                min_blob_size: ReadableSize(1024), // default value
+                min_blob_size: None, // default value
                 blob_file_compression: CompressionType::Zstd,
                 zstd_dict_size: ReadableSize::kb(0),
                 blob_cache_size: ReadableSize::mb(0),
@@ -580,7 +580,7 @@ fn test_serde_custom_tikv_config() {
             hard_pending_compaction_bytes_limit: Some(ReadableSize::gb(12)),
             force_consistency_checks: true,
             titan: TitanCfConfig {
-                min_blob_size: ReadableSize(1024), // default value
+                min_blob_size: None, // default value
                 blob_file_compression: CompressionType::Zstd,
                 zstd_dict_size: ReadableSize::kb(0),
                 blob_cache_size: ReadableSize::mb(0),

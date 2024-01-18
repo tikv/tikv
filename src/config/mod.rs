@@ -166,6 +166,7 @@ pub struct TitanCfConfig {
     #[deprecated = "Titan doesn't need to sample anymore"]
     pub sample_ratio: Option<f64>,
 }
+const DEFAULT_MIN_BLOB_SIZE: ReadableSize = ReadableSize::kb(32);
 
 impl Default for TitanCfConfig {
     #[allow(deprecated)]
@@ -192,9 +193,16 @@ impl Default for TitanCfConfig {
 }
 
 impl TitanCfConfig {
+    fn default_for_disabled() -> Self {
+        Self {
+            blob_run_mode: BlobRunMode::ReadOnly,
+            ..Default::default()
+        }
+    }
+
     fn build_opts(&self) -> RocksTitanDbOptions {
         let mut opts = RocksTitanDbOptions::new();
-        opts.set_min_blob_size(self.min_blob_size.unwrap().0);
+        opts.set_min_blob_size(self.min_blob_size.unwrap_or(DEFAULT_MIN_BLOB_SIZE).0);
         opts.set_blob_file_compression(self.blob_file_compression.into());
         // To try zstd dict compression, set dict size to 4k, sample size to 100X dict
         // size
@@ -562,7 +570,7 @@ macro_rules! write_into_metrics {
         // Titan specific metrics.
         $metrics
             .with_label_values(&[$tag, "titan_min_blob_size"])
-            .set($cf.titan.min_blob_size.unwrap().0 as f64);
+            .set($cf.titan.min_blob_size.unwrap_or_default().0 as f64);
         $metrics
             .with_label_values(&[$tag, "titan_blob_cache_size"])
             .set($cf.titan.blob_cache_size.0 as f64);
@@ -876,12 +884,6 @@ cf_config!(WriteCfConfig);
 
 impl Default for WriteCfConfig {
     fn default() -> WriteCfConfig {
-        // Setting blob_run_mode=read_only effectively disable Titan.
-        let titan = TitanCfConfig {
-            blob_run_mode: BlobRunMode::ReadOnly,
-            ..Default::default()
-        };
-
         WriteCfConfig {
             block_size: ReadableSize::kb(32),
             block_cache_size: None,
@@ -941,7 +943,7 @@ impl Default for WriteCfConfig {
             max_compactions: None,
             ttl: None,
             periodic_compaction_seconds: None,
-            titan,
+            titan: TitanCfConfig::default_for_disabled(),
             write_buffer_limit: None,
         }
     }
@@ -1010,12 +1012,6 @@ cf_config!(LockCfConfig);
 
 impl Default for LockCfConfig {
     fn default() -> LockCfConfig {
-        // Setting blob_run_mode=read_only effectively disable Titan.
-        let titan = TitanCfConfig {
-            blob_run_mode: BlobRunMode::ReadOnly,
-            ..Default::default()
-        };
-
         LockCfConfig {
             block_size: ReadableSize::kb(16),
             block_cache_size: None,
@@ -1067,7 +1063,7 @@ impl Default for LockCfConfig {
             max_compactions: None,
             ttl: None,
             periodic_compaction_seconds: None,
-            titan,
+            titan: TitanCfConfig::default_for_disabled(),
             write_buffer_limit: None,
         }
     }
@@ -1114,11 +1110,6 @@ cf_config!(RaftCfConfig);
 
 impl Default for RaftCfConfig {
     fn default() -> RaftCfConfig {
-        // Setting blob_run_mode=read_only effectively disable Titan.
-        let titan = TitanCfConfig {
-            blob_run_mode: BlobRunMode::ReadOnly,
-            ..Default::default()
-        };
         RaftCfConfig {
             block_size: ReadableSize::kb(16),
             block_cache_size: None,
@@ -1170,7 +1161,7 @@ impl Default for RaftCfConfig {
             max_compactions: None,
             ttl: None,
             periodic_compaction_seconds: None,
-            titan,
+            titan: TitanCfConfig::default_for_disabled(),
             write_buffer_limit: None,
         }
     }
@@ -3913,7 +3904,6 @@ impl TikvConfig {
                         return Err("raftdb.wal_dir can't be same as rocksdb.wal_dir".into());
                     }
                 }
-
                 RocksEngine::exists(&kv_db_path)
             }
             EngineType::RaftKv2 => {
@@ -4004,14 +3994,30 @@ impl TikvConfig {
                 }
                 if self.rocksdb.defaultcf.titan.min_blob_size.is_none() {
                     // get blob size from last config
-                    self.rocksdb.defaultcf.titan.min_blob_size = last_cfg
-                        .as_ref()
-                        .and_then(|cfg| cfg.rocksdb.defaultcf.titan.min_blob_size)
-                        .or(Some(ReadableSize::kb(32)));
+                    self.rocksdb.defaultcf.titan.min_blob_size =
+                        Some(if let Some(last_cfg) = &last_cfg {
+                            // If previous config has titan enabled, we use the previous
+                            // min-blob-size.
+                            if last_cfg.rocksdb.titan.enabled.unwrap_or(false) {
+                                last_cfg
+                                    .rocksdb
+                                    .defaultcf
+                                    .titan
+                                    .min_blob_size
+                                    .unwrap_or(DEFAULT_MIN_BLOB_SIZE)
+                            } else {
+                                // If previous config has titan disabled, we use the current default
+                                // value
+                                DEFAULT_MIN_BLOB_SIZE
+                            }
+                        } else {
+                            DEFAULT_MIN_BLOB_SIZE
+                        });
                 }
             }
             EngineType::RaftKv2 => {
                 self.rocksdb.titan.enabled = Some(false);
+                self.rocksdb.defaultcf.titan.min_blob_size = Some(DEFAULT_MIN_BLOB_SIZE);
             }
         }
         Ok(())
@@ -4272,7 +4278,21 @@ impl TikvConfig {
         let tmp = tempfile::tempdir()?;
         let mut cfg = TikvConfig::default();
         cfg.storage.data_dir = tmp.path().display().to_string();
-        cfg.cfg_path = tmp.path().join(LAST_CONFIG_FILE).display().to_string();
+        cfg.cfg_path = tmp.path().join("config.toml").display().to_string();
+
+        // create tmp config file
+        let mut f = fs::File::create(&cfg.cfg_path)?;
+        // write storage data dir to tmp config file
+        let content = format!(
+            r#"
+            [storage]
+            data-dir = "{}"
+            "#,
+            cfg.storage.data_dir,
+        );
+        f.write_all(content.as_bytes())?;
+        f.sync_all()?;
+
         Ok((cfg, tmp))
     }
 
@@ -4299,6 +4319,42 @@ impl TikvConfig {
         }
         Ok(env)
     }
+}
+
+pub fn validate_and_persist_config(config: &mut TikvConfig, persist: bool) -> Result<(), String> {
+    // Check current critical configurations with last time, if there are some
+    // changes, user must guarantee relevant works have been done.
+    let mut last_cfg = get_last_config(&config.storage.data_dir);
+    if let Some(last_cfg) = &mut last_cfg {
+        last_cfg.compatible_adjust();
+        if let Err(e) = last_cfg.validate() {
+            warn!("last_tikv.toml is invalid but ignored: {:?}", e);
+        }
+    }
+
+    config.compatible_adjust();
+    if let Err(e) = config.validate() {
+        return Err(format!("invalid configuration: {}", e));
+    }
+    if let Err(e) = config.optional_default_cfg_adjust_with(&last_cfg) {
+        return Err(format!(
+            "failed to adjust optional default configuration: {}",
+            e
+        ));
+    }
+
+    if let Some(ref last_cfg) = last_cfg {
+        if let Err(e) = config.check_critical_cfg_with(&last_cfg) {
+            return Err(format!("critical config check failed: {}", e));
+        }
+    }
+
+    if persist {
+        if let Err(e) = persist_config(config) {
+            return Err(format!("persist critical config failed: {}", e));
+        }
+    }
+    Ok(())
 }
 
 pub fn get_last_config(data_dir: &str) -> Option<TikvConfig> {
@@ -5888,42 +5944,139 @@ mod tests {
     }
 
     #[test]
-    fn test_titan_auto_enable() {
-        // Do not auto enable titan for existing instances
-        let (cfg, dir) = TikvConfig::with_tmp().unwrap();
-        persist_config(&cfg).unwrap();
-        let (storage, ..) = new_engines::<ApiV1>(cfg);
-        drop(storage);
-        let mut cfg = TikvConfig::from_file(&dir.path().join(LAST_CONFIG_FILE), None).unwrap();
-        // titan.enabled is not specified.
-        assert_eq!(cfg.rocksdb.titan.enabled, None);
-        cfg.validate().unwrap();
-        // Config optimized with titan.enabled = false, since it is an existing
-        // instance.
-        assert_eq!(cfg.rocksdb.titan.enabled, Some(false));
-        let (_storage, cfg_controller, ..) = new_engines::<ApiV1>(cfg);
-        assert_eq!(
-            cfg_controller.get_current().rocksdb.titan.enabled,
-            Some(false)
-        );
-        drop(dir);
+    fn test_titan_config_compatible_upgrade() {
+        // Case 1: Upgrade from existing instance with titan disabled
+        {
+            // Mock a existing instance with titan disabled
+            let (mut cfg, dir) = TikvConfig::with_tmp().unwrap();
+            cfg.rocksdb.titan.enabled = Some(false);
+            cfg.rocksdb.defaultcf.titan.min_blob_size = Some(ReadableSize::kb(1));
+            persist_config(&cfg).unwrap();
 
-        // Auto enable titan for new instances
-        let (mut cfg, dir) = TikvConfig::with_tmp().unwrap();
-        assert_eq!(cfg.rocksdb.titan.enabled, None);
-        cfg.validate().unwrap();
-        persist_config(&cfg).unwrap();
-        assert_eq!(cfg.rocksdb.titan.enabled, Some(true));
-        let (storage, cfg_controller, ..) = new_engines::<ApiV1>(cfg);
-        assert_eq!(
-            cfg_controller.get_current().rocksdb.titan.enabled,
-            Some(true)
-        );
-        drop(storage);
-        // The config is persisted
-        let cfg = TikvConfig::from_file(&dir.path().join(LAST_CONFIG_FILE), None).unwrap();
-        assert_eq!(cfg.rocksdb.titan.enabled, Some(true));
-        drop(dir);
+            let (storage, ..) = new_engines::<ApiV1>(cfg);
+            drop(storage);
+
+            let mut cfg = TikvConfig::from_file(&dir.path().join("config.toml"), None).unwrap();
+            assert_eq!(cfg.rocksdb.titan.enabled, None);
+            validate_and_persist_config(&mut cfg, true).unwrap();
+            // Titan is kept disabled
+            assert_eq!(cfg.rocksdb.titan.enabled, Some(false));
+            assert_eq!(
+                cfg.rocksdb.defaultcf.titan.min_blob_size,
+                Some(ReadableSize::kb(32)),
+            );
+            let (_storage, cfg_controller, ..) = new_engines::<ApiV1>(cfg);
+            assert_eq!(
+                cfg_controller.get_current().rocksdb.titan.enabled,
+                Some(false)
+            );
+            assert_eq!(
+                cfg_controller
+                    .get_current()
+                    .rocksdb
+                    .defaultcf
+                    .titan
+                    .min_blob_size,
+                Some(ReadableSize::kb(32)),
+            );
+            drop(dir);
+        }
+
+        // Case 2: Upgrade from existing instance with titan enabled
+        {
+            // Mock a existing instance with titan enabled
+            let (mut cfg, dir) = TikvConfig::with_tmp().unwrap();
+            cfg.rocksdb.titan.enabled = Some(true);
+            cfg.rocksdb.defaultcf.titan.min_blob_size = Some(ReadableSize::kb(1));
+            persist_config(&cfg).unwrap();
+            let (storage, ..) = new_engines::<ApiV1>(cfg.clone());
+            drop(storage);
+
+            let mut cfg = TikvConfig::from_file(&dir.path().join("config.toml"), None).unwrap();
+            cfg.rocksdb.titan.enabled = Some(true);
+            validate_and_persist_config(&mut cfg, true).unwrap();
+            assert_eq!(cfg.rocksdb.titan.enabled, Some(true));
+            // The min blob size is kept
+            assert_eq!(
+                cfg.rocksdb.defaultcf.titan.min_blob_size,
+                Some(ReadableSize::kb(1)),
+            );
+            let (_storage, cfg_controller, ..) = new_engines::<ApiV1>(cfg);
+            assert_eq!(
+                cfg_controller.get_current().rocksdb.titan.enabled,
+                Some(true)
+            );
+            assert_eq!(
+                cfg_controller
+                    .get_current()
+                    .rocksdb
+                    .defaultcf
+                    .titan
+                    .min_blob_size,
+                Some(ReadableSize::kb(1)),
+            );
+        }
+
+        // Case 3: Upgrade from existing instance with titan disabled and enable it now
+        {
+            // Mock a existing instance with titan disabled
+            let (mut cfg, dir) = TikvConfig::with_tmp().unwrap();
+            cfg.rocksdb.titan.enabled = Some(false);
+            cfg.rocksdb.defaultcf.titan.min_blob_size = Some(ReadableSize::kb(1));
+            persist_config(&cfg).unwrap();
+            let (storage, ..) = new_engines::<ApiV1>(cfg);
+            drop(storage);
+
+            let mut cfg = TikvConfig::from_file(&dir.path().join("config.toml"), None).unwrap();
+            cfg.rocksdb.titan.enabled = Some(true);
+            validate_and_persist_config(&mut cfg, true).unwrap();
+            assert_eq!(cfg.rocksdb.titan.enabled, Some(true));
+            // The min blob size is current default value
+            assert_eq!(
+                cfg.rocksdb.defaultcf.titan.min_blob_size,
+                Some(ReadableSize::kb(32)),
+            );
+            let (_storage, cfg_controller, ..) = new_engines::<ApiV1>(cfg);
+            assert_eq!(
+                cfg_controller.get_current().rocksdb.titan.enabled,
+                Some(true)
+            );
+            assert_eq!(
+                cfg_controller
+                    .get_current()
+                    .rocksdb
+                    .defaultcf
+                    .titan
+                    .min_blob_size,
+                Some(ReadableSize::kb(32)),
+            );
+        }
+
+        // Case 4: Create a new instance
+        {
+            let (mut cfg, _dir) = TikvConfig::with_tmp().unwrap();
+            assert_eq!(cfg.rocksdb.titan.enabled, None);
+            validate_and_persist_config(&mut cfg, true).unwrap();
+            assert_eq!(cfg.rocksdb.titan.enabled, Some(true));
+            assert_eq!(
+                cfg.rocksdb.defaultcf.titan.min_blob_size,
+                Some(ReadableSize::kb(32)),
+            );
+            let (_storage, cfg_controller, ..) = new_engines::<ApiV1>(cfg);
+            assert_eq!(
+                cfg_controller.get_current().rocksdb.titan.enabled,
+                Some(true)
+            );
+            assert_eq!(
+                cfg_controller
+                    .get_current()
+                    .rocksdb
+                    .defaultcf
+                    .titan
+                    .min_blob_size,
+                Some(ReadableSize::kb(32)),
+            );
+        }
     }
 
     #[test]

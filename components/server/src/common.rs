@@ -34,7 +34,7 @@ use raft_log_engine::RaftLogEngine;
 use region_cache_memory_engine::RegionCacheMemoryEngine;
 use security::SecurityManager;
 use tikv::{
-    config::{ConfigController, DbConfigManger, DbType, TikvConfig},
+    config::{validate_and_persist_config, ConfigController, DbConfigManger, DbType, TikvConfig},
     server::{status_server::StatusServer, DEFAULT_CLUSTER_ID},
 };
 use tikv_util::{
@@ -47,7 +47,7 @@ use tikv_util::{
     worker::{LazyWorker, Worker},
 };
 
-use crate::{raft_engine_switch::*, setup::validate_and_persist_config};
+use crate::raft_engine_switch::*;
 
 // minimum number of core kept for background requests
 const BACKGROUND_REQUEST_CORE_LOWER_BOUND: f64 = 1.0;
@@ -95,7 +95,9 @@ impl TikvServerCore {
     /// - If the max open file descriptor limit is not high enough to support
     ///   the main database and the raft database.
     pub fn init_config(mut config: TikvConfig) -> ConfigController {
-        validate_and_persist_config(&mut config, true);
+        if let Err(e) = validate_and_persist_config(&mut config, true) {
+            fatal!("failed to validate config: {}", e);
+        }
 
         ensure_dir_exist(&config.storage.data_dir).unwrap();
         if !config.rocksdb.wal_dir.is_empty() {
