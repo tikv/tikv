@@ -3,6 +3,7 @@ name = "fuzz"
 version = "0.0.1"
 publish = false
 edition = "2021"
+license = "Apache-2.0"
 
 [[bin]]
 name = "fuzz"

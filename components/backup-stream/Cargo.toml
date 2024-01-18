@@ -2,6 +2,7 @@
 name = "backup-stream"
 version = "0.1.0"
 edition = "2021"
+license = "Apache-2.0"
 
 [features]
 default = ["test-engine-kv-rocksdb", "test-engine-raft-raft-engine"]

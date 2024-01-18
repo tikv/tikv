@@ -1753,7 +1753,7 @@ mod tests {
             async_apply_prewrite: bool,
         }
 
-        let cases = vec![
+        let cases = [
             Case {
                 // basic case
                 expected: ResponsePolicy::OnApplied,
