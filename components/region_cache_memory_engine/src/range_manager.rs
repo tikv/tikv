@@ -85,7 +85,7 @@ impl RangeManager {
 
     pub fn set_range_readable(&mut self, range: &CacheRange, set_readable: bool) {
         let meta = self.ranges.get_mut(range).unwrap();
-        meta.can_read = true;
+        meta.can_read = set_readable;
     }
 
     pub fn set_safe_ts(&mut self, range: &CacheRange, safe_ts: u64) -> bool {
