@@ -1051,6 +1051,7 @@ where
                     })
                 );
             }
+            #[allow(clippy::blocks_in_conditions)]
             RegionCheckpointOperation::Resolve { min_ts, start_time } => {
                 let sched = self.scheduler.clone();
                 try_send!(
