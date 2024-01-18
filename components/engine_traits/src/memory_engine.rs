@@ -75,7 +75,7 @@ impl CacheRange {
     }
 
     pub fn contains_key(&self, key: &[u8]) -> bool {
-        self.start <= key && key < self.end
+        self.start.as_slice() <= key && key < self.end.as_slice()
     }
 
     pub fn overlaps(&self, other: &CacheRange) -> bool {
