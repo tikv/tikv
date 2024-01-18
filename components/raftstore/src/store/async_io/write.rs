@@ -21,6 +21,7 @@ use engine_traits::{
 use error_code::ErrorCodeExt;
 use fail::fail_point;
 use file_system::{set_io_type, IoType};
+use health_controller::types::LatencyInspector;
 use kvproto::{
     metapb::RegionEpoch,
     raft_serverpb::{RaftLocalState, RaftMessage},
@@ -50,9 +51,7 @@ use crate::{
         local_metrics::{RaftSendMessageMetrics, StoreWriteMetrics, TimeTracker},
         metrics::*,
         transport::Transport,
-        util,
-        util::LatencyInspector,
-        PeerMsg,
+        util, PeerMsg,
     },
     Result,
 };

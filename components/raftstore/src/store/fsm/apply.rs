@@ -34,6 +34,7 @@ use engine_traits::{
     WriteOptions, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE,
 };
 use fail::fail_point;
+use health_controller::types::LatencyInspector;
 use kvproto::{
     import_sstpb::SstMeta,
     kvrpcpb::ExtraOp as TxnExtraOp,
@@ -92,7 +93,7 @@ use crate::{
         peer_storage::{write_initial_apply_state, write_peer_state},
         util::{
             self, admin_cmd_epoch_lookup, check_flashback_state, check_req_region_epoch,
-            compare_region_epoch, ChangePeerI, ConfChangeKind, KeysInfoFormatter, LatencyInspector,
+            compare_region_epoch, ChangePeerI, ConfChangeKind, KeysInfoFormatter,
         },
         Config, RegionSnapshot, RegionTask, WriteCallback,
     },

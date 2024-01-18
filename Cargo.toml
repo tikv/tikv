@@ -257,6 +257,7 @@ members = [
   "components/error_code",
   "components/external_storage",
   "components/file_system",
+  "components/health_controller",
   "components/into_other",
   "components/keys",
   "components/log_wrappers",
@@ -335,6 +336,7 @@ external_storage = { path = "components/external_storage" }
 file_system = { path = "components/file_system" }
 crypto = { path = "components/crypto" }
 gcp = { path = "components/cloud/gcp" }
+health_controller = { path = "components/health_controller" }
 into_other = { path = "components/into_other" }
 keys = { path = "components/keys" }
 log_wrappers = { path = "components/log_wrappers" }

@@ -2319,6 +2319,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "health_controller"
+version = "0.1.0"
+dependencies = [
+ "ordered-float",
+ "prometheus",
+ "prometheus-static-metric",
+ "slog",
+ "slog-global",
+ "tikv_util",
+]
+
+[[package]]
 name = "heck"
 version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4139,6 +4151,7 @@ dependencies = [
  "futures-util",
  "getset",
  "grpcio-health",
+ "health_controller",
  "hybrid_engine",
  "into_other",
  "itertools",
@@ -4204,6 +4217,7 @@ dependencies = [
  "file_system",
  "fs2",
  "futures 0.3.15",
+ "health_controller",
  "keys",
  "kvproto",
  "log_wrappers",

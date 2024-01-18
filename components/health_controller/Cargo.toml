@@ -1,0 +1,14 @@
+[package]
+name = "health_controller"
+version = "0.1.0"
+license = "Apache-2.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+ordered-float = "2.6"
+prometheus = { version = "0.13", features = ["nightly"] }
+prometheus-static-metric = "0.5"
+tikv_util = { workspace = true}
+slog = { workspace = true }
+slog-global = { workspace = true }

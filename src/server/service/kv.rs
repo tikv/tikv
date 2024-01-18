@@ -212,13 +212,15 @@ macro_rules! handle_request {
             GRPC_RESOURCE_GROUP_COUNTER_VEC
                     .with_label_values(&[resource_control_ctx.get_resource_group_name(), resource_control_ctx.get_resource_group_name()])
                     .inc();
+            // #[allow(unused_variables)]
+            // let slow_stats_retriever = self.slow_stats_retriever.clone();
             let resp = $future_name(&self.storage, req);
             let task = async move {
                 #[allow(unused_mut)]
                 let mut resp = resp.await?;
                 let elapsed = begin_instant.saturating_elapsed();
                 set_total_time!(resp, elapsed, $time_detail);
-                set_perf_feedback!(resp, $perf_feedback);
+                set_perf_feedback!(slow_stats_retriever, resp, $perf_feedback);
                 sink.success(resp).await?;
                 GRPC_MSG_HISTOGRAM_STATIC
                     .$fn_name
@@ -255,10 +257,14 @@ macro_rules! set_total_time {
 }
 
 macro_rules! set_perf_feedback {
-    ($resp:ident,no_perf_feedback) => {};
-    ($resp:ident,has_perf_feedback) => {
-        let feedback = ResponseFeedbackInformation::default();
-        $resp.set_response_feedback(feedback);
+    ($slow_stats_retriever:ident, $resp:ident,no_perf_feedback) => {};
+    ($slow_stats_retriever:ident, $resp:ident,has_perf_feedback) => {
+        // let mut perf_feedback = PerformanceFeedback::default();
+        // let score = $slow_stats_retriever.get_slow_score();
+        // perf_feedback.set_slow_score(score as i32);
+        // let mut feedback = ResponseFeedbackInformation::default();
+        // feedback.set_performance_feedback(perf_feedback);
+        // $resp.set_response_feedback(feedback);
     };
 }
 
@@ -979,6 +985,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
             collect_batch_resp,
         );
 
+        // let slow_stats_retriever = self.slow_stats_retriever.clone();
         let mut response_retriever = response_retriever.map(move |mut item| {
             handle_measures_for_batch_commands(&mut item);
             let mut r = item.batch_resp;
@@ -1379,6 +1386,40 @@ fn handle_measures_for_batch_commands(measures: &mut MeasuredBatchResponse) {
                 .mut_time_detail_v2()
                 .set_total_rpc_wall_time_ns(elapsed.as_nanos() as u64);
         }
+        // let response_feedback = resp.cmd.as_mut().and_then(|cmd| match cmd {
+        //     Get(resp) => Some(resp.mut_response_feedback()),
+        //     Scan(resp) => Some(resp.mut_response_feedback()),
+        //     Prewrite(resp) => Some(resp.mut_response_feedback()),
+        //     Commit(resp) => Some(resp.mut_response_feedback()),
+        //     Cleanup(resp) => Some(resp.mut_response_feedback()),
+        //     BatchGet(resp) => Some(resp.mut_response_feedback()),
+        //     BatchRollback(resp) => Some(resp.mut_response_feedback()),
+        //     ScanLock(resp) => Some(resp.mut_response_feedback()),
+        //     ResolveLock(resp) => Some(resp.mut_response_feedback()),
+        //     DeleteRange(resp) => Some(resp.mut_response_feedback()),
+        //     RawGet(resp) => Some(resp.mut_response_feedback()),
+        //     RawBatchGet(resp) => Some(resp.mut_response_feedback()),
+        //     RawPut(resp) => Some(resp.mut_response_feedback()),
+        //     RawBatchPut(resp) => Some(resp.mut_response_feedback()),
+        //     RawDelete(resp) => Some(resp.mut_response_feedback()),
+        //     RawBatchDelete(resp) => Some(resp.mut_response_feedback()),
+        //     RawScan(resp) => Some(resp.mut_response_feedback()),
+        //     RawDeleteRange(resp) => Some(resp.mut_response_feedback()),
+        //     RawBatchScan(resp) => Some(resp.mut_response_feedback()),
+        //     Coprocessor(resp) => Some(resp.mut_response_feedback()),
+        //     PessimisticLock(resp) => Some(resp.mut_response_feedback()),
+        //     PessimisticRollback(resp) => Some(resp.mut_response_feedback()),
+        //     CheckTxnStatus(resp) => Some(resp.mut_response_feedback()),
+        //     TxnHeartBeat(resp) => Some(resp.mut_response_feedback()),
+        //     CheckSecondaryLocks(resp) => Some(resp.mut_response_feedback()),
+        //     RawCoprocessor(resp) => Some(resp.mut_response_feedback()),
+        //     _ => None,
+        // });
+        // if let Some(response_feedback) = response_feedback {
+        //     response_feedback
+        //         .mut_performance_feedback()
+        //         .set_slow_score(slow_stats_retriever.get_slow_score() as
+        // i32); }
     }
 }
 

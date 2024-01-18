@@ -34,6 +34,7 @@ use fail::fail_point;
 use file_system::{IoType, WithIoType};
 use futures::{compat::Future01CompatExt, FutureExt};
 use grpcio_health::HealthService;
+use health_controller::types;
 use keys::{self, data_end_key, data_key, enc_end_key, enc_start_key};
 use kvproto::{
     metapb::{self, Region, RegionEpoch},
@@ -583,7 +584,7 @@ where
     pub store_disk_usages: HashMap<u64, DiskUsage>,
     pub write_senders: WriteSenders<EK, ER>,
     pub sync_write_worker: Option<WriteWorker<EK, ER, RaftRouter<EK, ER>, T>>,
-    pub pending_latency_inspect: Vec<util::LatencyInspector>,
+    pub pending_latency_inspect: Vec<types::LatencyInspector>,
 
     pub safe_point: Arc<AtomicU64>,
 

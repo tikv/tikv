@@ -21,6 +21,10 @@ use engine_traits::{KvEngine, RaftEngine};
 use fail::fail_point;
 use futures::{compat::Future01CompatExt, FutureExt};
 use grpcio_health::{HealthService, ServingStatus};
+use health_controller::{
+    types::{LatencyInspector, RaftstoreDuration},
+    SlowScore, SlowTrendConfig, SlowTrendStatistics,
+};
 use kvproto::{
     kvrpcpb::DiskFullOpt,
     metapb, pdpb,
@@ -31,7 +35,6 @@ use kvproto::{
     raft_serverpb::RaftMessage,
     replication_modepb::{RegionReplicationStatus, StoreDrAutoSyncStatus},
 };
-use ordered_float::OrderedFloat;
 use pd_client::{metrics::*, BucketStat, Error, PdClient, RegionStat};
 use prometheus::local::LocalHistogram;
 use raft::eraftpb::ConfChangeType;
@@ -46,7 +49,6 @@ use tikv_util::{
     time::{Instant as TiInstant, UnixSecs},
     timer::GLOBAL_TIMER_HANDLE,
     topn::TopN,
-    trend::{RequestPerSecRecorder, Trend},
     warn,
     worker::{Runnable, RunnableWithTimer, ScheduleError, Scheduler},
 };
@@ -62,7 +64,7 @@ use crate::{
         unsafe_recovery::{
             UnsafeRecoveryExecutePlanSyncer, UnsafeRecoveryForceLeaderSyncer, UnsafeRecoveryHandle,
         },
-        util::{is_epoch_stale, KeysInfoFormatter, LatencyInspector, RaftstoreDuration},
+        util::{is_epoch_stale, KeysInfoFormatter},
         worker::{
             split_controller::{SplitInfo, TOP_N},
             AutoSplitController, ReadStats, SplitConfigChange, WriteStats,
@@ -815,180 +817,6 @@ fn hotspot_query_num_report_threshold() -> u64 {
 /// Max limitation of delayed store_heartbeat.
 const STORE_HEARTBEAT_DELAY_LIMIT: u64 = 5 * 60;
 
-// Slow score is a value that represents the speed of a store and ranges in [1,
-// 100]. It is maintained in the AIMD way.
-// If there are some inspecting requests timeout during a round, by default the
-// score will be increased at most 1x when above 10% inspecting requests
-// timeout. If there is not any timeout inspecting requests, the score will go
-// back to 1 in at least 5min.
-struct SlowScore {
-    value: OrderedFloat<f64>,
-    last_record_time: Instant,
-    last_update_time: Instant,
-
-    timeout_requests: usize,
-    total_requests: usize,
-
-    inspect_interval: Duration,
-    // The maximal tolerated timeout ratio.
-    ratio_thresh: OrderedFloat<f64>,
-    // Minimal time that the score could be decreased from 100 to 1.
-    min_ttr: Duration,
-
-    // After how many ticks the value need to be updated.
-    round_ticks: u64,
-    // Identify every ticks.
-    last_tick_id: u64,
-    // If the last tick does not finished, it would be recorded as a timeout.
-    last_tick_finished: bool,
-}
-
-impl SlowScore {
-    fn new(inspect_interval: Duration) -> SlowScore {
-        SlowScore {
-            value: OrderedFloat(1.0),
-
-            timeout_requests: 0,
-            total_requests: 0,
-
-            inspect_interval,
-            ratio_thresh: OrderedFloat(0.1),
-            min_ttr: Duration::from_secs(5 * 60),
-            last_record_time: Instant::now(),
-            last_update_time: Instant::now(),
-            round_ticks: 30,
-            last_tick_id: 0,
-            last_tick_finished: true,
-        }
-    }
-
-    fn record(&mut self, id: u64, duration: Duration, not_busy: bool) {
-        self.last_record_time = Instant::now();
-        if id != self.last_tick_id {
-            return;
-        }
-        self.last_tick_finished = true;
-        self.total_requests += 1;
-        if not_busy && duration >= self.inspect_interval {
-            self.timeout_requests += 1;
-        }
-    }
-
-    fn record_timeout(&mut self) {
-        self.last_tick_finished = true;
-        self.total_requests += 1;
-        self.timeout_requests += 1;
-    }
-
-    fn update(&mut self) -> f64 {
-        let elapsed = self.last_update_time.elapsed();
-        self.update_impl(elapsed).into()
-    }
-
-    fn get(&self) -> f64 {
-        self.value.into()
-    }
-
-    // Update the score in a AIMD way.
-    fn update_impl(&mut self, elapsed: Duration) -> OrderedFloat<f64> {
-        if self.timeout_requests == 0 {
-            let desc = 100.0 * (elapsed.as_millis() as f64 / self.min_ttr.as_millis() as f64);
-            if OrderedFloat(desc) > self.value - OrderedFloat(1.0) {
-                self.value = 1.0.into();
-            } else {
-                self.value -= desc;
-            }
-        } else {
-            let timeout_ratio = self.timeout_requests as f64 / self.total_requests as f64;
-            let near_thresh =
-                cmp::min(OrderedFloat(timeout_ratio), self.ratio_thresh) / self.ratio_thresh;
-            let value = self.value * (OrderedFloat(1.0) + near_thresh);
-            self.value = cmp::min(OrderedFloat(100.0), value);
-        }
-
-        self.total_requests = 0;
-        self.timeout_requests = 0;
-        self.last_update_time = Instant::now();
-        self.value
-    }
-
-    fn should_force_report_slow_store(&self) -> bool {
-        self.value >= OrderedFloat(100.0) && (self.last_tick_id % self.round_ticks == 0)
-    }
-}
-
-struct SlowTrendStatistics {
-    net_io_factor: f64,
-    /// Detector to detect NetIo&DiskIo jitters.
-    slow_cause: Trend,
-    /// Reactor as an assistant detector to detect the QPS jitters.
-    slow_result: Trend,
-    slow_result_recorder: RequestPerSecRecorder,
-}
-
-impl SlowTrendStatistics {
-    #[inline]
-    fn new(cfg: &Config) -> Self {
-        Self {
-            slow_cause: Trend::new(
-                // Disable SpikeFilter for now
-                Duration::from_secs(0),
-                STORE_SLOW_TREND_MISC_GAUGE_VEC.with_label_values(&["spike_filter_value"]),
-                STORE_SLOW_TREND_MISC_GAUGE_VEC.with_label_values(&["spike_filter_count"]),
-                Duration::from_secs(180),
-                Duration::from_secs(30),
-                Duration::from_secs(120),
-                Duration::from_secs(600),
-                1,
-                tikv_util::time::duration_to_us(Duration::from_micros(500)),
-                STORE_SLOW_TREND_MARGIN_ERROR_WINDOW_GAP_GAUGE_VEC.with_label_values(&["L1"]),
-                STORE_SLOW_TREND_MARGIN_ERROR_WINDOW_GAP_GAUGE_VEC.with_label_values(&["L2"]),
-                cfg.slow_trend_unsensitive_cause,
-            ),
-            slow_result: Trend::new(
-                // Disable SpikeFilter for now
-                Duration::from_secs(0),
-                STORE_SLOW_TREND_RESULT_MISC_GAUGE_VEC.with_label_values(&["spike_filter_value"]),
-                STORE_SLOW_TREND_RESULT_MISC_GAUGE_VEC.with_label_values(&["spike_filter_count"]),
-                Duration::from_secs(120),
-                Duration::from_secs(15),
-                Duration::from_secs(60),
-                Duration::from_secs(300),
-                1,
-                2000,
-                STORE_SLOW_TREND_RESULT_MARGIN_ERROR_WINDOW_GAP_GAUGE_VEC
-                    .with_label_values(&["L1"]),
-                STORE_SLOW_TREND_RESULT_MARGIN_ERROR_WINDOW_GAP_GAUGE_VEC
-                    .with_label_values(&["L2"]),
-                cfg.slow_trend_unsensitive_result,
-            ),
-            slow_result_recorder: RequestPerSecRecorder::new(),
-            net_io_factor: cfg.slow_trend_network_io_factor, /* FIXME: add extra parameter in
-                                                              * Config to control it. */
-        }
-    }
-
-    #[inline]
-    fn record(&mut self, duration: RaftstoreDuration) {
-        // TODO: It's more appropriate to divide the factor into `Disk IO factor` and
-        // `Net IO factor`.
-        // Currently, when `network ratio == 1`, it summarizes all factors by `sum`
-        // simplily, approved valid to common cases when there exists IO jitters on
-        // Network or Disk.
-        let latency = || -> u64 {
-            if self.net_io_factor as u64 >= 1 {
-                return tikv_util::time::duration_to_us(duration.sum());
-            }
-            let disk_io_latency =
-                tikv_util::time::duration_to_us(duration.delays_on_disk_io(true)) as f64;
-            let network_io_latency =
-                tikv_util::time::duration_to_us(duration.delays_on_net_io()) as f64;
-            (disk_io_latency + network_io_latency * self.net_io_factor) as u64
-        }();
-        self.slow_cause.record(latency, Instant::now());
-    }
-}
-
 pub struct Runner<EK, ER, T>
 where
     EK: KvEngine,
@@ -1066,6 +894,29 @@ where
             error!("failed to start stats collector, error = {:?}", e);
         }
 
+        let slow_trend_config = SlowTrendConfig {
+            unsensitive_cause: cfg.slow_trend_unsensitive_cause,
+            unsensitive_result: cfg.slow_trend_unsensitive_result,
+            net_io_factor: cfg.slow_trend_network_io_factor,
+
+            cause_spike_filter_value_gauge: STORE_SLOW_TREND_MISC_GAUGE_VEC
+                .with_label_values(&["spike_filter_value"]),
+            cause_spike_filter_count_gauge: STORE_SLOW_TREND_MISC_GAUGE_VEC
+                .with_label_values(&["spike_filter_count"]),
+            cause_l1_gap_gauges: STORE_SLOW_TREND_MARGIN_ERROR_WINDOW_GAP_GAUGE_VEC
+                .with_label_values(&["L1"]),
+            cause_l2_gap_gauges: STORE_SLOW_TREND_MARGIN_ERROR_WINDOW_GAP_GAUGE_VEC
+                .with_label_values(&["L2"]),
+            result_spike_filter_value_gauge: STORE_SLOW_TREND_RESULT_MISC_GAUGE_VEC
+                .with_label_values(&["spike_filter_value"]),
+            result_spike_filter_count_gauge: STORE_SLOW_TREND_RESULT_MISC_GAUGE_VEC
+                .with_label_values(&["spike_filter_count"]),
+            result_l1_gap_gauges: STORE_SLOW_TREND_RESULT_MARGIN_ERROR_WINDOW_GAP_GAUGE_VEC
+                .with_label_values(&["L1"]),
+            result_l2_gap_gauges: STORE_SLOW_TREND_RESULT_MARGIN_ERROR_WINDOW_GAP_GAUGE_VEC
+                .with_label_values(&["L2"]),
+        };
+
         Runner {
             store_id,
             pd_client,
@@ -1083,7 +934,7 @@ where
             snap_mgr,
             remote,
             slow_score: SlowScore::new(cfg.inspect_interval.0),
-            slow_trend: SlowTrendStatistics::new(cfg),
+            slow_trend: SlowTrendStatistics::new(slow_trend_config),
             health_service,
             curr_health_status: ServingStatus::Serving,
             coprocessor_host,
@@ -2336,11 +2187,11 @@ where
         // The health status is recovered to serving as long as any tick
         // does not timeout.
         if self.curr_health_status == ServingStatus::ServiceUnknown
-            && self.slow_score.last_tick_finished
+            && self.slow_score.last_tick_finished()
         {
             self.update_health_status(ServingStatus::Serving);
         }
-        if !self.slow_score.last_tick_finished {
+        if !self.slow_score.last_tick_finished() {
             // If the last tick is not finished, it means that the current store might
             // be busy on handling requests or delayed on I/O operations. And only when
             // the current store is not busy, it should record the last_tick as a timeout.
@@ -2355,23 +2206,18 @@ where
                 self.handle_fake_store_heartbeat();
             }
         }
-        let scheduler = self.scheduler.clone();
-        let id = self.slow_score.last_tick_id + 1;
-        self.slow_score.last_tick_id += 1;
-        self.slow_score.last_tick_finished = false;
 
-        if self.slow_score.last_tick_id % self.slow_score.round_ticks == 0 {
-            // `last_update_time` is refreshed every round. If no update happens in a whole
-            // round, we set the status to unknown.
-            if self.curr_health_status == ServingStatus::Serving
-                && self.slow_score.last_record_time < self.slow_score.last_update_time
-            {
+        let slow_score_tick_result = self.slow_score.tick();
+        if let Some(score) = slow_score_tick_result.updated_score {
+            STORE_SLOW_SCORE_GAUGE.set(score);
+            if !slow_score_tick_result.has_new_record {
                 self.update_health_status(ServingStatus::ServiceUnknown);
             }
-            let slow_score = self.slow_score.update();
-            STORE_SLOW_SCORE_GAUGE.set(slow_score);
         }
 
+        let id = slow_score_tick_result.tick_id;
+
+        let scheduler = self.scheduler.clone();
         let inspector = LatencyInspector::new(
             id,
             Box::new(move |id, duration| {
@@ -2409,7 +2255,7 @@ where
     }
 
     fn get_interval(&self) -> Duration {
-        self.slow_score.inspect_interval
+        self.slow_score.get_inspect_interval()
     }
 }
 
@@ -2796,59 +2642,6 @@ mod tests {
         let mut store_stats = pdpb::StoreStats::default();
         store_stats = collect_report_read_peer_stats(1, report_stats, store_stats);
         assert_eq!(store_stats.peer_stats.len(), 3)
-    }
-
-    #[test]
-    fn test_slow_score() {
-        let mut slow_score = SlowScore::new(Duration::from_millis(500));
-        slow_score.timeout_requests = 5;
-        slow_score.total_requests = 100;
-        assert_eq!(
-            OrderedFloat(1.5),
-            slow_score.update_impl(Duration::from_secs(10))
-        );
-
-        slow_score.timeout_requests = 10;
-        slow_score.total_requests = 100;
-        assert_eq!(
-            OrderedFloat(3.0),
-            slow_score.update_impl(Duration::from_secs(10))
-        );
-
-        slow_score.timeout_requests = 20;
-        slow_score.total_requests = 100;
-        assert_eq!(
-            OrderedFloat(6.0),
-            slow_score.update_impl(Duration::from_secs(10))
-        );
-
-        slow_score.timeout_requests = 100;
-        slow_score.total_requests = 100;
-        assert_eq!(
-            OrderedFloat(12.0),
-            slow_score.update_impl(Duration::from_secs(10))
-        );
-
-        slow_score.timeout_requests = 11;
-        slow_score.total_requests = 100;
-        assert_eq!(
-            OrderedFloat(24.0),
-            slow_score.update_impl(Duration::from_secs(10))
-        );
-
-        slow_score.timeout_requests = 0;
-        slow_score.total_requests = 100;
-        assert_eq!(
-            OrderedFloat(19.0),
-            slow_score.update_impl(Duration::from_secs(15))
-        );
-
-        slow_score.timeout_requests = 0;
-        slow_score.total_requests = 100;
-        assert_eq!(
-            OrderedFloat(1.0),
-            slow_score.update_impl(Duration::from_secs(57))
-        );
     }
 
     use engine_test::{kv::KvTestEngine, raft::RaftTestEngine};

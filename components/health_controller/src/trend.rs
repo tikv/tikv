@@ -6,6 +6,7 @@ use std::{
 };
 
 use prometheus::IntGauge;
+use tikv_util::info;
 
 pub struct SampleValue {
     value: u64,
