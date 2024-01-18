@@ -672,8 +672,9 @@
 [rocksdb.titan]
 ## Enables or disables `Titan`. Note that Titan is still an experimental feature. Once
 ## enabled, it can't fall back. Forced fallback may result in data loss.
-## default: false
-# enabled = false
+## Titan is default on since v7.6.0. This won't affect deployments existed before v7.6.0.
+## default: true
+# enabled = true
 
 ## Maximum number of threads of `Titan` background gc jobs.
 ## default: 1

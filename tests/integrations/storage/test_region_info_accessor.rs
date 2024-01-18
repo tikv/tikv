@@ -19,7 +19,7 @@ fn prepare_cluster<T: Simulator<RocksEngine>>(
         cluster.must_put(&key, &value);
     }
 
-    let end_keys = vec![
+    let end_keys = [
         b"k1".to_vec(),
         b"k3".to_vec(),
         b"k5".to_vec(),
@@ -28,7 +28,7 @@ fn prepare_cluster<T: Simulator<RocksEngine>>(
         b"".to_vec(),
     ];
 
-    let start_keys = vec![
+    let start_keys = [
         b"".to_vec(),
         b"k1".to_vec(),
         b"k3".to_vec(),
@@ -39,7 +39,7 @@ fn prepare_cluster<T: Simulator<RocksEngine>>(
 
     let mut regions = Vec::new();
 
-    for mut key in end_keys.iter().take(end_keys.len() - 1).map(Vec::clone) {
+    for mut key in end_keys.iter().take(end_keys.len() - 1).cloned() {
         let region = cluster.get_region(&key);
         cluster.must_split(&region, &key);
 

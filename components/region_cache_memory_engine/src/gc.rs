@@ -9,8 +9,9 @@ use slog_global::{info, warn};
 use txn_types::{Key, WriteRef, WriteType};
 
 use crate::{
+    engine::GlobalMemoryLimiter,
     keys::{decode_key, encoding_for_filter, InternalKey, InternalKeyComparator},
-    RegionCacheMemoryEngine,
+    RangeCacheMemoryEngine,
 };
 
 fn split_ts(key: &[u8]) -> Result<(&[u8], u64), String> {
@@ -47,18 +48,20 @@ impl Display for GcTask {
 }
 
 pub struct GcRunner {
-    memory_engine: RegionCacheMemoryEngine,
+    memory_engine: RangeCacheMemoryEngine,
 }
 
 impl GcRunner {
-    pub fn new(memory_engine: RegionCacheMemoryEngine) -> Self {
+    pub fn new(memory_engine: RangeCacheMemoryEngine) -> Self {
         Self { memory_engine }
     }
 
     fn gc_region(&mut self, region_id: u64, safe_ts: u64) {
         let (region_m_engine, safe_ts) = {
             let mut core = self.memory_engine.core().lock().unwrap();
-            let Some(region_meta) = core.mut_region_meta(region_id) else { return };
+            let Some(region_meta) = core.mut_region_meta(region_id) else {
+                return;
+            };
             let min_snapshot = region_meta
                 .snapshot_list()
                 .min_snapshot_ts()
@@ -82,7 +85,7 @@ impl GcRunner {
                 "region_id" => region_id,
             );
             region_meta.set_safe_ts(safe_ts);
-            (core.region_memory_engine(region_id).unwrap(), safe_ts)
+            (core.engine(), safe_ts)
         };
 
         let write_cf_handle = region_m_engine.cf_handle(CF_WRITE);
@@ -122,8 +125,8 @@ struct Filter {
     mvcc_key_prefix: Vec<u8>,
     remove_older: bool,
 
-    default_cf_handle: Arc<Skiplist<InternalKeyComparator>>,
-    write_cf_handle: Arc<Skiplist<InternalKeyComparator>>,
+    default_cf_handle: Arc<Skiplist<InternalKeyComparator, GlobalMemoryLimiter>>,
+    write_cf_handle: Arc<Skiplist<InternalKeyComparator, GlobalMemoryLimiter>>,
 
     cached_delete_key: Option<Vec<u8>>,
 
@@ -145,8 +148,8 @@ impl Drop for Filter {
 impl Filter {
     fn new(
         safe_point: u64,
-        default_cf_handle: Arc<Skiplist<InternalKeyComparator>>,
-        write_cf_handle: Arc<Skiplist<InternalKeyComparator>>,
+        default_cf_handle: Arc<Skiplist<InternalKeyComparator, GlobalMemoryLimiter>>,
+        write_cf_handle: Arc<Skiplist<InternalKeyComparator, GlobalMemoryLimiter>>,
     ) -> Self {
         Self {
             safe_point,
@@ -236,16 +239,16 @@ pub mod tests {
     use std::sync::Arc;
 
     use bytes::Bytes;
-    use engine_traits::{RegionCacheEngine, CF_DEFAULT, CF_WRITE};
+    use engine_traits::{RangeCacheEngine, CF_DEFAULT, CF_WRITE};
     use skiplist_rs::Skiplist;
     use txn_types::{Key, TimeStamp, Write, WriteType};
 
     use super::Filter;
     use crate::{
-        engine::RegionMemoryEngine,
+        engine::{GlobalMemoryLimiter, RegionMemoryEngine},
         gc::GcRunner,
         keys::{encode_key, encoding_for_filter, InternalKeyComparator, ValueType},
-        RegionCacheMemoryEngine,
+        RangeCacheMemoryEngine,
     };
 
     fn put_data(
@@ -255,8 +258,8 @@ pub mod tests {
         commit_ts: u64,
         seq_num: u64,
         short_value: bool,
-        default_cf: &Arc<Skiplist<InternalKeyComparator>>,
-        write_cf: &Arc<Skiplist<InternalKeyComparator>>,
+        default_cf: &Arc<Skiplist<InternalKeyComparator, GlobalMemoryLimiter>>,
+        write_cf: &Arc<Skiplist<InternalKeyComparator, GlobalMemoryLimiter>>,
     ) {
         let write_k = Key::from_raw(key)
             .append_ts(TimeStamp::new(commit_ts))
@@ -286,7 +289,7 @@ pub mod tests {
         key: &[u8],
         ts: u64,
         seq_num: u64,
-        write_cf: &Arc<Skiplist<InternalKeyComparator>>,
+        write_cf: &Arc<Skiplist<InternalKeyComparator, GlobalMemoryLimiter>>,
     ) {
         let write_k = Key::from_raw(key)
             .append_ts(TimeStamp::new(ts))
@@ -300,7 +303,7 @@ pub mod tests {
         key: &[u8],
         ts: u64,
         seq_num: u64,
-        write_cf: &Arc<Skiplist<InternalKeyComparator>>,
+        write_cf: &Arc<Skiplist<InternalKeyComparator, GlobalMemoryLimiter>>,
     ) {
         let write_k = Key::from_raw(key)
             .append_ts(TimeStamp::new(ts))
@@ -310,7 +313,7 @@ pub mod tests {
         write_cf.put(write_k, Bytes::from(write_v.as_ref().to_bytes()));
     }
 
-    fn element_count(sklist: &Arc<Skiplist<InternalKeyComparator>>) -> u64 {
+    fn element_count(sklist: &Arc<Skiplist<InternalKeyComparator, GlobalMemoryLimiter>>) -> u64 {
         let mut count = 0;
         let mut iter = sklist.iter();
         iter.seek_to_first();
@@ -381,11 +384,11 @@ pub mod tests {
 
     #[test]
     fn test_gc() {
-        let engine = RegionCacheMemoryEngine::default();
+        let engine = RangeCacheMemoryEngine::default();
         engine.new_region(1);
         let (write, default) = {
             let mut core = engine.core().lock().unwrap();
-            let region_m_engine = core.region_memory_engine(1).unwrap();
+            let region_m_engine = core.engine();
             core.mut_region_meta(1).unwrap().set_can_read(true);
             (
                 region_m_engine.cf_handle(CF_WRITE),
@@ -435,11 +438,11 @@ pub mod tests {
 
     #[test]
     fn test_snapshot_block_gc() {
-        let engine = RegionCacheMemoryEngine::default();
+        let engine = RangeCacheMemoryEngine::default();
         engine.new_region(1);
         let (write, default) = {
             let mut core = engine.core().lock().unwrap();
-            let region_m_engine = core.region_memory_engine(1).unwrap();
+            let region_m_engine = core.engine();
             core.mut_region_meta(1).unwrap().set_can_read(true);
             (
                 region_m_engine.cf_handle(CF_WRITE),

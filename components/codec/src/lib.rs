@@ -1,6 +1,7 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 #![cfg_attr(test, feature(test))]
+#![allow(internal_features)]
 #![feature(core_intrinsics)]
 #![feature(min_specialization)]
 

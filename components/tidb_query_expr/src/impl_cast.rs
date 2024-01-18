@@ -6536,7 +6536,7 @@ mod tests {
             "cast_decimal_as_duration",
         );
 
-        let values = vec![
+        let values = [
             Decimal::from_bytes(b"9995959").unwrap().unwrap(),
             Decimal::from_bytes(b"-9995959").unwrap().unwrap(),
         ];

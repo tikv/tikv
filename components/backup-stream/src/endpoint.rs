@@ -915,7 +915,7 @@ where
              "config" => ?cfg,
              "concurrency_diff" => concurrency_diff,
         );
-        self.range_router.udpate_config(&cfg);
+        self.range_router.update_config(&cfg);
         self.update_semaphore_capacity(&self.initial_scan_semaphore, concurrency_diff);
 
         self.config = cfg;
@@ -1051,6 +1051,7 @@ where
                     })
                 );
             }
+            #[allow(clippy::blocks_in_conditions)]
             RegionCheckpointOperation::Resolve { min_ts, start_time } => {
                 let sched = self.scheduler.clone();
                 try_send!(

@@ -3,6 +3,7 @@ name = "test_util"
 version = "0.0.1"
 edition = "2021"
 publish = false
+license = "Apache-2.0"
 
 [features]
 default = ["cloud-aws", "cloud-gcp", "cloud-azure"]
@@ -12,6 +13,7 @@ cloud-azure = ["encryption_export/cloud-azure"]
 
 [dependencies]
 backtrace = "0.3"
+chrono = { workspace = true }
 collections = { workspace = true }
 encryption_export = { workspace = true }
 fail = "0.5"
@@ -24,4 +26,4 @@ slog = { workspace = true }
 slog-global = { workspace = true }
 tempfile = "3.0"
 tikv_util = { workspace = true }
-time = "0.1"
+time = { workspace = true }
