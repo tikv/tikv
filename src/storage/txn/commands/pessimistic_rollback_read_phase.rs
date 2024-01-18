@@ -22,6 +22,9 @@ command! {
             for_update_ts: TimeStamp,
             scan_key: Option<Key>,
         }
+        in_heap => {
+            scan_key,
+        }
 }
 
 impl CommandExt for PessimisticRollbackReadPhase {

@@ -8,6 +8,7 @@ use std::{
     },
 };
 
+use collections::HashMap;
 use kvproto::{
     encryptionpb::EncryptionMeta,
     kvrpcpb::LockInfo,
@@ -34,9 +35,68 @@ pub trait HeapSize {
     }
 }
 
-impl HeapSize for [u8] {
+macro_rules! impl_heap_size{
+    (
+        $($typ: ty,)+
+    ) => {
+        $(
+            impl HeapSize for $typ {
+                fn heap_size(&self) -> usize {
+                    std::mem::size_of::<Self>()
+                }
+            }
+        )+
+    }
+}
+
+impl_heap_size! {
+    // These types are not necessary stored in heap as they can be inlined
+    // in structures.
+    // TODO: We may need to add a new method to distinguish the difference.
+    u8, bool, u64,
+}
+
+impl<T: HeapSize> HeapSize for [T] {
     fn heap_size(&self) -> usize {
-        std::mem::size_of_val(self)
+        if self.is_empty() {
+            0
+        } else {
+            self.len() * self[0].heap_size()
+        }
+    }
+}
+
+impl<T: HeapSize> HeapSize for Vec<T> {
+    fn heap_size(&self) -> usize {
+        // NB: It's an approximation of Vec<T> heap usage, because its capacity
+        // may be large then its length, and the unused space is also in heap.
+        self.as_slice().heap_size()
+    }
+}
+
+impl<A: HeapSize, B: HeapSize> HeapSize for (A, B) {
+    fn heap_size(&self) -> usize {
+        self.0.heap_size() + self.1.heap_size()
+    }
+}
+
+impl<T: HeapSize> HeapSize for Option<T> {
+    fn heap_size(&self) -> usize {
+        match self {
+            Some(t) => t.heap_size(),
+            None => 0,
+        }
+    }
+}
+
+impl<K: HeapSize, V: HeapSize> HeapSize for HashMap<K, V> {
+    fn heap_size(&self) -> usize {
+        if self.is_empty() {
+            0
+        } else {
+            let kv = self.iter().next().unwrap();
+            self.len() * (kv.0.heap_size() + kv.1.heap_size())
+        }
     }
 }
 

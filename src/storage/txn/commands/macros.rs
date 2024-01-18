@@ -28,6 +28,7 @@ macro_rules! ctx {
 /// * display -> Information needed to implement the `Display` trait for the
 /// command.
 /// * content -> The fields of the struct definition for the command.
+/// * in_heap -> The fields that have heap allocation.
 macro_rules! command {
     (
         $(#[$outer_doc: meta])*
@@ -37,6 +38,7 @@ macro_rules! command {
             content => {
                 $($(#[$inner_doc:meta])* $arg: ident : $arg_ty: ty,)*
             }
+            $(in_heap => { $($arg_in_heap: ident,)* })?
     ) => {
         command! {
             $(#[$outer_doc])*
@@ -45,6 +47,7 @@ macro_rules! command {
                 content => {
                     $($(#[$inner_doc])* $arg: $arg_ty,)*
                 }
+                $(in_heap => { $($arg_in_heap,)* })?
         }
 
         impl std::fmt::Display for $cmd {
@@ -58,7 +61,6 @@ macro_rules! command {
                 )
             }
         }
-
         impl std::fmt::Debug for $cmd {
             fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
                 write!(f, "{}", self)
@@ -72,6 +74,7 @@ macro_rules! command {
             content => {
                 $($(#[$inner_doc:meta])* $arg: ident : $arg_ty: ty,)*
             }
+            $(in_heap => { $($arg_in_heap: ident,)* })?
     ) => {
         $(#[$outer_doc])*
         pub struct $cmd {
@@ -79,7 +82,6 @@ macro_rules! command {
             pub deadline: ::tikv_util::deadline::Deadline,
             $($(#[$inner_doc])* pub $arg: $arg_ty,)*
         }
-
         impl $cmd {
             /// Return a `TypedCommand` that encapsulates the result of executing this command.
             pub fn new(
@@ -97,6 +99,15 @@ macro_rules! command {
                         deadline,
                         $($arg,)*
                 }).into()
+            }
+        }
+
+        impl tikv_util::memory::HeapSize for $cmd {
+            fn heap_size(&self) -> usize {
+                0
+                $(
+                    $( + self.$arg_in_heap.heap_size() )*
+                )?
             }
         }
     }
