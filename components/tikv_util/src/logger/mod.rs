@@ -84,12 +84,6 @@ where
             threshold,
             inner: drain,
         };
-        // ThreadIDrain discards all previous `slog::OwnedKVList`, anything that
-        // wraps it should not pass `slog::OwnedKVList`.
-        //
-        // NB: slog macros (slog::info!() and others) only produce one
-        // `slog::Record`, `slog::OwnedKVList` are provided by `slog::Drain` and
-        // `slog::Logger`.
         let drain = ThreadIDrain(drain);
         // Let GlobalLevelFilter wrap ThreadIDrain, so that it saves getting
         // thread id for flittered logs.
@@ -651,12 +645,13 @@ where
 {
     type Ok = D::Ok;
     type Err = D::Err;
-    fn log(&self, record: &Record<'_>, _: &OwnedKVList) -> Result<Self::Ok, Self::Err> {
-        let thread_id = std::thread::current().id().as_u64().get();
-        self.0.log(
-            record,
-            &OwnedKVList::from(slog::o!("thread_id" => thread_id)),
-        )
+    fn log(&self, record: &Record<'_>, values: &OwnedKVList) -> Result<Self::Ok, Self::Err> {
+        let values = slog::o!(
+            "thread_id" => std::thread::current().id().as_u64().get(),
+            // OwnedKVList is essentially an Arc, clone is cheap.
+            values.clone(),
+        );
+        self.0.log(record, &OwnedKVList::from(values))
     }
 }
 
