@@ -111,7 +111,7 @@ impl GcRunner {
         }
 
         info!(
-            "region gc complete";
+            "range gc complete";
             "range" => ?range,
             "total_version" => count,
             "unique_keys" => filter.unique_key,
@@ -130,6 +130,8 @@ struct Filter {
     default_cf_handle: Arc<Skiplist<InternalKeyComparator, GlobalMemoryLimiter>>,
     write_cf_handle: Arc<Skiplist<InternalKeyComparator, GlobalMemoryLimiter>>,
 
+    // the total size of the keys buffered, when it exceeds the limit, all keys in the buffer will
+    // be removed
     filtered_write_key_size: usize,
     filtered_write_key_buffer: Vec<Vec<u8>>,
     cached_delete_key: Option<Vec<u8>>,
@@ -215,6 +217,8 @@ impl Filter {
             return Ok(());
         }
         self.filtered += 1;
+        // we cannot delete it directly as it's the node the iterator currently points
+        // to, so we cache it in the buffer and delete them later.
         self.filter_write_cf_key(key);
         self.handle_filtered_write(write)?;
 
@@ -420,11 +424,11 @@ pub mod tests {
         engine.new_range(range.clone());
         let (write, default) = {
             let mut core = engine.core().lock().unwrap();
-            let region_m_engine = core.engine();
+            let skiplist_engine = core.engine();
             core.mut_range_manager().set_range_readable(&range, true);
             (
-                region_m_engine.cf_handle(CF_WRITE),
-                region_m_engine.cf_handle(CF_DEFAULT),
+                skiplist_engine.cf_handle(CF_WRITE),
+                skiplist_engine.cf_handle(CF_DEFAULT),
             )
         };
 
@@ -475,11 +479,11 @@ pub mod tests {
         engine.new_range(range.clone());
         let (write, default) = {
             let mut core = engine.core().lock().unwrap();
-            let region_m_engine = core.engine();
+            let skiplist_engine = core.engine();
             core.mut_range_manager().set_range_readable(&range, true);
             (
-                region_m_engine.cf_handle(CF_WRITE),
-                region_m_engine.cf_handle(CF_DEFAULT),
+                skiplist_engine.cf_handle(CF_WRITE),
+                skiplist_engine.cf_handle(CF_DEFAULT),
             )
         };
 
