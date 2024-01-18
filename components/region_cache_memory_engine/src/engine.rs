@@ -28,7 +28,7 @@ use crate::{
 
 const EVICTION_KEY_BUFFER_LIMIT: usize = 5 * MIB as usize;
 
-fn cf_to_id(cf: &str) -> usize {
+pub(crate) fn cf_to_id(cf: &str) -> usize {
     match cf {
         CF_DEFAULT => 0,
         CF_LOCK => 1,
@@ -81,7 +81,7 @@ impl Drop for GlobalMemoryLimiter {
 /// A single global set of skiplists shared by all cached ranges
 #[derive(Clone)]
 pub struct SkiplistEngine {
-    data: [Arc<Skiplist<InternalKeyComparator, GlobalMemoryLimiter>>; 3],
+    pub(crate) data: [Arc<Skiplist<InternalKeyComparator, GlobalMemoryLimiter>>; 3],
 }
 
 impl SkiplistEngine {
@@ -183,6 +183,10 @@ impl RangeCacheMemoryEngineCore {
         }
     }
 
+    pub fn engine(&self) -> SkiplistEngine {
+        self.engine.clone()
+    }
+
     pub fn range_manager(&self) -> &RangeManager {
         &self.range_manager
     }
@@ -211,7 +215,7 @@ impl RangeCacheMemoryEngineCore {
 /// cached region), we resort to using a the disk engine's snapshot instead.
 #[derive(Clone)]
 pub struct RangeCacheMemoryEngine {
-    core: Arc<Mutex<RangeCacheMemoryEngineCore>>,
+    pub(crate) core: Arc<Mutex<RangeCacheMemoryEngineCore>>,
     memory_limiter: Arc<GlobalMemoryLimiter>,
 }
 
