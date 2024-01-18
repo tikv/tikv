@@ -455,7 +455,6 @@ impl ReadDelegate {
             bucket_meta: peer
                 .region_buckets_info()
                 .bucket_stat()
-                .as_ref()
                 .map(|b| b.meta.clone()),
             track_ver: TrackVer::new(),
         }

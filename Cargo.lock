@@ -2342,9 +2342,9 @@ dependencies = [
 
 [[package]]
 name = "h2"
-version = "0.3.22"
+version = "0.3.24"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4d6250322ef6e60f93f9a2162799302cd6f68f79f6e5d85c8c16f14d1d958178"
+checksum = "bb2c4422095b67ee78da96fbb51a4cc413b3b25883c7717ff7ca1ab31022c9c9"
 dependencies = [
  "bytes",
  "fnv",
@@ -2871,7 +2871,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#c247909c279e89b3eabb4f200d580ee50f27fda6"
+source = "git+https://github.com/tikv/rust-rocksdb.git#256c9ca2f45fef644b518223707de50f841fe9e8"
 dependencies = [
  "bindgen 0.65.1",
  "bzip2-sys",
@@ -2890,7 +2890,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/tikv/rust-rocksdb.git#c247909c279e89b3eabb4f200d580ee50f27fda6"
+source = "git+https://github.com/tikv/rust-rocksdb.git#256c9ca2f45fef644b518223707de50f841fe9e8"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -3163,15 +3163,6 @@ checksum = "0bc85448a6006dd2ba26a385a564a8a0f1f2c7e78c70f1a70b2e0f4af286b823"
 dependencies = [
  "libc 0.1.12",
  "tempdir",
-]
-
-[[package]]
-name = "mnt"
-version = "0.3.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1587ebb20a5b04738f16cffa7e2526f1b8496b84f92920facd518362ff1559eb"
-dependencies = [
- "libc 0.2.151",
 ]
 
 [[package]]
@@ -4726,7 +4717,7 @@ dependencies = [
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#c247909c279e89b3eabb4f200d580ee50f27fda6"
+source = "git+https://github.com/tikv/rust-rocksdb.git#256c9ca2f45fef644b518223707de50f841fe9e8"
 dependencies = [
  "libc 0.2.151",
  "librocksdb_sys",
@@ -6645,7 +6636,6 @@ dependencies = [
  "libc 0.2.151",
  "log",
  "log_wrappers",
- "mnt",
  "nix 0.24.1",
  "num-traits",
  "num_cpus",
@@ -6967,7 +6957,7 @@ version = "1.6.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "97fee6b57c6a41524a810daee9286c02d7752c4253064d0b05472833a438f675"
 dependencies = [
- "cfg-if 1.0.0",
+ "cfg-if 0.1.10",
  "static_assertions",
 ]
 

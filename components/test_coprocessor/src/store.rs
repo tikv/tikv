@@ -271,8 +271,7 @@ impl<E: Engine> Store<E> {
             )
             .unwrap()
             .into_iter()
-            .filter(Result::is_ok)
-            .map(Result::unwrap)
+            .flatten()
             .collect()
     }
 
@@ -316,7 +315,7 @@ impl<E: Engine> Store<E> {
             .set_v2(&tbl["id"], ScalarValue::Int(None))
             .set_v2(&tbl["name"], ScalarValue::Bytes(None))
             .set_v2(&tbl["count"], ScalarValue::Int(None));
-        inserts.execute_with_v2_checksum(ctx.clone(), with_checksum, extra_checksum);
+        inserts.execute_with_v2_checksum(ctx, with_checksum, extra_checksum);
         self.commit();
     }
 }

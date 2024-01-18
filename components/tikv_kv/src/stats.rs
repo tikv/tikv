@@ -24,7 +24,7 @@ const STAT_SEEK_FOR_PREV_TOMBSTONE: &str = "seek_for_prev_tombstone";
 const STAT_RAW_VALUE_TOMBSTONE: &str = "raw_value_tombstone";
 
 thread_local! {
-    pub static RAW_VALUE_TOMBSTONE : RefCell<usize> = RefCell::new(0);
+    pub static RAW_VALUE_TOMBSTONE : RefCell<usize> = const{ RefCell::new(0)};
 }
 
 pub enum StatsKind {
