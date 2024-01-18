@@ -2864,11 +2864,13 @@ where
     fn on_extra_message(&mut self, mut msg: RaftMessage) {
         match msg.get_extra_msg().get_type() {
             ExtraMessageType::MsgRegionWakeUp | ExtraMessageType::MsgCheckStalePeer => {
+                let prev_state = self.fsm.hibernate_state.group_state();
+                let need_set_ordered = self.ctx.cfg.slow_trend_network_io_factor as u64 > 1;
                 if self.fsm.hibernate_state.group_state() == GroupState::Idle {
                     if msg.get_extra_msg().forcely_awaken {
                         // Forcely awaken this region by manually setting this GroupState
                         // into Chaos to trigger a new voting in this RaftGroup.
-                        self.reset_raft_tick(if !self.fsm.peer.is_leader() {
+                        self.reset_raft_tick(if !self.fsm.peer.is_leader() && !need_set_ordered {
                             GroupState::Chaos
                         } else {
                             GroupState::Ordered
@@ -2882,6 +2884,13 @@ where
                 {
                     self.fsm.peer.raft_group.raft.ping();
                 }
+                warn!(
+                    "try to forcely awaken region";
+                    "raft_id" => msg.get_from_peer().get_id(),
+                    "prev_state" => ?prev_state,
+                    "curr_state" => ?self.fsm.hibernate_state.group_state(),
+                    "is_leader" => self.fsm.peer.is_leader(),
+                );
             }
             ExtraMessageType::MsgWantRollbackMerge => {
                 self.fsm.peer.maybe_add_want_rollback_merge_peer(
@@ -2930,7 +2939,7 @@ where
     }
 
     fn reset_raft_tick(&mut self, state: GroupState) {
-        debug!(
+        info!(
             "reset raft tick to {:?}", state;
             "region_id"=> self.fsm.region_id(),
             "peer_id" => self.fsm.peer_id(),

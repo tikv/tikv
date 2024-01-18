@@ -289,6 +289,10 @@ make_static_metric! {
         "state" => {
             awaken,
             hibernated,
+            idle,
+            pre_chaos,
+            chaos,
+            ordered,
         },
     }
 
