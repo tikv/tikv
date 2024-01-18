@@ -784,22 +784,23 @@ mod tests {
         let decorator = PlainSyncDecorator::new(TestWriter(buffer.clone()));
         let drain = TikvFormat::new(decorator, true).fuse();
         let drain = ThreadIDrain(drain);
+        let drain = slog::Logger::root_typed(drain, slog_o!("raft_id" => 1)).into_erased();
         let logger = slog::Logger::root_typed(drain, slog_o!()).into_erased();
 
         log_format_cases(logger);
 
         let thread_id = std::thread::current().id().as_u64();
         let expect = format!(
-            r#"[2019/01/15 13:40:39.619 +08:00] [INFO] [mod.rs:469] [] [thread_id={0}]
-[2019/01/15 13:40:39.619 +08:00] [INFO] [mod.rs:469] [Welcome] [thread_id={0}]
-[2019/01/15 13:40:39.619 +08:00] [INFO] [mod.rs:470] ["Welcome TiKV"] [thread_id={0}]
-[2019/01/15 13:40:39.619 +08:00] [INFO] [mod.rs:471] [欢迎] [thread_id={0}]
-[2019/01/15 13:40:39.619 +08:00] [INFO] [mod.rs:472] ["欢迎 TiKV"] [thread_id={0}]
-[2019/01/15 13:40:39.615 +08:00] [INFO] [mod.rs:455] ["failed to fetch URL"] [backoff=3s] [attempt=3] [url=http://example.com] [thread_id={0}]
-[2019/01/15 13:40:39.619 +08:00] [INFO] [mod.rs:460] ["failed to \"fetch\" [URL]: http://example.com"] [thread_id={0}]
-[2019/01/15 13:40:39.619 +08:00] [DEBUG] [mod.rs:463] ["Slow query"] ["process keys"=1500] [duration=123ns] [sql="SELECT * FROM TABLE WHERE ID=\"abc\""] [thread_id={0}]
-[2019/01/15 13:40:39.619 +08:00] [WARN] [mod.rs:473] [Type] [Other=-inf] [Score=inf] [Counter=NaN] [thread_id={0}]
-[2019/01/16 16:56:04.854 +08:00] [INFO] [mod.rs:391] ["more type tests"] [str_array="[\"💖\", \"�\", \"☺☻☹\", \"日a本b語ç日ð本Ê語þ日¥本¼語i日©\", \"日a本b語ç日ð本Ê語þ日¥本¼語i日©日a本b語ç日ð本Ê語þ日¥本¼語i日©日a本b語ç日ð本Ê語þ日¥本¼語i日©\", \"\\\\x80\\\\x80\\\\x80\\\\x80\", \"<car><mirror>XML</mirror></car>\"]"] [u8=34] [is_None=None] [is_false=false] [is_true=true] ["store ids"="[1, 2, 3]"] [url-peers="[\"peer1\", \"peer 2\"]"] [urls="[\"http://xxx.com:2347\", \"http://xxx.com:2432\"]"] [field2="in quote"] [field1=no_quote] [thread_id={0}]
+            r#"[2019/01/15 13:40:39.619 +08:00] [INFO] [mod.rs:469] [] [raft_id=1] [thread_id={0}]
+[2019/01/15 13:40:39.619 +08:00] [INFO] [mod.rs:469] [Welcome] [raft_id=1] [thread_id={0}]
+[2019/01/15 13:40:39.619 +08:00] [INFO] [mod.rs:470] ["Welcome TiKV"] [raft_id=1] [thread_id={0}]
+[2019/01/15 13:40:39.619 +08:00] [INFO] [mod.rs:471] [欢迎] [raft_id=1] [thread_id={0}]
+[2019/01/15 13:40:39.619 +08:00] [INFO] [mod.rs:472] ["欢迎 TiKV"] [raft_id=1] [thread_id={0}]
+[2019/01/15 13:40:39.615 +08:00] [INFO] [mod.rs:455] ["failed to fetch URL"] [backoff=3s] [attempt=3] [url=http://example.com] [raft_id=1] [thread_id={0}]
+[2019/01/15 13:40:39.619 +08:00] [INFO] [mod.rs:460] ["failed to \"fetch\" [URL]: http://example.com"] [raft_id=1] [thread_id={0}]
+[2019/01/15 13:40:39.619 +08:00] [DEBUG] [mod.rs:463] ["Slow query"] ["process keys"=1500] [duration=123ns] [sql="SELECT * FROM TABLE WHERE ID=\"abc\""] [raft_id=1] [thread_id={0}]
+[2019/01/15 13:40:39.619 +08:00] [WARN] [mod.rs:473] [Type] [Other=-inf] [Score=inf] [Counter=NaN] [raft_id=1] [thread_id={0}]
+[2019/01/16 16:56:04.854 +08:00] [INFO] [mod.rs:391] ["more type tests"] [str_array="[\"💖\", \"�\", \"☺☻☹\", \"日a本b語ç日ð本Ê語þ日¥本¼語i日©\", \"日a本b語ç日ð本Ê語þ日¥本¼語i日©日a本b語ç日ð本Ê語þ日¥本¼語i日©日a本b語ç日ð本Ê語þ日¥本¼語i日©\", \"\\\\x80\\\\x80\\\\x80\\\\x80\", \"<car><mirror>XML</mirror></car>\"]"] [u8=34] [is_None=None] [is_false=false] [is_true=true] ["store ids"="[1, 2, 3]"] [url-peers="[\"peer1\", \"peer 2\"]"] [urls="[\"http://xxx.com:2347\", \"http://xxx.com:2432\"]"] [field2="in quote"] [field1=no_quote] [raft_id=1] [thread_id={0}]
 "#,
             thread_id
         );
