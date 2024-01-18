@@ -50,65 +50,75 @@ impl<EK: KvEngine> WriteBatch for HybridEngineWriteBatch<EK> {
     }
 
     fn data_size(&self) -> usize {
-        unimplemented!()
+        self.disk_write_batch.data_size()
     }
 
     fn count(&self) -> usize {
-        unimplemented!()
+        self.disk_write_batch.count()
     }
 
     fn is_empty(&self) -> bool {
-        unimplemented!()
+        self.disk_write_batch.is_empty()
     }
 
     fn should_write_to_engine(&self) -> bool {
-        unimplemented!()
+        self.disk_write_batch.should_write_to_engine()
     }
 
     fn clear(&mut self) {
-        unimplemented!()
+        self.disk_write_batch.clear();
+        self.cache_write_batch.clear()
     }
 
     fn set_save_point(&mut self) {
-        unimplemented!()
+        self.disk_write_batch.set_save_point();
+        self.cache_write_batch.set_save_point()
     }
 
     fn pop_save_point(&mut self) -> Result<()> {
-        unimplemented!()
+        self.disk_write_batch.pop_save_point()?;
+        self.cache_write_batch.pop_save_point()
     }
 
     fn rollback_to_save_point(&mut self) -> Result<()> {
-        unimplemented!()
+        self.disk_write_batch.rollback_to_save_point()?;
+        self.cache_write_batch.rollback_to_save_point()
     }
 
-    fn merge(&mut self, _other: Self) -> Result<()> {
-        unimplemented!()
+    fn merge(&mut self, other: Self) -> Result<()> {
+        self.disk_write_batch.merge(other.disk_write_batch)?;
+        self.cache_write_batch.merge(other.cache_write_batch)
     }
 }
 
 impl<EK: KvEngine> Mutable for HybridEngineWriteBatch<EK> {
-    fn put(&mut self, _key: &[u8], _value: &[u8]) -> Result<()> {
-        unimplemented!()
+    fn put(&mut self, key: &[u8], value: &[u8]) -> Result<()> {
+        self.disk_write_batch.put(key, value)?;
+        self.cache_write_batch.put(key, value)
     }
 
-    fn put_cf(&mut self, _cf: &str, _key: &[u8], _value: &[u8]) -> Result<()> {
-        unimplemented!()
+    fn put_cf(&mut self, cf: &str, key: &[u8], value: &[u8]) -> Result<()> {
+        self.disk_write_batch.put_cf(cf, key, value)?;
+        self.cache_write_batch.put_cf(cf, key, value)
     }
 
-    fn delete(&mut self, _key: &[u8]) -> Result<()> {
-        unimplemented!()
+    fn delete(&mut self, key: &[u8]) -> Result<()> {
+        self.disk_write_batch.delete(key)?;
+        self.cache_write_batch.delete(key)
     }
 
-    fn delete_cf(&mut self, _cf: &str, _key: &[u8]) -> Result<()> {
-        unimplemented!()
+    fn delete_cf(&mut self, cf: &str, key: &[u8]) -> Result<()> {
+        self.disk_write_batch.delete_cf(cf, key)?;
+        self.cache_write_batch.delete_cf(cf, key)
     }
 
-    fn delete_range(&mut self, _begin_key: &[u8], _end_key: &[u8]) -> Result<()> {
-        unimplemented!()
+    fn delete_range(&mut self, begin_key: &[u8], end_key: &[u8]) -> Result<()> {
+        self.disk_write_batch.delete_range(begin_key, end_key)
     }
 
-    fn delete_range_cf(&mut self, _cf: &str, _begin_key: &[u8], _end_key: &[u8]) -> Result<()> {
-        unimplemented!()
+    fn delete_range_cf(&mut self, cf: &str, begin_key: &[u8], end_key: &[u8]) -> Result<()> {
+        self.disk_write_batch
+            .delete_range_cf(cf, begin_key, end_key)
     }
 }
 
