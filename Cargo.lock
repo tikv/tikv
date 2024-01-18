@@ -516,6 +516,7 @@ dependencies = [
  "security",
  "slog",
  "slog-global",
+ "tempdir",
  "tempfile",
  "test_pd",
  "test_pd_client",

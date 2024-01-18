@@ -209,7 +209,7 @@ impl SubscriptionTracer {
         handle: ObserveHandle,
         start_ts: Option<TimeStamp>,
     ) {
-        info!("start listen stream from store"; "observer" => ?handle);
+        info!("start listen stream from store"; "observer" => ?handle, utils::slog_region(region));
         TRACK_REGION.inc();
         let e = self.0.entry(region.id);
         match e {

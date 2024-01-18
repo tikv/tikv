@@ -543,8 +543,10 @@ where
             return;
         }
         let tx = tx.unwrap();
+        // tikv_util::Instant cannot be converted to std::time::Instant :(
+        let start = std::time::Instant::now();
         let scheduled = async move {
-            tokio::time::sleep(backoff).await;
+            tokio::time::sleep_until((start + backoff).into()).await;
             let handle = handle.unwrap_or_else(|| ObserveHandle::new());
             if let Err(err) = tx.send(ObserveOp::Start { region, handle }).await {
                 warn!("log backup failed to schedule start observe."; "err" => %err);
@@ -829,7 +831,7 @@ mod test {
         RegionInfo,
     };
     use tikv::{config::BackupStreamConfig, storage::Statistics};
-    use tikv_util::{memory::MemoryQuota, worker::dummy_scheduler};
+    use tikv_util::{info, memory::MemoryQuota, worker::dummy_scheduler};
     use tokio::{sync::mpsc::Sender, task::JoinHandle};
     use txn_types::TimeStamp;
 
@@ -1162,12 +1164,13 @@ mod test {
         }
 
         #[track_caller]
-        fn wait_initial_scan_all_finish(&self) {
+        fn wait_initial_scan_all_finish(&self, expected_region: usize) {
+            info!("[TEST] Start waiting initial scanning finish.");
             self.rt.block_on(async move {
                 let max_wait = Duration::from_secs(1);
                 let start = Instant::now();
                 loop {
-                    let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+                    let (tx, rx) = tokio::sync::oneshot::channel();
                     if start.elapsed() > max_wait {
                         panic!(
                             "wait initial scan takes too long! events = {:?}",
@@ -1179,21 +1182,22 @@ mod test {
                         .unwrap()
                         .send(ObserveOp::ResolveRegions {
                             callback: Box::new(move |result| {
-                                if result.items.iter().all(|r| {
+                                let no_initial_scan = result.items.iter().all(|r| {
                                     r.checkpoint_type != CheckpointType::StartTsOfInitialScan
-                                }) {
-                                    tx.try_send(true).unwrap();
-                                } else {
-                                    tx.try_send(false).unwrap();
-                                }
+                                });
+                                let all_region_done = result.items.len() == expected_region;
+                                tx.send(no_initial_scan && all_region_done).unwrap()
                             }),
                             min_ts: self.task_start_ts.next(),
                         })
                         .await
                         .unwrap();
-                    if rx.recv().await.unwrap() {
+                    if rx.await.unwrap() {
+                        info!("[TEST] Finish waiting initial scanning finish.");
                         return;
                     }
+                    // Advance the global timer in case of someone is waiting for timer.
+                    tokio::time::advance(Duration::from_secs(16)).await;
                 }
             })
         }
@@ -1206,6 +1210,7 @@ mod test {
 
     #[test]
     fn test_basic_retry() {
+        test_util::init_log_for_test();
         use ObserveEvent::*;
         let failed = Arc::new(AtomicBool::new(false));
         let mut suite = Suite::new(FuncInitialScan(move |r, _, _| {
@@ -1219,8 +1224,7 @@ mod test {
         tokio::time::pause();
         suite.start_region(suite.region(1, 1, 1, b"a", b"b"));
         suite.start_region(suite.region(2, 1, 1, b"b", b"c"));
-        suite.advance_ms(32000);
-        suite.wait_initial_scan_all_finish();
+        suite.wait_initial_scan_all_finish(2);
         suite.wait_shutdown();
         assert_eq!(
             &*suite.events.lock().unwrap(),
@@ -1228,8 +1232,8 @@ mod test {
                 Start(1),
                 Start(2),
                 StartResult(1, false),
-                Start(1),
                 StartResult(2, true),
+                Start(1),
                 StartResult(1, true)
             ]
         );
@@ -1246,7 +1250,7 @@ mod test {
         let mut rs = suite.subs.current_regions();
         rs.sort();
         assert_eq!(rs, [1, 2]);
-        suite.wait_initial_scan_all_finish();
+        suite.wait_initial_scan_all_finish(2);
         suite.run(ObserveOp::HighMemUsageWarning {
             inconsistent_region_id: 1,
         });
@@ -1255,7 +1259,7 @@ mod test {
         suite.advance_ms(
             (OOM_BACKOFF_BASE + Duration::from_secs(OOM_BACKOFF_JITTER_SECS + 1)).as_millis() as _,
         );
-        suite.wait_initial_scan_all_finish();
+        suite.wait_initial_scan_all_finish(2);
         suite.wait_shutdown();
         let mut rs = suite.subs.current_regions();
         rs.sort();
