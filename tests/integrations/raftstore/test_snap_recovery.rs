@@ -2,11 +2,15 @@
 
 use std::time::Duration;
 
-use futures::StreamExt;
+use futures::{executor::block_on, StreamExt};
 use raft::eraftpb::MessageType;
-use raftstore::store::{PeerMsg, SignificantMsg, SnapshotRecoveryWaitApplySyncer};
+use raftstore::store::{
+    snapshot_backup::{SnapshotBrWaitApplyRequest, SyncReport},
+    PeerMsg, SignificantMsg, SnapshotBrWaitApplySyncer,
+};
 use test_raftstore::*;
-use tikv_util::HandyRwLock;
+use tikv_util::{future::block_on_timeout, HandyRwLock};
+use tokio::sync::oneshot;
 
 #[test]
 fn test_check_pending_admin() {
@@ -33,7 +37,7 @@ fn test_check_pending_admin() {
 
     // make a admin request to let leader has pending conf change.
     let leader = new_peer(1, 4);
-    cluster.async_add_peer(1, leader).unwrap();
+    let _ = cluster.async_add_peer(1, leader).unwrap();
 
     std::thread::sleep(Duration::from_millis(800));
 
@@ -89,22 +93,22 @@ fn test_snap_wait_apply() {
     ));
 
     // make a async put request to let leader has inflight raft log.
-    cluster.async_put(b"k2", b"v2").unwrap();
+    let _ = cluster.async_put(b"k2", b"v2").unwrap();
     std::thread::sleep(Duration::from_millis(800));
 
     let router = cluster.sim.wl().get_router(1).unwrap();
 
-    let (tx, rx) = std::sync::mpsc::sync_channel(1);
-
+    let (tx, rx) = oneshot::channel();
+    let syncer = SnapshotBrWaitApplySyncer::new(1, tx);
     router.broadcast_normal(|| {
-        PeerMsg::SignificantMsg(SignificantMsg::SnapshotRecoveryWaitApply(
-            SnapshotRecoveryWaitApplySyncer::new(1, tx.clone()),
+        PeerMsg::SignificantMsg(SignificantMsg::SnapshotBrWaitApply(
+            SnapshotBrWaitApplyRequest::relaxed(syncer.clone()),
         ))
     });
 
     // we expect recv timeout because the leader peer on store 1 cannot finished the
     // apply. so the wait apply will timeout.
-    rx.recv_timeout(Duration::from_secs(1)).unwrap_err();
+    block_on_timeout(rx, Duration::from_secs(1)).unwrap_err();
 
     // clear filter so we can make wait apply finished.
     cluster.clear_send_filters();
@@ -112,13 +116,21 @@ fn test_snap_wait_apply() {
 
     // after clear the filter the leader peer on store 1 can finsihed the wait
     // apply.
-    let (tx, rx) = std::sync::mpsc::sync_channel(1);
+    let (tx, rx) = oneshot::channel();
+    let syncer = SnapshotBrWaitApplySyncer::new(1, tx);
     router.broadcast_normal(|| {
-        PeerMsg::SignificantMsg(SignificantMsg::SnapshotRecoveryWaitApply(
-            SnapshotRecoveryWaitApplySyncer::new(1, tx.clone()),
+        PeerMsg::SignificantMsg(SignificantMsg::SnapshotBrWaitApply(
+            SnapshotBrWaitApplyRequest::relaxed(syncer.clone()),
         ))
     });
+    drop(syncer);
 
     // we expect recv the region id from rx.
-    assert_eq!(rx.recv(), Ok(1));
+    assert_eq!(
+        block_on(rx),
+        Ok(SyncReport {
+            report_id: 1,
+            aborted: None
+        })
+    );
 }

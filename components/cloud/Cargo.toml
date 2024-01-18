@@ -3,6 +3,7 @@ name = "cloud"
 version = "0.0.1"
 edition = "2021"
 publish = false
+license = "Apache-2.0"
 
 [dependencies]
 async-trait = "0.1"

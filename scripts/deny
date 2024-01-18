@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+cargo install cargo-deny 2> /dev/null || echo "Install cargo-deny failed"
+cargo deny fetch all
+cargo deny check --show-stats

@@ -42,6 +42,8 @@ use tokio::{
     sync::{oneshot, Semaphore},
 };
 use tokio_stream::StreamExt;
+use tracing::instrument;
+use tracing_active_tree::root;
 use txn_types::TimeStamp;
 
 use super::metrics::HANDLE_EVENT_DURATION_HISTOGRAM;
@@ -131,14 +133,14 @@ where
         let meta_client_clone = meta_client.clone();
         let scheduler_clone = scheduler.clone();
         // TODO build a error handle mechanism #error 2
-        pool.spawn(async {
+        pool.spawn(root!("flush_ticker"; Self::starts_flush_ticks(range_router.clone())));
+        pool.spawn(root!("start_watch_tasks"; async {
             if let Err(err) = Self::start_and_watch_tasks(meta_client_clone, scheduler_clone).await
             {
                 err.report("failed to start watch tasks");
             }
-        });
-
-        pool.spawn(Self::starts_flush_ticks(range_router.clone()));
+            info!("started task watcher!");
+        }));
 
         let initial_scan_memory_quota = Arc::new(MemoryQuota::new(
             config.initial_scan_pending_memory_quota.0 as _,
@@ -173,9 +175,9 @@ where
             ((config.num_threads + 1) / 2).max(1),
             resolver,
         );
-        pool.spawn(op_loop);
+        pool.spawn(root!(op_loop));
         let mut checkpoint_mgr = CheckpointManager::default();
-        pool.spawn(checkpoint_mgr.spawn_subscription_mgr());
+        pool.spawn(root!(checkpoint_mgr.spawn_subscription_mgr()));
         let ep = Endpoint {
             initial_scan_semaphore,
             meta_client,
@@ -195,7 +197,7 @@ where
             checkpoint_mgr,
             abort_last_storage_save: None,
         };
-        ep.pool.spawn(ep.min_ts_worker());
+        ep.pool.spawn(root!(ep.min_ts_worker()));
         ep
     }
 }
@@ -221,28 +223,28 @@ where
         let safepoint_ttl = self.pause_guard_duration();
         let code = err.error_code().code.to_owned();
         let msg = err.to_string();
-        let task = task.to_owned();
-        async move {
+        let t = task.to_owned();
+        let f = async move {
             let err_fut = async {
-                let safepoint = meta_cli.global_progress_of_task(&task).await?;
+                let safepoint = meta_cli.global_progress_of_task(&t).await?;
                 pdc.update_service_safe_point(
                     safepoint_name,
                     TimeStamp::new(safepoint.saturating_sub(1)),
                     safepoint_ttl,
                 )
                 .await?;
-                meta_cli.pause(&task).await?;
+                meta_cli.pause(&t).await?;
                 let mut last_error = StreamBackupError::new();
                 last_error.set_error_code(code);
                 last_error.set_error_message(msg.clone());
                 last_error.set_store_id(store_id);
                 last_error.set_happen_at(TimeStamp::physical_now());
-                meta_cli.report_last_error(&task, last_error).await?;
+                meta_cli.report_last_error(&t, last_error).await?;
                 Result::Ok(())
             };
             if let Err(err_report) = err_fut.await {
                 err_report.report(format_args!("failed to upload error {}", err_report));
-                let name = task.to_owned();
+                let name = t.to_owned();
                 // Let's retry reporting after 5s.
                 tokio::task::spawn(async move {
                     tokio::time::sleep(Duration::from_secs(5)).await;
@@ -255,7 +257,8 @@ where
                     );
                 });
             }
-        }
+        };
+        tracing_active_tree::frame!("on_fatal_error_of_task"; f; %err, %task)
     }
 
     fn on_fatal_error(&self, select: TaskSelector, err: Box<Error>) {
@@ -283,6 +286,7 @@ where
     }
 
     // TODO find a proper way to exit watch tasks
+    #[instrument(skip_all)]
     async fn start_and_watch_tasks(
         meta_client: MetadataClient<S>,
         scheduler: Scheduler<Task>,
@@ -318,19 +322,19 @@ where
         let meta_client_clone = meta_client.clone();
         let scheduler_clone = scheduler.clone();
 
-        Handle::current().spawn(async move {
+        Handle::current().spawn(root!("task_watcher"; async move {
             if let Err(err) =
                 Self::starts_watch_task(meta_client_clone, scheduler_clone, revision).await
             {
                 err.report("failed to start watch tasks");
             }
-        });
+        }));
 
-        Handle::current().spawn(async move {
+        Handle::current().spawn(root!("pause_watcher"; async move {
             if let Err(err) = Self::starts_watch_pause(meta_client, scheduler, revision).await {
                 err.report("failed to start watch pause");
             }
-        });
+        }));
 
         Ok(())
     }
@@ -478,7 +482,14 @@ where
         let router = self.range_router.clone();
         let sched = self.scheduler.clone();
         let subs = self.subs.clone();
-        self.pool.spawn(async move {
+        let region = batch.region_id;
+        let from_idx = batch.cmds.first().map(|c| c.index).unwrap_or(0);
+        let (to_idx, term) = batch
+            .cmds
+            .last()
+            .map(|c| (c.index, c.term))
+            .unwrap_or((0, 0));
+        self.pool.spawn(root!("backup_batch"; async move {
             let region_id = batch.region_id;
             let kvs = Self::record_batch(subs, batch);
             if kvs.as_ref().map(|x| x.is_empty()).unwrap_or(true) {
@@ -504,7 +515,7 @@ where
                 .with_label_values(&["save_to_temp_file"])
                 .observe(time_cost);
             drop(work)
-        });
+        }; from_idx, to_idx, region, current_term = term));
     }
 
     pub fn handle_watch_task(&self, op: TaskOp) {
@@ -626,7 +637,7 @@ where
 
         let task_name = task.info.get_name().to_owned();
         // clean the safepoint created at pause(if there is)
-        self.pool.spawn(
+        self.pool.spawn(root!("load_initial_task";
             self.pd_client
                 .update_service_safe_point(
                     self.pause_guard_id_for_task(task.info.get_name()),
@@ -635,8 +646,8 @@ where
                 )
                 .map(|r| {
                     r.map_err(|err| Error::from(err).report("removing safe point for pausing"))
-                }),
-        );
+                })
+        ));
         self.pool.block_on(async move {
             let task_clone = task.clone();
             let run = async move {
@@ -703,12 +714,12 @@ where
             Err(err) => {
                 err.report(format!("failed to resume backup stream task {}", task_name));
                 let sched = self.scheduler.clone();
-                tokio::task::spawn(async move {
+                tokio::task::spawn(root!("retry_resume"; async move {
                     tokio::time::sleep(Duration::from_secs(5)).await;
                     sched
                         .schedule(Task::WatchTask(TaskOp::ResumeTask(task_name)))
                         .unwrap();
-                });
+                }));
             }
         }
     }
@@ -822,11 +833,12 @@ where
     }
 
     fn on_flush_with_min_ts(&self, task: String, min_ts: TimeStamp) {
-        self.pool.spawn(self.do_flush(task, min_ts).map(|r| {
-            if let Err(err) = r {
-                err.report("during updating flush status")
-            }
-        }));
+        self.pool
+            .spawn(root!("flush"; self.do_flush(task, min_ts).map(|r| {
+                if let Err(err) = r {
+                    err.report("during updating flush status")
+                }
+            }); min_ts = min_ts.into_inner()));
     }
 
     fn update_global_checkpoint(&self, task: String) -> future![()] {
@@ -891,7 +903,7 @@ where
             handle.abort();
         }
         let (fut, handle) = futures::future::abortable(self.update_global_checkpoint(task));
-        self.pool.spawn(fut);
+        self.pool.spawn(root!("update_global_checkpoint"; fut));
         self.abort_last_storage_save = Some(handle);
     }
 
@@ -903,7 +915,7 @@ where
              "config" => ?cfg,
              "concurrency_diff" => concurrency_diff,
         );
-        self.range_router.udpate_config(&cfg);
+        self.range_router.update_config(&cfg);
         self.update_semaphore_capacity(&self.initial_scan_semaphore, concurrency_diff);
 
         self.config = cfg;
@@ -919,12 +931,12 @@ where
         use std::cmp::Ordering::*;
         match diff.cmp(&0) {
             Less => {
-                self.pool.spawn(
+                self.pool.spawn(root!(
                     Arc::clone(sema)
                     .acquire_many_owned(-diff as _)
                     // It is OK to trivially ignore the Error case (semaphore has been closed, we are shutting down the server.)
-                    .map_ok(|p| p.forget()),
-                );
+                    .map_ok(|p| p.forget())
+                ));
             }
             Equal => {}
             Greater => {
@@ -956,10 +968,10 @@ where
                     cb()
                 } else {
                     let sched = self.scheduler.clone();
-                    self.pool.spawn(async move {
+                    self.pool.spawn(root!(async move {
                         tokio::time::sleep(Duration::from_millis(500)).await;
                         sched.schedule(Task::Sync(cb, cond)).unwrap();
-                    });
+                    }));
                 }
             }
             Task::MarkFailover(t) => self.failover_time = Some(t),
@@ -1015,11 +1027,11 @@ where
             }
             RegionCheckpointOperation::Subscribe(sub) => {
                 let fut = self.checkpoint_mgr.add_subscriber(sub);
-                self.pool.spawn(async move {
+                self.pool.spawn(root!(async move {
                     if let Err(err) = fut.await {
                         err.report("adding subscription");
                     }
-                });
+                }));
             }
             RegionCheckpointOperation::PrepareMinTsForResolve => {
                 if self.observer.is_hibernating() {
@@ -1039,6 +1051,7 @@ where
                     })
                 );
             }
+            #[allow(clippy::blocks_in_conditions)]
             RegionCheckpointOperation::Resolve { min_ts, start_time } => {
                 let sched = self.scheduler.clone();
                 try_send!(

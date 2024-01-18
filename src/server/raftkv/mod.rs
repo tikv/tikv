@@ -581,7 +581,9 @@ where
             tx.notify(res);
         }
         rx.inspect(move |ev| {
-            let WriteEvent::Finished(res) = ev else { return };
+            let WriteEvent::Finished(res) = ev else {
+                return;
+            };
             match res {
                 Ok(()) => {
                     ASYNC_REQUESTS_COUNTER_VEC.write.success.inc();
@@ -646,7 +648,7 @@ where
 
         let snap_ctx = ctx.start_ts.map(|ts| SnapshotContext {
             read_ts: ts.into_inner(),
-            region_id: ctx.pb_ctx.get_region_id(),
+            range: None,
         });
 
         if res.is_ok() {
@@ -667,7 +669,7 @@ where
             match res {
                 Ok(CmdRes::Resp(mut r)) => {
                     let e = if r
-                        .get(0)
+                        .first()
                         .map(|resp| resp.get_read_index().has_locked())
                         .unwrap_or(false)
                     {

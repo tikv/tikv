@@ -480,7 +480,7 @@ mod tests {
         fn new() -> TableScanTestHelper {
             const TABLE_ID: i64 = 7;
             // [(row_id, columns)] where each column: (column id, datum)
-            let data = vec![
+            let data = [
                 (
                     1,
                     vec![

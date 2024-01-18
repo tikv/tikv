@@ -1,7 +1,7 @@
 // Copyright 2023 TiKV Project Authors. Licensed under Apache-2.0.
 
 use engine_traits::{
-    KvEngine, RegionCacheEngine, Result, SstCompressionType, SstExt, SstWriterBuilder,
+    KvEngine, RangeCacheEngine, Result, SstCompressionType, SstExt, SstWriterBuilder,
 };
 
 use crate::engine::HybridEngine;
@@ -11,7 +11,7 @@ pub struct HybridEngineSstWriteBuilder {}
 impl<EK, EC> SstExt for HybridEngine<EK, EC>
 where
     EK: KvEngine,
-    EC: RegionCacheEngine,
+    EC: RangeCacheEngine,
 {
     type SstReader = EK::SstReader;
     type SstWriter = EK::SstWriter;
@@ -21,7 +21,7 @@ where
 impl<EK, EC> SstWriterBuilder<HybridEngine<EK, EC>> for HybridEngineSstWriteBuilder
 where
     EK: KvEngine,
-    EC: RegionCacheEngine,
+    EC: RangeCacheEngine,
 {
     fn new() -> Self {
         unimplemented!()

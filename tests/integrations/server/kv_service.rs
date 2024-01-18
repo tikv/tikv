@@ -2922,3 +2922,117 @@ fn test_mvcc_scan_memory_and_cf_locks() {
     assert!(!scan_lock_resp.has_region_error());
     assert_eq!(scan_lock_resp.locks.len(), 0);
 }
+
+#[test_case(test_raftstore::must_new_and_configure_cluster)]
+#[test_case(test_raftstore_v2::must_new_and_configure_cluster)]
+fn test_pessimistic_rollback_with_read_first() {
+    for enable_in_memory_lock in [true, false] {
+        let (cluster, leader, ctx) = new_cluster(|cluster| {
+            cluster.cfg.pessimistic_txn.pipelined = enable_in_memory_lock;
+            cluster.cfg.pessimistic_txn.in_memory = enable_in_memory_lock;
+
+            // Disable region split.
+            const MAX_REGION_SIZE: u64 = 1024;
+            const MAX_SPLIT_KEY: u64 = 1 << 31;
+            cluster.cfg.coprocessor.region_max_size = Some(ReadableSize::gb(MAX_REGION_SIZE));
+            cluster.cfg.coprocessor.region_split_size = Some(ReadableSize::gb(MAX_REGION_SIZE));
+            cluster.cfg.coprocessor.region_max_keys = Some(MAX_SPLIT_KEY);
+            cluster.cfg.coprocessor.region_split_keys = Some(MAX_SPLIT_KEY);
+        });
+        let env = Arc::new(Environment::new(1));
+        let leader_store_id = leader.get_store_id();
+        let channel = ChannelBuilder::new(env).connect(&cluster.sim.rl().get_addr(leader_store_id));
+        let client = TikvClient::new(channel);
+
+        let format_key = |prefix: char, i: usize| format!("{}{:04}", prefix, i).as_bytes().to_vec();
+        let (k1, k2, k3) = (format_key('k', 1), format_key('k', 2), format_key('k', 3));
+
+        // Basic case, two keys could be rolled back within one pessimistic rollback
+        // request.
+        let start_ts = 10;
+        must_kv_pessimistic_lock(&client, ctx.clone(), k1.clone(), start_ts);
+        must_kv_pessimistic_lock(&client, ctx.clone(), k2, start_ts);
+        must_lock_cnt(
+            &client,
+            ctx.clone(),
+            start_ts + 10,
+            k1.as_slice(),
+            k3.as_slice(),
+            Op::PessimisticLock,
+            2,
+            100,
+        );
+        must_kv_pessimistic_rollback_with_scan_first(&client, ctx.clone(), start_ts, start_ts);
+        must_lock_cnt(
+            &client,
+            ctx.clone(),
+            start_ts + 10,
+            k1.as_slice(),
+            k3.as_slice(),
+            Op::PessimisticLock,
+            0,
+            100,
+        );
+
+        // Acquire pessimistic locks for more than 256(RESOLVE_LOCK_BATCH_SIZE) keys.
+        let start_ts = 11;
+        let num_keys = 1000;
+        let prewrite_primary_key = format_key('k', 1);
+        let val = b"value";
+        for i in 0..num_keys {
+            let key = format_key('k', i);
+            if i % 2 == 0 {
+                must_kv_pessimistic_lock(&client, ctx.clone(), key, start_ts);
+            } else {
+                let mut mutation = Mutation::default();
+                mutation.set_op(Op::Put);
+                mutation.set_key(key);
+                mutation.set_value(val.to_vec());
+                must_kv_prewrite(
+                    &client,
+                    ctx.clone(),
+                    vec![mutation],
+                    prewrite_primary_key.clone(),
+                    start_ts,
+                );
+            }
+        }
+
+        // Pessimistic roll back one key.
+        must_kv_pessimistic_rollback(&client, ctx.clone(), format_key('k', 0), start_ts, start_ts);
+        must_lock_cnt(
+            &client,
+            ctx.clone(),
+            start_ts + 10,
+            format_key('k', 0).as_slice(),
+            format_key('k', num_keys + 1).as_slice(),
+            Op::PessimisticLock,
+            num_keys / 2 - 1,
+            0,
+        );
+
+        // All the pessimistic locks belonging to the same transaction are pessimistic
+        // rolled back within one request.
+        must_kv_pessimistic_rollback_with_scan_first(&client, ctx.clone(), start_ts, start_ts);
+        must_lock_cnt(
+            &client,
+            ctx.clone(),
+            start_ts + 10,
+            format_key('k', 0).as_slice(),
+            format_key('k', num_keys + 1).as_slice(),
+            Op::PessimisticLock,
+            0,
+            0,
+        );
+        must_lock_cnt(
+            &client,
+            ctx,
+            start_ts + 10,
+            format_key('k', 0).as_slice(),
+            format_key('k', num_keys + 1).as_slice(),
+            Op::Put,
+            num_keys / 2,
+            0,
+        );
+    }
+}
