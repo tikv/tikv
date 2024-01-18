@@ -166,3 +166,22 @@ pub extern "C" fn ffi_handle_link_file(
         )
     }
 }
+
+// The CloudStorageEngineFFI contains dummy implementation of
+// CloudStorageEngine-specific FFI, not used, just for tiflash compilation.
+pub struct CloudStorageEngineFFI {}
+
+impl CloudStorageEngineFFI {
+    // always return false
+    pub extern "C" fn ffi_get_keyspace_encryption(
+        _proxy_ptr: RaftStoreProxyPtr,
+        _keyspace_id: u32,
+    ) -> bool {
+        false
+    }
+
+    // always return empty string
+    pub extern "C" fn ffi_get_master_key(_proxy_ptr: RaftStoreProxyPtr) -> RawCppStringPtr {
+        get_engine_store_server_helper().gen_cpp_string(b"")
+    }
+}

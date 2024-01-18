@@ -206,6 +206,11 @@ struct SSTReaderInterfaces {
   RustStrWithViewVec (*fn_get_split_keys)(SSTReaderPtr, uint64_t splits_count);
 };
 
+struct CloudStorageEngineInterfaces {
+  bool (*fn_get_keyspace_encryption)(RaftStoreProxyPtr, uint32_t);
+  RawCppStringPtr (*fn_get_master_key)(RaftStoreProxyPtr);
+};
+
 enum class MsgPBType : uint32_t {
   ReadIndexResponse = 0,
   ServerInfoResponse,
@@ -264,6 +269,7 @@ struct RaftStoreProxyFFIHelper {
       void (*fn_insert_batch_read_index_resp)(RawVoidPtr, BaseBuffView,
                                               uint64_t));  // To remove
   SSTReaderInterfaces sst_reader_interfaces;
+  CloudStorageEngineInterfaces cloud_storage_engine_interfaces;
 
   uint32_t (*fn_server_info)(RaftStoreProxyPtr, BaseBuffView, RawVoidPtr);
   RawRustPtr (*fn_make_read_index_task)(RaftStoreProxyPtr, BaseBuffView);
