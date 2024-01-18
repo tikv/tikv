@@ -7,9 +7,9 @@ use std::{path::Path, process};
 use clap::{crate_authors, App, Arg};
 use crypto::fips;
 use serde_json::{Map, Value};
-use server::setup::{ensure_no_unrecognized_config, validate_and_persist_config};
+use server::setup::ensure_no_unrecognized_config;
 use tikv::{
-    config::{to_flatten_config_info, TikvConfig},
+    config::{to_flatten_config_info, validate_and_persist_config, TikvConfig},
     storage::config::EngineType,
 };
 
@@ -197,7 +197,9 @@ fn main() {
     config.logger_compatible_adjust();
 
     if is_config_check {
-        validate_and_persist_config(&mut config, false);
+        if let Err(e) = validate_and_persist_config(&mut config, false) {
+            fatal!("failed to validate config: {}", e);
+        }
         ensure_no_unrecognized_config(&unrecognized_keys);
         println!("config check successful");
         process::exit(0)
