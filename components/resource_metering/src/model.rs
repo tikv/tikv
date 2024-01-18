@@ -16,7 +16,7 @@ use tikv_util::warn;
 use crate::TagInfos;
 
 thread_local! {
-    static STATIC_BUF: Cell<Vec<u32>> = Cell::new(vec![]);
+    static STATIC_BUF: Cell<Vec<u32>> = const {Cell::new(vec![])};
 }
 
 /// Raw resource statistics record.

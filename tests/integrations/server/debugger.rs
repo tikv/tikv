@@ -41,7 +41,7 @@ fn gen_delete_k(k: &[u8], commit_ts: TimeStamp) -> Vec<u8> {
 fn test_compact() {
     let (split_key, _) = gen_mvcc_put_kv(b"k10", b"", 1.into(), 2.into());
     let (split_key2, _) = gen_mvcc_put_kv(b"k20", b"", 1.into(), 2.into());
-    let regions = vec![
+    let regions = [
         (1, b"".to_vec(), split_key.clone()),
         (1000, split_key.clone(), split_key2.clone()),
         (1002, split_key2.clone(), b"".to_vec()),
