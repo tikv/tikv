@@ -226,8 +226,8 @@ impl BucketStatsInfo {
     }
 
     #[inline]
-    pub fn bucket_stat(&self) -> &Option<BucketStat> {
-        &self.bucket_stat
+    pub fn bucket_stat(&self) -> Option<&BucketStat> {
+        self.bucket_stat.as_ref()
     }
 
     #[inline]
@@ -1018,7 +1018,7 @@ mod tests {
     #[test]
     pub fn test_report_buckets() {
         let mut bucket_stats_info = mock_bucket_stats_info();
-        let bucket_stats = bucket_stats_info.bucket_stat().as_ref().unwrap();
+        let bucket_stats = bucket_stats_info.bucket_stat().unwrap();
         let mut delta_bucket_stats = bucket_stats.clone();
         delta_bucket_stats.write_key(&[1], 1);
         delta_bucket_stats.write_key(&[201], 1);
@@ -1040,7 +1040,7 @@ mod tests {
         region.set_id(1);
         let cfg = Config::default();
         let bucket_size = cfg.region_bucket_size.0;
-        let bucket_stats = bucket_stats_info.bucket_stat().as_ref().unwrap();
+        let bucket_stats = bucket_stats_info.bucket_stat().unwrap();
         let region_epoch = bucket_stats.meta.region_epoch.clone();
 
         // step1: update buckets flow
@@ -1048,7 +1048,7 @@ mod tests {
         delta_bucket_stats.write_key(&[1], 1);
         delta_bucket_stats.write_key(&[201], 1);
         bucket_stats_info.add_bucket_flow(&Some(delta_bucket_stats));
-        let bucket_stats = bucket_stats_info.bucket_stat().as_ref().unwrap();
+        let bucket_stats = bucket_stats_info.bucket_stat().unwrap();
         assert_eq!(vec![2, 0, 2], bucket_stats.stats.write_bytes);
 
         // step2: tick not affect anything
@@ -1062,7 +1062,7 @@ mod tests {
             &region,
             bucket_ranges,
         );
-        let bucket_stats = bucket_stats_info.bucket_stat().as_ref().unwrap();
+        let bucket_stats = bucket_stats_info.bucket_stat().unwrap();
         assert!(!change_bucket_version);
         assert_eq!(vec![2, 0, 2], bucket_stats.stats.write_bytes);
 
@@ -1081,7 +1081,7 @@ mod tests {
             bucket_ranges.clone(),
         );
         assert!(change_bucket_version);
-        let bucket_stats = bucket_stats_info.bucket_stat().as_ref().unwrap();
+        let bucket_stats = bucket_stats_info.bucket_stat().unwrap();
         assert_eq!(
             vec![vec![], vec![50], vec![100], vec![200], vec![]],
             bucket_stats.meta.keys
@@ -1108,7 +1108,7 @@ mod tests {
         );
         assert!(change_bucket_version);
 
-        let bucket_stats = bucket_stats_info.bucket_stat().as_ref().unwrap();
+        let bucket_stats = bucket_stats_info.bucket_stat().unwrap();
         assert_eq!(
             vec![vec![], vec![100], vec![200], vec![]],
             bucket_stats.meta.keys

@@ -6091,7 +6091,6 @@ where
                         .peer
                         .region_buckets_info()
                         .bucket_stat()
-                        .as_ref()
                         .unwrap()
                         .meta
                         .clone(),
@@ -6120,7 +6119,6 @@ where
             .peer
             .region_buckets_info()
             .bucket_stat()
-            .as_ref()
             .unwrap()
             .clone();
         let buckets_count = region_buckets.meta.keys.len() - 1;
