@@ -3912,13 +3912,8 @@ impl TikvConfig {
                 } else {
                     Path::new(&self.rocksdb.titan.dirname).to_path_buf()
                 };
-                if let Err(_) =
-                    tikv_util::config::check_data_dir_empty(titandb_path.to_str().unwrap(), "blob")
-                {
-                    true
-                } else {
-                    false
-                }
+                tikv_util::config::check_data_dir_empty(titandb_path.to_str().unwrap(), "blob")
+                    .is_err()
             }
             EngineType::RaftKv2 => false,
         };
