@@ -412,7 +412,34 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         self.peer_heartbeats.remove(&peer_id);
     }
 
+<<<<<<< HEAD
     pub fn collect_down_peers(&self, max_duration: Duration) -> Vec<pdpb::PeerStats> {
+=======
+    #[inline]
+    pub fn get_peer_heartbeats(&self) -> &HashMap<u64, Instant> {
+        &self.peer_heartbeats
+    }
+
+    #[inline]
+    pub fn has_peer(&self, peer_id: u64) -> bool {
+        self.region()
+            .get_peers()
+            .iter()
+            .any(|p| p.get_id() == peer_id)
+    }
+
+    /// Returns whether or not the peer sent heartbeat after the provided
+    /// deadline time.
+    #[inline]
+    pub fn peer_heartbeat_is_fresh(&self, peer_id: u64, deadline: &Instant) -> bool {
+        matches!(
+            self.peer_heartbeats.get(&peer_id),
+            Some(last_heartbeat) if *last_heartbeat >= *deadline
+        )
+    }
+
+    pub fn collect_down_peers<T>(&mut self, ctx: &StoreContext<EK, ER, T>) -> Vec<pdpb::PeerStats> {
+>>>>>>> cf0560a5e2 (raftstore: check last heartbeat time before doing conf change remove node (#16174))
         let mut down_peers = Vec::new();
         let now = Instant::now();
         for p in self.region().get_peers() {
