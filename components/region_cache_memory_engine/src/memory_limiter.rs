@@ -3,7 +3,7 @@
 use std::sync::{Arc, Mutex};
 
 use collections::{HashMap, HashSet};
-use skiplist_rs::{MemoryLimiter, AllocationRecorder, Node};
+use skiplist_rs::{AllocationRecorder, MemoryLimiter, Node};
 
 // todo: implement a real memory limiter. Now, it is used for test.
 #[derive(Clone, Default)]
