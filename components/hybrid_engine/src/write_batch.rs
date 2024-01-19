@@ -1,16 +1,16 @@
 // Copyright 2023 TiKV Project Authors. Licensed under Apache-2.0.
 
 use engine_traits::{KvEngine, Mutable, Result, WriteBatch, WriteBatchExt, WriteOptions};
-use region_cache_memory_engine::{RegionCacheMemoryEngine, RegionCacheWriteBatch};
+use region_cache_memory_engine::{RangeCacheMemoryEngine, RangeCacheWriteBatch};
 
 use crate::engine::HybridEngine;
 
 pub struct HybridEngineWriteBatch<EK: KvEngine> {
     disk_write_batch: EK::WriteBatch,
-    cache_write_batch: RegionCacheWriteBatch,
+    cache_write_batch: RangeCacheWriteBatch,
 }
 
-impl<EK> WriteBatchExt for HybridEngine<EK, RegionCacheMemoryEngine>
+impl<EK> WriteBatchExt for HybridEngine<EK, RangeCacheMemoryEngine>
 where
     EK: KvEngine,
 {
@@ -124,9 +124,11 @@ impl<EK: KvEngine> Mutable for HybridEngineWriteBatch<EK> {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use engine_rocks::util::new_engine;
-    use engine_traits::{WriteBatchExt, CF_DEFAULT, CF_LOCK, CF_WRITE};
-    use region_cache_memory_engine::RegionCacheMemoryEngine;
+    use engine_traits::{CacheRange, WriteBatchExt, CF_DEFAULT, CF_LOCK, CF_WRITE};
+    use region_cache_memory_engine::RangeCacheMemoryEngine;
     use tempfile::Builder;
 
     use crate::HybridEngine;
@@ -139,16 +141,17 @@ mod tests {
             &[CF_DEFAULT, CF_LOCK, CF_WRITE],
         )
         .unwrap();
-        let memory_engine = RegionCacheMemoryEngine::default();
-        memory_engine.new_region(1);
+        let memory_engine = RangeCacheMemoryEngine::new(Arc::default());
+        let range = CacheRange::new(b"k00".to_vec(), b"k10".to_vec());
+        memory_engine.new_range(range.clone());
         {
             let mut core = memory_engine.core().lock().unwrap();
-            core.mut_region_meta(1).unwrap().set_can_read(true);
-            core.mut_region_meta(1).unwrap().set_safe_ts(10);
+            core.mut_range_manager().set_range_readable(&range, true);
+            core.mut_range_manager().set_safe_ts(&range, 10);
         }
 
         let hybrid_engine =
-            HybridEngine::<_, RegionCacheMemoryEngine>::new(disk_engine, memory_engine.clone());
+            HybridEngine::<_, RangeCacheMemoryEngine>::new(disk_engine, memory_engine.clone());
         let mut write_batch = hybrid_engine.write_batch();
         write_batch
             .cache_write_batch
