@@ -4344,7 +4344,7 @@ pub fn validate_and_persist_config(config: &mut TikvConfig, persist: bool) -> Re
     }
 
     if let Some(ref last_cfg) = last_cfg {
-        if let Err(e) = config.check_critical_cfg_with(&last_cfg) {
+        if let Err(e) = config.check_critical_cfg_with(last_cfg) {
             return Err(format!("critical config check failed: {}", e));
         }
     }
