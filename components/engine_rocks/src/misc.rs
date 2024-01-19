@@ -2,7 +2,7 @@
 
 use engine_traits::{
     CfNamesExt, DeleteStrategy, ImportExt, IterOptions, Iterable, Iterator, MiscExt, Mutable,
-    Range, Result, SstWriter, SstWriterBuilder, WriteBatch, WriteBatchExt, ALL_CFS, RangeStats,
+    Range, RangeStats, Result, SstWriter, SstWriterBuilder, WriteBatch, WriteBatchExt, ALL_CFS,
 };
 use rocksdb::Range as RocksRange;
 use tikv_util::{box_try, keybuilder::KeyBuilder};
