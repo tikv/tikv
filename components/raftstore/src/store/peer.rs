@@ -4915,7 +4915,12 @@ where
             &self.peer,
             changes.as_ref(),
             &cc,
+<<<<<<< HEAD
             self.is_force_leader(),
+=======
+            self.is_in_force_leader(),
+            &self.peer_heartbeats,
+>>>>>>> cf0560a5e2 (raftstore: check last heartbeat time before doing conf change remove node (#16174))
         )?;
 
         ctx.raft_metrics.propose.conf_change.inc();

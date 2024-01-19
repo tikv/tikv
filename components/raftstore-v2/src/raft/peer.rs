@@ -569,6 +569,22 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         self.peer_heartbeats.remove(&peer_id);
     }
 
+<<<<<<< HEAD
+=======
+    #[inline]
+    pub fn get_peer_heartbeats(&self) -> &HashMap<u64, Instant> {
+        &self.peer_heartbeats
+    }
+
+    #[inline]
+    pub fn has_peer(&self, peer_id: u64) -> bool {
+        self.region()
+            .get_peers()
+            .iter()
+            .any(|p| p.get_id() == peer_id)
+    }
+
+>>>>>>> cf0560a5e2 (raftstore: check last heartbeat time before doing conf change remove node (#16174))
     /// Returns whether or not the peer sent heartbeat after the provided
     /// deadline time.
     #[inline]
