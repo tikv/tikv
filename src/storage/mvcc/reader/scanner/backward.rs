@@ -467,6 +467,7 @@ impl<S: Snapshot> BackwardKvScanner<S> {
             }
         }
 
+        self.statistics.write.over_seek_bound += 1;
         // We have not found another user key for now, so we directly `seek_for_prev()`.
         // After that, we must pointing to another key, or out of bound.
         self.write_cursor
