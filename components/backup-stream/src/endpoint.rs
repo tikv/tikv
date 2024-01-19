@@ -495,7 +495,7 @@ where
             let kvs = Self::record_batch(subs, batch);
             let kvs = match kvs {
                 Err(Error::OutOfQuota { region_id }) => {
-                    region_op.send(ObserveOp::HighMemUsageWarning { inconsistent_region_id: region_id }).await
+                    region_op.send(ObserveOp::HighMemUsageWarning { region_id: region_id }).await
                         .map_err(|err| Error::Other(box_err!("failed to send, are we shutting down? {}", err)))
                         .report_if_err("");
                     return
@@ -635,7 +635,7 @@ where
 
     /// send an operation request to the manager.
     /// the returned future would be resolved after send is success.
-    /// the opeartion would be executed asynchronously.
+    /// the operation would be executed asynchronously.
     async fn region_op(&self, cmd: ObserveOp) {
         self.region_operator
             .send(cmd)
@@ -645,7 +645,7 @@ where
                     format!("cannot send to region operator, are we shutting down? ({err})").into(),
                 )
             })
-            .report_if_err("")
+            .report_if_err("send region cmd")
     }
 
     // register task ranges
@@ -1291,7 +1291,7 @@ pub enum ObserveOp {
         min_ts: TimeStamp,
     },
     HighMemUsageWarning {
-        inconsistent_region_id: u64,
+        region_id: u64,
     },
 }
 
@@ -1331,7 +1331,7 @@ impl std::fmt::Debug for ObserveOp {
                 .field("callback", &format_args!("fn {{ .. }}"))
                 .finish(),
             Self::HighMemUsageWarning {
-                inconsistent_region_id,
+                region_id: inconsistent_region_id,
             } => f
                 .debug_struct("HighMemUsageWarning")
                 .field("inconsistent_region", &inconsistent_region_id)

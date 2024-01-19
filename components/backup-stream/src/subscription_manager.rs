@@ -244,7 +244,7 @@ async fn scan_executor_loop(init: impl InitialScan, mut cmds: Receiver<ScanCmd>)
                         err
                     ))
                 })
-                .report_if_err("");
+                .report_if_err("exec initial scan");
             metrics::PENDING_INITIAL_SCAN_LEN
                 .with_label_values(&["executing"])
                 .dec();
@@ -452,9 +452,7 @@ where
                     }
                     callback(ResolvedRegions::new(rts, cps));
                 }
-                ObserveOp::HighMemUsageWarning {
-                    inconsistent_region_id,
-                } => {
+                ObserveOp::HighMemUsageWarning { region_id } => {
                     self.on_high_memory_usage(inconsistent_region_id).await;
                 }
             }
@@ -626,7 +624,7 @@ where
     }
 
     async fn start_observe(&self, region: Region, handle: ObserveHandle) {
-        match self.check_not_stale(&region, &handle).await {
+        match self.request_is_available(&region, &handle).await {
             Ok(false) => {
                 warn!("stale start observe command."; utils::slog_region(&region), "handle" => ?handle);
                 return;
@@ -653,7 +651,7 @@ where
     }
 
     #[instrument(skip_all)]
-    async fn check_not_stale(&self, region: &Region, handle: &ObserveHandle) -> Result<bool> {
+    async fn is_available(&self, region: &Region, handle: &ObserveHandle) -> Result<bool> {
         let (tx, rx) = tokio::sync::oneshot::channel();
         self.regions
             .find_region_by_id(
@@ -729,7 +727,7 @@ where
             ));
         }
 
-        let should_retry = self.check_not_stale(&region, &handle).await?;
+        let should_retry = self.request_is_available(&region, &handle).await?;
         if !should_retry {
             return Ok(false);
         }
@@ -981,7 +979,7 @@ mod test {
                     Some(Self::StartResult(region.id, err.is_none()))
                 }
                 ObserveOp::HighMemUsageWarning {
-                    inconsistent_region_id,
+                    region_id: inconsistent_region_id,
                 } => Some(Self::HighMemUse(*inconsistent_region_id)),
 
                 _ => None,
@@ -1251,9 +1249,7 @@ mod test {
         rs.sort();
         assert_eq!(rs, [1, 2]);
         suite.wait_initial_scan_all_finish(2);
-        suite.run(ObserveOp::HighMemUsageWarning {
-            inconsistent_region_id: 1,
-        });
+        suite.run(ObserveOp::HighMemUsageWarning { region_id: 1 });
         suite.advance_ms(0);
         assert_eq!(suite.subs.current_regions(), [2]);
         suite.advance_ms(
