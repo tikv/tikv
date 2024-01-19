@@ -1322,18 +1322,11 @@ impl TestPdClient {
             dr.state_id += 1;
             return;
         }
+        status.set_mode(ReplicationMode::DrAutoSync);
         let mut dr = status.mut_dr_auto_sync();
         dr.state_id += 1;
         dr.set_state(state.unwrap());
         dr.available_stores = available_stores;
-    }
-
-    pub fn switch_to_drautosync_mode(&self) {
-        let mut cluster = self.cluster.wl();
-        let status = cluster.replication_status.as_mut().unwrap();
-        status.set_mode(ReplicationMode::DrAutoSync);
-        let mut dr = status.mut_dr_auto_sync();
-        dr.state_id += 1;
     }
 
     pub fn region_replication_status(&self, region_id: u64) -> RegionReplicationStatus {

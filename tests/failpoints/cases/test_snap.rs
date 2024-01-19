@@ -897,3 +897,20 @@ fn test_snapshot_recover_from_raft_write_failure_with_uncommitted_log() {
         cluster.must_put(format!("k1{}", i).as_bytes(), b"v1");
     }
 }
+
+#[test]
+/// Test a corrupted snapshot can be detected and retry to generate a new one.
+fn test_retry_corrupted_snapshot() {
+    let mut cluster = new_node_cluster(0, 3);
+    let pd_client = cluster.pd_client.clone();
+    pd_client.disable_default_operator();
+
+    let r = cluster.run_conf_change();
+    cluster.must_put(b"k1", b"v1");
+    must_get_none(&cluster.get_engine(3), b"k1");
+    pd_client.must_add_peer(r, new_peer(2, 2));
+    fail::cfg("inject_sst_file_corruption", "return").unwrap();
+    pd_client.must_add_peer(r, new_peer(3, 3));
+
+    must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
+}

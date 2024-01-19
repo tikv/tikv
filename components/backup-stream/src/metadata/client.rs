@@ -285,7 +285,20 @@ impl<Store: MetaStore> MetadataClient<Store> {
         Ok(())
     }
 
-    pub async fn get_last_error(
+    pub async fn get_last_error(&self, name: &str) -> Result<Option<StreamBackupError>> {
+        let key = MetaKey::last_errors_of(name);
+
+        let s = self.meta_store.snapshot().await?;
+        let r = s.get(Keys::Key(key)).await?;
+        if r.is_empty() {
+            return Ok(None);
+        }
+        let r = &r[0];
+        let err = protobuf::parse_from_bytes(r.value())?;
+        Ok(Some(err))
+    }
+
+    pub async fn get_last_error_of(
         &self,
         name: &str,
         store_id: u64,
