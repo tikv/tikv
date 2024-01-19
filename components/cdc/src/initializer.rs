@@ -1125,11 +1125,11 @@ mod tests {
         let mut cfg = DbConfig::default();
         cfg.titan.enabled = Some(true);
         cfg.defaultcf.titan.blob_run_mode = BlobRunMode::Normal;
-        cfg.defaultcf.titan.min_blob_size = ReadableSize(0);
+        cfg.defaultcf.titan.min_blob_size = Some(ReadableSize(0));
         cfg.writecf.titan.blob_run_mode = BlobRunMode::Normal;
-        cfg.writecf.titan.min_blob_size = ReadableSize(0);
+        cfg.writecf.titan.min_blob_size = Some(ReadableSize(0));
         cfg.lockcf.titan.blob_run_mode = BlobRunMode::Normal;
-        cfg.lockcf.titan.min_blob_size = ReadableSize(0);
+        cfg.lockcf.titan.min_blob_size = Some(ReadableSize(0));
         let mut engine = TestEngineBuilder::new().build_with_cfg(&cfg).unwrap();
 
         must_prewrite_put(&mut engine, b"zkey", b"value", b"zkey", 100);

@@ -11,7 +11,7 @@ use chrono::Local;
 use clap::ArgMatches;
 use collections::HashMap;
 use fail;
-use tikv::config::{get_last_config, persist_config, MetricConfig, TikvConfig};
+use tikv::config::{MetricConfig, TikvConfig};
 use tikv_util::{self, config, logger};
 
 // A workaround for checking if log is initialized.
@@ -300,6 +300,12 @@ pub fn overwrite_config_with_cmd_args(config: &mut TikvConfig, matches: &ArgMatc
 
     if matches.value_of("metrics-addr").is_some() {
         warn!("metrics push is not supported any more.");
+    }
+}
+
+pub fn validate_and_persist_config(config: &mut TikvConfig, persist: bool) {
+    if let Err(e) = tikv::config::validate_and_persist_config(config, persist) {
+        fatal!("failed to validate config: {}", e);
     }
 }
 

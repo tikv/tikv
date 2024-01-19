@@ -5908,7 +5908,7 @@ mod tests {
 
     #[test]
     fn test_update_titan_blob_run_mode_config() {
-        let mut cfg = TikvConfig::default();
+        let (mut cfg, _dir) = TikvConfig::with_tmp().unwrap();
         cfg.rocksdb.titan.enabled = Some(true);
         let (_, cfg_controller, ..) = new_engines::<ApiV1>(cfg);
         for run_mode in [
@@ -6944,6 +6944,8 @@ mod tests {
         cfg.rocksdb.lockcf.max_compactions = None;
         cfg.rocksdb.raftcf.max_compactions = None;
         cfg.raftdb.defaultcf.max_compactions = None;
+
+        cfg.rocksdb.defaultcf.titan.min_blob_size = None;
 
         cfg.coprocessor
             .optimize_for(default_cfg.storage.engine == EngineType::RaftKv2);

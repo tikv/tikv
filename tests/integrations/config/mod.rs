@@ -272,7 +272,7 @@ fn test_serde_custom_tikv_config() {
     };
     value.pd = PdConfig::new(vec!["example.com:443".to_owned()]);
     let titan_cf_config = TitanCfConfig {
-        min_blob_size: ReadableSize(2018),
+        min_blob_size: Some(ReadableSize(2018)),
         blob_file_compression: CompressionType::Lz4,
         zstd_dict_size: ReadableSize::kb(16),
         blob_cache_size: ReadableSize::gb(12),
