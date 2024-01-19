@@ -102,13 +102,6 @@ macro_rules! command {
                 }).into()
             }
         }
-
-        impl tikv_util::memory::HeapSize for $cmd {
-            fn heap_size(&self) -> usize {
-                std::mem::size_of<$cmd>()
-                    $( +  )+
-            }
-        }
     }
 }
 
@@ -183,14 +176,6 @@ macro_rules! gen_lock {
 macro_rules! property {
     ($property:ident) => {
         fn $property(&self) -> bool {
-            true
-        }
-    };
-}
-
-macro_rules! heap_size {
-    ($property:ident) => {
-        fn $heap_size(&self) -> bool {
             true
         }
     };
