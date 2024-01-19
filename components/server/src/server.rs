@@ -100,7 +100,8 @@ use tikv::{
         status_server::StatusServer,
         tablet_snap::NoSnapshotCache,
         ttl::TtlChecker,
-        KvEngineFactoryBuilder, Node, RaftKv, Server, CPU_CORES_QUOTA_GAUGE, GRPC_THREAD_PREFIX, MEMORY_LIMIT_GAUGE,
+        KvEngineFactoryBuilder, Node, RaftKv, Server, CPU_CORES_QUOTA_GAUGE, GRPC_THREAD_PREFIX,
+        MEMORY_LIMIT_GAUGE,
     },
     storage::{
         self,
@@ -1494,8 +1495,9 @@ where
     fn init_cgroup_monitor(&mut self) {
         let mut last_cpu_quota: f64 = 0.0;
         let mut last_memory_limit: u64 = 0;
-        self.core.background_worker
-            .spawn_interval_task(DEFAULT_CGROUP_MONITOR_INTERVAL, move || {
+        self.core.background_worker.spawn_interval_task(
+            DEFAULT_CGROUP_MONITOR_INTERVAL,
+            move || {
                 let cpu_quota = SysQuota::cpu_cores_quota_current();
                 if cpu_quota != last_cpu_quota {
                     info!("cpu quota set to {:?}", cpu_quota);
@@ -1508,7 +1510,8 @@ where
                     MEMORY_LIMIT_GAUGE.set(memory_limit as f64);
                     last_memory_limit = memory_limit;
                 }
-            });
+            },
+        );
     }
 
     fn run_server(&mut self, server_config: Arc<VersionTrack<ServerConfig>>) {
