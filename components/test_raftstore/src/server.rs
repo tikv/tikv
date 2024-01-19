@@ -868,7 +868,7 @@ pub fn new_server_cluster(
 }
 
 // the hybrid engine with disk engine "RocksEngine" and region cache engine
-// "RegionCacheMemoryEngine" is used in the server cluster.
+// "RangeCacheMemoryEngine" is used in the server cluster.
 pub fn new_server_cluster_with_hybrid_engine(
     id: u64,
     count: usize,
