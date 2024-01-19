@@ -232,19 +232,9 @@ fn collect_ranges_need_compact(
     for range in ranges.windows(2) {
         // Get total entries and total versions in this range and checks if it needs to
         // be compacted.
-        if let Some((num_ent, num_ver)) =
-            box_try!(engine.get_range_entries_and_versions(CF_WRITE, &range[0], &range[1]))
+        if let Some(range_stats) = box_try!(engine.get_range_stats(CF_WRITE, &range[0], &range[1]))
         {
-<<<<<<< HEAD
-            if need_compact(
-                num_ent,
-                num_ver,
-                tombstones_num_threshold,
-                tombstones_percent_threshold,
-            ) {
-=======
             if need_compact(&range_stats, &compact_threshold) {
->>>>>>> c099e482cb (raftstore: consider duplicated mvcc versions when check compact (#15342))
                 if compact_start.is_none() {
                     // The previous range doesn't need compacting.
                     compact_start = Some(range[0].clone());
@@ -388,18 +378,13 @@ mod tests {
         engine.flush_cf(CF_WRITE, true).unwrap();
 
         let (start, end) = (data_key(b"k0"), data_key(b"k5"));
-        let (entries, version) = engine
-            .get_range_entries_and_versions(CF_WRITE, &start, &end)
+        let range_stats = engine
+            .get_range_stats(CF_WRITE, &start, &end)
             .unwrap()
             .unwrap();
-<<<<<<< HEAD
-        assert_eq!(entries, 10);
-        assert_eq!(version, 5);
-=======
         assert_eq!(range_stats.num_entries, 15);
         assert_eq!(range_stats.num_versions, 10);
         assert_eq!(range_stats.num_rows, 5);
->>>>>>> c099e482cb (raftstore: consider duplicated mvcc versions when check compact (#15342))
 
         // mvcc_put 5..10
         for i in 5..10 {
@@ -413,19 +398,10 @@ mod tests {
         engine.flush_cf(CF_WRITE, true).unwrap();
 
         let (s, e) = (data_key(b"k5"), data_key(b"k9"));
-<<<<<<< HEAD
-        let (entries, version) = engine
-            .get_range_entries_and_versions(CF_WRITE, &s, &e)
-            .unwrap()
-            .unwrap();
-        assert_eq!(entries, 5);
-        assert_eq!(version, 5);
-=======
         let range_stats = engine.get_range_stats(CF_WRITE, &s, &e).unwrap().unwrap();
         assert_eq!(range_stats.num_entries, 8);
         assert_eq!(range_stats.num_versions, 8);
         assert_eq!(range_stats.num_rows, 5);
->>>>>>> c099e482cb (raftstore: consider duplicated mvcc versions when check compact (#15342))
 
         // tombstone triggers compaction
         let ranges_need_to_compact = collect_ranges_need_compact(
@@ -456,19 +432,10 @@ mod tests {
         engine.flush_cf(CF_WRITE, true).unwrap();
 
         let (s, e) = (data_key(b"k5"), data_key(b"k9"));
-<<<<<<< HEAD
-        let (entries, version) = engine
-            .get_range_entries_and_versions(CF_WRITE, &s, &e)
-            .unwrap()
-            .unwrap();
-        assert_eq!(entries, 10);
-        assert_eq!(version, 5);
-=======
         let range_stats = engine.get_range_stats(CF_WRITE, &s, &e).unwrap().unwrap();
         assert_eq!(range_stats.num_entries, 11);
         assert_eq!(range_stats.num_versions, 8);
         assert_eq!(range_stats.num_rows, 5);
->>>>>>> c099e482cb (raftstore: consider duplicated mvcc versions when check compact (#15342))
 
         let ranges_need_to_compact = collect_ranges_need_compact(
             &engine,
