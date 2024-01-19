@@ -7,6 +7,7 @@
 
 mod engine;
 pub mod keys;
+pub use engine::RangeCacheMemoryEngine;
+pub mod range_manager;
 mod write_batch;
-pub use engine::RegionCacheMemoryEngine;
-pub use write_batch::RegionCacheWriteBatch;
+pub use write_batch::RangeCacheWriteBatch;

@@ -1,13 +1,13 @@
 // Copyright 2023 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine_traits::{KvEngine, MiscExt, RegionCacheEngine, Result, WriteBatchExt};
+use engine_traits::{KvEngine, MiscExt, RangeCacheEngine, Result, WriteBatchExt};
 
 use crate::{engine::HybridEngine, hybrid_metrics::HybridEngineStatisticsReporter};
 
 impl<EK, EC> MiscExt for HybridEngine<EK, EC>
 where
     EK: KvEngine,
-    EC: RegionCacheEngine,
+    EC: RangeCacheEngine,
     HybridEngine<EK, EC>: WriteBatchExt,
 {
     type StatisticsReporter = HybridEngineStatisticsReporter;

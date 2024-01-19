@@ -3,36 +3,36 @@ use engine_traits::{Mutable, Result, WriteBatch, WriteBatchExt, WriteOptions, CF
 use tikv_util::box_err;
 
 use crate::{
-    engine::{cf_to_id, RegionMemoryEngine},
+    engine::{cf_to_id, SkiplistEngine},
     keys::{encode_key, ValueType},
-    RegionCacheMemoryEngine,
+    RangeCacheMemoryEngine,
 };
 
 /// Callback to apply an encoded entry to cache engine.
 ///
 /// Arguments: &str - cf name, Bytes - (encoded) key, Bytes - value.
 ///
-/// TODO: consider refactoring into a trait once RegionCacheMemoryEngine API
+/// TODO: consider refactoring into a trait once RangeCacheMemoryEngine API
 /// stabilizes.
 type ApplyEncodedEntryCb = Box<dyn FnMut(&str, Bytes, Bytes) -> Result<()> + Send + Sync>;
 
-/// RegionCacheWriteBatch maintains its own in-memory buffer.
-pub struct RegionCacheWriteBatch {
-    buffer: Vec<RegionCacheWriteBatchEntry>,
+/// RangeCacheWriteBatch maintains its own in-memory buffer.
+pub struct RangeCacheWriteBatch {
+    buffer: Vec<RangeCacheWriteBatchEntry>,
     apply_cb: ApplyEncodedEntryCb,
     sequence_number: Option<u64>,
     save_points: Vec<usize>,
 }
 
-impl std::fmt::Debug for RegionCacheWriteBatch {
+impl std::fmt::Debug for RangeCacheWriteBatch {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("RegionCacheWriteBatch")
+        f.debug_struct("RangeCacheWriteBatch")
             .field("buffer", &self.buffer)
             .finish()
     }
 }
 
-impl RegionCacheWriteBatch {
+impl RangeCacheWriteBatch {
     pub fn new(apply_cb: ApplyEncodedEntryCb) -> Self {
         Self {
             buffer: Vec::new(),
@@ -94,13 +94,13 @@ impl CacheWriteBatchEntryMutation {
     }
 }
 #[derive(Clone, Debug)]
-struct RegionCacheWriteBatchEntry {
+struct RangeCacheWriteBatchEntry {
     cf: String,
     key: Bytes,
     mutation: CacheWriteBatchEntryMutation,
 }
 
-impl RegionCacheWriteBatchEntry {
+impl RangeCacheWriteBatchEntry {
     pub fn put_value(cf: &str, key: &[u8], value: &[u8]) -> Self {
         Self {
             cf: cf.to_owned(),
@@ -126,39 +126,39 @@ impl RegionCacheWriteBatchEntry {
         self.key.len() + std::mem::size_of::<u64>() + self.mutation.data_size()
     }
 }
-impl RegionCacheMemoryEngine {
+impl RangeCacheMemoryEngine {
     fn apply_cb(&self) -> ApplyEncodedEntryCb {
         // TODO: use the stabilized API for appending to the skip list here.
         Box::new(|_cf, _key, _value| Ok(()))
     }
 }
 
-impl From<&RegionMemoryEngine> for RegionCacheWriteBatch {
-    fn from(engine: &RegionMemoryEngine) -> Self {
+impl From<&SkiplistEngine> for RangeCacheWriteBatch {
+    fn from(engine: &SkiplistEngine) -> Self {
         let engine_clone = engine.clone();
         let apply_cb = Box::new(move |cf: &'_ str, key, value| {
             engine_clone.data[cf_to_id(cf)].put(key, value);
             Ok(())
         });
-        RegionCacheWriteBatch::new(apply_cb)
+        RangeCacheWriteBatch::new(apply_cb)
     }
 }
 
-impl WriteBatchExt for RegionCacheMemoryEngine {
-    type WriteBatch = RegionCacheWriteBatch;
+impl WriteBatchExt for RangeCacheMemoryEngine {
+    type WriteBatch = RangeCacheWriteBatch;
     // todo: adjust it
     const WRITE_BATCH_MAX_KEYS: usize = 256;
 
     fn write_batch(&self) -> Self::WriteBatch {
-        RegionCacheWriteBatch::new(self.apply_cb())
+        RangeCacheWriteBatch::new(self.apply_cb())
     }
 
     fn write_batch_with_cap(&self, cap: usize) -> Self::WriteBatch {
-        RegionCacheWriteBatch::with_capacity(self.apply_cb(), cap)
+        RangeCacheWriteBatch::with_capacity(self.apply_cb(), cap)
     }
 }
 
-impl WriteBatch for RegionCacheWriteBatch {
+impl WriteBatch for RangeCacheWriteBatch {
     fn write_opt(&mut self, _: &WriteOptions) -> Result<u64> {
         self.sequence_number
             .map(|seq| self.write_impl(seq).map(|()| seq))
@@ -169,7 +169,7 @@ impl WriteBatch for RegionCacheWriteBatch {
     fn data_size(&self) -> usize {
         self.buffer
             .iter()
-            .map(RegionCacheWriteBatchEntry::data_size)
+            .map(RangeCacheWriteBatchEntry::data_size)
             .sum()
     }
 
@@ -217,14 +217,14 @@ impl WriteBatch for RegionCacheWriteBatch {
     }
 }
 
-impl Mutable for RegionCacheWriteBatch {
+impl Mutable for RangeCacheWriteBatch {
     fn put(&mut self, key: &[u8], val: &[u8]) -> Result<()> {
         self.put_cf(CF_DEFAULT, key, val)
     }
 
     fn put_cf(&mut self, cf: &str, key: &[u8], val: &[u8]) -> Result<()> {
         self.buffer
-            .push(RegionCacheWriteBatchEntry::put_value(cf, key, val));
+            .push(RangeCacheWriteBatchEntry::put_value(cf, key, val));
         Ok(())
     }
 
@@ -234,7 +234,7 @@ impl Mutable for RegionCacheWriteBatch {
 
     fn delete_cf(&mut self, cf: &str, key: &[u8]) -> Result<()> {
         self.buffer
-            .push(RegionCacheWriteBatchEntry::deletion(cf, key));
+            .push(RangeCacheWriteBatchEntry::deletion(cf, key));
         Ok(())
     }
 
@@ -249,14 +249,16 @@ impl Mutable for RegionCacheWriteBatch {
 
 #[cfg(test)]
 mod tests {
-    use engine_traits::{Peekable, RegionCacheEngine, WriteBatch};
+    use std::sync::Arc;
+
+    use engine_traits::{CacheRange, Peekable, RangeCacheEngine, WriteBatch};
 
     use super::*;
 
     #[test]
     fn test_write_to_skiplist() {
-        let engine = RegionMemoryEngine::default();
-        let mut wb = RegionCacheWriteBatch::from(&engine);
+        let engine = SkiplistEngine::new(Arc::default());
+        let mut wb = RangeCacheWriteBatch::from(&engine);
         wb.put(b"aaa", b"bbb").unwrap();
         wb.set_sequence_number(1).unwrap();
         assert_eq!(wb.write().unwrap(), 1);
@@ -267,8 +269,8 @@ mod tests {
 
     #[test]
     fn test_savepoints() {
-        let engine = RegionMemoryEngine::default();
-        let mut wb = RegionCacheWriteBatch::from(&engine);
+        let engine = SkiplistEngine::new(Arc::default());
+        let mut wb = RangeCacheWriteBatch::from(&engine);
         wb.put(b"aaa", b"bbb").unwrap();
         wb.set_save_point();
         wb.put(b"aaa", b"ccc").unwrap();
@@ -284,15 +286,16 @@ mod tests {
 
     #[test]
     fn test_put_write_clear_delete_put_write() {
-        let engine = RegionCacheMemoryEngine::default();
-        engine.new_region(1);
+        let engine = RangeCacheMemoryEngine::new(Arc::default());
+        let r = CacheRange::new(b"".to_vec(), b"z".to_vec());
+        engine.new_range(r.clone());
         let engine_for_writes = {
             let mut core = engine.core.lock().unwrap();
-            core.region_metas.get_mut(&1).unwrap().can_read = true;
-            core.region_metas.get_mut(&1).unwrap().safe_ts = 10;
-            core.engine.get_mut(&1).unwrap().clone()
+            core.mut_range_manager().set_range_readable(&r, true);
+            core.mut_range_manager().set_safe_ts(&r, 10);
+            core.engine()
         };
-        let mut wb = RegionCacheWriteBatch::from(&engine_for_writes);
+        let mut wb = RangeCacheWriteBatch::from(&engine_for_writes);
         wb.put(b"aaa", b"bbb").unwrap();
         wb.set_sequence_number(1).unwrap();
         _ = wb.write().unwrap();
@@ -301,7 +304,7 @@ mod tests {
         wb.delete(b"aaa").unwrap();
         wb.set_sequence_number(2).unwrap();
         _ = wb.write().unwrap();
-        let snapshot = engine.snapshot(1, u64::MAX, 2).unwrap();
+        let snapshot = engine.snapshot(r, u64::MAX, 2).unwrap();
         assert_eq!(
             snapshot.get_value(&b"bbb"[..]).unwrap().unwrap(),
             &b"ccc"[..]

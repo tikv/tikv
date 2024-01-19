@@ -1,12 +1,12 @@
 // Copyright 2023 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine_traits::{Iterator, KvEngine, RegionCacheEngine, Result};
+use engine_traits::{Iterator, KvEngine, RangeCacheEngine, Result};
 use tikv_util::Either;
 
 pub struct HybridEngineIterator<EK, EC>
 where
     EK: KvEngine,
-    EC: RegionCacheEngine,
+    EC: RangeCacheEngine,
 {
     iter: Either<EK::Iterator, EC::Iterator>,
 }
@@ -14,7 +14,7 @@ where
 impl<EK, EC> HybridEngineIterator<EK, EC>
 where
     EK: KvEngine,
-    EC: RegionCacheEngine,
+    EC: RangeCacheEngine,
 {
     pub fn disk_engine_iterator(iter: EK::Iterator) -> Self {
         Self {
@@ -32,7 +32,7 @@ where
 impl<EK, EC> Iterator for HybridEngineIterator<EK, EC>
 where
     EK: KvEngine,
-    EC: RegionCacheEngine,
+    EC: RangeCacheEngine,
 {
     fn seek(&mut self, key: &[u8]) -> Result<bool> {
         match self.iter {
