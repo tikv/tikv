@@ -648,7 +648,7 @@ where
 
         let snap_ctx = ctx.start_ts.map(|ts| SnapshotContext {
             read_ts: ts.into_inner(),
-            region_id: ctx.pb_ctx.get_region_id(),
+            range: None,
         });
 
         if res.is_ok() {
