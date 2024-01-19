@@ -453,7 +453,7 @@ where
                     callback(ResolvedRegions::new(rts, cps));
                 }
                 ObserveOp::HighMemUsageWarning { region_id } => {
-                    self.on_high_memory_usage(inconsistent_region_id).await;
+                    self.on_high_memory_usage(region_id).await;
                 }
             }
         }
@@ -624,7 +624,7 @@ where
     }
 
     async fn start_observe(&self, region: Region, handle: ObserveHandle) {
-        match self.request_is_available(&region, &handle).await {
+        match self.is_available(&region, &handle).await {
             Ok(false) => {
                 warn!("stale start observe command."; utils::slog_region(&region), "handle" => ?handle);
                 return;
@@ -727,7 +727,7 @@ where
             ));
         }
 
-        let should_retry = self.request_is_available(&region, &handle).await?;
+        let should_retry = self.is_available(&region, &handle).await?;
         if !should_retry {
             return Ok(false);
         }

@@ -495,7 +495,7 @@ where
             let kvs = Self::record_batch(subs, batch);
             let kvs = match kvs {
                 Err(Error::OutOfQuota { region_id }) => {
-                    region_op.send(ObserveOp::HighMemUsageWarning { region_id: region_id }).await
+                    region_op.send(ObserveOp::HighMemUsageWarning { region_id }).await
                         .map_err(|err| Error::Other(box_err!("failed to send, are we shutting down? {}", err)))
                         .report_if_err("");
                     return
