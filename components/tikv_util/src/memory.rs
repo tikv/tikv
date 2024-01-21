@@ -103,6 +103,10 @@ impl OwnedAllocated {
         self.allocated += bytes;
         Ok(())
     }
+
+    pub fn source(&self) -> &MemoryQuota {
+        &self.from
+    }
 }
 
 impl Drop for OwnedAllocated {
@@ -126,6 +130,12 @@ impl MemoryQuota {
 
     pub fn in_use(&self) -> usize {
         self.in_use.load(Ordering::Relaxed)
+    }
+
+    /// Returns a floating number between [0, 1] presents the current memory
+    /// status.
+    pub fn used_ratio(&self) -> f64 {
+        self.in_use() as f64 / self.capacity() as f64
     }
 
     pub fn capacity(&self) -> usize {
