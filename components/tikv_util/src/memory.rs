@@ -90,6 +90,39 @@ pub struct MemoryQuota {
     capacity: AtomicUsize,
 }
 
+<<<<<<< HEAD
+=======
+pub struct OwnedAllocated {
+    allocated: usize,
+    from: Arc<MemoryQuota>,
+}
+
+impl OwnedAllocated {
+    pub fn new(target: Arc<MemoryQuota>) -> Self {
+        Self {
+            allocated: 0,
+            from: target,
+        }
+    }
+
+    pub fn alloc(&mut self, bytes: usize) -> Result<(), MemoryQuotaExceeded> {
+        self.from.alloc(bytes)?;
+        self.allocated += bytes;
+        Ok(())
+    }
+
+    pub fn source(&self) -> &MemoryQuota {
+        &self.from
+    }
+}
+
+impl Drop for OwnedAllocated {
+    fn drop(&mut self) {
+        self.from.free(self.allocated)
+    }
+}
+
+>>>>>>> 66301257e4 (log_backup: stop task while memory out of quota (#16008))
 impl MemoryQuota {
     pub fn new(capacity: usize) -> MemoryQuota {
         MemoryQuota {
@@ -100,6 +133,12 @@ impl MemoryQuota {
 
     pub fn in_use(&self) -> usize {
         self.in_use.load(Ordering::Relaxed)
+    }
+
+    /// Returns a floating number between [0, 1] presents the current memory
+    /// status.
+    pub fn used_ratio(&self) -> f64 {
+        self.in_use() as f64 / self.capacity() as f64
     }
 
     pub fn capacity(&self) -> usize {
