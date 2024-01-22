@@ -134,6 +134,7 @@ fn test_forcely_awaken_hibenrate_regions() {
         rx.recv_timeout(Duration::from_secs(1)).unwrap(),
         base_tick_ms
     );
+    fail::remove("on_raft_base_tick_chaos");
 }
 
 // This case creates a cluster with 3 TiKV instances, and then wait all peers
