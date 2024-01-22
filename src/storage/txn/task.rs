@@ -1,7 +1,10 @@
 // Copyright 2024 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::sync::Arc;
+
 use kvproto::kvrpcpb::ExtraOp;
 use tikv_kv::Snapshot;
+use tikv_util::memory::{HeapSize, MemoryQuota, MemoryQuotaExceeded};
 use tracker::{get_tls_tracker_token, TrackerToken};
 
 use crate::storage::{
@@ -18,6 +21,7 @@ pub(super) struct Task {
     tracker: TrackerToken,
     cmd: Option<Command>,
     extra_op: ExtraOp,
+    memory_quota: Option<(Arc<MemoryQuota>, usize)>,
 }
 
 impl Task {
@@ -29,6 +33,7 @@ impl Task {
             tracker,
             cmd: Some(cmd),
             extra_op: ExtraOp::Noop,
+            memory_quota: None,
         }
     }
 
@@ -56,13 +61,27 @@ impl Task {
         self.extra_op = extra_op
     }
 
+    pub(super) fn alloc_memory_quota(
+        &mut self,
+        memory_quota: Arc<MemoryQuota>,
+    ) -> Result<(), MemoryQuotaExceeded> {
+        let bytes = self.cmd.heap_size();
+        memory_quota.alloc(bytes)?;
+        self.memory_quota = Some((memory_quota, bytes));
+        Ok(())
+    }
+
     pub(super) fn process_write<S: Snapshot, L: LockManager>(
         mut self,
         snapshot: S,
         context: WriteContext<'_, L>,
     ) -> super::Result<WriteResult> {
         let cmd = self.cmd.take().unwrap();
-        cmd.process_write(snapshot, context)
+        let res = cmd.process_write(snapshot, context);
+        if let Some((memory_quota, bytes)) = self.memory_quota.take() {
+            memory_quota.free(bytes);
+        }
+        res
     }
 
     pub(super) fn process_read<S: Snapshot>(
@@ -71,6 +90,18 @@ impl Task {
         statistics: &mut Statistics,
     ) -> super::Result<ProcessResult> {
         let cmd = self.cmd.take().unwrap();
-        cmd.process_read(snapshot, statistics)
+        let res = cmd.process_read(snapshot, statistics);
+        if let Some((memory_quota, bytes)) = self.memory_quota.take() {
+            memory_quota.free(bytes);
+        }
+        res
+    }
+}
+
+impl Drop for Task {
+    fn drop(&mut self) {
+        if let Some((memory_quota, bytes)) = self.memory_quota.take() {
+            memory_quota.free(bytes);
+        }
     }
 }
