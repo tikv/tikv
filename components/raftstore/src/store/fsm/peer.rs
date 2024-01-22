@@ -2865,9 +2865,9 @@ where
         match msg.get_extra_msg().get_type() {
             ExtraMessageType::MsgRegionWakeUp | ExtraMessageType::MsgCheckStalePeer => {
                 if msg.get_extra_msg().forcely_awaken {
-                    // Forcely awaken this region by manually setting the Raft Group state
+                    // Forcely awaken this region by manually setting the GroupState
                     // into `Chaos` to trigger a new voting in the Raft Group.
-                    // Meanwhile, it avoids the group entering the `PreChaos` state,
+                    // Meanwhile, it avoids the peer entering the `PreChaos` state,
                     // which would wait for another long tick to enter the `Chaos` state.
                     self.reset_raft_tick(if !self.fsm.peer.is_leader() {
                         GroupState::Chaos
