@@ -61,7 +61,7 @@ impl Task {
         self.extra_op = extra_op
     }
 
-    pub(super) fn alloc(
+    pub(super) fn alloc_memory_quota(
         &mut self,
         memory_quota: Arc<MemoryQuota>,
     ) -> Result<(), MemoryQuotaExceeded> {

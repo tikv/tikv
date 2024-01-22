@@ -105,7 +105,7 @@ macro_rules! command {
 
         impl tikv_util::memory::HeapSize for $cmd {
             fn heap_size(&self) -> usize {
-                std::mem::size_of::<$cmd>()
+                0
                 $(
                     $( + self.$arg_in_heap.heap_size() )*
                 )?

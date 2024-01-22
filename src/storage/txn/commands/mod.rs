@@ -808,30 +808,31 @@ impl Debug for Command {
 
 impl HeapSize for Command {
     fn heap_size(&self) -> usize {
-        match self {
-            Command::Prewrite(t) => t.heap_size(),
-            Command::PrewritePessimistic(t) => t.heap_size(),
-            Command::AcquirePessimisticLock(t) => t.heap_size(),
-            Command::AcquirePessimisticLockResumed(t) => t.heap_size(),
-            Command::Commit(t) => t.heap_size(),
-            Command::Cleanup(t) => t.heap_size(),
-            Command::Rollback(t) => t.heap_size(),
-            Command::PessimisticRollback(t) => t.heap_size(),
-            Command::PessimisticRollbackReadPhase(t) => t.heap_size(),
-            Command::TxnHeartBeat(t) => t.heap_size(),
-            Command::CheckTxnStatus(t) => t.heap_size(),
-            Command::CheckSecondaryLocks(t) => t.heap_size(),
-            Command::ResolveLockReadPhase(t) => t.heap_size(),
-            Command::ResolveLock(t) => t.heap_size(),
-            Command::ResolveLockLite(t) => t.heap_size(),
-            Command::Pause(t) => t.heap_size(),
-            Command::MvccByKey(t) => t.heap_size(),
-            Command::MvccByStartTs(t) => t.heap_size(),
-            Command::RawCompareAndSwap(t) => t.heap_size(),
-            Command::RawAtomicStore(t) => t.heap_size(),
-            Command::FlashbackToVersionReadPhase(t) => t.heap_size(),
-            Command::FlashbackToVersion(t) => t.heap_size(),
-        }
+        std::mem::size_of::<Self>()
+            + match self {
+                Command::Prewrite(t) => t.heap_size(),
+                Command::PrewritePessimistic(t) => t.heap_size(),
+                Command::AcquirePessimisticLock(t) => t.heap_size(),
+                Command::AcquirePessimisticLockResumed(t) => t.heap_size(),
+                Command::Commit(t) => t.heap_size(),
+                Command::Cleanup(t) => t.heap_size(),
+                Command::Rollback(t) => t.heap_size(),
+                Command::PessimisticRollback(t) => t.heap_size(),
+                Command::PessimisticRollbackReadPhase(t) => t.heap_size(),
+                Command::TxnHeartBeat(t) => t.heap_size(),
+                Command::CheckTxnStatus(t) => t.heap_size(),
+                Command::CheckSecondaryLocks(t) => t.heap_size(),
+                Command::ResolveLockReadPhase(t) => t.heap_size(),
+                Command::ResolveLock(t) => t.heap_size(),
+                Command::ResolveLockLite(t) => t.heap_size(),
+                Command::Pause(t) => t.heap_size(),
+                Command::MvccByKey(t) => t.heap_size(),
+                Command::MvccByStartTs(t) => t.heap_size(),
+                Command::RawCompareAndSwap(t) => t.heap_size(),
+                Command::RawAtomicStore(t) => t.heap_size(),
+                Command::FlashbackToVersionReadPhase(t) => t.heap_size(),
+                Command::FlashbackToVersion(t) => t.heap_size(),
+            }
     }
 }
 
