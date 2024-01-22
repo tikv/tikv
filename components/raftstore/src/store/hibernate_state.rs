@@ -46,13 +46,6 @@ macro_rules! update_metric {
             _ => &HIBERNATED_PEER_STATE_GAUGE.awaken,
         };
         gauge.$op();
-        let gauge_in_details = match $state {
-            GroupState::Idle => &HIBERNATED_PEER_STATE_GAUGE.idle,
-            GroupState::PreChaos => &HIBERNATED_PEER_STATE_GAUGE.pre_chaos,
-            GroupState::Chaos => &HIBERNATED_PEER_STATE_GAUGE.chaos,
-            _ => &HIBERNATED_PEER_STATE_GAUGE.ordered,
-        };
-        gauge_in_details.$op();
     };
 }
 

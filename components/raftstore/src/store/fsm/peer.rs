@@ -2865,7 +2865,7 @@ where
         match msg.get_extra_msg().get_type() {
             ExtraMessageType::MsgRegionWakeUp | ExtraMessageType::MsgCheckStalePeer => {
                 if msg.get_extra_msg().forcely_awaken {
-                    // Forcibly awaken this region by manually setting the Raft Group state
+                    // Forcely awaken this region by manually setting the Raft Group state
                     // into `Chaos` to trigger a new voting in the Raft Group.
                     // Meanwhile, it avoids the group entering the `PreChaos` state,
                     // which would wait for another long tick to enter the `Chaos` state.
