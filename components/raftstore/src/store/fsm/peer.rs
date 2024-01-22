@@ -2180,6 +2180,11 @@ where
             self.fsm.hibernate_state.group_state() == GroupState::Idle,
             |_| {}
         );
+        fail_point!(
+            "on_raft_base_tick_chaos",
+            self.fsm.hibernate_state.group_state() == GroupState::Chaos,
+            |_| {}
+        );
 
         if self.fsm.peer.pending_remove {
             self.fsm.peer.mut_store().flush_entry_cache_metrics();
