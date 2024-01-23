@@ -477,6 +477,10 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             memory_quota: Arc::new(MemoryQuota::new(config.memory_quota.0 as _)),
         });
 
+        SCHED_TXN_MEMORY_QUOTA_IN_USE
+            .allocated
+            .set(config.memory_quota.0 as i64);
+
         slow_log!(
             t.saturating_elapsed(),
             "initialized the transaction scheduler"
@@ -883,8 +887,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                         do_wake_up = false;
                     } else {
                         panic!(
-                            "undetermined error: {:?} cid={}, tag={}, process
-                        result={:?}",
+                            "undetermined error: {:?} cid={}, tag={}, process result={:?}",
                             e, cid, tag, &pr
                         );
                     }
