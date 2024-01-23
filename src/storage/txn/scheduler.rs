@@ -40,7 +40,7 @@ use concurrency_manager::{ConcurrencyManager, KeyHandleGuard};
 use crossbeam::utils::CachePadded;
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 use file_system::IoBytes;
-use futures::{compat::Future01CompatExt, StreamExt};
+use futures::{compat::Future01CompatExt, FutureExt as _, StreamExt};
 use kvproto::{
     kvrpcpb::{self, CommandPri, Context, DiskFullOpt},
     pdpb::QueryKind,
@@ -688,72 +688,80 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         set_tls_tracker_token(task.tracker());
         let sched = self.clone();
         let metadata = TaskMetadata::from_ctx(task.cmd().resource_control_ctx());
+        let priority = task.cmd().priority();
+        let execution = async move {
+            fail_point!("scheduler_start_execute");
+            if sched.check_task_deadline_exceeded(&task, None) {
+                return;
+            }
 
-        self.get_sched_pool()
-            .spawn(metadata, task.cmd().priority(), async move {
-                fail_point!("scheduler_start_execute");
-                if sched.check_task_deadline_exceeded(&task, None) {
-                    return;
-                }
+            let tag = task.cmd().tag();
+            SCHED_STAGE_COUNTER_VEC.get(tag).snapshot.inc();
 
-                let tag = task.cmd().tag();
-                SCHED_STAGE_COUNTER_VEC.get(tag).snapshot.inc();
-
-                let mut snap_ctx = SnapContext {
-                    pb_ctx: task.cmd().ctx(),
-                    ..Default::default()
-                };
-                if matches!(
-                    task.cmd(),
-                    Command::FlashbackToVersionReadPhase { .. }
-                        | Command::FlashbackToVersion { .. }
-                ) {
-                    snap_ctx.allowed_in_flashback = true;
-                }
-                // The program is currently in scheduler worker threads.
-                // Safety: `self.inner.worker_pool` should ensure that a TLS engine exists.
-                match unsafe { with_tls_engine(|engine: &mut E| kv::snapshot(engine, snap_ctx)) }
-                    .await
-                {
-                    Ok(snapshot) => {
-                        SCHED_STAGE_COUNTER_VEC.get(tag).snapshot_ok.inc();
-                        let term = snapshot.ext().get_term();
-                        let extra_op = snapshot.ext().get_txn_extra_op();
-                        if !sched
-                            .inner
-                            .get_task_slot(task.cid())
-                            .get(&task.cid())
-                            .unwrap()
-                            .try_own()
-                        {
-                            sched.finish_with_err(
-                                task.cid(),
-                                StorageErrorInner::DeadlineExceeded,
-                                None,
-                            );
-                            return;
-                        }
-
-                        if let Some(term) = term {
-                            task.cmd_mut().ctx_mut().set_term(term.get());
-                        }
-                        task.set_extra_op(extra_op);
-
-                        debug!(
-                            "process cmd with snapshot";
-                            "cid" => task.cid(), "term" => ?term, "extra_op" => ?extra_op,
-                            "tracker" => ?task.tracker()
+            let mut snap_ctx = SnapContext {
+                pb_ctx: task.cmd().ctx(),
+                ..Default::default()
+            };
+            if matches!(
+                task.cmd(),
+                Command::FlashbackToVersionReadPhase { .. } | Command::FlashbackToVersion { .. }
+            ) {
+                snap_ctx.allowed_in_flashback = true;
+            }
+            // The program is currently in scheduler worker threads.
+            // Safety: `self.inner.worker_pool` should ensure that a TLS engine exists.
+            match unsafe { with_tls_engine(|engine: &mut E| kv::snapshot(engine, snap_ctx)) }.await
+            {
+                Ok(snapshot) => {
+                    SCHED_STAGE_COUNTER_VEC.get(tag).snapshot_ok.inc();
+                    let term = snapshot.ext().get_term();
+                    let extra_op = snapshot.ext().get_txn_extra_op();
+                    if !sched
+                        .inner
+                        .get_task_slot(task.cid())
+                        .get(&task.cid())
+                        .unwrap()
+                        .try_own()
+                    {
+                        sched.finish_with_err(
+                            task.cid(),
+                            StorageErrorInner::DeadlineExceeded,
+                            None,
                         );
-                        sched.process(snapshot, task).await;
+                        return;
                     }
-                    Err(err) => {
-                        SCHED_STAGE_COUNTER_VEC.get(tag).snapshot_err.inc();
 
-                        info!("get snapshot failed"; "cid" => task.cid(), "err" => ?err);
-                        sched.finish_with_err(task.cid(), Error::from(err), None);
+                    if let Some(term) = term {
+                        task.cmd_mut().ctx_mut().set_term(term.get());
                     }
+                    task.set_extra_op(extra_op);
+
+                    debug!(
+                        "process cmd with snapshot";
+                        "cid" => task.cid(), "term" => ?term, "extra_op" => ?extra_op,
+                        "tracker" => ?task.tracker()
+                    );
+                    sched.process(snapshot, task).await;
                 }
-            })
+                Err(err) => {
+                    SCHED_STAGE_COUNTER_VEC.get(tag).snapshot_err.inc();
+
+                    info!("get snapshot failed"; "cid" => task.cid(), "err" => ?err);
+                    sched.finish_with_err(task.cid(), Error::from(err), None);
+                }
+            }
+        };
+        let execution_bytes = std::mem::size_of_val(&execution);
+        let memory_quota = self.inner.memory_quota.clone();
+        memory_quota.alloc_force(execution_bytes);
+        // NB: Prefer FutureExt::map to async block, because an async block
+        // doubles memory usage.
+        // See https://github.com/rust-lang/rust/issues/59087
+        let execution = execution.map(move |_| {
+            memory_quota.free(execution_bytes);
+        });
+        self.get_sched_pool()
+            .spawn(metadata, priority, execution)
             .unwrap();
     }
 
@@ -2494,8 +2502,7 @@ mod tests {
         assert!(scheduler.inner.latches.acquire(&mut lock_b, cid_b));
 
         // Run SecondaryLocksStatus requests.
-        let mut first_fut = None;
-        let mut rest_fut = vec![];
+        let mut requests = vec![];
         for i in 0..max_request_count + 2 {
             let cmd = build_cmd();
             let (cb, mut fut) = paired_future_callback();
@@ -2508,23 +2515,27 @@ mod tests {
                 );
             } else {
                 assert_matches!(fut.try_recv(), Ok(None));
-                if first_fut.is_none() {
-                    first_fut = Some(fut);
-                } else {
-                    rest_fut.push(fut);
-                }
+                requests.push(fut);
             }
         }
 
         // Release latches, unblock CheckSecondaryLocks.
         scheduler.release_latches(lock_a, cid_a, None);
         scheduler.release_latches(lock_b, cid_b, None);
-        // Waiting for CheckSecondaryLocks to finish executing and release quota.
-        let _ = block_on_timeout(first_fut.unwrap(), Duration::from_secs(5))
-            .unwrap()
-            .unwrap()
-            .unwrap();
-        // So that scheduler can run new commands.
+
+        // Wait for rest CheckSecondaryLocks and must free memory quota completely.
+        for fut in requests {
+            let _ = block_on_timeout(fut, Duration::from_secs(5))
+                .unwrap()
+                .unwrap()
+                .unwrap();
+        }
+        // It frees memory quota after resolving a future, so we need to sleep
+        // a while to stabilize the test.
+        std::thread::sleep(Duration::from_millis(100));
+        assert_eq!(scheduler.inner.memory_quota.in_use(), 0);
+
+        // After freeing memory quota, we can run new commands.
         let cmd = build_cmd();
         let (cb, fut) = paired_future_callback();
         scheduler.run_cmd(cmd, StorageCallback::SecondaryLocksStatus(cb));
@@ -2532,14 +2543,7 @@ mod tests {
             .unwrap()
             .unwrap()
             .unwrap();
-
-        // Wait for rest CheckSecondaryLocks and must free memory quota completely.
-        for fut in rest_fut {
-            let _ = block_on_timeout(fut, Duration::from_secs(5))
-                .unwrap()
-                .unwrap()
-                .unwrap();
-        }
+        std::thread::sleep(Duration::from_millis(100));
         assert_eq!(scheduler.inner.memory_quota.in_use(), 0);
     }
 }
