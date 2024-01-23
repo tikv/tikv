@@ -410,7 +410,7 @@ pub struct Config {
 
     /// The minimal ratio of region finishing recovery. Only when
     /// the count of regions which finish recovery exceed the
-    /// threshold, can the raftstore supply service for service.
+    /// threshold, can the raftstore supply service.
     #[doc(hidden)]
     #[online_config(hidden)]
     pub min_recovery_ready_region_ratio: f64,

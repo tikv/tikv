@@ -27,8 +27,7 @@ pub struct StoreStat {
     pub engine_total_query_put: AtomicU64,
     pub engine_total_query_delete: AtomicU64,
     pub engine_total_query_delete_range: AtomicU64,
-    pub raftstore_busy: AtomicBool,
-    pub applystore_busy: AtomicBool,
+    pub is_busy: AtomicBool,
 }
 
 #[derive(Clone, Default)]
@@ -44,8 +43,7 @@ impl GlobalStoreStat {
             engine_total_bytes_written: 0,
             engine_total_keys_written: 0,
             engine_total_query_stats: QueryStats::default(),
-            raftstore_busy: false,
-            applystore_busy: false,
+            is_busy: false,
 
             global: self.clone(),
         }
@@ -57,8 +55,7 @@ pub struct LocalStoreStat {
     pub engine_total_bytes_written: u64,
     pub engine_total_keys_written: u64,
     pub engine_total_query_stats: QueryStats,
-    pub raftstore_busy: bool,
-    pub applystore_busy: bool,
+    pub is_busy: bool,
 
     global: GlobalStoreStat,
 }
@@ -117,19 +114,9 @@ impl LocalStoreStat {
                 .fetch_add(delete_range_query_num, Ordering::Relaxed);
             self.engine_total_query_stats.0.set_delete_range(0);
         }
-        if self.raftstore_busy {
-            self.global
-                .stat
-                .raftstore_busy
-                .store(true, Ordering::Relaxed);
-            self.raftstore_busy = false;
-        }
-        if self.applystore_busy {
-            self.global
-                .stat
-                .applystore_busy
-                .store(true, Ordering::Relaxed);
-            self.applystore_busy = false;
+        if self.is_busy {
+            self.global.stat.is_busy.store(true, Ordering::Relaxed);
+            self.is_busy = false;
         }
     }
 }
