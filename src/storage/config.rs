@@ -97,14 +97,14 @@ pub struct Config {
     pub ttl_check_poll_interval: ReadableDuration,
     #[online_config(skip)]
     pub txn_status_cache_capacity: usize,
+    #[online_config(skip)]
+    pub memory_quota: ReadableSize,
     #[online_config(submodule)]
     pub flow_control: FlowControlConfig,
     #[online_config(submodule)]
     pub block_cache: BlockCacheConfig,
     #[online_config(submodule)]
     pub io_rate_limit: IoRateLimitConfig,
-    #[online_config(skip)]
-    pub memory_quota: ReadableSize,
 }
 
 impl Default for Config {
