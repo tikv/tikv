@@ -84,6 +84,13 @@ pub trait KvEngine:
 
 #[derive(Debug, Clone)]
 pub struct SnapshotContext {
-    pub region_id: u64,
+    pub range: Option<CacheRange>,
     pub read_ts: u64,
+}
+
+impl SnapshotContext {
+    pub fn set_range(&mut self, range: CacheRange) {
+        assert!(self.range.is_none());
+        self.range = Some(range);
+    }
 }

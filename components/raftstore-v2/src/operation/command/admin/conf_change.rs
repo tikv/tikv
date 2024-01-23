@@ -106,6 +106,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             changes.as_ref(),
             &cc,
             self.is_in_force_leader(),
+            self.get_peer_heartbeats(),
         )?;
 
         // TODO: check if the new peer is already in history record.
