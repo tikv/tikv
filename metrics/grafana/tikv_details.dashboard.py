@@ -8669,12 +8669,14 @@ dashboard = Dashboard(
         CoprocessorOverview(),
         CoprocessorDetail(),
         UnifiedReadPool(),
+        # Transaction
+        GC(),
+        PessimisticLocking(),
         # Background Tasks
         Task(),
         PD(),
         SlowTrendStatistics(),
         Snapshot(),
-        GC(),
         # Tools
         ResolvedTS(),
         PointInTimeRestore(),
