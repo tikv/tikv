@@ -5,6 +5,7 @@ use std::{
     borrow::Borrow,
     cell::RefCell,
     collections::{hash_map::RandomState, BTreeMap, HashMap},
+    intrinsics::unlikely,
     ops::{Bound, RangeBounds},
     path::Path,
     sync::{
@@ -31,6 +32,7 @@ use tikv_util::{
         self_thread_inspector, IoStat, ThreadInspector, ThreadInspectorImpl as OsInspector,
     },
     time::Instant,
+    warn,
     worker::Scheduler,
     Either,
 };
@@ -473,6 +475,13 @@ impl ReadThroughputRecorder {
         let ins = self.ins.as_ref()?;
         let begin = self.begin.as_ref()?;
         let end = ins.io_stat().ok()??;
+        if unlikely(end.read < begin.read) {
+            warn!("The system read statistic decreases, the disk read speed limit may not work properly.";
+                "begin" => begin.read,
+                "end" => end.read
+            );
+            return None;
+        }
         let bytes_read = end.read - begin.read;
         // FIXME: In our test environment, there may be too many caches hence the
         // `bytes_read` is always zero.
