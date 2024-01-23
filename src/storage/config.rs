@@ -38,6 +38,18 @@ const DEFAULT_RESERVED_RAFT_SPACE_GB: u64 = 1;
 // much less as it's hard to see the capacity being used up.
 const DEFAULT_TXN_STATUS_CACHE_CAPACITY: usize = 40_000 * 128;
 
+// The memory usage of a tikv::storage::txn::commands::Commands can be broken
+// down into:
+//
+// * The size of key-value pair which is assumed to be 1KB.
+// * The size of Command itself is approximately 448 bytes.
+// * The size of a future that executes Command, about 6184 bytes (see
+//   TxnScheduler::execute).
+//
+// Given the total memory capacity of 512MB, TiKV can support around 7,000
+// concurrently running commands or 364,000 commands waiting to be executed.
+const DEFAULT_TXN_MEMORY_QUOTA_CAPACITY: ReadableSize = ReadableSize::mb(512);
+
 // Block cache capacity used when TikvConfig isn't validated. It should only
 // occur in tests.
 const FALLBACK_BLOCK_CACHE_CAPACITY: ReadableSize = ReadableSize::mb(128);
@@ -91,6 +103,7 @@ pub struct Config {
     pub block_cache: BlockCacheConfig,
     #[online_config(submodule)]
     pub io_rate_limit: IoRateLimitConfig,
+    #[online_config(skip)]
     pub memory_quota: ReadableSize,
 }
 
@@ -120,9 +133,7 @@ impl Default for Config {
             block_cache: BlockCacheConfig::default(),
             io_rate_limit: IoRateLimitConfig::default(),
             background_error_recovery_window: ReadableDuration::hours(1),
-            // TODO: revise default memory value.
-            // On TiDB Cloud, the min memory spec is 16G, the default is 32G.
-            memory_quota: ReadableSize::gb(1),
+            memory_quota: DEFAULT_TXN_MEMORY_QUOTA_CAPACITY,
         }
     }
 }
