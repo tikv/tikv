@@ -144,7 +144,7 @@ fn test_forcely_awaken_hibenrate_regions() {
     // stable.
     cluster.cfg.raft_store.raft_min_election_timeout_ticks = 10;
     cluster.cfg.raft_store.raft_max_election_timeout_ticks = 11;
-    configure_for_hibernate(&mut cluster.cfg);
+    configure_for_hibernate(&mut cluster);
     cluster.pd_client.disable_default_operator();
     let r = cluster.run_conf_change();
     cluster.pd_client.must_add_peer(r, new_peer(2, 2));
