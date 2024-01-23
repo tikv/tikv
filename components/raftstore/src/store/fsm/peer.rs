@@ -2182,6 +2182,11 @@ where
             self.fsm.hibernate_state.group_state() == GroupState::Idle,
             |_| {}
         );
+        fail_point!(
+            "on_raft_base_tick_chaos",
+            self.fsm.hibernate_state.group_state() == GroupState::Chaos,
+            |_| {}
+        );
 
         if self.fsm.peer.pending_remove {
             self.fsm.peer.mut_store().flush_entry_cache_metrics();
@@ -2866,18 +2871,19 @@ where
     fn on_extra_message(&mut self, mut msg: RaftMessage) {
         match msg.get_extra_msg().get_type() {
             ExtraMessageType::MsgRegionWakeUp | ExtraMessageType::MsgCheckStalePeer => {
-                if self.fsm.hibernate_state.group_state() == GroupState::Idle {
-                    if msg.get_extra_msg().forcely_awaken {
-                        // Forcely awaken this region by manually setting this GroupState
-                        // into Chaos to trigger a new voting in this RaftGroup.
-                        self.reset_raft_tick(if !self.fsm.peer.is_leader() {
-                            GroupState::Chaos
-                        } else {
-                            GroupState::Ordered
-                        });
+                if msg.get_extra_msg().forcely_awaken {
+                    // Forcely awaken this region by manually setting the GroupState
+                    // into `Chaos` to trigger a new voting in the Raft Group.
+                    // Meanwhile, it avoids the peer entering the `PreChaos` state,
+                    // which would wait for another long tick to enter the `Chaos` state.
+                    self.reset_raft_tick(if !self.fsm.peer.is_leader() {
+                        GroupState::Chaos
                     } else {
-                        self.reset_raft_tick(GroupState::Ordered);
-                    }
+                        GroupState::Ordered
+                    });
+                }
+                if self.fsm.hibernate_state.group_state() == GroupState::Idle {
+                    self.reset_raft_tick(GroupState::Ordered);
                 }
                 if msg.get_extra_msg().get_type() == ExtraMessageType::MsgRegionWakeUp
                     && self.fsm.peer.is_leader()
