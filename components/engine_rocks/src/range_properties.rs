@@ -7,10 +7,7 @@ use engine_traits::{
 };
 use tikv_util::{box_err, box_try, debug, info};
 
-use crate::{
-    engine::RocksEngine,
-    properties::{get_range_entries_and_versions, RangeProperties},
-};
+use crate::{engine::RocksEngine, get_range_stats, properties::RangeProperties};
 
 impl RangePropertiesExt for RocksEngine {
     fn get_range_approximate_keys(&self, range: Range<'_>, large_threshold: u64) -> Result<u64> {
@@ -27,9 +24,8 @@ impl RangePropertiesExt for RocksEngine {
 
         let start = &range.start_key;
         let end = &range.end_key;
-        let (_, keys) =
-            get_range_entries_and_versions(self, CF_WRITE, start, end).unwrap_or_default();
-        Ok(keys)
+        let range_stats = get_range_stats(self, CF_WRITE, start, end).unwrap_or_default();
+        Ok(range_stats.num_versions)
     }
 
     fn get_range_approximate_keys_cf(
