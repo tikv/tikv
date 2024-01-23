@@ -2,6 +2,7 @@
 #![feature(slice_group_by)]
 #![feature(result_flattening)]
 #![feature(assert_matches)]
+#![feature(core_intrinsics)]
 #![feature(test)]
 
 mod checkpoint_manager;
