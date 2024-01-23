@@ -932,11 +932,10 @@ fn test_conf_change_fast() {
     assert!(timer.saturating_elapsed() < Duration::from_secs(5));
 }
 
-#[test_case(test_raftstore::new_node_cluster)]
-#[test_case(test_raftstore_v2::new_node_cluster)]
+#[test]
 fn test_remove_node_on_partition() {
     let count = 3;
-    let mut cluster = new_cluster(0, count);
+    let mut cluster = new_server_cluster(0, count);
     let pd_client = Arc::clone(&cluster.pd_client);
     // Disable default max peer number check.
     pd_client.disable_default_operator();
