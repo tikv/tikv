@@ -9,7 +9,6 @@ use slog_global::{info, warn};
 use txn_types::{Key, WriteRef, WriteType};
 
 use crate::{
-    engine::EVICTION_KEY_BUFFER_LIMIT,
     keys::{decode_key, encoding_for_filter, InternalKey, InternalKeyComparator},
     memory_limiter::GlobalMemoryLimiter,
     RangeCacheMemoryEngine,
@@ -150,7 +149,6 @@ impl Drop for Filter {
         if let Some(cached_delete_key) = self.cached_delete_key.take() {
             self.write_cf_handle.remove(cached_delete_key.as_slice());
         }
-        self.remove_filtered_key();
     }
 }
 
@@ -191,7 +189,9 @@ impl Filter {
             self.mvcc_key_prefix.clear();
             self.mvcc_key_prefix.extend_from_slice(mvcc_key_prefix);
             self.remove_older = false;
-            self.remove_cached_delete_key();
+            if let Some(cached_delete_key) = self.cached_delete_key.take() {
+                self.write_cf_handle.remove(&cached_delete_key);
+            }
         }
 
         let mut filtered = self.remove_older;
@@ -221,34 +221,10 @@ impl Filter {
         self.filtered += 1;
         // we cannot delete it directly as it's the node the iterator currently points
         // to, so we cache it in the buffer and delete them later.
-        self.filter_write_cf_key(key);
+        self.write_cf_handle.remove(key);
         self.handle_filtered_write(write)?;
 
         Ok(())
-    }
-
-    fn remove_cached_delete_key(&mut self) {
-        if let Some(cached_delete_key) = self.cached_delete_key.take() {
-            // remove the older versions first
-            self.remove_filtered_key();
-            self.write_cf_handle.remove(&cached_delete_key);
-        }
-    }
-
-    fn filter_write_cf_key(&mut self, key: &[u8]) {
-        if self.filtered_write_key_size + key.len() >= EVICTION_KEY_BUFFER_LIMIT {
-            self.remove_filtered_key();
-        }
-
-        self.filtered_write_key_buffer.push(key.to_vec());
-        self.filtered_write_key_size += key.len();
-    }
-
-    fn remove_filtered_key(&mut self) {
-        self.filtered_write_key_size = 0;
-        for key in self.filtered_write_key_buffer.drain(..) {
-            self.write_cf_handle.remove(&key);
-        }
     }
 
     fn handle_filtered_write(&mut self, write: WriteRef<'_>) -> std::result::Result<(), String> {
