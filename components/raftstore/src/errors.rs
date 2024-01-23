@@ -263,6 +263,15 @@ impl From<Error> for errorpb::Error {
                 e.set_region_id(region_id);
                 errorpb.set_flashback_not_prepared(e);
             }
+            Error::Coprocessor(CopError::RequireDelay {
+                after,
+                reason: hint,
+            }) => {
+                let mut e = errorpb::ServerIsBusy::new();
+                e.set_backoff_ms(after.as_millis() as _);
+                e.set_reason(hint);
+                errorpb.set_server_is_busy(e);
+            }
             _ => {}
         };
 
