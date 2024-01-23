@@ -10,6 +10,7 @@ use tracker::{get_tls_tracker_token, TrackerToken};
 use crate::storage::{
     kv::Statistics,
     lock_manager::LockManager,
+    metrics::*,
     txn::{
         commands::{Command, WriteContext, WriteResult},
         ProcessResult,
@@ -67,6 +68,9 @@ impl Task {
     ) -> Result<(), MemoryQuotaExceeded> {
         let bytes = self.cmd.heap_size();
         memory_quota.alloc(bytes)?;
+        SCHED_TXN_MEMORY_QUOTA_IN_USE
+            .used
+            .set(memory_quota.in_use() as i64);
         self.memory_quota = Some((memory_quota, bytes));
         Ok(())
     }

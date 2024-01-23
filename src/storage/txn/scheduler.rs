@@ -34,14 +34,13 @@ use std::{
     u64,
 };
 
-use futures::FutureExt as _;
 use causal_ts::CausalTsProviderImpl;
 use collections::HashMap;
 use concurrency_manager::{ConcurrencyManager, KeyHandleGuard};
 use crossbeam::utils::CachePadded;
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 use file_system::IoBytes;
-use futures::{compat::Future01CompatExt, StreamExt};
+use futures::{compat::Future01CompatExt, FutureExt as _, StreamExt};
 use kvproto::{
     kvrpcpb::{self, CommandPri, Context, DiskFullOpt},
     pdpb::QueryKind,
@@ -478,6 +477,10 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             memory_quota: Arc::new(MemoryQuota::new(config.memory_quota.0 as _)),
         });
 
+        SCHED_TXN_MEMORY_QUOTA_IN_USE
+            .allocated
+            .set(config.memory_quota.0 as i64);
+
         slow_log!(
             t.saturating_elapsed(),
             "initialized the transaction scheduler"
@@ -705,15 +708,13 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             };
             if matches!(
                 task.cmd(),
-                Command::FlashbackToVersionReadPhase { .. }
-                    | Command::FlashbackToVersion { .. }
+                Command::FlashbackToVersionReadPhase { .. } | Command::FlashbackToVersion { .. }
             ) {
                 snap_ctx.allowed_in_flashback = true;
             }
             // The program is currently in scheduler worker threads.
             // Safety: `self.inner.worker_pool` should ensure that a TLS engine exists.
-            match unsafe { with_tls_engine(|engine: &mut E| kv::snapshot(engine, snap_ctx)) }
-                .await
+            match unsafe { with_tls_engine(|engine: &mut E| kv::snapshot(engine, snap_ctx)) }.await
             {
                 Ok(snapshot) => {
                     SCHED_STAGE_COUNTER_VEC.get(tag).snapshot_ok.inc();
@@ -879,8 +880,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                         do_wake_up = false;
                     } else {
                         panic!(
-                            "undetermined error: {:?} cid={}, tag={}, process
-                        result={:?}",
+                            "undetermined error: {:?} cid={}, tag={}, process result={:?}",
                             e, cid, tag, &pr
                         );
                     }
@@ -2518,7 +2518,7 @@ mod tests {
                 );
             } else {
                 assert_matches!(fut.try_recv(), Ok(None));
-                    requests.push(fut);
+                requests.push(fut);
             }
         }
 
