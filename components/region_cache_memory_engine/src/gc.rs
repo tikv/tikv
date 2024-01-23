@@ -219,8 +219,6 @@ impl Filter {
             return Ok(());
         }
         self.filtered += 1;
-        // we cannot delete it directly as it's the node the iterator currently points
-        // to, so we cache it in the buffer and delete them later.
         self.write_cf_handle.remove(key);
         self.handle_filtered_write(write)?;
 
