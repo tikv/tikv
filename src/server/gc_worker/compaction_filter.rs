@@ -821,7 +821,7 @@ pub mod test_utils {
                     cfg.ratio_threshold = ratio_threshold;
                 }
                 cfg.enable_compaction_filter = true;
-                GcWorkerConfigManager(Arc::new(VersionTrack::new(cfg)), None)
+                GcWorkerConfigManager(Arc::new(VersionTrack::new(cfg)))
             };
             let feature_gate = {
                 let feature_gate = FeatureGate::default();
