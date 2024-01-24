@@ -2719,6 +2719,20 @@ fn test_rpc_wall_time() {
                 .get_total_rpc_wall_time_ns()
                 > 0
         );
+        assert!(
+            resp.get_get()
+                .get_exec_details_v2()
+                .get_time_detail_v2()
+                .get_grpc_exec_time_ns()
+                > 0
+        );
+        assert!(
+            resp.get_get()
+                .get_exec_details_v2()
+                .get_time_detail_v2()
+                .get_grpc_wait_time_ns()
+                > 0
+        );
     }
 }
 

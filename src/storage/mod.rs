@@ -623,6 +623,9 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
 
         let quota_limiter = self.quota_limiter.clone();
         let mut sample = quota_limiter.new_sample(true);
+        with_tls_tracker(|tracker| {
+            tracker.metrics.grpc_exec_nanos = stage_begin_ts.saturating_elapsed().as_nanos() as u64;
+        });
 
         self.read_pool_spawn_with_busy_check(
             busy_threshold,
@@ -1010,6 +1013,9 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         let busy_threshold = Duration::from_millis(ctx.busy_threshold_ms as u64);
         let quota_limiter = self.quota_limiter.clone();
         let mut sample = quota_limiter.new_sample(true);
+        with_tls_tracker(|tracker| {
+            tracker.metrics.grpc_exec_nanos = stage_begin_ts.saturating_elapsed().as_nanos() as u64;
+        });
         self.read_pool_spawn_with_busy_check(
             busy_threshold,
             async move {
@@ -1063,7 +1069,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                     let buckets = snapshot.ext().get_buckets();
                     let (result, stats) = Self::with_perf_context(CMD, || {
                         let _guard = sample.observe_cpu();
-                        let snap_store = SnapshotStore::new(
+                        let snap_store: SnapshotStore<<E as Engine>::Snap> = SnapshotStore::new(
                             snapshot,
                             start_ts,
                             ctx.get_isolation_level(),
