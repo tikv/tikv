@@ -962,13 +962,18 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
             MeasuredBatchResponse::default,
             collect_batch_resp,
         );
-
+        let active_resource_group_count = self
+            .resource_manager
+            .as_ref()
+            .map(|x| x.active_resource_group(""))
+            .unwrap_or(0);
         let mut response_retriever = response_retriever.map(move |mut item| {
             handle_measures_for_batch_commands(&mut item);
             let mut r = item.batch_resp;
             GRPC_RESP_BATCH_COMMANDS_SIZE.observe(r.request_ids.len() as f64);
             // TODO: per thread load is more reasonable for batching.
             r.set_transport_layer_load(grpc_thread_load.total_load() as u64);
+            r.set_active_resource_group_count(active_resource_group_count);
             GrpcResult::<(BatchCommandsResponse, WriteFlags)>::Ok((
                 r,
                 WriteFlags::default().buffer_hint(false),
