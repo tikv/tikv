@@ -368,7 +368,7 @@ dependencies = [
 [[package]]
 name = "azure_core"
 version = "0.1.0"
-source = "git+https://github.com/tikv/azure-sdk-for-rust?branch=release-6.5-fips#4184014b4c07f2afc73fde854e6c844c4f1f1a3e"
+source = "git+https://github.com/tikv/azure-sdk-for-rust?branch=release-6.5-fips#b3c53f4cec4a6b541e49388b51e696dc892f18a3"
 dependencies = [
  "async-trait",
  "base64",
@@ -394,7 +394,7 @@ dependencies = [
 [[package]]
 name = "azure_identity"
 version = "0.1.0"
-source = "git+https://github.com/tikv/azure-sdk-for-rust?branch=release-6.5-fips#4184014b4c07f2afc73fde854e6c844c4f1f1a3e"
+source = "git+https://github.com/tikv/azure-sdk-for-rust?branch=release-6.5-fips#b3c53f4cec4a6b541e49388b51e696dc892f18a3"
 dependencies = [
  "async-timer",
  "async-trait",
@@ -413,7 +413,7 @@ dependencies = [
 [[package]]
 name = "azure_storage"
 version = "0.1.0"
-source = "git+https://github.com/tikv/azure-sdk-for-rust?branch=release-6.5-fips#4184014b4c07f2afc73fde854e6c844c4f1f1a3e"
+source = "git+https://github.com/tikv/azure-sdk-for-rust?branch=release-6.5-fips#b3c53f4cec4a6b541e49388b51e696dc892f18a3"
 dependencies = [
  "RustyXML",
  "async-trait",
@@ -424,8 +424,9 @@ dependencies = [
  "futures 0.3.15",
  "http",
  "log",
+ "md5",
  "once_cell",
- "openssl",
+ "ring",
  "serde",
  "serde-xml-rs",
  "serde_derive",
@@ -4653,6 +4654,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "ring"
+version = "0.16.16"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b72b84d47e8ec5a4f2872e8262b8f8256c5be1c938a7d6d3a867a3ba8f722f74"
+dependencies = [
+ "cc",
+ "libc 0.2.139",
+ "once_cell",
+ "spin",
+ "untrusted",
+ "web-sys",
+ "winapi 0.3.9",
+]
+
+[[package]]
 name = "rocksdb"
 version = "0.3.0"
 source = "git+https://github.com/tikv/rust-rocksdb.git?branch=tikv-6.5#91f362ac1db42341a2e85df8b42cd0690aee69b0"
@@ -5371,6 +5387,12 @@ dependencies = [
  "libc 0.2.139",
  "winapi 0.3.9",
 ]
+
+[[package]]
+name = "spin"
+version = "0.5.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6e63cff320ae2c57904679ba7cb63280a3dc4613885beafb148ee7bf9aa9042d"
 
 [[package]]
 name = "sst_importer"
@@ -6269,11 +6291,13 @@ name = "tikv-ctl"
 version = "0.0.1"
 dependencies = [
  "api_version",
+ "aws",
  "backup",
  "cc",
  "cdc",
  "chrono",
  "clap 2.33.0",
+ "cloud",
  "collections",
  "concurrency_manager",
  "crossbeam",
@@ -6888,6 +6912,12 @@ name = "unicode-width"
 version = "0.1.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7007dbd421b92cc6e28410fe7362e2e0a2503394908f417b68ec8d1c364c4e20"
+
+[[package]]
+name = "untrusted"
+version = "0.7.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a156c684c91ea7d62626509bce3cb4e1d9ed5c4d978f7b4352658f96a4c26b4a"
 
 [[package]]
 name = "url"

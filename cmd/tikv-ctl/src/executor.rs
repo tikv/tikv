@@ -19,7 +19,10 @@ use kvproto::{
     metapb::{Peer, Region},
     raft_cmdpb::RaftCmdRequest,
     raft_serverpb::PeerState,
+    brpb::S3 as InputConfig,
 };
+use aws::S3Storage;
+use cloud::blob::{BlobStorage, PutResource};
 use pd_client::{Config as PdConfig, PdClient, RpcClient};
 use protobuf::Message;
 use raft::eraftpb::{ConfChange, ConfChangeV2, Entry, EntryType};
@@ -291,6 +294,23 @@ pub trait DebugExecutor {
                 cmd.merge_from_bytes(&ctx).unwrap();
                 println!("ConfChangeV2.RaftCmdRequest: {:#?}", cmd);
             }
+        }
+    }
+
+    /// ..
+    fn debug_s3(&self, bucket: String, prefix: String, task: String) {
+        let mut input = InputConfig::default();
+        input.set_bucket(bucket);
+        input.set_prefix(prefix.to_owned());
+        let stg = S3Storage::from_input(input).unwrap();
+        if task == "put" {
+            // put something
+            let magic_contents = "567890";
+            block_on(stg.put(
+                "debug_key",
+                PutResource(Box::new(magic_contents.as_bytes())),
+                magic_contents.len() as u64,
+            )).unwrap()
         }
     }
 

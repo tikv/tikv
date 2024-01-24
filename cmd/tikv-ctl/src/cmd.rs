@@ -207,6 +207,18 @@ pub enum Cmd {
         )]
         key: String,
     },
+    ///
+    S3 {
+        #[structopt(long)]
+        /// ..
+        bucket: String,
+
+        /// ..
+        prefix: String,
+
+        /// ..
+        task: String,
+    },
     /// Print the mvcc value
     Mvcc {
         #[structopt(
