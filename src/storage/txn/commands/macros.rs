@@ -37,7 +37,6 @@ macro_rules! command {
             content => {
                 $($(#[$inner_doc:meta])* $arg: ident : $arg_ty: ty,)*
             }
-            $(in_heap => { $($arg_in_heap: ident)+ })?
     ) => {
         command! {
             $(#[$outer_doc])*
@@ -46,7 +45,6 @@ macro_rules! command {
                 content => {
                     $($(#[$inner_doc])* $arg: $arg_ty,)*
                 }
-                $(in_heap => { $($arg_in_heap)+ })?
         }
 
         impl std::fmt::Display for $cmd {
@@ -74,7 +72,6 @@ macro_rules! command {
             content => {
                 $($(#[$inner_doc:meta])* $arg: ident : $arg_ty: ty,)*
             }
-            $(in_heap => { $($arg_in_heap: ident)+ })?
     ) => {
         $(#[$outer_doc])*
         pub struct $cmd {
