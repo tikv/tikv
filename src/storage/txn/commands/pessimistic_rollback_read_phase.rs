@@ -16,11 +16,14 @@ use crate::storage::{
 command! {
     PessimisticRollbackReadPhase:
         cmd_ty => Vec<StorageResult<()>>,
-        display => "kv::pessimistic_rollback_read_phase", (),
+        display => { "kv::pessimistic_rollback_read_phase", (), }
         content => {
             start_ts: TimeStamp,
             for_update_ts: TimeStamp,
             scan_key: Option<Key>,
+        }
+        in_heap => {
+            scan_key,
         }
 }
 

@@ -8,6 +8,7 @@ use std::{
     },
 };
 
+use collections::HashMap;
 use kvproto::{
     encryptionpb::EncryptionMeta,
     kvrpcpb::LockInfo,
@@ -34,9 +35,66 @@ pub trait HeapSize {
     }
 }
 
-impl HeapSize for [u8] {
+macro_rules! impl_heap_size{
+    (
+        $($typ: ty,)+
+    ) => {
+        $(
+            impl HeapSize for $typ {
+                fn heap_size(&self) -> usize {
+                    std::mem::size_of::<Self>()
+                }
+            }
+        )+
+    }
+}
+
+impl_heap_size! {
+    // These types are not necessary stored in heap as they are be inlined
+    // in structures.
+    // TODO: We may need to add a new method to distinguish the difference.
+    u8, bool, u64,
+}
+
+impl<T: HeapSize> HeapSize for [T] {
     fn heap_size(&self) -> usize {
-        std::mem::size_of_val(self)
+        if self.is_empty() {
+            0
+        } else {
+            self.len() * self[0].heap_size()
+        }
+    }
+}
+
+impl<T: HeapSize> HeapSize for Vec<T> {
+    fn heap_size(&self) -> usize {
+        self.as_slice().heap_size()
+    }
+}
+
+impl<A: HeapSize, B: HeapSize> HeapSize for (A, B) {
+    fn heap_size(&self) -> usize {
+        self.0.heap_size() + self.1.heap_size()
+    }
+}
+
+impl<T: HeapSize> HeapSize for Option<T> {
+    fn heap_size(&self) -> usize {
+        match self {
+            Some(t) => t.heap_size(),
+            None => 0,
+        }
+    }
+}
+
+impl<K: HeapSize, V: HeapSize> HeapSize for HashMap<K, V> {
+    fn heap_size(&self) -> usize {
+        if self.is_empty() {
+            0
+        } else {
+            let kv = self.iter().next().unwrap();
+            self.len() * (kv.0.heap_size() + kv.1.heap_size())
+        }
     }
 }
 
@@ -146,6 +204,22 @@ impl MemoryQuota {
         self.capacity.store(capacity, Ordering::Relaxed);
     }
 
+    pub fn alloc_force(&self, bytes: usize) {
+        let mut in_use_bytes = self.in_use.load(Ordering::Relaxed);
+        loop {
+            let new_in_use_bytes = in_use_bytes + bytes;
+            match self.in_use.compare_exchange_weak(
+                in_use_bytes,
+                new_in_use_bytes,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => return,
+                Err(current) => in_use_bytes = current,
+            }
+        }
+    }
+
     pub fn alloc(&self, bytes: usize) -> Result<(), MemoryQuotaExceeded> {
         let capacity = self.capacity.load(Ordering::Relaxed);
         let mut in_use_bytes = self.in_use.load(Ordering::Relaxed);
@@ -241,5 +315,45 @@ mod tests {
         assert_eq!(quota.in_use(), 12);
         drop(allocated2);
         assert_eq!(quota.in_use(), 4);
+    }
+
+    #[test]
+    fn test_alloc_force() {
+        let quota = MemoryQuota::new(100);
+        quota.alloc(10).unwrap();
+        assert_eq!(quota.in_use(), 10);
+        quota.alloc_force(100);
+        assert_eq!(quota.in_use(), 110);
+
+        quota.free(10);
+        assert_eq!(quota.in_use(), 100);
+        quota.alloc(10).unwrap_err();
+        assert_eq!(quota.in_use(), 100);
+
+        quota.alloc_force(20);
+        assert_eq!(quota.in_use(), 120);
+        quota.free(110);
+        assert_eq!(quota.in_use(), 10);
+
+        quota.alloc(10).unwrap();
+        assert_eq!(quota.in_use(), 20);
+        quota.free(10);
+        assert_eq!(quota.in_use(), 10);
+
+        // Resize to a smaller capacity
+        quota.set_capacity(10);
+        quota.alloc(100).unwrap_err();
+        assert_eq!(quota.in_use(), 10);
+        quota.alloc_force(100);
+        assert_eq!(quota.in_use(), 110);
+        // Resize to a larger capacity
+        quota.set_capacity(120);
+        quota.alloc(10).unwrap();
+        assert_eq!(quota.in_use(), 120);
+        quota.alloc_force(100);
+        assert_eq!(quota.in_use(), 220);
+        // Free more then it has.
+        quota.free(230);
+        assert_eq!(quota.in_use(), 0);
     }
 }
