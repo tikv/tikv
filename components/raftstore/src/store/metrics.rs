@@ -524,13 +524,6 @@ lazy_static! {
             &["type"]
         ).unwrap();
 
-    pub static ref STORE_RAFT_PROCESS_BUSY_GAUGE_VEC: IntGaugeVec =
-        register_int_gauge_vec!(
-            "tikv_raftstore_raft_process_busy",
-            "Is raft process busy or not",
-            &["type"]
-        ).unwrap();
-
     pub static ref STORE_SNAPSHOT_TRAFFIC_GAUGE_VEC: IntGaugeVec =
         register_int_gauge_vec!(
             "tikv_raftstore_snapshot_traffic_total",

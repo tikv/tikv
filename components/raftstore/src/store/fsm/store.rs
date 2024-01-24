@@ -2765,6 +2765,10 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         let pending_recovery = (time::get_time().sec as u32).saturating_sub(start_time)
             <= STORE_RECOVERY_DURATION.as_secs() as u32;
         let is_busy = if pending_recovery {
+            // If the store is busy in handling recovery when starting, it should not be
+            // treated as a normal store for balance. Only when the store is
+            // almost idle (no more pending regions on recovery), it can be
+            // regarded as candidates for balance.
             let target_count = ((1_f64 - self.ctx.cfg.min_recovery_ready_region_ratio)
                 * stats.get_region_count() as f64) as usize;
             let pending_count = self
@@ -2774,17 +2778,11 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
                 .unwrap()
                 .pending_recovery_peers
                 .len();
-            STORE_RAFT_PROCESS_BUSY_GAUGE_VEC
-                .with_label_values(&["pending_region_count"])
-                .set(pending_count as i64);
             pending_count < target_count
         } else {
             store_is_busy
         };
         stats.set_is_busy(is_busy);
-        STORE_RAFT_PROCESS_BUSY_GAUGE_VEC
-            .with_label_values(&["is_busy"])
-            .set(is_busy as i64);
 
         let mut query_stats = QueryStats::default();
         query_stats.set_put(
