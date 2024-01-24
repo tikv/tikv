@@ -459,6 +459,9 @@ fn main() {
                     let to = unescape(&to);
                     debug_executor.raw_scan(&from, &to, limit, &cf);
                 }
+                Cmd::S3 { bucket, prefix, task } => {
+                    debug_executor.debug_s3(bucket, prefix, task)
+                }
                 Cmd::Mvcc {
                     key,
                     show_cf,
