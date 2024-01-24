@@ -186,6 +186,8 @@ pub struct StoreMeta {
     pub damaged_ranges: HashMap<String, (Vec<u8>, Vec<u8>)>,
     /// record peers in recovery progress
     pub pending_recovery_peers: HashSet<u64>,
+    /// record the number of peers done for recovery
+    pub recovered_peers_count: u64,
 }
 
 impl StoreRegionMeta for StoreMeta {
@@ -237,6 +239,7 @@ impl StoreMeta {
             region_read_progress: RegionReadProgressRegistry::new(),
             damaged_ranges: HashMap::default(),
             pending_recovery_peers: HashSet::default(),
+            recovered_peers_count: 0,
         }
     }
 
@@ -2762,23 +2765,22 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
             .stat
             .is_busy
             .swap(false, Ordering::Relaxed);
-        let pending_recovery = (time::get_time().sec as u32).saturating_sub(start_time)
-            <= STORE_RECOVERY_DURATION.as_secs() as u32;
+        let pending_recovery = {
+            (time::get_time().sec as u32).saturating_sub(start_time)
+                <= STORE_RECOVERY_DURATION.as_secs() as u32
+        };
         let is_busy = if pending_recovery {
             // If the store is busy in handling recovery when starting, it should not be
             // treated as a normal store for balance. Only when the store is
             // almost idle (no more pending regions on recovery), it can be
             // regarded as candidates for balance.
-            let target_count = ((1_f64 - self.ctx.cfg.min_recovery_ready_region_ratio)
-                * stats.get_region_count() as f64) as usize;
-            let pending_count = self
-                .ctx
-                .store_meta
-                .lock()
-                .unwrap()
-                .pending_recovery_peers
-                .len();
-            pending_count < target_count
+            let target_count = std::cmp::max(
+                1,
+                self.ctx.cfg.min_recovery_ready_region_percent * (stats.get_region_count() as u64)
+                    / 100,
+            );
+            let recovered_count = self.ctx.store_meta.lock().unwrap().recovered_peers_count;
+            recovered_count < target_count
         } else {
             store_is_busy
         };

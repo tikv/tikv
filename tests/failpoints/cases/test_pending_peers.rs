@@ -109,3 +109,47 @@ fn test_pending_snapshot() {
         state2
     );
 }
+
+#[test]
+fn test_pending_recovery_peers() {
+    let mut cluster = new_node_cluster(0, 3);
+    cluster.cfg.raft_store.raft_base_tick_interval = ReadableDuration::millis(5);
+    cluster.cfg.raft_store.raft_store_max_leader_lease = ReadableDuration::millis(100);
+    cluster.cfg.raft_store.leader_transfer_max_log_lag = 10;
+    cluster.cfg.raft_store.check_long_uncommitted_interval = ReadableDuration::millis(10); // short check interval for recovery
+    cluster.cfg.raft_store.pd_heartbeat_tick_interval = ReadableDuration::millis(50);
+
+    let pd_client = Arc::clone(&cluster.pd_client);
+    // Disable default max peer count check.
+    pd_client.disable_default_operator();
+
+    let r1 = cluster.run_conf_change();
+    pd_client.must_add_peer(r1, new_peer(2, 1002));
+    pd_client.must_add_peer(r1, new_peer(3, 1003));
+
+    cluster.must_put(b"k1", b"v1");
+    must_get_equal(&cluster.get_engine(2), b"k1", b"v1");
+    must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
+
+    // Pause peer 1003 on applying logs to make it pending.
+    let before_apply_stat = cluster.apply_state(r1, 3);
+    cluster.stop_node(3);
+    for i in 0..=cluster.cfg.raft_store.leader_transfer_max_log_lag {
+        let bytes = format!("k{:03}", i).into_bytes();
+        cluster.must_put(&bytes, &bytes);
+    }
+    cluster.must_put(b"k2", b"v2");
+    must_get_equal(&cluster.get_engine(1), b"k2", b"v2");
+    must_get_equal(&cluster.get_engine(2), b"k2", b"v2");
+
+    // Restart peer 1003 and make it pending for applying pending logs.
+    fail::cfg("on_handle_apply_1003", "return").unwrap();
+    cluster.run_node(3).unwrap();
+    let after_apply_stat = cluster.apply_state(r1, 3);
+    assert!(after_apply_stat.applied_index == before_apply_stat.applied_index);
+    cluster.must_send_store_heartbeat(3);
+    sleep_ms(100);
+    let stats = cluster.pd_client.get_store_stats(3).unwrap();
+    assert!(stats.is_busy);
+    fail::remove("on_handle_apply_1003");
+}

@@ -6583,7 +6583,7 @@ where
         }
 
         // If the peer has large unapplied logs, this peer should be recorded until
-        // the lag reaches the given threshold.
+        // the lag is less than the given threshold.
         let applied_idx = self.fsm.peer.get_store().applied_index();
         let last_idx = self.fsm.peer.get_store().last_index();
         if last_idx >= applied_idx + self.ctx.cfg.leader_transfer_max_log_lag {
@@ -6594,9 +6594,11 @@ where
             {
                 let mut meta = self.ctx.store_meta.lock().unwrap();
                 meta.pending_recovery_peers.remove(&peer_id);
+                meta.recovered_peers_count += 1;
             }
             self.fsm.peer.pending_recovery = false;
         }
+        // If the peer is pending on recovery, it should keep the tick.
         if self.fsm.peer.pending_recovery {
             self.register_check_peer_complete_recovery();
         }
