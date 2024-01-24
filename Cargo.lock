@@ -2830,7 +2830,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git?branch=release-6.5#1bdcc25ed63c42d5271edb7126292a3c5184fe45"
+source = "git+https://github.com/pingcap/kvproto.git?branch=release-6.5#a0e3fbb1eeee6b8e04e2bec6d1ca65dcd9172662"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
@@ -5912,6 +5912,7 @@ dependencies = [
  "grpcio",
  "kvproto",
  "protobuf",
+ "raftstore",
  "rand 0.8.5",
  "tempfile",
  "test_raftstore",
