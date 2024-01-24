@@ -632,4 +632,10 @@ lazy_static! {
         &["type"]
     )
     .unwrap();
+
+    pub static ref SCHED_TXN_RUNNING_COMMANDS: IntGauge = register_int_gauge!(
+        "tikv_scheduler_running_commands",
+        "The count of running scheduler commands"
+    )
+    .unwrap();
 }

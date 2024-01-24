@@ -775,7 +775,12 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         // See https://github.com/rust-lang/rust/issues/59087
         let execution = execution.map(move |_| {
             memory_quota.free(execution_bytes);
+            SCHED_TXN_MEMORY_QUOTA_IN_USE
+                .used
+                .set(memory_quota.in_use() as i64);
+            SCHED_TXN_RUNNING_COMMANDS.dec();
         });
+        SCHED_TXN_RUNNING_COMMANDS.inc();
         self.get_sched_pool()
             .spawn(metadata, priority, execution)
             .unwrap();
