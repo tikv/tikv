@@ -14,4 +14,8 @@ collections = { workspace = true }
 skiplist-rs = { git = "https://github.com/tikv/skiplist-rs.git", branch = "main" }
 bytes = "1.0"
 tikv_util = { workspace = true }
+txn_types = { workspace = true }
+log_wrappers = { workspace = true }
+slog-global = { workspace = true }
+slog = { workspace = true }
 engine_rocks = { workspace = true }
