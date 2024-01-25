@@ -42,7 +42,7 @@ use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 use file_system::IoBytes;
 use futures::{compat::Future01CompatExt, StreamExt};
 use kvproto::{
-    kvrpcpb::{self, CommandPri, Context, DiskFullOpt, ExtraOp},
+    kvrpcpb::{self, CommandPri, Context, DiskFullOpt},
     pdpb::QueryKind,
 };
 use parking_lot::{Mutex, MutexGuard, RwLockWriteGuard};
@@ -53,9 +53,10 @@ use resource_metering::{FutureExt, ResourceTagFactory};
 use smallvec::{smallvec, SmallVec};
 use tikv_kv::{Modify, Snapshot, SnapshotExt, WriteData, WriteEvent};
 use tikv_util::{quota_limiter::QuotaLimiter, time::Instant, timer::GLOBAL_TIMER_HANDLE};
-use tracker::{get_tls_tracker_token, set_tls_tracker_token, TrackerToken, GLOBAL_TRACKERS};
+use tracker::{set_tls_tracker_token, TrackerToken, GLOBAL_TRACKERS};
 use txn_types::TimeStamp;
 
+use super::task::Task;
 use crate::{
     server::lock_manager::waiter_manager,
     storage::{
@@ -107,26 +108,6 @@ const SCHEDULER_CPU_TIME_FACTOR: u32 = 5;
 
 type SVec<T> = SmallVec<[T; 4]>;
 
-/// Task is a running command.
-pub(super) struct Task {
-    pub(super) cid: u64,
-    pub(super) tracker: TrackerToken,
-    pub(super) cmd: Command,
-    pub(super) extra_op: ExtraOp,
-}
-
-impl Task {
-    /// Creates a task for a running command.
-    pub(super) fn new(cid: u64, tracker: TrackerToken, cmd: Command) -> Task {
-        Task {
-            cid,
-            tracker,
-            cmd,
-            extra_op: ExtraOp::Noop,
-        }
-    }
-}
-
 struct CmdTimer {
     tag: CommandKind,
     begin: Instant,
@@ -162,16 +143,16 @@ struct TaskContext {
 
 impl TaskContext {
     fn new(task: Task, cb: SchedulerTaskCallback, prepared_latches: Option<Lock>) -> TaskContext {
-        let tag = task.cmd.tag();
-        let lock = prepared_latches.unwrap_or_else(|| task.cmd.gen_lock());
+        let tag = task.cmd().tag();
+        let lock = prepared_latches.unwrap_or_else(|| task.cmd().gen_lock());
         // The initial locks should be either all acquired or all not acquired.
         assert!(lock.owned_count == 0 || lock.owned_count == lock.required_hashes.len());
         // Write command should acquire write lock.
-        if !task.cmd.readonly() && !lock.is_write_lock() {
-            panic!("write lock is expected for command {}", task.cmd);
+        if !task.cmd().readonly() && !lock.is_write_lock() {
+            panic!("write lock is expected for command {}", task.cmd());
         }
         let write_bytes = if lock.is_write_lock() {
-            task.cmd.write_bytes()
+            task.cmd().write_bytes()
         } else {
             0
         };
@@ -196,7 +177,7 @@ impl TaskContext {
     fn on_schedule(&mut self) {
         let elapsed = self.latch_timer.saturating_elapsed();
         if let Some(task) = &self.task.as_ref() {
-            GLOBAL_TRACKERS.with_tracker(task.tracker, |tracker| {
+            GLOBAL_TRACKERS.with_tracker(task.tracker(), |tracker| {
                 tracker.metrics.latch_wait_nanos = elapsed.as_nanos() as u64;
             });
         }
@@ -394,7 +375,7 @@ impl<L: LockManager> TxnSchedulerInner<L> {
         let tctx = task_slot.get_mut(&cid).unwrap();
         // Check deadline early during acquiring latches to avoid expired requests
         // blocking other requests.
-        let cmd = &tctx.task.as_ref().unwrap().cmd;
+        let cmd = tctx.task.as_ref().unwrap().cmd();
         if let Err(e) = cmd.deadline().check() {
             // `acquire_lock_on_wakeup` is called when another command releases its locks
             // and wakes up command `cid`. This command inserted its lock before
@@ -518,9 +499,10 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             });
             return;
         }
+        let cid = self.inner.gen_id();
+        let task = Task::new(cid, cmd);
         self.schedule_command(
-            None,
-            cmd,
+            task,
             SchedulerTaskCallback::NormalRequestCallback(callback),
             None,
         );
@@ -544,13 +526,13 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
 
     fn schedule_command(
         &self,
-        specified_cid: Option<u64>,
-        cmd: Command,
+        task: Task,
         callback: SchedulerTaskCallback,
         prepared_latches: Option<Lock>,
     ) {
-        let cid = specified_cid.unwrap_or_else(|| self.inner.gen_id());
-        let tracker = get_tls_tracker_token();
+        let cid = task.cid();
+        let tracker = task.tracker();
+        let cmd = task.cmd();
         debug!("received new command"; "cid" => cid, "cmd" => ?cmd, "tracker" => ?tracker);
 
         let tag = cmd.tag();
@@ -564,7 +546,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         let mut task_slot = self.inner.get_task_slot(cid);
         let tctx = task_slot.entry(cid).or_insert_with(|| {
             self.inner
-                .new_task_context(Task::new(cid, tracker, cmd), callback, prepared_latches)
+                .new_task_context(task, callback, prepared_latches)
         });
 
         if self.inner.latches.acquire(&mut tctx.lock, cid) {
@@ -576,7 +558,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             return;
         }
         let task = tctx.task.as_ref().unwrap();
-        self.fail_fast_or_check_deadline(cid, &task.cmd);
+        self.fail_fast_or_check_deadline(cid, task.cmd());
         fail_point!("txn_scheduler_acquire_fail");
     }
 
@@ -669,11 +651,12 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             .collect();
 
         let cmd = commands::AcquirePessimisticLockResumed::from_lock_wait_entries(awakened_entries);
+        let cid = specified_cid.unwrap_or_else(|| self.inner.gen_id());
+        let task = Task::new(cid, cmd.into());
 
         // TODO: Make flow control take effect on this thing.
         self.schedule_command(
-            specified_cid,
-            cmd.into(),
+            task,
             SchedulerTaskCallback::LockKeyCallbacks(key_callbacks),
             prepared_latches,
         );
@@ -686,26 +669,26 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
 
     /// Executes the task in the sched pool.
     fn execute(&self, mut task: Task) {
-        set_tls_tracker_token(task.tracker);
+        set_tls_tracker_token(task.tracker());
         let sched = self.clone();
-        let metadata = TaskMetadata::from_ctx(task.cmd.resource_control_ctx());
+        let metadata = TaskMetadata::from_ctx(task.cmd().resource_control_ctx());
 
         self.get_sched_pool()
-            .spawn(metadata, task.cmd.priority(), async move {
+            .spawn(metadata, task.cmd().priority(), async move {
                 fail_point!("scheduler_start_execute");
                 if sched.check_task_deadline_exceeded(&task, None) {
                     return;
                 }
 
-                let tag = task.cmd.tag();
+                let tag = task.cmd().tag();
                 SCHED_STAGE_COUNTER_VEC.get(tag).snapshot.inc();
 
                 let mut snap_ctx = SnapContext {
-                    pb_ctx: task.cmd.ctx(),
+                    pb_ctx: task.cmd().ctx(),
                     ..Default::default()
                 };
                 if matches!(
-                    task.cmd,
+                    task.cmd(),
                     Command::FlashbackToVersionReadPhase { .. }
                         | Command::FlashbackToVersion { .. }
                 ) {
@@ -722,13 +705,13 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                         let extra_op = snapshot.ext().get_txn_extra_op();
                         if !sched
                             .inner
-                            .get_task_slot(task.cid)
-                            .get(&task.cid)
+                            .get_task_slot(task.cid())
+                            .get(&task.cid())
                             .unwrap()
                             .try_own()
                         {
                             sched.finish_with_err(
-                                task.cid,
+                                task.cid(),
                                 StorageErrorInner::DeadlineExceeded,
                                 None,
                             );
@@ -736,22 +719,22 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                         }
 
                         if let Some(term) = term {
-                            task.cmd.ctx_mut().set_term(term.get());
+                            task.cmd_mut().ctx_mut().set_term(term.get());
                         }
-                        task.extra_op = extra_op;
+                        task.set_extra_op(extra_op);
 
                         debug!(
                             "process cmd with snapshot";
-                            "cid" => task.cid, "term" => ?term, "extra_op" => ?extra_op,
-                            "trakcer" => ?task.tracker
+                            "cid" => task.cid(), "term" => ?term, "extra_op" => ?extra_op,
+                            "tracker" => ?task.tracker()
                         );
                         sched.process(snapshot, task).await;
                     }
                     Err(err) => {
                         SCHED_STAGE_COUNTER_VEC.get(tag).snapshot_err.inc();
 
-                        info!("get snapshot failed"; "cid" => task.cid, "err" => ?err);
-                        sched.finish_with_err(task.cid, Error::from(err), None);
+                        info!("get snapshot failed"; "cid" => task.cid(), "err" => ?err);
+                        sched.finish_with_err(task.cid(), Error::from(err), None);
                     }
                 }
             })
@@ -802,7 +785,8 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         let tctx = self.inner.dequeue_task_context(cid);
         if let ProcessResult::NextCommand { cmd } = pr {
             SCHED_STAGE_COUNTER_VEC.get(tag).next_cmd.inc();
-            self.schedule_command(None, cmd, tctx.cb.unwrap(), None);
+            let task = Task::new(self.inner.gen_id(), cmd);
+            self.schedule_command(task, tctx.cb.unwrap(), None);
         } else {
             tctx.cb.unwrap().execute(pr);
         }
@@ -880,7 +864,8 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             };
             if let ProcessResult::NextCommand { cmd } = pr {
                 SCHED_STAGE_COUNTER_VEC.get(tag).next_cmd.inc();
-                self.schedule_command(None, cmd, cb, None);
+                let task = Task::new(self.inner.gen_id(), cmd);
+                self.schedule_command(task, cb, None);
             } else {
                 GLOBAL_TRACKERS.with_tracker(sched_details.tracker, |tracker| {
                     tracker.metrics.scheduler_process_nanos = sched_details
@@ -1143,18 +1128,18 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             return;
         }
 
-        let resource_tag = self.inner.resource_tag_factory.new_tag(task.cmd.ctx());
+        let resource_tag = self.inner.resource_tag_factory.new_tag(task.cmd().ctx());
         async {
-            let tag = task.cmd.tag();
+            let tag = task.cmd().tag();
             fail_point!("scheduler_async_snapshot_finish");
             SCHED_STAGE_COUNTER_VEC.get(tag).process.inc();
 
             let timer = Instant::now();
 
-            let region_id = task.cmd.ctx().get_region_id();
-            let ts = task.cmd.ts();
-            let mut sched_details = SchedulerDetails::new(task.tracker, timer);
-            match &task.cmd {
+            let region_id = task.cmd().ctx().get_region_id();
+            let ts = task.cmd().ts();
+            let mut sched_details = SchedulerDetails::new(task.tracker(), timer);
+            match task.cmd() {
                 Command::Prewrite(_) | Command::PrewritePessimistic(_) => {
                     tls_collect_query(region_id, QueryKind::Prewrite);
                 }
@@ -1171,7 +1156,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             }
 
             fail_point!("scheduler_process");
-            if task.cmd.readonly() {
+            if task.cmd().readonly() {
                 self.process_read(snapshot, task, &mut sched_details);
             } else {
                 self.process_write(snapshot, task, &mut sched_details).await;
@@ -1195,22 +1180,22 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
     /// `ReadFinished` message back to the `TxnScheduler`.
     fn process_read(self, snapshot: E::Snap, task: Task, sched_details: &mut SchedulerDetails) {
         fail_point!("txn_before_process_read");
-        debug!("process read cmd in worker pool"; "cid" => task.cid);
+        let cid = task.cid();
+        debug!("process read cmd in worker pool"; "cid" => cid);
 
-        let tag = task.cmd.tag();
+        let tag = task.cmd().tag();
 
         let begin_instant = Instant::now();
-        let cmd = task.cmd;
         let pr = unsafe {
             with_perf_context::<E, _, _>(tag, || {
-                cmd.process_read(snapshot, &mut sched_details.stat)
+                task.process_read(snapshot, &mut sched_details.stat)
                     .unwrap_or_else(|e| ProcessResult::Failed { err: e.into() })
             })
         };
         SCHED_PROCESSING_READ_HISTOGRAM_STATIC
             .get(tag)
             .observe(begin_instant.saturating_elapsed_secs());
-        self.on_read_finished(task.cid, pr, tag);
+        self.on_read_finished(cid, pr, tag);
     }
 
     /// Processes a write command within a worker thread, then posts either a
@@ -1223,24 +1208,19 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         sched_details: &mut SchedulerDetails,
     ) {
         fail_point!("txn_before_process_write");
-        let write_bytes = task.cmd.write_bytes();
-        let tag = task.cmd.tag();
-        let cid = task.cid;
-        let metadata = TaskMetadata::from_ctx(task.cmd.resource_control_ctx());
-        let tracker = task.tracker;
+        let write_bytes = task.cmd().write_bytes();
+        let tag = task.cmd().tag();
+        let cid = task.cid();
+        let metadata = TaskMetadata::from_ctx(task.cmd().resource_control_ctx());
+        let tracker = task.tracker();
         let scheduler = self.clone();
         let quota_limiter = self.inner.quota_limiter.clone();
         let resource_limiter = self.inner.resource_manager.as_ref().and_then(|m| {
+            let ctx = task.cmd().ctx();
             m.get_resource_limiter(
-                task.cmd
-                    .ctx()
-                    .get_resource_control_context()
-                    .get_resource_group_name(),
-                task.cmd.ctx().get_request_source(),
-                task.cmd
-                    .ctx()
-                    .get_resource_control_context()
-                    .get_override_priority(),
+                ctx.get_resource_control_context().get_resource_group_name(),
+                ctx.get_request_source(),
+                ctx.get_resource_control_context().get_override_priority(),
             )
         });
         let mut sample = quota_limiter.new_sample(true);
@@ -1248,8 +1228,8 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             sample.enable_cpu_limit();
         }
         let pessimistic_lock_mode = self.pessimistic_lock_mode();
-        let pipelined =
-            task.cmd.can_be_pipelined() && pessimistic_lock_mode == PessimisticLockMode::Pipelined;
+        let pipelined = task.cmd().can_be_pipelined()
+            && pessimistic_lock_mode == PessimisticLockMode::Pipelined;
         let txn_ext = snapshot.ext().get_txn_ext().cloned();
         let max_ts_synced = snapshot.ext().is_max_ts_synced();
         let causal_ts_provider = self.inner.causal_ts_provider.clone();
@@ -1259,7 +1239,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             causal_ts_provider,
             concurrency_manager.clone(),
             max_ts_synced,
-            &task.cmd,
+            task.cmd(),
         )
         .await;
         if let Err(err) = raw_ext {
@@ -1269,13 +1249,13 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         }
         let raw_ext = raw_ext.unwrap();
 
-        let deadline = task.cmd.deadline();
+        let deadline = task.cmd().deadline();
         let write_result = {
             let _guard = sample.observe_cpu();
             let context = WriteContext {
                 lock_mgr: &self.inner.lock_mgr,
                 concurrency_manager,
-                extra_op: task.extra_op,
+                extra_op: task.extra_op(),
                 statistics: &mut sched_details.stat,
                 async_apply_prewrite: self.inner.enable_async_apply_prewrite,
                 raw_ext,
@@ -1284,8 +1264,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             let begin_instant = Instant::now();
             let res = unsafe {
                 with_perf_context::<E, _, _>(tag, || {
-                    task.cmd
-                        .process_write(snapshot, context)
+                    task.process_write(snapshot, context)
                         .map_err(StorageError::from)
                 })
             };
@@ -1751,8 +1730,8 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         task: &Task,
         sched_details: Option<&SchedulerDetails>,
     ) -> bool {
-        if let Err(e) = task.cmd.deadline().check() {
-            self.finish_with_err(task.cid, e, sched_details);
+        if let Err(e) = task.cmd().deadline().check() {
+            self.finish_with_err(task.cid(), e, sched_details);
             true
         } else {
             false
