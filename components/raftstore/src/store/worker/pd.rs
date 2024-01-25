@@ -6,9 +6,9 @@ use std::{
     fmt::{self, Display, Formatter},
     io, mem,
     sync::{
-        Arc,
         atomic::Ordering,
-        mpsc::{self, Receiver, Sender}, Mutex,
+        mpsc::{self, Receiver, Sender},
+        Arc, Mutex,
     },
     thread::{Builder, JoinHandle},
     time::{Duration, Instant},
@@ -22,7 +22,10 @@ use fail::fail_point;
 use futures::{compat::Future01CompatExt, FutureExt};
 use grpcio_health::{HealthService, ServingStatus};
 use health_controller::{
+    reporters::{RaftstoreReporter, RaftstoreReporterConfig, SlowTrendStatistics},
+    slow_score::SlowScore,
     types::{LatencyInspector, RaftstoreDuration},
+    HealthController,
 };
 use kvproto::{
     kvrpcpb::DiskFullOpt,
@@ -34,7 +37,7 @@ use kvproto::{
     raft_serverpb::RaftMessage,
     replication_modepb::{RegionReplicationStatus, StoreDrAutoSyncStatus},
 };
-use pd_client::{BucketStat, Error, metrics::*, PdClient, RegionStat};
+use pd_client::{metrics::*, BucketStat, Error, PdClient, RegionStat};
 use prometheus::local::LocalHistogram;
 use raft::eraftpb::ConfChangeType;
 use resource_metering::{Collector, CollectorGuard, CollectorRegHandle, RawRecords};
@@ -43,7 +46,7 @@ use tikv_util::{
     box_err, debug, error, info,
     metrics::ThreadInfoStatistics,
     store::QueryStats,
-    sys::{SysQuota, thread::StdThreadBuildWrapper},
+    sys::{thread::StdThreadBuildWrapper, SysQuota},
     thd_name,
     time::{Instant as TiInstant, UnixSecs},
     timer::GLOBAL_TIMER_HANDLE,
@@ -53,25 +56,23 @@ use tikv_util::{
 };
 use txn_types::TimeStamp;
 use yatp::Remote;
-use health_controller::slow_score::SlowScore;
-use health_controller::trend::{SlowTrendConfig, SlowTrendStatistics};
 
 use crate::{
     coprocessor::CoprocessorHost,
     router::RaftStoreRouter,
     store::{
-        Callback,
-        CasualMessage,
         cmd_resp::new_error,
-        Config,
         metrics::*,
-        PeerMsg, RaftCmdExtraOpts, RaftCommand, RaftRouter, SnapManager, StoreInfo, StoreMsg,
-        TxnExt, unsafe_recovery::{
+        unsafe_recovery::{
             UnsafeRecoveryExecutePlanSyncer, UnsafeRecoveryForceLeaderSyncer, UnsafeRecoveryHandle,
-        }, util::{is_epoch_stale, KeysInfoFormatter}, worker::{
-            AutoSplitController,
-            ReadStats, split_controller::{SplitInfo, TOP_N}, SplitConfigChange, WriteStats,
         },
+        util::{is_epoch_stale, KeysInfoFormatter},
+        worker::{
+            split_controller::{SplitInfo, TOP_N},
+            AutoSplitController, ReadStats, SplitConfigChange, WriteStats,
+        },
+        Callback, CasualMessage, Config, PeerMsg, RaftCmdExtraOpts, RaftCommand, RaftRouter,
+        SnapManager, StoreInfo, StoreMsg, TxnExt,
     },
 };
 
@@ -847,12 +848,9 @@ where
     concurrency_manager: ConcurrencyManager,
     snap_mgr: SnapManager,
     remote: Remote<yatp::task::future::TaskCell>,
-    slow_score: SlowScore,
-    slow_trend: SlowTrendStatistics,
 
-    // The health status of the store is updated by the slow score mechanism.
-    health_service: Option<HealthService>,
-    curr_health_status: ServingStatus,
+    health_reporter: RaftstoreReporter,
+
     coprocessor_host: CoprocessorHost<EK>,
     causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
 
@@ -877,7 +875,7 @@ where
         snap_mgr: SnapManager,
         remote: Remote<yatp::task::future::TaskCell>,
         collector_reg_handle: CollectorRegHandle,
-        health_service: Option<HealthService>,
+        health_controller: &HealthController,
         coprocessor_host: CoprocessorHost<EK>,
         causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
         grpc_service_manager: GrpcServiceManager,
@@ -895,7 +893,9 @@ where
             error!("failed to start stats collector, error = {:?}", e);
         }
 
-        let slow_trend_config = SlowTrendConfig {
+        let health_reporter_config = RaftstoreReporterConfig {
+            inspect_interval: cfg.inspect_interval.0,
+
             unsensitive_cause: cfg.slow_trend_unsensitive_cause,
             unsensitive_result: cfg.slow_trend_unsensitive_result,
             net_io_factor: cfg.slow_trend_network_io_factor,
@@ -918,6 +918,8 @@ where
                 .with_label_values(&["L2"]),
         };
 
+        let health_reporter = RaftstoreReporter::new(health_controller, health_reporter_config);
+
         Runner {
             store_id,
             pd_client,
@@ -934,10 +936,7 @@ where
             concurrency_manager,
             snap_mgr,
             remote,
-            slow_score: SlowScore::new(cfg.inspect_interval.0),
-            slow_trend: SlowTrendStatistics::new(slow_trend_config),
-            health_service,
-            curr_health_status: ServingStatus::Serving,
+            health_reporter,
             coprocessor_host,
             causal_ts_provider,
             grpc_service_manager,
@@ -1247,9 +1246,10 @@ where
         STORE_SIZE_EVENT_INT_VEC.available.set(available as i64);
         STORE_SIZE_EVENT_INT_VEC.used.set(used_size as i64);
 
-        let slow_score = self.slow_score.get();
+        let slow_score = self.health_reporter.get_slow_score();
         stats.set_slow_score(slow_score as u64);
         self.set_slow_trend_to_store_stats(&mut stats, total_query_num);
+        self.write_slow_trend_metrics();
 
         stats.set_is_grpc_paused(self.grpc_service_manager.is_paused());
 
@@ -1360,29 +1360,28 @@ where
             STORE_SLOW_TREND_RESULT_VALUE_GAUGE.set(-100.0);
         }
         stats.set_slow_trend(slow_trend);
-        self.write_slow_trend_metrics();
     }
 
     fn write_slow_trend_metrics(&mut self) {
-        STORE_SLOW_TREND_L0_GAUGE.set(self.slow_trend.slow_cause.l0_avg());
-        STORE_SLOW_TREND_L1_GAUGE.set(self.slow_trend.slow_cause.l1_avg());
-        STORE_SLOW_TREND_L2_GAUGE.set(self.slow_trend.slow_cause.l2_avg());
-        STORE_SLOW_TREND_L0_L1_GAUGE.set(self.slow_trend.slow_cause.l0_l1_rate());
-        STORE_SLOW_TREND_L1_L2_GAUGE.set(self.slow_trend.slow_cause.l1_l2_rate());
-        STORE_SLOW_TREND_L1_MARGIN_ERROR_GAUGE
-            .set(self.slow_trend.slow_cause.l1_margin_error_base());
-        STORE_SLOW_TREND_L2_MARGIN_ERROR_GAUGE
-            .set(self.slow_trend.slow_cause.l2_margin_error_base());
+        let slow_trend = self.health_reporter.get_slow_trend();
+
+        STORE_SLOW_TREND_L0_GAUGE.set(slow_trend.slow_cause.l0_avg());
+        STORE_SLOW_TREND_L1_GAUGE.set(slow_trend.slow_cause.l1_avg());
+        STORE_SLOW_TREND_L2_GAUGE.set(slow_trend.slow_cause.l2_avg());
+        STORE_SLOW_TREND_L0_L1_GAUGE.set(slow_trend.slow_cause.l0_l1_rate());
+        STORE_SLOW_TREND_L1_L2_GAUGE.set(slow_trend.slow_cause.l1_l2_rate());
+        STORE_SLOW_TREND_L1_MARGIN_ERROR_GAUGE.set(slow_trend.slow_cause.l1_margin_error_base());
+        STORE_SLOW_TREND_L2_MARGIN_ERROR_GAUGE.set(slow_trend.slow_cause.l2_margin_error_base());
         // Report results of all slow Trends.
-        STORE_SLOW_TREND_RESULT_L0_GAUGE.set(self.slow_trend.slow_result.l0_avg());
-        STORE_SLOW_TREND_RESULT_L1_GAUGE.set(self.slow_trend.slow_result.l1_avg());
-        STORE_SLOW_TREND_RESULT_L2_GAUGE.set(self.slow_trend.slow_result.l2_avg());
-        STORE_SLOW_TREND_RESULT_L0_L1_GAUGE.set(self.slow_trend.slow_result.l0_l1_rate());
-        STORE_SLOW_TREND_RESULT_L1_L2_GAUGE.set(self.slow_trend.slow_result.l1_l2_rate());
+        STORE_SLOW_TREND_RESULT_L0_GAUGE.set(slow_trend.slow_result.l0_avg());
+        STORE_SLOW_TREND_RESULT_L1_GAUGE.set(slow_trend.slow_result.l1_avg());
+        STORE_SLOW_TREND_RESULT_L2_GAUGE.set(slow_trend.slow_result.l2_avg());
+        STORE_SLOW_TREND_RESULT_L0_L1_GAUGE.set(slow_trend.slow_result.l0_l1_rate());
+        STORE_SLOW_TREND_RESULT_L1_L2_GAUGE.set(slow_trend.slow_result.l1_l2_rate());
         STORE_SLOW_TREND_RESULT_L1_MARGIN_ERROR_GAUGE
-            .set(self.slow_trend.slow_result.l1_margin_error_base());
+            .set(slow_trend.slow_result.l1_margin_error_base());
         STORE_SLOW_TREND_RESULT_L2_MARGIN_ERROR_GAUGE
-            .set(self.slow_trend.slow_result.l2_margin_error_base());
+            .set(slow_trend.slow_result.l2_margin_error_base());
     }
 
     fn handle_report_batch_split(&self, regions: Vec<metapb::Region>) {
@@ -2148,13 +2147,11 @@ where
             } => self.handle_update_max_timestamp(region_id, initial_status, txn_ext),
             Task::QueryRegionLeader { region_id } => self.handle_query_region_leader(region_id),
             Task::UpdateSlowScore { id, duration } => {
-                // Fine-tuned, `SlowScore` only takes the I/O jitters on the disk into account.
-                self.slow_score.record(
+                self.health_reporter.record_raftstore_duration(
                     id,
-                    duration.delays_on_disk_io(false),
+                    duration,
                     !self.store_stat.maybe_busy(),
                 );
-                self.slow_trend.record(duration);
             }
             Task::RegionCpuRecords(records) => self.handle_region_cpu_records(records),
             Task::ReportMinResolvedTs {
@@ -2182,38 +2179,18 @@ where
     T: PdClient + 'static,
 {
     fn on_timeout(&mut self) {
-        // Record a fairly great value when timeout
-        self.slow_trend.slow_cause.record(500_000, Instant::now());
-
-        // The health status is recovered to serving as long as any tick
-        // does not timeout.
-        if self.curr_health_status == ServingStatus::ServiceUnknown
-            && self.slow_score.last_tick_finished()
-        {
-            self.update_health_status(ServingStatus::Serving);
-        }
-        if !self.slow_score.last_tick_finished() {
-            // If the last tick is not finished, it means that the current store might
-            // be busy on handling requests or delayed on I/O operations. And only when
-            // the current store is not busy, it should record the last_tick as a timeout.
-            if !self.store_stat.maybe_busy() {
-                self.slow_score.record_timeout();
-            }
-            // If the last slow_score already reached abnormal state and was delayed for
-            // reporting by `store-heartbeat` to PD, we should report it here manually as
-            // a FAKE `store-heartbeat`.
-            if self.slow_score.should_force_report_slow_store() && self.is_store_heartbeat_delayed()
-            {
-                self.handle_fake_store_heartbeat();
-            }
-        }
-
-        let slow_score_tick_result = self.slow_score.tick();
+        let slow_score_tick_result = self.health_reporter.tick(self.store_stat.maybe_busy());
         if let Some(score) = slow_score_tick_result.updated_score {
             STORE_SLOW_SCORE_GAUGE.set(score);
-            if !slow_score_tick_result.has_new_record {
-                self.update_health_status(ServingStatus::ServiceUnknown);
-            }
+        }
+
+        // If the last slow_score already reached abnormal state and was delayed for
+        // reporting by `store-heartbeat` to PD, we should report it here manually as
+        // a FAKE `store-heartbeat`.
+        if slow_score_tick_result.should_force_report_slow_store
+            && self.is_store_heartbeat_delayed()
+        {
+            self.handle_fake_store_heartbeat();
         }
 
         let id = slow_score_tick_result.tick_id;
@@ -2256,7 +2233,7 @@ where
     }
 
     fn get_interval(&self) -> Duration {
-        self.slow_score.get_inspect_interval()
+        self.health_reporter.get_tick_interval()
     }
 }
 
@@ -2520,7 +2497,7 @@ mod tests {
     use std::thread::sleep;
 
     use kvproto::{kvrpcpb, pdpb::QueryKind};
-    use pd_client::{BucketMeta, new_bucket_stats};
+    use pd_client::{new_bucket_stats, BucketMeta};
 
     use super::*;
 

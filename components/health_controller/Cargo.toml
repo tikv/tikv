@@ -6,10 +6,13 @@ edition = "2021"
 publish = false
 
 [dependencies]
+grpcio-health = { workspace = true }
+kvproto = { workspace = true }
 ordered-float = "2.6"
 parking_lot = "0.12.1"
 prometheus = { version = "0.13", features = ["nightly"] }
 prometheus-static-metric = "0.5"
-tikv_util = { workspace = true}
+protobuf = { version = "2.8", features = ["bytes"] }
+tikv_util = { workspace = true }
 slog = { workspace = true }
 slog-global = { workspace = true }

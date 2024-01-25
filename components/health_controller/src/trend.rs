@@ -7,7 +7,6 @@ use std::{
 
 use prometheus::IntGauge;
 use tikv_util::info;
-use crate::RaftstoreDuration;
 
 pub struct SampleValue {
     value: u64,
@@ -732,91 +731,5 @@ mod tests {
         assert_eq!(window.avg(), (20.0 + 30.0 + 40.0) / 3.0);
         assert_eq!(window.overflow, true);
         assert_eq!(window.std_ev_ratio(), f64::sqrt(200.0 / 3.0) / 30.0);
-    }
-}
-
-pub struct SlowTrendConfig {
-    pub unsensitive_cause: f64,
-    pub unsensitive_result: f64,
-    pub net_io_factor: f64,
-
-    pub cause_spike_filter_value_gauge: IntGauge,
-    pub cause_spike_filter_count_gauge: IntGauge,
-    pub cause_l1_gap_gauges: IntGauge,
-    pub cause_l2_gap_gauges: IntGauge,
-
-    pub result_spike_filter_value_gauge: IntGauge,
-    pub result_spike_filter_count_gauge: IntGauge,
-    pub result_l1_gap_gauges: IntGauge,
-    pub result_l2_gap_gauges: IntGauge,
-}
-
-pub struct SlowTrendStatistics {
-    net_io_factor: f64,
-    /// Detector to detect NetIo&DiskIo jitters.
-    pub slow_cause: Trend,
-    /// Reactor as an assistant detector to detect the QPS jitters.
-    pub slow_result: Trend,
-    pub slow_result_recorder: RequestPerSecRecorder,
-}
-
-impl SlowTrendStatistics {
-    #[inline]
-    pub fn new(config: SlowTrendConfig) -> Self {
-        Self {
-            slow_cause: Trend::new(
-                // Disable SpikeFilter for now
-                Duration::from_secs(0),
-                config.cause_spike_filter_value_gauge,
-                config.cause_spike_filter_count_gauge,
-                Duration::from_secs(180),
-                Duration::from_secs(30),
-                Duration::from_secs(120),
-                Duration::from_secs(600),
-                1,
-                tikv_util::time::duration_to_us(Duration::from_micros(500)),
-                config.cause_l1_gap_gauges,
-                config.cause_l2_gap_gauges,
-                config.unsensitive_cause,
-            ),
-            slow_result: Trend::new(
-                // Disable SpikeFilter for now
-                Duration::from_secs(0),
-                config.result_spike_filter_value_gauge,
-                config.result_spike_filter_count_gauge,
-                Duration::from_secs(120),
-                Duration::from_secs(15),
-                Duration::from_secs(60),
-                Duration::from_secs(300),
-                1,
-                2000,
-                config.result_l1_gap_gauges,
-                config.result_l2_gap_gauges,
-                config.unsensitive_result,
-            ),
-            slow_result_recorder: RequestPerSecRecorder::new(),
-            net_io_factor: config.net_io_factor, /* FIXME: add extra parameter in
-                                                  * Config to control it. */
-        }
-    }
-
-    #[inline]
-    pub fn record(&mut self, duration: RaftstoreDuration) {
-        // TODO: It's more appropriate to divide the factor into `Disk IO factor` and
-        // `Net IO factor`.
-        // Currently, when `network ratio == 1`, it summarizes all factors by `sum`
-        // simplily, approved valid to common cases when there exists IO jitters on
-        // Network or Disk.
-        let latency = || -> u64 {
-            if self.net_io_factor as u64 >= 1 {
-                return tikv_util::time::duration_to_us(duration.sum());
-            }
-            let disk_io_latency =
-                tikv_util::time::duration_to_us(duration.delays_on_disk_io(true)) as f64;
-            let network_io_latency =
-                tikv_util::time::duration_to_us(duration.delays_on_net_io()) as f64;
-            (disk_io_latency + network_io_latency * self.net_io_factor) as u64
-        }();
-        self.slow_cause.record(latency, Instant::now());
     }
 }

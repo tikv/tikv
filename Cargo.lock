@@ -2322,10 +2322,13 @@ dependencies = [
 name = "health_controller"
 version = "0.1.0"
 dependencies = [
+ "grpcio-health",
+ "kvproto",
  "ordered-float",
  "parking_lot 0.12.1",
  "prometheus",
  "prometheus-static-metric",
+ "protobuf",
  "slog",
  "slog-global",
  "tikv_util",

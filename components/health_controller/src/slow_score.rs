@@ -1,8 +1,11 @@
 // Copyright 2024 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::{
+    cmp,
+    time::{Duration, Instant},
+};
+
 use ordered_float::OrderedFloat;
-use std::time::{Duration, Instant};
-use std::cmp;
 
 // Slow score is a value that represents the speed of a store and ranges in [1,
 // 100]. It is maintained in the AIMD way.
@@ -114,6 +117,8 @@ impl SlowScore {
     }
 
     pub fn tick(&mut self) -> SlowScoreTickResult {
+        let should_force_report_slow_store = self.should_force_report_slow_store();
+
         let id = self.last_tick_id + 1;
         self.last_tick_id += 1;
         self.last_tick_finished = false;
@@ -133,6 +138,7 @@ impl SlowScore {
             tick_id: id,
             updated_score,
             has_new_record,
+            should_force_report_slow_store,
         }
     }
 }
@@ -200,4 +206,5 @@ pub struct SlowScoreTickResult {
     // None if skipped in this tick
     pub updated_score: Option<f64>,
     pub has_new_record: bool,
+    pub should_force_report_slow_store: bool,
 }
