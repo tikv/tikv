@@ -25,7 +25,10 @@ command! {
     /// [`Prewrite`](Command::Prewrite).
     TxnHeartBeat:
         cmd_ty => TxnStatus,
-        display => "kv::command::txn_heart_beat {} @ {} ttl {} | {:?}", (primary_key, start_ts, advise_ttl, ctx),
+        display => {
+            "kv::command::txn_heart_beat {} @ {} ttl {} | {:?}",
+            (primary_key, start_ts, advise_ttl, ctx),
+        }
         content => {
             /// The primary key of the transaction.
             primary_key: Key,
