@@ -20,7 +20,7 @@ command! {
     /// Run Put or Delete for keys which may be changed by `RawCompareAndSwap`.
     RawAtomicStore:
         cmd_ty => (),
-        display => "kv::command::atomic_store {:?}", (ctx),
+        display => { "kv::command::atomic_store {:?}", (ctx), }
         content => {
             /// The set of mutations to apply.
             cf: CfName,
