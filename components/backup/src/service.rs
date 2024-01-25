@@ -1,8 +1,9 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::atomic::*;
+use std::sync::{atomic::*, Arc, Mutex};
 
 use futures::{channel::mpsc, FutureExt, SinkExt, StreamExt, TryFutureExt};
+use futures_util::stream::AbortHandle;
 use grpcio::{self, *};
 use kvproto::brpb::*;
 use raftstore::store::snapshot_backup::SnapshotBrHandle;
@@ -16,6 +17,7 @@ use crate::disk_snap::{self, StreamHandleLoop};
 pub struct Service<H: SnapshotBrHandle> {
     scheduler: Scheduler<Task>,
     snap_br_env: disk_snap::Env<H>,
+    abort_last_req: Arc<Mutex<Option<AbortHandle>>>,
 }
 
 impl<H> Service<H>
@@ -27,6 +29,7 @@ where
         Service {
             scheduler,
             snap_br_env: env,
+            abort_last_req: Arc::default(),
         }
     }
 }
@@ -147,17 +150,26 @@ where
         stream: grpcio::RequestStream<PrepareSnapshotBackupRequest>,
         sink: grpcio::DuplexSink<PrepareSnapshotBackupResponse>,
     ) {
-        let l = StreamHandleLoop::new(self.snap_br_env.clone());
+        let (l, new_cancel) = StreamHandleLoop::new(self.snap_br_env.clone());
+        let peer = ctx.peer();
         // Note: should we disconnect here once there are more than one stream...?
         // Generally once two streams enter here, one may exit
         info!("A new prepare snapshot backup stream created!";
-            "peer" => %ctx.peer(),
+            "peer" => %peer,
             "stream_count" => %self.snap_br_env.active_stream(),
         );
+        let abort_last_req = self.abort_last_req.clone();
         self.snap_br_env.get_async_runtime().spawn(async move {
-            if let Err(err) = l.run(stream, sink.into()).await {
-                warn!("stream closed; perhaps a problem cannot be retried happens"; "reason" => ?err);
+            {
+                let mut lock = abort_last_req.lock().unwrap();
+                if let Some(cancel) = &*lock {
+                    cancel.abort();
+                }
+                *lock = Some(new_cancel);
             }
+            let res = l.run(stream, sink.into()).await;
+            info!("stream closed; probably everything is done or a problem cannot be retried happens"; 
+                "result" => ?res, "peer" => %peer);
         });
     }
 }
