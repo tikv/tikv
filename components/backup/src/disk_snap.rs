@@ -232,7 +232,7 @@ impl<SR: SnapshotBrHandle + 'static> StreamHandleLoop<SR> {
             aborted,
             pending_regions: vec![],
         };
-        return (this, handle);
+        (this, handle)
     }
 
     fn async_wait_apply(&mut self, region: &Region) -> BoxFuture<'static, (Region, Result<()>)> {
