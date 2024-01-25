@@ -172,7 +172,7 @@ mod tests {
         let mut write_batch = hybrid_engine.write_batch();
         write_batch.put(b"hello", b"world").unwrap();
         let seq = write_batch.write().unwrap();
-        dbg!(seq);
+        assert!(seq > 0);
         let actual: &[u8] = &hybrid_engine.get_value(b"hello").unwrap().unwrap();
         assert_eq!(b"world", &actual);
         let ctx = SnapshotContext {
@@ -180,10 +180,16 @@ mod tests {
             read_ts: 10,
         };
         let snap = hybrid_engine.snapshot(Some(ctx));
+        let actual: &[u8] = &snap.get_value(b"hello").unwrap().unwrap();
+        assert_eq!(b"world", &actual);
         let actual: &[u8] = &snap.disk_snap().get_value(b"hello").unwrap().unwrap();
         assert_eq!(b"world", &actual);
-        let snap = snap.region_cache_snap().unwrap();
-        let actual: &[u8] = &snap.get_value(b"hello").unwrap().unwrap();
+        let actual: &[u8] = &snap
+            .region_cache_snap()
+            .unwrap()
+            .get_value(b"hello")
+            .unwrap()
+            .unwrap();
         assert_eq!(b"world", &actual);
     }
 
