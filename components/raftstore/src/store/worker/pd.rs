@@ -6,9 +6,9 @@ use std::{
     fmt::{self, Display, Formatter},
     io, mem,
     sync::{
+        Arc,
         atomic::Ordering,
-        mpsc::{self, Receiver, Sender},
-        Arc, Mutex,
+        mpsc::{self, Receiver, Sender}, Mutex,
     },
     thread::{Builder, JoinHandle},
     time::{Duration, Instant},
@@ -23,7 +23,6 @@ use futures::{compat::Future01CompatExt, FutureExt};
 use grpcio_health::{HealthService, ServingStatus};
 use health_controller::{
     types::{LatencyInspector, RaftstoreDuration},
-    SlowScore, SlowTrendConfig, SlowTrendStatistics,
 };
 use kvproto::{
     kvrpcpb::DiskFullOpt,
@@ -35,7 +34,7 @@ use kvproto::{
     raft_serverpb::RaftMessage,
     replication_modepb::{RegionReplicationStatus, StoreDrAutoSyncStatus},
 };
-use pd_client::{metrics::*, BucketStat, Error, PdClient, RegionStat};
+use pd_client::{BucketStat, Error, metrics::*, PdClient, RegionStat};
 use prometheus::local::LocalHistogram;
 use raft::eraftpb::ConfChangeType;
 use resource_metering::{Collector, CollectorGuard, CollectorRegHandle, RawRecords};
@@ -44,7 +43,7 @@ use tikv_util::{
     box_err, debug, error, info,
     metrics::ThreadInfoStatistics,
     store::QueryStats,
-    sys::{thread::StdThreadBuildWrapper, SysQuota},
+    sys::{SysQuota, thread::StdThreadBuildWrapper},
     thd_name,
     time::{Instant as TiInstant, UnixSecs},
     timer::GLOBAL_TIMER_HANDLE,
@@ -54,23 +53,25 @@ use tikv_util::{
 };
 use txn_types::TimeStamp;
 use yatp::Remote;
+use health_controller::slow_score::SlowScore;
+use health_controller::trend::{SlowTrendConfig, SlowTrendStatistics};
 
 use crate::{
     coprocessor::CoprocessorHost,
     router::RaftStoreRouter,
     store::{
+        Callback,
+        CasualMessage,
         cmd_resp::new_error,
+        Config,
         metrics::*,
-        unsafe_recovery::{
+        PeerMsg, RaftCmdExtraOpts, RaftCommand, RaftRouter, SnapManager, StoreInfo, StoreMsg,
+        TxnExt, unsafe_recovery::{
             UnsafeRecoveryExecutePlanSyncer, UnsafeRecoveryForceLeaderSyncer, UnsafeRecoveryHandle,
+        }, util::{is_epoch_stale, KeysInfoFormatter}, worker::{
+            AutoSplitController,
+            ReadStats, split_controller::{SplitInfo, TOP_N}, SplitConfigChange, WriteStats,
         },
-        util::{is_epoch_stale, KeysInfoFormatter},
-        worker::{
-            split_controller::{SplitInfo, TOP_N},
-            AutoSplitController, ReadStats, SplitConfigChange, WriteStats,
-        },
-        Callback, CasualMessage, Config, PeerMsg, RaftCmdExtraOpts, RaftCommand, RaftRouter,
-        SnapManager, StoreInfo, StoreMsg, TxnExt,
     },
 };
 
@@ -2519,7 +2520,7 @@ mod tests {
     use std::thread::sleep;
 
     use kvproto::{kvrpcpb, pdpb::QueryKind};
-    use pd_client::{new_bucket_stats, BucketMeta};
+    use pd_client::{BucketMeta, new_bucket_stats};
 
     use super::*;
 

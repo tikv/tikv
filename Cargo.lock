@@ -2323,6 +2323,7 @@ name = "health_controller"
 version = "0.1.0"
 dependencies = [
  "ordered-float",
+ "parking_lot 0.12.1",
  "prometheus",
  "prometheus-static-metric",
  "slog",
