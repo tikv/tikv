@@ -6589,6 +6589,13 @@ where
         if last_idx >= applied_idx + self.ctx.cfg.leader_transfer_max_log_lag {
             let mut meta = self.ctx.store_meta.lock().unwrap();
             meta.pending_recovery_peers.insert(peer_id);
+            info!(
+                "peer is pending recovery";
+                "last_commit_idx" => last_idx,
+                "last_applied_idx" => applied_idx,
+                "region_id" => self.fsm.region_id(),
+                "peer_id" => peer_id,
+            );
         } else if self.fsm.peer.pending_recovery {
             // Already finish recovery, no needs to keep the tick.
             {
@@ -6596,6 +6603,13 @@ where
                 meta.pending_recovery_peers.remove(&peer_id);
                 meta.recovered_peers_count += 1;
             }
+            info!(
+                "peer completes recovery";
+                "last_commit_idx" => last_idx,
+                "last_applied_idx" => applied_idx,
+                "region_id" => self.fsm.region_id(),
+                "peer_id" => peer_id,
+            );
             self.fsm.peer.pending_recovery = false;
         }
         // If the peer is pending on recovery, it should keep the tick.
