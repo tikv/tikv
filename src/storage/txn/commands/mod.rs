@@ -121,7 +121,8 @@ pub enum Command {
 /// 2. The `From<CommitRequest>` impl for `TypedCommand` gets chosen, and its
 /// generic parameter indicates that the result type for this instance of
 /// `TypedCommand` is going to be `TxnStatus` - one of the variants of the
-/// `StorageCallback` enum. 3. In the above `from` method, the details of the
+/// `StorageCallback` enum.
+/// 3. In the above `from` method, the details of the
 /// commit request are captured by creating an instance of the struct
 /// `storage::txn::commands::commit::Command` via its `new` method.
 /// 4. This struct is wrapped in a variant of the enum
