@@ -24,7 +24,7 @@ command! {
     /// This means other write operations that involve these keys will be blocked.
     Pause:
         cmd_ty => (),
-        display => "kv::command::pause keys:({}) {} ms | {:?}", (keys.len, duration, ctx),
+        display => { "kv::command::pause keys:({}) {} ms | {:?}", (keys.len, duration, ctx), }
         content => {
             /// The keys to hold latches on.
             keys: Vec<Key>,
