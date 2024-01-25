@@ -1,8 +1,8 @@
 // Copyright 2023 TiKV Project Authors. Licensed under Apache-2.0.
 
 use engine_traits::{
-    KvEngine, Peekable, RangeCacheEngine, ReadOptions, Result, SnapshotContext, SnapshotMiscExt,
-    SyncMutable, WriteBatchExt,
+    KvEngine, Mutable, Peekable, RangeCacheEngine, ReadOptions, Result, SnapshotContext,
+    SnapshotMiscExt, SyncMutable, WriteBatch, WriteBatchExt,
 };
 
 use crate::snapshot::HybridEngineSnapshot;
@@ -122,29 +122,48 @@ impl<EK, EC> SyncMutable for HybridEngine<EK, EC>
 where
     EK: KvEngine,
     EC: RangeCacheEngine,
+    HybridEngine<EK, EC>: WriteBatchExt,
 {
     fn put(&self, key: &[u8], value: &[u8]) -> Result<()> {
-        unimplemented!()
+        let mut batch = self.write_batch();
+        batch.put(key, value)?;
+        let _ = batch.write()?;
+        Ok(())
     }
 
     fn put_cf(&self, cf: &str, key: &[u8], value: &[u8]) -> Result<()> {
-        unimplemented!()
+        let mut batch = self.write_batch();
+        batch.put_cf(cf, key, value)?;
+        let _ = batch.write()?;
+        Ok(())
     }
 
     fn delete(&self, key: &[u8]) -> Result<()> {
-        unimplemented!()
+        let mut batch = self.write_batch();
+        batch.delete(key)?;
+        let _ = batch.write()?;
+        Ok(())
     }
 
     fn delete_cf(&self, cf: &str, key: &[u8]) -> Result<()> {
-        unimplemented!()
+        let mut batch = self.write_batch();
+        batch.delete_cf(cf, key)?;
+        let _ = batch.write()?;
+        Ok(())
     }
 
     fn delete_range(&self, begin_key: &[u8], end_key: &[u8]) -> Result<()> {
-        unimplemented!()
+        let mut batch = self.write_batch();
+        batch.delete_range(begin_key, end_key)?;
+        let _ = batch.write()?;
+        Ok(())
     }
 
     fn delete_range_cf(&self, cf: &str, begin_key: &[u8], end_key: &[u8]) -> Result<()> {
-        unimplemented!()
+        let mut batch = self.write_batch();
+        batch.delete_range_cf(cf, begin_key, end_key)?;
+        let _ = batch.write()?;
+        Ok(())
     }
 }
 

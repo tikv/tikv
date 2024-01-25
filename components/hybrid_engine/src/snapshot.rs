@@ -33,6 +33,14 @@ where
     pub fn region_cache_snapshot_available(&self) -> bool {
         self.region_cache_snap.is_some()
     }
+
+    pub fn region_cache_snap(&self) -> Option<&EC::Snapshot> {
+        self.region_cache_snap.as_ref()
+    }
+
+    pub fn disk_snap(&self) -> &EK::Snapshot {
+        &self.disk_snap
+    }
 }
 
 impl<EK, EC> Snapshot for HybridEngineSnapshot<EK, EC>
