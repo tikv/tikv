@@ -317,7 +317,12 @@ impl ArithmeticOp for DecimalMultiply {
     type T = Decimal;
 
     fn calc(lhs: &Decimal, rhs: &Decimal) -> Result<Option<Decimal>> {
-        let res: codec::Result<Decimal> = (lhs * rhs).into();
+        let res: codec::Result<Decimal> = match lhs * rhs {
+            codec::mysql::Res::Ok(t) => Ok(t),
+            codec::mysql::Res::Truncated(t) => Ok(t),
+            other => other.into(),
+        };
+
         Ok(Some(res?))
     }
 }
@@ -854,7 +859,14 @@ mod tests {
 
     #[test]
     fn test_multiply_decimal() {
-        let test_cases = vec![("1.1", "2.2", "2.42")];
+        let test_cases = vec![
+            ("1.1", "2.2", "2.42"),
+            (
+                "999999999999999999999999999999999.9999",
+                "766507373740683764182618847769240.9770",
+                "766507373740683764182618847769239999923349262625931623581738115223.07600000",
+            ),
+        ];
         for (lhs, rhs, expected) in test_cases {
             let expected: Option<Decimal> = expected.parse().ok();
             let output = RpnFnScalarEvaluator::new()
