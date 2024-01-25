@@ -17,7 +17,7 @@ command! {
     /// Retrieve MVCC information for the given key.
     MvccByKey:
         cmd_ty => MvccInfo,
-        display => "kv::command::mvccbykey {:?} | {:?}", (key, ctx),
+        display => { "kv::command::mvccbykey {:?} | {:?}", (key, ctx), }
         content => {
             key: Key,
         }

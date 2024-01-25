@@ -54,8 +54,7 @@ command! {
     /// This can be rolled back with a [`PessimisticRollback`](Command::PessimisticRollback) command.
     AcquirePessimisticLockResumed:
         cmd_ty => StorageResult<PessimisticLockResults>,
-        display => "kv::command::acquirepessimisticlockresumed {:?}",
-        (items),
+        display => { "kv::command::acquirepessimisticlockresumed {:?}", (items), }
         content => {
             items: Vec<ResumedPessimisticLockItem>,
         }
