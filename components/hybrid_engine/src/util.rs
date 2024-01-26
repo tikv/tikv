@@ -12,7 +12,6 @@ use crate::HybridEngine;
 /// Create a [`HybridEngine`] using temporary storage in `prefix`.
 /// Once the memory engine is created, runs `configure_memory_engine_fn`.
 /// Returns the handle to temporary directory and HybridEngine.
-///
 /// # Example
 ///
 /// ```
@@ -21,7 +20,7 @@ use crate::HybridEngine;
 ///     let range = engine_traits::CacheRange::new(b"k00".to_vec(), b"k10".to_vec());
 ///     memory_engine.new_range(range.clone());
 ///     {
-///         let mut core = memory_engine.core().lock().unwrap();
+///         let mut core = memory_engine.core().write().unwrap();
 ///         core.mut_range_manager().set_range_readable(&range, true);
 ///         core.mut_range_manager().set_safe_ts(&range, 10);
 ///     }
