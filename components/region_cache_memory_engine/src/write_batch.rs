@@ -76,13 +76,9 @@ impl RangeCacheWriteBatch {
                     .collect::<Vec<_>>(),
             )
         };
-
-        let seq_no = self
-            .sequence_number
-            .ok_or_else(|| -> engine_traits::Error { box_err!("sequence number must be set!") })?;
         filtered_keys
             .into_iter()
-            .try_for_each(|e| e.write_to_memory(&engine, seq_no))
+            .try_for_each(|e| e.write_to_memory(&engine, seq))
     }
 }
 
