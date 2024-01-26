@@ -112,6 +112,32 @@ impl RaftstoreReporter {
 
         slow_score_tick_result
     }
+
+    pub fn update_slow_trend(
+        &mut self,
+        observed_request_count: u64,
+        now: Instant,
+    ) -> (Option<f64>, SlowTrendPb) {
+        let requests_per_sec = self
+            .slow_trend
+            .slow_result_recorder
+            .record_and_get_current_rps(observed_request_count, now);
+
+        let slow_trend_cause_rate = self.slow_trend.slow_cause.increasing_rate();
+        let mut slow_trend_pb = SlowTrendPb::default();
+        slow_trend_pb.set_cause_rate(slow_trend_cause_rate);
+        slow_trend_pb.set_cause_value(self.slow_trend.slow_cause.l0_avg());
+        if let Some(requests_per_sec) = requests_per_sec {
+            self.slow_trend
+                .slow_result
+                .record(requests_per_sec as u64, Instant::now());
+            slow_trend_pb.set_result_value(self.slow_trend.slow_result.l0_avg());
+            let slow_trend_result_rate = self.slow_trend.slow_result.increasing_rate();
+            slow_trend_pb.set_result_rate(slow_trend_result_rate);
+        }
+
+        (requests_per_sec, slow_trend_pb)
+    }
 }
 
 pub struct SlowTrendStatistics {

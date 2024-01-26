@@ -1211,10 +1211,7 @@ where
             .store_stat
             .engine_total_query_num
             .sub_query_stats(&self.store_stat.engine_last_query_num);
-        let total_query_num = self
-            .slow_trend
-            .slow_result_recorder
-            .record_and_get_current_rps(res.get_all_query_num(), Instant::now());
+        let all_query_num = res.get_all_query_num();
         stats.set_query_stats(res.0);
 
         stats.set_cpu_usages(self.store_stat.store_cpu_usages.clone().into());
@@ -1248,8 +1245,11 @@ where
 
         let slow_score = self.health_reporter.get_slow_score();
         stats.set_slow_score(slow_score as u64);
-        self.set_slow_trend_to_store_stats(&mut stats, total_query_num);
-        self.write_slow_trend_metrics();
+        let (rps, slow_trend_pb) = self
+            .health_reporter
+            .update_slow_trend(all_query_num, Instant::now());
+        self.write_slow_trend_metrics(rps, &slow_trend_pb);
+        stats.set_slow_trend(slow_trend_pb);
 
         stats.set_is_grpc_paused(self.grpc_service_manager.is_paused());
 
@@ -1336,35 +1336,23 @@ where
         self.remote.spawn(f);
     }
 
-    fn set_slow_trend_to_store_stats(
+    fn write_slow_trend_metrics(
         &mut self,
-        stats: &mut pdpb::StoreStats,
-        total_query_num: Option<f64>,
+        requests_per_sec: Option<f64>,
+        slow_trend_pb: &pdpb::SlowTrend,
     ) {
-        let slow_trend_cause_rate = self.slow_trend.slow_cause.increasing_rate();
-        STORE_SLOW_TREND_GAUGE.set(slow_trend_cause_rate);
-        let mut slow_trend = pdpb::SlowTrend::default();
-        slow_trend.set_cause_rate(slow_trend_cause_rate);
-        slow_trend.set_cause_value(self.slow_trend.slow_cause.l0_avg());
-        if let Some(total_query_num) = total_query_num {
-            self.slow_trend
-                .slow_result
-                .record(total_query_num as u64, Instant::now());
-            slow_trend.set_result_value(self.slow_trend.slow_result.l0_avg());
-            let slow_trend_result_rate = self.slow_trend.slow_result.increasing_rate();
-            slow_trend.set_result_rate(slow_trend_result_rate);
-            STORE_SLOW_TREND_RESULT_GAUGE.set(slow_trend_result_rate);
-            STORE_SLOW_TREND_RESULT_VALUE_GAUGE.set(total_query_num);
+        let slow_trend = self.health_reporter.get_slow_trend();
+        // Latest result.
+        STORE_SLOW_TREND_GAUGE.set(slow_trend_pb.get_cause_rate());
+        if let Some(requests_per_sec) = requests_per_sec {
+            STORE_SLOW_TREND_RESULT_GAUGE.set(slow_trend_pb.get_result_rate());
+            STORE_SLOW_TREND_RESULT_VALUE_GAUGE.set(requests_per_sec);
         } else {
             // Just to mark the invalid range on the graphic
             STORE_SLOW_TREND_RESULT_VALUE_GAUGE.set(-100.0);
         }
-        stats.set_slow_trend(slow_trend);
-    }
 
-    fn write_slow_trend_metrics(&mut self) {
-        let slow_trend = self.health_reporter.get_slow_trend();
-
+        // Current internal states.
         STORE_SLOW_TREND_L0_GAUGE.set(slow_trend.slow_cause.l0_avg());
         STORE_SLOW_TREND_L1_GAUGE.set(slow_trend.slow_cause.l1_avg());
         STORE_SLOW_TREND_L2_GAUGE.set(slow_trend.slow_cause.l2_avg());
