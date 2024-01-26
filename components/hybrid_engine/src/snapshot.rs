@@ -75,6 +75,7 @@ where
     }
 }
 
+/// TODO: May be possible to replace this with an Either.
 pub struct HybridDbVector(Box<dyn DbVector>);
 
 impl DbVector for HybridDbVector {}
