@@ -14,7 +14,7 @@ use kvproto::{
     metapb,
     metapb::RegionEpoch,
     pdpb::{self, CheckPolicy},
-    raft_cmdpb::{RaftCmdRequest, RaftCmdResponse},
+    raft_cmdpb::{AdminRequest, RaftCmdRequest, RaftCmdResponse},
     raft_serverpb::RaftMessage,
     replication_modepb::ReplicationStatus,
 };
@@ -567,6 +567,11 @@ pub enum CasualMessage<EK: KvEngine> {
         share_source_region_size: bool,
     },
 
+    RedirectSplitRegion {
+        request: AdminRequest,
+        to_peer: metapb::Peer,
+    },
+
     /// Hash result of ComputeHash command.
     ComputeHashResult {
         index: u64,
@@ -710,6 +715,9 @@ impl<EK: KvEngine> fmt::Debug for CasualMessage<EK> {
             CasualMessage::RenewLease => write!(fmt, "RenewLease"),
             CasualMessage::SnapshotApplied => write!(fmt, "SnapshotApplied"),
             CasualMessage::Campaign => write!(fmt, "Campaign"),
+            CasualMessage::RedirectSplitRegion { request, to_peer } => {
+                write!(fmt, "RedirectSplitRegion {:?} to {:?})", request, to_peer)
+            }
         }
     }
 }

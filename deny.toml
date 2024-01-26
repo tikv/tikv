@@ -105,6 +105,6 @@ exceptions = [
 ]
 
 [sources]
-unknown-git = "deny"
+unknown-git = "warn"
 unknown-registry = "deny"
 allow-org = { github = ["tikv", "pingcap", "rust-lang"] }

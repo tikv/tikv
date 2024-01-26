@@ -285,7 +285,7 @@ impl Recorder {
     }
 
     fn update_peer(&mut self, peer: &Peer) {
-        if self.peer != *peer {
+        if self.peer != *peer && peer.get_id() != 0 {
             self.peer = peer.clone();
         }
     }
@@ -374,7 +374,7 @@ impl RegionInfo {
     }
 
     fn update_peer(&mut self, peer: &Peer) {
-        if self.peer != *peer {
+        if self.peer != *peer && peer.get_id() != 0 {
             self.peer = peer.clone();
         }
     }
