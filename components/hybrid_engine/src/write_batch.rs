@@ -137,7 +137,7 @@ mod tests {
         let (_path, hybrid_engine) = hybrid_engine_for_tests("temp", move |memory_engine| {
             memory_engine.new_range(range_clone.clone());
             {
-                let mut core = memory_engine.core().lock().unwrap();
+                let mut core = memory_engine.core().write().unwrap();
                 core.mut_range_manager()
                     .set_range_readable(&range_clone, true);
                 core.mut_range_manager().set_safe_ts(&range_clone, 5);
@@ -174,7 +174,7 @@ mod tests {
             let range = CacheRange::new(b"k00".to_vec(), b"k10".to_vec());
             memory_engine.new_range(range.clone());
             {
-                let mut core = memory_engine.core().lock().unwrap();
+                let mut core = memory_engine.core().write().unwrap();
                 core.mut_range_manager().set_range_readable(&range, true);
                 core.mut_range_manager().set_safe_ts(&range, 10);
             }

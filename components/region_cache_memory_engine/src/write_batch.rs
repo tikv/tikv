@@ -66,16 +66,14 @@ impl RangeCacheWriteBatch {
     }
 
     fn write_impl(&mut self, seq: u64) -> Result<()> {
-        let (engine, filtered_keys) = {
-            let core = self.engine.core().lock().unwrap();
-            (
-                core.engine().clone(),
-                self.buffer
-                    .iter()
-                    .filter(|&e| e.should_write_to_memory(core.range_manager()))
-                    .collect::<Vec<_>>(),
-            )
-        };
+        let core = self.engine.core().read().unwrap();
+        let (engine, filtered_keys) = (
+            core.engine().clone(),
+            self.buffer
+                .iter()
+                .filter(|&e| e.should_write_to_memory(core.range_manager()))
+                .collect::<Vec<_>>(),
+        );
         filtered_keys
             .into_iter()
             .try_for_each(|e| e.write_to_memory(&engine, seq))
@@ -277,7 +275,7 @@ mod tests {
         let r = CacheRange::new(b"".to_vec(), b"z".to_vec());
         engine.new_range(r.clone());
         {
-            let mut core = engine.core.lock().unwrap();
+            let mut core = engine.core.write().unwrap();
             core.mut_range_manager().set_range_readable(&r, true);
             core.mut_range_manager().set_safe_ts(&r, 10);
         }
@@ -285,7 +283,7 @@ mod tests {
         wb.put(b"aaa", b"bbb").unwrap();
         wb.set_sequence_number(1).unwrap();
         assert_eq!(wb.write().unwrap(), 1);
-        let sl = engine.core.lock().unwrap().engine().data[cf_to_id(CF_DEFAULT)].clone();
+        let sl = engine.core.read().unwrap().engine().data[cf_to_id(CF_DEFAULT)].clone();
         let actual = sl.get(&encode_key(b"aaa", 1, ValueType::Value)).unwrap();
         assert_eq!(&b"bbb"[..], actual)
     }
@@ -296,7 +294,7 @@ mod tests {
         let r = CacheRange::new(b"".to_vec(), b"z".to_vec());
         engine.new_range(r.clone());
         {
-            let mut core = engine.core.lock().unwrap();
+            let mut core = engine.core.write().unwrap();
             core.mut_range_manager().set_range_readable(&r, true);
             core.mut_range_manager().set_safe_ts(&r, 10);
         }
@@ -308,7 +306,7 @@ mod tests {
         wb.rollback_to_save_point().unwrap();
         wb.set_sequence_number(1).unwrap();
         assert_eq!(wb.write().unwrap(), 1);
-        let sl = engine.core.lock().unwrap().engine().data[cf_to_id(CF_DEFAULT)].clone();
+        let sl = engine.core.read().unwrap().engine().data[cf_to_id(CF_DEFAULT)].clone();
         let actual = sl.get(&encode_key(b"aaa", 1, ValueType::Value)).unwrap();
         assert_eq!(&b"bbb"[..], actual);
         assert!(sl.get(&encode_key(b"ccc", 1, ValueType::Value)).is_none())
@@ -320,7 +318,7 @@ mod tests {
         let r = CacheRange::new(b"".to_vec(), b"z".to_vec());
         engine.new_range(r.clone());
         {
-            let mut core = engine.core.lock().unwrap();
+            let mut core = engine.core.write().unwrap();
             core.mut_range_manager().set_range_readable(&r, true);
             core.mut_range_manager().set_safe_ts(&r, 10);
         }
