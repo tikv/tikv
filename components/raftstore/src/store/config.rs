@@ -961,7 +961,8 @@ impl Config {
             || self.min_recovery_ready_region_percent > 100
         {
             return Err(box_err!(
-                "min_recovery_ready_region_percent must be between 1 and 100, invalid value: {}", self.min_recovery_ready_region_percent
+                "min_recovery_ready_region_percent must be between 1 and 100, invalid value: {}",
+                self.min_recovery_ready_region_percent
             ));
         }
 
