@@ -16,10 +16,13 @@ use tidb_query_common::storage::{
 };
 use tidb_query_datatype::{
     codec::{
+        batch::LazyBatchColumn,
+        data_type::{ChunkRef, VectorValue},
         datum::{
             encode_value, split_datum, Datum, DatumDecoder, DURATION_FLAG, INT_FLAG, NIL_FLAG,
             UINT_FLAG,
         },
+        datum_codec::EvaluableDatumEncoder,
         table,
     },
     def::Collation,
@@ -395,42 +398,86 @@ impl<S: Snapshot, F: KvFormat> RowSampleBuilder<S, F> {
                 let mut column_vals: Vec<Vec<u8>> = vec![vec![]; self.columns_info.len()];
                 let mut collation_key_vals: Vec<Vec<u8>> = vec![vec![]; self.columns_info.len()];
                 for logical_row in &result.logical_rows {
+                    let pick = collector.pick_sample();
                     for i in 0..self.columns_info.len() {
                         column_vals[i].clear();
                         collation_key_vals[i].clear();
-                        columns_slice[i].encode(
-                            *logical_row,
-                            &self.columns_info[i],
-                            &mut ctx,
-                            &mut column_vals[i],
-                        )?;
+                        let mut sort_key_shortcut = false;
                         if self.columns_info[i].as_accessor().is_string_like() {
-                            match_template_collator! {
-                                TT, match self.columns_info[i].as_accessor().collation()? {
-                                    Collation::TT => {
-                                        let mut mut_val = &column_vals[i][..];
-                                        let decoded_val = table::decode_col_value(&mut mut_val, &mut ctx, &self.columns_info[i])?;
-                                        if decoded_val == Datum::Null {
-                                            collation_key_vals[i].clone_from(&column_vals[i]);
-                                        } else {
-                                            // Only if the `decoded_val` is Datum::Null, `decoded_val` is a Ok(None).
-                                            // So it is safe the unwrap the Ok value.
-                                            TT::write_sort_key(&mut collation_key_vals[i], &decoded_val.as_string()?.unwrap())?;
-                                        }
+                            if let LazyBatchColumn::Decoded(VectorValue::Bytes(ref vec)) =
+                                columns_slice[i]
+                            {
+                                sort_key_shortcut = true;
+                                match vec.get_option_ref(*logical_row) {
+                                    Some(val) => {
+                                        match_template_collator! {
+                                            TT, match self.columns_info[i].as_accessor().collation()? {
+                                                Collation::TT => {
+                                                    TT::write_sort_key(&mut collation_key_vals[i], val)?;
+                                                }
+                                            }
+                                        };
+                                    }
+                                    None => {
+                                        collation_key_vals[i].write_evaluable_datum_null()?;
                                     }
                                 }
-                            };
+                            }
                         }
-                        read_size += column_vals[i].len();
+                        if sort_key_shortcut {
+                            if pick {
+                                columns_slice[i].encode(
+                                    *logical_row,
+                                    &self.columns_info[i],
+                                    &mut ctx,
+                                    &mut column_vals[i],
+                                )?;
+                                read_size += column_vals[i].len();
+                            } else {
+                                read_size += collation_key_vals[i].len();
+                            }
+                        } else {
+                            columns_slice[i].encode(
+                                *logical_row,
+                                &self.columns_info[i],
+                                &mut ctx,
+                                &mut column_vals[i],
+                            )?;
+                            if self.columns_info[i].as_accessor().is_string_like() {
+                                match_template_collator! {
+                                    TT, match self.columns_info[i].as_accessor().collation()? {
+                                        Collation::TT => {
+                                            let mut mut_val = &column_vals[i][..];
+                                            let decoded_val = table::decode_col_value(&mut mut_val, &mut ctx, &self.columns_info[i])?;
+                                            if decoded_val == Datum::Null {
+                                                collation_key_vals[i].clone_from(&column_vals[i]);
+                                            } else {
+                                                // Only if the `decoded_val` is Datum::Null, `decoded_val` is a Ok(None).
+                                                // So it is safe the unwrap the Ok value.
+                                                TT::write_sort_key(&mut collation_key_vals[i], &decoded_val.as_string()?.unwrap())?;
+                                            }
+                                        }
+                                    }
+                                };
+                            }
+                            read_size += column_vals[i].len();
+                        }
                     }
                     collector.mut_base().count += 1;
-                    collector.collect_column_group(
+                    collector.mut_base().collect_column_group(
                         &column_vals,
                         &collation_key_vals,
                         &self.columns_info,
                         &self.column_groups,
                     );
-                    collector.collect_column(&column_vals, &collation_key_vals, &self.columns_info);
+                    collector.mut_base().collect_column(
+                        &column_vals,
+                        &collation_key_vals,
+                        &self.columns_info,
+                    );
+                    if pick {
+                        collector.push_sample(&column_vals)
+                    }
                 }
             }
 
@@ -475,20 +522,8 @@ impl<S: Snapshot, F: KvFormat> RowSampleBuilder<S, F> {
 
 trait RowSampleCollector: Send {
     fn mut_base(&mut self) -> &mut BaseRowSampleCollector;
-    fn collect_column_group(
-        &mut self,
-        columns_val: &[Vec<u8>],
-        collation_keys_val: &[Vec<u8>],
-        columns_info: &[tipb::ColumnInfo],
-        column_groups: &[tipb::AnalyzeColumnGroup],
-    );
-    fn collect_column(
-        &mut self,
-        columns_val: &[Vec<u8>],
-        collation_keys_val: &[Vec<u8>],
-        columns_info: &[tipb::ColumnInfo],
-    );
-    fn sampling(&mut self, data: &[Vec<u8>]);
+    fn pick_sample(&mut self) -> bool;
+    fn push_sample(&mut self, data: &[Vec<u8>]);
     fn to_proto(&mut self) -> tipb::RowSampleCollector;
     fn get_reported_memory_usage(&mut self) -> usize {
         self.mut_base().reported_memory_usage
@@ -652,40 +687,19 @@ impl RowSampleCollector for BernoulliRowSampleCollector {
     fn mut_base(&mut self) -> &mut BaseRowSampleCollector {
         &mut self.base
     }
-    fn collect_column_group(
-        &mut self,
-        columns_val: &[Vec<u8>],
-        collation_keys_val: &[Vec<u8>],
-        columns_info: &[tipb::ColumnInfo],
-        column_groups: &[tipb::AnalyzeColumnGroup],
-    ) {
-        self.base.collect_column_group(
-            columns_val,
-            collation_keys_val,
-            columns_info,
-            column_groups,
-        );
-    }
-    fn collect_column(
-        &mut self,
-        columns_val: &[Vec<u8>],
-        collation_keys_val: &[Vec<u8>],
-        columns_info: &[tipb::ColumnInfo],
-    ) {
-        self.base
-            .collect_column(columns_val, collation_keys_val, columns_info);
-        self.sampling(columns_val);
-    }
-    fn sampling(&mut self, data: &[Vec<u8>]) {
+
+    fn pick_sample(&mut self) -> bool {
         let cur_rng = self.base.rng.gen_range(0.0, 1.0);
-        if cur_rng >= self.sample_rate {
-            return;
-        }
+        cur_rng < self.sample_rate
+    }
+
+    fn push_sample(&mut self, data: &[Vec<u8>]) {
         let sample = data.to_vec();
         self.base.memory_usage += sample.iter().map(|x| x.capacity()).sum::<usize>();
         self.base.report_memory_usage(false);
         self.samples.push(sample);
     }
+
     fn to_proto(&mut self) -> tipb::RowSampleCollector {
         self.base.memory_usage = 0;
         self.base.report_memory_usage(true);
@@ -709,6 +723,7 @@ struct ReservoirRowSampleCollector {
     base: BaseRowSampleCollector,
     samples: BinaryHeap<Reverse<(i64, Vec<Vec<u8>>)>>,
     max_sample_size: usize,
+    cur_rng: i64,
 }
 
 impl ReservoirRowSampleCollector {
@@ -721,6 +736,7 @@ impl ReservoirRowSampleCollector {
             base: BaseRowSampleCollector::new(max_fm_sketch_size, col_and_group_len),
             samples: BinaryHeap::new(),
             max_sample_size,
+            cur_rng: 0,
         }
     }
 }
@@ -729,53 +745,29 @@ impl RowSampleCollector for ReservoirRowSampleCollector {
     fn mut_base(&mut self) -> &mut BaseRowSampleCollector {
         &mut self.base
     }
-    fn collect_column_group(
-        &mut self,
-        columns_val: &[Vec<u8>],
-        collation_keys_val: &[Vec<u8>],
-        columns_info: &[tipb::ColumnInfo],
-        column_groups: &[tipb::AnalyzeColumnGroup],
-    ) {
-        self.base.collect_column_group(
-            columns_val,
-            collation_keys_val,
-            columns_info,
-            column_groups,
-        );
-    }
 
-    fn collect_column(
-        &mut self,
-        columns_val: &[Vec<u8>],
-        collation_keys_val: &[Vec<u8>],
-        columns_info: &[tipb::ColumnInfo],
-    ) {
-        self.base
-            .collect_column(columns_val, collation_keys_val, columns_info);
-        self.sampling(columns_val);
-    }
-
-    fn sampling(&mut self, data: &[Vec<u8>]) {
+    fn pick_sample(&mut self) -> bool {
         // We should tolerate the abnormal case => `self.max_sample_size == 0`.
         if self.max_sample_size == 0 {
-            return;
+            return false;
         }
-        let mut need_push = false;
-        let cur_rng = self.base.rng.gen_range(0, i64::MAX);
+        let mut pick = false;
+        self.cur_rng = self.base.rng.gen_range(0, i64::MAX);
         if self.samples.len() < self.max_sample_size {
-            need_push = true;
-        } else if self.samples.peek().unwrap().0.0 < cur_rng {
-            need_push = true;
+            pick = true;
+        } else if self.samples.peek().unwrap().0.0 < self.cur_rng {
+            pick = true;
             let (_, evicted) = self.samples.pop().unwrap().0;
             self.base.memory_usage -= evicted.iter().map(|x| x.capacity()).sum::<usize>();
         }
+        pick
+    }
 
-        if need_push {
-            let sample = data.to_vec();
-            self.base.memory_usage += sample.iter().map(|x| x.capacity()).sum::<usize>();
-            self.base.report_memory_usage(false);
-            self.samples.push(Reverse((cur_rng, sample)));
-        }
+    fn push_sample(&mut self, data: &[Vec<u8>]) {
+        let sample = data.to_vec();
+        self.base.memory_usage += sample.iter().map(|x| x.capacity()).sum::<usize>();
+        self.base.report_memory_usage(false);
+        self.samples.push(Reverse((self.cur_rng, sample)));
     }
 
     fn to_proto(&mut self) -> tipb::RowSampleCollector {
@@ -1253,7 +1245,9 @@ mod tests {
         for loop_i in 0..loop_cnt {
             let mut collector = ReservoirRowSampleCollector::new(sample_num, 1000, 1);
             for row in &nums {
-                collector.sampling(&[row.clone()]);
+                if collector.pick_sample() {
+                    collector.push_sample(&[row.clone()]);
+                }
             }
             assert_eq!(collector.samples.len(), sample_num);
             for sample in &collector.samples {
@@ -1301,7 +1295,9 @@ mod tests {
             let mut collector =
                 BernoulliRowSampleCollector::new(sample_num as f64 / row_num as f64, 1000, 1);
             for row in &nums {
-                collector.sampling(&[row.clone()]);
+                if collector.pick_sample() {
+                    collector.push_sample(&[row.clone()]);
+                }
             }
             for sample in &collector.samples {
                 *item_cnt.entry(sample[0].clone()).or_insert(0) += 1;
@@ -1346,7 +1342,9 @@ mod tests {
             // Test for ReservoirRowSampleCollector
             let mut collector = ReservoirRowSampleCollector::new(sample_num, 1000, 1);
             for row in &nums {
-                collector.sampling(&[row.clone()]);
+                if collector.pick_sample() {
+                    collector.push_sample(&[row.clone()]);
+                }
             }
             assert_eq!(collector.samples.len(), 0);
         }
@@ -1355,7 +1353,9 @@ mod tests {
             let mut collector =
                 BernoulliRowSampleCollector::new(sample_num as f64 / row_num as f64, 1000, 1);
             for row in &nums {
-                collector.sampling(&[row.clone()]);
+                if collector.pick_sample() {
+                    collector.push_sample(&[row.clone()]);
+                }
             }
             assert_eq!(collector.samples.len(), 0);
         }
