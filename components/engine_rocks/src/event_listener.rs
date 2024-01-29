@@ -100,6 +100,13 @@ impl rocksdb::EventListener for RocksEventListener {
         STORE_ENGINE_INGESTION_PICKED_LEVEL_VEC
             .with_label_values(&[&self.db_name, info.cf_name()])
             .observe(info.picked_level() as f64);
+        if info.picked_level() < 6 {
+            warn!(
+                "SST can not ingest to L6";
+                "level" => info.picked_level(),
+                "file" => info.internal_file_path().to_str().unwrap(),
+            );
+        }
     }
 
     fn on_background_error(&self, reason: DBBackgroundErrorReason, status: MutableStatus) {
