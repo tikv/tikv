@@ -73,6 +73,10 @@ impl RaftstoreReporter {
         self.slow_score
             .record(id, duration.delays_on_disk_io(false), store_not_busy);
         self.slow_trend.record(duration);
+
+        // Publish slow score to health controller
+        self.health_controller_inner
+            .update_raftstore_slow_score(self.slow_score.get());
     }
 
     fn set_service_healthy(&mut self, is_healthy: bool) {
@@ -110,6 +114,12 @@ impl RaftstoreReporter {
             }
         }
 
+        // Publish the slow score to health controller
+        if let Some(slow_score_value) = slow_score_tick_result.updated_score {
+            self.health_controller_inner
+                .update_raftstore_slow_score(slow_score_value);
+        }
+
         slow_score_tick_result
     }
 
@@ -135,6 +145,10 @@ impl RaftstoreReporter {
             let slow_trend_result_rate = self.slow_trend.slow_result.increasing_rate();
             slow_trend_pb.set_result_rate(slow_trend_result_rate);
         }
+
+        // Publish the result to health controller.
+        self.health_controller_inner
+            .update_raftstore_slow_trend(slow_trend_pb.clone());
 
         (requests_per_sec, slow_trend_pb)
     }
