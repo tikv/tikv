@@ -66,14 +66,16 @@ impl RangeCacheWriteBatch {
     }
 
     fn write_impl(&mut self, seq: u64) -> Result<()> {
-        let core = self.engine.core().read().unwrap();
-        let (engine, filtered_keys) = (
-            core.engine().clone(),
-            self.buffer
-                .iter()
-                .filter(|&e| e.should_write_to_memory(core.range_manager()))
-                .collect::<Vec<_>>(),
-        );
+        let (engine, filtered_keys) = {
+            let core = self.engine.core().read().unwrap();
+            (
+                core.engine().clone(),
+                self.buffer
+                    .iter()
+                    .filter(|&e| e.should_write_to_memory(core.range_manager()))
+                    .collect::<Vec<_>>(),
+            )
+        };
         filtered_keys
             .into_iter()
             .try_for_each(|e| e.write_to_memory(&engine, seq))
