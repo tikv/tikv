@@ -1069,7 +1069,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                     let buckets = snapshot.ext().get_buckets();
                     let (result, stats) = Self::with_perf_context(CMD, || {
                         let _guard = sample.observe_cpu();
-                        let snap_store: SnapshotStore<<E as Engine>::Snap> = SnapshotStore::new(
+                        let snap_store = SnapshotStore::new(
                             snapshot,
                             start_ts,
                             ctx.get_isolation_level(),

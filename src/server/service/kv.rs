@@ -1529,7 +1529,6 @@ fn future_batch_get<E: Engine, L: LockManager, F: KvFormat>(
                 Ok((kv_res, stats)) => {
                     let pairs = map_kv_pairs(kv_res);
                     let exec_detail_v2 = resp.mut_exec_details_v2();
-                    // let scan_detail_v2 = exec_detail_v2.mut_scan_detail_v2();
                     stats
                         .stats
                         .write_scan_detail(exec_detail_v2.mut_scan_detail_v2());
