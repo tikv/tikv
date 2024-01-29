@@ -5,7 +5,19 @@ use crate::{
     fatal,
 };
 
+#[derive(PartialEq)]
+pub enum SnapshotDeducedType {
+    Uncertain,
+    Regular,
+    Fap,
+}
+
 impl<T: Transport + 'static, ER: RaftEngine> ProxyForwarder<T, ER> {
+    pub fn deduce_snapshot_type(_peer_id: u64, _snap: &store::Snapshot) -> SnapshotDeducedType {
+        // TODO(fap) implement in seperated modes(serverless or op).
+        SnapshotDeducedType::Uncertain
+    }
+
     pub fn pre_apply_snapshot_for_fap_snapshot(
         &self,
         ob_region: &Region,
@@ -21,7 +33,7 @@ impl<T: Transport + 'static, ER: RaftEngine> ProxyForwarder<T, ER> {
                 |info: MapEntry<u64, Arc<CachedRegionInfo>>| match info {
                     MapEntry::Occupied(_) => {
                         if !self.engine_store_server_helper.kvstore_region_exist(region_id) {
-                            if self.engine_store_server_helper.query_fap_snapshot_state(region_id, peer_id) == proxy_ffi::interfaces_ffi::FapSnapshotState::Persisted {
+                            if self.engine_store_server_helper.query_fap_snapshot_state(region_id, peer_id, snap_key.idx, snap_key.term) == proxy_ffi::interfaces_ffi::FapSnapshotState::Persisted {
                                 info!("fast path: prehandle first snapshot skipped {}:{} {}", self.store_id, region_id, peer_id;
                                     "snap_key" => ?snap_key,
                                     "region_id" => region_id,
@@ -32,7 +44,7 @@ impl<T: Transport + 'static, ER: RaftEngine> ProxyForwarder<T, ER> {
                     }
                     MapEntry::Vacant(_) => {
                         // It won't go here because cached region info is inited after restart and on the first fap message.
-                        let pstate = self.engine_store_server_helper.query_fap_snapshot_state(region_id, peer_id);
+                        let pstate = self.engine_store_server_helper.query_fap_snapshot_state(region_id, peer_id, snap_key.idx, snap_key.term);
                         if pstate == proxy_ffi::interfaces_ffi::FapSnapshotState::Persisted {
                             // We have a fap snapshot now. skip
                             info!("fast path: prehandle first snapshot skipped after restart {}:{} {}", self.store_id, region_id, peer_id;
@@ -63,10 +75,21 @@ impl<T: Transport + 'static, ER: RaftEngine> ProxyForwarder<T, ER> {
         ob_region: &Region,
         peer_id: u64,
         snap_key: &store::SnapKey,
+        maybe_snap: Option<&store::Snapshot>,
     ) -> bool {
         let region_id = ob_region.get_id();
-        let try_apply_fap_snapshot = |c: Arc<CachedRegionInfo>, restarted: bool| {
-            info!("fast path: start applying first snapshot {}:{} {}", self.store_id, region_id, peer_id;
+        let try_apply_fap_snapshot = |c: Arc<CachedRegionInfo>| {
+            let already_existed = self
+                .engine_store_server_helper
+                .kvstore_region_exist(region_id);
+            if already_existed {
+                debug!("fast path: skip apply snapshot because not first {}:{} {}", self.store_id, region_id, peer_id;
+                    "snap_key" => ?snap_key,
+                    "region_id" => region_id,
+                );
+                return false;
+            }
+            info!("fast path: start applying first fap snapshot {}:{} {}", self.store_id, region_id, peer_id;
                 "snap_key" => ?snap_key,
                 "region_id" => region_id,
             );
@@ -80,36 +103,78 @@ impl<T: Transport + 'static, ER: RaftEngine> ProxyForwarder<T, ER> {
                 .duration_since(SystemTime::UNIX_EPOCH)
                 .unwrap();
 
-            let assert_exist = if !restarted {
-                snapshot_sent_time != 0
-            } else {
-                false
+            let snap = match maybe_snap {
+                Some(s) => s,
+                None => {
+                    return false;
+                }
             };
-            if !self
-                .engine_store_server_helper
-                .apply_fap_snapshot(region_id, peer_id, assert_exist)
-            {
-                // This is not a fap snapshot.
-                info!("fast path: this is not fap snapshot {}:{} {}, goto tikv snapshot", self.store_id, region_id, peer_id;
+
+            // We can't rely on `snapshot_inflight`, because it will be undetermined ZERO
+            // after restart.
+            let expected_snapshot_type = Self::deduce_snapshot_type(peer_id, snap);
+
+            let quit_apply_fap = |tag: &str| {
+                info!("fast path: fap snapshot mismatch/nonexist {}:{} {}", self.store_id, region_id, peer_id;
                     "snap_key" => ?snap_key,
                     "region_id" => region_id,
                     "cost_snapshot" => current.as_millis() - snapshot_sent_time,
                     "cost_total" => current.as_millis() - fap_start_time,
                     "current_enabled" => current_enabled,
-                    "from_restart" => restarted,
+                    "tag" => tag
                 );
+                if expected_snapshot_type == SnapshotDeducedType::Fap {
+                    // It won't actually happen because TiFlash will panic since `assert_exist` is
+                    // true in this case.
+                    fatal!(
+                        "fast path: fap snapshot apply failed {}:{} {}, which is assert to be fap snapshot",
+                        self.store_id,
+                        region_id,
+                        peer_id
+                    );
+                }
                 c.snapshot_inflight.store(0, Ordering::SeqCst);
                 c.fast_add_peer_start.store(0, Ordering::SeqCst);
                 c.inited_or_fallback.store(true, Ordering::SeqCst);
-                return false;
+                false
+            };
+
+            // If there is no fap snapshot with given (index, term) we shall quit.
+            if self.engine_store_server_helper.query_fap_snapshot_state(
+                region_id,
+                peer_id,
+                snap_key.idx,
+                snap_key.term,
+            ) != proxy_ffi::interfaces_ffi::FapSnapshotState::Persisted
+            {
+                return quit_apply_fap("pre check");
             }
-            info!("fast path: finished applied first snapshot {}:{} {}, recover MsgAppend", self.store_id, region_id, peer_id;
+
+            // Only succeeds if (index, term) matches.
+            // Returns false if `assert_exist` is false,
+            // Panics if `assert_exist` is true.
+            // The logic is kind of redundant, but we want to make it complete on both
+            // sides.
+            if !self.engine_store_server_helper.apply_fap_snapshot(
+                region_id,
+                peer_id,
+                true,
+                snap_key.idx,
+                snap_key.term,
+            ) {
+                return quit_apply_fap("apply");
+            }
+            // If it's a reguar snapshot have the same (index, term) as the fap snapshot,
+            // it make no difference which snapshot we actually applied.
+            // So we always choose to apply a fap snapshot, since it saves as from
+            // prehandling work.
+            info!("fast path: finished applied first fap snapshot {}:{} {}, recover MsgAppend", self.store_id, region_id, peer_id;
                 "snap_key" => ?snap_key,
                 "region_id" => region_id,
                 "cost_snapshot" => current.as_millis() - snapshot_sent_time,
                 "cost_total" => current.as_millis() - fap_start_time,
                 "current_enabled" => current_enabled,
-                "from_restart" => restarted,
+                "replacement_of_regular" => expected_snapshot_type == SnapshotDeducedType::Regular
             );
             c.snapshot_inflight.store(0, Ordering::SeqCst);
             c.fast_add_peer_start.store(0, Ordering::SeqCst);
@@ -132,26 +197,13 @@ impl<T: Transport + 'static, ER: RaftEngine> ProxyForwarder<T, ER> {
         let mut applied_fap = false;
         #[allow(clippy::collapsible_if)]
         if should_check_fap_snapshot {
-            let mut maybe_cached_info: Option<Arc<CachedRegionInfo>> = None;
             if self
                 .get_cached_manager()
                 .access_cached_region_info_mut(
                     region_id,
                     |info: MapEntry<u64, Arc<CachedRegionInfo>>| match info {
                         MapEntry::Occupied(o) => {
-                            maybe_cached_info = Some(o.get().clone());
-                            let already_existed = self.engine_store_server_helper.kvstore_region_exist(region_id);
-                            debug!("fast path: check should apply fap snapshot {}:{} {}", self.store_id, region_id, peer_id;
-                                "snap_key" => ?snap_key,
-                                "region_id" => region_id,
-                                "inited_or_fallback" => o.get().inited_or_fallback.load(Ordering::SeqCst),
-                                "snapshot_inflight" => o.get().snapshot_inflight.load(Ordering::SeqCst),
-                                "already_existed" => already_existed,
-                            );
-                            if !already_existed {
-                                // May be a fap snapshot, try to apply.
-                                applied_fap = try_apply_fap_snapshot(o.get().clone(), false);
-                            }
+                            applied_fap = try_apply_fap_snapshot(o.get().clone());
                         }
                         MapEntry::Vacant(_) => {
                             // It won't go here because cached region info is inited after restart and on the first fap message.
@@ -161,7 +213,7 @@ impl<T: Transport + 'static, ER: RaftEngine> ProxyForwarder<T, ER> {
                             );
                             assert!(self.is_initialized(region_id));
                             let o = Arc::new(CachedRegionInfo::default());
-                            applied_fap = try_apply_fap_snapshot(o, true);
+                            applied_fap = try_apply_fap_snapshot(o);
                         }
                     },
                 )

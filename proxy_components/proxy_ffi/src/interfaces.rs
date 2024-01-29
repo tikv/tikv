@@ -660,6 +660,8 @@ pub mod root {
                     arg2: u64,
                     arg3: u64,
                     arg4: u8,
+                    arg5: u64,
+                    arg6: u64,
                 ) -> u8,
             >,
             pub fn_handle_http_request: ::std::option::Option<
@@ -735,6 +737,8 @@ pub mod root {
                     arg1: *mut root::DB::EngineStoreServerWrap,
                     region_id: u64,
                     new_peer_id: u64,
+                    arg2: u64,
+                    arg3: u64,
                 ) -> root::DB::FapSnapshotState,
             >,
             pub fn_clear_fap_snapshot: ::std::option::Option<
@@ -754,7 +758,7 @@ pub mod root {
                 arg3: root::DB::RawVoidPtr,
             ) -> u32;
         }
-        pub const RAFT_STORE_PROXY_VERSION: u64 = 3560036848329077111;
+        pub const RAFT_STORE_PROXY_VERSION: u64 = 8589640407431546086;
         pub const RAFT_STORE_PROXY_MAGIC_NUMBER: u32 = 324508639;
     }
 }

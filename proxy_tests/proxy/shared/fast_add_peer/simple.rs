@@ -243,7 +243,7 @@ fn simple_fast_add_peer(
     iter_ffi_helpers(&cluster, Some(vec![3]), &mut |_, ffi: &mut FFIHelperSet| {
         assert_eq!(
             ffi.engine_store_server_helper
-                .query_fap_snapshot_state(1, 3),
+                .query_fap_snapshot_state(1, 3, 0, 0),
             proxy_ffi::interfaces_ffi::FapSnapshotState::NotFound
         );
     });

@@ -1,3 +1,5 @@
+use proxy_ffi::fatal;
+
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 use crate::core::{common::*, ProxyForwarder};
 
@@ -40,10 +42,16 @@ impl<T: Transport + 'static, ER: RaftEngine> ProxyForwarder<T, ER> {
                     v.insert(Arc::new(c));
                 }
             };
-            // TODO remove unwrap
-            self.get_cached_manager()
+            if self
+                .get_cached_manager()
                 .access_cached_region_info_mut(region_id, f)
-                .unwrap();
+                .is_err()
+            {
+                fatal!(
+                    "on_region_changed could not found region info region_id={}",
+                    region_id
+                );
+            }
         }
     }
 
@@ -135,9 +143,15 @@ impl<T: Transport + 'static, ER: RaftEngine> ProxyForwarder<T, ER> {
                 v.insert(Arc::new(c));
             }
         };
-        // TODO remove unwrap
-        self.get_cached_manager()
+        if self
+            .get_cached_manager()
             .access_cached_region_info_mut(region_id, f)
-            .unwrap();
+            .is_err()
+        {
+            fatal!(
+                "on_role_change could not found region info region_id={}",
+                region_id
+            );
+        }
     }
 }

@@ -347,7 +347,7 @@ struct EngineStoreServerHelper {
   void (*fn_release_pre_handled_snapshot)(EngineStoreServerWrap *, RawVoidPtr,
                                           RawCppPtrType);
   uint8_t (*fn_apply_fap_snapshot)(EngineStoreServerWrap *, uint64_t, uint64_t,
-                                   uint8_t);
+                                   uint8_t, uint64_t, uint64_t);
   HttpRequestRes (*fn_handle_http_request)(EngineStoreServerWrap *,
                                            BaseBuffView path,
                                            BaseBuffView query,
@@ -369,7 +369,8 @@ struct EngineStoreServerHelper {
                                      BaseBuffView);
   FapSnapshotState (*fn_query_fap_snapshot_state)(EngineStoreServerWrap *,
                                                   uint64_t region_id,
-                                                  uint64_t new_peer_id);
+                                                  uint64_t new_peer_id,
+                                                  uint64_t, uint64_t);
   void (*fn_clear_fap_snapshot)(EngineStoreServerWrap *, uint64_t region_id);
   bool (*fn_kvstore_region_exists)(EngineStoreServerWrap *, uint64_t region_id);
 };

@@ -220,7 +220,14 @@ impl EngineStoreServerHelper {
         }
     }
 
-    pub fn apply_fap_snapshot(&self, region_id: u64, peer_id: u64, assert_exist: bool) -> bool {
+    pub fn apply_fap_snapshot(
+        &self,
+        region_id: u64,
+        peer_id: u64,
+        assert_exist: bool,
+        index: u64,
+        term: u64,
+    ) -> bool {
         debug_assert!(self.fn_apply_fap_snapshot.is_some());
         unsafe {
             (self.fn_apply_fap_snapshot.into_inner())(
@@ -228,6 +235,8 @@ impl EngineStoreServerHelper {
                 region_id,
                 peer_id,
                 assert_exist as u8,
+                index,
+                term,
             ) != 0
         }
     }
@@ -236,10 +245,18 @@ impl EngineStoreServerHelper {
         &self,
         region_id: u64,
         new_peer_id: u64,
+        index: u64,
+        term: u64,
     ) -> interfaces_ffi::FapSnapshotState {
         debug_assert!(self.fn_query_fap_snapshot_state.is_some());
         unsafe {
-            (self.fn_query_fap_snapshot_state.into_inner())(self.inner, region_id, new_peer_id)
+            (self.fn_query_fap_snapshot_state.into_inner())(
+                self.inner,
+                region_id,
+                new_peer_id,
+                index,
+                term,
+            )
         }
     }
 

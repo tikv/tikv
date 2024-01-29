@@ -6,13 +6,77 @@ use engine_tiflash::CachedRegionInfo;
 use crate::utils::v1::*;
 
 #[test]
+fn test_disable_fap() {
+    tikv_util::set_panic_hook(true, "./");
+    let (mut cluster, pd_client) = new_mock_cluster(0, 2);
+    fail::cfg("post_apply_snapshot_allow_no_unips", "return").unwrap();
+    cluster.cfg.proxy_cfg.engine_store.enable_fast_add_peer = true;
+    fail::cfg("fap_core_fake_send", "return(1)").unwrap(); // Can always apply snapshot immediately
+    fail::cfg("apply_on_handle_snapshot_sync", "return(true)").unwrap();
+    // Otherwise will panic with `assert_eq!(apply_state, last_applied_state)`.
+    fail::cfg("on_pre_write_apply_state", "return(true)").unwrap();
+    disable_auto_gen_compact_log(&mut cluster);
+    // Disable auto generate peer.
+    pd_client.disable_default_operator();
+    let _ = cluster.run_conf_change();
+
+    cluster.must_put(b"k0", b"v0");
+    check_key(&cluster, b"k0", b"v0", Some(true), None, Some(vec![1]));
+
+    pd_client.must_add_peer(1, new_learner_peer(2, 2));
+    std::thread::sleep(std::time::Duration::from_millis(1000));
+
+    stop_tiflash_node(&mut cluster, 2);
+    cluster.cfg.proxy_cfg.engine_store.enable_fast_add_peer = false;
+
+    fail::cfg("fap_core_no_fast_path", "panic").unwrap();
+    for i in 10..19 {
+        let k = format!("k{}", i);
+        let v = format!("v{}", i);
+        cluster.must_put(k.as_bytes(), v.as_bytes());
+    }
+    for i in 10..19 {
+        let k = format!("k{}", i);
+        let v = format!("v{}", i);
+        check_key(
+            &cluster,
+            k.as_bytes(),
+            v.as_bytes(),
+            Some(true),
+            None,
+            Some(vec![1]),
+        );
+    }
+    let region = cluster.get_region("k19".as_bytes());
+    let prev_state = maybe_collect_states(&cluster.cluster_ext, 1, Some(vec![1]));
+    let (compact_index, compact_term) = get_valid_compact_index(&prev_state);
+    debug!("compact at index {}", compact_index);
+    let compact_log = test_raftstore::new_compact_log_request(compact_index, compact_term);
+    let req = test_raftstore::new_admin_request(1, region.get_region_epoch(), compact_log);
+    let res = cluster
+        .call_command_on_leader(req, Duration::from_secs(3))
+        .unwrap();
+    // compact index should less than applied index
+    assert!(!res.get_header().has_error(), "{:?}", res);
+
+    restart_tiflash_node(&mut cluster, 2);
+    pd_client.must_add_peer(1, new_learner_peer(2, 2));
+    // The original fap snapshot not match
+    check_key(&cluster, b"k0", b"v0", Some(true), None, Some(vec![2]));
+    check_key(&cluster, b"k10", b"v10", Some(true), None, Some(vec![2]));
+
+    cluster.shutdown();
+    fail::remove("apply_on_handle_snapshot_sync");
+    fail::remove("on_pre_write_apply_state");
+}
+
+#[test]
 fn test_cancel_after_fap_phase1() {
     tikv_util::set_panic_hook(true, "./");
     let (mut cluster, pd_client) = new_mock_cluster(0, 2);
     fail::cfg("post_apply_snapshot_allow_no_unips", "return").unwrap();
     cluster.cfg.proxy_cfg.engine_store.enable_fast_add_peer = true;
     // fail::cfg("on_pre_write_apply_state", "return").unwrap();
-    fail::cfg("fap_mock_fake_snapshot", "return(1)").unwrap();
     // fail::cfg("before_tiflash_check_double_write", "return").unwrap();
     disable_auto_gen_compact_log(&mut cluster);
     // Disable auto generate peer.
@@ -46,9 +110,9 @@ fn test_cancel_after_fap_phase1() {
     cluster.shutdown();
     fail::remove("on_ob_cancel_after_pre_handle_snapshot");
     fail::remove("fap_core_no_fallback");
-    fail::remove("fap_mock_fake_snapshot");
 }
 
+// Test is the cached mem info is well managed in all cases.
 #[test]
 fn test_restart_meta_info() {
     fail::cfg("post_apply_snapshot_allow_no_unips", "return").unwrap();
@@ -115,7 +179,6 @@ fn test_restart_meta_info() {
     cluster.shutdown();
     fail::remove("post_apply_snapshot_allow_no_unips");
     fail::remove("fap_core_no_fallback");
-    fail::remove("fap_mock_fake_snapshot");
 }
 
 fn prehandle_snapshot_after_restart(kind: u64) {
@@ -153,7 +216,7 @@ fn prehandle_snapshot_after_restart(kind: u64) {
         iter_ffi_helpers(&cluster, Some(vec![3]), &mut |_, ffi: &mut FFIHelperSet| {
             res = ffi
                 .engine_store_server_helper
-                .query_fap_snapshot_state(1, 3003)
+                .query_fap_snapshot_state(1, 3003, 0, 0)
                 == proxy_ffi::interfaces_ffi::FapSnapshotState::Persisted;
         });
         if res {
@@ -218,7 +281,7 @@ fn prehandle_snapshot_after_restart(kind: u64) {
     iter_ffi_helpers(&cluster, Some(vec![3]), &mut |_, ffi: &mut FFIHelperSet| {
         assert_eq!(
             ffi.engine_store_server_helper
-                .query_fap_snapshot_state(1, 3003),
+                .query_fap_snapshot_state(1, 3003, 0, 0),
             proxy_ffi::interfaces_ffi::FapSnapshotState::Persisted
         );
     });
@@ -569,6 +632,7 @@ fn test_existing_peer() {
 
     restart_tiflash_node(&mut cluster, 2);
 
+    // No tikv snapshot before.
     iter_ffi_helpers(&cluster, Some(vec![2]), &mut |_, ffi: &mut FFIHelperSet| {
         (*ffi.engine_store_server).mutate_region_states(1, |e: &mut RegionStats| {
             assert_eq!(e.apply_snap_count.load(Ordering::SeqCst), 0);
@@ -766,6 +830,7 @@ fn test_split_merge() {
     cluster.shutdown();
 }
 
+// Fallback to slow path in if fast_add_peer call fails.
 #[test]
 fn test_fall_back_to_slow_path() {
     let (mut cluster, pd_client) = new_mock_cluster_snap(0, 2);
@@ -801,7 +866,7 @@ fn test_fall_back_to_slow_path() {
     iter_ffi_helpers(&cluster, Some(vec![2]), &mut |_, ffi: &mut FFIHelperSet| {
         assert_eq!(
             ffi.engine_store_server_helper
-                .query_fap_snapshot_state(1, 2),
+                .query_fap_snapshot_state(1, 2, 0, 0),
             proxy_ffi::interfaces_ffi::FapSnapshotState::NotFound
         );
     });
