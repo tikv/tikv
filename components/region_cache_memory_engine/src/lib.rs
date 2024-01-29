@@ -6,8 +6,10 @@
 #![feature(slice_pattern)]
 
 mod engine;
+mod gc;
 pub mod keys;
 pub use engine::RangeCacheMemoryEngine;
 pub mod range_manager;
 mod write_batch;
 pub use write_batch::RangeCacheWriteBatch;
+mod memory_limiter;

@@ -22,7 +22,7 @@ command! {
     /// This should followed by a `ResolveLock`.
     ResolveLockReadPhase:
         cmd_ty => (),
-        display => "kv::resolve_lock_readphase", (),
+        display => { "kv::resolve_lock_readphase", (), }
         content => {
             /// Maps lock_ts to commit_ts. See ./resolve_lock.rs for details.
             txn_status: HashMap<TimeStamp, TimeStamp>,
