@@ -186,8 +186,8 @@ pub struct StoreMeta {
     pub damaged_ranges: HashMap<String, (Vec<u8>, Vec<u8>)>,
     /// record peers in recovery progress
     pub pending_recovery_peers: HashSet<u64>,
-    /// record the number of peers done for recovery
-    pub recovered_peers_count: u64,
+    /// record the number of peers done for applying logs
+    pub completed_apply_peers_count: u64,
 }
 
 impl StoreRegionMeta for StoreMeta {
@@ -239,7 +239,7 @@ impl StoreMeta {
             region_read_progress: RegionReadProgressRegistry::new(),
             damaged_ranges: HashMap::default(),
             pending_recovery_peers: HashSet::default(),
-            recovered_peers_count: 0,
+            completed_apply_peers_count: 0,
         }
     }
 
@@ -639,9 +639,9 @@ where
         // TODO: make it reasonable
         self.tick_batch[PeerTick::RequestVoterReplicatedIndex as usize].wait_duration =
             self.cfg.raft_log_gc_tick_interval.0 * 2;
-        // Keep PeerTick::CheckPeerCompleteRecovery timeout same with checking
+        // Keep PeerTick::CheckPeerCompleteApplyLogs timeout same with checking
         // uncommited interval
-        self.tick_batch[PeerTick::CheckPeerCompleteRecovery as usize].wait_duration =
+        self.tick_batch[PeerTick::CheckPeerCompleteApplyLogs as usize].wait_duration =
             self.cfg.check_long_uncommitted_interval.0;
     }
 
@@ -2718,6 +2718,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         let mut stats = StoreStats::default();
 
         stats.set_store_id(self.ctx.store_id());
+        let completed_apply_peers_count: u64;
         {
             let meta = self.ctx.store_meta.lock().unwrap();
             stats.set_region_count(meta.regions.len() as u32);
@@ -2726,6 +2727,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
                 let damaged_regions_id = meta.get_all_damaged_region_ids().into_iter().collect();
                 stats.set_damaged_regions_id(damaged_regions_id);
             }
+            completed_apply_peers_count = meta.completed_apply_peers_count;
         }
 
         let snap_stats = self.ctx.snap_mgr.stats();
@@ -2765,22 +2767,21 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
             .stat
             .is_busy
             .swap(false, Ordering::Relaxed);
-        let pending_recovery = {
+        let pending_on_apply = {
             (time::get_time().sec as u32).saturating_sub(start_time)
                 <= STORE_RECOVERY_DURATION.as_secs() as u32
         };
-        let is_busy = if pending_recovery {
-            // If the store is busy in handling recovery when starting, it should not be
-            // treated as a normal store for balance. Only when the store is
-            // almost idle (no more pending regions on recovery), it can be
-            // regarded as candidates for balance.
+        let is_busy = if pending_on_apply {
+            // If the store is busy in handling applying logs when starting, it should not
+            // be treated as a normal store for balance. Only when the store is
+            // almost idle (no more pending regions on applying logs), it can be
+            // regarded as the candidate for balancing leaders.
             let target_count = std::cmp::max(
                 1,
-                self.ctx.cfg.min_recovery_ready_region_percent * (stats.get_region_count() as u64)
+                self.ctx.cfg.min_apply_ready_region_percent * (stats.get_region_count() as u64)
                     / 100,
             );
-            let recovered_count = self.ctx.store_meta.lock().unwrap().recovered_peers_count;
-            recovered_count < target_count
+            completed_apply_peers_count < target_count
         } else {
             store_is_busy
         };

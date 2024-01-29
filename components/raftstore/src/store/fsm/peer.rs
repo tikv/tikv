@@ -103,7 +103,7 @@ use crate::{
         },
         CasualMessage, Config, LocksStatus, MergeResultKind, PdTask, PeerMsg, PeerTick,
         ProposalContext, RaftCmdExtraOpts, RaftCommand, RaftlogFetchResult, ReadCallback, ReadTask,
-        SignificantMsg, SnapKey, StoreMsg, WriteCallback,
+        SignificantMsg, SnapKey, StoreMsg, WriteCallback, RAFT_INIT_LOG_INDEX,
     },
     Error, Result,
 };
@@ -1278,7 +1278,7 @@ where
             PeerTick::CheckPeersAvailability => self.on_check_peers_availability(),
             PeerTick::RequestSnapshot => self.on_request_snapshot_tick(),
             PeerTick::RequestVoterReplicatedIndex => self.on_request_voter_replicated_index(),
-            PeerTick::CheckPeerCompleteRecovery => self.on_check_peer_complete_recovery(),
+            PeerTick::CheckPeerCompleteApplyLogs => self.on_check_peer_complete_apply_logs(),
         }
     }
 
@@ -6559,61 +6559,53 @@ where
     }
 
     fn register_check_peer_complete_recovery(&mut self) {
-        self.schedule_tick(PeerTick::CheckPeerCompleteRecovery)
+        self.schedule_tick(PeerTick::CheckPeerCompleteApplyLogs)
     }
 
-    fn on_check_peer_complete_recovery(&mut self) {
-        if !self.fsm.peer.pending_recovery {
+    fn on_check_peer_complete_apply_logs(&mut self) {
+        if !self.fsm.peer.pending_on_apply {
             return;
         }
 
-        // If the peer is newly added or created, no need to check the recovery status.
         let peer_id = self.fsm.peer.peer_id();
-        let is_newly_added_peer = self
-            .fsm
-            .peer
-            .raft_group
-            .raft
-            .prs()
-            .get(peer_id)
-            .map_or(false, |pr| pr.matched == 0);
-        if is_newly_added_peer {
-            self.fsm.peer.pending_recovery = false;
-            return;
-        }
-
-        // If the peer has large unapplied logs, this peer should be recorded until
-        // the lag is less than the given threshold.
         let applied_idx = self.fsm.peer.get_store().applied_index();
         let last_idx = self.fsm.peer.get_store().last_index();
+        // If the peer is newly added or created, no need to check the apply status.
+        if last_idx <= RAFT_INIT_LOG_INDEX {
+            self.fsm.peer.pending_on_apply = false;
+            return;
+        }
+        // If the peer has large unapplied logs, this peer should be recorded until
+        // the lag is less than the given threshold.
         if last_idx >= applied_idx + self.ctx.cfg.leader_transfer_max_log_lag {
             let mut meta = self.ctx.store_meta.lock().unwrap();
             meta.pending_recovery_peers.insert(peer_id);
             debug!(
-                "peer is pending recovery";
+                "peer is pending on applying logs";
                 "last_commit_idx" => last_idx,
                 "last_applied_idx" => applied_idx,
                 "region_id" => self.fsm.region_id(),
                 "peer_id" => peer_id,
             );
-        } else if self.fsm.peer.pending_recovery {
-            // Already finish recovery, no needs to keep the tick.
+        } else if self.fsm.peer.pending_on_apply {
+            // Already finish apply, no needs to keep the tick.
             {
                 let mut meta = self.ctx.store_meta.lock().unwrap();
                 meta.pending_recovery_peers.remove(&peer_id);
-                meta.recovered_peers_count += 1;
+                meta.completed_apply_peers_count += 1;
             }
             debug!(
-                "peer completes recovery";
+                "peer completes applying logs";
                 "last_commit_idx" => last_idx,
                 "last_applied_idx" => applied_idx,
                 "region_id" => self.fsm.region_id(),
                 "peer_id" => peer_id,
             );
-            self.fsm.peer.pending_recovery = false;
+            self.fsm.peer.pending_on_apply = false;
         }
-        // If the peer is pending on recovery, it should keep the tick.
-        if self.fsm.peer.pending_recovery {
+
+        // If the peer is pending on apply, it should keep the tick.
+        if self.fsm.peer.pending_on_apply {
             self.register_check_peer_complete_recovery();
         }
     }

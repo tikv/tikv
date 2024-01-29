@@ -893,7 +893,7 @@ where
 
     last_record_safe_point: u64,
 
-    pub pending_recovery: bool,
+    pub pending_on_apply: bool,
 }
 
 impl<EK, ER> Peer<EK, ER>
@@ -1038,7 +1038,7 @@ where
             lead_transferee: raft::INVALID_ID,
             unsafe_recovery_state: None,
             snapshot_recovery_state: None,
-            pending_recovery: true,
+            pending_on_apply: true,
         };
 
         // If this region has only one peer and I am the one, campaign directly.
