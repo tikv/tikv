@@ -499,6 +499,11 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         self.inner.scale_pool_size(pool_size)
     }
 
+    pub fn set_memory_quota_capacity(&self, cap: usize) {
+        SCHED_TXN_MEMORY_QUOTA_IN_USE.allocated.set(cap as i64);
+        self.inner.memory_quota.set_capacity(cap)
+    }
+
     pub(in crate::storage) fn run_cmd(&self, cmd: Command, callback: StorageCallback) {
         let tag = cmd.tag();
         let fail_with_busy = |callback: StorageCallback| {
