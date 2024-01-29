@@ -137,8 +137,7 @@ pub struct TitanCfConfig {
     pub blob_file_compression: CompressionType,
     #[online_config(skip)]
     pub zstd_dict_size: ReadableSize,
-    #[online_config(skip)]
-    pub blob_cache_size: ReadableSize,
+
     #[online_config(skip)]
     pub min_gc_batch_size: ReadableSize,
     #[online_config(skip)]
@@ -155,6 +154,11 @@ pub struct TitanCfConfig {
     #[online_config(skip)]
     pub max_sorted_runs: i32,
 
+    #[online_config(skip)]
+    #[doc(hidden)]
+    #[serde(skip_serializing)]
+    #[deprecated = "The feature is removed"]
+    pub blob_cache_size: ReadableSize,
     #[online_config(skip)]
     #[doc(hidden)]
     #[serde(skip_serializing)]
@@ -200,7 +204,7 @@ impl TitanCfConfig {
         }
     }
 
-    fn build_opts(&self) -> RocksTitanDbOptions {
+    fn build_opts(&self, cache: &Cache) -> RocksTitanDbOptions {
         let mut opts = RocksTitanDbOptions::new();
         opts.set_min_blob_size(self.min_blob_size.unwrap_or(DEFAULT_MIN_BLOB_SIZE).0);
         opts.set_blob_file_compression(self.blob_file_compression.into());
@@ -213,7 +217,7 @@ impl TitanCfConfig {
             self.zstd_dict_size.0 as i32,       // zstd dict size
             self.zstd_dict_size.0 as i32 * 100, // zstd sample size
         );
-        opts.set_blob_cache(self.blob_cache_size.0 as usize, -1, false, 0.0);
+        opts.set_blob_cache(cache);
         opts.set_min_gc_batch_size(self.min_gc_batch_size.0);
         opts.set_max_gc_batch_size(self.max_gc_batch_size.0);
         opts.set_discardable_ratio(self.discardable_ratio);
@@ -572,9 +576,6 @@ macro_rules! write_into_metrics {
             .with_label_values(&[$tag, "titan_min_blob_size"])
             .set($cf.titan.min_blob_size.unwrap_or_default().0 as f64);
         $metrics
-            .with_label_values(&[$tag, "titan_blob_cache_size"])
-            .set($cf.titan.blob_cache_size.0 as f64);
-        $metrics
             .with_label_values(&[$tag, "titan_min_gc_batch_size"])
             .set($cf.titan.min_gc_batch_size.0 as f64);
         $metrics
@@ -872,7 +873,7 @@ impl DefaultCfConfig {
                 }
             }
         }
-        cf_opts.set_titan_cf_options(&self.titan.build_opts());
+        cf_opts.set_titan_cf_options(&self.titan.build_opts(&shared.cache));
         if let Some(write_buffer_manager) = shared.write_buffer_managers.get(CF_DEFAULT) {
             cf_opts.set_write_buffer_manager(write_buffer_manager);
         }
@@ -1000,7 +1001,7 @@ impl WriteCfConfig {
                 )
                 .unwrap();
         }
-        cf_opts.set_titan_cf_options(&self.titan.build_opts());
+        cf_opts.set_titan_cf_options(&self.titan.build_opts(&shared.cache));
         if let Some(write_buffer_manager) = shared.write_buffer_managers.get(CF_WRITE) {
             cf_opts.set_write_buffer_manager(write_buffer_manager);
         }
@@ -1098,7 +1099,7 @@ impl LockCfConfig {
                 .set_compaction_filter_factory("range_filter_factory", factory.clone())
                 .unwrap();
         }
-        cf_opts.set_titan_cf_options(&self.titan.build_opts());
+        cf_opts.set_titan_cf_options(&self.titan.build_opts(&shared.cache));
         if let Some(write_buffer_manager) = shared.write_buffer_managers.get(CF_LOCK) {
             cf_opts.set_write_buffer_manager(write_buffer_manager);
         }
@@ -1181,7 +1182,7 @@ impl RaftCfConfig {
             .set_prefix_extractor("NoopSliceTransform", NoopSliceTransform)
             .unwrap();
         cf_opts.set_memtable_prefix_bloom_size_ratio(0.1);
-        cf_opts.set_titan_cf_options(&self.titan.build_opts());
+        cf_opts.set_titan_cf_options(&self.titan.build_opts(&shared.cache));
         cf_opts
     }
 }
@@ -1770,7 +1771,7 @@ impl RaftDefaultCfConfig {
         cf_opts
             .set_memtable_insert_hint_prefix_extractor("RaftPrefixSliceTransform", f)
             .unwrap();
-        cf_opts.set_titan_cf_options(&self.titan.build_opts());
+        cf_opts.set_titan_cf_options(&self.titan.build_opts(cache));
         cf_opts
     }
 }
