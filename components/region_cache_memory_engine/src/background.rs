@@ -379,7 +379,7 @@ pub mod tests {
     use super::Filter;
     use crate::{
         engine::SkiplistEngine,
-        gc::BackgroundRunner,
+        background::BackgroundRunner,
         keys::{encode_key, encoding_for_filter, InternalKeyComparator, ValueType},
         memory_limiter::GlobalMemoryLimiter,
         RangeCacheMemoryEngine,

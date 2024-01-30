@@ -19,7 +19,7 @@ use engine_traits::{
 use skiplist_rs::{IterRef, Skiplist, MIB};
 
 use crate::{
-    gc::BackgroundWork,
+    background::BackgroundWork,
     keys::{
         decode_key, encode_key_for_eviction, encode_seek_key, InternalKey, InternalKeyComparator,
         ValueType, VALUE_TYPE_FOR_SEEK, VALUE_TYPE_FOR_SEEK_FOR_PREV,
