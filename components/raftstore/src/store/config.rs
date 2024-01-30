@@ -408,13 +408,12 @@ pub struct Config {
     #[serde(alias = "enable-partitioned-raft-kv-compatible-learner")]
     pub enable_v2_compatible_learner: bool,
 
-    /// The minimal percent of region finishing applying pending logs.
-    /// Only when the count of regions which finish applying logs exceed
-    /// the threshold, can the raftstore supply service.
-    /// Should between 1 and 100.
+    /// The minimal count of region pending on applying raft logs.
+    /// Only when the count of regions which not pending on applying logs is
+    /// less than the threshold, can the raftstore supply service.
     #[doc(hidden)]
     #[online_config(hidden)]
-    pub min_apply_ready_region_percent: u64,
+    pub min_pending_apply_region_count: u64,
 }
 
 impl Default for Config {
@@ -552,7 +551,7 @@ impl Default for Config {
             check_request_snapshot_interval: ReadableDuration::minutes(1),
             enable_v2_compatible_learner: false,
             unsafe_disable_check_quorum: false,
-            min_apply_ready_region_percent: 99,
+            min_pending_apply_region_count: 10,
         }
     }
 }
@@ -957,10 +956,9 @@ impl Config {
             ));
         }
 
-        if self.min_apply_ready_region_percent < 1 || self.min_apply_ready_region_percent > 100 {
+        if self.min_pending_apply_region_count == 0 {
             return Err(box_err!(
-                "min_apply_ready_region_percent must be between 1 and 100, invalid value: {}",
-                self.min_apply_ready_region_percent
+                "min_pending_apply_region_count must be greater than 0"
             ));
         }
 

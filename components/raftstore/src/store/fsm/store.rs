@@ -130,7 +130,11 @@ const LOAD_STATS_WINDOW_DURATION: Duration = Duration::from_secs(10 * 60);
 // When the store is started, it will take some time for applying pending
 // snapshots and delayed raft logs. Before the store is ready, it will report
 // `is_busy` to PD, so PD will not schedule operators to the store.
-const STORE_RECOVERY_DURATION: Duration = Duration::from_secs(5 * 60);
+const STORE_CHECK_PENDING_APPLY_DURATION: Duration = Duration::from_secs(5 * 60);
+// The minimal percent of region finishing applying pending logs.
+// Only when the count of regions which finish applying logs exceed
+// the threshold, can the raftstore supply service.
+const STORE_CHECK_COMPLETE_APPLY_REGIONS_PERCENT: u64 = 99;
 
 pub struct StoreInfo<EK, ER> {
     pub kv_engine: EK,
@@ -2718,7 +2722,9 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         let mut stats = StoreStats::default();
 
         stats.set_store_id(self.ctx.store_id());
+
         let completed_apply_peers_count: u64;
+        let pending_apply_peers_count: u64;
         {
             let meta = self.ctx.store_meta.lock().unwrap();
             stats.set_region_count(meta.regions.len() as u32);
@@ -2728,6 +2734,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
                 stats.set_damaged_regions_id(damaged_regions_id);
             }
             completed_apply_peers_count = meta.completed_apply_peers_count;
+            pending_apply_peers_count = meta.pending_apply_peers.len() as u64;
         }
 
         let snap_stats = self.ctx.snap_mgr.stats();
@@ -2767,24 +2774,36 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
             .stat
             .is_busy
             .swap(false, Ordering::Relaxed);
-        let pending_on_apply = {
+        let mut busy_on_apply = false;
+        let during_starting_stage = {
             (time::get_time().sec as u32).saturating_sub(start_time)
-                <= STORE_RECOVERY_DURATION.as_secs() as u32
+                <= STORE_CHECK_PENDING_APPLY_DURATION.as_secs() as u32
         };
-        let busy_on_apply = if pending_on_apply {
-            // If the store is busy in handling applying logs when starting, it should not
-            // be treated as a normal store for balance. Only when the store is
-            // almost idle (no more pending regions on applying logs), it can be
-            // regarded as the candidate for balancing leaders.
-            let target_count = std::cmp::max(
-                1,
-                self.ctx.cfg.min_apply_ready_region_percent * (stats.get_region_count() as u64)
-                    / 100,
-            );
-            completed_apply_peers_count < target_count
-        } else {
-            false
-        };
+        // If the store is busy in handling applying logs when starting, it should not
+        // be treated as a normal store for balance. Only when the store is
+        // almost idle (no more pending regions on applying logs), it can be
+        // regarded as the candidate for balancing leaders.
+        if during_starting_stage {
+            let region_count = stats.get_region_count() as u64;
+            let completed_target_count = (|| {
+                fail_point!("on_mock_store_completed_target_count", |_| 0);
+                std::cmp::max(
+                    1,
+                    STORE_CHECK_COMPLETE_APPLY_REGIONS_PERCENT * region_count / 100,
+                )
+            })();
+            // If the number of regions on completing applying logs does not occupy the
+            // majority of regions, the store is regarded as busy.
+            if completed_apply_peers_count < completed_target_count {
+                busy_on_apply = true;
+            } else {
+                let pending_target_count = std::cmp::min(
+                    self.ctx.cfg.min_pending_apply_region_count,
+                    region_count.saturating_sub(completed_target_count),
+                );
+                busy_on_apply = pending_apply_peers_count >= pending_target_count;
+            }
+        }
         stats.set_is_busy(store_is_busy || busy_on_apply);
 
         let mut query_stats = QueryStats::default();

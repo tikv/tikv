@@ -110,10 +110,11 @@ fn test_pending_snapshot() {
     );
 }
 
-#[test]
 // Tests if store is marked with busy when there exists peers on
 // pending on applying raft logs.
-fn test_is_busy_on_pending_apply_peers() {
+// Case 1: no completed regions.
+#[test]
+fn test_on_pending_apply_peers_no_completed_regions() {
     let mut cluster = new_node_cluster(0, 3);
     cluster.cfg.raft_store.raft_base_tick_interval = ReadableDuration::millis(5);
     cluster.cfg.raft_store.raft_store_max_leader_lease = ReadableDuration::millis(100);
@@ -153,5 +154,49 @@ fn test_is_busy_on_pending_apply_peers() {
     sleep_ms(100);
     let stats = cluster.pd_client.get_store_stats(3).unwrap();
     assert!(stats.is_busy);
+    fail::remove("on_handle_apply_1003");
+}
+
+// Tests if store is marked with busy when there exists peers on
+// pending on applying raft logs.
+// Case 2: completed_apply_peers_count > completed_target_count but
+//        there exists pending peer.
+#[test]
+fn test_on_pending_apply_peers_pending_applying() {
+    let mut cluster = new_node_cluster(0, 3);
+    cluster.cfg.raft_store.raft_base_tick_interval = ReadableDuration::millis(5);
+    cluster.cfg.raft_store.raft_store_max_leader_lease = ReadableDuration::millis(100);
+    cluster.cfg.raft_store.leader_transfer_max_log_lag = 10;
+    cluster.cfg.raft_store.check_long_uncommitted_interval = ReadableDuration::millis(10); // short check interval for recovery
+    cluster.cfg.raft_store.pd_heartbeat_tick_interval = ReadableDuration::millis(50);
+    cluster.cfg.raft_store.min_pending_apply_region_count = 1;
+
+    let pd_client = Arc::clone(&cluster.pd_client);
+    // Disable default max peer count check.
+    pd_client.disable_default_operator();
+
+    let r1 = cluster.run_conf_change();
+    pd_client.must_add_peer(r1, new_peer(2, 1002));
+    pd_client.must_add_peer(r1, new_peer(3, 1003));
+    cluster.must_put(b"k1", b"v1");
+
+    // Pause peer 1003 on applying logs to make it pending.
+    cluster.stop_node(3);
+    for i in 0..=cluster.cfg.raft_store.leader_transfer_max_log_lag {
+        let bytes = format!("k{:03}", i).into_bytes();
+        cluster.must_put(&bytes, &bytes);
+    }
+    cluster.must_put(b"k2", b"v2");
+
+    // Restart peer 1003 and make it pending for applying pending logs.
+    fail::cfg("on_handle_apply_1003", "return").unwrap();
+    fail::cfg("on_mock_store_completed_target_count", "return").unwrap();
+    cluster.run_node(3).unwrap();
+    sleep_ms(100);
+    cluster.must_send_store_heartbeat(3);
+    sleep_ms(100);
+    let stats = cluster.pd_client.get_store_stats(3).unwrap();
+    assert!(stats.is_busy);
+    fail::remove("on_mock_store_completed_target_count");
     fail::remove("on_handle_apply_1003");
 }
