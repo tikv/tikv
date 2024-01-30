@@ -20,10 +20,8 @@ use concurrency_manager::ConcurrencyManager;
 use engine_traits::{KvEngine, RaftEngine};
 use fail::fail_point;
 use futures::{compat::Future01CompatExt, FutureExt};
-use grpcio_health::{HealthService, ServingStatus};
 use health_controller::{
-    reporters::{RaftstoreReporter, RaftstoreReporterConfig, SlowTrendStatistics},
-    slow_score::SlowScore,
+    reporters::{RaftstoreReporter, RaftstoreReporterConfig},
     types::{LatencyInspector, RaftstoreDuration},
     HealthController,
 };
@@ -850,6 +848,7 @@ where
     remote: Remote<yatp::task::future::TaskCell>,
 
     health_reporter: RaftstoreReporter,
+    health_controller: HealthController,
 
     coprocessor_host: CoprocessorHost<EK>,
     causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
@@ -875,7 +874,7 @@ where
         snap_mgr: SnapManager,
         remote: Remote<yatp::task::future::TaskCell>,
         collector_reg_handle: CollectorRegHandle,
-        health_controller: &HealthController,
+        health_controller: HealthController,
         coprocessor_host: CoprocessorHost<EK>,
         causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
         grpc_service_manager: GrpcServiceManager,
@@ -918,7 +917,7 @@ where
                 .with_label_values(&["L2"]),
         };
 
-        let health_reporter = RaftstoreReporter::new(health_controller, health_reporter_config);
+        let health_reporter = RaftstoreReporter::new(&health_controller, health_reporter_config);
 
         Runner {
             store_id,
@@ -937,6 +936,7 @@ where
             snap_mgr,
             remote,
             health_reporter,
+            health_controller,
             coprocessor_host,
             causal_ts_provider,
             grpc_service_manager,
@@ -1819,13 +1819,6 @@ where
             .or_insert_with(|| ReportBucket::new(buckets));
     }
 
-    fn update_health_status(&mut self, status: ServingStatus) {
-        self.curr_health_status = status;
-        if let Some(health_service) = &self.health_service {
-            health_service.set_serving_status("", status);
-        }
-    }
-
     /// Force to send a special heartbeat to pd when current store is hung on
     /// some special circumstances, i.e. disk busy, handler busy and others.
     fn handle_fake_store_heartbeat(&mut self) {
@@ -1869,7 +1862,7 @@ where
 
     fn handle_control_grpc_server(&mut self, event: pdpb::ControlGrpcEvent) {
         info!("forcely control grpc server";
-                "curr_health_status" => ?self.curr_health_status,
+                "curr_health_status" => ?self.health_controller.get_serving_status(),
                 "event" => ?event,
         );
         match event {
@@ -1878,7 +1871,7 @@ where
                     warn!("failed to send service event to PAUSE grpc server";
                             "err" => ?e);
                 } else {
-                    self.update_health_status(ServingStatus::NotServing);
+                    self.health_controller.set_is_serving(false);
                 }
             }
             pdpb::ControlGrpcEvent::Resume => {
@@ -1886,7 +1879,7 @@ where
                     warn!("failed to send service event to RESUME grpc server";
                             "err" => ?e);
                 } else {
-                    self.update_health_status(ServingStatus::Serving);
+                    self.health_controller.set_is_serving(true);
                 }
             }
         }

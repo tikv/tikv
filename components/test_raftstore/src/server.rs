@@ -19,6 +19,7 @@ use engine_traits::{Engines, KvEngine, SnapshotContext};
 use futures::executor::block_on;
 use grpcio::{ChannelBuilder, EnvBuilder, Environment, Error as GrpcError, Service};
 use grpcio_health::HealthService;
+use health_controller::HealthController;
 use kvproto::{
     deadlock::create_deadlock,
     debugpb::{create_debug, DebugClient},
@@ -518,7 +519,7 @@ impl<EK: KvEngineWithRocks> ServerCluster<EK> {
                 false,
             )
             .unwrap();
-        let health_service = HealthService::default();
+        let health_controller = HealthController::new();
         let mut node = Node::new(
             system,
             &server_cfg.value().clone(),
@@ -527,7 +528,7 @@ impl<EK: KvEngineWithRocks> ServerCluster<EK> {
             Arc::clone(&self.pd_client),
             state,
             bg_worker.clone(),
-            Some(health_service.clone()),
+            health_controller.clone(),
             None,
         );
         node.try_bootstrap_store(engines.clone())?;
@@ -548,7 +549,7 @@ impl<EK: KvEngineWithRocks> ServerCluster<EK> {
                 self.env.clone(),
                 None,
                 debug_thread_pool.clone(),
-                health_service.clone(),
+                health_controller.clone(),
                 resource_manager.clone(),
             )
             .unwrap();
@@ -625,7 +626,8 @@ impl<EK: KvEngineWithRocks> ServerCluster<EK> {
         self.region_info_accessors
             .insert(node_id, region_info_accessor);
         self.importers.insert(node_id, importer);
-        self.health_services.insert(node_id, health_service);
+        self.health_services
+            .insert(node_id, health_controller.get_grpc_health_service());
 
         lock_mgr
             .start(

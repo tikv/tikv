@@ -88,6 +88,7 @@ fxhash = "0.2.1"
 getset = "0.1"
 grpcio = { workspace = true }
 grpcio-health = { workspace = true }
+health_controller = { workspace = true }
 hex = "0.4"
 http = "0"
 hybrid_engine = { workspace = true }

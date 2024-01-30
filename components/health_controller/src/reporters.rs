@@ -5,7 +5,6 @@ use std::{
     time::{Duration, Instant},
 };
 
-use grpcio_health::ServingStatus;
 use kvproto::pdpb;
 use pdpb::SlowTrend as SlowTrendPb;
 use prometheus::IntGauge;
@@ -38,16 +37,18 @@ pub struct RaftstoreReporter {
     health_controller_inner: Arc<HealthControllerInner>,
     slow_score: SlowScore,
     slow_trend: SlowTrendStatistics,
-    is_service_healthy: bool,
+    is_healthy: bool,
 }
 
 impl RaftstoreReporter {
+    const MODULE_NAME: &'static str = "raftstore";
+
     pub fn new(health_controller: &HealthController, cfg: RaftstoreReporterConfig) -> Self {
         RaftstoreReporter {
             health_controller_inner: health_controller.inner.clone(),
             slow_score: SlowScore::new(cfg.inspect_interval),
             slow_trend: SlowTrendStatistics::new(cfg),
-            is_service_healthy: true,
+            is_healthy: true,
         }
     }
 
@@ -79,14 +80,23 @@ impl RaftstoreReporter {
             .update_raftstore_slow_score(self.slow_score.get());
     }
 
-    fn set_service_healthy(&mut self, is_healthy: bool) {
-        self.is_service_healthy = is_healthy;
-        self.health_controller_inner
-            .update_server_health_status(if is_healthy {
-                ServingStatus::Serving
-            } else {
-                ServingStatus::ServiceUnknown
-            })
+    fn is_healthy(&self) -> bool {
+        self.is_healthy
+    }
+
+    fn set_is_healthy(&mut self, is_healthy: bool) {
+        if is_healthy == self.is_healthy {
+            return;
+        }
+
+        self.is_healthy = is_healthy;
+        if is_healthy {
+            self.health_controller_inner
+                .add_unhealthy_module(Self::MODULE_NAME);
+        } else {
+            self.health_controller_inner
+                .remove_unhealthy_module(Self::MODULE_NAME);
+        }
     }
 
     pub fn tick(&mut self, store_maybe_busy: bool) -> SlowScoreTickResult {
@@ -95,8 +105,8 @@ impl RaftstoreReporter {
 
         // The health status is recovered to serving as long as any tick
         // does not timeout.
-        if !self.is_service_healthy && self.slow_score.last_tick_finished() {
-            self.set_service_healthy(true);
+        if !self.is_healthy() && self.slow_score.last_tick_finished() {
+            self.set_is_healthy(true);
         }
         if !self.slow_score.last_tick_finished() {
             // If the last tick is not finished, it means that the current store might
@@ -110,7 +120,7 @@ impl RaftstoreReporter {
         let slow_score_tick_result = self.slow_score.tick();
         if slow_score_tick_result.updated_score.is_some() {
             if !slow_score_tick_result.has_new_record {
-                self.set_service_healthy(false);
+                self.set_is_healthy(false);
             }
         }
 
