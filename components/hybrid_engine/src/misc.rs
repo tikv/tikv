@@ -130,4 +130,9 @@ where
     fn get_disk_engine(&self) -> &Self::DiskEngine {
         self.disk_engine().get_disk_engine()
     }
+
+    type RangeCacheEngine = EC;
+    fn get_range_cache_engine(&self) -> Option<&Self::RangeCacheEngine> {
+        Some(self.region_cache_engine())
+    }
 }

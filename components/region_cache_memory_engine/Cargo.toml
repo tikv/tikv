@@ -19,3 +19,4 @@ log_wrappers = { workspace = true }
 slog-global = { workspace = true }
 slog = { workspace = true }
 engine_rocks = { workspace = true }
+crossbeam = "0.8"

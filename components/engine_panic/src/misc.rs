@@ -1,5 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+use core::panic;
+
 use engine_traits::{
     DeleteStrategy, MiscExt, Range, RangeStats, Result, StatisticsReporter, WriteOptions,
 };
@@ -132,6 +134,11 @@ impl MiscExt for PanicEngine {
 
     type DiskEngine = PanicEngine;
     fn get_disk_engine(&self) -> &Self::DiskEngine {
+        panic!()
+    }
+
+    type RangeCacheEngine = PanicEngine;
+    fn get_range_cache_engine(&self) -> Option<&Self::RangeCacheEngine> {
         panic!()
     }
 }

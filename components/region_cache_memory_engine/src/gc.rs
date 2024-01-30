@@ -1,17 +1,27 @@
 // Copyright 2024 TiKV Project Authors. Licensed under Apache-2.0.
 
 use core::slice::SlicePattern;
-use std::{fmt::Display, sync::Arc};
+use std::{
+    fmt::Display,
+    sync::{Arc, Mutex},
+    thread::JoinHandle,
+    time::Duration,
+};
 
+use crossbeam::{
+    channel::{bounded, tick, Sender},
+    select,
+};
 use engine_traits::{CacheRange, CF_DEFAULT, CF_WRITE};
 use skiplist_rs::Skiplist;
-use slog_global::{info, warn};
-use txn_types::{Key, WriteRef, WriteType};
+use slog_global::{error, info, warn};
+use tikv_util::worker::{Runnable, Scheduler, Worker};
+use txn_types::{Key, TimeStamp, WriteRef, WriteType};
 
 use crate::{
+    engine::RangeCacheMemoryEngineCore,
     keys::{decode_key, encoding_for_filter, InternalKey, InternalKeyComparator},
     memory_limiter::GlobalMemoryLimiter,
-    RangeCacheMemoryEngine,
 };
 
 /// Try to extract the key and `u64` timestamp from `encoded_key`.
@@ -37,9 +47,95 @@ fn parse_write(value: &[u8]) -> Result<WriteRef<'_>, String> {
     }
 }
 
+pub struct BackgroundWork {
+    worker: Worker,
+    scheduler: Scheduler<BackgroundTask>,
+
+    tick_stopper: Option<(JoinHandle<()>, Sender<bool>)>,
+}
+
+impl Drop for BackgroundWork {
+    fn drop(&mut self) {
+        let (h, tx) = self.tick_stopper.take().unwrap();
+        let _ = tx.send(true);
+        let _ = h.join();
+        self.worker.stop();
+    }
+}
+
+impl BackgroundWork {
+    pub fn new(core: Arc<Mutex<RangeCacheMemoryEngineCore>>, gc_internal: Duration) -> Self {
+        let worker = Worker::new("range-cache-background-worker");
+        let runner = BackgroundRunner::new(core.clone());
+        let scheduler = worker.start("range-cache-engine-background", runner);
+
+        let scheduler_clone = scheduler.clone();
+
+        let (handle, tx) = BackgroundWork::start_tick(scheduler_clone, gc_internal);
+
+        Self {
+            worker,
+            scheduler,
+            tick_stopper: Some((handle, tx)),
+        }
+    }
+
+    fn start_tick(
+        scheduler: Scheduler<BackgroundTask>,
+        gc_internal: Duration,
+    ) -> (JoinHandle<()>, Sender<bool>) {
+        let (tx, rx) = bounded(0);
+        let h = std::thread::spawn(move || {
+            loop {
+                select! {
+                    recv(tick(gc_internal)) -> _ => {
+                        if scheduler.is_busy() {
+                            info!(
+                                "range cache engine gc worker is busy, jump to next gc duration";
+                            );
+                            continue;
+                        }
+
+                        let safe_point = TimeStamp::physical_now() - gc_internal.as_millis() as u64;
+                        if let Err(e) = scheduler.schedule(BackgroundTask::GcTask(GcTask {safe_point})) {
+                            error!(
+                                "schedule range cache engine gc failed";
+                                "err" => ?e,
+                            );
+                        }
+                    },
+                    recv(rx) -> r => {
+                        if let Err(e) = r {
+                            error!(
+                                "receive error in range cache engien gc ticker";
+                                "err" => ?e,
+                            );
+                        }
+                        return;
+                    },
+                }
+            }
+        });
+        (h, tx)
+    }
+}
+
+#[derive(Debug)]
+pub enum BackgroundTask {
+    GcTask(GcTask),
+}
+
 #[derive(Debug)]
 pub struct GcTask {
     pub safe_point: u64,
+}
+
+impl Display for BackgroundTask {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            BackgroundTask::GcTask(ref t) => t.fmt(f),
+        }
+    }
 }
 
 impl Display for GcTask {
@@ -50,18 +146,25 @@ impl Display for GcTask {
     }
 }
 
-pub struct GcRunner {
-    memory_engine: RangeCacheMemoryEngine,
+pub struct BackgroundRunner {
+    engine_core: Arc<Mutex<RangeCacheMemoryEngineCore>>,
 }
 
-impl GcRunner {
-    pub fn new(memory_engine: RangeCacheMemoryEngine) -> Self {
-        Self { memory_engine }
+impl BackgroundRunner {
+    pub fn new(engine_core: Arc<Mutex<RangeCacheMemoryEngineCore>>) -> Self {
+        Self { engine_core }
     }
 
-    fn gc_range(&mut self, range: &CacheRange, safe_point: u64) {
+    fn ranges_for_gc(&self) -> Vec<CacheRange> {
+        let mut core = self.engine_core.lock().unwrap();
+        let ranges: Vec<CacheRange> = core.range_manager().ranges().keys().cloned().collect();
+        core.set_ranges_gcing(ranges.clone());
+        ranges
+    }
+
+    fn gc_range(&self, range: &CacheRange, safe_point: u64) {
         let (skiplist_engine, safe_ts) = {
-            let mut core = self.memory_engine.core().lock().unwrap();
+            let mut core = self.engine_core.lock().unwrap();
             let Some(range_meta) = core.mut_range_manager().mut_range_meta(range) else {
                 return;
             };
@@ -120,6 +223,27 @@ impl GcRunner {
             "outdated_delete_version" => filter.delete_versions,
             "filtered_version" => filter.filtered,
         );
+    }
+
+    fn gc_finished(&mut self) {
+        let mut core = self.engine_core.lock().unwrap();
+        core.clear_ranges_gcing();
+    }
+}
+
+impl Runnable for BackgroundRunner {
+    type Task = BackgroundTask;
+
+    fn run(&mut self, task: Self::Task) {
+        match task {
+            BackgroundTask::GcTask(t) => {
+                let ranges = self.ranges_for_gc();
+                for range in ranges {
+                    self.gc_range(&range, t.safe_point);
+                }
+                self.gc_finished();
+            }
+        }
     }
 }
 
@@ -245,17 +369,17 @@ impl Filter {
 #[cfg(test)]
 pub mod tests {
     use core::slice::SlicePattern;
-    use std::sync::Arc;
+    use std::{sync::Arc, time::Duration};
 
     use bytes::Bytes;
     use engine_traits::{CacheRange, RangeCacheEngine, CF_DEFAULT, CF_WRITE};
     use skiplist_rs::Skiplist;
     use txn_types::{Key, TimeStamp, Write, WriteType};
 
-    use super::Filter;
+    use super::{BackgroundWork, Filter};
     use crate::{
         engine::SkiplistEngine,
-        gc::GcRunner,
+        gc::BackgroundRunner,
         keys::{encode_key, encoding_for_filter, InternalKeyComparator, ValueType},
         memory_limiter::GlobalMemoryLimiter,
         RangeCacheMemoryEngine,
@@ -419,7 +543,7 @@ pub mod tests {
         assert_eq!(3, element_count(&default));
         assert_eq!(3, element_count(&write));
 
-        let mut worker = GcRunner::new(engine);
+        let worker = BackgroundRunner::new(engine.core.clone());
 
         // gc will not remove the latest mvcc put below safe point
         worker.gc_range(&range, 14);
@@ -472,7 +596,7 @@ pub mod tests {
         assert_eq!(6, element_count(&default));
         assert_eq!(6, element_count(&write));
 
-        let mut worker = GcRunner::new(engine.clone());
+        let worker = BackgroundRunner::new(engine.core.clone());
         let s1 = engine.snapshot(range.clone(), 10, u64::MAX);
         let s2 = engine.snapshot(range.clone(), 11, u64::MAX);
         let s3 = engine.snapshot(range.clone(), 20, u64::MAX);
@@ -496,5 +620,61 @@ pub mod tests {
         worker.gc_range(&range, 30);
         assert_eq!(3, element_count(&default));
         assert_eq!(3, element_count(&write));
+    }
+
+    #[test]
+    fn test_gc_worker() {
+        let engine = RangeCacheMemoryEngine::new(Arc::default());
+        let (write, default) = {
+            let mut core = engine.core.lock().unwrap();
+            core.mut_range_manager()
+                .new_range(CacheRange::new(b"".to_vec(), b"z".to_vec()));
+            let engine = core.engine();
+            (engine.cf_handle(CF_WRITE), engine.cf_handle(CF_DEFAULT))
+        };
+
+        let start_ts = TimeStamp::physical_now() - Duration::from_secs(10).as_millis() as u64;
+        let commit_ts1 = TimeStamp::physical_now() - Duration::from_secs(9).as_millis() as u64;
+        put_data(
+            b"k", b"v1", start_ts, commit_ts1, 100, false, &default, &write,
+        );
+
+        let start_ts = TimeStamp::physical_now() - Duration::from_secs(8).as_millis() as u64;
+        let commit_ts2 = TimeStamp::physical_now() - Duration::from_secs(7).as_millis() as u64;
+        put_data(
+            b"k", b"v2", start_ts, commit_ts2, 110, false, &default, &write,
+        );
+
+        let start_ts = TimeStamp::physical_now() - Duration::from_secs(6).as_millis() as u64;
+        let commit_ts3 = TimeStamp::physical_now() - Duration::from_secs(5).as_millis() as u64;
+        put_data(
+            b"k", b"v3", start_ts, commit_ts3, 110, false, &default, &write,
+        );
+
+        let start_ts = TimeStamp::physical_now() - Duration::from_secs(4).as_millis() as u64;
+        let commit_ts4 = TimeStamp::physical_now() - Duration::from_secs(3).as_millis() as u64;
+        put_data(
+            b"k", b"v4", start_ts, commit_ts4, 110, false, &default, &write,
+        );
+
+        for &ts in &[commit_ts1, commit_ts2, commit_ts3] {
+            let key = Key::from_raw(b"k");
+            let key = encoding_for_filter(key.as_encoded(), TimeStamp::new(ts));
+
+            assert!(write.get(&key).is_some());
+        }
+
+        let bg_worker = BackgroundWork::new(engine.core.clone(), Duration::from_secs(1));
+        std::thread::sleep(Duration::from_secs_f32(1.5));
+
+        let key = Key::from_raw(b"k");
+        // now, the outdated mvcc versions should be gone
+        for &ts in &[commit_ts1, commit_ts2, commit_ts3] {
+            let key = encoding_for_filter(key.as_encoded(), TimeStamp::new(ts));
+            assert!(write.get(&key).is_none());
+        }
+
+        let key = encoding_for_filter(key.as_encoded(), TimeStamp::new(commit_ts4));
+        assert!(write.get(&key).is_some());
     }
 }

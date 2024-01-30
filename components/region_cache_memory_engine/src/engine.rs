@@ -2,10 +2,7 @@
 
 use core::slice::SlicePattern;
 use std::{
-    collections::BTreeMap,
-    fmt::{self, Debug},
-    ops::Deref,
-    sync::{Arc, Mutex},
+    collections::BTreeMap, fmt::{self, Debug}, ops::Deref, sync::{Arc, Mutex}, time::Duration
 };
 
 use bytes::Bytes;
@@ -18,6 +15,7 @@ use engine_traits::{
 use skiplist_rs::{IterRef, Skiplist, MIB};
 
 use crate::{
+    gc::BackgroundWork,
     keys::{
         decode_key, encode_key_for_eviction, encode_seek_key, InternalKey, InternalKeyComparator,
         ValueType, VALUE_TYPE_FOR_SEEK, VALUE_TYPE_FOR_SEEK_FOR_PREV,
@@ -141,6 +139,8 @@ impl SnapshotList {
 pub struct RangeCacheMemoryEngineCore {
     engine: SkiplistEngine,
     range_manager: RangeManager,
+    // ranges being gced
+    ranges_being_gced: Vec<CacheRange>,
 }
 
 impl RangeCacheMemoryEngineCore {
@@ -148,6 +148,7 @@ impl RangeCacheMemoryEngineCore {
         RangeCacheMemoryEngineCore {
             engine: SkiplistEngine::new(limiter),
             range_manager: RangeManager::default(),
+            ranges_being_gced: vec![],
         }
     }
 
@@ -161,6 +162,14 @@ impl RangeCacheMemoryEngineCore {
 
     pub fn mut_range_manager(&mut self) -> &mut RangeManager {
         &mut self.range_manager
+    }
+
+    pub fn set_ranges_gcing(&mut self, ranges_being_gced: Vec<CacheRange>) {
+        self.ranges_being_gced = ranges_being_gced;
+    }
+
+    pub fn clear_ranges_gcing(&mut self) {
+        self.ranges_being_gced = vec![];
     }
 }
 
@@ -185,15 +194,20 @@ impl RangeCacheMemoryEngineCore {
 pub struct RangeCacheMemoryEngine {
     pub(crate) core: Arc<Mutex<RangeCacheMemoryEngineCore>>,
     memory_limiter: Arc<GlobalMemoryLimiter>,
+    background_work: Arc<BackgroundWork>,
 }
 
 impl RangeCacheMemoryEngine {
     pub fn new(limiter: Arc<GlobalMemoryLimiter>) -> Self {
-        let engine = RangeCacheMemoryEngineCore::new(limiter.clone());
-        Self {
-            core: Arc::new(Mutex::new(engine)),
+        let core = Arc::new(Mutex::new(RangeCacheMemoryEngineCore::new(limiter.clone())));
+        // todo: make it configurable
+        let gc_internal = Duration::from_secs(180);
+        let engine = Self {
+            core: core.clone(),
             memory_limiter: limiter,
-        }
+            background_work: Arc::new(BackgroundWork::new(core, gc_internal)),
+        };
+        engine
     }
 
     pub fn new_range(&self, range: CacheRange) {
@@ -206,6 +220,10 @@ impl RangeCacheMemoryEngine {
         if core.range_manager.evict_range(range) {
             core.engine.delete_range(range);
         }
+    }
+
+    pub fn background_worker(&self) -> &BackgroundWork {
+        &self.background_work
     }
 }
 
