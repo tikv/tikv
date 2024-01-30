@@ -8638,15 +8638,19 @@ dashboard = Dashboard(
     editable=True,
     templating=Templates(),
     panels=[
+        # Overview
         Duration(),
         Cluster(),
         Errors(),
         Server(),
+        # Entrance of Write and Read
         gRPC(),
+        Storage(),
+        LocalReader(),
+        # CPU and IO
         ThreadCPU(),
-        TTL(),
-        PD(),
         IOBreakdown(),
+        # Raftstore
         RaftWaterfall(),
         RaftIO(),
         RaftPropose(),
@@ -8654,30 +8658,37 @@ dashboard = Dashboard(
         RaftMessage(),
         RaftAdmin(),
         RaftLog(),
-        LocalReader(),
-        UnifiedReadPool(),
-        Storage(),
+        # Engine
+        RaftEngine(),
+        RocksDB(),
+        Titan(),
+        # Scheduler and Read Pools
         FlowControl(),
-        SchedulerCommands(),
         Scheduler(),
-        GC(),
-        Snapshot(),
-        Task(),
+        SchedulerCommands(),
         CoprocessorOverview(),
         CoprocessorDetail(),
-        Threads(),
-        RocksDB(),
-        RaftEngine(),
-        Titan(),
+        UnifiedReadPool(),
+        # Transaction
+        GC(),
         PessimisticLocking(),
-        PointInTimeRestore(),
-        ResolvedTS(),
-        Memory(),
-        BackupImport(),
-        Encryption(),
-        BackupLog(),
+        # Background Tasks
+        Task(),
+        PD(),
         SlowTrendStatistics(),
+        Snapshot(),
+        # Tools
+        ResolvedTS(),
+        PointInTimeRestore(),
+        BackupImport(),
+        BackupLog(),
+        # Advanced Debugging for CPU and Memory
+        Threads(),
+        Memory(),
+        # Infrequently Used
         StatusServer(),
+        Encryption(),
+        TTL(),
     ],
     # Set 14 or larger to support shared crosshair or shared tooltip.
     # See https://github.com/grafana/grafana/blob/v10.2.2/public/app/features/dashboard/state/DashboardMigrator.ts#L443-L445

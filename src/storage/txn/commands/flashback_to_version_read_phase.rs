@@ -84,7 +84,10 @@ pub fn new_flashback_write_cmd(
 command! {
     FlashbackToVersionReadPhase:
         cmd_ty => (),
-        display => "kv::command::flashback_to_version_read_phase -> {} | {} {} | {:?}", (version, start_ts, commit_ts, ctx),
+        display => {
+            "kv::command::flashback_to_version_read_phase -> {} | {} {} | {:?}",
+            (version, start_ts, commit_ts, ctx),
+        }
         content => {
             start_ts: TimeStamp,
             commit_ts: TimeStamp,
