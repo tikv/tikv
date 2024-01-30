@@ -2742,7 +2742,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/MyonKeminta/kvproto?branch=m/add-perf-feedback#0c658407ed7175874f718803670b30963456c244"
+source = "git+https://github.com/pingcap/kvproto.git#9660a33cf0d2cbed1cec622d2ef9f9730b0b95d6"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
