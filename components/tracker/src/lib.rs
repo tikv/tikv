@@ -30,7 +30,7 @@ impl Tracker {
     }
 
     pub fn write_time_detail(&self, detail_v2: &mut pb::TimeDetailV2) {
-        detail_v2.set_grpc_exec_time_ns(self.metrics.grpc_exec_nanos);
+        detail_v2.set_kv_grpc_exec_time_ns(self.metrics.grpc_exec_nanos);
     }
 
     pub fn write_scan_detail(&self, detail_v2: &mut pb::ScanDetailV2) {

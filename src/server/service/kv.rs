@@ -1361,7 +1361,7 @@ fn handle_measures_for_batch_commands(measures: &mut MeasuredBatchResponse) {
                 .set_total_rpc_wall_time_ns(elapsed.as_nanos() as u64);
             exec_details
                 .mut_time_detail_v2()
-                .set_grpc_wait_time_ns(wait.as_nanos() as u64);
+                .set_kv_grpc_wait_time_ns(wait.as_nanos() as u64);
         }
     }
 }
