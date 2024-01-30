@@ -2771,7 +2771,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
             (time::get_time().sec as u32).saturating_sub(start_time)
                 <= STORE_RECOVERY_DURATION.as_secs() as u32
         };
-        let is_busy = if pending_on_apply {
+        let busy_on_apply = if pending_on_apply {
             // If the store is busy in handling applying logs when starting, it should not
             // be treated as a normal store for balance. Only when the store is
             // almost idle (no more pending regions on applying logs), it can be
@@ -2783,9 +2783,9 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
             );
             completed_apply_peers_count < target_count
         } else {
-            store_is_busy
+            false
         };
-        stats.set_is_busy(is_busy);
+        stats.set_is_busy(store_is_busy || busy_on_apply);
 
         let mut query_stats = QueryStats::default();
         query_stats.set_put(
