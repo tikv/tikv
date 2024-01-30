@@ -29,6 +29,8 @@ command! {
             start_ts: TimeStamp,
             primary: Vec<u8>,
             mutations: Vec<Mutation>,
+            lock_ttl: u64,
+            assertion_level: AssertionLevel,
         }
 }
 
@@ -95,8 +97,6 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for Flush {
 }
 
 impl Flush {
-    // It similar to prewrite() in commands::prewrite. But it is simpler.
-    // TODO: refactor to reuse the same function.
     fn flush(
         &mut self,
         txn: &mut MvccTxn,
@@ -109,12 +109,12 @@ impl Flush {
             kind: TransactionKind::Optimistic(false),
             commit_kind: CommitKind::TwoPc,
             primary: &self.primary,
-            txn_size: 0,    // FIXME
-            lock_ttl: 3000, // FIXME
+            txn_size: 0, // txn_size is unknown
+            lock_ttl: self.lock_ttl,
             min_commit_ts: TimeStamp::zero(),
             need_old_value: extra_op == ExtraOp::ReadOldValue, // FIXME?
             is_retry_request: self.ctx.is_retry_request,
-            assertion_level: AssertionLevel::Fast, // FIXME
+            assertion_level: self.assertion_level,
             txn_source: self.ctx.get_txn_source(),
         };
         let mut locks = Vec::new();

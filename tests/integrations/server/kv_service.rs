@@ -3066,7 +3066,7 @@ fn test_pipelined_dml_flush() {
     flush_req.set_primary_key(pk.clone());
     let flush_resp = client.kv_flush(&flush_req).unwrap();
     assert!(!flush_resp.has_region_error());
-    assert!(flush_resp.get_errors().len() == 0);
+    assert!(flush_resp.get_errors().is_empty());
 
     let mut batch_get_req = BufferBatchGetRequest::default();
     batch_get_req.set_context(ctx.clone());
