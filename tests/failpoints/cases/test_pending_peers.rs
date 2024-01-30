@@ -111,7 +111,7 @@ fn test_pending_snapshot() {
 }
 
 #[test]
-fn test_pending_recovery_peers() {
+fn test_pending_apply_peers() {
     let mut cluster = new_node_cluster(0, 3);
     cluster.cfg.raft_store.raft_base_tick_interval = ReadableDuration::millis(5);
     cluster.cfg.raft_store.raft_store_max_leader_lease = ReadableDuration::millis(100);

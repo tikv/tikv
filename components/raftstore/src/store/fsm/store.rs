@@ -184,8 +184,8 @@ pub struct StoreMeta {
     pub region_read_progress: RegionReadProgressRegistry,
     /// record sst_file_name -> (sst_smallest_key, sst_largest_key)
     pub damaged_ranges: HashMap<String, (Vec<u8>, Vec<u8>)>,
-    /// record peers in recovery progress
-    pub pending_recovery_peers: HashSet<u64>,
+    /// record peers pending in applying logs
+    pub pending_apply_peers: HashSet<u64>,
     /// record the number of peers done for applying logs
     pub completed_apply_peers_count: u64,
 }
@@ -238,7 +238,7 @@ impl StoreMeta {
             destroyed_region_for_snap: HashMap::default(),
             region_read_progress: RegionReadProgressRegistry::new(),
             damaged_ranges: HashMap::default(),
-            pending_recovery_peers: HashSet::default(),
+            pending_apply_peers: HashSet::default(),
             completed_apply_peers_count: 0,
         }
     }

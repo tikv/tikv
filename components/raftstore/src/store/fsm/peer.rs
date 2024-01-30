@@ -6579,7 +6579,7 @@ where
         // the lag is less than the given threshold.
         if last_idx >= applied_idx + self.ctx.cfg.leader_transfer_max_log_lag {
             let mut meta = self.ctx.store_meta.lock().unwrap();
-            meta.pending_recovery_peers.insert(peer_id);
+            meta.pending_apply_peers.insert(peer_id);
             debug!(
                 "peer is pending on applying logs";
                 "last_commit_idx" => last_idx,
@@ -6591,7 +6591,7 @@ where
             // Already finish apply, no needs to keep the tick.
             {
                 let mut meta = self.ctx.store_meta.lock().unwrap();
-                meta.pending_recovery_peers.remove(&peer_id);
+                meta.pending_apply_peers.remove(&peer_id);
                 meta.completed_apply_peers_count += 1;
             }
             debug!(
