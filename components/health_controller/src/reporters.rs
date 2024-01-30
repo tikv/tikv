@@ -118,10 +118,9 @@ impl RaftstoreReporter {
         }
 
         let slow_score_tick_result = self.slow_score.tick();
-        if slow_score_tick_result.updated_score.is_some() {
-            if !slow_score_tick_result.has_new_record {
-                self.set_is_healthy(false);
-            }
+        if slow_score_tick_result.updated_score.is_some() && !slow_score_tick_result.has_new_record
+        {
+            self.set_is_healthy(false);
         }
 
         // Publish the slow score to health controller

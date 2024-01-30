@@ -665,7 +665,7 @@ mod tests {
             env,
             None,
             debug_thread_pool,
-            HealthService::default(),
+            HealthController::new(),
             None,
         )
         .unwrap();

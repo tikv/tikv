@@ -143,6 +143,14 @@ impl SlowScore {
     }
 }
 
+pub struct SlowScoreTickResult {
+    pub tick_id: u64,
+    // None if skipped in this tick
+    pub updated_score: Option<f64>,
+    pub has_new_record: bool,
+    pub should_force_report_slow_store: bool,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -199,12 +207,4 @@ mod tests {
             slow_score.update_impl(Duration::from_secs(57))
         );
     }
-}
-
-pub struct SlowScoreTickResult {
-    pub tick_id: u64,
-    // None if skipped in this tick
-    pub updated_score: Option<f64>,
-    pub has_new_record: bool,
-    pub should_force_report_slow_store: bool,
 }

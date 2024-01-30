@@ -165,6 +165,19 @@ impl HealthController {
     }
 }
 
+// Make clippy happy.
+impl Default for HealthControllerInner {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Default for HealthController {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 struct RollingRetriever<T> {
     content: [RwLock<T>; 2],
     current_index: AtomicUsize,
