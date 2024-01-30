@@ -204,7 +204,6 @@ pub struct RangeCacheMemoryEngine {
 impl RangeCacheMemoryEngine {
     pub fn new(limiter: Arc<GlobalMemoryLimiter>, gc_interval: Duration) -> Self {
         let core = Arc::new(Mutex::new(RangeCacheMemoryEngineCore::new(limiter.clone())));
-        // todo: make it configurable
         Self {
             core: core.clone(),
             memory_limiter: limiter,
