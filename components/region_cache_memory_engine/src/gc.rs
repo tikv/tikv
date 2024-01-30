@@ -376,7 +376,7 @@ pub mod tests {
     use skiplist_rs::Skiplist;
     use txn_types::{Key, TimeStamp, Write, WriteType};
 
-    use super::{BackgroundWork, Filter};
+    use super::Filter;
     use crate::{
         engine::SkiplistEngine,
         gc::BackgroundRunner,
@@ -664,7 +664,6 @@ pub mod tests {
             assert!(write.get(&key).is_some());
         }
 
-        let bg_worker = BackgroundWork::new(engine.core.clone(), Duration::from_secs(1));
         std::thread::sleep(Duration::from_secs_f32(1.5));
 
         let key = Key::from_raw(b"k");
