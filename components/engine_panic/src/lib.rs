@@ -46,6 +46,5 @@ pub use crate::flow_control_factors::*;
 pub mod table_properties;
 pub use crate::table_properties::*;
 pub mod checkpoint;
-pub mod range_cache_engine;
 
 mod raft_engine;

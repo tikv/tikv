@@ -136,9 +136,4 @@ impl MiscExt for PanicEngine {
     fn get_disk_engine(&self) -> &Self::DiskEngine {
         panic!()
     }
-
-    type RangeCacheEngine = PanicEngine;
-    fn get_range_cache_engine(&self) -> Option<&Self::RangeCacheEngine> {
-        panic!()
-    }
 }

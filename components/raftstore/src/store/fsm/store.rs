@@ -45,7 +45,6 @@ use kvproto::{
 use pd_client::{Feature, FeatureGate, PdClient};
 use protobuf::Message;
 use raft::StateRole;
-use region_cache_memory_engine::{BackgroundRunner, GcTask};
 use resource_control::{channel::unbounded, ResourceGroupManager};
 use resource_metering::CollectorRegHandle;
 use service::service_manager::GrpcServiceManager;
@@ -535,7 +534,6 @@ where
     pub raftlog_gc_scheduler: Scheduler<RaftlogGcTask>,
     pub raftlog_fetch_scheduler: Scheduler<ReadTask<EK>>,
     pub region_scheduler: Scheduler<RegionTask<EK::Snapshot>>,
-    pub range_cache_gc_scheduler: Scheduler<GcTask>,
     pub apply_router: ApplyRouter<EK>,
     pub router: RaftRouter<EK, ER>,
     pub importer: Arc<SstImporter<EK>>,
@@ -1214,7 +1212,6 @@ pub struct RaftPollerBuilder<EK: KvEngine, ER: RaftEngine, T> {
     raftlog_gc_scheduler: Scheduler<RaftlogGcTask>,
     raftlog_fetch_scheduler: Scheduler<ReadTask<EK>>,
     pub region_scheduler: Scheduler<RegionTask<EK::Snapshot>>,
-    range_cache_gc_scheduler: Scheduler<GcTask>,
     apply_router: ApplyRouter<EK>,
     pub router: RaftRouter<EK, ER>,
     pub importer: Arc<SstImporter<EK>>,
@@ -1456,7 +1453,6 @@ where
             cleanup_scheduler: self.cleanup_scheduler.clone(),
             raftlog_fetch_scheduler: self.raftlog_fetch_scheduler.clone(),
             raftlog_gc_scheduler: self.raftlog_gc_scheduler.clone(),
-            range_cache_gc_scheduler: self.range_cache_gc_scheduler.clone(),
             importer: self.importer.clone(),
             store_meta: self.store_meta.clone(),
             pending_create_peers: self.pending_create_peers.clone(),
@@ -1529,7 +1525,6 @@ where
             raftlog_gc_scheduler: self.raftlog_gc_scheduler.clone(),
             raftlog_fetch_scheduler: self.raftlog_fetch_scheduler.clone(),
             region_scheduler: self.region_scheduler.clone(),
-            range_cache_gc_scheduler: self.range_cache_gc_scheduler.clone(),
             apply_router: self.apply_router.clone(),
             router: self.router.clone(),
             importer: self.importer.clone(),
@@ -1567,8 +1562,6 @@ struct Workers<EK: KvEngine, ER: RaftEngine> {
     coprocessor_host: CoprocessorHost<EK>,
 
     refresh_config_worker: LazyWorker<RefreshConfigTask>,
-
-    range_cache_gc_worker: Worker,
 }
 
 pub struct RaftBatchSystem<EK: KvEngine, ER: RaftEngine> {
@@ -1661,7 +1654,6 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             raftlog_fetch_worker: Worker::new("raftlog-fetch-worker"),
             coprocessor_host: coprocessor_host.clone(),
             refresh_config_worker: LazyWorker::new("refreash-config-worker"),
-            range_cache_gc_worker: Worker::new("range-cache-gc-worker"),
         };
         mgr.init()?;
         let region_runner = RegionRunner::new(
@@ -1708,12 +1700,6 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             .background_worker
             .start("consistency-check", consistency_check_runner);
 
-        let range_cache_gc_runner =
-            BackgroundRunner::new(engines.kv.get_range_cache_engine().unwrap().clone());
-        let range_cache_gc_scheduler = workers
-            .range_cache_gc_worker
-            .start("range-cache-engine-gc", range_cache_gc_runner);
-
         self.store_writers.spawn(
             meta.get_id(),
             engines.raft.clone(),
@@ -1735,7 +1721,6 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             cleanup_scheduler,
             raftlog_gc_scheduler,
             raftlog_fetch_scheduler,
-            range_cache_gc_scheduler,
             apply_router: self.apply_router.clone(),
             trans,
             coprocessor_host,

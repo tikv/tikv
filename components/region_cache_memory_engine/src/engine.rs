@@ -2,7 +2,11 @@
 
 use core::slice::SlicePattern;
 use std::{
-    collections::BTreeMap, fmt::{self, Debug}, ops::Deref, sync::{Arc, Mutex}, time::Duration
+    collections::BTreeMap,
+    fmt::{self, Debug},
+    ops::Deref,
+    sync::{Arc, Mutex},
+    time::Duration,
 };
 
 use bytes::Bytes;
@@ -202,12 +206,11 @@ impl RangeCacheMemoryEngine {
         let core = Arc::new(Mutex::new(RangeCacheMemoryEngineCore::new(limiter.clone())));
         // todo: make it configurable
         let gc_internal = Duration::from_secs(180);
-        let engine = Self {
+        Self {
             core: core.clone(),
             memory_limiter: limiter,
             background_work: Arc::new(BackgroundWork::new(core, gc_internal)),
-        };
-        engine
+        }
     }
 
     pub fn new_range(&self, range: CacheRange) {

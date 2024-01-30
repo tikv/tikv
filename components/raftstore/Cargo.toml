@@ -90,7 +90,6 @@ tracker = { workspace = true }
 txn_types = { workspace = true }
 uuid = { version = "0.8.1", features = ["serde", "v4"] }
 yatp = { workspace = true }
-region_cache_memory_engine = { workspace = true }
 
 [dev-dependencies]
 encryption_export = { workspace = true }
@@ -98,4 +97,5 @@ engine_panic = { workspace = true }
 engine_rocks = { workspace = true }
 hybrid_engine = { workspace = true }
 panic_hook = { workspace = true }
+region_cache_memory_engine = { workspace = true }
 test_sst_importer = { workspace = true }
