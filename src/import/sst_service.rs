@@ -1207,14 +1207,9 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
         let mut errorpb = errorpb::Error::default();
         let mut metas = vec![];
         for sst in req.get_ssts() {
-            if Self::acquire_lock(&self.task_slots, sst).unwrap_or(false) {
-                metas.push(sst.clone());
-            }
+            metas.push(sst.clone());
         }
         if metas.len() < req.get_ssts().len() {
-            for m in metas {
-                Self::release_lock(&self.task_slots, &m).unwrap();
-            }
             errorpb.set_message(Error::FileConflict.to_string());
             resp.set_error(errorpb);
             ctx.spawn(
@@ -1223,13 +1218,9 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
             );
             return;
         }
-        let task_slots = self.task_slots.clone();
         let f = self.ingest_files(req.take_context(), label, req.take_ssts().into());
         let handle_task = async move {
             let res = f.await;
-            for m in metas {
-                Self::release_lock(&task_slots, &m).unwrap();
-            }
             crate::send_rpc_response!(res, sink, label, timer);
         };
         self.threads.spawn(handle_task);
