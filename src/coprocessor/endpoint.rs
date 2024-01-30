@@ -568,7 +568,7 @@ impl<E: Engine> Endpoint<E> {
             .parse_request_and_check_memory_locks(req, peer, false)
             .map(|(handler_builder, req_ctx)| self.handle_unary_request(req_ctx, handler_builder));
         with_tls_tracker(|tracker| {
-            tracker.metrics.grpc_exec_nanos = now.saturating_elapsed().as_nanos() as u64;
+            tracker.metrics.grpc_process_nanos = now.saturating_elapsed().as_nanos() as u64;
         });
         let fut = async move {
             let res = match result_of_future {

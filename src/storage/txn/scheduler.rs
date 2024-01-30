@@ -550,7 +550,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                 .new_task_context(task, callback, prepared_latches)
         });
         GLOBAL_TRACKERS.with_tracker(tracker, |tracker| {
-            tracker.metrics.grpc_exec_nanos = now.saturating_elapsed().as_nanos() as u64;
+            tracker.metrics.grpc_process_nanos = now.saturating_elapsed().as_nanos() as u64;
         });
         if self.inner.latches.acquire(&mut tctx.lock, cid) {
             fail_point!("txn_scheduler_acquire_success");

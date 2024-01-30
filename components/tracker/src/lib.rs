@@ -30,7 +30,7 @@ impl Tracker {
     }
 
     pub fn write_time_detail(&self, detail_v2: &mut pb::TimeDetailV2) {
-        detail_v2.set_kv_grpc_exec_time_ns(self.metrics.grpc_exec_nanos);
+        detail_v2.set_kv_grpc_process_time_ns(self.metrics.grpc_process_nanos);
     }
 
     pub fn write_scan_detail(&self, detail_v2: &mut pb::ScanDetailV2) {
@@ -133,7 +133,7 @@ pub enum RequestType {
 
 #[derive(Debug, Default, Clone)]
 pub struct RequestMetrics {
-    pub grpc_exec_nanos: u64,
+    pub grpc_process_nanos: u64,
     pub get_snapshot_nanos: u64,
     pub read_index_propose_wait_nanos: u64,
     pub read_index_confirm_wait_nanos: u64,

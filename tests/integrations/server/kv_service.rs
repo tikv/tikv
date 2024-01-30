@@ -2723,7 +2723,7 @@ fn test_rpc_wall_time() {
             resp.get_get()
                 .get_exec_details_v2()
                 .get_time_detail_v2()
-                .get_kv_grpc_exec_time_ns()
+                .get_kv_grpc_process_time_ns()
                 > 0
         );
         assert!(
