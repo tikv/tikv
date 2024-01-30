@@ -5,8 +5,8 @@
 #![feature(let_chains)]
 #![feature(slice_pattern)]
 
-mod engine;
 mod background;
+mod engine;
 pub mod keys;
 pub use engine::RangeCacheMemoryEngine;
 pub mod range_manager;
