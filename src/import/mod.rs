@@ -36,12 +36,14 @@ macro_rules! send_rpc_response {
                 IMPORT_RPC_DURATION
                     .with_label_values(&[$label, "ok"])
                     .observe($timer.saturating_elapsed_secs());
+                IMPORT_RPC_COUNT.with_label_values(&[$label]).dec();
                 $sink.success(resp)
             }
             Err(e) => {
                 IMPORT_RPC_DURATION
                     .with_label_values(&[$label, "error"])
                     .observe($timer.saturating_elapsed_secs());
+                IMPORT_RPC_COUNT.with_label_values(&[$label]).dec();
                 error_inc($label, &e);
                 $sink.fail(make_rpc_error(e))
             }
