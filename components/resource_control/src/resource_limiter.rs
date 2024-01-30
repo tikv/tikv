@@ -71,19 +71,22 @@ impl ResourceLimiter {
         self.is_background
     }
 
-    pub fn consume(&self, cpu_time: Duration, io_bytes: IoBytes) -> Duration {
+    pub fn consume(&self, cpu_time: Duration, io_bytes: IoBytes, wait: bool) -> Duration {
         let cpu_dur =
-            self.limiters[ResourceType::Cpu as usize].consume(cpu_time.as_micros() as u64);
-        let io_dur = self.limiters[ResourceType::Io as usize].consume_io(io_bytes);
+            self.limiters[ResourceType::Cpu as usize].consume(cpu_time.as_micros() as u64, wait);
+        let io_dur = self.limiters[ResourceType::Io as usize].consume_io(io_bytes, wait);
         let wait_dur = cpu_dur.max(io_dur);
-        BACKGROUND_TASKS_WAIT_DURATION
-            .with_label_values(&[&self.name])
-            .inc_by(wait_dur.as_micros() as u64);
+        if wait_dur > Duration::ZERO {
+            BACKGROUND_TASKS_WAIT_DURATION
+                .with_label_values(&[&self.name])
+                .inc_by(wait_dur.as_micros() as u64);
+        }
+
         wait_dur
     }
 
     pub async fn async_consume(&self, cpu_time: Duration, io_bytes: IoBytes) -> Duration {
-        let dur = self.consume(cpu_time, io_bytes);
+        let dur = self.consume(cpu_time, io_bytes, true);
         if !dur.is_zero() {
             _ = GLOBAL_TIMER_HANDLE
                 .delay(Instant::now() + dur)
@@ -154,12 +157,14 @@ impl QuotaLimiter {
         )
     }
 
-    fn consume(&self, value: u64) -> Duration {
-        if value == 0 {
+    fn consume(&self, value: u64, wait: bool) -> Duration {
+        if value == 0 && self.limiter.speed_limit().is_infinite() {
             return Duration::ZERO;
         }
-        let dur = self.limiter.consume_duration(value as usize);
-        if dur != Duration::ZERO {
+        let mut dur = self.limiter.consume_duration(value as usize);
+        if !wait {
+            dur = Duration::ZERO;
+        } else if dur != Duration::ZERO {
             self.total_wait_dur_us
                 .fetch_add(dur.as_micros() as u64, Ordering::Relaxed);
         }
@@ -167,16 +172,18 @@ impl QuotaLimiter {
         dur
     }
 
-    fn consume_io(&self, value: IoBytes) -> Duration {
+    fn consume_io(&self, value: IoBytes, wait: bool) -> Duration {
         self.read_bytes.fetch_add(value.read, Ordering::Relaxed);
         self.write_bytes.fetch_add(value.write, Ordering::Relaxed);
 
         let value = value.read + value.write;
-        if value == 0 {
+        if value == 0 && self.limiter.speed_limit().is_infinite() {
             return Duration::ZERO;
         }
-        let dur = self.limiter.consume_duration(value as usize);
-        if dur != Duration::ZERO {
+        let mut dur = self.limiter.consume_duration(value as usize);
+        if !wait {
+            dur = Duration::ZERO;
+        } else if dur != Duration::ZERO {
             self.total_wait_dur_us
                 .fetch_add(dur.as_micros() as u64, Ordering::Relaxed);
         }
