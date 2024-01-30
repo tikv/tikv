@@ -20,6 +20,7 @@ use raftstore_v2::router::PeerMsg;
 use resource_metering::CollectorRegHandle;
 use service::service_manager::GrpcServiceManager;
 use tempfile::Builder;
+use health_controller::HealthController;
 use test_pd_client::{bootstrap_with_first_region, TestPdClient};
 use test_raftstore::*;
 use tikv::{import::SstImporter, server::Node};
@@ -69,7 +70,7 @@ fn test_node_bootstrap_with_prepared_data() {
         Arc::clone(&pd_client),
         Arc::default(),
         bg_worker,
-        None,
+        HealthController::new(),
         None,
     );
     let snap_mgr = SnapManager::new(tmp_mgr.path().to_str().unwrap());
