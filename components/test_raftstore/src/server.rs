@@ -18,7 +18,6 @@ use engine_test::raft::RaftTestEngine;
 use engine_traits::{Engines, KvEngine, SnapshotContext};
 use futures::executor::block_on;
 use grpcio::{ChannelBuilder, EnvBuilder, Environment, Error as GrpcError, Service};
-use grpcio_health::HealthService;
 use health_controller::HealthController;
 use kvproto::{
     deadlock::create_deadlock,
@@ -151,7 +150,7 @@ pub struct ServerCluster<EK: KvEngine> {
     pub importers: HashMap<u64, Arc<SstImporter<EK>>>,
     pub pending_services: HashMap<u64, PendingServices>,
     pub coprocessor_hooks: HashMap<u64, CopHooks<EK>>,
-    pub health_services: HashMap<u64, HealthService>,
+    pub health_controllers: HashMap<u64, HealthController>,
     pub security_mgr: Arc<SecurityManager>,
     pub txn_extra_schedulers: HashMap<u64, Arc<dyn TxnExtraScheduler>>,
     snap_paths: HashMap<u64, TempDir>,
@@ -198,7 +197,7 @@ impl<EK: KvEngineWithRocks> ServerCluster<EK> {
             snap_mgrs: HashMap::default(),
             pending_services: HashMap::default(),
             coprocessor_hooks: HashMap::default(),
-            health_services: HashMap::default(),
+            health_controllers: HashMap::default(),
             raft_clients: HashMap::default(),
             conn_builder,
             concurrency_managers: HashMap::default(),
@@ -626,8 +625,7 @@ impl<EK: KvEngineWithRocks> ServerCluster<EK> {
         self.region_info_accessors
             .insert(node_id, region_info_accessor);
         self.importers.insert(node_id, importer);
-        self.health_services
-            .insert(node_id, health_controller.get_grpc_health_service());
+        self.health_controllers.insert(node_id, health_controller);
 
         lock_mgr
             .start(

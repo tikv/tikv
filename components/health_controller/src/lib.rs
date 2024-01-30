@@ -7,7 +7,7 @@ pub mod types;
 
 use std::{
     collections::HashSet,
-    ops::{Deref, DerefMut},
+    ops::Deref,
     sync::{
         atomic::{AtomicU64, AtomicUsize, Ordering},
         Arc,
@@ -195,21 +195,21 @@ impl<T: Default> RollingRetriever<T> {
 }
 
 impl<T> RollingRetriever<T> {
-    pub fn write<R>(&self, f: impl FnOnce(&mut T) -> R) -> R {
+    #[inline]
+    pub fn put(&self, new_value: T) {
+        self.put_with(|| new_value)
+    }
+
+    fn put_with(&self, f: impl FnOnce() -> T) {
         let _write_guard = self.write_mutex.lock();
         // Update the item that is not the currently active one
         let index = self.current_index.load(Ordering::Acquire) ^ 1;
 
         let mut data_guard = self.content[index].write();
-        let res = f(data_guard.deref_mut());
+        *data_guard = f();
 
         drop(data_guard);
         self.current_index.store(index, Ordering::Release);
-        res
-    }
-
-    pub fn put(&self, new_value: T) {
-        self.write(|r| *r = new_value);
     }
 
     pub fn read<R>(&self, f: impl FnOnce(&T) -> R) -> R {
@@ -222,5 +222,138 @@ impl<T> RollingRetriever<T> {
 impl<T: Clone> RollingRetriever<T> {
     pub fn get_cloned(&self) -> T {
         self.read(|r| r.clone())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        sync::mpsc::{sync_channel, RecvTimeoutError},
+        time::Duration,
+    };
+
+    use super::*;
+
+    #[test]
+    fn test_health_controller_update_service_status() {
+        let h = HealthController::new();
+        assert_eq!(
+            h.get_serving_status(),
+            grpcio_health::ServingStatus::NotServing
+        );
+
+        h.set_is_serving(true);
+        assert_eq!(
+            h.get_serving_status(),
+            grpcio_health::ServingStatus::Serving
+        );
+
+        h.inner.add_unhealthy_module("A");
+        assert_eq!(
+            h.get_serving_status(),
+            grpcio_health::ServingStatus::ServiceUnknown
+        );
+        h.inner.add_unhealthy_module("B");
+        assert_eq!(
+            h.get_serving_status(),
+            grpcio_health::ServingStatus::ServiceUnknown
+        );
+
+        h.inner.remove_unhealthy_module("A");
+        assert_eq!(
+            h.get_serving_status(),
+            grpcio_health::ServingStatus::ServiceUnknown
+        );
+        h.inner.remove_unhealthy_module("B");
+        assert_eq!(
+            h.get_serving_status(),
+            grpcio_health::ServingStatus::Serving
+        );
+
+        h.set_is_serving(false);
+        assert_eq!(
+            h.get_serving_status(),
+            grpcio_health::ServingStatus::NotServing
+        );
+        h.inner.add_unhealthy_module("A");
+        assert_eq!(
+            h.get_serving_status(),
+            grpcio_health::ServingStatus::NotServing
+        );
+
+        h.set_is_serving(true);
+        assert_eq!(
+            h.get_serving_status(),
+            grpcio_health::ServingStatus::ServiceUnknown
+        );
+
+        h.inner.remove_unhealthy_module("A");
+        assert_eq!(
+            h.get_serving_status(),
+            grpcio_health::ServingStatus::Serving
+        );
+    }
+
+    #[test]
+    fn test_rolling_retriever() {
+        let r = Arc::new(RollingRetriever::<u64>::new());
+        assert_eq!(r.get_cloned(), 0);
+
+        for i in 1..=10 {
+            r.put(i);
+            assert_eq!(r.get_cloned(), i);
+        }
+
+        // Writing doesn't block reading.
+        let r1 = r.clone();
+        let (write_continue_tx, rx) = sync_channel(0);
+        let write_handle = std::thread::spawn(move || {
+            r1.put_with(move || {
+                rx.recv().unwrap();
+                11
+            })
+        });
+        for _ in 1..10 {
+            std::thread::sleep(Duration::from_millis(5));
+            assert_eq!(r.get_cloned(), 10)
+        }
+        write_continue_tx.send(()).unwrap();
+        write_handle.join().unwrap();
+        assert_eq!(r.get_cloned(), 11);
+
+        // Writing block each other.
+        let r1 = r.clone();
+        let (write1_tx, rx1) = sync_channel(0);
+        let write1_handle = std::thread::spawn(move || {
+            r1.put_with(move || {
+                // Receive once for notifying lock acquired.
+                rx1.recv().unwrap();
+                // Receive again to be notified ready to continue.
+                rx1.recv().unwrap();
+                12
+            })
+        });
+        write1_tx.send(()).unwrap();
+        let r1 = r.clone();
+        let (write2_tx, rx2) = sync_channel(0);
+        let write2_handle = std::thread::spawn(move || {
+            r1.put_with(move || {
+                write2_tx.send(()).unwrap();
+                13
+            })
+        });
+        // Write 2 cannot continue as blocked by write 1.
+        assert_eq!(
+            rx2.recv_timeout(Duration::from_millis(50)).unwrap_err(),
+            RecvTimeoutError::Timeout
+        );
+        // Continue write1
+        write1_tx.send(()).unwrap();
+        write1_handle.join().unwrap();
+        assert_eq!(r.get_cloned(), 12);
+        // Continue write2
+        rx2.recv().unwrap();
+        write2_handle.join().unwrap();
+        assert_eq!(r.get_cloned(), 13);
     }
 }
