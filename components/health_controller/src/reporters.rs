@@ -92,10 +92,10 @@ impl RaftstoreReporter {
         self.is_healthy = is_healthy;
         if is_healthy {
             self.health_controller_inner
-                .add_unhealthy_module(Self::MODULE_NAME);
+                .remove_unhealthy_module(Self::MODULE_NAME);
         } else {
             self.health_controller_inner
-                .remove_unhealthy_module(Self::MODULE_NAME);
+                .add_unhealthy_module(Self::MODULE_NAME);
         }
     }
 
