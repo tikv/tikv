@@ -249,7 +249,7 @@ impl Mutable for RangeCacheWriteBatch {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
+    use std::{sync::Arc, time::Duration};
 
     use engine_traits::{CacheRange, Peekable, RangeCacheEngine, WriteBatch};
 
@@ -286,7 +286,7 @@ mod tests {
 
     #[test]
     fn test_put_write_clear_delete_put_write() {
-        let engine = RangeCacheMemoryEngine::new(Arc::default());
+        let engine = RangeCacheMemoryEngine::new(Arc::default(), Duration::from_secs(1));
         let r = CacheRange::new(b"".to_vec(), b"z".to_vec());
         engine.new_range(r.clone());
         let engine_for_writes = {

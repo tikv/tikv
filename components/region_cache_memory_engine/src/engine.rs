@@ -202,14 +202,13 @@ pub struct RangeCacheMemoryEngine {
 }
 
 impl RangeCacheMemoryEngine {
-    pub fn new(limiter: Arc<GlobalMemoryLimiter>) -> Self {
+    pub fn new(limiter: Arc<GlobalMemoryLimiter>, gc_interval: Duration) -> Self {
         let core = Arc::new(Mutex::new(RangeCacheMemoryEngineCore::new(limiter.clone())));
         // todo: make it configurable
-        let gc_internal = Duration::from_secs(180);
         Self {
             core: core.clone(),
             memory_limiter: limiter,
-            background_work: Arc::new(BackgroundWork::new(core, gc_internal)),
+            background_work: Arc::new(BackgroundWork::new(core, gc_interval)),
         }
     }
 
@@ -702,7 +701,7 @@ impl<'a> PartialEq<&'a [u8]> for RangeCacheDbVector {
 #[cfg(test)]
 mod tests {
     use core::{ops::Range, slice::SlicePattern};
-    use std::{iter, iter::StepBy, ops::Deref, sync::Arc};
+    use std::{iter, iter::StepBy, ops::Deref, sync::Arc, time::Duration};
 
     use bytes::{BufMut, Bytes};
     use engine_traits::{
@@ -718,7 +717,10 @@ mod tests {
 
     #[test]
     fn test_snapshot() {
-        let engine = RangeCacheMemoryEngine::new(Arc::new(GlobalMemoryLimiter::default()));
+        let engine = RangeCacheMemoryEngine::new(
+            Arc::new(GlobalMemoryLimiter::default()),
+            Duration::from_secs(1),
+        );
         let range = CacheRange::new(b"k00".to_vec(), b"k10".to_vec());
         engine.new_range(range.clone());
 
@@ -914,7 +916,7 @@ mod tests {
 
     #[test]
     fn test_get_value() {
-        let engine = RangeCacheMemoryEngine::new(Arc::default());
+        let engine = RangeCacheMemoryEngine::new(Arc::default(), Duration::from_secs(1));
         let range = CacheRange::new(b"k000".to_vec(), b"k100".to_vec());
         engine.new_range(range.clone());
 
@@ -993,7 +995,7 @@ mod tests {
 
     #[test]
     fn test_iterator_forawrd() {
-        let engine = RangeCacheMemoryEngine::new(Arc::default());
+        let engine = RangeCacheMemoryEngine::new(Arc::default(), Duration::from_secs(1));
         let range = CacheRange::new(b"k000".to_vec(), b"k100".to_vec());
         engine.new_range(range.clone());
         let step: i32 = 2;
@@ -1179,7 +1181,7 @@ mod tests {
 
     #[test]
     fn test_iterator_backward() {
-        let engine = RangeCacheMemoryEngine::new(Arc::default());
+        let engine = RangeCacheMemoryEngine::new(Arc::default(), Duration::from_secs(1));
         let range = CacheRange::new(b"k000".to_vec(), b"k100".to_vec());
         engine.new_range(range.clone());
         let step: i32 = 2;
@@ -1282,7 +1284,7 @@ mod tests {
 
     #[test]
     fn test_seq_visibility() {
-        let engine = RangeCacheMemoryEngine::new(Arc::default());
+        let engine = RangeCacheMemoryEngine::new(Arc::default(), Duration::from_secs(1));
         let range = CacheRange::new(b"k000".to_vec(), b"k100".to_vec());
         engine.new_range(range.clone());
         let step: i32 = 2;
@@ -1407,7 +1409,7 @@ mod tests {
 
     #[test]
     fn test_seq_visibility_backward() {
-        let engine = RangeCacheMemoryEngine::new(Arc::default());
+        let engine = RangeCacheMemoryEngine::new(Arc::default(), Duration::from_secs(1));
         let range = CacheRange::new(b"k000".to_vec(), b"k100".to_vec());
         engine.new_range(range.clone());
 
@@ -1513,7 +1515,7 @@ mod tests {
 
         // backward, all put
         {
-            let engine = RangeCacheMemoryEngine::new(Arc::default());
+            let engine = RangeCacheMemoryEngine::new(Arc::default(), Duration::from_secs(1));
             engine.new_range(range.clone());
             let sl = {
                 let mut core = engine.core.lock().unwrap();
@@ -1550,7 +1552,7 @@ mod tests {
 
         // backward, all deletes
         {
-            let engine = RangeCacheMemoryEngine::new(Arc::default());
+            let engine = RangeCacheMemoryEngine::new(Arc::default(), Duration::from_secs(1));
             engine.new_range(range.clone());
             let sl = {
                 let mut core = engine.core.lock().unwrap();
@@ -1580,7 +1582,7 @@ mod tests {
 
         // backward, all deletes except for last put, last put's seq
         {
-            let engine = RangeCacheMemoryEngine::new(Arc::default());
+            let engine = RangeCacheMemoryEngine::new(Arc::default(), Duration::from_secs(1));
             engine.new_range(range.clone());
             let sl = {
                 let mut core = engine.core.lock().unwrap();
@@ -1612,7 +1614,7 @@ mod tests {
 
         // all deletes except for last put, deletions' seq
         {
-            let engine = RangeCacheMemoryEngine::new(Arc::default());
+            let engine = RangeCacheMemoryEngine::new(Arc::default(), Duration::from_secs(1));
             engine.new_range(range.clone());
             let sl = {
                 let mut core = engine.core.lock().unwrap();
@@ -1643,7 +1645,7 @@ mod tests {
 
     #[test]
     fn test_prefix_seek() {
-        let engine = RangeCacheMemoryEngine::new(Arc::default());
+        let engine = RangeCacheMemoryEngine::new(Arc::default(), Duration::from_secs(1));
         let range = CacheRange::new(b"k000".to_vec(), b"k100".to_vec());
         engine.new_range(range.clone());
 
@@ -1738,7 +1740,7 @@ mod tests {
 
     #[test]
     fn test_evict_range_without_snapshot() {
-        let mut engine = RangeCacheMemoryEngine::new(Arc::default());
+        let mut engine = RangeCacheMemoryEngine::new(Arc::default(), Duration::from_secs(1));
         let range = CacheRange::new(construct_user_key(0), construct_user_key(30));
         let evict_range = CacheRange::new(construct_user_key(10), construct_user_key(20));
         engine.new_range(range.clone());
@@ -1793,7 +1795,7 @@ mod tests {
 
     #[test]
     fn test_evict_range_with_snapshot() {
-        let mut engine = RangeCacheMemoryEngine::new(Arc::default());
+        let mut engine = RangeCacheMemoryEngine::new(Arc::default(), Duration::from_secs(1));
         let range = CacheRange::new(construct_user_key(0), construct_user_key(30));
         let evict_range = CacheRange::new(construct_user_key(10), construct_user_key(20));
         engine.new_range(range.clone());

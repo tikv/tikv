@@ -2469,6 +2469,7 @@ mod tests {
         path: &str,
         store_id: u64,
         store_meta: Arc<Mutex<StoreMeta>>,
+        gc_interval: std::time::Duration,
     ) -> (
         TempDir,
         LocalReader<HybridTestEnigne, HybridEngineMockRouter>,
@@ -2479,7 +2480,7 @@ mod tests {
         let disk_engine =
             engine_test::kv::new_engine(path.path().to_str().unwrap(), ALL_CFS).unwrap();
         let (ch, rx, _) = HybridEngineMockRouter::new();
-        let memory_engine = RangeCacheMemoryEngine::new(Arc::default());
+        let memory_engine = RangeCacheMemoryEngine::new(Arc::default(), gc_interval);
         let engine = HybridEngine::new(disk_engine, memory_engine.clone());
         let mut reader = LocalReader::new(
             engine.clone(),
@@ -2518,6 +2519,7 @@ mod tests {
             "test-local-hybrid-engine-reader",
             store_id,
             store_meta.clone(),
+            std::time::Duration::from_secs(1000),
         );
 
         // set up region so we can acquire snapshot from local reader

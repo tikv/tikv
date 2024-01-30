@@ -64,14 +64,14 @@ impl Drop for BackgroundWork {
 }
 
 impl BackgroundWork {
-    pub fn new(core: Arc<Mutex<RangeCacheMemoryEngineCore>>, gc_internal: Duration) -> Self {
+    pub fn new(core: Arc<Mutex<RangeCacheMemoryEngineCore>>, gc_interval: Duration) -> Self {
         let worker = Worker::new("range-cache-background-worker");
         let runner = BackgroundRunner::new(core.clone());
         let scheduler = worker.start("range-cache-engine-background", runner);
 
         let scheduler_clone = scheduler.clone();
 
-        let (handle, tx) = BackgroundWork::start_tick(scheduler_clone, gc_internal);
+        let (handle, tx) = BackgroundWork::start_tick(scheduler_clone, gc_interval);
 
         Self {
             worker,
@@ -82,13 +82,13 @@ impl BackgroundWork {
 
     fn start_tick(
         scheduler: Scheduler<BackgroundTask>,
-        gc_internal: Duration,
+        gc_interval: Duration,
     ) -> (JoinHandle<()>, Sender<bool>) {
         let (tx, rx) = bounded(0);
         let h = std::thread::spawn(move || {
             loop {
                 select! {
-                    recv(tick(gc_internal)) -> _ => {
+                    recv(tick(gc_interval)) -> _ => {
                         if scheduler.is_busy() {
                             info!(
                                 "range cache engine gc worker is busy, jump to next gc duration";
@@ -96,7 +96,7 @@ impl BackgroundWork {
                             continue;
                         }
 
-                        let safe_point = TimeStamp::physical_now() - gc_internal.as_millis() as u64;
+                        let safe_point = TimeStamp::physical_now() - gc_interval.as_millis() as u64;
                         if let Err(e) = scheduler.schedule(BackgroundTask::GcTask(GcTask {safe_point})) {
                             error!(
                                 "schedule range cache engine gc failed";
@@ -519,7 +519,7 @@ pub mod tests {
 
     #[test]
     fn test_gc() {
-        let engine = RangeCacheMemoryEngine::new(Arc::default());
+        let engine = RangeCacheMemoryEngine::new(Arc::default(), Duration::from_secs(1));
         let range = CacheRange::new(b"".to_vec(), b"z".to_vec());
         engine.new_range(range.clone());
         let (write, default) = {
@@ -574,7 +574,7 @@ pub mod tests {
 
     #[test]
     fn test_snapshot_block_gc() {
-        let engine = RangeCacheMemoryEngine::new(Arc::default());
+        let engine = RangeCacheMemoryEngine::new(Arc::default(), Duration::from_secs(1));
         let range = CacheRange::new(b"".to_vec(), b"z".to_vec());
         engine.new_range(range.clone());
         let (write, default) = {
@@ -624,7 +624,7 @@ pub mod tests {
 
     #[test]
     fn test_gc_worker() {
-        let engine = RangeCacheMemoryEngine::new(Arc::default());
+        let engine = RangeCacheMemoryEngine::new(Arc::default(), Duration::from_secs(1));
         let (write, default) = {
             let mut core = engine.core.lock().unwrap();
             core.mut_range_manager()
