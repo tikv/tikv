@@ -8,11 +8,12 @@ use std::{
         atomic::{AtomicUsize, Ordering},
         Arc,
     },
-    time::Duration,
+    time::{Duration, Instant as StdInstant},
 };
 
 use file_system::{IoType, WithIoType};
 use futures::{
+    compat::{Compat01As03, Future01CompatExt},
     future::{Future, TryFutureExt},
     sink::SinkExt,
     stream::{Stream, StreamExt, TryStreamExt},
@@ -31,17 +32,21 @@ use kvproto::{
     },
     tikvpb::TikvClient,
 };
+use pin_project::pin_project;
 use protobuf::Message;
 use raftstore::store::{SnapEntry, SnapKey, SnapManager, Snapshot};
 use security::SecurityManager;
 use tikv_kv::RaftExtension;
 use tikv_util::{
+    box_err,
     config::{Tracker, VersionTrack},
     time::{Instant, UnixSecs},
+    timer::GLOBAL_TIMER_HANDLE,
     worker::Runnable,
     DeferContext,
 };
 use tokio::runtime::{Builder as RuntimeBuilder, Runtime};
+use tokio_timer::Delay;
 
 use super::{metrics::*, Config, Error, Result};
 use crate::{server::tablet_snap::NoSnapshotCache, tikv_util::sys::thread::ThreadBuildWrapper};
@@ -49,6 +54,18 @@ use crate::{server::tablet_snap::NoSnapshotCache, tikv_util::sys::thread::Thread
 pub type Callback = Box<dyn FnOnce(Result<()>) + Send>;
 
 pub const DEFAULT_POOL_SIZE: usize = 4;
+
+// the max duration before a snapshot send task is canceled.
+const SNAP_SEND_TIMEOUT_DURATION: Duration = Duration::from_secs(600);
+
+#[inline]
+fn get_snap_timeout() -> Duration {
+    fail_point!("snap_send_duration_timeout", |t| -> Duration {
+        let t = t.unwrap().parse::<u64>();
+        Duration::from_millis(t.unwrap())
+    });
+    SNAP_SEND_TIMEOUT_DURATION
+}
 
 /// A task for either receiving Snapshot or sending Snapshot
 pub enum Task {
@@ -191,10 +208,30 @@ pub fn send_snap(
     let (sink, receiver) = client.snapshot()?;
 
     let send_task = async move {
-        let mut sink = sink.sink_map_err(Error::from);
-        sink.send_all(&mut chunks).await?;
-        sink.close().await?;
-        let recv_result = receiver.map_err(Error::from).await;
+        let send_and_recv = async {
+            let mut sink = sink.sink_map_err(Error::from);
+
+            #[cfg(feature = "failpoints")]
+            {
+                let should_delay = (|| {
+                    fail::fail_point!("snap_send_timer_delay", |_| { true });
+                    false
+                })();
+                if should_delay {
+                    _ = GLOBAL_TIMER_HANDLE
+                        .delay(StdInstant::now() + Duration::from_secs(1))
+                        .compat()
+                        .await;
+                }
+            }
+            sink.send_all(&mut chunks).await?;
+            sink.close().await?;
+            Ok(receiver.map_err(Error::from).await)
+        };
+        let sink_timeout = TimeoutFuture::new(send_and_recv, get_snap_timeout(), || {
+            Err(Error::Other(box_err!("send snapshot timeout")))
+        });
+        let recv_result = sink_timeout.await?;
         send_timer.observe_duration();
         drop(deregister);
         drop(client);
@@ -559,5 +596,43 @@ impl<R: RaftExtension + 'static> Runnable for Runner<R> {
                 f(&self.cfg);
             }
         }
+    }
+}
+
+#[pin_project]
+struct TimeoutFuture<F, T> {
+    #[pin]
+    f: F,
+    #[pin]
+    timer: Compat01As03<Delay>,
+    on_timeout: T,
+}
+
+impl<F, T> TimeoutFuture<F, T> {
+    fn new(f: F, timeout: Duration, on_timeout: T) -> Self {
+        let timer = GLOBAL_TIMER_HANDLE
+            .delay(StdInstant::now() + timeout)
+            .compat();
+        Self {
+            f,
+            timer,
+            on_timeout,
+        }
+    }
+}
+
+impl<F: Future, T: FnMut() -> F::Output> Future for TimeoutFuture<F, T> {
+    type Output = F::Output;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let this = self.project();
+        let r = this.f.poll(cx);
+        if r.is_ready() {
+            return r;
+        }
+        if this.timer.poll(cx).is_ready() {
+            return Poll::Ready((this.on_timeout)());
+        }
+        Poll::Pending
     }
 }
