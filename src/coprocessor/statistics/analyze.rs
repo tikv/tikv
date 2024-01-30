@@ -93,7 +93,7 @@ impl<S: Snapshot, F: KvFormat> AnalyzeContext<S, F> {
         let (col_res, _) = builder.collect_columns_stats().await?;
 
         let res_data = {
-            let res = col_res.into_proto();
+            let res: tipb::AnalyzeColumnsResp = col_res.into();
             box_try!(res.write_to_bytes())
         };
         Ok(res_data)
@@ -208,7 +208,7 @@ impl<S: Snapshot, F: KvFormat> AnalyzeContext<S, F> {
             }
         }
 
-        let res = AnalyzeIndexResult::new(hist, cms, Some(fms)).into_proto();
+        let res: tipb::AnalyzeIndexResp = AnalyzeIndexResult::new(hist, cms, Some(fms)).into();
         let dt = box_try!(res.write_to_bytes());
         Ok(dt)
     }
@@ -1068,19 +1068,6 @@ impl SampleCollector {
         }
     }
 
-    fn into_proto(self) -> tipb::SampleCollector {
-        let mut s = tipb::SampleCollector::default();
-        s.set_null_count(self.null_count as i64);
-        s.set_count(self.count as i64);
-        s.set_fm_sketch(self.fm_sketch.into_proto());
-        s.set_samples(self.samples.into());
-        if let Some(c) = self.cm_sketch {
-            s.set_cm_sketch(c.into_proto())
-        }
-        s.set_total_size(self.total_size as i64);
-        s
-    }
-
     pub fn collect(&mut self, data: Vec<u8>) {
         if data[0] == NIL_FLAG {
             self.null_count += 1;
@@ -1102,6 +1089,21 @@ impl SampleCollector {
             self.samples.remove(idx);
             self.samples.push(data);
         }
+    }
+}
+
+impl From<SampleCollector> for tipb::SampleCollector {
+    fn from(collector: SampleCollector) -> tipb::SampleCollector {
+        let mut s = tipb::SampleCollector::default();
+        s.set_null_count(collector.null_count as i64);
+        s.set_count(collector.count as i64);
+        s.set_fm_sketch(collector.fm_sketch.into_proto());
+        s.set_samples(collector.samples.into());
+        if let Some(c) = collector.cm_sketch {
+            s.set_cm_sketch(c.into_proto())
+        }
+        s.set_total_size(collector.total_size as i64);
+        s
     }
 }
 
@@ -1144,13 +1146,15 @@ impl AnalyzeColumnsResult {
             pk_hist,
         }
     }
+}
 
-    fn into_proto(self) -> tipb::AnalyzeColumnsResp {
-        let hist = self.pk_hist.into_proto();
-        let cols: Vec<tipb::SampleCollector> = self
+impl From<AnalyzeColumnsResult> for tipb::AnalyzeColumnsResp {
+    fn from(result: AnalyzeColumnsResult) -> tipb::AnalyzeColumnsResp {
+        let hist = result.pk_hist.into();
+        let cols: Vec<tipb::SampleCollector> = result
             .sample_collectors
             .into_iter()
-            .map(|col| col.into_proto())
+            .map(|col| col.into())
             .collect();
         let mut res = tipb::AnalyzeColumnsResp::default();
         res.set_collectors(cols.into());
@@ -1171,14 +1175,16 @@ impl AnalyzeIndexResult {
     fn new(hist: Histogram, cms: Option<CmSketch>, fms: Option<FmSketch>) -> AnalyzeIndexResult {
         AnalyzeIndexResult { hist, cms, fms }
     }
+}
 
-    fn into_proto(self) -> tipb::AnalyzeIndexResp {
+impl From<AnalyzeIndexResult> for tipb::AnalyzeIndexResp {
+    fn from(result: AnalyzeIndexResult) -> tipb::AnalyzeIndexResp {
         let mut res = tipb::AnalyzeIndexResp::default();
-        res.set_hist(self.hist.into_proto());
-        if let Some(c) = self.cms {
+        res.set_hist(result.hist.into());
+        if let Some(c) = result.cms {
             res.set_cms(c.into_proto());
         }
-        if let Some(f) = self.fms {
+        if let Some(f) = result.fms {
             let mut s = tipb::SampleCollector::default();
             s.set_fm_sketch(f.into_proto());
             res.set_collector(s);
@@ -1201,8 +1207,8 @@ impl AnalyzeMixedResult {
 
     fn into_proto(self) -> tipb::AnalyzeMixedResp {
         let mut res = tipb::AnalyzeMixedResp::default();
-        res.set_index_resp(self.idx_res.into_proto());
-        res.set_columns_resp(self.col_res.into_proto());
+        res.set_index_resp(self.idx_res.into());
+        res.set_columns_resp(self.col_res.into());
         res
     }
 }
