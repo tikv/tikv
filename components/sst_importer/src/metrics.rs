@@ -3,7 +3,7 @@
 use prometheus::*;
 
 lazy_static! {
-    pub static ref IMPORT_RPC_COUNT : IntGaugeVec = register_int_counter_vec!(
+    pub static ref IMPORT_RPC_COUNT: IntGaugeVec = register_int_gauge_vec!(
         "tikv_import_rpc_count",
         "Total number of import rpc",
         &["type"],
