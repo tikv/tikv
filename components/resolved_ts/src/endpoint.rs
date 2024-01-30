@@ -65,7 +65,8 @@ impl Drop for ResolverStatus {
             locks,
             memory_quota,
             ..
-        } = self else {
+        } = self
+        else {
             return;
         };
         if locks.is_empty() {
@@ -96,7 +97,8 @@ impl ResolverStatus {
             locks,
             memory_quota,
             ..
-        } = self else {
+        } = self
+        else {
             panic!("region {:?} resolver has ready", region_id)
         };
         // Check if adding a new lock or unlock will exceed the memory
@@ -110,10 +112,7 @@ impl ResolverStatus {
     }
 
     fn update_tracked_index(&mut self, index: u64, region_id: u64) {
-        let ResolverStatus::Pending {
-            tracked_index,
-            ..
-        } = self else {
+        let ResolverStatus::Pending { tracked_index, .. } = self else {
             panic!("region {:?} resolver has ready", region_id)
         };
         assert!(
@@ -135,7 +134,8 @@ impl ResolverStatus {
             memory_quota,
             tracked_index,
             ..
-        } = self else {
+        } = self
+        else {
             panic!("region {:?} resolver has ready", region_id)
         };
         // Must take locks, otherwise it may double free memory quota on drop.
@@ -658,12 +658,8 @@ where
             let meta = store_meta.lock().unwrap();
             (meta.region_read_progress().clone(), meta.store_id())
         };
-        let advance_worker = AdvanceTsWorker::new(
-            cfg.advance_ts_interval.0,
-            pd_client.clone(),
-            scheduler.clone(),
-            concurrency_manager,
-        );
+        let advance_worker =
+            AdvanceTsWorker::new(pd_client.clone(), scheduler.clone(), concurrency_manager);
         let scanner_pool = ScannerPool::new(cfg.scan_lock_pool_size, cdc_handle);
         let store_resolver_gc_interval = Duration::from_secs(60);
         let leader_resolver = LeadershipResolver::new(
@@ -687,7 +683,7 @@ where
             scanner_pool,
             scan_concurrency_semaphore,
             regions: HashMap::default(),
-            _phantom: PhantomData::default(),
+            _phantom: PhantomData,
         };
         ep.handle_advance_resolved_ts(leader_resolver);
         ep
@@ -870,7 +866,7 @@ where
 
     // Tracking or untracking locks with incoming commands that corresponding
     // observe id is valid.
-    #[allow(clippy::drop_ref)]
+    #[allow(dropping_references)]
     fn handle_change_log(&mut self, cmd_batch: Vec<CmdBatch>) {
         let size = cmd_batch.iter().map(|b| b.size()).sum::<usize>();
         RTS_CHANNEL_PENDING_CMD_BYTES.sub(size as i64);
@@ -930,7 +926,7 @@ where
     }
 
     fn handle_advance_resolved_ts(&self, leader_resolver: LeadershipResolver) {
-        let regions = self.regions.keys().into_iter().copied().collect();
+        let regions = self.regions.keys().copied().collect();
         self.advance_worker.advance_ts_for_regions(
             regions,
             leader_resolver,

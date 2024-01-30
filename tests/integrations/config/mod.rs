@@ -272,7 +272,7 @@ fn test_serde_custom_tikv_config() {
     };
     value.pd = PdConfig::new(vec!["example.com:443".to_owned()]);
     let titan_cf_config = TitanCfConfig {
-        min_blob_size: ReadableSize(2018),
+        min_blob_size: Some(ReadableSize(2018)),
         blob_file_compression: CompressionType::Lz4,
         zstd_dict_size: ReadableSize::kb(16),
         blob_cache_size: ReadableSize::gb(12),
@@ -287,7 +287,7 @@ fn test_serde_custom_tikv_config() {
         ..Default::default()
     };
     let titan_db_config = TitanDbConfig {
-        enabled: true,
+        enabled: Some(true),
         dirname: "bar".to_owned(),
         disable_gc: false,
         max_background_gc: 9,
@@ -432,7 +432,7 @@ fn test_serde_custom_tikv_config() {
             hard_pending_compaction_bytes_limit: Some(ReadableSize::gb(12)),
             force_consistency_checks: true,
             titan: TitanCfConfig {
-                min_blob_size: ReadableSize(1024), // default value
+                min_blob_size: None, // default value
                 blob_file_compression: CompressionType::Zstd,
                 zstd_dict_size: ReadableSize::kb(0),
                 blob_cache_size: ReadableSize::mb(0),
@@ -506,7 +506,7 @@ fn test_serde_custom_tikv_config() {
             hard_pending_compaction_bytes_limit: Some(ReadableSize::gb(12)),
             force_consistency_checks: true,
             titan: TitanCfConfig {
-                min_blob_size: ReadableSize(1024), // default value
+                min_blob_size: None, // default value
                 blob_file_compression: CompressionType::Zstd,
                 zstd_dict_size: ReadableSize::kb(0),
                 blob_cache_size: ReadableSize::mb(0),
@@ -580,7 +580,7 @@ fn test_serde_custom_tikv_config() {
             hard_pending_compaction_bytes_limit: Some(ReadableSize::gb(12)),
             force_consistency_checks: true,
             titan: TitanCfConfig {
-                min_blob_size: ReadableSize(1024), // default value
+                min_blob_size: None, // default value
                 blob_file_compression: CompressionType::Zstd,
                 zstd_dict_size: ReadableSize::kb(0),
                 blob_cache_size: ReadableSize::mb(0),

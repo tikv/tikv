@@ -22,7 +22,7 @@ command! {
     /// This should followed by a `ResolveLock`.
     ResolveLockReadPhase:
         cmd_ty => (),
-        display => "kv::resolve_lock_readphase", (),
+        display => { "kv::resolve_lock_readphase", (), }
         content => {
             /// Maps lock_ts to commit_ts. See ./resolve_lock.rs for details.
             txn_status: HashMap<TimeStamp, TimeStamp>,
@@ -48,10 +48,10 @@ impl<S: Snapshot> ReadCommand<S> for ResolveLockReadPhase {
         let tag = self.tag();
         let (ctx, txn_status) = (self.ctx, self.txn_status);
         let mut reader = MvccReader::new_with_ctx(snapshot, Some(ScanMode::Forward), &ctx);
-        let result = reader.scan_locks(
+        let result = reader.scan_locks_from_storage(
             self.scan_key.as_ref(),
             None,
-            |lock| txn_status.contains_key(&lock.ts),
+            |_, lock| txn_status.contains_key(&lock.ts),
             RESOLVE_LOCK_BATCH_SIZE,
         );
         statistics.add(&reader.statistics);

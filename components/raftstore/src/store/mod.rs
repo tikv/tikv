@@ -11,6 +11,7 @@ pub mod msg;
 mod peer;
 mod read_queue;
 pub mod region_meta;
+pub mod snapshot_backup;
 pub mod transport;
 #[macro_use]
 pub mod util;
@@ -74,13 +75,14 @@ pub use self::{
         ApplyOptions, CfFile, Error as SnapError, SnapEntry, SnapKey, SnapManager,
         SnapManagerBuilder, Snapshot, SnapshotStatistics, TabletSnapKey, TabletSnapManager,
     },
+    snapshot_backup::SnapshotBrWaitApplySyncer,
     transport::{CasualRouter, ProposalRouter, SignificantRouter, StoreRouter, Transport},
     txn_ext::{LocksStatus, PeerPessimisticLocks, PessimisticLockPair, TxnExt},
     unsafe_recovery::{
         demote_failed_voters_request, exit_joint_request, ForceLeaderState,
-        SnapshotRecoveryWaitApplySyncer, UnsafeRecoveryExecutePlanSyncer,
-        UnsafeRecoveryFillOutReportSyncer, UnsafeRecoveryForceLeaderSyncer, UnsafeRecoveryHandle,
-        UnsafeRecoveryState, UnsafeRecoveryWaitApplySyncer,
+        UnsafeRecoveryExecutePlanSyncer, UnsafeRecoveryFillOutReportSyncer,
+        UnsafeRecoveryForceLeaderSyncer, UnsafeRecoveryHandle, UnsafeRecoveryState,
+        UnsafeRecoveryWaitApplySyncer,
     },
     util::{RegionReadProgress, RegionReadProgressRegistry},
     worker::{

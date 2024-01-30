@@ -279,7 +279,7 @@ impl<EK: KvEngine> Simulator<EK> for NodeCluster<EK> {
             (snap_mgr, Some(tmp))
         } else {
             let trans = self.trans.core.lock().unwrap();
-            let &(ref snap_mgr, _) = &trans.snap_paths[&node_id];
+            let (snap_mgr, _) = &trans.snap_paths[&node_id];
             (snap_mgr.clone(), None)
         };
 
@@ -527,7 +527,7 @@ pub fn new_node_cluster(id: u64, count: usize) -> Cluster<RocksEngine, NodeClust
 }
 
 // the hybrid engine with disk engine "RocksEngine" and region cache engine
-// "RegionCacheMemoryEngine" is used in the node cluster.
+// "RangeCacheMemoryEngine" is used in the node cluster.
 pub fn new_node_cluster_with_hybrid_engine(
     id: u64,
     count: usize,

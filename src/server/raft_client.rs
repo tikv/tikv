@@ -57,7 +57,7 @@ use crate::server::{
 pub struct MetadataSourceStoreId {}
 
 impl MetadataSourceStoreId {
-    pub const KEY: &str = "source_store_id";
+    pub const KEY: &'static str = "source_store_id";
 
     pub fn parse(value: &[u8]) -> u64 {
         let value = std::str::from_utf8(value).unwrap();

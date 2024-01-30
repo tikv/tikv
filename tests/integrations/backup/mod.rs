@@ -17,6 +17,8 @@ use tikv::coprocessor::checksum_crc64_xor;
 use tikv_util::HandyRwLock;
 use txn_types::TimeStamp;
 
+mod disk_snap;
+
 fn assert_same_file_name(s1: String, s2: String) {
     let tokens1: Vec<&str> = s1.split('_').collect();
     let tokens2: Vec<&str> = s2.split('_').collect();
@@ -518,6 +520,7 @@ fn test_invalid_external_storage() {
     let resps = block_on(rx.collect::<Vec<_>>());
     assert!(resps[0].has_error());
 
+    #[allow(clippy::permissions_set_readonly_false)]
     perms.set_readonly(false);
     f.set_permissions(perms).unwrap();
 

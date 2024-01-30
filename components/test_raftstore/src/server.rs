@@ -870,7 +870,7 @@ pub fn new_server_cluster(
 }
 
 // the hybrid engine with disk engine "RocksEngine" and region cache engine
-// "RegionCacheMemoryEngine" is used in the server cluster.
+// "RangeCacheMemoryEngine" is used in the server cluster.
 pub fn new_server_cluster_with_hybrid_engine(
     id: u64,
     count: usize,
@@ -956,8 +956,18 @@ pub fn must_new_cluster_and_kv_client_mul(
     TikvClient,
     Context,
 ) {
-    let (cluster, leader, ctx) = must_new_cluster_mul(count);
+    must_new_cluster_with_cfg_and_kv_client_mul(count, |_| {})
+}
 
+pub fn must_new_cluster_with_cfg_and_kv_client_mul(
+    count: usize,
+    configure: impl FnMut(&mut Cluster<RocksEngine, ServerCluster<RocksEngine>>),
+) -> (
+    Cluster<RocksEngine, ServerCluster<RocksEngine>>,
+    TikvClient,
+    Context,
+) {
+    let (cluster, leader, ctx) = must_new_and_configure_cluster_mul(count, configure);
     let env = Arc::new(Environment::new(1));
     let channel =
         ChannelBuilder::new(env).connect(&cluster.sim.rl().get_addr(leader.get_store_id()));
