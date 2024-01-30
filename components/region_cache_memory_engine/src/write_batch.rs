@@ -9,14 +9,6 @@ use crate::{
     RangeCacheMemoryEngine,
 };
 
-/// Callback to apply an encoded entry to cache engine.
-///
-/// Arguments: &str - cf name, Bytes - (encoded) key, Bytes - value.
-///
-/// TODO: consider refactoring into a trait once RangeCacheMemoryEngine API
-/// stabilizes.
-type ApplyEncodedEntryCb = Box<dyn FnMut(&str, Bytes, Bytes) -> Result<()> + Send + Sync>;
-
 pub struct RangeCacheWriteBatch {
     buffer: Vec<RangeCacheWriteBatchEntry>,
     engine: RangeCacheMemoryEngine,
@@ -151,13 +143,6 @@ impl RangeCacheWriteBatchEntry {
         let (key, value) = self.encode(seq);
         let _ = handle.put(key, value);
         Ok(())
-    }
-}
-
-impl RangeCacheMemoryEngine {
-    fn apply_cb(&self) -> ApplyEncodedEntryCb {
-        // TODO: use the stabilized API for appending to the skip list here.
-        Box::new(|_cf, _key, _value| Ok(()))
     }
 }
 
