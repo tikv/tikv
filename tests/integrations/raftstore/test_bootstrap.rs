@@ -11,6 +11,7 @@ use engine_traits::{
     DbOptionsExt, Engines, MiscExt, Peekable, RaftEngine, RaftEngineReadOnly, ALL_CFS, CF_DEFAULT,
     CF_LOCK, CF_RAFT, CF_WRITE,
 };
+use health_controller::HealthController;
 use kvproto::{kvrpcpb::ApiVersion, metapb, raft_serverpb::RegionLocalState};
 use raftstore::{
     coprocessor::CoprocessorHost,
@@ -20,7 +21,6 @@ use raftstore_v2::router::PeerMsg;
 use resource_metering::CollectorRegHandle;
 use service::service_manager::GrpcServiceManager;
 use tempfile::Builder;
-use health_controller::HealthController;
 use test_pd_client::{bootstrap_with_first_region, TestPdClient};
 use test_raftstore::*;
 use tikv::{import::SstImporter, server::Node};
