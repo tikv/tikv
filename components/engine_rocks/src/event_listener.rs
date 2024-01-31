@@ -1,15 +1,17 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine_traits::PersistenceListener;
+use engine_traits::{Iterator, IterOptions, PersistenceListener, RefIterable};
 use file_system::{get_io_type, set_io_type, IoType};
 use regex::Regex;
 use rocksdb::{
     CompactionJobInfo, DBBackgroundErrorReason, FlushJobInfo, IngestionInfo, MemTableInfo,
     MutableStatus, SubcompactionJobInfo, WriteStallInfo,
 };
+use test::bench::iter;
+use log_wrappers::hex_encode_upper;
 use tikv_util::{error, metrics::CRITICAL_ERROR, set_panic_mark, warn, worker::Scheduler};
 
-use crate::rocks_metrics::*;
+use crate::{rocks_metrics::*, RocksSstReader};
 
 // Message for RocksDB status subcode kNoSpace.
 const NO_SPACE_ERROR: &str = "IO error: No space left on device";
@@ -101,11 +103,43 @@ impl rocksdb::EventListener for RocksEventListener {
             .with_label_values(&[&self.db_name, info.cf_name()])
             .observe(info.picked_level() as f64);
         if info.picked_level() < 6 {
-            warn!(
-                "SST can not ingest to L6";
-                "level" => info.picked_level(),
-                "file" => info.internal_file_path().to_str().unwrap(),
-            );
+            let file_path = info.internal_file_path().to_str().unwrap();
+            let reader = RocksSstReader::open_with_env(file_path, None);
+            match reader {
+                Ok(reader) => {
+                    let iter_opt = IterOptions::new(None, None, false);
+                    let iter = reader.iter(iter_opt);
+                    if let Err(e) = iter {
+                        warn!(
+                            "SST can not ingest to L6";
+                            "level" => info.picked_level(),
+                            "file" => file_path,
+                            "iter_error" => e,
+                        );
+                        return;
+                    }
+                    let mut iter = iter.unwrap();
+                    _ = iter.seek_to_first();
+                    let min_key = hex_encode_upper(iter.key());
+                    _ = iter.seek_to_last();
+                    let max_key = hex_encode_upper(iter.key());
+                    warn!(
+                        "SST can not ingest to L6";
+                        "level" => info.picked_level(),
+                        "file" => file_path,
+                        "min_key" => min_key,
+                        "max_key" => max_key,
+                    );
+                }
+                Err(e) => {
+                    warn!(
+                        "SST can not ingest to L6";
+                        "level" => info.picked_level(),
+                        "file" => file_path,
+                        "reader_error" => e,
+                    );
+                }
+            }
         }
     }
 
