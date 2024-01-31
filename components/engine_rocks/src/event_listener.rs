@@ -7,7 +7,6 @@ use rocksdb::{
     CompactionJobInfo, DBBackgroundErrorReason, FlushJobInfo, IngestionInfo, MemTableInfo,
     MutableStatus, SubcompactionJobInfo, WriteStallInfo,
 };
-use test::bench::iter;
 use log_wrappers::hex_encode_upper;
 use tikv_util::{error, metrics::CRITICAL_ERROR, set_panic_mark, warn, worker::Scheduler};
 
@@ -114,7 +113,7 @@ impl rocksdb::EventListener for RocksEventListener {
                             "SST can not ingest to L6";
                             "level" => info.picked_level(),
                             "file" => file_path,
-                            "iter_error" => e,
+                            "iter_error" => e.to_string(),
                         );
                         return;
                     }
@@ -136,7 +135,7 @@ impl rocksdb::EventListener for RocksEventListener {
                         "SST can not ingest to L6";
                         "level" => info.picked_level(),
                         "file" => file_path,
-                        "reader_error" => e,
+                        "reader_error" => e.to_string(),
                     );
                 }
             }
