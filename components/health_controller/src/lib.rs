@@ -1,5 +1,35 @@
 // Copyright 2024 TiKV Project Authors. Licensed under Apache-2.0.
 
+//! This module contains utilities to manage and retrieve the health status of
+//! TiKV instance in a unified way.
+//!
+//! ## [`HealthController`]
+//!
+//! [`HealthController`] is the core of the module. It's a unified place where
+//! the server's health status is managed and collected, including the [gRPC
+//! `HealthService`](grpcio_health::HealthService). It provides interfaces to
+//! retrieve the collected information, and actively setting whether
+//! the gRPC `HealthService` should report a `Serving` or `NotServing` status.
+//!
+//! ## Reporters
+//!
+//! [`HealthController`] doesn't provide ways to update most of the states
+//! directly. Instead, each module in TiKV tha need to report its health status
+//! need to create a corresponding reporter.
+//!
+//! The reason why the reporters is split out from the `HealthController` is:
+//!
+//! * Reporters can have different designs to fit the special use patterns of
+//!   different modules.
+//! * `HealthController` internally contains states that are shared in different
+//!   modules and threads. If some module need to store internal states to
+//!   calculate the health status, they can be put in the reporter instead of
+//!   the `HealthController`, which makes it possible to avoid unnecessary
+//!   synchronization like mutexes.
+//! * To avoid the `HealthController` itself contains too many different APIs
+//!   that are specific to different modules, increasing the complexity and
+//!   possibility to misuse of `HealthController`.
+
 pub mod reporters;
 pub mod slow_score;
 pub mod trend;
@@ -35,9 +65,32 @@ impl ServingStatus {
 }
 
 struct HealthControllerInner {
+    // Internally stores a `f64` type.
     raftstore_slow_score: AtomicU64,
     raftstore_slow_trend: RollingRetriever<SlowTrendPb>,
 
+    /// gRPC's builtin `HealthService`.
+    ///
+    /// **Note**: DO NOT update its state directly. Only change its state while
+    /// holding the mutex of `current_serving_status`, and keep consistent
+    /// with value of `current_serving_status`, unless `health_service` is
+    /// already shutdown.
+    ///
+    /// TiKV uses gRPC's builtin `HealthService` to provide information about
+    /// whether the TiKV server is normally running. To keep its behavior
+    /// consistent with earlier versions without the `HealthController`,
+    /// it's used in such pattern:
+    ///
+    /// * Only an empty service name is used, representing the status of the
+    ///   whole server..
+    /// * When `current_serving_status.is_serving` is set to false (by calling
+    ///   [`set_is_serving(false)`](HealthController::set_is_serving)), the
+    ///   serving status is set to `NotServing`.
+    /// * If `current_serving_status.is_serving` is true, but
+    ///   `current_serving_status.unhealthy_modules` is not empty, the serving
+    ///   status is set to `ServiceUnknown`.
+    /// * Otherwise, the TiKV instance is regarded operational and the serving
+    ///   status is set to `Serving`.
     health_service: HealthService,
     current_serving_status: Mutex<ServingStatus>,
 }
@@ -58,6 +111,12 @@ impl HealthControllerInner {
         }
     }
 
+    /// Marks a module (identified by name) to be unhealthy. Adding an unhealthy
+    /// will make the serving status of the TiKV server, reported via the
+    /// gRPC `HealthService`, to become `ServiceUnknown`.
+    ///
+    /// This is not an public API. This method is expected to be called only
+    /// from reporters.
     fn add_unhealthy_module(&self, module_name: &'static str) {
         let mut status = self.current_serving_status.lock();
         if !status.unhealthy_modules.insert(module_name) {
@@ -74,6 +133,13 @@ impl HealthControllerInner {
         }
     }
 
+    /// Removes a module (identified by name) that was marked unhealthy before.
+    /// When the unhealthy modules are cleared, the serving status reported
+    /// via the gRPC `HealthService` will change from `ServiceUnknown` to
+    /// `Serving`.
+    ///
+    /// This is not an public API. This method is expected to be called only
+    /// from reporters.
     fn remove_unhealthy_module(&self, module_name: &'static str) {
         let mut status = self.current_serving_status.lock();
         if !status.unhealthy_modules.remove(module_name) {
@@ -90,6 +156,11 @@ impl HealthControllerInner {
         }
     }
 
+    /// Sets whether the TiKV server is serving. This is currently used to pause
+    /// the server, which has implementation in code but not commonly used.
+    ///
+    /// The effect of setting not serving overrides the effect of
+    /// [`add_on_healthy_module`](Self::add_unhealthy_module).
     fn set_is_serving(&self, is_serving: bool) {
         let mut status = self.current_serving_status.lock();
         if is_serving == status.is_serving {
@@ -101,6 +172,8 @@ impl HealthControllerInner {
             .set_serving_status("", status.to_serving_status_pb());
     }
 
+    /// Gets the current serving status that is being reported by
+    /// `health_service`, if it's not shutdown.
     fn get_serving_status(&self) -> grpcio_health::ServingStatus {
         let status = self.current_serving_status.lock();
         status.to_serving_status_pb()
@@ -148,6 +221,15 @@ impl HealthController {
         self.inner.get_raftstore_slow_trend()
     }
 
+    /// Get the gRPC `HealthService`.
+    ///
+    /// Only use this when it's necessary to startup the gRPC server or for test
+    /// purpose. Do not change the `HealthService`'s state manually.
+    ///
+    /// If it's necessary to update `HealthService`'s state, consider using
+    /// [`set_is_serving`](Self::set_is_serving) or use a reporter to add an
+    /// unhealthy module. An example:
+    ///  [`RaftstoreReporter::set_is_healthy`](reporters::RaftstoreReporter::set_is_healthy).
     pub fn get_grpc_health_service(&self) -> HealthService {
         self.inner.health_service.clone()
     }
@@ -156,6 +238,8 @@ impl HealthController {
         self.inner.get_serving_status()
     }
 
+    /// Set whether the TiKV server is serving. This controls the state reported
+    /// by the gRPC `HealthService`.
     pub fn set_is_serving(&self, is_serving: bool) {
         self.inner.set_is_serving(is_serving);
     }
@@ -178,6 +262,14 @@ impl Default for HealthController {
     }
 }
 
+/// An alternative util to simple RwLock. It allows writing not blocking
+/// reading, at the expense of linearizability between reads and writes.
+///
+/// This is suitable for use cases where atomic storing and loading is expected,
+/// but atomic variables is not applicable due to the inner type larger than 8
+/// bytes. When writing is in progress, readings will get the previous value.
+/// Writes will block each other, and fast and frequent writes may also block or
+/// be blocked by slow reads.
 struct RollingRetriever<T> {
     content: [RwLock<T>; 2],
     current_index: AtomicUsize,
