@@ -7,7 +7,6 @@ use rocksdb::{
     CompactionJobInfo, DBBackgroundErrorReason, FlushJobInfo, IngestionInfo, MemTableInfo,
     MutableStatus, SubcompactionJobInfo, WriteStallInfo,
 };
-use log_wrappers::hex_encode_upper;
 use tikv_util::{error, metrics::CRITICAL_ERROR, set_panic_mark, warn, worker::Scheduler};
 
 use crate::{rocks_metrics::*, RocksSstReader};
@@ -119,9 +118,9 @@ impl rocksdb::EventListener for RocksEventListener {
                     }
                     let mut iter = iter.unwrap();
                     _ = iter.seek_to_first();
-                    let min_key = hex_encode_upper(iter.key());
+                    let min_key = log_wrappers::hex_encode_upper(iter.key());
                     _ = iter.seek_to_last();
-                    let max_key = hex_encode_upper(iter.key());
+                    let max_key = log_wrappers::hex_encode_upper(iter.key());
                     warn!(
                         "SST can not ingest to L6";
                         "level" => info.picked_level(),
