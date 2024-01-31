@@ -56,8 +56,9 @@ pub const DEFAULT_POOL_SIZE: usize = 4;
 
 // the max duration before a snapshot send task is canceled.
 const SNAP_SEND_TIMEOUT_DURATION: Duration = Duration::from_secs(600);
-// the minimum send speed for a big snapshot.
-const MIN_SNAP_SEND_SPEED: u64 = 1 * MIB;
+// the minimum expected send speed for sending snapshot, this is used to avoid
+// timeout too early when the snapshot size is too big.
+const MIN_SNAP_SEND_SPEED: u64 = MIB;
 
 ///
 #[inline]
