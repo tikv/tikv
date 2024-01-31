@@ -61,7 +61,7 @@ impl GcRunner {
 
     fn gc_range(&mut self, range: &CacheRange, safe_point: u64) {
         let (skiplist_engine, safe_ts) = {
-            let mut core = self.memory_engine.core().lock().unwrap();
+            let mut core = self.memory_engine.core().write().unwrap();
             let Some(range_meta) = core.mut_range_manager().mut_range_meta(range) else {
                 return;
             };
@@ -399,7 +399,7 @@ pub mod tests {
         let range = CacheRange::new(b"".to_vec(), b"z".to_vec());
         engine.new_range(range.clone());
         let (write, default) = {
-            let mut core = engine.core().lock().unwrap();
+            let mut core = engine.core().write().unwrap();
             let skiplist_engine = core.engine();
             core.mut_range_manager().set_range_readable(&range, true);
             (
@@ -454,7 +454,7 @@ pub mod tests {
         let range = CacheRange::new(b"".to_vec(), b"z".to_vec());
         engine.new_range(range.clone());
         let (write, default) = {
-            let mut core = engine.core().lock().unwrap();
+            let mut core = engine.core().write().unwrap();
             let skiplist_engine = core.engine();
             core.mut_range_manager().set_range_readable(&range, true);
             (
