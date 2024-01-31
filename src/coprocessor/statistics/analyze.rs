@@ -93,7 +93,7 @@ impl<S: Snapshot, F: KvFormat> AnalyzeContext<S, F> {
         let (col_res, _) = builder.collect_columns_stats().await?;
 
         let res_data = {
-            let res = col_res.into_proto();
+            let res: tipb::AnalyzeColumnsResp = col_res.into();
             box_try!(res.write_to_bytes())
         };
         Ok(res_data)
@@ -103,13 +103,13 @@ impl<S: Snapshot, F: KvFormat> AnalyzeContext<S, F> {
         let (col_res, idx_res) = builder.collect_columns_stats().await?;
 
         let res_data = {
-            let resp = AnalyzeMixedResult::new(
+            let resp: tipb::AnalyzeMixedResp = AnalyzeMixedResult::new(
                 col_res,
                 idx_res.ok_or_else(|| {
                     Error::Other("Mixed analyze type should have index response.".into())
                 })?,
             )
-            .into_proto();
+            .into();
             box_try!(resp.write_to_bytes())
         };
         Ok(res_data)
@@ -118,7 +118,7 @@ impl<S: Snapshot, F: KvFormat> AnalyzeContext<S, F> {
     async fn handle_full_sampling(builder: &mut RowSampleBuilder<S, F>) -> Result<Vec<u8>> {
         let sample_res = builder.collect_column_stats().await?;
         let res_data = {
-            let res = sample_res.into_proto();
+            let res: tipb::AnalyzeColumnsResp = sample_res.into();
             box_try!(res.write_to_bytes())
         };
         Ok(res_data)
@@ -208,7 +208,7 @@ impl<S: Snapshot, F: KvFormat> AnalyzeContext<S, F> {
             }
         }
 
-        let res = AnalyzeIndexResult::new(hist, cms, Some(fms)).into_proto();
+        let res: tipb::AnalyzeIndexResp = AnalyzeIndexResult::new(hist, cms, Some(fms)).into();
         let dt = box_try!(res.write_to_bytes());
         Ok(dt)
     }
@@ -597,7 +597,7 @@ impl BaseRowSampleCollector {
         proto_collector.set_count(self.count as i64);
         let pb_fm_sketches = mem::take(&mut self.fm_sketches)
             .into_iter()
-            .map(|fm_sketch| fm_sketch.into_proto())
+            .map(|fm_sketch| fm_sketch.into())
             .collect();
         proto_collector.set_fm_sketch(pb_fm_sketches);
         proto_collector.set_total_size(self.total_sizes.clone());
@@ -1068,19 +1068,6 @@ impl SampleCollector {
         }
     }
 
-    fn into_proto(self) -> tipb::SampleCollector {
-        let mut s = tipb::SampleCollector::default();
-        s.set_null_count(self.null_count as i64);
-        s.set_count(self.count as i64);
-        s.set_fm_sketch(self.fm_sketch.into_proto());
-        s.set_samples(self.samples.into());
-        if let Some(c) = self.cm_sketch {
-            s.set_cm_sketch(c.into_proto())
-        }
-        s.set_total_size(self.total_size as i64);
-        s
-    }
-
     pub fn collect(&mut self, data: Vec<u8>) {
         if data[0] == NIL_FLAG {
             self.null_count += 1;
@@ -1105,6 +1092,21 @@ impl SampleCollector {
     }
 }
 
+impl From<SampleCollector> for tipb::SampleCollector {
+    fn from(collector: SampleCollector) -> tipb::SampleCollector {
+        let mut s = tipb::SampleCollector::default();
+        s.set_null_count(collector.null_count as i64);
+        s.set_count(collector.count as i64);
+        s.set_fm_sketch(collector.fm_sketch.into());
+        s.set_samples(collector.samples.into());
+        if let Some(c) = collector.cm_sketch {
+            s.set_cm_sketch(c.into())
+        }
+        s.set_total_size(collector.total_size as i64);
+        s
+    }
+}
+
 struct AnalyzeSamplingResult {
     row_sample_collector: Box<dyn RowSampleCollector>,
 }
@@ -1115,9 +1117,11 @@ impl AnalyzeSamplingResult {
             row_sample_collector,
         }
     }
+}
 
-    fn into_proto(mut self) -> tipb::AnalyzeColumnsResp {
-        let pb_collector = self.row_sample_collector.to_proto();
+impl From<AnalyzeSamplingResult> for tipb::AnalyzeColumnsResp {
+    fn from(mut result: AnalyzeSamplingResult) -> tipb::AnalyzeColumnsResp {
+        let pb_collector = result.row_sample_collector.to_proto();
         let mut res = tipb::AnalyzeColumnsResp::default();
         res.set_row_collector(pb_collector);
         res
@@ -1144,13 +1148,15 @@ impl AnalyzeColumnsResult {
             pk_hist,
         }
     }
+}
 
-    fn into_proto(self) -> tipb::AnalyzeColumnsResp {
-        let hist = self.pk_hist.into_proto();
-        let cols: Vec<tipb::SampleCollector> = self
+impl From<AnalyzeColumnsResult> for tipb::AnalyzeColumnsResp {
+    fn from(result: AnalyzeColumnsResult) -> tipb::AnalyzeColumnsResp {
+        let hist = result.pk_hist.into();
+        let cols: Vec<tipb::SampleCollector> = result
             .sample_collectors
             .into_iter()
-            .map(|col| col.into_proto())
+            .map(|col| col.into())
             .collect();
         let mut res = tipb::AnalyzeColumnsResp::default();
         res.set_collectors(cols.into());
@@ -1171,16 +1177,18 @@ impl AnalyzeIndexResult {
     fn new(hist: Histogram, cms: Option<CmSketch>, fms: Option<FmSketch>) -> AnalyzeIndexResult {
         AnalyzeIndexResult { hist, cms, fms }
     }
+}
 
-    fn into_proto(self) -> tipb::AnalyzeIndexResp {
+impl From<AnalyzeIndexResult> for tipb::AnalyzeIndexResp {
+    fn from(result: AnalyzeIndexResult) -> tipb::AnalyzeIndexResp {
         let mut res = tipb::AnalyzeIndexResp::default();
-        res.set_hist(self.hist.into_proto());
-        if let Some(c) = self.cms {
-            res.set_cms(c.into_proto());
+        res.set_hist(result.hist.into());
+        if let Some(c) = result.cms {
+            res.set_cms(c.into());
         }
-        if let Some(f) = self.fms {
+        if let Some(f) = result.fms {
             let mut s = tipb::SampleCollector::default();
-            s.set_fm_sketch(f.into_proto());
+            s.set_fm_sketch(f.into());
             res.set_collector(s);
         }
         res
@@ -1198,11 +1206,13 @@ impl AnalyzeMixedResult {
     fn new(col_res: AnalyzeColumnsResult, idx_res: AnalyzeIndexResult) -> AnalyzeMixedResult {
         AnalyzeMixedResult { col_res, idx_res }
     }
+}
 
-    fn into_proto(self) -> tipb::AnalyzeMixedResp {
+impl From<AnalyzeMixedResult> for tipb::AnalyzeMixedResp {
+    fn from(result: AnalyzeMixedResult) -> tipb::AnalyzeMixedResp {
         let mut res = tipb::AnalyzeMixedResp::default();
-        res.set_index_resp(self.idx_res.into_proto());
-        res.set_columns_resp(self.col_res.into_proto());
+        res.set_index_resp(result.idx_res.into());
+        res.set_columns_resp(result.col_res.into());
         res
     }
 }

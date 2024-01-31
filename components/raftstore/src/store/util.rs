@@ -1094,13 +1094,7 @@ pub fn check_conf_change(
         return Err(box_err!("multiple changes that only effect learner"));
     }
 
-    check_remove_or_demote_voter(
-        region.get_id(),
-        cfg,
-        change_peers,
-        leader.get_id(),
-        peer_heartbeat,
-    )?;
+    check_remove_or_demote_voter(region, cfg, change_peers, leader.get_id(), peer_heartbeat)?;
     if !ignore_safety {
         let promoted_commit_index = after_progress.maximal_committed_index().0;
         let first_index = node.raft.raft_log.first_index();
@@ -1130,7 +1124,7 @@ pub fn check_conf_change(
 }
 
 fn check_remove_or_demote_voter(
-    region_id: u64,
+    region: &metapb::Region,
     cfg: &Config,
     change_peers: &[ChangePeerRequest],
     leader_id: u64,
@@ -1139,16 +1133,24 @@ fn check_remove_or_demote_voter(
     let mut slow_peer_count = 0;
     let mut normal_peer_count = 0;
     // Here we assume if the last beartbeat is within 2 election timeout, the peer
-    // is healthy. This is to be tolerant to some slightly slow peers when
-    // the leader is in hibernate mode.
+    // is healthy. When a region is hibernate, we expect all its peers are *slow*
+    // and it would still allow the operation
     let slow_peer_threshold =
         2 * cfg.raft_base_tick_interval.0 * cfg.raft_max_election_timeout_ticks as u32;
     for (id, last_heartbeat) in peer_heartbeat {
-        // leader itself is not a slow peer
-        if *id == leader_id || last_heartbeat.elapsed() <= slow_peer_threshold {
-            normal_peer_count += 1;
-        } else {
-            slow_peer_count += 1;
+        // for slow and normal peer calculation, we only count voter role
+        if region
+            .get_peers()
+            .iter()
+            .find(|p| p.get_id() == *id)
+            .map_or(false, |p| p.role == PeerRole::Voter)
+        {
+            // leader itself is not a slow peer
+            if *id == leader_id || last_heartbeat.elapsed() <= slow_peer_threshold {
+                normal_peer_count += 1;
+            } else {
+                slow_peer_count += 1;
+            }
         }
     }
 
@@ -1158,10 +1160,16 @@ fn check_remove_or_demote_voter(
         if change_type == ConfChangeType::RemoveNode
             || change_type == ConfChangeType::AddLearnerNode
         {
+            let is_voter = region
+                .get_peers()
+                .iter()
+                .find(|p| p.get_id() == peer.get_id())
+                .map_or(false, |p| p.role == PeerRole::Voter);
+
             // If the change_type is AddLearnerNode and the last heartbeat is found, it
             // means it's a demote from voter as AddLearnerNode on existing learner node is
             // not allowed.
-            if let Some(last_heartbeat) = peer_heartbeat.get(&peer.get_id()) {
+            if is_voter && let Some(last_heartbeat) = peer_heartbeat.get(&peer.get_id()) {
                 // peer itself is *not* slow peer, but current slow peer is >= total peers/2
                 if last_heartbeat.elapsed() <= slow_peer_threshold {
                     normal_peer_count -= 1;
@@ -1182,7 +1190,7 @@ fn check_remove_or_demote_voter(
     {
         return Err(box_err!(
             "Ignore conf change command on region {} because RemoveNode or Demote a voter on peers {:?} may lead to unavailability. There're {} slow peers and {} normal peers",
-            region_id,
+            region.get_id(),
             &normal_peers_to_remove,
             slow_peer_count,
             normal_peer_count
@@ -2603,6 +2611,13 @@ mod tests {
             },
         ];
 
+        let mut region = Region::default();
+        for i in 1..4 {
+            region.mut_peers().push(metapb::Peer {
+                id: i,
+                ..Default::default()
+            });
+        }
         for i in 0..change_peers.len() {
             // Call the function under test and assert that the function returns failed
             let mut cp = vec![change_peers[i].clone()];
@@ -2620,7 +2635,7 @@ mod tests {
                 std::time::Instant::now() - std::time::Duration::from_secs(1),
             );
             // Call the function under test and assert that the function returns Ok
-            check_remove_or_demote_voter(1, &cfg, &cp, 1, &peer_heartbeat).unwrap();
+            check_remove_or_demote_voter(&region, &cfg, &cp, 1, &peer_heartbeat).unwrap();
 
             // now make one peer slow
             if let Some(peer_heartbeat) = peer_heartbeat.get_mut(&3) {
@@ -2628,7 +2643,7 @@ mod tests {
             }
 
             // Call the function under test
-            let result = check_remove_or_demote_voter(1, &cfg, &cp, 1, &peer_heartbeat);
+            let result = check_remove_or_demote_voter(&region, &cfg, &cp, 1, &peer_heartbeat);
             // Assert that the function returns failed
             assert!(result.is_err());
 
@@ -2639,7 +2654,19 @@ mod tests {
             })
             .into();
             // Call the function under test
-            check_remove_or_demote_voter(1, &cfg, &cp, 1, &peer_heartbeat).unwrap();
+            check_remove_or_demote_voter(&region, &cfg, &cp, 1, &peer_heartbeat).unwrap();
+
+            // make peer to learner and remove the peer 2
+            region.mut_peers()[1].set_role(metapb::PeerRole::Learner);
+            cp[0].peer = Some(metapb::Peer {
+                id: 2,
+                ..Default::default()
+            })
+            .into();
+            // Call the function under test
+            check_remove_or_demote_voter(&region, &cfg, &cp, 1, &peer_heartbeat).unwrap();
+            // set peer 2 voter again
+            region.mut_peers()[1].set_role(metapb::PeerRole::Voter);
 
             // there's no remove node, it's fine with slow peers.
             cp[0] = ChangePeerRequest {
@@ -2652,7 +2679,7 @@ mod tests {
                 ..Default::default()
             };
             // Call the function under test
-            check_remove_or_demote_voter(1, &cfg, &cp, 1, &peer_heartbeat).unwrap();
+            check_remove_or_demote_voter(&region, &cfg, &cp, 1, &peer_heartbeat).unwrap();
         }
     }
 }
