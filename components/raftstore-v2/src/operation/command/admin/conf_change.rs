@@ -104,12 +104,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             self.peer(),
             changes.as_ref(),
             &cc,
-<<<<<<< HEAD
             false,
-=======
-            self.is_in_force_leader(),
             self.get_peer_heartbeats(),
->>>>>>> cf0560a5e2 (raftstore: check last heartbeat time before doing conf change remove node (#16174))
         )?;
 
         // TODO: check if the new peer is already in history record.

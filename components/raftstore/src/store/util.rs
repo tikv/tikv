@@ -2499,27 +2499,6 @@ mod tests {
             *region.get_peers(),
         );
     }
-<<<<<<< HEAD
-=======
-
-    #[test]
-    fn test_peer_id_mismatch() {
-        use kvproto::errorpb::{Error, MismatchPeerId};
-        let mut header = RaftRequestHeader::default();
-        let mut peer = Peer::default();
-        peer.set_id(1);
-        header.set_peer(peer);
-        // match
-        check_peer_id(&header, 1).unwrap();
-        // mismatch
-        let err = check_peer_id(&header, 2).unwrap_err();
-        let region_err: Error = err.into();
-        assert!(region_err.has_mismatch_peer_id());
-        let mut mismatch_err = MismatchPeerId::default();
-        mismatch_err.set_request_peer_id(1);
-        mismatch_err.set_store_peer_id(2);
-        assert_eq!(region_err.get_mismatch_peer_id(), &mismatch_err)
-    }
 
     #[test]
     fn test_check_conf_change_upon_slow_peers() {
@@ -2600,5 +2579,4 @@ mod tests {
             check_remove_or_demote_voter(1, &cfg, &cp, 1, &peer_heartbeat).unwrap();
         }
     }
->>>>>>> cf0560a5e2 (raftstore: check last heartbeat time before doing conf change remove node (#16174))
 }
