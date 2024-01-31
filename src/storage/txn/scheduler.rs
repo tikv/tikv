@@ -530,6 +530,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         callback: SchedulerTaskCallback,
         prepared_latches: Option<Lock>,
     ) {
+        let now = Instant::now();
         let cid = task.cid();
         let tracker = task.tracker();
         let cmd = task.cmd();
@@ -548,7 +549,9 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             self.inner
                 .new_task_context(task, callback, prepared_latches)
         });
-
+        GLOBAL_TRACKERS.with_tracker(tracker, |tracker| {
+            tracker.metrics.grpc_process_nanos = now.saturating_elapsed().as_nanos() as u64;
+        });
         if self.inner.latches.acquire(&mut tctx.lock, cid) {
             fail_point!("txn_scheduler_acquire_success");
             tctx.on_schedule();
