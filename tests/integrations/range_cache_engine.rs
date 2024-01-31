@@ -28,7 +28,7 @@ fn test_basic_put_get() {
     };
     let (tx, rx) = sync_channel(1);
     fail::cfg_callback("on_range_cache_get_value", move || {
-        let _ = tx.send(true).unwrap();
+        tx.send(true).unwrap();
     })
     .unwrap();
 
