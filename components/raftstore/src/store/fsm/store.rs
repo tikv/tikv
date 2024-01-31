@@ -2774,36 +2774,40 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
             .stat
             .is_busy
             .swap(false, Ordering::Relaxed);
-        let mut busy_on_apply = false;
-        let during_starting_stage = {
-            (time::get_time().sec as u32).saturating_sub(start_time)
-                <= STORE_CHECK_PENDING_APPLY_DURATION.as_secs() as u32
-        };
-        // If the store is busy in handling applying logs when starting, it should not
-        // be treated as a normal store for balance. Only when the store is
-        // almost idle (no more pending regions on applying logs), it can be
-        // regarded as the candidate for balancing leaders.
-        if during_starting_stage {
-            let region_count = stats.get_region_count() as u64;
-            let completed_target_count = (|| {
-                fail_point!("on_mock_store_completed_target_count", |_| 0);
-                std::cmp::max(
-                    1,
-                    STORE_CHECK_COMPLETE_APPLY_REGIONS_PERCENT * region_count / 100,
-                )
-            })();
-            // If the number of regions on completing applying logs does not occupy the
-            // majority of regions, the store is regarded as busy.
-            if completed_apply_peers_count < completed_target_count {
-                busy_on_apply = true;
+        let busy_on_apply = {
+            let during_starting_stage = {
+                (time::get_time().sec as u32).saturating_sub(start_time)
+                    <= STORE_CHECK_PENDING_APPLY_DURATION.as_secs() as u32
+            };
+            // If the store is busy in handling applying logs when starting, it should not
+            // be treated as a normal store for balance. Only when the store is
+            // almost idle (no more pending regions on applying logs), it can be
+            // regarded as the candidate for balancing leaders.
+            if during_starting_stage {
+                let region_count = stats.get_region_count() as u64;
+                let completed_target_count = (|| {
+                    fail_point!("on_mock_store_completed_target_count", |_| 0);
+                    std::cmp::max(
+                        1,
+                        STORE_CHECK_COMPLETE_APPLY_REGIONS_PERCENT * region_count / 100,
+                    )
+                })();
+                // If the number of regions on completing applying logs does not occupy the
+                // majority of regions, the store is regarded as busy.
+                if completed_apply_peers_count < completed_target_count {
+                    true
+                } else {
+                    let pending_target_count = std::cmp::min(
+                        self.ctx.cfg.min_pending_apply_region_count,
+                        region_count.saturating_sub(completed_target_count),
+                    );
+                    pending_apply_peers_count >= pending_target_count
+                }
             } else {
-                let pending_target_count = std::cmp::min(
-                    self.ctx.cfg.min_pending_apply_region_count,
-                    region_count.saturating_sub(completed_target_count),
-                );
-                busy_on_apply = pending_apply_peers_count >= pending_target_count;
+                // Already started for a fairy long time.
+                false
             }
-        }
+        };
         stats.set_is_busy(store_is_busy || busy_on_apply);
 
         let mut query_stats = QueryStats::default();
