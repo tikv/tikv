@@ -623,6 +623,10 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
 
         let quota_limiter = self.quota_limiter.clone();
         let mut sample = quota_limiter.new_sample(true);
+        with_tls_tracker(|tracker| {
+            tracker.metrics.grpc_process_nanos =
+                stage_begin_ts.saturating_elapsed().as_nanos() as u64;
+        });
 
         self.read_pool_spawn_with_busy_check(
             busy_threshold,
@@ -1010,6 +1014,10 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         let busy_threshold = Duration::from_millis(ctx.busy_threshold_ms as u64);
         let quota_limiter = self.quota_limiter.clone();
         let mut sample = quota_limiter.new_sample(true);
+        with_tls_tracker(|tracker| {
+            tracker.metrics.grpc_process_nanos =
+                stage_begin_ts.saturating_elapsed().as_nanos() as u64;
+        });
         self.read_pool_spawn_with_busy_check(
             busy_threshold,
             async move {
