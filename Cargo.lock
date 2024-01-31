@@ -4532,6 +4532,7 @@ dependencies = [
  "crossbeam",
  "engine_rocks",
  "engine_traits",
+ "fail",
  "log_wrappers",
  "skiplist-rs",
  "slog",
