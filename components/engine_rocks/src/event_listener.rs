@@ -1,6 +1,6 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine_traits::{Iterator, IterOptions, PersistenceListener, RefIterable};
+use engine_traits::{IterOptions, Iterator, PersistenceListener, RefIterable};
 use file_system::{get_io_type, set_io_type, IoType};
 use regex::Regex;
 use rocksdb::{
