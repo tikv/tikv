@@ -4529,6 +4529,7 @@ version = "0.0.1"
 dependencies = [
  "bytes",
  "collections",
+ "crossbeam",
  "engine_rocks",
  "engine_traits",
  "log_wrappers",
