@@ -13,8 +13,9 @@ use std::{
 
 use file_system::{IoType, WithIoType};
 use futures::{
-    compat::{Compat01As03, Future01CompatExt},
-    future::{Future, TryFutureExt},
+    compat::Future01CompatExt,
+    future::{select, Either, Future, TryFutureExt},
+    pin_mut,
     sink::SinkExt,
     stream::{Stream, StreamExt, TryStreamExt},
     task::{Context, Poll},
@@ -32,21 +33,19 @@ use kvproto::{
     },
     tikvpb::TikvClient,
 };
-use pin_project::pin_project;
 use protobuf::Message;
 use raftstore::store::{SnapEntry, SnapKey, SnapManager, Snapshot};
 use security::SecurityManager;
 use tikv_kv::RaftExtension;
 use tikv_util::{
     box_err,
-    config::{Tracker, VersionTrack},
+    config::{Tracker, VersionTrack, MIB},
     time::{Instant, UnixSecs},
     timer::GLOBAL_TIMER_HANDLE,
     worker::Runnable,
     DeferContext,
 };
 use tokio::runtime::{Builder as RuntimeBuilder, Runtime};
-use tokio_timer::Delay;
 
 use super::{metrics::*, Config, Error, Result};
 use crate::{server::tablet_snap::NoSnapshotCache, tikv_util::sys::thread::ThreadBuildWrapper};
@@ -57,14 +56,21 @@ pub const DEFAULT_POOL_SIZE: usize = 4;
 
 // the max duration before a snapshot send task is canceled.
 const SNAP_SEND_TIMEOUT_DURATION: Duration = Duration::from_secs(600);
+// the minimum send speed for a big snapshot.
+const MIN_SNAP_SEND_SPEED: u64 = 1 * MIB;
 
+///
 #[inline]
-fn get_snap_timeout() -> Duration {
-    fail_point!("snap_send_duration_timeout", |t| -> Duration {
-        let t = t.unwrap().parse::<u64>();
-        Duration::from_millis(t.unwrap())
-    });
-    SNAP_SEND_TIMEOUT_DURATION
+fn get_snap_timeout(size: u64) -> Duration {
+    let timeout = (|| {
+        fail_point!("snap_send_duration_timeout", |t| -> Duration {
+            let t = t.unwrap().parse::<u64>();
+            Duration::from_millis(t.unwrap())
+        });
+        SNAP_SEND_TIMEOUT_DURATION
+    })();
+    let max_expected_dur = Duration::from_secs(size / MIN_SNAP_SEND_SPEED);
+    std::cmp::max(timeout, max_expected_dur)
 }
 
 /// A task for either receiving Snapshot or sending Snapshot
@@ -228,10 +234,16 @@ pub fn send_snap(
             sink.close().await?;
             Ok(receiver.map_err(Error::from).await)
         };
-        let sink_timeout = TimeoutFuture::new(send_and_recv, get_snap_timeout(), || {
-            Err(Error::Other(box_err!("send snapshot timeout")))
-        });
-        let recv_result = sink_timeout.await?;
+        let wait_timeout = GLOBAL_TIMER_HANDLE
+            .delay(StdInstant::now() + get_snap_timeout(total_size))
+            .compat();
+        let recv_result = {
+            pin_mut!(send_and_recv, wait_timeout);
+            match select(send_and_recv, wait_timeout).await {
+                Either::Left((r, _)) => r,
+                Either::Right((..)) => Err(Error::Other(box_err!("send snapshot timeout"))),
+            }
+        };
         send_timer.observe_duration();
         drop(deregister);
         drop(client);
@@ -596,43 +608,5 @@ impl<R: RaftExtension + 'static> Runnable for Runner<R> {
                 f(&self.cfg);
             }
         }
-    }
-}
-
-#[pin_project]
-struct TimeoutFuture<F, T> {
-    #[pin]
-    f: F,
-    #[pin]
-    timer: Compat01As03<Delay>,
-    on_timeout: T,
-}
-
-impl<F, T> TimeoutFuture<F, T> {
-    fn new(f: F, timeout: Duration, on_timeout: T) -> Self {
-        let timer = GLOBAL_TIMER_HANDLE
-            .delay(StdInstant::now() + timeout)
-            .compat();
-        Self {
-            f,
-            timer,
-            on_timeout,
-        }
-    }
-}
-
-impl<F: Future, T: FnMut() -> F::Output> Future for TimeoutFuture<F, T> {
-    type Output = F::Output;
-
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let this = self.project();
-        let r = this.f.poll(cx);
-        if r.is_ready() {
-            return r;
-        }
-        if this.timer.poll(cx).is_ready() {
-            return Poll::Ready((this.on_timeout)());
-        }
-        Poll::Pending
     }
 }
