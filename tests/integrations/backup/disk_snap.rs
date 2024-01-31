@@ -108,6 +108,18 @@ fn test_prepare_merge() {
 }
 
 #[test]
+fn test_abort_last_one() {
+    let suite = Suite::new(1);
+    let mut call = suite.prepare_backup(1);
+    call.prepare(10);
+    let mut call2 = suite.prepare_backup(1);
+    call2.prepare(10);
+    let should_err = call.try_next();
+    assert!(should_err.is_err(), "{:?}", should_err);
+    assert!(call2.send_finalize());
+}
+
+#[test]
 fn test_wait_apply() {
     let mut suite = Suite::new(3);
     for key in 'a'..'k' {
