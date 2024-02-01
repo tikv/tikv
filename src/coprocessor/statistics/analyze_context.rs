@@ -28,8 +28,21 @@ use crate::{
     storage::{Snapshot, SnapshotStore, Statistics},
 };
 
-pub(crate) const ANALYZE_VERSION_V1: i32 = 1;
-pub(crate) const ANALYZE_VERSION_V2: i32 = 2;
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AnalyzeVersion {
+    V1,
+    V2,
+}
+
+impl From<i32> for AnalyzeVersion {
+    fn from(v: i32) -> Self {
+        match v {
+            1 => AnalyzeVersion::V1,
+            2 => AnalyzeVersion::V2,
+            _ => panic!("Unknown analyze version: {}", v),
+        }
+    }
+}
 
 /// Used to handle analyze request.
 pub struct AnalyzeContext<S: Snapshot, F: KvFormat> {
@@ -134,9 +147,9 @@ impl<S: Snapshot, F: KvFormat> AnalyzeContext<S, F> {
         let mut cur_val: (u32, Vec<u8>) = (0, vec![]);
         let top_n_size = req.get_top_n_size() as usize;
         let stats_version = if req.has_version() {
-            req.get_version()
+            req.get_version().into()
         } else {
-            ANALYZE_VERSION_V1
+            AnalyzeVersion::V1
         };
         while let Some(row) = scanner.next().await? {
             let mut key = row.key();
@@ -165,7 +178,7 @@ impl<S: Snapshot, F: KvFormat> AnalyzeContext<S, F> {
                 }
             }
             fms.insert(&data);
-            if stats_version == ANALYZE_VERSION_V2 {
+            if stats_version == AnalyzeVersion::V2 {
                 hist.append(&data, true);
                 if cur_val.1 == data {
                     cur_val.0 += 1;
@@ -183,7 +196,7 @@ impl<S: Snapshot, F: KvFormat> AnalyzeContext<S, F> {
             }
         }
 
-        if stats_version == ANALYZE_VERSION_V2 {
+        if stats_version == AnalyzeVersion::V2 {
             if cur_val.0 > 0 {
                 topn_heap.push(Reverse(cur_val));
                 if topn_heap.len() > top_n_size {

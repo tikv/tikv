@@ -27,9 +27,7 @@ use tipb::{self, AnalyzeColumnsReq};
 use super::{cmsketch::CmSketch, fmsketch::FmSketch, histogram::Histogram};
 use crate::{
     coprocessor::{
-        dag::TikvStorage,
-        statistics::analyze_context::{ANALYZE_VERSION_V1, ANALYZE_VERSION_V2},
-        MEMTRACE_ANALYZE, *,
+        dag::TikvStorage, statistics::analyze_context::AnalyzeVersion, MEMTRACE_ANALYZE, *,
     },
     storage::{Snapshot, SnapshotStore},
 };
@@ -537,7 +535,7 @@ pub(crate) struct SampleBuilder<S: Snapshot, F: KvFormat> {
     max_fm_sketch_size: usize,
     cm_sketch_depth: usize,
     cm_sketch_width: usize,
-    stats_version: i32,
+    stats_version: AnalyzeVersion,
     top_n_size: usize,
     columns_info: Vec<tipb::ColumnInfo>,
     analyze_common_handle: bool,
@@ -577,10 +575,10 @@ impl<S: Snapshot, F: KvFormat> SampleBuilder<S, F> {
             cm_sketch_depth: req.get_cmsketch_depth() as usize,
             cm_sketch_width: req.get_cmsketch_width() as usize,
             stats_version: common_handle_req.as_ref().map_or_else(
-                || ANALYZE_VERSION_V1,
+                || AnalyzeVersion::V1,
                 |req| match req.has_version() {
-                    true => req.get_version(),
-                    _ => ANALYZE_VERSION_V1,
+                    true => req.get_version().into(),
+                    _ => AnalyzeVersion::V1,
                 },
             ),
             top_n_size: common_handle_req
@@ -660,7 +658,7 @@ impl<S: Snapshot, F: KvFormat> SampleBuilder<S, F> {
                         }
                     }
                     common_handle_fms.insert(&data);
-                    if self.stats_version == ANALYZE_VERSION_V2 {
+                    if self.stats_version == AnalyzeVersion::V2.into() {
                         common_handle_hist.append(&data, true);
                         if cur_val.1 == data {
                             cur_val.0 += 1;
@@ -677,7 +675,7 @@ impl<S: Snapshot, F: KvFormat> SampleBuilder<S, F> {
                         common_handle_hist.append(&data, false)
                     }
                 }
-                if self.stats_version == ANALYZE_VERSION_V2 {
+                if self.stats_version == AnalyzeVersion::V2 {
                     if cur_val.0 > 0 {
                         topn_heap.push(Reverse(cur_val));
                         if topn_heap.len() > self.top_n_size {
