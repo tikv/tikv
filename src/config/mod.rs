@@ -2910,6 +2910,9 @@ impl BackupStreamConfig {
         if self.initial_scan_concurrency == 0 {
             return Err("the `initial_scan_concurrency` shouldn't be zero".into());
         }
+        if self.initial_scan_rate_limit.0 < 1024 {
+            return Err("the `initial_scan_rate_limit` should be at least 1024 bytes".into());
+        }
         Ok(())
     }
 }
