@@ -4847,7 +4847,6 @@ where
             changes.as_ref(),
             &cc,
             self.is_force_leader(),
-            &self.peer_heartbeats,
         )?;
 
         ctx.raft_metrics.propose.conf_change.inc();
