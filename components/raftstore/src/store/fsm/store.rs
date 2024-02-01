@@ -188,11 +188,12 @@ pub struct StoreMeta {
     pub region_read_progress: RegionReadProgressRegistry,
     /// record sst_file_name -> (sst_smallest_key, sst_largest_key)
     pub damaged_ranges: HashMap<String, (Vec<u8>, Vec<u8>)>,
-    /// Record peers pending in applying logs.
-    /// `pending_apply_peers` and `completed_apply_peers_count` are used
-    /// to record the accurate count of pending peers and ready peers on
-    /// applying logs.
-    pub pending_apply_peers: HashSet<u64>,
+    /// Record peers are busy with applying logs
+    /// (applied_index <= last_idx - leader_transfer_max_log_lag).
+    /// `busy_apply_peers` and `completed_apply_peers_count` are used
+    /// to record the accurate count of busy apply peers and peers complete
+    /// applying logs
+    pub busy_apply_peers: HashSet<u64>,
     /// Record the number of peers done for applying logs.
     /// Without `completed_apply_peers_count`, it's hard to know whether all
     /// peers are ready for applying logs.
@@ -247,7 +248,7 @@ impl StoreMeta {
             destroyed_region_for_snap: HashMap::default(),
             region_read_progress: RegionReadProgressRegistry::new(),
             damaged_ranges: HashMap::default(),
-            pending_apply_peers: HashSet::default(),
+            busy_apply_peers: HashSet::default(),
             completed_apply_peers_count: 0,
         }
     }
@@ -2723,7 +2724,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         &self,
         start_ts_sec: u32,
         region_count: u64,
-        pending_apply_peers_count: u64,
+        busy_apply_peers_count: u64,
         completed_apply_peers_count: u64,
     ) -> bool {
         let during_starting_stage = {
@@ -2751,7 +2752,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
                     self.ctx.cfg.min_pending_apply_region_count,
                     region_count.saturating_sub(completed_target_count),
                 );
-                pending_apply_peers_count >= pending_target_count
+                busy_apply_peers_count >= pending_target_count
             }
         } else {
             // Already started for a fairy long time.
@@ -2765,7 +2766,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         stats.set_store_id(self.ctx.store_id());
 
         let completed_apply_peers_count: u64;
-        let pending_apply_peers_count: u64;
+        let busy_apply_peers_count: u64;
         {
             let meta = self.ctx.store_meta.lock().unwrap();
             stats.set_region_count(meta.regions.len() as u32);
@@ -2775,7 +2776,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
                 stats.set_damaged_regions_id(damaged_regions_id);
             }
             completed_apply_peers_count = meta.completed_apply_peers_count;
-            pending_apply_peers_count = meta.pending_apply_peers.len() as u64;
+            busy_apply_peers_count = meta.busy_apply_peers.len() as u64;
         }
 
         let snap_stats = self.ctx.snap_mgr.stats();
@@ -2818,7 +2819,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         let busy_on_apply = self.check_store_is_busy_on_apply(
             start_time,
             stats.get_region_count() as u64,
-            pending_apply_peers_count,
+            busy_apply_peers_count,
             completed_apply_peers_count,
         );
         stats.set_is_busy(store_is_busy || busy_on_apply);

@@ -892,10 +892,12 @@ where
     pub snapshot_recovery_state: Option<SnapshotBrState>,
 
     last_record_safe_point: u64,
-    /// Used for checking whether the peer is pending on apply.
-    /// If None, the peer has no pending logs for apply or already
-    /// finishes applying.
-    pub pending_on_apply: Option<bool>,
+    /// Used for checking whether the peer is busy on apply.
+    /// * `None` => the peer has no pending logs for apply or already finishes
+    ///   applying.
+    /// * `Some(false)` => initial state, not be recorded.
+    /// * `Some(true)` => busy on apply, and already recorded.
+    pub busy_on_apply: Option<bool>,
 }
 
 impl<EK, ER> Peer<EK, ER>
@@ -1040,7 +1042,7 @@ where
             lead_transferee: raft::INVALID_ID,
             unsafe_recovery_state: None,
             snapshot_recovery_state: None,
-            pending_on_apply: Some(false),
+            busy_on_apply: Some(false),
         };
 
         // If this region has only one peer and I am the one, campaign directly.
