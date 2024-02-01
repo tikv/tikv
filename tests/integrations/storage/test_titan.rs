@@ -30,7 +30,6 @@ use tikv_util::{
 use txn_types::{Key, Write, WriteType};
 
 #[test]
-#[ignore]
 fn test_turnoff_titan() {
     let mut cluster = new_node_cluster(0, 3);
     cluster.cfg.rocksdb.defaultcf.disable_auto_compactions = true;
@@ -159,7 +158,7 @@ fn test_delete_files_in_range_for_titan() {
     cfg.rocksdb.defaultcf.dynamic_level_bytes = false;
     cfg.rocksdb.defaultcf.titan.min_gc_batch_size = ReadableSize(0);
     cfg.rocksdb.defaultcf.titan.discardable_ratio = 0.4;
-    cfg.rocksdb.defaultcf.titan.min_blob_size = ReadableSize(0);
+    cfg.rocksdb.defaultcf.titan.min_blob_size = Some(ReadableSize(0));
     let resource = cfg
         .rocksdb
         .build_resources(Default::default(), cfg.storage.engine);

@@ -3,7 +3,10 @@
 use std::cmp;
 
 use bytes::{BufMut, Bytes, BytesMut};
+use engine_traits::CacheRange;
 use skiplist_rs::KeyComparator;
+use tikv_util::codec::number::NumberEncoder;
+use txn_types::{Key, TimeStamp};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ValueType {
@@ -28,12 +31,13 @@ impl TryFrom<u8> for ValueType {
 }
 
 pub struct InternalKey<'a> {
+    // key with mvcc version
     pub user_key: &'a [u8],
     pub v_type: ValueType,
     pub sequence: u64,
 }
 
-const ENC_KEY_SEQ_LENGTH: usize = std::mem::size_of::<u64>();
+pub const ENC_KEY_SEQ_LENGTH: usize = std::mem::size_of::<u64>();
 
 impl<'a> From<&'a [u8]> for InternalKey<'a> {
     fn from(encoded_key: &'a [u8]) -> Self {
@@ -104,6 +108,36 @@ pub fn encode_key(key: &[u8], seq: u64, v_type: ValueType) -> Bytes {
 #[inline]
 pub fn encode_seek_key(key: &[u8], seq: u64, v_type: ValueType) -> Vec<u8> {
     encode_key_internal::<Vec<_>>(key, seq, v_type, Vec::with_capacity)
+}
+
+// range keys deos not contain mvcc version and sequence number
+#[inline]
+pub fn encode_key_for_eviction(range: &CacheRange) -> (Vec<u8>, Vec<u8>) {
+    // Both encoded_start and encoded_end should be the smallest key in the
+    // respective of user key, so that the eviction covers all versions of the range
+    // start and covers nothing of range end.
+    let mut encoded_start = Vec::with_capacity(range.start.len() + 16);
+    encoded_start.extend_from_slice(&range.start);
+    encoded_start.encode_u64_desc(u64::MAX).unwrap();
+    encoded_start.put_u64((u64::MAX << 8) | VALUE_TYPE_FOR_SEEK as u64);
+
+    let mut encoded_end = Vec::with_capacity(range.end.len() + 16);
+    encoded_end.extend_from_slice(&range.end);
+    encoded_end.encode_u64_desc(u64::MAX).unwrap();
+    encoded_end.put_u64((u64::MAX << 8) | VALUE_TYPE_FOR_SEEK as u64);
+
+    (encoded_start, encoded_end)
+}
+
+#[inline]
+pub fn encoding_for_filter(mvcc_prefix: &[u8], start_ts: TimeStamp) -> Vec<u8> {
+    let mut default_key = Vec::with_capacity(mvcc_prefix.len() + 2 * ENC_KEY_SEQ_LENGTH);
+    default_key.extend_from_slice(mvcc_prefix);
+    let mut default_key = Key::from_encoded(default_key)
+        .append_ts(start_ts)
+        .into_encoded();
+    default_key.put_u64((u64::MAX << 8) | VALUE_TYPE_FOR_SEEK as u64);
+    default_key
 }
 
 #[derive(Default, Debug, Clone, Copy)]

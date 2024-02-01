@@ -14,6 +14,8 @@ pub use encryption::{
     KmsConfig, MasterKeyConfig, Result,
 };
 use encryption::{cloud_convert_error, FileBackend, PlaintextBackend};
+#[cfg(feature = "cloud-gcp")]
+use gcp::{GcpKms, STORAGE_VENDOR_NAME_GCP};
 use tikv_util::{box_err, error, info};
 
 pub fn data_key_manager_from_config(
@@ -68,7 +70,16 @@ pub fn create_cloud_backend(config: &KmsConfig) -> Result<Box<dyn Backend>> {
             let keyvault_provider = Box::new(
                 AzureKms::new(conf).map_err(cloud_convert_error("new Azure KMS".to_owned()))?,
             );
-            Ok(Box::new(KmsBackend::new(keyvault_provider)?) as Box<dyn Backend>)
+            Ok(Box::new(KmsBackend::new(keyvault_provider)?))
+        }
+        #[cfg(feature = "cloud-gcp")]
+        STORAGE_VENDOR_NAME_GCP => {
+            let (mk, gcp_cfg) = config.clone().convert_to_gcp_config();
+            let conf = CloudConfig::from_gcp_kms_config(mk, gcp_cfg)
+                .map_err(cloud_convert_error("gcp from proto".to_owned()))?;
+            let kms_provider =
+                GcpKms::new(conf).map_err(cloud_convert_error("new GCP KMS".to_owned()))?;
+            Ok(Box::new(KmsBackend::new(Box::new(kms_provider))?))
         }
         provider => Err(Error::Other(box_err!("provider not found {}", provider))),
     }
@@ -105,6 +116,7 @@ mod tests {
                 client_secret: Some("client_secret".to_owned()),
                 ..AzureConfig::default()
             }),
+            gcp: None,
         };
         let invalid_config = KmsConfig {
             azure: None,

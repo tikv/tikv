@@ -137,7 +137,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         };
         let logger = self.logger.clone();
         let read_scheduler = self.storage().read_scheduler();
-        let buckets = self.region_buckets_info().bucket_stat().clone();
+        let buckets = self.region_buckets_info().bucket_stat().cloned();
         let sst_apply_state = self.sst_apply_state().clone();
         let (apply_scheduler, mut apply_fsm) = ApplyFsm::new(
             &store_ctx.cfg,
@@ -853,7 +853,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
             let mut write_opt = WriteOptions::default();
             write_opt.set_disable_wal(true);
             let wb = self.write_batch.as_mut().unwrap();
-            if let Err(e) = wb.write_callback_opt(&write_opt, || {
+            if let Err(e) = wb.write_callback_opt(&write_opt, |_| {
                 flush_state.set_applied_index(index);
             }) {
                 slog_panic!(self.logger, "failed to write data"; "error" => ?e);

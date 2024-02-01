@@ -43,7 +43,7 @@ use tikv_util::{
     warn,
     worker::Runnable,
 };
-use tokio::runtime::Runtime;
+use tokio::runtime::{Handle, Runtime};
 use txn_types::{Key, Lock, TimeStamp};
 
 use crate::{
@@ -1154,6 +1154,13 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
             ));
         }
     }
+
+    /// Get the internal handle of the io thread pool used by the backup
+    /// endpoint. This is mainly shared for disk snapshot backup (so they
+    /// don't need to spawn on the gRPC pool.)
+    pub fn io_pool_handle(&self) -> &Handle {
+        self.io_pool.handle()
+    }
 }
 
 impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Runnable for Endpoint<E, R> {
@@ -1576,7 +1583,7 @@ pub mod tests {
             };
 
         // Test whether responses contain correct range.
-        #[allow(clippy::blocks_in_if_conditions)]
+        #[allow(clippy::blocks_in_conditions)]
         let test_handle_backup_task_range =
             |start_key: &[u8], end_key: &[u8], expect: Vec<(&[u8], &[u8])>| {
                 let tmp = TempDir::new().unwrap();
@@ -1823,7 +1830,7 @@ pub mod tests {
             };
 
         // Test whether responses contain correct range.
-        #[allow(clippy::blocks_in_if_conditions)]
+        #[allow(clippy::blocks_in_conditions)]
         let test_handle_backup_task_ranges =
             |sub_ranges: Vec<(&[u8], &[u8])>, expect: Vec<(&[u8], &[u8])>| {
                 let tmp = TempDir::new().unwrap();

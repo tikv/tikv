@@ -469,14 +469,6 @@ where
 const DEFAULT_LOAD_BASE_SPLIT_CHECK_INTERVAL: Duration = Duration::from_secs(1);
 const DEFAULT_COLLECT_TICK_INTERVAL: Duration = Duration::from_secs(1);
 
-fn default_load_base_split_check_interval() -> Duration {
-    fail_point!("mock_load_base_split_check_interval", |t| {
-        let t = t.unwrap().parse::<u64>().unwrap();
-        Duration::from_millis(t)
-    });
-    DEFAULT_LOAD_BASE_SPLIT_CHECK_INTERVAL
-}
-
 fn default_collect_tick_interval() -> Duration {
     fail_point!("mock_collect_tick_interval", |_| {
         Duration::from_millis(1)
@@ -602,7 +594,7 @@ where
             cpu_stats_sender: None,
             collect_store_infos_interval: interval,
             load_base_split_check_interval: cmp::min(
-                default_load_base_split_check_interval(),
+                DEFAULT_LOAD_BASE_SPLIT_CHECK_INTERVAL,
                 interval,
             ),
             // Use `inspect_latency_interval` as the minimal limitation for collecting tick.
@@ -2132,19 +2124,11 @@ where
 
                 let f = async move {
                     for split_info in split_infos {
-                        let Ok(Some((region, leader))) = pd_client
-                            .get_region_leader_by_id(split_info.region_id)
-                            .await
+                        let Ok(Some(region)) =
+                            pd_client.get_region_by_id(split_info.region_id).await
                         else {
                             continue;
                         };
-                        if leader.get_id() != split_info.peer.get_id() {
-                            info!("load base split region on non-leader";
-                                "region_id" => region.get_id(),
-                                "peer_id" => split_info.peer.get_id(),
-                                "leader_id" => leader.get_id(),
-                            );
-                        }
                         // Try to split the region with the given split key.
                         if let Some(split_key) = split_info.split_key {
                             Self::handle_ask_batch_split(

@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+cargo deny fetch all
+cargo deny check --show-stats

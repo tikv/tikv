@@ -2537,7 +2537,7 @@ def LocalReader() -> RowPanel:
     layout.row(
         [
             graph_panel(
-                title="Raft log async fetch task duration",
+                title="Local reader requests",
                 targets=[
                     target(
                         expr=expr_sum_rate(
@@ -7211,13 +7211,12 @@ def ResolvedTS() -> RowPanel:
                 ],
             ),
             graph_panel(
-                title="Max gap of follower safe-ts",
-                description="The gap between now() and the minimal (non-zero) safe ts for followers",
-                yaxes=yaxes(left_format=UNITS.MILLI_SECONDS),
+                title="Min Resolved TS Region",
+                description="The region that has minimal resolved ts",
                 targets=[
                     target(
                         expr=expr_sum(
-                            "tikv_resolved_ts_min_follower_safe_ts_gap_millis",
+                            "tikv_resolved_ts_min_resolved_ts_region",
                         ),
                     )
                 ],
@@ -7227,12 +7226,13 @@ def ResolvedTS() -> RowPanel:
     layout.row(
         [
             graph_panel(
-                title="Min Resolved TS Region",
-                description="The region that has minimal resolved ts",
+                title="Max gap of follower safe-ts",
+                description="The gap between now() and the minimal (non-zero) safe ts for followers",
+                yaxes=yaxes(left_format=UNITS.MILLI_SECONDS),
                 targets=[
                     target(
                         expr=expr_sum(
-                            "tikv_resolved_ts_min_resolved_ts_region",
+                            "tikv_resolved_ts_min_follower_safe_ts_gap_millis",
                         ),
                     )
                 ],
@@ -7252,12 +7252,6 @@ def ResolvedTS() -> RowPanel:
     )
     layout.row(
         [
-            heatmap_panel(
-                title="Check leader duration",
-                description="The time consumed when handle a check leader request",
-                yaxis=yaxis(format=UNITS.SECONDS),
-                metric="tikv_resolved_ts_check_leader_duration_seconds_bucket",
-            ),
             graph_panel(
                 title="Max gap of resolved-ts in region leaders",
                 description="The gap between resolved ts of leaders and current time",
@@ -7266,46 +7260,6 @@ def ResolvedTS() -> RowPanel:
                     target(
                         expr=expr_sum(
                             "tikv_resolved_ts_min_leader_resolved_ts_gap_millis",
-                        ),
-                    )
-                ],
-            ),
-        ]
-    )
-    layout.row(
-        [
-            graph_panel(
-                title="99% CheckLeader request region count",
-                description="Bucketed histogram of region count in a check leader request",
-                targets=[
-                    target(
-                        expr=expr_histogram_quantile(
-                            0.99,
-                            "tikv_check_leader_request_item_count",
-                            by_labels=["instance"],
-                        ),
-                        legend_format="{{instance}}",
-                    )
-                ],
-            ),
-            heatmap_panel(
-                title="Initial scan backoff duration",
-                description="The backoff duration before starting initial scan",
-                yaxis=yaxis(format=UNITS.SECONDS),
-                metric="tikv_resolved_ts_initial_scan_backoff_duration_seconds_bucket",
-            ),
-        ]
-    )
-    layout.row(
-        [
-            graph_panel(
-                title="Lock heap size",
-                description="Total bytes in memory of resolved-ts observe regions's lock heap",
-                yaxes=yaxes(left_format=UNITS.BYTES_IEC),
-                targets=[
-                    target(
-                        expr=expr_avg(
-                            "tikv_resolved_ts_lock_heap_bytes",
                         ),
                     )
                 ],
@@ -7325,35 +7279,24 @@ def ResolvedTS() -> RowPanel:
     )
     layout.row(
         [
-            graph_panel(
-                title="Observe region status",
-                description="The status of resolved-ts observe regions",
-                targets=[
-                    target(
-                        expr=expr_sum(
-                            "tikv_resolved_ts_region_resolve_status",
-                            by_labels=["type"],
-                        ),
-                    )
-                ],
+            heatmap_panel(
+                title="Check leader duration",
+                description="The time consumed when handle a check leader request",
+                yaxis=yaxis(format=UNITS.SECONDS),
+                metric="tikv_resolved_ts_check_leader_duration_seconds_bucket",
             ),
             graph_panel(
-                title="Fail advance ts count",
-                description="The count of fail to advance resolved-ts",
+                title="99% CheckLeader request region count",
+                description="Bucketed histogram of region count in a check leader request",
                 targets=[
                     target(
-                        expr=expr_sum_delta(
-                            "tikv_resolved_ts_fail_advance_count",
-                            by_labels=["instance", "reason"],
-                        ),
-                    ),
-                    target(
-                        expr=expr_sum_delta(
-                            "tikv_raftstore_check_stale_peer",
+                        expr=expr_histogram_quantile(
+                            0.99,
+                            "tikv_check_leader_request_item_count",
                             by_labels=["instance"],
                         ),
-                        legend_format="{{instance}}-stale-peer",
-                    ),
+                        legend_format="{{instance}}",
+                    )
                 ],
             ),
         ]
@@ -7381,6 +7324,63 @@ def ResolvedTS() -> RowPanel:
                         ),
                         legend_format="{{instance}}-check-num",
                     ),
+                ],
+            ),
+            graph_panel(
+                title="Fail advance ts count",
+                description="The count of fail to advance resolved-ts",
+                targets=[
+                    target(
+                        expr=expr_sum_delta(
+                            "tikv_resolved_ts_fail_advance_count",
+                            by_labels=["instance", "reason"],
+                        ),
+                    ),
+                    target(
+                        expr=expr_sum_delta(
+                            "tikv_raftstore_check_stale_peer",
+                            by_labels=["instance"],
+                        ),
+                        legend_format="{{instance}}-stale-peer",
+                    ),
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel(
+                title="Lock heap size",
+                description="Total bytes in memory of resolved-ts observe regions's lock heap",
+                yaxes=yaxes(left_format=UNITS.BYTES_IEC),
+                targets=[
+                    target(
+                        expr=expr_avg(
+                            "tikv_resolved_ts_lock_heap_bytes",
+                        ),
+                    )
+                ],
+            ),
+            heatmap_panel(
+                title="Initial scan backoff duration",
+                description="The backoff duration before starting initial scan",
+                yaxis=yaxis(format=UNITS.SECONDS),
+                metric="tikv_resolved_ts_initial_scan_backoff_duration_seconds_bucket",
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel(
+                title="Observe region status",
+                description="The status of resolved-ts observe regions",
+                targets=[
+                    target(
+                        expr=expr_sum(
+                            "tikv_resolved_ts_region_resolve_status",
+                            by_labels=["type"],
+                        ),
+                    )
                 ],
             ),
             graph_panel(
@@ -8638,15 +8638,19 @@ dashboard = Dashboard(
     editable=True,
     templating=Templates(),
     panels=[
+        # Overview
         Duration(),
         Cluster(),
         Errors(),
         Server(),
+        # Entrance of Write and Read
         gRPC(),
+        Storage(),
+        LocalReader(),
+        # CPU and IO
         ThreadCPU(),
-        TTL(),
-        PD(),
         IOBreakdown(),
+        # Raftstore
         RaftWaterfall(),
         RaftIO(),
         RaftPropose(),
@@ -8654,30 +8658,37 @@ dashboard = Dashboard(
         RaftMessage(),
         RaftAdmin(),
         RaftLog(),
-        LocalReader(),
-        UnifiedReadPool(),
-        Storage(),
+        # Engine
+        RaftEngine(),
+        RocksDB(),
+        Titan(),
+        # Scheduler and Read Pools
         FlowControl(),
-        SchedulerCommands(),
         Scheduler(),
-        GC(),
-        Snapshot(),
-        Task(),
+        SchedulerCommands(),
         CoprocessorOverview(),
         CoprocessorDetail(),
-        Threads(),
-        RocksDB(),
-        RaftEngine(),
-        Titan(),
+        UnifiedReadPool(),
+        # Transaction
+        GC(),
         PessimisticLocking(),
-        PointInTimeRestore(),
-        ResolvedTS(),
-        Memory(),
-        BackupImport(),
-        Encryption(),
-        BackupLog(),
+        # Background Tasks
+        Task(),
+        PD(),
         SlowTrendStatistics(),
+        Snapshot(),
+        # Tools
+        ResolvedTS(),
+        PointInTimeRestore(),
+        BackupImport(),
+        BackupLog(),
+        # Advanced Debugging for CPU and Memory
+        Threads(),
+        Memory(),
+        # Infrequently Used
         StatusServer(),
+        Encryption(),
+        TTL(),
     ],
     # Set 14 or larger to support shared crosshair or shared tooltip.
     # See https://github.com/grafana/grafana/blob/v10.2.2/public/app/features/dashboard/state/DashboardMigrator.ts#L443-L445

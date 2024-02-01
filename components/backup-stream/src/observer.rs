@@ -56,6 +56,7 @@ impl BackupStreamObserver {
             .scheduler
             .schedule(Task::ModifyObserve(ObserveOp::Start {
                 region: region.clone(),
+                handle: ObserveHandle::new(),
             }))
         {
             use crate::errors::Error;
@@ -128,6 +129,7 @@ impl<E: KvEngine> CmdObserver<E> for BackupStreamObserver {
                 self.scheduler,
                 Task::ModifyObserve(ObserveOp::Start {
                     region: region.clone(),
+                    handle: ObserveHandle::new(),
                 })
             );
         }

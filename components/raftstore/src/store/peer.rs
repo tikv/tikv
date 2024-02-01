@@ -19,7 +19,7 @@ use bytes::Bytes;
 use collections::{HashMap, HashSet};
 use crossbeam::{atomic::AtomicCell, channel::TrySendError};
 use engine_traits::{
-    Engines, KvEngine, PerfContext, RaftEngine, Snapshot, SnapshotContext, WriteBatch,
+    CacheRange, Engines, KvEngine, PerfContext, RaftEngine, Snapshot, SnapshotContext, WriteBatch,
     WriteOptions, CF_DEFAULT, CF_LOCK, CF_WRITE,
 };
 use error_code::ErrorCodeExt;
@@ -101,8 +101,9 @@ use crate::{
         memory::{needs_evict_entry_cache, MEMTRACE_RAFT_ENTRIES},
         msg::{CasualMessage, ErrorCallback, RaftCommand},
         peer_storage::HandleSnapshotResult,
+        snapshot_backup::{AbortReason, SnapshotBrState},
         txn_ext::LocksStatus,
-        unsafe_recovery::{ForceLeaderState, SnapshotRecoveryState, UnsafeRecoveryState},
+        unsafe_recovery::{ForceLeaderState, UnsafeRecoveryState},
         util::{admin_cmd_epoch_lookup, RegionReadProgress},
         worker::{
             CleanupTask, CompactTask, HeartbeatTask, RaftlogGcTask, ReadDelegate, ReadExecutor,
@@ -888,7 +889,7 @@ where
     /// lead_transferee if this peer(leader) is in a leadership transferring.
     pub lead_transferee: u64,
     pub unsafe_recovery_state: Option<UnsafeRecoveryState>,
-    pub snapshot_recovery_state: Option<SnapshotRecoveryState>,
+    pub snapshot_recovery_state: Option<SnapshotBrState>,
 
     last_record_safe_point: u64,
 }
@@ -2974,7 +2975,6 @@ where
                 cbs,
                 self.region_buckets_info()
                     .bucket_stat()
-                    .as_ref()
                     .map(|b| b.meta.clone()),
             );
             apply.on_schedule(&ctx.raft_metrics);
@@ -3640,7 +3640,7 @@ where
                 self.check_normal_proposal_with_disk_full_opt(ctx, disk_full_opt)
                     .and_then(|_| self.propose_normal(ctx, req))
             }
-            Ok(RequestPolicy::ProposeConfChange) => self.propose_conf_change(ctx, &req),
+            Ok(RequestPolicy::ProposeConfChange) => self.propose_conf_change(ctx, req),
             Err(e) => Err(e),
         };
         fail_point!("after_propose");
@@ -4342,12 +4342,7 @@ where
         }
 
         match req.get_admin_request().get_cmd_type() {
-            AdminCmdType::Split | AdminCmdType::BatchSplit => {
-                ctx.insert(ProposalContext::SPLIT);
-                if !self.is_leader() {
-                    poll_ctx.raft_metrics.propose.non_leader_split.inc();
-                }
-            }
+            AdminCmdType::Split | AdminCmdType::BatchSplit => ctx.insert(ProposalContext::SPLIT),
             AdminCmdType::PrepareMerge => {
                 self.pre_propose_prepare_merge(poll_ctx, req)?;
                 ctx.insert(ProposalContext::PREPARE_MERGE);
@@ -4631,9 +4626,23 @@ where
         req: RaftCmdRequest,
         cb: Callback<EK::Snapshot>,
     ) -> bool {
+        let transfer_leader = get_transfer_leader_cmd(&req).unwrap();
+        if let Err(err) = ctx
+            .coprocessor_host
+            .pre_transfer_leader(self.region(), transfer_leader)
+        {
+            warn!("Coprocessor rejected transfer leader."; "err" => ?err, 
+                "region_id" => self.region_id, 
+                "peer_id" => self.peer.get_id(), 
+                "transferee" => transfer_leader.get_peer().get_id());
+            let mut resp = RaftCmdResponse::new();
+            *resp.mut_header().mut_error() = Error::from(err).into();
+            cb.invoke_with_response(resp);
+            return false;
+        }
+
         ctx.raft_metrics.propose.transfer_leader.inc();
 
-        let transfer_leader = get_transfer_leader_cmd(&req).unwrap();
         let prs = self.raft_group.raft.prs();
 
         let (_, peers) = transfer_leader
@@ -4686,7 +4695,7 @@ where
     fn propose_conf_change<T>(
         &mut self,
         ctx: &mut PollContext<EK, ER, T>,
-        req: &RaftCmdRequest,
+        mut req: RaftCmdRequest,
     ) -> Result<Either<u64, u64>> {
         if self.pending_merge_state.is_some() {
             return Err(Error::ProposalInMergingMode(self.region_id));
@@ -4714,7 +4723,24 @@ where
                 self.term()
             ));
         }
-        if let Some(index) = self.cmd_epoch_checker.propose_check_epoch(req, self.term()) {
+
+        if let Err(err) = ctx.coprocessor_host.pre_propose(self.region(), &mut req) {
+            warn!("Coprocessor rejected proposing conf change.";
+                "err" => ?err,
+                "region_id" => self.region_id,
+                "peer_id" => self.peer.get_id(),
+            );
+            return Err(box_err!(
+                "{} rejected by coprocessor(reason = {})",
+                self.tag,
+                err
+            ));
+        }
+
+        if let Some(index) = self
+            .cmd_epoch_checker
+            .propose_check_epoch(&req, self.term())
+        {
             return Ok(Either::Right(index));
         }
 
@@ -4758,6 +4784,7 @@ where
             changes.as_ref(),
             &cc,
             self.is_in_force_leader(),
+            &self.peer_heartbeats,
         )?;
 
         ctx.raft_metrics.propose.conf_change.inc();
@@ -4834,7 +4861,7 @@ where
 
         let snap_ctx = if let Ok(read_ts) = decode_u64(&mut req.get_header().get_flag_data()) {
             Some(SnapshotContext {
-                region_id: self.region_id,
+                range: Some(CacheRange::from_region(&region)),
                 read_ts,
             })
         } else {
@@ -4847,7 +4874,6 @@ where
             snap.bucket_meta = self
                 .region_buckets_info()
                 .bucket_stat()
-                .as_ref()
                 .map(|s| s.meta.clone());
         }
         resp.txn_extra_op = self.txn_extra_op.load();
@@ -5159,10 +5185,31 @@ where
     }
 
     pub fn snapshot_recovery_maybe_finish_wait_apply(&mut self, force: bool) {
-        if let Some(SnapshotRecoveryState::WaitLogApplyToLast { target_index, .. }) =
-            &self.snapshot_recovery_state
+        if let Some(SnapshotBrState::WaitLogApplyToLast {
+            target_index,
+            valid_for_term,
+            ..
+        }) = &self.snapshot_recovery_state
         {
-            if self.raft_group.raft.term != self.raft_group.raft.raft_log.last_term() {
+            if valid_for_term
+                .map(|vt| vt != self.raft_group.raft.term)
+                .unwrap_or(false)
+            {
+                info!("leadership changed, aborting syncer because required."; "region_id" => self.region().id);
+                match self.snapshot_recovery_state.take() {
+                    Some(SnapshotBrState::WaitLogApplyToLast {
+                        syncer,
+                        valid_for_term,
+                        ..
+                    }) => {
+                        syncer.abort(AbortReason::StaleCommand {
+                            region_id: self.region().get_id(),
+                            expected_term: valid_for_term.unwrap_or_default(),
+                            current_term: self.raft_group.raft.term,
+                        });
+                    }
+                    _ => unreachable!(),
+                };
                 return;
             }
 

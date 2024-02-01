@@ -178,6 +178,7 @@ impl From<Error> for import_sstpb::Error {
                 let mut server_is_busy = errorpb::ServerIsBusy::default();
                 server_is_busy.set_backoff_ms(time_to_lease_expire.as_millis() as _);
                 store_err.set_server_is_busy(server_is_busy);
+                store_err.set_message(format!("{}", e));
                 err.set_store_error(store_err);
                 err.set_message(format!("{}", e));
             }
