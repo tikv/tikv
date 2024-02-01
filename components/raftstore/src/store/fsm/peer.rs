@@ -1278,7 +1278,6 @@ where
             PeerTick::CheckPeersAvailability => self.on_check_peers_availability(),
             PeerTick::RequestSnapshot => self.on_request_snapshot_tick(),
             PeerTick::RequestVoterReplicatedIndex => self.on_request_voter_replicated_index(),
-            PeerTick::CheckPeerCompleteApplyLogs => self.on_check_peer_complete_apply_logs(),
         }
     }
 
@@ -1307,7 +1306,6 @@ where
         if self.fsm.peer.is_witness() {
             self.register_pull_voter_replicated_index_tick();
         }
-        self.register_check_peer_complete_recovery();
     }
 
     fn on_gc_snap(&mut self, snaps: Vec<(SnapKey, bool)>) {
@@ -2377,6 +2375,7 @@ where
                     .peer
                     .region_buckets_info_mut()
                     .add_bucket_flow(&res.bucket_stat);
+                self.on_check_peer_complete_apply_logs();
 
                 self.fsm.has_ready |= self.fsm.peer.post_apply(
                     self.ctx,
@@ -3808,6 +3807,9 @@ where
             "is_peer_initialized" => is_peer_initialized,
             "is_latest_initialized" => is_latest_initialized,
         );
+
+        // Ensure this peer is removed in the pending apply list.
+        meta.pending_apply_peers.remove(&self.fsm.peer_id());
 
         if meta.atomic_snap_regions.contains_key(&self.region_id()) {
             drop(meta);
@@ -6558,12 +6560,13 @@ where
         self.schedule_tick(PeerTick::ReportBuckets)
     }
 
-    fn register_check_peer_complete_recovery(&mut self) {
-        self.schedule_tick(PeerTick::CheckPeerCompleteApplyLogs)
-    }
-
+    /// Check whether the peer is pending on applying raft logs.
+    ///
+    /// If pending, the peer will be recorded, until the pending logs are
+    /// applied. And after it completes applying, it will be removed from
+    /// the recording list.
     fn on_check_peer_complete_apply_logs(&mut self) {
-        if !self.fsm.peer.pending_on_apply {
+        if self.fsm.peer.pending_on_apply.is_none() {
             return;
         }
 
@@ -6572,14 +6575,18 @@ where
         let last_idx = self.fsm.peer.get_store().last_index();
         // If the peer is newly added or created, no need to check the apply status.
         if last_idx <= RAFT_INIT_LOG_INDEX {
-            self.fsm.peer.pending_on_apply = false;
+            self.fsm.peer.pending_on_apply = None;
             return;
         }
+        assert!(self.fsm.peer.pending_on_apply.is_some());
         // If the peer has large unapplied logs, this peer should be recorded until
         // the lag is less than the given threshold.
         if last_idx >= applied_idx + self.ctx.cfg.leader_transfer_max_log_lag {
-            let mut meta = self.ctx.store_meta.lock().unwrap();
-            meta.pending_apply_peers.insert(peer_id);
+            if !self.fsm.peer.pending_on_apply.unwrap() {
+                let mut meta = self.ctx.store_meta.lock().unwrap();
+                meta.pending_apply_peers.insert(peer_id);
+            }
+            self.fsm.peer.pending_on_apply = Some(true);
             debug!(
                 "peer is pending on applying logs";
                 "last_commit_idx" => last_idx,
@@ -6587,7 +6594,7 @@ where
                 "region_id" => self.fsm.region_id(),
                 "peer_id" => peer_id,
             );
-        } else if self.fsm.peer.pending_on_apply {
+        } else {
             // Already finish apply, no needs to keep the tick.
             {
                 let mut meta = self.ctx.store_meta.lock().unwrap();
@@ -6601,12 +6608,7 @@ where
                 "region_id" => self.fsm.region_id(),
                 "peer_id" => peer_id,
             );
-            self.fsm.peer.pending_on_apply = false;
-        }
-
-        // If the peer is pending on apply, it should keep the tick.
-        if self.fsm.peer.pending_on_apply {
-            self.register_check_peer_complete_recovery();
+            self.fsm.peer.pending_on_apply = None;
         }
     }
 }

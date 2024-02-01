@@ -188,9 +188,14 @@ pub struct StoreMeta {
     pub region_read_progress: RegionReadProgressRegistry,
     /// record sst_file_name -> (sst_smallest_key, sst_largest_key)
     pub damaged_ranges: HashMap<String, (Vec<u8>, Vec<u8>)>,
-    /// record peers pending in applying logs
+    /// Record peers pending in applying logs.
+    /// `pending_apply_peers` and `completed_apply_peers_count` are used
+    /// to record the accurate count of pending peers and ready peers on
+    /// applying logs.
     pub pending_apply_peers: HashSet<u64>,
-    /// record the number of peers done for applying logs
+    /// Record the number of peers done for applying logs.
+    /// Without `completed_apply_peers_count`, it's hard to know whether all
+    /// peers are ready for applying logs.
     pub completed_apply_peers_count: u64,
 }
 
@@ -643,10 +648,6 @@ where
         // TODO: make it reasonable
         self.tick_batch[PeerTick::RequestVoterReplicatedIndex as usize].wait_duration =
             self.cfg.raft_log_gc_tick_interval.0 * 2;
-        // Keep PeerTick::CheckPeerCompleteApplyLogs timeout same with checking
-        // uncommited interval
-        self.tick_batch[PeerTick::CheckPeerCompleteApplyLogs as usize].wait_duration =
-            self.cfg.check_long_uncommitted_interval.0;
     }
 
     // Return None means it has passed unsafe vote period.
@@ -2718,6 +2719,46 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         }
     }
 
+    fn check_store_is_busy_on_apply(
+        &self,
+        start_ts_sec: u32,
+        region_count: u64,
+        pending_apply_peers_count: u64,
+        completed_apply_peers_count: u64,
+    ) -> bool {
+        let during_starting_stage = {
+            (time::get_time().sec as u32).saturating_sub(start_ts_sec)
+                <= STORE_CHECK_PENDING_APPLY_DURATION.as_secs() as u32
+        };
+        // If the store is busy in handling applying logs when starting, it should not
+        // be treated as a normal store for balance. Only when the store is
+        // almost idle (no more pending regions on applying logs), it can be
+        // regarded as the candidate for balancing leaders.
+        if during_starting_stage {
+            let completed_target_count = (|| {
+                fail_point!("on_mock_store_completed_target_count", |_| 0);
+                std::cmp::max(
+                    1,
+                    STORE_CHECK_COMPLETE_APPLY_REGIONS_PERCENT * region_count / 100,
+                )
+            })();
+            // If the number of regions on completing applying logs does not occupy the
+            // majority of regions, the store is regarded as busy.
+            if completed_apply_peers_count < completed_target_count {
+                true
+            } else {
+                let pending_target_count = std::cmp::min(
+                    self.ctx.cfg.min_pending_apply_region_count,
+                    region_count.saturating_sub(completed_target_count),
+                );
+                pending_apply_peers_count >= pending_target_count
+            }
+        } else {
+            // Already started for a fairy long time.
+            false
+        }
+    }
+
     fn store_heartbeat_pd(&mut self, report: Option<pdpb::StoreReport>) {
         let mut stats = StoreStats::default();
 
@@ -2774,40 +2815,12 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
             .stat
             .is_busy
             .swap(false, Ordering::Relaxed);
-        let busy_on_apply = {
-            let during_starting_stage = {
-                (time::get_time().sec as u32).saturating_sub(start_time)
-                    <= STORE_CHECK_PENDING_APPLY_DURATION.as_secs() as u32
-            };
-            // If the store is busy in handling applying logs when starting, it should not
-            // be treated as a normal store for balance. Only when the store is
-            // almost idle (no more pending regions on applying logs), it can be
-            // regarded as the candidate for balancing leaders.
-            if during_starting_stage {
-                let region_count = stats.get_region_count() as u64;
-                let completed_target_count = (|| {
-                    fail_point!("on_mock_store_completed_target_count", |_| 0);
-                    std::cmp::max(
-                        1,
-                        STORE_CHECK_COMPLETE_APPLY_REGIONS_PERCENT * region_count / 100,
-                    )
-                })();
-                // If the number of regions on completing applying logs does not occupy the
-                // majority of regions, the store is regarded as busy.
-                if completed_apply_peers_count < completed_target_count {
-                    true
-                } else {
-                    let pending_target_count = std::cmp::min(
-                        self.ctx.cfg.min_pending_apply_region_count,
-                        region_count.saturating_sub(completed_target_count),
-                    );
-                    pending_apply_peers_count >= pending_target_count
-                }
-            } else {
-                // Already started for a fairy long time.
-                false
-            }
-        };
+        let busy_on_apply = self.check_store_is_busy_on_apply(
+            start_time,
+            stats.get_region_count() as u64,
+            pending_apply_peers_count,
+            completed_apply_peers_count,
+        );
         stats.set_is_busy(store_is_busy || busy_on_apply);
 
         let mut query_stats = QueryStats::default();
