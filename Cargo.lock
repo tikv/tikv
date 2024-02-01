@@ -1435,16 +1435,16 @@ checksum = "e78d4f1cc4ae33bbfc157ed5d5a5ef3bc29227303d595861deb238fcec4e9457"
 [[package]]
 name = "encoding_rs"
 version = "0.8.29"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a74ea89a0a1b98f6332de42c95baff457ada66d1cb4030f9ff151b2041a1c746"
+source = "git+https://github.com/tikv/encoding_rs.git?rev=68e0bc5a72a37a78228d80cd98047326559cf43c#68e0bc5a72a37a78228d80cd98047326559cf43c"
 dependencies = [
  "cfg-if 1.0.0",
 ]
 
 [[package]]
 name = "encoding_rs"
-version = "0.8.29"
-source = "git+https://github.com/tikv/encoding_rs.git?rev=68e0bc5a72a37a78228d80cd98047326559cf43c#68e0bc5a72a37a78228d80cd98047326559cf43c"
+version = "0.8.33"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7268b386296a025e474d5140678f75d6de9493ae55a5d709eeb9dd08149945e1"
 dependencies = [
  "cfg-if 1.0.0",
 ]
@@ -2807,7 +2807,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#932639606bcf3db9676627d55430e1dd10670570"
+source = "git+https://github.com/pingcap/kvproto.git#705bb9244fd9557b45c0f4f1530ba239c782068b"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
@@ -4529,10 +4529,15 @@ version = "0.0.1"
 dependencies = [
  "bytes",
  "collections",
+ "crossbeam",
  "engine_rocks",
  "engine_traits",
+ "log_wrappers",
  "skiplist-rs",
+ "slog",
+ "slog-global",
  "tikv_util",
+ "txn_types",
 ]
 
 [[package]]
@@ -4552,7 +4557,7 @@ checksum = "0460542b551950620a3648c6aa23318ac6b3cd779114bd873209e6e8b5eb1c34"
 dependencies = [
  "base64 0.13.0",
  "bytes",
- "encoding_rs 0.8.29 (registry+https://github.com/rust-lang/crates.io-index)",
+ "encoding_rs 0.8.33",
  "futures-core",
  "futures-util",
  "http",
@@ -6225,7 +6230,7 @@ dependencies = [
  "codec",
  "collections",
  "crc32fast",
- "encoding_rs 0.8.29 (git+https://github.com/tikv/encoding_rs.git?rev=68e0bc5a72a37a78228d80cd98047326559cf43c)",
+ "encoding_rs 0.8.29",
  "error_code",
  "hex 0.4.2",
  "kvproto",
@@ -6960,7 +6965,7 @@ version = "1.6.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "97fee6b57c6a41524a810daee9286c02d7752c4253064d0b05472833a438f675"
 dependencies = [
- "cfg-if 0.1.10",
+ "cfg-if 1.0.0",
  "static_assertions",
 ]
 
