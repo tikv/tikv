@@ -50,9 +50,41 @@ macro_rules! impl_heap_size{
 }
 
 impl_heap_size! {
-    // These types are not necessary stored in heap as they can be inlined
-    // in structures.
-    // TODO: We may need to add a new method to distinguish the difference.
+    // TODO: Clarify the semantic of `heap_size`.
+    // NB: The current `HeapSize` trait is ambiguous, it may refer to 1)
+    // the number of bytes it owns in heap, or 2) the number of bytes it owns in
+    // heap plus the number of bytes of itself.
+    // Because of the ambiguous, it is insufficient to count heap size
+    // accurately. We need to add a second methods to `HeapSize` distinguish the
+    // difference.
+    //
+    // A better alternative would be the following.
+    //
+    // ```rust
+    // trait HeapSize {
+    //     // The number of bytes it owns in bytes.
+    //     fn heap_size(&self) -> usize;
+    //     // The size of itself.
+    //     fn inline_size(&self) -> usize;
+    // }
+    //
+    // impl HeapSize for u8 {
+    //     fn heap_size(&self) -> usize { 0 }
+    //     fn inline_size(&self) -> usize { 1 }
+    // }
+    // impl <T: HeapSize> HeapSize for Box<T> {
+    //     fn heap_size(&self) -> usize { self.as_ref().inline_size() + self.as_ref().heap_size() }
+    //     fn inline_size(&self) -> usize { std::mem::size_of::<Self>() }
+    // }
+    // fn main() {
+    //     let b = Box::new(0u8);
+    //     dbg!(b.heap_size());
+    //     let bb = Box::new(b);
+    //     dbg!(bb.heap_size());
+    // }
+    // ```
+    //
+    // For now, we choose the 2) semantic for types below.
     u8, bool, u64,
 }
 
@@ -61,6 +93,8 @@ impl<T: HeapSize> HeapSize for [T] {
         if self.is_empty() {
             0
         } else {
+            // Prefer an approximation of its actually heap size, because we
+            // want the time complexity to be O(1).
             self.len() * self[0].heap_size()
         }
     }
@@ -70,7 +104,7 @@ impl<T: HeapSize> HeapSize for Vec<T> {
     fn heap_size(&self) -> usize {
         // NB: It's an approximation of Vec<T> heap usage, because its capacity
         // may be large then its length, and the unused space is also in heap.
-        self.as_slice().heap_size()
+        self.as_slice().heap_size() + self.capacity() * std::mem::size_of::<T>()
     }
 }
 

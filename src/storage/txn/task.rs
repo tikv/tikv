@@ -65,9 +65,11 @@ impl Task {
         &mut self,
         memory_quota: Arc<MemoryQuota>,
     ) -> Result<(), MemoryQuotaExceeded> {
-        let bytes = self.cmd.heap_size();
-        memory_quota.alloc(bytes)?;
-        self.memory_quota = Some((memory_quota, bytes));
+        if self.memory_quota.is_none() {
+            let bytes = self.cmd.heap_size();
+            memory_quota.alloc(bytes)?;
+            self.memory_quota = Some((memory_quota, bytes));
+        }
         Ok(())
     }
 
