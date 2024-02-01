@@ -31,13 +31,14 @@ use crate::{
 pub(crate) const ANALYZE_VERSION_V1: i32 = 1;
 pub(crate) const ANALYZE_VERSION_V2: i32 = 2;
 
-// `AnalyzeContext` is used to handle `AnalyzeReq`
+/// Used to handle analyze request.
 pub struct AnalyzeContext<S: Snapshot, F: KvFormat> {
     req: AnalyzeReq,
     storage: Option<TikvStorage<SnapshotStore<S>>>,
     ranges: Vec<KeyRange>,
     storage_stats: Statistics,
     quota_limiter: Arc<QuotaLimiter>,
+    // is_auto_analyze is used to indicate whether the analyze request is sent by TiDB itself.
     is_auto_analyze: bool,
     _phantom: PhantomData<F>,
 }
@@ -86,6 +87,8 @@ impl<S: Snapshot, F: KvFormat> AnalyzeContext<S, F> {
         Ok(res_data)
     }
 
+    // Handle mixed request, it would build histograms for common handle and columns
+    // by scan table rows once.
     async fn handle_mixed(builder: &mut SampleBuilder<S, F>) -> Result<Vec<u8>> {
         let (col_res, idx_res) = builder.collect_columns_stats().await?;
 

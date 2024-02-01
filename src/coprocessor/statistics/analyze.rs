@@ -601,12 +601,12 @@ impl<S: Snapshot, F: KvFormat> SampleBuilder<S, F> {
         &mut self,
     ) -> Result<(AnalyzeColumnsResult, Option<AnalyzeIndexResult>)> {
         use tidb_query_datatype::{codec::collation::Collator, match_template_collator};
-        let columns_without_handle_len =
-            self.columns_info.len() - self.columns_info[0].get_pk_handle() as usize;
-
         // The number of columns need to be sampled is `columns_without_handle_len`.
         // It equals to `columns_info.len()` if the first column doesn't contain a
         // handle. Otherwise, it equals to `columns_info.len() - 1`.
+        let columns_without_handle_len =
+            self.columns_info.len() - self.columns_info[0].get_pk_handle() as usize;
+
         let mut pk_builder = Histogram::new(self.max_bucket_size);
         let mut collectors = vec![
             SampleCollector::new(
