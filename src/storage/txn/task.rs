@@ -107,3 +107,27 @@ impl Drop for Task {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use kvproto::kvrpcpb::PrewriteRequest;
+
+    use super::*;
+    use crate::storage::TypedCommand;
+
+    #[test]
+    fn test_alloc_memory_quota() {
+        let p = PrewriteRequest::default();
+        let cmd: TypedCommand<_> = p.into();
+        let mut task = Task::new(0, cmd.cmd);
+        let quota = Arc::new(MemoryQuota::new(1 << 32));
+        task.alloc_memory_quota(quota.clone()).unwrap();
+        assert_ne!(quota.in_use(), 0);
+        let in_use = quota.in_use();
+        task.alloc_memory_quota(quota.clone()).unwrap();
+        let in_use_new = quota.in_use();
+        assert_eq!(in_use, in_use_new);
+        drop(task);
+        assert_eq!(quota.in_use(), 0);
+    }
+}
