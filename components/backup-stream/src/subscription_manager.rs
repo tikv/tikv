@@ -624,6 +624,9 @@ where
     }
 
     async fn start_observe(&self, region: Region, handle: ObserveHandle) {
+        // Mark here we are, or once there are region change in-flight, we
+        // may lose the message.
+        self.subs.add_pending_region(&region);
         match self.is_available(&region, &handle).await {
             Ok(false) => {
                 warn!("stale start observe command."; utils::slog_region(&region), "handle" => ?handle);
@@ -635,7 +638,6 @@ where
             }
             _ => {}
         }
-        self.subs.add_pending_region(&region);
         let res = self.try_start_observe(&region, handle.clone()).await;
         if let Err(err) = res {
             warn!("failed to start observe, would retry"; "err" => %err, utils::slog_region(&region));
@@ -965,6 +967,7 @@ mod test {
     #[derive(Debug, Eq, PartialEq)]
     enum ObserveEvent {
         Start(u64),
+        RefreshObs(u64),
         Stop(u64),
         StartResult(u64, bool),
         HighMemUse(u64),
@@ -981,6 +984,7 @@ mod test {
                 ObserveOp::HighMemUsageWarning {
                     region_id: inconsistent_region_id,
                 } => Some(Self::HighMemUse(*inconsistent_region_id)),
+                ObserveOp::RefreshResolver { region } => Some(Self::RefreshObs(region.id)),
 
                 _ => None,
             }
@@ -1115,7 +1119,19 @@ mod test {
                 .unwrap()
         }
 
+        fn insert_and_start_region(&self, region: Region) {
+            self.insert_region(region.clone());
+            self.start_region(region)
+        }
+
         fn start_region(&self, region: Region) {
+            self.run(ObserveOp::Start {
+                region,
+                handle: ObserveHandle::new(),
+            })
+        }
+
+        fn insert_region(&self, region: Region) {
             self.regions.regions.lock().unwrap().insert(
                 region.id,
                 RegionInfo {
@@ -1124,10 +1140,6 @@ mod test {
                     buckets: 0,
                 },
             );
-            self.run(ObserveOp::Start {
-                region,
-                handle: ObserveHandle::new(),
-            });
         }
 
         fn region(
@@ -1220,8 +1232,8 @@ mod test {
         }));
         let _guard = suite.rt.enter();
         tokio::time::pause();
-        suite.start_region(suite.region(1, 1, 1, b"a", b"b"));
-        suite.start_region(suite.region(2, 1, 1, b"b", b"c"));
+        suite.insert_and_start_region(suite.region(1, 1, 1, b"a", b"b"));
+        suite.insert_and_start_region(suite.region(2, 1, 1, b"b", b"c"));
         suite.wait_initial_scan_all_finish(2);
         suite.wait_shutdown();
         assert_eq!(
@@ -1242,8 +1254,8 @@ mod test {
         let mut suite = Suite::new(FuncInitialScan(|_, _, _| Ok(Statistics::default())));
         let _guard = suite.rt.enter();
         tokio::time::pause();
-        suite.start_region(suite.region(1, 1, 1, b"a", b"b"));
-        suite.start_region(suite.region(2, 1, 1, b"b", b"c"));
+        suite.insert_and_start_region(suite.region(1, 1, 1, b"a", b"b"));
+        suite.insert_and_start_region(suite.region(2, 1, 1, b"b", b"c"));
         suite.advance_ms(0);
         let mut rs = suite.subs.current_regions();
         rs.sort();
@@ -1273,6 +1285,28 @@ mod test {
                 Start(1),
                 StartResult(1, true),
             ]
+        );
+    }
+
+    #[test]
+    fn test_region_split_inflight() {
+        test_util::init_log_for_test();
+        let mut suite = Suite::new(FuncInitialScan(|_, _, _| Ok(Statistics::default())));
+        let _guard = suite.rt.enter();
+        tokio::time::pause();
+        suite.insert_region(suite.region(1, 1, 1, b"a", b"b"));
+        // Region split..?
+        suite.insert_region(suite.region(1, 2, 1, b"a", b"az"));
+        suite.start_region(suite.region(1, 1, 1, b"a", b"b"));
+        suite.run(ObserveOp::RefreshResolver {
+            region: suite.region(1, 2, 1, b"a", b"az"),
+        });
+        suite.wait_initial_scan_all_finish(1);
+        suite.wait_shutdown();
+        use ObserveEvent::*;
+        assert_eq!(
+            &*suite.events.lock().unwrap(),
+            &[Start(1), RefreshObs(1), StartResult(1, true)]
         );
     }
 }

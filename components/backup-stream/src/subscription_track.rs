@@ -187,14 +187,14 @@ impl SubscriptionTracer {
     /// We should skip when we are going to refresh absent regions because there
     /// may be some stale commands.
     pub fn add_pending_region(&self, region: &Region) {
-        let r = self
-            .0
-            .insert(region.get_id(), SubscribeState::Pending(region.clone()));
-        if let Some(s) = r {
-            warn!(
-                "excepted state transform: running | pending -> pending";
-                "old" => ?s, utils::slog_region(region),
-            )
+        match self.0.entry(region.get_id()) {
+            Entry::Occupied(ent) => warn!(
+                "excepted state transform(will ignore): running | pending -> pending";
+                "old" => ?ent.get(), utils::slog_region(region),
+            ),
+            Entry::Vacant(ent) => {
+                ent.insert(SubscribeState::Pending(region.clone()));
+            }
         }
     }
 
