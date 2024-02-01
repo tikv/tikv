@@ -111,9 +111,9 @@ fn test_pending_snapshot() {
 }
 
 // Tests if store is marked with busy when there exists peers on
-// pending on applying raft logs.
+// busy on applying raft logs.
 #[test]
-fn test_on_check_pending_apply_peers() {
+fn test_on_check_busy_on_apply_peers() {
     let mut cluster = new_node_cluster(0, 3);
     cluster.cfg.raft_store.raft_base_tick_interval = ReadableDuration::millis(5);
     cluster.cfg.raft_store.raft_store_max_leader_lease = ReadableDuration::millis(100);
@@ -144,7 +144,7 @@ fn test_on_check_pending_apply_peers() {
     must_get_equal(&cluster.get_engine(1), b"k2", b"v2");
     must_get_equal(&cluster.get_engine(2), b"k2", b"v2");
 
-    // Restart peer 1003 and make it pending for applying pending logs.
+    // Restart peer 1003 and make it busy for applying pending logs.
     fail::cfg("on_handle_apply_1003", "return").unwrap();
     cluster.run_node(3).unwrap();
     let after_apply_stat = cluster.apply_state(r1, 3);
@@ -155,7 +155,7 @@ fn test_on_check_pending_apply_peers() {
     let stats = cluster.pd_client.get_store_stats(3).unwrap();
     assert!(stats.is_busy);
     // Case 2: completed_apply_peers_count > completed_target_count but
-    //        there exists pending peer.
+    //        there exists busy peers.
     fail::cfg("on_mock_store_completed_target_count", "return").unwrap();
     sleep_ms(100);
     cluster.must_send_store_heartbeat(3);
