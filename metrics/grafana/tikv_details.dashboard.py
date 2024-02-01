@@ -3203,7 +3203,8 @@ def Scheduler() -> RowPanel:
             ),
         ]
     )
-    layout.row([
+    layout.row(
+        [
             graph_panel(
                 title="Scheduler writing bytes",
                 description="The total writing bytes of commands on each stage",
@@ -3236,7 +3237,8 @@ def Scheduler() -> RowPanel:
                     ),
                 ],
             ),
-    ])
+        ]
+    )
     layout.row(
         [
             heatmap_panel(
