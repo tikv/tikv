@@ -658,7 +658,7 @@ impl<S: Snapshot, F: KvFormat> SampleBuilder<S, F> {
                         }
                     }
                     common_handle_fms.insert(&data);
-                    if self.stats_version == AnalyzeVersion::V2.into() {
+                    if self.stats_version == AnalyzeVersion::V2 {
                         common_handle_hist.append(&data, true);
                         if cur_val.1 == data {
                             cur_val.0 += 1;
