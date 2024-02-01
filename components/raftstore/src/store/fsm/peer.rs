@@ -2375,7 +2375,6 @@ where
                     .peer
                     .region_buckets_info_mut()
                     .add_bucket_flow(&res.bucket_stat);
-                self.on_check_peer_complete_apply_logs();
 
                 self.fsm.has_ready |= self.fsm.peer.post_apply(
                     self.ctx,
@@ -2383,6 +2382,7 @@ where
                     res.applied_term,
                     &res.metrics,
                 );
+                self.on_check_peer_complete_apply_logs();
                 // After applying, several metrics are updated, report it to pd to
                 // get fair schedule.
                 if self.fsm.peer.is_leader() {
