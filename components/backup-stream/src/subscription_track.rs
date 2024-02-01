@@ -193,6 +193,7 @@ impl SubscriptionTracer {
                 "old" => ?ent.get(), utils::slog_region(region),
             ),
             Entry::Vacant(ent) => {
+                debug!("inserting pending region."; utils::slog_region(region));
                 ent.insert(SubscribeState::Pending(region.clone()));
             }
         }

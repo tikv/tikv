@@ -543,6 +543,7 @@ where
         let tx = tx.unwrap();
         // tikv_util::Instant cannot be converted to std::time::Instant :(
         let start = std::time::Instant::now();
+        info!("Scheduing subscription."; utils::slog_region(&region), "after" => ?backoff, "handle" => ?handle);
         let scheduled = async move {
             tokio::time::sleep_until((start + backoff).into()).await;
             let handle = handle.unwrap_or_else(|| ObserveHandle::new());
@@ -624,12 +625,12 @@ where
     }
 
     async fn start_observe(&self, region: Region, handle: ObserveHandle) {
-        // Mark here we are, or once there are region change in-flight, we
-        // may lose the message.
-        self.subs.add_pending_region(&region);
         match self.is_available(&region, &handle).await {
             Ok(false) => {
                 warn!("stale start observe command."; utils::slog_region(&region), "handle" => ?handle);
+                // Mark here we are anyway, or once there are region change in-flight, we
+                // may lose the message.
+                self.subs.add_pending_region(&region);
                 return;
             }
             Err(err) => {
@@ -638,6 +639,7 @@ where
             }
             _ => {}
         }
+        self.subs.add_pending_region(&region);
         let res = self.try_start_observe(&region, handle.clone()).await;
         if let Err(err) = res {
             warn!("failed to start observe, would retry"; "err" => %err, utils::slog_region(&region));
@@ -731,6 +733,7 @@ where
 
         let should_retry = self.is_available(&region, &handle).await?;
         if !should_retry {
+            warn!("give up retry retion."; utils::slog_region(&region), "handle" => ?handle);
             return Ok(false);
         }
         self.schedule_start_observe(backoff_for_start_observe(failure_count), region, None);
