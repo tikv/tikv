@@ -292,9 +292,4 @@ impl<S: Snapshot, F: KvFormat> RequestHandler for AnalyzeContext<S, F> {
             Err(e) => Err(e),
         }
     }
-
-    fn collect_scan_statistics(&mut self, dest: &mut Statistics) {
-        dest.add(&self.storage_stats);
-        self.storage_stats = Statistics::default();
-    }
 }
