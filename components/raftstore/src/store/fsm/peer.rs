@@ -752,6 +752,9 @@ where
             }
             self.fsm.batch_req_builder.request = Some(cmd);
         }
+        // Update the state whether the peer is pending on applying raft
+        // logs if necesssary.
+        self.on_check_peer_complete_apply_logs();
     }
 
     /// Flushes all pending raft commands for immediate execution.
@@ -2382,7 +2385,6 @@ where
                     res.applied_term,
                     &res.metrics,
                 );
-                self.on_check_peer_complete_apply_logs();
                 // After applying, several metrics are updated, report it to pd to
                 // get fair schedule.
                 if self.fsm.peer.is_leader() {
@@ -6595,7 +6597,7 @@ where
                 "peer_id" => peer_id,
             );
         } else {
-            // Already finish apply, no needs to keep the tick.
+            // Already finish apply, remove it from recording list.
             {
                 let mut meta = self.ctx.store_meta.lock().unwrap();
                 meta.pending_apply_peers.remove(&peer_id);
