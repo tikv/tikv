@@ -69,7 +69,7 @@ impl Task {
         if self.owned_quota.is_none() {
             let mut owned = OwnedAllocated::new(memory_quota);
             owned.alloc(self.cmd.approximate_heap_size())?;
-            SCHED_TXN_MEMORY_QUOTA_IN_USE
+            SCHED_TXN_MEMORY_QUOTA
                 .used
                 .set(owned.source().in_use() as i64);
             self.owned_quota = Some(owned);

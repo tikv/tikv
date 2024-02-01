@@ -625,7 +625,7 @@ lazy_static! {
     )
     .unwrap();
 
-    pub static ref SCHED_TXN_MEMORY_QUOTA_IN_USE: MemoryQuotaGauge = register_static_int_gauge_vec!(
+    pub static ref SCHED_TXN_MEMORY_QUOTA: MemoryQuotaGauge = register_static_int_gauge_vec!(
         MemoryQuotaGauge,
         "tikv_scheduler_memory_quota_size",
         "Statistics of in_use and capacity of scheduler memory quota",

@@ -477,7 +477,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             memory_quota: Arc::new(MemoryQuota::new(config.memory_quota.0 as _)),
         });
 
-        SCHED_TXN_MEMORY_QUOTA_IN_USE
+        SCHED_TXN_MEMORY_QUOTA
             .allocated
             .set(config.memory_quota.0 as i64);
 
@@ -500,7 +500,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
     }
 
     pub fn set_memory_quota_capacity(&self, cap: usize) {
-        SCHED_TXN_MEMORY_QUOTA_IN_USE.allocated.set(cap as i64);
+        SCHED_TXN_MEMORY_QUOTA.allocated.set(cap as i64);
         self.inner.memory_quota.set_capacity(cap)
     }
 
@@ -775,7 +775,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         // See https://github.com/rust-lang/rust/issues/59087
         let execution = execution.map(move |_| {
             memory_quota.free(execution_bytes);
-            SCHED_TXN_MEMORY_QUOTA_IN_USE
+            SCHED_TXN_MEMORY_QUOTA
                 .used
                 .set(memory_quota.in_use() as i64);
             SCHED_TXN_RUNNING_COMMANDS.dec();
