@@ -29,6 +29,7 @@ use crate::HybridEngine;
 /// ```
 pub fn hybrid_engine_for_tests<F>(
     prefix: &str,
+    gc_internal: Duration,
     configure_memory_engine_fn: F,
 ) -> Result<(TempDir, HybridEngine<RocksEngine, RangeCacheMemoryEngine>)>
 where
@@ -39,7 +40,7 @@ where
         path.path().to_str().unwrap(),
         &[CF_DEFAULT, CF_LOCK, CF_WRITE],
     )?;
-    let memory_engine = RangeCacheMemoryEngine::new(Arc::default(), Duration::from_secs(1));
+    let memory_engine = RangeCacheMemoryEngine::new(Arc::default(), gc_internal);
     configure_memory_engine_fn(&memory_engine);
     let hybrid_engine = HybridEngine::new(disk_engine, memory_engine);
     Ok((path, hybrid_engine))
