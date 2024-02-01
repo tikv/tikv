@@ -1130,12 +1130,12 @@ fn check_remove_or_demote_voter(
     leader_id: u64,
     peer_heartbeat: &collections::HashMap<u64, std::time::Instant>,
 ) -> Result<()> {
-    let mut slow_peer_count = 0;
-    let mut normal_peer_count = 0;
+    let mut slow_voters_count = 0;
+    let mut normal_voters_count = 0;
     // Here we assume if the last beartbeat is within 2 election timeout, the peer
     // is healthy. When a region is hibernate, we expect all its peers are *slow*
     // and it would still allow the operation
-    let slow_peer_threshold =
+    let slow_voter_threshold =
         2 * cfg.raft_base_tick_interval.0 * cfg.raft_max_election_timeout_ticks as u32;
     for (id, last_heartbeat) in peer_heartbeat {
         // for slow and normal peer calculation, we only count voter role
@@ -1146,15 +1146,15 @@ fn check_remove_or_demote_voter(
             .map_or(false, |p| p.role == PeerRole::Voter)
         {
             // leader itself is not a slow peer
-            if *id == leader_id || last_heartbeat.elapsed() <= slow_peer_threshold {
-                normal_peer_count += 1;
+            if *id == leader_id || last_heartbeat.elapsed() <= slow_voter_threshold {
+                normal_voters_count += 1;
             } else {
-                slow_peer_count += 1;
+                slow_voters_count += 1;
             }
         }
     }
 
-    let mut normal_peers_to_remove = vec![];
+    let mut normal_voters_to_remove = vec![];
     for cp in change_peers {
         let (change_type, peer) = (cp.get_change_type(), cp.get_peer());
         if change_type == ConfChangeType::RemoveNode
@@ -1171,9 +1171,9 @@ fn check_remove_or_demote_voter(
             // not allowed.
             if is_voter && let Some(last_heartbeat) = peer_heartbeat.get(&peer.get_id()) {
                 // peer itself is *not* slow peer, but current slow peer is >= total peers/2
-                if last_heartbeat.elapsed() <= slow_peer_threshold {
-                    normal_peer_count -= 1;
-                    normal_peers_to_remove.push(peer.clone());
+                if last_heartbeat.elapsed() <= slow_voter_threshold {
+                    normal_voters_count -= 1;
+                    normal_voters_to_remove.push(peer.clone());
                 }
             }
         }
@@ -1184,16 +1184,16 @@ fn check_remove_or_demote_voter(
     // option to finish as there's no choice.
     // We only block the operation when normal peers are going to be removed and it
     // could lead to slow peers more than normal peers
-    if !normal_peers_to_remove.is_empty()
-        && slow_peer_count > 0
-        && slow_peer_count >= normal_peer_count
+    if !normal_voters_to_remove.is_empty()
+        && slow_voters_count > 0
+        && slow_voters_count >= normal_voters_count
     {
         return Err(box_err!(
             "Ignore conf change command on region {} because RemoveNode or Demote a voter on peers {:?} may lead to unavailability. There're {} slow peers and {} normal peers",
             region.get_id(),
-            &normal_peers_to_remove,
-            slow_peer_count,
-            normal_peer_count
+            &normal_voters_to_remove,
+            slow_voters_count,
+            normal_voters_count
         ));
     }
 
