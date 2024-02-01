@@ -5,11 +5,12 @@ use std::{
     collections::BTreeMap,
     fmt::{self, Debug},
     ops::Deref,
-    sync::{Arc, Mutex},
+    sync::Arc,
     time::Duration,
 };
 
 use bytes::Bytes;
+use crossbeam::sync::ShardedLock;
 use engine_rocks::{raw::SliceTransform, util::FixedSuffixSliceTransform};
 use engine_traits::{
     CacheRange, CfNamesExt, DbVector, Error, IterOptions, Iterable, Iterator, Peekable,
@@ -196,14 +197,16 @@ impl RangeCacheMemoryEngineCore {
 /// cached region), we resort to using a the disk engine's snapshot instead.
 #[derive(Clone)]
 pub struct RangeCacheMemoryEngine {
-    pub(crate) core: Arc<Mutex<RangeCacheMemoryEngineCore>>,
+    pub(crate) core: Arc<ShardedLock<RangeCacheMemoryEngineCore>>,
     memory_limiter: Arc<GlobalMemoryLimiter>,
     background_work: Arc<BackgroundWork>,
 }
 
 impl RangeCacheMemoryEngine {
     pub fn new(limiter: Arc<GlobalMemoryLimiter>, gc_interval: Duration) -> Self {
-        let core = Arc::new(Mutex::new(RangeCacheMemoryEngineCore::new(limiter.clone())));
+        let core = Arc::new(ShardedLock::new(RangeCacheMemoryEngineCore::new(
+            limiter.clone(),
+        )));
         Self {
             core: core.clone(),
             memory_limiter: limiter,
@@ -212,12 +215,12 @@ impl RangeCacheMemoryEngine {
     }
 
     pub fn new_range(&self, range: CacheRange) {
-        let mut core = self.core.lock().unwrap();
+        let mut core = self.core.write().unwrap();
         core.range_manager.new_range(range);
     }
 
     pub fn evict_range(&mut self, range: &CacheRange) {
-        let mut core = self.core.lock().unwrap();
+        let mut core = self.core.write().unwrap();
         if core.range_manager.evict_range(range) {
             core.engine.delete_range(range);
         }
@@ -229,7 +232,7 @@ impl RangeCacheMemoryEngine {
 }
 
 impl RangeCacheMemoryEngine {
-    pub fn core(&self) -> &Arc<Mutex<RangeCacheMemoryEngineCore>> {
+    pub fn core(&self) -> &Arc<ShardedLock<RangeCacheMemoryEngineCore>> {
         &self.core
     }
 }
@@ -572,7 +575,7 @@ impl RangeCacheSnapshot {
         read_ts: u64,
         seq_num: u64,
     ) -> Option<Self> {
-        let mut core = engine.core.lock().unwrap();
+        let mut core = engine.core.write().unwrap();
         if let Some(range_id) = core.range_manager.range_snapshot(&range, read_ts) {
             return Some(RangeCacheSnapshot {
                 snapshot_meta: RagneCacheSnapshotMeta::new(range_id, range, read_ts, seq_num),
@@ -587,7 +590,7 @@ impl RangeCacheSnapshot {
 
 impl Drop for RangeCacheSnapshot {
     fn drop(&mut self) {
-        let mut core = self.engine.core.lock().unwrap();
+        let mut core = self.engine.core.write().unwrap();
         for range_removable in core
             .range_manager
             .remove_range_snapshot(&self.snapshot_meta)
@@ -724,7 +727,7 @@ mod tests {
         engine.new_range(range.clone());
 
         let verify_snapshot_count = |snapshot_ts, count| {
-            let core = engine.core.lock().unwrap();
+            let core = engine.core.read().unwrap();
             if count > 0 {
                 assert_eq!(
                     *core
@@ -755,13 +758,13 @@ mod tests {
         assert!(engine.snapshot(range.clone(), 5, u64::MAX).is_none());
 
         {
-            let mut core = engine.core.lock().unwrap();
+            let mut core = engine.core.write().unwrap();
             core.range_manager.set_range_readable(&range, true);
         }
         let s1 = engine.snapshot(range.clone(), 5, u64::MAX).unwrap();
 
         {
-            let mut core = engine.core.lock().unwrap();
+            let mut core = engine.core.write().unwrap();
             let t_range = CacheRange::new(b"k00".to_vec(), b"k02".to_vec());
             assert!(!core.range_manager.set_safe_ts(&t_range, 5));
             assert!(core.range_manager.set_safe_ts(&range, 5));
@@ -784,7 +787,7 @@ mod tests {
         verify_snapshot_count(10, 1);
         drop(s3);
         {
-            let core = engine.core.lock().unwrap();
+            let core = engine.core.write().unwrap();
             assert!(
                 core.range_manager
                     .ranges()
@@ -920,7 +923,7 @@ mod tests {
         engine.new_range(range.clone());
 
         {
-            let mut core = engine.core.lock().unwrap();
+            let mut core = engine.core.write().unwrap();
             core.range_manager.set_range_readable(&range, true);
             core.range_manager.set_safe_ts(&range, 5);
             let sl = core.engine.data[cf_to_id("write")].clone();
@@ -1000,7 +1003,7 @@ mod tests {
         let step: i32 = 2;
 
         {
-            let mut core = engine.core.lock().unwrap();
+            let mut core = engine.core.write().unwrap();
             core.range_manager.set_range_readable(&range, true);
             core.range_manager.set_safe_ts(&range, 5);
             let sl = core.engine.data[cf_to_id("write")].clone();
@@ -1186,7 +1189,7 @@ mod tests {
         let step: i32 = 2;
 
         {
-            let mut core = engine.core.lock().unwrap();
+            let mut core = engine.core.write().unwrap();
             core.range_manager.set_range_readable(&range, true);
             core.range_manager.set_safe_ts(&range, 5);
             let sl = core.engine.data[cf_to_id("write")].clone();
@@ -1289,7 +1292,7 @@ mod tests {
         let step: i32 = 2;
 
         {
-            let mut core = engine.core.lock().unwrap();
+            let mut core = engine.core.write().unwrap();
             core.range_manager.set_range_readable(&range, true);
             core.range_manager.set_safe_ts(&range, 5);
             let sl = core.engine.data[cf_to_id("write")].clone();
@@ -1413,7 +1416,7 @@ mod tests {
         engine.new_range(range.clone());
 
         {
-            let mut core = engine.core.lock().unwrap();
+            let mut core = engine.core.write().unwrap();
             core.range_manager.set_range_readable(&range, true);
             core.range_manager.set_safe_ts(&range, 5);
             let sl = core.engine.data[cf_to_id("write")].clone();
@@ -1517,7 +1520,7 @@ mod tests {
             let engine = RangeCacheMemoryEngine::new(Arc::default(), Duration::from_secs(1));
             engine.new_range(range.clone());
             let sl = {
-                let mut core = engine.core.lock().unwrap();
+                let mut core = engine.core.write().unwrap();
                 core.range_manager.set_range_readable(&range, true);
                 core.range_manager.set_safe_ts(&range, 5);
                 core.engine.data[cf_to_id("write")].clone()
@@ -1554,7 +1557,7 @@ mod tests {
             let engine = RangeCacheMemoryEngine::new(Arc::default(), Duration::from_secs(1));
             engine.new_range(range.clone());
             let sl = {
-                let mut core = engine.core.lock().unwrap();
+                let mut core = engine.core.write().unwrap();
                 core.range_manager.set_range_readable(&range, true);
                 core.range_manager.set_safe_ts(&range, 5);
                 core.engine.data[cf_to_id("write")].clone()
@@ -1584,7 +1587,7 @@ mod tests {
             let engine = RangeCacheMemoryEngine::new(Arc::default(), Duration::from_secs(1));
             engine.new_range(range.clone());
             let sl = {
-                let mut core = engine.core.lock().unwrap();
+                let mut core = engine.core.write().unwrap();
                 core.range_manager.set_range_readable(&range, true);
                 core.range_manager.set_safe_ts(&range, 5);
                 core.engine.data[cf_to_id("write")].clone()
@@ -1616,7 +1619,7 @@ mod tests {
             let engine = RangeCacheMemoryEngine::new(Arc::default(), Duration::from_secs(1));
             engine.new_range(range.clone());
             let sl = {
-                let mut core = engine.core.lock().unwrap();
+                let mut core = engine.core.write().unwrap();
                 core.range_manager.set_range_readable(&range, true);
                 core.range_manager.set_safe_ts(&range, 5);
                 core.engine.data[cf_to_id("write")].clone()
@@ -1649,7 +1652,7 @@ mod tests {
         engine.new_range(range.clone());
 
         {
-            let mut core = engine.core.lock().unwrap();
+            let mut core = engine.core.write().unwrap();
             core.range_manager.set_range_readable(&range, true);
             core.range_manager.set_safe_ts(&range, 5);
             let sl = core.engine.data[cf_to_id("write")].clone();
@@ -1745,7 +1748,7 @@ mod tests {
         engine.new_range(range.clone());
 
         {
-            let mut core = engine.core.lock().unwrap();
+            let mut core = engine.core.write().unwrap();
             core.range_manager.set_range_readable(&range, true);
             core.range_manager.set_safe_ts(&range, 5);
             let sl = core.engine.data[cf_to_id("write")].clone();
@@ -1799,7 +1802,7 @@ mod tests {
         let evict_range = CacheRange::new(construct_user_key(10), construct_user_key(20));
         engine.new_range(range.clone());
         {
-            let mut core = engine.core.lock().unwrap();
+            let mut core = engine.core.write().unwrap();
             core.range_manager.set_range_readable(&range, true);
             core.range_manager.set_safe_ts(&range, 5);
             let sl = core.engine.data[cf_to_id("write")].clone();

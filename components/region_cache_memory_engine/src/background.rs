@@ -1,16 +1,12 @@
 // Copyright 2024 TiKV Project Authors. Licensed under Apache-2.0.
 
 use core::slice::SlicePattern;
-use std::{
-    fmt::Display,
-    sync::{Arc, Mutex},
-    thread::JoinHandle,
-    time::Duration,
-};
+use std::{fmt::Display, sync::Arc, thread::JoinHandle, time::Duration};
 
 use crossbeam::{
     channel::{bounded, tick, Sender},
     select,
+    sync::ShardedLock,
 };
 use engine_traits::{CacheRange, CF_DEFAULT, CF_WRITE};
 use skiplist_rs::Skiplist;
@@ -64,7 +60,7 @@ impl Drop for BackgroundWork {
 }
 
 impl BackgroundWork {
-    pub fn new(core: Arc<Mutex<RangeCacheMemoryEngineCore>>, gc_interval: Duration) -> Self {
+    pub fn new(core: Arc<ShardedLock<RangeCacheMemoryEngineCore>>, gc_interval: Duration) -> Self {
         let worker = Worker::new("range-cache-background-worker");
         let runner = BackgroundRunner::new(core.clone());
         let scheduler = worker.start("range-cache-engine-background", runner);
@@ -147,16 +143,16 @@ impl Display for GcTask {
 }
 
 pub struct BackgroundRunner {
-    engine_core: Arc<Mutex<RangeCacheMemoryEngineCore>>,
+    engine_core: Arc<ShardedLock<RangeCacheMemoryEngineCore>>,
 }
 
 impl BackgroundRunner {
-    pub fn new(engine_core: Arc<Mutex<RangeCacheMemoryEngineCore>>) -> Self {
+    pub fn new(engine_core: Arc<ShardedLock<RangeCacheMemoryEngineCore>>) -> Self {
         Self { engine_core }
     }
 
     fn ranges_for_gc(&self) -> Vec<CacheRange> {
-        let mut core = self.engine_core.lock().unwrap();
+        let mut core = self.engine_core.write().unwrap();
         let ranges: Vec<CacheRange> = core.range_manager().ranges().keys().cloned().collect();
         core.set_ranges_gcing(ranges.clone());
         ranges
@@ -164,7 +160,7 @@ impl BackgroundRunner {
 
     fn gc_range(&self, range: &CacheRange, safe_point: u64) {
         let (skiplist_engine, safe_ts) = {
-            let mut core = self.engine_core.lock().unwrap();
+            let mut core = self.engine_core.write().unwrap();
             let Some(range_meta) = core.mut_range_manager().mut_range_meta(range) else {
                 return;
             };
@@ -226,7 +222,7 @@ impl BackgroundRunner {
     }
 
     fn gc_finished(&mut self) {
-        let mut core = self.engine_core.lock().unwrap();
+        let mut core = self.engine_core.write().unwrap();
         core.clear_ranges_gcing();
     }
 }
@@ -523,7 +519,7 @@ pub mod tests {
         let range = CacheRange::new(b"".to_vec(), b"z".to_vec());
         engine.new_range(range.clone());
         let (write, default) = {
-            let mut core = engine.core().lock().unwrap();
+            let mut core = engine.core().write().unwrap();
             let skiplist_engine = core.engine();
             core.mut_range_manager().set_range_readable(&range, true);
             (
@@ -578,7 +574,7 @@ pub mod tests {
         let range = CacheRange::new(b"".to_vec(), b"z".to_vec());
         engine.new_range(range.clone());
         let (write, default) = {
-            let mut core = engine.core().lock().unwrap();
+            let mut core = engine.core().write().unwrap();
             let skiplist_engine = core.engine();
             core.mut_range_manager().set_range_readable(&range, true);
             (
@@ -626,7 +622,7 @@ pub mod tests {
     fn test_gc_worker() {
         let engine = RangeCacheMemoryEngine::new(Arc::default(), Duration::from_secs(1));
         let (write, default) = {
-            let mut core = engine.core.lock().unwrap();
+            let mut core = engine.core.write().unwrap();
             core.mut_range_manager()
                 .new_range(CacheRange::new(b"".to_vec(), b"z".to_vec()));
             let engine = core.engine();
