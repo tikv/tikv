@@ -504,6 +504,10 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             });
         };
         // write flow control
+        //
+        // TODO: Consider deprecating this write flow control. Reasons being:
+        // 1) The flow_controller accomplishes the same task, and
+        // 2) The "admission control" functionality has been superseded by memory quota.
         if cmd.need_flow_control() && self.inner.too_busy(cmd.ctx().region_id) {
             fail_with_busy(callback);
             return;
