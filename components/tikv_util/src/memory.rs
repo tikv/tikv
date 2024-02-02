@@ -35,57 +35,18 @@ pub trait HeapSize {
     }
 }
 
-macro_rules! impl_heap_size{
-    (
-        $($typ: ty,)+
-    ) => {
+macro_rules! impl_zero_heap_size{
+    ( $($typ: ty,)+ ) => {
         $(
             impl HeapSize for $typ {
-                fn heap_size(&self) -> usize {
-                    std::mem::size_of::<Self>()
-                }
+                fn heap_size(&self) -> usize { 0 }
             }
         )+
     }
 }
 
-impl_heap_size! {
-    // TODO: Clarify the semantic of `heap_size`.
-    // NB: The current `HeapSize` trait is ambiguous, it may refer to 1)
-    // the number of bytes it owns in heap, or 2) the number of bytes it owns in
-    // heap plus the number of bytes of itself.
-    // Because of the ambiguous, it is insufficient to count heap size
-    // accurately. We need to add a second methods to `HeapSize` distinguish the
-    // difference.
-    //
-    // A better alternative would be the following.
-    //
-    // ```rust
-    // trait HeapSize {
-    //     // The number of bytes it owns in bytes.
-    //     fn heap_size(&self) -> usize;
-    //     // The size of itself.
-    //     fn inline_size(&self) -> usize;
-    // }
-    //
-    // impl HeapSize for u8 {
-    //     fn heap_size(&self) -> usize { 0 }
-    //     fn inline_size(&self) -> usize { 1 }
-    // }
-    // impl <T: HeapSize> HeapSize for Box<T> {
-    //     fn heap_size(&self) -> usize { self.as_ref().inline_size() + self.as_ref().heap_size() }
-    //     fn inline_size(&self) -> usize { std::mem::size_of::<Self>() }
-    // }
-    // fn main() {
-    //     let b = Box::new(0u8);
-    //     dbg!(b.heap_size());
-    //     let bb = Box::new(b);
-    //     dbg!(bb.heap_size());
-    // }
-    // ```
-    //
-    // For now, we choose the 2) semantic for types below.
-    u8, bool, u64,
+impl_zero_heap_size! {
+    bool, u8, u64,
 }
 
 impl<T: HeapSize> HeapSize for [T] {
@@ -125,11 +86,12 @@ impl<T: HeapSize> HeapSize for Option<T> {
 
 impl<K: HeapSize, V: HeapSize> HeapSize for HashMap<K, V> {
     fn heap_size(&self) -> usize {
+        let cap_bytes = self.capacity() * (mem::size_of::<K>() + mem::size_of::<V>());
         if self.is_empty() {
-            0
+            cap_bytes
         } else {
             let kv = self.iter().next().unwrap();
-            self.len() * (kv.0.heap_size() + kv.1.heap_size())
+            cap_bytes + self.len() * (kv.0.heap_size() + kv.1.heap_size())
         }
     }
 }
@@ -391,5 +353,36 @@ mod tests {
         // Free more then it has.
         quota.free(230);
         assert_eq!(quota.in_use(), 0);
+    }
+
+    #[test]
+    fn test_heap_size() {
+        let au8 = [1u8, 2, 3];
+        assert_eq!(au8.heap_size(), 0);
+
+        let mut vu8 = Vec::with_capacity(16);
+        assert_eq!(vu8.heap_size(), 16);
+        vu8.extend(au8);
+        assert_eq!(vu8.heap_size(), 16);
+
+        let ovu8 = Some(vu8);
+        assert_eq!(ovu8.heap_size(), 16);
+
+        let ovu82 = (ovu8, Some(Vec::<u8>::with_capacity(16)));
+        assert_eq!(ovu82.heap_size(), 16 * 2);
+
+        let mut mu8u64 = HashMap::<u8, u64>::default();
+        mu8u64.reserve(16);
+        assert_eq!(mu8u64.heap_size(), mu8u64.capacity() * (1 + 8));
+
+        let mut mu8vu64 = HashMap::<u8, Vec<u64>>::default();
+        mu8vu64.reserve(16);
+        mu8vu64.insert(1, Vec::with_capacity(2));
+        mu8vu64.insert(2, Vec::with_capacity(2));
+        assert_eq!(
+            mu8vu64.heap_size(),
+            mu8vu64.capacity() * (1 + mem::size_of::<Vec<u64>>())
+                + 2 * (Vec::<u64>::with_capacity(2).heap_size())
+        );
     }
 }

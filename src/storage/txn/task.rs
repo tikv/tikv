@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use kvproto::kvrpcpb::ExtraOp;
 use tikv_kv::Snapshot;
-use tikv_util::memory::{HeapSize, MemoryQuota, MemoryQuotaExceeded};
+use tikv_util::memory::{HeapSize, MemoryQuota, MemoryQuotaExceeded, OwnedAllocated};
 use tracker::{get_tls_tracker_token, TrackerToken};
 
 use crate::storage::{
@@ -21,7 +21,7 @@ pub(super) struct Task {
     tracker: TrackerToken,
     cmd: Option<Command>,
     extra_op: ExtraOp,
-    memory_quota: Option<(Arc<MemoryQuota>, usize)>,
+    memory_quota: Option<OwnedAllocated>,
 }
 
 impl Task {
@@ -66,9 +66,9 @@ impl Task {
         memory_quota: Arc<MemoryQuota>,
     ) -> Result<(), MemoryQuotaExceeded> {
         if self.memory_quota.is_none() {
-            let bytes = self.cmd.heap_size();
-            memory_quota.alloc(bytes)?;
-            self.memory_quota = Some((memory_quota, bytes));
+            let mut owned = OwnedAllocated::new(memory_quota);
+            owned.alloc(self.cmd.heap_size())?;
+            self.memory_quota = Some(owned);
         }
         Ok(())
     }
@@ -80,9 +80,6 @@ impl Task {
     ) -> super::Result<WriteResult> {
         let cmd = self.cmd.take().unwrap();
         let res = cmd.process_write(snapshot, context);
-        if let Some((memory_quota, bytes)) = self.memory_quota.take() {
-            memory_quota.free(bytes);
-        }
         res
     }
 
@@ -93,18 +90,7 @@ impl Task {
     ) -> super::Result<ProcessResult> {
         let cmd = self.cmd.take().unwrap();
         let res = cmd.process_read(snapshot, statistics);
-        if let Some((memory_quota, bytes)) = self.memory_quota.take() {
-            memory_quota.free(bytes);
-        }
         res
-    }
-}
-
-impl Drop for Task {
-    fn drop(&mut self) {
-        if let Some((memory_quota, bytes)) = self.memory_quota.take() {
-            memory_quota.free(bytes);
-        }
     }
 }
 
