@@ -41,7 +41,10 @@ fn test_upload_sst() {
 
     // diskfull
     set_disk_status(DiskUsage::AlmostFull);
-    assert_to_string_contains!(send_upload_sst(&import, &meta, &data).unwrap_err(), "DiskSpaceNotEnough");
+    assert_to_string_contains!(
+        send_upload_sst(&import, &meta, &data).unwrap_err(),
+        "DiskSpaceNotEnough"
+    );
     set_disk_status(DiskUsage::Normal);
 
     let mut meta = new_sst_meta(crc32, length);
@@ -76,10 +79,10 @@ fn run_test_write_sst(
     let resp = send_write_sst(&import, &meta, keys, values, 1);
     if !expected_error.is_empty() {
         assert_to_string_contains!(resp.unwrap_err(), expected_error);
-        return
+        return;
     }
 
-    let resp = resp.unwrap(); 
+    let resp = resp.unwrap();
     for m in resp.metas.into_iter() {
         let mut ingest = IngestRequest::default();
         ingest.set_context(ctx.clone());
