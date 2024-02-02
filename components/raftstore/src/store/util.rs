@@ -1167,6 +1167,11 @@ fn check_availability_by_last_heartbeats(
     }
 
     let is_healthy = normal_voters.len() > slow_voters.len();
+    // if it's already unhealthy, let it go
+    if !is_healthy {
+        return Ok(());
+    }
+
     let mut normal_voters_to_remove = vec![];
     let mut slow_voters_to_add = vec![];
     for cp in change_peers {
@@ -1211,7 +1216,7 @@ fn check_availability_by_last_heartbeats(
 
     // Only block the conf change when currently it's healthy, but would be
     // unhealthy. If currently it's already unhealthy, let it go.
-    if is_healthy && slow_voters.len() >= normal_voters.len() {
+    if slow_voters.len() >= normal_voters.len() {
         return Err(box_err!(
             "Ignore conf change command on [region_id={}] because the operations may lead to unavailability.\
              Normal voters to remove {:?}, slow voters to add {:?}.\
