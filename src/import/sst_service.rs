@@ -46,7 +46,10 @@ use tikv_kv::{
 use tikv_util::{
     config::ReadableSize,
     future::{create_stream_with_buffer, paired_future_callback},
-    sys::thread::ThreadBuildWrapper,
+    sys::{
+        disk::{get_disk_status, DiskUsage},
+        thread::ThreadBuildWrapper,
+    },
     time::{Instant, Limiter},
     HandyRwLock,
 };
@@ -744,6 +747,10 @@ macro_rules! impl_write {
             let resource_manager = self.resource_manager.clone();
             let handle_task = async move {
                 let (res, rx) = async move {
+                    if get_disk_status(0) != DiskUsage::Normal {
+                        warn!("write failed due to not enough disk space");
+                        return (Err(Error::DiskSpaceNotEnough), Some(rx));
+                    }
                     let first_req = match rx.try_next().await {
                         Ok(r) => r,
                         Err(e) => return (Err(e), Some(rx)),
@@ -953,6 +960,10 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
             // So stream will not be dropped until response is sent.
             let rx = &mut map_rx;
             let res = async move {
+                if get_disk_status(0) != DiskUsage::Normal {
+                    warn!("Upload failed due to not enough disk space");
+                    return Err(Error::DiskSpaceNotEnough);
+                }
                 let first_chunk = rx.try_next().await?;
                 let meta = match first_chunk {
                     Some(ref chunk) if chunk.has_meta() => chunk.get_meta(),
