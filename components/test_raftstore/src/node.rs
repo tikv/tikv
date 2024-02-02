@@ -10,7 +10,12 @@ use concurrency_manager::ConcurrencyManager;
 use encryption_export::DataKeyManager;
 use engine_rocks::{RocksEngine, RocksSnapshot};
 use engine_test::raft::RaftTestEngine;
+<<<<<<< HEAD
 use engine_traits::{Engines, MiscExt, Peekable};
+=======
+use engine_traits::{Engines, KvEngine, SnapshotContext};
+use health_controller::HealthController;
+>>>>>>> 00a2518938 (*: Add module health_controller and move SlowScore, SlowTrend, HealthService from PdWorker to it (#16456))
 use kvproto::{
     kvrpcpb::ApiVersion,
     metapb,
@@ -256,7 +261,7 @@ impl Simulator for NodeCluster {
             Arc::clone(&self.pd_client),
             Arc::default(),
             bg_worker.clone(),
-            None,
+            HealthController::new(),
             None,
         );
 
