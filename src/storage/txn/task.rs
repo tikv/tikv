@@ -21,7 +21,7 @@ pub(super) struct Task {
     tracker: TrackerToken,
     cmd: Option<Command>,
     extra_op: ExtraOp,
-    memory_quota: Option<OwnedAllocated>,
+    owned_quota: Option<OwnedAllocated>,
 }
 
 impl Task {
@@ -33,7 +33,7 @@ impl Task {
             tracker,
             cmd: Some(cmd),
             extra_op: ExtraOp::Noop,
-            memory_quota: None,
+            owned_quota: None,
         }
     }
 
@@ -65,10 +65,10 @@ impl Task {
         &mut self,
         memory_quota: Arc<MemoryQuota>,
     ) -> Result<(), MemoryQuotaExceeded> {
-        if self.memory_quota.is_none() {
+        if self.owned_quota.is_none() {
             let mut owned = OwnedAllocated::new(memory_quota);
             owned.alloc(self.cmd.heap_size())?;
-            self.memory_quota = Some(owned);
+            self.owned_quota = Some(owned);
         }
         Ok(())
     }
