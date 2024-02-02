@@ -819,7 +819,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         self.merge_state_changes_to(&mut write_task);
         self.storage_mut()
             .handle_raft_ready(ctx, &mut ready, &mut write_task);
-        self.try_compelete_recovery();
+        self.try_complete_recovery();
         self.on_advance_persisted_apply_index(ctx, prev_persisted, &mut write_task);
 
         if !ready.persisted_messages().is_empty() {
