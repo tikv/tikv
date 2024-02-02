@@ -268,6 +268,7 @@ mod all {
         fail::cfg("try_start_observe", "2*return").unwrap();
         fail::cfg("try_start_observe0", "off").unwrap();
 
+        std::thread::sleep(Duration::from_secs(2));
         let round2 = run_async_test(suite.write_records(256, 128, 1));
         suite.force_flush_files("failure_and_split");
         suite.wait_for_flush();
