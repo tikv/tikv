@@ -10,7 +10,7 @@ use api_version::api_v2::TIDB_RANGES_COMPLEMENT;
 use causal_ts::CausalTsProviderImpl;
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::{Engines, Iterable, KvEngine, RaftEngine, DATA_CFS, DATA_KEY_PREFIX_LEN};
-use grpcio_health::HealthService;
+use health_controller::HealthController;
 use kvproto::{
     kvrpcpb::ApiVersion, metapb, raft_serverpb::StoreIdent, replication_modepb::ReplicationStatus,
 };
@@ -103,7 +103,7 @@ pub struct Node<C: PdClient + 'static, EK: KvEngine, ER: RaftEngine> {
     pd_client: Arc<C>,
     state: Arc<Mutex<GlobalReplicationState>>,
     bg_worker: Worker,
-    health_service: Option<HealthService>,
+    health_controller: HealthController,
 }
 
 impl<C, EK, ER> Node<C, EK, ER>
@@ -121,7 +121,7 @@ where
         pd_client: Arc<C>,
         state: Arc<Mutex<GlobalReplicationState>>,
         bg_worker: Worker,
-        health_service: Option<HealthService>,
+        health_controller: HealthController,
         default_store: Option<metapb::Store>,
     ) -> Node<C, EK, ER> {
         let store = init_store(default_store, cfg);
@@ -136,7 +136,7 @@ where
             has_started: false,
             state,
             bg_worker,
-            health_service,
+            health_controller,
         }
     }
 
@@ -494,7 +494,7 @@ where
             self.state.clone(),
             concurrency_manager,
             collector_reg_handle,
-            self.health_service.clone(),
+            self.health_controller.clone(),
             causal_ts_provider,
             grpc_service_mgr,
             safe_point,

@@ -100,6 +100,7 @@ fxhash = "0.2.1"
 getset = "0.1"
 grpcio = { workspace = true }
 grpcio-health = { workspace = true }
+health_controller = { workspace = true }
 hex = "0.4"
 http = "0"
 hyper = { version = "0.14", features = ["full"] }
@@ -269,6 +270,7 @@ members = [
   "components/external_storage",
   "components/external_storage/export",
   "components/file_system",
+  "components/health_controller",
   "components/into_other",
   "components/keys",
   "components/log_wrappers",
@@ -345,6 +347,7 @@ external_storage = { path = "components/external_storage" }
 external_storage_export = { path = "components/external_storage/export" }
 file_system = { path = "components/file_system" }
 gcp = { path = "components/cloud/gcp" }
+health_controller = { path = "components/health_controller" }
 into_other = { path = "components/into_other" }
 keys = { path = "components/keys" }
 log_wrappers = { path = "components/log_wrappers" }

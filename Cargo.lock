@@ -2514,6 +2514,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "health_controller"
+version = "0.1.0"
+dependencies = [
+ "grpcio-health",
+ "kvproto",
+ "ordered-float",
+ "parking_lot 0.12.1",
+ "prometheus",
+ "prometheus-static-metric",
+ "slog",
+ "slog-global",
+ "tikv_util",
+]
+
+[[package]]
 name = "heck"
 version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4428,6 +4443,7 @@ dependencies = [
  "futures-util",
  "getset",
  "grpcio-health",
+ "health_controller",
  "into_other",
  "itertools",
  "keys",
@@ -4493,6 +4509,7 @@ dependencies = [
  "file_system",
  "fs2",
  "futures 0.3.15",
+ "health_controller",
  "keys",
  "kvproto",
  "log_wrappers",
@@ -5399,6 +5416,7 @@ dependencies = [
  "futures 0.3.15",
  "grpcio",
  "grpcio-health",
+ "health_controller",
  "hex 0.4.2",
  "keys",
  "kvproto",
@@ -6111,6 +6129,7 @@ dependencies = [
  "futures 0.3.15",
  "grpcio",
  "grpcio-health",
+ "health_controller",
  "keys",
  "kvproto",
  "lazy_static",
@@ -6158,6 +6177,7 @@ dependencies = [
  "futures 0.3.15",
  "grpcio",
  "grpcio-health",
+ "health_controller",
  "keys",
  "kvproto",
  "lazy_static",
@@ -6274,6 +6294,7 @@ dependencies = [
  "futures 0.3.15",
  "grpcio",
  "grpcio-health",
+ "health_controller",
  "hyper",
  "keys",
  "kvproto",
@@ -6574,6 +6595,7 @@ dependencies = [
  "getset",
  "grpcio",
  "grpcio-health",
+ "health_controller",
  "hex 0.4.2",
  "http",
  "hyper",

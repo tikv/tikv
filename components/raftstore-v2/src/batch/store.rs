@@ -21,6 +21,7 @@ use encryption_export::DataKeyManager;
 use engine_traits::{KvEngine, RaftEngine, TabletRegistry};
 use file_system::{set_io_type, IoType, WithIoType};
 use futures::compat::Future01CompatExt;
+use health_controller::types::LatencyInspector;
 use kvproto::{disk_usage::DiskUsage, raft_serverpb::RaftMessage};
 use pd_client::PdClient;
 use raft::{StateRole, INVALID_ID};
@@ -32,7 +33,6 @@ use raftstore::{
             GlobalStoreStat, LocalStoreStat,
         },
         local_metrics::RaftMetrics,
-        util::LatencyInspector,
         AutoSplitController, Config, ReadRunner, ReadTask, RefreshConfigTask, SplitCheckRunner,
         SplitCheckTask, StoreWriters, StoreWritersContext, TabletSnapManager, Transport,
         WriteRouterContext, WriteSenders, WriterContoller,
