@@ -43,14 +43,18 @@ fn parse_write(value: &[u8]) -> Result<WriteRef<'_>, String> {
     }
 }
 
-pub struct BackgroundWork {
+// BgWorkManager managers the worker inits, stops, and task schedules. When
+// created, it starts a worker which receives tasks such as gc task, range
+// delete task and so on, and starts a thread for periodically schedule gc
+// tasks.
+pub struct BgWorkManager {
     worker: Worker,
     scheduler: Scheduler<BackgroundTask>,
 
     tick_stopper: Option<(JoinHandle<()>, Sender<bool>)>,
 }
 
-impl Drop for BackgroundWork {
+impl Drop for BgWorkManager {
     fn drop(&mut self) {
         let (h, tx) = self.tick_stopper.take().unwrap();
         let _ = tx.send(true);
@@ -59,7 +63,7 @@ impl Drop for BackgroundWork {
     }
 }
 
-impl BackgroundWork {
+impl BgWorkManager {
     pub fn new(core: Arc<ShardedLock<RangeCacheMemoryEngineCore>>, gc_interval: Duration) -> Self {
         let worker = Worker::new("range-cache-background-worker");
         let runner = BackgroundRunner::new(core.clone());
@@ -67,7 +71,7 @@ impl BackgroundWork {
 
         let scheduler_clone = scheduler.clone();
 
-        let (handle, tx) = BackgroundWork::start_tick(scheduler_clone, gc_interval);
+        let (handle, tx) = BgWorkManager::start_tick(scheduler_clone, gc_interval);
 
         Self {
             worker,

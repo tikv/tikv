@@ -20,7 +20,7 @@ use engine_traits::{
 use skiplist_rs::{IterRef, Skiplist, MIB};
 
 use crate::{
-    background::BackgroundWork,
+    background::BgWorkManager,
     keys::{
         decode_key, encode_key_for_eviction, encode_seek_key, InternalKey, InternalKeyComparator,
         ValueType, VALUE_TYPE_FOR_SEEK, VALUE_TYPE_FOR_SEEK_FOR_PREV,
@@ -199,7 +199,7 @@ impl RangeCacheMemoryEngineCore {
 pub struct RangeCacheMemoryEngine {
     pub(crate) core: Arc<ShardedLock<RangeCacheMemoryEngineCore>>,
     memory_limiter: Arc<GlobalMemoryLimiter>,
-    background_work: Arc<BackgroundWork>,
+    bg_work_manager: Arc<BgWorkManager>,
 }
 
 impl RangeCacheMemoryEngine {
@@ -210,7 +210,7 @@ impl RangeCacheMemoryEngine {
         Self {
             core: core.clone(),
             memory_limiter: limiter,
-            background_work: Arc::new(BackgroundWork::new(core, gc_interval)),
+            bg_work_manager: Arc::new(BgWorkManager::new(core, gc_interval)),
         }
     }
 
@@ -226,8 +226,8 @@ impl RangeCacheMemoryEngine {
         }
     }
 
-    pub fn background_worker(&self) -> &BackgroundWork {
-        &self.background_work
+    pub fn background_worker(&self) -> &BgWorkManager {
+        &self.bg_work_manager
     }
 }
 
