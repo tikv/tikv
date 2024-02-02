@@ -1141,18 +1141,13 @@ fn check_availability_by_last_heartbeats(
     leader_id: u64,
     peer_heartbeats: &collections::HashMap<u64, std::time::Instant>,
 ) -> Result<()> {
-<<<<<<< HEAD
-    let mut slow_peer_count = 0;
-    let mut normal_peer_count = 0;
-=======
     let mut slow_voters = vec![];
     let mut normal_voters = vec![];
 
->>>>>>> 04370e9ef4 (raftstore: polish the availability check on conf change requests (#16486))
     // Here we assume if the last beartbeat is within 2 election timeout, the peer
     // is healthy. When a region is hibernate, we expect all its peers are *slow*
     // and it would still allow the operation
-    let slow_peer_threshold =
+    let slow_voter_threshold =
         2 * cfg.raft_base_tick_interval.0 * cfg.raft_max_election_timeout_ticks as u32;
     for (id, last_heartbeat) in peer_heartbeats {
         // for slow and normal peer calculation, we only count voter role
@@ -1165,24 +1160,14 @@ fn check_availability_by_last_heartbeats(
             })
         {
             // leader itself is not a slow peer
-<<<<<<< HEAD
-            if *id == leader_id || last_heartbeat.elapsed() <= slow_peer_threshold {
-                normal_peer_count += 1;
-            } else {
-                slow_peer_count += 1;
-=======
             if *id == leader_id || last_heartbeat.elapsed() <= slow_voter_threshold {
                 normal_voters.push(*id);
             } else {
                 slow_voters.push(*id);
->>>>>>> 04370e9ef4 (raftstore: polish the availability check on conf change requests (#16486))
             }
         }
     }
 
-<<<<<<< HEAD
-    let mut normal_peers_to_remove = vec![];
-=======
     let is_healthy = normal_voters.len() > slow_voters.len();
     // if it's already unhealthy, let it go
     if !is_healthy {
@@ -1191,7 +1176,6 @@ fn check_availability_by_last_heartbeats(
 
     let mut normal_voters_to_remove = vec![];
     let mut slow_voters_to_add = vec![];
->>>>>>> 04370e9ef4 (raftstore: polish the availability check on conf change requests (#16486))
     for cp in change_peers {
         let (change_type, peer) = (cp.get_change_type(), cp.get_peer());
         let is_voter = region
@@ -1223,53 +1207,27 @@ fn check_availability_by_last_heartbeats(
             // If the change_type is AddLearnerNode and the last heartbeat is found, it
             // means it's a demote from voter as AddLearnerNode on existing learner node is
             // not allowed.
-<<<<<<< HEAD
-            if is_voter && let Some(last_heartbeat) = peer_heartbeat.get(&peer.get_id()) {
-                // peer itself is *not* slow peer, but current slow peer is >= total peers/2
-                if last_heartbeat.elapsed() <= slow_peer_threshold {
-                    normal_peer_count -= 1;
-                    normal_peers_to_remove.push(peer.clone());
-=======
             if let Some(last_heartbeat) = peer_heartbeats.get(&peer.get_id()) {
                 if last_heartbeat.elapsed() <= slow_voter_threshold {
                     normal_voters.retain(|id| *id != peer.get_id());
                     normal_voters_to_remove.push(peer.clone());
->>>>>>> 04370e9ef4 (raftstore: polish the availability check on conf change requests (#16486))
                 }
             }
         }
     }
 
-<<<<<<< HEAD
-    // only block the conf change when there's chance to improve the availability
-    // For example, if there's no normal peers actually, then we still allow the
-    // option to finish as there's no choice.
-    // We only block the operation when normal peers are going to be removed and it
-    // could lead to slow peers more than normal peers
-    if !normal_peers_to_remove.is_empty()
-        && slow_peer_count > 0
-        && slow_peer_count >= normal_peer_count
-    {
-=======
     // Only block the conf change when currently it's healthy, but would be
     // unhealthy. If currently it's already unhealthy, let it go.
     if slow_voters.len() >= normal_voters.len() {
->>>>>>> 04370e9ef4 (raftstore: polish the availability check on conf change requests (#16486))
         return Err(box_err!(
             "Ignore conf change command on [region_id={}] because the operations may lead to unavailability.\
              Normal voters to remove {:?}, slow voters to add {:?}.\
              Normal voters would be {:?}, slow voters would be {:?}.",
             region.get_id(),
-<<<<<<< HEAD
-            &normal_peers_to_remove,
-            slow_peer_count,
-            normal_peer_count
-=======
             &normal_voters_to_remove,
             &slow_voters_to_add,
             &normal_voters,
             &slow_voters
->>>>>>> 04370e9ef4 (raftstore: polish the availability check on conf change requests (#16486))
         ));
     }
 
