@@ -89,12 +89,14 @@ pub enum Modify {
 }
 
 impl HeapSize for Modify {
-    fn heap_size(&self) -> usize {
+    fn approximate_heap_size(&self) -> usize {
         match self {
-            Modify::Delete(_, k) => k.heap_size(),
-            Modify::Put(_, k, v) => k.heap_size() + v.heap_size(),
-            Modify::PessimisticLock(k, _) => k.heap_size(),
-            Modify::DeleteRange(_, k1, k2, _) => k1.heap_size() + k2.heap_size(),
+            Modify::Delete(_, k) => k.approximate_heap_size(),
+            Modify::Put(_, k, v) => k.approximate_heap_size() + v.approximate_heap_size(),
+            Modify::PessimisticLock(k, _) => k.approximate_heap_size(),
+            Modify::DeleteRange(_, k1, k2, _) => {
+                k1.approximate_heap_size() + k2.approximate_heap_size()
+            }
             Modify::Ingest(_) => 0,
         }
     }

@@ -49,9 +49,9 @@ impl Debug for ResumedPessimisticLockItem {
 }
 
 impl tikv_util::memory::HeapSize for ResumedPessimisticLockItem {
-    fn heap_size(&self) -> usize {
+    fn approximate_heap_size(&self) -> usize {
         // TODO: account heap size for params
-        self.key.heap_size()
+        self.key.approximate_heap_size()
     }
 }
 

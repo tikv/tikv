@@ -29,8 +29,13 @@ pub unsafe fn vec_transmute<F, T>(from: Vec<F>) -> Vec<T> {
     Vec::from_raw_parts(ptr as _, len, cap)
 }
 
+/// Query the number of bytes of an object.
 pub trait HeapSize {
-    fn heap_size(&self) -> usize {
+    /// Return the approximate number of bytes it owns in heap.
+    ///
+    /// N.B. the implementation should be performant, as it is often called on
+    /// performance critical path.
+    fn approximate_heap_size(&self) -> usize {
         0
     }
 }
@@ -39,7 +44,7 @@ macro_rules! impl_zero_heap_size{
     ( $($typ: ty,)+ ) => {
         $(
             impl HeapSize for $typ {
-                fn heap_size(&self) -> usize { 0 }
+                fn approximate_heap_size(&self) -> usize { 0 }
             }
         )+
     }
@@ -50,54 +55,54 @@ impl_zero_heap_size! {
 }
 
 impl<T: HeapSize> HeapSize for [T] {
-    fn heap_size(&self) -> usize {
+    fn approximate_heap_size(&self) -> usize {
         if self.is_empty() {
             0
         } else {
             // Prefer an approximation of its actually heap size, because we
             // want the time complexity to be O(1).
-            self.len() * self[0].heap_size()
+            self.len() * self[0].approximate_heap_size()
         }
     }
 }
 
 impl<T: HeapSize> HeapSize for Vec<T> {
-    fn heap_size(&self) -> usize {
-        // NB: It's an approximation of Vec<T> heap usage, because its capacity
-        // may be large then its length, and the unused space is also in heap.
-        self.as_slice().heap_size() + self.capacity() * std::mem::size_of::<T>()
+    fn approximate_heap_size(&self) -> usize {
+        self.as_slice().approximate_heap_size() + self.capacity() * std::mem::size_of::<T>()
     }
 }
 
 impl<A: HeapSize, B: HeapSize> HeapSize for (A, B) {
-    fn heap_size(&self) -> usize {
-        self.0.heap_size() + self.1.heap_size()
+    fn approximate_heap_size(&self) -> usize {
+        self.0.approximate_heap_size() + self.1.approximate_heap_size()
     }
 }
 
 impl<T: HeapSize> HeapSize for Option<T> {
-    fn heap_size(&self) -> usize {
+    fn approximate_heap_size(&self) -> usize {
         match self {
-            Some(t) => t.heap_size(),
+            Some(t) => t.approximate_heap_size(),
             None => 0,
         }
     }
 }
 
 impl<K: HeapSize, V: HeapSize> HeapSize for HashMap<K, V> {
-    fn heap_size(&self) -> usize {
+    fn approximate_heap_size(&self) -> usize {
         let cap_bytes = self.capacity() * (mem::size_of::<K>() + mem::size_of::<V>());
         if self.is_empty() {
             cap_bytes
         } else {
             let kv = self.iter().next().unwrap();
-            cap_bytes + self.len() * (kv.0.heap_size() + kv.1.heap_size())
+            // Prefer an approximation of its actually heap size, because we
+            // want the time complexity to be O(1).
+            cap_bytes + self.len() * (kv.0.approximate_heap_size() + kv.1.approximate_heap_size())
         }
     }
 }
 
 impl HeapSize for Region {
-    fn heap_size(&self) -> usize {
+    fn approximate_heap_size(&self) -> usize {
         let mut size = self.start_key.capacity() + self.end_key.capacity();
         size += mem::size_of::<RegionEpoch>();
         size += self.peers.capacity() * mem::size_of::<Peer>();
@@ -109,7 +114,7 @@ impl HeapSize for Region {
 }
 
 impl HeapSize for ReadIndexRequest {
-    fn heap_size(&self) -> usize {
+    fn approximate_heap_size(&self) -> usize {
         self.key_ranges
             .iter()
             .map(|r| r.start_key.capacity() + r.end_key.capacity())
@@ -118,7 +123,7 @@ impl HeapSize for ReadIndexRequest {
 }
 
 impl HeapSize for LockInfo {
-    fn heap_size(&self) -> usize {
+    fn approximate_heap_size(&self) -> usize {
         self.primary_lock.capacity()
             + self.key.capacity()
             + self.secondaries.iter().map(|k| k.len()).sum::<usize>()
@@ -126,7 +131,7 @@ impl HeapSize for LockInfo {
 }
 
 impl HeapSize for RaftCmdRequest {
-    fn heap_size(&self) -> usize {
+    fn approximate_heap_size(&self) -> usize {
         mem::size_of::<raft_cmdpb::RaftRequestHeader>()
             + self.requests.capacity() * mem::size_of::<raft_cmdpb::Request>()
             + mem::size_of_val(&self.admin_request)
@@ -356,33 +361,33 @@ mod tests {
     }
 
     #[test]
-    fn test_heap_size() {
+    fn test_approximate_heap_size() {
         let au8 = [1u8, 2, 3];
-        assert_eq!(au8.heap_size(), 0);
+        assert_eq!(au8.approximate_heap_size(), 0);
 
         let mut vu8 = Vec::with_capacity(16);
-        assert_eq!(vu8.heap_size(), 16);
+        assert_eq!(vu8.approximate_heap_size(), 16);
         vu8.extend(au8);
-        assert_eq!(vu8.heap_size(), 16);
+        assert_eq!(vu8.approximate_heap_size(), 16);
 
         let ovu8 = Some(vu8);
-        assert_eq!(ovu8.heap_size(), 16);
+        assert_eq!(ovu8.approximate_heap_size(), 16);
 
         let ovu82 = (ovu8, Some(Vec::<u8>::with_capacity(16)));
-        assert_eq!(ovu82.heap_size(), 16 * 2);
+        assert_eq!(ovu82.approximate_heap_size(), 16 * 2);
 
         let mut mu8u64 = HashMap::<u8, u64>::default();
         mu8u64.reserve(16);
-        assert_eq!(mu8u64.heap_size(), mu8u64.capacity() * (1 + 8));
+        assert_eq!(mu8u64.approximate_heap_size(), mu8u64.capacity() * (1 + 8));
 
         let mut mu8vu64 = HashMap::<u8, Vec<u64>>::default();
         mu8vu64.reserve(16);
         mu8vu64.insert(1, Vec::with_capacity(2));
         mu8vu64.insert(2, Vec::with_capacity(2));
         assert_eq!(
-            mu8vu64.heap_size(),
+            mu8vu64.approximate_heap_size(),
             mu8vu64.capacity() * (1 + mem::size_of::<Vec<u64>>())
-                + 2 * (Vec::<u64>::with_capacity(2).heap_size())
+                + 2 * (Vec::<u64>::with_capacity(2).approximate_heap_size())
         );
     }
 }

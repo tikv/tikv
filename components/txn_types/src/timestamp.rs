@@ -100,8 +100,8 @@ impl From<&u64> for TimeStamp {
 }
 
 impl HeapSize for TimeStamp {
-    fn heap_size(&self) -> usize {
-        self.0.heap_size()
+    fn approximate_heap_size(&self) -> usize {
+        self.0.approximate_heap_size()
     }
 }
 

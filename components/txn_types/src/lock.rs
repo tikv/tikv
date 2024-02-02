@@ -137,11 +137,11 @@ impl std::fmt::Debug for Lock {
 }
 
 impl HeapSize for Lock {
-    fn heap_size(&self) -> usize {
-        self.primary.heap_size()
-            + self.short_value.heap_size()
-            + self.secondaries.heap_size()
-            + self.rollback_ts.heap_size()
+    fn approximate_heap_size(&self) -> usize {
+        self.primary.approximate_heap_size()
+            + self.short_value.approximate_heap_size()
+            + self.secondaries.approximate_heap_size()
+            + self.rollback_ts.approximate_heap_size()
     }
 }
 

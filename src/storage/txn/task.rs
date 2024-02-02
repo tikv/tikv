@@ -67,7 +67,7 @@ impl Task {
     ) -> Result<(), MemoryQuotaExceeded> {
         if self.owned_quota.is_none() {
             let mut owned = OwnedAllocated::new(memory_quota);
-            owned.alloc(self.cmd.heap_size())?;
+            owned.alloc(self.cmd.approximate_heap_size())?;
             self.owned_quota = Some(owned);
         }
         Ok(())

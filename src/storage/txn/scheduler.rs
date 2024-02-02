@@ -2487,7 +2487,7 @@ mod tests {
             cmd.cmd
         };
 
-        let cmd_bytes = build_cmd().heap_size();
+        let cmd_bytes = build_cmd().approximate_heap_size();
         let max_request_count = 10u64;
         let config = Config {
             scheduler_concurrency: 1024,

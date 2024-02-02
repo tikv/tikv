@@ -67,10 +67,10 @@ macro_rules! command {
         }
 
         impl tikv_util::memory::HeapSize for $cmd {
-            fn heap_size(&self) -> usize {
+            fn approximate_heap_size(&self) -> usize {
                 0
                 $(
-                    $( + self.$arg_in_heap.heap_size() )*
+                    $( + self.$arg_in_heap.approximate_heap_size() )*
                 )?
             }
         }
@@ -85,7 +85,7 @@ macro_rules! command {
                     $(
                         self.$fields$(.$sub_field())?,
                     )*
-                    self.heap_size(),
+                    self.approximate_heap_size(),
                 )
             }
         }

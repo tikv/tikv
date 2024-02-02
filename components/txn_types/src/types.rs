@@ -272,8 +272,8 @@ impl Display for Key {
 }
 
 impl HeapSize for Key {
-    fn heap_size(&self) -> usize {
-        self.0.heap_size()
+    fn approximate_heap_size(&self) -> usize {
+        self.0.approximate_heap_size()
     }
 }
 
@@ -312,11 +312,11 @@ pub enum Mutation {
 }
 
 impl HeapSize for Mutation {
-    fn heap_size(&self) -> usize {
+    fn approximate_heap_size(&self) -> usize {
         match self {
-            Mutation::Put(kv, _) | Mutation::Insert(kv, _) => kv.heap_size(),
+            Mutation::Put(kv, _) | Mutation::Insert(kv, _) => kv.approximate_heap_size(),
             Mutation::Delete(k, _) | Mutation::CheckNotExists(k, _) | Mutation::Lock(k, _) => {
-                k.heap_size()
+                k.approximate_heap_size()
             }
         }
     }

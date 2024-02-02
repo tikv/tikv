@@ -257,7 +257,7 @@ impl Resolver {
         // the same Arc<[u8]>, so lock_ts_heap is negligible. Also, it's hard to
         // track accurate memory usage of lock_ts_heap as a timestamp may have
         // many keys.
-        key.heap_size() + std::mem::size_of::<TimeStamp>()
+        key.approximate_heap_size() + std::mem::size_of::<TimeStamp>()
     }
 
     fn shrink_ratio(&mut self, ratio: usize) {
