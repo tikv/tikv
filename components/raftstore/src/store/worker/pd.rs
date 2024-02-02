@@ -1248,7 +1248,7 @@ where
         let (rps, slow_trend_pb) = self
             .health_reporter
             .update_slow_trend(all_query_num, Instant::now());
-        self.write_slow_trend_metrics(rps, &slow_trend_pb);
+        self.flush_slow_trend_metrics(rps, &slow_trend_pb);
         stats.set_slow_trend(slow_trend_pb);
 
         stats.set_is_grpc_paused(self.grpc_service_manager.is_paused());
@@ -1336,7 +1336,7 @@ where
         self.remote.spawn(f);
     }
 
-    fn write_slow_trend_metrics(
+    fn flush_slow_trend_metrics(
         &mut self,
         requests_per_sec: Option<f64>,
         slow_trend_pb: &pdpb::SlowTrend,
