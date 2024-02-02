@@ -429,8 +429,13 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             apply_res.applied_index,
             progress_to_be_updated,
         );
+<<<<<<< HEAD
         self.try_compelete_recovery();
         if !self.pause_for_recovery() && self.storage_mut().apply_trace_mut().should_flush() {
+=======
+        self.try_complete_recovery();
+        if !self.pause_for_replay() && self.storage_mut().apply_trace_mut().should_flush() {
+>>>>>>> 997eabc7f6 (raftstore: report busy to PD when restarting if exists apply log lags. (#16239))
             if let Some(scheduler) = self.apply_scheduler() {
                 scheduler.send(ApplyTask::ManualFlush);
             }

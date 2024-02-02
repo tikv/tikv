@@ -486,8 +486,13 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     // we may have skipped scheduling raft tick when start due to noticable gap
     // between commit index and apply index. We should scheduling it when raft log
     // apply catches up.
+<<<<<<< HEAD
     pub fn try_compelete_recovery(&mut self) {
         if self.pause_for_recovery()
+=======
+    pub fn try_complete_recovery(&mut self) {
+        if self.pause_for_replay()
+>>>>>>> 997eabc7f6 (raftstore: report busy to PD when restarting if exists apply log lags. (#16239))
             && self.storage().entry_storage().commit_index()
                 <= self.storage().entry_storage().applied_index()
         {

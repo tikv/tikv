@@ -1113,6 +1113,12 @@ where
     pub snapshot_recovery_state: Option<SnapshotRecoveryState>,
 
     last_record_safe_point: u64,
+    /// Used for checking whether the peer is busy on apply.
+    /// * `None` => the peer has no pending logs for apply or already finishes
+    ///   applying.
+    /// * `Some(false)` => initial state, not be recorded.
+    /// * `Some(true)` => busy on apply, and already recorded.
+    pub busy_on_apply: Option<bool>,
 }
 
 impl<EK, ER> Peer<EK, ER>
@@ -1262,6 +1268,7 @@ where
             lead_transferee: raft::INVALID_ID,
             unsafe_recovery_state: None,
             snapshot_recovery_state: None,
+            busy_on_apply: Some(false),
         };
 
         // If this region has only one peer and I am the one, campaign directly.
@@ -2891,9 +2898,10 @@ where
 
         if let Some(hs) = ready.hs() {
             let pre_commit_index = self.get_store().commit_index();
-            assert!(hs.get_commit() >= pre_commit_index);
+            let cur_commit_index = hs.get_commit();
+            assert!(cur_commit_index >= pre_commit_index);
             if self.is_leader() {
-                self.on_leader_commit_idx_changed(pre_commit_index, hs.get_commit());
+                self.on_leader_commit_idx_changed(pre_commit_index, cur_commit_index);
             }
         }
 
