@@ -395,6 +395,11 @@ impl Suite {
         MetadataClient::new(self.meta_store.clone(), 0)
     }
 
+    #[allow(dead_code)]
+    pub fn dump_slash_etc(&self) {
+        self.meta_store.inner.blocking_lock().dump();
+    }
+
     pub fn must_split(&mut self, key: &[u8]) {
         let region = self.cluster.get_region(key);
         self.cluster.must_split(&region, key);
