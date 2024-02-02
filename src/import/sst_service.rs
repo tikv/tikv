@@ -747,10 +747,6 @@ macro_rules! impl_write {
             let resource_manager = self.resource_manager.clone();
             let handle_task = async move {
                 let (res, rx) = async move {
-                    if get_disk_status(0) != DiskUsage::Normal {
-                        warn!("write failed due to not enough disk space");
-                        return (Err(Error::DiskSpaceNotEnough), Some(rx));
-                    }
                     let first_req = match rx.try_next().await {
                         Ok(r) => r,
                         Err(e) => return (Err(e), Some(rx)),
@@ -824,6 +820,11 @@ macro_rules! impl_write {
                         .try_fold(
                             (writer, resource_limiter),
                             |(mut writer, limiter), req| async move {
+                                if get_disk_status(0) != DiskUsage::Normal {
+                                    warn!("Upload failed due to not enough disk space");
+                                    return Err(Error::DiskSpaceNotEnough);
+                                }
+
                                 let batch = match req.chunk {
                                     Some($chunk_ty::Batch(b)) => b,
                                     _ => return Err(Error::InvalidChunk),
@@ -960,10 +961,6 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
             // So stream will not be dropped until response is sent.
             let rx = &mut map_rx;
             let res = async move {
-                if get_disk_status(0) != DiskUsage::Normal {
-                    warn!("Upload failed due to not enough disk space");
-                    return Err(Error::DiskSpaceNotEnough);
-                }
                 let first_chunk = rx.try_next().await?;
                 let meta = match first_chunk {
                     Some(ref chunk) if chunk.has_meta() => chunk.get_meta(),
@@ -972,6 +969,11 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
                 let file = import.create(meta)?;
                 let mut file = rx
                     .try_fold(file, |mut file, chunk| async move {
+                        if get_disk_status(0) != DiskUsage::Normal {
+                            warn!("Upload failed due to not enough disk space");
+                            return Err(Error::DiskSpaceNotEnough);
+                        }
+
                         let start = Instant::now_coarse();
                         let data = chunk.get_data();
                         if data.is_empty() {
