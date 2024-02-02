@@ -79,8 +79,7 @@ impl Task {
         context: WriteContext<'_, L>,
     ) -> super::Result<WriteResult> {
         let cmd = self.cmd.take().unwrap();
-        let res = cmd.process_write(snapshot, context);
-        res
+        cmd.process_write(snapshot, context)
     }
 
     pub(super) fn process_read<S: Snapshot>(
@@ -89,8 +88,7 @@ impl Task {
         statistics: &mut Statistics,
     ) -> super::Result<ProcessResult> {
         let cmd = self.cmd.take().unwrap();
-        let res = cmd.process_read(snapshot, statistics);
-        res
+        cmd.process_read(snapshot, statistics)
     }
 }
 
