@@ -5340,6 +5340,18 @@ mod tests {
     }
 
     #[test]
+    fn test_illegal_backupstream_config_parm() {
+        let mut tikv_cfg = TikvConfig::default();
+        tikv_cfg.log_backup.initial_scan_rate_limit.0 = 1000;
+        tikv_cfg.pd.endpoints = vec!["".to_owned()];
+        let dur = tikv_cfg.raft_store.raft_heartbeat_interval();
+        tikv_cfg.server.grpc_keepalive_time = ReadableDuration(dur);
+        tikv_cfg.validate().unwrap_err();
+        tikv_cfg.server.grpc_keepalive_time = ReadableDuration(dur * 2);
+        tikv_cfg.validate().unwrap_err();
+    }
+
+    #[test]
     fn test_block_size() {
         let mut tikv_cfg = TikvConfig::default();
         tikv_cfg.pd.endpoints = vec!["".to_owned()];
