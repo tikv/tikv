@@ -27,7 +27,10 @@ use tokio::sync::Semaphore;
 use txn_types::Lock;
 
 use crate::{
-    coprocessor::{cache::CachedRequestHandler, interceptors::*, metrics::*, tracker::Tracker, *},
+    coprocessor::{
+        cache::CachedRequestHandler, interceptors::*, metrics::*,
+        statistics::analyze_context::AnalyzeContext, tracker::Tracker, *,
+    },
     read_pool::ReadPoolHandle,
     server::Config,
     storage::{
@@ -302,7 +305,7 @@ impl<E: Engine> Endpoint<E> {
                 let quota_limiter = self.quota_limiter.clone();
 
                 builder = Box::new(move |snap, req_ctx| {
-                    statistics::analyze::AnalyzeContext::<_, F>::new(
+                    AnalyzeContext::<_, F>::new(
                         analyze,
                         req_ctx.ranges.clone(),
                         start_ts,
