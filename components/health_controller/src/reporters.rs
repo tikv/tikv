@@ -15,18 +15,28 @@ use crate::{
     HealthController, HealthControllerInner, RaftstoreDuration,
 };
 
+/// The parameters for building a [`RaftstoreReporter`].
+///
+/// For slow trend related parameters (unsensitive_cause, unsensitive_result,
+/// cause_*, result_*), please refer to : [`SlowTrendStatistics::new`] and
+/// [`Trend`].
 pub struct RaftstoreReporterConfig {
+    /// The interval to tick the [`RaftstoreReporter`].
+    ///
+    /// The `RaftstoreReporter` doesn't tick by itself, the caller (the PD
+    /// worker) is expected to tick it. But the interval is necessary in
+    /// some internal calculations.
     pub inspect_interval: Duration,
 
     pub unsensitive_cause: f64,
     pub unsensitive_result: f64,
     pub net_io_factor: f64,
 
+    // Metrics about slow trend.
     pub cause_spike_filter_value_gauge: IntGauge,
     pub cause_spike_filter_count_gauge: IntGauge,
     pub cause_l1_gap_gauges: IntGauge,
     pub cause_l2_gap_gauges: IntGauge,
-
     pub result_spike_filter_value_gauge: IntGauge,
     pub result_spike_filter_count_gauge: IntGauge,
     pub result_l1_gap_gauges: IntGauge,

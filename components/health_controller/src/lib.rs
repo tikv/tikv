@@ -82,7 +82,7 @@ struct HealthControllerInner {
     /// it's used in such pattern:
     ///
     /// * Only an empty service name is used, representing the status of the
-    ///   whole server..
+    ///   whole server.
     /// * When `current_serving_status.is_serving` is set to false (by calling
     ///   [`set_is_serving(false)`](HealthController::set_is_serving)), the
     ///   serving status is set to `NotServing`.
