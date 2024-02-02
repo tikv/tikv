@@ -39,6 +39,11 @@ impl From<&RangeCacheMemoryEngine> for RangeCacheWriteBatch {
 
 impl RangeCacheWriteBatch {
     pub fn with_capacity(engine: &RangeCacheMemoryEngine, cap: usize) -> Self {
+        let mut core = engine.core.write().unwrap();
+        let range_manager = core.mut_range_manager();
+        let pending_loaded_ranges = std::mem::take(&mut range_manager.pending_loaded_ranges);
+        
+
         Self {
             buffer: Vec::with_capacity(cap),
             engine: engine.clone(),

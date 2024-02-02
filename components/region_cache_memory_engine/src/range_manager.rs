@@ -2,6 +2,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use engine_rocks::RocksSnapshot;
 use engine_traits::CacheRange;
 
 use crate::engine::{RagneCacheSnapshotMeta, SnapshotList};
@@ -79,6 +80,10 @@ pub struct RangeManager {
     evicted_ranges: BTreeSet<CacheRange>,
     // ranges that are cached now
     ranges: BTreeMap<CacheRange, RangeMeta>,
+
+    pub(crate) pending_loaded_ranges: Vec<CacheRange>,
+    pub(crate) pending_loaded_ranges_with_snapshot: Vec<(CacheRange, RocksSnapshot)>,
+    pub(crate) ranges_with_snap_done: Vec<CacheRange>,
 }
 
 impl RangeManager {
