@@ -110,6 +110,7 @@ fn test_pending_snapshot() {
     );
 }
 
+<<<<<<< HEAD
 #[test]
 fn test_on_apply_snap_failed() {
     let mut cluster = new_node_cluster(0, 3);
@@ -117,11 +118,24 @@ fn test_on_apply_snap_failed() {
     cluster.cfg.raft_store.raft_store_max_leader_lease = ReadableDuration::millis(100);
     cluster.cfg.raft_store.pd_heartbeat_tick_interval = ReadableDuration::millis(100);
     cluster.cfg.raft_store.pd_store_heartbeat_tick_interval = ReadableDuration::millis(100);
+=======
+// Tests if store is marked with busy when there exists peers on
+// busy on applying raft logs.
+#[test]
+fn test_on_check_busy_on_apply_peers() {
+    let mut cluster = new_node_cluster(0, 3);
+    cluster.cfg.raft_store.raft_base_tick_interval = ReadableDuration::millis(5);
+    cluster.cfg.raft_store.raft_store_max_leader_lease = ReadableDuration::millis(100);
+    cluster.cfg.raft_store.leader_transfer_max_log_lag = 10;
+    cluster.cfg.raft_store.check_long_uncommitted_interval = ReadableDuration::millis(10); // short check interval for recovery
+    cluster.cfg.raft_store.pd_heartbeat_tick_interval = ReadableDuration::millis(50);
+>>>>>>> 997eabc7f6 (raftstore: report busy to PD when restarting if exists apply log lags. (#16239))
 
     let pd_client = Arc::clone(&cluster.pd_client);
     // Disable default max peer count check.
     pd_client.disable_default_operator();
 
+<<<<<<< HEAD
     let region_id = cluster.run_conf_change();
     pd_client.must_add_peer(region_id, new_peer(2, 2));
 
@@ -150,4 +164,49 @@ fn test_on_apply_snap_failed() {
     let stats = pd_client.get_store_stats(3).unwrap();
     assert!(stats.damaged_regions_id.contains(&region_id));
     fail::remove("region_apply_snap_io_err");
+=======
+    let r1 = cluster.run_conf_change();
+    pd_client.must_add_peer(r1, new_peer(2, 1002));
+    pd_client.must_add_peer(r1, new_peer(3, 1003));
+
+    cluster.must_put(b"k1", b"v1");
+    must_get_equal(&cluster.get_engine(2), b"k1", b"v1");
+    must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
+
+    // Pause peer 1003 on applying logs to make it pending.
+    let before_apply_stat = cluster.apply_state(r1, 3);
+    cluster.stop_node(3);
+    for i in 0..=cluster.cfg.raft_store.leader_transfer_max_log_lag {
+        let bytes = format!("k{:03}", i).into_bytes();
+        cluster.must_put(&bytes, &bytes);
+    }
+    cluster.must_put(b"k2", b"v2");
+    must_get_equal(&cluster.get_engine(1), b"k2", b"v2");
+    must_get_equal(&cluster.get_engine(2), b"k2", b"v2");
+
+    // Restart peer 1003 and make it busy for applying pending logs.
+    fail::cfg("on_handle_apply_1003", "return").unwrap();
+    cluster.run_node(3).unwrap();
+    let after_apply_stat = cluster.apply_state(r1, 3);
+    assert!(after_apply_stat.applied_index == before_apply_stat.applied_index);
+    // Case 1: no completed regions.
+    cluster.must_send_store_heartbeat(3);
+    sleep_ms(100);
+    let stats = cluster.pd_client.get_store_stats(3).unwrap();
+    assert!(stats.is_busy);
+    // Case 2: completed_apply_peers_count > completed_target_count but
+    //        there exists busy peers.
+    fail::cfg("on_mock_store_completed_target_count", "return").unwrap();
+    sleep_ms(100);
+    cluster.must_send_store_heartbeat(3);
+    sleep_ms(100);
+    let stats = cluster.pd_client.get_store_stats(3).unwrap();
+    assert!(!stats.is_busy);
+    fail::remove("on_mock_store_completed_target_count");
+    fail::remove("on_handle_apply_1003");
+    sleep_ms(100);
+    // After peer 1003 is recovered, store should not be marked with busy.
+    let stats = cluster.pd_client.get_store_stats(3).unwrap();
+    assert!(!stats.is_busy);
+>>>>>>> 997eabc7f6 (raftstore: report busy to PD when restarting if exists apply log lags. (#16239))
 }
