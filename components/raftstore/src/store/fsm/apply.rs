@@ -772,9 +772,9 @@ fn should_write_to_engine(cmd: &RaftCmdRequest) -> bool {
         if req.has_delete_range() {
             return true;
         }
-        if req.has_ingest_sst() {
-            return true;
-        }
+        // if req.has_ingest_sst() {
+        //     return true;
+        // }
     }
 
     false
