@@ -197,7 +197,9 @@ pub struct StoreMeta {
     /// Record the number of peers done for applying logs.
     /// Without `completed_apply_peers_count`, it's hard to know whether all
     /// peers are ready for applying logs.
-    pub completed_apply_peers_count: u64,
+    /// If None, it means the store is start from empty, no need to check and
+    /// update it anymore.
+    pub completed_apply_peers_count: Option<u64>,
 }
 
 impl StoreRegionMeta for StoreMeta {
@@ -249,7 +251,7 @@ impl StoreMeta {
             region_read_progress: RegionReadProgressRegistry::new(),
             damaged_ranges: HashMap::default(),
             busy_apply_peers: HashSet::default(),
-            completed_apply_peers_count: 0,
+            completed_apply_peers_count: Some(0),
         }
     }
 
@@ -2725,8 +2727,15 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         start_ts_sec: u32,
         region_count: u64,
         busy_apply_peers_count: u64,
-        completed_apply_peers_count: u64,
+        completed_apply_peers_count: Option<u64>,
     ) -> bool {
+        // No need to check busy status if there are no regions.
+        if completed_apply_peers_count.is_none() || region_count == 0 {
+            return false;
+        }
+        assert!(completed_apply_peers_count.is_some());
+
+        let completed_apply_peers_count = completed_apply_peers_count.unwrap();
         let during_starting_stage = {
             (time::get_time().sec as u32).saturating_sub(start_ts_sec)
                 <= STORE_CHECK_PENDING_APPLY_DURATION.as_secs() as u32
@@ -2765,7 +2774,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
 
         stats.set_store_id(self.ctx.store_id());
 
-        let completed_apply_peers_count: u64;
+        let completed_apply_peers_count: Option<u64>;
         let busy_apply_peers_count: u64;
         {
             let meta = self.ctx.store_meta.lock().unwrap();
@@ -2775,7 +2784,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
                 let damaged_regions_id = meta.get_all_damaged_region_ids().into_iter().collect();
                 stats.set_damaged_regions_id(damaged_regions_id);
             }
-            completed_apply_peers_count = meta.completed_apply_peers_count;
+            completed_apply_peers_count = meta.completed_apply_peers_count.clone();
             busy_apply_peers_count = meta.busy_apply_peers.len() as u64;
         }
 
@@ -2810,18 +2819,24 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
                 .swap(0, Ordering::Relaxed),
         );
 
-        let store_is_busy = self
-            .ctx
-            .global_stat
-            .stat
-            .is_busy
-            .swap(false, Ordering::Relaxed);
         let busy_on_apply = self.check_store_is_busy_on_apply(
             start_time,
             stats.get_region_count() as u64,
             busy_apply_peers_count,
             completed_apply_peers_count,
         );
+        // If the store already pass the check, it should clear the
+        // `completed_apply_peers_count` to skip the check next time.
+        if !busy_on_apply {
+            let mut meta = self.ctx.store_meta.lock().unwrap();
+            meta.completed_apply_peers_count = None;
+        }
+        let store_is_busy = self
+            .ctx
+            .global_stat
+            .stat
+            .is_busy
+            .swap(false, Ordering::Relaxed);
         stats.set_is_busy(store_is_busy || busy_on_apply);
 
         let mut query_stats = QueryStats::default();

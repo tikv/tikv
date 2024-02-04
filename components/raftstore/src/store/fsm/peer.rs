@@ -6602,7 +6602,9 @@ where
             {
                 let mut meta = self.ctx.store_meta.lock().unwrap();
                 meta.busy_apply_peers.remove(&peer_id);
-                meta.completed_apply_peers_count += 1;
+                if let Some(count) = meta.completed_apply_peers_count.as_mut() {
+                    *count += 1;
+                }
             }
             debug!(
                 "peer completes applying logs";
