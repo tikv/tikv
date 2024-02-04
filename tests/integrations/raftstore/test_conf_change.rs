@@ -863,3 +863,40 @@ fn test_conf_change_fast() {
     must_get_equal(&cluster.get_engine(2), b"k1", b"v1");
     assert!(timer.saturating_elapsed() < Duration::from_secs(5));
 }
+
+#[test_case(test_raftstore::new_node_cluster)]
+#[test_case(test_raftstore_v2::new_node_cluster)]
+fn test_remove_node_on_partition() {
+    let count = 3;
+    let mut cluster = new_cluster(0, count);
+    let pd_client = Arc::clone(&cluster.pd_client);
+    // Disable default max peer number check.
+    pd_client.disable_default_operator();
+    cluster.cfg.raft_store.raft_heartbeat_ticks = 1;
+    cluster.cfg.raft_store.raft_base_tick_interval = ReadableDuration::millis(10);
+    cluster.cfg.raft_store.raft_election_timeout_ticks = 3;
+    cluster.cfg.raft_store.raft_store_max_leader_lease = ReadableDuration::millis(20);
+    let r1 = cluster.run_conf_change();
+
+    cluster.must_put(b"k0", b"v0");
+    pd_client.must_add_peer(r1, new_peer(2, 2));
+    must_get_equal(&cluster.get_engine(2), b"k0", b"v0");
+    pd_client.must_add_peer(r1, new_peer(3, 3));
+    must_get_equal(&cluster.get_engine(3), b"k0", b"v0");
+
+    // peer 3 isolation
+    cluster.add_send_filter(IsolationFilterFactory::new(3));
+    // sleep for 13 heartbeat interval (>12 should be ok)
+    let sleep_time = cluster.cfg.raft_store.raft_base_tick_interval.0
+        * (4 * cluster.cfg.raft_store.raft_election_timeout_ticks as u32 + 1);
+    thread::sleep(sleep_time);
+    pd_client.remove_peer(r1, new_peer(2, 2));
+    cluster.must_put(b"k1", b"v1");
+    thread::sleep(Duration::from_millis(500));
+    // remove peer 2 should not work
+    pd_client.must_have_peer(r1, new_peer(2, 2));
+
+    // remove peer 3 should work
+    pd_client.must_remove_peer(r1, new_peer(3, 3));
+    cluster.must_put(b"k3", b"v3");
+}

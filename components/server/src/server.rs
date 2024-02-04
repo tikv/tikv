@@ -70,12 +70,14 @@ use raftstore::{
     RaftRouterCompactedEventSender,
 };
 use resolved_ts::{LeadershipResolver, Task};
-use resource_control::ResourceGroupManager;
+use resource_control::{priority_from_task_meta, ResourceGroupManager};
 use security::SecurityManager;
 use service::{service_event::ServiceEvent, service_manager::GrpcServiceManager};
 use snap_recovery::RecoveryService;
 use tikv::{
-    config::{ConfigController, DbConfigManger, DbType, LogConfigManager, TikvConfig},
+    config::{
+        ConfigController, DbConfigManger, DbType, LogConfigManager, MemoryConfigManager, TikvConfig,
+    },
     coprocessor::{self, MEMTRACE_ROOT as MEMTRACE_COPROCESSOR},
     coprocessor_v2,
     import::{ImportSstService, SstImporter},
@@ -291,11 +293,14 @@ where
             SecurityManager::new(&config.security)
                 .unwrap_or_else(|e| fatal!("failed to create security manager: {}", e)),
         );
+        let props = tikv_util::thread_group::current_properties();
         let env = Arc::new(
             EnvBuilder::new()
                 .cq_count(config.server.grpc_concurrency)
                 .name_prefix(thd_name!(GRPC_THREAD_PREFIX))
-                .after_start(|| {
+                .after_start(move || {
+                    tikv_util::thread_group::set_properties(props.clone());
+
                     // SAFETY: we will call `remove_thread_memory_accessor` at before_stop.
                     unsafe { add_thread_memory_accessor() };
                 })
@@ -366,6 +371,7 @@ where
             router.clone(),
             config.coprocessor.clone(),
         ));
+
         let region_info_accessor = RegionInfoAccessor::new(coprocessor_host.as_mut().unwrap());
 
         // Initialize concurrency manager
@@ -505,6 +511,7 @@ where
         );
 
         cfg_controller.register(tikv::config::Module::Log, Box::new(LogConfigManager));
+        cfg_controller.register(tikv::config::Module::Memory, Box::new(MemoryConfigManager));
 
         // Create cdc.
         let mut cdc_worker = Box::new(LazyWorker::new("cdc"));
@@ -554,6 +561,7 @@ where
                 engines.engine.clone(),
                 resource_ctl,
                 CleanupMethod::Remote(self.core.background_worker.remote()),
+                Some(Arc::new(priority_from_task_meta)),
             ))
         } else {
             None
@@ -1080,6 +1088,7 @@ where
             servers.importer.clone(),
             None,
             self.resource_manager.clone(),
+            Arc::new(self.region_info_accessor.clone()),
         );
         let import_cfg_mgr = import_service.get_config_manager();
 

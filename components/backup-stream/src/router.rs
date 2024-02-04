@@ -540,6 +540,15 @@ impl RouterInner {
         let task_info = self.get_task_info(&task).await?;
         task_info.on_events(events).await?;
         let file_size_limit = self.temp_file_size_limit.load(Ordering::SeqCst);
+        #[cfg(features = "failpoints")]
+        {
+            let delayed = (|| {
+                fail::fail_point!("router_on_event_delay_ms", |v| {
+                    v.and_then(|v| v.parse::<u64>().ok()).unwrap_or(0)
+                })
+            })();
+            tokio::time::sleep(Duration::from_millis(delayed)).await;
+        }
 
         // When this event make the size of temporary files exceeds the size limit, make
         // a flush. Note that we only flush if the size is less than the limit before
@@ -820,6 +829,28 @@ pub struct StreamTaskInfo {
     merged_file_size_limit: u64,
     /// The pool for holding the temporary files.
     temp_file_pool: Arc<TempFilePool>,
+}
+
+impl Drop for StreamTaskInfo {
+    fn drop(&mut self) {
+        let (success, failed): (Vec<_>, Vec<_>) = self
+            .flushing_files
+            .get_mut()
+            .drain(..)
+            .chain(self.flushing_meta_files.get_mut().drain(..))
+            .map(|(_, f, _)| f.inner.path().to_owned())
+            .map(|p| self.temp_file_pool.remove(&p))
+            .partition(|r| *r);
+        info!("stream task info dropped[1/2], removing flushing_temp files"; "success" => %success.len(), "failure" => %failed.len());
+        let (success, failed): (Vec<_>, Vec<_>) = self
+            .files
+            .get_mut()
+            .drain()
+            .map(|(_, f)| f.into_inner().inner.path().to_owned())
+            .map(|p| self.temp_file_pool.remove(&p))
+            .partition(|r| *r);
+        info!("stream task info dropped[2/2], removing temp files"; "success" => %success.len(), "failure" => %failed.len());
+    }
 }
 
 impl std::fmt::Debug for StreamTaskInfo {
@@ -2081,6 +2112,12 @@ mod tests {
         let (task, _path) = task("cleanup_test".to_owned()).await?;
         must_register_table(&router, task, 1).await;
         write_simple_data(&router).await;
+        let tempfiles = router
+            .get_task_info("cleanup_test")
+            .await
+            .unwrap()
+            .temp_file_pool
+            .clone();
         router
             .get_task_info("cleanup_test")
             .await?
@@ -2089,6 +2126,7 @@ mod tests {
         write_simple_data(&router).await;
         let mut w = walkdir::WalkDir::new(&tmp).into_iter();
         assert!(w.next().is_some(), "the temp files doesn't created");
+        assert!(tempfiles.mem_used() > 0, "the temp files doesn't created.");
         drop(router);
         let w = walkdir::WalkDir::new(&tmp)
             .into_iter()
@@ -2105,6 +2143,11 @@ mod tests {
             w.is_empty(),
             "the temp files should be removed, but it is {:?}",
             w
+        );
+        assert_eq!(
+            tempfiles.mem_used(),
+            0,
+            "the temp files hasn't been cleared."
         );
         Ok(())
     }

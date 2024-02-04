@@ -1012,6 +1012,7 @@ pub fn check_conf_change(
     change_peers: &[ChangePeerRequest],
     cc: &impl ConfChangeI,
     ignore_safety: bool,
+    peer_heartbeat: &collections::HashMap<u64, std::time::Instant>,
 ) -> Result<()> {
     let current_progress = node.status().progress.unwrap().clone();
     let mut after_progress = current_progress.clone();
@@ -1095,6 +1096,7 @@ pub fn check_conf_change(
         return Err(box_err!("multiple changes that only effect learner"));
     }
 
+    check_remove_or_demote_voter(region, cfg, change_peers, leader.get_id(), peer_heartbeat)?;
     if !ignore_safety {
         let promoted_commit_index = after_progress.maximal_committed_index().0;
         let first_index = node.raft.raft_log.first_index();
@@ -1123,6 +1125,82 @@ pub fn check_conf_change(
     }
 }
 
+fn check_remove_or_demote_voter(
+    region: &metapb::Region,
+    cfg: &Config,
+    change_peers: &[ChangePeerRequest],
+    leader_id: u64,
+    peer_heartbeat: &collections::HashMap<u64, std::time::Instant>,
+) -> Result<()> {
+    let mut slow_peer_count = 0;
+    let mut normal_peer_count = 0;
+    // Here we assume if the last beartbeat is within 2 election timeout, the peer
+    // is healthy. When a region is hibernate, we expect all its peers are *slow*
+    // and it would still allow the operation
+    let slow_peer_threshold =
+        2 * cfg.raft_base_tick_interval.0 * cfg.raft_max_election_timeout_ticks as u32;
+    for (id, last_heartbeat) in peer_heartbeat {
+        // for slow and normal peer calculation, we only count voter role
+        if region
+            .get_peers()
+            .iter()
+            .find(|p| p.get_id() == *id)
+            .map_or(false, |p| p.role == PeerRole::Voter)
+        {
+            // leader itself is not a slow peer
+            if *id == leader_id || last_heartbeat.elapsed() <= slow_peer_threshold {
+                normal_peer_count += 1;
+            } else {
+                slow_peer_count += 1;
+            }
+        }
+    }
+
+    let mut normal_peers_to_remove = vec![];
+    for cp in change_peers {
+        let (change_type, peer) = (cp.get_change_type(), cp.get_peer());
+        if change_type == ConfChangeType::RemoveNode
+            || change_type == ConfChangeType::AddLearnerNode
+        {
+            let is_voter = region
+                .get_peers()
+                .iter()
+                .find(|p| p.get_id() == peer.get_id())
+                .map_or(false, |p| p.role == PeerRole::Voter);
+
+            // If the change_type is AddLearnerNode and the last heartbeat is found, it
+            // means it's a demote from voter as AddLearnerNode on existing learner node is
+            // not allowed.
+            if is_voter && let Some(last_heartbeat) = peer_heartbeat.get(&peer.get_id()) {
+                // peer itself is *not* slow peer, but current slow peer is >= total peers/2
+                if last_heartbeat.elapsed() <= slow_peer_threshold {
+                    normal_peer_count -= 1;
+                    normal_peers_to_remove.push(peer.clone());
+                }
+            }
+        }
+    }
+
+    // only block the conf change when there's chance to improve the availability
+    // For example, if there's no normal peers actually, then we still allow the
+    // option to finish as there's no choice.
+    // We only block the operation when normal peers are going to be removed and it
+    // could lead to slow peers more than normal peers
+    if !normal_peers_to_remove.is_empty()
+        && slow_peer_count > 0
+        && slow_peer_count >= normal_peer_count
+    {
+        return Err(box_err!(
+            "Ignore conf change command on region {} because RemoveNode or Demote a voter on peers {:?} may lead to unavailability. There're {} slow peers and {} normal peers",
+            region.get_id(),
+            &normal_peers_to_remove,
+            slow_peer_count,
+            normal_peer_count
+        ));
+    }
+
+    Ok(())
+}
 pub struct MsgType<'a>(pub &'a RaftMessage);
 
 impl Display for MsgType<'_> {
@@ -1733,13 +1811,38 @@ pub struct RaftstoreDuration {
 }
 
 impl RaftstoreDuration {
+    #[inline]
     pub fn sum(&self) -> std::time::Duration {
-        self.store_wait_duration.unwrap_or_default()
-            + self.store_process_duration.unwrap_or_default()
+        self.delays_on_disk_io(true) + self.delays_on_net_io()
+    }
+
+    #[inline]
+    /// Returns the delayed duration on Disk I/O.
+    pub fn delays_on_disk_io(&self, include_wait_duration: bool) -> std::time::Duration {
+        let duration = self.store_process_duration.unwrap_or_default()
             + self.store_write_duration.unwrap_or_default()
-            + self.store_commit_duration.unwrap_or_default()
-            + self.apply_wait_duration.unwrap_or_default()
-            + self.apply_process_duration.unwrap_or_default()
+            + self.apply_process_duration.unwrap_or_default();
+        if include_wait_duration {
+            duration
+                + self.store_wait_duration.unwrap_or_default()
+                + self.apply_wait_duration.unwrap_or_default()
+        } else {
+            duration
+        }
+    }
+
+    #[inline]
+    /// Returns the delayed duration on Network I/O.
+    ///
+    /// Normally, it can be reflected by the duraiton on
+    /// `store_commit_duraiton`.
+    pub fn delays_on_net_io(&self) -> std::time::Duration {
+        // The `store_commit_duration` serves as an indicator for latency
+        // during the duration of transferring Raft logs to peers and appending
+        // logs. In most scenarios, instances of latency fluctuations in the
+        // network are reflected by this duration. Hence, it is selected as a
+        // representative of network latency.
+        self.store_commit_duration.unwrap_or_default()
     }
 }
 
@@ -2478,5 +2581,104 @@ mod tests {
         mismatch_err.set_request_peer_id(1);
         mismatch_err.set_store_peer_id(2);
         assert_eq!(region_err.get_mismatch_peer_id(), &mismatch_err)
+    }
+
+    #[test]
+    fn test_check_conf_change_upon_slow_peers() {
+        // Create a sample configuration
+        let mut cfg = Config::default();
+        cfg.raft_max_election_timeout_ticks = 10;
+        // Initialize change_peers
+        let change_peers = vec![
+            ChangePeerRequest {
+                change_type: eraftpb::ConfChangeType::RemoveNode,
+                peer: Some(metapb::Peer {
+                    id: 2,
+                    ..Default::default()
+                })
+                .into(),
+                ..Default::default()
+            },
+            ChangePeerRequest {
+                change_type: eraftpb::ConfChangeType::AddLearnerNode,
+                peer: Some(metapb::Peer {
+                    id: 2,
+                    ..Default::default()
+                })
+                .into(),
+                ..Default::default()
+            },
+        ];
+
+        let mut region = Region::default();
+        for i in 1..4 {
+            region.mut_peers().push(metapb::Peer {
+                id: i,
+                ..Default::default()
+            });
+        }
+        for i in 0..change_peers.len() {
+            // Call the function under test and assert that the function returns failed
+            let mut cp = vec![change_peers[i].clone()];
+            let mut peer_heartbeat = collections::HashMap::default();
+            peer_heartbeat.insert(
+                1,
+                std::time::Instant::now() - std::time::Duration::from_secs(1),
+            );
+            peer_heartbeat.insert(
+                2,
+                std::time::Instant::now() - std::time::Duration::from_secs(1),
+            );
+            peer_heartbeat.insert(
+                3,
+                std::time::Instant::now() - std::time::Duration::from_secs(1),
+            );
+            // Call the function under test and assert that the function returns Ok
+            check_remove_or_demote_voter(&region, &cfg, &cp, 1, &peer_heartbeat).unwrap();
+
+            // now make one peer slow
+            if let Some(peer_heartbeat) = peer_heartbeat.get_mut(&3) {
+                *peer_heartbeat = std::time::Instant::now() - std::time::Duration::from_secs(100);
+            }
+
+            // Call the function under test
+            let result = check_remove_or_demote_voter(&region, &cfg, &cp, 1, &peer_heartbeat);
+            // Assert that the function returns failed
+            assert!(result.is_err());
+
+            // remove the slow peer instead
+            cp[0].peer = Some(metapb::Peer {
+                id: 3,
+                ..Default::default()
+            })
+            .into();
+            // Call the function under test
+            check_remove_or_demote_voter(&region, &cfg, &cp, 1, &peer_heartbeat).unwrap();
+
+            // make peer to learner and remove the peer 2
+            region.mut_peers()[1].set_role(metapb::PeerRole::Learner);
+            cp[0].peer = Some(metapb::Peer {
+                id: 2,
+                ..Default::default()
+            })
+            .into();
+            // Call the function under test
+            check_remove_or_demote_voter(&region, &cfg, &cp, 1, &peer_heartbeat).unwrap();
+            // set peer 2 voter again
+            region.mut_peers()[1].set_role(metapb::PeerRole::Voter);
+
+            // there's no remove node, it's fine with slow peers.
+            cp[0] = ChangePeerRequest {
+                change_type: eraftpb::ConfChangeType::AddNode,
+                peer: Some(metapb::Peer {
+                    id: 2,
+                    ..Default::default()
+                })
+                .into(),
+                ..Default::default()
+            };
+            // Call the function under test
+            check_remove_or_demote_voter(&region, &cfg, &cp, 1, &peer_heartbeat).unwrap();
+        }
     }
 }

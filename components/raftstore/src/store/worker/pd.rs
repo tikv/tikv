@@ -41,7 +41,7 @@ use tikv_util::{
     box_err, debug, error, info,
     metrics::ThreadInfoStatistics,
     store::QueryStats,
-    sys::thread::StdThreadBuildWrapper,
+    sys::{thread::StdThreadBuildWrapper, SysQuota},
     thd_name,
     time::{Instant as TiInstant, UnixSecs},
     timer::GLOBAL_TIMER_HANDLE,
@@ -225,6 +225,9 @@ pub struct StoreStat {
     pub store_cpu_usages: RecordPairVec,
     pub store_read_io_rates: RecordPairVec,
     pub store_write_io_rates: RecordPairVec,
+
+    store_cpu_quota: f64, // quota of cpu usage
+    store_cpu_busy_thd: f64,
 }
 
 impl Default for StoreStat {
@@ -249,7 +252,30 @@ impl Default for StoreStat {
             store_cpu_usages: RecordPairVec::default(),
             store_read_io_rates: RecordPairVec::default(),
             store_write_io_rates: RecordPairVec::default(),
+
+            store_cpu_quota: 0.0_f64,
+            store_cpu_busy_thd: 0.8_f64,
         }
+    }
+}
+
+impl StoreStat {
+    fn set_cpu_quota(&mut self, cpu_cores: f64, busy_thd: f64) {
+        self.store_cpu_quota = cpu_cores * 100.0;
+        self.store_cpu_busy_thd = busy_thd;
+    }
+
+    fn maybe_busy(&self) -> bool {
+        if self.store_cpu_quota < 1.0 || self.store_cpu_busy_thd > 1.0 {
+            return false;
+        }
+
+        let mut cpu_usage = 0_u64;
+        for record in self.store_cpu_usages.iter() {
+            cpu_usage += record.get_value();
+        }
+
+        (cpu_usage as f64 / self.store_cpu_quota) >= self.store_cpu_busy_thd
     }
 }
 
@@ -864,14 +890,14 @@ impl SlowScore {
         }
     }
 
-    fn record(&mut self, id: u64, duration: Duration) {
+    fn record(&mut self, id: u64, duration: Duration, not_busy: bool) {
         self.last_record_time = Instant::now();
         if id != self.last_tick_id {
             return;
         }
         self.last_tick_finished = true;
         self.total_requests += 1;
-        if duration >= self.inspect_interval {
+        if not_busy && duration >= self.inspect_interval {
             self.timeout_requests += 1;
         }
     }
@@ -986,6 +1012,8 @@ where
         causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
         grpc_service_manager: GrpcServiceManager,
     ) -> Runner<EK, ER, T> {
+        let mut store_stat = StoreStat::default();
+        store_stat.set_cpu_quota(SysQuota::cpu_cores_quota(), cfg.inspect_cpu_util_thd);
         let store_heartbeat_interval = cfg.pd_store_heartbeat_tick_interval.0;
         let interval = store_heartbeat_interval / NUM_COLLECT_STORE_INFOS_PER_HEARTBEAT;
         let mut stats_monitor = StatsMonitor::new(
@@ -1010,7 +1038,7 @@ where
             is_hb_receiver_scheduled: false,
             region_peers: HashMap::default(),
             region_buckets: HashMap::default(),
-            store_stat: StoreStat::default(),
+            store_stat,
             start_ts: UnixSecs::now(),
             scheduler,
             store_heartbeat_interval,
@@ -1567,8 +1595,14 @@ where
                     }
                 }
                 Ok(None) => {
-                    // splitted Region has not yet reported to PD.
-                    // TODO: handle merge
+                    // Splitted region has not yet reported to PD.
+                    //
+                    // Or region has been merged. This case is handled by
+                    // message `MsgCheckStalePeer`, stale peers will be
+                    // removed eventually.
+                    PD_VALIDATE_PEER_COUNTER_VEC
+                        .with_label_values(&["region not found"])
+                        .inc();
                 }
                 Err(e) => {
                     error!("get region failed"; "err" => ?e);
@@ -2255,10 +2289,11 @@ where
             } => self.handle_update_max_timestamp(region_id, initial_status, txn_ext),
             Task::QueryRegionLeader { region_id } => self.handle_query_region_leader(region_id),
             Task::UpdateSlowScore { id, duration } => {
-                self.slow_score.record(id, duration.sum());
-                self.slow_trend_cause.record(
-                    tikv_util::time::duration_to_us(duration.store_wait_duration.unwrap()),
-                    Instant::now(),
+                // Fine-tuned, `SlowScore` only takes the I/O jitters on the disk into account.
+                self.slow_score.record(
+                    id,
+                    duration.delays_on_disk_io(false),
+                    !self.store_stat.maybe_busy(),
                 );
             }
             Task::RegionCpuRecords(records) => self.handle_region_cpu_records(records),
@@ -2298,7 +2333,12 @@ where
             self.update_health_status(ServingStatus::Serving);
         }
         if !self.slow_score.last_tick_finished {
-            self.slow_score.record_timeout();
+            // If the last tick is not finished, it means that the current store might
+            // be busy on handling requests or delayed on I/O operations. And only when
+            // the current store is not busy, it should record the last_tick as a timeout.
+            if !self.store_stat.maybe_busy() {
+                self.slow_score.record_timeout();
+            }
             // If the last slow_score already reached abnormal state and was delayed for
             // reporting by `store-heartbeat` to PD, we should report it here manually as
             // a FAKE `store-heartbeat`.
@@ -2332,13 +2372,14 @@ where
                 STORE_INSPECT_DURATION_HISTOGRAM
                     .with_label_values(&["store_process"])
                     .observe(tikv_util::time::duration_to_sec(
-                        duration.store_process_duration.unwrap(),
+                        duration.store_process_duration.unwrap_or_default(),
                     ));
                 STORE_INSPECT_DURATION_HISTOGRAM
                     .with_label_values(&["store_wait"])
                     .observe(tikv_util::time::duration_to_sec(
-                        duration.store_wait_duration.unwrap(),
+                        duration.store_wait_duration.unwrap_or_default(),
                     ));
+
                 STORE_INSPECT_DURATION_HISTOGRAM
                     .with_label_values(&["all"])
                     .observe(tikv_util::time::duration_to_sec(dur));

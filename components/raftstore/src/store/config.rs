@@ -104,12 +104,11 @@ pub struct Config {
     pub max_manual_flush_rate: f64,
     // When a peer is not responding for this time, leader will not keep entry cache for it.
     pub raft_entry_cache_life_time: ReadableDuration,
-    // Deprecated! The configuration has no effect.
-    // They are preserved for compatibility check.
     // When a peer is newly added, reject transferring leader to the peer for a while.
     #[doc(hidden)]
     #[serde(skip_serializing)]
-    #[online_config(skip)]
+    #[online_config(hidden)]
+    #[deprecated = "The configuration has been removed. It has no effect"]
     pub raft_reject_transfer_leader_duration: ReadableDuration,
 
     /// Whether to disable checking quorum for the raft group. This will make
@@ -320,31 +319,33 @@ pub struct Config {
     pub io_reschedule_concurrent_max_count: usize,
     pub io_reschedule_hotpot_duration: ReadableDuration,
 
-    // Deprecated! Batch is done in raft client.
     #[doc(hidden)]
     #[serde(skip_serializing)]
-    #[online_config(skip)]
+    #[online_config(hidden)]
+    #[deprecated = "The configuration has been removed. Batch is done in raft client."]
     pub raft_msg_flush_interval: ReadableDuration,
 
-    // Deprecated! These configuration has been moved to Coprocessor.
-    // They are preserved for compatibility check.
     #[doc(hidden)]
     #[serde(skip_serializing)]
-    #[online_config(skip)]
+    #[online_config(hidden)]
+    #[deprecated = "The configuration has been moved to coprocessor.region_max_size."]
     pub region_max_size: ReadableSize,
     #[doc(hidden)]
     #[serde(skip_serializing)]
-    #[online_config(skip)]
+    #[online_config(hidden)]
+    #[deprecated = "The configuration has been moved to coprocessor.region_split_size."]
     pub region_split_size: ReadableSize,
-    // Deprecated! The time to clean stale peer safely can be decided based on RocksDB snapshot
-    // sequence number.
     #[doc(hidden)]
     #[serde(skip_serializing)]
-    #[online_config(skip)]
+    #[online_config(hidden)]
+    #[deprecated = "The configuration has been removed. The time to clean stale peer safely can be decided based on RocksDB snapshot sequence number."]
     pub clean_stale_peer_delay: ReadableDuration,
 
     // Interval to inspect the latency of raftstore for slow store detection.
     pub inspect_interval: ReadableDuration,
+    /// Threshold of CPU utilization to inspect for slow store detection.
+    #[doc(hidden)]
+    pub inspect_cpu_util_thd: f64,
 
     // The unsensitive(increase it to reduce sensitiveness) of the cause-trend detection
     pub slow_trend_unsensitive_cause: f64,
@@ -400,6 +401,7 @@ pub struct Config {
 }
 
 impl Default for Config {
+    #[allow(deprecated)]
     fn default() -> Config {
         Config {
             prevote: true,
@@ -432,7 +434,7 @@ impl Default for Config {
             region_compact_min_tombstones: 10000,
             region_compact_tombstones_percent: 30,
             region_compact_min_redundant_rows: 50000,
-            region_compact_redundant_rows_percent: None,
+            region_compact_redundant_rows_percent: Some(20),
             pd_heartbeat_tick_interval: ReadableDuration::minutes(1),
             pd_store_heartbeat_tick_interval: ReadableDuration::secs(10),
             notify_capacity: 40960,
@@ -503,7 +505,12 @@ impl Default for Config {
             region_max_size: ReadableSize(0),
             region_split_size: ReadableSize(0),
             clean_stale_peer_delay: ReadableDuration::minutes(0),
-            inspect_interval: ReadableDuration::millis(500),
+            inspect_interval: ReadableDuration::millis(100),
+            // The default value of `inspect_cpu_util_thd` is 0.4, which means
+            // when the cpu utilization is greater than 40%, the store might be
+            // regarded as a slow node if there exists delayed inspected messages.
+            // It's good enough for most cases to reduce the false positive rate.
+            inspect_cpu_util_thd: 0.4,
             // The param `slow_trend_unsensitive_cause == 2.0` can yield good results,
             // make it `10.0` to reduce a bit sensitiveness because SpikeFilter is disabled
             slow_trend_unsensitive_cause: 10.0,
@@ -614,15 +621,6 @@ impl Config {
                 self.region_compact_check_step = Some(5);
             } else {
                 self.region_compact_check_step = Some(100);
-            }
-        }
-
-        if self.region_compact_redundant_rows_percent.is_none() {
-            if raft_kv_v2 {
-                self.region_compact_redundant_rows_percent = Some(20);
-            } else {
-                // Disable redundant rows check in default for v1.
-                self.region_compact_redundant_rows_percent = Some(100);
             }
         }
 

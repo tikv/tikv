@@ -23,8 +23,9 @@ use raftstore::{
         fsm::ApplyMetrics,
         metrics::RAFT_PEER_PENDING_DURATION,
         util::{Lease, RegionReadProgress},
-        Config, EntryStorage, ForceLeaderState, PeerStat, ProposalQueue, ReadDelegate,
-        ReadIndexQueue, ReadProgress, TabletSnapManager, UnsafeRecoveryState, WriteTask,
+        BucketStatsInfo, Config, EntryStorage, ForceLeaderState, PeerStat, ProposalQueue,
+        ReadDelegate, ReadIndexQueue, ReadProgress, TabletSnapManager, UnsafeRecoveryState,
+        WriteTask,
     },
 };
 use slog::{debug, info, Logger};
@@ -35,9 +36,9 @@ use crate::{
     batch::StoreContext,
     fsm::ApplyScheduler,
     operation::{
-        AbnormalPeerContext, AsyncWriter, BucketStatsInfo, CompactLogContext, DestroyProgress,
-        GcPeerContext, MergeContext, ProposalControl, ReplayWatch, SimpleWriteReqEncoder,
-        SplitFlowControl, SplitPendingAppend, TxnContext,
+        AbnormalPeerContext, AsyncWriter, CompactLogContext, DestroyProgress, GcPeerContext,
+        MergeContext, ProposalControl, ReplayWatch, SimpleWriteReqEncoder, SplitFlowControl,
+        SplitPendingAppend, TxnContext,
     },
     router::{ApplyTask, CmdResChannel, PeerTick, QueryResChannel},
     Result,
@@ -587,6 +588,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     #[inline]
     pub fn remove_peer_heartbeat(&mut self, peer_id: u64) {
         self.peer_heartbeats.remove(&peer_id);
+    }
+
+    #[inline]
+    pub fn get_peer_heartbeats(&self) -> &HashMap<u64, Instant> {
+        &self.peer_heartbeats
     }
 
     #[inline]

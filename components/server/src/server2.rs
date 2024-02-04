@@ -67,13 +67,13 @@ use raftstore_v2::{
     StateStorage,
 };
 use resolved_ts::Task;
-use resource_control::ResourceGroupManager;
+use resource_control::{priority_from_task_meta, ResourceGroupManager};
 use security::SecurityManager;
 use service::{service_event::ServiceEvent, service_manager::GrpcServiceManager};
 use tikv::{
     config::{
         loop_registry, ConfigController, ConfigurableDb, DbConfigManger, DbType, LogConfigManager,
-        TikvConfig,
+        MemoryConfigManager, TikvConfig,
     },
     coprocessor::{self, MEMTRACE_ROOT as MEMTRACE_COPROCESSOR},
     coprocessor_v2,
@@ -286,11 +286,14 @@ where
             SecurityManager::new(&config.security)
                 .unwrap_or_else(|e| fatal!("failed to create security manager: {}", e)),
         );
+        let props = tikv_util::thread_group::current_properties();
         let env = Arc::new(
             EnvBuilder::new()
                 .cq_count(config.server.grpc_concurrency)
                 .name_prefix(thd_name!(GRPC_THREAD_PREFIX))
-                .after_start(|| {
+                .after_start(move || {
+                    tikv_util::thread_group::set_properties(props.clone());
+
                     // SAFETY: we will call `remove_thread_memory_accessor` at before_stop.
                     unsafe { add_thread_memory_accessor() };
                 })
@@ -441,6 +444,7 @@ where
         );
 
         cfg_controller.register(tikv::config::Module::Log, Box::new(LogConfigManager));
+        cfg_controller.register(tikv::config::Module::Memory, Box::new(MemoryConfigManager));
 
         let lock_mgr = LockManager::new(&self.core.config.pessimistic_txn);
         cfg_controller.register(
@@ -468,6 +472,7 @@ where
                 engines.engine.clone(),
                 resource_ctl,
                 CleanupMethod::Remote(self.core.background_worker.remote()),
+                Some(Arc::new(priority_from_task_meta)),
             ))
         } else {
             None
@@ -948,6 +953,7 @@ where
         backup_worker.start(backup_endpoint);
 
         // Import SST service.
+        let region_info_accessor = self.region_info_accessor.as_ref().unwrap().clone();
         let import_service = ImportSstService::new(
             self.core.config.import.clone(),
             self.core.config.raft_store.raft_entry_max_size,
@@ -956,6 +962,7 @@ where
             servers.importer.clone(),
             Some(self.router.as_ref().unwrap().store_meta().clone()),
             self.resource_manager.clone(),
+            Arc::new(region_info_accessor),
         );
         let import_cfg_mgr = import_service.get_config_manager();
 
