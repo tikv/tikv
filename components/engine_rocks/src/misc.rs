@@ -773,7 +773,8 @@ mod tests {
         ];
         assert_eq!(sst_range, expected);
 
-        db.compact_range_cf(cf, None, None, false, 1).unwrap();
+        db.compact_range_cf(cf, None, None, false, 1, false)
+            .unwrap();
         let sst_range = db.get_sst_key_ranges(cf, 0).unwrap();
         assert_eq!(sst_range.len(), 0);
         let sst_range = db.get_sst_key_ranges(cf, 1).unwrap();

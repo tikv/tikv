@@ -200,7 +200,7 @@ fn test_delete_range_does_not_block_flushed_index() {
     cached
         .latest()
         .unwrap()
-        .compact_range_cf(CF_DEFAULT, Some(b"A"), Some(b"{"), false, 1)
+        .compact_range_cf(CF_DEFAULT, Some(b"A"), Some(b"{"), false, 1, false)
         .unwrap();
     // delete range by files.
     let header = Box::new(router.new_request_for(2).take_header());

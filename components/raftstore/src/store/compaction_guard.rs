@@ -610,6 +610,7 @@ mod tests {
             None,  // end_key
             false, // exclusive_manual
             1,     // max_subcompactions
+            false,
         )
         .unwrap();
 
@@ -697,7 +698,7 @@ mod tests {
         assert_eq!(level_1.len(), 1, "{:?}", level_1);
         assert_eq!(level_1[0].smallestkey, b"za0", "{:?}", level_1);
         assert_eq!(level_1[0].largestkey, b"za9", "{:?}", level_1);
-        db.compact_range(None, None, false, 1).unwrap();
+        db.compact_range(None, None, false, 1, false).unwrap();
 
         // So... the next-level size will be almost 1024 * 15, which should reach the
         // limit.

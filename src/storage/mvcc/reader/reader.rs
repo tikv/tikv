@@ -1216,7 +1216,9 @@ pub mod tests {
 
         pub fn compact(&mut self) {
             for cf in ALL_CFS {
-                self.db.compact_range_cf(cf, None, None, false, 1).unwrap();
+                self.db
+                    .compact_range_cf(cf, None, None, false, 1, false)
+                    .unwrap();
             }
         }
     }

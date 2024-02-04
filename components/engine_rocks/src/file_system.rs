@@ -97,6 +97,7 @@ mod tests {
             None,  // end_key
             false, // exclusive_manual
             1,     // max_subcompactions
+            false,
         )
         .unwrap();
         assert!(stats.fetch(IoType::LevelZeroCompaction, IoOp::Read) > value_size * 4);

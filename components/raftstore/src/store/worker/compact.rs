@@ -539,6 +539,7 @@ mod tests {
             cf_name: String::from(CF_DEFAULT),
             start_key: None,
             end_key: None,
+            bottommost_level_force: false,
         });
         sleep(Duration::from_secs(5));
 

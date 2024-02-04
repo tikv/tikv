@@ -227,7 +227,7 @@ mod tests {
         db.put(b"z2", b"val").unwrap();
         db.put(b"z7", b"val").unwrap();
         // generate SST file.
-        db.compact_range_cf(CF_DEFAULT, None, None, false, 1)
+        db.compact_range_cf(CF_DEFAULT, None, None, false, 1, false)
             .unwrap();
 
         let files = db.as_inner().get_live_files();
