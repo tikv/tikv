@@ -15,6 +15,7 @@ use grpcio::{
     ClientStreamingSink, DuplexSink, Error as GrpcError, RequestStream, Result as GrpcResult,
     RpcContext, RpcStatus, RpcStatusCode, ServerStreamingSink, UnarySink, WriteFlags,
 };
+use health_controller::HealthController;
 use kvproto::{coprocessor::*, kvrpcpb::*, mpp::*, raft_serverpb::*, tikvpb::*};
 use protobuf::RepeatedField;
 use raft::eraftpb::MessageType;
@@ -89,6 +90,8 @@ pub struct Service<E: Engine, L: LockManager, F: KvFormat> {
     reject_messages_on_memory_ratio: f64,
 
     resource_manager: Option<Arc<ResourceGroupManager>>,
+
+    health_controller: HealthController,
 }
 
 impl<E: Engine, L: LockManager, F: KvFormat> Drop for Service<E, L, F> {
@@ -112,6 +115,7 @@ impl<E: Engine + Clone, L: LockManager + Clone, F: KvFormat> Clone for Service<E
             proxy: self.proxy.clone(),
             reject_messages_on_memory_ratio: self.reject_messages_on_memory_ratio,
             resource_manager: self.resource_manager.clone(),
+            health_controller: self.health_controller.clone(),
         }
     }
 }
@@ -131,6 +135,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Service<E, L, F> {
         proxy: Proxy,
         reject_messages_on_memory_ratio: f64,
         resource_manager: Option<Arc<ResourceGroupManager>>,
+        health_controller: HealthController,
     ) -> Self {
         Service {
             store_id,
@@ -145,6 +150,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Service<E, L, F> {
             proxy,
             reject_messages_on_memory_ratio,
             resource_manager,
+            health_controller,
         }
     }
 
@@ -926,6 +932,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
         let pool_size = storage.get_normal_pool_size();
         let batch_builder = BatcherBuilder::new(self.enable_req_batch, pool_size);
         let resource_manager = self.resource_manager.clone();
+        let health_controller = self.health_controller.clone();
         let request_handler = stream.try_for_each(move |mut req| {
             let request_ids = req.take_request_ids();
             let requests: Vec<_> = req.take_requests().into();
@@ -963,12 +970,14 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
             collect_batch_resp,
         );
 
+        let mut health_feedback_attacher = HealthFeedbackAttacher::new(health_controller);
         let mut response_retriever = response_retriever.map(move |mut item| {
             handle_measures_for_batch_commands(&mut item);
             let mut r = item.batch_resp;
             GRPC_RESP_BATCH_COMMANDS_SIZE.observe(r.request_ids.len() as f64);
             // TODO: per thread load is more reasonable for batching.
             r.set_transport_layer_load(grpc_thread_load.total_load() as u64);
+            health_feedback_attacher.attach_if_needed(&mut r);
             GrpcResult::<(BatchCommandsResponse, WriteFlags)>::Ok((
                 r,
                 WriteFlags::default().buffer_hint(false),
@@ -2371,6 +2380,38 @@ fn needs_reject_raft_append(reject_messages_on_memory_ratio: f64) -> bool {
         }
     }
     false
+}
+
+struct HealthFeedbackAttacher {
+    health_controller: HealthController,
+    last_feedback_time: Option<Instant>,
+}
+
+impl HealthFeedbackAttacher {
+    fn new(health_controller: HealthController) -> Self {
+        Self {
+            health_controller,
+            last_feedback_time: None,
+        }
+    }
+
+    fn attach_if_needed(&mut self, resp: &mut BatchCommandsResponse) {
+        let now = Instant::now_coarse();
+
+        if let Some(last_feedback_time) = self.last_feedback_time
+            && now - last_feedback_time < Duration::from_secs(1)
+        {
+            return;
+        }
+
+        self.attach(resp, now);
+    }
+
+    fn attach(&mut self, resp: &mut BatchCommandsResponse, now: Instant) {
+        self.last_feedback_time = Some(now);
+        resp.mut_health_feedback()
+            .set_slow_score(self.health_controller.get_raftstore_slow_score() as i32);
+    }
 }
 
 #[cfg(test)]
