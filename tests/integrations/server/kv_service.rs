@@ -1760,6 +1760,33 @@ fn test_batch_commands() {
 
 #[test_case(test_raftstore::must_new_cluster_and_kv_client)]
 #[test_case(test_raftstore_v2::must_new_cluster_and_kv_client)]
+fn test_health_feedback() {
+    let (_cluster, client, _ctx) = new_cluster();
+    let (mut sender, mut receiver) = client.batch_commands().unwrap();
+
+    let mut batch_req = BatchCommandsRequest::default();
+    batch_req.mut_requests().push(Default::default());
+    batch_req.mut_request_ids().push(1);
+
+    block_on(sender.send((batch_req.clone(), WriteFlags::default()))).unwrap();
+    let resp = block_on(receiver.next()).unwrap().unwrap();
+    assert!(resp.has_health_feedback());
+
+    block_on(sender.send((batch_req.clone(), WriteFlags::default()))).unwrap();
+    let resp = block_on(receiver.next()).unwrap().unwrap();
+    assert!(!resp.has_health_feedback());
+
+    thread::sleep(Duration::from_millis(1100));
+    block_on(sender.send((batch_req, WriteFlags::default()))).unwrap();
+    let resp = block_on(receiver.next()).unwrap().unwrap();
+    assert!(resp.has_health_feedback());
+
+    block_on(sender.close()).unwrap();
+    block_on(receiver.for_each(|_| future::ready(())));
+}
+
+#[test_case(test_raftstore::must_new_cluster_and_kv_client)]
+#[test_case(test_raftstore_v2::must_new_cluster_and_kv_client)]
 fn test_empty_commands() {
     let (_cluster, client, _ctx) = new_cluster();
     let (mut sender, receiver) = client.batch_commands().unwrap();
