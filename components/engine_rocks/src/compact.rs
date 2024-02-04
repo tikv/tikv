@@ -40,9 +40,9 @@ impl CompactExt for RocksEngine {
         // concurrently run with other background compactions.
         compact_opts.set_exclusive_manual_compaction(exclusive_manual);
         compact_opts.set_max_subcompactions(max_subcompactions as i32);
-        // if bottommost_level_force {
-        //     compact_opts.set_bottommost_level_compaction(DBBottommostLevelCompaction::Force);
-        // }
+        if bottommost_level_force {
+            compact_opts.set_bottommost_level_compaction(DBBottommostLevelCompaction::Force);
+        }
         db.compact_range_cf_opt(handle, &compact_opts, start_key, end_key);
         Ok(())
     }
