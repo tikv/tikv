@@ -2923,6 +2923,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
                 cf_name: String::from(CF_LOCK),
                 start_key: None,
                 end_key: None,
+                bottommost_level_force: false,
             };
             if let Err(e) = self
                 .ctx

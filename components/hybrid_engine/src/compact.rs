@@ -22,6 +22,7 @@ where
         end_key: Option<&[u8]>,
         exclusive_manual: bool,
         max_subcompactions: u32,
+        bottommost_level_force: bool,
     ) -> Result<()> {
         self.disk_engine().compact_range_cf(
             cf,
@@ -29,6 +30,7 @@ where
             end_key,
             exclusive_manual,
             max_subcompactions,
+            bottommost_level_force,
         )
     }
 

@@ -34,8 +34,9 @@ pub enum Task {
 
     Compact {
         cf_name: String,
-        start_key: Option<Key>, // None means smallest key
-        end_key: Option<Key>,   // None means largest key
+        start_key: Option<Key>,       // None means smallest key
+        end_key: Option<Key>,         // None means largest key
+        bottommost_level_force: bool, // Whether force the bottommost level to compact
     },
 
     CheckAndCompact {
@@ -155,6 +156,7 @@ impl Display for Task {
                 ref cf_name,
                 ref start_key,
                 ref end_key,
+                ref bottommost_level_force,
             } => f
                 .debug_struct("Compact")
                 .field("cf_name", cf_name)
@@ -166,6 +168,7 @@ impl Display for Task {
                     "end_key",
                     &end_key.as_ref().map(|k| log_wrappers::Value::key(k)),
                 )
+                .field("bottommost_level_force", bottommost_level_force)
                 .finish(),
             Task::CheckAndCompact {
                 ref cf_names,
@@ -256,6 +259,7 @@ where
                 range.0, range.1, // Compact the entire key range.
                 false,   // non-exclusive
                 1,       // number of threads threads
+                false,   // force bottommost level compaction
             ));
             incremental_timer.observe_duration();
             debug!(
@@ -301,16 +305,21 @@ where
         cf_name: &str,
         start_key: Option<&[u8]>,
         end_key: Option<&[u8]>,
+        bottommost_level_force: bool,
     ) -> Result<(), Error> {
         fail_point!("on_compact_range_cf");
         let timer = Instant::now();
         let compact_range_timer = COMPACT_RANGE_CF
             .with_label_values(&[cf_name])
             .start_coarse_timer();
-        box_try!(
-            self.engine
-                .compact_range_cf(cf_name, start_key, end_key, false, 1 /* threads */,)
-        );
+        box_try!(self.engine.compact_range_cf(
+            cf_name,
+            start_key,
+            end_key,
+            false,
+            1, // threads
+            bottommost_level_force
+        ));
         compact_range_timer.observe_duration();
         info!(
             "compact range finished";
@@ -358,10 +367,15 @@ where
                 cf_name,
                 start_key,
                 end_key,
+                bottommost_level_force,
             } => {
                 let cf = &cf_name;
-                if let Err(e) = self.compact_range_cf(cf, start_key.as_deref(), end_key.as_deref())
-                {
+                if let Err(e) = self.compact_range_cf(
+                    cf,
+                    start_key.as_deref(),
+                    end_key.as_deref(),
+                    bottommost_level_force,
+                ) {
                     error!("execute compact range failed"; "cf" => cf, "err" => %e);
                 }
             }
@@ -373,7 +387,9 @@ where
                 Ok(mut ranges) => {
                     for (start, end) in ranges.drain(..) {
                         for cf in &cf_names {
-                            if let Err(e) = self.compact_range_cf(cf, Some(&start), Some(&end)) {
+                            if let Err(e) =
+                                self.compact_range_cf(cf, Some(&start), Some(&end), false)
+                            {
                                 error!(
                                     "compact range failed";
                                     "range_start" => log_wrappers::Value::key(&start),

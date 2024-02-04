@@ -19,9 +19,17 @@ pub trait CompactExt: CfNamesExt {
         end_key: Option<&[u8]>,
         exclusive_manual: bool,
         max_subcompactions: u32,
+        bottommost_level_force: bool,
     ) -> Result<()> {
         for cf in self.cf_names() {
-            self.compact_range_cf(cf, start_key, end_key, exclusive_manual, max_subcompactions)?;
+            self.compact_range_cf(
+                cf,
+                start_key,
+                end_key,
+                exclusive_manual,
+                max_subcompactions,
+                bottommost_level_force,
+            )?;
         }
         Ok(())
     }
@@ -34,6 +42,7 @@ pub trait CompactExt: CfNamesExt {
         end_key: Option<&[u8]>,
         exclusive_manual: bool,
         max_subcompactions: u32,
+        bottommost_level_force: bool,
     ) -> Result<()>;
 
     /// Compacts files in the range and above the output level.

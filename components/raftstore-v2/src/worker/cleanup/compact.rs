@@ -104,9 +104,10 @@ where
                             continue;
                         };
                         for cf in &cf_names {
-                            if let Err(e) =
-                                tablet.compact_range_cf(cf, None, None, false, 1 /* threads */)
-                            {
+                            if let Err(e) = tablet.compact_range_cf(
+                                cf, None, None, false, 1, // threads
+                                false,
+                            ) {
                                 error!(
                                     self.logger,
                                     "compact range failed";

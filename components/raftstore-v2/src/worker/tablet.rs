@@ -303,7 +303,7 @@ impl<EK: KvEngine> Runner<EK> {
                 for r in [range1, range2] {
                     // When compaction filter is present, trivial move is disallowed.
                     if let Err(e) =
-                        tablet.compact_range(Some(r.start_key), Some(r.end_key), false, 1)
+                        tablet.compact_range(Some(r.start_key), Some(r.end_key), false, 1, false)
                     {
                         if e.to_string().contains("Manual compaction paused") {
                             info!(

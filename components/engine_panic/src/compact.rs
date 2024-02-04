@@ -20,6 +20,7 @@ impl CompactExt for PanicEngine {
         end_key: Option<&[u8]>,
         exclusive_manual: bool,
         max_subcompactions: u32,
+        bottommost_level_force: bool,
     ) -> Result<()> {
         panic!()
     }

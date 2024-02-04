@@ -327,7 +327,7 @@ where
     pub fn compact_data(&self) {
         for engine in self.engines.values() {
             let db = &engine.kv;
-            db.compact_range_cf(CF_DEFAULT, None, None, false, 1)
+            db.compact_range_cf(CF_DEFAULT, None, None, false, 1, false)
                 .unwrap();
         }
     }
