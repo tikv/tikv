@@ -2746,7 +2746,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         // regarded as the candidate for balancing leaders.
         if during_starting_stage {
             let completed_target_count = (|| {
-                fail_point!("on_mock_store_completed_target_count", |_| 0);
+                fail_point!("on_mock_store_completed_target_count", |_| 100);
                 std::cmp::max(
                     1,
                     STORE_CHECK_COMPLETE_APPLY_REGIONS_PERCENT * region_count / 100,
@@ -2761,7 +2761,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
                     self.ctx.cfg.min_pending_apply_region_count,
                     region_count.saturating_sub(completed_target_count),
                 );
-                busy_apply_peers_count >= pending_target_count
+                pending_target_count > 0 && busy_apply_peers_count >= pending_target_count
             }
         } else {
             // Already started for a fairy long time.

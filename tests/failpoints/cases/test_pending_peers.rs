@@ -156,25 +156,26 @@ fn test_on_check_busy_on_apply_peers() {
     let after_apply_stat = cluster.apply_state(r1, 3);
     assert!(after_apply_stat.applied_index == before_apply_stat.applied_index);
 
-    // Case 1: no completed regions.
-    cluster.must_send_store_heartbeat(3);
-    sleep_ms(100);
-    let stats = cluster.pd_client.get_store_stats(3).unwrap();
-    assert!(stats.is_busy);
-
-    // Case 2: completed_apply_peers_count > completed_target_count but
-    //        there exists busy peers.
+    // Case 1: completed regions < target count.
     fail::cfg("on_mock_store_completed_target_count", "return").unwrap();
     sleep_ms(100);
     cluster.must_send_store_heartbeat(3);
     sleep_ms(100);
     let stats = cluster.pd_client.get_store_stats(3).unwrap();
-    assert!(!stats.is_busy);
+    assert!(stats.is_busy);
     fail::remove("on_mock_store_completed_target_count");
-    fail::remove("on_handle_apply_1003");
     sleep_ms(100);
 
-    // After peer 1003 is recovered, store should not be marked with busy.
+    // Case 2: completed_apply_peers_count > completed_target_count but
+    //        there exists no busy peers.
+    cluster.must_send_store_heartbeat(3);
+    sleep_ms(100);
+    let stats = cluster.pd_client.get_store_stats(3).unwrap();
+    assert!(!stats.is_busy);
+
+    // After peer 1003 is recovered, store also should not be marked with busy.
+    fail::remove("on_handle_apply_1003");
+    sleep_ms(100);
     let stats = cluster.pd_client.get_store_stats(3).unwrap();
     assert!(!stats.is_busy);
 }

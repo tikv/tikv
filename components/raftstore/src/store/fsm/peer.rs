@@ -6579,6 +6579,12 @@ where
         // If the peer is newly added or created, no need to check the apply status.
         if last_idx <= RAFT_INIT_LOG_INDEX {
             self.fsm.peer.busy_on_apply = None;
+            // And it should be recorded in the `completed_apply_peers_count`.
+            let mut meta = self.ctx.store_meta.lock().unwrap();
+            meta.busy_apply_peers.remove(&peer_id);
+            if let Some(count) = meta.completed_apply_peers_count.as_mut() {
+                *count += 1;
+            }
             return;
         }
         assert!(self.fsm.peer.busy_on_apply.is_some());
