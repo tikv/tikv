@@ -40,6 +40,10 @@ command! {
             end_key: Option<Key>,
             state: FlashbackToVersionState,
         }
+        in_heap => {
+            start_key,
+            end_key,
+        }
 }
 
 impl CommandExt for FlashbackToVersion {

@@ -36,6 +36,9 @@ command! {
             /// The start timestamp of the transaction.
             start_ts: txn_types::TimeStamp,
         }
+        in_heap => {
+            keys,
+        }
 }
 
 impl CommandExt for CheckSecondaryLocks {

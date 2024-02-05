@@ -26,6 +26,7 @@ command! {
             cf: CfName,
             mutations: Vec<Modify>,
         }
+        in_heap => { mutations, }
 }
 
 impl CommandExt for RawAtomicStore {

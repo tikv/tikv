@@ -51,7 +51,9 @@ use kvproto::{
 use pd_client::BucketMeta;
 use raftstore::store::{PessimisticLockPair, TxnExt};
 use thiserror::Error;
-use tikv_util::{deadline::Deadline, escape, future::block_on_timeout, time::ThreadReadId};
+use tikv_util::{
+    deadline::Deadline, escape, future::block_on_timeout, memory::HeapSize, time::ThreadReadId,
+};
 use tracker::with_tls_tracker;
 use txn_types::{Key, PessimisticLock, TimeStamp, TxnExtra, Value};
 
@@ -83,6 +85,20 @@ pub enum Modify {
     // cf_name, start_key, end_key, notify_only
     DeleteRange(CfName, Key, Key, bool),
     Ingest(Box<SstMeta>),
+}
+
+impl HeapSize for Modify {
+    fn approximate_heap_size(&self) -> usize {
+        match self {
+            Modify::Delete(_, k) => k.approximate_heap_size(),
+            Modify::Put(_, k, v) => k.approximate_heap_size() + v.approximate_heap_size(),
+            Modify::PessimisticLock(k, _) => k.approximate_heap_size(),
+            Modify::DeleteRange(_, k1, k2, _) => {
+                k1.approximate_heap_size() + k2.approximate_heap_size()
+            }
+            Modify::Ingest(_) => 0,
+        }
+    }
 }
 
 impl Modify {

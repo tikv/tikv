@@ -102,6 +102,7 @@ reserve-raft-space = "2GB"
 enable-ttl = true
 ttl-check-poll-interval = "0s"
 txn-status-cache-capacity = 1000
+memory-quota = "123KB"
 
 [storage.block-cache]
 capacity = "40GB"

@@ -33,6 +33,9 @@ command! {
             /// The transaction timestamp.
             start_ts: TimeStamp,
         }
+        in_heap => {
+            keys,
+        }
 }
 
 impl CommandExt for Rollback {

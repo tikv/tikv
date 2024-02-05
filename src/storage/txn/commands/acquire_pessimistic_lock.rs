@@ -54,6 +54,10 @@ command! {
             lock_only_if_exists: bool,
             allow_lock_with_conflict: bool,
         }
+        in_heap => {
+            primary,
+            keys,
+        }
 }
 
 impl CommandExt for AcquirePessimisticLock {

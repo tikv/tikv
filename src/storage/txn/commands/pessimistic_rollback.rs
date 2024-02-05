@@ -36,6 +36,9 @@ command! {
             start_ts: TimeStamp,
             for_update_ts: TimeStamp,
         }
+        in_heap => {
+            keys,
+        }
 }
 
 impl CommandExt for PessimisticRollback {
