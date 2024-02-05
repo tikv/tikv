@@ -2733,7 +2733,6 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         if completed_apply_peers_count.is_none() || region_count == 0 {
             return false;
         }
-        assert!(completed_apply_peers_count.is_some());
 
         let completed_apply_peers_count = completed_apply_peers_count.unwrap();
         let during_starting_stage = {
