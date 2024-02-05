@@ -5341,14 +5341,16 @@ mod tests {
 
     #[test]
     fn test_illegal_backupstream_config_parm() {
-        let mut tikv_cfg = TikvConfig::default();
-        tikv_cfg.log_backup.initial_scan_rate_limit.0 = 1000;
-        tikv_cfg.pd.endpoints = vec!["".to_owned()];
-        let dur = tikv_cfg.raft_store.raft_heartbeat_interval();
-        tikv_cfg.server.grpc_keepalive_time = ReadableDuration(dur);
-        tikv_cfg.validate().unwrap_err();
-        tikv_cfg.server.grpc_keepalive_time = ReadableDuration(dur * 2);
-        tikv_cfg.validate().unwrap_err();
+        let mut backup_stream_cfg = BackupStreamConfig::default();
+        backup_stream_cfg.initial_scan_rate_limit.0 = 0;
+        backup_stream_cfg.validate().unwrap_err();
+        backup_stream_cfg.initial_scan_rate_limit.0 = 1000;
+        backup_stream_cfg.validate().unwrap_err();
+        backup_stream_cfg.initial_scan_rate_limit.0 = 1024;
+        backup_stream_cfg.validate().unwrap();
+        backup_stream_cfg.initial_scan_rate_limit.0 = 2048;
+        backup_stream_cfg.validate().unwrap();
+
     }
 
     #[test]
