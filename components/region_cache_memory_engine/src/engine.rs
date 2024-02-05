@@ -628,6 +628,7 @@ impl Peekable for RangeCacheSnapshot {
         cf: &str,
         key: &[u8],
     ) -> Result<Option<Self::DbVector>> {
+        fail::fail_point!("on_range_cache_get_value");
         let seq = self.sequence_number();
         let mut iter = self.skiplist_engine.data[cf_to_id(cf)].iter();
         let seek_key = encode_seek_key(key, self.sequence_number(), VALUE_TYPE_FOR_SEEK);
