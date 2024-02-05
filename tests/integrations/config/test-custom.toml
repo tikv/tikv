@@ -101,6 +101,11 @@ reserve-space = "10GB"
 reserve-raft-space = "2GB"
 enable-ttl = true
 ttl-check-poll-interval = "0s"
+<<<<<<< HEAD
+=======
+txn-status-cache-capacity = 1000
+memory-quota = "123KB"
+>>>>>>> 2a75a7e965 (storage: reject new commands if memory quota exceeded (#16473))
 
 [storage.block-cache]
 capacity = "40GB"

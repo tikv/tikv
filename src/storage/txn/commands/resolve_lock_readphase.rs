@@ -28,6 +28,10 @@ command! {
             txn_status: HashMap<TimeStamp, TimeStamp>,
             scan_key: Option<Key>,
         }
+        in_heap => {
+            txn_status,
+            scan_key,
+        }
 }
 
 impl CommandExt for ResolveLockReadPhase {

@@ -76,7 +76,7 @@ impl Drop for ResolverStatus {
         let mut bytes = 0;
         let num_locks = locks.len();
         for lock in locks {
-            bytes += lock.heap_size();
+            bytes += lock.approximate_heap_size();
         }
         if bytes > ON_DROP_WARN_HEAP_SIZE {
             warn!("drop huge ResolverStatus";
@@ -101,10 +101,12 @@ impl ResolverStatus {
         };
         // Check if adding a new lock or unlock will exceed the memory
         // quota.
-        memory_quota.alloc(lock.heap_size()).map_err(|e| {
-            fail::fail_point!("resolved_ts_on_pending_locks_memory_quota_exceeded");
-            Error::MemoryQuotaExceeded(e)
-        })?;
+        memory_quota
+            .alloc(lock.approximate_heap_size())
+            .map_err(|e| {
+                fail::fail_point!("resolved_ts_on_pending_locks_memory_quota_exceeded");
+                Error::MemoryQuotaExceeded(e)
+            })?;
         locks.push(lock);
         Ok(())
     }
@@ -143,8 +145,13 @@ impl ResolverStatus {
         let locks = std::mem::take(locks);
         (
             *tracked_index,
+<<<<<<< HEAD
             locks.into_iter().map(move |lock| {
                 memory_quota.free(lock.heap_size());
+=======
+            locks.into_iter().map(|lock| {
+                memory_quota.free(lock.approximate_heap_size());
+>>>>>>> 2a75a7e965 (storage: reject new commands if memory quota exceeded (#16473))
                 lock
             }),
         )
@@ -165,10 +172,10 @@ enum PendingLock {
 }
 
 impl HeapSize for PendingLock {
-    fn heap_size(&self) -> usize {
+    fn approximate_heap_size(&self) -> usize {
         match self {
             PendingLock::Track { key, .. } | PendingLock::Untrack { key, .. } => {
-                key.as_encoded().heap_size()
+                key.as_encoded().approximate_heap_size()
             }
         }
     }
@@ -442,7 +449,7 @@ where
             match &observed_region.resolver_status {
                 ResolverStatus::Pending { locks, .. } => {
                     for l in locks {
-                        stats.heap_size += l.heap_size() as i64;
+                        stats.heap_size += l.approximate_heap_size() as i64;
                     }
                     stats.unresolved_count += 1;
                 }

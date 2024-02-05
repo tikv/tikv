@@ -5,7 +5,7 @@ use std::{cmp, collections::BTreeMap, sync::Arc, time::Duration};
 use collections::{HashMap, HashMapEntry};
 use raftstore::store::RegionReadProgress;
 use tikv_util::{
-    memory::{HeapSize, MemoryQuota, MemoryQuotaExceeded},
+    memory::{MemoryQuota, MemoryQuotaExceeded},
     time::Instant,
 };
 use txn_types::{Key, TimeStamp};
@@ -258,7 +258,7 @@ impl Resolver {
         // the same Arc<[u8]>, so lock_ts_heap is negligible. Also, it's hard to
         // track accurate memory usage of lock_ts_heap as a timestamp may have
         // many keys.
-        key.heap_size() + std::mem::size_of::<TimeStamp>()
+        std::mem::size_of_val(key) + std::mem::size_of::<TimeStamp>()
     }
 
     fn shrink_ratio(&mut self, ratio: usize) {

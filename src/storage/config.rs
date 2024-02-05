@@ -31,6 +31,25 @@ const MAX_SCHED_CONCURRENCY: usize = 2 * 1024 * 1024;
 // here we use 100MB as default value for tolerate 1s latency.
 const DEFAULT_SCHED_PENDING_WRITE_MB: u64 = 100;
 
+// The default memory quota for pending and running storage commands kv_get,
+// kv_prewrite, kv_commit, etc.
+//
+// The memory usage of a tikv::storage::txn::commands::Commands can be broken
+// down into:
+//
+// * The size of key-value pair which is assumed to be 1KB.
+// * The size of Command itself is approximately 448 bytes.
+// * The size of a future that executes Command, about 6184 bytes (see
+//   TxnScheduler::execute).
+//
+// Given the total memory capacity of 256MB, TiKV can support around 35,000
+// concurrently running commands or 182,000 commands waiting to be executed.
+//
+// With the default config on a single-node TiKV cluster, an empirical
+// memory quota usage for TPCC prepare with --threads 500 is about 50MB.
+// 256MB is large enough for most scenarios.
+const DEFAULT_TXN_MEMORY_QUOTA_CAPACITY: ReadableSize = ReadableSize::mb(256);
+
 const DEFAULT_RESERVED_SPACE_GB: u64 = 5;
 const DEFAULT_RESERVED_RAFT_SPACE_GB: u64 = 1;
 
@@ -75,6 +94,13 @@ pub struct Config {
     pub background_error_recovery_window: ReadableDuration,
     /// Interval to check TTL for all SSTs,
     pub ttl_check_poll_interval: ReadableDuration,
+<<<<<<< HEAD
+=======
+    #[online_config(skip)]
+    pub txn_status_cache_capacity: usize,
+    #[online_config(skip)]
+    pub memory_quota: ReadableSize,
+>>>>>>> 2a75a7e965 (storage: reject new commands if memory quota exceeded (#16473))
     #[online_config(submodule)]
     pub flow_control: FlowControlConfig,
     #[online_config(submodule)]
@@ -108,6 +134,7 @@ impl Default for Config {
             block_cache: BlockCacheConfig::default(),
             io_rate_limit: IoRateLimitConfig::default(),
             background_error_recovery_window: ReadableDuration::hours(1),
+            memory_quota: DEFAULT_TXN_MEMORY_QUOTA_CAPACITY,
         }
     }
 }
@@ -172,12 +199,20 @@ impl Config {
         if self.scheduler_worker_pool_size == 0 || self.scheduler_worker_pool_size > max_pool_size {
             return Err(
                 format!(
-                    "storage.scheduler_worker_pool_size should be greater than 0 and less than or equal to {}",
+                    "storage.scheduler-worker-pool-size should be greater than 0 and less than or equal to {}",
                     max_pool_size
                 ).into()
             );
         }
         self.io_rate_limit.validate()?;
+        if self.memory_quota < self.scheduler_pending_write_threshold {
+            warn!(
+                "scheduler.memory-quota {:?} is smaller than scheduler.scheduler-pending-write-threshold, \
+                increase to {:?}",
+                self.memory_quota, self.scheduler_pending_write_threshold,
+            );
+            self.memory_quota = self.scheduler_pending_write_threshold;
+        }
 
         Ok(())
     }

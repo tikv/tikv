@@ -21,6 +21,9 @@ command! {
         content => {
             key: Key,
         }
+        in_heap => {
+            key,
+        }
 }
 
 impl CommandExt for MvccByKey {

@@ -22,14 +22,23 @@ macro_rules! ctx {
 /// enum `storage::txns::commands::Command` must exist whose name matches the
 /// value of `cmd` and which accepts one parameter whose type name matches
 /// the value of `cmd`.
+<<<<<<< HEAD
 /// cmd_ty -> The type of the result of executing this command.
 /// display -> Information needed to implement the `Display` trait for the
 /// command. content -> The fields of the struct definition for the command.
+=======
+/// * cmd_ty -> The type of the result of executing this command.
+/// * display -> Information needed to implement the `Display` trait for the
+/// command.
+/// * content -> The fields of the struct definition for the command.
+/// * in_heap -> The fields that have heap allocation.
+>>>>>>> 2a75a7e965 (storage: reject new commands if memory quota exceeded (#16473))
 macro_rules! command {
     (
         $(#[$outer_doc: meta])*
         $cmd: ident:
             cmd_ty => $cmd_ty: ty,
+<<<<<<< HEAD
             display => $format_str: expr, ($($fields: ident$(.$sub_field:ident)?),*),
             content => {
                 $($(#[$inner_doc:meta])* $arg: ident : $arg_ty: ty,)*
@@ -84,9 +93,13 @@ macro_rules! command {
         $(#[$outer_doc: meta])*
         $cmd: ident:
             cmd_ty => $cmd_ty: ty,
+=======
+            $(display => { $format_str: expr, ($($fields: ident$(.$sub_field:ident)?),*), })?
+>>>>>>> 2a75a7e965 (storage: reject new commands if memory quota exceeded (#16473))
             content => {
                 $($(#[$inner_doc:meta])* $arg: ident : $arg_ty: ty,)*
             }
+            $(in_heap => { $($arg_in_heap: ident,)* })?
     ) => {
         $(#[$outer_doc])*
         pub struct $cmd {
@@ -94,7 +107,6 @@ macro_rules! command {
             pub deadline: ::tikv_util::deadline::Deadline,
             $($(#[$inner_doc])* pub $arg: $arg_ty,)*
         }
-
         impl $cmd {
             /// Return a `TypedCommand` that encapsulates the result of executing this command.
             pub fn new(
@@ -114,6 +126,36 @@ macro_rules! command {
                 }).into()
             }
         }
+
+        impl tikv_util::memory::HeapSize for $cmd {
+            fn approximate_heap_size(&self) -> usize {
+                0
+                $(
+                    $( + self.$arg_in_heap.approximate_heap_size() )*
+                )?
+            }
+        }
+
+        $(
+        impl std::fmt::Display for $cmd {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                use tikv_util::memory::HeapSize;
+                write!(
+                    f,
+                    concat!($format_str, " heap_size: {}"),
+                    $(
+                        self.$fields$(.$sub_field())?,
+                    )*
+                    self.approximate_heap_size(),
+                )
+            }
+        }
+        impl std::fmt::Debug for $cmd {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                write!(f, "{}", self)
+            }
+        }
+        )?
     }
 }
 

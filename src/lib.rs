@@ -29,7 +29,12 @@
 #![feature(read_buf)]
 #![feature(type_alias_impl_trait)]
 #![allow(incomplete_features)]
+<<<<<<< HEAD
 #![feature(return_position_impl_trait_in_trait)]
+=======
+#![feature(core_io_borrowed_buf)]
+#![feature(assert_matches)]
+>>>>>>> 2a75a7e965 (storage: reject new commands if memory quota exceeded (#16473))
 
 #[macro_use(fail_point)]
 extern crate fail;

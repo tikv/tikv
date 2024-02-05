@@ -245,7 +245,7 @@ impl Pending {
     }
 
     fn push_pending_lock(&mut self, lock: PendingLock) -> Result<()> {
-        let bytes = lock.heap_size();
+        let bytes = lock.approximate_heap_size();
         self.memory_quota.alloc(bytes)?;
         self.locks.push(lock);
         self.pending_bytes += bytes;
@@ -259,7 +259,7 @@ impl Pending {
         ));
         // Must take locks, otherwise it may double free memory quota on drop.
         for lock in mem::take(&mut self.locks) {
-            self.memory_quota.free(lock.heap_size());
+            self.memory_quota.free(lock.approximate_heap_size());
             match lock {
                 PendingLock::Track { key, start_ts } => {
                     resolver.track_lock(start_ts, key, None)?;
@@ -283,7 +283,7 @@ impl Drop for Pending {
         let mut bytes = 0;
         let num_locks = locks.len();
         for lock in locks {
-            bytes += lock.heap_size();
+            bytes += lock.approximate_heap_size();
         }
         if bytes > ON_DROP_WARN_HEAP_SIZE {
             warn!("cdc drop huge Pending";
@@ -303,9 +303,11 @@ enum PendingLock {
 }
 
 impl HeapSize for PendingLock {
-    fn heap_size(&self) -> usize {
+    fn approximate_heap_size(&self) -> usize {
         match self {
-            PendingLock::Track { key, .. } | PendingLock::Untrack { key } => key.heap_size(),
+            PendingLock::Track { key, .. } | PendingLock::Untrack { key } => {
+                key.approximate_heap_size()
+            }
         }
     }
 }

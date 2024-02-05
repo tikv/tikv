@@ -57,7 +57,7 @@ pub use resolve_lock::{ResolveLock, RESOLVE_LOCK_BATCH_SIZE};
 pub use resolve_lock_lite::ResolveLockLite;
 pub use resolve_lock_readphase::ResolveLockReadPhase;
 pub use rollback::Rollback;
-use tikv_util::deadline::Deadline;
+use tikv_util::{deadline::Deadline, memory::HeapSize};
 use tracker::RequestType;
 pub use txn_heart_beat::TxnHeartBeat;
 use txn_types::{Key, TimeStamp, Value, Write};
@@ -775,6 +775,36 @@ impl Display for Command {
 impl Debug for Command {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         self.command_ext().fmt(f)
+    }
+}
+
+impl HeapSize for Command {
+    fn approximate_heap_size(&self) -> usize {
+        std::mem::size_of::<Self>()
+            + match self {
+                Command::Prewrite(t) => t.approximate_heap_size(),
+                Command::PrewritePessimistic(t) => t.approximate_heap_size(),
+                Command::AcquirePessimisticLock(t) => t.approximate_heap_size(),
+                Command::AcquirePessimisticLockResumed(t) => t.approximate_heap_size(),
+                Command::Commit(t) => t.approximate_heap_size(),
+                Command::Cleanup(t) => t.approximate_heap_size(),
+                Command::Rollback(t) => t.approximate_heap_size(),
+                Command::PessimisticRollback(t) => t.approximate_heap_size(),
+                Command::PessimisticRollbackReadPhase(t) => t.approximate_heap_size(),
+                Command::TxnHeartBeat(t) => t.approximate_heap_size(),
+                Command::CheckTxnStatus(t) => t.approximate_heap_size(),
+                Command::CheckSecondaryLocks(t) => t.approximate_heap_size(),
+                Command::ResolveLockReadPhase(t) => t.approximate_heap_size(),
+                Command::ResolveLock(t) => t.approximate_heap_size(),
+                Command::ResolveLockLite(t) => t.approximate_heap_size(),
+                Command::Pause(t) => t.approximate_heap_size(),
+                Command::MvccByKey(t) => t.approximate_heap_size(),
+                Command::MvccByStartTs(t) => t.approximate_heap_size(),
+                Command::RawCompareAndSwap(t) => t.approximate_heap_size(),
+                Command::RawAtomicStore(t) => t.approximate_heap_size(),
+                Command::FlashbackToVersionReadPhase(t) => t.approximate_heap_size(),
+                Command::FlashbackToVersion(t) => t.approximate_heap_size(),
+            }
     }
 }
 

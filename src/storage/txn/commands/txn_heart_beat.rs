@@ -35,6 +35,9 @@ command! {
             /// greater than `advise_ttl`, nothing will happen.
             advise_ttl: u64,
         }
+        in_heap => {
+            primary_key,
+        }
 }
 
 impl CommandExt for TxnHeartBeat {

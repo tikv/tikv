@@ -38,6 +38,11 @@ command! {
             ttl: u64,
             api_version: ApiVersion,
         }
+        in_heap => {
+            key,
+            value,
+            previous_value,
+        }
 }
 
 impl CommandExt for RawCompareAndSwap {

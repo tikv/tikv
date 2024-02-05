@@ -742,6 +742,11 @@ fn test_serde_custom_tikv_config() {
             other_priority: IoPriority::Low,
         },
         background_error_recovery_window: ReadableDuration::hours(1),
+<<<<<<< HEAD
+=======
+        txn_status_cache_capacity: 1000,
+        memory_quota: ReadableSize::kb(123),
+>>>>>>> 2a75a7e965 (storage: reject new commands if memory quota exceeded (#16473))
     };
     value.coprocessor = CopConfig {
         split_region_on_table: false,
