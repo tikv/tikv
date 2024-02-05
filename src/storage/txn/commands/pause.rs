@@ -31,6 +31,9 @@ command! {
             /// The amount of time in milliseconds to latch for.
             duration: u64,
         }
+        in_heap => {
+            keys,
+        }
 }
 
 impl CommandExt for Pause {
