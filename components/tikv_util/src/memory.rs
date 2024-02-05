@@ -54,21 +54,13 @@ impl_zero_heap_size! {
     bool, u8, u64,
 }
 
-impl<T: HeapSize> HeapSize for [T] {
-    fn approximate_heap_size(&self) -> usize {
-        if self.is_empty() {
-            0
-        } else {
-            // Prefer an approximation of its actually heap size, because we
-            // want the time complexity to be O(1).
-            self.len() * self[0].approximate_heap_size()
-        }
-    }
-}
-
+// Do not impl HeapSize for [T], because type coercions make it error-prone.
+// E.g., Vec[u8] may be casted to &[u8] which does not own any byte in heap.
 impl<T: HeapSize> HeapSize for Vec<T> {
     fn approximate_heap_size(&self) -> usize {
-        self.as_slice().approximate_heap_size() + self.capacity() * std::mem::size_of::<T>()
+        // Prefer an approximation of its actually heap size, because we want
+        // the time complexity to be O(1).
+        self.len() * self[0].approximate_heap_size() + self.capacity() * std::mem::size_of::<T>()
     }
 }
 
@@ -362,12 +354,9 @@ mod tests {
 
     #[test]
     fn test_approximate_heap_size() {
-        let au8 = [1u8, 2, 3];
-        assert_eq!(au8.approximate_heap_size(), 0);
-
         let mut vu8 = Vec::with_capacity(16);
         assert_eq!(vu8.approximate_heap_size(), 16);
-        vu8.extend(au8);
+        vu8.extend([1u8, 2, 3]);
         assert_eq!(vu8.approximate_heap_size(), 16);
 
         let ovu8 = Some(vu8);
