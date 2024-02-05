@@ -187,7 +187,9 @@ pub struct StoreMeta {
     /// Record the number of peers done for applying logs.
     /// Without `completed_apply_peers_count`, it's hard to know whether all
     /// peers are ready for applying logs.
-    pub completed_apply_peers_count: u64,
+    /// If None, it means the store is start from empty, no need to check and
+    /// update it anymore.
+    pub completed_apply_peers_count: Option<u64>,
 }
 
 impl StoreRegionMeta for StoreMeta {
@@ -239,7 +241,7 @@ impl StoreMeta {
             region_read_progress: RegionReadProgressRegistry::new(),
             damaged_ranges: HashMap::default(),
             busy_apply_peers: HashSet::default(),
-            completed_apply_peers_count: 0,
+            completed_apply_peers_count: Some(0),
         }
     }
 
@@ -2563,8 +2565,14 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         start_ts_sec: u32,
         region_count: u64,
         busy_apply_peers_count: u64,
-        completed_apply_peers_count: u64,
+        completed_apply_peers_count: Option<u64>,
     ) -> bool {
+        // No need to check busy status if there are no regions.
+        if completed_apply_peers_count.is_none() || region_count == 0 {
+            return false;
+        }
+
+        let completed_apply_peers_count = completed_apply_peers_count.unwrap();
         let during_starting_stage = {
             (time::get_time().sec as u32).saturating_sub(start_ts_sec)
                 <= STORE_CHECK_PENDING_APPLY_DURATION.as_secs() as u32
@@ -2575,7 +2583,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         // regarded as the candidate for balancing leaders.
         if during_starting_stage {
             let completed_target_count = (|| {
-                fail_point!("on_mock_store_completed_target_count", |_| 0);
+                fail_point!("on_mock_store_completed_target_count", |_| 100);
                 std::cmp::max(
                     1,
                     STORE_CHECK_COMPLETE_APPLY_REGIONS_PERCENT * region_count / 100,
@@ -2590,7 +2598,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
                     self.ctx.cfg.min_pending_apply_region_count,
                     region_count.saturating_sub(completed_target_count),
                 );
-                busy_apply_peers_count >= pending_target_count
+                pending_target_count > 0 && busy_apply_peers_count >= pending_target_count
             }
         } else {
             // Already started for a fairy long time.
@@ -2603,7 +2611,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
 
         stats.set_store_id(self.ctx.store_id());
 
-        let completed_apply_peers_count: u64;
+        let completed_apply_peers_count: Option<u64>;
         let busy_apply_peers_count: u64;
         {
             stats.set_region_count(meta.regions.len() as u32);
@@ -2647,18 +2655,24 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
                 .swap(0, Ordering::Relaxed),
         );
 
-        let store_is_busy = self
-            .ctx
-            .global_stat
-            .stat
-            .is_busy
-            .swap(false, Ordering::Relaxed);
         let busy_on_apply = self.check_store_is_busy_on_apply(
             start_time,
             stats.get_region_count() as u64,
             busy_apply_peers_count,
             completed_apply_peers_count,
         );
+        // If the store already pass the check, it should clear the
+        // `completed_apply_peers_count` to skip the check next time.
+        if !busy_on_apply {
+            let mut meta = self.ctx.store_meta.lock().unwrap();
+            meta.completed_apply_peers_count = None;
+        }
+        let store_is_busy = self
+            .ctx
+            .global_stat
+            .stat
+            .is_busy
+            .swap(false, Ordering::Relaxed);
         stats.set_is_busy(store_is_busy || busy_on_apply);
 
         let mut query_stats = QueryStats::default();
