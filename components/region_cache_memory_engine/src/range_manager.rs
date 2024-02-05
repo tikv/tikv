@@ -91,7 +91,7 @@ impl RangeManager {
         &self.ranges
     }
 
-    pub(crate) fn new_range(&mut self, range: CacheRange) {
+    pub fn new_range(&mut self, range: CacheRange) {
         assert!(!self.overlap_with_range(&range));
         let range_meta = RangeMeta::new(self.id_allocator.allocate_id());
         self.ranges.insert(range, range_meta);

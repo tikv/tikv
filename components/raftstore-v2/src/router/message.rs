@@ -4,6 +4,7 @@
 use std::sync::{mpsc::SyncSender, Arc};
 
 use collections::HashSet;
+use health_controller::types::LatencyInspector;
 use kvproto::{
     import_sstpb::SstMeta,
     metapb,
@@ -14,9 +15,9 @@ use kvproto::{
 };
 use raftstore::store::{
     fsm::ChangeObserver, metrics::RaftEventDurationType, simple_write::SimpleWriteBinary,
-    util::LatencyInspector, FetchedLogs, GenSnapRes, RaftCmdExtraOpts, TabletSnapKey,
-    UnsafeRecoveryExecutePlanSyncer, UnsafeRecoveryFillOutReportSyncer,
-    UnsafeRecoveryForceLeaderSyncer, UnsafeRecoveryWaitApplySyncer,
+    FetchedLogs, GenSnapRes, RaftCmdExtraOpts, TabletSnapKey, UnsafeRecoveryExecutePlanSyncer,
+    UnsafeRecoveryFillOutReportSyncer, UnsafeRecoveryForceLeaderSyncer,
+    UnsafeRecoveryWaitApplySyncer,
 };
 use resource_control::ResourceMetered;
 use tikv_util::time::Instant;
