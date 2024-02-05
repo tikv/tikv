@@ -58,9 +58,14 @@ impl_zero_heap_size! {
 // E.g., Vec[u8] may be casted to &[u8] which does not own any byte in heap.
 impl<T: HeapSize> HeapSize for Vec<T> {
     fn approximate_heap_size(&self) -> usize {
-        // Prefer an approximation of its actually heap size, because we want
-        // the time complexity to be O(1).
-        self.len() * self[0].approximate_heap_size() + self.capacity() * std::mem::size_of::<T>()
+        let cap_bytes = self.capacity() * std::mem::size_of::<T>();
+        if self.is_empty() {
+            cap_bytes
+        } else {
+            // Prefer an approximation of its actually heap size, because we
+            // want the time complexity to be O(1).
+            self.len() * self[0].approximate_heap_size() + cap_bytes
+        }
     }
 }
 
