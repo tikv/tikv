@@ -714,7 +714,7 @@ impl Peekable for RangeCacheSnapshot {
         if !iter.valid() {
             return Ok(None);
         }
-        
+
         match decode_key(iter.key()) {
             InternalKey {
                 user_key,
