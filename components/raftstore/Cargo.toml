@@ -7,21 +7,17 @@ edition = "2021"
 publish = false
 
 [features]
-default = ["test-engine-kv-rocksdb", "test-engine-raft-raft-engine", "engine_rocks"]
+default = [
+  "test-engine-kv-rocksdb",
+  "test-engine-raft-raft-engine",
+  "engine_rocks",
+]
 failpoints = ["fail/failpoints"]
 testexport = []
-test-engine-kv-rocksdb = [
-  "engine_test/test-engine-kv-rocksdb"
-]
-test-engine-raft-raft-engine = [
-  "engine_test/test-engine-raft-raft-engine"
-]
-test-engines-rocksdb = [
-  "engine_test/test-engines-rocksdb",
-]
-test-engines-panic = [
-  "engine_test/test-engines-panic",
-]
+test-engine-kv-rocksdb = ["engine_test/test-engine-kv-rocksdb"]
+test-engine-raft-raft-engine = ["engine_test/test-engine-raft-raft-engine"]
+test-engines-rocksdb = ["engine_test/test-engines-rocksdb"]
+test-engines-panic = ["engine_test/test-engines-panic"]
 
 [dependencies]
 batch-system = { workspace = true }
@@ -37,17 +33,15 @@ crossbeam = "0.8"
 derivative = "2"
 encryption = { workspace = true }
 engine_rocks = { workspace = true, optional = true }
-
-# Should be [dev-dependencies] but we need to control the features
-# https://github.com/rust-lang/cargo/issues/6915
-engine_test = { workspace = true }
 engine_traits = { workspace = true }
 error_code = { workspace = true }
 fail = "0.5"
 file_system = { workspace = true }
 fs2 = "0.4"
 futures = "0.3"
-futures-util = { version = "0.3.1", default-features = false, features = ["io"] }
+futures-util = { version = "0.3.1", default-features = false, features = [
+  "io",
+] }
 getset = "0.1"
 grpcio-health = { workspace = true }
 health_controller = { workspace = true }
@@ -56,7 +50,10 @@ itertools = "0.10"
 keys = { workspace = true }
 kvproto = { workspace = true }
 lazy_static = "1.3"
-log = { version = "0.4", features = ["max_level_trace", "release_max_level_debug"] }
+log = { version = "0.4", features = [
+  "max_level_trace",
+  "release_max_level_debug",
+] }
 log_wrappers = { workspace = true }
 memory_trace_macros = { workspace = true }
 online_config = { workspace = true }
@@ -96,6 +93,9 @@ yatp = { workspace = true }
 encryption_export = { workspace = true }
 engine_panic = { workspace = true }
 engine_rocks = { workspace = true }
+# Should be [dev-dependencies] but we need to control the features
+# https://github.com/rust-lang/cargo/issues/6915
+engine_test = { workspace = true }
 hybrid_engine = { workspace = true }
 panic_hook = { workspace = true }
 region_cache_memory_engine = { workspace = true }
