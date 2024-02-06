@@ -131,9 +131,7 @@ fn bloom_filter_ratio(et: EngineType) -> f64 {
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct TitanCfConfig {
-    #[online_config(skip)]
     pub min_blob_size: Option<ReadableSize>,
-    #[online_config(skip)]
     pub blob_file_compression: CompressionType,
     #[online_config(skip)]
     pub zstd_dict_size: ReadableSize,
@@ -143,7 +141,6 @@ pub struct TitanCfConfig {
     pub min_gc_batch_size: ReadableSize,
     #[online_config(skip)]
     pub max_gc_batch_size: ReadableSize,
-    #[online_config(skip)]
     pub discardable_ratio: f64,
     #[online_config(skip)]
     pub merge_small_file_threshold: ReadableSize,
