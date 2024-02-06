@@ -1368,18 +1368,8 @@ impl Default for DbConfig {
 }
 
 impl DbConfig {
-<<<<<<< HEAD
     pub fn optimize_for(&mut self, engine: EngineType) {
         match engine {
-=======
-    pub fn optimize_for(
-        &mut self,
-        storage_config: &StorageConfig,
-        kv_data_exists: bool,
-        is_titan_dir_empty: bool,
-    ) {
-        match storage_config.engine {
->>>>>>> 65308d6728 (engine: calculate table properties correctly for Titan (#16320))
             EngineType::RaftKv => {
                 self.allow_concurrent_memtable_write.get_or_insert(true);
                 self.max_total_wal_size.get_or_insert(ReadableSize::gb(4));
@@ -1390,18 +1380,6 @@ impl DbConfig {
                 if self.lockcf.write_buffer_size.is_none() {
                     self.lockcf.write_buffer_size = Some(ReadableSize::mb(32));
                 }
-<<<<<<< HEAD
-=======
-                if self.titan.enabled.is_none() {
-                    // If the user doesn't specify titan.enabled, we enable it by default for newly
-                    // created clusters.
-                    if (kv_data_exists && is_titan_dir_empty) || storage_config.enable_ttl {
-                        self.titan.enabled = Some(false);
-                    } else {
-                        self.titan.enabled = Some(true);
-                    }
-                }
->>>>>>> 65308d6728 (engine: calculate table properties correctly for Titan (#16320))
             }
             EngineType::RaftKv2 => {
                 self.enable_multi_batch_write.get_or_insert(false);
@@ -1440,8 +1418,7 @@ impl DbConfig {
                     .get_or_insert(DEFAULT_LOCK_BUFFER_MEMORY_LIMIT);
             }
         }
-        let bg_job_limits =
-            get_background_job_limits(storage_config.engine, &KVDB_DEFAULT_BACKGROUND_JOB_LIMITS);
+        let bg_job_limits = get_background_job_limits(engine, &KVDB_DEFAULT_BACKGROUND_JOB_LIMITS);
         if self.max_background_jobs == 0 {
             self.max_background_jobs = bg_job_limits.max_background_jobs as i32;
         }
@@ -3647,12 +3624,7 @@ impl TikvConfig {
         .validate(kv_data_exists)?;
 
         // Optimize.
-<<<<<<< HEAD
         self.rocksdb.optimize_for(self.storage.engine);
-=======
-        self.rocksdb
-            .optimize_for(&self.storage, kv_data_exists, is_titan_dir_empty);
->>>>>>> 65308d6728 (engine: calculate table properties correctly for Titan (#16320))
         self.coprocessor
             .optimize_for(self.storage.engine == EngineType::RaftKv2);
         self.split
@@ -3884,7 +3856,7 @@ impl TikvConfig {
         self.causal_ts.validate()?;
 
         // Validate feature TTL with Titan configuration.
-        if matches!(self.rocksdb.titan.enabled, Some(true)) && self.storage.enable_ttl {
+        if self.rocksdb.titan.enabled && self.storage.enable_ttl {
             return Err("Titan is unavailable for feature TTL".to_string().into());
         }
 
@@ -4846,7 +4818,7 @@ mod tests {
 
         // Check api version.
         {
-            tikv_cfg.rocksdb.titan.enabled = Some(false);
+            tikv_cfg.rocksdb.titan.enabled = false;
             let cases = [
                 (ApiVersion::V1, ApiVersion::V1, true),
                 (ApiVersion::V1, ApiVersion::V1ttl, false),
@@ -5998,13 +5970,13 @@ mod tests {
         let mut valid_cfg = TikvConfig::default();
         valid_cfg.storage.api_version = 2;
         valid_cfg.storage.enable_ttl = true;
-        valid_cfg.rocksdb.titan.enabled = None;
+        valid_cfg.rocksdb.titan.enabled = false;
         valid_cfg.validate().unwrap();
 
         let mut invalid_cfg = TikvConfig::default();
         invalid_cfg.storage.api_version = 2;
         invalid_cfg.storage.enable_ttl = true;
-        invalid_cfg.rocksdb.titan.enabled = Some(true);
+        invalid_cfg.rocksdb.titan.enabled = true;
         assert_eq!(
             invalid_cfg.validate().unwrap_err().to_string(),
             "Titan is unavailable for feature TTL"
