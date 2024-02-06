@@ -93,8 +93,6 @@ yatp = { workspace = true }
 encryption_export = { workspace = true }
 engine_panic = { workspace = true }
 engine_rocks = { workspace = true }
-# Should be [dev-dependencies] but we need to control the features
-# https://github.com/rust-lang/cargo/issues/6915
 engine_test = { workspace = true }
 hybrid_engine = { workspace = true }
 panic_hook = { workspace = true }
