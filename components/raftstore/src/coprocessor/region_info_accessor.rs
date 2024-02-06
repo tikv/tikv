@@ -14,6 +14,7 @@ use collections::{HashMap, HashSet};
 use engine_traits::KvEngine;
 use itertools::Itertools;
 use kvproto::metapb::Region;
+use pd_client::RegionStat;
 use raft::StateRole;
 use tikv_util::{
     box_err, debug, info, warn,
@@ -99,6 +100,7 @@ impl RegionInfo {
 
 type RegionsMap = HashMap<u64, RegionInfo>;
 type RegionRangesMap = BTreeMap<RangeKey, u64>;
+type RegionStatMap = HashMap<u64, RegionStat>;
 
 // RangeKey is a wrapper used to unify the comparison between region start key
 // and region end key. Region end key is special as empty stands for the
@@ -144,6 +146,10 @@ pub enum RegionInfoQuery {
         end_key: Vec<u8>,
         callback: Callback<Vec<Region>>,
     },
+    GetTopRegions {
+        count: usize,
+        callback: Callback<Vec<Region>>,
+    },
     /// Gets all contents from the collection. Only used for testing.
     DebugDump(mpsc::Sender<(RegionsMap, RegionRangesMap)>),
 }
@@ -166,6 +172,9 @@ impl Display for RegionInfoQuery {
                 &log_wrappers::Value::key(start_key),
                 &log_wrappers::Value::key(end_key)
             ),
+            RegionInfoQuery::GetTopRegions { count, .. } => {
+                write!(f, "GetTopRegions(count: {})", count)
+            }
             RegionInfoQuery::DebugDump(_) => write!(f, "DebugDump"),
         }
     }
@@ -239,7 +248,7 @@ pub struct RegionCollector {
     regions: RegionsMap,
     // BTreeMap: data_end_key -> region_id
     region_ranges: RegionRangesMap,
-
+    region_stats: RegionStatMap,
     region_leaders: Arc<RwLock<HashSet<u64>>>,
 }
 
@@ -248,6 +257,7 @@ impl RegionCollector {
         Self {
             region_leaders,
             regions: HashMap::default(),
+            region_stats: HashMap::default(),
             region_ranges: BTreeMap::default(),
         }
     }
@@ -499,6 +509,14 @@ impl RegionCollector {
         callback(regions);
     }
 
+    pub fn handle_get_top_regions(&self, count: usize, callback: Callback<Vec<Region>>) {
+        if count == 0 {
+            callback(self.regions.values().into_iter().map(|ri| ri.region.clone()).collect::<Vec<_>>())
+        } else {
+            unimplemented!()
+        }
+    }
+
     fn handle_raftstore_event(&mut self, event: RaftStoreEvent) {
         {
             let region = event.get_region();
@@ -572,6 +590,9 @@ impl Runnable for RegionCollector {
                 callback,
             } => {
                 self.handle_get_regions_in_range(start_key, end_key, callback);
+            }
+            RegionInfoQuery::GetTopRegions { count, callback } => {
+                self.handle_get_top_regions(count, callback);
             }
             RegionInfoQuery::DebugDump(tx) => {
                 tx.send((self.regions.clone(), self.region_ranges.clone()))
@@ -692,6 +713,9 @@ pub trait RegionInfoProvider: Send + Sync {
     fn get_regions_in_range(&self, _start_key: &[u8], _end_key: &[u8]) -> Result<Vec<Region>> {
         unimplemented!()
     }
+    fn get_top_regions(&self, _count: usize) -> Result<Vec<Region>> {
+        unimplemented!()
+    }
 }
 
 impl RegionInfoProvider for RegionInfoAccessor {
@@ -741,7 +765,6 @@ impl RegionInfoProvider for RegionInfoAccessor {
             )
         })
     }
-
     fn get_regions_in_range(&self, start_key: &[u8], end_key: &[u8]) -> Result<Vec<Region>> {
         let (tx, rx) = mpsc::channel();
         let msg = RegionInfoQuery::GetRegionsInRange {
@@ -760,6 +783,28 @@ impl RegionInfoProvider for RegionInfoAccessor {
                 rx.recv().map_err(|e| {
                     box_err!(
                         "failed to receive get_regions_in_range result from region collector: {:?}",
+                        e
+                    )
+                })
+            })
+    }
+    fn get_top_regions(&self, count: usize) -> Result<Vec<Region>> {
+        let (tx, rx) = mpsc::channel();
+        let msg = RegionInfoQuery::GetTopRegions {
+            count,
+            callback: Box::new(move |regions| {
+                if let Err(e) = tx.send(regions) {
+                    warn!("failed to send get_top_regions result: {:?}", e);
+                }
+            }),
+        };
+        self.scheduler
+            .schedule(msg)
+            .map_err(|e| box_err!("failed to send request to region collector: {:?}", e))
+            .and_then(|_| {
+                rx.recv().map_err(|e| {
+                    box_err!(
+                        "failed to receive get_top_regions result from region_collector: {:?}",
                         e
                     )
                 })
@@ -842,6 +887,24 @@ impl RegionInfoProvider for MockRegionInfoProvider {
             })
             .map(|region_info| region_info.region.clone())
             .ok_or(box_err!("Not found region containing {:?}", key))
+    }
+
+    fn get_top_regions(&self, count: usize) -> Result<Vec<Region>> {
+        let mut regions = Vec::new();
+        let (tx, rx) = mpsc::channel();
+
+        self.seek_region(b"",
+            Box::new(move |iter| {
+                for region_info in iter {
+                    tx.send(region_info.region.clone()).unwrap();
+                }
+            }),
+        )?;
+
+        for region in rx {
+            regions.push(region);
+        }
+        Ok(regions)
     }
 }
 
