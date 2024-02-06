@@ -1,6 +1,8 @@
 // Copyright 2023 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine_traits::{KvEngine, Mutable, Result, WriteBatch, WriteBatchExt, WriteOptions};
+use engine_traits::{
+    is_data_cf, KvEngine, Mutable, Result, WriteBatch, WriteBatchExt, WriteOptions,
+};
 use region_cache_memory_engine::{RangeCacheMemoryEngine, RangeCacheWriteBatch};
 
 use crate::engine::HybridEngine;
@@ -99,7 +101,10 @@ impl<EK: KvEngine> Mutable for HybridEngineWriteBatch<EK> {
 
     fn put_cf(&mut self, cf: &str, key: &[u8], value: &[u8]) -> Result<()> {
         self.disk_write_batch.put_cf(cf, key, value)?;
-        self.cache_write_batch.put_cf(cf, key, value)
+        if is_data_cf(cf) {
+            self.cache_write_batch.put_cf(cf, key, value)?;
+        }
+        Ok(())
     }
 
     fn delete(&mut self, key: &[u8]) -> Result<()> {

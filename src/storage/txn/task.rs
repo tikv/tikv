@@ -1,7 +1,10 @@
 // Copyright 2024 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::sync::Arc;
+
 use kvproto::kvrpcpb::ExtraOp;
 use tikv_kv::Snapshot;
+use tikv_util::memory::{HeapSize, MemoryQuota, MemoryQuotaExceeded, OwnedAllocated};
 use tracker::{get_tls_tracker_token, TrackerToken};
 
 use crate::storage::{
@@ -18,6 +21,7 @@ pub(super) struct Task {
     tracker: TrackerToken,
     cmd: Option<Command>,
     extra_op: ExtraOp,
+    owned_quota: Option<OwnedAllocated>,
 }
 
 impl Task {
@@ -29,6 +33,7 @@ impl Task {
             tracker,
             cmd: Some(cmd),
             extra_op: ExtraOp::Noop,
+            owned_quota: None,
         }
     }
 
@@ -56,6 +61,18 @@ impl Task {
         self.extra_op = extra_op
     }
 
+    pub(super) fn alloc_memory_quota(
+        &mut self,
+        memory_quota: Arc<MemoryQuota>,
+    ) -> Result<(), MemoryQuotaExceeded> {
+        if self.owned_quota.is_none() {
+            let mut owned = OwnedAllocated::new(memory_quota);
+            owned.alloc(self.cmd.approximate_heap_size())?;
+            self.owned_quota = Some(owned);
+        }
+        Ok(())
+    }
+
     pub(super) fn process_write<S: Snapshot, L: LockManager>(
         mut self,
         snapshot: S,
@@ -72,5 +89,29 @@ impl Task {
     ) -> super::Result<ProcessResult> {
         let cmd = self.cmd.take().unwrap();
         cmd.process_read(snapshot, statistics)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use kvproto::kvrpcpb::PrewriteRequest;
+
+    use super::*;
+    use crate::storage::TypedCommand;
+
+    #[test]
+    fn test_alloc_memory_quota() {
+        let p = PrewriteRequest::default();
+        let cmd: TypedCommand<_> = p.into();
+        let mut task = Task::new(0, cmd.cmd);
+        let quota = Arc::new(MemoryQuota::new(1 << 32));
+        task.alloc_memory_quota(quota.clone()).unwrap();
+        assert_ne!(quota.in_use(), 0);
+        let in_use = quota.in_use();
+        task.alloc_memory_quota(quota.clone()).unwrap();
+        let in_use_new = quota.in_use();
+        assert_eq!(in_use, in_use_new);
+        drop(task);
+        assert_eq!(quota.in_use(), 0);
     }
 }

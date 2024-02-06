@@ -38,6 +38,10 @@ command! {
             /// The next key to scan using pessimistic rollback read phase.
             scan_key: Option<Key>,
         }
+        in_heap => {
+            keys,
+            scan_key,
+        }
 }
 
 impl CommandExt for PessimisticRollback {
