@@ -31,8 +31,15 @@ fn test_deadline() {
 
     fail::cfg("deadline_check_fail", "return()").unwrap();
     let resp = handle_request(&endpoint, req);
-
-    assert!(resp.get_other_error().contains("exceeding the deadline"));
+    let region_err = resp.get_region_error();
+    assert_eq!(
+        region_err.get_server_is_busy().reason,
+        "deadline is exceeded".to_string()
+    );
+    assert_eq!(
+        region_err.get_message(),
+        "Coprocessor task terminated due to exceeding the deadline"
+    );
 }
 
 #[test]
@@ -46,8 +53,15 @@ fn test_deadline_2() {
     fail::cfg("rockskv_async_snapshot", "panic").unwrap();
     fail::cfg("deadline_check_fail", "return()").unwrap();
     let resp = handle_request(&endpoint, req);
-
-    assert!(resp.get_other_error().contains("exceeding the deadline"));
+    let region_err = resp.get_region_error();
+    assert_eq!(
+        region_err.get_server_is_busy().reason,
+        "deadline is exceeded".to_string()
+    );
+    assert_eq!(
+        region_err.get_message(),
+        "Coprocessor task terminated due to exceeding the deadline"
+    );
 }
 
 /// Test deadline exceeded when request is handling
@@ -80,12 +94,14 @@ fn test_deadline_3() {
     let mut resp = SelectResponse::default();
     resp.merge_from_bytes(cop_resp.get_data()).unwrap();
 
-    assert!(
-        cop_resp.other_error.contains("exceeding the deadline")
-            || resp
-                .get_error()
-                .get_msg()
-                .contains("exceeding the deadline")
+    let region_err = cop_resp.get_region_error();
+    assert_eq!(
+        region_err.get_server_is_busy().reason,
+        "deadline is exceeded".to_string()
+    );
+    assert_eq!(
+        region_err.get_message(),
+        "Coprocessor task terminated due to exceeding the deadline"
     );
 }
 
