@@ -1,6 +1,7 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use fail::fail_point;
+use kvproto::errorpb;
 
 use super::time::{Duration, Instant};
 
@@ -57,4 +58,12 @@ impl Deadline {
     pub fn to_std_instant(&self) -> std::time::Instant {
         std::time::Instant::now() + self.deadline.duration_since(Instant::now_coarse())
     }
+}
+
+const DEADLINE_EXCEEDED: &str = "deadline is exceeded";
+
+pub fn set_deadline_exceeded_busy_error(e: &mut errorpb::Error) {
+    let mut server_is_busy_err = errorpb::ServerIsBusy::default();
+    server_is_busy_err.set_reason(DEADLINE_EXCEEDED.to_owned());
+    e.set_server_is_busy(server_is_busy_err);
 }
