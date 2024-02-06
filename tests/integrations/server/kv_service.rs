@@ -3146,7 +3146,7 @@ fn test_pipelined_dml_write_conflict() {
     req.set_start_ts(2);
     let resp = client.kv_flush(&req).unwrap();
     assert!(!resp.has_region_error());
-    assert!(resp.get_errors().get(0).unwrap().has_locked());
+    assert!(resp.get_errors().first().unwrap().has_locked());
 
     // flush x prerwite
     let mut req = PrewriteRequest::default();
@@ -3164,7 +3164,7 @@ fn test_pipelined_dml_write_conflict() {
     req.set_primary_lock(k.clone());
     let resp = client.kv_prewrite(&req).unwrap();
     assert!(!resp.has_region_error());
-    assert!(resp.errors.get(0).unwrap().has_locked());
+    assert!(resp.errors.first().unwrap().has_locked());
 
     // flush x pessimistic lock
     let mut req = PessimisticLockRequest::default();
@@ -3183,7 +3183,7 @@ fn test_pipelined_dml_write_conflict() {
     );
     let resp = client.kv_pessimistic_lock(&req).unwrap();
     assert!(!resp.has_region_error());
-    assert!(resp.get_errors().get(0).unwrap().has_locked());
+    assert!(resp.get_errors().first().unwrap().has_locked());
 
     // prewrite x flush
     let k = b"key2".to_vec();
@@ -3219,7 +3219,7 @@ fn test_pipelined_dml_write_conflict() {
     req.set_primary_key(k.clone());
     let resp = client.kv_flush(&req).unwrap();
     assert!(!resp.has_region_error());
-    assert!(resp.get_errors().get(0).unwrap().has_locked());
+    assert!(resp.get_errors().first().unwrap().has_locked());
 
     // pessimistic lock x flush
     let k = b"key3".to_vec();
@@ -3256,7 +3256,7 @@ fn test_pipelined_dml_write_conflict() {
     req.set_primary_key(k.clone());
     let resp = client.kv_flush(&req).unwrap();
     assert!(!resp.has_region_error());
-    assert!(resp.get_errors().get(0).unwrap().has_locked());
+    assert!(resp.get_errors().first().unwrap().has_locked());
 }
 
 #[test_case(test_raftstore::must_new_cluster_and_kv_client)]

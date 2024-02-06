@@ -185,3 +185,149 @@ impl Flush {
         Ok(locks)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use concurrency_manager::ConcurrencyManager;
+    use kvproto::kvrpcpb::{AssertionLevel, Context, ExtraOp};
+    use tikv_kv::{Engine, Statistics};
+    use txn_types::{Key, Mutation, TimeStamp};
+
+    use crate::storage::{
+        lock_manager::MockLockManager,
+        mvcc::tests::{must_get, must_locked},
+        txn,
+        txn::{
+            commands::{Flush, WriteContext, WriteResult},
+            tests::{
+                must_acquire_pessimistic_lock, must_acquire_pessimistic_lock_err, must_commit,
+                must_pessimistic_locked, must_prewrite_put, must_prewrite_put_err,
+            },
+            txn_status_cache::TxnStatusCache,
+        },
+        ProcessResult, TestEngineBuilder,
+    };
+
+    pub fn flush_put_impl<E: Engine>(
+        engine: &mut E,
+        key: &[u8],
+        value: impl Into<Vec<u8>>,
+        pk: impl Into<Vec<u8>>,
+        start_ts: impl Into<TimeStamp>,
+    ) -> txn::Result<WriteResult> {
+        let key = Key::from_raw(key);
+        let start_ts = start_ts.into();
+        let cmd = Flush::new(
+            start_ts,
+            pk.into(),
+            vec![Mutation::make_put(key, value.into())],
+            3000,
+            AssertionLevel::Strict,
+            Context::new(),
+        );
+        let mut statistics = Statistics::default();
+        let cm = ConcurrencyManager::new(start_ts);
+        let context = WriteContext {
+            lock_mgr: &MockLockManager::new(),
+            concurrency_manager: cm.clone(),
+            extra_op: ExtraOp::Noop,
+            statistics: &mut statistics,
+            async_apply_prewrite: false,
+            raw_ext: None,
+            txn_status_cache: &TxnStatusCache::new_for_test(),
+        };
+        let snapshot = engine.snapshot(Default::default()).unwrap();
+        cmd.cmd.process_write(snapshot.clone(), context)
+    }
+
+    pub fn must_flush_put<E: Engine>(
+        engine: &mut E,
+        key: &[u8],
+        value: impl Into<Vec<u8>>,
+        pk: impl Into<Vec<u8>>,
+        start_ts: impl Into<TimeStamp>,
+    ) {
+        let res = flush_put_impl(engine, key, value, pk, start_ts);
+        assert!(res.is_ok());
+        let res = res.unwrap();
+        let to_be_write = res.to_be_write;
+        engine.write(&Context::new(), to_be_write).unwrap();
+    }
+
+    pub fn must_flush_put_meet_lock<E: Engine>(
+        engine: &mut E,
+        key: &[u8],
+        value: impl Into<Vec<u8>>,
+        pk: impl Into<Vec<u8>>,
+        start_ts: impl Into<TimeStamp>,
+    ) {
+        let res = flush_put_impl(engine, key, value, pk, start_ts).unwrap();
+        if let ProcessResult::MultiRes { results } = res.pr {
+            assert!(!results.is_empty());
+        } else {
+            panic!("flush return type error");
+        }
+    }
+
+    #[allow(unused)]
+    pub fn must_flush_put_err<E: Engine>(
+        engine: &mut E,
+        key: &[u8],
+        value: impl Into<Vec<u8>>,
+        pk: impl Into<Vec<u8>>,
+        start_ts: impl Into<TimeStamp>,
+    ) {
+        let res = flush_put_impl(engine, key, value, pk, start_ts);
+        assert!(res.is_err());
+    }
+
+    #[test]
+    fn test_flush() {
+        let mut engine = TestEngineBuilder::new().build().unwrap();
+        let k = b"key";
+        let v = b"value";
+        let start_ts = 1;
+        must_flush_put(&mut engine, k, *v, k, start_ts);
+        must_locked(&mut engine, k, start_ts);
+        must_commit(&mut engine, k, start_ts, start_ts + 1);
+        must_get(&mut engine, k, start_ts + 1, v);
+    }
+
+    #[test]
+    fn test_write_conflict() {
+        let mut engine = TestEngineBuilder::new().build().unwrap();
+        let k = b"key";
+        let v = b"value";
+        // flush x {flush, pessimistic lock, prewrite}
+        must_flush_put(&mut engine, k, *v, k, 1);
+        must_locked(&mut engine, k, 1);
+        must_flush_put_meet_lock(&mut engine, k, *v, k, 2);
+        must_acquire_pessimistic_lock_err(&mut engine, k, k, 2, 2);
+        must_prewrite_put_err(&mut engine, k, v, k, 2);
+
+        // pessimistic lock x flush
+        let k = b"key2";
+        must_acquire_pessimistic_lock(&mut engine, k, k, 1, 1);
+        must_pessimistic_locked(&mut engine, k, 1, 1);
+        must_flush_put_meet_lock(&mut engine, k, v, k, 2);
+
+        // prewrite x flush
+        let k = b"key3";
+        must_prewrite_put(&mut engine, k, v, k, 1);
+        must_locked(&mut engine, k, 1);
+        must_flush_put_meet_lock(&mut engine, k, v, k, 2);
+    }
+
+    #[test]
+    fn test_flush_overwrite() {
+        let mut engine = TestEngineBuilder::new().build().unwrap();
+        let k = b"key";
+        let v = b"value";
+        must_flush_put(&mut engine, k, *v, k, 1);
+        // FIXME later together with the generation check
+        // let v2 = b"value2";
+        // must_flush_put(&mut engine, k, v2.clone(), k, 1);
+        // must_commit(&mut engine, k, 1, 2);
+        // must_get(&mut engine, k, 3, v);
+    }
+}
