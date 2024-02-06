@@ -34,6 +34,7 @@ use engine_traits::{
     WriteOptions, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE,
 };
 use fail::fail_point;
+use health_controller::types::LatencyInspector;
 use kvproto::{
     import_sstpb::SstMeta,
     kvrpcpb::ExtraOp as TxnExtraOp,
@@ -92,7 +93,7 @@ use crate::{
         peer_storage::{write_initial_apply_state, write_peer_state},
         util::{
             self, admin_cmd_epoch_lookup, check_flashback_state, check_req_region_epoch,
-            compare_region_epoch, ChangePeerI, ConfChangeKind, KeysInfoFormatter, LatencyInspector,
+            compare_region_epoch, ChangePeerI, ConfChangeKind, KeysInfoFormatter,
         },
         Config, RegionSnapshot, RegionTask, WriteCallback,
     },
@@ -3373,10 +3374,10 @@ where
     }
 
     fn update_memory_trace(&mut self, event: &mut TraceEvent) {
-        let pending_cmds = self.pending_cmds.heap_size();
+        let pending_cmds = self.pending_cmds.approximate_heap_size();
         let merge_yield = if let Some(ref mut state) = self.yield_state {
             if state.heap_size.is_none() {
-                state.heap_size = Some(state.heap_size());
+                state.heap_size = Some(state.approximate_heap_size());
             }
             state.heap_size.unwrap()
         } else {
@@ -4954,7 +4955,7 @@ mod memtrace {
     }
 
     impl<C> HeapSize for PendingCmdQueue<C> {
-        fn heap_size(&self) -> usize {
+        fn approximate_heap_size(&self) -> usize {
             // Some fields of `PendingCmd` are on stack, but ignore them because they are
             // just some small boxed closures.
             self.normals.capacity() * mem::size_of::<PendingCmd<C>>()
@@ -4965,7 +4966,7 @@ mod memtrace {
     where
         EK: KvEngine,
     {
-        fn heap_size(&self) -> usize {
+        fn approximate_heap_size(&self) -> usize {
             let mut size = self.pending_entries.capacity() * mem::size_of::<Entry>();
             for e in &self.pending_entries {
                 size += bytes_capacity(&e.data) + bytes_capacity(&e.context);
@@ -4973,7 +4974,7 @@ mod memtrace {
 
             size += self.pending_msgs.capacity() * mem::size_of::<Msg<EK>>();
             for msg in &self.pending_msgs {
-                size += msg.heap_size();
+                size += msg.approximate_heap_size();
             }
 
             size
@@ -4985,9 +4986,9 @@ mod memtrace {
         EK: KvEngine,
     {
         /// Only consider large fields in `Msg`.
-        fn heap_size(&self) -> usize {
+        fn approximate_heap_size(&self) -> usize {
             match self {
-                Msg::LogsUpToDate(l) => l.heap_size(),
+                Msg::LogsUpToDate(l) => l.approximate_heap_size(),
                 // For entries in `Msg::Apply`, heap size is already updated when fetching them
                 // from `raft::Storage`. So use `0` here.
                 Msg::Apply { .. } => 0,
@@ -5005,7 +5006,7 @@ mod memtrace {
     }
 
     impl HeapSize for CatchUpLogs {
-        fn heap_size(&self) -> usize {
+        fn approximate_heap_size(&self) -> usize {
             let mut size: usize = 0;
             for e in &self.merge.entries {
                 size += bytes_capacity(&e.data) + bytes_capacity(&e.context);

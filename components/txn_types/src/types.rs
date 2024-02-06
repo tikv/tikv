@@ -13,6 +13,7 @@ use tikv_util::{
         bytes::BytesEncoder,
         number::{self, NumberEncoder},
     },
+    memory::HeapSize,
 };
 
 use super::timestamp::TimeStamp;
@@ -270,6 +271,12 @@ impl Display for Key {
     }
 }
 
+impl HeapSize for Key {
+    fn approximate_heap_size(&self) -> usize {
+        self.0.approximate_heap_size()
+    }
+}
+
 #[derive(Debug, Copy, Clone, PartialEq)]
 pub enum MutationType {
     Put,
@@ -302,6 +309,17 @@ pub enum Mutation {
     ///
     /// Returns `kvrpcpb::KeyError::AlreadyExists` if the key already exists.
     CheckNotExists(Key, Assertion),
+}
+
+impl HeapSize for Mutation {
+    fn approximate_heap_size(&self) -> usize {
+        match self {
+            Mutation::Put(kv, _) | Mutation::Insert(kv, _) => kv.approximate_heap_size(),
+            Mutation::Delete(k, _) | Mutation::CheckNotExists(k, _) | Mutation::Lock(k, _) => {
+                k.approximate_heap_size()
+            }
+        }
+    }
 }
 
 impl Debug for Mutation {
