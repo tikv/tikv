@@ -46,10 +46,12 @@ use raftstore::{
             RaftBatchSystem, RaftRouter,
         },
         transport::CasualRouter,
+        util::encode_start_ts_into_flag_data,
         *,
     },
     Error, Result,
 };
+use region_cache_memory_engine::RangeCacheMemoryEngine;
 use resource_control::ResourceGroupManager;
 use tempfile::TempDir;
 use test_pd_client::TestPdClient;
@@ -475,6 +477,15 @@ where
         request: RaftCmdRequest,
         timeout: Duration,
     ) -> Result<RaftCmdResponse> {
+        self.call_command_with_snap_ctx(request, timeout, None)
+    }
+
+    pub fn call_command_with_snap_ctx(
+        &self,
+        request: RaftCmdRequest,
+        timeout: Duration,
+        snap_ctx: Option<SnapshotContext>,
+    ) -> Result<RaftCmdResponse> {
         let mut is_read = false;
         for req in request.get_requests() {
             match req.get_cmd_type() {
@@ -485,7 +496,7 @@ where
             }
         }
         let ret = if is_read {
-            self.sim.wl().read(None, None, request.clone(), timeout)
+            self.sim.wl().read(snap_ctx, None, request.clone(), timeout)
         } else {
             self.sim.rl().call_command(request.clone(), timeout)
         };
@@ -498,10 +509,11 @@ where
         }
     }
 
-    pub fn call_command_on_leader(
+    pub fn call_command_on_leader_with_snap_ctx(
         &mut self,
         mut request: RaftCmdRequest,
         timeout: Duration,
+        snap_ctx: Option<SnapshotContext>,
     ) -> Result<RaftCmdResponse> {
         let timer = Instant::now();
         let region_id = request.get_header().get_region_id();
@@ -511,10 +523,11 @@ where
                 Some(l) => l,
             };
             request.mut_header().set_peer(leader);
-            let resp = match self.call_command(request.clone(), timeout) {
-                e @ Err(_) => return e,
-                Ok(resp) => resp,
-            };
+            let resp =
+                match self.call_command_with_snap_ctx(request.clone(), timeout, snap_ctx.clone()) {
+                    e @ Err(_) => return e,
+                    Ok(resp) => resp,
+                };
             if self.refresh_leader_if_needed(&resp, region_id)
                 && timer.saturating_elapsed() < timeout
             {
@@ -526,6 +539,14 @@ where
             }
             return Ok(resp);
         }
+    }
+
+    pub fn call_command_on_leader(
+        &mut self,
+        request: RaftCmdRequest,
+        timeout: Duration,
+    ) -> Result<RaftCmdResponse> {
+        self.call_command_on_leader_with_snap_ctx(request, timeout, None)
     }
 
     fn valid_leader_id(&self, region_id: u64, leader_id: u64) -> bool {
@@ -874,6 +895,17 @@ where
         read_quorum: bool,
         timeout: Duration,
     ) -> RaftCmdResponse {
+        self.request_with_snap_ctx(key, reqs, read_quorum, timeout, None)
+    }
+
+    pub fn request_with_snap_ctx(
+        &mut self,
+        key: &[u8],
+        reqs: Vec<Request>,
+        read_quorum: bool,
+        timeout: Duration,
+        snap_ctx: Option<SnapshotContext>,
+    ) -> RaftCmdResponse {
         let timer = Instant::now();
         let mut tried_times = 0;
         // At least retry once.
@@ -881,13 +913,16 @@ where
             tried_times += 1;
             let mut region = self.get_region(key);
             let region_id = region.get_id();
-            let req = new_request(
+            let mut req = new_request(
                 region_id,
                 region.take_region_epoch(),
                 reqs.clone(),
                 read_quorum,
             );
-            let result = self.call_command_on_leader(req, timeout);
+            if let Some(ref ctx) = snap_ctx {
+                encode_start_ts_into_flag_data(req.mut_header(), ctx.read_ts);
+            }
+            let result = self.call_command_on_leader_with_snap_ctx(req, timeout, snap_ctx.clone());
 
             let resp = match result {
                 e @ Err(Error::Timeout(_))
@@ -2015,5 +2050,36 @@ impl RawEngine<RocksEngine> for RocksEngine {
 
     fn raft_local_state(&self, region_id: u64) -> engine_traits::Result<Option<RaftLocalState>> {
         self.get_msg_cf(CF_RAFT, &keys::raft_state_key(region_id))
+    }
+}
+
+impl<T: Simulator<HybridEngineImpl>> Cluster<HybridEngineImpl, T> {
+    pub fn get_range_cache_engine(&self, node_id: u64) -> RangeCacheMemoryEngine {
+        self.engines
+            .get(&node_id)
+            .unwrap()
+            .kv
+            .region_cache_engine()
+            .clone()
+    }
+
+    pub fn get_with_snap_ctx(&mut self, key: &[u8], snap_ctx: SnapshotContext) -> Option<Vec<u8>> {
+        let mut resp = self.request_with_snap_ctx(
+            key,
+            vec![new_get_cf_cmd(CF_DEFAULT, key)],
+            false,
+            Duration::from_secs(5),
+            Some(snap_ctx),
+        );
+        if resp.get_header().has_error() {
+            panic!("response {:?} has error", resp);
+        }
+        assert_eq!(resp.get_responses().len(), 1);
+        assert_eq!(resp.get_responses()[0].get_cmd_type(), CmdType::Get);
+        if resp.get_responses()[0].has_get() {
+            Some(resp.mut_responses()[0].mut_get().take_value())
+        } else {
+            None
+        }
     }
 }
