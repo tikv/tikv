@@ -5350,7 +5350,6 @@ mod tests {
         backup_stream_cfg.validate().unwrap();
         backup_stream_cfg.initial_scan_rate_limit.0 = 2048;
         backup_stream_cfg.validate().unwrap();
-
     }
 
     #[test]
