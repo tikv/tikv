@@ -1091,7 +1091,7 @@ mod tests {
     #[test]
     fn test_scanner_with_titan() {
         let mut cfg = DbConfig::default();
-        cfg.titan.enabled = Some(true);
+        cfg.titan.enabled = true;
         cfg.defaultcf.titan.blob_run_mode = BlobRunMode::Normal;
         cfg.defaultcf.titan.min_blob_size = ReadableSize(0);
         cfg.writecf.titan.blob_run_mode = BlobRunMode::Normal;
