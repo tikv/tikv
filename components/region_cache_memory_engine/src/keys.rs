@@ -181,8 +181,10 @@ impl KeyComparator for InternalKeyComparator {
 mod tests {
     use bytes::BufMut;
     use skiplist_rs::KeyComparator;
+    use tikv_util::codec::bytes::decode_bytes;
+    use txn_types::Key;
 
-    use super::{InternalKeyComparator, ValueType};
+    use super::{decode_key, InternalKeyComparator, ValueType};
     use crate::keys::encode_key;
 
     fn construct_key(i: u64, mvcc: u64) -> Vec<u8> {
@@ -225,5 +227,23 @@ mod tests {
         // key2: k2_MAX_MAX_val
         let key2 = encode_key(&k, u64::MAX, ValueType::Value);
         assert!(c.compare_key(&key1, &key2).is_le());
+    }
+
+    #[test]
+    fn test_x() {
+        let key = format!("key-{:04}", 1);
+        let encoded_key = Key::from_raw(key.as_bytes())
+            .append_ts(10.into())
+            .into_encoded();
+
+        let k = Key::from_encoded(encoded_key.to_vec());
+        let t = k.decode_ts().unwrap();
+        let k1 = k.to_raw();
+        println!("{:?}, {:?}", k.as_encoded(), t);
+        println!("{:?} ", k1);
+
+        let k = encode_key(key.as_bytes(), 1000, ValueType::Value);
+        let internal_key = decode_key(&k);
+        println!("{:?}", internal_key.user_key);
     }
 }

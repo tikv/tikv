@@ -1,6 +1,9 @@
 // Copyright 2024 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::Arc,
+};
 
 use engine_rocks::RocksSnapshot;
 use engine_traits::CacheRange;
@@ -82,7 +85,8 @@ pub struct RangeManager {
     ranges: BTreeMap<CacheRange, RangeMeta>,
 
     pub(crate) pending_loaded_ranges: Vec<CacheRange>,
-    pub(crate) pending_loaded_ranges_with_snapshot: Vec<(CacheRange, RocksSnapshot)>,
+    // todo: change to deque
+    pub(crate) pending_loaded_ranges_with_snapshot: Vec<(CacheRange, Arc<RocksSnapshot>)>,
     pub(crate) ranges_with_snap_done: Vec<CacheRange>,
 }
 
@@ -106,7 +110,7 @@ impl RangeManager {
         self.ranges.get_mut(range)
     }
 
-    pub fn set_safe_ts(&mut self, range: &CacheRange, safe_ts: u64) -> bool {
+    pub fn set_safe_point(&mut self, range: &CacheRange, safe_ts: u64) -> bool {
         if let Some(meta) = self.ranges.get_mut(range) {
             if meta.safe_point > safe_ts {
                 return false;
@@ -235,6 +239,15 @@ impl RangeManager {
             .keys()
             .any(|r| r.overlaps(evict_range))
     }
+
+    pub fn load_range(&mut self, cache_range: CacheRange) -> bool {
+        // todo: check evicted
+        if self.overlap_with_range(&cache_range) {
+            return false;
+        };
+        self.pending_loaded_ranges.push(cache_range);
+        true
+    }
 }
 
 #[cfg(test)]
@@ -250,7 +263,7 @@ mod tests {
 
         range_mgr.new_range(r1.clone());
         range_mgr.set_range_readable(&r1, true);
-        range_mgr.set_safe_ts(&r1, 5);
+        range_mgr.set_safe_point(&r1, 5);
         assert!(range_mgr.range_snapshot(&r1, 5).is_none());
         assert!(range_mgr.range_snapshot(&r1, 8).is_some());
         assert!(range_mgr.range_snapshot(&r1, 10).is_some());

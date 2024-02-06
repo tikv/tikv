@@ -8,15 +8,21 @@ use crossbeam::{
     select,
     sync::ShardedLock,
 };
-use engine_traits::{CacheRange, CF_DEFAULT, CF_WRITE};
+use engine_rocks::RocksSnapshot;
+use engine_traits::{CacheRange, IterOptions, Iterable, Iterator, CF_DEFAULT, CF_WRITE, DATA_CFS};
 use skiplist_rs::Skiplist;
 use slog_global::{error, info, warn};
-use tikv_util::worker::{Runnable, Scheduler, Worker};
+use tikv_util::{
+    keybuilder::KeyBuilder,
+    worker::{Runnable, ScheduleError, Scheduler, Worker},
+};
 use txn_types::{Key, TimeStamp, WriteRef, WriteType};
 
 use crate::{
-    engine::RangeCacheMemoryEngineCore,
-    keys::{decode_key, encoding_for_filter, InternalKey, InternalKeyComparator},
+    engine::{RangeCacheMemoryEngineCore, SkiplistEngine},
+    keys::{
+        decode_key, encode_key, encoding_for_filter, InternalKey, InternalKeyComparator, ValueType,
+    },
     memory_limiter::GlobalMemoryLimiter,
 };
 
@@ -76,6 +82,13 @@ impl BackgroundWork {
         }
     }
 
+    pub fn sechedule_task(
+        &self,
+        task: BackgroundTask,
+    ) -> Result<(), ScheduleError<BackgroundTask>> {
+        self.scheduler.schedule(task)
+    }
+
     fn start_tick(
         scheduler: Scheduler<BackgroundTask>,
         gc_interval: Duration,
@@ -119,6 +132,7 @@ impl BackgroundWork {
 #[derive(Debug)]
 pub enum BackgroundTask {
     GcTask(GcTask),
+    LoadTask,
 }
 
 #[derive(Debug)]
@@ -130,6 +144,7 @@ impl Display for BackgroundTask {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             BackgroundTask::GcTask(ref t) => t.fmt(f),
+            BackgroundTask::LoadTask => f.debug_struct("LoadTask").finish(),
         }
     }
 }
@@ -151,7 +166,7 @@ impl BackgroundRunner {
         Self { engine_core }
     }
 
-    fn ranges_for_gc(&self) -> Vec<CacheRange> {
+    fn ranges_to_gc(&self) -> Vec<CacheRange> {
         let mut core = self.engine_core.write().unwrap();
         let ranges: Vec<CacheRange> = core.range_manager().ranges().keys().cloned().collect();
         core.set_ranges_gcing(ranges.clone());
@@ -225,6 +240,41 @@ impl BackgroundRunner {
         let mut core = self.engine_core.write().unwrap();
         core.clear_ranges_gcing();
     }
+
+    fn get_range_to_load(&self) -> Option<((CacheRange, Arc<RocksSnapshot>), SkiplistEngine)> {
+        let core = self.engine_core.read().unwrap();
+        let range = core
+            .range_manager()
+            .pending_loaded_ranges_with_snapshot
+            .first()?
+            .clone();
+        Some((range, core.engine().clone()))
+    }
+
+    fn on_snapshot_loaded(&mut self, range: CacheRange) -> engine_traits::Result<()> {
+        let (cache_batch, skiplist_engine) = {
+            let mut core = self.engine_core.write().unwrap();
+            (core.take_cache_write_batch(&range), core.engine().clone())
+        };
+        if let Some(cache_batch) = cache_batch {
+            for (seq, entry) in cache_batch {
+                entry.write_to_memory(&skiplist_engine, seq)?;
+            }
+        }
+        {
+            let mut core = self.engine_core.write().unwrap();
+            let range_manager = core.mut_range_manager();
+            assert_eq!(
+                range_manager
+                    .pending_loaded_ranges_with_snapshot
+                    .remove(0)
+                    .0,
+                range
+            );
+            range_manager.ranges_with_snap_done.push(range);
+        }
+        Ok(())
+    }
 }
 
 impl Runnable for BackgroundRunner {
@@ -233,11 +283,36 @@ impl Runnable for BackgroundRunner {
     fn run(&mut self, task: Self::Task) {
         match task {
             BackgroundTask::GcTask(t) => {
-                let ranges = self.ranges_for_gc();
+                let ranges = self.ranges_to_gc();
                 for range in ranges {
                     self.gc_range(&range, t.safe_point);
                 }
                 self.gc_finished();
+            }
+            BackgroundTask::LoadTask => {
+                if let Some(((range, snap), skiplist_engine)) = self.get_range_to_load() {
+                    let iter_opt = IterOptions::new(
+                        Some(KeyBuilder::from_vec(range.start.clone(), 0, 0)),
+                        Some(KeyBuilder::from_vec(range.end.clone(), 0, 0)),
+                        false,
+                    );
+                    for &cf in DATA_CFS {
+                        let handle = skiplist_engine.cf_handle(cf);
+                        match snap.iterator_opt(cf, iter_opt.clone()) {
+                            Ok(mut iter) => {
+                                iter.seek_to_first().unwrap();
+                                while iter.valid().unwrap() {
+                                    // use 0 sequence number here as the kv is clearlly visible
+                                    let encoded_key = encode_key(iter.key(), 0, ValueType::Value);
+                                    handle.put(encoded_key, iter.value().to_vec());
+                                    iter.next().unwrap();
+                                }
+                            }
+                            Err(e) => {}
+                        }
+                    }
+                    self.on_snapshot_loaded(range).unwrap();
+                }
             }
         }
     }

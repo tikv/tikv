@@ -13,8 +13,8 @@ pub struct HybridEngineWriteBatch<EK: KvEngine> {
 }
 
 impl<EK> WriteBatchExt for HybridEngine<EK, RangeCacheMemoryEngine>
-where
-    EK: KvEngine,
+    where
+        EK: KvEngine,
 {
     type WriteBatch = HybridEngineWriteBatch<EK>;
     const WRITE_BATCH_MAX_KEYS: usize = EK::WRITE_BATCH_MAX_KEYS;
@@ -148,10 +148,10 @@ mod tests {
                     let mut core = memory_engine.core().write().unwrap();
                     core.mut_range_manager()
                         .set_range_readable(&range_clone, true);
-                    core.mut_range_manager().set_safe_ts(&range_clone, 5);
+                    core.mut_range_manager().set_safe_point(&range_clone, 5);
                 }
             })
-            .unwrap();
+                .unwrap();
         let mut write_batch = hybrid_engine.write_batch();
         write_batch.put(b"hello", b"world").unwrap();
         let seq = write_batch.write().unwrap();
@@ -185,10 +185,10 @@ mod tests {
                 {
                     let mut core = memory_engine.core().write().unwrap();
                     core.mut_range_manager().set_range_readable(&range, true);
-                    core.mut_range_manager().set_safe_ts(&range, 10);
+                    core.mut_range_manager().set_safe_point(&range, 10);
                 }
             })
-            .unwrap();
+                .unwrap();
 
         let mut write_batch = hybrid_engine.write_batch();
         write_batch

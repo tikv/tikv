@@ -10,7 +10,7 @@ use std::{
 };
 
 use collections::HashMap;
-use engine_traits::{CF_DEFAULT, CF_WRITE};
+use engine_traits::CF_WRITE;
 use grpcio::{ChannelBuilder, Environment};
 use kvproto::{
     kvrpcpb::{
@@ -1524,7 +1524,6 @@ fn test_split_region_with_no_valid_split_keys() {
         let key = Key::from_raw(raw_key.as_bytes());
         let key = key.append_ts(TimeStamp::new(i));
         cluster.must_put_cf(CF_WRITE, key.as_encoded(), b"val");
-        cluster.must_put_cf(CF_DEFAULT, key.as_encoded(), b"val");
     }
 
     // one for default cf, one for write cf
@@ -1535,7 +1534,6 @@ fn test_split_region_with_no_valid_split_keys() {
         let key = Key::from_raw(raw_key.as_bytes());
         let key = key.append_ts(TimeStamp::new(i));
         cluster.must_put_cf(CF_WRITE, key.as_encoded(), b"val");
-        cluster.must_put_cf(CF_DEFAULT, key.as_encoded(), b"val");
     }
     // at most one compaction will be triggered for each safe_point
     rx.try_recv().unwrap_err();
@@ -1545,7 +1543,6 @@ fn test_split_region_with_no_valid_split_keys() {
         let key = Key::from_raw(raw_key.as_bytes());
         let key = key.append_ts(TimeStamp::new(i));
         cluster.must_put_cf(CF_WRITE, key.as_encoded(), b"val");
-        cluster.must_put_cf(CF_DEFAULT, key.as_encoded(), b"val");
     }
     rx.recv_timeout(Duration::from_secs(5)).unwrap();
     rx.recv_timeout(Duration::from_secs(5)).unwrap();
