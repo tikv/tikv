@@ -197,15 +197,23 @@ fn test_region_collection_get_top_regions() {
     let region_info_providers: HashMap<_, _> = rx.try_iter().collect();
     assert_eq!(region_info_providers.len(), 3);
     let regions = prepare_cluster(&mut cluster);
+    let mut regions = regions.into_iter().map(|r| r.get_id()).collect::<Vec<_>>();
+    regions.sort();
 
     for node_id in cluster.get_node_ids() {
         let engine = &region_info_providers[&node_id];
 
-        let result = engine.get_top_regions(0).unwrap();
+        let mut result = engine
+            .get_top_regions(0)
+            .unwrap()
+            .into_iter()
+            .map(|r| r.get_id())
+            .collect::<Vec<_>>();
+        result.sort();
         assert_eq!(result, regions);
     }
 
-    for  (_, p) in region_info_providers {
+    for (_, p) in region_info_providers {
         p.stop();
     }
 }

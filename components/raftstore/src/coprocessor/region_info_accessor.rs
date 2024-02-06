@@ -511,7 +511,13 @@ impl RegionCollector {
 
     pub fn handle_get_top_regions(&self, count: usize, callback: Callback<Vec<Region>>) {
         if count == 0 {
-            callback(self.regions.values().into_iter().map(|ri| ri.region.clone()).collect::<Vec<_>>())
+            callback(
+                self.regions
+                    .values()
+                    .into_iter()
+                    .map(|ri| ri.region.clone())
+                    .collect::<Vec<_>>(),
+            )
         } else {
             unimplemented!()
         }
@@ -893,7 +899,8 @@ impl RegionInfoProvider for MockRegionInfoProvider {
         let mut regions = Vec::new();
         let (tx, rx) = mpsc::channel();
 
-        self.seek_region(b"",
+        self.seek_region(
+            b"",
             Box::new(move |iter| {
                 for region_info in iter {
                     tx.send(region_info.region.clone()).unwrap();
