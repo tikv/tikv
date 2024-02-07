@@ -878,10 +878,12 @@ where
             }); min_ts = min_ts.into_inner()));
     }
 
-    fn update_global_checkpoint(&self, task: String) -> future![()] {
+    fn check_and_save_checkpoint(&self, task: String) -> future![()] {
         let meta_client = self.meta_client.clone();
         let router = self.range_router.clone();
         let store_id = self.store_id;
+        let sched = self.scheduler.clone();
+        let checkpoint_max_gap = self.config.checkpoint_max_gap.0;
         async move {
             #[cfg(feature = "failpoints")]
             {
@@ -895,6 +897,25 @@ where
             let ts = meta_client.global_progress_of_task(&task).await;
             match ts {
                 Ok(global_checkpoint) => {
+                    let lag = utils::elapsed_by_tso(global_checkpoint.into());
+                    // Ignore the config if it is zero.
+                    if checkpoint_max_gap > Duration::ZERO && lag > checkpoint_max_gap {
+                        warn!("Checkpoint lag too huge, we are going to abort this task!"; "task" => %task);
+                        try_send!(
+                            sched,
+                            Task::FatalError(
+                                TaskSelector::ByName(task),
+                                Box::new(Error::Other(box_err!(
+                                    "the checkpoint lag is too huge(checkpoint={}, lag={:?}), aborting bakcup to avoid impaction to nomral workloads.\
+                                    If you want resume this task, please firstly modify the config `log-backup.checkpoint-max-gap`.",
+                                    global_checkpoint,
+                                    lag
+                                )))
+                            )
+                        );
+                        return;
+                    }
+
                     let r = router
                         .update_global_checkpoint(&task, global_checkpoint, store_id)
                         .await;
@@ -939,7 +960,7 @@ where
         if let Some(handle) = self.abort_last_storage_save.take() {
             handle.abort();
         }
-        let (fut, handle) = futures::future::abortable(self.update_global_checkpoint(task));
+        let (fut, handle) = futures::future::abortable(self.check_and_save_checkpoint(task));
         self.pool.spawn(root!("update_global_checkpoint"; fut));
         self.abort_last_storage_save = Some(handle);
     }

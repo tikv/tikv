@@ -7,6 +7,7 @@ use std::{
     collections::{hash_map::RandomState, BTreeMap, HashMap},
     ops::{Bound, RangeBounds},
     path::Path,
+    str::FromStr,
     sync::{
         atomic::{AtomicUsize, Ordering},
         Arc,
@@ -27,6 +28,7 @@ use kvproto::{
 use tikv::storage::CfStatistics;
 use tikv_util::{
     box_err,
+    config::ReadableDuration,
     sys::inspector::{
         self_thread_inspector, IoStat, ThreadInspector, ThreadInspectorImpl as OsInspector,
     },
@@ -39,7 +41,7 @@ use tokio::{
     io::{AsyncRead, AsyncWrite, AsyncWriteExt, BufWriter},
     sync::{oneshot, Mutex, RwLock},
 };
-use txn_types::{Key, Lock, LockType};
+use txn_types::{Key, Lock, LockType, TimeStamp};
 
 use crate::{
     errors::{Error, Result},
@@ -798,6 +800,16 @@ impl<D: std::fmt::Debug, T: Iterator<Item = D>> std::fmt::Debug for DebugIter<D,
     }
 }
 
+pub fn elapsed_by_tso(t: TimeStamp) -> Duration {
+    fail::fail_point!("elapsed_by_tso::long_future", |v| {
+        v.and_then(|s| ReadableDuration::from_str(&s).ok())
+            .unwrap_or_default()
+            .0
+    });
+    let now = TimeStamp::physical_now();
+    Duration::from_millis(now - t.physical())
+}
+
 #[cfg(test)]
 mod test {
     use std::{
@@ -805,15 +817,30 @@ mod test {
             atomic::{AtomicUsize, Ordering},
             Arc,
         },
-        time::Duration,
+        time::{Duration, SystemTime, UNIX_EPOCH},
     };
 
     use engine_traits::WriteOptions;
     use futures::executor::block_on;
     use kvproto::metapb::{Region, RegionEpoch};
     use tokio::io::{AsyncWriteExt, BufReader};
+    use txn_types::TimeStamp;
 
     use crate::utils::{is_in_range, CallbackWaitGroup, SegmentMap};
+
+    #[test]
+    fn test_elapsed_by_tso() {
+        let now = SystemTime::now();
+        let epoch_ms = now.duration_since(UNIX_EPOCH).unwrap().as_millis();
+        let tso = TimeStamp::compose(epoch_ms as _, 0);
+
+        std::thread::sleep(Duration::from_millis(2345));
+
+        let d1 = now.elapsed().unwrap();
+        let d2 = super::elapsed_by_tso(tso);
+        let diff = d2.as_secs_f64() - d1.as_secs_f64();
+        assert!(diff < 0.1, "{:?} {:?} diff = {}s", d1, d2, diff);
+    }
 
     #[test]
     fn test_redact() {

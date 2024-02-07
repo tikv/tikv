@@ -2880,6 +2880,8 @@ pub struct BackupStreamConfig {
     #[online_config(skip)]
     pub initial_scan_rate_limit: ReadableSize,
     pub initial_scan_concurrency: usize,
+
+    pub checkpoint_max_gap: ReadableDuration,
 }
 
 impl BackupStreamConfig {
@@ -2939,6 +2941,7 @@ impl Default for BackupStreamConfig {
             initial_scan_rate_limit: ReadableSize::mb(60),
             initial_scan_concurrency: 6,
             temp_file_memory_quota: cache_size,
+            checkpoint_max_gap: ReadableDuration::days(1),
         }
     }
 }

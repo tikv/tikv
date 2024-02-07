@@ -26,12 +26,51 @@ mod all {
     };
     use futures::executor::block_on;
     use raftstore::coprocessor::ObserveHandle;
-    use tikv_util::{config::ReadableSize, defer};
+    use tikv_util::{
+        config::{ReadableDuration, ReadableSize},
+        defer,
+    };
 
     use super::{
         make_record_key, make_split_key_at_record, mutation, run_async_test, SuiteBuilder,
     };
-    use crate::make_table_key;
+    use crate::{make_table_key, Suite};
+
+    #[track_caller]
+    fn assert_task_in_error(task: &str, suite: &Suite) {
+        let cli = suite.get_meta_cli();
+        for _ in 0..10 {
+            if block_on(cli.get_last_error(task)).unwrap().is_some() {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        suite.dump_slash_etc();
+        panic!("No error uploaded when failed to comminate to PD.");
+    }
+
+    #[test]
+    fn checkpoint_lag_too_huge() {
+        let suite = SuiteBuilder::new_named("lag_too_huge").build();
+        fail::cfg("elapsed_by_tso::long_future", "return(23h)").unwrap();
+        block_on(suite.get_meta_cli().insert_task_with_range(
+            &suite.simple_task("lag_too_huge"),
+            &[(&make_table_key(1, b""), &make_table_key(2, b""))],
+        ))
+        .unwrap();
+        std::thread::sleep(Duration::from_secs(5));
+        suite.sync();
+        assert!(
+            run_async_test(suite.get_meta_cli().get_last_error("lag_too_huge"))
+                .unwrap()
+                .is_none()
+        );
+        suite.edit_config(|cfg| cfg.checkpoint_max_gap = ReadableDuration::hours(12));
+        suite.sync();
+        std::thread::sleep(Duration::from_secs(5));
+        suite.sync();
+        assert_task_in_error("lag_too_huge", &suite);
+    }
 
     #[test]
     fn failed_register_task() {
@@ -44,18 +83,7 @@ mod all {
         ))
         .unwrap();
 
-        for _ in 0..10 {
-            if block_on(cli.get_last_error_of("failed_register_task", 1))
-                .unwrap()
-                .is_some()
-            {
-                return;
-            }
-            std::thread::sleep(Duration::from_millis(100));
-        }
-
-        suite.dump_slash_etc();
-        panic!("No error uploaded when failed to comminate to PD.");
+        assert_task_in_error("failed_register_task", &suite);
     }
 
     #[test]

@@ -928,7 +928,7 @@ pub struct TestPdClient {
 
 #[derive(Debug, PartialEq, Clone)]
 pub struct GcSafePoint {
-    pub serivce: String,
+    pub service: String,
     pub ttl: Duration,
     pub safepoint: TimeStamp,
 }
@@ -1939,7 +1939,7 @@ impl PdClient for TestPdClient {
     ) -> PdFuture<()> {
         if ttl.as_secs() > 0 {
             self.gc_safepoints.wl().push(GcSafePoint {
-                serivce: name,
+                service: name,
                 ttl,
                 safepoint,
             });

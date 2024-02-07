@@ -170,6 +170,8 @@ impl SuiteBuilder {
             metastore_error,
             cfg: cfg_f,
         } = self;
+        let mut cfg = BackupStreamConfig::default();
+        cfg_f(&mut cfg);
 
         info!("start test"; "case" => %case, "nodes" => %n);
         let cluster = new_server_cluster(42, n);
@@ -190,14 +192,13 @@ impl SuiteBuilder {
             temp_files: TempDir::new().unwrap(),
             flushed_files: TempDir::new().unwrap(),
             case_name: case,
+            config_template: cfg.clone(),
         };
         for id in 1..=(n as u64) {
             let worker = suite.start_br_stream_on(id);
             suite.endpoints.insert(id, worker);
         }
         suite.cluster.run();
-        let mut cfg = BackupStreamConfig::default();
-        cfg_f(&mut cfg);
         for id in 1..=(n as u64) {
             suite.start_endpoint(id, cfg.clone());
             let cli = suite.start_log_backup_client_on(id);
@@ -261,9 +262,21 @@ pub struct Suite {
     temp_files: TempDir,
     pub flushed_files: TempDir,
     case_name: String,
+    // NOTE: Now for failpoint cases and normal integration test cases share the suite code with
+    // some technique results like "copy & paste". For now, this field is used by failpoint
+    // cases but not by normal cases. Hence we mute some dead code lints for now.
+    #[allow(dead_code)]
+    config_template: BackupStreamConfig,
 }
 
 impl Suite {
+    #[allow(dead_code)]
+    pub fn edit_config(&self, cfg_f: impl FnOnce(&mut BackupStreamConfig)) {
+        let mut cfg = self.config_template.clone();
+        cfg_f(&mut cfg);
+        self.run(|| Task::ChangeConfig(cfg.clone()));
+    }
+
     pub fn simple_task(&self, name: &str) -> StreamTask {
         let mut task = StreamTask::default();
         task.info.set_name(name.to_owned());
