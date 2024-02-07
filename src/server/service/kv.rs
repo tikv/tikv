@@ -1,7 +1,14 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath]: TiKV gRPC APIs implementation
-use std::{mem, sync::Arc, time::Duration};
+use std::{
+    mem,
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc,
+    },
+    time::Duration,
+};
 
 use api_version::KvFormat;
 use fail::fail_point;
@@ -92,6 +99,7 @@ pub struct Service<E: Engine, L: LockManager, F: KvFormat> {
     resource_manager: Option<Arc<ResourceGroupManager>>,
 
     health_controller: HealthController,
+    health_feedback_seq: Arc<AtomicU64>,
 }
 
 impl<E: Engine, L: LockManager, F: KvFormat> Drop for Service<E, L, F> {
@@ -116,6 +124,7 @@ impl<E: Engine + Clone, L: LockManager + Clone, F: KvFormat> Clone for Service<E
             reject_messages_on_memory_ratio: self.reject_messages_on_memory_ratio,
             resource_manager: self.resource_manager.clone(),
             health_controller: self.health_controller.clone(),
+            health_feedback_seq: self.health_feedback_seq.clone(),
         }
     }
 }
@@ -137,6 +146,10 @@ impl<E: Engine, L: LockManager, F: KvFormat> Service<E, L, F> {
         resource_manager: Option<Arc<ResourceGroupManager>>,
         health_controller: HealthController,
     ) -> Self {
+        let now_unix = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64;
         Service {
             store_id,
             gc_worker,
@@ -151,6 +164,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Service<E, L, F> {
             reject_messages_on_memory_ratio,
             resource_manager,
             health_controller,
+            health_feedback_seq: Arc::new(AtomicU64::new(now_unix)),
         }
     }
 
@@ -932,7 +946,11 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
         let pool_size = storage.get_normal_pool_size();
         let batch_builder = BatcherBuilder::new(self.enable_req_batch, pool_size);
         let resource_manager = self.resource_manager.clone();
-        let health_controller = self.health_controller.clone();
+        let mut health_feedback_attacher = HealthFeedbackAttacher::new(
+            self.store_id,
+            self.health_controller.clone(),
+            self.health_feedback_seq.clone(),
+        );
         let request_handler = stream.try_for_each(move |mut req| {
             let request_ids = req.take_request_ids();
             let requests: Vec<_> = req.take_requests().into();
@@ -970,7 +988,6 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
             collect_batch_resp,
         );
 
-        let mut health_feedback_attacher = HealthFeedbackAttacher::new(health_controller);
         let mut response_retriever = response_retriever.map(move |mut item| {
             handle_measures_for_batch_commands(&mut item);
             let mut r = item.batch_resp;
@@ -2383,15 +2400,19 @@ fn needs_reject_raft_append(reject_messages_on_memory_ratio: f64) -> bool {
 }
 
 struct HealthFeedbackAttacher {
+    store_id: u64,
     health_controller: HealthController,
     last_feedback_time: Option<Instant>,
+    seq: Arc<AtomicU64>,
 }
 
 impl HealthFeedbackAttacher {
-    fn new(health_controller: HealthController) -> Self {
+    fn new(store_id: u64, health_controller: HealthController, seq: Arc<AtomicU64>) -> Self {
         Self {
+            store_id,
             health_controller,
             last_feedback_time: None,
+            seq,
         }
     }
 
@@ -2409,8 +2430,10 @@ impl HealthFeedbackAttacher {
 
     fn attach(&mut self, resp: &mut BatchCommandsResponse, now: Instant) {
         self.last_feedback_time = Some(now);
-        resp.mut_health_feedback()
-            .set_slow_score(self.health_controller.get_raftstore_slow_score() as i32);
+        let feedback = resp.mut_health_feedback();
+        feedback.set_store_id(self.store_id);
+        feedback.set_feedback_seq_no(self.seq.fetch_add(1, Ordering::Relaxed));
+        feedback.set_slow_score(self.health_controller.get_raftstore_slow_score() as i32);
     }
 }
 
