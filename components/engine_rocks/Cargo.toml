@@ -65,3 +65,4 @@ features = ["encryption"]
 [dev-dependencies]
 rand = "0.8"
 toml = "0.5"
+proptest = "1.0.0"
