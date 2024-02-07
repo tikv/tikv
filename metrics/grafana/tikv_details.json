@@ -40376,6 +40376,15 @@
               "legendFormat": "{{instance}}-{{reason}}",
               "refId": "A",
               "step": 10
+            },
+            {
+              "expr": "sum(delta(tikv_raftstore_check_stale_peer{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m])) by (instance)",
+              "format": "time_series",
+              "hide": false,
+              "intervalFactor": 2,
+              "legendFormat": "{{instance}}-stale-peer",
+              "refId": "B",
+              "step": 10
             }
           ],
           "thresholds": [],
