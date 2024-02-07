@@ -831,6 +831,7 @@ fn test_serde_custom_tikv_config() {
         max_write_bytes_per_sec: ReadableSize::mb(10),
         enable_compaction_filter: false,
         compaction_filter_skip_version_check: true,
+        num_threads: 2,
     };
     value.pessimistic_txn = PessimisticTxnConfig {
         wait_for_lock_timeout: ReadableDuration::millis(10),
