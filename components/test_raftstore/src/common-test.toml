@@ -81,6 +81,7 @@ max-sub-compactions = 1
 
 [rocksdb.titan]
 max-background-gc = 1
+min-blob-size = 0
 
 [rocksdb.defaultcf]
 
@@ -98,6 +99,7 @@ max-sub-compactions = 1
 
 [raftdb.titan]
 max-background-gc = 1
+min-blob-size = 0
 
 [raftdb.defaultcf]
 

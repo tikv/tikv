@@ -332,10 +332,11 @@ impl<R: ResourceStatsProvider> PriorityLimiterAdjustWorker<R> {
         resource_ctl: Arc<ResourceGroupManager>,
         resource_quota_getter: R,
     ) -> Self {
-        let trackers = resource_ctl
-            .get_priority_resource_limiters()
-            .zip(TaskPriority::priorities())
-            .map(|(l, p)| PriorityLimiterStatsTracker::new(l, p.as_str()));
+        let limiters = resource_ctl.get_priority_resource_limiters();
+        let priorities = TaskPriority::priorities();
+        let trackers = std::array::from_fn(|i| {
+            PriorityLimiterStatsTracker::new(limiters[i].clone(), priorities[i].as_str())
+        });
         Self {
             resource_ctl,
             trackers,
@@ -447,9 +448,9 @@ impl<R: ResourceStatsProvider> PriorityLimiterAdjustWorker<R> {
             limits[i - 1] = limit;
             expect_cpu_time_total -= level_expected[i];
         }
-        debug!("adjsut cpu limiter by priority"; "cpu_quota" => process_cpu_stats.total_quota, 
+        debug!("adjsut cpu limiter by priority"; "cpu_quota" => process_cpu_stats.total_quota,
             "process_cpu" => process_cpu_stats.current_used, "expected_cpu" => ?level_expected,
-            "cpu_costs" => ?cpu_duration, "limits" => ?limits, 
+            "cpu_costs" => ?cpu_duration, "limits" => ?limits,
             "limit_cpu_total" => expect_pool_cpu_total, "pool_cpu_cost" => real_cpu_total);
     }
 }

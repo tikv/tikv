@@ -300,7 +300,7 @@ mod tests {
             // ["t1", "") => t2_xx
             (Some(1), None, data_keys.get(1).cloned()),
             // ["t1", "t2") => t1_xx
-            (Some(1), Some(2), data_keys.get(0).cloned()),
+            (Some(1), Some(2), data_keys.first().cloned()),
         ]);
     }
 

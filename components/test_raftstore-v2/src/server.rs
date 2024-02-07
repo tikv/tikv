@@ -18,6 +18,7 @@ use engine_traits::{KvEngine, RaftEngine, TabletRegistry};
 use futures::{executor::block_on, future::BoxFuture, Future};
 use grpcio::{ChannelBuilder, EnvBuilder, Environment, Error as GrpcError, Service};
 use grpcio_health::HealthService;
+use health_controller::HealthController;
 use kvproto::{
     deadlock_grpc::create_deadlock,
     debugpb_grpc::{create_debug, DebugClient},
@@ -605,7 +606,7 @@ impl<EK: KvEngine> ServerCluster<EK> {
             cfg.slow_log_file.clone(),
         );
 
-        let health_service = HealthService::default();
+        let health_controller = HealthController::new();
 
         for _ in 0..100 {
             let mut svr = Server::new(
@@ -622,7 +623,7 @@ impl<EK: KvEngine> ServerCluster<EK> {
                 self.env.clone(),
                 None,
                 debug_thread_pool.clone(),
-                health_service.clone(),
+                health_controller.clone(),
                 resource_manager.clone(),
             )
             .unwrap();
@@ -691,7 +692,8 @@ impl<EK: KvEngine> ServerCluster<EK> {
         self.region_info_accessors
             .insert(node_id, region_info_accessor);
         // todo: importer
-        self.health_services.insert(node_id, health_service);
+        self.health_services
+            .insert(node_id, health_controller.get_grpc_health_service());
 
         lock_mgr
             .start(
@@ -1012,7 +1014,18 @@ pub fn must_new_cluster_and_kv_client_mul(
     TikvClient,
     Context,
 ) {
-    let (cluster, leader, ctx) = must_new_cluster_mul(count);
+    must_new_cluster_with_cfg_and_kv_client_mul(count, |_| {})
+}
+
+pub fn must_new_cluster_with_cfg_and_kv_client_mul(
+    count: usize,
+    configure: impl FnMut(&mut Cluster<ServerCluster<RocksEngine>, RocksEngine>),
+) -> (
+    Cluster<ServerCluster<RocksEngine>, RocksEngine>,
+    TikvClient,
+    Context,
+) {
+    let (cluster, leader, ctx) = must_new_and_configure_cluster_mul(count, configure);
 
     let env = Arc::new(Environment::new(1));
     let channel =
@@ -1021,6 +1034,7 @@ pub fn must_new_cluster_and_kv_client_mul(
 
     (cluster, client, ctx)
 }
+
 pub fn must_new_cluster_mul(
     count: usize,
 ) -> (

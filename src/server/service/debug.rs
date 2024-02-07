@@ -300,7 +300,6 @@ where
         let debugger = self.debugger.clone();
 
         let res = self.pool.spawn(async move {
-            let req = req;
             debugger
                 .compact(
                     req.get_db(),

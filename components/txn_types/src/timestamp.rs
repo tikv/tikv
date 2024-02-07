@@ -7,6 +7,7 @@ use std::{
 };
 
 use collections::HashSet;
+use tikv_util::memory::HeapSize;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Ord, PartialOrd, Hash)]
 #[repr(transparent)]
@@ -95,6 +96,12 @@ impl From<u64> for TimeStamp {
 impl From<&u64> for TimeStamp {
     fn from(ts: &u64) -> TimeStamp {
         TimeStamp(*ts)
+    }
+}
+
+impl HeapSize for TimeStamp {
+    fn approximate_heap_size(&self) -> usize {
+        self.0.approximate_heap_size()
     }
 }
 

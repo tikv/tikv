@@ -200,10 +200,9 @@ impl Drop for Monitor {
     }
 }
 
-use self::inner::monotonic_coarse_now;
-pub use self::inner::monotonic_now;
 /// Returns the monotonic raw time since some unspecified starting point.
 pub use self::inner::monotonic_raw_now;
+pub use self::inner::{monotonic_coarse_now, monotonic_now};
 use crate::sys::thread::StdThreadBuildWrapper;
 
 const NANOSECONDS_PER_SECOND: u64 = 1_000_000_000;
@@ -511,7 +510,7 @@ pub struct ThreadReadId {
     pub create_time: Timespec,
 }
 
-thread_local!(static READ_SEQUENCE: RefCell<u64> = RefCell::new(0));
+thread_local!(static READ_SEQUENCE: RefCell<u64> = const { RefCell::new(0) });
 
 impl ThreadReadId {
     pub fn new() -> ThreadReadId {

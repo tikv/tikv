@@ -251,7 +251,7 @@ impl<EK: KvEngine, ER: RaftEngine> tikv_kv::Engine for RaftKv2<EK, ER> {
                 Err(mut resp) => {
                     if resp
                         .get_responses()
-                        .get(0)
+                        .first()
                         .map_or(false, |r| r.get_read_index().has_locked())
                     {
                         let locked = resp.mut_responses()[0].mut_read_index().take_locked();
@@ -352,7 +352,9 @@ impl<EK: KvEngine, ER: RaftEngine> tikv_kv::Engine for RaftKv2<EK, ER> {
             early_err: res.err(),
         })
         .inspect(move |ev| {
-            let WriteEvent::Finished(res) = ev else { return };
+            let WriteEvent::Finished(res) = ev else {
+                return;
+            };
             match res {
                 Ok(()) => {
                     ASYNC_REQUESTS_COUNTER_VEC.write.success.inc();

@@ -342,8 +342,8 @@ impl ResourceGroupManager {
     #[inline]
     pub fn get_priority_resource_limiters(
         &self,
-    ) -> [Arc<ResourceLimiter>; TaskPriority::PRIORITY_COUNT] {
-        self.priority_limiters.clone()
+    ) -> &[Arc<ResourceLimiter>; TaskPriority::PRIORITY_COUNT] {
+        &self.priority_limiters
     }
 }
 
@@ -406,8 +406,8 @@ pub struct ResourceController {
     // 1. the priority factor is calculate based on read/write RU settings.
     // 2. for read request, we increase a constant virtual time delta at each `get_priority` call
     //    because the cost can't be calculated at start, so we only increase a constant delta and
-    //    increase the real cost after task is executed; but don't increase it at write because
-    //    the cost is known so we just pre-consume it.
+    //    increase the real cost after task is executed; but don't increase it at write because the
+    //    cost is known so we just pre-consume it.
     is_read: bool,
     // Track the maximum ru quota used to calculate the factor of each resource group.
     // factor = max_ru_quota / group_ru_quota * 10.0
@@ -606,8 +606,8 @@ impl ResourceController {
             });
         if near_overflow {
             let end = Instant::now_coarse();
-            info!("all resource groups' virtual time are near overflow, do reset"; 
-                "min" => min_vt, "max" => max_vt, "dur" => ?end.duration_since(start), 
+            info!("all resource groups' virtual time are near overflow, do reset";
+                "min" => min_vt, "max" => max_vt, "dur" => ?end.duration_since(start),
                 "reset_dur" => ?end.duration_since(self.last_rest_vt_time.get()));
             max_vt -= RESET_VT_THRESHOLD;
             self.last_rest_vt_time.set(end);

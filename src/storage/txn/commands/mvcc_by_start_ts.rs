@@ -17,7 +17,7 @@ command! {
     /// Retrieve MVCC info for the first committed key which `start_ts == ts`.
     MvccByStartTs:
         cmd_ty => Option<(Key, MvccInfo)>,
-        display => "kv::command::mvccbystartts {:?} | {:?}", (start_ts, ctx),
+        display => { "kv::command::mvccbystartts {:?} | {:?}", (start_ts, ctx), }
         content => {
             start_ts: TimeStamp,
         }

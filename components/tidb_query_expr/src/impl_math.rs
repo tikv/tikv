@@ -329,7 +329,7 @@ fn cot(arg: &Real) -> Result<Option<Real>> {
 fn pow(lhs: &Real, rhs: &Real) -> Result<Option<Real>> {
     let pow = (lhs.into_inner()).pow(rhs.into_inner());
     if pow.is_infinite() {
-        Err(Error::overflow("DOUBLE", format!("{}.pow({})", lhs, rhs)).into())
+        Err(Error::overflow("DOUBLE", format!("pow({}, {})", lhs, rhs)).into())
     } else {
         Ok(Real::new(pow).ok())
     }

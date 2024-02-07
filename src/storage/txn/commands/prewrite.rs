@@ -74,6 +74,9 @@ command! {
             /// that must be satisfied as long as data is consistent.
             assertion_level: AssertionLevel,
         }
+        in_heap => {
+            primary, mutations,
+        }
 }
 
 impl std::fmt::Display for Prewrite {
@@ -285,6 +288,11 @@ command! {
             assertion_level: AssertionLevel,
             /// Constraints on the pessimistic locks that have to be checked when prewriting.
             for_update_ts_constraints: Vec<PrewriteRequestForUpdateTsConstraint>,
+        }
+        in_heap => {
+            primary,
+            secondary_keys,
+            // TODO: for_update_ts_constraints, mutations
         }
 }
 
@@ -1753,7 +1761,7 @@ mod tests {
             async_apply_prewrite: bool,
         }
 
-        let cases = vec![
+        let cases = [
             Case {
                 // basic case
                 expected: ResponsePolicy::OnApplied,
@@ -1892,9 +1900,7 @@ mod tests {
         .unwrap_err();
         assert!(matches!(
             res,
-            Error(box ErrorInner::Mvcc(MvccError(
-                box MvccErrorInner::AlreadyExist { .. }
-            )))
+            Error(box ErrorInner::Mvcc(MvccError(box MvccErrorInner::AlreadyExist { .. })))
         ));
 
         assert_eq!(cm.max_ts().into_inner(), 15);
@@ -1917,9 +1923,7 @@ mod tests {
         .unwrap_err();
         assert!(matches!(
             res,
-            Error(box ErrorInner::Mvcc(MvccError(
-                box MvccErrorInner::WriteConflict { .. }
-            )))
+            Error(box ErrorInner::Mvcc(MvccError(box MvccErrorInner::WriteConflict { .. })))
         ));
     }
 
@@ -2329,9 +2333,9 @@ mod tests {
         .unwrap_err();
         assert!(matches!(
             err,
-            Error(box ErrorInner::Mvcc(MvccError(
-                box MvccErrorInner::PessimisticLockNotFound { .. }
-            )))
+            Error(box ErrorInner::Mvcc(MvccError(box MvccErrorInner::PessimisticLockNotFound {
+                ..
+            })))
         ));
         must_unlocked(&mut engine, b"k2");
         // However conflict still won't be checked if there's a non-retry request
@@ -2514,9 +2518,9 @@ mod tests {
         let err = prewrite_command(&mut engine, cm.clone(), &mut stat, cmd).unwrap_err();
         assert!(matches!(
             err,
-            Error(box ErrorInner::Mvcc(MvccError(
-                box MvccErrorInner::PessimisticLockNotFound { .. }
-            )))
+            Error(box ErrorInner::Mvcc(MvccError(box MvccErrorInner::PessimisticLockNotFound {
+                ..
+            })))
         ));
         // Passing keys in different order gets the same result:
         let cmd = PrewritePessimistic::with_defaults(
@@ -2537,9 +2541,9 @@ mod tests {
         let err = prewrite_command(&mut engine, cm, &mut stat, cmd).unwrap_err();
         assert!(matches!(
             err,
-            Error(box ErrorInner::Mvcc(MvccError(
-                box MvccErrorInner::PessimisticLockNotFound { .. }
-            )))
+            Error(box ErrorInner::Mvcc(MvccError(box MvccErrorInner::PessimisticLockNotFound {
+                ..
+            })))
         ));
 
         // If the two keys are sent in different requests, it would be the client's duty

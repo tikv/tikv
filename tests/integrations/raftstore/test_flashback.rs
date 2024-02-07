@@ -239,7 +239,7 @@ fn test_prepare_flashback_after_conf_change() {
     let on_handle_apply_fp = "on_handle_apply";
     fail::cfg(on_handle_apply_fp, "pause").unwrap();
     // Send the conf change msg.
-    cluster.async_add_peer(region_id, new_peer(2, 2)).unwrap();
+    let _ = cluster.async_add_peer(region_id, new_peer(2, 2)).unwrap();
     // Make sure the conf change cmd is ready.
     sleep(Duration::from_millis(100));
     // Send the prepare flashback msg.

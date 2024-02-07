@@ -11,9 +11,9 @@ where
     let mut start = 0;
     let bytes = file_name.as_bytes();
     for (index, &b) in bytes.iter().enumerate() {
-        if (b'A'..=b'Z').contains(&b)
-            || (b'a'..=b'z').contains(&b)
-            || (b'0'..=b'9').contains(&b)
+        if b.is_ascii_uppercase()
+            || b.is_ascii_lowercase()
+            || b.is_ascii_digit()
             || b == b'.'
             || b == b'-'
             || b == b'_'

@@ -52,12 +52,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             &region,
             bucket_ranges,
         );
-        let region_buckets = self
-            .region_buckets_info()
-            .bucket_stat()
-            .as_ref()
-            .unwrap()
-            .clone();
+        let region_buckets = self.region_buckets_info().bucket_stat().unwrap().clone();
         let buckets_count = region_buckets.meta.keys.len() - 1;
         if change_bucket_version {
             // TODO: we may need to make it debug once the coprocessor timeout is resolved.

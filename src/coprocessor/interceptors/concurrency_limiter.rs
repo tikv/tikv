@@ -126,7 +126,13 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::{sync::Arc, thread};
+    use std::{
+        sync::{
+            atomic::{AtomicBool, Ordering},
+            Arc,
+        },
+        thread,
+    };
 
     use futures::future::FutureExt;
     use tokio::{
@@ -162,11 +168,15 @@ mod tests {
         // than t1, it starts with t1
         smp.add_permits(1);
         let smp2 = smp.clone();
-        let mut t1 =
-            tokio::spawn(
-                async move { limit_concurrency(work(8), &smp2, Duration::default()).await },
-            )
-            .fuse();
+
+        let t1_finished = Arc::new(AtomicBool::new(false));
+
+        let t1_finished_cloned = t1_finished.clone();
+        let mut t1 = tokio::spawn(async move {
+            limit_concurrency(work(8), &smp2, Duration::default()).await;
+            t1_finished_cloned.store(true, Ordering::Release);
+        })
+        .fuse();
 
         sleep(Duration::from_millis(100)).await;
         let smp2 = smp.clone();
@@ -178,14 +188,11 @@ mod tests {
 
         let deadline = sleep(Duration::from_millis(1500)).fuse();
         futures::pin_mut!(deadline);
-        let mut t1_finished = false;
         loop {
             futures_util::select! {
-                _ = t1 => {
-                    t1_finished = true;
-                },
+                _ = t1 => {},
                 _ = t2 => {
-                    if t1_finished {
+                    if t1_finished.load(Ordering::Acquire) {
                         return;
                     } else {
                         panic!("t2 should finish later than t1");

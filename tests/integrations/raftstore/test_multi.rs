@@ -815,7 +815,7 @@ fn test_node_catch_up_logs() {
     cluster.stop_node(3);
     for i in 0..10 {
         let v = format!("{:04}", i);
-        cluster.async_put(v.as_bytes(), v.as_bytes()).unwrap();
+        let _ = cluster.async_put(v.as_bytes(), v.as_bytes()).unwrap();
     }
     must_get_equal(&cluster.get_engine(1), b"0009", b"0009");
     cluster.run_node(3).unwrap();

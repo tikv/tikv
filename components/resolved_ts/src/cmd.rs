@@ -213,13 +213,13 @@ fn group_row_changes(requests: Vec<Request>) -> (HashMap<Key, RowChange>, bool) 
                     CF_WRITE => {
                         if let Ok(ts) = key.decode_ts() {
                             let key = key.truncate_ts().unwrap();
-                            let mut row = changes.entry(key).or_default();
+                            let row = changes.entry(key).or_default();
                             assert!(row.write.is_none());
                             row.write = Some(KeyOp::Put(Some(ts), value));
                         }
                     }
                     CF_LOCK => {
-                        let mut row = changes.entry(key).or_default();
+                        let row = changes.entry(key).or_default();
                         assert!(row.lock.is_none());
                         row.lock = Some(KeyOp::Put(None, value));
                     }
@@ -239,7 +239,7 @@ fn group_row_changes(requests: Vec<Request>) -> (HashMap<Key, RowChange>, bool) 
                 match delete.cf.as_str() {
                     CF_LOCK => {
                         let key = Key::from_encoded(delete.take_key());
-                        let mut row = changes.entry(key).or_default();
+                        let row = changes.entry(key).or_default();
                         row.lock = Some(KeyOp::Delete);
                     }
                     "" | CF_WRITE | CF_DEFAULT => {}

@@ -611,8 +611,8 @@ impl IndexScanExecutorImpl {
     }
 
     #[inline]
-    fn build_operations<'a, 'b>(
-        &'b self,
+    fn build_operations<'a>(
+        &self,
         mut key_payload: &'a [u8],
         index_value: &'a [u8],
     ) -> Result<(DecodeHandleOp<'a>, DecodePartitionIdOp<'a>, RestoreData<'a>)> {
@@ -1403,7 +1403,7 @@ mod tests {
         ];
 
         let columns = vec![Column::new(1, 2), Column::new(2, 3), Column::new(3, 4.0)];
-        let datums = vec![Datum::U64(2), Datum::U64(3), Datum::F64(4.0)];
+        let datums = [Datum::U64(2), Datum::U64(3), Datum::F64(4.0)];
 
         let mut value_prefix = vec![];
         let mut restore_data = vec![];
@@ -1557,7 +1557,7 @@ mod tests {
             FieldTypeTp::Double.into(),
         ];
 
-        let datums = vec![Datum::U64(2), Datum::U64(3), Datum::F64(4.0)];
+        let datums = [Datum::U64(2), Datum::U64(3), Datum::F64(4.0)];
 
         let common_handle = datum::encode_key(
             &mut EvalContext::default(),
@@ -1655,7 +1655,7 @@ mod tests {
         ];
 
         let columns = vec![Column::new(1, 2), Column::new(2, 3.0), Column::new(3, 4)];
-        let datums = vec![Datum::U64(2), Datum::F64(3.0), Datum::U64(4)];
+        let datums = [Datum::U64(2), Datum::F64(3.0), Datum::U64(4)];
         let index_data = datum::encode_key(&mut EvalContext::default(), &datums[0..2]).unwrap();
         let key = table::encode_index_seek_key(TABLE_ID, INDEX_ID, &index_data);
 
@@ -1948,7 +1948,7 @@ mod tests {
         ];
 
         let columns = vec![Column::new(1, 2), Column::new(2, 3), Column::new(3, 4.0)];
-        let datums = vec![Datum::U64(2), Datum::U64(3), Datum::F64(4.0)];
+        let datums = [Datum::U64(2), Datum::U64(3), Datum::F64(4.0)];
 
         let mut value_prefix = vec![];
         let mut restore_data = vec![];

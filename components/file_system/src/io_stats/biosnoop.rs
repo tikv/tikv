@@ -150,10 +150,11 @@ pub fn get_io_type() -> IoType {
 }
 
 pub fn fetch_io_bytes() -> [IoBytes; IoType::COUNT] {
-    let mut bytes = Default::default();
+    let mut bytes: [IoBytes; IoType::COUNT] = Default::default();
     unsafe {
         if let Some(ctx) = BPF_CONTEXT.as_mut() {
             for io_type in IoType::iter() {
+                let mut io_type = io_type;
                 let io_type_buf_ptr = &mut io_type as *mut IoType as *mut u8;
                 let mut io_type_buf =
                     std::slice::from_raw_parts_mut(io_type_buf_ptr, std::mem::size_of::<IoType>());
@@ -269,15 +270,19 @@ pub fn flush_io_latency_metrics() {
     }
 }
 
+pub fn get_thread_io_bytes_total() -> Result<IoBytes, String> {
+    Err("unimplemented".into())
+}
+
 #[cfg(test)]
 mod tests {
     use std::{
         io::{Read, Seek, SeekFrom, Write},
+        os::unix::fs::OpenOptionsExt,
         sync::{Arc, Condvar, Mutex},
     };
 
     use libc::O_DIRECT;
-    use maligned::{AsBytes, AsBytesMut, A512};
     use rand::Rng;
     use tempfile::TempDir;
     use test::Bencher;
@@ -286,7 +291,7 @@ mod tests {
         fetch_io_bytes, flush_io_latency_metrics, get_io_type, init, set_io_type, BPF_CONTEXT,
         MAX_THREAD_IDX,
     };
-    use crate::{metrics::*, IoType, OpenOptions};
+    use crate::{io_stats::A512, metrics::*, IoType, OpenOptions};
 
     #[test]
     fn test_biosnoop() {
@@ -311,10 +316,10 @@ mod tests {
             .custom_flags(O_DIRECT)
             .open(&file_path)
             .unwrap();
-        let mut w = vec![A512::default(); 2];
-        w.as_bytes_mut()[512] = 42;
+        let mut w = Box::new(A512([0u8; 512 * 2]));
+        w.0[512] = 42;
         let mut compaction_bytes_before = fetch_io_bytes()[IoType::Compaction as usize];
-        f.write(w.as_bytes()).unwrap();
+        f.write(&w.0).unwrap();
         f.sync_all().unwrap();
         let compaction_bytes = fetch_io_bytes()[IoType::Compaction as usize];
         assert_ne!((compaction_bytes - compaction_bytes_before).write, 0);
@@ -330,8 +335,8 @@ mod tests {
                 .custom_flags(O_DIRECT)
                 .open(&file_path)
                 .unwrap();
-            let mut r = vec![A512::default(); 2];
-            assert_ne!(f.read(&mut r.as_bytes_mut()).unwrap(), 0);
+            let mut r = Box::new(A512([0u8; 512 * 2]));
+            assert_ne!(f.read(&mut r.0).unwrap(), 0);
             drop(f);
         })
         .join()
@@ -450,10 +455,10 @@ mod tests {
             .open(&file_path)
             .unwrap();
 
-        let mut w = vec![A512::default(); 1];
-        w.as_bytes_mut()[64] = 42;
+        let mut w = Box::new(A512([0u8; 512 * 1]));
+        w.0[64] = 42;
         for _ in 1..=100 {
-            f.write(w.as_bytes()).unwrap();
+            f.write(&w.0).unwrap();
         }
         f.sync_all().unwrap();
 
@@ -472,12 +477,12 @@ mod tests {
             .open(&file_path)
             .unwrap();
 
-        let mut w = vec![A512::default(); 1];
-        w.as_bytes_mut()[64] = 42;
+        let mut w = Box::new(A512([0u8; 512 * 1]));
+        w.0[64] = 42;
 
         b.iter(|| {
             set_io_type(IoType::ForegroundWrite);
-            f.write(w.as_bytes()).unwrap();
+            f.write(&w.0).unwrap();
             f.sync_all().unwrap();
         });
     }
@@ -493,10 +498,10 @@ mod tests {
             .open(&file_path)
             .unwrap();
 
-        let mut w = vec![A512::default(); 2];
-        w.as_bytes_mut()[64] = 42;
+        let mut w = Box::new(A512([0u8; 512 * 2]));
+        w.0[64] = 42;
         for _ in 0..100 {
-            f.write(w.as_bytes()).unwrap();
+            f.write(&w.0).unwrap();
         }
         f.sync_all().unwrap();
         drop(f);
@@ -507,12 +512,12 @@ mod tests {
             .custom_flags(O_DIRECT)
             .open(&file_path)
             .unwrap();
-        let mut r = vec![A512::default(); 2];
+        let mut r = Box::new(A512([0u8; 512 * 2]));
         b.iter(|| {
             set_io_type(IoType::ForegroundRead);
             f.seek(SeekFrom::Start(rng.gen_range(0..100) * 512))
                 .unwrap();
-            assert_ne!(f.read(&mut r.as_bytes_mut()).unwrap(), 0);
+            assert_ne!(f.read(&mut r.0).unwrap(), 0);
         });
     }
 }

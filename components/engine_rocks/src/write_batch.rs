@@ -98,7 +98,7 @@ impl RocksWriteBatchVec {
     }
 
     #[inline]
-    fn write_impl(&mut self, opts: &WriteOptions, mut cb: impl FnMut()) -> Result<u64> {
+    fn write_impl(&mut self, opts: &WriteOptions, mut cb: impl FnMut(u64)) -> Result<u64> {
         let opt: RocksWriteOptions = opts.into();
         let mut seq = 0;
         if self.support_write_batch_vec {
@@ -106,14 +106,14 @@ impl RocksWriteBatchVec {
             self.get_db()
                 .multi_batch_write_callback(self.as_inner(), &opt.into_raw(), |s| {
                     seq = s;
-                    cb();
+                    cb(s);
                 })
                 .map_err(r2e)?;
         } else {
             self.get_db()
                 .write_callback(&self.wbs[0], &opt.into_raw(), |s| {
                     seq = s;
-                    cb();
+                    cb(s);
                 })
                 .map_err(r2e)?;
         }
@@ -123,10 +123,10 @@ impl RocksWriteBatchVec {
 
 impl engine_traits::WriteBatch for RocksWriteBatchVec {
     fn write_opt(&mut self, opts: &WriteOptions) -> Result<u64> {
-        self.write_impl(opts, || {})
+        self.write_impl(opts, |_| {})
     }
 
-    fn write_callback_opt(&mut self, opts: &WriteOptions, cb: impl FnMut()) -> Result<u64> {
+    fn write_callback_opt(&mut self, opts: &WriteOptions, cb: impl FnMut(u64)) -> Result<u64> {
         self.write_impl(opts, cb)
     }
 

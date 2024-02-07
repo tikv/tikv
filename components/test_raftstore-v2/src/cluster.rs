@@ -223,7 +223,7 @@ pub trait Simulator<EK: KvEngine> {
             None => {
                 error!("call_query_on_node receives none response"; "request" => ?request);
                 // Do not unwrap here, sometimes raftstore v2 may return none.
-                return Err(box_err!("receives none response {:?}", request));
+                Err(box_err!("receives none response {:?}", request))
             }
         }
     }

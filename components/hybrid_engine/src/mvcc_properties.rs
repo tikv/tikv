@@ -1,6 +1,6 @@
 // Copyright 2023 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine_traits::{KvEngine, MvccProperties, MvccPropertiesExt, RegionCacheEngine};
+use engine_traits::{KvEngine, MvccProperties, MvccPropertiesExt, RangeCacheEngine};
 use txn_types::TimeStamp;
 
 use crate::engine::HybridEngine;
@@ -8,7 +8,7 @@ use crate::engine::HybridEngine;
 impl<EK, EC> MvccPropertiesExt for HybridEngine<EK, EC>
 where
     EK: KvEngine,
-    EC: RegionCacheEngine,
+    EC: RangeCacheEngine,
 {
     fn get_mvcc_properties_cf(
         &self,

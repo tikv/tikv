@@ -63,7 +63,7 @@ pub fn tls_collect_scan_details(cmd: CommandKind, stats: &Statistics) {
         m.borrow_mut()
             .local_scan_details
             .entry(cmd)
-            .or_insert_with(Default::default)
+            .or_default()
             .add(stats);
     });
 }
@@ -131,6 +131,7 @@ make_auto_flush_static_metric! {
         cleanup,
         rollback,
         pessimistic_rollback,
+        pessimistic_rollback_read_phase,
         txn_heart_beat,
         check_txn_status,
         check_secondary_locks,

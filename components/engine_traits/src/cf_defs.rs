@@ -26,3 +26,7 @@ pub fn name_to_cf(name: &str) -> Option<CfName> {
     }
     ALL_CFS.iter().copied().find(|c| name == *c)
 }
+
+pub fn is_data_cf(cf: &str) -> bool {
+    DATA_CFS.iter().any(|c| *c == cf)
+}

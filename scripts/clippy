@@ -21,6 +21,8 @@ fi
 # - `derive_partial_eq_without_eq` has compilation overhead.
 # - Blocking issue for enabling `result_large_err` is the protobuf messages.
 # - Blocking issue for clippy::large_enum_variant is the raftstore peer message.
+# - Enables `clippy::needless_return_with_question_mark` after
+#   https://github.com/rust-lang/rust-clippy/issues/11982 is fixed.
 CLIPPY_LINTS=(
     -A clippy::module_inception  \
     -A clippy::result_large_err \
@@ -48,6 +50,10 @@ CLIPPY_LINTS=(
     -D clippy::disallowed_methods \
     -D rust-2018-idioms \
     -D clippy::assertions_on_result_states \
+    -A clippy::needless_return_with_question_mark \
+    -A clippy::non_canonical_partial_ord_impl \
+    -A clippy::arc_with_non_send_sync \
+    -A clippy::let_underscore_future \
 )
 
 cargo clippy --workspace \

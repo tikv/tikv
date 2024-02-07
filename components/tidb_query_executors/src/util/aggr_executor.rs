@@ -641,9 +641,9 @@ pub mod tests {
             )) as Box<dyn BatchExecutor<StorageStats = ()>>
         };
 
-        let test_paging_size = vec![2, 5, 7];
-        let expect_call_num = vec![1, 3, 4];
-        let expect_row_num = vec![vec![4], vec![0, 0, 5], vec![0, 0, 0, 6]];
+        let test_paging_size = [2, 5, 7];
+        let expect_call_num = [1, 3, 4];
+        let expect_row_num = [vec![4], vec![0, 0, 5], vec![0, 0, 0, 6]];
         let executor_builders: Vec<Box<dyn Fn(MockExecutor, Option<u64>) -> _>> =
             vec![Box::new(exec_fast), Box::new(exec_slow)];
         for test_case in 0..test_paging_size.len() {
@@ -665,7 +665,7 @@ pub mod tests {
             }
         }
 
-        let expect_row_num2 = vec![vec![4], vec![3, 0, 2], vec![3, 0, 1, 2]];
+        let expect_row_num2 = [vec![4], vec![3, 0, 2], vec![3, 0, 1, 2]];
         let exec_stream = |src_exec, paging_size| {
             let mut config = EvalConfig::default();
             config.paging_size = paging_size;

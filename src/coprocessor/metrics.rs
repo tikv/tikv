@@ -285,7 +285,7 @@ pub fn tls_collect_scan_details(cmd: ReqTag, stats: &Statistics) {
         m.borrow_mut()
             .local_scan_details
             .entry(cmd)
-            .or_insert_with(Default::default)
+            .or_default()
             .add(stats);
     });
 }

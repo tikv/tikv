@@ -229,7 +229,7 @@ fn rocksdb_files_should_copy(iter: &mut dyn Iterator<Item = String>) -> Vec<Stri
         }
     }
     names.sort_by_key(|a| a.0);
-    names.pop().map_or_else(|| vec![], |a| vec![a.1])
+    names.pop().map_or_else(Vec::new, |a| vec![a.1])
 }
 
 fn read_dir<P: AsRef<Path>>(path: P) -> Result<ReadDir, String> {
@@ -270,6 +270,7 @@ fn add_write_permission<P: AsRef<Path>>(path: P) -> Result<(), String> {
     let mut pmt = std::fs::metadata(path)
         .map_err(|e| format!("metadata({}): {}", path.display(), e))?
         .permissions();
+    #[allow(clippy::permissions_set_readonly_false)]
     pmt.set_readonly(false);
     std::fs::set_permissions(path, pmt)
         .map_err(|e| format!("set_permissions({}): {}", path.display(), e))

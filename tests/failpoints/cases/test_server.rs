@@ -95,7 +95,7 @@ fn test_send_raft_channel_full() {
     fail::cfg(on_batch_raft_stream_drop_by_err_fp, "panic").unwrap();
 
     // send request while channel full should not cause the connection drop
-    cluster.async_put(b"k2", b"v2").unwrap();
+    let _ = cluster.async_put(b"k2", b"v2").unwrap();
 
     fail::remove(send_raft_message_full_fp);
     cluster.must_put(b"k3", b"v3");
@@ -112,9 +112,9 @@ fn test_serving_status() {
     cluster.cfg.raft_store.inspect_interval = ReadableDuration::millis(10);
     cluster.run();
 
-    let service = cluster.sim.rl().health_services.get(&1).unwrap().clone();
-    let builder =
-        ServerBuilder::new(Arc::new(Environment::new(1))).register_service(create_health(service));
+    let health_controller = cluster.sim.rl().health_controllers.get(&1).unwrap().clone();
+    let builder = ServerBuilder::new(Arc::new(Environment::new(1)))
+        .register_service(create_health(health_controller.get_grpc_health_service()));
     let mut server = builder.bind("127.0.0.1", 0).build().unwrap();
     server.start();
 
@@ -135,9 +135,19 @@ fn test_serving_status() {
     thread::sleep(Duration::from_millis(500));
     assert_eq!(check(), ServingStatus::Serving);
 
+    health_controller.set_is_serving(false);
+    assert_eq!(check(), ServingStatus::NotServing);
+    health_controller.set_is_serving(true);
+    assert_eq!(check(), ServingStatus::Serving);
+
     fail::cfg("pause_on_peer_collect_message", "pause").unwrap();
 
     thread::sleep(Duration::from_secs(1));
+    assert_eq!(check(), ServingStatus::ServiceUnknown);
+
+    health_controller.set_is_serving(false);
+    assert_eq!(check(), ServingStatus::NotServing);
+    health_controller.set_is_serving(true);
     assert_eq!(check(), ServingStatus::ServiceUnknown);
 
     fail::remove("pause_on_peer_collect_message");

@@ -1091,6 +1091,7 @@ mod tests {
         use tipb::{Expr, ScalarFuncSig};
 
         #[allow(clippy::trivially_copy_pass_by_ref)]
+        #[allow(clippy::extra_unused_type_parameters)]
         #[rpn_fn(capture = [metadata], metadata_mapper = prepare_a::<T>)]
         fn fn_a_nonnull<T: Evaluable + EvaluableRet>(
             metadata: &i64,
@@ -1100,6 +1101,7 @@ mod tests {
             Ok(Some(v + *metadata))
         }
 
+        #[allow(clippy::extra_unused_type_parameters)]
         fn prepare_a<T: Evaluable>(_expr: &mut Expr) -> Result<i64> {
             Ok(42)
         }

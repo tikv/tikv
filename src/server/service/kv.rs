@@ -204,7 +204,7 @@ macro_rules! handle_request {
                 resource_group_priority= ResourcePriority::from(resource_control_ctx.override_priority);
             }
             GRPC_RESOURCE_GROUP_COUNTER_VEC
-                    .with_label_values(&[resource_control_ctx.get_resource_group_name()])
+                    .with_label_values(&[resource_control_ctx.get_resource_group_name(), resource_control_ctx.get_resource_group_name()])
                     .inc();
             let resp = $future_name(&self.storage, req);
             let task = async move {
@@ -493,7 +493,10 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
         }
 
         GRPC_RESOURCE_GROUP_COUNTER_VEC
-            .with_label_values(&[resource_control_ctx.get_resource_group_name()])
+            .with_label_values(&[
+                resource_control_ctx.get_resource_group_name(),
+                resource_control_ctx.get_resource_group_name(),
+            ])
             .inc();
 
         let begin_instant = Instant::now();
@@ -535,7 +538,10 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
                 ResourcePriority::from(resource_control_ctx.override_priority);
         }
         GRPC_RESOURCE_GROUP_COUNTER_VEC
-            .with_label_values(&[resource_control_ctx.get_resource_group_name()])
+            .with_label_values(&[
+                resource_control_ctx.get_resource_group_name(),
+                resource_control_ctx.get_resource_group_name(),
+            ])
             .inc();
 
         let begin_instant = Instant::now();
@@ -629,7 +635,10 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
                 ResourcePriority::from(resource_control_ctx.override_priority);
         }
         GRPC_RESOURCE_GROUP_COUNTER_VEC
-            .with_label_values(&[resource_control_ctx.get_resource_group_name()])
+            .with_label_values(&[
+                resource_control_ctx.get_resource_group_name(),
+                resource_control_ctx.get_resource_group_name(),
+            ])
             .inc();
 
         let mut stream = self
@@ -1131,12 +1140,7 @@ fn response_batch_commands_request<F, T>(
 {
     let task = async move {
         if let Ok(resp) = resp.await {
-            let measure = GrpcRequestDuration {
-                begin,
-                label,
-                source,
-                resource_priority,
-            };
+            let measure = GrpcRequestDuration::new(begin, label, source, resource_priority);
             let task = MeasuredSingleResponse::new(id, resp, measure);
             if let Err(e) = tx.send_with(task, WakePolicy::Immediately) {
                 error!("KvService response batch commands fail"; "err" => ?e);
@@ -1185,7 +1189,7 @@ fn handle_batch_commands_request<E: Engine, L: LockManager, F: KvFormat>(
                     }
 
                     GRPC_RESOURCE_GROUP_COUNTER_VEC
-                        .with_label_values(&[ resource_control_ctx.get_resource_group_name()])
+                        .with_label_values(&[ resource_control_ctx.get_resource_group_name(), resource_control_ctx.get_resource_group_name()])
                         .inc();
                     if batcher.as_mut().map_or(false, |req_batch| {
                         req_batch.can_batch_get(&req)
@@ -1208,7 +1212,7 @@ fn handle_batch_commands_request<E: Engine, L: LockManager, F: KvFormat>(
                         resource_group_priority = ResourcePriority::from(resource_control_ctx.override_priority);
                     }
                     GRPC_RESOURCE_GROUP_COUNTER_VEC
-                    .with_label_values(&[resource_control_ctx.get_resource_group_name()])
+                    .with_label_values(&[resource_control_ctx.get_resource_group_name(), resource_control_ctx.get_resource_group_name()])
                     .inc();
                     if batcher.as_mut().map_or(false, |req_batch| {
                         req_batch.can_batch_raw_get(&req)
@@ -1231,7 +1235,7 @@ fn handle_batch_commands_request<E: Engine, L: LockManager, F: KvFormat>(
                         resource_group_priority = ResourcePriority::from(resource_control_ctx.override_priority );
                     }
                     GRPC_RESOURCE_GROUP_COUNTER_VEC
-                    .with_label_values(&[resource_control_ctx.get_resource_group_name()])
+                    .with_label_values(&[resource_control_ctx.get_resource_group_name(), resource_control_ctx.get_resource_group_name()])
                     .inc();
                     let begin_instant = Instant::now();
                     let source = req.get_context().get_request_source().to_owned();
@@ -1268,7 +1272,7 @@ fn handle_batch_commands_request<E: Engine, L: LockManager, F: KvFormat>(
                         resource_group_priority = ResourcePriority::from(resource_control_ctx.override_priority);
                     }
                     GRPC_RESOURCE_GROUP_COUNTER_VEC
-                        .with_label_values(&[resource_control_ctx.get_resource_group_name()])
+                        .with_label_values(&[resource_control_ctx.get_resource_group_name(), resource_control_ctx.get_resource_group_name()])
                         .inc();
                     let begin_instant = Instant::now();
                     let source = req.get_context().get_request_source().to_owned();
@@ -1326,8 +1330,10 @@ fn handle_measures_for_batch_commands(measures: &mut MeasuredBatchResponse) {
             begin,
             source,
             resource_priority,
+            sent,
         } = measure;
         let elapsed = now.saturating_duration_since(begin);
+        let wait = now.saturating_duration_since(sent);
         GRPC_MSG_HISTOGRAM_STATIC
             .get(label)
             .get(resource_priority)
@@ -1353,6 +1359,9 @@ fn handle_measures_for_batch_commands(measures: &mut MeasuredBatchResponse) {
             exec_details
                 .mut_time_detail_v2()
                 .set_total_rpc_wall_time_ns(elapsed.as_nanos() as u64);
+            exec_details
+                .mut_time_detail_v2()
+                .set_kv_grpc_wait_time_ns(wait.as_nanos() as u64);
         }
     }
 }
@@ -1403,10 +1412,12 @@ fn future_get<E: Engine, L: LockManager, F: KvFormat>(
             match v {
                 Ok((val, stats)) => {
                     let exec_detail_v2 = resp.mut_exec_details_v2();
-                    let scan_detail_v2 = exec_detail_v2.mut_scan_detail_v2();
-                    stats.stats.write_scan_detail(scan_detail_v2);
+                    stats
+                        .stats
+                        .write_scan_detail(exec_detail_v2.mut_scan_detail_v2());
                     GLOBAL_TRACKERS.with_tracker(tracker, |tracker| {
-                        tracker.write_scan_detail(scan_detail_v2);
+                        tracker.write_scan_detail(exec_detail_v2.mut_scan_detail_v2());
+                        tracker.write_time_detail(exec_detail_v2.mut_time_detail_v2());
                     });
                     set_time_detail(exec_detail_v2, duration, &stats.latency_stats);
                     match val {
@@ -1518,10 +1529,12 @@ fn future_batch_get<E: Engine, L: LockManager, F: KvFormat>(
                 Ok((kv_res, stats)) => {
                     let pairs = map_kv_pairs(kv_res);
                     let exec_detail_v2 = resp.mut_exec_details_v2();
-                    let scan_detail_v2 = exec_detail_v2.mut_scan_detail_v2();
-                    stats.stats.write_scan_detail(scan_detail_v2);
+                    stats
+                        .stats
+                        .write_scan_detail(exec_detail_v2.mut_scan_detail_v2());
                     GLOBAL_TRACKERS.with_tracker(tracker, |tracker| {
-                        tracker.write_scan_detail(scan_detail_v2);
+                        tracker.write_scan_detail(exec_detail_v2.mut_scan_detail_v2());
+                        tracker.write_time_detail(exec_detail_v2.mut_time_detail_v2());
                     });
                     set_time_detail(exec_detail_v2, duration, &stats.latency_stats);
                     resp.set_pairs(pairs.into());
@@ -2061,6 +2074,7 @@ macro_rules! txn_command_future {
             GLOBAL_TRACKERS.with_tracker($tracker, |tracker| {
                 tracker.write_scan_detail($resp.mut_exec_details_v2().mut_scan_detail_v2());
                 tracker.write_write_detail($resp.mut_exec_details_v2().mut_write_detail());
+                tracker.write_time_detail($resp.mut_exec_details_v2().mut_time_detail_v2());
             });
         });
     };
@@ -2071,6 +2085,7 @@ macro_rules! txn_command_future {
             GLOBAL_TRACKERS.with_tracker($tracker, |tracker| {
                 tracker.write_scan_detail($resp.mut_exec_details_v2().mut_scan_detail_v2());
                 tracker.write_write_detail($resp.mut_exec_details_v2().mut_write_detail());
+                tracker.write_time_detail($resp.mut_exec_details_v2().mut_time_detail_v2());
             });
         });
     };
@@ -2274,7 +2289,9 @@ pub struct GrpcRequestDuration {
     pub label: GrpcTypeKind,
     pub source: String,
     pub resource_priority: ResourcePriority,
+    pub sent: Instant,
 }
+
 impl GrpcRequestDuration {
     pub fn new(
         begin: Instant,
@@ -2287,6 +2304,7 @@ impl GrpcRequestDuration {
             label,
             source,
             resource_priority,
+            sent: Instant::now(),
         }
     }
 }

@@ -91,6 +91,7 @@ impl<S: Snapshot> Cursors<S> {
                 }
             }
         }
+        statistics.write.over_seek_bound += 1;
 
         // We have not found another user key for now, so we directly `seek()`.
         // After that, we must pointing to another key, or out of bound.
@@ -314,7 +315,6 @@ impl<S: Snapshot, P: ScanPolicy<S>> ForwardScanner<S, P> {
         // and if we have not reached where we want, we use `seek()`.
 
         // Whether we have *not* reached where we want by `next()`.
-        let mut needs_seek = true;
 
         for i in 0..SEEK_BOUND {
             if i > 0 {
@@ -333,8 +333,7 @@ impl<S: Snapshot, P: ScanPolicy<S>> ForwardScanner<S, P> {
                 let key_commit_ts = Key::decode_ts_from(current_key)?;
                 if key_commit_ts <= self.cfg.ts {
                     // Founded, don't need to seek again.
-                    needs_seek = false;
-                    break;
+                    return Ok(true);
                 } else if self.met_newer_ts_data == NewerTsCheckState::NotMetYet {
                     self.met_newer_ts_data = NewerTsCheckState::Met;
                 }
@@ -356,24 +355,22 @@ impl<S: Snapshot, P: ScanPolicy<S>> ForwardScanner<S, P> {
                 }
             }
         }
-        // If we have not found `${user_key}_${ts}` in a few `next()`, directly
-        // `seek()`.
-        if needs_seek {
-            // `user_key` must have reserved space here, so its clone has reserved space
-            // too. So no reallocation happens in `append_ts`.
-            self.cursors.write.seek(
-                &user_key.clone().append_ts(self.cfg.ts),
-                &mut self.statistics.write,
-            )?;
-            if !self.cursors.write.valid()? {
-                // Key space ended.
-                return Ok(false);
-            }
-            let current_key = self.cursors.write.key(&mut self.statistics.write);
-            if !Key::is_user_key_eq(current_key, user_key.as_encoded().as_slice()) {
-                // Meet another key.
-                return Ok(false);
-            }
+        self.statistics.write.over_seek_bound += 1;
+
+        // `user_key` must have reserved space here, so its clone has reserved space
+        // too. So no reallocation happens in `append_ts`.
+        self.cursors.write.seek(
+            &user_key.clone().append_ts(self.cfg.ts),
+            &mut self.statistics.write,
+        )?;
+        if !self.cursors.write.valid()? {
+            // Key space ended.
+            return Ok(false);
+        }
+        let current_key = self.cursors.write.key(&mut self.statistics.write);
+        if !Key::is_user_key_eq(current_key, user_key.as_encoded().as_slice()) {
+            // Meet another key.
+            return Ok(false);
         }
         Ok(true)
     }
@@ -1636,7 +1633,7 @@ mod latest_kv_tests {
         must_prewrite_put(&mut engine, b"k4", b"v41", b"k4", 3);
         must_commit(&mut engine, b"k4", 3, 7);
 
-        for start_ts in (10..30).into_iter().step_by(2) {
+        for start_ts in (10..30).step_by(2) {
             must_prewrite_lock(&mut engine, b"k1", b"k1", start_ts);
             must_commit(&mut engine, b"k1", start_ts, start_ts + 1);
             must_prewrite_lock(&mut engine, b"k3", b"k1", start_ts);

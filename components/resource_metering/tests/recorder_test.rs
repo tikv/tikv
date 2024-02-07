@@ -55,7 +55,7 @@ mod tests {
                     if let Some(tag) = self.current_ctx {
                         self.records
                             .entry(tag.as_bytes().to_vec())
-                            .or_insert_with(RawRecord::default)
+                            .or_default()
                             .cpu_time += ms;
                     }
                     self.ops.push(op);
@@ -156,10 +156,10 @@ mod tests {
 
             let mut records = self.records.lock().unwrap();
             for k in expected.keys() {
-                records.entry(k.clone()).or_insert_with(RawRecord::default);
+                records.entry(k.clone()).or_default();
             }
             for k in records.keys() {
-                expected.entry(k.clone()).or_insert_with(RawRecord::default);
+                expected.entry(k.clone()).or_default();
             }
             for (k, expected_value) in expected {
                 let value = records.get(&k).unwrap();

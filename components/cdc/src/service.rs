@@ -217,8 +217,8 @@ struct EventFeedHeaders {
 }
 
 impl EventFeedHeaders {
-    const FEATURES_KEY: &str = "features";
-    const STREAM_MULTIPLEXING: &str = "stream-multiplexing";
+    const FEATURES_KEY: &'static str = "features";
+    const STREAM_MULTIPLEXING: &'static str = "stream-multiplexing";
     const FEATURES: &'static [&'static str] = &[Self::STREAM_MULTIPLEXING];
 
     fn parse_features(value: &[u8]) -> Result<Vec<&'static str>, String> {

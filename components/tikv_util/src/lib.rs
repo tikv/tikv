@@ -61,7 +61,6 @@ pub mod thread_group;
 pub mod time;
 pub mod timer;
 pub mod topn;
-pub mod trend;
 pub mod worker;
 pub mod yatp_pool;
 

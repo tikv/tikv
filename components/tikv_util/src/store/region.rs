@@ -42,7 +42,7 @@ pub fn region_on_same_stores(lhs: &Region, rhs: &Region) -> bool {
 
 /// Check if the given region exists on stores, by checking whether any one of
 /// the peers belonging to this region exist on the given stores.
-pub fn region_on_stores(region: &Region, store_ids: &Vec<u64>) -> bool {
+pub fn region_on_stores(region: &Region, store_ids: &[u64]) -> bool {
     if store_ids.is_empty() {
         return true;
     }

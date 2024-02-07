@@ -1,13 +1,13 @@
 // Copyright 2023 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine_traits::{KvEngine, PerfContextExt, PerfContextKind, RegionCacheEngine};
+use engine_traits::{KvEngine, PerfContextExt, PerfContextKind, RangeCacheEngine};
 
 use crate::engine::HybridEngine;
 
 impl<EK, EC> PerfContextExt for HybridEngine<EK, EC>
 where
     EK: KvEngine,
-    EC: RegionCacheEngine,
+    EC: RangeCacheEngine,
 {
     type PerfContext = EK::PerfContext;
 
