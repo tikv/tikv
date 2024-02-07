@@ -8,7 +8,7 @@ use std::{
     time::Duration,
 };
 
-use engine_traits::{KvEngine, RangeStats, CF_WRITE};
+use engine_traits::{KvEngine, ManualCompactionOptions, RangeStats, CF_WRITE};
 use fail::fail_point;
 use futures_util::compat::Future01CompatExt;
 use thiserror::Error;
@@ -256,10 +256,9 @@ where
              );
             let incremental_timer = FULL_COMPACT_INCREMENTAL.start_coarse_timer();
             box_try!(engine.compact_range(
-                range.0, range.1, // Compact the entire key range.
-                false,   // non-exclusive
-                1,       // number of threads threads
-                false,   // force bottommost level compaction
+                range.0,
+                range.1, // Compact the entire key range.
+                ManualCompactionOptions::new(false, 1, false),
             ));
             incremental_timer.observe_duration();
             debug!(
@@ -316,9 +315,7 @@ where
             cf_name,
             start_key,
             end_key,
-            false,
-            1, // threads
-            bottommost_level_force
+            ManualCompactionOptions::new(false, 1, bottommost_level_force),
         ));
         compact_range_timer.observe_duration();
         info!(

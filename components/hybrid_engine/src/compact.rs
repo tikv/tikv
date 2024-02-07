@@ -1,6 +1,6 @@
 // Copyright 2023 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine_traits::{CompactExt, KvEngine, RangeCacheEngine, Result};
+use engine_traits::{CompactExt, KvEngine, ManualCompactionOptions, RangeCacheEngine, Result};
 
 use crate::engine::HybridEngine;
 
@@ -20,18 +20,10 @@ where
         cf: &str,
         start_key: Option<&[u8]>,
         end_key: Option<&[u8]>,
-        exclusive_manual: bool,
-        max_subcompactions: u32,
-        bottommost_level_force: bool,
+        compaction_option: ManualCompactionOptions,
     ) -> Result<()> {
-        self.disk_engine().compact_range_cf(
-            cf,
-            start_key,
-            end_key,
-            exclusive_manual,
-            max_subcompactions,
-            bottommost_level_force,
-        )
+        self.disk_engine()
+            .compact_range_cf(cf, start_key, end_key, compaction_option)
     }
 
     fn compact_files_in_range_cf(

@@ -275,7 +275,8 @@ mod tests {
         RocksCfOptions, RocksDbOptions, RocksEngine, RocksSstPartitionerFactory, RocksSstReader,
     };
     use engine_traits::{
-        CompactExt, IterOptions, Iterator, MiscExt, RefIterable, SstReader, SyncMutable, CF_DEFAULT,
+        CompactExt, IterOptions, Iterator, ManualCompactionOptions, MiscExt, RefIterable,
+        SstReader, SyncMutable, CF_DEFAULT,
     };
     use keys::DATA_PREFIX_KEY;
     use kvproto::metapb::Region;
@@ -606,11 +607,10 @@ mod tests {
         db.put(b"zc6", &value).unwrap();
         db.flush_cfs(&[], true /* wait */).unwrap();
         db.compact_range_cf(
-            CF_DEFAULT, None,  // start_key
-            None,  // end_key
-            false, // exclusive_manual
-            1,     // max_subcompactions
-            false,
+            CF_DEFAULT,
+            None, // start_key
+            None, // end_key
+            ManualCompactionOptions::new(false, 1, false),
         )
         .unwrap();
 
@@ -698,7 +698,8 @@ mod tests {
         assert_eq!(level_1.len(), 1, "{:?}", level_1);
         assert_eq!(level_1[0].smallestkey, b"za0", "{:?}", level_1);
         assert_eq!(level_1[0].largestkey, b"za9", "{:?}", level_1);
-        db.compact_range(None, None, false, 1, false).unwrap();
+        db.compact_range(None, None, ManualCompactionOptions::new(false, 1, false))
+            .unwrap();
 
         // So... the next-level size will be almost 1024 * 15, which should reach the
         // limit.

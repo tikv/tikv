@@ -9,7 +9,8 @@ use std::{
 
 use collections::HashMap;
 use engine_traits::{
-    CfName, DeleteStrategy, KvEngine, Range, TabletContext, TabletRegistry, WriteOptions, DATA_CFS,
+    CfName, DeleteStrategy, KvEngine, ManualCompactionOptions, Range, TabletContext,
+    TabletRegistry, WriteOptions, DATA_CFS,
 };
 use fail::fail_point;
 use kvproto::{import_sstpb::SstMeta, metapb::Region};
@@ -302,9 +303,11 @@ impl<EK: KvEngine> Runner<EK> {
                 // some files missing from compaction if dynamic_level_bytes is off.
                 for r in [range1, range2] {
                     // When compaction filter is present, trivial move is disallowed.
-                    if let Err(e) =
-                        tablet.compact_range(Some(r.start_key), Some(r.end_key), false, 1, false)
-                    {
+                    if let Err(e) = tablet.compact_range(
+                        Some(r.start_key),
+                        Some(r.end_key),
+                        ManualCompactionOptions::new(false, 1, false),
+                    ) {
                         if e.to_string().contains("Manual compaction paused") {
                             info!(
                                 logger,
