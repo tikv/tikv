@@ -247,6 +247,7 @@ fn test_serde_custom_tikv_config() {
         io_reschedule_concurrent_max_count: 1234,
         io_reschedule_hotpot_duration: ReadableDuration::secs(4321),
         inspect_interval: ReadableDuration::millis(444),
+        inspect_cpu_util_thd: 0.666,
         report_min_resolved_ts_interval: ReadableDuration::millis(233),
         check_leader_lease_interval: ReadableDuration::millis(123),
         renew_leader_lease_advance_duration: ReadableDuration::millis(456),
@@ -830,6 +831,7 @@ fn test_serde_custom_tikv_config() {
         max_write_bytes_per_sec: ReadableSize::mb(10),
         enable_compaction_filter: false,
         compaction_filter_skip_version_check: true,
+        num_threads: 2,
     };
     value.pessimistic_txn = PessimisticTxnConfig {
         wait_for_lock_timeout: ReadableDuration::millis(10),
