@@ -6,21 +6,60 @@ use std::collections::BTreeMap;
 
 use crate::errors::Result;
 
+<<<<<<< HEAD
 pub trait CompactExt {
+=======
+#[derive(Clone, Debug)]
+pub struct ManualCompactionOptions {
+    pub exclusive_manual: bool,
+    pub max_subcompactions: u32,
+    pub bottommost_level_force: bool,
+}
+
+impl ManualCompactionOptions {
+    pub fn new(
+        exclusive_manual: bool,
+        max_subcompactions: u32,
+        bottommost_level_force: bool,
+    ) -> Self {
+        Self {
+            exclusive_manual,
+            max_subcompactions,
+            bottommost_level_force,
+        }
+    }
+}
+
+pub trait CompactExt: CfNamesExt {
+>>>>>>> a796cbe281 (raftstore: use force in compact_range triggered by no valid split key (#16493))
     type CompactedEvent: CompactedEvent;
 
     /// Checks whether any column family sets `disable_auto_compactions` to
     /// `True` or not.
     fn auto_compactions_is_disabled(&self) -> Result<bool>;
 
+<<<<<<< HEAD
+=======
+    fn compact_range(
+        &self,
+        start_key: Option<&[u8]>,
+        end_key: Option<&[u8]>,
+        compaction_option: ManualCompactionOptions,
+    ) -> Result<()> {
+        for cf in self.cf_names() {
+            self.compact_range_cf(cf, start_key, end_key, compaction_option.clone())?;
+        }
+        Ok(())
+    }
+
+>>>>>>> a796cbe281 (raftstore: use force in compact_range triggered by no valid split key (#16493))
     /// Compacts the column families in the specified range by manual or not.
     fn compact_range(
         &self,
         cf: &str,
         start_key: Option<&[u8]>,
         end_key: Option<&[u8]>,
-        exclusive_manual: bool,
-        max_subcompactions: u32,
+        compaction_option: ManualCompactionOptions,
     ) -> Result<()>;
 
     /// Compacts files in the range and above the output level.

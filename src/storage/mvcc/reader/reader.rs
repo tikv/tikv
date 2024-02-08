@@ -804,8 +804,8 @@ pub mod tests {
         RocksSnapshot,
     };
     use engine_traits::{
-        CompactExt, IterOptions, MiscExt, Mutable, SyncMutable, WriteBatch, WriteBatchExt, ALL_CFS,
-        CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE,
+        CompactExt, IterOptions, ManualCompactionOptions, MiscExt, Mutable, SyncMutable,
+        WriteBatch, WriteBatchExt, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE,
     };
     use kvproto::{
         kvrpcpb::{AssertionLevel, Context, PrewriteRequestPessimisticAction::*},
@@ -1066,7 +1066,18 @@ pub mod tests {
 
         pub fn compact(&mut self) {
             for cf in ALL_CFS {
+<<<<<<< HEAD
                 self.db.compact_range(cf, None, None, false, 1).unwrap();
+=======
+                self.db
+                    .compact_range_cf(
+                        cf,
+                        None,
+                        None,
+                        ManualCompactionOptions::new(false, 1, false),
+                    )
+                    .unwrap();
+>>>>>>> a796cbe281 (raftstore: use force in compact_range triggered by no valid split key (#16493))
             }
         }
     }
