@@ -2998,11 +2998,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-<<<<<<< HEAD
-source = "git+https://github.com/tikv/rust-rocksdb.git#aa41eb102d373f56846be88ffd250c2b581b48d4"
-=======
 source = "git+https://github.com/tikv/rust-rocksdb.git#1cdf55ba2fd2b132e8cd549146b96205ba4721ad"
->>>>>>> eb7b143771 (titan: update titan to fix incorrect blob file size and change default value (#16020))
 dependencies = [
  "bindgen 0.65.1",
  "bzip2-sys",
@@ -3021,11 +3017,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-<<<<<<< HEAD
-source = "git+https://github.com/tikv/rust-rocksdb.git#aa41eb102d373f56846be88ffd250c2b581b48d4"
-=======
 source = "git+https://github.com/tikv/rust-rocksdb.git#1cdf55ba2fd2b132e8cd549146b96205ba4721ad"
->>>>>>> eb7b143771 (titan: update titan to fix incorrect blob file size and change default value (#16020))
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -4944,11 +4936,7 @@ dependencies = [
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-<<<<<<< HEAD
-source = "git+https://github.com/tikv/rust-rocksdb.git#aa41eb102d373f56846be88ffd250c2b581b48d4"
-=======
 source = "git+https://github.com/tikv/rust-rocksdb.git#1cdf55ba2fd2b132e8cd549146b96205ba4721ad"
->>>>>>> eb7b143771 (titan: update titan to fix incorrect blob file size and change default value (#16020))
 dependencies = [
  "libc 0.2.146",
  "librocksdb_sys",

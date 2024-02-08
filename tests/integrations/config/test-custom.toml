@@ -348,12 +348,7 @@ periodic-compaction-seconds = "10d"
 
 [rocksdb.defaultcf.titan]
 min-blob-size = "2018B"
-<<<<<<< HEAD
 blob-file-compression = "zstd"
-=======
-blob-file-compression = "lz4"
-zstd-dict-size = "16KB"
->>>>>>> eb7b143771 (titan: update titan to fix incorrect blob file size and change default value (#16020))
 blob-cache-size = "12GB"
 min-gc-batch-size = "12KB"
 max-gc-batch-size = "12MB"
@@ -613,12 +608,7 @@ max-compactions = 3
 
 [raftdb.defaultcf.titan]
 min-blob-size = "2018B"
-<<<<<<< HEAD
 blob-file-compression = "zstd"
-=======
-blob-file-compression = "lz4"
-zstd-dict-size = "16KB"
->>>>>>> eb7b143771 (titan: update titan to fix incorrect blob file size and change default value (#16020))
 blob-cache-size = "12GB"
 min-gc-batch-size = "12KB"
 max-gc-batch-size = "12MB"
