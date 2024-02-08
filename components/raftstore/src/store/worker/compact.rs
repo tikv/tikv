@@ -311,11 +311,12 @@ where
         let compact_range_timer = COMPACT_RANGE_CF
             .with_label_values(&[cf_name])
             .start_coarse_timer();
+        let compact_options = ManualCompactionOptions::new(false, 1, bottommost_level_force);
         box_try!(self.engine.compact_range_cf(
             cf_name,
             start_key,
             end_key,
-            ManualCompactionOptions::new(false, 1, bottommost_level_force),
+            compact_options.clone()
         ));
         compact_range_timer.observe_duration();
         info!(
@@ -324,6 +325,7 @@ where
             "range_end" => end_key.map(::log_wrappers::Value::key),
             "cf" => cf_name,
             "time_takes" => ?timer.saturating_elapsed(),
+            "compact_options" => ?compact_options,
         );
         Ok(())
     }

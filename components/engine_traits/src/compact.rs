@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 
 use crate::{errors::Result, CfNamesExt};
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct ManualCompactionOptions {
     pub exclusive_manual: bool,
     pub max_subcompactions: u32,
