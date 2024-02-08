@@ -12,13 +12,8 @@ use encryption::{
     from_engine_encryption_method, DataKeyManager, DecrypterReader, EncrypterWriter, Iv,
 };
 use engine_traits::{
-<<<<<<< HEAD
     CfName, EncryptionKeyManager, Error as EngineError, Iterable, KvEngine, Mutable,
-    SstCompressionType, SstWriter, SstWriterBuilder, WriteBatch,
-=======
-    CfName, Error as EngineError, Iterable, KvEngine, Mutable, SstCompressionType, SstReader,
-    SstWriter, SstWriterBuilder, WriteBatch,
->>>>>>> ca8c70d9a0 (raftstore: Verify checksum right after SST files are generated (#16107))
+    SstCompressionType, SstReader, SstWriter, SstWriterBuilder, WriteBatch,
 };
 use fail::fail_point;
 use kvproto::encryptionpb::EncryptionMethod;
@@ -166,7 +161,12 @@ where
             });
         })();
 
-        let sst_reader = E::SstReader::open(&path, key_mgr)?;
+        let sst_reader = if let Some(mgr) = key_mgr {
+            E::SstReader::open_encrypted(&path, mgr)?
+        } else {
+            E::SstReader::open(&path)?
+        };
+
         if let Err(e) = sst_reader.verify_checksum() {
             // use sst reader to verify block checksum, it would detect corrupted SST due to
             // memory bit-flip
