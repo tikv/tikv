@@ -59,6 +59,9 @@ command! {
             // Must be set to true, unless the client is old version that doesn't support this behavior.
             verify_is_primary: bool,
         }
+        in_heap => {
+            primary_key,
+        }
 }
 
 impl CommandExt for CheckTxnStatus {
