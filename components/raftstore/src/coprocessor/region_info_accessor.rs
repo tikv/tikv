@@ -98,9 +98,14 @@ impl RegionInfo {
     }
 }
 
+#[derive(Clone, Debug)]
+pub struct RegionActivity {
+    pub region_stat: RegionStat,
+}
+
 type RegionsMap = HashMap<u64, RegionInfo>;
 type RegionRangesMap = BTreeMap<RangeKey, u64>;
-type RegionStatMap = HashMap<u64, RegionStat>;
+type RegionActivityMap = HashMap<u64, RegionActivity>;
 
 // RangeKey is a wrapper used to unify the comparison between region start key
 // and region end key. Region end key is special as empty stands for the
@@ -248,7 +253,7 @@ pub struct RegionCollector {
     regions: RegionsMap,
     // BTreeMap: data_end_key -> region_id
     region_ranges: RegionRangesMap,
-    region_stats: RegionStatMap,
+    region_activity: RegionActivityMap,
     region_leaders: Arc<RwLock<HashSet<u64>>>,
 }
 
@@ -257,7 +262,7 @@ impl RegionCollector {
         Self {
             region_leaders,
             regions: HashMap::default(),
-            region_stats: HashMap::default(),
+            region_activity: HashMap::default(),
             region_ranges: BTreeMap::default(),
         }
     }
@@ -328,6 +333,12 @@ impl RegionCollector {
         } else {
             self.create_region(region, role);
         }
+    }
+
+    fn handle_update_region_activity(&mut self, region_id: u64, region_activity: &RegionActivity) {
+        _ = self
+            .region_activity
+            .insert(region_id, region_activity.clone())
     }
 
     fn handle_update_region(&mut self, region: Region, role: StateRole) {
@@ -510,17 +521,26 @@ impl RegionCollector {
     }
 
     pub fn handle_get_top_regions(&self, count: usize, callback: Callback<Vec<Region>>) {
-        if count == 0 {
-            callback(
-                self.regions
-                    .values()
-                    .into_iter()
-                    .map(|ri| ri.region.clone())
-                    .collect::<Vec<_>>(),
-            )
+        let top_regions = if count == 0 {
+            self.regions
+                .values()
+                .into_iter()
+                .map(|ri| ri.region.clone())
+                .collect::<Vec<_>>()
         } else {
-            unimplemented!()
-        }
+            let count = usize::max(count, self.region_activity.len());
+            self.region_activity
+                .iter()
+                .sorted_by(|(_, activity_0), (_, activity_1)| {
+                    let a = activity_0.region_stat.read_keys + activity_0.region_stat.written_keys;
+                    let b = activity_1.region_stat.read_keys + activity_1.region_stat.written_keys;
+                    b.cmp(&a)
+                })
+                .take(count)
+                .flat_map(|(id, _)| self.regions.get(&id).map(|ri| ri.region.clone()))
+                .collect::<Vec<_>>()
+        };
+        callback(top_regions)
     }
 
     fn handle_raftstore_event(&mut self, event: RaftStoreEvent) {
