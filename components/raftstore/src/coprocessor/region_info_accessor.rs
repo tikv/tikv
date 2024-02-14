@@ -22,8 +22,9 @@ use tikv_util::{
 };
 
 use super::{
-    metrics::*, BoxRegionChangeObserver, BoxRoleObserver, Coprocessor, CoprocessorHost,
-    ObserverContext, RegionChangeEvent, RegionChangeObserver, Result, RoleChange, RoleObserver,
+    dispatcher::BoxRegionHeartbeatObserver, metrics::*, BoxRegionChangeObserver, BoxRoleObserver,
+    Coprocessor, CoprocessorHost, ObserverContext, RegionChangeEvent, RegionChangeObserver,
+    RegionHeartbeatObserver, Result, RoleChange, RoleObserver,
 };
 
 /// `RegionInfoAccessor` is used to collect all regions' information on this
@@ -67,6 +68,10 @@ pub enum RaftStoreEvent {
         region: Region,
         buckets: usize,
     },
+    UpdateRegionActivity {
+        region: Region,
+        activity: RegionActivity,
+    },
 }
 
 impl RaftStoreEvent {
@@ -76,6 +81,7 @@ impl RaftStoreEvent {
             | RaftStoreEvent::UpdateRegion { region, .. }
             | RaftStoreEvent::DestroyRegion { region, .. }
             | RaftStoreEvent::UpdateRegionBuckets { region, .. }
+            | RaftStoreEvent::UpdateRegionActivity { region, .. }
             | RaftStoreEvent::RoleChange { region, .. } => region,
         }
     }
@@ -231,6 +237,21 @@ impl RoleObserver for RegionEventListener {
     }
 }
 
+impl RegionHeartbeatObserver for RegionEventListener {
+    fn on_region_heartbeat(&self, context: &mut ObserverContext<'_>, region_stat: &RegionStat) {
+        let region = context.region().clone();
+        let region_stat = region_stat.clone();
+        let event = RaftStoreEvent::UpdateRegionActivity {
+            region,
+            activity: RegionActivity { region_stat },
+        };
+
+        self.scheduler
+            .schedule(RegionInfoQuery::RaftStoreEvent(event))
+            .unwrap();
+    }
+}
+
 /// Creates an `RegionEventListener` and register it to given coprocessor host.
 fn register_region_event_listener(
     host: &mut CoprocessorHost<impl KvEngine>,
@@ -241,7 +262,9 @@ fn register_region_event_listener(
     host.registry
         .register_role_observer(1, BoxRoleObserver::new(listener.clone()));
     host.registry
-        .register_region_change_observer(1, BoxRegionChangeObserver::new(listener));
+        .register_region_change_observer(1, BoxRegionChangeObserver::new(listener.clone()));
+    host.registry
+        .register_region_heartbeat_observer(1, BoxRegionHeartbeatObserver::new(listener))
 }
 
 /// `RegionCollector` is the place where we hold all region information we
@@ -589,6 +612,9 @@ impl RegionCollector {
             RaftStoreEvent::UpdateRegionBuckets { region, buckets } => {
                 self.handle_update_region_buckets(region, buckets);
             }
+            RaftStoreEvent::UpdateRegionActivity { region, activity } => {
+                self.handle_update_region_activity(region.get_id(), &activity)
+            }
         }
     }
 }
@@ -915,7 +941,7 @@ impl RegionInfoProvider for MockRegionInfoProvider {
             .ok_or(box_err!("Not found region containing {:?}", key))
     }
 
-    fn get_top_regions(&self, count: usize) -> Result<Vec<Region>> {
+    fn get_top_regions(&self, _count: usize) -> Result<Vec<Region>> {
         let mut regions = Vec::new();
         let (tx, rx) = mpsc::channel();
 
