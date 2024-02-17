@@ -3291,3 +3291,35 @@ fn test_pipelined_dml_read_write_conflict() {
     assert!(!resp.has_region_error());
     assert!(resp.get_error().has_locked());
 }
+
+#[test_case(test_raftstore::must_new_cluster_and_kv_client)]
+#[test_case(test_raftstore_v2::must_new_cluster_and_kv_client)]
+fn test_pipelined_dml_buffer_get_other_key() {
+    let (_cluster, client, ctx) = new_cluster();
+    let k = b"key".to_vec();
+    let mut req = PessimisticLockRequest::default();
+    req.set_context(ctx.clone());
+    req.set_primary_lock(k.clone());
+    req.set_start_version(1);
+    req.set_for_update_ts(1);
+    req.set_mutations(
+        vec![Mutation {
+            op: Op::PessimisticLock,
+            key: k.clone(),
+            value: [].into(),
+            ..Default::default()
+        }]
+        .into(),
+    );
+    let resp = client.kv_pessimistic_lock(&req).unwrap();
+    assert!(!resp.has_region_error());
+    assert!(resp.get_errors().is_empty());
+
+    let mut req = BufferBatchGetRequest::default();
+    req.set_context(ctx.clone());
+    req.set_keys(vec![k.clone()].into());
+    req.set_version(2);
+    let resp = client.kv_buffer_batch_get(&req).unwrap();
+    assert!(!resp.has_region_error());
+    assert!(resp.get_pairs().is_empty());
+}

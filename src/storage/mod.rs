@@ -1078,6 +1078,9 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                                     match reader.load_lock(&k) {
                                         Ok(None) => None,
                                         Ok(Some(lock)) => {
+                                            if matches!(lock.lock_type, LockType::Pessimistic) {
+                                                assert_ne!(lock.ts, start_ts);
+                                            }
                                             if lock.ts != start_ts {
                                                 None
                                             } else {
