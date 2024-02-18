@@ -7,7 +7,10 @@ use std::{
 };
 
 use file_system::{set_io_type, IoType};
-use futures::{channel::oneshot, future::TryFutureExt};
+use futures::{
+    channel::oneshot,
+    future::{FutureExt, TryFutureExt},
+};
 use kvproto::kvrpcpb::CommandPri;
 use online_config::{ConfigChange, ConfigManager, ConfigValue, Result as CfgResult};
 use prometheus::{IntCounter, IntGauge};
@@ -142,10 +145,9 @@ impl ReadPoolHandle {
                 };
                 let extras = Extras::new_multilevel(task_id, fixed_level);
                 let task_cell = TaskCell::new(
-                    TrackedFuture::new(async move {
-                        f.await;
+                    TrackedFuture::new(f.map(move |_| {
                         running_tasks.dec();
-                    }),
+                    })),
                     extras,
                 );
                 remote.spawn(task_cell);
@@ -166,10 +168,9 @@ impl ReadPoolHandle {
     {
         let (tx, rx) = oneshot::channel::<T>();
         let res = self.spawn(
-            async move {
-                let res = f.await;
+            f.map(move |res| {
                 let _ = tx.send(res);
-            },
+            }),
             priority,
             task_id,
         );
