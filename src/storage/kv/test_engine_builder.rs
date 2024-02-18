@@ -127,7 +127,9 @@ impl TestEngineBuilder {
                 _ => (*cf, RocksCfOptions::default()),
             })
             .collect();
-        let engine = RocksEngine::new(&path, None, cfs_opts, self.io_rate_limiter)?;
+        let resources = cfg_rocksdb.build_resources(Default::default());
+        let db_opts = cfg_rocksdb.build_opt(&resources, EngineType::RaftKv);
+        let engine = RocksEngine::new(&path, Some(db_opts), cfs_opts, self.io_rate_limiter)?;
         Ok(engine)
     }
 }
