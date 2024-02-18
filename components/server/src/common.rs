@@ -710,8 +710,9 @@ impl KvEngineBuilder for RocksEngine {
 }
 
 impl KvEngineBuilder for HybridEngine<RocksEngine, RangeCacheMemoryEngine> {
-    fn build(_disk_engine: RocksEngine) -> Self {
-        unimplemented!()
+    fn build(disk_engine: RocksEngine) -> Self {
+        let memory_engine = RangeCacheMemoryEngine::new(Arc::default());
+        HybridEngine::new(disk_engine, memory_engine)
     }
 }
 

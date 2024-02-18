@@ -40,6 +40,7 @@ file_system = { workspace = true }
 futures = "0.3"
 grpcio = { workspace = true }
 grpcio-health = { workspace = true }
+health_controller = { workspace = true }
 keys = { workspace = true }
 kvproto = { workspace = true }
 lazy_static = "1.3"

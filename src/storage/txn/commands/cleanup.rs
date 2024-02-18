@@ -33,6 +33,9 @@ command! {
             /// lock's TTL. 0 means do not check TTL.
             current_ts: TimeStamp,
         }
+        in_heap => {
+            key,
+        }
 }
 
 impl CommandExt for Cleanup {
