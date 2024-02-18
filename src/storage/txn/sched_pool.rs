@@ -8,6 +8,7 @@ use std::{
 
 use collections::HashMap;
 use file_system::{set_io_type, IoType};
+use futures::future::FutureExt;
 use kvproto::{kvrpcpb::CommandPri, pdpb::QueryKind};
 use pd_client::{Feature, FeatureGate};
 use prometheus::local::*;
@@ -131,13 +132,7 @@ impl PriorityQueue {
         extras.set_metadata(metadata.to_vec());
         self.worker_pool.spawn_with_extras(
             with_resource_limiter(
-                ControlledFuture::new(
-                    async move {
-                        f.await;
-                    },
-                    self.resource_ctl.clone(),
-                    group_name,
-                ),
+                ControlledFuture::new(f, self.resource_ctl.clone(), group_name),
                 resource_limiter,
             ),
             extras,
