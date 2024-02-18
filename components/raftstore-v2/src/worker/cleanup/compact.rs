@@ -5,7 +5,7 @@ use std::{
     fmt::{self, Display, Formatter},
 };
 
-use engine_traits::{KvEngine, TabletRegistry, CF_WRITE};
+use engine_traits::{KvEngine, ManualCompactionOptions, TabletRegistry, CF_WRITE};
 use fail::fail_point;
 use keys::{DATA_MAX_KEY, DATA_MIN_KEY};
 use raftstore::store::{need_compact, CompactThreshold};
@@ -104,9 +104,12 @@ where
                             continue;
                         };
                         for cf in &cf_names {
-                            if let Err(e) =
-                                tablet.compact_range_cf(cf, None, None, false, 1 /* threads */)
-                            {
+                            if let Err(e) = tablet.compact_range_cf(
+                                cf,
+                                None,
+                                None,
+                                ManualCompactionOptions::new(false, 1, false),
+                            ) {
                                 error!(
                                     self.logger,
                                     "compact range failed";
