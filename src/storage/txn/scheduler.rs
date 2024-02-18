@@ -499,7 +499,11 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         self.inner.scale_pool_size(pool_size)
     }
 
-    pub fn set_memory_quota_capacity(&self, cap: usize) {
+    pub fn memory_quota_capacity(&self) -> usize {
+        self.inner.memory_quota.capacity()
+    }
+
+    pub(in crate::storage) fn set_memory_quota_capacity(&self, cap: usize) {
         SCHED_TXN_MEMORY_QUOTA.allocated.set(cap as i64);
         self.inner.memory_quota.set_capacity(cap)
     }
