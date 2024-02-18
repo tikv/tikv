@@ -58,7 +58,7 @@ impl RangeCacheWriteBatch {
     }
 
     fn write_impl(&mut self, seq: u64) -> Result<()> {
-        self.engine.handle_range_load();
+        self.engine.handle_pending_load();
         let (engine, filtered_keys) = {
             let mut core = self.engine.core().write().unwrap();
 

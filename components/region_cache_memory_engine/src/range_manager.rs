@@ -88,6 +88,8 @@ pub struct RangeManager {
     // todo: change to deque
     pub(crate) pending_loaded_ranges_with_snapshot: Vec<(CacheRange, Arc<RocksSnapshot>)>,
     pub(crate) ranges_with_snap_done: Vec<CacheRange>,
+
+    ranges_being_gced: BTreeSet<CacheRange>,
 }
 
 impl RangeManager {
@@ -210,7 +212,7 @@ impl RangeManager {
             .ranges
             .keys()
             .find(|&r| r.contains_range(evict_range))
-            .unwrap()
+            .expect(format!("evict a range that does not contain: {:?}", evict_range).as_str())
             .clone();
         let meta = self.ranges.remove(&range_key).unwrap();
         let (left_range, right_range) = range_key.split_off(evict_range);
@@ -240,21 +242,48 @@ impl RangeManager {
             .any(|r| r.overlaps(evict_range))
     }
 
-    pub fn load_range(&mut self, cache_range: CacheRange) -> bool {
-        // todo: check evicted
-        if self.overlap_with_range(&cache_range) {
-            return false;
-        };
-        self.pending_loaded_ranges.push(cache_range);
-        true
+    pub fn on_delete_range(&mut self, range: &CacheRange) {
+        self.evicted_ranges.remove(range);
     }
+
+    pub fn set_ranges_gcing(&mut self, ranges_being_gced: BTreeSet<CacheRange>) {
+        self.ranges_being_gced = ranges_being_gced;
+    }
+
+    pub fn clear_ranges_gcing(&mut self) {
+        self.ranges_being_gced = BTreeSet::default();
+    }
+
+    pub fn load_range(&mut self, cache_range: CacheRange) -> Result<(), LoadFailedReason> {
+        if self.overlap_with_range(&cache_range) {
+            return Err(LoadFailedReason::Overlapped);
+        };
+        if self.ranges_being_gced.contains(&cache_range) {
+            return Err(LoadFailedReason::BeingGced);
+        }
+        if self.evicted_ranges.contains(&cache_range) {
+            return Err(LoadFailedReason::BeingEvicted);
+        }
+        self.pending_loaded_ranges.push(cache_range);
+        Ok(())
+    }
+}
+
+#[derive(Debug, PartialEq)]
+pub enum LoadFailedReason {
+    Overlapped,
+    BeingGced,
+    BeingEvicted,
 }
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
+
     use engine_traits::CacheRange;
 
     use super::RangeManager;
+    use crate::range_manager::LoadFailedReason;
 
     #[test]
     fn test_range_manager() {
@@ -293,5 +322,36 @@ mod tests {
 
         assert!(!range_mgr.evict_range(&r_right));
         assert!(range_mgr.historical_ranges.get(&r_right).is_none());
+    }
+
+    #[test]
+    fn test_range_load() {
+        let mut range_mgr = RangeManager::default();
+        let r1 = CacheRange::new(b"k00".to_vec(), b"k10".to_vec());
+        let r2 = CacheRange::new(b"k10".to_vec(), b"k20".to_vec());
+        let r3 = CacheRange::new(b"k20".to_vec(), b"k30".to_vec());
+        let r4 = CacheRange::new(b"k25".to_vec(), b"k35".to_vec());
+        range_mgr.new_range(r1.clone());
+        range_mgr.new_range(r3.clone());
+        range_mgr.evict_range(&r1);
+
+        let mut gced = BTreeSet::default();
+        gced.insert(r2.clone());
+        range_mgr.set_ranges_gcing(gced);
+
+        assert_eq!(
+            range_mgr.load_range(r1).unwrap_err(),
+            LoadFailedReason::BeingEvicted
+        );
+
+        assert_eq!(
+            range_mgr.load_range(r2).unwrap_err(),
+            LoadFailedReason::BeingGced
+        );
+
+        assert_eq!(
+            range_mgr.load_range(r4).unwrap_err(),
+            LoadFailedReason::Overlapped
+        );
     }
 }

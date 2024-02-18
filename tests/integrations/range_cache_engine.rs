@@ -55,15 +55,17 @@ fn test_load() {
         cluster.must_put_cf(CF_WRITE, &encoded_key, b"val-write");
     }
 
+    // load range
     {
         let range_cache_engine = cluster.get_range_cache_engine(1);
         let mut core = range_cache_engine.core().write().unwrap();
         let cache_range = CacheRange::new(DATA_MIN_KEY.to_vec(), DATA_MAX_KEY.to_vec());
-        core.mut_range_manager().load_range(cache_range);
+        core.mut_range_manager().load_range(cache_range).unwrap();
     }
 
     for i in 10..20 {
         if i == 19 {
+            // wait snapshot load
             std::thread::sleep(Duration::from_secs(1));
         }
         let key = format!("key-{:04}", i);
@@ -72,13 +74,6 @@ fn test_load() {
             .into_encoded();
         cluster.must_put(&encoded_key, b"val-default");
         cluster.must_put_cf(CF_WRITE, &encoded_key, b"val-write");
-    }
-
-    {
-        let range_cache_engine = cluster.get_range_cache_engine(1);
-        let mut core = range_cache_engine.core().write().unwrap();
-        let cache_range = CacheRange::new(DATA_MIN_KEY.to_vec(), DATA_MAX_KEY.to_vec());
-        core.mut_range_manager().load_range(cache_range);
     }
 
     let (tx, rx) = sync_channel(1);
@@ -101,7 +96,6 @@ fn test_load() {
             .get_cf_with_snap_ctx(CF_WRITE, &encoded_key, snap_ctx.clone())
             .unwrap();
         assert_eq!(&val, b"val-write");
-        println!("find {:?}", key);
         // verify it's read from range cache engine
         assert!(rx.try_recv().unwrap());
 

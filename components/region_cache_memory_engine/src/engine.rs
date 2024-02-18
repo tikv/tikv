@@ -145,8 +145,6 @@ impl SnapshotList {
 pub struct RangeCacheMemoryEngineCore {
     engine: SkiplistEngine,
     range_manager: RangeManager,
-    // ranges being gced
-    ranges_being_gced: Vec<CacheRange>,
     pub(crate) cached_write_batch: BTreeMap<CacheRange, Vec<(u64, RangeCacheWriteBatchEntry)>>,
 }
 
@@ -155,7 +153,6 @@ impl RangeCacheMemoryEngineCore {
         RangeCacheMemoryEngineCore {
             engine: SkiplistEngine::new(limiter),
             range_manager: RangeManager::default(),
-            ranges_being_gced: vec![],
             cached_write_batch: BTreeMap::default(),
         }
     }
@@ -170,14 +167,6 @@ impl RangeCacheMemoryEngineCore {
 
     pub fn mut_range_manager(&mut self) -> &mut RangeManager {
         &mut self.range_manager
-    }
-
-    pub fn set_ranges_gcing(&mut self, ranges_being_gced: Vec<CacheRange>) {
-        self.ranges_being_gced = ranges_being_gced;
-    }
-
-    pub fn clear_ranges_gcing(&mut self) {
-        self.ranges_being_gced = vec![];
     }
 
     pub(crate) fn take_cache_write_batch(
@@ -234,15 +223,21 @@ impl RangeCacheMemoryEngine {
     pub fn evict_range(&mut self, range: &CacheRange) {
         let mut core = self.core.write().unwrap();
         if core.range_manager.evict_range(range) {
+            // todo: schedule it to a separate thread
             core.engine.delete_range(range);
         }
+    }
+
+    pub fn on_delete_range(&self, range: &CacheRange) {
+        let mut core = self.core.write().unwrap();
+        core.mut_range_manager().on_delete_range(range);
     }
 
     pub fn background_worker(&self) -> &BackgroundWork {
         &self.background_work
     }
 
-    pub(crate) fn handle_range_load(&self) {
+    pub(crate) fn handle_pending_load(&self) {
         let mut core = self.core.write().unwrap();
         let skiplist_engine = core.engine().clone();
         let range_manager = core.mut_range_manager();

@@ -1,7 +1,7 @@
 // Copyright 2024 TiKV Project Authors. Licensed under Apache-2.0.
 
 use core::slice::SlicePattern;
-use std::{fmt::Display, sync::Arc, thread::JoinHandle, time::Duration};
+use std::{collections::BTreeSet, fmt::Display, sync::Arc, thread::JoinHandle, time::Duration};
 
 use crossbeam::{
     channel::{bounded, tick, Sender},
@@ -166,10 +166,10 @@ impl BackgroundRunner {
         Self { engine_core }
     }
 
-    fn ranges_to_gc(&self) -> Vec<CacheRange> {
+    fn ranges_to_gc(&self) -> BTreeSet<CacheRange> {
         let mut core = self.engine_core.write().unwrap();
-        let ranges: Vec<CacheRange> = core.range_manager().ranges().keys().cloned().collect();
-        core.set_ranges_gcing(ranges.clone());
+        let ranges: BTreeSet<CacheRange> = core.range_manager().ranges().keys().cloned().collect();
+        core.mut_range_manager().set_ranges_gcing(ranges.clone());
         ranges
     }
 
@@ -238,7 +238,7 @@ impl BackgroundRunner {
 
     fn gc_finished(&mut self) {
         let mut core = self.engine_core.write().unwrap();
-        core.clear_ranges_gcing();
+        core.mut_range_manager().clear_ranges_gcing();
     }
 
     fn get_range_to_load(&self) -> Option<((CacheRange, Arc<RocksSnapshot>), SkiplistEngine)> {

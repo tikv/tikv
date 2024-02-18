@@ -181,7 +181,6 @@ impl KeyComparator for InternalKeyComparator {
 mod tests {
     use bytes::BufMut;
     use skiplist_rs::KeyComparator;
-    use tikv_util::codec::bytes::decode_bytes;
     use txn_types::Key;
 
     use super::{decode_key, InternalKeyComparator, ValueType};
