@@ -1,7 +1,7 @@
 // Copyright 2024 TiKV Project Authors. Licensed under Apache-2.0.
 
 use core::slice::SlicePattern;
-use std::{collections::BTreeSet, fmt::Display, sync::Arc, thread::JoinHandle, time::Duration};
+use std::{fmt::Display, sync::Arc, thread::JoinHandle, time::Duration};
 
 use crossbeam::{
     channel::{bounded, tick, Sender},
@@ -56,7 +56,17 @@ pub struct BackgroundWork {
     tick_stopper: Option<(JoinHandle<()>, Sender<bool>)>,
 }
 
-impl Drop for BackgroundWork {
+// BgWorkManager managers the worker inits, stops, and task schedules. When
+// created, it starts a worker which receives tasks such as gc task, range
+// delete task, range snapshot load and so on, and starts a thread for
+// periodically schedule gc tasks.
+pub struct BgWorkManager {
+    worker: Worker,
+    scheduler: Scheduler<BackgroundTask>,
+    tick_stopper: Option<(JoinHandle<()>, Sender<bool>)>,
+}
+
+impl Drop for BgWorkManager {
     fn drop(&mut self) {
         let (h, tx) = self.tick_stopper.take().unwrap();
         let _ = tx.send(true);
@@ -65,7 +75,7 @@ impl Drop for BackgroundWork {
     }
 }
 
-impl BackgroundWork {
+impl BgWorkManager {
     pub fn new(core: Arc<ShardedLock<RangeCacheMemoryEngineCore>>, gc_interval: Duration) -> Self {
         let worker = Worker::new("range-cache-background-worker");
         let runner = BackgroundRunner::new(core.clone());
@@ -73,7 +83,7 @@ impl BackgroundWork {
 
         let scheduler_clone = scheduler.clone();
 
-        let (handle, tx) = BackgroundWork::start_tick(scheduler_clone, gc_interval);
+        let (handle, tx) = BgWorkManager::start_tick(scheduler_clone, gc_interval);
 
         Self {
             worker,
@@ -166,10 +176,10 @@ impl BackgroundRunner {
         Self { engine_core }
     }
 
-    fn ranges_to_gc(&self) -> BTreeSet<CacheRange> {
+    fn ranges_for_gc(&self) -> Vec<CacheRange> {
         let mut core = self.engine_core.write().unwrap();
-        let ranges: BTreeSet<CacheRange> = core.range_manager().ranges().keys().cloned().collect();
-        core.mut_range_manager().set_ranges_gcing(ranges.clone());
+        let ranges: Vec<CacheRange> = core.range_manager().ranges().keys().cloned().collect();
+        core.set_ranges_gcing(ranges.clone());
         ranges
     }
 
@@ -239,6 +249,7 @@ impl BackgroundRunner {
     fn gc_finished(&mut self) {
         let mut core = self.engine_core.write().unwrap();
         core.mut_range_manager().clear_ranges_gcing();
+        core.clear_ranges_gcing();
     }
 
     fn get_range_to_load(&self) -> Option<((CacheRange, Arc<RocksSnapshot>), SkiplistEngine)> {
@@ -283,7 +294,7 @@ impl Runnable for BackgroundRunner {
     fn run(&mut self, task: Self::Task) {
         match task {
             BackgroundTask::GcTask(t) => {
-                let ranges = self.ranges_to_gc();
+                let ranges = self.ranges_for_gc();
                 for range in ranges {
                     self.gc_range(&range, t.safe_point);
                 }

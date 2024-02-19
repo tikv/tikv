@@ -32,6 +32,9 @@ command! {
             /// The commit timestamp.
             commit_ts: txn_types::TimeStamp,
         }
+        in_heap => {
+            keys,
+        }
 }
 
 impl CommandExt for Commit {

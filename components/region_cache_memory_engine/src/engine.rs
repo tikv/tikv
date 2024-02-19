@@ -20,7 +20,7 @@ use engine_traits::{
 use skiplist_rs::{IterRef, Skiplist, MIB};
 
 use crate::{
-    background::{BackgroundTask, BackgroundWork},
+    background::{BackgroundTask, BgWorkManager},
     keys::{
         decode_key, encode_key_for_eviction, encode_seek_key, InternalKey, InternalKeyComparator,
         ValueType, VALUE_TYPE_FOR_SEEK, VALUE_TYPE_FOR_SEEK_FOR_PREV,
@@ -146,6 +146,8 @@ pub struct RangeCacheMemoryEngineCore {
     engine: SkiplistEngine,
     range_manager: RangeManager,
     pub(crate) cached_write_batch: BTreeMap<CacheRange, Vec<(u64, RangeCacheWriteBatchEntry)>>,
+    // ranges being gced
+    ranges_being_gced: Vec<CacheRange>,
 }
 
 impl RangeCacheMemoryEngineCore {
@@ -154,6 +156,7 @@ impl RangeCacheMemoryEngineCore {
             engine: SkiplistEngine::new(limiter),
             range_manager: RangeManager::default(),
             cached_write_batch: BTreeMap::default(),
+            ranges_being_gced: vec![],
         }
     }
 
@@ -174,6 +177,14 @@ impl RangeCacheMemoryEngineCore {
         cache_range: &CacheRange,
     ) -> Option<Vec<(u64, RangeCacheWriteBatchEntry)>> {
         self.cached_write_batch.remove(cache_range)
+    }
+
+    pub fn set_ranges_gcing(&mut self, ranges_being_gced: Vec<CacheRange>) {
+        self.ranges_being_gced = ranges_being_gced;
+    }
+
+    pub fn clear_ranges_gcing(&mut self) {
+        self.ranges_being_gced = vec![];
     }
 }
 
@@ -198,8 +209,8 @@ impl RangeCacheMemoryEngineCore {
 pub struct RangeCacheMemoryEngine {
     pub(crate) core: Arc<ShardedLock<RangeCacheMemoryEngineCore>>,
     memory_limiter: Arc<GlobalMemoryLimiter>,
-    background_work: Arc<BackgroundWork>,
     pub(crate) rocks_engine: Option<RocksEngine>,
+    bg_work_manager: Arc<BgWorkManager>,
 }
 
 impl RangeCacheMemoryEngine {
@@ -210,8 +221,8 @@ impl RangeCacheMemoryEngine {
         Self {
             core: core.clone(),
             memory_limiter: limiter,
-            background_work: Arc::new(BackgroundWork::new(core, gc_interval)),
             rocks_engine: None,
+            bg_work_manager: Arc::new(BgWorkManager::new(core, gc_interval)),
         }
     }
 
@@ -233,10 +244,6 @@ impl RangeCacheMemoryEngine {
         core.mut_range_manager().on_delete_range(range);
     }
 
-    pub fn background_worker(&self) -> &BackgroundWork {
-        &self.background_work
-    }
-
     pub(crate) fn handle_pending_load(&self) {
         let mut core = self.core.write().unwrap();
         let skiplist_engine = core.engine().clone();
@@ -250,7 +257,7 @@ impl RangeCacheMemoryEngine {
                 .map(|r| (r, rocks_snap.clone()))
                 .collect();
             if let Err(e) = self
-                .background_work
+                .background_worker()
                 .sechedule_task(BackgroundTask::LoadTask)
             {
                 // todo(SpadeA)
@@ -274,6 +281,10 @@ impl RangeCacheMemoryEngine {
             range_manager.set_safe_point(&range, 10);
             range_manager.set_range_readable(&range, true);
         }
+    }
+
+    pub fn background_worker(&self) -> &BgWorkManager {
+        &self.bg_work_manager
     }
 }
 
