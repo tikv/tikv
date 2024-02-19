@@ -3161,22 +3161,6 @@ def Scheduler() -> RowPanel:
                 ],
             ),
             graph_panel(
-                title="Scheduler writing bytes",
-                description="The total writing bytes of commands on each stage",
-                yaxes=yaxes(left_format=UNITS.BYTES_IEC),
-                targets=[
-                    target(
-                        expr=expr_sum(
-                            "tikv_scheduler_writing_bytes",
-                        ),
-                    ),
-                ],
-            ),
-        ]
-    )
-    layout.row(
-        [
-            graph_panel(
                 title="Scheduler priority commands",
                 description="The count of different priority commands",
                 yaxes=yaxes(left_format=UNITS.OPS_PER_SEC),
@@ -3189,15 +3173,67 @@ def Scheduler() -> RowPanel:
                     ),
                 ],
             ),
+        ]
+    )
+    layout.row(
+        [
             graph_panel(
                 title="Scheduler pending commands",
                 description="The count of pending commands per TiKV instance",
-                yaxes=yaxes(left_format=UNITS.OPS_PER_SEC),
+                yaxes=yaxes(left_format=UNITS.NONE_FORMAT),
                 targets=[
                     target(
                         expr=expr_sum(
                             "tikv_scheduler_contex_total",
                         ),
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="Scheduler running commands",
+                description="The count of running commands per TiKV instance",
+                yaxes=yaxes(left_format=UNITS.NONE_FORMAT),
+                targets=[
+                    target(
+                        expr=expr_sum(
+                            "tikv_scheduler_running_commands",
+                        ),
+                    ),
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel(
+                title="Scheduler writing bytes",
+                description="The total writing bytes of commands on each stage",
+                yaxes=yaxes(left_format=UNITS.BYTES_IEC),
+                targets=[
+                    target(
+                        expr=expr_sum(
+                            "tikv_scheduler_writing_bytes",
+                        ),
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="Scheduler memory quota",
+                description="The number of bytes used by scheduler",
+                yaxes=yaxes(left_format=UNITS.BYTES_IEC),
+                targets=[
+                    target(
+                        expr=expr_sum(
+                            "tikv_scheduler_memory_quota_size",
+                            label_selectors=['type="in_use"'],
+                        ),
+                    ),
+                    target(
+                        expr=expr_sum(
+                            "tikv_scheduler_memory_quota_size",
+                            label_selectors=['type="capacity"'],
+                        ),
+                        hide=True,
                     ),
                 ],
             ),
