@@ -405,6 +405,15 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
         RawChecksumResponse
     );
 
+    handle_request!(kv_flush, future_flush, FlushRequest, FlushResponse);
+
+    handle_request!(
+        kv_buffer_batch_get,
+        future_buffer_batch_get,
+        BufferBatchGetRequest,
+        BufferBatchGetResponse
+    );
+
     fn kv_import(&mut self, _: RpcContext<'_>, _: ImportRequest, _: UnarySink<ImportResponse>) {
         unimplemented!();
     }
@@ -1302,6 +1311,8 @@ fn handle_batch_commands_request<E: Engine, L: LockManager, F: KvFormat>(
         DeleteRange, future_delete_range(storage), kv_delete_range;
         PrepareFlashbackToVersion, future_prepare_flashback_to_version(storage.clone()), kv_prepare_flashback_to_version;
         FlashbackToVersion, future_flashback_to_version(storage.clone()), kv_flashback_to_version;
+        BufferBatchGet, future_buffer_batch_get(storage), kv_buffer_batch_get;
+        Flush, future_flush(storage), kv_flush;
         RawBatchGet, future_raw_batch_get(storage), raw_batch_get;
         RawPut, future_raw_put(storage), raw_put;
         RawBatchPut, future_raw_batch_put(storage), raw_batch_put;
@@ -1546,6 +1557,50 @@ fn future_batch_get<E: Engine, L: LockManager, F: KvFormat>(
                     let mut pair = KvPair::default();
                     pair.set_error(key_error);
                     resp.mut_pairs().push(pair);
+                }
+            }
+        }
+        GLOBAL_TRACKERS.remove(tracker);
+        Ok(resp)
+    }
+}
+
+fn future_buffer_batch_get<E: Engine, L: LockManager, F: KvFormat>(
+    storage: &Storage<E, L, F>,
+    mut req: BufferBatchGetRequest,
+) -> impl Future<Output = ServerResult<BufferBatchGetResponse>> {
+    let tracker = GLOBAL_TRACKERS.insert(Tracker::new(RequestInfo::new(
+        req.get_context(),
+        RequestType::KvBufferBatchGet,
+        req.get_version(),
+    )));
+    set_tls_tracker_token(tracker);
+    let start = Instant::now();
+    let keys = req.get_keys().iter().map(|x| Key::from_raw(x)).collect();
+    let v = storage.buffer_batch_get(req.take_context(), keys, req.get_version().into());
+
+    async move {
+        let v = v.await;
+        let duration = start.saturating_elapsed();
+        let mut resp = BufferBatchGetResponse::default();
+        if let Some(err) = extract_region_error(&v) {
+            resp.set_region_error(err);
+        } else {
+            match v {
+                Ok((kv_res, stats)) => {
+                    let pairs = map_kv_pairs(kv_res);
+                    let exec_detail_v2 = resp.mut_exec_details_v2();
+                    let scan_detail_v2 = exec_detail_v2.mut_scan_detail_v2();
+                    stats.stats.write_scan_detail(scan_detail_v2);
+                    GLOBAL_TRACKERS.with_tracker(tracker, |tracker| {
+                        tracker.write_scan_detail(scan_detail_v2);
+                    });
+                    set_time_detail(exec_detail_v2, duration, &stats.latency_stats);
+                    resp.set_pairs(pairs.into());
+                }
+                Err(e) => {
+                    let key_error = extract_key_error(&e);
+                    resp.set_error(key_error.clone());
                 }
             }
         }
@@ -2264,6 +2319,9 @@ txn_command_future!(future_mvcc_get_by_start_ts, MvccGetByStartTsRequest, MvccGe
         }
         Err(e) => resp.set_error(format!("{}", e)),
     }
+});
+txn_command_future!(future_flush, FlushRequest, FlushResponse, (v, resp) {
+    resp.set_errors(extract_key_errors(v).into());
 });
 
 pub mod batch_commands_response {
