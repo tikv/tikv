@@ -33,15 +33,10 @@ use raftstore::store::{SnapEntry, SnapKey, SnapManager, Snapshot};
 use security::SecurityManager;
 use tikv_kv::RaftExtension;
 use tikv_util::{
-<<<<<<< HEAD
-    config::{Tracker, VersionTrack},
-    time::Instant,
-=======
     box_err,
     config::{Tracker, VersionTrack, MIB},
-    time::{Instant, UnixSecs},
+    time::Instant,
     timer::GLOBAL_TIMER_HANDLE,
->>>>>>> 13ade79c6e (raftstore: add a timeout for sending snapshot (#16466))
     worker::Runnable,
     DeferContext,
 };
