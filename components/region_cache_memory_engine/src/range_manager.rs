@@ -212,7 +212,7 @@ impl RangeManager {
             .ranges
             .keys()
             .find(|&r| r.contains_range(evict_range))
-            .expect(format!("evict a range that does not contain: {:?}", evict_range).as_str())
+            .unwrap_or_else(|| panic!("evict a range that does not contain: {:?}", evict_range))
             .clone();
         let meta = self.ranges.remove(&range_key).unwrap();
         let (left_range, right_range) = range_key.split_off(evict_range);

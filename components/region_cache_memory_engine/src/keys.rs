@@ -181,9 +181,8 @@ impl KeyComparator for InternalKeyComparator {
 mod tests {
     use bytes::BufMut;
     use skiplist_rs::KeyComparator;
-    use txn_types::Key;
 
-    use super::{decode_key, InternalKeyComparator, ValueType};
+    use super::{InternalKeyComparator, ValueType};
     use crate::keys::encode_key;
 
     fn construct_key(i: u64, mvcc: u64) -> Vec<u8> {

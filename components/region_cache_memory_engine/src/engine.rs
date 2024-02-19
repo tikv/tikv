@@ -270,8 +270,7 @@ impl RangeCacheMemoryEngine {
         for range in ranges_with_snap_done {
             if let Some(write_batches) = core.take_cache_write_batch(&range) {
                 for (seq, entry) in write_batches {
-                    // todo
-                    if let Err(_) = entry.write_to_memory(&skiplist_engine, seq) {}
+                    entry.write_to_memory(&skiplist_engine, seq).unwrap();
                 }
             }
 
