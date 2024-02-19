@@ -10,6 +10,7 @@ use tracker::{get_tls_tracker_token, TrackerToken};
 use crate::storage::{
     kv::Statistics,
     lock_manager::LockManager,
+    metrics::*,
     txn::{
         commands::{Command, WriteContext, WriteResult},
         ProcessResult,
@@ -68,6 +69,9 @@ impl Task {
         if self.owned_quota.is_none() {
             let mut owned = OwnedAllocated::new(memory_quota);
             owned.alloc(self.cmd.approximate_heap_size())?;
+            SCHED_TXN_MEMORY_QUOTA
+                .in_use
+                .set(owned.source().in_use() as i64);
             self.owned_quota = Some(owned);
         }
         Ok(())

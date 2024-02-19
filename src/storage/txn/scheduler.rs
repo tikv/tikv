@@ -477,6 +477,10 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             memory_quota: Arc::new(MemoryQuota::new(config.memory_quota.0 as _)),
         });
 
+        SCHED_TXN_MEMORY_QUOTA
+            .capacity
+            .set(config.memory_quota.0 as i64);
+
         slow_log!(
             t.saturating_elapsed(),
             "initialized the transaction scheduler"
@@ -493,6 +497,15 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
 
     pub fn scale_pool_size(&self, pool_size: usize) {
         self.inner.scale_pool_size(pool_size)
+    }
+
+    pub fn memory_quota_capacity(&self) -> usize {
+        self.inner.memory_quota.capacity()
+    }
+
+    pub(in crate::storage) fn set_memory_quota_capacity(&self, cap: usize) {
+        SCHED_TXN_MEMORY_QUOTA.capacity.set(cap as i64);
+        self.inner.memory_quota.set_capacity(cap)
     }
 
     pub(in crate::storage) fn run_cmd(&self, cmd: Command, callback: StorageCallback) {
@@ -763,7 +776,12 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         // See https://github.com/rust-lang/rust/issues/59087
         let execution = execution.map(move |_| {
             memory_quota.free(execution_bytes);
+            SCHED_TXN_MEMORY_QUOTA
+                .in_use
+                .set(memory_quota.in_use() as i64);
+            SCHED_TXN_RUNNING_COMMANDS.dec();
         });
+        SCHED_TXN_RUNNING_COMMANDS.inc();
         self.get_sched_pool()
             .spawn(metadata, priority, execution)
             .unwrap();
@@ -880,8 +898,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                         do_wake_up = false;
                     } else {
                         panic!(
-                            "undetermined error: {:?} cid={}, tag={}, process
-                        result={:?}",
+                            "undetermined error: {:?} cid={}, tag={}, process result={:?}",
                             e, cid, tag, &pr
                         );
                     }
