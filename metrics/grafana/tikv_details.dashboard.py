@@ -3225,13 +3225,13 @@ def Scheduler() -> RowPanel:
                     target(
                         expr=expr_sum(
                             "tikv_scheduler_memory_quota_size",
-                            label_selectors=['type="used"'],
+                            label_selectors=['type="in_use"'],
                         ),
                     ),
                     target(
                         expr=expr_sum(
                             "tikv_scheduler_memory_quota_size",
-                            label_selectors=['type="allocated"'],
+                            label_selectors=['type="capacity"'],
                         ),
                         hide=True,
                     ),

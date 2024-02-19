@@ -478,7 +478,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         });
 
         SCHED_TXN_MEMORY_QUOTA
-            .allocated
+            .capacity
             .set(config.memory_quota.0 as i64);
 
         slow_log!(
@@ -504,7 +504,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
     }
 
     pub(in crate::storage) fn set_memory_quota_capacity(&self, cap: usize) {
-        SCHED_TXN_MEMORY_QUOTA.allocated.set(cap as i64);
+        SCHED_TXN_MEMORY_QUOTA.capacity.set(cap as i64);
         self.inner.memory_quota.set_capacity(cap)
     }
 
@@ -780,7 +780,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         let execution = execution.map(move |_| {
             memory_quota.free(execution_bytes);
             SCHED_TXN_MEMORY_QUOTA
-                .used
+                .in_use
                 .set(memory_quota.in_use() as i64);
             SCHED_TXN_RUNNING_COMMANDS.dec();
         });

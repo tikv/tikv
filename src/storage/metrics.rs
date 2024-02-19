@@ -381,8 +381,8 @@ make_static_metric! {
 
     pub struct MemoryQuotaGauge: IntGauge {
         "type" =>  {
-            used,
-            allocated,
+            in_use,
+            capacity,
         }
     }
 }
