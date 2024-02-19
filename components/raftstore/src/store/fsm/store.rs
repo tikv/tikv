@@ -2826,7 +2826,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         );
         // If the store already pass the check, it should clear the
         // `completed_apply_peers_count` to skip the check next time.
-        if !busy_on_apply {
+        if !busy_on_apply && completed_apply_peers_count.is_some() {
             let mut meta = self.ctx.store_meta.lock().unwrap();
             meta.completed_apply_peers_count = None;
         }
