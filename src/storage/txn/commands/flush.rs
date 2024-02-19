@@ -32,6 +32,10 @@ command! {
             lock_ttl: u64,
             assertion_level: AssertionLevel,
         }
+        in_heap => {
+            mutations,
+            primary,
+        }
 }
 
 impl CommandExt for Flush {

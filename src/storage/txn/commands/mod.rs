@@ -852,6 +852,7 @@ impl HeapSize for Command {
                 Command::RawAtomicStore(t) => t.approximate_heap_size(),
                 Command::FlashbackToVersionReadPhase(t) => t.approximate_heap_size(),
                 Command::FlashbackToVersion(t) => t.approximate_heap_size(),
+                Command::Flush(t) => t.approximate_heap_size(),
             }
     }
 }
