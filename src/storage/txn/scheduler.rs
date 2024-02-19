@@ -491,6 +491,10 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             txn_status_cache: TxnStatusCache::new(config.txn_status_cache_capacity),
         });
 
+        SCHED_TXN_MEMORY_QUOTA
+            .capacity
+            .set(config.memory_quota.0 as i64);
+
         slow_log!(
             t.saturating_elapsed(),
             "initialized the transaction scheduler"
@@ -507,6 +511,15 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
 
     pub fn scale_pool_size(&self, pool_size: usize) {
         self.inner.scale_pool_size(pool_size)
+    }
+
+    pub fn memory_quota_capacity(&self) -> usize {
+        self.inner.memory_quota.capacity()
+    }
+
+    pub(in crate::storage) fn set_memory_quota_capacity(&self, cap: usize) {
+        SCHED_TXN_MEMORY_QUOTA.capacity.set(cap as i64);
+        self.inner.memory_quota.set_capacity(cap)
     }
 
     pub(in crate::storage) fn run_cmd(&self, cmd: Command, callback: StorageCallback) {
@@ -690,6 +703,79 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         let sched = self.clone();
         let metadata = TaskMetadata::from_ctx(task.cmd.resource_control_ctx());
 
+<<<<<<< HEAD
+=======
+            let tag = task.cmd().tag();
+            SCHED_STAGE_COUNTER_VEC.get(tag).snapshot.inc();
+
+            let mut snap_ctx = SnapContext {
+                pb_ctx: task.cmd().ctx(),
+                ..Default::default()
+            };
+            if matches!(
+                task.cmd(),
+                Command::FlashbackToVersionReadPhase { .. } | Command::FlashbackToVersion { .. }
+            ) {
+                snap_ctx.allowed_in_flashback = true;
+            }
+            // The program is currently in scheduler worker threads.
+            // Safety: `self.inner.worker_pool` should ensure that a TLS engine exists.
+            match unsafe { with_tls_engine(|engine: &mut E| kv::snapshot(engine, snap_ctx)) }.await
+            {
+                Ok(snapshot) => {
+                    SCHED_STAGE_COUNTER_VEC.get(tag).snapshot_ok.inc();
+                    let term = snapshot.ext().get_term();
+                    let extra_op = snapshot.ext().get_txn_extra_op();
+                    if !sched
+                        .inner
+                        .get_task_slot(task.cid())
+                        .get(&task.cid())
+                        .unwrap()
+                        .try_own()
+                    {
+                        sched.finish_with_err(
+                            task.cid(),
+                            StorageErrorInner::DeadlineExceeded,
+                            None,
+                        );
+                        return;
+                    }
+
+                    if let Some(term) = term {
+                        task.cmd_mut().ctx_mut().set_term(term.get());
+                    }
+                    task.set_extra_op(extra_op);
+
+                    debug!(
+                        "process cmd with snapshot";
+                        "cid" => task.cid(), "term" => ?term, "extra_op" => ?extra_op,
+                        "tracker" => ?task.tracker()
+                    );
+                    sched.process(snapshot, task).await;
+                }
+                Err(err) => {
+                    SCHED_STAGE_COUNTER_VEC.get(tag).snapshot_err.inc();
+
+                    info!("get snapshot failed"; "cid" => task.cid(), "err" => ?err);
+                    sched.finish_with_err(task.cid(), Error::from(err), None);
+                }
+            }
+        };
+        let execution_bytes = std::mem::size_of_val(&execution);
+        let memory_quota = self.inner.memory_quota.clone();
+        memory_quota.alloc_force(execution_bytes);
+        // NB: Prefer FutureExt::map to async block, because an async block
+        // doubles memory usage.
+        // See https://github.com/rust-lang/rust/issues/59087
+        let execution = execution.map(move |_| {
+            memory_quota.free(execution_bytes);
+            SCHED_TXN_MEMORY_QUOTA
+                .in_use
+                .set(memory_quota.in_use() as i64);
+            SCHED_TXN_RUNNING_COMMANDS.dec();
+        });
+        SCHED_TXN_RUNNING_COMMANDS.inc();
+>>>>>>> c7e403dc9e (storage: add memory quota metrics (#16482))
         self.get_sched_pool()
             .spawn(metadata, task.cmd.priority(), async move {
                 fail_point!("scheduler_start_execute");
@@ -868,8 +954,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                         do_wake_up = false;
                     } else {
                         panic!(
-                            "undetermined error: {:?} cid={}, tag={}, process
-                        result={:?}",
+                            "undetermined error: {:?} cid={}, tag={}, process result={:?}",
                             e, cid, tag, &pr
                         );
                     }

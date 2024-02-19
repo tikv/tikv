@@ -85,6 +85,10 @@ pub struct Config {
     pub ttl_check_poll_interval: ReadableDuration,
     #[online_config(skip)]
     pub txn_status_cache_capacity: usize,
+<<<<<<< HEAD
+=======
+    pub memory_quota: ReadableSize,
+>>>>>>> c7e403dc9e (storage: add memory quota metrics (#16482))
     #[online_config(submodule)]
     pub flow_control: FlowControlConfig,
     #[online_config(submodule)]
