@@ -129,6 +129,8 @@ impl<EK: KvEngine> Mutable for HybridEngineWriteBatch<EK> {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use engine_traits::{
         CacheRange, KvEngine, Mutable, Peekable, SnapshotContext, WriteBatch, WriteBatchExt,
     };
@@ -139,16 +141,17 @@ mod tests {
     fn test_write_to_both_engines() {
         let range = CacheRange::new(b"".to_vec(), b"z".to_vec());
         let range_clone = range.clone();
-        let (_path, hybrid_engine) = hybrid_engine_for_tests("temp", move |memory_engine| {
-            memory_engine.new_range(range_clone.clone());
-            {
-                let mut core = memory_engine.core().write().unwrap();
-                core.mut_range_manager()
-                    .set_range_readable(&range_clone, true);
-                core.mut_range_manager().set_safe_ts(&range_clone, 5);
-            }
-        })
-        .unwrap();
+        let (_path, hybrid_engine) =
+            hybrid_engine_for_tests("temp", Duration::from_secs(1000), move |memory_engine| {
+                memory_engine.new_range(range_clone.clone());
+                {
+                    let mut core = memory_engine.core().write().unwrap();
+                    core.mut_range_manager()
+                        .set_range_readable(&range_clone, true);
+                    core.mut_range_manager().set_safe_ts(&range_clone, 5);
+                }
+            })
+            .unwrap();
         let mut write_batch = hybrid_engine.write_batch();
         write_batch.put(b"hello", b"world").unwrap();
         let seq = write_batch.write().unwrap();
@@ -175,16 +178,17 @@ mod tests {
 
     #[test]
     fn test_range_cache_memory_engine() {
-        let (_path, hybrid_engine) = hybrid_engine_for_tests("temp", |memory_engine| {
-            let range = CacheRange::new(b"k00".to_vec(), b"k10".to_vec());
-            memory_engine.new_range(range.clone());
-            {
-                let mut core = memory_engine.core().write().unwrap();
-                core.mut_range_manager().set_range_readable(&range, true);
-                core.mut_range_manager().set_safe_ts(&range, 10);
-            }
-        })
-        .unwrap();
+        let (_path, hybrid_engine) =
+            hybrid_engine_for_tests("temp", Duration::from_secs(1000), |memory_engine| {
+                let range = CacheRange::new(b"k00".to_vec(), b"k10".to_vec());
+                memory_engine.new_range(range.clone());
+                {
+                    let mut core = memory_engine.core().write().unwrap();
+                    core.mut_range_manager().set_range_readable(&range, true);
+                    core.mut_range_manager().set_safe_ts(&range, 10);
+                }
+            })
+            .unwrap();
 
         let mut write_batch = hybrid_engine.write_batch();
         write_batch
