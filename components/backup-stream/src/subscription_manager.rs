@@ -543,7 +543,7 @@ where
         let tx = tx.unwrap();
         // tikv_util::Instant cannot be converted to std::time::Instant :(
         let start = std::time::Instant::now();
-        info!("Scheduing subscription."; utils::slog_region(&region), "after" => ?backoff, "handle" => ?handle);
+        debug!("Scheduing subscription."; utils::slog_region(&region), "after" => ?backoff, "handle" => ?handle);
         let scheduled = async move {
             tokio::time::sleep_until((start + backoff).into()).await;
             let handle = handle.unwrap_or_else(|| ObserveHandle::new());
