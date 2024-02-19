@@ -93,7 +93,7 @@ make format
 make clippy
 ```
 
-See the [style doc](https://github.com/rust-lang/fmt-rfcs/blob/master/guide/guide.md) and the [API guidelines](https://rust-lang-nursery.github.io/api-guidelines/) for details on the conventions.
+See the [style doc](https://github.com/rust-lang/rust/tree/HEAD/src/doc/style-guide/src) and the [API guidelines](https://rust-lang-nursery.github.io/api-guidelines/) for details on the conventions.
 
 Please follow this style to make TiKV easy to review, maintain, and develop.
 
