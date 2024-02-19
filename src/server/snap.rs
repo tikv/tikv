@@ -54,13 +54,12 @@ pub type Callback = Box<dyn FnOnce(Result<()>) + Send>;
 
 pub const DEFAULT_POOL_SIZE: usize = 4;
 
-// the max duration before a snapshot send task is canceled.
+// the default duration before a snapshot sending task is canceled.
 const SNAP_SEND_TIMEOUT_DURATION: Duration = Duration::from_secs(600);
 // the minimum expected send speed for sending snapshot, this is used to avoid
 // timeout too early when the snapshot size is too big.
 const MIN_SNAP_SEND_SPEED: u64 = MIB;
 
-///
 #[inline]
 fn get_snap_timeout(size: u64) -> Duration {
     let timeout = (|| {
