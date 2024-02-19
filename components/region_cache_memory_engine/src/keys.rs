@@ -227,22 +227,4 @@ mod tests {
         let key2 = encode_key(&k, u64::MAX, ValueType::Value);
         assert!(c.compare_key(&key1, &key2).is_le());
     }
-
-    #[test]
-    fn test_x() {
-        let key = format!("key-{:04}", 1);
-        let encoded_key = Key::from_raw(key.as_bytes())
-            .append_ts(10.into())
-            .into_encoded();
-
-        let k = Key::from_encoded(encoded_key.to_vec());
-        let t = k.decode_ts().unwrap();
-        let k1 = k.to_raw();
-        println!("{:?}, {:?}", k.as_encoded(), t);
-        println!("{:?} ", k1);
-
-        let k = encode_key(key.as_bytes(), 1000, ValueType::Value);
-        let internal_key = decode_key(&k);
-        println!("{:?}", internal_key.user_key);
-    }
 }

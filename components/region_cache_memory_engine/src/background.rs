@@ -49,13 +49,6 @@ fn parse_write(value: &[u8]) -> Result<WriteRef<'_>, String> {
     }
 }
 
-pub struct BackgroundWork {
-    worker: Worker,
-    scheduler: Scheduler<BackgroundTask>,
-
-    tick_stopper: Option<(JoinHandle<()>, Sender<bool>)>,
-}
-
 // BgWorkManager managers the worker inits, stops, and task schedules. When
 // created, it starts a worker which receives tasks such as gc task, range
 // delete task, range snapshot load and so on, and starts a thread for
