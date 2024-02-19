@@ -117,7 +117,7 @@ impl RangeManager {
             if meta.safe_point > safe_ts {
                 return false;
             }
-            meta.safe_point = safe_ts;
+            meta.set_safe_point(safe_ts);
             true
         } else {
             false

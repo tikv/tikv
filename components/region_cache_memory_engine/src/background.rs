@@ -3,13 +3,16 @@
 use core::slice::SlicePattern;
 use std::{collections::BTreeSet, fmt::Display, sync::Arc, thread::JoinHandle, time::Duration};
 
+use bytes::Bytes;
 use crossbeam::{
     channel::{bounded, tick, Sender},
     select,
     sync::ShardedLock,
 };
 use engine_rocks::RocksSnapshot;
-use engine_traits::{CacheRange, IterOptions, Iterable, Iterator, CF_DEFAULT, CF_WRITE, DATA_CFS};
+use engine_traits::{
+    CacheRange, IterOptions, Iterable, Iterator, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS,
+};
 use skiplist_rs::Skiplist;
 use slog_global::{error, info, warn};
 use tikv_util::{
@@ -94,9 +97,18 @@ impl BackgroundWork {
         gc_interval: Duration,
     ) -> (JoinHandle<()>, Sender<bool>) {
         let (tx, rx) = bounded(0);
+        let lock_clear_interval = Duration::from_secs(60);
         let h = std::thread::spawn(move || {
             loop {
                 select! {
+                    recv(tick(lock_clear_interval)) -> _ => {
+                        if let Err(e) = scheduler.schedule(BackgroundTask::ClearTombstone) {
+                            error!(
+                                "schedule range cache engine gc failed";
+                                "err" => ?e,
+                            );
+                        }
+                    }
                     recv(tick(gc_interval)) -> _ => {
                         if scheduler.is_busy() {
                             info!(
@@ -106,6 +118,7 @@ impl BackgroundWork {
                         }
 
                         let safe_point = TimeStamp::physical_now() - gc_interval.as_millis() as u64;
+                        let safe_point = TimeStamp::compose(safe_point, 0).into_inner();
                         if let Err(e) = scheduler.schedule(BackgroundTask::GcTask(GcTask {safe_point})) {
                             error!(
                                 "schedule range cache engine gc failed";
@@ -132,6 +145,7 @@ impl BackgroundWork {
 #[derive(Debug)]
 pub enum BackgroundTask {
     GcTask(GcTask),
+    ClearTombstone,
     LoadTask,
 }
 
@@ -145,6 +159,7 @@ impl Display for BackgroundTask {
         match self {
             BackgroundTask::GcTask(ref t) => t.fmt(f),
             BackgroundTask::LoadTask => f.debug_struct("LoadTask").finish(),
+            BackgroundTask::ClearTombstone => f.debug_struct("ClearTombstone").finish(),
         }
     }
 }
@@ -164,6 +179,59 @@ pub struct BackgroundRunner {
 impl BackgroundRunner {
     pub fn new(engine_core: Arc<ShardedLock<RangeCacheMemoryEngineCore>>) -> Self {
         Self { engine_core }
+    }
+
+    fn clear_tombstone_for_lock_cf(&self, range: &CacheRange) {
+        let lock_handle = {
+            let core = self.engine_core.write().unwrap();
+            core.engine().cf_handle(CF_LOCK)
+        };
+        let mut iter = lock_handle.iter();
+        let mut prev_key = vec![];
+        let mut remove_older = false;
+        let mut cached_removed: Option<Bytes> = None;
+        let mut removed = 0;
+        let mut total = 0;
+        iter.seek_to_first();
+        while iter.valid() {
+            total += 1;
+            let k = iter.key();
+            let InternalKey {
+                user_key, v_type, ..
+            } = decode_key(k);
+            if prev_key != user_key {
+                if let Some(cached_remove) = cached_removed.take() {
+                    lock_handle.remove(cached_remove.as_slice());
+                    removed += 1;
+                }
+                remove_older = false;
+                prev_key.extend_from_slice(user_key);
+                if v_type == ValueType::Deletion {
+                    cached_removed = Some(k.clone());
+                    remove_older = true;
+                    iter.next();
+                    continue;
+                }
+            }
+            let remove = remove_older;
+            if v_type == ValueType::Deletion {
+                remove_older = true;
+            }
+            if remove {
+                removed += 1;
+                lock_handle.remove(k);
+            }
+            iter.next();
+        }
+        if let Some(cached_remove) = cached_removed.take() {
+            removed += 1;
+            lock_handle.remove(cached_remove.as_slice());
+        }
+        info!(
+            "clear tombstone lock cf";
+            "total" => total,
+            "removed" => removed,
+        );
     }
 
     fn ranges_to_gc(&self) -> BTreeSet<CacheRange> {
@@ -288,6 +356,15 @@ impl Runnable for BackgroundRunner {
                     self.gc_range(&range, t.safe_point);
                 }
                 self.gc_finished();
+            }
+            BackgroundTask::ClearTombstone => {
+                let ranges: Vec<_> = {
+                    let core = self.engine_core.write().unwrap();
+                    core.range_manager().ranges().keys().cloned().collect()
+                };
+                for range in ranges {
+                    self.clear_tombstone_for_lock_cf(&range);
+                }
             }
             BackgroundTask::LoadTask => {
                 if let Some(((range, snap), skiplist_engine)) = self.get_range_to_load() {

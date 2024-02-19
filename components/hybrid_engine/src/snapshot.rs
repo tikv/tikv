@@ -6,8 +6,8 @@ use std::{
 };
 
 use engine_traits::{
-    CfNamesExt, DbVector, IterOptions, Iterable, KvEngine, Peekable, RangeCacheEngine, ReadOptions,
-    Result, Snapshot, SnapshotMiscExt, CF_DEFAULT,
+    is_data_cf, CfNamesExt, DbVector, IterOptions, Iterable, KvEngine, Peekable, RangeCacheEngine,
+    ReadOptions, Result, Snapshot, SnapshotMiscExt, CF_DEFAULT,
 };
 
 use crate::engine_iterator::HybridEngineIterator;
@@ -71,7 +71,15 @@ where
     type Iterator = HybridEngineIterator<EK, EC>;
 
     fn iterator_opt(&self, cf: &str, opts: IterOptions) -> Result<Self::Iterator> {
-        unimplemented!()
+        if let Some(ref snap) = self.region_cache_snap {
+            Ok(HybridEngineIterator::region_cache_engine_iterator(
+                snap.iterator_opt(cf, opts)?,
+            ))
+        } else {
+            Ok(HybridEngineIterator::disk_engine_iterator(
+                self.disk_snap.iterator_opt(cf, opts)?,
+            ))
+        }
     }
 }
 
@@ -117,18 +125,17 @@ where
         cf: &str,
         key: &[u8],
     ) -> Result<Option<Self::DbVector>> {
-        self.region_cache_snap.as_ref().map_or_else(
-            || {
-                self.disk_snap
-                    .get_value_cf_opt(opts, cf, key)
-                    .map(|r| r.map(|e| HybridDbVector(Box::new(e))))
-            },
-            |cache_snapshot| {
-                cache_snapshot
-                    .get_value_cf_opt(opts, cf, key)
-                    .map(|r| r.map(|e| HybridDbVector(Box::new(e))))
-            },
-        )
+        if let Some(ref region_cache_snap) = self.region_cache_snap
+            && is_data_cf(cf)
+        {
+            region_cache_snap
+                .get_value_cf_opt(opts, cf, key)
+                .map(|r| r.map(|e| HybridDbVector(Box::new(e))))
+        } else {
+            self.disk_snap
+                .get_value_cf_opt(opts, cf, key)
+                .map(|r| r.map(|e| HybridDbVector(Box::new(e))))
+        }
     }
 }
 

@@ -17,7 +17,9 @@ use engine_traits::{
     RangeCacheEngine, ReadOptions, Result, Snapshot, SnapshotMiscExt, CF_DEFAULT, CF_LOCK,
     CF_WRITE,
 };
+use kvproto::metapb;
 use skiplist_rs::{IterRef, Skiplist, MIB};
+use tikv_util::store::new_peer;
 
 use crate::{
     background::{BackgroundTask, BackgroundWork},
@@ -150,9 +152,16 @@ pub struct RangeCacheMemoryEngineCore {
 
 impl RangeCacheMemoryEngineCore {
     pub fn new(limiter: Arc<GlobalMemoryLimiter>) -> RangeCacheMemoryEngineCore {
+        let mut range_manager = RangeManager::default();
+        let mut r = metapb::Region::default();
+        let p = new_peer(1, 1);
+        r.set_peers(vec![p].into());
+        let range = CacheRange::from_region(&r);
+        range_manager.new_range(range.clone());
+        range_manager.set_range_readable(&range, true);
         RangeCacheMemoryEngineCore {
             engine: SkiplistEngine::new(limiter),
-            range_manager: RangeManager::default(),
+            range_manager,
             cached_write_batch: BTreeMap::default(),
         }
     }

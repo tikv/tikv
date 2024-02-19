@@ -237,21 +237,11 @@ pub fn run_tikv(
                 )
             }
         } else {
-            if cfg!(feature = "memory-engine")
-                && config.region_cache_memory_limit != ReadableSize(0)
-            {
-                run_impl::<HybridEngine<RocksEngine, RangeCacheMemoryEngine>, RaftLogEngine, API>(
-                    config,
-                    service_event_tx,
-                    service_event_rx,
-                )
-            } else {
-                run_impl::<RocksEngine, RaftLogEngine, API>(
-                    config,
-                    service_event_tx,
-                    service_event_rx,
-                )
-            }
+            run_impl::<HybridEngine<RocksEngine, RangeCacheMemoryEngine>, RaftLogEngine, API>(
+                config,
+                service_event_tx,
+                service_event_rx,
+            )
         }
     })
 }

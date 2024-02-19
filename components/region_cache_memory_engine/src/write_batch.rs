@@ -1,3 +1,4 @@
+
 use bytes::Bytes;
 use engine_traits::{Mutable, Result, WriteBatch, WriteBatchExt, WriteOptions, CF_DEFAULT};
 use tikv_util::box_err;
@@ -51,7 +52,7 @@ impl RangeCacheWriteBatch {
     /// prior to writing the batch.
     pub fn set_sequence_number(&mut self, seq: u64) -> Result<()> {
         if let Some(seqno) = self.sequence_number {
-            return Err(box_err!("Sequence number {} already set", seqno));
+            return Err(box_err!("Sequence number {} already set, want to set {}", seqno, seq));
         };
         self.sequence_number = Some(seq);
         Ok(())
