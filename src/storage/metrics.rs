@@ -370,6 +370,23 @@ make_static_metric! {
             keys,
         },
     }
+<<<<<<< HEAD
+=======
+
+    pub struct TxnStatusCacheSizeGauge: IntGauge {
+        "type" =>  {
+            used,
+            allocated,
+        }
+    }
+
+    pub struct MemoryQuotaGauge: IntGauge {
+        "type" =>  {
+            in_use,
+            capacity,
+        }
+    }
+>>>>>>> c7e403dc9e (storage: add memory quota metrics (#16482))
 }
 
 lazy_static! {
@@ -601,4 +618,29 @@ lazy_static! {
         exponential_buckets(1.0, 2.0, 16).unwrap()
     )
     .unwrap();
+<<<<<<< HEAD
+=======
+
+    pub static ref SCHED_TXN_STATUS_CACHE_SIZE: TxnStatusCacheSizeGauge = register_static_int_gauge_vec!(
+        TxnStatusCacheSizeGauge,
+        "tikv_scheduler_txn_status_cache_size",
+        "Statistics of size and capacity of txn status cache (represented in count of entries)",
+        &["type"]
+    )
+    .unwrap();
+
+    pub static ref SCHED_TXN_MEMORY_QUOTA: MemoryQuotaGauge = register_static_int_gauge_vec!(
+        MemoryQuotaGauge,
+        "tikv_scheduler_memory_quota_size",
+        "Statistics of in_use and capacity of scheduler memory quota",
+        &["type"]
+    )
+    .unwrap();
+
+    pub static ref SCHED_TXN_RUNNING_COMMANDS: IntGauge = register_int_gauge!(
+        "tikv_scheduler_running_commands",
+        "The count of running scheduler commands"
+    )
+    .unwrap();
+>>>>>>> c7e403dc9e (storage: add memory quota metrics (#16482))
 }

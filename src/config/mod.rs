@@ -5211,6 +5211,33 @@ mod tests {
     }
 
     #[test]
+    fn test_change_store_scheduler_memory_quota() {
+        let (mut cfg, _dir) = TikvConfig::with_tmp().unwrap();
+        cfg.storage.memory_quota = ReadableSize::mb(100);
+        cfg.storage.scheduler_pending_write_threshold = ReadableSize::mb(10);
+        cfg.validate().unwrap();
+        let (storage, cfg_controller, ..) = new_engines::<ApiV1>(cfg.clone());
+        let scheduler = storage.get_scheduler();
+
+        let check_scheduler_memory_quota = |size: &str, expected: Option<usize>| {
+            let res = cfg_controller.update_config("storage.memory-quota", size);
+            let Some(expected_size) = expected else {
+                res.unwrap_err();
+                return;
+            };
+            assert_eq!(scheduler.memory_quota_capacity(), expected_size);
+        };
+
+        check_scheduler_memory_quota("11h", None);
+        check_scheduler_memory_quota(
+            "0B",
+            Some(cfg.storage.scheduler_pending_write_threshold.0 as usize),
+        );
+        check_scheduler_memory_quota("11MB", Some(ReadableSize::mb(11).0 as usize));
+        check_scheduler_memory_quota("111MB", Some(ReadableSize::mb(111).0 as usize));
+    }
+
+    #[test]
     fn test_change_quota_config() {
         let (mut cfg, _dir) = TikvConfig::with_tmp().unwrap();
         cfg.quota.foreground_cpu_time = 1000;
