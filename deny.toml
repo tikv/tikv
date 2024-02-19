@@ -7,12 +7,12 @@ deny = [
     # Hash functions
     # We allow md5 for AWS S3 object lock feature which requires
     # computting object's md5.
-    { name = "md5" , wrappers = [ "aws" ] },
+    { name = "md5", wrappers = ["aws"] },
     { name = "md-5" },
     { name = "sha1" },
     { name = "sha-1" },
     # We allow sha2 for oauth2 crate, because it does use sha2 in TiKV use case.
-    { name = "sha2", wrappers = [ "oauth2" ] },
+    { name = "sha2", wrappers = ["oauth2"] },
     { name = "sha3" },
     # Symmetric encryption
     { name = "aes" },
@@ -34,7 +34,7 @@ deny = [
     # Ban trait crates from RustCrypto.
     { name = "aead" },
     { name = "cipher" },
-    { name = "digest", wrappers = [ "sha2" ] },
+    { name = "digest", wrappers = ["sha2"] },
     { name = "password-hash" },
     { name = "signature" },
 ]
@@ -97,7 +97,6 @@ exceptions = [
     # which is licensed under Unicode-DFS-2016.
     # See https://github.com/dtolnay/unicode-ident/pull/4
     { name = "unicode-ident", allow = ["Unicode-DFS-2016"] },
-
     # Allow licenses in Category B explicitly, make their usage more prominent.
     { name = "slog-json", allow = ["MPL-2.0"] },
     { name = "smartstring", allow = ["MPL-2.0"] },

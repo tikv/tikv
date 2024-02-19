@@ -3050,3 +3050,276 @@ fn test_pessimistic_rollback_with_read_first() {
         );
     }
 }
+
+#[test_case(test_raftstore::must_new_cluster_and_kv_client)]
+#[test_case(test_raftstore_v2::must_new_cluster_and_kv_client)]
+fn test_pipelined_dml_flush() {
+    let (_cluster, client, ctx) = new_cluster();
+    let (k, v) = (b"key".to_vec(), b"value".to_vec());
+    let pk = b"primary".to_vec();
+    let mut flush_req = FlushRequest::default();
+    flush_req.set_mutations(
+        vec![
+            Mutation {
+                op: Op::Put,
+                key: pk.clone(),
+                value: v.clone(),
+                ..Default::default()
+            },
+            Mutation {
+                op: Op::Put,
+                key: k.clone(),
+                value: v.clone(),
+                ..Default::default()
+            },
+        ]
+        .into(),
+    );
+    flush_req.set_context(ctx.clone());
+    flush_req.set_start_ts(1);
+    flush_req.set_primary_key(pk.clone());
+    let flush_resp = client.kv_flush(&flush_req).unwrap();
+    assert!(!flush_resp.has_region_error());
+    assert!(flush_resp.get_errors().is_empty());
+
+    let mut batch_get_req = BufferBatchGetRequest::default();
+    batch_get_req.set_context(ctx.clone());
+    batch_get_req.set_keys(vec![k.clone()].into());
+    batch_get_req.set_version(1);
+    let batch_get_resp = client.kv_buffer_batch_get(&batch_get_req).unwrap();
+    assert!(!batch_get_resp.has_region_error());
+    let pairs = batch_get_resp.get_pairs();
+    assert_eq!(pairs.len(), 1);
+    assert!(!pairs[0].has_error());
+    assert_eq!(pairs[0].get_key(), k.as_slice());
+    assert_eq!(pairs[0].get_value(), v.as_slice());
+
+    let mut commit_req = CommitRequest::default();
+    commit_req.set_context(ctx.clone());
+    commit_req.set_start_version(1);
+    commit_req.set_commit_version(2);
+    commit_req.set_keys(vec![pk.clone(), k.clone()].into());
+    let commit_resp = client.kv_commit(&commit_req).unwrap();
+    assert!(!commit_resp.has_region_error());
+    assert!(!commit_resp.has_error(), "{:?}", commit_resp.get_error());
+
+    let mut get_req = GetRequest::default();
+    get_req.set_context(ctx);
+    get_req.set_key(k);
+    get_req.set_version(10);
+    let get_resp = client.kv_get(&get_req).unwrap();
+    assert!(!get_resp.has_region_error());
+    assert!(
+        !get_resp.has_error(),
+        "get error {:?}",
+        get_resp.get_error()
+    );
+    assert_eq!(get_resp.get_value(), v);
+}
+
+#[test_case(test_raftstore::must_new_cluster_and_kv_client)]
+#[test_case(test_raftstore_v2::must_new_cluster_and_kv_client)]
+fn test_pipelined_dml_write_conflict() {
+    let (_cluster, client, ctx) = new_cluster();
+    let (k, v) = (b"key".to_vec(), b"value".to_vec());
+
+    // flush x flush
+    let mut req = FlushRequest::default();
+    req.set_mutations(
+        vec![Mutation {
+            op: Op::Put,
+            key: k.clone(),
+            value: v.clone(),
+            ..Default::default()
+        }]
+        .into(),
+    );
+    req.set_context(ctx.clone());
+    req.set_start_ts(1);
+    req.set_primary_key(k.clone());
+    let flush_resp = client.kv_flush(&req).unwrap();
+    assert!(!flush_resp.has_region_error());
+    assert!(flush_resp.get_errors().is_empty());
+
+    // another conflicting flush should return error
+    let mut req = req.clone();
+    req.set_start_ts(2);
+    let resp = client.kv_flush(&req).unwrap();
+    assert!(!resp.has_region_error());
+    assert!(resp.get_errors().first().unwrap().has_locked());
+
+    // flush x prerwite
+    let mut req = PrewriteRequest::default();
+    req.set_context(ctx.clone());
+    req.set_mutations(
+        vec![Mutation {
+            op: Op::Put,
+            key: k.clone(),
+            value: v.clone(),
+            ..Default::default()
+        }]
+        .into(),
+    );
+    req.set_start_version(2);
+    req.set_primary_lock(k.clone());
+    let resp = client.kv_prewrite(&req).unwrap();
+    assert!(!resp.has_region_error());
+    assert!(resp.errors.first().unwrap().has_locked());
+
+    // flush x pessimistic lock
+    let mut req = PessimisticLockRequest::default();
+    req.set_context(ctx.clone());
+    req.set_primary_lock(k.clone());
+    req.set_start_version(2);
+    req.set_for_update_ts(2);
+    req.set_mutations(
+        vec![Mutation {
+            op: Op::PessimisticLock,
+            key: k.clone(),
+            value: [].into(),
+            ..Default::default()
+        }]
+        .into(),
+    );
+    let resp = client.kv_pessimistic_lock(&req).unwrap();
+    assert!(!resp.has_region_error());
+    assert!(resp.get_errors().first().unwrap().has_locked());
+
+    // prewrite x flush
+    let k = b"key2".to_vec();
+    let mut prewrite_req = PrewriteRequest::default();
+    prewrite_req.set_context(ctx.clone());
+    prewrite_req.set_mutations(
+        vec![Mutation {
+            op: Op::Put,
+            key: k.clone(),
+            value: v.clone(),
+            ..Default::default()
+        }]
+        .into(),
+    );
+    prewrite_req.set_start_version(1);
+    prewrite_req.set_primary_lock(k.clone());
+    let resp = client.kv_prewrite(&prewrite_req).unwrap();
+    assert!(!resp.has_region_error());
+    assert!(resp.errors.is_empty());
+
+    let mut req = FlushRequest::default();
+    req.set_mutations(
+        vec![Mutation {
+            op: Op::Put,
+            key: k.clone(),
+            value: v.clone(),
+            ..Default::default()
+        }]
+        .into(),
+    );
+    req.set_context(ctx.clone());
+    req.set_start_ts(2);
+    req.set_primary_key(k.clone());
+    let resp = client.kv_flush(&req).unwrap();
+    assert!(!resp.has_region_error());
+    assert!(resp.get_errors().first().unwrap().has_locked());
+
+    // pessimistic lock x flush
+    let k = b"key3".to_vec();
+    let mut req = PessimisticLockRequest::default();
+    req.set_context(ctx.clone());
+    req.set_primary_lock(k.clone());
+    req.set_start_version(1);
+    req.set_for_update_ts(1);
+    req.set_mutations(
+        vec![Mutation {
+            op: Op::PessimisticLock,
+            key: k.clone(),
+            value: [].into(),
+            ..Default::default()
+        }]
+        .into(),
+    );
+    let resp = client.kv_pessimistic_lock(&req).unwrap();
+    assert!(!resp.has_region_error());
+    assert!(resp.get_errors().is_empty());
+
+    let mut req = FlushRequest::default();
+    req.set_mutations(
+        vec![Mutation {
+            op: Op::Put,
+            key: k.clone(),
+            value: v.clone(),
+            ..Default::default()
+        }]
+        .into(),
+    );
+    req.set_context(ctx.clone());
+    req.set_start_ts(2);
+    req.set_primary_key(k.clone());
+    let resp = client.kv_flush(&req).unwrap();
+    assert!(!resp.has_region_error());
+    assert!(resp.get_errors().first().unwrap().has_locked());
+}
+
+#[test_case(test_raftstore::must_new_cluster_and_kv_client)]
+#[test_case(test_raftstore_v2::must_new_cluster_and_kv_client)]
+fn test_pipelined_dml_read_write_conflict() {
+    let (_cluster, client, ctx) = new_cluster();
+    let (k, v) = (b"key".to_vec(), b"value".to_vec());
+
+    // flushed lock can be observed by another read
+    let mut req = FlushRequest::default();
+    req.set_mutations(
+        vec![Mutation {
+            op: Op::Put,
+            key: k.clone(),
+            value: v.clone(),
+            ..Default::default()
+        }]
+        .into(),
+    );
+    req.set_context(ctx.clone());
+    req.set_start_ts(1);
+    req.set_primary_key(k.clone());
+    let resp = client.kv_flush(&req).unwrap();
+    assert!(!resp.has_region_error());
+    assert!(resp.get_errors().is_empty());
+
+    let mut req = GetRequest::default();
+    req.set_context(ctx.clone());
+    req.set_version(2);
+    req.set_key(k.clone());
+    let resp = client.kv_get(&req).unwrap();
+    assert!(!resp.has_region_error());
+    assert!(resp.get_error().has_locked());
+}
+
+#[test_case(test_raftstore::must_new_cluster_and_kv_client)]
+#[test_case(test_raftstore_v2::must_new_cluster_and_kv_client)]
+fn test_pipelined_dml_buffer_get_other_key() {
+    let (_cluster, client, ctx) = new_cluster();
+    let k = b"key".to_vec();
+    let mut req = PessimisticLockRequest::default();
+    req.set_context(ctx.clone());
+    req.set_primary_lock(k.clone());
+    req.set_start_version(1);
+    req.set_for_update_ts(1);
+    req.set_mutations(
+        vec![Mutation {
+            op: Op::PessimisticLock,
+            key: k.clone(),
+            value: [].into(),
+            ..Default::default()
+        }]
+        .into(),
+    );
+    let resp = client.kv_pessimistic_lock(&req).unwrap();
+    assert!(!resp.has_region_error());
+    assert!(resp.get_errors().is_empty());
+
+    let mut req = BufferBatchGetRequest::default();
+    req.set_context(ctx.clone());
+    req.set_keys(vec![k.clone()].into());
+    req.set_version(2);
+    let resp = client.kv_buffer_batch_get(&req).unwrap();
+    assert!(!resp.has_region_error());
+    assert!(resp.get_pairs().is_empty());
+}
