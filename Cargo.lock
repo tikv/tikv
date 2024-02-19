@@ -641,6 +641,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "bit-set"
+version = "0.5.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0700ddab506f33b20a03b13996eccd309a48e5ff77d0d95926aa0210fb4e95f1"
+dependencies = [
+ "bit-vec",
+]
+
+[[package]]
+name = "bit-vec"
+version = "0.6.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "349f9b6a179ed607305526ca489b34ad0a41aed5f7980fa90eb03160b69598fb"
+
+[[package]]
 name = "bit_field"
 version = "0.10.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1545,6 +1560,7 @@ dependencies = [
  "online_config",
  "prometheus",
  "prometheus-static-metric",
+ "proptest",
  "protobuf",
  "raft",
  "rand 0.8.5",
@@ -2383,6 +2399,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "health_controller"
+version = "0.1.0"
+dependencies = [
+ "grpcio-health",
+ "kvproto",
+ "ordered-float",
+ "parking_lot 0.12.1",
+ "prometheus",
+ "prometheus-static-metric",
+ "slog",
+ "slog-global",
+ "tikv_util",
+]
+
+[[package]]
 name = "heck"
 version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2859,6 +2890,12 @@ dependencies = [
  "cfg-if 1.0.0",
  "winapi 0.3.9",
 ]
+
+[[package]]
+name = "libm"
+version = "0.2.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4ec2a862134d2a7d32d7983ddcdd1c4923530833c9f2ea1a44fc5fa473989058"
 
 [[package]]
 name = "libmimalloc-sys"
@@ -3405,6 +3442,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39e3200413f237f41ab11ad6d161bc7239c84dcb631773ccd7de3dfe4b5c267c"
 dependencies = [
  "autocfg",
+ "libm",
 ]
 
 [[package]]
@@ -4002,6 +4040,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "proptest"
+version = "1.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "31b476131c3c86cb68032fdc5cb6d5a1045e3e42d96b69fa599fd77701e1f5bf"
+dependencies = [
+ "bit-set",
+ "bit-vec",
+ "bitflags 2.4.1",
+ "lazy_static",
+ "num-traits",
+ "rand 0.8.5",
+ "rand_chacha 0.3.0",
+ "rand_xorshift",
+ "regex-syntax",
+ "rusty-fork",
+ "tempfile",
+ "unarray",
+]
+
+[[package]]
 name = "protobuf"
 version = "2.8.0"
 source = "git+https://github.com/pingcap/rust-protobuf?branch=v2.8#6642ebaae4352ea01bf00e160480d8da966d3109"
@@ -4052,6 +4110,12 @@ checksum = "c7ac8852baeb3cc6fb83b93646fb93c0ffe5d14bf138c945ceb4b9948ee0e3c1"
 dependencies = [
  "autotools",
 ]
+
+[[package]]
+name = "quick-error"
+version = "1.2.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a1d01941d82fa2ab50be1e79e6714289dd7cde78eba4c074bc5a4374f650dfe0"
 
 [[package]]
 name = "quick-xml"
@@ -4203,6 +4267,7 @@ dependencies = [
  "futures-util",
  "getset",
  "grpcio-health",
+ "health_controller",
  "hybrid_engine",
  "into_other",
  "itertools",
@@ -4268,6 +4333,7 @@ dependencies = [
  "file_system",
  "fs2",
  "futures 0.3.15",
+ "health_controller",
  "keys",
  "kvproto",
  "log_wrappers",
@@ -4532,6 +4598,7 @@ dependencies = [
  "crossbeam",
  "engine_rocks",
  "engine_traits",
+ "fail",
  "log_wrappers",
  "skiplist-rs",
  "slog",
@@ -4932,6 +4999,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cb5d2a036dc6d2d8fd16fde3498b04306e29bd193bf306a57427019b823d5acd"
 
 [[package]]
+name = "rusty-fork"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cb3dcc6e454c328bb824492db107ab7c0ae8fcffe4ad210136ef014458c1bc4f"
+dependencies = [
+ "fnv",
+ "quick-error",
+ "tempfile",
+ "wait-timeout",
+]
+
+[[package]]
 name = "ryu"
 version = "1.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5202,6 +5281,7 @@ dependencies = [
  "futures 0.3.15",
  "grpcio",
  "grpcio-health",
+ "health_controller",
  "hex 0.4.2",
  "hybrid_engine",
  "keys",
@@ -5897,6 +5977,7 @@ dependencies = [
  "futures 0.3.15",
  "grpcio",
  "grpcio-health",
+ "health_controller",
  "hybrid_engine",
  "keys",
  "kvproto",
@@ -5946,6 +6027,7 @@ dependencies = [
  "futures 0.3.15",
  "grpcio",
  "grpcio-health",
+ "health_controller",
  "keys",
  "kvproto",
  "lazy_static",
@@ -6064,6 +6146,7 @@ dependencies = [
  "futures 0.3.15",
  "grpcio",
  "grpcio-health",
+ "health_controller",
  "hyper",
  "keys",
  "kvproto",
@@ -6365,6 +6448,7 @@ dependencies = [
  "getset",
  "grpcio",
  "grpcio-health",
+ "health_controller",
  "hex 0.4.2",
  "http",
  "hybrid_engine",
@@ -7002,6 +7086,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "56dee185309b50d1f11bfedef0fe6d036842e3fb77413abef29f8f8d1c5d4c1c"
 
 [[package]]
+name = "unarray"
+version = "0.1.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "eaea85b334db583fe3274d12b4cd1880032beab409c0d774be044d4480ab9a94"
+
+[[package]]
 name = "unchecked-index"
 version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7121,6 +7211,15 @@ name = "version_check"
 version = "0.9.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "49874b5167b65d7193b8aba1567f5c7d93d001cafc34600cee003eda787e483f"
+
+[[package]]
+name = "wait-timeout"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9f200f5b12eb75f8c1ed65abd4b2db8a6e1b138a20de009dacee265a2498f3f6"
+dependencies = [
+ "libc 0.2.151",
+]
 
 [[package]]
 name = "waker-fn"

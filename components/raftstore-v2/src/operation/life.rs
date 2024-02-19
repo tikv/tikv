@@ -31,6 +31,7 @@ use std::{cmp, collections::HashSet, mem};
 use batch_system::BasicMailbox;
 use crossbeam::channel::{SendError, TrySendError};
 use engine_traits::{KvEngine, RaftEngine, RaftLogBatch};
+use health_controller::types;
 use kvproto::{
     kvrpcpb::DiskFullOpt,
     metapb::{self, PeerRole, Region},
@@ -574,7 +575,7 @@ impl Store {
         &self,
         ctx: &mut StoreContext<EK, ER, T>,
         start_ts: Instant,
-        mut inspector: util::LatencyInspector,
+        mut inspector: types::LatencyInspector,
     ) where
         EK: KvEngine,
         ER: RaftEngine,

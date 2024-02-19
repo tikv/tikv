@@ -76,6 +76,9 @@ command! {
             /// that must be satisfied as long as data is consistent.
             assertion_level: AssertionLevel,
         }
+        in_heap => {
+            primary, mutations,
+        }
 }
 
 impl std::fmt::Display for Prewrite {
@@ -287,6 +290,11 @@ command! {
             assertion_level: AssertionLevel,
             /// Constraints on the pessimistic locks that have to be checked when prewriting.
             for_update_ts_constraints: Vec<PrewriteRequestForUpdateTsConstraint>,
+        }
+        in_heap => {
+            primary,
+            secondary_keys,
+            // TODO: for_update_ts_constraints, mutations
         }
 }
 
