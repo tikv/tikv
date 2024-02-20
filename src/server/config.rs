@@ -207,8 +207,8 @@ pub struct Config {
 
     #[doc(hidden)]
     #[online_config(skip)]
-    /// Minimum interval to send health feedback information in each `BatchCommands` gRPC stream.
-    /// 0 to disable sending health feedback.
+    /// Minimum interval to send health feedback information in each
+    /// `BatchCommands` gRPC stream. 0 to disable sending health feedback.
     pub health_feedback_interval: ReadableDuration,
 }
 

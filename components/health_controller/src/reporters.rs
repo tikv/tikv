@@ -256,6 +256,7 @@ impl TestReporter {
     }
 
     pub fn set_raftstore_slow_score(&self, slow_score: f64) {
-        self.health_controller_inner.update_raftstore_slow_score(slow_score);
+        self.health_controller_inner
+            .update_raftstore_slow_score(slow_score);
     }
 }

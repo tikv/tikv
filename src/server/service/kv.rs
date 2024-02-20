@@ -147,7 +147,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Service<E, L, F> {
         reject_messages_on_memory_ratio: f64,
         resource_manager: Option<Arc<ResourceGroupManager>>,
         health_controller: HealthController,
-        health_feedback_interval: Option<Duration>
+        health_feedback_interval: Option<Duration>,
     ) -> Self {
         let now_unix = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -2471,7 +2471,12 @@ struct HealthFeedbackAttacher {
 }
 
 impl HealthFeedbackAttacher {
-    fn new(store_id: u64, health_controller: HealthController, seq: Arc<AtomicU64>, feedback_interval: Option<Duration>) -> Self {
+    fn new(
+        store_id: u64,
+        health_controller: HealthController,
+        seq: Arc<AtomicU64>,
+        feedback_interval: Option<Duration>,
+    ) -> Self {
         Self {
             store_id,
             health_controller,
@@ -2574,7 +2579,8 @@ mod tests {
         a.attach_if_needed(&mut resp);
         assert!(!resp.has_health_feedback());
 
-        let mut a = HealthFeedbackAttacher::new(1, health_controller, seq, Some(Duration::from_secs(1)));
+        let mut a =
+            HealthFeedbackAttacher::new(1, health_controller, seq, Some(Duration::from_secs(1)));
         resp = BatchCommandsResponse::default();
         a.attach_if_needed(&mut resp);
         assert!(resp.has_health_feedback());
@@ -2596,6 +2602,5 @@ mod tests {
         // Seq no increased.
         assert_eq!(resp.get_health_feedback().get_feedback_seq_no(), 2);
         assert_eq!(resp.get_health_feedback().get_slow_score(), 50);
-
     }
 }
