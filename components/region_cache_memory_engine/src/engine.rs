@@ -18,6 +18,7 @@ use engine_traits::{
     CF_WRITE,
 };
 use skiplist_rs::{IterRef, Skiplist, MIB};
+use slog_global::error;
 
 use crate::{
     background::{BackgroundTask, BgWorkManager},
@@ -225,12 +226,8 @@ impl RangeCacheMemoryEngine {
         if core.range_manager.evict_range(range) {
             // todo: schedule it to a separate thread
             core.engine.delete_range(range);
+            core.mut_range_manager().on_delete_range(range);
         }
-    }
-
-    pub fn on_delete_range(&self, range: &CacheRange) {
-        let mut core = self.core.write().unwrap();
-        core.mut_range_manager().on_delete_range(range);
     }
 
     pub(crate) fn handle_pending_load(&self) {
@@ -241,15 +238,21 @@ impl RangeCacheMemoryEngine {
         let pending_loaded_ranges = std::mem::take(&mut range_manager.pending_ranges);
         if !pending_loaded_ranges.is_empty() {
             let rocks_snap = Arc::new(self.rocks_engine.as_ref().unwrap().snapshot(None));
-            range_manager.pending_ranges_with_snapshot = pending_loaded_ranges
-                .into_iter()
-                .map(|r| (r, rocks_snap.clone()))
-                .collect();
+            range_manager.pending_ranges_with_snapshot.extend(
+                pending_loaded_ranges
+                    .into_iter()
+                    .map(|r| (r, rocks_snap.clone()))
+                    .into_iter(),
+            );
             if let Err(e) = self
                 .bg_worker_manager()
                 .sechedule_task(BackgroundTask::LoadTask)
             {
-                // todo(SpadeA)
+                error!(
+                    "schedule range load failed";
+                    "err" => ?e,
+                );
+                assert!(tikv_util::thread_group::is_shutdown(!cfg!(test)));
             }
         }
 
@@ -647,6 +650,8 @@ impl Drop for RangeCacheSnapshot {
         {
             // todo: schedule it to a separate thread
             core.engine.delete_range(&self.snapshot_meta.range);
+            core.mut_range_manager()
+                .on_delete_range(&self.snapshot_meta.range);
         }
     }
 }

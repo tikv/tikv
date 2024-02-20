@@ -89,7 +89,7 @@ impl BgWorkManager {
         &self,
         task: BackgroundTask,
     ) -> Result<(), ScheduleError<BackgroundTask>> {
-        self.scheduler.schedule(task)
+        self.scheduler.schedule_force(task)
     }
 
     fn start_tick(
@@ -291,7 +291,7 @@ impl Runnable for BackgroundRunner {
                 self.gc_finished();
             }
             BackgroundTask::LoadTask => {
-                if let Some(((range, snap), skiplist_engine)) = self.get_range_to_load() {
+                while let Some(((range, snap), skiplist_engine)) = self.get_range_to_load() {
                     let iter_opt = IterOptions::new(
                         Some(KeyBuilder::from_vec(range.start.clone(), 0, 0)),
                         Some(KeyBuilder::from_vec(range.end.clone(), 0, 0)),
