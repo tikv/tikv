@@ -16,6 +16,7 @@ backup = { workspace = true }
 collections = { workspace = true }
 concurrency_manager = { workspace = true }
 crc64fast = "0.1"
+engine_rocks = { workspace = true }
 engine_traits = { workspace = true }
 external_storage_export = { workspace = true }
 file_system = { workspace = true }
