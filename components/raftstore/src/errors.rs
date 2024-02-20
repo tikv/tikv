@@ -7,7 +7,10 @@ use error_code::{self, ErrorCode, ErrorCodeExt};
 use kvproto::{errorpb, metapb, raft_serverpb};
 use protobuf::ProtobufError;
 use thiserror::Error;
-use tikv_util::{codec, deadline::DeadlineError};
+use tikv_util::{
+    codec,
+    deadline::{set_deadline_exceeded_busy_error, DeadlineError},
+};
 
 use super::{coprocessor::Error as CopError, store::SnapError};
 
@@ -287,11 +290,6 @@ impl From<Error> for errorpb::Error {
                 e.set_store_peer_id(store_peer_id);
                 errorpb.set_mismatch_peer_id(e);
             }
-<<<<<<< HEAD
-=======
-            Error::DeadlineExceeded => {
-                set_deadline_exceeded_busy_error(&mut errorpb);
-            }
             Error::Coprocessor(CopError::RequireDelay {
                 after,
                 reason: hint,
@@ -301,7 +299,9 @@ impl From<Error> for errorpb::Error {
                 e.set_reason(hint);
                 errorpb.set_server_is_busy(e);
             }
->>>>>>> 956c9f377d (snapshot_backup: enhanced prepare stage (#15946))
+            Error::DeadlineExceeded => {
+                set_deadline_exceeded_busy_error(&mut errorpb);
+            }
             _ => {}
         };
 
@@ -363,5 +363,22 @@ impl ErrorCodeExt for Error {
 
             Error::Other(_) | Error::RegionNotRegistered { .. } => error_code::raftstore::UNKNOWN,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use kvproto::errorpb;
+
+    use crate::Error;
+
+    #[test]
+    fn test_deadline_exceeded_error() {
+        let err: errorpb::Error = Error::DeadlineExceeded.into();
+        assert_eq!(
+            err.get_server_is_busy().reason,
+            "deadline is exceeded".to_string()
+        );
+        assert_eq!(err.get_message(), "Deadline is exceeded");
     }
 }

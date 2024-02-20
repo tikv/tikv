@@ -2171,6 +2171,11 @@ where
             self.fsm.hibernate_state.group_state() == GroupState::Idle,
             |_| {}
         );
+        fail_point!(
+            "on_raft_base_tick_chaos",
+            self.fsm.hibernate_state.group_state() == GroupState::Chaos,
+            |_| {}
+        );
 
         if self.fsm.peer.pending_remove {
             self.fsm.peer.mut_store().flush_entry_cache_metrics();
@@ -2855,18 +2860,19 @@ where
     fn on_extra_message(&mut self, mut msg: RaftMessage) {
         match msg.get_extra_msg().get_type() {
             ExtraMessageType::MsgRegionWakeUp | ExtraMessageType::MsgCheckStalePeer => {
-                if self.fsm.hibernate_state.group_state() == GroupState::Idle {
-                    if msg.get_extra_msg().forcely_awaken {
-                        // Forcely awaken this region by manually setting this GroupState
-                        // into Chaos to trigger a new voting in this RaftGroup.
-                        self.reset_raft_tick(if !self.fsm.peer.is_leader() {
-                            GroupState::Chaos
-                        } else {
-                            GroupState::Ordered
-                        });
+                if msg.get_extra_msg().forcely_awaken {
+                    // Forcely awaken this region by manually setting the GroupState
+                    // into `Chaos` to trigger a new voting in the Raft Group.
+                    // Meanwhile, it avoids the peer entering the `PreChaos` state,
+                    // which would wait for another long tick to enter the `Chaos` state.
+                    self.reset_raft_tick(if !self.fsm.peer.is_leader() {
+                        GroupState::Chaos
                     } else {
-                        self.reset_raft_tick(GroupState::Ordered);
-                    }
+                        GroupState::Ordered
+                    });
+                }
+                if self.fsm.hibernate_state.group_state() == GroupState::Idle {
+                    self.reset_raft_tick(GroupState::Ordered);
                 }
                 if msg.get_extra_msg().get_type() == ExtraMessageType::MsgRegionWakeUp
                     && self.fsm.peer.is_leader()
@@ -3869,14 +3875,19 @@ where
                     self.fsm.peer.tag
                 );
             } else {
+                // Remove itself from atomic_snap_regions as it has cleaned both
+                // data and metadata.
                 let target_region_id = *meta.targets_map.get(&region_id).unwrap();
-                let is_ready = meta
-                    .atomic_snap_regions
+                meta.atomic_snap_regions
                     .get_mut(&target_region_id)
                     .unwrap()
-                    .get_mut(&region_id)
-                    .unwrap();
-                *is_ready = true;
+                    .remove(&region_id);
+                meta.destroyed_region_for_snap.remove(&region_id);
+                info!("peer has destroyed, clean up for incoming overlapped snapshot";
+                    "region_id" => region_id,
+                    "peer_id" => self.fsm.peer_id(),
+                    "target_region_id" => target_region_id,
+                );
             }
         }
 
@@ -5011,6 +5022,7 @@ where
             "region_id" => self.fsm.region_id(),
             "peer_id" => self.fsm.peer_id(),
             "region" => ?region,
+            "destroy_regions" => ?persist_res.destroy_regions,
         );
 
         let mut state = self.ctx.global_replication_state.lock().unwrap();
@@ -6423,19 +6435,26 @@ where
         fail_point!("peer_check_stale_state", state != StaleState::Valid, |_| {});
         match state {
             StaleState::Valid => (),
-            StaleState::LeaderMissing => {
-                warn!(
-                    "leader missing longer than abnormal_leader_missing_duration";
-                    "region_id" => self.fsm.region_id(),
-                    "peer_id" => self.fsm.peer_id(),
-                    "expect" => %self.ctx.cfg.abnormal_leader_missing_duration,
-                );
-                self.ctx
-                    .raft_metrics
-                    .leader_missing
-                    .lock()
-                    .unwrap()
-                    .insert(self.region_id());
+            StaleState::LeaderMissing | StaleState::MaybeLeaderMissing => {
+                if state == StaleState::LeaderMissing {
+                    warn!(
+                        "leader missing longer than abnormal_leader_missing_duration";
+                        "region_id" => self.fsm.region_id(),
+                        "peer_id" => self.fsm.peer_id(),
+                        "expect" => %self.ctx.cfg.abnormal_leader_missing_duration,
+                    );
+                    self.ctx
+                        .raft_metrics
+                        .leader_missing
+                        .lock()
+                        .unwrap()
+                        .insert(self.region_id());
+                }
+
+                // It's very likely that this is a stale peer. To prevent
+                // resolved ts from being blocked for too long, we check stale
+                // peer eagerly.
+                self.fsm.peer.bcast_check_stale_peer_message(self.ctx);
             }
             StaleState::ToValidate => {
                 // for peer B in case 1 above
