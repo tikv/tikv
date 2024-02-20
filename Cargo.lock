@@ -1223,9 +1223,9 @@ dependencies = [
  "cfg-if 1.0.0",
  "crossbeam-channel",
  "crossbeam-deque",
- "crossbeam-epoch",
+ "crossbeam-epoch 0.9.8",
  "crossbeam-queue",
- "crossbeam-utils",
+ "crossbeam-utils 0.8.19",
 ]
 
 [[package]]
@@ -1234,7 +1234,7 @@ version = "0.5.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "176dc175b78f56c0f321911d9c8eb2b77a78a4860b9c19db83835fea1a46649b"
 dependencies = [
- "crossbeam-utils",
+ "crossbeam-utils 0.8.19",
 ]
 
 [[package]]
@@ -1244,8 +1244,22 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ce6fd6f855243022dcecf8702fef0c297d4338e226845fe067f6341ad9fa0cef"
 dependencies = [
  "cfg-if 1.0.0",
- "crossbeam-epoch",
- "crossbeam-utils",
+ "crossbeam-epoch 0.9.8",
+ "crossbeam-utils 0.8.19",
+]
+
+[[package]]
+name = "crossbeam-epoch"
+version = "0.4.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2af0e75710d6181e234c8ecc79f14a97907850a541b13b0be1dd10992f2e4620"
+dependencies = [
+ "arrayvec",
+ "cfg-if 0.1.10",
+ "crossbeam-utils 0.3.2",
+ "lazy_static",
+ "memoffset 0.2.1",
+ "scopeguard 0.3.3",
 ]
 
 [[package]]
@@ -1256,10 +1270,10 @@ checksum = "1145cf131a2c6ba0615079ab6a638f7e1973ac9c2634fcbeaaad6114246efe8c"
 dependencies = [
  "autocfg",
  "cfg-if 1.0.0",
- "crossbeam-utils",
+ "crossbeam-utils 0.8.19",
  "lazy_static",
  "memoffset 0.6.4",
- "scopeguard",
+ "scopeguard 1.1.0",
 ]
 
 [[package]]
@@ -1269,7 +1283,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1f25d8400f4a7a5778f0e4e52384a48cbd9b5c495d110786187fc750075277a2"
 dependencies = [
  "cfg-if 1.0.0",
- "crossbeam-utils",
+ "crossbeam-utils 0.8.19",
 ]
 
 [[package]]
@@ -1279,9 +1293,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "883a5821d7d079fcf34ac55f27a833ee61678110f6b97637cc74513c0d0b42fc"
 dependencies = [
  "cfg-if 1.0.0",
- "crossbeam-epoch",
- "crossbeam-utils",
- "scopeguard",
+ "crossbeam-epoch 0.9.8",
+ "crossbeam-utils 0.8.19",
+ "scopeguard 1.1.0",
+]
+
+[[package]]
+name = "crossbeam-utils"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d636a8b3bcc1b409d7ffd3facef8f21dcb4009626adbd0c5e6c4305c07253c7b"
+dependencies = [
+ "cfg-if 0.1.10",
 ]
 
 [[package]]
@@ -1844,7 +1867,7 @@ dependencies = [
  "bcc",
  "collections",
  "crc32fast",
- "crossbeam-utils",
+ "crossbeam-utils 0.8.19",
  "fs2",
  "lazy_static",
  "libc 0.2.151",
@@ -2985,7 +3008,7 @@ version = "0.4.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "88943dd7ef4a2e5a4bfa2753aaab3013e34ce2533d1996fb18ef591e315e2b3b"
 dependencies = [
- "scopeguard",
+ "scopeguard 1.1.0",
 ]
 
 [[package]]
@@ -3071,6 +3094,12 @@ checksum = "45fd3a57831bf88bc63f8cebc0cf956116276e97fef3966103e96416209f7c92"
 dependencies = [
  "libc 0.2.151",
 ]
+
+[[package]]
+name = "memoffset"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0f9dc261e2b62d7a622bf416ea3c5245cdd5d9a7fcc428c0d06804dfce1775b3"
 
 [[package]]
 name = "memoffset"
@@ -4187,7 +4216,7 @@ dependencies = [
  "protobuf",
  "rayon",
  "rhai",
- "scopeguard",
+ "scopeguard 1.1.0",
  "serde",
  "serde_repr",
  "strum 0.25.0",
@@ -4510,7 +4539,7 @@ checksum = "258bcdb5ac6dad48491bb2992db6b7cf74878b0384908af124823d118c99683f"
 dependencies = [
  "crossbeam-channel",
  "crossbeam-deque",
- "crossbeam-utils",
+ "crossbeam-utils 0.8.19",
  "num_cpus",
 ]
 
@@ -5043,6 +5072,12 @@ dependencies = [
 
 [[package]]
 name = "scopeguard"
+version = "0.3.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "94258f53601af11e6a49f722422f6e3425c52b06245a5cf9bc09908b174f5e27"
+
+[[package]]
+name = "scopeguard"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d29ab0c6d3fc0ee92fe66e2d99f700eab17a8d57d1c1d3b748380fb20baa78cd"
@@ -5388,10 +5423,14 @@ checksum = "fa8f3741c7372e75519bd9346068370c9cdaabcc1f9599cbcf2a2719352286b7"
 [[package]]
 name = "skiplist-rs"
 version = "0.1.0"
-source = "git+https://github.com/tikv/skiplist-rs.git?branch=main#79280c29c3d309189fc39b2d8df48c67ccc998bf"
+source = "git+https://github.com/tikv/skiplist-rs.git?branch=main#031f37fc663c5eb0768e5faa3cac360b64c5cab3"
 dependencies = [
  "bytes",
+ "crossbeam-epoch 0.4.3",
+ "crossbeam-utils 0.3.2",
+ "fail",
  "rand 0.8.5",
+ "scopeguard 0.3.3",
  "slog",
  "tikv-jemalloc-ctl",
  "tikv-jemallocator",
@@ -6861,7 +6900,7 @@ name = "tokio-executor"
 version = "0.1.9"
 source = "git+https://github.com/tikv/tokio?branch=tokio-timer-hotfix#4394380fa3c1f7f2c702a4ccc5ff01384746fdfd"
 dependencies = [
- "crossbeam-utils",
+ "crossbeam-utils 0.8.19",
  "futures 0.1.31",
 ]
 
@@ -6914,7 +6953,7 @@ name = "tokio-timer"
 version = "0.2.13"
 source = "git+https://github.com/tikv/tokio?branch=tokio-timer-hotfix#4394380fa3c1f7f2c702a4ccc5ff01384746fdfd"
 dependencies = [
- "crossbeam-utils",
+ "crossbeam-utils 0.8.19",
  "futures 0.1.31",
  "slab",
  "tokio-executor",
@@ -7018,7 +7057,7 @@ name = "tracker"
 version = "0.0.1"
 dependencies = [
  "collections",
- "crossbeam-utils",
+ "crossbeam-utils 0.8.19",
  "kvproto",
  "lazy_static",
  "parking_lot 0.12.1",
@@ -7677,7 +7716,7 @@ source = "git+https://github.com/tikv/yatp.git?branch=master#793be4d789d4bd15292
 dependencies = [
  "crossbeam-deque",
  "crossbeam-skiplist",
- "crossbeam-utils",
+ "crossbeam-utils 0.8.19",
  "dashmap",
  "fail",
  "lazy_static",

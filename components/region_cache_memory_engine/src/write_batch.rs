@@ -297,7 +297,7 @@ mod tests {
         assert_eq!(wb.write().unwrap(), 1);
         let sl = engine.core.read().unwrap().engine().data[cf_to_id(CF_DEFAULT)].clone();
         let actual = sl.get(&encode_key(b"aaa", 1, ValueType::Value)).unwrap();
-        assert_eq!(&b"bbb"[..], actual)
+        assert_eq!(&b"bbb"[..], actual.value())
     }
 
     #[test]
@@ -320,7 +320,7 @@ mod tests {
         assert_eq!(wb.write().unwrap(), 1);
         let sl = engine.core.read().unwrap().engine().data[cf_to_id(CF_DEFAULT)].clone();
         let actual = sl.get(&encode_key(b"aaa", 1, ValueType::Value)).unwrap();
-        assert_eq!(&b"bbb"[..], actual);
+        assert_eq!(&b"bbb"[..], actual.value());
         assert!(sl.get(&encode_key(b"ccc", 1, ValueType::Value)).is_none())
     }
 

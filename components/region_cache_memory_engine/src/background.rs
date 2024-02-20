@@ -433,8 +433,8 @@ impl Filter {
             // seek(both get and remove invovle seek). Maybe we can provide the API to
             // delete the mvcc keys with all sequence numbers.
             let default_key = encoding_for_filter(&self.mvcc_key_prefix, write.start_ts);
-            while let Some((key, val)) = self.default_cf_handle.get_with_key(&default_key) {
-                self.default_cf_handle.remove(key.as_slice());
+            while let Some(entry) = self.default_cf_handle.get(&default_key) {
+                self.default_cf_handle.remove(entry.key().as_slice());
             }
         }
         Ok(())

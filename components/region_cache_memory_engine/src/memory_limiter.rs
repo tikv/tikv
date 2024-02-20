@@ -25,13 +25,13 @@ impl MemoryLimiter for GlobalMemoryLimiter {
 }
 
 impl AllocationRecorder for GlobalMemoryLimiter {
-    fn alloc(&self, addr: usize, size: usize) {
+    fn allocated(&self, addr: usize, size: usize) {
         let mut recorder = self.recorder.lock().unwrap();
         assert!(!recorder.contains_key(&addr));
         recorder.insert(addr, size);
     }
 
-    fn free(&self, addr: usize, size: usize) {
+    fn freed(&self, addr: usize, size: usize) {
         let node = addr as *mut Node;
         let mut removed = self.removed.lock().unwrap();
         removed.insert(unsafe { (*node).key().to_vec() });
