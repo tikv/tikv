@@ -16,7 +16,7 @@ use crate::storage::{
             CommandExt, ReaderWithStats, ReleasedLocks, ResponsePolicy, WriteCommand, WriteContext,
             WriteResult,
         },
-        CommitKind, Error, Result, TransactionKind, TransactionProperties,
+        CommitKind, Error, ErrorInner, Result, TransactionKind, TransactionProperties,
     },
     Command, ProcessResult, Result as StorageResult, Snapshot, TypedCommand,
 };
@@ -68,6 +68,12 @@ impl CommandExt for Flush {
 
 impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for Flush {
     fn process_write(mut self, snapshot: S, context: WriteContext<'_, L>) -> Result<WriteResult> {
+        if self.generation == 0 {
+            return Err(ErrorInner::Other(box_err!(
+                "generation should be greater than 0 for Flush requests"
+            ))
+            .into());
+        }
         let rows = self.mutations.len();
         let mut txn = MvccTxn::new(self.start_ts, context.concurrency_manager);
         let mut reader = ReaderWithStats::new(
@@ -194,6 +200,8 @@ impl Flush {
 
 #[cfg(test)]
 mod tests {
+    use std::assert_matches::assert_matches;
+
     use concurrency_manager::ConcurrencyManager;
     use kvproto::kvrpcpb::{AssertionLevel, Context, ExtraOp};
     use tikv_kv::{Engine, Statistics};
@@ -201,7 +209,10 @@ mod tests {
 
     use crate::storage::{
         lock_manager::MockLockManager,
-        mvcc::tests::{must_get, must_locked},
+        mvcc::{
+            tests::{must_get, must_locked},
+            Error as MvccError, ErrorInner as MvccErrorInner,
+        },
         txn,
         txn::{
             commands::{Flush, WriteContext, WriteResult},
@@ -210,6 +221,7 @@ mod tests {
                 must_pessimistic_locked, must_prewrite_put, must_prewrite_put_err,
             },
             txn_status_cache::TxnStatusCache,
+            Error, ErrorInner,
         },
         ProcessResult, TestEngineBuilder,
     };
@@ -220,6 +232,7 @@ mod tests {
         value: impl Into<Vec<u8>>,
         pk: impl Into<Vec<u8>>,
         start_ts: impl Into<TimeStamp>,
+        generation: u64,
     ) -> txn::Result<WriteResult> {
         let key = Key::from_raw(key);
         let start_ts = start_ts.into();
@@ -227,7 +240,7 @@ mod tests {
             start_ts,
             pk.into(),
             vec![Mutation::make_put(key, value.into())],
-            1,
+            generation,
             3000,
             AssertionLevel::Strict,
             Context::new(),
@@ -253,8 +266,9 @@ mod tests {
         value: impl Into<Vec<u8>>,
         pk: impl Into<Vec<u8>>,
         start_ts: impl Into<TimeStamp>,
+        generation: u64,
     ) {
-        let res = flush_put_impl(engine, key, value, pk, start_ts);
+        let res = flush_put_impl(engine, key, value, pk, start_ts, generation);
         assert!(res.is_ok());
         let res = res.unwrap();
         let to_be_write = res.to_be_write;
@@ -267,8 +281,9 @@ mod tests {
         value: impl Into<Vec<u8>>,
         pk: impl Into<Vec<u8>>,
         start_ts: impl Into<TimeStamp>,
+        generation: u64,
     ) {
-        let res = flush_put_impl(engine, key, value, pk, start_ts).unwrap();
+        let res = flush_put_impl(engine, key, value, pk, start_ts, generation).unwrap();
         if let ProcessResult::MultiRes { results } = res.pr {
             assert!(!results.is_empty());
         } else {
@@ -283,9 +298,11 @@ mod tests {
         value: impl Into<Vec<u8>>,
         pk: impl Into<Vec<u8>>,
         start_ts: impl Into<TimeStamp>,
-    ) {
-        let res = flush_put_impl(engine, key, value, pk, start_ts);
+        generation: u64,
+    ) -> txn::Error {
+        let res = flush_put_impl(engine, key, value, pk, start_ts, generation);
         assert!(res.is_err());
+        res.err().unwrap()
     }
 
     #[test]
@@ -294,7 +311,7 @@ mod tests {
         let k = b"key";
         let v = b"value";
         let start_ts = 1;
-        must_flush_put(&mut engine, k, *v, k, start_ts);
+        must_flush_put(&mut engine, k, *v, k, start_ts, 1);
         must_locked(&mut engine, k, start_ts);
         must_commit(&mut engine, k, start_ts, start_ts + 1);
         must_get(&mut engine, k, start_ts + 1, v);
@@ -306,9 +323,9 @@ mod tests {
         let k = b"key";
         let v = b"value";
         // flush x {flush, pessimistic lock, prewrite}
-        must_flush_put(&mut engine, k, *v, k, 1);
+        must_flush_put(&mut engine, k, *v, k, 1, 1);
         must_locked(&mut engine, k, 1);
-        must_flush_put_meet_lock(&mut engine, k, *v, k, 2);
+        must_flush_put_meet_lock(&mut engine, k, *v, k, 2, 2);
         must_acquire_pessimistic_lock_err(&mut engine, k, k, 2, 2);
         must_prewrite_put_err(&mut engine, k, v, k, 2);
 
@@ -316,13 +333,13 @@ mod tests {
         let k = b"key2";
         must_acquire_pessimistic_lock(&mut engine, k, k, 1, 1);
         must_pessimistic_locked(&mut engine, k, 1, 1);
-        must_flush_put_meet_lock(&mut engine, k, v, k, 2);
+        must_flush_put_meet_lock(&mut engine, k, v, k, 2, 3);
 
         // prewrite x flush
         let k = b"key3";
         must_prewrite_put(&mut engine, k, v, k, 1);
         must_locked(&mut engine, k, 1);
-        must_flush_put_meet_lock(&mut engine, k, v, k, 2);
+        must_flush_put_meet_lock(&mut engine, k, v, k, 2, 4);
     }
 
     #[test]
@@ -330,11 +347,30 @@ mod tests {
         let mut engine = TestEngineBuilder::new().build().unwrap();
         let k = b"key";
         let v = b"value";
-        must_flush_put(&mut engine, k, *v, k, 1);
-        // FIXME later together with the generation check
-        // let v2 = b"value2";
-        // must_flush_put(&mut engine, k, v2.clone(), k, 1);
-        // must_commit(&mut engine, k, 1, 2);
-        // must_get(&mut engine, k, 3, v);
+        must_flush_put(&mut engine, k, *v, k, 1, 1);
+        let v2 = b"value2";
+        must_flush_put(&mut engine, k, v2, k, 1, 2);
+        must_commit(&mut engine, k, 1, 2);
+        must_get(&mut engine, k, 3, v2);
+    }
+
+    #[test]
+    fn test_flush_out_of_order() {
+        let mut engine = TestEngineBuilder::new().build().unwrap();
+        let k = b"key";
+        let v = b"value";
+
+        // generation == 0 will be rejected
+        assert_matches!(
+            must_flush_put_err(&mut engine, k, *v, k, 1, 0),
+            Error(box ErrorInner::Other(s)) if s.to_string().contains("generation should be greater than 0")
+        );
+
+        must_flush_put(&mut engine, k, *v, k, 1, 2);
+        must_locked(&mut engine, k, 1);
+        assert_matches!(
+            must_flush_put_err(&mut engine, k, *v, k, 1, 1),
+            Error(box ErrorInner::Mvcc(MvccError(box MvccErrorInner::GenerationOutOfOrder(..))))
+        );
     }
 }

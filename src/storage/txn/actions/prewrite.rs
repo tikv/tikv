@@ -108,8 +108,12 @@ pub fn prewrite_with_generation<S: Snapshot>(
         None => LockStatus::None,
     };
 
-    if let LockStatus::Locked(ts) = lock_status {
-        return Ok((ts, OldValue::Unspecified));
+    // a key can be flushed multiple times. We cannot skip the prewrite if it is
+    // already locked.
+    if generation == 0 {
+        if let LockStatus::Locked(ts) = lock_status {
+            return Ok((ts, OldValue::Unspecified));
+        }
     }
 
     // Note that the `prev_write` may have invalid GC fence.
