@@ -9,6 +9,7 @@ mod test_conf_change;
 mod test_coprocessor;
 mod test_debugger;
 mod test_disk_full;
+mod test_disk_snap_br;
 mod test_early_apply;
 mod test_encryption;
 mod test_engine;

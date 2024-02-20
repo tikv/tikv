@@ -16,6 +16,7 @@ backup = { workspace = true }
 collections = { workspace = true }
 concurrency_manager = { workspace = true }
 crc64fast = "0.1"
+engine_rocks = { workspace = true }
 engine_traits = { workspace = true }
 external_storage_export = { workspace = true }
 file_system = { workspace = true }
@@ -25,6 +26,7 @@ futures-util = { version = "0.3", default-features = false, features = ["io"] }
 grpcio = { workspace = true }
 kvproto = { workspace = true }
 protobuf = "2"
+raftstore = { workspace = true }
 rand = "0.8"
 tempfile = "3.0"
 test_raftstore = { workspace = true }

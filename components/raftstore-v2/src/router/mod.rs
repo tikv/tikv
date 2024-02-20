@@ -20,3 +20,4 @@ pub use self::{
         DebugInfoSubscriber, QueryResChannel, QueryResult, ReadResponse,
     },
 };
+pub use super::operation::DiskSnapBackupHandle;

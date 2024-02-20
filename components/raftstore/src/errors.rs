@@ -290,6 +290,15 @@ impl From<Error> for errorpb::Error {
                 e.set_store_peer_id(store_peer_id);
                 errorpb.set_mismatch_peer_id(e);
             }
+            Error::Coprocessor(CopError::RequireDelay {
+                after,
+                reason: hint,
+            }) => {
+                let mut e = errorpb::ServerIsBusy::new();
+                e.set_backoff_ms(after.as_millis() as _);
+                e.set_reason(hint);
+                errorpb.set_server_is_busy(e);
+            }
             Error::DeadlineExceeded => {
                 set_deadline_exceeded_busy_error(&mut errorpb);
             }

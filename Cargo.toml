@@ -336,7 +336,7 @@ server = { path = "components/server" }
 service = { path = "components/service" }
 snap_recovery = { path = "components/snap_recovery", default-features = false }
 sst_importer = { path = "components/sst_importer", default-features = false }
-test_backup = { path = "components/test_backup" }
+test_backup = { path = "components/test_backup", default-features = false }
 test_coprocessor = { path = "components/test_coprocessor", default-features = false }
 example_coprocessor_plugin = { path = "components/test_coprocessor_plugin/example_plugin" }
 test_pd = { path = "components/test_pd" }
@@ -365,7 +365,7 @@ raft = { version = "0.7.0", default-features = false, features = ["protobuf-code
 grpcio = { version = "0.10.4", default-features = false, features = ["openssl-vendored", "protobuf-codec", "nightly"] }
 grpcio-health = { version = "0.10.4", default-features = false, features = ["protobuf-codec"] }
 tipb = { git = "https://github.com/pingcap/tipb.git" }
-kvproto = { git = "https://github.com/pingcap/kvproto.git" }
+kvproto = { git = "https://github.com/pingcap/kvproto.git", branch = "release-7.5" }
 yatp = { git = "https://github.com/tikv/yatp.git", branch = "master" }
 tokio-timer = { git = "https://github.com/tikv/tokio", branch = "tokio-timer-hotfix" }
 tokio-executor = { git = "https://github.com/tikv/tokio", branch = "tokio-timer-hotfix" }
