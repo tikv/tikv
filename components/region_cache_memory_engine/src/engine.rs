@@ -257,7 +257,7 @@ impl RangeCacheMemoryEngine {
                 .map(|r| (r, rocks_snap.clone()))
                 .collect();
             if let Err(e) = self
-                .background_worker()
+                .bg_worker_manager()
                 .sechedule_task(BackgroundTask::LoadTask)
             {
                 // todo(SpadeA)
@@ -277,12 +277,11 @@ impl RangeCacheMemoryEngine {
             let range_manager = core.mut_range_manager();
             // todo: the safe_point here should be the store's safe_ts
             range_manager.new_range(range.clone());
-            range_manager.set_safe_point(&range, 10);
             range_manager.set_range_readable(&range, true);
         }
     }
 
-    pub fn background_worker(&self) -> &BgWorkManager {
+    pub fn bg_worker_manager(&self) -> &BgWorkManager {
         &self.bg_work_manager
     }
 }
@@ -775,7 +774,10 @@ mod tests {
 
     use super::{cf_to_id, GlobalMemoryLimiter, RangeCacheIterator, SkiplistEngine};
     use crate::{
-        keys::{decode_key, encode_key, InternalKeyComparator, ValueType},
+        keys::{
+            construct_key, construct_user_key, construct_value, decode_key, encode_key,
+            InternalKeyComparator, ValueType,
+        },
         RangeCacheMemoryEngine,
     };
 
@@ -859,23 +861,6 @@ mod tests {
                     .is_empty()
             );
         }
-    }
-
-    fn construct_user_key(i: u64) -> Vec<u8> {
-        let k = format!("k{:08}", i);
-        k.as_bytes().to_owned()
-    }
-
-    fn construct_key(i: u64, mvcc: u64) -> Vec<u8> {
-        let k = format!("k{:08}", i);
-        let mut key = k.as_bytes().to_vec();
-        // mvcc version should be make bit-wise reverse so that k-100 is less than k-99
-        key.put_u64(!mvcc);
-        key
-    }
-
-    fn construct_value(i: u64, j: u64) -> String {
-        format!("value-{:04}-{:04}", i, j)
     }
 
     fn fill_data_in_skiplist(

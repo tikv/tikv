@@ -21,3 +21,7 @@ slog-global = { workspace = true }
 slog = { workspace = true }
 engine_rocks = { workspace = true }
 fail = "0.5"
+
+[dev-dependencies]
+keys = { workspace = true }
+tempfile = "3.0"

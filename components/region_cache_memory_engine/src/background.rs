@@ -109,6 +109,7 @@ impl BgWorkManager {
                         }
 
                         let safe_point = TimeStamp::physical_now() - gc_interval.as_millis() as u64;
+                        let safe_point = TimeStamp::compose(safe_point, 0).into_inner();
                         if let Err(e) = scheduler.schedule(BackgroundTask::GcTask(GcTask {safe_point})) {
                             error!(
                                 "schedule range cache engine gc failed";
@@ -447,15 +448,23 @@ pub mod tests {
     use std::{sync::Arc, time::Duration};
 
     use bytes::Bytes;
-    use engine_traits::{CacheRange, RangeCacheEngine, CF_DEFAULT, CF_WRITE};
+    use engine_rocks::util::new_engine;
+    use engine_traits::{
+        CacheRange, RangeCacheEngine, SyncMutable, CF_DEFAULT, CF_WRITE, DATA_CFS,
+    };
+    use keys::{data_key, DATA_MAX_KEY, DATA_MIN_KEY};
     use skiplist_rs::Skiplist;
+    use tempfile::Builder;
     use txn_types::{Key, TimeStamp, Write, WriteType};
 
     use super::Filter;
     use crate::{
         background::BackgroundRunner,
         engine::SkiplistEngine,
-        keys::{encode_key, encoding_for_filter, InternalKeyComparator, ValueType},
+        keys::{
+            construct_key, construct_value, encode_key, encode_seek_key, encoding_for_filter,
+            InternalKeyComparator, ValueType, VALUE_TYPE_FOR_SEEK,
+        },
         memory_limiter::GlobalMemoryLimiter,
         RangeCacheMemoryEngine,
     };
@@ -750,5 +759,78 @@ pub mod tests {
 
         let key = encoding_for_filter(key.as_encoded(), TimeStamp::new(commit_ts4));
         assert!(write.get(&key).is_some());
+    }
+
+    #[test]
+    fn test_background_worker_load() {
+        let mut engine = RangeCacheMemoryEngine::new(Arc::default(), Duration::from_secs(1000));
+        let path = Builder::new().prefix("test_load").tempdir().unwrap();
+        let path_str = path.path().to_str().unwrap();
+        let rocks_engine = new_engine(path_str, DATA_CFS).unwrap();
+        engine.set_disk_engine(rocks_engine.clone());
+
+        for i in 10..20 {
+            let key = construct_key(i, 1);
+            let key = data_key(&key);
+            let value = construct_value(i, i);
+            rocks_engine
+                .put_cf(CF_DEFAULT, &key, value.as_bytes())
+                .unwrap();
+            rocks_engine
+                .put_cf(CF_WRITE, &key, value.as_bytes())
+                .unwrap();
+        }
+
+        let r = CacheRange::new(DATA_MIN_KEY.to_vec(), DATA_MAX_KEY.to_vec());
+        {
+            let mut core = engine.core.write().unwrap();
+            core.mut_range_manager()
+                .pending_loaded_ranges
+                .push(r.clone());
+        }
+        engine.handle_pending_load();
+
+        // concurrent write to rocksdb, but the key will not be loaded in the memory
+        // engine
+        let key = construct_key(20, 1);
+        let key20 = data_key(&key);
+        let value = construct_value(20, 20);
+        rocks_engine
+            .put_cf(CF_DEFAULT, &key20, value.as_bytes())
+            .unwrap();
+        rocks_engine
+            .put_cf(CF_WRITE, &key20, value.as_bytes())
+            .unwrap();
+
+        let (write, default) = {
+            let core = engine.core().write().unwrap();
+            let skiplist_engine = core.engine();
+            (
+                skiplist_engine.cf_handle(CF_WRITE),
+                skiplist_engine.cf_handle(CF_DEFAULT),
+            )
+        };
+
+        // wait for background load
+        std::thread::sleep(Duration::from_secs(1));
+
+        for i in 10..20 {
+            let key = construct_key(i, 1);
+            let key = data_key(&key);
+            let value = construct_value(i, i);
+            let key = encode_seek_key(&key, u64::MAX, VALUE_TYPE_FOR_SEEK);
+            assert_eq!(
+                write.get(&key).unwrap().value().as_slice(),
+                value.as_bytes()
+            );
+            assert_eq!(
+                default.get(&key).unwrap().value().as_slice(),
+                value.as_bytes()
+            );
+        }
+
+        let key20 = encode_seek_key(&key20, u64::MAX, VALUE_TYPE_FOR_SEEK);
+        assert!(write.get(&key20).is_none());
+        assert!(default.get(&key20).is_none());
     }
 }
