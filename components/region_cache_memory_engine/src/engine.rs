@@ -146,8 +146,6 @@ pub struct RangeCacheMemoryEngineCore {
     engine: SkiplistEngine,
     range_manager: RangeManager,
     pub(crate) cached_write_batch: BTreeMap<CacheRange, Vec<(u64, RangeCacheWriteBatchEntry)>>,
-    // ranges being gced
-    ranges_being_gced: Vec<CacheRange>,
 }
 
 impl RangeCacheMemoryEngineCore {
@@ -156,7 +154,6 @@ impl RangeCacheMemoryEngineCore {
             engine: SkiplistEngine::new(limiter),
             range_manager: RangeManager::default(),
             cached_write_batch: BTreeMap::default(),
-            ranges_being_gced: vec![],
         }
     }
 
@@ -177,14 +174,6 @@ impl RangeCacheMemoryEngineCore {
         cache_range: &CacheRange,
     ) -> Option<Vec<(u64, RangeCacheWriteBatchEntry)>> {
         self.cached_write_batch.remove(cache_range)
-    }
-
-    pub fn set_ranges_gcing(&mut self, ranges_being_gced: Vec<CacheRange>) {
-        self.ranges_being_gced = ranges_being_gced;
-    }
-
-    pub fn clear_ranges_gcing(&mut self) {
-        self.ranges_being_gced = vec![];
     }
 }
 
@@ -249,10 +238,10 @@ impl RangeCacheMemoryEngine {
         let skiplist_engine = core.engine().clone();
         let range_manager = core.mut_range_manager();
         // Couple ranges that need to be loaded with snapshot
-        let pending_loaded_ranges = std::mem::take(&mut range_manager.pending_loaded_ranges);
+        let pending_loaded_ranges = std::mem::take(&mut range_manager.pending_ranges);
         if !pending_loaded_ranges.is_empty() {
             let rocks_snap = Arc::new(self.rocks_engine.as_ref().unwrap().snapshot(None));
-            range_manager.pending_loaded_ranges_with_snapshot = pending_loaded_ranges
+            range_manager.pending_ranges_with_snapshot = pending_loaded_ranges
                 .into_iter()
                 .map(|r| (r, rocks_snap.clone()))
                 .collect();
@@ -266,8 +255,9 @@ impl RangeCacheMemoryEngine {
 
         // Some ranges have already loaded all data from snapshot, it's time to consume
         // the cached write batch and make the range visible
-        let ranges_with_snap_done = std::mem::take(&mut range_manager.ranges_with_snap_done);
-        for range in ranges_with_snap_done {
+        let ranges_with_snapshot_loaded =
+            std::mem::take(&mut range_manager.ranges_with_snapshot_loaded);
+        for range in ranges_with_snapshot_loaded {
             if let Some(write_batches) = core.take_cache_write_batch(&range) {
                 for (seq, entry) in write_batches {
                     entry.write_to_memory(&skiplist_engine, seq).unwrap();

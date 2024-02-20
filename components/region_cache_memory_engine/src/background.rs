@@ -1,7 +1,7 @@
 // Copyright 2024 TiKV Project Authors. Licensed under Apache-2.0.
 
 use core::slice::SlicePattern;
-use std::{fmt::Display, sync::Arc, thread::JoinHandle, time::Duration};
+use std::{collections::BTreeSet, fmt::Display, sync::Arc, thread::JoinHandle, time::Duration};
 
 use crossbeam::{
     channel::{bounded, tick, Sender},
@@ -170,10 +170,10 @@ impl BackgroundRunner {
         Self { engine_core }
     }
 
-    fn ranges_for_gc(&self) -> Vec<CacheRange> {
+    fn ranges_for_gc(&self) -> BTreeSet<CacheRange> {
         let mut core = self.engine_core.write().unwrap();
-        let ranges: Vec<CacheRange> = core.range_manager().ranges().keys().cloned().collect();
-        core.set_ranges_gcing(ranges.clone());
+        let ranges: BTreeSet<CacheRange> = core.range_manager().ranges().keys().cloned().collect();
+        core.mut_range_manager().set_ranges_gcing(ranges.clone());
         ranges
     }
 
@@ -243,14 +243,13 @@ impl BackgroundRunner {
     fn gc_finished(&mut self) {
         let mut core = self.engine_core.write().unwrap();
         core.mut_range_manager().clear_ranges_gcing();
-        core.clear_ranges_gcing();
     }
 
     fn get_range_to_load(&self) -> Option<((CacheRange, Arc<RocksSnapshot>), SkiplistEngine)> {
         let core = self.engine_core.read().unwrap();
         let range = core
             .range_manager()
-            .pending_loaded_ranges_with_snapshot
+            .pending_ranges_with_snapshot
             .first()?
             .clone();
         Some((range, core.engine().clone()))
@@ -271,12 +270,12 @@ impl BackgroundRunner {
             let range_manager = core.mut_range_manager();
             assert_eq!(
                 range_manager
-                    .pending_loaded_ranges_with_snapshot
+                    .pending_ranges_with_snapshot
                     .remove(0)
                     .0,
                 range
             );
-            range_manager.ranges_with_snap_done.push(range);
+            range_manager.ranges_with_snapshot_loaded.push(range);
         }
         Ok(())
     }
@@ -785,7 +784,7 @@ pub mod tests {
         {
             let mut core = engine.core.write().unwrap();
             core.mut_range_manager()
-                .pending_loaded_ranges
+                .pending_ranges
                 .push(r.clone());
         }
         engine.handle_pending_load();

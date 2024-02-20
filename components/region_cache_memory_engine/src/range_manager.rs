@@ -84,10 +84,17 @@ pub struct RangeManager {
     // ranges that are cached now
     ranges: BTreeMap<CacheRange, RangeMeta>,
 
-    pub(crate) pending_loaded_ranges: Vec<CacheRange>,
+    // `pending_ranges` contains ranges that will be loaded into the memory engine. At
+    // sometime in the apply thread, the pending ranges, coupled with rocksdb snapshot, will be
+    // poped and pushed into `pending_ranges_with_snapshot`. Then the data in the snapshot
+    // of the given ranges will be loaded in the memory engine in the background worker.
+    // When the snapshot load is finished, `ranges_with_snapshot_loaded` will take over it, which
+    // will handle data that is written after the acquire of the snapshot. After it, the range load
+    // is finished.
+    pub(crate) pending_ranges: Vec<CacheRange>,
     // todo: change to deque
-    pub(crate) pending_loaded_ranges_with_snapshot: Vec<(CacheRange, Arc<RocksSnapshot>)>,
-    pub(crate) ranges_with_snap_done: Vec<CacheRange>,
+    pub(crate) pending_ranges_with_snapshot: Vec<(CacheRange, Arc<RocksSnapshot>)>,
+    pub(crate) ranges_with_snapshot_loaded: Vec<CacheRange>,
 
     ranges_being_gced: BTreeSet<CacheRange>,
 }
@@ -264,7 +271,7 @@ impl RangeManager {
         if self.evicted_ranges.contains(&cache_range) {
             return Err(LoadFailedReason::BeingEvicted);
         }
-        self.pending_loaded_ranges.push(cache_range);
+        self.pending_ranges.push(cache_range);
         Ok(())
     }
 }
