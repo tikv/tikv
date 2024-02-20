@@ -63,6 +63,8 @@ make_auto_flush_static_metric! {
         read_index,
         check_leader,
         batch_commands,
+        kv_flush,
+        kv_buffer_batch_get,
     }
 
     pub label_enum GcCommandKind {
