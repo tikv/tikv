@@ -204,6 +204,12 @@ pub struct Config {
     #[online_config(hidden)]
     #[deprecated = "The configuration has been moved to readpool.coprocessor.max_tasks_per_worker_*."]
     pub end_point_max_tasks: Option<usize>,
+
+    #[doc(hidden)]
+    #[online_config(skip)]
+    /// Minimum interval to send health feedback information in each `BatchCommands` gRPC stream.
+    /// 0 to disable sending health feedback.
+    pub health_feedback_interval: ReadableDuration,
 }
 
 impl Default for Config {
@@ -264,6 +270,7 @@ impl Default for Config {
             // Go tikv client uses 4 as well.
             forward_max_connections_per_address: 4,
             simplify_metrics: false,
+            health_feedback_interval: ReadableDuration::secs(1),
         }
     }
 }

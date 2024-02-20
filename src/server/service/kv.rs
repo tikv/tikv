@@ -99,6 +99,7 @@ pub struct Service<E: Engine, L: LockManager, F: KvFormat> {
     resource_manager: Option<Arc<ResourceGroupManager>>,
 
     health_controller: HealthController,
+    health_feedback_interval: Option<Duration>,
     health_feedback_seq: Arc<AtomicU64>,
 }
 
@@ -125,6 +126,7 @@ impl<E: Engine + Clone, L: LockManager + Clone, F: KvFormat> Clone for Service<E
             resource_manager: self.resource_manager.clone(),
             health_controller: self.health_controller.clone(),
             health_feedback_seq: self.health_feedback_seq.clone(),
+            health_feedback_interval: self.health_feedback_interval,
         }
     }
 }
@@ -145,6 +147,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Service<E, L, F> {
         reject_messages_on_memory_ratio: f64,
         resource_manager: Option<Arc<ResourceGroupManager>>,
         health_controller: HealthController,
+        health_feedback_interval: Option<Duration>
     ) -> Self {
         let now_unix = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -164,6 +167,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Service<E, L, F> {
             reject_messages_on_memory_ratio,
             resource_manager,
             health_controller,
+            health_feedback_interval,
             health_feedback_seq: Arc::new(AtomicU64::new(now_unix)),
         }
     }
@@ -959,6 +963,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
             self.store_id,
             self.health_controller.clone(),
             self.health_feedback_seq.clone(),
+            self.health_feedback_interval,
         );
         let request_handler = stream.try_for_each(move |mut req| {
             let request_ids = req.take_request_ids();
@@ -2462,23 +2467,30 @@ struct HealthFeedbackAttacher {
     health_controller: HealthController,
     last_feedback_time: Option<Instant>,
     seq: Arc<AtomicU64>,
+    feedback_interval: Option<Duration>,
 }
 
 impl HealthFeedbackAttacher {
-    fn new(store_id: u64, health_controller: HealthController, seq: Arc<AtomicU64>) -> Self {
+    fn new(store_id: u64, health_controller: HealthController, seq: Arc<AtomicU64>, feedback_interval: Option<Duration>) -> Self {
         Self {
             store_id,
             health_controller,
             last_feedback_time: None,
             seq,
+            feedback_interval,
         }
     }
 
     fn attach_if_needed(&mut self, resp: &mut BatchCommandsResponse) {
+        let feedback_interval = match self.feedback_interval {
+            Some(i) => i,
+            None => return,
+        };
+
         let now = Instant::now_coarse();
 
         if let Some(last_feedback_time) = self.last_feedback_time
-            && now - last_feedback_time < Duration::from_secs(1)
+            && now - last_feedback_time < feedback_interval
         {
             return;
         }
@@ -2549,5 +2561,41 @@ mod tests {
         };
         poll_future_notify(task);
         assert_eq!(block_on(rx1).unwrap(), 200);
+    }
+
+    #[test]
+    fn test_health_feedback_attacher() {
+        let health_controller = HealthController::new();
+        let test_reporter = health_controller::reporters::TestReporter::new(&health_controller);
+        let seq = Arc::new(AtomicU64::new(1));
+
+        let mut a = HealthFeedbackAttacher::new(1, health_controller.clone(), seq.clone(), None);
+        let mut resp = BatchCommandsResponse::default();
+        a.attach_if_needed(&mut resp);
+        assert!(!resp.has_health_feedback());
+
+        let mut a = HealthFeedbackAttacher::new(1, health_controller, seq, Some(Duration::from_secs(1)));
+        resp = BatchCommandsResponse::default();
+        a.attach_if_needed(&mut resp);
+        assert!(resp.has_health_feedback());
+        assert_eq!(resp.get_health_feedback().get_store_id(), 1);
+        assert_eq!(resp.get_health_feedback().get_feedback_seq_no(), 1);
+        assert_eq!(resp.get_health_feedback().get_slow_score(), 1);
+
+        // Skips attaching feedback because last attaching was just done.
+        test_reporter.set_raftstore_slow_score(50.);
+        resp = BatchCommandsResponse::default();
+        a.attach_if_needed(&mut resp);
+        assert!(!resp.has_health_feedback());
+
+        // Simulate elapsing enough time by changing the recorded last update time.
+        *a.last_feedback_time.as_mut().unwrap() -= Duration::from_millis(1001);
+        a.attach_if_needed(&mut resp);
+        assert!(resp.has_health_feedback());
+        assert_eq!(resp.get_health_feedback().get_store_id(), 1);
+        // Seq no increased.
+        assert_eq!(resp.get_health_feedback().get_feedback_seq_no(), 2);
+        assert_eq!(resp.get_health_feedback().get_slow_score(), 50);
+
     }
 }

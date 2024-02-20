@@ -54,7 +54,7 @@ impl RaftstoreReporter {
     const MODULE_NAME: &'static str = "raftstore";
 
     pub fn new(health_controller: &HealthController, cfg: RaftstoreReporterConfig) -> Self {
-        RaftstoreReporter {
+        Self {
             health_controller_inner: health_controller.inner.clone(),
             slow_score: SlowScore::new(cfg.inspect_interval),
             slow_trend: SlowTrendStatistics::new(cfg),
@@ -240,5 +240,22 @@ impl SlowTrendStatistics {
             (disk_io_latency + network_io_latency * self.net_io_factor) as u64
         }();
         self.slow_cause.record(latency, Instant::now());
+    }
+}
+
+/// A reporter that can set states directly, for testing purposes.
+pub struct TestReporter {
+    health_controller_inner: Arc<HealthControllerInner>,
+}
+
+impl TestReporter {
+    pub fn new(health_controller: &HealthController) -> Self {
+        Self {
+            health_controller_inner: health_controller.inner.clone(),
+        }
+    }
+
+    pub fn set_raftstore_slow_score(&self, slow_score: f64) {
+        self.health_controller_inner.update_raftstore_slow_score(slow_score);
     }
 }
