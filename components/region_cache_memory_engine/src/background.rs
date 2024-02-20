@@ -269,10 +269,7 @@ impl BackgroundRunner {
             let mut core = self.engine_core.write().unwrap();
             let range_manager = core.mut_range_manager();
             assert_eq!(
-                range_manager
-                    .pending_ranges_with_snapshot
-                    .remove(0)
-                    .0,
+                range_manager.pending_ranges_with_snapshot.remove(0).0,
                 range
             );
             range_manager.ranges_with_snapshot_loaded.push(range);
@@ -783,9 +780,7 @@ pub mod tests {
         let r = CacheRange::new(DATA_MIN_KEY.to_vec(), DATA_MAX_KEY.to_vec());
         {
             let mut core = engine.core.write().unwrap();
-            core.mut_range_manager()
-                .pending_ranges
-                .push(r.clone());
+            core.mut_range_manager().pending_ranges.push(r.clone());
         }
         engine.handle_pending_load();
 
