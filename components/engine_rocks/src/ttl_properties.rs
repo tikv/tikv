@@ -74,6 +74,7 @@ pub struct TtlPropertiesCollector<F: KvFormat> {
 
 impl<F: KvFormat> TablePropertiesCollector for TtlPropertiesCollector<F> {
     fn add(&mut self, key: &[u8], value: &[u8], entry_type: DBEntryType, _: u64, _: u64) {
+        // DBEntryType::BlobIndex will be skipped because we can't parse the value.
         if entry_type != DBEntryType::Put {
             return;
         }
