@@ -136,6 +136,9 @@ pub enum Error {
 
     #[error("imports are suspended for {time_to_lease_expire:?}")]
     Suspended { time_to_lease_expire: Duration },
+
+    #[error("TiKV disk space is not enough.")]
+    DiskSpaceNotEnough,
 }
 
 impl Error {
@@ -222,6 +225,7 @@ impl ErrorCodeExt for Error {
             Error::Suspended { .. } => error_code::sst_importer::SUSPENDED,
             Error::RequestTooNew(_) => error_code::sst_importer::REQUEST_TOO_NEW,
             Error::RequestTooOld(_) => error_code::sst_importer::REQUEST_TOO_OLD,
+            Error::DiskSpaceNotEnough => error_code::sst_importer::DISK_SPACE_NOT_ENOUGH,
         }
     }
 }
