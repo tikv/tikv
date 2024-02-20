@@ -461,6 +461,14 @@ pub fn extract_key_error(err: &Error) -> kvrpcpb::KeyError {
             primary_mismatch.set_lock_info(lock_info.clone());
             key_error.set_primary_mismatch(primary_mismatch);
         }
+        Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(MvccError(
+            box MvccErrorInner::GenerationOutOfOrder(generation, lock_info),
+        ))))) => {
+            let mut generation_out_of_order = kvrpcpb::GenerationOutOfOrder::default();
+            generation_out_of_order.set_generation(*generation);
+            generation_out_of_order.set_lock_info(lock_info.clone());
+            key_error.set_generation_out_of_order(generation_out_of_order);
+        }
         _ => {
             error!(?*err; "txn aborts");
             key_error.set_abort(format!("{:?}", err));

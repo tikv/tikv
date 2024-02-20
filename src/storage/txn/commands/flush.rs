@@ -11,12 +11,12 @@ use crate::storage::{
     lock_manager::LockManager,
     mvcc::{MvccTxn, SnapshotReader},
     txn::{
-        actions::common::check_committed_record_on_err,
+        actions::{common::check_committed_record_on_err, prewrite::prewrite_with_generation},
         commands::{
             CommandExt, ReaderWithStats, ReleasedLocks, ResponsePolicy, WriteCommand, WriteContext,
             WriteResult,
         },
-        prewrite, CommitKind, Error, Result, TransactionKind, TransactionProperties,
+        CommitKind, Error, Result, TransactionKind, TransactionProperties,
     },
     Command, ProcessResult, Result as StorageResult, Snapshot, TypedCommand,
 };
@@ -29,6 +29,7 @@ command! {
             start_ts: TimeStamp,
             primary: Vec<u8>,
             mutations: Vec<Mutation>,
+            generation: u64,
             lock_ttl: u64,
             assertion_level: AssertionLevel,
         }
@@ -128,7 +129,7 @@ impl Flush {
         for m in mem::take(&mut self.mutations) {
             let key = m.key().clone();
             let mutation_type = m.mutation_type();
-            let prewrite_result = prewrite(
+            let prewrite_result = prewrite_with_generation(
                 txn,
                 reader,
                 &props,
@@ -136,6 +137,7 @@ impl Flush {
                 &None,
                 PrewriteRequestPessimisticAction::SkipPessimisticCheck,
                 None,
+                self.generation,
             );
             match prewrite_result {
                 Ok((_ts, old_value)) => {
@@ -225,6 +227,7 @@ mod tests {
             start_ts,
             pk.into(),
             vec![Mutation::make_put(key, value.into())],
+            1,
             3000,
             AssertionLevel::Strict,
             Context::new(),

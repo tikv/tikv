@@ -42,6 +42,28 @@ pub fn prewrite<S: Snapshot>(
     pessimistic_action: PrewriteRequestPessimisticAction,
     expected_for_update_ts: Option<TimeStamp>,
 ) -> Result<(TimeStamp, OldValue)> {
+    prewrite_with_generation(
+        txn,
+        reader,
+        txn_props,
+        mutation,
+        secondary_keys,
+        pessimistic_action,
+        expected_for_update_ts,
+        0,
+    )
+}
+
+pub fn prewrite_with_generation<S: Snapshot>(
+    txn: &mut MvccTxn,
+    reader: &mut SnapshotReader<S>,
+    txn_props: &TransactionProperties<'_>,
+    mutation: Mutation,
+    secondary_keys: &Option<Vec<Vec<u8>>>,
+    pessimistic_action: PrewriteRequestPessimisticAction,
+    expected_for_update_ts: Option<TimeStamp>,
+    generation: u64,
+) -> Result<(TimeStamp, OldValue)> {
     let mut mutation =
         PrewriteMutation::from_mutation(mutation, secondary_keys, pessimistic_action, txn_props)?;
 
@@ -68,7 +90,16 @@ pub fn prewrite<S: Snapshot>(
     let mut lock_amended = false;
 
     let lock_status = match reader.load_lock(&mutation.key)? {
-        Some(lock) => mutation.check_lock(lock, pessimistic_action, expected_for_update_ts)?,
+        Some(lock) => {
+            if lock.generation >= generation {
+                return Err(ErrorInner::GenerationOutOfOrder(
+                    lock.generation,
+                    lock.into_lock_info(mutation.key.to_raw().unwrap()),
+                )
+                .into());
+            }
+            mutation.check_lock(lock, pessimistic_action, expected_for_update_ts)?
+        }
         None if matches!(pessimistic_action, DoPessimisticCheck) => {
             amend_pessimistic_lock(&mut mutation, reader)?;
             lock_amended = true;
@@ -160,7 +191,7 @@ pub fn prewrite<S: Snapshot>(
 
     let is_new_lock = !matches!(pessimistic_action, DoPessimisticCheck) || lock_amended;
 
-    let final_min_commit_ts = mutation.write_lock(lock_status, txn, is_new_lock)?;
+    let final_min_commit_ts = mutation.write_lock(lock_status, txn, is_new_lock, generation)?;
 
     fail_point!("after_prewrite_one_key");
 
@@ -510,6 +541,7 @@ impl<'a> PrewriteMutation<'a> {
         lock_status: LockStatus,
         txn: &mut MvccTxn,
         is_new_lock: bool,
+        generation: u64,
     ) -> Result<TimeStamp> {
         let mut try_one_pc = self.try_one_pc();
 
@@ -531,7 +563,8 @@ impl<'a> PrewriteMutation<'a> {
             self.min_commit_ts,
             false,
         )
-        .set_txn_source(self.txn_props.txn_source);
+        .set_txn_source(self.txn_props.txn_source)
+        .with_generation(generation);
         // Only Lock needs to record `last_change_ts` in its write record, Put or Delete
         // records themselves are effective changes.
         if tls_can_enable(LAST_CHANGE_TS) && self.lock_type == Some(LockType::Lock) {
