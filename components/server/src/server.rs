@@ -298,18 +298,9 @@ where
             EnvBuilder::new()
                 .cq_count(config.server.grpc_concurrency)
                 .name_prefix(thd_name!(GRPC_THREAD_PREFIX))
-<<<<<<< HEAD
-=======
                 .after_start(move || {
                     tikv_util::thread_group::set_properties(props.clone());
-
-                    // SAFETY: we will call `remove_thread_memory_accessor` at before_stop.
-                    unsafe { add_thread_memory_accessor() };
                 })
-                .before_stop(|| {
-                    remove_thread_memory_accessor();
-                })
->>>>>>> 369f7be1a7 (server: fix panic of gRPC threads due to thread group properties not set (#16258))
                 .build(),
         );
         let pd_client = TikvServerCore::connect_to_pd_cluster(
