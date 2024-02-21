@@ -73,6 +73,11 @@ store-io-pool-size = 0
 
 apply-pool-size = 1
 store-pool-size = 1
+<<<<<<< HEAD
+=======
+snap-generator-pool-size = 2
+skip-manual-compaction-in-clean_up-worker = false
+>>>>>>> 8cdf87b4da (raftstore: make manual compaction in cleanup worker be able to be ignored dynamically (#16547))
 [coprocessor]
 
 [rocksdb]
