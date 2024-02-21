@@ -91,14 +91,7 @@ pub fn prewrite_with_generation<S: Snapshot>(
 
     let lock_status = match reader.load_lock(&mutation.key)? {
         Some(lock) => {
-            if generation > 0 && lock.generation >= generation {
-                return Err(ErrorInner::GenerationOutOfOrder(
-                    lock.generation,
-                    lock.into_lock_info(mutation.key.to_raw().unwrap()),
-                )
-                .into());
-            }
-            mutation.check_lock(lock, pessimistic_action, expected_for_update_ts)?
+            mutation.check_lock(lock, pessimistic_action, expected_for_update_ts, generation)?
         }
         None if matches!(pessimistic_action, DoPessimisticCheck) => {
             amend_pessimistic_lock(&mut mutation, reader)?;
@@ -351,6 +344,7 @@ impl<'a> PrewriteMutation<'a> {
         lock: Lock,
         pessimistic_action: PrewriteRequestPessimisticAction,
         expected_for_update_ts: Option<TimeStamp>,
+        generation_to_write: u64,
     ) -> Result<LockStatus> {
         if lock.ts != self.txn_props.start_ts {
             // Abort on lock belonging to other transaction if
@@ -441,6 +435,14 @@ impl<'a> PrewriteMutation<'a> {
             self.min_commit_ts = std::cmp::max(self.min_commit_ts, lock.min_commit_ts);
 
             return Ok(LockStatus::Pessimistic(lock.for_update_ts));
+        }
+
+        if generation_to_write > 0 && lock.generation >= generation_to_write {
+            return Err(ErrorInner::GenerationOutOfOrder(
+                generation_to_write,
+                self.lock_info(lock)?,
+            )
+            .into());
         }
 
         // Duplicated command. No need to overwrite the lock and data.
