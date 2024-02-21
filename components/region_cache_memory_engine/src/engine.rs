@@ -268,7 +268,6 @@ impl RangeCacheMemoryEngine {
             }
 
             let range_manager = core.mut_range_manager();
-            // todo: the safe_point here should be the store's safe_ts
             range_manager.new_range(range.clone());
             range_manager.set_range_readable(&range, true);
         }

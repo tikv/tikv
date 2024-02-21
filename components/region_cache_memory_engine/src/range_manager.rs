@@ -1,7 +1,7 @@
 // Copyright 2024 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::{BTreeMap, BTreeSet, VecDeque},
     sync::Arc,
 };
 
@@ -93,7 +93,7 @@ pub struct RangeManager {
     // is finished.
     pub(crate) pending_ranges: Vec<CacheRange>,
     // todo: change to deque
-    pub(crate) pending_ranges_with_snapshot: Vec<(CacheRange, Arc<RocksSnapshot>)>,
+    pub(crate) pending_ranges_with_snapshot: VecDeque<(CacheRange, Arc<RocksSnapshot>)>,
     pub(crate) ranges_with_snapshot_loaded: Vec<CacheRange>,
 
     ranges_being_gced: BTreeSet<CacheRange>,

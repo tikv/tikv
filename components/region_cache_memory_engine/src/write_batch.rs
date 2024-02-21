@@ -156,6 +156,17 @@ impl RangeCacheWriteBatchEntry {
                 return;
             }
         }
+        for r in &engine_core.range_manager().ranges_with_snapshot_loaded {
+            if r.contains_key(&self.key) {
+                let range = r.clone();
+                engine_core
+                    .cached_write_batch
+                    .entry(range)
+                    .or_default()
+                    .push((seq, self.clone()));
+                return;
+            }
+        }
     }
 
     #[inline]

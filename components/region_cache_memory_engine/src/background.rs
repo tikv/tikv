@@ -250,12 +250,13 @@ impl BackgroundRunner {
         let range = core
             .range_manager()
             .pending_ranges_with_snapshot
-            .first()?
+            .front()?
             .clone();
         Some((range, core.engine().clone()))
     }
 
     fn on_snapshot_loaded(&mut self, range: CacheRange) -> engine_traits::Result<()> {
+        fail::fail_point!("on_snapshot_loaded");
         let (cache_batch, skiplist_engine) = {
             let mut core = self.engine_core.write().unwrap();
             (core.take_cache_write_batch(&range), core.engine().clone())
@@ -265,11 +266,16 @@ impl BackgroundRunner {
                 entry.write_to_memory(&skiplist_engine, seq)?;
             }
         }
+        fail::fail_point!("on_snapshot_loaded_finish_before_status_change");
         {
             let mut core = self.engine_core.write().unwrap();
             let range_manager = core.mut_range_manager();
             assert_eq!(
-                range_manager.pending_ranges_with_snapshot.remove(0).0,
+                range_manager
+                    .pending_ranges_with_snapshot
+                    .pop_front()
+                    .unwrap()
+                    .0,
                 range
             );
             range_manager.ranges_with_snapshot_loaded.push(range);
@@ -777,10 +783,13 @@ pub mod tests {
                 .unwrap();
         }
 
-        let r = CacheRange::new(DATA_MIN_KEY.to_vec(), DATA_MAX_KEY.to_vec());
+        let k = format!("zk{:08}", 15).into_bytes();
+        let r1 = CacheRange::new(DATA_MIN_KEY.to_vec(), k.clone());
+        let r2 = CacheRange::new(k, DATA_MAX_KEY.to_vec());
         {
             let mut core = engine.core.write().unwrap();
-            core.mut_range_manager().pending_ranges.push(r.clone());
+            core.mut_range_manager().pending_ranges.push(r1.clone());
+            core.mut_range_manager().pending_ranges.push(r2.clone());
         }
         engine.handle_pending_load();
 
