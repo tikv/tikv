@@ -59,6 +59,10 @@ impl DbOptions for PanicDbOptions {
     fn set_titandb_options(&mut self, opts: &Self::TitanDbOptions) {
         panic!()
     }
+
+    fn set_track_and_verify_wals_in_manifest(&mut self, v: bool) {
+        panic!()
+    }
 }
 
 pub struct PanicTitanDbOptions;

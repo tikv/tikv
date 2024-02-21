@@ -1312,6 +1312,8 @@ pub struct DbConfig {
     pub raftcf: RaftCfConfig,
     #[online_config(skip)]
     pub titan: TitanDbConfig,
+    #[online_config(skip)]
+    pub track_and_verify_wals_in_manifest: bool,
 }
 
 #[derive(Clone)]
@@ -1368,6 +1370,7 @@ impl Default for DbConfig {
             lockcf: LockCfConfig::default(),
             raftcf: RaftCfConfig::default(),
             titan: TitanDbConfig::default(),
+            track_and_verify_wals_in_manifest: false,
         }
     }
 }
@@ -1539,6 +1542,7 @@ impl DbConfig {
             // Historical stats are not used.
             opts.set_stats_persist_period_sec(0);
         }
+        opts.set_track_and_verify_wals_in_manifest(self.track_and_verify_wals_in_manifest);
         opts
     }
 
