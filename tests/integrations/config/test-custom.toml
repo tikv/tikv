@@ -84,6 +84,7 @@ background-thread-count = 999
 end-point-slow-log-threshold = "1s"
 forward-max-connections-per-address = 5
 reject-messages-on-memory-ratio = 0.8
+health-feedback-interval = "2s"
 
 [server.labels]
 a = "b"
