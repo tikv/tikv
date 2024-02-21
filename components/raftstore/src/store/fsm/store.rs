@@ -1704,7 +1704,12 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             ReadRunner::new(self.router.clone(), engines.raft.clone()),
         );
 
-        let compact_runner = CompactRunner::new(engines.kv.clone(), bgworker_remote);
+        let compact_runner = CompactRunner::new(
+            engines.kv.clone(),
+            bgworker_remote,
+            cfg.clone().tracker(String::from("compact-runner")),
+            cfg.value().clean_up_manual_compaction_skip,
+        );
         let cleanup_sst_runner = CleanupSstRunner::new(Arc::clone(&importer));
         let gc_snapshot_runner = GcSnapshotRunner::new(
             meta.get_id(),

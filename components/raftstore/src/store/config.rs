@@ -414,6 +414,11 @@ pub struct Config {
     #[doc(hidden)]
     #[online_config(hidden)]
     pub min_pending_apply_region_count: u64,
+
+    /// Whether to skip manual compaction in the clean up worker for `write` and
+    /// `default` column family
+    #[doc(hidden)]
+    pub clean_up_manual_compaction_skip: bool,
 }
 
 impl Default for Config {
@@ -552,6 +557,7 @@ impl Default for Config {
             enable_v2_compatible_learner: false,
             unsafe_disable_check_quorum: false,
             min_pending_apply_region_count: 10,
+            clean_up_manual_compaction_skip: false,
         }
     }
 }
