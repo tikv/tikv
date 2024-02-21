@@ -42,6 +42,7 @@ use raftstore::{
     },
     Result,
 };
+use resolved_ts::IngestObserver;
 use resource_control::ResourceGroupManager;
 use resource_metering::{CollectorRegHandle, ResourceTagFactory};
 use security::SecurityManager;
@@ -352,6 +353,7 @@ impl<EK: KvEngineWithRocks> ServerCluster<EK> {
             // resolved ts endpoint needs store id.
             store_meta.lock().unwrap().store_id = Some(node_id);
             // Resolved ts endpoint
+            let ingest_observer = Arc::new(IngestObserver::default());
             let rts_endpoint = resolved_ts::Endpoint::new(
                 &cfg.resolved_ts,
                 rts_worker.scheduler(),
@@ -361,6 +363,7 @@ impl<EK: KvEngineWithRocks> ServerCluster<EK> {
                 concurrency_manager.clone(),
                 self.env.clone(),
                 self.security_mgr.clone(),
+                ingest_observer,
             );
             // Start the worker
             rts_worker.start(rts_endpoint);

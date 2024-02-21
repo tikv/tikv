@@ -36,7 +36,7 @@ use raftstore::{
     router::CdcHandle,
     store::fsm::{store::StoreRegionMeta, ChangeObserver},
 };
-use resolved_ts::{resolve_by_raft, LeadershipResolver, Resolver};
+use resolved_ts::{resolve_by_raft, IObserver, LeadershipResolver, Resolver};
 use security::SecurityManager;
 use tikv::{
     config::CdcConfig,
@@ -425,6 +425,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
         security_mgr: Arc<SecurityManager>,
         sink_memory_quota: Arc<MemoryQuota>,
         causal_ts_provider: Option<Arc<CausalTsProviderImpl>>,
+        ingest_observer: Arc<dyn IObserver>,
     ) -> Endpoint<T, E, S> {
         let workers = Builder::new_multi_thread()
             .thread_name("cdcwkr")
@@ -470,6 +471,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
             env,
             security_mgr,
             region_read_progress,
+            ingest_observer,
             store_resolver_gc_interval,
         );
         let ep = Endpoint {
@@ -1408,6 +1410,7 @@ mod tests {
         router::{CdcRaftRouter, RaftStoreRouter},
         store::{fsm::StoreMeta, msg::CasualMessage, PeerMsg, ReadDelegate},
     };
+    use resolved_ts::IngestObserver;
     use test_pd_client::TestPdClient;
     use test_raftstore::MockRaftStoreRouter;
     use tikv::{
@@ -1512,12 +1515,14 @@ mod tests {
         let env = Arc::new(Environment::new(1));
         let security_mgr = Arc::new(SecurityManager::default());
         let store_resolver_gc_interval = Duration::from_secs(60);
+        let ingest_observer = Arc::new(IngestObserver::default());
         let leader_resolver = LeadershipResolver::new(
             1,
             pd_client.clone(),
             env.clone(),
             security_mgr.clone(),
             region_read_progress,
+            ingest_observer.clone(),
             store_resolver_gc_interval,
         );
         let ep = Endpoint::new(
@@ -1542,6 +1547,7 @@ mod tests {
             security_mgr,
             Arc::new(MemoryQuota::new(usize::MAX)),
             causal_ts_provider,
+            ingest_observer,
         );
 
         TestEndpointSuite {

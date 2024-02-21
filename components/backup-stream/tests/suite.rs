@@ -33,7 +33,7 @@ use kvproto::{
 };
 use pd_client::PdClient;
 use raftstore::{router::CdcRaftRouter, RegionInfoAccessor};
-use resolved_ts::LeadershipResolver;
+use resolved_ts::{IngestObserver, LeadershipResolver};
 use tempfile::TempDir;
 use test_pd_client::TestPdClient;
 use test_raftstore::{new_server_cluster, Cluster, ServerCluster};
@@ -365,6 +365,7 @@ impl Suite {
         let ob = self.obs.get(&id).unwrap().clone();
         cfg.enable = true;
         cfg.temp_path = format!("/{}/{}", self.temp_files.path().display(), id);
+        let ingest_observer = Arc::new(IngestObserver::default());
         let resolver = LeadershipResolver::new(
             id,
             cluster.pd_client.clone(),
@@ -375,6 +376,7 @@ impl Suite {
                 .unwrap()
                 .region_read_progress
                 .clone(),
+            ingest_observer,
             Duration::from_secs(60),
         );
         let endpoint = Endpoint::new(

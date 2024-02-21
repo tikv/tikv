@@ -74,7 +74,7 @@ use raftstore::{
     RaftRouterCompactedEventSender,
 };
 use region_cache_memory_engine::RangeCacheMemoryEngine;
-use resolved_ts::{LeadershipResolver, Task};
+use resolved_ts::{IngestMediator, IngestObserver, LeadershipResolver, Mediator, Task};
 use resource_control::ResourceGroupManager;
 use security::SecurityManager;
 use service::{service_event::ServiceEvent, service_manager::GrpcServiceManager};
@@ -870,61 +870,8 @@ where
         rejector.register_to(self.coprocessor_host.as_mut().unwrap());
         self.snap_br_rejector = Some(rejector);
 
-        // Start backup stream
-        let backup_stream_scheduler = if self.core.config.log_backup.enable {
-            // Create backup stream.
-            let mut backup_stream_worker = Box::new(LazyWorker::new("backup-stream"));
-            let backup_stream_scheduler = backup_stream_worker.scheduler();
-
-            // Register backup-stream observer.
-            let backup_stream_ob = BackupStreamObserver::new(backup_stream_scheduler.clone());
-            backup_stream_ob.register_to(self.coprocessor_host.as_mut().unwrap());
-            // Register config manager.
-            cfg_controller.register(
-                tikv::config::Module::BackupStream,
-                Box::new(BackupStreamConfigManager::new(
-                    backup_stream_worker.scheduler(),
-                    self.core.config.log_backup.clone(),
-                )),
-            );
-
-            let region_read_progress = engines
-                .store_meta
-                .lock()
-                .unwrap()
-                .region_read_progress
-                .clone();
-            let leadership_resolver = LeadershipResolver::new(
-                node.id(),
-                self.pd_client.clone(),
-                self.env.clone(),
-                self.security_mgr.clone(),
-                region_read_progress,
-                Duration::from_secs(60),
-            );
-
-            let backup_stream_endpoint = backup_stream::Endpoint::new(
-                node.id(),
-                PdStore::new(Checked::new(Sourced::new(
-                    Arc::clone(&self.pd_client),
-                    pd_client::meta_storage::Source::LogBackup,
-                ))),
-                self.core.config.log_backup.clone(),
-                backup_stream_scheduler.clone(),
-                backup_stream_ob,
-                self.region_info_accessor.clone(),
-                CdcRaftRouter(self.router.clone()),
-                self.pd_client.clone(),
-                self.concurrency_manager.clone(),
-                BackupStreamResolver::V1(leadership_resolver),
-            );
-            backup_stream_worker.start(backup_stream_endpoint);
-            self.core.to_stop.push(backup_stream_worker);
-            Some(backup_stream_scheduler)
-        } else {
-            None
-        };
-
+        // Start SST importer.
+        let mut ingest_mediator = IngestMediator::default();
         let import_path = self.core.store_path.join("import");
         let mut importer = SstImporter::new(
             &self.core.config.import,
@@ -955,6 +902,66 @@ where
             importer.set_compression_type(cf_name, from_rocks_compression_type(*compression_type));
         }
         let importer = Arc::new(importer);
+
+        // Start backup stream
+        let backup_stream_scheduler = if self.core.config.log_backup.enable {
+            // Create backup stream.
+            let mut backup_stream_worker = Box::new(LazyWorker::new("backup-stream"));
+            let backup_stream_scheduler = backup_stream_worker.scheduler();
+
+            // Register backup-stream observer.
+            let backup_stream_ob = BackupStreamObserver::new(backup_stream_scheduler.clone());
+            backup_stream_ob.register_to(self.coprocessor_host.as_mut().unwrap());
+            // Register config manager.
+            cfg_controller.register(
+                tikv::config::Module::BackupStream,
+                Box::new(BackupStreamConfigManager::new(
+                    backup_stream_worker.scheduler(),
+                    self.core.config.log_backup.clone(),
+                )),
+            );
+
+            let region_read_progress = engines
+                .store_meta
+                .lock()
+                .unwrap()
+                .region_read_progress
+                .clone();
+            // TODO: backup_stream may need to write its own observer so that
+            // its resolved ts does not advance until ingested ssts are backed up.
+            let ingest_observer = Arc::new(IngestObserver::default());
+            ingest_mediator.register(ingest_observer.clone());
+            let leadership_resolver = LeadershipResolver::new(
+                node.id(),
+                self.pd_client.clone(),
+                self.env.clone(),
+                self.security_mgr.clone(),
+                region_read_progress,
+                ingest_observer,
+                Duration::from_secs(60),
+            );
+
+            let backup_stream_endpoint = backup_stream::Endpoint::new(
+                node.id(),
+                PdStore::new(Checked::new(Sourced::new(
+                    Arc::clone(&self.pd_client),
+                    pd_client::meta_storage::Source::LogBackup,
+                ))),
+                self.core.config.log_backup.clone(),
+                backup_stream_scheduler.clone(),
+                backup_stream_ob,
+                self.region_info_accessor.clone(),
+                CdcRaftRouter(self.router.clone()),
+                self.pd_client.clone(),
+                self.concurrency_manager.clone(),
+                BackupStreamResolver::V1(leadership_resolver),
+            );
+            backup_stream_worker.start(backup_stream_endpoint);
+            self.core.to_stop.push(backup_stream_worker);
+            Some(backup_stream_scheduler)
+        } else {
+            None
+        };
 
         let split_check_runner = SplitCheckRunner::new(
             engines.engines.kv.clone(),
@@ -1044,6 +1051,8 @@ where
         }
 
         // Start CDC.
+        let ingest_observer = Arc::new(IngestObserver::default());
+        ingest_mediator.register(ingest_observer.clone());
         let cdc_memory_quota = Arc::new(MemoryQuota::new(
             self.core.config.cdc.sink_memory_quota.0 as _,
         ));
@@ -1063,12 +1072,15 @@ where
             self.security_mgr.clone(),
             cdc_memory_quota.clone(),
             self.causal_ts_provider.clone(),
+            ingest_observer,
         );
         cdc_worker.start_with_timer(cdc_endpoint);
         self.core.to_stop.push(cdc_worker);
 
         // Start resolved ts
         if let Some(mut rts_worker) = rts_worker {
+            let ingest_observer = Arc::new(IngestObserver::default());
+            ingest_mediator.register(ingest_observer.clone());
             let rts_endpoint = resolved_ts::Endpoint::new(
                 &self.core.config.resolved_ts,
                 rts_worker.scheduler(),
@@ -1078,6 +1090,7 @@ where
                 self.concurrency_manager.clone(),
                 server.env(),
                 self.security_mgr.clone(),
+                ingest_observer,
             );
             self.resolved_ts_scheduler = Some(rts_worker.scheduler());
             rts_worker.start_with_timer(rts_endpoint);

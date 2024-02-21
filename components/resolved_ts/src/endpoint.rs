@@ -39,6 +39,7 @@ use txn_types::{Key, TimeStamp};
 use crate::{
     advance::{AdvanceTsWorker, LeadershipResolver, DEFAULT_CHECK_LEADER_TIMEOUT_DURATION},
     cmd::{ChangeLog, ChangeRow},
+    ingest::Observer,
     metrics::*,
     resolver::{LastAttempt, Resolver},
     scanner::{ScanEntries, ScanTask, ScannerPool},
@@ -655,6 +656,7 @@ where
         concurrency_manager: ConcurrencyManager,
         env: Arc<Environment>,
         security_mgr: Arc<SecurityManager>,
+        ingest_observer: Arc<dyn Observer>,
     ) -> Self {
         let (region_read_progress, store_id) = {
             let meta = store_meta.lock().unwrap();
@@ -670,6 +672,7 @@ where
             env,
             security_mgr,
             region_read_progress.clone(),
+            ingest_observer,
             store_resolver_gc_interval,
         );
         let scan_concurrency_semaphore = Arc::new(Semaphore::new(cfg.incremental_scan_concurrency));

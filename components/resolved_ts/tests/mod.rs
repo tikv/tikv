@@ -15,7 +15,7 @@ use kvproto::{
 };
 use online_config::ConfigValue;
 use raftstore::{coprocessor::CoprocessorHost, router::CdcRaftRouter};
-use resolved_ts::{Observer, Task};
+use resolved_ts::{IngestObserver, Observer, Task};
 use test_raftstore::*;
 use tikv::config::ResolvedTsConfig;
 use tikv_util::{worker::LazyWorker, HandyRwLock};
@@ -85,6 +85,7 @@ impl TestSuite {
                 advance_ts_interval: tikv_util::config::ReadableDuration(Duration::from_millis(10)),
                 ..Default::default()
             };
+            let ingest_observer = Arc::new(IngestObserver::default());
             let rts_endpoint = resolved_ts::Endpoint::new(
                 &cfg,
                 worker.scheduler(),
@@ -94,6 +95,7 @@ impl TestSuite {
                 cm.clone(),
                 env,
                 sim.security_mgr.clone(),
+                ingest_observer,
             );
             concurrency_managers.insert(*id, cm);
             worker.start(rts_endpoint);

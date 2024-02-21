@@ -43,7 +43,12 @@ use tokio::{
 };
 use txn_types::TimeStamp;
 
-use crate::{endpoint::Task, metrics::*, TsSource};
+use crate::{
+    endpoint::Task,
+    ingest::{Observer},
+    metrics::*,
+    TsSource,
+};
 
 pub(crate) const DEFAULT_CHECK_LEADER_TIMEOUT_DURATION: Duration = Duration::from_secs(5); // 5s
 const DEFAULT_GRPC_GZIP_COMPRESSION_LEVEL: usize = 2;
@@ -161,6 +166,7 @@ pub struct LeadershipResolver {
     security_mgr: Arc<SecurityManager>,
     region_read_progress: RegionReadProgressRegistry,
     store_id: u64,
+    ingest_observer: Arc<dyn Observer>,
 
     // store_id -> check leader request, record the request to each stores.
     store_req_map: HashMap<u64, CheckLeaderRequest>,
@@ -179,6 +185,7 @@ impl LeadershipResolver {
         env: Arc<Environment>,
         security_mgr: Arc<SecurityManager>,
         region_read_progress: RegionReadProgressRegistry,
+        ingest_observer: Arc<dyn Observer>,
         gc_interval: Duration,
     ) -> LeadershipResolver {
         LeadershipResolver {
@@ -188,6 +195,7 @@ impl LeadershipResolver {
             env,
             security_mgr,
             region_read_progress,
+            ingest_observer,
 
             store_req_map: HashMap::default(),
             progresses: HashMap::default(),
@@ -406,7 +414,17 @@ impl LeadershipResolver {
                 break;
             }
         }
-        let res: Vec<u64> = self.valid_regions.drain().collect();
+        let mut res = Vec::with_capacity(self.valid_regions.len());
+        for region_id in self.valid_regions.drain() {
+            // Skip regions those are currently ingesting SSTs.
+            if let Some(lease) = self.ingest_observer.query(region_id) {
+                info!("skip advancing resolved ts due to ingest sst";
+                    "region_id" => region_id, "lease" => ?lease,
+                );
+                continue;
+            }
+            res.push(region_id)
+        }
         if res.len() != checking_regions.len() {
             warn!(
                 "check leader returns valid regions different from checking regions";
@@ -578,6 +596,7 @@ mod tests {
     use tikv_util::store::new_peer;
 
     use super::*;
+    use crate::IngestObserver;
 
     #[derive(Clone)]
     struct MockTikv {
@@ -633,12 +652,14 @@ mod tests {
         let progress2 = RegionReadProgress::new(&region2, 1, 1, 2);
         progress2.update_leader_info(2, 2, &region2);
 
+        let ingest_observer = Arc::new(IngestObserver::default());
         let mut leader_resolver = LeadershipResolver::new(
             1, // store id
             Arc::new(MockPdClient {}),
             env.clone(),
             Arc::new(SecurityManager::default()),
             RegionReadProgressRegistry::new(),
+            ingest_observer,
             Duration::from_secs(1),
         );
         leader_resolver

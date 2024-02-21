@@ -67,7 +67,7 @@ use raftstore_v2::{
     router::{DiskSnapBackupHandle, PeerMsg, RaftRouter},
     StateStorage,
 };
-use resolved_ts::Task;
+use resolved_ts::{IngestMediator, IngestObserver, Mediator, Task};
 use resource_control::ResourceGroupManager;
 use security::SecurityManager;
 use service::{service_event::ServiceEvent, service_manager::GrpcServiceManager};
@@ -619,6 +619,39 @@ where
             unified_read_pool_scale_receiver = Some(rx);
         }
 
+        // Start SST importer.
+        let mut ingest_mediator = IngestMediator::default();
+        let import_path = self.core.store_path.join("import");
+        let mut importer = SstImporter::new(
+            &self.core.config.import,
+            import_path,
+            self.core.encryption_key_manager.clone(),
+            self.core.config.storage.api_version(),
+            true,
+        )
+        .unwrap();
+        for (cf_name, compression_type) in &[
+            (
+                CF_DEFAULT,
+                self.core
+                    .config
+                    .rocksdb
+                    .defaultcf
+                    .bottommost_level_compression,
+            ),
+            (
+                CF_WRITE,
+                self.core
+                    .config
+                    .rocksdb
+                    .writecf
+                    .bottommost_level_compression,
+            ),
+        ] {
+            importer.set_compression_type(cf_name, from_rocks_compression_type(*compression_type));
+        }
+        let importer = Arc::new(importer);
+
         // Run check leader in a dedicate thread, because it is time sensitive
         // and crucial to TiCDC replication lag.
         let check_leader_worker =
@@ -646,6 +679,8 @@ where
         let cdc_memory_quota = Arc::new(MemoryQuota::new(
             self.core.config.cdc.sink_memory_quota.0 as _,
         ));
+        let ingest_observer = Arc::new(IngestObserver::default());
+        ingest_mediator.register(ingest_observer.clone());
         let cdc_endpoint = cdc::Endpoint::new(
             self.core.config.server.cluster_id,
             &self.core.config.cdc,
@@ -662,6 +697,7 @@ where
             self.security_mgr.clone(),
             cdc_memory_quota.clone(),
             self.causal_ts_provider.clone(),
+            ingest_observer,
         );
         cdc_worker.start_with_timer(cdc_endpoint);
         self.core.to_stop.push(cdc_worker);
@@ -680,6 +716,8 @@ where
                     rts_worker.scheduler(),
                 )),
             );
+            let ingest_observer = Arc::new(IngestObserver::default());
+            ingest_mediator.register(ingest_observer.clone());
             let rts_endpoint = resolved_ts::Endpoint::new(
                 &self.core.config.resolved_ts,
                 rts_worker.scheduler(),
@@ -689,6 +727,7 @@ where
                 self.concurrency_manager.clone(),
                 self.env.clone(),
                 self.security_mgr.clone(),
+                ingest_observer,
             );
             self.resolved_ts_scheduler = Some(rts_worker.scheduler());
             rts_worker.start_with_timer(rts_endpoint);
@@ -713,6 +752,11 @@ where
                 )),
             );
 
+            // TODO: Support pausing resolved ts using ingest observer in
+            // BackupStreamResolver::V2.
+            //
+            // let ingest_observer = Arc::new(IngestObserver::default());
+            // ingest_mediator.register(ingest_observer.clone());
             let backup_stream_endpoint = backup_stream::Endpoint::new(
                 self.node.as_ref().unwrap().id(),
                 PdStore::new(Checked::new(Sourced::new(
@@ -788,37 +832,6 @@ where
                 server.get_grpc_mem_quota().clone(),
             )),
         );
-
-        let import_path = self.core.store_path.join("import");
-        let mut importer = SstImporter::new(
-            &self.core.config.import,
-            import_path,
-            self.core.encryption_key_manager.clone(),
-            self.core.config.storage.api_version(),
-            true,
-        )
-        .unwrap();
-        for (cf_name, compression_type) in &[
-            (
-                CF_DEFAULT,
-                self.core
-                    .config
-                    .rocksdb
-                    .defaultcf
-                    .bottommost_level_compression,
-            ),
-            (
-                CF_WRITE,
-                self.core
-                    .config
-                    .rocksdb
-                    .writecf
-                    .bottommost_level_compression,
-            ),
-        ] {
-            importer.set_compression_type(cf_name, from_rocks_compression_type(*compression_type));
-        }
-        let importer = Arc::new(importer);
 
         // V2 starts split-check worker within raftstore.
 
