@@ -216,7 +216,6 @@ pub enum Error {
 pub struct Runner<E> {
     engine: E,
     remote: Remote<yatp::task::future::TaskCell>,
-
     cfg_tracker: Tracker<Config>,
     // Whether to skip the manual compaction of write and default comlumn family.
     skip_compact: bool,
@@ -386,6 +385,7 @@ where
             } => {
                 let cf = &cf_name;
                 if cf != CF_LOCK {
+                    // check whether the config changed for ignoring manual compaction
                     if let Some(incoming) = self.cfg_tracker.any_new() {
                         self.skip_compact = incoming.clean_up_manual_compaction_skip;
                     }
