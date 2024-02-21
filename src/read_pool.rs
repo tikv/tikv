@@ -12,7 +12,10 @@ use std::{
 };
 
 use file_system::{set_io_type, IoType};
-use futures::{channel::oneshot, future::TryFutureExt};
+use futures::{
+    channel::oneshot,
+    future::{FutureExt, TryFutureExt},
+};
 use kvproto::{errorpb, kvrpcpb::CommandPri};
 use online_config::{ConfigChange, ConfigManager, ConfigValue, Result as CfgResult};
 use prometheus::{core::Metric, Histogram, IntCounter, IntGauge};
@@ -172,10 +175,9 @@ impl ReadPoolHandle {
                     TaskCell::new(
                         TrackedFuture::new(with_resource_limiter(
                             ControlledFuture::new(
-                                async move {
-                                    f.await;
+                                f.map(move |_| {
                                     running_tasks.dec();
-                                },
+                                }),
                                 resource_ctl.clone(),
                                 group_name,
                             ),
@@ -185,10 +187,9 @@ impl ReadPoolHandle {
                     )
                 } else {
                     TaskCell::new(
-                        TrackedFuture::new(async move {
-                            f.await;
+                        TrackedFuture::new(f.map(move |_| {
                             running_tasks.dec();
-                        }),
+                        })),
                         extras,
                     )
                 };
@@ -212,10 +213,9 @@ impl ReadPoolHandle {
     {
         let (tx, rx) = oneshot::channel::<T>();
         let res = self.spawn(
-            async move {
-                let res = f.await;
+            f.map(move |res| {
                 let _ = tx.send(res);
-            },
+            }),
             priority,
             task_id,
             metadata,
