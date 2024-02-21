@@ -56,7 +56,9 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: raftstore::store::Transport>
         let id = self.fsm.peer().region_id();
         let term = self.fsm.peer().term();
         let (ch, _) = QueryResChannel::with_callback(Box::new(move |res| {
-            if let QueryResult::Response(resp) = res && resp.get_header().has_error() {
+            if let QueryResult::Response(resp) = res
+                && resp.get_header().has_error()
+            {
                 // Return error
                 capture_change.snap_cb.report_error(resp.clone());
                 return;
@@ -116,7 +118,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                 self.flush();
                 let (applied_index, _) = self.apply_progress();
                 let snap = RegionSnapshot::from_snapshot(
-                    Arc::new(self.tablet().snapshot()),
+                    Arc::new(self.tablet().snapshot(None)),
                     Arc::new(self.region().clone()),
                 );
                 snap.set_apply_index(applied_index);

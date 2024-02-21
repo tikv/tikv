@@ -1,0 +1,13 @@
+[package]
+name = "crypto"
+version = "0.0.1"
+edition = "2021"
+publish = false
+license = "Apache-2.0"
+
+[dependencies]
+openssl = { workspace = true }
+openssl-sys = { workspace = true }
+slog = { workspace = true }
+# better to not use slog-global, but pass in the logger
+slog-global = { workspace = true }

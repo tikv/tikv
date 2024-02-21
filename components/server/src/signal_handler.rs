@@ -43,11 +43,15 @@ mod imp {
                     info!("{}", metrics::dump(false));
                     if let Some(ref engines) = engines {
                         info!("{:?}", MiscExt::dump_stats(&engines.kv));
-                        if let Some(s) = kv_statistics.as_ref() && let Some(s) = s.to_string() {
+                        if let Some(s) = kv_statistics.as_ref()
+                            && let Some(s) = s.to_string()
+                        {
                             info!("{:?}", s);
                         }
                         info!("{:?}", RaftEngine::dump_stats(&engines.raft));
-                        if let Some(s) = raft_statistics.as_ref() && let Some(s) = s.to_string() {
+                        if let Some(s) = raft_statistics.as_ref()
+                            && let Some(s) = s.to_string()
+                        {
                             info!("{:?}", s);
                         }
                     }
@@ -61,12 +65,15 @@ mod imp {
 
 #[cfg(not(unix))]
 mod imp {
+    use service::service_event::ServiceEvent;
+
     use super::*;
 
     pub fn wait_for_signal(
         _: Option<Engines<impl KvEngine, impl RaftEngine>>,
         _: Option<Arc<RocksStatistics>>,
         _: Option<Arc<RocksStatistics>>,
+        _: Option<TikvMpsc::Sender<ServiceEvent>>,
     ) {
     }
 }

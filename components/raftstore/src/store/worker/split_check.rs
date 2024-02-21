@@ -226,8 +226,8 @@ impl BucketStatsInfo {
     }
 
     #[inline]
-    pub fn bucket_stat(&self) -> &Option<BucketStat> {
-        &self.bucket_stat
+    pub fn bucket_stat(&self) -> Option<&BucketStat> {
+        self.bucket_stat.as_ref()
     }
 
     #[inline]
@@ -250,14 +250,22 @@ impl BucketStatsInfo {
         // The bucket ranges is none when the region buckets is also none.
         // So this condition indicates that the region buckets needs to refresh not
         // renew.
-        if let Some(bucket_ranges) = bucket_ranges&&self.bucket_stat.is_some(){
+        if let Some(bucket_ranges) = bucket_ranges
+            && self.bucket_stat.is_some()
+        {
             assert_eq!(buckets.len(), bucket_ranges.len());
-            change_bucket_version=self.update_buckets(cfg, next_bucket_version, buckets, region_epoch,  &bucket_ranges);
-        }else{
+            change_bucket_version = self.update_buckets(
+                cfg,
+                next_bucket_version,
+                buckets,
+                region_epoch,
+                &bucket_ranges,
+            );
+        } else {
             change_bucket_version = true;
             // when the region buckets is none, the exclusive buckets includes all the
             // bucket keys.
-           self.init_buckets(cfg, next_bucket_version, buckets, region_epoch, region);
+            self.init_buckets(cfg, next_bucket_version, buckets, region_epoch, region);
         }
         change_bucket_version
     }
@@ -500,7 +508,7 @@ impl<EK: KvEngine, S: StoreHandle> Runner<EK, S> {
         region: &Region,
         bucket_ranges: &Vec<BucketRange>,
     ) {
-        for (mut bucket, bucket_range) in &mut buckets.iter_mut().zip(bucket_ranges) {
+        for (bucket, bucket_range) in &mut buckets.iter_mut().zip(bucket_ranges) {
             let mut bucket_region = region.clone();
             bucket_region.set_start_key(bucket_range.0.clone());
             bucket_region.set_end_key(bucket_range.1.clone());
@@ -695,6 +703,19 @@ impl<EK: KvEngine, S: StoreHandle> Runner<EK, S> {
         };
 
         if !split_keys.is_empty() {
+            // Notify peer that if the region is truly splitable.
+            // If it's truly splitable, then skip_split_check should be false;
+            self.router.update_approximate_size(
+                region.get_id(),
+                None,
+                Some(!split_keys.is_empty()),
+            );
+            self.router.update_approximate_keys(
+                region.get_id(),
+                None,
+                Some(!split_keys.is_empty()),
+            );
+
             let region_epoch = region.get_region_epoch().clone();
             self.router
                 .ask_split(region_id, region_epoch, split_keys, "split checker".into());
@@ -736,6 +757,7 @@ impl<EK: KvEngine, S: StoreHandle> Runner<EK, S> {
             } else {
                 (!host.enable_region_bucket(), &empty_bucket)
             };
+        let mut split_keys = vec![];
 
         MergedIterator::<<EK as Iterable>::Iterator>::new(
             tablet, LARGE_CFS, start_key, end_key, false,
@@ -748,6 +770,7 @@ impl<EK: KvEngine, S: StoreHandle> Runner<EK, S> {
             let mut skip_on_kv = false;
             while let Some(e) = iter.next() {
                 if skip_on_kv && skip_check_bucket {
+                    split_keys = host.split_keys();
                     return;
                 }
                 if !skip_on_kv && host.on_kv(region, &e) {
@@ -810,6 +833,8 @@ impl<EK: KvEngine, S: StoreHandle> Runner<EK, S> {
                 }
             }
 
+            split_keys = host.split_keys();
+
             // if we scan the whole range, we can update approximate size and keys with
             // accurate value.
             if is_key_range {
@@ -823,8 +848,17 @@ impl<EK: KvEngine, S: StoreHandle> Runner<EK, S> {
                 "bucket_count" => buckets.len(),
                 "bucket_size" => bucket_size,
             );
-            self.router.update_approximate_size(region.get_id(), size);
-            self.router.update_approximate_keys(region.get_id(), keys);
+
+            self.router.update_approximate_size(
+                region.get_id(),
+                Some(size),
+                Some(!split_keys.is_empty()),
+            );
+            self.router.update_approximate_keys(
+                region.get_id(),
+                Some(keys),
+                Some(!split_keys.is_empty()),
+            );
         })?;
 
         if host.enable_region_bucket() {
@@ -839,7 +873,7 @@ impl<EK: KvEngine, S: StoreHandle> Runner<EK, S> {
         }
         timer.observe_duration();
 
-        Ok(host.split_keys())
+        Ok(split_keys)
     }
 
     fn change_cfg(&mut self, change: ConfigChange) {
@@ -984,7 +1018,7 @@ mod tests {
     #[test]
     pub fn test_report_buckets() {
         let mut bucket_stats_info = mock_bucket_stats_info();
-        let bucket_stats = bucket_stats_info.bucket_stat().as_ref().unwrap();
+        let bucket_stats = bucket_stats_info.bucket_stat().unwrap();
         let mut delta_bucket_stats = bucket_stats.clone();
         delta_bucket_stats.write_key(&[1], 1);
         delta_bucket_stats.write_key(&[201], 1);
@@ -1006,7 +1040,7 @@ mod tests {
         region.set_id(1);
         let cfg = Config::default();
         let bucket_size = cfg.region_bucket_size.0;
-        let bucket_stats = bucket_stats_info.bucket_stat().as_ref().unwrap();
+        let bucket_stats = bucket_stats_info.bucket_stat().unwrap();
         let region_epoch = bucket_stats.meta.region_epoch.clone();
 
         // step1: update buckets flow
@@ -1014,7 +1048,7 @@ mod tests {
         delta_bucket_stats.write_key(&[1], 1);
         delta_bucket_stats.write_key(&[201], 1);
         bucket_stats_info.add_bucket_flow(&Some(delta_bucket_stats));
-        let bucket_stats = bucket_stats_info.bucket_stat().as_ref().unwrap();
+        let bucket_stats = bucket_stats_info.bucket_stat().unwrap();
         assert_eq!(vec![2, 0, 2], bucket_stats.stats.write_bytes);
 
         // step2: tick not affect anything
@@ -1028,7 +1062,7 @@ mod tests {
             &region,
             bucket_ranges,
         );
-        let bucket_stats = bucket_stats_info.bucket_stat().as_ref().unwrap();
+        let bucket_stats = bucket_stats_info.bucket_stat().unwrap();
         assert!(!change_bucket_version);
         assert_eq!(vec![2, 0, 2], bucket_stats.stats.write_bytes);
 
@@ -1047,7 +1081,7 @@ mod tests {
             bucket_ranges.clone(),
         );
         assert!(change_bucket_version);
-        let bucket_stats = bucket_stats_info.bucket_stat().as_ref().unwrap();
+        let bucket_stats = bucket_stats_info.bucket_stat().unwrap();
         assert_eq!(
             vec![vec![], vec![50], vec![100], vec![200], vec![]],
             bucket_stats.meta.keys
@@ -1074,7 +1108,7 @@ mod tests {
         );
         assert!(change_bucket_version);
 
-        let bucket_stats = bucket_stats_info.bucket_stat().as_ref().unwrap();
+        let bucket_stats = bucket_stats_info.bucket_stat().unwrap();
         assert_eq!(
             vec![vec![], vec![100], vec![200], vec![]],
             bucket_stats.meta.keys

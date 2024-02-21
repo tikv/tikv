@@ -2,6 +2,7 @@
 name = "raftstore-v2"
 version = "0.1.0"
 edition = "2021"
+license = "Apache-2.0"
 
 [features]
 default = ["testexport", "test-engine-kv-rocksdb", "test-engine-raft-raft-engine"]
@@ -38,6 +39,7 @@ fail = "0.5"
 file_system = { workspace = true }
 fs2 = "0.4"
 futures = { version = "0.3", features = ["compat"] }
+health_controller = { workspace = true }
 keys = { workspace = true }
 kvproto = { workspace = true }
 log_wrappers = { workspace = true }
@@ -57,7 +59,7 @@ smallvec = "1.4"
 sst_importer = { workspace = true }
 thiserror = "1.0"
 tikv_util = { workspace = true }
-time = "0.1"
+time = { workspace = true }
 tracker = { workspace = true }
 txn_types = { workspace = true }
 yatp = { git = "https://github.com/tikv/yatp.git", branch = "master" }

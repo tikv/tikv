@@ -7,7 +7,7 @@ use std::{
 
 // #[PerformanceCriticalPath]
 use crossbeam::channel::TrySendError;
-use engine_traits::{KvEngine, RaftEngine, Snapshot};
+use engine_traits::{KvEngine, RaftEngine, Snapshot, SnapshotContext};
 use error_code::ErrorCodeExt;
 use kvproto::{metapb, raft_cmdpb::RaftCmdRequest, raft_serverpb::RaftMessage};
 use raft::SnapshotStatus;
@@ -121,6 +121,7 @@ where
 {
     fn read(
         &mut self,
+        snap_ctx: Option<SnapshotContext>,
         read_id: Option<ThreadReadId>,
         req: RaftCmdRequest,
         cb: Callback<EK::Snapshot>,
@@ -251,11 +252,12 @@ impl<EK: KvEngine, ER: RaftEngine> RaftStoreRouter<EK> for ServerRaftStoreRouter
 impl<EK: KvEngine, ER: RaftEngine> LocalReadRouter<EK> for ServerRaftStoreRouter<EK, ER> {
     fn read(
         &mut self,
+        snap_ctx: Option<SnapshotContext>,
         read_id: Option<ThreadReadId>,
         req: RaftCmdRequest,
         cb: Callback<EK::Snapshot>,
     ) -> RaftStoreResult<()> {
-        self.local_reader.read(read_id, req, cb);
+        self.local_reader.read(snap_ctx, read_id, req, cb);
         Ok(())
     }
 
@@ -289,11 +291,11 @@ impl<EK: KvEngine, ER: RaftEngine> RaftStoreRouter<EK> for RaftRouter<EK, ER> {
 // duplicated codes.
 
 impl<EK: KvEngine, ER: RaftEngine> crate::coprocessor::StoreHandle for RaftRouter<EK, ER> {
-    fn update_approximate_size(&self, region_id: u64, size: u64) {
+    fn update_approximate_size(&self, region_id: u64, size: Option<u64>, splitable: Option<bool>) {
         if let Err(e) = CasualRouter::send(
             self,
             region_id,
-            CasualMessage::RegionApproximateSize { size },
+            CasualMessage::RegionApproximateSize { size, splitable },
         ) {
             warn!(
                 "failed to send approximate region size";
@@ -304,11 +306,11 @@ impl<EK: KvEngine, ER: RaftEngine> crate::coprocessor::StoreHandle for RaftRoute
         }
     }
 
-    fn update_approximate_keys(&self, region_id: u64, keys: u64) {
+    fn update_approximate_keys(&self, region_id: u64, keys: Option<u64>, splitable: Option<bool>) {
         if let Err(e) = CasualRouter::send(
             self,
             region_id,
-            CasualMessage::RegionApproximateKeys { keys },
+            CasualMessage::RegionApproximateKeys { keys, splitable },
         ) {
             warn!(
                 "failed to send approximate region keys";

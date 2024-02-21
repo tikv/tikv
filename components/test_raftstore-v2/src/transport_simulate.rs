@@ -3,7 +3,7 @@
 use std::sync::{Arc, RwLock};
 
 use engine_traits::{KvEngine, RaftEngine};
-use futures::Future;
+use futures::future::{BoxFuture, FutureExt};
 use kvproto::{
     raft_cmdpb::{RaftCmdRequest, RaftCmdResponse},
     raft_serverpb::RaftMessage,
@@ -64,30 +64,30 @@ impl<C: Transport> Transport for SimulateTransport<C> {
     }
 }
 
-pub trait SnapshotRouter<E: KvEngine> {
+pub trait SnapshotRouter<EK: KvEngine> {
     fn snapshot(
         &mut self,
         req: RaftCmdRequest,
-    ) -> impl Future<Output = std::result::Result<RegionSnapshot<E::Snapshot>, RaftCmdResponse>> + Send;
+    ) -> BoxFuture<'static, std::result::Result<RegionSnapshot<EK::Snapshot>, RaftCmdResponse>>;
 }
 
 impl<EK: KvEngine, ER: RaftEngine> SnapshotRouter<EK> for RaftRouter<EK, ER> {
     fn snapshot(
         &mut self,
         req: RaftCmdRequest,
-    ) -> impl Future<Output = std::result::Result<RegionSnapshot<EK::Snapshot>, RaftCmdResponse>> + Send
+    ) -> BoxFuture<'static, std::result::Result<RegionSnapshot<EK::Snapshot>, RaftCmdResponse>>
     {
-        self.snapshot(req)
+        self.snapshot(req).boxed()
     }
 }
 
-impl<E: KvEngine, C: SnapshotRouter<E>> SnapshotRouter<E> for SimulateTransport<C> {
+impl<EK: KvEngine, C: SnapshotRouter<EK>> SnapshotRouter<EK> for SimulateTransport<C> {
     fn snapshot(
         &mut self,
         req: RaftCmdRequest,
-    ) -> impl Future<Output = std::result::Result<RegionSnapshot<E::Snapshot>, RaftCmdResponse>> + Send
+    ) -> BoxFuture<'static, std::result::Result<RegionSnapshot<EK::Snapshot>, RaftCmdResponse>>
     {
-        self.ch.snapshot(req)
+        self.ch.snapshot(req).boxed()
     }
 }
 

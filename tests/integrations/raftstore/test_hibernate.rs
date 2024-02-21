@@ -62,7 +62,7 @@ fn test_proposal_prevent_sleep() {
         true,
     );
     request.mut_header().set_peer(new_peer(1, 1));
-    let (cb, mut rx) = make_cb(&request);
+    let (cb, mut rx) = make_cb_rocks(&request);
     // send to peer 2
     cluster
         .sim
@@ -90,7 +90,7 @@ fn test_proposal_prevent_sleep() {
     let conf_change = new_change_peer_request(ConfChangeType::RemoveNode, new_peer(3, 3));
     let mut admin_req = new_admin_request(1, region.get_region_epoch(), conf_change);
     admin_req.mut_header().set_peer(new_peer(1, 1));
-    let (cb, _rx) = make_cb(&admin_req);
+    let (cb, _rx) = make_cb_rocks(&admin_req);
     cluster
         .sim
         .rl()
@@ -450,7 +450,7 @@ fn test_leader_demoted_when_hibernated() {
         ));
     }
     // Leave joint.
-    cluster.async_exit_joint(r).unwrap();
+    let _ = cluster.async_exit_joint(r).unwrap();
     // Ensure peer 3 can campaign.
     cluster.wait_last_index(r, 3, 11, Duration::from_secs(5));
     cluster.add_send_filter(CloneFilterFactory(
@@ -482,7 +482,7 @@ fn test_leader_demoted_when_hibernated() {
         );
         request.mut_header().set_peer(new_peer(3, 3));
         // In case peer 3 is hibernated.
-        let (cb, _rx) = make_cb(&request);
+        let (cb, _rx) = make_cb_rocks(&request);
         cluster
             .sim
             .rl()

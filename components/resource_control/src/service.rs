@@ -533,13 +533,17 @@ pub mod tests {
             s_clone.report_ru_metrics().await;
         });
         // Mock consume.
-        let bg_limiter = s.manager.get_resource_limiter("background", "br").unwrap();
+        let bg_limiter = s
+            .manager
+            .get_background_resource_limiter("background", "br")
+            .unwrap();
         bg_limiter.consume(
             Duration::from_secs(2),
             IoBytes {
                 read: 1000,
                 write: 1000,
             },
+            true,
         );
         // Wait for report ru metrics.
         std::thread::sleep(Duration::from_millis(100));
@@ -552,7 +556,7 @@ pub mod tests {
         s.manager.add_resource_group(background_group);
         let new_bg_limiter = s
             .manager
-            .get_resource_limiter("background", "lightning")
+            .get_background_resource_limiter("background", "lightning")
             .unwrap();
         new_bg_limiter.consume(
             Duration::from_secs(5),
@@ -560,6 +564,7 @@ pub mod tests {
                 read: 2000,
                 write: 2000,
             },
+            true,
         );
         // Wait for report ru metrics.
         std::thread::sleep(Duration::from_millis(100));

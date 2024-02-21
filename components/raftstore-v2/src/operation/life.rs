@@ -31,6 +31,7 @@ use std::{cmp, collections::HashSet, mem};
 use batch_system::BasicMailbox;
 use crossbeam::channel::{SendError, TrySendError};
 use engine_traits::{KvEngine, RaftEngine, RaftLogBatch};
+use health_controller::types;
 use kvproto::{
     kvrpcpb::DiskFullOpt,
     metapb::{self, PeerRole, Region},
@@ -45,6 +46,7 @@ use raftstore::{
             life::{build_peer_destroyed_report, forward_destroy_to_source_peer},
             Proposal,
         },
+        local_metrics::IoType as InspectIoType,
         metrics::RAFT_PEER_PENDING_DURATION,
         util, DiskFullPeers, Transport, WriteTask,
     },
@@ -239,7 +241,9 @@ fn check_if_to_peer_destroyed<ER: RaftEngine>(
     if util::is_epoch_stale(msg.get_region_epoch(), local_epoch) {
         return Ok(true);
     }
-    if let Some(local_peer) = find_peer(local_state.get_region(), store_id) && to_peer.id <= local_peer.get_id() {
+    if let Some(local_peer) = find_peer(local_state.get_region(), store_id)
+        && to_peer.id <= local_peer.get_id()
+    {
         return Ok(true);
     }
     // If the peer is destroyed by conf change, all above checks will pass.
@@ -571,7 +575,7 @@ impl Store {
         &self,
         ctx: &mut StoreContext<EK, ER, T>,
         start_ts: Instant,
-        mut inspector: util::LatencyInspector,
+        mut inspector: types::LatencyInspector,
     ) where
         EK: KvEngine,
         ER: RaftEngine,
@@ -579,9 +583,9 @@ impl Store {
     {
         // Record the last statistics of commit-log-duration and store-write-duration.
         inspector.record_store_wait(start_ts.saturating_elapsed());
-        inspector.record_store_commit(ctx.raft_metrics.stat_commit_log.avg());
-        // Reset the stat_commit_log and wait it to be refreshed in the next tick.
-        ctx.raft_metrics.stat_commit_log.reset();
+        inspector.record_store_commit(ctx.raft_metrics.health_stats.avg(InspectIoType::Network));
+        // Reset the health_stats and wait it to be refreshed in the next tick.
+        ctx.raft_metrics.health_stats.reset();
         ctx.pending_latency_inspect.push(inspector);
     }
 }
@@ -708,8 +712,12 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let check_peer_id = check.get_check_peer().get_id();
         let records = self.storage().region_state().get_merged_records();
         let Some(record) = records.iter().find(|r| {
-            r.get_source_peers().iter().any(|p| p.get_id() == check_peer_id)
-        }) else { return };
+            r.get_source_peers()
+                .iter()
+                .any(|p| p.get_id() == check_peer_id)
+        }) else {
+            return;
+        };
         let source_index = record.get_source_index();
         forward_destroy_to_source_peer(msg, |m| {
             let source_checkpoint = super::merge_source_path(

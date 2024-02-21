@@ -2,7 +2,9 @@
 
 use std::{any::Any, sync::Arc};
 
-use engine_traits::{IterOptions, Iterable, KvEngine, Peekable, ReadOptions, Result, SyncMutable};
+use engine_traits::{
+    IterOptions, Iterable, KvEngine, Peekable, ReadOptions, Result, SnapshotContext, SyncMutable,
+};
 use rocksdb::{DBIterator, Writable, DB};
 
 use crate::{
@@ -182,7 +184,7 @@ impl RocksEngine {
 impl KvEngine for RocksEngine {
     type Snapshot = RocksSnapshot;
 
-    fn snapshot(&self) -> RocksSnapshot {
+    fn snapshot(&self, _: Option<SnapshotContext>) -> RocksSnapshot {
         RocksSnapshot::new(self.db.clone())
     }
 
@@ -275,6 +277,8 @@ impl SyncMutable for RocksEngine {
 mod tests {
     use engine_traits::{Iterable, KvEngine, Peekable, SyncMutable, CF_DEFAULT};
     use kvproto::metapb::Region;
+    use proptest::prelude::*;
+    use rocksdb::{DBOptions, SeekKey, TitanDBOptions, Writable, DB};
     use tempfile::Builder;
 
     use crate::{util, RocksSnapshot};
@@ -292,7 +296,7 @@ mod tests {
         engine.put_msg(key, &r).unwrap();
         engine.put_msg_cf(cf, key, &r).unwrap();
 
-        let snap = engine.snapshot();
+        let snap = engine.snapshot(None);
 
         let mut r1: Region = engine.get_msg(key).unwrap().unwrap();
         assert_eq!(r, r1);
@@ -406,5 +410,130 @@ mod tests {
         .unwrap();
 
         assert_eq!(data.len(), 2);
+    }
+
+    #[derive(Clone, Debug)]
+    enum Operation {
+        Put(Vec<u8>, Vec<u8>),
+        Get(Vec<u8>),
+        Delete(Vec<u8>),
+        Scan(Vec<u8>, usize),
+        DeleteRange(Vec<u8>, Vec<u8>),
+    }
+
+    fn gen_operations(value_size: usize) -> impl Strategy<Value = Vec<Operation>> {
+        let key_size: usize = 16;
+        prop::collection::vec(
+            prop_oneof![
+                (
+                    prop::collection::vec(prop::num::u8::ANY, 0..key_size),
+                    prop::collection::vec(prop::num::u8::ANY, 0..value_size)
+                )
+                    .prop_map(|(k, v)| Operation::Put(k, v)),
+                prop::collection::vec(prop::num::u8::ANY, 0..key_size)
+                    .prop_map(|k| Operation::Get(k)),
+                prop::collection::vec(prop::num::u8::ANY, 0..key_size)
+                    .prop_map(|k| Operation::Delete(k)),
+                (
+                    prop::collection::vec(prop::num::u8::ANY, 0..key_size),
+                    0..10usize
+                )
+                    .prop_map(|(k, v)| Operation::Scan(k, v)),
+                (
+                    prop::collection::vec(prop::num::u8::ANY, 0..key_size),
+                    prop::collection::vec(prop::num::u8::ANY, 0..key_size)
+                )
+                    .prop_map(|(k1, k2)| Operation::DeleteRange(k1, k2)),
+            ],
+            0..100,
+        )
+    }
+
+    fn scan_kvs(db: &DB, start: &[u8], limit: usize) -> Vec<(Vec<u8>, Vec<u8>)> {
+        let mut iter = db.iter();
+        iter.seek(SeekKey::Key(start)).unwrap();
+        let mut num = 0;
+        let mut res = vec![];
+        while num < limit {
+            if iter.valid().unwrap() {
+                let k = iter.key().to_vec();
+                let v = iter.value().to_vec();
+
+                res.push((k, v));
+                num += 1;
+            } else {
+                break;
+            }
+            iter.next().unwrap();
+        }
+        res
+    }
+
+    fn test_rocks_titan_basic_operations(operations: Vec<Operation>, min_blob_size: u64) {
+        let path_rocks = Builder::new()
+            .prefix("test_rocks_titan_basic_operations_rocks")
+            .tempdir()
+            .unwrap();
+        let path_titan = Builder::new()
+            .prefix("test_rocks_titan_basic_operations_titan")
+            .tempdir()
+            .unwrap();
+        let mut tdb_opts = TitanDBOptions::new();
+        tdb_opts.set_min_blob_size(min_blob_size);
+        let mut opts = DBOptions::new();
+        opts.set_titandb_options(&tdb_opts);
+        opts.create_if_missing(true);
+
+        let db_titan = DB::open(opts, path_titan.path().to_str().unwrap()).unwrap();
+
+        opts = DBOptions::new();
+        opts.create_if_missing(true);
+
+        let db_rocks = DB::open(opts, path_rocks.path().to_str().unwrap()).unwrap();
+
+        for op in operations {
+            match op {
+                Operation::Put(k, v) => {
+                    db_rocks.put(&k, &v).unwrap();
+                    db_titan.put(&k, &v).unwrap();
+                }
+                Operation::Get(k) => {
+                    let res_rocks = db_rocks.get(&k).unwrap();
+                    let res_titan = db_titan.get(&k).unwrap();
+                    assert_eq!(res_rocks.as_deref(), res_titan.as_deref());
+                }
+                Operation::Delete(k) => {
+                    db_rocks.delete(&k).unwrap();
+                    db_titan.delete(&k).unwrap();
+                }
+                Operation::Scan(k, limit) => {
+                    let res_rocks = scan_kvs(&db_rocks, &k, limit);
+                    let res_titan = scan_kvs(&db_titan, &k, limit);
+                    assert_eq!(res_rocks, res_titan);
+                }
+                Operation::DeleteRange(k1, k2) => {
+                    if k1 <= k2 {
+                        db_rocks.delete_range(&k1, &k2).unwrap();
+                        db_titan.delete_range(&k1, &k2).unwrap();
+                    } else {
+                        db_rocks.delete_range(&k2, &k1).unwrap();
+                        db_titan.delete_range(&k2, &k1).unwrap();
+                    }
+                }
+            }
+        }
+    }
+
+    proptest! {
+        #[test]
+        fn test_rocks_titan_basic_ops(operations in gen_operations(1000)) {
+            test_rocks_titan_basic_operations(operations.clone(), 8);
+        }
+
+        #[test]
+        fn test_rocks_titan_basic_ops_large_min_blob_size(operations in gen_operations(1000)) {
+            // titan actually is not enabled
+            test_rocks_titan_basic_operations(operations, 1024);
+        }
     }
 }

@@ -9,14 +9,13 @@ use causal_ts::CausalTsProviderImpl;
 use collections::HashMap;
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::{KvEngine, RaftEngine, TabletRegistry};
+use health_controller::types::{LatencyInspector, RaftstoreDuration};
 use kvproto::{metapb, pdpb};
 use pd_client::{BucketStat, PdClient};
 use raftstore::store::{
-    metrics::STORE_INSPECT_DURATION_HISTOGRAM,
-    util::{KeysInfoFormatter, LatencyInspector, RaftstoreDuration},
-    AutoSplitController, Config, FlowStatsReporter, PdStatsMonitor, ReadStats,
-    RegionReadProgressRegistry, SplitInfo, StoreStatsReporter, TabletSnapManager, TxnExt,
-    WriteStats, NUM_COLLECT_STORE_INFOS_PER_HEARTBEAT,
+    metrics::STORE_INSPECT_DURATION_HISTOGRAM, util::KeysInfoFormatter, AutoSplitController,
+    Config, FlowStatsReporter, PdStatsMonitor, ReadStats, SplitInfo, StoreStatsReporter,
+    TabletSnapManager, TxnExt, WriteStats, NUM_COLLECT_STORE_INFOS_PER_HEARTBEAT,
 };
 use resource_metering::{Collector, CollectorRegHandle, RawRecords};
 use service::service_manager::GrpcServiceManager;
@@ -245,7 +244,6 @@ where
         causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
         pd_scheduler: Scheduler<Task>,
         auto_split_controller: AutoSplitController,
-        region_read_progress: RegionReadProgressRegistry,
         collector_reg_handle: CollectorRegHandle,
         grpc_service_manager: GrpcServiceManager,
         logger: Logger,
@@ -255,16 +253,10 @@ where
         let store_heartbeat_interval = cfg.value().pd_store_heartbeat_tick_interval.0;
         let mut stats_monitor = PdStatsMonitor::new(
             store_heartbeat_interval / NUM_COLLECT_STORE_INFOS_PER_HEARTBEAT,
-            cfg.value().report_min_resolved_ts_interval.0,
             cfg.value().inspect_interval.0,
             PdReporter::new(pd_scheduler, logger.clone()),
         );
-        stats_monitor.start(
-            auto_split_controller,
-            region_read_progress,
-            collector_reg_handle,
-            store_id,
-        )?;
+        stats_monitor.start(auto_split_controller, collector_reg_handle)?;
         let slowness_stats = slowness::SlownessStatistics::new(&cfg.value());
         Ok(Self {
             store_id,

@@ -46,7 +46,10 @@ use tikv_kv::{
 use tikv_util::{
     config::ReadableSize,
     future::{create_stream_with_buffer, paired_future_callback},
-    sys::thread::ThreadBuildWrapper,
+    sys::{
+        disk::{get_disk_status, DiskUsage},
+        thread::ThreadBuildWrapper,
+    },
     time::{Instant, Limiter},
     HandyRwLock,
 };
@@ -126,7 +129,7 @@ pub struct ImportSstService<E: Engine> {
     tablets: LocalTablets<E::Local>,
     engine: E,
     threads: Arc<Runtime>,
-    importer: Arc<SstImporter>,
+    importer: Arc<SstImporter<E::Local>>,
     limiter: Limiter,
     task_slots: Arc<Mutex<HashSet<PathBuf>>>,
     raft_entry_max_size: ReadableSize,
@@ -322,7 +325,7 @@ impl<E: Engine> ImportSstService<E> {
         raft_entry_max_size: ReadableSize,
         engine: E,
         tablets: LocalTablets<E::Local>,
-        importer: Arc<SstImporter>,
+        importer: Arc<SstImporter<E::Local>>,
         store_meta: Option<Arc<Mutex<StoreMeta<E::Local>>>>,
         resource_manager: Option<Arc<ResourceGroupManager>>,
         region_info_accessor: Arc<RegionInfoAccessor>,
@@ -350,7 +353,7 @@ impl<E: Engine> ImportSstService<E> {
         if let LocalTablets::Singleton(tablet) = &tablets {
             importer.start_switch_mode_check(threads.handle(), Some(tablet.clone()));
         } else {
-            importer.start_switch_mode_check::<E::Local>(threads.handle(), None);
+            importer.start_switch_mode_check(threads.handle(), None);
         }
 
         let writer = raft_writer::ThrottledTlsEngineWriter::default();
@@ -385,7 +388,7 @@ impl<E: Engine> ImportSstService<E> {
         self.cfg.clone()
     }
 
-    async fn tick(importer: Arc<SstImporter>, cfg: ConfigManager) {
+    async fn tick(importer: Arc<SstImporter<E::Local>>, cfg: ConfigManager) {
         loop {
             sleep(Duration::from_secs(10)).await;
 
@@ -563,7 +566,7 @@ impl<E: Engine> ImportSstService<E> {
 
     async fn apply_imp(
         mut req: ApplyRequest,
-        importer: Arc<SstImporter>,
+        importer: Arc<SstImporter<E::Local>>,
         writer: raft_writer::ThrottledTlsEngineWriter,
         limiter: Limiter,
         max_raft_size: usize,
@@ -751,7 +754,7 @@ macro_rules! impl_write {
                     let (meta, resource_limiter) = match first_req {
                         Some(r) => {
                             let limiter = resource_manager.as_ref().and_then(|m| {
-                                m.get_resource_limiter(
+                                m.get_background_resource_limiter(
                                     r.get_context()
                                         .get_resource_control_context()
                                         .get_resource_group_name(),
@@ -817,6 +820,11 @@ macro_rules! impl_write {
                         .try_fold(
                             (writer, resource_limiter),
                             |(mut writer, limiter), req| async move {
+                                if get_disk_status(0) != DiskUsage::Normal {
+                                    warn!("Upload failed due to not enough disk space");
+                                    return Err(Error::DiskSpaceNotEnough);
+                                }
+
                                 let batch = match req.chunk {
                                     Some($chunk_ty::Batch(b)) => b,
                                     _ => return Err(Error::InvalidChunk),
@@ -961,6 +969,11 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
                 let file = import.create(meta)?;
                 let mut file = rx
                     .try_fold(file, |mut file, chunk| async move {
+                        if get_disk_status(0) != DiskUsage::Normal {
+                            warn!("Upload failed due to not enough disk space");
+                            return Err(Error::DiskSpaceNotEnough);
+                        }
+
                         let start = Instant::now_coarse();
                         let data = chunk.get_data();
                         if data.is_empty() {
@@ -1060,7 +1073,7 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
         let tablets = self.tablets.clone();
         let start = Instant::now();
         let resource_limiter = self.resource_manager.as_ref().and_then(|r| {
-            r.get_resource_limiter(
+            r.get_background_resource_limiter(
                 req.get_context()
                     .get_resource_control_context()
                     .get_resource_group_name(),
@@ -1098,7 +1111,7 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
             };
 
             let res = with_resource_limiter(
-                importer.download_ext::<E::Local>(
+                importer.download_ext(
                     req.get_sst(),
                     req.get_storage_backend(),
                     req.get_name(),
@@ -1139,12 +1152,14 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
     ) {
         let label = "ingest";
         let timer = Instant::now_coarse();
+        let mut resp = IngestResponse::default();
+
         if let Err(err) = self.check_suspend() {
-            ctx.spawn(async move { crate::send_rpc_response!(Err(err), sink, label, timer) });
+            resp.set_error(ImportPbError::from(err).take_store_error());
+            ctx.spawn(async move { crate::send_rpc_response!(Ok(resp), sink, label, timer) });
             return;
         }
 
-        let mut resp = IngestResponse::default();
         let region_id = req.get_context().get_region_id();
         if let Some(errorpb) = self.check_write_stall(region_id) {
             resp.set_error(errorpb);
@@ -1186,12 +1201,13 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
     ) {
         let label = "multi-ingest";
         let timer = Instant::now_coarse();
+        let mut resp = IngestResponse::default();
         if let Err(err) = self.check_suspend() {
-            ctx.spawn(async move { crate::send_rpc_response!(Err(err), sink, label, timer) });
+            resp.set_error(ImportPbError::from(err).take_store_error());
+            ctx.spawn(async move { crate::send_rpc_response!(Ok(resp), sink, label, timer) });
             return;
         }
 
-        let mut resp = IngestResponse::default();
         if let Some(errorpb) = self.check_write_stall(req.get_context().get_region_id()) {
             resp.set_error(errorpb);
             ctx.spawn(

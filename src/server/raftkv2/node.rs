@@ -113,7 +113,7 @@ where
         pd_worker: LazyWorker<PdTask>,
         store_cfg: Arc<VersionTrack<raftstore_v2::Config>>,
         state: &Mutex<GlobalReplicationState>,
-        sst_importer: Arc<SstImporter>,
+        sst_importer: Arc<SstImporter<EK>>,
         key_manager: Option<Arc<DataKeyManager>>,
         grpc_service_mgr: GrpcServiceManager,
     ) -> Result<()>
@@ -218,7 +218,7 @@ where
         background: Worker,
         pd_worker: LazyWorker<PdTask>,
         store_cfg: Arc<VersionTrack<raftstore_v2::Config>>,
-        sst_importer: Arc<SstImporter>,
+        sst_importer: Arc<SstImporter<EK>>,
         key_manager: Option<Arc<DataKeyManager>>,
         grpc_service_mgr: GrpcServiceManager,
     ) -> Result<()>
@@ -269,7 +269,9 @@ where
     /// Stops the Node.
     pub fn stop(&mut self) {
         let store_id = self.store.get_id();
-        let Some((_, mut system)) = self.system.take() else { return };
+        let Some((_, mut system)) = self.system.take() else {
+            return;
+        };
         info!(self.logger, "stop raft store thread"; "store_id" => store_id);
         system.shutdown();
     }

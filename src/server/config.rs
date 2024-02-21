@@ -183,30 +183,37 @@ pub struct Config {
     #[doc(hidden)]
     pub simplify_metrics: bool,
 
+    #[doc(hidden)]
+    #[online_config(skip)]
+    /// Minimum interval to send health feedback information in each
+    /// `BatchCommands` gRPC stream. 0 to disable sending health feedback.
+    pub health_feedback_interval: ReadableDuration,
+
     // Server labels to specify some attributes about this server.
     #[online_config(skip)]
     pub labels: HashMap<String, String>,
 
-    // deprecated. use readpool.coprocessor.xx_concurrency.
     #[doc(hidden)]
     #[serde(skip_serializing)]
-    #[online_config(skip)]
+    #[online_config(hidden)]
+    #[deprecated = "The configuration has been moved to readpool.coprocessor.*_concurrency."]
     pub end_point_concurrency: Option<usize>,
 
-    // deprecated. use readpool.coprocessor.stack_size.
     #[doc(hidden)]
     #[serde(skip_serializing)]
-    #[online_config(skip)]
+    #[online_config(hidden)]
+    #[deprecated = "The configuration has been moved to readpool.coprocessor.stack_size."]
     pub end_point_stack_size: Option<ReadableSize>,
 
-    // deprecated. use readpool.coprocessor.max_tasks_per_worker_xx.
     #[doc(hidden)]
     #[serde(skip_serializing)]
-    #[online_config(skip)]
+    #[online_config(hidden)]
+    #[deprecated = "The configuration has been moved to readpool.coprocessor.max_tasks_per_worker_*."]
     pub end_point_max_tasks: Option<usize>,
 }
 
 impl Default for Config {
+    #[allow(deprecated)]
     fn default() -> Config {
         let cpu_num = SysQuota::cpu_cores_quota();
         let background_thread_count = if cpu_num > 16.0 { 3 } else { 2 };
@@ -263,6 +270,7 @@ impl Default for Config {
             // Go tikv client uses 4 as well.
             forward_max_connections_per_address: 4,
             simplify_metrics: false,
+            health_feedback_interval: ReadableDuration::secs(1),
         }
     }
 }

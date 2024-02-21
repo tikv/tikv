@@ -33,7 +33,7 @@ where
     R: RaftEngine,
 {
     compact: CompactRunner<E>,
-    cleanup_sst: CleanupSstRunner,
+    cleanup_sst: CleanupSstRunner<E>,
     gc_snapshot: GcSnapshotRunner<E, R>,
 }
 
@@ -44,7 +44,7 @@ where
 {
     pub fn new(
         compact: CompactRunner<E>,
-        cleanup_sst: CleanupSstRunner,
+        cleanup_sst: CleanupSstRunner<E>,
         gc_snapshot: GcSnapshotRunner<E, R>,
     ) -> Runner<E, R> {
         Runner {

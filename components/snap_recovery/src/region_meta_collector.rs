@@ -2,8 +2,7 @@
 
 use std::{cell::RefCell, error::Error as StdError, result, thread::JoinHandle};
 
-use engine_rocks::RocksEngine;
-use engine_traits::{Engines, Iterable, Peekable, RaftEngine, CF_RAFT};
+use engine_traits::{Engines, KvEngine, RaftEngine, CF_RAFT};
 use futures::channel::mpsc::UnboundedSender;
 use kvproto::{
     raft_serverpb::{PeerState, RaftApplyState, RaftLocalState, RegionLocalState},
@@ -30,9 +29,13 @@ pub enum Error {
 }
 
 /// `RegionMetaCollector` is the collector that collector all region meta
-pub struct RegionMetaCollector<ER: RaftEngine> {
+pub struct RegionMetaCollector<EK, ER>
+where
+    EK: KvEngine,
+    ER: RaftEngine,
+{
     /// The engine we are working on
-    engines: Engines<RocksEngine, ER>,
+    engines: Engines<EK, ER>,
     /// region meta report to br
     tx: UnboundedSender<RegionMeta>,
     /// Current working workers
@@ -40,8 +43,12 @@ pub struct RegionMetaCollector<ER: RaftEngine> {
 }
 
 #[allow(dead_code)]
-impl<ER: RaftEngine> RegionMetaCollector<ER> {
-    pub fn new(engines: Engines<RocksEngine, ER>, tx: UnboundedSender<RegionMeta>) -> Self {
+impl<EK, ER> RegionMetaCollector<EK, ER>
+where
+    EK: KvEngine,
+    ER: RaftEngine,
+{
+    pub fn new(engines: Engines<EK, ER>, tx: UnboundedSender<RegionMeta>) -> Self {
         RegionMetaCollector {
             engines,
             tx,
@@ -74,14 +81,22 @@ impl<ER: RaftEngine> RegionMetaCollector<ER> {
     }
 }
 
-struct CollectWorker<ER: RaftEngine> {
+struct CollectWorker<EK, ER>
+where
+    EK: KvEngine,
+    ER: RaftEngine,
+{
     /// The engine we are working on
-    engines: Engines<RocksEngine, ER>,
+    engines: Engines<EK, ER>,
     tx: UnboundedSender<RegionMeta>,
 }
 
-impl<ER: RaftEngine> CollectWorker<ER> {
-    pub fn new(engines: Engines<RocksEngine, ER>, tx: UnboundedSender<RegionMeta>) -> Self {
+impl<EK, ER> CollectWorker<EK, ER>
+where
+    EK: KvEngine,
+    ER: RaftEngine,
+{
+    pub fn new(engines: Engines<EK, ER>, tx: UnboundedSender<RegionMeta>) -> Self {
         CollectWorker { engines, tx }
     }
 

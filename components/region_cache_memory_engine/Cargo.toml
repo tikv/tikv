@@ -1,0 +1,23 @@
+[package]
+name = "region_cache_memory_engine"
+version = "0.0.1"
+edition = "2021"
+publish = false
+license = "Apache-2.0"
+
+[features]
+testexport = []
+
+[dependencies]
+engine_traits = { workspace = true }
+collections = { workspace = true }
+skiplist-rs = { git = "https://github.com/tikv/skiplist-rs.git", branch = "main" }
+bytes = "1.0"
+crossbeam = "0.8"
+tikv_util = { workspace = true }
+txn_types = { workspace = true }
+log_wrappers = { workspace = true }
+slog-global = { workspace = true }
+slog = { workspace = true }
+engine_rocks = { workspace = true }
+fail = "0.5"

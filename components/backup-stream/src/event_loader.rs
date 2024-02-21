@@ -12,15 +12,18 @@ use raftstore::{
 use tikv::storage::{
     kv::StatisticsSummary,
     mvcc::{DeltaScanner, ScannerBuilder},
-    txn::{EntryBatch, TxnEntry, TxnEntryScanner},
+    txn::{TxnEntry, TxnEntryScanner},
     Snapshot, Statistics,
 };
 use tikv_util::{
     box_err,
+    memory::{MemoryQuota, OwnedAllocated},
     time::{Instant, Limiter},
     worker::Scheduler,
 };
-use tokio::sync::{OwnedSemaphorePermit, Semaphore};
+use tokio::sync::Semaphore;
+use tracing::instrument;
+use tracing_active_tree::frame;
 use txn_types::{Key, Lock, TimeStamp};
 
 use crate::{
@@ -33,42 +36,23 @@ use crate::{
 };
 
 const MAX_GET_SNAPSHOT_RETRY: usize = 5;
+/// The threshold of slowing down initial scanning.
+/// While the memory usage reaches this ratio, we will consume the result of
+/// initial scanning more frequently.
+const SLOW_DOWN_INITIAL_SCAN_RATIO: f64 = 0.7;
 
-#[derive(Clone)]
-pub struct PendingMemoryQuota(Arc<Semaphore>);
-
-impl std::fmt::Debug for PendingMemoryQuota {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("PendingMemoryQuota")
-            .field("remain", &self.0.available_permits())
-            .field("total", &self.0)
-            .finish()
-    }
-}
-
-pub struct PendingMemory(OwnedSemaphorePermit);
-
-impl PendingMemoryQuota {
-    pub fn new(quota: usize) -> Self {
-        Self(Arc::new(Semaphore::new(quota)))
-    }
-
-    pub async fn pending(&self, size: usize) -> PendingMemory {
-        PendingMemory(
-            self.0
-                .clone()
-                .acquire_many_owned(size as _)
-                .await
-                .expect("BUG: the semaphore is closed unexpectedly."),
-        )
-    }
+struct ScanResult {
+    more: bool,
+    out_of_memory: bool,
+    statistics: Statistics,
 }
 
 /// EventLoader transforms data from the snapshot into ApplyEvent.
 pub struct EventLoader<S: Snapshot> {
     scanner: DeltaScanner<S>,
     // pooling the memory.
-    entry_batch: EntryBatch,
+    region: Region,
+    entry_batch: Vec<TxnEntry>,
 }
 
 const ENTRY_BATCH_SIZE: usize = 1024;
@@ -97,20 +81,51 @@ impl<S: Snapshot> EventLoader<S> {
 
         Ok(Self {
             scanner,
-            entry_batch: EntryBatch::with_capacity(ENTRY_BATCH_SIZE),
+            region: region.clone(),
+            entry_batch: Vec::with_capacity(ENTRY_BATCH_SIZE),
         })
+    }
+
+    fn scan_result(&mut self, more: bool) -> ScanResult {
+        ScanResult {
+            more,
+            out_of_memory: false,
+            statistics: self.scanner.take_statistics(),
+        }
+    }
+
+    fn out_of_memory(&mut self) -> ScanResult {
+        ScanResult {
+            more: true,
+            out_of_memory: true,
+            statistics: self.scanner.take_statistics(),
+        }
     }
 
     /// Scan a batch of events from the snapshot, and save them into the
     /// internal buffer.
-    fn fill_entries(&mut self) -> Result<Statistics> {
+    fn fill_entries(&mut self, memory_quota: &mut OwnedAllocated) -> Result<ScanResult> {
         assert!(
             self.entry_batch.is_empty(),
-            "EventLoader: the entry batch isn't empty when filling entries, which is error-prone, please call `omit_entries` first. (len = {})",
+            "EventLoader: the entry batch isn't empty when filling entries, which is error-prone, please call `emit_entries_to` first. (len = {})",
             self.entry_batch.len()
         );
-        self.scanner.scan_entries(&mut self.entry_batch)?;
-        Ok(self.scanner.take_statistics())
+        let batch = &mut self.entry_batch;
+        while batch.len() < batch.capacity() {
+            match self.scanner.next_entry()? {
+                Some(entry) => {
+                    let size = entry.size();
+                    batch.push(entry);
+                    if memory_quota.alloc(size).is_err()
+                        || memory_quota.source().used_ratio() > SLOW_DOWN_INITIAL_SCAN_RATIO
+                    {
+                        return Ok(self.out_of_memory());
+                    }
+                }
+                None => return Ok(self.scan_result(false)),
+            }
+        }
+        Ok(self.scan_result(true))
     }
 
     /// Drain the internal buffer, converting them to the [`ApplyEvents`],
@@ -120,7 +135,7 @@ impl<S: Snapshot> EventLoader<S> {
         result: &mut ApplyEvents,
         resolver: &mut TwoPhaseResolver,
     ) -> Result<()> {
-        for entry in self.entry_batch.drain() {
+        for entry in self.entry_batch.drain(..) {
             match entry {
                 TxnEntry::Prewrite {
                     default: (key, value),
@@ -144,7 +159,11 @@ impl<S: Snapshot> EventLoader<S> {
                     })?;
                     debug!("meet lock during initial scanning."; "key" => %utils::redact(&lock_at), "ts" => %lock.ts);
                     if utils::should_track_lock(&lock) {
-                        resolver.track_phase_one_lock(lock.ts, lock_at);
+                        resolver
+                            .track_phase_one_lock(lock.ts, lock_at)
+                            .map_err(|_| Error::OutOfQuota {
+                                region_id: self.region.id,
+                            })?;
                     }
                 }
                 TxnEntry::Commit { default, write, .. } => {
@@ -180,7 +199,7 @@ pub struct InitialDataLoader<E: KvEngine, H> {
     pub(crate) tracing: SubscriptionTracer,
     pub(crate) scheduler: Scheduler<Task>,
 
-    pub(crate) quota: PendingMemoryQuota,
+    pub(crate) quota: Arc<MemoryQuota>,
     pub(crate) limit: Limiter,
     // If there are too many concurrent initial scanning, the limit of disk speed or pending memory
     // quota will probably be triggered. Then the whole scanning will be pretty slow. And when
@@ -202,7 +221,7 @@ where
         sink: Router,
         tracing: SubscriptionTracer,
         sched: Scheduler<Task>,
-        quota: PendingMemoryQuota,
+        quota: Arc<MemoryQuota>,
         limiter: Limiter,
         cdc_handle: H,
         concurrency_limit: Arc<Semaphore>,
@@ -219,6 +238,7 @@ where
         }
     }
 
+    #[instrument(skip_all)]
     pub async fn capture_change(
         &self,
         region: &Region,
@@ -271,6 +291,7 @@ where
         Ok(snap)
     }
 
+    #[instrument(skip_all)]
     pub async fn observe_over_with_retry(
         &self,
         region: &Region,
@@ -368,6 +389,7 @@ where
         f(v.value_mut().resolver())
     }
 
+    #[instrument(skip_all)]
     async fn scan_and_async_send(
         &self,
         region: &Region,
@@ -384,43 +406,48 @@ where
             let mut events = ApplyEvents::with_capacity(1024, region.id);
             // Note: the call of `fill_entries` is the only step which would read the disk.
             //       we only need to record the disk throughput of this.
-            let (stat, disk_read) =
-                utils::with_record_read_throughput(|| event_loader.fill_entries());
-            // We must use the size of entry batch here to check whether we have progress.
-            // Or we may exit too early if there are only records:
-            // - can be inlined to `write` CF (hence it won't be written to default CF)
-            // - are prewritten. (hence it will only contains `Prewrite` records).
-            // In this condition, ALL records generate no ApplyEvent(only lock change),
-            // and we would exit after the first run of loop :(
-            let no_progress = event_loader.entry_batch.is_empty();
-            let stat = stat?;
+            let mut allocated = OwnedAllocated::new(Arc::clone(&self.quota));
+            let (res, disk_read) =
+                utils::with_record_read_throughput(|| event_loader.fill_entries(&mut allocated));
+            let res = res?;
             self.with_resolver(region, handle, |r| {
                 event_loader.emit_entries_to(&mut events, r)
             })?;
-            if no_progress {
-                metrics::INITIAL_SCAN_DURATION.observe(start.saturating_elapsed_secs());
-                return Ok(stats.stat);
-            }
-            stats.add_statistics(&stat);
+            stats.add_statistics(&res.statistics);
             let region_id = region.get_id();
             let sink = self.sink.clone();
             let event_size = events.size();
             let sched = self.scheduler.clone();
-            let permit = self.quota.pending(event_size).await;
             self.limit.consume(disk_read as _).await;
             debug!("sending events to router"; "size" => %event_size, "region" => %region_id);
             metrics::INCREMENTAL_SCAN_SIZE.observe(event_size as f64);
             metrics::INCREMENTAL_SCAN_DISK_READ.inc_by(disk_read as f64);
             metrics::HEAP_MEMORY.add(event_size as _);
+            fail::fail_point!("scan_and_async_send::about_to_consume");
             join_handles.push(tokio::spawn(async move {
                 utils::handle_on_event_result(&sched, sink.on_events(events).await);
                 metrics::HEAP_MEMORY.sub(event_size as _);
+                drop(allocated);
                 debug!("apply event done"; "size" => %event_size, "region" => %region_id);
-                drop(permit);
             }));
+            if !res.more {
+                metrics::INITIAL_SCAN_DURATION.observe(start.saturating_elapsed_secs());
+                return Ok(stats.stat);
+            }
+            if res.out_of_memory {
+                futures::future::try_join_all(join_handles.drain(..))
+                    .await
+                    .map_err(|err| {
+                        annotate!(
+                            err,
+                            "failed to join tokio runtime during out-of-memory-quota"
+                        )
+                    })?;
+            }
         }
     }
 
+    #[instrument(skip_all)]
     pub async fn do_initial_scan(
         &self,
         region: &Region,
@@ -429,16 +456,12 @@ where
         start_ts: TimeStamp,
         snap: impl Snapshot,
     ) -> Result<Statistics> {
-        let tr = self.tracing.clone();
-        let region_id = region.get_id();
-
         let mut join_handles = Vec::with_capacity(8);
 
-        let permit = self
-            .concurrency_limit
-            .acquire()
+        let permit = frame!(self.concurrency_limit.acquire())
             .await
             .expect("BUG: semaphore closed");
+
         // It is ok to sink more data than needed. So scan to +inf TS for convenance.
         let event_loader = EventLoader::load_from(snap, start_ts, TimeStamp::max(), region)?;
         let stats = self
@@ -446,18 +469,9 @@ where
             .await?;
         drop(permit);
 
-        futures::future::try_join_all(join_handles)
+        frame!(futures::future::try_join_all(join_handles))
             .await
             .map_err(|err| annotate!(err, "tokio runtime failed to join consuming threads"))?;
-
-        Self::with_resolver_by(&tr, region, &handle, |r| {
-            r.phase_one_done();
-            Ok(())
-        })
-        .context(format_args!(
-            "failed to finish phase 1 for region {:?}",
-            region_id
-        ))?;
 
         Ok(stats)
     }
@@ -465,10 +479,13 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use futures::executor::block_on;
     use kvproto::metapb::*;
     use tikv::storage::{txn::tests::*, TestEngineBuilder};
     use tikv_kv::SnapContext;
+    use tikv_util::memory::{MemoryQuota, OwnedAllocated};
     use txn_types::TimeStamp;
 
     use super::EventLoader;
@@ -498,10 +515,13 @@ mod tests {
 
         let snap = block_on(async { tikv_kv::snapshot(&mut engine, SnapContext::default()).await })
             .unwrap();
+        let quota_inf = Arc::new(MemoryQuota::new(usize::MAX));
         let mut loader =
             EventLoader::load_from(snap, TimeStamp::zero(), TimeStamp::max(), &r).unwrap();
 
-        let (r, data_load) = with_record_read_throughput(|| loader.fill_entries());
+        let (r, data_load) = with_record_read_throughput(|| {
+            loader.fill_entries(&mut OwnedAllocated::new(quota_inf))
+        });
         r.unwrap();
         let mut events = ApplyEvents::with_capacity(1024, 42);
         let mut res = TwoPhaseResolver::new(42, None);

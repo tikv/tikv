@@ -39,6 +39,8 @@ pub struct ResourceLimiter {
     name: String,
     version: u64,
     limiters: [QuotaLimiter; ResourceType::COUNT],
+    // whether the resource limiter is a background limiter or priority limiter.
+    is_background: bool,
 }
 
 impl std::fmt::Debug for ResourceLimiter {
@@ -48,29 +50,43 @@ impl std::fmt::Debug for ResourceLimiter {
 }
 
 impl ResourceLimiter {
-    pub fn new(name: String, cpu_limit: f64, io_limit: f64, version: u64) -> Self {
+    pub fn new(
+        name: String,
+        cpu_limit: f64,
+        io_limit: f64,
+        version: u64,
+        is_background: bool,
+    ) -> Self {
         let cpu_limiter = QuotaLimiter::new(cpu_limit);
         let io_limiter = QuotaLimiter::new(io_limit);
         Self {
             name,
             version,
             limiters: [cpu_limiter, io_limiter],
+            is_background,
         }
     }
 
-    pub fn consume(&self, cpu_time: Duration, io_bytes: IoBytes) -> Duration {
+    pub fn is_background(&self) -> bool {
+        self.is_background
+    }
+
+    pub fn consume(&self, cpu_time: Duration, io_bytes: IoBytes, wait: bool) -> Duration {
         let cpu_dur =
-            self.limiters[ResourceType::Cpu as usize].consume(cpu_time.as_micros() as u64);
-        let io_dur = self.limiters[ResourceType::Io as usize].consume_io(io_bytes);
+            self.limiters[ResourceType::Cpu as usize].consume(cpu_time.as_micros() as u64, wait);
+        let io_dur = self.limiters[ResourceType::Io as usize].consume_io(io_bytes, wait);
         let wait_dur = cpu_dur.max(io_dur);
-        BACKGROUND_TASKS_WAIT_DURATION
-            .with_label_values(&[&self.name])
-            .inc_by(wait_dur.as_micros() as u64);
+        if wait_dur > Duration::ZERO {
+            BACKGROUND_TASKS_WAIT_DURATION
+                .with_label_values(&[&self.name])
+                .inc_by(wait_dur.as_micros() as u64);
+        }
+
         wait_dur
     }
 
     pub async fn async_consume(&self, cpu_time: Duration, io_bytes: IoBytes) -> Duration {
-        let dur = self.consume(cpu_time, io_bytes);
+        let dur = self.consume(cpu_time, io_bytes, true);
         if !dur.is_zero() {
             _ = GLOBAL_TIMER_HANDLE
                 .delay(Instant::now() + dur)
@@ -86,7 +102,7 @@ impl ResourceLimiter {
     }
 
     pub(crate) fn get_limit_statistics(&self, ty: ResourceType) -> GroupStatistics {
-        let (total_consumed, total_wait_dur_us, read_consumed, write_consumed) =
+        let (total_consumed, total_wait_dur_us, read_consumed, write_consumed, request_count) =
             self.limiters[ty as usize].get_statistics();
         GroupStatistics {
             version: self.version,
@@ -94,6 +110,7 @@ impl ResourceLimiter {
             total_wait_dur_us,
             read_consumed,
             write_consumed,
+            request_count,
         }
     }
 }
@@ -104,6 +121,7 @@ pub(crate) struct QuotaLimiter {
     total_wait_dur_us: AtomicU64,
     read_bytes: AtomicU64,
     write_bytes: AtomicU64,
+    req_count: AtomicU64,
 }
 
 impl QuotaLimiter {
@@ -113,6 +131,7 @@ impl QuotaLimiter {
             total_wait_dur_us: AtomicU64::new(0),
             read_bytes: AtomicU64::new(0),
             write_bytes: AtomicU64::new(0),
+            req_count: AtomicU64::new(0),
         }
     }
 
@@ -128,40 +147,47 @@ impl QuotaLimiter {
         self.limiter.set_speed_limit(limit);
     }
 
-    fn get_statistics(&self) -> (u64, u64, u64, u64) {
+    fn get_statistics(&self) -> (u64, u64, u64, u64, u64) {
         (
             self.limiter.total_bytes_consumed() as u64,
             self.total_wait_dur_us.load(Ordering::Relaxed),
             self.read_bytes.load(Ordering::Relaxed),
             self.write_bytes.load(Ordering::Relaxed),
+            self.req_count.load(Ordering::Relaxed),
         )
     }
 
-    fn consume(&self, value: u64) -> Duration {
-        if value == 0 {
+    fn consume(&self, value: u64, wait: bool) -> Duration {
+        if value == 0 && self.limiter.speed_limit().is_infinite() {
             return Duration::ZERO;
         }
-        let dur = self.limiter.consume_duration(value as usize);
-        if dur != Duration::ZERO {
+        let mut dur = self.limiter.consume_duration(value as usize);
+        if !wait {
+            dur = Duration::ZERO;
+        } else if dur != Duration::ZERO {
             self.total_wait_dur_us
                 .fetch_add(dur.as_micros() as u64, Ordering::Relaxed);
         }
+        self.req_count.fetch_add(1, Ordering::Relaxed);
         dur
     }
 
-    fn consume_io(&self, value: IoBytes) -> Duration {
+    fn consume_io(&self, value: IoBytes, wait: bool) -> Duration {
         self.read_bytes.fetch_add(value.read, Ordering::Relaxed);
         self.write_bytes.fetch_add(value.write, Ordering::Relaxed);
 
         let value = value.read + value.write;
-        if value == 0 {
+        if value == 0 && self.limiter.speed_limit().is_infinite() {
             return Duration::ZERO;
         }
-        let dur = self.limiter.consume_duration(value as usize);
-        if dur != Duration::ZERO {
+        let mut dur = self.limiter.consume_duration(value as usize);
+        if !wait {
+            dur = Duration::ZERO;
+        } else if dur != Duration::ZERO {
             self.total_wait_dur_us
                 .fetch_add(dur.as_micros() as u64, Ordering::Relaxed);
         }
+        self.req_count.fetch_add(1, Ordering::Relaxed);
         dur
     }
 }
@@ -173,6 +199,7 @@ pub struct GroupStatistics {
     pub total_wait_dur_us: u64,
     pub read_consumed: u64,
     pub write_consumed: u64,
+    pub request_count: u64,
 }
 
 impl std::ops::Sub for GroupStatistics {
@@ -184,6 +211,7 @@ impl std::ops::Sub for GroupStatistics {
             total_wait_dur_us: self.total_wait_dur_us.saturating_sub(rhs.total_wait_dur_us),
             read_consumed: self.read_consumed.saturating_sub(rhs.read_consumed),
             write_consumed: self.write_consumed.saturating_sub(rhs.write_consumed),
+            request_count: self.request_count.saturating_sub(rhs.request_count),
         }
     }
 }
@@ -198,6 +226,7 @@ impl std::ops::Div<f64> for GroupStatistics {
             total_wait_dur_us: (self.total_wait_dur_us as f64 / rhs) as u64,
             read_consumed: (self.read_consumed as f64 / rhs) as u64,
             write_consumed: (self.write_consumed as f64 / rhs) as u64,
+            request_count: (self.request_count as f64 / rhs) as u64,
         }
     }
 }

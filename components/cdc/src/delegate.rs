@@ -206,6 +206,12 @@ impl Downstream {
         self.sink_error_event(region_id, err_event)
     }
 
+    pub fn sink_server_is_busy(&self, region_id: u64, reason: String) -> Result<()> {
+        let mut err_event = EventError::default();
+        err_event.mut_server_is_busy().reason = reason;
+        self.sink_error_event(region_id, err_event)
+    }
+
     pub fn set_sink(&mut self, sink: Sink) {
         self.sink = Some(sink);
     }
@@ -248,7 +254,7 @@ impl Pending {
     }
 
     fn push_pending_lock(&mut self, lock: PendingLock) -> Result<()> {
-        let bytes = lock.heap_size();
+        let bytes = lock.approximate_heap_size();
         self.memory_quota.alloc(bytes)?;
         self.locks.push(lock);
         self.pending_bytes += bytes;
@@ -262,7 +268,7 @@ impl Pending {
         ));
         // Must take locks, otherwise it may double free memory quota on drop.
         for lock in mem::take(&mut self.locks) {
-            self.memory_quota.free(lock.heap_size());
+            self.memory_quota.free(lock.approximate_heap_size());
             match lock {
                 PendingLock::Track { key, start_ts } => {
                     resolver.track_lock(start_ts, key, None)?;
@@ -286,7 +292,7 @@ impl Drop for Pending {
         let mut bytes = 0;
         let num_locks = locks.len();
         for lock in locks {
-            bytes += lock.heap_size();
+            bytes += lock.approximate_heap_size();
         }
         if bytes > ON_DROP_WARN_HEAP_SIZE {
             warn!("cdc drop huge Pending";
@@ -306,9 +312,11 @@ enum PendingLock {
 }
 
 impl HeapSize for PendingLock {
-    fn heap_size(&self) -> usize {
+    fn approximate_heap_size(&self) -> usize {
         match self {
-            PendingLock::Track { key, .. } | PendingLock::Untrack { key } => key.heap_size(),
+            PendingLock::Track { key, .. } | PendingLock::Untrack { key } => {
+                key.approximate_heap_size()
+            }
         }
     }
 }
@@ -1158,8 +1166,8 @@ fn decode_default(value: Vec<u8>, row: &mut EventRow, has_value: &mut bool) {
 /// Observed key range.
 #[derive(Clone, Default)]
 pub struct ObservedRange {
-    start_key_encoded: Vec<u8>,
-    end_key_encoded: Vec<u8>,
+    pub(crate) start_key_encoded: Vec<u8>,
+    pub(crate) end_key_encoded: Vec<u8>,
     start_key_raw: Vec<u8>,
     end_key_raw: Vec<u8>,
     pub(crate) all_key_covered: bool,

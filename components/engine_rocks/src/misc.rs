@@ -195,10 +195,7 @@ impl MiscExt for RocksEngine {
             fopts.set_allow_write_stall(true);
             fopts.set_check_if_compaction_disabled(true);
             fopts.set_expected_oldest_key_time(time);
-            self
-                .as_inner()
-                .flush_cf(handle, &fopts)
-                .map_err(r2e)?;
+            self.as_inner().flush_cf(handle, &fopts).map_err(r2e)?;
             return Ok(true);
         }
         Ok(false)
@@ -448,13 +445,18 @@ impl MiscExt for RocksEngine {
             .get();
         Ok(n)
     }
+
+    type DiskEngine = RocksEngine;
+    fn get_disk_engine(&self) -> &Self::DiskEngine {
+        self
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use engine_traits::{
-        CompactExt, DeleteStrategy, Iterable, Iterator, Mutable, SyncMutable, WriteBatchExt,
-        ALL_CFS,
+        CompactExt, DeleteStrategy, Iterable, Iterator, ManualCompactionOptions, Mutable,
+        SyncMutable, WriteBatchExt, ALL_CFS,
     };
     use tempfile::Builder;
 
@@ -499,7 +501,7 @@ mod tests {
             .collect();
 
         let mut kvs: Vec<(&[u8], &[u8])> = vec![];
-        for (_, key) in keys.iter().enumerate() {
+        for key in keys.iter() {
             kvs.push((key.as_slice(), b"value"));
         }
         for &(k, v) in kvs.as_slice() {
@@ -771,7 +773,13 @@ mod tests {
         ];
         assert_eq!(sst_range, expected);
 
-        db.compact_range_cf(cf, None, None, false, 1).unwrap();
+        db.compact_range_cf(
+            cf,
+            None,
+            None,
+            ManualCompactionOptions::new(false, 1, false),
+        )
+        .unwrap();
         let sst_range = db.get_sst_key_ranges(cf, 0).unwrap();
         assert_eq!(sst_range.len(), 0);
         let sst_range = db.get_sst_key_ranges(cf, 1).unwrap();

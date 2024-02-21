@@ -136,6 +136,9 @@ pub enum Error {
 
     #[error("imports are suspended for {time_to_lease_expire:?}")]
     Suspended { time_to_lease_expire: Duration },
+
+    #[error("TiKV disk space is not enough.")]
+    DiskSpaceNotEnough,
 }
 
 impl Error {
@@ -178,6 +181,7 @@ impl From<Error> for import_sstpb::Error {
                 let mut server_is_busy = errorpb::ServerIsBusy::default();
                 server_is_busy.set_backoff_ms(time_to_lease_expire.as_millis() as _);
                 store_err.set_server_is_busy(server_is_busy);
+                store_err.set_message(format!("{}", e));
                 err.set_store_error(store_err);
                 err.set_message(format!("{}", e));
             }
@@ -221,6 +225,7 @@ impl ErrorCodeExt for Error {
             Error::Suspended { .. } => error_code::sst_importer::SUSPENDED,
             Error::RequestTooNew(_) => error_code::sst_importer::REQUEST_TOO_NEW,
             Error::RequestTooOld(_) => error_code::sst_importer::REQUEST_TOO_OLD,
+            Error::DiskSpaceNotEnough => error_code::sst_importer::DISK_SPACE_NOT_ENOUGH,
         }
     }
 }

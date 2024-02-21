@@ -5,7 +5,7 @@ use std::{
     fmt::{self, Display, Formatter},
 };
 
-use engine_traits::{KvEngine, TabletRegistry, CF_WRITE};
+use engine_traits::{KvEngine, ManualCompactionOptions, TabletRegistry, CF_WRITE};
 use fail::fail_point;
 use keys::{DATA_MAX_KEY, DATA_MIN_KEY};
 use raftstore::store::{need_compact, CompactThreshold};
@@ -97,12 +97,19 @@ where
             ) {
                 Ok(mut region_ids) => {
                     for region_id in region_ids.drain(..) {
-                        let Some(mut tablet_cache) = self.tablet_registry.get(region_id) else {continue};
-                        let Some(tablet) = tablet_cache.latest() else {continue};
+                        let Some(mut tablet_cache) = self.tablet_registry.get(region_id) else {
+                            continue;
+                        };
+                        let Some(tablet) = tablet_cache.latest() else {
+                            continue;
+                        };
                         for cf in &cf_names {
-                            if let Err(e) =
-                                tablet.compact_range_cf(cf, None, None, false, 1 /* threads */)
-                            {
+                            if let Err(e) = tablet.compact_range_cf(
+                                cf,
+                                None,
+                                None,
+                                ManualCompactionOptions::new(false, 1, false),
+                            ) {
                                 error!(
                                     self.logger,
                                     "compact range failed";
@@ -143,8 +150,12 @@ fn collect_regions_to_compact<E: KvEngine>(
     );
     let mut regions_to_compact = vec![];
     for id in region_ids {
-        let Some(mut tablet_cache) = reg.get(id) else {continue};
-        let Some(tablet) = tablet_cache.latest() else {continue};
+        let Some(mut tablet_cache) = reg.get(id) else {
+            continue;
+        };
+        let Some(tablet) = tablet_cache.latest() else {
+            continue;
+        };
         if tablet.auto_compactions_is_disabled().expect("cf") {
             info!(
                 logger,

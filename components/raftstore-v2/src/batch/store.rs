@@ -21,6 +21,7 @@ use encryption_export::DataKeyManager;
 use engine_traits::{KvEngine, RaftEngine, TabletRegistry};
 use file_system::{set_io_type, IoType, WithIoType};
 use futures::compat::Future01CompatExt;
+use health_controller::types::LatencyInspector;
 use kvproto::{disk_usage::DiskUsage, raft_serverpb::RaftMessage};
 use pd_client::PdClient;
 use raft::{StateRole, INVALID_ID};
@@ -32,7 +33,6 @@ use raftstore::{
             GlobalStoreStat, LocalStoreStat,
         },
         local_metrics::RaftMetrics,
-        util::LatencyInspector,
         AutoSplitController, Config, ReadRunner, ReadTask, RefreshConfigTask, SplitCheckRunner,
         SplitCheckTask, StoreWriters, StoreWritersContext, TabletSnapManager, Transport,
         WriteRouterContext, WriteSenders, WriterContoller,
@@ -112,7 +112,7 @@ pub struct StoreContext<EK: KvEngine, ER: RaftEngine, T> {
     pub snap_mgr: TabletSnapManager,
     pub global_stat: GlobalStoreStat,
     pub store_stat: LocalStoreStat,
-    pub sst_importer: Arc<SstImporter>,
+    pub sst_importer: Arc<SstImporter<EK>>,
     pub key_manager: Option<Arc<DataKeyManager>>,
 
     /// Inspector for latency inspecting
@@ -366,7 +366,7 @@ struct StorePollerBuilder<EK: KvEngine, ER: RaftEngine, T> {
     shutdown: Arc<AtomicBool>,
     snap_mgr: TabletSnapManager,
     global_stat: GlobalStoreStat,
-    sst_importer: Arc<SstImporter>,
+    sst_importer: Arc<SstImporter<EK>>,
     key_manager: Option<Arc<DataKeyManager>>,
     node_start_time: Timespec, // monotonic_raw_now
 }
@@ -386,7 +386,7 @@ impl<EK: KvEngine, ER: RaftEngine, T> StorePollerBuilder<EK, ER, T> {
         shutdown: Arc<AtomicBool>,
         snap_mgr: TabletSnapManager,
         coprocessor_host: CoprocessorHost<EK>,
-        sst_importer: Arc<SstImporter>,
+        sst_importer: Arc<SstImporter<EK>>,
         key_manager: Option<Arc<DataKeyManager>>,
         node_start_time: Timespec, // monotonic_raw_now
     ) -> Self {
@@ -493,7 +493,11 @@ impl<EK: KvEngine, ER: RaftEngine, T> StorePollerBuilder<EK, ER, T> {
                 self.remove_dir(&path)?;
                 continue;
             }
-            let Some((prefix, region_id, tablet_index)) = self.tablet_registry.parse_tablet_name(&path) else { continue };
+            let Some((prefix, region_id, tablet_index)) =
+                self.tablet_registry.parse_tablet_name(&path)
+            else {
+                continue;
+            };
             if prefix == MERGE_SOURCE_PREFIX {
                 continue;
             }
@@ -694,7 +698,7 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
         collector_reg_handle: CollectorRegHandle,
         background: Worker,
         pd_worker: LazyWorker<pd::Task>,
-        sst_importer: Arc<SstImporter>,
+        sst_importer: Arc<SstImporter<EK>>,
         key_manager: Option<Arc<DataKeyManager>>,
         grpc_service_mgr: GrpcServiceManager,
         resource_ctl: Option<Arc<ResourceController>>,
@@ -811,7 +815,6 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
             causal_ts_provider,
             workers.pd.scheduler(),
             auto_split_controller,
-            store_meta.lock().unwrap().region_read_progress.clone(),
             collector_reg_handle,
             grpc_service_mgr,
             self.logger.clone(),

@@ -21,7 +21,7 @@ use txn_types::{Key, LastChange, PessimisticLock};
 #[test_case(test_raftstore::new_node_cluster)]
 fn test_node_base_merge() {
     let mut cluster = new_cluster(0, 3);
-    cluster.cfg.rocksdb.titan.enabled = true;
+    cluster.cfg.rocksdb.titan.enabled = Some(true);
     configure_for_merge(&mut cluster.cfg);
 
     cluster.run();
@@ -106,7 +106,7 @@ fn test_node_base_merge() {
 fn test_node_base_merge_v2() {
     let mut cluster = new_cluster(0, 3);
     // TODO: v2 doesn't support titan yet.
-    // cluster.cfg.rocksdb.titan.enabled = true;
+    // cluster.cfg.rocksdb.titan.enabled = Some(true);
     configure_for_merge(&mut cluster.cfg);
 
     cluster.run();
@@ -405,6 +405,122 @@ fn test_node_check_merged_message() {
     must_get_equal(&engine3, b"k4", b"v4");
     must_get_none(&engine3, b"k3");
     must_get_none(&engine3, b"v5");
+}
+
+/// Test if an uninitialized stale peer will be handled properly after merge.
+#[test_case(test_raftstore::new_node_cluster)]
+// #[test_case(test_raftstore_v2::new_node_cluster)]
+fn test_node_gc_uninitialized_peer_after_merge() {
+    let mut cluster = new_cluster(0, 4);
+    configure_for_merge(&mut cluster.cfg);
+    ignore_merge_target_integrity(&mut cluster.cfg, &cluster.pd_client);
+    cluster.cfg.raft_store.raft_election_timeout_ticks = 5;
+    cluster.cfg.raft_store.raft_store_max_leader_lease = ReadableDuration::millis(40);
+    cluster.cfg.raft_store.max_leader_missing_duration = ReadableDuration::millis(150);
+    cluster.cfg.raft_store.abnormal_leader_missing_duration = ReadableDuration::millis(100);
+    cluster.cfg.raft_store.peer_stale_state_check_interval = ReadableDuration::millis(100);
+
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+
+    cluster.run_conf_change();
+
+    cluster.must_put(b"k1", b"v1");
+    cluster.must_put(b"k3", b"v3");
+
+    // test if an uninitialized stale peer before conf removal is destroyed
+    // automatically
+    let region = pd_client.get_region(b"k1").unwrap();
+    pd_client.must_add_peer(region.get_id(), new_peer(2, 2));
+    pd_client.must_add_peer(region.get_id(), new_peer(3, 3));
+
+    cluster.must_split(&region, b"k2");
+    let left = pd_client.get_region(b"k1").unwrap();
+    let right = pd_client.get_region(b"k2").unwrap();
+
+    // Block snapshot messages, so that new peers will never be initialized.
+    cluster.add_send_filter(CloneFilterFactory(
+        RegionPacketFilter::new(left.get_id(), 4)
+            .msg_type(MessageType::MsgSnapshot)
+            .direction(Direction::Recv),
+    ));
+    // Add peer (4,4), remove peer (4,4) and then merge regions.
+    // Peer (4,4) will be an an uninitialized stale peer.
+    pd_client.must_add_peer(left.get_id(), new_peer(4, 4));
+    cluster.must_region_exist(left.get_id(), 4);
+    cluster.add_send_filter(IsolationFilterFactory::new(4));
+    pd_client.must_remove_peer(left.get_id(), new_peer(4, 4));
+    pd_client.must_merge(left.get_id(), right.get_id());
+    cluster.clear_send_filters();
+
+    // Wait for the peer (4,4) to be destroyed.
+    sleep_ms(
+        2 * cluster
+            .cfg
+            .raft_store
+            .max_leader_missing_duration
+            .as_millis(),
+    );
+    cluster.must_region_not_exist(left.get_id(), 4);
+}
+
+/// Test leader missing should issue check stale peer requests.
+#[test_case(test_raftstore::new_node_cluster)]
+// #[test_case(test_raftstore_v2::new_node_cluster)]
+fn test_node_gc_uninitialized_peer_after_merge_on_leader_missing() {
+    let mut cluster = new_cluster(0, 4);
+    configure_for_merge(&mut cluster.cfg);
+    ignore_merge_target_integrity(&mut cluster.cfg, &cluster.pd_client);
+    cluster.cfg.raft_store.raft_election_timeout_ticks = 5;
+    cluster.cfg.raft_store.raft_store_max_leader_lease = ReadableDuration::millis(40);
+    cluster.cfg.raft_store.peer_stale_state_check_interval = ReadableDuration::millis(100);
+    cluster.cfg.raft_store.abnormal_leader_missing_duration = ReadableDuration::millis(100);
+    // Set a large max_leader_missing_duration so that check stale peer will
+    // only be triggered by leader missing.
+    cluster.cfg.raft_store.max_leader_missing_duration = ReadableDuration::hours(1);
+
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+
+    cluster.run_conf_change();
+
+    cluster.must_put(b"k1", b"v1");
+    cluster.must_put(b"k3", b"v3");
+
+    // test if an uninitialized stale peer before conf removal is destroyed
+    // automatically
+    let region = pd_client.get_region(b"k1").unwrap();
+    pd_client.must_add_peer(region.get_id(), new_peer(2, 2));
+    pd_client.must_add_peer(region.get_id(), new_peer(3, 3));
+
+    cluster.must_split(&region, b"k2");
+    let left = pd_client.get_region(b"k1").unwrap();
+    let right = pd_client.get_region(b"k2").unwrap();
+
+    // Block snapshot messages, so that new peers will never be initialized.
+    cluster.add_send_filter(CloneFilterFactory(
+        RegionPacketFilter::new(left.get_id(), 4)
+            .msg_type(MessageType::MsgSnapshot)
+            .direction(Direction::Recv),
+    ));
+    // Add peer (4,4), remove peer (4,4) and then merge regions.
+    // Peer (4,4) will be an an uninitialized stale peer.
+    pd_client.must_add_peer(left.get_id(), new_peer(4, 4));
+    cluster.must_region_exist(left.get_id(), 4);
+    cluster.add_send_filter(IsolationFilterFactory::new(4));
+    pd_client.must_remove_peer(left.get_id(), new_peer(4, 4));
+    pd_client.must_merge(left.get_id(), right.get_id());
+    cluster.clear_send_filters();
+
+    // Wait for the peer (4,4) to be destroyed.
+    sleep_ms(
+        3 * cluster
+            .cfg
+            .raft_store
+            .abnormal_leader_missing_duration
+            .as_millis(),
+    );
+    cluster.must_region_not_exist(left.get_id(), 4);
 }
 
 // Test if a merge handled properly when there is a unfinished slow split before
@@ -779,8 +895,8 @@ fn test_node_merge_update_region() {
     let new_leader = left
         .get_peers()
         .iter()
+        .find(|&p| p.get_id() != origin_leader.get_id())
         .cloned()
-        .find(|p| p.get_id() != origin_leader.get_id())
         .unwrap();
 
     // Make sure merge is done in the new_leader.
@@ -1436,7 +1552,7 @@ fn test_merge_pessimistic_locks_when_gap_is_too_large() {
     let large_bytes = vec![b'v'; 32 << 10]; // 32 KiB
     // 4 * 32 KiB = 128 KiB > raft_entry_max_size
     for _ in 0..4 {
-        cluster.async_put(b"k1", &large_bytes).unwrap();
+        let _ = cluster.async_put(b"k1", &large_bytes).unwrap();
     }
 
     cluster.merge_region(left.id, right.id, Callback::None);

@@ -8,7 +8,10 @@ use pd_client::PdClient;
 use tempfile::Builder;
 use test_sst_importer::*;
 use tikv::config::TikvConfig;
-use tikv_util::config::ReadableSize;
+use tikv_util::{
+    config::ReadableSize,
+    sys::disk::{set_disk_status, DiskUsage},
+};
 
 use super::util::*;
 
@@ -36,6 +39,14 @@ fn test_upload_sst() {
     let meta = new_sst_meta(0, length);
     assert_to_string_contains!(send_upload_sst(&import, &meta, &data).unwrap_err(), "crc32");
 
+    // diskfull
+    set_disk_status(DiskUsage::AlmostFull);
+    assert_to_string_contains!(
+        send_upload_sst(&import, &meta, &data).unwrap_err(),
+        "DiskSpaceNotEnough"
+    );
+    set_disk_status(DiskUsage::Normal);
+
     let mut meta = new_sst_meta(crc32, length);
     meta.set_region_id(ctx.get_region_id());
     meta.set_region_epoch(ctx.get_region_epoch().clone());
@@ -48,7 +59,12 @@ fn test_upload_sst() {
     );
 }
 
-fn run_test_write_sst(ctx: Context, tikv: TikvClient, import: ImportSstClient) {
+fn run_test_write_sst(
+    ctx: Context,
+    tikv: TikvClient,
+    import: ImportSstClient,
+    expected_error: &str,
+) {
     let mut meta = new_sst_meta(0, 0);
     meta.set_region_id(ctx.get_region_id());
     meta.set_region_epoch(ctx.get_region_epoch().clone());
@@ -60,8 +76,13 @@ fn run_test_write_sst(ctx: Context, tikv: TikvClient, import: ImportSstClient) {
         keys.push(vec![i]);
         values.push(vec![i]);
     }
-    let resp = send_write_sst(&import, &meta, keys, values, 1).unwrap();
+    let resp = send_write_sst(&import, &meta, keys, values, 1);
+    if !expected_error.is_empty() {
+        assert_to_string_contains!(resp.unwrap_err(), expected_error);
+        return;
+    }
 
+    let resp = resp.unwrap();
     for m in resp.metas.into_iter() {
         let mut ingest = IngestRequest::default();
         ingest.set_context(ctx.clone());
@@ -76,13 +97,21 @@ fn run_test_write_sst(ctx: Context, tikv: TikvClient, import: ImportSstClient) {
 fn test_write_sst() {
     let (_cluster, ctx, tikv, import) = new_cluster_and_tikv_import_client();
 
-    run_test_write_sst(ctx, tikv, import);
+    run_test_write_sst(ctx, tikv, import, "");
+}
+
+#[test]
+fn test_write_sst_when_disk_full() {
+    set_disk_status(DiskUsage::AlmostFull);
+    let (_cluster, ctx, tikv, import) = new_cluster_and_tikv_import_client();
+    run_test_write_sst(ctx, tikv, import, "DiskSpaceNotEnough");
+    set_disk_status(DiskUsage::Normal);
 }
 
 #[test]
 fn test_write_and_ingest_with_tde() {
     let (_tmp_dir, _cluster, ctx, tikv, import) = new_cluster_and_tikv_import_client_tde();
-    run_test_write_sst(ctx, tikv, import);
+    run_test_write_sst(ctx, tikv, import, "");
 }
 
 #[test]
@@ -609,10 +638,18 @@ fn test_suspend_import() {
     );
     let write_res = write(sst_range);
     write_res.unwrap();
-    let ingest_res = ingest(&sst);
-    assert_to_string_contains!(ingest_res.unwrap_err(), "Suspended");
-    let multi_ingest_res = multi_ingest(&[sst.clone()]);
-    assert_to_string_contains!(multi_ingest_res.unwrap_err(), "Suspended");
+    let ingest_res = ingest(&sst).unwrap();
+    assert!(
+        ingest_res.get_error().has_server_is_busy(),
+        "{:?}",
+        ingest_res
+    );
+    let multi_ingest_res = multi_ingest(&[sst.clone()]).unwrap();
+    assert!(
+        multi_ingest_res.get_error().has_server_is_busy(),
+        "{:?}",
+        multi_ingest_res
+    );
 
     assert!(
         import
@@ -637,7 +674,11 @@ fn test_suspend_import() {
     let write_res = write(sst_range);
     let sst = write_res.unwrap().metas;
     let res = multi_ingest(&sst);
-    assert_to_string_contains!(res.unwrap_err(), "Suspended");
+    assert!(
+        res.as_ref().unwrap().get_error().has_server_is_busy(),
+        "{:?}",
+        res
+    );
     std::thread::sleep(Duration::from_secs(1));
     multi_ingest(&sst).unwrap();
 

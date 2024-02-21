@@ -3,12 +3,15 @@
 use std::{sync::mpsc::channel, thread, time::Duration};
 
 use collections::HashMap;
+use engine_rocks::RocksEngine;
 use kvproto::metapb::Region;
 use raftstore::coprocessor::{RegionInfoAccessor, RegionInfoProvider};
 use test_raftstore::*;
 use tikv_util::HandyRwLock;
 
-fn prepare_cluster<T: Simulator>(cluster: &mut Cluster<T>) -> Vec<Region> {
+fn prepare_cluster<T: Simulator<RocksEngine>>(
+    cluster: &mut Cluster<RocksEngine, T>,
+) -> Vec<Region> {
     for i in 0..15 {
         let i = i + b'0';
         let key = vec![b'k', i];
@@ -16,7 +19,7 @@ fn prepare_cluster<T: Simulator>(cluster: &mut Cluster<T>) -> Vec<Region> {
         cluster.must_put(&key, &value);
     }
 
-    let end_keys = vec![
+    let end_keys = [
         b"k1".to_vec(),
         b"k3".to_vec(),
         b"k5".to_vec(),
@@ -25,7 +28,7 @@ fn prepare_cluster<T: Simulator>(cluster: &mut Cluster<T>) -> Vec<Region> {
         b"".to_vec(),
     ];
 
-    let start_keys = vec![
+    let start_keys = [
         b"".to_vec(),
         b"k1".to_vec(),
         b"k3".to_vec(),
@@ -36,7 +39,7 @@ fn prepare_cluster<T: Simulator>(cluster: &mut Cluster<T>) -> Vec<Region> {
 
     let mut regions = Vec::new();
 
-    for mut key in end_keys.iter().take(end_keys.len() - 1).map(Vec::clone) {
+    for mut key in end_keys.iter().take(end_keys.len() - 1).cloned() {
         let region = cluster.get_region(&key);
         cluster.must_split(&region, &key);
 

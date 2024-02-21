@@ -120,6 +120,23 @@ ENABLE_FEATURES += cloud-gcp
 ENABLE_FEATURES += cloud-azure
 endif
 
+ifneq ($(NO_ASYNC_BACKTRACE),1)
+ENABLE_FEATURES += trace-async-tasks
+endif
+
+export DOCKER_FILE ?= Dockerfile
+export DOCKER_IMAGE_NAME ?= pingcap/tikv
+export DOCKER_IMAGE_TAG ?= latest
+export DEV_DOCKER_IMAGE_NAME ?= pingcap/tikv_dev
+export ENABLE_FIPS ?= 0
+
+ifeq ($(ENABLE_FIPS),1)
+DOCKER_IMAGE_TAG := ${DOCKER_IMAGE_TAG}-fips
+DOCKER_FILE := ${DOCKER_FILE}.FIPS
+else
+ENABLE_FEATURES += openssl-vendored
+endif
+
 PROJECT_DIR:=$(shell dirname $(realpath $(lastword $(MAKEFILE_LIST))))
 
 BIN_PATH = $(CURDIR)/bin
@@ -134,10 +151,6 @@ export TIKV_BUILD_RUSTC_TARGET := $(shell rustc -vV | awk '/host/ { print $$2 }'
 export TIKV_BUILD_GIT_HASH ?= $(shell git rev-parse HEAD 2> /dev/null || echo ${BUILD_INFO_GIT_FALLBACK})
 export TIKV_BUILD_GIT_TAG ?= $(shell git describe --tag || echo ${BUILD_INFO_GIT_FALLBACK})
 export TIKV_BUILD_GIT_BRANCH ?= $(shell git rev-parse --abbrev-ref HEAD 2> /dev/null || echo ${BUILD_INFO_GIT_FALLBACK})
-
-export DOCKER_IMAGE_NAME ?= "pingcap/tikv"
-export DOCKER_IMAGE_TAG ?= "latest"
-export DEV_DOCKER_IMAGE_NAME ?= "pingcap/tikv_dev"
 
 # Turn on cargo pipelining to add more build parallelism. This has shown decent
 # speedups in TiKV.
@@ -154,6 +167,9 @@ export CARGO_BUILD_PIPELINING=true
 ifeq ($(TIKV_BUILD_RUSTC_TARGET),aarch64-unknown-linux-gnu)
 export RUSTFLAGS := $(RUSTFLAGS) -Ctarget-feature=-outline-atomics
 endif
+
+# If both python and python3 are installed, it will choose python as a preferred option.
+PYTHON := $(shell command -v python 2> /dev/null || command -v python3 2> /dev/null)
 
 # Almost all the rules in this Makefile are PHONY
 # Declaring a rule as PHONY could improve correctness
@@ -248,7 +264,7 @@ dist_release:
 	@mkdir -p ${BIN_PATH}
 	@cp -f ${CARGO_TARGET_DIR}/release/tikv-ctl ${CARGO_TARGET_DIR}/release/tikv-server ${BIN_PATH}/
 ifeq ($(shell uname),Linux) # Macs binary isn't elf format
-	@python scripts/check-bins.py --features "${ENABLE_FEATURES}" --check-release ${BIN_PATH}/tikv-ctl ${BIN_PATH}/tikv-server
+	$(PYTHON) scripts/check-bins.py --features "${ENABLE_FEATURES}" --check-release ${BIN_PATH}/tikv-ctl ${BIN_PATH}/tikv-server
 endif
 
 # Build with release flag as if it were for distribution, but without
@@ -316,7 +332,7 @@ test:
 
 # Run tests with nextest.
 ifndef CUSTOM_TEST_COMMAND
-test_with_nextest: export CUSTOM_TEST_COMMAND=nextest run
+test_with_nextest: export CUSTOM_TEST_COMMAND=nextest run --nocapture
 endif
 test_with_nextest: export RUSTDOCFLAGS="-Z unstable-options --persist-doctests"
 test_with_nextest:
@@ -348,8 +364,10 @@ pre-clippy: unset-override
 clippy: pre-clippy
 	@./scripts/check-redact-log
 	@./scripts/check-log-style
+	@./scripts/check-dashboards
 	@./scripts/check-docker-build
 	@./scripts/check-license
+	@./scripts/deny
 	@./scripts/clippy-all
 
 pre-audit:
@@ -393,6 +411,7 @@ error-code: etc/error_code.toml
 docker:
 	docker build \
 		-t ${DOCKER_IMAGE_NAME}:${DOCKER_IMAGE_TAG} \
+		-f ${DOCKER_FILE} \
 		--build-arg GIT_HASH=${TIKV_BUILD_GIT_HASH} \
 		--build-arg GIT_TAG=${TIKV_BUILD_GIT_TAG} \
 		--build-arg GIT_BRANCH=${TIKV_BUILD_GIT_BRANCH} \

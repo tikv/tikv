@@ -4,9 +4,12 @@ use std::{borrow::Cow, mem::size_of};
 
 use byteorder::ReadBytesExt;
 use kvproto::kvrpcpb::{IsolationLevel, LockInfo, Op, WriteConflictReason};
-use tikv_util::codec::{
-    bytes::{self, BytesEncoder},
-    number::{self, NumberEncoder, MAX_VAR_I64_LEN, MAX_VAR_U64_LEN},
+use tikv_util::{
+    codec::{
+        bytes::{self, BytesEncoder},
+        number::{self, NumberEncoder, MAX_VAR_I64_LEN, MAX_VAR_U64_LEN},
+    },
+    memory::HeapSize,
 };
 
 use crate::{
@@ -35,6 +38,7 @@ const ASYNC_COMMIT_PREFIX: u8 = b'a';
 const ROLLBACK_TS_PREFIX: u8 = b'r';
 const LAST_CHANGE_PREFIX: u8 = b'l';
 const TXN_SOURCE_PREFIX: u8 = b's';
+const _RESERVED_PREFIX: u8 = b'T'; // Reserved for future use.
 const PESSIMISTIC_LOCK_WITH_CONFLICT_PREFIX: u8 = b'F';
 
 impl LockType {
@@ -129,6 +133,15 @@ impl std::fmt::Debug for Lock {
             .field("txn_source", &self.txn_source)
             .field("is_locked_with_conflict", &self.is_locked_with_conflict)
             .finish()
+    }
+}
+
+impl HeapSize for Lock {
+    fn approximate_heap_size(&self) -> usize {
+        self.primary.approximate_heap_size()
+            + self.short_value.approximate_heap_size()
+            + self.secondaries.approximate_heap_size()
+            + self.rollback_ts.approximate_heap_size()
     }
 }
 
@@ -601,6 +614,55 @@ impl std::fmt::Debug for PessimisticLock {
             .field("last_change", &self.last_change)
             .field("is_locked_with_conflict", &self.is_locked_with_conflict)
             .finish()
+    }
+}
+
+/// TxnLock is a wrapper for in-memory pessimistic locks and storage locks.
+#[derive(PartialEq, Clone, Debug)]
+pub enum TxnLockRef<'a> {
+    InMemory(&'a PessimisticLock),
+    Persisted(&'a Lock),
+}
+
+impl<'a> TxnLockRef<'a> {
+    pub fn get_start_ts(&self) -> TimeStamp {
+        match self {
+            TxnLockRef::InMemory(pessimistic_lock) => pessimistic_lock.start_ts,
+            TxnLockRef::Persisted(lock) => lock.ts,
+        }
+    }
+
+    pub fn get_for_update_ts(&self) -> TimeStamp {
+        match self {
+            TxnLockRef::InMemory(pessimistic_lock) => pessimistic_lock.for_update_ts,
+            TxnLockRef::Persisted(lock) => lock.for_update_ts,
+        }
+    }
+
+    pub fn is_pessimistic_lock(&self) -> bool {
+        match self {
+            TxnLockRef::InMemory(_) => true,
+            TxnLockRef::Persisted(lock) => lock.is_pessimistic_lock(),
+        }
+    }
+
+    pub fn get_lock_type(&self) -> LockType {
+        match self {
+            TxnLockRef::InMemory(_) => LockType::Pessimistic,
+            TxnLockRef::Persisted(lock) => lock.lock_type,
+        }
+    }
+}
+
+impl<'a> From<&'a PessimisticLock> for TxnLockRef<'a> {
+    fn from(in_memory_pessimistic_lock: &'a PessimisticLock) -> Self {
+        Self::InMemory(in_memory_pessimistic_lock)
+    }
+}
+
+impl<'a> From<&'a Lock> for TxnLockRef<'a> {
+    fn from(lock: &'a Lock) -> Self {
+        Self::Persisted(lock)
     }
 }
 
