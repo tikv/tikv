@@ -36,6 +36,7 @@ use futures::{compat::Future01CompatExt, FutureExt};
 use health_controller::{types::LatencyInspector, HealthController};
 use keys::{self, data_end_key, data_key, enc_end_key, enc_start_key};
 use kvproto::{
+    import_sstpb::SstMeta,
     metapb::{self, Region, RegionEpoch},
     pdpb::{self, QueryStats, StoreStats},
     raft_cmdpb::{AdminCmdType, AdminRequest},
@@ -3024,6 +3025,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
 
 // we will remove 1-week old version 1 SST files.
 const VERSION_1_SST_CLEANUP_DURATION: Duration = Duration::from_secs(7 * 24 * 60 * 60);
+const WARN_LINGER_SST_DURATION: Duration = Duration::from_secs(60);
 
 impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER, T> {
     fn on_cleanup_import_sst(&mut self) -> Result<()> {
@@ -3033,6 +3035,8 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         if ssts.is_empty() {
             return Ok(());
         }
+        let mut longest_linger_sst: Option<(SstMeta, Duration)> = None;
+        let mut linger_sst_count = 0;
         let now = SystemTime::now();
         {
             let meta = self.ctx.store_meta.lock().unwrap();
@@ -3042,6 +3046,15 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
                     if util::is_epoch_stale(sst.0.get_region_epoch(), region_epoch) {
                         // If the SST epoch is stale, it will not be ingested anymore.
                         delete_ssts.push(sst.0);
+                    } else if let Ok(duration) = now.duration_since(sst.2) {
+                        if duration > WARN_LINGER_SST_DURATION {
+                            linger_sst_count += 1;
+                            if longest_linger_sst.is_none()
+                                || duration > longest_linger_sst.as_ref().unwrap().1
+                            {
+                                longest_linger_sst = Some((sst.0.clone(), duration));
+                            }
+                        }
                     }
                 } else if sst.1 >= sst_importer::API_VERSION_2 {
                     // The write RPC of import sst service have make sure the region do exist at
@@ -3065,6 +3078,14 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
                     }
                 }
             }
+        }
+        if let Some((sst, duration)) = longest_linger_sst {
+            warn!(
+                "found lingering import SST file";
+                "linger_sst_count" => linger_sst_count,
+                "longest_linger_sst_meta" => ?sst,
+                "longest_linger_duration" => ?duration,
+            );
         }
 
         if !delete_ssts.is_empty() {

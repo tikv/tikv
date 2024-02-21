@@ -856,7 +856,7 @@ impl<E: KvEngine> SstImporter<E> {
         }
     }
 
-    pub async fn do_download_kv_file(
+    async fn do_download_kv_file(
         &self,
         meta: &KvMeta,
         backend: &StorageBackend,
