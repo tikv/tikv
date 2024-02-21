@@ -387,7 +387,7 @@ where
                 if cf != CF_LOCK {
                     // check whether the config changed for ignoring manual compaction
                     if let Some(incoming) = self.cfg_tracker.any_new() {
-                        self.skip_compact = incoming.clean_up_manual_compaction_skip;
+                        self.skip_compact = incoming.skip_manual_compaction_in_clean_up_worker;
                     }
                     if self.skip_compact {
                         info!(
