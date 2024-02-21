@@ -91,7 +91,7 @@ pub fn prewrite_with_generation<S: Snapshot>(
 
     let lock_status = match reader.load_lock(&mutation.key)? {
         Some(lock) => {
-            if lock.generation >= generation {
+            if generation > 0 && lock.generation >= generation {
                 return Err(ErrorInner::GenerationOutOfOrder(
                     lock.generation,
                     lock.into_lock_info(mutation.key.to_raw().unwrap()),
