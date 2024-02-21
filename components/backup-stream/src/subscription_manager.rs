@@ -486,7 +486,7 @@ where
                     let now = Instant::now();
                     let timedout = self.wait(Duration::from_secs(5)).await;
                     if timedout {
-                        warn!("waiting for initial scanning done timed out, forcing progress!"; 
+                        warn!("waiting for initial scanning done timed out, forcing progress!";
                             "take" => ?now.saturating_elapsed(), "timedout" => %timedout);
                     }
                     let regions = resolver.resolve(self.subs.current_regions(), min_ts).await;
@@ -503,10 +503,114 @@ where
                     }
                     callback(ResolvedRegions::new(rts, cps));
                 }
+<<<<<<< HEAD
+=======
+                ObserveOp::HighMemUsageWarning { region_id } => {
+                    self.on_high_memory_usage(region_id);
+                }
+>>>>>>> 66847e9c5a (*: remove unnecessary async blocks to save memory (#16541))
             }
         }
     }
 
+<<<<<<< HEAD
+=======
+    async fn on_observe_result(
+        &mut self,
+        region: Region,
+        handle: ObserveHandle,
+        err: Option<Box<Error>>,
+    ) {
+        let err = match err {
+            None => {
+                self.failure_count.remove(&region.id);
+                let sub = self.subs.get_subscription_of(region.id);
+                if let Some(mut sub) = sub {
+                    if sub.value().handle.id == handle.id {
+                        sub.value_mut().resolver.phase_one_done();
+                    }
+                }
+                return;
+            }
+            Some(err) => {
+                if !should_retry(&err) {
+                    self.failure_count.remove(&region.id);
+                    self.subs
+                        .deregister_region_if(&region, |sub, _| sub.handle.id == handle.id);
+                    return;
+                }
+                err
+            }
+        };
+
+        let region_id = region.id;
+        match self.retry_observe(region.clone(), handle).await {
+            Ok(has_resent_req) => {
+                if !has_resent_req {
+                    self.failure_count.remove(&region_id);
+                }
+            }
+            Err(e) => {
+                self.issue_fatal_of(
+                    &region,
+                    e.context(format_args!(
+                        "retry encountered error, origin error is {}",
+                        err
+                    )),
+                );
+                self.failure_count.remove(&region_id);
+            }
+        }
+    }
+
+    fn on_high_memory_usage(&mut self, inconsistent_region_id: u64) {
+        let mut lame_region = Region::new();
+        lame_region.set_id(inconsistent_region_id);
+        let mut act_region = None;
+        self.subs.deregister_region_if(&lame_region, |act, _| {
+            act_region = Some(act.meta.clone());
+            true
+        });
+        let delay = OOM_BACKOFF_BASE
+            + Duration::from_secs(rand::thread_rng().gen_range(0..OOM_BACKOFF_JITTER_SECS));
+        info!("log backup triggering high memory usage.";
+            "region" => %inconsistent_region_id,
+            "mem_usage" => %self.memory_manager.used_ratio(),
+            "mem_max" => %self.memory_manager.capacity());
+        if let Some(region) = act_region {
+            self.schedule_start_observe(delay, region, None);
+        }
+    }
+
+    fn schedule_start_observe(
+        &self,
+        backoff: Duration,
+        region: Region,
+        handle: Option<ObserveHandle>,
+    ) {
+        let tx = self.messenger.upgrade();
+        let region_id = region.id;
+        if tx.is_none() {
+            warn!(
+                "log backup subscription manager: cannot upgrade self-sender, are we shutting down?"
+            );
+            return;
+        }
+        let tx = tx.unwrap();
+        // tikv_util::Instant cannot be converted to std::time::Instant :(
+        let start = std::time::Instant::now();
+        let scheduled = async move {
+            tokio::time::sleep_until((start + backoff).into()).await;
+            let handle = handle.unwrap_or_else(|| ObserveHandle::new());
+            if let Err(err) = tx.send(ObserveOp::Start { region, handle }).await {
+                warn!("log backup failed to schedule start observe."; "err" => %err);
+            }
+        };
+        tokio::spawn(root!("scheduled_subscription"; scheduled; "after" = ?backoff, region_id));
+    }
+
+    #[instrument(skip_all, fields(id = region.id))]
+>>>>>>> 66847e9c5a (*: remove unnecessary async blocks to save memory (#16541))
     async fn refresh_resolver(&self, region: &Region) {
         let need_refresh_all = !self.subs.try_update_region(region);
 
@@ -726,6 +830,17 @@ where
     ) {
         self.subs
             .register_region(region, handle.clone(), Some(last_checkpoint));
+<<<<<<< HEAD
+=======
+        let feedback_channel = match self.messenger.upgrade() {
+            Some(ch) => ch,
+            None => {
+                warn!("log backup subscription manager is shutting down, aborting new scan.";
+                    utils::slog_region(region), "handle" => ?handle.id);
+                return;
+            }
+        };
+>>>>>>> 66847e9c5a (*: remove unnecessary async blocks to save memory (#16541))
         self.spawn_scan(ScanCmd {
             region: region.clone(),
             handle,

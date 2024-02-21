@@ -878,8 +878,13 @@ impl StreamTaskInfo {
         // copying.
         #[allow(clippy::map_entry)]
         if !w.contains_key(&key) {
+<<<<<<< HEAD
             let path = self.temp_dir.join(key.temp_file_name());
             let val = Mutex::new(DataFile::new(path, self.compression_type).await?);
+=======
+            let path = key.temp_file_name();
+            let val = Mutex::new(DataFile::new(path, &self.temp_file_pool)?);
+>>>>>>> 66847e9c5a (*: remove unnecessary async blocks to save memory (#16541))
             w.insert(key, val);
         }
 
@@ -1360,7 +1365,11 @@ impl MetadataInfo {
 impl DataFile {
     /// create and open a logfile at the path.
     /// Note: if a file with same name exists, would truncate it.
+<<<<<<< HEAD
     async fn new(local_path: impl AsRef<Path>, compression_type: CompressionType) -> Result<Self> {
+=======
+    fn new(local_path: impl AsRef<Path>, files: &Arc<TempFilePool>) -> Result<Self> {
+>>>>>>> 66847e9c5a (*: remove unnecessary async blocks to save memory (#16541))
         let sha256 = Hasher::new(MessageDigest::sha256())
             .map_err(|err| Error::Other(box_err!("openssl hasher failed to init: {}", err)))?;
         let inner =
@@ -2295,9 +2304,21 @@ mod tests {
         let mut f = File::create(file_path.clone()).await?;
         f.write_all("test-data".as_bytes()).await?;
 
+<<<<<<< HEAD
         let data_file = DataFile::new(file_path, CompressionType::Zstd)
             .await
             .unwrap();
+=======
+        let file_name = format!("{}", uuid::Uuid::new_v4());
+        let file_path = Path::new(&file_name);
+        let tempfile = TempDir::new().unwrap();
+        let cfg = make_tempfiles_cfg(tempfile.path());
+        let pool = Arc::new(TempFilePool::new(cfg).unwrap());
+        let mut f = pool.open_for_write(file_path).unwrap();
+        f.write_all(b"test-data").await?;
+        f.done().await?;
+        let mut data_file = DataFile::new(file_path, &pool).unwrap();
+>>>>>>> 66847e9c5a (*: remove unnecessary async blocks to save memory (#16541))
         let info = DataFileInfo::new();
 
         let mut meta = MetadataInfo::with_capacity(1);
