@@ -100,7 +100,7 @@ impl HealthControllerInner {
         let health_service = HealthService::default();
         health_service.set_serving_status("", grpcio_health::ServingStatus::NotServing);
         Self {
-            raftstore_slow_score: AtomicU64::new(1),
+            raftstore_slow_score: AtomicU64::new(f64::to_bits(1.0)),
             raftstore_slow_trend: RollingRetriever::new(),
 
             health_service,
@@ -329,6 +329,10 @@ mod tests {
     #[test]
     fn test_health_controller_update_service_status() {
         let h = HealthController::new();
+
+        // Initial value of slow score
+        assert_eq!(h.get_raftstore_slow_score(), 1.0);
+
         assert_eq!(
             h.get_serving_status(),
             grpcio_health::ServingStatus::NotServing

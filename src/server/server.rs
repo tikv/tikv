@@ -186,6 +186,12 @@ where
         let lazy_worker = snap_worker.lazy_build("snap-handler");
         let raft_ext = storage.get_engine().raft_extension();
 
+        let health_feedback_interval = if cfg.value().health_feedback_interval.0.is_zero() {
+            None
+        } else {
+            Some(cfg.value().health_feedback_interval.0)
+        };
+
         let proxy = Proxy::new(security_mgr.clone(), &env, Arc::new(cfg.value().clone()));
         let kv_service = KvService::new(
             store_id,
@@ -200,6 +206,8 @@ where
             proxy,
             cfg.value().reject_messages_on_memory_ratio,
             resource_manager,
+            health_controller.clone(),
+            health_feedback_interval,
         );
         let builder_factory = Box::new(BuilderFactory::new(
             kv_service,
