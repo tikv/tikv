@@ -499,6 +499,161 @@ pub mod tests {
         r
     }
 
+<<<<<<< HEAD
+=======
+    #[derive(Clone)]
+    pub struct MockSink(Arc<Mutex<MockSinkInner>>);
+
+    impl MockSink {
+        fn with_fail_once(code: RpcStatusCode) -> Self {
+            let mut failed = false;
+            let inner = MockSinkInner {
+                items: Vec::default(),
+                closed: false,
+                on_error: Box::new(move || {
+                    if failed {
+                        RpcStatusCode::OK
+                    } else {
+                        failed = true;
+                        code
+                    }
+                }),
+            };
+            Self(Arc::new(Mutex::new(inner)))
+        }
+
+        fn trivial() -> Self {
+            let inner = MockSinkInner {
+                items: Vec::default(),
+                closed: false,
+                on_error: Box::new(|| RpcStatusCode::OK),
+            };
+            Self(Arc::new(Mutex::new(inner)))
+        }
+
+        #[allow(clippy::unused_async)]
+        pub async fn fail(&self, status: RpcStatus) -> crate::errors::Result<()> {
+            panic!("failed in a case should never fail: {}", status);
+        }
+    }
+
+    struct MockSinkInner {
+        items: Vec<SubscribeFlushEventResponse>,
+        closed: bool,
+        on_error: Box<dyn FnMut() -> grpcio::RpcStatusCode + Send>,
+    }
+
+    impl Sink<(SubscribeFlushEventResponse, grpcio::WriteFlags)> for MockSink {
+        type Error = grpcio::Error;
+
+        fn poll_ready(
+            self: std::pin::Pin<&mut Self>,
+            _cx: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<Result<(), Self::Error>> {
+            Ok(()).into()
+        }
+
+        fn start_send(
+            self: std::pin::Pin<&mut Self>,
+            item: (SubscribeFlushEventResponse, grpcio::WriteFlags),
+        ) -> Result<(), Self::Error> {
+            let mut guard = self.0.lock().unwrap();
+            let code = (guard.on_error)();
+            if code != RpcStatusCode::OK {
+                return Err(grpcio::Error::RpcFailure(RpcStatus::new(code)));
+            }
+            guard.items.push(item.0);
+            Ok(())
+        }
+
+        fn poll_flush(
+            self: std::pin::Pin<&mut Self>,
+            _cx: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<Result<(), Self::Error>> {
+            Ok(()).into()
+        }
+
+        fn poll_close(
+            self: std::pin::Pin<&mut Self>,
+            _cx: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<Result<(), Self::Error>> {
+            let mut guard = self.0.lock().unwrap();
+            guard.closed = true;
+            Ok(()).into()
+        }
+    }
+
+    fn simple_resolve_result() -> ResolveResult {
+        let mut region = Region::new();
+        region.set_id(42);
+        ResolveResult {
+            region,
+            checkpoint: 42.into(),
+            checkpoint_type: CheckpointType::MinTs,
+        }
+    }
+
+    #[test]
+    fn test_rpc_sub() {
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .build()
+            .unwrap();
+        let mut mgr = super::CheckpointManager::default();
+        rt.spawn(mgr.spawn_subscription_mgr());
+
+        let trivial_sink = MockSink::trivial();
+        rt.block_on(mgr.add_subscriber(trivial_sink.clone()))
+            .unwrap();
+
+        mgr.resolve_regions(vec![simple_resolve_result()]);
+        mgr.flush();
+        mgr.sync_with_subs_mgr(|_| {});
+        assert_eq!(trivial_sink.0.lock().unwrap().items.len(), 1);
+    }
+
+    #[test]
+    fn test_rpc_failure() {
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .build()
+            .unwrap();
+        let mut mgr = super::CheckpointManager::default();
+        rt.spawn(mgr.spawn_subscription_mgr());
+
+        let error_sink = MockSink::with_fail_once(RpcStatusCode::INTERNAL);
+        rt.block_on(mgr.add_subscriber(error_sink.clone())).unwrap();
+
+        mgr.resolve_regions(vec![simple_resolve_result()]);
+        mgr.flush();
+        assert_eq!(mgr.sync_with_subs_mgr(|item| { item.subscribers.len() }), 0);
+        let sink = error_sink.0.lock().unwrap();
+        assert_eq!(sink.items.len(), 0);
+        // The stream shouldn't be closed when exit by a failure.
+        assert_eq!(sink.closed, false);
+    }
+
+    #[test]
+    fn test_flush() {
+        let mut mgr = super::CheckpointManager::default();
+        mgr.do_update(region(1, 32, 8), TimeStamp::new(8));
+        mgr.do_update(region(2, 34, 8), TimeStamp::new(15));
+        mgr.do_update(region(2, 35, 8), TimeStamp::new(16));
+        mgr.do_update(region(2, 35, 8), TimeStamp::new(14));
+        let r = mgr.get_from_region(RegionIdWithVersion::new(1, 32));
+        assert_matches::assert_matches!(r, GetCheckpointResult::NotFound { .. });
+
+        mgr.flush();
+        let r = mgr.get_from_region(RegionIdWithVersion::new(1, 32));
+        assert_matches::assert_matches!(r, GetCheckpointResult::Ok { checkpoint , .. } if checkpoint.into_inner() == 8);
+        let r = mgr.get_from_region(RegionIdWithVersion::new(2, 35));
+        assert_matches::assert_matches!(r, GetCheckpointResult::Ok { checkpoint , .. } if checkpoint.into_inner() == 16);
+        mgr.flush();
+        let r = mgr.get_from_region(RegionIdWithVersion::new(1, 32));
+        assert_matches::assert_matches!(r, GetCheckpointResult::NotFound { .. });
+    }
+
+>>>>>>> 66847e9c5a (*: remove unnecessary async blocks to save memory (#16541))
     #[test]
     fn test_mgr() {
         let mut mgr = super::CheckpointManager::default();

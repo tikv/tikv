@@ -7,8 +7,16 @@ use std::{
 };
 
 use file_system::{set_io_type, IoType};
+<<<<<<< HEAD
 use futures::{channel::oneshot, future::TryFutureExt};
 use kvproto::kvrpcpb::CommandPri;
+=======
+use futures::{
+    channel::oneshot,
+    future::{FutureExt, TryFutureExt},
+};
+use kvproto::{errorpb, kvrpcpb::CommandPri};
+>>>>>>> 66847e9c5a (*: remove unnecessary async blocks to save memory (#16541))
 use online_config::{ConfigChange, ConfigManager, ConfigValue, Result as CfgResult};
 use prometheus::{IntCounter, IntGauge};
 use resource_control::{ControlledFuture, ResourceController};
@@ -156,6 +164,7 @@ impl ReadPoolHandle {
                 extras.set_metadata(group_meta.clone());
                 let task_cell = if let Some(resource_ctl) = resource_ctl {
                     TaskCell::new(
+<<<<<<< HEAD
                         TrackedFuture::new(ControlledFuture::new(
                             async move {
                                 f.await;
@@ -163,15 +172,25 @@ impl ReadPoolHandle {
                             },
                             resource_ctl.clone(),
                             group_meta,
+=======
+                        TrackedFuture::new(with_resource_limiter(
+                            ControlledFuture::new(
+                                f.map(move |_| {
+                                    running_tasks.dec();
+                                }),
+                                resource_ctl.clone(),
+                                group_name,
+                            ),
+                            resource_limiter,
+>>>>>>> 66847e9c5a (*: remove unnecessary async blocks to save memory (#16541))
                         )),
                         extras,
                     )
                 } else {
                     TaskCell::new(
-                        TrackedFuture::new(async move {
-                            f.await;
+                        TrackedFuture::new(f.map(move |_| {
                             running_tasks.dec();
-                        }),
+                        })),
                         extras,
                     )
                 };
@@ -194,10 +213,9 @@ impl ReadPoolHandle {
     {
         let (tx, rx) = oneshot::channel::<T>();
         let res = self.spawn(
-            async move {
-                let res = f.await;
+            f.map(move |res| {
                 let _ = tx.send(res);
-            },
+            }),
             priority,
             task_id,
             group_meta,
