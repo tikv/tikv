@@ -1640,7 +1640,7 @@ fn test_turn_off_manual_compaction_caused_by_no_valid_split_key() {
         let sim = cluster.sim.rl();
         let cfg_controller = sim.get_cfg_controller(1).unwrap();
         cfg_controller
-            .update(change("raftstore.clean-up-manual-compaction-skip", "true"))
+            .update(change("raftstore.skip-manual-compaction-in-clean_up-worker", "true"))
             .unwrap();
     }
 
@@ -1654,7 +1654,7 @@ fn test_turn_off_manual_compaction_caused_by_no_valid_split_key() {
         let sim = cluster.sim.rl();
         let cfg_controller = sim.get_cfg_controller(1).unwrap();
         cfg_controller
-            .update(change("raftstore.clean-up-manual-compaction-skip", "false"))
+            .update(change("raftstore.skip-manual-compaction-in-clean_up-worker", "false"))
             .unwrap();
     }
 
