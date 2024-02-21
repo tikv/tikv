@@ -6,12 +6,29 @@ use std::{
     fmt::{self, Display, Formatter},
 };
 
+<<<<<<< HEAD
 use engine_traits::{KvEngine, RangeStats, CF_WRITE};
+=======
+use engine_traits::{KvEngine, ManualCompactionOptions, RangeStats, CF_LOCK, CF_WRITE};
+>>>>>>> 8cdf87b4da (raftstore: make manual compaction in cleanup worker be able to be ignored dynamically (#16547))
 use fail::fail_point;
 use thiserror::Error;
+<<<<<<< HEAD
 use tikv_util::{box_try, error, info, time::Instant, warn, worker::Runnable};
 
 use super::metrics::COMPACT_RANGE_CF;
+=======
+use tikv_util::{
+    box_try, config::Tracker, debug, error, info, time::Instant, timer::GLOBAL_TIMER_HANDLE, warn,
+    worker::Runnable,
+};
+use yatp::Remote;
+
+use super::metrics::{
+    COMPACT_RANGE_CF, FULL_COMPACT, FULL_COMPACT_INCREMENTAL, FULL_COMPACT_PAUSE,
+};
+use crate::store::Config;
+>>>>>>> 8cdf87b4da (raftstore: make manual compaction in cleanup worker be able to be ignored dynamically (#16547))
 
 type Key = Vec<u8>;
 
@@ -117,14 +134,110 @@ pub enum Error {
 
 pub struct Runner<E> {
     engine: E,
+<<<<<<< HEAD
+=======
+    remote: Remote<yatp::task::future::TaskCell>,
+    cfg_tracker: Tracker<Config>,
+    // Whether to skip the manual compaction of write and default comlumn family.
+    skip_compact: bool,
+>>>>>>> 8cdf87b4da (raftstore: make manual compaction in cleanup worker be able to be ignored dynamically (#16547))
 }
 
 impl<E> Runner<E>
 where
     E: KvEngine,
 {
+<<<<<<< HEAD
     pub fn new(engine: E) -> Runner<E> {
         Runner { engine }
+=======
+    pub fn new(
+        engine: E,
+        remote: Remote<yatp::task::future::TaskCell>,
+        cfg_tracker: Tracker<Config>,
+        skip_compact: bool,
+    ) -> Runner<E> {
+        Runner {
+            engine,
+            remote,
+            cfg_tracker,
+            skip_compact,
+        }
+    }
+
+    /// Periodic full compaction.
+    /// Note: this does not accept a `&self` due to async lifetime issues.
+    ///
+    /// NOTE this is an experimental feature!
+    ///
+    /// TODO: Support stopping a full compaction.
+    async fn full_compact(
+        engine: E,
+        ranges: Vec<(Key, Key)>,
+        compact_controller: FullCompactController,
+    ) -> Result<(), Error> {
+        fail_point!("on_full_compact");
+        info!("full compaction started");
+        let mut ranges: VecDeque<_> = ranges
+            .iter()
+            .map(|(start, end)| (Some(start.as_slice()), Some(end.as_slice())))
+            .collect();
+        if ranges.is_empty() {
+            ranges.push_front((None, None))
+        }
+
+        let timer = Instant::now();
+        let full_compact_timer = FULL_COMPACT.start_coarse_timer();
+
+        while let Some(range) = ranges.pop_front() {
+            debug!(
+                "incremental range full compaction started";
+            "start_key" => ?range.0.map(log_wrappers::Value::key),
+            "end_key" => ?range.1.map(log_wrappers::Value::key),
+             );
+            let incremental_timer = FULL_COMPACT_INCREMENTAL.start_coarse_timer();
+            box_try!(engine.compact_range(
+                range.0,
+                range.1, // Compact the entire key range.
+                ManualCompactionOptions::new(false, 1, false),
+            ));
+            incremental_timer.observe_duration();
+            debug!(
+                "finished incremental range full compaction";
+                "remaining" => ranges.len(),
+            );
+            // If there is at least one range remaining in `ranges` remaining, evaluate
+            // `compact_controller.incremental_compaction_pred`. If `true`, proceed to next
+            // range; otherwise, pause this task
+            // (see `FullCompactController::pause` for details) until predicate
+            // evaluates to true.
+            if let Some(next_range) = ranges.front() {
+                if !(compact_controller.incremental_compaction_pred)() {
+                    info!("pausing full compaction before next increment";
+                    "finished_start_key" => ?range.0.map(log_wrappers::Value::key),
+                    "finished_end_key" => ?range.1.map(log_wrappers::Value::key),
+                    "next_range_start_key" => ?next_range.0.map(log_wrappers::Value::key),
+                    "next_range_end_key" => ?next_range.1.map(log_wrappers::Value::key),
+                    "remaining" => ranges.len(),
+                    );
+                    let pause_started = Instant::now();
+                    let pause_timer = FULL_COMPACT_PAUSE.start_coarse_timer();
+                    compact_controller.pause().await?;
+                    pause_timer.observe_duration();
+                    info!("resuming incremental full compaction";
+                        "paused" => ?pause_started.saturating_elapsed(),
+                    );
+                }
+            }
+        }
+
+        full_compact_timer.observe_duration();
+        info!(
+            "full compaction finished";
+            "time_takes" => ?timer.saturating_elapsed(),
+        );
+        Ok(())
+>>>>>>> 8cdf87b4da (raftstore: make manual compaction in cleanup worker be able to be ignored dynamically (#16547))
     }
 
     /// Sends a compact range command to RocksDB to compact the range of the cf.
@@ -169,8 +282,32 @@ where
                 end_key,
             } => {
                 let cf = &cf_name;
+<<<<<<< HEAD
                 if let Err(e) = self.compact_range_cf(cf, start_key.as_deref(), end_key.as_deref())
                 {
+=======
+                if cf != CF_LOCK {
+                    // check whether the config changed for ignoring manual compaction
+                    if let Some(incoming) = self.cfg_tracker.any_new() {
+                        self.skip_compact = incoming.skip_manual_compaction_in_clean_up_worker;
+                    }
+                    if self.skip_compact {
+                        info!(
+                            "skip compact range";
+                            "range_start" => start_key.as_ref().map(|k| log_wrappers::Value::key(k)),
+                            "range_end" => end_key.as_ref().map(|k|log_wrappers::Value::key(k)),
+                            "cf" => cf_name,
+                        );
+                        return;
+                    }
+                }
+                if let Err(e) = self.compact_range_cf(
+                    cf,
+                    start_key.as_deref(),
+                    end_key.as_deref(),
+                    bottommost_level_force,
+                ) {
+>>>>>>> 8cdf87b4da (raftstore: make manual compaction in cleanup worker be able to be ignored dynamically (#16547))
                     error!("execute compact range failed"; "cf" => cf, "err" => %e);
                 }
             }
@@ -286,6 +423,20 @@ mod tests {
 
     use super::*;
 
+<<<<<<< HEAD
+=======
+    fn make_compact_runner<E>(engine: E) -> (FuturePool, Runner<E>)
+    where
+        E: KvEngine,
+    {
+        let pool = YatpPoolBuilder::new(DefaultTicker::default()).build_future_pool();
+        (
+            pool.clone(),
+            Runner::new(engine, pool.remote().clone(), Tracker::default(), false),
+        )
+    }
+
+>>>>>>> 8cdf87b4da (raftstore: make manual compaction in cleanup worker be able to be ignored dynamically (#16547))
     #[test]
     fn test_compact_range() {
         let path = Builder::new()

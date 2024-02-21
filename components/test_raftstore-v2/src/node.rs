@@ -293,6 +293,7 @@ impl<EK: KvEngine> Simulator<EK> for NodeCluster<EK> {
 
         let bg_worker = WorkerBuilder::new("background").thread_count(2).create();
         let state: Arc<Mutex<GlobalReplicationState>> = Arc::default();
+        let store_config = Arc::new(VersionTrack::new(raft_store));
         node.start(
             raft_engine.clone(),
             tablet_registry,
@@ -306,7 +307,7 @@ impl<EK: KvEngine> Simulator<EK> for NodeCluster<EK> {
             CollectorRegHandle::new_for_test(),
             bg_worker,
             pd_worker,
-            Arc::new(VersionTrack::new(raft_store)),
+            store_config.clone(),
             &state,
             importer,
             key_manager,
@@ -319,6 +320,7 @@ impl<EK: KvEngine> Simulator<EK> for NodeCluster<EK> {
         );
         assert!(node_id == 0 || node_id == node.id());
         let node_id = node.id();
+<<<<<<< HEAD
 
         let region_split_size = cfg.coprocessor.region_split_size();
         let enable_region_bucket = cfg.coprocessor.enable_region_bucket();
@@ -337,6 +339,15 @@ impl<EK: KvEngine> Simulator<EK> for NodeCluster<EK> {
         //         raft_store,
         //     )),
         // );
+=======
+        cfg_controller.register(
+            Module::Raftstore,
+            Box::new(RaftstoreConfigManager::new(
+                node.refresh_config_scheduler(),
+                store_config,
+            )),
+        );
+>>>>>>> 8cdf87b4da (raftstore: make manual compaction in cleanup worker be able to be ignored dynamically (#16547))
 
         if let Some(tmp) = snap_mgs_path {
             self.trans

@@ -366,6 +366,21 @@ pub struct Config {
     #[online_config(hidden)]
     #[serde(alias = "enable-partitioned-raft-kv-compatible-learner")]
     pub enable_v2_compatible_learner: bool,
+<<<<<<< HEAD
+=======
+
+    /// The minimal count of region pending on applying raft logs.
+    /// Only when the count of regions which not pending on applying logs is
+    /// less than the threshold, can the raftstore supply service.
+    #[doc(hidden)]
+    #[online_config(hidden)]
+    pub min_pending_apply_region_count: u64,
+
+    /// Whether to skip manual compaction in the clean up worker for `write` and
+    /// `default` column family
+    #[doc(hidden)]
+    pub skip_manual_compaction_in_clean_up_worker: bool,
+>>>>>>> 8cdf87b4da (raftstore: make manual compaction in cleanup worker be able to be ignored dynamically (#16547))
 }
 
 impl Default for Config {
@@ -486,6 +501,11 @@ impl Default for Config {
             check_request_snapshot_interval: ReadableDuration::minutes(1),
             enable_v2_compatible_learner: false,
             unsafe_disable_check_quorum: false,
+<<<<<<< HEAD
+=======
+            min_pending_apply_region_count: 10,
+            skip_manual_compaction_in_clean_up_worker: false,
+>>>>>>> 8cdf87b4da (raftstore: make manual compaction in cleanup worker be able to be ignored dynamically (#16547))
         }
     }
 }
