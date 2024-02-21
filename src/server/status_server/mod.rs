@@ -134,6 +134,7 @@ where
         })
     }
 
+<<<<<<< HEAD
     fn list_heap_prof(_req: Request<Body>) -> hyper::Result<Response<Body>> {
         let profiles = match list_heap_profiles() {
             Ok(s) => s,
@@ -205,6 +206,9 @@ where
     }
 
     async fn dump_heap_prof_to_resp(req: Request<Body>) -> hyper::Result<Response<Body>> {
+=======
+    fn dump_heap_prof_to_resp(req: Request<Body>) -> hyper::Result<Response<Body>> {
+>>>>>>> 66847e9c5a (*: remove unnecessary async blocks to save memory (#16541))
         let query = req.uri().query().unwrap_or("");
         let query_pairs: HashMap<_, _> = url::form_urlencoded::parse(query.as_bytes()).collect();
 
@@ -265,7 +269,7 @@ where
         }
     }
 
-    async fn get_config(
+    fn get_config(
         req: Request<Body>,
         cfg_controller: &ConfigController,
     ) -> hyper::Result<Response<Body>> {
@@ -297,8 +301,13 @@ where
         })
     }
 
+<<<<<<< HEAD
     async fn get_cmdline(_req: Request<Body>) -> hyper::Result<Response<Body>> {
         let args = args().into_iter().fold(String::new(), |mut a, b| {
+=======
+    fn get_cmdline(_req: Request<Body>) -> hyper::Result<Response<Body>> {
+        let args = args().fold(String::new(), |mut a, b| {
+>>>>>>> 66847e9c5a (*: remove unnecessary async blocks to save memory (#16541))
             a.push_str(&b);
             a.push('\x00');
             a
@@ -311,7 +320,7 @@ where
         Ok(response)
     }
 
-    async fn get_symbol_count(req: Request<Body>) -> hyper::Result<Response<Body>> {
+    fn get_symbol_count(req: Request<Body>) -> hyper::Result<Response<Body>> {
         assert_eq!(req.method(), Method::GET);
         // We don't know how many symbols we have, but we
         // do have symbol information. pprof only cares whether
@@ -432,7 +441,7 @@ where
         })
     }
 
-    async fn update_config_from_toml_file(
+    fn update_config_from_toml_file(
         cfg_controller: ConfigController,
         _req: Request<Body>,
     ) -> hyper::Result<Response<Body>> {
@@ -524,7 +533,7 @@ where
         }
     }
 
-    async fn get_engine_type(cfg_controller: &ConfigController) -> hyper::Result<Response<Body>> {
+    fn get_engine_type(cfg_controller: &ConfigController) -> hyper::Result<Response<Body>> {
         let engine_type = cfg_controller.get_engine_type();
         let response = Response::builder()
             .header("Content-Type", mime::TEXT_PLAIN.to_string())
@@ -551,7 +560,22 @@ impl<R> StatusServer<R>
 where
     R: 'static + Send + RaftExtension + Clone,
 {
+<<<<<<< HEAD
     async fn handle_pause_grpc(
+=======
+    fn dump_async_trace() -> hyper::Result<Response<Body>> {
+        Ok(make_response(
+            StatusCode::OK,
+            tracing_active_tree::layer::global().fmt_bytes_with(|t, buf| {
+                t.traverse_with(FormatFlat::new(buf)).unwrap_or_else(|err| {
+                    error!("failed to format tree, unreachable!"; "err" => %err);
+                })
+            }),
+        ))
+    }
+
+    fn handle_pause_grpc(
+>>>>>>> 66847e9c5a (*: remove unnecessary async blocks to save memory (#16541))
         mut grpc_service_mgr: GrpcServiceManager,
     ) -> hyper::Result<Response<Body>> {
         if let Err(err) = grpc_service_mgr.pause() {
@@ -566,7 +590,7 @@ where
         ))
     }
 
-    async fn handle_resume_grpc(
+    fn handle_resume_grpc(
         mut grpc_service_mgr: GrpcServiceManager,
     ) -> hyper::Result<Response<Body>> {
         if let Err(err) = grpc_service_mgr.resume() {
@@ -757,21 +781,21 @@ where
                                 Self::deactivate_heap_prof(req)
                             }
                             (Method::GET, "/debug/pprof/heap") => {
-                                Self::dump_heap_prof_to_resp(req).await
+                                Self::dump_heap_prof_to_resp(req)
                             }
-                            (Method::GET, "/debug/pprof/cmdline") => Self::get_cmdline(req).await,
+                            (Method::GET, "/debug/pprof/cmdline") => Self::get_cmdline(req),
                             (Method::GET, "/debug/pprof/symbol") => {
-                                Self::get_symbol_count(req).await
+                                Self::get_symbol_count(req)
                             }
                             (Method::POST, "/debug/pprof/symbol") => Self::get_symbol(req).await,
                             (Method::GET, "/config") => {
-                                Self::get_config(req, &cfg_controller).await
+                                Self::get_config(req, &cfg_controller)
                             }
                             (Method::POST, "/config") => {
                                 Self::update_config(cfg_controller.clone(), req).await
                             }
                             (Method::GET, "/engine_type") => {
-                                Self::get_engine_type(&cfg_controller).await
+                                Self::get_engine_type(&cfg_controller)
                             }
                             // This interface is used for configuration file hosting scenarios,
                             // TiKV will not update configuration files, and this interface will
@@ -779,7 +803,6 @@ where
                             // hand it over to the hosting platform for processing.
                             (Method::PUT, "/config/reload") => {
                                 Self::update_config_from_toml_file(cfg_controller.clone(), req)
-                                    .await
                             }
                             (Method::GET, "/debug/pprof/profile") => {
                                 Self::dump_cpu_prof_to_resp(req).await
@@ -800,13 +823,32 @@ where
                                 Self::handle_get_all_resource_groups(resource_manager.as_ref())
                             }
                             (Method::PUT, "/pause_grpc") => {
-                                Self::handle_pause_grpc(grpc_service_mgr).await
+                                Self::handle_pause_grpc(grpc_service_mgr)
                             }
                             (Method::PUT, "/resume_grpc") => {
-                                Self::handle_resume_grpc(grpc_service_mgr).await
+                                Self::handle_resume_grpc(grpc_service_mgr)
                             }
+<<<<<<< HEAD
                             _ => Ok(make_response(StatusCode::NOT_FOUND, "path not found")),
                         }
+=======
+                            (Method::GET, "/async_tasks") => Self::dump_async_trace(),
+                            _ => {
+                                is_unknown_path = true;
+                                Ok(make_response(StatusCode::NOT_FOUND, "path not found"))
+                            },
+                        };
+                        // Using "unknown" for unknown paths to void creating high cardinality.
+                        let path_label = if is_unknown_path {
+                            "unknown".to_owned()
+                        } else {
+                            path
+                        };
+                        STATUS_REQUEST_DURATION
+                            .with_label_values(&[method.as_str(), &path_label])
+                            .observe(start.elapsed().as_secs_f64());
+                        res
+>>>>>>> 66847e9c5a (*: remove unnecessary async blocks to save memory (#16541))
                     }
                 }))
             }
