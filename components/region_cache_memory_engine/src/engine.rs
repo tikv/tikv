@@ -241,8 +241,7 @@ impl RangeCacheMemoryEngine {
             range_manager.pending_ranges_with_snapshot.extend(
                 pending_loaded_ranges
                     .into_iter()
-                    .map(|r| (r, rocks_snap.clone()))
-                    .into_iter(),
+                    .map(|r| (r, rocks_snap.clone())),
             );
             if let Err(e) = self
                 .bg_worker_manager()
