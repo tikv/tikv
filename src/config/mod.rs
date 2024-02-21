@@ -1298,6 +1298,8 @@ pub struct DbConfig {
     #[doc(hidden)]
     #[serde(skip_serializing)]
     pub write_buffer_flush_oldest_first: bool,
+    #[online_config(skip)]
+    pub track_and_verify_wals_in_manifest: bool,
     // Dangerous option only for programming use.
     #[online_config(skip)]
     #[serde(skip)]
@@ -1312,8 +1314,6 @@ pub struct DbConfig {
     pub raftcf: RaftCfConfig,
     #[online_config(skip)]
     pub titan: TitanDbConfig,
-    #[online_config(skip)]
-    pub track_and_verify_wals_in_manifest: bool,
 }
 
 #[derive(Clone)]
