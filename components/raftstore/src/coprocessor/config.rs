@@ -56,7 +56,6 @@ pub struct Config {
     // The region_bucket_merge_size_ratio * region_bucket_size is threshold to merge with its left
     // neighbor bucket
     pub region_bucket_merge_size_ratio: f64,
-    // TODO: add enable_region_stats_mgr? auto set it to true if hybrid engine is enabled?
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Serialize, Deserialize)]

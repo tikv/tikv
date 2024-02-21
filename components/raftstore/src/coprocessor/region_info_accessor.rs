@@ -547,7 +547,6 @@ impl RegionCollector {
         let top_regions = if count == 0 {
             self.regions
                 .values()
-                .into_iter()
                 .map(|ri| ri.region.clone())
                 .collect::<Vec<_>>()
         } else {
@@ -560,7 +559,7 @@ impl RegionCollector {
                     b.cmp(&a)
                 })
                 .take(count)
-                .flat_map(|(id, _)| self.regions.get(&id).map(|ri| ri.region.clone()))
+                .flat_map(|(id, _)| self.regions.get(id).map(|ri| ri.region.clone()))
                 .collect::<Vec<_>>()
         };
         callback(top_regions)
