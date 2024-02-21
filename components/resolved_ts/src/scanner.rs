@@ -49,9 +49,47 @@ pub struct ScanTask {
     pub mode: ScanMode,
     pub region: Region,
     pub checkpoint_ts: TimeStamp,
+<<<<<<< HEAD
     pub is_cancelled: IsCancelledCallback,
     pub send_entries: OnEntriesCallback,
     pub on_error: Option<OnErrorCallback>,
+=======
+    pub backoff: Option<Duration>,
+    pub cancelled: Receiver<()>,
+    pub scheduler: Scheduler<Task>,
+}
+
+impl ScanTask {
+    fn send_entries(&self, entries: ScanEntries, apply_index: u64) {
+        let task = Task::ScanLocks {
+            region_id: self.region.get_id(),
+            observe_id: self.handle.id,
+            entries,
+            apply_index,
+        };
+        if let Err(e) = self.scheduler.schedule(task) {
+            warn!("resolved_ts scheduler send entries failed"; "err" => ?e);
+        }
+    }
+
+    fn is_cancelled(&mut self) -> bool {
+        matches!(self.cancelled.try_recv(), Err(_) | Ok(Some(_)))
+    }
+
+    fn on_error(&self, err: Error) {
+        if let Err(e) = self.scheduler.schedule(Task::ReRegisterRegion {
+            region_id: self.region.get_id(),
+            observe_id: self.handle.id,
+            cause: err,
+        }) {
+            warn!("schedule re-register task failed";
+                "region_id" => self.region.get_id(),
+                "observe_id" => ?self.handle.id,
+                "error" => ?e);
+        }
+        RTS_SCAN_TASKS.with_label_values(&["abort"]).inc();
+    }
+>>>>>>> 66847e9c5a (*: remove unnecessary async blocks to save memory (#16541))
 }
 
 #[derive(Debug)]
@@ -171,10 +209,18 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> ScannerPool<T, E> {
                         entries.push(ScanEntry::Lock(locks));
                     }
                 }
+<<<<<<< HEAD
+=======
+                task.send_entries(ScanEntries::Lock(locks), apply_index);
+>>>>>>> 66847e9c5a (*: remove unnecessary async blocks to save memory (#16541))
             }
             entries.push(ScanEntry::None);
             RTS_SCAN_DURATION_HISTOGRAM.observe(start.saturating_elapsed().as_secs_f64());
+<<<<<<< HEAD
             (task.send_entries)(entries, apply_index);
+=======
+            task.send_entries(ScanEntries::None, apply_index);
+>>>>>>> 66847e9c5a (*: remove unnecessary async blocks to save memory (#16541))
         };
         self.workers.spawn(fut);
     }
