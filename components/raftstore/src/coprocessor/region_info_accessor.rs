@@ -256,6 +256,7 @@ impl RegionHeartbeatObserver for RegionEventListener {
 fn register_region_event_listener(
     host: &mut CoprocessorHost<impl KvEngine>,
     scheduler: Scheduler<RegionInfoQuery>,
+    enable_region_stats_manager: bool,
 ) {
     let listener = RegionEventListener { scheduler };
 
@@ -263,8 +264,10 @@ fn register_region_event_listener(
         .register_role_observer(1, BoxRoleObserver::new(listener.clone()));
     host.registry
         .register_region_change_observer(1, BoxRegionChangeObserver::new(listener.clone()));
-    host.registry
-        .register_region_heartbeat_observer(1, BoxRegionHeartbeatObserver::new(listener))
+    if enable_region_stats_manager {
+        host.registry
+            .register_region_heartbeat_observer(1, BoxRegionHeartbeatObserver::new(listener))
+    }
 }
 
 /// `RegionCollector` is the place where we hold all region information we
@@ -705,14 +708,17 @@ impl RegionInfoAccessor {
     /// `RegionInfoAccessor` doesn't need, and should not be created more than
     /// once. If it's needed in different places, just clone it, and their
     /// contents are shared.
-    pub fn new(host: &mut CoprocessorHost<impl KvEngine>) -> Self {
+    pub fn new(
+        host: &mut CoprocessorHost<impl KvEngine>,
+        enable_region_stats_manager: bool,
+    ) -> Self {
         let region_leaders = Arc::new(RwLock::new(HashSet::default()));
         let worker = WorkerBuilder::new("region-collector-worker").create();
         let scheduler = worker.start_with_timer(
             "region-collector-worker",
             RegionCollector::new(region_leaders.clone()),
         );
-        register_region_event_listener(host, scheduler.clone());
+        register_region_event_listener(host, scheduler.clone(), enable_region_stats_manager);
 
         Self {
             worker,

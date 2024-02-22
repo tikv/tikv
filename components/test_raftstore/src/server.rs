@@ -296,7 +296,8 @@ impl<EK: KvEngineWithRocks> ServerCluster<EK> {
 
         // Create coprocessor.
         let mut coprocessor_host = CoprocessorHost::new(router.clone(), cfg.coprocessor.clone());
-        let region_info_accessor = RegionInfoAccessor::new(&mut coprocessor_host);
+        let region_info_accessor =
+            RegionInfoAccessor::new(&mut coprocessor_host, false /* TODO: change this */);
 
         let raft_router = ServerRaftStoreRouter::new(router.clone(), local_reader);
         let sim_router = SimulateTransport::new(raft_router.clone());
