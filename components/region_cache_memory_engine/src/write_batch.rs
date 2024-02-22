@@ -1,5 +1,9 @@
+use std::collections::BTreeMap;
+
 use bytes::Bytes;
-use engine_traits::{Mutable, Result, WriteBatch, WriteBatchExt, WriteOptions, CF_DEFAULT};
+use engine_traits::{
+    CacheRange, Mutable, Result, WriteBatch, WriteBatchExt, WriteOptions, CF_DEFAULT,
+};
 use tikv_util::box_err;
 
 use crate::{
@@ -57,15 +61,17 @@ impl RangeCacheWriteBatch {
         Ok(())
     }
 
+    // todo(SpadeA): now, we cache all keys even for those that will not be written
+    // in to the memory engine.
     fn write_impl(&mut self, seq: u64) -> Result<()> {
         self.engine.handle_pending_load();
+        let mut keys_to_cache: BTreeMap<CacheRange, Vec<(u64, RangeCacheWriteBatchEntry)>> =
+            BTreeMap::new();
         let (engine, filtered_keys) = {
-            let mut core = self.engine.core().write().unwrap();
-
+            let core = self.engine.core().read().unwrap();
             self.buffer
                 .iter()
-                .for_each(|e| e.maybe_cached(seq, &mut core));
-
+                .for_each(|&e| e.maybe_cached(seq, &core, &mut keys_to_cache));
             (
                 core.engine().clone(),
                 self.buffer
@@ -74,6 +80,15 @@ impl RangeCacheWriteBatch {
                     .collect::<Vec<_>>(),
             )
         };
+        if !keys_to_cache.is_empty() {
+            let core = self.engine.core().write().unwrap();
+            for (range, write_batches) in keys_to_cache {
+                core.cached_write_batch
+                    .entry(range)
+                    .or_default()
+                    .extend(write_batches.into_iter());
+            }
+        }
         filtered_keys
             .into_iter()
             .try_for_each(|e| e.write_to_memory(&engine, seq))
@@ -144,23 +159,26 @@ impl RangeCacheWriteBatchEntry {
     }
 
     #[inline]
-    pub fn maybe_cached(&self, seq: u64, engine_core: &mut RangeCacheMemoryEngineCore) {
-        for r in &engine_core.range_manager().ranges_loading_snapshot {
+    pub fn maybe_cached(
+        &self,
+        seq: u64,
+        engine_core: &RangeCacheMemoryEngineCore,
+        keys_to_cache: &mut BTreeMap<CacheRange, Vec<(u64, RangeCacheWriteBatchEntry)>>,
+    ) {
+        for r in &engine_core.range_manager().pending_ranges_with_snapshot {
             if r.0.contains_key(&self.key) {
                 let range = r.0.clone();
-                engine_core
-                    .cached_write_batch
+                keys_to_cache
                     .entry(range)
                     .or_default()
                     .push((seq, self.clone()));
                 return;
             }
         }
-        for r in &engine_core.range_manager().ranges_loading_cached_write {
+        for r in &engine_core.range_manager().ranges_with_snapshot_loaded {
             if r.contains_key(&self.key) {
                 let range = r.clone();
-                engine_core
-                    .cached_write_batch
+                keys_to_cache
                     .entry(range)
                     .or_default()
                     .push((seq, self.clone()));

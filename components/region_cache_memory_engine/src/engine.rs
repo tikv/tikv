@@ -231,44 +231,56 @@ impl RangeCacheMemoryEngine {
     }
 
     pub(crate) fn handle_pending_load(&self) {
-        let mut core = self.core.write().unwrap();
-        let skiplist_engine = core.engine().clone();
-        let range_manager = core.mut_range_manager();
-        // Couple ranges that need to be loaded with snapshot
-        let pending_loaded_ranges = std::mem::take(&mut range_manager.pending_ranges);
-        if !pending_loaded_ranges.is_empty() {
-            let rocks_snap = Arc::new(self.rocks_engine.as_ref().unwrap().snapshot(None));
-            range_manager.ranges_loading_snapshot.extend(
-                pending_loaded_ranges
-                    .into_iter()
-                    .map(|r| (r, rocks_snap.clone())),
-            );
-            if let Err(e) = self
-                .bg_worker_manager()
-                .schedule_task(BackgroundTask::LoadTask)
-            {
-                error!(
-                    "schedule range load failed";
-                    "err" => ?e,
-                );
-                assert!(tikv_util::thread_group::is_shutdown(!cfg!(test)));
-            }
-        }
+        let (has_pending_range, has_ranges_to_load_cached_write) = {
+            let core = self.core.read().unwrap();
+            let range_manager = core.range_manager();
+            (
+                !range_manager.pending_ranges.is_empty(),
+                !range_manager.ranges_loading_cached_write.is_empty(),
+            )
+        };
 
-        // Some ranges have already loaded all data from snapshot, it's time to consume
-        // the cached write batch and make the range visible
-        let ranges_loading_cached_write =
-            std::mem::take(&mut range_manager.ranges_loading_cached_write);
-        for range in ranges_loading_cached_write {
-            if let Some(write_batches) = core.take_cache_write_batch(&range) {
-                for (seq, entry) in write_batches {
-                    entry.write_to_memory(&skiplist_engine, seq).unwrap();
+        if has_pending_range || has_ranges_to_load_cached_write {
+            let mut core = self.core.write().unwrap();
+            let skiplist_engine = core.engine().clone();
+            let range_manager = core.mut_range_manager();
+
+            // Couple ranges that need to be loaded with snapshot
+            let pending_loaded_ranges = std::mem::take(&mut range_manager.pending_ranges);
+            if !pending_loaded_ranges.is_empty() {
+                let rocks_snap = Arc::new(self.rocks_engine.as_ref().unwrap().snapshot(None));
+                range_manager.ranges_loading_snapshot.extend(
+                    pending_loaded_ranges
+                        .into_iter()
+                        .map(|r| (r, rocks_snap.clone())),
+                );
+                if let Err(e) = self
+                    .bg_worker_manager()
+                    .schedule_task(BackgroundTask::LoadTask)
+                {
+                    error!(
+                        "schedule range load failed";
+                        "err" => ?e,
+                    );
+                    assert!(tikv_util::thread_group::is_shutdown(!cfg!(test)));
                 }
             }
 
-            let range_manager = core.mut_range_manager();
-            range_manager.new_range(range.clone());
-            range_manager.set_range_readable(&range, true);
+            // Some ranges have already loaded all data from snapshot, it's time to consume
+            // the cached write batch and make the range visible
+            let ranges_loading_cached_write =
+                std::mem::take(&mut range_manager.ranges_loading_cached_write);
+            for range in ranges_loading_cached_write {
+                if let Some(write_batches) = core.take_cache_write_batch(&range) {
+                    for (seq, entry) in write_batches {
+                        entry.write_to_memory(&skiplist_engine, seq).unwrap();
+                    }
+                }
+
+                let range_manager = core.mut_range_manager();
+                range_manager.new_range(range.clone());
+                range_manager.set_range_readable(&range, true);
+            }
         }
     }
 

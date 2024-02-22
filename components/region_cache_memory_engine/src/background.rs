@@ -242,14 +242,13 @@ impl BackgroundRunner {
         core.mut_range_manager().clear_ranges_in_gc();
     }
 
-    fn get_range_to_load(&self) -> Option<((CacheRange, Arc<RocksSnapshot>), SkiplistEngine)> {
+    // return the first range to load with RocksDB snapshot
+    fn get_range_to_load(&self) -> Option<(CacheRange, Arc<RocksSnapshot>)> {
         let core = self.engine_core.read().unwrap();
-        let range = core
-            .range_manager()
+        core.range_manager()
             .ranges_loading_snapshot
-            .front()?
-            .clone();
-        Some((range, core.engine().clone()))
+            .front()
+            .cloned()
     }
 
     fn on_snapshot_loaded(&mut self, range: CacheRange) -> engine_traits::Result<()> {
@@ -290,7 +289,11 @@ impl Runnable for BackgroundRunner {
                 self.gc_finished();
             }
             BackgroundTask::LoadTask => {
-                while let Some(((range, snap), skiplist_engine)) = self.get_range_to_load() {
+                let skiplist_engine = {
+                    let core = self.engine_core.read().unwrap();
+                    core.engine().clone()
+                };
+                while let Some((range, snap)) = self.get_range_to_load() {
                     let iter_opt = IterOptions::new(
                         Some(KeyBuilder::from_vec(range.start.clone(), 0, 0)),
                         Some(KeyBuilder::from_vec(range.end.clone(), 0, 0)),
