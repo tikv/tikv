@@ -71,7 +71,7 @@ impl RangeCacheWriteBatch {
             let core = self.engine.core().read().unwrap();
             self.buffer
                 .iter()
-                .for_each(|&e| e.maybe_cached(seq, &core, &mut keys_to_cache));
+                .for_each(|e| e.maybe_cached(seq, &core, &mut keys_to_cache));
             (
                 core.engine().clone(),
                 self.buffer
@@ -81,7 +81,7 @@ impl RangeCacheWriteBatch {
             )
         };
         if !keys_to_cache.is_empty() {
-            let core = self.engine.core().write().unwrap();
+            let mut core = self.engine.core().write().unwrap();
             for (range, write_batches) in keys_to_cache {
                 core.cached_write_batch
                     .entry(range)
@@ -165,7 +165,7 @@ impl RangeCacheWriteBatchEntry {
         engine_core: &RangeCacheMemoryEngineCore,
         keys_to_cache: &mut BTreeMap<CacheRange, Vec<(u64, RangeCacheWriteBatchEntry)>>,
     ) {
-        for r in &engine_core.range_manager().pending_ranges_with_snapshot {
+        for r in &engine_core.range_manager().ranges_loading_snapshot {
             if r.0.contains_key(&self.key) {
                 let range = r.0.clone();
                 keys_to_cache
@@ -175,7 +175,7 @@ impl RangeCacheWriteBatchEntry {
                 return;
             }
         }
-        for r in &engine_core.range_manager().ranges_with_snapshot_loaded {
+        for r in &engine_core.range_manager().ranges_loading_cached_write {
             if r.contains_key(&self.key) {
                 let range = r.clone();
                 keys_to_cache

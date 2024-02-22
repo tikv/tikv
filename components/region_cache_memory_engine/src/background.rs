@@ -19,7 +19,7 @@ use tikv_util::{
 use txn_types::{Key, TimeStamp, WriteRef, WriteType};
 
 use crate::{
-    engine::{RangeCacheMemoryEngineCore, SkiplistEngine},
+    engine::RangeCacheMemoryEngineCore,
     keys::{
         decode_key, encode_key, encoding_for_filter, InternalKey, InternalKeyComparator, ValueType,
     },
