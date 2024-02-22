@@ -169,7 +169,7 @@ impl BackgroundRunner {
 
     fn ranges_for_gc(&self) -> BTreeSet<CacheRange> {
         let ranges: BTreeSet<CacheRange> = {
-            let mut core = self.engine_core.read().unwrap();
+            let core = self.engine_core.read().unwrap();
             core.range_manager().ranges().keys().cloned().collect()
         };
         let ranges_clone = ranges.clone();
