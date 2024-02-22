@@ -554,6 +554,7 @@ impl RegionCollector {
         let top_regions = if count == 0 {
             self.regions
                 .values()
+                .filter(|ri| ri.role == StateRole::Leader)
                 .map(|ri| ri.region.clone())
                 .collect::<Vec<_>>()
         } else {
