@@ -6,7 +6,7 @@ use std::{
     time::Duration,
 };
 
-use futures::{compat::Future01CompatExt, StreamExt};
+use futures::{compat::Future01CompatExt, stream, StreamExt};
 use kvproto::{
     meta_storagepb::EventEventType,
     resource_manager::{ResourceGroup, TokenBucketRequest, TokenBucketsRequest},
@@ -59,12 +59,12 @@ impl ResourceManagerService {
         self.reload_all_resource_groups().await;
         'outer: loop {
             // Secondly, start watcher at loading revision.
-            let mut stream = self.meta_client.watch(
+            let (mut stream, cancel) = stream::abortable(self.meta_client.watch(
                 Watch::of(RESOURCE_CONTROL_CONFIG_PATH)
                     .prefixed()
                     .from_rev(self.revision)
                     .with_prev_kv(),
-            );
+            ));
             info!("pd meta client creating watch stream."; "path" => RESOURCE_CONTROL_CONFIG_PATH, "rev" => %self.revision);
             while let Some(grpc_response) = stream.next().await {
                 match grpc_response {
@@ -88,6 +88,7 @@ impl ResourceManagerService {
                     Err(PdError::DataCompacted(msg)) => {
                         error!("required revision has been compacted"; "err" => ?msg);
                         self.reload_all_resource_groups().await;
+                        cancel.abort();
                         continue 'outer;
                     }
                     Err(err) => {
@@ -96,6 +97,7 @@ impl ResourceManagerService {
                             .delay(std::time::Instant::now() + RETRY_INTERVAL)
                             .compat()
                             .await;
+                        cancel.abort();
                         continue 'outer;
                     }
                 }
