@@ -410,9 +410,13 @@ where
             config.coprocessor.clone(),
         ));
 
+        // Region stats manager collects region heartbeat for use by in-memory engine.
+        let enable_region_stats_manager =
+            cfg!(feature = "memory-engine") && config.region_cache_memory_limit != ReadableSize(0);
+
         let region_info_accessor = RegionInfoAccessor::new(
             coprocessor_host.as_mut().unwrap(),
-            false, // TODO: change this.
+            enable_region_stats_manager,
         );
 
         // Initialize concurrency manager
