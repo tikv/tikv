@@ -737,7 +737,7 @@ mod tests {
     }
 
     #[test]
-    fn mtest_lock() {
+    fn test_lock() {
         // Test `Lock::to_bytes()` and `Lock::parse()` works as a pair.
         let mut locks = vec![
             Lock::new(
@@ -1234,6 +1234,7 @@ mod tests {
 
         lock.short_value = None;
         lock.secondaries = Vec::default();
+        lock.generation = 10;
         assert_eq!(
             format!("{:?}", lock),
             "Lock { \
@@ -1251,7 +1252,7 @@ mod tests {
             last_change: Exist { last_change_ts: TimeStamp(80), estimated_versions_to_last_change: 4 }, \
             txn_source: 0, \
             is_locked_with_conflict: false, \
-            generation: 0 \
+            generation: 10 \
             }"
         );
         log_wrappers::set_redact_info_log(true);
@@ -1259,11 +1260,23 @@ mod tests {
         log_wrappers::set_redact_info_log(false);
         assert_eq!(
             redact_result,
-            "Lock { lock_type: Put, primary_key: ?, start_ts: TimeStamp(100), ttl: 3, short_value: ?, \
-            for_update_ts: TimeStamp(101), txn_size: 10, min_commit_ts: TimeStamp(127), \
-            use_async_commit: true, secondaries: [], rollback_ts: [], \
-            last_change: Exist { last_change_ts: TimeStamp(80), estimated_versions_to_last_change: 4 }, txn_source: 0\
-            , is_locked_with_conflict: false, generation: 0 }"
+            "Lock { \
+            lock_type: Put, \
+            primary_key: ?, \
+            start_ts: TimeStamp(100), \
+            ttl: 3, \
+            short_value: ?, \
+            for_update_ts: TimeStamp(101), \
+            txn_size: 10, \
+            min_commit_ts: TimeStamp(127), \
+            use_async_commit: true, \
+            secondaries: [], \
+            rollback_ts: [], \
+            last_change: Exist { last_change_ts: TimeStamp(80), estimated_versions_to_last_change: 4 }, \
+            txn_source: 0, \
+            is_locked_with_conflict: false, \
+            generation: 10 \
+            }"
         );
     }
 
