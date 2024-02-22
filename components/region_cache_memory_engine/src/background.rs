@@ -85,10 +85,7 @@ impl BgWorkManager {
         }
     }
 
-    pub fn schedule_task(
-        &self,
-        task: BackgroundTask,
-    ) -> Result<(), ScheduleError<BackgroundTask>> {
+    pub fn schedule_task(&self, task: BackgroundTask) -> Result<(), ScheduleError<BackgroundTask>> {
         self.scheduler.schedule_force(task)
     }
 
