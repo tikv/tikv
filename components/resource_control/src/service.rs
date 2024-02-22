@@ -13,7 +13,8 @@ use kvproto::{
 };
 use pd_client::{
     meta_storage::{Checked, Get, MetaStorageClient, Sourced, Watch},
-    PdClient, RpcClient, RESOURCE_CONTROL_CONFIG_PATH, RESOURCE_CONTROL_CONTROLLER_CONFIG_PATH,
+    Error as PdError, PdClient, RpcClient, RESOURCE_CONTROL_CONFIG_PATH,
+    RESOURCE_CONTROL_CONTROLLER_CONFIG_PATH,
 };
 use serde::{Deserialize, Serialize};
 use tikv_util::{error, info, timer::GLOBAL_TIMER_HANDLE};
@@ -54,10 +55,9 @@ const BACKGROUND_RU_REPORT_DURATION: Duration = Duration::from_secs(5);
 
 impl ResourceManagerService {
     pub async fn watch_resource_groups(&mut self) {
-        loop {
-            // Firstly, load all resource groups as of now.
-            self.reload_all_resource_groups().await;
-
+        // Firstly, load all resource groups as of now.
+        self.reload_all_resource_groups().await;
+        'outer: loop {
             // Secondly, start watcher at loading revision.
             let mut stream = self.meta_client.watch(
                 Watch::of(RESOURCE_CONTROL_CONFIG_PATH)
@@ -69,8 +69,8 @@ impl ResourceManagerService {
             while let Some(grpc_response) = stream.next().await {
                 match grpc_response {
                     Ok(resp) => {
-                        let events = resp.get_events();
                         self.revision = resp.get_header().get_revision();
+                        let events = resp.get_events();
                         events.iter().for_each(|event| match event.get_type() {
                             EventEventType::Put => {
                                 match protobuf::parse_from_bytes::<ResourceGroup>(event.get_kv().get_value()) {
@@ -85,12 +85,18 @@ impl ResourceManagerService {
                                 }
                             }});
                     }
+                    Err(PdError::DataCompacted(msg)) => {
+                        error!("required revision has been compacted"; "err" => ?msg);
+                        self.reload_all_resource_groups().await;
+                        continue 'outer;
+                    }
                     Err(err) => {
                         error!("failed to watch resource groups"; "err" => ?err);
                         let _ = GLOBAL_TIMER_HANDLE
                             .delay(std::time::Instant::now() + RETRY_INTERVAL)
                             .compat()
                             .await;
+                        continue 'outer;
                     }
                 }
             }
