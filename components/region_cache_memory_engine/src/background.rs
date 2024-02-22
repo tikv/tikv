@@ -168,9 +168,15 @@ impl BackgroundRunner {
     }
 
     fn ranges_for_gc(&self) -> BTreeSet<CacheRange> {
-        let mut core = self.engine_core.write().unwrap();
-        let ranges: BTreeSet<CacheRange> = core.range_manager().ranges().keys().cloned().collect();
-        core.mut_range_manager().set_ranges_in_gc(ranges.clone());
+        let ranges: BTreeSet<CacheRange> = {
+            let mut core = self.engine_core.read().unwrap();
+            core.range_manager().ranges().keys().cloned().collect()
+        };
+        let ranges_clone = ranges.clone();
+        {
+            let mut core = self.engine_core.write().unwrap();
+            core.mut_range_manager().set_ranges_in_gc(ranges_clone);
+        }
         ranges
     }
 
@@ -253,13 +259,19 @@ impl BackgroundRunner {
 
     fn on_snapshot_loaded(&mut self, range: CacheRange) -> engine_traits::Result<()> {
         fail::fail_point!("on_snapshot_loaded");
-        let (cache_batch, skiplist_engine) = {
-            let mut core = self.engine_core.write().unwrap();
-            (core.take_cache_write_batch(&range), core.engine().clone())
+        let has_cache_batch = {
+            let core = self.engine_core.read().unwrap();
+            core.has_cache_write_batch(&range)
         };
-        if let Some(cache_batch) = cache_batch {
-            for (seq, entry) in cache_batch {
-                entry.write_to_memory(&skiplist_engine, seq)?;
+        if has_cache_batch {
+            let (cache_batch, skiplist_engine) = {
+                let mut core = self.engine_core.write().unwrap();
+                (core.take_cache_write_batch(&range), core.engine().clone())
+            };
+            if let Some(cache_batch) = cache_batch {
+                for (seq, entry) in cache_batch {
+                    entry.write_to_memory(&skiplist_engine, seq)?;
+                }
             }
         }
         fail::fail_point!("on_snapshot_loaded_finish_before_status_change");
