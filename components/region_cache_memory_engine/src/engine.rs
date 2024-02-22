@@ -245,7 +245,7 @@ impl RangeCacheMemoryEngine {
             );
             if let Err(e) = self
                 .bg_worker_manager()
-                .sechedule_task(BackgroundTask::LoadTask)
+                .schedule_task(BackgroundTask::LoadTask)
             {
                 error!(
                     "schedule range load failed";

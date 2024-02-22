@@ -85,7 +85,7 @@ impl BgWorkManager {
         }
     }
 
-    pub fn sechedule_task(
+    pub fn schedule_task(
         &self,
         task: BackgroundTask,
     ) -> Result<(), ScheduleError<BackgroundTask>> {
@@ -309,7 +309,7 @@ impl Runnable for BackgroundRunner {
                             Ok(mut iter) => {
                                 iter.seek_to_first().unwrap();
                                 while iter.valid().unwrap() {
-                                    // use 0 sequence number here as the kv is clearlly visible
+                                    // use 0 sequence number here as the kv is clearly visible
                                     let encoded_key = encode_key(iter.key(), 0, ValueType::Value);
                                     handle.put(encoded_key, iter.value().to_vec());
                                     iter.next().unwrap();
