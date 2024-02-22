@@ -231,16 +231,14 @@ impl RangeCacheMemoryEngine {
     }
 
     pub(crate) fn handle_pending_load(&self) {
-        let (has_pending_range, has_ranges_to_load_cached_write) = {
+        let has_range_to_process = {
             let core = self.core.read().unwrap();
             let range_manager = core.range_manager();
-            (
-                !range_manager.pending_ranges.is_empty(),
-                !range_manager.ranges_loading_cached_write.is_empty(),
-            )
+            !range_manager.pending_ranges.is_empty()
+                || !range_manager.ranges_loading_cached_write.is_empty()
         };
 
-        if has_pending_range || has_ranges_to_load_cached_write {
+        if has_range_to_process {
             let mut core = self.core.write().unwrap();
             let skiplist_engine = core.engine().clone();
             let range_manager = core.mut_range_manager();
