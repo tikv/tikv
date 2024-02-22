@@ -435,7 +435,7 @@ where
                     let now = Instant::now();
                     let timedout = self.wait(Duration::from_secs(5)).await;
                     if timedout {
-                        warn!("waiting for initial scanning done timed out, forcing progress!"; 
+                        warn!("waiting for initial scanning done timed out, forcing progress!";
                             "take" => ?now.saturating_elapsed(), "timedout" => %timedout);
                     }
                     let regions = resolver.resolve(self.subs.current_regions(), min_ts).await;
@@ -453,7 +453,7 @@ where
                     callback(ResolvedRegions::new(rts, cps));
                 }
                 ObserveOp::HighMemUsageWarning { region_id } => {
-                    self.on_high_memory_usage(region_id).await;
+                    self.on_high_memory_usage(region_id);
                 }
             }
         }
@@ -507,7 +507,7 @@ where
         }
     }
 
-    async fn on_high_memory_usage(&mut self, inconsistent_region_id: u64) {
+    fn on_high_memory_usage(&mut self, inconsistent_region_id: u64) {
         let mut lame_region = Region::new();
         lame_region.set_id(inconsistent_region_id);
         let mut act_region = None;
@@ -517,9 +517,9 @@ where
         });
         let delay = OOM_BACKOFF_BASE
             + Duration::from_secs(rand::thread_rng().gen_range(0..OOM_BACKOFF_JITTER_SECS));
-        info!("log backup triggering high memory usage."; 
-            "region" => %inconsistent_region_id, 
-            "mem_usage" => %self.memory_manager.used_ratio(), 
+        info!("log backup triggering high memory usage.";
+            "region" => %inconsistent_region_id,
+            "mem_usage" => %self.memory_manager.used_ratio(),
             "mem_max" => %self.memory_manager.capacity());
         if let Some(region) = act_region {
             self.schedule_start_observe(delay, region, None);
@@ -786,7 +786,7 @@ where
         let feedback_channel = match self.messenger.upgrade() {
             Some(ch) => ch,
             None => {
-                warn!("log backup subscription manager is shutting down, aborting new scan."; 
+                warn!("log backup subscription manager is shutting down, aborting new scan.";
                     utils::slog_region(region), "handle" => ?handle.id);
                 return;
             }
