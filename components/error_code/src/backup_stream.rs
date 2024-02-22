@@ -14,6 +14,10 @@ define_error_codes! {
         "A task not found.",
         "Please check the spell of your task name."
     ),
+    OUT_OF_QUOTA => ("OutOfQuota",
+        "Some of quota has been exceed, hence the task cannot continue.",
+        "For memory quotas, please check whether there are huge transactions. You may also increase the quota by modifying config."
+    ),
     OBSERVE_CANCELED => (
         "ObserveCancel",
         "When doing initial scanning, the observe of that region has been canceled",

@@ -280,7 +280,12 @@ pub fn request_to_triple(mut req: Request) -> Either<(Vec<u8>, Vec<u8>, CfName),
 /// `try_send!(s: Scheduler<T>, task: T)` tries to send a task to the scheduler,
 /// once meet an error, would report it, with the current file and line (so it
 /// is made as a macro). returns whether it success.
+<<<<<<< HEAD
 #[macro_export(crate)]
+=======
+// Note: perhaps we'd better using std::panic::Location.
+#[macro_export]
+>>>>>>> 66301257e4 (log_backup: stop task while memory out of quota (#16008))
 macro_rules! try_send {
     ($s:expr, $task:expr) => {
         match $s.schedule($task) {
