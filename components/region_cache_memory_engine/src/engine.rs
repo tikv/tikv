@@ -238,7 +238,7 @@ impl RangeCacheMemoryEngine {
         let pending_loaded_ranges = std::mem::take(&mut range_manager.pending_ranges);
         if !pending_loaded_ranges.is_empty() {
             let rocks_snap = Arc::new(self.rocks_engine.as_ref().unwrap().snapshot(None));
-            range_manager.pending_ranges_with_snapshot.extend(
+            range_manager.ranges_loading_snapshot.extend(
                 pending_loaded_ranges
                     .into_iter()
                     .map(|r| (r, rocks_snap.clone())),
@@ -257,9 +257,9 @@ impl RangeCacheMemoryEngine {
 
         // Some ranges have already loaded all data from snapshot, it's time to consume
         // the cached write batch and make the range visible
-        let ranges_with_snapshot_loaded =
-            std::mem::take(&mut range_manager.ranges_with_snapshot_loaded);
-        for range in ranges_with_snapshot_loaded {
+        let ranges_loading_cached_write =
+            std::mem::take(&mut range_manager.ranges_loading_cached_write);
+        for range in ranges_loading_cached_write {
             if let Some(write_batches) = core.take_cache_write_batch(&range) {
                 for (seq, entry) in write_batches {
                     entry.write_to_memory(&skiplist_engine, seq).unwrap();

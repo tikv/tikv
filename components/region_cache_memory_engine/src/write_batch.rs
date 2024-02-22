@@ -145,7 +145,7 @@ impl RangeCacheWriteBatchEntry {
 
     #[inline]
     pub fn maybe_cached(&self, seq: u64, engine_core: &mut RangeCacheMemoryEngineCore) {
-        for r in &engine_core.range_manager().pending_ranges_with_snapshot {
+        for r in &engine_core.range_manager().ranges_loading_snapshot {
             if r.0.contains_key(&self.key) {
                 let range = r.0.clone();
                 engine_core
@@ -156,7 +156,7 @@ impl RangeCacheWriteBatchEntry {
                 return;
             }
         }
-        for r in &engine_core.range_manager().ranges_with_snapshot_loaded {
+        for r in &engine_core.range_manager().ranges_loading_cached_write {
             if r.contains_key(&self.key) {
                 let range = r.clone();
                 engine_core
