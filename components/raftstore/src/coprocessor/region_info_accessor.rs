@@ -104,9 +104,13 @@ impl RegionInfo {
     }
 }
 
+/// Region activity data. Used by in-memory cache.
 #[derive(Clone, Debug)]
 pub struct RegionActivity {
     pub region_stat: RegionStat,
+    // TODO: add region's MVCC version/tombestone count to measure effectiveness of the in-memory
+    // cache for that region's data. This information could be collected from rocksdb, see:
+    // collection_regions_to_compact.
 }
 
 type RegionsMap = HashMap<u64, RegionInfo>;
