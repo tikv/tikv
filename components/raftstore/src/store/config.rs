@@ -407,6 +407,18 @@ pub struct Config {
     #[online_config(hidden)]
     #[serde(alias = "enable-partitioned-raft-kv-compatible-learner")]
     pub enable_v2_compatible_learner: bool,
+
+    /// The minimal count of region pending on applying raft logs.
+    /// Only when the count of regions which not pending on applying logs is
+    /// less than the threshold, can the raftstore supply service.
+    #[doc(hidden)]
+    #[online_config(hidden)]
+    pub min_pending_apply_region_count: u64,
+
+    /// Whether to skip manual compaction in the clean up worker for `write` and
+    /// `default` column family
+    #[doc(hidden)]
+    pub skip_manual_compaction_in_clean_up_worker: bool,
 }
 
 impl Default for Config {
@@ -544,6 +556,8 @@ impl Default for Config {
             check_request_snapshot_interval: ReadableDuration::minutes(1),
             enable_v2_compatible_learner: false,
             unsafe_disable_check_quorum: false,
+            min_pending_apply_region_count: 10,
+            skip_manual_compaction_in_clean_up_worker: false,
         }
     }
 }
@@ -945,6 +959,12 @@ impl Config {
         if self.slow_trend_network_io_factor < 0.0 {
             return Err(box_err!(
                 "slow_trend_network_io_factor must be greater than 0"
+            ));
+        }
+
+        if self.min_pending_apply_region_count == 0 {
+            return Err(box_err!(
+                "min_pending_apply_region_count must be greater than 0"
             ));
         }
 
