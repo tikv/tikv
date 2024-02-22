@@ -440,7 +440,8 @@ impl<'a> PrewriteMutation<'a> {
         if generation_to_write > 0 && lock.generation >= generation_to_write {
             return Err(ErrorInner::GenerationOutOfOrder(
                 generation_to_write,
-                self.lock_info(lock)?,
+                self.key.clone(),
+                lock,
             )
             .into());
         }

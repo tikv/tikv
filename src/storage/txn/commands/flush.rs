@@ -189,10 +189,15 @@ impl Flush {
                     }
                 }
                 Err(crate::storage::mvcc::Error(
-                    box crate::storage::mvcc::ErrorInner::GenerationOutOfOrder(generation, lock),
+                    box crate::storage::mvcc::ErrorInner::GenerationOutOfOrder(
+                        generation,
+                        key,
+                        lock,
+                    ),
                 )) => {
                     info!(
                         "generation in Flush is smaller than that in lock, ignore this mutation";
+                        "key" => ?key,
                         "start_ts" => self.start_ts,
                         "generation" => generation,
                         "lock" => ?lock,

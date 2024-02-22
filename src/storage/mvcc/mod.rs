@@ -174,8 +174,8 @@ pub enum ErrorInner {
     #[error("check_txn_status sent to secondary lock, current lock: {0:?}")]
     PrimaryMismatch(kvrpcpb::LockInfo),
 
-    #[error("generation out of order: current = {0}, lock = {1:?}")]
-    GenerationOutOfOrder(u64, kvrpcpb::LockInfo),
+    #[error("generation out of order: current = {0}, key={1:?}, lock = {1:?}")]
+    GenerationOutOfOrder(u64, Key, Lock),
 
     #[error("{0:?}")]
     Other(#[from] Box<dyn error::Error + Sync + Send>),
@@ -307,9 +307,9 @@ impl ErrorInner {
                 })
             }
             ErrorInner::PrimaryMismatch(l) => Some(ErrorInner::PrimaryMismatch(l.clone())),
-            ErrorInner::GenerationOutOfOrder(gen, lock_info) => {
-                Some(ErrorInner::GenerationOutOfOrder(*gen, lock_info.clone()))
-            }
+            ErrorInner::GenerationOutOfOrder(gen, key, lock_info) => Some(
+                ErrorInner::GenerationOutOfOrder(*gen, key.clone(), lock_info.clone()),
+            ),
             ErrorInner::Io(_) | ErrorInner::Other(_) => None,
         }
     }
