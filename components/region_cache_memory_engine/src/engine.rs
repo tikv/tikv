@@ -226,10 +226,18 @@ impl RangeCacheMemoryEngine {
     }
 
     pub fn evict_range(&mut self, range: &CacheRange) {
-        let mut core = self.core.write().unwrap();
-        if core.range_manager.evict_range(range) {
-            // todo: schedule it to a separate thread
-            core.engine.delete_range(range);
+        let mut skiplist_engine = None;
+        {
+            let mut core = self.core.write().unwrap();
+            if core.range_manager.evict_range(range) {
+                // The range can be delete directly.
+                skiplist_engine = Some(core.engine().clone());
+            }
+        };
+        if let Some(skiplist_engine) = skiplist_engine {
+            // todo(SpadeA): do it in background
+            skiplist_engine.delete_range(range);
+            let mut core = self.core.write().unwrap();
             core.mut_range_manager().on_delete_range(range);
         }
     }
@@ -655,15 +663,22 @@ impl RangeCacheSnapshot {
 
 impl Drop for RangeCacheSnapshot {
     fn drop(&mut self) {
-        let mut core = self.engine.core.write().unwrap();
-        for range_removable in core
-            .range_manager
-            .remove_range_snapshot(&self.snapshot_meta)
-        {
+        let (ranges_removable, skiplist_engine) = {
+            let mut core = self.engine.core.write().unwrap();
+            let ranges_removable = core
+                .range_manager
+                .remove_range_snapshot(&self.snapshot_meta);
+            (ranges_removable, core.engine().clone())
+        };
+        for range_removable in &ranges_removable {
             // todo: schedule it to a separate thread
-            core.engine.delete_range(&self.snapshot_meta.range);
-            core.mut_range_manager()
-                .on_delete_range(&self.snapshot_meta.range);
+            skiplist_engine.delete_range(range_removable);
+        }
+        if !ranges_removable.is_empty() {
+            let mut core = self.engine.core.write().unwrap();
+            for range_removable in &ranges_removable {
+                core.mut_range_manager().on_delete_range(range_removable);
+            }
         }
     }
 }
