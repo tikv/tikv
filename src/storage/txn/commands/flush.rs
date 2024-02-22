@@ -188,6 +188,16 @@ impl Flush {
                         assertion_failure = Some(e);
                     }
                 }
+                Err(crate::storage::mvcc::Error(
+                    box crate::storage::mvcc::ErrorInner::GenerationOutOfOrder(generation, lock),
+                )) => {
+                    info!(
+                        "generation in Flush is smaller than that in lock, ignore this mutation";
+                        "start_ts" => self.start_ts,
+                        "generation" => generation,
+                        "lock" => ?lock,
+                    );
+                }
                 Err(e) => return Err(Error::from(e)),
             }
         }
@@ -209,10 +219,7 @@ mod tests {
 
     use crate::storage::{
         lock_manager::MockLockManager,
-        mvcc::{
-            tests::{must_get, must_locked},
-            Error as MvccError, ErrorInner as MvccErrorInner,
-        },
+        mvcc::tests::{must_get, must_locked},
         txn,
         txn::{
             commands::{Flush, WriteContext, WriteResult},
@@ -272,6 +279,9 @@ mod tests {
         assert!(res.is_ok());
         let res = res.unwrap();
         let to_be_write = res.to_be_write;
+        if to_be_write.modifies.is_empty() {
+            return;
+        }
         engine.write(&Context::new(), to_be_write).unwrap();
     }
 
@@ -368,9 +378,12 @@ mod tests {
 
         must_flush_put(&mut engine, k, *v, k, 1, 2);
         must_locked(&mut engine, k, 1);
-        assert_matches!(
-            must_flush_put_err(&mut engine, k, *v, k, 1, 1),
-            Error(box ErrorInner::Mvcc(MvccError(box MvccErrorInner::GenerationOutOfOrder(..))))
-        );
+
+        // the following flush should have no effect
+        let v2 = b"value2";
+        must_flush_put(&mut engine, k, *v2, k, 1, 1);
+        must_locked(&mut engine, k, 1);
+        must_commit(&mut engine, k, 1, 2);
+        must_get(&mut engine, k, 3, v);
     }
 }
