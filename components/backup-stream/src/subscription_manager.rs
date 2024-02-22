@@ -1138,7 +1138,7 @@ mod test {
             self.regions.regions.lock().unwrap().insert(
                 region.id,
                 RegionInfo {
-                    region: region.clone(),
+                    region,
                     role: raft::StateRole::Leader,
                     buckets: 0,
                 },
