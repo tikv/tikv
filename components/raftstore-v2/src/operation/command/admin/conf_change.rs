@@ -105,6 +105,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             changes.as_ref(),
             &cc,
             false,
+            self.get_peer_heartbeats(),
         )?;
 
         // TODO: check if the new peer is already in history record.
