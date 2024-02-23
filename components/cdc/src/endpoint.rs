@@ -36,8 +36,9 @@ use raftstore::{
     router::CdcHandle,
     store::fsm::{store::StoreRegionMeta, ChangeObserver},
 };
-use resolved_ts::{resolve_by_raft, IObserver, LeadershipResolver, Resolver};
+use resolved_ts::{resolve_by_raft, LeadershipResolver, Resolver};
 use security::SecurityManager;
+use sst_importer::Observer;
 use tikv::{
     config::CdcConfig,
     storage::{kv::LocalTablets, Statistics},
@@ -425,7 +426,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
         security_mgr: Arc<SecurityManager>,
         sink_memory_quota: Arc<MemoryQuota>,
         causal_ts_provider: Option<Arc<CausalTsProviderImpl>>,
-        ingest_observer: Arc<dyn IObserver>,
+        ingest_observer: Arc<dyn Observer>,
     ) -> Endpoint<T, E, S> {
         let workers = Builder::new_multi_thread()
             .thread_name("cdcwkr")
@@ -1410,7 +1411,7 @@ mod tests {
         router::{CdcRaftRouter, RaftStoreRouter},
         store::{fsm::StoreMeta, msg::CasualMessage, PeerMsg, ReadDelegate},
     };
-    use resolved_ts::IngestObserver;
+    use sst_importer::IngestObserver;
     use test_pd_client::TestPdClient;
     use test_raftstore::MockRaftStoreRouter;
     use tikv::{

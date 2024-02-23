@@ -67,10 +67,11 @@ use raftstore_v2::{
     router::{DiskSnapBackupHandle, PeerMsg, RaftRouter},
     StateStorage,
 };
-use resolved_ts::{IngestMediator, IngestObserver, Mediator, Task};
+use resolved_ts::Task;
 use resource_control::ResourceGroupManager;
 use security::SecurityManager;
 use service::{service_event::ServiceEvent, service_manager::GrpcServiceManager};
+use sst_importer::{IngestMediator, IngestObserver, Mediator};
 use tikv::{
     config::{
         loop_registry, ConfigController, ConfigurableDb, DbConfigManger, DbType, LogConfigManager,
@@ -619,38 +620,7 @@ where
             unified_read_pool_scale_receiver = Some(rx);
         }
 
-        // Start SST importer.
         let mut ingest_mediator = IngestMediator::default();
-        let import_path = self.core.store_path.join("import");
-        let mut importer = SstImporter::new(
-            &self.core.config.import,
-            import_path,
-            self.core.encryption_key_manager.clone(),
-            self.core.config.storage.api_version(),
-            true,
-        )
-        .unwrap();
-        for (cf_name, compression_type) in &[
-            (
-                CF_DEFAULT,
-                self.core
-                    .config
-                    .rocksdb
-                    .defaultcf
-                    .bottommost_level_compression,
-            ),
-            (
-                CF_WRITE,
-                self.core
-                    .config
-                    .rocksdb
-                    .writecf
-                    .bottommost_level_compression,
-            ),
-        ] {
-            importer.set_compression_type(cf_name, from_rocks_compression_type(*compression_type));
-        }
-        let importer = Arc::new(importer);
 
         // Run check leader in a dedicate thread, because it is time sensitive
         // and crucial to TiCDC replication lag.
@@ -778,6 +748,42 @@ where
         } else {
             None
         };
+
+        // Start SST importer.
+        let ingest_observer = Arc::new(IngestObserver::default());
+        ingest_mediator.register(ingest_observer.clone());
+        let import_path = self.core.store_path.join("import");
+        let mut importer = SstImporter::new_(
+            &self.core.config.import,
+            import_path,
+            self.core.encryption_key_manager.clone(),
+            self.core.config.storage.api_version(),
+            true,
+            Arc::new(ingest_mediator),
+            ingest_observer,
+        )
+        .unwrap();
+        for (cf_name, compression_type) in &[
+            (
+                CF_DEFAULT,
+                self.core
+                    .config
+                    .rocksdb
+                    .defaultcf
+                    .bottommost_level_compression,
+            ),
+            (
+                CF_WRITE,
+                self.core
+                    .config
+                    .rocksdb
+                    .writecf
+                    .bottommost_level_compression,
+            ),
+        ] {
+            importer.set_compression_type(cf_name, from_rocks_compression_type(*compression_type));
+        }
+        let importer = Arc::new(importer);
 
         let server_config = Arc::new(VersionTrack::new(self.core.config.server.clone()));
 

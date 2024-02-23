@@ -30,6 +30,7 @@ use raftstore::{
     store::{msg::Callback, util::RegionReadProgressRegistry},
 };
 use security::SecurityManager;
+use sst_importer::Observer;
 use tikv_util::{
     info,
     sys::thread::ThreadBuildWrapper,
@@ -43,12 +44,7 @@ use tokio::{
 };
 use txn_types::TimeStamp;
 
-use crate::{
-    endpoint::Task,
-    ingest::{Observer},
-    metrics::*,
-    TsSource,
-};
+use crate::{endpoint::Task, metrics::*, TsSource};
 
 pub(crate) const DEFAULT_CHECK_LEADER_TIMEOUT_DURATION: Duration = Duration::from_secs(5); // 5s
 const DEFAULT_GRPC_GZIP_COMPRESSION_LEVEL: usize = 2;
@@ -417,9 +413,11 @@ impl LeadershipResolver {
         let mut res = Vec::with_capacity(self.valid_regions.len());
         for region_id in self.valid_regions.drain() {
             // Skip regions those are currently ingesting SSTs.
-            if let Some(lease) = self.ingest_observer.query(region_id) {
+            let leases = self.ingest_observer.query_region(region_id);
+            for (uuid, _) in leases {
                 info!("skip advancing resolved ts due to ingest sst";
-                    "region_id" => region_id, "lease" => ?lease,
+                    "region_id" => region_id,
+                    "lease_uuid" => ?uuid,
                 );
                 continue;
             }
@@ -593,10 +591,10 @@ mod tests {
     use kvproto::{metapb::Region, tikvpb::Tikv, tikvpb_grpc::create_tikv};
     use pd_client::PdClient;
     use raftstore::store::util::RegionReadProgress;
+    use sst_importer::IngestObserver;
     use tikv_util::store::new_peer;
 
     use super::*;
-    use crate::IngestObserver;
 
     #[derive(Clone)]
     struct MockTikv {

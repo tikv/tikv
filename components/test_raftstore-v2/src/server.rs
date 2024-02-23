@@ -41,12 +41,12 @@ use raftstore::{
     RegionInfoAccessor,
 };
 use raftstore_v2::{router::RaftRouter, StateStorage, StoreMeta, StoreRouter};
-use resolved_ts::IngestObserver;
 use resource_control::ResourceGroupManager;
 use resource_metering::{CollectorRegHandle, ResourceTagFactory};
 use security::SecurityManager;
 use service::service_manager::GrpcServiceManager;
 use slog_global::debug;
+use sst_importer::IngestObserver;
 use tempfile::TempDir;
 use test_pd_client::TestPdClient;
 use test_raftstore::{filter_send, AddressMap, Config, Filter};

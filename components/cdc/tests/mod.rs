@@ -22,7 +22,7 @@ use kvproto::{
 };
 use online_config::OnlineConfig;
 use raftstore::{coprocessor::CoprocessorHost, router::CdcRaftRouter};
-use resolved_ts::IngestObserver;
+use sst_importer::IngestObserver;
 use test_raftstore::*;
 use tikv::{config::CdcConfig, server::DEFAULT_CLUSTER_ID, storage::kv::LocalTablets};
 use tikv_util::{

@@ -81,6 +81,7 @@ service = { workspace = true }
 slog = { workspace = true }
 slog-global = { workspace = true }
 snap_recovery = { workspace = true }
+sst_importer = { workspace = true }
 tempfile = "3.0"
 tikv = { workspace = true }
 tikv_alloc = { workspace = true }

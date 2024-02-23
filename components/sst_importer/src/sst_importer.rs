@@ -47,6 +47,7 @@ use tokio::{
     sync::OnceCell,
 };
 use txn_types::{Key, TimeStamp, WriteRef};
+use uuid::Uuid;
 
 use crate::{
     caching::cache_map::{CacheMap, ShareOwned},
@@ -55,7 +56,8 @@ use crate::{
     import_mode2::{HashRange, ImportModeSwitcherV2},
     metrics::*,
     sst_writer::{RawSstWriter, TxnSstWriter},
-    util, Config, ConfigManager as ImportConfigManager, Error, Result,
+    util, Config, ConfigManager as ImportConfigManager, Error, IngestMediator, Mediator, Observer,
+    Result,
 };
 
 pub struct LoadedFile {
@@ -166,6 +168,8 @@ pub struct SstImporter<E: KvEngine> {
     file_locks: Arc<DashMap<String, (CacheKvFile, Instant)>>,
     mem_use: Arc<AtomicU64>,
     mem_limit: Arc<AtomicU64>,
+    ingest_mediator: Arc<dyn Mediator>,
+    ingest_observer: Arc<dyn Observer>,
 }
 
 impl<E: KvEngine> SstImporter<E> {
@@ -175,6 +179,29 @@ impl<E: KvEngine> SstImporter<E> {
         key_manager: Option<Arc<DataKeyManager>>,
         api_version: ApiVersion,
         raft_kv_v2: bool,
+    ) -> Result<Self> {
+        let ingest_mediator = Arc::new(IngestMediator::default());
+        let ingest_observer = Arc::new(crate::mediate::IngestObserver::default());
+        // TODO: remove new_
+        Self::new_(
+            cfg,
+            root,
+            key_manager,
+            api_version,
+            raft_kv_v2,
+            ingest_mediator,
+            ingest_observer,
+        )
+    }
+
+    pub fn new_<P: AsRef<Path>>(
+        cfg: &Config,
+        root: P,
+        key_manager: Option<Arc<DataKeyManager>>,
+        api_version: ApiVersion,
+        raft_kv_v2: bool,
+        ingest_mediator: Arc<dyn Mediator>,
+        ingest_observer: Arc<dyn Observer>,
     ) -> Result<Self> {
         let switcher = if raft_kv_v2 {
             Either::Right(ImportModeSwitcherV2::new(cfg))
@@ -219,7 +246,42 @@ impl<E: KvEngine> SstImporter<E> {
             _download_rt: download_rt,
             mem_use: Arc::new(AtomicU64::new(0)),
             mem_limit: Arc::new(AtomicU64::new(memory_limit)),
+            ingest_mediator,
+            ingest_observer,
         })
+    }
+
+    pub fn acquire_lease(
+        &self,
+        region_id: u64,
+        uuid_bytes: &[u8],
+        deadline: Instant,
+    ) -> Result<()> {
+        let uuid = parse_uuid_from_slice(uuid_bytes)?;
+        self.ingest_mediator.pause(region_id, uuid, deadline);
+        Ok(())
+    }
+
+    pub fn expire_lease(&self, region_id: u64, uuid_bytes: &[u8]) -> Result<()> {
+        let uuid = parse_uuid_from_slice(uuid_bytes)?;
+        self.ingest_mediator.continues(region_id, uuid);
+        Ok(())
+    }
+
+    // TODO: To avid race condition, maybe we should check the lease and hold it
+    // and let caller to decided when to unhold.
+    // hold means make a lease valid even if it exceeds its deadline.
+    pub fn check_lease(&self, region_id: u64, uuid_bytes: &[u8]) -> Result<()> {
+        let uuid = parse_uuid_from_slice(uuid_bytes)?;
+        if self
+            .ingest_observer
+            .query(region_id, &uuid)
+            .map_or(false, |deadline| Instant::now() <= deadline)
+        {
+            Ok(())
+        } else {
+            Err(Error::LeaseExpired)
+        }
     }
 
     pub fn ranges_enter_import_mode(&self, ranges: Vec<Range>) {
@@ -1466,6 +1528,19 @@ fn is_after_end_bound<K: AsRef<[u8]>>(value: &[u8], bound: &Bound<K>) -> bool {
         Bound::Unbounded => false,
         Bound::Included(b) => *value > *b.as_ref(),
         Bound::Excluded(b) => *value >= *b.as_ref(),
+    }
+}
+
+fn parse_uuid_from_slice(uuid_bytes: &[u8]) -> Result<Uuid> {
+    match Uuid::from_slice(uuid_bytes) {
+        Ok(uuid) => Ok(uuid),
+        Err(e) => {
+            warn!("fail to parse uuid from bytes";
+                "error" => ?e,
+                "uuid_bytes" => ?log_wrappers::hex_encode_upper(uuid_bytes),
+            );
+            Err(Error::InvalidLease)
+        }
     }
 }
 

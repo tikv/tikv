@@ -44,6 +44,7 @@ raftstore = { workspace = true }
 security = { workspace = true }
 slog = { workspace = true }
 slog-global = { workspace = true }
+sst_importer = { workspace = true }
 thiserror = "1.0"
 tikv = { workspace = true }
 tikv_util = { workspace = true }

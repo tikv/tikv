@@ -60,6 +60,7 @@ service = { workspace = true }
 slog = { workspace = true }
 # better to not use slog-global, but pass in the logger
 slog-global = { workspace = true }
+sst_importer = { workspace = true }
 tempfile = "3.0"
 test_pd_client = { workspace = true }
 test_raftstore = { workspace = true }

@@ -27,6 +27,7 @@ use raftstore::{
     },
 };
 use security::SecurityManager;
+use sst_importer::Observer;
 use tikv::config::ResolvedTsConfig;
 use tikv_util::{
     memory::{HeapSize, MemoryQuota},
@@ -39,7 +40,6 @@ use txn_types::{Key, TimeStamp};
 use crate::{
     advance::{AdvanceTsWorker, LeadershipResolver, DEFAULT_CHECK_LEADER_TIMEOUT_DURATION},
     cmd::{ChangeLog, ChangeRow},
-    ingest::Observer,
     metrics::*,
     resolver::{LastAttempt, Resolver},
     scanner::{ScanEntries, ScanTask, ScannerPool},

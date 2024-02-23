@@ -516,6 +516,7 @@ dependencies = [
  "security",
  "slog",
  "slog-global",
+ "sst_importer",
  "tempdir",
  "tempfile",
  "test_pd",
@@ -869,6 +870,7 @@ dependencies = [
  "semver 1.0.4",
  "slog",
  "slog-global",
+ "sst_importer",
  "tempfile",
  "test_pd_client",
  "test_raftstore",
@@ -2838,7 +2840,6 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#705bb9244fd9557b45c0f4f1530ba239c782068b"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
@@ -4676,6 +4677,7 @@ dependencies = [
  "security",
  "slog",
  "slog-global",
+ "sst_importer",
  "tempfile",
  "test_raftstore",
  "test_sst_importer",
@@ -5307,6 +5309,7 @@ dependencies = [
  "slog",
  "slog-global",
  "snap_recovery",
+ "sst_importer",
  "tempfile",
  "tikv",
  "tikv_alloc",
@@ -5997,6 +6000,7 @@ dependencies = [
  "service",
  "slog",
  "slog-global",
+ "sst_importer",
  "tempfile",
  "test_pd_client",
  "test_util",
@@ -6046,6 +6050,7 @@ dependencies = [
  "service",
  "slog",
  "slog-global",
+ "sst_importer",
  "tempfile",
  "test_pd_client",
  "test_raftstore",

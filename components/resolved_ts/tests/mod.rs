@@ -15,7 +15,8 @@ use kvproto::{
 };
 use online_config::ConfigValue;
 use raftstore::{coprocessor::CoprocessorHost, router::CdcRaftRouter};
-use resolved_ts::{IngestObserver, Observer, Task};
+use resolved_ts::{Observer, Task};
+use sst_importer::IngestObserver;
 use test_raftstore::*;
 use tikv::config::ResolvedTsConfig;
 use tikv_util::{worker::LazyWorker, HandyRwLock};

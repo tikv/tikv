@@ -33,7 +33,8 @@ use kvproto::{
 };
 use pd_client::PdClient;
 use raftstore::{router::CdcRaftRouter, RegionInfoAccessor};
-use resolved_ts::{IngestObserver, LeadershipResolver};
+use resolved_ts::LeadershipResolver;
+use sst_importer::IngestObserver;
 use tempfile::TempDir;
 use test_pd_client::TestPdClient;
 use test_raftstore::{new_server_cluster, Cluster, ServerCluster};

@@ -36,5 +36,3 @@ mod scanner;
 pub use scanner::*;
 mod metrics;
 pub use metrics::*;
-mod ingest;
-pub use ingest::{IngestMediator, IngestObserver, Mediator, Observer as IObserver};

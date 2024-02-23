@@ -42,11 +42,11 @@ use raftstore::{
     },
     Result,
 };
-use resolved_ts::IngestObserver;
 use resource_control::ResourceGroupManager;
 use resource_metering::{CollectorRegHandle, ResourceTagFactory};
 use security::SecurityManager;
 use service::service_manager::GrpcServiceManager;
+use sst_importer::IngestObserver;
 use tempfile::TempDir;
 use test_pd_client::TestPdClient;
 use tikv::{
