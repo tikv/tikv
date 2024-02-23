@@ -14,9 +14,10 @@ use engine_traits::{
     CacheRange, IterOptions, Iterable, Iterator, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS,
 };
 use skiplist_rs::Skiplist;
-use slog_global::{error, info, warn};
 use tikv_util::{
+    error, info,
     keybuilder::KeyBuilder,
+    warn,
     worker::{Runnable, ScheduleError, Scheduler, Worker},
 };
 use txn_types::{Key, TimeStamp, WriteRef, WriteType};
@@ -219,12 +220,20 @@ impl BackgroundRunner {
             }
             if remove {
                 removed += 1;
+                info!(
+                    "remove lock key";
+                    "key" => log_wrappers::Value::key(k.as_slice()),
+                );
                 lock_handle.remove(k);
             }
             iter.next();
         }
         if let Some(cached_remove) = cached_removed.take() {
             removed += 1;
+            info!(
+                "remove lock key";
+                "key" => log_wrappers::Value::key(cached_remove.as_slice()),
+            );
             lock_handle.remove(cached_remove.as_slice());
         }
         info!(
