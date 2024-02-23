@@ -69,9 +69,12 @@ impl RangeCacheWriteBatch {
             BTreeMap::new();
         let (engine, filtered_keys) = {
             let core = self.engine.core().read().unwrap();
-            self.buffer
-                .iter()
-                .for_each(|e| e.maybe_cached(seq, &core, &mut keys_to_cache));
+            if core.range_manager().has_range_to_cache_write() {
+                self.buffer
+                    .iter()
+                    .for_each(|e| e.maybe_cached(seq, &core, &mut keys_to_cache));
+            }
+
             (
                 core.engine().clone(),
                 self.buffer

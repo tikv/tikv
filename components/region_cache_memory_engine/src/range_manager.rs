@@ -86,9 +86,9 @@ pub struct RangeManager {
 
     // `pending_ranges` contains ranges that will be loaded into the memory engine. At
     // sometime in the apply thread, the pending ranges, coupled with rocksdb snapshot, will be
-    // poped and pushed into `pending_ranges_with_snapshot`. Then the data in the snapshot
+    // poped and pushed into `ranges_loading_snapshot`. Then the data in the snapshot
     // of the given ranges will be loaded in the memory engine in the background worker.
-    // When the snapshot load is finished, `ranges_with_snapshot_loaded` will take over it, which
+    // When the snapshot load is finished, `ranges_loading_cached_write` will take over it, which
     // will handle data that is written after the acquire of the snapshot. After it, the range load
     // is finished.
     pub(crate) pending_ranges: Vec<CacheRange>,
@@ -272,6 +272,10 @@ impl RangeManager {
         }
         self.pending_ranges.push(cache_range);
         Ok(())
+    }
+
+    pub(crate) fn has_range_to_cache_write(&self) -> bool {
+        !self.ranges_loading_snapshot.is_empty() || !self.ranges_loading_cached_write.is_empty()
     }
 }
 
