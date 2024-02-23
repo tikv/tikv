@@ -2,7 +2,7 @@
 
 use std::{
     collections::{
-        BTreeMap,
+        BTreeMap, BTreeSet,
         Bound::{Excluded, Unbounded},
     },
     fmt::{Display, Formatter, Result as FmtResult},
@@ -108,7 +108,7 @@ impl RegionInfo {
 #[derive(Clone, Debug)]
 pub struct RegionActivity {
     pub region_stat: RegionStat,
-    // TODO: add region's MVCC version/tombestone count to measure effectiveness of the in-memory
+    // TODO: add region's MVCC version/tombstone count to measure effectiveness of the in-memory
     // cache for that region's data. This information could be collected from rocksdb, see:
     // collection_regions_to_compact.
 }
@@ -410,6 +410,8 @@ impl RegionCollector {
 
             let removed_id = self.region_ranges.remove(&end_key).unwrap();
             assert_eq!(removed_id, region.get_id());
+            // Remove any activity associated with this id.
+            self.region_activity.remove(&removed_id);
         } else {
             // It's possible that the region is already removed because it's end_key is used
             // by another newer region.
@@ -557,7 +559,19 @@ impl RegionCollector {
         callback(regions);
     }
 
-    pub fn handle_get_top_regions(&self, count: usize, callback: Callback<Vec<Region>>) {
+    /// Used by the in-memory engine (if enabled.)
+    /// If `count` is 0, return all the regions for which this node is the
+    /// leader. Otherwise, return the top `count` regions from
+    /// `self.region_activity`. Top regions are determined by comparing
+    /// `read_keys + written_keys` in each region's most recent region stat.
+    /// If count > 0 and size of `self.region_activity` is `> 0`, remove but the
+    /// top `count` regions from `self.region_activity`.
+    ///
+    /// Note: this function is `O(N log(N))` with respect to size of
+    /// region_activity. This is acceptable, as region_activity is populated
+    /// by heartbeats for this node's region, so N cannot be greater than
+    /// approximately `300_000``.
+    pub fn handle_get_top_regions(&mut self, count: usize, callback: Callback<Vec<Region>>) {
         let top_regions = if count == 0 {
             self.regions
                 .values()
@@ -569,6 +583,7 @@ impl RegionCollector {
             self.region_activity
                 .iter()
                 .sorted_by(|(_, activity_0), (_, activity_1)| {
+                    // TODO: Make this extensible e.g., allow considering MVCC/tombstone stats.
                     let a = activity_0.region_stat.read_keys + activity_0.region_stat.written_keys;
                     let b = activity_1.region_stat.read_keys + activity_1.region_stat.written_keys;
                     b.cmp(&a)
@@ -577,6 +592,14 @@ impl RegionCollector {
                 .flat_map(|(id, _)| self.regions.get(id).map(|ri| ri.region.clone()))
                 .collect::<Vec<_>>()
         };
+        if count > 0 && self.region_activity.len() > count {
+            let top_region_ids = top_regions
+                .iter()
+                .map(Region::get_id)
+                .collect::<BTreeSet<_>>();
+            self.region_activity
+                .retain(|id, _| top_region_ids.contains(id))
+        }
         callback(top_regions)
     }
 
