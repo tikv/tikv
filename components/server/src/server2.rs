@@ -1515,8 +1515,10 @@ impl<CER: ConfiguredRaftEngine> TikvServer<CER> {
             router.store_router().clone(),
             self.core.config.coprocessor.clone(),
         );
-        let region_info_accessor =
-            RegionInfoAccessor::new(&mut coprocessor_host, false /* TODO: change this */);
+        let region_info_accessor = RegionInfoAccessor::new(
+            &mut coprocessor_host,
+            Arc::new(|| false), // Not applicable to v2.
+        );
 
         let cdc_worker = Box::new(LazyWorker::new("cdc"));
         let cdc_scheduler = cdc_worker.scheduler();

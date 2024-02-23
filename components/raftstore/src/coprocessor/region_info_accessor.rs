@@ -200,6 +200,7 @@ impl Display for RegionInfoQuery {
 #[derive(Clone)]
 struct RegionEventListener {
     scheduler: Scheduler<RegionInfoQuery>,
+    region_stats_manager_enabled_cb: RegionStatsManagerEnabledCb,
 }
 
 impl Coprocessor for RegionEventListener {}
@@ -243,6 +244,10 @@ impl RoleObserver for RegionEventListener {
 
 impl RegionHeartbeatObserver for RegionEventListener {
     fn on_region_heartbeat(&self, context: &mut ObserverContext<'_>, region_stat: &RegionStat) {
+        if !(self.region_stats_manager_enabled_cb)() {
+            // Region stats manager is disabled, return early.
+            return;
+        }
         let region = context.region().clone();
         let region_stat = region_stat.clone();
         let event = RaftStoreEvent::UpdateRegionActivity {
@@ -260,18 +265,20 @@ impl RegionHeartbeatObserver for RegionEventListener {
 fn register_region_event_listener(
     host: &mut CoprocessorHost<impl KvEngine>,
     scheduler: Scheduler<RegionInfoQuery>,
-    enable_region_stats_manager: bool,
+    region_stats_manager_enabled_cb: RegionStatsManagerEnabledCb,
 ) {
-    let listener = RegionEventListener { scheduler };
+    let listener = RegionEventListener {
+        scheduler,
+        region_stats_manager_enabled_cb,
+    };
 
     host.registry
         .register_role_observer(1, BoxRoleObserver::new(listener.clone()));
     host.registry
         .register_region_change_observer(1, BoxRegionChangeObserver::new(listener.clone()));
-    if enable_region_stats_manager {
-        host.registry
-            .register_region_heartbeat_observer(1, BoxRegionHeartbeatObserver::new(listener))
-    }
+
+    host.registry
+        .register_region_heartbeat_observer(1, BoxRegionHeartbeatObserver::new(listener))
 }
 
 /// `RegionCollector` is the place where we hold all region information we
@@ -690,6 +697,8 @@ impl RunnableWithTimer for RegionCollector {
     }
 }
 
+pub type RegionStatsManagerEnabledCb = Arc<dyn Fn() -> bool + Send + Sync>;
+
 /// `RegionInfoAccessor` keeps all region information separately from raftstore
 /// itself.
 #[derive(Clone)]
@@ -715,7 +724,7 @@ impl RegionInfoAccessor {
     /// contents are shared.
     pub fn new(
         host: &mut CoprocessorHost<impl KvEngine>,
-        enable_region_stats_manager: bool,
+        region_stats_manager_enabled_cb: RegionStatsManagerEnabledCb,
     ) -> Self {
         let region_leaders = Arc::new(RwLock::new(HashSet::default()));
         let worker = WorkerBuilder::new("region-collector-worker").create();
@@ -723,7 +732,7 @@ impl RegionInfoAccessor {
             "region-collector-worker",
             RegionCollector::new(region_leaders.clone()),
         );
-        register_region_event_listener(host, scheduler.clone(), enable_region_stats_manager);
+        register_region_event_listener(host, scheduler.clone(), region_stats_manager_enabled_cb);
 
         Self {
             worker,

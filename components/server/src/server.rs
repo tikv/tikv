@@ -411,12 +411,19 @@ where
         ));
 
         // Region stats manager collects region heartbeat for use by in-memory engine.
-        let enable_region_stats_manager =
-            cfg!(feature = "memory-engine") && config.region_cache_memory_limit != ReadableSize(0);
+        let region_stats_manager_enabled_cb: Arc<dyn Fn() -> bool + Send + Sync> =
+            if cfg!(feature = "memory-engine") {
+                let cfg_controller_clone = cfg_controller.clone();
+                Arc::new(move || {
+                    cfg_controller_clone.get_current().region_cache_memory_limit != ReadableSize(0)
+                })
+            } else {
+                Arc::new(|| false)
+            };
 
         let region_info_accessor = RegionInfoAccessor::new(
             coprocessor_host.as_mut().unwrap(),
-            enable_region_stats_manager,
+            region_stats_manager_enabled_cb,
         );
 
         // Initialize concurrency manager

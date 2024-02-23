@@ -1,6 +1,10 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{sync::mpsc::channel, thread, time::Duration};
+use std::{
+    sync::{mpsc::channel, Arc},
+    thread,
+    time::Duration,
+};
 
 use collections::HashMap;
 use engine_rocks::RocksEngine;
@@ -71,7 +75,7 @@ fn test_region_collection_seek_region() {
         .sim
         .wl()
         .post_create_coprocessor_host(Box::new(move |id, host| {
-            let p = RegionInfoAccessor::new(host, false);
+            let p = RegionInfoAccessor::new(host, Arc::new(|| false));
             tx.send((id, p)).unwrap()
         }));
 
@@ -145,7 +149,7 @@ fn test_region_collection_get_regions_in_range() {
         .sim
         .wl()
         .post_create_coprocessor_host(Box::new(move |id, host| {
-            let p = RegionInfoAccessor::new(host, false);
+            let p = RegionInfoAccessor::new(host, Arc::new(|| false));
             tx.send((id, p)).unwrap()
         }));
 
@@ -190,7 +194,7 @@ fn test_region_collection_get_top_regions() {
         .sim
         .wl()
         .post_create_coprocessor_host(Box::new(move |id, host| {
-            let p = RegionInfoAccessor::new(host, true);
+            let p = RegionInfoAccessor::new(host, Arc::new(|| true));
             tx.send((id, p)).unwrap()
         }));
     cluster.run();
@@ -245,7 +249,7 @@ fn test_region_collection_find_region_by_key() {
         .sim
         .wl()
         .post_create_coprocessor_host(Box::new(move |id, host| {
-            let p = RegionInfoAccessor::new(host, false);
+            let p = RegionInfoAccessor::new(host, Arc::new(|| false));
             tx.send((id, p)).unwrap()
         }));
 

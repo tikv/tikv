@@ -73,7 +73,7 @@ use tikv::{
     },
 };
 use tikv_util::{
-    config::VersionTrack,
+    config::{ReadableSize, VersionTrack},
     quota_limiter::QuotaLimiter,
     sys::thread::ThreadBuildWrapper,
     time::ThreadReadId,
@@ -295,9 +295,15 @@ impl<EK: KvEngineWithRocks> ServerCluster<EK> {
         );
 
         // Create coprocessor.
+        let enable_region_stats_mgr_cb: Arc<dyn Fn() -> bool + Send + Sync> =
+            if cfg.region_cache_memory_limit != ReadableSize(0) {
+                Arc::new(|| true)
+            } else {
+                Arc::new(|| false)
+            };
         let mut coprocessor_host = CoprocessorHost::new(router.clone(), cfg.coprocessor.clone());
         let region_info_accessor =
-            RegionInfoAccessor::new(&mut coprocessor_host, false /* TODO: change this */);
+            RegionInfoAccessor::new(&mut coprocessor_host, enable_region_stats_mgr_cb);
 
         let raft_router = ServerRaftStoreRouter::new(router.clone(), local_reader);
         let sim_router = SimulateTransport::new(raft_router.clone());
