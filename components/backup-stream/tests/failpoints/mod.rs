@@ -163,6 +163,7 @@ mod all {
     }
     #[test]
     fn failed_during_refresh_region() {
+        test_util::init_log_for_test();
         defer! {
             fail::remove("get_last_checkpoint_of")
         }
@@ -180,6 +181,8 @@ mod all {
 
         suite.must_split(b"SOLE");
         let keys2 = run_async_test(suite.write_records(256, 128, 1));
+        // Let's make sure the retry has been triggered...
+        std::thread::sleep(Duration::from_secs(2));
         suite.force_flush_files("fail_to_refresh_region");
         suite.wait_for_flush();
         suite.check_for_write_records(
