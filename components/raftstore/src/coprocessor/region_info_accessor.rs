@@ -290,6 +290,9 @@ pub struct RegionCollector {
     regions: RegionsMap,
     // BTreeMap: data_end_key -> region_id
     region_ranges: RegionRangesMap,
+    // HashMap: region_id -> RegionActivity
+    // TODO: add BinaryHeap to keep track of top N regions. Wrap the HashMap and BinaryHeap
+    // together in a struct exposing add, delete, and get_top_regions methods.
     region_activity: RegionActivityMap,
     region_leaders: Arc<RwLock<HashSet<u64>>>,
 }
