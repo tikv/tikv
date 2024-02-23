@@ -161,6 +161,7 @@ impl RangeCacheWriteBatchEntry {
         range_manager.contains(&self.key)
     }
 
+    // keys will be inserted in `keys_to_cache` if they are to cached.
     #[inline]
     pub fn maybe_cached(
         &self,

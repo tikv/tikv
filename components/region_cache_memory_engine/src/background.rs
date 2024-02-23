@@ -323,7 +323,9 @@ impl Runnable for BackgroundRunner {
                                     iter.next().unwrap();
                                 }
                             }
-                            Err(e) => {}
+                            Err(e) => {
+                                error!("creating rocksdb iterator failed"; "cf" => cf, "err" => %e);
+                            }
                         }
                     }
                     self.on_snapshot_loaded(range).unwrap();
