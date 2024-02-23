@@ -163,7 +163,6 @@ mod all {
     }
     #[test]
     fn failed_during_refresh_region() {
-        test_util::init_log_for_test();
         defer! {
             fail::remove("get_last_checkpoint_of")
         }
