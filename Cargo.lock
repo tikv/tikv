@@ -1259,7 +1259,7 @@ dependencies = [
  "crossbeam-utils",
  "lazy_static",
  "memoffset 0.6.4",
- "scopeguard",
+ "scopeguard 1.1.0",
 ]
 
 [[package]]
@@ -1281,7 +1281,7 @@ dependencies = [
  "cfg-if 1.0.0",
  "crossbeam-epoch",
  "crossbeam-utils",
- "scopeguard",
+ "scopeguard 1.1.0",
 ]
 
 [[package]]
@@ -2985,7 +2985,7 @@ version = "0.4.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "88943dd7ef4a2e5a4bfa2753aaab3013e34ce2533d1996fb18ef591e315e2b3b"
 dependencies = [
- "scopeguard",
+ "scopeguard 1.1.0",
 ]
 
 [[package]]
@@ -4187,7 +4187,7 @@ dependencies = [
  "protobuf",
  "rayon",
  "rhai",
- "scopeguard",
+ "scopeguard 1.1.0",
  "serde",
  "serde_repr",
  "strum 0.25.0",
@@ -4596,10 +4596,13 @@ dependencies = [
  "bytes",
  "collections",
  "crossbeam",
+ "crossbeam-epoch",
+ "crossbeam-utils",
  "engine_rocks",
  "engine_traits",
  "fail",
  "log_wrappers",
+ "scopeguard 0.3.3",
  "skiplist-rs",
  "slog",
  "slog-global",
@@ -5040,6 +5043,12 @@ dependencies = [
  "lazy_static",
  "winapi 0.3.9",
 ]
+
+[[package]]
+name = "scopeguard"
+version = "0.3.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "94258f53601af11e6a49f722422f6e3425c52b06245a5cf9bc09908b174f5e27"
 
 [[package]]
 name = "scopeguard"

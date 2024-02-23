@@ -9,6 +9,9 @@ license = "Apache-2.0"
 testexport = []
 
 [dependencies]
+crossbeam-epoch = "0.9"
+crossbeam-utils = "0.8"
+scopeguard = {version = "0.3.0", default-features = false}
 engine_traits = { workspace = true }
 collections = { workspace = true }
 skiplist-rs = { git = "https://github.com/tikv/skiplist-rs.git", branch = "main" }
