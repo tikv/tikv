@@ -242,7 +242,7 @@ impl Node {
     /// Decrements the reference count of a node, destroying it if the count
     /// becomes zero.
     #[inline]
-    unsafe fn decrement<M: MemoryLimiter>(&self, arena: Arena<M>) {
+    unsafe fn decrement<M: MemoryLimiter>(&self, arena: Arena<M>, guard: &Guard) {
         fail::fail_point!("on_decrement");
         let current_ref = self
             .refs_and_height
@@ -250,14 +250,15 @@ impl Node {
             >> HEIGHT_BITS;
         if current_ref == 1 {
             fence(Ordering::Acquire);
-            Self::finalize(self, &arena);
+            let ptr = self as *const Self;
+            guard.defer_unchecked(move || Self::finalize(ptr, arena));
             fail::fail_point!("on_finalize_scheduled");
         }
     }
 
     /// Drops the key and value of a node, then deallocates it.
     #[cold]
-    unsafe fn finalize<M: MemoryLimiter>(ptr: *const Self, arena: &Arena<M>) {
+    unsafe fn finalize<M: MemoryLimiter>(ptr: *const Self, arena: Arena<M>) {
         let ptr = ptr as *mut Self;
         arena.free(ptr);
     }
@@ -393,7 +394,7 @@ impl<C: KeyComparator, M: MemoryLimiter> Skiplist<C, M> {
             guard,
         ) {
             Ok(_) => {
-                curr.decrement(self.inner.arena.clone());
+                curr.decrement(self.inner.arena.clone(), guard);
                 Some(succ.with_tag(0))
             }
             Err(_) => None,
@@ -591,7 +592,7 @@ impl<C: KeyComparator, M: MemoryLimiter> Skiplist<C, M> {
                             .is_ok()
                         {
                             // Success! Decrement the reference count.
-                            n.decrement(self.inner.arena.clone());
+                            n.decrement(self.inner.arena.clone(), guard);
                         } else {
                             self.search_bound(Bound::Included(key), false, guard);
                             break;
@@ -651,7 +652,7 @@ impl<C: KeyComparator, M: MemoryLimiter> Skiplist<C, M> {
                 {
                     // Create a guard that destroys the new node in case search panics.
                     let sg = scopeguard::guard((), |_| {
-                        Node::finalize(node.as_raw(), &self.inner.arena.clone())
+                        Node::finalize(node.as_raw(), self.inner.arena.clone())
                     });
                     search = self.search_position(&n.key, guard);
                     mem::forget(sg);
@@ -843,7 +844,7 @@ impl<M: MemoryLimiter> Drop for SkiplistInner<M> {
                     .as_ref();
 
                 // Deallocate every node.
-                Node::finalize(n, &self.arena);
+                Node::finalize(n, self.arena.clone());
 
                 node = next;
             }
@@ -874,7 +875,8 @@ impl<M: MemoryLimiter> Debug for Entry<M> {
 
 impl<M: MemoryLimiter> Drop for Entry<M> {
     fn drop(&mut self) {
-        unsafe { (*self.node).decrement(self.arena.clone()) }
+        let guard = &pin();
+        unsafe { (*self.node).decrement(self.arena.clone(), guard) }
     }
 }
 
@@ -1007,6 +1009,7 @@ fn below_upper_bound<C: KeyComparator>(c: &C, bound: &Bound<&[u8]>, key: &[u8]) 
 
 #[cfg(test)]
 pub(crate) mod tests {
+    use core::slice::SlicePattern;
     use std::thread;
 
     use super::*;
@@ -1290,41 +1293,41 @@ pub(crate) mod tests {
                 ByteWiseComparator {},
                 Arc::default(),
             );
-            let n = 50000;
+            let n = 100000;
             for i in (0..n).step_by(3) {
-                let k = format!("k{:04}", i).into_bytes();
-                let v = format!("v{:04}", i).into_bytes();
+                let k = format!("k{:06}", i).into_bytes();
+                let v = format!("v{:06}", i).into_bytes();
                 sl.put(k, v);
             }
             let sl1 = sl.clone();
             let h1 = thread::spawn(move || {
                 for i in (1..n).step_by(3) {
-                    let k = format!("k{:04}", i).into_bytes();
-                    let v = format!("v{:04}", i).into_bytes();
+                    let k = format!("k{:06}", i).into_bytes();
+                    let v = format!("v{:06}", i).into_bytes();
                     sl1.put(k, v);
                 }
             });
-            let sl1 = sl.clone();
+            let sl2 = sl.clone();
             let h2 = thread::spawn(move || {
                 for i in (0..n).step_by(3) {
-                    let k = format!("k{:04}", i);
-                    sl1.remove(k.as_bytes());
+                    let k = format!("k{:06}", i);
+                    sl2.remove(k.as_bytes());
                 }
             });
 
-            let sl1 = sl.clone();
+            let sl3 = sl.clone();
             let h3 = thread::spawn(move || {
                 for i in (0..n).step_by(3) {
-                    let k = format!("k{:04}", i);
-                    sl1.remove(k.as_bytes());
+                    let k = format!("k{:06}", i);
+                    sl3.remove(k.as_bytes());
                 }
             });
 
-            let sl1 = sl.clone();
+            let sl4 = sl.clone();
             let h4 = thread::spawn(move || {
                 for i in (2..n).step_by(3) {
-                    let k = format!("k{:04}", i);
-                    sl1.remove(k.as_bytes());
+                    let k = format!("k{:06}", i);
+                    sl4.remove(k.as_bytes());
                 }
             });
 
@@ -1333,10 +1336,14 @@ pub(crate) mod tests {
             h3.join().unwrap();
             h4.join().unwrap();
 
+            let mut iter = sl.iter();
+            iter.seek_to_first();
             for i in (1..n).step_by(3) {
-                let k = format!("k{:04}", i);
-                let v = format!("v{:04}", i);
-                assert_eq!(sl.get(k.as_bytes()).unwrap().value(), v.as_bytes());
+                let expect_k = format!("k{:06}", i);
+                let v = format!("v{:06}", i);
+                let k = iter.key();
+                assert_eq!(k.as_slice(), expect_k.as_bytes());
+                iter.next();
             }
         }
     }
