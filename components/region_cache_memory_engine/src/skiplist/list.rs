@@ -161,7 +161,7 @@ impl Node {
     /// Returns the size of a node with tower of given `height` measured in
     /// `u64`s.
     fn node_size(height: usize) -> usize {
-        assert!(1 <= height && height <= MAX_HEIGHT);
+        assert!((1..=MAX_HEIGHT).contains(&height));
         assert!(mem::align_of::<Self>() <= mem::align_of::<u64>());
 
         let size_base = mem::size_of::<Self>();
@@ -620,7 +620,7 @@ impl<C: KeyComparator, M: MemoryLimiter> Skiplist<C, M> {
             // First try searching for the key.
             // Note that the `Ord` implementation for `K` may panic during the search.
             search = self.search_position(&key, guard);
-            if let Some(_) = search.found {
+            if search.found.is_some() {
                 // panic!("Overwrite is not supported, {:?}", (*r).key);
                 return false;
             }
@@ -658,7 +658,7 @@ impl<C: KeyComparator, M: MemoryLimiter> Skiplist<C, M> {
                     mem::forget(sg);
                 }
 
-                if let Some(_) = search.found {
+                if search.found.is_some() {
                     // panic!("Overwrite is not supported, {:?}", (*r).key);
                     return false;
                 }
@@ -705,7 +705,7 @@ impl<C: KeyComparator, M: MemoryLimiter> Skiplist<C, M> {
                     }
 
                     // Installation failed. Decrement the reference count.
-                    (*n).refs_and_height
+                    n.refs_and_height
                         .fetch_sub(1 << HEIGHT_BITS, Ordering::Relaxed);
 
                     // We don't have the most up-to-date search results. Repeat the search.
@@ -738,7 +738,7 @@ impl<C: KeyComparator, M: MemoryLimiter> Skiplist<C, M> {
         true
     }
 
-    pub fn get<'a>(&self, key: &[u8]) -> Option<Entry<M>> {
+    pub fn get(&self, key: &[u8]) -> Option<Entry<M>> {
         let guard = &crossbeam_epoch::pin();
         self.check_guard(guard);
         if let Some(n) = unsafe { self.search_bound(Bound::Included(key), false, guard) } {
@@ -751,11 +751,11 @@ impl<C: KeyComparator, M: MemoryLimiter> Skiplist<C, M> {
     }
 
     // Search the first node that we acquire successfully.
-    unsafe fn search_bound_for_node<'a>(
+    unsafe fn search_bound_for_node(
         &self,
         bound: Bound<&[u8]>,
         upper_bound: bool,
-        guard: &'a Guard,
+        guard: &Guard,
     ) -> Option<Entry<M>> {
         loop {
             let node = self.search_bound(bound, upper_bound, guard)?;
@@ -765,11 +765,11 @@ impl<C: KeyComparator, M: MemoryLimiter> Skiplist<C, M> {
         }
     }
 
-    fn next_node<'a>(
+    fn next_node(
         &self,
         pred: &Tower,
         lower_bound: Bound<&[u8]>,
-        guard: &'a Guard,
+        guard: &Guard,
     ) -> Option<Entry<M>> {
         unsafe {
             // Load the level 0 successor of the current node.
@@ -808,7 +808,7 @@ impl<C: KeyComparator, M: MemoryLimiter> Skiplist<C, M> {
         }
     }
 
-    pub fn iter<'a>(&self) -> IterRef<Skiplist<C, M>, C, M> {
+    pub fn iter(&self) -> IterRef<Skiplist<C, M>, C, M> {
         IterRef {
             list: self.clone(),
             cursor: None,
@@ -1038,11 +1038,7 @@ pub(crate) mod tests {
         sl.remove(&k)
     }
 
-    fn sl_get_assert<'a>(
-        sl: &'a Skiplist<ByteWiseComparator, RecorderLimiter>,
-        k: i32,
-        v: Option<i32>,
-    ) {
+    fn sl_get_assert(sl: &Skiplist<ByteWiseComparator, RecorderLimiter>, k: i32, v: Option<i32>) {
         let k = construct_key(k);
         let res = sl.get(&k);
         if let Some(v) = v {
