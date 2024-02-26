@@ -277,10 +277,14 @@ where
             SecurityManager::new(&config.security)
                 .unwrap_or_else(|e| fatal!("failed to create security manager: {}", e)),
         );
+        let props = tikv_util::thread_group::current_properties();
         let env = Arc::new(
             EnvBuilder::new()
                 .cq_count(config.server.grpc_concurrency)
                 .name_prefix(thd_name!(GRPC_THREAD_PREFIX))
+                .after_start(move || {
+                    tikv_util::thread_group::set_properties(props.clone());
+                })
                 .build(),
         );
         let pd_client = TikvServerCore::connect_to_pd_cluster(
