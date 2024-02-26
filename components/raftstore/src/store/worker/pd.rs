@@ -1114,6 +1114,8 @@ where
             .region_keys_read
             .observe(region_stat.read_keys as f64);
 
+        self.coprocessor_host
+            .on_region_heartbeat(&region, &region_stat);
         let resp = self.pd_client.region_heartbeat(
             term,
             region.clone(),
