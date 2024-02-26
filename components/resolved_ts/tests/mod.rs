@@ -8,7 +8,7 @@ use engine_rocks::RocksEngine;
 use futures::{executor::block_on, stream, SinkExt};
 use grpcio::{ChannelBuilder, ClientUnaryReceiver, Environment, Result, WriteFlags};
 use kvproto::{
-    import_sstpb::{IngestRequest, SstMeta, UploadRequest, UploadResponse},
+    import_sstpb::{IngestRequest, SstMeta, UploadRequest, UploadResponse, LeaseRequest, AcquireLease},
     import_sstpb_grpc::ImportSstClient,
     kvrpcpb::{PrewriteRequestPessimisticAction::*, *},
     tikvpb::TikvClient,
@@ -422,6 +422,32 @@ impl TestSuite {
             sleep_ms(100)
         }
         panic!("fail to get greater ts after 50 trys");
+    }
+
+    pub fn must_acquire_sst_lease(&mut self,
+        region_id: u64,
+        meta: &SstMeta,
+        ttl: Duration,
+    ) {
+        let import = self.get_import_client(region_id);
+        let mut acquire = AcquireLease::default();
+        acquire.mut_lease().mut_region().set_id(region_id);
+        acquire.mut_lease().set_uuid(meta.get_uuid().into());
+        acquire.set_ttl(ttl.as_secs());
+        let mut req = LeaseRequest::default();
+        req.mut_acquire().push(acquire);
+
+        let resp = import.lease(&req).unwrap();
+
+        let acquired_lease = &resp.get_acquired()[0];
+        assert_eq!(
+            region_id,
+            acquired_lease.get_region().get_id(),
+        );
+        assert_eq!(
+            meta.get_uuid(),
+            acquired_lease.get_uuid(),
+        );
     }
 
     pub fn upload_sst(

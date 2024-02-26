@@ -69,6 +69,7 @@ fn test_resolved_ts_basic() {
     meta.set_region_id(r1.id);
     meta.set_region_epoch(sst_epoch);
 
+    suite.must_acquire_sst_lease(r1.id, &meta, Duration::MAX);
     suite.upload_sst(r1.id, &meta, &data).unwrap();
 
     let tracked_index_before = suite.region_tracked_index(r1.id);

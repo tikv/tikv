@@ -280,6 +280,10 @@ impl<E: KvEngine> SstImporter<E> {
         {
             Ok(())
         } else {
+            info!("ingest lease expired";
+                "region_id" => region_id,
+                "lease_uuid" => ?uuid,
+            );
             Err(Error::LeaseExpired)
         }
     }

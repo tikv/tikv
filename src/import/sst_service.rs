@@ -95,6 +95,7 @@ const WRITER_GC_INTERVAL: Duration = Duration::from_secs(300);
 /// This may save us from some client sending insane value to the server.
 const SUSPEND_REQUEST_MAX_SECS: u64 = // 6h
     6 * 60 * 60;
+const SST_LEASE_DURATION_MAX_SECS: u64 = 6 * 60 * 60;
 
 fn transfer_error(err: storage::Error) -> ImportPbError {
     let mut e = ImportPbError::default();
@@ -184,8 +185,8 @@ impl RequestCollector {
     }
 
     fn accept_kv(&mut self, cf: &str, is_delete: bool, k: Vec<u8>, v: Vec<u8>) {
-        debug!("Accepting KV."; "cf" => %cf, 
-            "key" => %log_wrappers::Value::key(&k), 
+        debug!("Accepting KV."; "cf" => %cf,
+            "key" => %log_wrappers::Value::key(&k),
             "value" => %log_wrappers::Value::key(&v));
         // Need to skip the empty key/value that could break the transaction or cause
         // data corruption. see details at https://github.com/pingcap/tiflow/issues/5468.
@@ -765,6 +766,17 @@ macro_rules! impl_write {
                         }
                         _ => return (Err(Error::InvalidChunk), Some(rx)),
                     };
+
+                    // Make sure it has a valid lease.
+                    if let Err(e) = import.check_lease(meta.get_region_id(), meta.get_uuid()) {
+                        let mut resp = $resp_ty::default();
+                        resp.mut_error().set_message(e.to_string());
+                        let mut errorpb = errorpb::Error::default();
+                        errorpb.set_message(e.to_string());
+                        resp.mut_error().set_store_error(errorpb);
+                        return (Ok(resp), Some(rx));
+                    }
+
                     // wait the region epoch on this TiKV to catch up with the epoch
                     // in request, which comes from PD and represents the majority
                     // peers' status.
@@ -935,6 +947,57 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
         ctx.spawn(task);
     }
 
+    fn lease(&mut self, _ctx: RpcContext<'_>, req: LeaseRequest, sink: UnarySink<LeaseResponse>) {
+        let label = "lease";
+        let timer = Instant::now_coarse();
+        let import = self.importer.clone();
+        let now = timer;
+        let acquire_lease_task = async move {
+            let mut resp = LeaseResponse::default();
+
+            // Acquire leases.
+            for acquire_lease in req.get_acquire() {
+                let region_id = acquire_lease.get_lease().get_region().get_id();
+                let uuid = acquire_lease.get_lease().get_uuid();
+                let lease_secs = std::cmp::min(acquire_lease.get_ttl(), SST_LEASE_DURATION_MAX_SECS);
+                let deadline = now + Duration::from_secs(lease_secs);
+                match import.acquire_lease(region_id, uuid, deadline) {
+                    Ok(_) => {
+                        resp.mut_acquired().push(acquire_lease.get_lease().clone());
+                    }
+                    Err(e) => {
+                        warn!("acquire lease failed";
+                            "region_id" => region_id,
+                            "err" => %e);
+                        continue;
+                    }
+                };
+            }
+
+            // Release leases.
+            for release_lease in req.get_release() {
+                let region_id = release_lease.get_lease().get_region().get_id();
+                let uuid = release_lease.get_lease().get_uuid();
+                match import.expire_lease(region_id, uuid) {
+                    Ok(_) => {
+                        resp.mut_released().push(release_lease.get_lease().clone());
+                    }
+                    Err(e) => {
+                        warn!("release lease failed";
+                            "region_id" => region_id,
+                            "err" => %e);
+                        continue;
+                    }
+                };
+            }
+
+            // TODO should we set the timestamp?
+            // resp.set_timestamp();
+            crate::send_rpc_response!(Ok(resp), sink, label, timer);
+        };
+        self.threads.spawn(acquire_lease_task);
+    }
+
     /// Receive SST from client and save the file for later ingesting.
     fn upload(
         &mut self,
@@ -958,6 +1021,15 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
                     Some(ref chunk) if chunk.has_meta() => chunk.get_meta(),
                     _ => return Err(Error::InvalidChunk),
                 };
+                // Make sure it has a valid lease.
+                if let Err(e) = import.check_lease(meta.get_region_id(), meta.get_uuid()) {
+                    let mut resp = UploadResponse::default();
+                    let mut errorpb = errorpb::Error::default();
+                    errorpb.set_message(e.to_string());
+                    resp.set_error(errorpb);
+                    return Ok(resp);
+                }
+
                 let file = import.create(meta)?;
                 let mut file = rx
                     .try_fold(file, |mut file, chunk| async move {
@@ -1073,6 +1145,17 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
             sst_importer::metrics::IMPORTER_DOWNLOAD_DURATION
                 .with_label_values(&["queue"])
                 .observe(start.saturating_elapsed().as_secs_f64());
+
+            // Make sure it has a valid lease.
+            let meta = req.get_sst();
+            if let Err(e) = importer.check_lease(meta.get_region_id(), meta.get_uuid()) {
+                let mut resp = DownloadResponse::default();
+                resp.mut_error().set_message(e.to_string());
+                let mut errorpb = errorpb::Error::default();
+                errorpb.set_message(e.to_string());
+                resp.mut_error().set_store_error(errorpb);
+                return crate::send_rpc_response!(Ok(resp), sink, label, timer);
+            }
 
             // FIXME: download() should be an async fn, to allow BR to cancel
             // a download task.
@@ -1411,7 +1494,7 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
             ctx.spawn(async move {
                 send_rpc_response!(Err(Error::Io(
                     std::io::Error::new(std::io::ErrorKind::InvalidInput,
-                        format!("you are going to suspend the import RPCs too long. (for {} seconds, max acceptable duration is {} seconds)", 
+                        format!("you are going to suspend the import RPCs too long. (for {} seconds, max acceptable duration is {} seconds)",
                         req.get_duration_in_secs(), SUSPEND_REQUEST_MAX_SECS)))), sink, label, timer);
             });
             return;
