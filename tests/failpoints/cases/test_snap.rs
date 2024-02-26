@@ -914,3 +914,41 @@ fn test_retry_corrupted_snapshot() {
 
     must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
 }
+
+#[test]
+fn test_send_snapshot_timeout() {
+    let mut cluster = new_server_cluster(1, 5);
+    cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(20);
+    cluster.cfg.raft_store.raft_log_gc_count_limit = Some(8);
+    cluster.cfg.raft_store.merge_max_log_gap = 3;
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+
+    cluster.run();
+    cluster.must_transfer_leader(1, new_peer(1, 1));
+    cluster.stop_node(4);
+    cluster.stop_node(5);
+    (0..10).for_each(|_| cluster.must_put(b"k2", b"v2"));
+    // Sleep for a while to ensure all logs are compacted.
+    thread::sleep(Duration::from_millis(100));
+
+    fail::cfg("snap_send_duration_timeout", "return(100)").unwrap();
+
+    // Let store 4 inform leader to generate a snapshot.
+    cluster.run_node(4).unwrap();
+    must_get_equal(&cluster.get_engine(4), b"k2", b"v2");
+
+    // add a delay to let send snapshot fail due to timeout.
+    fail::cfg("snap_send_timer_delay", "return(1000)").unwrap();
+    cluster.run_node(5).unwrap();
+    thread::sleep(Duration::from_millis(150));
+    must_get_none(&cluster.get_engine(5), b"k2");
+
+    // only delay once, the snapshot should success after retry.
+    fail::cfg("snap_send_timer_delay", "1*return(1000)").unwrap();
+    thread::sleep(Duration::from_millis(500));
+    must_get_equal(&cluster.get_engine(5), b"k2", b"v2");
+
+    fail::remove("snap_send_timer_delay");
+    fail::remove("snap_send_duration_timeout");
+}
