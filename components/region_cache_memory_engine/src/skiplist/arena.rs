@@ -2,9 +2,11 @@
 
 use std::{alloc::Layout, ptr, sync::Arc};
 
-use crate::list::list::U_SIZE;
-
-use super::{list::{Node, ReclaimableNode}, memory_control::MemoryLimiter};
+use super::{
+    list::{Node, ReclaimableNode},
+    memory_control::MemoryLimiter,
+};
+use crate::skiplist::list::U_SIZE;
 
 #[derive(Clone)]
 pub struct Arena<M: MemoryLimiter> {

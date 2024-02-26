@@ -17,7 +17,7 @@ use engine_traits::{
     RangeCacheEngine, ReadOptions, Result, Snapshot, SnapshotMiscExt, CF_DEFAULT, CF_LOCK,
     CF_WRITE,
 };
-use skiplist_rs::{IterRef, Skiplist, MIB};
+use tikv_util::config::MIB;
 
 use crate::{
     background::BgWorkManager,
@@ -27,6 +27,7 @@ use crate::{
     },
     memory_limiter::GlobalMemoryLimiter,
     range_manager::RangeManager,
+    skiplist::{IterRef, Skiplist},
 };
 
 pub(crate) const EVICTION_KEY_BUFFER_LIMIT: usize = 5 * MIB as usize;
@@ -710,11 +711,11 @@ mod tests {
     use engine_traits::{
         CacheRange, IterOptions, Iterable, Iterator, Peekable, RangeCacheEngine, ReadOptions,
     };
-    use skiplist_rs::Skiplist;
 
     use super::{cf_to_id, GlobalMemoryLimiter, RangeCacheIterator, SkiplistEngine};
     use crate::{
         keys::{decode_key, encode_key, InternalKeyComparator, ValueType},
+        skiplist::Skiplist,
         RangeCacheMemoryEngine,
     };
 
@@ -1741,6 +1742,20 @@ mod tests {
         });
     }
 
+    fn make_mem_free_execute() {
+        // For skiplist delete, the memory free is regsitered in the crossbeam_epoch
+        // and will be done lazily. Here, flush it and do some pins to make the
+        // memory free execute.
+        let guard = crossbeam_epoch::pin();
+        guard.flush();
+        drop(guard);
+        {
+            for i in 0..128 {
+                crossbeam_epoch::pin();
+            }
+        }
+    }
+
     #[test]
     fn test_evict_range_without_snapshot() {
         let mut engine = RangeCacheMemoryEngine::new(Arc::default(), Duration::from_secs(1));
@@ -1764,6 +1779,7 @@ mod tests {
         engine.evict_range(&evict_range);
         assert!(engine.snapshot(range.clone(), 10, 200).is_none());
         assert!(engine.snapshot(evict_range, 10, 200).is_none());
+        make_mem_free_execute();
 
         {
             let removed = engine.memory_limiter.removed.lock().unwrap();
@@ -1776,6 +1792,7 @@ mod tests {
 
         let r_left = CacheRange::new(construct_user_key(0), construct_user_key(10));
         let r_right = CacheRange::new(construct_user_key(20), construct_user_key(30));
+        let r_evicted = CacheRange::new(construct_user_key(10), construct_user_key(20));
         let snap_left = engine.snapshot(r_left, 10, 200).unwrap();
 
         let mut iter_opt = IterOptions::default();
@@ -1787,11 +1804,14 @@ mod tests {
         iter.seek_to_first().unwrap();
         verify_key_values(&mut iter, (0..10).step_by(1), 10..11, true, true);
 
+        assert!(engine.snapshot(r_evicted, 10, 200).is_none());
+
+        let snap_right = engine.snapshot(r_right, 10, 200).unwrap();
         let lower_bound = construct_user_key(20);
         let upper_bound = construct_user_key(30);
         iter_opt.set_upper_bound(&upper_bound, 0);
         iter_opt.set_lower_bound(&lower_bound, 0);
-        let mut iter = snap_left.iterator_opt("write", iter_opt).unwrap();
+        let mut iter = snap_right.iterator_opt("write", iter_opt).unwrap();
         iter.seek_to_first().unwrap();
         verify_key_values(&mut iter, (20..30).step_by(1), 10..11, true, true);
     }
@@ -1826,6 +1846,7 @@ mod tests {
         drop(s3);
         let range_left_eviction = CacheRange::new(construct_user_key(0), construct_user_key(5));
         engine.evict_range(&range_left_eviction);
+        make_mem_free_execute();
 
         {
             let removed = engine.memory_limiter.removed.lock().unwrap();
@@ -1833,6 +1854,7 @@ mod tests {
         }
 
         drop(s1);
+        make_mem_free_execute();
         {
             let removed = engine.memory_limiter.removed.lock().unwrap();
             for i in 10..20 {
@@ -1843,6 +1865,7 @@ mod tests {
         }
 
         drop(s2);
+        make_mem_free_execute();
         // s2 is dropped, so the range of `evict_range` is removed. The snapshot of s3
         // and s4 does not prevent it as they are not overlapped.
         {

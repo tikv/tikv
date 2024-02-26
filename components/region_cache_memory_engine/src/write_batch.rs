@@ -271,8 +271,8 @@ mod tests {
         wb.set_sequence_number(1).unwrap();
         assert_eq!(wb.write().unwrap(), 1);
         let sl = engine.core.read().unwrap().engine().data[cf_to_id(CF_DEFAULT)].clone();
-        let actual = sl.get(&encode_key(b"aaa", 1, ValueType::Value)).unwrap();
-        assert_eq!(&b"bbb"[..], actual)
+        let entry = sl.get(&encode_key(b"aaa", 1, ValueType::Value)).unwrap();
+        assert_eq!(&b"bbb"[..], entry.value())
     }
 
     #[test]
@@ -294,8 +294,8 @@ mod tests {
         wb.set_sequence_number(1).unwrap();
         assert_eq!(wb.write().unwrap(), 1);
         let sl = engine.core.read().unwrap().engine().data[cf_to_id(CF_DEFAULT)].clone();
-        let actual = sl.get(&encode_key(b"aaa", 1, ValueType::Value)).unwrap();
-        assert_eq!(&b"bbb"[..], actual);
+        let entry = sl.get(&encode_key(b"aaa", 1, ValueType::Value)).unwrap();
+        assert_eq!(&b"bbb"[..], entry.value());
         assert!(sl.get(&encode_key(b"ccc", 1, ValueType::Value)).is_none())
     }
 

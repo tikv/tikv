@@ -4603,7 +4603,6 @@ dependencies = [
  "fail",
  "log_wrappers",
  "scopeguard 0.3.3",
- "skiplist-rs",
  "slog",
  "slog-global",
  "tikv_util",
@@ -5393,18 +5392,6 @@ name = "siphasher"
 version = "0.3.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fa8f3741c7372e75519bd9346068370c9cdaabcc1f9599cbcf2a2719352286b7"
-
-[[package]]
-name = "skiplist-rs"
-version = "0.1.0"
-source = "git+https://github.com/tikv/skiplist-rs.git?branch=main#79280c29c3d309189fc39b2d8df48c67ccc998bf"
-dependencies = [
- "bytes",
- "rand 0.8.5",
- "slog",
- "tikv-jemalloc-ctl",
- "tikv-jemallocator",
-]
 
 [[package]]
 name = "slab"

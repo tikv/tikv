@@ -1013,7 +1013,7 @@ pub(crate) mod tests {
     use std::thread;
 
     use super::*;
-    use crate::list::{key::ByteWiseComparator, memory_control::RecorderLimiter};
+    use crate::skiplist::{key::ByteWiseComparator, memory_control::RecorderLimiter};
 
     fn construct_key(i: i32) -> Vec<u8> {
         format!("key-{:08}", i).into_bytes()
@@ -1174,6 +1174,8 @@ pub(crate) mod tests {
             assert_keys(&s, vec![5], guard);
             assert!(sl_remove(&s, 5));
             assert_keys(&s, vec![], guard);
+
+            drop(s);
         }
     }
 
@@ -1283,6 +1285,21 @@ pub(crate) mod tests {
             iter2.seek_for_prev(&k);
             assert_eq!(iter2.key(), &k);
             iter.prev()
+        }
+    }
+
+    #[test]
+    fn test_mem() {
+        let sl = Skiplist::<ByteWiseComparator, RecorderLimiter>::new(
+            ByteWiseComparator {},
+            Arc::default(),
+        );
+        let n = 100000000;
+        for i in 0..n {
+            let k = format!("k{:0200}", i).into_bytes();
+            let v = format!("v{:0200}", i).into_bytes();
+            sl.put(k.clone(), v);
+            sl.remove(&k);
         }
     }
 

@@ -9,7 +9,6 @@ use crossbeam::{
     sync::ShardedLock,
 };
 use engine_traits::{CacheRange, CF_DEFAULT, CF_WRITE};
-use skiplist_rs::Skiplist;
 use slog_global::{error, info, warn};
 use tikv_util::worker::{Runnable, Scheduler, Worker};
 use txn_types::{Key, TimeStamp, WriteRef, WriteType};
@@ -18,6 +17,7 @@ use crate::{
     engine::RangeCacheMemoryEngineCore,
     keys::{decode_key, encoding_for_filter, InternalKey, InternalKeyComparator},
     memory_limiter::GlobalMemoryLimiter,
+    skiplist::Skiplist,
 };
 
 /// Try to extract the key and `u64` timestamp from `encoded_key`.
@@ -357,8 +357,8 @@ impl Filter {
             // seek(both get and remove invovle seek). Maybe we can provide the API to
             // delete the mvcc keys with all sequence numbers.
             let default_key = encoding_for_filter(&self.mvcc_key_prefix, write.start_ts);
-            while let Some((key, val)) = self.default_cf_handle.get_with_key(&default_key) {
-                self.default_cf_handle.remove(key.as_slice());
+            while let Some(entry) = self.default_cf_handle.get(&default_key) {
+                self.default_cf_handle.remove(entry.key().as_slice());
             }
         }
         Ok(())
@@ -372,7 +372,6 @@ pub mod tests {
 
     use bytes::Bytes;
     use engine_traits::{CacheRange, RangeCacheEngine, CF_DEFAULT, CF_WRITE};
-    use skiplist_rs::Skiplist;
     use txn_types::{Key, TimeStamp, Write, WriteType};
 
     use super::Filter;
@@ -381,6 +380,7 @@ pub mod tests {
         engine::SkiplistEngine,
         keys::{encode_key, encoding_for_filter, InternalKeyComparator, ValueType},
         memory_limiter::GlobalMemoryLimiter,
+        skiplist::Skiplist,
         RangeCacheMemoryEngine,
     };
 

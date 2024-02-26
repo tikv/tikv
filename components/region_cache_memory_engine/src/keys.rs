@@ -4,9 +4,10 @@ use std::cmp;
 
 use bytes::{BufMut, Bytes, BytesMut};
 use engine_traits::CacheRange;
-use skiplist_rs::KeyComparator;
 use tikv_util::codec::number::NumberEncoder;
 use txn_types::{Key, TimeStamp};
+
+use crate::skiplist::KeyComparator;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ValueType {
@@ -180,10 +181,9 @@ impl KeyComparator for InternalKeyComparator {
 #[cfg(test)]
 mod tests {
     use bytes::BufMut;
-    use skiplist_rs::KeyComparator;
 
     use super::{InternalKeyComparator, ValueType};
-    use crate::keys::encode_key;
+    use crate::{keys::encode_key, skiplist::KeyComparator};
 
     fn construct_key(i: u64, mvcc: u64) -> Vec<u8> {
         let k = format!("k{:08}", i);
