@@ -8,18 +8,20 @@ use std::{
     time::Duration,
 };
 
-use engine_traits::{KvEngine, ManualCompactionOptions, RangeStats, CF_WRITE};
+use engine_traits::{KvEngine, ManualCompactionOptions, RangeStats, CF_LOCK, CF_WRITE};
 use fail::fail_point;
 use futures_util::compat::Future01CompatExt;
 use thiserror::Error;
 use tikv_util::{
-    box_try, debug, error, info, time::Instant, timer::GLOBAL_TIMER_HANDLE, warn, worker::Runnable,
+    box_try, config::Tracker, debug, error, info, time::Instant, timer::GLOBAL_TIMER_HANDLE, warn,
+    worker::Runnable,
 };
 use yatp::Remote;
 
 use super::metrics::{
     COMPACT_RANGE_CF, FULL_COMPACT, FULL_COMPACT_INCREMENTAL, FULL_COMPACT_PAUSE,
 };
+use crate::store::Config;
 
 type Key = Vec<u8>;
 
@@ -214,14 +216,27 @@ pub enum Error {
 pub struct Runner<E> {
     engine: E,
     remote: Remote<yatp::task::future::TaskCell>,
+    cfg_tracker: Tracker<Config>,
+    // Whether to skip the manual compaction of write and default comlumn family.
+    skip_compact: bool,
 }
 
 impl<E> Runner<E>
 where
     E: KvEngine,
 {
-    pub fn new(engine: E, remote: Remote<yatp::task::future::TaskCell>) -> Runner<E> {
-        Runner { engine, remote }
+    pub fn new(
+        engine: E,
+        remote: Remote<yatp::task::future::TaskCell>,
+        cfg_tracker: Tracker<Config>,
+        skip_compact: bool,
+    ) -> Runner<E> {
+        Runner {
+            engine,
+            remote,
+            cfg_tracker,
+            skip_compact,
+        }
     }
 
     /// Periodic full compaction.
@@ -369,6 +384,21 @@ where
                 bottommost_level_force,
             } => {
                 let cf = &cf_name;
+                if cf != CF_LOCK {
+                    // check whether the config changed for ignoring manual compaction
+                    if let Some(incoming) = self.cfg_tracker.any_new() {
+                        self.skip_compact = incoming.skip_manual_compaction_in_clean_up_worker;
+                    }
+                    if self.skip_compact {
+                        info!(
+                            "skip compact range";
+                            "range_start" => start_key.as_ref().map(|k| log_wrappers::Value::key(k)),
+                            "range_end" => end_key.as_ref().map(|k|log_wrappers::Value::key(k)),
+                            "cf" => cf_name,
+                        );
+                        return;
+                    }
+                }
                 if let Err(e) = self.compact_range_cf(
                     cf,
                     start_key.as_deref(),
@@ -498,7 +528,10 @@ mod tests {
         E: KvEngine,
     {
         let pool = YatpPoolBuilder::new(DefaultTicker::default()).build_future_pool();
-        (pool.clone(), Runner::new(engine, pool.remote().clone()))
+        (
+            pool.clone(),
+            Runner::new(engine, pool.remote().clone(), Tracker::default(), false),
+        )
     }
 
     #[test]
