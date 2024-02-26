@@ -4607,6 +4607,7 @@ dependencies = [
  "tempfile",
  "tikv_util",
  "txn_types",
+ "yatp",
 ]
 
 [[package]]

@@ -17,6 +17,7 @@ use tikv_util::{
     worker::{Runnable, ScheduleError, Scheduler, Worker},
 };
 use txn_types::{Key, TimeStamp, WriteRef, WriteType};
+use yatp::Remote;
 
 use crate::{
     engine::RangeCacheMemoryEngineCore,
@@ -158,23 +159,20 @@ impl Display for GcTask {
     }
 }
 
-pub struct BackgroundRunner {
-    engine_core: Arc<ShardedLock<RangeCacheMemoryEngineCore>>,
+#[derive(Clone)]
+struct BackgroundRunnerCore {
+    engine: Arc<ShardedLock<RangeCacheMemoryEngineCore>>,
 }
 
-impl BackgroundRunner {
-    pub fn new(engine_core: Arc<ShardedLock<RangeCacheMemoryEngineCore>>) -> Self {
-        Self { engine_core }
-    }
-
+impl BackgroundRunnerCore {
     fn ranges_for_gc(&self) -> BTreeSet<CacheRange> {
         let ranges: BTreeSet<CacheRange> = {
-            let core = self.engine_core.read().unwrap();
+            let core = self.engine.read().unwrap();
             core.range_manager().ranges().keys().cloned().collect()
         };
         let ranges_clone = ranges.clone();
         {
-            let mut core = self.engine_core.write().unwrap();
+            let mut core = self.engine.write().unwrap();
             core.mut_range_manager().set_ranges_in_gc(ranges_clone);
         }
         ranges
@@ -182,7 +180,7 @@ impl BackgroundRunner {
 
     fn gc_range(&self, range: &CacheRange, safe_point: u64) {
         let (skiplist_engine, safe_ts) = {
-            let mut core = self.engine_core.write().unwrap();
+            let mut core = self.engine.write().unwrap();
             let Some(range_meta) = core.mut_range_manager().mut_range_meta(range) else {
                 return;
             };
@@ -244,13 +242,13 @@ impl BackgroundRunner {
     }
 
     fn gc_finished(&mut self) {
-        let mut core = self.engine_core.write().unwrap();
+        let mut core = self.engine.write().unwrap();
         core.mut_range_manager().clear_ranges_in_gc();
     }
 
     // return the first range to load with RocksDB snapshot
     fn get_range_to_load(&self) -> Option<(CacheRange, Arc<RocksSnapshot>)> {
-        let core = self.engine_core.read().unwrap();
+        let core = self.engine.read().unwrap();
         core.range_manager()
             .ranges_loading_snapshot
             .front()
@@ -260,12 +258,12 @@ impl BackgroundRunner {
     fn on_snapshot_loaded(&mut self, range: CacheRange) -> engine_traits::Result<()> {
         fail::fail_point!("on_snapshot_loaded");
         let has_cache_batch = {
-            let core = self.engine_core.read().unwrap();
+            let core = self.engine.read().unwrap();
             core.has_cache_write_batch(&range)
         };
         if has_cache_batch {
             let (cache_batch, skiplist_engine) = {
-                let mut core = self.engine_core.write().unwrap();
+                let mut core = self.engine.write().unwrap();
                 (core.take_cache_write_batch(&range), core.engine().clone())
             };
             if let Some(cache_batch) = cache_batch {
@@ -276,7 +274,7 @@ impl BackgroundRunner {
         }
         fail::fail_point!("on_snapshot_loaded_finish_before_status_change");
         {
-            let mut core = self.engine_core.write().unwrap();
+            let mut core = self.engine.write().unwrap();
             let range_manager = core.mut_range_manager();
             assert_eq!(
                 range_manager.ranges_loading_snapshot.pop_front().unwrap().0,
@@ -288,48 +286,77 @@ impl BackgroundRunner {
     }
 }
 
+pub struct BackgroundRunner {
+    core: BackgroundRunnerCore,
+    range_load_remote: Remote<yatp::task::future::TaskCell>,
+    range_load_worker: Worker,
+}
+
+impl Drop for BackgroundRunner {
+    fn drop(&mut self) {
+        self.range_load_worker.stop();
+    }
+}
+
+impl BackgroundRunner {
+    pub fn new(engine: Arc<ShardedLock<RangeCacheMemoryEngineCore>>) -> Self {
+        let range_load_worker = Worker::new("background-range-load-worker");
+        let range_load_remote = range_load_worker.remote();
+        Self {
+            core: BackgroundRunnerCore { engine },
+            range_load_worker,
+            range_load_remote,
+        }
+    }
+}
+
 impl Runnable for BackgroundRunner {
     type Task = BackgroundTask;
 
     fn run(&mut self, task: Self::Task) {
         match task {
             BackgroundTask::GcTask(t) => {
-                let ranges = self.ranges_for_gc();
+                let ranges = self.core.ranges_for_gc();
                 for range in ranges {
-                    self.gc_range(&range, t.safe_point);
+                    self.core.gc_range(&range, t.safe_point);
                 }
-                self.gc_finished();
+                self.core.gc_finished();
             }
             BackgroundTask::LoadTask => {
-                let skiplist_engine = {
-                    let core = self.engine_core.read().unwrap();
-                    core.engine().clone()
-                };
-                while let Some((range, snap)) = self.get_range_to_load() {
-                    let iter_opt = IterOptions::new(
-                        Some(KeyBuilder::from_vec(range.start.clone(), 0, 0)),
-                        Some(KeyBuilder::from_vec(range.end.clone(), 0, 0)),
-                        false,
-                    );
-                    for &cf in DATA_CFS {
-                        let handle = skiplist_engine.cf_handle(cf);
-                        match snap.iterator_opt(cf, iter_opt.clone()) {
-                            Ok(mut iter) => {
-                                iter.seek_to_first().unwrap();
-                                while iter.valid().unwrap() {
-                                    // use 0 sequence number here as the kv is clearly visible
-                                    let encoded_key = encode_key(iter.key(), 0, ValueType::Value);
-                                    handle.put(encoded_key, iter.value().to_vec());
-                                    iter.next().unwrap();
+                let mut core = self.core.clone();
+                let f = async move {
+                    let skiplist_engine = {
+                        let core = core.engine.read().unwrap();
+                        core.engine().clone()
+                    };
+                    while let Some((range, snap)) = core.get_range_to_load() {
+                        let iter_opt = IterOptions::new(
+                            Some(KeyBuilder::from_vec(range.start.clone(), 0, 0)),
+                            Some(KeyBuilder::from_vec(range.end.clone(), 0, 0)),
+                            false,
+                        );
+                        for &cf in DATA_CFS {
+                            let handle = skiplist_engine.cf_handle(cf);
+                            match snap.iterator_opt(cf, iter_opt.clone()) {
+                                Ok(mut iter) => {
+                                    iter.seek_to_first().unwrap();
+                                    while iter.valid().unwrap() {
+                                        // use 0 sequence number here as the kv is clearly visible
+                                        let encoded_key =
+                                            encode_key(iter.key(), 0, ValueType::Value);
+                                        handle.put(encoded_key, iter.value().to_vec());
+                                        iter.next().unwrap();
+                                    }
+                                }
+                                Err(e) => {
+                                    error!("creating rocksdb iterator failed"; "cf" => cf, "err" => %e);
                                 }
                             }
-                            Err(e) => {
-                                error!("creating rocksdb iterator failed"; "cf" => cf, "err" => %e);
-                            }
                         }
+                        core.on_snapshot_loaded(range).unwrap();
                     }
-                    self.on_snapshot_loaded(range).unwrap();
-                }
+                };
+                self.range_load_remote.spawn(f);
             }
         }
     }
@@ -642,17 +669,17 @@ pub mod tests {
         let worker = BackgroundRunner::new(engine.core.clone());
 
         // gc will not remove the latest mvcc put below safe point
-        worker.gc_range(&range, 14);
+        worker.core.gc_range(&range, 14);
         assert_eq!(2, element_count(&default));
         assert_eq!(2, element_count(&write));
 
-        worker.gc_range(&range, 16);
+        worker.core.gc_range(&range, 16);
         assert_eq!(1, element_count(&default));
         assert_eq!(1, element_count(&write));
 
         // rollback will not make the first older version be filtered
         rollback_data(b"key1", 17, 16, &write);
-        worker.gc_range(&range, 17);
+        worker.core.gc_range(&range, 17);
         assert_eq!(1, element_count(&default));
         assert_eq!(1, element_count(&write));
         let key = encode_key(b"key1", TimeStamp::new(15));
@@ -663,7 +690,7 @@ pub mod tests {
         // unlike in WriteCompactionFilter, the latest mvcc delete below safe point will
         // be filtered
         delete_data(b"key1", 19, 18, &write);
-        worker.gc_range(&range, 19);
+        worker.core.gc_range(&range, 19);
         assert_eq!(0, element_count(&write));
         assert_eq!(0, element_count(&default));
     }
@@ -698,22 +725,22 @@ pub mod tests {
         let s3 = engine.snapshot(range.clone(), 20, u64::MAX);
 
         // nothing will be removed due to snapshot 5
-        worker.gc_range(&range, 30);
+        worker.core.gc_range(&range, 30);
         assert_eq!(6, element_count(&default));
         assert_eq!(6, element_count(&write));
 
         drop(s1);
-        worker.gc_range(&range, 30);
+        worker.core.gc_range(&range, 30);
         assert_eq!(5, element_count(&default));
         assert_eq!(5, element_count(&write));
 
         drop(s2);
-        worker.gc_range(&range, 30);
+        worker.core.gc_range(&range, 30);
         assert_eq!(4, element_count(&default));
         assert_eq!(4, element_count(&write));
 
         drop(s3);
-        worker.gc_range(&range, 30);
+        worker.core.gc_range(&range, 30);
         assert_eq!(3, element_count(&default));
         assert_eq!(3, element_count(&write));
     }
