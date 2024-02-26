@@ -1364,13 +1364,13 @@ impl Default for DbConfig {
             write_buffer_limit: None,
             write_buffer_stall_ratio: 0.0,
             write_buffer_flush_oldest_first: true,
+            track_and_verify_wals_in_manifest: true,
             paranoid_checks: None,
             defaultcf: DefaultCfConfig::default(),
             writecf: WriteCfConfig::default(),
             lockcf: LockCfConfig::default(),
             raftcf: RaftCfConfig::default(),
             titan: TitanDbConfig::default(),
-            track_and_verify_wals_in_manifest: false,
         }
     }
 }
