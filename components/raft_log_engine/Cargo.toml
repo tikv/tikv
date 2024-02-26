@@ -15,7 +15,7 @@ num_cpus = "1"
 online_config = { workspace = true }
 protobuf = "2"
 raft = { version = "0.7.0", default-features = false, features = ["protobuf-codec"] }
-raft-engine = { git = "https://github.com/tikv/raft-engine.git", features = ["swap"] }
+raft-engine = { git = "https://github.com/tikv/raft-engine.git", branch = "tikv-6.5", features = ["swap"] }
 serde = "1.0"
 serde_derive = "1.0"
 slog = { workspace = true }
