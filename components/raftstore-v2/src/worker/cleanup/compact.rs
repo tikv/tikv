@@ -5,11 +5,7 @@ use std::{
     fmt::{self, Display, Formatter},
 };
 
-<<<<<<< HEAD
-use engine_traits::{KvEngine, RangeStats, TabletRegistry, CF_WRITE};
-=======
-use engine_traits::{KvEngine, ManualCompactionOptions, TabletRegistry, CF_WRITE};
->>>>>>> a796cbe281 (raftstore: use force in compact_range triggered by no valid split key (#16493))
+use engine_traits::{KvEngine, ManualCompactionOptions, RangeStats, TabletRegistry, CF_WRITE};
 use fail::fail_point;
 use keys::{DATA_MAX_KEY, DATA_MIN_KEY};
 use slog::{debug, error, info, warn, Logger};

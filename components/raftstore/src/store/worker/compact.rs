@@ -126,87 +126,8 @@ impl<E> Runner<E>
 where
     E: KvEngine,
 {
-<<<<<<< HEAD
     pub fn new(engine: E) -> Runner<E> {
         Runner { engine }
-=======
-    pub fn new(engine: E, remote: Remote<yatp::task::future::TaskCell>) -> Runner<E> {
-        Runner { engine, remote }
-    }
-
-    /// Periodic full compaction.
-    /// Note: this does not accept a `&self` due to async lifetime issues.
-    ///
-    /// NOTE this is an experimental feature!
-    ///
-    /// TODO: Support stopping a full compaction.
-    async fn full_compact(
-        engine: E,
-        ranges: Vec<(Key, Key)>,
-        compact_controller: FullCompactController,
-    ) -> Result<(), Error> {
-        fail_point!("on_full_compact");
-        info!("full compaction started");
-        let mut ranges: VecDeque<_> = ranges
-            .iter()
-            .map(|(start, end)| (Some(start.as_slice()), Some(end.as_slice())))
-            .collect();
-        if ranges.is_empty() {
-            ranges.push_front((None, None))
-        }
-
-        let timer = Instant::now();
-        let full_compact_timer = FULL_COMPACT.start_coarse_timer();
-
-        while let Some(range) = ranges.pop_front() {
-            debug!(
-                "incremental range full compaction started";
-            "start_key" => ?range.0.map(log_wrappers::Value::key),
-            "end_key" => ?range.1.map(log_wrappers::Value::key),
-             );
-            let incremental_timer = FULL_COMPACT_INCREMENTAL.start_coarse_timer();
-            box_try!(engine.compact_range(
-                range.0,
-                range.1, // Compact the entire key range.
-                ManualCompactionOptions::new(false, 1, false),
-            ));
-            incremental_timer.observe_duration();
-            debug!(
-                "finished incremental range full compaction";
-                "remaining" => ranges.len(),
-            );
-            // If there is at least one range remaining in `ranges` remaining, evaluate
-            // `compact_controller.incremental_compaction_pred`. If `true`, proceed to next
-            // range; otherwise, pause this task
-            // (see `FullCompactController::pause` for details) until predicate
-            // evaluates to true.
-            if let Some(next_range) = ranges.front() {
-                if !(compact_controller.incremental_compaction_pred)() {
-                    info!("pausing full compaction before next increment";
-                    "finished_start_key" => ?range.0.map(log_wrappers::Value::key),
-                    "finished_end_key" => ?range.1.map(log_wrappers::Value::key),
-                    "next_range_start_key" => ?next_range.0.map(log_wrappers::Value::key),
-                    "next_range_end_key" => ?next_range.1.map(log_wrappers::Value::key),
-                    "remaining" => ranges.len(),
-                    );
-                    let pause_started = Instant::now();
-                    let pause_timer = FULL_COMPACT_PAUSE.start_coarse_timer();
-                    compact_controller.pause().await?;
-                    pause_timer.observe_duration();
-                    info!("resuming incremental full compaction";
-                        "paused" => ?pause_started.saturating_elapsed(),
-                    );
-                }
-            }
-        }
-
-        full_compact_timer.observe_duration();
-        info!(
-            "full compaction finished";
-            "time_takes" => ?timer.saturating_elapsed(),
-        );
-        Ok(())
->>>>>>> a796cbe281 (raftstore: use force in compact_range triggered by no valid split key (#16493))
     }
 
     /// Sends a compact range command to RocksDB to compact the range of the cf.

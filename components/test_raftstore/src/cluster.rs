@@ -15,13 +15,8 @@ use encryption_export::DataKeyManager;
 use engine_rocks::{RocksEngine, RocksSnapshot, RocksStatistics};
 use engine_test::raft::RaftTestEngine;
 use engine_traits::{
-<<<<<<< HEAD
-    CompactExt, Engines, Iterable, MiscExt, Mutable, Peekable, RaftEngineReadOnly, SyncMutable,
-    WriteBatch, WriteBatchExt, CF_DEFAULT, CF_RAFT,
-=======
-    Engines, Iterable, KvEngine, ManualCompactionOptions, Mutable, Peekable, RaftEngineReadOnly,
-    SnapshotContext, SyncMutable, WriteBatch, CF_DEFAULT, CF_RAFT,
->>>>>>> a796cbe281 (raftstore: use force in compact_range triggered by no valid split key (#16493))
+    CompactExt, Engines, Iterable, ManualCompactionOptions, MiscExt, Mutable, Peekable,
+    RaftEngineReadOnly, SyncMutable, WriteBatch, WriteBatchExt, CF_DEFAULT, CF_RAFT,
 };
 use file_system::IoRateLimiter;
 use futures::{self, channel::oneshot, executor::block_on, future::BoxFuture};

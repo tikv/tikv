@@ -8,14 +8,10 @@ use std::{
 };
 
 use collections::HashMap;
-<<<<<<< HEAD
-use engine_traits::{DeleteStrategy, KvEngine, Range, TabletContext, TabletRegistry, DATA_CFS};
-=======
 use engine_traits::{
-    CfName, DeleteStrategy, KvEngine, ManualCompactionOptions, Range, TabletContext,
-    TabletRegistry, WriteOptions, DATA_CFS,
+    DeleteStrategy, KvEngine, ManualCompactionOptions, Range, TabletContext, TabletRegistry,
+    DATA_CFS,
 };
->>>>>>> a796cbe281 (raftstore: use force in compact_range triggered by no valid split key (#16493))
 use fail::fail_point;
 use kvproto::{import_sstpb::SstMeta, metapb::Region};
 use slog::{debug, error, info, warn, Logger};
