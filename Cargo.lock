@@ -2909,7 +2909,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#256c9ca2f45fef644b518223707de50f841fe9e8"
+source = "git+https://github.com/tonyxuqqi/rust-rocksdb?branch=rocksdb_wal_debug#01407e4c5ba89e5cacf1410beabb0fc7d27c4d25"
 dependencies = [
  "bindgen 0.65.1",
  "bzip2-sys",
@@ -2928,7 +2928,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/tikv/rust-rocksdb.git#256c9ca2f45fef644b518223707de50f841fe9e8"
+source = "git+https://github.com/tonyxuqqi/rust-rocksdb?branch=rocksdb_wal_debug#01407e4c5ba89e5cacf1410beabb0fc7d27c4d25"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -4784,7 +4784,7 @@ dependencies = [
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#256c9ca2f45fef644b518223707de50f841fe9e8"
+source = "git+https://github.com/tonyxuqqi/rust-rocksdb?branch=rocksdb_wal_debug#01407e4c5ba89e5cacf1410beabb0fc7d27c4d25"
 dependencies = [
  "libc 0.2.151",
  "librocksdb_sys",
@@ -5527,7 +5527,7 @@ dependencies = [
 [[package]]
 name = "snappy-sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-snappy.git?branch=static-link#8c12738bad811397600455d6982aff754ea2ac44"
+source = "git+https://github.com/busyjay/rust-snappy.git?branch=static-link#8c12738bad811397600455d6982aff754ea2ac44"
 dependencies = [
  "cmake",
  "libc 0.2.151",
@@ -7754,3 +7754,8 @@ dependencies = [
  "cc",
  "libc 0.2.151",
 ]
+
+[[patch.unused]]
+name = "snappy-sys"
+version = "0.1.0"
+source = "git+https://github.com/tikv/rust-snappy.git?branch=static-link#8c12738bad811397600455d6982aff754ea2ac44"
