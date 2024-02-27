@@ -10,9 +10,13 @@ collections = { workspace = true }
 encryption = { workspace = true }
 grpcio = { workspace = true }
 kvproto = { workspace = true }
+log_wrappers = {workspace = true }
 serde = "1.0"
 serde_derive = "1.0"
 serde_json = "1.0"
+slog = { workspace = true }
+slog-global = { workspace = true }
+online_config = { workspace = true }
 tikv_util = { workspace = true }
 
 [dev-dependencies]

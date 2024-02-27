@@ -69,7 +69,7 @@ use raftstore_v2::{
 };
 use resolved_ts::Task;
 use resource_control::ResourceGroupManager;
-use security::SecurityManager;
+use security::{SecurityConfigManager, SecurityManager};
 use service::{service_event::ServiceEvent, service_manager::GrpcServiceManager};
 use tikv::{
     config::{
@@ -437,6 +437,7 @@ where
 
         cfg_controller.register(tikv::config::Module::Log, Box::new(LogConfigManager));
         cfg_controller.register(tikv::config::Module::Memory, Box::new(MemoryConfigManager));
+        cfg_controller.register(tikv::config::Module::Security, Box::new(SecurityConfigManager));
 
         let lock_mgr = LockManager::new(&self.core.config.pessimistic_txn);
         cfg_controller.register(

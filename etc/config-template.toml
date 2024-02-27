@@ -42,6 +42,10 @@
 ## to release memory.
 # memory-usage-limit = "0B"
 
+## Allow dynamic security config modification
+# allow-dynamic-security-config = false
+
+
 [quota]
 ## Quota is use to add some limitation for the read write flow and then
 ## gain predictable stable performance.
