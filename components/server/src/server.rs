@@ -1038,7 +1038,7 @@ where
         let ingest_observer = Arc::new(IngestObserver::default());
         ingest_mediator.register(ingest_observer.clone());
         let import_path = self.core.store_path.join("import");
-        let mut importer = SstImporter::new_(
+        let mut importer = SstImporter::new(
             &self.core.config.import,
             import_path,
             self.core.encryption_key_manager.clone(),

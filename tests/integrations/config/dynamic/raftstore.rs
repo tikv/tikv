@@ -22,6 +22,7 @@ use raftstore::{
 };
 use resource_metering::CollectorRegHandle;
 use service::service_manager::GrpcServiceManager;
+use sst_importer::{IngestMediator, IngestObserver, Mediator};
 use tempfile::TempDir;
 use test_pd_client::TestPdClient;
 use tikv::{
@@ -72,13 +73,27 @@ fn start_raftstore(
     let engines = create_tmp_engine(dir);
     let host = CoprocessorHost::default();
     let importer = {
+        let mut ingest_mediator = IngestMediator::default();
+        let ingest_observer = Arc::new(IngestObserver::default());
+        ingest_mediator.register(ingest_observer.clone());
         let p = dir
             .path()
             .join("store-config-importer")
             .as_path()
             .display()
             .to_string();
-        Arc::new(SstImporter::new(&cfg.import, p, None, cfg.storage.api_version(), false).unwrap())
+        Arc::new(
+            SstImporter::new(
+                &cfg.import,
+                p,
+                None,
+                cfg.storage.api_version(),
+                false,
+                Arc::new(ingest_mediator),
+                ingest_observer,
+            )
+            .unwrap(),
+        )
     };
     let snap_mgr = {
         let p = dir

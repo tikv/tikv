@@ -34,6 +34,7 @@ use raftstore_v2::{
 use resource_control::ResourceGroupManager;
 use resource_metering::CollectorRegHandle;
 use service::service_manager::GrpcServiceManager;
+use sst_importer::{IngestMediator, IngestObserver, Mediator};
 use tempfile::TempDir;
 use test_pd_client::TestPdClient;
 use test_raftstore::{Config, Filter};
@@ -295,6 +296,9 @@ impl<EK: KvEngine> Simulator<EK> for NodeCluster<EK> {
             None,
         );
         let importer = {
+            let mut ingest_mediator = IngestMediator::default();
+            let ingest_observer = Arc::new(IngestObserver::default());
+            ingest_mediator.register(ingest_observer.clone());
             let dir = Path::new(raft_engine.get_engine_path()).join("../import-sst");
             Arc::new(
                 SstImporter::new(
@@ -303,6 +307,8 @@ impl<EK: KvEngine> Simulator<EK> for NodeCluster<EK> {
                     key_manager.clone(),
                     cfg.storage.api_version(),
                     true,
+                    Arc::new(ingest_mediator),
+                    ingest_observer,
                 )
                 .unwrap(),
             )

@@ -20,6 +20,7 @@ use raftstore::{
 use raftstore_v2::router::PeerMsg;
 use resource_metering::CollectorRegHandle;
 use service::service_manager::GrpcServiceManager;
+use sst_importer::{IngestMediator, IngestObserver, Mediator};
 use tempfile::Builder;
 use test_pd_client::{bootstrap_with_first_region, TestPdClient};
 use test_raftstore::*;
@@ -102,9 +103,21 @@ fn test_node_bootstrap_with_prepared_data() {
     let coprocessor_host = CoprocessorHost::new(node.get_router(), cfg.coprocessor);
 
     let importer = {
+        let mut ingest_mediator = IngestMediator::default();
+        let ingest_observer = Arc::new(IngestObserver::default());
+        ingest_mediator.register(ingest_observer.clone());
         let dir = tmp_path.path().join("import-sst");
         Arc::new(
-            SstImporter::new(&cfg.import, dir, None, cfg.storage.api_version(), false).unwrap(),
+            SstImporter::new(
+                &cfg.import,
+                dir,
+                None,
+                cfg.storage.api_version(),
+                false,
+                Arc::new(ingest_mediator),
+                ingest_observer,
+            )
+            .unwrap(),
         )
     };
     let (split_check_scheduler, _) = dummy_scheduler();

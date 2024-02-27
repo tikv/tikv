@@ -46,7 +46,7 @@ use resource_metering::{CollectorRegHandle, ResourceTagFactory};
 use security::SecurityManager;
 use service::service_manager::GrpcServiceManager;
 use slog_global::debug;
-use sst_importer::IngestObserver;
+use sst_importer::{IngestMediator, IngestObserver, Mediator};
 use tempfile::TempDir;
 use test_pd_client::TestPdClient;
 use test_raftstore::{filter_send, AddressMap, Config, Filter};
@@ -545,6 +545,9 @@ impl<EK: KvEngine> ServerCluster<EK> {
 
         // Create import service.
         let importer = {
+            let mut ingest_mediator = IngestMediator::default();
+            let ingest_observer = Arc::new(IngestObserver::default());
+            ingest_mediator.register(ingest_observer.clone());
             let dir = Path::new(raft_engine.get_engine_path()).join("../import-sst");
             Arc::new(
                 SstImporter::new(
@@ -553,6 +556,8 @@ impl<EK: KvEngine> ServerCluster<EK> {
                     key_manager.clone(),
                     cfg.storage.api_version(),
                     true,
+                    Arc::new(ingest_mediator),
+                    ingest_observer,
                 )
                 .unwrap(),
             )

@@ -298,7 +298,7 @@ mod tests {
     use uuid::Uuid;
 
     use super::*;
-    use crate::{Config, SstImporter};
+    use crate::{Config, IngestMediator, IngestObserver, Mediator, SstImporter};
 
     // Return the temp dir path to avoid it drop out of the scope.
     fn new_writer<W, F: Fn(&SstImporter<RocksEngine>, &RocksEngine, SstMeta) -> Result<W>>(
@@ -308,10 +308,21 @@ mod tests {
         let mut meta = SstMeta::default();
         meta.set_uuid(Uuid::new_v4().as_bytes().to_vec());
 
+        let mut ingest_mediator = IngestMediator::default();
+        let ingest_observer = Arc::new(IngestObserver::default());
+        ingest_mediator.register(ingest_observer.clone());
         let importer_dir = tempfile::tempdir().unwrap();
         let cfg = Config::default();
-        let importer =
-            SstImporter::<RocksEngine>::new(&cfg, &importer_dir, None, api_version, false).unwrap();
+        let importer = SstImporter::<RocksEngine>::new(
+            &cfg,
+            &importer_dir,
+            None,
+            api_version,
+            false,
+            Arc::new(ingest_mediator),
+            ingest_observer,
+        )
+        .unwrap();
         let db_path = importer_dir.path().join("db");
         let db = new_test_engine(db_path.to_str().unwrap(), DATA_CFS);
         (f(&importer, &db, meta).unwrap(), importer_dir)

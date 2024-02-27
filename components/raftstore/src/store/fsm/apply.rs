@@ -5037,7 +5037,7 @@ mod tests {
     };
     use protobuf::Message;
     use raft::eraftpb::{ConfChange, ConfChangeV2};
-    use sst_importer::Config as ImportConfig;
+    use sst_importer::{Config as ImportConfig, IngestMediator, IngestObserver, Mediator};
     use tempfile::{Builder, TempDir};
     use test_sst_importer::*;
     use tikv_util::{
@@ -5074,6 +5074,9 @@ mod tests {
     }
 
     pub fn create_tmp_importer(path: &str) -> (TempDir, Arc<SstImporter<KvTestEngine>>) {
+        let mut ingest_mediator = IngestMediator::default();
+        let ingest_observer = Arc::new(IngestObserver::default());
+        ingest_mediator.register(ingest_observer.clone());
         let dir = Builder::new().prefix(path).tempdir().unwrap();
         let importer = Arc::new(
             SstImporter::new(
@@ -5082,6 +5085,8 @@ mod tests {
                 None,
                 ApiVersion::V1,
                 false,
+                Arc::new(ingest_mediator),
+                ingest_observer,
             )
             .unwrap(),
         );

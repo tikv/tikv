@@ -46,7 +46,7 @@ use resource_control::ResourceGroupManager;
 use resource_metering::{CollectorRegHandle, ResourceTagFactory};
 use security::SecurityManager;
 use service::service_manager::GrpcServiceManager;
-use sst_importer::IngestObserver;
+use sst_importer::{IngestMediator, IngestObserver, Mediator};
 use tempfile::TempDir;
 use test_pd_client::TestPdClient;
 use tikv::{
@@ -431,6 +431,9 @@ impl<EK: KvEngineWithRocks> ServerCluster<EK> {
 
         // Create import service.
         let importer = {
+            let mut ingest_mediator = IngestMediator::default();
+            let ingest_observer = Arc::new(IngestObserver::default());
+            ingest_mediator.register(ingest_observer.clone());
             let dir = Path::new(engines.kv.path()).join("import-sst");
             Arc::new(
                 SstImporter::new(
@@ -439,6 +442,8 @@ impl<EK: KvEngineWithRocks> ServerCluster<EK> {
                     key_manager.clone(),
                     cfg.storage.api_version(),
                     false,
+                    Arc::new(ingest_mediator),
+                    ingest_observer,
                 )
                 .unwrap(),
             )

@@ -48,7 +48,7 @@ use resource_control::{ResourceController, ResourceGroupManager};
 use resource_metering::CollectorRegHandle;
 use service::service_manager::GrpcServiceManager;
 use slog::{debug, o, Logger};
-use sst_importer::SstImporter;
+use sst_importer::{IngestMediator, IngestObserver, Mediator, SstImporter};
 use tempfile::TempDir;
 use test_pd::mocker::Service;
 use tikv_util::{
@@ -326,6 +326,9 @@ impl RunningState {
         .unwrap();
         let coprocessor_host =
             CoprocessorHost::new(router.store_router().clone(), cop_cfg.value().clone());
+        let mut ingest_mediator = IngestMediator::default();
+        let ingest_observer = Arc::new(IngestObserver::default());
+        ingest_mediator.register(ingest_observer.clone());
         let importer = Arc::new(
             SstImporter::new(
                 &Default::default(),
@@ -333,6 +336,8 @@ impl RunningState {
                 key_manager.clone(),
                 ApiVersion::V1,
                 true,
+                Arc::new(ingest_mediator),
+                ingest_observer,
             )
             .unwrap(),
         );

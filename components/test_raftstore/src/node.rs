@@ -34,6 +34,7 @@ use raftstore::{
 use resource_control::ResourceGroupManager;
 use resource_metering::CollectorRegHandle;
 use service::service_manager::GrpcServiceManager;
+use sst_importer::{IngestMediator, IngestObserver, Mediator};
 use tempfile::TempDir;
 use test_pd_client::TestPdClient;
 use tikv::{
@@ -297,9 +298,21 @@ impl<EK: KvEngine> Simulator<EK> for NodeCluster<EK> {
         ReplicaReadLockChecker::new(cm.clone()).register(&mut coprocessor_host);
 
         let importer = {
+            let mut ingest_mediator = IngestMediator::default();
+            let ingest_observer = Arc::new(IngestObserver::default());
+            ingest_mediator.register(ingest_observer.clone());
             let dir = Path::new(engines.kv.path()).join("import-sst");
             Arc::new(
-                SstImporter::new(&cfg.import, dir, None, cfg.storage.api_version(), false).unwrap(),
+                SstImporter::new(
+                    &cfg.import,
+                    dir,
+                    None,
+                    cfg.storage.api_version(),
+                    false,
+                    Arc::new(ingest_mediator),
+                    ingest_observer,
+                )
+                .unwrap(),
             )
         };
 

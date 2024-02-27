@@ -42,16 +42,28 @@ pub mod test_util {
     use kvproto::{kvrpcpb::ApiVersion, metapb::RegionEpoch, raft_cmdpb::RaftRequestHeader};
     use raft::prelude::{Entry, EntryType};
     use raftstore::store::simple_write::SimpleWriteEncoder;
-    use sst_importer::SstImporter;
+    use sst_importer::{IngestMediator, IngestObserver, Mediator, SstImporter};
     use tempfile::TempDir;
 
     use super::{CatchUpLogs, SimpleWriteReqEncoder};
     use crate::{fsm::ApplyResReporter, router::ApplyRes};
 
     pub fn create_tmp_importer<E: KvEngine>() -> (TempDir, Arc<SstImporter<E>>) {
+        let mut ingest_mediator = IngestMediator::default();
+        let ingest_observer = Arc::new(IngestObserver::default());
+        ingest_mediator.register(ingest_observer.clone());
         let dir = TempDir::new().unwrap();
         let importer = Arc::new(
-            SstImporter::new(&Default::default(), dir.path(), None, ApiVersion::V1, true).unwrap(),
+            SstImporter::new(
+                &Default::default(),
+                dir.path(),
+                None,
+                ApiVersion::V1,
+                true,
+                Arc::new(ingest_mediator),
+                ingest_observer,
+            )
+            .unwrap(),
         );
         (dir, importer)
     }

@@ -34,6 +34,7 @@ use raftstore::{
 };
 use resource_metering::CollectorRegHandle;
 use service::service_manager::GrpcServiceManager;
+use sst_importer::{IngestMediator, IngestObserver, Mediator};
 use tempfile::Builder;
 use test_raftstore::*;
 use test_raftstore_macro::test_case;
@@ -1390,9 +1391,21 @@ fn test_double_run_node() {
     let snap_mgr = SnapManager::new(tmp.path().to_str().unwrap());
     let coprocessor_host = CoprocessorHost::new(router, raftstore::coprocessor::Config::default());
     let importer = {
+        let mut ingest_mediator = IngestMediator::default();
+        let ingest_observer = Arc::new(IngestObserver::default());
+        ingest_mediator.register(ingest_observer.clone());
         let dir = Path::new(MiscExt::path(&engines.kv)).join("import-sst");
         Arc::new(
-            SstImporter::new(&ImportConfig::default(), dir, None, ApiVersion::V1, false).unwrap(),
+            SstImporter::new(
+                &ImportConfig::default(),
+                dir,
+                None,
+                ApiVersion::V1,
+                false,
+                Arc::new(ingest_mediator),
+                ingest_observer,
+            )
+            .unwrap(),
         )
     };
     let (split_check_scheduler, _) = dummy_scheduler();
