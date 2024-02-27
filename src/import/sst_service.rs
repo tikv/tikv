@@ -129,6 +129,7 @@ pub struct ImportSstService<E: Engine> {
     tablets: LocalTablets<E::Local>,
     engine: E,
     threads: Arc<Runtime>,
+    threads_ingest: Arc<Runtime>,
     importer: Arc<SstImporter<E::Local>>,
     limiter: Limiter,
     task_slots: Arc<Mutex<HashSet<PathBuf>>>,
@@ -333,7 +334,7 @@ impl<E: Engine> ImportSstService<E> {
         let props = tikv_util::thread_group::current_properties();
         let eng = Mutex::new(engine.clone());
         let threads = tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(cfg.num_threads)
+            .worker_threads(cfg.num_threads / 2 + 1)
             .enable_all()
             .thread_name("sst-importer")
             .with_sys_and_custom_hooks(
@@ -348,6 +349,12 @@ impl<E: Engine> ImportSstService<E> {
                     unsafe { tikv_kv::destroy_tls_engine::<E>() };
                 },
             )
+            .build()
+            .unwrap();
+        let threads_ingest = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(cfg.num_threads / 2 + 1)
+            .enable_all()
+            .thread_name("sst-importer-ingest")
             .build()
             .unwrap();
         if let LocalTablets::Singleton(tablet) = &tablets {
@@ -371,6 +378,7 @@ impl<E: Engine> ImportSstService<E> {
             cfg: cfg_mgr,
             tablets,
             threads: Arc::new(threads),
+            threads_ingest: Arc::new(threads_ingest),
             engine,
             importer,
             limiter: Limiter::new(f64::INFINITY),
@@ -1067,6 +1075,7 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
     ) {
         let label = "download";
         let timer = Instant::now_coarse();
+        sst_importer::metrics::IMPORT_RPC_COUNT.with_label_values(&[label]).inc();
         let importer = Arc::clone(&self.importer);
         let limiter = self.limiter.clone();
         let region_id = req.get_sst().get_region_id();
@@ -1201,6 +1210,7 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
     ) {
         let label = "multi-ingest";
         let timer = Instant::now_coarse();
+        sst_importer::metrics::IMPORT_RPC_COUNT.with_label_values(&[label]).inc();
         let mut resp = IngestResponse::default();
         if let Err(err) = self.check_suspend() {
             resp.set_error(ImportPbError::from(err).take_store_error());
@@ -1220,14 +1230,9 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
         let mut errorpb = errorpb::Error::default();
         let mut metas = vec![];
         for sst in req.get_ssts() {
-            if Self::acquire_lock(&self.task_slots, sst).unwrap_or(false) {
-                metas.push(sst.clone());
-            }
+            metas.push(sst.clone());
         }
         if metas.len() < req.get_ssts().len() {
-            for m in metas {
-                Self::release_lock(&self.task_slots, &m).unwrap();
-            }
             errorpb.set_message(Error::FileConflict.to_string());
             resp.set_error(errorpb);
             ctx.spawn(
@@ -1236,16 +1241,12 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
             );
             return;
         }
-        let task_slots = self.task_slots.clone();
         let f = self.ingest_files(req.take_context(), label, req.take_ssts().into());
         let handle_task = async move {
             let res = f.await;
-            for m in metas {
-                Self::release_lock(&task_slots, &m).unwrap();
-            }
             crate::send_rpc_response!(res, sink, label, timer);
         };
-        self.threads.spawn(handle_task);
+        self.threads_ingest.spawn(handle_task);
     }
 
     fn compact(
