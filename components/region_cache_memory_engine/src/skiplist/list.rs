@@ -1010,10 +1010,15 @@ fn below_upper_bound<C: KeyComparator>(c: &C, bound: &Bound<&[u8]>, key: &[u8]) 
 #[cfg(test)]
 pub(crate) mod tests {
     use core::slice::SlicePattern;
-    use std::thread;
+    use std::{collections::BTreeMap, thread};
+
+    use proptest::{prelude::prop, prop_oneof, strategy::Strategy};
 
     use super::*;
-    use crate::skiplist::{key::ByteWiseComparator, memory_control::RecorderLimiter};
+    use crate::skiplist::{
+        key::ByteWiseComparator,
+        memory_control::{DummyLimiter, RecorderLimiter},
+    };
 
     fn construct_key(i: i32) -> Vec<u8> {
         format!("key-{:08}", i).into_bytes()
@@ -1377,5 +1382,46 @@ pub(crate) mod tests {
         let ref_count = unsafe { &*e.node }.refs_and_height.load(Ordering::Relaxed) >> HEIGHT_BITS;
         assert_eq!(ref_count, 1);
         assert_eq!(e.value(), &b"val-a".to_vec());
+    }
+
+    #[derive(Clone, Debug)]
+    enum Operation {
+        Put(Vec, Vec<u8>),
+        Get(Vec<u8>),
+        Delete(Vec<u8>),
+        Scan(Vec<u8>, usize),
+    }
+
+    fn gen_operations() -> impl Strategy<Value = Vec<Operation>> {
+        let kv_size: usize = 16;
+        prop::collection::vec(
+            prop_oneof![
+                (
+                    prop::collection::vec(prop::num::u8::ANY, 0..kv_size),
+                    prop::collection::vec(prop::num::u8::ANY, 0..kv_size)
+                )
+                    .prop_map(|(k, v)| Operation::Put(k, v)),
+                prop::collection::vec(prop::num::u8::ANY, 0..kv_size)
+                    .prop_map(|k| Operation::Get(k)),
+                prop::collection::vec(prop::num::u8::ANY, 0..kv_size)
+                    .prop_map(|k| Operation::Delete(k)),
+                (
+                    prop::collection::vec(prop::num::u8::ANY, 0..kv_size),
+                    0..10usize
+                )
+                    .prop_map(|(k, v)| Operation::Scan(k, v)),
+            ],
+            0..100,
+        )
+    }
+
+    fn test_skiplist_basic_operations(operations: Vec<Operation>) {
+        let sl = Skiplist::<ByteWiseComparator, DummyLimiter>::new(
+            ByteWiseComparator {},
+            Arc::default(),
+        );
+
+        let map: BTreeMap<Bytes, Bytes> = BTreeMap::new();
+        
     }
 }

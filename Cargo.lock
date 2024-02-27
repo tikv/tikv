@@ -4602,6 +4602,7 @@ dependencies = [
  "engine_traits",
  "fail",
  "log_wrappers",
+ "proptest",
  "scopeguard 0.3.3",
  "slog",
  "slog-global",

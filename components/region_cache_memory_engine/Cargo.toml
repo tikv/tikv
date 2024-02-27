@@ -23,3 +23,6 @@ slog-global = { workspace = true }
 slog = { workspace = true }
 engine_rocks = { workspace = true }
 fail = "0.5"
+
+[dev-dependencies]
+proptest = "1.0.0"

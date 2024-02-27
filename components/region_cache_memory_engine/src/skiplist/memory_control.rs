@@ -53,3 +53,24 @@ impl MemoryLimiter for RecorderLimiter {
 
     fn reclaim(&self, _: usize) {}
 }
+
+#[derive(Clone, Default)]
+pub struct DummyLimiter {}
+
+impl AllocationRecorder for DummyLimiter {
+    fn allocated(&self, _: usize, _: usize) {}
+
+    fn freed(&self, _: usize, _: usize) {}
+}
+
+impl MemoryLimiter for DummyLimiter {
+    fn acquire(&self, _: usize) -> bool {
+        true
+    }
+
+    fn mem_usage(&self) -> usize {
+        0
+    }
+
+    fn reclaim(&self, _: usize) {}
+}
