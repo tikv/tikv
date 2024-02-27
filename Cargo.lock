@@ -4604,6 +4604,7 @@ dependencies = [
  "keys",
  "log_wrappers",
  "proptest",
+ "rand 0.8.5",
  "scopeguard 0.3.3",
  "slog",
  "slog-global",

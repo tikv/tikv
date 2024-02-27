@@ -1023,9 +1023,13 @@ fn below_upper_bound<C: KeyComparator>(c: &C, bound: &Bound<&[u8]>, key: &[u8]) 
 #[cfg(test)]
 pub(crate) mod tests {
     use core::slice::SlicePattern;
-    use std::{collections::BTreeMap, ops::Bound, thread};
+    use std::{
+        collections::BTreeMap, ops::Bound, sync::atomic::AtomicBool, thread, time::Duration,
+    };
 
+    use crossbeam::channel::unbounded;
     use proptest::{prelude::prop, prop_oneof, proptest, strategy::Strategy};
+    use rand::{thread_rng, Rng};
 
     use super::*;
     use crate::skiplist::{
@@ -1332,24 +1336,15 @@ pub(crate) mod tests {
 
             let sl3 = sl.clone();
             let h3 = thread::spawn(move || {
-                for i in (0..n).step_by(3) {
-                    let k = format!("k{:06}", i);
-                    sl3.remove(k.as_bytes());
-                }
-            });
-
-            let sl4 = sl.clone();
-            let h4 = thread::spawn(move || {
                 for i in (2..n).step_by(3) {
                     let k = format!("k{:06}", i);
-                    sl4.remove(k.as_bytes());
+                    sl3.remove(k.as_bytes());
                 }
             });
 
             h1.join().unwrap();
             h2.join().unwrap();
             h3.join().unwrap();
-            h4.join().unwrap();
 
             let mut iter = sl.iter();
             iter.seek_to_first();
@@ -1360,6 +1355,62 @@ pub(crate) mod tests {
                 assert_eq!(k.as_slice(), expect_k.as_bytes());
                 iter.next();
             }
+        }
+    }
+
+    // A more conccurecy test case
+    #[test]
+    fn concurrent_put_and_remove2() {
+        let (tx, rx) = unbounded();
+        let sl = Skiplist::<ByteWiseComparator, RecorderLimiter>::new(
+            ByteWiseComparator {},
+            Arc::default(),
+        );
+
+        let total = 100000;
+        let n = 20;
+
+        let begin = Arc::new(AtomicBool::new(false));
+
+        let mut handlers = vec![];
+        for i in 0..n {
+            let sl_clone = sl.clone();
+            let tx_clone = tx.clone();
+            let begin_clone = begin.clone();
+            handlers.push(std::thread::spawn(move || {
+                for i in 0..total {
+                    if i == total / 10 {
+                        begin_clone.store(true, Ordering::Relaxed);
+                    }
+                    let mut rng = thread_rng();
+                    let n: u64 = rng.gen_range(0..=u64::MAX);
+                    let k = format!("key-{:064}", n).into_bytes();
+                    let v = format!("val-{:064}", n).into_bytes();
+                    assert!(sl_clone.put(k.clone(), v).unwrap());
+                    tx_clone.send(k).unwrap();
+                }
+            }));
+        }
+
+        for i in 0..n {
+            let sl_clone = sl.clone();
+            let rx_clone = rx.clone();
+            let begin_clone = begin.clone();
+            handlers.push(std::thread::spawn(move || {
+                while !begin_clone.load(Ordering::Relaxed) {
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+                while let Ok(key) = rx_clone.recv() {
+                    let _ = sl_clone.get(&key).unwrap();
+                    assert!(sl_clone.remove(&key));
+                }
+            }));
+        }
+
+        drop(tx);
+
+        for h in handlers {
+            h.join().unwrap();
         }
     }
 

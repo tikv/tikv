@@ -29,3 +29,4 @@ yatp = { workspace = true }
 keys = { workspace = true }
 tempfile = "3.0"
 proptest = "1.0.0"
+rand = "0.8.0"
