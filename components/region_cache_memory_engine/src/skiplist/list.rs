@@ -1302,21 +1302,6 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn test_x() {
-        let sl = Skiplist::<ByteWiseComparator, RecorderLimiter>::new(
-            ByteWiseComparator {},
-            Arc::default(),
-        );
-        let n = 100000000;
-        for i in 0..n {
-            let k = format!("k{:0200}", i).into_bytes();
-            let v = format!("v{:0200}", i).into_bytes();
-            sl.put(k.clone(), v).unwrap();
-            sl.remove(&k);
-        }
-    }
-
-    #[test]
     fn concurrent_put_and_remove() {
         for _ in 0..5 {
             let sl = Skiplist::<ByteWiseComparator, RecorderLimiter>::new(
