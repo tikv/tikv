@@ -3552,6 +3552,11 @@ impl TikvConfig {
             );
         }
 
+        // Validate feature TTL with Titan configuration.
+        if self.rocksdb.titan.enabled && self.storage.enable_ttl {
+            return Err("Titan is unavailable for feature TTL".to_string().into());
+        }
+
         Ok(())
     }
 
@@ -4487,6 +4492,7 @@ mod tests {
 
         // Check api version.
         {
+            tikv_cfg.rocksdb.titan.enabled = false;
             let cases = [
                 (ApiVersion::V1, ApiVersion::V1, true),
                 (ApiVersion::V1, ApiVersion::V1ttl, false),
@@ -5522,6 +5528,21 @@ mod tests {
         cfg.storage.engine = EngineType::RaftKv2;
         cfg.validate().unwrap();
         assert!(!cfg.raft_store.enable_v2_compatible_learner);
+
+        let mut valid_cfg = TikvConfig::default();
+        valid_cfg.storage.api_version = 2;
+        valid_cfg.storage.enable_ttl = true;
+        valid_cfg.rocksdb.titan.enabled = false;
+        valid_cfg.validate().unwrap();
+
+        let mut invalid_cfg = TikvConfig::default();
+        invalid_cfg.storage.api_version = 2;
+        invalid_cfg.storage.enable_ttl = true;
+        invalid_cfg.rocksdb.titan.enabled = true;
+        assert_eq!(
+            invalid_cfg.validate().unwrap_err().to_string(),
+            "Titan is unavailable for feature TTL"
+        );
     }
 
     #[test]
