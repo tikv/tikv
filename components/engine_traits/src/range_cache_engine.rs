@@ -5,7 +5,7 @@ use std::{cmp, fmt::Debug};
 use keys::{enc_end_key, enc_start_key};
 use kvproto::metapb;
 
-use crate::{Iterable, Snapshot, WriteBatchExt};
+use crate::{Iterable, KvEngine, Snapshot, WriteBatchExt};
 
 /// RangeCacheEngine works as a range cache caching some ranges (in Memory or
 /// NVME for instance) to improve the read performance.
@@ -19,6 +19,9 @@ pub trait RangeCacheEngine:
     // Sequence number is shared between RangeCacheEngine and disk KvEnigne to
     // provide atomic write
     fn snapshot(&self, range: CacheRange, read_ts: u64, seq_num: u64) -> Option<Self::Snapshot>;
+
+    type DiskEngine: KvEngine;
+    fn set_disk_engine(&mut self, disk_engine: Self::DiskEngine);
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
