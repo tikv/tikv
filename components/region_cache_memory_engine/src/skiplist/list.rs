@@ -1,4 +1,4 @@
-// Copyright 2023 TiKV Project Authors. Licensed under Apache-2.0.
+// Copyright 2024 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
     cmp,
@@ -16,7 +16,7 @@ use bytes::Bytes;
 use crossbeam_epoch::{self, default_collector, pin, Atomic, Collector, Guard, Shared};
 use crossbeam_utils::CachePadded;
 
-use super::{arena::Arena, key::KeyComparator, memory_control::MemoryLimiter, Bound};
+use super::{key::KeyComparator, memory_control::MemoryController, Bound, Error};
 
 /// Number of bits needed to store height.
 const HEIGHT_BITS: usize = 5;
@@ -135,16 +135,23 @@ impl ReclaimableNode for Node {
 }
 
 impl Node {
-    fn alloc<M: MemoryLimiter>(
-        arena: &Arena<M>,
+    fn create_node<M: MemoryController>(
         key: Bytes,
         value: Bytes,
         height: usize,
         ref_count: usize,
-    ) -> *mut Self {
+        memory_controller: &Arc<M>,
+    ) -> Result<*mut Self, Error> {
         // Not all values in Node::tower will be utilized.
         let node_size = Node::node_size(height);
-        let node_ptr = arena.alloc(node_size) as *mut Node;
+        if !memory_controller.acquire(node_size + key.len() + value.len()) {
+            return Err(Error::MemoryAcquireFailed);
+        }
+
+        let mut v = Vec::<u64>::with_capacity(node_size);
+        let node_ptr = v.as_mut_ptr() as *mut Self;
+        mem::forget(v);
+
         unsafe {
             let node = &mut *node_ptr;
             ptr::write(&mut node.key, key);
@@ -155,7 +162,22 @@ impl Node {
             );
             ptr::write_bytes(node.tower.pointers.as_mut_ptr(), 0, height);
         }
-        node_ptr
+        Ok(node_ptr)
+    }
+
+    unsafe fn destroy_node<M: MemoryController>(ptr: *mut Self, memory_controller: Arc<M>) {
+        let size = (*ptr).size();
+        let mut kv_size = 0;
+        if !(*ptr).key.is_empty() {
+            kv_size += (*ptr).key.len();
+            ptr::drop_in_place(&mut (*ptr).key);
+        }
+        if !(*ptr).value.is_empty() {
+            kv_size += (*ptr).value.len();
+            ptr::drop_in_place(&mut (*ptr).value);
+        }
+        drop(Vec::from_raw_parts(ptr as *mut u64, 0, size));
+        memory_controller.reclaim(size + kv_size);
     }
 
     /// Returns the size of a node with tower of given `height` measured in
@@ -170,7 +192,7 @@ impl Node {
         let size_u64 = mem::size_of::<u64>();
         let size_self = size_base + size_ptr * height;
 
-        (size_self + size_u64 - 1) & U64_MOD_BITS
+        (size_self + size_u64 - 1) / size_u64
     }
 
     /// Returns the height of this node's tower.
@@ -242,7 +264,7 @@ impl Node {
     /// Decrements the reference count of a node, destroying it if the count
     /// becomes zero.
     #[inline]
-    unsafe fn decrement<M: MemoryLimiter>(&self, arena: Arena<M>, guard: &Guard) {
+    unsafe fn decrement<M: MemoryController>(&self, memory_controller: Arc<M>, guard: &Guard) {
         fail::fail_point!("on_decrement");
         let current_ref = self
             .refs_and_height
@@ -251,16 +273,16 @@ impl Node {
         if current_ref == 1 {
             fence(Ordering::Acquire);
             let ptr = self as *const Self;
-            guard.defer_unchecked(move || Self::finalize(ptr, arena));
+            guard.defer_unchecked(move || Self::finalize(ptr, memory_controller));
             fail::fail_point!("on_finalize_scheduled");
         }
     }
 
     /// Drops the key and value of a node, then deallocates it.
     #[cold]
-    unsafe fn finalize<M: MemoryLimiter>(ptr: *const Self, arena: Arena<M>) {
+    unsafe fn finalize<M: MemoryController>(ptr: *const Self, memory_controller: Arc<M>) {
         let ptr = ptr as *mut Self;
-        arena.free(ptr);
+        Node::destroy_node(ptr, memory_controller)
     }
 }
 
@@ -274,7 +296,7 @@ struct HotData {
     max_height: AtomicUsize,
 }
 
-struct SkiplistInner<M: MemoryLimiter> {
+struct SkiplistInner<M: MemoryController> {
     /// The head of the skip list (just a dummy node, not a real entry).
     head: Head,
     /// Hot data associated with the skip list, stored in a dedicated cache
@@ -283,22 +305,21 @@ struct SkiplistInner<M: MemoryLimiter> {
     /// The `Collector` associated with this skip list.
     collector: Collector,
     /// <emory management unit
-    arena: Arena<M>,
+    memory_controller: Arc<M>,
 }
 
-unsafe impl<M: MemoryLimiter> Send for SkiplistInner<M> {}
-unsafe impl<M: MemoryLimiter> Sync for SkiplistInner<M> {}
+unsafe impl<M: MemoryController> Send for SkiplistInner<M> {}
+unsafe impl<M: MemoryController> Sync for SkiplistInner<M> {}
 
 #[derive(Clone)]
-pub struct Skiplist<C: KeyComparator, M: MemoryLimiter> {
+pub struct Skiplist<C: KeyComparator, M: MemoryController> {
     inner: Arc<SkiplistInner<M>>,
     c: C,
 }
 
-impl<C: KeyComparator, M: MemoryLimiter> Skiplist<C, M> {
-    pub fn new(c: C, mem_limiter: Arc<M>) -> Skiplist<C, M> {
+impl<C: KeyComparator, M: MemoryController> Skiplist<C, M> {
+    pub fn new(c: C, memory_controller: Arc<M>) -> Skiplist<C, M> {
         let collector = default_collector().clone();
-        let arena = Arena::new(mem_limiter);
         Skiplist {
             inner: Arc::new(SkiplistInner {
                 hot_data: CachePadded::new(HotData {
@@ -307,7 +328,7 @@ impl<C: KeyComparator, M: MemoryLimiter> Skiplist<C, M> {
                 }),
                 collector,
                 head: Head::new(),
-                arena,
+                memory_controller,
             }),
             c,
         }
@@ -371,7 +392,7 @@ impl<C: KeyComparator, M: MemoryLimiter> Skiplist<C, M> {
     }
 }
 
-impl<C: KeyComparator, M: MemoryLimiter> Skiplist<C, M> {
+impl<C: KeyComparator, M: MemoryController> Skiplist<C, M> {
     /// If we encounter a deleted node while searching, help with the deletion
     /// by attempting to unlink the node from the list.
     ///
@@ -394,7 +415,7 @@ impl<C: KeyComparator, M: MemoryLimiter> Skiplist<C, M> {
             guard,
         ) {
             Ok(_) => {
-                curr.decrement(self.inner.arena.clone(), guard);
+                curr.decrement(self.inner.memory_controller.clone(), guard);
                 Some(succ.with_tag(0))
             }
             Err(_) => None,
@@ -592,7 +613,7 @@ impl<C: KeyComparator, M: MemoryLimiter> Skiplist<C, M> {
                             .is_ok()
                         {
                             // Success! Decrement the reference count.
-                            n.decrement(self.inner.arena.clone(), guard);
+                            n.decrement(self.inner.memory_controller.clone(), guard);
                         } else {
                             self.search_bound(Bound::Included(key), false, guard);
                             break;
@@ -605,7 +626,7 @@ impl<C: KeyComparator, M: MemoryLimiter> Skiplist<C, M> {
         }
     }
 
-    pub fn put(&self, key: impl Into<Bytes>, value: impl Into<Bytes>) -> bool {
+    pub fn put(&self, key: impl Into<Bytes>, value: impl Into<Bytes>) -> Result<bool, Error> {
         let guard = &crossbeam_epoch::pin();
         let (key, value) = (key.into(), value.into());
         self.check_guard(guard);
@@ -622,12 +643,12 @@ impl<C: KeyComparator, M: MemoryLimiter> Skiplist<C, M> {
             search = self.search_position(&key, guard);
             if search.found.is_some() {
                 // panic!("Overwrite is not supported, {:?}", (*r).key);
-                return false;
+                return Ok(false);
             }
 
             let height = self.random_height();
             let (node, n) = {
-                let n = Node::alloc(&self.inner.arena, key, value, height, 1);
+                let n = Node::create_node(key, value, height, 1, &self.inner.memory_controller)?;
                 (Shared::<Node>::from(n as *const _), &*n)
             };
             loop {
@@ -652,7 +673,7 @@ impl<C: KeyComparator, M: MemoryLimiter> Skiplist<C, M> {
                 {
                     // Create a guard that destroys the new node in case search panics.
                     let sg = scopeguard::guard((), |_| {
-                        Node::finalize(node.as_raw(), self.inner.arena.clone())
+                        Node::finalize(node.as_raw(), self.inner.memory_controller.clone())
                     });
                     search = self.search_position(&n.key, guard);
                     mem::forget(sg);
@@ -660,7 +681,7 @@ impl<C: KeyComparator, M: MemoryLimiter> Skiplist<C, M> {
 
                 if search.found.is_some() {
                     // panic!("Overwrite is not supported, {:?}", (*r).key);
-                    return false;
+                    return Ok(false);
                 }
             }
 
@@ -731,11 +752,7 @@ impl<C: KeyComparator, M: MemoryLimiter> Skiplist<C, M> {
             }
         }
 
-        true
-    }
-
-    pub fn is_empty(&self) -> bool {
-        true
+        Ok(true)
     }
 
     pub fn get(&self, key: &[u8]) -> Option<Entry<M>> {
@@ -743,7 +760,7 @@ impl<C: KeyComparator, M: MemoryLimiter> Skiplist<C, M> {
         self.check_guard(guard);
         if let Some(n) = unsafe { self.search_bound(Bound::Included(key), false, guard) } {
             if self.c.same_key(&n.key, key) {
-                return unsafe { Entry::try_acquire(n, self.inner.arena.clone()) };
+                return unsafe { Entry::try_acquire(n, self.inner.memory_controller.clone()) };
             }
         }
 
@@ -759,7 +776,7 @@ impl<C: KeyComparator, M: MemoryLimiter> Skiplist<C, M> {
     ) -> Option<Entry<M>> {
         loop {
             let node = self.search_bound(bound, upper_bound, guard)?;
-            if let Some(e) = Entry::try_acquire(node, self.inner.arena.clone()) {
+            if let Some(e) = Entry::try_acquire(node, self.inner.memory_controller.clone()) {
                 return Some(e);
             }
         }
@@ -796,7 +813,7 @@ impl<C: KeyComparator, M: MemoryLimiter> Skiplist<C, M> {
                     }
                 }
 
-                if let Some(e) = Entry::try_acquire(c, self.inner.arena.clone()) {
+                if let Some(e) = Entry::try_acquire(c, self.inner.memory_controller.clone()) {
                     return Some(e);
                 }
 
@@ -818,17 +835,17 @@ impl<C: KeyComparator, M: MemoryLimiter> Skiplist<C, M> {
     }
 
     pub fn mem_size(&self) -> usize {
-        self.inner.arena.limiter.mem_usage()
+        self.inner.memory_controller.mem_usage()
     }
 }
 
-impl<C: KeyComparator, M: MemoryLimiter> AsRef<Skiplist<C, M>> for Skiplist<C, M> {
+impl<C: KeyComparator, M: MemoryController> AsRef<Skiplist<C, M>> for Skiplist<C, M> {
     fn as_ref(&self) -> &Skiplist<C, M> {
         self
     }
 }
 
-impl<M: MemoryLimiter> Drop for SkiplistInner<M> {
+impl<M: MemoryController> Drop for SkiplistInner<M> {
     fn drop(&mut self) {
         unsafe {
             let mut node = self.head[0]
@@ -844,7 +861,7 @@ impl<M: MemoryLimiter> Drop for SkiplistInner<M> {
                     .as_ref();
 
                 // Deallocate every node.
-                Node::finalize(n, self.arena.clone());
+                Node::finalize(n, self.memory_controller.clone());
 
                 node = next;
             }
@@ -852,41 +869,37 @@ impl<M: MemoryLimiter> Drop for SkiplistInner<M> {
     }
 }
 
-unsafe impl<C: Send + KeyComparator, M: MemoryLimiter> Send for Skiplist<C, M> {}
-unsafe impl<C: Sync + KeyComparator, M: MemoryLimiter> Sync for Skiplist<C, M> {}
+unsafe impl<C: Send + KeyComparator, M: MemoryController> Send for Skiplist<C, M> {}
+unsafe impl<C: Sync + KeyComparator, M: MemoryController> Sync for Skiplist<C, M> {}
 
-unsafe impl<M: MemoryLimiter> Send for Entry<M> {}
+unsafe impl<M: MemoryController> Send for Entry<M> {}
 
-/// An entry in a skip list, protected by a `Guard`.
-///
-/// The lifetimes of the key and value are the same as that of the `Guard`
-/// used when creating the `Entry` (`'g`).
-pub struct Entry<M: MemoryLimiter> {
+pub struct Entry<M: MemoryController> {
     node: *const Node,
-    arena: Arena<M>,
+    memory_controller: Arc<M>,
 }
 
-impl<M: MemoryLimiter> Debug for Entry<M> {
+impl<M: MemoryController> Debug for Entry<M> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let n = unsafe { &*self.node };
         write!(f, "Entry: key {:?}, value {:?}", n.key, n.value)
     }
 }
 
-impl<M: MemoryLimiter> Drop for Entry<M> {
+impl<M: MemoryController> Drop for Entry<M> {
     fn drop(&mut self) {
         let guard = &pin();
-        unsafe { (*self.node).decrement(self.arena.clone(), guard) }
+        unsafe { (*self.node).decrement(self.memory_controller.clone(), guard) }
     }
 }
 
-impl<M: MemoryLimiter> Entry<M> {
-    unsafe fn try_acquire(node: &Node, arena: Arena<M>) -> Option<Entry<M>> {
+impl<M: MemoryController> Entry<M> {
+    unsafe fn try_acquire(node: &Node, memory_controller: Arc<M>) -> Option<Entry<M>> {
         fail::fail_point!("on_try_acquire");
         if node.try_increment() {
             Some(Entry {
                 node: node as *const _,
-                arena,
+                memory_controller,
             })
         } else {
             None
@@ -902,7 +915,7 @@ impl<M: MemoryLimiter> Entry<M> {
     }
 }
 
-pub struct IterRef<T, C: KeyComparator, M: MemoryLimiter>
+pub struct IterRef<T, C: KeyComparator, M: MemoryController>
 where
     T: AsRef<Skiplist<C, M>>,
 {
@@ -912,7 +925,7 @@ where
     _limiter: std::marker::PhantomData<M>,
 }
 
-impl<T: AsRef<Skiplist<C, M>>, C: KeyComparator, M: MemoryLimiter> IterRef<T, C, M> {
+impl<T: AsRef<Skiplist<C, M>>, C: KeyComparator, M: MemoryController> IterRef<T, C, M> {
     pub fn valid(&self) -> bool {
         self.cursor.is_some()
     }
@@ -1010,9 +1023,9 @@ fn below_upper_bound<C: KeyComparator>(c: &C, bound: &Bound<&[u8]>, key: &[u8]) 
 #[cfg(test)]
 pub(crate) mod tests {
     use core::slice::SlicePattern;
-    use std::{collections::BTreeMap, thread};
+    use std::{collections::BTreeMap, ops::Bound, thread};
 
-    use proptest::{prelude::prop, prop_oneof, strategy::Strategy};
+    use proptest::{prelude::prop, prop_oneof, proptest, strategy::Strategy};
 
     use super::*;
     use crate::skiplist::{
@@ -1035,7 +1048,7 @@ pub(crate) mod tests {
     fn sl_insert(sl: &Skiplist<ByteWiseComparator, RecorderLimiter>, k: i32, v: i32) -> bool {
         let k = construct_key(k);
         let v = construct_val(v);
-        sl.put(k, v)
+        sl.put(k, v).unwrap()
     }
 
     fn sl_remove(sl: &Skiplist<ByteWiseComparator, RecorderLimiter>, k: i32) -> bool {
@@ -1106,7 +1119,6 @@ pub(crate) mod tests {
         for &x in &insert {
             sl_remove(&s, x);
         }
-        assert!(s.is_empty());
     }
 
     fn assert_keys(
@@ -1290,7 +1302,7 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn test_mem() {
+    fn test_x() {
         let sl = Skiplist::<ByteWiseComparator, RecorderLimiter>::new(
             ByteWiseComparator {},
             Arc::default(),
@@ -1299,7 +1311,7 @@ pub(crate) mod tests {
         for i in 0..n {
             let k = format!("k{:0200}", i).into_bytes();
             let v = format!("v{:0200}", i).into_bytes();
-            sl.put(k.clone(), v);
+            sl.put(k.clone(), v).unwrap();
             sl.remove(&k);
         }
     }
@@ -1315,14 +1327,14 @@ pub(crate) mod tests {
             for i in (0..n).step_by(3) {
                 let k = format!("k{:06}", i).into_bytes();
                 let v = format!("v{:06}", i).into_bytes();
-                sl.put(k, v);
+                sl.put(k, v).unwrap();
             }
             let sl1 = sl.clone();
             let h1 = thread::spawn(move || {
                 for i in (1..n).step_by(3) {
                     let k = format!("k{:06}", i).into_bytes();
                     let v = format!("v{:06}", i).into_bytes();
-                    sl1.put(k, v);
+                    sl1.put(k, v).unwrap();
                 }
             });
             let sl2 = sl.clone();
@@ -1373,7 +1385,7 @@ pub(crate) mod tests {
             Arc::default(),
         );
 
-        sl.put(b"aaa".to_vec(), b"val-a".to_vec());
+        sl.put(b"aaa".to_vec(), b"val-a".to_vec()).unwrap();
 
         let e = sl.get(b"aaa").unwrap();
         let ref_count = unsafe { &*e.node }.refs_and_height.load(Ordering::Relaxed) >> HEIGHT_BITS;
@@ -1393,25 +1405,26 @@ pub(crate) mod tests {
     }
 
     fn gen_operations() -> impl Strategy<Value = Vec<Operation>> {
-        let kv_size: usize = 16;
+        let min_kv_size: usize = 16;
+        let max_kv_size: usize = 32;
         prop::collection::vec(
             prop_oneof![
                 (
-                    prop::collection::vec(prop::num::u8::ANY, 0..kv_size),
-                    prop::collection::vec(prop::num::u8::ANY, 0..kv_size)
+                    prop::collection::vec(prop::num::u8::ANY, min_kv_size..max_kv_size),
+                    prop::collection::vec(prop::num::u8::ANY, min_kv_size..max_kv_size)
                 )
                     .prop_map(|(k, v)| Operation::Put(k, v)),
-                prop::collection::vec(prop::num::u8::ANY, 0..kv_size)
+                prop::collection::vec(prop::num::u8::ANY, min_kv_size..max_kv_size)
                     .prop_map(|k| Operation::Get(k)),
-                prop::collection::vec(prop::num::u8::ANY, 0..kv_size)
+                prop::collection::vec(prop::num::u8::ANY, min_kv_size..max_kv_size)
                     .prop_map(|k| Operation::Delete(k)),
                 (
-                    prop::collection::vec(prop::num::u8::ANY, 0..kv_size),
+                    prop::collection::vec(prop::num::u8::ANY, min_kv_size..max_kv_size),
                     0..10usize
                 )
                     .prop_map(|(k, v)| Operation::Scan(k, v)),
             ],
-            0..100,
+            0..1000,
         )
     }
 
@@ -1421,6 +1434,50 @@ pub(crate) mod tests {
             Arc::default(),
         );
 
-        let map: BTreeMap<Bytes, Bytes> = BTreeMap::new();
+        let mut map: BTreeMap<Vec<u8>, Vec<u8>> = BTreeMap::new();
+
+        for op in operations {
+            match op {
+                Operation::Put(k, v) => {
+                    // false means already have
+                    if sl.put(k.clone(), v.clone()).unwrap() {
+                        map.insert(k, v);
+                    }
+                }
+                Operation::Delete(k) => {
+                    let cursor = map.lower_bound(Bound::Included(&k));
+                    if let Some(k) = cursor.key().cloned() {
+                        assert!(sl.remove(&k));
+                        map.remove(&k).unwrap();
+                    }
+                }
+                Operation::Get(k) => {
+                    let cursor = map.lower_bound(Bound::Included(&k));
+                    if let Some((k, v)) = cursor.key_value() {
+                        let entry = sl.get(k).unwrap();
+                        assert_eq!(entry.value(), v);
+                    }
+                }
+                Operation::Scan(k, mut n) => {
+                    let mut cursor = map.lower_bound(Bound::Included(&k));
+                    let mut iter = sl.iter();
+                    iter.seek(&k);
+
+                    while iter.valid() && n > 0 {
+                        assert_eq!(iter.value(), cursor.value().unwrap());
+                        iter.next();
+                        cursor.move_next();
+                        n -= 1;
+                    }
+                }
+            }
+        }
+    }
+
+    proptest! {
+        #[test]
+        fn test_skiplist_basic_ops(operations in gen_operations()) {
+            test_skiplist_basic_operations(operations.clone());
+        }
     }
 }

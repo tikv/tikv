@@ -897,7 +897,7 @@ mod tests {
                 let key = construct_key(i, mvcc);
                 let val = construct_value(i, mvcc);
                 let key = encode_key(&key, start_seq, ValueType::Value);
-                sl.put(key, Bytes::from(val));
+                sl.put(key, Bytes::from(val)).unwrap();
             }
             start_seq += 1;
         }
@@ -913,7 +913,7 @@ mod tests {
             for mvcc in mvcc_range.clone() {
                 let key = construct_key(i, mvcc);
                 let key = encode_key(&key, seq, ValueType::Deletion);
-                sl.put(key, Bytes::default());
+                sl.put(key, Bytes::default()).unwrap();
             }
             seq += 1;
         }
@@ -935,7 +935,7 @@ mod tests {
     ) {
         let key = construct_mvcc_key(key, mvcc);
         let key = encode_key(&key, seq, ValueType::Value);
-        sl.put(key, Bytes::from(val.to_owned()));
+        sl.put(key, Bytes::from(val.to_owned())).unwrap();
     }
 
     fn delete_key(
@@ -946,7 +946,7 @@ mod tests {
     ) {
         let key = construct_mvcc_key(key, mvcc);
         let key = encode_key(&key, seq, ValueType::Deletion);
-        sl.put(key, Bytes::default());
+        sl.put(key, Bytes::default()).unwrap();
     }
 
     fn verify_key_value(k: &[u8], v: &[u8], i: u64, mvcc: u64) {
@@ -1732,7 +1732,7 @@ mod tests {
                     let user_key = construct_key(i, mvcc);
                     let internal_key = encode_key(&user_key, 10, ValueType::Value);
                     let v = format!("v{:02}{:02}", i, mvcc);
-                    sl.put(internal_key, v);
+                    sl.put(internal_key, v).unwrap();
                 }
             }
         }
@@ -1840,7 +1840,7 @@ mod tests {
                 let user_key = construct_key(i, 10);
                 let internal_key = encode_key(&user_key, 10, ValueType::Value);
                 let v = construct_value(i, 10);
-                sl.put(internal_key.clone(), v.clone());
+                sl.put(internal_key.clone(), v.clone()).unwrap();
             }
         }
 
@@ -1899,7 +1899,7 @@ mod tests {
                 let user_key = construct_key(i, 10);
                 let internal_key = encode_key(&user_key, 10, ValueType::Value);
                 let v = construct_value(i, 10);
-                sl.put(internal_key.clone(), v.clone());
+                sl.put(internal_key.clone(), v.clone()).unwrap();
             }
         }
 

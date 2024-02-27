@@ -345,7 +345,8 @@ impl Runnable for BackgroundRunner {
                                         // use 0 sequence number here as the kv is clearly visible
                                         let encoded_key =
                                             encode_key(iter.key(), 0, ValueType::Value);
-                                        handle.put(encoded_key, iter.value().to_vec());
+                                        // todo(SpadeA): handle the put error
+                                        handle.put(encoded_key, iter.value().to_vec()).unwrap();
                                         iter.next().unwrap();
                                     }
                                 }
@@ -532,14 +533,18 @@ pub mod tests {
                 None
             },
         );
-        write_cf.put(write_k, Bytes::from(write_v.as_ref().to_bytes()));
+        write_cf
+            .put(write_k, Bytes::from(write_v.as_ref().to_bytes()))
+            .unwrap();
 
         if !short_value {
             let default_k = Key::from_raw(key)
                 .append_ts(TimeStamp::new(start_ts))
                 .into_encoded();
             let default_k = encode_key(&default_k, seq_num + 1, ValueType::Value);
-            default_cf.put(default_k, Bytes::from(value.to_vec()));
+            default_cf
+                .put(default_k, Bytes::from(value.to_vec()))
+                .unwrap();
         }
     }
 
@@ -554,7 +559,9 @@ pub mod tests {
             .into_encoded();
         let write_k = encode_key(&write_k, seq_num, ValueType::Value);
         let write_v = Write::new(WriteType::Delete, TimeStamp::new(ts), None);
-        write_cf.put(write_k, Bytes::from(write_v.as_ref().to_bytes()));
+        write_cf
+            .put(write_k, Bytes::from(write_v.as_ref().to_bytes()))
+            .unwrap();
     }
 
     fn rollback_data(
@@ -568,7 +575,9 @@ pub mod tests {
             .into_encoded();
         let write_k = encode_key(&write_k, seq_num, ValueType::Value);
         let write_v = Write::new(WriteType::Rollback, TimeStamp::new(ts), None);
-        write_cf.put(write_k, Bytes::from(write_v.as_ref().to_bytes()));
+        write_cf
+            .put(write_k, Bytes::from(write_v.as_ref().to_bytes()))
+            .unwrap();
     }
 
     fn element_count(sklist: &Arc<Skiplist<InternalKeyComparator, GlobalMemoryLimiter>>) -> u64 {

@@ -1,9 +1,11 @@
+// Copyright 2024 TiKV Project Authors. Licensed under Apache-2.0.
+
 use std::{
     collections::HashMap,
     sync::{Arc, Mutex},
 };
 
-pub trait MemoryLimiter: AllocationRecorder {
+pub trait MemoryController: AllocationRecorder {
     fn acquire(&self, n: usize) -> bool;
     fn reclaim(&self, n: usize);
     fn mem_usage(&self) -> usize;
@@ -16,12 +18,13 @@ pub trait AllocationRecorder: Clone {
     fn freed(&self, addr: usize, size: usize);
 }
 
-// a test purpose limiter
+#[cfg(test)]
 #[derive(Clone, Default)]
 pub struct RecorderLimiter {
     recorder: Arc<Mutex<HashMap<usize, usize>>>,
 }
 
+#[cfg(test)]
 impl Drop for RecorderLimiter {
     fn drop(&mut self) {
         let recorder = self.recorder.lock().unwrap();
@@ -29,6 +32,7 @@ impl Drop for RecorderLimiter {
     }
 }
 
+#[cfg(test)]
 impl AllocationRecorder for RecorderLimiter {
     fn allocated(&self, addr: usize, size: usize) {
         let mut recorder = self.recorder.lock().unwrap();
@@ -42,7 +46,8 @@ impl AllocationRecorder for RecorderLimiter {
     }
 }
 
-impl MemoryLimiter for RecorderLimiter {
+#[cfg(test)]
+impl MemoryController for RecorderLimiter {
     fn acquire(&self, _: usize) -> bool {
         true
     }
@@ -54,16 +59,19 @@ impl MemoryLimiter for RecorderLimiter {
     fn reclaim(&self, _: usize) {}
 }
 
+#[cfg(test)]
 #[derive(Clone, Default)]
 pub struct DummyLimiter {}
 
+#[cfg(test)]
 impl AllocationRecorder for DummyLimiter {
     fn allocated(&self, _: usize, _: usize) {}
 
     fn freed(&self, _: usize, _: usize) {}
 }
 
-impl MemoryLimiter for DummyLimiter {
+#[cfg(test)]
+impl MemoryController for DummyLimiter {
     fn acquire(&self, _: usize) -> bool {
         true
     }

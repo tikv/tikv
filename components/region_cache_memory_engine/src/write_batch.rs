@@ -195,7 +195,8 @@ impl RangeCacheWriteBatchEntry {
     pub fn write_to_memory(&self, skiplist_engine: &SkiplistEngine, seq: u64) -> Result<()> {
         let handle = &skiplist_engine.data[self.cf];
         let (key, value) = self.encode(seq);
-        let _ = handle.put(key, value);
+        // todo(SpadeA): handle the put error
+        let _ = handle.put(key, value).unwrap();
         Ok(())
     }
 }

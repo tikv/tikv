@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex};
 
 use collections::{HashMap, HashSet};
 
-use crate::skiplist::{AllocationRecorder, MemoryLimiter, Node};
+use crate::skiplist::{AllocationRecorder, MemoryController, Node};
 
 // todo: implement a real memory limiter. Now, it is used for test.
 #[derive(Clone, Default)]
@@ -13,7 +13,7 @@ pub struct GlobalMemoryLimiter {
     pub(crate) removed: Arc<Mutex<HashSet<Vec<u8>>>>,
 }
 
-impl MemoryLimiter for GlobalMemoryLimiter {
+impl MemoryController for GlobalMemoryLimiter {
     fn acquire(&self, n: usize) -> bool {
         true
     }
