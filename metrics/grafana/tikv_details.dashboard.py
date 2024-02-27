@@ -1565,36 +1565,6 @@ def PD() -> RowPanel:
                     ),
                 ],
             ),
-            graph_panel(
-                title="Store Slow Score",
-                description="The slow score of stores",
-                targets=[
-                    target(
-                        expr=expr_sum(
-                            "tikv_raftstore_slow_score",
-                        ),
-                    ),
-                ],
-            ),
-        ]
-    )
-    layout.row(
-        [
-            graph_panel(
-                title="Inspected duration per server",
-                description="The duration that recorded by inspecting messages.",
-                yaxes=yaxes(left_format=UNITS.SECONDS),
-                targets=[
-                    target(
-                        expr=expr_histogram_quantile(
-                            0.99,
-                            "tikv_raftstore_inspect_duration_seconds",
-                            by_labels=["instance", "type"],
-                        ),
-                        legend_format="{{instance}}-{{type}}",
-                    ),
-                ],
-            )
         ]
     )
     return layout.row_panel
@@ -8574,6 +8544,36 @@ def BackupLog() -> RowPanel:
 
 def SlowTrendStatistics() -> RowPanel:
     layout = Layout(title="Slow Trend Statistics")
+    layout.row(
+        [
+            graph_panel(
+                title="Inspected duration per server",
+                description="The duration that recorded by inspecting messages.",
+                yaxes=yaxes(left_format=UNITS.SECONDS),
+                targets=[
+                    target(
+                        expr=expr_histogram_quantile(
+                            0.99,
+                            "tikv_raftstore_inspect_duration_seconds",
+                            by_labels=["instance", "type"],
+                        ),
+                        legend_format="{{instance}}-{{type}}",
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="Store Slow Score",
+                description="The slow score of stores",
+                targets=[
+                    target(
+                        expr=expr_sum(
+                            "tikv_raftstore_slow_score",
+                        ),
+                    ),
+                ],
+            ),
+        ]
+    )
     layout.row(
         [
             graph_panel(
