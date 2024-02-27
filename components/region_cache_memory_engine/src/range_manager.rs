@@ -1,7 +1,11 @@
 // Copyright 2024 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::{
+    collections::{BTreeMap, BTreeSet, VecDeque},
+    sync::Arc,
+};
 
+use engine_rocks::RocksSnapshot;
 use engine_traits::CacheRange;
 
 use crate::engine::{RagneCacheSnapshotMeta, SnapshotList};
@@ -79,6 +83,19 @@ pub struct RangeManager {
     evicted_ranges: BTreeSet<CacheRange>,
     // ranges that are cached now
     ranges: BTreeMap<CacheRange, RangeMeta>,
+
+    // `pending_ranges` contains ranges that will be loaded into the memory engine. At
+    // sometime in the apply thread, the pending ranges, coupled with rocksdb snapshot, will be
+    // poped and pushed into `ranges_loading_snapshot`. Then the data in the snapshot
+    // of the given ranges will be loaded in the memory engine in the background worker.
+    // When the snapshot load is finished, `ranges_loading_cached_write` will take over it, which
+    // will handle data that is written after the acquire of the snapshot. After it, the range load
+    // is finished.
+    pub(crate) pending_ranges: Vec<CacheRange>,
+    pub(crate) ranges_loading_snapshot: VecDeque<(CacheRange, Arc<RocksSnapshot>)>,
+    pub(crate) ranges_loading_cached_write: Vec<CacheRange>,
+
+    ranges_in_gc: BTreeSet<CacheRange>,
 }
 
 impl RangeManager {
@@ -101,7 +118,7 @@ impl RangeManager {
         self.ranges.get_mut(range)
     }
 
-    pub fn set_safe_ts(&mut self, range: &CacheRange, safe_ts: u64) -> bool {
+    pub fn set_safe_point(&mut self, range: &CacheRange, safe_ts: u64) -> bool {
         if let Some(meta) = self.ranges.get_mut(range) {
             if meta.safe_point > safe_ts {
                 return false;
@@ -201,7 +218,7 @@ impl RangeManager {
             .ranges
             .keys()
             .find(|&r| r.contains_range(evict_range))
-            .unwrap()
+            .unwrap_or_else(|| panic!("evict a range that does not contain: {:?}", evict_range))
             .clone();
         let meta = self.ranges.remove(&range_key).unwrap();
         let (left_range, right_range) = range_key.split_off(evict_range);
@@ -230,13 +247,53 @@ impl RangeManager {
             .keys()
             .any(|r| r.overlaps(evict_range))
     }
+
+    pub fn on_delete_range(&mut self, range: &CacheRange) {
+        self.evicted_ranges.remove(range);
+    }
+
+    pub fn set_ranges_in_gc(&mut self, ranges_in_gc: BTreeSet<CacheRange>) {
+        self.ranges_in_gc = ranges_in_gc;
+    }
+
+    pub fn clear_ranges_in_gc(&mut self) {
+        self.ranges_in_gc = BTreeSet::default();
+    }
+
+    pub fn load_range(&mut self, cache_range: CacheRange) -> Result<(), LoadFailedReason> {
+        if self.overlap_with_range(&cache_range) {
+            return Err(LoadFailedReason::Overlapped);
+        };
+        if self.ranges_in_gc.contains(&cache_range) {
+            return Err(LoadFailedReason::InGc);
+        }
+        if self.evicted_ranges.contains(&cache_range) {
+            return Err(LoadFailedReason::Evicted);
+        }
+        self.pending_ranges.push(cache_range);
+        Ok(())
+    }
+
+    pub(crate) fn has_range_to_cache_write(&self) -> bool {
+        !self.ranges_loading_snapshot.is_empty() || !self.ranges_loading_cached_write.is_empty()
+    }
+}
+
+#[derive(Debug, PartialEq)]
+pub enum LoadFailedReason {
+    Overlapped,
+    InGc,
+    Evicted,
 }
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
+
     use engine_traits::CacheRange;
 
     use super::RangeManager;
+    use crate::range_manager::LoadFailedReason;
 
     #[test]
     fn test_range_manager() {
@@ -245,7 +302,7 @@ mod tests {
 
         range_mgr.new_range(r1.clone());
         range_mgr.set_range_readable(&r1, true);
-        range_mgr.set_safe_ts(&r1, 5);
+        range_mgr.set_safe_point(&r1, 5);
         assert!(range_mgr.range_snapshot(&r1, 5).is_none());
         assert!(range_mgr.range_snapshot(&r1, 8).is_some());
         assert!(range_mgr.range_snapshot(&r1, 10).is_some());
@@ -275,5 +332,36 @@ mod tests {
 
         assert!(!range_mgr.evict_range(&r_right));
         assert!(range_mgr.historical_ranges.get(&r_right).is_none());
+    }
+
+    #[test]
+    fn test_range_load() {
+        let mut range_mgr = RangeManager::default();
+        let r1 = CacheRange::new(b"k00".to_vec(), b"k10".to_vec());
+        let r2 = CacheRange::new(b"k10".to_vec(), b"k20".to_vec());
+        let r3 = CacheRange::new(b"k20".to_vec(), b"k30".to_vec());
+        let r4 = CacheRange::new(b"k25".to_vec(), b"k35".to_vec());
+        range_mgr.new_range(r1.clone());
+        range_mgr.new_range(r3.clone());
+        range_mgr.evict_range(&r1);
+
+        let mut gced = BTreeSet::default();
+        gced.insert(r2.clone());
+        range_mgr.set_ranges_in_gc(gced);
+
+        assert_eq!(
+            range_mgr.load_range(r1).unwrap_err(),
+            LoadFailedReason::Evicted
+        );
+
+        assert_eq!(
+            range_mgr.load_range(r2).unwrap_err(),
+            LoadFailedReason::InGc
+        );
+
+        assert_eq!(
+            range_mgr.load_range(r4).unwrap_err(),
+            LoadFailedReason::Overlapped
+        );
     }
 }

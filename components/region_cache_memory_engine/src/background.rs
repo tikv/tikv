@@ -1,22 +1,29 @@
 // Copyright 2024 TiKV Project Authors. Licensed under Apache-2.0.
 
 use core::slice::SlicePattern;
-use std::{fmt::Display, sync::Arc, thread::JoinHandle, time::Duration};
+use std::{collections::BTreeSet, fmt::Display, sync::Arc, thread::JoinHandle, time::Duration};
 
 use crossbeam::{
     channel::{bounded, tick, Sender},
     select,
     sync::ShardedLock,
 };
-use engine_traits::{CacheRange, CF_DEFAULT, CF_WRITE};
+use engine_rocks::RocksSnapshot;
+use engine_traits::{CacheRange, IterOptions, Iterable, Iterator, CF_DEFAULT, CF_WRITE, DATA_CFS};
 use skiplist_rs::Skiplist;
 use slog_global::{error, info, warn};
-use tikv_util::worker::{Runnable, Scheduler, Worker};
+use tikv_util::{
+    keybuilder::KeyBuilder,
+    worker::{Runnable, ScheduleError, Scheduler, Worker},
+};
 use txn_types::{Key, TimeStamp, WriteRef, WriteType};
+use yatp::Remote;
 
 use crate::{
     engine::RangeCacheMemoryEngineCore,
-    keys::{decode_key, encoding_for_filter, InternalKey, InternalKeyComparator},
+    keys::{
+        decode_key, encode_key, encoding_for_filter, InternalKey, InternalKeyComparator, ValueType,
+    },
     memory_limiter::GlobalMemoryLimiter,
 };
 
@@ -79,6 +86,10 @@ impl BgWorkManager {
         }
     }
 
+    pub fn schedule_task(&self, task: BackgroundTask) -> Result<(), ScheduleError<BackgroundTask>> {
+        self.scheduler.schedule_force(task)
+    }
+
     fn start_tick(
         scheduler: Scheduler<BackgroundTask>,
         gc_interval: Duration,
@@ -96,6 +107,7 @@ impl BgWorkManager {
                         }
 
                         let safe_point = TimeStamp::physical_now() - gc_interval.as_millis() as u64;
+                        let safe_point = TimeStamp::compose(safe_point, 0).into_inner();
                         if let Err(e) = scheduler.schedule(BackgroundTask::GcTask(GcTask {safe_point})) {
                             error!(
                                 "schedule range cache engine gc failed";
@@ -122,6 +134,7 @@ impl BgWorkManager {
 #[derive(Debug)]
 pub enum BackgroundTask {
     GcTask(GcTask),
+    LoadTask,
 }
 
 #[derive(Debug)]
@@ -133,6 +146,7 @@ impl Display for BackgroundTask {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             BackgroundTask::GcTask(ref t) => t.fmt(f),
+            BackgroundTask::LoadTask => f.debug_struct("LoadTask").finish(),
         }
     }
 }
@@ -145,25 +159,28 @@ impl Display for GcTask {
     }
 }
 
-pub struct BackgroundRunner {
-    engine_core: Arc<ShardedLock<RangeCacheMemoryEngineCore>>,
+#[derive(Clone)]
+struct BackgroundRunnerCore {
+    engine: Arc<ShardedLock<RangeCacheMemoryEngineCore>>,
 }
 
-impl BackgroundRunner {
-    pub fn new(engine_core: Arc<ShardedLock<RangeCacheMemoryEngineCore>>) -> Self {
-        Self { engine_core }
-    }
-
-    fn ranges_for_gc(&self) -> Vec<CacheRange> {
-        let mut core = self.engine_core.write().unwrap();
-        let ranges: Vec<CacheRange> = core.range_manager().ranges().keys().cloned().collect();
-        core.set_ranges_gcing(ranges.clone());
+impl BackgroundRunnerCore {
+    fn ranges_for_gc(&self) -> BTreeSet<CacheRange> {
+        let ranges: BTreeSet<CacheRange> = {
+            let core = self.engine.read().unwrap();
+            core.range_manager().ranges().keys().cloned().collect()
+        };
+        let ranges_clone = ranges.clone();
+        {
+            let mut core = self.engine.write().unwrap();
+            core.mut_range_manager().set_ranges_in_gc(ranges_clone);
+        }
         ranges
     }
 
     fn gc_range(&self, range: &CacheRange, safe_point: u64) {
         let (skiplist_engine, safe_ts) = {
-            let mut core = self.engine_core.write().unwrap();
+            let mut core = self.engine.write().unwrap();
             let Some(range_meta) = core.mut_range_manager().mut_range_meta(range) else {
                 return;
             };
@@ -225,8 +242,72 @@ impl BackgroundRunner {
     }
 
     fn gc_finished(&mut self) {
-        let mut core = self.engine_core.write().unwrap();
-        core.clear_ranges_gcing();
+        let mut core = self.engine.write().unwrap();
+        core.mut_range_manager().clear_ranges_in_gc();
+    }
+
+    // return the first range to load with RocksDB snapshot
+    fn get_range_to_load(&self) -> Option<(CacheRange, Arc<RocksSnapshot>)> {
+        let core = self.engine.read().unwrap();
+        core.range_manager()
+            .ranges_loading_snapshot
+            .front()
+            .cloned()
+    }
+
+    fn on_snapshot_loaded(&mut self, range: CacheRange) -> engine_traits::Result<()> {
+        fail::fail_point!("on_snapshot_loaded");
+        let has_cache_batch = {
+            let core = self.engine.read().unwrap();
+            core.has_cached_write_batch(&range)
+        };
+        if has_cache_batch {
+            let (cache_batch, skiplist_engine) = {
+                let mut core = self.engine.write().unwrap();
+                (
+                    core.take_cache_write_batch(&range).unwrap(),
+                    core.engine().clone(),
+                )
+            };
+            for (seq, entry) in cache_batch {
+                entry.write_to_memory(&skiplist_engine, seq)?;
+            }
+        }
+        fail::fail_point!("on_snapshot_loaded_finish_before_status_change");
+        {
+            let mut core = self.engine.write().unwrap();
+            let range_manager = core.mut_range_manager();
+            assert_eq!(
+                range_manager.ranges_loading_snapshot.pop_front().unwrap().0,
+                range
+            );
+            range_manager.ranges_loading_cached_write.push(range);
+        }
+        Ok(())
+    }
+}
+
+pub struct BackgroundRunner {
+    core: BackgroundRunnerCore,
+    range_load_remote: Remote<yatp::task::future::TaskCell>,
+    range_load_worker: Worker,
+}
+
+impl Drop for BackgroundRunner {
+    fn drop(&mut self) {
+        self.range_load_worker.stop();
+    }
+}
+
+impl BackgroundRunner {
+    pub fn new(engine: Arc<ShardedLock<RangeCacheMemoryEngineCore>>) -> Self {
+        let range_load_worker = Worker::new("background-range-load-worker");
+        let range_load_remote = range_load_worker.remote();
+        Self {
+            core: BackgroundRunnerCore { engine },
+            range_load_worker,
+            range_load_remote,
+        }
     }
 }
 
@@ -236,11 +317,47 @@ impl Runnable for BackgroundRunner {
     fn run(&mut self, task: Self::Task) {
         match task {
             BackgroundTask::GcTask(t) => {
-                let ranges = self.ranges_for_gc();
+                let ranges = self.core.ranges_for_gc();
                 for range in ranges {
-                    self.gc_range(&range, t.safe_point);
+                    self.core.gc_range(&range, t.safe_point);
                 }
-                self.gc_finished();
+                self.core.gc_finished();
+            }
+            BackgroundTask::LoadTask => {
+                let mut core = self.core.clone();
+                let f = async move {
+                    let skiplist_engine = {
+                        let core = core.engine.read().unwrap();
+                        core.engine().clone()
+                    };
+                    while let Some((range, snap)) = core.get_range_to_load() {
+                        let iter_opt = IterOptions::new(
+                            Some(KeyBuilder::from_vec(range.start.clone(), 0, 0)),
+                            Some(KeyBuilder::from_vec(range.end.clone(), 0, 0)),
+                            false,
+                        );
+                        for &cf in DATA_CFS {
+                            let handle = skiplist_engine.cf_handle(cf);
+                            match snap.iterator_opt(cf, iter_opt.clone()) {
+                                Ok(mut iter) => {
+                                    iter.seek_to_first().unwrap();
+                                    while iter.valid().unwrap() {
+                                        // use 0 sequence number here as the kv is clearly visible
+                                        let encoded_key =
+                                            encode_key(iter.key(), 0, ValueType::Value);
+                                        handle.put(encoded_key, iter.value().to_vec());
+                                        iter.next().unwrap();
+                                    }
+                                }
+                                Err(e) => {
+                                    error!("creating rocksdb iterator failed"; "cf" => cf, "err" => %e);
+                                }
+                            }
+                        }
+                        core.on_snapshot_loaded(range).unwrap();
+                    }
+                };
+                self.range_load_remote.spawn(f);
             }
         }
     }
@@ -357,8 +474,8 @@ impl Filter {
             // seek(both get and remove invovle seek). Maybe we can provide the API to
             // delete the mvcc keys with all sequence numbers.
             let default_key = encoding_for_filter(&self.mvcc_key_prefix, write.start_ts);
-            while let Some((key, val)) = self.default_cf_handle.get_with_key(&default_key) {
-                self.default_cf_handle.remove(key.as_slice());
+            while let Some(entry) = self.default_cf_handle.get(&default_key) {
+                self.default_cf_handle.remove(entry.key().as_slice());
             }
         }
         Ok(())
@@ -371,15 +488,23 @@ pub mod tests {
     use std::{sync::Arc, time::Duration};
 
     use bytes::Bytes;
-    use engine_traits::{CacheRange, RangeCacheEngine, CF_DEFAULT, CF_WRITE};
+    use engine_rocks::util::new_engine;
+    use engine_traits::{
+        CacheRange, RangeCacheEngine, SyncMutable, CF_DEFAULT, CF_WRITE, DATA_CFS,
+    };
+    use keys::{data_key, DATA_MAX_KEY, DATA_MIN_KEY};
     use skiplist_rs::Skiplist;
+    use tempfile::Builder;
     use txn_types::{Key, TimeStamp, Write, WriteType};
 
     use super::Filter;
     use crate::{
         background::BackgroundRunner,
         engine::SkiplistEngine,
-        keys::{encode_key, encoding_for_filter, InternalKeyComparator, ValueType},
+        keys::{
+            construct_key, construct_value, encode_key, encode_seek_key, encoding_for_filter,
+            InternalKeyComparator, ValueType, VALUE_TYPE_FOR_SEEK,
+        },
         memory_limiter::GlobalMemoryLimiter,
         RangeCacheMemoryEngine,
     };
@@ -545,17 +670,17 @@ pub mod tests {
         let worker = BackgroundRunner::new(engine.core.clone());
 
         // gc will not remove the latest mvcc put below safe point
-        worker.gc_range(&range, 14);
+        worker.core.gc_range(&range, 14);
         assert_eq!(2, element_count(&default));
         assert_eq!(2, element_count(&write));
 
-        worker.gc_range(&range, 16);
+        worker.core.gc_range(&range, 16);
         assert_eq!(1, element_count(&default));
         assert_eq!(1, element_count(&write));
 
         // rollback will not make the first older version be filtered
         rollback_data(b"key1", 17, 16, &write);
-        worker.gc_range(&range, 17);
+        worker.core.gc_range(&range, 17);
         assert_eq!(1, element_count(&default));
         assert_eq!(1, element_count(&write));
         let key = encode_key(b"key1", TimeStamp::new(15));
@@ -566,7 +691,7 @@ pub mod tests {
         // unlike in WriteCompactionFilter, the latest mvcc delete below safe point will
         // be filtered
         delete_data(b"key1", 19, 18, &write);
-        worker.gc_range(&range, 19);
+        worker.core.gc_range(&range, 19);
         assert_eq!(0, element_count(&write));
         assert_eq!(0, element_count(&default));
     }
@@ -601,22 +726,22 @@ pub mod tests {
         let s3 = engine.snapshot(range.clone(), 20, u64::MAX);
 
         // nothing will be removed due to snapshot 5
-        worker.gc_range(&range, 30);
+        worker.core.gc_range(&range, 30);
         assert_eq!(6, element_count(&default));
         assert_eq!(6, element_count(&write));
 
         drop(s1);
-        worker.gc_range(&range, 30);
+        worker.core.gc_range(&range, 30);
         assert_eq!(5, element_count(&default));
         assert_eq!(5, element_count(&write));
 
         drop(s2);
-        worker.gc_range(&range, 30);
+        worker.core.gc_range(&range, 30);
         assert_eq!(4, element_count(&default));
         assert_eq!(4, element_count(&write));
 
         drop(s3);
-        worker.gc_range(&range, 30);
+        worker.core.gc_range(&range, 30);
         assert_eq!(3, element_count(&default));
         assert_eq!(3, element_count(&write));
     }
@@ -674,5 +799,79 @@ pub mod tests {
 
         let key = encoding_for_filter(key.as_encoded(), TimeStamp::new(commit_ts4));
         assert!(write.get(&key).is_some());
+    }
+
+    #[test]
+    fn test_background_worker_load() {
+        let mut engine = RangeCacheMemoryEngine::new(Arc::default(), Duration::from_secs(1000));
+        let path = Builder::new().prefix("test_load").tempdir().unwrap();
+        let path_str = path.path().to_str().unwrap();
+        let rocks_engine = new_engine(path_str, DATA_CFS).unwrap();
+        engine.set_disk_engine(rocks_engine.clone());
+
+        for i in 10..20 {
+            let key = construct_key(i, 1);
+            let key = data_key(&key);
+            let value = construct_value(i, i);
+            rocks_engine
+                .put_cf(CF_DEFAULT, &key, value.as_bytes())
+                .unwrap();
+            rocks_engine
+                .put_cf(CF_WRITE, &key, value.as_bytes())
+                .unwrap();
+        }
+
+        let k = format!("zk{:08}", 15).into_bytes();
+        let r1 = CacheRange::new(DATA_MIN_KEY.to_vec(), k.clone());
+        let r2 = CacheRange::new(k, DATA_MAX_KEY.to_vec());
+        {
+            let mut core = engine.core.write().unwrap();
+            core.mut_range_manager().pending_ranges.push(r1.clone());
+            core.mut_range_manager().pending_ranges.push(r2.clone());
+        }
+        engine.handle_pending_load();
+
+        // concurrent write to rocksdb, but the key will not be loaded in the memory
+        // engine
+        let key = construct_key(20, 1);
+        let key20 = data_key(&key);
+        let value = construct_value(20, 20);
+        rocks_engine
+            .put_cf(CF_DEFAULT, &key20, value.as_bytes())
+            .unwrap();
+        rocks_engine
+            .put_cf(CF_WRITE, &key20, value.as_bytes())
+            .unwrap();
+
+        let (write, default) = {
+            let core = engine.core().write().unwrap();
+            let skiplist_engine = core.engine();
+            (
+                skiplist_engine.cf_handle(CF_WRITE),
+                skiplist_engine.cf_handle(CF_DEFAULT),
+            )
+        };
+
+        // wait for background load
+        std::thread::sleep(Duration::from_secs(1));
+
+        for i in 10..20 {
+            let key = construct_key(i, 1);
+            let key = data_key(&key);
+            let value = construct_value(i, i);
+            let key = encode_seek_key(&key, u64::MAX, VALUE_TYPE_FOR_SEEK);
+            assert_eq!(
+                write.get(&key).unwrap().value().as_slice(),
+                value.as_bytes()
+            );
+            assert_eq!(
+                default.get(&key).unwrap().value().as_slice(),
+                value.as_bytes()
+            );
+        }
+
+        let key20 = encode_seek_key(&key20, u64::MAX, VALUE_TYPE_FOR_SEEK);
+        assert!(write.get(&key20).is_none());
+        assert!(default.get(&key20).is_none());
     }
 }
