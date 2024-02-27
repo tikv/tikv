@@ -29,9 +29,11 @@ command! {
     /// [`Prewrite`](Command::Prewrite).
     CheckTxnStatus:
         cmd_ty => TxnStatus,
-        display => "kv::command::check_txn_status {} @ {} curr({}, {}, {}, {}, {}) | {:?}",
-           (primary_key, lock_ts, caller_start_ts, current_ts, rollback_if_not_exist,
-               force_sync_commit, resolving_pessimistic_lock, ctx),
+        display => {
+            "kv::command::check_txn_status {} @ {} curr({}, {}, {}, {}, {}) | {:?}",
+            (primary_key, lock_ts, caller_start_ts, current_ts, rollback_if_not_exist,
+                force_sync_commit, resolving_pessimistic_lock, ctx),
+        }
         content => {
             /// The primary key of the transaction.
             primary_key: Key,
@@ -56,6 +58,9 @@ command! {
             // (see https://github.com/pingcap/tidb/issues/42937 for details).
             // Must be set to true, unless the client is old version that doesn't support this behavior.
             verify_is_primary: bool,
+        }
+        in_heap => {
+            primary_key,
         }
 }
 

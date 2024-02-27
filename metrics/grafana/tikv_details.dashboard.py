@@ -1593,36 +1593,6 @@ def PD() -> RowPanel:
                     ),
                 ],
             ),
-            graph_panel(
-                title="Store Slow Score",
-                description="The slow score of stores",
-                targets=[
-                    target(
-                        expr=expr_sum(
-                            "tikv_raftstore_slow_score",
-                        ),
-                    ),
-                ],
-            ),
-        ]
-    )
-    layout.row(
-        [
-            graph_panel(
-                title="Inspected duration per server",
-                description="The duration that recorded by inspecting messages.",
-                yaxes=yaxes(left_format=UNITS.SECONDS),
-                targets=[
-                    target(
-                        expr=expr_histogram_quantile(
-                            0.99,
-                            "tikv_raftstore_inspect_duration_seconds",
-                            by_labels=["instance", "type"],
-                        ),
-                        legend_format="{{instance}}-{{type}}",
-                    ),
-                ],
-            )
         ]
     )
     return layout.row_panel
@@ -3189,22 +3159,6 @@ def Scheduler() -> RowPanel:
                 ],
             ),
             graph_panel(
-                title="Scheduler writing bytes",
-                description="The total writing bytes of commands on each stage",
-                yaxes=yaxes(left_format=UNITS.BYTES_IEC),
-                targets=[
-                    target(
-                        expr=expr_sum(
-                            "tikv_scheduler_writing_bytes",
-                        ),
-                    ),
-                ],
-            ),
-        ]
-    )
-    layout.row(
-        [
-            graph_panel(
                 title="Scheduler priority commands",
                 description="The count of different priority commands",
                 yaxes=yaxes(left_format=UNITS.OPS_PER_SEC),
@@ -3217,15 +3171,67 @@ def Scheduler() -> RowPanel:
                     ),
                 ],
             ),
+        ]
+    )
+    layout.row(
+        [
             graph_panel(
                 title="Scheduler pending commands",
                 description="The count of pending commands per TiKV instance",
-                yaxes=yaxes(left_format=UNITS.OPS_PER_SEC),
+                yaxes=yaxes(left_format=UNITS.NONE_FORMAT),
                 targets=[
                     target(
                         expr=expr_sum(
                             "tikv_scheduler_contex_total",
                         ),
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="Scheduler running commands",
+                description="The count of running commands per TiKV instance",
+                yaxes=yaxes(left_format=UNITS.NONE_FORMAT),
+                targets=[
+                    target(
+                        expr=expr_sum(
+                            "tikv_scheduler_running_commands",
+                        ),
+                    ),
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel(
+                title="Scheduler writing bytes",
+                description="The total writing bytes of commands on each stage",
+                yaxes=yaxes(left_format=UNITS.BYTES_IEC),
+                targets=[
+                    target(
+                        expr=expr_sum(
+                            "tikv_scheduler_writing_bytes",
+                        ),
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="Scheduler memory quota",
+                description="The number of bytes used by scheduler",
+                yaxes=yaxes(left_format=UNITS.BYTES_IEC),
+                targets=[
+                    target(
+                        expr=expr_sum(
+                            "tikv_scheduler_memory_quota_size",
+                            label_selectors=['type="in_use"'],
+                        ),
+                    ),
+                    target(
+                        expr=expr_sum(
+                            "tikv_scheduler_memory_quota_size",
+                            label_selectors=['type="capacity"'],
+                        ),
+                        hide=True,
                     ),
                 ],
             ),
@@ -8569,6 +8575,36 @@ def SlowTrendStatistics() -> RowPanel:
     layout.row(
         [
             graph_panel(
+                title="Inspected duration per server",
+                description="The duration that recorded by inspecting messages.",
+                yaxes=yaxes(left_format=UNITS.SECONDS),
+                targets=[
+                    target(
+                        expr=expr_histogram_quantile(
+                            0.99,
+                            "tikv_raftstore_inspect_duration_seconds",
+                            by_labels=["instance", "type"],
+                        ),
+                        legend_format="{{instance}}-{{type}}",
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="Store Slow Score",
+                description="The slow score of stores",
+                targets=[
+                    target(
+                        expr=expr_sum(
+                            "tikv_raftstore_slow_score",
+                        ),
+                    ),
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel(
                 title="Slow Trend",
                 description="The changing trend of the slowness on I/O operations. 'value > 0' means the related store might have a slow trend.",
                 targets=[
@@ -8666,15 +8702,19 @@ dashboard = Dashboard(
     editable=True,
     templating=Templates(),
     panels=[
+        # Overview
         Duration(),
         Cluster(),
         Errors(),
         Server(),
+        # Entrance of Write and Read
         gRPC(),
+        Storage(),
+        LocalReader(),
+        # CPU and IO
         ThreadCPU(),
-        TTL(),
-        PD(),
         IOBreakdown(),
+        # Raftstore
         RaftWaterfall(),
         RaftIO(),
         RaftPropose(),
@@ -8682,30 +8722,37 @@ dashboard = Dashboard(
         RaftMessage(),
         RaftAdmin(),
         RaftLog(),
-        LocalReader(),
-        UnifiedReadPool(),
-        Storage(),
+        # Engine
+        RaftEngine(),
+        RocksDB(),
+        Titan(),
+        # Scheduler and Read Pools
         FlowControl(),
-        SchedulerCommands(),
         Scheduler(),
-        GC(),
-        Snapshot(),
-        Task(),
+        SchedulerCommands(),
         CoprocessorOverview(),
         CoprocessorDetail(),
-        Threads(),
-        RocksDB(),
-        RaftEngine(),
-        Titan(),
+        UnifiedReadPool(),
+        # Transaction
+        GC(),
         PessimisticLocking(),
-        PointInTimeRestore(),
-        ResolvedTS(),
-        Memory(),
-        BackupImport(),
-        Encryption(),
-        BackupLog(),
+        # Background Tasks
+        Task(),
+        PD(),
         SlowTrendStatistics(),
+        Snapshot(),
+        # Tools
+        ResolvedTS(),
+        PointInTimeRestore(),
+        BackupImport(),
+        BackupLog(),
+        # Advanced Debugging for CPU and Memory
+        Threads(),
+        Memory(),
+        # Infrequently Used
         StatusServer(),
+        Encryption(),
+        TTL(),
     ],
     # Set 14 or larger to support shared crosshair or shared tooltip.
     # See https://github.com/grafana/grafana/blob/v10.2.2/public/app/features/dashboard/state/DashboardMigrator.ts#L443-L445

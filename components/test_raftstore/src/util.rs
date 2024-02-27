@@ -47,7 +47,7 @@ use raftstore::{
     RaftRouterCompactedEventSender, Result,
 };
 use rand::{seq::SliceRandom, RngCore};
-use region_cache_memory_engine::RegionCacheMemoryEngine;
+use region_cache_memory_engine::RangeCacheMemoryEngine;
 use server::common::{ConfiguredRaftEngine, KvEngineBuilder};
 use tempfile::TempDir;
 use test_pd_client::TestPdClient;
@@ -67,7 +67,7 @@ use txn_types::Key;
 
 use crate::{Cluster, Config, KvEngineWithRocks, RawEngine, ServerCluster, Simulator};
 
-pub type HybridEngineImpl = HybridEngine<RocksEngine, RegionCacheMemoryEngine>;
+pub type HybridEngineImpl = HybridEngine<RocksEngine, RangeCacheMemoryEngine>;
 
 pub fn must_get<EK: KvEngine>(
     engine: &impl RawEngine<EK>,
@@ -776,7 +776,7 @@ pub fn configure_for_enable_titan<EK: KvEngineWithRocks, T: Simulator<EK>>(
     cluster.cfg.rocksdb.titan.enabled = Some(true);
     cluster.cfg.rocksdb.titan.purge_obsolete_files_period = ReadableDuration::secs(1);
     cluster.cfg.rocksdb.titan.max_background_gc = 10;
-    cluster.cfg.rocksdb.defaultcf.titan.min_blob_size = min_blob_size;
+    cluster.cfg.rocksdb.defaultcf.titan.min_blob_size = Some(min_blob_size);
     cluster.cfg.rocksdb.defaultcf.titan.blob_run_mode = BlobRunMode::Normal;
     cluster.cfg.rocksdb.defaultcf.titan.min_gc_batch_size = ReadableSize::kb(0);
 }

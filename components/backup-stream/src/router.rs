@@ -153,7 +153,7 @@ impl ApplyEvents {
     /// those keys.
     /// Note: the resolved ts cannot be advanced if there is no command, maybe
     /// we also need to update resolved_ts when flushing?
-    pub fn from_cmd_batch(cmd: CmdBatch, resolver: &mut TwoPhaseResolver) -> Self {
+    pub fn from_cmd_batch(cmd: CmdBatch, resolver: &mut TwoPhaseResolver) -> Result<Self> {
         let region_id = cmd.region_id;
         let mut result = vec![];
         for req in cmd
@@ -197,7 +197,9 @@ impl ApplyEvents {
                         }) {
                             Ok(lock) => {
                                 if utils::should_track_lock(&lock) {
-                                    resolver.track_lock(lock.ts, key)
+                                    resolver
+                                        .track_lock(lock.ts, key)
+                                        .map_err(|_| Error::OutOfQuota { region_id })?;
                                 }
                             }
                             Err(err) => err.report(format!("region id = {}", region_id)),
@@ -220,11 +222,11 @@ impl ApplyEvents {
             }
             result.push(item);
         }
-        Self {
+        Ok(Self {
             events: result,
             region_id,
             region_resolved_ts: resolver.resolved_ts().into_inner(),
-        }
+        })
     }
 
     pub fn push(&mut self, event: ApplyEvent) {
@@ -316,7 +318,7 @@ impl ApplyEvent {
 
 /// The shared version of router.
 #[derive(Debug, Clone)]
-pub struct Router(Arc<RouterInner>);
+pub struct Router(pub(crate) Arc<RouterInner>);
 
 pub struct Config {
     pub prefix: PathBuf,
@@ -938,7 +940,7 @@ impl StreamTaskInfo {
         #[allow(clippy::map_entry)]
         if !w.contains_key(&key) {
             let path = key.temp_file_name();
-            let val = Mutex::new(DataFile::new(path, &self.temp_file_pool).await?);
+            let val = Mutex::new(DataFile::new(path, &self.temp_file_pool)?);
             w.insert(key, val);
         }
 
@@ -1442,7 +1444,7 @@ impl MetadataInfo {
 impl DataFile {
     /// create and open a logfile at the path.
     /// Note: if a file with same name exists, would truncate it.
-    async fn new(local_path: impl AsRef<Path>, files: &Arc<TempFilePool>) -> Result<Self> {
+    fn new(local_path: impl AsRef<Path>, files: &Arc<TempFilePool>) -> Result<Self> {
         let sha256 = Hasher::new(MessageDigest::sha256())
             .map_err(|err| Error::Other(box_err!("openssl hasher failed to init: {}", err)))?;
         let inner = files.open_for_write(local_path.as_ref())?;
@@ -2432,7 +2434,7 @@ mod tests {
         let mut f = pool.open_for_write(file_path).unwrap();
         f.write_all(b"test-data").await?;
         f.done().await?;
-        let mut data_file = DataFile::new(&file_path, &pool).await.unwrap();
+        let mut data_file = DataFile::new(file_path, &pool).unwrap();
         let info = DataFileInfo::new();
 
         let mut meta = MetadataInfo::with_capacity(1);

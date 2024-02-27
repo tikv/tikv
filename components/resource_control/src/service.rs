@@ -6,12 +6,13 @@ use std::{
     time::Duration,
 };
 
-use futures::{compat::Future01CompatExt, StreamExt};
+use futures::{compat::Future01CompatExt, stream, StreamExt};
 use kvproto::{
-    pdpb::EventType,
+    meta_storagepb::EventEventType,
     resource_manager::{ResourceGroup, TokenBucketRequest, TokenBucketsRequest},
 };
 use pd_client::{
+    meta_storage::{Checked, Get, MetaStorageClient, Sourced, Watch},
     Error as PdError, PdClient, RpcClient, RESOURCE_CONTROL_CONFIG_PATH,
     RESOURCE_CONTROL_CONTROLLER_CONFIG_PATH,
 };
@@ -24,6 +25,8 @@ use crate::{resource_limiter::ResourceType, ResourceGroupManager};
 pub struct ResourceManagerService {
     manager: Arc<ResourceGroupManager>,
     pd_client: Arc<RpcClient>,
+    // wrap for etcd client.
+    meta_client: Checked<Sourced<Arc<RpcClient>>>,
     // record watch revision.
     revision: i64,
 }
@@ -36,9 +39,13 @@ impl ResourceManagerService {
         pd_client: Arc<RpcClient>,
     ) -> ResourceManagerService {
         ResourceManagerService {
-            pd_client,
             manager,
             revision: 0,
+            meta_client: Checked::new(Sourced::new(
+                Arc::clone(&pd_client.clone()),
+                pd_client::meta_storage::Source::ResourceControl,
+            )),
+            pd_client,
         }
     }
 }
@@ -48,61 +55,42 @@ const BACKGROUND_RU_REPORT_DURATION: Duration = Duration::from_secs(5);
 
 impl ResourceManagerService {
     pub async fn watch_resource_groups(&mut self) {
+        // Firstly, load all resource groups as of now.
+        self.reload_all_resource_groups().await;
         'outer: loop {
-            // Firstly, load all resource groups as of now.
-            self.reload_all_resource_groups().await;
             // Secondly, start watcher at loading revision.
-            loop {
-                match self
-                    .pd_client
-                    .watch_global_config(RESOURCE_CONTROL_CONFIG_PATH.to_string(), self.revision)
-                {
-                    Ok(mut stream) => {
-                        while let Some(grpc_response) = stream.next().await {
-                            match grpc_response {
-                                Ok(r) => {
-                                    self.revision = r.get_revision();
-                                    r.get_changes()
-                                        .iter()
-                                        .for_each(|item| match item.get_kind() {
-                                            EventType::Put => {
-                                                match protobuf::parse_from_bytes::<ResourceGroup>(
-                                                    item.get_payload(),
-                                                ) {
-                                                    Ok(group) => {
-                                                        self.manager.add_resource_group(group);
-                                                    }
-                                                    Err(e) => {
-                                                        error!("parse put resource group event failed"; "name" => item.get_name(), "err" => ?e);
-                                                    }
-                                                }
-                                            }
-                                            EventType::Delete => {
-                                                match protobuf::parse_from_bytes::<ResourceGroup>(
-                                                    item.get_payload(),
-                                                ) {
-                                                    Ok(group) => {
-                                                        self.manager.remove_resource_group(group.get_name());
-                                                    }
-                                                    Err(e) => {
-                                                        error!("parse delete resource group event failed"; "name" => item.get_name(), "err" => ?e);
-                                                    }
-                                                }
-                                            }
-                                        });
-                                }
-                                Err(err) => {
-                                    error!("failed to get stream"; "err" => ?err);
-                                    let _ = GLOBAL_TIMER_HANDLE
-                                        .delay(std::time::Instant::now() + RETRY_INTERVAL)
-                                        .compat()
-                                        .await;
+            let (mut stream, cancel) = stream::abortable(
+                self.meta_client.watch(
+                    Watch::of(RESOURCE_CONTROL_CONFIG_PATH)
+                        .prefixed()
+                        .from_rev(self.revision)
+                        .with_prev_kv(),
+                ),
+            );
+            info!("pd meta client creating watch stream."; "path" => RESOURCE_CONTROL_CONFIG_PATH, "rev" => %self.revision);
+            while let Some(grpc_response) = stream.next().await {
+                match grpc_response {
+                    Ok(resp) => {
+                        self.revision = resp.get_header().get_revision();
+                        let events = resp.get_events();
+                        events.iter().for_each(|event| match event.get_type() {
+                            EventEventType::Put => {
+                                match protobuf::parse_from_bytes::<ResourceGroup>(event.get_kv().get_value()) {
+                                    Ok(group) => self.manager.add_resource_group(group),
+                                    Err(e) => error!("parse put resource group event failed"; "name" => ?event.get_kv().get_key(), "err" => ?e),
                                 }
                             }
-                        }
+                            EventEventType::Delete => {
+                                match protobuf::parse_from_bytes::<ResourceGroup>(event.get_prev_kv().get_value()) {
+                                    Ok(group) => self.manager.remove_resource_group(group.get_name()),
+                                    Err(e) => error!("parse delete resource group event failed"; "name" => ?event.get_kv().get_key(), "err" => ?e),
+                                }
+                            }});
                     }
                     Err(PdError::DataCompacted(msg)) => {
                         error!("required revision has been compacted"; "err" => ?msg);
+                        self.reload_all_resource_groups().await;
+                        cancel.abort();
                         continue 'outer;
                     }
                     Err(err) => {
@@ -111,6 +99,8 @@ impl ResourceManagerService {
                             .delay(std::time::Instant::now() + RETRY_INTERVAL)
                             .compat()
                             .await;
+                        cancel.abort();
+                        continue 'outer;
                     }
                 }
             }
@@ -120,30 +110,31 @@ impl ResourceManagerService {
     async fn reload_all_resource_groups(&mut self) {
         loop {
             match self
-                .pd_client
-                .load_global_config(RESOURCE_CONTROL_CONFIG_PATH.to_string())
+                .meta_client
+                .get(Get::of(RESOURCE_CONTROL_CONFIG_PATH).prefixed())
                 .await
             {
-                Ok((items, revision)) => {
-                    let mut vaild_groups = HashSet::with_capacity(items.len());
-                    items.iter().for_each(|g| {
-                        match protobuf::parse_from_bytes::<ResourceGroup>(g.get_payload()) {
+                Ok(mut resp) => {
+                    let kvs = resp.take_kvs().into_iter().collect::<Vec<_>>();
+                    let mut vaild_groups = HashSet::with_capacity(kvs.len());
+                    kvs.iter().for_each(|g| {
+                        match protobuf::parse_from_bytes::<ResourceGroup>(g.get_value()) {
                             Ok(rg) => {
                                 vaild_groups.insert(rg.get_name().to_ascii_lowercase());
                                 self.manager.add_resource_group(rg);
                             }
                             Err(e) => {
-                                error!("parse resource group failed"; "name" => g.get_name(), "err" => ?e);
+                                error!("parse resource group failed"; "name" => ?g.get_key(), "err" => ?e);
                             }
                         }
                     });
 
                     self.manager.retain(|name, _g| vaild_groups.contains(name));
-                    self.revision = revision;
+                    self.revision = resp.get_header().get_revision();
                     return;
                 }
                 Err(err) => {
-                    error!("failed to load global config"; "err" => ?err);
+                    error!("failed to get meta storage's resource control config"; "err" => ?err);
                     let _ = GLOBAL_TIMER_HANDLE
                         .delay(std::time::Instant::now() + RETRY_INTERVAL)
                         .compat()
@@ -156,12 +147,13 @@ impl ResourceManagerService {
     async fn load_controller_config(&self) -> RequestUnitConfig {
         loop {
             match self
-                .pd_client
-                .load_global_config(RESOURCE_CONTROL_CONTROLLER_CONFIG_PATH.to_string())
+                .meta_client
+                .get(Get::of(RESOURCE_CONTROL_CONTROLLER_CONFIG_PATH).prefixed())
                 .await
             {
-                Ok((items, _)) => {
-                    if items.is_empty() {
+                Ok(mut resp) => {
+                    let kvs = resp.take_kvs().into_iter().collect::<Vec<_>>();
+                    if kvs.is_empty() {
                         error!("server does not save config, load config failed.");
                         let _ = GLOBAL_TIMER_HANDLE
                             .delay(std::time::Instant::now() + RETRY_INTERVAL)
@@ -169,7 +161,7 @@ impl ResourceManagerService {
                             .await;
                         continue;
                     }
-                    match serde_json::from_slice::<ControllerConfig>(items[0].get_payload()) {
+                    match serde_json::from_slice::<ControllerConfig>(kvs[0].get_value()) {
                         Ok(c) => return c.request_unit,
                         Err(err) => {
                             error!("parse controller config failed"; "err" => ?err);
@@ -342,10 +334,12 @@ pub mod tests {
 
     use file_system::IoBytes;
     use futures::executor::block_on;
-    use kvproto::pdpb::GlobalConfigItem;
-    use pd_client::RpcClient;
+    use pd_client::{
+        meta_storage::{Delete, Put},
+        RpcClient,
+    };
     use protobuf::Message;
-    use test_pd::{mocker::Service, util::*, Server as MockServer};
+    use test_pd::{mocker::MetaStorage, util::*, Server as MockServer};
     use tikv_util::{config::ReadableDuration, worker::Builder};
 
     use crate::resource_group::tests::{
@@ -354,55 +348,39 @@ pub mod tests {
 
     fn new_test_server_and_client(
         update_interval: ReadableDuration,
-    ) -> (MockServer<Service>, RpcClient) {
-        let server = MockServer::new(1);
+    ) -> (MockServer<MetaStorage>, RpcClient) {
+        let server = MockServer::with_case(1, Arc::<MetaStorage>::default());
         let eps = server.bind_addrs();
         let client = new_client_with_update_interval(eps, None, update_interval);
         (server, client)
     }
 
-    fn add_resource_group(pd_client: Arc<RpcClient>, group: ResourceGroup) {
-        let mut item = GlobalConfigItem::default();
-        item.set_kind(EventType::Put);
-        item.set_name(group.get_name().to_string());
+    fn add_resource_group(meta_client: Checked<Sourced<Arc<RpcClient>>>, group: ResourceGroup) {
+        let key = format!("{}/{}", RESOURCE_CONTROL_CONFIG_PATH, group.get_name());
         let mut buf = Vec::new();
         group.write_to_vec(&mut buf).unwrap();
-        item.set_payload(buf);
 
-        futures::executor::block_on(async move {
-            pd_client
-                .store_global_config(RESOURCE_CONTROL_CONFIG_PATH.to_string(), vec![item])
-                .await
-        })
-        .unwrap();
+        futures::executor::block_on(async move { meta_client.put(Put::of(key, buf)).await })
+            .unwrap();
     }
 
-    fn delete_resource_group(pd_client: Arc<RpcClient>, name: &str) {
-        let mut item = GlobalConfigItem::default();
-        item.set_kind(EventType::Delete);
-        item.set_name(name.to_string());
-
-        futures::executor::block_on(async move {
-            pd_client
-                .store_global_config(RESOURCE_CONTROL_CONFIG_PATH.to_string(), vec![item])
-                .await
-        })
-        .unwrap();
+    fn delete_resource_group(meta_client: Checked<Sourced<Arc<RpcClient>>>, name: &str) {
+        let key = format!("{}/{}", RESOURCE_CONTROL_CONFIG_PATH, name);
+        futures::executor::block_on(async move { meta_client.delete(Delete::of(key)).await })
+            .unwrap();
     }
 
-    fn store_controller_config(pd_client: Arc<RpcClient>, config: ControllerConfig) {
-        let mut item = GlobalConfigItem::default();
-        item.set_kind(EventType::Put);
-        item.set_name("controller_config".to_string());
+    fn store_controller_config(
+        meta_client: Checked<Sourced<Arc<RpcClient>>>,
+        config: ControllerConfig,
+    ) {
         let buf = serde_json::to_vec(&config).unwrap();
-        item.set_payload(buf);
-
         futures::executor::block_on(async move {
-            pd_client
-                .store_global_config(
+            meta_client
+                .put(Put::of(
                     RESOURCE_CONTROL_CONTROLLER_CONFIG_PATH.to_string(),
-                    vec![item],
-                )
+                    buf,
+                ))
                 .await
         })
         .unwrap();
@@ -417,12 +395,12 @@ pub mod tests {
         let mut s = ResourceManagerService::new(Arc::new(resource_manager), Arc::new(client));
         assert_eq!(s.manager.get_all_resource_groups().len(), 1);
         let group = new_resource_group("TEST".into(), true, 100, 100, 0);
-        add_resource_group(s.pd_client.clone(), group);
+        add_resource_group(s.meta_client.clone(), group);
         block_on(s.reload_all_resource_groups());
         assert_eq!(s.manager.get_all_resource_groups().len(), 2);
         assert_eq!(s.revision, 1);
 
-        delete_resource_group(s.pd_client.clone(), "TEST");
+        delete_resource_group(s.meta_client.clone(), "TEST");
         block_on(s.reload_all_resource_groups());
         assert_eq!(s.manager.get_all_resource_groups().len(), 1);
         assert_eq!(s.revision, 2);
@@ -462,16 +440,16 @@ pub mod tests {
         });
         // Mock add.
         let group1 = new_resource_group_ru("TEST1".into(), 100, 0);
-        add_resource_group(s.pd_client.clone(), group1);
+        add_resource_group(s.meta_client.clone(), group1);
         let group2 = new_resource_group_ru("TEST2".into(), 100, 0);
-        add_resource_group(s.pd_client.clone(), group2);
+        add_resource_group(s.meta_client.clone(), group2);
         // Mock modify
         let group2 = new_resource_group_ru("TEST2".into(), 50, 0);
-        add_resource_group(s.pd_client.clone(), group2);
+        add_resource_group(s.meta_client.clone(), group2);
         wait_watch_ready(&s, 3);
 
         // Mock delete.
-        delete_resource_group(s.pd_client.clone(), "TEST1");
+        delete_resource_group(s.meta_client.clone(), "TEST1");
 
         // Wait for watcher.
         wait_watch_ready(&s, 2);
@@ -497,15 +475,15 @@ pub mod tests {
         });
         // Mock add.
         let group1 = new_resource_group_ru("TEST1".into(), 100, 0);
-        add_resource_group(s.pd_client.clone(), group1);
+        add_resource_group(s.meta_client.clone(), group1);
         // Mock reboot watch server.
-        let watch_global_config_fp = "watch_global_config_return";
-        fail::cfg(watch_global_config_fp, "return").unwrap();
+        let watch_meta_storage_fp = "watch_meta_storage_return";
+        fail::cfg(watch_meta_storage_fp, "return").unwrap();
         std::thread::sleep(Duration::from_millis(100));
-        fail::remove(watch_global_config_fp);
+        fail::remove(watch_meta_storage_fp);
         // Mock add after rebooting will success.
         let group2 = new_resource_group_ru("TEST2".into(), 100, 0);
-        add_resource_group(s.pd_client.clone(), group2);
+        add_resource_group(s.meta_client.clone(), group2);
         // Wait watcher update.
         std::thread::sleep(Duration::from_secs(1));
         let groups = s.manager.get_all_resource_groups();
@@ -530,7 +508,7 @@ pub mod tests {
                 read_cpu_ms_cost: 1. / 3.,
             },
         };
-        store_controller_config(s.clone().pd_client, cfg);
+        store_controller_config(s.clone().meta_client, cfg);
         let config = block_on(s.load_controller_config());
         assert_eq!(config.read_base_cost, 1. / 8.);
 
@@ -556,7 +534,7 @@ pub mod tests {
                 read_cpu_ms_cost: 1. / 3.,
             },
         };
-        store_controller_config(s.clone().pd_client, cfg);
+        store_controller_config(s.clone().meta_client, cfg);
 
         fail::cfg("set_report_duration", "return(10)").unwrap();
         let background_worker = Builder::new("background").thread_count(1).create();
