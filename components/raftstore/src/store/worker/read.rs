@@ -2541,7 +2541,7 @@ mod tests {
         {
             let mut core = memory_engine.core().write().unwrap();
             core.mut_range_manager().set_range_readable(&range, true);
-            core.mut_range_manager().set_safe_ts(&range, 1);
+            core.mut_range_manager().set_safe_point(&range, 1);
         }
         let kv = (&[DATA_PREFIX, b'a'], b"b");
         reader.kv_engine.put(kv.0, kv.1).unwrap();
@@ -2589,7 +2589,7 @@ mod tests {
         {
             let mut core = memory_engine.core().write().unwrap();
             core.mut_range_manager().set_range_readable(&range, true);
-            core.mut_range_manager().set_safe_ts(&range, 10);
+            core.mut_range_manager().set_safe_point(&range, 10);
         }
 
         let mut snap_ctx = SnapshotContext {
