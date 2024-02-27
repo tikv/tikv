@@ -240,7 +240,6 @@ impl<C: PdMocker + Send + Sync + 'static> MetaStorage for PdMock<C> {
 }
 
 impl<C: PdMocker + Send + Sync + 'static> Pd for PdMock<C> {
-
     fn get_members(
         &mut self,
         ctx: RpcContext<'_>,
