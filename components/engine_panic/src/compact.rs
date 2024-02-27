@@ -2,7 +2,7 @@
 
 use std::collections::BTreeMap;
 
-use engine_traits::{CompactExt, CompactedEvent, Result};
+use engine_traits::{CompactExt, CompactedEvent, ManualCompactionOptions, Result};
 
 use crate::engine::PanicEngine;
 

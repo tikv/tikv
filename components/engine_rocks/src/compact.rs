@@ -3,7 +3,7 @@
 use std::cmp;
 
 use engine_traits::{CfNamesExt, CompactExt, ManualCompactionOptions, Result};
-use rocksdb::{CompactOptions, CompactionOptions, DBCompressionType};
+use rocksdb::{CompactOptions, CompactionOptions, DBBottommostLevelCompaction, DBCompressionType};
 
 use crate::{engine::RocksEngine, r2e, util};
 
