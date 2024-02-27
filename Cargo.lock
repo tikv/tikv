@@ -2838,7 +2838,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#a554af8ee11ffdf0adbbf0efac11220e416ddacf"
+source = "git+https://github.com/pingcap/kvproto.git#881fcbf5bc41a492d77db7a27f07ffe5088df6dc"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
@@ -4601,13 +4601,16 @@ dependencies = [
  "engine_rocks",
  "engine_traits",
  "fail",
+ "keys",
  "log_wrappers",
  "proptest",
  "scopeguard 0.3.3",
  "slog",
  "slog-global",
+ "tempfile",
  "tikv_util",
  "txn_types",
+ "yatp",
 ]
 
 [[package]]

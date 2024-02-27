@@ -42,6 +42,10 @@ pub trait PdMocker {
         None
     }
 
+    fn meta_store_delete(&self, _req: mpb::DeleteRequest) -> Option<Result<mpb::DeleteResponse>> {
+        None
+    }
+
     fn meta_store_watch(
         &self,
         _req: mpb::WatchRequest,

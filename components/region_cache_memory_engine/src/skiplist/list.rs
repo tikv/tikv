@@ -1386,7 +1386,7 @@ pub(crate) mod tests {
 
     #[derive(Clone, Debug)]
     enum Operation {
-        Put(Vec, Vec<u8>),
+        Put(Vec<u8>, Vec<u8>),
         Get(Vec<u8>),
         Delete(Vec<u8>),
         Scan(Vec<u8>, usize),
@@ -1422,6 +1422,5 @@ pub(crate) mod tests {
         );
 
         let map: BTreeMap<Bytes, Bytes> = BTreeMap::new();
-        
     }
 }
