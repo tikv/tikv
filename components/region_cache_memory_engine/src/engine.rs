@@ -170,7 +170,7 @@ impl RangeCacheMemoryEngineCore {
         &mut self.range_manager
     }
 
-    pub(crate) fn has_cache_write_batch(&self, cache_range: &CacheRange) -> bool {
+    pub(crate) fn has_cached_write_batch(&self, cache_range: &CacheRange) -> bool {
         self.cached_write_batch.contains_key(cache_range)
     }
 

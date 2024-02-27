@@ -259,7 +259,7 @@ impl BackgroundRunnerCore {
         fail::fail_point!("on_snapshot_loaded");
         let has_cache_batch = {
             let core = self.engine.read().unwrap();
-            core.has_cache_write_batch(&range)
+            core.has_cached_write_batch(&range)
         };
         if has_cache_batch {
             let (cache_batch, skiplist_engine) = {
