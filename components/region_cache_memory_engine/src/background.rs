@@ -264,12 +264,13 @@ impl BackgroundRunnerCore {
         if has_cache_batch {
             let (cache_batch, skiplist_engine) = {
                 let mut core = self.engine.write().unwrap();
-                (core.take_cache_write_batch(&range), core.engine().clone())
+                (
+                    core.take_cache_write_batch(&range).unwrap(),
+                    core.engine().clone(),
+                )
             };
-            if let Some(cache_batch) = cache_batch {
-                for (seq, entry) in cache_batch {
-                    entry.write_to_memory(&skiplist_engine, seq)?;
-                }
+            for (seq, entry) in cache_batch {
+                entry.write_to_memory(&skiplist_engine, seq)?;
             }
         }
         fail::fail_point!("on_snapshot_loaded_finish_before_status_change");
