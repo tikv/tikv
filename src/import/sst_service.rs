@@ -9,7 +9,7 @@ use std::{
         atomic::{AtomicU64, Ordering},
         Arc, Mutex,
     },
-    time::Duration,
+    time::{Duration, Instant as StdInstant},
 };
 
 use engine_traits::{CompactExt, MiscExt, CF_DEFAULT, CF_WRITE};
@@ -768,7 +768,8 @@ macro_rules! impl_write {
                     };
 
                     // Make sure it has a valid lease.
-                    if let Err(e) = import.check_lease(meta.get_region_id(), meta.get_uuid()) {
+                    if let Err(e) = import.check_lease(meta.get_region_id(), meta.get_uuid(), label)
+                    {
                         let mut resp = $resp_ty::default();
                         resp.mut_error().set_message(e.to_string());
                         let mut errorpb = errorpb::Error::default();
@@ -951,15 +952,16 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
         let label = "lease";
         let timer = Instant::now_coarse();
         let import = self.importer.clone();
-        let now = timer;
         let acquire_lease_task = async move {
             let mut resp = LeaseResponse::default();
+            let now = StdInstant::now();
 
             // Acquire leases.
             for acquire_lease in req.get_acquire() {
                 let region_id = acquire_lease.get_lease().get_region().get_id();
                 let uuid = acquire_lease.get_lease().get_uuid();
-                let lease_secs = std::cmp::min(acquire_lease.get_ttl(), SST_LEASE_DURATION_MAX_SECS);
+                let lease_secs =
+                    std::cmp::min(acquire_lease.get_ttl(), SST_LEASE_DURATION_MAX_SECS);
                 let deadline = now + Duration::from_secs(lease_secs);
                 match import.acquire_lease(region_id, uuid, deadline) {
                     Ok(_) => {
@@ -1022,7 +1024,7 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
                     _ => return Err(Error::InvalidChunk),
                 };
                 // Make sure it has a valid lease.
-                if let Err(e) = import.check_lease(meta.get_region_id(), meta.get_uuid()) {
+                if let Err(e) = import.check_lease(meta.get_region_id(), meta.get_uuid(), label) {
                     let mut resp = UploadResponse::default();
                     let mut errorpb = errorpb::Error::default();
                     errorpb.set_message(e.to_string());
@@ -1148,7 +1150,7 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
 
             // Make sure it has a valid lease.
             let meta = req.get_sst();
-            if let Err(e) = importer.check_lease(meta.get_region_id(), meta.get_uuid()) {
+            if let Err(e) = importer.check_lease(meta.get_region_id(), meta.get_uuid(), label) {
                 let mut resp = DownloadResponse::default();
                 resp.mut_error().set_message(e.to_string());
                 let mut errorpb = errorpb::Error::default();

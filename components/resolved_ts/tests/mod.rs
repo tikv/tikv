@@ -8,7 +8,9 @@ use engine_rocks::RocksEngine;
 use futures::{executor::block_on, stream, SinkExt};
 use grpcio::{ChannelBuilder, ClientUnaryReceiver, Environment, Result, WriteFlags};
 use kvproto::{
-    import_sstpb::{IngestRequest, SstMeta, UploadRequest, UploadResponse, LeaseRequest, AcquireLease},
+    import_sstpb::{
+        AcquireLease, IngestRequest, LeaseRequest, SstMeta, UploadRequest, UploadResponse,
+    },
     import_sstpb_grpc::ImportSstClient,
     kvrpcpb::{PrewriteRequestPessimisticAction::*, *},
     tikvpb::TikvClient,
@@ -424,11 +426,7 @@ impl TestSuite {
         panic!("fail to get greater ts after 50 trys");
     }
 
-    pub fn must_acquire_sst_lease(&mut self,
-        region_id: u64,
-        meta: &SstMeta,
-        ttl: Duration,
-    ) {
+    pub fn must_acquire_sst_lease(&mut self, region_id: u64, meta: &SstMeta, ttl: Duration) {
         let import = self.get_import_client(region_id);
         let mut acquire = AcquireLease::default();
         acquire.mut_lease().mut_region().set_id(region_id);
@@ -440,14 +438,8 @@ impl TestSuite {
         let resp = import.lease(&req).unwrap();
 
         let acquired_lease = &resp.get_acquired()[0];
-        assert_eq!(
-            region_id,
-            acquired_lease.get_region().get_id(),
-        );
-        assert_eq!(
-            meta.get_uuid(),
-            acquired_lease.get_uuid(),
-        );
+        assert_eq!(region_id, acquired_lease.get_region().get_id(),);
+        assert_eq!(meta.get_uuid(), acquired_lease.get_uuid(),);
     }
 
     pub fn upload_sst(
@@ -468,9 +460,16 @@ impl TestSuite {
         let (mut tx, rx) = import.upload().unwrap();
         let mut stream = stream::iter(reqs);
         block_on(async move {
-            tx.send_all(&mut stream).await?;
-            tx.close().await?;
-            rx.await
+            let send_res = tx.send_all(&mut stream).await;
+            let close_res = tx.close().await;
+            match rx.await {
+                Ok(resp) => Ok(resp),
+                Err(e) => {
+                    send_res?;
+                    close_res?;
+                    Err(e)
+                }
+            }
         })
     }
 

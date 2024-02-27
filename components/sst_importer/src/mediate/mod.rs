@@ -1,9 +1,11 @@
 // Copyright 2024 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::{Arc, RwLock};
+use std::{
+    sync::{Arc, RwLock},
+    time::Instant,
+};
 
 use collections::{HashMap, HashMapEntry};
-use tikv_util::time::Instant;
 use uuid::Uuid;
 
 #[derive(Clone)]
@@ -96,7 +98,7 @@ impl Observer for IngestObserver {
     fn query_region(&self, region_id: u64) -> Vec<(Uuid, Instant)> {
         let ssts = self.sst_leases.read().unwrap();
         ssts.get(&region_id).map_or_else(Vec::new, |leases| {
-            leases.iter().map(|(k, v)| (k.clone(), v.clone())).collect()
+            leases.iter().map(|(k, v)| (*k, *v)).collect()
         })
     }
 
@@ -148,7 +150,7 @@ impl IngestObserver {
         match ssts.entry(region_id) {
             HashMapEntry::Occupied(mut leases) => {
                 for uuid in uuids {
-                    leases.get_mut().remove(&uuid);
+                    leases.get_mut().remove(uuid);
                 }
                 if leases.get().is_empty() {
                     leases.remove();

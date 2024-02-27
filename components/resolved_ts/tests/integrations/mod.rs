@@ -70,7 +70,8 @@ fn test_resolved_ts_basic() {
     meta.set_region_epoch(sst_epoch);
 
     suite.must_acquire_sst_lease(r1.id, &meta, Duration::MAX);
-    suite.upload_sst(r1.id, &meta, &data).unwrap();
+    let resp = suite.upload_sst(r1.id, &meta, &data).unwrap();
+    assert!(!resp.has_error(), "{:?}", resp);
 
     let tracked_index_before = suite.region_tracked_index(r1.id);
     suite.must_ingest_sst(r1.id, meta);
