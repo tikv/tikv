@@ -1,9 +1,10 @@
 // Copyright 2024 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{
-    collections::HashMap,
-    sync::{Arc, Mutex},
-};
+#[cfg(test)]
+use std::sync::{Arc, Mutex};
+
+#[cfg(test)]
+use collections::HashMap;
 
 pub trait MemoryController: AllocationRecorder {
     fn acquire(&self, n: usize) -> bool;
