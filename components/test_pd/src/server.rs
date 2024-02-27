@@ -229,6 +229,15 @@ impl<C: PdMocker + Send + Sync + 'static> MetaStorage for PdMock<C> {
     ) {
         hijack_unary(self, ctx, sink, |m| m.meta_store_put(req.clone()))
     }
+
+    fn delete(
+        &mut self,
+        ctx: grpcio::RpcContext<'_>,
+        req: kvproto::meta_storagepb::DeleteRequest,
+        sink: grpcio::UnarySink<kvproto::meta_storagepb::DeleteResponse>,
+    ) {
+        hijack_unary(self, ctx, sink, |m| m.meta_store_delete(req.clone()))
+    }
 }
 
 impl<C: PdMocker + Send + Sync + 'static> Pd for PdMock<C> {
@@ -294,15 +303,6 @@ impl<C: PdMocker + Send + Sync + 'static> Pd for PdMock<C> {
                 wc.set_changes(vec![change].into());
                 let _ = sink.send((wc, WriteFlags::default())).await;
                 let _ = sink.flush().await;
-                #[cfg(feature = "failpoints")]
-                {
-                    use futures::executor::block_on;
-                    let cli_clone = cli.clone();
-                    fail_point!("watch_global_config_return", |_| {
-                        block_on(async move { cli_clone.lock().await.clear_subs() });
-                        watcher.close();
-                    });
-                }
             }
         };
         ctx.spawn(future);
