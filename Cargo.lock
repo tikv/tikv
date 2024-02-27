@@ -5503,6 +5503,25 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fa8f3741c7372e75519bd9346068370c9cdaabcc1f9599cbcf2a2719352286b7"
 
 [[package]]
+<<<<<<< HEAD
+=======
+name = "skiplist-rs"
+version = "0.1.0"
+source = "git+https://github.com/tikv/skiplist-rs.git?branch=main#a9d27501ddfc17d6df9afababcaa6280f1af9e77"
+dependencies = [
+ "bytes",
+ "crossbeam-epoch",
+ "crossbeam-utils",
+ "fail",
+ "rand 0.8.5",
+ "scopeguard",
+ "slog",
+ "tikv-jemalloc-ctl",
+ "tikv-jemallocator",
+]
+
+[[package]]
+>>>>>>> 544f71018b (*: fix make dist_release compile fail (#16566))
 name = "slab"
 version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
