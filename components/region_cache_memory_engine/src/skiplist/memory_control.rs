@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 #[cfg(test)]
 use collections::HashMap;
 
-pub trait MemoryController: AllocationRecorder {
+pub trait MemoryController: NodeAllocationRecorder {
     fn acquire(&self, n: usize) -> bool;
     fn reclaim(&self, n: usize);
     fn mem_usage(&self) -> usize;
@@ -14,7 +14,7 @@ pub trait MemoryController: AllocationRecorder {
 
 // todo(SpadeA): This is used for the purpose of recording the memory footprint.
 // It should be removed in the future.
-pub trait AllocationRecorder: Clone {
+pub trait NodeAllocationRecorder: Clone {
     fn allocated(&self, addr: usize, size: usize);
     fn freed(&self, addr: usize, size: usize);
 }
@@ -34,7 +34,7 @@ impl Drop for RecorderLimiter {
 }
 
 #[cfg(test)]
-impl AllocationRecorder for RecorderLimiter {
+impl NodeAllocationRecorder for RecorderLimiter {
     fn allocated(&self, addr: usize, size: usize) {
         let mut recorder = self.recorder.lock().unwrap();
         assert!(!recorder.contains_key(&addr));
@@ -65,7 +65,7 @@ impl MemoryController for RecorderLimiter {
 pub struct DummyLimiter {}
 
 #[cfg(test)]
-impl AllocationRecorder for DummyLimiter {
+impl NodeAllocationRecorder for DummyLimiter {
     fn allocated(&self, _: usize, _: usize) {}
 
     fn freed(&self, _: usize, _: usize) {}

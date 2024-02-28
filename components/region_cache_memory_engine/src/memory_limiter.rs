@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex};
 
 use collections::{HashMap, HashSet};
 
-use crate::skiplist::{AllocationRecorder, MemoryController, Node};
+use crate::skiplist::{MemoryController, Node, NodeAllocationRecorder};
 
 // todo: implement a real memory limiter. Now, it is used for test.
 #[derive(Clone, Default)]
@@ -25,7 +25,7 @@ impl MemoryController for GlobalMemoryLimiter {
     fn reclaim(&self, n: usize) {}
 }
 
-impl AllocationRecorder for GlobalMemoryLimiter {
+impl NodeAllocationRecorder for GlobalMemoryLimiter {
     fn allocated(&self, addr: usize, size: usize) {
         let mut recorder = self.recorder.lock().unwrap();
         assert!(!recorder.contains_key(&addr));

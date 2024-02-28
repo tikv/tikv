@@ -151,6 +151,7 @@ impl Node {
         let mut v = Vec::<u64>::with_capacity(node_size);
         let node_ptr = v.as_mut_ptr() as *mut Self;
         mem::forget(v);
+        memory_controller.allocated(node_ptr as usize, node_size);
 
         unsafe {
             let node = &mut *node_ptr;
@@ -166,15 +167,18 @@ impl Node {
     }
 
     unsafe fn destroy_node<M: MemoryController>(ptr: *mut Self, memory_controller: Arc<M>) {
-        let size = (*ptr).size();
+        let node = &mut *ptr;
+        let size = node.size();
+        memory_controller.freed(ptr as usize, size);
+
         let mut kv_size = 0;
-        if !(*ptr).key.is_empty() {
-            kv_size += (*ptr).key.len();
-            ptr::drop_in_place(&mut (*ptr).key);
+        if !node.key.is_empty() {
+            kv_size += node.key.len();
+            ptr::drop_in_place(&mut node.key);
         }
-        if !(*ptr).value.is_empty() {
-            kv_size += (*ptr).value.len();
-            ptr::drop_in_place(&mut (*ptr).value);
+        if !node.value.is_empty() {
+            kv_size += node.value.len();
+            ptr::drop_in_place(&mut node.value);
         }
         drop(Vec::from_raw_parts(ptr as *mut u64, 0, size));
         memory_controller.reclaim(size + kv_size);
