@@ -2828,7 +2828,11 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
+<<<<<<< HEAD
 source = "git+https://github.com/tikv/rust-rocksdb.git?branch=tikv-6.5#ef9b4fcf7489584d469723ba894644714b406c0d"
+=======
+source = "git+https://github.com/tikv/rust-rocksdb.git#05fc3f80ed50bac9932ca238e9dfbaadb7390965"
+>>>>>>> 9fa462a3c4 (rocksdb: Expose track-and-verify-wals-in-manifest config (#16546))
 dependencies = [
  "bindgen 0.57.0",
  "bzip2-sys",
@@ -2847,7 +2851,11 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
+<<<<<<< HEAD
 source = "git+https://github.com/tikv/rust-rocksdb.git?branch=tikv-6.5#ef9b4fcf7489584d469723ba894644714b406c0d"
+=======
+source = "git+https://github.com/tikv/rust-rocksdb.git#05fc3f80ed50bac9932ca238e9dfbaadb7390965"
+>>>>>>> 9fa462a3c4 (rocksdb: Expose track-and-verify-wals-in-manifest config (#16546))
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -4680,7 +4688,11 @@ dependencies = [
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
+<<<<<<< HEAD
 source = "git+https://github.com/tikv/rust-rocksdb.git?branch=tikv-6.5#ef9b4fcf7489584d469723ba894644714b406c0d"
+=======
+source = "git+https://github.com/tikv/rust-rocksdb.git#05fc3f80ed50bac9932ca238e9dfbaadb7390965"
+>>>>>>> 9fa462a3c4 (rocksdb: Expose track-and-verify-wals-in-manifest config (#16546))
 dependencies = [
  "libc 0.2.139",
  "librocksdb_sys",

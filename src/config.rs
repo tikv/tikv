@@ -1093,6 +1093,25 @@ pub struct DbConfig {
     pub enable_multi_batch_write: bool,
     #[online_config(skip)]
     pub enable_unordered_write: bool,
+<<<<<<< HEAD:src/config.rs
+=======
+    #[online_config(skip)]
+    pub allow_concurrent_memtable_write: Option<bool>,
+    pub write_buffer_limit: Option<ReadableSize>,
+    #[online_config(skip)]
+    #[doc(hidden)]
+    #[serde(skip_serializing)]
+    pub write_buffer_stall_ratio: f32,
+    #[doc(hidden)]
+    #[serde(skip_serializing)]
+    pub write_buffer_flush_oldest_first: bool,
+    #[online_config(skip)]
+    pub track_and_verify_wals_in_manifest: bool,
+    // Dangerous option only for programming use.
+    #[online_config(skip)]
+    #[serde(skip)]
+    pub paranoid_checks: Option<bool>,
+>>>>>>> 9fa462a3c4 (rocksdb: Expose track-and-verify-wals-in-manifest config (#16546)):src/config/mod.rs
     #[online_config(submodule)]
     pub defaultcf: DefaultCfConfig,
     #[online_config(submodule)]
@@ -1144,6 +1163,15 @@ impl Default for DbConfig {
             enable_pipelined_write: false,
             enable_multi_batch_write: true, // deprecated
             enable_unordered_write: false,
+<<<<<<< HEAD:src/config.rs
+=======
+            allow_concurrent_memtable_write: None,
+            write_buffer_limit: None,
+            write_buffer_stall_ratio: 0.0,
+            write_buffer_flush_oldest_first: true,
+            track_and_verify_wals_in_manifest: true,
+            paranoid_checks: None,
+>>>>>>> 9fa462a3c4 (rocksdb: Expose track-and-verify-wals-in-manifest config (#16546)):src/config/mod.rs
             defaultcf: DefaultCfConfig::default(),
             writecf: WriteCfConfig::default(),
             lockcf: LockCfConfig::default(),
@@ -1210,6 +1238,22 @@ impl DbConfig {
         if self.titan.enabled {
             opts.set_titandb_options(&self.titan.build_opts());
         }
+<<<<<<< HEAD:src/config.rs
+=======
+        opts.set_env(shared.env.clone());
+        opts.set_statistics(&shared.statistics);
+        if let Some(r) = &shared.rate_limiter {
+            opts.set_rate_limiter(r);
+        }
+        if let Some(r) = &shared.write_buffer_manager {
+            opts.set_write_buffer_manager(r);
+        }
+        if for_engine == EngineType::RaftKv2 {
+            // Historical stats are not used.
+            opts.set_stats_persist_period_sec(0);
+        }
+        opts.set_track_and_verify_wals_in_manifest(self.track_and_verify_wals_in_manifest);
+>>>>>>> 9fa462a3c4 (rocksdb: Expose track-and-verify-wals-in-manifest config (#16546)):src/config/mod.rs
         opts
     }
 
