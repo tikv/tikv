@@ -272,6 +272,17 @@ pub async fn ingest<E: Engine>(
         return Ok(resp);
     }
 
+    // Make sure all ssts have valid leases.
+    for meta in req.get_ssts() {
+        if let Err(e) = importer.check_lease(meta.get_region_id(), meta.get_uuid(), label) {
+            let mut resp = IngestResponse::default();
+            let mut errorpb = errorpb::Error::default();
+            errorpb.set_message(e.to_string());
+            resp.set_error(errorpb);
+            return Ok(resp);
+        }
+    }
+
     let mut errorpb = errorpb::Error::default();
     let mut metas = vec![];
     for meta in req.get_ssts() {
@@ -298,5 +309,15 @@ pub async fn ingest<E: Engine>(
     for meta in &metas {
         ingest_latch.release_lock(meta).unwrap();
     }
+    for meta in &metas {
+        if let Err(e) = importer.expire_lease(meta.get_region_id(), meta.get_uuid()) {
+            warn!("expire ingest lease failed after ingest";
+                "region_id" => meta.get_region_id(),
+                "uuid" => log_wrappers::hex_encode_upper(meta.get_uuid()),
+                "error" => ?e,
+            );
+        }
+    }
+
     res
 }
