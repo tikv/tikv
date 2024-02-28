@@ -253,6 +253,7 @@ impl<E: KvEngine> SstImporter<E> {
         let uuid = parse_uuid_from_slice(uuid_bytes)?;
         let now = StdInstant::now();
         let deadline = self.ingest_observer.query(region_id, &uuid);
+        info!("dbg check lease"; "region_id" => region_id, "now" => ?now, "deadline" => ?deadline);
         if deadline.map_or(false, |deadline| now < deadline) {
             Ok(())
         } else {
@@ -1528,9 +1529,10 @@ fn parse_uuid_from_slice(uuid_bytes: &[u8]) -> Result<Uuid> {
 #[cfg(test)]
 mod tests {
     use std::{
+        assert_matches::assert_matches,
         io::{self, BufWriter, Write},
         ops::Sub,
-        usize,
+        thread, usize,
     };
 
     use engine_rocks::get_env;
@@ -3159,5 +3161,70 @@ mod tests {
 
         let _buff = v.0.clone();
         assert_eq!(v.0.ref_count(), 2);
+    }
+
+    #[test]
+    fn test_ingest_lease() {
+        let (importer, _import_dir) = new_importer::<TestEngine>(&Config::default(), None);
+        let region_id = 1;
+        let uuid = Uuid::new_v4();
+        let rpc = "test";
+
+        // Not found means lease expired.
+        assert_matches!(
+            importer.check_lease(region_id, uuid.as_bytes(), rpc),
+            Err(Error::LeaseExpired),
+        );
+
+        let expired_deadline = StdInstant::now() - Duration::from_secs(1);
+        importer
+            .acquire_lease(region_id, uuid.as_bytes(), expired_deadline)
+            .unwrap();
+        assert_matches!(
+            importer.check_lease(region_id, uuid.as_bytes(), rpc),
+            Err(Error::LeaseExpired),
+        );
+
+        // Renew the lease.
+        let deadline = StdInstant::now() + Duration::from_millis(500);
+        importer
+            .acquire_lease(region_id, uuid.as_bytes(), deadline)
+            .unwrap();
+        importer
+            .check_lease(region_id, uuid.as_bytes(), rpc)
+            .unwrap();
+
+        // Wait for expiring.
+        thread::sleep(Duration::from_millis(800));
+        assert_matches!(
+            importer.check_lease(region_id, uuid.as_bytes(), rpc),
+            Err(Error::LeaseExpired),
+        );
+
+        // Renew two leases.
+        let deadline = StdInstant::now() + Duration::from_millis(500);
+        importer
+            .acquire_lease(region_id, uuid.as_bytes(), deadline)
+            .unwrap();
+        importer
+            .check_lease(region_id, uuid.as_bytes(), rpc)
+            .unwrap();
+        let new_uuid = Uuid::new_v4();
+        importer
+            .acquire_lease(region_id, new_uuid.as_bytes(), deadline)
+            .unwrap();
+        importer
+            .check_lease(region_id, new_uuid.as_bytes(), rpc)
+            .unwrap();
+
+        // Expire one lease does not affect the other.
+        importer.expire_lease(region_id, uuid.as_bytes()).unwrap();
+        assert_matches!(
+            importer.check_lease(region_id, uuid.as_bytes(), rpc),
+            Err(Error::LeaseExpired),
+        );
+        importer
+            .check_lease(region_id, new_uuid.as_bytes(), rpc)
+            .unwrap();
     }
 }
