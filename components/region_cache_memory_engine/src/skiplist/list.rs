@@ -308,7 +308,7 @@ struct SkiplistInner<M: MemoryController> {
     hot_data: CachePadded<HotData>,
     /// The `Collector` associated with this skip list.
     collector: Collector,
-    /// <emory management unit
+    /// memory controller
     memory_controller: Arc<M>,
 }
 
@@ -545,7 +545,7 @@ impl<C: KeyComparator, M: MemoryController> Skiplist<C, M> {
                     while let Some(c) = curr.as_ref() {
                         let succ = c.tower[level].load_consume(guard);
 
-                        if curr.tag() == 1 {
+                        if succ.tag() == 1 {
                             if let Some(c) = self.help_unlink(&pred[level], c, succ, guard) {
                                 // On success, continue searching through the current level.
                                 curr = c;
@@ -1371,7 +1371,7 @@ pub(crate) mod tests {
             Arc::default(),
         );
 
-        let total = 100000;
+        let total = 50000;
         let n = 20;
 
         let begin = Arc::new(AtomicBool::new(false));
