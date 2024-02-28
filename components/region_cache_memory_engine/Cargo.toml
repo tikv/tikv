@@ -9,9 +9,11 @@ license = "Apache-2.0"
 testexport = []
 
 [dependencies]
+crossbeam-epoch = "0.9"
+crossbeam-utils = "0.8"
+scopeguard = {version = "1.1.0", default-features = false}
 engine_traits = { workspace = true }
 collections = { workspace = true }
-skiplist-rs = { git = "https://github.com/tikv/skiplist-rs.git", branch = "main" }
 bytes = "1.0"
 crossbeam = "0.8"
 tikv_util = { workspace = true }
@@ -22,3 +24,10 @@ slog = { workspace = true }
 engine_rocks = { workspace = true }
 fail = "0.5"
 kvproto = { workspace = true }
+yatp = { workspace = true }
+
+[dev-dependencies]
+keys = { workspace = true }
+tempfile = "3.0"
+proptest = "1.0.0"
+rand = "0.8.0"

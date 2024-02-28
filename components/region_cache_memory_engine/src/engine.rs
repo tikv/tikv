@@ -18,17 +18,18 @@ use engine_traits::{
     CF_WRITE,
 };
 use kvproto::metapb;
-use skiplist_rs::{IterRef, Skiplist, MIB};
-use tikv_util::store::new_peer;
+use slog_global::error;
+use tikv_util::{config::MIB, store::new_peer};
 
 use crate::{
-    background::{BackgroundTask, BackgroundWork},
+    background::{BackgroundTask, BgWorkManager},
     keys::{
         decode_key, encode_key_for_eviction, encode_seek_key, InternalKey, InternalKeyComparator,
         ValueType, VALUE_TYPE_FOR_SEEK, VALUE_TYPE_FOR_SEEK_FOR_PREV,
     },
     memory_limiter::GlobalMemoryLimiter,
     range_manager::RangeManager,
+    skiplist::{IterRef, Skiplist},
     write_batch::RangeCacheWriteBatchEntry,
 };
 
@@ -161,7 +162,7 @@ impl RangeCacheMemoryEngineCore {
         range_manager.set_range_readable(&range, true);
         RangeCacheMemoryEngineCore {
             engine: SkiplistEngine::new(limiter),
-            range_manager,
+            range_manager: RangeManager::default(),
             cached_write_batch: BTreeMap::default(),
         }
     }
@@ -176,6 +177,10 @@ impl RangeCacheMemoryEngineCore {
 
     pub fn mut_range_manager(&mut self) -> &mut RangeManager {
         &mut self.range_manager
+    }
+
+    pub(crate) fn has_cached_write_batch(&self, cache_range: &CacheRange) -> bool {
+        self.cached_write_batch.contains_key(cache_range)
     }
 
     pub(crate) fn take_cache_write_batch(
@@ -207,8 +212,8 @@ impl RangeCacheMemoryEngineCore {
 pub struct RangeCacheMemoryEngine {
     pub(crate) core: Arc<ShardedLock<RangeCacheMemoryEngineCore>>,
     memory_limiter: Arc<GlobalMemoryLimiter>,
-    background_work: Arc<BackgroundWork>,
     pub(crate) rocks_engine: Option<RocksEngine>,
+    bg_work_manager: Arc<BgWorkManager>,
 }
 
 impl RangeCacheMemoryEngine {
@@ -219,8 +224,8 @@ impl RangeCacheMemoryEngine {
         Self {
             core: core.clone(),
             memory_limiter: limiter,
-            background_work: Arc::new(BackgroundWork::new(core, gc_interval)),
             rocks_engine: None,
+            bg_work_manager: Arc::new(BgWorkManager::new(core, gc_interval)),
         }
     }
 
@@ -230,59 +235,76 @@ impl RangeCacheMemoryEngine {
     }
 
     pub fn evict_range(&mut self, range: &CacheRange) {
-        let mut core = self.core.write().unwrap();
-        if core.range_manager.evict_range(range) {
-            // todo: schedule it to a separate thread
-            core.engine.delete_range(range);
+        let mut skiplist_engine = None;
+        {
+            let mut core = self.core.write().unwrap();
+            if core.range_manager.evict_range(range) {
+                // The range can be delete directly.
+                skiplist_engine = Some(core.engine().clone());
+            }
+        };
+        if let Some(skiplist_engine) = skiplist_engine {
+            // todo(SpadeA): do it in background
+            skiplist_engine.delete_range(range);
+            let mut core = self.core.write().unwrap();
+            core.mut_range_manager().on_delete_range(range);
         }
-    }
-
-    pub fn on_delete_range(&self, range: &CacheRange) {
-        let mut core = self.core.write().unwrap();
-        core.mut_range_manager().on_delete_range(range);
-    }
-
-    pub fn background_worker(&self) -> &BackgroundWork {
-        &self.background_work
     }
 
     pub(crate) fn handle_pending_load(&self) {
-        let mut core = self.core.write().unwrap();
-        let skiplist_engine = core.engine().clone();
-        let range_manager = core.mut_range_manager();
-        // Couple ranges that need to be loaded with snapshot
-        let pending_loaded_ranges = std::mem::take(&mut range_manager.pending_loaded_ranges);
-        if !pending_loaded_ranges.is_empty() {
-            let rocks_snap = Arc::new(self.rocks_engine.as_ref().unwrap().snapshot(None));
-            range_manager.pending_loaded_ranges_with_snapshot = pending_loaded_ranges
-                .into_iter()
-                .map(|r| (r, rocks_snap.clone()))
-                .collect();
-            if let Err(e) = self
-                .background_work
-                .sechedule_task(BackgroundTask::LoadTask)
-            {
-                // todo(SpadeA)
-            }
-        }
+        let has_range_to_process = {
+            let core = self.core.read().unwrap();
+            let range_manager = core.range_manager();
+            !range_manager.pending_ranges.is_empty()
+                || !range_manager.ranges_loading_cached_write.is_empty()
+        };
 
-        // Some ranges have already loaded all data from snapshot, it's time to consume
-        // the cached write batch and make the range visible
-        let ranges_with_snap_done = std::mem::take(&mut range_manager.ranges_with_snap_done);
-        for range in ranges_with_snap_done {
-            if let Some(write_batches) = core.take_cache_write_batch(&range) {
-                for (seq, entry) in write_batches {
-                    // todo
-                    if let Err(_) = entry.write_to_memory(&skiplist_engine, seq) {}
+        if has_range_to_process {
+            let mut core = self.core.write().unwrap();
+            let skiplist_engine = core.engine().clone();
+            let range_manager = core.mut_range_manager();
+
+            // Couple ranges that need to be loaded with snapshot
+            let pending_loaded_ranges = std::mem::take(&mut range_manager.pending_ranges);
+            if !pending_loaded_ranges.is_empty() {
+                let rocks_snap = Arc::new(self.rocks_engine.as_ref().unwrap().snapshot(None));
+                range_manager.ranges_loading_snapshot.extend(
+                    pending_loaded_ranges
+                        .into_iter()
+                        .map(|r| (r, rocks_snap.clone())),
+                );
+                if let Err(e) = self
+                    .bg_worker_manager()
+                    .schedule_task(BackgroundTask::LoadTask)
+                {
+                    error!(
+                        "schedule range load failed";
+                        "err" => ?e,
+                    );
+                    assert!(tikv_util::thread_group::is_shutdown(!cfg!(test)));
                 }
             }
 
-            let range_manager = core.mut_range_manager();
-            // todo: the safe_point here should be the store's safe_ts
-            range_manager.new_range(range.clone());
-            range_manager.set_safe_point(&range, 10);
-            range_manager.set_range_readable(&range, true);
+            // Some ranges have already loaded all data from snapshot, it's time to consume
+            // the cached write batch and make the range visible
+            let ranges_loading_cached_write =
+                std::mem::take(&mut range_manager.ranges_loading_cached_write);
+            for range in ranges_loading_cached_write {
+                if let Some(write_batches) = core.take_cache_write_batch(&range) {
+                    for (seq, entry) in write_batches {
+                        entry.write_to_memory(&skiplist_engine, seq).unwrap();
+                    }
+                }
+
+                let range_manager = core.mut_range_manager();
+                range_manager.new_range(range.clone());
+                range_manager.set_range_readable(&range, true);
+            }
         }
+    }
+
+    pub fn bg_worker_manager(&self) -> &BgWorkManager {
+        &self.bg_work_manager
     }
 }
 
@@ -650,13 +672,22 @@ impl RangeCacheSnapshot {
 
 impl Drop for RangeCacheSnapshot {
     fn drop(&mut self) {
-        let mut core = self.engine.core.write().unwrap();
-        for range_removable in core
-            .range_manager
-            .remove_range_snapshot(&self.snapshot_meta)
-        {
+        let (ranges_removable, skiplist_engine) = {
+            let mut core = self.engine.core.write().unwrap();
+            let ranges_removable = core
+                .range_manager
+                .remove_range_snapshot(&self.snapshot_meta);
+            (ranges_removable, core.engine().clone())
+        };
+        for range_removable in &ranges_removable {
             // todo: schedule it to a separate thread
-            core.engine.delete_range(&self.snapshot_meta.range);
+            skiplist_engine.delete_range(range_removable);
+        }
+        if !ranges_removable.is_empty() {
+            let mut core = self.engine.core.write().unwrap();
+            for range_removable in &ranges_removable {
+                core.mut_range_manager().on_delete_range(range_removable);
+            }
         }
     }
 }
@@ -770,11 +801,14 @@ mod tests {
     use engine_traits::{
         CacheRange, IterOptions, Iterable, Iterator, Peekable, RangeCacheEngine, ReadOptions,
     };
-    use skiplist_rs::Skiplist;
 
     use super::{cf_to_id, GlobalMemoryLimiter, RangeCacheIterator, SkiplistEngine};
     use crate::{
-        keys::{decode_key, encode_key, InternalKeyComparator, ValueType},
+        keys::{
+            construct_key, construct_user_key, construct_value, decode_key, encode_key,
+            InternalKeyComparator, ValueType,
+        },
+        skiplist::Skiplist,
         RangeCacheMemoryEngine,
     };
 
@@ -860,23 +894,6 @@ mod tests {
         }
     }
 
-    fn construct_user_key(i: u64) -> Vec<u8> {
-        let k = format!("k{:08}", i);
-        k.as_bytes().to_owned()
-    }
-
-    fn construct_key(i: u64, mvcc: u64) -> Vec<u8> {
-        let k = format!("k{:08}", i);
-        let mut key = k.as_bytes().to_vec();
-        // mvcc version should be make bit-wise reverse so that k-100 is less than k-99
-        key.put_u64(!mvcc);
-        key
-    }
-
-    fn construct_value(i: u64, j: u64) -> String {
-        format!("value-{:04}-{:04}", i, j)
-    }
-
     fn fill_data_in_skiplist(
         sl: Arc<Skiplist<InternalKeyComparator, GlobalMemoryLimiter>>,
         key_range: StepBy<Range<u64>>,
@@ -888,7 +905,7 @@ mod tests {
                 let key = construct_key(i, mvcc);
                 let val = construct_value(i, mvcc);
                 let key = encode_key(&key, start_seq, ValueType::Value);
-                sl.put(key, Bytes::from(val));
+                sl.put(key, Bytes::from(val)).unwrap();
             }
             start_seq += 1;
         }
@@ -904,7 +921,7 @@ mod tests {
             for mvcc in mvcc_range.clone() {
                 let key = construct_key(i, mvcc);
                 let key = encode_key(&key, seq, ValueType::Deletion);
-                sl.put(key, Bytes::default());
+                sl.put(key, Bytes::default()).unwrap();
             }
             seq += 1;
         }
@@ -926,7 +943,7 @@ mod tests {
     ) {
         let key = construct_mvcc_key(key, mvcc);
         let key = encode_key(&key, seq, ValueType::Value);
-        sl.put(key, Bytes::from(val.to_owned()));
+        sl.put(key, Bytes::from(val.to_owned())).unwrap();
     }
 
     fn delete_key(
@@ -937,7 +954,7 @@ mod tests {
     ) {
         let key = construct_mvcc_key(key, mvcc);
         let key = encode_key(&key, seq, ValueType::Deletion);
-        sl.put(key, Bytes::default());
+        sl.put(key, Bytes::default()).unwrap();
     }
 
     fn verify_key_value(k: &[u8], v: &[u8], i: u64, mvcc: u64) {
@@ -1723,7 +1740,7 @@ mod tests {
                     let user_key = construct_key(i, mvcc);
                     let internal_key = encode_key(&user_key, 10, ValueType::Value);
                     let v = format!("v{:02}{:02}", i, mvcc);
-                    sl.put(internal_key, v);
+                    sl.put(internal_key, v).unwrap();
                 }
             }
         }
@@ -1801,6 +1818,20 @@ mod tests {
         });
     }
 
+    fn make_mem_free_execute() {
+        // For skiplist delete, the memory free is regsitered in the crossbeam_epoch
+        // and will be done lazily. Here, flush it and do some pins to make the
+        // memory free execute.
+        let guard = crossbeam_epoch::pin();
+        guard.flush();
+        drop(guard);
+        {
+            for i in 0..128 {
+                crossbeam_epoch::pin();
+            }
+        }
+    }
+
     #[test]
     fn test_evict_range_without_snapshot() {
         let mut engine = RangeCacheMemoryEngine::new(Arc::default(), Duration::from_secs(1));
@@ -1817,13 +1848,14 @@ mod tests {
                 let user_key = construct_key(i, 10);
                 let internal_key = encode_key(&user_key, 10, ValueType::Value);
                 let v = construct_value(i, 10);
-                sl.put(internal_key.clone(), v.clone());
+                sl.put(internal_key.clone(), v.clone()).unwrap();
             }
         }
 
         engine.evict_range(&evict_range);
         assert!(engine.snapshot(range.clone(), 10, 200).is_none());
         assert!(engine.snapshot(evict_range, 10, 200).is_none());
+        make_mem_free_execute();
 
         {
             let removed = engine.memory_limiter.removed.lock().unwrap();
@@ -1836,6 +1868,7 @@ mod tests {
 
         let r_left = CacheRange::new(construct_user_key(0), construct_user_key(10));
         let r_right = CacheRange::new(construct_user_key(20), construct_user_key(30));
+        let r_evicted = CacheRange::new(construct_user_key(10), construct_user_key(20));
         let snap_left = engine.snapshot(r_left, 10, 200).unwrap();
 
         let mut iter_opt = IterOptions::default();
@@ -1847,11 +1880,14 @@ mod tests {
         iter.seek_to_first().unwrap();
         verify_key_values(&mut iter, (0..10).step_by(1), 10..11, true, true);
 
+        assert!(engine.snapshot(r_evicted, 10, 200).is_none());
+
+        let snap_right = engine.snapshot(r_right, 10, 200).unwrap();
         let lower_bound = construct_user_key(20);
         let upper_bound = construct_user_key(30);
         iter_opt.set_upper_bound(&upper_bound, 0);
         iter_opt.set_lower_bound(&lower_bound, 0);
-        let mut iter = snap_left.iterator_opt("write", iter_opt).unwrap();
+        let mut iter = snap_right.iterator_opt("write", iter_opt).unwrap();
         iter.seek_to_first().unwrap();
         verify_key_values(&mut iter, (20..30).step_by(1), 10..11, true, true);
     }
@@ -1871,7 +1907,7 @@ mod tests {
                 let user_key = construct_key(i, 10);
                 let internal_key = encode_key(&user_key, 10, ValueType::Value);
                 let v = construct_value(i, 10);
-                sl.put(internal_key.clone(), v.clone());
+                sl.put(internal_key.clone(), v.clone()).unwrap();
             }
         }
 
@@ -1886,6 +1922,7 @@ mod tests {
         drop(s3);
         let range_left_eviction = CacheRange::new(construct_user_key(0), construct_user_key(5));
         engine.evict_range(&range_left_eviction);
+        make_mem_free_execute();
 
         {
             let removed = engine.memory_limiter.removed.lock().unwrap();
@@ -1893,6 +1930,7 @@ mod tests {
         }
 
         drop(s1);
+        make_mem_free_execute();
         {
             let removed = engine.memory_limiter.removed.lock().unwrap();
             for i in 10..20 {
@@ -1903,6 +1941,7 @@ mod tests {
         }
 
         drop(s2);
+        make_mem_free_execute();
         // s2 is dropped, so the range of `evict_range` is removed. The snapshot of s3
         // and s4 does not prevent it as they are not overlapped.
         {

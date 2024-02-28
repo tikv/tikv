@@ -3,7 +3,8 @@
 use std::sync::{Arc, Mutex};
 
 use collections::{HashMap, HashSet};
-use skiplist_rs::{AllocationRecorder, MemoryLimiter, Node};
+
+use crate::skiplist::{MemoryController, Node, NodeAllocationRecorder};
 
 // todo: implement a real memory limiter. Now, it is used for test.
 #[derive(Clone, Default)]
@@ -12,7 +13,7 @@ pub struct GlobalMemoryLimiter {
     pub(crate) removed: Arc<Mutex<HashSet<Vec<u8>>>>,
 }
 
-impl MemoryLimiter for GlobalMemoryLimiter {
+impl MemoryController for GlobalMemoryLimiter {
     fn acquire(&self, n: usize) -> bool {
         true
     }
@@ -24,14 +25,14 @@ impl MemoryLimiter for GlobalMemoryLimiter {
     fn reclaim(&self, n: usize) {}
 }
 
-impl AllocationRecorder for GlobalMemoryLimiter {
-    fn alloc(&self, addr: usize, size: usize) {
+impl NodeAllocationRecorder for GlobalMemoryLimiter {
+    fn allocated(&self, addr: usize, size: usize) {
         let mut recorder = self.recorder.lock().unwrap();
         assert!(!recorder.contains_key(&addr));
         recorder.insert(addr, size);
     }
 
-    fn free(&self, addr: usize, size: usize) {
+    fn freed(&self, addr: usize, size: usize) {
         let node = addr as *mut Node;
         let mut removed = self.removed.lock().unwrap();
         removed.insert(unsafe { (*node).key().to_vec() });

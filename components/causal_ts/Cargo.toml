@@ -29,6 +29,8 @@ serde = "1.0"
 serde_derive = "1.0"
 slog = { workspace = true }
 slog-global = { workspace = true }
+# Both included in `lib.rs` and `benches`, so we need to add it here.
+# TODO: move it to `dev-dependencies` after we have a better way to handle it.
 test_pd_client = { workspace = true }
 thiserror = "1.0"
 tikv_alloc = { workspace = true }

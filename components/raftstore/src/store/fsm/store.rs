@@ -1689,7 +1689,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         let snap_generator_pool = region_runner.snap_generator_pool();
         let region_scheduler = workers
             .region_worker
-            .start_with_timer("snapshot-worker", region_runner);
+            .start_with_timer("region-worker", region_runner);
 
         let raftlog_gc_runner = RaftlogGcRunner::new(
             engines.clone(),
@@ -1704,7 +1704,12 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             ReadRunner::new(self.router.clone(), engines.raft.clone()),
         );
 
-        let compact_runner = CompactRunner::new(engines.kv.clone(), bgworker_remote);
+        let compact_runner = CompactRunner::new(
+            engines.kv.clone(),
+            bgworker_remote,
+            cfg.clone().tracker(String::from("compact-runner")),
+            cfg.value().skip_manual_compaction_in_clean_up_worker,
+        );
         let cleanup_sst_runner = CleanupSstRunner::new(Arc::clone(&importer));
         let gc_snapshot_runner = GcSnapshotRunner::new(
             meta.get_id(),
@@ -2826,7 +2831,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         );
         // If the store already pass the check, it should clear the
         // `completed_apply_peers_count` to skip the check next time.
-        if !busy_on_apply {
+        if !busy_on_apply && completed_apply_peers_count.is_some() {
             let mut meta = self.ctx.store_meta.lock().unwrap();
             meta.completed_apply_peers_count = None;
         }
@@ -2937,6 +2942,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
                 cf_name: String::from(CF_LOCK),
                 start_key: None,
                 end_key: None,
+                bottommost_level_force: false,
             };
             if let Err(e) = self
                 .ctx

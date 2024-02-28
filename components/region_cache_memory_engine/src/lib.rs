@@ -4,6 +4,7 @@
 #![allow(unused_variables)]
 #![feature(let_chains)]
 #![feature(slice_pattern)]
+#![feature(btree_cursors)]
 
 mod background;
 mod engine;
@@ -14,3 +15,4 @@ mod write_batch;
 pub use write_batch::RangeCacheWriteBatch;
 mod memory_limiter;
 pub use background::{BackgroundRunner, GcTask};
+pub(crate) mod skiplist;

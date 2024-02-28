@@ -1,7 +1,7 @@
 // Copyright 2024 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::{BTreeMap, BTreeSet, VecDeque},
     sync::Arc,
 };
 
@@ -84,12 +84,18 @@ pub struct RangeManager {
     // ranges that are cached now
     ranges: BTreeMap<CacheRange, RangeMeta>,
 
-    pub(crate) pending_loaded_ranges: Vec<CacheRange>,
-    // todo: change to deque
-    pub(crate) pending_loaded_ranges_with_snapshot: Vec<(CacheRange, Arc<RocksSnapshot>)>,
-    pub(crate) ranges_with_snap_done: Vec<CacheRange>,
+    // `pending_ranges` contains ranges that will be loaded into the memory engine. At
+    // sometime in the apply thread, the pending ranges, coupled with rocksdb snapshot, will be
+    // poped and pushed into `ranges_loading_snapshot`. Then the data in the snapshot
+    // of the given ranges will be loaded in the memory engine in the background worker.
+    // When the snapshot load is finished, `ranges_loading_cached_write` will take over it, which
+    // will handle data that is written after the acquire of the snapshot. After it, the range load
+    // is finished.
+    pub(crate) pending_ranges: Vec<CacheRange>,
+    pub(crate) ranges_loading_snapshot: VecDeque<(CacheRange, Arc<RocksSnapshot>)>,
+    pub(crate) ranges_loading_cached_write: Vec<CacheRange>,
 
-    ranges_being_gced: BTreeSet<CacheRange>,
+    ranges_in_gc: BTreeSet<CacheRange>,
 }
 
 impl RangeManager {
@@ -212,7 +218,7 @@ impl RangeManager {
             .ranges
             .keys()
             .find(|&r| r.contains_range(evict_range))
-            .expect(format!("evict a range that does not contain: {:?}", evict_range).as_str())
+            .unwrap_or_else(|| panic!("evict a range that does not contain: {:?}", evict_range))
             .clone();
         let meta = self.ranges.remove(&range_key).unwrap();
         let (left_range, right_range) = range_key.split_off(evict_range);
@@ -246,34 +252,38 @@ impl RangeManager {
         self.evicted_ranges.remove(range);
     }
 
-    pub fn set_ranges_gcing(&mut self, ranges_being_gced: BTreeSet<CacheRange>) {
-        self.ranges_being_gced = ranges_being_gced;
+    pub fn set_ranges_in_gc(&mut self, ranges_in_gc: BTreeSet<CacheRange>) {
+        self.ranges_in_gc = ranges_in_gc;
     }
 
-    pub fn clear_ranges_gcing(&mut self) {
-        self.ranges_being_gced = BTreeSet::default();
+    pub fn clear_ranges_in_gc(&mut self) {
+        self.ranges_in_gc = BTreeSet::default();
     }
 
     pub fn load_range(&mut self, cache_range: CacheRange) -> Result<(), LoadFailedReason> {
         if self.overlap_with_range(&cache_range) {
             return Err(LoadFailedReason::Overlapped);
         };
-        if self.ranges_being_gced.contains(&cache_range) {
-            return Err(LoadFailedReason::BeingGced);
+        if self.ranges_in_gc.contains(&cache_range) {
+            return Err(LoadFailedReason::InGc);
         }
         if self.evicted_ranges.contains(&cache_range) {
-            return Err(LoadFailedReason::BeingEvicted);
+            return Err(LoadFailedReason::Evicted);
         }
-        self.pending_loaded_ranges.push(cache_range);
+        self.pending_ranges.push(cache_range);
         Ok(())
+    }
+
+    pub(crate) fn has_range_to_cache_write(&self) -> bool {
+        !self.ranges_loading_snapshot.is_empty() || !self.ranges_loading_cached_write.is_empty()
     }
 }
 
 #[derive(Debug, PartialEq)]
 pub enum LoadFailedReason {
     Overlapped,
-    BeingGced,
-    BeingEvicted,
+    InGc,
+    Evicted,
 }
 
 #[cfg(test)]
@@ -337,16 +347,16 @@ mod tests {
 
         let mut gced = BTreeSet::default();
         gced.insert(r2.clone());
-        range_mgr.set_ranges_gcing(gced);
+        range_mgr.set_ranges_in_gc(gced);
 
         assert_eq!(
             range_mgr.load_range(r1).unwrap_err(),
-            LoadFailedReason::BeingEvicted
+            LoadFailedReason::Evicted
         );
 
         assert_eq!(
             range_mgr.load_range(r2).unwrap_err(),
-            LoadFailedReason::BeingGced
+            LoadFailedReason::InGc
         );
 
         assert_eq!(

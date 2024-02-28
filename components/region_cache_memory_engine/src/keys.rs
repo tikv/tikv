@@ -4,9 +4,10 @@ use std::cmp;
 
 use bytes::{BufMut, Bytes, BytesMut};
 use engine_traits::CacheRange;
-use skiplist_rs::KeyComparator;
 use tikv_util::codec::number::NumberEncoder;
 use txn_types::{Key, TimeStamp};
+
+use crate::skiplist::KeyComparator;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ValueType {
@@ -178,13 +179,32 @@ impl KeyComparator for InternalKeyComparator {
 }
 
 #[cfg(test)]
+pub fn construct_user_key(i: u64) -> Vec<u8> {
+    let k = format!("k{:08}", i);
+    k.as_bytes().to_owned()
+}
+
+#[cfg(test)]
+pub fn construct_key(i: u64, mvcc: u64) -> Vec<u8> {
+    let k = format!("k{:08}", i);
+    let mut key = k.as_bytes().to_vec();
+    // mvcc version should be make bit-wise reverse so that k-100 is less than k-99
+    key.put_u64(!mvcc);
+    key
+}
+
+#[cfg(test)]
+pub fn construct_value(i: u64, j: u64) -> String {
+    format!("value-{:04}-{:04}", i, j)
+}
+
+#[cfg(test)]
 mod tests {
     use bytes::BufMut;
-    use skiplist_rs::KeyComparator;
     use txn_types::Key;
 
-    use super::{decode_key, InternalKeyComparator, ValueType};
-    use crate::keys::encode_key;
+    use super::{InternalKeyComparator, ValueType};
+    use crate::{keys::{decode_key, encode_key}, skiplist::KeyComparator};
 
     fn construct_key(i: u64, mvcc: u64) -> Vec<u8> {
         let k = format!("k{:08}", i);

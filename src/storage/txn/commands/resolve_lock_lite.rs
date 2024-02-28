@@ -34,6 +34,9 @@ command! {
             /// The keys to resolve.
             resolve_keys: Vec<Key>,
         }
+        in_heap => {
+            resolve_keys,
+        }
 }
 
 impl CommandExt for ResolveLockLite {
