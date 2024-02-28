@@ -20,7 +20,7 @@ use tikv_util::{config::ReadableSize, HandyRwLock};
 mod util;
 use self::util::{
     check_ingested_kvs, new_cluster_and_tikv_import_client, new_cluster_and_tikv_import_client_tde,
-    open_cluster_and_tikv_import_client_v2, send_upload_sst,
+    open_cluster_and_tikv_import_client_v2, send_upload_sst, must_acquire_sst_lease,
 };
 
 // Opening sst writer involves IO operation, it may block threads for a while.
@@ -38,6 +38,7 @@ fn test_download_sst_blocking_sst_writer() {
     let (mut meta, _) = gen_sst_file(sst_path, sst_range);
     meta.set_region_id(ctx.get_region_id());
     meta.set_region_epoch(ctx.get_region_epoch().clone());
+    must_acquire_sst_lease(&import, &meta, Duration::MAX);
 
     // Sleep 20s, make sure it is large than grpc_keepalive_timeout (3s).
     let sst_writer_open_fp = "on_open_sst_writer";
@@ -67,7 +68,7 @@ fn test_download_sst_blocking_sst_writer() {
     ingest.set_context(ctx.clone());
     ingest.set_sst(meta);
     let resp = import.ingest(&ingest).unwrap();
-    assert!(!resp.has_error());
+    assert!(!resp.has_error(), "{:?}", resp);
 
     check_ingested_kvs(&tikv, &ctx, sst_range);
 }
@@ -104,6 +105,7 @@ fn test_ingest_reentrant() {
     let (mut meta, data) = gen_sst_file(sst_path, sst_range);
     meta.set_region_id(ctx.get_region_id());
     meta.set_region_epoch(ctx.get_region_epoch().clone());
+    must_acquire_sst_lease(&import, &meta, Duration::MAX);
     upload_sst(&import, &meta, &data).unwrap();
 
     let mut ingest = IngestRequest::default();
@@ -124,9 +126,9 @@ fn test_ingest_reentrant() {
         .get_path(&meta);
 
     let checksum1 = calc_crc32(save_path.clone()).unwrap();
-    // Do ingest and it will ingest successs.
+    // Do ingest and it will ingest success.
     let resp = import.ingest(&ingest).unwrap();
-    assert!(!resp.has_error());
+    assert!(!resp.has_error(), "{:?}", resp);
 
     let checksum2 = calc_crc32(save_path).unwrap();
     // TODO: Remove this once write_global_seqno is deprecated.
@@ -134,8 +136,9 @@ fn test_ingest_reentrant() {
     // updated with the default setting, which is write_global_seqno=false.
     assert_eq!(checksum1, checksum2);
     // Do ingest again and it can be reentrant
+    must_acquire_sst_lease(&import, &meta, Duration::MAX);
     let resp = import.ingest(&ingest).unwrap();
-    assert!(!resp.has_error());
+    assert!(!resp.has_error(), "{:?}", resp);
 }
 
 #[test]
@@ -153,6 +156,7 @@ fn test_ingest_key_manager_delete_file_failed() {
     meta.set_region_id(ctx.get_region_id());
     meta.set_region_epoch(ctx.get_region_epoch().clone());
 
+    must_acquire_sst_lease(&import, &meta, Duration::MAX);
     upload_sst(&import, &meta, &data).unwrap();
 
     let deregister_fp = "key_manager_fails_before_delete_file";
@@ -169,7 +173,7 @@ fn test_ingest_key_manager_delete_file_failed() {
     ingest.set_sst(meta.clone());
     let resp = import.ingest(&ingest).unwrap();
 
-    assert!(!resp.has_error());
+    assert!(!resp.has_error(), "{:?}", resp);
 
     fail::remove(deregister_fp);
 
@@ -193,12 +197,13 @@ fn test_ingest_key_manager_delete_file_failed() {
 
     // Do upload and ingest again, though key manager contains this file, the ingest
     // action should success.
+    must_acquire_sst_lease(&import, &meta, Duration::MAX);
     upload_sst(&import, &meta, &data).unwrap();
     let mut ingest = IngestRequest::default();
     ingest.set_context(ctx);
     ingest.set_sst(meta);
     let resp = import.ingest(&ingest).unwrap();
-    assert!(!resp.has_error());
+    assert!(!resp.has_error(), "{:?}", resp);
 }
 
 #[test]
@@ -215,10 +220,11 @@ fn test_ingest_file_twice_and_conflict() {
     let (mut meta, data) = gen_sst_file(sst_path, sst_range);
     meta.set_region_id(ctx.get_region_id());
     meta.set_region_epoch(ctx.get_region_epoch().clone());
+    must_acquire_sst_lease(&import, &meta, Duration::MAX);
     upload_sst(&import, &meta, &data).unwrap();
     let mut ingest = IngestRequest::default();
     ingest.set_context(ctx);
-    ingest.set_sst(meta);
+    ingest.set_sst(meta.clone());
 
     let latch_fp = "import::sst_service::ingest";
     let (tx1, rx1) = channel();
@@ -240,9 +246,10 @@ fn test_ingest_file_twice_and_conflict() {
     assert_eq!("ingest file conflict", resp.get_error().get_message());
     tx2.send(()).unwrap();
     let resp = block_on(resp_recv).unwrap();
-    assert!(!resp.has_error());
+    assert!(!resp.has_error(), "{:?}", resp);
 
     fail::remove(latch_fp);
+    must_acquire_sst_lease(&import, &meta, Duration::MAX);
     let resp = import.ingest(&ingest).unwrap();
     assert!(resp.has_error());
     assert_eq!(
@@ -264,6 +271,7 @@ fn test_delete_sst_v2_after_epoch_stale() {
     let sst_path = temp_dir.path().join("test.sst");
     let sst_range = (0, 100);
     let (mut meta, data) = gen_sst_file(sst_path, sst_range);
+    must_acquire_sst_lease(&import, &meta, Duration::MAX);
     // disable data flushed
     fail::cfg("on_flush_completed", "return()").unwrap();
     send_upload_sst(&import, &meta, &data).unwrap();
@@ -272,6 +280,7 @@ fn test_delete_sst_v2_after_epoch_stale() {
     ingest.set_sst(meta.clone());
     meta.set_region_id(ctx.get_region_id());
     meta.set_region_epoch(ctx.get_region_epoch().clone());
+    must_acquire_sst_lease(&import, &meta, Duration::MAX);
     send_upload_sst(&import, &meta, &data).unwrap();
     ingest.set_sst(meta.clone());
 
@@ -332,12 +341,14 @@ fn test_delete_sst_after_applied_sst() {
     let sst_range = (0, 100);
     let (mut meta, data) = gen_sst_file(sst_path, sst_range);
     // No region id and epoch.
+    must_acquire_sst_lease(&import, &meta, Duration::MAX);
     send_upload_sst(&import, &meta, &data).unwrap();
     let mut ingest = IngestRequest::default();
     ingest.set_context(ctx.clone());
     ingest.set_sst(meta.clone());
     meta.set_region_id(ctx.get_region_id());
     meta.set_region_epoch(ctx.get_region_epoch().clone());
+    must_acquire_sst_lease(&import, &meta, Duration::MAX);
     send_upload_sst(&import, &meta, &data).unwrap();
     ingest.set_sst(meta.clone());
     let resp = import.ingest(&ingest).unwrap();
@@ -390,12 +401,14 @@ fn test_split_buckets_after_ingest_sst_v2() {
     let sst_path = temp_dir.path().join("test.sst");
     let sst_range = (0, 255);
     let (mut meta, data) = gen_sst_file(sst_path, sst_range);
+    must_acquire_sst_lease(&import, &meta, Duration::MAX);
     send_upload_sst(&import, &meta, &data).unwrap();
     let mut ingest = IngestRequest::default();
     ingest.set_context(ctx.clone());
     ingest.set_sst(meta.clone());
     meta.set_region_id(ctx.get_region_id());
     meta.set_region_epoch(ctx.get_region_epoch().clone());
+    must_acquire_sst_lease(&import, &meta, Duration::MAX);
     send_upload_sst(&import, &meta, &data).unwrap();
     ingest.set_sst(meta.clone());
 
@@ -474,12 +487,14 @@ fn test_flushed_applied_index_after_ingset() {
         let sst_range = (i * 20, (i + 1) * 20);
         let (mut meta, data) = gen_sst_file(sst_path.clone(), sst_range);
         // No region id and epoch.
+        must_acquire_sst_lease(&import, &meta, Duration::MAX);
         send_upload_sst(&import, &meta, &data).unwrap();
         let mut ingest = IngestRequest::default();
         ingest.set_context(ctx.clone());
         ingest.set_sst(meta.clone());
         meta.set_region_id(ctx.get_region_id());
         meta.set_region_epoch(ctx.get_region_epoch().clone());
+        must_acquire_sst_lease(&import, &meta, Duration::MAX);
         send_upload_sst(&import, &meta, &data).unwrap();
         ingest.set_sst(meta.clone());
         let resp = import.ingest(&ingest).unwrap();
@@ -494,12 +509,14 @@ fn test_flushed_applied_index_after_ingset() {
         let sst_range = (i * 20, (i + 1) * 20);
         let (mut meta, data) = gen_sst_file(sst_path.clone(), sst_range);
         // No region id and epoch.
+        must_acquire_sst_lease(&import, &meta, Duration::MAX);
         send_upload_sst(&import, &meta, &data).unwrap();
         let mut ingest = IngestRequest::default();
         ingest.set_context(ctx.clone());
         ingest.set_sst(meta.clone());
         meta.set_region_id(ctx.get_region_id());
         meta.set_region_epoch(ctx.get_region_epoch().clone());
+        must_acquire_sst_lease(&import, &meta, Duration::MAX);
         send_upload_sst(&import, &meta, &data).unwrap();
         ingest.set_sst(meta.clone());
         let resp = import.ingest(&ingest).unwrap();

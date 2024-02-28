@@ -193,6 +193,47 @@ pub fn new_sst_meta(crc32: u32, length: u64) -> SstMeta {
     m
 }
 
+pub fn must_acquire_sst_lease(client: &ImportSstClient, meta: &SstMeta, ttl: Duration) {
+    let resp = send_acquire_lease(client, meta, ttl).unwrap();
+    let acquired_lease = &resp.get_acquired()[0];
+    assert_eq!(meta.get_region_id(), acquired_lease.get_region().get_id());
+    assert_eq!(meta.get_uuid(), acquired_lease.get_uuid());
+}
+
+fn send_acquire_lease(
+    client: &ImportSstClient,
+    meta: &SstMeta,
+    ttl: Duration,
+) -> Result<LeaseResponse> {
+    let region_id = meta.get_region_id();
+    let mut acquire = AcquireLease::default();
+    acquire.mut_lease().mut_region().set_id(region_id);
+    acquire.mut_lease().set_uuid(meta.get_uuid().into());
+    acquire.set_ttl(ttl.as_secs());
+    let mut req = LeaseRequest::default();
+    req.mut_acquire().push(acquire);
+    let resp = client.lease(&req)?;
+    Ok(resp)
+}
+
+pub fn must_release_sst_lease(client: &ImportSstClient, meta: &SstMeta) {
+    let resp = send_release_lease(client, meta).unwrap();
+    let released_lease = &resp.get_released()[0];
+    assert_eq!(meta.get_region_id(), released_lease.get_region().get_id());
+    assert_eq!(meta.get_uuid(), released_lease.get_uuid());
+}
+
+fn send_release_lease(client: &ImportSstClient, meta: &SstMeta) -> Result<LeaseResponse> {
+    let region_id = meta.get_region_id();
+    let mut release = ReleaseLease::default();
+    release.mut_lease().mut_region().set_id(region_id);
+    release.mut_lease().set_uuid(meta.get_uuid().into());
+    let mut req = LeaseRequest::default();
+    req.mut_release().push(release);
+    let resp = client.lease(&req)?;
+    Ok(resp)
+}
+
 pub fn send_upload_sst(
     client: &ImportSstClient,
     meta: &SstMeta,
@@ -209,9 +250,16 @@ pub fn send_upload_sst(
     let (mut tx, rx) = client.upload().unwrap();
     let mut stream = stream::iter(reqs);
     block_on(async move {
-        tx.send_all(&mut stream).await?;
-        tx.close().await?;
-        rx.await
+        let send_res = tx.send_all(&mut stream).await;
+        let close_res = tx.close().await;
+        match rx.await {
+            Ok(resp) => Ok(resp),
+            Err(e) => {
+                send_res?;
+                close_res?;
+                Err(e)
+            }
+        }
     })
 }
 
