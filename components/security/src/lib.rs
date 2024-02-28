@@ -19,7 +19,7 @@ use grpcio::{
     ServerCredentialsFetcher,
 };
 use online_config::{ConfigChange, ConfigManager, OnlineConfig, Result as CfgResult};
-use tikv_util::{info};
+use tikv_util::info;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Default, OnlineConfig)]
 #[serde(default)]
@@ -138,7 +138,7 @@ pub struct SecurityConfigManager;
 
 impl ConfigManager for SecurityConfigManager {
     fn dispatch(&mut self, changes: ConfigChange) -> CfgResult<()> {
-        //update log redaction config
+        // update log redaction config
         if let Some(v) = changes.get("redact_info_log") {
             log_wrappers::set_redact_info_log(v.into());
         }
@@ -146,7 +146,6 @@ impl ConfigManager for SecurityConfigManager {
         Ok(())
     }
 }
-
 
 #[derive(Default)]
 pub struct SecurityManager {

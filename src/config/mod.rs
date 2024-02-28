@@ -49,6 +49,7 @@ use engine_traits::{
 use file_system::IoRateLimiter;
 use keys::region_raft_prefix_len;
 use kvproto::kvrpcpb::ApiVersion;
+use once_cell::sync::OnceCell;
 use online_config::{ConfigChange, ConfigManager, ConfigValue, OnlineConfig, Result as CfgResult};
 use pd_client::Config as PdConfig;
 use raft_log_engine::{
@@ -75,7 +76,6 @@ use tikv_util::{
     time::duration_to_sec,
     yatp_pool,
 };
-use once_cell::sync::OnceCell;
 
 use crate::{
     coprocessor_v2::Config as CoprocessorV2Config,
@@ -4279,14 +4279,19 @@ impl TikvConfig {
         deserializer.end()?;
         cfg.cfg_path = path.display().to_string();
 
-        //Check and set TIKV_ALLOW_DYNAMIC_SECURITY_CONFIG flag
-        match TIKV_ALLOW_DYNAMIC_SECURITY_CONFIG.get(){
+        // Check and set TIKV_ALLOW_DYNAMIC_SECURITY_CONFIG flag
+        match TIKV_ALLOW_DYNAMIC_SECURITY_CONFIG.get() {
             Some(allow) => {
                 info!("TIKV_ALLOW_DYNAMIC_SECURITY_CONFIG already set: {}", allow);
             }
             None => {
-                TIKV_ALLOW_DYNAMIC_SECURITY_CONFIG.set(cfg.allow_dynamic_security_config).unwrap();
-                info!("TIKV_ALLOW_DYNAMIC_SECURITY_CONFIG initialized : {}", TIKV_ALLOW_DYNAMIC_SECURITY_CONFIG.get().unwrap());
+                TIKV_ALLOW_DYNAMIC_SECURITY_CONFIG
+                    .set(cfg.allow_dynamic_security_config)
+                    .unwrap();
+                info!(
+                    "TIKV_ALLOW_DYNAMIC_SECURITY_CONFIG initialized : {}",
+                    TIKV_ALLOW_DYNAMIC_SECURITY_CONFIG.get().unwrap()
+                );
             }
         }
 
@@ -5520,10 +5525,7 @@ mod tests {
                 "raftstore.raft-heartbeat-ticks".to_owned(),
                 "100".to_owned(),
             ),
-            (
-                "security.redact_info_log".to_owned(),
-                "true".to_owned(),
-            ),
+            ("security.redact_info_log".to_owned(), "true".to_owned()),
             ("raftstore.prevote".to_owned(), "false".to_owned()),
         ];
         for (name, value) in cases {
@@ -5541,13 +5543,10 @@ mod tests {
         incoming.security.redact_info_log = Some(true);
         let diff = old.diff(&incoming);
         let mut change = HashMap::new();
-        change.insert(
-            "security.redact_info_log".to_owned(),
-            "true".to_owned(),
-        );
+        change.insert("security.redact_info_log".to_owned(), "true".to_owned());
         let res = to_config_change(change).unwrap();
         assert_eq!(diff, res);
-    }    
+    }
 
     #[test]
     fn test_to_toml_encode() {
