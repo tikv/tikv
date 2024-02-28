@@ -1689,7 +1689,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         let snap_generator_pool = region_runner.snap_generator_pool();
         let region_scheduler = workers
             .region_worker
-            .start_with_timer("snapshot-worker", region_runner);
+            .start_with_timer("region-worker", region_runner);
 
         let raftlog_gc_runner = RaftlogGcRunner::new(
             engines.clone(),
