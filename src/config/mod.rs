@@ -1237,6 +1237,8 @@ pub struct DbConfig {
     #[doc(hidden)]
     #[serde(skip_serializing)]
     pub write_buffer_flush_oldest_first: bool,
+    #[online_config(skip)]
+    pub track_and_verify_wals_in_manifest: bool,
     // Dangerous option only for programming use.
     #[online_config(skip)]
     #[serde(skip)]
@@ -1304,7 +1306,12 @@ impl Default for DbConfig {
             allow_concurrent_memtable_write: None,
             write_buffer_limit: None,
             write_buffer_stall_ratio: 0.0,
+<<<<<<< HEAD
             write_buffer_flush_oldest_first: false,
+=======
+            write_buffer_flush_oldest_first: true,
+            track_and_verify_wals_in_manifest: true,
+>>>>>>> 9fa462a3c4 (rocksdb: Expose track-and-verify-wals-in-manifest config (#16546))
             paranoid_checks: None,
             defaultcf: DefaultCfConfig::default(),
             writecf: WriteCfConfig::default(),
@@ -1433,6 +1440,7 @@ impl DbConfig {
             // Historical stats are not used.
             opts.set_stats_persist_period_sec(0);
         }
+        opts.set_track_and_verify_wals_in_manifest(self.track_and_verify_wals_in_manifest);
         opts
     }
 

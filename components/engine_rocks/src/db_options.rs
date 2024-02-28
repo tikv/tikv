@@ -94,6 +94,10 @@ impl DbOptions for RocksDbOptions {
     fn set_titandb_options(&mut self, opts: &Self::TitanDbOptions) {
         self.0.set_titandb_options(opts.as_raw())
     }
+
+    fn set_track_and_verify_wals_in_manifest(&mut self, v: bool) {
+        self.0.set_track_and_verify_wals_in_manifest(v)
+    }
 }
 
 pub struct RocksTitanDbOptions(RawTitanDBOptions);
