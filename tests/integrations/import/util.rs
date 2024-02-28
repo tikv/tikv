@@ -200,7 +200,7 @@ pub fn must_acquire_sst_lease(client: &ImportSstClient, meta: &SstMeta, ttl: Dur
     assert_eq!(meta.get_uuid(), acquired_lease.get_uuid());
 }
 
-fn send_acquire_lease(
+pub fn send_acquire_lease(
     client: &ImportSstClient,
     meta: &SstMeta,
     ttl: Duration,
