@@ -552,15 +552,18 @@ macro_rules! impl_write {
                     };
 
                     // Make sure it has a valid lease.
-                    if let Err(e) = import.check_lease(meta.get_region_id(), meta.get_uuid(), label)
-                    {
-                        let mut resp = $resp_ty::default();
-                        resp.mut_error().set_message(e.to_string());
-                        let mut errorpb = errorpb::Error::default();
-                        errorpb.set_message(e.to_string());
-                        resp.mut_error().set_store_error(errorpb);
-                        return (Ok(resp), Some(rx));
-                    }
+                    let _lease =
+                        match import.check_lease(meta.get_region_id(), meta.get_uuid(), label) {
+                            Ok(lease) => lease,
+                            Err(e) => {
+                                let mut resp = $resp_ty::default();
+                                resp.mut_error().set_message(e.to_string());
+                                let mut errorpb = errorpb::Error::default();
+                                errorpb.set_message(e.to_string());
+                                resp.mut_error().set_store_error(errorpb);
+                                return (Ok(resp), Some(rx));
+                            }
+                        };
 
                     // wait the region epoch on this TiKV to catch up with the epoch
                     // in request, which comes from PD and represents the majority
@@ -810,13 +813,17 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
                     _ => return Err(Error::InvalidChunk),
                 };
                 // Make sure it has a valid lease.
-                if let Err(e) = import.check_lease(meta.get_region_id(), meta.get_uuid(), label) {
-                    let mut resp = UploadResponse::default();
-                    let mut errorpb = errorpb::Error::default();
-                    errorpb.set_message(e.to_string());
-                    resp.set_error(errorpb);
-                    return Ok(resp);
-                }
+                let _lease = match import.check_lease(meta.get_region_id(), meta.get_uuid(), label)
+                {
+                    Ok(lease) => lease,
+                    Err(e) => {
+                        let mut resp = UploadResponse::default();
+                        let mut errorpb = errorpb::Error::default();
+                        errorpb.set_message(e.to_string());
+                        resp.set_error(errorpb);
+                        return Ok(resp);
+                    }
+                };
 
                 let file = import.create(meta)?;
                 let mut file = rx
@@ -936,14 +943,17 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
 
             // Make sure it has a valid lease.
             let meta = req.get_sst();
-            if let Err(e) = importer.check_lease(meta.get_region_id(), meta.get_uuid(), label) {
-                let mut resp = DownloadResponse::default();
-                resp.mut_error().set_message(e.to_string());
-                let mut errorpb = errorpb::Error::default();
-                errorpb.set_message(e.to_string());
-                resp.mut_error().set_store_error(errorpb);
-                return crate::send_rpc_response!(Ok(resp), sink, label, timer);
-            }
+            let _lease = match importer.check_lease(meta.get_region_id(), meta.get_uuid(), label) {
+                Ok(lease) => lease,
+                Err(e) => {
+                    let mut resp = DownloadResponse::default();
+                    resp.mut_error().set_message(e.to_string());
+                    let mut errorpb = errorpb::Error::default();
+                    errorpb.set_message(e.to_string());
+                    resp.mut_error().set_store_error(errorpb);
+                    return crate::send_rpc_response!(Ok(resp), sink, label, timer);
+                }
+            };
 
             // FIXME: download() should be an async fn, to allow BR to cancel
             // a download task.

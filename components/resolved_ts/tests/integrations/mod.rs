@@ -2,6 +2,7 @@
 
 #[path = "../mod.rs"]
 mod testsuite;
+
 use std::{sync::mpsc::channel, time::Duration};
 
 use futures::executor::block_on;

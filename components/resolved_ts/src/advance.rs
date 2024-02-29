@@ -413,8 +413,7 @@ impl LeadershipResolver {
         let mut res = Vec::with_capacity(self.valid_regions.len());
         for region_id in self.valid_regions.drain() {
             // Skip regions those are currently ingesting SSTs.
-            let leases = self.ingest_observer.query_region(region_id);
-            for (uuid, _) in leases {
+            if let Some(uuid) = self.ingest_observer.get_region_lease(region_id) {
                 info!("skip advancing resolved ts due to ingest sst";
                     "region_id" => region_id,
                     "lease_uuid" => ?uuid,

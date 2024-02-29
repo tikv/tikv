@@ -54,6 +54,7 @@ use crate::{
     import_file::{ImportDir, ImportFile},
     import_mode::{ImportModeSwitcher, RocksDbMetricsFn},
     import_mode2::{HashRange, ImportModeSwitcherV2},
+    mediate::LeaseRef,
     metrics::*,
     sst_writer::{RawSstWriter, TxnSstWriter},
     util, Config, ConfigManager as ImportConfigManager, Error, Mediator, Observer, Result,
@@ -249,13 +250,19 @@ impl<E: KvEngine> SstImporter<E> {
     // TODO: To avid race condition, maybe we should check the lease and hold it
     // and let caller to decided when to unhold.
     // hold means make a lease valid even if it exceeds its deadline.
-    pub fn check_lease(&self, region_id: u64, uuid_bytes: &[u8], rpc: &'static str) -> Result<()> {
+    pub fn check_lease(
+        &self,
+        region_id: u64,
+        uuid_bytes: &[u8],
+        rpc: &'static str,
+    ) -> Result<LeaseRef> {
         let uuid = parse_uuid_from_slice(uuid_bytes)?;
-        let now = StdInstant::now();
-        let deadline = self.ingest_observer.query(region_id, &uuid);
-        info!("dbg check lease"; "region_id" => region_id, "now" => ?now, "deadline" => ?deadline);
-        if deadline.map_or(false, |deadline| now < deadline) {
-            Ok(())
+        let lease_ref = self.ingest_observer.query(region_id, &uuid);
+        info!("dbg check lease"; "region_id" => region_id, "now" => ?StdInstant::now(), "deadline" => ?lease_ref);
+        if let Some(lease) = lease_ref
+            && !lease.is_expired()
+        {
+            Ok(lease)
         } else {
             info!("ingest lease expired";
                 "region_id" => region_id,

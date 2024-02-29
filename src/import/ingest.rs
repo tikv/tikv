@@ -273,14 +273,18 @@ pub async fn ingest<E: Engine>(
     }
 
     // Make sure all ssts have valid leases.
+    let mut lease_refs = Vec::with_capacity(req.get_ssts().len());
     for meta in req.get_ssts() {
-        if let Err(e) = importer.check_lease(meta.get_region_id(), meta.get_uuid(), label) {
-            let mut resp = IngestResponse::default();
-            let mut errorpb = errorpb::Error::default();
-            errorpb.set_message(e.to_string());
-            resp.set_error(errorpb);
-            return Ok(resp);
-        }
+        match importer.check_lease(meta.get_region_id(), meta.get_uuid(), label) {
+            Ok(lease) => lease_refs.push(lease),
+            Err(e) => {
+                let mut resp = IngestResponse::default();
+                let mut errorpb = errorpb::Error::default();
+                errorpb.set_message(e.to_string());
+                resp.set_error(errorpb);
+                return Ok(resp);
+            }
+        };
     }
 
     let mut errorpb = errorpb::Error::default();
@@ -309,6 +313,8 @@ pub async fn ingest<E: Engine>(
     for meta in &metas {
         ingest_latch.release_lock(meta).unwrap();
     }
+    // We should drop lease refs, so that they can be expired.
+    drop(lease_refs);
     for meta in &metas {
         if let Err(e) = importer.expire_lease(meta.get_region_id(), meta.get_uuid()) {
             warn!("expire ingest lease failed after ingest";
