@@ -295,9 +295,16 @@ pub fn send_write_sst(
     let (mut tx, rx) = client.write().unwrap();
     let mut stream = stream::iter(reqs);
     block_on(async move {
-        tx.send_all(&mut stream).await?;
-        tx.close().await?;
-        rx.await
+        let send_res = tx.send_all(&mut stream).await;
+        let close_res = tx.close().await;
+        match rx.await {
+            Ok(resp) => Ok(resp),
+            Err(e) => {
+                send_res?;
+                close_res?;
+                Err(e)
+            }
+        }
     })
 }
 
