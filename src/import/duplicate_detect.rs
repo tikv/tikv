@@ -416,6 +416,7 @@ mod tests {
             }
             base += data.len();
         }
+
         assert_eq!(base, expected_kvs.len(), "{:?}", &expected_kvs[base..]);
     }
 
@@ -426,21 +427,21 @@ mod tests {
             .unwrap();
         let mut data = vec![];
         for i in 0..1000 {
-            let key = format!("{}", i);
-            let value = format!("{}", i);
+            let key = format!("{:03}", i);
+            let value = format!("{:03}", i);
             data.push((key.as_bytes().to_vec(), value.as_bytes().to_vec()))
         }
         write_data(&storage, data, 3);
         let mut data = vec![];
         let big_value = vec![1u8; 300];
         for i in 0..1000 {
-            let key = format!("{}", i * 2);
+            let key = format!("{:03}", i * 2);
             data.push((key.as_bytes().to_vec(), big_value.clone()))
         }
         write_data(&storage, data, 5);
         // We have to do the prewrite manually so that the mem locks don't get released.
         let snapshot = storage.get_snapshot();
-        let start = format!("{}", 0);
+        let start = format!("{:03}", 0);
         let end = format!("{}", 800);
         let detector = DuplicateDetector::new(
             snapshot,
@@ -452,8 +453,8 @@ mod tests {
         .unwrap();
         let mut expected_kvs = vec![];
         for i in 0..400 {
-            let key = format!("{}", i * 2);
-            let value = format!("{}", i * 2);
+            let key = format!("{:03}", i * 2);
+            let value = format!("{:03}", i * 2);
             expected_kvs.push((key.as_bytes().to_vec(), big_value.clone(), 5));
             expected_kvs.push((key.as_bytes().to_vec(), value.as_bytes().to_vec(), 3));
         }
