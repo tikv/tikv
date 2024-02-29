@@ -72,6 +72,7 @@ const GRPC_MSG_NOTIFY_SIZE: usize = 8;
 
 /// Service handles the RPC messages for the `Tikv` service.
 pub struct Service<E: Engine, L: LockManager, F: KvFormat> {
+    cluster_id: u64,
     store_id: u64,
     /// Used to handle requests related to GC.
     // TODO: make it Some after GC is supported for v2.
@@ -112,6 +113,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Drop for Service<E, L, F> {
 impl<E: Engine + Clone, L: LockManager + Clone, F: KvFormat> Clone for Service<E, L, F> {
     fn clone(&self) -> Self {
         Service {
+            cluster_id: self.cluster_id,
             store_id: self.store_id,
             gc_worker: self.gc_worker.clone(),
             storage: self.storage.clone(),
@@ -134,6 +136,7 @@ impl<E: Engine + Clone, L: LockManager + Clone, F: KvFormat> Clone for Service<E
 impl<E: Engine, L: LockManager, F: KvFormat> Service<E, L, F> {
     /// Constructs a new `Service` which provides the `Tikv` service.
     pub fn new(
+        cluster_id: u64,
         store_id: u64,
         storage: Storage<E, L, F>,
         gc_worker: GcWorker<E>,
@@ -154,6 +157,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Service<E, L, F> {
             .unwrap()
             .as_millis() as u64;
         Service {
+            cluster_id,
             store_id,
             gc_worker,
             storage,
@@ -211,12 +215,27 @@ impl<E: Engine, L: LockManager, F: KvFormat> Service<E, L, F> {
     }
 }
 
+macro_rules! reject_if_cluster_id_mismatch {
+    ($req:expr, $self:ident, $ctx:expr, $sink:expr) => {
+        let req_cluster_id = $req.get_context().get_cluster_id();
+        if req_cluster_id > 0 && req_cluster_id != $self.cluster_id {
+            // Reject the request if the cluster IDs do not match.
+            warn!("unexpected request with different cluster id is received"; "req" => ?&$req);
+            let e = RpcStatus::with_message(RpcStatusCode::INVALID_ARGUMENT,
+            "the cluster id of the request does not match the TiKV cluster".to_string());
+            $ctx.spawn($sink.fail(e).unwrap_or_else(|_| {}),);
+            return;
+        }
+    };
+}
+
 macro_rules! handle_request {
     ($fn_name: ident, $future_name: ident, $req_ty: ident, $resp_ty: ident) => {
         handle_request!($fn_name, $future_name, $req_ty, $resp_ty, no_time_detail);
     };
     ($fn_name: ident, $future_name: ident, $req_ty: ident, $resp_ty: ident, $time_detail: tt) => {
         fn $fn_name(&mut self, ctx: RpcContext<'_>, req: $req_ty, sink: UnarySink<$resp_ty>) {
+            reject_if_cluster_id_mismatch!(req, self, ctx, sink);
             forward_unary!(self.proxy, $fn_name, ctx, req, sink);
             let begin_instant = Instant::now();
 
@@ -456,6 +475,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
         req: PrepareFlashbackToVersionRequest,
         sink: UnarySink<PrepareFlashbackToVersionResponse>,
     ) {
+        reject_if_cluster_id_mismatch!(req, self, ctx, sink);
         let begin_instant = Instant::now();
 
         let source = req.get_context().get_request_source().to_owned();
@@ -488,6 +508,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
         req: FlashbackToVersionRequest,
         sink: UnarySink<FlashbackToVersionResponse>,
     ) {
+        reject_if_cluster_id_mismatch!(req, self, ctx, sink);
         let begin_instant = Instant::now();
 
         let source = req.get_context().get_request_source().to_owned();
@@ -515,6 +536,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
     }
 
     fn coprocessor(&mut self, ctx: RpcContext<'_>, req: Request, sink: UnarySink<Response>) {
+        reject_if_cluster_id_mismatch!(req, self, ctx, sink);
         forward_unary!(self.proxy, coprocessor, ctx, req, sink);
         let source = req.get_context().get_request_source().to_owned();
         let resource_control_ctx = req.get_context().get_resource_control_context();
@@ -562,6 +584,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
         req: RawCoprocessorRequest,
         sink: UnarySink<RawCoprocessorResponse>,
     ) {
+        reject_if_cluster_id_mismatch!(req, self, ctx, sink);
         let source = req.get_context().get_request_source().to_owned();
         let resource_control_ctx = req.get_context().get_resource_control_context();
         let mut resource_group_priority = ResourcePriority::unknown;
@@ -659,6 +682,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
         req: Request,
         mut sink: ServerStreamingSink<Response>,
     ) {
+        reject_if_cluster_id_mismatch!(req, self, ctx, sink);
         let begin_instant = Instant::now();
         let resource_control_ctx = req.get_context().get_resource_control_context();
         let mut resource_group_priority = ResourcePriority::unknown;

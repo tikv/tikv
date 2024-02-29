@@ -3355,3 +3355,58 @@ fn test_pipelined_dml_buffer_get_other_key() {
     assert!(!resp.has_region_error());
     assert!(resp.get_pairs().is_empty());
 }
+
+#[test_case(test_raftstore::must_new_cluster_and_kv_client)]
+#[test_case(test_raftstore_v2::must_new_cluster_and_kv_client)]
+fn test_check_cluster_id() {
+    let (cluster, client, ctx) = new_cluster();
+    let k1 = b"k1";
+    let v1 = b"v1";
+    let ts = 1;
+    let mut mutation = Mutation::default();
+    mutation.set_op(Op::Put);
+    mutation.set_key(k1.to_vec());
+    mutation.set_value(v1.to_vec());
+    must_kv_prewrite(&client, ctx.clone(), vec![mutation], k1.to_vec(), ts);
+    must_kv_commit(&client, ctx.clone(), vec![k1.to_vec()], ts, ts + 1, ts + 1);
+
+    // Test unary requests, cluster id is not set.
+    let mut get_req = GetRequest::default();
+    get_req.set_context(ctx.clone());
+    get_req.key = k1.to_vec();
+    get_req.version = 10;
+    let get_resp = client.kv_get(&get_req).unwrap();
+    assert!(!get_resp.has_region_error());
+    assert!(
+        !get_resp.has_error(),
+        "get error {:?}",
+        get_resp.get_error()
+    );
+    assert_eq!(get_resp.get_value(), v1);
+
+    // Test unary request, cluster id is set correctly.
+    get_req.mut_context().cluster_id = ctx.cluster_id;
+    let get_resp = client.kv_get(&get_req).unwrap();
+    assert!(!get_resp.has_region_error());
+    assert!(
+        !get_resp.has_error(),
+        "get error {:?}",
+        get_resp.get_error()
+    );
+    assert_eq!(get_resp.get_value(), v1);
+
+    // Test unary request, cluster id is set incorrectly.
+    let cm = cluster.sim.read().unwrap().get_concurrency_manager(1);
+    let max_ts_before_req = cm.max_ts();
+    get_req.mut_context().cluster_id = ctx.cluster_id + 1;
+    get_req.version = max_ts_before_req.next().next().into_inner();
+    let get_resp = client.kv_get(&get_req);
+    let mut error_match = false;
+    if let Error::RpcFailure(status) = get_resp.unwrap_err() {
+        if status.code() == RpcStatusCode::INVALID_ARGUMENT {
+            error_match = true;
+        }
+    }
+    assert!(error_match);
+    assert_eq!(max_ts_before_req, cm.max_ts());
+}
