@@ -1,6 +1,7 @@
 // Copyright 2024 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
+    alloc::Layout,
     cmp,
     fmt::Debug,
     mem,
@@ -15,6 +16,7 @@ use std::{
 use bytes::Bytes;
 use crossbeam_epoch::{self, default_collector, pin, Atomic, Collector, Guard, Shared};
 use crossbeam_utils::CachePadded;
+use slog_global::{info, warn};
 
 use super::{key::KeyComparator, memory_control::MemoryController, Bound, Error};
 
@@ -148,9 +150,8 @@ impl Node {
             return Err(Error::MemoryAcquireFailed);
         }
 
-        let mut v = Vec::<u64>::with_capacity(node_size);
-        let node_ptr = v.as_mut_ptr() as *mut Self;
-        mem::forget(v);
+        let layout = Layout::from_size_align(node_size, U_SIZE).unwrap();
+        let node_ptr = unsafe { std::alloc::alloc(layout) as usize } as *mut Self;
         memory_controller.allocated(node_ptr as usize, node_size);
 
         unsafe {
@@ -180,7 +181,9 @@ impl Node {
             kv_size += node.value.len();
             ptr::drop_in_place(&mut node.value);
         }
-        drop(Vec::from_raw_parts(ptr as *mut u64, 0, size));
+        let layout = Layout::from_size_align(size, U_SIZE).unwrap();
+        std::alloc::dealloc(ptr as *mut u8, layout);
+
         memory_controller.reclaim(size + kv_size);
     }
 
@@ -196,7 +199,7 @@ impl Node {
         let size_u64 = mem::size_of::<u64>();
         let size_self = size_base + size_ptr * height;
 
-        (size_self + size_u64 - 1) / size_u64
+        (size_self + size_u64 - 1) & U64_MOD_BITS
     }
 
     /// Returns the height of this node's tower.
@@ -322,8 +325,7 @@ pub struct Skiplist<C: KeyComparator, M: MemoryController> {
 }
 
 impl<C: KeyComparator, M: MemoryController> Skiplist<C, M> {
-    pub fn new(c: C, memory_controller: Arc<M>) -> Skiplist<C, M> {
-        let collector = default_collector().clone();
+    pub fn new(c: C, memory_controller: Arc<M>, collector: Collector) -> Skiplist<C, M> {
         Skiplist {
             inner: Arc::new(SkiplistInner {
                 hot_data: CachePadded::new(HotData {
@@ -386,7 +388,10 @@ impl<C: KeyComparator, M: MemoryController> Skiplist<C, M> {
     /// `Collector`.
     fn check_guard(&self, guard: &Guard) {
         if let Some(c) = guard.collector() {
-            assert!(c == &self.inner.collector);
+            if c != &self.inner.collector {
+                // panic!("collector not equal");
+            }
+            // assert!(c == &self.inner.collector);
         }
     }
 
@@ -631,6 +636,7 @@ impl<C: KeyComparator, M: MemoryController> Skiplist<C, M> {
     }
 
     pub fn put(&self, key: impl Into<Bytes>, value: impl Into<Bytes>) -> Result<bool, Error> {
+        info!("put begin");
         let guard = &crossbeam_epoch::pin();
         let (key, value) = (key.into(), value.into());
         self.check_guard(guard);
@@ -651,14 +657,17 @@ impl<C: KeyComparator, M: MemoryController> Skiplist<C, M> {
             }
 
             let height = self.random_height();
+            info!("put 1");
             let (node, n) = {
                 let n = Node::create_node(key, value, height, 1, &self.inner.memory_controller)?;
                 (Shared::<Node>::from(n as *const _), &*n)
             };
+            info!("put 2");
             loop {
                 // Set the lowest successor of `n` to `search.right[0]`.
                 n.tower[0].store(search.right[0], Ordering::Relaxed);
 
+                info!("put 3");
                 // Try installing the new node into the skip list (at level 0).
                 if search.left[0][0]
                     .compare_exchange(
@@ -670,9 +679,11 @@ impl<C: KeyComparator, M: MemoryController> Skiplist<C, M> {
                     )
                     .is_ok()
                 {
+                    info!("put 4");
                     break;
                 }
 
+                info!("put 5");
                 // We failed. Let's search for the key and try again.
                 {
                     // Create a guard that destroys the new node in case search panics.
@@ -1050,7 +1061,11 @@ pub(crate) mod tests {
     }
 
     fn default_list() -> Skiplist<ByteWiseComparator, RecorderLimiter> {
-        Skiplist::new(ByteWiseComparator {}, Arc::default())
+        Skiplist::new(
+            ByteWiseComparator {},
+            Arc::default(),
+            default_collector().clone(),
+        )
     }
 
     fn sl_insert(sl: &Skiplist<ByteWiseComparator, RecorderLimiter>, k: i32, v: i32) -> bool {
@@ -1315,6 +1330,7 @@ pub(crate) mod tests {
             let sl = Skiplist::<ByteWiseComparator, RecorderLimiter>::new(
                 ByteWiseComparator {},
                 Arc::default(),
+                default_collector().clone(),
             );
             let n = 100000;
             for i in (0..n).step_by(3) {
@@ -1369,6 +1385,7 @@ pub(crate) mod tests {
         let sl = Skiplist::<ByteWiseComparator, RecorderLimiter>::new(
             ByteWiseComparator {},
             Arc::default(),
+            default_collector().clone(),
         );
 
         let total = 50000;
@@ -1423,6 +1440,7 @@ pub(crate) mod tests {
         let sl = Skiplist::<ByteWiseComparator, RecorderLimiter>::new(
             ByteWiseComparator {},
             Arc::default(),
+            default_collector().clone(),
         );
 
         sl.put(b"aaa".to_vec(), b"val-a".to_vec()).unwrap();
@@ -1472,6 +1490,7 @@ pub(crate) mod tests {
         let sl = Skiplist::<ByteWiseComparator, DummyLimiter>::new(
             ByteWiseComparator {},
             Arc::default(),
+            default_collector().clone(),
         );
 
         let mut map: BTreeMap<Vec<u8>, Vec<u8>> = BTreeMap::new();

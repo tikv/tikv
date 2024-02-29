@@ -95,7 +95,7 @@ impl BgWorkManager {
         gc_interval: Duration,
     ) -> (JoinHandle<()>, Sender<bool>) {
         let (tx, rx) = bounded(0);
-        let lock_clear_interval = Duration::from_secs(60);
+        let lock_clear_interval = Duration::from_secs(30);
         let h = std::thread::spawn(move || {
             loop {
                 select! {
@@ -217,20 +217,12 @@ impl BackgroundRunner {
             }
             if remove {
                 removed += 1;
-                info!(
-                    "remove lock key";
-                    "key" => log_wrappers::Value::key(k.as_slice()),
-                );
                 lock_handle.remove(k);
             }
             iter.next();
         }
         if let Some(cached_remove) = cached_removed.take() {
             removed += 1;
-            info!(
-                "remove lock key";
-                "key" => log_wrappers::Value::key(cached_remove.as_slice()),
-            );
             lock_handle.remove(cached_remove.as_slice());
         }
         info!(

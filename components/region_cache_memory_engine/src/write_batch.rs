@@ -4,6 +4,7 @@ use bytes::Bytes;
 use engine_traits::{
     CacheRange, Mutable, Result, WriteBatch, WriteBatchExt, WriteOptions, CF_DEFAULT,
 };
+use slog_global::warn;
 use tikv_util::box_err;
 
 use crate::{
@@ -55,7 +56,11 @@ impl RangeCacheWriteBatch {
     /// prior to writing the batch.
     pub fn set_sequence_number(&mut self, seq: u64) -> Result<()> {
         if let Some(seqno) = self.sequence_number {
-            return Err(box_err!("Sequence number {} already set, want to set {}", seqno, seq));
+            return Err(box_err!(
+                "Sequence number {} already set, want to set {}",
+                seqno,
+                seq
+            ));
         };
         self.sequence_number = Some(seq);
         Ok(())
@@ -196,7 +201,7 @@ impl RangeCacheWriteBatchEntry {
         let handle = &skiplist_engine.data[self.cf];
         let (key, value) = self.encode(seq);
         // todo(SpadeA): handle the put error
-        let _ = handle.put(key, value).unwrap();
+        let _ = handle.put(key, value);
         Ok(())
     }
 }

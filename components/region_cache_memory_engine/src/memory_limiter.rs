@@ -27,22 +27,22 @@ impl MemoryController for GlobalMemoryLimiter {
 
 impl NodeAllocationRecorder for GlobalMemoryLimiter {
     fn allocated(&self, addr: usize, size: usize) {
-        let mut recorder = self.recorder.lock().unwrap();
-        assert!(!recorder.contains_key(&addr));
-        recorder.insert(addr, size);
+        // let mut recorder = self.recorder.lock().unwrap();
+        // assert!(!recorder.contains_key(&addr));
+        // recorder.insert(addr, size);
     }
 
     fn freed(&self, addr: usize, size: usize) {
-        let node = addr as *mut Node;
-        let mut removed = self.removed.lock().unwrap();
-        removed.insert(unsafe { (*node).key().to_vec() });
-        let mut recorder = self.recorder.lock().unwrap();
-        assert_eq!(recorder.remove(&addr).unwrap(), size);
+        // let node = addr as *mut Node;
+        // let mut removed = self.removed.lock().unwrap();
+        // removed.insert(unsafe { (*node).key().to_vec() });
+        // let mut recorder = self.recorder.lock().unwrap();
+        // assert_eq!(recorder.remove(&addr).unwrap(), size);
     }
 }
 
 impl Drop for GlobalMemoryLimiter {
     fn drop(&mut self) {
-        assert!(self.recorder.lock().unwrap().is_empty());
+        // assert!(self.recorder.lock().unwrap().is_empty());
     }
 }

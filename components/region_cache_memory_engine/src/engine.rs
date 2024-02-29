@@ -11,6 +11,7 @@ use std::{
 
 use bytes::Bytes;
 use crossbeam::sync::ShardedLock;
+use crossbeam_epoch::default_collector;
 use engine_rocks::{raw::SliceTransform, util::FixedSuffixSliceTransform, RocksEngine};
 use engine_traits::{
     CacheRange, CfNamesExt, DbVector, Error, IterOptions, Iterable, Iterator, KvEngine, Peekable,
@@ -52,19 +53,23 @@ pub struct SkiplistEngine {
 
 impl SkiplistEngine {
     pub fn new(global_limiter: Arc<GlobalMemoryLimiter>) -> Self {
+        let collector = default_collector();
         SkiplistEngine {
             data: [
                 Arc::new(Skiplist::new(
                     InternalKeyComparator::default(),
                     global_limiter.clone(),
+                    collector.clone(),
                 )),
                 Arc::new(Skiplist::new(
                     InternalKeyComparator::default(),
                     global_limiter.clone(),
+                    collector.clone(),
                 )),
                 Arc::new(Skiplist::new(
                     InternalKeyComparator::default(),
                     global_limiter.clone(),
+                    collector.clone(),
                 )),
             ],
         }
@@ -162,7 +167,7 @@ impl RangeCacheMemoryEngineCore {
         range_manager.set_range_readable(&range, true);
         RangeCacheMemoryEngineCore {
             engine: SkiplistEngine::new(limiter),
-            range_manager: RangeManager::default(),
+            range_manager,
             cached_write_batch: BTreeMap::default(),
         }
     }
