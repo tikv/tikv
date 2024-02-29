@@ -1,5 +1,7 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::collections::HashSet;
+
 use engine_traits::{IterOptions, CF_DEFAULT, CF_WRITE, DATA_KEY_PREFIX_LEN};
 use kvproto::import_sstpb::{DuplicateDetectResponse, KvPair};
 use sst_importer::{Error, Result};
@@ -83,6 +85,11 @@ impl<S: Snapshot> DuplicateDetector<S> {
         duplicate_pairs: &mut Vec<KvPair>,
     ) -> Result<()> {
         let write = WriteRef::parse(self.iter.value()).map_err(from_txn_types_error)?;
+        // This records all start ts we encountered in this key.
+        // For the compatibility with resolved ts, it is possible to import multi writes
+        // points to the same write record. But in an import result without duplicate,
+        // there should be only one start ts.
+        let mut exist_start_ts = HashSet::new();
         let mut write_info = match write.write_type {
             WriteType::Delete | WriteType::Rollback | WriteType::Lock => {
                 return Err(Error::Engine(box_err!(
@@ -93,6 +100,7 @@ impl<S: Snapshot> DuplicateDetector<S> {
                 )));
             }
             WriteType::Put => {
+                exist_start_ts.insert(write.start_ts);
                 if self.key_only {
                     None
                 } else {
@@ -114,19 +122,31 @@ impl<S: Snapshot> DuplicateDetector<S> {
                         return Ok(());
                     }
 
+                    let start_ts = current_write.start_ts;
                     let write_value = if self.key_only {
                         None
                     } else {
                         Some(current_write)
                     };
-                    if write_info.is_some() {
+
+                    let version_duplicated = !exist_start_ts.contains(&start_ts);
+                    if version_duplicated {
+                        if write_info.is_some() {
+                            duplicate_pairs.push(self.make_kv_pair(
+                                &start_key,
+                                write_info.take(),
+                                end_commit_ts,
+                            )?);
+                        }
                         duplicate_pairs.push(self.make_kv_pair(
-                            &start_key,
-                            write_info.take(),
-                            end_commit_ts,
+                            current_key,
+                            write_value,
+                            commit_ts,
                         )?);
                     }
-                    duplicate_pairs.push(self.make_kv_pair(current_key, write_value, commit_ts)?);
+
+                    // We will ignore "logically equal" records then.
+                    exist_start_ts.insert(start_ts);
                 }
                 // ignore the KV that is deleted.
                 WriteType::Delete => {
@@ -241,9 +261,10 @@ mod tests {
     use std::sync::mpsc::channel;
 
     use api_version::KvFormat;
+    use engine_traits::{KvEngine, Mutable, WriteBatch};
     use kvproto::kvrpcpb::Context;
     use tikv_kv::Engine;
-    use txn_types::Mutation;
+    use txn_types::{Mutation, SHORT_VALUE_MAX_LEN};
 
     use super::*;
     use crate::storage::{
@@ -307,13 +328,40 @@ mod tests {
         rx.recv().unwrap();
     }
 
-    fn write_data<E: Engine, L: LockManager, F: KvFormat>(
+    /// Writing with the same `start_ts` may be deduped by the scheduler.
+    /// This will write directly to the engine, to simulate how lightning did.
+    fn write_datad<E: KvEngine>(engine: &E, data: Vec<(Vec<u8>, Vec<u8>)>, ts: u64, start_ts: u64) {
+        let mut batch = engine.write_batch();
+        for (k, v) in data {
+            // Create the default CF content.
+            let key = Key::from_raw(&k).append_ts(start_ts.into());
+            batch
+                .put_cf(CF_DEFAULT, key.as_encoded().as_slice(), &v)
+                .unwrap();
+            // Create the write CF content.
+            let key = Key::from_raw(&k).append_ts(ts.into());
+            let short_value = if v.len() < SHORT_VALUE_MAX_LEN {
+                Some(v.clone())
+            } else {
+                None
+            };
+            let write = Write::new(WriteType::Put, start_ts.into(), short_value);
+            let bs = write.as_ref().to_bytes();
+            batch
+                .put_cf(CF_WRITE, key.as_encoded().as_slice(), &bs)
+                .unwrap();
+        }
+        batch.write().unwrap();
+    }
+
+    /// this variant of `write_data` supports manually specify `start_ts`
+    fn write_data2<E: Engine, L: LockManager, F: KvFormat>(
         storage: &Storage<E, L, F>,
         data: Vec<(Vec<u8>, Vec<u8>)>,
         ts: u64,
+        start_ts: u64,
     ) {
         let primary = data[0].0.clone();
-        let start_ts = ts - 1;
         let keys: Vec<Key> = data.iter().map(|(key, _)| Key::from_raw(key)).collect();
         prewrite_data(storage, primary, data, start_ts);
         let cmd = commands::Commit::new(keys, start_ts.into(), ts.into(), Context::default());
@@ -330,6 +378,15 @@ mod tests {
         rx.recv().unwrap();
     }
 
+    fn write_data<E: Engine, L: LockManager, F: KvFormat>(
+        storage: &Storage<E, L, F>,
+        data: Vec<(Vec<u8>, Vec<u8>)>,
+        ts: u64,
+    ) {
+        write_data2(storage, data, ts, ts - 1)
+    }
+
+    #[track_caller]
     fn check_duplicate_data<S: Snapshot>(
         mut detector: DuplicateDetector<S>,
         expected_kvs: Vec<(Vec<u8>, Vec<u8>, u64)>,
@@ -340,7 +397,12 @@ mod tests {
                 .into_iter()
                 .map(|mut p| (p.take_key(), p.take_value(), p.get_commit_ts()))
                 .collect();
-            assert!(expected_kvs.len() >= base + data.len());
+            assert!(
+                expected_kvs.len() >= base + data.len(),
+                "expected={:?} data={:?}",
+                &expected_kvs[base..],
+                data
+            );
             for i in base..(base + data.len()) {
                 assert_eq!(
                     expected_kvs[i],
@@ -354,6 +416,7 @@ mod tests {
             }
             base += data.len();
         }
+        assert_eq!(base, expected_kvs.len(), "{:?}", &expected_kvs[base..]);
     }
 
     #[test]
@@ -503,6 +566,45 @@ mod tests {
         // in fact lightning will not set min_commit_ts
         let snapshot = storage.get_snapshot();
         let detector = DuplicateDetector::new(snapshot, b"0".to_vec(), None, 0, false).unwrap();
+        check_duplicate_data(detector, expected_kvs);
+    }
+
+    #[test]
+    fn test_duplicate_detect_by_start_ts() {
+        let mut storage = TestStorageBuilderApiV1::new(MockLockManager::new())
+            .build()
+            .unwrap();
+        let kv = |k: &[u8], v: &[u8]| vec![(k.to_vec(), v.to_vec())];
+        let v = |k: &[u8]| k.to_vec();
+        let kvt = |k: &[u8], v: &[u8], t| (k.to_vec(), v.to_vec(), t);
+
+        let engine = storage.get_engine().get_rocksdb();
+        write_data2(&storage, kv(b"100", b"0"), 11, 10);
+        write_datad(&engine, kv(b"100", b"1"), 12, 10);
+
+        write_data2(&storage, kv(b"101", b"0"), 12, 10);
+        write_data2(&storage, kv(b"101", b"1"), 14, 13);
+
+        write_data2(&storage, kv(b"102", b"0"), 12, 10);
+        write_datad(&engine, kv(b"102", b"1"), 14, 13);
+        write_datad(&engine, kv(b"102", b"2"), 15, 13);
+
+        write_data2(&storage, kv(b"103", b"0"), 12, 10);
+        write_datad(&engine, kv(b"103", b"1"), 13, 10);
+        write_datad(&engine, kv(b"103", b"2"), 16, 15);
+        write_datad(&engine, kv(b"103", b"3"), 18, 17);
+
+        let snapshot = storage.get_snapshot();
+        let detector = DuplicateDetector::new(snapshot, v(b"100"), None, 0, false).unwrap();
+        let expected_kvs = vec![
+            kvt(b"101", b"1", 14),
+            kvt(b"101", b"0", 12),
+            kvt(b"102", b"2", 15),
+            kvt(b"102", b"0", 12),
+            kvt(b"103", b"3", 18),
+            kvt(b"103", b"2", 16),
+            kvt(b"103", b"1", 13),
+        ];
         check_duplicate_data(detector, expected_kvs);
     }
 }
