@@ -220,7 +220,7 @@ fn test_ingest_file_twice_and_conflict() {
     ingest.set_context(ctx);
     ingest.set_sst(meta);
 
-    let latch_fp = "import::sst_service::ingest";
+    let latch_fp = "before_sst_service_ingest_check_file_exist";
     let (tx1, rx1) = channel();
     let (tx2, rx2) = channel();
     let tx1 = Arc::new(Mutex::new(tx1));
