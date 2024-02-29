@@ -169,7 +169,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
+    use std::{sync::Arc, time::Duration};
 
     use engine_rocks::util::new_engine;
     use engine_traits::{CacheRange, KvEngine, SnapshotContext, CF_DEFAULT, CF_LOCK, CF_WRITE};
@@ -186,13 +186,13 @@ mod tests {
             &[CF_DEFAULT, CF_LOCK, CF_WRITE],
         )
         .unwrap();
-        let memory_engine = RangeCacheMemoryEngine::new(Arc::default());
+        let memory_engine = RangeCacheMemoryEngine::new(Arc::default(), Duration::from_secs(1));
         let range = CacheRange::new(b"k00".to_vec(), b"k10".to_vec());
         memory_engine.new_range(range.clone());
         {
             let mut core = memory_engine.core().write().unwrap();
             core.mut_range_manager().set_range_readable(&range, true);
-            core.mut_range_manager().set_safe_ts(&range, 10);
+            core.mut_range_manager().set_safe_point(&range, 10);
         }
 
         let hybrid_engine = HybridEngine::new(disk_engine, memory_engine.clone());

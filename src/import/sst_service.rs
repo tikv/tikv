@@ -46,7 +46,10 @@ use tikv_kv::{
 use tikv_util::{
     config::ReadableSize,
     future::{create_stream_with_buffer, paired_future_callback},
-    sys::thread::ThreadBuildWrapper,
+    sys::{
+        disk::{get_disk_status, DiskUsage},
+        thread::ThreadBuildWrapper,
+    },
     time::{Instant, Limiter},
     HandyRwLock,
 };
@@ -817,6 +820,11 @@ macro_rules! impl_write {
                         .try_fold(
                             (writer, resource_limiter),
                             |(mut writer, limiter), req| async move {
+                                if get_disk_status(0) != DiskUsage::Normal {
+                                    warn!("Upload failed due to not enough disk space");
+                                    return Err(Error::DiskSpaceNotEnough);
+                                }
+
                                 let batch = match req.chunk {
                                     Some($chunk_ty::Batch(b)) => b,
                                     _ => return Err(Error::InvalidChunk),
@@ -963,6 +971,11 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
                 let file = import.create(meta)?;
                 let mut file = rx
                     .try_fold(file, |mut file, chunk| async move {
+                        if get_disk_status(0) != DiskUsage::Normal {
+                            warn!("Upload failed due to not enough disk space");
+                            return Err(Error::DiskSpaceNotEnough);
+                        }
+
                         let start = Instant::now_coarse();
                         let data = chunk.get_data();
                         if data.is_empty() {

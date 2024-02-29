@@ -123,6 +123,7 @@ fn test_serde_custom_tikv_config() {
         forward_max_connections_per_address: 5,
         reject_messages_on_memory_ratio: 0.8,
         simplify_metrics: false,
+        health_feedback_interval: ReadableDuration::secs(2),
         ..Default::default()
     };
     value.readpool = ReadPoolConfig {
@@ -761,6 +762,7 @@ fn test_serde_custom_tikv_config() {
         },
         background_error_recovery_window: ReadableDuration::hours(1),
         txn_status_cache_capacity: 1000,
+        memory_quota: ReadableSize::kb(123),
     };
     value.coprocessor = CopConfig {
         split_region_on_table: false,

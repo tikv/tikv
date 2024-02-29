@@ -40,7 +40,7 @@ use engine_traits::{Engines, KvEngine, MiscExt, RaftEngine, TabletRegistry, CF_D
 use file_system::{get_io_rate_limiter, BytesFetcher, MetricsManager as IoMetricsManager};
 use futures::executor::block_on;
 use grpcio::{EnvBuilder, Environment};
-use grpcio_health::HealthService;
+use health_controller::HealthController;
 use kvproto::{
     brpb::create_backup, cdcpb_grpc::create_change_data, deadlock::create_deadlock,
     debugpb_grpc::create_debug, diagnosticspb::create_diagnostics,
@@ -749,7 +749,7 @@ where
             )
             .unwrap_or_else(|e| fatal!("failed to validate raftstore config {}", e));
         let raft_store = Arc::new(VersionTrack::new(self.core.config.raft_store.clone()));
-        let health_service = HealthService::default();
+        let health_controller = HealthController::new();
 
         let node = self.node.as_ref().unwrap();
 
@@ -776,7 +776,7 @@ where
             self.env.clone(),
             unified_read_pool,
             debug_thread_pool,
-            health_service,
+            health_controller,
             self.resource_manager.clone(),
         )
         .unwrap_or_else(|e| fatal!("failed to create server: {}", e));
@@ -1515,7 +1515,10 @@ impl<CER: ConfiguredRaftEngine> TikvServer<CER> {
             router.store_router().clone(),
             self.core.config.coprocessor.clone(),
         );
-        let region_info_accessor = RegionInfoAccessor::new(&mut coprocessor_host);
+        let region_info_accessor = RegionInfoAccessor::new(
+            &mut coprocessor_host,
+            Arc::new(|| false), // Not applicable to v2.
+        );
 
         let cdc_worker = Box::new(LazyWorker::new("cdc"));
         let cdc_scheduler = cdc_worker.scheduler();

@@ -14,6 +14,7 @@ pub(crate) mod commit;
 pub(crate) mod compare_and_swap;
 pub(crate) mod flashback_to_version;
 pub(crate) mod flashback_to_version_read_phase;
+pub(crate) mod flush;
 pub(crate) mod mvcc_by_key;
 pub(crate) mod mvcc_by_start_ts;
 pub(crate) mod pause;
@@ -48,6 +49,7 @@ pub use flashback_to_version_read_phase::{
     new_flashback_rollback_lock_cmd, new_flashback_write_cmd, FlashbackToVersionReadPhase,
     FlashbackToVersionState,
 };
+pub use flush::Flush;
 use kvproto::kvrpcpb::*;
 pub use mvcc_by_key::MvccByKey;
 pub use mvcc_by_start_ts::MvccByStartTs;
@@ -59,7 +61,7 @@ pub use resolve_lock::{ResolveLock, RESOLVE_LOCK_BATCH_SIZE};
 pub use resolve_lock_lite::ResolveLockLite;
 pub use resolve_lock_readphase::ResolveLockReadPhase;
 pub use rollback::Rollback;
-use tikv_util::deadline::Deadline;
+use tikv_util::{deadline::Deadline, memory::HeapSize};
 use tracker::RequestType;
 pub use txn_heart_beat::TxnHeartBeat;
 use txn_types::{Key, TimeStamp, Value, Write};
@@ -111,6 +113,7 @@ pub enum Command {
     RawAtomicStore(RawAtomicStore),
     FlashbackToVersionReadPhase(FlashbackToVersionReadPhase),
     FlashbackToVersion(FlashbackToVersion),
+    Flush(Flush),
 }
 
 /// A `Command` with its return type, reified as the generic parameter `T`.
@@ -409,6 +412,19 @@ impl From<FlashbackToVersionRequest> for TypedCommand<()> {
     }
 }
 
+impl From<FlushRequest> for TypedCommand<Vec<StorageResult<()>>> {
+    fn from(mut req: FlushRequest) -> Self {
+        Flush::new(
+            req.get_start_ts().into(),
+            req.take_primary_key(),
+            req.take_mutations().into_iter().map(Into::into).collect(),
+            req.get_lock_ttl(),
+            req.get_assertion_level(),
+            req.take_context(),
+        )
+    }
+}
+
 /// Represents for a scheduler command, when should the response sent to the
 /// client. For most cases, the response should be sent after the result being
 /// successfully applied to the storage (if needed). But in some special cases,
@@ -594,7 +610,8 @@ pub struct WriteContext<'a, L: LockManager> {
     pub extra_op: ExtraOp,
     pub statistics: &'a mut Statistics,
     pub async_apply_prewrite: bool,
-    pub raw_ext: Option<RawExt>, // use for apiv2
+    pub raw_ext: Option<RawExt>,
+    // use for apiv2
     pub txn_status_cache: &'a TxnStatusCache,
 }
 
@@ -656,6 +673,7 @@ impl Command {
             Command::RawAtomicStore(t) => t,
             Command::FlashbackToVersionReadPhase(t) => t,
             Command::FlashbackToVersion(t) => t,
+            Command::Flush(t) => t,
         }
     }
 
@@ -683,6 +701,7 @@ impl Command {
             Command::RawAtomicStore(t) => t,
             Command::FlashbackToVersionReadPhase(t) => t,
             Command::FlashbackToVersion(t) => t,
+            Command::Flush(t) => t,
         }
     }
 
@@ -724,6 +743,7 @@ impl Command {
             Command::RawCompareAndSwap(t) => t.process_write(snapshot, context),
             Command::RawAtomicStore(t) => t.process_write(snapshot, context),
             Command::FlashbackToVersion(t) => t.process_write(snapshot, context),
+            Command::Flush(t) => t.process_write(snapshot, context),
             _ => panic!("unsupported write command"),
         }
     }
@@ -803,6 +823,37 @@ impl Display for Command {
 impl Debug for Command {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         self.command_ext().fmt(f)
+    }
+}
+
+impl HeapSize for Command {
+    fn approximate_heap_size(&self) -> usize {
+        std::mem::size_of::<Self>()
+            + match self {
+                Command::Prewrite(t) => t.approximate_heap_size(),
+                Command::PrewritePessimistic(t) => t.approximate_heap_size(),
+                Command::AcquirePessimisticLock(t) => t.approximate_heap_size(),
+                Command::AcquirePessimisticLockResumed(t) => t.approximate_heap_size(),
+                Command::Commit(t) => t.approximate_heap_size(),
+                Command::Cleanup(t) => t.approximate_heap_size(),
+                Command::Rollback(t) => t.approximate_heap_size(),
+                Command::PessimisticRollback(t) => t.approximate_heap_size(),
+                Command::PessimisticRollbackReadPhase(t) => t.approximate_heap_size(),
+                Command::TxnHeartBeat(t) => t.approximate_heap_size(),
+                Command::CheckTxnStatus(t) => t.approximate_heap_size(),
+                Command::CheckSecondaryLocks(t) => t.approximate_heap_size(),
+                Command::ResolveLockReadPhase(t) => t.approximate_heap_size(),
+                Command::ResolveLock(t) => t.approximate_heap_size(),
+                Command::ResolveLockLite(t) => t.approximate_heap_size(),
+                Command::Pause(t) => t.approximate_heap_size(),
+                Command::MvccByKey(t) => t.approximate_heap_size(),
+                Command::MvccByStartTs(t) => t.approximate_heap_size(),
+                Command::RawCompareAndSwap(t) => t.approximate_heap_size(),
+                Command::RawAtomicStore(t) => t.approximate_heap_size(),
+                Command::FlashbackToVersionReadPhase(t) => t.approximate_heap_size(),
+                Command::FlashbackToVersion(t) => t.approximate_heap_size(),
+                Command::Flush(t) => t.approximate_heap_size(),
+            }
     }
 }
 

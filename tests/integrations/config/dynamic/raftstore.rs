@@ -9,6 +9,7 @@ use std::{
 use concurrency_manager::ConcurrencyManager;
 use engine_rocks::RocksEngine;
 use engine_traits::{Engines, ALL_CFS, CF_DEFAULT};
+use health_controller::HealthController;
 use kvproto::raft_serverpb::RaftMessage;
 use raftstore::{
     coprocessor::CoprocessorHost,
@@ -111,7 +112,7 @@ fn start_raftstore(
             Arc::default(),
             ConcurrencyManager::new(1.into()),
             CollectorRegHandle::new_for_test(),
-            None,
+            HealthController::new(),
             None,
             GrpcServiceManager::dummy(),
             Arc::new(AtomicU64::new(0)),

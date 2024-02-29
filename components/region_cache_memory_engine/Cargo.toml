@@ -20,3 +20,9 @@ log_wrappers = { workspace = true }
 slog-global = { workspace = true }
 slog = { workspace = true }
 engine_rocks = { workspace = true }
+fail = "0.5"
+yatp = { workspace = true }
+
+[dev-dependencies]
+keys = { workspace = true }
+tempfile = "3.0"

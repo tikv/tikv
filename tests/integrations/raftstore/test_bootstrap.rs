@@ -11,6 +11,7 @@ use engine_traits::{
     DbOptionsExt, Engines, MiscExt, Peekable, RaftEngine, RaftEngineReadOnly, ALL_CFS, CF_DEFAULT,
     CF_LOCK, CF_RAFT, CF_WRITE,
 };
+use health_controller::HealthController;
 use kvproto::{kvrpcpb::ApiVersion, metapb, raft_serverpb::RegionLocalState};
 use raftstore::{
     coprocessor::CoprocessorHost,
@@ -69,7 +70,7 @@ fn test_node_bootstrap_with_prepared_data() {
         Arc::clone(&pd_client),
         Arc::default(),
         bg_worker,
-        None,
+        HealthController::new(),
         None,
     );
     let snap_mgr = SnapManager::new(tmp_mgr.path().to_str().unwrap());

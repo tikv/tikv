@@ -435,7 +435,7 @@ where
                     let now = Instant::now();
                     let timedout = self.wait(Duration::from_secs(5)).await;
                     if timedout {
-                        warn!("waiting for initial scanning done timed out, forcing progress!"; 
+                        warn!("waiting for initial scanning done timed out, forcing progress!";
                             "take" => ?now.saturating_elapsed(), "timedout" => %timedout);
                     }
                     let regions = resolver.resolve(self.subs.current_regions(), min_ts).await;
@@ -453,7 +453,7 @@ where
                     callback(ResolvedRegions::new(rts, cps));
                 }
                 ObserveOp::HighMemUsageWarning { region_id } => {
-                    self.on_high_memory_usage(region_id).await;
+                    self.on_high_memory_usage(region_id);
                 }
             }
         }
@@ -507,7 +507,7 @@ where
         }
     }
 
-    async fn on_high_memory_usage(&mut self, inconsistent_region_id: u64) {
+    fn on_high_memory_usage(&mut self, inconsistent_region_id: u64) {
         let mut lame_region = Region::new();
         lame_region.set_id(inconsistent_region_id);
         let mut act_region = None;
@@ -517,9 +517,9 @@ where
         });
         let delay = OOM_BACKOFF_BASE
             + Duration::from_secs(rand::thread_rng().gen_range(0..OOM_BACKOFF_JITTER_SECS));
-        info!("log backup triggering high memory usage."; 
-            "region" => %inconsistent_region_id, 
-            "mem_usage" => %self.memory_manager.used_ratio(), 
+        info!("log backup triggering high memory usage.";
+            "region" => %inconsistent_region_id,
+            "mem_usage" => %self.memory_manager.used_ratio(),
             "mem_max" => %self.memory_manager.capacity());
         if let Some(region) = act_region {
             self.schedule_start_observe(delay, region, None);
@@ -543,6 +543,7 @@ where
         let tx = tx.unwrap();
         // tikv_util::Instant cannot be converted to std::time::Instant :(
         let start = std::time::Instant::now();
+        debug!("Scheduing subscription."; utils::slog_region(&region), "after" => ?backoff, "handle" => ?handle);
         let scheduled = async move {
             tokio::time::sleep_until((start + backoff).into()).await;
             let handle = handle.unwrap_or_else(|| ObserveHandle::new());
@@ -627,6 +628,9 @@ where
         match self.is_available(&region, &handle).await {
             Ok(false) => {
                 warn!("stale start observe command."; utils::slog_region(&region), "handle" => ?handle);
+                // Mark here we are anyway, or once there are region change in-flight, we
+                // may lose the message.
+                self.subs.add_pending_region(&region);
                 return;
             }
             Err(err) => {
@@ -729,6 +733,7 @@ where
 
         let should_retry = self.is_available(&region, &handle).await?;
         if !should_retry {
+            warn!("give up retry retion."; utils::slog_region(&region), "handle" => ?handle);
             return Ok(false);
         }
         self.schedule_start_observe(backoff_for_start_observe(failure_count), region, None);
@@ -786,7 +791,7 @@ where
         let feedback_channel = match self.messenger.upgrade() {
             Some(ch) => ch,
             None => {
-                warn!("log backup subscription manager is shutting down, aborting new scan."; 
+                warn!("log backup subscription manager is shutting down, aborting new scan.";
                     utils::slog_region(region), "handle" => ?handle.id);
                 return;
             }
@@ -965,6 +970,7 @@ mod test {
     #[derive(Debug, Eq, PartialEq)]
     enum ObserveEvent {
         Start(u64),
+        RefreshObs(u64),
         Stop(u64),
         StartResult(u64, bool),
         HighMemUse(u64),
@@ -981,6 +987,7 @@ mod test {
                 ObserveOp::HighMemUsageWarning {
                     region_id: inconsistent_region_id,
                 } => Some(Self::HighMemUse(*inconsistent_region_id)),
+                ObserveOp::RefreshResolver { region } => Some(Self::RefreshObs(region.id)),
 
                 _ => None,
             }
@@ -1115,19 +1122,27 @@ mod test {
                 .unwrap()
         }
 
+        fn insert_and_start_region(&self, region: Region) {
+            self.insert_region(region.clone());
+            self.start_region(region)
+        }
+
         fn start_region(&self, region: Region) {
+            self.run(ObserveOp::Start {
+                region,
+                handle: ObserveHandle::new(),
+            })
+        }
+
+        fn insert_region(&self, region: Region) {
             self.regions.regions.lock().unwrap().insert(
                 region.id,
                 RegionInfo {
-                    region: region.clone(),
+                    region,
                     role: raft::StateRole::Leader,
                     buckets: 0,
                 },
             );
-            self.run(ObserveOp::Start {
-                region,
-                handle: ObserveHandle::new(),
-            });
         }
 
         fn region(
@@ -1220,8 +1235,8 @@ mod test {
         }));
         let _guard = suite.rt.enter();
         tokio::time::pause();
-        suite.start_region(suite.region(1, 1, 1, b"a", b"b"));
-        suite.start_region(suite.region(2, 1, 1, b"b", b"c"));
+        suite.insert_and_start_region(suite.region(1, 1, 1, b"a", b"b"));
+        suite.insert_and_start_region(suite.region(2, 1, 1, b"b", b"c"));
         suite.wait_initial_scan_all_finish(2);
         suite.wait_shutdown();
         assert_eq!(
@@ -1242,8 +1257,8 @@ mod test {
         let mut suite = Suite::new(FuncInitialScan(|_, _, _| Ok(Statistics::default())));
         let _guard = suite.rt.enter();
         tokio::time::pause();
-        suite.start_region(suite.region(1, 1, 1, b"a", b"b"));
-        suite.start_region(suite.region(2, 1, 1, b"b", b"c"));
+        suite.insert_and_start_region(suite.region(1, 1, 1, b"a", b"b"));
+        suite.insert_and_start_region(suite.region(2, 1, 1, b"b", b"c"));
         suite.advance_ms(0);
         let mut rs = suite.subs.current_regions();
         rs.sort();
@@ -1273,6 +1288,28 @@ mod test {
                 Start(1),
                 StartResult(1, true),
             ]
+        );
+    }
+
+    #[test]
+    fn test_region_split_inflight() {
+        test_util::init_log_for_test();
+        let mut suite = Suite::new(FuncInitialScan(|_, _, _| Ok(Statistics::default())));
+        let _guard = suite.rt.enter();
+        tokio::time::pause();
+        suite.insert_region(suite.region(1, 1, 1, b"a", b"b"));
+        // Region split..?
+        suite.insert_region(suite.region(1, 2, 1, b"a", b"az"));
+        suite.start_region(suite.region(1, 1, 1, b"a", b"b"));
+        suite.run(ObserveOp::RefreshResolver {
+            region: suite.region(1, 2, 1, b"a", b"az"),
+        });
+        suite.wait_initial_scan_all_finish(1);
+        suite.wait_shutdown();
+        use ObserveEvent::*;
+        assert_eq!(
+            &*suite.events.lock().unwrap(),
+            &[Start(1), RefreshObs(1), StartResult(1, true)]
         );
     }
 }
