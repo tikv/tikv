@@ -321,6 +321,18 @@ fn create_scan_pool(num_threads: usize) -> ScanPool {
         .unwrap()
 }
 
+#[async_trait::async_trait]
+trait ResolveLeader {
+    async fn resolve_leader(&mut self, regions: Vec<u64>, min_ts: TimeStamp) -> Vec<u64>;
+}
+
+#[async_trait::async_trait]
+impl ResolveLeader for LeadershipResolver {
+    async fn resolve_leader(&mut self, regions: Vec<u64>, min_ts: TimeStamp) -> Vec<u64> {
+        self.resolve(regions, min_ts).await
+    }
+}
+
 impl<S, R> RegionSubscriptionManager<S, R>
 where
     S: MetaStore + 'static,
@@ -380,7 +392,7 @@ where
     async fn region_operator_loop(
         mut self,
         mut message_box: Receiver<ObserveOp>,
-        mut leader_checker: LeadershipResolver,
+        mut leader_checker: impl ResolveLeader,
     ) {
         while let Some(op) = message_box.recv().await {
             // Skip some trivial resolve commands.
@@ -427,7 +439,7 @@ where
                             "take" => ?now.saturating_elapsed(), "timedout" => %timedout);
                     }
                     let regions = leader_checker
-                        .resolve(self.subs.current_regions(), min_ts)
+                        .resolve_leader(self.subs.current_regions(), min_ts)
                         .await;
                     let cps = self.subs.resolve_with(min_ts, regions);
                     let min_region = cps.iter().min_by_key(|rs| rs.checkpoint);
