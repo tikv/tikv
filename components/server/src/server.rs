@@ -871,8 +871,6 @@ where
         rejector.register_to(self.coprocessor_host.as_mut().unwrap());
         self.snap_br_rejector = Some(rejector);
 
-        let mut ingest_mediator = IngestMediator::default();
-
         // Start backup stream
         let backup_stream_scheduler = if self.core.config.log_backup.enable {
             // Create backup stream.
@@ -899,15 +897,12 @@ where
                 .clone();
             // TODO: backup_stream may need to write its own observer so that
             // its resolved ts does not advance until ingested ssts are backed up.
-            let ingest_observer = Arc::new(IngestObserver::default());
-            ingest_mediator.register(ingest_observer.clone());
             let leadership_resolver = LeadershipResolver::new(
                 node.id(),
                 self.pd_client.clone(),
                 self.env.clone(),
                 self.security_mgr.clone(),
                 region_read_progress,
-                ingest_observer,
                 Duration::from_secs(60),
             );
 
@@ -988,8 +983,6 @@ where
         }
 
         // Start CDC.
-        let ingest_observer = Arc::new(IngestObserver::default());
-        ingest_mediator.register(ingest_observer.clone());
         let cdc_memory_quota = Arc::new(MemoryQuota::new(
             self.core.config.cdc.sink_memory_quota.0 as _,
         ));
@@ -1009,15 +1002,14 @@ where
             self.security_mgr.clone(),
             cdc_memory_quota.clone(),
             self.causal_ts_provider.clone(),
-            ingest_observer,
         );
         cdc_worker.start_with_timer(cdc_endpoint);
         self.core.to_stop.push(cdc_worker);
 
         // Start resolved ts
         if let Some(mut rts_worker) = rts_worker {
-            let ingest_observer = Arc::new(IngestObserver::default());
-            ingest_mediator.register(ingest_observer.clone());
+            // Do not let sst ingest block resolved ts in production.
+            let ingest_observer = None;
             let rts_endpoint = resolved_ts::Endpoint::new(
                 &self.core.config.resolved_ts,
                 rts_worker.scheduler(),
@@ -1036,6 +1028,7 @@ where
 
         // Start SST importer.
         let ingest_observer = Arc::new(IngestObserver::default());
+        let mut ingest_mediator = IngestMediator::default();
         ingest_mediator.register(ingest_observer.clone());
         let import_path = self.core.store_path.join("import");
         let mut importer = SstImporter::new(

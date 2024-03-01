@@ -620,8 +620,6 @@ where
             unified_read_pool_scale_receiver = Some(rx);
         }
 
-        let mut ingest_mediator = IngestMediator::default();
-
         // Run check leader in a dedicate thread, because it is time sensitive
         // and crucial to TiCDC replication lag.
         let check_leader_worker =
@@ -649,8 +647,6 @@ where
         let cdc_memory_quota = Arc::new(MemoryQuota::new(
             self.core.config.cdc.sink_memory_quota.0 as _,
         ));
-        let ingest_observer = Arc::new(IngestObserver::default());
-        ingest_mediator.register(ingest_observer.clone());
         let cdc_endpoint = cdc::Endpoint::new(
             self.core.config.server.cluster_id,
             &self.core.config.cdc,
@@ -667,7 +663,6 @@ where
             self.security_mgr.clone(),
             cdc_memory_quota.clone(),
             self.causal_ts_provider.clone(),
-            ingest_observer,
         );
         cdc_worker.start_with_timer(cdc_endpoint);
         self.core.to_stop.push(cdc_worker);
@@ -686,8 +681,8 @@ where
                     rts_worker.scheduler(),
                 )),
             );
-            let ingest_observer = Arc::new(IngestObserver::default());
-            ingest_mediator.register(ingest_observer.clone());
+            // Do not let sst ingest block resolved ts in production.
+            let ingest_observer = None;
             let rts_endpoint = resolved_ts::Endpoint::new(
                 &self.core.config.resolved_ts,
                 rts_worker.scheduler(),
@@ -722,11 +717,6 @@ where
                 )),
             );
 
-            // TODO: Support pausing resolved ts using ingest observer in
-            // BackupStreamResolver::V2.
-            //
-            // let ingest_observer = Arc::new(IngestObserver::default());
-            // ingest_mediator.register(ingest_observer.clone());
             let backup_stream_endpoint = backup_stream::Endpoint::new(
                 self.node.as_ref().unwrap().id(),
                 PdStore::new(Checked::new(Sourced::new(
@@ -751,6 +741,7 @@ where
 
         // Start SST importer.
         let ingest_observer = Arc::new(IngestObserver::default());
+        let mut ingest_mediator = IngestMediator::default();
         ingest_mediator.register(ingest_observer.clone());
         let import_path = self.core.store_path.join("import");
         let mut importer = SstImporter::new(

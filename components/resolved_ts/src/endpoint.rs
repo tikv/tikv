@@ -656,14 +656,18 @@ where
         concurrency_manager: ConcurrencyManager,
         env: Arc<Environment>,
         security_mgr: Arc<SecurityManager>,
-        ingest_observer: Arc<dyn Observer>,
+        ingest_observer: Option<Arc<dyn Observer>>,
     ) -> Self {
         let (region_read_progress, store_id) = {
             let meta = store_meta.lock().unwrap();
             (meta.region_read_progress().clone(), meta.store_id())
         };
-        let advance_worker =
-            AdvanceTsWorker::new(pd_client.clone(), scheduler.clone(), concurrency_manager);
+        let advance_worker = AdvanceTsWorker::new(
+            pd_client.clone(),
+            scheduler.clone(),
+            concurrency_manager,
+            ingest_observer,
+        );
         let scanner_pool = ScannerPool::new(cfg.scan_lock_pool_size, cdc_handle);
         let store_resolver_gc_interval = Duration::from_secs(60);
         let leader_resolver = LeadershipResolver::new(
@@ -672,7 +676,6 @@ where
             env,
             security_mgr,
             region_read_progress.clone(),
-            ingest_observer,
             store_resolver_gc_interval,
         );
         let scan_concurrency_semaphore = Arc::new(Semaphore::new(cfg.incremental_scan_concurrency));

@@ -476,7 +476,7 @@ impl<EK: KvEngine> ServerCluster<EK> {
                 concurrency_manager.clone(),
                 self.env.clone(),
                 self.security_mgr.clone(),
-                ingest_observer,
+                Some(ingest_observer),
             );
             // Start the worker
             rts_worker.start(rts_endpoint);

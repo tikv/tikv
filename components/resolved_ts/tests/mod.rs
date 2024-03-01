@@ -98,7 +98,7 @@ impl TestSuite {
                 cm.clone(),
                 env,
                 sim.security_mgr.clone(),
-                ingest_observer,
+                Some(ingest_observer),
             );
             concurrency_managers.insert(*id, cm);
             worker.start(rts_endpoint);

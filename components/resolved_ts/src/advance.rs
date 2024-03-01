@@ -50,11 +50,12 @@ pub(crate) const DEFAULT_CHECK_LEADER_TIMEOUT_DURATION: Duration = Duration::fro
 const DEFAULT_GRPC_GZIP_COMPRESSION_LEVEL: usize = 2;
 const DEFAULT_GRPC_MIN_MESSAGE_SIZE_TO_COMPRESS: usize = 4096;
 
-pub struct AdvanceTsWorker {
+pub(crate) struct AdvanceTsWorker {
     pd_client: Arc<dyn PdClient>,
     timer: SteadyTimer,
     worker: Runtime,
     scheduler: Scheduler<Task>,
+    ingest_observer: Option<Arc<dyn Observer>>,
     /// The concurrency manager for transactions. It's needed for CDC to check
     /// locks when calculating resolved_ts.
     pub(crate) concurrency_manager: ConcurrencyManager,
@@ -68,6 +69,7 @@ impl AdvanceTsWorker {
         pd_client: Arc<dyn PdClient>,
         scheduler: Scheduler<Task>,
         concurrency_manager: ConcurrencyManager,
+        ingest_observer: Option<Arc<dyn Observer>>,
     ) -> Self {
         let worker = Builder::new_multi_thread()
             .thread_name("advance-ts")
@@ -81,6 +83,7 @@ impl AdvanceTsWorker {
             pd_client,
             worker,
             timer: SteadyTimer::default(),
+            ingest_observer,
             concurrency_manager,
             last_pd_tso: Arc::new(std::sync::Mutex::new(None)),
         }
@@ -96,6 +99,7 @@ impl AdvanceTsWorker {
         advance_ts_interval: Duration,
         advance_notify: Arc<Notify>,
     ) {
+        let ingest_observer = self.ingest_observer.clone();
         let cm = self.concurrency_manager.clone();
         let pd_client = self.pd_client.clone();
         let scheduler = self.scheduler.clone();
@@ -126,7 +130,23 @@ impl AdvanceTsWorker {
                 }
             }
 
-            let regions = leader_resolver.resolve(regions, min_ts).await;
+            let mut regions = leader_resolver.resolve(regions, min_ts).await;
+
+            // Skip regions those are currently ingesting SSTs.
+            if let Some(observer) = ingest_observer {
+                regions.retain(|region_id| {
+                    if let Some(uuid) = observer.get_region_lease(*region_id) {
+                        info!("skip advancing resolved ts due to ingest sst";
+                            "region_id" => region_id,
+                            "lease_uuid" => ?uuid,
+                        );
+                        false
+                    } else {
+                        true
+                    }
+                });
+            }
+
             if !regions.is_empty() {
                 if let Err(e) = scheduler.schedule(Task::ResolvedTsAdvanced {
                     regions,
@@ -162,7 +182,6 @@ pub struct LeadershipResolver {
     security_mgr: Arc<SecurityManager>,
     region_read_progress: RegionReadProgressRegistry,
     store_id: u64,
-    ingest_observer: Arc<dyn Observer>,
 
     // store_id -> check leader request, record the request to each stores.
     store_req_map: HashMap<u64, CheckLeaderRequest>,
@@ -181,7 +200,6 @@ impl LeadershipResolver {
         env: Arc<Environment>,
         security_mgr: Arc<SecurityManager>,
         region_read_progress: RegionReadProgressRegistry,
-        ingest_observer: Arc<dyn Observer>,
         gc_interval: Duration,
     ) -> LeadershipResolver {
         LeadershipResolver {
@@ -191,7 +209,6 @@ impl LeadershipResolver {
             env,
             security_mgr,
             region_read_progress,
-            ingest_observer,
 
             store_req_map: HashMap::default(),
             progresses: HashMap::default(),
@@ -410,18 +427,7 @@ impl LeadershipResolver {
                 break;
             }
         }
-        let mut res = Vec::with_capacity(self.valid_regions.len());
-        for region_id in self.valid_regions.drain() {
-            // Skip regions those are currently ingesting SSTs.
-            if let Some(uuid) = self.ingest_observer.get_region_lease(region_id) {
-                info!("skip advancing resolved ts due to ingest sst";
-                    "region_id" => region_id,
-                    "lease_uuid" => ?uuid,
-                );
-                continue;
-            }
-            res.push(region_id)
-        }
+        let res: Vec<u64> = self.valid_regions.drain().collect();
         if res.len() != checking_regions.len() {
             warn!(
                 "check leader returns valid regions different from checking regions";
@@ -590,7 +596,6 @@ mod tests {
     use kvproto::{metapb::Region, tikvpb::Tikv, tikvpb_grpc::create_tikv};
     use pd_client::PdClient;
     use raftstore::store::util::RegionReadProgress;
-    use sst_importer::IngestObserver;
     use tikv_util::store::new_peer;
 
     use super::*;
@@ -649,14 +654,12 @@ mod tests {
         let progress2 = RegionReadProgress::new(&region2, 1, 1, 2);
         progress2.update_leader_info(2, 2, &region2);
 
-        let ingest_observer = Arc::new(IngestObserver::default());
         let mut leader_resolver = LeadershipResolver::new(
             1, // store id
             Arc::new(MockPdClient {}),
             env.clone(),
             Arc::new(SecurityManager::default()),
             RegionReadProgressRegistry::new(),
-            ingest_observer,
             Duration::from_secs(1),
         );
         leader_resolver

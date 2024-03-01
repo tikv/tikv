@@ -22,7 +22,6 @@ use kvproto::{
 };
 use online_config::OnlineConfig;
 use raftstore::{coprocessor::CoprocessorHost, router::CdcRaftRouter};
-use sst_importer::IngestObserver;
 use test_raftstore::*;
 use tikv::{config::CdcConfig, server::DEFAULT_CLUSTER_ID, storage::kv::LocalTablets};
 use tikv_util::{
@@ -215,7 +214,6 @@ impl TestSuiteBuilder {
             let cm = sim.get_concurrency_manager(*id);
             let env = Arc::new(Environment::new(1));
             let cfg = CdcConfig::default();
-            let ingest_observer = Arc::new(IngestObserver::default());
             let mut cdc_endpoint = cdc::Endpoint::new(
                 DEFAULT_CLUSTER_ID,
                 &cfg,
@@ -232,7 +230,6 @@ impl TestSuiteBuilder {
                 sim.security_mgr.clone(),
                 quotas[id].clone(),
                 sim.get_causal_ts_provider(*id),
-                ingest_observer,
             );
             let mut updated_cfg = cfg.clone();
             updated_cfg.min_ts_interval = ReadableDuration::millis(100);
