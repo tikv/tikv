@@ -125,6 +125,7 @@ impl<Src: BatchExecutor> BatchExecutor for BatchProjectionExecutor<Src> {
                 }
             }
 
+            /// Since we ensure the eval_result is "concrete", which mean all elements are picked, thus update the logical_rows.
             if !self.exprs.is_empty() {
                 logical_rows.clear();
                 logical_rows.extend(0..logical_len);
