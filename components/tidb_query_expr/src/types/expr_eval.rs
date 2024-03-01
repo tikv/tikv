@@ -7,10 +7,7 @@ pub use tidb_query_datatype::codec::data_type::{
     LogicalRows, BATCH_MAX_SIZE, IDENTICAL_LOGICAL_ROWS,
 };
 use tidb_query_datatype::{
-    codec::{
-        batch::LazyBatchColumnVec,
-        data_type::*,
-    },
+    codec::{batch::LazyBatchColumnVec, data_type::*},
     expr::EvalContext,
 };
 use tipb::FieldType;
@@ -53,7 +50,11 @@ impl<'a> RpnStackNodeVectorValue<'a> {
     pub fn take_vector_value(self) -> Result<VectorValue> {
         match self {
             RpnStackNodeVectorValue::Generated { physical_value } => Ok(physical_value),
-            RpnStackNodeVectorValue::Ref { physical_value, logical_rows, .. } => {
+            RpnStackNodeVectorValue::Ref {
+                physical_value,
+                logical_rows,
+                ..
+            } => {
                 // TODO: extract a common util function to do this
                 let mut result_vec = physical_value.clone_empty(logical_rows.len());
                 let result_vec_ref = result_vec.borrow_mut();
@@ -79,7 +80,7 @@ impl<'a> RpnStackNodeVectorValue<'a> {
                         },
                     }
                 }
-                Ok(result_vec)                
+                Ok(result_vec)
             }
         }
     }
@@ -99,7 +100,6 @@ impl<'a> RpnStackNodeVectorValue<'a> {
     pub fn logical_rows(&self) -> &[usize] {
         self.logical_rows_struct().as_slice()
     }
-
 }
 
 /// A type for each node in the RPN evaluation stack. It can be one of a scalar
@@ -1275,15 +1275,26 @@ mod tests {
 
     #[test]
     fn test_take_vector_value() {
-        let scalar_node = RpnStackNode::Scalar { value: &ScalarValue::Real(Real::new(10.0).ok()), field_type: &FieldTypeTp::Double.into() };
+        let scalar_node = RpnStackNode::Scalar {
+            value: &ScalarValue::Real(Real::new(10.0).ok()),
+            field_type: &FieldTypeTp::Double.into()
+        };
         scalar_node.take_vector_value().unwrap_err();
 
         let mut column = VectorValue::with_capacity(10, EvalType::Real);
         column.push_real(Real::new(10.0).ok());
         column.push_real(None);
         column.push_real(Real::new(20.0).ok());
-        let vector_generate_node = RpnStackNode::Vector { value: (RpnStackNodeVectorValue::Generated { physical_value: (column) }), field_type: &FieldTypeTp::Double.into() };
-        let taked_value = vector_generate_node.take_vector_value().unwrap().to_real_vec();
+        let vector_generate_node = RpnStackNode::Vector {
+            value: (RpnStackNodeVectorValue::Generated {
+                physical_value: (column)
+            }),
+            field_type: &FieldTypeTp::Double.into()
+        };
+        let taked_value = vector_generate_node
+            .take_vector_value()
+            .unwrap()
+            .to_real_vec();
         assert_eq!(taked_value[0].is_some_and(|x| x == 10.0), true);
         assert_eq!(taked_value[1].is_none(), true);
         assert_eq!(taked_value[2].is_some_and(|x| x == 20.0), true);
@@ -1295,8 +1306,17 @@ mod tests {
         column2.push_real(Real::new(40.0).ok());
         column2.push_real(None);
         let logical_rows = vec![0, 1, 3];
-        let vector_generate_node = RpnStackNode::Vector { value: (RpnStackNodeVectorValue::Ref { physical_value: &column2, logical_rows: &logical_rows}), field_type: &FieldTypeTp::Double.into() };
-        let taked_value = vector_generate_node.take_vector_value().unwrap().to_real_vec();
+        let vector_generate_node = RpnStackNode::Vector {
+            value: (RpnStackNodeVectorValue::Ref {
+                physical_value: &column2,
+                logical_rows: &logical_rows
+            }),
+            field_type: &FieldTypeTp::Double.into()
+        };
+        let taked_value = vector_generate_node
+            .take_vector_value()
+            .unwrap()
+            .to_real_vec();
         assert_eq!(taked_value[0].is_some_and(|x| x == 10.0), true);
         assert_eq!(taked_value[1].is_none(), true);
         assert_eq!(taked_value[2].is_some_and(|x| x == 40.0), true);

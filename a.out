@@ -1,0 +1,379 @@
+fatal: No names found, cannot describe anything.
+    Blocking waiting for file lock on build directory
+   Compiling libc v0.2.151
+   Compiling proc-macro2 v1.0.76
+   Compiling quote v1.0.28
+   Compiling unicode-ident v1.0.5
+   Compiling syn v1.0.103
+   Compiling autocfg v1.1.0
+   Compiling log v0.4.20
+   Compiling serde_derive v1.0.147
+   Compiling serde v1.0.147
+   Compiling version_check v0.9.4
+   Compiling futures-core v0.3.15
+   Compiling pkg-config v0.3.16
+   Compiling proc-macro-hack v0.5.19
+   Compiling futures-macro v0.3.15
+   Compiling futures-task v0.3.15
+   Compiling futures-channel v0.3.15
+   Compiling syn v2.0.43
+   Compiling proc-macro-nested v0.1.3
+   Compiling jobserver v0.1.17
+   Compiling cc v1.0.83
+   Compiling futures-util v0.3.15
+   Compiling parking_lot_core v0.9.1
+   Compiling num_cpus v1.13.1
+   Compiling memchr v2.7.1
+   Compiling signal-hook-registry v1.4.0
+   Compiling tokio v1.25.3
+   Compiling parking_lot v0.12.1
+   Compiling unicode-segmentation v1.3.0
+   Compiling getrandom v0.2.11
+   Compiling mio v0.8.5
+   Compiling socket2 v0.4.7
+   Compiling heck v0.3.1
+   Compiling num-traits v0.2.17
+   Compiling ryu v1.0.4
+   Compiling aho-corasick v1.1.2
+   Compiling regex-syntax v0.8.2
+   Compiling ahash v0.8.7
+   Compiling indexmap v1.6.2
+   Compiling core-foundation-sys v0.8.2
+   Compiling rustix v0.38.3
+   Compiling errno v0.3.8
+   Compiling protobuf v2.8.0 (https://github.com/pingcap/rust-protobuf?branch=v2.8#6642ebaa)
+   Compiling hashbrown v0.14.0
+   Compiling hex v0.3.2
+   Compiling bytes v1.0.1
+   Compiling httparse v1.8.0
+   Compiling indexmap v2.0.1
+   Compiling cmake v0.1.48 (https://github.com/rust-lang/cmake-rs#00e6b220)
+   Compiling regex-automata v0.4.3
+   Compiling tempfile v3.8.0
+   Compiling num-integer v0.1.45
+   Compiling core-foundation v0.9.1
+   Compiling security-framework-sys v2.2.0
+   Compiling bitflags v1.3.2
+   Compiling native-tls v0.2.7
+   Compiling vcpkg v0.2.11
+   Compiling security-framework v2.2.0
+   Compiling crossbeam-utils v0.8.19
+   Compiling serde_json v1.0.64
+   Compiling openssl-sys v0.9.92
+   Compiling libz-sys v1.1.3
+   Compiling autotools v0.2.6
+   Compiling protobuf-src v1.1.0+21.5
+   Compiling regex v1.10.2
+   Compiling protobuf-codegen v2.8.0 (https://github.com/pingcap/rust-protobuf?branch=v2.8#6642ebaa)
+   Compiling rand_core v0.6.2
+   Compiling rand_chacha v0.3.0
+   Compiling time v0.1.43
+   Compiling rand v0.8.5
+   Compiling tracing-attributes v0.1.27
+   Compiling grpcio-compiler v0.10.4
+   Compiling async-trait v0.1.58
+   Compiling parking_lot_core v0.8.3
+   Compiling memoffset v0.6.4
+   Compiling ucd-trie v0.1.3
+   Compiling tokio-macros v1.7.0
+   Compiling thiserror-impl v1.0.30
+   Compiling pest v2.1.3
+   Compiling tracing v0.1.40
+   Compiling parking_lot v0.11.1
+   Compiling proc-macro-error-attr v1.0.4
+   Compiling slog v2.5.2
+   Compiling openssl v0.10.57
+   Compiling semver-parser v0.10.2
+   Compiling openssl-macros v0.1.0
+   Compiling thiserror v1.0.30
+   Compiling proc-macro-error v1.0.4
+   Compiling crossbeam-epoch v0.9.8
+   Compiling same-file v1.0.5
+   Compiling walkdir v2.3.1
+   Compiling semver v0.11.0
+   Compiling dirs-sys-next v0.1.2
+   Compiling dirs-next v2.0.0
+   Compiling grpcio-sys v0.10.3+1.44.0-patched
+   Compiling rustc_version v0.3.3
+   Compiling crc32fast v1.2.0
+   Compiling pin-project-internal v1.0.11
+   Compiling atty v0.2.13
+   Compiling lazy_static v1.4.0
+   Compiling futures-executor v0.3.15
+   Compiling crossbeam-deque v0.8.3
+   Compiling futures v0.3.15
+   Compiling crossbeam-channel v0.5.11
+   Compiling rayon-core v1.9.3
+   Compiling prometheus v0.13.0
+   Compiling tikv_alloc v0.1.0 (/Users/yibinhu/Documents/work/dev/tikv/components/tikv_alloc)
+   Compiling rusoto_core v0.46.0 (https://github.com/tikv/rusoto?branch=gh1482-s3-addr-styles#cc733208)
+   Compiling rayon v1.5.3
+   Compiling crossbeam-queue v0.3.5
+   Compiling miniz_oxide v0.4.4
+   Compiling getset v0.1.1
+   Compiling fail v0.5.1
+   Compiling pin-project v1.0.11
+   Compiling backtrace v0.3.61
+   Compiling crossbeam-skiplist v0.1.1
+   Compiling crossbeam v0.8.1
+   Compiling prometheus-static-metric v0.5.1
+   Compiling term v0.7.0
+   Compiling dashmap v5.2.0
+   Compiling slog-global v0.1.0 (https://github.com/tikv/slog-global.git?rev=d592f88e4dbba5eb439998463054f1a44fbf17b9#d592f88e)
+   Compiling collections v0.1.0 (/Users/yibinhu/Documents/work/dev/tikv/components/collections)
+   Compiling strum_macros v0.20.1
+   Compiling online_config_derive v0.1.0 (/Users/yibinhu/Documents/work/dev/tikv/components/online_config/online_config_derive)
+   Compiling tokio-executor v0.1.9 (https://github.com/tikv/tokio?branch=tokio-timer-hotfix#4394380f)
+   Compiling slog-async v2.6.0
+   Compiling tokio-timer v0.2.13 (https://github.com/tikv/tokio?branch=tokio-timer-hotfix#4394380f)
+   Compiling sysinfo v0.26.9 (https://github.com/tikv/sysinfo?branch=0.26-fix-cpu#5a1bcf08)
+   Compiling async-speed-limit v0.4.0
+   Compiling nix v0.24.1
+   Compiling derive_more v0.99.3
+   Compiling cpu-time v1.0.0
+   Compiling fs2 v0.4.3 (https://github.com/tikv/fs2-rs?branch=tikv#cd503764)
+   Compiling crypto v0.0.1 (/Users/yibinhu/Documents/work/dev/tikv/components/crypto)
+   Compiling semver v1.0.4
+   Compiling url v2.2.2
+   Compiling serde_urlencoded v0.7.0
+   Compiling http v0.2.8
+   Compiling chrono v0.4.20
+   Compiling http-body v0.4.5
+   Compiling strum v0.20.0
+   Compiling nom v7.1.0
+   Compiling zstd-sys v2.0.1+zstd.1.5.2
+   Compiling slog-term v2.8.1
+   Compiling online_config v0.1.0 (/Users/yibinhu/Documents/work/dev/tikv/components/online_config)
+   Compiling slog-json v2.3.0
+   Compiling anyhow v1.0.75
+   Compiling case_macros v0.1.0 (/Users/yibinhu/Documents/work/dev/tikv/components/case_macros)
+   Compiling rustc_version v0.4.0
+   Compiling lz4-sys v1.9.4
+   Compiling getrandom v0.1.12
+   Compiling glob v0.3.0
+   Compiling uuid v1.2.1
+   Compiling paste v1.0.4
+   Compiling prettyplease v0.2.6
+   Compiling clang-sys v1.1.1
+   Compiling rand_core v0.5.1
+   Compiling log_wrappers v0.0.1 (/Users/yibinhu/Documents/work/dev/tikv/components/log_wrappers)
+   Compiling snappy-sys v0.1.0 (https://github.com/tikv/rust-snappy.git?branch=static-link#8c12738b)
+   Compiling bzip2-sys v0.1.11+1.0.8
+   Compiling minimal-lexical v0.2.1
+   Compiling cfg-if v1.0.0
+   Compiling typenum v1.16.0
+   Compiling libloading v0.7.0
+   Compiling rand_chacha v0.2.1
+   Compiling match-template v0.0.1
+   Compiling generic-array v0.14.4
+   Compiling time-core v0.1.0
+   Compiling http-types v2.12.0
+   Compiling bindgen v0.65.1
+   Compiling byteorder v1.4.3
+   Compiling futures-lite v1.13.0
+   Compiling rustc-hash v1.0.1
+   Compiling tokio-util v0.7.2
+   Compiling tokio-native-tls v0.3.0
+   Compiling time-macros v0.2.8
+   Compiling h2 v0.3.24
+   Compiling rand v0.7.3
+   Compiling cexpr v0.6.0
+   Compiling async-channel v1.6.1
+   Compiling azure_core v0.12.0 (https://github.com/tikv/azure-sdk-for-rust?branch=release-7.5-fips#e3dc3e02)
+   Compiling serde_qs v0.8.5
+   Compiling libtitan_sys v0.0.1 (https://github.com/tikv/rust-rocksdb.git#256c9ca2)
+   Compiling num_threads v0.1.6
+   Compiling peeking_take_while v0.1.2
+   Compiling shlex v1.3.0
+   Compiling lazycell v1.3.0
+   Compiling time v0.3.20
+   Compiling hyper v0.14.23
+   Compiling quick-xml v0.29.0
+   Compiling digest v0.9.0
+   Compiling block-buffer v0.9.0
+   Compiling uuid v0.8.2
+   Compiling parse-zoneinfo v0.3.0
+   Compiling num-iter v0.1.43
+   Compiling num-rational v0.3.0
+   Compiling unicode-xid v0.2.4
+   Compiling const_format_proc_macros v0.2.29
+   Compiling sha2 v0.9.1
+   Compiling chrono-tz v0.5.3
+   Compiling crc32c v0.6.4
+   Compiling serde_path_to_error v0.1.5
+   Compiling hyper-tls v0.5.0
+   Compiling rusoto_credential v0.46.0 (https://github.com/tikv/rusoto?branch=gh1482-s3-addr-styles#cc733208)
+   Compiling reqwest v0.11.1
+   Compiling fix-hidden-lifetime-bug-proc_macros v0.2.5
+   Compiling encoding_rs v0.8.29 (https://github.com/tikv/encoding_rs.git?rev=68e0bc5a72a37a78228d80cd98047326559cf43c#68e0bc5a)
+   Compiling zstd-safe v5.0.2+zstd.1.5.2
+   Compiling const_format v0.2.30
+   Compiling oauth2 v4.1.0
+   Compiling rusoto_signature v0.46.0 (https://github.com/tikv/rusoto?branch=gh1482-s3-addr-styles#cc733208)
+   Compiling fix-hidden-lifetime-bug v0.2.5
+   Compiling yatp v0.0.1 (https://github.com/tikv/yatp.git?branch=master#793be4d7)
+   Compiling azure_storage v0.12.0 (https://github.com/tikv/azure-sdk-for-rust?branch=release-7.5-fips#e3dc3e02)
+   Compiling slog_derive v0.2.0
+   Compiling librocksdb_sys v0.1.0 (https://github.com/tikv/rust-rocksdb.git#256c9ca2)
+   Compiling ordered-float v2.10.0
+   Compiling num-complex v0.3.0
+   Compiling tame-oauth v0.9.6 (https://github.com/tikv/tame-oauth?branch=fips-0.9#487e287c)
+   Compiling azure_identity v0.12.0 (https://github.com/tikv/azure-sdk-for-rust?branch=release-7.5-fips#e3dc3e02)
+   Compiling num v0.3.0
+   Compiling azure_storage_blobs v0.12.0 (https://github.com/tikv/azure-sdk-for-rust?branch=release-7.5-fips#e3dc3e02)
+   Compiling rusoto_s3 v0.46.0 (https://github.com/tikv/rusoto?branch=gh1482-s3-addr-styles#cc733208)
+   Compiling rusoto_kms v0.46.0 (https://github.com/tikv/rusoto?branch=gh1482-s3-addr-styles#cc733208)
+   Compiling rusoto_sts v0.46.0 (https://github.com/tikv/rusoto?branch=gh1482-s3-addr-styles#cc733208)
+   Compiling azure_security_keyvault v0.12.0 (https://github.com/tikv/azure-sdk-for-rust?branch=release-7.5-fips#e3dc3e02)
+   Compiling tame-gcs v0.10.0
+   Compiling num-derive v0.3.0
+   Compiling ahash v0.7.7
+   Compiling atomic v0.5.0
+   Compiling fs_extra v1.1.0
+   Compiling tikv-jemalloc-sys v0.5.0+5.3.0
+   Compiling memoffset v0.7.1
+   Compiling ident_case v1.0.1
+   Compiling heck v0.4.1
+   Compiling strsim v0.9.2
+   Compiling fnv v1.0.6
+   Compiling rustversion v1.0.4
+   Compiling darling_core v0.10.1
+   Compiling smartstring v1.0.1
+   Compiling once_cell v1.19.0
+   Compiling enum_dispatch v0.3.8
+   Compiling serde_with_macros v1.1.0
+   Compiling arrayvec v0.4.11
+   Compiling strum_macros v0.25.0
+   Compiling serde_with v1.4.0
+   Compiling nix v0.26.2
+   Compiling rhai_codegen v1.4.1
+   Compiling memory_trace_macros v0.1.0 (/Users/yibinhu/Documents/work/dev/tikv/components/memory_trace_macros)
+   Compiling darling_macro v0.10.1
+   Compiling derivative v2.2.0
+   Compiling darling v0.10.1
+   Compiling tidb_query_codegen v0.0.1 (/Users/yibinhu/Documents/work/dev/tikv/components/tidb_query_codegen)
+   Compiling rhai v1.7.0
+   Compiling strum v0.25.0
+   Compiling debugid v0.8.0
+   Compiling serde_repr v0.1.9
+   Compiling num-derive v0.4.0
+   Compiling protobuf-codegen-pure v2.8.0
+   Compiling findshlibs v0.10.1
+   Compiling memmap2 v0.5.10
+   Compiling memmap2 v0.9.3
+   Compiling symbolic-demangle v10.1.1
+   Compiling version_check v0.1.5
+   Compiling symbolic-common v10.1.1
+   Compiling nom v5.1.0
+   Compiling num-format v0.4.0
+   Compiling pprof v0.11.1
+   Compiling coprocessor_plugin_api v0.1.0 (/Users/yibinhu/Documents/work/dev/tikv/components/coprocessor_plugin_api)
+   Compiling fsevent-sys v2.0.1
+   Compiling fsevent v0.4.0
+   Compiling inferno v0.11.3
+   Compiling ipnetwork v0.15.1
+   Compiling async-stream-impl v0.2.0
+   Compiling pnet_sys v0.25.0
+   Compiling filetime v0.2.14
+   Compiling coarsetime v0.1.33
+   Compiling pnet_datalink v0.23.1
+   Compiling notify v4.0.17
+   Compiling tracing-active-tree v0.1.0 (https://github.com/tikv/tracing-active-tree.git?rev=a71f8f8148f88ab759deb6d3e1d62d07ab218347#a71f8f81)
+   Compiling async-stream v0.2.0
+   Compiling tokio-openssl v0.6.1
+   Compiling serde_ignored v0.1.2
+   Compiling toml v0.5.7
+   Compiling keyed_priority_queue v0.4.1
+   Compiling io-lifetimes v1.0.4
+   Compiling rustix v0.36.7
+   Compiling clap v2.33.0
+   Compiling tokio-stream v0.1.11
+   Compiling structopt-derive v0.4.13
+   Compiling errno v0.2.8
+   Compiling signal-hook v0.3.14
+   Compiling is-terminal v0.4.2
+   Compiling clap_derive v3.1.4
+   Compiling env_logger v0.10.0
+   Compiling tikv-server v0.0.1 (/Users/yibinhu/Documents/work/dev/tikv/cmd/tikv-server)
+   Compiling tikv-ctl v0.0.1 (/Users/yibinhu/Documents/work/dev/tikv/cmd/tikv-ctl)
+   Compiling filedescriptor v0.8.1
+   Compiling structopt v0.3.20
+   Compiling gag v1.0.0
+   Compiling clap v3.1.6
+   Compiling raft-engine v0.4.1 (https://github.com/tikv/raft-engine.git#e505d631)
+   Compiling tikv-jemallocator v0.5.0
+   Compiling tikv-jemalloc-ctl v0.5.0
+   Compiling skiplist-rs v0.1.0 (https://github.com/tikv/skiplist-rs.git?branch=main#79280c29)
+   Compiling raft-engine-ctl v0.4.1 (https://github.com/tikv/raft-engine.git#e505d631)
+   Compiling flate2 v1.0.11
+   Compiling zstd v0.11.2+zstd.1.5.2
+   Compiling async-compression v0.3.14
+   Compiling protobuf-build v0.15.1
+   Compiling raft-proto v0.7.0 (https://github.com/tikv/raft-rs?branch=master#f60fb9e1)
+   Compiling kvproto v0.0.2 (https://github.com/pingcap/kvproto.git#a554af8e)
+   Compiling tipb v0.0.1 (https://github.com/pingcap/tipb.git#711da6fe)
+   Compiling raft v0.7.0 (https://github.com/tikv/raft-rs?branch=master#f60fb9e1)
+   Compiling rocksdb v0.3.0 (https://github.com/tikv/rust-rocksdb.git#256c9ca2)
+   Compiling grpcio v0.10.4
+   Compiling grpcio-health v0.10.4
+   Compiling error_code v0.0.1 (/Users/yibinhu/Documents/work/dev/tikv/components/error_code)
+   Compiling tracker v0.0.1 (/Users/yibinhu/Documents/work/dev/tikv/components/tracker)
+   Compiling codec v0.0.1 (/Users/yibinhu/Documents/work/dev/tikv/components/codec)
+   Compiling tikv_util v0.1.0 (/Users/yibinhu/Documents/work/dev/tikv/components/tikv_util)
+   Compiling cloud v0.0.1 (/Users/yibinhu/Documents/work/dev/tikv/components/cloud)
+   Compiling file_system v0.1.0 (/Users/yibinhu/Documents/work/dev/tikv/components/file_system)
+   Compiling txn_types v0.1.0 (/Users/yibinhu/Documents/work/dev/tikv/components/txn_types)
+   Compiling keys v0.1.0 (/Users/yibinhu/Documents/work/dev/tikv/components/keys)
+   Compiling resource_metering v0.0.1 (/Users/yibinhu/Documents/work/dev/tikv/components/resource_metering)
+   Compiling service v0.0.1 (/Users/yibinhu/Documents/work/dev/tikv/components/service)
+   Compiling health_controller v0.1.0 (/Users/yibinhu/Documents/work/dev/tikv/components/health_controller)
+   Compiling gcp v0.0.1 (/Users/yibinhu/Documents/work/dev/tikv/components/cloud/gcp)
+   Compiling encryption v0.0.1 (/Users/yibinhu/Documents/work/dev/tikv/components/encryption)
+   Compiling aws v0.0.1 (/Users/yibinhu/Documents/work/dev/tikv/components/cloud/aws)
+   Compiling azure v0.0.1 (/Users/yibinhu/Documents/work/dev/tikv/components/cloud/azure)
+   Compiling concurrency_manager v0.0.1 (/Users/yibinhu/Documents/work/dev/tikv/components/concurrency_manager)
+   Compiling engine_traits v0.0.1 (/Users/yibinhu/Documents/work/dev/tikv/components/engine_traits)
+   Compiling security v0.0.1 (/Users/yibinhu/Documents/work/dev/tikv/components/security)
+   Compiling encryption_export v0.0.1 (/Users/yibinhu/Documents/work/dev/tikv/components/encryption/export)
+   Compiling pd_client v0.1.0 (/Users/yibinhu/Documents/work/dev/tikv/components/pd_client)
+   Compiling api_version v0.1.0 (/Users/yibinhu/Documents/work/dev/tikv/components/api_version)
+   Compiling external_storage v0.0.1 (/Users/yibinhu/Documents/work/dev/tikv/components/external_storage)
+   Compiling into_other v0.0.1 (/Users/yibinhu/Documents/work/dev/tikv/components/into_other)
+   Compiling engine_panic v0.0.1 (/Users/yibinhu/Documents/work/dev/tikv/components/engine_panic)
+   Compiling raft_log_engine v0.0.1 (/Users/yibinhu/Documents/work/dev/tikv/components/raft_log_engine)
+   Compiling tidb_query_common v0.0.1 (/Users/yibinhu/Documents/work/dev/tikv/components/tidb_query_common)
+   Compiling engine_rocks v0.0.1 (/Users/yibinhu/Documents/work/dev/tikv/components/engine_rocks)
+   Compiling resource_control v0.0.1 (/Users/yibinhu/Documents/work/dev/tikv/components/resource_control)
+   Compiling test_pd_client v0.0.1 (/Users/yibinhu/Documents/work/dev/tikv/components/test_pd_client)
+   Compiling tidb_query_datatype v0.0.1 (/Users/yibinhu/Documents/work/dev/tikv/components/tidb_query_datatype)
+   Compiling batch-system v0.1.0 (/Users/yibinhu/Documents/work/dev/tikv/components/batch-system)
+   Compiling causal_ts v0.0.1 (/Users/yibinhu/Documents/work/dev/tikv/components/causal_ts)
+   Compiling sst_importer v0.1.0 (/Users/yibinhu/Documents/work/dev/tikv/components/sst_importer)
+   Compiling region_cache_memory_engine v0.0.1 (/Users/yibinhu/Documents/work/dev/tikv/components/region_cache_memory_engine)
+   Compiling hybrid_engine v0.0.1 (/Users/yibinhu/Documents/work/dev/tikv/components/hybrid_engine)
+   Compiling raftstore v0.0.1 (/Users/yibinhu/Documents/work/dev/tikv/components/raftstore)
+   Compiling tidb_query_expr v0.0.1 (/Users/yibinhu/Documents/work/dev/tikv/components/tidb_query_expr)
+   Compiling tidb_query_aggr v0.0.1 (/Users/yibinhu/Documents/work/dev/tikv/components/tidb_query_aggr)
+   Compiling tidb_query_executors v0.0.1 (/Users/yibinhu/Documents/work/dev/tikv/components/tidb_query_executors)
+   Compiling tikv_kv v0.1.0 (/Users/yibinhu/Documents/work/dev/tikv/components/tikv_kv)
+   Compiling raftstore-v2 v0.1.0 (/Users/yibinhu/Documents/work/dev/tikv/components/raftstore-v2)
+   Compiling engine_rocks_helper v0.1.0 (/Users/yibinhu/Documents/work/dev/tikv/components/engine_rocks_helper)
+warning: unused variable: `physical_len`
+   --> components/tidb_query_executors/src/projection_executor.rs:100:13
+    |
+100 |         let physical_len = src_result.physical_columns.rows_len();
+    |             ^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_physical_len`
+    |
+    = note: `#[warn(unused_variables)]` on by default
+
+warning: `tidb_query_executors` (lib) generated 1 warning (run `cargo fix --lib -p tidb_query_executors` to apply 1 suggestion)
+   Compiling tikv v8.0.0-alpha (/Users/yibinhu/Documents/work/dev/tikv)
+   Compiling resolved_ts v0.0.1 (/Users/yibinhu/Documents/work/dev/tikv/components/resolved_ts)
+   Compiling snap_recovery v0.1.0 (/Users/yibinhu/Documents/work/dev/tikv/components/snap_recovery)
+   Compiling backup v0.0.1 (/Users/yibinhu/Documents/work/dev/tikv/components/backup)
+   Compiling cdc v0.0.1 (/Users/yibinhu/Documents/work/dev/tikv/components/cdc)
+   Compiling backup-stream v0.1.0 (/Users/yibinhu/Documents/work/dev/tikv/components/backup-stream)
+   Compiling server v0.0.1 (/Users/yibinhu/Documents/work/dev/tikv/components/server)
+    Finished dev [unoptimized + debuginfo] target(s) in 35m 28s
+warning: the following packages contain code that will be rejected by a future version of Rust: fs_extra v1.1.0, nom v5.1.0, quick-xml v0.22.0
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
