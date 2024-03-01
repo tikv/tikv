@@ -813,7 +813,6 @@ mod test {
         time::{Duration, Instant},
     };
 
-    use engine_test::{kv::KvTestEngine, raft::RaftTestEngine};
     use kvproto::{
         brpb::{Noop, StorageBackend, StreamBackupTaskInfo},
         metapb::{Region, RegionEpoch},
@@ -823,8 +822,7 @@ mod test {
         router::ServerRaftStoreRouter,
         RegionInfo,
     };
-    use resolved_ts::LeadershipResolver;
-    use tikv::{config::BackupStreamConfig, storage::Statistics};
+    use tikv::storage::Statistics;
     use tikv_util::{info, memory::MemoryQuota, worker::dummy_scheduler};
     use tokio::{sync::mpsc::Sender, task::JoinHandle};
     use txn_types::TimeStamp;
@@ -839,6 +837,15 @@ mod test {
         utils::CallbackWaitGroup,
         ObserveOp, Task,
     };
+
+    struct NoopCheckLeader;
+
+    #[async_trait::async_trait]
+    impl super::ResolveLeader for NoopCheckLeader {
+        async fn resolve_leader(&mut self, regions: Vec<u64>, _min_ts: TimeStamp) -> Vec<u64> {
+            regions
+        }
+    }
 
     #[derive(Clone, Copy)]
     struct FuncInitialScan<F>(F)
@@ -1016,8 +1023,14 @@ mod test {
             let (scheduler, mut output) = dummy_scheduler();
             let subs = SubscriptionTracer::default();
             let memory_manager = Arc::new(MemoryQuota::new(1024));
+            let tmp = tempfile::TempDir::new().unwrap();
             let (tx, mut rx) = tokio::sync::mpsc::channel(8);
-            let router = RouterInner::new(scheduler.clone(), BackupStreamConfig::default().into());
+            let router = RouterInner::new(
+                tmp.path().to_owned(),
+                scheduler.clone(),
+                1000,
+                Duration::from_secs(300),
+            );
             let mut task = StreamBackupTaskInfo::new();
             task.set_name(task_name.to_owned());
             task.set_storage({
@@ -1073,7 +1086,8 @@ mod test {
                                 .unwrap(),
                             Task::FatalError(select, err) => {
                                 panic!(
-                                    "Background handler received fatal error {err} for {select:?}!"
+                                    "Background handler received fatal error {} for {:?}!",
+                                    err, select
                                 )
                             }
                             _ => {}
@@ -1087,19 +1101,7 @@ mod test {
                     }
                 }
             }));
-            bg_tasks.push(
-                pool.spawn(subs_mgr.region_operator_loop::<KvTestEngine, None>(
-                    ob_rx,
-                    LeadershipResolver::new(
-                        store_id,
-                        pd_client,
-                        env,
-                        security_mgr,
-                        region_read_progress,
-                        gc_interval,
-                    ),
-                )),
-            );
+            bg_tasks.push(pool.spawn(subs_mgr.region_operator_loop(ob_rx, NoopCheckLeader)));
 
             Self {
                 rt: pool,
