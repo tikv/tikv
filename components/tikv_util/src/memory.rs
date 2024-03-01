@@ -172,6 +172,10 @@ impl OwnedAllocated {
         self.allocated += bytes;
         Ok(())
     }
+
+    pub fn source(&self) -> &MemoryQuota {
+        &self.from
+    }
 }
 
 impl Drop for OwnedAllocated {

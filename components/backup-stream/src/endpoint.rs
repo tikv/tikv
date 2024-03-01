@@ -494,6 +494,7 @@ where
         let mut sw = StopWatch::by_now();
 
         let router = self.range_router.clone();
+        let region_op = self.region_operator.clone();
         let sched = self.scheduler.clone();
         let subs = self.subs.clone();
         self.pool.spawn(async move {

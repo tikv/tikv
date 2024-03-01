@@ -20,12 +20,8 @@ use crate::{endpoint::Task, metrics};
 
 #[derive(ThisError, Debug)]
 pub enum Error {
-    #[error("gRPC meet error {0}")]
-    Grpc(#[from] GrpcError),
     #[error("Etcd meet error {0}")]
     Etcd(#[from] EtcdErrorExt),
-    #[error("Protobuf meet error {0}")]
-    Protobuf(#[from] ProtobufError),
     #[error("No such task {task_name:?}")]
     NoSuchTask { task_name: String },
     #[error("Observe have already canceled for region {0} (version = {1:?})")]

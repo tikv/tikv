@@ -132,6 +132,7 @@ impl<S: Snapshot> EventLoader<S> {
         result: &mut ApplyEvents,
         resolver: &mut TwoPhaseResolver,
     ) -> Result<()> {
+        let region_id = self.region.id;
         for entry in self.entry_batch.drain(..) {
             match entry {
                 TxnEntry::Prewrite {
@@ -158,9 +159,7 @@ impl<S: Snapshot> EventLoader<S> {
                     if utils::should_track_lock(&lock) {
                         resolver
                             .track_phase_one_lock(lock.ts, lock_at)
-                            .map_err(|_| Error::OutOfQuota {
-                                region_id: self.region.id,
-                            })?;
+                            .map_err(|_| Error::OutOfQuota { region_id })?;
                     }
                 }
                 TxnEntry::Commit { default, write, .. } => {

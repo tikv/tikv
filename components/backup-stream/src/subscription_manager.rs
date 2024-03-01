@@ -17,12 +17,12 @@ use tikv_util::{
     box_err, debug, info, memory::MemoryQuota, sys::thread::ThreadBuildWrapper, time::Instant,
     warn, worker::Scheduler,
 };
-use tokio::sync::mpsc::{channel, error::SendError, Receiver, Sender};
+use tokio::sync::mpsc::{channel, error::SendError, Receiver, Sender, WeakSender};
 use txn_types::TimeStamp;
 
 use crate::{
     annotate,
-    endpoint::{BackupStreamResolver, ObserveOp},
+    endpoint::ObserveOp,
     errors::{Error, ReportableResult, Result},
     event_loader::InitialDataLoader,
     future,
@@ -357,7 +357,7 @@ where
             failure_count: HashMap::new(),
             memory_manager: Arc::clone(&initial_loader.quota),
         };
-        let fut = op.region_operator_loop(rx, resolver);
+        let fut = op.region_operator_loop(rx, leader_checker);
         (tx, fut)
     }
 
@@ -378,7 +378,7 @@ where
 
     /// the handler loop.
     async fn region_operator_loop(
-        self,
+        mut self,
         mut message_box: Receiver<ObserveOp>,
         mut leader_checker: LeadershipResolver,
     ) {
@@ -523,7 +523,6 @@ where
         handle: Option<ObserveHandle>,
     ) {
         let tx = self.messenger.upgrade();
-        let region_id = region.id;
         if tx.is_none() {
             warn!(
                 "log backup subscription manager: cannot upgrade self-sender, are we shutting down?"
@@ -540,7 +539,7 @@ where
                 warn!("log backup failed to schedule start observe."; "err" => %err);
             }
         };
-        tokio::spawn(root!("scheduled_subscription"; scheduled; "after" = ?backoff, region_id));
+        tokio::spawn(scheduled);
     }
 
     async fn refresh_resolver(&self, region: &Region) {
@@ -809,9 +808,10 @@ mod test {
     };
     use raftstore::{
         coprocessor::{ObserveHandle, RegionInfoCallback, RegionInfoProvider},
-        router::{CdcRaftRouter, ServerRaftStoreRouter},
+        router::ServerRaftStoreRouter,
         RegionInfo,
     };
+    use resolved_ts::LeadershipResolver;
     use tikv::{config::BackupStreamConfig, storage::Statistics};
     use tikv_util::{info, memory::MemoryQuota, worker::dummy_scheduler};
     use tokio::{sync::mpsc::Sender, task::JoinHandle};
@@ -825,7 +825,7 @@ mod test {
         subscription_manager::{OOM_BACKOFF_BASE, OOM_BACKOFF_JITTER_SECS},
         subscription_track::{CheckpointType, SubscriptionTracer},
         utils::CallbackWaitGroup,
-        BackupStreamResolver, ObserveOp, Task,
+        ObserveOp, Task,
     };
 
     #[derive(Clone, Copy)]
@@ -1076,9 +1076,17 @@ mod test {
                 }
             }));
             bg_tasks.push(
-                pool.spawn(subs_mgr.region_operator_loop::<KvTestEngine, CdcRaftRouter<
-                    ServerRaftStoreRouter<KvTestEngine, RaftTestEngine>,
-                >>(ob_rx, BackupStreamResolver::Nop)),
+                pool.spawn(subs_mgr.region_operator_loop::<KvTestEngine, None>(
+                    ob_rx,
+                    LeadershipResolver::new(
+                        store_id,
+                        pd_client,
+                        env,
+                        security_mgr,
+                        region_read_progress,
+                        gc_interval,
+                    ),
+                )),
             );
 
             Self {
