@@ -1277,7 +1277,7 @@ mod tests {
     fn test_take_vector_value() {
         let scalar_node = RpnStackNode::Scalar {
             value: &ScalarValue::Real(Real::new(10.0).ok()),
-            field_type: &FieldTypeTp::Double.into()
+            field_type: &FieldTypeTp::Double.into(),
         };
         scalar_node.take_vector_value().unwrap_err();
 
@@ -1287,9 +1287,9 @@ mod tests {
         column.push_real(Real::new(20.0).ok());
         let vector_generate_node = RpnStackNode::Vector {
             value: (RpnStackNodeVectorValue::Generated {
-                physical_value: (column)
+                physical_value: (column),
             }),
-            field_type: &FieldTypeTp::Double.into()
+            field_type: &FieldTypeTp::Double.into(),
         };
         let taked_value = vector_generate_node
             .take_vector_value()
@@ -1309,9 +1309,9 @@ mod tests {
         let vector_generate_node = RpnStackNode::Vector {
             value: (RpnStackNodeVectorValue::Ref {
                 physical_value: &column2,
-                logical_rows: &logical_rows
+                logical_rows: &logical_rows,
             }),
-            field_type: &FieldTypeTp::Double.into()
+            field_type: &FieldTypeTp::Double.into(),
         };
         let taked_value = vector_generate_node
             .take_vector_value()

@@ -311,10 +311,7 @@ mod tests {
         let r = block_on(exec.next_batch(1));
         assert_eq!(&r.logical_rows, &[0]);
         assert_eq!(r.physical_columns.columns_len(), 1);
-        assert_eq!(
-            r.physical_columns[0].decoded().to_int_vec(),
-            vec![Some(1)]
-        );
+        assert_eq!(r.physical_columns[0].decoded().to_int_vec(), vec![Some(1)]);
         assert!(r.is_drained.unwrap().stop());
     }
 
@@ -352,14 +349,8 @@ mod tests {
         let r = block_on(exec.next_batch(1));
         assert_eq!(&r.logical_rows, &[0]);
         assert_eq!(r.physical_columns.columns_len(), 2);
-        assert_eq!(
-            r.physical_columns[0].decoded().to_int_vec(),
-            vec![None]
-        );
-        assert_eq!(
-            r.physical_columns[1].decoded().to_real_vec(),
-            vec![None]
-        );
+        assert_eq!(r.physical_columns[0].decoded().to_int_vec(), vec![None]);
+        assert_eq!(r.physical_columns[1].decoded().to_real_vec(), vec![None]);
         assert!(r.is_drained.unwrap().stop());
     }
 
@@ -460,7 +451,7 @@ mod tests {
         assert_eq!(
             r.physical_columns[2].decoded().to_int_vec(),
             vec![Some(-100), Some(-100), Some(-100), Some(-100)]
-        );        
+        );
         assert!(r.is_drained.unwrap().is_remain());
 
         let r = block_on(exec.next_batch(1));
@@ -472,7 +463,10 @@ mod tests {
         assert_eq!(r.physical_columns.columns_len(), 3);
         assert_eq!(r.physical_columns[0].decoded().to_int_vec(), vec![None]);
         assert_eq!(r.physical_columns[1].decoded().to_int_vec(), vec![Some(1)]);
-        assert_eq!(r.physical_columns[2].decoded().to_int_vec(), vec![Some(-100)]);
+        assert_eq!(
+            r.physical_columns[2].decoded().to_int_vec(),
+            vec![Some(-100)]
+        );
         assert!(r.is_drained.unwrap().stop());
     }
 
