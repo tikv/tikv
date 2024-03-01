@@ -1241,7 +1241,7 @@ where
             }
             CasualMessage::SnapshotApplied => {
                 self.fsm.has_ready = true;
-                if self.fsm.peer.destroy_after_apply_snapshot() {
+                if self.fsm.peer.should_destroy_after_apply_snapshot() {
                     self.maybe_destroy();
                 }
             }

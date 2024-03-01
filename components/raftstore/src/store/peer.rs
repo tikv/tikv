@@ -469,6 +469,11 @@ pub struct ApplySnapshotContext {
     /// The message should be sent after snapshot is applied.
     pub msgs: Vec<eraftpb::Message>,
     pub persist_res: Option<PersistSnapshotResult>,
+    /// Destroy the peer after apply task finished or aborted
+    /// This flag is set to true when the peer destroy is skipped because of
+    /// running snapshot task.
+    /// This is to accelerate peer destroy without waiting for extra destory
+    /// peer message.
     pub destroy_peer_after_apply: bool,
 }
 
@@ -1638,7 +1643,7 @@ where
     }
 
     #[inline]
-    pub fn destroy_after_apply_snapshot(&self) -> bool {
+    pub fn should_destroy_after_apply_snapshot(&self) -> bool {
         self.apply_snap_ctx
             .as_ref()
             .map_or(false, |ctx| ctx.destroy_peer_after_apply)
