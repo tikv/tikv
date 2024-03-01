@@ -1222,10 +1222,7 @@ impl<E: Engine> GcWorker<E> {
         GcWorker {
             engine,
             flow_info_sender: Some(flow_info_sender),
-            config_manager: GcWorkerConfigManager(
-                Arc::new(VersionTrack::new(cfg)),
-                Some(worker.pool()),
-            ),
+            config_manager: GcWorkerConfigManager(Arc::new(VersionTrack::new(cfg))),
             refs: Arc::new(AtomicUsize::new(1)),
             worker: Arc::new(Mutex::new(worker)),
             worker_scheduler,
@@ -1347,10 +1344,6 @@ impl<E: Engine> GcWorker<E> {
 
     pub fn get_config_manager(&self) -> GcWorkerConfigManager {
         self.config_manager.clone()
-    }
-
-    pub fn get_worker_thread_count(&self) -> usize {
-        self.worker.lock().unwrap().pool_size()
     }
 }
 
@@ -1542,7 +1535,6 @@ mod tests {
     use engine_traits::Peekable as _;
     use futures::executor::block_on;
     use kvproto::{kvrpcpb::ApiVersion, metapb::Peer};
-    use online_config::{ConfigChange, ConfigManager, ConfigValue};
     use raft::StateRole;
     use raftstore::coprocessor::{
         region_info_accessor::{MockRegionInfoProvider, RegionInfoAccessor},
@@ -1965,7 +1957,7 @@ mod tests {
             store_id,
             prefixed_engine.clone(),
             tx,
-            GcWorkerConfigManager(Arc::new(VersionTrack::new(cfg.clone())), None)
+            GcWorkerConfigManager(Arc::new(VersionTrack::new(cfg.clone())))
                 .0
                 .tracker("gc-worker".to_owned()),
             cfg,
@@ -2027,7 +2019,7 @@ mod tests {
             store_id,
             prefixed_engine.clone(),
             tx,
-            GcWorkerConfigManager(Arc::new(VersionTrack::new(cfg.clone())), None)
+            GcWorkerConfigManager(Arc::new(VersionTrack::new(cfg.clone())))
                 .0
                 .tracker("gc-worker".to_owned()),
             cfg,
@@ -2128,7 +2120,7 @@ mod tests {
             1,
             prefixed_engine.clone(),
             tx,
-            GcWorkerConfigManager(Arc::new(VersionTrack::new(cfg.clone())), None)
+            GcWorkerConfigManager(Arc::new(VersionTrack::new(cfg.clone())))
                 .0
                 .tracker("gc-worker".to_owned()),
             cfg,
@@ -2443,7 +2435,7 @@ mod tests {
             store_id,
             engine.clone(),
             tx,
-            GcWorkerConfigManager(Arc::new(VersionTrack::new(cfg.clone())), None)
+            GcWorkerConfigManager(Arc::new(VersionTrack::new(cfg.clone())))
                 .0
                 .tracker("gc-worker".to_owned()),
             cfg,
@@ -2621,7 +2613,7 @@ mod tests {
             store_id,
             engine.clone(),
             tx,
-            GcWorkerConfigManager(Arc::new(VersionTrack::new(cfg.clone())), None)
+            GcWorkerConfigManager(Arc::new(VersionTrack::new(cfg.clone())))
                 .0
                 .tracker("gc-worker".to_owned()),
             cfg,
@@ -2808,34 +2800,5 @@ mod tests {
         // Cover two regions
         test_destroy_range_for_multi_rocksdb_impl(b"k05", b"k195", vec![1, 2]);
         test_destroy_range_for_multi_rocksdb_impl(b"k099", b"k25", vec![2, 3]);
-    }
-
-    #[test]
-    fn test_update_gc_thread_count() {
-        let engine = TestEngineBuilder::new().build().unwrap();
-        let (tx, _rx) = mpsc::channel();
-        let gate = FeatureGate::default();
-        gate.set_version("5.0.0").unwrap();
-        let mut gc_config = GcConfig::default();
-        gc_config.num_threads = 1;
-        let gc_worker = GcWorker::new(
-            engine,
-            tx,
-            gc_config,
-            gate,
-            Arc::new(MockRegionInfoProvider::new(vec![])),
-        );
-        let mut config_change = ConfigChange::new();
-        config_change.insert(String::from("num_threads"), ConfigValue::Usize(5));
-        let mut cfg_manager = gc_worker.get_config_manager();
-        cfg_manager.dispatch(config_change).unwrap();
-
-        assert_eq!(gc_worker.get_worker_thread_count(), 5);
-
-        let mut config_change = ConfigChange::new();
-        config_change.insert(String::from("num_threads"), ConfigValue::Usize(2));
-        cfg_manager.dispatch(config_change).unwrap();
-
-        assert_eq!(gc_worker.get_worker_thread_count(), 2);
     }
 }
