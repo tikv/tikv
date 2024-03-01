@@ -345,6 +345,7 @@ impl<EK: KvEngineWithRocks> ServerCluster<EK> {
         );
         gc_worker.start(node_id).unwrap();
 
+        let mut ingest_mediator = IngestMediator::default();
         let rts_worker = if cfg.resolved_ts.enable {
             // Resolved ts worker
             let mut rts_worker = LazyWorker::new("resolved-ts");
@@ -352,8 +353,10 @@ impl<EK: KvEngineWithRocks> ServerCluster<EK> {
             rts_ob.register_to(&mut coprocessor_host);
             // resolved ts endpoint needs store id.
             store_meta.lock().unwrap().store_id = Some(node_id);
-            // Resolved ts endpoint
+            // Setup ingest observer.
             let ingest_observer = Arc::new(IngestObserver::default());
+            ingest_mediator.register(ingest_observer.clone());
+            // Resolved ts endpoint
             let rts_endpoint = resolved_ts::Endpoint::new(
                 &cfg.resolved_ts,
                 rts_worker.scheduler(),
@@ -431,7 +434,6 @@ impl<EK: KvEngineWithRocks> ServerCluster<EK> {
 
         // Create import service.
         let importer = {
-            let mut ingest_mediator = IngestMediator::default();
             let ingest_observer = Arc::new(IngestObserver::default());
             ingest_mediator.register(ingest_observer.clone());
             let dir = Path::new(engines.kv.path()).join("import-sst");

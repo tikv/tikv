@@ -458,6 +458,7 @@ impl<EK: KvEngine> ServerCluster<EK> {
         );
         gc_worker.start(node_id).unwrap();
 
+        let mut ingest_mediator = IngestMediator::default();
         let rts_worker = if cfg.resolved_ts.enable {
             // Resolved ts worker
             let mut rts_worker = LazyWorker::new("resolved-ts");
@@ -467,6 +468,7 @@ impl<EK: KvEngine> ServerCluster<EK> {
             store_meta.lock().unwrap().store_id = node_id;
             // Resolved ts endpoint
             let ingest_observer = Arc::new(IngestObserver::default());
+            ingest_mediator.register(ingest_observer.clone());
             let rts_endpoint = resolved_ts::Endpoint::new(
                 &cfg.resolved_ts,
                 rts_worker.scheduler(),

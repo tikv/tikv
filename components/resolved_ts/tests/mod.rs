@@ -8,7 +8,8 @@ use futures::{executor::block_on, stream, SinkExt};
 use grpcio::{ChannelBuilder, Environment, Result, WriteFlags};
 use kvproto::{
     import_sstpb::{
-        AcquireLease, IngestRequest, LeaseRequest, SstMeta, UploadRequest, UploadResponse,
+        AcquireLease, IngestRequest, LeaseRequest, ReleaseLease, SstMeta, UploadRequest,
+        UploadResponse,
     },
     import_sstpb_grpc::ImportSstClient,
     kvrpcpb::*,
@@ -267,6 +268,21 @@ impl TestSuite {
         let acquired_lease = &resp.get_acquired()[0];
         assert_eq!(region_id, acquired_lease.get_region().get_id(),);
         assert_eq!(meta.get_uuid(), acquired_lease.get_uuid(),);
+    }
+
+    pub fn must_release_sst_lease(&mut self, region_id: u64, meta: &SstMeta) {
+        let import = self.get_import_client(region_id);
+        let mut release = ReleaseLease::default();
+        release.mut_lease().mut_region().set_id(region_id);
+        release.mut_lease().set_uuid(meta.get_uuid().into());
+        let mut req = LeaseRequest::default();
+        req.mut_release().push(release);
+
+        let resp = import.lease(&req).unwrap();
+
+        let released_lease = &resp.get_released()[0];
+        assert_eq!(region_id, released_lease.get_region().get_id(),);
+        assert_eq!(meta.get_uuid(), released_lease.get_uuid(),);
     }
 
     pub fn upload_sst(
