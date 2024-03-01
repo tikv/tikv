@@ -20,15 +20,12 @@ use crate::{endpoint::Task, metrics};
 
 #[derive(ThisError, Debug)]
 pub enum Error {
-<<<<<<< HEAD
     #[error("gRPC meet error {0}")]
     Grpc(#[from] GrpcError),
     #[error("Etcd meet error {0}")]
     Etcd(#[from] EtcdErrorExt),
     #[error("Protobuf meet error {0}")]
     Protobuf(#[from] ProtobufError),
-=======
->>>>>>> 66301257e4 (log_backup: stop task while memory out of quota (#16008))
     #[error("No such task {task_name:?}")]
     NoSuchTask { task_name: String },
     #[error("Observe have already canceled for region {0} (version = {1:?})")]

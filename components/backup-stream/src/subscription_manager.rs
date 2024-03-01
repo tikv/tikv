@@ -10,34 +10,20 @@ use raftstore::{
     coprocessor::{ObserveHandle, RegionInfoProvider},
     store::{fsm::ChangeObserver, SignificantRouter},
 };
-<<<<<<< HEAD
-use resolved_ts::LeadershipResolver;
-=======
 use rand::Rng;
->>>>>>> 66301257e4 (log_backup: stop task while memory out of quota (#16008))
+use resolved_ts::LeadershipResolver;
 use tikv::storage::Statistics;
 use tikv_util::{
     box_err, debug, info, memory::MemoryQuota, sys::thread::ThreadBuildWrapper, time::Instant,
     warn, worker::Scheduler,
 };
-<<<<<<< HEAD
 use tokio::sync::mpsc::{channel, error::SendError, Receiver, Sender};
-=======
-use tokio::sync::mpsc::{channel, error::SendError, Receiver, Sender, WeakSender};
-use tracing::instrument;
-use tracing_active_tree::root;
->>>>>>> 66301257e4 (log_backup: stop task while memory out of quota (#16008))
 use txn_types::TimeStamp;
 
 use crate::{
     annotate,
-<<<<<<< HEAD
-    endpoint::ObserveOp,
-    errors::{Error, Result},
-=======
     endpoint::{BackupStreamResolver, ObserveOp},
     errors::{Error, ReportableResult, Result},
->>>>>>> 66301257e4 (log_backup: stop task while memory out of quota (#16008))
     event_loader::InitialDataLoader,
     future,
     metadata::{store::MetaStore, CheckpointProvider, MetadataClient},
@@ -217,30 +203,6 @@ impl ScanCmd {
         utils::record_cf_stat("default", &stat.data);
         Ok(())
     }
-<<<<<<< HEAD
-
-    /// execute the command, when meeting error, retrying.
-    async fn exec_by_with_retry(self, init: impl InitialScan) {
-        let mut retry_time = INITIAL_SCAN_FAILURE_MAX_RETRY_TIME;
-        loop {
-            match self.exec_by(init.clone()).await {
-                Err(err) if should_retry(&err) && retry_time > 0 => {
-                    tokio::time::sleep(Duration::from_millis(500)).await;
-                    warn!("meet retryable error"; "err" => %err, "retry_time" => retry_time);
-                    retry_time -= 1;
-                    continue;
-                }
-                Err(err) if retry_time == 0 => {
-                    init.handle_fatal_error(&self.region, err.context("retry time exceeds"));
-                    break;
-                }
-                // Errors which `should_retry` returns false means they can be ignored.
-                Err(_) | Ok(_) => break,
-            }
-        }
-    }
-=======
->>>>>>> 66301257e4 (log_backup: stop task while memory out of quota (#16008))
 }
 
 async fn scan_executor_loop(init: impl InitialScan, mut cmds: Receiver<ScanCmd>) {
@@ -292,12 +254,6 @@ fn spawn_executors(
 ) -> ScanPoolHandle {
     let (tx, rx) = tokio::sync::mpsc::channel(MESSAGE_BUFFER_SIZE);
     let pool = create_scan_pool(number);
-<<<<<<< HEAD
-    pool.spawn(async move {
-        scan_executor_loop(init, rx).await;
-    });
-    ScanPoolHandle { tx, _pool: pool }
-=======
     let handle = pool.handle().clone();
     handle.spawn(async move {
         scan_executor_loop(init, rx).await;
@@ -309,7 +265,6 @@ fn spawn_executors(
         tokio::task::block_in_place(move || drop(pool));
     });
     ScanPoolHandle { tx }
->>>>>>> 66301257e4 (log_backup: stop task while memory out of quota (#16008))
 }
 
 struct ScanPoolHandle {
@@ -382,13 +337,8 @@ where
         regions: R,
         meta_cli: MetadataClient<S>,
         scan_pool_size: usize,
-<<<<<<< HEAD
         leader_checker: LeadershipResolver,
-    ) -> (Self, future![()])
-=======
-        resolver: BackupStreamResolver<HChkLd, E>,
     ) -> (Sender<ObserveOp>, future![()])
->>>>>>> 66301257e4 (log_backup: stop task while memory out of quota (#16008))
     where
         E: KvEngine,
         HInit: SignificantRouter<E> + Clone + Sync + 'static,
@@ -407,23 +357,8 @@ where
             failure_count: HashMap::new(),
             memory_manager: Arc::clone(&initial_loader.quota),
         };
-<<<<<<< HEAD
-        let fut = op.clone().region_operator_loop(rx, leader_checker);
-        (op, fut)
-    }
-
-    /// send an operation request to the manager.
-    /// the returned future would be resolved after send is success.
-    /// the opeartion would be executed asynchronously.
-    pub async fn request(&self, op: ObserveOp) {
-        if let Err(err) = self.messenger.send(op).await {
-            annotate!(err, "BUG: region operator channel closed.")
-                .report("when executing region op");
-        }
-=======
         let fut = op.region_operator_loop(rx, resolver);
         (tx, fut)
->>>>>>> 66301257e4 (log_backup: stop task while memory out of quota (#16008))
     }
 
     /// wait initial scanning get finished.
@@ -442,14 +377,8 @@ where
     }
 
     /// the handler loop.
-<<<<<<< HEAD
     async fn region_operator_loop(
         self,
-=======
-    #[instrument(skip_all)]
-    async fn region_operator_loop<E, RT>(
-        mut self,
->>>>>>> 66301257e4 (log_backup: stop task while memory out of quota (#16008))
         mut message_box: Receiver<ObserveOp>,
         mut leader_checker: LeadershipResolver,
     ) {
@@ -614,7 +543,6 @@ where
         tokio::spawn(root!("scheduled_subscription"; scheduled; "after" = ?backoff, region_id));
     }
 
-    #[instrument(skip_all, fields(id = region.id))]
     async fn refresh_resolver(&self, region: &Region) {
         let need_refresh_all = !self.subs.try_update_region(region);
 
@@ -683,15 +611,6 @@ where
         Ok(())
     }
 
-<<<<<<< HEAD
-    async fn start_observe(&self, region: Region) {
-        self.start_observe_with_failure_count(region, 0).await
-    }
-
-    async fn start_observe_with_failure_count(&self, region: Region, has_failed_for: u8) {
-        let handle = ObserveHandle::new();
-        let schd = self.scheduler.clone();
-=======
     async fn start_observe(&self, region: Region, handle: ObserveHandle) {
         match self.is_available(&region, &handle).await {
             Ok(false) => {
@@ -704,38 +623,10 @@ where
             }
             _ => {}
         }
->>>>>>> 66301257e4 (log_backup: stop task while memory out of quota (#16008))
         self.subs.add_pending_region(&region);
         let res = self.try_start_observe(&region, handle.clone()).await;
         if let Err(err) = res {
             warn!("failed to start observe, would retry"; "err" => %err, utils::slog_region(&region));
-<<<<<<< HEAD
-            tokio::spawn(async move {
-                #[cfg(not(feature = "failpoints"))]
-                let delay = backoff_for_start_observe(has_failed_for);
-                #[cfg(feature = "failpoints")]
-                let delay = (|| {
-                    fail::fail_point!("subscribe_mgr_retry_start_observe_delay", |v| {
-                        let dur = v
-                            .expect("should provide delay time (in ms)")
-                            .parse::<u64>()
-                            .expect("should be number (in ms)");
-                        Duration::from_millis(dur)
-                    });
-                    backoff_for_start_observe(has_failed_for)
-                })();
-                tokio::time::sleep(delay).await;
-                try_send!(
-                    schd,
-                    Task::ModifyObserve(ObserveOp::NotifyFailToStartObserve {
-                        region,
-                        handle,
-                        err: Box::new(err),
-                        has_failed_for: has_failed_for + 1
-                    })
-                )
-            });
-=======
             try_send!(
                 self.scheduler,
                 Task::ModifyObserve(ObserveOp::NotifyStartObserveResult {
@@ -744,11 +635,9 @@ where
                     err: Some(Box::new(err)),
                 })
             );
->>>>>>> 66301257e4 (log_backup: stop task while memory out of quota (#16008))
         }
     }
 
-    #[instrument(skip_all)]
     async fn is_available(&self, region: &Region, handle: &ObserveHandle) -> Result<bool> {
         let (tx, rx) = tokio::sync::oneshot::channel();
         self.regions

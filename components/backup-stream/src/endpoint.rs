@@ -496,19 +496,7 @@ where
         let router = self.range_router.clone();
         let sched = self.scheduler.clone();
         let subs = self.subs.clone();
-<<<<<<< HEAD
         self.pool.spawn(async move {
-=======
-        let region_op = self.region_operator.clone();
-        let region = batch.region_id;
-        let from_idx = batch.cmds.first().map(|c| c.index).unwrap_or(0);
-        let (to_idx, term) = batch
-            .cmds
-            .last()
-            .map(|c| (c.index, c.term))
-            .unwrap_or((0, 0));
-        self.pool.spawn(root!("backup_batch"; async move {
->>>>>>> 66301257e4 (log_backup: stop task while memory out of quota (#16008))
             let region_id = batch.region_id;
             let kvs = Self::record_batch(subs, batch);
             let kvs = match kvs {
@@ -1169,37 +1157,6 @@ fn create_tokio_runtime(thread_count: usize, thread_name: &str) -> TokioResult<R
         .build()
 }
 
-<<<<<<< HEAD
-=======
-pub enum BackupStreamResolver<RT, EK> {
-    // for raftstore-v1, we use LeadershipResolver to check leadership of a region.
-    V1(LeadershipResolver),
-    // for raftstore-v2, it has less regions. we use CDCHandler to check leadership of a region.
-    V2(RT, PhantomData<EK>),
-    #[cfg(test)]
-    // for some test cases, it is OK to don't check leader.
-    Nop,
-}
-
-impl<RT, EK> BackupStreamResolver<RT, EK>
-where
-    RT: CdcHandle<EK> + 'static,
-    EK: KvEngine,
-{
-    pub async fn resolve(&mut self, regions: Vec<u64>, min_ts: TimeStamp) -> Vec<u64> {
-        match self {
-            BackupStreamResolver::V1(x) => x.resolve(regions, min_ts).await,
-            BackupStreamResolver::V2(x, _) => {
-                let x = x.clone();
-                resolve_by_raft(regions, min_ts, x).await
-            }
-            #[cfg(test)]
-            BackupStreamResolver::Nop => regions,
-        }
-    }
-}
-
->>>>>>> 66301257e4 (log_backup: stop task while memory out of quota (#16008))
 #[derive(Debug)]
 pub enum RegionSet {
     /// The universal set.

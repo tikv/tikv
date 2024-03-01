@@ -32,15 +32,11 @@ use crate::{
     utils, Task,
 };
 
-<<<<<<< HEAD
-const MAX_GET_SNAPSHOT_RETRY: usize = 3;
-=======
 const MAX_GET_SNAPSHOT_RETRY: usize = 5;
 /// The threshold of slowing down initial scanning.
 /// While the memory usage reaches this ratio, we will consume the result of
 /// initial scanning more frequently.
 const SLOW_DOWN_INITIAL_SCAN_RATIO: f64 = 0.7;
->>>>>>> 66301257e4 (log_backup: stop task while memory out of quota (#16008))
 
 struct ScanResult {
     more: bool,
@@ -455,12 +451,6 @@ where
         start_ts: TimeStamp,
         snap: impl Snapshot,
     ) -> Result<Statistics> {
-<<<<<<< HEAD
-        let tr = self.tracing.clone();
-        let region_id = region.get_id();
-
-=======
->>>>>>> 66301257e4 (log_backup: stop task while memory out of quota (#16008))
         let mut join_handles = Vec::with_capacity(8);
 
         let permit = self
@@ -479,18 +469,6 @@ where
             .await
             .map_err(|err| annotate!(err, "tokio runtime failed to join consuming threads"))?;
 
-<<<<<<< HEAD
-        Self::with_resolver_by(&tr, region, &handle, |r| {
-            r.phase_one_done();
-            Ok(())
-        })
-        .context(format_args!(
-            "failed to finish phase 1 for region {:?}",
-            region_id
-        ))?;
-
-=======
->>>>>>> 66301257e4 (log_backup: stop task while memory out of quota (#16008))
         Ok(stats)
     }
 }
