@@ -2633,9 +2633,6 @@ where
             self.reset_raft_tick(GroupState::Ordered);
         }
 
-        let from_peer_id = msg.get_from_peer().get_id();
-        self.fsm.peer.insert_peer_cache(msg.take_from_peer());
-
         let result = if msg_type == MessageType::MsgTransferLeader {
             self.on_transfer_leader_msg(msg.get_message(), peer_disk_usage);
             Ok(())
@@ -2674,6 +2671,7 @@ where
 
         result?;
 
+        let from_peer_id = msg.get_from_peer().get_id();
         if self.fsm.peer.any_new_peer_catch_up(from_peer_id) {
             self.fsm.peer.heartbeat_pd(self.ctx);
             self.fsm.peer.should_wake_up = true;
