@@ -2069,9 +2069,18 @@ impl<T: Simulator<HybridEngineImpl>> Cluster<HybridEngineImpl, T> {
     }
 
     pub fn get_with_snap_ctx(&mut self, key: &[u8], snap_ctx: SnapshotContext) -> Option<Vec<u8>> {
+        self.get_cf_with_snap_ctx(CF_DEFAULT, key, snap_ctx)
+    }
+
+    pub fn get_cf_with_snap_ctx(
+        &mut self,
+        cf: &str,
+        key: &[u8],
+        snap_ctx: SnapshotContext,
+    ) -> Option<Vec<u8>> {
         let mut resp = self.request_with_snap_ctx(
             key,
-            vec![new_get_cf_cmd(CF_DEFAULT, key)],
+            vec![new_get_cf_cmd(cf, key)],
             false,
             Duration::from_secs(5),
             Some(snap_ctx),
