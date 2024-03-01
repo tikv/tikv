@@ -1,5 +1,7 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::borrow::BorrowMut;
+
 use tidb_query_common::Result;
 pub use tidb_query_datatype::codec::data_type::{
     LogicalRows, BATCH_MAX_SIZE, IDENTICAL_LOGICAL_ROWS,
@@ -7,7 +9,7 @@ pub use tidb_query_datatype::codec::data_type::{
 use tidb_query_datatype::{
     codec::{
         batch::LazyBatchColumnVec,
-        data_type::{ScalarValue, ScalarValueRef, VectorValue},
+        data_type::*,
     },
     expr::EvalContext,
 };
@@ -47,6 +49,40 @@ impl<'a> RpnStackNodeVectorValue<'a> {
         }
     }
 
+    /// Gets the actual vector value.
+    pub fn take_vector_value(self) -> Result<VectorValue> {
+        match self {
+            RpnStackNodeVectorValue::Generated { physical_value } => Ok(physical_value),
+            RpnStackNodeVectorValue::Ref { physical_value, logical_rows, .. } => {
+                let mut result_vec = physical_value.clone_empty(logical_rows.len());
+                let result_vec_ref = result_vec.borrow_mut();
+                match_template::match_template! {
+                    TT = [
+                        Int,
+                        Real,
+                        Duration,
+                        Decimal,
+                        DateTime,
+                        Bytes => BytesRef,
+                        Json => JsonRef,
+                        Enum => EnumRef,
+                        Set => SetRef,
+                    ],
+                    match result_vec_ref {
+                        VectorValue::TT(dest_column) => {
+                            for index in logical_rows {
+                                let src_ref = TT::borrow_vector_value(physical_value);
+                                // TODO: This clone is not necessary.
+                                dest_column.push(src_ref.get_option_ref(*index).map(|x| x.into_owned_value()));
+                            }
+                        },
+                    }
+                }
+                Ok(result_vec)                
+            }
+        }
+    }
+
     /// Gets a reference to the logical rows.
     pub fn logical_rows_struct(&self) -> LogicalRows {
         match self {
@@ -62,6 +98,7 @@ impl<'a> RpnStackNodeVectorValue<'a> {
     pub fn logical_rows(&self) -> &[usize] {
         self.logical_rows_struct().as_slice()
     }
+
 }
 
 /// A type for each node in the RPN evaluation stack. It can be one of a scalar
@@ -122,6 +159,14 @@ impl<'a> RpnStackNode<'a> {
     #[inline]
     pub fn is_vector(&self) -> bool {
         matches!(self, RpnStackNode::Vector { .. })
+    }
+
+    /// Gets the actual vector value.
+    pub fn take_vector_value(self) -> Result<VectorValue> {
+        match self {
+            RpnStackNode::Scalar { .. } => Err(other_err!("take_vector_value on Scalar variant")),
+            RpnStackNode::Vector { value, .. } => value.take_vector_value(),
+        }
     }
 
     /// Gets a reference of the element by logical index.
@@ -1225,6 +1270,35 @@ mod tests {
                 .map(|_| Real::new(25.0).ok())
                 .collect::<Vec<Option<Real>>>()
         );
+    }
+
+    #[test]
+    fn test_take_vector_value() {
+        let scalar_node = RpnStackNode::Scalar { value: &ScalarValue::Real(Real::new(10.0).ok()), field_type: &FieldTypeTp::Double.into() };
+        scalar_node.take_vector_value().unwrap_err();
+
+        let mut column = VectorValue::with_capacity(10, EvalType::Real);
+        column.push_real(Real::new(10.0).ok());
+        column.push_real(None);
+        column.push_real(Real::new(20.0).ok());
+        let vector_generate_node = RpnStackNode::Vector { value: (RpnStackNodeVectorValue::Generated { physical_value: (column) }), field_type: &FieldTypeTp::Double.into() };
+        let taked_value = vector_generate_node.take_vector_value().unwrap().to_real_vec();
+        assert_eq!(taked_value[0].is_some_and(|x| x == 10.0), true);
+        assert_eq!(taked_value[1].is_none(), true);
+        assert_eq!(taked_value[2].is_some_and(|x| x == 20.0), true);
+
+        let mut column2 = VectorValue::with_capacity(10, EvalType::Real);
+        column2.push_real(Real::new(10.0).ok());
+        column2.push_real(None);
+        column2.push_real(Real::new(20.0).ok());
+        column2.push_real(Real::new(40.0).ok());
+        column2.push_real(None);
+        let logical_rows = vec![0, 1, 3];
+        let vector_generate_node = RpnStackNode::Vector { value: (RpnStackNodeVectorValue::Ref { physical_value: &column2, logical_rows: &logical_rows}), field_type: &FieldTypeTp::Double.into() };
+        let taked_value = vector_generate_node.take_vector_value().unwrap().to_real_vec();
+        assert_eq!(taked_value[0].is_some_and(|x| x == 10.0), true);
+        assert_eq!(taked_value[1].is_none(), true);
+        assert_eq!(taked_value[2].is_some_and(|x| x == 40.0), true);
     }
 
     #[bench]

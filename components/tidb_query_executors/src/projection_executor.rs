@@ -97,7 +97,6 @@ impl<Src: BatchExecutor> BatchExecutor for BatchProjectionExecutor<Src> {
             ..
         } = src_result;
         let logical_len = logical_rows.len();
-        let physical_len = src_result.physical_columns.rows_len();
 
         if is_drained.is_ok() && logical_len != 0 {
             for expr in &self.exprs {
@@ -117,15 +116,18 @@ impl<Src: BatchExecutor> BatchExecutor for BatchProjectionExecutor<Src> {
                         if col.is_scalar() {
                             eval_result.push(VectorValue::from_scalar(
                                 col.scalar_value().unwrap(),
-                                physical_len,
+                                logical_len,
                             ));
                         } else {
-                            // since column often refer to vector values, we can't easily
-                            // transfer the ownership, so we use clone here.
-                            eval_result.push(col.vector_value().unwrap().as_ref().clone());
+                            eval_result.push(col.take_vector_value().unwrap());
                         }
                     }
                 }
+            }
+
+            if !self.exprs.is_empty() {
+                logical_rows.clear();
+                logical_rows.extend(0..logical_len);
             }
         }
 
