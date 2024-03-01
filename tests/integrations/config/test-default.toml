@@ -20,8 +20,6 @@
 
 [metric]
 
-[raftstore]
-
 [coprocessor]
 
 [rocksdb]

@@ -424,6 +424,9 @@ pub struct Config {
 impl Default for Config {
     #[allow(deprecated)]
     fn default() -> Config {
+        let mut store_batch_system = BatchSystemConfig::default();
+        // set default store-pool-size = 1 when store-io-pool-size = 1
+        store_batch_system.pool_size = 1;
         Config {
             prevote: true,
             raftdb_path: String::new(),
@@ -499,8 +502,8 @@ impl Default for Config {
             cleanup_import_sst_interval: ReadableDuration::minutes(10),
             local_read_batch_size: 1024,
             apply_batch_system: BatchSystemConfig::default(),
-            store_batch_system: BatchSystemConfig::default(),
-            store_io_pool_size: 0,
+            store_batch_system,
+            store_io_pool_size: 1,
             store_io_notify_capacity: 40960,
             future_poll_size: 1,
             hibernate_regions: true,
