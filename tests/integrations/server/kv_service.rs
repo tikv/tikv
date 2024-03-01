@@ -3105,6 +3105,7 @@ fn test_pipelined_dml_flush() {
     flush_req.set_context(ctx.clone());
     flush_req.set_start_ts(1);
     flush_req.set_primary_key(pk.clone());
+    flush_req.set_generation(1);
     let flush_resp = client.kv_flush(&flush_req).unwrap();
     assert!(!flush_resp.has_region_error());
     assert!(flush_resp.get_errors().is_empty());
@@ -3161,6 +3162,7 @@ fn test_pipelined_dml_write_conflict() {
         }]
         .into(),
     );
+    req.set_generation(1);
     req.set_context(ctx.clone());
     req.set_start_ts(1);
     req.set_primary_key(k.clone());
@@ -3241,6 +3243,7 @@ fn test_pipelined_dml_write_conflict() {
         }]
         .into(),
     );
+    req.set_generation(2);
     req.set_context(ctx.clone());
     req.set_start_ts(2);
     req.set_primary_key(k.clone());
@@ -3278,6 +3281,7 @@ fn test_pipelined_dml_write_conflict() {
         }]
         .into(),
     );
+    req.set_generation(3);
     req.set_context(ctx.clone());
     req.set_start_ts(2);
     req.set_primary_key(k.clone());
@@ -3303,6 +3307,7 @@ fn test_pipelined_dml_read_write_conflict() {
         }]
         .into(),
     );
+    req.set_generation(1);
     req.set_context(ctx.clone());
     req.set_start_ts(1);
     req.set_primary_key(k.clone());
