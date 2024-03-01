@@ -91,11 +91,16 @@ engine_test = { workspace = true }
 grpcio = { workspace = true }
 hex = "0.4"
 protobuf = { version = "2.8", features = ["bytes"] }
+<<<<<<< HEAD
+=======
+rand = "0.8.0"
+>>>>>>> 66301257e4 (log_backup: stop task while memory out of quota (#16008))
 tempdir = "0.3"
 tempfile = "3.0"
 test_pd = { workspace = true }
 test_pd_client = { workspace = true }
 test_raftstore = { workspace = true }
 test_util = { workspace = true }
+tokio = { version = "1.5", features = ["test-util"] }
 url = "2"
 walkdir = "2"
