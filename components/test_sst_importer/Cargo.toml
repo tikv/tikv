@@ -16,3 +16,9 @@ engine_traits = { workspace = true }
 keys = { workspace = true }
 kvproto = { workspace = true }
 uuid = { version = "0.8.1", features = ["serde", "v4"] }
+grpcio = { workspace = true }
+tempfile = "3.0"
+futures = "0.3"
+txn_types = { workspace = true }
+external_storage ={ workspace = true }
+tikv_util = { workspace = true }

@@ -6,6 +6,7 @@ use futures::{executor::block_on, SinkExt};
 use grpcio::WriteFlags;
 use kvproto::import_sstpb::*;
 use test_raftstore::sleep_ms;
+use test_sst_importer::*;
 use uuid::Uuid;
 
 use super::util::*;
@@ -209,7 +210,7 @@ fn test_lease_invalid_uuid() {
 
     // Set an invalid uuid, an normal uuid should be 16 bytes.
     meta.set_uuid(vec![7, 7, 7]);
-    let resp = send_acquire_lease(&import, &meta, Duration::MAX).unwrap();
+    let resp = send_acquire_sst_lease(&import, &meta, Duration::MAX).unwrap();
     assert_eq!(resp.get_acquired().len(), 0, "{:?}", resp);
 
     let (keys, values, _) = new_write_params();

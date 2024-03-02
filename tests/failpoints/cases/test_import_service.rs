@@ -6,8 +6,8 @@ use std::{
 };
 
 use file_system::calc_crc32;
-use futures::{executor::block_on, stream, SinkExt};
-use grpcio::{ChannelBuilder, Environment, Result, WriteFlags};
+use futures::executor::block_on;
+use grpcio::{ChannelBuilder, Environment};
 use kvproto::{import_sstpb::*, tikvpb_grpc::TikvClient};
 use tempfile::{Builder, TempDir};
 use test_raftstore::{must_raw_put, Simulator};
@@ -18,9 +18,11 @@ use tikv_util::{config::ReadableSize, HandyRwLock};
 #[allow(dead_code)]
 #[path = "../../integrations/import/util.rs"]
 mod util;
+use test_sst_importer::{check_ingested_kvs, send_upload_sst, must_acquire_sst_lease};
+
 use self::util::{
-    check_ingested_kvs, new_cluster_and_tikv_import_client, new_cluster_and_tikv_import_client_tde,
-    open_cluster_and_tikv_import_client_v2, send_upload_sst, must_acquire_sst_lease,
+    new_cluster_and_tikv_import_client, new_cluster_and_tikv_import_client_tde,
+    open_cluster_and_tikv_import_client_v2,
 };
 
 // Opening sst writer involves IO operation, it may block threads for a while.
@@ -73,24 +75,6 @@ fn test_download_sst_blocking_sst_writer() {
     check_ingested_kvs(&tikv, &ctx, sst_range);
 }
 
-fn upload_sst(import: &ImportSstClient, meta: &SstMeta, data: &[u8]) -> Result<UploadResponse> {
-    let mut r1 = UploadRequest::default();
-    r1.set_meta(meta.clone());
-    let mut r2 = UploadRequest::default();
-    r2.set_data(data.to_vec());
-    let reqs: Vec<_> = vec![r1, r2]
-        .into_iter()
-        .map(|r| Result::Ok((r, WriteFlags::default())))
-        .collect();
-    let (mut tx, rx) = import.upload().unwrap();
-    let mut stream = stream::iter(reqs);
-    block_on(async move {
-        tx.send_all(&mut stream).await?;
-        tx.close().await?;
-        rx.await
-    })
-}
-
 #[test]
 fn test_ingest_reentrant() {
     let (cluster, ctx, _tikv, import) = new_cluster_and_tikv_import_client();
@@ -106,7 +90,7 @@ fn test_ingest_reentrant() {
     meta.set_region_id(ctx.get_region_id());
     meta.set_region_epoch(ctx.get_region_epoch().clone());
     must_acquire_sst_lease(&import, &meta, Duration::MAX);
-    upload_sst(&import, &meta, &data).unwrap();
+    send_upload_sst(&import, &meta, &data).unwrap();
 
     let mut ingest = IngestRequest::default();
     ingest.set_context(ctx);
@@ -157,7 +141,7 @@ fn test_ingest_key_manager_delete_file_failed() {
     meta.set_region_epoch(ctx.get_region_epoch().clone());
 
     must_acquire_sst_lease(&import, &meta, Duration::MAX);
-    upload_sst(&import, &meta, &data).unwrap();
+    send_upload_sst(&import, &meta, &data).unwrap();
 
     let deregister_fp = "key_manager_fails_before_delete_file";
     // the first delete is in check before ingest, the second is in ingest cleanup
@@ -198,7 +182,7 @@ fn test_ingest_key_manager_delete_file_failed() {
     // Do upload and ingest again, though key manager contains this file, the ingest
     // action should success.
     must_acquire_sst_lease(&import, &meta, Duration::MAX);
-    upload_sst(&import, &meta, &data).unwrap();
+    send_upload_sst(&import, &meta, &data).unwrap();
     let mut ingest = IngestRequest::default();
     ingest.set_context(ctx);
     ingest.set_sst(meta);
@@ -221,7 +205,7 @@ fn test_ingest_file_twice_and_conflict() {
     meta.set_region_id(ctx.get_region_id());
     meta.set_region_epoch(ctx.get_region_epoch().clone());
     must_acquire_sst_lease(&import, &meta, Duration::MAX);
-    upload_sst(&import, &meta, &data).unwrap();
+    send_upload_sst(&import, &meta, &data).unwrap();
     let mut ingest = IngestRequest::default();
     ingest.set_context(ctx);
     ingest.set_sst(meta.clone());
