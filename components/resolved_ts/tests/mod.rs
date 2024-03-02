@@ -4,14 +4,8 @@ use std::{sync::*, time::Duration};
 
 use collections::HashMap;
 use engine_rocks::RocksEngine;
-use futures::{executor::block_on, stream, SinkExt};
-use grpcio::{ChannelBuilder, Environment, Result, WriteFlags};
-use kvproto::{
-    import_sstpb::{IngestRequest, SstMeta, UploadRequest, UploadResponse},
-    import_sstpb_grpc::ImportSstClient,
-    kvrpcpb::*,
-    tikvpb::TikvClient,
-};
+use grpcio::{ChannelBuilder, Environment};
+use kvproto::{import_sstpb_grpc::ImportSstClient, kvrpcpb::*, tikvpb::TikvClient};
 use online_config::ConfigValue;
 use resolved_ts::Task;
 use test_raftstore::*;
@@ -249,46 +243,5 @@ impl TestSuite {
             sleep_ms(100)
         }
         panic!("fail to get greater ts after 50 trys");
-    }
-
-    pub fn upload_sst(
-        &mut self,
-        region_id: u64,
-        meta: &SstMeta,
-        data: &[u8],
-    ) -> Result<UploadResponse> {
-        let import = self.get_import_client(region_id);
-        let mut r1 = UploadRequest::default();
-        r1.set_meta(meta.clone());
-        let mut r2 = UploadRequest::default();
-        r2.set_data(data.to_vec());
-        let reqs: Vec<_> = vec![r1, r2]
-            .into_iter()
-            .map(|r| Result::Ok((r, WriteFlags::default())))
-            .collect();
-        let (mut tx, rx) = import.upload().unwrap();
-        let mut stream = stream::iter(reqs);
-        block_on(async move {
-            tx.send_all(&mut stream).await?;
-            tx.close().await?;
-            rx.await
-        })
-    }
-
-    pub fn must_ingest_sst(&mut self, region_id: u64, meta: SstMeta) {
-        let mut ingest_request = IngestRequest::default();
-        ingest_request.set_context(self.get_context(region_id));
-        ingest_request.set_sst(meta);
-
-        let ingest_sst_resp = self
-            .get_import_client(region_id)
-            .ingest(&ingest_request)
-            .unwrap();
-
-        assert!(
-            !ingest_sst_resp.has_error(),
-            "{:?}",
-            ingest_sst_resp.get_error()
-        );
     }
 }
