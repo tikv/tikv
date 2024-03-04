@@ -942,12 +942,14 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
     ) {
         let label = "ingest";
         let timer = Instant::now_coarse();
+        let mut resp = IngestResponse::default();
+
         if let Err(err) = self.check_suspend() {
-            ctx.spawn(async move { crate::send_rpc_response!(Err(err), sink, label, timer) });
+            resp.set_error(ImportPbError::from(err).take_store_error());
+            ctx.spawn(async move { crate::send_rpc_response!(Ok(resp), sink, label, timer) });
             return;
         }
 
-        let mut resp = IngestResponse::default();
         let region_id = req.get_context().get_region_id();
         if let Some(errorpb) = self.check_write_stall(region_id) {
             resp.set_error(errorpb);
@@ -989,12 +991,13 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
     ) {
         let label = "multi-ingest";
         let timer = Instant::now_coarse();
+        let mut resp = IngestResponse::default();
         if let Err(err) = self.check_suspend() {
-            ctx.spawn(async move { crate::send_rpc_response!(Err(err), sink, label, timer) });
+            resp.set_error(ImportPbError::from(err).take_store_error());
+            ctx.spawn(async move { crate::send_rpc_response!(Ok(resp), sink, label, timer) });
             return;
         }
 
-        let mut resp = IngestResponse::default();
         if let Some(errorpb) = self.check_write_stall(req.get_context().get_region_id()) {
             resp.set_error(errorpb);
             ctx.spawn(

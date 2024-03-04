@@ -23,6 +23,7 @@ use std::{
 };
 
 use api_version::{dispatch_api_version, KvFormat};
+use backup::disk_snap::Env;
 use backup_stream::{
     config::BackupStreamConfigManager, metadata::store::PdStore, observer::BackupStreamObserver,
     BackupStreamResolver,
@@ -58,7 +59,14 @@ use raftstore::{
     },
     RegionInfoAccessor,
 };
+<<<<<<< HEAD
 use raftstore_v2::{router::RaftRouter, StateStorage};
+=======
+use raftstore_v2::{
+    router::{DiskSnapBackupHandle, PeerMsg, RaftRouter},
+    StateStorage,
+};
+>>>>>>> 956c9f377d (snapshot_backup: enhanced prepare stage (#15946))
 use resolved_ts::Task;
 use resource_control::{
     ResourceGroupManager, ResourceManagerService, MIN_PRIORITY_UPDATE_INTERVAL,
@@ -900,7 +908,10 @@ where
         // Backup service.
         let mut backup_worker = Box::new(self.core.background_worker.lazy_build("backup-endpoint"));
         let backup_scheduler = backup_worker.scheduler();
-        let backup_service = backup::Service::<RocksEngine, ER>::new(backup_scheduler);
+        let backup_service = backup::Service::new(
+            backup_scheduler,
+            Env::new(DiskSnapBackupHandle, Default::default(), None),
+        );
         if servers
             .server
             .register_service(create_backup(backup_service))
