@@ -201,6 +201,7 @@ fn test_serde_custom_tikv_config() {
         region_compact_redundant_rows_percent: 33,
         pd_heartbeat_tick_interval: ReadableDuration::minutes(12),
         pd_store_heartbeat_tick_interval: ReadableDuration::secs(12),
+        pd_report_min_resolved_ts_interval: ReadableDuration::millis(233),
         notify_capacity: 12_345,
         snap_mgr_gc_tick_interval: ReadableDuration::minutes(12),
         snap_gc_timeout: ReadableDuration::hours(12),
@@ -247,8 +248,11 @@ fn test_serde_custom_tikv_config() {
         io_reschedule_concurrent_max_count: 1234,
         io_reschedule_hotpot_duration: ReadableDuration::secs(4321),
         inspect_interval: ReadableDuration::millis(444),
+<<<<<<< HEAD
         report_min_resolved_ts_interval: ReadableDuration::millis(233),
         raft_msg_flush_interval: ReadableDuration::micros(250),
+=======
+>>>>>>> bc1ae30437 (pd_client: support dynamically modifying `min-resolved-ts` report interval and reduce retry times (#15837))
         check_leader_lease_interval: ReadableDuration::millis(123),
         renew_leader_lease_advance_duration: ReadableDuration::millis(456),
         reactive_memory_lock_tick_interval: ReadableDuration::millis(566),
