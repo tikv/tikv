@@ -543,10 +543,9 @@ where
         }
         let tx = tx.unwrap();
         // tikv_util::Instant cannot be converted to std::time::Instant :(
-        let start = std::time::Instant::now();
         debug!("Scheduing subscription."; utils::slog_region(&region), "after" => ?backoff, "handle" => ?handle);
         let scheduled = async move {
-            tokio::time::sleep_until((start + backoff).into()).await;
+            tokio::time::sleep(backoff).await;
             let handle = handle.unwrap_or_else(|| ObserveHandle::new());
             if let Err(err) = tx.send(ObserveOp::Start { region, handle }).await {
                 warn!("log backup failed to schedule start observe."; "err" => %err);
@@ -1181,6 +1180,24 @@ mod test {
                 .unwrap();
         }
 
+        fn sync(&self) {
+            self.rt.block_on(async {
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                self.handle
+                    .as_ref()
+                    .unwrap()
+                    .send(ObserveOp::ResolveRegions {
+                        callback: Box::new(move |_result| {
+                            tx.send(()).unwrap();
+                        }),
+                        min_ts: self.task_start_ts.next(),
+                    })
+                    .await
+                    .unwrap();
+                rx.await.unwrap();
+            })
+        }
+
         #[track_caller]
         fn wait_initial_scan_all_finish(&self, expected_region: usize) {
             info!("[TEST] Start waiting initial scanning finish.");
@@ -1228,7 +1245,6 @@ mod test {
 
     #[test]
     fn test_basic_retry() {
-        test_util::init_log_for_test();
         use ObserveEvent::*;
         let failed = Arc::new(AtomicBool::new(false));
         let mut suite = Suite::new(FuncInitialScan(move |r, _, _| {
@@ -1250,8 +1266,8 @@ mod test {
                 Start(1),
                 Start(2),
                 StartResult(1, false),
-                StartResult(2, true),
                 Start(1),
+                StartResult(2, true),
                 StartResult(1, true)
             ]
         );
@@ -1270,7 +1286,7 @@ mod test {
         assert_eq!(rs, [1, 2]);
         suite.wait_initial_scan_all_finish(2);
         suite.run(ObserveOp::HighMemUsageWarning { region_id: 1 });
-        suite.advance_ms(0);
+        suite.sync();
         assert_eq!(suite.subs.current_regions(), [2]);
         suite.advance_ms(
             (OOM_BACKOFF_BASE + Duration::from_secs(OOM_BACKOFF_JITTER_SECS + 1)).as_millis() as _,
