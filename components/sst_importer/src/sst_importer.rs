@@ -54,7 +54,7 @@ use crate::{
     import_file::{ImportDir, ImportFile},
     import_mode::{ImportModeSwitcher, RocksDbMetricsFn},
     import_mode2::{HashRange, ImportModeSwitcherV2},
-    mediate::LeaseRef,
+    mediate::{periodic_gc_mediator, LeaseRef},
     metrics::*,
     sst_writer::{RawSstWriter, TxnSstWriter},
     util, Config, ConfigManager as ImportConfigManager, Error, Mediator, Observer, Result,
@@ -164,7 +164,7 @@ pub struct SstImporter<E: KvEngine> {
 
     cached_storage: CacheMap<StorageBackend>,
     // We need to keep reference to the runtime so background tasks won't be dropped.
-    _download_rt: Runtime,
+    _auxiliary_rt: Runtime,
     file_locks: Arc<DashMap<String, (CacheKvFile, Instant)>>,
     mem_use: Arc<AtomicU64>,
     mem_limit: Arc<AtomicU64>,
@@ -189,10 +189,10 @@ impl<E: KvEngine> SstImporter<E> {
         };
         let cached_storage = CacheMap::default();
         // We are going to run some background tasks here, (hyper needs to maintain the
-        // connection, the cache map needs gc intervally.) so we must create a
+        // connection, the cache map needs gc periodically.) so we must create a
         // multi-thread runtime, given there isn't blocking, a single thread runtime is
         // enough.
-        let download_rt = tokio::runtime::Builder::new_multi_thread()
+        let auxiliary_rt = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(1)
             .thread_name("sst_import_misc")
             .with_sys_and_custom_hooks(
@@ -203,7 +203,12 @@ impl<E: KvEngine> SstImporter<E> {
             )
             .enable_all()
             .build()?;
-        download_rt.spawn(cached_storage.gc_loop());
+        auxiliary_rt.spawn(cached_storage.gc_loop());
+        let mediator = Arc::downgrade(&ingest_mediator);
+        let gc_mediator_duration = Duration::from_secs(60);
+        auxiliary_rt.spawn(async move {
+            periodic_gc_mediator(mediator, gc_mediator_duration).await;
+        });
 
         let memory_limit = Self::calcualte_usage_mem(cfg.memory_use_ratio);
         info!(
@@ -222,7 +227,7 @@ impl<E: KvEngine> SstImporter<E> {
             compression_types: HashMap::with_capacity(2),
             file_locks: Arc::new(DashMap::default()),
             cached_storage,
-            _download_rt: download_rt,
+            _auxiliary_rt: auxiliary_rt,
             mem_use: Arc::new(AtomicU64::new(0)),
             mem_limit: Arc::new(AtomicU64::new(memory_limit)),
             ingest_mediator,
@@ -522,7 +527,7 @@ impl<E: KvEngine> SstImporter<E> {
         speed_limiter: &Limiter,
         restore_config: external_storage::RestoreConfig,
     ) -> Result<()> {
-        self._download_rt
+        self._auxiliary_rt
             .block_on(self.async_download_file_from_external_storage(
                 file_length,
                 src_file_name,
@@ -1141,7 +1146,7 @@ impl<E: KvEngine> SstImporter<E> {
         speed_limiter: Limiter,
         engine: E,
     ) -> Result<Option<Range>> {
-        self._download_rt.block_on(self.download_ext(
+        self._auxiliary_rt.block_on(self.download_ext(
             meta,
             backend,
             name,

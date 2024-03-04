@@ -3,13 +3,16 @@
 use std::{
     sync::{
         atomic::{AtomicU64, Ordering},
-        Arc, RwLock,
+        Arc, Weak,
     },
     time::{Duration, Instant},
 };
 
-use collections::{HashMap, HashMapEntry};
+use futures::compat::Future01CompatExt;
 use uuid::Uuid;
+
+mod observer;
+pub use observer::IngestObserver;
 
 #[derive(Clone)]
 pub enum Event {
@@ -77,12 +80,14 @@ pub trait Observer: Sync + Send {
     // Returns a valid lease uuid for a region.
     // Called by Resolver before advancing resolved_ts.
     fn get_region_lease(&self, region_id: u64) -> Option<Uuid>;
+    fn gc(&self);
 }
 
 pub trait Mediator: Sync + Send {
     fn pause(&self, region_id: u64, uuid: Uuid, deadline: Instant);
     fn continues(&self, region_id: u64, uuid: Uuid);
     fn register(&mut self, comp: Arc<dyn Observer>);
+    fn gc(&self);
 }
 
 #[derive(Default)]
@@ -112,157 +117,34 @@ impl Mediator for IngestMediator {
     fn register(&mut self, comp: Arc<dyn Observer>) {
         self.comps.push(comp)
     }
+
+    fn gc(&self) {
+        for comp in &self.comps {
+            comp.gc();
+        }
+    }
 }
 
-#[derive(Default)]
-pub struct IngestObserver {
-    // region_id -> (uuid -> deadline)
-    sst_leases: RwLock<HashMap<u64, HashMap<Uuid, LeaseState>>>,
-}
-
-impl Observer for IngestObserver {
-    fn update(&self, event: Event) {
-        match event {
-            Event::Pause {
-                region_id,
-                uuid,
-                deadline,
-            } => {
-                self.upsert_lease(region_id, uuid, deadline);
-            }
-            Event::Continue { region_id, uuid } => {
-                self.expire_lease(region_id, &[uuid]);
-            }
-        }
-        // TODO: batch clean up expired leases.
-    }
-
-    fn query(&self, region_id: u64, uuid: &Uuid) -> Option<LeaseRef> {
-        let ssts = self.sst_leases.read().unwrap();
-        let Some(leases) = ssts.get(&region_id) else {
-            return None;
+pub async fn periodic_gc_mediator(mediator: Weak<dyn Mediator>, duration: Duration) {
+    loop {
+        let Some(m) = mediator.upgrade() else {
+            return;
         };
-        warn!("dbg query"; "region_id" => region_id, "leases" => format!("{:?}", ssts.get(&region_id)));
-        leases.get(uuid).map(|lease| lease.ref_())
-    }
-
-    fn get_region_lease(&self, region_id: u64) -> Option<Uuid> {
-        let ssts = self.sst_leases.read().unwrap();
-        let leases = ssts.get(&region_id)?;
-        for (uuid, lease) in leases {
-            if !lease.is_expired() || lease.has_ref() {
-                return Some(*uuid);
-            }
-        }
-        None
-    }
-
-    // fn query(&self, region_id: u64, uuid: Option<Uuid>) -> Option<Instant> {
-    //     let mut expired_leases = vec![];
-    //     let mut valid_lease = None;
-    //     {
-    //         let now = Instant::now();
-    //         let ssts = self.sst_leases.read().unwrap();
-    //         let Some(leases) = ssts.get(&region_id) else {
-    //             return None;
-    //         };
-    //         for (uuid, deadline) in leases {
-    //             if now < *deadline {
-    //                 valid_lease = Some(*deadline);
-    //             } else {
-    //                 expired_leases.push(*uuid);
-    //                 info!("ingest lease expired";
-    //                     "region_id" => region_id,
-    //                     "uuid" => ?uuid,
-    //                 );
-    //             }
-    //         }
-    //     }
-    //     if !expired_leases.is_empty() {
-    //         // Clean up expired leases.
-    //         self.expire_lease(region_id, &expired_leases);
-    //     }
-    //     valid_lease
-    // }
-}
-
-impl IngestObserver {
-    fn upsert_lease(&self, region_id: u64, uuid: Uuid, deadline: Instant) {
-        let mut ssts = self.sst_leases.write().unwrap();
-        let region_leases = ssts.entry(region_id).or_default();
-        match region_leases.entry(uuid) {
-            HashMapEntry::Vacant(e) => {
-                e.insert(LeaseState {
-                    deadline,
-                    ref_count: Arc::default(),
-                });
-            }
-            HashMapEntry::Occupied(mut e) => {
-                // Update deadline and keep ref_count as it is.
-                e.get_mut().deadline = deadline;
-            }
-        };
-        warn!("dbg upsert"; "region_id" => region_id, "leases" => format!("{:?}", ssts.get(&region_id)));
-    }
-    fn expire_lease(&self, region_id: u64, uuids: &[Uuid]) {
-        let mut ssts = self.sst_leases.write().unwrap();
-        if let HashMapEntry::Occupied(mut leases) = ssts.entry(region_id) {
-            for uuid in uuids {
-                if let Some(lease) = leases.get_mut().get_mut(uuid) {
-                    if lease.has_ref() {
-                        // Do not remove a lease that has refs.
-                        lease.expire();
-                    } else {
-                        leases.get_mut().remove(uuid);
-                    }
-                }
-            }
-            if leases.get().is_empty() {
-                leases.remove();
-            }
-        } else {
-            warn!("ingest lease not found"; "region_id" => region_id);
-        };
-        const MIN_SHRINK_CAP: usize = 1024;
-        if ssts.capacity() > MIN_SHRINK_CAP && ssts.capacity() > ssts.len() * 2 {
-            ssts.shrink_to(MIN_SHRINK_CAP);
-        }
-        warn!("dbg expire"; "region_id" => region_id, "leases" => format!("{:?}", ssts.get(&region_id)));
+        m.gc();
+        let _ = tikv_util::timer::GLOBAL_TIMER_HANDLE
+            .delay(Instant::now() + duration)
+            .compat()
+            .await;
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::{assert_matches::assert_matches, thread, time::Duration};
+    use std::{thread, time::Duration};
+
+    use futures::executor::block_on;
 
     use super::*;
-
-    #[test]
-    fn test_observer_get_region_lease() {
-        let observer = IngestObserver::default();
-        let region_id = 1;
-        assert!(observer.get_region_lease(region_id).is_none());
-
-        let uuid = Uuid::new_v4();
-        let deadline = Instant::now() + Duration::from_secs(60);
-        observer.update(Event::Pause {
-            region_id,
-            uuid,
-            deadline,
-        });
-        assert_eq!(observer.get_region_lease(region_id).unwrap(), uuid);
-
-        observer.update(Event::Continue { region_id, uuid });
-        assert!(observer.get_region_lease(region_id).is_none());
-
-        observer.update(Event::Pause {
-            region_id,
-            uuid,
-            deadline: Instant::now(),
-        });
-        thread::sleep(Duration::from_millis(200));
-        assert!(observer.get_region_lease(region_id).is_none());
-    }
 
     #[test]
     fn test_lease_ref_is_expired() {
@@ -298,88 +180,37 @@ mod tests {
     }
 
     #[test]
-    fn test_observer_upsert_lease() {
-        let observer = IngestObserver::default();
-        let region_id = 1;
-        let uuid1 = Uuid::new_v4();
-        let deadline1 = Instant::now();
-        let uuid2 = Uuid::new_v4();
-        let deadline2 = Instant::now();
-        observer.update(Event::Pause {
-            region_id,
-            uuid: uuid1,
-            deadline: deadline1,
+    fn test_gc() {
+        struct Mock {
+            gc_count: AtomicU64,
+        }
+        impl Observer for Mock {
+            fn update(&self, _: Event) {}
+            fn query(&self, _: u64, _: &Uuid) -> Option<LeaseRef> {
+                None
+            }
+            fn get_region_lease(&self, _: u64) -> Option<Uuid> {
+                None
+            }
+            fn gc(&self) {
+                self.gc_count.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+
+        let mock = Arc::new(Mock {
+            gc_count: AtomicU64::new(0),
         });
-        observer.update(Event::Pause {
-            region_id,
-            uuid: uuid2,
-            deadline: deadline2,
+        let mut mediator = IngestMediator::default();
+        mediator.register(mock.clone());
+        let mediator = Arc::new(mediator);
+        let mediator_weak = Arc::downgrade(&mediator);
+        thread::spawn(move || {
+            block_on(periodic_gc_mediator(
+                mediator_weak,
+                Duration::from_millis(100),
+            ))
         });
-
-        let assert_ref_count = |uuid, count: u64| {
-            assert_eq!(
-                observer.sst_leases.read().unwrap()[&region_id][&uuid]
-                    .ref_count
-                    .load(Ordering::SeqCst),
-                count,
-            );
-        };
-
-        let ref1 = observer.query(region_id, &uuid1).unwrap();
-        assert_eq!(ref1.lease.deadline, deadline1);
-        assert_ref_count(uuid1, 1);
-        let ref2 = observer.query(region_id, &uuid2).unwrap();
-        assert_eq!(ref2.lease.deadline, deadline2);
-
-        // Make sure upsert does not overwrite ref_count.
-        let deadline3 = Instant::now();
-        observer.update(Event::Pause {
-            region_id,
-            uuid: uuid1,
-            deadline: deadline3,
-        });
-        let ref3 = observer.query(region_id, &uuid1).unwrap();
-        assert_eq!(ref3.lease.deadline, deadline3);
-        assert_ref_count(uuid1, 2);
-    }
-
-    #[test]
-    fn test_observer_expire_lease() {
-        let observer = IngestObserver::default();
-        let region_id = 1;
-        let uuid1 = Uuid::new_v4();
-        let deadline1 = Instant::now();
-        let uuid2 = Uuid::new_v4();
-        let deadline2 = Instant::now();
-        observer.update(Event::Pause {
-            region_id,
-            uuid: uuid1,
-            deadline: deadline1,
-        });
-        observer.update(Event::Pause {
-            region_id,
-            uuid: uuid2,
-            deadline: deadline2,
-        });
-
-        // Hold a ref to uuid1.
-        let ref1 = observer.query(region_id, &uuid1).unwrap();
-        assert_eq!(ref1.lease.deadline, deadline1);
-
-        observer.update(Event::Continue {
-            region_id,
-            uuid: uuid1,
-        });
-        observer.update(Event::Continue {
-            region_id,
-            uuid: uuid2,
-        });
-
-        // Make sure expire does not remove a lease that has refs.
-        let ref11 = observer.query(region_id, &uuid1).unwrap();
-        // Make sure the unremoved lease is indeed expired.
-        assert!(ref11.is_expired());
-
-        assert_matches!(observer.query(region_id, &uuid2), None);
+        thread::sleep(Duration::from_millis(500));
+        assert!(mock.gc_count.load(Ordering::SeqCst) > 2);
     }
 }
