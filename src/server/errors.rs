@@ -69,6 +69,9 @@ pub enum Error {
 
     #[error("{0:?}")]
     StreamDisconnect(#[from] SendError),
+
+    #[error("cluster of request={0:?} does not match TiKV cluster id={1:?}")]
+    ClusterIDMisMatch(u64, u64),
 }
 
 pub type Result<T> = result::Result<T, Error>;

@@ -3410,3 +3410,67 @@ fn test_check_cluster_id() {
     assert!(error_match);
     assert_eq!(max_ts_before_req, cm.max_ts());
 }
+
+#[test]
+fn test_check_cluster_id_for_batch_cmds() {
+    let (_cluster, client, ctx) = must_new_cluster_and_kv_client();
+    let k1 = b"k1";
+    let v1 = b"v1";
+    let ts = 1;
+    // Prewrite and commit.
+    let mut mutation = Mutation::default();
+    mutation.set_op(Op::Put);
+    mutation.set_key(k1.to_vec());
+    mutation.set_value(v1.to_vec());
+    must_kv_prewrite(&client, ctx.clone(), vec![mutation], k1.to_vec(), ts);
+    must_kv_commit(&client, ctx.clone(), vec![k1.to_vec()], ts, ts + 1, ts + 1);
+
+    // Test batch command requests.
+    for set_cluster_id in [false, true] {
+        let batch_req_num = 10usize;
+        for invalid_req_index in [0, 5, 9, 20] {
+            let (mut sender, receiver) = client.batch_commands().unwrap();
+            let mut batch_req = BatchCommandsRequest::default();
+            for i in 0..batch_req_num {
+                let mut get = GetRequest::default();
+                get.version = ts + 10;
+                get.key = k1.to_vec();
+                get.set_context(ctx.clone());
+                if set_cluster_id {
+                    get.mut_context().cluster_id = ctx.cluster_id;
+                    if i == invalid_req_index {
+                        get.mut_context().cluster_id = ctx.cluster_id + 100;
+                    }
+                }
+                let mut req = batch_commands_request::Request::default();
+                req.cmd = Some(batch_commands_request::request::Cmd::Get(get));
+                batch_req.mut_requests().push(req);
+                batch_req.mut_request_ids().push(i as u64);
+            }
+            block_on(sender.send((batch_req, WriteFlags::default()))).unwrap();
+            block_on(sender.close()).unwrap();
+            let (tx, rx) = mpsc::sync_channel(1);
+
+            thread::spawn(move || {
+                let mut count = 0;
+                for x in block_on(
+                    receiver
+                        .map(move |b| match b {
+                            Ok(batch) => batch.get_responses().len(),
+                            Err(..) => 0,
+                        })
+                        .collect::<Vec<usize>>(),
+                ) {
+                    count += x;
+                }
+                tx.send(count).unwrap();
+            });
+            let received_cnt = rx.recv_timeout(Duration::from_secs(2)).unwrap();
+            if !set_cluster_id || invalid_req_index >= batch_req_num {
+                assert_eq!(received_cnt, batch_req_num);
+            } else {
+                assert!(received_cnt < batch_req_num);
+            }
+        }
+    }
+}
