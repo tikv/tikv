@@ -144,7 +144,7 @@ paste = "1.0"
 pd_client = { workspace = true }
 pin-project = "1.0"
 pnet_datalink = "0.23"
-pprof = { version = "0.11", default-features = false, features = [
+pprof = { version = "0.13", default-features = false, features = [
   "flamegraph",
   "protobuf-codec",
 ] }
@@ -250,7 +250,7 @@ procinfo = { git = "https://github.com/tikv/procinfo-rs", rev = "7693954bd1dd86e
 # [patch.'https://github.com/pingcap/kvproto']
 # kvproto = { git = "https://github.com/your_github_id/kvproto", branch = "your_branch" }
 [patch.'https://github.com/pingcap/kvproto']
-kvproto = { path = "/home/stn/kvproto" }
+kvproto = { git = "https://github.com/overvenus/kvproto", branch = "resolved-ts-compat" }
 #
 # After the PR to rust-rocksdb is merged, remember to comment this out and run `cargo update -p rocksdb`.
 # [patch.'https://github.com/tikv/rust-rocksdb']
