@@ -64,11 +64,7 @@ fn test_lease_expire() {
     let resp = send_write_sst(&import, &meta, keys.clone(), values.clone(), 1).unwrap();
     assert_eq!(resp.metas.len(), 1);
     // A successful ingest expires its lease.
-    let mut ingest = IngestRequest::default();
-    ingest.set_context(ctx.clone());
-    ingest.set_sst(resp.metas[0].clone());
-    let resp = import.ingest(&ingest).unwrap();
-    assert!(!resp.has_error());
+    must_ingest_sst(&import, ctx.clone(), resp.metas[0].clone());
     check_ingested_txn_kvs(&tikv, &ctx, sst_range, 2);
 
     // Must fail with lease expired.
