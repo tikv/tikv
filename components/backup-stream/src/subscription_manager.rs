@@ -542,9 +542,10 @@ where
             return;
         }
         let tx = tx.unwrap();
-        // tikv_util::Instant cannot be converted to std::time::Instant :(
         debug!("Scheduing subscription."; utils::slog_region(&region), "after" => ?backoff, "handle" => ?handle);
         let scheduled = async move {
+            // In v6.5.x, it seems our test case isn't pretty stable when we use
+            // `sleep_until`. Sleep directly here. (This may slightly increase the delay)
             tokio::time::sleep(backoff).await;
             let handle = handle.unwrap_or_else(|| ObserveHandle::new());
             if let Err(err) = tx.send(ObserveOp::Start { region, handle }).await {
