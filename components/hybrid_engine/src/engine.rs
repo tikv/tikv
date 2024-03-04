@@ -192,7 +192,7 @@ mod tests {
         {
             let mut core = memory_engine.core().write().unwrap();
             core.mut_range_manager().set_range_readable(&range, true);
-            core.mut_range_manager().set_safe_ts(&range, 10);
+            core.mut_range_manager().set_safe_point(&range, 10);
         }
 
         let hybrid_engine = HybridEngine::new(disk_engine, memory_engine.clone());
