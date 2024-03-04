@@ -64,6 +64,8 @@ snmalloc = ["tikv/snmalloc"]
 mem-profiling = ["tikv/mem-profiling"]
 sse = ["tikv/sse"]
 portable = ["tikv/portable"]
+openssl-vendored = ["tikv/openssl-vendored"]
+sm4 = ["tikv/sm4"]
 
 [dependencies]
 api_version = { workspace = true }

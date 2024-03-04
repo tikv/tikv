@@ -11,6 +11,7 @@ cloud-aws = ["aws"]
 cloud-gcp = ["gcp"]
 cloud-azure = ["azure"]
 sm4 = ["encryption/sm4"]
+openssl-vendored = ["encryption/openssl-vendored"]
 
 [dependencies]
 async-trait = "0.1"

@@ -134,6 +134,7 @@ ifeq ($(ENABLE_FIPS),1)
 DOCKER_IMAGE_TAG := ${DOCKER_IMAGE_TAG}-fips
 DOCKER_FILE := ${DOCKER_FILE}.FIPS
 else
+ENABLE_FEATURES += sm4
 ENABLE_FEATURES += openssl-vendored
 endif
 

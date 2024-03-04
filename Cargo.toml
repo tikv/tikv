@@ -59,7 +59,11 @@ openssl-vendored = [
   # Enabling "grpcio/openssl-vendored" explicitly makes grpcio-sys depends on
   # openssl-sys and correctly links to the static openssl.
   "grpcio/openssl-vendored",
-  # NB: Enable SM4 support if OpenSSL is built from source and statically linked.
+  "encryption_export/openssl-vendored",
+]
+# NB: Enable SM4 support if OpenSSL is built from source and statically linked.
+sm4 = [
+  "openssl-vendored",
   "encryption_export/sm4",
 ]
 

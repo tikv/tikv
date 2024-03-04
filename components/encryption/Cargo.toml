@@ -7,9 +7,10 @@ license = "Apache-2.0"
 
 [features]
 failpoints = ["fail/failpoints"]
+openssl-vendored = ["openssl/vendored"]
 # openssl/vendored is necssary in order to conditionally building SM4 encryption
 # support, as SM4 is disabled on various openssl distributions, such as Rocky Linux 9.
-sm4 = ["openssl/vendored"]
+sm4 = ["openssl-vendored"]
 
 [dependencies]
 async-trait = "0.1"
