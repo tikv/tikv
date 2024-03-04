@@ -4,8 +4,10 @@ use bytes::Bytes;
 use engine_traits::{
     CacheRange, Mutable, Result, WriteBatch, WriteBatchExt, WriteOptions, CF_DEFAULT,
 };
-use slog_global::warn;
-use tikv_util::box_err;
+use lazy_static::lazy_static;
+use prometheus::*;
+use prometheus_static_metric::*;
+use tikv_util::{box_err, info, time::Instant};
 
 use crate::{
     engine::{cf_to_id, RangeCacheMemoryEngineCore, SkiplistEngine},
@@ -13,6 +15,27 @@ use crate::{
     range_manager::RangeManager,
     RangeCacheMemoryEngine,
 };
+
+make_auto_flush_static_metric! {
+    pub label_enum WriteCmdType {
+        put,
+    }
+
+    pub struct WriteCmdVec : LocalIntCounter {
+        "type" => WriteCmdType,
+    }
+}
+
+lazy_static! {
+    pub static ref PEER_WRITE_CMD_COUNTER_VEC: IntCounterVec = register_int_counter_vec!(
+        "in_memory_engine_write_cmd_total",
+        "Total number of write cmd processed.",
+        &["type"]
+    )
+    .unwrap();
+    pub static ref PEER_WRITE_CMD_COUNTER: WriteCmdVec =
+        auto_flush_from!(PEER_WRITE_CMD_COUNTER_VEC, WriteCmdVec);
+}
 
 pub struct RangeCacheWriteBatch {
     buffer: Vec<RangeCacheWriteBatchEntry>,
@@ -69,6 +92,7 @@ impl RangeCacheWriteBatch {
     // todo(SpadeA): now, we cache all keys even for those that will not be written
     // in to the memory engine.
     fn write_impl(&mut self, seq: u64) -> Result<()> {
+        let t = Instant::now();
         self.engine.handle_pending_load();
         let mut keys_to_cache: BTreeMap<CacheRange, Vec<(u64, RangeCacheWriteBatchEntry)>> =
             BTreeMap::new();
@@ -99,7 +123,13 @@ impl RangeCacheWriteBatch {
         }
         filtered_keys
             .into_iter()
-            .try_for_each(|e| e.write_to_memory(&engine, seq))
+            .try_for_each(|e| e.write_to_memory(&engine, seq))?;
+
+        info!(
+            "write_impl";
+            "taks(ms)" => t.saturating_elapsed().as_millis(),
+        );
+        Ok(())
     }
 }
 
@@ -198,6 +228,7 @@ impl RangeCacheWriteBatchEntry {
 
     #[inline]
     pub fn write_to_memory(&self, skiplist_engine: &SkiplistEngine, seq: u64) -> Result<()> {
+        PEER_WRITE_CMD_COUNTER.put.inc();
         let handle = &skiplist_engine.data[self.cf];
         let (key, value) = self.encode(seq);
         // todo(SpadeA): handle the put error

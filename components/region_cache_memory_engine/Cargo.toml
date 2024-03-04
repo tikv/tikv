@@ -25,6 +25,9 @@ engine_rocks = { workspace = true }
 fail = "0.5"
 kvproto = { workspace = true }
 yatp = { workspace = true }
+lazy_static = "1.3"
+prometheus = { version = "0.13", features = ["nightly"] }
+prometheus-static-metric = "0.5"
 
 [dev-dependencies]
 keys = { workspace = true }

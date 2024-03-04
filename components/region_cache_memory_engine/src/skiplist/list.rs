@@ -14,9 +14,8 @@ use std::{
 };
 
 use bytes::Bytes;
-use crossbeam_epoch::{self, default_collector, pin, Atomic, Collector, Guard, Shared};
+use crossbeam_epoch::{self, pin, Atomic, Collector, Guard, Shared};
 use crossbeam_utils::CachePadded;
-use slog_global::{info, warn};
 
 use super::{key::KeyComparator, memory_control::MemoryController, Bound, Error};
 
@@ -44,7 +43,7 @@ impl Index<usize> for Tower {
     fn index(&self, index: usize) -> &Atomic<Node> {
         // This implementation is actually unsafe since we don't check if the
         // index is in-bounds. But this is fine since this is only used internally.
-        unsafe { self.pointers.get_unchecked(index) }
+        unsafe { &*(&self.pointers as *const Atomic<Node>).add(index) }
     }
 }
 
@@ -388,10 +387,7 @@ impl<C: KeyComparator, M: MemoryController> Skiplist<C, M> {
     /// `Collector`.
     fn check_guard(&self, guard: &Guard) {
         if let Some(c) = guard.collector() {
-            if c != &self.inner.collector {
-                // panic!("collector not equal");
-            }
-            // assert!(c == &self.inner.collector);
+            assert!(c == &self.inner.collector);
         }
     }
 
@@ -636,7 +632,6 @@ impl<C: KeyComparator, M: MemoryController> Skiplist<C, M> {
     }
 
     pub fn put(&self, key: impl Into<Bytes>, value: impl Into<Bytes>) -> Result<bool, Error> {
-        info!("put begin");
         let guard = &crossbeam_epoch::pin();
         let (key, value) = (key.into(), value.into());
         self.check_guard(guard);
@@ -657,17 +652,14 @@ impl<C: KeyComparator, M: MemoryController> Skiplist<C, M> {
             }
 
             let height = self.random_height();
-            info!("put 1");
             let (node, n) = {
                 let n = Node::create_node(key, value, height, 1, &self.inner.memory_controller)?;
                 (Shared::<Node>::from(n as *const _), &*n)
             };
-            info!("put 2");
             loop {
                 // Set the lowest successor of `n` to `search.right[0]`.
                 n.tower[0].store(search.right[0], Ordering::Relaxed);
 
-                info!("put 3");
                 // Try installing the new node into the skip list (at level 0).
                 if search.left[0][0]
                     .compare_exchange(
@@ -679,11 +671,9 @@ impl<C: KeyComparator, M: MemoryController> Skiplist<C, M> {
                     )
                     .is_ok()
                 {
-                    info!("put 4");
                     break;
                 }
 
-                info!("put 5");
                 // We failed. Let's search for the key and try again.
                 {
                     // Create a guard that destroys the new node in case search panics.
@@ -1043,6 +1033,7 @@ pub(crate) mod tests {
     };
 
     use crossbeam::channel::unbounded;
+    use crossbeam_epoch::default_collector;
     use proptest::{prelude::prop, prop_oneof, proptest, strategy::Strategy};
     use rand::{thread_rng, Rng};
 

@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex};
 
 use collections::{HashMap, HashSet};
 
-use crate::skiplist::{MemoryController, Node, NodeAllocationRecorder};
+use crate::skiplist::{MemoryController, NodeAllocationRecorder};
 
 // todo: implement a real memory limiter. Now, it is used for test.
 #[derive(Clone, Default)]

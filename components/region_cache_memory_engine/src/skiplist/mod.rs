@@ -5,7 +5,7 @@ mod list;
 mod memory_control;
 
 pub use key::KeyComparator;
-pub use list::{IterRef, Node, Skiplist};
+pub use list::{IterRef, Skiplist};
 pub use memory_control::{MemoryController, NodeAllocationRecorder};
 
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
