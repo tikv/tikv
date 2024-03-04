@@ -1093,6 +1093,8 @@ pub struct DbConfig {
     pub enable_multi_batch_write: bool,
     #[online_config(skip)]
     pub enable_unordered_write: bool,
+    #[online_config(skip)]
+    pub track_and_verify_wals_in_manifest: bool,
     #[online_config(submodule)]
     pub defaultcf: DefaultCfConfig,
     #[online_config(submodule)]
@@ -1144,6 +1146,7 @@ impl Default for DbConfig {
             enable_pipelined_write: false,
             enable_multi_batch_write: true, // deprecated
             enable_unordered_write: false,
+            track_and_verify_wals_in_manifest: false,
             defaultcf: DefaultCfConfig::default(),
             writecf: WriteCfConfig::default(),
             lockcf: LockCfConfig::default(),
@@ -1210,6 +1213,7 @@ impl DbConfig {
         if self.titan.enabled {
             opts.set_titandb_options(&self.titan.build_opts());
         }
+        opts.set_track_and_verify_wals_in_manifest(self.track_and_verify_wals_in_manifest);
         opts
     }
 
