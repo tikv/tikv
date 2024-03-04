@@ -6071,8 +6071,14 @@ dependencies = [
  "crc32fast",
  "engine_rocks",
  "engine_traits",
+ "external_storage",
+ "futures 0.3.15",
+ "grpcio",
  "keys",
  "kvproto",
+ "tempfile",
+ "tikv_util",
+ "txn_types",
  "uuid 0.8.2",
 ]
 
