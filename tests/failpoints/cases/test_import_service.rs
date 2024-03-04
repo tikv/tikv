@@ -18,7 +18,6 @@ use tikv_util::{config::ReadableSize, HandyRwLock};
 #[allow(dead_code)]
 #[path = "../../integrations/import/util.rs"]
 mod util;
-use test_sst_importer::{check_ingested_kvs, send_upload_sst};
 
 use self::util::{
     new_cluster_and_tikv_import_client, new_cluster_and_tikv_import_client_tde,
@@ -65,12 +64,7 @@ fn test_download_sst_blocking_sst_writer() {
     fail::remove(sst_writer_open_fp);
 
     // Do an ingest and verify the result is correct.
-    let mut ingest = IngestRequest::default();
-    ingest.set_context(ctx.clone());
-    ingest.set_sst(meta);
-    let resp = import.ingest(&ingest).unwrap();
-    assert!(!resp.has_error());
-
+    must_ingest_sst(&import, ctx.clone(), meta);
     check_ingested_kvs(&tikv, &ctx, sst_range);
 }
 
@@ -90,10 +84,6 @@ fn test_ingest_reentrant() {
     meta.set_region_epoch(ctx.get_region_epoch().clone());
     send_upload_sst(&import, &meta, &data).unwrap();
 
-    let mut ingest = IngestRequest::default();
-    ingest.set_context(ctx);
-    ingest.set_sst(meta.clone());
-
     // Don't delete ingested sst file or we cannot find sst file in next ingest.
     fail::cfg("dont_delete_ingested_sst", "1*return").unwrap();
 
@@ -108,9 +98,8 @@ fn test_ingest_reentrant() {
         .get_path(&meta);
 
     let checksum1 = calc_crc32(save_path.clone()).unwrap();
-    // Do ingest and it will ingest successs.
-    let resp = import.ingest(&ingest).unwrap();
-    assert!(!resp.has_error());
+    // Do ingest and it will ingest success.
+    must_ingest_sst(&import, ctx.clone(), meta.clone());
 
     let checksum2 = calc_crc32(save_path).unwrap();
     // TODO: Remove this once write_global_seqno is deprecated.
@@ -118,8 +107,7 @@ fn test_ingest_reentrant() {
     // updated with the default setting, which is write_global_seqno=false.
     assert_eq!(checksum1, checksum2);
     // Do ingest again and it can be reentrant
-    let resp = import.ingest(&ingest).unwrap();
-    assert!(!resp.has_error());
+    must_ingest_sst(&import, ctx.clone(), meta);
 }
 
 #[test]
@@ -148,12 +136,7 @@ fn test_ingest_key_manager_delete_file_failed() {
     // Do an ingest and verify the result is correct. Though the ingest succeeded,
     // the clone file is still in the key manager
     // TODO: how to check the key manager contains the clone key
-    let mut ingest = IngestRequest::default();
-    ingest.set_context(ctx.clone());
-    ingest.set_sst(meta.clone());
-    let resp = import.ingest(&ingest).unwrap();
-
-    assert!(!resp.has_error());
+    must_ingest_sst(&import, ctx.clone(), meta.clone());
 
     fail::remove(deregister_fp);
 
@@ -178,11 +161,7 @@ fn test_ingest_key_manager_delete_file_failed() {
     // Do upload and ingest again, though key manager contains this file, the ingest
     // action should success.
     send_upload_sst(&import, &meta, &data).unwrap();
-    let mut ingest = IngestRequest::default();
-    ingest.set_context(ctx);
-    ingest.set_sst(meta);
-    let resp = import.ingest(&ingest).unwrap();
-    assert!(!resp.has_error());
+    must_ingest_sst(&import, ctx, meta);
 }
 
 #[test]
@@ -251,16 +230,11 @@ fn test_delete_sst_v2_after_epoch_stale() {
     // disable data flushed
     fail::cfg("on_flush_completed", "return()").unwrap();
     send_upload_sst(&import, &meta, &data).unwrap();
-    let mut ingest = IngestRequest::default();
-    ingest.set_context(ctx.clone());
-    ingest.set_sst(meta.clone());
     meta.set_region_id(ctx.get_region_id());
     meta.set_region_epoch(ctx.get_region_epoch().clone());
     send_upload_sst(&import, &meta, &data).unwrap();
-    ingest.set_sst(meta.clone());
+    must_ingest_sst(&import, ctx.clone(), meta.clone());
 
-    let resp = import.ingest(&ingest).unwrap();
-    assert!(!resp.has_error(), "{:?}", resp.get_error());
     let (tx, rx) = channel::<()>();
     let tx = Arc::new(Mutex::new(tx));
     fail::cfg_callback("on_cleanup_import_sst_schedule", move || {
@@ -317,15 +291,10 @@ fn test_delete_sst_after_applied_sst() {
     let (mut meta, data) = gen_sst_file(sst_path, sst_range);
     // No region id and epoch.
     send_upload_sst(&import, &meta, &data).unwrap();
-    let mut ingest = IngestRequest::default();
-    ingest.set_context(ctx.clone());
-    ingest.set_sst(meta.clone());
     meta.set_region_id(ctx.get_region_id());
     meta.set_region_epoch(ctx.get_region_epoch().clone());
     send_upload_sst(&import, &meta, &data).unwrap();
-    ingest.set_sst(meta.clone());
-    let resp = import.ingest(&ingest).unwrap();
-    assert!(!resp.has_error(), "{:?}", resp.get_error());
+    must_ingest_sst(&import, ctx.clone(), meta);
 
     // restart node
     cluster.stop_node(1);
@@ -375,16 +344,10 @@ fn test_split_buckets_after_ingest_sst_v2() {
     let sst_range = (0, 255);
     let (mut meta, data) = gen_sst_file(sst_path, sst_range);
     send_upload_sst(&import, &meta, &data).unwrap();
-    let mut ingest = IngestRequest::default();
-    ingest.set_context(ctx.clone());
-    ingest.set_sst(meta.clone());
     meta.set_region_id(ctx.get_region_id());
     meta.set_region_epoch(ctx.get_region_epoch().clone());
     send_upload_sst(&import, &meta, &data).unwrap();
-    ingest.set_sst(meta.clone());
-
-    let resp = import.ingest(&ingest).unwrap();
-    assert!(!resp.has_error(), "{:?}", resp.get_error());
+    must_ingest_sst(&import, ctx.clone(), meta);
 
     let (tx, rx) = channel::<()>();
     let tx = Arc::new(Mutex::new(tx));
@@ -459,15 +422,10 @@ fn test_flushed_applied_index_after_ingset() {
         let (mut meta, data) = gen_sst_file(sst_path.clone(), sst_range);
         // No region id and epoch.
         send_upload_sst(&import, &meta, &data).unwrap();
-        let mut ingest = IngestRequest::default();
-        ingest.set_context(ctx.clone());
-        ingest.set_sst(meta.clone());
         meta.set_region_id(ctx.get_region_id());
         meta.set_region_epoch(ctx.get_region_epoch().clone());
         send_upload_sst(&import, &meta, &data).unwrap();
-        ingest.set_sst(meta.clone());
-        let resp = import.ingest(&ingest).unwrap();
-        assert!(!resp.has_error(), "{:?}", resp.get_error());
+        must_ingest_sst(&import, ctx.clone(), meta);
     }
 
     // only 1 sst left because there is no more event to trigger a raft ready flush.
@@ -479,15 +437,10 @@ fn test_flushed_applied_index_after_ingset() {
         let (mut meta, data) = gen_sst_file(sst_path.clone(), sst_range);
         // No region id and epoch.
         send_upload_sst(&import, &meta, &data).unwrap();
-        let mut ingest = IngestRequest::default();
-        ingest.set_context(ctx.clone());
-        ingest.set_sst(meta.clone());
         meta.set_region_id(ctx.get_region_id());
         meta.set_region_epoch(ctx.get_region_epoch().clone());
         send_upload_sst(&import, &meta, &data).unwrap();
-        ingest.set_sst(meta.clone());
-        let resp = import.ingest(&ingest).unwrap();
-        assert!(!resp.has_error(), "{:?}", resp.get_error());
+        must_ingest_sst(&import, ctx.clone(), meta);
     }
 
     // ingest more sst files, unflushed index still be 1.

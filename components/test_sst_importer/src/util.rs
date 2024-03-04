@@ -116,6 +116,16 @@ pub fn must_ingest_sst(client: &ImportSstClient, context: Context, meta: SstMeta
     assert!(!resp.has_error(), "{:?}", resp);
 }
 
+pub fn must_ingest_sst_error(client: &ImportSstClient, context: Context, meta: SstMeta) {
+    let mut ingest_request = IngestRequest::default();
+    ingest_request.set_context(context);
+    ingest_request.set_sst(meta);
+
+    let resp = client.ingest(&ingest_request).unwrap();
+
+    assert!(resp.has_error(), "{:?}", resp);
+}
+
 pub fn check_ingested_kvs(tikv: &TikvClient, ctx: &Context, sst_range: (u8, u8)) {
     check_ingested_kvs_cf(tikv, ctx, "", sst_range);
 }
