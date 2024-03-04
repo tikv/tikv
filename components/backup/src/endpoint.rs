@@ -812,8 +812,9 @@ impl<R: RegionInfoProvider> Progress<R> {
                     let peer = if let Some(peer) = find_peer(region, store_id) {
                         peer.to_owned()
                     } else {
-                        // skip the region at this time, and would retry to backup the region in finegrained step.
-                        continue
+                        // skip the region at this time, and would retry to backup the region in
+                        // finegrained step.
+                        continue;
                     };
                     // Raft peer role has to match the replica read flag.
                     if replica_read || info.role == StateRole::Leader {
