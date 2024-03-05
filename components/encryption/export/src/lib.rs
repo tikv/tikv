@@ -1,20 +1,15 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 use std::path::Path;
 
-#[cfg(feature = "cloud-aws")]
 use aws::{AwsKms, STORAGE_VENDOR_NAME_AWS};
-#[cfg(feature = "cloud-azure")]
 use azure::{AzureKms, STORAGE_VENDOR_NAME_AZURE};
 use cloud::kms::Config as CloudConfig;
-#[cfg(feature = "cloud-aws")]
-pub use encryption::KmsBackend;
 pub use encryption::{
     clean_up_dir, clean_up_trash, trash_dir_all, AzureConfig, Backend, DataKeyImporter,
     DataKeyManager, DataKeyManagerArgs, DecrypterReader, EncryptionConfig, Error, FileConfig, Iv,
-    KmsConfig, MasterKeyConfig, Result,
+    KmsBackend, KmsConfig, MasterKeyConfig, Result,
 };
 use encryption::{cloud_convert_error, FileBackend, PlaintextBackend};
-#[cfg(feature = "cloud-gcp")]
 use gcp::{GcpKms, STORAGE_VENDOR_NAME_GCP};
 use tikv_util::{box_err, error, info};
 
@@ -49,7 +44,6 @@ pub fn create_cloud_backend(config: &KmsConfig) -> Result<Box<dyn Backend>> {
         "vendor" => &config.vendor,
     );
     match config.vendor.as_str() {
-        #[cfg(feature = "cloud-aws")]
         STORAGE_VENDOR_NAME_AWS | "" => {
             let conf = CloudConfig::from_proto(config.clone().into_proto())
                 .map_err(cloud_convert_error("aws from proto".to_owned()))?;
@@ -57,7 +51,6 @@ pub fn create_cloud_backend(config: &KmsConfig) -> Result<Box<dyn Backend>> {
                 Box::new(AwsKms::new(conf).map_err(cloud_convert_error("new AWS KMS".to_owned()))?);
             Ok(Box::new(KmsBackend::new(kms_provider)?) as Box<dyn Backend>)
         }
-        #[cfg(feature = "cloud-azure")]
         STORAGE_VENDOR_NAME_AZURE => {
             if config.azure.is_none() {
                 return Err(Error::Other(box_err!(
@@ -72,7 +65,6 @@ pub fn create_cloud_backend(config: &KmsConfig) -> Result<Box<dyn Backend>> {
             );
             Ok(Box::new(KmsBackend::new(keyvault_provider)?))
         }
-        #[cfg(feature = "cloud-gcp")]
         STORAGE_VENDOR_NAME_GCP => {
             let (mk, gcp_cfg) = config.clone().convert_to_gcp_config();
             let conf = CloudConfig::from_gcp_kms_config(mk, gcp_cfg)
@@ -100,7 +92,6 @@ mod tests {
     use super::*;
 
     #[test]
-    #[cfg(feature = "cloud-azure")]
     fn test_kms_cloud_backend_azure() {
         let config = KmsConfig {
             key_id: "key_id".to_owned(),
