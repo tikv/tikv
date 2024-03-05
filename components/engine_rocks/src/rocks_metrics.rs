@@ -969,7 +969,6 @@ impl StatisticsReporter<RocksEngine> for RocksStatisticsReporter {
             // column families.
             *cf_stats.used_size.get_or_insert_default() +=
                 crate::util::get_engine_cf_used_size(db, handle);
-            *cf_stats.blob_cache_size.get_or_insert_default() += db.get_blob_cache_usage_cf(handle);
             // TODO: find a better place to record these metrics.
             // Refer: https://github.com/facebook/rocksdb/wiki/Memory-usage-in-RocksDB
             // For index and filter blocks memory
