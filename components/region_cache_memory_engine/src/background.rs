@@ -96,17 +96,10 @@ impl BgWorkManager {
     ) -> (JoinHandle<()>, Sender<bool>) {
         let (tx, rx) = bounded(0);
         let lock_clear_interval = Duration::from_secs(30);
+        let gc_interval = Duration::from_secs(61);
         let h = std::thread::spawn(move || {
             loop {
                 select! {
-                    recv(tick(lock_clear_interval)) -> _ => {
-                        if let Err(e) = scheduler.schedule(BackgroundTask::ClearTombstone) {
-                            error!(
-                                "schedule range cache engine gc failed";
-                                "err" => ?e,
-                            );
-                        }
-                    }
                     recv(tick(gc_interval)) -> _ => {
                         if scheduler.is_busy() {
                             info!(
@@ -124,6 +117,14 @@ impl BgWorkManager {
                             );
                         }
                     },
+                    // recv(tick(lock_clear_interval)) -> _ => {
+                    //     if let Err(e) = scheduler.schedule(BackgroundTask::ClearTombstone) {
+                    //         error!(
+                    //             "schedule range cache engine gc failed";
+                    //             "err" => ?e,
+                    //         );
+                    //     }
+                    // },
                     recv(rx) -> r => {
                         if let Err(e) = r {
                             error!(
@@ -359,12 +360,11 @@ impl Runnable for BackgroundRunner {
     fn run(&mut self, task: Self::Task) {
         match task {
             BackgroundTask::GcTask(t) => {
-                return;
-                // let ranges = self.ranges_for_gc();
-                // for range in ranges {
-                //     self.gc_range(&range, t.safe_point);
-                // }
-                // self.gc_finished();
+                let ranges = self.ranges_for_gc();
+                for range in ranges {
+                    self.gc_range(&range, t.safe_point);
+                }
+                self.gc_finished();
             }
             BackgroundTask::ClearTombstone => {
                 // let ranges: Vec<_> = {
