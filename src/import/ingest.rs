@@ -218,8 +218,8 @@ async fn ingest_files_impl<E: Engine>(
         }
     }
     let modifies = ssts
-        .iter()
-        .map(|s| Modify::Ingest(Box::new(s.clone())))
+        .into_iter()
+        .map(|s| Modify::Ingest(Box::new(s)))
         .collect();
     context.set_term(res.ext().get_term().unwrap().into());
     let region_id = context.get_region_id();
@@ -316,8 +316,8 @@ pub async fn ingest<E: Engine>(
     // We should drop lease refs, so that they can be expired.
     drop(lease_refs);
     for meta in &metas {
-        if let Err(e) = importer.expire_lease(meta.get_region_id(), meta.get_uuid()) {
-            warn!("expire ingest lease failed after ingest";
+        if let Err(e) = importer.release_lease(meta.get_region_id(), meta.get_uuid()) {
+            warn!("expire sst lease failed after ingest";
                 "region_id" => meta.get_region_id(),
                 "uuid" => log_wrappers::hex_encode_upper(meta.get_uuid()),
                 "error" => ?e,

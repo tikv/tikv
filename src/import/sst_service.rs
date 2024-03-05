@@ -769,7 +769,7 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
             for release_lease in req.get_release() {
                 let region_id = release_lease.get_lease().get_region().get_id();
                 let uuid = release_lease.get_lease().get_uuid();
-                match import.expire_lease(region_id, uuid) {
+                match import.release_lease(region_id, uuid) {
                     Ok(_) => {
                         resp.mut_released().push(release_lease.get_lease().clone());
                     }

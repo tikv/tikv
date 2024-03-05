@@ -242,13 +242,13 @@ impl<E: KvEngine> SstImporter<E> {
         deadline: StdInstant,
     ) -> Result<()> {
         let uuid = parse_uuid_from_slice(uuid_bytes)?;
-        self.ingest_mediator.pause(region_id, uuid, deadline);
+        self.ingest_mediator.acquire(region_id, uuid, deadline);
         Ok(())
     }
 
-    pub fn expire_lease(&self, region_id: u64, uuid_bytes: &[u8]) -> Result<()> {
+    pub fn release_lease(&self, region_id: u64, uuid_bytes: &[u8]) -> Result<()> {
         let uuid = parse_uuid_from_slice(uuid_bytes)?;
-        self.ingest_mediator.continues(region_id, uuid);
+        self.ingest_mediator.release(region_id, uuid);
         Ok(())
     }
 
@@ -262,14 +262,14 @@ impl<E: KvEngine> SstImporter<E> {
         rpc: &'static str,
     ) -> Result<LeaseRef> {
         let uuid = parse_uuid_from_slice(uuid_bytes)?;
-        let lease_ref = self.ingest_observer.query(region_id, &uuid);
+        let lease_ref = self.ingest_observer.get_lease(region_id, &uuid);
         info!("dbg check lease"; "region_id" => region_id, "now" => ?StdInstant::now(), "deadline" => ?lease_ref);
         if let Some(lease) = lease_ref
             && !lease.is_expired()
         {
             Ok(lease)
         } else {
-            info!("ingest lease expired";
+            info!("sst lease expired";
                 "region_id" => region_id,
                 "lease_uuid" => ?uuid,
                 "rpc" => rpc,
@@ -3230,7 +3230,7 @@ mod tests {
             .unwrap();
 
         // Expire one lease does not affect the other.
-        importer.expire_lease(region_id, uuid.as_bytes()).unwrap();
+        importer.release_lease(region_id, uuid.as_bytes()).unwrap();
         assert_matches!(
             importer.check_lease(region_id, uuid.as_bytes(), rpc),
             Err(Error::LeaseExpired),

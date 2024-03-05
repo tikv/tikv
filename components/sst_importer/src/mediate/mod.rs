@@ -1,5 +1,11 @@
 // Copyright 2024 TiKV Project Authors. Licensed under Apache-2.0.
 
+//! This module contains the implementation of the mediator pattern for the
+//! sst_importer component in TiKV. It provides the `Mediator` trait and the
+//! `IngestMediator` struct, which act as a central hub for communication
+//! between different observers. Observers can register with the mediator and
+//! receive events through the `Observer` trait.
+
 use std::{
     sync::{
         atomic::{AtomicU64, Ordering},
@@ -14,14 +20,15 @@ use uuid::Uuid;
 mod observer;
 pub use observer::IngestObserver;
 
+/// The event type that the mediator can send to observers.
 #[derive(Clone)]
 pub enum Event {
-    Pause {
+    Acquire {
         region_id: u64,
         uuid: Uuid,
         deadline: Instant,
     },
-    Continue {
+    Release {
         region_id: u64,
         uuid: Uuid,
     },
@@ -57,12 +64,15 @@ impl LeaseState {
     }
 }
 
+/// A reference to a lease. It should be hold when a long time import RPC is in
+/// progress.
 #[derive(Debug)]
 pub struct LeaseRef {
     lease: LeaseState,
 }
 
 impl LeaseRef {
+    /// Checks if the lease is expired.
     pub fn is_expired(&self) -> bool {
         self.lease.is_expired()
     }
@@ -76,16 +86,18 @@ impl Drop for LeaseRef {
 
 pub trait Observer: Sync + Send {
     fn update(&self, event: Event);
-    fn query(&self, region_id: u64, uuid: &Uuid) -> Option<LeaseRef>;
-    // Returns a valid lease uuid for a region.
-    // Called by Resolver before advancing resolved_ts.
+    /// Returns a lease specified by region_id and uuid if the lease is valid.
+    fn get_lease(&self, region_id: u64, uuid: &Uuid) -> Option<LeaseRef>;
+    /// Returns a valid lease uuid for a region.
+    /// Called by Resolver before advancing resolved_ts.
     fn get_region_lease(&self, region_id: u64) -> Option<Uuid>;
+    /// Garbage collection and it should never block.
     fn gc(&self);
 }
 
 pub trait Mediator: Sync + Send {
-    fn pause(&self, region_id: u64, uuid: Uuid, deadline: Instant);
-    fn continues(&self, region_id: u64, uuid: Uuid);
+    fn acquire(&self, region_id: u64, uuid: Uuid, deadline: Instant);
+    fn release(&self, region_id: u64, uuid: Uuid);
     fn register(&mut self, comp: Arc<dyn Observer>);
     fn gc(&self);
 }
@@ -96,8 +108,8 @@ pub struct IngestMediator {
 }
 
 impl Mediator for IngestMediator {
-    fn pause(&self, region_id: u64, uuid: Uuid, deadline: Instant) {
-        let event = Event::Pause {
+    fn acquire(&self, region_id: u64, uuid: Uuid, deadline: Instant) {
+        let event = Event::Acquire {
             region_id,
             uuid,
             deadline,
@@ -107,8 +119,8 @@ impl Mediator for IngestMediator {
         }
     }
 
-    fn continues(&self, region_id: u64, uuid: Uuid) {
-        let event = Event::Continue { region_id, uuid };
+    fn release(&self, region_id: u64, uuid: Uuid) {
+        let event = Event::Release { region_id, uuid };
         for comp in &self.comps {
             comp.update(event.clone())
         }
@@ -125,6 +137,7 @@ impl Mediator for IngestMediator {
     }
 }
 
+/// Periodically triggers garbage collection on the mediator.
 pub async fn periodic_gc_mediator(mediator: Weak<dyn Mediator>, duration: Duration) {
     loop {
         let Some(m) = mediator.upgrade() else {
@@ -186,7 +199,7 @@ mod tests {
         }
         impl Observer for Mock {
             fn update(&self, _: Event) {}
-            fn query(&self, _: u64, _: &Uuid) -> Option<LeaseRef> {
+            fn get_lease(&self, _: u64, _: &Uuid) -> Option<LeaseRef> {
                 None
             }
             fn get_region_lease(&self, _: u64) -> Option<Uuid> {
