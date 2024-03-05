@@ -766,6 +766,7 @@ pub struct InspectedRaftMessage {
 
 /// Message that can be sent to a peer.
 #[allow(clippy::large_enum_variant)]
+#[repr(u8)]
 pub enum PeerMsg<EK: KvEngine> {
     /// Raft message is the message sent between raft nodes in the same
     /// raft group. Messages need to be redirected to raftstore if target
@@ -836,6 +837,10 @@ impl<EK: KvEngine> fmt::Debug for PeerMsg<EK> {
 }
 
 impl<EK: KvEngine> PeerMsg<EK> {
+    pub fn discriminant(&self) -> u8 {
+        unsafe { *(self as *const Self as *const u8) }
+    }
+
     /// For some specific kind of messages, it's actually acceptable if failed
     /// to send it by `significant_send`. This function determine if the
     /// current message is acceptable to fail.
@@ -847,6 +852,7 @@ impl<EK: KvEngine> PeerMsg<EK> {
     }
 }
 
+#[repr(u8)]
 pub enum StoreMsg<EK>
 where
     EK: KvEngine,
@@ -930,5 +936,11 @@ where
             StoreMsg::GcSnapshotFinish => write!(fmt, "GcSnapshotFinish"),
             StoreMsg::AwakenRegions { .. } => write!(fmt, "AwakenRegions"),
         }
+    }
+}
+
+impl<EK: KvEngine> StoreMsg<EK> {
+    pub fn discriminant(&self) -> u8 {
+        unsafe { *(self as *const Self as *const u8) }
     }
 }

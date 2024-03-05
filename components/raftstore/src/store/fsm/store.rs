@@ -23,7 +23,7 @@ use batch_system::{
     HandlerBuilder, PollHandler, Priority,
 };
 use causal_ts::CausalTsProviderImpl;
-use collections::{HashMap, HashMapEntry, HashSet};
+use collections::{hash_map_with_capacity, HashMap, HashMapEntry, HashSet};
 use concurrency_manager::ConcurrencyManager;
 use crossbeam::channel::{TryRecvError, TrySendError};
 use engine_traits::{
@@ -799,7 +799,7 @@ impl<'a, EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
             .observe(duration_to_sec(elapsed));
         slow_log!(
             elapsed,
-            "[store {}] handle timeout {:?}",
+            "[store {}] handle tick {:?}",
             self.fsm.store.id,
             tick
         );
@@ -807,7 +807,13 @@ impl<'a, EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
 
     fn handle_msgs(&mut self, msgs: &mut Vec<StoreMsg<EK>>) {
         let timer = TiInstant::now_coarse();
+        let count = msgs.len();
+        let mut distribution = hash_map_with_capacity(std::mem::variant_count::<PeerMsg<EK>>());
         for m in msgs.drain(..) {
+            distribution
+                .entry(m.discriminant())
+                .and_modify(|c| *c += 1)
+                .or_insert(1);
             match m {
                 StoreMsg::Tick(tick) => self.on_tick(tick),
                 StoreMsg::RaftMessage(msg) => {
@@ -868,11 +874,19 @@ impl<'a, EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
                 }
             }
         }
+        let elapsed = timer.saturating_elapsed();
+        slow_log!(
+            elapsed,
+            "[store {}] handle {} store messages {:?}",
+            self.fsm.store.id,
+            count,
+            distribution,
+        );
         self.ctx
             .raft_metrics
             .event_time
             .store_msg
-            .observe(timer.saturating_elapsed_secs());
+            .observe(elapsed.as_secs_f64());
     }
 
     fn start(&mut self, store: metapb::Store) {

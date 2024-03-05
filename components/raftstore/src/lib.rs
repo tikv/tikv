@@ -10,6 +10,7 @@
 #![feature(assert_matches)]
 #![feature(type_alias_impl_trait)]
 #![feature(impl_trait_in_assoc_type)]
+#![feature(variant_count)]
 #![recursion_limit = "256"]
 
 #[cfg(test)]
