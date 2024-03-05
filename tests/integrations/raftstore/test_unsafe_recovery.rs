@@ -725,96 +725,99 @@ fn test_force_leader_on_hibernated_follower() {
 
 // Test the case that three of five nodes fail and force leader on the rest node
 // with triggering snapshot.
-// #[test]
-// fn test_force_leader_trigger_snapshot() {
-//     let mut cluster = new_node_cluster(0, 5);
-//     cluster.cfg.raft_store.raft_base_tick_interval = ReadableDuration::millis(10);
-//     cluster.cfg.raft_store.raft_election_timeout_ticks = 10;
-//     cluster.cfg.raft_store.raft_store_max_leader_lease = ReadableDuration::millis(90);
-//     cluster.pd_client.disable_default_operator();
-//
-//     cluster.run();
-//     cluster.must_put(b"k1", b"v1");
-//
-//     let region = cluster.get_region(b"k1");
-//     cluster.must_split(&region, b"k9");
-//     let region = cluster.get_region(b"k2");
-//     let peer_on_store1 = find_peer(&region, 1).unwrap();
-//     cluster.must_transfer_leader(region.get_id(), peer_on_store1.clone());
-//
-//     // Isolate node 2
-//     cluster.add_send_filter(IsolationFilterFactory::new(2));
-//
-//     // Compact logs to force requesting snapshot after clearing send filters.
-//     let state = cluster.truncated_state(region.get_id(), 1);
-//     // Write some data to trigger snapshot.
-//     for i in 100..150 {
-//         let key = format!("k{}", i);
-//         let value = format!("v{}", i);
-//         cluster.must_put(key.as_bytes(), value.as_bytes());
-//     }
-//     cluster.wait_log_truncated(region.get_id(), 1, state.get_index() + 40);
-//
-//     cluster.stop_node(3);
-//     cluster.stop_node(4);
-//     cluster.stop_node(5);
-//
-//     // Recover the isolation of 2, but still don't permit snapshot
-//     let recv_filter = Box::new(
-//         RegionPacketFilter::new(region.get_id(), 2)
-//             .direction(Direction::Recv)
-//             .msg_type(MessageType::MsgSnapshot),
-//     );
-//     cluster.sim.wl().add_recv_filter(2, recv_filter);
-//     cluster.clear_send_filters();
-//
-//     // wait election timeout
-//     sleep_ms(
-//         cluster.cfg.raft_store.raft_election_timeout_ticks as u64
-//             * cluster.cfg.raft_store.raft_base_tick_interval.as_millis()
-//             * 5,
-//     );
-//     cluster.must_enter_force_leader(region.get_id(), 1, vec![3, 4, 5]);
-//
-//     sleep_ms(
-//         cluster.cfg.raft_store.raft_election_timeout_ticks as u64
-//             * cluster.cfg.raft_store.raft_base_tick_interval.as_millis()
-//             * 3,
-//     );
-//     let cmd = new_change_peer_request(
-//         ConfChangeType::RemoveNode,
-//         find_peer(&region, 3).unwrap().clone(),
-//     );
-//     let req = new_admin_request(region.get_id(), region.get_region_epoch(), cmd);
-//     // Though it has a force leader now, but the command can't committed because the log is not replicated to all the alive peers.
-//     assert!(
-//         cluster
-//             .call_command_on_leader(req, Duration::from_millis(1000))
-//             .unwrap()
-//             .get_header()
-//             .has_error() // error "there is a pending conf change" indicating no committed log after being the leader
-//     );
-//
-//     // Permit snapshot message, snapshot should be applied and advance commit index now.
-//     cluster.sim.wl().clear_recv_filters(2);
-//     cluster
-//         .pd_client
-//         .must_remove_peer(region.get_id(), find_peer(&region, 3).unwrap().clone());
-//     cluster
-//         .pd_client
-//         .must_remove_peer(region.get_id(), find_peer(&region, 4).unwrap().clone());
-//     cluster
-//         .pd_client
-//         .must_remove_peer(region.get_id(), find_peer(&region, 5).unwrap().clone());
-//     cluster.exit_force_leader(region.get_id(), 1);
-//
-//     // quorum is formed, can propose command successfully now
-//     cluster.must_put(b"k4", b"v4");
-//     assert_eq!(cluster.must_get(b"k2"), None);
-//     assert_eq!(cluster.must_get(b"k3"), None);
-//     assert_eq!(cluster.must_get(b"k4"), Some(b"v4".to_vec()));
-//     cluster.must_transfer_leader(region.get_id(), find_peer(&region, 1).unwrap().clone());
-// }
+#[test]
+fn test_force_leader_trigger_snapshot() {
+    let mut cluster = new_node_cluster(0, 5);
+    cluster.cfg.raft_store.raft_base_tick_interval = ReadableDuration::millis(10);
+    cluster.cfg.raft_store.raft_election_timeout_ticks = 10;
+    cluster.cfg.raft_store.raft_store_max_leader_lease = ReadableDuration::millis(90);
+    cluster.cfg.raft_store.raft_log_gc_count_limit = Some(8);
+    cluster.cfg.raft_store.merge_max_log_gap = 3;
+    cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(10);
+    cluster.pd_client.disable_default_operator();
+
+    cluster.run();
+    cluster.must_put(b"k1", b"v1");
+
+    let region = cluster.get_region(b"k1");
+    cluster.must_split(&region, b"k9");
+    let region = cluster.get_region(b"k2");
+    let peer_on_store1 = find_peer(&region, 1).unwrap();
+    cluster.must_transfer_leader(region.get_id(), peer_on_store1.clone());
+
+    // Isolate node 2
+    cluster.add_send_filter(IsolationFilterFactory::new(2));
+
+    // Compact logs to force requesting snapshot after clearing send filters.
+    let state = cluster.truncated_state(region.get_id(), 1);
+    // Write some data to trigger snapshot.
+    for i in 100..150 {
+        let key = format!("k{}", i);
+        let value = format!("v{}", i);
+        cluster.must_put(key.as_bytes(), value.as_bytes());
+    }
+    cluster.wait_log_truncated(region.get_id(), 1, state.get_index() + 40);
+
+    cluster.stop_node(3);
+    cluster.stop_node(4);
+    cluster.stop_node(5);
+
+    // Recover the isolation of 2, but still don't permit snapshot
+    let recv_filter = Box::new(
+        RegionPacketFilter::new(region.get_id(), 2)
+            .direction(Direction::Recv)
+            .msg_type(MessageType::MsgSnapshot),
+    );
+    cluster.sim.wl().add_recv_filter(2, recv_filter);
+    cluster.clear_send_filters();
+
+    // wait election timeout
+    sleep_ms(
+        cluster.cfg.raft_store.raft_election_timeout_ticks as u64
+            * cluster.cfg.raft_store.raft_base_tick_interval.as_millis()
+            * 5,
+    );
+    cluster.enter_force_leader(region.get_id(), 1, vec![3, 4, 5]);
+
+    sleep_ms(
+        cluster.cfg.raft_store.raft_election_timeout_ticks as u64
+            * cluster.cfg.raft_store.raft_base_tick_interval.as_millis()
+            * 3,
+    );
+    let cmd = new_change_peer_request(
+        ConfChangeType::RemoveNode,
+        find_peer(&region, 3).unwrap().clone(),
+    );
+    let req = new_admin_request(region.get_id(), region.get_region_epoch(), cmd);
+    // Though it has a force leader now, but the command can't committed because the log is not replicated to all the alive peers.
+    assert!(
+        cluster
+            .call_command_on_leader(req, Duration::from_millis(1000))
+            .unwrap()
+            .get_header()
+            .has_error() // error "there is a pending conf change" indicating no committed log after being the leader
+    );
+
+    // Permit snapshot message, snapshot should be applied and advance commit index now.
+    cluster.sim.wl().clear_recv_filters(2);
+    cluster
+        .pd_client
+        .must_remove_peer(region.get_id(), find_peer(&region, 3).unwrap().clone());
+    cluster
+        .pd_client
+        .must_remove_peer(region.get_id(), find_peer(&region, 4).unwrap().clone());
+    cluster
+        .pd_client
+        .must_remove_peer(region.get_id(), find_peer(&region, 5).unwrap().clone());
+    cluster.exit_force_leader(region.get_id(), 1);
+
+    // quorum is formed, can propose command successfully now
+    cluster.must_put(b"k4", b"v4");
+    assert_eq!(cluster.must_get(b"k2"), None);
+    assert_eq!(cluster.must_get(b"k3"), None);
+    assert_eq!(cluster.must_get(b"k4"), Some(b"v4".to_vec()));
+    cluster.must_transfer_leader(region.get_id(), find_peer(&region, 1).unwrap().clone());
+}
 
 // Test the case that three of five nodes fail and force leader on the rest node
 // with uncommitted conf change.
