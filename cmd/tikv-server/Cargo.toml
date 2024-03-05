@@ -6,6 +6,7 @@ edition = "2021"
 publish = false
 
 [features]
+<<<<<<< HEAD
 default = [
   "test-engine-kv-rocksdb",
   "test-engine-raft-raft-engine",
@@ -13,6 +14,10 @@ default = [
   "cloud-gcp",
   "cloud-azure",
 ]
+=======
+default = ["test-engine-kv-rocksdb", "test-engine-raft-raft-engine"]
+trace-async-tasks = ["dep:tracing-active-tree", "dep:tracing-subscriber"]
+>>>>>>> a0f8373f3a (*: remove cloud aws gcp azure features (#16602))
 trace-tablet-lifetime = ["tikv/trace-tablet-lifetime"]
 tcmalloc = ["server/tcmalloc"]
 jemalloc = ["server/jemalloc"]
@@ -21,11 +26,21 @@ portable = ["server/portable"]
 sse = ["server/sse"]
 mem-profiling = ["server/mem-profiling"]
 failpoints = ["server/failpoints"]
+<<<<<<< HEAD
 cloud-aws = ["server/cloud-aws"]
 cloud-gcp = ["server/cloud-gcp"]
 cloud-azure = ["server/cloud-azure"]
 test-engine-kv-rocksdb = ["server/test-engine-kv-rocksdb"]
 test-engine-raft-raft-engine = ["server/test-engine-raft-raft-engine"]
+=======
+openssl-vendored = ["tikv/openssl-vendored"]
+test-engine-kv-rocksdb = [
+  "server/test-engine-kv-rocksdb"
+]
+test-engine-raft-raft-engine = [
+  "server/test-engine-raft-raft-engine"
+]
+>>>>>>> a0f8373f3a (*: remove cloud aws gcp azure features (#16602))
 test-engines-rocksdb = ["server/test-engines-rocksdb"]
 test-engines-panic = ["server/test-engines-panic"]
 

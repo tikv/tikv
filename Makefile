@@ -114,10 +114,28 @@ else
 # Caller is responsible for setting up test engine features
 endif
 
+<<<<<<< HEAD
 ifneq ($(NO_CLOUD),1)
 ENABLE_FEATURES += cloud-aws
 ENABLE_FEATURES += cloud-gcp
 ENABLE_FEATURES += cloud-azure
+=======
+ifneq ($(NO_ASYNC_BACKTRACE),1)
+ENABLE_FEATURES += trace-async-tasks
+endif
+
+export DOCKER_FILE ?= Dockerfile
+export DOCKER_IMAGE_NAME ?= pingcap/tikv
+export DOCKER_IMAGE_TAG ?= latest
+export DEV_DOCKER_IMAGE_NAME ?= pingcap/tikv_dev
+export ENABLE_FIPS ?= 0
+
+ifeq ($(ENABLE_FIPS),1)
+DOCKER_IMAGE_TAG := ${DOCKER_IMAGE_TAG}-fips
+DOCKER_FILE := ${DOCKER_FILE}.FIPS
+else
+ENABLE_FEATURES += openssl-vendored
+>>>>>>> a0f8373f3a (*: remove cloud aws gcp azure features (#16602))
 endif
 
 PROJECT_DIR:=$(shell dirname $(realpath $(lastword $(MAKEFILE_LIST))))

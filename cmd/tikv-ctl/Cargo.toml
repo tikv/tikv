@@ -6,6 +6,7 @@ edition = "2021"
 publish = false
 
 [features]
+<<<<<<< HEAD
 default = [
   "test-engine-kv-rocksdb",
   "test-engine-raft-raft-engine",
@@ -13,6 +14,9 @@ default = [
   "cloud-gcp",
   "cloud-azure",
 ]
+=======
+default = ["test-engine-kv-rocksdb", "test-engine-raft-raft-engine"]
+>>>>>>> a0f8373f3a (*: remove cloud aws gcp azure features (#16602))
 tcmalloc = ["tikv/tcmalloc"]
 jemalloc = ["tikv/jemalloc"]
 mimalloc = ["tikv/mimalloc"]
@@ -21,6 +25,7 @@ portable = ["tikv/portable"]
 sse = ["tikv/sse"]
 mem-profiling = ["tikv/mem-profiling"]
 failpoints = ["tikv/failpoints"]
+<<<<<<< HEAD
 cloud-aws = ["encryption_export/cloud-aws", "backup/cloud-aws"]
 cloud-gcp = ["encryption_export/cloud-gcp", "backup/cloud-gcp"]
 cloud-azure = ["encryption_export/cloud-azure", "backup/cloud-azure"]
@@ -30,6 +35,21 @@ test-engine-kv-rocksdb = ["tikv/test-engine-kv-rocksdb"]
 test-engine-raft-raft-engine = ["tikv/test-engine-raft-raft-engine"]
 test-engines-rocksdb = ["tikv/test-engines-rocksdb"]
 test-engines-panic = ["tikv/test-engines-panic"]
+=======
+openssl-vendored = ["tikv/openssl-vendored"]
+test-engine-kv-rocksdb = [
+  "tikv/test-engine-kv-rocksdb"
+]
+test-engine-raft-raft-engine = [
+  "tikv/test-engine-raft-raft-engine"
+]
+test-engines-rocksdb = [
+  "tikv/test-engines-rocksdb",
+]
+test-engines-panic = [
+  "tikv/test-engines-panic",
+]
+>>>>>>> a0f8373f3a (*: remove cloud aws gcp azure features (#16602))
 
 nortcheck = ["engine_rocks/nortcheck"]
 

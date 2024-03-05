@@ -4,9 +4,14 @@ use std::io::{Read, Write};
 
 use azure::STORAGE_VENDOR_NAME_AZURE;
 pub use cloud::kms::Config as CloudConfig;
+<<<<<<< HEAD
 #[cfg(feature = "cloud-aws")]
 use encryption_export::{create_cloud_backend, KmsConfig};
 use encryption_export::{AzureConfig, Backend, Error, Result};
+=======
+use encryption::GcpConfig;
+use encryption_export::{create_cloud_backend, AzureConfig, Backend, Error, KmsConfig, Result};
+>>>>>>> a0f8373f3a (*: remove cloud aws gcp azure features (#16602))
 use file_system::{File, OpenOptions};
 use ini::ini::Ini;
 use kvproto::encryptionpb::EncryptedContent;
