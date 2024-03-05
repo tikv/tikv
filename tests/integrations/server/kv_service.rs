@@ -3411,9 +3411,10 @@ fn test_check_cluster_id() {
     assert_eq!(max_ts_before_req, cm.max_ts());
 }
 
-#[test]
+#[test_case(test_raftstore::must_new_cluster_and_kv_client)]
+#[test_case(test_raftstore_v2::must_new_cluster_and_kv_client)]
 fn test_check_cluster_id_for_batch_cmds() {
-    let (_cluster, client, ctx) = must_new_cluster_and_kv_client();
+    let (_cluster, client, ctx) = new_cluster();
     let k1 = b"k1";
     let v1 = b"v1";
     let ts = 1;
