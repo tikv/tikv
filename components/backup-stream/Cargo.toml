@@ -43,7 +43,6 @@ file_system = { workspace = true }
 futures = "0.3"
 futures-io = "0.3"
 grpcio = { workspace = true }
-sst_importer = { workspace = true }
 hex = "0.4"
 # Fixing ahash cyclic dep: https://github.com/tkaitchuck/ahash/issues/95
 indexmap = "=1.6.2"
@@ -65,6 +64,7 @@ resolved_ts = { workspace = true }
 security = { path = "../security" }
 slog = { workspace = true }
 slog-global = { workspace = true }
+sst_importer = { workspace = true }
 thiserror = "1"
 tidb_query_datatype = { workspace = true }
 tikv = { workspace = true }
