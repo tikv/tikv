@@ -2544,6 +2544,7 @@ version = "0.0.1"
 dependencies = [
  "engine_rocks",
  "engine_traits",
+ "log_wrappers",
  "region_cache_memory_engine",
  "slog",
  "slog-global",

@@ -107,6 +107,14 @@ pub trait Iterator: Send {
 
     /// Returns `true` if the iterator points to a `key`/`value` pair.
     fn valid(&self) -> Result<bool>;
+
+    fn sequence_number(&self) -> u64 {
+        unimplemented!()
+    }
+
+    fn cf(&self) -> &str {
+        unimplemented!()
+    }
 }
 
 pub trait RefIterable {

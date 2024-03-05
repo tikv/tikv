@@ -17,6 +17,7 @@ region_cache_memory_engine = { workspace = true }
 tempfile = "3.0"
 slog-global = { workspace = true }
 slog = { workspace = true }
+log_wrappers = { workspace = true }
 
 [dev-dependencies]
 tempfile = "3.0"

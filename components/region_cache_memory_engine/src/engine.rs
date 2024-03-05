@@ -297,7 +297,7 @@ impl RangeCacheMemoryEngine {
             for range in ranges_loading_cached_write {
                 if let Some(write_batches) = core.take_cache_write_batch(&range) {
                     for (seq, entry) in write_batches {
-                        entry.write_to_memory(&skiplist_engine, seq).unwrap();
+                        entry.write_to_memory(&skiplist_engine, seq, None).unwrap();
                     }
                 }
 
@@ -624,6 +624,14 @@ impl Iterator for RangeCacheIterator {
 
     fn valid(&self) -> Result<bool> {
         Ok(self.valid)
+    }
+
+    fn sequence_number(&self) -> u64 {
+        self.sequence_number
+    }
+
+    fn cf(&self) -> &str {
+        self.cf.as_str()
     }
 }
 

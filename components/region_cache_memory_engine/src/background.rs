@@ -336,7 +336,7 @@ impl BackgroundRunner {
                 )
             };
             for (seq, entry) in cache_batch {
-                entry.write_to_memory(&skiplist_engine, seq)?;
+                entry.write_to_memory(&skiplist_engine, seq, None)?;
             }
         }
         fail::fail_point!("on_snapshot_loaded_finish_before_status_change");
@@ -359,20 +359,21 @@ impl Runnable for BackgroundRunner {
     fn run(&mut self, task: Self::Task) {
         match task {
             BackgroundTask::GcTask(t) => {
-                let ranges = self.ranges_for_gc();
-                for range in ranges {
-                    self.gc_range(&range, t.safe_point);
-                }
-                self.gc_finished();
+                return;
+                // let ranges = self.ranges_for_gc();
+                // for range in ranges {
+                //     self.gc_range(&range, t.safe_point);
+                // }
+                // self.gc_finished();
             }
             BackgroundTask::ClearTombstone => {
-                let ranges: Vec<_> = {
-                    let core = self.engine_core.write().unwrap();
-                    core.range_manager().ranges().keys().cloned().collect()
-                };
-                for range in ranges {
-                    self.clear_tombstone_for_lock_cf(&range);
-                }
+                // let ranges: Vec<_> = {
+                //     let core = self.engine_core.write().unwrap();
+                //     core.range_manager().ranges().keys().cloned().collect()
+                // };
+                // for range in ranges {
+                //     self.clear_tombstone_for_lock_cf(&range);
+                // }
             }
             BackgroundTask::LoadTask => {
                 let core = self.engine_core.clone();

@@ -1,8 +1,10 @@
 use std::collections::BTreeMap;
 
+use ::core::slice::SlicePattern;
 use bytes::Bytes;
 use engine_traits::{
-    CacheRange, Mutable, Result, WriteBatch, WriteBatchExt, WriteOptions, CF_DEFAULT,
+    CacheRange, IterOptions, Iterable, Iterator, Mutable, RangeCacheEngine, Result, WriteBatch,
+    WriteBatchExt, WriteOptions, CF_DEFAULT, CF_LOCK,
 };
 use lazy_static::lazy_static;
 use prometheus::*;
@@ -65,6 +67,11 @@ impl From<&RangeCacheMemoryEngine> for RangeCacheWriteBatch {
     }
 }
 
+pub const DATA_PREFIX: u8 = b'z';
+pub const DATA_PREFIX_KEY: &[u8] = &[DATA_PREFIX];
+pub const DATA_MIN_KEY: &[u8] = &[DATA_PREFIX];
+pub const DATA_MAX_KEY: &[u8] = &[DATA_PREFIX + 1];
+
 impl RangeCacheWriteBatch {
     pub fn with_capacity(engine: &RangeCacheMemoryEngine, cap: usize) -> Self {
         Self {
@@ -121,9 +128,9 @@ impl RangeCacheWriteBatch {
                     .extend(write_batches.into_iter());
             }
         }
-        filtered_keys
-            .into_iter()
-            .try_for_each(|e| e.write_to_memory(&engine, seq))?;
+        for e in filtered_keys.into_iter() {
+            let (..) = e.write_to_memory(&engine, seq, Some(self.engine.clone()))?;
+        }
 
         info!(
             "write_impl";
@@ -227,12 +234,77 @@ impl RangeCacheWriteBatchEntry {
     }
 
     #[inline]
-    pub fn write_to_memory(&self, skiplist_engine: &SkiplistEngine, seq: u64) -> Result<()> {
+    pub fn write_to_memory(
+        &self,
+        skiplist_engine: &SkiplistEngine,
+        seq: u64,
+        engine: Option<RangeCacheMemoryEngine>,
+    ) -> Result<()> {
         PEER_WRITE_CMD_COUNTER.put.inc();
         let handle = &skiplist_engine.data[self.cf];
         let (key, value) = self.encode(seq);
+        // let mut delete = false;
+        // match &self.inner {
+        //     WriteBatchEntryInternal::PutValue(value) => {
+        //         if self.cf == 1 {
+        //             info!(
+        //                 "write to memory, put value";
+        //                 "seq" => seq,
+        //                 "cf" => self.cf,
+        //                 "key" => log_wrappers::Value::key(self.key.as_slice()),
+        //                 "encoded_key" => log_wrappers::Value::key(key.as_slice()),
+        //             );
+        //         }
+        //     }
+        //     WriteBatchEntryInternal::Deletion => {
+        //         delete = true;
+        //         if self.cf == 1 {
+        //             info!(
+        //                 "write to memory, delete";
+        //                 "seq" => seq,
+        //                 "cf" => self.cf,
+        //                 "key" => log_wrappers::Value::key(self.key.as_slice()),
+        //                 "encoded_key" => log_wrappers::Value::key(key.as_slice()),
+        //             );
+        //         }
+        //     }
+        // }
         // todo(SpadeA): handle the put error
-        let _ = handle.put(key, value);
+        assert!(handle.put(key, value).unwrap());
+
+        // if delete && self.cf == 1 {
+        //     let snap = engine
+        //         .as_ref()
+        //         .unwrap()
+        //         .snapshot(
+        //             CacheRange::new(DATA_MIN_KEY.to_vec(), DATA_MAX_KEY.to_vec()),
+        //             u64::MAX,
+        //             seq,
+        //         )
+        //         .unwrap();
+        //     let mut iter_opts = IterOptions::default();
+        //     iter_opts.set_lower_bound(DATA_MIN_KEY, 0);
+        //     iter_opts.set_upper_bound(DATA_MAX_KEY, 0);
+        //     let mut iter = snap.iterator_opt(CF_LOCK, iter_opts).unwrap();
+        //     info!(
+        //         "To read after delete";
+        //         "seq" => seq,
+        //         "key" => log_wrappers::Value::key(&self.key),
+        //     );
+        //     if let Ok(res) = iter.seek(&self.key)
+        //         && res
+        //     {
+        //         let key = iter.key();
+        //         if self.key.as_slice() == key {
+        //             info!(
+        //                 "can read after delete";
+        //                 "seq" => seq,
+        //                 "key" => log_wrappers::Value::key(key),
+        //                 "value" => log_wrappers::Value::key(iter.value()),
+        //             );
+        //         }
+        //     }
+        // }
         Ok(())
     }
 }
@@ -344,7 +416,10 @@ impl Mutable for RangeCacheWriteBatch {
 mod tests {
     use std::{sync::Arc, time::Duration};
 
-    use engine_traits::{CacheRange, Peekable, RangeCacheEngine, WriteBatch};
+    use engine_traits::{
+        CacheRange, IterOptions, Iterable, Iterator, Peekable, RangeCacheEngine, WriteBatch,
+        CF_LOCK,
+    };
 
     use super::*;
 
@@ -416,5 +491,54 @@ mod tests {
             &b"ccc"[..]
         );
         assert!(snapshot.get_value(&b"aaa"[..]).unwrap().is_none())
+    }
+
+    #[test]
+    fn test_x() {
+        let engine = RangeCacheMemoryEngine::new(Arc::default(), Duration::from_secs(1));
+        let r = CacheRange::new(b"".to_vec(), b"z".to_vec());
+        engine.new_range(r.clone());
+        {
+            let mut core = engine.core.write().unwrap();
+            core.mut_range_manager().set_range_readable(&r, true);
+            core.mut_range_manager().set_safe_point(&r, 10);
+        }
+        let mut wb = RangeCacheWriteBatch::from(&engine);
+        wb.put_cf(CF_LOCK, b"aaa", b"bbb").unwrap();
+        wb.set_sequence_number(1).unwrap();
+        assert_eq!(wb.write().unwrap(), 1);
+        let sl = engine.core.read().unwrap().engine().data[cf_to_id(CF_LOCK)].clone();
+        let entry = sl.get(&encode_key(b"aaa", 1, ValueType::Value)).unwrap();
+        assert_eq!(&b"bbb"[..], entry.value());
+
+        let mut wb = RangeCacheWriteBatch::from(&engine);
+        wb.put_cf(CF_LOCK, b"aaa", b"ccc").unwrap();
+        wb.set_sequence_number(2).unwrap();
+        assert_eq!(wb.write().unwrap(), 2);
+
+        {
+            let snap = engine.snapshot(r.clone(), 100, 10).unwrap();
+            let mut iter_opt = IterOptions::default();
+            iter_opt.set_lower_bound(b"", 0);
+            iter_opt.set_upper_bound(b"z", 0);
+            let mut iter = snap.iterator_opt(CF_LOCK, iter_opt).unwrap();
+            iter.seek(b"aaa");
+            println!("{:?}", iter.key());
+        }
+
+        let mut wb = RangeCacheWriteBatch::from(&engine);
+        wb.delete_cf(CF_LOCK, b"aaa");
+        wb.set_sequence_number(10).unwrap();
+        assert_eq!(wb.write().unwrap(), 10);
+
+        {
+            let snap = engine.snapshot(r.clone(), 100, 10).unwrap();
+            let mut iter_opt = IterOptions::default();
+            iter_opt.set_lower_bound(b"", 0);
+            iter_opt.set_upper_bound(b"z", 0);
+            let mut iter = snap.iterator_opt(CF_LOCK, iter_opt).unwrap();
+            iter.seek(b"aaa");
+            println!("{:?}", iter.key());
+        }
     }
 }

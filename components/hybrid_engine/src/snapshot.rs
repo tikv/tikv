@@ -73,10 +73,12 @@ where
     fn iterator_opt(&self, cf: &str, opts: IterOptions) -> Result<Self::Iterator> {
         if let Some(ref snap) = self.region_cache_snap {
             Ok(HybridEngineIterator::region_cache_engine_iterator(
+                self.disk_snap.iterator_opt(cf, opts.clone())?,
                 snap.iterator_opt(cf, opts)?,
             ))
         } else {
             Ok(HybridEngineIterator::disk_engine_iterator(
+                self.disk_snap.iterator_opt(cf, opts.clone())?,
                 self.disk_snap.iterator_opt(cf, opts)?,
             ))
         }

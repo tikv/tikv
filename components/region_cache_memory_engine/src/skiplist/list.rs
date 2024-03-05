@@ -16,8 +16,10 @@ use std::{
 use bytes::Bytes;
 use crossbeam_epoch::{self, pin, Atomic, Collector, Guard, Shared};
 use crossbeam_utils::CachePadded;
+use tikv_util::info;
 
 use super::{key::KeyComparator, memory_control::MemoryController, Bound, Error};
+use crate::keys::decode_key;
 
 /// Number of bits needed to store height.
 const HEIGHT_BITS: usize = 5;
@@ -653,7 +655,13 @@ impl<C: KeyComparator, M: MemoryController> Skiplist<C, M> {
 
             let height = self.random_height();
             let (node, n) = {
-                let n = Node::create_node(key, value, height, 1, &self.inner.memory_controller)?;
+                let n = Node::create_node(
+                    key.clone(),
+                    value,
+                    height,
+                    1,
+                    &self.inner.memory_controller,
+                )?;
                 (Shared::<Node>::from(n as *const _), &*n)
             };
             loop {
@@ -671,6 +679,18 @@ impl<C: KeyComparator, M: MemoryController> Skiplist<C, M> {
                     )
                     .is_ok()
                 {
+                    let internal_key = decode_key(&key);
+                    if !search.right[0].is_null() {
+                        let right = (&*search.right[0].as_raw()).key();
+                        info!(
+                            "put success";
+                            "key" => log_wrappers::Value::key(&key),
+                            "right_key" => log_wrappers::Value::key(right),
+                            "user_key" => log_wrappers::Value::key(internal_key.user_key),
+                            "seq" => internal_key.sequence,
+                            "type" => ?internal_key.v_type,
+                        );
+                    }
                     break;
                 }
 

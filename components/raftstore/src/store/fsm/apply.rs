@@ -1835,6 +1835,12 @@ where
             if cf == CF_LOCK {
                 self.metrics.lock_cf_written_bytes += key.len() as u64;
                 self.metrics.lock_cf_written_bytes += value.len() as u64;
+                info!(
+                    "handle put";
+                    "cf" => ?cf,
+                    "key" => log_wrappers::Value::key(key),
+                    "value" => log_wrappers::Value::key(value),
+                );
             }
             // TODO: check whether cf exists or not.
             ctx.kv_wb.put_cf(cf, key, value).unwrap_or_else(|e| {
@@ -1879,6 +1885,11 @@ where
         if !req.get_delete().get_cf().is_empty() {
             let cf = req.get_delete().get_cf();
             // TODO: check whether cf exists or not.
+            info!(
+                "handle delete";
+                "cf" => ?cf,
+                "key" => log_wrappers::Value::key(key),
+            );
             ctx.kv_wb.delete_cf(cf, key).unwrap_or_else(|e| {
                 panic!(
                     "{} failed to delete {}: {}",
@@ -1895,6 +1906,10 @@ where
                 self.metrics.delete_keys_hint += 1;
             }
         } else {
+            info!(
+                "handle delete, default";
+                "key" => log_wrappers::Value::key(key),
+            );
             ctx.kv_wb.delete(key).unwrap_or_else(|e| {
                 panic!(
                     "{} failed to delete {}: {}",
