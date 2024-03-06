@@ -10,14 +10,13 @@ use std::{
 };
 
 use engine_rocks::RocksSnapshot;
-use kvproto::{metapb, raft_serverpb::RaftMessage};
+use kvproto::{kvrpcpb::Op, metapb};
 use more_asserts::assert_le;
 use pd_client::PdClient;
 use raft::eraftpb::{ConfChangeType, MessageType};
 use raftstore::store::{Callback, RegionSnapshot};
 use test_raftstore::*;
-use test_raftstore_macro::test_case;
-use tikv_util::{config::*, future::block_on_timeout, time::Instant, HandyRwLock};
+use tikv_util::{config::*, time::Instant, HandyRwLock};
 
 // A helper function for testing the lease reads and lease renewing.
 // The leader keeps a record of its leader lease, and uses the system's
@@ -431,7 +430,7 @@ fn test_node_callback_when_destroyed() {
     let get = new_get_cmd(b"k1");
     let mut req = new_request(1, epoch, vec![get], true);
     req.mut_header().set_peer(leader);
-    let (cb, mut rx) = make_cb(&req);
+    let (cb, rx) = make_cb(&req);
     cluster
         .sim
         .rl()
@@ -501,8 +500,8 @@ fn test_read_index_stale_in_suspect_lease() {
     cluster.must_put(b"k2", b"v2");
     must_get_equal(&cluster.get_engine(3), b"k2", b"v2");
     // Ensure peer 3 is ready to become leader.
-    let resp_ch = async_read_on_peer(&mut cluster, new_peer(3, 3), r1.clone(), b"k2", true, true);
-    let resp = block_on_timeout(resp_ch, Duration::from_secs(3)).unwrap();
+    let rx = async_read_on_peer(&mut cluster, new_peer(3, 3), r1.clone(), b"k2", true, true);
+    let resp = rx.recv_timeout(Duration::from_secs(3)).unwrap();
     assert!(!resp.get_header().has_error(), "{:?}", resp);
     assert_eq!(
         resp.get_responses()[0].get_get().get_value(),
@@ -650,7 +649,7 @@ fn test_not_leader_read_lease() {
         true,
     );
     req.mut_header().set_peer(new_peer(1, 1));
-    let (cb, mut rx) = make_cb(&req);
+    let (cb, rx) = make_cb(&req);
     cluster.sim.rl().async_command_on_node(1, req, cb).unwrap();
 
     cluster.must_transfer_leader(region_id, new_peer(3, 3));
@@ -717,7 +716,7 @@ fn test_read_index_after_write() {
     );
     req.mut_header()
         .set_peer(new_peer(1, region_on_store1.get_id()));
-    let (cb, mut rx) = make_cb(&req);
+    let (cb, rx) = make_cb(&req);
     cluster.sim.rl().async_command_on_node(1, req, cb).unwrap();
 
     cluster.sim.wl().clear_recv_filters(2);
@@ -830,82 +829,46 @@ fn test_node_local_read_renew_lease() {
     }
 }
 
-#[test_case(test_raftstore::new_node_cluster)]
-#[test_case(test_raftstore_v2::new_node_cluster)]
-fn test_node_lease_restart_during_isolation() {
-    let mut cluster = new_cluster(0, 3);
-    let election_timeout = configure_for_lease_read(&mut cluster.cfg, Some(500), Some(3));
-    cluster.cfg.raft_store.allow_unsafe_vote_after_start = false;
+#[test]
+fn test_stale_read_with_ts0() {
+    let mut cluster = new_server_cluster(0, 3);
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+    cluster.cfg.resolved_ts.enable = true;
     cluster.run();
-    sleep_ms(election_timeout.as_millis() as _);
-    let mut region;
-    let start = Instant::now_coarse();
-    let key = b"k";
-    loop {
-        region = cluster.get_region(key);
-        if region.get_peers().len() == 3
-            && region
-                .get_peers()
-                .iter()
-                .all(|p| p.get_role() == metapb::PeerRole::Voter)
-        {
-            break;
-        }
-        if start.saturating_elapsed() > Duration::from_secs(5) {
-            panic!("timeout");
-        }
-    }
 
-    let region_id = region.get_id();
-    let peer1 = find_peer(&region, 1).unwrap();
-    let peer2 = find_peer(&region, 2).unwrap();
+    let leader = new_peer(1, 1);
+    cluster.must_transfer_leader(1, leader.clone());
+    let mut leader_client = PeerClient::new(&cluster, 1, leader);
 
-    cluster.must_put(key, b"v0");
-    cluster.must_transfer_leader(region_id, peer1.clone());
-    must_read_on_peer(&mut cluster, peer1.clone(), region.clone(), key, b"v0");
-    cluster.must_transfer_leader(region_id, peer2.clone());
-    must_read_on_peer(&mut cluster, peer2.clone(), region.clone(), key, b"v0");
+    let mut follower_client2 = PeerClient::new(&cluster, 1, new_peer(2, 2));
 
-    cluster.add_send_filter(IsolationFilterFactory::new(2));
+    // Set the `stale_read` flag
+    leader_client.ctx.set_stale_read(true);
+    follower_client2.ctx.set_stale_read(true);
 
-    // Restart node 3.
-    cluster.stop_node(3);
-    cluster.run_node(3).unwrap();
-
-    // Let peer1 start election.
-    let mut timeout = RaftMessage::default();
-    timeout.mut_message().set_to(peer1.get_id());
-    timeout
-        .mut_message()
-        .set_msg_type(MessageType::MsgTimeoutNow);
-    timeout
-        .mut_message()
-        .set_msg_type(MessageType::MsgTimeoutNow);
-    timeout.set_region_id(region.get_id());
-    timeout.set_from_peer(peer2.clone());
-    timeout.set_to_peer(peer1.clone());
-    timeout.set_region_epoch(region.get_region_epoch().clone());
-    cluster.send_raft_msg(timeout).unwrap();
-
-    let (tx, rx) = mpsc::channel();
-    let append_resp_notifier = Box::new(MessageTypeNotifier::new(
-        MessageType::MsgAppendResponse,
-        tx,
-        Arc::from(AtomicBool::new(true)),
-    ));
-    cluster.sim.wl().add_send_filter(3, append_resp_notifier);
-    let timeout = Duration::from_secs(5);
-    rx.recv_timeout(timeout).unwrap();
-
-    let mut put = new_request(
-        region.get_id(),
-        region.get_region_epoch().clone(),
-        vec![new_put_cmd(key, b"v1")],
-        false,
+    let commit_ts1 = leader_client.must_kv_write(
+        &pd_client,
+        vec![new_mutation(Op::Put, &b"key1"[..], &b"value1"[..])],
+        b"key1".to_vec(),
     );
-    put.mut_header().set_peer(peer1.clone());
-    let resp = cluster.call_command(put, timeout).unwrap();
-    assert!(!resp.get_header().has_error(), "{:?}", resp);
-    must_read_on_peer(&mut cluster, peer1.clone(), region.clone(), key, b"v1");
-    must_error_read_on_peer(&mut cluster, peer2.clone(), region.clone(), key, timeout);
+
+    let commit_ts2 = leader_client.must_kv_write(
+        &pd_client,
+        vec![new_mutation(Op::Put, &b"key1"[..], &b"value2"[..])],
+        b"key1".to_vec(),
+    );
+
+    follower_client2.must_kv_read_equal(b"key1".to_vec(), b"value1".to_vec(), commit_ts1);
+    follower_client2.must_kv_read_equal(b"key1".to_vec(), b"value2".to_vec(), commit_ts2);
+    assert!(
+        follower_client2
+            .kv_read(b"key1".to_vec(), 0)
+            .region_error
+            .into_option()
+            .unwrap()
+            .not_leader
+            .is_some()
+    );
+    assert!(leader_client.kv_read(b"key1".to_vec(), 0).not_found);
 }

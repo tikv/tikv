@@ -753,11 +753,6 @@ error = '''
 KV:Storage:LockIfExistsFailed
 '''
 
-["KV:Storage:PrimaryMismatch"]
-error = '''
-KV:Storage:PrimaryMismatch
-'''
-
 ["KV:Storage:Unknown"]
 error = '''
 KV:Storage:Unknown

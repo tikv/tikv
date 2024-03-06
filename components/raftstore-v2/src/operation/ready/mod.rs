@@ -57,7 +57,6 @@ pub use self::{
 use crate::{
     batch::StoreContext,
     fsm::{PeerFsmDelegate, Store},
-    operation::life::is_empty_split_message,
     raft::{Peer, Storage},
     router::{PeerMsg, PeerTick},
     worker::tablet,
@@ -96,7 +95,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
     /// Raft relies on periodic ticks to keep the state machine sync with other
     /// peers.
     pub fn on_raft_tick(&mut self) {
-        if self.fsm.peer_mut().tick(self.store_ctx) {
+        if self.fsm.peer_mut().tick() {
             self.fsm.peer_mut().set_has_ready();
         }
         self.fsm.peer_mut().maybe_clean_up_stale_merge_context();
@@ -152,15 +151,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     }
 
     #[inline]
-    fn tick<T>(&mut self, store_ctx: &mut StoreContext<EK, ER, T>) -> bool {
+    fn tick(&mut self) -> bool {
         // When it's handling snapshot, it's pointless to tick as all the side
         // affects have to wait till snapshot is applied. On the other hand, ticking
         // will bring other corner cases like elections.
-        if self.is_handling_snapshot() || !self.serving() {
-            return false;
-        }
-        self.retry_pending_reads(&store_ctx.cfg);
-        self.raft_group_mut().tick()
+        !self.is_handling_snapshot() && self.serving() && self.raft_group_mut().tick()
     }
 
     pub fn on_peer_unreachable(&mut self, to_peer_id: u64) {
@@ -196,19 +191,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         if !self.serving() {
             return;
         }
-        if util::is_vote_msg(msg.get_message()) {
-            if self.maybe_gc_sender(&msg) {
-                return;
-            }
-            if let Some(remain) = ctx.maybe_in_unsafe_vote_period() {
-                debug!(self.logger,
-                    "drop request vote for one election timeout after node starts";
-                    "from_peer_id" => msg.get_message().get_from(),
-                    "remain_duration" => ?remain,
-                );
-                ctx.raft_metrics.message_dropped.unsafe_vote.inc();
-                return;
-            }
+        if util::is_vote_msg(msg.get_message()) && self.maybe_gc_sender(&msg) {
+            return;
         }
         if msg.get_to_peer().get_store_id() != self.peer().get_store_id() {
             ctx.raft_metrics.message_dropped.mismatch_store_id.inc();
@@ -305,14 +289,10 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         // ranges with other peers.
         let from_peer = msg.take_from_peer();
         let from_peer_id = from_peer.get_id();
-        if from_peer_id != INVALID_ID {
-            if self.is_leader() {
-                self.add_peer_heartbeat(from_peer.get_id(), Instant::now());
-            }
-            // We only cache peer with an valid ID.
-            // It prevents cache peer(0,0) which is sent by region split.
-            self.insert_peer_cache(from_peer);
+        if self.is_leader() && from_peer.get_id() != INVALID_ID {
+            self.add_peer_heartbeat(from_peer.get_id(), Instant::now());
         }
+        self.insert_peer_cache(from_peer);
         let pre_committed_index = self.raft_group().raft.raft_log.committed;
         if msg.get_message().get_msg_type() == MessageType::MsgTransferLeader {
             self.on_transfer_leader_msg(ctx, msg.get_message(), msg.disk_usage)
@@ -324,19 +304,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 && (msg.get_message().get_from() == raft::INVALID_ID
                     || msg.get_message().get_from() == self.peer_id())
             {
-                ctx.raft_metrics.message_dropped.stale_msg.inc();
-                return;
-            }
-            if msg.get_message().get_msg_type() == MessageType::MsgReadIndex
-                && self.is_leader()
-                && self.on_step_read_index(ctx, msg.mut_message())
-            {
-                // Read index has respond in `on_step_read_index`.
-                return;
-            }
-
-            // As this peer is already created, the empty split message is meaningless.
-            if is_empty_split_message(&msg) {
                 ctx.raft_metrics.message_dropped.stale_msg.inc();
                 return;
             }
@@ -402,7 +369,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let to_peer = match self.peer_from_cache(msg.to) {
             Some(p) => p,
             None => {
-                warn!(self.logger, "failed to look up recipient peer"; "to_peer" => msg.to, "message_type" => ?msg.msg_type);
+                warn!(self.logger, "failed to look up recipient peer"; "to_peer" => msg.to);
                 return None;
             }
         };
@@ -422,7 +389,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         }
 
         // Filling start and end key is only needed for being compatible with
-        // raftstore v1 learners (e.g. tiflash engine).
+        // raftstore v1 tiflash engine.
         //
         // There could be two cases:
         // - Target peer already exists but has not established communication with
@@ -629,12 +596,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             || true,
             |entry| entry.index == self.raft_group().raft.raft_log.last_index()
         ));
-
-        fail::fail_point!(
-            "before_handle_snapshot_ready_3",
-            self.peer_id() == 3 && self.get_pending_snapshot().is_some(),
-            |_| ()
-        );
 
         self.on_role_changed(ctx, &ready);
 
@@ -928,7 +889,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                     self.maybe_schedule_gc_peer_tick();
                 }
                 StateRole::Follower => {
-                    self.expire_lease_on_became_follower(&ctx.store_meta);
+                    self.leader_lease_mut().expire();
                     self.storage_mut().cancel_generating_snap(None);
                     self.txn_context()
                         .on_became_follower(self.term(), self.region());
@@ -936,8 +897,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 }
                 _ => {}
             }
-            self.read_progress()
-                .update_leader_info(ss.leader_id, term, self.region());
             let target = self.refresh_leader_transferee();
             ctx.coprocessor_host.on_role_change(
                 self.region(),
@@ -1027,11 +986,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     }
 
     fn check_long_uncommitted_proposals<T>(&mut self, ctx: &mut StoreContext<EK, ER, T>) {
-        fail::fail_point!(
-            "on_check_long_uncommitted_proposals_1",
-            self.peer_id() == 1,
-            |_| {}
-        );
         if self.has_long_uncommitted_proposals(ctx) {
             let status = self.raft_group().status();
             let mut buffer: Vec<(u64, u64, u64)> = Vec::new();
@@ -1067,9 +1021,8 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
             if let Err(e) = self.apply_snapshot(
                 ready.snapshot(),
                 write_task,
-                &ctx.snap_mgr,
-                &ctx.tablet_registry,
-                ctx.key_manager.as_ref(),
+                ctx.snap_mgr.clone(),
+                ctx.tablet_registry.clone(),
             ) {
                 SNAP_COUNTER.apply.fail.inc();
                 error!(self.logger(),"failed to apply snapshot";"error" => ?e)

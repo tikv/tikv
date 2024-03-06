@@ -195,7 +195,7 @@ impl KvEngine for RocksEngine {
         e.downcast_ref().expect("bad engine downcast")
     }
 
-    #[cfg(feature = "testexport")]
+    #[cfg(any(test, feature = "testexport"))]
     fn inner_refcount(&self) -> usize {
         Arc::strong_count(&self.db)
     }

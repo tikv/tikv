@@ -29,7 +29,6 @@
 
 use std::{cmp, sync::Mutex};
 
-use encryption_export::DataKeyManager;
 use engine_traits::{
     data_cf_offset, ApplyProgress, KvEngine, RaftEngine, RaftLogBatch, TabletRegistry, ALL_CFS,
     CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE, DATA_CFS, DATA_CFS_LEN,
@@ -298,23 +297,16 @@ impl ApplyTrace {
     /// `None` is returned.
     #[inline]
     pub fn log_recovery(&self) -> Option<Box<DataTrace>> {
-        let flushed_indexes = self.flushed_indexes();
+        let mut flushed_indexes = [0; DATA_CFS_LEN];
+        for (off, pr) in self.data_cfs.iter().enumerate() {
+            flushed_indexes[off] = pr.flushed;
+        }
         for i in flushed_indexes {
             if i > self.admin.flushed {
                 return Some(Box::new(flushed_indexes));
             }
         }
         None
-    }
-
-    /// Get the flushed indexes of all data CF that is needed when recoverying
-    /// logs. It does not check the admin cf.
-    pub fn flushed_indexes(&self) -> DataTrace {
-        let mut flushed_indexes = [0; DATA_CFS_LEN];
-        for (off, pr) in self.data_cfs.iter().enumerate() {
-            flushed_indexes[off] = pr.flushed;
-        }
-        flushed_indexes
     }
 
     pub fn restore_snapshot(&mut self, index: u64) {
@@ -413,12 +405,13 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
             }
         };
         apply_state.set_applied_index(applied_index);
-        (|| {
+        let mut reset_apply_index = || {
             // Make node reply from start.
             fail_point!("RESET_APPLY_INDEX_WHEN_RESTART", |_| {
                 apply_state.set_applied_index(5);
             });
-        })();
+        };
+        reset_apply_index();
 
         Self::create(
             store_id,
@@ -437,12 +430,7 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
     /// Region state is written before actually moving data. It's possible that
     /// the tablet is missing after restart. We need to move the data again
     /// after being restarted.
-    pub fn recover_tablet(
-        &self,
-        registry: &TabletRegistry<EK>,
-        key_manager: Option<&DataKeyManager>,
-        snap_mgr: &TabletSnapManager,
-    ) {
+    pub fn recover_tablet(&self, registry: &TabletRegistry<EK>, snap_mgr: &TabletSnapManager) {
         let tablet_index = self.region_state().get_tablet_index();
         if tablet_index == 0 {
             // It's an uninitialized peer, nothing to recover.
@@ -457,7 +445,7 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
         if tablet_index == RAFT_INIT_LOG_INDEX {
             // Its data may come from split or snapshot. Try split first.
             let split_path = temp_split_path(registry, region_id);
-            if install_tablet(registry, key_manager, &split_path, region_id, tablet_index) {
+            if install_tablet(registry, &split_path, region_id, tablet_index) {
                 return;
             }
         }
@@ -472,7 +460,7 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
                 self.entry_storage().truncated_term(),
                 tablet_index,
             );
-            if install_tablet(registry, key_manager, &snap_path, region_id, tablet_index) {
+            if install_tablet(registry, &snap_path, region_id, tablet_index) {
                 return;
             }
         }

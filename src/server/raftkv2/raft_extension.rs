@@ -71,7 +71,7 @@ impl<EK: KvEngine, ER: RaftEngine> tikv_kv::RaftExtension for Extension<EK, ER> 
         split_keys: Vec<Vec<u8>>,
         source: String,
     ) -> futures::future::BoxFuture<'static, tikv_kv::Result<Vec<kvproto::metapb::Region>>> {
-        let (msg, sub) = PeerMsg::request_split(region_epoch, split_keys, source, true);
+        let (msg, sub) = PeerMsg::request_split(region_epoch, split_keys, source);
         let res = self.router.check_send(region_id, msg);
         Box::pin(async move {
             res?;

@@ -40,7 +40,6 @@
 
 mod basic_read_write;
 mod cf_names;
-mod checkpoint;
 mod ctor;
 mod delete_range;
 mod iterator;

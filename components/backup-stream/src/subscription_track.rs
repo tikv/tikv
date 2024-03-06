@@ -8,8 +8,8 @@ use dashmap::{
 };
 use kvproto::metapb::Region;
 use raftstore::coprocessor::*;
-use resolved_ts::{Resolver, TsSource, TxnLocks};
-use tikv_util::{info, memory::MemoryQuota, warn};
+use resolved_ts::Resolver;
+use tikv_util::{info, warn};
 use txn_types::TimeStamp;
 
 use crate::{debug, metrics::TRACK_REGION, utils};
@@ -82,7 +82,6 @@ impl ActiveSubscription {
         self.handle.stop_observing();
     }
 
-    #[cfg(test)]
     pub fn is_observing(&self) -> bool {
         self.handle.is_observing()
     }
@@ -100,7 +99,7 @@ impl ActiveSubscription {
 pub enum CheckpointType {
     MinTs,
     StartTsOfInitialScan,
-    StartTsOfTxn(Option<(TimeStamp, TxnLocks)>),
+    StartTsOfTxn(Option<Arc<[u8]>>),
 }
 
 impl std::fmt::Debug for CheckpointType {
@@ -110,7 +109,10 @@ impl std::fmt::Debug for CheckpointType {
             Self::StartTsOfInitialScan => write!(f, "StartTsOfInitialScan"),
             Self::StartTsOfTxn(arg0) => f
                 .debug_tuple("StartTsOfTxn")
-                .field(&format_args!("{:?}", arg0))
+                .field(&format_args!(
+                    "{}",
+                    utils::redact(&arg0.as_ref().map(|x| x.as_ref()).unwrap_or(&[]))
+                ))
                 .finish(),
         }
     }
@@ -320,7 +322,6 @@ impl SubscriptionTracer {
     }
 
     /// check whether the region_id should be observed by this observer.
-    #[cfg(test)]
     pub fn is_observing(&self, region_id: u64) -> bool {
         let sub = self.0.get_mut(&region_id);
         match sub {
@@ -400,7 +401,7 @@ impl<'a> SubscriptionRef<'a> {
     }
 }
 
-/// This enhanced version of `Resolver` allow some unordered lock events.
+/// This enhanced version of `Resolver` allow some unordered lock events.  
 /// The name "2-phase" means this is used for 2 *concurrency* phases of
 /// observing a region:
 /// 1. Doing the initial scanning.
@@ -465,11 +466,9 @@ impl std::fmt::Debug for FutureLock {
 
 impl TwoPhaseResolver {
     /// try to get one of the key of the oldest lock in the resolver.
-    pub fn sample_far_lock(&self) -> Option<(TimeStamp, TxnLocks)> {
-        self.resolver
-            .locks()
-            .first_key_value()
-            .map(|(ts, txn_locks)| (*ts, txn_locks.clone()))
+    pub fn sample_far_lock(&self) -> Option<Arc<[u8]>> {
+        let (_, keys) = self.resolver.locks().first_key_value()?;
+        keys.iter().next().cloned()
     }
 
     pub fn in_phase_one(&self) -> bool {
@@ -480,8 +479,7 @@ impl TwoPhaseResolver {
         if !self.in_phase_one() {
             warn!("backup stream tracking lock as if in phase one"; "start_ts" => %start_ts, "key" => %utils::redact(&key))
         }
-        // TODO: handle memory quota exceed, for now, quota is set to usize::MAX.
-        self.resolver.track_lock(start_ts, key, None).unwrap();
+        self.resolver.track_lock(start_ts, key, None)
     }
 
     pub fn track_lock(&mut self, start_ts: TimeStamp, key: Vec<u8>) {
@@ -489,8 +487,7 @@ impl TwoPhaseResolver {
             self.future_locks.push(FutureLock::Lock(key, start_ts));
             return;
         }
-        // TODO: handle memory quota exceed, for now, quota is set to usize::MAX.
-        self.resolver.track_lock(start_ts, key, None).unwrap();
+        self.resolver.track_lock(start_ts, key, None)
     }
 
     pub fn untrack_lock(&mut self, key: &[u8]) {
@@ -504,10 +501,7 @@ impl TwoPhaseResolver {
 
     fn handle_future_lock(&mut self, lock: FutureLock) {
         match lock {
-            FutureLock::Lock(key, ts) => {
-                // TODO: handle memory quota exceed, for now, quota is set to usize::MAX.
-                self.resolver.track_lock(ts, key, None).unwrap();
-            }
+            FutureLock::Lock(key, ts) => self.resolver.track_lock(ts, key, None),
             FutureLock::Unlock(key) => self.resolver.untrack_lock(&key, None),
         }
     }
@@ -517,7 +511,7 @@ impl TwoPhaseResolver {
             return min_ts.min(stable_ts);
         }
 
-        self.resolver.resolve(min_ts, None, TsSource::BackupStream)
+        self.resolver.resolve(min_ts)
     }
 
     pub fn resolved_ts(&self) -> TimeStamp {
@@ -529,10 +523,8 @@ impl TwoPhaseResolver {
     }
 
     pub fn new(region_id: u64, stable_ts: Option<TimeStamp>) -> Self {
-        // TODO: limit the memory usage of the resolver.
-        let memory_quota = Arc::new(MemoryQuota::new(std::usize::MAX));
         Self {
-            resolver: Resolver::new(region_id, memory_quota),
+            resolver: Resolver::new(region_id),
             future_locks: Default::default(),
             stable_ts,
         }
@@ -549,7 +541,7 @@ impl TwoPhaseResolver {
                 // advance the internal resolver.
                 // the start ts of initial scanning would be a safe ts for min ts
                 // -- because is used to be a resolved ts.
-                self.resolver.resolve(ts, None, TsSource::BackupStream);
+                self.resolver.resolve(ts);
             }
             None => {
                 warn!("BUG: a two-phase resolver is executing phase_one_done when not in phase one"; "resolver" => ?self)
@@ -573,7 +565,6 @@ mod test {
 
     use kvproto::metapb::{Region, RegionEpoch};
     use raftstore::coprocessor::ObserveHandle;
-    use resolved_ts::TxnLocks;
     use txn_types::TimeStamp;
 
     use super::{SubscriptionTracer, TwoPhaseResolver};
@@ -676,13 +667,7 @@ mod test {
                 (
                     region(4, 8, 1),
                     128.into(),
-                    StartTsOfTxn(Some((
-                        TimeStamp::new(128),
-                        TxnLocks {
-                            lock_count: 1,
-                            sample_lock: Some(Arc::from(b"Alpi".as_slice())),
-                        }
-                    )))
+                    StartTsOfTxn(Some(Arc::from(b"Alpi".as_slice())))
                 ),
             ]
         );

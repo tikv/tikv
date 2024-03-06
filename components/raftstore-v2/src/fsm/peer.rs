@@ -6,7 +6,6 @@ use std::borrow::Cow;
 
 use batch_system::{BasicMailbox, Fsm};
 use crossbeam::channel::TryRecvError;
-use encryption_export::DataKeyManager;
 use engine_traits::{KvEngine, RaftEngine, TabletRegistry};
 use kvproto::{errorpb, raft_cmdpb::RaftCmdResponse};
 use raftstore::store::{Config, TabletSnapManager, Transport};
@@ -41,11 +40,10 @@ impl<EK: KvEngine, ER: RaftEngine> PeerFsm<EK, ER> {
     pub fn new(
         cfg: &Config,
         tablet_registry: &TabletRegistry<EK>,
-        key_manager: Option<&DataKeyManager>,
         snap_mgr: &TabletSnapManager,
         storage: Storage<EK, ER>,
     ) -> Result<SenderFsmPair<EK, ER>> {
-        let peer = Peer::new(cfg, tablet_registry, key_manager, snap_mgr, storage)?;
+        let peer = Peer::new(cfg, tablet_registry, snap_mgr, storage)?;
         info!(peer.logger, "create peer";
             "raft_state" => ?peer.storage().raft_state(),
             "apply_state" => ?peer.storage().apply_state(),

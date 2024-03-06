@@ -13,10 +13,10 @@
 //! be used as the start state.
 
 use std::{
-    collections::{HashMap, LinkedList},
+    collections::LinkedList,
     sync::{
         atomic::{AtomicU64, Ordering},
-        Arc, Mutex, RwLock,
+        Arc, Mutex,
     },
 };
 
@@ -52,47 +52,6 @@ impl ApplyProgress {
 struct FlushProgress {
     prs: LinkedList<ApplyProgress>,
     last_flushed: [u64; DATA_CFS_LEN],
-}
-
-/// A share state between raftstore and underlying engine.
-///
-/// raftstore will update state changes and corresponding sst apply index, when
-/// apply ingest sst request, it should ensure the sst can be deleted
-/// if the flushed index greater than it .
-#[derive(Debug, Clone)]
-pub struct SstApplyState {
-    sst_map: Arc<RwLock<HashMap<Vec<u8>, u64>>>,
-}
-
-impl Default for SstApplyState {
-    fn default() -> Self {
-        Self {
-            sst_map: Arc::new(RwLock::new(HashMap::new())),
-        }
-    }
-}
-
-impl SstApplyState {
-    #[inline]
-    pub fn registe_ssts(&self, uuids: Vec<Vec<u8>>, sst_applied_index: u64) {
-        let mut map = self.sst_map.write().unwrap();
-        for uuid in uuids {
-            map.insert(uuid, sst_applied_index);
-        }
-    }
-
-    /// Query the sst applied index.
-    #[inline]
-    pub fn sst_applied_index(&self, uuid: &Vec<u8>) -> Option<u64> {
-        self.sst_map.read().unwrap().get(uuid).copied()
-    }
-
-    pub fn delete_ssts(&self, uuids: Vec<Vec<u8>>) {
-        let mut map = self.sst_map.write().unwrap();
-        for uuid in uuids {
-            map.remove(&uuid);
-        }
-    }
 }
 
 /// A share state between raftstore and underlying engine.

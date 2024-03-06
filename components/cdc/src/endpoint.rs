@@ -33,7 +33,7 @@ use raftstore::{
     router::CdcHandle,
     store::fsm::{store::StoreRegionMeta, ChangeObserver},
 };
-use resolved_ts::{resolve_by_raft, LeadershipResolver, Resolver};
+use resolved_ts::{LeadershipResolver, Resolver};
 use security::SecurityManager;
 use tikv::{
     config::CdcConfig,
@@ -41,7 +41,6 @@ use tikv::{
 };
 use tikv_util::{
     debug, defer, error, impl_display_as_debug, info,
-    memory::MemoryQuota,
     mpsc::bounded,
     slow_log,
     sys::thread::ThreadBuildWrapper,
@@ -57,7 +56,7 @@ use tokio::{
 use txn_types::{TimeStamp, TxnExtra, TxnExtraScheduler};
 
 use crate::{
-    channel::{CdcEvent, SendError},
+    channel::{CdcEvent, MemoryQuota, SendError},
     delegate::{on_init_downstream, Delegate, Downstream, DownstreamId, DownstreamState},
     initializer::Initializer,
     metrics::*,
@@ -342,10 +341,9 @@ pub struct Endpoint<T, E, S> {
     workers: Runtime,
     scan_concurrency_semaphore: Arc<Semaphore>,
     scan_speed_limiter: Limiter,
-    fetch_speed_limiter: Limiter,
     max_scan_batch_bytes: usize,
     max_scan_batch_size: usize,
-    sink_memory_quota: Arc<MemoryQuota>,
+    sink_memory_quota: MemoryQuota,
 
     old_value_cache: OldValueCache,
     resolved_region_heap: RefCell<ResolvedRegionHeap>,
@@ -376,7 +374,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
         concurrency_manager: ConcurrencyManager,
         env: Arc<Environment>,
         security_mgr: Arc<SecurityManager>,
-        sink_memory_quota: Arc<MemoryQuota>,
+        sink_memory_quota: MemoryQuota,
         causal_ts_provider: Option<Arc<CausalTsProviderImpl>>,
     ) -> Endpoint<T, E, S> {
         let workers = Builder::new_multi_thread()
@@ -400,13 +398,8 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
         let scan_concurrency_semaphore =
             Arc::new(Semaphore::new(config.incremental_scan_concurrency));
         let old_value_cache = OldValueCache::new(config.old_value_cache_memory_quota);
-        let scan_speed_limiter = Limiter::new(if config.incremental_scan_speed_limit.0 > 0 {
+        let speed_limiter = Limiter::new(if config.incremental_scan_speed_limit.0 > 0 {
             config.incremental_scan_speed_limit.0 as f64
-        } else {
-            f64::INFINITY
-        });
-        let fetch_speed_limiter = Limiter::new(if config.incremental_fetch_speed_limit.0 > 0 {
-            config.incremental_fetch_speed_limit.0 as f64
         } else {
             f64::INFINITY
         });
@@ -435,8 +428,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
             pd_client,
             tso_worker,
             timer: SteadyTimer::default(),
-            scan_speed_limiter,
-            fetch_speed_limiter,
+            scan_speed_limiter: speed_limiter,
             max_scan_batch_bytes,
             max_scan_batch_size,
             config: config.clone(),
@@ -516,15 +508,6 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
             };
 
             self.scan_speed_limiter.set_speed_limit(new_speed_limit);
-        }
-        if change.get("incremental_fetch_speed_limit").is_some() {
-            let new_speed_limit = if self.config.incremental_fetch_speed_limit.0 > 0 {
-                self.config.incremental_fetch_speed_limit.0 as f64
-            } else {
-                f64::INFINITY
-            };
-
-            self.fetch_speed_limiter.set_speed_limit(new_speed_limit);
         }
     }
 
@@ -703,11 +686,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
             HashMapEntry::Occupied(e) => e.into_mut(),
             HashMapEntry::Vacant(e) => {
                 is_new_delegate = true;
-                e.insert(Delegate::new(
-                    region_id,
-                    txn_extra_op,
-                    self.sink_memory_quota.clone(),
-                ))
+                e.insert(Delegate::new(region_id, txn_extra_op))
             }
         };
 
@@ -760,8 +739,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
             sink: conn.get_sink().clone(),
             request_id: request.get_request_id(),
             downstream_state,
-            scan_speed_limiter: self.scan_speed_limiter.clone(),
-            fetch_speed_limiter: self.fetch_speed_limiter.clone(),
+            speed_limiter: self.scan_speed_limiter.clone(),
             max_scan_batch_bytes: self.max_scan_batch_bytes,
             max_scan_batch_size: self.max_scan_batch_size,
             observe_id,
@@ -774,11 +752,10 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
 
         let cdc_handle = self.cdc_handle.clone();
         let concurrency_semaphore = self.scan_concurrency_semaphore.clone();
-        let memory_quota = self.sink_memory_quota.clone();
         self.workers.spawn(async move {
             CDC_SCAN_TASKS.with_label_values(&["total"]).inc();
             match init
-                .initialize(change_cmd, cdc_handle, concurrency_semaphore, memory_quota)
+                .initialize(change_cmd, cdc_handle, concurrency_semaphore)
                 .await
             {
                 Ok(()) => {
@@ -828,25 +805,17 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
 
     fn on_region_ready(&mut self, observe_id: ObserveId, resolver: Resolver, region: Region) {
         let region_id = region.get_id();
-        let mut deregisters = Vec::new();
+        let mut failed_downstreams = Vec::new();
         if let Some(delegate) = self.capture_regions.get_mut(&region_id) {
             if delegate.handle.id == observe_id {
-                match delegate.on_region_ready(resolver, region) {
-                    Ok(fails) => {
-                        for (downstream, e) in fails {
-                            deregisters.push(Deregister::Downstream {
-                                conn_id: downstream.get_conn_id(),
-                                region_id,
-                                downstream_id: downstream.get_id(),
-                                err: Some(e),
-                            });
-                        }
-                    }
-                    Err(e) => deregisters.push(Deregister::Delegate {
+                let region_id = delegate.region_id;
+                for (downstream, e) in delegate.on_region_ready(resolver, region) {
+                    failed_downstreams.push(Deregister::Downstream {
                         region_id,
-                        observe_id,
-                        err: e,
-                    }),
+                        downstream_id: downstream.get_id(),
+                        conn_id: downstream.get_conn_id(),
+                        err: Some(e),
+                    });
                 }
             } else {
                 debug!("cdc stale region ready";
@@ -860,7 +829,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
         }
 
         // Deregister downstreams if there is any downstream fails to subscribe.
-        for deregister in deregisters {
+        for deregister in failed_downstreams {
             self.on_deregister(deregister);
         }
     }
@@ -1110,7 +1079,9 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
                     leader_resolver.resolve(regions, min_ts).await
                 } else {
                     CDC_RESOLVED_TS_ADVANCE_METHOD.set(0);
-                    resolve_by_raft(regions, min_ts, cdc_handle).await
+                    leader_resolver
+                        .resolve_by_raft(regions, min_ts, cdc_handle)
+                        .await
                 };
             leader_resolver_tx.send(leader_resolver).unwrap();
 
@@ -1424,7 +1395,7 @@ mod tests {
             ConcurrencyManager::new(1.into()),
             env,
             security_mgr,
-            Arc::new(MemoryQuota::new(usize::MAX)),
+            MemoryQuota::new(usize::MAX),
             causal_ts_provider,
         );
 
@@ -1445,7 +1416,7 @@ mod tests {
 
         let mut suite = mock_endpoint(&cfg, None, ApiVersion::V1);
         suite.add_region(1, 100);
-        let quota = Arc::new(MemoryQuota::new(usize::MAX));
+        let quota = crate::channel::MemoryQuota::new(usize::MAX);
         let (tx, mut rx) = channel::channel(1, quota);
         let mut rx = rx.drain();
 
@@ -1696,38 +1667,11 @@ mod tests {
                     < f64::EPSILON
             );
         }
-
-        // Modify incremental_fetch_speed_limit.
-        {
-            let mut updated_cfg = cfg.clone();
-            {
-                updated_cfg.incremental_fetch_speed_limit = ReadableSize::mb(2048);
-            }
-            let diff = cfg.diff(&updated_cfg);
-
-            assert_eq!(
-                ep.config.incremental_fetch_speed_limit,
-                ReadableSize::mb(512)
-            );
-            assert!(
-                (ep.fetch_speed_limiter.speed_limit() - ReadableSize::mb(512).0 as f64).abs()
-                    < f64::EPSILON
-            );
-            ep.run(Task::ChangeConfig(diff));
-            assert_eq!(
-                ep.config.incremental_fetch_speed_limit,
-                ReadableSize::mb(2048)
-            );
-            assert!(
-                (ep.fetch_speed_limiter.speed_limit() - ReadableSize::mb(2048).0 as f64).abs()
-                    < f64::EPSILON
-            );
-        }
     }
 
     #[test]
     fn test_raftstore_is_busy() {
-        let quota = Arc::new(MemoryQuota::new(usize::MAX));
+        let quota = crate::channel::MemoryQuota::new(usize::MAX);
         let (tx, _rx) = channel::channel(1, quota);
         let mut suite = mock_endpoint(&CdcConfig::default(), None, ApiVersion::V1);
 
@@ -1779,7 +1723,7 @@ mod tests {
         };
         let mut suite = mock_endpoint(&cfg, None, ApiVersion::V1);
         suite.add_region(1, 100);
-        let quota = Arc::new(MemoryQuota::new(usize::MAX));
+        let quota = crate::channel::MemoryQuota::new(usize::MAX);
         let (tx, mut rx) = channel::channel(1, quota);
         let mut rx = rx.drain();
 
@@ -1996,7 +1940,7 @@ mod tests {
         let mut suite = mock_endpoint(&cfg, None, ApiVersion::V1);
         suite.add_region(1, 100);
 
-        let quota = Arc::new(MemoryQuota::new(usize::MAX));
+        let quota = crate::channel::MemoryQuota::new(usize::MAX);
         let (tx, mut rx) = channel::channel(1, quota);
         let mut rx = rx.drain();
         let mut region = Region::default();
@@ -2027,8 +1971,7 @@ mod tests {
             conn_id,
             version: version.clone(),
         });
-        let memory_quota = Arc::new(MemoryQuota::new(std::usize::MAX));
-        let resolver = Resolver::new(1, memory_quota);
+        let resolver = Resolver::new(1);
         let observe_id = suite.endpoint.capture_regions[&1].handle.id;
         suite.on_region_ready(observe_id, resolver, region.clone());
         suite.run(Task::MinTs {
@@ -2065,8 +2008,7 @@ mod tests {
             conn_id,
             version,
         });
-        let memory_quota = Arc::new(MemoryQuota::new(std::usize::MAX));
-        let resolver = Resolver::new(2, memory_quota);
+        let resolver = Resolver::new(2);
         region.set_id(2);
         let observe_id = suite.endpoint.capture_regions[&2].handle.id;
         suite.on_region_ready(observe_id, resolver, region);
@@ -2087,7 +2029,7 @@ mod tests {
         }
 
         // Register region 3 to another conn which is not support batch resolved ts.
-        let quota = Arc::new(MemoryQuota::new(usize::MAX));
+        let quota = crate::channel::MemoryQuota::new(usize::MAX);
         let (tx, mut rx2) = channel::channel(1, quota);
         let mut rx2 = rx2.drain();
         let mut region = Region::default();
@@ -2113,8 +2055,7 @@ mod tests {
             conn_id,
             version: semver::Version::new(4, 0, 5),
         });
-        let memory_quota = Arc::new(MemoryQuota::new(std::usize::MAX));
-        let resolver = Resolver::new(3, memory_quota);
+        let resolver = Resolver::new(3);
         region.set_id(3);
         let observe_id = suite.endpoint.capture_regions[&3].handle.id;
         suite.on_region_ready(observe_id, resolver, region);
@@ -2157,7 +2098,7 @@ mod tests {
     fn test_deregister() {
         let mut suite = mock_endpoint(&CdcConfig::default(), None, ApiVersion::V1);
         suite.add_region(1, 100);
-        let quota = Arc::new(MemoryQuota::new(usize::MAX));
+        let quota = crate::channel::MemoryQuota::new(usize::MAX);
         let (tx, mut rx) = channel::channel(1, quota);
         let mut rx = rx.drain();
 
@@ -2307,7 +2248,7 @@ mod tests {
         // Open two connections a and b, registers region 1, 2 to conn a and
         // region 3 to conn b.
         let mut conn_rxs = vec![];
-        let quota = Arc::new(MemoryQuota::new(usize::MAX));
+        let quota = channel::MemoryQuota::new(usize::MAX);
         for region_ids in vec![vec![1, 2], vec![3]] {
             let (tx, rx) = channel::channel(1, quota.clone());
             conn_rxs.push(rx);
@@ -2338,8 +2279,7 @@ mod tests {
                     conn_id,
                     version: FeatureGate::batch_resolved_ts(),
                 });
-                let memory_quota = Arc::new(MemoryQuota::new(std::usize::MAX));
-                let resolver = Resolver::new(region_id, memory_quota);
+                let resolver = Resolver::new(region_id);
                 let observe_id = suite.endpoint.capture_regions[&region_id].handle.id;
                 let mut region = Region::default();
                 region.set_id(region_id);
@@ -2420,7 +2360,7 @@ mod tests {
     fn test_deregister_conn_then_delegate() {
         let mut suite = mock_endpoint(&CdcConfig::default(), None, ApiVersion::V1);
         suite.add_region(1, 100);
-        let quota = Arc::new(MemoryQuota::new(usize::MAX));
+        let quota = crate::channel::MemoryQuota::new(usize::MAX);
 
         // Open conn a
         let (tx1, _rx1) = channel::channel(1, quota.clone());
@@ -2492,11 +2432,10 @@ mod tests {
         let mut region = Region::default();
         region.id = 1;
         region.set_region_epoch(region_epoch_2);
-        let memory_quota = Arc::new(MemoryQuota::new(std::usize::MAX));
         suite.run(Task::ResolverReady {
             observe_id,
             region: region.clone(),
-            resolver: Resolver::new(1, memory_quota),
+            resolver: Resolver::new(1),
         });
 
         // Deregister deletgate due to epoch not match for conn b.
@@ -2580,7 +2519,7 @@ mod tests {
             ..Default::default()
         };
         let mut suite = mock_endpoint(&cfg, None, ApiVersion::V1);
-        let quota = Arc::new(MemoryQuota::new(usize::MAX));
+        let quota = crate::channel::MemoryQuota::new(usize::MAX);
         let (tx, mut rx) = channel::channel(1, quota);
         let mut rx = rx.drain();
 
@@ -2618,11 +2557,8 @@ mod tests {
                 version: version.clone(),
             });
 
-            let memory_quota = Arc::new(MemoryQuota::new(std::usize::MAX));
-            let mut resolver = Resolver::new(id, memory_quota);
-            resolver
-                .track_lock(TimeStamp::compose(0, id), vec![], None)
-                .unwrap();
+            let mut resolver = Resolver::new(id);
+            resolver.track_lock(TimeStamp::compose(0, id), vec![], None);
             let mut region = Region::default();
             region.id = id;
             region.set_region_epoch(region_epoch);
@@ -2630,8 +2566,7 @@ mod tests {
                 .capture_regions
                 .get_mut(&id)
                 .unwrap()
-                .on_region_ready(resolver, region)
-                .unwrap();
+                .on_region_ready(resolver, region);
             assert!(failed.is_empty());
         }
         suite

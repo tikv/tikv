@@ -37,12 +37,9 @@ use raftstore::{
             Proposal,
         },
         local_metrics::RaftMetrics,
-        metrics::{
-            APPLY_TASK_WAIT_TIME_HISTOGRAM, APPLY_TIME_HISTOGRAM, STORE_APPLY_LOG_HISTOGRAM,
-        },
+        metrics::{APPLY_TASK_WAIT_TIME_HISTOGRAM, APPLY_TIME_HISTOGRAM},
         msg::ErrorCallback,
-        util::{self, check_flashback_state},
-        Config, Transport, WriteCallback,
+        util, Config, Transport, WriteCallback,
     },
     Error, Result,
 };
@@ -103,6 +100,7 @@ pub struct CommittedEntries {
     /// Entries need to be applied. Note some entries may not be included for
     /// flow control.
     pub entry_and_proposals: Vec<(Entry, Vec<CmdResChannel>)>,
+    pub committed_time: Instant,
 }
 
 fn new_response(header: &RaftRequestHeader) -> RaftCmdResponse {
@@ -137,7 +135,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let logger = self.logger.clone();
         let read_scheduler = self.storage().read_scheduler();
         let buckets = self.region_buckets_info().bucket_stat().clone();
-        let sst_apply_state = self.sst_apply_state().clone();
         let (apply_scheduler, mut apply_fsm) = ApplyFsm::new(
             &store_ctx.cfg,
             self.peer().clone(),
@@ -145,9 +142,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             mailbox,
             store_ctx.tablet_registry.clone(),
             read_scheduler,
-            store_ctx.schedulers.checkpoint.clone(),
             self.flush_state().clone(),
-            sst_apply_state,
             self.storage().apply_trace().log_recovery(),
             self.entry_storage().applied_term(),
             buckets,
@@ -191,29 +186,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             if let Error::EpochNotMatch(_, _new_regions) = &mut e {
                 // TODO: query sibling regions.
                 metrics.invalid_proposal.epoch_not_match.inc();
-            }
-            return Err(e);
-        }
-        // Check whether the region is in the flashback state and the request could be
-        // proposed. Skip the not prepared error because the
-        // `self.region().is_in_flashback` may not be the latest right after applying
-        // the `PrepareFlashback` admin command, we will let it pass here and check in
-        // the apply phase and because a read-only request doesn't need to be applied,
-        // so it will be allowed during the flashback progress, for example, a snapshot
-        // request.
-        if let Err(e) = util::check_flashback_state(
-            self.region().get_is_in_flashback(),
-            self.region().get_flashback_start_ts(),
-            header,
-            admin_type,
-            self.region_id(),
-            true,
-        ) {
-            match e {
-                Error::FlashbackInProgress(..) => {
-                    metrics.invalid_proposal.flashback_in_progress.inc()
-                }
-                _ => unreachable!("{:?}", e),
             }
             return Err(e);
         }
@@ -334,6 +306,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         // memtables in kv engine is flushed.
         let apply = CommittedEntries {
             entry_and_proposals,
+            committed_time: Instant::now(),
         };
         assert!(
             self.apply_scheduler().is_some() || ctx.router.is_shutdown(),
@@ -396,7 +369,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 AdminCmdResult::UpdateGcPeers(state) => self.on_apply_res_update_gc_peers(state),
                 AdminCmdResult::PrepareMerge(res) => self.on_apply_res_prepare_merge(ctx, res),
                 AdminCmdResult::CommitMerge(res) => self.on_apply_res_commit_merge(ctx, res),
-                AdminCmdResult::Flashback(res) => self.on_apply_res_flashback(ctx, res),
             }
         }
         self.region_buckets_info_mut()
@@ -513,7 +485,6 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                         dr.start_key,
                         dr.end_key,
                         dr.notify_only,
-                        self.use_delete_range(),
                     );
                 }
                 SimpleWrite::Ingest(_) => {
@@ -546,17 +517,14 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
     #[inline]
     pub async fn apply_committed_entries(&mut self, ce: CommittedEntries) {
         fail::fail_point!("APPLY_COMMITTED_ENTRIES");
-        let now = std::time::Instant::now();
-        let apply_wait_time = APPLY_TASK_WAIT_TIME_HISTOGRAM.local();
+        APPLY_TASK_WAIT_TIME_HISTOGRAM
+            .observe(duration_to_sec(ce.committed_time.saturating_elapsed()));
         for (e, ch) in ce.entry_and_proposals {
             if self.tombstone() {
                 apply::notify_req_region_removed(self.region_id(), ch);
                 continue;
             }
             if !e.get_data().is_empty() {
-                for tracker in ch.write_trackers() {
-                    tracker.observe(now, &apply_wait_time, |t| &mut t.metrics.apply_wait_nanos);
-                }
                 let mut set_save_point = false;
                 if let Some(wb) = &mut self.write_batch {
                     wb.set_save_point();
@@ -599,13 +567,6 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                 entry.get_term(),
             ) {
                 Ok(decoder) => {
-                    fail::fail_point!(
-                        "on_apply_write_cmd",
-                        cfg!(release) || self.peer_id() == 3,
-                        |_| {
-                            unimplemented!();
-                        }
-                    );
                     util::compare_region_epoch(
                         decoder.header().get_region_epoch(),
                         self.region(),
@@ -633,7 +594,6 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                                     dr.start_key,
                                     dr.end_key,
                                     dr.notify_only,
-                                    self.use_delete_range(),
                                 )?;
                             }
                             SimpleWrite::Ingest(ssts) => {
@@ -664,22 +624,12 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
         };
 
         util::check_req_region_epoch(&req, self.region(), true)?;
-        let header = req.get_header();
-        let admin_type = req.admin_request.as_ref().map(|req| req.get_cmd_type());
-        check_flashback_state(
-            self.region().get_is_in_flashback(),
-            self.region().get_flashback_start_ts(),
-            header,
-            admin_type,
-            self.region_id(),
-            false,
-        )?;
         if req.has_admin_request() {
             let admin_req = req.get_admin_request();
             let (admin_resp, admin_result) = match req.get_admin_request().get_cmd_type() {
                 AdminCmdType::CompactLog => self.apply_compact_log(admin_req, log_index)?,
-                AdminCmdType::Split => self.apply_split(admin_req, log_index).await?,
-                AdminCmdType::BatchSplit => self.apply_batch_split(admin_req, log_index).await?,
+                AdminCmdType::Split => self.apply_split(admin_req, log_index)?,
+                AdminCmdType::BatchSplit => self.apply_batch_split(admin_req, log_index)?,
                 AdminCmdType::PrepareMerge => self.apply_prepare_merge(admin_req, log_index)?,
                 AdminCmdType::CommitMerge => self.apply_commit_merge(admin_req, log_index).await?,
                 AdminCmdType::RollbackMerge => unimplemented!(),
@@ -694,9 +644,8 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                 }
                 AdminCmdType::ComputeHash => unimplemented!(),
                 AdminCmdType::VerifyHash => unimplemented!(),
-                AdminCmdType::PrepareFlashback | AdminCmdType::FinishFlashback => {
-                    self.apply_flashback(log_index, admin_req)?
-                }
+                AdminCmdType::PrepareFlashback => unimplemented!(),
+                AdminCmdType::FinishFlashback => unimplemented!(),
                 AdminCmdType::BatchSwitchWitness => unimplemented!(),
                 AdminCmdType::UpdateGcPeer => self.apply_update_gc_peer(log_index, admin_req),
                 AdminCmdType::InvalidAdmin => {
@@ -732,7 +681,6 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                             dr.get_start_key(),
                             dr.get_end_key(),
                             dr.get_notify_only(),
-                            self.use_delete_range(),
                         )?;
                     }
                     _ => unimplemented!(),
@@ -839,14 +787,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
         let apply_time = APPLY_TIME_HISTOGRAM.local();
         for (ch, resp) in callbacks.drain(..) {
             for tracker in ch.write_trackers() {
-                let mut apply_wait_nanos = 0_u64;
-                let apply_time_nanos = tracker.observe(now, &apply_time, |t| {
-                    apply_wait_nanos = t.metrics.apply_wait_nanos;
-                    &mut t.metrics.apply_time_nanos
-                });
-                STORE_APPLY_LOG_HISTOGRAM.observe(duration_to_sec(Duration::from_nanos(
-                    apply_time_nanos - apply_wait_nanos,
-                )));
+                tracker.observe(now, &apply_time, |t| &mut t.metrics.apply_time_nanos);
             }
             ch.set_result(resp);
         }

@@ -68,12 +68,7 @@ impl Tracker {
             self.metrics.wf_commit_log_nanos - self.metrics.wf_batch_wait_nanos,
         );
         detail.set_apply_batch_wait_nanos(self.metrics.apply_wait_nanos);
-        // When async_prewrite_apply is set, the `apply_time_nanos` could be less than
-        // apply_wait_nanos.
-        if self.metrics.apply_time_nanos > self.metrics.apply_wait_nanos {
-            detail
-                .set_apply_log_nanos(self.metrics.apply_time_nanos - self.metrics.apply_wait_nanos);
-        }
+        detail.set_apply_log_nanos(self.metrics.apply_time_nanos - self.metrics.apply_wait_nanos);
         detail.set_apply_mutex_lock_nanos(self.metrics.apply_mutex_lock_nanos);
         detail.set_apply_write_leader_wait_nanos(self.metrics.apply_thread_wait_nanos);
         detail.set_apply_write_wal_nanos(self.metrics.apply_write_wal_nanos);

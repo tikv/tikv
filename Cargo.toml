@@ -1,6 +1,6 @@
 [package]
 name = "tikv"
-version = "7.1.4"
+version = "7.1.0-alpha"
 authors = ["The TiKV Authors"]
 description = "A distributed transactional key-value database powered by Rust and Raft"
 license = "Apache-2.0"
@@ -150,7 +150,6 @@ serde = { version = "1.0", features = ["derive"] }
 serde_derive = "1.0"
 serde_ignored = "0.1"
 serde_json = { version = "1.0", features = ["preserve_order"] }
-service = { workspace = true }
 slog = { workspace = true }
 slog-global = { workspace = true }
 smallvec = "1.4"
@@ -216,8 +215,6 @@ fs2 = { git = "https://github.com/tabokie/fs2-rs", branch = "tikv" }
 # Remove this when a new version is release. We need to solve rust-lang/cmake-rs#143.
 cmake = { git = "https://github.com/rust-lang/cmake-rs" }
 
-sysinfo ={ git = "https://github.com/tikv/sysinfo", branch = "0.26-fix-cpu" }
-
 [target.'cfg(target_os = "linux")'.dependencies]
 procinfo = { git = "https://github.com/tikv/procinfo-rs", rev = "6599eb9dca74229b2c1fcc44118bef7eff127128" }
 # When you modify TiKV cooperatively with kvproto, this will be useful to submit the PR to TiKV and the PR to
@@ -273,7 +270,6 @@ members = [
   "components/resource_metering",
   "components/security",
   "components/server",
-  "components/service",
   "components/snap_recovery",
   "components/sst_importer",
   "components/test_backup",
@@ -351,9 +347,8 @@ resource_control = { path = "components/resource_control" }
 resource_metering = { path = "components/resource_metering" }
 security = { path = "components/security" }
 server = { path = "components/server" }
-service = { path = "components/service" }
-snap_recovery = { path = "components/snap_recovery", default-features = false }
-sst_importer = { path = "components/sst_importer", default-features = false }
+snap_recovery = { path = "components/snap_recovery" }
+sst_importer = { path = "components/sst_importer" }
 test_backup = { path = "components/test_backup" }
 test_coprocessor = { path = "components/test_coprocessor", default-features = false }
 example_coprocessor_plugin = { path = "components/test_coprocessor_plugin/example_plugin" }
@@ -382,10 +377,9 @@ txn_types = { path = "components/txn_types" }
 grpcio = { version = "0.10.4", default-features = false, features = ["openssl-vendored", "protobuf-codec", "nightly"] }
 grpcio-health = { version = "0.10.4", default-features = false, features = ["protobuf-codec"] }
 tipb = { git = "https://github.com/pingcap/tipb.git" }
-kvproto = { git = "https://github.com/pingcap/kvproto.git", branch = "release-7.1" }
+kvproto = { git = "https://github.com/pingcap/kvproto.git" }
 yatp = { git = "https://github.com/tikv/yatp.git", branch = "master" }
 tokio-timer = { git = "https://github.com/tikv/tokio", branch = "tokio-timer-hotfix" }
-tokio-executor = { git = "https://github.com/tikv/tokio", branch = "tokio-timer-hotfix" }
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }
 

@@ -164,12 +164,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             return Err(e);
         }
 
-        // Check whether the peer is initialized.
-        if !self.storage().is_initialized() {
-            raft_metrics.invalid_proposal.region_not_initialized.inc();
-            let region_id = msg.get_header().get_region_id();
-            return Err(Error::RegionNotInitialized(region_id));
-        }
+        // TODO: check applying snapshot
 
         // Check whether the term is stale.
         if let Err(e) = util::check_term(msg.get_header(), self.term()) {
@@ -191,21 +186,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         req: RaftCmdRequest,
         ch: QueryResChannel,
     ) {
-        if let Err(e) = self.pre_read_index() {
-            debug!(
-                self.logger,
-                "prevents unsafe read index";
-                "err" => ?e,
-            );
-            ctx.raft_metrics.propose.unsafe_read_index.inc();
-            let mut resp = RaftCmdResponse::default();
-            let term = self.term();
-            cmd_resp::bind_term(&mut resp, term);
-            cmd_resp::bind_error(&mut resp, e);
-            ch.report_error(resp);
-            return;
-        }
-
+        // TODO: add pre_read_index to handle splitting or merging
         if self.is_leader() {
             self.read_index_leader(ctx, req, ch);
         } else {
@@ -301,7 +282,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         self.storage().apply_state().get_applied_index() >= read_index
             // If it is in pending merge state(i.e. applied PrepareMerge), the data may be stale.
             // TODO: Add a test to cover this case
-            && !self.proposal_control().has_applied_prepare_merge()
+            && self.proposal_control().has_applied_prepare_merge()
     }
 
     #[inline]

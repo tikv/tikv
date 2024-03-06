@@ -51,7 +51,6 @@ use raftstore::{
 use thiserror::Error;
 use tikv_kv::{write_modifies, OnAppliedCb, WriteEvent};
 use tikv_util::{
-    callback::must_call,
     future::{paired_future_callback, paired_must_called_future_callback},
     time::Instant,
 };
@@ -62,8 +61,6 @@ use crate::storage::{
     self, kv,
     kv::{Engine, Error as KvError, ErrorInner as KvErrorInner, Modify, SnapContext, WriteData},
 };
-
-pub const ASYNC_WRITE_CALLBACK_DROPPED_ERR_MSG: &str = "async write on_applied callback is dropped";
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -82,9 +79,6 @@ pub enum Error {
     #[error("{0}")]
     InvalidRequest(String),
 
-    #[error("{0}")]
-    Undetermined(String),
-
     #[error("timeout after {0:?}")]
     Timeout(Duration),
 }
@@ -99,7 +93,6 @@ pub fn get_status_kind_from_engine_error(e: &kv::Error) -> RequestStatusKind {
         }
         KvError(box KvErrorInner::Timeout(_)) => RequestStatusKind::err_timeout,
         KvError(box KvErrorInner::EmptyRequest) => RequestStatusKind::err_empty_request,
-        KvError(box KvErrorInner::Undetermined(_)) => RequestStatusKind::err_undetermind,
         KvError(box KvErrorInner::Other(_)) => RequestStatusKind::err_other,
     }
 }
@@ -110,7 +103,6 @@ impl From<Error> for kv::Error {
     fn from(e: Error) -> kv::Error {
         match e {
             Error::RequestFailed(e) => KvError::from(KvErrorInner::Request(e)),
-            Error::Undetermined(e) => KvError::from(KvErrorInner::Undetermined(e)),
             Error::Server(e) => e.into(),
             e => box_err!(e),
         }
@@ -125,13 +117,9 @@ where
     Snap(RegionSnapshot<S>),
 }
 
-pub fn check_raft_cmd_response(resp: &mut RaftCmdResponse) -> Result<()> {
+fn check_raft_cmd_response(resp: &mut RaftCmdResponse) -> Result<()> {
     if resp.get_header().has_error() {
-        let mut err = resp.take_header().take_error();
-        if err.get_message() == ASYNC_WRITE_CALLBACK_DROPPED_ERR_MSG {
-            return Err(Error::Undetermined(err.take_message()));
-        }
-        return Err(Error::RequestFailed(err));
+        return Err(Error::RequestFailed(resp.take_header().take_error()));
     }
 
     Ok(())
@@ -172,11 +160,7 @@ pub fn new_request_header(ctx: &Context) -> RaftRequestHeader {
     }
     header.set_sync_log(ctx.get_sync_log());
     header.set_replica_read(ctx.get_replica_read());
-    header.set_resource_group_name(
-        ctx.get_resource_control_context()
-            .get_resource_group_name()
-            .to_owned(),
-    );
+    header.set_resource_group_name(ctx.get_resource_group_name().to_owned());
     header
 }
 
@@ -215,25 +199,6 @@ pub fn drop_snapshot_callback<T>() -> kv::Result<T> {
     let mut err = errorpb::Error::default();
     err.set_message("async snapshot callback is dropped".to_string());
     Err(kv::Error::from(kv::ErrorInner::Request(err)))
-}
-
-pub fn async_write_callback_dropped_err() -> errorpb::Error {
-    let mut err = errorpb::Error::default();
-    err.set_message(ASYNC_WRITE_CALLBACK_DROPPED_ERR_MSG.to_string());
-    err
-}
-
-pub fn drop_on_applied_callback() -> WriteResponse {
-    let bt = backtrace::Backtrace::new();
-    error!("async write on_applied callback is dropped"; "backtrace" => ?bt);
-    let mut write_resp = WriteResponse {
-        response: Default::default(),
-    };
-    write_resp
-        .response
-        .mut_header()
-        .set_error(async_write_callback_dropped_err());
-    write_resp
 }
 
 struct WriteResCore {
@@ -506,59 +471,46 @@ where
         self.schedule_txn_extra(txn_extra);
 
         let (tx, rx) = WriteResFeed::pair();
-        if res.is_ok() {
-            let proposed_cb = if !WriteEvent::subscribed_proposed(subscribed) {
-                None
-            } else {
-                let tx = tx.clone();
-                Some(Box::new(move || tx.notify_proposed()) as store::ExtCallback)
+        let proposed_cb = if !WriteEvent::subscribed_proposed(subscribed) {
+            None
+        } else {
+            let tx = tx.clone();
+            Some(Box::new(move || tx.notify_proposed()) as store::ExtCallback)
+        };
+        let committed_cb = if !WriteEvent::subscribed_committed(subscribed) {
+            None
+        } else {
+            let tx = tx.clone();
+            Some(Box::new(move || tx.notify_committed()) as store::ExtCallback)
+        };
+        let applied_tx = tx.clone();
+        let applied_cb = Box::new(move |resp: WriteResponse| {
+            let mut res = match on_write_result::<E::Snapshot>(resp) {
+                Ok(CmdRes::Resp(_)) => {
+                    fail_point!("raftkv_async_write_finish");
+                    Ok(())
+                }
+                Ok(CmdRes::Snap(_)) => Err(box_err!("unexpect snapshot, should mutate instead.")),
+                Err(e) => Err(kv::Error::from(e)),
             };
-            let committed_cb = if !WriteEvent::subscribed_committed(subscribed) {
-                None
-            } else {
-                let tx = tx.clone();
-                Some(Box::new(move || tx.notify_committed()) as store::ExtCallback)
-            };
-            let applied_tx = tx.clone();
-            let applied_cb = must_call(
-                Box::new(move |resp: WriteResponse| {
-                    fail_point!("applied_cb_return_undetermined_err", |_| {
-                        applied_tx.notify(Err(kv::Error::from(Error::Undetermined(
-                            ASYNC_WRITE_CALLBACK_DROPPED_ERR_MSG.to_string(),
-                        ))));
-                    });
-                    let mut res = match on_write_result::<E::Snapshot>(resp) {
-                        Ok(CmdRes::Resp(_)) => {
-                            fail_point!("raftkv_async_write_finish");
-                            Ok(())
-                        }
-                        Ok(CmdRes::Snap(_)) => {
-                            Err(box_err!("unexpect snapshot, should mutate instead."))
-                        }
-                        Err(e) => Err(kv::Error::from(e)),
-                    };
-                    if let Some(cb) = on_applied {
-                        cb(&mut res);
-                    }
-                    applied_tx.notify(res);
-                }),
-                drop_on_applied_callback,
-            );
+            if let Some(cb) = on_applied {
+                cb(&mut res);
+            }
+            applied_tx.notify(res);
+        });
 
-            let cb = StoreCallback::write_ext(applied_cb, proposed_cb, committed_cb);
-            let extra_opts = RaftCmdExtraOpts {
-                deadline: batch.deadline,
-                disk_full_opt: batch.disk_full_opt,
-            };
+        let cb = StoreCallback::write_ext(applied_cb, proposed_cb, committed_cb);
+        let extra_opts = RaftCmdExtraOpts {
+            deadline: batch.deadline,
+            disk_full_opt: batch.disk_full_opt,
+        };
+        if res.is_ok() {
             res = self
                 .router
                 .send_command(cmd, cb, extra_opts)
                 .map_err(kv::Error::from);
         }
         if res.is_err() {
-            // Note that `on_applied` is not called in this case. We send message to the
-            // channel here to notify the caller that the writing ended, like
-            // how the `applied_cb` does.
             tx.notify(res);
         }
         rx.inspect(move |ev| {
@@ -779,7 +731,7 @@ impl ReadIndexObserver for ReplicaReadLockChecker {
                     start_key.as_ref(),
                     end_key.as_ref(),
                     |key, lock| {
-                        txn_types::Lock::check_ts_conflict_for_replica_read(
+                        txn_types::Lock::check_ts_conflict(
                             Cow::Borrowed(lock),
                             key,
                             start_ts,

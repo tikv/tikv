@@ -1,9 +1,6 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine_traits::{
-    data_cf_offset, DeleteStrategy, KvEngine, Mutable, RaftEngine, Range as EngineRange, ALL_CFS,
-    CF_DEFAULT,
-};
+use engine_traits::{data_cf_offset, KvEngine, Mutable, RaftEngine, CF_DEFAULT};
 use kvproto::raft_cmdpb::RaftRequestHeader;
 use raftstore::{
     store::{
@@ -15,8 +12,7 @@ use raftstore::{
     },
     Error, Result,
 };
-use slog::info;
-use tikv_util::{box_err, slog_panic};
+use tikv_util::slog_panic;
 
 use crate::{
     batch::StoreContext,
@@ -226,94 +222,13 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
     #[inline]
     pub fn apply_delete_range(
         &mut self,
-        mut cf: &str,
-        index: u64,
-        start_key: &[u8],
-        end_key: &[u8],
-        notify_only: bool,
-        use_delete_range: bool,
+        _cf: &str,
+        _index: u64,
+        _start_key: &[u8],
+        _end_key: &[u8],
+        _notify_only: bool,
     ) -> Result<()> {
-        PEER_WRITE_CMD_COUNTER.delete_range.inc();
-        let off = data_cf_offset(cf);
-        if self.should_skip(off, index) {
-            return Ok(());
-        }
-        if !end_key.is_empty() && start_key >= end_key {
-            return Err(box_err!(
-                "invalid delete range command, start_key: {:?}, end_key: {:?}",
-                start_key,
-                end_key
-            ));
-        }
-        // region key range has no data prefix, so we must use origin key to check.
-        util::check_key_in_region(start_key, self.region())?;
-        let end_key = keys::data_end_key(end_key);
-        let region_end_key = keys::data_end_key(self.region().get_end_key());
-        if end_key > region_end_key {
-            return Err(Error::KeyNotInRegion(
-                end_key.to_vec(),
-                self.region().clone(),
-            ));
-        }
-
-        if cf.is_empty() {
-            cf = CF_DEFAULT;
-        }
-
-        if !ALL_CFS.iter().any(|x| *x == cf) {
-            return Err(box_err!("invalid delete range command, cf: {:?}", cf));
-        }
-
-        let start_key = keys::data_key(start_key);
-
-        info!(
-            self.logger,
-            "execute delete range";
-            "range_start" => log_wrappers::Value::key(&start_key),
-            "range_end" => log_wrappers::Value::key(&end_key),
-            "notify_only" => notify_only,
-            "use_delete_range" => use_delete_range,
-        );
-
-        // Use delete_files_in_range to drop as many sst files as possible, this
-        // is a way to reclaim disk space quickly after drop a table/index.
-        if !notify_only {
-            let range = vec![EngineRange::new(&start_key, &end_key)];
-            let fail_f = |e: engine_traits::Error, strategy: DeleteStrategy| {
-                slog_panic!(
-                    self.logger,
-                    "failed to delete";
-                    "strategy" => ?strategy,
-                    "range_start" => log_wrappers::Value::key(&start_key),
-                    "range_end" => log_wrappers::Value::key(&end_key),
-                    "error" => ?e,
-                )
-            };
-            let tablet = self.tablet();
-            tablet
-                .delete_ranges_cf(cf, DeleteStrategy::DeleteFiles, &range)
-                .unwrap_or_else(|e| fail_f(e, DeleteStrategy::DeleteFiles));
-
-            let strategy = if use_delete_range {
-                DeleteStrategy::DeleteByRange
-            } else {
-                DeleteStrategy::DeleteByKey
-            };
-            // Delete all remaining keys.
-            tablet
-                .delete_ranges_cf(cf, strategy.clone(), &range)
-                .unwrap_or_else(move |e| fail_f(e, strategy));
-
-            // to do: support titan?
-            // tablet
-            //     .delete_ranges_cf(cf, DeleteStrategy::DeleteBlobs, &range)
-            //     .unwrap_or_else(move |e| fail_f(e,
-            // DeleteStrategy::DeleteBlobs));
-        }
-        if index != u64::MAX {
-            self.modifications_mut()[off] = index;
-        }
-
+        // TODO: reuse the same delete as split/merge.
         Ok(())
     }
 }

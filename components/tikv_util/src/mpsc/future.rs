@@ -6,17 +6,13 @@ use std::{
     pin::Pin,
     sync::atomic::{self, AtomicUsize, Ordering},
     task::{Context, Poll},
-    time::Duration,
 };
 
-pub use crossbeam::channel::{RecvTimeoutError, TryRecvError};
 use crossbeam::{
-    channel::SendError,
+    channel::{SendError, TryRecvError},
     queue::{ArrayQueue, SegQueue},
 };
 use futures::{task::AtomicWaker, Stream, StreamExt};
-
-use crate::future::block_on_timeout;
 
 enum QueueType<T> {
     Unbounded(SegQueue<T>),
@@ -179,15 +175,6 @@ impl<T: Send> Receiver<T> {
             return Err(TryRecvError::Empty);
         }
         Err(TryRecvError::Disconnected)
-    }
-
-    pub fn recv_timeout(&mut self, dur: Duration) -> Result<T, RecvTimeoutError> {
-        let fut = self.next();
-        match block_on_timeout(fut, dur) {
-            Ok(Some(v)) => Ok(v),
-            Ok(None) => Err(RecvTimeoutError::Disconnected),
-            Err(_) => Err(RecvTimeoutError::Timeout),
-        }
     }
 }
 

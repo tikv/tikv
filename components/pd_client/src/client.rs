@@ -320,8 +320,6 @@ impl fmt::Debug for RpcClient {
 }
 
 const LEADER_CHANGE_RETRY: usize = 10;
-// periodic request like store_heartbeat, we don't need to retry.
-const NO_RETRY: usize = 1;
 
 impl PdClient for RpcClient {
     fn store_global_config(
@@ -820,14 +818,10 @@ impl PdClient for RpcClient {
                     })
             };
             Box::pin(async move {
-                let resp = handler
-                    .map(|res| {
-                        PD_REQUEST_HISTOGRAM_VEC
-                            .store_heartbeat
-                            .observe(timer.saturating_elapsed_secs());
-                        res
-                    })
-                    .await?;
+                let resp = handler.await?;
+                PD_REQUEST_HISTOGRAM_VEC
+                    .store_heartbeat
+                    .observe(timer.saturating_elapsed_secs());
                 check_resp_header(resp.get_header())?;
                 match feature_gate.set_version(resp.get_cluster_version()) {
                     Err(_) => warn!("invalid cluster version: {}", resp.get_cluster_version()),
@@ -838,7 +832,9 @@ impl PdClient for RpcClient {
             }) as PdFuture<_>
         };
 
-        self.pd_client.request(req, executor, NO_RETRY).execute()
+        self.pd_client
+            .request(req, executor, LEADER_CHANGE_RETRY)
+            .execute()
     }
 
     fn report_batch_split(&self, regions: Vec<metapb::Region>) -> PdFuture<()> {

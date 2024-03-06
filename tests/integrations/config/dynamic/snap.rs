@@ -65,6 +65,7 @@ fn start_server(
         RaftRouterWrap::new(raft_router),
         security_mgr,
         Arc::clone(&server_config),
+        false,
     );
     snap_worker.start(snap_runner);
 

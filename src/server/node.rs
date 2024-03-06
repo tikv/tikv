@@ -1,7 +1,7 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    sync::{atomic::AtomicU64, Arc, Mutex},
+    sync::{Arc, Mutex},
     thread,
     time::Duration,
 };
@@ -172,7 +172,6 @@ where
         concurrency_manager: ConcurrencyManager,
         collector_reg_handle: CollectorRegHandle,
         causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
-        safe_point: Arc<AtomicU64>,
     ) -> Result<()>
     where
         T: Transport + 'static,
@@ -210,7 +209,6 @@ where
             concurrency_manager,
             collector_reg_handle,
             causal_ts_provider,
-            safe_point,
         )?;
 
         Ok(())
@@ -458,7 +456,6 @@ where
         concurrency_manager: ConcurrencyManager,
         collector_reg_handle: CollectorRegHandle,
         causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
-        safe_point: Arc<AtomicU64>,
     ) -> Result<()>
     where
         T: Transport + 'static,
@@ -492,7 +489,6 @@ where
             collector_reg_handle,
             self.health_service.clone(),
             causal_ts_provider,
-            safe_point,
         )?;
         Ok(())
     }

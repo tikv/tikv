@@ -11,7 +11,7 @@ macro_rules! box_err {
         e.into()
     });
     ($f:tt, $($arg:expr),+) => ({
-        $crate::box_err!(format!($f, $($arg),+))
+        box_err!(format!($f, $($arg),+))
     });
 }
 

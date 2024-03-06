@@ -51,7 +51,7 @@ impl<EK: KvEngine, ER: RaftEngine> raftstore::coprocessor::StoreHandle for Store
         split_keys: Vec<Vec<u8>>,
         source: Cow<'static, str>,
     ) {
-        let (msg, _) = PeerMsg::request_split(region_epoch, split_keys, source.to_string(), true);
+        let (msg, _) = PeerMsg::request_split(region_epoch, split_keys, source.to_string());
         let res = self.send(region_id, msg);
         if let Err(e) = res {
             warn!(
@@ -159,9 +159,8 @@ impl<EK: KvEngine, ER: RaftEngine> RaftRouter<EK, ER> {
     pub fn snapshot(
         &mut self,
         req: RaftCmdRequest,
-    ) -> impl Future<Output = std::result::Result<RegionSnapshot<EK::Snapshot>, RaftCmdResponse>>
-    + Send
-    + 'static {
+    ) -> impl Future<Output = std::result::Result<RegionSnapshot<EK::Snapshot>, RaftCmdResponse>> + Send
+    {
         self.local_reader.snapshot(req)
     }
 

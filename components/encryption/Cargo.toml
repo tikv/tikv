@@ -37,7 +37,6 @@ thiserror = "1.0"
 tikv_alloc = { workspace = true }
 tikv_util = { workspace = true }
 tokio = { version = "1.5", features = ["time", "rt"] }
-walkdir = "2"
 
 [dev-dependencies]
 matches = "0.1.8"
