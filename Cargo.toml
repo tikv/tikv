@@ -422,12 +422,12 @@ raft-engine = { git = "https://github.com/tikv/raft-engine.git", features = [
   "swap",
 ] }
 raft-engine-ctl = { git = "https://github.com/tikv/raft-engine.git" }
-grpcio = { version = "0.10.4", default-features = false, features = [
+grpcio = { git = "https://github.com/LykxSassinator/grpc-rs.git", branch = "load-balance", default-features = false, features = [
   "openssl",
   "protobuf-codec",
   "nightly",
 ] }
-grpcio-health = { version = "0.10.4", default-features = false, features = [
+grpcio-health = { git = "https://github.com/LykxSassinator/grpc-rs.git", branch = "load-balance", default-features = false, features = [
   "protobuf-codec",
 ] }
 tipb = { git = "https://github.com/pingcap/tipb.git" }
