@@ -70,7 +70,7 @@ pub enum Error {
     #[error("{0:?}")]
     StreamDisconnect(#[from] SendError),
 
-    #[error("cluster of request={0:?} does not match TiKV cluster id={1:?}")]
+    #[error("cluster of request={request_id} does not match TiKV cluster id={cluster_id}")]
     ClusterIDMisMatch(u64, u64),
 }
 
