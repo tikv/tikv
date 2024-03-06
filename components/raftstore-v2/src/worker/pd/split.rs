@@ -17,13 +17,10 @@ fn new_batch_split_region_request(
     split_keys: Vec<Vec<u8>>,
     ids: Vec<pdpb::SplitId>,
     right_derive: bool,
-    share_source_region_size: bool,
 ) -> AdminRequest {
     let mut req = AdminRequest::default();
     req.set_cmd_type(AdminCmdType::BatchSplit);
     req.mut_splits().set_right_derive(right_derive);
-    req.mut_splits()
-        .set_share_source_region_size(share_source_region_size);
     let mut requests = Vec::with_capacity(ids.len());
     for (mut id, key) in ids.into_iter().zip(split_keys) {
         let mut split = SplitRequest::default();
@@ -49,7 +46,6 @@ where
         split_keys: Vec<Vec<u8>>,
         peer: metapb::Peer,
         right_derive: bool,
-        share_source_region_size: bool,
         ch: CmdResChannel,
     ) {
         Self::ask_batch_split_imp(
@@ -61,7 +57,6 @@ where
             split_keys,
             peer,
             right_derive,
-            share_source_region_size,
             Some(ch),
         );
     }
@@ -75,7 +70,6 @@ where
         split_keys: Vec<Vec<u8>>,
         peer: metapb::Peer,
         right_derive: bool,
-        share_source_region_size: bool,
         ch: Option<CmdResChannel>,
     ) {
         if split_keys.is_empty() {
@@ -104,7 +98,6 @@ where
                         split_keys,
                         resp.take_ids().into(),
                         right_derive,
-                        share_source_region_size,
                     );
                     let region_id = region.get_id();
                     let epoch = region.take_region_epoch();
@@ -155,7 +148,6 @@ where
                         vec![split_key],
                         split_info.peer,
                         true,
-                        false,
                         None,
                     );
                 // Try to split the region on half within the given key

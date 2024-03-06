@@ -424,13 +424,6 @@ pub fn extract_key_error(err: &Error) -> kvrpcpb::KeyError {
             assertion_failed.set_existing_commit_ts(existing_commit_ts.into_inner());
             key_error.set_assertion_failed(assertion_failed);
         }
-        Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(MvccError(
-            box MvccErrorInner::PrimaryMismatch(lock_info),
-        ))))) => {
-            let mut primary_mismatch = kvrpcpb::PrimaryMismatch::default();
-            primary_mismatch.set_lock_info(lock_info.clone());
-            key_error.set_primary_mismatch(primary_mismatch);
-        }
         _ => {
             error!(?*err; "txn aborts");
             key_error.set_abort(format!("{:?}", err));

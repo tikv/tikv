@@ -26,7 +26,7 @@ use tikv::{
     config::BackupConfig,
     coprocessor::{checksum_crc64_xor, dag::TikvStorage},
     storage::{
-        kv::{Engine, LocalTablets, SnapContext},
+        kv::{Engine, SnapContext},
         SnapshotStore,
     },
 };
@@ -73,7 +73,7 @@ impl TestSuite {
     pub fn new(count: usize, sst_max_size: u64, api_version: ApiVersion) -> TestSuite {
         let mut cluster = new_server_cluster_with_api_ver(1, count, api_version);
         // Increase the Raft tick interval to make this test case running reliably.
-        configure_for_lease_read(&mut cluster.cfg, Some(100), None);
+        configure_for_lease_read(&mut cluster, Some(100), None);
         cluster.run();
 
         let mut endpoints = HashMap::default();
@@ -85,7 +85,7 @@ impl TestSuite {
                 *id,
                 sim.storages[id].clone(),
                 sim.region_info_accessors[id].clone(),
-                LocalTablets::Singleton(engines.kv.clone()),
+                engines.kv.clone(),
                 BackupConfig {
                     num_threads: 4,
                     batch_size: 8,

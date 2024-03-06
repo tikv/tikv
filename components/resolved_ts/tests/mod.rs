@@ -13,7 +13,7 @@ use kvproto::{
     tikvpb::TikvClient,
 };
 use online_config::ConfigValue;
-use raftstore::{coprocessor::CoprocessorHost, router::CdcRaftRouter};
+use raftstore::coprocessor::CoprocessorHost;
 use resolved_ts::{Observer, Task};
 use test_raftstore::*;
 use tikv::config::ResolvedTsConfig;
@@ -40,7 +40,7 @@ impl TestSuite {
     pub fn new(count: usize) -> Self {
         let mut cluster = new_server_cluster(1, count);
         // Increase the Raft tick interval to make this test case running reliably.
-        configure_for_lease_read(&mut cluster.cfg, Some(100), None);
+        configure_for_lease_read(&mut cluster, Some(100), None);
         Self::with_cluster(count, cluster)
     }
 
@@ -81,7 +81,7 @@ impl TestSuite {
             let rts_endpoint = resolved_ts::Endpoint::new(
                 &cfg,
                 worker.scheduler(),
-                CdcRaftRouter(raft_router),
+                raft_router,
                 cluster.store_metas[id].clone(),
                 pd_cli.clone(),
                 cm.clone(),
@@ -119,21 +119,8 @@ impl TestSuite {
             );
             c
         };
-        self.must_schedule_task(store_id, Task::ChangeConfig { change });
-    }
-
-    pub fn must_change_memory_quota(&self, store_id: u64, bytes: u64) {
-        let change = {
-            let mut c = std::collections::HashMap::default();
-            c.insert("memory_quota".to_owned(), ConfigValue::Size(bytes));
-            c
-        };
-        self.must_schedule_task(store_id, Task::ChangeConfig { change });
-    }
-
-    pub fn must_schedule_task(&self, store_id: u64, task: Task) {
         let scheduler = self.endpoints.get(&store_id).unwrap().scheduler();
-        scheduler.schedule(task).unwrap();
+        scheduler.schedule(Task::ChangeConfig { change }).unwrap();
     }
 
     pub fn must_kv_prewrite(

@@ -10,154 +10,21 @@ use crate::{
     RocksEngineIterator, RocksSnapshot,
 };
 
-#[cfg(feature = "trace-lifetime")]
-mod trace {
-    //! Trace tools for tablets.
-    //!
-    //! It's hard to know who is holding the rocksdb reference when trying to
-    //! debug why the tablet is not deleted. The module will record the
-    //! backtrace and thread name when the tablet is created or clone. So
-    //! after print all the backtrace, we can easily figure out who is
-    //! leaking the tablet.
-    //!
-    //! To use the feature, you need to compile tikv-server with
-    //! trace-tabelt-lifetime feature. For example, `env
-    //! ENABLE_FEATURES=trace-tablet-lifetime make release`. And then query the trace information by `curl http://ip:status_port/region/id?trace-tablet=1`.
-
-    use std::{
-        backtrace::Backtrace,
-        collections::BTreeMap,
-        ops::Bound::Included,
-        sync::{
-            atomic::{AtomicU64, Ordering},
-            Mutex,
-        },
-    };
-
-    use rocksdb::DB;
-
-    static CNT: AtomicU64 = AtomicU64::new(0);
-
-    fn inc_id() -> u64 {
-        CNT.fetch_add(1, Ordering::Relaxed)
-    }
-
-    struct BacktraceInfo {
-        bt: Backtrace,
-        name: String,
-    }
-
-    impl BacktraceInfo {
-        fn default() -> Self {
-            BacktraceInfo {
-                bt: Backtrace::force_capture(),
-                name: std::thread::current().name().unwrap_or("").to_string(),
-            }
-        }
-    }
-
-    #[derive(PartialEq, PartialOrd, Eq, Ord, Clone, Copy, Default, Debug)]
-    struct TabletTraceKey {
-        region_id: u64,
-        suffix: u64,
-        addr: u64,
-        alloc_id: u64,
-    }
-
-    lazy_static::lazy_static! {
-        static ref TABLET_TRACE: Mutex<BTreeMap<TabletTraceKey, BacktraceInfo>> = Mutex::new(BTreeMap::default());
-    }
-
-    pub fn list(id: u64) -> Vec<String> {
-        let min = TabletTraceKey {
-            region_id: id,
-            suffix: 0,
-            addr: 0,
-            alloc_id: 0,
-        };
-        let max = TabletTraceKey {
-            region_id: id,
-            suffix: u64::MAX,
-            addr: u64::MAX,
-            alloc_id: u64::MAX,
-        };
-        let traces = TABLET_TRACE.lock().unwrap();
-        traces
-            .range((Included(min), Included(max)))
-            .map(|(k, v)| {
-                format!(
-                    "{}_{} {} {} {}",
-                    k.region_id, k.suffix, k.addr, v.name, v.bt
-                )
-            })
-            .collect()
-    }
-
-    #[derive(Debug)]
-    pub struct TabletTraceId(TabletTraceKey);
-
-    impl TabletTraceId {
-        pub fn new(path: &str, db: &DB) -> Self {
-            let mut name = path.split('/');
-            let name = name.next_back().unwrap();
-            let parts: Vec<_> = name.split('_').collect();
-            if parts.len() == 2 {
-                let id: u64 = parts[0].parse().unwrap();
-                let suffix: u64 = parts[1].parse().unwrap();
-                let bt = BacktraceInfo::default();
-                let key = TabletTraceKey {
-                    region_id: id,
-                    suffix,
-                    addr: db as *const _ as u64,
-                    alloc_id: inc_id(),
-                };
-                TABLET_TRACE.lock().unwrap().insert(key, bt);
-                Self(key)
-            } else {
-                Self(Default::default())
-            }
-        }
-    }
-
-    impl Clone for TabletTraceId {
-        fn clone(&self) -> Self {
-            if self.0.region_id != 0 {
-                let bt = BacktraceInfo::default();
-                let mut key = self.0;
-                key.alloc_id = inc_id();
-                TABLET_TRACE.lock().unwrap().insert(key, bt);
-                Self(key)
-            } else {
-                Self(self.0)
-            }
-        }
-    }
-
-    impl Drop for TabletTraceId {
-        fn drop(&mut self) {
-            if self.0.region_id != 0 {
-                TABLET_TRACE.lock().unwrap().remove(&self.0);
-            }
-        }
-    }
-}
-
 #[derive(Clone, Debug)]
 pub struct RocksEngine {
     db: Arc<DB>,
     support_multi_batch_write: bool,
-    #[cfg(feature = "trace-lifetime")]
-    _id: trace::TabletTraceId,
 }
 
 impl RocksEngine {
-    pub fn new(db: DB) -> RocksEngine {
-        let db = Arc::new(db);
+    pub(crate) fn new(db: DB) -> RocksEngine {
+        RocksEngine::from_db(Arc::new(db))
+    }
+
+    pub fn from_db(db: Arc<DB>) -> Self {
         RocksEngine {
+            db: db.clone(),
             support_multi_batch_write: db.get_db_options().is_enable_multi_batch_write(),
-            #[cfg(feature = "trace-lifetime")]
-            _id: trace::TabletTraceId::new(db.path(), &db),
-            db,
         }
     }
 
@@ -171,11 +38,6 @@ impl RocksEngine {
 
     pub fn support_multi_batch_write(&self) -> bool {
         self.support_multi_batch_write
-    }
-
-    #[cfg(feature = "trace-lifetime")]
-    pub fn trace(region_id: u64) -> Vec<String> {
-        trace::list(region_id)
     }
 }
 
@@ -193,11 +55,6 @@ impl KvEngine for RocksEngine {
     fn bad_downcast<T: 'static>(&self) -> &T {
         let e: &dyn Any = &self.db;
         e.downcast_ref().expect("bad engine downcast")
-    }
-
-    #[cfg(feature = "testexport")]
-    fn inner_refcount(&self) -> usize {
-        Arc::strong_count(&self.db)
     }
 }
 

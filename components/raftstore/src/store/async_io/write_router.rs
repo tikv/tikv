@@ -75,7 +75,7 @@ where
     pending_write_msgs: Vec<WriteMsg<EK, ER>>,
     /// The scheduling priority of the last msg, only valid when priority
     /// scheduling is enabled
-    last_msg_priority: Option<u64>,
+    last_msg_priority: u64,
 }
 
 impl<EK, ER> WriteRouter<EK, ER>
@@ -91,7 +91,7 @@ where
             next_writer_id: None,
             last_unpersisted: None,
             pending_write_msgs: vec![],
-            last_msg_priority: None,
+            last_msg_priority: 0,
         }
     }
 
@@ -103,10 +103,6 @@ where
         last_unpersisted: Option<u64>,
         msg: WriteMsg<EK, ER>,
     ) {
-        if last_unpersisted.is_none() {
-            // reset when there is no pending write
-            self.last_msg_priority = None;
-        }
         if self.should_send(ctx, last_unpersisted) {
             self.send(ctx, msg);
         } else {
@@ -242,7 +238,6 @@ where
         // pass the priority of last msg as low bound to make sure all messages of one
         // peer are handled sequentially.
         match sender.try_send(msg, self.last_msg_priority) {
-            // TODO: handle last msg priority properly
             Ok(priority) => self.last_msg_priority = priority,
             Err(TrySendError::Full(msg)) => {
                 let now = Instant::now();

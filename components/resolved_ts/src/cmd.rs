@@ -424,7 +424,6 @@ mod tests {
             Mutation::make_put(k1.clone(), b"v4".to_vec()),
             &None,
             SkipPessimisticCheck,
-            None,
         )
         .unwrap();
         one_pc_commit(true, &mut txn, 10.into());

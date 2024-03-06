@@ -32,7 +32,6 @@ use hyper::{
     service::{make_service_fn, service_fn},
     Body, Method, Request, Response, Server, StatusCode,
 };
-use kvproto::resource_manager::ResourceGroup;
 use online_config::OnlineConfig;
 use openssl::{
     ssl::{Ssl, SslAcceptor, SslContext, SslFiletype, SslMethod, SslVerifyMode},
@@ -45,11 +44,8 @@ pub use profile::{
 };
 use prometheus::TEXT_FORMAT;
 use regex::Regex;
-use resource_control::ResourceGroupManager;
 use security::{self, SecurityConfig};
-use serde::Serialize;
 use serde_json::Value;
-use service::service_manager::GrpcServiceManager;
 use tikv_kv::RaftExtension;
 use tikv_util::{
     logger::set_log_level,
@@ -93,8 +89,6 @@ pub struct StatusServer<R> {
     router: R,
     security_config: Arc<SecurityConfig>,
     store_path: PathBuf,
-    resource_manager: Option<Arc<ResourceGroupManager>>,
-    grpc_service_mgr: GrpcServiceManager,
 }
 
 impl<R> StatusServer<R>
@@ -107,8 +101,6 @@ where
         security_config: Arc<SecurityConfig>,
         router: R,
         store_path: PathBuf,
-        resource_manager: Option<Arc<ResourceGroupManager>>,
-        grpc_service_mgr: GrpcServiceManager,
     ) -> Result<Self> {
         let thread_pool = Builder::new_multi_thread()
             .enable_all()
@@ -128,8 +120,6 @@ where
             router,
             security_config,
             store_path,
-            resource_manager,
-            grpc_service_mgr,
         })
     }
 
@@ -415,16 +405,6 @@ where
         }
     }
 
-    async fn get_engine_type(cfg_controller: &ConfigController) -> hyper::Result<Response<Body>> {
-        let engine_type = cfg_controller.get_engine_type();
-        let response = Response::builder()
-            .header("Content-Type", mime::TEXT_PLAIN.to_string())
-            .header("Content-Length", engine_type.len())
-            .body(engine_type.into())
-            .unwrap();
-        Ok(response)
-    }
-
     pub fn stop(self) {
         let _ = self.tx.send(());
         self.thread_pool.shutdown_timeout(Duration::from_secs(3));
@@ -442,36 +422,6 @@ impl<R> StatusServer<R>
 where
     R: 'static + Send + RaftExtension + Clone,
 {
-    async fn handle_pause_grpc(
-        mut grpc_service_mgr: GrpcServiceManager,
-    ) -> hyper::Result<Response<Body>> {
-        if let Err(err) = grpc_service_mgr.pause() {
-            return Ok(make_response(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("fails to pause grpc: {}", err),
-            ));
-        }
-        Ok(make_response(
-            StatusCode::OK,
-            "Successfully pause grpc service",
-        ))
-    }
-
-    async fn handle_resume_grpc(
-        mut grpc_service_mgr: GrpcServiceManager,
-    ) -> hyper::Result<Response<Body>> {
-        if let Err(err) = grpc_service_mgr.resume() {
-            return Ok(make_response(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("fails to resume grpc: {}", err),
-            ));
-        }
-        Ok(make_response(
-            StatusCode::OK,
-            "Successfully resume grpc service",
-        ))
-    }
-
     pub async fn dump_region_meta(req: Request<Body>, router: R) -> hyper::Result<Response<Body>> {
         lazy_static! {
             static ref REGION: Regex = Regex::new(r"/region/(?P<id>\d+)").unwrap();
@@ -519,22 +469,6 @@ where
                     format!("fails to json: {}", err),
                 ));
             }
-        };
-
-        #[cfg(feature = "trace-tablet-lifetime")]
-        let body = {
-            let query = req.uri().query().unwrap_or("");
-            let query_pairs: HashMap<_, _> =
-                url::form_urlencoded::parse(query.as_bytes()).collect();
-
-            let mut body = body;
-            if query_pairs.contains_key("trace-tablet") {
-                for s in engine_rocks::RocksEngine::trace(id) {
-                    body.push(b'\n');
-                    body.extend_from_slice(s.as_bytes());
-                }
-            };
-            body
         };
         match Response::builder()
             .header("content-type", "application/json")
@@ -584,8 +518,6 @@ where
         let cfg_controller = self.cfg_controller.clone();
         let router = self.router.clone();
         let store_path = self.store_path.clone();
-        let resource_manager = self.resource_manager.clone();
-        let grpc_service_mgr = self.grpc_service_mgr.clone();
         // Start to serve.
         let server = builder.serve(make_service_fn(move |conn: &C| {
             let x509 = conn.get_x509();
@@ -593,8 +525,6 @@ where
             let cfg_controller = cfg_controller.clone();
             let router = router.clone();
             let store_path = store_path.clone();
-            let resource_manager = resource_manager.clone();
-            let grpc_service_mgr = grpc_service_mgr.clone();
             async move {
                 // Create a status service.
                 Ok::<_, hyper::Error>(service_fn(move |req: Request<Body>| {
@@ -603,8 +533,6 @@ where
                     let cfg_controller = cfg_controller.clone();
                     let router = router.clone();
                     let store_path = store_path.clone();
-                    let resource_manager = resource_manager.clone();
-                    let grpc_service_mgr = grpc_service_mgr.clone();
                     async move {
                         let path = req.uri().path().to_owned();
                         let method = req.method().to_owned();
@@ -656,9 +584,6 @@ where
                             (Method::POST, "/config") => {
                                 Self::update_config(cfg_controller.clone(), req).await
                             }
-                            (Method::GET, "/engine_type") => {
-                                Self::get_engine_type(&cfg_controller).await
-                            }
                             // This interface is used for configuration file hosting scenarios,
                             // TiKV will not update configuration files, and this interface will
                             // silently ignore configration items that cannot be updated online,
@@ -681,15 +606,6 @@ where
                             }
                             (Method::PUT, path) if path.starts_with("/log-level") => {
                                 Self::change_log_level(req).await
-                            }
-                            (Method::GET, "/resource_groups") => {
-                                Self::handle_get_all_resource_groups(resource_manager.as_ref())
-                            }
-                            (Method::PUT, "/pause_grpc") => {
-                                Self::handle_pause_grpc(grpc_service_mgr).await
-                            }
-                            (Method::PUT, "/resume_grpc") => {
-                                Self::handle_resume_grpc(grpc_service_mgr).await
                             }
                             _ => Ok(make_response(StatusCode::NOT_FOUND, "path not found")),
                         }
@@ -727,65 +643,6 @@ where
             self.start_serve(server);
         }
         Ok(())
-    }
-
-    pub fn handle_get_all_resource_groups(
-        mgr: Option<&Arc<ResourceGroupManager>>,
-    ) -> hyper::Result<Response<Body>> {
-        let groups = if let Some(mgr) = mgr {
-            mgr.get_all_resource_groups()
-                .into_iter()
-                .map(into_debug_request_group)
-                .collect()
-        } else {
-            vec![]
-        };
-        let body = match serde_json::to_vec(&groups) {
-            Ok(body) => body,
-            Err(err) => {
-                return Ok(make_response(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    format!("fails to json: {}", err),
-                ));
-            }
-        };
-        match Response::builder()
-            .header("content-type", "application/json")
-            .body(hyper::Body::from(body))
-        {
-            Ok(resp) => Ok(resp),
-            Err(err) => Ok(make_response(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("fails to build response: {}", err),
-            )),
-        }
-    }
-}
-
-#[derive(Serialize)]
-struct ResourceGroupSetting {
-    name: String,
-    ru: u64,
-    priority: u32,
-    burst_limit: i64,
-}
-
-fn into_debug_request_group(rg: ResourceGroup) -> ResourceGroupSetting {
-    ResourceGroupSetting {
-        name: rg.name,
-        ru: rg
-            .r_u_settings
-            .get_ref()
-            .get_r_u()
-            .get_settings()
-            .get_fill_rate(),
-        priority: rg.priority,
-        burst_limit: rg
-            .r_u_settings
-            .get_ref()
-            .get_r_u()
-            .get_settings()
-            .get_burst_limit(),
     }
 }
 
@@ -1073,7 +930,6 @@ mod tests {
     use openssl::ssl::{SslConnector, SslFiletype, SslMethod};
     use raftstore::store::region_meta::RegionMeta;
     use security::SecurityConfig;
-    use service::service_manager::GrpcServiceManager;
     use test_util::new_security_cfg;
     use tikv_kv::RaftExtension;
     use tikv_util::logger::get_log_level;
@@ -1081,7 +937,6 @@ mod tests {
     use crate::{
         config::{ConfigController, TikvConfig},
         server::status_server::{profile::TEST_PROFILE_MUTEX, LogLevelRequest, StatusServer},
-        storage::config::EngineType,
     };
 
     #[derive(Clone)]
@@ -1102,8 +957,6 @@ mod tests {
             Arc::new(SecurityConfig::default()),
             MockRouter,
             temp_dir.path().to_path_buf(),
-            None,
-            GrpcServiceManager::dummy(),
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
@@ -1152,8 +1005,6 @@ mod tests {
             Arc::new(SecurityConfig::default()),
             MockRouter,
             temp_dir.path().to_path_buf(),
-            None,
-            GrpcServiceManager::dummy(),
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
@@ -1199,8 +1050,6 @@ mod tests {
             Arc::new(SecurityConfig::default()),
             MockRouter,
             temp_dir.path().to_path_buf(),
-            None,
-            GrpcServiceManager::dummy(),
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
@@ -1317,8 +1166,6 @@ mod tests {
             Arc::new(SecurityConfig::default()),
             MockRouter,
             temp_dir.path().to_path_buf(),
-            None,
-            GrpcServiceManager::dummy(),
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
@@ -1363,8 +1210,6 @@ mod tests {
             Arc::new(SecurityConfig::default()),
             MockRouter,
             temp_dir.path().to_path_buf(),
-            None,
-            GrpcServiceManager::dummy(),
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
@@ -1401,8 +1246,6 @@ mod tests {
             Arc::new(new_security_cfg(Some(allowed_cn))),
             MockRouter,
             temp_dir.path().to_path_buf(),
-            None,
-            GrpcServiceManager::dummy(),
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
@@ -1476,8 +1319,6 @@ mod tests {
             Arc::new(SecurityConfig::default()),
             MockRouter,
             temp_dir.path().to_path_buf(),
-            None,
-            GrpcServiceManager::dummy(),
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
@@ -1508,8 +1349,6 @@ mod tests {
             Arc::new(SecurityConfig::default()),
             MockRouter,
             temp_dir.path().to_path_buf(),
-            None,
-            GrpcServiceManager::dummy(),
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
@@ -1543,8 +1382,6 @@ mod tests {
             Arc::new(SecurityConfig::default()),
             MockRouter,
             temp_dir.path().to_path_buf(),
-            None,
-            GrpcServiceManager::dummy(),
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
@@ -1600,8 +1437,6 @@ mod tests {
             Arc::new(SecurityConfig::default()),
             MockRouter,
             temp_dir.path().to_path_buf(),
-            None,
-            GrpcServiceManager::dummy(),
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
@@ -1640,87 +1475,5 @@ mod tests {
         });
         block_on(handle).unwrap();
         status_server.stop();
-    }
-
-    #[test]
-    fn test_get_engine_type() {
-        let mut multi_rocks_cfg = TikvConfig::default();
-        multi_rocks_cfg.storage.engine = EngineType::RaftKv2;
-        let cfgs = [TikvConfig::default(), multi_rocks_cfg];
-        let resp_strs = ["raft-kv", "partitioned-raft-kv"];
-        for (cfg, resp_str) in IntoIterator::into_iter(cfgs).zip(resp_strs) {
-            let temp_dir = tempfile::TempDir::new().unwrap();
-            let mut status_server = StatusServer::new(
-                1,
-                ConfigController::new(cfg),
-                Arc::new(SecurityConfig::default()),
-                MockRouter,
-                temp_dir.path().to_path_buf(),
-                None,
-                GrpcServiceManager::dummy(),
-            )
-            .unwrap();
-            let addr = "127.0.0.1:0".to_owned();
-            let _ = status_server.start(addr);
-            let client = Client::new();
-            let uri = Uri::builder()
-                .scheme("http")
-                .authority(status_server.listening_addr().to_string().as_str())
-                .path_and_query("/engine_type")
-                .build()
-                .unwrap();
-
-            let handle = status_server.thread_pool.spawn(async move {
-                let res = client.get(uri).await.unwrap();
-                assert_eq!(res.status(), StatusCode::OK);
-                let body_bytes = hyper::body::to_bytes(res.into_body()).await.unwrap();
-                let engine_type = String::from_utf8(body_bytes.as_ref().to_owned()).unwrap();
-                assert_eq!(engine_type, resp_str);
-            });
-            block_on(handle).unwrap();
-            status_server.stop();
-        }
-    }
-
-    #[test]
-    fn test_control_grpc_service() {
-        let mut multi_rocks_cfg = TikvConfig::default();
-        multi_rocks_cfg.storage.engine = EngineType::RaftKv2;
-        let cfgs = [TikvConfig::default(), multi_rocks_cfg];
-        for cfg in IntoIterator::into_iter(cfgs) {
-            let temp_dir = tempfile::TempDir::new().unwrap();
-            let mut status_server = StatusServer::new(
-                1,
-                ConfigController::new(cfg),
-                Arc::new(SecurityConfig::default()),
-                MockRouter,
-                temp_dir.path().to_path_buf(),
-                None,
-                GrpcServiceManager::dummy(),
-            )
-            .unwrap();
-            let addr = "127.0.0.1:0".to_owned();
-            let _ = status_server.start(addr);
-            for req in ["/pause_grpc", "/resume_grpc"] {
-                let client = Client::new();
-                let uri = Uri::builder()
-                    .scheme("http")
-                    .authority(status_server.listening_addr().to_string().as_str())
-                    .path_and_query(req)
-                    .build()
-                    .unwrap();
-
-                let mut grpc_req = Request::default();
-                *grpc_req.method_mut() = Method::PUT;
-                *grpc_req.uri_mut() = uri;
-                let handle = status_server.thread_pool.spawn(async move {
-                    let res = client.request(grpc_req).await.unwrap();
-                    // Dummy grpc service manager, should return error.
-                    assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
-                });
-                block_on(handle).unwrap();
-            }
-            status_server.stop();
-        }
     }
 }

@@ -435,10 +435,10 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for SlowHashAggregationImp
     fn iterate_available_groups(
         &mut self,
         entities: &mut Entities<Src>,
-        src_is_drained: BatchExecIsDrain,
+        src_is_drained: bool,
         mut iteratee: impl FnMut(&mut Entities<Src>, &[Box<dyn AggrFunctionState>]) -> Result<()>,
     ) -> Result<Vec<LazyBatchColumn>> {
-        assert!(src_is_drained.stop());
+        assert!(src_is_drained);
 
         let number_of_groups = self.groups.len();
         let mut group_by_columns: Vec<_> = self
@@ -577,12 +577,12 @@ mod tests {
         let r = block_on(exec.next_batch(1));
         assert!(r.logical_rows.is_empty());
         assert_eq!(r.physical_columns.rows_len(), 0);
-        assert!(r.is_drained.unwrap().is_remain());
+        assert!(!r.is_drained.unwrap());
 
         let r = block_on(exec.next_batch(1));
         assert!(r.logical_rows.is_empty());
         assert_eq!(r.physical_columns.rows_len(), 0);
-        assert!(r.is_drained.unwrap().is_remain());
+        assert!(!r.is_drained.unwrap());
 
         let mut r = block_on(exec.next_batch(1));
         // col_4 (sort_key),    col_0 + 1 can result in:

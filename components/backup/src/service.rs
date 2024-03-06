@@ -1,53 +1,47 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::atomic::*;
+use std::{marker::PhantomData, sync::atomic::*};
 
-use engine_traits::{KvEngine, RaftEngine};
+use engine_traits::KvEngine;
 use futures::{channel::mpsc, FutureExt, SinkExt, StreamExt, TryFutureExt};
 use grpcio::{self, *};
 use kvproto::brpb::*;
-use raftstore::store::{
-    fsm::store::RaftRouter,
-    msg::{PeerMsg, SignificantMsg},
+use raftstore::{
+    router::RaftStoreRouter,
+    store::msg::{PeerMsg, SignificantMsg},
 };
 use tikv_util::{error, info, worker::*};
 
 use super::Task;
 
 /// Service handles the RPC messages for the `Backup` service.
+
 #[derive(Clone)]
-pub struct Service<EK: KvEngine, ER: RaftEngine> {
+pub struct Service<E, RR> {
     scheduler: Scheduler<Task>,
-    router: Option<RaftRouter<EK, ER>>,
+    router: RR,
+    _phantom: PhantomData<E>,
 }
 
-impl<EK, ER> Service<EK, ER>
+impl<E, RR> Service<E, RR>
 where
-    EK: KvEngine,
-    ER: RaftEngine,
+    E: KvEngine,
+    RR: RaftStoreRouter<E>,
 {
-    // Create a new backup service without router, this used for raftstore v2.
-    // because we don't have RaftStoreRouter any more.
-    pub fn new(scheduler: Scheduler<Task>) -> Self {
+    /// Create a new backup service.
+    pub fn new(scheduler: Scheduler<Task>, router: RR) -> Self {
         Service {
             scheduler,
-            router: None,
-        }
-    }
-
-    // Create a new backup service with router, this used for raftstore v1.
-    pub fn with_router(scheduler: Scheduler<Task>, router: RaftRouter<EK, ER>) -> Self {
-        Service {
-            scheduler,
-            router: Some(router),
+            router,
+            _phantom: PhantomData,
         }
     }
 }
 
-impl<EK, ER> Backup for Service<EK, ER>
+impl<E, RR> Backup for Service<E, RR>
 where
-    EK: KvEngine,
-    ER: RaftEngine,
+    E: KvEngine,
+    RR: RaftStoreRouter<E>,
 {
     fn check_pending_admin_op(
         &mut self,
@@ -56,33 +50,25 @@ where
         mut sink: ServerStreamingSink<CheckAdminResponse>,
     ) {
         let (tx, rx) = mpsc::unbounded();
-        match &self.router {
-            Some(router) => {
-                router.broadcast_normal(|| {
-                    PeerMsg::SignificantMsg(SignificantMsg::CheckPendingAdmin(tx.clone()))
-                });
-                let send_task = async move {
-                    let mut s = rx.map(|resp| Ok((resp, WriteFlags::default())));
-                    sink.send_all(&mut s).await?;
-                    sink.close().await?;
-                    Ok(())
-                }
-                .map(|res: Result<()>| match res {
-                    Ok(_) => {
-                        info!("check admin closed");
-                    }
-                    Err(e) => {
-                        error!("check admin canceled"; "error" => ?e);
-                    }
-                });
-                ctx.spawn(send_task);
-            }
-            None => {
-                // check pending admin reqeust is used for EBS Backup.
-                // for raftstore v2. we don't need it for now. so just return unimplemented
-                unimplemented_call!(ctx, sink)
-            }
+        self.router.broadcast_normal(|| {
+            PeerMsg::SignificantMsg(SignificantMsg::CheckPendingAdmin(tx.clone()))
+        });
+
+        let send_task = async move {
+            let mut s = rx.map(|resp| Ok((resp, WriteFlags::default())));
+            sink.send_all(&mut s).await?;
+            sink.close().await?;
+            Ok(())
         }
+        .map(|res: Result<()>| match res {
+            Ok(_) => {
+                info!("check admin closed");
+            }
+            Err(e) => {
+                error!("check admin canceled"; "error" => ?e);
+            }
+        });
+        ctx.spawn(send_task);
     }
 
     fn backup(
@@ -145,6 +131,7 @@ mod tests {
 
     use engine_rocks::RocksEngine;
     use external_storage_export::make_local_backend;
+    use raftstore::router::RaftStoreBlackHole;
     use tikv::storage::txn::tests::{must_commit, must_prewrite_put};
     use tikv_util::worker::{dummy_scheduler, ReceiverWrapper};
     use txn_types::TimeStamp;
@@ -155,7 +142,8 @@ mod tests {
     fn new_rpc_suite() -> (Server, BackupClient, ReceiverWrapper<Task>) {
         let env = Arc::new(EnvBuilder::new().build());
         let (scheduler, rx) = dummy_scheduler();
-        let backup_service = super::Service::<RocksEngine, RocksEngine>::new(scheduler);
+        let backup_service =
+            super::Service::<RocksEngine, RaftStoreBlackHole>::new(scheduler, RaftStoreBlackHole);
         let builder =
             ServerBuilder::new(env.clone()).register_service(create_backup(backup_service));
         let mut server = builder.bind("127.0.0.1", 0).build().unwrap();

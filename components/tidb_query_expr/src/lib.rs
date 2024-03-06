@@ -409,14 +409,6 @@ fn map_lower_utf8_sig(value: ScalarFuncSig, children: &[Expr]) -> Result<RpnFnMe
     })
 }
 
-fn map_field_string_sig(ret_field_type: &FieldType) -> Result<RpnFnMeta> {
-    Ok(match_template_collator! {
-        TT, match ret_field_type.as_accessor().collation().map_err(tidb_query_datatype::codec::Error::from)? {
-            Collation::TT => field_bytes_fn_meta::<TT>()
-        }
-    })
-}
-
 #[rustfmt::skip]
 fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
     let value = expr.get_sig();
@@ -794,7 +786,7 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::Locate3Args => locate_3_args_fn_meta(),
         ScalarFuncSig::FieldInt => field_fn_meta::<Int>(),
         ScalarFuncSig::FieldReal => field_fn_meta::<Real>(),
-        ScalarFuncSig::FieldString => map_field_string_sig(ft)?,
+        ScalarFuncSig::FieldString => field_bytes_fn_meta(),
         ScalarFuncSig::Elt => elt_fn_meta(),
         ScalarFuncSig::MakeSet => make_set_fn_meta(),
         ScalarFuncSig::Space => space_fn_meta(),

@@ -384,17 +384,6 @@ pub trait ThreadBuildWrapper {
 
 lazy_static::lazy_static! {
     pub static ref THREAD_NAME_HASHMAP: Mutex<HashMap<Pid, String>> = Mutex::new(HashMap::default());
-    pub static ref THREAD_START_HOOKS: Mutex<Vec<Box<dyn Fn() + Sync + Send>>> = Mutex::new(Vec::new());
-}
-
-pub fn hook_thread_start(f: Box<dyn Fn() + Sync + Send>) {
-    THREAD_START_HOOKS.lock().unwrap().push(f);
-}
-
-pub(crate) fn call_thread_start_hooks() {
-    for f in THREAD_START_HOOKS.lock().unwrap().iter() {
-        f();
-    }
 }
 
 pub(crate) fn add_thread_name_to_map() {
@@ -422,7 +411,6 @@ impl StdThreadBuildWrapper for std::thread::Builder {
     {
         #[allow(clippy::disallowed_methods)]
         self.spawn(|| {
-            call_thread_start_hooks();
             add_thread_name_to_map();
             let res = f();
             remove_thread_name_from_map();
@@ -438,7 +426,6 @@ impl ThreadBuildWrapper for tokio::runtime::Builder {
     {
         #[allow(clippy::disallowed_methods)]
         self.on_thread_start(move || {
-            call_thread_start_hooks();
             add_thread_name_to_map();
             f();
         })
@@ -463,7 +450,6 @@ impl ThreadBuildWrapper for futures::executor::ThreadPoolBuilder {
     {
         #[allow(clippy::disallowed_methods)]
         self.after_start(move |_| {
-            call_thread_start_hooks();
             add_thread_name_to_map();
             f();
         })

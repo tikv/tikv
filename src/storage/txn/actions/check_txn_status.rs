@@ -1,6 +1,5 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use tikv_kv::SnapshotExt;
 // #[PerformanceCriticalPath]
 use txn_types::{Key, Lock, TimeStamp, Write, WriteType};
 
@@ -24,15 +23,7 @@ pub fn check_txn_status_lock_exists(
     caller_start_ts: TimeStamp,
     force_sync_commit: bool,
     resolving_pessimistic_lock: bool,
-    verify_is_primary: bool,
 ) -> Result<(TxnStatus, Option<ReleasedLock>)> {
-    if verify_is_primary && !primary_key.is_encoded_from(&lock.primary) {
-        // Return the current lock info to tell the client what the actual primary is.
-        return Err(
-            ErrorInner::PrimaryMismatch(lock.into_lock_info(primary_key.into_raw()?)).into(),
-        );
-    }
-
     // Never rollback or push forward min_commit_ts in check_txn_status if it's
     // using async commit. Rollback of async-commit locks are done during
     // ResolveLock.
@@ -163,17 +154,8 @@ pub fn rollback_lock(
 ) -> Result<Option<ReleasedLock>> {
     let overlapped_write = match reader.get_txn_commit_record(&key)? {
         TxnCommitRecord::None { overlapped_write } => overlapped_write,
-        TxnCommitRecord::SingleRecord { write, commit_ts }
-            if write.write_type != WriteType::Rollback =>
-        {
-            panic!(
-                "txn record found but not expected: {:?} {} {:?} {:?} [region_id={}]",
-                write,
-                commit_ts,
-                txn,
-                lock,
-                reader.reader.snapshot_ext().get_region_id().unwrap_or(0)
-            )
+        TxnCommitRecord::SingleRecord { write, .. } if write.write_type != WriteType::Rollback => {
+            panic!("txn record found but not expected: {:?}", txn)
         }
         _ => return Ok(txn.unlock_key(key, is_pessimistic_txn, TimeStamp::zero())),
     };

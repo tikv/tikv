@@ -1,6 +1,6 @@
 // Copyright 2023 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{collections::HashSet, sync::Arc, time::Duration};
+use std::{sync::Arc, time::Duration};
 
 use futures::{compat::Future01CompatExt, StreamExt};
 use kvproto::{pdpb::EventType, resource_manager::ResourceGroup};
@@ -35,76 +35,71 @@ const RETRY_INTERVAL: Duration = Duration::from_secs(1); // to consistent with p
 
 impl ResourceManagerService {
     pub async fn watch_resource_groups(&mut self) {
-        'outer: loop {
-            // Firstly, load all resource groups as of now.
-            self.reload_all_resource_groups().await;
-            // Secondly, start watcher at loading revision.
-            loop {
-                match self
-                    .pd_client
-                    .watch_global_config(RESOURCE_CONTROL_CONFIG_PATH.to_string(), self.revision)
-                {
-                    Ok(mut stream) => {
-                        while let Some(grpc_response) = stream.next().await {
-                            match grpc_response {
-                                Ok(r) => {
-                                    self.revision = r.get_revision();
-                                    r.get_changes()
-                                        .iter()
-                                        .for_each(|item| match item.get_kind() {
-                                            EventType::Put => {
-                                                match protobuf::parse_from_bytes::<ResourceGroup>(
+        // Firstly, load all resource groups as of now.
+        let (groups, revision) = self.list_resource_groups().await;
+        self.revision = revision;
+        groups
+            .into_iter()
+            .for_each(|rg| self.manager.add_resource_group(rg));
+        // Secondly, start watcher at loading revision.
+        loop {
+            match self
+                .pd_client
+                .watch_global_config(RESOURCE_CONTROL_CONFIG_PATH.to_string(), self.revision)
+            {
+                Ok(mut stream) => {
+                    while let Some(grpc_response) = stream.next().await {
+                        match grpc_response {
+                            Ok(r) => {
+                                self.revision = r.get_revision();
+                                r.get_changes()
+                                    .iter()
+                                    .for_each(|item| match item.get_kind() {
+                                        EventType::Put => {
+                                            if let Ok(group) =
+                                                protobuf::parse_from_bytes::<ResourceGroup>(
                                                     item.get_payload(),
-                                                ) {
-                                                    Ok(group) => {
-                                                        self.manager.add_resource_group(group);
-                                                    }
-                                                    Err(e) => {
-                                                        error!("parse put resource group event failed"; "name" => item.get_name(), "err" => ?e);
-                                                    }
-                                                }
+                                                )
+                                            {
+                                                self.manager.add_resource_group(group);
                                             }
-                                            EventType::Delete => {
-                                                match protobuf::parse_from_bytes::<ResourceGroup>(
-                                                    item.get_payload(),
-                                                ) {
-                                                    Ok(group) => {
-                                                        self.manager.remove_resource_group(group.get_name());
-                                                    }
-                                                    Err(e) => {
-                                                        error!("parse delete resource group event failed"; "name" => item.get_name(), "err" => ?e);
-                                                    }
-                                                }
-                                            }
-                                        });
-                                }
-                                Err(err) => {
-                                    error!("failed to get stream"; "err" => ?err);
-                                    let _ = GLOBAL_TIMER_HANDLE
-                                        .delay(std::time::Instant::now() + RETRY_INTERVAL)
-                                        .compat()
-                                        .await;
-                                }
+                                        }
+                                        EventType::Delete => {
+                                            self.manager.remove_resource_group(item.get_name());
+                                        }
+                                    });
+                            }
+                            Err(err) => {
+                                error!("failed to get stream"; "err" => ?err);
+                                let _ = GLOBAL_TIMER_HANDLE
+                                    .delay(std::time::Instant::now() + RETRY_INTERVAL)
+                                    .compat()
+                                    .await;
                             }
                         }
                     }
-                    Err(PdError::DataCompacted(msg)) => {
-                        error!("required revision has been compacted"; "err" => ?msg);
-                        continue 'outer;
-                    }
-                    Err(err) => {
-                        error!("failed to watch resource groups"; "err" => ?err);
-                        let _ = GLOBAL_TIMER_HANDLE
-                            .delay(std::time::Instant::now() + RETRY_INTERVAL)
-                            .compat()
-                            .await;
-                    }
+                }
+                Err(PdError::DataCompacted(msg)) => {
+                    error!("required revision has been compacted"; "err" => ?msg);
+                    // If the etcd revision is compacted, we need to reload all resouce groups.
+                    let (groups, revision) = self.list_resource_groups().await;
+                    self.revision = revision;
+                    groups
+                        .into_iter()
+                        .for_each(|rg| self.manager.add_resource_group(rg));
+                }
+                Err(err) => {
+                    error!("failed to watch resource groups"; "err" => ?err);
+                    let _ = GLOBAL_TIMER_HANDLE
+                        .delay(std::time::Instant::now() + RETRY_INTERVAL)
+                        .compat()
+                        .await;
                 }
             }
         }
     }
 
-    async fn reload_all_resource_groups(&mut self) {
+    async fn list_resource_groups(&mut self) -> (Vec<ResourceGroup>, i64) {
         loop {
             match self
                 .pd_client
@@ -112,22 +107,11 @@ impl ResourceManagerService {
                 .await
             {
                 Ok((items, revision)) => {
-                    let mut vaild_groups = HashSet::with_capacity(items.len());
-                    items.iter().for_each(|g| {
-                        match protobuf::parse_from_bytes::<ResourceGroup>(g.get_payload()) {
-                            Ok(rg) => {
-                                vaild_groups.insert(rg.get_name().to_ascii_lowercase());
-                                self.manager.add_resource_group(rg);
-                            }
-                            Err(e) => {
-                                error!("parse resource group failed"; "name" => g.get_name(), "err" => ?e);
-                            }
-                        }
-                    });
-
-                    self.manager.retain(|name, _g| vaild_groups.contains(name));
-                    self.revision = revision;
-                    return;
+                    let groups = items
+                        .into_iter()
+                        .filter_map(|g| protobuf::parse_from_bytes(g.get_payload()).ok())
+                        .collect();
+                    return (groups, revision);
                 }
                 Err(err) => {
                     error!("failed to load global config"; "err" => ?err);
@@ -199,16 +183,16 @@ pub mod tests {
         let resource_manager = ResourceGroupManager::default();
 
         let mut s = ResourceManagerService::new(Arc::new(resource_manager), Arc::new(client));
-        let group = new_resource_group("TEST".into(), true, 100, 100, 0);
+        let group = new_resource_group("TEST".into(), true, 100, 100);
         add_resource_group(s.pd_client.clone(), group);
-        block_on(s.reload_all_resource_groups());
-        assert_eq!(s.manager.get_all_resource_groups().len(), 1);
-        assert_eq!(s.revision, 1);
+        let (res, revision) = block_on(s.list_resource_groups());
+        assert_eq!(res.len(), 1);
+        assert_eq!(revision, 1);
 
         delete_resource_group(s.pd_client.clone(), "TEST");
-        block_on(s.reload_all_resource_groups());
-        assert_eq!(s.manager.get_all_resource_groups().len(), 0);
-        assert_eq!(s.revision, 2);
+        let (res, revision) = block_on(s.list_resource_groups());
+        assert_eq!(res.len(), 0);
+        assert_eq!(revision, 2);
 
         server.stop();
     }
@@ -219,24 +203,9 @@ pub mod tests {
         let resource_manager = ResourceGroupManager::default();
 
         let mut s = ResourceManagerService::new(Arc::new(resource_manager), Arc::new(client));
-        block_on(s.reload_all_resource_groups());
-        assert_eq!(s.manager.get_all_resource_groups().len(), 0);
-        assert_eq!(s.revision, 0);
-
-        // TODO: find a better way to observe the watch is ready.
-        let wait_watch_ready = |s: &ResourceManagerService, count: usize| {
-            for _i in 0..100 {
-                if s.manager.get_all_resource_groups().len() == count {
-                    return;
-                }
-                std::thread::sleep(Duration::from_millis(1));
-            }
-            panic!(
-                "wait time out, expectd: {}, got: {}",
-                count,
-                s.manager.get_all_resource_groups().len()
-            );
-        };
+        let (res, revision) = block_on(s.list_resource_groups());
+        assert_eq!(res.len(), 0);
+        assert_eq!(revision, 0);
 
         let background_worker = Builder::new("background").thread_count(1).create();
         let mut s_clone = s.clone();
@@ -244,20 +213,23 @@ pub mod tests {
             s_clone.watch_resource_groups().await;
         });
         // Mock add
-        let group1 = new_resource_group_ru("TEST1".into(), 100, 0);
+        let group1 = new_resource_group_ru("TEST1".into(), 100);
         add_resource_group(s.pd_client.clone(), group1);
-        let group2 = new_resource_group_ru("TEST2".into(), 100, 0);
+        let group2 = new_resource_group_ru("TEST2".into(), 100);
         add_resource_group(s.pd_client.clone(), group2);
         // Mock modify
-        let group2 = new_resource_group_ru("TEST2".into(), 50, 0);
+        let group2 = new_resource_group_ru("TEST2".into(), 50);
         add_resource_group(s.pd_client.clone(), group2);
-        wait_watch_ready(&s, 2);
-
+        let (res, revision) = block_on(s.list_resource_groups());
+        assert_eq!(res.len(), 2);
+        assert_eq!(revision, 3);
         // Mock delete
         delete_resource_group(s.pd_client.clone(), "TEST1");
-
+        let (res, revision) = block_on(s.list_resource_groups());
+        assert_eq!(res.len(), 1);
+        assert_eq!(revision, 4);
         // Wait for watcher
-        wait_watch_ready(&s, 1);
+        std::thread::sleep(Duration::from_millis(100));
         let groups = s.manager.get_all_resource_groups();
         assert_eq!(groups.len(), 1);
         assert!(s.manager.get_resource_group("TEST1").is_none());
@@ -286,7 +258,7 @@ pub mod tests {
             s_clone.watch_resource_groups().await;
         });
         // Mock add
-        let group1 = new_resource_group_ru("TEST1".into(), 100, 0);
+        let group1 = new_resource_group_ru("TEST1".into(), 100);
         add_resource_group(s.pd_client.clone(), group1);
         // Mock reboot watch server
         let watch_global_config_fp = "watch_global_config_return";
@@ -294,7 +266,7 @@ pub mod tests {
         std::thread::sleep(Duration::from_millis(100));
         fail::remove(watch_global_config_fp);
         // Mock add after rebooting will success
-        let group1 = new_resource_group_ru("TEST2".into(), 100, 0);
+        let group1 = new_resource_group_ru("TEST2".into(), 100);
         add_resource_group(s.pd_client.clone(), group1);
         // Wait watcher update
         std::thread::sleep(Duration::from_secs(1));

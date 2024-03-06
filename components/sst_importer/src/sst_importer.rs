@@ -14,7 +14,7 @@ use std::{
     time::Duration,
 };
 
-use dashmap::{mapref::entry::Entry, DashMap};
+use dashmap::DashMap;
 use encryption::{to_engine_encryption_method, DataKeyManager};
 use engine_rocks::{get_env, RocksSstReader};
 use engine_traits::{
@@ -25,7 +25,7 @@ use engine_traits::{
 use external_storage_export::{
     compression_reader_dispatcher, encrypt_wrap_reader, ExternalStorage, RestoreConfig,
 };
-use file_system::{get_io_rate_limiter, IoType, OpenOptions};
+use file_system::{get_io_rate_limiter, OpenOptions};
 use kvproto::{
     brpb::{CipherInfo, StorageBackend},
     import_sstpb::*,
@@ -36,46 +36,22 @@ use tikv_util::{
         bytes::{decode_bytes_in_place, encode_bytes},
         stream_event::{EventEncoder, EventIterator, Iterator as EIterator},
     },
-    sys::{thread::ThreadBuildWrapper, SysQuota},
+    config::ReadableSize,
+    stream::block_on_external_io,
+    sys::SysQuota,
     time::{Instant, Limiter},
-    HandyRwLock,
 };
-use tokio::{
-    runtime::{Handle, Runtime},
-    sync::OnceCell,
-};
+use tokio::runtime::{Handle, Runtime};
 use txn_types::{Key, TimeStamp, WriteRef};
 
 use crate::{
-    caching::cache_map::{CacheMap, ShareOwned},
+    caching::cache_map::CacheMap,
     import_file::{ImportDir, ImportFile},
     import_mode::{ImportModeSwitcher, RocksDbMetricsFn},
     metrics::*,
     sst_writer::{RawSstWriter, TxnSstWriter},
-    util, Config, ConfigManager as ImportConfigManager, Error, Result,
+    util, Config, Error, Result,
 };
-
-pub struct LoadedFile {
-    permit: MemUsePermit,
-    content: Arc<[u8]>,
-}
-
-impl std::fmt::Debug for LoadedFile {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("LoadedFileInner")
-            .field("permit", &self.permit)
-            .field("content.len()", &self.content.len())
-            .finish()
-    }
-}
-
-impl ShareOwned for LoadedFile {
-    type Shared = Arc<[u8]>;
-
-    fn share_owned(&self) -> Self::Shared {
-        Arc::clone(&self.content)
-    }
-}
 
 #[derive(Default, Debug, Clone)]
 pub struct DownloadExt<'a> {
@@ -95,44 +71,17 @@ impl<'a> DownloadExt<'a> {
     }
 }
 
-#[derive(Debug)]
-struct MemUsePermit {
-    amount: u64,
-    statistic: Arc<AtomicU64>,
-}
-
-impl Drop for MemUsePermit {
-    fn drop(&mut self) {
-        self.statistic.fetch_sub(self.amount, Ordering::SeqCst);
-    }
-}
-
-#[derive(Clone, Debug)]
+#[derive(Clone, PartialEq, Debug)]
 pub enum CacheKvFile {
-    Mem(Arc<OnceCell<LoadedFile>>),
+    Mem(Arc<Vec<u8>>),
     Fs(Arc<PathBuf>),
-}
-
-/// returns a error indices that we are going to panic in a invalid state.
-/// (Rust panic information cannot be send to BR, hence client cannot know
-/// what happens, so we pack it into a `Result`.)
-fn bug(message: impl std::fmt::Display) -> Error {
-    Error::Io(std::io::Error::new(
-        std::io::ErrorKind::Other,
-        format!("BUG in TiKV: {}", message),
-    ))
 }
 
 impl CacheKvFile {
     // get the ref count of item.
     pub fn ref_count(&self) -> usize {
         match self {
-            CacheKvFile::Mem(buff) => {
-                if let Some(a) = buff.get() {
-                    return Arc::strong_count(&a.content);
-                }
-                Arc::strong_count(buff)
-            }
+            CacheKvFile::Mem(buff) => Arc::strong_count(buff),
             CacheKvFile::Fs(path) => Arc::strong_count(path),
         }
     }
@@ -140,7 +89,7 @@ impl CacheKvFile {
     // check the item is expired.
     pub fn is_expired(&self, start: &Instant) -> bool {
         match self {
-            // The expired duration for memory is 60s.
+            // The expired duration for memeory is 60s.
             CacheKvFile::Mem(_) => start.saturating_elapsed() >= Duration::from_secs(60),
             // The expired duration for local file is 10min.
             CacheKvFile::Fs(_) => start.saturating_elapsed() >= Duration::from_secs(600),
@@ -158,11 +107,10 @@ pub struct SstImporter {
     compression_types: HashMap<CfName, SstCompressionType>,
 
     cached_storage: CacheMap<StorageBackend>,
-    // We need to keep reference to the runtime so background tasks won't be dropped.
-    _download_rt: Runtime,
+    download_rt: Runtime,
     file_locks: Arc<DashMap<String, (CacheKvFile, Instant)>>,
-    mem_use: Arc<AtomicU64>,
-    mem_limit: Arc<AtomicU64>,
+    mem_use: AtomicU64,
+    mem_limit: ReadableSize,
 }
 
 impl SstImporter {
@@ -174,49 +122,26 @@ impl SstImporter {
     ) -> Result<SstImporter> {
         let switcher = ImportModeSwitcher::new(cfg);
         let cached_storage = CacheMap::default();
-        // We are going to run some background tasks here, (hyper needs to maintain the
-        // connection, the cache map needs gc intervally.) so we must create a
-        // multi-thread runtime, given there isn't blocking, a single thread runtime is
-        // enough.
-        let download_rt = tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(1)
-            .thread_name("sst_import_misc")
-            .after_start_wrapper(|| {
-                tikv_alloc::add_thread_memory_accessor();
-                file_system::set_io_type(IoType::Import);
-            })
-            .before_stop_wrapper(|| {
-                tikv_alloc::remove_thread_memory_accessor();
-            })
+        let download_rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()?;
         download_rt.spawn(cached_storage.gc_loop());
 
-        let memory_limit = Self::calcualte_usage_mem(cfg.memory_use_ratio);
-        info!(
-            "sst importer memory limit when apply";
-            "ratio" => cfg.memory_use_ratio,
-            "size" => ?memory_limit,
-        );
-
-        let dir = ImportDir::new(root)?;
+        let memory_limit = (SysQuota::memory_limit_in_bytes() as f64) * cfg.memory_use_ratio;
+        info!("sst importer memory limit when apply"; "size" => ?memory_limit);
 
         Ok(SstImporter {
-            dir,
+            dir: ImportDir::new(root)?,
             key_manager,
             switcher,
             api_version,
             compression_types: HashMap::with_capacity(2),
             file_locks: Arc::new(DashMap::default()),
             cached_storage,
-            _download_rt: download_rt,
-            mem_use: Arc::new(AtomicU64::new(0)),
-            mem_limit: Arc::new(AtomicU64::new(memory_limit)),
+            download_rt,
+            mem_use: AtomicU64::new(0),
+            mem_limit: ReadableSize(memory_limit as u64),
         })
-    }
-
-    fn calcualte_usage_mem(mem_ratio: f64) -> u64 {
-        ((SysQuota::memory_limit_in_bytes() as f64) * mem_ratio) as u64
     }
 
     pub fn set_compression_type(
@@ -377,7 +302,6 @@ impl SstImporter {
         self.switcher.get_mode()
     }
 
-    #[cfg(test)]
     fn download_file_from_external_storage(
         &self,
         file_length: u64,
@@ -388,7 +312,7 @@ impl SstImporter {
         speed_limiter: &Limiter,
         restore_config: external_storage_export::RestoreConfig,
     ) -> Result<()> {
-        self._download_rt
+        self.download_rt
             .block_on(self.async_download_file_from_external_storage(
                 file_length,
                 src_file_name,
@@ -478,19 +402,6 @@ impl SstImporter {
         Ok(())
     }
 
-    pub fn update_config_memory_use_ratio(&self, cfg_mgr: &ImportConfigManager) {
-        let mem_ratio = cfg_mgr.rl().memory_use_ratio;
-        let memory_limit = Self::calcualte_usage_mem(mem_ratio);
-
-        if self.mem_limit.load(Ordering::SeqCst) != memory_limit {
-            self.mem_limit.store(memory_limit, Ordering::SeqCst);
-            info!("update importer config";
-                "memory-use-ratio" => mem_ratio,
-                "size" => memory_limit,
-            )
-        }
-    }
-
     pub fn shrink_by_tick(&self) -> usize {
         let mut shrink_buff_size: usize = 0;
         let mut retain_buff_size: usize = 0;
@@ -501,10 +412,9 @@ impl SstImporter {
             let mut need_retain = true;
             match c {
                 CacheKvFile::Mem(buff) => {
-                    let buflen = buff.get().map(|v| v.content.len()).unwrap_or_default();
+                    let buflen = buff.len();
                     // The term of recycle memeory is 60s.
                     if c.ref_count() == 1 && c.is_expired(start) {
-                        CACHE_EVENT.with_label_values(&["remove"]).inc();
                         need_retain = false;
                         shrink_buff_size += buflen;
                     } else {
@@ -526,13 +436,9 @@ impl SstImporter {
             need_retain
         });
 
-        CACHED_FILE_IN_MEM.set(self.mem_use.load(Ordering::SeqCst) as _);
-
         if self.import_support_download() {
             let shrink_file_count = shrink_files.len();
-            if shrink_file_count > 0 || retain_file_count > 0 {
-                info!("shrink space by tick"; "shrink files count" => shrink_file_count, "retain files count" => retain_file_count);
-            }
+            info!("shrink space by tick"; "shrink files count" => shrink_file_count, "retain files count" => retain_file_count);
 
             for f in shrink_files {
                 if let Err(e) = file_system::remove_file(&f) {
@@ -541,9 +447,8 @@ impl SstImporter {
             }
             shrink_file_count
         } else {
-            if shrink_buff_size > 0 || retain_buff_size > 0 {
-                info!("shrink cache by tick"; "shrink size" => shrink_buff_size, "retain size" => retain_buff_size);
-            }
+            info!("shrink cache by tick"; "shrink size" => shrink_buff_size, "retain size" => retain_buff_size);
+            self.dec_mem(shrink_buff_size as _);
             shrink_buff_size
         }
     }
@@ -551,37 +456,51 @@ impl SstImporter {
     // If mem_limit is 0, which represent download kv-file when import.
     // Or read kv-file into buffer directly.
     pub fn import_support_download(&self) -> bool {
-        self.mem_limit.load(Ordering::SeqCst) == 0
+        self.mem_limit == ReadableSize(0)
     }
 
-    fn request_memory(&self, meta: &KvMeta) -> Option<MemUsePermit> {
+    fn inc_mem_and_check(&self, meta: &KvMeta) -> bool {
         let size = meta.get_length();
         let old = self.mem_use.fetch_add(size, Ordering::SeqCst);
 
         // If the memory is limited, roll backup the mem_use and return false.
-        if old + size > self.mem_limit.load(Ordering::SeqCst) {
+        if old + size > self.mem_limit.0 {
             self.mem_use.fetch_sub(size, Ordering::SeqCst);
-            CACHE_EVENT.with_label_values(&["out-of-quota"]).inc();
-            None
+            false
         } else {
-            CACHE_EVENT.with_label_values(&["add"]).inc();
-            Some(MemUsePermit {
-                amount: size,
-                statistic: Arc::clone(&self.mem_use),
-            })
+            true
         }
     }
 
-    async fn exec_download(
+    fn dec_mem(&self, size: u64) {
+        self.mem_use.fetch_sub(size, Ordering::SeqCst);
+    }
+
+    pub fn do_read_kv_file(
         &self,
         meta: &KvMeta,
+        rewrite_rule: &RewriteRule,
         ext_storage: Arc<dyn external_storage_export::ExternalStorage>,
         speed_limiter: &Limiter,
-    ) -> Result<LoadedFile> {
+    ) -> Result<CacheKvFile> {
         let start = Instant::now();
-        let permit = self
-            .request_memory(meta)
-            .ok_or_else(|| Error::ResourceNotEnough(String::from("memory is limited")))?;
+        let dst_name = format!("{}_{}", meta.get_name(), meta.get_range_offset());
+
+        let mut lock = self
+            .file_locks
+            .entry(dst_name)
+            .or_insert((CacheKvFile::Mem(Arc::default()), Instant::now()));
+
+        if let CacheKvFile::Mem(buff) = &lock.0 {
+            if !buff.is_empty() {
+                lock.1 = Instant::now();
+                return Ok(lock.0.clone());
+            }
+        }
+
+        if !self.inc_mem_and_check(meta) {
+            return Err(Error::ResourceNotEnough(String::from("memory is limited")));
+        }
 
         let expected_sha256 = {
             let sha256 = meta.get_sha256().to_vec();
@@ -607,73 +526,22 @@ impl SstImporter {
             file_crypter: None,
         };
 
-        let buff = self
-            .read_kv_files_from_external_storage(
-                file_length,
-                meta.get_name(),
-                ext_storage,
-                speed_limiter,
-                restore_config,
-            )
-            .await?;
+        let buff = self.read_kv_files_from_external_storage(
+            file_length,
+            meta.get_name(),
+            ext_storage,
+            speed_limiter,
+            restore_config,
+        )?;
 
         IMPORTER_DOWNLOAD_BYTES.observe(file_length as _);
         IMPORTER_APPLY_DURATION
-            .with_label_values(&["exec_download"])
+            .with_label_values(&["download"])
             .observe(start.saturating_elapsed().as_secs_f64());
 
-        Ok(LoadedFile {
-            content: Arc::from(buff.into_boxed_slice()),
-            permit,
-        })
-    }
-
-    pub async fn do_read_kv_file(
-        &self,
-        meta: &KvMeta,
-        ext_storage: Arc<dyn external_storage_export::ExternalStorage>,
-        speed_limiter: &Limiter,
-    ) -> Result<CacheKvFile> {
-        let start = Instant::now();
-        let dst_name = format!("{}_{}", meta.get_name(), meta.get_range_offset());
-
-        let cache = {
-            let lock = self.file_locks.entry(dst_name);
-            IMPORTER_APPLY_DURATION
-                .with_label_values(&["download-get-lock"])
-                .observe(start.saturating_elapsed().as_secs_f64());
-
-            match lock {
-                Entry::Occupied(mut ent) => match ent.get_mut() {
-                    (CacheKvFile::Mem(buff), last_used) => {
-                        *last_used = Instant::now();
-                        Arc::clone(buff)
-                    }
-                    _ => {
-                        return Err(bug(concat!(
-                            "using both read-to-memory and download-to-file is unacceptable for now.",
-                            "(If you think it is possible in the future you are reading this, ",
-                            "please change this line to `return item.get.0.clone()`)",
-                            "(Please also check the state transform is OK too.)",
-                        )));
-                    }
-                },
-                Entry::Vacant(ent) => {
-                    let cache = Arc::new(OnceCell::new());
-                    ent.insert((CacheKvFile::Mem(Arc::clone(&cache)), Instant::now()));
-                    cache
-                }
-            }
-        };
-
-        if cache.initialized() {
-            CACHE_EVENT.with_label_values(&["hit"]).inc();
-        }
-
-        cache
-            .get_or_try_init(|| self.exec_download(meta, ext_storage, speed_limiter))
-            .await?;
-        Ok(CacheKvFile::Mem(cache))
+        let rewrite_buff = self.rewrite_kv_file(buff, rewrite_rule)?;
+        *lock = (CacheKvFile::Mem(Arc::new(rewrite_buff)), Instant::now());
+        Ok(lock.0.clone())
     }
 
     pub fn wrap_kms(
@@ -696,7 +564,7 @@ impl SstImporter {
         }
     }
 
-    async fn read_kv_files_from_external_storage(
+    fn read_kv_files_from_external_storage(
         &self,
         file_length: u64,
         file_name: &str,
@@ -722,14 +590,13 @@ impl SstImporter {
             encrypt_wrap_reader(file_crypter, inner)?
         };
 
-        let r = external_storage_export::read_external_storage_info_buff(
+        let r = block_on_external_io(external_storage_export::read_external_storage_info_buff(
             &mut reader,
             speed_limiter,
             file_length,
             expected_sha256,
             external_storage_export::MIN_READ_SPEED,
-        )
-        .await;
+        ));
         let url = ext_storage.url()?.to_string();
         let buff = r.map_err(|e| Error::CannotReadExternalStorage {
             url: url.to_string(),
@@ -741,28 +608,22 @@ impl SstImporter {
         Ok(buff)
     }
 
-    pub async fn read_from_kv_file(
+    pub fn read_from_kv_file(
         &self,
         meta: &KvMeta,
+        rewrite_rule: &RewriteRule,
         ext_storage: Arc<dyn external_storage_export::ExternalStorage>,
         backend: &StorageBackend,
         speed_limiter: &Limiter,
-    ) -> Result<Arc<[u8]>> {
+    ) -> Result<Arc<Vec<u8>>> {
         let c = if self.import_support_download() {
-            self.do_download_kv_file(meta, backend, speed_limiter)
-                .await?
+            self.do_download_kv_file(meta, backend, speed_limiter)?
         } else {
-            self.do_read_kv_file(meta, ext_storage, speed_limiter)
-                .await?
+            self.do_read_kv_file(meta, rewrite_rule, ext_storage, speed_limiter)?
         };
         match c {
             // If cache memroy, it has been rewrite, return buffer directly.
-            CacheKvFile::Mem(buff) => Ok(Arc::clone(
-                &buff
-                    .get()
-                    .ok_or_else(|| bug("invalid cache state"))?
-                    .content,
-            )),
+            CacheKvFile::Mem(buff) => Ok(buff),
             // If cache file name, it need to read and rewrite.
             CacheKvFile::Fs(path) => {
                 let file = File::open(path.as_ref())?;
@@ -770,12 +631,13 @@ impl SstImporter {
                 let mut buffer = Vec::new();
                 reader.read_to_end(&mut buffer)?;
 
-                Ok(Arc::from(buffer.into_boxed_slice()))
+                let rewrite_buff = self.rewrite_kv_file(buffer, rewrite_rule)?;
+                Ok(Arc::new(rewrite_buff))
             }
         }
     }
 
-    pub async fn do_download_kv_file(
+    pub fn do_download_kv_file(
         &self,
         meta: &KvMeta,
         backend: &StorageBackend,
@@ -815,7 +677,7 @@ impl SstImporter {
             expected_sha256,
             file_crypter: None,
         };
-        self.async_download_file_from_external_storage(
+        self.download_file_from_external_storage(
             meta.get_length(),
             src_name,
             path.temp.clone(),
@@ -823,10 +685,8 @@ impl SstImporter {
             false,
             // don't support encrypt for now.
             speed_limiter,
-            "",
             restore_config,
-        )
-        .await?;
+        )?;
         info!(
             "download file finished {}, offset {}, length {}",
             src_name,
@@ -868,11 +728,7 @@ impl SstImporter {
 
         // perform iteration and key rewrite.
         let mut new_buff = Vec::with_capacity(file_buff.len());
-        let mut event_iter = EventIterator::with_rewriting(
-            file_buff.as_slice(),
-            rewrite_rule.get_old_key_prefix(),
-            rewrite_rule.get_new_key_prefix(),
-        );
+        let mut event_iter = EventIterator::new(file_buff.as_slice());
         let mut key = new_prefix.to_vec();
         let new_prefix_data_key_len = key.len();
 
@@ -914,15 +770,10 @@ impl SstImporter {
         end_key: &[u8],
         start_ts: u64,
         restore_ts: u64,
-        file_buff: Arc<[u8]>,
-        rewrite_rule: &RewriteRule,
+        file_buff: Arc<Vec<u8>>,
         mut build_fn: impl FnMut(Vec<u8>, Vec<u8>),
     ) -> Result<Option<Range>> {
-        let mut event_iter = EventIterator::with_rewriting(
-            file_buff.as_ref(),
-            rewrite_rule.get_old_key_prefix(),
-            rewrite_rule.get_new_key_prefix(),
-        );
+        let mut event_iter = EventIterator::new(file_buff.as_slice());
         let mut smallest_key = None;
         let mut largest_key = None;
         let mut total_key = 0;
@@ -938,16 +789,6 @@ impl SstImporter {
             event_iter.next()?;
             INPORTER_APPLY_COUNT.with_label_values(&["key_meet"]).inc();
 
-            if !event_iter
-                .key()
-                .starts_with(rewrite_rule.get_new_key_prefix())
-            {
-                return Err(Error::WrongKeyPrefix {
-                    what: "do_apply_kv_file",
-                    key: event_iter.key().to_vec(),
-                    prefix: rewrite_rule.get_old_key_prefix().to_vec(),
-                });
-            }
             let key = event_iter.key().to_vec();
             let value = event_iter.value().to_vec();
             let ts = Key::decode_ts_from(&key)?;
@@ -975,11 +816,10 @@ impl SstImporter {
             largest_key = largest_key
                 .map_or_else(|| Some(key.clone()), |v: Vec<u8>| Some(v.max(key.clone())));
         }
-        if not_in_range != 0 || ts_not_expected != 0 {
-            info!("build download request file done";
-                "total_keys" => %total_key,
-                "ts_filtered_keys" => %ts_not_expected,
-                "range_filtered_keys" => %not_in_range);
+        if total_key != not_in_range {
+            info!("build download request file done"; "total keys" => %total_key,
+            "ts filtered keys" => %ts_not_expected,
+            "range filtered keys" => %not_in_range);
         }
 
         IMPORTER_APPLY_DURATION
@@ -1009,7 +849,7 @@ impl SstImporter {
         speed_limiter: Limiter,
         engine: E,
     ) -> Result<Option<Range>> {
-        self._download_rt.block_on(self.download_ext(
+        self.download_rt.block_on(self.download_ext(
             meta,
             backend,
             name,
@@ -1292,21 +1132,8 @@ impl SstImporter {
         }
     }
 
-    /// List the basic information of the current SST files.
-    /// The information contains UUID, region ID, region Epoch.
-    /// Other fields may be left blank.
     pub fn list_ssts(&self) -> Result<Vec<SstMeta>> {
         self.dir.list_ssts()
-    }
-
-    /// Load the start key by a metadata.
-    /// This will open the internal SST and try to load the first user key.
-    /// (For RocksEngine, that is the key without the 'z' prefix.)
-    /// When the SST is empty or the first key cannot be parsed as user key,
-    /// return None.
-    pub fn load_start_key_by_meta<S: SstExt>(&self, meta: &SstMeta) -> Result<Option<Vec<u8>>> {
-        self.dir
-            .load_start_key_by_meta::<S>(meta, self.key_manager.clone())
     }
 
     pub fn new_txn_writer<E: KvEngine>(&self, db: &E, meta: SstMeta) -> Result<TxnSstWriter<E>> {
@@ -1410,7 +1237,6 @@ mod tests {
     };
     use external_storage_export::read_external_storage_info_buff;
     use file_system::File;
-    use online_config::{ConfigManager, OnlineConfig};
     use openssl::hash::{Hasher, MessageDigest};
     use tempfile::Builder;
     use test_sst_importer::*;
@@ -1918,53 +1744,6 @@ mod tests {
     }
 
     #[test]
-    fn test_update_config_memory_use_ratio() {
-        // create SstImpoter with default.
-        let cfg = Config {
-            memory_use_ratio: 0.3,
-            ..Default::default()
-        };
-        let import_dir = tempfile::tempdir().unwrap();
-        let importer = SstImporter::new(&cfg, import_dir, None, ApiVersion::V1).unwrap();
-        let mem_limit_old = importer.mem_limit.load(Ordering::SeqCst);
-
-        // create new config and get the diff config.
-        let cfg_new = Config {
-            memory_use_ratio: 0.1,
-            ..Default::default()
-        };
-        let change = cfg.diff(&cfg_new);
-
-        // create config manager and update config.
-        let mut cfg_mgr = ImportConfigManager::new(cfg);
-        cfg_mgr.dispatch(change).unwrap();
-        importer.update_config_memory_use_ratio(&cfg_mgr);
-
-        let mem_limit_new = importer.mem_limit.load(Ordering::SeqCst);
-        assert!(mem_limit_old > mem_limit_new);
-        assert_eq!(
-            mem_limit_old / 3,
-            mem_limit_new,
-            "mem_limit_old / 3 = {} mem_limit_new = {}",
-            mem_limit_old / 3,
-            mem_limit_new
-        );
-    }
-
-    #[test]
-    fn test_update_config_with_invalid_conifg() {
-        let cfg = Config::default();
-        let cfg_new = Config {
-            memory_use_ratio: -0.1,
-            ..Default::default()
-        };
-        let change = cfg.diff(&cfg_new);
-        let mut cfg_mgr = ImportConfigManager::new(cfg);
-        let r = cfg_mgr.dispatch(change);
-        assert!(r.is_err());
-    }
-
-    #[test]
     fn test_do_read_kv_file() {
         // create a sample kv file.
         let (_temp_dir, backend, kv_meta, buff) = create_sample_external_kv_file().unwrap();
@@ -1988,18 +1767,17 @@ mod tests {
         };
 
         // test do_read_kv_file()
-        let output = block_on_external_io(importer.do_read_kv_file(
-            &kv_meta,
-            ext_storage,
-            &Limiter::new(f64::INFINITY),
-        ))
-        .unwrap();
+        let rewrite_rule = &new_rewrite_rule(b"", b"", 12345);
+        let output = importer
+            .do_read_kv_file(
+                &kv_meta,
+                rewrite_rule,
+                ext_storage,
+                &Limiter::new(f64::INFINITY),
+            )
+            .unwrap();
 
-        assert!(
-            matches!(output.clone(), CacheKvFile::Mem(rc) if &*rc.get().unwrap().content == buff.as_slice()),
-            "{:?}",
-            output
-        );
+        assert_eq!(CacheKvFile::Mem(Arc::new(buff.clone())), output);
 
         // Do not shrint nothing.
         let shrink_size = importer.shrink_by_tick();
@@ -2050,14 +1828,15 @@ mod tests {
             ..Default::default()
         };
 
-        let output = block_on_external_io(importer.read_kv_files_from_external_storage(
-            kv_meta.get_length(),
-            kv_meta.get_name(),
-            ext_storage.clone(),
-            &Limiter::new(f64::INFINITY),
-            restore_config,
-        ))
-        .unwrap();
+        let output = importer
+            .read_kv_files_from_external_storage(
+                kv_meta.get_length(),
+                kv_meta.get_name(),
+                ext_storage.clone(),
+                &Limiter::new(f64::INFINITY),
+                restore_config,
+            )
+            .unwrap();
         assert_eq!(
             buff,
             output,
@@ -2073,14 +1852,15 @@ mod tests {
             ..Default::default()
         };
 
-        let output = block_on_external_io(importer.read_kv_files_from_external_storage(
-            len,
-            kv_meta.get_name(),
-            ext_storage,
-            &Limiter::new(f64::INFINITY),
-            restore_config,
-        ))
-        .unwrap();
+        let output = importer
+            .read_kv_files_from_external_storage(
+                len,
+                kv_meta.get_name(),
+                ext_storage,
+                &Limiter::new(f64::INFINITY),
+                restore_config,
+            )
+            .unwrap();
         assert_eq!(&buff[offset as _..(offset + len) as _], &output[..]);
     }
 
@@ -2098,6 +1878,7 @@ mod tests {
         };
         let importer =
             SstImporter::new(&cfg, import_dir, Some(key_manager), ApiVersion::V1).unwrap();
+        let rewrite_rule = &new_rewrite_rule(b"", b"", 12345);
         let ext_storage = {
             importer.wrap_kms(
                 importer.external_storage_or_cache(&backend, "").unwrap(),
@@ -2113,13 +1894,15 @@ mod tests {
 
         // test do_download_kv_file().
         assert!(importer.import_support_download());
-        let output = block_on_external_io(importer.read_from_kv_file(
-            &kv_meta,
-            ext_storage,
-            &backend,
-            &Limiter::new(f64::INFINITY),
-        ))
-        .unwrap();
+        let output = importer
+            .read_from_kv_file(
+                &kv_meta,
+                rewrite_rule,
+                ext_storage,
+                &backend,
+                &Limiter::new(f64::INFINITY),
+            )
+            .unwrap();
         assert_eq!(*output, buff);
         check_file_exists(&path.save, None);
 
@@ -3007,11 +2790,11 @@ mod tests {
             length: 100,
             ..Default::default()
         };
-        let check = importer.request_memory(&meta);
-        assert!(check.is_some());
+        let check = importer.inc_mem_and_check(&meta);
+        assert!(check);
         assert_eq!(importer.mem_use.load(Ordering::SeqCst), meta.get_length());
 
-        drop(check);
+        importer.dec_mem(meta.get_length());
         assert_eq!(importer.mem_use.load(Ordering::SeqCst), 0);
 
         // test inc_mem_and_check() failed.
@@ -3019,8 +2802,8 @@ mod tests {
             length: u64::MAX,
             ..Default::default()
         };
-        let check = importer.request_memory(&meta);
-        assert!(check.is_none());
+        let check = importer.inc_mem_and_check(&meta);
+        assert!(!check);
     }
 
     #[test]
@@ -3030,8 +2813,7 @@ mod tests {
             SstImporter::new(&Config::default(), import_dir, None, ApiVersion::V1).unwrap();
 
         let key = "file1";
-        let r = Arc::new(OnceCell::new());
-        let value = (CacheKvFile::Mem(r), Instant::now());
+        let value = (CacheKvFile::Mem(Arc::default()), Instant::now());
         let lock = importer.file_locks.entry(key.to_string()).or_insert(value);
 
         // test locked by try_entry()

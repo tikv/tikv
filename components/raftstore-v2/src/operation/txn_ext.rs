@@ -70,20 +70,6 @@ impl TxnContext {
     }
 
     #[inline]
-    pub fn after_commit_merge<EK: KvEngine, ER: RaftEngine, T>(
-        &self,
-        ctx: &StoreContext<EK, ER, T>,
-        term: u64,
-        region: &Region,
-        logger: &Logger,
-    ) {
-        // If a follower merges into a leader, a more recent read may happen
-        // on the leader of the follower. So max ts should be updated after
-        // a region merge.
-        self.require_updating_max_ts(ctx, term, region, logger);
-    }
-
-    #[inline]
     pub fn on_became_follower(&self, term: u64, region: &Region) {
         let mut pessimistic_locks = self.ext.pessimistic_locks.write();
         pessimistic_locks.status = LocksStatus::NotLeader;
@@ -102,6 +88,7 @@ impl TxnContext {
         &self.extra_op
     }
 
+    // TODO: find a better place to put all txn related stuff.
     fn require_updating_max_ts<EK, ER, T>(
         &self,
         ctx: &StoreContext<EK, ER, T>,

@@ -105,7 +105,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             changes.as_ref(),
             &cc,
             false,
-            self.get_peer_heartbeats(),
         )?;
 
         // TODO: check if the new peer is already in history record.
@@ -193,10 +192,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 self.maybe_schedule_gc_peer_tick();
             }
         }
-        ctx.store_meta
-            .lock()
-            .unwrap()
-            .set_region(self.region(), true, &self.logger);
         ctx.coprocessor_host.on_region_changed(
             self.region(),
             RegionChangeEvent::Update(RegionChangeReason::ChangePeer),
@@ -260,7 +255,7 @@ impl<EK: KvEngine, R> Apply<EK, R> {
         cc: ConfChangeV2,
         legacy: bool,
     ) -> Result<(AdminResponse, AdminCmdResult)> {
-        let region = self.region();
+        let region = self.region_state().get_region();
         let change_kind = ConfChangeKind::confchange_kind(changes.len());
         info!(self.logger, "exec ConfChangeV2"; "kind" => ?change_kind, "legacy" => legacy, "epoch" => ?region.get_region_epoch(), "index" => index);
         let mut new_region = region.clone();

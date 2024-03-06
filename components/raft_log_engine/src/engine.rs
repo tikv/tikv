@@ -14,7 +14,7 @@ use engine_traits::{
     RaftEngine, RaftEngineDebug, RaftEngineReadOnly, RaftLogBatch as RaftLogBatchTrait, Result,
     CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE,
 };
-use file_system::{IoOp, IoRateLimiter, IoType, WithIoType};
+use file_system::{IoOp, IoRateLimiter, IoType};
 use kvproto::{
     metapb::Region,
     raft_serverpb::{
@@ -23,7 +23,7 @@ use kvproto::{
 };
 use raft::eraftpb::Entry;
 use raft_engine::{
-    env::{DefaultFileSystem, FileSystem, Handle, Permission, WriteExt},
+    env::{DefaultFileSystem, FileSystem, Handle, WriteExt},
     Command, Engine as RawRaftEngine, Error as RaftEngineError, LogBatch, MessageExt,
 };
 pub use raft_engine::{Config as RaftEngineConfig, ReadableSize, RecoveryMode};
@@ -66,8 +66,7 @@ impl Read for ManagedReader {
     fn read(&mut self, buf: &mut [u8]) -> IoResult<usize> {
         let mut size = buf.len();
         if let Some(ref mut limiter) = self.rate_limiter {
-            let io_type = file_system::get_io_type();
-            size = limiter.request(io_type, IoOp::Read, size);
+            size = limiter.request(IoType::ForegroundRead, IoOp::Read, size);
         }
         match self.inner.as_mut() {
             Either::Left(reader) => reader.read(&mut buf[..size]),
@@ -97,8 +96,7 @@ impl Write for ManagedWriter {
     fn write(&mut self, buf: &[u8]) -> IoResult<usize> {
         let mut size = buf.len();
         if let Some(ref mut limiter) = self.rate_limiter {
-            let io_type = file_system::get_io_type();
-            size = limiter.request(io_type, IoOp::Write, size);
+            size = limiter.request(IoType::ForegroundWrite, IoOp::Write, size);
         }
         match self.inner.as_mut() {
             Either::Left(writer) => writer.write(&buf[..size]),
@@ -182,19 +180,18 @@ impl FileSystem for ManagedFileSystem {
         })
     }
 
-    fn open<P: AsRef<Path>>(&self, path: P, perm: Permission) -> IoResult<Self::Handle> {
+    fn open<P: AsRef<Path>>(&self, path: P) -> IoResult<Self::Handle> {
         Ok(ManagedHandle {
             path: path.as_ref().to_path_buf(),
-            base: Arc::new(self.base_file_system.open(path.as_ref(), perm)?),
+            base: Arc::new(self.base_file_system.open(path.as_ref())?),
         })
     }
 
     fn delete<P: AsRef<Path>>(&self, path: P) -> IoResult<()> {
-        self.base_file_system.delete(path.as_ref())?;
         if let Some(ref manager) = self.key_manager {
             manager.delete_file(path.as_ref().to_str().unwrap())?;
         }
-        Ok(())
+        self.base_file_system.delete(path)
     }
 
     fn rename<P: AsRef<Path>>(&self, src_path: P, dst_path: P) -> IoResult<()> {
@@ -338,6 +335,10 @@ impl RaftLogEngine {
         Ok(RaftLogEngine(Arc::new(
             RawRaftEngine::open_with_file_system(config, file_system).map_err(transfer_error)?,
         )))
+    }
+
+    pub fn path(&self) -> &str {
+        self.0.path()
     }
 
     /// If path is not an empty directory, we say db exists.
@@ -656,8 +657,6 @@ impl RaftEngine for RaftLogEngine {
     }
 
     fn consume(&self, batch: &mut Self::LogBatch, sync: bool) -> Result<usize> {
-        // Always use ForegroundWrite as all `consume` calls share the same write queue.
-        let _guard = WithIoType::new(IoType::ForegroundWrite);
         self.0.write(&mut batch.0, sync).map_err(transfer_error)
     }
 
@@ -668,8 +667,6 @@ impl RaftEngine for RaftLogEngine {
         _: usize,
         _: usize,
     ) -> Result<usize> {
-        // Always use ForegroundWrite as all `consume` calls share the same write queue.
-        let _guard = WithIoType::new(IoType::ForegroundWrite);
         self.0.write(&mut batch.0, sync).map_err(transfer_error)
     }
 
@@ -783,7 +780,7 @@ impl RaftEngine for RaftLogEngine {
     }
 
     fn get_engine_path(&self) -> &str {
-        self.0.path()
+        self.path()
     }
 
     fn for_each_raft_group<E, F>(&self, f: &mut F) -> std::result::Result<(), E>

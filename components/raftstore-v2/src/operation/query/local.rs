@@ -36,7 +36,7 @@ use crate::{
     StoreRouter,
 };
 
-pub trait MsgRouter: Clone + Send + 'static {
+pub trait MsgRouter: Clone + Send {
     fn send(&self, addr: u64, msg: PeerMsg) -> std::result::Result<(), TrySendError<PeerMsg>>;
 }
 
@@ -184,15 +184,10 @@ where
             Ok(ReadRequestPolicy::StaleRead) => {
                 ReadResult::Ok((delegate, ReadRequestPolicy::StaleRead))
             }
+            // It can not handle other policies.
             // TODO: we should only abort when lease expires. For other cases we should retry
             // infinitely.
-            Ok(ReadRequestPolicy::ReadIndex) => {
-                if req.get_header().get_replica_read() {
-                    ReadResult::Ok((delegate, ReadRequestPolicy::ReadIndex))
-                } else {
-                    ReadResult::Redirect
-                }
-            }
+            Ok(ReadRequestPolicy::ReadIndex) => ReadResult::Redirect,
             Err(e) => ReadResult::Err(e),
         }
     }
@@ -200,7 +195,6 @@ where
     fn try_get_snapshot(
         &mut self,
         req: &RaftCmdRequest,
-        after_read_index: bool,
     ) -> ReadResult<RegionSnapshot<E::Snapshot>, RaftCmdResponse> {
         match self.pre_propose_raft_command(req) {
             ReadResult::Ok((mut delegate, policy)) => {
@@ -249,26 +243,7 @@ where
                             .with(|m| m.borrow_mut().local_executed_stale_read_requests.inc());
                         snap
                     }
-                    ReadRequestPolicy::ReadIndex => {
-                        // ReadIndex is returned only for replica read.
-                        if !after_read_index {
-                            // It needs to read index before getting snapshot.
-                            return ReadResult::Redirect;
-                        }
-
-                        let region = Arc::clone(&delegate.region);
-                        let snap = RegionSnapshot::from_snapshot(
-                            Arc::new(delegate.cached_tablet.cache().snapshot()),
-                            region,
-                        );
-
-                        TLS_LOCAL_READ_METRICS.with(|m| {
-                            m.borrow_mut().local_executed_requests.inc();
-                            m.borrow_mut().local_executed_replica_read_requests.inc()
-                        });
-
-                        snap
-                    }
+                    _ => unreachable!(),
                 };
 
                 snap.txn_ext = Some(delegate.txn_ext.clone());
@@ -299,13 +274,12 @@ where
     pub fn snapshot(
         &mut self,
         mut req: RaftCmdRequest,
-    ) -> impl Future<Output = std::result::Result<RegionSnapshot<E::Snapshot>, RaftCmdResponse>>
-    + Send
-    + 'static {
+    ) -> impl Future<Output = std::result::Result<RegionSnapshot<E::Snapshot>, RaftCmdResponse>> + Send
+    {
         let region_id = req.header.get_ref().region_id;
         let mut tried_cnt = 0;
         let res = loop {
-            let res = self.try_get_snapshot(&req, false /* after_read_index */);
+            let res = self.try_get_snapshot(&req);
             match res {
                 ReadResult::Ok(snap) => break Either::Left(Ok(snap)),
                 ReadResult::Err(e) => break Either::Left(Err(e)),
@@ -340,17 +314,7 @@ where
                     Some(query_res) => {
                         if query_res.read().is_none() {
                             let QueryResult::Response(res) = query_res else { unreachable!() };
-                            // Get an error explicitly in header,
-                            // or leader reports KeyIsLocked error via read index.
-                            assert!(
-                                res.get_header().has_error()
-                                    || res
-                                        .get_responses()
-                                        .get(0)
-                                        .map_or(false, |r| r.get_read_index().has_locked()),
-                                "{:?}",
-                                res
-                            );
+                            assert!(res.get_header().has_error(), "{:?}", res);
                             return Err(res);
                         }
                     }
@@ -365,7 +329,7 @@ where
                 // If query successful, try again.
                 req.mut_header().set_read_quorum(false);
                 loop {
-                    let r = reader.try_get_snapshot(&req, true /* after_read_index */);
+                    let r = reader.try_get_snapshot(&req);
                     match r {
                         ReadResult::Ok(snap) => return Ok(snap),
                         ReadResult::Err(e) => return Err(e),
@@ -402,8 +366,7 @@ where
         &self,
         region_id: u64,
         req: &RaftCmdRequest,
-    ) -> impl Future<Output = std::result::Result<Option<QueryResult>, RaftCmdResponse>> + 'static
-    {
+    ) -> impl Future<Output = std::result::Result<Option<QueryResult>, RaftCmdResponse>> {
         let mut req = req.clone();
         // Remote lease is updated step by step. It's possible local reader expires
         // while the raftstore doesn't. So we need to trigger an update
@@ -916,7 +879,7 @@ mod tests {
                         .get_mut(&1)
                         .unwrap()
                         .0
-                        .update(ReadProgress::set_leader_lease(remote));
+                        .update(ReadProgress::leader_lease(remote));
                 }),
                 rx,
                 ch_tx.clone(),

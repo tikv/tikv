@@ -1,7 +1,7 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 use collections::HashSet;
-use mur3::murmurhash3_x64_128;
+use murmur3::murmur3_x64_128;
 
 /// `FmSketch` is used to count the approximate number of distinct
 /// elements in multiset.
@@ -22,8 +22,11 @@ impl FmSketch {
         }
     }
 
-    pub fn insert(&mut self, bytes: &[u8]) {
-        let hash = murmurhash3_x64_128(bytes, 0).0;
+    pub fn insert(&mut self, mut bytes: &[u8]) {
+        let hash = {
+            let out = murmur3_x64_128(&mut bytes, 0).unwrap();
+            out as u64
+        };
         self.insert_hash_value(hash);
     }
 
@@ -35,7 +38,7 @@ impl FmSketch {
         proto
     }
 
-    pub fn insert_hash_value(&mut self, hash_val: u64) {
+    fn insert_hash_value(&mut self, hash_val: u64) {
         if (hash_val & self.mask) != 0 {
             return;
         }

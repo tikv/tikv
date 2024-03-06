@@ -4,7 +4,6 @@ use std::sync::{Arc, Mutex};
 
 use causal_ts::CausalTsProviderImpl;
 use concurrency_manager::ConcurrencyManager;
-use encryption_export::DataKeyManager;
 use engine_traits::{KvEngine, RaftEngine, TabletContext, TabletRegistry};
 use kvproto::{metapb, replication_modepb::ReplicationStatus};
 use pd_client::PdClient;
@@ -18,7 +17,6 @@ use raftstore::{
 use raftstore_v2::{router::RaftRouter, Bootstrap, PdTask, StoreRouter, StoreSystem};
 use resource_metering::CollectorRegHandle;
 use slog::{info, o, Logger};
-use sst_importer::SstImporter;
 use tikv_util::{
     config::VersionTrack,
     worker::{LazyWorker, Worker},
@@ -104,8 +102,6 @@ where
         pd_worker: LazyWorker<PdTask>,
         store_cfg: Arc<VersionTrack<raftstore_v2::Config>>,
         state: &Mutex<GlobalReplicationState>,
-        sst_importer: Arc<SstImporter>,
-        key_manager: Option<Arc<DataKeyManager>>,
     ) -> Result<()>
     where
         T: Transport + 'static,
@@ -144,8 +140,6 @@ where
             background,
             pd_worker,
             store_cfg,
-            sst_importer,
-            key_manager,
         )?;
 
         Ok(())
@@ -207,8 +201,6 @@ where
         background: Worker,
         pd_worker: LazyWorker<PdTask>,
         store_cfg: Arc<VersionTrack<raftstore_v2::Config>>,
-        sst_importer: Arc<SstImporter>,
-        key_manager: Option<Arc<DataKeyManager>>,
     ) -> Result<()>
     where
         T: Transport + 'static,
@@ -240,8 +232,6 @@ where
             collector_reg_handle,
             background,
             pd_worker,
-            sst_importer,
-            key_manager,
         )?;
         Ok(())
     }

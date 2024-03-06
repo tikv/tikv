@@ -1,23 +1,88 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::time::Duration;
+use std::{
+    assert_matches::assert_matches,
+    thread,
+    time::{Duration, Instant},
+};
 
-use engine_traits::{RaftEngineReadOnly, CF_DEFAULT};
+use crossbeam::channel::TrySendError;
+use engine_traits::{RaftEngine, RaftEngineReadOnly, CF_DEFAULT};
 use futures::executor::block_on;
-use kvproto::{raft_cmdpb::AdminCmdType, raft_serverpb::RaftMessage};
+use kvproto::{
+    metapb,
+    raft_cmdpb::AdminCmdType,
+    raft_serverpb::{ExtraMessageType, PeerState, RaftMessage},
+};
 use raft::prelude::{ConfChangeType, MessageType};
 use raftstore_v2::{
-    router::{PeerMsg, PeerTick},
+    router::{DebugInfoChannel, PeerMsg, PeerTick},
     SimpleWriteEncoder,
 };
 use tikv_util::store::{new_learner_peer, new_peer};
 
-use crate::cluster::{
-    life_helper::{
-        assert_peer_not_exist, assert_tombstone, assert_tombstone_msg, assert_valid_report,
-    },
-    Cluster,
-};
+use crate::cluster::{Cluster, TestRouter};
+
+fn assert_peer_not_exist(region_id: u64, peer_id: u64, router: &TestRouter) {
+    let timer = Instant::now();
+    loop {
+        let (ch, sub) = DebugInfoChannel::pair();
+        let msg = PeerMsg::QueryDebugInfo(ch);
+        match router.send(region_id, msg) {
+            Err(TrySendError::Disconnected(_)) => return,
+            Ok(()) => {
+                if let Some(m) = block_on(sub.result()) {
+                    if m.raft_status.id != peer_id {
+                        return;
+                    }
+                }
+            }
+            Err(_) => (),
+        }
+        if timer.elapsed() < Duration::from_secs(3) {
+            thread::sleep(Duration::from_millis(10));
+        } else {
+            panic!("peer of {} still exists", region_id);
+        }
+    }
+}
+
+// TODO: make raft engine support more suitable way to verify range is empty.
+/// Verify all states in raft engine are cleared.
+fn assert_tombstone(raft_engine: &impl RaftEngine, region_id: u64, peer: &metapb::Peer) {
+    let mut buf = vec![];
+    raft_engine.get_all_entries_to(region_id, &mut buf).unwrap();
+    assert!(buf.is_empty(), "{:?}", buf);
+    assert_matches!(raft_engine.get_raft_state(region_id), Ok(None));
+    assert_matches!(raft_engine.get_apply_state(region_id, u64::MAX), Ok(None));
+    let region_state = raft_engine
+        .get_region_state(region_id, u64::MAX)
+        .unwrap()
+        .unwrap();
+    assert_matches!(region_state.get_state(), PeerState::Tombstone);
+    assert!(
+        region_state.get_region().get_peers().contains(peer),
+        "{:?}",
+        region_state
+    );
+}
+
+#[track_caller]
+fn assert_valid_report(report: &RaftMessage, region_id: u64, peer_id: u64) {
+    assert_eq!(
+        report.get_extra_msg().get_type(),
+        ExtraMessageType::MsgGcPeerResponse
+    );
+    assert_eq!(report.get_region_id(), region_id);
+    assert_eq!(report.get_from_peer().get_id(), peer_id);
+}
+
+#[track_caller]
+fn assert_tombstone_msg(msg: &RaftMessage, region_id: u64, peer_id: u64) {
+    assert_eq!(msg.get_region_id(), region_id);
+    assert_eq!(msg.get_to_peer().get_id(), peer_id);
+    assert!(msg.get_is_tombstone());
+}
 
 /// Test a peer can be created by general raft message and destroyed tombstone
 /// message.

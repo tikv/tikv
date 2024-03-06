@@ -23,7 +23,7 @@ pub use self::{
     cleanup::{Runner as CleanupRunner, Task as CleanupTask},
     cleanup_snapshot::{Runner as GcSnapshotRunner, Task as GcSnapshotTask},
     cleanup_sst::{Runner as CleanupSstRunner, Task as CleanupSstTask},
-    compact::{need_compact, CompactThreshold, Runner as CompactRunner, Task as CompactTask},
+    compact::{Runner as CompactRunner, Task as CompactTask},
     consistency_check::{Runner as ConsistencyCheckRunner, Task as ConsistencyCheckTask},
     pd::{
         new_change_peer_v2_request, FlowStatistics, FlowStatsReporter, HeartbeatTask,
@@ -44,10 +44,6 @@ pub use self::{
     split_check::{
         Bucket, BucketRange, KeyEntry, Runner as SplitCheckRunner, Task as SplitCheckTask,
     },
-    split_config::{
-        SplitConfig, SplitConfigManager, BIG_REGION_CPU_OVERLOAD_THRESHOLD_RATIO,
-        DEFAULT_BIG_REGION_BYTE_THRESHOLD, DEFAULT_BIG_REGION_QPS_THRESHOLD,
-        DEFAULT_BYTE_THRESHOLD, DEFAULT_QPS_THRESHOLD, REGION_CPU_OVERLOAD_THRESHOLD_RATIO,
-    },
+    split_config::{SplitConfig, SplitConfigManager},
     split_controller::{AutoSplitController, ReadStats, SplitConfigChange, SplitInfo, WriteStats},
 };

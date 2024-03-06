@@ -141,25 +141,6 @@ use crate::{
 pub type Result<T> = std::result::Result<T, Error>;
 pub type Callback<T> = Box<dyn FnOnce(Result<T>) + Send>;
 
-macro_rules! check_key_size {
-    ($key_iter:expr, $max_key_size:expr, $callback:ident) => {
-        for k in $key_iter {
-            let key_size = k.len();
-            if key_size > $max_key_size {
-                $callback(Err(Error::from(ErrorInner::KeyTooLarge {
-                    size: key_size,
-                    limit: $max_key_size,
-                })));
-                return Ok(());
-            }
-        }
-    };
-}
-
-/// Storage for Api V1
-/// To be convenience for test cases unrelated to RawKV.
-pub type StorageApiV1<E, L> = Storage<E, L, ApiV1>;
-
 /// [`Storage`](Storage) implements transactional KV APIs and raw KV APIs on a
 /// given [`Engine`]. An [`Engine`] provides low level KV functionality.
 /// [`Engine`] has multiple implementations. When a TiKV server is running, a
@@ -215,6 +196,10 @@ pub struct Storage<E: Engine, L: LockManager, F: KvFormat> {
     _phantom: PhantomData<F>,
 }
 
+/// Storage for Api V1
+/// To be convenience for test cases unrelated to RawKV.
+pub type StorageApiV1<E, L> = Storage<E, L, ApiV1>;
+
 impl<E: Engine, L: LockManager, F: KvFormat> Clone for Storage<E, L, F> {
     #[inline]
     fn clone(&self) -> Self {
@@ -234,7 +219,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Clone for Storage<E, L, F> {
             api_version: self.api_version,
             causal_ts_provider: self.causal_ts_provider.clone(),
             resource_tag_factory: self.resource_tag_factory.clone(),
-            quota_limiter: self.quota_limiter.clone(),
+            quota_limiter: Arc::clone(&self.quota_limiter),
             _phantom: PhantomData,
         }
     }
@@ -255,6 +240,21 @@ impl<E: Engine, L: LockManager, F: KvFormat> Drop for Storage<E, L, F> {
 
         info!("Storage stopped.");
     }
+}
+
+macro_rules! check_key_size {
+    ($key_iter:expr, $max_key_size:expr, $callback:ident) => {
+        for k in $key_iter {
+            let key_size = k.len();
+            if key_size > $max_key_size {
+                $callback(Err(Error::from(ErrorInner::KeyTooLarge {
+                    size: key_size,
+                    limit: $max_key_size,
+                })));
+                return Ok(());
+            }
+        }
+    };
 }
 
 impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
@@ -598,11 +598,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         let stage_begin_ts = Instant::now();
         const CMD: CommandKind = CommandKind::get;
         let priority = ctx.get_priority();
-        let group_name = ctx
-            .get_resource_control_context()
-            .get_resource_group_name()
-            .as_bytes()
-            .to_owned();
+        let group_name = ctx.get_resource_group_name().as_bytes().to_owned();
         let priority_tag = get_priority_tag(priority);
         let resource_tag = self.resource_tag_factory.new_tag_with_key_ranges(
             &ctx,
@@ -717,10 +713,10 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                     let process_wall_time =
                         stage_finished_ts.saturating_duration_since(stage_snap_recv_ts);
                     let latency_stats = StageLatencyStats {
-                        schedule_wait_time_ns: schedule_wait_time.as_nanos() as u64,
-                        snapshot_wait_time_ns: snapshot_wait_time.as_nanos() as u64,
-                        wait_wall_time_ns: wait_wall_time.as_nanos() as u64,
-                        process_wall_time_ns: process_wall_time.as_nanos() as u64,
+                        schedule_wait_time_ms: duration_to_ms(schedule_wait_time),
+                        snapshot_wait_time_ms: duration_to_ms(snapshot_wait_time),
+                        wait_wall_time_ms: duration_to_ms(wait_wall_time),
+                        process_wall_time_ms: duration_to_ms(process_wall_time),
                     };
                     with_tls_tracker(|tracker| {
                         tracker.metrics.read_pool_schedule_wait_nanos =
@@ -760,7 +756,6 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         let priority = requests[0].get_context().get_priority();
         let group_name = requests[0]
             .get_context()
-            .get_resource_control_context()
             .get_resource_group_name()
             .as_bytes()
             .to_owned();
@@ -943,11 +938,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         let stage_begin_ts = Instant::now();
         const CMD: CommandKind = CommandKind::batch_get;
         let priority = ctx.get_priority();
-        let group_name = ctx
-            .get_resource_control_context()
-            .get_resource_group_name()
-            .as_bytes()
-            .to_owned();
+        let group_name = ctx.get_resource_group_name().as_bytes().to_owned();
         let priority_tag = get_priority_tag(priority);
         let key_ranges = keys
             .iter()
@@ -1086,10 +1077,10 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                             schedule_wait_time.as_nanos() as u64;
                     });
                     let latency_stats = StageLatencyStats {
-                        schedule_wait_time_ns: duration_to_ms(schedule_wait_time),
-                        snapshot_wait_time_ns: duration_to_ms(snapshot_wait_time),
-                        wait_wall_time_ns: duration_to_ms(wait_wall_time),
-                        process_wall_time_ns: duration_to_ms(process_wall_time),
+                        schedule_wait_time_ms: duration_to_ms(schedule_wait_time),
+                        snapshot_wait_time_ms: duration_to_ms(snapshot_wait_time),
+                        wait_wall_time_ms: duration_to_ms(wait_wall_time),
+                        process_wall_time_ms: duration_to_ms(process_wall_time),
                     };
                     Ok((
                         result?,
@@ -1126,11 +1117,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
     ) -> impl Future<Output = Result<Vec<Result<KvPair>>>> {
         const CMD: CommandKind = CommandKind::scan;
         let priority = ctx.get_priority();
-        let group_name = ctx
-            .get_resource_control_context()
-            .get_resource_group_name()
-            .as_bytes()
-            .to_owned();
+        let group_name = ctx.get_resource_group_name().as_bytes().to_owned();
         let priority_tag = get_priority_tag(priority);
         let resource_tag = self.resource_tag_factory.new_tag_with_key_ranges(
             &ctx,
@@ -1296,11 +1283,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
     ) -> impl Future<Output = Result<Vec<LockInfo>>> {
         const CMD: CommandKind = CommandKind::scan_lock;
         let priority = ctx.get_priority();
-        let group_name = ctx
-            .get_resource_control_context()
-            .get_resource_group_name()
-            .as_bytes()
-            .to_owned();
+        let group_name = ctx.get_resource_group_name().as_bytes().to_owned();
         let priority_tag = get_priority_tag(priority);
         let resource_tag = self.resource_tag_factory.new_tag_with_key_ranges(
             &ctx,
@@ -1502,6 +1485,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         });
 
         fail_point!("storage_drop_message", |_| Ok(()));
+        cmd.incr_cmd_metric();
         self.sched.run_cmd(cmd, T::callback(callback));
 
         Ok(())
@@ -1514,6 +1498,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         callback: Callback<T>,
     ) {
         let cmd: Command = cmd.into();
+        cmd.incr_cmd_metric();
         sched.run_cmd(cmd, T::callback(callback));
     }
 
@@ -1606,11 +1591,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
     ) -> impl Future<Output = Result<Option<Vec<u8>>>> {
         const CMD: CommandKind = CommandKind::raw_get;
         let priority = ctx.get_priority();
-        let group_name = ctx
-            .get_resource_control_context()
-            .get_resource_group_name()
-            .as_bytes()
-            .to_owned();
+        let group_name = ctx.get_resource_group_name().as_bytes().to_owned();
         let priority_tag = get_priority_tag(priority);
         let resource_tag = self
             .resource_tag_factory
@@ -1691,7 +1672,6 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         let priority = gets[0].get_context().get_priority();
         let group_name = gets[0]
             .get_context()
-            .get_resource_control_context()
             .get_resource_group_name()
             .as_bytes()
             .to_owned();
@@ -1823,11 +1803,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
     ) -> impl Future<Output = Result<Vec<Result<KvPair>>>> {
         const CMD: CommandKind = CommandKind::raw_batch_get;
         let priority = ctx.get_priority();
-        let group_name = ctx
-            .get_resource_control_context()
-            .get_resource_group_name()
-            .as_bytes()
-            .to_owned();
+        let group_name = ctx.get_resource_group_name().as_bytes().to_owned();
         let priority_tag = get_priority_tag(priority);
         let key_ranges = keys.iter().map(|k| (k.clone(), k.clone())).collect();
         let resource_tag = self
@@ -1973,10 +1949,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         let concurrency_manager = self.concurrency_manager.clone();
 
         let priority = ctx.get_priority();
-        let group_name = ctx
-            .get_resource_control_context()
-            .get_resource_group_name()
-            .to_owned();
+        let group_name = ctx.get_resource_group_name().to_owned();
         self.sched_raw_command(&group_name, priority, CMD, async move {
             if let Err(e) = deadline.check() {
                 return callback(Err(Error::from(e)));
@@ -2088,10 +2061,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         let concurrency_manager = self.concurrency_manager.clone();
         let deadline = Self::get_deadline(&ctx);
         let priority = ctx.get_priority();
-        let group_name = ctx
-            .get_resource_control_context()
-            .get_resource_group_name()
-            .to_owned();
+        let group_name = ctx.get_resource_group_name().to_owned();
         self.sched_raw_command(&group_name, priority, CMD, async move {
             if let Err(e) = deadline.check() {
                 return callback(Err(Error::from(e)));
@@ -2156,10 +2126,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         let concurrency_manager = self.concurrency_manager.clone();
         let deadline = Self::get_deadline(&ctx);
         let priority = ctx.get_priority();
-        let group_name = ctx
-            .get_resource_control_context()
-            .get_resource_group_name()
-            .to_owned();
+        let group_name = ctx.get_resource_group_name().to_owned();
         self.sched_raw_command(&group_name, priority, CMD, async move {
             if let Err(e) = deadline.check() {
                 return callback(Err(Error::from(e)));
@@ -2220,10 +2187,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         let engine = self.engine.clone();
         let deadline = Self::get_deadline(&ctx);
         let priority = ctx.get_priority();
-        let group_name = ctx
-            .get_resource_control_context()
-            .get_resource_group_name()
-            .to_owned();
+        let group_name = ctx.get_resource_group_name().to_owned();
         self.sched_raw_command(&group_name, priority, CMD, async move {
             if let Err(e) = deadline.check() {
                 return callback(Err(Error::from(e)));
@@ -2271,10 +2235,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         let concurrency_manager = self.concurrency_manager.clone();
         let deadline = Self::get_deadline(&ctx);
         let priority = ctx.get_priority();
-        let group_name = ctx
-            .get_resource_control_context()
-            .get_resource_group_name()
-            .to_owned();
+        let group_name = ctx.get_resource_group_name().to_owned();
         self.sched_raw_command(&group_name, priority, CMD, async move {
             if let Err(e) = deadline.check() {
                 return callback(Err(Error::from(e)));
@@ -2338,11 +2299,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
     ) -> impl Future<Output = Result<Vec<Result<KvPair>>>> {
         const CMD: CommandKind = CommandKind::raw_scan;
         let priority = ctx.get_priority();
-        let group_name = ctx
-            .get_resource_control_context()
-            .get_resource_group_name()
-            .as_bytes()
-            .to_owned();
+        let group_name = ctx.get_resource_group_name().as_bytes().to_owned();
         let priority_tag = get_priority_tag(priority);
         let resource_tag = self.resource_tag_factory.new_tag(&ctx);
         let api_version = self.api_version;
@@ -2469,11 +2426,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
     ) -> impl Future<Output = Result<Vec<Result<KvPair>>>> {
         const CMD: CommandKind = CommandKind::raw_batch_scan;
         let priority = ctx.get_priority();
-        let group_name = ctx
-            .get_resource_control_context()
-            .get_resource_group_name()
-            .as_bytes()
-            .to_owned();
+        let group_name = ctx.get_resource_group_name().as_bytes().to_owned();
         let priority_tag = get_priority_tag(priority);
         let key_ranges = ranges
             .iter()
@@ -2625,11 +2578,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
     ) -> impl Future<Output = Result<Option<u64>>> {
         const CMD: CommandKind = CommandKind::raw_get_key_ttl;
         let priority = ctx.get_priority();
-        let group_name = ctx
-            .get_resource_control_context()
-            .get_resource_group_name()
-            .as_bytes()
-            .to_owned();
+        let group_name = ctx.get_resource_group_name().as_bytes().to_owned();
         let priority_tag = get_priority_tag(priority);
         let resource_tag = self
             .resource_tag_factory
@@ -2718,10 +2667,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         }
         let sched = self.get_scheduler();
         let priority = ctx.get_priority();
-        let group_name = ctx
-            .get_resource_control_context()
-            .get_resource_group_name()
-            .to_owned();
+        let group_name = ctx.get_resource_group_name().to_owned();
         self.sched_raw_command(&group_name, priority, CMD, async move {
             let key = F::encode_raw_key_owned(key, None);
             let cmd = RawCompareAndSwap::new(cf, key, previous_value, value, ttl, api_version, ctx);
@@ -2754,10 +2700,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
 
         let sched = self.get_scheduler();
         let priority = ctx.get_priority();
-        let group_name = ctx
-            .get_resource_control_context()
-            .get_resource_group_name()
-            .to_owned();
+        let group_name = ctx.get_resource_group_name().to_owned();
         self.sched_raw_command(&group_name, priority, CMD, async move {
             let modifies = Self::raw_batch_put_requests_to_modifies(cf, pairs, ttls, None);
             let cmd = RawAtomicStore::new(cf, modifies, ctx);
@@ -2782,10 +2725,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         let cf = Self::rawkv_cf(&cf, self.api_version)?;
         let sched = self.get_scheduler();
         let priority = ctx.get_priority();
-        let group_name = ctx
-            .get_resource_control_context()
-            .get_resource_group_name()
-            .to_owned();
+        let group_name = ctx.get_resource_group_name().to_owned();
         self.sched_raw_command(&group_name, priority, CMD, async move {
             // Do NOT encode ts here as RawAtomicStore use key to gen lock
             let modifies = keys
@@ -2809,11 +2749,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
     ) -> impl Future<Output = Result<(u64, u64, u64)>> {
         const CMD: CommandKind = CommandKind::raw_checksum;
         let priority = ctx.get_priority();
-        let group_name = ctx
-            .get_resource_control_context()
-            .get_resource_group_name()
-            .as_bytes()
-            .to_owned();
+        let group_name = ctx.get_resource_group_name().as_bytes().to_owned();
         let priority_tag = get_priority_tag(priority);
         let key_ranges = ranges
             .iter()
@@ -3304,40 +3240,6 @@ impl<E: Engine, L: LockManager, F: KvFormat> TestStorageBuilder<E, L, F> {
             latest_feature_gate(),
             None,
             Some(Arc::new(ResourceController::new("test".to_owned(), false))),
-        )
-    }
-
-    pub fn build_for_resource_controller(
-        self,
-        resource_controller: Arc<ResourceController>,
-    ) -> Result<Storage<TxnTestEngine<E>, L, F>> {
-        let engine = TxnTestEngine {
-            engine: self.engine,
-            txn_ext: Arc::new(TxnExt::default()),
-        };
-        let read_pool = build_read_pool_for_test(
-            &crate::config::StorageReadPoolConfig::default_for_test(),
-            engine.clone(),
-        );
-
-        Storage::from_engine(
-            engine,
-            &self.config,
-            ReadPool::from(read_pool).handle(),
-            self.lock_mgr,
-            ConcurrencyManager::new(1.into()),
-            DynamicConfigs {
-                pipelined_pessimistic_lock: self.pipelined_pessimistic_lock,
-                in_memory_pessimistic_lock: self.in_memory_pessimistic_lock,
-                wake_up_delay_duration_ms: self.wake_up_delay_duration_ms,
-            },
-            Arc::new(FlowController::Singleton(EngineFlowController::empty())),
-            DummyReporter,
-            ResourceTagFactory::new_for_test(),
-            Arc::new(QuotaLimiter::default()),
-            latest_feature_gate(),
-            None,
-            Some(resource_controller),
         )
     }
 }
@@ -4303,21 +4205,18 @@ mod tests {
                         &shared,
                         None,
                         ApiVersion::V1,
-                        None,
                         EngineType::RaftKv,
                     ),
                 ),
                 (
                     CF_LOCK,
-                    cfg_rocksdb
-                        .lockcf
-                        .build_opt(&shared, None, EngineType::RaftKv),
+                    cfg_rocksdb.lockcf.build_opt(&shared, EngineType::RaftKv),
                 ),
                 (
                     CF_WRITE,
                     cfg_rocksdb
                         .writecf
-                        .build_opt(&shared, None, None, EngineType::RaftKv),
+                        .build_opt(&shared, None, EngineType::RaftKv),
                 ),
                 (CF_RAFT, cfg_rocksdb.raftcf.build_opt(&shared)),
             ];
@@ -7908,7 +7807,6 @@ mod tests {
                     false,
                     false,
                     false,
-                    true,
                     Context::default(),
                 ),
                 expect_fail_callback(tx.clone(), 0, |e| match e {
@@ -7935,7 +7833,6 @@ mod tests {
                     true,
                     false,
                     false,
-                    true,
                     Context::default(),
                 ),
                 expect_value_callback(tx.clone(), 0, LockNotExist),
@@ -7993,7 +7890,6 @@ mod tests {
                     true,
                     false,
                     false,
-                    true,
                     Context::default(),
                 ),
                 expect_value_callback(
@@ -8039,7 +7935,6 @@ mod tests {
                     true,
                     false,
                     false,
-                    true,
                     Context::default(),
                 ),
                 expect_value_callback(tx.clone(), 0, committed(ts(20, 0))),
@@ -8051,7 +7946,7 @@ mod tests {
             .sched_txn_command(
                 commands::Prewrite::with_lock_ttl(
                     vec![Mutation::make_put(k.clone(), v)],
-                    k.to_raw().unwrap(),
+                    k.as_encoded().to_vec(),
                     ts(25, 0),
                     100,
                 ),
@@ -8071,7 +7966,6 @@ mod tests {
                     true,
                     false,
                     false,
-                    true,
                     Context::default(),
                 ),
                 expect_value_callback(tx.clone(), 0, TtlExpire),
@@ -8357,7 +8251,6 @@ mod tests {
                     None,
                     false,
                     AssertionLevel::Off,
-                    vec![],
                     Context::default(),
                 ),
                 expect_ok_callback(tx.clone(), 0),
@@ -9414,7 +9307,6 @@ mod tests {
                     false,
                     false,
                     false,
-                    true,
                     Context::default(),
                 ),
                 expect_value_callback(
@@ -9451,7 +9343,6 @@ mod tests {
                     false,
                     false,
                     false,
-                    true,
                     Context::default(),
                 ),
                 expect_value_callback(tx.clone(), 0, TxnStatus::TtlExpire),
@@ -9726,7 +9617,6 @@ mod tests {
                     Some(vec![b"e".to_vec()]),
                     false,
                     AssertionLevel::Off,
-                    vec![],
                     Context::default(),
                 ),
                 Box::new(move |res| {
@@ -9825,7 +9715,6 @@ mod tests {
                     None,
                     false,
                     AssertionLevel::Off,
-                    vec![],
                     Default::default(),
                 ),
                 expect_ok_callback(tx.clone(), 0),
@@ -9845,7 +9734,6 @@ mod tests {
                     true,
                     false,
                     false,
-                    true,
                     Default::default(),
                 ),
                 expect_ok_callback(tx.clone(), 0),
@@ -9877,7 +9765,6 @@ mod tests {
                     Some(vec![k2.to_vec()]),
                     false,
                     AssertionLevel::Off,
-                    vec![],
                     Default::default(),
                 ),
                 expect_ok_callback(tx.clone(), 0),
@@ -10714,7 +10601,6 @@ mod tests {
                     None,
                     false,
                     AssertionLevel::Off,
-                    vec![],
                     Context::default(),
                 ),
                 Box::new(move |res| {
@@ -10773,7 +10659,6 @@ mod tests {
                     None,
                     false,
                     AssertionLevel::Off,
-                    vec![],
                     Context::default(),
                 ),
                 Box::new(move |res| {

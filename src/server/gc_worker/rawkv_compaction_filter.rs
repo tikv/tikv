@@ -9,8 +9,9 @@ use std::{
 use api_version::{ApiV2, KeyMode, KvFormat};
 use engine_rocks::{
     raw::{
-        CompactionFilter, CompactionFilterContext, CompactionFilterDecision,
-        CompactionFilterFactory, CompactionFilterValueType,
+        new_compaction_filter_raw, CompactionFilter, CompactionFilterContext,
+        CompactionFilterDecision, CompactionFilterFactory, CompactionFilterValueType,
+        DBCompactionFilter,
     },
     RocksEngine,
 };
@@ -35,17 +36,15 @@ use crate::{
 pub struct RawCompactionFilterFactory;
 
 impl CompactionFilterFactory for RawCompactionFilterFactory {
-    type Filter = RawCompactionFilter;
-
     fn create_compaction_filter(
         &self,
         context: &CompactionFilterContext,
-    ) -> Option<(CString, Self::Filter)> {
+    ) -> *mut DBCompactionFilter {
         //---------------- GC context --------------
         let gc_context_option = GC_CONTEXT.lock().unwrap();
         let gc_context = match *gc_context_option {
             Some(ref ctx) => ctx,
-            None => return None,
+            None => return std::ptr::null_mut(),
         };
         //---------------- GC context END --------------
 
@@ -58,7 +57,7 @@ impl CompactionFilterFactory for RawCompactionFilterFactory {
         if safe_point == 0 {
             // Safe point has not been initialized yet.
             debug!("skip gc in compaction filter because of no safe point");
-            return None;
+            return std::ptr::null_mut();
         }
 
         let ratio_threshold = {
@@ -77,7 +76,7 @@ impl CompactionFilterFactory for RawCompactionFilterFactory {
             .map_or(false, RocksEngine::is_stalled_or_stopped)
         {
             debug!("skip gc in compaction filter because the DB is stalled");
-            return None;
+            return std::ptr::null_mut();
         }
 
         drop(gc_context_option);
@@ -91,7 +90,7 @@ impl CompactionFilterFactory for RawCompactionFilterFactory {
             GC_COMPACTION_FILTER_SKIP
                 .with_label_values(&[STAT_RAW_KEYMODE])
                 .inc();
-            return None;
+            return std::ptr::null_mut();
         }
 
         let filter = RawCompactionFilter::new(
@@ -102,11 +101,11 @@ impl CompactionFilterFactory for RawCompactionFilterFactory {
             (store_id, region_info_provider),
         );
         let name = CString::new("raw_compaction_filter").unwrap();
-        Some((name, filter))
+        unsafe { new_compaction_filter_raw(name, filter) }
     }
 }
 
-pub struct RawCompactionFilter {
+struct RawCompactionFilter {
     safe_point: u64,
     is_bottommost_level: bool,
     gc_scheduler: Scheduler<GcTask<RocksEngine>>,

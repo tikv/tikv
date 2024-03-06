@@ -132,9 +132,6 @@ pub mod kv {
             let tombstone_path = path.with_extension(TOMBSTONE_SUFFIX);
             let _ = std::fs::remove_dir_all(&tombstone_path);
             std::fs::rename(path, &tombstone_path)?;
-            if let Some(m) = &self.db_opt.get_key_manager() {
-                m.remove_dir(path, Some(&tombstone_path))?;
-            }
             std::fs::remove_dir_all(tombstone_path)?;
             Ok(())
         }
@@ -217,10 +214,6 @@ pub mod ctor {
     }
 
     impl DbOptions {
-        pub fn get_key_manager(&self) -> Option<Arc<DataKeyManager>> {
-            self.key_manager.clone()
-        }
-
         pub fn set_key_manager(&mut self, key_manager: Option<Arc<DataKeyManager>>) {
             self.key_manager = key_manager;
         }
@@ -372,7 +365,7 @@ pub mod ctor {
         use engine_rocks::{
             get_env,
             properties::{MvccPropertiesCollectorFactory, RangePropertiesCollectorFactory},
-            util::{new_engine_opt as rocks_new_engine_opt, RangeCompactionFilterFactory},
+            util::new_engine_opt as rocks_new_engine_opt,
             RocksCfOptions, RocksDbOptions, RocksPersistenceListener,
         };
         use engine_traits::{
@@ -432,17 +425,9 @@ pub mod ctor {
                     );
                     rocks_db_opts.add_event_listener(RocksPersistenceListener::new(listener));
                 }
-                let factory =
-                    RangeCompactionFilterFactory::new(ctx.start_key.clone(), ctx.end_key.clone());
                 let rocks_cfs_opts = cf_opts
                     .iter()
-                    .map(|(name, opt)| {
-                        let mut opt = get_rocks_cf_opts(opt);
-                        // We assume `get_rocks_cf_opts` didn't set a factory already.
-                        opt.set_compaction_filter_factory("range_filter_factory", factory.clone())
-                            .unwrap();
-                        (*name, opt)
-                    })
+                    .map(|(name, opt)| (*name, get_rocks_cf_opts(opt)))
                     .collect();
                 rocks_new_engine_opt(path, rocks_db_opts, rocks_cfs_opts)
             }

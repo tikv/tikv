@@ -6,8 +6,6 @@ use quote::{quote, ToTokens};
 use syn::{parse_macro_input, parse_quote, Ident, ItemFn, Path};
 
 /// test_case generate test cases using cluster creation method provided.
-/// It also import the package related util module, which means we should locate
-/// methods using Cluster in the related util modules.
 ///
 /// ex:
 /// #[test_case(test_raftstore::new_node_cluster)]
@@ -23,19 +21,19 @@ use syn::{parse_macro_input, parse_quote, Ident, ItemFn, Path};
 /// mod test_something {
 ///     #[test]
 ///     fn test_raftstore_new_node_cluster() {
-///         use test_raftstore::(util::*, new_node_cluster as new_cluster);
+///         use test_raftstore::new_node_cluster as new_cluster;
 ///         let mut cluster = new_cluster(0, 1);
 ///     }
 ///
 ///     #[test]
 ///     fn test_raftstore_new_server_cluster() {
-///         use test_raftstore::(util::*, new_server_cluster as new_cluster);
+///         use test_raftstore::new_server_cluster as new_cluster;
 ///         let mut cluster = new_cluster(0, 1);
 ///     }
 ///
 ///     #[test]
 ///     fn test_raftstore_v2_new_server_cluster() {
-///         use test_raftstore::(util::*, test_raftstore_v2 as new_cluster);
+///         use test_raftstore::test_raftstore_v2 as new_cluster;
 ///         let mut cluster = new_cluster(0, 1);
 ///     }
 /// }
@@ -75,7 +73,7 @@ fn render_test_cases(test_cases: Vec<TokenStream2>, fn_item: ItemFn) -> TokenStr
             0,
             syn::parse(
                 quote! {
-                    use #package::{util::*, #method as new_cluster, Simulator};
+                    use #package::#method as new_cluster;
                 }
                 .into(),
             )

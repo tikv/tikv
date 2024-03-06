@@ -5,7 +5,6 @@ mod raft_client;
 
 pub mod config;
 pub mod debug;
-pub mod debug2;
 mod engine_factory;
 pub mod errors;
 pub mod gc_worker;
@@ -35,9 +34,9 @@ pub use self::{
     metrics::{CONFIG_ROCKSDB_GAUGE, CPU_CORES_QUOTA_GAUGE, MEM_TRACE_SUM_GAUGE},
     node::Node,
     proxy::{build_forward_option, get_target_address, Proxy},
-    raft_client::{ConnectionBuilder, MetadataSourceStoreId, RaftClient},
+    raft_client::{ConnectionBuilder, RaftClient},
     raftkv::RaftKv,
-    raftkv2::{Extension, NodeV2, RaftKv2},
+    raftkv2::{NodeV2, RaftKv2},
     resolve::{PdStoreAddrResolver, StoreAddrResolver},
     server::{Server, GRPC_THREAD_PREFIX},
     transport::ServerTransport,

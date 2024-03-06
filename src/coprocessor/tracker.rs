@@ -67,7 +67,7 @@ pub struct Tracker<E: Engine> {
     total_process_time: Duration,
     total_storage_stats: Statistics,
     slow_log_threshold: Duration,
-    scan_process_time_ns: u64,
+    scan_process_time_ms: u64,
 
     pub buckets: Option<Arc<BucketMeta>>,
 
@@ -96,7 +96,7 @@ impl<E: Engine> Tracker<E> {
             total_suspend_time: Duration::default(),
             total_process_time: Duration::default(),
             total_storage_stats: Statistics::default(),
-            scan_process_time_ns: 0,
+            scan_process_time_ms: 0,
             slow_log_threshold,
             req_ctx,
             buckets: None,
@@ -175,7 +175,7 @@ impl<E: Engine> Tracker<E> {
     }
 
     pub fn collect_scan_process_time(&mut self, exec_summary: ExecSummary) {
-        self.scan_process_time_ns = exec_summary.time_processed_ns as u64;
+        self.scan_process_time_ms = (exec_summary.time_processed_ns / 1000000) as u64;
     }
 
     /// Get current item's ExecDetail according to previous collected metrics.
@@ -183,7 +183,7 @@ impl<E: Engine> Tracker<E> {
     /// WARN: TRY BEST NOT TO USE THIS FUNCTION.
     pub fn get_item_exec_details(&self) -> (kvrpcpb::ExecDetails, kvrpcpb::ExecDetailsV2) {
         if let TrackerState::ItemFinished(_) = self.current_stage {
-            self.exec_details(self.item_process_time, self.item_suspend_time)
+            self.exec_details(self.item_process_time)
         } else {
             unreachable!()
         }
@@ -194,39 +194,27 @@ impl<E: Engine> Tracker<E> {
     pub fn get_exec_details(&self) -> (kvrpcpb::ExecDetails, kvrpcpb::ExecDetailsV2) {
         if let TrackerState::ItemFinished(_) = self.current_stage {
             // TODO: Separate process time and suspend time
-            self.exec_details(self.total_process_time, self.total_suspend_time)
+            self.exec_details(self.total_process_time + self.total_suspend_time)
         } else {
             unreachable!()
         }
     }
 
-    fn exec_details(
-        &self,
-        process_time: Duration,
-        suspend_time: Duration,
-    ) -> (kvrpcpb::ExecDetails, kvrpcpb::ExecDetailsV2) {
+    fn exec_details(&self, measure: Duration) -> (kvrpcpb::ExecDetails, kvrpcpb::ExecDetailsV2) {
         // For compatibility, ExecDetails field is still filled.
         let mut exec_details = kvrpcpb::ExecDetails::default();
 
-        // TimeDetail is deprecated, we only keep it for backward compatibility.
         let mut td = kvrpcpb::TimeDetail::default();
-        td.set_process_wall_time_ms(time::duration_to_ms(process_time));
+        td.set_process_wall_time_ms(time::duration_to_ms(measure));
         td.set_wait_wall_time_ms(time::duration_to_ms(self.wait_time));
-        td.set_kv_read_wall_time_ms(self.scan_process_time_ns / 1_000_000);
+        td.set_kv_read_wall_time_ms(self.scan_process_time_ms);
         exec_details.set_time_detail(td.clone());
 
         let detail = self.total_storage_stats.scan_detail();
         exec_details.set_scan_detail(detail);
 
-        let mut td_v2 = kvrpcpb::TimeDetailV2::default();
-        td_v2.set_process_wall_time_ns(process_time.as_nanos() as u64);
-        td_v2.set_process_suspend_wall_time_ns(suspend_time.as_nanos() as u64);
-        td_v2.set_wait_wall_time_ns(self.wait_time.as_nanos() as u64);
-        td_v2.set_kv_read_wall_time_ns(self.scan_process_time_ns);
-
         let mut exec_details_v2 = kvrpcpb::ExecDetailsV2::default();
         exec_details_v2.set_time_detail(td);
-        exec_details_v2.set_time_detail_v2(td_v2);
 
         let mut detail_v2 = ScanDetailV2::default();
         detail_v2.set_processed_versions(self.total_storage_stats.write.processed_keys as u64);

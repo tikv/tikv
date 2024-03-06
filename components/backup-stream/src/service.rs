@@ -94,13 +94,8 @@ impl LogBackup for Service {
         &mut self,
         _ctx: grpcio::RpcContext<'_>,
         _req: kvproto::logbackuppb::SubscribeFlushEventRequest,
-        #[allow(unused_variables)] sink: grpcio::ServerStreamingSink<
-            kvproto::logbackuppb::SubscribeFlushEventResponse,
-        >,
+        sink: grpcio::ServerStreamingSink<kvproto::logbackuppb::SubscribeFlushEventResponse>,
     ) {
-        #[cfg(test)]
-        panic!("Service should not be used in an unit test");
-        #[cfg(not(test))]
         try_send!(
             self.endpoint,
             Task::RegionCheckpointsOp(RegionCheckpointOperation::Subscribe(sink))

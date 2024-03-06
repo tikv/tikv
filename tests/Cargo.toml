@@ -96,10 +96,8 @@ raft_log_engine = { workspace = true }
 raftstore = { workspace = true }
 rand = "0.8.3"
 resource_control = { workspace = true }
-server = { workspace = true }
-service = { workspace = true }
-slog = { workspace = true }
-slog-global = { workspace = true }
+slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
+slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }
 tempfile = "3.0"
 tidb_query_aggr = { workspace = true }
 tidb_query_common = { workspace = true }
@@ -118,6 +116,7 @@ uuid = { version = "0.8.1", features = ["serde", "v4"] }
 procinfo = { git = "https://github.com/tikv/procinfo-rs", rev = "6599eb9dca74229b2c1fcc44118bef7eff127128" }
 
 [dev-dependencies]
+arrow = "13.0"
 byteorder = "1.2"
 # See https://bheisler.github.io/criterion.rs/book/user_guide/known_limitations.html for the usage
 # of `real_blackbox` feature.
@@ -144,7 +143,6 @@ test_coprocessor = { workspace = true }
 test_pd = { workspace = true }
 test_pd_client = { workspace = true }
 test_raftstore = { workspace = true }
-test_raftstore-v2 = { workspace = true }
 test_raftstore_macro = { workspace = true }
 test_sst_importer = { workspace = true }
 test_storage = { workspace = true }

@@ -11,17 +11,15 @@ use kvproto::raft_serverpb::RaftMessage;
 use pd_client::PdClient;
 use raft::eraftpb::{ConfChangeType, MessageType};
 use test_raftstore::*;
-use test_raftstore_macro::test_case;
 use tikv_util::{config::ReadableDuration, HandyRwLock};
 
-#[test_case(test_raftstore::new_node_cluster)]
-#[test_case(test_raftstore_v2::new_node_cluster)]
+#[test]
 fn test_destroy_local_reader() {
     // 3 nodes cluster.
-    let mut cluster = new_cluster(0, 3);
+    let mut cluster = new_node_cluster(0, 3);
 
     // Set election timeout and max leader lease to 1s.
-    configure_for_lease_read(&mut cluster.cfg, Some(100), Some(10));
+    configure_for_lease_read(&mut cluster, Some(100), Some(10));
 
     let pd_client = cluster.pd_client.clone();
     // Disable default max peer count check.
@@ -110,7 +108,7 @@ fn test_write_after_destroy() {
     let mut epoch = cluster.pd_client.get_region_epoch(r1);
     let mut admin_req = new_admin_request(r1, &epoch, conf_change);
     admin_req.mut_header().set_peer(new_peer(1, 1));
-    let (cb1, mut rx1) = make_cb(&admin_req);
+    let (cb1, rx1) = make_cb(&admin_req);
     let engines_3 = cluster.get_all_engines(3);
     let region = block_on(cluster.pd_client.get_region_by_id(r1))
         .unwrap()
@@ -143,11 +141,10 @@ fn test_write_after_destroy() {
     must_region_cleared(&engines_3, &region);
 }
 
-#[test_case(test_raftstore::new_server_cluster)]
-#[test_case(test_raftstore_v2::new_server_cluster)]
+#[test]
 fn test_tick_after_destroy() {
     // 3 nodes cluster.
-    let mut cluster = new_cluster(0, 3);
+    let mut cluster = new_server_cluster(0, 3);
     cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(50);
 
     let pd_client = cluster.pd_client.clone();
@@ -189,11 +186,10 @@ fn test_tick_after_destroy() {
     must_get_equal(&cluster.get_engine(1), b"k2", b"v2");
 }
 
-#[test_case(test_raftstore::new_node_cluster)]
-#[test_case(test_raftstore_v2::new_node_cluster)]
+#[test]
 fn test_stale_peer_cache() {
     // 3 nodes cluster.
-    let mut cluster = new_cluster(0, 3);
+    let mut cluster = new_node_cluster(0, 3);
 
     cluster.run();
     // Now region 1 only has peer (1, 1);
@@ -217,10 +213,9 @@ fn test_stale_peer_cache() {
 // 6. then peer 3 calling `Raft::apply_conf_change` to add peer 4;
 // 7. so the disk configuration `[1, 2, 3]` is different from memory
 // configuration `[1, 2, 3, 4]`.
-#[test_case(test_raftstore::new_node_cluster)]
-#[test_case(test_raftstore_v2::new_node_cluster)]
+#[test]
 fn test_redundant_conf_change_by_snapshot() {
-    let mut cluster = new_cluster(0, 4);
+    let mut cluster = new_node_cluster(0, 4);
     cluster.cfg.raft_store.raft_log_gc_count_limit = Some(5);
     cluster.cfg.raft_store.merge_max_log_gap = 4;
     cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(20);
@@ -244,7 +239,7 @@ fn test_redundant_conf_change_by_snapshot() {
             .direction(Direction::Recv)
             .msg_type(MessageType::MsgAppend),
     );
-    cluster.add_recv_filter_on_node(3, filter);
+    cluster.sim.wl().add_recv_filter(3, filter);
 
     // propose to remove peer 4, and append more entries to compact raft logs.
     cluster.pd_client.must_remove_peer(1, new_peer(4, 4));
@@ -252,7 +247,7 @@ fn test_redundant_conf_change_by_snapshot() {
     sleep_ms(50);
 
     // Clear filters on peer 3, so it can receive and restore a snapshot.
-    cluster.clear_recv_filter_on_node(3);
+    cluster.sim.wl().clear_recv_filters(3);
     sleep_ms(100);
 
     // Use a filter to capture messages sent from 3 to 4.
@@ -269,7 +264,7 @@ fn test_redundant_conf_change_by_snapshot() {
             .when(Arc::new(AtomicBool::new(false)))
             .set_msg_callback(cb),
     );
-    cluster.add_recv_filter_on_node(3, filter);
+    cluster.sim.wl().add_send_filter(3, filter);
 
     // Unpause the fail point, so peer 3 can apply the redundant conf change result.
     fail::cfg("apply_on_conf_change_3_1", "off").unwrap();
@@ -280,10 +275,9 @@ fn test_redundant_conf_change_by_snapshot() {
     fail::remove("apply_on_conf_change_3_1");
 }
 
-#[test_case(test_raftstore::new_node_cluster)]
-#[test_case(test_raftstore_v2::new_node_cluster)]
+#[test]
 fn test_handle_conf_change_when_apply_fsm_resume_pending_state() {
-    let mut cluster = new_cluster(0, 3);
+    let mut cluster = new_node_cluster(0, 3);
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_operator();
 

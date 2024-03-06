@@ -3,13 +3,12 @@
 use std::result;
 
 use futures::executor::block_on;
-use kvproto::{meta_storagepb as mpb, pdpb::*};
+use kvproto::pdpb::*;
 
 mod bootstrap;
 pub mod etcd;
 mod incompatible;
 mod leader_change;
-mod meta_storage;
 mod retry;
 mod service;
 mod split;
@@ -19,7 +18,6 @@ pub use self::{
     bootstrap::AlreadyBootstrapped,
     incompatible::Incompatible,
     leader_change::LeaderChange,
-    meta_storage::MetaStorage,
     retry::{NotRetry, Retry},
     service::Service,
     split::Split,
@@ -30,23 +28,6 @@ pub const DEFAULT_CLUSTER_ID: u64 = 42;
 pub type Result<T> = result::Result<T, String>;
 
 pub trait PdMocker {
-    fn meta_store_get(&self, _req: mpb::GetRequest) -> Option<Result<mpb::GetResponse>> {
-        None
-    }
-
-    fn meta_store_put(&self, _req: mpb::PutRequest) -> Option<Result<mpb::PutResponse>> {
-        None
-    }
-
-    fn meta_store_watch(
-        &self,
-        _req: mpb::WatchRequest,
-        _sink: grpcio::ServerStreamingSink<mpb::WatchResponse>,
-        _ctx: &grpcio::RpcContext<'_>,
-    ) -> bool {
-        false
-    }
-
     fn load_global_config(
         &self,
         _req: &LoadGlobalConfigRequest,
@@ -149,10 +130,6 @@ pub trait PdMocker {
         &self,
         _: &RegionHeartbeatRequest,
     ) -> Option<Result<RegionHeartbeatResponse>> {
-        None
-    }
-
-    fn report_buckets(&self, _: &ReportBucketsRequest) -> Option<Result<ReportBucketsResponse>> {
         None
     }
 

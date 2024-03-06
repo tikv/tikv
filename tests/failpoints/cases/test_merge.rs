@@ -28,7 +28,7 @@ use txn_types::{Key, PessimisticLock};
 #[test]
 fn test_node_merge_rollback() {
     let mut cluster = new_node_cluster(0, 3);
-    configure_for_merge(&mut cluster.cfg);
+    configure_for_merge(&mut cluster);
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_operator();
 
@@ -116,7 +116,7 @@ fn test_node_merge_rollback() {
 #[test]
 fn test_node_merge_restart() {
     let mut cluster = new_node_cluster(0, 3);
-    configure_for_merge(&mut cluster.cfg);
+    configure_for_merge(&mut cluster);
     cluster.run();
 
     let pd_client = Arc::clone(&cluster.pd_client);
@@ -201,7 +201,7 @@ fn test_node_merge_restart() {
 #[test]
 fn test_node_merge_catch_up_logs_restart() {
     let mut cluster = new_node_cluster(0, 3);
-    configure_for_merge(&mut cluster.cfg);
+    configure_for_merge(&mut cluster);
     cluster.run();
 
     cluster.must_put(b"k1", b"v1");
@@ -242,7 +242,7 @@ fn test_node_merge_catch_up_logs_restart() {
 #[test]
 fn test_node_merge_catch_up_logs_leader_election() {
     let mut cluster = new_node_cluster(0, 3);
-    configure_for_merge(&mut cluster.cfg);
+    configure_for_merge(&mut cluster);
     cluster.cfg.raft_store.raft_base_tick_interval = ReadableDuration::millis(10);
     cluster.cfg.raft_store.raft_election_timeout_ticks = 25;
     cluster.cfg.raft_store.raft_log_gc_threshold = 12;
@@ -296,7 +296,7 @@ fn test_node_merge_catch_up_logs_leader_election() {
 #[test]
 fn test_node_merge_catch_up_logs_no_need() {
     let mut cluster = new_node_cluster(0, 3);
-    configure_for_merge(&mut cluster.cfg);
+    configure_for_merge(&mut cluster);
     cluster.cfg.raft_store.raft_base_tick_interval = ReadableDuration::millis(10);
     cluster.cfg.raft_store.raft_election_timeout_ticks = 25;
     cluster.cfg.raft_store.raft_log_gc_threshold = 12;
@@ -366,7 +366,7 @@ fn test_node_merge_catch_up_logs_no_need() {
 #[test]
 fn test_node_merge_recover_snapshot() {
     let mut cluster = new_node_cluster(0, 3);
-    configure_for_merge(&mut cluster.cfg);
+    configure_for_merge(&mut cluster);
     cluster.cfg.raft_store.raft_log_gc_threshold = 12;
     cluster.cfg.raft_store.raft_log_gc_count_limit = Some(12);
     let pd_client = Arc::clone(&cluster.pd_client);
@@ -424,8 +424,8 @@ fn test_node_merge_multiple_snapshots_not_together() {
 
 fn test_node_merge_multiple_snapshots(together: bool) {
     let mut cluster = new_node_cluster(0, 3);
-    configure_for_merge(&mut cluster.cfg);
-    ignore_merge_target_integrity(&mut cluster.cfg, &cluster.pd_client);
+    configure_for_merge(&mut cluster);
+    ignore_merge_target_integrity(&mut cluster);
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_operator();
     // make it gc quickly to trigger snapshot easily
@@ -534,7 +534,7 @@ fn test_node_merge_multiple_snapshots(together: bool) {
 #[test]
 fn test_node_merge_restart_after_apply_premerge_before_apply_compact_log() {
     let mut cluster = new_node_cluster(0, 3);
-    configure_for_merge(&mut cluster.cfg);
+    configure_for_merge(&mut cluster);
     cluster.cfg.raft_store.merge_max_log_gap = 10;
     cluster.cfg.raft_store.raft_log_gc_count_limit = Some(11);
     // Rely on this config to trigger a compact log
@@ -617,7 +617,7 @@ fn test_node_merge_restart_after_apply_premerge_before_apply_compact_log() {
 #[test]
 fn test_node_failed_merge_before_succeed_merge() {
     let mut cluster = new_node_cluster(0, 3);
-    configure_for_merge(&mut cluster.cfg);
+    configure_for_merge(&mut cluster);
     cluster.cfg.raft_store.merge_max_log_gap = 30;
     cluster.cfg.raft_store.store_batch_system.max_batch_size = Some(1);
     cluster.cfg.raft_store.store_batch_system.pool_size = 2;
@@ -706,7 +706,7 @@ fn test_node_failed_merge_before_succeed_merge() {
 #[test]
 fn test_node_merge_transfer_leader() {
     let mut cluster = new_node_cluster(0, 3);
-    configure_for_merge(&mut cluster.cfg);
+    configure_for_merge(&mut cluster);
     cluster.cfg.raft_store.store_batch_system.max_batch_size = Some(1);
     cluster.cfg.raft_store.store_batch_system.pool_size = 2;
     let pd_client = Arc::clone(&cluster.pd_client);
@@ -768,7 +768,7 @@ fn test_node_merge_transfer_leader() {
 #[test]
 fn test_node_merge_cascade_merge_with_apply_yield() {
     let mut cluster = new_node_cluster(0, 3);
-    configure_for_merge(&mut cluster.cfg);
+    configure_for_merge(&mut cluster);
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_operator();
 
@@ -807,7 +807,7 @@ fn test_node_merge_cascade_merge_with_apply_yield() {
 #[test]
 fn test_node_multiple_rollback_merge() {
     let mut cluster = new_node_cluster(0, 3);
-    configure_for_merge(&mut cluster.cfg);
+    configure_for_merge(&mut cluster);
     cluster.cfg.raft_store.right_derive_when_split = true;
     cluster.cfg.raft_store.merge_check_tick_interval = ReadableDuration::millis(20);
     let pd_client = Arc::clone(&cluster.pd_client);
@@ -1208,7 +1208,7 @@ fn test_node_merge_crash_when_snapshot() {
 #[test]
 fn test_prewrite_before_max_ts_is_synced() {
     let mut cluster = new_server_cluster(0, 3);
-    configure_for_merge(&mut cluster.cfg);
+    configure_for_merge(&mut cluster);
     cluster.run();
 
     // Transfer leader to node 1 first to ensure all operations happen on node 1
@@ -1265,7 +1265,7 @@ fn test_prewrite_before_max_ts_is_synced() {
 #[test]
 fn test_source_peer_read_delegate_after_apply() {
     let mut cluster = new_node_cluster(0, 3);
-    configure_for_merge(&mut cluster.cfg);
+    configure_for_merge(&mut cluster);
 
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_operator();
@@ -1314,7 +1314,7 @@ fn test_source_peer_read_delegate_after_apply() {
 #[test]
 fn test_merge_with_concurrent_pessimistic_locking() {
     let mut cluster = new_server_cluster(0, 2);
-    configure_for_merge(&mut cluster.cfg);
+    configure_for_merge(&mut cluster);
     cluster.cfg.pessimistic_txn.pipelined = true;
     cluster.cfg.pessimistic_txn.in_memory = true;
     cluster.run();
@@ -1402,7 +1402,7 @@ fn test_merge_with_concurrent_pessimistic_locking() {
 #[test]
 fn test_merge_pessimistic_locks_with_concurrent_prewrite() {
     let mut cluster = new_server_cluster(0, 2);
-    configure_for_merge(&mut cluster.cfg);
+    configure_for_merge(&mut cluster);
     cluster.cfg.pessimistic_txn.pipelined = true;
     cluster.cfg.pessimistic_txn.in_memory = true;
     let pd_client = Arc::clone(&cluster.pd_client);
@@ -1487,7 +1487,7 @@ fn test_merge_pessimistic_locks_with_concurrent_prewrite() {
 #[test]
 fn test_retry_pending_prepare_merge_fail() {
     let mut cluster = new_server_cluster(0, 2);
-    configure_for_merge(&mut cluster.cfg);
+    configure_for_merge(&mut cluster);
     cluster.cfg.pessimistic_txn.pipelined = true;
     cluster.cfg.pessimistic_txn.in_memory = true;
     let pd_client = Arc::clone(&cluster.pd_client);
@@ -1530,7 +1530,7 @@ fn test_retry_pending_prepare_merge_fail() {
     let (propose_tx, propose_rx) = mpsc::sync_channel(10);
     fail::cfg_callback("after_propose", move || propose_tx.send(()).unwrap()).unwrap();
 
-    let mut rx = cluster.async_put(b"k1", b"v11").unwrap();
+    let rx = cluster.async_put(b"k1", b"v11").unwrap();
     propose_rx.recv_timeout(Duration::from_secs(2)).unwrap();
     rx.recv_timeout(Duration::from_millis(200)).unwrap_err();
 
@@ -1564,7 +1564,7 @@ fn test_retry_pending_prepare_merge_fail() {
 #[test]
 fn test_merge_pessimistic_locks_propose_fail() {
     let mut cluster = new_server_cluster(0, 2);
-    configure_for_merge(&mut cluster.cfg);
+    configure_for_merge(&mut cluster);
     cluster.cfg.pessimistic_txn.pipelined = true;
     cluster.cfg.pessimistic_txn.in_memory = true;
     let pd_client = Arc::clone(&cluster.pd_client);
@@ -1633,7 +1633,7 @@ fn test_merge_pessimistic_locks_propose_fail() {
 #[test]
 fn test_destroy_source_peer_while_merging() {
     let mut cluster = new_node_cluster(0, 5);
-    configure_for_merge(&mut cluster.cfg);
+    configure_for_merge(&mut cluster);
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_operator();
 
@@ -1705,109 +1705,4 @@ fn test_destroy_source_peer_while_merging() {
     for i in 2..=5 {
         must_get_equal(&cluster.get_engine(i), b"k5", b"v5");
     }
-}
-
-// If a node is isolated during merge, and the target peer is replaced by a peer
-// with a larger ID, then the snapshot of the target peer covers the source
-// regions as well.
-// In such cases, the snapshot becomes an "atomic_snapshot" which needs to
-// destroy the source peer too.
-// This test case checks the race between destroying the source peer by atomic
-// snapshot and the gc message. The source peer must be successfully destroyed
-// in this case.
-#[test]
-fn test_destroy_race_during_atomic_snapshot_after_merge() {
-    let mut cluster = new_node_cluster(0, 3);
-    configure_for_merge(&mut cluster.cfg);
-    cluster.run();
-    let pd_client = Arc::clone(&cluster.pd_client);
-    pd_client.disable_default_operator();
-
-    cluster.must_transfer_leader(1, new_peer(1, 1));
-
-    cluster.must_put(b"k1", b"v1");
-    cluster.must_put(b"k3", b"v3");
-
-    let region = cluster.get_region(b"k1");
-    cluster.must_split(&region, b"k2");
-    let left = cluster.get_region(b"k1");
-    let right = cluster.get_region(b"k3");
-
-    // Allow raft messages to source peer on store 3 before PrepareMerge.
-    let left_filter_block = Arc::new(atomic::AtomicBool::new(false));
-    let left_filter_block_ = left_filter_block.clone();
-    let left_blocked_messages = Arc::new(Mutex::new(vec![]));
-    let left_filter = RegionPacketFilter::new(left.get_id(), 3)
-        .direction(Direction::Recv)
-        .when(left_filter_block.clone())
-        .reserve_dropped(left_blocked_messages.clone())
-        .set_msg_callback(Arc::new(move |msg: &RaftMessage| {
-            debug!("dbg left msg_callback"; "msg" => ?msg);
-            if left_filter_block.load(atomic::Ordering::SeqCst) {
-                return;
-            }
-            for e in msg.get_message().get_entries() {
-                let ctx = raftstore::store::ProposalContext::from_bytes(&e.context);
-                if ctx.contains(raftstore::store::ProposalContext::PREPARE_MERGE) {
-                    // Block further messages.
-                    left_filter_block.store(true, atomic::Ordering::SeqCst);
-                }
-            }
-        }));
-    cluster.sim.wl().add_recv_filter(3, Box::new(left_filter));
-    // Block messages to target peer on store 3.
-    let right_filter_block = Arc::new(atomic::AtomicBool::new(true));
-    let new_peer_id = 1004;
-    let (new_peer_id_tx, new_peer_id_rx) = std::sync::mpsc::channel();
-    let new_peer_id_tx = Mutex::new(Some(new_peer_id_tx));
-    let (new_peer_snap_tx, new_peer_snap_rx) = std::sync::mpsc::channel();
-    let new_peer_snap_tx = Mutex::new(new_peer_snap_tx);
-    let right_filter = RegionPacketFilter::new(right.get_id(), 3)
-        .direction(Direction::Recv)
-        .when(right_filter_block.clone())
-        .set_msg_callback(Arc::new(move |msg: &RaftMessage| {
-            debug!("dbg right msg_callback"; "msg" => ?msg);
-            if msg.get_to_peer().get_id() == new_peer_id {
-                let _ = new_peer_id_tx.lock().unwrap().take().map(|tx| tx.send(()));
-                if msg.get_message().get_msg_type() == MessageType::MsgSnapshot {
-                    let _ = new_peer_snap_tx.lock().unwrap().send(());
-                }
-            }
-        }));
-    cluster.sim.wl().add_recv_filter(3, Box::new(right_filter));
-    pd_client.must_merge(left.get_id(), right.get_id());
-
-    // Make target peer on store 3 a stale peer.
-    pd_client.must_remove_peer(right.get_id(), find_peer(&right, 3).unwrap().to_owned());
-    pd_client.must_add_peer(right.get_id(), new_peer(3, new_peer_id));
-    // Unblock messages to target peer on store 3.
-    right_filter_block.store(false, atomic::Ordering::SeqCst);
-    // Wait for receiving new peer id message to destroy stale target peer.
-    new_peer_id_rx.recv_timeout(Duration::from_secs(5)).unwrap();
-    cluster.must_region_not_exist(right.get_id(), 3);
-    // Let source peer continue prepare merge. It will fails to schedule merge,
-    // because the target peer is destroyed.
-    left_filter_block_.store(false, atomic::Ordering::SeqCst);
-    // Before sending blocked messages, make sure source peer is paused at
-    // destroy apply delegate, so that the new right peer snapshot can will
-    // try to destroy source peer before applying snapshot.
-    fail::cfg("on_apply_handle_destroy", "pause").unwrap();
-    // Send blocked messages to source peer. Prepare merge must fail to schedule
-    // CommitMerge because now target peer stale peer is destroyed.
-    let router = cluster.sim.wl().get_router(3).unwrap();
-    for raft_msg in std::mem::take(&mut *left_blocked_messages.lock().unwrap()) {
-        router.send_raft_message(raft_msg).unwrap();
-    }
-    // Wait the new right peer snapshot.
-    new_peer_snap_rx
-        .recv_timeout(Duration::from_secs(5))
-        .unwrap();
-    // Give it some time to step snapshot message.
-    sleep_ms(500);
-    // Let source peer destroy continue, so it races with atomic snapshot destroy.
-    fail::remove("on_apply_handle_destroy");
-
-    // New peer applies snapshot eventually.
-    cluster.must_transfer_leader(right.get_id(), new_peer(3, new_peer_id));
-    cluster.must_put(b"k4", b"v4");
 }

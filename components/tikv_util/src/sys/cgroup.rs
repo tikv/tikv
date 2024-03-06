@@ -183,19 +183,15 @@ fn is_cgroup2_unified_mode() -> Result<bool, String> {
 //
 // The format is "<id>:<hierarchy>:<path>". For example,
 // "10:cpuset:/test-cpuset".
-//
-// Note: path may contains ":" in some envrionment.
 fn parse_proc_cgroup_v1(lines: &str) -> HashMap<String, String> {
     let mut subsystems = HashMap::new();
     for line in lines.lines().map(|s| s.trim()).filter(|s| !s.is_empty()) {
         let mut iter = line.split(':');
         if let Some(_id) = iter.next() {
             if let Some(systems) = iter.next() {
-                // If the path itself contains ":", we need to concat them
-                let path = iter.collect::<Vec<_>>().join(":");
-                if !path.is_empty() {
+                if let Some(path) = iter.next() {
                     for system in systems.split(',') {
-                        subsystems.insert(system.to_owned(), path.clone());
+                        subsystems.insert(system.to_owned(), path.to_owned());
                     }
                     continue;
                 }
@@ -564,6 +560,7 @@ mod tests {
             ("-18446744073709551610", None), // Raise InvalidDigit instead of NegOverflow.
             ("0.1", None),
         ];
+        println!("{:?}", "-18446744073709551610".parse::<u64>());
         for (content, expect) in cases.into_iter() {
             let limit = parse_memory_max(content);
             assert_eq!(limit, expect);
@@ -700,20 +697,5 @@ mod tests {
             .spawn()
             .unwrap();
         assert!(child.wait().unwrap().success());
-    }
-
-    #[test]
-    fn test_cgroup_path_with_semicolon() {
-        let id = "1";
-        let devices = "test_device";
-        let path = "/dir1:dir2:dir3";
-        let mut lines = String::new();
-        lines.push_str(id);
-        lines.push(':');
-        lines.push_str(devices);
-        lines.push(':');
-        lines.push_str(path);
-        let ret = parse_proc_cgroup_v1(&lines);
-        assert_eq!(ret.get(devices).unwrap(), path);
     }
 }

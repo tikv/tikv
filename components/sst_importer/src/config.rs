@@ -1,15 +1,10 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{
-    error::Error,
-    result::Result,
-    sync::{Arc, RwLock},
-};
+use std::{error::Error, result::Result};
 
-use online_config::{self, OnlineConfig};
-use tikv_util::{config::ReadableDuration, HandyRwLock};
+use tikv_util::config::ReadableDuration;
 
-#[derive(Clone, Serialize, Deserialize, PartialEq, Debug, OnlineConfig)]
+#[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct Config {
@@ -52,48 +47,12 @@ impl Config {
             self.stream_channel_window = default_cfg.stream_channel_window;
         }
         if self.memory_use_ratio > 0.5 || self.memory_use_ratio < 0.0 {
-            return Err("import.mem_ratio should belong to [0.0, 0.5].".into());
-        }
-        Ok(())
-    }
-}
-
-#[derive(Clone)]
-pub struct ConfigManager(pub Arc<RwLock<Config>>);
-
-impl ConfigManager {
-    pub fn new(cfg: Config) -> Self {
-        ConfigManager(Arc::new(RwLock::new(cfg)))
-    }
-}
-
-impl online_config::ConfigManager for ConfigManager {
-    fn dispatch(&mut self, change: online_config::ConfigChange) -> online_config::Result<()> {
-        info!(
-            "import config changed";
-            "change" => ?change,
-        );
-
-        let mut cfg = self.rl().clone();
-        cfg.update(change)?;
-
-        if let Err(e) = cfg.validate() {
             warn!(
-                "import config changed";
-                "change" => ?cfg,
+                "import.mem_ratio should belong to [0.0, 0.5], change it to {}",
+                default_cfg.memory_use_ratio,
             );
-            return Err(e);
+            self.memory_use_ratio = default_cfg.memory_use_ratio;
         }
-
-        *self.wl() = cfg;
         Ok(())
-    }
-}
-
-impl std::ops::Deref for ConfigManager {
-    type Target = RwLock<Config>;
-
-    fn deref(&self) -> &Self::Target {
-        self.0.as_ref()
     }
 }

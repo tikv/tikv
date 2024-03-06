@@ -26,7 +26,6 @@
 #![feature(div_duration)]
 #![feature(box_into_inner)]
 #![feature(assert_matches)]
-#![feature(option_get_or_insert_default)]
 
 mod batch;
 mod bootstrap;
@@ -40,10 +39,6 @@ pub(crate) use batch::StoreContext;
 pub use batch::{create_store_batch_system, StoreRouter, StoreSystem};
 pub use bootstrap::Bootstrap;
 pub use fsm::StoreMeta;
-pub use operation::{write_initial_states, SimpleWriteBinary, SimpleWriteEncoder, StateStorage};
+pub use operation::{SimpleWriteBinary, SimpleWriteEncoder, StateStorage};
 pub use raftstore::{store::Config, Error, Result};
-pub use worker::{
-    cleanup::CompactTask,
-    pd::{PdReporter, Task as PdTask},
-    tablet::Task as TabletTask,
-};
+pub use worker::pd::{PdReporter, Task as PdTask};

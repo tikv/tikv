@@ -2,7 +2,7 @@
 
 //! Storage configuration.
 
-use std::{cmp::max, error::Error, path::Path};
+use std::{cmp::max, error::Error};
 
 use engine_rocks::raw::{Cache, LRUCacheOptions, MemoryAllocator};
 use file_system::{IoPriority, IoRateLimitMode, IoRateLimiter, IoType};
@@ -14,10 +14,7 @@ use tikv_util::{
     sys::SysQuota,
 };
 
-use crate::config::{
-    BLOCK_CACHE_RATE, DEFAULT_ROCKSDB_SUB_DIR, DEFAULT_TABLET_SUB_DIR, MIN_BLOCK_CACHE_SHARD_SIZE,
-    RAFTSTORE_V2_BLOCK_CACHE_RATE,
-};
+use crate::config::{BLOCK_CACHE_RATE, MIN_BLOCK_CACHE_SHARD_SIZE, RAFTSTORE_V2_BLOCK_CACHE_RATE};
 
 pub const DEFAULT_DATA_DIR: &str = "./";
 const DEFAULT_GC_RATIO_THRESHOLD: f64 = 1.1;
@@ -113,43 +110,10 @@ impl Default for Config {
 }
 
 impl Config {
-    pub fn validate_engine_type(&mut self) -> Result<(), Box<dyn Error>> {
+    pub fn validate(&mut self) -> Result<(), Box<dyn Error>> {
         if self.data_dir != DEFAULT_DATA_DIR {
             self.data_dir = config::canonicalize_path(&self.data_dir)?
         }
-
-        let v1_kv_db_path =
-            config::canonicalize_sub_path(&self.data_dir, DEFAULT_ROCKSDB_SUB_DIR).unwrap();
-        let v2_tablet_path =
-            config::canonicalize_sub_path(&self.data_dir, DEFAULT_TABLET_SUB_DIR).unwrap();
-
-        let kv_data_exists = Path::new(&v1_kv_db_path).exists();
-        let v2_tablet_exists = Path::new(&v2_tablet_path).exists();
-        if kv_data_exists && v2_tablet_exists {
-            return Err("Both raft-kv and partitioned-raft-kv's data folders exist".into());
-        }
-
-        // v1's data exists, but the engine type is v2
-        if kv_data_exists && self.engine == EngineType::RaftKv2 {
-            info!(
-                "TiKV has data for raft-kv engine but the engine type in config is partitioned-raft-kv. Ignore the config and keep raft-kv instead"
-            );
-            self.engine = EngineType::RaftKv;
-        }
-
-        // if v2's data exists, but the engine type is v1
-        if v2_tablet_exists && self.engine == EngineType::RaftKv {
-            info!(
-                "TiKV has data for partitioned-raft-kv engine but the engine type in config is raft-kv. Ignore the config and keep partitioned-raft-kv instead"
-            );
-            self.engine = EngineType::RaftKv2;
-        }
-        Ok(())
-    }
-
-    pub fn validate(&mut self) -> Result<(), Box<dyn Error>> {
-        self.validate_engine_type()?;
-
         if self.scheduler_concurrency > MAX_SCHED_CONCURRENCY {
             warn!(
                 "TiKV has optimized latch since v4.0, so it is not necessary to set large schedule \
@@ -394,7 +358,6 @@ impl IoRateLimitConfig {
         limiter.set_io_priority(IoType::Gc, self.gc_priority);
         limiter.set_io_priority(IoType::Import, self.import_priority);
         limiter.set_io_priority(IoType::Export, self.export_priority);
-        limiter.set_io_priority(IoType::RewriteLog, self.compaction_priority);
         limiter.set_io_priority(IoType::Other, self.other_priority);
         limiter
     }
@@ -430,8 +393,6 @@ impl IoRateLimitConfig {
 
 #[cfg(test)]
 mod tests {
-    use std::fs;
-
     use super::*;
 
     #[test]
@@ -448,38 +409,6 @@ mod tests {
 
         cfg.scheduler_worker_pool_size = max_pool_size + 1;
         cfg.validate().unwrap_err();
-    }
-
-    #[test]
-    fn test_validate_engine_type_config() {
-        let mut cfg = Config::default();
-        cfg.engine = EngineType::RaftKv;
-        cfg.validate().unwrap();
-        assert_eq!(cfg.engine, EngineType::RaftKv);
-
-        cfg.engine = EngineType::RaftKv2;
-        cfg.validate().unwrap();
-        assert_eq!(cfg.engine, EngineType::RaftKv2);
-
-        let v1_kv_db_path =
-            config::canonicalize_sub_path(&cfg.data_dir, DEFAULT_ROCKSDB_SUB_DIR).unwrap();
-        fs::create_dir_all(&v1_kv_db_path).unwrap();
-        cfg.validate().unwrap();
-        assert_eq!(cfg.engine, EngineType::RaftKv);
-        fs::remove_dir_all(&v1_kv_db_path).unwrap();
-
-        let v2_tablet_path =
-            config::canonicalize_sub_path(&cfg.data_dir, DEFAULT_TABLET_SUB_DIR).unwrap();
-        fs::create_dir_all(&v2_tablet_path).unwrap();
-        cfg.engine = EngineType::RaftKv;
-        cfg.validate().unwrap();
-        assert_eq!(cfg.engine, EngineType::RaftKv2);
-
-        // both v1 and v2 data exists, throw error
-        fs::create_dir_all(&v1_kv_db_path).unwrap();
-        cfg.validate().unwrap_err();
-        fs::remove_dir_all(&v1_kv_db_path).unwrap();
-        fs::remove_dir_all(&v2_tablet_path).unwrap();
     }
 
     #[test]

@@ -18,12 +18,14 @@ use std::{
 use async_compression::{tokio::write::ZstdEncoder, Level};
 use engine_rocks::ReadPerfInstant;
 use engine_traits::{CfName, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
-use futures::{ready, task::Poll, FutureExt};
+use futures::{channel::mpsc, executor::block_on, ready, task::Poll, FutureExt, StreamExt};
 use kvproto::{
     brpb::CompressionType,
     metapb::Region,
     raft_cmdpb::{CmdType, Request},
 };
+use raft::StateRole;
+use raftstore::{coprocessor::RegionInfoProvider, RegionInfo};
 use tikv::storage::CfStatistics;
 use tikv_util::{
     box_err,
@@ -31,6 +33,7 @@ use tikv_util::{
         self_thread_inspector, IoStat, ThreadInspector, ThreadInspectorImpl as OsInspector,
     },
     time::Instant,
+    warn,
     worker::Scheduler,
     Either,
 };
@@ -76,13 +79,72 @@ pub fn redact(key: &impl AsRef<[u8]>) -> log_wrappers::Value<'_> {
     log_wrappers::Value::key(key.as_ref())
 }
 
+/// RegionPager seeks regions with leader role in the range.
+pub struct RegionPager<P> {
+    regions: P,
+    start_key: Vec<u8>,
+    end_key: Vec<u8>,
+    reach_last_region: bool,
+}
+
+impl<P: RegionInfoProvider> RegionPager<P> {
+    pub fn scan_from(regions: P, start_key: Vec<u8>, end_key: Vec<u8>) -> Self {
+        Self {
+            regions,
+            start_key,
+            end_key,
+            reach_last_region: false,
+        }
+    }
+
+    pub fn next_page(&mut self, size: usize) -> Result<Vec<RegionInfo>> {
+        if self.start_key >= self.end_key || self.reach_last_region {
+            return Ok(vec![]);
+        }
+
+        let (mut tx, rx) = mpsc::channel(size);
+        let end_key = self.end_key.clone();
+        self.regions
+            .seek_region(
+                &self.start_key,
+                Box::new(move |i| {
+                    let r = i
+                        .filter(|r| r.role == StateRole::Leader)
+                        .take(size)
+                        .take_while(|r| r.region.start_key < end_key)
+                        .try_for_each(|r| tx.try_send(r.clone()));
+                    if let Err(_err) = r {
+                        warn!("failed to scan region and send to initlizer")
+                    }
+                }),
+            )
+            .map_err(|err| {
+                Error::Other(box_err!(
+                    "failed to seek region for start key {}: {}",
+                    redact(&self.start_key),
+                    err
+                ))
+            })?;
+        let collected_regions = block_on(rx.collect::<Vec<_>>());
+        self.start_key = collected_regions
+            .last()
+            .map(|region| region.region.end_key.to_owned())
+            // no leader region found.
+            .unwrap_or_default();
+        if self.start_key.is_empty() {
+            self.reach_last_region = true;
+        }
+        Ok(collected_regions)
+    }
+}
+
 /// StopWatch is a utility for record time cost in multi-stage tasks.
 /// NOTE: Maybe it should be generic over somewhat Clock type?
 pub struct StopWatch(Instant);
 
 impl StopWatch {
     /// Create a new stopwatch via current time.
-    pub fn by_now() -> Self {
+    pub fn new() -> Self {
         Self(Instant::now_coarse())
     }
 
@@ -253,10 +315,6 @@ impl<K: Ord, V> SegmentMap<K, V> {
     pub fn get_inner(&mut self) -> &mut BTreeMap<K, SegmentValue<K, V>> {
         &mut self.0
     }
-
-    pub fn is_empty(&self) -> bool {
-        self.0.is_empty()
-    }
 }
 
 /// transform a [`RaftCmdRequest`] to `(key, value, cf)` triple.
@@ -381,6 +439,15 @@ pub fn should_track_lock(l: &Lock) -> bool {
 pub struct CallbackWaitGroup {
     running: AtomicUsize,
     on_finish_all: std::sync::Mutex<Vec<Box<dyn FnOnce() + Send + 'static>>>,
+}
+
+/// A shortcut for making an opaque future type for return type or argument
+/// type, which is sendable and not borrowing any variables.  
+///
+/// `fut![T]` == `impl Future<Output = T> + Send + 'static`
+#[macro_export(crate)]
+macro_rules! future {
+    ($t:ty) => { impl core::future::Future<Output = $t> + Send + 'static };
 }
 
 impl CallbackWaitGroup {
@@ -758,15 +825,6 @@ impl<'a> slog::KV for SlogRegion<'a> {
         )?;
         Ok(())
     }
-}
-
-/// A shortcut for making an opaque future type for return type or argument
-/// type, which is sendable and not borrowing any variables.  
-///
-/// `future![T]` == `impl Future<Output = T> + Send + 'static`
-#[macro_export]
-macro_rules! future {
-    ($t:ty) => { impl core::future::Future<Output = $t> + Send + 'static };
 }
 
 pub fn debug_iter<D: std::fmt::Debug>(t: impl Iterator<Item = D>) -> impl std::fmt::Debug {

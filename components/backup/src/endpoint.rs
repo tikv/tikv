@@ -11,7 +11,8 @@ use std::{
 use async_channel::SendError;
 use causal_ts::{CausalTsProvider, CausalTsProviderImpl};
 use concurrency_manager::ConcurrencyManager;
-use engine_traits::{name_to_cf, raw_ttl::ttl_current_ts, CfName, KvEngine, SstCompressionType};
+use engine_rocks::RocksEngine;
+use engine_traits::{name_to_cf, raw_ttl::ttl_current_ts, CfName, SstCompressionType};
 use external_storage::{BackendConfig, HdfsConfig};
 use external_storage_export::{create_storage, ExternalStorage};
 use futures::{channel::mpsc::*, executor::block_on};
@@ -27,7 +28,7 @@ use raftstore::coprocessor::RegionInfoProvider;
 use tikv::{
     config::BackupConfig,
     storage::{
-        kv::{CursorBuilder, Engine, LocalTablets, ScanMode, SnapContext},
+        kv::{CursorBuilder, Engine, ScanMode, SnapContext},
         mvcc::Error as MvccError,
         raw::raw_mvcc::RawMvccSnapshot,
         txn::{EntryBatch, Error as TxnError, SnapshotStore, TxnEntryScanner, TxnEntryStore},
@@ -162,12 +163,12 @@ pub struct BackupRange {
 
 /// The generic saveable writer. for generic `InMemBackupFiles`.
 /// Maybe what we really need is make Writer a trait...
-enum KvWriter<EK: KvEngine> {
-    Txn(BackupWriter<EK>),
-    Raw(BackupRawKvWriter<EK>),
+enum KvWriter {
+    Txn(BackupWriter),
+    Raw(BackupRawKvWriter),
 }
 
-impl<EK: KvEngine> std::fmt::Debug for KvWriter<EK> {
+impl std::fmt::Debug for KvWriter {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Txn(_) => f.debug_tuple("Txn").finish(),
@@ -176,7 +177,7 @@ impl<EK: KvEngine> std::fmt::Debug for KvWriter<EK> {
     }
 }
 
-impl<EK: KvEngine> KvWriter<EK> {
+impl KvWriter {
     async fn save(self, storage: &dyn ExternalStorage) -> Result<Vec<File>> {
         match self {
             Self::Txn(writer) => writer.save(storage).await,
@@ -193,8 +194,8 @@ impl<EK: KvEngine> KvWriter<EK> {
 }
 
 #[derive(Debug)]
-struct InMemBackupFiles<EK: KvEngine> {
-    files: KvWriter<EK>,
+struct InMemBackupFiles {
+    files: KvWriter,
     start_key: Vec<u8>,
     end_key: Vec<u8>,
     start_version: TimeStamp,
@@ -202,8 +203,8 @@ struct InMemBackupFiles<EK: KvEngine> {
     region: Region,
 }
 
-async fn save_backup_file_worker<EK: KvEngine>(
-    rx: async_channel::Receiver<InMemBackupFiles<EK>>,
+async fn save_backup_file_worker(
+    rx: async_channel::Receiver<InMemBackupFiles>,
     tx: UnboundedSender<BackupResponse>,
     storage: Arc<dyn ExternalStorage>,
     codec: KeyValueCodec,
@@ -275,10 +276,10 @@ async fn save_backup_file_worker<EK: KvEngine>(
 
 /// Send the save task to the save worker.
 /// Record the wait time at the same time.
-async fn send_to_worker_with_metrics<EK: KvEngine>(
-    tx: &async_channel::Sender<InMemBackupFiles<EK>>,
-    files: InMemBackupFiles<EK>,
-) -> std::result::Result<(), SendError<InMemBackupFiles<EK>>> {
+async fn send_to_worker_with_metrics(
+    tx: &async_channel::Sender<InMemBackupFiles>,
+    files: InMemBackupFiles,
+) -> std::result::Result<(), SendError<InMemBackupFiles>> {
     let files = match tx.try_send(files) {
         Ok(_) => return Ok(()),
         Err(e) => e.into_inner(),
@@ -293,12 +294,12 @@ impl BackupRange {
     /// Get entries from the scanner and save them to storage
     async fn backup<E: Engine>(
         &self,
-        writer_builder: BackupWriterBuilder<E::Local>,
+        writer_builder: BackupWriterBuilder,
         mut engine: E,
         concurrency_manager: ConcurrencyManager,
         backup_ts: TimeStamp,
         begin_ts: TimeStamp,
-        saver: async_channel::Sender<InMemBackupFiles<E::Local>>,
+        saver: async_channel::Sender<InMemBackupFiles>,
         storage_name: &str,
     ) -> Result<Statistics> {
         assert!(!self.codec.is_raw_kv);
@@ -459,9 +460,9 @@ impl BackupRange {
         Ok(stat)
     }
 
-    fn backup_raw<EK: KvEngine, S: Snapshot>(
+    fn backup_raw<S: Snapshot>(
         &self,
-        writer: &mut BackupRawKvWriter<EK>,
+        writer: &mut BackupRawKvWriter,
         snapshot: &S,
     ) -> Result<Statistics> {
         assert!(self.codec.is_raw_kv);
@@ -523,14 +524,14 @@ impl BackupRange {
     async fn backup_raw_kv_to_file<E: Engine>(
         &self,
         mut engine: E,
-        db: E::Local,
+        db: RocksEngine,
         limiter: &Limiter,
         file_name: String,
         cf: CfNameWrap,
         compression_type: Option<SstCompressionType>,
         compression_level: i32,
         cipher: CipherInfo,
-        saver_tx: async_channel::Sender<InMemBackupFiles<E::Local>>,
+        saver_tx: async_channel::Sender<InMemBackupFiles>,
     ) -> Result<Statistics> {
         let mut writer = match BackupRawKvWriter::new(
             db,
@@ -678,7 +679,7 @@ pub struct Endpoint<E: Engine, R: RegionInfoProvider + Clone + 'static> {
     store_id: u64,
     pool: RefCell<ControlThreadPool>,
     io_pool: Runtime,
-    tablets: LocalTablets<E::Local>,
+    db: RocksEngine,
     config_manager: ConfigManager,
     concurrency_manager: ConcurrencyManager,
     softlimit: SoftLimitKeeper,
@@ -833,7 +834,7 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
         store_id: u64,
         engine: E,
         region_info: R,
-        tablets: LocalTablets<E::Local>,
+        db: RocksEngine,
         config: BackupConfig,
         concurrency_manager: ConcurrencyManager,
         api_version: ApiVersion,
@@ -849,7 +850,7 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
             engine,
             region_info,
             pool: RefCell::new(pool),
-            tablets,
+            db,
             io_pool: rt,
             softlimit,
             config_manager,
@@ -884,14 +885,14 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
         &self,
         prs: Arc<Mutex<Progress<R>>>,
         request: Request,
-        saver_tx: async_channel::Sender<InMemBackupFiles<E::Local>>,
+        saver_tx: async_channel::Sender<InMemBackupFiles>,
         resp_tx: UnboundedSender<BackupResponse>,
         _backend: Arc<dyn ExternalStorage>,
     ) {
         let start_ts = request.start_ts;
         let backup_ts = request.end_ts;
         let engine = self.engine.clone();
-        let tablets = self.tablets.clone();
+        let db = self.db.clone();
         let store_id = self.store_id;
         let concurrency_manager = self.concurrency_manager.clone();
         let batch_size = self.config_manager.0.read().unwrap().batch_size;
@@ -946,19 +947,12 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
                     });
                     let name = backup_file_name(store_id, &brange.region, key, _backend.name());
                     let ct = to_sst_compression_type(request.compression_type);
-                    let db = match tablets.get(brange.region.id) {
-                        Some(t) => t,
-                        None => {
-                            warn!("backup region not found"; "region" => ?brange.region.id);
-                            return;
-                        }
-                    };
 
                     let stat = if is_raw_kv {
                         brange
                             .backup_raw_kv_to_file(
                                 engine,
-                                db.into_owned(),
+                                db.clone(),
                                 &request.limiter,
                                 name,
                                 cf.into(),
@@ -973,7 +967,7 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
                             store_id,
                             request.limiter.clone(),
                             brange.region.clone(),
-                            db.into_owned(),
+                            db.clone(),
                             ct,
                             request.compression_level,
                             sst_max_size,
@@ -1276,7 +1270,6 @@ pub mod tests {
     use tikv::{
         coprocessor::checksum_crc64_xor,
         storage::{
-            kv::LocalTablets,
             txn::tests::{must_commit, must_prewrite_put},
             RocksEngine, TestEngineBuilder,
         },
@@ -1409,7 +1402,7 @@ pub mod tests {
                 1,
                 rocks,
                 MockRegionInfoProvider::new(need_encode_key),
-                LocalTablets::Singleton(db),
+                db,
                 BackupConfig {
                     num_threads: 4,
                     batch_size: 8,

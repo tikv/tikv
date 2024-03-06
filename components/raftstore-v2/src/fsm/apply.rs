@@ -7,16 +7,11 @@ use std::{
 
 use batch_system::{Fsm, FsmScheduler, Mailbox};
 use crossbeam::channel::TryRecvError;
-use engine_traits::{FlushState, KvEngine, SstApplyState, TabletRegistry};
+use engine_traits::{FlushState, KvEngine, TabletRegistry};
 use futures::{compat::Future01CompatExt, FutureExt, StreamExt};
 use kvproto::{metapb, raft_serverpb::RegionLocalState};
-use pd_client::BucketStat;
-use raftstore::{
-    coprocessor::CoprocessorHost,
-    store::{Config, ReadTask},
-};
+use raftstore::store::{Config, ReadTask};
 use slog::Logger;
-use sst_importer::SstImporter;
 use tikv_util::{
     mpsc::future::{self, Receiver, Sender, WakePolicy},
     timer::GLOBAL_TIMER_HANDLE,
@@ -24,10 +19,9 @@ use tikv_util::{
 };
 
 use crate::{
-    operation::{CatchUpLogs, DataTrace},
+    operation::DataTrace,
     raft::Apply,
     router::{ApplyRes, ApplyTask, PeerMsg},
-    worker::checkpoint,
 };
 
 /// A trait for reporting apply result.
@@ -35,8 +29,6 @@ use crate::{
 /// Using a trait to make signiture simpler.
 pub trait ApplyResReporter {
     fn report(&self, apply_res: ApplyRes);
-
-    fn redirect_catch_up_logs(&self, c: CatchUpLogs);
 }
 
 impl<F: Fsm<Message = PeerMsg>, S: FsmScheduler<Fsm = F>> ApplyResReporter for Mailbox<F, S> {
@@ -44,15 +36,9 @@ impl<F: Fsm<Message = PeerMsg>, S: FsmScheduler<Fsm = F>> ApplyResReporter for M
         // TODO: check shutdown.
         let _ = self.force_send(PeerMsg::ApplyRes(apply_res));
     }
-
-    fn redirect_catch_up_logs(&self, c: CatchUpLogs) {
-        let msg = PeerMsg::RedirectCatchUpLogs(c);
-        let _ = self.force_send(msg);
-    }
 }
 
 /// Schedule task to `ApplyFsm`.
-#[derive(Clone)]
 pub struct ApplyScheduler {
     sender: Sender<ApplyTask>,
 }
@@ -78,14 +64,9 @@ impl<EK: KvEngine, R> ApplyFsm<EK, R> {
         res_reporter: R,
         tablet_registry: TabletRegistry<EK>,
         read_scheduler: Scheduler<ReadTask<EK>>,
-        checkpoint_scheduler: Scheduler<checkpoint::Task<EK>>,
         flush_state: Arc<FlushState>,
-        sst_apply_state: SstApplyState,
         log_recovery: Option<Box<DataTrace>>,
         applied_term: u64,
-        buckets: Option<BucketStat>,
-        sst_importer: Arc<SstImporter>,
-        coprocessor_host: CoprocessorHost<EK>,
         logger: Logger,
     ) -> (ApplyScheduler, Self) {
         let (tx, rx) = future::unbounded(WakePolicy::Immediately);
@@ -97,13 +78,8 @@ impl<EK: KvEngine, R> ApplyFsm<EK, R> {
             tablet_registry,
             read_scheduler,
             flush_state,
-            sst_apply_state,
             log_recovery,
             applied_term,
-            buckets,
-            sst_importer,
-            coprocessor_host,
-            checkpoint_scheduler,
             logger,
         );
         (
@@ -144,12 +120,6 @@ impl<EK: KvEngine, R: ApplyResReporter> ApplyFsm<EK, R> {
                     ApplyTask::Snapshot(snap_task) => self.apply.schedule_gen_snapshot(snap_task),
                     ApplyTask::UnsafeWrite(raw_write) => self.apply.apply_unsafe_write(raw_write),
                     ApplyTask::ManualFlush => self.apply.on_manual_flush().await,
-                    ApplyTask::RefreshBucketStat(bucket_meta) => {
-                        self.apply.on_refresh_buckets(bucket_meta)
-                    }
-                    ApplyTask::CaptureApply(capture_change) => {
-                        self.apply.on_capture_apply(capture_change)
-                    }
                 }
 
                 self.apply.maybe_flush().await;

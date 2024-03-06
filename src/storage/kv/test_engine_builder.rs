@@ -103,33 +103,25 @@ impl TestEngineBuilder {
             .map(|cf| match *cf {
                 CF_DEFAULT => (
                     CF_DEFAULT,
-                    cfg_rocksdb.defaultcf.build_opt(
-                        &shared,
-                        None,
-                        api_version,
-                        None,
-                        EngineType::RaftKv,
-                    ),
+                    cfg_rocksdb
+                        .defaultcf
+                        .build_opt(&shared, None, api_version, EngineType::RaftKv),
                 ),
                 CF_LOCK => (
                     CF_LOCK,
-                    cfg_rocksdb
-                        .lockcf
-                        .build_opt(&shared, None, EngineType::RaftKv),
+                    cfg_rocksdb.lockcf.build_opt(&shared, EngineType::RaftKv),
                 ),
                 CF_WRITE => (
                     CF_WRITE,
                     cfg_rocksdb
                         .writecf
-                        .build_opt(&shared, None, None, EngineType::RaftKv),
+                        .build_opt(&shared, None, EngineType::RaftKv),
                 ),
                 CF_RAFT => (CF_RAFT, cfg_rocksdb.raftcf.build_opt(&shared)),
                 _ => (*cf, RocksCfOptions::default()),
             })
             .collect();
-        let resources = cfg_rocksdb.build_resources(Default::default());
-        let db_opts = cfg_rocksdb.build_opt(&resources, EngineType::RaftKv);
-        let engine = RocksEngine::new(&path, Some(db_opts), cfs_opts, self.io_rate_limiter)?;
+        let engine = RocksEngine::new(&path, None, cfs_opts, self.io_rate_limiter)?;
         Ok(engine)
     }
 }

@@ -52,7 +52,6 @@ where
             Mutation::make_put(Key::from_raw(k), v.clone()),
             &None,
             SkipPessimisticCheck,
-            None,
         )
         .unwrap();
     }
@@ -101,7 +100,6 @@ fn txn_prewrite<E: Engine, F: EngineFactory<E>>(b: &mut Bencher<'_>, config: &Be
                     mutation,
                     &None,
                     SkipPessimisticCheck,
-                    None,
                 )
                 .unwrap();
                 let write_data = WriteData::from_modifies(txn.into_modifies());

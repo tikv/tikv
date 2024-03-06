@@ -12,9 +12,9 @@ http = "0.2.0"
 hyper = "0.14"
 hyper-tls = "0.5"
 kvproto = { workspace = true }
-slog = { workspace = true }
+slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
 # better to not use slog-global, but pass in the logger
-slog-global = { workspace = true }
+slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }
 tame-gcs = { version = "0.10", features = ["async-multipart"] }
 tame-oauth = "0.4.7"
 tikv_util = { workspace = true }

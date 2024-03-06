@@ -15,19 +15,17 @@ fn test_split() {
     let store_id = cluster.node(0).id();
     let raft_engine = cluster.node(0).running_state().unwrap().raft_engine.clone();
     let router = &mut cluster.routers[0];
+    // let factory = cluster.node(0).tablet_factory();
 
-    let region_2 = 2;
-    let region = router.region_detail(region_2);
-    let peer = region.get_peers()[0].clone();
-    router.wait_applied_to_current_term(region_2, Duration::from_secs(3));
+    let region_id = 2;
+    let peer = new_peer(store_id, 3);
+    let region = router.region_detail(region_id);
+    router.wait_applied_to_current_term(2, Duration::from_secs(3));
 
-    // Region 2 ["", ""]
-    //   -> Region 2    ["", "k22"]
+    // Region 2 ["", ""] peer(1, 3)
+    //   -> Region 2    ["", "k22"] peer(1, 3)
     //      Region 1000 ["k22", ""] peer(1, 10)
-    let region_state = raft_engine
-        .get_region_state(region_2, u64::MAX)
-        .unwrap()
-        .unwrap();
+    let region_state = raft_engine.get_region_state(2, u64::MAX).unwrap().unwrap();
     assert_eq!(region_state.get_tablet_index(), RAFT_INIT_LOG_INDEX);
     let (left, mut right) = split_region(
         router,
@@ -41,32 +39,26 @@ fn test_split() {
         b"k22",
         false,
     );
-    let region_state = raft_engine
-        .get_region_state(region_2, u64::MAX)
-        .unwrap()
-        .unwrap();
+    let region_state = raft_engine.get_region_state(2, u64::MAX).unwrap().unwrap();
     assert_ne!(region_state.get_tablet_index(), RAFT_INIT_LOG_INDEX);
     assert_eq!(
         region_state.get_region().get_region_epoch().get_version(),
         INIT_EPOCH_VER + 1
     );
     let region_state0 = raft_engine
-        .get_region_state(region_2, region_state.get_tablet_index())
+        .get_region_state(2, region_state.get_tablet_index())
         .unwrap()
         .unwrap();
     assert_eq!(region_state, region_state0);
-    let flushed_index = raft_engine
-        .get_flushed_index(region_2, CF_RAFT)
-        .unwrap()
-        .unwrap();
+    let flushed_index = raft_engine.get_flushed_index(2, CF_RAFT).unwrap().unwrap();
     assert!(
         flushed_index >= region_state.get_tablet_index(),
         "{flushed_index} >= {}",
         region_state.get_tablet_index()
     );
 
-    // Region 2 ["", "k22"]
-    //   -> Region 2    ["", "k11"]
+    // Region 2 ["", "k22"] peer(1, 3)
+    //   -> Region 2    ["", "k11"]    peer(1, 3)
     //      Region 1001 ["k11", "k22"] peer(1, 11)
     let _ = split_region(
         router,
@@ -80,10 +72,7 @@ fn test_split() {
         b"k11",
         false,
     );
-    let region_state = raft_engine
-        .get_region_state(region_2, u64::MAX)
-        .unwrap()
-        .unwrap();
+    let region_state = raft_engine.get_region_state(2, u64::MAX).unwrap().unwrap();
     assert_ne!(
         region_state.get_tablet_index(),
         region_state0.get_tablet_index()
@@ -93,14 +82,11 @@ fn test_split() {
         INIT_EPOCH_VER + 2
     );
     let region_state1 = raft_engine
-        .get_region_state(region_2, region_state.get_tablet_index())
+        .get_region_state(2, region_state.get_tablet_index())
         .unwrap()
         .unwrap();
     assert_eq!(region_state, region_state1);
-    let flushed_index = raft_engine
-        .get_flushed_index(region_2, CF_RAFT)
-        .unwrap()
-        .unwrap();
+    let flushed_index = raft_engine.get_flushed_index(2, CF_RAFT).unwrap().unwrap();
     assert!(
         flushed_index >= region_state.get_tablet_index(),
         "{flushed_index} >= {}",
@@ -110,9 +96,8 @@ fn test_split() {
     // Region 1000 ["k22", ""] peer(1, 10)
     //   -> Region 1000 ["k22", "k33"] peer(1, 10)
     //      Region 1002 ["k33", ""]    peer(1, 12)
-    let region_1000 = 1000;
     let region_state = raft_engine
-        .get_region_state(region_1000, u64::MAX)
+        .get_region_state(1000, u64::MAX)
         .unwrap()
         .unwrap();
     assert_eq!(region_state.get_tablet_index(), RAFT_INIT_LOG_INDEX);
@@ -130,7 +115,7 @@ fn test_split() {
     )
     .1;
     let region_state = raft_engine
-        .get_region_state(region_1000, u64::MAX)
+        .get_region_state(1000, u64::MAX)
         .unwrap()
         .unwrap();
     assert_ne!(region_state.get_tablet_index(), RAFT_INIT_LOG_INDEX);
@@ -139,21 +124,17 @@ fn test_split() {
         INIT_EPOCH_VER + 2
     );
     let region_state2 = raft_engine
-        .get_region_state(region_1000, region_state.get_tablet_index())
+        .get_region_state(1000, region_state.get_tablet_index())
         .unwrap()
         .unwrap();
     assert_eq!(region_state, region_state2);
-    let flushed_index = raft_engine
-        .get_flushed_index(region_1000, CF_RAFT)
-        .unwrap()
-        .unwrap();
+    let flushed_index = raft_engine.get_flushed_index(2, CF_RAFT).unwrap().unwrap();
     assert!(
         flushed_index >= region_state.get_tablet_index(),
         "{flushed_index} >= {}",
         region_state.get_tablet_index()
     );
 
-    // 1002 -> 1002, 1003
     let split_key = Key::from_raw(b"k44").append_ts(TimeStamp::zero());
     let actual_split_key = split_key.clone().truncate_ts().unwrap();
     split_region(

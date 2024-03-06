@@ -72,7 +72,6 @@ pub enum IoType {
     Gc = 8,
     Import = 9,
     Export = 10,
-    RewriteLog = 11,
 }
 
 impl IoType {
@@ -89,7 +88,6 @@ impl IoType {
             IoType::Gc => "gc",
             IoType::Import => "import",
             IoType::Export => "export",
-            IoType::RewriteLog => "log_rewrite",
         }
     }
 }
@@ -147,13 +145,8 @@ impl IoPriority {
         }
     }
 
-    fn from_u32(i: u32) -> Self {
-        match i {
-            0 => IoPriority::Low,
-            1 => IoPriority::Medium,
-            2 => IoPriority::High,
-            _ => panic!("unknown io priority {}", i),
-        }
+    fn unsafe_from_u32(i: u32) -> Self {
+        unsafe { std::mem::transmute(i) }
     }
 }
 

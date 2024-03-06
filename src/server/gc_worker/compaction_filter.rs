@@ -14,8 +14,9 @@ use std::{
 
 use engine_rocks::{
     raw::{
-        CompactionFilter, CompactionFilterContext, CompactionFilterDecision,
-        CompactionFilterFactory, CompactionFilterValueType,
+        new_compaction_filter_raw, CompactionFilter, CompactionFilterContext,
+        CompactionFilterDecision, CompactionFilterFactory, CompactionFilterValueType,
+        DBCompactionFilter,
     },
     RocksEngine, RocksMvccProperties, RocksWriteBatchVec,
 };
@@ -198,23 +199,21 @@ impl CompactionFilterInitializer<RocksEngine> for Option<RocksEngine> {
 pub struct WriteCompactionFilterFactory;
 
 impl CompactionFilterFactory for WriteCompactionFilterFactory {
-    type Filter = WriteCompactionFilter;
-
     fn create_compaction_filter(
         &self,
         context: &CompactionFilterContext,
-    ) -> Option<(CString, Self::Filter)> {
+    ) -> *mut DBCompactionFilter {
         let gc_context_option = GC_CONTEXT.lock().unwrap();
         let gc_context = match *gc_context_option {
             Some(ref ctx) => ctx,
-            None => return None,
+            None => return std::ptr::null_mut(),
         };
 
         let safe_point = gc_context.safe_point.load(Ordering::Relaxed);
         if safe_point == 0 {
             // Safe point has not been initialized yet.
             debug!("skip gc in compaction filter because of no safe point");
-            return None;
+            return std::ptr::null_mut();
         }
 
         let (enable, skip_vcheck, ratio_threshold) = {
@@ -242,12 +241,12 @@ impl CompactionFilterFactory for WriteCompactionFilterFactory {
             .map_or(false, RocksEngine::is_stalled_or_stopped)
         {
             debug!("skip gc in compaction filter because the DB is stalled");
-            return None;
+            return std::ptr::null_mut();
         }
 
         if !do_check_allowed(enable, skip_vcheck, &gc_context.feature_gate) {
             debug!("skip gc in compaction filter because it's not allowed");
-            return None;
+            return std::ptr::null_mut();
         }
         drop(gc_context_option);
         GC_COMPACTION_FILTER_PERFORM
@@ -258,7 +257,7 @@ impl CompactionFilterFactory for WriteCompactionFilterFactory {
             GC_COMPACTION_FILTER_SKIP
                 .with_label_values(&[STAT_TXN_KEYMODE])
                 .inc();
-            return None;
+            return std::ptr::null_mut();
         }
 
         debug!(
@@ -276,7 +275,7 @@ impl CompactionFilterFactory for WriteCompactionFilterFactory {
             (store_id, region_info_provider),
         );
         let name = CString::new("write_compaction_filter").unwrap();
-        Some((name, filter))
+        unsafe { new_compaction_filter_raw(name, filter) }
     }
 }
 
@@ -327,7 +326,7 @@ impl<B: WriteBatch> DeleteBatch<B> {
     }
 }
 
-pub struct WriteCompactionFilter {
+struct WriteCompactionFilter {
     safe_point: u64,
     engine: Option<RocksEngine>,
     is_bottommost_level: bool,
@@ -880,7 +879,7 @@ pub mod test_utils {
             self
         }
 
-        pub fn prepare_gc(&self, engine: &RocksEngine) {
+        fn prepare_gc(&self, engine: &RocksEngine) {
             let safe_point = Arc::new(AtomicU64::new(self.safe_point));
             let cfg_tracker = {
                 let mut cfg = GcConfig::default();
@@ -909,7 +908,7 @@ pub mod test_utils {
             });
         }
 
-        pub fn post_gc(&mut self) {
+        fn post_gc(&mut self) {
             self.callbacks_on_drop.clear();
             let mut gc_context = GC_CONTEXT.lock().unwrap();
             let callbacks = &mut gc_context.as_mut().unwrap().callbacks_on_drop;
@@ -1068,7 +1067,7 @@ pub mod tests {
 
             // Wait up to 1 second, and treat as no task if timeout.
             if let Ok(Some(task)) = gc_runner.gc_receiver.recv_timeout(Duration::new(1, 0)) {
-                assert!(expect_tasks, "unexpected GC task");
+                assert!(expect_tasks, "a GC task is expected");
                 match task {
                     GcTask::GcKeys { keys, .. } => {
                         assert_eq!(keys.len(), 1);
@@ -1080,7 +1079,7 @@ pub mod tests {
                 }
                 return;
             }
-            assert!(!expect_tasks, "no GC task after 1 second");
+            assert!(!expect_tasks, "no GC task is expected");
         };
 
         // No key switch after the deletion mark.

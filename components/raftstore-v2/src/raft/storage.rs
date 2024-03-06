@@ -318,35 +318,28 @@ mod tests {
 
     use engine_test::{
         ctor::{CfOptions, DbOptions},
-        kv::{KvTestEngine, TestTabletFactory},
+        kv::TestTabletFactory,
     };
     use engine_traits::{
-        FlushState, RaftEngine, RaftLogBatch, SstApplyState, TabletContext, TabletRegistry,
-        DATA_CFS,
+        FlushState, RaftEngine, RaftLogBatch, TabletContext, TabletRegistry, DATA_CFS,
     };
     use kvproto::{
         metapb::{Peer, Region},
         raft_serverpb::PeerState,
     };
     use raft::{Error as RaftError, StorageError};
-    use raftstore::{
-        coprocessor::CoprocessorHost,
-        store::{
-            util::new_empty_snapshot, write_to_db_for_test, AsyncReadNotifier, Config, FetchedLogs,
-            GenSnapRes, ReadRunner, TabletSnapKey, TabletSnapManager, WriteTask,
-            RAFT_INIT_LOG_INDEX, RAFT_INIT_LOG_TERM,
-        },
+    use raftstore::store::{
+        util::new_empty_snapshot, write_to_db_for_test, AsyncReadNotifier, Config, FetchedLogs,
+        GenSnapRes, ReadRunner, TabletSnapKey, TabletSnapManager, WriteTask, RAFT_INIT_LOG_INDEX,
+        RAFT_INIT_LOG_TERM,
     };
     use slog::o;
     use tempfile::TempDir;
-    use tikv_util::worker::{dummy_scheduler, Worker};
+    use tikv_util::worker::Worker;
 
     use super::*;
     use crate::{
-        fsm::ApplyResReporter,
-        operation::{test_util::create_tmp_importer, write_initial_states, CatchUpLogs},
-        raft::Apply,
-        router::ApplyRes,
+        fsm::ApplyResReporter, operation::write_initial_states, raft::Apply, router::ApplyRes,
     };
 
     #[derive(Clone)]
@@ -373,7 +366,6 @@ mod tests {
 
     impl ApplyResReporter for TestRouter {
         fn report(&self, _res: ApplyRes) {}
-        fn redirect_catch_up_logs(&self, _c: CatchUpLogs) {}
     }
 
     fn new_region() -> Region {
@@ -399,8 +391,7 @@ mod tests {
     fn test_apply_snapshot() {
         let region = new_region();
         let path = TempDir::new().unwrap();
-        let mgr =
-            TabletSnapManager::new(path.path().join("snap_dir").to_str().unwrap(), None).unwrap();
+        let mgr = TabletSnapManager::new(path.path().join("snap_dir").to_str().unwrap()).unwrap();
         let engines = engine_test::new_temp_engine(&path);
         let raft_engine = engines.raft.clone();
         let mut wb = raft_engine.log_batch(10);
@@ -439,7 +430,7 @@ mod tests {
             .unwrap();
         let snapshot = new_empty_snapshot(region.clone(), snap_index, snap_term, false);
         let mut task = WriteTask::new(region.get_id(), 5, 1);
-        s.apply_snapshot(&snapshot, &mut task, &mgr, &reg, None)
+        s.apply_snapshot(&snapshot, &mut task, mgr, reg.clone())
             .unwrap();
         // Add more entries to check if old entries are cleared. If not, it should panic
         // with memtable hole when using raft engine.
@@ -483,8 +474,7 @@ mod tests {
         write_initial_states(&mut wb, region.clone()).unwrap();
         assert!(!wb.is_empty());
         raft_engine.consume(&mut wb, true).unwrap();
-        let mgr =
-            TabletSnapManager::new(path.path().join("snap_dir").to_str().unwrap(), None).unwrap();
+        let mgr = TabletSnapManager::new(path.path().join("snap_dir").to_str().unwrap()).unwrap();
         // building a tablet factory
         let ops = DbOptions::default();
         let cf_opts = DATA_CFS.iter().map(|cf| (*cf, CfOptions::new())).collect();
@@ -505,10 +495,6 @@ mod tests {
         worker.start(read_runner);
         let mut state = RegionLocalState::default();
         state.set_region(region.clone());
-        let (_tmp_dir, importer) = create_tmp_importer();
-        let host = CoprocessorHost::<KvTestEngine>::default();
-
-        let (dummy_scheduler, _) = dummy_scheduler();
         // setup peer applyer
         let mut apply = Apply::new(
             &Config::default(),
@@ -518,13 +504,8 @@ mod tests {
             reg,
             sched,
             Arc::new(FlushState::new(5)),
-            SstApplyState::default(),
             None,
             5,
-            None,
-            importer,
-            host,
-            dummy_scheduler,
             logger,
         );
 
