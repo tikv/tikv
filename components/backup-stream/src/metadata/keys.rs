@@ -2,7 +2,7 @@
 
 use kvproto::metapb::Region;
 
-pub(super) const PREFIX: &str = "/tidb/br-stream";
+const PREFIX: &str = "/tidb/br-stream";
 const PATH_INFO: &str = "/info";
 const PATH_NEXT_BACKUP_TS: &str = "/checkpoint";
 const PATH_STORAGE_CHECKPOINT: &str = "/storage-checkpoint";
@@ -28,26 +28,17 @@ const TASKS_PREFIX: &str = "/tidb/br-stream/info/";
 /// For the storage checkpoint ts of tasks:
 /// <PREFIX>/storage-checkpoint/<task_name>/<store_id(u64,be)> -> <ts(u64,be)>
 /// ```
-#[derive(Clone, Eq, PartialEq)]
+#[derive(Clone)]
 pub struct MetaKey(pub Vec<u8>);
 
 /// A simple key value pair of metadata.
-#[derive(Clone, Eq, PartialEq)]
+#[derive(Clone, Debug)]
 pub struct KeyValue(pub MetaKey, pub Vec<u8>);
-
-impl std::fmt::Debug for KeyValue {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_tuple("KV")
-            .field(&self.0)
-            .field(&format_args!("{}", self.1.escape_ascii()))
-            .finish()
-    }
-}
 
 impl std::fmt::Debug for MetaKey {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_tuple("K")
-            .field(&format_args!("{}", self.0.escape_ascii()))
+        f.debug_tuple("MetaKey")
+            .field(&self.0.escape_ascii())
             .finish()
     }
 }
@@ -167,10 +158,6 @@ impl MetaKey {
         Self(format!("{}{}/{}", PREFIX, PATH_PAUSE, name).into_bytes())
     }
 
-    pub fn last_errors_of(name: &str) -> Self {
-        Self(format!("{}{}/{}", PREFIX, PATH_LAST_ERROR, name).into_bytes())
-    }
-
     pub fn last_error_of(name: &str, store: u64) -> Self {
         Self(format!("{}{}/{}/{}", PREFIX, PATH_LAST_ERROR, name, store).into_bytes())
     }
@@ -190,7 +177,16 @@ impl MetaKey {
     /// return the key that keeps the range [self, self.next_prefix()) contains
     /// all keys with the prefix `self`.
     pub fn next_prefix(&self) -> Self {
-        Self(tikv_util::codec::next_prefix_of(self.0.clone()))
+        let mut next_prefix = self.clone();
+        for i in (0..next_prefix.0.len()).rev() {
+            if next_prefix.0[i] == u8::MAX {
+                next_prefix.0.pop();
+            } else {
+                next_prefix.0[i] += 1;
+                break;
+            }
+        }
+        next_prefix
     }
 }
 

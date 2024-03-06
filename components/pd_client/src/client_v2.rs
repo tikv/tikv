@@ -117,7 +117,7 @@ impl RawClient {
 
     /// Returns Ok(true) when a new connection is established.
     async fn maybe_reconnect(&mut self, ctx: &ConnectContext, force: bool) -> Result<bool> {
-        PD_RECONNECT_COUNTER_VEC.try_connect.inc();
+        PD_RECONNECT_COUNTER_VEC.with_label_values(&["try"]).inc();
         let start = Instant::now();
 
         let members = self.members.clone();
@@ -135,15 +135,21 @@ impl RawClient {
             .await
         {
             Err(e) => {
-                PD_RECONNECT_COUNTER_VEC.failure.inc();
+                PD_RECONNECT_COUNTER_VEC
+                    .with_label_values(&["failure"])
+                    .inc();
                 return Err(e);
             }
             Ok(None) => {
-                PD_RECONNECT_COUNTER_VEC.no_need.inc();
+                PD_RECONNECT_COUNTER_VEC
+                    .with_label_values(&["no-need"])
+                    .inc();
                 return Ok(false);
             }
             Ok(Some(tuple)) => {
-                PD_RECONNECT_COUNTER_VEC.success.inc();
+                PD_RECONNECT_COUNTER_VEC
+                    .with_label_values(&["success"])
+                    .inc();
                 tuple
             }
         };
@@ -239,9 +245,8 @@ impl CachedRawClient {
         let latest_version = {
             let mut latest = self.core.latest.lock().unwrap();
             *latest = self.cache.clone();
-            let v = self.core.version.fetch_add(1, Ordering::Relaxed) + 1;
             let _ = self.core.on_reconnect_tx.send(());
-            v
+            self.core.version.fetch_add(1, Ordering::Relaxed) + 1
         };
         debug_assert!(self.cache_version < latest_version);
         self.cache_version = latest_version;
@@ -510,29 +515,6 @@ impl RpcClient {
     }
 }
 
-async fn get_region_resp_by_id(
-    mut raw_client: CachedRawClient,
-    region_id: u64,
-) -> Result<pdpb::GetRegionResponse> {
-    let timer = Instant::now_coarse();
-    let mut req = pdpb::GetRegionByIdRequest::default();
-    req.set_region_id(region_id);
-    raw_client.wait_for_ready().await?;
-    req.set_header(raw_client.header());
-    let resp = raw_client
-        .stub()
-        .get_region_by_id_async_opt(&req, raw_client.call_option().timeout(request_timeout()))
-        .unwrap_or_else(|e| {
-            panic!("fail to request PD {} err {:?}", "get_region_by_id", e);
-        })
-        .await;
-    PD_REQUEST_HISTOGRAM_VEC
-        .get_region_by_id
-        .observe(timer.saturating_elapsed_secs());
-    let resp = raw_client.check_resp(resp)?;
-    check_resp_header(resp.get_header())?;
-    Ok(resp)
-}
 pub trait PdClient {
     type ResponseChannel<R: Debug>: Stream<Item = Result<R>>;
 
@@ -601,8 +583,6 @@ pub trait PdClient {
     }
 
     fn get_region_by_id(&mut self, region_id: u64) -> PdFuture<Option<metapb::Region>>;
-
-    fn get_buckets_by_id(&self, region_id: u64) -> PdFuture<Option<metapb::Buckets>>;
 
     fn get_region_leader_by_id(
         &mut self,
@@ -1065,22 +1045,31 @@ impl PdClient for RpcClient {
         })
     }
 
-    fn get_buckets_by_id(&self, region_id: u64) -> PdFuture<Option<metapb::Buckets>> {
-        let pd_client = self.raw_client.clone();
-        Box::pin(async move {
-            let mut resp = get_region_resp_by_id(pd_client, region_id).await?;
-            if resp.has_buckets() {
-                Ok(Some(resp.take_buckets()))
-            } else {
-                Ok(None)
-            }
-        })
-    }
-
     fn get_region_by_id(&mut self, region_id: u64) -> PdFuture<Option<metapb::Region>> {
-        let pd_client = self.raw_client.clone();
+        let timer = Instant::now_coarse();
+
+        let mut req = pdpb::GetRegionByIdRequest::default();
+        req.set_region_id(region_id);
+
+        let mut raw_client = self.raw_client.clone();
         Box::pin(async move {
-            let mut resp = get_region_resp_by_id(pd_client, region_id).await?;
+            raw_client.wait_for_ready().await?;
+            req.set_header(raw_client.header());
+            let resp = raw_client
+                .stub()
+                .get_region_by_id_async_opt(
+                    &req,
+                    raw_client.call_option().timeout(request_timeout()),
+                )
+                .unwrap_or_else(|e| {
+                    panic!("fail to request PD {} err {:?}", "get_region_by_id", e);
+                })
+                .await;
+            PD_REQUEST_HISTOGRAM_VEC
+                .get_region_by_id
+                .observe(timer.saturating_elapsed_secs());
+            let mut resp = raw_client.check_resp(resp)?;
+            check_resp_header(resp.get_header())?;
             if resp.has_region() {
                 Ok(Some(resp.take_region()))
             } else {
@@ -1093,9 +1082,33 @@ impl PdClient for RpcClient {
         &mut self,
         region_id: u64,
     ) -> PdFuture<Option<(metapb::Region, metapb::Peer)>> {
-        let pd_client = self.raw_client.clone();
+        let timer = Instant::now_coarse();
+
+        let mut req = pdpb::GetRegionByIdRequest::default();
+        req.set_region_id(region_id);
+
+        let mut raw_client = self.raw_client.clone();
         Box::pin(async move {
-            let mut resp = get_region_resp_by_id(pd_client, region_id).await?;
+            raw_client.wait_for_ready().await?;
+            req.set_header(raw_client.header());
+            let resp = raw_client
+                .stub()
+                .get_region_by_id_async_opt(
+                    &req,
+                    raw_client.call_option().timeout(request_timeout()),
+                )
+                .unwrap_or_else(|e| {
+                    panic!(
+                        "fail to request PD {} err {:?}",
+                        "get_region_leader_by_id", e
+                    );
+                })
+                .await;
+            PD_REQUEST_HISTOGRAM_VEC
+                .get_region_leader_by_id
+                .observe(timer.saturating_elapsed_secs());
+            let mut resp = raw_client.check_resp(resp)?;
+            check_resp_header(resp.get_header())?;
             if resp.has_region() && resp.has_leader() {
                 Ok(Some((resp.take_region(), resp.take_leader())))
             } else {

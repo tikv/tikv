@@ -21,11 +21,7 @@ use tikv::{
     server::Config,
     storage::TestEngineBuilder,
 };
-use tikv_util::{
-    codec::number::*,
-    config::{ReadableDuration, ReadableSize},
-    HandyRwLock,
-};
+use tikv_util::{codec::number::*, config::ReadableSize};
 use tipb::{
     AnalyzeColumnsReq, AnalyzeReq, AnalyzeType, ChecksumRequest, Chunk, Expr, ExprType,
     ScalarFuncSig, SelectResponse,
@@ -230,44 +226,6 @@ fn test_select_after_lease() {
     }
 }
 
-/// If a failed read should not trigger panic.
-#[test]
-fn test_select_failed() {
-    let mut cluster = test_raftstore::new_server_cluster(0, 3);
-    cluster.cfg.raft_store.check_leader_lease_interval = ReadableDuration::hours(10);
-    cluster.run();
-    // make sure leader has been elected.
-    assert_eq!(cluster.must_get(b""), None);
-    let region = cluster.get_region(b"");
-    let leader = cluster.leader_of_region(region.get_id()).unwrap();
-    let engine = cluster.sim.rl().storages[&leader.get_id()].clone();
-    let mut ctx = Context::default();
-    ctx.set_region_id(region.get_id());
-    ctx.set_region_epoch(region.get_region_epoch().clone());
-    ctx.set_peer(leader);
-
-    let product = ProductTable::new();
-    let (_, endpoint, _) =
-        init_data_with_engine_and_commit(ctx.clone(), engine, &product, &[], true);
-
-    // Sleep until the leader lease is expired.
-    thread::sleep(
-        cluster.cfg.raft_store.raft_heartbeat_interval()
-            * cluster.cfg.raft_store.raft_election_timeout_ticks as u32
-            * 2,
-    );
-    for id in 1..=3 {
-        if id != ctx.get_peer().get_store_id() {
-            cluster.stop_node(id);
-        }
-    }
-    let req = DagSelect::from(&product).build_with(ctx.clone(), &[0]);
-    let f = endpoint.parse_and_handle_unary_request(req, None);
-    cluster.stop_node(ctx.get_peer().get_store_id());
-    drop(cluster);
-    let _ = futures::executor::block_on(f);
-}
-
 #[test]
 fn test_scan_detail() {
     let data = vec![
@@ -303,7 +261,6 @@ fn test_scan_detail() {
         assert_eq!(scan_detail.get_lock().get_total(), 1);
 
         assert!(resp.get_exec_details_v2().has_time_detail());
-        assert!(resp.get_exec_details_v2().has_time_detail_v2());
         let scan_detail_v2 = resp.get_exec_details_v2().get_scan_detail_v2();
         assert_eq!(scan_detail_v2.get_total_versions(), 5);
         assert_eq!(scan_detail_v2.get_processed_versions(), 4);
@@ -1018,7 +975,6 @@ fn test_del_select() {
     assert_eq!(row_count, 5);
 
     assert!(resp.get_exec_details_v2().has_time_detail());
-    assert!(resp.get_exec_details_v2().has_time_detail_v2());
     let scan_detail_v2 = resp.get_exec_details_v2().get_scan_detail_v2();
     assert_eq!(scan_detail_v2.get_total_versions(), 8);
     assert_eq!(scan_detail_v2.get_processed_versions(), 5);
@@ -1724,7 +1680,6 @@ fn test_exec_details() {
     assert!(resp.has_exec_details_v2());
     let exec_details = resp.get_exec_details_v2();
     assert!(exec_details.has_time_detail());
-    assert!(exec_details.has_time_detail_v2());
     assert!(exec_details.has_scan_detail_v2());
 }
 

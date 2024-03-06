@@ -25,7 +25,6 @@ mod rocksdb_engine;
 mod stats;
 
 use std::{
-    borrow::Cow,
     cell::UnsafeCell,
     error,
     num::NonZeroU64,
@@ -36,15 +35,14 @@ use std::{
 
 use collections::HashMap;
 use engine_traits::{
-    CfName, IterOptions, KvEngine as LocalEngine, Mutable, MvccProperties, ReadOptions,
-    TabletRegistry, WriteBatch, CF_DEFAULT, CF_LOCK,
+    CfName, IterOptions, KvEngine as LocalEngine, Mutable, MvccProperties, ReadOptions, WriteBatch,
+    CF_DEFAULT, CF_LOCK,
 };
 use error_code::{self, ErrorCode, ErrorCodeExt};
 use futures::{compat::Future01CompatExt, future::BoxFuture, prelude::*};
 use into_other::IntoOther;
 use kvproto::{
     errorpb::Error as ErrorHeader,
-    import_sstpb::SstMeta,
     kvrpcpb::{Context, DiskFullOpt, ExtraOp as TxnExtraOp, KeyRange},
     raft_cmdpb,
 };
@@ -82,7 +80,6 @@ pub enum Modify {
     PessimisticLock(Key, PessimisticLock),
     // cf_name, start_key, end_key, notify_only
     DeleteRange(CfName, Key, Key, bool),
-    Ingest(Box<SstMeta>),
 }
 
 impl Modify {
@@ -91,7 +88,7 @@ impl Modify {
             Modify::Delete(cf, _) => cf,
             Modify::Put(cf, ..) => cf,
             Modify::PessimisticLock(..) => &CF_LOCK,
-            Modify::DeleteRange(..) | Modify::Ingest(_) => unreachable!(),
+            Modify::DeleteRange(..) => unreachable!(),
         };
         let cf_size = if cf == &CF_DEFAULT { 0 } else { cf.len() };
 
@@ -99,7 +96,7 @@ impl Modify {
             Modify::Delete(_, k) => cf_size + k.as_encoded().len(),
             Modify::Put(_, k, v) => cf_size + k.as_encoded().len() + v.len(),
             Modify::PessimisticLock(k, _) => cf_size + k.as_encoded().len(), // FIXME: inaccurate
-            Modify::DeleteRange(..) | Modify::Ingest(_) => unreachable!(),
+            Modify::DeleteRange(..) => unreachable!(),
         }
     }
 
@@ -108,7 +105,7 @@ impl Modify {
             Modify::Delete(_, ref k) => k,
             Modify::Put(_, ref k, _) => k,
             Modify::PessimisticLock(ref k, _) => k,
-            Modify::DeleteRange(..) | Modify::Ingest(_) => unreachable!(),
+            Modify::DeleteRange(..) => unreachable!(),
         }
     }
 }
@@ -154,10 +151,6 @@ impl From<Modify> for raft_cmdpb::Request {
                 req.set_cmd_type(raft_cmdpb::CmdType::DeleteRange);
                 req.set_delete_range(delete_range);
             }
-            Modify::Ingest(sst) => {
-                req.set_cmd_type(raft_cmdpb::CmdType::IngestSst);
-                req.mut_ingest_sst().set_sst(*sst);
-            }
         };
         req
     }
@@ -198,10 +191,6 @@ impl From<raft_cmdpb::Request> for Modify {
                     delete_range.get_notify_only(),
                 )
             }
-            raft_cmdpb::CmdType::IngestSst => {
-                let sst = req.mut_ingest_sst().take_sst();
-                Modify::Ingest(Box::new(sst))
-            }
             _ => {
                 unimplemented!()
             }
@@ -225,13 +214,12 @@ impl PessimisticLockPair for Modify {
     }
 }
 
-#[derive(Default, Debug)]
+#[derive(Default)]
 pub struct WriteData {
     pub modifies: Vec<Modify>,
     pub extra: TxnExtra,
     pub deadline: Option<Deadline>,
     pub disk_full_opt: DiskFullOpt,
-    pub avoid_batch: bool,
 }
 
 impl WriteData {
@@ -241,7 +229,6 @@ impl WriteData {
             extra,
             deadline: None,
             disk_full_opt: DiskFullOpt::NotAllowedOnFull,
-            avoid_batch: false,
         }
     }
 
@@ -264,18 +251,9 @@ impl WriteData {
     pub fn set_disk_full_opt(&mut self, level: DiskFullOpt) {
         self.disk_full_opt = level
     }
-
-    /// Underlying engine may batch up several requests to increase throughput.
-    ///
-    /// If external correctness depends on isolation of requests, you may need
-    /// to set this flag to true.
-    pub fn set_avoid_batch(&mut self, avoid_batch: bool) {
-        self.avoid_batch = avoid_batch
-    }
 }
 
 /// Events that can subscribed from the `WriteSubscriber`.
-#[derive(Debug)]
 pub enum WriteEvent {
     Proposed,
     Committed,
@@ -515,10 +493,6 @@ pub trait SnapshotExt {
         None
     }
 
-    fn get_region_id(&self) -> Option<u64> {
-        None
-    }
-
     fn get_txn_extra_op(&self) -> TxnExtraOp {
         TxnExtraOp::Noop
     }
@@ -572,8 +546,6 @@ pub enum ErrorInner {
     EmptyRequest,
     #[error("key is locked (backoff or cleanup) {0:?}")]
     KeyIsLocked(kvproto::kvrpcpb::LockInfo),
-    #[error("undetermined write result {0:?}")]
-    Undetermined(String),
     #[error("unknown error {0:?}")]
     Other(#[from] Box<dyn error::Error + Send + Sync>),
 }
@@ -597,7 +569,6 @@ impl ErrorInner {
             ErrorInner::Timeout(d) => Some(ErrorInner::Timeout(d)),
             ErrorInner::EmptyRequest => Some(ErrorInner::EmptyRequest),
             ErrorInner::KeyIsLocked(ref info) => Some(ErrorInner::KeyIsLocked(info.clone())),
-            ErrorInner::Undetermined(ref msg) => Some(ErrorInner::Undetermined(msg.clone())),
             ErrorInner::Other(_) => None,
         }
     }
@@ -635,7 +606,6 @@ impl ErrorCodeExt for Error {
             ErrorInner::KeyIsLocked(_) => error_code::storage::KEY_IS_LOCKED,
             ErrorInner::Timeout(_) => error_code::storage::TIMEOUT,
             ErrorInner::EmptyRequest => error_code::storage::EMPTY_REQUEST,
-            ErrorInner::Undetermined(_) => error_code::storage::UNDETERMINED,
             ErrorInner::Other(_) => error_code::storage::UNKNOWN,
         }
     }
@@ -776,9 +746,6 @@ pub fn write_modifies(kv_engine: &impl LocalEngine, modifies: Vec<Modify>) -> Re
                     Ok(())
                 }
             }
-            Modify::Ingest(_) => {
-                unimplemented!("IngestSST is not implemented for local engine yet.")
-            }
         };
         // TODO: turn the error into an engine error.
         if let Err(msg) = res {
@@ -787,29 +754,6 @@ pub fn write_modifies(kv_engine: &impl LocalEngine, modifies: Vec<Modify>) -> Re
     }
     wb.write()?;
     Ok(())
-}
-
-#[derive(Clone)]
-pub enum LocalTablets<EK> {
-    Singleton(EK),
-    Registry(TabletRegistry<EK>),
-}
-
-impl<EK: Clone> LocalTablets<EK> {
-    /// Get the tablet of the given region.
-    ///
-    /// If `None` is returned, the region may not exist or may not initialized.
-    /// If there are multiple versions of tablet, the latest one is returned
-    /// with best effort.
-    pub fn get(&self, region_id: u64) -> Option<Cow<'_, EK>> {
-        match self {
-            LocalTablets::Singleton(tablet) => Some(Cow::Borrowed(tablet)),
-            LocalTablets::Registry(registry) => {
-                let mut cached = registry.get(region_id)?;
-                cached.latest().cloned().map(Cow::Owned)
-            }
-        }
-    }
 }
 
 pub const TEST_ENGINE_CFS: &[CfName] = &[CF_DEFAULT, "cf"];

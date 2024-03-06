@@ -75,25 +75,30 @@ const MAX_TSO_BATCH_LIST_CAPACITY: u32 = 1024;
 /// TSO range: [(physical, logical_start), (physical, logical_end))
 #[derive(Debug)]
 struct TsoBatch {
+    size: u32,
     physical: u64,
-    logical_start: u64,
     logical_end: u64, // exclusive
-    // current valid logical_tso offset, alloc_offset >= logical_end means
-    // the batch is exhausted.
-    alloc_offset: AtomicU64,
+    logical_start: AtomicU64,
 }
 
 impl TsoBatch {
     pub fn pop(&self) -> Option<(TimeStamp, bool /* is_used_up */)> {
-        // alloc_offset might be far bigger than logical_end if the concurrency is
-        // *very* high, but it won't overflow in practice, so no need to do an
-        // extra load check here.
-        let ts = self.alloc_offset.fetch_add(1, Ordering::Relaxed);
-        if ts < self.logical_end {
-            return Some((
-                TimeStamp::compose(self.physical, ts),
-                ts + 1 == self.logical_end,
-            ));
+        let mut logical = self.logical_start.load(Ordering::Relaxed);
+        while logical < self.logical_end {
+            match self.logical_start.compare_exchange_weak(
+                logical,
+                logical + 1,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => {
+                    return Some((
+                        TimeStamp::compose(self.physical, logical),
+                        logical + 1 == self.logical_end,
+                    ));
+                }
+                Err(x) => logical = x,
+            }
         }
         None
     }
@@ -104,22 +109,22 @@ impl TsoBatch {
         let logical_start = logical_end.checked_sub(batch_size as u64).unwrap();
 
         Self {
+            size: batch_size,
             physical,
-            logical_start,
             logical_end,
-            alloc_offset: AtomicU64::new(logical_start),
+            logical_start: AtomicU64::new(logical_start),
         }
     }
 
     /// Number of remaining (available) TSO in the batch.
     pub fn remain(&self) -> u32 {
         self.logical_end
-            .saturating_sub(self.alloc_offset.load(Ordering::Relaxed)) as u32
+            .saturating_sub(self.logical_start.load(Ordering::Relaxed)) as u32
     }
 
     /// The original start timestamp in the batch.
     pub fn original_start(&self) -> TimeStamp {
-        TimeStamp::compose(self.physical, self.logical_start)
+        TimeStamp::compose(self.physical, self.logical_end - self.size as u64)
     }
 
     /// The excluded end timestamp after the last in batch.
@@ -355,7 +360,7 @@ impl<C: PdClient + 'static> BatchTsoProvider<C> {
         let s = Self {
             pd_client: pd_client.clone(),
             batch_list: Arc::new(TsoBatchList::new(cache_multiplier)),
-            causal_ts_worker: WorkerBuilder::new("causal-ts-batch-tso-worker").create(),
+            causal_ts_worker: WorkerBuilder::new("causal_ts_batch_tso_worker").create(),
             renew_interval,
             renew_parameter,
             renew_request_tx,

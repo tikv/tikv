@@ -24,7 +24,7 @@ pub mod metrics;
 pub mod sst_importer;
 
 pub use self::{
-    config::{Config, ConfigManager},
+    config::Config,
     errors::{error_inc, Error, Result},
     import_file::sst_meta_to_path,
     sst_importer::SstImporter,

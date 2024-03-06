@@ -43,9 +43,6 @@ impl Tracker {
     }
 
     pub fn write_write_detail(&self, detail: &mut pb::WriteDetail) {
-        detail.set_latch_wait_nanos(self.metrics.latch_wait_nanos);
-        detail.set_process_nanos(self.metrics.scheduler_process_nanos);
-        detail.set_throttle_nanos(self.metrics.scheduler_throttle_nanos);
         detail.set_pessimistic_lock_wait_nanos(self.metrics.pessimistic_lock_wait_nanos);
         detail.set_store_batch_wait_nanos(self.metrics.wf_batch_wait_nanos);
         detail.set_propose_send_wait_nanos(
@@ -68,15 +65,10 @@ impl Tracker {
             self.metrics.wf_commit_log_nanos - self.metrics.wf_batch_wait_nanos,
         );
         detail.set_apply_batch_wait_nanos(self.metrics.apply_wait_nanos);
-        // When async_prewrite_apply is set, the `apply_time_nanos` could be less than
-        // apply_wait_nanos.
-        if self.metrics.apply_time_nanos > self.metrics.apply_wait_nanos {
-            detail
-                .set_apply_log_nanos(self.metrics.apply_time_nanos - self.metrics.apply_wait_nanos);
-        }
+        detail.set_apply_log_nanos(self.metrics.apply_time_nanos - self.metrics.apply_wait_nanos);
         detail.set_apply_mutex_lock_nanos(self.metrics.apply_mutex_lock_nanos);
         detail.set_apply_write_leader_wait_nanos(self.metrics.apply_thread_wait_nanos);
-        detail.set_apply_write_wal_nanos(self.metrics.apply_write_wal_nanos);
+        detail.set_apply_write_wal_nanos(self.metrics.apply_wait_nanos);
         detail.set_apply_write_memtable_nanos(self.metrics.apply_write_memtable_nanos);
     }
 }
@@ -140,9 +132,6 @@ pub struct RequestMetrics {
     pub internal_key_skipped_count: u64,
     pub deleted_key_skipped_count: u64,
     pub pessimistic_lock_wait_nanos: u64,
-    pub latch_wait_nanos: u64,
-    pub scheduler_process_nanos: u64,
-    pub scheduler_throttle_nanos: u64,
     // temp instant used in raftstore metrics, first be the instant when creating the write
     // callback, then reset when it is ready to apply
     pub write_instant: Option<Instant>,

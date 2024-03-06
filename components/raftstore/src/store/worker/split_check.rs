@@ -667,7 +667,7 @@ where
             ),
             Task::ChangeConfig(c) => self.change_cfg(c),
             Task::ApproximateBuckets(region) => {
-                if self.coprocessor.cfg.enable_region_bucket() {
+                if self.coprocessor.cfg.enable_region_bucket {
                     let mut cached;
                     let tablet = match &self.engine {
                         Either::Left(e) => e,

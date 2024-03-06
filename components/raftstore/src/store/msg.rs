@@ -507,7 +507,7 @@ where
         store_id: u64,
         group_id: u64,
     },
-    /// Capture changes of a region.
+    /// Capture the changes of the region.
     CaptureChange {
         cmd: ChangeObserver,
         region_epoch: RegionEpoch,
@@ -545,7 +545,6 @@ pub enum CasualMessage<EK: KvEngine> {
         split_keys: Vec<Vec<u8>>,
         callback: Callback<EK::Snapshot>,
         source: Cow<'static, str>,
-        share_source_region_size: bool,
     },
 
     /// Hash result of ComputeHash command.

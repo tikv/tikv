@@ -175,7 +175,7 @@ impl<Iter: EngineIterator, Ob: MvccInfoObserver> MvccInfoScanner<Iter, Ob> {
         })
     }
 
-    pub fn next_item(&mut self) -> Result<Option<Ob::Target>> {
+    fn next_item(&mut self) -> Result<Option<Ob::Target>> {
         let mut lock_ok = box_try!(self.lock_iter.valid());
         let mut writes_ok = box_try!(self.write_iter.valid());
 
@@ -221,7 +221,7 @@ impl<Iter: EngineIterator, Ob: MvccInfoObserver> MvccInfoScanner<Iter, Ob> {
 }
 
 #[derive(Clone, Default)]
-pub struct MvccInfoCollector {
+struct MvccInfoCollector {
     current_item: Vec<u8>,
     mvcc_info: MvccInfo,
 }

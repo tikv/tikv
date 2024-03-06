@@ -6,14 +6,14 @@ use engine_traits::{Peekable, RaftEngineReadOnly, CF_DEFAULT};
 use futures::executor::block_on;
 use kvproto::{
     raft_cmdpb::{AdminCmdType, RaftCmdRequest},
-    raft_serverpb::{PeerState, RaftMessage},
+    raft_serverpb::PeerState,
 };
-use raft::prelude::{ConfChangeType, MessageType};
+use raft::prelude::ConfChangeType;
 use raftstore_v2::{
     router::{PeerMsg, PeerTick},
     SimpleWriteEncoder,
 };
-use tikv_util::store::{new_learner_peer, new_peer};
+use tikv_util::store::new_learner_peer;
 
 use crate::cluster::{check_skip_wal, Cluster};
 
@@ -198,37 +198,4 @@ fn remove_peer(cluster: &Cluster, offset_id: usize, region_id: u64, peer_id: u64
         .unwrap();
     assert_eq!(region_state.get_state(), PeerState::Tombstone);
     assert_eq!(raft_engine.get_raft_state(region_id).unwrap(), None);
-}
-
-/// The peer should be able to respond an unknown sender, otherwise the
-/// liveness of configuration change can't be guaranteed.
-#[test]
-fn test_unknown_peer() {
-    let cluster = Cluster::with_node_count(1, None);
-
-    let router = &cluster.routers[0];
-    let header = router.new_request_for(2).take_header();
-
-    // Create a fake message to see whether it's responded.
-    let from_peer = new_peer(10, 10);
-    let mut msg = Box::<RaftMessage>::default();
-    msg.set_region_id(2);
-    msg.set_to_peer(header.get_peer().clone());
-    msg.set_region_epoch(header.get_region_epoch().clone());
-    msg.set_from_peer(from_peer.clone());
-    let raft_message = msg.mut_message();
-    raft_message.set_msg_type(raft::prelude::MessageType::MsgHeartbeat);
-    raft_message.set_from(10);
-    raft_message.set_term(10);
-
-    router.send_raft_message(msg).unwrap();
-    router.wait_flush(2, Duration::from_secs(3));
-    // If peer cache is updated correctly, it should be able to respond.
-    let msg = cluster.receiver(0).try_recv().unwrap();
-    assert_eq!(*msg.get_to_peer(), from_peer);
-    assert_eq!(msg.get_from_peer(), header.get_peer());
-    assert_eq!(
-        msg.get_message().get_msg_type(),
-        MessageType::MsgHeartbeatResponse
-    );
 }

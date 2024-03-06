@@ -258,12 +258,7 @@ fn main() {
                     debug_executor.dump_value(&cf, key);
                 }
                 Cmd::Raft { cmd: subcmd } => match subcmd {
-                    RaftCmd::Log {
-                        region,
-                        index,
-                        key,
-                        binary,
-                    } => {
+                    RaftCmd::Log { region, index, key } => {
                         let (id, index) = if let Some(key) = key.as_deref() {
                             keys::decode_raft_log_key(&unescape(key)).unwrap()
                         } else {
@@ -271,7 +266,7 @@ fn main() {
                             let index = index.unwrap();
                             (id, index)
                         };
-                        debug_executor.dump_raft_log(id, index, binary);
+                        debug_executor.dump_raft_log(id, index);
                     }
                     RaftCmd::Region {
                         regions,
@@ -520,17 +515,6 @@ fn main() {
                     debug_executor.dump_cluster_info();
                 }
                 Cmd::ResetToVersion { version } => debug_executor.reset_to_version(version),
-                Cmd::GetRegionReadProgress {
-                    region,
-                    log,
-                    min_start_ts,
-                } => {
-                    debug_executor.get_region_read_progress(
-                        region,
-                        log,
-                        min_start_ts.unwrap_or_default(),
-                    );
-                }
                 _ => {
                     unreachable!()
                 }
@@ -643,18 +627,12 @@ fn compact_whole_cluster(
     threads: u32,
     bottommost: BottommostLevelCompaction,
 ) {
-    let all_stores = pd_client
+    let stores = pd_client
         .get_all_stores(true) // Exclude tombstone stores.
         .unwrap_or_else(|e| perror_and_exit("Get all cluster stores from PD failed", e));
 
-    let tikv_stores = all_stores.iter().filter(|s| {
-        !s.get_labels()
-            .iter()
-            .any(|l| l.get_key() == "engine" && l.get_value() == "tiflash")
-    });
-
     let mut handles = Vec::new();
-    for s in tikv_stores {
+    for s in stores {
         let cfg = cfg.clone();
         let mgr = Arc::clone(&mgr);
         let addr = s.address.clone();

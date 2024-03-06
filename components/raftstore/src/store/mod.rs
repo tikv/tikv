@@ -22,7 +22,6 @@ mod hibernate_state;
 mod peer_storage;
 mod region_snapshot;
 mod replication_mode;
-pub mod simple_write;
 pub mod snap;
 mod txn_ext;
 mod worker;
@@ -84,8 +83,6 @@ pub use self::{
         ReadExecutor, ReadExecutorProvider, ReadProgress, ReadStats, RefreshConfigTask, RegionTask,
         SplitCheckRunner, SplitCheckTask, SplitConfig, SplitConfigManager, SplitInfo,
         StoreMetaDelegate, StoreStatsReporter, TrackVer, WriteStats,
-        BIG_REGION_CPU_OVERLOAD_THRESHOLD_RATIO, DEFAULT_BIG_REGION_BYTE_THRESHOLD,
-        DEFAULT_BIG_REGION_QPS_THRESHOLD, DEFAULT_BYTE_THRESHOLD, DEFAULT_QPS_THRESHOLD,
-        NUM_COLLECT_STORE_INFOS_PER_HEARTBEAT, REGION_CPU_OVERLOAD_THRESHOLD_RATIO,
+        NUM_COLLECT_STORE_INFOS_PER_HEARTBEAT,
     },
 };

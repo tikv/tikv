@@ -205,11 +205,9 @@
 ## Max time to handle Coprocessor requests before timeout.
 # end-point-request-max-handle-duration = "60s"
 
-## Max bytes that snapshot can interact with disk in one second. It should be
-## set based on your disk performance. Only write flow is considered, if
-## partiioned-raft-kv is used, read flow is also considered and it will be estimated
-## as read_size * 0.5 to get around errors from page cache.
-# snap-io-max-bytes-per-sec = "100MB"
+## Max bytes that snapshot can be written to disk in one second.
+## It should be set based on your disk performance.
+# snap-max-write-bytes-per-sec = "100MB"
 
 ## Whether to enable request batch.
 # enable-request-batch = true
@@ -517,8 +515,8 @@
 ## Value -1 means files opened are always kept open and RocksDB will prefetch index and filter
 ## blocks into block cache at startup. So if your database has a large working set, it will take
 ## several minutes to open the DB. You may need to increase this if your database has a large
-## working set. You can estimate the number of files based on `target-file-size-base` for
-## level-based compaction.
+## working set. You can estimate the number of files based on `target-file-size-base` and
+## `target_file_size_multiplier` for level-based compaction.
 # max-open-files = 40960
 
 ## Max size of RocksDB's MANIFEST file.
@@ -681,7 +679,7 @@
 ## The data block size. RocksDB compresses data based on the unit of block.
 ## Similar to page in other databases, block is the smallest unit cached in block-cache. Note that
 ## the block size specified here corresponds to uncompressed data.
-# block-size = "32KB"
+# block-size = "16KB"
 
 ## If you're doing point lookups you definitely want to turn bloom filters on. We use bloom filters
 ## to avoid unnecessary disk reads. Default bits_per_key is 10, which yields ~1% false positive
@@ -858,19 +856,6 @@
 ## The maximum number of concurrent compaction tasks. 0 stands for no limit.
 # max-compactions = 0
 
-## SST files containing updates older than TTL will go through the compaction
-## process. This usually happens in a cascading way so that those entries
-## will be compacted to bottommost level/file. Disabled as default.
-##
-## Default: 0s.
-# ttl = "0s"
-
-## SST files older than this value will be picked up for compaction, and
-## re-written to the same level as they were before. Disabled as default.
-##
-## Default: 0s.
-# periodic-compaction-seconds = "0s"
-
 ## Options for "Default" Column Family for `Titan`.
 [rocksdb.defaultcf.titan]
 ## The smallest value to store in blob files. Value smaller than
@@ -930,7 +915,7 @@
 [rocksdb.writecf]
 ## Recommend to set it the same as `rocksdb.defaultcf.compression-per-level`.
 # compression-per-level = ["no", "no", "lz4", "lz4", "lz4", "zstd", "zstd"]
-# block-size = "32KB"
+# block-size = "16KB"
 
 ## Recommend to set it the same as `rocksdb.defaultcf.write-buffer-size`.
 # write-buffer-size = "128MB"
@@ -1114,16 +1099,8 @@
 ## Only available for `format-version` >= 2. This option is only
 ## available when TiKV >= 6.3.x.
 ##
-## Default: true.
-# enable-log-recycle = true
-
-## Whether to prepare log files for recycling when start.
-## If `true`, batch empty log files will be prepared for recycling when
-## starting engine.
-## Only available for `enable-log-reycle` is true.
-##
-## Default: false
-# prefill-for-recycle = false
+## Default: false.
+# enable-log-recycle = false
 
 [security]
 ## The path for TLS certificates. Empty string means disabling secure connections.

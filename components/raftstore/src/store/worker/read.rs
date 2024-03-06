@@ -29,7 +29,6 @@ use tikv_util::{
     time::{monotonic_raw_now, ThreadReadId},
 };
 use time::Timespec;
-use txn_types::TimeStamp;
 
 use super::metrics::*;
 use crate::{
@@ -496,7 +495,7 @@ impl ReadDelegate {
                 self.applied_term = applied_term;
             }
             Progress::LeaderLease(leader_lease) => {
-                self.leader_lease = leader_lease;
+                self.leader_lease = Some(leader_lease);
             }
             Progress::RegionBuckets(bucket_meta) => {
                 self.bucket_meta = Some(bucket_meta);
@@ -564,15 +563,11 @@ impl ReadDelegate {
         if safe_ts >= read_ts {
             return Ok(());
         }
-        // Advancing resolved ts may be expensive, only notify if read_ts - safe_ts >
-        // 200ms.
-        if TimeStamp::from(read_ts).physical() > TimeStamp::from(safe_ts).physical() + 200 {
-            self.read_progress.notify_advance_resolved_ts();
-        }
         debug!(
             "reject stale read by safe ts";
             "safe_ts" => safe_ts,
             "read_ts" => read_ts,
+
             "region_id" => self.region.get_id(),
             "peer_id" => self.peer_id,
         );
@@ -631,7 +626,7 @@ pub enum Progress {
     Region(metapb::Region),
     Term(u64),
     AppliedTerm(u64),
-    LeaderLease(Option<RemoteLease>),
+    LeaderLease(RemoteLease),
     RegionBuckets(Arc<BucketMeta>),
     WaitData(bool),
 }
@@ -649,12 +644,8 @@ impl Progress {
         Progress::AppliedTerm(applied_term)
     }
 
-    pub fn set_leader_lease(lease: RemoteLease) -> Progress {
-        Progress::LeaderLease(Some(lease))
-    }
-
-    pub fn unset_leader_lease() -> Progress {
-        Progress::LeaderLease(None)
+    pub fn leader_lease(lease: RemoteLease) -> Progress {
+        Progress::LeaderLease(lease)
     }
 
     pub fn region_buckets(bucket_meta: Arc<BucketMeta>) -> Progress {
@@ -816,21 +807,10 @@ where
             return Ok(None);
         }
 
-        match find_peer_by_id(&delegate.region, delegate.peer_id) {
-            // Check witness
-            Some(peer) => {
-                if peer.is_witness {
-                    TLS_LOCAL_READ_METRICS.with(|m| m.borrow_mut().reject_reason.witness.inc());
-                    return Err(Error::IsWitness(region_id));
-                }
-            }
-            // This (rarely) happen in witness disabled clusters while the conf change applied but
-            // region not removed. We shouldn't return `IsWitness` here because our client back off
-            // for a long time while encountering that.
-            None => {
-                TLS_LOCAL_READ_METRICS.with(|m| m.borrow_mut().reject_reason.no_region.inc());
-                return Err(Error::RegionNotFound(region_id));
-            }
+        // Check witness
+        if find_peer_by_id(&delegate.region, delegate.peer_id).map_or(true, |p| p.is_witness) {
+            TLS_LOCAL_READ_METRICS.with(|m| m.borrow_mut().reject_reason.witness.inc());
+            return Err(Error::IsWitness(region_id));
         }
 
         // Check non-witness hasn't finish applying snapshot yet.
@@ -843,32 +823,20 @@ where
         // be performed.
         let is_in_flashback = delegate.region.is_in_flashback;
         let flashback_start_ts = delegate.region.flashback_start_ts;
-        let header = req.get_header();
-        let admin_type = req.admin_request.as_ref().map(|req| req.get_cmd_type());
-        if let Err(e) = util::check_flashback_state(
-            is_in_flashback,
-            flashback_start_ts,
-            header,
-            admin_type,
-            region_id,
-            true,
-        ) {
-            debug!("rejected by flashback state";
-                "error" => ?e,
-                "is_in_flashback" => is_in_flashback,
-                "tag" => &delegate.tag);
-            match e {
+        if let Err(e) =
+            util::check_flashback_state(is_in_flashback, flashback_start_ts, req, region_id, false)
+        {
+            TLS_LOCAL_READ_METRICS.with(|m| match e {
                 Error::FlashbackNotPrepared(_) => {
-                    TLS_LOCAL_READ_METRICS
-                        .with(|m| m.borrow_mut().reject_reason.flashback_not_prepared.inc());
+                    m.borrow_mut().reject_reason.flashback_not_prepared.inc()
                 }
                 Error::FlashbackInProgress(..) => {
-                    TLS_LOCAL_READ_METRICS
-                        .with(|m| m.borrow_mut().reject_reason.flashback_in_progress.inc());
+                    m.borrow_mut().reject_reason.flashback_in_progress.inc()
                 }
-                _ => unreachable!("{:?}", e),
-            };
-            return Err(e);
+                _ => unreachable!(),
+            });
+            debug!("rejected by flashback state"; "is_in_flashback" => is_in_flashback, "tag" => &delegate.tag);
+            return Ok(None);
         }
 
         Ok(Some(delegate))
@@ -994,11 +962,8 @@ where
                         }
 
                         let region = Arc::clone(&delegate.region);
-                        let mut response =
-                            delegate.execute(&req, &region, None, Some(local_read_ctx));
-                        if let Some(snap) = response.snapshot.as_mut() {
-                            snap.bucket_meta = delegate.bucket_meta.clone();
-                        }
+                        let response = delegate.execute(&req, &region, None, Some(local_read_ctx));
+
                         // Try renew lease in advance
                         delegate.maybe_renew_lease_advance(&self.router, snapshot_ts);
                         response
@@ -1022,11 +987,8 @@ where
 
                         let region = Arc::clone(&delegate.region);
                         // Getting the snapshot
-                        let mut response =
-                            delegate.execute(&req, &region, None, Some(local_read_ctx));
-                        if let Some(snap) = response.snapshot.as_mut() {
-                            snap.bucket_meta = delegate.bucket_meta.clone();
-                        }
+                        let response = delegate.execute(&req, &region, None, Some(local_read_ctx));
+
                         // Double check in case `safe_ts` change after the first check and before
                         // getting snapshot
                         if let Err(resp) = delegate.check_stale_read_safe(read_ts) {
@@ -1563,7 +1525,7 @@ mod tests {
         cmd.mut_header().set_term(term6 + 3);
         lease.expire_remote_lease();
         let remote_lease = lease.maybe_new_remote_lease(term6 + 3).unwrap();
-        let pg = Progress::set_leader_lease(remote_lease);
+        let pg = Progress::leader_lease(remote_lease);
         {
             let mut meta = store_meta.lock().unwrap();
             meta.readers.get_mut(&1).unwrap().update(pg);
@@ -1695,7 +1657,7 @@ mod tests {
         {
             let mut lease = Lease::new(Duration::seconds(1), Duration::milliseconds(250)); // 1s is long enough.
             let remote = lease.maybe_new_remote_lease(3).unwrap();
-            let pg = Progress::set_leader_lease(remote);
+            let pg = Progress::leader_lease(remote);
             let mut meta = store_meta.lock().unwrap();
             meta.readers.get_mut(&1).unwrap().update(pg);
         }
@@ -2051,104 +2013,5 @@ mod tests {
                 .get_oldest_snapshot_sequence_number()
                 .is_none()
         );
-    }
-
-    #[test]
-    fn test_stale_read_notify() {
-        let store_id = 2;
-        let store_meta = Arc::new(Mutex::new(StoreMeta::new(0)));
-        let (_tmp, mut reader, rx) = new_reader("test-local-reader", store_id, store_meta.clone());
-        reader.kv_engine.put(b"key", b"value").unwrap();
-
-        let epoch13 = {
-            let mut ep = metapb::RegionEpoch::default();
-            ep.set_conf_ver(1);
-            ep.set_version(3);
-            ep
-        };
-        let term6 = 6;
-
-        // Register region1
-        let pr_ids1 = vec![2, 3, 4];
-        let prs1 = new_peers(store_id, pr_ids1.clone());
-        prepare_read_delegate(
-            store_id,
-            1,
-            term6,
-            pr_ids1,
-            epoch13.clone(),
-            store_meta.clone(),
-        );
-        let leader1 = prs1[0].clone();
-
-        // Local read
-        let mut cmd = RaftCmdRequest::default();
-        let mut header = RaftRequestHeader::default();
-        header.set_region_id(1);
-        header.set_peer(leader1);
-        header.set_region_epoch(epoch13);
-        header.set_term(term6);
-        header.set_flags(header.get_flags() | WriteBatchFlags::STALE_READ.bits());
-        cmd.set_header(header.clone());
-        let mut req = Request::default();
-        req.set_cmd_type(CmdType::Snap);
-        cmd.set_requests(vec![req].into());
-
-        // A peer can serve read_ts < safe_ts.
-        let safe_ts = TimeStamp::compose(2, 0);
-        {
-            let mut meta = store_meta.lock().unwrap();
-            let delegate = meta.readers.get_mut(&1).unwrap();
-            delegate
-                .read_progress
-                .update_safe_ts(1, safe_ts.into_inner());
-            assert_eq!(delegate.read_progress.safe_ts(), safe_ts.into_inner());
-        }
-        let read_ts_1 = TimeStamp::compose(1, 0);
-        let mut data = [0u8; 8];
-        (&mut data[..]).encode_u64(read_ts_1.into_inner()).unwrap();
-        header.set_flag_data(data.into());
-        cmd.set_header(header.clone());
-        let (snap_tx, snap_rx) = channel();
-        let task = RaftCommand::<KvTestSnapshot>::new(
-            cmd.clone(),
-            Callback::read(Box::new(move |resp: ReadResponse<KvTestSnapshot>| {
-                snap_tx.send(resp).unwrap();
-            })),
-        );
-        must_not_redirect(&mut reader, &rx, task);
-        snap_rx.recv().unwrap().snapshot.unwrap();
-
-        // A peer has to notify advancing resolved ts if read_ts >= safe_ts.
-        let notify = Arc::new(tokio::sync::Notify::new());
-        {
-            let mut meta = store_meta.lock().unwrap();
-            let delegate = meta.readers.get_mut(&1).unwrap();
-            delegate
-                .read_progress
-                .update_advance_resolved_ts_notify(notify.clone());
-        }
-        // 201ms larger than safe_ts.
-        let read_ts_2 = TimeStamp::compose(safe_ts.physical() + 201, 0);
-        let mut data = [0u8; 8];
-        (&mut data[..]).encode_u64(read_ts_2.into_inner()).unwrap();
-        header.set_flag_data(data.into());
-        cmd.set_header(header.clone());
-        let task = RaftCommand::<KvTestSnapshot>::new(
-            cmd.clone(),
-            Callback::read(Box::new(move |_: ReadResponse<KvTestSnapshot>| {})),
-        );
-        let (notify_tx, notify_rx) = channel();
-        let (wait_spawn_tx, wait_spawn_rx) = channel();
-        let runtime = tokio::runtime::Runtime::new().unwrap();
-        let _ = runtime.spawn(async move {
-            wait_spawn_tx.send(()).unwrap();
-            notify.notified().await;
-            notify_tx.send(()).unwrap();
-        });
-        wait_spawn_rx.recv().unwrap();
-        thread::sleep(std::time::Duration::from_millis(500)); // Prevent lost notify.
-        must_not_redirect(&mut reader, &rx, task);
-        notify_rx.recv().unwrap();
     }
 }

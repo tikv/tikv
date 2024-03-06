@@ -13,8 +13,6 @@ use collections::HashMap;
 use kvproto::metapb::Region;
 use tikv_util::box_err;
 
-#[cfg(any(test, feature = "testexport"))]
-use crate::StateStorage;
 use crate::{Error, FlushState, Result};
 
 #[derive(Debug)]
@@ -46,11 +44,10 @@ impl<EK: Clone> CachedTablet<EK> {
         CachedTablet {
             latest: Arc::new(LatestTablet {
                 data: Mutex::new(data.clone()),
-                version: AtomicU64::new(1),
+                version: AtomicU64::new(0),
             }),
             cache: data,
-            // We use 0 in release, so it needs to be intialized to 1.
-            version: 1,
+            version: 0,
         }
     }
 
@@ -148,11 +145,6 @@ pub trait TabletFactory<EK>: Send + Sync {
 
     /// Check if the tablet with specified path exists
     fn exists(&self, path: &Path) -> bool;
-
-    #[cfg(feature = "testexport")]
-    fn set_state_storage(&self, _: Arc<dyn StateStorage>) {
-        unimplemented!()
-    }
 }
 
 pub struct SingletonFactory<EK> {

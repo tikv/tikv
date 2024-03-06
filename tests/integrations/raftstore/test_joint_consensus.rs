@@ -1,6 +1,9 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{sync::Arc, time::*};
+use std::{
+    sync::{mpsc, Arc},
+    time::*,
+};
 
 use kvproto::{
     metapb::{self, PeerRole, Region},
@@ -10,7 +13,7 @@ use pd_client::PdClient;
 use raft::eraftpb::ConfChangeType;
 use raftstore::Result;
 use test_raftstore::*;
-use tikv_util::{mpsc::future, store::find_peer};
+use tikv_util::store::find_peer;
 
 /// Tests multiple confchange commands can be done by one request
 #[test]
@@ -164,23 +167,23 @@ fn test_request_in_joint_state() {
 
     // Isolated peer 2, so the old configuation can't reach quorum
     cluster.add_send_filter(IsolationFilterFactory::new(2));
-    let mut rx = cluster
+    let rx = cluster
         .async_request(put_request(&region, 1, b"k3", b"v3"))
         .unwrap();
     assert_eq!(
         rx.recv_timeout(Duration::from_millis(100)),
-        Err(future::RecvTimeoutError::Timeout)
+        Err(mpsc::RecvTimeoutError::Timeout)
     );
     cluster.clear_send_filters();
 
     // Isolated peer 3, so the new configuation can't reach quorum
     cluster.add_send_filter(IsolationFilterFactory::new(3));
-    let mut rx = cluster
+    let rx = cluster
         .async_request(put_request(&region, 1, b"k4", b"v4"))
         .unwrap();
     assert_eq!(
         rx.recv_timeout(Duration::from_millis(100)),
-        Err(future::RecvTimeoutError::Timeout)
+        Err(mpsc::RecvTimeoutError::Timeout)
     );
     cluster.clear_send_filters();
 

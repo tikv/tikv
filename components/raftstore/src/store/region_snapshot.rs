@@ -86,11 +86,6 @@ where
     }
 
     #[inline]
-    pub fn set_apply_index(&self, apply_index: u64) {
-        self.apply_index.store(apply_index, Ordering::SeqCst);
-    }
-
-    #[inline]
     pub fn get_apply_index(&self) -> Result<u64> {
         let apply_index = self.apply_index.load(Ordering::SeqCst);
         if apply_index == 0 {

@@ -83,14 +83,10 @@ impl TxnCommitRecord {
         }
     }
 
-    #[inline]
-    pub fn unwrap_none(self, region_id: u64) -> Option<OverlappedWrite> {
+    pub fn unwrap_none(self) -> Option<OverlappedWrite> {
         match self {
             Self::None { overlapped_write } => overlapped_write,
-            _ => panic!(
-                "txn record found but not expected: {:?} [region_id={}]",
-                self, region_id
-            ),
+            _ => panic!("txn record found but not expected: {:?}", self),
         }
     }
 }

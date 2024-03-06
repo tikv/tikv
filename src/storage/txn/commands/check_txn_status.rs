@@ -51,11 +51,6 @@ command! {
             // lock, the transaction status could not be decided if the primary lock is pessimistic too and
             // it's still uncertain.
             resolving_pessimistic_lock: bool,
-            // Whether it's needed to check wheter the lock on the key (if any) is the primary lock.
-            // This is for handling some corner cases when pessimistic transactions changes its primary
-            // (see https://github.com/pingcap/tidb/issues/42937 for details).
-            // Must be set to true, unless the client is old version that doesn't support this behavior.
-            verify_is_primary: bool,
         }
 }
 
@@ -112,7 +107,6 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for CheckTxnStatus {
                 self.caller_start_ts,
                 self.force_sync_commit,
                 self.resolving_pessimistic_lock,
-                self.verify_is_primary,
             )?,
             l => (
                 check_txn_status_missing_lock(
@@ -151,7 +145,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for CheckTxnStatus {
 #[cfg(test)]
 pub mod tests {
     use concurrency_manager::ConcurrencyManager;
-    use kvproto::kvrpcpb::{self, Context, LockInfo, PrewriteRequestPessimisticAction::*};
+    use kvproto::kvrpcpb::{Context, PrewriteRequestPessimisticAction::*};
     use tikv_util::deadline::Deadline;
     use txn_types::{Key, WriteType};
 
@@ -159,10 +153,8 @@ pub mod tests {
     use crate::storage::{
         kv::Engine,
         lock_manager::MockLockManager,
-        mvcc,
         mvcc::tests::*,
         txn::{
-            self,
             commands::{pessimistic_rollback, WriteCommand, WriteContext},
             scheduler::DEFAULT_EXECUTION_DURATION_LIMIT,
             tests::*,
@@ -196,7 +188,6 @@ pub mod tests {
             rollback_if_not_exist,
             force_sync_commit,
             resolving_pessimistic_lock,
-            verify_is_primary: true,
             deadline: Deadline::from_now(DEFAULT_EXECUTION_DURATION_LIMIT),
         };
         let result = command
@@ -229,7 +220,7 @@ pub mod tests {
         rollback_if_not_exist: bool,
         force_sync_commit: bool,
         resolving_pessimistic_lock: bool,
-    ) -> txn::Error {
+    ) {
         let ctx = Context::default();
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let current_ts = current_ts.into();
@@ -244,28 +235,23 @@ pub mod tests {
             rollback_if_not_exist,
             force_sync_commit,
             resolving_pessimistic_lock,
-            verify_is_primary: true,
             deadline: Deadline::from_now(DEFAULT_EXECUTION_DURATION_LIMIT),
         };
-        command
-            .process_write(
-                snapshot,
-                WriteContext {
-                    lock_mgr: &MockLockManager::new(),
-                    concurrency_manager: cm,
-                    extra_op: Default::default(),
-                    statistics: &mut Default::default(),
-                    async_apply_prewrite: false,
-                    raw_ext: None,
-                },
-            )
-            .map(|r| {
-                panic!(
-                    "expected check_txn_status fail but succeeded with result: {:?}",
-                    r.pr
+        assert!(
+            command
+                .process_write(
+                    snapshot,
+                    WriteContext {
+                        lock_mgr: &MockLockManager::new(),
+                        concurrency_manager: cm,
+                        extra_op: Default::default(),
+                        statistics: &mut Default::default(),
+                        async_apply_prewrite: false,
+                        raw_ext: None,
+                    },
                 )
-            })
-            .unwrap_err()
+                .is_err()
+        );
     }
 
     fn committed(commit_ts: impl Into<TimeStamp>) -> impl FnOnce(TxnStatus) -> bool {
@@ -1201,47 +1187,5 @@ pub mod tests {
         let rollback = must_written(&mut engine, k, 10, 10, WriteType::Rollback);
         assert!(rollback.last_change_ts.is_zero());
         assert_eq!(rollback.versions_to_last_change, 0);
-    }
-
-    #[test]
-    fn test_verify_is_primary() {
-        let mut engine = TestEngineBuilder::new().build().unwrap();
-
-        let check_lock = |l: LockInfo, key: &'_ [u8], primary: &'_ [u8], lock_type| {
-            assert_eq!(&l.key, key);
-            assert_eq!(l.lock_type, lock_type);
-            assert_eq!(&l.primary_lock, primary);
-        };
-
-        let check_error = |e, key: &'_ [u8], primary: &'_ [u8], lock_type| match e {
-            txn::Error(box txn::ErrorInner::Mvcc(mvcc::Error(
-                box mvcc::ErrorInner::PrimaryMismatch(lock_info),
-            ))) => {
-                check_lock(lock_info, key, primary, lock_type);
-            }
-            e => panic!("unexpected error: {:?}", e),
-        };
-
-        must_acquire_pessimistic_lock(&mut engine, b"k1", b"k2", 1, 1);
-        let e = must_err(&mut engine, b"k1", 1, 1, 0, true, false, true);
-        check_error(e, b"k1", b"k2", kvrpcpb::Op::PessimisticLock);
-        let lock = must_pessimistic_locked(&mut engine, b"k1", 1, 1);
-        check_lock(
-            lock.into_lock_info(b"k1".to_vec()),
-            b"k1",
-            b"k2",
-            kvrpcpb::Op::PessimisticLock,
-        );
-
-        must_pessimistic_prewrite_put(&mut engine, b"k1", b"v1", b"k2", 1, 1, DoPessimisticCheck);
-        let e = must_err(&mut engine, b"k1", 1, 1, 0, true, false, true);
-        check_error(e, b"k1", b"k2", kvrpcpb::Op::Put);
-        let lock = must_locked(&mut engine, b"k1", 1);
-        check_lock(
-            lock.into_lock_info(b"k1".to_vec()),
-            b"k1",
-            b"k2",
-            kvrpcpb::Op::Put,
-        );
     }
 }

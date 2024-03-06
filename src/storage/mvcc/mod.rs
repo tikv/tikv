@@ -20,9 +20,7 @@ pub use txn_types::{
 };
 
 pub use self::{
-    consistency_check::{
-        Mvcc as MvccConsistencyCheckObserver, MvccInfoCollector, MvccInfoIterator, MvccInfoScanner,
-    },
+    consistency_check::{Mvcc as MvccConsistencyCheckObserver, MvccInfoIterator},
     metrics::{GC_DELETE_VERSIONS_HISTOGRAM, MVCC_VERSIONS_HISTOGRAM},
     reader::*,
     txn::{GcInfo, MvccTxn, ReleasedLock, MAX_TXN_WRITE_SIZE},
@@ -134,14 +132,10 @@ pub enum ErrorInner {
     KeyVersion,
 
     #[error(
-        "pessimistic lock not found, start_ts:{}, key:{}, reason: {:?}",
-        .start_ts, log_wrappers::Value::key(.key), .reason
+        "pessimistic lock not found, start_ts:{}, key:{}",
+        .start_ts, log_wrappers::Value::key(.key)
     )]
-    PessimisticLockNotFound {
-        start_ts: TimeStamp,
-        key: Vec<u8>,
-        reason: PessimisticLockNotFoundReason,
-    },
+    PessimisticLockNotFound { start_ts: TimeStamp, key: Vec<u8> },
 
     #[error(
         "min_commit_ts {} is larger than max_commit_ts {}, start_ts: {}",
@@ -170,9 +164,6 @@ pub enum ErrorInner {
         .start_ts, log_wrappers::Value::key(.key)
     )]
     LockIfExistsFailed { start_ts: TimeStamp, key: Vec<u8> },
-
-    #[error("check_txn_status sent to secondary lock, current lock: {0:?}")]
-    PrimaryMismatch(kvproto::kvrpcpb::LockInfo),
 
     #[error("{0:?}")]
     Other(#[from] Box<dyn error::Error + Sync + Send>),
@@ -266,15 +257,12 @@ impl ErrorInner {
                     key: key.to_owned(),
                 })
             }
-            ErrorInner::PessimisticLockNotFound {
-                start_ts,
-                key,
-                reason,
-            } => Some(ErrorInner::PessimisticLockNotFound {
-                start_ts: *start_ts,
-                key: key.to_owned(),
-                reason: *reason,
-            }),
+            ErrorInner::PessimisticLockNotFound { start_ts, key } => {
+                Some(ErrorInner::PessimisticLockNotFound {
+                    start_ts: *start_ts,
+                    key: key.to_owned(),
+                })
+            }
             ErrorInner::CommitTsTooLarge {
                 start_ts,
                 min_commit_ts,
@@ -303,7 +291,6 @@ impl ErrorInner {
                     key: key.clone(),
                 })
             }
-            ErrorInner::PrimaryMismatch(l) => Some(ErrorInner::PrimaryMismatch(l.clone())),
             ErrorInner::Io(_) | ErrorInner::Other(_) => None,
         }
     }
@@ -406,7 +393,6 @@ impl ErrorCodeExt for Error {
             ErrorInner::CommitTsTooLarge { .. } => error_code::storage::COMMIT_TS_TOO_LARGE,
             ErrorInner::AssertionFailed { .. } => error_code::storage::ASSERTION_FAILED,
             ErrorInner::LockIfExistsFailed { .. } => error_code::storage::LOCK_IF_EXISTS_FAILED,
-            ErrorInner::PrimaryMismatch(_) => error_code::storage::PRIMARY_MISMATCH,
             ErrorInner::Other(_) => error_code::storage::UNKNOWN,
         }
     }
@@ -433,15 +419,6 @@ pub fn default_not_found_error(key: Vec<u8>, hint: &str) -> Error {
         );
         Error::from(ErrorInner::DefaultNotFound { key })
     }
-}
-
-#[derive(Debug, Clone, Copy)]
-pub enum PessimisticLockNotFoundReason {
-    LockTsMismatch,
-    LockMissingAmendFail,
-    LockForUpdateTsMismatch,
-    NonLockKeyConflict,
-    FailpointInjected,
 }
 
 pub mod tests {

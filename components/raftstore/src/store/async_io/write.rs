@@ -20,14 +20,13 @@ use engine_traits::{
 };
 use error_code::ErrorCodeExt;
 use fail::fail_point;
-use file_system::{set_io_type, IoType};
 use kvproto::raft_serverpb::{RaftLocalState, RaftMessage};
 use parking_lot::Mutex;
 use protobuf::Message;
 use raft::eraftpb::Entry;
 use resource_control::{
     channel::{bounded, Receiver},
-    ResourceConsumeType, ResourceController, ResourceMetered,
+    ResourceController, ResourceMetered,
 };
 use tikv_util::{
     box_err,
@@ -284,25 +283,16 @@ where
     EK: KvEngine,
     ER: RaftEngine,
 {
-    fn consume_resource(&self, resource_ctl: &Arc<ResourceController>) -> Option<String> {
+    fn get_resource_consumptions(&self) -> Option<HashMap<String, u64>> {
         match self {
             WriteMsg::WriteTask(t) => {
-                let mut dominant_group = "".to_owned();
-                let mut max_write_bytes = 0;
+                let mut map = HashMap::default();
                 for entry in &t.entries {
                     let header = util::get_entry_header(entry);
                     let group_name = header.get_resource_group_name().to_owned();
-                    let write_bytes = entry.compute_size() as u64;
-                    resource_ctl.consume(
-                        group_name.as_bytes(),
-                        ResourceConsumeType::IoBytes(write_bytes),
-                    );
-                    if write_bytes > max_write_bytes {
-                        dominant_group = group_name;
-                        max_write_bytes = write_bytes;
-                    }
+                    *map.entry(group_name).or_default() += entry.compute_size() as u64;
                 }
-                Some(dominant_group)
+                Some(map)
             }
             _ => None,
         }
@@ -446,8 +436,7 @@ where
             .unwrap();
 
         if let Some(raft_state) = task.raft_state.take()
-            && self.raft_states.insert(task.region_id, raft_state).is_none()
-        {
+            && self.raft_states.insert(task.region_id, raft_state).is_none() {
             self.state_size += std::mem::size_of::<RaftLocalState>();
         }
         self.extra_batch_write.merge(&mut task.extra_write);
@@ -966,7 +955,7 @@ where
         assert_eq!(writers.len(), handlers.len());
         for (i, handler) in handlers.drain(..).enumerate() {
             info!("stopping store writer {}", i);
-            writers[i].send(WriteMsg::Shutdown, None).unwrap();
+            writers[i].send(WriteMsg::Shutdown, 0).unwrap();
             handler.join().unwrap();
         }
     }
@@ -1027,7 +1016,6 @@ where
                         thread::Builder::new()
                             .name(thd_name!(tag))
                             .spawn_wrapper(move || {
-                                set_io_type(IoType::ForegroundWrite);
                                 worker.run();
                             })?;
                     cached_senders.push(tx);

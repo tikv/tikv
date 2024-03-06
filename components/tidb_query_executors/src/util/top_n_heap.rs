@@ -51,25 +51,17 @@ impl TopNHeap {
     }
 
     #[allow(clippy::clone_on_copy)]
-    pub fn take_all_append_to(&mut self, result: &mut LazyBatchColumnVec) {
+    pub fn take_all(&mut self) -> LazyBatchColumnVec {
         let heap = std::mem::take(&mut self.heap);
         let sorted_items = heap.into_sorted_vec();
         if sorted_items.is_empty() {
-            return;
+            return LazyBatchColumnVec::empty();
         }
 
-        // If it is a pure empty LazyBatchColumnVec, we need create columns on it first.
-        if result.columns_len() == 0 {
-            *result = sorted_items[0]
-                .source_data
-                .physical_columns
-                .clone_empty(self.heap.len());
-        }
-        // todo: check schema is equal
-        assert_eq!(
-            result.columns_len(),
-            sorted_items[0].source_data.physical_columns.columns_len(),
-        );
+        let mut result = sorted_items[0]
+            .source_data
+            .physical_columns
+            .clone_empty(sorted_items.len());
 
         for (column_index, result_column) in result.as_mut_slice().iter_mut().enumerate() {
             match result_column {
@@ -109,12 +101,6 @@ impl TopNHeap {
         }
 
         result.assert_columns_equal_length();
-    }
-
-    #[allow(clippy::clone_on_copy)]
-    pub fn take_all(&mut self) -> LazyBatchColumnVec {
-        let mut result = LazyBatchColumnVec::empty();
-        self.take_all_append_to(&mut result);
         result
     }
 }

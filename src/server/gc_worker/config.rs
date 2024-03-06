@@ -22,8 +22,6 @@ pub struct GcConfig {
     /// greater than 5.0.0. Change `compaction_filter_skip_version_check`
     /// can enable it by force.
     pub compaction_filter_skip_version_check: bool,
-    /// gc threads count
-    pub num_threads: usize,
 }
 
 impl Default for GcConfig {
@@ -34,7 +32,6 @@ impl Default for GcConfig {
             max_write_bytes_per_sec: ReadableSize(DEFAULT_GC_MAX_WRITE_BYTES_PER_SEC),
             enable_compaction_filter: true,
             compaction_filter_skip_version_check: false,
-            num_threads: 1,
         }
     }
 }
@@ -43,9 +40,6 @@ impl GcConfig {
     pub fn validate(&self) -> std::result::Result<(), Box<dyn std::error::Error>> {
         if self.batch_keys == 0 {
             return Err("gc.batch_keys should not be 0".into());
-        }
-        if self.num_threads == 0 {
-            return Err("gc.thread_count should not be 0".into());
         }
         Ok(())
     }

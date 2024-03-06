@@ -52,7 +52,7 @@ use resource_metering::{FutureExt, ResourceTagFactory};
 use smallvec::{smallvec, SmallVec};
 use tikv_kv::{Modify, Snapshot, SnapshotExt, WriteData, WriteEvent};
 use tikv_util::{quota_limiter::QuotaLimiter, time::Instant, timer::GLOBAL_TIMER_HANDLE};
-use tracker::{get_tls_tracker_token, set_tls_tracker_token, TrackerToken, GLOBAL_TRACKERS};
+use tracker::{get_tls_tracker_token, set_tls_tracker_token, TrackerToken};
 use txn_types::TimeStamp;
 
 use crate::{
@@ -188,15 +188,9 @@ impl TaskContext {
     }
 
     fn on_schedule(&mut self) {
-        let elapsed = self.latch_timer.saturating_elapsed();
-        if let Some(task) = &self.task.as_ref() {
-            GLOBAL_TRACKERS.with_tracker(task.tracker, |tracker| {
-                tracker.metrics.latch_wait_nanos = elapsed.as_nanos() as u64;
-            });
-        }
         SCHED_LATCH_HISTOGRAM_VEC
             .get(self.tag)
-            .observe(elapsed.as_secs_f64());
+            .observe(self.latch_timer.saturating_elapsed_secs());
     }
 
     // Try to own this TaskContext by setting `owned` from false to true.
@@ -538,7 +532,6 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
 
         let tag = cmd.tag();
         let priority_tag = get_priority_tag(cmd.priority());
-        cmd.incr_cmd_metric();
         SCHED_STAGE_COUNTER_VEC.get(tag).new.inc();
         SCHED_COMMANDS_PRI_COUNTER_VEC_STATIC
             .get(priority_tag)
@@ -786,7 +779,6 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         new_acquired_locks: Vec<kvrpcpb::LockInfo>,
         tag: CommandKind,
         group_name: &str,
-        sched_details: &SchedulerDetails,
     ) {
         // TODO: Does async apply prewrite worth a special metric here?
         if pipelined {
@@ -818,12 +810,6 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                 Err(e) => {
                     if !Self::is_undetermined_error(&e) {
                         do_wake_up = false;
-                    } else {
-                        panic!(
-                            "undetermined error: {:?} cid={}, tag={}, process
-                        result={:?}",
-                            e, cid, tag, &pr
-                        );
                     }
                     ProcessResult::Failed {
                         err: StorageError::from(e),
@@ -834,15 +820,6 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                 SCHED_STAGE_COUNTER_VEC.get(tag).next_cmd.inc();
                 self.schedule_command(None, cmd, cb, None);
             } else {
-                GLOBAL_TRACKERS.with_tracker(sched_details.tracker, |tracker| {
-                    tracker.metrics.scheduler_process_nanos = sched_details
-                        .start_process_instant
-                        .saturating_elapsed()
-                        .as_nanos()
-                        as u64;
-                    tracker.metrics.scheduler_throttle_nanos =
-                        sched_details.flow_control_nanos + sched_details.quota_limit_delay_nanos;
-                });
                 cb.execute(pr);
             }
         } else {
@@ -1061,18 +1038,10 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             .unwrap();
     }
 
-    // Return true if raftstore returns error and the underlying write status could
-    // not be decided.
-    fn is_undetermined_error(e: &tikv_kv::Error) -> bool {
-        if let tikv_kv::ErrorInner::Undetermined(err_msg) = &*(e.0) {
-            error!(
-                "undetermined error is encountered, exit the tikv-server msg={:?}",
-                err_msg
-            );
-            true
-        } else {
-            false
-        }
+    fn is_undetermined_error(_e: &tikv_kv::Error) -> bool {
+        // TODO: If there's some cases that `engine.async_write` returns error but it's
+        // still possible that the data is successfully written, return true.
+        false
     }
 
     fn early_response(
@@ -1104,7 +1073,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
 
             let region_id = task.cmd.ctx().get_region_id();
             let ts = task.cmd.ts();
-            let mut sched_details = SchedulerDetails::new(task.tracker, timer);
+            let mut statistics = Statistics::default();
             match &task.cmd {
                 Command::Prewrite(_) | Command::PrewritePessimistic(_) => {
                     tls_collect_query(region_id, QueryKind::Prewrite);
@@ -1123,19 +1092,18 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
 
             fail_point!("scheduler_process");
             if task.cmd.readonly() {
-                self.process_read(snapshot, task, &mut sched_details);
+                self.process_read(snapshot, task, &mut statistics);
             } else {
-                self.process_write(snapshot, task, &mut sched_details).await;
+                self.process_write(snapshot, task, &mut statistics).await;
             };
-            tls_collect_scan_details(tag.get_str(), &sched_details.stat);
+            tls_collect_scan_details(tag.get_str(), &statistics);
             let elapsed = timer.saturating_elapsed();
             slow_log!(
                 elapsed,
-                "[region {}] scheduler handle command: {}, ts: {}, details: {:?}",
+                "[region {}] scheduler handle command: {}, ts: {}",
                 region_id,
                 tag,
-                ts,
-                sched_details,
+                ts
             );
         }
         .in_resource_metering_tag(resource_tag)
@@ -1144,7 +1112,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
 
     /// Processes a read command within a worker thread, then posts
     /// `ReadFinished` message back to the `TxnScheduler`.
-    fn process_read(self, snapshot: E::Snap, task: Task, sched_details: &mut SchedulerDetails) {
+    fn process_read(self, snapshot: E::Snap, task: Task, statistics: &mut Statistics) {
         fail_point!("txn_before_process_read");
         debug!("process read cmd in worker pool"; "cid" => task.cid);
 
@@ -1154,7 +1122,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         let cmd = task.cmd;
         let pr = unsafe {
             with_perf_context::<E, _, _>(tag, || {
-                cmd.process_read(snapshot, &mut sched_details.stat)
+                cmd.process_read(snapshot, statistics)
                     .unwrap_or_else(|e| ProcessResult::Failed { err: e.into() })
             })
         };
@@ -1167,12 +1135,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
     /// Processes a write command within a worker thread, then posts either a
     /// `WriteFinished` message if successful or a `FinishedWithErr` message
     /// back to the `TxnScheduler`.
-    async fn process_write(
-        self,
-        snapshot: E::Snap,
-        task: Task,
-        sched_details: &mut SchedulerDetails,
-    ) {
+    async fn process_write(self, snapshot: E::Snap, task: Task, statistics: &mut Statistics) {
         fail_point!("txn_before_process_write");
         let write_bytes = task.cmd.write_bytes();
         let tag = task.cmd.tag();
@@ -1211,7 +1174,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                 lock_mgr: &self.inner.lock_mgr,
                 concurrency_manager,
                 extra_op: task.extra_op,
-                statistics: &mut sched_details.stat,
+                statistics,
                 async_apply_prewrite: self.inner.enable_async_apply_prewrite,
                 raw_ext,
             };
@@ -1229,32 +1192,17 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             res
         };
 
-        let process_end = Instant::now();
         if write_result.is_ok() {
             // TODO: write bytes can be a bit inaccurate due to error requests or in-memory
             // pessimistic locks.
             sample.add_write_bytes(write_bytes);
         }
-        let read_bytes = sched_details
-            .stat
-            .cf_statistics(CF_DEFAULT)
-            .flow_stats
-            .read_bytes
-            + sched_details
-                .stat
-                .cf_statistics(CF_LOCK)
-                .flow_stats
-                .read_bytes
-            + sched_details
-                .stat
-                .cf_statistics(CF_WRITE)
-                .flow_stats
-                .read_bytes;
+        let read_bytes = statistics.cf_statistics(CF_DEFAULT).flow_stats.read_bytes
+            + statistics.cf_statistics(CF_LOCK).flow_stats.read_bytes
+            + statistics.cf_statistics(CF_WRITE).flow_stats.read_bytes;
         sample.add_read_bytes(read_bytes);
         let quota_delay = quota_limiter.consume_sample(sample, true).await;
         if !quota_delay.is_zero() {
-            let actual_quota_delay = process_end.saturating_elapsed();
-            sched_details.quota_limit_delay_nanos = actual_quota_delay.as_nanos() as u64;
             TXN_COMMAND_THROTTLE_TIME_COUNTER_VEC_STATIC
                 .get(tag)
                 .inc_by(quota_delay.as_micros() as u64);
@@ -1350,7 +1298,6 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                 new_acquired_locks,
                 tag,
                 &group_name,
-                sched_details,
             );
             return;
         }
@@ -1382,7 +1329,6 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                 new_acquired_locks,
                 tag,
                 &group_name,
-                sched_details,
             );
             return;
         }
@@ -1437,9 +1383,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                         .await
                         .unwrap();
                 }
-                let elapsed = start.saturating_elapsed();
-                SCHED_THROTTLE_TIME.observe(elapsed.as_secs_f64());
-                sched_details.flow_control_nanos = elapsed.as_nanos() as u64;
+                SCHED_THROTTLE_TIME.observe(start.saturating_elapsed_secs());
             }
         }
 
@@ -1477,7 +1421,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         // sent to the raftstore.
         //
         // If some in-memory pessimistic locks need to be proposed, we will propose
-        // another TransferLeader command. Then, we can guarantee even if the proposed
+        // another TransferLeader command. Then, we can guarentee even if the proposed
         // locks don't include the locks deleted here, the response message of the
         // transfer leader command must be later than this write command because this
         // write command has been sent to the raftstore. Then, we don't need to worry
@@ -1572,7 +1516,6 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                         new_acquired_locks,
                         tag,
                         &group_name,
-                        sched_details,
                     );
                     KV_COMMAND_KEYWRITE_HISTOGRAM_VEC
                         .get(tag)
@@ -1843,27 +1786,6 @@ enum PessimisticLockMode {
     Pipelined,
     // Try to store pessimistic locks only in the memory.
     InMemory,
-}
-
-#[derive(Debug)]
-struct SchedulerDetails {
-    tracker: TrackerToken,
-    stat: Statistics,
-    start_process_instant: Instant,
-    quota_limit_delay_nanos: u64,
-    flow_control_nanos: u64,
-}
-
-impl SchedulerDetails {
-    fn new(tracker: TrackerToken, start_process_instant: Instant) -> Self {
-        SchedulerDetails {
-            tracker,
-            stat: Default::default(),
-            start_process_instant,
-            quota_limit_delay_nanos: 0,
-            flow_control_nanos: 0,
-        }
-    }
 }
 
 #[cfg(test)]

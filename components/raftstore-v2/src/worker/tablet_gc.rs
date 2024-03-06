@@ -3,18 +3,14 @@
 use std::{
     fmt::{self, Display, Formatter},
     path::{Path, PathBuf},
-    sync::Arc,
     time::Duration,
 };
 
 use collections::HashMap;
-use engine_traits::{DeleteStrategy, KvEngine, Range, TabletContext, TabletRegistry, DATA_CFS};
-use fail::fail_point;
-use kvproto::{import_sstpb::SstMeta, metapb::Region};
+use engine_traits::{DeleteStrategy, KvEngine, Range, TabletContext, TabletRegistry};
+use kvproto::metapb::Region;
 use slog::{debug, error, info, warn, Logger};
-use sst_importer::SstImporter;
 use tikv_util::{
-    time::Instant,
     worker::{Runnable, RunnableWithTimer},
     yatp_pool::{DefaultTicker, FuturePool, YatpPoolBuilder},
     Either,
@@ -41,16 +37,6 @@ pub enum Task<EK> {
     },
     /// Sometimes we know for sure a tablet can be destroyed directly.
     DirectDestroy { tablet: Either<EK, PathBuf> },
-    /// Cleanup ssts.
-    CleanupImportSst(Box<[SstMeta]>),
-    /// Flush memtable before split
-    ///
-    /// cb is some iff the task is sent from leader, it is used to real propose
-    /// split when flush finishes
-    Flush {
-        region_id: u64,
-        cb: Option<Box<dyn FnOnce() + Send>>,
-    },
 }
 
 impl<EK> Display for Task<EK> {
@@ -83,20 +69,6 @@ impl<EK> Display for Task<EK> {
             ),
             Task::DirectDestroy { .. } => {
                 write!(f, "direct destroy tablet")
-            }
-            Task::CleanupImportSst(ssts) => {
-                write!(f, "cleanup import ssts {:?}", ssts)
-            }
-            Task::Flush {
-                region_id,
-                cb: on_flush_finish,
-            } => {
-                write!(
-                    f,
-                    "flush tablet for region_id {}, is leader {}",
-                    region_id,
-                    on_flush_finish.is_some()
-                )
             }
         }
     }
@@ -156,7 +128,6 @@ impl<EK> Task<EK> {
 
 pub struct Runner<EK: KvEngine> {
     tablet_registry: TabletRegistry<EK>,
-    sst_importer: Arc<SstImporter>,
     logger: Logger,
 
     // region_id -> [(tablet_path, wait_for_persisted)].
@@ -169,19 +140,14 @@ pub struct Runner<EK: KvEngine> {
 }
 
 impl<EK: KvEngine> Runner<EK> {
-    pub fn new(
-        tablet_registry: TabletRegistry<EK>,
-        sst_importer: Arc<SstImporter>,
-        logger: Logger,
-    ) -> Self {
+    pub fn new(tablet_registry: TabletRegistry<EK>, logger: Logger) -> Self {
         Self {
             tablet_registry,
-            sst_importer,
             logger,
             waiting_destroy_tasks: HashMap::default(),
             pending_destroy_tasks: Vec::new(),
             background_pool: YatpPoolBuilder::new(DefaultTicker::default())
-                .name_prefix("tablet-bg")
+                .name_prefix("tablet-gc-bg")
                 .thread_count(
                     0,
                     DEFAULT_BACKGROUND_POOL_SIZE,
@@ -196,7 +162,13 @@ impl<EK: KvEngine> Runner<EK> {
         let end_key = keys::data_end_key(&end);
         let range1 = Range::new(&[], &start_key);
         let range2 = Range::new(&end_key, keys::DATA_MAX_KEY);
-        if let Err(e) = tablet.delete_ranges_cfs(DeleteStrategy::DeleteFiles, &[range1, range2]) {
+        // TODO: Avoid `DeleteByRange` after compaction filter is ready.
+        if let Err(e) = tablet
+            .delete_ranges_cfs(DeleteStrategy::DeleteFiles, &[range1, range2])
+            .and_then(|_| {
+                tablet.delete_ranges_cfs(DeleteStrategy::DeleteByRange, &[range1, range2])
+            })
+        {
             error!(
                 self.logger,
                 "failed to trim tablet";
@@ -212,7 +184,6 @@ impl<EK: KvEngine> Runner<EK> {
                 let range1 = Range::new(&[], &start_key);
                 let range2 = Range::new(&end_key, keys::DATA_MAX_KEY);
                 for r in [range1, range2] {
-                    // When compaction filter is present, trivial move is disallowed.
                     if let Err(e) =
                         tablet.compact_range(Some(r.start_key), Some(r.end_key), false, 1)
                     {
@@ -238,7 +209,6 @@ impl<EK: KvEngine> Runner<EK> {
                 }
                 // drop before callback.
                 drop(tablet);
-                fail_point!("tablet_trimmed_finished");
                 cb();
             })
             .unwrap();
@@ -325,54 +295,6 @@ impl<EK: KvEngine> Runner<EK> {
         }
         false
     }
-
-    fn cleanup_ssts(&self, ssts: Box<[SstMeta]>) {
-        for sst in Vec::from(ssts) {
-            if let Err(e) = self.sst_importer.delete(&sst) {
-                warn!(self.logger, "failed to cleanup sst"; "err" => ?e, "sst" => ?sst);
-            }
-        }
-    }
-
-    fn flush_tablet(&self, region_id: u64, cb: Option<Box<dyn FnOnce() + Send>>) {
-        let Some(Some(tablet)) = self
-            .tablet_registry
-            .get(region_id)
-            .map(|mut cache| cache.latest().cloned()) else {return};
-
-        // The callback `cb` being some means it's the task sent from
-        // leader, we should sync flush memtables and call it after the flush complete
-        // where the split will be proposed again with extra flag.
-        if let Some(cb) = cb {
-            let logger = self.logger.clone();
-            let now = Instant::now();
-            self.background_pool
-                .spawn(async move {
-                    // sync flush for leader to let the flush happend before later checkpoint.
-                    tablet.flush_cfs(DATA_CFS, true).unwrap();
-                    let elapsed = now.saturating_elapsed();
-                    // to be removed after when it's stable
-                    info!(
-                        logger,
-                        "flush memtable for leader";
-                        "region_id" => region_id,
-                        "duration" => ?elapsed,
-                    );
-
-                    drop(tablet);
-                    cb();
-                })
-                .unwrap();
-        } else {
-            info!(
-                self.logger,
-                "flush memtable for follower";
-                "region_id" => region_id,
-            );
-
-            tablet.flush_cfs(DATA_CFS, false).unwrap();
-        }
-    }
 }
 
 impl<EK> Runnable for Runner<EK>
@@ -399,8 +321,6 @@ where
                 persisted_index,
             } => self.destroy(region_id, persisted_index),
             Task::DirectDestroy { tablet, .. } => self.direct_destroy(tablet),
-            Task::CleanupImportSst(ssts) => self.cleanup_ssts(ssts),
-            Task::Flush { region_id, cb } => self.flush_tablet(region_id, cb),
         }
     }
 }
@@ -429,7 +349,6 @@ mod tests {
     use tempfile::Builder;
 
     use super::*;
-    use crate::operation::test_util::create_tmp_importer;
 
     #[test]
     fn test_race_between_destroy_and_trim() {
@@ -443,8 +362,7 @@ mod tests {
         ));
         let registry = TabletRegistry::new(factory, dir.path()).unwrap();
         let logger = slog_global::borrow_global().new(slog::o!());
-        let (_dir, importer) = create_tmp_importer();
-        let mut runner = Runner::new(registry.clone(), importer, logger);
+        let mut runner = Runner::new(registry.clone(), logger);
 
         let mut region = Region::default();
         let rid = 1;

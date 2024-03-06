@@ -15,14 +15,14 @@ use file_system::{set_io_type, IoType};
 use futures::{channel::oneshot, future::TryFutureExt};
 use kvproto::{errorpb, kvrpcpb::CommandPri};
 use online_config::{ConfigChange, ConfigManager, ConfigValue, Result as CfgResult};
-use prometheus::{core::Metric, Histogram, IntCounter, IntGauge};
+use prometheus::{Histogram, IntCounter, IntGauge};
 use resource_control::{ControlledFuture, ResourceController};
 use thiserror::Error;
 use tikv_util::{
     sys::{cpu_time::ProcessStat, SysQuota},
     time::Instant,
     worker::{Runnable, RunnableWithTimer, Scheduler, Worker},
-    yatp_pool::{self, CleanupMethod, FuturePool, PoolTicker, YatpPoolBuilder},
+    yatp_pool::{self, FuturePool, PoolTicker, YatpPoolBuilder},
 };
 use tracker::TrackedFuture;
 use yatp::{
@@ -355,15 +355,11 @@ impl TimeSliceInspector {
         // Now, we simplify the problem by merging samples from all levels. If we want
         // more accurate answer in the future, calculate for each level separately.
         for hist in &inner.time_slice_hist {
-            // Call `metric` to get a consistent snapshot of sum and count.
-            let metric_proto = hist.metric();
-            let hist_proto = metric_proto.get_histogram();
-            new_sum += Duration::from_secs_f64(hist_proto.get_sample_sum());
-            new_count += hist_proto.get_sample_count();
+            new_sum += Duration::from_secs_f64(hist.get_sample_sum());
+            new_count += hist.get_sample_count();
         }
-        let time_diff = new_sum.saturating_sub(inner.last_sum);
-        let count_diff = new_count.saturating_sub(inner.last_count);
-        if time_diff < MIN_TIME_DIFF || count_diff == 0 {
+        let time_diff = new_sum - inner.last_sum;
+        if time_diff < MIN_TIME_DIFF {
             return;
         }
         let new_val = time_diff / ((new_count - inner.last_count) as u32);
@@ -413,37 +409,16 @@ fn get_unified_read_pool_name() -> String {
     "unified-read-pool".to_string()
 }
 
-#[inline]
 pub fn build_yatp_read_pool<E: Engine, R: FlowStatsReporter>(
     config: &UnifiedReadPoolConfig,
     reporter: R,
     engine: E,
     resource_ctl: Option<Arc<ResourceController>>,
-    cleanup_method: CleanupMethod,
 ) -> ReadPool {
     let unified_read_pool_name = get_unified_read_pool_name();
-    build_yatp_read_pool_with_name(
-        config,
-        reporter,
-        engine,
-        resource_ctl,
-        cleanup_method,
-        unified_read_pool_name,
-    )
-}
-
-pub fn build_yatp_read_pool_with_name<E: Engine, R: FlowStatsReporter>(
-    config: &UnifiedReadPoolConfig,
-    reporter: R,
-    engine: E,
-    resource_ctl: Option<Arc<ResourceController>>,
-    cleanup_method: CleanupMethod,
-    unified_read_pool_name: String,
-) -> ReadPool {
     let raftkv = Arc::new(Mutex::new(engine));
     let builder = YatpPoolBuilder::new(ReporterTicker { reporter })
         .name_prefix(&unified_read_pool_name)
-        .cleanup_method(cleanup_method)
         .stack_size(config.stack_size.0 as usize)
         .thread_count(
             config.min_thread_count,
@@ -763,7 +738,6 @@ mod tests {
 
     use futures::channel::oneshot;
     use raftstore::store::{ReadStats, WriteStats};
-    use resource_control::ResourceGroupManager;
 
     use super::*;
     use crate::storage::TestEngineBuilder;
@@ -787,8 +761,7 @@ mod tests {
         // max running tasks number should be 2*1 = 2
 
         let engine = TestEngineBuilder::new().build().unwrap();
-        let pool =
-            build_yatp_read_pool(&config, DummyReporter, engine, None, CleanupMethod::InPlace);
+        let pool = build_yatp_read_pool(&config, DummyReporter, engine, None);
 
         let gen_task = || {
             let (tx, rx) = oneshot::channel::<()>();
@@ -829,8 +802,7 @@ mod tests {
         // max running tasks number should be 2*1 = 2
 
         let engine = TestEngineBuilder::new().build().unwrap();
-        let pool =
-            build_yatp_read_pool(&config, DummyReporter, engine, None, CleanupMethod::InPlace);
+        let pool = build_yatp_read_pool(&config, DummyReporter, engine, None);
 
         let gen_task = || {
             let (tx, rx) = oneshot::channel::<()>();
@@ -879,8 +851,7 @@ mod tests {
         // max running tasks number should be 2*1 = 2
 
         let engine = TestEngineBuilder::new().build().unwrap();
-        let pool =
-            build_yatp_read_pool(&config, DummyReporter, engine, None, CleanupMethod::InPlace);
+        let pool = build_yatp_read_pool(&config, DummyReporter, engine, None);
 
         let gen_task = || {
             let (tx, rx) = oneshot::channel::<()>();
@@ -961,70 +932,5 @@ mod tests {
         inspector.update();
         let ewma = inspector.get_ewma_time_slice().as_secs_f64();
         assert!((ewma - 0.01307).abs() < MARGIN);
-    }
-
-    #[test]
-    fn test_yatp_task_poll_duration_metric() {
-        let count_metric = |name: &str| -> u64 {
-            let mut sum = 0;
-            for i in 0..=2 {
-                let hist =
-                    yatp::metrics::TASK_POLL_DURATION.with_label_values(&[name, &format!("{}", i)]);
-                sum += hist.get_sample_count();
-            }
-            sum
-        };
-
-        for control in [false, true] {
-            let name = format!("test_yatp_task_poll_duration_metric_{}", control);
-            let resource_manager = if control {
-                let resource_manager = ResourceGroupManager::default();
-                let resource_ctl = resource_manager.derive_controller(name.clone(), true);
-                Some(resource_ctl)
-            } else {
-                None
-            };
-            let config = UnifiedReadPoolConfig {
-                min_thread_count: 1,
-                max_thread_count: 2,
-                max_tasks_per_worker: 1,
-                ..Default::default()
-            };
-
-            let engine = TestEngineBuilder::new().build().unwrap();
-
-            let pool = build_yatp_read_pool_with_name(
-                &config,
-                DummyReporter,
-                engine,
-                resource_manager,
-                CleanupMethod::InPlace,
-                name.clone(),
-            );
-
-            let gen_task = || {
-                let (tx, rx) = oneshot::channel::<()>();
-                let task = async move {
-                    // sleep the thread 100ms to trigger flushing the metrics.
-                    std::thread::sleep(std::time::Duration::from_millis(100));
-                    let _ = rx.await;
-                };
-                (task, tx)
-            };
-
-            let handle = pool.handle();
-            let (task1, tx1) = gen_task();
-            let (task2, tx2) = gen_task();
-
-            handle.spawn(task1, CommandPri::Normal, 1, vec![]).unwrap();
-            handle.spawn(task2, CommandPri::Normal, 2, vec![]).unwrap();
-
-            tx1.send(()).unwrap();
-            tx2.send(()).unwrap();
-
-            thread::sleep(Duration::from_millis(300));
-            assert_eq!(count_metric(&name), 2);
-            drop(pool);
-        }
     }
 }

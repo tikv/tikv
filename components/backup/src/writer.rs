@@ -3,9 +3,10 @@
 use std::{fmt::Display, io::Read};
 
 use encryption::{EncrypterReader, Iv};
+use engine_rocks::{RocksEngine, RocksSstWriter, RocksSstWriterBuilder};
 use engine_traits::{
-    CfName, ExternalSstFileInfo, KvEngine, SstCompressionType, SstExt, SstWriter, SstWriterBuilder,
-    CF_DEFAULT, CF_WRITE,
+    CfName, ExternalSstFileInfo, SstCompressionType, SstWriter, SstWriterBuilder, CF_DEFAULT,
+    CF_WRITE,
 };
 use external_storage_export::{ExternalStorage, UnpinReader};
 use file_system::Sha256Reader;
@@ -48,16 +49,16 @@ impl From<CfNameWrap> for CfName {
     }
 }
 
-struct Writer<W: SstWriter + 'static> {
-    writer: W,
+struct Writer {
+    writer: RocksSstWriter,
     total_kvs: u64,
     total_bytes: u64,
     checksum: u64,
     digest: crc64fast::Digest,
 }
 
-impl<W: SstWriter + 'static> Writer<W> {
-    fn new(writer: W) -> Self {
+impl Writer {
+    fn new(writer: RocksSstWriter) -> Self {
         Writer {
             writer,
             total_kvs: 0,
@@ -97,7 +98,9 @@ impl<W: SstWriter + 'static> Writer<W> {
         Ok(())
     }
 
-    fn finish_read(writer: W) -> Result<(u64, impl Read)> {
+    // FIXME: we cannot get sst_info in [save_and_build_file], which may cause the
+    // !Send type [RocksEnternalSstFileInfo] sent between threads.
+    fn finish_read(writer: RocksSstWriter) -> Result<(u64, impl Read)> {
         let (sst_info, sst_reader) = writer.finish_read()?;
         Ok((sst_info.file_size(), sst_reader))
     }
@@ -160,28 +163,28 @@ impl<W: SstWriter + 'static> Writer<W> {
     }
 }
 
-pub struct BackupWriterBuilder<EK: KvEngine> {
+pub struct BackupWriterBuilder {
     store_id: u64,
     limiter: Limiter,
     region: Region,
-    db: EK,
+    db: RocksEngine,
     compression_type: Option<SstCompressionType>,
     compression_level: i32,
     sst_max_size: u64,
     cipher: CipherInfo,
 }
 
-impl<EK: KvEngine> BackupWriterBuilder<EK> {
+impl BackupWriterBuilder {
     pub fn new(
         store_id: u64,
         limiter: Limiter,
         region: Region,
-        db: EK,
+        db: RocksEngine,
         compression_type: Option<SstCompressionType>,
         compression_level: i32,
         sst_max_size: u64,
         cipher: CipherInfo,
-    ) -> BackupWriterBuilder<EK> {
+    ) -> BackupWriterBuilder {
         Self {
             store_id,
             limiter,
@@ -194,7 +197,7 @@ impl<EK: KvEngine> BackupWriterBuilder<EK> {
         }
     }
 
-    pub fn build(&self, start_key: Vec<u8>, storage_name: &str) -> Result<BackupWriter<EK>> {
+    pub fn build(&self, start_key: Vec<u8>, storage_name: &str) -> Result<BackupWriter> {
         let key = file_system::sha256(&start_key).ok().map(hex::encode);
         let store_id = self.store_id;
         let name = backup_file_name(store_id, &self.region, key, storage_name);
@@ -211,34 +214,34 @@ impl<EK: KvEngine> BackupWriterBuilder<EK> {
 }
 
 /// A writer writes txn entries into SST files.
-pub struct BackupWriter<EK: KvEngine> {
+pub struct BackupWriter {
     name: String,
-    default: Writer<<EK as SstExt>::SstWriter>,
-    write: Writer<<EK as SstExt>::SstWriter>,
+    default: Writer,
+    write: Writer,
     limiter: Limiter,
     sst_max_size: u64,
     cipher: CipherInfo,
 }
 
-impl<EK: KvEngine> BackupWriter<EK> {
+impl BackupWriter {
     /// Create a new BackupWriter.
     pub fn new(
-        db: EK,
+        db: RocksEngine,
         name: &str,
         compression_type: Option<SstCompressionType>,
         compression_level: i32,
         limiter: Limiter,
         sst_max_size: u64,
         cipher: CipherInfo,
-    ) -> Result<BackupWriter<EK>> {
-        let default = <EK as SstExt>::SstWriterBuilder::new()
+    ) -> Result<BackupWriter> {
+        let default = RocksSstWriterBuilder::new()
             .set_in_memory(true)
             .set_cf(CF_DEFAULT)
             .set_db(&db)
             .set_compression_type(compression_type)
             .set_compression_level(compression_level)
             .build(name)?;
-        let write = <EK as SstExt>::SstWriterBuilder::new()
+        let write = RocksSstWriterBuilder::new()
             .set_in_memory(true)
             .set_cf(CF_WRITE)
             .set_db(&db)
@@ -335,19 +338,19 @@ impl<EK: KvEngine> BackupWriter<EK> {
 }
 
 /// A writer writes Raw kv into SST files.
-pub struct BackupRawKvWriter<EK: KvEngine> {
+pub struct BackupRawKvWriter {
     name: String,
     cf: CfName,
-    writer: Writer<<EK as SstExt>::SstWriter>,
+    writer: Writer,
     limiter: Limiter,
     cipher: CipherInfo,
     codec: KeyValueCodec,
 }
 
-impl<EK: KvEngine> BackupRawKvWriter<EK> {
+impl BackupRawKvWriter {
     /// Create a new BackupRawKvWriter.
     pub fn new(
-        db: EK,
+        db: RocksEngine,
         name: &str,
         cf: CfNameWrap,
         limiter: Limiter,
@@ -355,8 +358,8 @@ impl<EK: KvEngine> BackupRawKvWriter<EK> {
         compression_level: i32,
         cipher: CipherInfo,
         codec: KeyValueCodec,
-    ) -> Result<BackupRawKvWriter<EK>> {
-        let writer = <EK as SstExt>::SstWriterBuilder::new()
+    ) -> Result<BackupRawKvWriter> {
+        let writer = RocksSstWriterBuilder::new()
             .set_in_memory(true)
             .set_cf(cf.into())
             .set_db(&db)

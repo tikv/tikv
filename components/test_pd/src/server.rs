@@ -13,13 +13,10 @@ use std::{
 use fail::fail_point;
 use futures::{future, SinkExt, TryFutureExt, TryStreamExt};
 use grpcio::{
-    ClientStreamingSink, DuplexSink, EnvBuilder, RequestStream, RpcContext, RpcStatus,
-    RpcStatusCode, Server as GrpcServer, ServerBuilder, ServerStreamingSink, UnarySink, WriteFlags,
+    DuplexSink, EnvBuilder, RequestStream, RpcContext, RpcStatus, RpcStatusCode,
+    Server as GrpcServer, ServerBuilder, ServerStreamingSink, UnarySink, WriteFlags,
 };
-use kvproto::{
-    meta_storagepb_grpc::{create_meta_storage, MetaStorage},
-    pdpb::*,
-};
+use kvproto::pdpb::*;
 use pd_client::Error as PdError;
 use security::*;
 
@@ -73,17 +70,14 @@ impl<C: PdMocker + Send + Sync + 'static> Server<C> {
     }
 
     pub fn start(&mut self, mgr: &SecurityManager, eps: Vec<(String, u16)>) {
-        let pd = create_pd(self.mocker.clone());
-        let meta_store = create_meta_storage(self.mocker.clone());
+        let service = create_pd(self.mocker.clone());
         let env = Arc::new(
             EnvBuilder::new()
                 .cq_count(1)
                 .name_prefix(thd_name!("mock-server"))
                 .build(),
         );
-        let mut sb = ServerBuilder::new(env)
-            .register_service(pd)
-            .register_service(meta_store);
+        let mut sb = ServerBuilder::new(env).register_service(service);
         for (host, port) in eps {
             sb = mgr.bind(sb, &host, port);
         }
@@ -190,40 +184,6 @@ impl<C: PdMocker> Clone for PdMock<C> {
             tso_logical: self.tso_logical.clone(),
             etcd_client: self.etcd_client.clone(),
         }
-    }
-}
-
-impl<C: PdMocker + Send + Sync + 'static> MetaStorage for PdMock<C> {
-    fn watch(
-        &mut self,
-        ctx: grpcio::RpcContext<'_>,
-        req: kvproto::meta_storagepb::WatchRequest,
-        sink: grpcio::ServerStreamingSink<kvproto::meta_storagepb::WatchResponse>,
-    ) {
-        match &self.case {
-            Some(x) => {
-                x.meta_store_watch(req, sink, &ctx);
-            }
-            None => grpcio::unimplemented_call!(ctx, sink),
-        }
-    }
-
-    fn get(
-        &mut self,
-        ctx: grpcio::RpcContext<'_>,
-        req: kvproto::meta_storagepb::GetRequest,
-        sink: grpcio::UnarySink<kvproto::meta_storagepb::GetResponse>,
-    ) {
-        hijack_unary(self, ctx, sink, |m| m.meta_store_get(req.clone()))
-    }
-
-    fn put(
-        &mut self,
-        ctx: grpcio::RpcContext<'_>,
-        req: kvproto::meta_storagepb::PutRequest,
-        sink: grpcio::UnarySink<kvproto::meta_storagepb::PutResponse>,
-    ) {
-        hijack_unary(self, ctx, sink, |m| m.meta_store_put(req.clone()))
     }
 }
 
@@ -398,29 +358,6 @@ impl<C: PdMocker + Send + Sync + 'static> Pd for PdMock<C> {
         sink: UnarySink<StoreHeartbeatResponse>,
     ) {
         hijack_unary(self, ctx, sink, |c| c.store_heartbeat(&req))
-    }
-
-    fn report_buckets(
-        &mut self,
-        ctx: grpcio::RpcContext<'_>,
-        stream: RequestStream<ReportBucketsRequest>,
-        sink: ClientStreamingSink<ReportBucketsResponse>,
-    ) {
-        let mock = self.clone();
-        ctx.spawn(async move {
-            let mut stream = stream.map_err(PdError::from);
-            while let Ok(Some(req)) = stream.try_next().await {
-                let resp = mock
-                    .case
-                    .as_ref()
-                    .and_then(|case| case.report_buckets(&req))
-                    .or_else(|| mock.default_handler.report_buckets(&req));
-                if let Some(Ok(resp)) = resp {
-                    sink.success(resp);
-                    break;
-                }
-            }
-        });
     }
 
     fn region_heartbeat(

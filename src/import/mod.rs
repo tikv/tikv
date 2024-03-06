@@ -13,7 +13,6 @@
 //! inside TiKV because it needs to interact with raftstore.
 
 mod duplicate_detect;
-mod raft_writer;
 mod sst_service;
 
 use std::fmt::Debug;

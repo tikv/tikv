@@ -31,8 +31,8 @@ rusoto_credential = "0.46.0"
 rusoto_kms = { version = "0.46.0", features = ["serialize_structs"] }
 rusoto_s3 = { version = "0.46.0", features = ["serialize_structs"] }
 rusoto_sts = "0.46.0"
-slog = { workspace = true }
-slog-global = { workspace = true }
+slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
+slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }
 thiserror = "1.0"
 tikv_util = { workspace = true }
 # better to not use slog-global, but pass in the logger

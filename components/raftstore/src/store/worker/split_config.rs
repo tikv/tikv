@@ -6,18 +6,13 @@ use lazy_static::lazy_static;
 use online_config::{ConfigChange, ConfigManager, OnlineConfig};
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
-use tikv_util::{
-    config::{ReadableSize, VersionTrack},
-    info,
-};
+use tikv_util::{config::VersionTrack, info};
 
 const DEFAULT_DETECT_TIMES: u64 = 10;
 const DEFAULT_SAMPLE_THRESHOLD: u64 = 100;
 pub(crate) const DEFAULT_SAMPLE_NUM: usize = 20;
-pub const DEFAULT_QPS_THRESHOLD: usize = 3000;
-pub const DEFAULT_BIG_REGION_QPS_THRESHOLD: usize = 7000;
-pub const DEFAULT_BYTE_THRESHOLD: usize = 30 * 1024 * 1024;
-pub const DEFAULT_BIG_REGION_BYTE_THRESHOLD: usize = 100 * 1024 * 1024;
+const DEFAULT_QPS_THRESHOLD: usize = 3000;
+const DEFAULT_BYTE_THRESHOLD: usize = 30 * 1024 * 1024;
 
 // We get balance score by
 // abs(sample.left-sample.right)/(sample.right+sample.left). It will be used to
@@ -48,8 +43,7 @@ const DEFAULT_UNIFIED_READ_POOL_THREAD_CPU_OVERLOAD_THRESHOLD_RATIO: f64 = 0.8;
 // `REGION_CPU_OVERLOAD_THRESHOLD_RATIO` as a percentage of the Unified Read
 // Poll, it will be added into the hot region list and may be split later as the
 // top hot CPU region.
-pub const REGION_CPU_OVERLOAD_THRESHOLD_RATIO: f64 = 0.25;
-pub const BIG_REGION_CPU_OVERLOAD_THRESHOLD_RATIO: f64 = 0.75;
+pub(crate) const REGION_CPU_OVERLOAD_THRESHOLD_RATIO: f64 = 0.25;
 
 lazy_static! {
     static ref SPLIT_CONFIG: Mutex<Option<Arc<VersionTrack<SplitConfig>>>> = Mutex::new(None);
@@ -139,15 +133,6 @@ impl SplitConfig {
             return Err(("threshold ratio should be between 0 and 1.").into());
         }
         Ok(())
-    }
-
-    pub fn optimize_for(&mut self, region_size: ReadableSize) {
-        const LARGE_REGION_SIZE_IN_MB: u64 = 4096;
-        if region_size.as_mb() >= LARGE_REGION_SIZE_IN_MB {
-            self.qps_threshold = DEFAULT_BIG_REGION_QPS_THRESHOLD;
-            self.region_cpu_overload_threshold_ratio = BIG_REGION_CPU_OVERLOAD_THRESHOLD_RATIO;
-            self.byte_threshold = DEFAULT_BIG_REGION_BYTE_THRESHOLD;
-        }
     }
 }
 

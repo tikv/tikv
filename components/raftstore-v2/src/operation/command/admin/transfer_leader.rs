@@ -15,7 +15,7 @@ use raft::{eraftpb, ProgressState, Storage};
 use raftstore::{
     store::{
         fsm::new_admin_request, make_transfer_leader_response, metrics::PEER_ADMIN_CMD_COUNTER,
-        Transport, TRANSFER_LEADER_COMMAND_REPLY_CTX,
+        TRANSFER_LEADER_COMMAND_REPLY_CTX,
     },
     Result,
 };
@@ -146,7 +146,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         true
     }
 
-    pub fn on_transfer_leader_msg<T: Transport>(
+    pub fn on_transfer_leader_msg<T>(
         &mut self,
         ctx: &mut StoreContext<EK, ER, T>,
         msg: &eraftpb::Message,

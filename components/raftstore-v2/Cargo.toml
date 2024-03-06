@@ -35,7 +35,6 @@ causal_ts = { workspace = true }
 collections = { workspace = true }
 concurrency_manager = { workspace = true }
 crossbeam = "0.8"
-encryption_export = { workspace = true }
 engine_traits = { workspace = true }
 error_code = { workspace = true }
 fail = "0.5"
@@ -57,7 +56,6 @@ resource_control = { workspace = true }
 resource_metering = { workspace = true }
 slog = "2.3"
 smallvec = "1.4"
-sst_importer = { workspace = true }
 thiserror = "1.0"
 tikv_util = { workspace = true }
 time = "0.1"
@@ -66,9 +64,8 @@ txn_types = { workspace = true }
 yatp = { git = "https://github.com/tikv/yatp.git", branch = "master" }
 
 [dev-dependencies]
-engine_rocks = { workspace = true }
 engine_test = { workspace = true }
-slog-global = { workspace = true }
+slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }
 tempfile = "3.0"
 test_pd = { workspace = true }
 test_util = { workspace = true }

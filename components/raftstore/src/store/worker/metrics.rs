@@ -70,7 +70,6 @@ make_static_metric! {
 pub struct LocalReadMetrics {
     pub local_executed_requests: LocalIntCounter,
     pub local_executed_stale_read_requests: LocalIntCounter,
-    pub local_executed_replica_read_requests: LocalIntCounter,
     pub local_executed_snapshot_cache_hit: LocalIntCounter,
     pub reject_reason: LocalReadRejectCounter,
     pub renew_lease_advance: LocalIntCounter,
@@ -82,7 +81,6 @@ thread_local! {
         LocalReadMetrics {
             local_executed_requests: LOCAL_READ_EXECUTED_REQUESTS.local(),
             local_executed_stale_read_requests: LOCAL_READ_EXECUTED_STALE_READ_REQUESTS.local(),
-            local_executed_replica_read_requests: LOCAL_READ_EXECUTED_REPLICA_READ_REQUESTS.local(),
             local_executed_snapshot_cache_hit: LOCAL_READ_EXECUTED_CACHE_REQUESTS.local(),
             reject_reason: LocalReadRejectCounter::from(&LOCAL_READ_REJECT_VEC),
             renew_lease_advance: LOCAL_READ_RENEW_LEASE_ADVANCE_COUNTER.local(),
@@ -100,7 +98,6 @@ pub fn maybe_tls_local_read_metrics_flush() {
         if m.last_flush_time.saturating_elapsed() >= Duration::from_millis(METRICS_FLUSH_INTERVAL) {
             m.local_executed_requests.flush();
             m.local_executed_stale_read_requests.flush();
-            m.local_executed_replica_read_requests.flush();
             m.local_executed_snapshot_cache_hit.flush();
             m.reject_reason.flush();
             m.renew_lease_advance.flush();
@@ -183,11 +180,6 @@ lazy_static! {
         "Total number of stale read requests directly executed by local reader."
     )
     .unwrap();
-    pub static ref LOCAL_READ_EXECUTED_REPLICA_READ_REQUESTS: IntCounter = register_int_counter!(
-        "tikv_raftstore_local_read_executed_replica_read_requests",
-        "Total number of stale read requests directly executed by local reader."
-    )
-    .unwrap();
     pub static ref RAFT_LOG_GC_WRITE_DURATION_HISTOGRAM: Histogram = register_histogram!(
         "tikv_raftstore_raft_log_gc_write_duration_secs",
         "Bucketed histogram of write duration of raft log gc.",
@@ -197,6 +189,12 @@ lazy_static! {
     pub static ref RAFT_LOG_GC_SEEK_OPERATIONS: IntCounter = register_int_counter!(
         "tikv_raftstore_raft_log_gc_seek_operations_count",
         "Total number of seek operations from raft log gc."
+    )
+    .unwrap();
+    pub static ref RAFT_LOG_GC_DELETED_KEYS_HISTOGRAM: Histogram = register_histogram!(
+        "tikv_raftstore_raft_log_gc_deleted_keys",
+        "Bucket of number of deleted keys from raft log gc.",
+        exponential_buckets(1.0, 2.0, 20).unwrap()
     )
     .unwrap();
     pub static ref RAFT_LOG_GC_FAILED: IntCounter = register_int_counter!(

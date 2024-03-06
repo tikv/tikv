@@ -206,8 +206,6 @@ pub trait ApplySnapshotObserver: Coprocessor {
     ) {
     }
 
-    fn cancel_apply_snapshot(&self, _: u64, _: u64) {}
-
     /// We call pre_apply_snapshot only when one of the observer returns true.
     fn should_pre_apply_snapshot(&self) -> bool {
         false
@@ -277,7 +275,7 @@ pub struct RoleChange {
 }
 
 impl RoleChange {
-    #[cfg(any(test, feature = "testexport"))]
+    #[cfg(feature = "testexport")]
     pub fn new(state: StateRole) -> Self {
         RoleChange {
             state,
@@ -307,7 +305,6 @@ pub enum RegionChangeReason {
     CommitMerge,
     RollbackMerge,
     SwitchWitness,
-    Flashback,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -441,7 +438,7 @@ impl CmdObserveInfo {
     /// PiTR: Observer supports the `backup-log` function.
     /// RTS: Observer supports the `resolved-ts` advancing (and follower read,
     /// etc.).
-    pub fn observe_level(&self) -> ObserveLevel {
+    fn observe_level(&self) -> ObserveLevel {
         let cdc = if self.cdc_id.is_observing() {
             // `cdc` observe all data
             ObserveLevel::All
@@ -513,19 +510,6 @@ impl CmdBatch {
         assert_eq!(observe_info.rts_id.id, self.rts_id);
         assert_eq!(observe_info.pitr_id.id, self.pitr_id);
         self.cmds.push(cmd)
-    }
-
-    pub fn extend<I: IntoIterator<Item = Cmd>>(
-        &mut self,
-        observe_info: &CmdObserveInfo,
-        region_id: u64,
-        cmds: I,
-    ) {
-        assert_eq!(region_id, self.region_id);
-        assert_eq!(observe_info.cdc_id.id, self.cdc_id);
-        assert_eq!(observe_info.rts_id.id, self.rts_id);
-        assert_eq!(observe_info.pitr_id.id, self.pitr_id);
-        self.cmds.extend(cmds)
     }
 
     pub fn into_iter(self, region_id: u64) -> IntoIter<Cmd> {

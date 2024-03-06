@@ -14,7 +14,6 @@ mod util;
 
 mod config;
 pub mod errors;
-pub mod meta_storage;
 use std::{cmp::Ordering, ops::Deref, sync::Arc, time::Duration};
 
 use futures::future::BoxFuture;
@@ -151,33 +150,6 @@ impl BucketStat {
             stats,
             create_time: Instant::now(),
         }
-    }
-
-    pub fn from_meta(meta: Arc<BucketMeta>) -> Self {
-        let stats = new_bucket_stats(&meta);
-        Self::new(meta, stats)
-    }
-
-    pub fn set_meta(&mut self, meta: Arc<BucketMeta>) {
-        self.stats = new_bucket_stats(&meta);
-        self.meta = meta;
-    }
-
-    pub fn clear_stats(&mut self) {
-        self.stats = new_bucket_stats(&self.meta);
-    }
-
-    pub fn merge(&mut self, delta: &BucketStat) {
-        merge_bucket_stats(
-            &self.meta.keys,
-            &mut self.stats,
-            &delta.meta.keys,
-            &delta.stats,
-        );
-    }
-
-    pub fn add_flows<I: AsRef<[u8]>>(&mut self, incoming: &[I], delta_stats: &metapb::BucketStats) {
-        merge_bucket_stats(&self.meta.keys, &mut self.stats, incoming, delta_stats);
     }
 
     pub fn write_key(&mut self, key: &[u8], value_size: u64) {
@@ -370,11 +342,6 @@ pub trait PdClient: Send + Sync {
 
     /// Gets Region by Region id.
     fn get_region_by_id(&self, _region_id: u64) -> PdFuture<Option<metapb::Region>> {
-        unimplemented!();
-    }
-
-    // Gets Buckets by Region id.
-    fn get_buckets_by_id(&self, _region_id: u64) -> PdFuture<Option<metapb::Buckets>> {
         unimplemented!();
     }
 

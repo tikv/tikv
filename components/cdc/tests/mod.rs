@@ -6,7 +6,7 @@ use std::{
 };
 
 use causal_ts::CausalTsProvider;
-use cdc::{recv_timeout, CdcObserver, Delegate, FeatureGate, Task, Validate};
+use cdc::{recv_timeout, CdcObserver, Delegate, FeatureGate, MemoryQuota, Task, Validate};
 use collections::HashMap;
 use concurrency_manager::ConcurrencyManager;
 use engine_rocks::RocksEngine;
@@ -20,12 +20,11 @@ use kvproto::{
     tikvpb::TikvClient,
 };
 use online_config::OnlineConfig;
-use raftstore::{coprocessor::CoprocessorHost, router::CdcRaftRouter};
+use raftstore::coprocessor::CoprocessorHost;
 use test_raftstore::*;
-use tikv::{config::CdcConfig, server::DEFAULT_CLUSTER_ID, storage::kv::LocalTablets};
+use tikv::{config::CdcConfig, server::DEFAULT_CLUSTER_ID};
 use tikv_util::{
     config::ReadableDuration,
-    memory::MemoryQuota,
     worker::{LazyWorker, Runnable},
     HandyRwLock,
 };
@@ -138,7 +137,6 @@ impl TestSuiteBuilder {
         let count = cluster.count;
         let pd_cli = cluster.pd_client.clone();
         let mut endpoints = HashMap::default();
-        let mut quotas = HashMap::default();
         let mut obs = HashMap::default();
         let mut concurrency_managers = HashMap::default();
         // Hack! node id are generated from 1..count+1.
@@ -148,14 +146,15 @@ impl TestSuiteBuilder {
             let mut sim = cluster.sim.wl();
 
             // Register cdc service to gRPC server.
-            let memory_quota = Arc::new(MemoryQuota::new(memory_quota));
-            let memory_quota_ = memory_quota.clone();
             let scheduler = worker.scheduler();
             sim.pending_services
                 .entry(id)
                 .or_default()
                 .push(Box::new(move || {
-                    create_change_data(cdc::Service::new(scheduler.clone(), memory_quota_.clone()))
+                    create_change_data(cdc::Service::new(
+                        scheduler.clone(),
+                        MemoryQuota::new(memory_quota),
+                    ))
                 }));
             sim.txn_extra_schedulers.insert(
                 id,
@@ -170,7 +169,6 @@ impl TestSuiteBuilder {
                 },
             ));
             endpoints.insert(id, worker);
-            quotas.insert(id, memory_quota);
         }
 
         runner(&mut cluster);
@@ -184,18 +182,17 @@ impl TestSuiteBuilder {
             let mut cdc_endpoint = cdc::Endpoint::new(
                 DEFAULT_CLUSTER_ID,
                 &cfg,
-                false,
                 cluster.cfg.storage.api_version(),
                 pd_cli.clone(),
                 worker.scheduler(),
-                CdcRaftRouter(raft_router),
-                LocalTablets::Singleton(cluster.engines[id].kv.clone()),
+                raft_router,
+                cluster.engines[id].kv.clone(),
                 cdc_ob,
                 cluster.store_metas[id].clone(),
                 cm.clone(),
                 env,
                 sim.security_mgr.clone(),
-                quotas[id].clone(),
+                MemoryQuota::new(usize::MAX),
                 sim.get_causal_ts_provider(*id),
             );
             let mut updated_cfg = cfg.clone();
@@ -239,7 +236,7 @@ impl TestSuite {
     pub fn new(count: usize, api_version: ApiVersion) -> TestSuite {
         let mut cluster = new_server_cluster_with_api_ver(1, count, api_version);
         // Increase the Raft tick interval to make this test case running reliably.
-        configure_for_lease_read(&mut cluster.cfg, Some(100), None);
+        configure_for_lease_read(&mut cluster, Some(100), None);
         // Disable background renew to make timestamp predictable.
         configure_for_causal_ts(&mut cluster, "0s", 1);
 

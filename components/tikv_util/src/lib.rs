@@ -61,7 +61,6 @@ pub mod thread_group;
 pub mod time;
 pub mod timer;
 pub mod topn;
-pub mod trend;
 pub mod worker;
 pub mod yatp_pool;
 
@@ -344,19 +343,6 @@ impl<L, R> Either<L, R> {
             Either::Right(r) => Some(r),
             _ => None,
         }
-    }
-
-    #[inline]
-    pub fn is_left(&self) -> bool {
-        match *self {
-            Either::Left(_) => true,
-            Either::Right(_) => false,
-        }
-    }
-
-    #[inline]
-    pub fn is_right(&self) -> bool {
-        !self.is_left()
     }
 }
 

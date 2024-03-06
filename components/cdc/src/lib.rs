@@ -13,9 +13,8 @@ pub mod metrics;
 mod observer;
 mod old_value;
 mod service;
-mod txn_source;
 
-pub use channel::{recv_timeout, CdcEvent};
+pub use channel::{recv_timeout, CdcEvent, MemoryQuota};
 pub use config::CdcConfigManager;
 pub use delegate::Delegate;
 pub use endpoint::{CdcTxnExtraScheduler, Endpoint, Task, Validate};

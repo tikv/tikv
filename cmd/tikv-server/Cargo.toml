@@ -7,7 +7,6 @@ publish = false
 
 [features]
 default = ["test-engine-kv-rocksdb", "test-engine-raft-raft-engine", "cloud-aws", "cloud-gcp", "cloud-azure"]
-trace-tablet-lifetime = ["tikv/trace-tablet-lifetime"]
 tcmalloc = ["server/tcmalloc"]
 jemalloc = ["server/jemalloc"]
 mimalloc = ["server/mimalloc"]
@@ -36,7 +35,6 @@ clap = "2.32"
 serde_json = { version = "1.0", features = ["preserve_order"] }
 server = { workspace = true }
 tikv = { workspace = true }
-tikv_util = { workspace = true }
 toml = "0.5"
 
 [build-dependencies]

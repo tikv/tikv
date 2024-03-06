@@ -77,7 +77,6 @@ make_auto_flush_static_metric! {
     pub label_enum SnapTask {
         send,
         recv,
-        recv_v2,
     }
 
     pub label_enum ResolveStore {
@@ -469,7 +468,6 @@ make_auto_flush_static_metric! {
         err_store_not_match,
         err_raft_entry_too_large,
         err_leader_memory_lock_check,
-        err_undetermind,
     }
 
     pub label_enum RequestTypeKind {

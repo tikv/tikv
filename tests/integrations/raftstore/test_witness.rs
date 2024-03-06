@@ -1,10 +1,6 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{
-    iter::FromIterator,
-    sync::{Arc, Mutex},
-    time::Duration,
-};
+use std::{iter::FromIterator, sync::Arc, time::Duration};
 
 use collections::HashMap;
 use futures::executor::block_on;
@@ -14,13 +10,9 @@ use kvproto::{
     raft_serverpb::{PeerState, RaftApplyState},
 };
 use pd_client::PdClient;
-use raft::eraftpb::{ConfChangeType, MessageType};
+use raft::eraftpb::ConfChangeType;
 use test_raftstore::*;
-use tikv_util::{
-    config::ReadableDuration,
-    store::{find_peer, new_witness_peer},
-    HandyRwLock,
-};
+use tikv_util::{config::ReadableDuration, store::find_peer};
 
 // Test the case that region split or merge with witness peer
 #[test]
@@ -604,51 +596,5 @@ fn test_witness_ignore_consistency_check() {
             format!("k{:06}", i).as_bytes(),
         );
         std::thread::sleep(Duration::from_millis(10));
-    }
-}
-
-// Test the case that witness apply snapshot with network isolation
-#[test]
-fn test_witness_apply_snapshot_with_network_isolation() {
-    let mut cluster = new_server_cluster(0, 3);
-    configure_for_snapshot(&mut cluster.cfg);
-    let pd_client = Arc::clone(&cluster.pd_client);
-    pd_client.disable_default_operator();
-    let r1 = cluster.run_conf_change();
-    pd_client.must_add_peer(r1, new_peer(2, 2));
-    pd_client.must_add_peer(r1, new_witness_peer(3, 3));
-    // Ensure all peers are initialized.
-    std::thread::sleep(Duration::from_millis(100));
-
-    cluster.must_transfer_leader(1, new_peer(1, 1));
-
-    cluster.add_send_filter(IsolationFilterFactory::new(3));
-
-    for i in 0..20 {
-        cluster.must_put(format!("k{}", i).as_bytes(), b"v1");
-    }
-    sleep_ms(500);
-
-    // Ignore witness's MsgAppendResponse, after applying snaphost
-    let dropped_msgs = Arc::new(Mutex::new(Vec::new()));
-    let recv_filter = Box::new(
-        RegionPacketFilter::new(r1, 1)
-            .direction(Direction::Recv)
-            .msg_type(MessageType::MsgAppendResponse)
-            .reserve_dropped(Arc::clone(&dropped_msgs)),
-    );
-    cluster.sim.wl().add_recv_filter(1, recv_filter);
-
-    cluster.clear_send_filters();
-    // Wait for leader send snapshot.
-    sleep_ms(500);
-
-    cluster.sim.wl().clear_recv_filters(1);
-
-    // Witness's ProgressState must have been changed to Probe
-    cluster.must_transfer_leader(1, new_peer(2, 2));
-
-    for i in 20..25 {
-        cluster.must_put(format!("k{}", i).as_bytes(), b"v1");
     }
 }

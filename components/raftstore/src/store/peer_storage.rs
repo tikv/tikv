@@ -30,10 +30,7 @@ use raft::{
     Error as RaftError, GetEntriesContext, RaftState, Ready, Storage, StorageError,
 };
 use tikv_util::{
-    box_err, box_try, debug, defer, error, info,
-    store::find_peer_by_id,
-    time::{Instant, UnixSecs},
-    warn,
+    box_err, box_try, debug, defer, error, info, store::find_peer_by_id, time::Instant, warn,
     worker::Scheduler,
 };
 
@@ -507,8 +504,6 @@ where
                     *snap_state = SnapState::Relax;
                     *tried_cnt = 0;
                     if self.validate_snap(&s, request_index) {
-                        info!("start sending snapshot"; "region_id" => self.region.get_id(),
-                            "peer_id" => self.peer_id, "request_peer" => to,);
                         return Ok(s);
                     }
                 }
@@ -529,12 +524,7 @@ where
             panic!("{} unexpected state: {:?}", self.tag, *snap_state);
         }
 
-        let max_snap_try_cnt = (|| {
-            fail_point!("ignore_snap_try_cnt", |_| usize::MAX);
-            MAX_SNAP_TRY_CNT
-        })();
-
-        if *tried_cnt >= max_snap_try_cnt {
+        if *tried_cnt >= MAX_SNAP_TRY_CNT {
             let cnt = *tried_cnt;
             *tried_cnt = 0;
             return Err(raft::Error::Store(box_err!(
@@ -1019,9 +1009,6 @@ where
         // The `region` is updated after persisting in order to stay consistent with the
         // one in `StoreMeta::regions` (will be updated soon).
         // See comments in `apply_snapshot` for more details.
-        (|| {
-            fail_point!("before_set_region_on_peer_3", self.peer_id == 3, |_| {});
-        })();
         self.set_region(res.region.clone());
     }
 }
@@ -1068,7 +1055,6 @@ pub fn do_snapshot<E>(
     last_applied_state: RaftApplyState,
     for_balance: bool,
     allow_multi_files_snapshot: bool,
-    start: UnixSecs,
 ) -> raft::Result<Snapshot>
 where
     E: KvEngine,
@@ -1126,7 +1112,6 @@ where
         region_state.get_region(),
         allow_multi_files_snapshot,
         for_balance,
-        start,
     )?;
     snapshot.set_data(snap_data.write_to_bytes()?.into());
 
@@ -1634,7 +1619,6 @@ pub mod tests {
         let td = Builder::new().prefix("tikv-store-test").tempdir().unwrap();
         let snap_dir = Builder::new().prefix("snap_dir").tempdir().unwrap();
         let mgr = SnapManager::new(snap_dir.path().to_str().unwrap());
-        mgr.init().unwrap();
         let mut worker = Worker::new("region-worker").lazy_build("region-worker");
         let sched = worker.scheduler();
         let (dummy_scheduler, _) = dummy_scheduler();
@@ -1771,7 +1755,6 @@ pub mod tests {
         let td = Builder::new().prefix("tikv-store-test").tempdir().unwrap();
         let snap_dir = Builder::new().prefix("snap_dir").tempdir().unwrap();
         let mut mgr = SnapManager::new(snap_dir.path().to_str().unwrap());
-        mgr.init().unwrap();
         mgr.set_enable_multi_snapshot_files(true);
         mgr.set_max_per_file_size(500);
         let mut worker = Worker::new("region-worker").lazy_build("region-worker");
@@ -1843,7 +1826,6 @@ pub mod tests {
         let td = Builder::new().prefix("tikv-store-test").tempdir().unwrap();
         let snap_dir = Builder::new().prefix("snap_dir").tempdir().unwrap();
         let mgr = SnapManager::new(snap_dir.path().to_str().unwrap());
-        mgr.init().unwrap();
         let mut worker = Worker::new("region-worker").lazy_build("region-worker");
         let sched = worker.scheduler();
         let (dummy_scheduler, _) = dummy_scheduler();
@@ -1923,7 +1905,6 @@ pub mod tests {
         let td1 = Builder::new().prefix("tikv-store-test").tempdir().unwrap();
         let snap_dir = Builder::new().prefix("snap").tempdir().unwrap();
         let mgr = SnapManager::new(snap_dir.path().to_str().unwrap());
-        mgr.init().unwrap();
         let mut worker = LazyWorker::new("snap-manager");
         let sched = worker.scheduler();
         let (dummy_scheduler, _) = dummy_scheduler();

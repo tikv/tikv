@@ -20,8 +20,8 @@ kvproto = { workspace = true }
 rand = "0.8"
 rand_isaac = "0.3"
 security = { workspace = true }
-slog = { workspace = true }
-slog-global = { workspace = true }
+slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
+slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }
 tempfile = "3.0"
 tikv_util = { workspace = true }
 time = "0.1"

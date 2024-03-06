@@ -499,7 +499,7 @@ fn test_basic_flow() {
         .append(&mut vec![RaftMessage::default(), RaftMessage::default()]);
 
     t.write_sender(0)
-        .send(WriteMsg::WriteTask(task_1), None)
+        .send(WriteMsg::WriteTask(task_1), 0)
         .unwrap();
 
     let mut task_2 = WriteTask::<KvTestEngine, RaftTestEngine>::new(2, 2, 20);
@@ -515,7 +515,7 @@ fn test_basic_flow() {
         .append(&mut vec![RaftMessage::default(), RaftMessage::default()]);
 
     t.write_sender(1)
-        .send(WriteMsg::WriteTask(task_2), None)
+        .send(WriteMsg::WriteTask(task_2), 0)
         .unwrap();
 
     let mut task_3 = WriteTask::<KvTestEngine, RaftTestEngine>::new(region_1, 1, 15);
@@ -531,7 +531,7 @@ fn test_basic_flow() {
         .append(&mut vec![RaftMessage::default(), RaftMessage::default()]);
 
     t.write_sender(0)
-        .send(WriteMsg::WriteTask(task_3), None)
+        .send(WriteMsg::WriteTask(task_3), 0)
         .unwrap();
 
     must_wait_same_notifies(vec![(region_1, (1, 15)), (region_2, (2, 20))], &t.notify_rx);
@@ -601,7 +601,7 @@ fn test_basic_flow_with_states() {
         .append(&mut vec![RaftMessage::default(), RaftMessage::default()]);
 
     t.write_sender(0)
-        .send(WriteMsg::WriteTask(task_1), None)
+        .send(WriteMsg::WriteTask(task_1), 0)
         .unwrap();
 
     let mut task_2 = WriteTask::<KvTestEngine, RaftTestEngine>::new(2, 2, 20);
@@ -620,7 +620,7 @@ fn test_basic_flow_with_states() {
         .append(&mut vec![RaftMessage::default(), RaftMessage::default()]);
 
     t.write_sender(1)
-        .send(WriteMsg::WriteTask(task_2), None)
+        .send(WriteMsg::WriteTask(task_2), 0)
         .unwrap();
 
     let mut task_3 = WriteTask::<KvTestEngine, RaftTestEngine>::new(region_1, 1, 15);
@@ -638,7 +638,7 @@ fn test_basic_flow_with_states() {
         .append(&mut vec![RaftMessage::default(), RaftMessage::default()]);
 
     t.write_sender(0)
-        .send(WriteMsg::WriteTask(task_3), None)
+        .send(WriteMsg::WriteTask(task_3), 0)
         .unwrap();
 
     must_wait_same_notifies(vec![(region_1, (1, 15)), (region_2, (2, 20))], &t.notify_rx);
@@ -714,7 +714,7 @@ fn test_resource_group() {
     let mut t = TestWriters::new(cfg, &engines, Some(resource_manager));
 
     let (tx, rx) = mpsc::sync_channel(0);
-    t.write_sender(0).send(WriteMsg::Pause(rx), None).unwrap();
+    t.write_sender(0).send(WriteMsg::Pause(rx), 0).unwrap();
 
     let mut r = WriteRouter::new("1".to_string());
     let mut task_1 = WriteTask::<KvTestEngine, RaftTestEngine>::new(region_1, 1, 10);

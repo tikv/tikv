@@ -555,7 +555,7 @@ mod tests {
             region_max_keys: Some(159),
             region_split_keys: Some(80),
             batch_split_limit: 5,
-            enable_region_bucket: Some(true),
+            enable_region_bucket: true,
             // need check split region buckets, but region size does not exceed the split threshold
             region_bucket_size: ReadableSize(100),
             ..Default::default()

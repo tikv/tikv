@@ -161,7 +161,7 @@ impl<C: StoreHandle, E: KvEngine> SplitCheckObserver<E> for SizeCheckObserver<C>
         self.router.update_approximate_size(region_id, region_size);
 
         let need_bucket_checker =
-            host.cfg.enable_region_bucket() && region_size >= 2 * host.cfg.region_bucket_size.0;
+            host.cfg.enable_region_bucket && region_size >= 2 * host.cfg.region_bucket_size.0;
         REGION_SIZE_HISTOGRAM.observe(region_size as f64);
 
         let need_split_region = region_size >= host.cfg.region_max_size().0;
@@ -549,7 +549,7 @@ pub mod tests {
             region_max_keys: Some(1000000),
             region_split_keys: Some(1000000),
             batch_split_limit: 5,
-            enable_region_bucket: Some(true),
+            enable_region_bucket: true,
             region_bucket_size: ReadableSize(3000),
             region_size_threshold_for_approximate: ReadableSize(50000),
             ..Default::default()
@@ -675,7 +675,7 @@ pub mod tests {
             region_max_keys: Some(1000000),
             region_split_keys: Some(1000000),
             batch_split_limit: 5,
-            enable_region_bucket: Some(true),
+            enable_region_bucket: true,
             region_bucket_size: ReadableSize(1), // minimal bucket size
             region_size_threshold_for_approximate: ReadableSize(500000000),
             // follow split region's check policy, not force to use approximate

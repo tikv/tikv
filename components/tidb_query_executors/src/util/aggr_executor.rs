@@ -86,7 +86,7 @@ pub trait AggregationExecutorImpl<Src: BatchExecutor>: Send {
     fn iterate_available_groups(
         &mut self,
         entities: &mut Entities<Src>,
-        src_is_drained: BatchExecIsDrain,
+        src_is_drained: bool,
         iteratee: impl FnMut(&mut Entities<Src>, &[Box<dyn AggrFunctionState>]) -> Result<()>,
     ) -> Result<Vec<LazyBatchColumn>>;
 
@@ -203,9 +203,7 @@ impl<Src: BatchExecutor, I: AggregationExecutorImpl<Src>> AggregationExecutor<Sr
     /// Returns partial results of aggregation if available and whether the
     /// source is drained
     #[inline]
-    async fn handle_next_batch(
-        &mut self,
-    ) -> Result<(Option<LazyBatchColumnVec>, BatchExecIsDrain)> {
+    async fn handle_next_batch(&mut self) -> Result<(Option<LazyBatchColumnVec>, bool)> {
         // Use max batch size from the beginning because aggregation
         // always needs to calculate over all data.
         let src_result = self
@@ -233,16 +231,16 @@ impl<Src: BatchExecutor, I: AggregationExecutorImpl<Src>> AggregationExecutor<Sr
 
         if let Some(required_row) = self.required_row {
             if self.imp.groups_len() >= required_row as usize {
-                src_is_drained = BatchExecIsDrain::PagingDrain;
+                src_is_drained = true
             }
             // StreamAgg will return groups_len - 1 rows immediately
-            if src_is_drained.is_remain() && self.imp.is_partial_results_ready() {
+            if !src_is_drained && self.imp.is_partial_results_ready() {
                 self.required_row = Some(required_row + 1 - self.imp.groups_len() as u64)
             }
         }
 
         // aggregate result is always available when source is drained
-        let result = if src_is_drained.stop() || self.imp.is_partial_results_ready() {
+        let result = if src_is_drained || self.imp.is_partial_results_ready() {
             Some(self.aggregate_partial_results(src_is_drained)?)
         } else {
             None
@@ -251,10 +249,7 @@ impl<Src: BatchExecutor, I: AggregationExecutorImpl<Src>> AggregationExecutor<Sr
     }
 
     /// Generates aggregation results of available groups.
-    fn aggregate_partial_results(
-        &mut self,
-        src_is_drained: BatchExecIsDrain,
-    ) -> Result<LazyBatchColumnVec> {
+    fn aggregate_partial_results(&mut self, src_is_drained: bool) -> Result<LazyBatchColumnVec> {
         let groups_len = self.imp.groups_len();
         let mut all_result_columns: Vec<_> = self
             .entities
@@ -329,7 +324,7 @@ impl<Src: BatchExecutor, I: AggregationExecutorImpl<Src>> BatchExecutor
                 }
             }
             Ok((data, src_is_drained)) => {
-                self.is_ended = src_is_drained.stop();
+                self.is_ended = src_is_drained;
                 let logical_columns = data.unwrap_or_else(LazyBatchColumnVec::empty);
                 let logical_rows = (0..logical_columns.rows_len()).collect();
                 BatchExecuteResult {
@@ -469,7 +464,7 @@ pub mod tests {
                     ]),
                     logical_rows: vec![2, 4, 0, 1],
                     warnings: EvalWarnings::default(),
-                    is_drained: Ok(BatchExecIsDrain::Remain),
+                    is_drained: Ok(false),
                 },
                 BatchExecuteResult {
                     physical_columns: LazyBatchColumnVec::from(vec![
@@ -481,7 +476,7 @@ pub mod tests {
                     ]),
                     logical_rows: Vec::new(),
                     warnings: EvalWarnings::default(),
-                    is_drained: Ok(BatchExecIsDrain::Remain),
+                    is_drained: Ok(false),
                 },
                 BatchExecuteResult {
                     physical_columns: LazyBatchColumnVec::from(vec![
@@ -499,7 +494,7 @@ pub mod tests {
                     ]),
                     logical_rows: vec![1],
                     warnings: EvalWarnings::default(),
-                    is_drained: Ok(BatchExecIsDrain::Drain),
+                    is_drained: Ok(true),
                 },
             ],
         )
@@ -545,7 +540,7 @@ pub mod tests {
                     ]),
                     logical_rows: vec![2, 4, 0, 1],
                     warnings: EvalWarnings::default(),
-                    is_drained: Ok(BatchExecIsDrain::Remain),
+                    is_drained: Ok(false),
                 },
                 BatchExecuteResult {
                     physical_columns: LazyBatchColumnVec::from(vec![
@@ -554,7 +549,7 @@ pub mod tests {
                     ]),
                     logical_rows: Vec::new(),
                     warnings: EvalWarnings::default(),
-                    is_drained: Ok(BatchExecIsDrain::Remain),
+                    is_drained: Ok(false),
                 },
                 BatchExecuteResult {
                     physical_columns: LazyBatchColumnVec::from(vec![
@@ -572,7 +567,7 @@ pub mod tests {
                     ]),
                     logical_rows: vec![1, 2],
                     warnings: EvalWarnings::default(),
-                    is_drained: Ok(BatchExecIsDrain::Remain),
+                    is_drained: Ok(false),
                 },
                 BatchExecuteResult {
                     physical_columns: LazyBatchColumnVec::from(vec![
@@ -581,7 +576,7 @@ pub mod tests {
                     ]),
                     logical_rows: vec![1, 0],
                     warnings: EvalWarnings::default(),
-                    is_drained: Ok(BatchExecIsDrain::Drain),
+                    is_drained: Ok(true),
                 },
             ],
         )
@@ -656,9 +651,9 @@ pub mod tests {
                 for nth_call in 0..call_num {
                     let r = block_on(exec.next_batch(1));
                     if nth_call == call_num - 1 {
-                        assert!(r.is_drained.unwrap().stop());
+                        assert!(r.is_drained.unwrap());
                     } else {
-                        assert!(r.is_drained.unwrap().is_remain());
+                        assert!(!r.is_drained.unwrap());
                     }
                     assert_eq!(r.physical_columns.rows_len(), row_num[nth_call]);
                 }
@@ -686,9 +681,9 @@ pub mod tests {
             for nth_call in 0..call_num {
                 let r = block_on(exec.next_batch(1));
                 if nth_call == call_num - 1 {
-                    assert!(r.is_drained.unwrap().stop());
+                    assert!(r.is_drained.unwrap());
                 } else {
-                    assert!(r.is_drained.unwrap().is_remain());
+                    assert!(!r.is_drained.unwrap());
                 }
                 assert_eq!(r.physical_columns.rows_len(), row_num[nth_call]);
             }

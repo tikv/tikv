@@ -8,7 +8,7 @@ use std::sync::{
 use collections::HashMap;
 use fail::fail_point;
 use kvproto::{
-    metapb::{Buckets, Peer, Region, Store, StoreState},
+    metapb::{Peer, Region, Store, StoreState},
     pdpb::*,
 };
 
@@ -21,7 +21,6 @@ pub struct Service {
     is_bootstrapped: AtomicBool,
     stores: Mutex<HashMap<u64, (Store, StoreStats)>>,
     regions: Mutex<HashMap<u64, Region>>,
-    buckets: Mutex<HashMap<u64, Buckets>>,
     leaders: Mutex<HashMap<u64, Peer>>,
     feature_gate: Mutex<String>,
 }
@@ -36,7 +35,6 @@ impl Service {
             regions: Mutex::new(HashMap::default()),
             leaders: Mutex::new(HashMap::default()),
             feature_gate: Mutex::new(String::default()),
-            buckets: Mutex::new(HashMap::default()),
         }
     }
 
@@ -212,9 +210,6 @@ impl PdMocker for Service {
             Some(region) => {
                 resp.set_header(Service::header());
                 resp.set_region(region.clone());
-                if let Some(bucket) = self.buckets.lock().unwrap().get(&req.get_region_id()) {
-                    resp.set_buckets(bucket.clone());
-                }
                 if let Some(leader) = leaders.get(&region.get_id()) {
                     resp.set_leader(leader.clone());
                 }
@@ -230,16 +225,6 @@ impl PdMocker for Service {
                 Some(Ok(resp))
             }
         }
-    }
-
-    fn report_buckets(&self, req: &ReportBucketsRequest) -> Option<Result<ReportBucketsResponse>> {
-        let buckets = req.get_buckets();
-        let region_id = req.get_buckets().get_region_id();
-        self.buckets
-            .lock()
-            .unwrap()
-            .insert(region_id, buckets.clone());
-        None
     }
 
     fn region_heartbeat(
