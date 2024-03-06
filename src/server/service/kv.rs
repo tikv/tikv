@@ -997,7 +997,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
             let mut batcher = batch_builder.build(queue, request_ids.len());
             GRPC_REQ_BATCH_COMMANDS_SIZE.observe(requests.len() as f64);
             for (id, req) in request_ids.into_iter().zip(requests) {
-                if let Err(server_err @ Error::ClusterIDMisMatch(..)) =
+                if let Err(server_err @ Error::ClusterIDMisMatch { .. }) =
                     handle_batch_commands_request(
                         cluster_id,
                         &mut batcher,
@@ -1043,7 +1043,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
             // TODO: per thread load is more reasonable for batching.
             r.set_transport_layer_load(grpc_thread_load.total_load() as u64);
             health_feedback_attacher.attach_if_needed(&mut r);
-            if let Some(err @ Error::ClusterIDMisMatch(..)) = item.server_err {
+            if let Some(err @ Error::ClusterIDMisMatch { .. }) = item.server_err {
                 let e = RpcStatus::with_message(RpcStatusCode::INVALID_ARGUMENT, err.to_string());
                 GrpcResult::<(BatchCommandsResponse, WriteFlags)>::Err(GrpcError::RpcFailure(e))
             } else {
@@ -1231,7 +1231,7 @@ fn response_batch_commands_request<F, T>(
                     error!("KvService response batch commands fail"; "err" => ?e);
                 }
             }
-            Err(server_err @ Error::ClusterIDMisMatch(..)) => {
+            Err(server_err @ Error::ClusterIDMisMatch { .. }) => {
                 let task = MeasuredSingleResponse::new(id, T::default(), measure, Some(server_err));
                 if let Err(e) = tx.send_with(task, WakePolicy::Immediately) {
                     error!("KvService response batch commands fail"; "err" => ?e);
@@ -1264,10 +1264,11 @@ fn handle_batch_commands_request<E: Engine, L: LockManager, F: KvFormat>(
                 // Reject the request if the cluster IDs do not match.
                 warn!("unexpected request with different cluster id is received in batch command request"; "req" => ?&$req);
                 let begin_instant = Instant::now();
-                let fut_resp = future::err::<batch_commands_response::Response, Error>(Error::ClusterIDMisMatch(req_cluster_id, $cluster_id));
+                let fut_resp = future::err::<batch_commands_response::Response, Error>(
+                    Error::ClusterIDMisMatch{request_id: req_cluster_id, cluster_id: $cluster_id});
                 response_batch_commands_request(id, fut_resp, tx.clone(), begin_instant, GrpcTypeKind::invalid,
                 String::default(), ResourcePriority::unknown);
-                return Err(Error::ClusterIDMisMatch(req_cluster_id, $cluster_id));
+                return Err(Error::ClusterIDMisMatch{request_id: req_cluster_id, cluster_id: $cluster_id});
             }
         };
     }
