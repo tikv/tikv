@@ -306,7 +306,6 @@ impl From<CheckTxnStatusRequest> for TypedCommand<TxnStatus> {
             req.get_rollback_if_not_exist(),
             req.get_force_sync_commit(),
             req.get_resolving_pessimistic_lock(),
-            req.get_verify_is_primary(),
             req.take_context(),
         )
     }
@@ -720,7 +719,6 @@ impl Command {
     pub fn group_name(&self) -> String {
         self.command_ext()
             .get_ctx()
-            .get_resource_control_context()
             .get_resource_group_name()
             .to_owned()
     }

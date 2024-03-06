@@ -12,7 +12,6 @@ pub mod check_data_constraint;
 pub mod check_txn_status;
 pub mod cleanup;
 pub mod commit;
-pub mod common;
 pub mod flashback_to_version;
 pub mod gc;
 pub mod prewrite;

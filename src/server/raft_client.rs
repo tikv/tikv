@@ -25,8 +25,8 @@ use futures::{
 };
 use futures_timer::Delay;
 use grpcio::{
-    CallOption, Channel, ChannelBuilder, ClientCStreamReceiver, ClientCStreamSender, Environment,
-    MetadataBuilder, RpcStatusCode, WriteFlags,
+    Channel, ChannelBuilder, ClientCStreamReceiver, ClientCStreamSender, Environment,
+    RpcStatusCode, WriteFlags,
 };
 use kvproto::{
     raft_serverpb::{Done, RaftMessage, RaftSnapshotData},
@@ -49,21 +49,6 @@ use crate::server::{
     self, load_statistics::ThreadLoadPool, metrics::*, snap::Task as SnapTask, Config,
     StoreAddrResolver,
 };
-
-pub struct MetadataSourceStoreId {}
-
-impl MetadataSourceStoreId {
-    pub const KEY: &str = "source_store_id";
-
-    pub fn parse(value: &[u8]) -> u64 {
-        let value = std::str::from_utf8(value).unwrap();
-        value.parse::<u64>().unwrap()
-    }
-
-    pub fn format(id: u64) -> String {
-        format!("{}", id)
-    }
-}
 
 static CONN_ID: AtomicI32 = AtomicI32::new(0);
 
@@ -631,7 +616,6 @@ impl<S, R> ConnectionBuilder<S, R> {
 /// StreamBackEnd watches lifetime of a connection and handles reconnecting,
 /// spawn new RPC.
 struct StreamBackEnd<S, R> {
-    self_store_id: u64,
     store_id: u64,
     queue: Arc<Queue>,
     builder: ConnectionBuilder<S, R>,
@@ -713,8 +697,7 @@ where
     }
 
     fn batch_call(&self, client: &TikvClient, addr: String) -> oneshot::Receiver<RaftCallRes> {
-        let (batch_sink, batch_stream) = client.batch_raft_opt(self.get_call_option()).unwrap();
-
+        let (batch_sink, batch_stream) = client.batch_raft().unwrap();
         let (tx, rx) = oneshot::channel();
         let mut call = RaftCall {
             sender: AsyncRaftSender {
@@ -738,8 +721,7 @@ where
     }
 
     fn call(&self, client: &TikvClient, addr: String) -> oneshot::Receiver<RaftCallRes> {
-        let (sink, stream) = client.raft_opt(self.get_call_option()).unwrap();
-
+        let (sink, stream) = client.raft().unwrap();
         let (tx, rx) = oneshot::channel();
         let mut call = RaftCall {
             sender: AsyncRaftSender {
@@ -759,15 +741,6 @@ where
             call.poll().await;
         });
         rx
-    }
-
-    fn get_call_option(&self) -> CallOption {
-        let mut metadata = MetadataBuilder::with_capacity(1);
-        let value = MetadataSourceStoreId::format(self.self_store_id);
-        metadata
-            .add_str(MetadataSourceStoreId::KEY, &value)
-            .unwrap();
-        CallOption::default().headers(metadata.build())
     }
 }
 
@@ -809,6 +782,7 @@ async fn start<S, R>(
     R: RaftExtension + Unpin + Send + 'static,
 {
     let mut last_wake_time = None;
+    let mut first_time = true;
     let backoff_duration = back_end.builder.cfg.value().raft_client_max_backoff.0;
     let mut addr_channel = None;
     loop {
@@ -854,10 +828,15 @@ async fn start<S, R>(
             // shutdown.
             back_end.clear_pending_message("unreachable");
 
-            back_end
-                .builder
-                .router
-                .report_store_unreachable(back_end.store_id);
+            // broadcast is time consuming operation which would blocks raftstore, so report
+            // unreachable only once until being connected again.
+            if first_time {
+                first_time = false;
+                back_end
+                    .builder
+                    .router
+                    .report_store_unreachable(back_end.store_id);
+            }
             continue;
         } else {
             debug!("connection established"; "store_id" => back_end.store_id, "addr" => %addr);
@@ -889,6 +868,7 @@ async fn start<S, R>(
                     .router
                     .report_store_unreachable(back_end.store_id);
                 addr_channel = None;
+                first_time = false;
             }
         }
     }
@@ -946,7 +926,6 @@ struct CachedQueue {
 /// raft_client.flush();
 /// ```
 pub struct RaftClient<S, R> {
-    self_store_id: u64,
     pool: Arc<Mutex<ConnectionPool>>,
     cache: LruCache<(u64, usize), CachedQueue>,
     need_flush: Vec<(u64, usize)>,
@@ -961,14 +940,13 @@ where
     S: StoreAddrResolver + Send + 'static,
     R: RaftExtension + Unpin + Send + 'static,
 {
-    pub fn new(self_store_id: u64, builder: ConnectionBuilder<S, R>) -> Self {
+    pub fn new(builder: ConnectionBuilder<S, R>) -> Self {
         let future_pool = Arc::new(
             yatp::Builder::new(thd_name!("raft-stream"))
                 .max_thread_count(1)
                 .build_future_pool(),
         );
         RaftClient {
-            self_store_id,
             pool: Arc::default(),
             cache: LruCache::with_capacity_and_sample(0, 7),
             need_flush: vec![],
@@ -1004,7 +982,6 @@ where
                         queue.set_conn_state(ConnState::Paused);
                     }
                     let back_end = StreamBackEnd {
-                        self_store_id: self.self_store_id,
                         store_id,
                         queue: queue.clone(),
                         builder: self.builder.clone(),
@@ -1166,7 +1143,6 @@ where
 {
     fn clone(&self) -> Self {
         RaftClient {
-            self_store_id: self.self_store_id,
             pool: self.pool.clone(),
             cache: LruCache::with_capacity_and_sample(0, 7),
             need_flush: vec![],

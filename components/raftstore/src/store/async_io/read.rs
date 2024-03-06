@@ -122,17 +122,14 @@ impl<EK: KvEngine, ER: RaftEngine, N: AsyncReadNotifier> ReadRunner<EK, ER, N> {
 
     fn generate_snap(&self, snap_key: &TabletSnapKey, tablet: EK) -> crate::Result<()> {
         let checkpointer_path = self.snap_mgr().tablet_gen_path(snap_key);
-        if checkpointer_path.exists() {
-            // TODO: make `delete_snapshot` return error so we can use it here.
+        if checkpointer_path.as_path().exists() {
             // Remove the old checkpoint directly.
-            encryption::trash_dir_all(
-                &checkpointer_path,
-                self.snap_mgr().key_manager().as_deref(),
-            )?;
+            file_system::trash_dir_all(&checkpointer_path)?;
         }
         // Here not checkpoint to a temporary directory first, the temporary directory
         // logic already implemented in rocksdb.
         let mut checkpointer = tablet.new_checkpointer()?;
+
         checkpointer.create_at(checkpointer_path.as_path(), None, 0)?;
         Ok(())
     }

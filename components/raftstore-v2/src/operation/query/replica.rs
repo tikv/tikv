@@ -9,7 +9,7 @@ use raftstore::{
         fsm::apply::notify_stale_req,
         metrics::RAFT_READ_INDEX_PENDING_COUNT,
         msg::{ErrorCallback, ReadCallback},
-        propose_read_index, Config, ReadIndexContext, ReadIndexRequest, Transport,
+        propose_read_index, ReadIndexRequest, Transport,
     },
     Error,
 };
@@ -23,29 +23,6 @@ use crate::{
     router::{QueryResChannel, QueryResult, ReadResponse},
 };
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
-    /// `ReadIndex` requests could be lost in network, so on followers commands
-    /// could queue in `pending_reads` forever. Sending a new `ReadIndex`
-    /// periodically can resolve this.
-    pub fn retry_pending_reads(&mut self, cfg: &Config) {
-        if self.is_leader()
-            || !self.pending_reads_mut().check_needs_retry(cfg)
-            || self.pre_read_index().is_err()
-        {
-            return;
-        }
-
-        let read = self.pending_reads().back().unwrap();
-        debug!(
-            self.logger,
-            "request to get a read index from follower, retry";
-            "request_id" => ?read.id,
-        );
-        let ctx =
-            ReadIndexContext::fields_to_bytes(read.id, read.addition_request.as_deref(), None);
-        debug_assert!(read.read_index.is_none());
-        self.raft_group_mut().read_index(ctx);
-    }
-
     /// read index on follower
     ///
     /// call set_has_ready if it's proposed.
@@ -72,8 +49,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             .get_mut(0)
             .filter(|req| req.has_read_index())
             .map(|req| req.take_read_index());
-        // No need to check `dropped` as it only meaningful for leader.
-        let (id, _dropped) = propose_read_index(self.raft_group_mut(), request.as_ref());
+        let (id, _dropped) = propose_read_index(self.raft_group_mut(), request.as_ref(), None);
         let now = monotonic_raw_now();
         let mut read = ReadIndexRequest::with_command(id, req, ch, now);
         read.addition_request = request.map(Box::new);

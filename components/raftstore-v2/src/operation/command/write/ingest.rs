@@ -67,34 +67,12 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         ctx: &mut StoreContext<EK, ER, T>,
         ssts: Box<[SstMeta]>,
     ) {
-        let mut stale_ssts = Vec::from(ssts);
         let epoch = self.region().get_region_epoch();
-        stale_ssts.retain(|sst| {
-            fail::fail_point!("on_cleanup_import_sst", |_| true);
-            util::is_epoch_stale(sst.get_region_epoch(), epoch)
-        });
-
-        // some sst needs to be kept if the log didn't flush the disk.
-        let flushed_indexes = self.storage().apply_trace().flushed_indexes();
-        stale_ssts.retain(|sst| {
-            let off = data_cf_offset(sst.get_cf_name());
-            let uuid = sst.get_uuid().to_vec();
-            let sst_index = self.sst_apply_state().sst_applied_index(&uuid);
-            if let Some(index) = sst_index {
-                return flushed_indexes.as_ref()[off] >= index;
-            }
-            true
-        });
-
-        fail::fail_point!("on_cleanup_import_sst_schedule");
+        let mut stale_ssts = Vec::from(ssts);
+        stale_ssts.retain(|sst| util::is_epoch_stale(sst.get_region_epoch(), epoch));
         if stale_ssts.is_empty() {
             return;
         }
-        let uuids = stale_ssts
-            .iter()
-            .map(|sst| sst.get_uuid().to_vec())
-            .collect();
-        self.sst_apply_state().delete_ssts(uuids);
         let _ = ctx
             .schedulers
             .tablet
@@ -138,11 +116,6 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                 slog_panic!(self.logger, "ingest fail"; "ssts" => ?ssts, "error" => ?e);
             }
         }
-        let uuids = infos
-            .iter()
-            .map(|info| info.meta.get_uuid().to_vec())
-            .collect::<Vec<_>>();
-        self.set_sst_applied_index(uuids, index);
         Ok(())
     }
 }

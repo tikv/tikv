@@ -2,14 +2,50 @@
 
 use std::time::Duration;
 
-use engine_traits::{CF_DEFAULT, CF_WRITE};
+use engine_traits::{CfName, CF_DEFAULT, CF_WRITE};
 use raftstore::store::RAFT_INIT_LOG_INDEX;
 use rand::prelude::*;
-use test_raftstore::{new_put_cmd, new_request, sleep_ms};
+use test_raftstore::{new_put_cf_cmd, new_put_cmd, new_request, sleep_ms};
 use test_raftstore_macro::test_case;
 use tikv_util::{config::*, time::Instant};
 
 // TODO add epoch not match test cases.
+
+fn test_delete_range<T: test_raftstore::Simulator>(
+    cluster: &mut test_raftstore::Cluster<T>,
+    cf: CfName,
+) {
+    let data_set: Vec<_> = (1..500)
+        .map(|i| {
+            (
+                format!("key{:08}", i).into_bytes(),
+                format!("value{}", i).into_bytes(),
+            )
+        })
+        .collect();
+    for kvs in data_set.chunks(50) {
+        let requests = kvs.iter().map(|(k, v)| new_put_cf_cmd(cf, k, v)).collect();
+        // key9 is always the last region.
+        cluster.batch_put(b"key9", requests).unwrap();
+    }
+
+    // delete_range request with notify_only set should not actually delete data.
+    cluster.must_notify_delete_range_cf(cf, b"", b"");
+
+    let mut rng = rand::thread_rng();
+    for _ in 0..50 {
+        let (k, v) = data_set.choose(&mut rng).unwrap();
+        assert_eq!(cluster.get_cf(cf, k).unwrap(), *v);
+    }
+
+    // Empty keys means the whole range.
+    cluster.must_delete_range_cf(cf, b"", b"");
+
+    for _ in 0..50 {
+        let k = &data_set.choose(&mut rng).unwrap().0;
+        assert!(cluster.get_cf(cf, k).is_none());
+    }
+}
 
 #[test_case(test_raftstore::new_node_cluster)]
 #[test_case(test_raftstore::new_server_cluster)]
@@ -91,10 +127,9 @@ fn test_delete() {
     }
 }
 
-#[test_case(test_raftstore::new_node_cluster)]
-#[test_case(test_raftstore_v2::new_node_cluster)]
+#[test]
 fn test_node_use_delete_range() {
-    let mut cluster = new_cluster(0, 1);
+    let mut cluster = test_raftstore::new_node_cluster(0, 1);
     cluster.cfg.raft_store.use_delete_range = true;
     cluster.run();
     test_delete_range(&mut cluster, CF_DEFAULT);
@@ -102,10 +137,9 @@ fn test_node_use_delete_range() {
     test_delete_range(&mut cluster, CF_WRITE);
 }
 
-#[test_case(test_raftstore::new_node_cluster)]
-#[test_case(test_raftstore_v2::new_node_cluster)]
+#[test]
 fn test_node_not_use_delete_range() {
-    let mut cluster = new_cluster(0, 1);
+    let mut cluster = test_raftstore::new_node_cluster(0, 1);
     cluster.cfg.raft_store.use_delete_range = false;
     cluster.run();
     test_delete_range(&mut cluster, CF_DEFAULT);

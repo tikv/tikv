@@ -89,7 +89,6 @@ pub enum StoreTick {
     SnapGc,
     ConsistencyCheck,
     CleanupImportSst,
-    CompactCheck,
 }
 
 impl StoreTick {
@@ -100,7 +99,6 @@ impl StoreTick {
             StoreTick::SnapGc => RaftEventDurationType::snap_gc,
             StoreTick::ConsistencyCheck => RaftEventDurationType::consistency_check,
             StoreTick::CleanupImportSst => RaftEventDurationType::cleanup_import_sst,
-            StoreTick::CompactCheck => RaftEventDurationType::compact_check,
         }
     }
 }
@@ -282,7 +280,6 @@ impl PeerMsg {
         epoch: metapb::RegionEpoch,
         split_keys: Vec<Vec<u8>>,
         source: String,
-        share_source_region_size: bool,
     ) -> (Self, CmdResSubscriber) {
         let (ch, sub) = CmdResChannel::pair();
         (
@@ -291,7 +288,6 @@ impl PeerMsg {
                     epoch,
                     split_keys,
                     source: source.into(),
-                    share_source_region_size,
                 },
                 ch,
             },

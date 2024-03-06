@@ -46,8 +46,8 @@ impl Store {
 
         let snap_stats = ctx.snap_mgr.stats();
         // todo: imple snapshot status report
-        stats.set_sending_snap_count(snap_stats.sending_count as u32);
-        stats.set_receiving_snap_count(snap_stats.receiving_count as u32);
+        stats.set_sending_snap_count(0);
+        stats.set_receiving_snap_count(0);
         stats.set_snapshot_stats(snap_stats.stats.into());
 
         STORE_SNAPSHOT_TRAFFIC_GAUGE_VEC
@@ -213,7 +213,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         &self,
         ctx: &StoreContext<EK, ER, T>,
         split_keys: Vec<Vec<u8>>,
-        share_source_region_size: bool,
         ch: CmdResChannel,
     ) {
         let task = pd::Task::AskBatchSplit {
@@ -221,7 +220,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             split_keys,
             peer: self.peer().clone(),
             right_derive: ctx.cfg.right_derive_when_split,
-            share_source_region_size,
             ch,
         };
         if let Err(e) = ctx.schedulers.pd.schedule(task) {

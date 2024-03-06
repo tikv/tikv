@@ -25,13 +25,14 @@
 //!   created by the store, and here init it using the data sent from the parent
 //!   peer.
 
-use std::{any::Any, borrow::Cow, cmp, path::PathBuf, time::Duration};
+use std::{any::Any, borrow::Cow, cmp, path::PathBuf};
 
 use collections::HashSet;
 use crossbeam::channel::SendError;
-use engine_traits::{KvEngine, RaftEngine, RaftLogBatch, TabletContext, TabletRegistry};
+use engine_traits::{
+    Checkpointer, KvEngine, RaftEngine, RaftLogBatch, TabletContext, TabletRegistry,
+};
 use fail::fail_point;
-use futures::channel::oneshot;
 use kvproto::{
     metapb::{self, Region, RegionEpoch},
     pdpb::CheckPolicy,
@@ -53,7 +54,7 @@ use raftstore::{
     Result,
 };
 use slog::{error, info, warn};
-use tikv_util::{log::SlogFormat, slog_panic, time::Instant, worker::Scheduler};
+use tikv_util::{log::SlogFormat, slog_panic, time::Instant};
 
 use crate::{
     batch::StoreContext,
@@ -61,7 +62,7 @@ use crate::{
     operation::{AdminCmdResult, SharedReadTablet},
     raft::{Apply, Peer},
     router::{CmdResChannel, PeerMsg, PeerTick, StoreMsg},
-    worker::{checkpoint, tablet},
+    worker::tablet,
     Error,
 };
 
@@ -73,9 +74,6 @@ pub struct SplitResult {
     // The index of the derived region in `regions`
     pub derived_index: usize,
     pub tablet_index: u64,
-    // new regions will share the region size if it's true.
-    // otherwise, the new region's size will be 0.
-    pub share_source_region_size: bool,
     // Hack: in common case we should use generic, but split is an infrequent
     // event that performance is not critical. And using `Any` can avoid polluting
     // all existing code.
@@ -149,9 +147,6 @@ pub struct RequestSplit {
     pub epoch: RegionEpoch,
     pub split_keys: Vec<Vec<u8>>,
     pub source: Cow<'static, str>,
-    // new regions will share the region size if it's true.
-    // otherwise, the new region's size will be 0.
-    pub share_source_region_size: bool,
 }
 
 #[derive(Debug)]
@@ -213,7 +208,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         {
             return true;
         }
-        fail_point!("on_split_region_check_tick", |_| true);
         if ctx.schedulers.split_check.is_busy() {
             return false;
         }
@@ -304,7 +298,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             ch.set_result(cmd_resp::new_error(e));
             return;
         }
-        self.ask_batch_split_pd(ctx, rs.split_keys, rs.share_source_region_size, ch);
+        self.ask_batch_split_pd(ctx, rs.split_keys, ch);
     }
 
     pub fn on_request_half_split<T>(
@@ -376,7 +370,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 }
 
 impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
-    pub async fn apply_split(
+    pub fn apply_split(
         &mut self,
         req: &AdminRequest,
         log_index: u64,
@@ -394,10 +388,10 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
         // This method is executed only when there are unapplied entries after being
         // restarted. So there will be no callback, it's OK to return a response
         // that does not matched with its request.
-        self.apply_batch_split(req, log_index).await
+        self.apply_batch_split(req, log_index)
     }
 
-    pub async fn apply_batch_split(
+    pub fn apply_batch_split(
         &mut self,
         req: &AdminRequest,
         log_index: u64,
@@ -405,11 +399,6 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
         fail_point!(
             "on_apply_batch_split",
             self.peer().get_store_id() == 3,
-            |_| { unreachable!() }
-        );
-        fail_point!(
-            "apply_before_split_1_3",
-            self.peer_id() == 3 && self.region_id() == 1,
             |_| { unreachable!() }
         );
         PEER_ADMIN_CMD_COUNTER.batch_split.all.inc();
@@ -442,7 +431,6 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
         let derived_req = &[derived_req];
 
         let right_derive = split_reqs.get_right_derive();
-        let share_source_region_size = split_reqs.get_share_source_region_size();
         let reqs = if right_derive {
             split_reqs.get_requests().iter().chain(derived_req)
         } else {
@@ -481,27 +469,65 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
         // write batch
         self.flush();
 
-        let now = Instant::now();
-        let split_region_ids = regions
-            .iter()
-            .map(|r| r.get_id())
-            .filter(|id| id != &region_id)
-            .collect::<Vec<_>>();
-        let scheduler: _ = self.checkpoint_scheduler().clone();
+        // todo(SpadeA): Here: we use a temporary solution that we use checkpoint API to
+        // clone new tablets. It may cause large jitter as we need to flush the
+        // memtable. And more what is more important is that after removing WAL, the API
+        // will never flush.
+        // We will freeze the memtable rather than flush it in the following PR.
         let tablet = self.tablet().clone();
-        let checkpoint_duration =
-            async_checkpoint(tablet, &scheduler, region_id, split_region_ids, log_index).await;
+        let mut checkpointer = tablet.new_checkpointer().unwrap_or_else(|e| {
+            slog_panic!(
+                self.logger,
+                "fails to create checkpoint object";
+                "error" => ?e
+            )
+        });
 
-        // It should equal to checkpoint_duration + the duration of rescheduling current
-        // apply peer
+        let now = Instant::now();
+        let reg = self.tablet_registry();
+        for new_region in &regions {
+            let new_region_id = new_region.id;
+            if new_region_id == region_id {
+                continue;
+            }
+
+            let split_temp_path = temp_split_path(reg, new_region_id);
+            checkpointer
+                .create_at(&split_temp_path, None, 0)
+                .unwrap_or_else(|e| {
+                    slog_panic!(
+                        self.logger,
+                        "fails to create checkpoint";
+                        "path" => %split_temp_path.display(),
+                        "error" => ?e
+                    )
+                });
+        }
+
+        let derived_path = self.tablet_registry().tablet_path(region_id, log_index);
+        // If it's recovered from restart, it's possible the target path exists already.
+        // And because checkpoint is atomic, so we don't need to worry about corruption.
+        // And it's also wrong to delete it and remake as it may has applied and flushed
+        // some data to the new checkpoint before being restarted.
+        if !derived_path.exists() {
+            checkpointer
+                .create_at(&derived_path, None, 0)
+                .unwrap_or_else(|e| {
+                    slog_panic!(
+                        self.logger,
+                        "fails to create checkpoint";
+                        "path" => %derived_path.display(),
+                        "error" => ?e
+                    )
+                });
+        }
         let elapsed = now.saturating_elapsed();
         // to be removed after when it's stable
         info!(
             self.logger,
-            "checkpoint done and resume batch split execution";
+            "create checkpoint time consumes";
             "region" =>  ?self.region(),
-            "checkpoint_duration" => ?checkpoint_duration,
-            "total_duration" => ?elapsed,
+            "duration" => ?elapsed
         );
 
         let reg = self.tablet_registry();
@@ -529,31 +555,9 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                 derived_index,
                 tablet_index: log_index,
                 tablet: Box::new(tablet),
-                share_source_region_size,
             }),
         ))
     }
-}
-
-// asynchronously execute the checkpoint creation and return the duration spent
-// by it
-async fn async_checkpoint<EK: KvEngine>(
-    tablet: EK,
-    scheduler: &Scheduler<checkpoint::Task<EK>>,
-    parent_region: u64,
-    split_regions: Vec<u64>,
-    log_index: u64,
-) -> Duration {
-    let (tx, rx) = oneshot::channel();
-    let task = checkpoint::Task::Checkpoint {
-        tablet,
-        log_index,
-        parent_region,
-        split_regions,
-        sender: tx,
-    };
-    scheduler.schedule_force(task).unwrap();
-    rx.await.unwrap()
 }
 
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
@@ -565,7 +569,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         fail_point!("on_split", self.peer().get_store_id() == 3, |_| {});
 
         let derived = &res.regions[res.derived_index];
-        let share_source_region_size = res.share_source_region_size;
         let region_id = derived.get_id();
 
         let region_locks = self.txn_context().split(&res.regions, derived);
@@ -596,14 +599,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 
         let new_region_count = res.regions.len() as u64;
         let control = self.split_flow_control_mut();
-        // if share_source_region_size is true, it means the new region contains any
-        // data from the origin region.
-        let mut share_size = None;
-        let mut share_keys = None;
-        if share_source_region_size {
-            share_size = control.approximate_size.map(|v| v / new_region_count);
-            share_keys = control.approximate_keys.map(|v| v / new_region_count);
-        }
+        let estimated_size = control.approximate_size.map(|v| v / new_region_count);
+        let estimated_keys = control.approximate_keys.map(|v| v / new_region_count);
 
         self.post_split();
 
@@ -621,11 +618,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             // After split, the peer may need to update its metrics.
             let control = self.split_flow_control_mut();
             control.may_skip_split_check = false;
-            if share_source_region_size {
-                control.approximate_size = share_size;
-                control.approximate_keys = share_keys;
-            }
-
+            control.approximate_size = estimated_size;
+            control.approximate_keys = estimated_keys;
             self.add_pending_tick(PeerTick::SplitRegionCheck);
         }
         self.storage_mut().set_has_dirty_data(true);
@@ -670,8 +664,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 derived_region_id: region_id,
                 check_split: last_region_id == new_region_id,
                 scheduled: false,
-                approximate_size: share_size,
-                approximate_keys: share_keys,
+                approximate_size: estimated_size,
+                approximate_keys: estimated_keys,
                 locks,
             }));
 
@@ -871,10 +865,8 @@ mod test {
         kv::{KvTestEngine, TestTabletFactory},
     };
     use engine_traits::{
-        FlushState, Peekable, SstApplyState, TabletContext, TabletRegistry, WriteBatch, CF_DEFAULT,
-        DATA_CFS,
+        FlushState, Peekable, TabletContext, TabletRegistry, WriteBatch, CF_DEFAULT, DATA_CFS,
     };
-    use futures::executor::block_on;
     use kvproto::{
         metapb::RegionEpoch,
         raft_cmdpb::{BatchSplitRequest, SplitRequest},
@@ -887,9 +879,8 @@ mod test {
     use slog::o;
     use tempfile::TempDir;
     use tikv_util::{
-        defer,
         store::{new_learner_peer, new_peer},
-        worker::{dummy_scheduler, Worker},
+        worker::dummy_scheduler,
     };
 
     use super::*;
@@ -956,8 +947,7 @@ mod test {
         req.set_splits(splits);
 
         // Exec batch split
-        let (resp, apply_res) =
-            block_on(async { apply.apply_batch_split(&req, log_index).await }).unwrap();
+        let (resp, apply_res) = apply.apply_batch_split(&req, log_index).unwrap();
 
         let regions = resp.get_splits().get_regions();
         assert!(regions.len() == region_boundries.len());
@@ -1000,11 +990,6 @@ mod test {
                 assert!(reg.tablet_factory().exists(&path));
             }
         }
-
-        let AdminCmdResult::SplitRegion(SplitResult { tablet, .. }) = apply_res else { panic!() };
-        // update cache
-        let mut cache = apply.tablet_registry().get(parent_id).unwrap();
-        cache.set(*tablet.downcast().unwrap());
     }
 
     #[test]
@@ -1035,13 +1020,6 @@ mod test {
         region_state.set_region(region.clone());
         region_state.set_tablet_index(5);
 
-        let checkpoint_worker = Worker::new("checkpoint-worker");
-        let checkpoint_scheduler = checkpoint_worker.start(
-            "checkpoint-worker",
-            checkpoint::Runner::new(logger.clone(), reg.clone()),
-        );
-        defer!(checkpoint_worker.stop());
-
         let (read_scheduler, _rx) = dummy_scheduler();
         let (reporter, _) = MockReporter::new();
         let (_tmp_dir, importer) = create_tmp_importer();
@@ -1059,13 +1037,11 @@ mod test {
             reg,
             read_scheduler,
             Arc::new(FlushState::new(5)),
-            SstApplyState::default(),
             None,
             5,
             None,
             importer,
             host,
-            checkpoint_scheduler,
             logger.clone(),
         );
 
@@ -1074,13 +1050,13 @@ mod test {
         splits.mut_requests().push(new_split_req(b"k1", 1, vec![]));
         let mut req = AdminRequest::default();
         req.set_splits(splits.clone());
-        let err = block_on(async { apply.apply_batch_split(&req, 0).await }).unwrap_err();
+        let err = apply.apply_batch_split(&req, 0).unwrap_err();
         // 3 followers are required.
         assert!(err.to_string().contains("invalid new peer id count"));
 
         splits.mut_requests().clear();
         req.set_splits(splits.clone());
-        let err = block_on(async { apply.apply_batch_split(&req, 6).await }).unwrap_err();
+        let err = apply.apply_batch_split(&req, 6).unwrap_err();
         // Empty requests should be rejected.
         assert!(err.to_string().contains("missing split requests"));
 
@@ -1088,9 +1064,7 @@ mod test {
             .mut_requests()
             .push(new_split_req(b"k11", 1, vec![11, 12, 13]));
         req.set_splits(splits.clone());
-        let resp =
-            new_error(block_on(async { apply.apply_batch_split(&req, 0).await }).unwrap_err());
-
+        let resp = new_error(apply.apply_batch_split(&req, 0).unwrap_err());
         // Out of range keys should be rejected.
         assert!(
             resp.get_header().get_error().has_key_not_in_region(),
@@ -1103,7 +1077,7 @@ mod test {
             .mut_requests()
             .push(new_split_req(b"", 1, vec![11, 12, 13]));
         req.set_splits(splits.clone());
-        let err = block_on(async { apply.apply_batch_split(&req, 7).await }).unwrap_err();
+        let err = apply.apply_batch_split(&req, 7).unwrap_err();
         // Empty key will not in any region exclusively.
         assert!(err.to_string().contains("missing split key"), "{:?}", err);
 
@@ -1115,7 +1089,7 @@ mod test {
             .mut_requests()
             .push(new_split_req(b"k1", 1, vec![11, 12, 13]));
         req.set_splits(splits.clone());
-        let err = block_on(async { apply.apply_batch_split(&req, 8).await }).unwrap_err();
+        let err = apply.apply_batch_split(&req, 8).unwrap_err();
         // keys should be in ascend order.
         assert!(
             err.to_string().contains("invalid split request"),
@@ -1131,7 +1105,7 @@ mod test {
             .mut_requests()
             .push(new_split_req(b"k2", 1, vec![11, 12]));
         req.set_splits(splits.clone());
-        let err = block_on(async { apply.apply_batch_split(&req, 9).await }).unwrap_err();
+        let err = apply.apply_batch_split(&req, 9).unwrap_err();
         // All requests should be checked.
         assert!(err.to_string().contains("id count"), "{:?}", err);
 
@@ -1249,7 +1223,7 @@ mod test {
             .mut_requests()
             .push(new_split_req(b"k05", 70, vec![71, 72, 73]));
         req.set_splits(splits);
-        block_on(async { apply.apply_batch_split(&req, 51).await }).unwrap();
+        apply.apply_batch_split(&req, 51).unwrap();
         assert!(apply.write_batch.is_none());
         assert_eq!(
             apply

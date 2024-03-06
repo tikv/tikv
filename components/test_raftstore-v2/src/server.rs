@@ -15,12 +15,12 @@ use encryption_export::DataKeyManager;
 use engine_rocks::RocksEngine;
 use engine_test::raft::RaftTestEngine;
 use engine_traits::{KvEngine, RaftEngine, TabletRegistry};
-use futures::{executor::block_on, future::BoxFuture, Future};
+use futures::{executor::block_on, Future};
 use grpcio::{ChannelBuilder, EnvBuilder, Environment, Error as GrpcError, Service};
 use grpcio_health::HealthService;
 use kvproto::{
     deadlock_grpc::create_deadlock,
-    debugpb_grpc::{create_debug, DebugClient},
+    debugpb_grpc::DebugClient,
     diagnosticspb_grpc::create_diagnostics,
     import_sstpb_grpc::create_import_sst,
     kvrpcpb::{ApiVersion, Context},
@@ -48,20 +48,14 @@ use tempfile::TempDir;
 use test_pd_client::TestPdClient;
 use test_raftstore::{filter_send, AddressMap, Config, Filter};
 use tikv::{
-    config::ConfigController,
     coprocessor, coprocessor_v2,
     import::{ImportSstService, SstImporter},
     read_pool::ReadPool,
     server::{
-        debug2::DebuggerImplV2,
-        gc_worker::GcWorker,
-        load_statistics::ThreadLoadPool,
-        lock_manager::LockManager,
-        raftkv::ReplicaReadLockChecker,
-        resolve,
-        service::{DebugService, DiagnosticsService},
-        ConnectionBuilder, Error, Extension, NodeV2, PdStoreAddrResolver, RaftClient, RaftKv2,
-        Result as ServerResult, Server, ServerTransport,
+        gc_worker::GcWorker, load_statistics::ThreadLoadPool, lock_manager::LockManager,
+        raftkv::ReplicaReadLockChecker, resolve, service::DiagnosticsService, ConnectionBuilder,
+        Error, Extension, NodeV2, PdStoreAddrResolver, RaftClient, RaftKv2, Result as ServerResult,
+        Server, ServerTransport,
     },
     storage::{
         self,
@@ -79,7 +73,7 @@ use tikv_util::{
     worker::{Builder as WorkerBuilder, LazyWorker},
     Either, HandyRwLock,
 };
-use tokio::runtime::{Builder as TokioBuilder, Handle};
+use tokio::runtime::Builder as TokioBuilder;
 use txn_types::TxnExtraScheduler;
 
 use crate::{Cluster, RaftStoreRouter, SimulateTransport, Simulator, SnapshotRouter};
@@ -164,18 +158,6 @@ impl<EK: KvEngine> Engine for TestRaftKv2<EK> {
     #[inline]
     fn schedule_txn_extra(&self, txn_extra: txn_types::TxnExtra) {
         self.raftkv.schedule_txn_extra(txn_extra)
-    }
-
-    fn start_flashback(
-        &self,
-        ctx: &Context,
-        start_ts: u64,
-    ) -> BoxFuture<'static, storage::kv::Result<()>> {
-        self.raftkv.start_flashback(ctx, start_ts)
-    }
-
-    fn end_flashback(&self, ctx: &Context) -> BoxFuture<'static, storage::kv::Result<()>> {
-        self.raftkv.end_flashback(ctx)
     }
 }
 
@@ -264,12 +246,10 @@ pub struct ServerMeta<EK: KvEngine> {
     sim_trans: SimulateServerTransport<EK>,
     raw_router: StoreRouter<EK, RaftTestEngine>,
     gc_worker: GcWorker<TestRaftKv2<EK>>,
-    rts_worker: Option<LazyWorker<resolved_ts::Task>>,
     rsmeter_cleanup: Box<dyn FnOnce()>,
 }
 
 type PendingServices = Vec<Box<dyn Fn() -> Service>>;
-type PendingDebugService<EK> = Box<dyn Fn(&ServerCluster<EK>, Handle) -> Service>;
 
 pub struct ServerCluster<EK: KvEngine> {
     metas: HashMap<u64, ServerMeta<EK>>,
@@ -279,14 +259,10 @@ pub struct ServerCluster<EK: KvEngine> {
     snap_paths: HashMap<u64, TempDir>,
     snap_mgrs: HashMap<u64, TabletSnapManager>,
     pd_client: Arc<TestPdClient>,
-    raft_clients: HashMap<u64, RaftClient<AddressMap, FakeExtension>>,
-    conn_builder: ConnectionBuilder<AddressMap, FakeExtension>,
+    raft_client: RaftClient<AddressMap, FakeExtension>,
     concurrency_managers: HashMap<u64, ConcurrencyManager>,
     env: Arc<Environment>,
     pub pending_services: HashMap<u64, PendingServices>,
-    // This is used to work around that server cluster is generic over KvEngine while the debug
-    // service implementation is specific overal RocksDB.
-    pub pending_debug_service: Option<PendingDebugService<EK>>,
     pub health_services: HashMap<u64, HealthService>,
     pub security_mgr: Arc<SecurityManager>,
     pub txn_extra_schedulers: HashMap<u64, Arc<dyn TxnExtraScheduler>>,
@@ -315,6 +291,7 @@ impl<EK: KvEngine> ServerCluster<EK> {
             worker.scheduler(),
             Arc::new(ThreadLoadPool::with_threshold(usize::MAX)),
         );
+        let raft_client = RaftClient::new(conn_builder);
         ServerCluster {
             metas: HashMap::default(),
             addrs: map,
@@ -325,10 +302,8 @@ impl<EK: KvEngine> ServerCluster<EK> {
             snap_mgrs: HashMap::default(),
             snap_paths: HashMap::default(),
             pending_services: HashMap::default(),
-            pending_debug_service: None::<PendingDebugService<EK>>,
             health_services: HashMap::default(),
-            raft_clients: HashMap::default(),
-            conn_builder,
+            raft_client,
             concurrency_managers: HashMap::default(),
             env,
             txn_extra_schedulers: HashMap::default(),
@@ -353,10 +328,7 @@ impl<EK: KvEngine> ServerCluster<EK> {
         let (snap_mgr, snap_mgs_path) = if !self.snap_mgrs.contains_key(&node_id) {
             let tmp = test_util::temp_dir("test_cluster", cfg.prefer_mem);
             let snap_path = tmp.path().to_str().unwrap().to_owned();
-            (
-                TabletSnapManager::new(snap_path, key_manager.clone())?,
-                Some(tmp),
-            )
+            (TabletSnapManager::new(snap_path)?, Some(tmp))
         } else {
             (self.snap_mgrs[&node_id].clone(), None)
         };
@@ -375,7 +347,6 @@ impl<EK: KvEngine> ServerCluster<EK> {
 
         // Create node.
         let mut raft_store = cfg.raft_store.clone();
-        raft_store.optimize_for(true);
         raft_store
             .validate(
                 cfg.coprocessor.region_split_size(),
@@ -442,30 +413,7 @@ impl<EK: KvEngine> ServerCluster<EK> {
         );
         gc_worker.start(node_id).unwrap();
 
-        let rts_worker = if cfg.resolved_ts.enable {
-            // Resolved ts worker
-            let mut rts_worker = LazyWorker::new("resolved-ts");
-            let rts_ob = resolved_ts::Observer::new(rts_worker.scheduler());
-            rts_ob.register_to(&mut coprocessor_host);
-            // resolved ts endpoint needs store id.
-            store_meta.lock().unwrap().store_id = node_id;
-            // Resolved ts endpoint
-            let rts_endpoint = resolved_ts::Endpoint::new(
-                &cfg.resolved_ts,
-                rts_worker.scheduler(),
-                raft_router.clone(),
-                store_meta.clone(),
-                self.pd_client.clone(),
-                concurrency_manager.clone(),
-                self.env.clone(),
-                self.security_mgr.clone(),
-            );
-            // Start the worker
-            rts_worker.start(rts_endpoint);
-            Some(rts_worker)
-        } else {
-            None
-        };
+        // todo: resolved ts
 
         if ApiVersion::V2 == F::TAG {
             let casual_ts_provider: Arc<CausalTsProviderImpl> = Arc::new(
@@ -527,13 +475,7 @@ impl<EK: KvEngine> ServerCluster<EK> {
         let importer = {
             let dir = Path::new(raft_engine.get_engine_path()).join("../import-sst");
             Arc::new(
-                SstImporter::new(
-                    &cfg.import,
-                    dir,
-                    key_manager.clone(),
-                    cfg.storage.api_version(),
-                )
-                .unwrap(),
+                SstImporter::new(&cfg.import, dir, key_manager, cfg.storage.api_version()).unwrap(),
             )
         };
         let import_service = ImportSstService::new(
@@ -580,7 +522,7 @@ impl<EK: KvEngine> ServerCluster<EK> {
         );
         let debug_thread_handle = debug_thread_pool.handle().clone();
         let diag_service = DiagnosticsService::new(
-            debug_thread_handle.clone(),
+            debug_thread_handle,
             cfg.log.file.filename.clone(),
             cfg.slow_log_file.clone(),
         );
@@ -603,7 +545,6 @@ impl<EK: KvEngine> ServerCluster<EK> {
                 None,
                 debug_thread_pool.clone(),
                 health_service.clone(),
-                resource_manager.clone(),
             )
             .unwrap();
             svr.register_service(create_diagnostics(diag_service.clone()));
@@ -613,9 +554,6 @@ impl<EK: KvEngine> ServerCluster<EK> {
                 for fact in svcs {
                     svr.register_service(fact());
                 }
-            }
-            if let Some(debug_service) = &self.pending_debug_service {
-                svr.register_service(debug_service(self, debug_thread_handle.clone()));
             }
             match svr.build_and_bind() {
                 Ok(_) => {
@@ -659,7 +597,6 @@ impl<EK: KvEngine> ServerCluster<EK> {
             Arc::new(VersionTrack::new(raft_store)),
             &state,
             importer,
-            key_manager,
         )?;
         assert!(node_id == 0 || node_id == node.id());
         let node_id = node.id();
@@ -695,7 +632,6 @@ impl<EK: KvEngine> ServerCluster<EK> {
                 sim_router,
                 gc_worker,
                 sim_trans: simulate_trans,
-                rts_worker,
                 rsmeter_cleanup,
             },
         );
@@ -703,8 +639,6 @@ impl<EK: KvEngine> ServerCluster<EK> {
         self.concurrency_managers
             .insert(node_id, concurrency_manager);
 
-        let client = RaftClient::new(node_id, self.conn_builder.clone());
-        self.raft_clients.insert(node_id, client);
         Ok(node_id)
     }
 
@@ -811,23 +745,21 @@ impl<EK: KvEngine> Simulator<EK> for ServerCluster<EK> {
         if let Some(mut meta) = self.metas.remove(&node_id) {
             meta.server.stop().unwrap();
             meta.node.stop();
-            // resolved ts worker started, let's stop it
-            if let Some(worker) = meta.rts_worker {
-                worker.stop_worker();
-            }
+            // // resolved ts worker started, let's stop it
+            // if let Some(worker) = meta.rts_worker {
+            //     worker.stop_worker();
+            // }
             (meta.rsmeter_cleanup)();
         }
         self.storages.remove(&node_id);
-        let _ = self.raft_clients.remove(&node_id);
     }
 
     fn async_snapshot(
         &mut self,
-        node_id: u64,
         request: kvproto::raft_cmdpb::RaftCmdRequest,
-    ) -> impl Future<Output = std::result::Result<RegionSnapshot<EK::Snapshot>, RaftCmdResponse>>
-    + Send
-    + 'static {
+    ) -> impl Future<Output = std::result::Result<RegionSnapshot<EK::Snapshot>, RaftCmdResponse>> + Send
+    {
+        let node_id = request.get_header().get_peer().get_store_id();
         let mut router = match self.metas.get(&node_id) {
             None => {
                 let mut resp = RaftCmdResponse::default();
@@ -857,12 +789,8 @@ impl<EK: KvEngine> Simulator<EK> for ServerCluster<EK> {
     }
 
     fn send_raft_msg(&mut self, msg: RaftMessage) -> raftstore::Result<()> {
-        let from_store = msg.get_from_peer().store_id;
-        assert_ne!(from_store, 0);
-        if let Some(client) = self.raft_clients.get_mut(&from_store) {
-            client.send(msg).unwrap();
-            client.flush();
-        }
+        self.raft_client.send(msg).unwrap();
+        self.raft_client.flush();
         Ok(())
     }
 
@@ -885,14 +813,6 @@ impl<EK: KvEngine> Simulator<EK> for ServerCluster<EK> {
 
 impl<EK: KvEngine> Cluster<ServerCluster<EK>, EK> {
     pub fn must_get_snapshot_of_region(&mut self, region_id: u64) -> RegionSnapshot<EK::Snapshot> {
-        self.must_get_snapshot_of_region_with_ctx(region_id, SnapContext::default())
-    }
-
-    pub fn must_get_snapshot_of_region_with_ctx(
-        &mut self,
-        region_id: u64,
-        snap_ctx: SnapContext<'_>,
-    ) -> RegionSnapshot<EK::Snapshot> {
         let mut try_snapshot = || -> Option<RegionSnapshot<EK::Snapshot>> {
             let leader = self.leader_of_region(region_id)?;
             let store_id = leader.store_id;
@@ -905,7 +825,7 @@ impl<EK: KvEngine> Cluster<ServerCluster<EK>, EK> {
             let mut storage = self.sim.rl().storages.get(&store_id).unwrap().clone();
             let snap_ctx = SnapContext {
                 pb_ctx: &ctx,
-                ..snap_ctx.clone()
+                ..Default::default()
             };
             storage.snapshot(snap_ctx).ok()
         };
@@ -1064,33 +984,7 @@ pub fn must_new_cluster_and_debug_client() -> (
     DebugClient,
     u64,
 ) {
-    let mut cluster = new_server_cluster(0, 1);
-    cluster.create_engines();
-    let region_id = cluster.bootstrap_conf_change();
-
-    {
-        let mut sim = cluster.sim.wl();
-        let tablet_registry = cluster.tablet_registries.get(&1).unwrap().clone();
-        let raft_engine = cluster.raft_engines.get(&1).unwrap().clone();
-        let debugger =
-            DebuggerImplV2::new(tablet_registry, raft_engine, ConfigController::default());
-
-        sim.pending_debug_service = Some(Box::new(move |cluster, debug_thread_handle| {
-            let raftkv = cluster.storages.get(&1).unwrap();
-            let raft_extension = raftkv.raft_extension();
-
-            create_debug(DebugService::new(
-                debugger.clone(),
-                debug_thread_handle,
-                raft_extension,
-                raftkv.raftkv.router().store_meta().clone(),
-                Arc::new(|_, _, _, _| false),
-            ))
-        }));
-    }
-
-    cluster.start().unwrap();
-    let leader = cluster.leader_of_region(region_id).unwrap();
+    let (cluster, leader, _) = must_new_cluster_mul(1);
 
     let env = Arc::new(Environment::new(1));
     let channel =
@@ -1098,47 +992,4 @@ pub fn must_new_cluster_and_debug_client() -> (
     let client = DebugClient::new(channel);
 
     (cluster, client, leader.get_store_id())
-}
-
-pub fn setup_cluster() -> (
-    Cluster<ServerCluster<RocksEngine>, RocksEngine>,
-    TikvClient,
-    String,
-    Context,
-) {
-    let mut cluster = new_server_cluster(0, 3);
-    cluster.run();
-
-    let region_id = 1;
-    let leader = cluster.leader_of_region(region_id).unwrap();
-    let leader_addr = cluster.sim.rl().get_addr(leader.get_store_id());
-    let region = cluster.get_region(b"k1");
-    let follower = region
-        .get_peers()
-        .iter()
-        .find(|p| **p != leader)
-        .unwrap()
-        .clone();
-    let follower_addr = cluster.sim.rl().get_addr(follower.get_store_id());
-    let epoch = cluster.get_region_epoch(region_id);
-    let mut ctx = Context::default();
-    ctx.set_region_id(region_id);
-    ctx.set_peer(leader);
-    ctx.set_region_epoch(epoch);
-
-    let env = Arc::new(Environment::new(1));
-    let channel = ChannelBuilder::new(env).connect(&follower_addr);
-    let client = TikvClient::new(channel);
-
-    // Verify not setting forwarding header will result in store not match.
-    let mut put_req = kvproto::kvrpcpb::RawPutRequest::default();
-    put_req.set_context(ctx.clone());
-    let put_resp = client.raw_put(&put_req).unwrap();
-    assert!(
-        put_resp.get_region_error().has_store_not_match(),
-        "{:?}",
-        put_resp
-    );
-    assert!(put_resp.error.is_empty(), "{:?}", put_resp);
-    (cluster, client, leader_addr, ctx)
 }

@@ -9,7 +9,6 @@ use std::{
 
 use collections::HashMap;
 use engine_traits::{DeleteStrategy, KvEngine, Range, TabletContext, TabletRegistry, DATA_CFS};
-use fail::fail_point;
 use kvproto::{import_sstpb::SstMeta, metapb::Region};
 use slog::{debug, error, info, warn, Logger};
 use sst_importer::SstImporter;
@@ -238,7 +237,6 @@ impl<EK: KvEngine> Runner<EK> {
                 }
                 // drop before callback.
                 drop(tablet);
-                fail_point!("tablet_trimmed_finished");
                 cb();
             })
             .unwrap();

@@ -199,10 +199,8 @@ impl SstImporter {
             "size" => ?memory_limit,
         );
 
-        let dir = ImportDir::new(root)?;
-
         Ok(SstImporter {
-            dir,
+            dir: ImportDir::new(root)?,
             key_manager,
             switcher,
             api_version,
@@ -575,6 +573,7 @@ impl SstImporter {
     async fn exec_download(
         &self,
         meta: &KvMeta,
+        rewrite_rule: &RewriteRule,
         ext_storage: Arc<dyn external_storage_export::ExternalStorage>,
         speed_limiter: &Limiter,
     ) -> Result<LoadedFile> {
@@ -622,8 +621,9 @@ impl SstImporter {
             .with_label_values(&["exec_download"])
             .observe(start.saturating_elapsed().as_secs_f64());
 
+        let rewrite_buff = self.rewrite_kv_file(buff, rewrite_rule)?;
         Ok(LoadedFile {
-            content: Arc::from(buff.into_boxed_slice()),
+            content: Arc::from(rewrite_buff.into_boxed_slice()),
             permit,
         })
     }
@@ -631,6 +631,7 @@ impl SstImporter {
     pub async fn do_read_kv_file(
         &self,
         meta: &KvMeta,
+        rewrite_rule: &RewriteRule,
         ext_storage: Arc<dyn external_storage_export::ExternalStorage>,
         speed_limiter: &Limiter,
     ) -> Result<CacheKvFile> {
@@ -671,7 +672,7 @@ impl SstImporter {
         }
 
         cache
-            .get_or_try_init(|| self.exec_download(meta, ext_storage, speed_limiter))
+            .get_or_try_init(|| self.exec_download(meta, rewrite_rule, ext_storage, speed_limiter))
             .await?;
         Ok(CacheKvFile::Mem(cache))
     }
@@ -744,6 +745,7 @@ impl SstImporter {
     pub async fn read_from_kv_file(
         &self,
         meta: &KvMeta,
+        rewrite_rule: &RewriteRule,
         ext_storage: Arc<dyn external_storage_export::ExternalStorage>,
         backend: &StorageBackend,
         speed_limiter: &Limiter,
@@ -752,7 +754,7 @@ impl SstImporter {
             self.do_download_kv_file(meta, backend, speed_limiter)
                 .await?
         } else {
-            self.do_read_kv_file(meta, ext_storage, speed_limiter)
+            self.do_read_kv_file(meta, rewrite_rule, ext_storage, speed_limiter)
                 .await?
         };
         match c {
@@ -770,7 +772,8 @@ impl SstImporter {
                 let mut buffer = Vec::new();
                 reader.read_to_end(&mut buffer)?;
 
-                Ok(Arc::from(buffer.into_boxed_slice()))
+                let rewrite_buff = self.rewrite_kv_file(buffer, rewrite_rule)?;
+                Ok(Arc::from(rewrite_buff.into_boxed_slice()))
             }
         }
     }
@@ -868,11 +871,7 @@ impl SstImporter {
 
         // perform iteration and key rewrite.
         let mut new_buff = Vec::with_capacity(file_buff.len());
-        let mut event_iter = EventIterator::with_rewriting(
-            file_buff.as_slice(),
-            rewrite_rule.get_old_key_prefix(),
-            rewrite_rule.get_new_key_prefix(),
-        );
+        let mut event_iter = EventIterator::new(file_buff.as_slice());
         let mut key = new_prefix.to_vec();
         let new_prefix_data_key_len = key.len();
 
@@ -915,14 +914,9 @@ impl SstImporter {
         start_ts: u64,
         restore_ts: u64,
         file_buff: Arc<[u8]>,
-        rewrite_rule: &RewriteRule,
         mut build_fn: impl FnMut(Vec<u8>, Vec<u8>),
     ) -> Result<Option<Range>> {
-        let mut event_iter = EventIterator::with_rewriting(
-            file_buff.as_ref(),
-            rewrite_rule.get_old_key_prefix(),
-            rewrite_rule.get_new_key_prefix(),
-        );
+        let mut event_iter = EventIterator::new(file_buff.as_ref());
         let mut smallest_key = None;
         let mut largest_key = None;
         let mut total_key = 0;
@@ -938,16 +932,6 @@ impl SstImporter {
             event_iter.next()?;
             INPORTER_APPLY_COUNT.with_label_values(&["key_meet"]).inc();
 
-            if !event_iter
-                .key()
-                .starts_with(rewrite_rule.get_new_key_prefix())
-            {
-                return Err(Error::WrongKeyPrefix {
-                    what: "do_apply_kv_file",
-                    key: event_iter.key().to_vec(),
-                    prefix: rewrite_rule.get_old_key_prefix().to_vec(),
-                });
-            }
             let key = event_iter.key().to_vec();
             let value = event_iter.value().to_vec();
             let ts = Key::decode_ts_from(&key)?;
@@ -975,11 +959,10 @@ impl SstImporter {
             largest_key = largest_key
                 .map_or_else(|| Some(key.clone()), |v: Vec<u8>| Some(v.max(key.clone())));
         }
-        if not_in_range != 0 || ts_not_expected != 0 {
-            info!("build download request file done";
-                "total_keys" => %total_key,
-                "ts_filtered_keys" => %ts_not_expected,
-                "range_filtered_keys" => %not_in_range);
+        if total_key != not_in_range {
+            info!("build download request file done"; "total keys" => %total_key,
+            "ts filtered keys" => %ts_not_expected,
+            "range filtered keys" => %not_in_range);
         }
 
         IMPORTER_APPLY_DURATION
@@ -1292,21 +1275,8 @@ impl SstImporter {
         }
     }
 
-    /// List the basic information of the current SST files.
-    /// The information contains UUID, region ID, region Epoch.
-    /// Other fields may be left blank.
     pub fn list_ssts(&self) -> Result<Vec<SstMeta>> {
         self.dir.list_ssts()
-    }
-
-    /// Load the start key by a metadata.
-    /// This will open the internal SST and try to load the first user key.
-    /// (For RocksEngine, that is the key without the 'z' prefix.)
-    /// When the SST is empty or the first key cannot be parsed as user key,
-    /// return None.
-    pub fn load_start_key_by_meta<S: SstExt>(&self, meta: &SstMeta) -> Result<Option<Vec<u8>>> {
-        self.dir
-            .load_start_key_by_meta::<S>(meta, self.key_manager.clone())
     }
 
     pub fn new_txn_writer<E: KvEngine>(&self, db: &E, meta: SstMeta) -> Result<TxnSstWriter<E>> {
@@ -1988,8 +1958,10 @@ mod tests {
         };
 
         // test do_read_kv_file()
+        let rewrite_rule = &new_rewrite_rule(b"", b"", 12345);
         let output = block_on_external_io(importer.do_read_kv_file(
             &kv_meta,
+            rewrite_rule,
             ext_storage,
             &Limiter::new(f64::INFINITY),
         ))
@@ -2098,6 +2070,7 @@ mod tests {
         };
         let importer =
             SstImporter::new(&cfg, import_dir, Some(key_manager), ApiVersion::V1).unwrap();
+        let rewrite_rule = &new_rewrite_rule(b"", b"", 12345);
         let ext_storage = {
             importer.wrap_kms(
                 importer.external_storage_or_cache(&backend, "").unwrap(),
@@ -2115,6 +2088,7 @@ mod tests {
         assert!(importer.import_support_download());
         let output = block_on_external_io(importer.read_from_kv_file(
             &kv_meta,
+            rewrite_rule,
             ext_storage,
             &backend,
             &Limiter::new(f64::INFINITY),

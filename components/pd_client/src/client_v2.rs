@@ -117,7 +117,7 @@ impl RawClient {
 
     /// Returns Ok(true) when a new connection is established.
     async fn maybe_reconnect(&mut self, ctx: &ConnectContext, force: bool) -> Result<bool> {
-        PD_RECONNECT_COUNTER_VEC.try_connect.inc();
+        PD_RECONNECT_COUNTER_VEC.with_label_values(&["try"]).inc();
         let start = Instant::now();
 
         let members = self.members.clone();
@@ -135,15 +135,21 @@ impl RawClient {
             .await
         {
             Err(e) => {
-                PD_RECONNECT_COUNTER_VEC.failure.inc();
+                PD_RECONNECT_COUNTER_VEC
+                    .with_label_values(&["failure"])
+                    .inc();
                 return Err(e);
             }
             Ok(None) => {
-                PD_RECONNECT_COUNTER_VEC.no_need.inc();
+                PD_RECONNECT_COUNTER_VEC
+                    .with_label_values(&["no-need"])
+                    .inc();
                 return Ok(false);
             }
             Ok(Some(tuple)) => {
-                PD_RECONNECT_COUNTER_VEC.success.inc();
+                PD_RECONNECT_COUNTER_VEC
+                    .with_label_values(&["success"])
+                    .inc();
                 tuple
             }
         };

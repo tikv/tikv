@@ -11,7 +11,7 @@ use raft::eraftpb::MessageType;
 use test_raftstore::*;
 use tikv::storage::{kv::*, CfStatistics};
 use tikv_util::{codec::bytes, HandyRwLock};
-use txn_types::{Key, Lock, LockType, TimeStamp};
+use txn_types::{Key, Lock, LockType};
 
 #[test]
 fn test_raftkv() {
@@ -255,27 +255,20 @@ fn test_read_on_replica_check_memory_locks() {
     follower_ctx.set_region_epoch(region.get_region_epoch().clone());
     follower_ctx.set_peer(follower_peer.as_ref().unwrap().clone());
     follower_ctx.set_replica_read(true);
-    for use_max_ts in [false, true] {
-        let mut range = KeyRange::default();
-        range.set_start_key(encoded_key.as_encoded().to_vec());
-        let ts = if use_max_ts {
-            Some(TimeStamp::max())
-        } else {
-            Some(100.into())
-        };
-        let follower_snap_ctx = SnapContext {
-            pb_ctx: &follower_ctx,
-            start_ts: ts,
-            key_ranges: vec![range],
-            ..Default::default()
-        };
-        let mut follower_storage = cluster.sim.rl().storages[&follower_id].clone();
-        match follower_storage.snapshot(follower_snap_ctx) {
-            Err(Error(box ErrorInner::KeyIsLocked(lock_info))) => {
-                assert_eq!(lock_info, lock.clone().into_lock_info(raw_key.to_vec()))
-            }
-            other => panic!("unexpected result: {:?}", other),
+    let mut range = KeyRange::default();
+    range.set_start_key(encoded_key.as_encoded().to_vec());
+    let follower_snap_ctx = SnapContext {
+        pb_ctx: &follower_ctx,
+        start_ts: Some(100.into()),
+        key_ranges: vec![range],
+        ..Default::default()
+    };
+    let mut follower_storage = cluster.sim.rl().storages[&follower_id].clone();
+    match follower_storage.snapshot(follower_snap_ctx) {
+        Err(Error(box ErrorInner::KeyIsLocked(lock_info))) => {
+            assert_eq!(lock_info, lock.into_lock_info(raw_key.to_vec()))
         }
+        other => panic!("unexpected result: {:?}", other),
     }
 }
 
@@ -322,7 +315,7 @@ fn test_invalid_read_index_when_no_leader() {
         true,
     );
     request.mut_header().set_peer(follower.clone());
-    let (cb, mut rx) = make_cb(&request);
+    let (cb, rx) = make_cb(&request);
     cluster
         .sim
         .rl()

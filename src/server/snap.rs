@@ -8,14 +8,12 @@ use std::{
         atomic::{AtomicUsize, Ordering},
         Arc,
     },
-    time::{Duration, Instant as StdInstant},
+    time::Duration,
 };
 
 use file_system::{IoType, WithIoType};
 use futures::{
-    compat::Future01CompatExt,
-    future::{select, Either, Future, TryFutureExt},
-    pin_mut,
+    future::{Future, TryFutureExt},
     sink::SinkExt,
     stream::{Stream, StreamExt, TryStreamExt},
     task::{Context, Poll},
@@ -38,10 +36,8 @@ use raftstore::store::{SnapEntry, SnapKey, SnapManager, Snapshot};
 use security::SecurityManager;
 use tikv_kv::RaftExtension;
 use tikv_util::{
-    box_err,
-    config::{Tracker, VersionTrack, MIB},
+    config::{Tracker, VersionTrack},
     time::{Instant, UnixSecs},
-    timer::GLOBAL_TIMER_HANDLE,
     worker::Runnable,
     DeferContext,
 };
@@ -53,25 +49,6 @@ use crate::{server::tablet_snap::NoSnapshotCache, tikv_util::sys::thread::Thread
 pub type Callback = Box<dyn FnOnce(Result<()>) + Send>;
 
 pub const DEFAULT_POOL_SIZE: usize = 4;
-
-// the default duration before a snapshot sending task is canceled.
-const SNAP_SEND_TIMEOUT_DURATION: Duration = Duration::from_secs(600);
-// the minimum expected send speed for sending snapshot, this is used to avoid
-// timeout too early when the snapshot size is too big.
-const MIN_SNAP_SEND_SPEED: u64 = MIB;
-
-#[inline]
-fn get_snap_timeout(size: u64) -> Duration {
-    let timeout = (|| {
-        fail_point!("snap_send_duration_timeout", |t| -> Duration {
-            let t = t.unwrap().parse::<u64>();
-            Duration::from_millis(t.unwrap())
-        });
-        SNAP_SEND_TIMEOUT_DURATION
-    })();
-    let max_expected_dur = Duration::from_secs(size / MIN_SNAP_SEND_SPEED);
-    std::cmp::max(timeout, max_expected_dur)
-}
 
 /// A task for either receiving Snapshot or sending Snapshot
 pub enum Task {
@@ -214,36 +191,10 @@ pub fn send_snap(
     let (sink, receiver) = client.snapshot()?;
 
     let send_task = async move {
-        let send_and_recv = async {
-            let mut sink = sink.sink_map_err(Error::from);
-
-            #[cfg(feature = "failpoints")]
-            {
-                let should_delay = (|| {
-                    fail::fail_point!("snap_send_timer_delay", |_| { true });
-                    false
-                })();
-                if should_delay {
-                    _ = GLOBAL_TIMER_HANDLE
-                        .delay(StdInstant::now() + Duration::from_secs(1))
-                        .compat()
-                        .await;
-                }
-            }
-            sink.send_all(&mut chunks).await?;
-            sink.close().await?;
-            Ok(receiver.map_err(Error::from).await)
-        };
-        let wait_timeout = GLOBAL_TIMER_HANDLE
-            .delay(StdInstant::now() + get_snap_timeout(total_size))
-            .compat();
-        let recv_result = {
-            pin_mut!(send_and_recv, wait_timeout);
-            match select(send_and_recv, wait_timeout).await {
-                Either::Left((r, _)) => r,
-                Either::Right((..)) => Err(Error::Other(box_err!("send snapshot timeout"))),
-            }
-        };
+        let mut sink = sink.sink_map_err(Error::from);
+        sink.send_all(&mut chunks).await?;
+        sink.close().await?;
+        let recv_result = receiver.map_err(Error::from).await;
         send_timer.observe_duration();
         drop(deregister);
         drop(client);
@@ -413,6 +364,7 @@ pub struct Runner<R: RaftExtension> {
     cfg: Config,
     sending_count: Arc<AtomicUsize>,
     recving_count: Arc<AtomicUsize>,
+    can_receive_tablet_snapshot: bool,
 }
 
 impl<R: RaftExtension + 'static> Runner<R> {
@@ -425,6 +377,7 @@ impl<R: RaftExtension + 'static> Runner<R> {
         r: R,
         security_mgr: Arc<SecurityManager>,
         cfg: Arc<VersionTrack<Config>>,
+        can_receive_tablet_snapshot: bool,
     ) -> Self {
         let cfg_tracker = cfg.clone().tracker("snap-sender".to_owned());
         let config = cfg.value().clone();
@@ -444,6 +397,7 @@ impl<R: RaftExtension + 'static> Runner<R> {
             cfg: config,
             sending_count: Arc::new(AtomicUsize::new(0)),
             recving_count: Arc::new(AtomicUsize::new(0)),
+            can_receive_tablet_snapshot,
         };
         snap_worker
     }
@@ -513,39 +467,35 @@ impl<R: RaftExtension + 'static> Runnable for Runner<R> {
                 self.pool.spawn(task);
             }
             Task::RecvTablet { stream, sink } => {
-                let tablet_snap_mgr = match self.snap_mgr.tablet_snap_manager() {
-                    Some(s) => s.clone(),
-                    None => {
-                        let status = RpcStatus::with_message(
-                            RpcStatusCode::UNIMPLEMENTED,
-                            "tablet snap is not supported".to_string(),
-                        );
-                        self.pool.spawn(sink.fail(status).map(|_| ()));
-                        return;
-                    }
-                };
+                if !self.can_receive_tablet_snapshot {
+                    let status = RpcStatus::with_message(
+                        RpcStatusCode::UNIMPLEMENTED,
+                        "tablet snap is not supported".to_string(),
+                    );
+                    self.pool.spawn(sink.fail(status).map(|_| ()));
+                    return;
+                }
 
                 if let Some(status) = self.receiving_busy() {
                     self.pool.spawn(sink.fail(status));
                     return;
                 }
 
-                SNAP_TASK_COUNTER_STATIC.recv_v2.inc();
+                SNAP_TASK_COUNTER_STATIC.recv.inc();
 
+                let snap_mgr = self.snap_mgr.tablet_snap_manager().clone();
                 let raft_router = self.raft_router.clone();
                 let recving_count = self.recving_count.clone();
                 recving_count.fetch_add(1, Ordering::SeqCst);
                 let limiter = self.snap_mgr.limiter().clone();
-                let snap_mgr_v1 = self.snap_mgr.clone();
                 let task = async move {
                     let result = crate::server::tablet_snap::recv_snap(
                         stream,
                         sink,
-                        tablet_snap_mgr,
+                        snap_mgr,
                         raft_router,
                         NoSnapshotCache, // do not use cache in v1
                         limiter,
-                        Some(snap_mgr_v1),
                     )
                     .await;
                     recving_count.fetch_sub(1, Ordering::SeqCst);

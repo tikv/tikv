@@ -12,11 +12,8 @@ use std::{
 
 use collections::HashSet;
 use engine_traits::{KvEngine, RaftEngine, CF_LOCK};
-use futures::{future::BoxFuture, Future, Stream, StreamExt};
-use kvproto::{
-    kvrpcpb::Context,
-    raft_cmdpb::{AdminCmdType, CmdType, RaftCmdRequest, Request},
-};
+use futures::{Future, Stream, StreamExt};
+use kvproto::raft_cmdpb::{CmdType, RaftCmdRequest, Request};
 pub use node::NodeV2;
 pub use raft_extension::Extension;
 use raftstore::store::{util::encode_start_ts_into_flag_data, RegionSnapshot};
@@ -32,10 +29,7 @@ use txn_types::{TxnExtra, TxnExtraScheduler, WriteBatchFlags};
 
 use super::{
     metrics::{ASYNC_REQUESTS_COUNTER_VEC, ASYNC_REQUESTS_DURATIONS_VEC},
-    raftkv::{
-        check_raft_cmd_response, get_status_kind_from_engine_error, new_flashback_req,
-        new_request_header,
-    },
+    raftkv::{get_status_kind_from_engine_error, new_request_header},
 };
 
 struct Transform {
@@ -128,11 +122,6 @@ impl<EK: KvEngine, ER: RaftEngine> RaftKv2<EK, ER> {
     pub fn set_txn_extra_scheduler(&mut self, txn_extra_scheduler: Arc<dyn TxnExtraScheduler>) {
         self.txn_extra_scheduler = Some(txn_extra_scheduler);
     }
-
-    // for test only
-    pub fn router(&self) -> &RaftRouter<EK, ER> {
-        &self.router
-    }
 }
 
 impl<EK: KvEngine, ER: RaftEngine> tikv_kv::Engine for RaftKv2<EK, ER> {
@@ -161,7 +150,7 @@ impl<EK: KvEngine, ER: RaftEngine> tikv_kv::Engine for RaftKv2<EK, ER> {
         Ok(())
     }
 
-    type SnapshotRes = impl Future<Output = tikv_kv::Result<Self::Snap>> + Send + 'static;
+    type SnapshotRes = impl Future<Output = tikv_kv::Result<Self::Snap>> + Send;
     fn async_snapshot(&mut self, mut ctx: tikv_kv::SnapContext<'_>) -> Self::SnapshotRes {
         let mut req = Request::default();
         req.set_cmd_type(CmdType::Snap);
@@ -180,9 +169,10 @@ impl<EK: KvEngine, ER: RaftEngine> tikv_kv::Engine for RaftKv2<EK, ER> {
         if ctx.pb_ctx.get_stale_read() && need_encoded_start_ts {
             flags |= WriteBatchFlags::STALE_READ.bits();
         }
-        if ctx.allowed_in_flashback {
-            flags |= WriteBatchFlags::FLASHBACK.bits();
-        }
+        // TODO: flashback is not supported yet.
+        // if ctx.allowed_in_flashback {
+        //     flags |= WriteBatchFlags::FLASHBACK.bits();
+        // }
         header.set_flags(flags);
         // Encode `start_ts` in `flag_data` for the check of stale read and flashback.
         if need_encoded_start_ts {
@@ -245,9 +235,10 @@ impl<EK: KvEngine, ER: RaftEngine> tikv_kv::Engine for RaftKv2<EK, ER> {
         if batch.extra.one_pc {
             flags |= WriteBatchFlags::ONE_PC.bits();
         }
-        if batch.extra.allowed_in_flashback {
-            flags |= WriteBatchFlags::FLASHBACK.bits();
-        }
+        // TODO: flashback is not supported yet.
+        // if batch.extra.allowed_in_flashback {
+        //     flags |= WriteBatchFlags::FLASHBACK.bits();
+        // }
         header.set_flags(flags);
 
         self.schedule_txn_extra(batch.extra);
@@ -322,51 +313,4 @@ impl<EK: KvEngine, ER: RaftEngine> tikv_kv::Engine for RaftKv2<EK, ER> {
             }
         }
     }
-
-    fn start_flashback(
-        &self,
-        ctx: &Context,
-        start_ts: u64,
-    ) -> BoxFuture<'static, tikv_kv::Result<()>> {
-        // Send an `AdminCmdType::PrepareFlashback` to prepare the raftstore for the
-        // later flashback. Once invoked, we will update the persistent region meta and
-        // the memory state of the flashback in Peer FSM to reject all read, write
-        // and scheduling operations for this region when propose/apply before we
-        // start the actual data flashback transaction command in the next phase.
-        let mut req = new_flashback_req(ctx, AdminCmdType::PrepareFlashback);
-        req.mut_admin_request()
-            .mut_prepare_flashback()
-            .set_start_ts(start_ts);
-        exec_admin(&self.router, req)
-    }
-
-    fn end_flashback(&self, ctx: &Context) -> BoxFuture<'static, tikv_kv::Result<()>> {
-        // Send an `AdminCmdType::FinishFlashback` to unset the persistence state
-        // in `RegionLocalState` and region's meta, and when that admin cmd is applied,
-        // will update the memory state of the flashback
-        let req = new_flashback_req(ctx, AdminCmdType::FinishFlashback);
-        exec_admin(&self.router, req)
-    }
-}
-
-fn exec_admin<EK: KvEngine, ER: RaftEngine>(
-    router: &RaftRouter<EK, ER>,
-    req: RaftCmdRequest,
-) -> BoxFuture<'static, tikv_kv::Result<()>> {
-    let region_id = req.get_header().get_region_id();
-    let admin_type = req.get_admin_request().get_cmd_type();
-    let (msg, sub) = PeerMsg::admin_command(req);
-    let res = router.check_send(region_id, msg);
-    Box::pin(async move {
-        res?;
-        let mut resp = sub.result().await.ok_or_else(|| -> tikv_kv::Error {
-            box_err!(
-                "region {} exec_admin {:?} without response",
-                region_id,
-                admin_type
-            )
-        })?;
-        check_raft_cmd_response(&mut resp)?;
-        Ok(())
-    })
 }

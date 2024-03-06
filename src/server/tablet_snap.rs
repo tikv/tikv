@@ -25,7 +25,10 @@ use std::{
     fs::{self, File},
     io::{BorrowedBuf, Read, Seek, SeekFrom, Write},
     path::Path,
-    sync::{atomic::Ordering, Arc},
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    },
     time::Duration,
 };
 
@@ -50,10 +53,7 @@ use kvproto::{
     tikvpb::TikvClient,
 };
 use protobuf::Message;
-use raftstore::store::{
-    snap::{ReceivingGuard, TabletSnapKey, TabletSnapManager},
-    SnapManager,
-};
+use raftstore::store::snap::{ReceivingGuard, TabletSnapKey, TabletSnapManager};
 use security::SecurityManager;
 use tikv_kv::RaftExtension;
 use tikv_util::{
@@ -245,7 +245,6 @@ pub(crate) async fn cleanup_cache(
         let entry = entry?;
         let ft = entry.file_type()?;
         if ft.is_dir() {
-            // TODO(tabokie)
             fs::remove_dir_all(entry.path())?;
             continue;
         }
@@ -355,9 +354,6 @@ pub(crate) async fn accept_missing(
     }
     // Now receive other files.
     loop {
-        fail_point!("receiving_snapshot_net_error", |_| {
-            Err(box_err!("failed to receive snapshot"))
-        });
         let chunk = match stream.next().await {
             Some(Ok(mut req)) if req.has_chunk() => req.take_chunk(),
             Some(Ok(req)) if req.has_end() => {
@@ -410,7 +406,6 @@ pub(crate) async fn recv_snap_files<'a>(
     let path = snap_mgr.tmp_recv_path(&context.key);
     info!("begin to receive tablet snapshot files"; "file" => %path.display(), "region_id" => region_id);
     if path.exists() {
-        // TODO(tabokie)
         fs::remove_dir_all(&path)?;
     }
     let (reused, missing_ssts) = if context.use_cache {
@@ -427,9 +422,7 @@ pub(crate) async fn recv_snap_files<'a>(
     let received = accept_missing(&path, missing_ssts, &mut stream, &limiter).await?;
     info!("received all tablet snapshot file"; "snap_key" => %context.key, "region_id" => region_id, "received" => received, "reused" => reused);
     let final_path = snap_mgr.final_recv_path(&context.key);
-    // TODO(tabokie)
     fs::rename(&path, final_path)?;
-
     Ok(context)
 }
 
@@ -440,25 +433,12 @@ pub(crate) async fn recv_snap<R: RaftExtension + 'static>(
     raft_router: R,
     cache_builder: impl SnapCacheBuilder,
     limiter: Limiter,
-    snap_mgr_v1: Option<SnapManager>,
 ) -> Result<()> {
     let stream = stream.map_err(Error::from);
     let mut sink = sink;
     let res = recv_snap_files(&snap_mgr, cache_builder, stream, &mut sink, limiter)
         .await
-        .and_then(|context| {
-            // some means we are in raftstore-v1 config and received a tablet snapshot from
-            // raftstore-v2. Now, it can only happen in tiflash node within a raftstore-v2
-            // cluster.
-            if let Some(snap_mgr_v1) = snap_mgr_v1 {
-                snap_mgr_v1.gen_empty_snapshot_for_tablet_snapshot(
-                    &context.key,
-                    context.io_type == IoType::LoadBalance,
-                )?;
-            }
-            fail_point!("finish_receiving_snapshot");
-            context.finish(raft_router)
-        });
+        .and_then(|context| context.finish(raft_router));
     match res {
         Ok(()) => sink.close().await.map_err(Error::from),
         Err(e) => {
@@ -708,6 +688,8 @@ pub struct TabletRunner<B, R: RaftExtension + 'static> {
     raft_router: R,
     cfg_tracker: Tracker<Config>,
     cfg: Config,
+    sending_count: Arc<AtomicUsize>,
+    recving_count: Arc<AtomicUsize>,
     cache_builder: B,
     limiter: Limiter,
 }
@@ -745,6 +727,8 @@ impl<B, R: RaftExtension> TabletRunner<B, R> {
             security_mgr,
             cfg_tracker,
             cfg: config,
+            sending_count: Arc::new(AtomicUsize::new(0)),
+            recving_count: Arc::new(AtomicUsize::new(0)),
             cache_builder,
             limiter,
         };
@@ -789,8 +773,7 @@ where
                 self.pool.spawn(sink.fail(status).map(|_| ()));
             }
             Task::RecvTablet { stream, sink } => {
-                let recving_count = self.snap_mgr.recving_count().clone();
-                let task_num = recving_count.load(Ordering::SeqCst);
+                let task_num = self.recving_count.load(Ordering::SeqCst);
                 if task_num >= self.cfg.concurrent_recv_snap_limit {
                     warn!("too many recving snapshot tasks, ignore");
                     let status = RpcStatus::with_message(
@@ -807,20 +790,14 @@ where
 
                 let snap_mgr = self.snap_mgr.clone();
                 let raft_router = self.raft_router.clone();
+                let recving_count = self.recving_count.clone();
                 recving_count.fetch_add(1, Ordering::SeqCst);
                 let limiter = self.limiter.clone();
                 let cache_builder = self.cache_builder.clone();
                 let task = async move {
-                    let result = recv_snap(
-                        stream,
-                        sink,
-                        snap_mgr,
-                        raft_router,
-                        cache_builder,
-                        limiter,
-                        None,
-                    )
-                    .await;
+                    let result =
+                        recv_snap(stream, sink, snap_mgr, raft_router, cache_builder, limiter)
+                            .await;
                     recving_count.fetch_sub(1, Ordering::SeqCst);
                     if let Err(e) = result {
                         error!("failed to recv snapshot"; "err" => %e);
@@ -830,8 +807,8 @@ where
             }
             Task::Send { addr, msg, cb } => {
                 let region_id = msg.get_region_id();
-                let sending_count = self.snap_mgr.sending_count().clone();
-                if sending_count.load(Ordering::SeqCst) >= self.cfg.concurrent_send_snap_limit {
+                if self.sending_count.load(Ordering::SeqCst) >= self.cfg.concurrent_send_snap_limit
+                {
                     let key = TabletSnapKey::from_region_snap(
                         msg.get_region_id(),
                         msg.get_to_peer().get_id(),
@@ -850,6 +827,7 @@ where
                 let env = Arc::clone(&self.env);
                 let mgr = self.snap_mgr.clone();
                 let security_mgr = Arc::clone(&self.security_mgr);
+                let sending_count = Arc::clone(&self.sending_count);
                 sending_count.fetch_add(1, Ordering::SeqCst);
                 let limiter = self.limiter.clone();
                 let send_task = send_snap(

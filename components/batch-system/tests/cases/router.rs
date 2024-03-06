@@ -143,19 +143,25 @@ fn test_router_trace() {
         router.close(addr);
     };
 
-    let mut mailboxes = vec![];
+    let router_clone = router.clone();
     for i in 0..10 {
         register_runner(i);
-        mailboxes.push(router.mailbox(i).unwrap());
+        // Read mailbox to cache.
+        router_clone.mailbox(i).unwrap();
     }
-    assert_eq!(router.alive_cnt(), 10);
+    assert_eq!(router.alive_cnt().load(Ordering::Relaxed), 10);
     assert_eq!(router.state_cnt().load(Ordering::Relaxed), 11);
+    // Routers closed but exist in the cache.
     for i in 0..10 {
         close_runner(i);
     }
-    assert_eq!(router.alive_cnt(), 0);
+    assert_eq!(router.alive_cnt().load(Ordering::Relaxed), 0);
     assert_eq!(router.state_cnt().load(Ordering::Relaxed), 11);
-    drop(mailboxes);
-    assert_eq!(router.alive_cnt(), 0);
-    assert_eq!(router.state_cnt().load(Ordering::Relaxed), 1);
+    for i in 0..1024 {
+        register_runner(i);
+        // Read mailbox to cache, closed routers should be evicted.
+        router_clone.mailbox(i).unwrap();
+    }
+    assert_eq!(router.alive_cnt().load(Ordering::Relaxed), 1024);
+    assert_eq!(router.state_cnt().load(Ordering::Relaxed), 1025);
 }

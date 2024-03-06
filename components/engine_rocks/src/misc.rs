@@ -2,7 +2,7 @@
 
 use engine_traits::{
     CfNamesExt, DeleteStrategy, ImportExt, IterOptions, Iterable, Iterator, MiscExt, Mutable,
-    Range, RangeStats, Result, SstWriter, SstWriterBuilder, WriteBatch, WriteBatchExt,
+    Range, Result, SstWriter, SstWriterBuilder, WriteBatch, WriteBatchExt,
 };
 use rocksdb::Range as RocksRange;
 use tikv_util::{box_try, keybuilder::KeyBuilder};
@@ -138,14 +138,12 @@ impl MiscExt for RocksEngine {
                 handles.push(util::get_cf_handle(self.as_inner(), cf)?);
             }
         }
-        self.as_inner()
-            .flush_cfs(&handles, wait, false)
-            .map_err(r2e)
+        self.as_inner().flush_cfs(&handles, wait).map_err(r2e)
     }
 
     fn flush_cf(&self, cf: &str, wait: bool) -> Result<()> {
         let handle = util::get_cf_handle(self.as_inner(), cf)?;
-        self.as_inner().flush_cf(handle, wait, false).map_err(r2e)
+        self.as_inner().flush_cf(handle, wait).map_err(r2e)
     }
 
     fn delete_ranges_cf(
@@ -355,8 +353,15 @@ impl MiscExt for RocksEngine {
         Ok(total)
     }
 
-    fn get_range_stats(&self, cf: &str, start: &[u8], end: &[u8]) -> Result<Option<RangeStats>> {
-        Ok(crate::properties::get_range_stats(self, cf, start, end))
+    fn get_range_entries_and_versions(
+        &self,
+        cf: &str,
+        start: &[u8],
+        end: &[u8],
+    ) -> Result<Option<(u64, u64)>> {
+        Ok(crate::properties::get_range_entries_and_versions(
+            self, cf, start, end,
+        ))
     }
 
     fn is_stalled_or_stopped(&self) -> bool {

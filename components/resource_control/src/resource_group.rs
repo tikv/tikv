@@ -14,7 +14,7 @@ use collections::HashMap;
 use dashmap::{mapref::one::Ref, DashMap};
 use fail::fail_point;
 use kvproto::{
-    kvrpcpb::{CommandPri, ResourceControlContext},
+    kvrpcpb::CommandPri,
     resource_manager::{GroupMode, ResourceGroup},
 };
 use parking_lot::{MappedRwLockReadGuard, RwLock, RwLockReadGuard};
@@ -54,7 +54,7 @@ pub enum ResourceConsumeType {
 #[derive(Default)]
 pub struct ResourceGroupManager {
     resource_groups: DashMap<String, ResourceGroup>,
-    registry: RwLock<Vec<Arc<ResourceController>>>,
+    registry: Mutex<Vec<Arc<ResourceController>>>,
 }
 
 impl ResourceGroupManager {
@@ -85,7 +85,7 @@ impl ResourceGroupManager {
 
     pub fn add_resource_group(&self, rg: ResourceGroup) {
         let group_name = rg.get_name().to_ascii_lowercase();
-        self.registry.read().iter().for_each(|controller| {
+        self.registry.lock().unwrap().iter().for_each(|controller| {
             let ru_quota = Self::get_ru_setting(&rg, controller.is_read);
             controller.add_resource_group(group_name.clone().into_bytes(), ru_quota, rg.priority);
         });
@@ -95,7 +95,7 @@ impl ResourceGroupManager {
 
     pub fn remove_resource_group(&self, name: &str) {
         let group_name = name.to_ascii_lowercase();
-        self.registry.read().iter().for_each(|controller| {
+        self.registry.lock().unwrap().iter().for_each(|controller| {
             controller.remove_resource_group(group_name.as_bytes());
         });
         info!("remove resource group"; "name"=> name);
@@ -112,7 +112,7 @@ impl ResourceGroupManager {
             ret
         });
         if !removed_names.is_empty() {
-            self.registry.read().iter().for_each(|controller| {
+            self.registry.lock().unwrap().iter().for_each(|controller| {
                 for name in &removed_names {
                     controller.remove_resource_group(name.as_bytes());
                 }
@@ -130,7 +130,7 @@ impl ResourceGroupManager {
 
     pub fn derive_controller(&self, name: String, is_read: bool) -> Arc<ResourceController> {
         let controller = Arc::new(ResourceController::new(name, is_read));
-        self.registry.write().push(controller.clone());
+        self.registry.lock().unwrap().push(controller.clone());
         for g in &self.resource_groups {
             let ru_quota = Self::get_ru_setting(g.value(), controller.is_read);
             controller.add_resource_group(g.key().clone().into_bytes(), ru_quota, g.priority);
@@ -139,27 +139,8 @@ impl ResourceGroupManager {
     }
 
     pub fn advance_min_virtual_time(&self) {
-        for controller in self.registry.read().iter() {
+        for controller in self.registry.lock().unwrap().iter() {
             controller.update_min_virtual_time();
-        }
-    }
-
-    pub fn consume_penalty(&self, ctx: &ResourceControlContext) {
-        for controller in self.registry.read().iter() {
-            // FIXME: Should consume CPU time for read controller and write bytes for write
-            // controller, once CPU process time of scheduler worker is tracked. Currently,
-            // we consume write bytes for read controller as the
-            // order of magnitude of CPU time and write bytes is similar.
-            controller.consume(
-                ctx.resource_group_name.as_bytes(),
-                ResourceConsumeType::CpuTime(Duration::from_nanos(
-                    (ctx.get_penalty().total_cpu_time_ms * 1_000_000.0) as u64,
-                )),
-            );
-            controller.consume(
-                ctx.resource_group_name.as_bytes(),
-                ResourceConsumeType::IoBytes(ctx.get_penalty().write_bytes as u64),
-            );
         }
     }
 }
@@ -323,8 +304,8 @@ impl ResourceController {
         })
     }
 
-    pub fn consume(&self, name: &[u8], resource: ResourceConsumeType) {
-        self.resource_group(name).consume(resource)
+    pub fn consume(&self, name: &[u8], delta: ResourceConsumeType) {
+        self.resource_group(name).consume(delta)
     }
 
     pub fn update_min_virtual_time(&self) {
@@ -443,8 +424,8 @@ impl GroupPriorityTracker {
 
     // TODO: make it delta type as generic to avoid mixed consume different types.
     #[inline]
-    fn consume(&self, resource: ResourceConsumeType) {
-        let vt_delta = match resource {
+    fn consume(&self, delta: ResourceConsumeType) {
+        let vt_delta = match delta {
             ResourceConsumeType::CpuTime(dur) => dur.as_micros() as u64,
             ResourceConsumeType::IoBytes(bytes) => bytes,
         } * self.weight;

@@ -2,7 +2,7 @@
 
 use std::{
     path::Path,
-    sync::{atomic::AtomicU64, Arc, Mutex, RwLock},
+    sync::{Arc, Mutex, RwLock},
 };
 
 use collections::{HashMap, HashSet};
@@ -237,7 +237,6 @@ impl Simulator for NodeCluster {
 
         let simulate_trans = SimulateTransport::new(self.trans.clone());
         let mut raft_store = cfg.raft_store.clone();
-        raft_store.optimize_for(false);
         raft_store
             .validate(
                 cfg.coprocessor.region_split_size(),
@@ -274,7 +273,6 @@ impl Simulator for NodeCluster {
                 .encryption_key_manager(key_manager)
                 .max_per_file_size(cfg.raft_store.max_snapshot_file_raw_size.0)
                 .enable_multi_snapshot_files(true)
-                .enable_receive_tablet_snapshot(cfg.raft_store.enable_v2_compatible_learner)
                 .build(tmp.path().to_str().unwrap());
             (snap_mgr, Some(tmp))
         } else {
@@ -330,7 +328,6 @@ impl Simulator for NodeCluster {
             cm,
             CollectorRegHandle::new_for_test(),
             None,
-            Arc::new(AtomicU64::new(0)),
         )?;
         assert!(
             engines
@@ -354,7 +351,6 @@ impl Simulator for NodeCluster {
         let enable_region_bucket = cfg.coprocessor.enable_region_bucket();
         let region_bucket_size = cfg.coprocessor.region_bucket_size;
         let mut raftstore_cfg = cfg.tikv.raft_store;
-        raftstore_cfg.optimize_for(false);
         raftstore_cfg
             .validate(region_split_size, enable_region_bucket, region_bucket_size)
             .unwrap();

@@ -4,7 +4,7 @@ use std::{
     collections::{
         BTreeMap,
         Bound::{Excluded, Included, Unbounded},
-        VecDeque,
+        HashMap, VecDeque,
     },
     fmt::{self, Display, Formatter},
     sync::{
@@ -16,7 +16,6 @@ use std::{
     u64,
 };
 
-use collections::HashMap;
 use engine_traits::{DeleteStrategy, KvEngine, Mutable, Range, WriteBatch, CF_LOCK, CF_RAFT};
 use fail::fail_point;
 use file_system::{IoType, WithIoType};
@@ -53,8 +52,8 @@ use crate::{
 
 const CLEANUP_MAX_REGION_COUNT: usize = 64;
 
-const TIFLASH: &str = "tiflash";
-const ENGINE: &str = "engine";
+pub const TIFLASH: &str = "tiflash";
+pub const ENGINE: &str = "engine";
 
 /// Region related task
 #[derive(Debug)]
@@ -516,8 +515,6 @@ where
             }
             Err(Error::Abort) => {
                 warn!("applying snapshot is aborted"; "region_id" => region_id);
-                self.coprocessor_host
-                    .cancel_apply_snapshot(region_id, peer_id);
                 assert_eq!(
                     status.swap(JOB_STATUS_CANCELLED, Ordering::SeqCst),
                     JOB_STATUS_CANCELLING
@@ -755,12 +752,10 @@ where
             }
             if let Some(Task::Apply { region_id, .. }) = self.pending_applies.front() {
                 fail_point!("handle_new_pending_applies", |_| {});
-                if !self.engine.can_apply_snapshot(
-                    is_timeout,
-                    new_batch,
-                    *region_id,
-                    self.pending_applies.len(),
-                ) {
+                if !self
+                    .engine
+                    .can_apply_snapshot(is_timeout, new_batch, *region_id)
+                {
                     // KvEngine can't apply snapshot for other reasons.
                     break;
                 }
@@ -808,10 +803,14 @@ where
                     } else {
                         let is_tiflash = self.pd_client.as_ref().map_or(false, |pd_client| {
                             if let Ok(s) = pd_client.get_store(to_store_id) {
-                                return s.get_labels().iter().any(|label| {
-                                    label.get_key().to_lowercase() == ENGINE
-                                        && label.get_value().to_lowercase() == TIFLASH
-                                });
+                                if let Some(_l) = s.get_labels().iter().find(|l| {
+                                    l.key.to_lowercase() == ENGINE
+                                        && l.value.to_lowercase() == TIFLASH
+                                }) {
+                                    return true;
+                                } else {
+                                    return false;
+                                }
                             }
                             true
                         });
@@ -1307,7 +1306,6 @@ pub(crate) mod tests {
             obs.pre_apply_hash.load(Ordering::SeqCst),
             obs.post_apply_hash.load(Ordering::SeqCst)
         );
-        assert_eq!(obs.cancel_apply.load(Ordering::SeqCst), 0);
 
         // the pending apply task should be finished and snapshots are ingested.
         // note that when ingest sst, it may flush memtable if overlap,
@@ -1437,7 +1435,6 @@ pub(crate) mod tests {
         pub post_apply_count: Arc<AtomicUsize>,
         pub pre_apply_hash: Arc<AtomicUsize>,
         pub post_apply_hash: Arc<AtomicUsize>,
-        pub cancel_apply: Arc<AtomicUsize>,
     }
 
     impl Coprocessor for MockApplySnapshotObserver {}
@@ -1473,10 +1470,6 @@ pub(crate) mod tests {
 
         fn should_pre_apply_snapshot(&self) -> bool {
             true
-        }
-
-        fn cancel_apply_snapshot(&self, _: u64, _: u64) {
-            self.cancel_apply.fetch_add(1, Ordering::SeqCst);
         }
     }
 }

@@ -7,7 +7,7 @@ use std::{
 
 use batch_system::{Fsm, FsmScheduler, Mailbox};
 use crossbeam::channel::TryRecvError;
-use engine_traits::{FlushState, KvEngine, SstApplyState, TabletRegistry};
+use engine_traits::{FlushState, KvEngine, TabletRegistry};
 use futures::{compat::Future01CompatExt, FutureExt, StreamExt};
 use kvproto::{metapb, raft_serverpb::RegionLocalState};
 use pd_client::BucketStat;
@@ -27,7 +27,6 @@ use crate::{
     operation::{CatchUpLogs, DataTrace},
     raft::Apply,
     router::{ApplyRes, ApplyTask, PeerMsg},
-    worker::checkpoint,
 };
 
 /// A trait for reporting apply result.
@@ -78,9 +77,7 @@ impl<EK: KvEngine, R> ApplyFsm<EK, R> {
         res_reporter: R,
         tablet_registry: TabletRegistry<EK>,
         read_scheduler: Scheduler<ReadTask<EK>>,
-        checkpoint_scheduler: Scheduler<checkpoint::Task<EK>>,
         flush_state: Arc<FlushState>,
-        sst_apply_state: SstApplyState,
         log_recovery: Option<Box<DataTrace>>,
         applied_term: u64,
         buckets: Option<BucketStat>,
@@ -97,13 +94,11 @@ impl<EK: KvEngine, R> ApplyFsm<EK, R> {
             tablet_registry,
             read_scheduler,
             flush_state,
-            sst_apply_state,
             log_recovery,
             applied_term,
             buckets,
             sst_importer,
             coprocessor_host,
-            checkpoint_scheduler,
             logger,
         );
         (

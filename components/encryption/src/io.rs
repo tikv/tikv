@@ -251,11 +251,7 @@ impl<R: Read> Read for CrypterReader<R> {
     fn read(&mut self, buf: &mut [u8]) -> IoResult<usize> {
         let count = self.reader.read(buf)?;
         if let Some(crypter) = self.crypter.as_mut() {
-            if let Err(e) = crypter.do_crypter_in_place(&mut buf[..count]) {
-                // FIXME: We can't recover from this without rollback `reader` to old offset.
-                // But that requires `Seek` which requires a wider refactor of user code.
-                panic!("`do_crypter_in_place` failed: {:?}", e);
-            }
+            crypter.do_crypter_in_place(&mut buf[..count])?;
         }
         Ok(count)
     }
@@ -287,9 +283,7 @@ impl<R: AsyncRead + Unpin> AsyncRead for CrypterReader<R> {
         };
         if let Some(crypter) = inner.crypter.as_mut() {
             if let Err(e) = crypter.do_crypter_in_place(&mut buf[..read_count]) {
-                // FIXME: We can't recover from this without rollback `reader` to old offset.
-                // But that requires `Seek` which requires a wider refactor of user code.
-                panic!("`do_crypter_in_place` failed: {:?}", e);
+                return Poll::Ready(Err(e));
             }
         }
         Poll::Ready(Ok(read_count))
@@ -336,10 +330,7 @@ impl<W: Write> Write for CrypterWriter<W> {
         if let Some(crypter) = self.crypter.as_mut() {
             let crypted = crypter.do_crypter(buf)?;
             debug_assert!(crypted.len() == buf.len());
-            let r = self.writer.write(crypted);
-            let missing = buf.len() - r.as_ref().unwrap_or(&0);
-            crypter.lazy_reset_crypter(crypter.offset - missing as u64);
-            r
+            self.writer.write(crypted)
         } else {
             self.writer.write(buf)
         }
@@ -397,10 +388,6 @@ struct CrypterCore {
     key: Vec<u8>,
     mode: Mode,
     initial_iv: Iv,
-
-    // Used to ensure the atomicity of operation over a chunk of data. Only advance it when
-    // operation succeeds.
-    offset: u64,
     crypter: Option<OCrypter>,
     block_size: usize,
 
@@ -414,10 +401,9 @@ impl CrypterCore {
             method,
             key: key.to_owned(),
             mode,
-            initial_iv: iv,
-            offset: 0,
             crypter: None,
             block_size: 0,
+            initial_iv: iv,
             buffer: Vec::new(),
         })
     }
@@ -428,17 +414,6 @@ impl CrypterCore {
         self.buffer.resize(size + self.block_size, 0);
     }
 
-    // Delay the reset to future operations that use crypter. Guarantees those
-    // operations can only succeed after crypter is properly reset.
-    pub fn lazy_reset_crypter(&mut self, offset: u64) {
-        if self.offset != offset {
-            self.crypter.take();
-            self.offset = offset;
-        }
-    }
-
-    // It has the same guarantee as `lazy_reset_crypter`. In addition, it attempts
-    // to reset immediately and returns any error.
     pub fn reset_crypter(&mut self, offset: u64) -> IoResult<()> {
         let mut iv = self.initial_iv;
         iv.add_offset(offset / AES_BLOCK_SIZE as u64)?;
@@ -449,7 +424,6 @@ impl CrypterCore {
         self.reset_buffer(partial_offset);
         let crypter_count = crypter.update(&partial_block, &mut self.buffer)?;
         if crypter_count != partial_offset {
-            self.lazy_reset_crypter(offset);
             return Err(IoError::new(
                 ErrorKind::Other,
                 format!(
@@ -458,7 +432,6 @@ impl CrypterCore {
                 ),
             ));
         }
-        self.offset = offset;
         self.crypter = Some(crypter);
         self.block_size = cipher.block_size();
         Ok(())
@@ -470,7 +443,7 @@ impl CrypterCore {
     /// this code needs to be updated.
     pub fn do_crypter_in_place(&mut self, buf: &mut [u8]) -> IoResult<()> {
         if self.crypter.is_none() {
-            self.reset_crypter(self.offset)?;
+            self.reset_crypter(0)?;
         }
         let count = buf.len();
         self.reset_buffer(std::cmp::min(count, MAX_INPLACE_CRYPTION_SIZE));
@@ -481,7 +454,6 @@ impl CrypterCore {
             debug_assert!(self.buffer.len() >= target - encrypted);
             let crypter_count = crypter.update(&buf[encrypted..target], &mut self.buffer)?;
             if crypter_count != target - encrypted {
-                self.crypter.take();
                 return Err(IoError::new(
                     ErrorKind::Other,
                     format!(
@@ -494,20 +466,18 @@ impl CrypterCore {
             buf[encrypted..target].copy_from_slice(&self.buffer[..crypter_count]);
             encrypted += crypter_count;
         }
-        self.offset += count as u64;
         Ok(())
     }
 
     pub fn do_crypter(&mut self, buf: &[u8]) -> IoResult<&[u8]> {
         if self.crypter.is_none() {
-            self.reset_crypter(self.offset)?;
+            self.reset_crypter(0)?;
         }
         let count = buf.len();
         self.reset_buffer(count);
         let crypter = self.crypter.as_mut().unwrap();
         let crypter_count = crypter.update(buf, &mut self.buffer)?;
         if crypter_count != count {
-            self.crypter.take();
             return Err(IoError::new(
                 ErrorKind::Other,
                 format!(
@@ -516,7 +486,6 @@ impl CrypterCore {
                 ),
             ));
         }
-        self.offset += count as u64;
         Ok(&self.buffer[..count])
     }
 
@@ -539,6 +508,7 @@ mod tests {
     use std::{cmp::min, io::Cursor};
 
     use byteorder::{BigEndian, ByteOrder};
+    use futures::AsyncReadExt;
     use rand::{rngs::OsRng, RngCore};
 
     use super::*;
@@ -549,58 +519,6 @@ mod tests {
         let mut key = vec![0; key_length];
         OsRng.fill_bytes(&mut key);
         key
-    }
-
-    struct DecoratedCursor {
-        cursor: Cursor<Vec<u8>>,
-        read_size: usize,
-    }
-
-    impl DecoratedCursor {
-        fn new(buff: Vec<u8>, read_size: usize) -> DecoratedCursor {
-            Self {
-                cursor: Cursor::new(buff.to_vec()),
-                read_size,
-            }
-        }
-
-        fn into_inner(self) -> Vec<u8> {
-            self.cursor.into_inner()
-        }
-    }
-
-    impl AsyncRead for DecoratedCursor {
-        fn poll_read(
-            mut self: Pin<&mut Self>,
-            _: &mut Context<'_>,
-            buf: &mut [u8],
-        ) -> Poll<IoResult<usize>> {
-            let len = min(self.read_size, buf.len());
-            Poll::Ready(self.cursor.read(&mut buf[..len]))
-        }
-    }
-
-    impl Read for DecoratedCursor {
-        fn read(&mut self, buf: &mut [u8]) -> IoResult<usize> {
-            let len = min(self.read_size, buf.len());
-            self.cursor.read(&mut buf[..len])
-        }
-    }
-
-    impl Write for DecoratedCursor {
-        fn write(&mut self, buf: &[u8]) -> IoResult<usize> {
-            let len = min(self.read_size, buf.len());
-            self.cursor.write(&buf[0..len])
-        }
-        fn flush(&mut self) -> IoResult<()> {
-            self.cursor.flush()
-        }
-    }
-
-    impl Seek for DecoratedCursor {
-        fn seek(&mut self, s: SeekFrom) -> IoResult<u64> {
-            self.cursor.seek(s)
-        }
     }
 
     #[test]
@@ -634,30 +552,24 @@ mod tests {
 
                 let mut plaintext = vec![0; 1024];
                 OsRng.fill_bytes(&mut plaintext);
-                let mut encrypter = EncrypterWriter::new(
-                    DecoratedCursor::new(plaintext.clone(), 1),
-                    method,
-                    &key,
-                    iv,
-                )
-                .unwrap();
+                let buf = Vec::with_capacity(1024);
+                let mut encrypter = EncrypterWriter::new(buf, method, &key, iv).unwrap();
                 encrypter.write_all(&plaintext).unwrap();
 
-                let encrypted = encrypter.finalize().unwrap().into_inner();
+                let buf = encrypter.finalize().unwrap();
                 // Make sure it's properly encrypted.
                 if method != EncryptionMethod::Plaintext {
-                    assert_ne!(encrypted, plaintext);
+                    assert_ne!(buf, plaintext);
                 } else {
-                    assert_eq!(encrypted, plaintext);
+                    assert_eq!(buf, plaintext);
                 }
-                let mut decrypter =
-                    DecrypterReader::new(DecoratedCursor::new(encrypted, 1), method, &key, iv)
-                        .unwrap();
+                let buf_reader = std::io::Cursor::new(buf);
+                let mut decrypter = DecrypterReader::new(buf_reader, method, &key, iv).unwrap();
                 let mut piece = vec![0; 5];
                 // Read the first two blocks randomly.
                 for i in 0..31 {
                     assert_eq!(decrypter.seek(SeekFrom::Start(i as u64)).unwrap(), i as u64);
-                    decrypter.read_exact(&mut piece).unwrap();
+                    assert_eq!(decrypter.read(&mut piece).unwrap(), piece.len());
                     assert_eq!(piece, plaintext[i..i + piece.len()]);
                 }
                 // Read the rest of the data sequentially.
@@ -667,14 +579,13 @@ mod tests {
                     cursor as u64
                 );
                 while cursor + piece.len() <= plaintext.len() {
-                    decrypter.read_exact(&mut piece).unwrap();
+                    assert_eq!(decrypter.read(&mut piece).unwrap(), piece.len());
                     assert_eq!(piece, plaintext[cursor..cursor + piece.len()]);
                     cursor += piece.len();
                 }
                 let tail = plaintext.len() - cursor;
-                let mut short_piece = vec![0; tail];
-                decrypter.read_exact(&mut short_piece).unwrap();
-                assert_eq!(short_piece[..], plaintext[cursor..cursor + tail]);
+                assert_eq!(decrypter.read(&mut piece).unwrap(), tail);
+                assert_eq!(piece[..tail], plaintext[cursor..cursor + tail]);
             }
         }
     }
@@ -694,10 +605,9 @@ mod tests {
         let sizes = [1024, 10240];
         for method in methods {
             let key = generate_data_key(method);
+            let readable_text = std::io::Cursor::new(plaintext.clone());
             let iv = Iv::new_ctr();
-            let encrypter =
-                EncrypterReader::new(DecoratedCursor::new(plaintext.clone(), 1), method, &key, iv)
-                    .unwrap();
+            let encrypter = EncrypterReader::new(readable_text, method, &key, iv).unwrap();
             let mut decrypter = DecrypterReader::new(encrypter, method, &key, iv).unwrap();
             let mut read = vec![0; 10240];
             for offset in offsets {
@@ -707,7 +617,7 @@ mod tests {
                         offset as u64
                     );
                     let actual_size = std::cmp::min(plaintext.len().saturating_sub(offset), size);
-                    decrypter.read_exact(&mut read[..actual_size]).unwrap();
+                    assert_eq!(decrypter.read(&mut read[..size]).unwrap(), actual_size);
                     if actual_size > 0 {
                         assert_eq!(read[..actual_size], plaintext[offset..offset + actual_size]);
                     }
@@ -732,14 +642,13 @@ mod tests {
         let written = vec![0; 10240];
         for method in methods {
             let key = generate_data_key(method);
+            let writable_text = std::io::Cursor::new(written.clone());
             let iv = Iv::new_ctr();
-            let encrypter =
-                EncrypterWriter::new(DecoratedCursor::new(written.clone(), 1), method, &key, iv)
-                    .unwrap();
+            let encrypter = EncrypterWriter::new(writable_text, method, &key, iv).unwrap();
             let mut decrypter = DecrypterWriter::new(encrypter, method, &key, iv).unwrap();
             // First write full data.
             assert_eq!(decrypter.seek(SeekFrom::Start(0)).unwrap(), 0);
-            decrypter.write_all(&plaintext).unwrap();
+            assert_eq!(decrypter.write(&plaintext).unwrap(), plaintext.len());
             // Then overwrite specific locations.
             for offset in offsets {
                 for size in sizes {
@@ -748,9 +657,10 @@ mod tests {
                         offset as u64
                     );
                     let size = std::cmp::min(plaintext.len().saturating_sub(offset), size);
-                    decrypter
-                        .write_all(&plaintext[offset..offset + size])
-                        .unwrap();
+                    assert_eq!(
+                        decrypter.write(&plaintext[offset..offset + size]).unwrap(),
+                        size
+                    );
                 }
             }
             let written = decrypter
@@ -763,8 +673,33 @@ mod tests {
         }
     }
 
+    struct MockCursorReader {
+        cursor: Cursor<Vec<u8>>,
+        read_maxsize_once: usize,
+    }
+
+    impl MockCursorReader {
+        fn new(buff: &mut [u8], size_once: usize) -> MockCursorReader {
+            Self {
+                cursor: Cursor::new(buff.to_vec()),
+                read_maxsize_once: size_once,
+            }
+        }
+    }
+
+    impl AsyncRead for MockCursorReader {
+        fn poll_read(
+            mut self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+            buf: &mut [u8],
+        ) -> Poll<IoResult<usize>> {
+            let len = min(self.read_maxsize_once, buf.len());
+            let r = self.cursor.read(&mut buf[..len]).unwrap();
+            Poll::Ready(IoResult::Ok(r))
+        }
+    }
+
     async fn test_poll_read() {
-        use futures::AsyncReadExt;
         let methods = [
             EncryptionMethod::Plaintext,
             EncryptionMethod::Aes128Ctr,
@@ -781,39 +716,38 @@ mod tests {
             // encrypt plaintext into encrypt_text
             let read_once = 16;
             let mut encrypt_reader = EncrypterReader::new(
-                DecoratedCursor::new(plain_text.clone(), read_once),
+                MockCursorReader::new(&mut plain_text[..], read_once),
                 method,
                 &key[..],
                 iv,
             )
             .unwrap();
-            let mut encrypt_text = vec![0; 20480];
+            let mut encrypt_text = [0; 20480];
             let mut encrypt_read_len = 0;
 
             loop {
-                let read_len =
-                    AsyncReadExt::read(&mut encrypt_reader, &mut encrypt_text[encrypt_read_len..])
-                        .await
-                        .unwrap();
+                let read_len = encrypt_reader
+                    .read(&mut encrypt_text[encrypt_read_len..])
+                    .await
+                    .unwrap();
                 if read_len == 0 {
                     break;
                 }
                 encrypt_read_len += read_len;
             }
 
-            encrypt_text.truncate(encrypt_read_len);
             if method == EncryptionMethod::Plaintext {
-                assert_eq!(encrypt_text, plain_text);
+                assert_eq!(encrypt_text[..encrypt_read_len], plain_text);
             } else {
-                assert_ne!(encrypt_text, plain_text);
+                assert_ne!(encrypt_text[..encrypt_read_len], plain_text);
             }
 
             // decrypt encrypt_text into decrypt_text
-            let mut decrypt_text = vec![0; 20480];
+            let mut decrypt_text = [0; 20480];
             let mut decrypt_read_len = 0;
             let read_once = 20;
             let mut decrypt_reader = DecrypterReader::new(
-                DecoratedCursor::new(encrypt_text.clone(), read_once),
+                MockCursorReader::new(&mut encrypt_text[..encrypt_read_len], read_once),
                 method,
                 &key[..],
                 iv,
@@ -821,18 +755,17 @@ mod tests {
             .unwrap();
 
             loop {
-                let read_len =
-                    AsyncReadExt::read(&mut decrypt_reader, &mut decrypt_text[decrypt_read_len..])
-                        .await
-                        .unwrap();
+                let read_len = decrypt_reader
+                    .read(&mut decrypt_text[decrypt_read_len..])
+                    .await
+                    .unwrap();
                 if read_len == 0 {
                     break;
                 }
                 decrypt_read_len += read_len;
             }
 
-            decrypt_text.truncate(decrypt_read_len);
-            assert_eq!(decrypt_text, plain_text);
+            assert_eq!(decrypt_text[..decrypt_read_len], plain_text);
         }
     }
 

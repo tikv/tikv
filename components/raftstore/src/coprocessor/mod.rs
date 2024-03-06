@@ -206,8 +206,6 @@ pub trait ApplySnapshotObserver: Coprocessor {
     ) {
     }
 
-    fn cancel_apply_snapshot(&self, _: u64, _: u64) {}
-
     /// We call pre_apply_snapshot only when one of the observer returns true.
     fn should_pre_apply_snapshot(&self) -> bool {
         false
@@ -307,7 +305,6 @@ pub enum RegionChangeReason {
     CommitMerge,
     RollbackMerge,
     SwitchWitness,
-    Flashback,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]

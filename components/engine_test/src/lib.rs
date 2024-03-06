@@ -132,9 +132,6 @@ pub mod kv {
             let tombstone_path = path.with_extension(TOMBSTONE_SUFFIX);
             let _ = std::fs::remove_dir_all(&tombstone_path);
             std::fs::rename(path, &tombstone_path)?;
-            if let Some(m) = &self.db_opt.get_key_manager() {
-                m.remove_dir(path, Some(&tombstone_path))?;
-            }
             std::fs::remove_dir_all(tombstone_path)?;
             Ok(())
         }
@@ -217,10 +214,6 @@ pub mod ctor {
     }
 
     impl DbOptions {
-        pub fn get_key_manager(&self) -> Option<Arc<DataKeyManager>> {
-            self.key_manager.clone()
-        }
-
         pub fn set_key_manager(&mut self, key_manager: Option<Arc<DataKeyManager>>) {
             self.key_manager = key_manager;
         }

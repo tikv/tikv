@@ -2,7 +2,6 @@
 
 use std::{path::Path, sync::Arc};
 
-use encryption_export::DataKeyManager;
 use engine_rocks::{
     raw::{Cache, Env},
     util::RangeCompactionFilterFactory,
@@ -29,7 +28,6 @@ struct FactoryInner {
     api_version: ApiVersion,
     flow_listener: Option<engine_rocks::FlowListener>,
     sst_recovery_sender: Option<Scheduler<String>>,
-    encryption_key_manager: Option<Arc<DataKeyManager>>,
     db_resources: DbResources,
     cf_resources: CfResources,
     state_storage: Option<Arc<dyn StateStorage>>,
@@ -50,7 +48,6 @@ impl KvEngineFactoryBuilder {
                 api_version: config.storage.api_version(),
                 flow_listener: None,
                 sst_recovery_sender: None,
-                encryption_key_manager: None,
                 db_resources: config.rocksdb.build_resources(env),
                 cf_resources: config.rocksdb.build_cf_resources(cache),
                 state_storage: None,
@@ -80,11 +77,6 @@ impl KvEngineFactoryBuilder {
         sender: Arc<dyn CompactedEventSender + Send + Sync>,
     ) -> Self {
         self.compact_event_sender = Some(sender);
-        self
-    }
-
-    pub fn encryption_key_manager(mut self, m: Option<Arc<DataKeyManager>>) -> Self {
-        self.inner.encryption_key_manager = m;
         self
     }
 
@@ -241,9 +233,7 @@ impl TabletFactory<RocksEngine> for KvEngineFactory {
         //   kv_db_opts,
         //   kv_cfs_opts,
         // )?;
-        // TODO: use RocksDB::DestroyDB.
-        let _ =
-            encryption_export::trash_dir_all(path, self.inner.encryption_key_manager.as_deref());
+        let _ = file_system::trash_dir_all(path);
         if let Some(listener) = &self.inner.flow_listener {
             listener.clone_with(ctx.id).on_destroyed();
         }

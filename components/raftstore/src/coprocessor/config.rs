@@ -164,7 +164,7 @@ impl Config {
         Ok(())
     }
 
-    pub fn validate(&mut self, raft_kv_v2: bool) -> Result<()> {
+    pub fn validate(&mut self) -> Result<()> {
         if self.region_split_keys.is_none() {
             self.region_split_keys = Some((self.region_split_size().as_mb_f64() * 10000.0) as u64);
         }
@@ -195,9 +195,8 @@ impl Config {
             None => self.region_max_keys = Some(self.region_split_keys() / 2 * 3),
         }
         let res = self.validate_bucket_size();
-        // If it's OK to enable bucket, we will prefer to enable it if useful for
-        // raftstore-v2.
-        if let Ok(()) = res && self.enable_region_bucket.is_none() && raft_kv_v2 {
+        // If it's OK to enable bucket, we will prefer to enable it if useful.
+        if let Ok(()) = res && self.enable_region_bucket.is_none() {
             let useful = self.region_split_size() >= self.region_bucket_size * 2;
             self.enable_region_bucket = Some(useful);
         } else if let Err(e) = res && self.enable_region_bucket() {
@@ -234,39 +233,39 @@ mod tests {
     #[test]
     fn test_config_validate() {
         let mut cfg = Config::default();
-        cfg.validate(false).unwrap();
+        cfg.validate().unwrap();
 
         cfg = Config::default();
         cfg.region_max_size = Some(ReadableSize(10));
         cfg.region_split_size = Some(ReadableSize(20));
-        cfg.validate(false).unwrap_err();
+        cfg.validate().unwrap_err();
 
         cfg = Config::default();
         cfg.region_max_size = None;
         cfg.region_split_size = Some(ReadableSize(20));
-        cfg.validate(false).unwrap();
+        cfg.validate().unwrap();
         assert_eq!(cfg.region_max_size, Some(ReadableSize(30)));
 
         cfg = Config::default();
         cfg.region_max_keys = Some(10);
         cfg.region_split_keys = Some(20);
-        cfg.validate(false).unwrap_err();
+        cfg.validate().unwrap_err();
 
         cfg = Config::default();
         cfg.region_max_keys = None;
         cfg.region_split_keys = Some(20);
-        cfg.validate(false).unwrap();
+        cfg.validate().unwrap();
         assert_eq!(cfg.region_max_keys, Some(30));
 
         cfg = Config::default();
         cfg.enable_region_bucket = Some(false);
         cfg.region_split_size = Some(ReadableSize(20));
         cfg.region_bucket_size = ReadableSize(30);
-        cfg.validate(false).unwrap();
+        cfg.validate().unwrap();
 
         cfg = Config::default();
         cfg.region_split_size = Some(ReadableSize::mb(20));
-        cfg.validate(false).unwrap();
+        cfg.validate().unwrap();
         assert_eq!(cfg.region_split_keys, Some(200000));
     }
 }
