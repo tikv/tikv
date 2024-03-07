@@ -771,7 +771,7 @@ pub enum PeerMsg<EK: KvEngine> {
     /// Raft message is the message sent between raft nodes in the same
     /// raft group. Messages need to be redirected to raftstore if target
     /// peer doesn't exist.
-    RaftMessage(InspectedRaftMessage, Option<Instant>),
+    RaftMessage(InspectedRaftMessage, Option<Instant>) = 0,
     /// Raft command is the command that is expected to be proposed by the
     /// leader of the target raft group. If it's failed to be sent, callback
     /// usually needs to be called before dropping in case of resource leak.
@@ -838,7 +838,8 @@ impl<EK: KvEngine> fmt::Debug for PeerMsg<EK> {
 
 impl<EK: KvEngine> PeerMsg<EK> {
     pub fn discriminant(&self) -> u8 {
-        unsafe { *(self as *const Self as *const u8) }
+        // Ref: https://doc.rust-lang.org/std/mem/fn.discriminant.html#accessing-the-numeric-value-of-the-discriminant
+        unsafe { *<*const _>::from(self).cast::<u8>() }
     }
 
     /// For some specific kind of messages, it's actually acceptable if failed
@@ -941,6 +942,7 @@ where
 
 impl<EK: KvEngine> StoreMsg<EK> {
     pub fn discriminant(&self) -> u8 {
-        unsafe { *(self as *const Self as *const u8) }
+        // Ref: https://doc.rust-lang.org/std/mem/fn.discriminant.html#accessing-the-numeric-value-of-the-discriminant
+        unsafe { *<*const _>::from(self).cast::<u8>() }
     }
 }

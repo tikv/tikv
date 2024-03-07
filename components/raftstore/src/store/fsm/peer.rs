@@ -17,7 +17,7 @@ use std::{
 };
 
 use batch_system::{BasicMailbox, Fsm};
-use collections::{hash_map_with_capacity, HashMap, HashSet};
+use collections::{HashMap, HashSet};
 use engine_traits::{Engines, KvEngine, RaftEngine, SstMetaInfo, WriteBatchExt, CF_LOCK, CF_RAFT};
 use error_code::ErrorCodeExt;
 use fail::fail_point;
@@ -56,7 +56,7 @@ use tikv_util::{
     slow_log,
     store::{find_peer, find_peer_by_id, is_learner, region_on_same_stores},
     sys::disk::DiskUsage,
-    time::{monotonic_raw_now, Instant as TiInstant},
+    time::{monotonic_raw_now, Instant as TiInstant, SlowTimer},
     trace, warn,
     worker::{ScheduleError, Scheduler},
     Either,
@@ -618,14 +618,12 @@ where
     }
 
     pub fn handle_msgs(&mut self, msgs: &mut Vec<PeerMsg<EK>>) {
-        let timer = TiInstant::now_coarse();
+        let timer = SlowTimer::from_millis(100);
         let count = msgs.len();
-        let mut distribution = hash_map_with_capacity(std::mem::variant_count::<PeerMsg<EK>>());
+        #[allow(const_evaluatable_unchecked)]
+        let mut distribution = [0; std::mem::variant_count::<PeerMsg<EK>>()];
         for m in msgs.drain(..) {
-            distribution
-                .entry(m.discriminant())
-                .and_modify(|c| *c += 1)
-                .or_insert(1);
+            distribution[m.discriminant() as usize] += 1;
             match m {
                 PeerMsg::RaftMessage(msg, sent_time) => {
                     if let Some(sent_time) = sent_time {
@@ -716,9 +714,8 @@ where
             }
         }
         self.on_loop_finished();
-        let elapsed = timer.saturating_elapsed();
         slow_log!(
-            elapsed,
+            T timer,
             "{} handle {} peer messages {:?}",
             self.fsm.peer.tag,
             count,
@@ -729,7 +726,7 @@ where
             .raft_metrics
             .event_time
             .peer_msg
-            .observe(elapsed.as_secs_f64());
+            .observe(timer.saturating_elapsed().as_secs_f64());
     }
 
     #[inline]

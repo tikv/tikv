@@ -23,7 +23,7 @@ use batch_system::{
     HandlerBuilder, PollHandler, Priority,
 };
 use causal_ts::CausalTsProviderImpl;
-use collections::{hash_map_with_capacity, HashMap, HashMapEntry, HashSet};
+use collections::{HashMap, HashMapEntry, HashSet};
 use concurrency_manager::ConcurrencyManager;
 use crossbeam::channel::{TryRecvError, TrySendError};
 use engine_traits::{
@@ -64,7 +64,7 @@ use tikv_util::{
         cpu_time::ProcessStat,
         disk::{get_disk_status, DiskUsage},
     },
-    time::{duration_to_sec, monotonic_raw_now, Instant as TiInstant},
+    time::{duration_to_sec, monotonic_raw_now, Instant as TiInstant, SlowTimer},
     timer::SteadyTimer,
     warn,
     worker::{LazyWorker, Scheduler, Worker},
@@ -806,14 +806,12 @@ impl<'a, EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
     }
 
     fn handle_msgs(&mut self, msgs: &mut Vec<StoreMsg<EK>>) {
-        let timer = TiInstant::now_coarse();
+        let timer = SlowTimer::from_millis(100);
         let count = msgs.len();
-        let mut distribution = hash_map_with_capacity(std::mem::variant_count::<PeerMsg<EK>>());
+        #[allow(const_evaluatable_unchecked)]
+        let mut distribution = [0; std::mem::variant_count::<StoreMsg<EK>>()];
         for m in msgs.drain(..) {
-            distribution
-                .entry(m.discriminant())
-                .and_modify(|c| *c += 1)
-                .or_insert(1);
+            distribution[m.discriminant() as usize] += 1;
             match m {
                 StoreMsg::Tick(tick) => self.on_tick(tick),
                 StoreMsg::RaftMessage(msg) => {
@@ -874,9 +872,8 @@ impl<'a, EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
                 }
             }
         }
-        let elapsed = timer.saturating_elapsed();
         slow_log!(
-            elapsed,
+            T timer,
             "[store {}] handle {} store messages {:?}",
             self.fsm.store.id,
             count,
@@ -886,7 +883,7 @@ impl<'a, EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
             .raft_metrics
             .event_time
             .store_msg
-            .observe(elapsed.as_secs_f64());
+            .observe(timer.saturating_elapsed().as_secs_f64());
     }
 
     fn start(&mut self, store: metapb::Store) {
