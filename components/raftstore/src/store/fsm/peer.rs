@@ -3346,9 +3346,19 @@ where
                     .atomic_snap_regions
                     .get_mut(&target_region_id)
                     .unwrap()
+<<<<<<< HEAD
                     .get_mut(&region_id)
                     .unwrap();
                 *is_ready = true;
+=======
+                    .remove(&region_id);
+                meta.destroyed_region_for_snap.remove(&region_id);
+                info!("peer has destroyed, clean up for incoming overlapped snapshot";
+                    "region_id" => region_id,
+                    "peer_id" => self.fsm.peer_id(),
+                    "target_region_id" => target_region_id,
+                );
+>>>>>>> e14a803902 (raftstore: clean up destroyed_region_for_snap when a peer is destroyed (#16133))
             }
         }
 
