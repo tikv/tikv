@@ -256,7 +256,7 @@ dependencies = [
  "fail",
  "futures 0.3.15",
  "futures-util",
- "grpcio 0.10.4 (git+https://github.com/LykxSassinator/grpc-rs.git?branch=load-balance)",
+ "grpcio",
  "http",
  "hyper",
  "hyper-tls",
@@ -443,7 +443,7 @@ dependencies = [
  "file_system",
  "futures 0.3.15",
  "futures-util",
- "grpcio 0.10.4 (git+https://github.com/LykxSassinator/grpc-rs.git?branch=load-balance)",
+ "grpcio",
  "hex 0.4.2",
  "keys",
  "kvproto",
@@ -495,7 +495,7 @@ dependencies = [
  "file_system",
  "futures 0.3.15",
  "futures-io",
- "grpcio 0.10.4 (git+https://github.com/LykxSassinator/grpc-rs.git?branch=load-balance)",
+ "grpcio",
  "hex 0.4.2",
  "indexmap 1.6.2",
  "kvproto",
@@ -852,7 +852,7 @@ dependencies = [
  "futures 0.3.15",
  "futures-timer",
  "getset",
- "grpcio 0.10.4 (git+https://github.com/LykxSassinator/grpc-rs.git?branch=load-balance)",
+ "grpcio",
  "keys",
  "kvproto",
  "lazy_static",
@@ -1750,7 +1750,7 @@ dependencies = [
 name = "error_code"
 version = "0.0.1"
 dependencies = [
- "grpcio 0.10.4 (git+https://github.com/LykxSassinator/grpc-rs.git?branch=load-balance)",
+ "grpcio",
  "kvproto",
  "lazy_static",
  "raft",
@@ -2307,26 +2307,11 @@ dependencies = [
 [[package]]
 name = "grpcio"
 version = "0.10.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1f2506de56197d01821c2d1d21082d2dcfd6c82d7a1d6e04d33f37aab6130632"
-dependencies = [
- "futures-executor",
- "futures-util",
- "grpcio-sys 0.10.3+1.44.0-patched (registry+https://github.com/rust-lang/crates.io-index)",
- "libc 0.2.151",
- "log",
- "parking_lot 0.11.1",
- "protobuf",
-]
-
-[[package]]
-name = "grpcio"
-version = "0.10.4"
 source = "git+https://github.com/LykxSassinator/grpc-rs.git?branch=load-balance#5dd48d77bb7d37520fd7b3c070e06a0fdd94d3c7"
 dependencies = [
  "futures-executor",
  "futures-util",
- "grpcio-sys 0.10.3+1.44.0-patched (git+https://github.com/LykxSassinator/grpc-rs.git?branch=load-balance)",
+ "grpcio-sys",
  "libc 0.2.151",
  "log",
  "parking_lot 0.11.1",
@@ -2345,28 +2330,14 @@ dependencies = [
 [[package]]
 name = "grpcio-health"
 version = "0.10.4"
-source = "git+https://github.com/LykxSassinator/grpc-rs.git?branch=load-balance#5dd48d77bb7d37520fd7b3c070e06a0fdd94d3c7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a37eae605cd21f144b7c7fd0e64e57af9f73d132756fef5b706db110c3ec7ea0"
 dependencies = [
  "futures-executor",
  "futures-util",
- "grpcio 0.10.4 (git+https://github.com/LykxSassinator/grpc-rs.git?branch=load-balance)",
+ "grpcio",
  "log",
  "protobuf",
-]
-
-[[package]]
-name = "grpcio-sys"
-version = "0.10.3+1.44.0-patched"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f23adc509a3c4dea990e0ab8d2add4a65389ee69c288b7851d75dd1df7a6d6c6"
-dependencies = [
- "bindgen 0.59.2",
- "cc",
- "cmake",
- "libc 0.2.151",
- "libz-sys",
- "pkg-config",
- "walkdir",
 ]
 
 [[package]]
@@ -2868,7 +2839,7 @@ version = "0.0.2"
 source = "git+https://github.com/pingcap/kvproto.git#929ab83f9754d96b3366adec9004ccf21e9d7824"
 dependencies = [
  "futures 0.3.15",
- "grpcio 0.10.4 (registry+https://github.com/rust-lang/crates.io-index)",
+ "grpcio",
  "protobuf",
  "protobuf-build",
  "raft-proto",
@@ -3710,7 +3681,7 @@ dependencies = [
  "error_code",
  "fail",
  "futures 0.3.15",
- "grpcio 0.10.4 (git+https://github.com/LykxSassinator/grpc-rs.git?branch=load-balance)",
+ "grpcio",
  "kvproto",
  "lazy_static",
  "log",
@@ -4681,7 +4652,7 @@ dependencies = [
  "engine_traits",
  "fail",
  "futures 0.3.15",
- "grpcio 0.10.4 (git+https://github.com/LykxSassinator/grpc-rs.git?branch=load-balance)",
+ "grpcio",
  "hex 0.4.2",
  "kvproto",
  "lazy_static",
@@ -4748,7 +4719,7 @@ dependencies = [
  "collections",
  "crossbeam",
  "futures 0.3.15",
- "grpcio 0.10.4 (git+https://github.com/LykxSassinator/grpc-rs.git?branch=load-balance)",
+ "grpcio",
  "kvproto",
  "lazy_static",
  "libc 0.2.151",
@@ -5079,7 +5050,7 @@ version = "0.0.1"
 dependencies = [
  "collections",
  "encryption",
- "grpcio 0.10.4 (git+https://github.com/LykxSassinator/grpc-rs.git?branch=load-balance)",
+ "grpcio",
  "kvproto",
  "serde",
  "serde_derive",
@@ -5299,7 +5270,7 @@ dependencies = [
  "file_system",
  "fs2",
  "futures 0.3.15",
- "grpcio 0.10.4 (git+https://github.com/LykxSassinator/grpc-rs.git?branch=load-balance)",
+ "grpcio",
  "grpcio-health",
  "health_controller",
  "hex 0.4.2",
@@ -5519,7 +5490,7 @@ dependencies = [
  "engine_rocks",
  "engine_traits",
  "futures 0.3.15",
- "grpcio 0.10.4 (git+https://github.com/LykxSassinator/grpc-rs.git?branch=load-balance)",
+ "grpcio",
  "itertools",
  "keys",
  "kvproto",
@@ -5599,7 +5570,7 @@ dependencies = [
  "file_system",
  "futures 0.3.15",
  "futures-util",
- "grpcio 0.10.4 (git+https://github.com/LykxSassinator/grpc-rs.git?branch=load-balance)",
+ "grpcio",
  "keys",
  "kvproto",
  "lazy_static",
@@ -5907,7 +5878,7 @@ dependencies = [
  "futures 0.3.15",
  "futures-executor",
  "futures-util",
- "grpcio 0.10.4 (git+https://github.com/LykxSassinator/grpc-rs.git?branch=load-balance)",
+ "grpcio",
  "kvproto",
  "protobuf",
  "raftstore",
@@ -5948,7 +5919,7 @@ dependencies = [
  "collections",
  "fail",
  "futures 0.3.15",
- "grpcio 0.10.4 (git+https://github.com/LykxSassinator/grpc-rs.git?branch=load-balance)",
+ "grpcio",
  "kvproto",
  "log_wrappers",
  "pd_client",
@@ -5967,7 +5938,7 @@ dependencies = [
  "collections",
  "fail",
  "futures 0.3.15",
- "grpcio 0.10.4 (git+https://github.com/LykxSassinator/grpc-rs.git?branch=load-balance)",
+ "grpcio",
  "keys",
  "kvproto",
  "log_wrappers",
@@ -5999,7 +5970,7 @@ dependencies = [
  "fail",
  "file_system",
  "futures 0.3.15",
- "grpcio 0.10.4 (git+https://github.com/LykxSassinator/grpc-rs.git?branch=load-balance)",
+ "grpcio",
  "grpcio-health",
  "health_controller",
  "hybrid_engine",
@@ -6049,7 +6020,7 @@ dependencies = [
  "fail",
  "file_system",
  "futures 0.3.15",
- "grpcio 0.10.4 (git+https://github.com/LykxSassinator/grpc-rs.git?branch=load-balance)",
+ "grpcio",
  "grpcio-health",
  "health_controller",
  "keys",
@@ -6099,7 +6070,7 @@ dependencies = [
  "engine_traits",
  "external_storage",
  "futures 0.3.15",
- "grpcio 0.10.4 (git+https://github.com/LykxSassinator/grpc-rs.git?branch=load-balance)",
+ "grpcio",
  "keys",
  "kvproto",
  "tempfile",
@@ -6135,7 +6106,7 @@ dependencies = [
  "collections",
  "encryption_export",
  "fail",
- "grpcio 0.10.4 (git+https://github.com/LykxSassinator/grpc-rs.git?branch=load-balance)",
+ "grpcio",
  "kvproto",
  "rand 0.8.5",
  "rand_isaac",
@@ -6174,7 +6145,7 @@ dependencies = [
  "fail",
  "file_system",
  "futures 0.3.15",
- "grpcio 0.10.4 (git+https://github.com/LykxSassinator/grpc-rs.git?branch=load-balance)",
+ "grpcio",
  "grpcio-health",
  "health_controller",
  "hyper",
@@ -6476,7 +6447,7 @@ dependencies = [
  "futures-util",
  "fxhash",
  "getset",
- "grpcio 0.10.4 (git+https://github.com/LykxSassinator/grpc-rs.git?branch=load-balance)",
+ "grpcio",
  "grpcio-health",
  "health_controller",
  "hex 0.4.2",
@@ -6591,7 +6562,7 @@ dependencies = [
  "file_system",
  "futures 0.3.15",
  "gag",
- "grpcio 0.10.4 (git+https://github.com/LykxSassinator/grpc-rs.git?branch=load-balance)",
+ "grpcio",
  "hex 0.4.2",
  "keys",
  "kvproto",
@@ -6751,7 +6722,7 @@ dependencies = [
  "futures 0.3.15",
  "futures-util",
  "gag",
- "grpcio 0.10.4 (git+https://github.com/LykxSassinator/grpc-rs.git?branch=load-balance)",
+ "grpcio",
  "http",
  "kvproto",
  "lazy_static",
@@ -6853,7 +6824,7 @@ version = "0.0.1"
 source = "git+https://github.com/pingcap/tipb.git#711da6fede03533302fbc9fa3a8fca3556683197"
 dependencies = [
  "futures 0.3.15",
- "grpcio 0.10.4 (registry+https://github.com/rust-lang/crates.io-index)",
+ "grpcio",
  "protobuf",
  "protobuf-build",
 ]
