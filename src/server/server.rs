@@ -338,7 +338,12 @@ pub mod test_router {
 
     use engine_rocks::{RocksEngine, RocksSnapshot};
     use kvproto::raft_serverpb::RaftMessage;
+<<<<<<< HEAD
     use raftstore::{store::*, Result as RaftStoreResult};
+=======
+    use raftstore::{router::RaftStoreRouter, store::*, Result as RaftStoreResult};
+    use tikv_util::time::Instant as TiInstant;
+>>>>>>> 6e826308b9 (add more metrics for slow commit log diagnostics (#15716))
 
     use super::*;
 
@@ -398,12 +403,10 @@ pub mod test_router {
 
     impl RaftStoreRouter<RocksEngine> for TestRaftStoreRouter {
         fn send_raft_msg(&self, msg: RaftMessage) -> RaftStoreResult<()> {
-            let _ = self
-                .tx
-                .send(Either::Left(PeerMsg::RaftMessage(InspectedRaftMessage {
-                    heap_size: 0,
-                    msg,
-                })));
+            let _ = self.tx.send(Either::Left(PeerMsg::RaftMessage(
+                InspectedRaftMessage { heap_size: 0, msg },
+                Some(TiInstant::now()),
+            )));
             Ok(())
         }
 
