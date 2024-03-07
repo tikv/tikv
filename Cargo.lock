@@ -2307,7 +2307,7 @@ dependencies = [
 [[package]]
 name = "grpcio"
 version = "0.10.4"
-source = "git+https://github.com/LykxSassinator/grpc-rs.git?branch=load-balance#5dd48d77bb7d37520fd7b3c070e06a0fdd94d3c7"
+source = "git+https://github.com/LykxSassinator/grpc-rs.git?branch=load-balance#723a8021851538dec497626bb71e681b805cc8f2"
 dependencies = [
  "futures-executor",
  "futures-util",
@@ -2343,7 +2343,7 @@ dependencies = [
 [[package]]
 name = "grpcio-sys"
 version = "0.10.3+1.44.0-patched"
-source = "git+https://github.com/LykxSassinator/grpc-rs.git?branch=load-balance#5dd48d77bb7d37520fd7b3c070e06a0fdd94d3c7"
+source = "git+https://github.com/LykxSassinator/grpc-rs.git?branch=load-balance#723a8021851538dec497626bb71e681b805cc8f2"
 dependencies = [
  "bindgen 0.59.2",
  "cc",
