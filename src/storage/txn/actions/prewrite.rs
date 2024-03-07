@@ -449,7 +449,7 @@ impl<'a> PrewriteMutation<'a> {
         // A key can be flushed multiple times for a Pipelined-DML transaction.
         // A latter flush with `should_not_exist` should return error if a previous
         // flush of the key writes a value
-        if self.should_not_exist && matches!(lock.lock_type, LockType::Put) {
+        if lock.generation > 0 && self.should_not_exist && matches!(lock.lock_type, LockType::Put) {
             return Err(ErrorInner::AlreadyExist {
                 key: self.key.to_raw()?,
             }
