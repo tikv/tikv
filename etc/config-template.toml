@@ -481,7 +481,7 @@
 
 ## Use how many threads to handle raft io tasks
 ## If it is 0, it means io tasks are handled in store threads.
-# store-io-pool-size = 0
+# store-io-pool-size = 1
 
 ## When the size of raft db writebatch exceeds this value, write will be triggered.
 # raft-write-size-limit = "1MB"
@@ -673,7 +673,6 @@
 ## Enables or disables `Titan`. Note that Titan is still an experimental feature. Once
 ## enabled, it can't fall back. Forced fallback may result in data loss.
 ## Titan is default on since v7.6.0. This won't affect deployments existed before v7.6.0.
-## default: true
 # enabled = true
 
 ## Maximum number of threads of `Titan` background gc jobs.
@@ -928,8 +927,8 @@
 [rocksdb.defaultcf.titan]
 ## The smallest value to store in blob files. Value smaller than
 ## this threshold will be inlined in base DB.
-## default: 1KB
-# min-blob-size = "1KB"
+## The default value is 32KB since v7.6.0. But it won't affect deployments existed before v7.6.0 of which the default value is 1KB.
+# min-blob-size = "32KB"
 
 ## The compression algorithm used to compress data in blob files.
 ## Compression method.

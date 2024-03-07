@@ -208,7 +208,11 @@ impl PrepareBackup {
     }
 
     pub fn next(&mut self) -> PrepareSnapshotBackupResponse {
-        block_on(self.rx.next()).unwrap().unwrap()
+        self.try_next().unwrap()
+    }
+
+    pub fn try_next(&mut self) -> grpcio::Result<PrepareSnapshotBackupResponse> {
+        block_on(self.rx.next()).unwrap()
     }
 }
 

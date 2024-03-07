@@ -311,8 +311,8 @@ mod table_properties;
 pub use crate::table_properties::*;
 mod checkpoint;
 pub use crate::checkpoint::*;
-mod memory_engine;
-pub use memory_engine::RegionCacheEngine;
+mod range_cache_engine;
+pub use range_cache_engine::{CacheRange, RangeCacheEngine};
 
 // These modules contain more general traits, some of which may be implemented
 // by multiple types.

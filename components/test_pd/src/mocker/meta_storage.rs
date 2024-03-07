@@ -66,6 +66,19 @@ impl PdMocker for MetaStorage {
         Some(Ok(Default::default()))
     }
 
+    fn meta_store_delete(
+        &self,
+        req: mpb::DeleteRequest,
+    ) -> Option<super::Result<mpb::DeleteResponse>> {
+        if let Err(err) = check_header(req.get_header()) {
+            return Some(Err(err));
+        }
+
+        let mut store = self.store.lock().unwrap();
+        block_on(store.delete(Keys::Key(MetaKey(req.get_key().into())))).unwrap();
+        Some(Ok(Default::default()))
+    }
+
     fn meta_store_watch(
         &self,
         req: mpb::WatchRequest,
@@ -98,14 +111,28 @@ impl PdMocker for MetaStorage {
         ctx.spawn(async move {
             while let Some(x) = watcher.next().await {
                 let mut event = mpb::Event::new();
-                event.set_kv(convert_kv(x.pair));
-                event.set_type(match x.kind {
-                    KvEventType::Put => mpb::EventEventType::Put,
-                    KvEventType::Delete => mpb::EventEventType::Delete,
-                });
+                event.set_kv(convert_kv(x.pair.clone()));
+                match x.kind {
+                    KvEventType::Put => event.set_type(mpb::EventEventType::Put),
+                    KvEventType::Delete => {
+                        event.set_type(mpb::EventEventType::Delete);
+                        event.set_prev_kv(convert_kv(x.pair));
+                    }
+                }
+
                 let mut resp = mpb::WatchResponse::default();
                 resp.set_events(vec![event].into());
                 sink.send((resp, Default::default())).await.unwrap();
+
+                #[cfg(feature = "failpoints")]
+                {
+                    use futures::executor::block_on;
+                    let cli_clone = cli.clone();
+                    fail_point!("watch_meta_storage_return", |_| {
+                        block_on(async move { cli_clone.lock().await.clear_subs() });
+                        watcher.close();
+                    });
+                }
             }
         });
         true
