@@ -53,6 +53,7 @@ pub use proc::*;
 // See https://man7.org/linux/man-pages/man2/open.2.html#NOTES
 #[cfg(test)]
 #[repr(align(512))]
+#[cfg_attr(not(target_os = "linux"), allow(unused))]
 pub(crate) struct A512<const SZ: usize>(pub [u8; SZ]);
 
 #[cfg(test)]
