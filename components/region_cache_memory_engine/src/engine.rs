@@ -242,7 +242,10 @@ impl RangeCacheMemoryEngine {
         }
     }
 
-    // It handle the pending range and return whether to buffer the write.
+    // It handle the pending range and return whether to buffer the write
+    // (`range_in_cache means` the writes should be written to memory engine
+    // directly, `range_in_loading` means the write for the range should be
+    // cached and wait for the snapshot load finishes).
     // In addition, the range of the region in the `pending_range` may have been
     // splited, and we should split the range accrodingly.
     pub(crate) fn prepare_for_apply(&self, range: &CacheRange) -> (bool, bool) {
