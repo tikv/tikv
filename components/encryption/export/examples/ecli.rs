@@ -5,9 +5,7 @@ use std::io::{Read, Write};
 use azure::STORAGE_VENDOR_NAME_AZURE;
 pub use cloud::kms::Config as CloudConfig;
 use encryption::GcpConfig;
-#[cfg(feature = "cloud-aws")]
-use encryption_export::{create_cloud_backend, KmsConfig};
-use encryption_export::{AzureConfig, Backend, Error, Result};
+use encryption_export::{create_cloud_backend, AzureConfig, Backend, Error, KmsConfig, Result};
 use file_system::{File, OpenOptions};
 use gcp::STORAGE_VENDOR_NAME_GCP;
 use ini::ini::Ini;

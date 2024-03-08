@@ -194,6 +194,7 @@ where
 
         let proxy = Proxy::new(security_mgr.clone(), &env, Arc::new(cfg.value().clone()));
         let kv_service = KvService::new(
+            cfg.value().cluster_id,
             store_id,
             storage,
             gc_worker,
