@@ -1,7 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    mem,
+    fmt, mem,
     string::String,
     sync::{
         atomic::{AtomicUsize, Ordering},
@@ -135,6 +135,16 @@ pub struct Downstream {
     kv_api: ChangeDataRequestKvApi,
     filter_loop: bool,
     pub(crate) observed_range: ObservedRange,
+}
+
+impl fmt::Debug for Downstream {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Downstream")
+            .field("id", &self.id)
+            .field("req_id", &self.req_id)
+            .field("conn_id", &self.conn_id)
+            .finish()
+    }
 }
 
 impl Downstream {
@@ -1478,7 +1488,7 @@ mod tests {
         assert!(delegate.handle.is_observing());
 
         // Subscribe with an invalid epoch.
-        delegate.subscribe(new_downstream(1, 2)).unwrap_err();
+        assert!(delegate.subscribe(new_downstream(1, 2)).is_err());
         assert_eq!(delegate.downstreams().len(), 1);
 
         // Unsubscribe all downstreams.

@@ -119,10 +119,10 @@ pub(crate) struct Initializer<E> {
 }
 
 impl<E: KvEngine> Initializer<E> {
-    pub(crate) async fn initialize<T: 'static + CdcHandle<E>>(
-        &mut self,
-        cdc_handle: T,
-    ) -> Result<()> {
+    pub(crate) async fn initialize<T>(&mut self, cdc_handle: T) -> Result<()>
+    where
+        T: 'static + CdcHandle<E>,
+    {
         fail_point!("cdc_before_initialize");
         let concurrency_semaphore = self.concurrency_semaphore.clone();
         let _permit = concurrency_semaphore.acquire().await;
@@ -203,7 +203,7 @@ impl<E: KvEngine> Initializer<E> {
         }
     }
 
-    pub(crate) async fn async_incremental_scan<S: Snapshot + 'static>(
+    pub(crate) async fn async_incremental_scan<S>(
         &mut self,
         snap: S,
         region: Region,
@@ -689,6 +689,18 @@ mod tests {
             .unwrap();
         let downstream_state = Arc::new(AtomicCell::new(DownstreamState::Initializing));
         let initializer = Initializer {
+            region_id: 1,
+            conn_id: ConnId::new(),
+            request_id: 0,
+            checkpoint_ts: 1.into(),
+            region_epoch: RegionEpoch::default(),
+
+            build_resolver: Arc::new(Default::default()),
+            observed_range: ObservedRange::default(),
+            observe_handle: ObserveHandle::new(),
+            downstream_id: DownstreamId::new(),
+            downstream_state,
+
             tablet: engine.or_else(|| {
                 TestEngineBuilder::new()
                     .build_without_cache()
@@ -697,20 +709,14 @@ mod tests {
             }),
             sched: receiver_worker.scheduler(),
             sink,
-            observed_range: ObservedRange::default(),
-            region_id: 1,
-            region_epoch: RegionEpoch::default(),
-            observe_id: ObserveId::new(),
-            downstream_id: DownstreamId::new(),
-            downstream_state,
-            conn_id: ConnId::new(),
-            request_id: 0,
-            checkpoint_ts: 1.into(),
+            concurrency_semaphore: Arc::new(Semaphore::new(1)),
+            memory_quota: Arc::new(MemoryQuota::new(usize::MAX)),
+
             scan_speed_limiter: Limiter::new(scan_limit as _),
             fetch_speed_limiter: Limiter::new(fetch_limit as _),
             max_scan_batch_bytes: 1024 * 1024,
             max_scan_batch_size: 1024,
-            build_resolver: true,
+
             ts_filter_ratio: 1.0, // always enable it.
             kv_api,
             filter_loop,
@@ -791,37 +797,21 @@ mod tests {
             }
         });
 
-        let memory_quota = Arc::new(MemoryQuota::new(usize::MAX));
-        block_on(initializer.async_incremental_scan(
-            snap.clone(),
-            region.clone(),
-            memory_quota.clone(),
-        ))
-        .unwrap();
+        block_on(initializer.async_incremental_scan(snap.clone(), region.clone())).unwrap();
         check_result();
 
         initializer
             .downstream_state
             .store(DownstreamState::Initializing);
         initializer.max_scan_batch_bytes = total_bytes;
-        block_on(initializer.async_incremental_scan(
-            snap.clone(),
-            region.clone(),
-            memory_quota.clone(),
-        ))
-        .unwrap();
+        block_on(initializer.async_incremental_scan(snap.clone(), region.clone())).unwrap();
         check_result();
 
         initializer
             .downstream_state
             .store(DownstreamState::Initializing);
-        initializer.build_resolver = false;
-        block_on(initializer.async_incremental_scan(
-            snap.clone(),
-            region.clone(),
-            memory_quota.clone(),
-        ))
-        .unwrap();
+        initializer.build_resolver.store(false, Ordering::Release);
+        block_on(initializer.async_incremental_scan(snap.clone(), region.clone())).unwrap();
 
         let task = rx.recv_timeout(Duration::from_millis(100));
         match task {
@@ -832,8 +822,7 @@ mod tests {
 
         // Test cancellation.
         initializer.downstream_state.store(DownstreamState::Stopped);
-        block_on(initializer.async_incremental_scan(snap.clone(), region, memory_quota.clone()))
-            .unwrap_err();
+        block_on(initializer.async_incremental_scan(snap.clone(), region)).unwrap_err();
 
         // Cancel error should trigger a deregsiter.
         let mut region = Region::default();
@@ -845,15 +834,14 @@ mod tests {
             response: Default::default(),
             txn_extra_op: Default::default(),
         };
-        block_on(initializer.on_change_cmd_response(resp.clone(), memory_quota.clone()))
-            .unwrap_err();
+        block_on(initializer.on_change_cmd_response(resp.clone())).unwrap_err();
 
         // Disconnect sink by dropping runtime (it also drops drain).
         drop(pool);
         initializer
             .downstream_state
             .store(DownstreamState::Initializing);
-        block_on(initializer.on_change_cmd_response(resp, memory_quota)).unwrap_err();
+        block_on(initializer.on_change_cmd_response(resp)).unwrap_err();
 
         worker.stop();
     }
@@ -884,7 +872,7 @@ mod tests {
         let th = pool.spawn(async move {
             let memory_quota = Arc::new(MemoryQuota::new(usize::MAX));
             initializer
-                .async_incremental_scan(snap, Region::default(), memory_quota)
+                .async_incremental_scan(snap, Region::default())
                 .await
                 .unwrap();
         });
@@ -971,7 +959,7 @@ mod tests {
                 let th = pool.spawn(async move {
                     let memory_qutoa = Arc::new(MemoryQuota::new(usize::MAX));
                     initializer
-                        .async_incremental_scan(snap, Region::default(), memory_qutoa)
+                        .async_incremental_scan(snap, Region::default())
                         .await
                         .unwrap();
                 });
@@ -1032,7 +1020,7 @@ mod tests {
         );
 
         // Errors reported by region should deregister region.
-        initializer.build_resolver = false;
+        initializer.build_resolver.store(false, Ordering::Release);
         initializer.deregister_downstream(Error::request(ErrorHeader::default()));
         let task = rx.recv_timeout(Duration::from_millis(100));
         match task {
@@ -1043,7 +1031,7 @@ mod tests {
             Err(e) => panic!("unexpected err {:?}", e),
         }
 
-        initializer.build_resolver = false;
+        initializer.build_resolver.store(false, Ordering::Release);
         initializer.deregister_downstream(Error::Other(box_err!("test")));
         let task = rx.recv_timeout(Duration::from_millis(100));
         match task {
@@ -1055,7 +1043,7 @@ mod tests {
         }
 
         // Test deregister region when resolver fails to build.
-        initializer.build_resolver = true;
+        initializer.build_resolver.store(true, Ordering::Release);
         initializer.deregister_downstream(Error::Other(box_err!("test")));
         let task = rx.recv_timeout(Duration::from_millis(100));
         match task {
@@ -1081,24 +1069,14 @@ mod tests {
         let (mut worker, pool, mut initializer, _rx, _drain) =
             mock_initializer(total_bytes, total_bytes, buffer, None, kv_api, false);
 
-        let change_cmd = ChangeObserver::from_cdc(1, ObserveHandle::new());
         let raft_router = CdcRaftRouter(MockRaftStoreRouter::new());
-        let concurrency_semaphore = Arc::new(Semaphore::new(1));
-        let memory_quota = Arc::new(MemoryQuota::new(usize::MAX));
-
         initializer.downstream_state.store(DownstreamState::Stopped);
-        block_on(initializer.initialize(
-            change_cmd,
-            raft_router.clone(),
-            concurrency_semaphore.clone(),
-            memory_quota.clone(),
-        ))
-        .unwrap_err();
+        block_on(initializer.initialize(raft_router.clone())).unwrap_err();
 
         let (tx, rx) = sync_channel(1);
-        let concurrency_semaphore_ = concurrency_semaphore.clone();
+        let concurrency_semaphore = initializer.concurrency_semaphore.clone();
         pool.spawn(async move {
-            let _permit = concurrency_semaphore_.acquire().await;
+            let _permit = concurrency_semaphore.acquire().await;
             tx.send(()).unwrap();
             tx.send(()).unwrap();
             tx.send(()).unwrap();
@@ -1106,19 +1084,11 @@ mod tests {
         rx.recv_timeout(Duration::from_millis(200)).unwrap();
 
         let (tx1, rx1) = sync_channel(1);
-        let change_cmd = ChangeObserver::from_cdc(1, ObserveHandle::new());
         pool.spawn(async move {
             // Migrated to 2021 migration. This let statement is probably not needed, see
             //   https://doc.rust-lang.org/edition-guide/rust-2021/disjoint-capture-in-closures.html
-            let _ = (
-                &initializer,
-                &change_cmd,
-                &raft_router,
-                &concurrency_semaphore,
-            );
-            let res = initializer
-                .initialize(change_cmd, raft_router, concurrency_semaphore, memory_quota)
-                .await;
+            let _ = (&initializer, &raft_router);
+            let res = initializer.initialize(raft_router).await;
             tx1.send(res).unwrap();
         });
         // Must timeout because there is no enough permit.
@@ -1169,7 +1139,7 @@ mod tests {
         let th = pool.spawn(async move {
             let memory_quota = Arc::new(MemoryQuota::new(usize::MAX));
             initializer
-                .async_incremental_scan(snap, Region::default(), memory_quota)
+                .async_incremental_scan(snap, Region::default())
                 .await
                 .unwrap();
         });
@@ -1238,7 +1208,7 @@ mod tests {
             let region = Region::default();
             let memory_quota = Arc::new(MemoryQuota::new(usize::MAX));
             let scan_stat = initializer
-                .async_incremental_scan(snap, region, memory_quota)
+                .async_incremental_scan(snap, region)
                 .await
                 .unwrap();
             let block_reads = scan_stat.perf_delta.block_read_count;
