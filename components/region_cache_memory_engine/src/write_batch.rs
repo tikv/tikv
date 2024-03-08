@@ -69,20 +69,6 @@ impl RangeCacheWriteBatch {
         Ok(())
     }
 
-    // apply ctx, decide buffer and load_range_buffer
-    //                   buffer written in list, load_range_buffer will be cached in
-    // engine
-    //
-    // write_impl, handle_pending_load decide loading_range_cache becoming cache
-    // so, load_range_buffer put in engine cache should be done first
-    //  1. load_range_buffer to engine cache buffer, 不过此时这个 loading_range
-    //     可能已经被另一个线程转换成了 range
-    //  2. handle_pending_load
-    //  3. write buffer to list
-    //
-    //
-    // todo(SpadeA): now, we cache all keys even for those that will not be written
-    // in to the memory engine.
     fn write_impl(&mut self, seq: u64) -> Result<()> {
         let (entries_to_write, engine) = self
             .engine
@@ -92,37 +78,6 @@ impl RangeCacheWriteBatch {
             .into_iter()
             .chain(std::mem::take(&mut self.buffer).into_iter())
             .try_for_each(|e| e.write_to_memory(&engine, seq))
-
-        // let mut keys_to_cache: BTreeMap<CacheRange, Vec<(u64,
-        // RangeCacheWriteBatchEntry)>> =     BTreeMap::new();
-        // let (engine, filtered_keys) = {
-        //     let core = self.engine.core().read();
-        //     if core.range_manager().has_range_to_cache_write() {
-        //         self.buffer
-        //             .iter()
-        //             .for_each(|e| e.maybe_cached(seq, &core, &mut
-        // keys_to_cache));     }
-
-        //     (
-        //         core.engine().clone(),
-        //         self.buffer
-        //             .iter()
-        //             .filter(|&e|
-        // e.should_write_to_memory(core.range_manager()))
-        // .collect::<Vec<_>>(),     )
-        // };
-        // if !keys_to_cache.is_empty() {
-        //     let mut core = self.engine.core().write();
-        //     for (range, write_batches) in keys_to_cache {
-        //         core.cached_write_batch
-        //             .entry(range)
-        //             .or_default()
-        //             .extend(write_batches.into_iter());
-        //     }
-        // }
-        // filtered_keys
-        //     .into_iter()
-        //     .try_for_each(|e| e.write_to_memory(&engine, seq))
     }
 }
 
@@ -188,36 +143,6 @@ impl RangeCacheWriteBatchEntry {
     pub fn should_write_to_memory(&self, range_manager: &RangeManager) -> bool {
         range_manager.contains(&self.key)
     }
-
-    // // keys will be inserted in `keys_to_cache` if they are to cached.
-    // #[inline]
-    // pub fn maybe_cached(
-    //     &self,
-    //     seq: u64,
-    //     engine_core: &RangeCacheMemoryEngineCore,
-    //     keys_to_cache: &mut BTreeMap<CacheRange, Vec<(u64,
-    // RangeCacheWriteBatchEntry)>>, ) {
-    //     for r in &engine_core.range_manager().ranges_loading_snapshot {
-    //         if r.0.contains_key(&self.key) {
-    //             let range = r.0.clone();
-    //             keys_to_cache
-    //                 .entry(range)
-    //                 .or_default()
-    //                 .push((seq, self.clone()));
-    //             return;
-    //         }
-    //     }
-    //     for r in &engine_core.range_manager().ranges_loading_cached_write {
-    //         if r.contains_key(&self.key) {
-    //             let range = r.clone();
-    //             keys_to_cache
-    //                 .entry(range)
-    //                 .or_default()
-    //                 .push((seq, self.clone()));
-    //             return;
-    //         }
-    //     }
-    // }
 
     #[inline]
     pub fn write_to_memory(&self, skiplist_engine: &SkiplistEngine, seq: u64) -> Result<()> {
