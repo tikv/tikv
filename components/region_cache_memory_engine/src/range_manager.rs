@@ -91,6 +91,14 @@ pub struct RangeManager {
     // When the snapshot load is finished, `ranges_loading_cached_write` will take over it, which
     // will handle data that is written after the acquire of the snapshot. After it, the range load
     // is finished.
+    //
+    // Note: the range transferred from pending_range *must be* performed by the peer whose region
+    // range equals it. If split happened, the first noticed peer should first split the range in
+    // the pending_range and then only handles its part.
+    //
+    // Note: after snapshot is fetched, we need to cache further write for the range. That is to
+    // say, if range is in `ranges_loading_snapshot` or `ranges_loading_cached_write`, we need to
+    // cache write for it.
     pub(crate) pending_ranges: Vec<CacheRange>,
     pub(crate) ranges_loading_snapshot: VecDeque<(CacheRange, Arc<RocksSnapshot>)>,
     pub(crate) ranges_loading_cached_write: Vec<CacheRange>,
@@ -132,6 +140,20 @@ impl RangeManager {
 
     pub fn contains(&self, key: &[u8]) -> bool {
         self.ranges.keys().any(|r| r.contains_key(key))
+    }
+
+    pub fn contains_range(&self, range: &CacheRange) -> bool {
+        self.ranges.keys().any(|r| r.contains_range(range))
+    }
+
+    pub fn loading_range_contains(&self, range: &CacheRange) -> bool {
+        self.ranges_loading_cached_write
+            .iter()
+            .any(|r| r.contains_range(range))
+            || self
+                .ranges_loading_snapshot
+                .iter()
+                .any(|(r, _)| r.contains_range(range))
     }
 
     pub(crate) fn overlap_with_range(&self, range: &CacheRange) -> bool {

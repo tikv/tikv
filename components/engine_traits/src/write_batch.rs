@@ -1,6 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::{errors::Result, options::WriteOptions};
+use crate::{errors::Result, options::WriteOptions, CacheRange};
 
 /// Engines that can create write batches
 pub trait WriteBatchExt: Sized {
@@ -123,4 +123,6 @@ pub trait WriteBatch: Mutable {
 
     /// Merge another WriteBatch to itself
     fn merge(&mut self, src: Self) -> Result<()>;
+
+    fn prepare_for_range(&mut self, _: &CacheRange) {}
 }

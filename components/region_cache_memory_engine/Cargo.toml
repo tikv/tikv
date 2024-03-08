@@ -22,6 +22,7 @@ slog = { workspace = true }
 engine_rocks = { workspace = true }
 fail = "0.5"
 yatp = { workspace = true }
+parking_lot = "0.12"
 
 [dev-dependencies]
 keys = { workspace = true }

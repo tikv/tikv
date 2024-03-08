@@ -6,10 +6,10 @@ use std::{collections::BTreeSet, fmt::Display, sync::Arc, thread::JoinHandle, ti
 use crossbeam::{
     channel::{bounded, tick, Sender},
     select,
-    sync::ShardedLock,
 };
 use engine_rocks::RocksSnapshot;
 use engine_traits::{CacheRange, IterOptions, Iterable, Iterator, CF_DEFAULT, CF_WRITE, DATA_CFS};
+use parking_lot::{RwLock, RwLockUpgradableReadGuard};
 use skiplist_rs::Skiplist;
 use slog_global::{error, info, warn};
 use tikv_util::{
@@ -70,7 +70,7 @@ impl Drop for BgWorkManager {
 }
 
 impl BgWorkManager {
-    pub fn new(core: Arc<ShardedLock<RangeCacheMemoryEngineCore>>, gc_interval: Duration) -> Self {
+    pub fn new(core: Arc<RwLock<RangeCacheMemoryEngineCore>>, gc_interval: Duration) -> Self {
         let worker = Worker::new("range-cache-background-worker");
         let runner = BackgroundRunner::new(core.clone());
         let scheduler = worker.start("range-cache-engine-background", runner);
@@ -161,18 +161,18 @@ impl Display for GcTask {
 
 #[derive(Clone)]
 struct BackgroundRunnerCore {
-    engine: Arc<ShardedLock<RangeCacheMemoryEngineCore>>,
+    engine: Arc<RwLock<RangeCacheMemoryEngineCore>>,
 }
 
 impl BackgroundRunnerCore {
     fn ranges_for_gc(&self) -> BTreeSet<CacheRange> {
         let ranges: BTreeSet<CacheRange> = {
-            let core = self.engine.read().unwrap();
+            let core = self.engine.read();
             core.range_manager().ranges().keys().cloned().collect()
         };
         let ranges_clone = ranges.clone();
         {
-            let mut core = self.engine.write().unwrap();
+            let mut core = self.engine.write();
             core.mut_range_manager().set_ranges_in_gc(ranges_clone);
         }
         ranges
@@ -180,7 +180,7 @@ impl BackgroundRunnerCore {
 
     fn gc_range(&self, range: &CacheRange, safe_point: u64) {
         let (skiplist_engine, safe_ts) = {
-            let mut core = self.engine.write().unwrap();
+            let mut core = self.engine.write();
             let Some(range_meta) = core.mut_range_manager().mut_range_meta(range) else {
                 return;
             };
@@ -242,13 +242,13 @@ impl BackgroundRunnerCore {
     }
 
     fn gc_finished(&mut self) {
-        let mut core = self.engine.write().unwrap();
+        let mut core = self.engine.write();
         core.mut_range_manager().clear_ranges_in_gc();
     }
 
     // return the first range to load with RocksDB snapshot
     fn get_range_to_load(&self) -> Option<(CacheRange, Arc<RocksSnapshot>)> {
-        let core = self.engine.read().unwrap();
+        let core = self.engine.read();
         core.range_manager()
             .ranges_loading_snapshot
             .front()
@@ -257,25 +257,24 @@ impl BackgroundRunnerCore {
 
     fn on_snapshot_loaded(&mut self, range: CacheRange) -> engine_traits::Result<()> {
         fail::fail_point!("on_snapshot_loaded");
-        let has_cache_batch = {
-            let core = self.engine.read().unwrap();
-            core.has_cached_write_batch(&range)
-        };
-        if has_cache_batch {
-            let (cache_batch, skiplist_engine) = {
-                let mut core = self.engine.write().unwrap();
-                (
-                    core.take_cache_write_batch(&range).unwrap(),
-                    core.engine().clone(),
-                )
-            };
-            for (seq, entry) in cache_batch {
-                entry.write_to_memory(&skiplist_engine, seq)?;
+        {
+            let core = self.engine.upgradable_read();
+            if core.has_cached_write_batch(&range) {
+                let (cache_batch, skiplist_engine) = {
+                    let mut core = RwLockUpgradableReadGuard::upgrade(core);
+                    (
+                        core.take_cache_write_batch(&range).unwrap(),
+                        core.engine().clone(),
+                    )
+                };
+                for (seq, entry) in cache_batch {
+                    entry.write_to_memory(&skiplist_engine, seq)?;
+                }
             }
         }
         fail::fail_point!("on_snapshot_loaded_finish_before_status_change");
         {
-            let mut core = self.engine.write().unwrap();
+            let mut core = self.engine.write();
             let range_manager = core.mut_range_manager();
             assert_eq!(
                 range_manager.ranges_loading_snapshot.pop_front().unwrap().0,
@@ -300,7 +299,7 @@ impl Drop for BackgroundRunner {
 }
 
 impl BackgroundRunner {
-    pub fn new(engine: Arc<ShardedLock<RangeCacheMemoryEngineCore>>) -> Self {
+    pub fn new(engine: Arc<RwLock<RangeCacheMemoryEngineCore>>) -> Self {
         let range_load_worker = Worker::new("background-range-load-worker");
         let range_load_remote = range_load_worker.remote();
         Self {
@@ -327,7 +326,7 @@ impl Runnable for BackgroundRunner {
                 let mut core = self.core.clone();
                 let f = async move {
                     let skiplist_engine = {
-                        let core = core.engine.read().unwrap();
+                        let core = core.engine.read();
                         core.engine().clone()
                     };
                     while let Some((range, snap)) = core.get_range_to_load() {
@@ -647,7 +646,7 @@ pub mod tests {
         let range = CacheRange::new(b"".to_vec(), b"z".to_vec());
         engine.new_range(range.clone());
         let (write, default) = {
-            let mut core = engine.core().write().unwrap();
+            let mut core = engine.core().write();
             let skiplist_engine = core.engine();
             core.mut_range_manager().set_range_readable(&range, true);
             (
@@ -702,7 +701,7 @@ pub mod tests {
         let range = CacheRange::new(b"".to_vec(), b"z".to_vec());
         engine.new_range(range.clone());
         let (write, default) = {
-            let mut core = engine.core().write().unwrap();
+            let mut core = engine.core().write();
             let skiplist_engine = core.engine();
             core.mut_range_manager().set_range_readable(&range, true);
             (
@@ -750,7 +749,7 @@ pub mod tests {
     fn test_gc_worker() {
         let engine = RangeCacheMemoryEngine::new(Arc::default(), Duration::from_secs(1));
         let (write, default) = {
-            let mut core = engine.core.write().unwrap();
+            let mut core = engine.core.write();
             core.mut_range_manager()
                 .new_range(CacheRange::new(b"".to_vec(), b"z".to_vec()));
             let engine = core.engine();
@@ -825,11 +824,11 @@ pub mod tests {
         let r1 = CacheRange::new(DATA_MIN_KEY.to_vec(), k.clone());
         let r2 = CacheRange::new(k, DATA_MAX_KEY.to_vec());
         {
-            let mut core = engine.core.write().unwrap();
+            let mut core = engine.core.write();
             core.mut_range_manager().pending_ranges.push(r1.clone());
             core.mut_range_manager().pending_ranges.push(r2.clone());
         }
-        engine.handle_pending_load();
+        engine.handle_loading_range();
 
         // concurrent write to rocksdb, but the key will not be loaded in the memory
         // engine
@@ -844,7 +843,7 @@ pub mod tests {
             .unwrap();
 
         let (write, default) = {
-            let core = engine.core().write().unwrap();
+            let core = engine.core().write();
             let skiplist_engine = core.engine();
             (
                 skiplist_engine.cf_handle(CF_WRITE),

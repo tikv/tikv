@@ -1,7 +1,7 @@
 // Copyright 2023 TiKV Project Authors. Licensed under Apache-2.0.
 
 use engine_traits::{
-    is_data_cf, KvEngine, Mutable, Result, WriteBatch, WriteBatchExt, WriteOptions,
+    is_data_cf, CacheRange, KvEngine, Mutable, Result, WriteBatch, WriteBatchExt, WriteOptions,
 };
 use region_cache_memory_engine::{RangeCacheMemoryEngine, RangeCacheWriteBatch};
 
@@ -90,6 +90,10 @@ impl<EK: KvEngine> WriteBatch for HybridEngineWriteBatch<EK> {
     fn merge(&mut self, other: Self) -> Result<()> {
         self.disk_write_batch.merge(other.disk_write_batch)?;
         self.cache_write_batch.merge(other.cache_write_batch)
+    }
+
+    fn prepare_for_range(&mut self, range: &CacheRange) {
+        self.cache_write_batch.prepare_for_range(range);
     }
 }
 
