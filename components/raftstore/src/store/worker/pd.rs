@@ -7,7 +7,7 @@ use std::{
     io, mem,
     sync::{
         atomic::Ordering,
-        mpsc::{self, Receiver, Sender},
+        mpsc::{self, Receiver, Sender, SyncSender},
         Arc, Mutex,
     },
     thread::{Builder, JoinHandle},
@@ -583,8 +583,8 @@ where
     reporter: T,
     handle: Option<JoinHandle<()>>,
     timer: Option<Sender<bool>>,
-    read_stats_sender: Option<Sender<ReadStats>>,
-    cpu_stats_sender: Option<Sender<Arc<RawRecords>>>,
+    read_stats_sender: Option<SyncSender<ReadStats>>,
+    cpu_stats_sender: Option<SyncSender<Arc<RawRecords>>>,
     collect_store_infos_interval: Duration,
     load_base_split_check_interval: Duration,
     collect_tick_interval: Duration,
@@ -661,10 +661,10 @@ where
         let (timer_tx, timer_rx) = mpsc::channel();
         self.timer = Some(timer_tx);
 
-        let (read_stats_sender, read_stats_receiver) = mpsc::channel();
+        let (read_stats_sender, read_stats_receiver) = mpsc::sync_channel(128);
         self.read_stats_sender = Some(read_stats_sender);
 
-        let (cpu_stats_sender, cpu_stats_receiver) = mpsc::channel();
+        let (cpu_stats_sender, cpu_stats_receiver) = mpsc::sync_channel(128);
         self.cpu_stats_sender = Some(cpu_stats_sender);
 
         let reporter = self.reporter.clone();
@@ -801,7 +801,7 @@ where
     pub fn maybe_send_read_stats(&self, read_stats: ReadStats) {
         if let Some(sender) = &self.read_stats_sender {
             if sender.send(read_stats).is_err() {
-                warn!("send read_stats failed, are we shutting down?")
+                debug!("send read_stats failed, are we shutting down?")
             }
         }
     }
@@ -810,7 +810,7 @@ where
     pub fn maybe_send_cpu_stats(&self, cpu_stats: &Arc<RawRecords>) {
         if let Some(sender) = &self.cpu_stats_sender {
             if sender.send(cpu_stats.clone()).is_err() {
-                warn!("send region cpu info failed, are we shutting down?")
+                debug!("send region cpu info failed, are we shutting down?")
             }
         }
     }
