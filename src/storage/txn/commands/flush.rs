@@ -218,7 +218,7 @@ mod tests {
     use std::assert_matches::assert_matches;
 
     use concurrency_manager::ConcurrencyManager;
-    use kvproto::kvrpcpb::{AssertionLevel, Context, ExtraOp};
+    use kvproto::kvrpcpb::{Assertion, AssertionLevel, Context, ExtraOp};
     use tikv_kv::{Engine, Statistics};
     use txn_types::{Key, Mutation, TimeStamp};
 
@@ -250,16 +250,40 @@ mod tests {
         generation: u64,
         should_not_exist: bool,
     ) -> txn::Result<WriteResult> {
+        flush_put_impl_with_assertion(
+            engine,
+            key,
+            value,
+            pk,
+            start_ts,
+            generation,
+            should_not_exist,
+            Assertion::None,
+        )
+    }
+
+    pub fn flush_put_impl_with_assertion<E: Engine>(
+        engine: &mut E,
+        key: &[u8],
+        value: impl Into<Vec<u8>>,
+        pk: impl Into<Vec<u8>>,
+        start_ts: impl Into<TimeStamp>,
+        generation: u64,
+        should_not_exist: bool,
+        assertion: Assertion,
+    ) -> txn::Result<WriteResult> {
         let key = Key::from_raw(key);
         let start_ts = start_ts.into();
+        let mut m = if should_not_exist {
+            Mutation::make_insert(key, value.into())
+        } else {
+            Mutation::make_put(key, value.into())
+        };
+        m.set_assertion(assertion);
         let cmd = Flush::new(
             start_ts,
             pk.into(),
-            vec![if should_not_exist {
-                Mutation::make_insert(key, value.into())
-            } else {
-                Mutation::make_put(key, value.into())
-            }],
+            vec![m],
             generation,
             3000,
             AssertionLevel::Strict,
@@ -289,6 +313,27 @@ mod tests {
         generation: u64,
     ) {
         let res = flush_put_impl(engine, key, value, pk, start_ts, generation, false);
+        assert!(res.is_ok());
+        let res = res.unwrap();
+        let to_be_write = res.to_be_write;
+        if to_be_write.modifies.is_empty() {
+            return;
+        }
+        engine.write(&Context::new(), to_be_write).unwrap();
+    }
+
+    pub fn must_flush_put_with_assertion<E: Engine>(
+        engine: &mut E,
+        key: &[u8],
+        value: impl Into<Vec<u8>>,
+        pk: impl Into<Vec<u8>>,
+        start_ts: impl Into<TimeStamp>,
+        generation: u64,
+        assertion: Assertion,
+    ) {
+        let res = flush_put_impl_with_assertion(
+            engine, key, value, pk, start_ts, generation, false, assertion,
+        );
         assert!(res.is_ok());
         let res = res.unwrap();
         let to_be_write = res.to_be_write;
@@ -424,5 +469,23 @@ mod tests {
             must_flush_insert_err(&mut engine, k, *v, k, 1, 2),
             Error(box ErrorInner::Mvcc(MvccError(box MvccErrorInner::AlreadyExist { key }))) if key == k
         );
+        must_commit(&mut engine, k, 1, 2);
+        assert_matches!(
+            must_flush_insert_err(&mut engine, k, *v, k, 3, 1),
+            Error(box ErrorInner::Mvcc(MvccError(box MvccErrorInner::AlreadyExist { key }))) if key == k
+        );
+    }
+
+    #[test]
+    fn test_flush_overwrite_assertion() {
+        let mut engine = TestEngineBuilder::new().build().unwrap();
+        let k = b"key";
+        let v = b"value";
+        must_flush_put_with_assertion(&mut engine, k, *v, k, 1, 1, Assertion::NotExist);
+        must_locked(&mut engine, k, 1);
+        let v2 = b"value2";
+        must_flush_put_with_assertion(&mut engine, k, *v2, k, 1, 2, Assertion::Exist);
+        must_commit(&mut engine, k, 1, 2);
+        must_get(&mut engine, k, 3, v2);
     }
 }
