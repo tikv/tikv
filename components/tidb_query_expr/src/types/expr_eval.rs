@@ -75,7 +75,7 @@ impl<'a> RpnStackNodeVectorValue<'a> {
                             for index in logical_rows {
                                 let src_ref = TT::borrow_vector_value(physical_value);
                                 // TODO: This clone is not necessary.
-                                dest_column.push(src_ref.get_option_ref(*index).map(|x| x.into_owned_value()));
+                                dest_column.push(src_ref.get_option_ref(*index).unwrap());
                             }
                         },
                     }
