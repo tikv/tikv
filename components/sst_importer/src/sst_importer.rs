@@ -57,7 +57,7 @@ use crate::{
 };
 
 pub struct LoadedFile {
-    permit: OwnedAllocated,
+    _permit: OwnedAllocated,
     content: Arc<[u8]>,
 }
 
@@ -201,7 +201,7 @@ impl<E: KvEngine> SstImporter<E> {
             file_locks: Arc::new(DashMap::default()),
             cached_storage,
             _download_rt: download_rt,
-            memory_quota: Arc::new(MemoryQuota::new(memory_limit)),
+            memory_quota: Arc::new(MemoryQuota::new(memory_limit as _)),
         })
     }
 
@@ -622,7 +622,7 @@ impl<E: KvEngine> SstImporter<E> {
 
     fn request_memory(&self, meta: &KvMeta) -> Option<OwnedAllocated> {
         let size = meta.get_length();
-        let permit = OwnedAllocated::new(self.memory_quota.clone());
+        let mut permit = OwnedAllocated::new(self.memory_quota.clone());
         // If the memory is limited, roll backup the memory_quota and return false.
         if permit.alloc(size as _).is_err() {
             CACHE_EVENT.with_label_values(&["out-of-quota"]).inc();
@@ -685,7 +685,7 @@ impl<E: KvEngine> SstImporter<E> {
 
         Ok(LoadedFile {
             content: Arc::from(buff.into_boxed_slice()),
-            permit,
+            _permit: permit,
         })
     }
 
