@@ -6,7 +6,7 @@ use std::{
     collections::BinaryHeap,
     fmt,
     sync::{
-        atomic::{AtomicIsize, Ordering},
+        atomic::{AtomicBool, AtomicIsize, Ordering},
         Arc, Mutex as StdMutex,
     },
     time::Duration,
@@ -34,7 +34,7 @@ use pd_client::{Feature, PdClient};
 use raftstore::{
     coprocessor::{CmdBatch, ObserveId},
     router::CdcHandle,
-    store::fsm::{store::StoreRegionMeta, ChangeObserver},
+    store::fsm::store::StoreRegionMeta,
 };
 use resolved_ts::{resolve_by_raft, LeadershipResolver, Resolver};
 use security::SecurityManager;
@@ -205,9 +205,10 @@ pub enum Task {
         region_id: u64,
         downstream_id: DownstreamId,
         downstream_state: Arc<AtomicCell<DownstreamState>>,
+        sink: crate::channel::Sink,
+        build_resolver: Arc<AtomicBool>,
         // `incremental_scan_barrier` will be sent into `sink` to ensure all delta changes
         // are delivered to the downstream. And then incremental scan can start.
-        sink: crate::channel::Sink,
         incremental_scan_barrier: CdcEvent,
         cb: InitCallback,
     },
@@ -794,14 +795,13 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
             "observe_id" => ?observe_id,
             "downstream_id" => ?downstream_id);
 
+        let observed_range = downstream.observed_range.clone();
         let downstream_state = downstream.get_state();
-        let checkpoint_ts = request.checkpoint_ts;
         let sched = self.scheduler.clone();
 
-        let downstream_ = downstream.clone();
-        if let Err(err) = delegate.subscribe(downstream) {
+        if let Err((err, downstream)) = delegate.subscribe(downstream) {
             let error_event = err.into_error_event(region_id);
-            let _ = downstream_.sink_error_event(region_id, error_event);
+            let _ = downstream.sink_error_event(region_id, error_event);
             conn.unsubscribe(request_id, region_id);
             if is_new_delegate {
                 self.capture_regions.remove(&region_id);
@@ -821,41 +821,39 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
             );
         };
 
-        let change_cmd = ChangeObserver::from_cdc(region_id, delegate.handle.clone());
-        let observed_range = downstream_.observed_range;
-        let region_epoch = request.take_region_epoch();
         let mut init = Initializer {
+            region_id,
+            conn_id,
+            request_id,
+            checkpoint_ts: request.checkpoint_ts.into(),
+            region_epoch: request.take_region_epoch(),
+
+            build_resolver: Arc::new(Default::default()),
+            observed_range,
+            observe_handle: delegate.handle.clone(),
+            downstream_id,
+            downstream_state,
+
             tablet: self.tablets.get(region_id).map(|t| t.into_owned()),
             sched,
-            observed_range,
-            region_id,
-            region_epoch,
-            conn_id,
-            downstream_id,
             sink: conn.get_sink().clone(),
-            request_id: request.get_request_id(),
-            downstream_state,
+            concurrency_semaphore: self.scan_concurrency_semaphore.clone(),
+            memory_quota: self.sink_memory_quota.clone(),
+
             scan_speed_limiter: self.scan_speed_limiter.clone(),
             fetch_speed_limiter: self.fetch_speed_limiter.clone(),
             max_scan_batch_bytes: self.max_scan_batch_bytes,
             max_scan_batch_size: self.max_scan_batch_size,
-            observe_id,
-            checkpoint_ts: checkpoint_ts.into(),
-            build_resolver: is_new_delegate,
+
             ts_filter_ratio: self.config.incremental_scan_ts_filter_ratio,
             kv_api,
             filter_loop,
         };
 
         let cdc_handle = self.cdc_handle.clone();
-        let concurrency_semaphore = self.scan_concurrency_semaphore.clone();
-        let memory_quota = self.sink_memory_quota.clone();
         self.workers.spawn(async move {
             CDC_SCAN_TASKS.with_label_values(&["total"]).inc();
-            match init
-                .initialize(change_cmd, cdc_handle, concurrency_semaphore, memory_quota)
-                .await
-            {
+            match init.initialize(cdc_handle).await {
                 Ok(()) => {
                     CDC_SCAN_TASKS.with_label_values(&["finish"]).inc();
                 }
@@ -958,10 +956,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
         let mut advance_failed_stale = 0;
         for region_id in regions {
             if let Some(delegate) = self.capture_regions.get_mut(&region_id) {
-                let old_resolved_ts = delegate
-                    .resolver
-                    .as_ref()
-                    .map_or(TimeStamp::zero(), |r| r.resolved_ts());
+                let old_resolved_ts = delegate.resolved_ts();
                 if old_resolved_ts > min_ts {
                     advance_failed_stale += 1;
                 }
@@ -1290,9 +1285,14 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta + Send> Runnable
                 downstream_id,
                 downstream_state,
                 sink,
+                build_resolver,
                 incremental_scan_barrier,
                 cb,
             } => {
+                if let Some(delegate) = self.capture_regions.get_mut(&region_id) {
+                    delegate.maybe_init_lock_tracker();
+                    build_resolver.store(true, Ordering::Release);
+                }
                 if let Err(e) = sink.unbounded_send(incremental_scan_barrier, true) {
                     error!("cdc failed to schedule barrier for delta before delta scan";
                         "region_id" => region_id,

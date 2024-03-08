@@ -1,5 +1,11 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
-use std::{sync::Arc, time::Duration};
+use std::{
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
+    time::Duration,
+};
 
 use api_version::ApiV2;
 use crossbeam::atomic::AtomicCell;
@@ -16,7 +22,7 @@ use kvproto::{
     metapb::{Region, RegionEpoch},
 };
 use raftstore::{
-    coprocessor::ObserveId,
+    coprocessor::ObserveHandle,
     router::CdcHandle,
     store::{
         fsm::ChangeObserver,
@@ -26,12 +32,12 @@ use raftstore::{
 use resolved_ts::{Resolver, TsSource};
 use tikv::storage::{
     kv::Snapshot,
-    mvcc::{DeltaScanner, ScannerBuilder},
+    mvcc::{DeltaScanner, MvccReader, ScannerBuilder},
     raw::raw_mvcc::{RawMvccIterator, RawMvccSnapshot},
     txn::{TxnEntry, TxnEntryScanner},
     Statistics,
 };
-use tikv_kv::Iterator;
+use tikv_kv::{Iterator, ScanMode};
 use tikv_util::{
     box_err,
     codec::number,
@@ -44,7 +50,7 @@ use tikv_util::{
     Either,
 };
 use tokio::sync::Semaphore;
-use txn_types::{Key, KvPair, Lock, LockType, OldValue, TimeStamp};
+use txn_types::{Key, KvPair, LockType, OldValue, TimeStamp};
 
 use crate::{
     channel::CdcEvent,
@@ -77,19 +83,29 @@ pub(crate) enum Scanner<S: Snapshot> {
 }
 
 pub(crate) struct Initializer<E> {
-    pub(crate) tablet: Option<E>,
-    pub(crate) sched: Scheduler<Task>,
-    pub(crate) sink: crate::channel::Sink,
-
-    pub(crate) observed_range: ObservedRange,
     pub(crate) region_id: u64,
-    pub(crate) region_epoch: RegionEpoch,
-    pub(crate) observe_id: ObserveId,
-    pub(crate) downstream_id: DownstreamId,
-    pub(crate) downstream_state: Arc<AtomicCell<DownstreamState>>,
     pub(crate) conn_id: ConnId,
     pub(crate) request_id: u64,
     pub(crate) checkpoint_ts: TimeStamp,
+    pub(crate) region_epoch: RegionEpoch,
+
+    // `build_resolver` can only be determined after snapshot is acquired.
+    // If a region is subscribed more than one times, the downstream with the
+    // earliest snapshot will build the lock resolver.
+    //
+    // `build_resolver` won't be changed after set in `InitDownstream`.
+    pub(crate) build_resolver: Arc<AtomicBool>,
+
+    pub(crate) observed_range: ObservedRange,
+    pub(crate) observe_handle: ObserveHandle,
+    pub(crate) downstream_id: DownstreamId,
+    pub(crate) downstream_state: Arc<AtomicCell<DownstreamState>>,
+
+    pub(crate) tablet: Option<E>,
+    pub(crate) sched: Scheduler<Task>,
+    pub(crate) sink: crate::channel::Sink,
+    pub(crate) concurrency_semaphore: Arc<Semaphore>,
+    pub(crate) memory_quota: Arc<MemoryQuota>,
 
     pub(crate) scan_speed_limiter: Limiter,
     pub(crate) fetch_speed_limiter: Limiter,
@@ -97,23 +113,18 @@ pub(crate) struct Initializer<E> {
     pub(crate) max_scan_batch_bytes: usize,
     pub(crate) max_scan_batch_size: usize,
 
-    pub(crate) build_resolver: bool,
     pub(crate) ts_filter_ratio: f64,
-
     pub(crate) kv_api: ChangeDataRequestKvApi,
-
     pub(crate) filter_loop: bool,
 }
 
 impl<E: KvEngine> Initializer<E> {
     pub(crate) async fn initialize<T: 'static + CdcHandle<E>>(
         &mut self,
-        change_observer: ChangeObserver,
         cdc_handle: T,
-        concurrency_semaphore: Arc<Semaphore>,
-        memory_quota: Arc<MemoryQuota>,
     ) -> Result<()> {
         fail_point!("cdc_before_initialize");
+        let concurrency_semaphore = self.concurrency_semaphore.clone();
         let _permit = concurrency_semaphore.acquire().await;
 
         // To avoid holding too many snapshots and holding them too long,
@@ -125,19 +136,24 @@ impl<E: KvEngine> Initializer<E> {
         let downstream_state = self.downstream_state.clone();
         let (cb, fut) = tikv_util::future::paired_future_callback();
         let sink = self.sink.clone();
+        let build_resolver = self.build_resolver.clone();
         let (incremental_scan_barrier_cb, incremental_scan_barrier_fut) =
             tikv_util::future::paired_future_callback();
         let barrier = CdcEvent::Barrier(Some(incremental_scan_barrier_cb));
         if let Err(e) = cdc_handle.capture_change(
             self.region_id,
             region_epoch,
-            change_observer,
+            ChangeObserver::from_cdc(self.region_id, self.observe_handle.clone()),
+            // NOTE: raftstore handles requests in serial for every region.
+            // That's why we can determine whehter to build a lock resolver or not
+            // without check and compare snapshot sequence number.
             Callback::read(Box::new(move |resp| {
                 if let Err(e) = sched.schedule(Task::InitDownstream {
                     region_id,
                     downstream_id,
                     downstream_state,
                     sink,
+                    build_resolver,
                     incremental_scan_barrier: barrier,
                     cb: Box::new(move || cb(resp)),
                 }) {
@@ -158,20 +174,22 @@ impl<E: KvEngine> Initializer<E> {
         }
 
         match fut.await {
-            Ok(resp) => self.on_change_cmd_response(resp, memory_quota).await,
+            Ok(resp) => self.on_change_cmd_response(resp).await,
             Err(e) => Err(Error::Other(box_err!(e))),
         }
     }
 
-    pub(crate) async fn on_change_cmd_response(
+    pub(crate) async fn on_change_cmd_response<S>(
         &mut self,
-        mut resp: ReadResponse<impl EngineSnapshot>,
-        memory_quota: Arc<MemoryQuota>,
-    ) -> Result<()> {
+        mut resp: ReadResponse<S>,
+    ) -> Result<()>
+    where
+        S: EngineSnapshot + 'static,
+    {
         if let Some(region_snapshot) = resp.snapshot {
             let region = region_snapshot.get_region().clone();
             assert_eq!(self.region_id, region.get_id());
-            self.async_incremental_scan(region_snapshot, region, memory_quota)
+            self.async_incremental_scan(region_snapshot, region)
                 .await
                 .map(|_| ())
         } else {
@@ -189,22 +207,25 @@ impl<E: KvEngine> Initializer<E> {
         &mut self,
         snap: S,
         region: Region,
-        memory_quota: Arc<MemoryQuota>,
-    ) -> Result<ScanStat> {
+    ) -> Result<ScanStat>
+    where
+        S: Snapshot + 'static,
+    {
         CDC_SCAN_TASKS.with_label_values(&["ongoing"]).inc();
         defer!(CDC_SCAN_TASKS.with_label_values(&["ongoing"]).dec());
 
-        let region_id = region.get_id();
+        let region_id = self.region_id;
         let downstream_id = self.downstream_id;
-        let observe_id = self.observe_id;
+        let observe_id = self.observe_handle.id;
         let conn_id = self.conn_id;
-        let kv_api = self.kv_api;
         let on_cancel = || -> Result<ScanStat> {
-            info!("cdc async incremental scan canceled";
+            info!(
+                "cdc async incremental scan canceled";
                 "region_id" => region_id,
                 "downstream_id" => ?downstream_id,
                 "observe_id" => ?observe_id,
-                "conn_id" => ?conn_id);
+                "conn_id" =>?conn_id,
+            );
             Err(box_err!("scan canceled"))
         };
 
@@ -232,19 +253,28 @@ impl<E: KvEngine> Initializer<E> {
         debug!("cdc async incremental scan";
             "region_id" => region_id,
             "downstream_id" => ?downstream_id,
-            "observe_id" => ?self.observe_id,
+            "observe_id" => ?observe_id,
+            "conn_id" => ?conn_id,
             "all_key_covered" => ?self.observed_range.all_key_covered,
             "start_key" => log_wrappers::Value::key(start_key.as_encoded()),
             "end_key" => log_wrappers::Value::key(end_key.as_encoded()));
 
-        let mut resolver = if self.build_resolver {
-            Some(Resolver::new(region_id, memory_quota))
-        } else {
-            None
+        if self.build_resolver.load(Ordering::Acquire) {
+            let mut reader = MvccReader::new(snap.clone(), Some(ScanMode::Forward), false);
+            let (key_locks, has_remain) =
+                reader.scan_locks_from_storage(Some(&start_key), Some(&end_key), |_, _| true, 0)?;
+            assert!(!has_remain);
+            let mut resolver = Resolver::new(region_id, self.memory_quota.clone());
+            for (key, lock) in key_locks {
+                if matches!(lock.lock_type, LockType::Put | LockType::Delete) {
+                    resolver.track_lock(lock.ts, key.into_raw().unwrap(), None)?;
+                }
+            }
+            self.finish_building_resolver(resolver, region);
         };
 
         let (mut hint_min_ts, mut old_value_cursors) = (None, None);
-        let mut scanner = if kv_api == ChangeDataRequestKvApi::TiDb {
+        let mut scanner = if self.kv_api == ChangeDataRequestKvApi::TiDb {
             if self.ts_filter_is_helpful(&start_key, &end_key) {
                 hint_min_ts = Some(self.checkpoint_ts);
                 old_value_cursors = Some(OldValueCursors::new(&snap));
@@ -298,9 +328,8 @@ impl<E: KvEngine> Initializer<E> {
                 return on_cancel();
             }
             let cursors = old_value_cursors.as_mut();
-            let resolver = resolver.as_mut();
             let entries = self
-                .scan_batch(&mut scanner, cursors, resolver, &mut scan_stat)
+                .scan_batch(&mut scanner, cursors, &mut scan_stat)
                 .await?;
             if let Some(None) = entries.last() {
                 // If the last element is None, it means scanning is finished.
@@ -319,15 +348,12 @@ impl<E: KvEngine> Initializer<E> {
         }
         let takes = start.saturating_elapsed();
         info!("cdc async incremental scan finished";
-            "region_id" => region.get_id(),
-            "conn_id" => ?self.conn_id,
-            "downstream_id" => ?self.downstream_id,
+            "region_id" => region_id,
+            "downstream_id" => ?downstream_id,
+            "observe_id" => ?observe_id,
+            "conn_id" => ?conn_id,
             "takes" => ?takes,
         );
-
-        if let Some(resolver) = resolver {
-            self.finish_building_resolver(resolver, region);
-        }
 
         CDC_SCAN_DURATION_HISTOGRAM.observe(takes.as_secs_f64());
         CDC_SCAN_SINK_DURATION_HISTOGRAM.observe(duration_to_sec(sink_time));
@@ -418,7 +444,6 @@ impl<E: KvEngine> Initializer<E> {
         &self,
         scanner: &mut Scanner<S>,
         old_value_cursors: Option<&mut OldValueCursors<S>>,
-        resolver: Option<&mut Resolver>,
         scan_stat: &mut ScanStat,
     ) -> Result<Vec<Option<KvEntry>>> {
         let mut entries = Vec::with_capacity(self.max_scan_batch_size);
@@ -438,22 +463,6 @@ impl<E: KvEngine> Initializer<E> {
         CDC_SCAN_BYTES.inc_by(delta.emit as _);
         self.fetch_speed_limiter.consume(delta.emit as _).await;
 
-        if let Some(resolver) = resolver {
-            // Track the locks.
-            for entry in entries.iter().flatten() {
-                if let KvEntry::TxnEntry(TxnEntry::Prewrite { ref lock, .. }) = entry {
-                    let (encoded_key, value) = lock;
-                    let key = Key::from_encoded_slice(encoded_key).into_raw().unwrap();
-                    let lock = Lock::parse(value)?;
-                    match lock.lock_type {
-                        LockType::Put | LockType::Delete => {
-                            resolver.track_lock(lock.ts, key, None)?;
-                        }
-                        _ => (),
-                    };
-                }
-            }
-        }
         Ok(entries)
     }
 
@@ -487,10 +496,10 @@ impl<E: KvEngine> Initializer<E> {
     }
 
     fn finish_building_resolver(&self, mut resolver: Resolver, region: Region) {
-        let observe_id = self.observe_id;
+        let observe_id = self.observe_handle.id;
         let rts = resolver.resolve(TimeStamp::zero(), None, TsSource::Cdc);
         info!(
-            "cdc resolver initialized and schedule resolver ready";
+            "cdc has scanned all incremental scan locks, builds resolver";
             "region_id" => region.get_id(),
             "conn_id" => ?self.conn_id,
             "downstream_id" => ?self.downstream_id,
@@ -511,7 +520,8 @@ impl<E: KvEngine> Initializer<E> {
 
     // Deregister downstream when the Initializer fails to initialize.
     pub(crate) fn deregister_downstream(&self, err: Error) {
-        let deregister = if self.build_resolver || err.has_region_error() {
+        let build_resolver = self.build_resolver.load(Ordering::Acquire);
+        let deregister = if build_resolver || err.has_region_error() {
             // Deregister delegate on the conditions,
             // * It fails to build a resolver. A delegate requires a resolver to advance
             //   resolved ts.
@@ -519,7 +529,7 @@ impl<E: KvEngine> Initializer<E> {
             //   error and can not serve.
             Deregister::Delegate {
                 region_id: self.region_id,
-                observe_id: self.observe_id,
+                observe_id: self.observe_handle.id,
                 err,
             }
         } else {
