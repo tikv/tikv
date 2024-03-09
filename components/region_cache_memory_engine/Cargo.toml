@@ -17,6 +17,7 @@ crossbeam = "0.8"
 futures = { version = "0.3", features = ["compat"] }
 tikv_util = { workspace = true }
 txn_types = { workspace = true }
+kvproto = { workspace = true }
 log_wrappers = { workspace = true }
 pd_client = { workspace = true }
 dashmap = "5.1"

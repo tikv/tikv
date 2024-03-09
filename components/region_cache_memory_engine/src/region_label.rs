@@ -7,6 +7,7 @@ use futures::{
     compat::Future01CompatExt,
     stream::{self, StreamExt},
 };
+use kvproto::meta_storagepb::EventEventType;
 use pd_client::{
     meta_storage::{Checked, Get, MetaStorageClient, Sourced, Watch},
     Error as PdError, PdClient, RpcClient, REGION_LABEL_PATH_PREFIX,
@@ -99,6 +100,15 @@ impl RegionLabelService {
         )
     }
 
+    fn on_label_rule(&mut self, label_rule: &LabelRule) {
+        let should_add_label = self
+            .rule_filter_fn
+            .as_ref()
+            .map_or_else(|| true, |r_f_fn| r_f_fn(label_rule));
+        if should_add_label {
+            self.manager.add_region_label(label_rule.clone())
+        }
+    }
     pub async fn watch_region_labels(&mut self) {
         self.reload_all_region_labels().await;
         'outer: loop {
@@ -114,7 +124,23 @@ impl RegionLabelService {
             info!("pd meta client creating watch stream"; "path" => region_label_path, "rev" => %self.revision);
             while let Some(grpc_response) = stream.next().await {
                 match grpc_response {
-                    Ok(_) => todo!(),
+                    Ok(resp) => {
+                        self.revision = resp.get_header().get_revision();
+                        let events = resp.get_events();
+                        events.iter().for_each(|event| match event.get_type() {
+                            EventEventType::Put => {
+                                match serde_json::from_slice::<LabelRule>(
+                                    event.get_kv().get_value(),
+                                ) {
+                                    Ok(label_rule) => self.on_label_rule(&label_rule),
+                                    Err(e) => error!("parse put region label event failed"; "name" => ?event.get_kv().get_key(), "err" => ?e),
+                                }
+                            }
+                            EventEventType::Delete => {
+                                todo!()
+                            }
+                        });
+                    }
                     Err(PdError::DataCompacted(msg)) => {
                         error!("required revision has been compacted"; "err" => ?msg);
                         self.reload_all_region_labels().await;
@@ -147,15 +173,7 @@ impl RegionLabelService {
                     let kvs = resp.take_kvs().into_iter().collect::<Vec<_>>();
                     for g in kvs.iter() {
                         match serde_json::from_slice::<LabelRule>(g.get_value()) {
-                            Ok(label_rule) => {
-                                let should_add_label = self
-                                    .rule_filter_fn
-                                    .as_ref()
-                                    .map_or_else(|| true, |r_f_fn| r_f_fn(&label_rule));
-                                if should_add_label {
-                                    self.manager.add_region_label(label_rule)
-                                }
-                            }
+                            Ok(label_rule) => self.on_label_rule(&label_rule),
 
                             Err(e) => {
                                 error!("parse label rule failed"; "name" => ?g.get_key(), "err" => ?e);
