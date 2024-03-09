@@ -3,13 +3,16 @@
 use std::{sync::Arc, time::Duration};
 
 use dashmap::DashMap;
-use futures::compat::Future01CompatExt;
+use futures::{
+    compat::Future01CompatExt,
+    stream::{self, StreamExt},
+};
 use pd_client::{
-    meta_storage::{Checked, Get, MetaStorageClient, Sourced},
-    PdClient, RpcClient, REGION_LABEL_PATH_PREFIX,
+    meta_storage::{Checked, Get, MetaStorageClient, Sourced, Watch},
+    Error as PdError, PdClient, RpcClient, REGION_LABEL_PATH_PREFIX,
 };
 use serde::{Deserialize, Serialize};
-use tikv_util::{error, timer::GLOBAL_TIMER_HANDLE};
+use tikv_util::{error, info, timer::GLOBAL_TIMER_HANDLE};
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
 pub struct RegionLabel {
@@ -94,6 +97,42 @@ impl RegionLabelService {
             "/pd/{}/{}{}",
             cluster_id, REGION_LABEL_PATH_PREFIX, path_suffix
         )
+    }
+
+    pub async fn watch_region_labels(&mut self) {
+        self.reload_all_region_labels().await;
+        'outer: loop {
+            let region_label_path = self.region_label_path();
+            let (mut stream, cancel) = stream::abortable(
+                self.meta_client.watch(
+                    Watch::of(region_label_path.clone())
+                        .prefixed()
+                        .from_rev(self.revision)
+                        .with_prev_kv(),
+                ),
+            );
+            info!("pd meta client creating watch stream"; "path" => region_label_path, "rev" => %self.revision);
+            while let Some(grpc_response) = stream.next().await {
+                match grpc_response {
+                    Ok(_) => todo!(),
+                    Err(PdError::DataCompacted(msg)) => {
+                        error!("required revision has been compacted"; "err" => ?msg);
+                        self.reload_all_region_labels().await;
+                        cancel.abort();
+                        continue 'outer;
+                    }
+                    Err(err) => {
+                        error!("failed to watch region labels"; "err" => ?err);
+                        let _ = GLOBAL_TIMER_HANDLE
+                            .delay(std::time::Instant::now() + RETRY_INTERVAL)
+                            .compat()
+                            .await;
+                        cancel.abort();
+                        continue 'outer;
+                    }
+                }
+            }
+        }
     }
 
     async fn reload_all_region_labels(&mut self) {
