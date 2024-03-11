@@ -983,6 +983,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
         let pool_size = storage.get_normal_pool_size();
         let batch_builder = BatcherBuilder::new(self.enable_req_batch, pool_size);
         let resource_manager = self.resource_manager.clone();
+        let cluster_id = self.cluster_id;
         let mut health_feedback_attacher = HealthFeedbackAttacher::new(
             self.store_id,
             self.health_controller.clone(),
@@ -996,17 +997,26 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
             let mut batcher = batch_builder.build(queue, request_ids.len());
             GRPC_REQ_BATCH_COMMANDS_SIZE.observe(requests.len() as f64);
             for (id, req) in request_ids.into_iter().zip(requests) {
-                handle_batch_commands_request(
-                    &mut batcher,
-                    &storage,
-                    &copr,
-                    &copr_v2,
-                    &peer,
-                    id,
-                    req,
-                    &tx,
-                    &resource_manager,
-                );
+                if let Err(server_err @ Error::ClusterIDMisMatch { .. }) =
+                    handle_batch_commands_request(
+                        cluster_id,
+                        &mut batcher,
+                        &storage,
+                        &copr,
+                        &copr_v2,
+                        &peer,
+                        id,
+                        req,
+                        &tx,
+                        &resource_manager,
+                    )
+                {
+                    let e = RpcStatus::with_message(
+                        RpcStatusCode::INVALID_ARGUMENT,
+                        server_err.to_string(),
+                    );
+                    return future::err(GrpcError::RpcFailure(e));
+                }
                 if let Some(batch) = batcher.as_mut() {
                     batch.maybe_commit(&storage, &tx);
                 }
@@ -1033,15 +1043,24 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
             // TODO: per thread load is more reasonable for batching.
             r.set_transport_layer_load(grpc_thread_load.total_load() as u64);
             health_feedback_attacher.attach_if_needed(&mut r);
-            GrpcResult::<(BatchCommandsResponse, WriteFlags)>::Ok((
-                r,
-                WriteFlags::default().buffer_hint(false),
-            ))
+            if let Some(err @ Error::ClusterIDMisMatch { .. }) = item.server_err {
+                let e = RpcStatus::with_message(RpcStatusCode::INVALID_ARGUMENT, err.to_string());
+                GrpcResult::<(BatchCommandsResponse, WriteFlags)>::Err(GrpcError::RpcFailure(e))
+            } else {
+                GrpcResult::<(BatchCommandsResponse, WriteFlags)>::Ok((
+                    r,
+                    WriteFlags::default().buffer_hint(false),
+                ))
+            }
         });
 
         let send_task = async move {
-            sink.send_all(&mut response_retriever).await?;
-            sink.close().await?;
+            if let Err(e) = sink.send_all(&mut response_retriever).await {
+                let e = RpcStatus::with_message(RpcStatusCode::INVALID_ARGUMENT, e.to_string());
+                sink.fail(e).await?;
+            } else {
+                sink.close().await?;
+            }
             Ok(())
         }
         .map_err(|e: grpcio::Error| {
@@ -1200,21 +1219,34 @@ fn response_batch_commands_request<F, T>(
     resource_priority: ResourcePriority,
 ) where
     MemoryTraceGuard<batch_commands_response::Response>: From<T>,
-    F: Future<Output = Result<T, ()>> + Send + 'static,
+    F: Future<Output = Result<T, Error>> + Send + 'static,
+    T: Default,
 {
     let task = async move {
-        if let Ok(resp) = resp.await {
-            let measure = GrpcRequestDuration::new(begin, label, source, resource_priority);
-            let task = MeasuredSingleResponse::new(id, resp, measure);
-            if let Err(e) = tx.send_with(task, WakePolicy::Immediately) {
-                error!("KvService response batch commands fail"; "err" => ?e);
+        let measure = GrpcRequestDuration::new(begin, label, source, resource_priority);
+        match resp.await {
+            Ok(resp) => {
+                let task = MeasuredSingleResponse::new(id, resp, measure, None);
+                if let Err(e) = tx.send_with(task, WakePolicy::Immediately) {
+                    error!("KvService response batch commands fail"; "err" => ?e);
+                }
             }
-        }
+            Err(server_err @ Error::ClusterIDMisMatch { .. }) => {
+                let task = MeasuredSingleResponse::new(id, T::default(), measure, Some(server_err));
+                if let Err(e) = tx.send_with(task, WakePolicy::Immediately) {
+                    error!("KvService response batch commands fail"; "err" => ?e);
+                }
+            }
+            _ => {}
+        };
     };
     poll_future_notify(task);
 }
 
+// If error is returned, there could be some unexpected errors like cluster id
+// mismatch.
 fn handle_batch_commands_request<E: Engine, L: LockManager, F: KvFormat>(
+    cluster_id: u64,
     batcher: &mut Option<ReqBatcher>,
     storage: &Storage<E, L, F>,
     copr: &Endpoint<E>,
@@ -1224,7 +1256,23 @@ fn handle_batch_commands_request<E: Engine, L: LockManager, F: KvFormat>(
     req: batch_commands_request::Request,
     tx: &Sender<MeasuredSingleResponse>,
     resource_manager: &Option<Arc<ResourceGroupManager>>,
-) {
+) -> Result<(), Error> {
+    macro_rules! handle_cluster_id_mismatch {
+        ($cluster_id:expr, $req:expr) => {
+            let req_cluster_id = $req.get_context().get_cluster_id();
+            if req_cluster_id > 0 && req_cluster_id != $cluster_id {
+                // Reject the request if the cluster IDs do not match.
+                warn!("unexpected request with different cluster id is received in batch command request"; "req" => ?&$req);
+                let begin_instant = Instant::now();
+                let fut_resp = future::err::<batch_commands_response::Response, Error>(
+                    Error::ClusterIDMisMatch{request_id: req_cluster_id, cluster_id: $cluster_id});
+                response_batch_commands_request(id, fut_resp, tx.clone(), begin_instant, GrpcTypeKind::invalid,
+                String::default(), ResourcePriority::unknown);
+                return Err(Error::ClusterIDMisMatch{request_id: req_cluster_id, cluster_id: $cluster_id});
+            }
+        };
+    }
+
     // To simplify code and make the logic more clear.
     macro_rules! oneof {
         ($p:path) => {
@@ -1245,6 +1293,7 @@ fn handle_batch_commands_request<E: Engine, L: LockManager, F: KvFormat>(
                     response_batch_commands_request(id, resp, tx.clone(), begin_instant, GrpcTypeKind::invalid, String::default(), ResourcePriority::unknown);
                 },
                 Some(batch_commands_request::request::Cmd::Get(req)) => {
+                    handle_cluster_id_mismatch!(cluster_id, req);
                     let resource_control_ctx = req.get_context().get_resource_control_context();
                     let mut resource_group_priority = ResourcePriority::unknown;
                     if let Some(resource_manager) = resource_manager {
@@ -1264,11 +1313,12 @@ fn handle_batch_commands_request<E: Engine, L: LockManager, F: KvFormat>(
                        let source = req.get_context().get_request_source().to_owned();
                        let resp = future_get(storage, req)
                             .map_ok(oneof!(batch_commands_response::response::Cmd::Get))
-                            .map_err(|_| GRPC_MSG_FAIL_COUNTER.kv_get.inc());
+                            .map_err(|e| {GRPC_MSG_FAIL_COUNTER.kv_get.inc(); e});
                         response_batch_commands_request(id, resp, tx.clone(), begin_instant, GrpcTypeKind::kv_get, source,resource_group_priority);
                     }
                 },
                 Some(batch_commands_request::request::Cmd::RawGet(req)) => {
+                    handle_cluster_id_mismatch!(cluster_id, req);
                     let resource_control_ctx = req.get_context().get_resource_control_context();
                     let mut resource_group_priority = ResourcePriority::unknown;
                     if let Some(resource_manager) = resource_manager {
@@ -1287,11 +1337,12 @@ fn handle_batch_commands_request<E: Engine, L: LockManager, F: KvFormat>(
                        let source = req.get_context().get_request_source().to_owned();
                        let resp = future_raw_get(storage, req)
                             .map_ok(oneof!(batch_commands_response::response::Cmd::RawGet))
-                            .map_err(|_| GRPC_MSG_FAIL_COUNTER.raw_get.inc());
+                            .map_err(|e| {GRPC_MSG_FAIL_COUNTER.raw_get.inc(); e});
                         response_batch_commands_request(id, resp, tx.clone(), begin_instant, GrpcTypeKind::raw_get, source,resource_group_priority);
                     }
                 },
                 Some(batch_commands_request::request::Cmd::Coprocessor(req)) => {
+                    handle_cluster_id_mismatch!(cluster_id, req);
                     let resource_control_ctx = req.get_context().get_resource_control_context();
                     let mut resource_group_priority = ResourcePriority::unknown;
                     if let Some(resource_manager) = resource_manager {
@@ -1307,7 +1358,7 @@ fn handle_batch_commands_request<E: Engine, L: LockManager, F: KvFormat>(
                         .map_ok(|resp| {
                             resp.map(oneof!(batch_commands_response::response::Cmd::Coprocessor))
                         })
-                        .map_err(|_| GRPC_MSG_FAIL_COUNTER.coprocessor.inc());
+                        .map_err(|e| {GRPC_MSG_FAIL_COUNTER.coprocessor.inc(); e});
                     response_batch_commands_request(id, resp, tx.clone(), begin_instant, GrpcTypeKind::coprocessor, source,resource_group_priority);
                 },
                 Some(batch_commands_request::request::Cmd::Empty(req)) => {
@@ -1317,7 +1368,7 @@ fn handle_batch_commands_request<E: Engine, L: LockManager, F: KvFormat>(
                             cmd: Some(batch_commands_response::response::Cmd::Empty(resp)),
                             ..Default::default()
                         })
-                        .map_err(|_| GRPC_MSG_FAIL_COUNTER.invalid.inc());
+                        .map_err(|e| {GRPC_MSG_FAIL_COUNTER.invalid.inc(); e});
                     response_batch_commands_request(
                         id,
                         resp,
@@ -1329,6 +1380,7 @@ fn handle_batch_commands_request<E: Engine, L: LockManager, F: KvFormat>(
                     );
                 }
                 $(Some(batch_commands_request::request::Cmd::$cmd(req)) => {
+                    handle_cluster_id_mismatch!(cluster_id, req);
                     let resource_control_ctx = req.get_context().get_resource_control_context();
                     let mut resource_group_priority = ResourcePriority::unknown;
                     if let Some(resource_manager) = resource_manager {
@@ -1342,7 +1394,7 @@ fn handle_batch_commands_request<E: Engine, L: LockManager, F: KvFormat>(
                     let source = req.get_context().get_request_source().to_owned();
                     let resp = $future_fn($($arg,)* req)
                         .map_ok(oneof!(batch_commands_response::response::Cmd::$cmd))
-                        .map_err(|_| GRPC_MSG_FAIL_COUNTER.$metric_name.inc());
+                        .map_err(|e| {GRPC_MSG_FAIL_COUNTER.$metric_name.inc(); e});
                     response_batch_commands_request(id, resp, tx.clone(), begin_instant, GrpcTypeKind::$metric_name, source,resource_group_priority);
                 })*
                 Some(batch_commands_request::request::Cmd::Import(_)) => unimplemented!(),
@@ -1380,6 +1432,8 @@ fn handle_batch_commands_request<E: Engine, L: LockManager, F: KvFormat>(
         PessimisticLock, future_acquire_pessimistic_lock(storage), kv_pessimistic_lock;
         PessimisticRollback, future_pessimistic_rollback(storage), kv_pessimistic_rollback;
     }
+
+    Ok(())
 }
 
 fn handle_measures_for_batch_commands(measures: &mut MeasuredBatchResponse) {
@@ -2428,14 +2482,20 @@ pub struct MeasuredSingleResponse {
     pub id: u64,
     pub resp: MemoryTraceGuard<batch_commands_response::Response>,
     pub measure: GrpcRequestDuration,
+    pub server_err: Option<Error>,
 }
 impl MeasuredSingleResponse {
-    pub fn new<T>(id: u64, resp: T, measure: GrpcRequestDuration) -> Self
+    pub fn new<T>(id: u64, resp: T, measure: GrpcRequestDuration, server_err: Option<Error>) -> Self
     where
         MemoryTraceGuard<batch_commands_response::Response>: From<T>,
     {
         let resp = resp.into();
-        MeasuredSingleResponse { id, resp, measure }
+        MeasuredSingleResponse {
+            id,
+            resp,
+            measure,
+            server_err,
+        }
     }
 }
 
@@ -2443,12 +2503,14 @@ impl MeasuredSingleResponse {
 pub struct MeasuredBatchResponse {
     pub batch_resp: BatchCommandsResponse,
     pub measures: Vec<GrpcRequestDuration>,
+    pub server_err: Option<Error>,
 }
 impl Default for MeasuredBatchResponse {
     fn default() -> Self {
         MeasuredBatchResponse {
             batch_resp: Default::default(),
             measures: Vec::with_capacity(GRPC_MSG_MAX_BATCH_SIZE),
+            server_err: None,
         }
     }
 }
@@ -2457,6 +2519,9 @@ fn collect_batch_resp(v: &mut MeasuredBatchResponse, mut e: MeasuredSingleRespon
     v.batch_resp.mut_request_ids().push(e.id);
     v.batch_resp.mut_responses().push(e.resp.consume());
     v.measures.push(e.measure);
+    if let Some(server_err) = e.server_err.take() {
+        v.server_err = Some(server_err);
+    }
 }
 
 fn needs_reject_raft_append(reject_messages_on_memory_ratio: f64) -> bool {
