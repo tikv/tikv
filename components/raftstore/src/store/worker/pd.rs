@@ -26,7 +26,7 @@ use health_controller::{
     HealthController,
 };
 use kvproto::{
-    kvrpcpb::DiskFullOpt,
+    kvrpcpb::{DiskFullOpt, KeyRange},
     metapb, pdpb,
     raft_cmdpb::{
         AdminCmdType, AdminRequest, BatchSwitchWitnessRequest, ChangePeerRequest,
@@ -663,6 +663,8 @@ where
                 let mut collect_store_infos_thread_stats = ThreadInfoStatistics::new();
                 let mut load_base_split_thread_stats = ThreadInfoStatistics::new();
                 let mut region_cpu_records_collector = None;
+                let mut region_cpu_map = HashMap::default();
+                let mut hottest_key_range_cpu_time_map = HashMap::default();
                 // Register the region CPU records collector.
                 if auto_split_controller
                     .cfg
@@ -690,6 +692,8 @@ where
                             &reporter,
                             &collector_reg_handle,
                             &mut region_cpu_records_collector,
+                            &mut region_cpu_map,
+                            &mut hottest_key_range_cpu_time_map,
                         );
                     }
                     if is_enable_tick(timer_cnt, update_latency_stats_interval) {
@@ -720,6 +724,8 @@ where
         reporter: &T,
         collector_reg_handle: &CollectorRegHandle,
         region_cpu_records_collector: &mut Option<CollectorGuard>,
+        region_cpu_map: &mut HashMap<u64, (f64, Option<KeyRange>)>,
+        hottest_key_range_cpu_time_map: &mut HashMap<u64, u32>,
     ) {
         let start_time = TiInstant::now();
         match auto_split_controller.refresh_and_check_cfg() {
@@ -744,8 +750,13 @@ where
             cpu_stats_vec.push(cpu_stats);
         }
         thread_stats.record();
-        let (top_qps, split_infos) =
-            auto_split_controller.flush(read_stats_vec, cpu_stats_vec, thread_stats);
+        let (top_qps, split_infos) = auto_split_controller.flush(
+            read_stats_vec,
+            cpu_stats_vec,
+            thread_stats,
+            region_cpu_map,
+            hottest_key_range_cpu_time_map,
+        );
         auto_split_controller.clear();
         reporter.auto_split(split_infos);
         for i in 0..TOP_N {
