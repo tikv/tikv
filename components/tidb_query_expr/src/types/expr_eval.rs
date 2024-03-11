@@ -57,7 +57,6 @@ impl<'a> RpnStackNodeVectorValue<'a> {
             } => {
                 // TODO: extract a common util function to do this
                 let mut result_vec = physical_value.clone_empty(logical_rows.len());
-                let result_vec_ref = result_vec.borrow_mut();
                 match_template::match_template! {
                     TT = [
                         Int,
