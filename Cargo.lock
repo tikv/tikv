@@ -2838,7 +2838,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#881fcbf5bc41a492d77db7a27f07ffe5088df6dc"
+source = "git+https://github.com/pingcap/kvproto.git#929ab83f9754d96b3366adec9004ccf21e9d7824"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
@@ -3150,14 +3150,13 @@ dependencies = [
 
 [[package]]
 name = "mio"
-version = "0.8.5"
+version = "0.8.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e5d732bc30207a6423068df043e3d02e0735b155ad7ce1a6f76fe2baa5b158de"
+checksum = "a4a650543ca06a924e8b371db273b2756685faae30f8487da1b56505a8f78b0c"
 dependencies = [
  "libc 0.2.151",
- "log",
  "wasi 0.11.0+wasi-snapshot-preview1",
- "windows-sys 0.42.0",
+ "windows-sys 0.48.0",
 ]
 
 [[package]]
@@ -6071,8 +6070,14 @@ dependencies = [
  "crc32fast",
  "engine_rocks",
  "engine_traits",
+ "external_storage",
+ "futures 0.3.15",
+ "grpcio",
  "keys",
  "kvproto",
+ "tempfile",
+ "tikv_util",
+ "txn_types",
  "uuid 0.8.2",
 ]
 
@@ -6844,7 +6849,7 @@ dependencies = [
  "autocfg",
  "bytes",
  "libc 0.2.151",
- "mio 0.8.5",
+ "mio 0.8.11",
  "num_cpus",
  "parking_lot 0.12.1",
  "pin-project-lite",

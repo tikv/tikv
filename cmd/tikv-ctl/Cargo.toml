@@ -6,7 +6,7 @@ edition = "2021"
 publish = false
 
 [features]
-default = ["test-engine-kv-rocksdb", "test-engine-raft-raft-engine", "cloud-aws", "cloud-gcp", "cloud-azure"]
+default = ["test-engine-kv-rocksdb", "test-engine-raft-raft-engine"]
 tcmalloc = ["tikv/tcmalloc"]
 jemalloc = ["tikv/jemalloc"]
 mimalloc = ["tikv/mimalloc"]
@@ -15,15 +15,6 @@ portable = ["tikv/portable"]
 sse = ["tikv/sse"]
 mem-profiling = ["tikv/mem-profiling"]
 failpoints = ["tikv/failpoints"]
-cloud-aws = [
-   "encryption_export/cloud-aws",
-]
-cloud-gcp = [
-  "encryption_export/cloud-gcp",
-]
-cloud-azure = [
-  "encryption_export/cloud-azure",
-]
 openssl-vendored = ["tikv/openssl-vendored"]
 test-engine-kv-rocksdb = [
   "tikv/test-engine-kv-rocksdb"
