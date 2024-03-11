@@ -284,12 +284,7 @@ impl SubscriptionTracer {
         match remove_result {
             Entry::Vacant(_) => false,
             Entry::Occupied(mut o) => match o.get_mut() {
-                SubscribeState::Pending(r) => {
-                    info!("remove pending subscription"; "region_id"=> %region_id, utils::slog_region(r));
-
-                    o.remove();
-                    true
-                }
+                SubscribeState::Pending(_) => true,
                 SubscribeState::Running(s) => {
                     if if_cond(s, region) {
                         let r = s.meta.clone();
