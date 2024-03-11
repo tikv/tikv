@@ -61,6 +61,8 @@ impl SqlMode {
 
 const DEFAULT_MAX_WARNING_CNT: usize = 64;
 
+const DEFAULT_DIV_PRECISION_INCR: i32 = 4;
+
 #[derive(Clone, Debug)]
 pub struct EvalConfig {
     /// timezone to use when parse/calculate time.
@@ -72,6 +74,7 @@ pub struct EvalConfig {
     pub sql_mode: SqlMode,
 
     pub paging_size: Option<u64>,
+    pub div_precision_increment: i32,
 }
 
 impl Default for EvalConfig {
@@ -98,6 +101,9 @@ impl EvalConfig {
         if req.has_sql_mode() {
             eval_cfg.set_sql_mode(SqlMode::from_bits_truncate(req.get_sql_mode()));
         }
+        if req.has_div_precision_increment() {
+            eval_cfg.set_div_precision_incr(req.get_div_precision_increment() as i32);
+        }
         Ok(eval_cfg)
     }
 
@@ -108,6 +114,7 @@ impl EvalConfig {
             max_warning_cnt: DEFAULT_MAX_WARNING_CNT,
             sql_mode: SqlMode::empty(),
             paging_size: None,
+            div_precision_increment: DEFAULT_DIV_PRECISION_INCR,
         }
     }
 
@@ -124,6 +131,11 @@ impl EvalConfig {
 
     pub fn set_sql_mode(&mut self, new_value: SqlMode) -> &mut Self {
         self.sql_mode = new_value;
+        self
+    }
+
+    pub fn set_div_precision_incr(&mut self, new_value: i32) -> &mut Self {
+        self.div_precision_increment = new_value;
         self
     }
 
