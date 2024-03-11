@@ -332,14 +332,11 @@ impl RangeCacheMemoryEngine {
         (range_in_cache, pending_range_in_loading)
     }
 
-    // Normally, the writes in `handle_pending_range_in_loading_buffer` should be
-    // cached rather than written in the memory engine because the range is
-    // loading the snapshot (snapshot data is order than writes in
-    // loading_range_buffer, we should ensure data is written by order). But if
-    // the range completes the load and be transfered to normal `range` before
-    // this method by another thread, we should picked the writes of this range
-    // in the pending_range_in_loading_buffer which should be written in the memory
-    // engine directly.
+    // The writes in `handle_pending_range_in_loading_buffer` indicating the ranges
+    // of the writes are pending_ranges that are loading data at begin. But some of
+    // them may have been finished the load and become a normal range. This method
+    // decides which writes in should be cached and which writes should be written
+    // directly.
     pub(crate) fn handle_pending_range_in_loading_buffer(
         &self,
         seq: u64,
