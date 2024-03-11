@@ -922,13 +922,13 @@ const_assert_eq!(DECIMAL_STRUCT_SIZE, mem::size_of::<Decimal>());
 #[derive(Clone, Debug, Copy)]
 pub struct Decimal {
     /// The number of *decimal* digits before the point.
-    pub int_cnt: u8,
+    int_cnt: u8,
 
     /// The number of decimal digits after the point.
-    pub frac_cnt: u8,
+    frac_cnt: u8,
 
     /// The number of calculated or printed result fraction digits.
-    pub result_frac_cnt: u8,
+    result_frac_cnt: u8,
 
     negative: bool,
 
