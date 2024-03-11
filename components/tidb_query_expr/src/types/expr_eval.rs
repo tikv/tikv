@@ -1,7 +1,5 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::borrow::BorrowMut;
-
 use tidb_query_common::Result;
 pub use tidb_query_datatype::codec::data_type::{
     LogicalRows, BATCH_MAX_SIZE, IDENTICAL_LOGICAL_ROWS,
