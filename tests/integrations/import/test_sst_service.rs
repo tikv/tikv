@@ -84,11 +84,7 @@ fn run_test_write_sst(
 
     let resp = resp.unwrap();
     for m in resp.metas.into_iter() {
-        let mut ingest = IngestRequest::default();
-        ingest.set_context(ctx.clone());
-        ingest.set_sst(m.clone());
-        let resp = import.ingest(&ingest).unwrap();
-        assert!(!resp.has_error());
+        must_ingest_sst(&import, ctx.clone(), m.clone());
     }
     check_ingested_txn_kvs(&tikv, &ctx, sst_range, 2);
 }
@@ -137,11 +133,7 @@ fn test_ingest_sst() {
     // No region id and epoch.
     send_upload_sst(&import, &meta, &data).unwrap();
 
-    let mut ingest = IngestRequest::default();
-    ingest.set_context(ctx.clone());
-    ingest.set_sst(meta.clone());
-    let resp = import.ingest(&ingest).unwrap();
-    assert!(resp.has_error());
+    must_ingest_sst_error(&import, ctx.clone(), meta.clone());
 
     // Set region id and epoch.
     meta.set_region_id(ctx.get_region_id());
@@ -152,10 +144,7 @@ fn test_ingest_sst() {
         send_upload_sst(&import, &meta, &data).unwrap_err(),
         "FileExists"
     );
-
-    ingest.set_sst(meta);
-    let resp = import.ingest(&ingest).unwrap();
-    assert!(!resp.has_error(), "{:?}", resp.get_error());
+    must_ingest_sst(&import, ctx.clone(), meta.clone());
 
     for _ in 0..10 {
         let region_keys = cluster
@@ -272,11 +261,7 @@ fn test_upload_and_ingest_with_tde() {
     meta.set_region_epoch(ctx.get_region_epoch().clone());
     send_upload_sst(&import, &meta, &data).unwrap();
 
-    let mut ingest = IngestRequest::default();
-    ingest.set_context(ctx.clone());
-    ingest.set_sst(meta);
-    let resp = import.ingest(&ingest).unwrap();
-    assert!(!resp.has_error(), "{:?}", resp.get_error());
+    must_ingest_sst(&import, ctx.clone(), meta);
 
     check_ingested_kvs(&tikv, &ctx, sst_range);
 }
@@ -300,11 +285,7 @@ fn test_ingest_sst_without_crc32() {
     send_upload_sst(&import, &meta, &data).unwrap();
     meta.set_crc32(0);
 
-    let mut ingest = IngestRequest::default();
-    ingest.set_context(ctx.clone());
-    ingest.set_sst(meta);
-    let resp = import.ingest(&ingest).unwrap();
-    assert!(!resp.has_error(), "{:?}", resp.get_error());
+    must_ingest_sst(&import, ctx.clone(), meta);
 
     // Check ingested kvs
     check_ingested_kvs(&tikv, &ctx, sst_range);
@@ -357,11 +338,7 @@ fn test_download_sst() {
 
     // Do an ingest and verify the result is correct.
 
-    let mut ingest = IngestRequest::default();
-    ingest.set_context(ctx.clone());
-    ingest.set_sst(meta);
-    let resp = import.ingest(&ingest).unwrap();
-    assert!(!resp.has_error());
+    must_ingest_sst(&import, ctx.clone(), meta);
 
     check_ingested_kvs(&tikv, &ctx, sst_range);
 }
@@ -549,11 +526,7 @@ fn test_duplicate_and_close() {
         }
         let resp = send_write_sst(&import, &meta, keys, values, commit_ts).unwrap();
         for m in resp.metas.into_iter() {
-            let mut ingest = IngestRequest::default();
-            ingest.set_context(ctx.clone());
-            ingest.set_sst(m.clone());
-            let resp = import.ingest(&ingest).unwrap();
-            assert!(!resp.has_error());
+            must_ingest_sst(&import, ctx.clone(), m.clone());
         }
     }
 

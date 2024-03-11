@@ -418,6 +418,7 @@ impl From<FlushRequest> for TypedCommand<Vec<StorageResult<()>>> {
             req.get_start_ts().into(),
             req.take_primary_key(),
             req.take_mutations().into_iter().map(Into::into).collect(),
+            req.get_generation(),
             req.get_lock_ttl(),
             req.get_assertion_level(),
             req.take_context(),

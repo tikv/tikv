@@ -1298,6 +1298,8 @@ pub struct DbConfig {
     #[doc(hidden)]
     #[serde(skip_serializing)]
     pub write_buffer_flush_oldest_first: bool,
+    #[online_config(skip)]
+    pub track_and_verify_wals_in_manifest: bool,
     // Dangerous option only for programming use.
     #[online_config(skip)]
     #[serde(skip)]
@@ -1362,6 +1364,7 @@ impl Default for DbConfig {
             write_buffer_limit: None,
             write_buffer_stall_ratio: 0.0,
             write_buffer_flush_oldest_first: true,
+            track_and_verify_wals_in_manifest: true,
             paranoid_checks: None,
             defaultcf: DefaultCfConfig::default(),
             writecf: WriteCfConfig::default(),
@@ -1539,6 +1542,7 @@ impl DbConfig {
             // Historical stats are not used.
             opts.set_stats_persist_period_sec(0);
         }
+        opts.set_track_and_verify_wals_in_manifest(self.track_and_verify_wals_in_manifest);
         opts
     }
 
@@ -2909,6 +2913,9 @@ impl BackupStreamConfig {
         }
         if self.initial_scan_concurrency == 0 {
             return Err("the `initial_scan_concurrency` shouldn't be zero".into());
+        }
+        if self.initial_scan_rate_limit.0 < 1024 {
+            return Err("the `initial_scan_rate_limit` should be at least 1024 bytes".into());
         }
         Ok(())
     }
@@ -5334,6 +5341,19 @@ mod tests {
         tikv_cfg.validate().unwrap_err();
         tikv_cfg.server.grpc_keepalive_time = ReadableDuration(dur * 2);
         tikv_cfg.validate().unwrap();
+    }
+
+    #[test]
+    fn test_illegal_backupstream_config_parm() {
+        let mut backup_stream_cfg = BackupStreamConfig::default();
+        backup_stream_cfg.initial_scan_rate_limit.0 = 0;
+        backup_stream_cfg.validate().unwrap_err();
+        backup_stream_cfg.initial_scan_rate_limit.0 = 1000;
+        backup_stream_cfg.validate().unwrap_err();
+        backup_stream_cfg.initial_scan_rate_limit.0 = 1024;
+        backup_stream_cfg.validate().unwrap();
+        backup_stream_cfg.initial_scan_rate_limit.0 = 2048;
+        backup_stream_cfg.validate().unwrap();
     }
 
     #[test]

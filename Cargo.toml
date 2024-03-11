@@ -15,9 +15,6 @@ publish = false
 default = [
   "test-engine-kv-rocksdb",
   "test-engine-raft-raft-engine",
-  "cloud-aws",
-  "cloud-gcp",
-  "cloud-azure",
 ]
 trace-tablet-lifetime = ["engine_rocks/trace-lifetime"]
 tcmalloc = ["tikv_alloc/tcmalloc"]
@@ -34,9 +31,6 @@ failpoints = [
   "engine_rocks/failpoints",
   "raft_log_engine/failpoints",
 ]
-cloud-aws = ["encryption_export/cloud-aws"]
-cloud-gcp = ["encryption_export/cloud-gcp"]
-cloud-azure = ["encryption_export/cloud-azure"]
 testexport = [
   "raftstore/testexport",
   "api_version/testexport",
@@ -144,7 +138,7 @@ paste = "1.0"
 pd_client = { workspace = true }
 pin-project = "1.0"
 pnet_datalink = "0.23"
-pprof = { version = "0.11", default-features = false, features = [
+pprof = { version = "0.13", default-features = false, features = [
   "flamegraph",
   "protobuf-codec",
 ] }
