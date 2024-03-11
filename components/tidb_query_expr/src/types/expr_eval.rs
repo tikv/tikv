@@ -69,7 +69,7 @@ impl<'a> RpnStackNodeVectorValue<'a> {
                         Enum => EnumRef,
                         Set => SetRef,
                     ],
-                    match result_vec_ref {
+                    match &mut result_vec {
                         VectorValue::TT(dest_column) => {
                             for index in logical_rows {
                                 let src_ref = TT::borrow_vector_value(physical_value);
