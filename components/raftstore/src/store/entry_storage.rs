@@ -479,13 +479,7 @@ fn validate_states<ER: RaftEngine>(
         info!("updating commit index"; "region_id" => region_id, "old" => commit_index, "new" => recorded_commit_index);
         commit_index = recorded_commit_index;
     }
-    // Invariant: applied index <= max(commit index, recorded commit index)
-    if apply_state.get_applied_index() > commit_index {
-        return Err(box_err!(
-            "applied index > max(commit index, recorded commit index), {}",
-            state_str()
-        ));
-    }
+
     // Invariant: max(commit index, recorded commit index) <= last index
     if commit_index > last_index {
         return Err(box_err!(
@@ -550,11 +544,8 @@ pub fn init_applied_term<ER: RaftEngine>(
 
     match raft_engine.get_entry(region.get_id(), apply_state.applied_index)? {
         Some(e) => Ok(e.term),
-        None => Err(box_err!(
-            "[region {}] entry at apply index {} doesn't exist, may lose data.",
-            region.get_id(),
-            apply_state.applied_index
-        )),
+        // None means apply is ahead of persist, in this case the raft term must not be changed.
+        None => Ok(apply_state.commit_term),
     }
 }
 

@@ -2389,6 +2389,9 @@ where
                     self.register_pd_heartbeat_tick();
                     self.register_split_region_check_tick();
                     self.retry_pending_prepare_merge(applied_index);
+                    self.fsm
+                        .peer
+                        .maybe_update_apply_unpersisted_log_state(applied_index);
                 }
             }
             ApplyTaskRes::Destroy {
@@ -5762,6 +5765,10 @@ where
         } else {
             replicated_idx
         };
+        // avoid compact unpersisted raft logs when persist is far behind apply.
+        if compact_idx > self.fsm.peer.raft_group.raft.raft_log.persisted {
+            compact_idx = self.fsm.peer.raft_group.raft.raft_log.persisted;
+        }
         assert!(compact_idx >= first_idx);
         // Have no idea why subtract 1 here, but original code did this by magic.
         compact_idx -= 1;

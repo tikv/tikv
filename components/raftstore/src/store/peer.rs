@@ -793,6 +793,12 @@ where
     pub pending_request_snapshot_count: Arc<AtomicUsize>,
     /// The index of last scheduled committed raft log.
     pub last_applying_idx: u64,
+    pub apply_unpersisted_log_limit: u64,
+    // the minimum raft index after which apply unpersisted raft log can be enabled.
+    // we force disable apply unpersisted raft log in following 2 situation:
+    // 1) raft term changes. In this case, the min index is set to the current last index.
+    // 2) propose PrepareMerge. In this case, the min index is set to that raft log's index.
+    pub min_safe_index_for_unpersisted_apply: u64,
     /// The index of last compacted raft log. It is used for the next compact
     /// log task.
     pub last_compacted_idx: u64,
@@ -953,6 +959,7 @@ where
             pre_vote: cfg.prevote,
             max_committed_size_per_ready: MAX_COMMITTED_SIZE_PER_READY,
             priority: if peer.is_witness { -1 } else { 0 },
+            apply_unpersisted_log_limit: cfg.apply_unpersisted_log_limit,
             ..Default::default()
         };
 
@@ -997,6 +1004,8 @@ where
             leader_missing_time: Some(Instant::now()),
             tag: tag.clone(),
             last_applying_idx: applied_index,
+            apply_unpersisted_log_limit: cfg.apply_unpersisted_log_limit,
+            min_safe_index_for_unpersisted_apply: last_index,
             last_compacted_idx: 0,
             last_compacted_time: Instant::now(),
             has_pending_compact_cmd,
@@ -1158,6 +1167,18 @@ where
         match self.raft_group.raft.raft_log.term(idx) {
             Ok(t) => t,
             Err(e) => panic!("{} fail to load term for {}: {:?}", self.tag, idx, e),
+        }
+    }
+
+    #[inline]
+    pub fn maybe_update_apply_unpersisted_log_state(&mut self, applied_index: u64) {
+        if self.min_safe_index_for_unpersisted_apply > 0
+            && self.min_safe_index_for_unpersisted_apply < applied_index
+        {
+            self.raft_group
+                .raft
+                .set_apply_unpersisted_log_limit(self.apply_unpersisted_log_limit);
+            self.min_safe_index_for_unpersisted_apply = 0;
         }
     }
 
@@ -2343,6 +2364,12 @@ where
             "peer_id" => self.peer_id(),
         );
 
+        self.min_safe_index_for_unpersisted_apply = std::cmp::max(
+            self.min_safe_index_for_unpersisted_apply,
+            self.raft_group.raft.raft_log.last_index(),
+        );
+        self.raft_group.raft.set_apply_unpersisted_log_limit(0);
+
         self.read_progress
             .update_leader_info(leader_id, term, self.region());
     }
@@ -3012,6 +3039,10 @@ where
             }
             ctx.apply_router
                 .schedule_task(self.region_id, ApplyTask::apply(apply));
+            let apply_ahead_delta = self
+                .last_applying_idx
+                .saturating_sub(self.raft_group.raft.r.raft_log.persisted);
+            RAFT_APPLY_AHEAD_PERSIST_HISTOGRAM.observe(apply_ahead_delta as f64);
         }
         fail_point!("after_send_to_apply_1003", self.peer_id() == 1003, |_| {});
     }
@@ -3716,6 +3747,11 @@ where
                         .post_propose(cmd_type, idx, self.term());
                 }
                 self.post_propose(ctx, p);
+                if req_admin_cmd_type == Some(AdminCmdType::PrepareMerge) {
+                    self.min_safe_index_for_unpersisted_apply =
+                        std::cmp::max(self.min_safe_index_for_unpersisted_apply, idx);
+                    self.raft_group.raft.set_apply_unpersisted_log_limit(0);
+                }
                 true
             }
         }
@@ -5681,6 +5717,23 @@ where
             self.raft_max_inflight_msgs = raft_max_inflight_msgs;
         }
         self.raft_group.raft.r.max_msg_size = ctx.cfg.raft_max_size_per_msg.0;
+        self.apply_unpersisted_log_limit = ctx.cfg.apply_unpersisted_log_limit;
+        if self.raft_group.raft.r.raft_log.apply_unpersisted_log_limit
+            != self.apply_unpersisted_log_limit
+        {
+            if self.apply_unpersisted_log_limit == 0 {
+                self.raft_group.raft.set_apply_unpersisted_log_limit(0);
+            } else if self.is_leader()
+                && self.min_safe_index_for_unpersisted_apply
+                    < self.raft_group.raft.r.raft_log.applied
+            {
+                // currently only enable unpersisted apply on leader.
+                self.raft_group
+                    .raft
+                    .set_apply_unpersisted_log_limit(self.apply_unpersisted_log_limit);
+                self.min_safe_index_for_unpersisted_apply = 0;
+            }
+        }
     }
 
     /// Update states of the peer which can be changed in the previous raft
