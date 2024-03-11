@@ -770,10 +770,16 @@ where
         let mut read_stats_vec = vec![];
         while let Ok(read_stats) = read_stats_receiver.try_recv() {
             read_stats_vec.push(read_stats);
+            if read_stats_vec.len() == 128 {
+                break;
+            }
         }
         let mut cpu_stats_vec = vec![];
         while let Ok(cpu_stats) = cpu_stats_receiver.try_recv() {
             cpu_stats_vec.push(cpu_stats);
+            if cpu_stats_vec.len() == 128 {
+                break;
+            }
         }
         thread_stats.record();
         let (top_qps, split_infos) = auto_split_controller.flush(
