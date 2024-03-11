@@ -1,5 +1,4 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
-
 use std::{
     cmp,
     cmp::Ordering,
@@ -923,13 +922,13 @@ const_assert_eq!(DECIMAL_STRUCT_SIZE, mem::size_of::<Decimal>());
 #[derive(Clone, Debug, Copy)]
 pub struct Decimal {
     /// The number of *decimal* digits before the point.
-    int_cnt: u8,
+    pub int_cnt: u8,
 
     /// The number of decimal digits after the point.
-    frac_cnt: u8,
+    pub frac_cnt: u8,
 
     /// The number of calculated or printed result fraction digits.
-    result_frac_cnt: u8,
+    pub result_frac_cnt: u8,
 
     negative: bool,
 

@@ -765,7 +765,7 @@ impl Datum {
     }
 
     // `checked_int_div` computes the result of a / b, both a and b are integer.
-    pub fn checked_int_div(self, _: &mut EvalContext, datum: Datum) -> Result<Datum> {
+    /*pub fn checked_int_div(self, _: &mut EvalContext, datum: Datum) -> Result<Datum> {
         match datum {
             Datum::I64(0) | Datum::U64(0) => return Ok(Datum::Null),
             _ => {}
@@ -810,7 +810,7 @@ impl Datum {
                 }
             }
         }
-    }
+    }*/
 }
 
 impl From<bool> for Datum {
