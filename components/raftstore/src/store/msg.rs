@@ -24,6 +24,7 @@ use pd_client::BucketMeta;
 use raft::SnapshotStatus;
 use resource_control::ResourceMetered;
 use smallvec::{smallvec, SmallVec};
+use strum::{EnumCount, EnumVariantNames};
 use tikv_util::{deadline::Deadline, escape, memory::HeapSize, time::Instant};
 use tracker::{get_tls_tracker_token, TrackerToken};
 
@@ -767,6 +768,7 @@ pub struct InspectedRaftMessage {
 
 /// Message that can be sent to a peer.
 #[allow(clippy::large_enum_variant)]
+#[derive(EnumCount, EnumVariantNames)]
 #[repr(u8)]
 pub enum PeerMsg<EK: KvEngine> {
     /// Raft message is the message sent between raft nodes in the same
@@ -838,9 +840,21 @@ impl<EK: KvEngine> fmt::Debug for PeerMsg<EK> {
 }
 
 impl<EK: KvEngine> PeerMsg<EK> {
-    pub fn discriminant(&self) -> u8 {
-        // Ref: https://doc.rust-lang.org/std/mem/fn.discriminant.html#accessing-the-numeric-value-of-the-discriminant
-        unsafe { *<*const _>::from(self).cast::<u8>() }
+    pub fn discriminant(&self) -> usize {
+        match self {
+            PeerMsg::RaftMessage(..) => 0,
+            PeerMsg::RaftCommand(_) => 1,
+            PeerMsg::Tick(_) => 2,
+            PeerMsg::SignificantMsg(_) => 3,
+            PeerMsg::ApplyRes { .. } => 4,
+            PeerMsg::Start => 5,
+            PeerMsg::Noop => 6,
+            PeerMsg::Persisted { .. } => 7,
+            PeerMsg::CasualMessage(_) => 8,
+            PeerMsg::HeartbeatPd => 9,
+            PeerMsg::UpdateReplicationMode => 10,
+            PeerMsg::Destroy(_) => 11,
+        }
     }
 
     /// For some specific kind of messages, it's actually acceptable if failed
@@ -854,7 +868,7 @@ impl<EK: KvEngine> PeerMsg<EK> {
     }
 }
 
-#[repr(u8)]
+#[derive(EnumCount, EnumVariantNames)]
 pub enum StoreMsg<EK>
 where
     EK: KvEngine,
@@ -942,8 +956,22 @@ where
 }
 
 impl<EK: KvEngine> StoreMsg<EK> {
-    pub fn discriminant(&self) -> u8 {
-        // Ref: https://doc.rust-lang.org/std/mem/fn.discriminant.html#accessing-the-numeric-value-of-the-discriminant
-        unsafe { *<*const _>::from(self).cast::<u8>() }
+    pub fn discriminant(&self) -> usize {
+        match self {
+            StoreMsg::RaftMessage(_) => 0,
+            StoreMsg::StoreUnreachable { .. } => 1,
+            StoreMsg::CompactedEvent(_) => 2,
+            StoreMsg::ClearRegionSizeInRange { .. } => 3,
+            StoreMsg::Tick(_) => 4,
+            StoreMsg::Start { .. } => 5,
+            #[cfg(any(test, feature = "testexport"))]
+            StoreMsg::Validate(_) => 6,
+            StoreMsg::UpdateReplicationMode(_) => 7,
+            StoreMsg::LatencyInspect { .. } => 8,
+            StoreMsg::UnsafeRecoveryReport(_) => 9,
+            StoreMsg::UnsafeRecoveryCreatePeer { .. } => 10,
+            StoreMsg::GcSnapshotFinish => 11,
+            StoreMsg::AwakenRegions { .. } => 12,
+        }
     }
 }

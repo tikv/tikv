@@ -34,6 +34,7 @@ use fail::fail_point;
 use file_system::{IoType, WithIoType};
 use futures::{compat::Future01CompatExt, FutureExt};
 use health_controller::{types::LatencyInspector, HealthController};
+use itertools::Itertools;
 use keys::{self, data_end_key, data_key, enc_end_key, enc_start_key};
 use kvproto::{
     metapb::{self, Region, RegionEpoch},
@@ -49,6 +50,7 @@ use resource_control::{channel::unbounded, ResourceGroupManager};
 use resource_metering::CollectorRegHandle;
 use service::service_manager::GrpcServiceManager;
 use sst_importer::SstImporter;
+use strum::{EnumCount, VariantNames};
 use tikv_alloc::trace::TraceEvent;
 use tikv_util::{
     box_try,
@@ -831,9 +833,9 @@ impl<'a, EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
         let timer = SlowTimer::from_millis(100);
         let count = msgs.len();
         #[allow(const_evaluatable_unchecked)]
-        let mut distribution = [0; std::mem::variant_count::<StoreMsg<EK>>()];
+        let mut distribution = [0; StoreMsg::<EK>::COUNT];
         for m in msgs.drain(..) {
-            distribution[m.discriminant() as usize] += 1;
+            distribution[m.discriminant()] += 1;
             match m {
                 StoreMsg::Tick(tick) => self.on_tick(tick),
                 StoreMsg::RaftMessage(msg) => {
@@ -899,7 +901,7 @@ impl<'a, EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
             "[store {}] handle {} store messages {:?}",
             self.fsm.store.id,
             count,
-            distribution,
+            StoreMsg::<EK>::VARIANTS.iter().zip(distribution).filter(|(_, c)| *c > 0).format(", "),
         );
         self.ctx
             .raft_metrics
