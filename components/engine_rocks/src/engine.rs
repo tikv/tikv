@@ -278,8 +278,9 @@ mod tests {
     use engine_traits::{Iterable, KvEngine, Peekable, SyncMutable, CF_DEFAULT};
     use kvproto::metapb::Region;
     use proptest::prelude::*;
-    use rocksdb::{DBOptions, SeekKey, TitanDBOptions, Writable, DB};
+    use rocksdb::{DBOptions, FlushOptions, SeekKey, TitanDBOptions, Writable, DB};
     use tempfile::Builder;
+    use tikv_util::config::ReadableSize;
 
     use crate::{util, RocksSnapshot};
 
@@ -419,6 +420,7 @@ mod tests {
         Delete(Vec<u8>),
         Scan(Vec<u8>, usize),
         DeleteRange(Vec<u8>, Vec<u8>),
+        Sync(),
     }
 
     fn gen_operations(value_size: usize) -> impl Strategy<Value = Vec<Operation>> {
@@ -444,6 +446,7 @@ mod tests {
                     prop::collection::vec(prop::num::u8::ANY, 0..key_size)
                 )
                     .prop_map(|(k1, k2)| Operation::DeleteRange(k1, k2)),
+                Just(Operation::Sync()),
             ],
             0..100,
         )
@@ -469,7 +472,11 @@ mod tests {
         res
     }
 
-    fn test_rocks_titan_basic_operations(operations: Vec<Operation>, min_blob_size: u64) {
+    fn test_rocks_titan_basic_operations(
+        operations: Vec<Operation>,
+        min_blob_size: u64,
+        enable_dict_compress: bool,
+    ) {
         let path_rocks = Builder::new()
             .prefix("test_rocks_titan_basic_operations_rocks")
             .tempdir()
@@ -480,6 +487,15 @@ mod tests {
             .unwrap();
         let mut tdb_opts = TitanDBOptions::new();
         tdb_opts.set_min_blob_size(min_blob_size);
+        if enable_dict_compress {
+            tdb_opts.set_compression_options(
+                -14,                                 // window_bits
+                32767,                               // level
+                0,                                   // strategy
+                ReadableSize::kb(16).0 as i32,       // zstd dict size
+                ReadableSize::kb(16).0 as i32 * 100, // zstd sample size
+            );
+        }
         let mut opts = DBOptions::new();
         opts.set_titandb_options(&tdb_opts);
         opts.create_if_missing(true);
@@ -490,7 +506,7 @@ mod tests {
         opts.create_if_missing(true);
 
         let db_rocks = DB::open(opts, path_rocks.path().to_str().unwrap()).unwrap();
-
+        let mut flush = false;
         for op in operations {
             match op {
                 Operation::Put(k, v) => {
@@ -520,6 +536,15 @@ mod tests {
                         db_titan.delete_range(&k2, &k1).unwrap();
                     }
                 }
+                Operation::Sync() => {
+                    if !flush {
+                        let mut opts = FlushOptions::default();
+                        opts.set_wait(false);
+                        let _ = db_rocks.flush(&opts);
+                        let _ = db_titan.flush(&opts);
+                        flush = true;
+                    }
+                }
             }
         }
     }
@@ -527,13 +552,13 @@ mod tests {
     proptest! {
         #[test]
         fn test_rocks_titan_basic_ops(operations in gen_operations(1000)) {
-            test_rocks_titan_basic_operations(operations.clone(), 8);
+            test_rocks_titan_basic_operations(operations.clone(), 8, true);
         }
 
         #[test]
         fn test_rocks_titan_basic_ops_large_min_blob_size(operations in gen_operations(1000)) {
             // titan actually is not enabled
-            test_rocks_titan_basic_operations(operations, 1024);
+            test_rocks_titan_basic_operations(operations, 1024, false);
         }
     }
 }
