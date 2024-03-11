@@ -149,7 +149,7 @@ mod tests {
             hybrid_engine_for_tests("temp", Duration::from_secs(1000), move |memory_engine| {
                 memory_engine.new_range(range_clone.clone());
                 {
-                    let mut core = memory_engine.core().write().unwrap();
+                    let mut core = memory_engine.core().write();
                     core.mut_range_manager()
                         .set_range_readable(&range_clone, true);
                     core.mut_range_manager().set_safe_point(&range_clone, 5);
@@ -157,6 +157,7 @@ mod tests {
             })
             .unwrap();
         let mut write_batch = hybrid_engine.write_batch();
+        write_batch.cache_write_batch.set_range_in_cache(true);
         write_batch.put(b"hello", b"world").unwrap();
         let seq = write_batch.write().unwrap();
         assert!(seq > 0);
@@ -187,7 +188,7 @@ mod tests {
                 let range = CacheRange::new(b"k00".to_vec(), b"k10".to_vec());
                 memory_engine.new_range(range.clone());
                 {
-                    let mut core = memory_engine.core().write().unwrap();
+                    let mut core = memory_engine.core().write();
                     core.mut_range_manager().set_range_readable(&range, true);
                     core.mut_range_manager().set_safe_point(&range, 10);
                 }

@@ -84,24 +84,31 @@ pub struct RangeManager {
     // ranges that are cached now
     ranges: BTreeMap<CacheRange, RangeMeta>,
 
-    // `pending_ranges` contains ranges that will be loaded into the memory engine. At
-    // sometime in the apply thread, the pending ranges, coupled with rocksdb snapshot, will be
-    // poped and pushed into `ranges_loading_snapshot`. Then the data in the snapshot
-    // of the given ranges will be loaded in the memory engine in the background worker.
-    // When the snapshot load is finished, `ranges_loading_cached_write` will take over it, which
-    // will handle data that is written after the acquire of the snapshot. After it, the range load
-    // is finished.
+    // `pending_ranges` contains ranges that will be loaded into the memory engine. To guarantee
+    // the completeness of the data, we also need to write the data that is applied after the
+    // snapshot is acquired. And to ensure the data is written by order, we should cache the data
+    // that is applied after the snapshot acquired and only consume them when snapshot load
+    // finishes.
+    // So, at sometime in the apply thread, the pending ranges, coupled with rocksdb
+    // snapshot, will be poped and pushed into `pending_ranges_loading_snapshot`. Then the data
+    // in the snapshot of the given ranges will be loaded in the memory engine in the
+    // background worker. When the snapshot load is finished, `pending_ranges_loading_cached_write`
+    // will take over it, which will handle data that is written after the acquire of the
+    // snapshot. After it, the range load is finished.
     //
     // Note: the range transferred from pending_range *must be* performed by the peer whose region
-    // range equals it. If split happened, the first noticed peer should first split the range in
-    // the pending_range and then only handles its part.
+    // range equals to it. If split happened, the first noticed peer should first split the range
+    // in the pending_range and then only handles its part.
     //
     // Note: after snapshot is fetched, we need to cache further write for the range. That is to
-    // say, if range is in `ranges_loading_snapshot` or `ranges_loading_cached_write`, we need to
-    // cache write for it.
+    // say, if range is in `ranges_loading_snapshot` or `pending_ranges_loading_cached_write`, we
+    // need to cache write for it.
     pub(crate) pending_ranges: Vec<CacheRange>,
-    pub(crate) ranges_loading_snapshot: VecDeque<(CacheRange, Arc<RocksSnapshot>)>,
-    pub(crate) ranges_loading_cached_write: Vec<CacheRange>,
+    pub(crate) pending_ranges_loading_snapshot: VecDeque<(CacheRange, Arc<RocksSnapshot>)>,
+    pub(crate) pending_ranges_loading_cached_write: VecDeque<CacheRange>,
+    // indicate there's a range being transfered from `pending_ranges_loading_cached_write` to
+    // `range`, we use this bool to make the transfer sequentially to make thing simple
+    pub(crate) pending_ranges_loading_cached_write_handling: bool,
 
     ranges_in_gc: BTreeSet<CacheRange>,
 }
@@ -142,18 +149,36 @@ impl RangeManager {
         self.ranges.keys().any(|r| r.contains_key(key))
     }
 
+    pub fn get_range_for_key(&self, key: &[u8]) -> Option<CacheRange> {
+        self.ranges.keys().find_map(|r| {
+            if r.contains_key(key) {
+                Some(r.clone())
+            } else {
+                None
+            }
+        })
+    }
+
     pub fn contains_range(&self, range: &CacheRange) -> bool {
         self.ranges.keys().any(|r| r.contains_range(range))
     }
 
-    pub fn loading_range_contains(&self, range: &CacheRange) -> bool {
-        self.ranges_loading_cached_write
+    pub fn pending_ranges_in_loading_contains(&self, range: &CacheRange) -> bool {
+        self.pending_ranges_loading_cached_write
             .iter()
             .any(|r| r.contains_range(range))
             || self
-                .ranges_loading_snapshot
+                .pending_ranges_loading_snapshot
                 .iter()
                 .any(|(r, _)| r.contains_range(range))
+    }
+
+    pub fn handle_pending_ranges_loading_cached_write(&mut self) -> Option<CacheRange> {
+        if let Some(r) = self.pending_ranges_loading_cached_write.front() {
+            self.pending_ranges_loading_cached_write_handling = true;
+            return Some(r.clone());
+        }
+        None
     }
 
     pub(crate) fn overlap_with_range(&self, range: &CacheRange) -> bool {
@@ -297,7 +322,8 @@ impl RangeManager {
     }
 
     pub(crate) fn has_range_to_cache_write(&self) -> bool {
-        !self.ranges_loading_snapshot.is_empty() || !self.ranges_loading_cached_write.is_empty()
+        !self.pending_ranges_loading_snapshot.is_empty()
+            || !self.pending_ranges_loading_cached_write.is_empty()
     }
 }
 

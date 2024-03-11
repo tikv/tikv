@@ -22,6 +22,9 @@ pub trait RangeCacheEngine:
 
     type DiskEngine: KvEngine;
     fn set_disk_engine(&mut self, disk_engine: Self::DiskEngine);
+
+    // return the range containing the key
+    fn get_range_for_key(&self, key: &[u8]) -> Option<CacheRange>;
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

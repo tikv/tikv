@@ -217,7 +217,6 @@ fn test_write_batch_cache_during_load() {
 
     for i in 0..30 {
         let key = format!("key-{:04}", i);
-        println!("{:?}", key);
         let encoded_key = Key::from_raw(key.as_bytes())
             .append_ts(20.into())
             .into_encoded();

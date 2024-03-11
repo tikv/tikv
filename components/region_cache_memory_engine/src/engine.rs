@@ -16,7 +16,7 @@ use engine_traits::{
     RangeCacheEngine, ReadOptions, Result, Snapshot, SnapshotMiscExt, CF_DEFAULT, CF_LOCK,
     CF_WRITE,
 };
-use parking_lot::{lock_api::RwLockUpgradableReadGuard, RwLock};
+use parking_lot::{lock_api::RwLockUpgradableReadGuard, RwLock, RwLockWriteGuard};
 use skiplist_rs::{IterRef, Skiplist, MIB};
 use slog_global::error;
 
@@ -180,6 +180,21 @@ impl RangeCacheMemoryEngineCore {
     ) -> Option<Vec<(u64, RangeCacheWriteBatchEntry)>> {
         self.cached_write_batch.remove(cache_range)
     }
+
+    // ensure that the transfer from `pending_ranges_loading_cached_write` to
+    // `range` is atomic with cached_write_batch empty
+    fn pending_range_completes_loading(core: &mut RwLockWriteGuard<'_, Self>, range: &CacheRange) {
+        assert!(!core.has_cached_write_batch(range));
+        let range_manager = core.mut_range_manager();
+        let r = range_manager
+            .pending_ranges_loading_cached_write
+            .pop_front()
+            .unwrap();
+        assert_eq!(&r, range);
+        range_manager.new_range(r);
+        range_manager.set_range_readable(range, true);
+        range_manager.pending_ranges_loading_cached_write_handling = false;
+    }
 }
 
 /// The RangeCacheMemoryEngine serves as a range cache, storing hot ranges in
@@ -242,25 +257,26 @@ impl RangeCacheMemoryEngine {
         }
     }
 
-    // It handle the pending range and return whether to buffer the write
-    // (`range_in_cache means` the writes should be written to memory engine
-    // directly, `range_in_loading` means the write for the range should be
-    // cached and wait for the snapshot load finishes).
-    // In addition, the range of the region in the `pending_range` may have been
-    // splited, and we should split the range accrodingly.
+    // It handles the pending range and returns
+    // `(range_in_cache, pending_range_in_loading)`, see comments in
+    // `RangeCacheWriteBatch` for the detail of them.
+    //
+    // In addition, the region with range equals to the range in the `pending_range`
+    // may have been splited, and we should split the range accrodingly.
     pub(crate) fn prepare_for_apply(&self, range: &CacheRange) -> (bool, bool) {
         let core = self.core.upgradable_read();
         let range_manager = core.range_manager();
-        let mut range_in_loading = range_manager.loading_range_contains(range);
+        let mut pending_range_in_loading = range_manager.pending_ranges_in_loading_contains(range);
         let range_in_cache = range_manager.contains_range(range);
-        if range_in_cache || range_in_loading {
-            return (range_in_cache, range_in_loading);
+        if range_in_cache || pending_range_in_loading {
+            return (range_in_cache, pending_range_in_loading);
         }
 
-        // check whether the range is in pending_range
+        // check whether the range is in pending_range and also split it if the range
+        // has been splitted
         let mut index = None;
-        let mut left = None;
-        let mut right = None;
+        let mut left_splitted_range = None;
+        let mut right_splitted_range = None;
         // todo: need to consider split/merge
         for (i, r) in range_manager.pending_ranges.iter().enumerate() {
             if r == range {
@@ -270,7 +286,7 @@ impl RangeCacheMemoryEngine {
                 index = Some(i);
                 // It means the loading region has been splitted. We split the
                 // range accordingly.
-                (left, right) = r.split_off(range);
+                (left_splitted_range, right_splitted_range) = r.split_off(range);
                 break;
             } else if range.contains_range(r) {
                 // todo: it means merge happens
@@ -278,22 +294,22 @@ impl RangeCacheMemoryEngine {
             }
         }
         if index.is_none() {
-            return (range_in_cache, range_in_loading);
+            return (range_in_cache, pending_range_in_loading);
         }
 
         let mut core = RwLockUpgradableReadGuard::upgrade(core);
         let range_manager = core.mut_range_manager();
         range_manager.pending_ranges.swap_remove(index.unwrap());
-        if let Some(left) = left {
+        if let Some(left) = left_splitted_range {
             range_manager.pending_ranges.push(left);
         }
-        if let Some(right) = right {
+        if let Some(right) = right_splitted_range {
             range_manager.pending_ranges.push(right);
         }
 
         let rocks_snap = Arc::new(self.rocks_engine.as_ref().unwrap().snapshot(None));
         range_manager
-            .ranges_loading_snapshot
+            .pending_ranges_loading_snapshot
             .push_back((range.clone(), rocks_snap));
 
         if let Err(e) = self
@@ -306,26 +322,27 @@ impl RangeCacheMemoryEngine {
             );
             assert!(tikv_util::thread_group::is_shutdown(!cfg!(test)));
         }
-        range_in_loading = true;
-        (range_in_cache, range_in_loading)
+        pending_range_in_loading = true;
+        (range_in_cache, pending_range_in_loading)
     }
 
-    // Normally, the writes in `loading_range_buffer` should be cached rather than
-    // written in the memory engine because the range is loading the snapshot
-    // (snapshot data is order than writes in loading_range_buffer, we should ensure
-    // data is written by order). But if the range completes the load and be
-    // transfered to normal `range` before this method by another thread, we should
-    // picked the writes of this range in the loading_range_buffer which should
-    // be written in the memory engine directly.
-    pub(crate) fn handle_loading_range_buffer(
+    // Normally, the writes in `handle_pending_range_in_loading_buffer` should be
+    // cached rather than written in the memory engine because the range is
+    // loading the snapshot (snapshot data is order than writes in
+    // loading_range_buffer, we should ensure data is written by order). But if
+    // the range completes the load and be transfered to normal `range` before
+    // this method by another thread, we should picked the writes of this range
+    // in the pending_range_in_loading_buffer which should be written in the memory
+    // engine directly.
+    pub(crate) fn handle_pending_range_in_loading_buffer(
         &self,
         seq: u64,
-        loading_range_buffer: Vec<RangeCacheWriteBatchEntry>,
+        pending_range_in_loading_buffer: Vec<RangeCacheWriteBatchEntry>,
     ) -> (Vec<RangeCacheWriteBatchEntry>, SkiplistEngine) {
-        if !loading_range_buffer.is_empty() {
+        if !pending_range_in_loading_buffer.is_empty() {
             let core = self.core.upgradable_read();
             let (group_entries_to_cache, entries_to_write) =
-                group_write_batch_entries(loading_range_buffer, core.range_manager());
+                group_write_batch_entries(pending_range_in_loading_buffer, core.range_manager());
             let engine = core.engine().clone();
             if !group_entries_to_cache.is_empty() {
                 let mut core = RwLockUpgradableReadGuard::upgrade(core);
@@ -343,33 +360,39 @@ impl RangeCacheMemoryEngine {
         }
     }
 
+    // todo(SpadeA): use a atomic bool to perform quick check
     pub(crate) fn handle_loading_range(&self) {
         let core = self.core.upgradable_read();
         let range_manager = core.range_manager();
 
-        if range_manager.ranges_loading_cached_write.is_empty() {
+        if range_manager.pending_ranges_loading_cached_write_handling
+            || range_manager.pending_ranges_loading_cached_write.is_empty()
+        {
             return;
         }
 
         let mut core = RwLockUpgradableReadGuard::upgrade(core);
         let skiplist_engine = core.engine().clone();
         let range_manager = core.mut_range_manager();
-
         // Some ranges have already loaded all data from snapshot, it's time to consume
         // the cached write batch and make the range visible
-        let ranges_loading_cached_write =
-            std::mem::take(&mut range_manager.ranges_loading_cached_write);
-        for range in ranges_loading_cached_write {
+        let range = range_manager
+            .handle_pending_ranges_loading_cached_write()
+            .unwrap();
+        loop {
             if let Some(write_batches) = core.take_cache_write_batch(&range) {
+                drop(core);
                 for (seq, entry) in write_batches {
                     entry.write_to_memory(&skiplist_engine, seq).unwrap();
                 }
+                core = self.core.write();
             }
-
-            let range_manager = core.mut_range_manager();
-            range_manager.new_range(range.clone());
-            range_manager.set_range_readable(&range, true);
+            // we must ensure the write batch for the range is empty
+            if !core.has_cached_write_batch(&range) {
+                break;
+            }
         }
+        RangeCacheMemoryEngineCore::pending_range_completes_loading(&mut core, &range);
     }
 
     pub fn bg_worker_manager(&self) -> &BgWorkManager {
@@ -399,6 +422,11 @@ impl RangeCacheEngine for RangeCacheMemoryEngine {
     type DiskEngine = RocksEngine;
     fn set_disk_engine(&mut self, disk_engine: Self::DiskEngine) {
         self.rocks_engine = Some(disk_engine);
+    }
+
+    fn get_range_for_key(&self, key: &[u8]) -> Option<CacheRange> {
+        let core = self.core.read();
+        core.range_manager().get_range_for_key(key)
     }
 }
 

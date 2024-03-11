@@ -250,7 +250,7 @@ impl BackgroundRunnerCore {
     fn get_range_to_load(&self) -> Option<(CacheRange, Arc<RocksSnapshot>)> {
         let core = self.engine.read();
         core.range_manager()
-            .ranges_loading_snapshot
+            .pending_ranges_loading_snapshot
             .front()
             .cloned()
     }
@@ -277,10 +277,16 @@ impl BackgroundRunnerCore {
             let mut core = self.engine.write();
             let range_manager = core.mut_range_manager();
             assert_eq!(
-                range_manager.ranges_loading_snapshot.pop_front().unwrap().0,
+                range_manager
+                    .pending_ranges_loading_snapshot
+                    .pop_front()
+                    .unwrap()
+                    .0,
                 range
             );
-            range_manager.ranges_loading_cached_write.push(range);
+            range_manager
+                .pending_ranges_loading_cached_write
+                .push_back(range);
         }
         Ok(())
     }
@@ -828,7 +834,8 @@ pub mod tests {
             core.mut_range_manager().pending_ranges.push(r1.clone());
             core.mut_range_manager().pending_ranges.push(r2.clone());
         }
-        engine.handle_loading_range();
+        engine.prepare_for_apply(&r1);
+        engine.prepare_for_apply(&r2);
 
         // concurrent write to rocksdb, but the key will not be loaded in the memory
         // engine
@@ -853,6 +860,14 @@ pub mod tests {
 
         // wait for background load
         std::thread::sleep(Duration::from_secs(1));
+        // each call handles one range
+        engine.handle_loading_range();
+
+        let _ = engine.snapshot(r1, u64::MAX, u64::MAX).unwrap();
+        assert!(engine.snapshot(r2.clone(), u64::MAX, u64::MAX).is_none());
+
+        engine.handle_loading_range();
+        let _ = engine.snapshot(r2, u64::MAX, u64::MAX).unwrap();
 
         for i in 10..20 {
             let key = construct_key(i, 1);
