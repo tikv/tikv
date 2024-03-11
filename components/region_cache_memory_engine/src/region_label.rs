@@ -56,6 +56,10 @@ impl RegionLabelRulesManager {
             .map(|e| e.value().clone())
             .collect::<Vec<_>>()
     }
+
+    pub fn remove_region_label(&self, label_rule_id: &String) {
+        let _ = self.region_labels.remove(label_rule_id);
+    }
 }
 
 pub type RuleFilterFn = Box<dyn Fn(&LabelRule) -> bool + Send + Sync>;
@@ -71,25 +75,52 @@ pub struct RegionLabelService {
 
 const RETRY_INTERVAL: Duration = Duration::from_secs(1); // to consistent with pd_client
 
-// Todo: provide ways to restrict this.
-impl RegionLabelService {
+pub struct RegionLabelServiceBuilder {
+    manager: Arc<RegionLabelRulesManager>,
+    pd_client: Arc<RpcClient>,
+    path_suffix: Option<String>,
+    rule_filter_fn: Option<RuleFilterFn>,
+}
+
+impl RegionLabelServiceBuilder {
     pub fn new(
         manager: Arc<RegionLabelRulesManager>,
         pd_client: Arc<RpcClient>,
-    ) -> RegionLabelService {
-        RegionLabelService {
+    ) -> RegionLabelServiceBuilder {
+        RegionLabelServiceBuilder {
             manager,
-            revision: 0,
+            pd_client,
             path_suffix: None,
             rule_filter_fn: None,
-            meta_client: Checked::new(Sourced::new(
-                Arc::clone(&pd_client.clone()),
-                pd_client::meta_storage::Source::RegionLabel,
-            )),
-            pd_client,
         }
     }
 
+    pub fn path_suffix(mut self, suffix: String) -> Self {
+        self.path_suffix = Some(suffix);
+        self
+    }
+
+    pub fn rule_filter_fn(mut self, rule_filter_fn: RuleFilterFn) -> Self {
+        self.rule_filter_fn = Some(rule_filter_fn);
+        self
+    }
+
+    pub fn build(self) -> RegionLabelService {
+        RegionLabelService {
+            manager: self.manager,
+            revision: 0,
+            meta_client: Checked::new(Sourced::new(
+                Arc::clone(&self.pd_client.clone()),
+                pd_client::meta_storage::Source::RegionLabel,
+            )),
+            pd_client: self.pd_client,
+            path_suffix: self.path_suffix,
+            rule_filter_fn: self.rule_filter_fn,
+        }
+    }
+}
+
+impl RegionLabelService {
     fn region_label_path(&self) -> String {
         let cluster_id = self.pd_client.get_cluster_id().unwrap();
         let path_suffix = self.path_suffix.clone();
@@ -137,7 +168,12 @@ impl RegionLabelService {
                                 }
                             }
                             EventEventType::Delete => {
-                                todo!()
+                                match serde_json::from_slice::<LabelRule>(
+                                    event.get_prev_kv().get_value()
+                                ) {
+                                    Ok(label_rule) => self.manager.remove_region_label(&label_rule.id),
+                                    Err(e) => error!("parse delete region label event failed"; "name" => ?event.get_kv().get_key(), "err" => ?e),
+                                }
                             }
                         });
                     }
@@ -163,7 +199,6 @@ impl RegionLabelService {
 
     async fn reload_all_region_labels(&mut self) {
         loop {
-            let cluster_id = self.pd_client.get_cluster_id().unwrap();
             match self
                 .meta_client
                 .get(Get::of(self.region_label_path()).prefixed())
@@ -197,10 +232,17 @@ impl RegionLabelService {
 #[cfg(test)]
 pub mod tests {
 
+    use futures::executor::block_on;
+    use pd_client::meta_storage::Put;
     use security::{SecurityConfig, SecurityManager};
+    use test_pd::{mocker::MetaStorage, util::*, Server as MockServer};
+    use tikv_util::config::ReadableDuration;
 
     use super::*;
 
+    // Note: a test that runs against a local PD instance. This is for debugging
+    // purposesly only and is disabled by default. To run, remove `#[ignore]`
+    // line below.
     #[ignore]
     #[test]
     fn local_crud_test() {
@@ -217,10 +259,83 @@ pub mod tests {
         .unwrap();
         let region_label_manager_arc = Arc::new(region_label_manager);
 
-        let mut service =
-            RegionLabelService::new(Arc::clone(&region_label_manager_arc), Arc::new(rpc_client));
+        let mut service = RegionLabelServiceBuilder::new(
+            Arc::clone(&region_label_manager_arc),
+            Arc::new(rpc_client),
+        )
+        .build();
         futures::executor::block_on(async move { service.reload_all_region_labels().await });
         let region_labels = region_label_manager_arc.region_labels();
         assert!(!region_labels.is_empty());
+    }
+
+    fn new_test_server_and_client(
+        update_interval: ReadableDuration,
+    ) -> (MockServer<MetaStorage>, RpcClient) {
+        let server = MockServer::with_case(1, Arc::<MetaStorage>::default());
+        let eps = server.bind_addrs();
+        let client = new_client_with_update_interval(eps, None, update_interval);
+        (server, client)
+    }
+
+    fn add_region_label_rule(
+        meta_client: Checked<Sourced<Arc<RpcClient>>>,
+        cluster_id: u64,
+        label_rule: LabelRule,
+    ) {
+        let id = &label_rule.id;
+        let key = format!("/pd/{}/{}/{}", cluster_id, REGION_LABEL_PATH_PREFIX, id);
+        let buf = serde_json::to_vec::<LabelRule>(&label_rule).unwrap();
+        futures::executor::block_on(async move { meta_client.put(Put::of(key, buf)).await })
+            .unwrap();
+    }
+
+    #[test]
+    fn crud_test() {
+        let (mut server, client) = new_test_server_and_client(ReadableDuration::millis(100));
+        let region_label_manager = RegionLabelRulesManager::default();
+        let cluster_id = client.get_cluster_id().unwrap();
+        let mut s =
+            RegionLabelServiceBuilder::new(Arc::new(region_label_manager), Arc::new(client))
+                .build();
+        block_on(s.reload_all_region_labels());
+        assert_eq!(s.manager.region_labels().len(), 0);
+        add_region_label_rule(
+            s.meta_client.clone(),
+            cluster_id,
+            LabelRule {
+                id: "cache/0".to_string(),
+                labels: vec![RegionLabel {
+                    key: "cache".to_string(),
+                    value: "always".to_string(),
+                    ..RegionLabel::default()
+                }],
+                rule_type: "key-range".to_string(),
+                data: vec![KeyRangeRule {
+                    start_key: "a".to_string(),
+                    end_key: "b".to_string(),
+                }],
+                ..LabelRule::default()
+            },
+        );
+        block_on(s.reload_all_region_labels());
+        assert_eq!(s.manager.region_labels().len(), 1);
+
+        server.stop();
+    }
+
+    #[test]
+    fn watch_test() {
+        // todo
+    }
+
+    #[test]
+    fn watch_suffix_test() {
+        // todo
+    }
+
+    #[test]
+    fn watch_filter_fn_test() {
+        // todo
     }
 }

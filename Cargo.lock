@@ -4605,6 +4605,8 @@ dependencies = [
  "slog",
  "slog-global",
  "tempfile",
+ "test_pd",
+ "test_pd_client",
  "tikv_util",
  "txn_types",
  "yatp",
