@@ -322,7 +322,7 @@ pub fn rollback_lock(
         txn.delete_value(key.clone(), lock.ts);
     }
 
-    // (1) The primary key of a pessimistic transaction needs to be protected.
+    // (1) The primary key of any transaction needs to be protected.
     //
     // (2) If the lock belongs to a pipelined-DML transaction, it must be protected.
     //

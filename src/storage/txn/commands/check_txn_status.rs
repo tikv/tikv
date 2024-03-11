@@ -426,7 +426,7 @@ pub mod tests {
                 |s| s == TtlExpire,
             );
             must_unlocked(&mut engine, b"k1");
-            must_get_rollback_protected(&mut engine, b"k1", 1, false);
+            must_get_rollback_protected(&mut engine, b"k1", 1, true);
 
             // case 2: primary is prewritten (pessimistic)
             must_acquire_pessimistic_lock(&mut engine, b"k2", b"k2", 15, 15);
