@@ -108,3 +108,6 @@ exceptions = [
 unknown-git = "deny"
 unknown-registry = "deny"
 allow-org = { github = ["tikv", "pingcap", "rust-lang"] }
+allow-git = [
+    "https://github.com/tonyxuqqi/rust-rocksdb",
+]
