@@ -295,7 +295,7 @@ impl SubscriptionTracer {
                         let r = s.meta.clone();
                         TRACK_REGION.dec();
                         s.stop();
-                        info!("stop listen stream from store"; "observer" => ?s, "region_id"=> %region_id);
+                        info!("Inactivating subscription."; "observer" => ?s, "region_id"=> %region_id);
 
                         *o.get_mut() = SubscribeState::Pending(r);
                         return true;

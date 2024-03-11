@@ -559,7 +559,7 @@ where
         let start = tokio::time::Instant::now();
         debug!("Scheduing subscription."; utils::slog_region(&region), "after" => ?backoff, "handle" => ?handle);
         let scheduled = async move {
-            tokio::time::sleep_until((start + backoff).into()).await;
+            tokio::time::sleep_until(start + backoff).await;
             let handle = handle.unwrap_or_else(|| ObserveHandle::new());
             if let Err(err) = tx.send(ObserveOp::Start { region, handle }).await {
                 warn!("log backup failed to schedule start observe."; "err" => %err);
