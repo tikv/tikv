@@ -205,19 +205,7 @@ impl MemoryQuota {
     }
 
     pub fn alloc_force(&self, bytes: usize) {
-        let mut in_use_bytes = self.in_use.load(Ordering::Relaxed);
-        loop {
-            let new_in_use_bytes = in_use_bytes + bytes;
-            match self.in_use.compare_exchange_weak(
-                in_use_bytes,
-                new_in_use_bytes,
-                Ordering::Relaxed,
-                Ordering::Relaxed,
-            ) {
-                Ok(_) => return,
-                Err(current) => in_use_bytes = current,
-            }
-        }
+        self.in_use.fetch_add(bytes, Ordering::Release);
     }
 
     pub fn alloc(&self, bytes: usize) -> Result<(), MemoryQuotaExceeded> {

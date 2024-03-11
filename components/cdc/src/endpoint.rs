@@ -2038,9 +2038,9 @@ mod tests {
         assert_eq!(suite.endpoint.capture_regions.len(), 3);
         let task = suite.task_rx.recv_timeout(timeout).unwrap();
         match task.unwrap() {
-            Task::Deregister(Deregister::Delegate { region_id, err, .. }) => {
+            Task::Deregister(Deregister::Downstream { region_id, err, .. }) => {
                 assert_eq!(region_id, 101);
-                assert!(matches!(err, Error::Other(_)), "{:?}", err);
+                assert!(matches!(err, Some(Error::Other(_))), "{:?}", err);
             }
             other => panic!("unexpected task {:?}", other),
         }
@@ -2208,6 +2208,7 @@ mod tests {
         let memory_quota = Arc::new(MemoryQuota::new(std::usize::MAX));
         let resolver = Resolver::new(1, memory_quota);
         let observe_id = suite.endpoint.capture_regions[&1].handle.id;
+        suite.capture_regions.get_mut(&1).unwrap().maybe_init_lock_tracker();
         suite.on_region_ready(observe_id, resolver, region.clone());
         suite.run(Task::MinTs {
             regions: vec![1],
@@ -2246,6 +2247,7 @@ mod tests {
         let resolver = Resolver::new(2, memory_quota);
         region.set_id(2);
         let observe_id = suite.endpoint.capture_regions[&2].handle.id;
+        suite.capture_regions.get_mut(&2).unwrap().maybe_init_lock_tracker();
         suite.on_region_ready(observe_id, resolver, region);
         suite.run(Task::MinTs {
             regions: vec![1, 2],
@@ -2299,6 +2301,7 @@ mod tests {
         let resolver = Resolver::new(3, memory_quota);
         region.set_id(3);
         let observe_id = suite.endpoint.capture_regions[&3].handle.id;
+        suite.capture_regions.get_mut(&3).unwrap().maybe_init_lock_tracker();
         suite.on_region_ready(observe_id, resolver, region);
         suite.run(Task::MinTs {
             regions: vec![1, 2, 3],
@@ -2531,6 +2534,7 @@ mod tests {
                 let observe_id = suite.endpoint.capture_regions[&region_id].handle.id;
                 let mut region = Region::default();
                 region.set_id(region_id);
+                suite.capture_regions.get_mut(&region_id).unwrap().maybe_init_lock_tracker();
                 suite.on_region_ready(observe_id, resolver, region);
             }
         }
@@ -2687,6 +2691,7 @@ mod tests {
         region.id = 1;
         region.set_region_epoch(region_epoch_2);
         let memory_quota = Arc::new(MemoryQuota::new(std::usize::MAX));
+        suite.capture_regions.get_mut(&1).unwrap().maybe_init_lock_tracker();
         suite.run(Task::ResolverReady {
             observe_id,
             region: region.clone(),
@@ -2821,6 +2826,7 @@ mod tests {
             let mut region = Region::default();
             region.id = id;
             region.set_region_epoch(region_epoch);
+            suite.capture_regions.get_mut(&id).unwrap().maybe_init_lock_tracker();
             let failed = suite
                 .capture_regions
                 .get_mut(&id)

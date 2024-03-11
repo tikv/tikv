@@ -606,6 +606,7 @@ mod tests {
         fmt::Display,
         sync::{
             mpsc::{channel, sync_channel, Receiver, RecvTimeoutError, Sender},
+            atomic::{AtomicBool},
             Arc,
         },
         time::Duration,
@@ -695,7 +696,7 @@ mod tests {
             checkpoint_ts: 1.into(),
             region_epoch: RegionEpoch::default(),
 
-            build_resolver: Arc::new(Default::default()),
+            build_resolver: Arc::new(AtomicBool::new(true)),
             observed_range: ObservedRange::default(),
             observe_handle: ObserveHandle::new(),
             downstream_id: DownstreamId::new(),
