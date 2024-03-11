@@ -481,7 +481,7 @@
 
 ## Use how many threads to handle raft io tasks
 ## If it is 0, it means io tasks are handled in store threads.
-# store-io-pool-size = 0
+# store-io-pool-size = 1
 
 ## When the size of raft db writebatch exceeds this value, write will be triggered.
 # raft-write-size-limit = "1MB"
