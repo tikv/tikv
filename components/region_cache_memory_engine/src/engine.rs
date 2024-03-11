@@ -181,19 +181,23 @@ impl RangeCacheMemoryEngineCore {
         self.cached_write_batch.remove(cache_range)
     }
 
-    // ensure that the transfer from `pending_ranges_loading_cached_write` to
+    // ensure that the transfer from `pending_ranges_loading_data` to
     // `range` is atomic with cached_write_batch empty
-    fn pending_range_completes_loading(core: &mut RwLockWriteGuard<'_, Self>, range: &CacheRange) {
+    pub(crate) fn pending_range_completes_loading(
+        core: &mut RwLockWriteGuard<'_, Self>,
+        range: &CacheRange,
+    ) {
+        fail::fail_point!("on_pending_range_completes_loading");
         assert!(!core.has_cached_write_batch(range));
         let range_manager = core.mut_range_manager();
         let r = range_manager
-            .pending_ranges_loading_cached_write
+            .pending_ranges_loading_data
             .pop_front()
-            .unwrap();
+            .unwrap()
+            .0;
         assert_eq!(&r, range);
         range_manager.new_range(r);
         range_manager.set_range_readable(range, true);
-        range_manager.pending_ranges_loading_cached_write_handling = false;
     }
 }
 
@@ -257,8 +261,10 @@ impl RangeCacheMemoryEngine {
         }
     }
 
-    // It handles the pending range and returns
-    // `(range_in_cache, pending_range_in_loading)`, see comments in
+    // It handles the pending range and check whether to buffer write for this
+    // range.
+    //
+    // Return `(range_in_cache, pending_range_in_loading)`, see comments in
     // `RangeCacheWriteBatch` for the detail of them.
     //
     // In addition, the region with range equals to the range in the `pending_range`
@@ -309,7 +315,7 @@ impl RangeCacheMemoryEngine {
 
         let rocks_snap = Arc::new(self.rocks_engine.as_ref().unwrap().snapshot(None));
         range_manager
-            .pending_ranges_loading_snapshot
+            .pending_ranges_loading_data
             .push_back((range.clone(), rocks_snap));
 
         if let Err(e) = self
@@ -358,41 +364,6 @@ impl RangeCacheMemoryEngine {
             let core = self.core.read();
             (vec![], core.engine().clone())
         }
-    }
-
-    // todo(SpadeA): use a atomic bool to perform quick check
-    pub(crate) fn handle_loading_range(&self) {
-        let core = self.core.upgradable_read();
-        let range_manager = core.range_manager();
-
-        if range_manager.pending_ranges_loading_cached_write_handling
-            || range_manager.pending_ranges_loading_cached_write.is_empty()
-        {
-            return;
-        }
-
-        let mut core = RwLockUpgradableReadGuard::upgrade(core);
-        let skiplist_engine = core.engine().clone();
-        let range_manager = core.mut_range_manager();
-        // Some ranges have already loaded all data from snapshot, it's time to consume
-        // the cached write batch and make the range visible
-        let range = range_manager
-            .handle_pending_ranges_loading_cached_write()
-            .unwrap();
-        loop {
-            if let Some(write_batches) = core.take_cache_write_batch(&range) {
-                drop(core);
-                for (seq, entry) in write_batches {
-                    entry.write_to_memory(&skiplist_engine, seq).unwrap();
-                }
-                core = self.core.write();
-            }
-            // we must ensure the write batch for the range is empty
-            if !core.has_cached_write_batch(&range) {
-                break;
-            }
-        }
-        RangeCacheMemoryEngineCore::pending_range_completes_loading(&mut core, &range);
     }
 
     pub fn bg_worker_manager(&self) -> &BgWorkManager {

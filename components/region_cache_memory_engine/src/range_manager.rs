@@ -90,25 +90,21 @@ pub struct RangeManager {
     // that is applied after the snapshot acquired and only consume them when snapshot load
     // finishes.
     // So, at sometime in the apply thread, the pending ranges, coupled with rocksdb
-    // snapshot, will be poped and pushed into `pending_ranges_loading_snapshot`. Then the data
-    // in the snapshot of the given ranges will be loaded in the memory engine in the
-    // background worker. When the snapshot load is finished, `pending_ranges_loading_cached_write`
-    // will take over it, which will handle data that is written after the acquire of the
-    // snapshot. After it, the range load is finished.
+    // snapshot, will be poped and pushed into `pending_ranges_loading_data` (data here means the
+    // data in snapshot and in further applied write). Then the data in the snapshot of the
+    // given ranges will be loaded in the memory engine in the background worker. When the
+    // snapshot load is finished, we begin to consume the write batch that is cached after the
+    // snapshot is acquired.
+    //
+    // Note: as we will release lock during the consuming of the cached write batch, there could be
+    // further write batch being cached. We must ensure the cached write batch is empty at the time
+    // the range becoming accessable range.
     //
     // Note: the range transferred from pending_range *must be* performed by the peer whose region
     // range equals to it. If split happened, the first noticed peer should first split the range
     // in the pending_range and then only handles its part.
-    //
-    // Note: after snapshot is fetched, we need to cache further write for the range. That is to
-    // say, if range is in `ranges_loading_snapshot` or `pending_ranges_loading_cached_write`, we
-    // need to cache write for it.
     pub(crate) pending_ranges: Vec<CacheRange>,
-    pub(crate) pending_ranges_loading_snapshot: VecDeque<(CacheRange, Arc<RocksSnapshot>)>,
-    pub(crate) pending_ranges_loading_cached_write: VecDeque<CacheRange>,
-    // indicate there's a range being transfered from `pending_ranges_loading_cached_write` to
-    // `range`, we use this bool to make the transfer sequentially to make thing simple
-    pub(crate) pending_ranges_loading_cached_write_handling: bool,
+    pub(crate) pending_ranges_loading_data: VecDeque<(CacheRange, Arc<RocksSnapshot>)>,
 
     ranges_in_gc: BTreeSet<CacheRange>,
 }
@@ -164,21 +160,9 @@ impl RangeManager {
     }
 
     pub fn pending_ranges_in_loading_contains(&self, range: &CacheRange) -> bool {
-        self.pending_ranges_loading_cached_write
+        self.pending_ranges_loading_data
             .iter()
-            .any(|r| r.contains_range(range))
-            || self
-                .pending_ranges_loading_snapshot
-                .iter()
-                .any(|(r, _)| r.contains_range(range))
-    }
-
-    pub fn handle_pending_ranges_loading_cached_write(&mut self) -> Option<CacheRange> {
-        if let Some(r) = self.pending_ranges_loading_cached_write.front() {
-            self.pending_ranges_loading_cached_write_handling = true;
-            return Some(r.clone());
-        }
-        None
+            .any(|(r, _)| r.contains_range(range))
     }
 
     pub(crate) fn overlap_with_range(&self, range: &CacheRange) -> bool {
@@ -322,8 +306,7 @@ impl RangeManager {
     }
 
     pub(crate) fn has_range_to_cache_write(&self) -> bool {
-        !self.pending_ranges_loading_snapshot.is_empty()
-            || !self.pending_ranges_loading_cached_write.is_empty()
+        !self.pending_ranges_loading_data.is_empty()
     }
 }
 

@@ -9,7 +9,7 @@ use crossbeam::{
 };
 use engine_rocks::RocksSnapshot;
 use engine_traits::{CacheRange, IterOptions, Iterable, Iterator, CF_DEFAULT, CF_WRITE, DATA_CFS};
-use parking_lot::{RwLock, RwLockUpgradableReadGuard};
+use parking_lot::RwLock;
 use skiplist_rs::Skiplist;
 use slog_global::{error, info, warn};
 use tikv_util::{
@@ -96,9 +96,10 @@ impl BgWorkManager {
     ) -> (JoinHandle<()>, Sender<bool>) {
         let (tx, rx) = bounded(0);
         let h = std::thread::spawn(move || {
+            let ticker = tick(gc_interval);
             loop {
                 select! {
-                    recv(tick(gc_interval)) -> _ => {
+                    recv(ticker) -> _ => {
                         if scheduler.is_busy() {
                             info!(
                                 "range cache engine gc worker is busy, jump to next gc duration";
@@ -250,43 +251,32 @@ impl BackgroundRunnerCore {
     fn get_range_to_load(&self) -> Option<(CacheRange, Arc<RocksSnapshot>)> {
         let core = self.engine.read();
         core.range_manager()
-            .pending_ranges_loading_snapshot
+            .pending_ranges_loading_data
             .front()
             .cloned()
     }
 
     fn on_snapshot_loaded(&mut self, range: CacheRange) -> engine_traits::Result<()> {
         fail::fail_point!("on_snapshot_loaded");
-        {
-            let core = self.engine.upgradable_read();
+        loop {
+            // Consume the cached write batch after the snapshot is acquired.
+            let mut core = self.engine.write();
             if core.has_cached_write_batch(&range) {
                 let (cache_batch, skiplist_engine) = {
-                    let mut core = RwLockUpgradableReadGuard::upgrade(core);
                     (
                         core.take_cache_write_batch(&range).unwrap(),
                         core.engine().clone(),
                     )
                 };
+                drop(core);
                 for (seq, entry) in cache_batch {
                     entry.write_to_memory(&skiplist_engine, seq)?;
                 }
+                fail::fail_point!("on_cached_write_batch_consumed");
+            } else {
+                RangeCacheMemoryEngineCore::pending_range_completes_loading(&mut core, &range);
+                break;
             }
-        }
-        fail::fail_point!("on_snapshot_loaded_finish_before_status_change");
-        {
-            let mut core = self.engine.write();
-            let range_manager = core.mut_range_manager();
-            assert_eq!(
-                range_manager
-                    .pending_ranges_loading_snapshot
-                    .pop_front()
-                    .unwrap()
-                    .0,
-                range
-            );
-            range_manager
-                .pending_ranges_loading_cached_write
-                .push_back(range);
         }
         Ok(())
     }
@@ -860,13 +850,8 @@ pub mod tests {
 
         // wait for background load
         std::thread::sleep(Duration::from_secs(1));
-        // each call handles one range
-        engine.handle_loading_range();
 
         let _ = engine.snapshot(r1, u64::MAX, u64::MAX).unwrap();
-        assert!(engine.snapshot(r2.clone(), u64::MAX, u64::MAX).is_none());
-
-        engine.handle_loading_range();
         let _ = engine.snapshot(r2, u64::MAX, u64::MAX).unwrap();
 
         for i in 10..20 {

@@ -79,7 +79,7 @@ impl RangeCacheWriteBatch {
             seq,
             std::mem::take(&mut self.pending_range_in_loading_buffer),
         );
-        self.engine.handle_loading_range();
+        // self.engine.handle_loading_range();
         entries_to_write
             .into_iter()
             .chain(std::mem::take(&mut self.buffer))
@@ -186,17 +186,10 @@ pub fn group_write_batch_entries(
     let mut drain = entries.drain(..).peekable();
     while let Some(mut e) = drain.next() {
         let mut cache_range = None;
-        for r in &range_manager.pending_ranges_loading_snapshot {
+        for r in &range_manager.pending_ranges_loading_data {
             if r.0.contains_key(&e.key) {
                 cache_range = Some(r.0.clone());
                 break;
-            }
-        }
-        if cache_range.is_none() {
-            for r in &range_manager.pending_ranges_loading_cached_write {
-                if r.contains_key(&e.key) {
-                    cache_range = Some(r.clone());
-                }
             }
         }
         if let Some(cache_range) = cache_range {
@@ -448,12 +441,13 @@ mod tests {
         let r2 = CacheRange::new(b"k10".to_vec(), b"k20".to_vec());
         let r3 = CacheRange::new(b"k20".to_vec(), b"k30".to_vec());
         range_manager.new_range(r1.clone());
+        let snap = Arc::new(snap);
         range_manager
-            .pending_ranges_loading_snapshot
-            .push_back((r2.clone(), Arc::new(snap)));
+            .pending_ranges_loading_data
+            .push_back((r2.clone(), snap.clone()));
         range_manager
-            .pending_ranges_loading_cached_write
-            .push_back(r3.clone());
+            .pending_ranges_loading_data
+            .push_back((r3.clone(), snap));
 
         let entries = vec![
             RangeCacheWriteBatchEntry::put_value(CF_DEFAULT, b"k22", b"val"),

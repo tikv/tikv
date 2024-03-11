@@ -180,12 +180,21 @@ fn test_write_batch_cache_during_load() {
         cluster.must_put(&encoded_key, b"val-default");
         cluster.must_put_cf(CF_WRITE, &encoded_key, b"val-write");
     }
-    fail::cfg("on_snapshot_loaded_finish_before_status_change", "pause").unwrap();
+
+    let (tx1, rx1) = sync_channel(1);
+    fail::cfg_callback("on_pending_range_completes_loading", move || {
+        tx1.send(true).unwrap();
+    })
+    .unwrap();
+
+    // use it to mock concurrency between consuming cached write batch and cache
+    // further writes
+    fail::cfg("on_cached_write_batch_consumed", "pause").unwrap();
     fail::remove("on_snapshot_loaded");
 
-    let (tx, rx) = sync_channel(1);
+    let (tx2, rx2) = sync_channel(1);
     fail::cfg_callback("on_range_cache_get_value", move || {
-        tx.send(true).unwrap();
+        tx2.send(true).unwrap();
     })
     .unwrap();
     let snap_ctx = SnapshotContext {
@@ -204,8 +213,8 @@ fn test_write_batch_cache_during_load() {
                 .unwrap();
             assert_eq!(&val, b"val-write");
             // We should not read the value in the memory engine at this phase.
-            rx.try_recv().unwrap_err();
-            fail::remove("on_snapshot_loaded_finish_before_status_change");
+            rx2.try_recv().unwrap_err();
+            fail::remove("on_cached_write_batch_consumed");
         }
         let key = format!("key-{:04}", i);
         let encoded_key = Key::from_raw(key.as_bytes())
@@ -214,6 +223,9 @@ fn test_write_batch_cache_during_load() {
         cluster.must_put(&encoded_key, b"val-default");
         cluster.must_put_cf(CF_WRITE, &encoded_key, b"val-write");
     }
+
+    // ensure the pending range is transfered to normal range
+    rx1.recv_timeout(Duration::from_secs(5)).unwrap();
 
     for i in 0..30 {
         let key = format!("key-{:04}", i);
@@ -225,13 +237,13 @@ fn test_write_batch_cache_during_load() {
             .unwrap();
         assert_eq!(&val, b"val-write");
         // verify it's read from range cache engine
-        assert!(rx.try_recv().unwrap());
+        assert!(rx2.try_recv().unwrap());
 
         let val = cluster
             .get_with_snap_ctx(&encoded_key, snap_ctx.clone())
             .unwrap();
         assert_eq!(&val, b"val-default");
         // verify it's read from range cache engine
-        assert!(rx.try_recv().unwrap());
+        assert!(rx2.try_recv().unwrap());
     }
 }
