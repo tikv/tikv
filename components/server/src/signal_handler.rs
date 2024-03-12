@@ -65,12 +65,15 @@ mod imp {
 
 #[cfg(not(unix))]
 mod imp {
+    use service::service_event::ServiceEvent;
+
     use super::*;
 
     pub fn wait_for_signal(
         _: Option<Engines<impl KvEngine, impl RaftEngine>>,
         _: Option<Arc<RocksStatistics>>,
         _: Option<Arc<RocksStatistics>>,
+        _: Option<TikvMpsc::Sender<ServiceEvent>>,
     ) {
     }
 }

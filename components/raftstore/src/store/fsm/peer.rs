@@ -103,7 +103,7 @@ use crate::{
         },
         CasualMessage, Config, LocksStatus, MergeResultKind, PdTask, PeerMsg, PeerTick,
         ProposalContext, RaftCmdExtraOpts, RaftCommand, RaftlogFetchResult, ReadCallback, ReadTask,
-        SignificantMsg, SnapKey, StoreMsg, WriteCallback,
+        SignificantMsg, SnapKey, StoreMsg, WriteCallback, RAFT_INIT_LOG_INDEX,
     },
     Error, Result,
 };
@@ -699,12 +699,7 @@ where
                 PeerMsg::UpdateReplicationMode => self.on_update_replication_mode(),
                 PeerMsg::Destroy(peer_id) => {
                     if self.fsm.peer.peer_id() == peer_id {
-                        match self.fsm.peer.maybe_destroy(self.ctx) {
-                            None => self.ctx.raft_metrics.message_dropped.applying_snap.inc(),
-                            Some(job) => {
-                                self.handle_destroy_peer(job);
-                            }
-                        }
+                        self.maybe_destroy();
                     }
                 }
             }
@@ -752,6 +747,9 @@ where
             }
             self.fsm.batch_req_builder.request = Some(cmd);
         }
+        // Update the state whether the peer is pending on applying raft
+        // logs if necesssary.
+        self.on_check_peer_complete_apply_logs();
     }
 
     /// Flushes all pending raft commands for immediate execution.
@@ -1243,6 +1241,9 @@ where
             }
             CasualMessage::SnapshotApplied => {
                 self.fsm.has_ready = true;
+                if self.fsm.peer.should_destroy_after_apply_snapshot() {
+                    self.maybe_destroy();
+                }
             }
             CasualMessage::Campaign => {
                 let _ = self.fsm.peer.raft_group.campaign();
@@ -3634,6 +3635,15 @@ where
         }
     }
 
+    fn maybe_destroy(&mut self) {
+        match self.fsm.peer.maybe_destroy(self.ctx) {
+            None => self.ctx.raft_metrics.message_dropped.applying_snap.inc(),
+            Some(job) => {
+                self.handle_destroy_peer(job);
+            }
+        }
+    }
+
     /// Check if destroy can be executed immediately. If it can't, the reason is
     /// returned.
     fn maybe_delay_destroy(&mut self) -> Option<DelayReason> {
@@ -3806,6 +3816,9 @@ where
             "is_peer_initialized" => is_peer_initialized,
             "is_latest_initialized" => is_latest_initialized,
         );
+
+        // Ensure this peer is removed in the pending apply list.
+        meta.busy_apply_peers.remove(&self.fsm.peer_id());
 
         if meta.atomic_snap_regions.contains_key(&self.region_id()) {
             drop(meta);
@@ -6554,6 +6567,67 @@ where
 
     fn register_report_region_buckets_tick(&mut self) {
         self.schedule_tick(PeerTick::ReportBuckets)
+    }
+
+    /// Check whether the peer is pending on applying raft logs.
+    ///
+    /// If busy, the peer will be recorded, until the pending logs are
+    /// applied. And after it completes applying, it will be removed from
+    /// the recording list.
+    fn on_check_peer_complete_apply_logs(&mut self) {
+        // Already completed, skip.
+        if self.fsm.peer.busy_on_apply.is_none() {
+            return;
+        }
+
+        let peer_id = self.fsm.peer.peer_id();
+        let applied_idx = self.fsm.peer.get_store().applied_index();
+        let last_idx = self.fsm.peer.get_store().last_index();
+        // If the peer is newly added or created, no need to check the apply status.
+        if last_idx <= RAFT_INIT_LOG_INDEX {
+            self.fsm.peer.busy_on_apply = None;
+            // And it should be recorded in the `completed_apply_peers_count`.
+            let mut meta = self.ctx.store_meta.lock().unwrap();
+            meta.busy_apply_peers.remove(&peer_id);
+            if let Some(count) = meta.completed_apply_peers_count.as_mut() {
+                *count += 1;
+            }
+            return;
+        }
+        assert!(self.fsm.peer.busy_on_apply.is_some());
+        // If the peer has large unapplied logs, this peer should be recorded until
+        // the lag is less than the given threshold.
+        if last_idx >= applied_idx + self.ctx.cfg.leader_transfer_max_log_lag {
+            if !self.fsm.peer.busy_on_apply.unwrap() {
+                let mut meta = self.ctx.store_meta.lock().unwrap();
+                meta.busy_apply_peers.insert(peer_id);
+            }
+            self.fsm.peer.busy_on_apply = Some(true);
+            debug!(
+                "peer is busy on applying logs";
+                "last_commit_idx" => last_idx,
+                "last_applied_idx" => applied_idx,
+                "region_id" => self.fsm.region_id(),
+                "peer_id" => peer_id,
+            );
+        } else {
+            // Already finish apply, remove it from recording list.
+            {
+                let mut meta = self.ctx.store_meta.lock().unwrap();
+                meta.busy_apply_peers.remove(&peer_id);
+                if let Some(count) = meta.completed_apply_peers_count.as_mut() {
+                    *count += 1;
+                }
+            }
+            debug!(
+                "peer completes applying logs";
+                "last_commit_idx" => last_idx,
+                "last_applied_idx" => applied_idx,
+                "region_id" => self.fsm.region_id(),
+                "peer_id" => peer_id,
+            );
+            self.fsm.peer.busy_on_apply = None;
+        }
     }
 }
 

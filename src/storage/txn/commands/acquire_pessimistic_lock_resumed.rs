@@ -48,6 +48,13 @@ impl Debug for ResumedPessimisticLockItem {
     }
 }
 
+impl tikv_util::memory::HeapSize for ResumedPessimisticLockItem {
+    fn approximate_heap_size(&self) -> usize {
+        // TODO: account heap size for params
+        self.key.approximate_heap_size()
+    }
+}
+
 command! {
     /// Acquire a Pessimistic lock on the keys.
     ///
@@ -57,6 +64,9 @@ command! {
         display => { "kv::command::acquirepessimisticlockresumed {:?}", (items), }
         content => {
             items: Vec<ResumedPessimisticLockItem>,
+        }
+        in_heap => {
+            items,
         }
 }
 

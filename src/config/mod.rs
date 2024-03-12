@@ -1299,6 +1299,8 @@ pub struct DbConfig {
     #[doc(hidden)]
     #[serde(skip_serializing)]
     pub write_buffer_flush_oldest_first: bool,
+    #[online_config(skip)]
+    pub track_and_verify_wals_in_manifest: bool,
     // Dangerous option only for programming use.
     #[online_config(skip)]
     #[serde(skip)]
@@ -1363,6 +1365,7 @@ impl Default for DbConfig {
             write_buffer_limit: None,
             write_buffer_stall_ratio: 0.0,
             write_buffer_flush_oldest_first: true,
+            track_and_verify_wals_in_manifest: true,
             paranoid_checks: None,
             defaultcf: DefaultCfConfig::default(),
             writecf: WriteCfConfig::default(),
@@ -1540,6 +1543,7 @@ impl DbConfig {
             // Historical stats are not used.
             opts.set_stats_persist_period_sec(0);
         }
+        opts.set_track_and_verify_wals_in_manifest(self.track_and_verify_wals_in_manifest);
         opts
     }
 
@@ -2910,6 +2914,9 @@ impl BackupStreamConfig {
         }
         if self.initial_scan_concurrency == 0 {
             return Err("the `initial_scan_concurrency` shouldn't be zero".into());
+        }
+        if self.initial_scan_rate_limit.0 < 1024 {
+            return Err("the `initial_scan_rate_limit` should be at least 1024 bytes".into());
         }
         Ok(())
     }
@@ -5338,6 +5345,19 @@ mod tests {
     }
 
     #[test]
+    fn test_illegal_backupstream_config_parm() {
+        let mut backup_stream_cfg = BackupStreamConfig::default();
+        backup_stream_cfg.initial_scan_rate_limit.0 = 0;
+        backup_stream_cfg.validate().unwrap_err();
+        backup_stream_cfg.initial_scan_rate_limit.0 = 1000;
+        backup_stream_cfg.validate().unwrap_err();
+        backup_stream_cfg.initial_scan_rate_limit.0 = 1024;
+        backup_stream_cfg.validate().unwrap();
+        backup_stream_cfg.initial_scan_rate_limit.0 = 2048;
+        backup_stream_cfg.validate().unwrap();
+    }
+
+    #[test]
     fn test_block_size() {
         let mut tikv_cfg = TikvConfig::default();
         tikv_cfg.pd.endpoints = vec!["".to_owned()];
@@ -6129,6 +6149,33 @@ mod tests {
         check_scale_pool_size(max_pool_size + 1, false);
         check_scale_pool_size(1, true);
         check_scale_pool_size(max_pool_size, true);
+    }
+
+    #[test]
+    fn test_change_store_scheduler_memory_quota() {
+        let (mut cfg, _dir) = TikvConfig::with_tmp().unwrap();
+        cfg.storage.memory_quota = ReadableSize::mb(100);
+        cfg.storage.scheduler_pending_write_threshold = ReadableSize::mb(10);
+        cfg.validate().unwrap();
+        let (storage, cfg_controller, ..) = new_engines::<ApiV1>(cfg.clone());
+        let scheduler = storage.get_scheduler();
+
+        let check_scheduler_memory_quota = |size: &str, expected: Option<usize>| {
+            let res = cfg_controller.update_config("storage.memory-quota", size);
+            let Some(expected_size) = expected else {
+                res.unwrap_err();
+                return;
+            };
+            assert_eq!(scheduler.memory_quota_capacity(), expected_size);
+        };
+
+        check_scheduler_memory_quota("11h", None);
+        check_scheduler_memory_quota(
+            "0B",
+            Some(cfg.storage.scheduler_pending_write_threshold.0 as usize),
+        );
+        check_scheduler_memory_quota("11MB", Some(ReadableSize::mb(11).0 as usize));
+        check_scheduler_memory_quota("111MB", Some(ReadableSize::mb(111).0 as usize));
     }
 
     #[test]

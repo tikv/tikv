@@ -15,9 +15,6 @@ sse = ["tikv/sse"]
 memory-engine = []
 mem-profiling = ["tikv/mem-profiling"]
 failpoints = ["tikv/failpoints"]
-cloud-aws = ["encryption_export/cloud-aws"]
-cloud-gcp = ["encryption_export/cloud-gcp"]
-cloud-azure = ["encryption_export/cloud-azure"]
 test-engine-kv-rocksdb = [
   "tikv/test-engine-kv-rocksdb"
 ]
@@ -56,6 +53,7 @@ fs2 = "0.4"
 futures = "0.3"
 grpcio = { workspace = true }
 grpcio-health = { workspace = true }
+health_controller = { workspace = true }
 hex = "0.4"
 hybrid_engine = { workspace = true }
 keys = { workspace = true }

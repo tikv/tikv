@@ -403,6 +403,14 @@
               "legendFormat": "{{instance}}",
               "refId": "A",
               "step": 10
+            },
+            {
+              "expr": "tikv_server_cpu_cores_quota{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", job=~\".*tikv\"}",
+              "format": "time_series",
+              "intervalFactor": 2,
+              "legendFormat": "quota-{{instance}}",
+              "refId": "B",
+              "step": 10
             }
           ],
           "thresholds": [],
@@ -499,6 +507,14 @@
               "intervalFactor": 2,
               "legendFormat": "{{instance}}",
               "refId": "A",
+              "step": 10
+            },
+            {
+              "expr": "tikv_server_memory_quota_bytes{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", job=~\".*tikv\"}",
+              "format": "time_series",
+              "intervalFactor": 2,
+              "legendFormat": "quota-{{instance}}",
+              "refId": "B",
               "step": 10
             }
           ],

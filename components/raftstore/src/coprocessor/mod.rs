@@ -19,6 +19,7 @@ use kvproto::{
     },
     raft_serverpb::RaftApplyState,
 };
+use pd_client::RegionStat;
 use raft::{eraftpb, StateRole};
 
 pub mod config;
@@ -350,6 +351,9 @@ pub trait RegionChangeObserver: Coprocessor {
     fn pre_write_apply_state(&self, _: &mut ObserverContext<'_>) -> bool {
         true
     }
+}
+pub trait RegionHeartbeatObserver: Coprocessor {
+    fn on_region_heartbeat(&self, _: &mut ObserverContext<'_>, _: &RegionStat) {}
 }
 
 pub trait MessageObserver: Coprocessor {
