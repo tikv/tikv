@@ -186,15 +186,14 @@ impl PrepareBackup {
     }
 
     pub fn send_finalize(mut self) -> bool {
-        let flag = match block_on(self.tx.send({
-            let mut req = PrepareSnapshotBackupRequest::new();
-            req.set_ty(PrepareSnapshotBackupRequestType::Finish);
-            (req, WriteFlags::default())
-        })) {
-            Ok(_) | Err(grpcio::Error::RpcFinished(_)) => true,
-            _ => false,
-        };
-        if flag {
+        if matches!(
+            block_on(self.tx.send({
+                let mut req = PrepareSnapshotBackupRequest::new();
+                req.set_ty(PrepareSnapshotBackupRequestType::Finish);
+                (req, WriteFlags::default())
+            })),
+            Ok(_) | Err(grpcio::Error::RpcFinished(_))
+        ) {
             block_on_timeout(
                 async {
                     while let Some(item) = self.rx.next().await {
