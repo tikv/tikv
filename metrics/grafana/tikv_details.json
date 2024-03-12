@@ -934,6 +934,21 @@
               "refId": "",
               "step": 10,
               "target": ""
+            },
+            {
+              "datasource": "${DS_TEST-CLUSTER}",
+              "expr": "((\n    tikv_server_cpu_cores_quota\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",job=~\".*tikv\"}\n    \n))  ",
+              "format": "time_series",
+              "hide": false,
+              "instant": false,
+              "interval": "",
+              "intervalFactor": 1,
+              "legendFormat": "quota-{{instance}}",
+              "metric": "",
+              "query": "((\n    tikv_server_cpu_cores_quota\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",job=~\".*tikv\"}\n    \n))  ",
+              "refId": "",
+              "step": 10,
+              "target": ""
             }
           ],
           "thresholds": [],
@@ -1064,6 +1079,21 @@
               "legendFormat": "{{instance}}",
               "metric": "",
               "query": "sum((\n    process_resident_memory_bytes\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",job=~\".*tikv\"}\n    \n)) by (instance) ",
+              "refId": "",
+              "step": 10,
+              "target": ""
+            },
+            {
+              "datasource": "${DS_TEST-CLUSTER}",
+              "expr": "((\n    tikv_server_memory_quota_bytes\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",job=~\".*tikv\"}\n    \n))  ",
+              "format": "time_series",
+              "hide": false,
+              "instant": false,
+              "interval": "",
+              "intervalFactor": 1,
+              "legendFormat": "quota-{{instance}}",
+              "metric": "",
+              "query": "((\n    tikv_server_memory_quota_bytes\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",job=~\".*tikv\"}\n    \n))  ",
               "refId": "",
               "step": 10,
               "target": ""

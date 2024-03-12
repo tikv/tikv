@@ -94,6 +94,9 @@ pub fn prewrite_with_generation<S: Snapshot>(
             mutation.check_lock(lock, pessimistic_action, expected_for_update_ts, generation)?
         }
         None if matches!(pessimistic_action, DoPessimisticCheck) => {
+            // pipelined DML can't go into this. Otherwise, assertions may need to be
+            // skipped for non-first flushes.
+            assert_eq!(generation, 0);
             amend_pessimistic_lock(&mut mutation, reader)?;
             lock_amended = true;
             LockStatus::None
@@ -125,7 +128,14 @@ pub fn prewrite_with_generation<S: Snapshot>(
     //   assertion here introduces too much overhead. However, we'll do it anyway if
     //   `assertion_level` is set to `Strict` level.
     // Assertion level will be checked within the `check_assertion` function.
-    if !lock_amended {
+    //
+    // By design, each key can be asserted only once in a transaction. For
+    // pipelined-DML, a key may be flushed multiple times. Once a mutation with an
+    // assertion is flushed and dropped from client buffer, the following execution
+    // can set a different assertion for the same key. We only check the first
+    // assertion here, ignoring the rest.
+    let is_subsequent_flush = generation > 0 && matches!(lock_status, LockStatus::Locked(_));
+    if !lock_amended && !is_subsequent_flush {
         let (reloaded_prev_write, reloaded) =
             mutation.check_assertion(reader, &prev_write, prev_write_loaded)?;
         if reloaded {
@@ -443,6 +453,16 @@ impl<'a> PrewriteMutation<'a> {
                 self.key.clone(),
                 lock,
             )
+            .into());
+        }
+
+        // A key can be flushed multiple times for a Pipelined-DML transaction.
+        // A latter flush with `should_not_exist` should return error if a previous
+        // flush of the key writes a value
+        if lock.generation > 0 && self.should_not_exist && matches!(lock.lock_type, LockType::Put) {
+            return Err(ErrorInner::AlreadyExist {
+                key: self.key.to_raw()?,
+            }
             .into());
         }
 
