@@ -1,23 +1,29 @@
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, sync::Arc};
 
 use bytes::Bytes;
 use engine_traits::{
     CacheRange, Mutable, Result, WriteBatch, WriteBatchExt, WriteOptions, CF_DEFAULT,
 };
-use tikv_util::box_err;
+use tikv_util::{box_err, config::ReadableSize, error, warn};
 
 use crate::{
+    background::BackgroundTask,
     engine::{cf_to_id, RangeCacheMemoryEngineCore, SkiplistEngine},
-    keys::{encode_key, ValueType},
+    keys::{encode_key, ValueType, ENC_KEY_SEQ_LENGTH},
+    memory_limiter::{MemoryController, MemoryUsage},
     range_manager::RangeManager,
     RangeCacheMemoryEngine,
 };
+
+const NODE_OVERHEAD_SIZE_EXPECTATION: usize = 96;
 
 pub struct RangeCacheWriteBatch {
     buffer: Vec<RangeCacheWriteBatchEntry>,
     engine: RangeCacheMemoryEngine,
     save_points: Vec<usize>,
     sequence_number: Option<u64>,
+    memory_controller: Arc<MemoryController>,
+    memory_usage_reach_hard_limit: bool,
 }
 
 impl std::fmt::Debug for RangeCacheWriteBatch {
@@ -37,6 +43,8 @@ impl From<&RangeCacheMemoryEngine> for RangeCacheWriteBatch {
             engine: engine.clone(),
             save_points: Vec::new(),
             sequence_number: None,
+            memory_controller: engine.memory_controller(),
+            memory_usage_reach_hard_limit: false,
         }
     }
 }
@@ -48,6 +56,8 @@ impl RangeCacheWriteBatch {
             engine: engine.clone(),
             save_points: Vec::new(),
             sequence_number: None,
+            memory_controller: engine.memory_controller(),
+            memory_usage_reach_hard_limit: false,
         }
     }
 
@@ -95,6 +105,49 @@ impl RangeCacheWriteBatch {
         filtered_keys
             .into_iter()
             .try_for_each(|e| e.write_to_memory(&engine, seq))
+    }
+
+    fn schedule_memory_check(&self) {
+        if self.memory_controller.memory_checking() {
+            return;
+        }
+        self.memory_controller.set_memory_checking(true);
+        if let Err(e) = self
+            .engine
+            .bg_worker_manager()
+            .schedule_task(BackgroundTask::MemoryCheck)
+        {
+            error!(
+                "schedule memory check failed";
+                "err" => ?e,
+            );
+            assert!(tikv_util::thread_group::is_shutdown(!cfg!(test)));
+        }
+    }
+
+    fn memory_acquire(&mut self, mem_required: usize) -> bool {
+        match self.memory_controller.acquire(mem_required) {
+            MemoryUsage::HardLimitReached(n) => {
+                self.memory_usage_reach_hard_limit = true;
+                warn!(
+                    "the memory usage of in-memory engine reaches to hard limit";
+                    "memory_usage(MB)" => ReadableSize(n as u64).as_mb_f64(),
+                    "memory_acquire(MB)" => ReadableSize(mem_required as u64).as_mb_f64(),
+                );
+                self.schedule_memory_check();
+                return false;
+            }
+            MemoryUsage::SoftLimitReached(n) => {
+                warn!(
+                    "the memory usage of in-memory engine reaches to soft limit";
+                    "memory_usage(MB)" => ReadableSize(n as u64).as_mb_f64(),
+                    "memory_acquire(MB)" => ReadableSize(mem_required as u64).as_mb_f64(),
+                );
+                self.schedule_memory_check();
+            }
+            _ => {}
+        }
+        true
     }
 }
 
@@ -279,6 +332,15 @@ impl Mutable for RangeCacheWriteBatch {
     }
 
     fn put_cf(&mut self, cf: &str, key: &[u8], val: &[u8]) -> Result<()> {
+        if self.memory_usage_reach_hard_limit {
+            return Ok(());
+        }
+        let expected_memory =
+            NODE_OVERHEAD_SIZE_EXPECTATION + key.len() + val.len() + ENC_KEY_SEQ_LENGTH;
+        if !self.memory_acquire(expected_memory) {
+            return Ok(());
+        }
+
         self.buffer
             .push(RangeCacheWriteBatchEntry::put_value(cf, key, val));
         Ok(())
@@ -289,6 +351,14 @@ impl Mutable for RangeCacheWriteBatch {
     }
 
     fn delete_cf(&mut self, cf: &str, key: &[u8]) -> Result<()> {
+        if self.memory_usage_reach_hard_limit {
+            return Ok(());
+        }
+        let expected_memory = NODE_OVERHEAD_SIZE_EXPECTATION + key.len() + ENC_KEY_SEQ_LENGTH;
+        if !self.memory_acquire(expected_memory) {
+            return Ok(());
+        }
+
         self.buffer
             .push(RangeCacheWriteBatchEntry::deletion(cf, key));
         Ok(())
@@ -305,15 +375,16 @@ impl Mutable for RangeCacheWriteBatch {
 
 #[cfg(test)]
 mod tests {
-    use std::{sync::Arc, time::Duration};
+    use std::sync::Arc;
 
     use engine_traits::{CacheRange, Peekable, RangeCacheEngine, WriteBatch};
 
     use super::*;
+    use crate::EngineConfig;
 
     #[test]
     fn test_write_to_skiplist() {
-        let engine = RangeCacheMemoryEngine::new(Arc::default(), Duration::from_secs(1));
+        let engine = RangeCacheMemoryEngine::new(Arc::default(), EngineConfig::config_for_test());
         let r = CacheRange::new(b"".to_vec(), b"z".to_vec());
         engine.new_range(r.clone());
         {
@@ -332,7 +403,7 @@ mod tests {
 
     #[test]
     fn test_savepoints() {
-        let engine = RangeCacheMemoryEngine::new(Arc::default(), Duration::from_secs(1));
+        let engine = RangeCacheMemoryEngine::new(Arc::default(), EngineConfig::config_for_test());
         let r = CacheRange::new(b"".to_vec(), b"z".to_vec());
         engine.new_range(r.clone());
         {
@@ -356,7 +427,7 @@ mod tests {
 
     #[test]
     fn test_put_write_clear_delete_put_write() {
-        let engine = RangeCacheMemoryEngine::new(Arc::default(), Duration::from_secs(1));
+        let engine = RangeCacheMemoryEngine::new(Arc::default(), EngineConfig::config_for_test());
         let r = CacheRange::new(b"".to_vec(), b"z".to_vec());
         engine.new_range(r.clone());
         {

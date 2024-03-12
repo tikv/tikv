@@ -169,11 +169,11 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::{sync::Arc, time::Duration};
+    use std::sync::Arc;
 
     use engine_rocks::util::new_engine;
     use engine_traits::{CacheRange, KvEngine, SnapshotContext, CF_DEFAULT, CF_LOCK, CF_WRITE};
-    use region_cache_memory_engine::RangeCacheMemoryEngine;
+    use region_cache_memory_engine::{EngineConfig, RangeCacheMemoryEngine};
     use tempfile::Builder;
 
     use crate::HybridEngine;
@@ -186,7 +186,8 @@ mod tests {
             &[CF_DEFAULT, CF_LOCK, CF_WRITE],
         )
         .unwrap();
-        let memory_engine = RangeCacheMemoryEngine::new(Arc::default(), Duration::from_secs(1));
+        let memory_engine =
+            RangeCacheMemoryEngine::new(Arc::default(), EngineConfig::config_for_test());
         let range = CacheRange::new(b"k00".to_vec(), b"k10".to_vec());
         memory_engine.new_range(range.clone());
         {

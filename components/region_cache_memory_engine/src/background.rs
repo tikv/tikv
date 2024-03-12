@@ -24,7 +24,7 @@ use crate::{
     keys::{
         decode_key, encode_key, encoding_for_filter, InternalKey, InternalKeyComparator, ValueType,
     },
-    memory_limiter::GlobalMemoryLimiter,
+    memory_limiter::{GlobalMemoryLimiter, MemoryController, MemoryUsage},
 };
 
 /// Try to extract the key and `u64` timestamp from `encoded_key`.
@@ -70,9 +70,13 @@ impl Drop for BgWorkManager {
 }
 
 impl BgWorkManager {
-    pub fn new(core: Arc<ShardedLock<RangeCacheMemoryEngineCore>>, gc_interval: Duration) -> Self {
+    pub fn new(
+        core: Arc<ShardedLock<RangeCacheMemoryEngineCore>>,
+        gc_interval: Duration,
+        memory_controller: Arc<MemoryController>,
+    ) -> Self {
         let worker = Worker::new("range-cache-background-worker");
-        let runner = BackgroundRunner::new(core.clone());
+        let runner = BackgroundRunner::new(core.clone(), memory_controller);
         let scheduler = worker.start("range-cache-engine-background", runner);
 
         let scheduler_clone = scheduler.clone();
@@ -84,6 +88,10 @@ impl BgWorkManager {
             scheduler,
             tick_stopper: Some((handle, tx)),
         }
+    }
+
+    pub fn scheduler(&self) -> Scheduler<BackgroundTask> {
+        self.scheduler.clone()
     }
 
     pub fn schedule_task(&self, task: BackgroundTask) -> Result<(), ScheduleError<BackgroundTask>> {
@@ -135,6 +143,7 @@ impl BgWorkManager {
 pub enum BackgroundTask {
     GcTask(GcTask),
     LoadTask,
+    MemoryCheck,
 }
 
 #[derive(Debug)]
@@ -147,6 +156,7 @@ impl Display for BackgroundTask {
         match self {
             BackgroundTask::GcTask(ref t) => t.fmt(f),
             BackgroundTask::LoadTask => f.debug_struct("LoadTask").finish(),
+            BackgroundTask::MemoryCheck => f.debug_struct("MemoryCheck").finish(),
         }
     }
 }
@@ -291,6 +301,7 @@ pub struct BackgroundRunner {
     core: BackgroundRunnerCore,
     range_load_remote: Remote<yatp::task::future::TaskCell>,
     range_load_worker: Worker,
+    memory_controller: Arc<MemoryController>,
 }
 
 impl Drop for BackgroundRunner {
@@ -300,13 +311,17 @@ impl Drop for BackgroundRunner {
 }
 
 impl BackgroundRunner {
-    pub fn new(engine: Arc<ShardedLock<RangeCacheMemoryEngineCore>>) -> Self {
+    pub fn new(
+        engine: Arc<ShardedLock<RangeCacheMemoryEngineCore>>,
+        memory_controller: Arc<MemoryController>,
+    ) -> Self {
         let range_load_worker = Worker::new("background-range-load-worker");
         let range_load_remote = range_load_worker.remote();
         Self {
             core: BackgroundRunnerCore { engine },
             range_load_worker,
             range_load_remote,
+            memory_controller,
         }
     }
 }
@@ -358,6 +373,19 @@ impl Runnable for BackgroundRunner {
                     }
                 };
                 self.range_load_remote.spawn(f);
+            }
+            BackgroundTask::MemoryCheck => {
+                let mem_usage = self.memory_controller.mem_usage();
+                match mem_usage {
+                    MemoryUsage::NormalUsage(..) => {}
+                    MemoryUsage::SoftLimitReached(n) => {
+                        // select ranges to evict
+                    }
+                    MemoryUsage::HardLimitReached(n) => {
+                        // select ranges to evict
+                    }
+                }
+                self.memory_controller.set_memory_checking(false);
             }
         }
     }
@@ -505,8 +533,8 @@ pub mod tests {
             construct_key, construct_value, encode_key, encode_seek_key, encoding_for_filter,
             InternalKeyComparator, ValueType, VALUE_TYPE_FOR_SEEK,
         },
-        memory_limiter::GlobalMemoryLimiter,
-        RangeCacheMemoryEngine,
+        memory_limiter::{GlobalMemoryLimiter, MemoryController},
+        EngineConfig, RangeCacheMemoryEngine,
     };
 
     fn put_data(
@@ -643,7 +671,7 @@ pub mod tests {
 
     #[test]
     fn test_gc() {
-        let engine = RangeCacheMemoryEngine::new(Arc::default(), Duration::from_secs(1));
+        let engine = RangeCacheMemoryEngine::new(Arc::default(), EngineConfig::config_for_test());
         let range = CacheRange::new(b"".to_vec(), b"z".to_vec());
         engine.new_range(range.clone());
         let (write, default) = {
@@ -667,7 +695,8 @@ pub mod tests {
         assert_eq!(3, element_count(&default));
         assert_eq!(3, element_count(&write));
 
-        let worker = BackgroundRunner::new(engine.core.clone());
+        let controller = Arc::new(MemoryController::new(usize::MAX, usize::MAX));
+        let worker = BackgroundRunner::new(engine.core.clone(), controller);
 
         // gc will not remove the latest mvcc put below safe point
         worker.core.gc_range(&range, 14);
@@ -698,7 +727,7 @@ pub mod tests {
 
     #[test]
     fn test_snapshot_block_gc() {
-        let engine = RangeCacheMemoryEngine::new(Arc::default(), Duration::from_secs(1));
+        let engine = RangeCacheMemoryEngine::new(Arc::default(), EngineConfig::config_for_test());
         let range = CacheRange::new(b"".to_vec(), b"z".to_vec());
         engine.new_range(range.clone());
         let (write, default) = {
@@ -720,7 +749,8 @@ pub mod tests {
         assert_eq!(6, element_count(&default));
         assert_eq!(6, element_count(&write));
 
-        let worker = BackgroundRunner::new(engine.core.clone());
+        let controller = Arc::new(MemoryController::new(usize::MAX, usize::MAX));
+        let worker = BackgroundRunner::new(engine.core.clone(), controller);
         let s1 = engine.snapshot(range.clone(), 10, u64::MAX);
         let s2 = engine.snapshot(range.clone(), 11, u64::MAX);
         let s3 = engine.snapshot(range.clone(), 20, u64::MAX);
@@ -748,7 +778,7 @@ pub mod tests {
 
     #[test]
     fn test_gc_worker() {
-        let engine = RangeCacheMemoryEngine::new(Arc::default(), Duration::from_secs(1));
+        let engine = RangeCacheMemoryEngine::new(Arc::default(), EngineConfig::config_for_test());
         let (write, default) = {
             let mut core = engine.core.write().unwrap();
             core.mut_range_manager()
@@ -803,7 +833,7 @@ pub mod tests {
 
     #[test]
     fn test_background_worker_load() {
-        let mut engine = RangeCacheMemoryEngine::new(Arc::default(), Duration::from_secs(1000));
+        let mut engine = RangeCacheMemoryEngine::new(Arc::default(), EngineConfig::config_for_test());
         let path = Builder::new().prefix("test_load").tempdir().unwrap();
         let path_str = path.path().to_str().unwrap();
         let rocks_engine = new_engine(path_str, DATA_CFS).unwrap();

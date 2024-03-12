@@ -31,7 +31,7 @@ use grpcio::Environment;
 use hybrid_engine::HybridEngine;
 use pd_client::{PdClient, RpcClient};
 use raft_log_engine::RaftLogEngine;
-use region_cache_memory_engine::RangeCacheMemoryEngine;
+use region_cache_memory_engine::{EngineConfig, RangeCacheMemoryEngine};
 use security::SecurityManager;
 use tikv::{
     config::{ConfigController, DbConfigManger, DbType, TikvConfig},
@@ -711,9 +711,9 @@ impl KvEngineBuilder for RocksEngine {
 
 impl KvEngineBuilder for HybridEngine<RocksEngine, RangeCacheMemoryEngine> {
     fn build(disk_engine: RocksEngine) -> Self {
-        // todo(SpadeA): make time configurable
+        // todo(SpadeA): fix this config for test
         let mut memory_engine =
-            RangeCacheMemoryEngine::new(Arc::default(), std::time::Duration::from_secs(180));
+            RangeCacheMemoryEngine::new(Arc::default(), EngineConfig::config_for_test());
         memory_engine.set_disk_engine(disk_engine.clone());
         HybridEngine::new(disk_engine, memory_engine)
     }

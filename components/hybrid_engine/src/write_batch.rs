@@ -129,11 +129,11 @@ impl<EK: KvEngine> Mutable for HybridEngineWriteBatch<EK> {
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
 
     use engine_traits::{
         CacheRange, KvEngine, Mutable, Peekable, SnapshotContext, WriteBatch, WriteBatchExt,
     };
+    use region_cache_memory_engine::EngineConfig;
 
     use crate::util::hybrid_engine_for_tests;
 
@@ -141,8 +141,10 @@ mod tests {
     fn test_write_to_both_engines() {
         let range = CacheRange::new(b"".to_vec(), b"z".to_vec());
         let range_clone = range.clone();
-        let (_path, hybrid_engine) =
-            hybrid_engine_for_tests("temp", Duration::from_secs(1000), move |memory_engine| {
+        let (_path, hybrid_engine) = hybrid_engine_for_tests(
+            "temp",
+            EngineConfig::config_for_test(),
+            move |memory_engine| {
                 memory_engine.new_range(range_clone.clone());
                 {
                     let mut core = memory_engine.core().write().unwrap();
@@ -150,8 +152,9 @@ mod tests {
                         .set_range_readable(&range_clone, true);
                     core.mut_range_manager().set_safe_point(&range_clone, 5);
                 }
-            })
-            .unwrap();
+            },
+        )
+        .unwrap();
         let mut write_batch = hybrid_engine.write_batch();
         write_batch.put(b"hello", b"world").unwrap();
         let seq = write_batch.write().unwrap();
@@ -179,7 +182,7 @@ mod tests {
     #[test]
     fn test_range_cache_memory_engine() {
         let (_path, hybrid_engine) =
-            hybrid_engine_for_tests("temp", Duration::from_secs(1000), |memory_engine| {
+            hybrid_engine_for_tests("temp", EngineConfig::config_for_test(), |memory_engine| {
                 let range = CacheRange::new(b"k00".to_vec(), b"k10".to_vec());
                 memory_engine.new_range(range.clone());
                 {
