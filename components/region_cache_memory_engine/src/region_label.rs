@@ -60,6 +60,12 @@ impl RegionLabelRulesManager {
     pub fn remove_region_label(&self, label_rule_id: &String) {
         let _ = self.region_labels.remove(label_rule_id);
     }
+
+    pub fn get_region_label(&self, label_rule_id: &str) -> Option<LabelRule> {
+        self.region_labels
+            .get(label_rule_id)
+            .map(|r| r.value().clone())
+    }
 }
 
 pub type RuleFilterFn = Arc<dyn Fn(&LabelRule) -> bool + Send + Sync>;
@@ -234,7 +240,7 @@ impl RegionLabelService {
 pub mod tests {
 
     use futures::executor::block_on;
-    use pd_client::meta_storage::Put;
+    use pd_client::meta_storage::{Delete, Put};
     use security::{SecurityConfig, SecurityManager};
     use test_pd::{mocker::MetaStorage, util::*, Server as MockServer};
     use tikv_util::{config::ReadableDuration, worker::Builder};
@@ -265,7 +271,7 @@ pub mod tests {
             Arc::new(rpc_client),
         )
         .build();
-        futures::executor::block_on(async move { service.reload_all_region_labels().await });
+        block_on(async move { service.reload_all_region_labels().await });
         let region_labels = region_label_manager_arc.region_labels();
         assert!(!region_labels.is_empty());
     }
@@ -287,11 +293,19 @@ pub mod tests {
         let id = &label_rule.id;
         let key = format!("/pd/{}/{}/{}", cluster_id, REGION_LABEL_PATH_PREFIX, id);
         let buf = serde_json::to_vec::<LabelRule>(&label_rule).unwrap();
-        futures::executor::block_on(async move { meta_client.put(Put::of(key, buf)).await })
-            .unwrap();
+        block_on(async move { meta_client.put(Put::of(key, buf)).await }).unwrap();
     }
 
-    fn new_religion_label_rule(id: &str, start_key: &str, end_key: &str) -> LabelRule {
+    fn delete_region_label_rule(
+        meta_client: Checked<Sourced<Arc<RpcClient>>>,
+        cluster_id: u64,
+        id: &str,
+    ) {
+        let key = format!("/pd/{}/{}/{}", cluster_id, REGION_LABEL_PATH_PREFIX, id);
+        block_on(async move { meta_client.delete(Delete::of(key)).await }).unwrap();
+    }
+
+    fn new_region_label_rule(id: &str, start_key: &str, end_key: &str) -> LabelRule {
         LabelRule {
             id: id.to_string(),
             labels: vec![RegionLabel {
@@ -321,7 +335,7 @@ pub mod tests {
         add_region_label_rule(
             s.meta_client.clone(),
             cluster_id,
-            new_religion_label_rule("cache/0", "a", "b"),
+            new_region_label_rule("cache/0", "a", "b"),
         );
         block_on(s.reload_all_region_labels());
         assert_eq!(s.manager.region_labels().len(), 1);
@@ -348,7 +362,7 @@ pub mod tests {
                 std::thread::sleep(Duration::from_millis(1));
             }
             panic!(
-                "wait time out, expectd: {}, got: {}",
+                "wait timed out, expected: {}, got: {}",
                 count,
                 s.manager.region_labels().len()
             );
@@ -363,34 +377,30 @@ pub mod tests {
         add_region_label_rule(
             s.meta_client.clone(),
             cluster_id,
-            new_religion_label_rule("cache/0", "a", "b"),
+            new_region_label_rule("cache/0", "a", "b"),
         );
         add_region_label_rule(
             s.meta_client.clone(),
             cluster_id,
-            new_religion_label_rule("cache/1", "c", "d"),
+            new_region_label_rule("cache/1", "c", "d"),
         );
         add_region_label_rule(
             s.meta_client.clone(),
             cluster_id,
-            new_religion_label_rule("cache/2", "e", "f"),
+            new_region_label_rule("cache/2", "e", "f"),
         );
 
         wait_watch_ready(&s, 3);
 
-        // delete
-        // wait_wait_thread(&s, 2);
+        delete_region_label_rule(s.meta_client.clone(), cluster_id, "cache/0");
+
+        wait_watch_ready(&s, 2);
+        let labels = s.manager.region_labels();
+        assert_eq!(labels.len(), 2);
+        assert!(s.manager.get_region_label("cache/0").is_none());
+        let label = s.manager.get_region_label("cache/1").unwrap();
+        assert_eq!(label.data[0].start_key, "c".to_string());
 
         server.stop();
-    }
-
-    #[test]
-    fn watch_suffix_test() {
-        // todo
-    }
-
-    #[test]
-    fn watch_filter_fn_test() {
-        // todo
     }
 }
