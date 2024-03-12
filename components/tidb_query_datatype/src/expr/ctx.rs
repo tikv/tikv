@@ -6,7 +6,7 @@ use bitflags::bitflags;
 use tipb::DagRequest;
 
 use super::{Error, Result};
-use crate::codec::mysql::Tz;
+use crate::codec::mysql::{Tz, DEFAULT_DIV_FRAC_INCR};
 
 bitflags! {
     /// Please refer to SQLMode in `mysql/const.go` in repo `pingcap/parser` for details.
@@ -61,8 +61,6 @@ impl SqlMode {
 
 const DEFAULT_MAX_WARNING_CNT: usize = 64;
 
-const DEFAULT_DIV_PRECISION_INCR: i32 = 4;
-
 #[derive(Clone, Debug)]
 pub struct EvalConfig {
     /// timezone to use when parse/calculate time.
@@ -74,7 +72,7 @@ pub struct EvalConfig {
     pub sql_mode: SqlMode,
 
     pub paging_size: Option<u64>,
-    pub div_precision_increment: i32,
+    pub div_precision_increment: u8,
 }
 
 impl Default for EvalConfig {
@@ -102,7 +100,7 @@ impl EvalConfig {
             eval_cfg.set_sql_mode(SqlMode::from_bits_truncate(req.get_sql_mode()));
         }
         if req.has_div_precision_increment() {
-            eval_cfg.set_div_precision_incr(req.get_div_precision_increment() as i32);
+            eval_cfg.set_div_precision_incr(req.get_div_precision_increment() as u8);
         }
         Ok(eval_cfg)
     }
@@ -114,7 +112,7 @@ impl EvalConfig {
             max_warning_cnt: DEFAULT_MAX_WARNING_CNT,
             sql_mode: SqlMode::empty(),
             paging_size: None,
-            div_precision_increment: DEFAULT_DIV_PRECISION_INCR,
+            div_precision_increment: DEFAULT_DIV_FRAC_INCR,
         }
     }
 
@@ -134,7 +132,7 @@ impl EvalConfig {
         self
     }
 
-    pub fn set_div_precision_incr(&mut self, new_value: i32) -> &mut Self {
+    pub fn set_div_precision_incr(&mut self, new_value: u8) -> &mut Self {
         self.div_precision_increment = new_value;
         self
     }

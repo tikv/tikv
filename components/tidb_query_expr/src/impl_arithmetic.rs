@@ -497,7 +497,7 @@ impl ArithmeticOpWithCtx for DecimalDivide {
 
     fn calc(ctx: &mut EvalContext, lhs: &Decimal, rhs: &Decimal) -> Result<Option<Decimal>> {
         Ok(
-            if let Some(value) = lhs.div(rhs, ctx.cfg.div_precision_increment as u8) {
+            if let Some(value) = lhs.div(rhs, ctx.cfg.div_precision_increment) {
                 value
                     .into_result_with_overflow_err(
                         ctx,
