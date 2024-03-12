@@ -1,6 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
+    collections::BTreeMap,
     fmt, mem,
     string::String,
     sync::{
@@ -28,7 +29,6 @@ use raftstore::{
     store::util::compare_region_epoch,
     Error as RaftStoreError,
 };
-use resolved_ts::{Resolver, TsSource, ON_DROP_WARN_HEAP_SIZE};
 use tikv::storage::{txn::TxnEntry, Statistics};
 use tikv_util::{
     debug, info,
@@ -135,6 +135,9 @@ pub struct Downstream {
     kv_api: ChangeDataRequestKvApi,
     filter_loop: bool,
     pub(crate) observed_range: ObservedRange,
+
+    // Count of different keys for every transaction ID.
+    locks: BTreeMap<TimeStamp, usize>,
 }
 
 impl fmt::Debug for Downstream {
@@ -172,6 +175,7 @@ impl Downstream {
             kv_api,
             filter_loop,
             observed_range,
+            locks: BTreeMap::default(),
         }
     }
 
@@ -271,7 +275,7 @@ impl Pending {
         Ok(())
     }
 
-    fn on_region_ready(&mut self, resolver: &mut Resolver) -> Result<()> {
+    fn on_region_ready(&mut self, locks: &mut BTreeMap<Key, TimeStamp>) -> Result<()> {
         fail::fail_point!("cdc_pending_on_region_ready", |_| Err(
             Error::MemoryQuotaExceeded(tikv_util::memory::MemoryQuotaExceeded)
         ));
@@ -279,11 +283,9 @@ impl Pending {
         for lock in mem::take(&mut self.locks) {
             self.memory_quota.free(lock.approximate_heap_size());
             match lock {
-                PendingLock::Track { key, start_ts } => {
-                    resolver.track_lock(start_ts, key, None)?;
-                }
-                PendingLock::Untrack { key } => resolver.untrack_lock(&key, None),
-            }
+                PendingLock::Track { key, start_ts } => drop(locks.insert(key, start_ts)),
+                PendingLock::Untrack { key } => assert!(locks.remove(&key).is_some()),
+            };
         }
         Ok(())
     }
@@ -317,8 +319,8 @@ impl Drop for Pending {
 
 // In `PendingLock`,  `key` is raw format instead of encoded.
 enum PendingLock {
-    Track { key: Vec<u8>, start_ts: TimeStamp },
-    Untrack { key: Vec<u8> },
+    Track { key: Key, start_ts: TimeStamp },
+    Untrack { key: Key },
 }
 
 impl HeapSize for PendingLock {
@@ -334,7 +336,10 @@ impl HeapSize for PendingLock {
 pub enum LockTracker {
     Pending,   // Snapshot hasn't been acquired.
     Preparing, // Snapshot is retrieved but locks are in scanning.
-    Prepared { region: Region, resolver: Resolver },
+    Prepared {
+        region: Region,
+        locks: BTreeMap<Key, TimeStamp>,
+    },
 }
 
 /// A CDC delegate of a raftstore region peer.
@@ -345,12 +350,13 @@ pub struct Delegate {
     pub region_id: u64,
     pub handle: ObserveHandle,
 
-    // None if the delegate is not initialized.
+    // Pending or Preparing means the delegate is not initialized.
     pub lock_tracker: LockTracker,
 
     // Downstreams after the delegate has been resolved.
     resolved_downstreams: Vec<Downstream>,
     pending: Option<Pending>,
+
     txn_extra_op: Arc<AtomicCell<TxnExtraOp>>,
     failed: bool,
 }
@@ -499,8 +505,8 @@ impl Delegate {
     /// region's internal changes.
     pub fn on_region_ready(
         &mut self,
-        mut resolver: Resolver,
         region: Region,
+        mut locks: BTreeMap<Key, TimeStamp>,
     ) -> Result<Vec<(&Downstream, Error)>> {
         assert!(matches!(self.lock_tracker, LockTracker::Preparing));
 
@@ -517,8 +523,8 @@ impl Delegate {
         let mut pending = self.pending.take().unwrap();
         self.resolved_downstreams = mem::take(&mut pending.downstreams);
 
-        pending.on_region_ready(&mut resolver)?;
-        self.lock_tracker = LockTracker::Prepared { region, resolver };
+        pending.on_region_ready(&mut locks)?;
+        self.lock_tracker = LockTracker::Prepared { region, locks };
 
         let mut failed_downstreams = Vec::new();
         for downstream in self.downstreams() {
@@ -531,24 +537,26 @@ impl Delegate {
 
     /// Try advance and broadcast resolved ts.
     pub fn on_min_ts(&mut self, min_ts: TimeStamp) -> Option<TimeStamp> {
-        let resolver = match self.lock_tracker {
-            LockTracker::Prepared {
-                ref mut resolver, ..
-            } => resolver,
-            _ => {
-                debug!(
-                    "cdc region resolver not ready";
-                    "region_id" => self.region_id, "min_ts" => min_ts
-                );
-                return None;
-            }
-        };
+        None
+        // let resolver = match self.lock_tracker {
+        //     LockTracker::Prepared {
+        //     } => resolver,
+        //     _ => {
+        //         debug!(
+        //             "cdc region resolver not ready";
+        //             "region_id" => self.region_id, "min_ts" => min_ts
+        //         );
+        //         return None;
+        //     }
+        // };
 
-        debug!("cdc try to advance ts"; "region_id" => self.region_id, "min_ts" => min_ts);
-        let resolved_ts = resolver.resolve(min_ts, None, TsSource::Cdc);
-        debug!("cdc resolved ts updated";
-            "region_id" => self.region_id, "resolved_ts" => resolved_ts);
-        Some(resolved_ts)
+        // debug!("cdc try to advance ts"; "region_id" => self.region_id,
+        // "min_ts" => min_ts); // let resolved_ts =
+        // resolver.resolve(min_ts, None, TsSource::Cdc); // FIXME
+        // let resolved_ts = min_ts;
+        // debug!("cdc resolved ts updated";
+        //     "region_id" => self.region_id, "resolved_ts" => resolved_ts);
+        // Some(resolved_ts)
     }
 
     pub fn on_batch(
@@ -894,20 +902,6 @@ impl Delegate {
                         Some(TimeStamp::from(row.commit_ts))
                     }
                 };
-                match (&self.lock_tracker, commit_ts) {
-                    // validate commit_ts must be greater than the current resolved_ts
-                    (LockTracker::Prepared { ref resolver, .. }, Some(commit_ts)) => {
-                        let resolved_ts = resolver.resolved_ts();
-                        assert!(
-                            commit_ts > resolved_ts,
-                            "region {} commit_ts: {:?}, resolved_ts: {:?}",
-                            self.region_id,
-                            commit_ts,
-                            resolved_ts
-                        );
-                    }
-                    _ => {}
-                }
 
                 match rows.entry(row.key.clone()) {
                     HashMapEntry::Occupied(o) => {
@@ -933,16 +927,13 @@ impl Delegate {
 
                 // In order to compute resolved ts, we must track inflight txns.
                 match self.lock_tracker {
-                    LockTracker::Prepared {
-                        ref mut resolver, ..
-                    } => {
-                        resolver.track_lock(row.start_ts.into(), row.key.clone(), None)?;
+                    LockTracker::Prepared { ref mut locks, .. } => {
+                        locks.insert(Key::from_raw(&row.key), row.start_ts.into());
                     }
                     _ => {
-                        assert!(self.pending.is_some(), "region resolver not ready");
-                        let pending = self.pending.as_mut().unwrap();
+                        let pending = self.pending.as_mut().expect("region should be not ready");
                         pending.push_pending_lock(PendingLock::Track {
-                            key: row.key.clone(),
+                            key: Key::from_raw(&row.key),
                             start_ts: row.start_ts.into(),
                         })?;
                     }
@@ -969,15 +960,14 @@ impl Delegate {
     fn sink_delete(&mut self, mut delete: DeleteRequest) -> Result<()> {
         match delete.cf.as_str() {
             "lock" => {
-                let raw_key = Key::from_encoded(delete.take_key()).into_raw().unwrap();
+                let key = Key::from_encoded(delete.take_key());
                 match self.lock_tracker {
-                    LockTracker::Prepared {
-                        ref mut resolver, ..
-                    } => resolver.untrack_lock(&raw_key, None),
+                    LockTracker::Prepared { ref mut locks, .. } => {
+                        locks.remove(&key);
+                    }
                     _ => {
-                        assert!(self.pending.is_some(), "region resolver not ready");
-                        let pending = self.pending.as_mut().unwrap();
-                        pending.push_pending_lock(PendingLock::Untrack { key: raw_key })?;
+                        let pending = self.pending.as_mut().expect("region should be not ready");
+                        pending.push_pending_lock(PendingLock::Untrack { key })?;
                     }
                 }
             }
@@ -1079,10 +1069,11 @@ impl Delegate {
     }
 
     pub(crate) fn resolved_ts(&self) -> TimeStamp {
-        match self.lock_tracker {
-            LockTracker::Prepared { ref resolver, .. } => resolver.resolved_ts(),
-            _ => TimeStamp::zero(),
-        }
+        Default::default()
+        // match self.lock_tracker {
+        //     LockTracker::Prepared { ref resolver, .. } =>
+        // resolver.resolved_ts(),     _ => TimeStamp::zero(),
+        // }
     }
 }
 
@@ -1276,6 +1267,8 @@ impl ObservedRange {
         entries
     }
 }
+
+const ON_DROP_WARN_HEAP_SIZE: usize = 64 * 1024 * 1024; // 64MB
 
 #[cfg(test)]
 mod tests {

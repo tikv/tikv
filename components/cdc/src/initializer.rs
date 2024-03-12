@@ -1,5 +1,6 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 use std::{
+    collections::BTreeMap,
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc,
@@ -264,13 +265,13 @@ impl<E: KvEngine> Initializer<E> {
             let (key_locks, has_remain) =
                 reader.scan_locks_from_storage(Some(&start_key), Some(&end_key), |_, _| true, 0)?;
             assert!(!has_remain);
-            let mut resolver = Resolver::new(region_id, self.memory_quota.clone());
+            let mut locks = BTreeMap::<Key, TimeStamp>::new();
             for (key, lock) in key_locks {
                 if matches!(lock.lock_type, LockType::Put | LockType::Delete) {
-                    resolver.track_lock(lock.ts, key.into_raw().unwrap(), None)?;
+                    locks.insert(key, lock.ts);
                 }
             }
-            self.finish_building_resolver(resolver, region);
+            self.finish_building_resolver(region, locks);
         };
 
         let (mut hint_min_ts, mut old_value_cursors) = (None, None);
@@ -495,24 +496,22 @@ impl<E: KvEngine> Initializer<E> {
         Ok(())
     }
 
-    fn finish_building_resolver(&self, mut resolver: Resolver, region: Region) {
+    fn finish_building_resolver(&self, region: Region, locks: BTreeMap<Key, TimeStamp>) {
         let observe_id = self.observe_handle.id;
-        let rts = resolver.resolve(TimeStamp::zero(), None, TsSource::Cdc);
         info!(
             "cdc has scanned all incremental scan locks, builds resolver";
             "region_id" => region.get_id(),
             "conn_id" => ?self.conn_id,
             "downstream_id" => ?self.downstream_id,
-            "resolved_ts" => rts,
-            "lock_count" => resolver.locks().len(),
+            "lock_count" => locks.len(),
             "observe_id" => ?observe_id,
         );
 
         fail_point!("before_schedule_resolver_ready");
         if let Err(e) = self.sched.schedule(Task::ResolverReady {
             observe_id,
-            resolver,
             region,
+            locks,
         }) {
             error!("cdc schedule task failed"; "error" => ?e);
         }
@@ -605,8 +604,8 @@ mod tests {
         collections::BTreeMap,
         fmt::Display,
         sync::{
+            atomic::AtomicBool,
             mpsc::{channel, sync_channel, Receiver, RecvTimeoutError, Sender},
-            atomic::{AtomicBool},
             Arc,
         },
         time::Duration,

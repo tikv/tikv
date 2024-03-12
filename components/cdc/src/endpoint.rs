@@ -3,7 +3,7 @@
 use std::{
     cell::RefCell,
     cmp::{Ord, Ordering as CmpOrdering, PartialOrd, Reverse},
-    collections::BinaryHeap,
+    collections::{BTreeMap, BinaryHeap},
     fmt,
     sync::{
         atomic::{AtomicBool, AtomicIsize, Ordering},
@@ -57,7 +57,7 @@ use tokio::{
     runtime::{Builder, Runtime},
     sync::Semaphore,
 };
-use txn_types::{TimeStamp, TxnExtra, TxnExtraScheduler};
+use txn_types::{Key, TimeStamp, TxnExtra, TxnExtraScheduler};
 
 use crate::{
     channel::{CdcEvent, SendError},
@@ -192,7 +192,7 @@ pub enum Task {
     ResolverReady {
         observe_id: ObserveId,
         region: Region,
-        resolver: Resolver,
+        locks: BTreeMap<Key, TimeStamp>,
     },
     RegisterMinTsEvent {
         leader_resolver: LeadershipResolver,
@@ -903,12 +903,17 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
         flush_oldvalue_stats(&statistics, TAG_DELTA_CHANGE);
     }
 
-    fn on_region_ready(&mut self, observe_id: ObserveId, resolver: Resolver, region: Region) {
+    fn on_region_ready(
+        &mut self,
+        observe_id: ObserveId,
+        region: Region,
+        locks: BTreeMap<Key, TimeStamp>,
+    ) {
         let region_id = region.get_id();
         let mut deregisters = Vec::new();
         if let Some(delegate) = self.capture_regions.get_mut(&region_id) {
             if delegate.handle.id == observe_id {
-                match delegate.on_region_ready(resolver, region) {
+                match delegate.on_region_ready(region, locks) {
                     Ok(fails) => {
                         for (downstream, e) in fails {
                             deregisters.push(Deregister::Downstream {
@@ -933,7 +938,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
                     "current_id" => ?delegate.handle.id);
             }
         } else {
-            debug!("cdc region not found on region ready (finish building resolver)";
+            debug!("cdc region not found on region ready (finish scan locks)";
                 "region_id" => region.get_id());
         }
 
@@ -1260,9 +1265,9 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta + Send> Runnable
             } => self.on_register(request, downstream, conn_id),
             Task::ResolverReady {
                 observe_id,
-                resolver,
                 region,
-            } => self.on_region_ready(observe_id, resolver, region),
+                locks,
+            } => self.on_region_ready(observe_id, region, locks),
             Task::Deregister(deregister) => self.on_deregister(deregister),
             Task::MultiBatch {
                 multi,
@@ -2208,7 +2213,11 @@ mod tests {
         let memory_quota = Arc::new(MemoryQuota::new(std::usize::MAX));
         let resolver = Resolver::new(1, memory_quota);
         let observe_id = suite.endpoint.capture_regions[&1].handle.id;
-        suite.capture_regions.get_mut(&1).unwrap().maybe_init_lock_tracker();
+        suite
+            .capture_regions
+            .get_mut(&1)
+            .unwrap()
+            .maybe_init_lock_tracker();
         suite.on_region_ready(observe_id, resolver, region.clone());
         suite.run(Task::MinTs {
             regions: vec![1],
@@ -2247,7 +2256,11 @@ mod tests {
         let resolver = Resolver::new(2, memory_quota);
         region.set_id(2);
         let observe_id = suite.endpoint.capture_regions[&2].handle.id;
-        suite.capture_regions.get_mut(&2).unwrap().maybe_init_lock_tracker();
+        suite
+            .capture_regions
+            .get_mut(&2)
+            .unwrap()
+            .maybe_init_lock_tracker();
         suite.on_region_ready(observe_id, resolver, region);
         suite.run(Task::MinTs {
             regions: vec![1, 2],
@@ -2301,7 +2314,11 @@ mod tests {
         let resolver = Resolver::new(3, memory_quota);
         region.set_id(3);
         let observe_id = suite.endpoint.capture_regions[&3].handle.id;
-        suite.capture_regions.get_mut(&3).unwrap().maybe_init_lock_tracker();
+        suite
+            .capture_regions
+            .get_mut(&3)
+            .unwrap()
+            .maybe_init_lock_tracker();
         suite.on_region_ready(observe_id, resolver, region);
         suite.run(Task::MinTs {
             regions: vec![1, 2, 3],
@@ -2534,7 +2551,11 @@ mod tests {
                 let observe_id = suite.endpoint.capture_regions[&region_id].handle.id;
                 let mut region = Region::default();
                 region.set_id(region_id);
-                suite.capture_regions.get_mut(&region_id).unwrap().maybe_init_lock_tracker();
+                suite
+                    .capture_regions
+                    .get_mut(&region_id)
+                    .unwrap()
+                    .maybe_init_lock_tracker();
                 suite.on_region_ready(observe_id, resolver, region);
             }
         }
@@ -2691,7 +2712,11 @@ mod tests {
         region.id = 1;
         region.set_region_epoch(region_epoch_2);
         let memory_quota = Arc::new(MemoryQuota::new(std::usize::MAX));
-        suite.capture_regions.get_mut(&1).unwrap().maybe_init_lock_tracker();
+        suite
+            .capture_regions
+            .get_mut(&1)
+            .unwrap()
+            .maybe_init_lock_tracker();
         suite.run(Task::ResolverReady {
             observe_id,
             region: region.clone(),
@@ -2826,7 +2851,11 @@ mod tests {
             let mut region = Region::default();
             region.id = id;
             region.set_region_epoch(region_epoch);
-            suite.capture_regions.get_mut(&id).unwrap().maybe_init_lock_tracker();
+            suite
+                .capture_regions
+                .get_mut(&id)
+                .unwrap()
+                .maybe_init_lock_tracker();
             let failed = suite
                 .capture_regions
                 .get_mut(&id)

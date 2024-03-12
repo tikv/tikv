@@ -11,12 +11,11 @@ use causal_ts::CausalTsProvider;
 use cdc::{recv_timeout, Delegate, OldValueCache, Task, Validate};
 use futures::{executor::block_on, sink::SinkExt};
 use grpcio::{ChannelBuilder, Environment, WriteFlags};
-use txn_types::Key;
 use kvproto::{cdcpb::*, kvrpcpb::*, tikvpb_grpc::TikvClient};
 use pd_client::PdClient;
 use test_raftstore::*;
 use tikv_util::{debug, worker::Scheduler, HandyRwLock};
-use txn_types::TimeStamp;
+use txn_types::{Key, TimeStamp};
 
 use crate::{new_event_feed, new_event_feed_v2, ClientReceiver, TestSuite, TestSuiteBuilder};
 
@@ -597,8 +596,8 @@ fn test_cdc_notify_pending_regions() {
     fail::remove("cdc_before_initialize");
 }
 
-// When subscribe a region, a Resolver will be constructed for the whole region range,
-// instead of the subscribed range. This case tests the behavior.
+// When subscribe a region, a Resolver will be constructed for the whole region
+// range, instead of the subscribed range. This case tests the behavior.
 #[test]
 fn test_cdc_build_ranged_resolver() {
     let mut cluster = new_server_cluster(0, 1);
@@ -630,7 +629,7 @@ fn test_cdc_build_ranged_resolver() {
     'WaitInit: for event in cdc_event.get_events() {
         for entry in event.get_entries().get_entries() {
             match entry.get_type() {
-                EventLogType::Prewrite => {},
+                EventLogType::Prewrite => {}
                 EventLogType::Initialized => break 'WaitInit,
                 _ => unreachable!(),
             }
