@@ -62,8 +62,9 @@ impl RegionLabelRulesManager {
     }
 }
 
-pub type RuleFilterFn = Box<dyn Fn(&LabelRule) -> bool + Send + Sync>;
+pub type RuleFilterFn = Arc<dyn Fn(&LabelRule) -> bool + Send + Sync>;
 
+#[derive(Clone)]
 pub struct RegionLabelService {
     manager: Arc<RegionLabelRulesManager>,
     pd_client: Arc<RpcClient>,
@@ -236,7 +237,7 @@ pub mod tests {
     use pd_client::meta_storage::Put;
     use security::{SecurityConfig, SecurityManager};
     use test_pd::{mocker::MetaStorage, util::*, Server as MockServer};
-    use tikv_util::config::ReadableDuration;
+    use tikv_util::{config::ReadableDuration, worker::Builder};
 
     use super::*;
 
@@ -290,6 +291,23 @@ pub mod tests {
             .unwrap();
     }
 
+    fn new_religion_label_rule(id: &str, start_key: &str, end_key: &str) -> LabelRule {
+        LabelRule {
+            id: id.to_string(),
+            labels: vec![RegionLabel {
+                key: "cache".to_string(),
+                value: "always".to_string(),
+                ..RegionLabel::default()
+            }],
+            rule_type: "key-range".to_string(),
+            data: vec![KeyRangeRule {
+                start_key: start_key.to_string(),
+                end_key: end_key.to_string(),
+            }],
+            ..LabelRule::default()
+        }
+    }
+
     #[test]
     fn crud_test() {
         let (mut server, client) = new_test_server_and_client(ReadableDuration::millis(100));
@@ -303,20 +321,7 @@ pub mod tests {
         add_region_label_rule(
             s.meta_client.clone(),
             cluster_id,
-            LabelRule {
-                id: "cache/0".to_string(),
-                labels: vec![RegionLabel {
-                    key: "cache".to_string(),
-                    value: "always".to_string(),
-                    ..RegionLabel::default()
-                }],
-                rule_type: "key-range".to_string(),
-                data: vec![KeyRangeRule {
-                    start_key: "a".to_string(),
-                    end_key: "b".to_string(),
-                }],
-                ..LabelRule::default()
-            },
+            new_religion_label_rule("cache/0", "a", "b"),
         );
         block_on(s.reload_all_region_labels());
         assert_eq!(s.manager.region_labels().len(), 1);
@@ -326,7 +331,57 @@ pub mod tests {
 
     #[test]
     fn watch_test() {
-        // todo
+        let (mut server, client) = new_test_server_and_client(ReadableDuration::millis(100));
+        let region_label_manager = RegionLabelRulesManager::default();
+        let cluster_id = client.get_cluster_id().unwrap();
+        let mut s =
+            RegionLabelServiceBuilder::new(Arc::new(region_label_manager), Arc::new(client))
+                .build();
+        block_on(s.reload_all_region_labels());
+        assert_eq!(s.manager.region_labels().len(), 0);
+
+        let wait_watch_ready = |s: &RegionLabelService, count: usize| {
+            for _i in 0..100 {
+                if s.manager.region_labels().len() == count {
+                    return;
+                }
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            panic!(
+                "wait time out, expectd: {}, got: {}",
+                count,
+                s.manager.region_labels().len()
+            );
+        };
+
+        let background_worker = Builder::new("background").thread_count(1).create();
+        let mut s_clone = s.clone();
+        background_worker.spawn_async_task(async move {
+            s_clone.watch_region_labels().await;
+        });
+
+        add_region_label_rule(
+            s.meta_client.clone(),
+            cluster_id,
+            new_religion_label_rule("cache/0", "a", "b"),
+        );
+        add_region_label_rule(
+            s.meta_client.clone(),
+            cluster_id,
+            new_religion_label_rule("cache/1", "c", "d"),
+        );
+        add_region_label_rule(
+            s.meta_client.clone(),
+            cluster_id,
+            new_religion_label_rule("cache/2", "e", "f"),
+        );
+
+        wait_watch_ready(&s, 3);
+
+        // delete
+        // wait_wait_thread(&s, 2);
+
+        server.stop();
     }
 
     #[test]
