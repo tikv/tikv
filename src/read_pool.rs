@@ -504,6 +504,9 @@ pub fn build_yatp_read_pool_with_name<E: Engine, R: FlowStatsReporter>(
         builder.build_multi_level_pool()
     };
     let time_slice_inspector = Arc::new(TimeSliceInspector::new(&unified_read_pool_name));
+    UNIFIED_READ_POOL_RUNNING_THREADS
+        .with_label_values(&[&unified_read_pool_name])
+        .set(config.max_thread_count as _);
     ReadPool::Yatp {
         pool,
         running_tasks: TaskPriority::priorities().map(|p| {
