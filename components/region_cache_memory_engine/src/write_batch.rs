@@ -9,12 +9,13 @@ use engine_traits::{
 use lazy_static::lazy_static;
 use prometheus::*;
 use prometheus_static_metric::*;
-use tikv_util::{box_err, info, time::Instant};
+use tikv_util::{box_err, info, time::Instant, warn};
 
 use crate::{
     engine::{cf_to_id, RangeCacheMemoryEngineCore, SkiplistEngine},
-    keys::{encode_key, ValueType},
+    keys::{encode_key, encode_seek_key, InternalKeyComparator, ValueType, VALUE_TYPE_FOR_SEEK},
     range_manager::RangeManager,
+    skiplist::KeyComparator,
     RangeCacheMemoryEngine,
 };
 
@@ -128,9 +129,9 @@ impl RangeCacheWriteBatch {
                     .extend(write_batches.into_iter());
             }
         }
-        for e in filtered_keys.into_iter() {
-            let (..) = e.write_to_memory(&engine, seq, Some(self.engine.clone()))?;
-        }
+        filtered_keys
+            .into_iter()
+            .try_for_each(|e| e.write_to_memory(&engine, seq));
 
         info!(
             "write_impl";
@@ -234,43 +235,74 @@ impl RangeCacheWriteBatchEntry {
     }
 
     #[inline]
-    pub fn write_to_memory(
-        &self,
-        skiplist_engine: &SkiplistEngine,
-        seq: u64,
-        engine: Option<RangeCacheMemoryEngine>,
-    ) -> Result<()> {
+    pub fn write_to_memory(&self, skiplist_engine: &SkiplistEngine, seq: u64) -> Result<()> {
         PEER_WRITE_CMD_COUNTER.put.inc();
         let handle = &skiplist_engine.data[self.cf];
-        let (key, value) = self.encode(seq);
-        // let mut delete = false;
-        // match &self.inner {
-        //     WriteBatchEntryInternal::PutValue(value) => {
-        //         if self.cf == 1 {
-        //             info!(
-        //                 "write to memory, put value";
-        //                 "seq" => seq,
-        //                 "cf" => self.cf,
-        //                 "key" => log_wrappers::Value::key(self.key.as_slice()),
-        //                 "encoded_key" => log_wrappers::Value::key(key.as_slice()),
-        //             );
-        //         }
-        //     }
-        //     WriteBatchEntryInternal::Deletion => {
-        //         delete = true;
-        //         if self.cf == 1 {
-        //             info!(
-        //                 "write to memory, delete";
-        //                 "seq" => seq,
-        //                 "cf" => self.cf,
-        //                 "key" => log_wrappers::Value::key(self.key.as_slice()),
-        //                 "encoded_key" => log_wrappers::Value::key(key.as_slice()),
-        //             );
-        //         }
-        //     }
-        // }
+        match &self.inner {
+            WriteBatchEntryInternal::PutValue(value) => {
+                if self.cf == 1 {
+                    info!(
+                        "write to memory, put value";
+                        "seq" => seq,
+                        "cf" => self.cf,
+                        "key" => log_wrappers::Value::key(self.key.as_slice()),
+                    );
+                }
+            }
+            WriteBatchEntryInternal::Deletion => {
+                if self.cf == 1 {
+                    info!(
+                        "write to memory, delete";
+                        "seq" => seq,
+                        "cf" => self.cf,
+                        "key" => log_wrappers::Value::key(self.key.as_slice()),
+                    );
+                }
+            }
+        }
         // todo(SpadeA): handle the put error
-        assert!(handle.put(key, value).unwrap());
+        if self.cf == 1 && matches!(self.inner, WriteBatchEntryInternal::Deletion) {
+            let seek_key = encode_seek_key(&self.key, seq, VALUE_TYPE_FOR_SEEK);
+            let Some(entry) = handle.get(&seek_key) else {
+                info!(
+                    "write to memory failed, not get";
+                    "key" => log_wrappers::Value::key(self.key.as_slice()),
+                    "encoded_key" => log_wrappers::Value::key(&seek_key),
+                );
+                return Ok(());
+            };
+
+            let mut iter = handle.iter();
+            iter.seek(entry.key());
+            assert_eq!(entry.key(), iter.key());
+            let c = InternalKeyComparator::default();
+            while iter.valid() {
+                iter.next();
+                if iter.valid() && c.same_key(entry.key(), iter.key()) {
+                    assert!(handle.remove(iter.key()));
+                } else {
+                    break;
+                }
+            }
+            assert!(handle.remove(entry.key()));
+            info!(
+                "write to memory, delete succed";
+                "key" => log_wrappers::Value::key(self.key.as_slice()),
+            );
+            if let Some(entry) = handle.get(&seek_key) {
+                info!(
+                    "get after delete";
+                    "key" => log_wrappers::Value::key(self.key.as_slice()),
+                    "seek_key" => log_wrappers::Value::key(&seek_key),
+                    "entry_key" => log_wrappers::Value::key(entry.key()),
+                    "entry_value" => log_wrappers::Value::key(entry.value()),
+                );
+                unreachable!()
+            }
+        } else {
+            let (key, value) = self.encode(seq);
+            assert!(handle.put(key, value).unwrap());
+        }
 
         // if delete && self.cf == 1 {
         //     let snap = engine

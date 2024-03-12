@@ -297,7 +297,7 @@ impl RangeCacheMemoryEngine {
             for range in ranges_loading_cached_write {
                 if let Some(write_batches) = core.take_cache_write_batch(&range) {
                     for (seq, entry) in write_batches {
-                        entry.write_to_memory(&skiplist_engine, seq, None).unwrap();
+                        entry.write_to_memory(&skiplist_engine, seq).unwrap();
                     }
                 }
 

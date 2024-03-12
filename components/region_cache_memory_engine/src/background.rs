@@ -96,11 +96,11 @@ impl BgWorkManager {
     ) -> (JoinHandle<()>, Sender<bool>) {
         let (tx, rx) = bounded(0);
         let lock_clear_interval = Duration::from_secs(30);
-        let gc_interval = Duration::from_secs(61);
+        let gc_tick = tick(gc_interval);
         let h = std::thread::spawn(move || {
             loop {
                 select! {
-                    recv(tick(gc_interval)) -> _ => {
+                    recv(gc_tick) -> _ => {
                         if scheduler.is_busy() {
                             info!(
                                 "range cache engine gc worker is busy, jump to next gc duration";
@@ -337,7 +337,7 @@ impl BackgroundRunner {
                 )
             };
             for (seq, entry) in cache_batch {
-                entry.write_to_memory(&skiplist_engine, seq, None)?;
+                entry.write_to_memory(&skiplist_engine, seq)?;
             }
         }
         fail::fail_point!("on_snapshot_loaded_finish_before_status_change");

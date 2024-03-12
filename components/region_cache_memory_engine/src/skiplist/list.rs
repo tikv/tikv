@@ -627,6 +627,14 @@ impl<C: KeyComparator, M: MemoryController> Skiplist<C, M> {
                         }
                     }
 
+                    let internal_key = decode_key(&key);
+                    info!(
+                        "remove success";
+                        "key" => log_wrappers::Value::key(&key),
+                        "user_key" => log_wrappers::Value::key(internal_key.user_key),
+                        "seq" => internal_key.sequence,
+                    );
+
                     return true;
                 }
             }
