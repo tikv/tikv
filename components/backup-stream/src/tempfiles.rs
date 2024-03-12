@@ -696,6 +696,7 @@ mod test {
 
     use async_compression::tokio::bufread::ZstdDecoder;
     use kvproto::brpb::CompressionType;
+    use rand::random;
     use tempfile::tempdir;
     use tokio::io::{AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader};
     use walkdir::WalkDir;
@@ -716,7 +717,7 @@ mod test {
             cache_size: AtomicUsize::new(100000),
             swap_files: std::env::temp_dir().join(format!(
                 "backup_stream::tempfiles::test::{}",
-                std::process::id()
+                random::<u64>()
             )),
             content_compression: CompressionType::Unknown,
             minimal_swap_out_file_size: 8192,
