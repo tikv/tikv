@@ -23,6 +23,7 @@ use pd_client::BucketMeta;
 use raft::SnapshotStatus;
 use resource_control::ResourceMetered;
 use smallvec::{smallvec, SmallVec};
+use strum::{EnumCount, EnumVariantNames};
 use tikv_util::{deadline::Deadline, escape, memory::HeapSize, time::Instant};
 use tracker::{get_tls_tracker_token, TrackerToken};
 
@@ -748,11 +749,13 @@ pub struct InspectedRaftMessage {
 
 /// Message that can be sent to a peer.
 #[allow(clippy::large_enum_variant)]
+#[derive(EnumCount, EnumVariantNames)]
+#[repr(u8)]
 pub enum PeerMsg<EK: KvEngine> {
     /// Raft message is the message sent between raft nodes in the same
     /// raft group. Messages need to be redirected to raftstore if target
     /// peer doesn't exist.
-    RaftMessage(InspectedRaftMessage, Option<Instant>),
+    RaftMessage(InspectedRaftMessage, Option<Instant>) = 0,
     /// Raft command is the command that is expected to be proposed by the
     /// leader of the target raft group. If it's failed to be sent, callback
     /// usually needs to be called before dropping in case of resource leak.
@@ -818,6 +821,23 @@ impl<EK: KvEngine> fmt::Debug for PeerMsg<EK> {
 }
 
 impl<EK: KvEngine> PeerMsg<EK> {
+    pub fn discriminant(&self) -> usize {
+        match self {
+            PeerMsg::RaftMessage(..) => 0,
+            PeerMsg::RaftCommand(_) => 1,
+            PeerMsg::Tick(_) => 2,
+            PeerMsg::SignificantMsg(_) => 3,
+            PeerMsg::ApplyRes { .. } => 4,
+            PeerMsg::Start => 5,
+            PeerMsg::Noop => 6,
+            PeerMsg::Persisted { .. } => 7,
+            PeerMsg::CasualMessage(_) => 8,
+            PeerMsg::HeartbeatPd => 9,
+            PeerMsg::UpdateReplicationMode => 10,
+            PeerMsg::Destroy(_) => 11,
+        }
+    }
+
     /// For some specific kind of messages, it's actually acceptable if failed
     /// to send it by `significant_send`. This function determine if the
     /// current message is acceptable to fail.
@@ -829,6 +849,7 @@ impl<EK: KvEngine> PeerMsg<EK> {
     }
 }
 
+#[derive(EnumCount, EnumVariantNames)]
 pub enum StoreMsg<EK>
 where
     EK: KvEngine,
@@ -911,6 +932,27 @@ where
             }
             StoreMsg::GcSnapshotFinish => write!(fmt, "GcSnapshotFinish"),
             StoreMsg::AwakenRegions { .. } => write!(fmt, "AwakenRegions"),
+        }
+    }
+}
+
+impl<EK: KvEngine> StoreMsg<EK> {
+    pub fn discriminant(&self) -> usize {
+        match self {
+            StoreMsg::RaftMessage(_) => 0,
+            StoreMsg::StoreUnreachable { .. } => 1,
+            StoreMsg::CompactedEvent(_) => 2,
+            StoreMsg::ClearRegionSizeInRange { .. } => 3,
+            StoreMsg::Tick(_) => 4,
+            StoreMsg::Start { .. } => 5,
+            #[cfg(any(test, feature = "testexport"))]
+            StoreMsg::Validate(_) => 6,
+            StoreMsg::UpdateReplicationMode(_) => 7,
+            StoreMsg::LatencyInspect { .. } => 8,
+            StoreMsg::UnsafeRecoveryReport(_) => 9,
+            StoreMsg::UnsafeRecoveryCreatePeer { .. } => 10,
+            StoreMsg::GcSnapshotFinish => 11,
+            StoreMsg::AwakenRegions { .. } => 12,
         }
     }
 }

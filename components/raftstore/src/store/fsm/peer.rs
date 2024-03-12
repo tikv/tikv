@@ -22,6 +22,7 @@ use engine_traits::{Engines, KvEngine, RaftEngine, SstMetaInfo, WriteBatchExt, C
 use error_code::ErrorCodeExt;
 use fail::fail_point;
 use futures::channel::mpsc::UnboundedSender;
+use itertools::Itertools;
 use keys::{self, enc_end_key, enc_start_key};
 use kvproto::{
     brpb::CheckAdminResponse,
@@ -49,13 +50,15 @@ use raft::{
     GetEntriesContext, Progress, ReadState, SnapshotStatus, StateRole, INVALID_INDEX, NO_LIMIT,
 };
 use smallvec::SmallVec;
+use strum::{EnumCount, VariantNames};
 use tikv_alloc::trace::TraceEvent;
 use tikv_util::{
     box_err, debug, defer, error, escape, info, info_or_debug, is_zero_duration,
     mpsc::{self, LooseBoundedSender, Receiver},
+    slow_log,
     store::{find_peer, find_peer_by_id, is_learner, region_on_same_stores},
     sys::disk::DiskUsage,
-    time::{monotonic_raw_now, Instant as TiInstant},
+    time::{monotonic_raw_now, Instant as TiInstant, SlowTimer},
     trace, warn,
     worker::{ScheduleError, Scheduler},
     Either,
@@ -617,9 +620,12 @@ where
     }
 
     pub fn handle_msgs(&mut self, msgs: &mut Vec<PeerMsg<EK>>) {
-        let timer = TiInstant::now_coarse();
+        let timer = SlowTimer::from_millis(100);
         let count = msgs.len();
+        #[allow(const_evaluatable_unchecked)]
+        let mut distribution = [0; PeerMsg::<EK>::COUNT];
         for m in msgs.drain(..) {
+            distribution[m.discriminant()] += 1;
             match m {
                 PeerMsg::RaftMessage(msg, sent_time) => {
                     if let Some(sent_time) = sent_time {
@@ -705,12 +711,19 @@ where
             }
         }
         self.on_loop_finished();
+        slow_log!(
+            T timer,
+            "{} handle {} peer messages {:?}",
+            self.fsm.peer.tag,
+            count,
+            PeerMsg::<EK>::VARIANTS.iter().zip(distribution).filter(|(_, c)| *c > 0).format(", "),
+        );
         self.ctx.raft_metrics.peer_msg_len.observe(count as f64);
         self.ctx
             .raft_metrics
             .event_time
             .peer_msg
-            .observe(timer.saturating_elapsed_secs());
+            .observe(timer.saturating_elapsed().as_secs_f64());
     }
 
     #[inline]
