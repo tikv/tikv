@@ -322,7 +322,7 @@ pub fn rollback_lock(
         txn.delete_value(key.clone(), lock.ts);
     }
 
-    // (1) The primary key of a pessimistic transaction needs to be protected.
+    // (1) The primary key of any transaction needs to be protected.
     //
     // (2) If the lock belongs to a pipelined-DML transaction, it must be protected.
     //
@@ -337,8 +337,7 @@ pub fn rollback_lock(
     //    assertion failed.
     // If the lock is protected, the second flush will detect the conflict and
     // return a write conflict error.
-    let protected: bool =
-        (is_pessimistic_txn && key.is_encoded_from(&lock.primary)) || (lock.generation > 0);
+    let protected: bool = key.is_encoded_from(&lock.primary) || (lock.generation > 0);
     if let Some(write) = make_rollback(reader.start_ts, protected, overlapped_write) {
         txn.put_write(key.clone(), reader.start_ts, write.as_ref().to_bytes());
     }
