@@ -186,25 +186,31 @@ impl PrepareBackup {
     }
 
     pub fn send_finalize(mut self) -> bool {
-        block_on(self.tx.send({
+        let flag = match block_on(self.tx.send({
             let mut req = PrepareSnapshotBackupRequest::new();
             req.set_ty(PrepareSnapshotBackupRequestType::Finish);
             (req, WriteFlags::default())
-        }))
-        .unwrap();
-        block_on_timeout(
-            async {
-                while let Some(item) = self.rx.next().await {
-                    let item = item.unwrap();
-                    if item.ty == PrepareSnapshotBackupEventType::UpdateLeaseResult {
-                        return item.last_lease_is_valid;
+        })) {
+            Ok(_) | Err(grpcio::Error::RpcFinished(_)) => true,
+            _ => false,
+        };
+        if flag {
+            block_on_timeout(
+                async {
+                    while let Some(item) = self.rx.next().await {
+                        let item = item.unwrap();
+                        if item.ty == PrepareSnapshotBackupEventType::UpdateLeaseResult {
+                            return item.last_lease_is_valid;
+                        }
                     }
-                }
-                false
-            },
-            Duration::from_secs(2),
-        )
-        .expect("take too long to finalize the stream")
+                    false
+                },
+                Duration::from_secs(2),
+            )
+            .expect("take too long to finalize the stream")
+        } else {
+            false
+        }
     }
 
     pub fn next(&mut self) -> PrepareSnapshotBackupResponse {
