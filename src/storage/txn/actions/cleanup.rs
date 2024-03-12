@@ -223,8 +223,9 @@ pub mod tests {
         // TTL expired. The lock should be removed.
         must_succeed(&mut engine, k, ts(10, 0), ts(120, 0));
         must_unlocked(&mut engine, k);
-        // Rollbacks of optimistic transactions needn't be protected
-        must_get_rollback_protected(&mut engine, k, ts(10, 0), false);
+        // Rollbacks of optimistic transactions need to be protected
+        // See: https://github.com/tikv/tikv/issues/16620
+        must_get_rollback_protected(&mut engine, k, ts(10, 0), true);
         must_get_rollback_ts(&mut engine, k, ts(10, 0));
 
         // Rollbacks of primary keys in pessimistic transactions should be protected
