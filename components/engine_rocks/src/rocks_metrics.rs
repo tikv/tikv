@@ -917,7 +917,6 @@ struct CfLevelStats {
 #[derive(Default)]
 struct CfStats {
     used_size: Option<u64>,
-    blob_cache_size: Option<u64>,
     readers_mem: Option<u64>,
     mem_tables: Option<u64>,
     mem_tables_all: Option<u64>,
@@ -942,6 +941,7 @@ struct DbStats {
     num_snapshots: Option<u64>,
     oldest_snapshot_time: Option<u64>,
     block_cache_size: Option<u64>,
+    blob_cache_size: Option<u64>,
     stall_num: Option<[u64; ROCKSDB_IOSTALL_KEY.len()]>,
 }
 
@@ -969,7 +969,6 @@ impl StatisticsReporter<RocksEngine> for RocksStatisticsReporter {
             // column families.
             *cf_stats.used_size.get_or_insert_default() +=
                 crate::util::get_engine_cf_used_size(db, handle);
-            *cf_stats.blob_cache_size.get_or_insert_default() += db.get_blob_cache_usage_cf(handle);
             // TODO: find a better place to record these metrics.
             // Refer: https://github.com/facebook/rocksdb/wiki/Memory-usage-in-RocksDB
             // For index and filter blocks memory
@@ -1099,17 +1098,17 @@ impl StatisticsReporter<RocksEngine> for RocksStatisticsReporter {
             *self.db_stats.block_cache_size.get_or_insert_default() =
                 db.get_block_cache_usage_cf(handle);
         }
+        if self.db_stats.blob_cache_size.is_none() {
+            let handle = crate::util::get_cf_handle(db, CF_DEFAULT).unwrap();
+            *self.db_stats.blob_cache_size.get_or_insert_default() =
+                db.get_blob_cache_usage_cf(handle);
+        }
     }
 
     fn flush(&mut self) {
         for (cf, cf_stats) in &self.cf_stats {
             if let Some(v) = cf_stats.used_size {
                 STORE_ENGINE_SIZE_GAUGE_VEC
-                    .with_label_values(&[&self.name, cf])
-                    .set(v as i64);
-            }
-            if let Some(v) = cf_stats.blob_cache_size {
-                STORE_ENGINE_BLOB_CACHE_USAGE_GAUGE_VEC
                     .with_label_values(&[&self.name, cf])
                     .set(v as i64);
             }
@@ -1228,6 +1227,11 @@ impl StatisticsReporter<RocksEngine> for RocksStatisticsReporter {
         }
         if let Some(v) = self.db_stats.block_cache_size {
             STORE_ENGINE_BLOCK_CACHE_USAGE_GAUGE_VEC
+                .with_label_values(&[&self.name, "all"])
+                .set(v as i64);
+        }
+        if let Some(v) = self.db_stats.blob_cache_size {
+            STORE_ENGINE_BLOB_CACHE_USAGE_GAUGE_VEC
                 .with_label_values(&[&self.name, "all"])
                 .set(v as i64);
         }

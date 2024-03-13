@@ -950,6 +950,8 @@
 # zstd-dict-size = 0
 
 ## Specifics cache size for blob records
+## Deprecated since v8.0.0, blob would be cached by shared block cache of lowest priority. 
+## The shared block cache size is controlled by `storage.block-cache.capacity`.
 ## default: 0
 # blob-cache-size = "0GB"
 
