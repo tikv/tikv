@@ -40,6 +40,8 @@ const DEFAULT_ENDPOINT_REQUEST_MAX_HANDLE_SECS: u64 = 60;
 // Number of rows in each chunk for streaming coprocessor.
 const DEFAULT_ENDPOINT_STREAM_BATCH_ROW_LIMIT: usize = 128;
 
+const DEFAULT_ENDPOINT_MEMORY_QUOTA: ReadableSize = ReadableSize::gb(2);
+
 // At least 4 long coprocessor requests are allowed to run concurrently.
 const MIN_ENDPOINT_MAX_CONCURRENCY: usize = 4;
 
@@ -145,6 +147,8 @@ pub struct Config {
     #[serde(with = "perf_level_serde")]
     #[online_config(skip)]
     pub end_point_perf_level: PerfLevel,
+    #[online_config(skip)]
+    pub end_point_memory_quota: ReadableSize,
     #[serde(alias = "snap-max-write-bytes-per-sec")]
     pub snap_io_max_bytes_per_sec: ReadableSize,
     pub snap_max_total_size: ReadableSize,
@@ -256,6 +260,7 @@ impl Default for Config {
             end_point_request_max_handle_duration: None,
             end_point_max_concurrency: cmp::max(cpu_num as usize, MIN_ENDPOINT_MAX_CONCURRENCY),
             end_point_perf_level: PerfLevel::Uninitialized,
+            end_point_memory_quota: DEFAULT_ENDPOINT_MEMORY_QUOTA,
             snap_io_max_bytes_per_sec: ReadableSize(DEFAULT_SNAP_MAX_BYTES_PER_SEC),
             snap_max_total_size: ReadableSize(0),
             stats_concurrency: 1,

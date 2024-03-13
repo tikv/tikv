@@ -1,7 +1,8 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    borrow::Cow, future::Future, iter::FromIterator, marker::PhantomData, sync::Arc, time::Duration,
+    borrow::Cow, future::Future, iter::FromIterator, marker::PhantomData, mem, sync::Arc,
+    time::Duration,
 };
 
 use ::tracker::{
@@ -11,7 +12,11 @@ use api_version::{dispatch_api_version, KvFormat};
 use async_stream::try_stream;
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::PerfLevel;
-use futures::{channel::mpsc, future::Either, prelude::*};
+use futures::{
+    channel::mpsc,
+    future::{ready, Either},
+    prelude::*,
+};
 use kvproto::{coprocessor as coppb, errorpb, kvrpcpb};
 use protobuf::{CodedInputStream, Message};
 use resource_control::{ResourceGroupManager, TaskMetadata};
@@ -20,7 +25,10 @@ use tidb_query_common::execute_stats::ExecSummary;
 use tikv_alloc::trace::MemoryTraceGuard;
 use tikv_kv::SnapshotExt;
 use tikv_util::{
-    deadline::set_deadline_exceeded_busy_error, quota_limiter::QuotaLimiter, time::Instant,
+    deadline::set_deadline_exceeded_busy_error,
+    memory::{MemoryQuota, OwnedAllocated},
+    quota_limiter::QuotaLimiter,
+    time::Instant,
 };
 use tipb::{AnalyzeReq, AnalyzeType, ChecksumRequest, ChecksumScanOn, DagRequest, ExecType};
 use tokio::sync::Semaphore;
@@ -54,6 +62,8 @@ pub struct Endpoint<E: Engine> {
 
     /// The concurrency limiter of the coprocessor.
     semaphore: Option<Arc<Semaphore>>,
+    /// The memory quota for coprocessor requests.
+    memory_quota: Arc<MemoryQuota>,
 
     concurrency_manager: ConcurrencyManager,
 
@@ -100,9 +110,11 @@ impl<E: Engine> Endpoint<E> {
             }
             _ => None,
         };
+        let memory_quota = Arc::new(MemoryQuota::new(cfg.end_point_memory_quota.0 as _));
         Self {
             read_pool,
             semaphore,
+            memory_quota,
             concurrency_manager,
             perf_level: cfg.end_point_perf_level,
             resource_tag_factory,
@@ -499,13 +511,15 @@ impl<E: Engine> Endpoint<E> {
         req_ctx: ReqContext,
         handler_builder: RequestHandlerBuilder<E::Snap>,
     ) -> impl Future<Output = Result<MemoryTraceGuard<coppb::Response>>> {
+        let mut bytes = req_ctx.approximate_heap_size();
         let priority = req_ctx.context.get_priority();
         let task_id = req_ctx.build_task_id();
-        let key_ranges = req_ctx
+        let key_ranges: Vec<_> = req_ctx
             .ranges
             .iter()
             .map(|key_range| (key_range.get_start().to_vec(), key_range.get_end().to_vec()))
             .collect();
+        bytes += key_ranges.approximate_heap_size();
         let resource_tag = self
             .resource_tag_factory
             .new_tag_with_key_ranges(&req_ctx.context, key_ranges);
@@ -525,16 +539,23 @@ impl<E: Engine> Endpoint<E> {
         });
         // box the tracker so that moving it is cheap.
         let tracker = Box::new(Tracker::new(req_ctx, self.slow_log_threshold));
+        let handle_fut =
+            Self::handle_unary_request_impl(self.semaphore.clone(), tracker, handler_builder)
+                .in_resource_metering_tag(resource_tag);
+
+        bytes += mem::size_of_val(&handle_fut);
+        let mut owned_quota = OwnedAllocated::new(self.memory_quota.clone());
+        let check_memory_quota_fut = ready(owned_quota.alloc(bytes).map_err(Error::from));
+        let fut = check_memory_quota_fut
+            .and_then(move |_| handle_fut) // Handle unary request if check passes.
+            .map(move |res| {
+                // Release quota after handle completed.
+                drop(owned_quota);
+                res
+            });
         let res = self
             .read_pool
-            .spawn_handle(
-                Self::handle_unary_request_impl(self.semaphore.clone(), tracker, handler_builder)
-                    .in_resource_metering_tag(resource_tag),
-                priority,
-                task_id,
-                metadata,
-                resource_limiter,
-            )
+            .spawn_handle(fut, priority, task_id, metadata, resource_limiter)
             .map_err(|_| Error::MaxPendingTasksExceeded);
         async move { res.await? }
     }
@@ -850,6 +871,15 @@ macro_rules! make_error_response_common {
             }
             Error::MaxPendingTasksExceeded => {
                 $tag = "max_pending_tasks_exceeded";
+                let mut server_is_busy_err = errorpb::ServerIsBusy::default();
+                server_is_busy_err.set_reason($e.to_string());
+                let mut errorpb = errorpb::Error::default();
+                errorpb.set_message($e.to_string());
+                errorpb.set_server_is_busy(server_is_busy_err);
+                $resp.set_region_error(errorpb);
+            }
+            Error::MemoryQuotaExceeded => {
+                $tag = "memory_quota_exceeded";
                 let mut server_is_busy_err = errorpb::ServerIsBusy::default();
                 server_is_busy_err.set_reason($e.to_string());
                 let mut errorpb = errorpb::Error::default();
