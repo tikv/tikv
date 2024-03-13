@@ -15,6 +15,11 @@ use pd_client::{
 use serde::{Deserialize, Serialize};
 use tikv_util::{error, info, timer::GLOBAL_TIMER_HANDLE};
 
+/// RegionLabel is the label of a region. This struct is partially copied from
+/// https://github.com/tikv/pd/blob/783d060861cef37c38cbdcab9777fe95c17907fe/server/schedule/labeler/rules.go#L31.
+///
+/// Convention: ranges that should always be cached by the in-memory engine
+/// should be labeled with key "cache" set to value "always".
 #[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
 pub struct RegionLabel {
     pub key: String,
@@ -23,16 +28,20 @@ pub struct RegionLabel {
     pub start_at: Option<String>,
 }
 
-#[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
+/// LabelRule is the rule to assign labels to a region. This struct is partially
+/// copied from https://github.com/tikv/pd/blob/783d060861cef37c38cbdcab9777fe95c17907fe/server/schedule/labeler/rules.go#L41.
+///
+/// Note: `rule_type` should always be "key-range" for memory-engine use case.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct LabelRule {
     pub id: String,
     pub labels: Vec<RegionLabel>,
     pub rule_type: String,
-    pub ttl: Option<String>,
-    pub start_at: Option<String>,
     pub data: Vec<KeyRangeRule>,
 }
 
+/// KeyRangeRule contains the start key and end key of the LabelRule. This
+/// struct is partially copied from https://github.com/tikv/pd/blob/783d060861cef37c38cbdcab9777fe95c17907fe/server/schedule/labeler/rules.go#L62.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct KeyRangeRule {
     pub start_key: String,
@@ -76,6 +85,7 @@ pub struct RegionLabelService {
     pd_client: Arc<RpcClient>,
     meta_client: Checked<Sourced<Arc<RpcClient>>>,
     revision: i64,
+    cluster_id: u64,
     path_suffix: Option<String>,
     rule_filter_fn: Option<RuleFilterFn>,
 }
@@ -112,8 +122,10 @@ impl RegionLabelServiceBuilder {
         self
     }
 
-    pub fn build(self) -> RegionLabelService {
-        RegionLabelService {
+    pub fn build(self) -> pd_client::Result<RegionLabelService> {
+        let cluster_id = self.pd_client.get_cluster_id()?;
+        Ok(RegionLabelService {
+            cluster_id,
             manager: self.manager,
             revision: 0,
             meta_client: Checked::new(Sourced::new(
@@ -123,18 +135,17 @@ impl RegionLabelServiceBuilder {
             pd_client: self.pd_client,
             path_suffix: self.path_suffix,
             rule_filter_fn: self.rule_filter_fn,
-        }
+        })
     }
 }
 
 impl RegionLabelService {
     fn region_label_path(&self) -> String {
-        let cluster_id = self.pd_client.get_cluster_id().unwrap();
         let path_suffix = self.path_suffix.clone();
         let path_suffix = path_suffix.unwrap_or_default();
         format!(
             "/pd/{}/{}{}",
-            cluster_id, REGION_LABEL_PATH_PREFIX, path_suffix
+            self.cluster_id, REGION_LABEL_PATH_PREFIX, path_suffix
         )
     }
 
@@ -270,7 +281,8 @@ pub mod tests {
             Arc::clone(&region_label_manager_arc),
             Arc::new(rpc_client),
         )
-        .build();
+        .build()
+        .unwrap();
         block_on(async move { service.reload_all_region_labels().await });
         let region_labels = region_label_manager_arc.region_labels();
         assert!(!region_labels.is_empty());
@@ -318,7 +330,6 @@ pub mod tests {
                 start_key: start_key.to_string(),
                 end_key: end_key.to_string(),
             }],
-            ..LabelRule::default()
         }
     }
 
@@ -329,7 +340,8 @@ pub mod tests {
         let cluster_id = client.get_cluster_id().unwrap();
         let mut s =
             RegionLabelServiceBuilder::new(Arc::new(region_label_manager), Arc::new(client))
-                .build();
+                .build()
+                .unwrap();
         block_on(s.reload_all_region_labels());
         assert_eq!(s.manager.region_labels().len(), 0);
         add_region_label_rule(
@@ -350,7 +362,8 @@ pub mod tests {
         let cluster_id = client.get_cluster_id().unwrap();
         let mut s =
             RegionLabelServiceBuilder::new(Arc::new(region_label_manager), Arc::new(client))
-                .build();
+                .build()
+                .unwrap();
         block_on(s.reload_all_region_labels());
         assert_eq!(s.manager.region_labels().len(), 0);
 
