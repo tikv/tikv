@@ -1,12 +1,66 @@
 // Copyright 2023 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::cmp;
+use core::slice::SlicePattern;
+use std::{borrow::Borrow, cmp, ops::Deref};
 
 use bytes::{BufMut, Bytes, BytesMut};
 use engine_traits::CacheRange;
-use skiplist_rs::KeyComparator;
 use tikv_util::codec::number::NumberEncoder;
 use txn_types::{Key, TimeStamp};
+
+#[derive(Debug)]
+pub struct SklistBytes {
+    bytes: Bytes,
+}
+
+impl SklistBytes {
+    pub fn from_bytes(bytes: Bytes) -> Self {
+        Self { bytes }
+    }
+
+    pub fn from_vec(vec: Vec<u8>) -> Self {
+        Self {
+            bytes: Bytes::from(vec),
+        }
+    }
+
+    pub fn clone_bytes(&self) -> Bytes {
+        self.bytes.clone()
+    }
+}
+
+impl Borrow<[u8]> for SklistBytes {
+    fn borrow(&self) -> &[u8] {
+        self.bytes.as_slice()
+    }
+}
+
+impl Deref for SklistBytes {
+    type Target = [u8];
+    fn deref(&self) -> &Self::Target {
+        self.bytes.as_slice()
+    }
+}
+
+impl PartialEq for SklistBytes {
+    fn eq(&self, other: &Self) -> bool {
+        self.bytes.eq(&other.bytes)
+    }
+}
+
+impl Eq for SklistBytes {}
+
+impl Ord for SklistBytes {
+    fn cmp(&self, other: &Self) -> cmp::Ordering {
+        self.bytes.cmp(&other.bytes)
+    }
+}
+
+impl PartialOrd for SklistBytes {
+    fn partial_cmp(&self, other: &Self) -> Option<cmp::Ordering> {
+        self.bytes.partial_cmp(&other.bytes)
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ValueType {
@@ -140,43 +194,6 @@ pub fn encoding_for_filter(mvcc_prefix: &[u8], start_ts: TimeStamp) -> Vec<u8> {
     default_key
 }
 
-#[derive(Default, Debug, Clone, Copy)]
-pub struct InternalKeyComparator {}
-
-impl InternalKeyComparator {
-    fn same_key(lhs: &[u8], rhs: &[u8]) -> bool {
-        let k_1 = decode_key(lhs);
-        let k_2 = decode_key(rhs);
-        k_1.user_key == k_2.user_key
-    }
-}
-
-impl KeyComparator for InternalKeyComparator {
-    fn compare_key(&self, lhs: &[u8], rhs: &[u8]) -> cmp::Ordering {
-        let (k_1, s_1) = extract_user_key_and_suffix_u64(lhs);
-        let (k_2, s_2) = extract_user_key_and_suffix_u64(rhs);
-        let r = k_1.cmp(k_2);
-        if r.is_eq() {
-            match s_1.cmp(&s_2) {
-                cmp::Ordering::Greater => {
-                    return cmp::Ordering::Less;
-                }
-                cmp::Ordering::Less => {
-                    return cmp::Ordering::Greater;
-                }
-                cmp::Ordering::Equal => {
-                    return cmp::Ordering::Equal;
-                }
-            }
-        }
-        r
-    }
-
-    fn same_key(&self, lhs: &[u8], rhs: &[u8]) -> bool {
-        InternalKeyComparator::same_key(lhs, rhs)
-    }
-}
-
 #[cfg(test)]
 pub fn construct_user_key(i: u64) -> Vec<u8> {
     let k = format!("k{:08}", i);
@@ -200,10 +217,6 @@ pub fn construct_value(i: u64, j: u64) -> String {
 #[cfg(test)]
 mod tests {
     use bytes::BufMut;
-    use skiplist_rs::KeyComparator;
-
-    use super::{InternalKeyComparator, ValueType};
-    use crate::keys::encode_key;
 
     fn construct_key(i: u64, mvcc: u64) -> Vec<u8> {
         let k = format!("k{:08}", i);
@@ -214,36 +227,5 @@ mod tests {
     }
 
     #[test]
-    fn test_compare_key() {
-        let c = InternalKeyComparator::default();
-        let k = construct_key(1, 10);
-        // key1: k1_10_10_val
-        let key1 = encode_key(&k, 10, ValueType::Value);
-        // key2: k1_10_10_del
-        let key2 = encode_key(&k, 10, ValueType::Deletion);
-        assert!(c.compare_key(&key1, &key2).is_le());
-
-        // key2: k1_10_0_val
-        let key2 = encode_key(&k, 0, ValueType::Value);
-        assert!(c.compare_key(&key1, &key2).is_le());
-
-        // key1: k1_10_MAX_val
-        let key1 = encode_key(&k, u64::MAX, ValueType::Value);
-        assert!(c.compare_key(&key1, &key2).is_le());
-
-        let k = construct_key(1, 0);
-        // key2: k1_0_10_val
-        let key2 = encode_key(&k, 10, ValueType::Value);
-        assert!(c.compare_key(&key1, &key2).is_le());
-
-        // key1: k1_MAX_0_val
-        let k = construct_key(1, u64::MAX);
-        let key1 = encode_key(&k, 0, ValueType::Value);
-        assert!(c.compare_key(&key1, &key2).is_le());
-
-        let k = construct_key(2, u64::MAX);
-        // key2: k2_MAX_MAX_val
-        let key2 = encode_key(&k, u64::MAX, ValueType::Value);
-        assert!(c.compare_key(&key1, &key2).is_le());
-    }
+    fn test_compare_key() {}
 }

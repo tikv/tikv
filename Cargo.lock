@@ -5383,17 +5383,10 @@ checksum = "fa8f3741c7372e75519bd9346068370c9cdaabcc1f9599cbcf2a2719352286b7"
 [[package]]
 name = "skiplist-rs"
 version = "0.1.0"
-source = "git+https://github.com/tikv/skiplist-rs.git?branch=main#a9d27501ddfc17d6df9afababcaa6280f1af9e77"
+source = "git+https://github.com/SpadeA-Tang/skiplist.git?branch=master#3e0feb80ead6f91e1f979263308e0680845319d9"
 dependencies = [
- "bytes",
  "crossbeam-epoch",
  "crossbeam-utils",
- "fail",
- "rand 0.8.5",
- "scopeguard",
- "slog",
- "tikv-jemalloc-ctl",
- "tikv-jemallocator",
 ]
 
 [[package]]
@@ -7067,7 +7060,7 @@ version = "1.6.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "97fee6b57c6a41524a810daee9286c02d7752c4253064d0b05472833a438f675"
 dependencies = [
- "cfg-if 1.0.0",
+ "cfg-if 0.1.10",
  "static_assertions",
 ]
 

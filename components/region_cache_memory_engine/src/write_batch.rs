@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 
 use bytes::Bytes;
+use crossbeam::epoch;
 use engine_traits::{
     CacheRange, Mutable, Result, WriteBatch, WriteBatchExt, WriteOptions, CF_DEFAULT,
 };
@@ -8,7 +9,7 @@ use tikv_util::box_err;
 
 use crate::{
     engine::{cf_to_id, RangeCacheMemoryEngineCore, SkiplistEngine},
-    keys::{encode_key, ValueType},
+    keys::{encode_key, SklistBytes, ValueType},
     range_manager::RangeManager,
     RangeCacheMemoryEngine,
 };
@@ -92,9 +93,11 @@ impl RangeCacheWriteBatch {
                     .extend(write_batches.into_iter());
             }
         }
+
+        let guard = &epoch::pin();
         filtered_keys
             .into_iter()
-            .try_for_each(|e| e.write_to_memory(&engine, seq))
+            .try_for_each(|e| e.write_to_memory(&engine, seq, guard))
     }
 }
 
@@ -192,10 +195,21 @@ impl RangeCacheWriteBatchEntry {
     }
 
     #[inline]
-    pub fn write_to_memory(&self, skiplist_engine: &SkiplistEngine, seq: u64) -> Result<()> {
+    pub fn write_to_memory(
+        &self,
+        skiplist_engine: &SkiplistEngine,
+        seq: u64,
+        guard: &epoch::Guard,
+    ) -> Result<()> {
         let handle = &skiplist_engine.data[self.cf];
         let (key, value) = self.encode(seq);
-        let _ = handle.put(key, value);
+        let _ = handle
+            .insert(
+                SklistBytes::from_bytes(key),
+                SklistBytes::from_bytes(value),
+                guard,
+            )
+            .release(guard);
         Ok(())
     }
 }
@@ -305,7 +319,8 @@ impl Mutable for RangeCacheWriteBatch {
 
 #[cfg(test)]
 mod tests {
-    use std::{sync::Arc, time::Duration};
+    use core::slice::SlicePattern;
+    use std::{borrow::Borrow, time::Duration};
 
     use engine_traits::{CacheRange, Peekable, RangeCacheEngine, WriteBatch};
 
@@ -313,7 +328,7 @@ mod tests {
 
     #[test]
     fn test_write_to_skiplist() {
-        let engine = RangeCacheMemoryEngine::new(Arc::default(), Duration::from_secs(1));
+        let engine = RangeCacheMemoryEngine::new(Duration::from_secs(1));
         let r = CacheRange::new(b"".to_vec(), b"z".to_vec());
         engine.new_range(r.clone());
         {
@@ -326,13 +341,16 @@ mod tests {
         wb.set_sequence_number(1).unwrap();
         assert_eq!(wb.write().unwrap(), 1);
         let sl = engine.core.read().unwrap().engine().data[cf_to_id(CF_DEFAULT)].clone();
-        let actual = sl.get(&encode_key(b"aaa", 1, ValueType::Value)).unwrap();
-        assert_eq!(&b"bbb"[..], actual.value())
+        let guard = &crossbeam::epoch::pin();
+        let actual = sl
+            .get(encode_key(b"aaa", 1, ValueType::Value).as_slice(), guard)
+            .unwrap();
+        assert_eq!(&b"bbb"[..], Borrow::<[u8]>::borrow(actual.value()));
     }
 
     #[test]
     fn test_savepoints() {
-        let engine = RangeCacheMemoryEngine::new(Arc::default(), Duration::from_secs(1));
+        let engine = RangeCacheMemoryEngine::new(Duration::from_secs(1));
         let r = CacheRange::new(b"".to_vec(), b"z".to_vec());
         engine.new_range(r.clone());
         {
@@ -349,14 +367,20 @@ mod tests {
         wb.set_sequence_number(1).unwrap();
         assert_eq!(wb.write().unwrap(), 1);
         let sl = engine.core.read().unwrap().engine().data[cf_to_id(CF_DEFAULT)].clone();
-        let actual = sl.get(&encode_key(b"aaa", 1, ValueType::Value)).unwrap();
-        assert_eq!(&b"bbb"[..], actual.value());
-        assert!(sl.get(&encode_key(b"ccc", 1, ValueType::Value)).is_none())
+        let guard = &crossbeam::epoch::pin();
+        let actual = sl
+            .get(encode_key(b"aaa", 1, ValueType::Value).as_slice(), guard)
+            .unwrap();
+        assert_eq!(&b"bbb"[..], Borrow::<[u8]>::borrow(actual.value()));
+        assert!(
+            sl.get(encode_key(b"ccc", 1, ValueType::Value).as_slice(), guard)
+                .is_none()
+        )
     }
 
     #[test]
     fn test_put_write_clear_delete_put_write() {
-        let engine = RangeCacheMemoryEngine::new(Arc::default(), Duration::from_secs(1));
+        let engine = RangeCacheMemoryEngine::new(Duration::from_secs(1));
         let r = CacheRange::new(b"".to_vec(), b"z".to_vec());
         engine.new_range(r.clone());
         {
