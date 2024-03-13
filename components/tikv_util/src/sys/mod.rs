@@ -52,8 +52,32 @@ impl SysQuota {
         limit_cpu_cores_quota_by_env_var(cpu_num)
     }
 
+    #[cfg(target_os = "linux")]
+    pub fn cpu_cores_quota_current() -> f64 {
+        let cgroup = cgroup::CGroupSys::new().unwrap_or_default();
+        let mut cpu_num = num_cpus::get() as f64;
+        let cpuset_cores = cgroup.cpuset_cores().len() as f64;
+        let cpu_quota = cgroup.cpu_quota().unwrap_or(0.);
+
+        if cpuset_cores != 0. {
+            cpu_num = cpu_num.min(cpuset_cores);
+        }
+
+        if cpu_quota != 0. {
+            cpu_num = cpu_num.min(cpu_quota);
+        }
+
+        limit_cpu_cores_quota_by_env_var(cpu_num)
+    }
+
     #[cfg(not(target_os = "linux"))]
     pub fn cpu_cores_quota() -> f64 {
+        let cpu_num = num_cpus::get() as f64;
+        limit_cpu_cores_quota_by_env_var(cpu_num)
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    pub fn cpu_cores_quota_current() -> f64 {
         let cpu_num = num_cpus::get() as f64;
         limit_cpu_cores_quota_by_env_var(cpu_num)
     }
@@ -68,8 +92,24 @@ impl SysQuota {
         }
     }
 
+    #[cfg(target_os = "linux")]
+    pub fn memory_limit_in_bytes_current() -> u64 {
+        let cgroup = cgroup::CGroupSys::new().unwrap_or_default();
+        let total_mem = Self::sysinfo_memory_limit_in_bytes();
+        if let Some(cgroup_memory_limit) = cgroup.memory_limit_in_bytes() {
+            std::cmp::min(total_mem, cgroup_memory_limit)
+        } else {
+            total_mem
+        }
+    }
+
     #[cfg(not(target_os = "linux"))]
     pub fn memory_limit_in_bytes() -> u64 {
+        Self::sysinfo_memory_limit_in_bytes()
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    pub fn memory_limit_in_bytes_current() -> u64 {
         Self::sysinfo_memory_limit_in_bytes()
     }
 

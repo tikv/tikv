@@ -77,7 +77,7 @@ use tikv_util::{
     quota_limiter::QuotaLimiter,
     sys::thread::ThreadBuildWrapper,
     time::ThreadReadId,
-    worker::{Builder as WorkerBuilder, LazyWorker},
+    worker::{Builder as WorkerBuilder, LazyWorker, Scheduler},
     HandyRwLock,
 };
 use tokio::runtime::Builder as TokioBuilder;
@@ -669,6 +669,12 @@ impl<EK: KvEngineWithRocks> ServerCluster<EK> {
         let client = RaftClient::new(node_id, self.conn_builder.clone());
         self.raft_clients.insert(node_id, client);
         Ok(node_id)
+    }
+
+    pub fn get_resolved_ts_scheduler(&self, store_id: u64) -> Option<Scheduler<resolved_ts::Task>> {
+        let meta = self.metas.get(&store_id)?;
+        let w = meta.rts_worker.as_ref()?;
+        Some(w.scheduler())
     }
 }
 
