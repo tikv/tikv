@@ -729,7 +729,11 @@ pub enum PeerMsg<EK: KvEngine> {
     /// Raft message is the message sent between raft nodes in the same
     /// raft group. Messages need to be redirected to raftstore if target
     /// peer doesn't exist.
+<<<<<<< HEAD
     RaftMessage(InspectedRaftMessage),
+=======
+    RaftMessage(InspectedRaftMessage, Option<Instant>),
+>>>>>>> 19affe077f (raftstore: Fix store msg discriminant out of bound (#16641))
     /// Raft command is the command that is expected to be proposed by the
     /// leader of the target raft group. If it's failed to be sent, callback
     /// usually needs to be called before dropping in case of resource leak.
@@ -869,6 +873,14 @@ where
     AwakenRegions {
         abnormal_stores: Vec<u64>,
     },
+<<<<<<< HEAD
+=======
+
+    /// Message only used for test.
+    #[cfg(any(test, feature = "testexport"))]
+    Validate(Box<dyn FnOnce(&crate::store::Config) + Send>),
+}
+>>>>>>> 19affe077f (raftstore: Fix store msg discriminant out of bound (#16641))
 
     /// Message only used for test.
     #[cfg(any(test, feature = "testexport"))]
@@ -897,8 +909,6 @@ where
             ),
             StoreMsg::Tick(tick) => write!(fmt, "StoreTick {:?}", tick),
             StoreMsg::Start { ref store } => write!(fmt, "Start store {:?}", store),
-            #[cfg(any(test, feature = "testexport"))]
-            StoreMsg::Validate(_) => write!(fmt, "Validate config"),
             StoreMsg::UpdateReplicationMode(_) => write!(fmt, "UpdateReplicationMode"),
             StoreMsg::LatencyInspect { .. } => write!(fmt, "LatencyInspect"),
             StoreMsg::UnsafeRecoveryReport(..) => write!(fmt, "UnsafeRecoveryReport"),
@@ -907,6 +917,8 @@ where
             }
             StoreMsg::GcSnapshotFinish => write!(fmt, "GcSnapshotFinish"),
             StoreMsg::AwakenRegions { .. } => write!(fmt, "AwakenRegions"),
+            #[cfg(any(test, feature = "testexport"))]
+            StoreMsg::Validate(_) => write!(fmt, "Validate config"),
         }
     }
 }
@@ -914,6 +926,7 @@ where
 impl<EK: KvEngine> StoreMsg<EK> {
     pub fn discriminant(&self) -> usize {
         match self {
+<<<<<<< HEAD
             StoreMsg::RaftMessage(..) => 0,
             StoreMsg::ValidateSstResult { .. } => 1,
             StoreMsg::ClearRegionSizeInRange { .. } => 2,
@@ -929,6 +942,22 @@ impl<EK: KvEngine> StoreMsg<EK> {
             StoreMsg::AwakenRegions { .. } => 12,
             #[cfg(any(test, feature = "testexport"))]
             StoreMsg::Validate(_) => 13,
+=======
+            StoreMsg::RaftMessage(_) => 0,
+            StoreMsg::StoreUnreachable { .. } => 1,
+            StoreMsg::CompactedEvent(_) => 2,
+            StoreMsg::ClearRegionSizeInRange { .. } => 3,
+            StoreMsg::Tick(_) => 4,
+            StoreMsg::Start { .. } => 5,
+            StoreMsg::UpdateReplicationMode(_) => 6,
+            StoreMsg::LatencyInspect { .. } => 7,
+            StoreMsg::UnsafeRecoveryReport(_) => 8,
+            StoreMsg::UnsafeRecoveryCreatePeer { .. } => 9,
+            StoreMsg::GcSnapshotFinish => 10,
+            StoreMsg::AwakenRegions { .. } => 11,
+            #[cfg(any(test, feature = "testexport"))]
+            StoreMsg::Validate(_) => 12, // Please keep this always be the last one.
+>>>>>>> 19affe077f (raftstore: Fix store msg discriminant out of bound (#16641))
         }
     }
 }
