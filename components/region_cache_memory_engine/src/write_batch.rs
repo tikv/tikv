@@ -438,6 +438,58 @@ mod tests {
     }
 
     #[test]
+    fn test_prepare_for_apply() {
+        let path = Builder::new()
+            .prefix("test_prepare_for_apply")
+            .tempdir()
+            .unwrap();
+        let path_str = path.path().to_str().unwrap();
+        let rocks_engine = new_engine(path_str, DATA_CFS).unwrap();
+
+        let engine = RangeCacheMemoryEngine::new(Arc::default(), Duration::from_secs(1));
+        let r1 = CacheRange::new(b"k01".to_vec(), b"k05".to_vec());
+        let r2 = CacheRange::new(b"k05".to_vec(), b"k10".to_vec());
+        let r3 = CacheRange::new(b"k10".to_vec(), b"k15".to_vec());
+        {
+            engine.new_range(r1.clone());
+            let mut core = engine.core.write();
+            core.mut_range_manager().set_range_readable(&r1, true);
+            core.mut_range_manager().set_safe_point(&r1, 10);
+
+            let snap = Arc::new(rocks_engine.snapshot(None));
+            core.mut_range_manager()
+                .pending_ranges_loading_data
+                .push_back((r2.clone(), snap));
+        }
+        let mut wb = RangeCacheWriteBatch::from(&engine);
+        wb.prepare_for_range(&r1);
+        wb.put(b"k01", b"val1").unwrap();
+        wb.prepare_for_range(&r2);
+        wb.put(b"k05", b"val5").unwrap();
+        wb.prepare_for_range(&r3);
+        wb.put(b"k10", b"val10").unwrap();
+        wb.set_sequence_number(2).unwrap();
+        let _ = wb.write();
+        let snapshot = engine.snapshot(r1.clone(), u64::MAX, 2).unwrap();
+        assert_eq!(
+            snapshot.get_value(&b"k01"[..]).unwrap().unwrap(),
+            &b"val1"[..]
+        );
+        {
+            let core = engine.core.read();
+            assert_eq!(core.cached_write_batch.get(&r2).unwrap().len(), 1);
+        }
+
+        let mut wb = RangeCacheWriteBatch::from(&engine);
+        wb.prepare_for_range(&r1);
+        wb.delete(b"k01").unwrap();
+        wb.set_sequence_number(3).unwrap();
+        let _ = wb.write();
+        let snapshot = engine.snapshot(r1, u64::MAX, 3).unwrap();
+        assert!(snapshot.get_value(&b"k01"[..]).unwrap().is_none(),);
+    }
+
+    #[test]
     fn test_group_entries() {
         let path = Builder::new().prefix("test_group").tempdir().unwrap();
         let path_str = path.path().to_str().unwrap();
