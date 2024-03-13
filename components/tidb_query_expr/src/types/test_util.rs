@@ -36,6 +36,16 @@ impl RpnFnScalarEvaluator {
         }
     }
 
+    /// Creates a new `RpnFnScalarEvaluator` for test usage.
+    pub fn new_for_test(ctx: EvalContext) -> Self {
+        Self {
+            rpn_expr_builder: RpnExpressionBuilder::new_for_test(),
+            return_field_type: None,
+            context: Some(ctx),
+            metadata: None,
+        }
+    }
+
     /// Pushes a parameter as the value of an argument for evaluation. The field
     /// type will be auto inferred by choosing an arbitrary field type that
     /// matches the field type of the given value.
