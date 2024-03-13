@@ -137,7 +137,8 @@ pub struct TitanCfConfig {
     pub blob_file_compression: CompressionType,
     #[online_config(skip)]
     pub zstd_dict_size: ReadableSize,
-
+    #[online_config(skip)]
+    pub blob_cache_size: ReadableSize,
     #[online_config(skip)]
     pub min_gc_batch_size: ReadableSize,
     #[online_config(skip)]
@@ -154,11 +155,6 @@ pub struct TitanCfConfig {
     #[online_config(skip)]
     pub max_sorted_runs: i32,
 
-    #[online_config(skip)]
-    #[doc(hidden)]
-    #[serde(skip_serializing)]
-    #[deprecated = "The feature is removed"]
-    pub blob_cache_size: ReadableSize,
     #[online_config(skip)]
     #[doc(hidden)]
     #[serde(skip_serializing)]
