@@ -12,8 +12,9 @@ use crate::{
 };
 
 // `prepare_for_range` should be called before raft command apply for each peer
-// delete. It sets `range_in_cache` and `pending_range_in_loading` which is used
-// to determine whether the writes of region of this peer should be buffered.
+// delegate. It sets `range_in_cache` and `pending_range_in_loading` which is
+// used to determine whether the writes of region of this peer should be
+// buffered.
 pub struct RangeCacheWriteBatch {
     // `range_in_cache` indicates that the range is cached in the memory engine and we should
     // buffer the write in `buffer` which is consumed during the write is written in the kv engine.
@@ -317,11 +318,13 @@ impl Mutable for RangeCacheWriteBatch {
     }
 
     fn put_cf(&mut self, cf: &str, key: &[u8], val: &[u8]) -> Result<()> {
-        if !self.range_in_cache && !self.pending_range_in_loading {
-            return Ok(());
+        if self.range_in_cache {
+            self.buffer
+                .push(RangeCacheWriteBatchEntry::put_value(cf, key, val));
+        } else if self.pending_range_in_loading {
+            self.pending_range_in_loading_buffer
+                .push(RangeCacheWriteBatchEntry::put_value(cf, key, val));
         }
-        self.pending_range_in_loading_buffer
-            .push(RangeCacheWriteBatchEntry::put_value(cf, key, val));
         Ok(())
     }
 
@@ -330,11 +333,13 @@ impl Mutable for RangeCacheWriteBatch {
     }
 
     fn delete_cf(&mut self, cf: &str, key: &[u8]) -> Result<()> {
-        if !self.range_in_cache && !self.pending_range_in_loading {
-            return Ok(());
+        if self.range_in_cache {
+            self.buffer
+                .push(RangeCacheWriteBatchEntry::deletion(cf, key));
+        } else if self.pending_range_in_loading {
+            self.pending_range_in_loading_buffer
+                .push(RangeCacheWriteBatchEntry::deletion(cf, key));
         }
-        self.buffer
-            .push(RangeCacheWriteBatchEntry::deletion(cf, key));
         Ok(())
     }
 
