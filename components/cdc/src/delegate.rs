@@ -1,7 +1,9 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::ops::Bound;
+use std::result::Result as StdResult;
 use std::{
-    collections::BTreeMap,
+    collections::btree_map::{BTreeMap, Entry as BTreeMapEntry},
     fmt, mem,
     string::String,
     sync::{
@@ -42,10 +44,11 @@ use crate::{
     initializer::KvEntry,
     metrics::*,
     old_value::{OldValueCache, OldValueCallback},
-    service::ConnId,
+    service::{Conn, ConnId, FeatureGate},
     txn_source::TxnSource,
     Error, Result,
 };
+use crate::endpoint::ResolvedRegionHeap;
 
 static DOWNSTREAM_ID_ALLOC: AtomicUsize = AtomicUsize::new(0);
 
@@ -121,23 +124,22 @@ impl DownstreamState {
 }
 
 pub struct Downstream {
-    // TODO: include cdc request.
-    /// A unique identifier of the Downstream.
-    id: DownstreamId,
-    // The request ID set by CDC to identify events corresponding different requests.
-    req_id: u64,
-    conn_id: ConnId,
-    // The IP address of downstream.
-    peer: String,
-    region_epoch: RegionEpoch,
+    pub id: DownstreamId,
+    pub peer: String,
+    pub region_epoch: RegionEpoch,
+    pub req_id: u64,
+    pub conn_id: ConnId,
+    pub kv_api: ChangeDataRequestKvApi,
+    pub filter_loop: bool,
+    pub observed_range: ObservedRange,
+
     sink: Option<Sink>,
     state: Arc<AtomicCell<DownstreamState>>,
-    kv_api: ChangeDataRequestKvApi,
-    filter_loop: bool,
-    pub(crate) observed_range: ObservedRange,
 
-    // Count of different keys for every transaction ID.
-    locks: BTreeMap<TimeStamp, usize>,
+    // Fields to handle ResolvedTs advancing. If `locks` is none it means
+    // the downstream hasn't finished the incremental scanning.
+    advanced_to: TimeStamp,
+    lock_heap: Option<BTreeMap<TimeStamp, usize>>,
 }
 
 impl fmt::Debug for Downstream {
@@ -166,16 +168,20 @@ impl Downstream {
     ) -> Downstream {
         Downstream {
             id: DownstreamId::new(),
-            req_id,
-            conn_id,
             peer,
             region_epoch,
-            sink: None,
-            state: Arc::new(AtomicCell::new(DownstreamState::default())),
+            req_id,
+            conn_id,
             kv_api,
             filter_loop,
+
             observed_range,
-            locks: BTreeMap::default(),
+
+            sink: None,
+            state: Arc::new(AtomicCell::new(DownstreamState::default())),
+
+            advanced_to: TimeStamp::zero(),
+            lock_heap: None,
         }
     }
 
@@ -229,92 +235,10 @@ impl Downstream {
         self.sink = Some(sink);
     }
 
-    pub fn get_id(&self) -> DownstreamId {
-        self.id
-    }
-
-    pub fn get_filter_loop(&self) -> bool {
-        self.filter_loop
-    }
-
     pub fn get_state(&self) -> Arc<AtomicCell<DownstreamState>> {
         self.state.clone()
     }
 
-    pub fn get_conn_id(&self) -> ConnId {
-        self.conn_id
-    }
-    pub fn get_req_id(&self) -> u64 {
-        self.req_id
-    }
-}
-
-struct Pending {
-    downstreams: Vec<Downstream>,
-    locks: Vec<PendingLock>,
-    pending_bytes: usize,
-    memory_quota: Arc<MemoryQuota>,
-}
-
-impl Pending {
-    fn new(memory_quota: Arc<MemoryQuota>) -> Pending {
-        Pending {
-            downstreams: vec![],
-            locks: vec![],
-            pending_bytes: 0,
-            memory_quota,
-        }
-    }
-
-    fn push_pending_lock(&mut self, lock: PendingLock) -> Result<()> {
-        let bytes = lock.approximate_heap_size();
-        self.memory_quota.alloc(bytes)?;
-        self.locks.push(lock);
-        self.pending_bytes += bytes;
-        CDC_PENDING_BYTES_GAUGE.add(bytes as i64);
-        Ok(())
-    }
-
-    fn on_region_ready(&mut self, locks: &mut BTreeMap<Key, TimeStamp>) -> Result<()> {
-        fail::fail_point!("cdc_pending_on_region_ready", |_| Err(
-            Error::MemoryQuotaExceeded(tikv_util::memory::MemoryQuotaExceeded)
-        ));
-        // Must take locks, otherwise it may double free memory quota on drop.
-        for lock in mem::take(&mut self.locks) {
-            self.memory_quota.free(lock.approximate_heap_size());
-            match lock {
-                PendingLock::Track { key, start_ts } => drop(locks.insert(key, start_ts)),
-                PendingLock::Untrack { key } => assert!(locks.remove(&key).is_some()),
-            };
-        }
-        Ok(())
-    }
-}
-
-impl Drop for Pending {
-    fn drop(&mut self) {
-        CDC_PENDING_BYTES_GAUGE.sub(self.pending_bytes as i64);
-        let locks = mem::take(&mut self.locks);
-        if locks.is_empty() {
-            return;
-        }
-
-        // Free memory quota used by pending locks and unlocks.
-        let mut bytes = 0;
-        let num_locks = locks.len();
-        for lock in locks {
-            bytes += lock.approximate_heap_size();
-        }
-        if bytes > ON_DROP_WARN_HEAP_SIZE {
-            warn!("cdc drop huge Pending";
-                "bytes" => bytes,
-                "num_locks" => num_locks,
-                "memory_quota_in_use" => self.memory_quota.in_use(),
-                "memory_quota_capacity" => self.memory_quota.capacity(),
-            );
-        }
-        self.memory_quota.free(bytes);
-    }
 }
 
 // In `PendingLock`,  `key` is raw format instead of encoded.
@@ -335,7 +259,10 @@ impl HeapSize for PendingLock {
 
 pub enum LockTracker {
     Pending,   // Snapshot hasn't been acquired.
-    Preparing, // Snapshot is retrieved but locks are in scanning.
+    Preparing {
+        locks: Vec<PendingLock>,
+        size: usize,
+    },
     Prepared {
         region: Region,
         locks: BTreeMap<Key, TimeStamp>,
@@ -349,32 +276,115 @@ pub enum LockTracker {
 pub struct Delegate {
     pub region_id: u64,
     pub handle: ObserveHandle,
+    memory_quota: Arc<MemoryQuota>,
 
-    // Pending or Preparing means the delegate is not initialized.
-    pub lock_tracker: LockTracker,
-
-    // Downstreams after the delegate has been resolved.
-    resolved_downstreams: Vec<Downstream>,
-    pending: Option<Pending>,
-
+    lock_tracker: LockTracker,
+    downstreams: Vec<Downstream>,
     txn_extra_op: Arc<AtomicCell<TxnExtraOp>>,
     failed: bool,
 }
 
 impl Delegate {
+    fn push_lock(&mut self, key: Key, start_ts: TimeStamp) -> Result<isize> {
+        let mut lock_count_modify = 0;
+        match self.lock_tracker {
+            LockTracker::Pending => unreachable!(),
+            LockTracker::Preparing { ref mut locks, ref mut size } => {
+                let bytes = key.approximate_heap_size();
+                self.memory_quota.alloc(bytes)?;
+                CDC_PENDING_BYTES_GAUGE.add(bytes as i64);
+                locks.push(PendingLock::Track { key, start_ts });
+                *size += bytes;
+            },
+            LockTracker::Prepared { ref mut locks, .. } => {
+                let bytes = key.approximate_heap_size();
+                if locks.insert(key, start_ts).is_none() {
+                    self.memory_quota.alloc(bytes)?;
+                    lock_count_modify = 1;
+                }
+            }
+        }
+        Ok(lock_count_modify)
+    }
+
+    fn pop_lock(&mut self, key: Key) -> Result<()> {
+        match self.lock_tracker {
+            LockTracker::Pending => unreachable!(),
+            LockTracker::Preparing { ref mut locks, ref mut size } => {
+                let bytes = key.approximate_heap_size();
+                self.memory_quota.alloc(bytes)?;
+                CDC_PENDING_BYTES_GAUGE.add(bytes as i64);
+                locks.push(PendingLock::Untrack { key });
+                *size += bytes;
+            },
+            LockTracker::Prepared { ref mut locks, .. } => {
+                let (key, _) = locks.remove_entry(&key).unwrap();
+                self.memory_quota.free(key.approximate_heap_size());
+            }
+        }
+        Ok(())
+    }
+
+    pub(crate) fn init_lock_tracker(&mut self) {
+        assert!(matches!(self.lock_tracker, LockTracker::Pending));
+        let locks = vec![];
+        let size= 0;
+        self.lock_tracker = LockTracker::Preparing { locks, size };
+    }
+
+    pub(crate) fn on_region_ready(
+        &mut self,
+        region: Region,
+        locks: BTreeMap<Key, TimeStamp>,
+    ) -> Result<()> {
+        info!("cdc region is ready"; "region_id" => self.region_id);
+
+        // Check observed key range in region.
+        for downstream in self.downstreams_mut() {
+            downstream.observed_range.update_region_key_range(&region);
+        }
+
+        self.finish_prepare_lock_tracker(region, locks)
+    }
+
+    fn finish_prepare_lock_tracker(&mut self, region: Region, locks: BTreeMap<Key, TimeStamp>) -> Result<()> {
+        let pending_locks = match std::mem::replace(&mut self.lock_tracker, LockTracker::Pending) {
+            LockTracker::Preparing { locks, size } => {
+                self.memory_quota.free(size);
+                CDC_PENDING_BYTES_GAUGE.sub(size as i64);
+                locks
+            },
+            _ => unreachable!(),
+        };
+
+        for key in locks.keys() {
+            let bytes = key.approximate_heap_size();
+            self.memory_quota.alloc(bytes)?;
+        }
+        self.lock_tracker = LockTracker::Prepared { region, locks };
+
+        for lock in pending_locks {
+            match lock {
+                PendingLock::Track { key, start_ts } => self.push_lock(key, start_ts)?,
+                PendingLock::Untrack { key } => self.pop_lock(key)?,
+            }
+        }
+        Ok(())
+    }
+
     /// Create a Delegate the given region.
     pub fn new(
         region_id: u64,
-        txn_extra_op: Arc<AtomicCell<TxnExtraOp>>,
         memory_quota: Arc<MemoryQuota>,
+        txn_extra_op: Arc<AtomicCell<TxnExtraOp>>,
     ) -> Delegate {
         Delegate {
             region_id,
             handle: ObserveHandle::new(),
-            lock_tracker: LockTracker::Pending,
+            memory_quota,
 
-            resolved_downstreams: Vec::new(),
-            pending: Some(Pending::new(memory_quota)),
+            lock_tracker: LockTracker::Pending,
+            downstreams: Vec::new(),
             txn_extra_op,
             failed: false,
         }
@@ -385,10 +395,10 @@ impl Delegate {
     pub fn subscribe(
         &mut self,
         downstream: Downstream,
-    ) -> std::result::Result<(), (Error, Downstream)> {
-        if let LockTracker::Prepared { .. } = &self.lock_tracker {
+    ) -> StdResult<(), (Error, Downstream)> {
+        if let LockTracker::Prepared { ref region, .. } = &self.lock_tracker {
             // Check if the downstream is out dated.
-            if let Err(e) = self.check_epoch_on_ready(&downstream) {
+            if let Err(e) = Self::check_epoch_on_ready(&downstream, region) {
                 return Err((e, downstream));
             }
         }
@@ -401,17 +411,11 @@ impl Delegate {
     }
 
     pub fn downstreams(&self) -> &Vec<Downstream> {
-        self.pending
-            .as_ref()
-            .map(|p| &p.downstreams)
-            .unwrap_or(&self.resolved_downstreams)
+        &self.downstreams
     }
 
     pub fn downstreams_mut(&mut self) -> &mut Vec<Downstream> {
-        self.pending
-            .as_mut()
-            .map(|p| &mut p.downstreams)
-            .unwrap_or(&mut self.resolved_downstreams)
+        &mut self.downstreams
     }
 
     /// Let downstream unsubscribe the delegate.
@@ -501,62 +505,68 @@ impl Delegate {
         Ok(())
     }
 
-    /// Install a resolver. Return downstreams which fail because of the
-    /// region's internal changes.
-    pub fn on_region_ready(
+    /// Try advance and broadcast resolved ts.
+    pub fn on_min_ts(
         &mut self,
-        region: Region,
-        mut locks: BTreeMap<Key, TimeStamp>,
-    ) -> Result<Vec<(&Downstream, Error)>> {
-        assert!(matches!(self.lock_tracker, LockTracker::Preparing));
+        min_ts: TimeStamp,
+        connections: &HashMap<ConnId, Conn>,
+        advanced: &mut HashMap<(ConnId, u64), ResolvedRegionHeap>,
+        unchanged: &mut usize,
+        failed: &mut Vec<(Error, ConnId, u64, u64, DownstreamId)>,
+    ) {
+        let (region, locks) = match self.lock_tracker {
+            LockTracker::Prepared { ref region, ref locks, } => (region, locks),
+            _ => return,
+        };
 
-        // Check observed key range in region.
-        for downstream in self.downstreams_mut() {
-            downstream.observed_range.update_region_key_range(&region);
-        }
+        let handle_downstream = |downstream: &mut Downstream| -> Result<Option<TimeStamp>> {
+            if downstream.lock_heap.is_none() {
+                let state = downstream.state.load();
+                if !state.ready_for_advancing_ts() {
+                    return Ok(None);
+                }
 
-        // Mark the delegate as initialized.
-        info!("cdc region is ready"; "region_id" => self.region_id);
-        // Downstreams in pending must be moved to resolved_downstreams
-        // immediately and must not return in the middle, otherwise the delegate
-        // loses downstreams.
-        let mut pending = self.pending.take().unwrap();
-        self.resolved_downstreams = mem::take(&mut pending.downstreams);
+                Self::check_epoch_on_ready(downstream, region)?;
 
-        pending.on_region_ready(&mut locks)?;
-        self.lock_tracker = LockTracker::Prepared { region, locks };
+                let mut lock_heap = BTreeMap::<TimeStamp, usize>::new();
+                for (key, ts) in locks.range(downstream.observed_range.to_range()) {
+                    match lock_heap.entry(*ts) {
+                        BTreeMapEntry::Occupied(x) => *x.get_mut() += 1,
+                        BTreeMapEntry::Vacant(x) => { x.insert(1); },
+                    }
+                }
+                downstream.lock_heap = Some(lock_heap);
+            }
 
-        let mut failed_downstreams = Vec::new();
-        for downstream in self.downstreams() {
-            if let Err(e) = self.check_epoch_on_ready(downstream) {
-                failed_downstreams.push((downstream, e));
+            let lock_heap = downstream.lock_heap.as_ref().unwrap();
+            let min_lock = lock_heap.keys().next().cloned().unwrap_or(min_ts);
+            let advanced_to = std::cmp::min(min_lock, min_ts);
+            if advanced_to > downstream.advanced_to {
+                downstream.advanced_to = advanced_to;
+                return Ok(Some(advanced_to));
+            }
+            Ok(None)
+        };
+
+        for d in &mut self.downstreams {
+            match handle_downstream(d) {
+                Err(e) => {
+                    failed.push((e, d.conn_id, d.req_id, self.region_id, d.id));
+                }
+                Ok(Some(ts)) => {
+                    let features = connections.get(&d.conn_id).unwrap().features();
+                    let req_id = if features.contains(FeatureGate::STREAM_MULTIPLEXING) {
+                        d.req_id
+                    } else {
+                        0
+                    };
+
+                    let v = advanced.entry((d.conn_id, d.req_id)).or_insert_with(ResolvedRegionHeap::default);
+                    v.push(self.region_id, ts);
+                }
+                Ok(None) => *unchanged += 1,
             }
         }
-        Ok(failed_downstreams)
-    }
-
-    /// Try advance and broadcast resolved ts.
-    pub fn on_min_ts(&mut self, min_ts: TimeStamp) -> Option<TimeStamp> {
-        None
-        // let resolver = match self.lock_tracker {
-        //     LockTracker::Prepared {
-        //     } => resolver,
-        //     _ => {
-        //         debug!(
-        //             "cdc region resolver not ready";
-        //             "region_id" => self.region_id, "min_ts" => min_ts
-        //         );
-        //         return None;
-        //     }
-        // };
-
-        // debug!("cdc try to advance ts"; "region_id" => self.region_id,
-        // "min_ts" => min_ts); // let resolved_ts =
-        // resolver.resolve(min_ts, None, TsSource::Cdc); // FIXME
-        // let resolved_ts = min_ts;
-        // debug!("cdc resolved ts updated";
-        //     "region_id" => self.region_id, "resolved_ts" => resolved_ts);
-        // Some(resolved_ts)
     }
 
     pub fn on_batch(
@@ -711,6 +721,7 @@ impl Delegate {
         is_one_pc: bool,
     ) -> Result<()> {
         debug_assert_eq!(self.txn_extra_op.load(), TxnExtraOp::ReadOldValue);
+
         let mut read_old_value = |row: &mut EventRow, read_old_ts| -> Result<()> {
             let key = Key::from_raw(&row.key).append_ts(row.start_ts.into());
             let old_value = old_value_cb(key, read_old_ts, old_value_cache, statistics)?;
@@ -718,16 +729,13 @@ impl Delegate {
             Ok(())
         };
 
-        // map[key] -> (event, has_value).
-        let mut txn_rows: HashMap<Vec<u8>, (EventRow, bool)> = HashMap::default();
-        let mut raw_rows: Vec<EventRow> = Vec::new();
+        let mut rows_builder = RowsBuilder::default();
         for mut req in requests {
             let res = match req.get_cmd_type() {
                 CmdType::Put => self.sink_put(
                     req.take_put(),
                     is_one_pc,
-                    &mut txn_rows,
-                    &mut raw_rows,
+                    &mut rows_builder,
                     &mut read_old_value,
                 ),
                 CmdType::Delete => self.sink_delete(req.take_delete()),
@@ -745,6 +753,8 @@ impl Delegate {
                 return res;
             }
         }
+
+        rows_builder.finish_build();
 
         let mut rows = Vec::with_capacity(txn_rows.len());
         for (_, (v, has_value)) in txn_rows {
@@ -830,7 +840,7 @@ impl Delegate {
 
             let event = Event {
                 region_id,
-                request_id: downstream.get_req_id(),
+                request_id: downstream.req_id,
                 index,
                 event: Some(Event_oneof_event::Entries(EventEntries {
                     entries: entries_clone.into(),
@@ -856,15 +866,14 @@ impl Delegate {
         &mut self,
         put: PutRequest,
         is_one_pc: bool,
-        txn_rows: &mut HashMap<Vec<u8>, (EventRow, bool)>,
-        raw_rows: &mut Vec<EventRow>,
+        rows_builder: &mut RowsBuilder,
         read_old_value: impl FnMut(&mut EventRow, TimeStamp) -> Result<()>,
     ) -> Result<()> {
         let key_mode = ApiV2::parse_key_mode(put.get_key());
         if key_mode == KeyMode::Raw {
-            self.sink_raw_put(put, raw_rows)
+            self.sink_raw_put(put, &mut rows_builder.raw_rows)
         } else {
-            self.sink_txn_put(put, is_one_pc, txn_rows, read_old_value)
+            self.sink_txn_put(put, is_one_pc, &rows_builder.txn_rows_by_key, read_old_value)
         }
     }
 
@@ -905,9 +914,9 @@ impl Delegate {
 
                 match rows.entry(row.key.clone()) {
                     HashMapEntry::Occupied(o) => {
-                        let o = o.into_mut();
-                        mem::swap(&mut o.0.value, &mut row.value);
-                        o.0 = row;
+                        let (ref mut exist_row, _, _) = o.into_mut();
+                        mem::swap(&mut exists_row.value, row.value);
+                        *exist_row = row;
                     }
                     HashMapEntry::Vacant(v) => {
                         v.insert((row, has_value));
@@ -925,27 +934,15 @@ impl Delegate {
                 let read_old_ts = std::cmp::max(for_update_ts, row.start_ts.into());
                 read_old_value(&mut row, read_old_ts)?;
 
-                // In order to compute resolved ts, we must track inflight txns.
-                match self.lock_tracker {
-                    LockTracker::Prepared { ref mut locks, .. } => {
-                        locks.insert(Key::from_raw(&row.key), row.start_ts.into());
-                    }
-                    _ => {
-                        let pending = self.pending.as_mut().expect("region should be not ready");
-                        pending.push_pending_lock(PendingLock::Track {
-                            key: Key::from_raw(&row.key),
-                            start_ts: row.start_ts.into(),
-                        })?;
-                    }
-                }
-
                 let occupied = rows.entry(row.key.clone()).or_default();
                 if occupied.1 {
                     assert!(!has_value);
                     has_value = true;
                     mem::swap(&mut occupied.0.value, &mut row.value);
                 }
-                *occupied = (row, has_value);
+                let lock_count_modify = self.push_lock(Key::from_raw(&row.key), row.start_ts.into())?;
+                *occupied = (row, has_value, lock_count_modify);
+
             }
             "" | "default" => {
                 let key = Key::from_encoded(put.take_key()).truncate_ts().unwrap();
@@ -959,22 +956,9 @@ impl Delegate {
 
     fn sink_delete(&mut self, mut delete: DeleteRequest) -> Result<()> {
         match delete.cf.as_str() {
-            "lock" => {
-                let key = Key::from_encoded(delete.take_key());
-                match self.lock_tracker {
-                    LockTracker::Prepared { ref mut locks, .. } => {
-                        locks.remove(&key);
-                    }
-                    _ => {
-                        let pending = self.pending.as_mut().expect("region should be not ready");
-                        pending.push_pending_lock(PendingLock::Untrack { key })?;
-                    }
-                }
-            }
+            "lock" => self.pop_lock(Key::from_encoded(delete.take_key()))?,
             "" | "default" | "write" => {}
-            other => {
-                panic!("invalid cf {}", other);
-            }
+            other => panic!("invalid cf {}", other),
         }
         Ok(())
     }
@@ -1009,10 +993,9 @@ impl Delegate {
     }
 
     fn remove_downstream(&mut self, id: DownstreamId) -> Option<Downstream> {
-        let downstreams = self.downstreams_mut();
-        if let Some(index) = downstreams.iter().position(|x| x.id == id) {
-            let downstream = downstreams.swap_remove(index);
-            if downstreams.is_empty() {
+        if let Some(index) = self.downstreams.iter().position(|x| x.id == id) {
+            let downstream = self.downstreams.swap_remove(index);
+            if self.downstreams.is_empty() {
                 // Stop observing when the last downstream is removed. Otherwise the observer
                 // will keep pushing events to the delegate.
                 self.stop_observing();
@@ -1022,12 +1005,7 @@ impl Delegate {
         None
     }
 
-    fn check_epoch_on_ready(&self, downstream: &Downstream) -> Result<()> {
-        let region = match self.lock_tracker {
-            LockTracker::Prepared { ref region, .. } => region,
-            _ => unreachable!(),
-        };
-
+    fn check_epoch_on_ready(downstream: &Downstream, region: &Region) -> Result<()> {
         if let Err(e) = compare_region_epoch(
             &downstream.region_epoch,
             region,
@@ -1057,24 +1035,14 @@ impl Delegate {
         // To inform transaction layer no more old values are required for the region.
         self.txn_extra_op.store(TxnExtraOp::Noop);
     }
+}
 
-    pub(crate) fn maybe_init_lock_tracker(&mut self) -> bool {
-        match &mut self.lock_tracker {
-            x @ LockTracker::Pending => {
-                *x = LockTracker::Preparing;
-                true
-            }
-            _ => false,
-        }
-    }
+#[derive(Default)]
+struct RowsBuilder {
+    // map[raw_key]->(row, has_value, lock_count_modify)
+    txn_rows_by_key: HashMap<Vec<u8>, (EventRow, bool, isize)>,
 
-    pub(crate) fn resolved_ts(&self) -> TimeStamp {
-        Default::default()
-        // match self.lock_tracker {
-        //     LockTracker::Prepared { ref resolver, .. } =>
-        // resolver.resolved_ts(),     _ => TimeStamp::zero(),
-        // }
-    }
+    raw_rows: Vec<EventRow>,
 }
 
 fn set_event_row_type(row: &mut EventRow, ty: EventLogType) {
@@ -1265,6 +1233,18 @@ impl ObservedRange {
         // Entry's key is in raw key format.
         entries.retain(|e| self.is_key_in_range(&self.start_key_raw, &self.end_key_raw, &e.key));
         entries
+    }
+
+    fn to_range(&self) -> (Bound<&Key>, Bound<&Key>) {
+        unsafe {
+            let start = Bound::Included(std::mem::transmute(&self.start_key_encoded));
+            let end = if self.end_key_encoded.is_empty() {
+                Bound::Unbounded
+            } else {
+                Bound::Excluded(std::mem::transmute(&self.end_key_encoded))
+            };
+            (start, end)
+        }
     }
 }
 

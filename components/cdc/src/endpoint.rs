@@ -1,7 +1,6 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    cell::RefCell,
     cmp::{Ord, Ordering as CmpOrdering, PartialOrd, Reverse},
     collections::{BTreeMap, BinaryHeap},
     fmt,
@@ -36,7 +35,7 @@ use raftstore::{
     router::CdcHandle,
     store::fsm::store::StoreRegionMeta,
 };
-use resolved_ts::{resolve_by_raft, LeadershipResolver, Resolver};
+use resolved_ts::{resolve_by_raft, LeadershipResolver,};
 use security::SecurityManager;
 use tikv::{
     config::CdcConfig,
@@ -232,7 +231,7 @@ impl fmt::Debug for Task {
                 .field("type", &"register")
                 .field("register request", request)
                 .field("request", request)
-                .field("id", &downstream.get_id())
+                .field("id", &downstream.id)
                 .field("conn_id", conn_id)
                 .finish(),
             Task::Deregister(deregister) => de
@@ -318,13 +317,14 @@ impl Ord for ResolvedRegion {
     }
 }
 
-struct ResolvedRegionHeap {
+#[derive(Default)]
+pub(crate) struct ResolvedRegionHeap {
     // BinaryHeap is max heap, so we reverse order to get a min heap.
     heap: BinaryHeap<Reverse<ResolvedRegion>>,
 }
 
 impl ResolvedRegionHeap {
-    fn push(&mut self, region_id: u64, resolved_ts: TimeStamp) {
+    pub(crate) fn push(&mut self, region_id: u64, resolved_ts: TimeStamp) {
         self.heap.push(Reverse(ResolvedRegion {
             region_id,
             resolved_ts,
@@ -396,7 +396,6 @@ pub struct Endpoint<T, E, S> {
     sink_memory_quota: Arc<MemoryQuota>,
 
     old_value_cache: OldValueCache,
-    resolved_region_heap: RefCell<ResolvedRegionHeap>,
 
     causal_ts_provider: Option<Arc<CausalTsProviderImpl>>,
 
@@ -498,9 +497,6 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
             concurrency_manager,
             min_resolved_ts: TimeStamp::max(),
             min_ts_region_id: 0,
-            resolved_region_heap: RefCell::new(ResolvedRegionHeap {
-                heap: BinaryHeap::new(),
-            }),
             old_value_cache,
             resolved_region_count: 0,
             unresolved_region_count: 0,
@@ -673,7 +669,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
                 };
                 delegate.stop(err);
                 for downstream in delegate.downstreams() {
-                    let request_id = downstream.get_req_id();
+                    let request_id = downstream.req_id;
                     for conn in &mut self.connections.values_mut() {
                         conn.unsubscribe(request_id, region_id);
                     }
@@ -691,11 +687,11 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
     ) {
         let kv_api = request.get_kv_api();
         let api_version = self.api_version;
-        let filter_loop = downstream.get_filter_loop();
+        let filter_loop = downstream.filter_loop;
 
         let region_id = request.region_id;
         let request_id = request.request_id;
-        let downstream_id = downstream.get_id();
+        let downstream_id = downstream.id;
         let downstream_state = downstream.get_state();
 
         // Register must follow OpenConn, so the connection must be available.
@@ -781,8 +777,8 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
                 is_new_delegate = true;
                 e.insert(Delegate::new(
                     region_id,
-                    txn_extra_op,
                     self.sink_memory_quota.clone(),
+                    txn_extra_op,
                 ))
             }
         };
@@ -910,26 +906,15 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
         locks: BTreeMap<Key, TimeStamp>,
     ) {
         let region_id = region.get_id();
-        let mut deregisters = Vec::new();
+        let mut deregister = None;
         if let Some(delegate) = self.capture_regions.get_mut(&region_id) {
             if delegate.handle.id == observe_id {
-                match delegate.on_region_ready(region, locks) {
-                    Ok(fails) => {
-                        for (downstream, e) in fails {
-                            deregisters.push(Deregister::Downstream {
-                                conn_id: downstream.get_conn_id(),
-                                request_id: downstream.get_req_id(),
-                                region_id,
-                                downstream_id: downstream.get_id(),
-                                err: Some(e),
-                            });
-                        }
-                    }
-                    Err(e) => deregisters.push(Deregister::Delegate {
+                if let Err(e) = delegate.on_region_ready(region, locks) {
+                    deregister = Some(Deregister::Delegate {
                         region_id,
                         observe_id,
                         err: e,
-                    }),
+                    });
                 }
             } else {
                 debug!("cdc stale region ready";
@@ -942,45 +927,59 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
                 "region_id" => region.get_id());
         }
 
-        // Deregister downstreams if there is any downstream fails to subscribe.
-        for deregister in deregisters {
+        if let Some(deregister) = deregister {
             self.on_deregister(deregister);
         }
     }
 
     fn on_min_ts(&mut self, regions: Vec<u64>, min_ts: TimeStamp, current_ts: TimeStamp) {
-        // Reset resolved_regions to empty.
-        let mut resolved_regions = self.resolved_region_heap.borrow_mut();
-        resolved_regions.clear();
-
         let total_region_count = regions.len();
-        self.min_resolved_ts = TimeStamp::max();
         let mut advance_ok = 0;
         let mut advance_failed_none = 0;
         let mut advance_failed_same = 0;
         let mut advance_failed_stale = 0;
+
+        self.min_resolved_ts = TimeStamp::max();
+
+        // map[(conn_id, req_id)]->ResolvedRegionHeap
+        let mut advanced = HashMap::<(ConnId, u64), ResolvedRegionHeap>::default();
+        let mut unchanged = 0;
+        let mut failed = Vec::new();
         for region_id in regions {
-            if let Some(delegate) = self.capture_regions.get_mut(&region_id) {
-                let old_resolved_ts = delegate.resolved_ts();
-                if old_resolved_ts > min_ts {
-                    advance_failed_stale += 1;
-                }
-                if let Some(resolved_ts) = delegate.on_min_ts(min_ts) {
-                    if resolved_ts < self.min_resolved_ts {
-                        self.min_resolved_ts = resolved_ts;
-                        self.min_ts_region_id = region_id;
-                    }
-                    resolved_regions.push(region_id, resolved_ts);
-                    if resolved_ts == old_resolved_ts {
-                        advance_failed_same += 1;
-                    } else {
-                        advance_ok += 1;
-                    }
-                } else {
-                    advance_failed_none += 1;
-                }
+            if let Some(d) = self.capture_regions.get_mut(&region_id) {
+                d.on_min_ts(min_ts, &self.connections, &mut advanced, &mut unchanged, &mut failed);
             }
         }
+
+        for ((conn_id, req_id), mut region_ts_heap) in advanced {
+            let conn = self.connections.get(&conn_id).unwrap();
+
+            // Separate broadcasting outlier regions and normal regions,
+            // so 1) downstreams know where they should send resolve lock requests,
+            // and 2) resolved ts of normal regions does not fallback.
+            //
+            // Regions are separated exponentially to reduce resolved ts events and
+            // save CPU for both TiKV and TiCDC.
+            let mut batch_count = 8;
+            while !region_ts_heap.is_empty() {
+                let (outlier_min_resolved_ts, outlier_regions) = region_ts_heap.pop(batch_count);
+                Self::emit_resolved_ts(conn, req_id, outlier_min_resolved_ts, outlier_regions);
+                batch_count *= 4;
+            }
+        }
+
+        for (err, conn_id, request_id, region_id, downstream_id) in failed {
+            let deregister = Deregister::Downstream {
+                conn_id,
+                request_id,
+                region_id,
+                downstream_id,
+                err: Some(err),
+            };
+            // FIXME: handle the error?
+            let _ = self.scheduler.schedule(Task::Deregister(deregister));
+        }
+
         self.current_ts = current_ts;
         let lag_millis = min_ts
             .physical()
@@ -989,31 +988,14 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
             self.warn_resolved_ts_repeat_count += 1;
             if self.warn_resolved_ts_repeat_count >= WARN_RESOLVED_TS_COUNT_THRESHOLD {
                 self.warn_resolved_ts_repeat_count = 0;
-                warn!("cdc resolved ts lag too large";
+                warn!(
+                    "cdc resolved ts lag too large";
                     "min_resolved_ts" => self.min_resolved_ts,
                     "min_ts_region_id" => self.min_ts_region_id,
                     "min_ts" => min_ts,
                     "lag" => ?Duration::from_millis(lag_millis),
-                    "ok" => advance_ok,
-                    "none" => advance_failed_none,
-                    "stale" => advance_failed_stale,
-                    "same" => advance_failed_same);
+                );
             }
-        }
-        self.resolved_region_count = resolved_regions.heap.len();
-        self.unresolved_region_count = total_region_count - self.resolved_region_count;
-
-        // Separate broadcasting outlier regions and normal regions,
-        // so 1) downstreams know where they should send resolve lock requests,
-        // and 2) resolved ts of normal regions does not fallback.
-        //
-        // Regions are separated exponentially to reduce resolved ts events and
-        // save CPU for both TiKV and TiCDC.
-        let mut batch_count = 8;
-        while !resolved_regions.is_empty() {
-            let (outlier_min_resolved_ts, outlier_regions) = resolved_regions.pop(batch_count);
-            self.broadcast_resolved_ts(outlier_min_resolved_ts, outlier_regions);
-            batch_count *= 4;
         }
     }
 
@@ -1054,16 +1036,16 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
                 if !downstream.get_state().load().ready_for_advancing_ts() {
                     continue;
                 }
-                let conn_id = downstream.get_conn_id();
+                let conn_id = downstream.conn_id;
                 let features = self.connections.get(&conn_id).unwrap().features();
                 if features.contains(FeatureGate::STREAM_MULTIPLEXING) {
                     multiplexing
-                        .entry((conn_id, downstream.get_req_id()))
+                        .entry((conn_id, downstream.req_id))
                         .or_insert_with(Default::default)
                         .push(*region_id);
                 } else {
                     let x = one_way.entry(conn_id).or_insert_with(Default::default);
-                    x.0.push(downstream.get_req_id());
+                    x.0.push(downstream.req_id);
                     x.1.push(*region_id);
                 }
             }
@@ -1101,6 +1083,34 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
                 }
             }
         }
+    }
+
+    fn emit_resolved_ts(conn: &Conn, req_id: u64, min_resolved_ts: TimeStamp, regions: HashSet<u64>) {
+        let send_cdc_event = |ts: u64, conn: &Conn, request_id: u64, regions: Vec<u64>| {
+            let mut resolved_ts = ResolvedTs::default();
+            resolved_ts.ts = ts;
+            resolved_ts.request_id = request_id;
+            *resolved_ts.mut_regions() = regions;
+
+            let force_send = false;
+            match conn
+                .get_sink()
+                .unbounded_send(CdcEvent::ResolvedTs(resolved_ts), force_send)
+            {
+                Ok(_) => (),
+                Err(SendError::Disconnected) => {
+                    debug!("cdc send event failed, disconnected";
+                        "conn_id" => ?conn.get_id(), "downstream" => ?conn.get_peer());
+                }
+                Err(SendError::Full) | Err(SendError::Congested) => {
+                    info!("cdc send event failed, full";
+                        "conn_id" => ?conn.get_id(), "downstream" => ?conn.get_peer());
+                }
+            }
+        };
+
+        let min_resolved_ts = min_resolved_ts.into_inner();
+        send_cdc_event(min_resolved_ts, conn, req_id, Vec::from_iter(regions));
     }
 
     fn broadcast_resolved_ts_compact(
@@ -1295,7 +1305,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta + Send> Runnable
                 cb,
             } => {
                 if let Some(delegate) = self.capture_regions.get_mut(&region_id) {
-                    delegate.maybe_init_lock_tracker();
+                    delegate.init_lock_tracker();
                     build_resolver.store(true, Ordering::Release);
                 }
                 if let Err(e) = sink.unbounded_send(incremental_scan_barrier, true) {
@@ -1337,11 +1347,6 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta + Send> Runnable
     for Endpoint<T, E, S>
 {
     fn on_timeout(&mut self) {
-        // Reclaim resolved_region_heap memory.
-        self.resolved_region_heap
-            .borrow_mut()
-            .reset_and_shrink_to(self.capture_regions.len());
-
         CDC_ENDPOINT_PENDING_TASKS.set(self.scheduler.pending_tasks() as _);
         CDC_CAPTURED_REGION_COUNT.set(self.capture_regions.len() as i64);
         CDC_REGION_RESOLVE_STATUS_GAUGE_VEC
