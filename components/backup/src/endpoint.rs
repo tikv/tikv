@@ -769,7 +769,19 @@ impl<R: RegionInfoProvider> Progress<R> {
                             break;
                         }
                     }
+<<<<<<< HEAD
                     if info.role == StateRole::Leader {
+=======
+                    let peer = if let Some(peer) = find_peer(region, store_id) {
+                        peer.to_owned()
+                    } else {
+                        // skip the region at this time, and would retry to backup the region in
+                        // finegrained step.
+                        continue;
+                    };
+                    // Raft peer role has to match the replica read flag.
+                    if replica_read || info.role == StateRole::Leader {
+>>>>>>> b9e0deca2e (backup: handle the error when peer not found (#16581))
                         let ekey = get_min_end_key(end_key.as_ref(), region);
                         let skey = get_max_start_key(start_key.as_ref(), region);
                         assert!(!(skey == ekey && ekey.is_some()), "{:?} {:?}", skey, ekey);
