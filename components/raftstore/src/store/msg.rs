@@ -739,12 +739,15 @@ pub struct InspectedRaftMessage {
 /// Message that can be sent to a peer.
 #[allow(clippy::large_enum_variant)]
 #[derive(EnumCount, EnumVariantNames)]
-#[repr(u8)]
 pub enum PeerMsg<EK: KvEngine> {
     /// Raft message is the message sent between raft nodes in the same
     /// raft group. Messages need to be redirected to raftstore if target
     /// peer doesn't exist.
+<<<<<<< HEAD
     RaftMessage(InspectedRaftMessage),
+=======
+    RaftMessage(InspectedRaftMessage, Option<Instant>),
+>>>>>>> 19affe077f (raftstore: Fix store msg discriminant out of bound (#16641))
     /// Raft command is the command that is expected to be proposed by the
     /// leader of the target raft group. If it's failed to be sent, callback
     /// usually needs to be called before dropping in case of resource leak.
@@ -875,10 +878,6 @@ where
         inspector: LatencyInspector,
     },
 
-    /// Message only used for test.
-    #[cfg(any(test, feature = "testexport"))]
-    Validate(Box<dyn FnOnce(&crate::store::Config) + Send>),
-
     UnsafeRecoveryReport(pdpb::StoreReport),
     UnsafeRecoveryCreatePeer {
         syncer: UnsafeRecoveryExecutePlanSyncer,
@@ -890,6 +889,10 @@ where
     AwakenRegions {
         abnormal_stores: Vec<u64>,
     },
+
+    /// Message only used for test.
+    #[cfg(any(test, feature = "testexport"))]
+    Validate(Box<dyn FnOnce(&crate::store::Config) + Send>),
 }
 
 impl<EK: KvEngine> ResourceMetered for StoreMsg<EK> {}
@@ -916,8 +919,6 @@ where
             ),
             StoreMsg::Tick(tick) => write!(fmt, "StoreTick {:?}", tick),
             StoreMsg::Start { ref store } => write!(fmt, "Start store {:?}", store),
-            #[cfg(any(test, feature = "testexport"))]
-            StoreMsg::Validate(_) => write!(fmt, "Validate config"),
             StoreMsg::UpdateReplicationMode(_) => write!(fmt, "UpdateReplicationMode"),
             StoreMsg::LatencyInspect { .. } => write!(fmt, "LatencyInspect"),
             StoreMsg::UnsafeRecoveryReport(..) => write!(fmt, "UnsafeRecoveryReport"),
@@ -926,6 +927,8 @@ where
             }
             StoreMsg::GcSnapshotFinish => write!(fmt, "GcSnapshotFinish"),
             StoreMsg::AwakenRegions { .. } => write!(fmt, "AwakenRegions"),
+            #[cfg(any(test, feature = "testexport"))]
+            StoreMsg::Validate(_) => write!(fmt, "Validate config"),
         }
     }
 }
@@ -939,7 +942,14 @@ impl<EK: KvEngine> StoreMsg<EK> {
             StoreMsg::ClearRegionSizeInRange { .. } => 3,
             StoreMsg::Tick(_) => 4,
             StoreMsg::Start { .. } => 5,
+            StoreMsg::UpdateReplicationMode(_) => 6,
+            StoreMsg::LatencyInspect { .. } => 7,
+            StoreMsg::UnsafeRecoveryReport(_) => 8,
+            StoreMsg::UnsafeRecoveryCreatePeer { .. } => 9,
+            StoreMsg::GcSnapshotFinish => 10,
+            StoreMsg::AwakenRegions { .. } => 11,
             #[cfg(any(test, feature = "testexport"))]
+<<<<<<< HEAD
             StoreMsg::Validate(_) => 6,
             StoreMsg::UpdateReplicationMode(_) => 7,
             StoreMsg::LatencyInspect { .. } => 8,
@@ -948,6 +958,9 @@ impl<EK: KvEngine> StoreMsg<EK> {
             StoreMsg::GcSnapshotFinish => 11,
             StoreMsg::AwakenRegions { .. } => 12,
             StoreMsg::ValidateSstResult { .. } => 13,
+=======
+            StoreMsg::Validate(_) => 12, // Please keep this always be the last one.
+>>>>>>> 19affe077f (raftstore: Fix store msg discriminant out of bound (#16641))
         }
     }
 }
