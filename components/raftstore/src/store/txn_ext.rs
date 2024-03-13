@@ -258,12 +258,9 @@ impl PeerPessimisticLocks {
         });
 
         for (key, (lock, _)) in removed_locks.into_iter() {
-            let idx = match regions
+            let idx = regions
                 .binary_search_by_key(&&**key.as_encoded(), |region| region.get_start_key())
-            {
-                Ok(idx) => idx,
-                Err(idx) => idx - 1,
-            };
+                .unwrap_or_else(|idx| idx - 1);
             let size = key.len() + lock.memory_size();
             self.memory_size -= size;
             res[idx].map.insert(key, (lock, false));
@@ -287,7 +284,7 @@ impl PeerPessimisticLocks {
         if let (Some(start_key), Some(end_key)) = (start, end) {
             assert!(end_key >= start_key);
         }
-        let mut locks = Vec::with_capacity(limit);
+        let mut locks = Vec::new();
         let mut iter = self.map.range((
             start.map_or(Bound::Unbounded, |k| Bound::Included(k)),
             end.map_or(Bound::Unbounded, |k| Bound::Excluded(k)),
