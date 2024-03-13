@@ -7019,6 +7019,20 @@ def PointInTimeRestore() -> RowPanel:
                 ],
             ),
             graph_panel(
+                title="Import RPC Count",
+                targets=[
+                    target(
+                        expr=expr_simple(
+                            "tikv_import_rpc_count",
+                            label_selectors=[
+                                'type="apply"',
+                            ],
+                        ),
+                        legend_format="{{type}}-{{instance}}",
+                    ),
+                ],
+            ),
+            graph_panel(
                 title="Cache Events",
                 description=None,
                 yaxes=yaxes(left_format=UNITS.COUNTS_PER_SEC),
@@ -7797,6 +7811,17 @@ def BackupImport() -> RowPanel:
                             label_selectors=['request!="switch_mode"'],
                             by_labels=["request"],
                         ),
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="Import RPC Count",
+                targets=[
+                    target(
+                        expr=expr_simple(
+                            "tikv_import_rpc_count",
+                        ),
+                        legend_format="{{type}}-{{instance}}",
                     ),
                 ],
             ),
