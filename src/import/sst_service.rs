@@ -675,6 +675,7 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
         sink: UnarySink<SwitchModeResponse>,
     ) {
         let label = "switch_mode";
+        IMPORT_RPC_COUNT.with_label_values(&[label]).inc();
         let timer = Instant::now_coarse();
 
         let res = {
@@ -721,6 +722,7 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
         }
 
         let task = async move {
+            defer! { IMPORT_RPC_COUNT.with_label_values(&[label]).dec() }
             crate::send_rpc_response!(Ok(SwitchModeResponse::default()), sink, label, timer);
         };
         ctx.spawn(task);
@@ -815,6 +817,7 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
     // store.
     fn apply(&mut self, _ctx: RpcContext<'_>, req: ApplyRequest, sink: UnarySink<ApplyResponse>) {
         let label = "apply";
+        IMPORT_RPC_COUNT.with_label_values(&[label]).inc();
         let start = Instant::now();
         let importer = self.importer.clone();
         let limiter = self.limiter.clone();
@@ -822,6 +825,7 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
         let applier = self.writer.clone();
 
         let handle_task = async move {
+            defer! { IMPORT_RPC_COUNT.with_label_values(&[label]).dec() }
             // Records how long the apply task waits to be scheduled.
             sst_importer::metrics::IMPORTER_APPLY_DURATION
                 .with_label_values(&["queue"])
@@ -849,6 +853,7 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
         sink: UnarySink<DownloadResponse>,
     ) {
         let label = "download";
+        IMPORT_RPC_COUNT.with_label_values(&[label]).inc();
         let timer = Instant::now_coarse();
         let importer = Arc::clone(&self.importer);
         let limiter = self.limiter.clone();
@@ -865,6 +870,7 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
         });
 
         let handle_task = async move {
+            defer! { IMPORT_RPC_COUNT.with_label_values(&[label]).dec() }
             // Records how long the download task waits to be scheduled.
             sst_importer::metrics::IMPORTER_DOWNLOAD_DURATION
                 .with_label_values(&["queue"])
@@ -934,6 +940,7 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
         sink: UnarySink<IngestResponse>,
     ) {
         let label = "ingest";
+        IMPORT_RPC_COUNT.with_label_values(&[label]).inc();
         let timer = Instant::now_coarse();
         let import = self.importer.clone();
         let engine = self.engine.clone();
@@ -943,6 +950,7 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
         let ingest_latch = self.ingest_latch.clone();
 
         let handle_task = async move {
+            defer! { IMPORT_RPC_COUNT.with_label_values(&[label]).dec() }
             let mut multi_ingest = MultiIngestRequest::default();
             multi_ingest.set_context(req.take_context());
             multi_ingest.mut_ssts().push(req.take_sst());
@@ -970,6 +978,7 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
         sink: UnarySink<IngestResponse>,
     ) {
         let label = "multi-ingest";
+        IMPORT_RPC_COUNT.with_label_values(&[label]).inc();
         let timer = Instant::now_coarse();
         let import = self.importer.clone();
         let engine = self.engine.clone();
@@ -979,6 +988,7 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
         let ingest_latch = self.ingest_latch.clone();
 
         let handle_task = async move {
+            defer! { IMPORT_RPC_COUNT.with_label_values(&[label]).dec() }
             let res = ingest(
                 req,
                 engine,
