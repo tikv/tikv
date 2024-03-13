@@ -19,6 +19,7 @@ use crate::{
     codec::{
         convert::{self, ConvertTo},
         data_type::*,
+        mysql::DEFAULT_DIV_FRAC_INCR,
         Error, Result, TEN_POW,
     },
     expr::EvalContext,
@@ -138,7 +139,6 @@ const DIG_MASK: u32 = TEN_POW[8];
 const WORD_BASE: u32 = TEN_POW[9];
 const WORD_MAX: u32 = WORD_BASE - 1;
 const MAX_FRACTION: u8 = 30;
-const DEFAULT_DIV_FRAC_INCR: u8 = 4;
 const DIG_2_BYTES: &[u8] = &[0, 1, 1, 2, 2, 3, 3, 4, 4, 4];
 const FRAC_MAX: &[u32] = &[
     900000000, 990000000, 999000000, 999900000, 999990000, 999999000, 999999900, 999999990,
@@ -1714,7 +1714,7 @@ impl Decimal {
         dec_encoded_len(&[prec, frac]).unwrap_or(3)
     }
 
-    fn div(&self, rhs: &Decimal, frac_incr: u8) -> Option<Res<Decimal>> {
+    pub fn div(&self, rhs: &Decimal, frac_incr: u8) -> Option<Res<Decimal>> {
         let result_frac_cnt =
             cmp::min(self.result_frac_cnt.saturating_add(frac_incr), MAX_FRACTION);
         let mut res = do_div_mod_impl(self, rhs, frac_incr, false, Some(result_frac_cnt));
