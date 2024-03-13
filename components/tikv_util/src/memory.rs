@@ -189,7 +189,7 @@ impl OwnedAllocated {
         Ok(())
     }
 
-    pub fn source(&self) -> &MemoryQuota {
+    pub fn source(&self) -> &Arc<MemoryQuota> {
         &self.from
     }
 }

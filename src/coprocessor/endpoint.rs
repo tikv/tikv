@@ -111,6 +111,7 @@ impl<E: Engine> Endpoint<E> {
             _ => None,
         };
         let memory_quota = Arc::new(MemoryQuota::new(cfg.end_point_memory_quota.0 as _));
+        COPR_MEMORY_QUOTA.capacity.set(memory_quota.capacity() as _);
         Self {
             read_pool,
             semaphore,
@@ -546,11 +547,16 @@ impl<E: Engine> Endpoint<E> {
         bytes += mem::size_of_val(&handle_fut);
         let mut owned_quota = OwnedAllocated::new(self.memory_quota.clone());
         let check_memory_quota_fut = ready(owned_quota.alloc(bytes).map_err(Error::from));
+        COPR_MEMORY_QUOTA
+            .in_use
+            .set(owned_quota.source().in_use() as _);
         let fut = check_memory_quota_fut
             .and_then(move |_| handle_fut) // Handle unary request if check passes.
             .map(move |res| {
+                let quota = owned_quota.source().clone();
                 // Release quota after handle completed.
                 drop(owned_quota);
+                COPR_MEMORY_QUOTA.in_use.set(quota.in_use() as _);
                 res
             });
         let res = self

@@ -185,6 +185,15 @@ lazy_static! {
         .unwrap();
     pub static ref MEM_LOCK_CHECK_HISTOGRAM_VEC_STATIC: MemLockCheckHistogramVec =
         auto_flush_from!(MEM_LOCK_CHECK_HISTOGRAM_VEC, MemLockCheckHistogramVec);
+
+    pub static ref COPR_MEMORY_QUOTA: MemoryQuotaGauge =
+        register_static_int_gauge_vec!(
+            MemoryQuotaGauge,
+            "tikv_coprocessor_memory_quota",
+            "Statistics of in_use and capacity of coprocessor memory quota",
+            &["type"],
+        )
+        .unwrap();
 }
 
 make_static_metric! {
@@ -195,6 +204,13 @@ make_static_metric! {
 
     pub struct CoprAcquireSemaphoreTypeCounterVec: IntCounter {
         "type" => AcquireSemaphoreType,
+    }
+
+    pub struct MemoryQuotaGauge: IntGauge {
+        "type" =>  {
+            in_use,
+            capacity,
+        }
     }
 }
 
