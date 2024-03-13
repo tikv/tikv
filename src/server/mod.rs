@@ -32,7 +32,9 @@ pub use self::server::test_router::TestRaftStoreRouter;
 pub use self::{
     config::{Config, ServerConfigManager, DEFAULT_CLUSTER_ID, DEFAULT_LISTENING_ADDR},
     errors::{Error, Result},
-    metrics::{CONFIG_ROCKSDB_GAUGE, CPU_CORES_QUOTA_GAUGE, MEM_TRACE_SUM_GAUGE},
+    metrics::{
+        CONFIG_ROCKSDB_GAUGE, CPU_CORES_QUOTA_GAUGE, MEMORY_LIMIT_GAUGE, MEM_TRACE_SUM_GAUGE,
+    },
     node::Node,
     proxy::{build_forward_option, get_target_address, Proxy},
     raft_client::{ConnectionBuilder, MetadataSourceStoreId, RaftClient},

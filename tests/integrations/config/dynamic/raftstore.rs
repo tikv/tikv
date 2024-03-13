@@ -237,6 +237,7 @@ fn test_update_raftstore_io_config() {
     // Start from SYNC mode.
     {
         let (mut resize_config, _dir) = TikvConfig::with_tmp().unwrap();
+        resize_config.raft_store.store_io_pool_size = 0; // SYNC mode
         resize_config.validate().unwrap();
         let (cfg_controller, _, _, mut system) = start_raftstore(resize_config, &_dir);
 
