@@ -259,7 +259,7 @@ pub mod tests {
     use super::*;
 
     // Note: a test that runs against a local PD instance. This is for debugging
-    // purposesly only and is disabled by default. To run, remove `#[ignore]`
+    // purposes only and is disabled by default. To run, remove `#[ignore]`
     // line below.
     #[ignore]
     #[test]
