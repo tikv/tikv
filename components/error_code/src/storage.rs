@@ -45,6 +45,7 @@ define_error_codes!(
 
     PRIMARY_MISMATCH => ("PrimaryMismatch", "", ""),
     UNDETERMINED => ("Undetermined", "", ""),
+    GENERATION_OUT_OF_ORDER => ("GenerationOutOfOrder", "", ""),
 
     UNKNOWN => ("Unknown", "", "")
 );

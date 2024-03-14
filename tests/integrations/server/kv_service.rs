@@ -3105,6 +3105,7 @@ fn test_pipelined_dml_flush() {
     flush_req.set_context(ctx.clone());
     flush_req.set_start_ts(1);
     flush_req.set_primary_key(pk.clone());
+    flush_req.set_generation(1);
     let flush_resp = client.kv_flush(&flush_req).unwrap();
     assert!(!flush_resp.has_region_error());
     assert!(flush_resp.get_errors().is_empty());
@@ -3161,6 +3162,7 @@ fn test_pipelined_dml_write_conflict() {
         }]
         .into(),
     );
+    req.set_generation(1);
     req.set_context(ctx.clone());
     req.set_start_ts(1);
     req.set_primary_key(k.clone());
@@ -3241,6 +3243,7 @@ fn test_pipelined_dml_write_conflict() {
         }]
         .into(),
     );
+    req.set_generation(2);
     req.set_context(ctx.clone());
     req.set_start_ts(2);
     req.set_primary_key(k.clone());
@@ -3278,6 +3281,7 @@ fn test_pipelined_dml_write_conflict() {
         }]
         .into(),
     );
+    req.set_generation(3);
     req.set_context(ctx.clone());
     req.set_start_ts(2);
     req.set_primary_key(k.clone());
@@ -3303,6 +3307,7 @@ fn test_pipelined_dml_read_write_conflict() {
         }]
         .into(),
     );
+    req.set_generation(1);
     req.set_context(ctx.clone());
     req.set_start_ts(1);
     req.set_primary_key(k.clone());
@@ -3349,4 +3354,124 @@ fn test_pipelined_dml_buffer_get_other_key() {
     let resp = client.kv_buffer_batch_get(&req).unwrap();
     assert!(!resp.has_region_error());
     assert!(resp.get_pairs().is_empty());
+}
+
+#[test_case(test_raftstore::must_new_cluster_and_kv_client)]
+#[test_case(test_raftstore_v2::must_new_cluster_and_kv_client)]
+fn test_check_cluster_id() {
+    let (cluster, client, ctx) = new_cluster();
+    let k1 = b"k1";
+    let v1 = b"v1";
+    let ts = 1;
+    let mut mutation = Mutation::default();
+    mutation.set_op(Op::Put);
+    mutation.set_key(k1.to_vec());
+    mutation.set_value(v1.to_vec());
+    must_kv_prewrite(&client, ctx.clone(), vec![mutation], k1.to_vec(), ts);
+    must_kv_commit(&client, ctx.clone(), vec![k1.to_vec()], ts, ts + 1, ts + 1);
+
+    // Test unary requests, cluster id is not set.
+    let mut get_req = GetRequest::default();
+    get_req.set_context(ctx.clone());
+    get_req.key = k1.to_vec();
+    get_req.version = 10;
+    let get_resp = client.kv_get(&get_req).unwrap();
+    assert!(!get_resp.has_region_error());
+    assert!(
+        !get_resp.has_error(),
+        "get error {:?}",
+        get_resp.get_error()
+    );
+    assert_eq!(get_resp.get_value(), v1);
+
+    // Test unary request, cluster id is set correctly.
+    get_req.mut_context().cluster_id = ctx.cluster_id;
+    let get_resp = client.kv_get(&get_req).unwrap();
+    assert!(!get_resp.has_region_error());
+    assert!(
+        !get_resp.has_error(),
+        "get error {:?}",
+        get_resp.get_error()
+    );
+    assert_eq!(get_resp.get_value(), v1);
+
+    // Test unary request, cluster id is set incorrectly.
+    let cm = cluster.sim.read().unwrap().get_concurrency_manager(1);
+    let max_ts_before_req = cm.max_ts();
+    get_req.mut_context().cluster_id = ctx.cluster_id + 1;
+    get_req.version = max_ts_before_req.next().next().into_inner();
+    let get_resp = client.kv_get(&get_req);
+    let mut error_match = false;
+    if let Error::RpcFailure(status) = get_resp.unwrap_err() {
+        if status.code() == RpcStatusCode::INVALID_ARGUMENT {
+            error_match = true;
+        }
+    }
+    assert!(error_match);
+    assert_eq!(max_ts_before_req, cm.max_ts());
+}
+
+#[test_case(test_raftstore::must_new_cluster_and_kv_client)]
+#[test_case(test_raftstore_v2::must_new_cluster_and_kv_client)]
+fn test_check_cluster_id_for_batch_cmds() {
+    let (_cluster, client, ctx) = new_cluster();
+    let k1 = b"k1";
+    let v1 = b"v1";
+    let ts = 1;
+    // Prewrite and commit.
+    let mut mutation = Mutation::default();
+    mutation.set_op(Op::Put);
+    mutation.set_key(k1.to_vec());
+    mutation.set_value(v1.to_vec());
+    must_kv_prewrite(&client, ctx.clone(), vec![mutation], k1.to_vec(), ts);
+    must_kv_commit(&client, ctx.clone(), vec![k1.to_vec()], ts, ts + 1, ts + 1);
+
+    // Test batch command requests.
+    for set_cluster_id in [false, true] {
+        let batch_req_num = 10usize;
+        for invalid_req_index in [0, 5, 9, 20] {
+            let (mut sender, receiver) = client.batch_commands().unwrap();
+            let mut batch_req = BatchCommandsRequest::default();
+            for i in 0..batch_req_num {
+                let mut get = GetRequest::default();
+                get.version = ts + 10;
+                get.key = k1.to_vec();
+                get.set_context(ctx.clone());
+                if set_cluster_id {
+                    get.mut_context().cluster_id = ctx.cluster_id;
+                    if i == invalid_req_index {
+                        get.mut_context().cluster_id = ctx.cluster_id + 100;
+                    }
+                }
+                let mut req = batch_commands_request::Request::default();
+                req.cmd = Some(batch_commands_request::request::Cmd::Get(get));
+                batch_req.mut_requests().push(req);
+                batch_req.mut_request_ids().push(i as u64);
+            }
+            block_on(sender.send((batch_req, WriteFlags::default()))).unwrap();
+            block_on(sender.close()).unwrap();
+            let (tx, rx) = mpsc::sync_channel(1);
+
+            thread::spawn(move || {
+                let mut count = 0;
+                for x in block_on(
+                    receiver
+                        .map(move |b| match b {
+                            Ok(batch) => batch.get_responses().len(),
+                            Err(..) => 0,
+                        })
+                        .collect::<Vec<usize>>(),
+                ) {
+                    count += x;
+                }
+                tx.send(count).unwrap();
+            });
+            let received_cnt = rx.recv_timeout(Duration::from_secs(2)).unwrap();
+            if !set_cluster_id || invalid_req_index >= batch_req_num {
+                assert_eq!(received_cnt, batch_req_num);
+            } else {
+                assert!(received_cnt < batch_req_num);
+            }
+        }
+    }
 }
