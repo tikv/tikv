@@ -31,7 +31,7 @@ use engine_rocks::{
     raw::{
         BlockBasedOptions, Cache, ChecksumType, CompactionPriority, ConcurrentTaskLimiter,
         DBCompactionStyle, DBCompressionType, DBRateLimiterMode, DBRecoveryMode, Env,
-        PrepopulateBlockCache, RateLimiter, WriteBufferManager,
+        LRUCacheOptions, PrepopulateBlockCache, RateLimiter, WriteBufferManager,
     },
     util::{
         FixedPrefixSliceTransform, FixedSuffixSliceTransform, NoopSliceTransform,
@@ -137,7 +137,10 @@ pub struct TitanCfConfig {
     pub blob_file_compression: CompressionType,
     #[online_config(skip)]
     pub zstd_dict_size: ReadableSize,
-
+    #[online_config(skip)]
+    pub shared_blob_cache: bool,
+    #[online_config(skip)]
+    pub blob_cache_size: ReadableSize,
     #[online_config(skip)]
     pub min_gc_batch_size: ReadableSize,
     #[online_config(skip)]
@@ -154,11 +157,6 @@ pub struct TitanCfConfig {
     #[online_config(skip)]
     pub max_sorted_runs: i32,
 
-    #[online_config(skip)]
-    #[doc(hidden)]
-    #[serde(skip_serializing)]
-    #[deprecated = "Included in shared block cache"]
-    pub blob_cache_size: ReadableSize,
     #[online_config(skip)]
     #[doc(hidden)]
     #[serde(skip_serializing)]
@@ -181,6 +179,7 @@ impl Default for TitanCfConfig {
                                   * The logic is in `optional_default_cfg_adjust_with` */
             blob_file_compression: CompressionType::Zstd,
             zstd_dict_size: ReadableSize::kb(0),
+            shared_blob_cache: true,
             blob_cache_size: ReadableSize::mb(0),
             min_gc_batch_size: ReadableSize::mb(16),
             max_gc_batch_size: ReadableSize::mb(64),
@@ -217,7 +216,14 @@ impl TitanCfConfig {
             self.zstd_dict_size.0 as i32,       // zstd dict size
             self.zstd_dict_size.0 as i32 * 100, // zstd sample size
         );
-        opts.set_blob_cache(cache);
+        if self.shared_blob_cache {
+            opts.set_blob_cache(cache);
+        } else {
+            let mut cache_opts = LRUCacheOptions::new();
+            cache_opts.set_capacity(self.blob_cache_size.0 as usize);
+            let cache = Cache::new_lru_cache(cache_opts);
+            opts.set_blob_cache(&cache);
+        }
         opts.set_min_gc_batch_size(self.min_gc_batch_size.0);
         opts.set_max_gc_batch_size(self.max_gc_batch_size.0);
         opts.set_discardable_ratio(self.discardable_ratio);
@@ -244,11 +250,6 @@ impl TitanCfConfig {
         }
         if self.sample_ratio.is_some() {
             warn!("sample-ratio is deprecated. Ignoring the value.");
-        }
-        if self.blob_cache_size.0 != 0 {
-            warn!(
-                "blob-cache-size is deprecated. It's included in shared block cache. Ignoring the value."
-            );
         }
         Ok(())
     }
