@@ -1465,7 +1465,7 @@ mod tests {
 
     #[test]
     fn test_json_member_of() {
-        let test_cases = vec![
+        let test_cases: Vec<(Option<&str>, Option<&str>, Option<i64>)> = vec![
             (Some(r#"1"#), Some(r#"[1,2]"#), Some(1)),
             (Some(r#"1"#), Some(r#"[1]"#), Some(1)),
             (Some(r#"1"#), Some(r#"[0]"#), Some(0)),
@@ -1511,12 +1511,44 @@ mod tests {
         let cases: Vec<(Vec<ScalarValue>, _)> = vec![
             (
                 vec![
+                    None::<Json>.into(),
+                    None::<Bytes>.into(),
+                    None::<Json>.into(),
+                ],
+                None::<Json>,
+            ),
+            (
+                vec![
                     Some(Json::from_i64(9).unwrap()).into(),
                     Some(b"$".to_vec()).into(),
                     Some(Json::from_u64(3).unwrap()).into(),
                 ],
                 Some(r#"[9,3]"#.parse().unwrap()),
             ),
+            (
+                vec![
+                    Some(Json::from_str(r#"["a", ["b", "c"], "d"]"#).unwrap()).into(),
+                    Some(b"$[1]".to_vec()).into(),
+                    Some(Json::from_u64(1).unwrap()).into(),
+                ],
+                Some(r#"["a", ["b", "c", 1], "d"]"#.parse().unwrap()),
+            ),
+            (
+                vec![
+                    Some(Json::from_str(r#"["a", ["b", "c"], "d"]"#).unwrap()).into(),
+                    Some(b"$[0]".to_vec()).into(),
+                    Some(Json::from_u64(2).unwrap()).into(),
+                ],
+                Some(r#"[["a", 2], ["b", "c"], "d"]"#.parse().unwrap()),
+            ),
+            (
+                vec![
+                    Some(Json::from_str(r#"["a", ["b", "c"], "d"]"#).unwrap()).into(),
+                    Some(b"$[1][0]".to_vec()).into(),
+                    Some(Json::from_u64(3).unwrap()).into(),
+                ],
+                Some(r#"["a", [["b", 3], "c"], "d"]"#.parse().unwrap()),
+            ), 
         ];
         for (args, expect_output) in cases {
             let output: Option<Json> = RpnFnScalarEvaluator::new()
