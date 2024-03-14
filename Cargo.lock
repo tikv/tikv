@@ -4290,6 +4290,8 @@ dependencies = [
  "slog-global",
  "smallvec",
  "sst_importer",
+ "strum 0.20.0",
+ "strum_macros 0.24.3",
  "tempfile",
  "test_sst_importer",
  "thiserror",
@@ -5689,6 +5691,19 @@ dependencies = [
 
 [[package]]
 name = "strum_macros"
+version = "0.24.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1e385be0d24f186b4ce2f9982191e7101bb737312ad61c1f2f984f34bcf85d59"
+dependencies = [
+ "heck 0.4.1",
+ "proc-macro2",
+ "quote",
+ "rustversion",
+ "syn 1.0.103",
+]
+
+[[package]]
+name = "strum_macros"
 version = "0.25.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fe9f3bd7d2e45dcc5e265fbb88d6513e4747d8ef9444cf01a533119bce28a157"
@@ -6823,7 +6838,7 @@ dependencies = [
 [[package]]
 name = "tipb"
 version = "0.0.1"
-source = "git+https://github.com/pingcap/tipb.git#711da6fede03533302fbc9fa3a8fca3556683197"
+source = "git+https://github.com/pingcap/tipb.git#87f5b80908ab561fb7875c88114488cad15727b1"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
