@@ -265,32 +265,6 @@ pub const RESOURCE_CONTROL_CONTROLLER_CONFIG_PATH: &str = "resource_group/contro
 /// creating the PdClient is enough and the PdClient will use this cluster id
 /// all the time.
 pub trait PdClient: Send + Sync {
-    /// Load a list of GlobalConfig
-    fn load_global_config(
-        &self,
-        _config_path: String,
-    ) -> PdFuture<(Vec<pdpb::GlobalConfigItem>, i64)> {
-        unimplemented!();
-    }
-
-    /// Store a list of GlobalConfig
-    fn store_global_config(
-        &self,
-        _config_path: String,
-        _items: Vec<pdpb::GlobalConfigItem>,
-    ) -> PdFuture<()> {
-        unimplemented!();
-    }
-
-    /// Watching change of GlobalConfig
-    fn watch_global_config(
-        &self,
-        _config_path: String,
-        _revision: i64,
-    ) -> Result<grpcio::ClientSStreamReceiver<pdpb::WatchGlobalConfigResponse>> {
-        unimplemented!();
-    }
-
     /// Returns the cluster ID.
     fn get_cluster_id(&self) -> Result<u64> {
         unimplemented!();
