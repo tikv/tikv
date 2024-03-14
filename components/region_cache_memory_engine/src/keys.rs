@@ -75,18 +75,18 @@ impl Ord for InternalBytes {
         let n2 = u64::from_be_bytes(other.bytes[(other.bytes.len() - 8)..].try_into().unwrap());
 
         if n1 < n2 {
-            return Ordering::Greater;
+            Ordering::Greater
         } else if n1 > n2 {
-            return Ordering::Less;
+            Ordering::Less
         } else {
-            return Ordering::Equal;
+            Ordering::Equal
         }
     }
 }
 
 impl PartialOrd for InternalBytes {
     fn partial_cmp(&self, other: &Self) -> Option<cmp::Ordering> {
-        Some(self.cmp(&other))
+        Some(self.cmp(other))
     }
 }
 

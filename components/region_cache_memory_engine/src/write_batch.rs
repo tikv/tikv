@@ -205,7 +205,7 @@ impl RangeCacheWriteBatchEntry {
     ) -> Result<()> {
         let handle = &skiplist_engine.data[self.cf];
         let (key, value) = self.encode(seq);
-        let _ = handle.insert(key, value, guard).release(guard);
+        handle.insert(key, value, guard).release(guard);
         Ok(())
     }
 }
