@@ -923,7 +923,6 @@ struct CfStats {
     num_keys: Option<u64>,
     pending_compaction_bytes: Option<u64>,
     num_immutable_mem_table: Option<u64>,
-    live_blob_size: Option<u64>,
     num_live_blob_file: Option<u64>,
     num_obsolete_blob_file: Option<u64>,
     live_blob_file_size: Option<u64>,
@@ -992,9 +991,6 @@ impl StatisticsReporter<RocksEngine> for RocksStatisticsReporter {
                 *cf_stats.num_immutable_mem_table.get_or_insert_default() += v;
             }
             // Titan.
-            if let Some(v) = db.get_property_int_cf(handle, ROCKSDB_TITANDB_LIVE_BLOB_SIZE) {
-                *cf_stats.live_blob_size.get_or_insert_default() += v;
-            }
             if let Some(v) = db.get_property_int_cf(handle, ROCKSDB_TITANDB_NUM_LIVE_BLOB_FILE) {
                 *cf_stats.num_live_blob_file.get_or_insert_default() += v;
             }
@@ -1163,11 +1159,6 @@ impl StatisticsReporter<RocksEngine> for RocksStatisticsReporter {
                     .with_label_values(&[&self.name, cf])
                     .set(v as i64);
             }
-            if let Some(v) = cf_stats.live_blob_size {
-                STORE_ENGINE_TITANDB_LIVE_BLOB_SIZE_VEC
-                    .with_label_values(&[&self.name, cf])
-                    .set(v as i64);
-            }
             if let Some(v) = cf_stats.num_live_blob_file {
                 STORE_ENGINE_TITANDB_NUM_LIVE_BLOB_FILE_VEC
                     .with_label_values(&[&self.name, cf])
@@ -1330,11 +1321,6 @@ lazy_static! {
         "tikv_engine_titandb_num_blob_files_at_level",
         "Number of blob files at each level",
         &["db", "cf", "level"]
-    ).unwrap();
-    pub static ref STORE_ENGINE_TITANDB_LIVE_BLOB_SIZE_VEC: IntGaugeVec = register_int_gauge_vec!(
-        "tikv_engine_titandb_live_blob_size",
-        "Total titan blob value size referenced by LSM tree",
-        &["db", "cf"]
     ).unwrap();
     pub static ref STORE_ENGINE_TITANDB_NUM_LIVE_BLOB_FILE_VEC: IntGaugeVec = register_int_gauge_vec!(
         "tikv_engine_titandb_num_live_blob_file",
