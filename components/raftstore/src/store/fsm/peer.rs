@@ -18,7 +18,9 @@ use std::{
 
 use batch_system::{BasicMailbox, Fsm};
 use collections::{HashMap, HashSet};
-use engine_traits::{Engines, KvEngine, RaftEngine, SstMetaInfo, WriteBatchExt, CF_LOCK, CF_RAFT};
+use engine_traits::{
+    Engines, KvEngine, RaftEngine, RaftLogBatch, SstMetaInfo, WriteBatchExt, CF_LOCK, CF_RAFT,
+};
 use error_code::ErrorCodeExt;
 use fail::fail_point;
 use futures::channel::mpsc::UnboundedSender;
@@ -1579,6 +1581,9 @@ where
             Some(ForceLeaderState::WaitTicks { .. }) => {
                 self.fsm.peer.force_leader = None;
             }
+            Some(ForceLeaderState::WaitForceCompact { .. }) => {
+                self.fsm.peer.force_leader = None;
+            }
             None => {}
         }
 
@@ -1650,6 +1655,26 @@ where
                 GroupState::Chaos
             });
             self.fsm.has_ready = true;
+            return;
+        }
+
+        // apply is ahead of raft, need to force raft commit to applied index.
+        if self.fsm.peer.raft_group.raft.r.raft_log.last_index()
+            < self.fsm.peer.raft_group.raft.r.raft_log.applied
+        {
+            self.ctx.apply_router.schedule_task(
+                self.region_id(),
+                ApplyTask::ForceCompact {
+                    region_id: self.region_id(),
+                    compact_index: self.fsm.peer.raft_group.raft.r.raft_log.applied,
+                    term: self.fsm.peer.raft_group.raft.r.term,
+                },
+            );
+
+            self.fsm.peer.force_leader = Some(ForceLeaderState::WaitForceCompact {
+                syncer,
+                failed_stores,
+            });
             return;
         }
 
@@ -1870,6 +1895,7 @@ where
                 return;
             }
             Some(ForceLeaderState::PreForceLeader { failed_stores, .. }) => failed_stores,
+            Some(ForceLeaderState::WaitForceCompact { .. }) => return,
             Some(ForceLeaderState::WaitTicks { .. }) => unreachable!(),
         };
 
@@ -5245,6 +5271,53 @@ where
                     self.fsm.peer.has_pending_compact_cmd = has_pending;
                     if has_pending {
                         self.register_pull_voter_replicated_index_tick();
+                    }
+                }
+                ExecResult::ForceCompact { apply_state } => {
+                    let last_index = apply_state.get_truncated_state().index;
+                    let first_index = self.fsm.peer.raft_group.raft.r.raft_log.first_index();
+
+                    {
+                        let peer_store = self.fsm.peer.mut_store();
+                        // self.on_ready_compact_log(first_index,
+                        // apply_state.get_truncated_state().clone());
+                        peer_store.set_apply_state(apply_state);
+                        peer_store.clear_entry_cache_warmup_state();
+                        peer_store.compact_entry_cache(last_index + 1);
+                        peer_store.raft_state_mut().mut_hard_state().commit = last_index;
+                        peer_store.raft_state_mut().last_index = last_index;
+                    }
+
+                    let raft_engine = self.fsm.peer.get_store().raft_engine();
+                    let mut batch = raft_engine.log_batch(2);
+                    raft_engine
+                        .gc(self.region_id(), first_index, last_index, &mut batch)
+                        .unwrap();
+                    batch
+                        .put_raft_state(self.region_id(), self.fsm.peer.get_store().raft_state())
+                        .unwrap();
+                    raft_engine.consume(&mut batch, true).unwrap();
+
+                    self.fsm.peer.raft_group.raft.raft_log.committed = last_index;
+                    self.fsm.peer.raft_group.raft.raft_log.persisted = last_index;
+                    assert!(
+                        self.fsm
+                            .peer
+                            .raft_group
+                            .raft
+                            .raft_log
+                            .unstable
+                            .entries
+                            .is_empty()
+                    );
+                    self.fsm.peer.raft_group.raft.raft_log.unstable.offset = last_index + 1;
+
+                    if let Some(ForceLeaderState::WaitForceCompact {
+                        syncer,
+                        failed_stores,
+                    }) = &self.fsm.peer.force_leader
+                    {
+                        self.on_enter_pre_force_leader(syncer.clone(), failed_stores.clone());
                     }
                 }
             }
