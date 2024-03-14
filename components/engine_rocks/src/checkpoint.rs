@@ -35,7 +35,7 @@ impl Checkpointer for RocksEngineCheckpointer {
         log_size_for_flush: u64,
     ) -> Result<()> {
         #[cfg(any(test, feature = "testexport"))]
-        file_system::delete_dir_if_exist(&db_out_dir).unwrap();
+        file_system::delete_dir_if_exist(db_out_dir).unwrap();
         self.0
             .create_at(db_out_dir, titan_out_dir, log_size_for_flush)
             .map_err(|e| r2e(e))
