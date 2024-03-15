@@ -8488,7 +8488,7 @@ def BackupLog() -> RowPanel:
                 description="The task status of initial scanning.",
                 targets=[
                     target(
-                        expr=expr_sum_rate(
+                        expr=expr_sum(
                             "tikv_log_backup_pending_initial_scan",
                             by_labels=["stage"],
                         ),
