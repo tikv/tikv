@@ -24,7 +24,7 @@ use crate::storage::{
 command! {
     Flush:
         cmd_ty => Vec<StorageResult<()>>,
-        display => { "kv::command::flush keys({:?}) @ {} | {:?}", (mutations, start_ts, ctx), }
+        display => { "kv::command::flush keys({:?}) @ {} | gen={}, {:?}", (mutations, start_ts, generation, ctx), }
         content => {
             start_ts: TimeStamp,
             primary: Vec<u8>,
