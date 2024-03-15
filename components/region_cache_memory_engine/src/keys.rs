@@ -7,8 +7,8 @@ use bytes::{BufMut, Bytes};
 use engine_traits::CacheRange;
 use txn_types::{Key, TimeStamp};
 
-// The internal bytes used in the skiplist. See comments on
-// `encode_internal_bytes`.
+/// The internal bytes used in the skiplist. See comments on
+/// `encode_internal_bytes`.
 #[derive(Debug)]
 pub struct InternalBytes {
     bytes: Bytes,
