@@ -19,8 +19,8 @@ use encryption_export::DataKeyManager;
 use engine_rocks::{RocksCompactedEvent, RocksEngine, RocksStatistics};
 use engine_test::raft::RaftTestEngine;
 use engine_traits::{
-    Engines, Iterable, KvEngine, Mutable, Peekable, RaftEngineReadOnly, SnapshotContext,
-    SyncMutable, WriteBatch, CF_DEFAULT, CF_RAFT,
+    Engines, Iterable, KvEngine, ManualCompactionOptions, Mutable, Peekable, RaftEngineReadOnly,
+    SnapshotContext, SyncMutable, WriteBatch, CF_DEFAULT, CF_RAFT,
 };
 use file_system::IoRateLimiter;
 use futures::{self, channel::oneshot, executor::block_on, future::BoxFuture, StreamExt};
@@ -329,8 +329,13 @@ where
     pub fn compact_data(&self) {
         for engine in self.engines.values() {
             let db = &engine.kv;
-            db.compact_range_cf(CF_DEFAULT, None, None, false, 1)
-                .unwrap();
+            db.compact_range_cf(
+                CF_DEFAULT,
+                None,
+                None,
+                ManualCompactionOptions::new(false, 1, false),
+            )
+            .unwrap();
         }
     }
 
@@ -2064,9 +2069,18 @@ impl<T: Simulator<HybridEngineImpl>> Cluster<HybridEngineImpl, T> {
     }
 
     pub fn get_with_snap_ctx(&mut self, key: &[u8], snap_ctx: SnapshotContext) -> Option<Vec<u8>> {
+        self.get_cf_with_snap_ctx(CF_DEFAULT, key, snap_ctx)
+    }
+
+    pub fn get_cf_with_snap_ctx(
+        &mut self,
+        cf: &str,
+        key: &[u8],
+        snap_ctx: SnapshotContext,
+    ) -> Option<Vec<u8>> {
         let mut resp = self.request_with_snap_ctx(
             key,
-            vec![new_get_cf_cmd(CF_DEFAULT, key)],
+            vec![new_get_cf_cmd(cf, key)],
             false,
             Duration::from_secs(5),
             Some(snap_ctx),

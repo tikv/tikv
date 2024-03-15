@@ -613,6 +613,7 @@ pub mod tests {
             Self(Arc::new(Mutex::new(inner)))
         }
 
+        #[allow(clippy::unused_async)]
         pub async fn fail(&self, status: RpcStatus) -> crate::errors::Result<()> {
             panic!("failed in a case should never fail: {}", status);
         }

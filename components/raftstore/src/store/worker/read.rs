@@ -2470,6 +2470,7 @@ mod tests {
         path: &str,
         store_id: u64,
         store_meta: Arc<Mutex<StoreMeta>>,
+        gc_interval: std::time::Duration,
     ) -> (
         TempDir,
         LocalReader<HybridTestEnigne, HybridEngineMockRouter>,
@@ -2480,7 +2481,7 @@ mod tests {
         let disk_engine =
             engine_test::kv::new_engine(path.path().to_str().unwrap(), ALL_CFS).unwrap();
         let (ch, rx, _) = HybridEngineMockRouter::new();
-        let memory_engine = RangeCacheMemoryEngine::new(Arc::default());
+        let memory_engine = RangeCacheMemoryEngine::new(Arc::default(), gc_interval);
         let engine = HybridEngine::new(disk_engine, memory_engine.clone());
         let mut reader = LocalReader::new(
             engine.clone(),
@@ -2519,6 +2520,7 @@ mod tests {
             "test-local-hybrid-engine-reader",
             store_id,
             store_meta.clone(),
+            std::time::Duration::from_secs(1000),
         );
 
         // set up region so we can acquire snapshot from local reader
@@ -2539,7 +2541,7 @@ mod tests {
         {
             let mut core = memory_engine.core().write().unwrap();
             core.mut_range_manager().set_range_readable(&range, true);
-            core.mut_range_manager().set_safe_ts(&range, 1);
+            core.mut_range_manager().set_safe_point(&range, 1);
         }
         let kv = (&[DATA_PREFIX, b'a'], b"b");
         reader.kv_engine.put(kv.0, kv.1).unwrap();
@@ -2587,7 +2589,7 @@ mod tests {
         {
             let mut core = memory_engine.core().write().unwrap();
             core.mut_range_manager().set_range_readable(&range, true);
-            core.mut_range_manager().set_safe_ts(&range, 10);
+            core.mut_range_manager().set_safe_point(&range, 10);
         }
 
         let mut snap_ctx = SnapshotContext {

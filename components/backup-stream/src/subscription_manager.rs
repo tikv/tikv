@@ -252,6 +252,19 @@ async fn scan_executor_loop(init: impl InitialScan, mut cmds: Receiver<ScanCmd>)
     }
 }
 
+/// spawn the executors to some runtime.
+#[cfg(test)]
+fn spawn_executors_to(
+    init: impl InitialScan + Send + Sync + 'static,
+    handle: &tokio::runtime::Handle,
+) -> ScanPoolHandle {
+    let (tx, rx) = tokio::sync::mpsc::channel(MESSAGE_BUFFER_SIZE);
+    handle.spawn(async move {
+        scan_executor_loop(init, rx).await;
+    });
+    ScanPoolHandle { tx }
+}
+
 /// spawn the executors in the scan pool.
 fn spawn_executors(
     init: impl InitialScan + Send + Sync + 'static,
@@ -435,7 +448,7 @@ where
                     let now = Instant::now();
                     let timedout = self.wait(Duration::from_secs(5)).await;
                     if timedout {
-                        warn!("waiting for initial scanning done timed out, forcing progress!"; 
+                        warn!("waiting for initial scanning done timed out, forcing progress!";
                             "take" => ?now.saturating_elapsed(), "timedout" => %timedout);
                     }
                     let regions = resolver.resolve(self.subs.current_regions(), min_ts).await;
@@ -453,7 +466,7 @@ where
                     callback(ResolvedRegions::new(rts, cps));
                 }
                 ObserveOp::HighMemUsageWarning { region_id } => {
-                    self.on_high_memory_usage(region_id).await;
+                    self.on_high_memory_usage(region_id);
                 }
             }
         }
@@ -477,10 +490,11 @@ where
                 return;
             }
             Some(err) => {
+                self.subs
+                    .set_pending_if(&region, |sub, _| sub.handle.id == handle.id);
                 if !should_retry(&err) {
                     self.failure_count.remove(&region.id);
-                    self.subs
-                        .deregister_region_if(&region, |sub, _| sub.handle.id == handle.id);
+                    // The pending record will be cleaned up by `Stop` command.
                     return;
                 }
                 err
@@ -507,7 +521,7 @@ where
         }
     }
 
-    async fn on_high_memory_usage(&mut self, inconsistent_region_id: u64) {
+    fn on_high_memory_usage(&mut self, inconsistent_region_id: u64) {
         let mut lame_region = Region::new();
         lame_region.set_id(inconsistent_region_id);
         let mut act_region = None;
@@ -517,9 +531,9 @@ where
         });
         let delay = OOM_BACKOFF_BASE
             + Duration::from_secs(rand::thread_rng().gen_range(0..OOM_BACKOFF_JITTER_SECS));
-        info!("log backup triggering high memory usage."; 
-            "region" => %inconsistent_region_id, 
-            "mem_usage" => %self.memory_manager.used_ratio(), 
+        info!("log backup triggering high memory usage.";
+            "region" => %inconsistent_region_id,
+            "mem_usage" => %self.memory_manager.used_ratio(),
             "mem_max" => %self.memory_manager.capacity());
         if let Some(region) = act_region {
             self.schedule_start_observe(delay, region, None);
@@ -542,9 +556,10 @@ where
         }
         let tx = tx.unwrap();
         // tikv_util::Instant cannot be converted to std::time::Instant :(
-        let start = std::time::Instant::now();
+        let start = tokio::time::Instant::now();
+        debug!("Scheduing subscription."; utils::slog_region(&region), "after" => ?backoff, "handle" => ?handle);
         let scheduled = async move {
-            tokio::time::sleep_until((start + backoff).into()).await;
+            tokio::time::sleep_until(start + backoff).await;
             let handle = handle.unwrap_or_else(|| ObserveHandle::new());
             if let Err(err) = tx.send(ObserveOp::Start { region, handle }).await {
                 warn!("log backup failed to schedule start observe."; "err" => %err);
@@ -627,6 +642,9 @@ where
         match self.is_available(&region, &handle).await {
             Ok(false) => {
                 warn!("stale start observe command."; utils::slog_region(&region), "handle" => ?handle);
+                // Mark here we are anyway, or once there are region change in-flight, we
+                // may lose the message.
+                self.subs.add_pending_region(&region);
                 return;
             }
             Err(err) => {
@@ -729,6 +747,7 @@ where
 
         let should_retry = self.is_available(&region, &handle).await?;
         if !should_retry {
+            warn!("give up retry retion."; utils::slog_region(&region), "handle" => ?handle);
             return Ok(false);
         }
         self.schedule_start_observe(backoff_for_start_observe(failure_count), region, None);
@@ -786,7 +805,7 @@ where
         let feedback_channel = match self.messenger.upgrade() {
             Some(ch) => ch,
             None => {
-                warn!("log backup subscription manager is shutting down, aborting new scan."; 
+                warn!("log backup subscription manager is shutting down, aborting new scan.";
                     utils::slog_region(region), "handle" => ?handle.id);
                 return;
             }
@@ -815,7 +834,7 @@ mod test {
             atomic::{AtomicBool, Ordering},
             Arc, Mutex,
         },
-        time::{Duration, Instant},
+        time::Duration,
     };
 
     use engine_test::{kv::KvTestEngine, raft::RaftTestEngine};
@@ -829,11 +848,11 @@ mod test {
         RegionInfo,
     };
     use tikv::{config::BackupStreamConfig, storage::Statistics};
-    use tikv_util::{info, memory::MemoryQuota, worker::dummy_scheduler};
+    use tikv_util::{box_err, info, memory::MemoryQuota, worker::dummy_scheduler};
     use tokio::{sync::mpsc::Sender, task::JoinHandle};
     use txn_types::TimeStamp;
 
-    use super::{spawn_executors, InitialScan, RegionSubscriptionManager};
+    use super::{spawn_executors_to, InitialScan, RegionSubscriptionManager};
     use crate::{
         errors::Error,
         metadata::{store::SlashEtcStore, MetadataClient, StreamTask},
@@ -965,6 +984,7 @@ mod test {
     #[derive(Debug, Eq, PartialEq)]
     enum ObserveEvent {
         Start(u64),
+        RefreshObs(u64),
         Stop(u64),
         StartResult(u64, bool),
         HighMemUse(u64),
@@ -981,6 +1001,7 @@ mod test {
                 ObserveOp::HighMemUsageWarning {
                     region_id: inconsistent_region_id,
                 } => Some(Self::HighMemUse(*inconsistent_region_id)),
+                ObserveOp::RefreshResolver { region } => Some(Self::RefreshObs(region.id)),
 
                 _ => None,
             }
@@ -1011,6 +1032,7 @@ mod test {
             let task_name = "test";
             let task_start_ts = TimeStamp::new(42);
             let pool = tokio::runtime::Builder::new_current_thread()
+                .start_paused(true)
                 .enable_all()
                 .build()
                 .unwrap();
@@ -1050,7 +1072,7 @@ mod test {
                 failure_count: Default::default(),
                 memory_manager,
                 messenger: tx.downgrade(),
-                scan_pool_handle: spawn_executors(init, 2),
+                scan_pool_handle: spawn_executors_to(init, pool.handle()),
                 scans: CallbackWaitGroup::new(),
             };
             let events = Arc::new(Mutex::new(vec![]));
@@ -1115,19 +1137,27 @@ mod test {
                 .unwrap()
         }
 
+        fn insert_and_start_region(&self, region: Region) {
+            self.insert_region(region.clone());
+            self.start_region(region)
+        }
+
         fn start_region(&self, region: Region) {
+            self.run(ObserveOp::Start {
+                region,
+                handle: ObserveHandle::new(),
+            })
+        }
+
+        fn insert_region(&self, region: Region) {
             self.regions.regions.lock().unwrap().insert(
                 region.id,
                 RegionInfo {
-                    region: region.clone(),
+                    region,
                     role: raft::StateRole::Leader,
                     buckets: 0,
                 },
             );
-            self.run(ObserveOp::Start {
-                region,
-                handle: ObserveHandle::new(),
-            });
         }
 
         fn region(
@@ -1161,20 +1191,30 @@ mod test {
                 .unwrap();
         }
 
+        fn sync(&self) {
+            self.rt.block_on(async {
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                self.handle
+                    .as_ref()
+                    .unwrap()
+                    .send(ObserveOp::ResolveRegions {
+                        callback: Box::new(move |_result| {
+                            tx.send(()).unwrap();
+                        }),
+                        min_ts: self.task_start_ts.next(),
+                    })
+                    .await
+                    .unwrap();
+                rx.await.unwrap();
+            })
+        }
+
         #[track_caller]
         fn wait_initial_scan_all_finish(&self, expected_region: usize) {
             info!("[TEST] Start waiting initial scanning finish.");
             self.rt.block_on(async move {
-                let max_wait = Duration::from_secs(1);
-                let start = Instant::now();
-                loop {
+                for _ in 0..200 {
                     let (tx, rx) = tokio::sync::oneshot::channel();
-                    if start.elapsed() > max_wait {
-                        panic!(
-                            "wait initial scan takes too long! events = {:?}",
-                            self.events
-                        );
-                    }
                     self.handle
                         .as_ref()
                         .unwrap()
@@ -1197,6 +1237,10 @@ mod test {
                     // Advance the global timer in case of someone is waiting for timer.
                     tokio::time::advance(Duration::from_secs(16)).await;
                 }
+                panic!(
+                    "wait initial scan takes too long! events = {:?}",
+                    self.events
+                );
             })
         }
 
@@ -1208,7 +1252,6 @@ mod test {
 
     #[test]
     fn test_basic_retry() {
-        test_util::init_log_for_test();
         use ObserveEvent::*;
         let failed = Arc::new(AtomicBool::new(false));
         let mut suite = Suite::new(FuncInitialScan(move |r, _, _| {
@@ -1219,9 +1262,8 @@ mod test {
             Err(Error::OutOfQuota { region_id: r.id })
         }));
         let _guard = suite.rt.enter();
-        tokio::time::pause();
-        suite.start_region(suite.region(1, 1, 1, b"a", b"b"));
-        suite.start_region(suite.region(2, 1, 1, b"b", b"c"));
+        suite.insert_and_start_region(suite.region(1, 1, 1, b"a", b"b"));
+        suite.insert_and_start_region(suite.region(2, 1, 1, b"b", b"c"));
         suite.wait_initial_scan_all_finish(2);
         suite.wait_shutdown();
         assert_eq!(
@@ -1241,10 +1283,9 @@ mod test {
     fn test_on_high_mem() {
         let mut suite = Suite::new(FuncInitialScan(|_, _, _| Ok(Statistics::default())));
         let _guard = suite.rt.enter();
-        tokio::time::pause();
-        suite.start_region(suite.region(1, 1, 1, b"a", b"b"));
-        suite.start_region(suite.region(2, 1, 1, b"b", b"c"));
-        suite.advance_ms(0);
+        suite.insert_and_start_region(suite.region(1, 1, 1, b"a", b"b"));
+        suite.insert_and_start_region(suite.region(2, 1, 1, b"b", b"c"));
+        suite.sync();
         let mut rs = suite.subs.current_regions();
         rs.sort();
         assert_eq!(rs, [1, 2]);
@@ -1274,5 +1315,98 @@ mod test {
                 StartResult(1, true),
             ]
         );
+    }
+
+    #[test]
+    fn test_region_split_inflight() {
+        let mut suite = Suite::new(FuncInitialScan(|_, _, _| Ok(Statistics::default())));
+        let _guard = suite.rt.enter();
+        suite.insert_region(suite.region(1, 1, 1, b"a", b"b"));
+        // Region split..?
+        suite.insert_region(suite.region(1, 2, 1, b"a", b"az"));
+        suite.start_region(suite.region(1, 1, 1, b"a", b"b"));
+        suite.run(ObserveOp::RefreshResolver {
+            region: suite.region(1, 2, 1, b"a", b"az"),
+        });
+        suite.wait_initial_scan_all_finish(1);
+        suite.wait_shutdown();
+        use ObserveEvent::*;
+        assert_eq!(
+            &*suite.events.lock().unwrap(),
+            &[Start(1), RefreshObs(1), StartResult(1, true)]
+        );
+    }
+
+    #[test]
+    fn test_unretryable_failure() {
+        let mut suite = Suite::new(FuncInitialScan(move |region, _, _| {
+            if region.get_region_epoch().get_version() != 2 {
+                let mut r2 = region.clone();
+                r2.mut_region_epoch().version = 2;
+                *r2.mut_end_key() = b"az".to_vec();
+                Err(Error::RaftStore(raftstore::Error::EpochNotMatch(
+                    "Testing Testing".to_string(),
+                    vec![r2],
+                )))
+            } else {
+                Ok(Statistics::default())
+            }
+        }));
+        suite.insert_and_start_region(suite.region(1, 1, 1, b"a", b"b"));
+        suite.sync();
+        // The region has been updated!
+        suite.insert_region(suite.region(1, 2, 1, b"a", b"az"));
+        suite.run(ObserveOp::RefreshResolver {
+            region: suite.region(1, 2, 1, b"a", b"az"),
+        });
+        suite.wait_initial_scan_all_finish(1);
+        suite.wait_shutdown();
+        use ObserveEvent::*;
+        assert_eq!(
+            *suite.events.lock().unwrap(),
+            [
+                Start(1),
+                StartResult(1, false),
+                RefreshObs(1),
+                StartResult(1, true)
+            ]
+        );
+    }
+
+    #[test]
+    fn test_always_failure_initial_scan() {
+        let start_time = tokio::time::Instant::now();
+        let target = start_time + Duration::from_secs(300);
+        let init = FuncInitialScan(move |_, _, _| {
+            let now = tokio::time::Instant::now();
+            if now < target {
+                return Err(Error::Other(box_err!(
+                    "work in progress now... please wait more {:?}",
+                    target - now
+                )));
+            }
+            Ok(Statistics::default())
+        });
+        let mut suite = Suite::new(init);
+        let _g = suite.rt.enter();
+        suite.insert_region(suite.region(1, 1, 1, b"a", b"b"));
+        suite.start_region(suite.region(1, 1, 1, b"a", b"b"));
+        suite.wait_initial_scan_all_finish(1);
+        suite.wait_shutdown();
+        fn consume_many<'a, T: Eq>(mut slice: &'a [T], pat: &[T]) -> (&'a [T], usize) {
+            assert!(!pat.is_empty());
+            let mut n = 0;
+            while slice.starts_with(pat) {
+                slice = &slice[pat.len()..];
+                n += 1;
+            }
+            (slice, n)
+        }
+        let events_lock = suite.events.lock().unwrap();
+        let events = events_lock.as_slice();
+        use ObserveEvent::*;
+        let (rem, count) = consume_many(events, &[Start(1), StartResult(1, false)]);
+        assert!(count > 0);
+        assert_eq!(rem, [Start(1), StartResult(1, true)]);
     }
 }

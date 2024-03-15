@@ -246,10 +246,11 @@ impl<EK: KvEngine> Simulator<EK> for NodeCluster<EK> {
             )
             .unwrap();
         let bg_worker = WorkerBuilder::new("background").thread_count(2).create();
+        let store_config = Arc::new(VersionTrack::new(raft_store));
         let mut node = Node::new(
             system,
             &cfg.server,
-            Arc::new(VersionTrack::new(raft_store)),
+            store_config.clone(),
             cfg.storage.api_version(),
             Arc::clone(&self.pd_client),
             Arc::default(),
@@ -353,25 +354,11 @@ impl<EK: KvEngine> Simulator<EK> for NodeCluster<EK> {
                 .map(|p| p.path().to_str().unwrap().to_owned())
         );
 
-        let region_split_size = cfg.coprocessor.region_split_size();
-        let enable_region_bucket = cfg.coprocessor.enable_region_bucket();
-        let region_bucket_size = cfg.coprocessor.region_bucket_size;
-        let mut raftstore_cfg = cfg.tikv.raft_store;
-        raftstore_cfg.optimize_for(false);
-        raftstore_cfg
-            .validate(
-                region_split_size,
-                enable_region_bucket,
-                region_bucket_size,
-                false,
-            )
-            .unwrap();
-        let raft_store = Arc::new(VersionTrack::new(raftstore_cfg));
         cfg_controller.register(
             Module::Raftstore,
             Box::new(RaftstoreConfigManager::new(
                 node.refresh_config_scheduler(),
-                raft_store,
+                store_config,
             )),
         );
 

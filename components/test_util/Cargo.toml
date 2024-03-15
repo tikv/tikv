@@ -5,12 +5,6 @@ edition = "2021"
 publish = false
 license = "Apache-2.0"
 
-[features]
-default = ["cloud-aws", "cloud-gcp", "cloud-azure"]
-cloud-aws = ["encryption_export/cloud-aws"]
-cloud-gcp = ["encryption_export/cloud-gcp"]
-cloud-azure = ["encryption_export/cloud-azure"]
-
 [dependencies]
 backtrace = "0.3"
 chrono = { workspace = true }

@@ -171,6 +171,17 @@ impl SubscriptionTracer {
     /// there are still tiny impure things need to do. (e.g. getting the
     /// checkpoint of this region.)
     ///
+    /// A typical state machine of a region:
+    ///
+    /// ```text
+    ///                             +-----[Start(Err)]------+
+    ///                             +----+   +--------------+
+    ///                                  v   |
+    ///   Absent --------[Start]------> Pending --[Start(OK)]--> Active
+    ///    ^                                |                       |
+    ///    +-------------[Stop]-------------+--------[Stop]---------+
+    /// ```
+    ///
     /// This state is a placeholder for those regions: once they failed in the
     /// impure operations, this would be the evidence proofing they were here.
     ///
@@ -187,14 +198,15 @@ impl SubscriptionTracer {
     /// We should skip when we are going to refresh absent regions because there
     /// may be some stale commands.
     pub fn add_pending_region(&self, region: &Region) {
-        let r = self
-            .0
-            .insert(region.get_id(), SubscribeState::Pending(region.clone()));
-        if let Some(s) = r {
-            warn!(
-                "excepted state transform: running | pending -> pending";
-                "old" => ?s, utils::slog_region(region),
-            )
+        match self.0.entry(region.get_id()) {
+            Entry::Occupied(ent) => warn!(
+                "excepted state transform(will ignore): running | pending -> pending";
+                "old" => ?ent.get(), utils::slog_region(region),
+            ),
+            Entry::Vacant(ent) => {
+                debug!("inserting pending region."; utils::slog_region(region));
+                ent.insert(SubscribeState::Pending(region.clone()));
+            }
         }
     }
 
@@ -260,6 +272,33 @@ impl SubscriptionTracer {
             }
             })
             .collect()
+    }
+
+    pub fn set_pending_if(
+        &self,
+        region: &Region,
+        if_cond: impl FnOnce(&ActiveSubscription, &Region) -> bool,
+    ) -> bool {
+        let region_id = region.get_id();
+        let remove_result = self.0.entry(region_id);
+        match remove_result {
+            Entry::Vacant(_) => false,
+            Entry::Occupied(mut o) => match o.get_mut() {
+                SubscribeState::Pending(_) => true,
+                SubscribeState::Running(s) => {
+                    if if_cond(s, region) {
+                        let r = s.meta.clone();
+                        TRACK_REGION.dec();
+                        s.stop();
+                        info!("Inactivating subscription."; "observer" => ?s, "region_id"=> %region_id);
+
+                        *o.get_mut() = SubscribeState::Pending(r);
+                        return true;
+                    }
+                    false
+                }
+            },
+        }
     }
 
     /// try to mark a region no longer be tracked by this observer.

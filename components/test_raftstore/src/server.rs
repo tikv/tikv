@@ -73,11 +73,11 @@ use tikv::{
     },
 };
 use tikv_util::{
-    config::VersionTrack,
+    config::{ReadableSize, VersionTrack},
     quota_limiter::QuotaLimiter,
     sys::thread::ThreadBuildWrapper,
     time::ThreadReadId,
-    worker::{Builder as WorkerBuilder, LazyWorker},
+    worker::{Builder as WorkerBuilder, LazyWorker, Scheduler},
     HandyRwLock,
 };
 use tokio::runtime::Builder as TokioBuilder;
@@ -295,8 +295,15 @@ impl<EK: KvEngineWithRocks> ServerCluster<EK> {
         );
 
         // Create coprocessor.
+        let enable_region_stats_mgr_cb: Arc<dyn Fn() -> bool + Send + Sync> =
+            if cfg.region_cache_memory_limit != ReadableSize(0) {
+                Arc::new(|| true)
+            } else {
+                Arc::new(|| false)
+            };
         let mut coprocessor_host = CoprocessorHost::new(router.clone(), cfg.coprocessor.clone());
-        let region_info_accessor = RegionInfoAccessor::new(&mut coprocessor_host);
+        let region_info_accessor =
+            RegionInfoAccessor::new(&mut coprocessor_host, enable_region_stats_mgr_cb);
 
         let raft_router = ServerRaftStoreRouter::new(router.clone(), local_reader);
         let sim_router = SimulateTransport::new(raft_router.clone());
@@ -662,6 +669,12 @@ impl<EK: KvEngineWithRocks> ServerCluster<EK> {
         let client = RaftClient::new(node_id, self.conn_builder.clone());
         self.raft_clients.insert(node_id, client);
         Ok(node_id)
+    }
+
+    pub fn get_resolved_ts_scheduler(&self, store_id: u64) -> Option<Scheduler<resolved_ts::Task>> {
+        let meta = self.metas.get(&store_id)?;
+        let w = meta.rts_worker.as_ref()?;
+        Some(w.scheduler())
     }
 }
 
