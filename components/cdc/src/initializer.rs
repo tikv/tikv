@@ -30,7 +30,6 @@ use raftstore::{
         msg::{Callback, ReadResponse},
     },
 };
-use resolved_ts::{Resolver, TsSource};
 use tikv::storage::{
     kv::Snapshot,
     mvcc::{DeltaScanner, MvccReader, ScannerBuilder},

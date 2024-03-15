@@ -1,10 +1,10 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::ops::Bound;
-use std::result::Result as StdResult;
 use std::{
     collections::btree_map::{BTreeMap, Entry as BTreeMapEntry},
     fmt, mem,
+    ops::Bound,
+    result::Result as StdResult,
     string::String,
     sync::{
         atomic::{AtomicUsize, Ordering},
@@ -41,6 +41,7 @@ use txn_types::{Key, Lock, LockType, TimeStamp, WriteBatchFlags, WriteRef, Write
 
 use crate::{
     channel::{CdcEvent, SendError, Sink, CDC_EVENT_MAX_BYTES},
+    endpoint::ResolvedRegionHeap,
     initializer::KvEntry,
     metrics::*,
     old_value::{OldValueCache, OldValueCallback},
@@ -48,7 +49,6 @@ use crate::{
     txn_source::TxnSource,
     Error, Result,
 };
-use crate::endpoint::ResolvedRegionHeap;
 
 static DOWNSTREAM_ID_ALLOC: AtomicUsize = AtomicUsize::new(0);
 
@@ -139,7 +139,7 @@ pub struct Downstream {
     // Fields to handle ResolvedTs advancing. If `locks` is none it means
     // the downstream hasn't finished the incremental scanning.
     advanced_to: TimeStamp,
-    lock_heap: Option<BTreeMap<TimeStamp, usize>>,
+    lock_heap: Option<BTreeMap<TimeStamp, isize>>,
 }
 
 impl fmt::Debug for Downstream {
@@ -238,11 +238,10 @@ impl Downstream {
     pub fn get_state(&self) -> Arc<AtomicCell<DownstreamState>> {
         self.state.clone()
     }
-
 }
 
 // In `PendingLock`,  `key` is raw format instead of encoded.
-enum PendingLock {
+pub enum PendingLock {
     Track { key: Key, start_ts: TimeStamp },
     Untrack { key: Key },
 }
@@ -258,7 +257,7 @@ impl HeapSize for PendingLock {
 }
 
 pub enum LockTracker {
-    Pending,   // Snapshot hasn't been acquired.
+    Pending, // Snapshot hasn't been acquired.
     Preparing {
         locks: Vec<PendingLock>,
         size: usize,
@@ -289,13 +288,16 @@ impl Delegate {
         let mut lock_count_modify = 0;
         match self.lock_tracker {
             LockTracker::Pending => unreachable!(),
-            LockTracker::Preparing { ref mut locks, ref mut size } => {
+            LockTracker::Preparing {
+                ref mut locks,
+                ref mut size,
+            } => {
                 let bytes = key.approximate_heap_size();
                 self.memory_quota.alloc(bytes)?;
                 CDC_PENDING_BYTES_GAUGE.add(bytes as i64);
                 locks.push(PendingLock::Track { key, start_ts });
                 *size += bytes;
-            },
+            }
             LockTracker::Prepared { ref mut locks, .. } => {
                 let bytes = key.approximate_heap_size();
                 if locks.insert(key, start_ts).is_none() {
@@ -310,13 +312,16 @@ impl Delegate {
     fn pop_lock(&mut self, key: Key) -> Result<()> {
         match self.lock_tracker {
             LockTracker::Pending => unreachable!(),
-            LockTracker::Preparing { ref mut locks, ref mut size } => {
+            LockTracker::Preparing {
+                ref mut locks,
+                ref mut size,
+            } => {
                 let bytes = key.approximate_heap_size();
                 self.memory_quota.alloc(bytes)?;
                 CDC_PENDING_BYTES_GAUGE.add(bytes as i64);
                 locks.push(PendingLock::Untrack { key });
                 *size += bytes;
-            },
+            }
             LockTracker::Prepared { ref mut locks, .. } => {
                 let (key, _) = locks.remove_entry(&key).unwrap();
                 self.memory_quota.free(key.approximate_heap_size());
@@ -328,7 +333,7 @@ impl Delegate {
     pub(crate) fn init_lock_tracker(&mut self) {
         assert!(matches!(self.lock_tracker, LockTracker::Pending));
         let locks = vec![];
-        let size= 0;
+        let size = 0;
         self.lock_tracker = LockTracker::Preparing { locks, size };
     }
 
@@ -347,13 +352,17 @@ impl Delegate {
         self.finish_prepare_lock_tracker(region, locks)
     }
 
-    fn finish_prepare_lock_tracker(&mut self, region: Region, locks: BTreeMap<Key, TimeStamp>) -> Result<()> {
+    fn finish_prepare_lock_tracker(
+        &mut self,
+        region: Region,
+        locks: BTreeMap<Key, TimeStamp>,
+    ) -> Result<()> {
         let pending_locks = match std::mem::replace(&mut self.lock_tracker, LockTracker::Pending) {
             LockTracker::Preparing { locks, size } => {
                 self.memory_quota.free(size);
                 CDC_PENDING_BYTES_GAUGE.sub(size as i64);
                 locks
-            },
+            }
             _ => unreachable!(),
         };
 
@@ -365,7 +374,9 @@ impl Delegate {
 
         for lock in pending_locks {
             match lock {
-                PendingLock::Track { key, start_ts } => self.push_lock(key, start_ts)?,
+                PendingLock::Track { key, start_ts } => {
+                    self.push_lock(key, start_ts)?;
+                }
                 PendingLock::Untrack { key } => self.pop_lock(key)?,
             }
         }
@@ -392,10 +403,7 @@ impl Delegate {
 
     /// Let downstream subscribe the delegate.
     /// Return error if subscribe fails and the `Delegate` won't be changed.
-    pub fn subscribe(
-        &mut self,
-        downstream: Downstream,
-    ) -> StdResult<(), (Error, Downstream)> {
+    pub fn subscribe(&mut self, downstream: Downstream) -> StdResult<(), (Error, Downstream)> {
         if let LockTracker::Prepared { ref region, .. } = &self.lock_tracker {
             // Check if the downstream is out dated.
             if let Err(e) = Self::check_epoch_on_ready(&downstream, region) {
@@ -471,12 +479,11 @@ impl Delegate {
                     "downstream_id" => ?downstream.id, "downstream" => ?downstream.peer,
                     "request_id" => downstream.req_id, "conn_id" => ?downstream.conn_id);
             }
-            Ok(())
         };
 
-        // TODO: In case we drop error messages, maybe we need a heartbeat mechanism
-        //       to allow TiCDC detect region status.
-        let _ = self.broadcast(send);
+        for downstream in &self.downstreams {
+            send(downstream);
+        }
     }
 
     /// `txn_extra_op` returns a shared flag which is accessed in TiKV's
@@ -489,22 +496,6 @@ impl Delegate {
         self.txn_extra_op.as_ref()
     }
 
-    fn broadcast<F>(&self, send: F) -> Result<()>
-    where
-        F: Fn(&Downstream) -> Result<()>,
-    {
-        let downstreams = self.downstreams();
-        assert!(
-            !downstreams.is_empty(),
-            "region {} miss downstream",
-            self.region_id
-        );
-        for downstream in downstreams {
-            send(downstream)?;
-        }
-        Ok(())
-    }
-
     /// Try advance and broadcast resolved ts.
     pub fn on_min_ts(
         &mut self,
@@ -515,7 +506,10 @@ impl Delegate {
         failed: &mut Vec<(Error, ConnId, u64, u64, DownstreamId)>,
     ) {
         let (region, locks) = match self.lock_tracker {
-            LockTracker::Prepared { ref region, ref locks, } => (region, locks),
+            LockTracker::Prepared {
+                ref region,
+                ref locks,
+            } => (region, locks),
             _ => return,
         };
 
@@ -528,11 +522,13 @@ impl Delegate {
 
                 Self::check_epoch_on_ready(downstream, region)?;
 
-                let mut lock_heap = BTreeMap::<TimeStamp, usize>::new();
-                for (key, ts) in locks.range(downstream.observed_range.to_range()) {
+                let mut lock_heap = BTreeMap::<TimeStamp, isize>::new();
+                for (_, ts) in locks.range(downstream.observed_range.to_range()) {
                     match lock_heap.entry(*ts) {
-                        BTreeMapEntry::Occupied(x) => *x.get_mut() += 1,
-                        BTreeMapEntry::Vacant(x) => { x.insert(1); },
+                        BTreeMapEntry::Occupied(mut x) => *x.get_mut() += 1,
+                        BTreeMapEntry::Vacant(x) => {
+                            x.insert(1);
+                        }
                     }
                 }
                 downstream.lock_heap = Some(lock_heap);
@@ -561,7 +557,9 @@ impl Delegate {
                         0
                     };
 
-                    let v = advanced.entry((d.conn_id, d.req_id)).or_insert_with(ResolvedRegionHeap::default);
+                    let v = advanced
+                        .entry((d.conn_id, req_id))
+                        .or_insert_with(ResolvedRegionHeap::default);
                     v.push(self.region_id, ts);
                 }
                 Ok(None) => *unchanged += 1,
@@ -754,112 +752,98 @@ impl Delegate {
             }
         }
 
-        rows_builder.finish_build();
-
-        let mut rows = Vec::with_capacity(txn_rows.len());
-        for (_, (v, has_value)) in txn_rows {
-            if v.r_type == EventLogType::Prewrite && v.op_type == EventRowOpType::Put && !has_value
-            {
-                // It's possible that a prewrite command only contains lock but without
-                // default. It's not documented by classic Percolator but introduced with
-                // Large-Transaction. Those prewrites are not complete, we must skip them.
-                continue;
-            }
-            rows.push(v);
-        }
-        self.sink_downstream(rows, index, ChangeDataRequestKvApi::TiDb)?;
-        self.sink_downstream(raw_rows, index, ChangeDataRequestKvApi::RawKv)
+        let (raws, txns) = rows_builder.finish_build();
+        self.sink_downstream_raw(raws, index)?;
+        self.sink_downstream_tidb(txns)?;
+        Ok(())
     }
 
-    fn sink_downstream(
-        &mut self,
-        entries: Vec<EventRow>,
-        index: u64,
-        kv_api: ChangeDataRequestKvApi,
-    ) -> Result<()> {
-        if entries.is_empty() {
+    fn sink_downstream_raw(&mut self, entries: Vec<EventRow>, index: u64) -> Result<()> {
+        let mut downstreams = Vec::with_capacity(self.downstreams.len());
+        for d in &mut self.downstreams {
+            if d.kv_api == ChangeDataRequestKvApi::RawKv && d.state.load().ready_for_change_events()
+            {
+                downstreams.push(d);
+            }
+        }
+        if downstreams.is_empty() {
             return Ok(());
         }
 
-        // Filter the entries which are lossy DDL events.
-        // We don't need to send them to downstream.
-        let entries = entries
-            .iter()
-            .filter(|x| !TxnSource::is_lossy_ddl_reorg_source_set(x.txn_source))
-            .cloned()
-            .collect::<Vec<EventRow>>();
-
-        let downstreams = self.downstreams();
-        assert!(
-            !downstreams.is_empty(),
-            "region {} miss downstream",
-            self.region_id
-        );
-
-        // Collect the change event cause by user write, which cdc write source is not
-        // set. For changefeed which only need the user write,
-        // send the `filtered_entries`, or else, send them all.
-        let mut filtered_entries = None;
         for downstream in downstreams {
-            if downstream.filter_loop {
-                let filtered = entries
-                    .iter()
-                    .filter(|x| !TxnSource::is_cdc_write_source_set(x.txn_source))
-                    .cloned()
-                    .collect::<Vec<EventRow>>();
-                if !filtered.is_empty() {
-                    filtered_entries = Some(filtered);
-                }
-                break;
-            }
-        }
-
-        let region_id = self.region_id;
-        let send = move |downstream: &Downstream| {
-            // No ready downstream or a downstream that does not match the kv_api type, will
-            // be ignored. There will be one region that contains both Txn & Raw entries.
-            // The judgement here is for sending entries to downstreams with correct kv_api.
-            if !downstream.state.load().ready_for_change_events() || downstream.kv_api != kv_api {
-                return Ok(());
-            }
-            if downstream.filter_loop && filtered_entries.is_none() {
-                return Ok(());
-            }
-
-            let entries_clone = if downstream.filter_loop {
-                downstream
-                    .observed_range
-                    .filter_entries(filtered_entries.clone().unwrap())
-            } else {
-                downstream.observed_range.filter_entries(entries.clone())
-            };
-
-            if entries_clone.is_empty() {
-                return Ok(());
-            }
-
+            let filtered_entries: Vec<_> = entries
+                .iter()
+                .filter(|x| downstream.observed_range.contains_raw_key(&x.key))
+                .map(|x| x.clone())
+                .collect();
             let event = Event {
-                region_id,
-                request_id: downstream.req_id,
+                region_id: self.region_id,
                 index,
+                request_id: downstream.req_id,
                 event: Some(Event_oneof_event::Entries(EventEntries {
-                    entries: entries_clone.into(),
+                    entries: filtered_entries.into(),
                     ..Default::default()
                 })),
                 ..Default::default()
             };
+            downstream.sink_event(event, false)?;
+        }
+        Ok(())
+    }
 
-            // Do not force send for real time change data events.
-            let force_send = false;
-            downstream.sink_event(event, force_send)
-        };
-        match self.broadcast(send) {
-            Ok(()) => Ok(()),
-            Err(e) => {
-                self.mark_failed();
-                Err(e)
+    fn sink_downstream_tidb(&mut self, mut entries: Vec<(EventRow, isize)>) -> Result<()> {
+        let mut downstreams = Vec::with_capacity(self.downstreams.len());
+        for d in &mut self.downstreams {
+            if d.kv_api == ChangeDataRequestKvApi::TiDb && d.state.load().ready_for_change_events()
+            {
+                downstreams.push(d);
             }
         }
+        if downstreams.is_empty() {
+            return Ok(());
+        }
+
+        // Drop lossy DDL entries.
+        entries.retain(|(x, _)| !TxnSource::is_lossy_ddl_reorg_source_set(x.txn_source));
+
+        for downstream in downstreams {
+            let mut filtered_entries = Vec::with_capacity(entries.len());
+            for (entry, lock_count_modify) in &entries {
+                if !downstream.observed_range.contains_raw_key(&entry.key) {
+                    continue;
+                }
+                if downstream.filter_loop && TxnSource::is_cdc_write_source_set(entry.txn_source) {
+                    continue;
+                }
+                filtered_entries.push(entry.clone());
+                if let Some(lock_heap) = &mut downstream.lock_heap {
+                    match lock_heap.entry(entry.start_ts.into()) {
+                        BTreeMapEntry::Vacant(x) => {
+                            x.insert(*lock_count_modify);
+                        }
+                        BTreeMapEntry::Occupied(mut x) => {
+                            *x.get_mut() += lock_count_modify;
+                            if *x.get() == 0 {
+                                x.remove();
+                            }
+                        }
+                    }
+                    let lock_count = lock_heap.entry(entry.start_ts.into()).or_insert(0);
+                    *lock_count += *lock_count_modify;
+                }
+            }
+            let event = Event {
+                region_id: self.region_id,
+                request_id: downstream.req_id,
+                event: Some(Event_oneof_event::Entries(EventEntries {
+                    entries: filtered_entries.into(),
+                    ..Default::default()
+                })),
+                ..Default::default()
+            };
+            downstream.sink_event(event, false)?;
+        }
+        Ok(())
     }
 
     fn sink_put(
@@ -871,16 +855,16 @@ impl Delegate {
     ) -> Result<()> {
         let key_mode = ApiV2::parse_key_mode(put.get_key());
         if key_mode == KeyMode::Raw {
-            self.sink_raw_put(put, &mut rows_builder.raw_rows)
+            self.sink_raw_put(put, rows_builder)
         } else {
-            self.sink_txn_put(put, is_one_pc, &rows_builder.txn_rows_by_key, read_old_value)
+            self.sink_txn_put(put, is_one_pc, read_old_value, rows_builder)
         }
     }
 
-    fn sink_raw_put(&mut self, mut put: PutRequest, rows: &mut Vec<EventRow>) -> Result<()> {
+    fn sink_raw_put(&mut self, mut put: PutRequest, rows: &mut RowsBuilder) -> Result<()> {
         let mut row = EventRow::default();
         decode_rawkv(put.take_key(), put.take_value(), &mut row)?;
-        rows.push(row);
+        rows.raws.push(row);
         Ok(())
     }
 
@@ -888,8 +872,8 @@ impl Delegate {
         &mut self,
         mut put: PutRequest,
         is_one_pc: bool,
-        rows: &mut HashMap<Vec<u8>, (EventRow, bool)>,
         mut read_old_value: impl FnMut(&mut EventRow, TimeStamp) -> Result<()>,
+        rows: &mut RowsBuilder,
     ) -> Result<()> {
         match put.cf.as_str() {
             "write" => {
@@ -898,7 +882,7 @@ impl Delegate {
                     return Ok(());
                 }
 
-                let commit_ts = if is_one_pc {
+                let _commit_ts = if is_one_pc {
                     set_event_row_type(&mut row, EventLogType::Committed);
                     let commit_ts = TimeStamp::from(row.commit_ts);
                     read_old_value(&mut row, commit_ts.prev())?;
@@ -911,15 +895,16 @@ impl Delegate {
                         Some(TimeStamp::from(row.commit_ts))
                     }
                 };
+                // FIXME: use commit_ts?
 
-                match rows.entry(row.key.clone()) {
+                match rows.txns_by_key.entry(row.key.clone()) {
                     HashMapEntry::Occupied(o) => {
-                        let (ref mut exist_row, _, _) = o.into_mut();
-                        mem::swap(&mut exists_row.value, row.value);
+                        let (ref mut exist_row, ..) = o.into_mut();
+                        mem::swap(&mut exist_row.value, &mut row.value);
                         *exist_row = row;
                     }
                     HashMapEntry::Vacant(v) => {
-                        v.insert((row, has_value));
+                        v.insert((row, has_value, -1));
                     }
                 }
             }
@@ -934,19 +919,19 @@ impl Delegate {
                 let read_old_ts = std::cmp::max(for_update_ts, row.start_ts.into());
                 read_old_value(&mut row, read_old_ts)?;
 
-                let occupied = rows.entry(row.key.clone()).or_default();
+                let occupied = rows.txns_by_key.entry(row.key.clone()).or_default();
                 if occupied.1 {
                     assert!(!has_value);
                     has_value = true;
                     mem::swap(&mut occupied.0.value, &mut row.value);
                 }
-                let lock_count_modify = self.push_lock(Key::from_raw(&row.key), row.start_ts.into())?;
+                let lock_count_modify =
+                    self.push_lock(Key::from_raw(&row.key), row.start_ts.into())?;
                 *occupied = (row, has_value, lock_count_modify);
-
             }
             "" | "default" => {
                 let key = Key::from_encoded(put.take_key()).truncate_ts().unwrap();
-                let row = rows.entry(key.into_raw().unwrap()).or_default();
+                let row = rows.txns_by_key.entry(key.into_raw().unwrap()).or_default();
                 decode_default(put.take_value(), &mut row.0, &mut row.1);
             }
             other => panic!("invalid cf {}", other),
@@ -1040,9 +1025,26 @@ impl Delegate {
 #[derive(Default)]
 struct RowsBuilder {
     // map[raw_key]->(row, has_value, lock_count_modify)
-    txn_rows_by_key: HashMap<Vec<u8>, (EventRow, bool, isize)>,
+    txns_by_key: HashMap<Vec<u8>, (EventRow, bool, isize)>,
 
-    raw_rows: Vec<EventRow>,
+    raws: Vec<EventRow>,
+}
+
+impl RowsBuilder {
+    fn finish_build(self) -> (Vec<EventRow>, Vec<(EventRow, isize)>) {
+        let mut txns = Vec::with_capacity(self.txns_by_key.len());
+        for (v, has_value, lock_count_modify) in self.txns_by_key.into_values() {
+            if v.r_type == EventLogType::Prewrite && v.op_type == EventRowOpType::Put && !has_value
+            {
+                // It's possible that a prewrite command only contains lock but without
+                // default. It's not documented by classic Percolator but introduced with
+                // Large-Transaction. Those prewrites are not complete, we must skip them.
+                continue;
+            }
+            txns.push((v, lock_count_modify));
+        }
+        (self.raws, txns)
+    }
 }
 
 fn set_event_row_type(row: &mut EventRow, ty: EventLogType) {
@@ -1177,9 +1179,9 @@ fn decode_default(value: Vec<u8>, row: &mut EventRow, has_value: &mut bool) {
 pub struct ObservedRange {
     pub(crate) start_key_encoded: Vec<u8>,
     pub(crate) end_key_encoded: Vec<u8>,
+    pub(crate) all_key_covered: bool,
     start_key_raw: Vec<u8>,
     end_key_raw: Vec<u8>,
-    pub(crate) all_key_covered: bool,
 }
 
 impl ObservedRange {
@@ -1193,9 +1195,9 @@ impl ObservedRange {
         Ok(ObservedRange {
             start_key_encoded,
             end_key_encoded,
+            all_key_covered: false,
             start_key_raw,
             end_key_raw,
-            all_key_covered: false,
         })
     }
 
@@ -1226,6 +1228,10 @@ impl ObservedRange {
         self.is_key_in_range(&self.start_key_encoded, &self.end_key_encoded, key)
     }
 
+    pub fn contains_raw_key(&self, key: &[u8]) -> bool {
+        self.is_key_in_range(&self.start_key_raw, &self.end_key_raw, key)
+    }
+
     pub fn filter_entries(&self, mut entries: Vec<EventRow>) -> Vec<EventRow> {
         if self.all_key_covered {
             return entries;
@@ -1247,8 +1253,6 @@ impl ObservedRange {
         }
     }
 }
-
-const ON_DROP_WARN_HEAP_SIZE: usize = 64 * 1024 * 1024; // 64MB
 
 #[cfg(test)]
 mod tests {

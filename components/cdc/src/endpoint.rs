@@ -35,7 +35,7 @@ use raftstore::{
     router::CdcHandle,
     store::fsm::store::StoreRegionMeta,
 };
-use resolved_ts::{resolve_by_raft, LeadershipResolver,};
+use resolved_ts::{resolve_by_raft, LeadershipResolver};
 use security::SecurityManager;
 use tikv::{
     config::CdcConfig,
@@ -318,13 +318,13 @@ impl Ord for ResolvedRegion {
 }
 
 #[derive(Default)]
-pub(crate) struct ResolvedRegionHeap {
+pub struct ResolvedRegionHeap {
     // BinaryHeap is max heap, so we reverse order to get a min heap.
     heap: BinaryHeap<Reverse<ResolvedRegion>>,
 }
 
 impl ResolvedRegionHeap {
-    pub(crate) fn push(&mut self, region_id: u64, resolved_ts: TimeStamp) {
+    pub fn push(&mut self, region_id: u64, resolved_ts: TimeStamp) {
         self.heap.push(Reverse(ResolvedRegion {
             region_id,
             resolved_ts,
@@ -350,15 +350,6 @@ impl ResolvedRegionHeap {
 
     fn is_empty(&self) -> bool {
         self.heap.is_empty()
-    }
-
-    fn clear(&mut self) {
-        self.heap.clear();
-    }
-
-    fn reset_and_shrink_to(&mut self, min_capacity: usize) {
-        self.clear();
-        self.heap.shrink_to(min_capacity);
     }
 }
 
@@ -933,12 +924,6 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
     }
 
     fn on_min_ts(&mut self, regions: Vec<u64>, min_ts: TimeStamp, current_ts: TimeStamp) {
-        let total_region_count = regions.len();
-        let mut advance_ok = 0;
-        let mut advance_failed_none = 0;
-        let mut advance_failed_same = 0;
-        let mut advance_failed_stale = 0;
-
         self.min_resolved_ts = TimeStamp::max();
 
         // map[(conn_id, req_id)]->ResolvedRegionHeap
@@ -947,7 +932,13 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
         let mut failed = Vec::new();
         for region_id in regions {
             if let Some(d) = self.capture_regions.get_mut(&region_id) {
-                d.on_min_ts(min_ts, &self.connections, &mut advanced, &mut unchanged, &mut failed);
+                d.on_min_ts(
+                    min_ts,
+                    &self.connections,
+                    &mut advanced,
+                    &mut unchanged,
+                    &mut failed,
+                );
             }
         }
 
@@ -999,93 +990,12 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
         }
     }
 
-    fn broadcast_resolved_ts(&self, min_resolved_ts: TimeStamp, regions: HashSet<u64>) {
-        let send_cdc_event = |ts: u64, conn: &Conn, request_id: u64, regions: Vec<u64>| {
-            let mut resolved_ts = ResolvedTs::default();
-            resolved_ts.ts = ts;
-            resolved_ts.request_id = request_id;
-            *resolved_ts.mut_regions() = regions;
-
-            let force_send = false;
-            match conn
-                .get_sink()
-                .unbounded_send(CdcEvent::ResolvedTs(resolved_ts), force_send)
-            {
-                Ok(_) => (),
-                Err(SendError::Disconnected) => {
-                    debug!("cdc send event failed, disconnected";
-                        "conn_id" => ?conn.get_id(), "downstream" => ?conn.get_peer());
-                }
-                Err(SendError::Full) | Err(SendError::Congested) => {
-                    info!("cdc send event failed, full";
-                        "conn_id" => ?conn.get_id(), "downstream" => ?conn.get_peer());
-                }
-            }
-        };
-
-        // multiplexing is for STREAM_MULTIPLEXING enabled.
-        let mut multiplexing = HashMap::<(ConnId, u64), Vec<u64>>::default();
-        // one_way is fro STREAM_MULTIPLEXING disabled.
-        let mut one_way = HashMap::<ConnId, (Vec<u64>, Vec<u64>)>::default();
-        for region_id in &regions {
-            let d = match self.capture_regions.get(region_id) {
-                Some(d) => d,
-                None => continue,
-            };
-            for downstream in d.downstreams() {
-                if !downstream.get_state().load().ready_for_advancing_ts() {
-                    continue;
-                }
-                let conn_id = downstream.conn_id;
-                let features = self.connections.get(&conn_id).unwrap().features();
-                if features.contains(FeatureGate::STREAM_MULTIPLEXING) {
-                    multiplexing
-                        .entry((conn_id, downstream.req_id))
-                        .or_insert_with(Default::default)
-                        .push(*region_id);
-                } else {
-                    let x = one_way.entry(conn_id).or_insert_with(Default::default);
-                    x.0.push(downstream.req_id);
-                    x.1.push(*region_id);
-                }
-            }
-        }
-
-        let min_resolved_ts = min_resolved_ts.into_inner();
-
-        for ((conn_id, request_id), regions) in multiplexing {
-            let conn = self.connections.get(&conn_id).unwrap();
-            if conn.features().contains(FeatureGate::BATCH_RESOLVED_TS) {
-                send_cdc_event(min_resolved_ts, conn, request_id, regions);
-            } else {
-                for region_id in regions {
-                    self.broadcast_resolved_ts_compact(
-                        conn,
-                        request_id,
-                        region_id,
-                        min_resolved_ts,
-                    );
-                }
-            }
-        }
-        for (conn_id, reqs_regions) in one_way {
-            let conn = self.connections.get(&conn_id).unwrap();
-            if conn.features().contains(FeatureGate::BATCH_RESOLVED_TS) {
-                send_cdc_event(min_resolved_ts, conn, 0, reqs_regions.1);
-            } else {
-                for i in 0..reqs_regions.0.len() {
-                    self.broadcast_resolved_ts_compact(
-                        conn,
-                        reqs_regions.0[i],
-                        reqs_regions.1[i],
-                        min_resolved_ts,
-                    );
-                }
-            }
-        }
-    }
-
-    fn emit_resolved_ts(conn: &Conn, req_id: u64, min_resolved_ts: TimeStamp, regions: HashSet<u64>) {
+    fn emit_resolved_ts(
+        conn: &Conn,
+        req_id: u64,
+        min_resolved_ts: TimeStamp,
+        regions: HashSet<u64>,
+    ) {
         let send_cdc_event = |ts: u64, conn: &Conn, request_id: u64, regions: Vec<u64>| {
             let mut resolved_ts = ResolvedTs::default();
             resolved_ts.ts = ts;
@@ -1113,6 +1023,8 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
         send_cdc_event(min_resolved_ts, conn, req_id, Vec::from_iter(regions));
     }
 
+    // FIXME: fix it.
+    #[allow(dead_code)]
     fn broadcast_resolved_ts_compact(
         &self,
         conn: &Conn,
