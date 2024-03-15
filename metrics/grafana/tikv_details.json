@@ -4969,7 +4969,7 @@
           },
           "dataFormat": "tsbuckets",
           "datasource": "${DS_TEST-CLUSTER}",
-          "description": null,
+          "description": "The key size for every put of apply worker",
           "editable": true,
           "error": false,
           "fieldConfig": {
@@ -5045,7 +5045,7 @@
           "xBucketSize": null,
           "yAxis": {
             "decimals": 1,
-            "format": "none",
+            "format": "bytes",
             "label": null,
             "logBase": 1,
             "max": null,
@@ -5128,7 +5128,7 @@
           ],
           "timeFrom": null,
           "timeShift": null,
-          "title": "Written value size",
+          "title": "Written value size for every put of apply worker",
           "tooltip": {
             "msResolution": true,
             "shared": true,
@@ -5149,7 +5149,7 @@
           "xBucketSize": null,
           "yAxis": {
             "decimals": 1,
-            "format": "none",
+            "format": "bytes",
             "label": null,
             "logBase": 1,
             "max": null,
