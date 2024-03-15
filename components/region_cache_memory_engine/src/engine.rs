@@ -48,6 +48,12 @@ pub struct SkiplistEngine {
     pub(crate) data: [Arc<SkipList<InternalBytes, InternalBytes>>; 3],
 }
 
+impl Default for SkiplistEngine {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SkiplistEngine {
     pub fn new() -> Self {
         let collector = default_collector().clone();
@@ -71,7 +77,9 @@ impl SkiplistEngine {
             let guard = &epoch::pin();
             iter.seek(&start, guard);
             while iter.valid() && iter.key() < &end {
-                d.remove(iter.key(), guard).map(|e| e.release(guard));
+                if let Some(e) = d.remove(iter.key(), guard) {
+                    e.release(guard)
+                }
                 iter.next(guard);
             }
         });
@@ -123,6 +131,12 @@ pub struct RangeCacheMemoryEngineCore {
     engine: SkiplistEngine,
     range_manager: RangeManager,
     pub(crate) cached_write_batch: BTreeMap<CacheRange, Vec<(u64, RangeCacheWriteBatchEntry)>>,
+}
+
+impl Default for RangeCacheMemoryEngineCore {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl RangeCacheMemoryEngineCore {

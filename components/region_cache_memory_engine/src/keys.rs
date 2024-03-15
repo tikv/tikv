@@ -64,16 +64,25 @@ impl Eq for InternalBytes {}
 
 impl Ord for InternalBytes {
     fn cmp(&self, other: &Self) -> cmp::Ordering {
-        let k1 = &self.bytes[..self.bytes.len() - 8];
-        let k2 = &other.bytes[..other.bytes.len() - 8];
-        let c = k1.cmp(&k2);
+        let k1 = &self.bytes[..self.bytes.len() - ENC_KEY_SEQ_LENGTH];
+        let k2 = &other.bytes[..other.bytes.len() - ENC_KEY_SEQ_LENGTH];
+        let c = k1.cmp(k2);
         if c != Ordering::Equal {
             return c;
         }
 
-        let n1 = u64::from_be_bytes(self.bytes[(self.bytes.len() - 8)..].try_into().unwrap());
-        let n2 = u64::from_be_bytes(other.bytes[(other.bytes.len() - 8)..].try_into().unwrap());
+        let n1 = u64::from_be_bytes(
+            self.bytes[(self.bytes.len() - ENC_KEY_SEQ_LENGTH)..]
+                .try_into()
+                .unwrap(),
+        );
+        let n2 = u64::from_be_bytes(
+            other.bytes[(other.bytes.len() - ENC_KEY_SEQ_LENGTH)..]
+                .try_into()
+                .unwrap(),
+        );
 
+        #[allow(clippy::comparison_chain)]
         if n1 < n2 {
             Ordering::Greater
         } else if n1 > n2 {

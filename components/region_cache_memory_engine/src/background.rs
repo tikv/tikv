@@ -422,7 +422,7 @@ impl Filter {
     }
 
     fn filter(&mut self, key: &Bytes, value: &Bytes) -> Result<(), String> {
-        let InternalKey { user_key, .. } = decode_key(&key);
+        let InternalKey { user_key, .. } = decode_key(key);
 
         let (mvcc_key_prefix, commit_ts) = split_ts(user_key)?;
         if commit_ts > self.safe_point {
@@ -437,9 +437,12 @@ impl Filter {
             self.mvcc_key_prefix.extend_from_slice(mvcc_key_prefix);
             self.remove_older = false;
             if let Some(cached_delete_key) = self.cached_delete_key.take() {
-                self.write_cf_handle
+                if let Some(e) = self
+                    .write_cf_handle
                     .remove(&InternalBytes::from_vec(cached_delete_key), guard)
-                    .map(|e| e.release(guard));
+                {
+                    e.release(guard)
+                }
             }
         }
 
@@ -468,9 +471,12 @@ impl Filter {
             return Ok(());
         }
         self.filtered += 1;
-        self.write_cf_handle
+        if let Some(e) = self
+            .write_cf_handle
             .remove(&InternalBytes::from_bytes(key.clone()), guard)
-            .map(|e| e.release(guard));
+        {
+            e.release(guard)
+        }
         self.handle_filtered_write(write, guard)?;
 
         Ok(())
@@ -492,9 +498,9 @@ impl Filter {
             let mut iter = self.default_cf_handle.owned_iter();
             iter.seek(&default_key, guard);
             while iter.valid() && iter.key().same_user_key_with(&default_key) {
-                self.default_cf_handle
-                    .remove(iter.key(), guard)
-                    .map(|e| e.release(guard));
+                if let Some(e) = self.default_cf_handle.remove(iter.key(), guard) {
+                    e.release(guard)
+                }
                 iter.next(guard);
             }
         }
