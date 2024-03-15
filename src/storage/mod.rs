@@ -1084,15 +1084,25 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                                             if lock.ts != start_ts {
                                                 None
                                             } else {
-                                                match lock.short_value {
-                                                    Some(v) => Some(Ok((k.into_raw().unwrap(), v))),
-                                                    None => match reader.get_value(&k, start_ts) {
-                                                        Ok(Some(data)) => {
-                                                            Some(Ok((k.into_raw().unwrap(), data)))
+                                                match lock.lock_type {
+                                                    // Deletions are returned in the result pairs.
+                                                    // This is the same behavior as TiDB's memdb.
+                                                    // This is different from a normal batch_get.
+                                                    LockType::Delete => Some(Ok((k.into_raw().unwrap(), vec![]))),
+                                                    LockType::Lock => unreachable!("Unexpected LockType::Lock. pipelined-dml only supports optimistic transactions"),
+                                                    LockType::Pessimistic => unreachable!("Unexpected LockType::Pessimistic. pipelined-dml only supports optimistic transactions"),
+                                                    LockType::Put => {
+                                                        match lock.short_value {
+                                                            Some(v) => Some(Ok((k.into_raw().unwrap(), v))),
+                                                            None => match reader.get_value(&k, start_ts) {
+                                                                Ok(Some(data)) => {
+                                                                    Some(Ok((k.into_raw().unwrap(), data)))
+                                                                }
+                                                                Ok(None) => None,
+                                                                Err(e) => Some(Err(e)),
+                                                            },
                                                         }
-                                                        Ok(None) => None,
-                                                        Err(e) => Some(Err(e)),
-                                                    },
+                                                    }
                                                 }
                                             }
                                         }
