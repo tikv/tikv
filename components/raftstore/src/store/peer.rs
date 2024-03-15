@@ -959,7 +959,7 @@ where
             pre_vote: cfg.prevote,
             max_committed_size_per_ready: MAX_COMMITTED_SIZE_PER_READY,
             priority: if peer.is_witness { -1 } else { 0 },
-            apply_unpersisted_log_limit: cfg.apply_unpersisted_log_limit,
+            apply_unpersisted_log_limit: 0,
             ..Default::default()
         };
 
