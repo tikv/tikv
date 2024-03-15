@@ -5383,7 +5383,7 @@ checksum = "fa8f3741c7372e75519bd9346068370c9cdaabcc1f9599cbcf2a2719352286b7"
 [[package]]
 name = "skiplist-rs"
 version = "0.1.0"
-source = "git+https://github.com/SpadeA-Tang/skiplist.git?branch=master#3e0feb80ead6f91e1f979263308e0680845319d9"
+source = "git+https://github.com/tikv/skiplist-rs.git?branch=main#d158a040783715612b80785e03d239ba5deb8960"
 dependencies = [
  "crossbeam-epoch",
  "crossbeam-utils",
