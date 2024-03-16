@@ -1,7 +1,6 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    str::from_utf8,
     sync::{
         atomic::{AtomicI64, Ordering},
         Arc,
@@ -14,7 +13,7 @@ use fail::fail_point;
 use futures::{future, SinkExt, TryFutureExt, TryStreamExt};
 use grpcio::{
     ClientStreamingSink, DuplexSink, EnvBuilder, RequestStream, RpcContext, RpcStatus,
-    RpcStatusCode, Server as GrpcServer, ServerBuilder, ServerStreamingSink, UnarySink, WriteFlags,
+    RpcStatusCode, Server as GrpcServer, ServerBuilder, UnarySink, WriteFlags,
 };
 use kvproto::{
     meta_storagepb_grpc::{create_meta_storage, MetaStorage},
@@ -26,7 +25,7 @@ use pd_client::Error as PdError;
 use security::*;
 
 use super::mocker::*;
-use crate::mocker::etcd::{EtcdClient, Keys, KvEventType, MetaKey};
+use crate::mocker::etcd::EtcdClient;
 
 pub struct Server<C: PdMocker> {
     server: Option<GrpcServer>,
@@ -241,73 +240,6 @@ impl<C: PdMocker + Send + Sync + 'static> MetaStorage for PdMock<C> {
 }
 
 impl<C: PdMocker + Send + Sync + 'static> Pd for PdMock<C> {
-    fn load_global_config(
-        &mut self,
-        ctx: RpcContext<'_>,
-        req: LoadGlobalConfigRequest,
-        sink: UnarySink<LoadGlobalConfigResponse>,
-    ) {
-        let cli = self.etcd_client.clone();
-        hijack_unary(self, ctx, sink, |c| c.load_global_config(&req, cli.clone()))
-    }
-
-    fn store_global_config(
-        &mut self,
-        ctx: RpcContext<'_>,
-        req: StoreGlobalConfigRequest,
-        sink: UnarySink<StoreGlobalConfigResponse>,
-    ) {
-        let cli = self.etcd_client.clone();
-        hijack_unary(self, ctx, sink, |c| {
-            c.store_global_config(&req, cli.clone())
-        })
-    }
-
-    fn watch_global_config(
-        &mut self,
-        ctx: RpcContext<'_>,
-        req: WatchGlobalConfigRequest,
-        mut sink: ServerStreamingSink<WatchGlobalConfigResponse>,
-    ) {
-        let cli = self.etcd_client.clone();
-        let future = async move {
-            // Migrated to 2021 migration. This let statement is probably not needed, see
-            //   https://doc.rust-lang.org/edition-guide/rust-2021/disjoint-capture-in-closures.html
-            let _ = &req;
-            let mut watcher = match cli
-                .lock()
-                .await
-                .watch(
-                    Keys::Range(MetaKey(b"".to_vec()), MetaKey(b"\xff".to_vec())),
-                    req.revision,
-                )
-                .await
-            {
-                Ok(w) => w,
-                Err(err) => {
-                    error!("failed to watch: {:?}", err);
-                    return;
-                }
-            };
-
-            while let Some(event) = watcher.as_mut().recv().await {
-                info!("watch event from etcd"; "event" => ?event);
-                let mut change = GlobalConfigItem::new();
-                change.set_kind(match event.kind {
-                    KvEventType::Put => EventType::Put,
-                    KvEventType::Delete => EventType::Delete,
-                });
-                change.set_name(from_utf8(event.pair.key()).unwrap().to_string());
-                change.set_payload(event.pair.value().into());
-                let mut wc = WatchGlobalConfigResponse::default();
-                wc.set_changes(vec![change].into());
-                let _ = sink.send((wc, WriteFlags::default())).await;
-                let _ = sink.flush().await;
-            }
-        };
-        ctx.spawn(future);
-    }
-
     fn get_members(
         &mut self,
         ctx: RpcContext<'_>,
