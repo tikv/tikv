@@ -8,6 +8,7 @@
 mod background;
 mod engine;
 pub mod keys;
+pub mod region_label;
 pub use engine::RangeCacheMemoryEngine;
 pub mod range_manager;
 mod write_batch;

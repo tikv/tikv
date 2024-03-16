@@ -259,6 +259,8 @@ pub const INVALID_ID: u64 = 0;
 pub const RESOURCE_CONTROL_CONFIG_PATH: &str = "resource_group/settings";
 pub const RESOURCE_CONTROL_CONTROLLER_CONFIG_PATH: &str = "resource_group/controller";
 
+pub const REGION_LABEL_PATH_PREFIX: &str = "region_label";
+
 /// PdClient communicates with Placement Driver (PD).
 /// Because now one PD only supports one cluster, so it is no need to pass
 /// cluster id in trait interface every time, so passing the cluster id when
