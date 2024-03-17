@@ -39,6 +39,13 @@ pub trait HeapSize {
     fn approximate_heap_size(&self) -> usize {
         0
     }
+
+    fn approximate_mem_size(&self) -> usize
+    where
+        Self: Sized,
+    {
+        mem::size_of::<Self>() + self.approximate_heap_size()
+    }
 }
 
 macro_rules! impl_zero_heap_size{
@@ -189,7 +196,11 @@ impl OwnedAllocated {
         Ok(())
     }
 
-    pub fn source(&self) -> &Arc<MemoryQuota> {
+    pub fn allocated(&self) -> usize {
+        self.allocated
+    }
+
+    pub fn source(&self) -> &MemoryQuota {
         &self.from
     }
 }

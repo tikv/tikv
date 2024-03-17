@@ -13,13 +13,13 @@ use async_stream::try_stream;
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::PerfLevel;
 use futures::{
-    channel::mpsc,
-    future::{ready, Either},
+    channel::{mpsc, oneshot},
+    future::Either,
     prelude::*,
 };
-use kvproto::{coprocessor as coppb, errorpb, kvrpcpb};
+use kvproto::{coprocessor as coppb, errorpb, kvrpcpb, kvrpcpb::CommandPri};
 use protobuf::{CodedInputStream, Message};
-use resource_control::{ResourceGroupManager, TaskMetadata};
+use resource_control::{ResourceGroupManager, ResourceLimiter, TaskMetadata};
 use resource_metering::{FutureExt, ResourceTagFactory, StreamExt};
 use tidb_query_common::execute_stats::ExecSummary;
 use tikv_alloc::trace::MemoryTraceGuard;
@@ -512,7 +512,6 @@ impl<E: Engine> Endpoint<E> {
         req_ctx: ReqContext,
         handler_builder: RequestHandlerBuilder<E::Snap>,
     ) -> impl Future<Output = Result<MemoryTraceGuard<coppb::Response>>> {
-        let mut bytes = req_ctx.approximate_heap_size();
         let priority = req_ctx.context.get_priority();
         let task_id = req_ctx.build_task_id();
         let key_ranges: Vec<_> = req_ctx
@@ -520,10 +519,11 @@ impl<E: Engine> Endpoint<E> {
             .iter()
             .map(|key_range| (key_range.get_start().to_vec(), key_range.get_end().to_vec()))
             .collect();
-        bytes += key_ranges.approximate_heap_size();
         let resource_tag = self
             .resource_tag_factory
             .new_tag_with_key_ranges(&req_ctx.context, key_ranges);
+        let mut allocated_bytes = resource_tag.approximate_heap_size();
+
         let metadata = TaskMetadata::from_ctx(req_ctx.context.get_resource_control_context());
         let resource_limiter = self.resource_ctl.as_ref().and_then(|r| {
             r.get_resource_limiter(
@@ -540,30 +540,27 @@ impl<E: Engine> Endpoint<E> {
         });
         // box the tracker so that moving it is cheap.
         let tracker = Box::new(Tracker::new(req_ctx, self.slow_log_threshold));
-        let handle_fut =
-            Self::handle_unary_request_impl(self.semaphore.clone(), tracker, handler_builder)
-                .in_resource_metering_tag(resource_tag);
+        allocated_bytes += tracker.approximate_mem_size();
 
-        bytes += mem::size_of_val(&handle_fut);
-        let mut owned_quota = OwnedAllocated::new(self.memory_quota.clone());
-        let check_memory_quota_fut = ready(owned_quota.alloc(bytes).map_err(Error::from));
-        COPR_MEMORY_QUOTA
-            .in_use
-            .set(owned_quota.source().in_use() as _);
-        let fut = check_memory_quota_fut
-            .and_then(move |_| handle_fut) // Handle unary request if check passes.
-            .map(move |res| {
-                let quota = owned_quota.source().clone();
-                // Release quota after handle completed.
-                drop(owned_quota);
-                COPR_MEMORY_QUOTA.in_use.set(quota.in_use() as _);
-                res
-            });
-        let res = self
-            .read_pool
-            .spawn_handle(fut, priority, task_id, metadata, resource_limiter)
-            .map_err(|_| Error::MaxPendingTasksExceeded);
-        async move { res.await? }
+        let (tx, rx) = oneshot::channel();
+        let future =
+            Self::handle_unary_request_impl(self.semaphore.clone(), tracker, handler_builder)
+                .in_resource_metering_tag(resource_tag)
+                .map(|res| {
+                    let _ = tx.send(res);
+                });
+        let res = self.read_pool_spawn_with_memory_quota_check(
+            allocated_bytes,
+            future,
+            priority,
+            task_id,
+            metadata,
+            resource_limiter,
+        );
+        async move {
+            res?;
+            rx.map_err(|_| Error::MaxPendingTasksExceeded).await?
+        }
     }
 
     /// Parses and handles a unary request. Returns a future that will never
@@ -813,24 +810,29 @@ impl<E: Engine> Endpoint<E> {
         let resource_tag = self
             .resource_tag_factory
             .new_tag_with_key_ranges(&req_ctx.context, key_ranges);
+        let mut allocated_bytes = resource_tag.approximate_heap_size();
+
         let task_id = req_ctx.build_task_id();
         let tracker = Box::new(Tracker::new(req_ctx, self.slow_log_threshold));
+        allocated_bytes += tracker.approximate_mem_size();
 
-        self.read_pool
-            .spawn(
-                Self::handle_stream_request_impl(self.semaphore.clone(), tracker, handler_builder)
-                    .in_resource_metering_tag(resource_tag)
-                    .then(futures::future::ok::<_, mpsc::SendError>)
-                    .forward(tx)
-                    .unwrap_or_else(|e| {
-                        warn!("coprocessor stream send error"; "error" => %e);
-                    }),
-                priority,
-                task_id,
-                metadata,
-                resource_limiter,
-            )
-            .map_err(|_| Error::MaxPendingTasksExceeded)?;
+        let future =
+            Self::handle_stream_request_impl(self.semaphore.clone(), tracker, handler_builder)
+                .in_resource_metering_tag(resource_tag)
+                .then(futures::future::ok::<_, mpsc::SendError>)
+                .forward(tx)
+                .unwrap_or_else(|e| {
+                    warn!("coprocessor stream send error"; "error" => %e);
+                });
+
+        self.read_pool_spawn_with_memory_quota_check(
+            allocated_bytes,
+            future,
+            priority,
+            task_id,
+            metadata,
+            resource_limiter,
+        )?;
         Ok(rx)
     }
 
@@ -854,6 +856,38 @@ impl<E: Engine> Endpoint<E> {
             .try_flatten() // Stream<Resp, Error>
             .or_else(|e| futures::future::ok(make_error_response(e))) // Stream<Resp, ()>
             .map(|item: std::result::Result<_, ()>| item.unwrap())
+    }
+
+    fn read_pool_spawn_with_memory_quota_check<F>(
+        &self,
+        mut allocated_bytes: usize,
+        future: F,
+        priority: CommandPri,
+        task_id: u64,
+        metadata: TaskMetadata<'_>,
+        resource_limiter: Option<Arc<ResourceLimiter>>,
+    ) -> Result<()>
+    where
+        F: Future<Output = ()> + Send + 'static,
+    {
+        allocated_bytes += mem::size_of_val(&future);
+        let mut owned_quota = OwnedAllocated::new(self.memory_quota.clone());
+        owned_quota.alloc(allocated_bytes)?;
+        COPR_MEMORY_QUOTA
+            .in_use
+            .set(owned_quota.source().in_use() as _);
+        let fut = future.map(move |_| {
+            let in_use = owned_quota.source().in_use();
+            let allocated = owned_quota.allocated();
+            COPR_MEMORY_QUOTA
+                .in_use
+                .set(in_use.saturating_sub(allocated) as _);
+            // Release quota after handle completed.
+            drop(owned_quota);
+        });
+        self.read_pool
+            .spawn(fut, priority, task_id, metadata, resource_limiter)
+            .map_err(|_| Error::MaxPendingTasksExceeded)
     }
 }
 
