@@ -99,13 +99,17 @@ fn json_array_append(args: &[ScalarValueRef]) -> Result<Option<Json>> {
         };
         // 2. merge the value into the element
         let mut tmp_values: Vec<JsonRef> = vec![];
-        
+
         tmp_values.push(element_ref.unwrap());
         tmp_values.push(value.as_ref());
 
         values.push(Json::merge(tmp_values)?);
     }
-    Ok(Some(base.as_ref().modify(&path_expr_list, values, ModifyType::Set)?))
+    Ok(Some(base.as_ref().modify(
+        &path_expr_list,
+        values,
+        ModifyType::Set,
+    )?))
 }
 
 /// validate the arguments are `(Option<JsonRef>, &[(Option<Bytes>,
