@@ -14,14 +14,14 @@ pub(crate) enum MemoryUsage {
     HardLimitReached(usize),
 }
 
-pub struct MemoryController {
+pub struct MemoryLimiter {
     allocated: AtomicUsize,
     soft_limit_threshold: usize,
     hard_limit_threshold: usize,
     memory_checking: AtomicBool,
 }
 
-impl MemoryController {
+impl MemoryLimiter {
     pub fn new(soft_limit_threshold: usize, hard_limit_threshold: usize) -> Self {
         Self {
             soft_limit_threshold,

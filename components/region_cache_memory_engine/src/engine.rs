@@ -25,7 +25,7 @@ use crate::{
         decode_key, encode_key_for_eviction, encode_seek_key, InternalKey, InternalKeyComparator,
         ValueType, VALUE_TYPE_FOR_SEEK, VALUE_TYPE_FOR_SEEK_FOR_PREV,
     },
-    memory_limiter::{GlobalMemoryLimiter, MemoryController},
+    memory_limiter::{GlobalMemoryLimiter, MemoryLimiter},
     range_manager::RangeManager,
     write_batch::RangeCacheWriteBatchEntry,
     EngineConfig,
@@ -205,7 +205,7 @@ pub struct RangeCacheMemoryEngine {
     memory_limiter: Arc<GlobalMemoryLimiter>,
     pub(crate) rocks_engine: Option<RocksEngine>,
     bg_work_manager: Arc<BgWorkManager>,
-    memory_controller: Arc<MemoryController>,
+    memory_limiter: Arc<MemoryLimiter>,
 }
 
 impl RangeCacheMemoryEngine {
@@ -214,7 +214,7 @@ impl RangeCacheMemoryEngine {
             limiter.clone(),
         )));
 
-        let memory_controller = Arc::new(MemoryController::new(
+        let memory_limiter = Arc::new(MemoryLimiter::new(
             config.soft_limit_threshold,
             config.hard_limit_threshold,
         ));
@@ -222,7 +222,7 @@ impl RangeCacheMemoryEngine {
         let bg_work_manager = Arc::new(BgWorkManager::new(
             core.clone(),
             config.gc_interval,
-            memory_controller.clone(),
+            memory_limiter.clone(),
         ));
 
         Self {
@@ -230,7 +230,7 @@ impl RangeCacheMemoryEngine {
             memory_limiter: limiter,
             rocks_engine: None,
             bg_work_manager,
-            memory_controller,
+            memory_limiter,
         }
     }
 
@@ -312,8 +312,8 @@ impl RangeCacheMemoryEngine {
         &self.bg_work_manager
     }
 
-    pub(crate) fn memory_controller(&self) -> Arc<MemoryController> {
-        self.memory_controller.clone()
+    pub(crate) fn memory_limiter(&self) -> Arc<MemoryLimiter> {
+        self.memory_limiter.clone()
     }
 }
 

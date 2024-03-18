@@ -24,7 +24,7 @@ use crate::{
     keys::{
         decode_key, encode_key, encoding_for_filter, InternalKey, InternalKeyComparator, ValueType,
     },
-    memory_limiter::{GlobalMemoryLimiter, MemoryController, MemoryUsage},
+    memory_limiter::{GlobalMemoryLimiter, MemoryLimiter, MemoryUsage},
 };
 
 /// Try to extract the key and `u64` timestamp from `encoded_key`.
@@ -73,10 +73,10 @@ impl BgWorkManager {
     pub fn new(
         core: Arc<ShardedLock<RangeCacheMemoryEngineCore>>,
         gc_interval: Duration,
-        memory_controller: Arc<MemoryController>,
+        memory_limiter: Arc<MemoryLimiter>,
     ) -> Self {
         let worker = Worker::new("range-cache-background-worker");
-        let runner = BackgroundRunner::new(core.clone(), memory_controller);
+        let runner = BackgroundRunner::new(core.clone(), memory_limiter);
         let scheduler = worker.start("range-cache-engine-background", runner);
 
         let scheduler_clone = scheduler.clone();
@@ -301,7 +301,7 @@ pub struct BackgroundRunner {
     core: BackgroundRunnerCore,
     range_load_remote: Remote<yatp::task::future::TaskCell>,
     range_load_worker: Worker,
-    memory_controller: Arc<MemoryController>,
+    memory_limiter: Arc<MemoryLimiter>,
 }
 
 impl Drop for BackgroundRunner {
@@ -313,7 +313,7 @@ impl Drop for BackgroundRunner {
 impl BackgroundRunner {
     pub fn new(
         engine: Arc<ShardedLock<RangeCacheMemoryEngineCore>>,
-        memory_controller: Arc<MemoryController>,
+        memory_limiter: Arc<MemoryLimiter>,
     ) -> Self {
         let range_load_worker = Worker::new("background-range-load-worker");
         let range_load_remote = range_load_worker.remote();
@@ -321,7 +321,7 @@ impl BackgroundRunner {
             core: BackgroundRunnerCore { engine },
             range_load_worker,
             range_load_remote,
-            memory_controller,
+            memory_limiter,
         }
     }
 }
@@ -375,7 +375,7 @@ impl Runnable for BackgroundRunner {
                 self.range_load_remote.spawn(f);
             }
             BackgroundTask::MemoryCheck => {
-                let mem_usage = self.memory_controller.mem_usage();
+                let mem_usage = self.memory_limiter.mem_usage();
                 match mem_usage {
                     MemoryUsage::NormalUsage(..) => {}
                     MemoryUsage::SoftLimitReached(n) => {
@@ -385,7 +385,7 @@ impl Runnable for BackgroundRunner {
                         // select ranges to evict
                     }
                 }
-                self.memory_controller.set_memory_checking(false);
+                self.memory_limiter.set_memory_checking(false);
             }
         }
     }
@@ -533,7 +533,7 @@ pub mod tests {
             construct_key, construct_value, encode_key, encode_seek_key, encoding_for_filter,
             InternalKeyComparator, ValueType, VALUE_TYPE_FOR_SEEK,
         },
-        memory_limiter::{GlobalMemoryLimiter, MemoryController},
+        memory_limiter::{GlobalMemoryLimiter, MemoryLimiter},
         EngineConfig, RangeCacheMemoryEngine,
     };
 
@@ -695,7 +695,7 @@ pub mod tests {
         assert_eq!(3, element_count(&default));
         assert_eq!(3, element_count(&write));
 
-        let controller = Arc::new(MemoryController::new(usize::MAX, usize::MAX));
+        let controller = Arc::new(MemoryLimiter::new(usize::MAX, usize::MAX));
         let worker = BackgroundRunner::new(engine.core.clone(), controller);
 
         // gc will not remove the latest mvcc put below safe point
@@ -749,7 +749,7 @@ pub mod tests {
         assert_eq!(6, element_count(&default));
         assert_eq!(6, element_count(&write));
 
-        let controller = Arc::new(MemoryController::new(usize::MAX, usize::MAX));
+        let controller = Arc::new(MemoryLimiter::new(usize::MAX, usize::MAX));
         let worker = BackgroundRunner::new(engine.core.clone(), controller);
         let s1 = engine.snapshot(range.clone(), 10, u64::MAX);
         let s2 = engine.snapshot(range.clone(), 11, u64::MAX);
@@ -833,7 +833,8 @@ pub mod tests {
 
     #[test]
     fn test_background_worker_load() {
-        let mut engine = RangeCacheMemoryEngine::new(Arc::default(), EngineConfig::config_for_test());
+        let mut engine =
+            RangeCacheMemoryEngine::new(Arc::default(), EngineConfig::config_for_test());
         let path = Builder::new().prefix("test_load").tempdir().unwrap();
         let path_str = path.path().to_str().unwrap();
         let rocks_engine = new_engine(path_str, DATA_CFS).unwrap();

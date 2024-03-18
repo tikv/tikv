@@ -10,7 +10,7 @@ use crate::{
     background::BackgroundTask,
     engine::{cf_to_id, RangeCacheMemoryEngineCore, SkiplistEngine},
     keys::{encode_key, ValueType, ENC_KEY_SEQ_LENGTH},
-    memory_limiter::{MemoryController, MemoryUsage},
+    memory_limiter::{MemoryLimiter, MemoryUsage},
     range_manager::RangeManager,
     RangeCacheMemoryEngine,
 };
@@ -22,7 +22,7 @@ pub struct RangeCacheWriteBatch {
     engine: RangeCacheMemoryEngine,
     save_points: Vec<usize>,
     sequence_number: Option<u64>,
-    memory_controller: Arc<MemoryController>,
+    memory_limiter: Arc<MemoryLimiter>,
     memory_usage_reach_hard_limit: bool,
 }
 
@@ -43,7 +43,7 @@ impl From<&RangeCacheMemoryEngine> for RangeCacheWriteBatch {
             engine: engine.clone(),
             save_points: Vec::new(),
             sequence_number: None,
-            memory_controller: engine.memory_controller(),
+            memory_limiter: engine.memory_limiter(),
             memory_usage_reach_hard_limit: false,
         }
     }
@@ -56,7 +56,7 @@ impl RangeCacheWriteBatch {
             engine: engine.clone(),
             save_points: Vec::new(),
             sequence_number: None,
-            memory_controller: engine.memory_controller(),
+            memory_limiter: engine.memory_limiter(),
             memory_usage_reach_hard_limit: false,
         }
     }
@@ -108,10 +108,10 @@ impl RangeCacheWriteBatch {
     }
 
     fn schedule_memory_check(&self) {
-        if self.memory_controller.memory_checking() {
+        if self.memory_limiter.memory_checking() {
             return;
         }
-        self.memory_controller.set_memory_checking(true);
+        self.memory_limiter.set_memory_checking(true);
         if let Err(e) = self
             .engine
             .bg_worker_manager()
@@ -126,7 +126,7 @@ impl RangeCacheWriteBatch {
     }
 
     fn memory_acquire(&mut self, mem_required: usize) -> bool {
-        match self.memory_controller.acquire(mem_required) {
+        match self.memory_limiter.acquire(mem_required) {
             MemoryUsage::HardLimitReached(n) => {
                 self.memory_usage_reach_hard_limit = true;
                 warn!(
