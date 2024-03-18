@@ -10,6 +10,7 @@ use std::{
 };
 
 use bytes::Bytes;
+use crossbeam::{epoch, epoch::default_collector};
 use engine_rocks::{raw::SliceTransform, util::FixedSuffixSliceTransform, RocksEngine};
 use engine_traits::{
     CacheRange, CfNamesExt, DbVector, Error, IterOptions, Iterable, Iterator, KvEngine, Peekable,
@@ -17,16 +18,16 @@ use engine_traits::{
     CF_WRITE,
 };
 use parking_lot::{lock_api::RwLockUpgradableReadGuard, RwLock, RwLockWriteGuard};
-use skiplist_rs::{IterRef, Skiplist, MIB};
+use skiplist_rs::{base::OwnedIter, SkipList};
 use slog_global::error;
+use tikv_util::{box_err, config::MIB};
 
 use crate::{
     background::{BackgroundTask, BgWorkManager},
     keys::{
-        decode_key, encode_key_for_eviction, encode_seek_key, InternalKey, InternalKeyComparator,
-        ValueType, VALUE_TYPE_FOR_SEEK, VALUE_TYPE_FOR_SEEK_FOR_PREV,
+        decode_key, encode_key_for_eviction, encode_seek_for_prev_key, encode_seek_key,
+        InternalBytes, InternalKey, ValueType,
     },
-    memory_limiter::GlobalMemoryLimiter,
     range_manager::RangeManager,
     write_batch::{group_write_batch_entries, RangeCacheWriteBatchEntry},
 };
@@ -45,58 +46,42 @@ pub(crate) fn cf_to_id(cf: &str) -> usize {
 /// A single global set of skiplists shared by all cached ranges
 #[derive(Clone)]
 pub struct SkiplistEngine {
-    pub(crate) data: [Arc<Skiplist<InternalKeyComparator, GlobalMemoryLimiter>>; 3],
+    pub(crate) data: [Arc<SkipList<InternalBytes, InternalBytes>>; 3],
+}
+
+impl Default for SkiplistEngine {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl SkiplistEngine {
-    pub fn new(global_limiter: Arc<GlobalMemoryLimiter>) -> Self {
+    pub fn new() -> Self {
+        let collector = default_collector().clone();
         SkiplistEngine {
             data: [
-                Arc::new(Skiplist::new(
-                    InternalKeyComparator::default(),
-                    global_limiter.clone(),
-                )),
-                Arc::new(Skiplist::new(
-                    InternalKeyComparator::default(),
-                    global_limiter.clone(),
-                )),
-                Arc::new(Skiplist::new(
-                    InternalKeyComparator::default(),
-                    global_limiter.clone(),
-                )),
+                Arc::new(SkipList::new(collector.clone())),
+                Arc::new(SkipList::new(collector.clone())),
+                Arc::new(SkipList::new(collector)),
             ],
         }
     }
 
-    pub fn cf_handle(&self, cf: &str) -> Arc<Skiplist<InternalKeyComparator, GlobalMemoryLimiter>> {
+    pub fn cf_handle(&self, cf: &str) -> Arc<SkipList<InternalBytes, InternalBytes>> {
         self.data[cf_to_id(cf)].clone()
     }
 
     fn delete_range(&self, range: &CacheRange) {
         self.data.iter().for_each(|d| {
-            let mut key_buffer: Vec<Bytes> = vec![];
-            let mut key_buffer_size = 0;
             let (start, end) = encode_key_for_eviction(range);
-
-            let mut iter = d.iter();
-            iter.seek(&start);
+            let mut iter = d.owned_iter();
+            let guard = &epoch::pin();
+            iter.seek(&start, guard);
             while iter.valid() && iter.key() < &end {
-                if key_buffer_size + iter.key().len() >= EVICTION_KEY_BUFFER_LIMIT {
-                    for key in key_buffer.drain(..) {
-                        d.remove(key.as_slice());
-                    }
-                    iter = d.iter();
-                    iter.seek(&start);
-                    continue;
+                if let Some(e) = d.remove(iter.key(), guard) {
+                    e.release(guard)
                 }
-
-                key_buffer_size += iter.key().len();
-                key_buffer.push(iter.key().clone());
-                iter.next();
-            }
-
-            for key in key_buffer {
-                d.remove(key.as_slice());
+                iter.next(guard);
             }
         });
     }
@@ -149,10 +134,16 @@ pub struct RangeCacheMemoryEngineCore {
     pub(crate) cached_write_batch: BTreeMap<CacheRange, Vec<(u64, RangeCacheWriteBatchEntry)>>,
 }
 
+impl Default for RangeCacheMemoryEngineCore {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl RangeCacheMemoryEngineCore {
-    pub fn new(limiter: Arc<GlobalMemoryLimiter>) -> RangeCacheMemoryEngineCore {
+    pub fn new() -> RangeCacheMemoryEngineCore {
         RangeCacheMemoryEngineCore {
-            engine: SkiplistEngine::new(limiter),
+            engine: SkiplistEngine::new(),
             range_manager: RangeManager::default(),
             cached_write_batch: BTreeMap::default(),
         }
@@ -221,19 +212,15 @@ impl RangeCacheMemoryEngineCore {
 #[derive(Clone)]
 pub struct RangeCacheMemoryEngine {
     pub(crate) core: Arc<RwLock<RangeCacheMemoryEngineCore>>,
-    memory_limiter: Arc<GlobalMemoryLimiter>,
     pub(crate) rocks_engine: Option<RocksEngine>,
     bg_work_manager: Arc<BgWorkManager>,
 }
 
 impl RangeCacheMemoryEngine {
-    pub fn new(limiter: Arc<GlobalMemoryLimiter>, gc_interval: Duration) -> Self {
-        let core = Arc::new(RwLock::new(RangeCacheMemoryEngineCore::new(
-            limiter.clone(),
-        )));
+    pub fn new(gc_interval: Duration) -> Self {
+        let core = Arc::new(RwLock::new(RangeCacheMemoryEngineCore::new()));
         Self {
             core: core.clone(),
-            memory_limiter: limiter,
             rocks_engine: None,
             bg_work_manager: Arc::new(BgWorkManager::new(core, gc_interval)),
         }
@@ -408,11 +395,7 @@ enum Direction {
 pub struct RangeCacheIterator {
     cf: String,
     valid: bool,
-    iter: IterRef<
-        Skiplist<InternalKeyComparator, GlobalMemoryLimiter>,
-        InternalKeyComparator,
-        GlobalMemoryLimiter,
-    >,
+    iter: OwnedIter<Arc<SkipList<InternalBytes, InternalBytes>>, InternalBytes, InternalBytes>,
     // The lower bound is inclusive while the upper bound is exclusive if set
     // Note: bounds (region boundaries) have no mvcc versions
     lower_bound: Vec<u8>,
@@ -447,7 +430,7 @@ impl RangeCacheIterator {
     // finds a user key that is larger than `saved_user_key`.
     // If `prefix` is not None, the iterator needs to stop when all keys for the
     // prefix are exhausted and the iterator is set to invalid.
-    fn find_next_visible_key(&mut self, mut skip_saved_key: bool) {
+    fn find_next_visible_key(&mut self, mut skip_saved_key: bool, guard: &epoch::Guard) {
         while self.iter.valid() {
             let InternalKey {
                 user_key,
@@ -473,6 +456,8 @@ impl RangeCacheIterator {
                 } else {
                     self.saved_user_key.clear();
                     self.saved_user_key.extend_from_slice(user_key);
+                    // self.saved_user_key =
+                    // Key::from_encoded(user_key.to_vec()).into_raw().unwrap();
 
                     match v_type {
                         ValueType::Deletion => {
@@ -489,7 +474,7 @@ impl RangeCacheIterator {
                 skip_saved_key = false;
             }
 
-            self.iter.next();
+            self.iter.next(guard);
         }
 
         self.valid = false;
@@ -499,24 +484,26 @@ impl RangeCacheIterator {
         seq <= self.sequence_number
     }
 
-    fn seek_internal(&mut self, key: &[u8]) -> Result<bool> {
-        self.iter.seek(key);
+    fn seek_internal(&mut self, key: &InternalBytes) -> Result<bool> {
+        let guard = &epoch::pin();
+        self.iter.seek(key, guard);
         if self.iter.valid() {
-            self.find_next_visible_key(false);
+            self.find_next_visible_key(false, guard);
         }
         Ok(self.valid)
     }
 
-    fn seek_for_prev_internal(&mut self, key: &[u8]) -> Result<bool> {
-        self.iter.seek_for_prev(key);
-        self.prev_internal();
+    fn seek_for_prev_internal(&mut self, key: &InternalBytes) -> Result<bool> {
+        let guard = &epoch::pin();
+        self.iter.seek_for_prev(key, guard);
+        self.prev_internal(guard);
 
         Ok(self.valid)
     }
 
-    fn prev_internal(&mut self) {
+    fn prev_internal(&mut self, guard: &epoch::Guard) {
         while self.iter.valid() {
-            let InternalKey { user_key, .. } = decode_key(self.iter.key());
+            let InternalKey { user_key, .. } = decode_key(self.iter.key().as_slice());
             self.saved_user_key.clear();
             self.saved_user_key.extend_from_slice(user_key);
 
@@ -531,11 +518,11 @@ impl RangeCacheIterator {
                 }
             }
 
-            if !self.find_value_for_current_key() {
+            if !self.find_value_for_current_key(guard) {
                 return;
             }
 
-            self.find_user_key_before_saved();
+            self.find_user_key_before_saved(guard);
 
             if self.valid {
                 return;
@@ -550,7 +537,7 @@ impl RangeCacheIterator {
     // Looks at the entries with user key `saved_user_key` and finds the most
     // up-to-date value for it. Sets `valid`` to true if the value is found and is
     // ready to be presented to the user through value().
-    fn find_value_for_current_key(&mut self) -> bool {
+    fn find_value_for_current_key(&mut self, guard: &epoch::Guard) -> bool {
         assert!(self.iter.valid());
         let mut last_key_entry_type = ValueType::Deletion;
         while self.iter.valid() {
@@ -558,7 +545,7 @@ impl RangeCacheIterator {
                 user_key,
                 sequence,
                 v_type,
-            } = decode_key(self.iter.key());
+            } = decode_key(self.iter.key().as_slice());
 
             if !self.is_visible(sequence) || self.saved_user_key != user_key {
                 // no further version is visible or the user key changed
@@ -568,14 +555,14 @@ impl RangeCacheIterator {
             last_key_entry_type = v_type;
             match v_type {
                 ValueType::Value => {
-                    self.saved_value = Some(self.iter.value().clone());
+                    self.saved_value = Some(self.iter.value().clone_bytes());
                 }
                 ValueType::Deletion => {
                     self.saved_value.take();
                 }
             }
 
-            self.iter.prev();
+            self.iter.prev(guard);
         }
 
         self.valid = last_key_entry_type == ValueType::Value;
@@ -584,15 +571,15 @@ impl RangeCacheIterator {
 
     // Move backwards until the key smaller than `saved_user_key`.
     // Changes valid only if return value is false.
-    fn find_user_key_before_saved(&mut self) {
+    fn find_user_key_before_saved(&mut self, guard: &epoch::Guard) {
         while self.iter.valid() {
-            let InternalKey { user_key, .. } = decode_key(self.iter.key());
+            let InternalKey { user_key, .. } = decode_key(self.iter.key().as_slice());
 
             if user_key < self.saved_user_key.as_slice() {
                 return;
             }
 
-            self.iter.prev();
+            self.iter.prev(guard);
         }
     }
 }
@@ -615,10 +602,11 @@ impl Iterator for RangeCacheIterator {
     fn next(&mut self) -> Result<bool> {
         assert!(self.valid);
         assert!(self.direction == Direction::Forward);
-        self.iter.next();
+        let guard = &epoch::pin();
+        self.iter.next(guard);
         self.valid = self.iter.valid();
         if self.valid {
-            self.find_next_visible_key(true);
+            self.find_next_visible_key(true, guard);
         }
         Ok(self.valid)
     }
@@ -626,7 +614,8 @@ impl Iterator for RangeCacheIterator {
     fn prev(&mut self) -> Result<bool> {
         assert!(self.valid);
         assert!(self.direction == Direction::Backward);
-        self.prev_internal();
+        let guard = &epoch::pin();
+        self.prev_internal(guard);
         Ok(self.valid)
     }
 
@@ -643,7 +632,7 @@ impl Iterator for RangeCacheIterator {
             key
         };
 
-        let seek_key = encode_seek_key(seek_key, self.sequence_number, VALUE_TYPE_FOR_SEEK);
+        let seek_key = encode_seek_key(seek_key, self.sequence_number);
         self.seek_internal(&seek_key)
     }
 
@@ -655,13 +644,9 @@ impl Iterator for RangeCacheIterator {
         }
 
         let seek_key = if key > self.upper_bound.as_slice() {
-            encode_seek_key(
-                self.upper_bound.as_slice(),
-                u64::MAX,
-                VALUE_TYPE_FOR_SEEK_FOR_PREV,
-            )
+            encode_seek_for_prev_key(self.upper_bound.as_slice(), u64::MAX)
         } else {
-            encode_seek_key(key, 0, VALUE_TYPE_FOR_SEEK_FOR_PREV)
+            encode_seek_for_prev_key(key, 0)
         };
 
         self.seek_for_prev_internal(&seek_key)
@@ -670,15 +655,14 @@ impl Iterator for RangeCacheIterator {
     fn seek_to_first(&mut self) -> Result<bool> {
         assert!(self.prefix_extractor.is_none());
         self.direction = Direction::Forward;
-        let seek_key =
-            encode_seek_key(&self.lower_bound, self.sequence_number, VALUE_TYPE_FOR_SEEK);
+        let seek_key = encode_seek_key(&self.lower_bound, self.sequence_number);
         self.seek_internal(&seek_key)
     }
 
     fn seek_to_last(&mut self) -> Result<bool> {
         assert!(self.prefix_extractor.is_none());
         self.direction = Direction::Backward;
-        let seek_key = encode_seek_key(&self.upper_bound, u64::MAX, VALUE_TYPE_FOR_SEEK_FOR_PREV);
+        let seek_key = encode_seek_for_prev_key(&self.upper_bound, u64::MAX);
         self.seek_for_prev_internal(&seek_key)
     }
 
@@ -763,7 +747,7 @@ impl Iterable for RangeCacheSnapshot {
     type Iterator = RangeCacheIterator;
 
     fn iterator_opt(&self, cf: &str, opts: IterOptions) -> Result<Self::Iterator> {
-        let iter = self.skiplist_engine.data[cf_to_id(cf)].iter();
+        let iter = self.skiplist_engine.data[cf_to_id(cf)].owned_iter();
         let prefix_extractor = if opts.prefix_same_as_start() {
             Some(FixedSuffixSliceTransform::new(8))
         } else {
@@ -776,12 +760,25 @@ impl Iterable for RangeCacheSnapshot {
             return Err(Error::BoundaryNotSet);
         }
 
+        let (lower_bound, upper_bound) = (lower_bound.unwrap(), upper_bound.unwrap());
+        if lower_bound < self.snapshot_meta.range.start
+            || upper_bound > self.snapshot_meta.range.end
+        {
+            return Err(Error::Other(box_err!(
+                "the bounderies required [{}, {}] exceeds the range of the snapshot [{}, {}]",
+                log_wrappers::Value(&lower_bound),
+                log_wrappers::Value(&upper_bound),
+                log_wrappers::Value(&self.snapshot_meta.range.start),
+                log_wrappers::Value(&self.snapshot_meta.range.end)
+            )));
+        }
+
         Ok(RangeCacheIterator {
             cf: String::from(cf),
             valid: false,
             prefix: None,
-            lower_bound: lower_bound.unwrap(),
-            upper_bound: upper_bound.unwrap(),
+            lower_bound,
+            upper_bound,
             iter,
             sequence_number: self.sequence_number(),
             saved_user_key: vec![],
@@ -807,20 +804,21 @@ impl Peekable for RangeCacheSnapshot {
     ) -> Result<Option<Self::DbVector>> {
         fail::fail_point!("on_range_cache_get_value");
         let seq = self.sequence_number();
-        let mut iter = self.skiplist_engine.data[cf_to_id(cf)].iter();
-        let seek_key = encode_seek_key(key, self.sequence_number(), VALUE_TYPE_FOR_SEEK);
+        let mut iter = self.skiplist_engine.data[cf_to_id(cf)].owned_iter();
+        let seek_key = encode_seek_key(key, self.sequence_number());
 
-        iter.seek(&seek_key);
+        let guard = &epoch::pin();
+        iter.seek(&seek_key, guard);
         if !iter.valid() {
             return Ok(None);
         }
 
-        match decode_key(iter.key()) {
+        match decode_key(iter.key().as_slice()) {
             InternalKey {
                 user_key,
                 v_type: ValueType::Value,
                 ..
-            } if user_key == key => Ok(Some(RangeCacheDbVector(iter.value().clone()))),
+            } if user_key == key => Ok(Some(RangeCacheDbVector(iter.value().clone_bytes()))),
             _ => Ok(None),
         }
     }
@@ -859,30 +857,33 @@ impl<'a> PartialEq<&'a [u8]> for RangeCacheDbVector {
 
 #[cfg(test)]
 mod tests {
-    use core::{ops::Range, slice::SlicePattern};
-    use std::{iter, iter::StepBy, ops::Deref, sync::Arc, time::Duration};
+    use core::ops::Range;
+    use std::{
+        iter::{self, StepBy},
+        ops::Deref,
+        sync::Arc,
+        time::Duration,
+    };
 
     use bytes::{BufMut, Bytes};
+    use crossbeam::epoch;
     use engine_traits::{
         CacheRange, IterOptions, Iterable, Iterator, Peekable, RangeCacheEngine, ReadOptions,
     };
-    use skiplist_rs::Skiplist;
+    use skiplist_rs::SkipList;
 
-    use super::{cf_to_id, GlobalMemoryLimiter, RangeCacheIterator, SkiplistEngine};
+    use super::{cf_to_id, RangeCacheIterator, SkiplistEngine};
     use crate::{
         keys::{
             construct_key, construct_user_key, construct_value, decode_key, encode_key,
-            InternalKeyComparator, ValueType,
+            InternalBytes, ValueType,
         },
         RangeCacheMemoryEngine,
     };
 
     #[test]
     fn test_snapshot() {
-        let engine = RangeCacheMemoryEngine::new(
-            Arc::new(GlobalMemoryLimiter::default()),
-            Duration::from_secs(1),
-        );
+        let engine = RangeCacheMemoryEngine::new(Duration::from_secs(1));
         let range = CacheRange::new(b"k00".to_vec(), b"k10".to_vec());
         engine.new_range(range.clone());
 
@@ -960,33 +961,37 @@ mod tests {
     }
 
     fn fill_data_in_skiplist(
-        sl: Arc<Skiplist<InternalKeyComparator, GlobalMemoryLimiter>>,
+        sl: Arc<SkipList<InternalBytes, InternalBytes>>,
         key_range: StepBy<Range<u64>>,
         mvcc_range: Range<u64>,
         mut start_seq: u64,
     ) {
+        let guard = &epoch::pin();
         for mvcc in mvcc_range {
             for i in key_range.clone() {
                 let key = construct_key(i, mvcc);
                 let val = construct_value(i, mvcc);
                 let key = encode_key(&key, start_seq, ValueType::Value);
-                sl.put(key, Bytes::from(val));
+                sl.insert(key, InternalBytes::from_vec(val.into_bytes()), guard)
+                    .release(guard);
             }
             start_seq += 1;
         }
     }
 
     fn delete_data_in_skiplist(
-        sl: Arc<Skiplist<InternalKeyComparator, GlobalMemoryLimiter>>,
+        sl: Arc<SkipList<InternalBytes, InternalBytes>>,
         key_range: StepBy<Range<u64>>,
         mvcc_range: Range<u64>,
         mut seq: u64,
     ) {
+        let guard = &epoch::pin();
         for i in key_range {
             for mvcc in mvcc_range.clone() {
                 let key = construct_key(i, mvcc);
                 let key = encode_key(&key, seq, ValueType::Deletion);
-                sl.put(key, Bytes::default());
+                sl.insert(key, InternalBytes::from_bytes(Bytes::default()), guard)
+                    .release(guard);
             }
             seq += 1;
         }
@@ -1000,7 +1005,7 @@ mod tests {
     }
 
     fn put_key_val(
-        sl: &Arc<Skiplist<InternalKeyComparator, GlobalMemoryLimiter>>,
+        sl: &Arc<SkipList<InternalBytes, InternalBytes>>,
         key: &str,
         val: &str,
         mvcc: u64,
@@ -1008,18 +1013,26 @@ mod tests {
     ) {
         let key = construct_mvcc_key(key, mvcc);
         let key = encode_key(&key, seq, ValueType::Value);
-        sl.put(key, Bytes::from(val.to_owned()));
+        let guard = &epoch::pin();
+        sl.insert(
+            key,
+            InternalBytes::from_vec(val.to_owned().into_bytes()),
+            guard,
+        )
+        .release(guard);
     }
 
     fn delete_key(
-        sl: &Arc<Skiplist<InternalKeyComparator, GlobalMemoryLimiter>>,
+        sl: &Arc<SkipList<InternalBytes, InternalBytes>>,
         key: &str,
         mvcc: u64,
         seq: u64,
     ) {
         let key = construct_mvcc_key(key, mvcc);
         let key = encode_key(&key, seq, ValueType::Deletion);
-        sl.put(key, Bytes::default());
+        let guard = &epoch::pin();
+        sl.insert(key, InternalBytes::from_vec(b"".to_vec()), guard)
+            .release(guard);
     }
 
     fn verify_key_value(k: &[u8], v: &[u8], i: u64, mvcc: u64) {
@@ -1061,8 +1074,8 @@ mod tests {
 
     #[test]
     fn test_get_value() {
-        let engine = RangeCacheMemoryEngine::new(Arc::default(), Duration::from_secs(1));
-        let range = CacheRange::new(b"k000".to_vec(), b"k100".to_vec());
+        let engine = RangeCacheMemoryEngine::new(Duration::from_secs(1));
+        let range = CacheRange::new(b"".to_vec(), b"z".to_vec());
         engine.new_range(range.clone());
 
         {
@@ -1140,8 +1153,8 @@ mod tests {
 
     #[test]
     fn test_iterator_forawrd() {
-        let engine = RangeCacheMemoryEngine::new(Arc::default(), Duration::from_secs(1));
-        let range = CacheRange::new(b"k000".to_vec(), b"k100".to_vec());
+        let engine = RangeCacheMemoryEngine::new(Duration::from_secs(1));
+        let range = CacheRange::new(b"".to_vec(), b"z".to_vec());
         engine.new_range(range.clone());
         let step: i32 = 2;
 
@@ -1326,8 +1339,8 @@ mod tests {
 
     #[test]
     fn test_iterator_backward() {
-        let engine = RangeCacheMemoryEngine::new(Arc::default(), Duration::from_secs(1));
-        let range = CacheRange::new(b"k000".to_vec(), b"k100".to_vec());
+        let engine = RangeCacheMemoryEngine::new(Duration::from_secs(1));
+        let range = CacheRange::new(b"".to_vec(), b"z".to_vec());
         engine.new_range(range.clone());
         let step: i32 = 2;
 
@@ -1429,8 +1442,8 @@ mod tests {
 
     #[test]
     fn test_seq_visibility() {
-        let engine = RangeCacheMemoryEngine::new(Arc::default(), Duration::from_secs(1));
-        let range = CacheRange::new(b"k000".to_vec(), b"k100".to_vec());
+        let engine = RangeCacheMemoryEngine::new(Duration::from_secs(1));
+        let range = CacheRange::new(b"".to_vec(), b"z".to_vec());
         engine.new_range(range.clone());
         let step: i32 = 2;
 
@@ -1455,10 +1468,8 @@ mod tests {
         }
 
         let mut iter_opt = IterOptions::default();
-        let lower_bound = b"";
-        let upper_bound = b"z";
-        iter_opt.set_upper_bound(upper_bound, 0);
-        iter_opt.set_lower_bound(lower_bound, 0);
+        iter_opt.set_upper_bound(&range.end, 0);
+        iter_opt.set_lower_bound(&range.start, 0);
 
         // seq num 1
         {
@@ -1554,8 +1565,8 @@ mod tests {
 
     #[test]
     fn test_seq_visibility_backward() {
-        let engine = RangeCacheMemoryEngine::new(Arc::default(), Duration::from_secs(1));
-        let range = CacheRange::new(b"k000".to_vec(), b"k100".to_vec());
+        let engine = RangeCacheMemoryEngine::new(Duration::from_secs(1));
+        let range = CacheRange::new(b"".to_vec(), b"z".to_vec());
         engine.new_range(range.clone());
 
         {
@@ -1579,10 +1590,8 @@ mod tests {
         }
 
         let mut iter_opt = IterOptions::default();
-        let lower_bound = b"";
-        let upper_bound = b"z";
-        iter_opt.set_upper_bound(upper_bound, 0);
-        iter_opt.set_lower_bound(lower_bound, 0);
+        iter_opt.set_upper_bound(&range.end, 0);
+        iter_opt.set_lower_bound(&range.start, 0);
 
         // seq num 1
         {
@@ -1650,17 +1659,15 @@ mod tests {
     }
 
     #[test]
-    fn test_iter_use_skip() {
+    fn test_iter_user_skip() {
         let mut iter_opt = IterOptions::default();
-        let lower_bound = b"";
-        let upper_bound = b"z";
-        iter_opt.set_upper_bound(upper_bound, 0);
-        iter_opt.set_lower_bound(lower_bound, 0);
-        let range = CacheRange::new(b"k000".to_vec(), b"k100".to_vec());
+        let range = CacheRange::new(b"".to_vec(), b"z".to_vec());
+        iter_opt.set_upper_bound(&range.end, 0);
+        iter_opt.set_lower_bound(&range.start, 0);
 
         // backward, all put
         {
-            let engine = RangeCacheMemoryEngine::new(Arc::default(), Duration::from_secs(1));
+            let engine = RangeCacheMemoryEngine::new(Duration::from_secs(1));
             engine.new_range(range.clone());
             let sl = {
                 let mut core = engine.core.write();
@@ -1697,7 +1704,7 @@ mod tests {
 
         // backward, all deletes
         {
-            let engine = RangeCacheMemoryEngine::new(Arc::default(), Duration::from_secs(1));
+            let engine = RangeCacheMemoryEngine::new(Duration::from_secs(1));
             engine.new_range(range.clone());
             let sl = {
                 let mut core = engine.core.write();
@@ -1727,7 +1734,7 @@ mod tests {
 
         // backward, all deletes except for last put, last put's seq
         {
-            let engine = RangeCacheMemoryEngine::new(Arc::default(), Duration::from_secs(1));
+            let engine = RangeCacheMemoryEngine::new(Duration::from_secs(1));
             engine.new_range(range.clone());
             let sl = {
                 let mut core = engine.core.write();
@@ -1759,7 +1766,7 @@ mod tests {
 
         // all deletes except for last put, deletions' seq
         {
-            let engine = RangeCacheMemoryEngine::new(Arc::default(), Duration::from_secs(1));
+            let engine = RangeCacheMemoryEngine::new(Duration::from_secs(1));
             engine.new_range(range.clone());
             let sl = {
                 let mut core = engine.core.write();
@@ -1790,7 +1797,7 @@ mod tests {
 
     #[test]
     fn test_prefix_seek() {
-        let engine = RangeCacheMemoryEngine::new(Arc::default(), Duration::from_secs(1));
+        let engine = RangeCacheMemoryEngine::new(Duration::from_secs(1));
         let range = CacheRange::new(b"k000".to_vec(), b"k100".to_vec());
         engine.new_range(range.clone());
 
@@ -1800,12 +1807,14 @@ mod tests {
             core.range_manager.set_safe_point(&range, 5);
             let sl = core.engine.data[cf_to_id("write")].clone();
 
+            let guard = &epoch::pin();
             for i in 1..5 {
                 for mvcc in 10..20 {
                     let user_key = construct_key(i, mvcc);
                     let internal_key = encode_key(&user_key, 10, ValueType::Value);
                     let v = format!("v{:02}{:02}", i, mvcc);
-                    sl.put(internal_key, v);
+                    sl.insert(internal_key, InternalBytes::from_vec(v.into_bytes()), guard)
+                        .release(guard);
                 }
             }
         }
@@ -1856,7 +1865,7 @@ mod tests {
 
     #[test]
     fn test_skiplist_engine_evict_range() {
-        let sl_engine = SkiplistEngine::new(Arc::default());
+        let sl_engine = SkiplistEngine::new();
         sl_engine.data.iter().for_each(|sl| {
             fill_data_in_skiplist(sl.clone(), (1..60).step_by(1), 1..2, 1);
         });
@@ -1864,20 +1873,21 @@ mod tests {
         let evict_range = CacheRange::new(construct_user_key(20), construct_user_key(40));
         sl_engine.delete_range(&evict_range);
         sl_engine.data.iter().for_each(|sl| {
-            let mut iter = sl.iter();
-            iter.seek_to_first();
+            let mut iter = sl.owned_iter();
+            let guard = &epoch::pin();
+            iter.seek_to_first(guard);
             for i in 1..20 {
-                let internal_key = decode_key(iter.key());
+                let internal_key = decode_key(iter.key().as_slice());
                 let expected_key = construct_key(i, 1);
                 assert_eq!(internal_key.user_key, &expected_key);
-                iter.next();
+                iter.next(guard);
             }
 
             for i in 40..60 {
-                let internal_key = decode_key(iter.key());
+                let internal_key = decode_key(iter.key().as_slice());
                 let expected_key = construct_key(i, 1);
                 assert_eq!(internal_key.user_key, &expected_key);
-                iter.next();
+                iter.next(guard);
             }
             assert!(!iter.valid());
         });
@@ -1885,11 +1895,12 @@ mod tests {
 
     #[test]
     fn test_evict_range_without_snapshot() {
-        let mut engine = RangeCacheMemoryEngine::new(Arc::default(), Duration::from_secs(1));
+        let mut engine = RangeCacheMemoryEngine::new(Duration::from_secs(1));
         let range = CacheRange::new(construct_user_key(0), construct_user_key(30));
         let evict_range = CacheRange::new(construct_user_key(10), construct_user_key(20));
         engine.new_range(range.clone());
 
+        let guard = &epoch::pin();
         {
             let mut core = engine.core.write();
             core.range_manager.set_range_readable(&range, true);
@@ -1899,22 +1910,18 @@ mod tests {
                 let user_key = construct_key(i, 10);
                 let internal_key = encode_key(&user_key, 10, ValueType::Value);
                 let v = construct_value(i, 10);
-                sl.put(internal_key.clone(), v.clone());
+                sl.insert(
+                    internal_key.clone(),
+                    InternalBytes::from_vec(v.into_bytes()),
+                    guard,
+                )
+                .release(guard);
             }
         }
 
         engine.evict_range(&evict_range);
         assert!(engine.snapshot(range.clone(), 10, 200).is_none());
         assert!(engine.snapshot(evict_range, 10, 200).is_none());
-
-        {
-            let removed = engine.memory_limiter.removed.lock().unwrap();
-            for i in 10..20 {
-                let user_key = construct_key(i, 10);
-                let internal_key = encode_key(&user_key, 10, ValueType::Value);
-                assert!(removed.contains(internal_key.as_slice()));
-            }
-        }
 
         let r_left = CacheRange::new(construct_user_key(0), construct_user_key(10));
         let r_right = CacheRange::new(construct_user_key(20), construct_user_key(30));
@@ -1929,21 +1936,24 @@ mod tests {
         iter.seek_to_first().unwrap();
         verify_key_values(&mut iter, (0..10).step_by(1), 10..11, true, true);
 
+        let snap_right = engine.snapshot(r_right, 10, 200).unwrap();
         let lower_bound = construct_user_key(20);
         let upper_bound = construct_user_key(30);
         iter_opt.set_upper_bound(&upper_bound, 0);
         iter_opt.set_lower_bound(&lower_bound, 0);
-        let mut iter = snap_left.iterator_opt("write", iter_opt).unwrap();
+        let mut iter = snap_right.iterator_opt("write", iter_opt).unwrap();
         iter.seek_to_first().unwrap();
         verify_key_values(&mut iter, (20..30).step_by(1), 10..11, true, true);
     }
 
     #[test]
     fn test_evict_range_with_snapshot() {
-        let mut engine = RangeCacheMemoryEngine::new(Arc::default(), Duration::from_secs(1));
+        let mut engine = RangeCacheMemoryEngine::new(Duration::from_secs(1));
         let range = CacheRange::new(construct_user_key(0), construct_user_key(30));
         let evict_range = CacheRange::new(construct_user_key(10), construct_user_key(20));
         engine.new_range(range.clone());
+
+        let guard = &epoch::pin();
         {
             let mut core = engine.core.write();
             core.range_manager.set_range_readable(&range, true);
@@ -1953,7 +1963,12 @@ mod tests {
                 let user_key = construct_key(i, 10);
                 let internal_key = encode_key(&user_key, 10, ValueType::Value);
                 let v = construct_value(i, 10);
-                sl.put(internal_key.clone(), v.clone());
+                sl.insert(
+                    internal_key.clone(),
+                    InternalBytes::from_vec(v.clone().into_bytes()),
+                    guard,
+                )
+                .release(guard);
             }
         }
 
@@ -1969,31 +1984,34 @@ mod tests {
         let range_left_eviction = CacheRange::new(construct_user_key(0), construct_user_key(5));
         engine.evict_range(&range_left_eviction);
 
-        {
-            let removed = engine.memory_limiter.removed.lock().unwrap();
-            assert!(removed.is_empty());
-        }
+        // todo(SpadeA): use memory limiter to check the removal of the node
+        // {
+        //     let removed = engine.memory_limiter.removed.lock().unwrap();
+        //     assert!(removed.is_empty());
+        // }
 
         drop(s1);
-        {
-            let removed = engine.memory_limiter.removed.lock().unwrap();
-            for i in 10..20 {
-                let user_key = construct_key(i, 10);
-                let internal_key = encode_key(&user_key, 10, ValueType::Value);
-                assert!(!removed.contains(internal_key.as_slice()));
-            }
-        }
+        // todo(SpadeA): use memory limiter to check the removal of the node
+        // {
+        //     let removed = engine.memory_limiter.removed.lock().unwrap();
+        //     for i in 10..20 {
+        //         let user_key = construct_key(i, 10);
+        //         let internal_key = encode_key(&user_key, 10, ValueType::Value);
+        //         assert!(!removed.contains(internal_key.as_slice()));
+        //     }
+        // }
 
         drop(s2);
-        // s2 is dropped, so the range of `evict_range` is removed. The snapshot of s3
-        // and s4 does not prevent it as they are not overlapped.
-        {
-            let removed = engine.memory_limiter.removed.lock().unwrap();
-            for i in 10..20 {
-                let user_key = construct_key(i, 10);
-                let internal_key = encode_key(&user_key, 10, ValueType::Value);
-                assert!(removed.contains(internal_key.as_slice()));
-            }
-        }
+        // todo(SpadeA): use memory limiter to check the removal of the node
+        // s2 is dropped, so the range of `evict_range` is removed. The snapshot
+        // of s3 and s4 does not prevent it as they are not overlapped.
+        // {
+        //     let removed = engine.memory_limiter.removed.lock().unwrap();
+        //     for i in 10..20 {
+        //         let user_key = construct_key(i, 10);
+        //         let internal_key = encode_key(&user_key, 10,
+        // ValueType::Value);         assert!(removed.
+        // contains(internal_key.as_slice()));     }
+        // }
     }
 }
