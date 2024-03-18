@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 
 use bytes::Bytes;
+use crossbeam::epoch;
 use engine_traits::{
     CacheRange, Mutable, Result, WriteBatch, WriteBatchExt, WriteOptions, CF_DEFAULT,
 };
@@ -8,7 +9,7 @@ use tikv_util::box_err;
 
 use crate::{
     engine::{cf_to_id, RangeCacheMemoryEngineCore, SkiplistEngine},
-    keys::{encode_key, ValueType},
+    keys::{encode_key, InternalBytes, ValueType},
     range_manager::RangeManager,
     RangeCacheMemoryEngine,
 };
@@ -92,9 +93,11 @@ impl RangeCacheWriteBatch {
                     .extend(write_batches.into_iter());
             }
         }
+
+        let guard = &epoch::pin();
         filtered_keys
             .into_iter()
-            .try_for_each(|e| e.write_to_memory(&engine, seq))
+            .try_for_each(|e| e.write_to_memory(&engine, seq, guard))
     }
 }
 
@@ -105,14 +108,16 @@ enum WriteBatchEntryInternal {
 }
 
 impl WriteBatchEntryInternal {
-    fn encode(&self, key: &[u8], seq: u64) -> (Bytes, Bytes) {
+    fn encode(&self, key: &[u8], seq: u64) -> (InternalBytes, InternalBytes) {
         match self {
-            WriteBatchEntryInternal::PutValue(value) => {
-                (encode_key(key, seq, ValueType::Value), value.clone())
-            }
-            WriteBatchEntryInternal::Deletion => {
-                (encode_key(key, seq, ValueType::Deletion), Bytes::new())
-            }
+            WriteBatchEntryInternal::PutValue(value) => (
+                encode_key(key, seq, ValueType::Value),
+                InternalBytes::from_bytes(value.clone()),
+            ),
+            WriteBatchEntryInternal::Deletion => (
+                encode_key(key, seq, ValueType::Deletion),
+                InternalBytes::from_bytes(Bytes::new()),
+            ),
         }
     }
     fn data_size(&self) -> usize {
@@ -148,7 +153,7 @@ impl RangeCacheWriteBatchEntry {
     }
 
     #[inline]
-    pub fn encode(&self, seq: u64) -> (Bytes, Bytes) {
+    pub fn encode(&self, seq: u64) -> (InternalBytes, InternalBytes) {
         self.inner.encode(&self.key, seq)
     }
 
@@ -192,10 +197,15 @@ impl RangeCacheWriteBatchEntry {
     }
 
     #[inline]
-    pub fn write_to_memory(&self, skiplist_engine: &SkiplistEngine, seq: u64) -> Result<()> {
+    pub fn write_to_memory(
+        &self,
+        skiplist_engine: &SkiplistEngine,
+        seq: u64,
+        guard: &epoch::Guard,
+    ) -> Result<()> {
         let handle = &skiplist_engine.data[self.cf];
         let (key, value) = self.encode(seq);
-        let _ = handle.put(key, value);
+        handle.insert(key, value, guard).release(guard);
         Ok(())
     }
 }
@@ -308,12 +318,28 @@ mod tests {
     use std::{sync::Arc, time::Duration};
 
     use engine_traits::{CacheRange, Peekable, RangeCacheEngine, WriteBatch};
+    use skiplist_rs::SkipList;
 
     use super::*;
 
+    // We should not use skiplist.get directly as we only cares keys without
+    // sequence number suffix
+    fn get_value(
+        sl: &Arc<SkipList<InternalBytes, InternalBytes>>,
+        key: &InternalBytes,
+        guard: &epoch::Guard,
+    ) -> Option<InternalBytes> {
+        let mut iter = sl.owned_iter();
+        iter.seek(key, guard);
+        if iter.valid() && iter.key().same_user_key_with(key) {
+            return Some(iter.value().clone());
+        }
+        None
+    }
+
     #[test]
     fn test_write_to_skiplist() {
-        let engine = RangeCacheMemoryEngine::new(Arc::default(), Duration::from_secs(1));
+        let engine = RangeCacheMemoryEngine::new(Duration::from_secs(1));
         let r = CacheRange::new(b"".to_vec(), b"z".to_vec());
         engine.new_range(r.clone());
         {
@@ -326,13 +352,14 @@ mod tests {
         wb.set_sequence_number(1).unwrap();
         assert_eq!(wb.write().unwrap(), 1);
         let sl = engine.core.read().unwrap().engine().data[cf_to_id(CF_DEFAULT)].clone();
-        let actual = sl.get(&encode_key(b"aaa", 1, ValueType::Value)).unwrap();
-        assert_eq!(&b"bbb"[..], actual.value())
+        let guard = &crossbeam::epoch::pin();
+        let val = get_value(&sl, &encode_key(b"aaa", 2, ValueType::Value), guard).unwrap();
+        assert_eq!(&b"bbb"[..], val.as_slice());
     }
 
     #[test]
     fn test_savepoints() {
-        let engine = RangeCacheMemoryEngine::new(Arc::default(), Duration::from_secs(1));
+        let engine = RangeCacheMemoryEngine::new(Duration::from_secs(1));
         let r = CacheRange::new(b"".to_vec(), b"z".to_vec());
         engine.new_range(r.clone());
         {
@@ -349,14 +376,15 @@ mod tests {
         wb.set_sequence_number(1).unwrap();
         assert_eq!(wb.write().unwrap(), 1);
         let sl = engine.core.read().unwrap().engine().data[cf_to_id(CF_DEFAULT)].clone();
-        let actual = sl.get(&encode_key(b"aaa", 1, ValueType::Value)).unwrap();
-        assert_eq!(&b"bbb"[..], actual.value());
-        assert!(sl.get(&encode_key(b"ccc", 1, ValueType::Value)).is_none())
+        let guard = &crossbeam::epoch::pin();
+        let val = get_value(&sl, &encode_key(b"aaa", 1, ValueType::Value), guard).unwrap();
+        assert_eq!(&b"bbb"[..], val.as_slice());
+        assert!(get_value(&sl, &encode_key(b"ccc", 1, ValueType::Value), guard).is_none())
     }
 
     #[test]
     fn test_put_write_clear_delete_put_write() {
-        let engine = RangeCacheMemoryEngine::new(Arc::default(), Duration::from_secs(1));
+        let engine = RangeCacheMemoryEngine::new(Duration::from_secs(1));
         let r = CacheRange::new(b"".to_vec(), b"z".to_vec());
         engine.new_range(r.clone());
         {
