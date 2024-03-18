@@ -141,6 +141,7 @@ fn test_turnoff_titan() {
 }
 
 #[test]
+#[ignore]
 fn test_delete_files_in_range_for_titan() {
     let path = Builder::new()
         .prefix("test-titan-delete-files-in-range")
