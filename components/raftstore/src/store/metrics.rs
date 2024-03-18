@@ -555,6 +555,19 @@ lazy_static! {
             exponential_buckets(8.0, 2.0, 22).unwrap()
         ).unwrap();
 
+    pub static ref STORE_APPLY_KEY_SIZE_HISTOGRAM: Histogram =
+        register_histogram!(
+            "tikv_raftstore_apply_key_size",
+            "Bucketed histogram of apply key size.",
+            exponential_buckets(8.0, 2.0, 17).unwrap()
+        ).unwrap();
+    pub static ref STORE_APPLY_VALUE_SIZE_HISTOGRAM: Histogram =
+        register_histogram!(
+            "tikv_raftstore_apply_value_size",
+            "Bucketed histogram of apply value size.",
+            exponential_buckets(8.0, 2.0, 23).unwrap()
+        ).unwrap();
+
     pub static ref REGION_HASH_COUNTER_VEC: IntCounterVec =
         register_int_counter_vec!(
             "tikv_raftstore_hash_total",
