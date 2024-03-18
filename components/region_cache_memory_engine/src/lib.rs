@@ -10,6 +10,7 @@ mod engine;
 pub mod keys;
 use std::time::Duration;
 
+pub mod region_label;
 pub use engine::RangeCacheMemoryEngine;
 pub mod range_manager;
 mod write_batch;
@@ -39,7 +40,7 @@ impl EngineConfig {
 
     pub fn config_for_test() -> EngineConfig {
         EngineConfig::new(
-            Duration::from_secs(60),
+            Duration::from_secs(600),
             ReadableSize::gb(1).0 as usize,
             ReadableSize::gb(2).0 as usize,
         )

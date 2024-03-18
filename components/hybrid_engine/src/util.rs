@@ -1,7 +1,5 @@
 // Copyright 2024 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::Arc;
-
 use engine_rocks::{util::new_engine, RocksEngine};
 use engine_traits::{Result, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use region_cache_memory_engine::{EngineConfig, RangeCacheMemoryEngine};
@@ -40,7 +38,7 @@ where
         path.path().to_str().unwrap(),
         &[CF_DEFAULT, CF_LOCK, CF_WRITE],
     )?;
-    let memory_engine = RangeCacheMemoryEngine::new(Arc::default(), config);
+    let memory_engine = RangeCacheMemoryEngine::new(config);
     configure_memory_engine_fn(&memory_engine);
     let hybrid_engine = HybridEngine::new(disk_engine, memory_engine);
     Ok((path, hybrid_engine))

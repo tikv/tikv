@@ -2909,7 +2909,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#05fc3f80ed50bac9932ca238e9dfbaadb7390965"
+source = "git+https://github.com/tikv/rust-rocksdb.git#fd7ed253c48062199cb9def8c981a90e97b4ae53"
 dependencies = [
  "bindgen 0.65.1",
  "bzip2-sys",
@@ -2928,7 +2928,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/tikv/rust-rocksdb.git#05fc3f80ed50bac9932ca238e9dfbaadb7390965"
+source = "git+https://github.com/tikv/rust-rocksdb.git#fd7ed253c48062199cb9def8c981a90e97b4ae53"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -4290,6 +4290,8 @@ dependencies = [
  "slog-global",
  "smallvec",
  "sst_importer",
+ "strum 0.20.0",
+ "strum_macros 0.24.3",
  "tempfile",
  "test_sst_importer",
  "thiserror",
@@ -4586,15 +4588,26 @@ dependencies = [
  "bytes",
  "collections",
  "crossbeam",
+ "dashmap",
  "engine_rocks",
  "engine_traits",
  "fail",
+ "futures 0.3.15",
  "keys",
+ "kvproto",
  "log_wrappers",
+ "parking_lot 0.12.1",
+ "pd_client",
+ "security",
+ "serde",
+ "serde_derive",
+ "serde_json",
  "skiplist-rs",
  "slog",
  "slog-global",
  "tempfile",
+ "test_pd",
+ "test_pd_client",
  "tikv_util",
  "txn_types",
  "yatp",
@@ -4783,7 +4796,7 @@ dependencies = [
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#05fc3f80ed50bac9932ca238e9dfbaadb7390965"
+source = "git+https://github.com/tikv/rust-rocksdb.git#fd7ed253c48062199cb9def8c981a90e97b4ae53"
 dependencies = [
  "libc 0.2.151",
  "librocksdb_sys",
@@ -5381,17 +5394,10 @@ checksum = "fa8f3741c7372e75519bd9346068370c9cdaabcc1f9599cbcf2a2719352286b7"
 [[package]]
 name = "skiplist-rs"
 version = "0.1.0"
-source = "git+https://github.com/tikv/skiplist-rs.git?branch=main#a9d27501ddfc17d6df9afababcaa6280f1af9e77"
+source = "git+https://github.com/tikv/skiplist-rs.git?branch=main#d158a040783715612b80785e03d239ba5deb8960"
 dependencies = [
- "bytes",
  "crossbeam-epoch",
  "crossbeam-utils",
- "fail",
- "rand 0.8.5",
- "scopeguard",
- "slog",
- "tikv-jemalloc-ctl",
- "tikv-jemallocator",
 ]
 
 [[package]]
@@ -5684,6 +5690,19 @@ dependencies = [
  "heck 0.3.1",
  "proc-macro2",
  "quote",
+ "syn 1.0.103",
+]
+
+[[package]]
+name = "strum_macros"
+version = "0.24.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1e385be0d24f186b4ce2f9982191e7101bb737312ad61c1f2f984f34bcf85d59"
+dependencies = [
+ "heck 0.4.1",
+ "proc-macro2",
+ "quote",
+ "rustversion",
  "syn 1.0.103",
 ]
 
@@ -6823,7 +6842,7 @@ dependencies = [
 [[package]]
 name = "tipb"
 version = "0.0.1"
-source = "git+https://github.com/pingcap/tipb.git#711da6fede03533302fbc9fa3a8fca3556683197"
+source = "git+https://github.com/pingcap/tipb.git#87f5b80908ab561fb7875c88114488cad15727b1"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
@@ -7052,7 +7071,7 @@ version = "1.6.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "97fee6b57c6a41524a810daee9286c02d7752c4253064d0b05472833a438f675"
 dependencies = [
- "cfg-if 1.0.0",
+ "cfg-if 0.1.10",
  "static_assertions",
 ]
 

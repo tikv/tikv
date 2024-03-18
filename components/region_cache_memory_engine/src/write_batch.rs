@@ -1,6 +1,7 @@
-use std::{collections::BTreeMap, sync::Arc};
+use std::sync::Arc;
 
 use bytes::Bytes;
+use crossbeam::epoch;
 use engine_traits::{
     CacheRange, Mutable, Result, WriteBatch, WriteBatchExt, WriteOptions, CF_DEFAULT,
 };
@@ -8,8 +9,8 @@ use tikv_util::{box_err, config::ReadableSize, error, warn};
 
 use crate::{
     background::BackgroundTask,
-    engine::{cf_to_id, RangeCacheMemoryEngineCore, SkiplistEngine},
-    keys::{encode_key, ValueType, ENC_KEY_SEQ_LENGTH},
+    engine::{cf_to_id, SkiplistEngine},
+    keys::{encode_key, InternalBytes, ValueType, ENC_KEY_SEQ_LENGTH},
     memory_limiter::{MemoryLimiter, MemoryUsage},
     range_manager::RangeManager,
     RangeCacheMemoryEngine,
@@ -17,8 +18,20 @@ use crate::{
 
 const NODE_OVERHEAD_SIZE_EXPECTATION: usize = 96;
 
+// `prepare_for_range` should be called before raft command apply for each peer
+// delegate. It sets `range_in_cache` and `pending_range_in_loading` which are
+// used to determine whether the writes of this peer should be buffered.
 pub struct RangeCacheWriteBatch {
+    // `range_in_cache` indicates that the range is cached in the memory engine and we should
+    // buffer the write in `buffer` which is consumed during the write is written in the kv engine.
+    range_in_cache: bool,
     buffer: Vec<RangeCacheWriteBatchEntry>,
+    // `pending_range_in_loading` indicates that the range is pending and loading snapshot in the
+    // background and we should buffer the further write for it in
+    // `pending_range_in_loading_buffer` which is cached in the memory engine and will be
+    // consumed after the snapshot has been loaded.
+    pending_range_in_loading: bool,
+    pending_range_in_loading_buffer: Vec<RangeCacheWriteBatchEntry>,
     engine: RangeCacheMemoryEngine,
     save_points: Vec<usize>,
     sequence_number: Option<u64>,
@@ -39,7 +52,10 @@ impl std::fmt::Debug for RangeCacheWriteBatch {
 impl From<&RangeCacheMemoryEngine> for RangeCacheWriteBatch {
     fn from(engine: &RangeCacheMemoryEngine) -> Self {
         Self {
+            range_in_cache: false,
+            pending_range_in_loading: false,
             buffer: Vec::new(),
+            pending_range_in_loading_buffer: Vec::new(),
             engine: engine.clone(),
             save_points: Vec::new(),
             sequence_number: None,
@@ -52,7 +68,11 @@ impl From<&RangeCacheMemoryEngine> for RangeCacheWriteBatch {
 impl RangeCacheWriteBatch {
     pub fn with_capacity(engine: &RangeCacheMemoryEngine, cap: usize) -> Self {
         Self {
+            range_in_cache: false,
+            pending_range_in_loading: false,
             buffer: Vec::with_capacity(cap),
+            // cache_buffer should need small capacity
+            pending_range_in_loading_buffer: Vec::new(),
             engine: engine.clone(),
             save_points: Vec::new(),
             sequence_number: None,
@@ -71,40 +91,47 @@ impl RangeCacheWriteBatch {
         Ok(())
     }
 
-    // todo(SpadeA): now, we cache all keys even for those that will not be written
-    // in to the memory engine.
     fn write_impl(&mut self, seq: u64) -> Result<()> {
-        self.engine.handle_pending_load();
-        let mut keys_to_cache: BTreeMap<CacheRange, Vec<(u64, RangeCacheWriteBatchEntry)>> =
-            BTreeMap::new();
-        let (engine, filtered_keys) = {
-            let core = self.engine.core().read().unwrap();
-            if core.range_manager().has_range_to_cache_write() {
-                self.buffer
-                    .iter()
-                    .for_each(|e| e.maybe_cached(seq, &core, &mut keys_to_cache));
-            }
-
-            (
-                core.engine().clone(),
-                self.buffer
-                    .iter()
-                    .filter(|&e| e.should_write_to_memory(core.range_manager()))
-                    .collect::<Vec<_>>(),
-            )
-        };
-        if !keys_to_cache.is_empty() {
-            let mut core = self.engine.core().write().unwrap();
-            for (range, write_batches) in keys_to_cache {
-                core.cached_write_batch
-                    .entry(range)
-                    .or_default()
-                    .extend(write_batches.into_iter());
-            }
-        }
-        filtered_keys
+        let (entries_to_write, engine) = self.engine.handle_pending_range_in_loading_buffer(
+            seq,
+            std::mem::take(&mut self.pending_range_in_loading_buffer),
+        );
+        let guard = &epoch::pin();
+        entries_to_write
             .into_iter()
-            .try_for_each(|e| e.write_to_memory(&engine, seq))
+            .chain(std::mem::take(&mut self.buffer))
+            .try_for_each(|e| e.write_to_memory(&engine, seq, guard))
+    }
+
+    pub fn set_range_in_cache(&mut self, v: bool) {
+        self.range_in_cache = v;
+    }
+
+    pub fn set_pending_range_in_loading(&mut self, v: bool) {
+        self.pending_range_in_loading = v;
+    }
+
+    fn process_cf_operation<F1, F2>(&mut self, entry_size: F1, entry: F2)
+    where
+        F1: FnOnce() -> usize,
+        F2: FnOnce() -> RangeCacheWriteBatchEntry,
+    {
+        if self.memory_usage_reach_hard_limit
+            || !(self.range_in_cache || self.pending_range_in_loading)
+        {
+            return;
+        }
+
+        let memory_expect = NODE_OVERHEAD_SIZE_EXPECTATION + entry_size();
+        if !self.memory_acquire(memory_expect) {
+            return;
+        }
+
+        if self.range_in_cache {
+            self.buffer.push(entry());
+        } else if self.pending_range_in_loading {
+            self.pending_range_in_loading_buffer.push(entry());
+        }
     }
 
     fn schedule_memory_check(&self) {
@@ -125,6 +152,8 @@ impl RangeCacheWriteBatch {
         }
     }
 
+    // return false means the memory usage reaches to hard limit and we have no
+    // quota to write to the engine
     fn memory_acquire(&mut self, mem_required: usize) -> bool {
         match self.memory_limiter.acquire(mem_required) {
             MemoryUsage::HardLimitReached(n) => {
@@ -158,14 +187,16 @@ enum WriteBatchEntryInternal {
 }
 
 impl WriteBatchEntryInternal {
-    fn encode(&self, key: &[u8], seq: u64) -> (Bytes, Bytes) {
+    fn encode(&self, key: &[u8], seq: u64) -> (InternalBytes, InternalBytes) {
         match self {
-            WriteBatchEntryInternal::PutValue(value) => {
-                (encode_key(key, seq, ValueType::Value), value.clone())
-            }
-            WriteBatchEntryInternal::Deletion => {
-                (encode_key(key, seq, ValueType::Deletion), Bytes::new())
-            }
+            WriteBatchEntryInternal::PutValue(value) => (
+                encode_key(key, seq, ValueType::Value),
+                InternalBytes::from_bytes(value.clone()),
+            ),
+            WriteBatchEntryInternal::Deletion => (
+                encode_key(key, seq, ValueType::Deletion),
+                InternalBytes::from_bytes(Bytes::new()),
+            ),
         }
     }
     fn data_size(&self) -> usize {
@@ -201,12 +232,20 @@ impl RangeCacheWriteBatchEntry {
     }
 
     #[inline]
-    pub fn encode(&self, seq: u64) -> (Bytes, Bytes) {
+    pub fn encode(&self, seq: u64) -> (InternalBytes, InternalBytes) {
         self.inner.encode(&self.key, seq)
     }
 
+    pub fn calc_put_entry_size(key: &[u8], value: &[u8]) -> usize {
+        key.len() + value.len() + ENC_KEY_SEQ_LENGTH
+    }
+
+    pub fn cal_delete_entry_size(key: &[u8]) -> usize {
+        key.len() + ENC_KEY_SEQ_LENGTH
+    }
+
     pub fn data_size(&self) -> usize {
-        self.key.len() + std::mem::size_of::<u64>() + self.inner.data_size()
+        self.key.len() + ENC_KEY_SEQ_LENGTH + self.inner.data_size()
     }
 
     #[inline]
@@ -214,43 +253,81 @@ impl RangeCacheWriteBatchEntry {
         range_manager.contains(&self.key)
     }
 
-    // keys will be inserted in `keys_to_cache` if they are to cached.
     #[inline]
-    pub fn maybe_cached(
+    pub fn write_to_memory(
         &self,
+        skiplist_engine: &SkiplistEngine,
         seq: u64,
-        engine_core: &RangeCacheMemoryEngineCore,
-        keys_to_cache: &mut BTreeMap<CacheRange, Vec<(u64, RangeCacheWriteBatchEntry)>>,
-    ) {
-        for r in &engine_core.range_manager().ranges_loading_snapshot {
-            if r.0.contains_key(&self.key) {
-                let range = r.0.clone();
-                keys_to_cache
-                    .entry(range)
-                    .or_default()
-                    .push((seq, self.clone()));
-                return;
-            }
-        }
-        for r in &engine_core.range_manager().ranges_loading_cached_write {
-            if r.contains_key(&self.key) {
-                let range = r.clone();
-                keys_to_cache
-                    .entry(range)
-                    .or_default()
-                    .push((seq, self.clone()));
-                return;
-            }
-        }
-    }
-
-    #[inline]
-    pub fn write_to_memory(&self, skiplist_engine: &SkiplistEngine, seq: u64) -> Result<()> {
+        guard: &epoch::Guard,
+    ) -> Result<()> {
         let handle = &skiplist_engine.data[self.cf];
         let (key, value) = self.encode(seq);
-        let _ = handle.put(key, value);
+        handle.insert(key, value, guard).release(guard);
         Ok(())
     }
+}
+
+// group_write_batch_entries classifies the entries to two categories according
+// to the infomation in range manager:
+// 1. entreis that can be written to memory engine directly
+// 2. entreis that need to be cached
+// For 2, we group the entries according to the range. The method uses the
+// property that entries in the same range are neighbors. Though that the method
+// still handles corretly even they are randomly positioned.
+pub fn group_write_batch_entries(
+    mut entries: Vec<RangeCacheWriteBatchEntry>,
+    range_manager: &RangeManager,
+) -> (
+    Vec<(CacheRange, Vec<RangeCacheWriteBatchEntry>)>,
+    Vec<RangeCacheWriteBatchEntry>,
+) {
+    let mut group_entries_to_cache: Vec<(CacheRange, Vec<RangeCacheWriteBatchEntry>)> = vec![];
+    let mut entries_to_write: Vec<RangeCacheWriteBatchEntry> = vec![];
+    let mut drain = entries.drain(..).peekable();
+    while let Some(mut e) = drain.next() {
+        let mut cache_range = None;
+        for r in &range_manager.pending_ranges_loading_data {
+            if r.0.contains_key(&e.key) {
+                cache_range = Some(r.0.clone());
+                break;
+            }
+        }
+        if let Some(cache_range) = cache_range {
+            let mut current_group = vec![];
+            // This range of this write batch entry is still in loading status
+            loop {
+                current_group.push(e);
+                if let Some(next_e) = drain.peek()
+                    && cache_range.contains_key(&next_e.key)
+                {
+                    e = drain.next().unwrap();
+                } else {
+                    break;
+                }
+            }
+            group_entries_to_cache.push((cache_range, current_group));
+        } else {
+            // cache_range is None, it means the range has finished loading and
+            // became a normal cache range
+            for r in range_manager.ranges().keys() {
+                if r.contains_key(&e.key) {
+                    cache_range = Some(r.clone());
+                }
+            }
+            let cache_range = cache_range.unwrap();
+            loop {
+                entries_to_write.push(e);
+                if let Some(next_e) = drain.peek()
+                    && cache_range.contains_key(&next_e.key)
+                {
+                    e = drain.next().unwrap();
+                } else {
+                    break;
+                }
+            }
+        }
+    }
+    (group_entries_to_cache, entries_to_write)
 }
 
 impl WriteBatchExt for RangeCacheMemoryEngine {
@@ -324,6 +401,12 @@ impl WriteBatch for RangeCacheWriteBatch {
         self.buffer.append(&mut other.buffer);
         Ok(())
     }
+
+    fn prepare_for_range(&mut self, range: &CacheRange) {
+        let (range_in_cache, range_in_loading) = self.engine.prepare_for_apply(range);
+        self.set_range_in_cache(range_in_cache);
+        self.set_pending_range_in_loading(range_in_loading);
+    }
 }
 
 impl Mutable for RangeCacheWriteBatch {
@@ -332,17 +415,10 @@ impl Mutable for RangeCacheWriteBatch {
     }
 
     fn put_cf(&mut self, cf: &str, key: &[u8], val: &[u8]) -> Result<()> {
-        if self.memory_usage_reach_hard_limit {
-            return Ok(());
-        }
-        let expected_memory =
-            NODE_OVERHEAD_SIZE_EXPECTATION + key.len() + val.len() + ENC_KEY_SEQ_LENGTH;
-        if !self.memory_acquire(expected_memory) {
-            return Ok(());
-        }
-
-        self.buffer
-            .push(RangeCacheWriteBatchEntry::put_value(cf, key, val));
+        self.process_cf_operation(
+            || RangeCacheWriteBatchEntry::calc_put_entry_size(key, val),
+            || RangeCacheWriteBatchEntry::put_value(cf, key, val),
+        );
         Ok(())
     }
 
@@ -351,16 +427,10 @@ impl Mutable for RangeCacheWriteBatch {
     }
 
     fn delete_cf(&mut self, cf: &str, key: &[u8]) -> Result<()> {
-        if self.memory_usage_reach_hard_limit {
-            return Ok(());
-        }
-        let expected_memory = NODE_OVERHEAD_SIZE_EXPECTATION + key.len() + ENC_KEY_SEQ_LENGTH;
-        if !self.memory_acquire(expected_memory) {
-            return Ok(());
-        }
-
-        self.buffer
-            .push(RangeCacheWriteBatchEntry::deletion(cf, key));
+        self.process_cf_operation(
+            || RangeCacheWriteBatchEntry::cal_delete_entry_size(key),
+            || RangeCacheWriteBatchEntry::deletion(cf, key),
+        );
         Ok(())
     }
 
@@ -377,41 +447,64 @@ impl Mutable for RangeCacheWriteBatch {
 mod tests {
     use std::sync::Arc;
 
-    use engine_traits::{CacheRange, Peekable, RangeCacheEngine, WriteBatch};
+    use engine_rocks::util::new_engine;
+    use engine_traits::{
+        CacheRange, KvEngine, Peekable, RangeCacheEngine, WriteBatch, CF_WRITE, DATA_CFS,
+    };
+    use skiplist_rs::SkipList;
+    use tempfile::Builder;
 
     use super::*;
     use crate::EngineConfig;
 
+    // We should not use skiplist.get directly as we only cares keys without
+    // sequence number suffix
+    fn get_value(
+        sl: &Arc<SkipList<InternalBytes, InternalBytes>>,
+        key: &InternalBytes,
+        guard: &epoch::Guard,
+    ) -> Option<InternalBytes> {
+        let mut iter = sl.owned_iter();
+        iter.seek(key, guard);
+        if iter.valid() && iter.key().same_user_key_with(key) {
+            return Some(iter.value().clone());
+        }
+        None
+    }
+
     #[test]
     fn test_write_to_skiplist() {
-        let engine = RangeCacheMemoryEngine::new(Arc::default(), EngineConfig::config_for_test());
+        let engine = RangeCacheMemoryEngine::new(EngineConfig::config_for_test());
         let r = CacheRange::new(b"".to_vec(), b"z".to_vec());
         engine.new_range(r.clone());
         {
-            let mut core = engine.core.write().unwrap();
+            let mut core = engine.core.write();
             core.mut_range_manager().set_range_readable(&r, true);
             core.mut_range_manager().set_safe_point(&r, 10);
         }
         let mut wb = RangeCacheWriteBatch::from(&engine);
+        wb.range_in_cache = true;
         wb.put(b"aaa", b"bbb").unwrap();
         wb.set_sequence_number(1).unwrap();
         assert_eq!(wb.write().unwrap(), 1);
-        let sl = engine.core.read().unwrap().engine().data[cf_to_id(CF_DEFAULT)].clone();
-        let actual = sl.get(&encode_key(b"aaa", 1, ValueType::Value)).unwrap();
-        assert_eq!(&b"bbb"[..], actual.value())
+        let sl = engine.core.read().engine().data[cf_to_id(CF_DEFAULT)].clone();
+        let guard = &crossbeam::epoch::pin();
+        let val = get_value(&sl, &encode_key(b"aaa", 2, ValueType::Value), guard).unwrap();
+        assert_eq!(&b"bbb"[..], val.as_slice());
     }
 
     #[test]
     fn test_savepoints() {
-        let engine = RangeCacheMemoryEngine::new(Arc::default(), EngineConfig::config_for_test());
+        let engine = RangeCacheMemoryEngine::new(EngineConfig::config_for_test());
         let r = CacheRange::new(b"".to_vec(), b"z".to_vec());
         engine.new_range(r.clone());
         {
-            let mut core = engine.core.write().unwrap();
+            let mut core = engine.core.write();
             core.mut_range_manager().set_range_readable(&r, true);
             core.mut_range_manager().set_safe_point(&r, 10);
         }
         let mut wb = RangeCacheWriteBatch::from(&engine);
+        wb.range_in_cache = true;
         wb.put(b"aaa", b"bbb").unwrap();
         wb.set_save_point();
         wb.put(b"aaa", b"ccc").unwrap();
@@ -419,36 +512,143 @@ mod tests {
         wb.rollback_to_save_point().unwrap();
         wb.set_sequence_number(1).unwrap();
         assert_eq!(wb.write().unwrap(), 1);
-        let sl = engine.core.read().unwrap().engine().data[cf_to_id(CF_DEFAULT)].clone();
-        let actual = sl.get(&encode_key(b"aaa", 1, ValueType::Value)).unwrap();
-        assert_eq!(&b"bbb"[..], actual.value());
-        assert!(sl.get(&encode_key(b"ccc", 1, ValueType::Value)).is_none())
+        let sl = engine.core.read().engine().data[cf_to_id(CF_DEFAULT)].clone();
+        let guard = &crossbeam::epoch::pin();
+        let val = get_value(&sl, &encode_key(b"aaa", 1, ValueType::Value), guard).unwrap();
+        assert_eq!(&b"bbb"[..], val.as_slice());
+        assert!(get_value(&sl, &encode_key(b"ccc", 1, ValueType::Value), guard).is_none())
     }
 
     #[test]
     fn test_put_write_clear_delete_put_write() {
-        let engine = RangeCacheMemoryEngine::new(Arc::default(), EngineConfig::config_for_test());
+        let engine = RangeCacheMemoryEngine::new(EngineConfig::config_for_test());
         let r = CacheRange::new(b"".to_vec(), b"z".to_vec());
         engine.new_range(r.clone());
         {
-            let mut core = engine.core.write().unwrap();
+            let mut core = engine.core.write();
             core.mut_range_manager().set_range_readable(&r, true);
             core.mut_range_manager().set_safe_point(&r, 10);
         }
         let mut wb = RangeCacheWriteBatch::from(&engine);
+        wb.range_in_cache = true;
         wb.put(b"aaa", b"bbb").unwrap();
         wb.set_sequence_number(1).unwrap();
-        _ = wb.write().unwrap();
+        _ = wb.write();
         wb.clear();
         wb.put(b"bbb", b"ccc").unwrap();
         wb.delete(b"aaa").unwrap();
         wb.set_sequence_number(2).unwrap();
-        _ = wb.write().unwrap();
+        _ = wb.write();
         let snapshot = engine.snapshot(r, u64::MAX, 2).unwrap();
         assert_eq!(
             snapshot.get_value(&b"bbb"[..]).unwrap().unwrap(),
             &b"ccc"[..]
         );
         assert!(snapshot.get_value(&b"aaa"[..]).unwrap().is_none())
+    }
+
+    #[test]
+    fn test_prepare_for_apply() {
+        let path = Builder::new()
+            .prefix("test_prepare_for_apply")
+            .tempdir()
+            .unwrap();
+        let path_str = path.path().to_str().unwrap();
+        let rocks_engine = new_engine(path_str, DATA_CFS).unwrap();
+
+        let engine = RangeCacheMemoryEngine::new(EngineConfig::config_for_test());
+        let r1 = CacheRange::new(b"k01".to_vec(), b"k05".to_vec());
+        let r2 = CacheRange::new(b"k05".to_vec(), b"k10".to_vec());
+        let r3 = CacheRange::new(b"k10".to_vec(), b"k15".to_vec());
+        {
+            engine.new_range(r1.clone());
+            let mut core = engine.core.write();
+            core.mut_range_manager().set_range_readable(&r1, true);
+            core.mut_range_manager().set_safe_point(&r1, 10);
+
+            let snap = Arc::new(rocks_engine.snapshot(None));
+            core.mut_range_manager()
+                .pending_ranges_loading_data
+                .push_back((r2.clone(), snap));
+        }
+        let mut wb = RangeCacheWriteBatch::from(&engine);
+        wb.prepare_for_range(&r1);
+        wb.put(b"k01", b"val1").unwrap();
+        wb.prepare_for_range(&r2);
+        wb.put(b"k05", b"val5").unwrap();
+        wb.prepare_for_range(&r3);
+        wb.put(b"k10", b"val10").unwrap();
+        wb.set_sequence_number(2).unwrap();
+        let _ = wb.write();
+        let snapshot = engine.snapshot(r1.clone(), u64::MAX, 2).unwrap();
+        assert_eq!(
+            snapshot.get_value(&b"k01"[..]).unwrap().unwrap(),
+            &b"val1"[..]
+        );
+        {
+            let core = engine.core.read();
+            assert_eq!(core.cached_write_batch.get(&r2).unwrap().len(), 1);
+        }
+
+        let mut wb = RangeCacheWriteBatch::from(&engine);
+        wb.prepare_for_range(&r1);
+        wb.delete(b"k01").unwrap();
+        wb.set_sequence_number(3).unwrap();
+        let _ = wb.write();
+        let snapshot = engine.snapshot(r1, u64::MAX, 3).unwrap();
+        assert!(snapshot.get_value(&b"k01"[..]).unwrap().is_none(),);
+    }
+
+    #[test]
+    fn test_group_entries() {
+        let path = Builder::new().prefix("test_group").tempdir().unwrap();
+        let path_str = path.path().to_str().unwrap();
+        let rocks_engine = new_engine(path_str, DATA_CFS).unwrap();
+        let snap = rocks_engine.snapshot(None);
+
+        let mut range_manager = RangeManager::default();
+        let r1 = CacheRange::new(b"k00".to_vec(), b"k10".to_vec());
+        let r2 = CacheRange::new(b"k10".to_vec(), b"k20".to_vec());
+        let r3 = CacheRange::new(b"k20".to_vec(), b"k30".to_vec());
+        range_manager.new_range(r1.clone());
+        let snap = Arc::new(snap);
+        range_manager
+            .pending_ranges_loading_data
+            .push_back((r2.clone(), snap.clone()));
+        range_manager
+            .pending_ranges_loading_data
+            .push_back((r3.clone(), snap));
+
+        let entries = vec![
+            RangeCacheWriteBatchEntry::put_value(CF_DEFAULT, b"k22", b"val"),
+            RangeCacheWriteBatchEntry::put_value(CF_DEFAULT, b"k21", b"val"),
+            RangeCacheWriteBatchEntry::deletion(CF_DEFAULT, b"k25"),
+            RangeCacheWriteBatchEntry::put_value(CF_DEFAULT, b"k28", b"val"),
+            RangeCacheWriteBatchEntry::put_value(CF_WRITE, b"k03", b"val"),
+            RangeCacheWriteBatchEntry::put_value(CF_WRITE, b"k05", b"val"),
+            RangeCacheWriteBatchEntry::put_value(CF_WRITE, b"k09", b"val"),
+            RangeCacheWriteBatchEntry::put_value(CF_WRITE, b"k10", b"val"),
+            RangeCacheWriteBatchEntry::put_value(CF_WRITE, b"k19", b"val"),
+        ];
+
+        let (group_entries_to_cache, entries_to_write) =
+            group_write_batch_entries(entries, &range_manager);
+        assert_eq!(group_entries_to_cache.len(), 2);
+        assert_eq!(entries_to_write.len(), 3);
+        entries_to_write
+            .iter()
+            .for_each(|e| assert!(r1.contains_key(&e.key)));
+        group_entries_to_cache.iter().for_each(|(range, entries)| {
+            if *range == r2 {
+                assert_eq!(entries.len(), 2);
+            } else if *range == r3 {
+                assert_eq!(entries.len(), 4);
+            } else {
+                unreachable!();
+            }
+            entries
+                .iter()
+                .for_each(|e| assert!(range.contains_key(&e.key)))
+        });
     }
 }

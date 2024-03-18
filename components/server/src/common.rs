@@ -712,8 +712,7 @@ impl KvEngineBuilder for RocksEngine {
 impl KvEngineBuilder for HybridEngine<RocksEngine, RangeCacheMemoryEngine> {
     fn build(disk_engine: RocksEngine) -> Self {
         // todo(SpadeA): fix this config for test
-        let mut memory_engine =
-            RangeCacheMemoryEngine::new(Arc::default(), EngineConfig::config_for_test());
+        let mut memory_engine = RangeCacheMemoryEngine::new(EngineConfig::config_for_test());
         memory_engine.set_disk_engine(disk_engine.clone());
         HybridEngine::new(disk_engine, memory_engine)
     }
