@@ -124,7 +124,7 @@ pub trait WriteBatch: Mutable {
     /// Merge another WriteBatch to itself
     fn merge(&mut self, src: Self) -> Result<()>;
 
-    /// It declears that the following consecutive write will be within this
+    /// It declares that the following consecutive write will be within this
     /// range.
     fn prepare_for_range(&mut self, _: &CacheRange) {}
 }
