@@ -331,11 +331,14 @@ where
         static SCAN_LOCK: RefCell<Option<Box<dyn PerfContext>>> = RefCell::new(None);
         static RESOLVE_LOCK: RefCell<Option<Box<dyn PerfContext>>> = RefCell::new(None);
         static RESOLVE_LOCK_LITE: RefCell<Option<Box<dyn PerfContext>>> = RefCell::new(None);
+        static FLUSH: RefCell<Option<Box<dyn PerfContext>>> = RefCell::new(None);
+        static BUFFER_BATCH_GET: RefCell<Option<Box<dyn PerfContext>>> = RefCell::new(None);
     }
     let tls_cell = match cmd {
         CommandKind::get => &GET,
         CommandKind::batch_get => &BATCH_GET,
         CommandKind::batch_get_command => &BATCH_GET_COMMAND,
+        CommandKind::buffer_batch_get => &BUFFER_BATCH_GET,
         CommandKind::scan => &SCAN,
         CommandKind::prewrite => &PREWRITE,
         CommandKind::acquire_pessimistic_lock => &ACQUIRE_PESSIMISTIC_LOCK,
@@ -349,6 +352,7 @@ where
         CommandKind::scan_lock => &SCAN_LOCK,
         CommandKind::resolve_lock => &RESOLVE_LOCK,
         CommandKind::resolve_lock_lite => &RESOLVE_LOCK_LITE,
+        CommandKind::flush => &FLUSH,
         _ => return f(),
     };
     tls_cell.with(|c| {
