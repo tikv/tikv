@@ -1557,7 +1557,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
 
         let wal_sync_worker = Worker::new("wal-sync-worker");
         let kv_clone = engines.kv.clone();
-        worker.spawn_interval_task(Duration::from_millis(100), move || {
+        wal_sync_worker.spawn_interval_task(Duration::from_millis(100), move || {
             kv_clone.flush_wal().unwrap();
         });
 
