@@ -2539,7 +2539,7 @@ mod tests {
         let range = CacheRange::from_region(&region1);
         memory_engine.new_range(range.clone());
         {
-            let mut core = memory_engine.core().write().unwrap();
+            let mut core = memory_engine.core().write();
             core.mut_range_manager().set_range_readable(&range, true);
             core.mut_range_manager().set_safe_point(&range, 1);
         }
@@ -2587,7 +2587,7 @@ mod tests {
         assert!(!s.region_cache_snapshot_available());
 
         {
-            let mut core = memory_engine.core().write().unwrap();
+            let mut core = memory_engine.core().write();
             core.mut_range_manager().set_range_readable(&range, true);
             core.mut_range_manager().set_safe_point(&range, 10);
         }
@@ -2602,14 +2602,14 @@ mod tests {
         assert_eq!(s.get_value(kv.0).unwrap().unwrap(), kv.1);
 
         {
-            let mut core = memory_engine.core().write().unwrap();
+            let mut core = memory_engine.core().write();
             core.mut_range_manager().set_range_readable(&range, false);
         }
         let s = get_snapshot(Some(snap_ctx.clone()), &mut reader, cmd.clone(), &rx);
         assert!(!s.region_cache_snapshot_available());
 
         {
-            let mut core = memory_engine.core().write().unwrap();
+            let mut core = memory_engine.core().write();
             core.mut_range_manager().set_range_readable(&range, true);
         }
         snap_ctx.read_ts = 5;

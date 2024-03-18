@@ -4596,6 +4596,7 @@ dependencies = [
  "keys",
  "kvproto",
  "log_wrappers",
+ "parking_lot 0.12.1",
  "pd_client",
  "security",
  "serde",
