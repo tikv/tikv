@@ -52,6 +52,10 @@ pub trait KvEngine:
     /// Syncs any writes to disk
     fn sync(&self) -> Result<()>;
 
+    fn flush_wal(&self) -> Result<()> {
+        Ok(())
+    }
+
     /// Flush metrics to prometheus
     ///
     /// `instance` is the label of the metric to flush.

@@ -74,6 +74,10 @@ impl KvEngine for RocksEngine {
         self.db.sync_wal().map_err(r2e)
     }
 
+    fn flush_wal(&self) -> Result<()> {
+        self.db.flush_wal(true).map_err(r2e)
+    }
+
     fn flush_metrics(&self, instance: &str) {
         for t in ENGINE_TICKER_TYPES {
             let v = self.db.get_and_reset_statistics_ticker_count(*t);

@@ -1463,6 +1463,7 @@ struct Workers<EK: KvEngine, ER: RaftEngine> {
     // Used for calling `manual_purge` if the specific engine implementation requires it
     // (`need_manual_purge`).
     purge_worker: Option<Worker>,
+    wal_sync_worker: Worker,
 
     raftlog_fetch_worker: Worker,
 
@@ -1554,12 +1555,19 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             None
         };
 
+        let wal_sync_worker = Worker::new("wal-sync-worker");
+        let kv_clone = engines.kv.clone();
+        worker.spawn_interval_task(Duration::from_millis(100), move || {
+            kv_clone.flush_wal().unwrap();
+        });
+
         let workers = Workers {
             pd_worker,
             background_worker,
             cleanup_worker: Worker::new("cleanup-worker"),
             region_worker: Worker::new("region-worker"),
             purge_worker,
+wal_sync_worker,
             raftlog_fetch_worker: Worker::new("raftlog-fetch-worker"),
             coprocessor_host: coprocessor_host.clone(),
             refresh_config_worker: LazyWorker::new("refreash-config-worker"),
@@ -1797,6 +1805,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         if let Some(w) = workers.purge_worker {
             w.stop();
         }
+        workers.wal_sync_worker.stop();
         workers.refresh_config_worker.stop();
         workers.raftlog_fetch_worker.stop();
     }
