@@ -723,6 +723,21 @@ def Server() -> RowPanel:
     )
     layout.row(
         [
+            heatmap_panel(
+                title="Written key size",
+                description="The key size for every put of apply worker",
+                metric="tikv_raftstore_apply_key_size_bucket",
+                yaxis=yaxis(format=UNITS.BYTES_IEC),
+            ),
+            heatmap_panel(
+                title="Written value size for every put of apply worker",
+                metric="tikv_raftstore_apply_value_size_bucket",
+                yaxis=yaxis(format=UNITS.BYTES_IEC),
+            ),
+        ]
+    )
+    layout.row(
+        [
             graph_panel(
                 title="Hibernate Peers",
                 description="The number of peers in hibernated state",
