@@ -96,6 +96,17 @@ impl RangeCacheWriteBatch {
     pub fn set_pending_range_in_loading(&mut self, v: bool) {
         self.pending_range_in_loading = v;
     }
+
+    fn process_cf_operation<F>(&mut self, entry: F)
+    where
+        F: FnOnce() -> RangeCacheWriteBatchEntry,
+    {
+        if self.range_in_cache {
+            self.buffer.push(entry());
+        } else if self.pending_range_in_loading {
+            self.pending_range_in_loading_buffer.push(entry());
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -318,13 +329,7 @@ impl Mutable for RangeCacheWriteBatch {
     }
 
     fn put_cf(&mut self, cf: &str, key: &[u8], val: &[u8]) -> Result<()> {
-        if self.range_in_cache {
-            self.buffer
-                .push(RangeCacheWriteBatchEntry::put_value(cf, key, val));
-        } else if self.pending_range_in_loading {
-            self.pending_range_in_loading_buffer
-                .push(RangeCacheWriteBatchEntry::put_value(cf, key, val));
-        }
+        self.process_cf_operation(|| RangeCacheWriteBatchEntry::put_value(cf, key, val));
         Ok(())
     }
 
@@ -333,13 +338,7 @@ impl Mutable for RangeCacheWriteBatch {
     }
 
     fn delete_cf(&mut self, cf: &str, key: &[u8]) -> Result<()> {
-        if self.range_in_cache {
-            self.buffer
-                .push(RangeCacheWriteBatchEntry::deletion(cf, key));
-        } else if self.pending_range_in_loading {
-            self.pending_range_in_loading_buffer
-                .push(RangeCacheWriteBatchEntry::deletion(cf, key));
-        }
+        self.process_cf_operation(|| RangeCacheWriteBatchEntry::deletion(cf, key));
         Ok(())
     }
 
