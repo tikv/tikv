@@ -12,17 +12,17 @@ use crate::{
 };
 
 // `prepare_for_range` should be called before raft command apply for each peer
-// delegate. It sets `range_in_cache` and `pending_range_in_loading` which is
-// used to determine whether the writes of region of this peer should be
-// buffered.
+// delegate. It sets `range_in_cache` and `pending_range_in_loading` which are
+// used to determine whether the writes of this peer should be buffered.
 pub struct RangeCacheWriteBatch {
     // `range_in_cache` indicates that the range is cached in the memory engine and we should
     // buffer the write in `buffer` which is consumed during the write is written in the kv engine.
     range_in_cache: bool,
     buffer: Vec<RangeCacheWriteBatchEntry>,
-    // `pending_range_in_loading` indicates that the range is pending and loading data and we
-    // should buffer the further write for it in `pending_range_in_loading_buffer` which is cached
-    // in the memory engine and will be consumed after the snapshot has been loaded.
+    // `pending_range_in_loading` indicates that the range is pending and loading snapshot in the
+    // background and we should buffer the further write for it in
+    // `pending_range_in_loading_buffer` which is cached in the memory engine and will be
+    // consumed after the snapshot has been loaded.
     pending_range_in_loading: bool,
     pending_range_in_loading_buffer: Vec<RangeCacheWriteBatchEntry>,
     engine: RangeCacheMemoryEngine,

@@ -283,7 +283,6 @@ impl RangeCacheMemoryEngine {
         let mut index = None;
         let mut left_splitted_range = None;
         let mut right_splitted_range = None;
-        // todo: need to consider split/merge
         for (i, r) in range_manager.pending_ranges.iter().enumerate() {
             if r == range {
                 index = Some(i);
@@ -333,10 +332,11 @@ impl RangeCacheMemoryEngine {
     }
 
     // The writes in `handle_pending_range_in_loading_buffer` indicating the ranges
-    // of the writes are pending_ranges that are loading data at begin. But some of
-    // them may have been finished the load and become a normal range. This method
-    // decides which writes in should be cached and which writes should be written
-    // directly.
+    // of the writes are pending_ranges that are still loading data at the time of
+    // `prepare_for_apply`. But some of them may have been finished the load and
+    // become a normal range so that the writes should be written to the engine
+    // directly rather than cached. This method decides which writes should be
+    // cached and which writes should be written directly.
     pub(crate) fn handle_pending_range_in_loading_buffer(
         &self,
         seq: u64,
