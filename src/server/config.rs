@@ -147,7 +147,6 @@ pub struct Config {
     #[serde(with = "perf_level_serde")]
     #[online_config(skip)]
     pub end_point_perf_level: PerfLevel,
-    #[online_config(skip)]
     pub end_point_memory_quota: ReadableSize,
     #[serde(alias = "snap-max-write-bytes-per-sec")]
     pub snap_io_max_bytes_per_sec: ReadableSize,
@@ -448,6 +447,7 @@ pub struct ServerConfigManager {
     tx: Scheduler<SnapTask>,
     config: Arc<VersionTrack<Config>>,
     grpc_mem_quota: ResourceQuota,
+    copr_config_manager: Box<dyn ConfigManager>,
 }
 
 unsafe impl Send for ServerConfigManager {}
@@ -458,32 +458,38 @@ impl ServerConfigManager {
         tx: Scheduler<SnapTask>,
         config: Arc<VersionTrack<Config>>,
         grpc_mem_quota: ResourceQuota,
+        copr_config_manager: Box<dyn ConfigManager>,
     ) -> ServerConfigManager {
         ServerConfigManager {
             tx,
             config,
             grpc_mem_quota,
+            copr_config_manager,
         }
     }
 }
 
 impl ConfigManager for ServerConfigManager {
     fn dispatch(&mut self, c: ConfigChange) -> std::result::Result<(), Box<dyn std::error::Error>> {
-        {
-            let change = c.clone();
-            self.config.update(move |cfg| cfg.update(change))?;
-            if let Some(value) = c.get("grpc_memory_pool_quota") {
-                let mem_quota: ReadableSize = value.clone().into();
-                // the resize is done inplace indeed, but grpc-rs's api need self, so we just
-                // clone it here, but this no extra side effect here.
-                self.grpc_mem_quota
-                    .clone()
-                    .resize_memory(mem_quota.0 as usize);
-            }
-            if let Err(e) = self.tx.schedule(SnapTask::RefreshConfigEvent) {
-                error!("server configuration manager schedule refresh snapshot work task failed"; "err"=> ?e);
-            }
+        let change = c.clone();
+        self.config.update(move |cfg| cfg.update(change))?;
+        if let Some(value) = c.get("grpc_memory_pool_quota") {
+            let mem_quota: ReadableSize = value.clone().into();
+            // the resize is done inplace indeed, but grpc-rs's api need self, so we just
+            // clone it here, but this no extra side effect here.
+            self.grpc_mem_quota
+                .clone()
+                .resize_memory(mem_quota.0 as usize);
         }
+        if let Err(e) = self.tx.schedule(SnapTask::RefreshConfigEvent) {
+            error!("server configuration manager schedule refresh snapshot work task failed"; "err"=> ?e);
+        }
+
+        // Dispatch coprocessor config.
+        if let Err(e) = self.copr_config_manager.dispatch(c.clone()) {
+            error!("server configuration manager fails to update coprocessor config"; "err"=> ?e);
+        }
+
         info!("server configuration changed"; "change" => ?c);
         Ok(())
     }

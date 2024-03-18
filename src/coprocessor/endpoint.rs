@@ -18,6 +18,7 @@ use futures::{
     prelude::*,
 };
 use kvproto::{coprocessor as coppb, errorpb, kvrpcpb, kvrpcpb::CommandPri};
+use online_config::ConfigManager;
 use protobuf::{CodedInputStream, Message};
 use resource_control::{ResourceGroupManager, ResourceLimiter, TaskMetadata};
 use resource_metering::{FutureExt, ResourceTagFactory, StreamExt};
@@ -34,6 +35,7 @@ use tipb::{AnalyzeReq, AnalyzeType, ChecksumRequest, ChecksumScanOn, DagRequest,
 use tokio::sync::Semaphore;
 use txn_types::Lock;
 
+use super::config_manager::CopConfigManager;
 use crate::{
     coprocessor::{
         cache::CachedRequestHandler, interceptors::*, metrics::*,
@@ -129,6 +131,10 @@ impl<E: Engine> Endpoint<E> {
             resource_ctl,
             _phantom: Default::default(),
         }
+    }
+
+    pub fn config_manager(&self) -> Box<dyn ConfigManager> {
+        Box::new(CopConfigManager::new(self.memory_quota.clone()))
     }
 
     fn check_memory_locks(&self, req_ctx: &ReqContext) -> Result<()> {

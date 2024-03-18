@@ -25,6 +25,7 @@
 
 mod cache;
 mod checksum;
+mod config_manager;
 pub mod dag;
 mod endpoint;
 mod error;
