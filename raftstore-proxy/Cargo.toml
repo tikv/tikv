@@ -35,6 +35,7 @@ backup-stream-debug = ["proxy_server/backup-stream-debug"]
 
 pprof-fp = ["proxy_server/pprof-fp"]
 openssl-vendored = ["proxy_server/openssl-vendored"]
+external-jemalloc = ["proxy_server/external-jemalloc"]
 
 [lib]
 name = "raftstore_proxy"

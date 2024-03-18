@@ -618,6 +618,11 @@ impl<ER: RaftEngine, F: KvFormat> TiKvServer<ER, F> {
             Arc::clone(&security_mgr),
         );
 
+        #[cfg(feature = "external-jemalloc")]
+        info!("linked with external jemalloc");
+        #[cfg(not(feature = "external-jemalloc"))]
+        info!("linked without external jemalloc");
+
         // Initialize and check config
         info!("using proxy config"; "config" => ?proxy_config);
         crate::config::address_proxy_config(&mut config, &proxy_config);

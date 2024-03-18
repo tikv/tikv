@@ -1,4 +1,9 @@
 set -uxeo pipefail
+cat /etc/issue
+cat /proc/version
+echo "LD_LIBRARY_PATH=", ${LD_LIBRARY_PATH:-nil}
+echo "PATH=", $PATH
+
 if [[ $M == "fmt" ]]; then
     pwd
     git rev-parse --show-toplevel
@@ -34,11 +39,14 @@ elif [[ $M == "testold" ]]; then
     # cargo test --package tests --test failpoints cases::test_snap
     cargo test --package tests --test failpoints cases::test_import_service
 elif [[ $M == "testnew" ]]; then
+    chmod +x ./proxy_scripts/make_env.sh
+    ./proxy_scripts/make_env.sh
     export ENGINE_LABEL_VALUE=tiflash
     export RUST_BACKTRACE=full
     export ENABLE_FEATURES="test-engine-kv-rocksdb test-engine-raft-raft-engine openssl-vendored"
     cargo check --package proxy_server --features="$ENABLE_FEATURES"
     # tests based on mock-engine-store, with compat for new proxy
+    LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/usr/local/lib cargo test --package proxy_tests --features="$ENABLE_FEATURES" --test proxy shared::jemalloc --features="jemalloc"
     cargo test --package proxy_tests --features="$ENABLE_FEATURES" --test proxy shared::write
     cargo test --package proxy_tests --features="$ENABLE_FEATURES" --test proxy shared::snapshot
     cargo test --package proxy_tests --features="$ENABLE_FEATURES" --test proxy shared::store
@@ -70,3 +78,4 @@ elif [[ $M == "release" ]]; then
     export ENGINE_LABEL_VALUE=tiflash
     make release
 fi
+   

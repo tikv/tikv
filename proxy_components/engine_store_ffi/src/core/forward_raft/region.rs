@@ -13,6 +13,10 @@ impl<T: Transport + 'static, ER: RaftEngine> ProxyForwarder<T, ER> {
     }
 
     pub fn on_region_changed(&self, ob_region: &Region, e: RegionChangeEvent, r: StateRole) {
+        self.engine_store_server_helper
+            .maybe_jemalloc_register_alloc();
+        self.engine_store_server_helper
+            .directly_report_jemalloc_alloc();
         let region_id = ob_region.get_id();
         if e == RegionChangeEvent::Destroy {
             info!(
@@ -104,6 +108,10 @@ impl<T: Transport + 'static, ER: RaftEngine> ProxyForwarder<T, ER> {
     }
 
     pub fn on_role_change(&self, ob_region: &Region, r: &RoleChange) {
+        self.engine_store_server_helper
+            .maybe_jemalloc_register_alloc();
+        self.engine_store_server_helper
+            .directly_report_jemalloc_alloc();
         let region_id = ob_region.get_id();
         let is_replicated = !r.initialized;
         let is_fap_enabled = if let Some(b) = self.engine.proxy_ext.config_set.as_ref() {

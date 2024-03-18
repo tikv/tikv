@@ -558,6 +558,20 @@ pub mod root {
                 unsafe extern "C" fn(arg1: *const root::DB::EngineStoreServerWrap),
             >,
         }
+        #[repr(u64)]
+        #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
+        pub enum ReportThreadAllocateInfoType {
+            Reset = 0,
+            Remove = 1,
+            AllocPtr = 2,
+            DeallocPtr = 3,
+        }
+        #[repr(C)]
+        #[derive(Debug)]
+        pub struct ReportThreadAllocateInfoBatch {
+            pub alloc: u64,
+            pub dealloc: u64,
+        }
         #[repr(C)]
         #[derive(Debug)]
         pub struct EngineStoreServerHelper {
@@ -750,6 +764,23 @@ pub mod root {
                     region_id: u64,
                 ) -> bool,
             >,
+            pub fn_report_thread_allocate_info: ::std::option::Option<
+                unsafe extern "C" fn(
+                    arg1: *mut root::DB::EngineStoreServerWrap,
+                    thread_id: u64,
+                    name: root::DB::BaseBuffView,
+                    type_: root::DB::ReportThreadAllocateInfoType,
+                    value: u64,
+                ),
+            >,
+            pub fn_report_thread_allocate_batch: ::std::option::Option<
+                unsafe extern "C" fn(
+                    arg1: *mut root::DB::EngineStoreServerWrap,
+                    thread_id: u64,
+                    name: root::DB::BaseBuffView,
+                    data: root::DB::ReportThreadAllocateInfoBatch,
+                ),
+            >,
         }
         extern "C" {
             pub fn ffi_get_server_info_from_proxy(
@@ -758,7 +789,7 @@ pub mod root {
                 arg3: root::DB::RawVoidPtr,
             ) -> u32;
         }
-        pub const RAFT_STORE_PROXY_VERSION: u64 = 8589640407431546086;
+        pub const RAFT_STORE_PROXY_VERSION: u64 = 9679186549381427051;
         pub const RAFT_STORE_PROXY_MAGIC_NUMBER: u32 = 324508639;
     }
 }

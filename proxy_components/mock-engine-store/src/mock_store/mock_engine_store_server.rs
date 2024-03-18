@@ -1,6 +1,10 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{cell::RefCell, pin::Pin, sync::atomic::Ordering};
+use std::{
+    cell::RefCell,
+    pin::Pin,
+    sync::{atomic::Ordering, Mutex},
+};
 
 use engine_store_ffi::TiFlashEngine;
 
@@ -18,6 +22,23 @@ use super::{
 };
 use crate::mock_cluster;
 
+#[derive(Clone)]
+pub struct ThreadInfoJealloc {
+    pub allocated_ptr: u64,
+    pub deallocated_ptr: u64,
+}
+
+impl ThreadInfoJealloc {
+    pub fn allocated(&self) -> u64 {
+        unsafe { *(self.allocated_ptr as *const u64) }
+    }
+    pub fn deallocated(&self) -> u64 {
+        unsafe { *(self.deallocated_ptr as *const u64) }
+    }
+    pub fn remaining(&self) -> i64 {
+        self.allocated() as i64 - self.deallocated() as i64
+    }
+}
 pub struct EngineStoreServer {
     pub id: u64,
     // TODO engines maybe changed into TabletRegistry?
@@ -28,6 +49,7 @@ pub struct EngineStoreServer {
     pub page_storage: MockPageStorage,
     // (region_id, peer_id) -> MockRegion
     pub tmp_fap_regions: HashMap<RegionId, Box<MockRegion>>,
+    pub thread_info_map: Mutex<HashMap<String, ThreadInfoJealloc>>,
 }
 
 impl EngineStoreServer {
@@ -40,6 +62,7 @@ impl EngineStoreServer {
             region_states: RefCell::new(Default::default()),
             page_storage: Default::default(),
             tmp_fap_regions: Default::default(),
+            thread_info_map: Default::default(),
         }
     }
 
@@ -369,6 +392,8 @@ pub fn gen_engine_store_server_helper(
         fn_query_fap_snapshot_state: Some(ffi_query_fap_snapshot_state),
         fn_kvstore_region_exists: Some(ffi_kvstore_region_exists),
         fn_clear_fap_snapshot: Some(ffi_clear_fap_snapshot),
+        fn_report_thread_allocate_info: Some(ffi_report_thread_allocate_info),
+        fn_report_thread_allocate_batch: Some(ffi_report_thread_allocate_batch),
         ps: PageStorageInterfaces {
             fn_create_write_batch: Some(ffi_mockps_create_write_batch),
             fn_wb_put_page: Some(ffi_mockps_wb_put_page),
@@ -608,4 +633,50 @@ unsafe extern "C" fn ffi_get_lock_by_key(
             len: 0,
         },
     }
+}
+
+unsafe extern "C" fn ffi_report_thread_allocate_info(
+    arg1: *mut interfaces_ffi::EngineStoreServerWrap,
+    _: u64,
+    name: interfaces_ffi::BaseBuffView,
+    t: interfaces_ffi::ReportThreadAllocateInfoType,
+    value: u64,
+) {
+    let store = into_engine_store_server_wrap(arg1);
+    let tn = std::str::from_utf8(name.to_slice()).unwrap().to_string();
+    match (*store.engine_store_server)
+        .thread_info_map
+        .lock()
+        .expect("poisoned")
+        .entry(tn)
+    {
+        std::collections::hash_map::Entry::Occupied(mut o) => {
+            if t == interfaces_ffi::ReportThreadAllocateInfoType::AllocPtr {
+                o.get_mut().allocated_ptr = value;
+            } else if t == interfaces_ffi::ReportThreadAllocateInfoType::DeallocPtr {
+                o.get_mut().deallocated_ptr = value;
+            }
+        }
+        std::collections::hash_map::Entry::Vacant(v) => {
+            if t == interfaces_ffi::ReportThreadAllocateInfoType::AllocPtr {
+                v.insert(ThreadInfoJealloc {
+                    allocated_ptr: value,
+                    deallocated_ptr: 0,
+                });
+            } else if t == interfaces_ffi::ReportThreadAllocateInfoType::DeallocPtr {
+                v.insert(ThreadInfoJealloc {
+                    allocated_ptr: 0,
+                    deallocated_ptr: value,
+                });
+            }
+        }
+    }
+}
+
+unsafe extern "C" fn ffi_report_thread_allocate_batch(
+    _: *mut interfaces_ffi::EngineStoreServerWrap,
+    _: u64,
+    _name: interfaces_ffi::BaseBuffView,
+    _data: interfaces_ffi::ReportThreadAllocateInfoBatch,
+) {
 }

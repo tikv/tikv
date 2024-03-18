@@ -6,6 +6,7 @@ mod engine;
 mod fast_add_peer;
 mod ffi;
 mod ingest;
+mod jemalloc;
 mod mock;
 mod normal;
 mod region;

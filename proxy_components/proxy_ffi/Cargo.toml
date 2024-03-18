@@ -22,11 +22,14 @@ test-engines-rocksdb = [
 test-engines-panic = [
   "engine_test/test-engines-panic",
 ]
+jemalloc = []
 
 # TODO use encryption/openssl-vendored if later supports
 openssl-vendored = [
   "openssl/vendored"
 ]
+
+external-jemalloc = []
 
 [dependencies]
 encryption = { workspace = true, default-features = false }

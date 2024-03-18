@@ -1,5 +1,7 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
+#![feature(thread_id_value)]
+
 /// All mods end up with `_impls` impl structs defined in interface.
 /// Other mods which define and impl structs should not end up with name
 /// `_impls`.
@@ -21,6 +23,7 @@ pub mod raftstore_proxy;
 pub mod raftstore_proxy_helper_impls;
 pub mod read_index_helper;
 // FFI releated with reading from SST/RocksDB files.
+pub mod jemalloc_utils;
 pub mod snapshot_reader_impls;
 pub mod utils;
 

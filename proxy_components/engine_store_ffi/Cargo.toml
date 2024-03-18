@@ -32,6 +32,9 @@ openssl-vendored = [
   "openssl/vendored"
 ]
 
+jemalloc = ["proxy_ffi/jemalloc"]
+external-jemalloc = ["proxy_ffi/external-jemalloc"]
+
 [dependencies]
 batch-system = { workspace = true, default-features = false }
 bitflags = "1.0.1"

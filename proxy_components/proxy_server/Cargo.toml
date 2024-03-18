@@ -7,7 +7,7 @@ publish = false
 
 [features]
 tcmalloc = ["tikv/tcmalloc"]
-jemalloc = ["tikv/jemalloc"]
+jemalloc = ["tikv/jemalloc", "engine_store_ffi/jemalloc"]
 mimalloc = ["tikv/mimalloc"]
 snmalloc = ["tikv/snmalloc"]
 portable = ["tikv/portable"]
@@ -35,6 +35,7 @@ backup-stream-debug = ["backup-stream/backup-stream-debug"]
 testexport = ["engine_tiflash/testexport", "engine_store_ffi/testexport", "tikv/testexport"]
 pprof-fp = ["tikv/pprof-fp"]
 openssl-vendored = ["tikv/openssl-vendored", "openssl/vendored"]
+external-jemalloc = ["engine_store_ffi/external-jemalloc"]
 
 [dependencies]
 api_version = { workspace = true }

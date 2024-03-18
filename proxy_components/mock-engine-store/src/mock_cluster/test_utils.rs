@@ -98,7 +98,6 @@ pub fn maybe_collect_states(
 }
 
 pub fn collect_all_states(cluster_ext: &ClusterExt, region_id: u64) -> HashMap<u64, States> {
-    maybe_collect_states(cluster_ext, region_id, None);
     let prev_state = maybe_collect_states(cluster_ext, region_id, None);
     assert_eq!(
         prev_state.len(),

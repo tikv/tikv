@@ -38,7 +38,7 @@ test-engine-raft-rocksdb = [
   "engine_test/test-engine-raft-rocksdb"
 ]
 
-jemalloc = ["tikv/jemalloc"]
+jemalloc = ["tikv/jemalloc", "proxy_server/jemalloc", "proxy_ffi/jemalloc"]
 mimalloc = ["tikv/mimalloc"]
 snmalloc = ["tikv/snmalloc"]
 mem-profiling = ["tikv/mem-profiling"]
@@ -46,6 +46,7 @@ sse = ["tikv/sse"]
 portable = ["tikv/portable"]
 openssl-vendored = ["tikv/openssl-vendored"]
 enable-pagestorage = []
+external-jemalloc = ["proxy_server/external-jemalloc", "engine_store_ffi/external-jemalloc"]
 
 [dependencies]
 api_version = { workspace = true }
