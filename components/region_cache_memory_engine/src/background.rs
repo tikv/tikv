@@ -345,11 +345,13 @@ impl Runnable for BackgroundRunner {
                                         // use 0 sequence number here as the kv is clearly visible
                                         let encoded_key =
                                             encode_key(iter.key(), 0, ValueType::Value);
-                                        handle.insert(
-                                            encoded_key,
-                                            InternalBytes::from_vec(iter.value().to_vec()),
-                                            guard,
-                                        );
+                                        handle
+                                            .insert(
+                                                encoded_key,
+                                                InternalBytes::from_vec(iter.value().to_vec()),
+                                                guard,
+                                            )
+                                            .release(guard);
                                         iter.next().unwrap();
                                     }
                                 }
@@ -392,8 +394,12 @@ impl Drop for Filter {
     fn drop(&mut self) {
         if let Some(cached_delete_key) = self.cached_delete_key.take() {
             let guard = &epoch::pin();
-            self.write_cf_handle
-                .remove(&InternalBytes::from_vec(cached_delete_key), guard);
+            if let Some(e) = self
+                .write_cf_handle
+                .remove(&InternalBytes::from_vec(cached_delete_key), guard)
+            {
+                e.release(guard);
+            };
         }
     }
 }
@@ -557,18 +563,22 @@ pub mod tests {
             },
         );
         let guard = &epoch::pin();
-        write_cf.insert(
-            write_k,
-            InternalBytes::from_vec(write_v.as_ref().to_bytes()),
-            guard,
-        );
+        write_cf
+            .insert(
+                write_k,
+                InternalBytes::from_vec(write_v.as_ref().to_bytes()),
+                guard,
+            )
+            .release(guard);
 
         if !short_value {
             let default_k = Key::from_raw(key)
                 .append_ts(TimeStamp::new(start_ts))
                 .into_encoded();
             let default_k = encode_key(&default_k, seq_num + 1, ValueType::Value);
-            default_cf.insert(default_k, InternalBytes::from_vec(value.to_vec()), guard);
+            default_cf
+                .insert(default_k, InternalBytes::from_vec(value.to_vec()), guard)
+                .release(guard);
         }
     }
 
@@ -584,11 +594,13 @@ pub mod tests {
         let write_k = encode_key(&write_k, seq_num, ValueType::Value);
         let write_v = Write::new(WriteType::Delete, TimeStamp::new(ts), None);
         let guard = &epoch::pin();
-        write_cf.insert(
-            write_k,
-            InternalBytes::from_vec(write_v.as_ref().to_bytes()),
-            guard,
-        );
+        write_cf
+            .insert(
+                write_k,
+                InternalBytes::from_vec(write_v.as_ref().to_bytes()),
+                guard,
+            )
+            .release(guard);
     }
 
     fn rollback_data(
@@ -603,11 +615,13 @@ pub mod tests {
         let write_k = encode_key(&write_k, seq_num, ValueType::Value);
         let write_v = Write::new(WriteType::Rollback, TimeStamp::new(ts), None);
         let guard = &epoch::pin();
-        write_cf.insert(
-            write_k,
-            InternalBytes::from_vec(write_v.as_ref().to_bytes()),
-            guard,
-        );
+        write_cf
+            .insert(
+                write_k,
+                InternalBytes::from_vec(write_v.as_ref().to_bytes()),
+                guard,
+            )
+            .release(guard);
     }
 
     fn element_count(sklist: &Arc<SkipList<InternalBytes, InternalBytes>>) -> u64 {

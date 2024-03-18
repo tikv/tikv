@@ -898,7 +898,8 @@ mod tests {
                 let key = construct_key(i, mvcc);
                 let val = construct_value(i, mvcc);
                 let key = encode_key(&key, start_seq, ValueType::Value);
-                sl.insert(key, InternalBytes::from_vec(val.into_bytes()), guard);
+                sl.insert(key, InternalBytes::from_vec(val.into_bytes()), guard)
+                    .release(guard);
             }
             start_seq += 1;
         }
@@ -915,7 +916,8 @@ mod tests {
             for mvcc in mvcc_range.clone() {
                 let key = construct_key(i, mvcc);
                 let key = encode_key(&key, seq, ValueType::Deletion);
-                sl.insert(key, InternalBytes::from_bytes(Bytes::default()), guard);
+                sl.insert(key, InternalBytes::from_bytes(Bytes::default()), guard)
+                    .release(guard);
             }
             seq += 1;
         }
@@ -942,7 +944,8 @@ mod tests {
             key,
             InternalBytes::from_vec(val.to_owned().into_bytes()),
             guard,
-        );
+        )
+        .release(guard);
     }
 
     fn delete_key(
@@ -954,7 +957,8 @@ mod tests {
         let key = construct_mvcc_key(key, mvcc);
         let key = encode_key(&key, seq, ValueType::Deletion);
         let guard = &epoch::pin();
-        sl.insert(key, InternalBytes::from_vec(b"".to_vec()), guard);
+        sl.insert(key, InternalBytes::from_vec(b"".to_vec()), guard)
+            .release(guard);
     }
 
     fn verify_key_value(k: &[u8], v: &[u8], i: u64, mvcc: u64) {
@@ -1735,7 +1739,8 @@ mod tests {
                     let user_key = construct_key(i, mvcc);
                     let internal_key = encode_key(&user_key, 10, ValueType::Value);
                     let v = format!("v{:02}{:02}", i, mvcc);
-                    sl.insert(internal_key, InternalBytes::from_vec(v.into_bytes()), guard);
+                    sl.insert(internal_key, InternalBytes::from_vec(v.into_bytes()), guard)
+                        .release(guard);
                 }
             }
         }
@@ -1835,7 +1840,8 @@ mod tests {
                     internal_key.clone(),
                     InternalBytes::from_vec(v.into_bytes()),
                     guard,
-                );
+                )
+                .release(guard);
             }
         }
 
@@ -1887,7 +1893,8 @@ mod tests {
                     internal_key.clone(),
                     InternalBytes::from_vec(v.clone().into_bytes()),
                     guard,
-                );
+                )
+                .release(guard);
             }
         }
 
