@@ -897,15 +897,26 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
         locks: BTreeMap<Key, TimeStamp>,
     ) {
         let region_id = region.get_id();
-        let mut deregister = None;
+        let mut deregisters = Vec::new();
         if let Some(delegate) = self.capture_regions.get_mut(&region_id) {
             if delegate.handle.id == observe_id {
-                if let Err(e) = delegate.on_region_ready(region, locks) {
-                    deregister = Some(Deregister::Delegate {
+                match delegate.on_region_ready(region, locks) {
+                    Ok(fails) => {
+                        for (downstream, e) in fails {
+                            deregisters.push(Deregister::Downstream {
+                                conn_id: downstream.conn_id,
+                                request_id: downstream.req_id,
+                                region_id,
+                                downstream_id: downstream.id,
+                                err: Some(e),
+                            });
+                        }
+                    }
+                    Err(e) => deregisters.push(Deregister::Delegate {
                         region_id,
                         observe_id,
                         err: e,
-                    });
+                    }),
                 }
             } else {
                 debug!("cdc stale region ready";
@@ -918,7 +929,8 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
                 "region_id" => region.get_id());
         }
 
-        if let Some(deregister) = deregister {
+        // Deregister downstreams if there is any downstream fails to subscribe.
+        for deregister in deregisters {
             self.on_deregister(deregister);
         }
     }
@@ -2128,14 +2140,13 @@ mod tests {
             conn_id,
         });
         let memory_quota = Arc::new(MemoryQuota::new(std::usize::MAX));
-        let resolver = Resolver::new(1, memory_quota);
         let observe_id = suite.endpoint.capture_regions[&1].handle.id;
         suite
             .capture_regions
             .get_mut(&1)
             .unwrap()
-            .maybe_init_lock_tracker();
-        suite.on_region_ready(observe_id, resolver, region.clone());
+            .init_lock_tracker();
+        suite.on_region_ready(observe_id, region.clone(), Default::default());
         suite.run(Task::MinTs {
             regions: vec![1],
             min_ts: TimeStamp::from(1),
@@ -2170,15 +2181,14 @@ mod tests {
             conn_id,
         });
         let memory_quota = Arc::new(MemoryQuota::new(std::usize::MAX));
-        let resolver = Resolver::new(2, memory_quota);
         region.set_id(2);
         let observe_id = suite.endpoint.capture_regions[&2].handle.id;
         suite
             .capture_regions
             .get_mut(&2)
             .unwrap()
-            .maybe_init_lock_tracker();
-        suite.on_region_ready(observe_id, resolver, region);
+            .init_lock_tracker();
+        suite.on_region_ready(observe_id, region, Default::default());
         suite.run(Task::MinTs {
             regions: vec![1, 2],
             min_ts: TimeStamp::from(2),
@@ -2228,15 +2238,14 @@ mod tests {
             conn_id,
         });
         let memory_quota = Arc::new(MemoryQuota::new(std::usize::MAX));
-        let resolver = Resolver::new(3, memory_quota);
         region.set_id(3);
         let observe_id = suite.endpoint.capture_regions[&3].handle.id;
         suite
             .capture_regions
             .get_mut(&3)
             .unwrap()
-            .maybe_init_lock_tracker();
-        suite.on_region_ready(observe_id, resolver, region);
+            .init_lock_tracker();
+        suite.on_region_ready(observe_id, region, Default::default());
         suite.run(Task::MinTs {
             regions: vec![1, 2, 3],
             min_ts: TimeStamp::from(3),
@@ -2302,7 +2311,7 @@ mod tests {
             false,
             ObservedRange::default(),
         );
-        let downstream_id = downstream.get_id();
+        let downstream_id = downstream.id;
         suite.run(Task::Register {
             request: req.clone(),
             downstream,
@@ -2346,7 +2355,7 @@ mod tests {
             false,
             ObservedRange::default(),
         );
-        let new_downstream_id = downstream.get_id();
+        let new_downstream_id = downstream.id;
         suite.run(Task::Register {
             request: req.clone(),
             downstream,
@@ -2464,7 +2473,6 @@ mod tests {
                     conn_id,
                 });
                 let memory_quota = Arc::new(MemoryQuota::new(std::usize::MAX));
-                let resolver = Resolver::new(region_id, memory_quota);
                 let observe_id = suite.endpoint.capture_regions[&region_id].handle.id;
                 let mut region = Region::default();
                 region.set_id(region_id);
@@ -2472,8 +2480,8 @@ mod tests {
                     .capture_regions
                     .get_mut(&region_id)
                     .unwrap()
-                    .maybe_init_lock_tracker();
-                suite.on_region_ready(observe_id, resolver, region);
+                    .init_lock_tracker();
+                suite.on_region_ready(observe_id, region, Default::default());
             }
         }
 
@@ -2633,11 +2641,11 @@ mod tests {
             .capture_regions
             .get_mut(&1)
             .unwrap()
-            .maybe_init_lock_tracker();
+            .init_lock_tracker();
         suite.run(Task::ResolverReady {
             observe_id,
             region: region.clone(),
-            resolver: Resolver::new(1, memory_quota),
+            locks: Default::default(),
         });
 
         // Deregister deletgate due to epoch not match for conn b.
@@ -2703,14 +2711,6 @@ mod tests {
         assert_eq!(ts, 3.into());
         assert_eq!(regions.len(), 1);
         assert!(regions.contains(&3));
-
-        heap1.reset_and_shrink_to(3);
-        assert_eq!(3, heap1.heap.capacity());
-        assert!(heap1.heap.is_empty());
-
-        heap1.push(1, 1.into());
-        heap1.clear();
-        assert!(heap1.heap.is_empty());
     }
 
     #[test]
@@ -2761,10 +2761,8 @@ mod tests {
             });
 
             let memory_quota = Arc::new(MemoryQuota::new(std::usize::MAX));
-            let mut resolver = Resolver::new(id, memory_quota);
-            resolver
-                .track_lock(TimeStamp::compose(0, id), vec![], None)
-                .unwrap();
+            let mut locks = BTreeMap::<Key, TimeStamp>::default();
+            locks.insert(Key::from_encoded(vec![]), TimeStamp::compose(0, id));
             let mut region = Region::default();
             region.id = id;
             region.set_region_epoch(region_epoch);
@@ -2772,12 +2770,12 @@ mod tests {
                 .capture_regions
                 .get_mut(&id)
                 .unwrap()
-                .maybe_init_lock_tracker();
+                .init_lock_tracker();
             let failed = suite
                 .capture_regions
                 .get_mut(&id)
                 .unwrap()
-                .on_region_ready(resolver, region)
+                .on_region_ready(region, locks)
                 .unwrap();
             assert!(failed.is_empty());
         }
@@ -2917,7 +2915,7 @@ mod tests {
         assert_eq!(suite.connections[&conn_id].downstreams_count(), 2);
 
         // Deregister an exist downstream.
-        let downstream_id = suite.capture_regions[&1].downstreams()[0].get_id();
+        let downstream_id = suite.capture_regions[&1].downstreams()[0].id;
         suite.run(Task::Deregister(Deregister::Downstream {
             conn_id,
             request_id: 1,
