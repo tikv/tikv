@@ -1548,7 +1548,7 @@ mod tests {
                     Some(Json::from_u64(3).unwrap()).into(),
                 ],
                 Some(r#"["a", [["b", 3], "c"], "d"]"#.parse().unwrap()),
-            ), 
+            ),
         ];
         for (args, expect_output) in cases {
             let output: Option<Json> = RpnFnScalarEvaluator::new()
