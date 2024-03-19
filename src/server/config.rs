@@ -40,7 +40,19 @@ const DEFAULT_ENDPOINT_REQUEST_MAX_HANDLE_SECS: u64 = 60;
 // Number of rows in each chunk for streaming coprocessor.
 const DEFAULT_ENDPOINT_STREAM_BATCH_ROW_LIMIT: usize = 128;
 
-const DEFAULT_ENDPOINT_MEMORY_QUOTA: ReadableSize = ReadableSize::gb(2);
+// By default, endpoint memory quota will be set to 12.5% of system memory.
+//
+// TPCC check test shows that:
+// * The actual endpoint memory usage is about 3 times to memory quota.
+// * Setting memory quota too low can lead to ServerIsBusy errors, which slow
+//   down performance.
+// * With 1000 warehouses and 1000 threads, the peak memory usage of the TPCC
+//   check is 11.5 GiB, which is too large for common scenario 16GiB memory,
+//   because default block cache takes about 45% memory (7.2GiB).
+//
+// The 12.5% default quota is a balance between efficient memory usage and
+// maintaining performance under load.
+const DEFAULT_ENDPOINT_MEMORY_QUOTA_RATE: f64 = 0.125;
 
 // At least 4 long coprocessor requests are allowed to run concurrently.
 const MIN_ENDPOINT_MAX_CONCURRENCY: usize = 4;
@@ -147,7 +159,7 @@ pub struct Config {
     #[serde(with = "perf_level_serde")]
     #[online_config(skip)]
     pub end_point_perf_level: PerfLevel,
-    pub end_point_memory_quota: ReadableSize,
+    pub end_point_memory_quota: Option<ReadableSize>,
     #[serde(alias = "snap-max-write-bytes-per-sec")]
     pub snap_io_max_bytes_per_sec: ReadableSize,
     pub snap_max_total_size: ReadableSize,
@@ -259,7 +271,7 @@ impl Default for Config {
             end_point_request_max_handle_duration: None,
             end_point_max_concurrency: cmp::max(cpu_num as usize, MIN_ENDPOINT_MAX_CONCURRENCY),
             end_point_perf_level: PerfLevel::Uninitialized,
-            end_point_memory_quota: DEFAULT_ENDPOINT_MEMORY_QUOTA,
+            end_point_memory_quota: None,
             snap_io_max_bytes_per_sec: ReadableSize(DEFAULT_SNAP_MAX_BYTES_PER_SEC),
             snap_max_total_size: ReadableSize(0),
             stats_concurrency: 1,
@@ -367,6 +379,12 @@ impl Config {
             return Err(box_err!(
                 "server.end-point-request-max-handle-secs is too small."
             ));
+        }
+
+        if self.end_point_memory_quota.is_none() {
+            let total_mem = SysQuota::memory_limit_in_bytes();
+            let quota = (total_mem as f64) * DEFAULT_ENDPOINT_MEMORY_QUOTA_RATE;
+            self.end_point_memory_quota = Some(ReadableSize(quota as _));
         }
 
         if self.max_grpc_send_msg_len <= 0 {

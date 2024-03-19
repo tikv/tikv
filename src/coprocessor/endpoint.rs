@@ -112,7 +112,7 @@ impl<E: Engine> Endpoint<E> {
             }
             _ => None,
         };
-        let memory_quota = Arc::new(MemoryQuota::new(cfg.end_point_memory_quota.0 as _));
+        let memory_quota = Arc::new(MemoryQuota::new(cfg.end_point_memory_quota.unwrap().0 as _));
         COPR_MEMORY_QUOTA.capacity.set(memory_quota.capacity() as _);
         Self {
             read_pool,
