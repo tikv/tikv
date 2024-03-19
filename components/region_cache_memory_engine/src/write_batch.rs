@@ -38,7 +38,7 @@ pub struct RangeCacheWriteBatch {
     engine: RangeCacheMemoryEngine,
     save_points: Vec<usize>,
     sequence_number: Option<u64>,
-    memory_limiter: Arc<MemoryController>,
+    memory_controller: Arc<MemoryController>,
     memory_usage_reach_hard_limit: bool,
 
     current_range: Option<CacheRange>,
@@ -66,7 +66,7 @@ impl From<&RangeCacheMemoryEngine> for RangeCacheWriteBatch {
             engine: engine.clone(),
             save_points: Vec::new(),
             sequence_number: None,
-            memory_limiter: engine.memory_limiter(),
+            memory_controller: engine.memory_controller(),
             memory_usage_reach_hard_limit: false,
             current_range: None,
             ranges_to_evict: vec![],
@@ -85,7 +85,7 @@ impl RangeCacheWriteBatch {
             engine: engine.clone(),
             save_points: Vec::new(),
             sequence_number: None,
-            memory_limiter: engine.memory_limiter(),
+            memory_controller: engine.memory_controller(),
             memory_usage_reach_hard_limit: false,
             current_range: None,
             ranges_to_evict: vec![],
@@ -114,7 +114,9 @@ impl RangeCacheWriteBatch {
         let res = entries_to_write
             .into_iter()
             .chain(std::mem::take(&mut self.buffer))
-            .try_for_each(|e| e.write_to_memory(seq, &engine, self.memory_limiter.clone(), guard));
+            .try_for_each(|e| {
+                e.write_to_memory(seq, &engine, self.memory_controller.clone(), guard)
+            });
 
         // todo: schedule it to background worker
         ranges_to_delete.iter().for_each(|r| engine.delete_range(r));
@@ -178,10 +180,10 @@ impl RangeCacheWriteBatch {
     }
 
     fn schedule_memory_check(&self) {
-        if self.memory_limiter.memory_checking() {
+        if self.memory_controller.memory_checking() {
             return;
         }
-        self.memory_limiter.set_memory_checking(true);
+        self.memory_controller.set_memory_checking(true);
         if let Err(e) = self
             .engine
             .bg_worker_manager()
@@ -198,7 +200,7 @@ impl RangeCacheWriteBatch {
     // return false means the memory usage reaches to hard limit and we have no
     // quota to write to the engine
     fn memory_acquire(&mut self, mem_required: usize) -> bool {
-        match self.memory_limiter.acquire(mem_required) {
+        match self.memory_controller.acquire(mem_required) {
             MemoryUsage::HardLimitReached(n) => {
                 self.memory_usage_reach_hard_limit = true;
                 warn!(
@@ -301,13 +303,13 @@ impl RangeCacheWriteBatchEntry {
         &self,
         seq: u64,
         skiplist_engine: &SkiplistEngine,
-        memory_limiter: Arc<MemoryController>,
+        memory_controller: Arc<MemoryController>,
         guard: &epoch::Guard,
     ) -> Result<()> {
         let handle = &skiplist_engine.data[self.cf];
         let (mut key, mut value) = self.encode(seq);
-        key.set_limiter(memory_limiter.clone());
-        value.set_limiter(memory_limiter);
+        key.set_limiter(memory_controller.clone());
+        value.set_limiter(memory_controller);
         handle.insert(key, value, guard).release(guard);
         Ok(())
     }
@@ -730,7 +732,7 @@ mod tests {
         let _ = engine.snapshot(r2.clone(), 1000, 1000).unwrap();
         let _ = engine.snapshot(r3.clone(), 1000, 1000).unwrap();
 
-        let val1: Vec<u8> = (0..100).into_iter().map(|_| 0).collect();
+        let val1: Vec<u8> = (0..100).map(|_| 0).collect();
         let mut wb = RangeCacheWriteBatch::from(&engine);
         wb.prepare_for_range(r1.clone());
         // memory required:
@@ -742,7 +744,7 @@ mod tests {
         wb.prepare_for_range(r3.clone());
         // Now, 621
         wb.put(b"k21", &val1).unwrap();
-        let val2: Vec<u8> = (0..400).into_iter().map(|_| 0).collect();
+        let val2: Vec<u8> = (0..400).map(|_| 0).collect();
         // The memory will fail to acquire
         wb.put(b"k22", &val2).unwrap();
 

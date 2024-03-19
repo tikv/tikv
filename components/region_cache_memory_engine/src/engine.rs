@@ -221,7 +221,7 @@ pub struct RangeCacheMemoryEngine {
     pub(crate) core: Arc<RwLock<RangeCacheMemoryEngineCore>>,
     pub(crate) rocks_engine: Option<RocksEngine>,
     bg_work_manager: Arc<BgWorkManager>,
-    memory_limiter: Arc<MemoryController>,
+    memory_controller: Arc<MemoryController>,
 }
 
 impl RangeCacheMemoryEngine {
@@ -229,7 +229,7 @@ impl RangeCacheMemoryEngine {
         let core = Arc::new(RwLock::new(RangeCacheMemoryEngineCore::new()));
         let skiplist_engine = { core.read().engine().clone() };
 
-        let memory_limiter = Arc::new(MemoryController::new(
+        let memory_controller = Arc::new(MemoryController::new(
             config.soft_limit_threshold,
             config.hard_limit_threshold,
             config.over_head_check_interval,
@@ -239,14 +239,14 @@ impl RangeCacheMemoryEngine {
         let bg_work_manager = Arc::new(BgWorkManager::new(
             core.clone(),
             config.gc_interval,
-            memory_limiter.clone(),
+            memory_controller.clone(),
         ));
 
         Self {
             core,
             rocks_engine: None,
             bg_work_manager,
-            memory_limiter,
+            memory_controller,
         }
     }
 
@@ -378,8 +378,8 @@ impl RangeCacheMemoryEngine {
         &self.bg_work_manager
     }
 
-    pub(crate) fn memory_limiter(&self) -> Arc<MemoryController> {
-        self.memory_limiter.clone()
+    pub(crate) fn memory_controller(&self) -> Arc<MemoryController> {
+        self.memory_controller.clone()
     }
 }
 
@@ -2009,14 +2009,14 @@ mod tests {
 
         // todo(SpadeA): use memory limiter to check the removal of the node
         // {
-        //     let removed = engine.memory_limiter.removed.lock().unwrap();
+        //     let removed = engine.memory_controller.removed.lock().unwrap();
         //     assert!(removed.is_empty());
         // }
 
         drop(s1);
         // todo(SpadeA): use memory limiter to check the removal of the node
         // {
-        //     let removed = engine.memory_limiter.removed.lock().unwrap();
+        //     let removed = engine.memory_controller.removed.lock().unwrap();
         //     for i in 10..20 {
         //         let user_key = construct_key(i, 10);
         //         let internal_key = encode_key(&user_key, 10, ValueType::Value);
@@ -2029,7 +2029,7 @@ mod tests {
         // s2 is dropped, so the range of `evict_range` is removed. The snapshot
         // of s3 and s4 does not prevent it as they are not overlapped.
         // {
-        //     let removed = engine.memory_limiter.removed.lock().unwrap();
+        //     let removed = engine.memory_controller.removed.lock().unwrap();
         //     for i in 10..20 {
         //         let user_key = construct_key(i, 10);
         //         let internal_key = encode_key(&user_key, 10,

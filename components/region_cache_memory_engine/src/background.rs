@@ -71,10 +71,10 @@ impl BgWorkManager {
     pub fn new(
         core: Arc<RwLock<RangeCacheMemoryEngineCore>>,
         gc_interval: Duration,
-        memory_limiter: Arc<MemoryController>,
+        memory_controller: Arc<MemoryController>,
     ) -> Self {
         let worker = Worker::new("range-cache-background-worker");
-        let runner = BackgroundRunner::new(core.clone(), memory_limiter);
+        let runner = BackgroundRunner::new(core.clone(), memory_controller);
         let scheduler = worker.start("range-cache-engine-background", runner);
 
         let scheduler_clone = scheduler.clone();
@@ -86,10 +86,6 @@ impl BgWorkManager {
             scheduler,
             tick_stopper: Some((handle, tx)),
         }
-    }
-
-    pub fn scheduler(&self) -> Scheduler<BackgroundTask> {
-        self.scheduler.clone()
     }
 
     pub fn schedule_task(&self, task: BackgroundTask) -> Result<(), ScheduleError<BackgroundTask>> {
@@ -171,7 +167,7 @@ impl Display for GcTask {
 #[derive(Clone)]
 struct BackgroundRunnerCore {
     engine: Arc<RwLock<RangeCacheMemoryEngineCore>>,
-    memory_limiter: Arc<MemoryController>,
+    memory_controller: Arc<MemoryController>,
 }
 
 impl BackgroundRunnerCore {
@@ -226,7 +222,7 @@ impl BackgroundRunnerCore {
             safe_ts,
             default_cf_handle,
             write_cf_handle.clone(),
-            self.memory_limiter.clone(),
+            self.memory_controller.clone(),
         );
 
         let mut iter = write_cf_handle.owned_iter();
@@ -289,7 +285,7 @@ impl BackgroundRunnerCore {
                     entry.write_to_memory(
                         seq,
                         &skiplist_engine,
-                        self.memory_limiter.clone(),
+                        self.memory_controller.clone(),
                         guard,
                     )?;
                 }
@@ -318,14 +314,14 @@ impl Drop for BackgroundRunner {
 impl BackgroundRunner {
     pub fn new(
         engine: Arc<RwLock<RangeCacheMemoryEngineCore>>,
-        memory_limiter: Arc<MemoryController>,
+        memory_controller: Arc<MemoryController>,
     ) -> Self {
         let range_load_worker = Worker::new("background-range-load-worker");
         let range_load_remote = range_load_worker.remote();
         Self {
             core: BackgroundRunnerCore {
                 engine,
-                memory_limiter,
+                memory_controller,
             },
             range_load_worker,
             range_load_remote,
@@ -346,10 +342,10 @@ impl Runnable for BackgroundRunner {
                 self.core.gc_finished();
             }
             BackgroundTask::LoadTask => {
-                let mem_usage = self.core.memory_limiter.mem_usage();
+                let mem_usage = self.core.memory_controller.mem_usage();
                 if mem_usage
-                    > (self.core.memory_limiter.soft_limit_threshold()
-                        + self.core.memory_limiter.hard_limit_threshold())
+                    > (self.core.memory_controller.soft_limit_threshold()
+                        + self.core.memory_controller.hard_limit_threshold())
                         / 2
                 {
                     // We are running out of memory, so not to load new range
@@ -400,11 +396,11 @@ impl Runnable for BackgroundRunner {
                 self.range_load_remote.spawn(f);
             }
             BackgroundTask::MemoryCheck => {
-                let mem_usage = self.core.memory_limiter.mem_usage();
-                if mem_usage > self.core.memory_limiter.soft_limit_threshold() {
+                let mem_usage = self.core.memory_controller.mem_usage();
+                if mem_usage > self.core.memory_controller.soft_limit_threshold() {
                     // todo: select ranges to evict
                 }
-                self.core.memory_limiter.set_memory_checking(false);
+                self.core.memory_controller.set_memory_checking(false);
             }
         }
     }
@@ -430,7 +426,7 @@ struct Filter {
     unique_key: usize,
     mvcc_rollback_and_locks: usize,
 
-    memory_limiter: Arc<MemoryController>,
+    memory_controller: Arc<MemoryController>,
 }
 
 impl Drop for Filter {
@@ -452,7 +448,7 @@ impl Filter {
         safe_point: u64,
         default_cf_handle: Arc<SkipList<InternalBytes, InternalBytes>>,
         write_cf_handle: Arc<SkipList<InternalBytes, InternalBytes>>,
-        memory_limiter: Arc<MemoryController>,
+        memory_controller: Arc<MemoryController>,
     ) -> Self {
         Self {
             safe_point,
@@ -468,7 +464,7 @@ impl Filter {
             cached_delete_key: None,
             mvcc_rollback_and_locks: 0,
             remove_older: false,
-            memory_limiter,
+            memory_controller,
         }
     }
 
