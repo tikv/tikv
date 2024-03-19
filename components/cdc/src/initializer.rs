@@ -42,7 +42,6 @@ use tikv_util::{
     box_err,
     codec::number,
     debug, defer, error, info,
-    memory::MemoryQuota,
     sys::inspector::{self_thread_inspector, ThreadInspector},
     time::{duration_to_sec, Instant, Limiter},
     warn,
@@ -105,7 +104,6 @@ pub(crate) struct Initializer<E> {
     pub(crate) sched: Scheduler<Task>,
     pub(crate) sink: crate::channel::Sink,
     pub(crate) concurrency_semaphore: Arc<Semaphore>,
-    pub(crate) memory_quota: Arc<MemoryQuota>,
 
     pub(crate) scan_speed_limiter: Limiter,
     pub(crate) fetch_speed_limiter: Limiter,
@@ -270,7 +268,7 @@ impl<E: KvEngine> Initializer<E> {
                     locks.insert(key, lock.ts);
                 }
             }
-            self.finish_building_resolver(region, locks);
+            self.finish_scan_locks(region, locks);
         };
 
         let (mut hint_min_ts, mut old_value_cursors) = (None, None);
@@ -495,10 +493,10 @@ impl<E: KvEngine> Initializer<E> {
         Ok(())
     }
 
-    fn finish_building_resolver(&self, region: Region, locks: BTreeMap<Key, TimeStamp>) {
+    fn finish_scan_locks(&self, region: Region, locks: BTreeMap<Key, TimeStamp>) {
         let observe_id = self.observe_handle.id;
         info!(
-            "cdc has scanned all incremental scan locks, builds resolver";
+            "cdc has scanned all incremental scan locks";
             "region_id" => region.get_id(),
             "conn_id" => ?self.conn_id,
             "downstream_id" => ?self.downstream_id,
@@ -507,7 +505,7 @@ impl<E: KvEngine> Initializer<E> {
         );
 
         fail_point!("before_schedule_resolver_ready");
-        if let Err(e) = self.sched.schedule(Task::ResolverReady {
+        if let Err(e) = self.sched.schedule(Task::FinishScanLocks {
             observe_id,
             region,
             locks,
@@ -709,7 +707,6 @@ mod tests {
             sched: receiver_worker.scheduler(),
             sink,
             concurrency_semaphore: Arc::new(Semaphore::new(1)),
-            memory_quota: Arc::new(MemoryQuota::new(usize::MAX)),
 
             scan_speed_limiter: Limiter::new(scan_limit as _),
             fetch_speed_limiter: Limiter::new(fetch_limit as _),
@@ -772,7 +769,7 @@ mod tests {
         let check_result = || {
             let task = rx.recv().unwrap();
             match task {
-                Task::ResolverReady { locks, .. } => assert_eq!(locks, expected_locks),
+                Task::FinishScanLocks { locks, .. } => assert_eq!(locks, expected_locks),
                 t => panic!("unexpected task {} received", t),
             }
         };
@@ -862,7 +859,6 @@ mod tests {
             filter_loop,
         );
         let th = pool.spawn(async move {
-            let memory_quota = Arc::new(MemoryQuota::new(usize::MAX));
             initializer
                 .async_incremental_scan(snap, Region::default())
                 .await
@@ -1129,7 +1125,6 @@ mod tests {
         let snap = engine.snapshot(Default::default()).unwrap();
 
         let th = pool.spawn(async move {
-            let memory_quota = Arc::new(MemoryQuota::new(usize::MAX));
             initializer
                 .async_incremental_scan(snap, Region::default())
                 .await
@@ -1198,7 +1193,6 @@ mod tests {
         let th = pool.spawn(async move {
             let snap = engine.snapshot(Default::default()).unwrap();
             let region = Region::default();
-            let memory_quota = Arc::new(MemoryQuota::new(usize::MAX));
             let scan_stat = initializer
                 .async_incremental_scan(snap, region)
                 .await

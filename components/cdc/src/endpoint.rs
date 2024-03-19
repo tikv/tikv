@@ -70,11 +70,6 @@ use crate::{
 
 const FEATURE_RESOLVED_TS_STORE: Feature = Feature::require(5, 0, 0);
 const METRICS_FLUSH_INTERVAL: u64 = 1_000; // 1s
-// 10 minutes, it's the default gc life time of TiDB
-// and is long enough for most transactions.
-const WARN_RESOLVED_TS_LAG_THRESHOLD: Duration = Duration::from_secs(600);
-// Suppress repeat resolved ts lag warning.
-const WARN_RESOLVED_TS_COUNT_THRESHOLD: usize = 10;
 
 pub enum Deregister {
     Conn(ConnId),
@@ -188,7 +183,7 @@ pub enum Task {
         min_ts: TimeStamp,
         current_ts: TimeStamp,
     },
-    ResolverReady {
+    FinishScanLocks {
         observe_id: ObserveId,
         region: Region,
         locks: BTreeMap<Key, TimeStamp>,
@@ -265,12 +260,12 @@ impl fmt::Debug for Task {
                 .field("current_ts", current_ts)
                 .field("min_ts", min_ts)
                 .finish(),
-            Task::ResolverReady {
+            Task::FinishScanLocks {
                 ref observe_id,
                 ref region,
                 ..
             } => de
-                .field("type", &"resolver_ready")
+                .field("type", &"finish_scan_locks")
                 .field("observe_id", &observe_id)
                 .field("region_id", &region.get_id())
                 .finish(),
@@ -318,13 +313,13 @@ impl Ord for ResolvedRegion {
 }
 
 #[derive(Default)]
-pub struct ResolvedRegionHeap {
+pub(crate) struct ResolvedRegionHeap {
     // BinaryHeap is max heap, so we reverse order to get a min heap.
     heap: BinaryHeap<Reverse<ResolvedRegion>>,
 }
 
 impl ResolvedRegionHeap {
-    pub fn push(&mut self, region_id: u64, resolved_ts: TimeStamp) {
+    pub(crate) fn push(&mut self, region_id: u64, resolved_ts: TimeStamp) {
         self.heap.push(Reverse(ResolvedRegion {
             region_id,
             resolved_ts,
@@ -350,6 +345,69 @@ impl ResolvedRegionHeap {
 
     fn is_empty(&self) -> bool {
         self.heap.is_empty()
+    }
+}
+
+#[derive(Default)]
+pub(crate) struct Advance {
+    // multiplexing means one region can be subscribed multiple times in one `Conn`,
+    // in which case progresses are grouped by (ConnId, request_id).
+    pub(crate) multiplexing: HashMap<(ConnId, u64), ResolvedRegionHeap>,
+
+    // exclusive means one region can only be subscribed one time in one `Conn`,
+    // in which case progresses are grouped by ConnId.
+    pub(crate) exclusive: HashMap<ConnId, ResolvedRegionHeap>,
+
+    pub(crate) unchanged: usize,
+}
+
+impl Advance {
+    fn emit_resolved_ts(&mut self, connections: &HashMap<ConnId, Conn>) {
+        let multiplexing = std::mem::take(&mut self.multiplexing).into_iter();
+        let exclusive = std::mem::take(&mut self.exclusive).into_iter();
+        let unioned = multiplexing
+            .map(|((a, b), c)| (a, b, c))
+            .chain(exclusive.map(|(a, c)| (a, 0, c)));
+
+        let send_cdc_event = |ts: u64, conn: &Conn, request_id: u64, regions: Vec<u64>| {
+            let mut resolved_ts = ResolvedTs::default();
+            resolved_ts.ts = ts;
+            resolved_ts.request_id = request_id;
+            *resolved_ts.mut_regions() = regions;
+
+            let force_send = false;
+            match conn
+                .get_sink()
+                .unbounded_send(CdcEvent::ResolvedTs(resolved_ts), force_send)
+            {
+                Ok(_) => (),
+                Err(SendError::Disconnected) => {
+                    debug!("cdc send event failed, disconnected";
+                        "conn_id" => ?conn.get_id(), "downstream" => ?conn.get_peer());
+                }
+                Err(SendError::Full) | Err(SendError::Congested) => {
+                    info!("cdc send event failed, full";
+                        "conn_id" => ?conn.get_id(), "downstream" => ?conn.get_peer());
+                }
+            }
+        };
+
+        for (conn_id, req_id, mut region_ts_heap) in unioned {
+            let conn = connections.get(&conn_id).unwrap();
+
+            // Separate broadcasting outlier regions and normal regions,
+            // so 1) downstreams know where they should send resolve lock requests,
+            // and 2) resolved ts of normal regions does not fallback.
+            //
+            // Regions are separated exponentially to reduce resolved ts events and
+            // save CPU for both TiKV and TiCDC.
+            let mut batch_count = 8;
+            while !region_ts_heap.is_empty() {
+                let (ts, regions) = region_ts_heap.pop(batch_count);
+                send_cdc_event(ts.into_inner(), conn, req_id, Vec::from_iter(regions));
+                batch_count *= 4;
+            }
+        }
     }
 }
 
@@ -396,7 +454,6 @@ pub struct Endpoint<T, E, S> {
     min_ts_region_id: u64,
     resolved_region_count: usize,
     unresolved_region_count: usize,
-    warn_resolved_ts_repeat_count: usize,
 }
 
 impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, S> {
@@ -465,37 +522,41 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
         );
         let ep = Endpoint {
             cluster_id,
+
             capture_regions: HashMap::default(),
             connections: HashMap::default(),
             scheduler,
+            cdc_handle,
+            tablets,
+            observer,
+
             pd_client,
-            tso_worker,
             timer: SteadyTimer::default(),
+            tso_worker,
+            store_meta,
+            concurrency_manager,
+
+            raftstore_v2,
+            config: config.clone(),
+            api_version,
+
+            workers,
             scan_task_counter: Arc::default(),
+            scan_concurrency_semaphore,
             scan_speed_limiter,
             fetch_speed_limiter,
             max_scan_batch_bytes,
             max_scan_batch_size,
-            config: config.clone(),
-            raftstore_v2,
-            api_version,
-            workers,
-            scan_concurrency_semaphore,
-            cdc_handle,
-            tablets,
-            observer,
-            store_meta,
-            concurrency_manager,
+            sink_memory_quota,
+
+            old_value_cache,
+            causal_ts_provider,
+
+            current_ts: TimeStamp::zero(),
             min_resolved_ts: TimeStamp::max(),
             min_ts_region_id: 0,
-            old_value_cache,
             resolved_region_count: 0,
             unresolved_region_count: 0,
-            sink_memory_quota,
-            // Log the first resolved ts warning.
-            warn_resolved_ts_repeat_count: WARN_RESOLVED_TS_COUNT_THRESHOLD,
-            current_ts: TimeStamp::zero(),
-            causal_ts_provider,
         };
         ep.register_min_ts_event(leader_resolver, Instant::now());
         ep
@@ -825,7 +886,6 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
             sched,
             sink: conn.get_sink().clone(),
             concurrency_semaphore: self.scan_concurrency_semaphore.clone(),
-            memory_quota: self.sink_memory_quota.clone(),
 
             scan_speed_limiter: self.scan_speed_limiter.clone(),
             fetch_speed_limiter: self.fetch_speed_limiter.clone(),
@@ -890,7 +950,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
         flush_oldvalue_stats(&statistics, TAG_DELTA_CHANGE);
     }
 
-    fn on_region_ready(
+    fn finish_scan_locks(
         &mut self,
         observe_id: ObserveId,
         region: Region,
@@ -900,7 +960,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
         let mut deregisters = Vec::new();
         if let Some(delegate) = self.capture_regions.get_mut(&region_id) {
             if delegate.handle.id == observe_id {
-                match delegate.on_region_ready(region, locks) {
+                match delegate.finish_scan_locks(region, locks) {
                     Ok(fails) => {
                         for (downstream, e) in fails {
                             deregisters.push(Deregister::Downstream {
@@ -938,101 +998,14 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
     fn on_min_ts(&mut self, regions: Vec<u64>, min_ts: TimeStamp, current_ts: TimeStamp) {
         self.min_resolved_ts = TimeStamp::max();
 
-        // map[(conn_id, req_id)]->ResolvedRegionHeap
-        let mut advanced = HashMap::<(ConnId, u64), ResolvedRegionHeap>::default();
-        let mut unchanged = 0;
-        let mut failed = Vec::new();
+        let mut advance = Advance::default();
         for region_id in regions {
             if let Some(d) = self.capture_regions.get_mut(&region_id) {
-                d.on_min_ts(
-                    min_ts,
-                    &self.connections,
-                    &mut advanced,
-                    &mut unchanged,
-                    &mut failed,
-                );
+                d.on_min_ts(min_ts, current_ts, &self.connections, &mut advance);
             }
         }
 
-        for ((conn_id, req_id), mut region_ts_heap) in advanced {
-            let conn = self.connections.get(&conn_id).unwrap();
-
-            // Separate broadcasting outlier regions and normal regions,
-            // so 1) downstreams know where they should send resolve lock requests,
-            // and 2) resolved ts of normal regions does not fallback.
-            //
-            // Regions are separated exponentially to reduce resolved ts events and
-            // save CPU for both TiKV and TiCDC.
-            let mut batch_count = 8;
-            while !region_ts_heap.is_empty() {
-                let (outlier_min_resolved_ts, outlier_regions) = region_ts_heap.pop(batch_count);
-                Self::emit_resolved_ts(conn, req_id, outlier_min_resolved_ts, outlier_regions);
-                batch_count *= 4;
-            }
-        }
-
-        for (err, conn_id, request_id, region_id, downstream_id) in failed {
-            let deregister = Deregister::Downstream {
-                conn_id,
-                request_id,
-                region_id,
-                downstream_id,
-                err: Some(err),
-            };
-            // FIXME: handle the error?
-            let _ = self.scheduler.schedule(Task::Deregister(deregister));
-        }
-
-        self.current_ts = current_ts;
-        let lag_millis = min_ts
-            .physical()
-            .saturating_sub(self.min_resolved_ts.physical());
-        if Duration::from_millis(lag_millis) > WARN_RESOLVED_TS_LAG_THRESHOLD {
-            self.warn_resolved_ts_repeat_count += 1;
-            if self.warn_resolved_ts_repeat_count >= WARN_RESOLVED_TS_COUNT_THRESHOLD {
-                self.warn_resolved_ts_repeat_count = 0;
-                warn!(
-                    "cdc resolved ts lag too large";
-                    "min_resolved_ts" => self.min_resolved_ts,
-                    "min_ts_region_id" => self.min_ts_region_id,
-                    "min_ts" => min_ts,
-                    "lag" => ?Duration::from_millis(lag_millis),
-                );
-            }
-        }
-    }
-
-    fn emit_resolved_ts(
-        conn: &Conn,
-        req_id: u64,
-        min_resolved_ts: TimeStamp,
-        regions: HashSet<u64>,
-    ) {
-        let send_cdc_event = |ts: u64, conn: &Conn, request_id: u64, regions: Vec<u64>| {
-            let mut resolved_ts = ResolvedTs::default();
-            resolved_ts.ts = ts;
-            resolved_ts.request_id = request_id;
-            *resolved_ts.mut_regions() = regions;
-
-            let force_send = false;
-            match conn
-                .get_sink()
-                .unbounded_send(CdcEvent::ResolvedTs(resolved_ts), force_send)
-            {
-                Ok(_) => (),
-                Err(SendError::Disconnected) => {
-                    debug!("cdc send event failed, disconnected";
-                        "conn_id" => ?conn.get_id(), "downstream" => ?conn.get_peer());
-                }
-                Err(SendError::Full) | Err(SendError::Congested) => {
-                    info!("cdc send event failed, full";
-                        "conn_id" => ?conn.get_id(), "downstream" => ?conn.get_peer());
-                }
-            }
-        };
-
-        let min_resolved_ts = min_resolved_ts.into_inner();
-        send_cdc_event(min_resolved_ts, conn, req_id, Vec::from_iter(regions));
+        advance.emit_resolved_ts(&self.connections);
     }
 
     // FIXME: fix it.
@@ -1093,7 +1066,6 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
                 None => pd_client.get_tso().await.unwrap_or_default(),
             };
             let mut min_ts = min_ts_pd;
-            let mut min_ts_min_lock = min_ts_pd;
 
             // Sync with concurrency manager so that it can work correctly when
             // optimizations like async commit is enabled.
@@ -1104,7 +1076,6 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
                 if min_mem_lock_ts < min_ts {
                     min_ts = min_mem_lock_ts;
                 }
-                min_ts_min_lock = min_mem_lock_ts;
             }
 
             let slow_timer = SlowTimer::default();
@@ -1152,13 +1123,6 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
                     Err(err) => panic!("failed to schedule min ts event, error: {:?}", err),
                 }
             }
-            let lag_millis = min_ts_pd.physical().saturating_sub(min_ts.physical());
-            if Duration::from_millis(lag_millis) > WARN_RESOLVED_TS_LAG_THRESHOLD {
-                // TODO: Suppress repeat logs by using WARN_RESOLVED_TS_COUNT_THRESHOLD.
-                info!("cdc min_ts lag too large";
-                    "min_ts" => min_ts, "min_ts_pd" => min_ts_pd,
-                    "min_ts_min_lock" => min_ts_min_lock);
-            }
         };
         self.tso_worker.spawn(fut);
     }
@@ -1197,11 +1161,11 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta + Send> Runnable
                 downstream,
                 conn_id,
             } => self.on_register(request, downstream, conn_id),
-            Task::ResolverReady {
+            Task::FinishScanLocks {
                 observe_id,
                 region,
                 locks,
-            } => self.on_region_ready(observe_id, region, locks),
+            } => self.finish_scan_locks(observe_id, region, locks),
             Task::Deregister(deregister) => self.on_deregister(deregister),
             Task::MultiBatch {
                 multi,
@@ -2146,7 +2110,7 @@ mod tests {
             .get_mut(&1)
             .unwrap()
             .init_lock_tracker();
-        suite.on_region_ready(observe_id, region.clone(), Default::default());
+        suite.finish_scan_locks(observe_id, region.clone(), Default::default());
         suite.run(Task::MinTs {
             regions: vec![1],
             min_ts: TimeStamp::from(1),
@@ -2188,7 +2152,7 @@ mod tests {
             .get_mut(&2)
             .unwrap()
             .init_lock_tracker();
-        suite.on_region_ready(observe_id, region, Default::default());
+        suite.finish_scan_locks(observe_id, region, Default::default());
         suite.run(Task::MinTs {
             regions: vec![1, 2],
             min_ts: TimeStamp::from(2),
@@ -2245,7 +2209,7 @@ mod tests {
             .get_mut(&3)
             .unwrap()
             .init_lock_tracker();
-        suite.on_region_ready(observe_id, region, Default::default());
+        suite.finish_scan_locks(observe_id, region, Default::default());
         suite.run(Task::MinTs {
             regions: vec![1, 2, 3],
             min_ts: TimeStamp::from(3),
@@ -2481,7 +2445,7 @@ mod tests {
                     .get_mut(&region_id)
                     .unwrap()
                     .init_lock_tracker();
-                suite.on_region_ready(observe_id, region, Default::default());
+                suite.finish_scan_locks(observe_id, region, Default::default());
             }
         }
 
@@ -2642,7 +2606,7 @@ mod tests {
             .get_mut(&1)
             .unwrap()
             .init_lock_tracker();
-        suite.run(Task::ResolverReady {
+        suite.run(Task::FinishScanLocks {
             observe_id,
             region: region.clone(),
             locks: Default::default(),
@@ -2775,7 +2739,7 @@ mod tests {
                 .capture_regions
                 .get_mut(&id)
                 .unwrap()
-                .on_region_ready(region, locks)
+                .finish_scan_locks(region, locks)
                 .unwrap();
             assert!(failed.is_empty());
         }

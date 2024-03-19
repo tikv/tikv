@@ -10,6 +10,7 @@ use std::{
         atomic::{AtomicUsize, Ordering},
         Arc,
     },
+    time::Duration,
 };
 
 use api_version::{ApiV2, KeyMode, KvFormat};
@@ -35,13 +36,14 @@ use tikv::storage::{txn::TxnEntry, Statistics};
 use tikv_util::{
     debug, info,
     memory::{HeapSize, MemoryQuota},
+    time::Instant,
     warn,
 };
 use txn_types::{Key, Lock, LockType, TimeStamp, WriteBatchFlags, WriteRef, WriteType};
 
 use crate::{
     channel::{CdcEvent, SendError, Sink, CDC_EVENT_MAX_BYTES},
-    endpoint::ResolvedRegionHeap,
+    endpoint::Advance,
     initializer::KvEntry,
     metrics::*,
     old_value::{OldValueCache, OldValueCallback},
@@ -257,11 +259,8 @@ impl HeapSize for PendingLock {
 }
 
 pub enum LockTracker {
-    Pending, // Snapshot hasn't been acquired.
-    Preparing {
-        locks: Vec<PendingLock>,
-        size: usize,
-    },
+    Pending,
+    Preparing(Vec<PendingLock>),
     Prepared {
         region: Region,
         locks: BTreeMap<Key, TimeStamp>,
@@ -281,27 +280,48 @@ pub struct Delegate {
     downstreams: Vec<Downstream>,
     txn_extra_op: Arc<AtomicCell<TxnExtraOp>>,
     failed: bool,
+
+    created: Instant,
+    last_lag_warn: Instant,
+}
+
+impl Drop for Delegate {
+    fn drop(&mut self) {
+        match &self.lock_tracker {
+            LockTracker::Pending => {}
+            LockTracker::Preparing(locks) => {
+                for lock in locks {
+                    let bytes = lock.approximate_heap_size();
+                    self.memory_quota.free(bytes);
+                    CDC_PENDING_BYTES_GAUGE.sub(bytes as _);
+                }
+            }
+            LockTracker::Prepared { locks, .. } => {
+                for lock in locks.keys() {
+                    let bytes = lock.approximate_heap_size();
+                    self.memory_quota.free(bytes);
+                    CDC_PENDING_BYTES_GAUGE.sub(bytes as _);
+                }
+            }
+        }
+    }
 }
 
 impl Delegate {
     fn push_lock(&mut self, key: Key, start_ts: TimeStamp) -> Result<isize> {
+        let bytes = key.approximate_heap_size();
         let mut lock_count_modify = 0;
-        match self.lock_tracker {
+        match &mut self.lock_tracker {
             LockTracker::Pending => unreachable!(),
-            LockTracker::Preparing {
-                ref mut locks,
-                ref mut size,
-            } => {
-                let bytes = key.approximate_heap_size();
+            LockTracker::Preparing(locks) => {
                 self.memory_quota.alloc(bytes)?;
-                CDC_PENDING_BYTES_GAUGE.add(bytes as i64);
+                CDC_PENDING_BYTES_GAUGE.add(bytes as _);
                 locks.push(PendingLock::Track { key, start_ts });
-                *size += bytes;
             }
-            LockTracker::Prepared { ref mut locks, .. } => {
-                let bytes = key.approximate_heap_size();
+            LockTracker::Prepared { locks, .. } => {
                 if locks.insert(key, start_ts).is_none() {
                     self.memory_quota.alloc(bytes)?;
+                    CDC_PENDING_BYTES_GAUGE.add(bytes as _);
                     lock_count_modify = 1;
                 }
             }
@@ -310,21 +330,19 @@ impl Delegate {
     }
 
     fn pop_lock(&mut self, key: Key) -> Result<()> {
-        match self.lock_tracker {
+        match &mut self.lock_tracker {
             LockTracker::Pending => unreachable!(),
-            LockTracker::Preparing {
-                ref mut locks,
-                ref mut size,
-            } => {
+            LockTracker::Preparing(locks) => {
                 let bytes = key.approximate_heap_size();
                 self.memory_quota.alloc(bytes)?;
-                CDC_PENDING_BYTES_GAUGE.add(bytes as i64);
+                CDC_PENDING_BYTES_GAUGE.add(bytes as _);
                 locks.push(PendingLock::Untrack { key });
-                *size += bytes;
             }
-            LockTracker::Prepared { ref mut locks, .. } => {
+            LockTracker::Prepared { locks, .. } => {
                 let (key, _) = locks.remove_entry(&key).unwrap();
-                self.memory_quota.free(key.approximate_heap_size());
+                let bytes = key.approximate_heap_size();
+                self.memory_quota.free(bytes);
+                CDC_PENDING_BYTES_GAUGE.sub(bytes as _);
             }
         }
         Ok(())
@@ -332,12 +350,10 @@ impl Delegate {
 
     pub(crate) fn init_lock_tracker(&mut self) {
         assert!(matches!(self.lock_tracker, LockTracker::Pending));
-        let locks = vec![];
-        let size = 0;
-        self.lock_tracker = LockTracker::Preparing { locks, size };
+        self.lock_tracker = LockTracker::Preparing(vec![]);
     }
 
-    pub(crate) fn on_region_ready(
+    pub(crate) fn finish_scan_locks(
         &mut self,
         region: Region,
         locks: BTreeMap<Key, TimeStamp>,
@@ -345,8 +361,8 @@ impl Delegate {
         info!("cdc region is ready"; "region_id" => self.region_id);
         self.finish_prepare_lock_tracker(region, locks)?;
 
-        let region = match self.lock_tracker {
-            LockTracker::Prepared { ref region, .. } => region,
+        let region = match &self.lock_tracker {
+            LockTracker::Prepared { region, .. } => region,
             _ => unreachable!(),
         };
 
@@ -365,31 +381,41 @@ impl Delegate {
     fn finish_prepare_lock_tracker(
         &mut self,
         region: Region,
-        locks: BTreeMap<Key, TimeStamp>,
+        mut locks: BTreeMap<Key, TimeStamp>,
     ) -> Result<()> {
-        let pending_locks = match std::mem::replace(&mut self.lock_tracker, LockTracker::Pending) {
-            LockTracker::Preparing { locks, size } => {
-                self.memory_quota.free(size);
-                CDC_PENDING_BYTES_GAUGE.sub(size as i64);
-                locks
-            }
+        let delta_locks = match std::mem::replace(&mut self.lock_tracker, LockTracker::Pending) {
+            LockTracker::Preparing(locks) => locks,
             _ => unreachable!(),
         };
+
+        for delta_lock in delta_locks {
+            let bytes = delta_lock.approximate_heap_size();
+            self.memory_quota.free(bytes);
+            CDC_PENDING_BYTES_GAUGE.sub(bytes as _);
+            match delta_lock {
+                PendingLock::Track { key, start_ts } => match locks.entry(key) {
+                    BTreeMapEntry::Vacant(x) => {
+                        x.insert(start_ts);
+                    }
+                    BTreeMapEntry::Occupied(x) => {
+                        assert_eq!(*x.get(), start_ts);
+                    }
+                },
+                PendingLock::Untrack { key } => match locks.entry(key) {
+                    BTreeMapEntry::Vacant(..) => unreachable!(),
+                    BTreeMapEntry::Occupied(x) => {
+                        x.remove();
+                    }
+                },
+            }
+        }
 
         for key in locks.keys() {
             let bytes = key.approximate_heap_size();
             self.memory_quota.alloc(bytes)?;
+            CDC_PENDING_BYTES_GAUGE.add(bytes as _);
         }
         self.lock_tracker = LockTracker::Prepared { region, locks };
-
-        for lock in pending_locks {
-            match lock {
-                PendingLock::Track { key, start_ts } => {
-                    self.push_lock(key, start_ts)?;
-                }
-                PendingLock::Untrack { key } => self.pop_lock(key)?,
-            }
-        }
         Ok(())
     }
 
@@ -408,6 +434,9 @@ impl Delegate {
             downstreams: Vec::new(),
             txn_extra_op,
             failed: false,
+
+            created: Instant::now_coarse(),
+            last_lag_warn: Instant::now_coarse(),
         }
     }
 
@@ -507,39 +536,41 @@ impl Delegate {
     }
 
     /// Try advance and broadcast resolved ts.
-    pub fn on_min_ts(
+    pub(crate) fn on_min_ts(
         &mut self,
         min_ts: TimeStamp,
+        current_ts: TimeStamp,
         connections: &HashMap<ConnId, Conn>,
-        advanced: &mut HashMap<(ConnId, u64), ResolvedRegionHeap>,
-        unchanged: &mut usize,
-        failed: &mut Vec<(Error, ConnId, u64, u64, DownstreamId)>,
+        advance: &mut Advance,
     ) {
-        let (region, locks) = match self.lock_tracker {
-            LockTracker::Prepared {
-                ref region,
-                ref locks,
-            } => (region, locks),
-            _ => return,
+        let locks = match &self.lock_tracker {
+            LockTracker::Prepared { locks, .. } => locks,
+            _ => {
+                let now = Instant::now_coarse();
+                let elapsed = now.duration_since(self.created);
+                if elapsed > WARN_LAG_THRESHOLD
+                    && now.duration_since(self.last_lag_warn) > WARN_LAG_INTERVAL
+                {
+                    warn!(
+                        "cdc region scan locks too slow";
+                        "region_id" => self.region_id,
+                        "elapsed" => ?elapsed,
+                    );
+                    self.last_lag_warn = now;
+                }
+                return;
+            }
         };
 
-        let handle_downstream = |downstream: &mut Downstream| -> Result<Option<TimeStamp>> {
+        let handle_downstream = |downstream: &mut Downstream| -> Option<TimeStamp> {
+            if !downstream.state.load().ready_for_advancing_ts() {
+                return None;
+            }
             if downstream.lock_heap.is_none() {
-                let state = downstream.state.load();
-                if !state.ready_for_advancing_ts() {
-                    return Ok(None);
-                }
-
-                Self::check_epoch_on_ready(downstream, region)?;
-
                 let mut lock_heap = BTreeMap::<TimeStamp, isize>::new();
                 for (_, ts) in locks.range(downstream.observed_range.to_range()) {
-                    match lock_heap.entry(*ts) {
-                        BTreeMapEntry::Occupied(mut x) => *x.get_mut() += 1,
-                        BTreeMapEntry::Vacant(x) => {
-                            x.insert(1);
-                        }
-                    }
+                    let lock_count = lock_heap.entry(*ts).or_default();
+                    *lock_count += 1;
                 }
                 downstream.lock_heap = Some(lock_heap);
             }
@@ -549,30 +580,45 @@ impl Delegate {
             let advanced_to = std::cmp::min(min_lock, min_ts);
             if advanced_to > downstream.advanced_to {
                 downstream.advanced_to = advanced_to;
-                return Ok(Some(advanced_to));
+                return Some(advanced_to);
             }
-            Ok(None)
+            None
         };
 
+        let mut slow_downstreams = Vec::new();
         for d in &mut self.downstreams {
-            match handle_downstream(d) {
-                Err(e) => {
-                    failed.push((e, d.conn_id, d.req_id, self.region_id, d.id));
-                }
-                Ok(Some(ts)) => {
-                    let features = connections.get(&d.conn_id).unwrap().features();
-                    let req_id = if features.contains(FeatureGate::STREAM_MULTIPLEXING) {
-                        d.req_id
-                    } else {
-                        0
-                    };
+            if let Some(ts) = handle_downstream(d) {
+                let features = connections.get(&d.conn_id).unwrap().features();
+                let v = if features.contains(FeatureGate::STREAM_MULTIPLEXING) {
+                    advance
+                        .multiplexing
+                        .entry((d.conn_id, d.req_id))
+                        .or_default()
+                } else {
+                    advance.exclusive.entry(d.conn_id).or_default()
+                };
+                v.push(self.region_id, ts);
+            } else {
+                advance.unchanged += 1;
+            }
 
-                    let v = advanced
-                        .entry((d.conn_id, req_id))
-                        .or_insert_with(ResolvedRegionHeap::default);
-                    v.push(self.region_id, ts);
-                }
-                Ok(None) => *unchanged += 1,
+            let lag = current_ts
+                .physical()
+                .saturating_sub(d.advanced_to.physical());
+            if Duration::from_millis(lag) > WARN_LAG_THRESHOLD {
+                slow_downstreams.push(d.id);
+            }
+        }
+
+        if !slow_downstreams.is_empty() {
+            let now = Instant::now_coarse();
+            if now.duration_since(self.last_lag_warn) > WARN_LAG_INTERVAL {
+                warn!(
+                    "cdc region downstreams are too slow";
+                    "region_id" => self.region_id,
+                    "downstreams" => ?slow_downstreams,
+                );
+                self.last_lag_warn = now;
             }
         }
     }
@@ -838,7 +884,7 @@ impl Delegate {
                             }
                         }
                     }
-                    let lock_count = lock_heap.entry(entry.start_ts.into()).or_insert(0);
+                    let lock_count = lock_heap.entry(entry.start_ts.into()).or_default();
                     *lock_count += *lock_count_modify;
                 }
             }
@@ -1264,493 +1310,494 @@ impl ObservedRange {
     }
 }
 
-/// ***************
-/// #[cfg(test)]
-/// mod tests {
-/// use std::cell::Cell;
-///
-/// use api_version::RawValue;
-/// use futures::{executor::block_on, stream::StreamExt};
-/// use kvproto::{errorpb::Error as ErrorHeader, metapb::Region};
-/// use tikv_util::memory::MemoryQuota;
-///
-/// use super::*;
-/// use crate::channel::{channel, recv_timeout};
-///
-/// #[test]
-/// fn test_error() {
-/// let region_id = 1;
-/// let mut region = Region::default();
-/// region.set_id(region_id);
-/// region.mut_peers().push(Default::default());
-/// region.mut_region_epoch().set_version(2);
-/// region.mut_region_epoch().set_conf_ver(2);
-/// let region_epoch = region.get_region_epoch().clone();
-///
-/// let quota = Arc::new(MemoryQuota::new(usize::MAX));
-/// let (sink, mut drain) = crate::channel::channel(1, quota);
-/// let rx = drain.drain();
-/// let request_id = 123;
-/// let mut downstream = Downstream::new(
-/// String::new(),
-/// region_epoch,
-/// request_id,
-/// ConnId::new(),
-/// ChangeDataRequestKvApi::TiDb,
-/// false,
-/// ObservedRange::default(),
-/// );
-/// downstream.set_sink(sink);
-/// let memory_quota = Arc::new(MemoryQuota::new(usize::MAX));
-/// let mut delegate = Delegate::new(region_id, memory_quota,
-/// Default::default()); delegate.subscribe(downstream).unwrap();
-/// assert!(delegate.handle.is_observing());
-/// let memory_quota = Arc::new(MemoryQuota::new(std::usize::MAX));
-/// delegate.init_lock_tracker();
-/// delegate.on_region_ready(region, Default::default()).unwrap();
-/// assert!(delegate.downstreams()[0].observed_range.all_key_covered);
-///
-/// let rx_wrap = Cell::new(Some(rx));
-/// let receive_error = || {
-/// let (event, rx) = block_on(rx_wrap.replace(None).unwrap().into_future());
-/// rx_wrap.set(Some(rx));
-/// let event = event.unwrap();
-/// assert!(
-/// matches!(event.0, CdcEvent::Event(_)),
-/// "unknown event {:?}",
-/// event
-/// );
-/// if let CdcEvent::Event(mut e) = event.0 {
-/// assert_eq!(e.get_request_id(), request_id);
-/// let event = e.event.take().unwrap();
-/// match event {
-/// Event_oneof_event::Error(err) => err,
-/// other => panic!("unknown event {:?}", other),
-/// }
-/// } else {
-/// panic!("unknown event")
-/// }
-/// };
-///
-/// let mut err_header = ErrorHeader::default();
-/// err_header.set_not_leader(Default::default());
-/// delegate.stop(Error::request(err_header));
-/// let err = receive_error();
-/// assert!(err.has_not_leader());
-/// Observing is disabled by any error.
-/// assert!(!delegate.handle.is_observing());
-///
-/// let mut err_header = ErrorHeader::default();
-/// err_header.set_region_not_found(Default::default());
-/// delegate.stop(Error::request(err_header));
-/// let err = receive_error();
-/// assert!(err.has_region_not_found());
-///
-/// let mut err_header = ErrorHeader::default();
-/// err_header.set_epoch_not_match(Default::default());
-/// delegate.stop(Error::request(err_header));
-/// let err = receive_error();
-/// assert!(err.has_epoch_not_match());
-///
-/// Split
-/// let mut region = Region::default();
-/// region.set_id(1);
-/// let mut request = AdminRequest::default();
-/// request.set_cmd_type(AdminCmdType::Split);
-/// let mut response = AdminResponse::default();
-/// response.mut_split().set_left(region.clone());
-/// let err = delegate.sink_admin(request, response).err().unwrap();
-/// delegate.stop(err);
-/// let mut err = receive_error();
-/// assert!(err.has_epoch_not_match());
-/// err.take_epoch_not_match()
-/// .current_regions
-/// .into_iter()
-/// .find(|r| r.get_id() == 1)
-/// .unwrap();
-///
-/// let mut request = AdminRequest::default();
-/// request.set_cmd_type(AdminCmdType::BatchSplit);
-/// let mut response = AdminResponse::default();
-/// response.mut_splits().set_regions(vec![region].into());
-/// let err = delegate.sink_admin(request, response).err().unwrap();
-/// delegate.stop(err);
-/// let mut err = receive_error();
-/// assert!(err.has_epoch_not_match());
-/// err.take_epoch_not_match()
-/// .current_regions
-/// .into_iter()
-/// .find(|r| r.get_id() == 1)
-/// .unwrap();
-///
-/// Merge
-/// let mut request = AdminRequest::default();
-/// request.set_cmd_type(AdminCmdType::PrepareMerge);
-/// let response = AdminResponse::default();
-/// let err = delegate.sink_admin(request, response).err().unwrap();
-/// delegate.stop(err);
-/// let mut err = receive_error();
-/// assert!(err.has_epoch_not_match());
-/// assert!(err.take_epoch_not_match().current_regions.is_empty());
-///
-/// let mut request = AdminRequest::default();
-/// request.set_cmd_type(AdminCmdType::CommitMerge);
-/// let response = AdminResponse::default();
-/// let err = delegate.sink_admin(request, response).err().unwrap();
-/// delegate.stop(err);
-/// let mut err = receive_error();
-/// assert!(err.has_epoch_not_match());
-/// assert!(err.take_epoch_not_match().current_regions.is_empty());
-///
-/// let mut request = AdminRequest::default();
-/// request.set_cmd_type(AdminCmdType::RollbackMerge);
-/// let response = AdminResponse::default();
-/// let err = delegate.sink_admin(request, response).err().unwrap();
-/// delegate.stop(err);
-/// let mut err = receive_error();
-/// assert!(err.has_epoch_not_match());
-/// assert!(err.take_epoch_not_match().current_regions.is_empty());
-/// }
-///
-/// #[test]
-/// fn test_delegate_subscribe_unsubscribe() {
-/// let new_downstream = |id: u64, region_version: u64| {
-/// let peer = format!("{}", id);
-/// let mut epoch = RegionEpoch::default();
-/// epoch.set_conf_ver(region_version);
-/// epoch.set_version(region_version);
-/// Downstream::new(
-/// peer,
-/// epoch,
-/// id,
-/// ConnId::new(),
-/// ChangeDataRequestKvApi::TiDb,
-/// false,
-/// ObservedRange::default(),
-/// )
-/// };
-///
-/// Create a new delegate.
-/// let memory_quota = Arc::new(MemoryQuota::new(usize::MAX));
-/// let txn_extra_op = Arc::new(AtomicCell::new(TxnExtraOp::Noop));
-/// let mut delegate = Delegate::new(1, memory_quota, txn_extra_op.clone(), );
-/// assert_eq!(txn_extra_op.load(), TxnExtraOp::Noop);
-/// assert!(delegate.handle.is_observing());
-///
-/// Subscribe once.
-/// let downstream1 = new_downstream(1, 1);
-/// let downstream1_id = downstream1.id;
-/// delegate.subscribe(downstream1).unwrap();
-/// assert_eq!(txn_extra_op.load(), TxnExtraOp::ReadOldValue);
-/// assert!(delegate.handle.is_observing());
-///
-/// Subscribe twice and then unsubscribe the second downstream.
-/// let downstream2 = new_downstream(2, 1);
-/// let downstream2_id = downstream2.id;
-/// delegate.subscribe(downstream2).unwrap();
-/// assert!(!delegate.unsubscribe(downstream2_id, None));
-/// assert_eq!(txn_extra_op.load(), TxnExtraOp::ReadOldValue);
-/// assert!(delegate.handle.is_observing());
-///
-/// `on_region_ready` when the delegate isn't resolved.
-/// delegate.subscribe(new_downstream(1, 2)).unwrap();
-/// let mut region = Region::default();
-/// region.mut_region_epoch().set_conf_ver(1);
-/// region.mut_region_epoch().set_version(1);
-/// {
-/// let memory_quota = Arc::new(MemoryQuota::new(std::usize::MAX));
-/// let failures = delegate.on_region_ready(region,
-/// Default::default()).unwrap(); assert_eq!(failures.len(), 1);
-/// let id = failures[0].0.id;
-/// delegate.unsubscribe(id, None);
-/// assert_eq!(delegate.downstreams().len(), 1);
-/// }
-/// assert_eq!(txn_extra_op.load(), TxnExtraOp::ReadOldValue);
-/// assert!(delegate.handle.is_observing());
-///
-/// Subscribe with an invalid epoch.
-/// assert!(delegate.subscribe(new_downstream(1, 2)).is_err());
-/// assert_eq!(delegate.downstreams().len(), 1);
-///
-/// Unsubscribe all downstreams.
-/// assert!(delegate.unsubscribe(downstream1_id, None));
-/// assert!(delegate.downstreams().is_empty());
-/// assert_eq!(txn_extra_op.load(), TxnExtraOp::Noop);
-/// assert!(!delegate.handle.is_observing());
-/// }
-///
-/// #[test]
-/// fn test_observed_range() {
-/// for case in vec![
-/// (b"".as_slice(), b"".as_slice(), false),
-/// (b"a", b"", false),
-/// (b"", b"b", false),
-/// (b"a", b"b", true),
-/// (b"a", b"bb", false),
-/// (b"a", b"aa", true),
-/// (b"aa", b"aaa", true),
-/// ] {
-/// let start_key = if !case.0.is_empty() {
-/// Key::from_raw(case.0).into_encoded()
-/// } else {
-/// case.0.to_owned()
-/// };
-/// let end_key = if !case.1.is_empty() {
-/// Key::from_raw(case.1).into_encoded()
-/// } else {
-/// case.1.to_owned()
-/// };
-/// let mut region = Region::default();
-/// region.start_key = start_key.to_owned();
-/// region.end_key = end_key.to_owned();
-///
-/// for k in 0..=0xff {
-/// let mut observed_range = ObservedRange::default();
-/// observed_range.update_region_key_range(&region);
-/// assert!(observed_range.contains_encoded_key(&Key::from_raw(&[k]).
-/// into_encoded())); }
-/// let mut observed_range = ObservedRange::new(
-/// Key::from_raw(b"a").into_encoded(),
-/// Key::from_raw(b"b").into_encoded(),
-/// )
-/// .unwrap();
-/// observed_range.update_region_key_range(&region);
-/// assert_eq!(observed_range.all_key_covered, case.2, "{:?}", case);
-/// assert!(
-/// observed_range.contains_encoded_key(&Key::from_raw(b"a").into_encoded()),
-/// "{:?}",
-/// case
-/// );
-/// assert!(
-/// observed_range.contains_encoded_key(&Key::from_raw(b"ab").into_encoded()),
-/// "{:?}",
-/// case
-/// );
-/// if observed_range.all_key_covered {
-/// assert!(
-/// observed_range.contains_encoded_key(&Key::from_raw(b"b").into_encoded()),
-/// "{:?}",
-/// case
-/// );
-/// } else {
-/// assert!(
-/// !observed_range.contains_encoded_key(&Key::from_raw(b"b").into_encoded()),
-/// "{:?}",
-/// case
-/// );
-/// }
-/// }
-/// }
-///
-/// #[test]
-/// fn test_downstream_filter_entires() {
-/// Create a new delegate that observes [b, d).
-/// let observed_range = ObservedRange::new(
-/// Key::from_raw(b"b").into_encoded(),
-/// Key::from_raw(b"d").into_encoded(),
-/// )
-/// .unwrap();
-/// let memory_quota = Arc::new(MemoryQuota::new(usize::MAX));
-/// let txn_extra_op = Arc::new(AtomicCell::new(TxnExtraOp::Noop));
-/// let mut delegate = Delegate::new(1, memory_quota, txn_extra_op, );
-/// assert!(delegate.handle.is_observing());
-///
-/// let mut map = HashMap::default();
-/// for k in b'a'..=b'e' {
-/// let mut put = PutRequest::default();
-/// put.key = Key::from_raw(&[k]).into_encoded();
-/// put.cf = "lock".to_owned();
-/// put.value = Lock::new(
-/// LockType::Put,
-/// put.key.clone(),
-/// 1.into(),
-/// 10,
-/// None,
-/// TimeStamp::zero(),
-/// 0,
-/// TimeStamp::zero(),
-/// false,
-/// )
-/// .to_bytes();
-/// delegate
-/// .sink_txn_put(
-/// put,
-/// false,
-/// |_: &mut EventRow, _: TimeStamp| Ok(()),
-/// &mut map,
-/// )
-/// .unwrap();
-/// }
-/// assert_eq!(map.len(), 5);
-///
-/// let (sink, mut drain) = channel(1, Arc::new(MemoryQuota::new(1024)));
-/// let downstream = Downstream {
-/// id: DownstreamId::new(),
-/// req_id: 1,
-/// conn_id: ConnId::new(),
-/// peer: String::new(),
-/// region_epoch: RegionEpoch::default(),
-/// sink: Some(sink),
-/// state: Arc::new(AtomicCell::new(DownstreamState::Normal)),
-/// kv_api: ChangeDataRequestKvApi::TiDb,
-/// filter_loop: false,
-/// observed_range,
-/// };
-/// delegate.add_downstream(downstream);
-/// let entries = map.values().map(|(r, _)| r).cloned().collect();
-/// delegate
-/// .sink_downstream(entries, 1, ChangeDataRequestKvApi::TiDb)
-/// .unwrap();
-///
-/// let (mut tx, mut rx) = futures::channel::mpsc::unbounded();
-/// let runtime = tokio::runtime::Runtime::new().unwrap();
-/// runtime.spawn(async move {
-/// drain.forward(&mut tx).await.unwrap();
-/// });
-/// let (e, _) = recv_timeout(&mut rx, std::time::Duration::from_secs(5))
-/// .unwrap()
-/// .unwrap();
-/// assert_eq!(e.events[0].get_entries().get_entries().len(), 2, "{:?}", e);
-/// }
-///
-/// fn test_downstream_txn_source_filter(txn_source: TxnSource, filter_loop:
-/// bool) { Create a new delegate that observes [a, f).
-/// let observed_range = ObservedRange::new(
-/// Key::from_raw(b"a").into_encoded(),
-/// Key::from_raw(b"f").into_encoded(),
-/// )
-/// .unwrap();
-/// let memory_quota = Arc::new(MemoryQuota::new(usize::MAX));
-/// let txn_extra_op = Arc::new(AtomicCell::new(TxnExtraOp::Noop));
-/// let mut delegate = Delegate::new(1, memory_quota, txn_extra_op, );
-/// assert!(delegate.handle.is_observing());
-///
-/// let mut map = HashMap::default();
-/// for k in b'a'..=b'e' {
-/// let mut put = PutRequest::default();
-/// put.key = Key::from_raw(&[k]).into_encoded();
-/// put.cf = "lock".to_owned();
-/// let mut lock = Lock::new(
-/// LockType::Put,
-/// put.key.clone(),
-/// 1.into(),
-/// 10,
-/// None,
-/// TimeStamp::zero(),
-/// 0,
-/// TimeStamp::zero(),
-/// false,
-/// );
-/// Only the key `a` is a normal write.
-/// if k != b'a' {
-/// lock = lock.set_txn_source(txn_source.into());
-/// }
-/// put.value = lock.to_bytes();
-/// delegate
-/// .sink_txn_put(
-/// put,
-/// false,
-/// &mut map,
-/// |_: &mut EventRow, _: TimeStamp| Ok(()),
-/// )
-/// .unwrap();
-/// }
-/// assert_eq!(map.len(), 5);
-///
-/// let (sink, mut drain) = channel(1, Arc::new(MemoryQuota::new(1024)));
-/// let downstream = Downstream {
-/// id: DownstreamId::new(),
-/// req_id: 1,
-/// conn_id: ConnId::new(),
-/// peer: String::new(),
-/// region_epoch: RegionEpoch::default(),
-/// sink: Some(sink),
-/// state: Arc::new(AtomicCell::new(DownstreamState::Normal)),
-/// kv_api: ChangeDataRequestKvApi::TiDb,
-/// filter_loop,
-/// observed_range,
-/// };
-/// delegate.add_downstream(downstream);
-/// let entries = map.values().map(|(r, _)| r).cloned().collect();
-/// delegate
-/// .sink_downstream(entries, 1, ChangeDataRequestKvApi::TiDb)
-/// .unwrap();
-///
-/// let (mut tx, mut rx) = futures::channel::mpsc::unbounded();
-/// let runtime = tokio::runtime::Runtime::new().unwrap();
-/// runtime.spawn(async move {
-/// drain.forward(&mut tx).await.unwrap();
-/// });
-/// let (e, _) = recv_timeout(&mut rx, std::time::Duration::from_secs(5))
-/// .unwrap()
-/// .unwrap();
-/// assert_eq!(e.events[0].get_entries().get_entries().len(), 1, "{:?}", e);
-/// }
-///
-/// #[test]
-/// fn test_downstream_filter_cdc_write_entires() {
-/// let mut txn_source = TxnSource::default();
-/// txn_source.set_cdc_write_source(1);
-///
-/// test_downstream_txn_source_filter(txn_source, true);
-/// }
-///
-/// #[test]
-/// fn test_downstream_filter_lossy_ddl_entires() {
-/// let mut txn_source = TxnSource::default();
-/// txn_source.set_lossy_ddl_reorg_source(1);
-/// test_downstream_txn_source_filter(txn_source, false);
-///
-/// With cdr write source and filter loop is false, we should still ignore lossy
-/// ddl changes.
-/// let mut txn_source = TxnSource::default();
-/// txn_source.set_cdc_write_source(1);
-/// txn_source.set_lossy_ddl_reorg_source(1);
-/// test_downstream_txn_source_filter(txn_source, false);
-///
-/// With cdr write source and filter loop is true, we should still ignore some
-/// events.
-/// let mut txn_source = TxnSource::default();
-/// txn_source.set_cdc_write_source(1);
-/// txn_source.set_lossy_ddl_reorg_source(1);
-/// test_downstream_txn_source_filter(txn_source, true);
-/// }
-///
-/// #[test]
-/// fn test_decode_rawkv() {
-/// let cases = vec![
-/// (vec![b'r', 2, 3, 4], b"world1".to_vec(), 1, Some(10), false),
-/// (vec![b'r', 3, 4, 5], b"world2".to_vec(), 2, None, true),
-/// ];
-///
-/// for (key, value, start_ts, expire_ts, is_delete) in cases.into_iter() {
-/// let mut row = EventRow::default();
-/// let key_with_ts = ApiV2::encode_raw_key(&key,
-/// Some(start_ts.into())).into_encoded(); let raw_value = RawValue {
-/// user_value: value.to_vec(),
-/// expire_ts,
-/// is_delete,
-/// };
-/// let encoded_value = ApiV2::encode_raw_value_owned(raw_value);
-/// decode_rawkv(key_with_ts, encoded_value, &mut row).unwrap();
-///
-/// assert_eq!(row.start_ts, start_ts);
-/// assert_eq!(row.commit_ts, start_ts);
-/// assert_eq!(row.key, key);
-/// assert_eq!(row.value, value);
-///
-/// if is_delete {
-/// assert_eq!(row.op_type, EventRowOpType::Delete);
-/// } else {
-/// assert_eq!(row.op_type, EventRowOpType::Put);
-/// }
-///
-/// if let Some(expire_ts) = expire_ts {
-/// assert_eq!(row.expire_ts_unix_secs, expire_ts);
-/// } else {
-/// assert_eq!(row.expire_ts_unix_secs, 0);
-/// }
-/// }
-/// }
-/// }
-/// *******************
+const WARN_LAG_THRESHOLD: Duration = Duration::from_secs(600);
+const WARN_LAG_INTERVAL: Duration = Duration::from_secs(60);
+
+// #[cfg(test)]
+// mod tests {
+// use std::cell::Cell;
+//
+// use api_version::RawValue;
+// use futures::{executor::block_on, stream::StreamExt};
+// use kvproto::{errorpb::Error as ErrorHeader, metapb::Region};
+// use tikv_util::memory::MemoryQuota;
+//
+// use super::*;
+// use crate::channel::{channel, recv_timeout};
+//
+// #[test]
+// fn test_error() {
+// let region_id = 1;
+// let mut region = Region::default();
+// region.set_id(region_id);
+// region.mut_peers().push(Default::default());
+// region.mut_region_epoch().set_version(2);
+// region.mut_region_epoch().set_conf_ver(2);
+// let region_epoch = region.get_region_epoch().clone();
+//
+// let quota = Arc::new(MemoryQuota::new(usize::MAX));
+// let (sink, mut drain) = crate::channel::channel(1, quota);
+// let rx = drain.drain();
+// let request_id = 123;
+// let mut downstream = Downstream::new(
+// String::new(),
+// region_epoch,
+// request_id,
+// ConnId::new(),
+// ChangeDataRequestKvApi::TiDb,
+// false,
+// ObservedRange::default(),
+// );
+// downstream.set_sink(sink);
+// let memory_quota = Arc::new(MemoryQuota::new(usize::MAX));
+// let mut delegate = Delegate::new(region_id, memory_quota,
+// Default::default()); delegate.subscribe(downstream).unwrap();
+// assert!(delegate.handle.is_observing());
+// let memory_quota = Arc::new(MemoryQuota::new(std::usize::MAX));
+// delegate.init_lock_tracker();
+// delegate.finish_prepare_lock_tracker(region, Default::default()).unwrap();
+// assert!(delegate.downstreams()[0].observed_range.all_key_covered);
+//
+// let rx_wrap = Cell::new(Some(rx));
+// let receive_error = || {
+// let (event, rx) = block_on(rx_wrap.replace(None).unwrap().into_future());
+// rx_wrap.set(Some(rx));
+// let event = event.unwrap();
+// assert!(
+// matches!(event.0, CdcEvent::Event(_)),
+// "unknown event {:?}",
+// event
+// );
+// if let CdcEvent::Event(mut e) = event.0 {
+// assert_eq!(e.get_request_id(), request_id);
+// let event = e.event.take().unwrap();
+// match event {
+// Event_oneof_event::Error(err) => err,
+// other => panic!("unknown event {:?}", other),
+// }
+// } else {
+// panic!("unknown event")
+// }
+// };
+//
+// let mut err_header = ErrorHeader::default();
+// err_header.set_not_leader(Default::default());
+// delegate.stop(Error::request(err_header));
+// let err = receive_error();
+// assert!(err.has_not_leader());
+// Observing is disabled by any error.
+// assert!(!delegate.handle.is_observing());
+//
+// let mut err_header = ErrorHeader::default();
+// err_header.set_region_not_found(Default::default());
+// delegate.stop(Error::request(err_header));
+// let err = receive_error();
+// assert!(err.has_region_not_found());
+//
+// let mut err_header = ErrorHeader::default();
+// err_header.set_epoch_not_match(Default::default());
+// delegate.stop(Error::request(err_header));
+// let err = receive_error();
+// assert!(err.has_epoch_not_match());
+//
+// Split
+// let mut region = Region::default();
+// region.set_id(1);
+// let mut request = AdminRequest::default();
+// request.set_cmd_type(AdminCmdType::Split);
+// let mut response = AdminResponse::default();
+// response.mut_split().set_left(region.clone());
+// let err = delegate.sink_admin(request, response).err().unwrap();
+// delegate.stop(err);
+// let mut err = receive_error();
+// assert!(err.has_epoch_not_match());
+// err.take_epoch_not_match()
+// .current_regions
+// .into_iter()
+// .find(|r| r.get_id() == 1)
+// .unwrap();
+//
+// let mut request = AdminRequest::default();
+// request.set_cmd_type(AdminCmdType::BatchSplit);
+// let mut response = AdminResponse::default();
+// response.mut_splits().set_regions(vec![region].into());
+// let err = delegate.sink_admin(request, response).err().unwrap();
+// delegate.stop(err);
+// let mut err = receive_error();
+// assert!(err.has_epoch_not_match());
+// err.take_epoch_not_match()
+// .current_regions
+// .into_iter()
+// .find(|r| r.get_id() == 1)
+// .unwrap();
+//
+// Merge
+// let mut request = AdminRequest::default();
+// request.set_cmd_type(AdminCmdType::PrepareMerge);
+// let response = AdminResponse::default();
+// let err = delegate.sink_admin(request, response).err().unwrap();
+// delegate.stop(err);
+// let mut err = receive_error();
+// assert!(err.has_epoch_not_match());
+// assert!(err.take_epoch_not_match().current_regions.is_empty());
+//
+// let mut request = AdminRequest::default();
+// request.set_cmd_type(AdminCmdType::CommitMerge);
+// let response = AdminResponse::default();
+// let err = delegate.sink_admin(request, response).err().unwrap();
+// delegate.stop(err);
+// let mut err = receive_error();
+// assert!(err.has_epoch_not_match());
+// assert!(err.take_epoch_not_match().current_regions.is_empty());
+//
+// let mut request = AdminRequest::default();
+// request.set_cmd_type(AdminCmdType::RollbackMerge);
+// let response = AdminResponse::default();
+// let err = delegate.sink_admin(request, response).err().unwrap();
+// delegate.stop(err);
+// let mut err = receive_error();
+// assert!(err.has_epoch_not_match());
+// assert!(err.take_epoch_not_match().current_regions.is_empty());
+// }
+//
+// #[test]
+// fn test_delegate_subscribe_unsubscribe() {
+// let new_downstream = |id: u64, region_version: u64| {
+// let peer = format!("{}", id);
+// let mut epoch = RegionEpoch::default();
+// epoch.set_conf_ver(region_version);
+// epoch.set_version(region_version);
+// Downstream::new(
+// peer,
+// epoch,
+// id,
+// ConnId::new(),
+// ChangeDataRequestKvApi::TiDb,
+// false,
+// ObservedRange::default(),
+// )
+// };
+//
+// Create a new delegate.
+// let memory_quota = Arc::new(MemoryQuota::new(usize::MAX));
+// let txn_extra_op = Arc::new(AtomicCell::new(TxnExtraOp::Noop));
+// let mut delegate = Delegate::new(1, memory_quota, txn_extra_op.clone(), );
+// assert_eq!(txn_extra_op.load(), TxnExtraOp::Noop);
+// assert!(delegate.handle.is_observing());
+//
+// Subscribe once.
+// let downstream1 = new_downstream(1, 1);
+// let downstream1_id = downstream1.id;
+// delegate.subscribe(downstream1).unwrap();
+// assert_eq!(txn_extra_op.load(), TxnExtraOp::ReadOldValue);
+// assert!(delegate.handle.is_observing());
+//
+// Subscribe twice and then unsubscribe the second downstream.
+// let downstream2 = new_downstream(2, 1);
+// let downstream2_id = downstream2.id;
+// delegate.subscribe(downstream2).unwrap();
+// assert!(!delegate.unsubscribe(downstream2_id, None));
+// assert_eq!(txn_extra_op.load(), TxnExtraOp::ReadOldValue);
+// assert!(delegate.handle.is_observing());
+//
+// `finish_prepare_lock_tracker` when the delegate isn't resolved.
+// delegate.subscribe(new_downstream(1, 2)).unwrap();
+// let mut region = Region::default();
+// region.mut_region_epoch().set_conf_ver(1);
+// region.mut_region_epoch().set_version(1);
+// {
+// let memory_quota = Arc::new(MemoryQuota::new(std::usize::MAX));
+// let failures = delegate.finish_prepare_lock_tracker(region,
+// Default::default()).unwrap(); assert_eq!(failures.len(), 1);
+// let id = failures[0].0.id;
+// delegate.unsubscribe(id, None);
+// assert_eq!(delegate.downstreams().len(), 1);
+// }
+// assert_eq!(txn_extra_op.load(), TxnExtraOp::ReadOldValue);
+// assert!(delegate.handle.is_observing());
+//
+// Subscribe with an invalid epoch.
+// assert!(delegate.subscribe(new_downstream(1, 2)).is_err());
+// assert_eq!(delegate.downstreams().len(), 1);
+//
+// Unsubscribe all downstreams.
+// assert!(delegate.unsubscribe(downstream1_id, None));
+// assert!(delegate.downstreams().is_empty());
+// assert_eq!(txn_extra_op.load(), TxnExtraOp::Noop);
+// assert!(!delegate.handle.is_observing());
+// }
+//
+// #[test]
+// fn test_observed_range() {
+// for case in vec![
+// (b"".as_slice(), b"".as_slice(), false),
+// (b"a", b"", false),
+// (b"", b"b", false),
+// (b"a", b"b", true),
+// (b"a", b"bb", false),
+// (b"a", b"aa", true),
+// (b"aa", b"aaa", true),
+// ] {
+// let start_key = if !case.0.is_empty() {
+// Key::from_raw(case.0).into_encoded()
+// } else {
+// case.0.to_owned()
+// };
+// let end_key = if !case.1.is_empty() {
+// Key::from_raw(case.1).into_encoded()
+// } else {
+// case.1.to_owned()
+// };
+// let mut region = Region::default();
+// region.start_key = start_key.to_owned();
+// region.end_key = end_key.to_owned();
+//
+// for k in 0..=0xff {
+// let mut observed_range = ObservedRange::default();
+// observed_range.update_region_key_range(&region);
+// assert!(observed_range.contains_encoded_key(&Key::from_raw(&[k]).
+// into_encoded())); }
+// let mut observed_range = ObservedRange::new(
+// Key::from_raw(b"a").into_encoded(),
+// Key::from_raw(b"b").into_encoded(),
+// )
+// .unwrap();
+// observed_range.update_region_key_range(&region);
+// assert_eq!(observed_range.all_key_covered, case.2, "{:?}", case);
+// assert!(
+// observed_range.contains_encoded_key(&Key::from_raw(b"a").into_encoded()),
+// "{:?}",
+// case
+// );
+// assert!(
+// observed_range.contains_encoded_key(&Key::from_raw(b"ab").into_encoded()),
+// "{:?}",
+// case
+// );
+// if observed_range.all_key_covered {
+// assert!(
+// observed_range.contains_encoded_key(&Key::from_raw(b"b").into_encoded()),
+// "{:?}",
+// case
+// );
+// } else {
+// assert!(
+// !observed_range.contains_encoded_key(&Key::from_raw(b"b").into_encoded()),
+// "{:?}",
+// case
+// );
+// }
+// }
+// }
+//
+// #[test]
+// fn test_downstream_filter_entires() {
+// Create a new delegate that observes [b, d).
+// let observed_range = ObservedRange::new(
+// Key::from_raw(b"b").into_encoded(),
+// Key::from_raw(b"d").into_encoded(),
+// )
+// .unwrap();
+// let memory_quota = Arc::new(MemoryQuota::new(usize::MAX));
+// let txn_extra_op = Arc::new(AtomicCell::new(TxnExtraOp::Noop));
+// let mut delegate = Delegate::new(1, memory_quota, txn_extra_op, );
+// assert!(delegate.handle.is_observing());
+//
+// let mut map = HashMap::default();
+// for k in b'a'..=b'e' {
+// let mut put = PutRequest::default();
+// put.key = Key::from_raw(&[k]).into_encoded();
+// put.cf = "lock".to_owned();
+// put.value = Lock::new(
+// LockType::Put,
+// put.key.clone(),
+// 1.into(),
+// 10,
+// None,
+// TimeStamp::zero(),
+// 0,
+// TimeStamp::zero(),
+// false,
+// )
+// .to_bytes();
+// delegate
+// .sink_txn_put(
+// put,
+// false,
+// |_: &mut EventRow, _: TimeStamp| Ok(()),
+// &mut map,
+// )
+// .unwrap();
+// }
+// assert_eq!(map.len(), 5);
+//
+// let (sink, mut drain) = channel(1, Arc::new(MemoryQuota::new(1024)));
+// let downstream = Downstream {
+// id: DownstreamId::new(),
+// req_id: 1,
+// conn_id: ConnId::new(),
+// peer: String::new(),
+// region_epoch: RegionEpoch::default(),
+// sink: Some(sink),
+// state: Arc::new(AtomicCell::new(DownstreamState::Normal)),
+// kv_api: ChangeDataRequestKvApi::TiDb,
+// filter_loop: false,
+// observed_range,
+// };
+// delegate.add_downstream(downstream);
+// let entries = map.values().map(|(r, _)| r).cloned().collect();
+// delegate
+// .sink_downstream(entries, 1, ChangeDataRequestKvApi::TiDb)
+// .unwrap();
+//
+// let (mut tx, mut rx) = futures::channel::mpsc::unbounded();
+// let runtime = tokio::runtime::Runtime::new().unwrap();
+// runtime.spawn(async move {
+// drain.forward(&mut tx).await.unwrap();
+// });
+// let (e, _) = recv_timeout(&mut rx, std::time::Duration::from_secs(5))
+// .unwrap()
+// .unwrap();
+// assert_eq!(e.events[0].get_entries().get_entries().len(), 2, "{:?}", e);
+// }
+//
+// fn test_downstream_txn_source_filter(txn_source: TxnSource, filter_loop:
+// bool) { Create a new delegate that observes [a, f).
+// let observed_range = ObservedRange::new(
+// Key::from_raw(b"a").into_encoded(),
+// Key::from_raw(b"f").into_encoded(),
+// )
+// .unwrap();
+// let memory_quota = Arc::new(MemoryQuota::new(usize::MAX));
+// let txn_extra_op = Arc::new(AtomicCell::new(TxnExtraOp::Noop));
+// let mut delegate = Delegate::new(1, memory_quota, txn_extra_op, );
+// assert!(delegate.handle.is_observing());
+//
+// let mut map = HashMap::default();
+// for k in b'a'..=b'e' {
+// let mut put = PutRequest::default();
+// put.key = Key::from_raw(&[k]).into_encoded();
+// put.cf = "lock".to_owned();
+// let mut lock = Lock::new(
+// LockType::Put,
+// put.key.clone(),
+// 1.into(),
+// 10,
+// None,
+// TimeStamp::zero(),
+// 0,
+// TimeStamp::zero(),
+// false,
+// );
+// Only the key `a` is a normal write.
+// if k != b'a' {
+// lock = lock.set_txn_source(txn_source.into());
+// }
+// put.value = lock.to_bytes();
+// delegate
+// .sink_txn_put(
+// put,
+// false,
+// &mut map,
+// |_: &mut EventRow, _: TimeStamp| Ok(()),
+// )
+// .unwrap();
+// }
+// assert_eq!(map.len(), 5);
+//
+// let (sink, mut drain) = channel(1, Arc::new(MemoryQuota::new(1024)));
+// let downstream = Downstream {
+// id: DownstreamId::new(),
+// req_id: 1,
+// conn_id: ConnId::new(),
+// peer: String::new(),
+// region_epoch: RegionEpoch::default(),
+// sink: Some(sink),
+// state: Arc::new(AtomicCell::new(DownstreamState::Normal)),
+// kv_api: ChangeDataRequestKvApi::TiDb,
+// filter_loop,
+// observed_range,
+// };
+// delegate.add_downstream(downstream);
+// let entries = map.values().map(|(r, _)| r).cloned().collect();
+// delegate
+// .sink_downstream(entries, 1, ChangeDataRequestKvApi::TiDb)
+// .unwrap();
+//
+// let (mut tx, mut rx) = futures::channel::mpsc::unbounded();
+// let runtime = tokio::runtime::Runtime::new().unwrap();
+// runtime.spawn(async move {
+// drain.forward(&mut tx).await.unwrap();
+// });
+// let (e, _) = recv_timeout(&mut rx, std::time::Duration::from_secs(5))
+// .unwrap()
+// .unwrap();
+// assert_eq!(e.events[0].get_entries().get_entries().len(), 1, "{:?}", e);
+// }
+//
+// #[test]
+// fn test_downstream_filter_cdc_write_entires() {
+// let mut txn_source = TxnSource::default();
+// txn_source.set_cdc_write_source(1);
+//
+// test_downstream_txn_source_filter(txn_source, true);
+// }
+//
+// #[test]
+// fn test_downstream_filter_lossy_ddl_entires() {
+// let mut txn_source = TxnSource::default();
+// txn_source.set_lossy_ddl_reorg_source(1);
+// test_downstream_txn_source_filter(txn_source, false);
+//
+// With cdr write source and filter loop is false, we should still ignore lossy
+// ddl changes.
+// let mut txn_source = TxnSource::default();
+// txn_source.set_cdc_write_source(1);
+// txn_source.set_lossy_ddl_reorg_source(1);
+// test_downstream_txn_source_filter(txn_source, false);
+//
+// With cdr write source and filter loop is true, we should still ignore some
+// events.
+// let mut txn_source = TxnSource::default();
+// txn_source.set_cdc_write_source(1);
+// txn_source.set_lossy_ddl_reorg_source(1);
+// test_downstream_txn_source_filter(txn_source, true);
+// }
+//
+// #[test]
+// fn test_decode_rawkv() {
+// let cases = vec![
+// (vec![b'r', 2, 3, 4], b"world1".to_vec(), 1, Some(10), false),
+// (vec![b'r', 3, 4, 5], b"world2".to_vec(), 2, None, true),
+// ];
+//
+// for (key, value, start_ts, expire_ts, is_delete) in cases.into_iter() {
+// let mut row = EventRow::default();
+// let key_with_ts = ApiV2::encode_raw_key(&key,
+// Some(start_ts.into())).into_encoded(); let raw_value = RawValue {
+// user_value: value.to_vec(),
+// expire_ts,
+// is_delete,
+// };
+// let encoded_value = ApiV2::encode_raw_value_owned(raw_value);
+// decode_rawkv(key_with_ts, encoded_value, &mut row).unwrap();
+//
+// assert_eq!(row.start_ts, start_ts);
+// assert_eq!(row.commit_ts, start_ts);
+// assert_eq!(row.key, key);
+// assert_eq!(row.value, value);
+//
+// if is_delete {
+// assert_eq!(row.op_type, EventRowOpType::Delete);
+// } else {
+// assert_eq!(row.op_type, EventRowOpType::Put);
+// }
+//
+// if let Some(expire_ts) = expire_ts {
+// assert_eq!(row.expire_ts_unix_secs, expire_ts);
+// } else {
+// assert_eq!(row.expire_ts_unix_secs, 0);
+// }
+// }
+// }
+// }
