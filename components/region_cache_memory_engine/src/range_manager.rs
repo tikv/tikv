@@ -304,10 +304,6 @@ impl RangeManager {
         self.pending_ranges.push(cache_range);
         Ok(())
     }
-
-    pub(crate) fn has_range_to_cache_write(&self) -> bool {
-        !self.pending_ranges_loading_data.is_empty()
-    }
 }
 
 #[derive(Debug, PartialEq)]
