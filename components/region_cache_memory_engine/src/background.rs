@@ -372,7 +372,8 @@ struct Filter {
     default_cf_handle: Arc<SkipList<InternalBytes, InternalBytes>>,
     write_cf_handle: Arc<SkipList<InternalBytes, InternalBytes>>,
 
-    // When delete some key, we should delete the latest one last to avoid the older version appear
+    // When deleting some keys, the latest one should be deleted at last to avoid the older
+    // version appears.
     cached_delete_key: Option<Vec<u8>>,
 
     versions: usize,
