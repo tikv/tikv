@@ -2068,23 +2068,18 @@ mod tests {
             latest_feature_gate(),
         );
 
-        // Spawn a task that sleeps for 500ms to occupy the pool. The next request
-        // cannot run within 500ms.
-        scheduler
-            .get_sched_pool(CommandPri::Normal)
-            .pool
-            .spawn(async { thread::sleep(Duration::from_millis(500)) })
-            .unwrap();
-
         let mut req = BatchRollbackRequest::default();
         req.mut_context().max_execution_duration_ms = 100;
         req.set_keys(vec![b"a".to_vec(), b"b".to_vec(), b"c".to_vec()].into());
-
         let cmd: TypedCommand<()> = req.into();
+
+        // Wait enough time to let the cmd timeout.
+        std::thread::sleep(Duration::from_millis(120));
+
         let (cb, f) = paired_future_callback();
         scheduler.run_cmd(cmd.cmd, StorageCallback::Boolean(cb));
 
-        // But the max execution duration is 100ms, so the deadline is exceeded.
+        // The max execution duration is 100ms, so the deadline is exceeded.
         assert!(matches!(
             block_on(f).unwrap(),
             Err(StorageError(box StorageErrorInner::DeadlineExceeded))
