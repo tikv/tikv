@@ -2312,13 +2312,13 @@ mod tests {
         req.set_keys(vec![b"a".to_vec(), b"b".to_vec(), b"c".to_vec()].into());
         let cmd: TypedCommand<()> = req.into();
 
-        // wait to let the cmd timeout.
+        // Wait enough time to let the cmd timeout.
         std::thread::sleep(Duration::from_millis(120));
 
         let (cb, f) = paired_future_callback();
         scheduler.run_cmd(cmd.cmd, StorageCallback::Boolean(cb));
 
-        // the max execution duration is 100ms, so the deadline is exceeded.
+        // The max execution duration is 100ms, so the deadline is exceeded.
         assert!(matches!(
             block_on(f).unwrap(),
             Err(StorageError(box StorageErrorInner::DeadlineExceeded))
