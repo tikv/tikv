@@ -82,7 +82,7 @@ pub type RuleFilterFn = Arc<dyn Fn(&LabelRule) -> bool + Send + Sync>;
 #[derive(Clone)]
 pub struct RegionLabelService {
     manager: Arc<RegionLabelRulesManager>,
-    pd_client: Arc<RpcClient>,
+    _pd_client: Arc<RpcClient>,
     meta_client: Checked<Sourced<Arc<RpcClient>>>,
     revision: i64,
     cluster_id: u64,
@@ -132,7 +132,7 @@ impl RegionLabelServiceBuilder {
                 Arc::clone(&self.pd_client.clone()),
                 pd_client::meta_storage::Source::RegionLabel,
             )),
-            pd_client: self.pd_client,
+            _pd_client: self.pd_client,
             path_suffix: self.path_suffix,
             rule_filter_fn: self.rule_filter_fn,
         })

@@ -414,10 +414,8 @@ struct Filter {
     default_cf_handle: Arc<SkipList<InternalBytes, InternalBytes>>,
     write_cf_handle: Arc<SkipList<InternalBytes, InternalBytes>>,
 
-    // the total size of the keys buffered, when it exceeds the limit, all keys in the buffer will
-    // be removed
-    filtered_write_key_size: usize,
-    filtered_write_key_buffer: Vec<Vec<u8>>,
+    // When deleting some keys, the latest one should be deleted at last to avoid the older
+    // version appears.
     cached_delete_key: Option<Vec<u8>>,
 
     versions: usize,
@@ -455,8 +453,6 @@ impl Filter {
             default_cf_handle,
             write_cf_handle,
             unique_key: 0,
-            filtered_write_key_size: 0,
-            filtered_write_key_buffer: Vec::with_capacity(100),
             mvcc_key_prefix: vec![],
             delete_versions: 0,
             versions: 0,
@@ -831,7 +827,6 @@ pub mod tests {
         worker.core.gc_range(&range, 17);
         assert_eq!(1, element_count(&default));
         assert_eq!(1, element_count(&write));
-        let guard = &epoch::pin();
         let key = encode_key(b"key1", TimeStamp::new(15));
         let guard = &epoch::pin();
         assert!(key_exist(&write, &key, guard));
