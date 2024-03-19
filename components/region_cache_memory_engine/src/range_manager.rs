@@ -311,10 +311,7 @@ impl RangeManager {
         Ok(())
     }
 
-    pub(crate) fn has_range_to_cache_write(&self) -> bool {
-        !self.pending_ranges_loading_data.is_empty()
-    }
-
+    #[cfg(test)]
     pub(crate) fn evicted_ranges(&self) -> &BTreeSet<CacheRange> {
         &self.evicted_ranges
     }

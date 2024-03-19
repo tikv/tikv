@@ -247,11 +247,6 @@ impl BackgroundRunnerCore {
         );
     }
 
-    /// Handles the completion of garbage collection for the specified ranges.
-    ///
-    /// # Arguments
-    ///
-    /// * `ranges` - The ranges for which garbage collection has been completed.
     fn on_gc_finished(&mut self, ranges: BTreeSet<CacheRange>) {
         let mut core = self.engine.write();
         core.mut_range_manager().on_gc_finished(ranges);
@@ -298,7 +293,7 @@ impl BackgroundRunnerCore {
 pub struct BackgroundRunner {
     core: BackgroundRunnerCore,
 
-    // We have following three separate workers so that each type of task should not block each
+    // We have following three separate workers so that each type of task would not block each
     // others
     range_load_remote: Remote<yatp::task::future::TaskCell>,
     range_load_worker: Worker,
@@ -313,6 +308,8 @@ pub struct BackgroundRunner {
 impl Drop for BackgroundRunner {
     fn drop(&mut self) {
         self.range_load_worker.stop();
+        self.delete_range_worker.stop();
+        self.gc_range_worker.stop();
     }
 }
 
@@ -431,10 +428,8 @@ struct Filter {
     default_cf_handle: Arc<SkipList<InternalBytes, InternalBytes>>,
     write_cf_handle: Arc<SkipList<InternalBytes, InternalBytes>>,
 
-    // the total size of the keys buffered, when it exceeds the limit, all keys in the buffer will
-    // be removed
-    filtered_write_key_size: usize,
-    filtered_write_key_buffer: Vec<Vec<u8>>,
+    // When deleting some keys, the latest one should be deleted at last to avoid the older
+    // version appears.
     cached_delete_key: Option<Vec<u8>>,
 
     versions: usize,
@@ -469,8 +464,6 @@ impl Filter {
             default_cf_handle,
             write_cf_handle,
             unique_key: 0,
-            filtered_write_key_size: 0,
-            filtered_write_key_buffer: Vec::with_capacity(100),
             mvcc_key_prefix: vec![],
             delete_versions: 0,
             versions: 0,
@@ -822,7 +815,6 @@ pub mod tests {
         worker.core.gc_range(&range, 17);
         assert_eq!(1, element_count(&default));
         assert_eq!(1, element_count(&write));
-        let guard = &epoch::pin();
         let key = encode_key(b"key1", TimeStamp::new(15));
         let guard = &epoch::pin();
         assert!(key_exist(&write, &key, guard));
