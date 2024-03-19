@@ -414,7 +414,7 @@ impl Iterable for RangeCacheMemoryEngine {
     type Iterator = RangeCacheIterator;
 
     fn iterator_opt(&self, _: &str, _: IterOptions) -> Result<Self::Iterator> {
-        // This engine does not support creating iterator directly by the engine
+        // This engine does not support creating iterators directly by the engine.
         unimplemented!()
     }
 }
