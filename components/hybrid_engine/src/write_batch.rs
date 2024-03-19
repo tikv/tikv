@@ -92,7 +92,7 @@ impl<EK: KvEngine> WriteBatch for HybridEngineWriteBatch<EK> {
         self.cache_write_batch.merge(other.cache_write_batch)
     }
 
-    fn prepare_for_range(&mut self, range: &CacheRange) {
+    fn prepare_for_range(&mut self, range: CacheRange) {
         self.cache_write_batch.prepare_for_range(range);
     }
 }

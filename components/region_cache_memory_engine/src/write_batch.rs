@@ -11,12 +11,15 @@ use crate::{
     background::BackgroundTask,
     engine::{cf_to_id, SkiplistEngine},
     keys::{encode_key, InternalBytes, ValueType, ENC_KEY_SEQ_LENGTH},
-    memory_limiter::{MemoryLimiter, MemoryUsage},
+    memory_limiter::{MemoryController, MemoryUsage},
     range_manager::RangeManager,
     RangeCacheMemoryEngine,
 };
 
-const NODE_OVERHEAD_SIZE_EXPECTATION: usize = 96;
+// This is a bit of a hack. It's the overhead of a node in the skiplist with
+// height 3, which is sufficiently conservative for estimating the node overhead
+// size.
+pub(crate) const NODE_OVERHEAD_SIZE_EXPECTATION: usize = 96;
 
 // `prepare_for_range` should be called before raft command apply for each peer
 // delegate. It sets `range_in_cache` and `pending_range_in_loading` which are
@@ -35,8 +38,12 @@ pub struct RangeCacheWriteBatch {
     engine: RangeCacheMemoryEngine,
     save_points: Vec<usize>,
     sequence_number: Option<u64>,
-    memory_limiter: Arc<MemoryLimiter>,
+    memory_limiter: Arc<MemoryController>,
     memory_usage_reach_hard_limit: bool,
+
+    current_range: Option<CacheRange>,
+    // the ranges that reaches the hard limit and need to be evicted
+    ranges_to_evict: Vec<CacheRange>,
 }
 
 impl std::fmt::Debug for RangeCacheWriteBatch {
@@ -61,6 +68,8 @@ impl From<&RangeCacheMemoryEngine> for RangeCacheWriteBatch {
             sequence_number: None,
             memory_limiter: engine.memory_limiter(),
             memory_usage_reach_hard_limit: false,
+            current_range: None,
+            ranges_to_evict: vec![],
         }
     }
 }
@@ -78,6 +87,8 @@ impl RangeCacheWriteBatch {
             sequence_number: None,
             memory_limiter: engine.memory_limiter(),
             memory_usage_reach_hard_limit: false,
+            current_range: None,
+            ranges_to_evict: vec![],
         }
     }
 
@@ -92,15 +103,45 @@ impl RangeCacheWriteBatch {
     }
 
     fn write_impl(&mut self, seq: u64) -> Result<()> {
+        let ranges_to_delete = self.handle_ranges_to_evict();
         let (entries_to_write, engine) = self.engine.handle_pending_range_in_loading_buffer(
             seq,
             std::mem::take(&mut self.pending_range_in_loading_buffer),
         );
         let guard = &epoch::pin();
-        entries_to_write
+        // Some entries whose ranges may be marked as evicted above, but it does not
+        // matter, they will be deleted at later.
+        let res = entries_to_write
             .into_iter()
             .chain(std::mem::take(&mut self.buffer))
-            .try_for_each(|e| e.write_to_memory(&engine, seq, guard))
+            .try_for_each(|e| e.write_to_memory(seq, &engine, self.memory_limiter.clone(), guard));
+
+        // todo: schedule it to background worker
+        ranges_to_delete.iter().for_each(|r| engine.delete_range(r));
+        if !ranges_to_delete.is_empty() {
+            self.engine
+                .core
+                .write()
+                .mut_range_manager()
+                .on_delete_ranges(&ranges_to_delete);
+        }
+
+        res
+    }
+
+    // return ranges that can be deleted from engine now
+    fn handle_ranges_to_evict(&mut self) -> Vec<CacheRange> {
+        if self.ranges_to_evict.is_empty() {
+            return vec![];
+        }
+        let mut core = self.engine.core.write();
+        let mut ranges = vec![];
+        for r in self.ranges_to_evict.drain(..) {
+            if core.mut_range_manager().evict_range(&r) {
+                ranges.push(r);
+            }
+        }
+        ranges
     }
 
     pub fn set_range_in_cache(&mut self, v: bool) {
@@ -124,6 +165,8 @@ impl RangeCacheWriteBatch {
 
         let memory_expect = NODE_OVERHEAD_SIZE_EXPECTATION + entry_size();
         if !self.memory_acquire(memory_expect) {
+            self.ranges_to_evict
+                .push(self.current_range.clone().unwrap());
             return;
         }
 
@@ -256,12 +299,15 @@ impl RangeCacheWriteBatchEntry {
     #[inline]
     pub fn write_to_memory(
         &self,
-        skiplist_engine: &SkiplistEngine,
         seq: u64,
+        skiplist_engine: &SkiplistEngine,
+        memory_limiter: Arc<MemoryController>,
         guard: &epoch::Guard,
     ) -> Result<()> {
         let handle = &skiplist_engine.data[self.cf];
-        let (key, value) = self.encode(seq);
+        let (mut key, mut value) = self.encode(seq);
+        key.set_limiter(memory_limiter.clone());
+        value.set_limiter(memory_limiter);
         handle.insert(key, value, guard).release(guard);
         Ok(())
     }
@@ -402,10 +448,11 @@ impl WriteBatch for RangeCacheWriteBatch {
         Ok(())
     }
 
-    fn prepare_for_range(&mut self, range: &CacheRange) {
-        let (range_in_cache, range_in_loading) = self.engine.prepare_for_apply(range);
+    fn prepare_for_range(&mut self, range: CacheRange) {
+        let (range_in_cache, range_in_loading) = self.engine.prepare_for_apply(&range);
         self.set_range_in_cache(range_in_cache);
         self.set_pending_range_in_loading(range_in_loading);
+        self.current_range = Some(range);
     }
 }
 
@@ -445,7 +492,7 @@ impl Mutable for RangeCacheWriteBatch {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
+    use std::{sync::Arc, time::Duration};
 
     use engine_rocks::util::new_engine;
     use engine_traits::{
@@ -463,11 +510,11 @@ mod tests {
         sl: &Arc<SkipList<InternalBytes, InternalBytes>>,
         key: &InternalBytes,
         guard: &epoch::Guard,
-    ) -> Option<InternalBytes> {
+    ) -> Option<Vec<u8>> {
         let mut iter = sl.owned_iter();
         iter.seek(key, guard);
         if iter.valid() && iter.key().same_user_key_with(key) {
-            return Some(iter.value().clone());
+            return Some(iter.value().as_slice().to_vec());
         }
         None
     }
@@ -572,11 +619,11 @@ mod tests {
                 .push_back((r2.clone(), snap));
         }
         let mut wb = RangeCacheWriteBatch::from(&engine);
-        wb.prepare_for_range(&r1);
+        wb.prepare_for_range(r1.clone());
         wb.put(b"k01", b"val1").unwrap();
-        wb.prepare_for_range(&r2);
+        wb.prepare_for_range(r2.clone());
         wb.put(b"k05", b"val5").unwrap();
-        wb.prepare_for_range(&r3);
+        wb.prepare_for_range(r3);
         wb.put(b"k10", b"val10").unwrap();
         wb.set_sequence_number(2).unwrap();
         let _ = wb.write();
@@ -591,7 +638,7 @@ mod tests {
         }
 
         let mut wb = RangeCacheWriteBatch::from(&engine);
-        wb.prepare_for_range(&r1);
+        wb.prepare_for_range(r1.clone());
         wb.delete(b"k01").unwrap();
         wb.set_sequence_number(3).unwrap();
         let _ = wb.write();
@@ -650,5 +697,60 @@ mod tests {
                 .iter()
                 .for_each(|e| assert!(range.contains_key(&e.key)))
         });
+    }
+
+    #[test]
+    fn test_write_batch_with_memory_controller() {
+        let path = Builder::new()
+            .prefix("test_write_batch_with_memory_controller")
+            .tempdir()
+            .unwrap();
+        let path_str = path.path().to_str().unwrap();
+        let rocks_engine = new_engine(path_str, DATA_CFS).unwrap();
+
+        let config = EngineConfig::new(Duration::from_secs(600), 500, 1000, 1);
+        let engine = RangeCacheMemoryEngine::new(config);
+        let r1 = CacheRange::new(b"k00".to_vec(), b"k10".to_vec());
+        let r2 = CacheRange::new(b"k10".to_vec(), b"k20".to_vec());
+        let r3 = CacheRange::new(b"k20".to_vec(), b"k30".to_vec());
+        engine.new_range(r1.clone());
+        engine.new_range(r2.clone());
+        engine.new_range(r3.clone());
+        {
+            let mut core = engine.core.write();
+            core.mut_range_manager().set_range_readable(&r1, true);
+            core.mut_range_manager().set_range_readable(&r2, true);
+            core.mut_range_manager().set_range_readable(&r3, true);
+            core.mut_range_manager().set_safe_point(&r1, 10);
+            core.mut_range_manager().set_safe_point(&r2, 10);
+            core.mut_range_manager().set_safe_point(&r3, 10);
+        }
+
+        let _ = engine.snapshot(r1.clone(), 1000, 1000).unwrap();
+        let _ = engine.snapshot(r2.clone(), 1000, 1000).unwrap();
+        let _ = engine.snapshot(r3.clone(), 1000, 1000).unwrap();
+
+        let val1: Vec<u8> = (0..100).into_iter().map(|_| 0).collect();
+        let mut wb = RangeCacheWriteBatch::from(&engine);
+        wb.prepare_for_range(r1.clone());
+        // memory required:
+        // 3(key) + 8(sequencen number) + 100(value) + 96(node overhead) = 207
+        wb.put(b"k01", &val1).unwrap();
+        wb.prepare_for_range(r2.clone());
+        // Now, 414
+        wb.put(b"k11", &val1).unwrap();
+        wb.prepare_for_range(r3.clone());
+        // Now, 621
+        wb.put(b"k21", &val1).unwrap();
+        let val2: Vec<u8> = (0..400).into_iter().map(|_| 0).collect();
+        // The memory will fail to acquire
+        wb.put(b"k22", &val2).unwrap();
+
+        wb.write_impl(1000).unwrap();
+        let snap1 = engine.snapshot(r1.clone(), 1000, 1000).unwrap();
+        assert_eq!(snap1.get_value(b"k01").unwrap().unwrap(), &val1);
+        let snap2 = engine.snapshot(r2.clone(), 1000, 1000).unwrap();
+        assert_eq!(snap1.get_value(b"k11").unwrap().unwrap(), &val1);
+        assert!(engine.snapshot(r3.clone(), 1000, 1000).is_none());
     }
 }

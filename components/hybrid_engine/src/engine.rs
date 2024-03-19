@@ -127,7 +127,7 @@ where
     fn put(&self, key: &[u8], value: &[u8]) -> Result<()> {
         let mut batch = self.write_batch();
         if let Some(range) = self.region_cache_engine.get_range_for_key(key) {
-            batch.prepare_for_range(&range);
+            batch.prepare_for_range(range);
         }
         batch.put(key, value)?;
         let _ = batch.write()?;
@@ -137,7 +137,7 @@ where
     fn put_cf(&self, cf: &str, key: &[u8], value: &[u8]) -> Result<()> {
         let mut batch = self.write_batch();
         if let Some(range) = self.region_cache_engine.get_range_for_key(key) {
-            batch.prepare_for_range(&range);
+            batch.prepare_for_range(range);
         }
         batch.put_cf(cf, key, value)?;
         let _ = batch.write()?;
@@ -147,7 +147,7 @@ where
     fn delete(&self, key: &[u8]) -> Result<()> {
         let mut batch = self.write_batch();
         if let Some(range) = self.region_cache_engine.get_range_for_key(key) {
-            batch.prepare_for_range(&range);
+            batch.prepare_for_range(range);
         }
         batch.delete(key)?;
         let _ = batch.write()?;
@@ -157,7 +157,7 @@ where
     fn delete_cf(&self, cf: &str, key: &[u8]) -> Result<()> {
         let mut batch = self.write_batch();
         if let Some(range) = self.region_cache_engine.get_range_for_key(key) {
-            batch.prepare_for_range(&range);
+            batch.prepare_for_range(range);
         }
         batch.delete_cf(cf, key)?;
         let _ = batch.write()?;
@@ -167,7 +167,7 @@ where
     fn delete_range(&self, begin_key: &[u8], end_key: &[u8]) -> Result<()> {
         let mut batch = self.write_batch();
         if let Some(range) = self.region_cache_engine.get_range_for_key(begin_key) {
-            batch.prepare_for_range(&range);
+            batch.prepare_for_range(range);
         }
         batch.delete_range(begin_key, end_key)?;
         let _ = batch.write()?;
@@ -177,7 +177,7 @@ where
     fn delete_range_cf(&self, cf: &str, begin_key: &[u8], end_key: &[u8]) -> Result<()> {
         let mut batch = self.write_batch();
         if let Some(range) = self.region_cache_engine.get_range_for_key(begin_key) {
-            batch.prepare_for_range(&range);
+            batch.prepare_for_range(range);
         }
         batch.delete_range_cf(cf, begin_key, end_key)?;
         let _ = batch.write()?;

@@ -1,35 +1,51 @@
 // Copyright 2023 TiKV Project Authors. Licensed under Apache-2.0.
 
 use core::slice::SlicePattern;
-use std::cmp::{self, Ordering};
+use std::{
+    cmp::{self, Ordering},
+    sync::Arc,
+};
 
 use bytes::{BufMut, Bytes};
 use engine_traits::CacheRange;
 use txn_types::{Key, TimeStamp};
+
+use crate::memory_limiter::MemoryController;
 
 /// The internal bytes used in the skiplist. See comments on
 /// `encode_internal_bytes`.
 #[derive(Debug)]
 pub struct InternalBytes {
     bytes: Bytes,
+    // memory_limiter **must** be set when interted into skiplist as keys/values.
+    memory_limiter: Option<Arc<MemoryController>>,
 }
 
-impl Clone for InternalBytes {
-    fn clone(&self) -> Self {
-        let bytes = Bytes::copy_from_slice(self.as_slice());
-        InternalBytes::from_bytes(bytes)
-    }
-}
+// impl Clone for InternalBytes {
+//     fn clone(&self) -> Self {
+//         let limiter = self.memory_limiter.clone();
+//         let bytes = Bytes::copy_from_slice(self.as_slice());
+//         InternalBytes::from_bytes(bytes)
+//     }
+// }
 
 impl InternalBytes {
     pub fn from_bytes(bytes: Bytes) -> Self {
-        Self { bytes }
+        Self {
+            bytes,
+            memory_limiter: None,
+        }
     }
 
     pub fn from_vec(vec: Vec<u8>) -> Self {
         Self {
             bytes: Bytes::from(vec),
+            memory_limiter: None,
         }
+    }
+
+    pub fn set_limiter(&mut self, limiter: Arc<MemoryController>) {
+        self.memory_limiter = Some(limiter);
     }
 
     pub fn clone_bytes(&self) -> Bytes {

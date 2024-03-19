@@ -27,7 +27,7 @@ use crate::{
         decode_key, encode_key_for_eviction, encode_seek_for_prev_key, encode_seek_key,
         InternalBytes, InternalKey, ValueType,
     },
-    memory_limiter::MemoryLimiter,
+    memory_limiter::MemoryController,
     range_manager::RangeManager,
     write_batch::{group_write_batch_entries, RangeCacheWriteBatchEntry},
     EngineConfig,
@@ -72,7 +72,13 @@ impl SkiplistEngine {
         self.data[cf_to_id(cf)].clone()
     }
 
-    fn delete_range(&self, range: &CacheRange) {
+    pub fn node_count(&self) -> usize {
+        let mut count = 0;
+        self.data.iter().for_each(|s| count += s.len());
+        count
+    }
+
+    pub(crate) fn delete_range(&self, range: &CacheRange) {
         self.data.iter().for_each(|d| {
             let (start, end) = encode_key_for_eviction(range);
             let mut iter = d.owned_iter();
@@ -215,16 +221,19 @@ pub struct RangeCacheMemoryEngine {
     pub(crate) core: Arc<RwLock<RangeCacheMemoryEngineCore>>,
     pub(crate) rocks_engine: Option<RocksEngine>,
     bg_work_manager: Arc<BgWorkManager>,
-    memory_limiter: Arc<MemoryLimiter>,
+    memory_limiter: Arc<MemoryController>,
 }
 
 impl RangeCacheMemoryEngine {
     pub fn new(config: EngineConfig) -> Self {
         let core = Arc::new(RwLock::new(RangeCacheMemoryEngineCore::new()));
+        let skiplist_engine = { core.read().engine().clone() };
 
-        let memory_limiter = Arc::new(MemoryLimiter::new(
+        let memory_limiter = Arc::new(MemoryController::new(
             config.soft_limit_threshold,
             config.hard_limit_threshold,
+            config.over_head_check_interval,
+            skiplist_engine,
         ));
 
         let bg_work_manager = Arc::new(BgWorkManager::new(
@@ -369,7 +378,7 @@ impl RangeCacheMemoryEngine {
         &self.bg_work_manager
     }
 
-    pub(crate) fn memory_limiter(&self) -> Arc<MemoryLimiter> {
+    pub(crate) fn memory_limiter(&self) -> Arc<MemoryController> {
         self.memory_limiter.clone()
     }
 }
@@ -1928,12 +1937,8 @@ mod tests {
                 let user_key = construct_key(i, 10);
                 let internal_key = encode_key(&user_key, 10, ValueType::Value);
                 let v = construct_value(i, 10);
-                sl.insert(
-                    internal_key.clone(),
-                    InternalBytes::from_vec(v.into_bytes()),
-                    guard,
-                )
-                .release(guard);
+                sl.insert(internal_key, InternalBytes::from_vec(v.into_bytes()), guard)
+                    .release(guard);
             }
         }
 
@@ -1982,7 +1987,7 @@ mod tests {
                 let internal_key = encode_key(&user_key, 10, ValueType::Value);
                 let v = construct_value(i, 10);
                 sl.insert(
-                    internal_key.clone(),
+                    internal_key,
                     InternalBytes::from_vec(v.clone().into_bytes()),
                     guard,
                 )

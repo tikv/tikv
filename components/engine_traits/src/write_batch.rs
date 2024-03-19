@@ -126,5 +126,5 @@ pub trait WriteBatch: Mutable {
 
     /// It declares that the following consecutive write will be within this
     /// range.
-    fn prepare_for_range(&mut self, _: &CacheRange) {}
+    fn prepare_for_range(&mut self, _: CacheRange) {}
 }

@@ -540,7 +540,7 @@ where
         self.applied_batch
             .push_batch(&delegate.observe_info, delegate.region.get_id());
         let range = CacheRange::from_region(&delegate.region);
-        self.kv_wb.prepare_for_range(&range);
+        self.kv_wb.prepare_for_range(range);
     }
 
     /// Commits all changes have done for delegate. `persistent` indicates

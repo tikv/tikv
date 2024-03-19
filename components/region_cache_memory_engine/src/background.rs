@@ -22,7 +22,7 @@ use yatp::Remote;
 use crate::{
     engine::RangeCacheMemoryEngineCore,
     keys::{decode_key, encode_key, encoding_for_filter, InternalBytes, InternalKey, ValueType},
-    memory_limiter::{MemoryLimiter, MemoryUsage},
+    memory_limiter::MemoryController,
 };
 
 /// Try to extract the key and `u64` timestamp from `encoded_key`.
@@ -71,7 +71,7 @@ impl BgWorkManager {
     pub fn new(
         core: Arc<RwLock<RangeCacheMemoryEngineCore>>,
         gc_interval: Duration,
-        memory_limiter: Arc<MemoryLimiter>,
+        memory_limiter: Arc<MemoryController>,
     ) -> Self {
         let worker = Worker::new("range-cache-background-worker");
         let runner = BackgroundRunner::new(core.clone(), memory_limiter);
@@ -171,6 +171,7 @@ impl Display for GcTask {
 #[derive(Clone)]
 struct BackgroundRunnerCore {
     engine: Arc<RwLock<RangeCacheMemoryEngineCore>>,
+    memory_limiter: Arc<MemoryController>,
 }
 
 impl BackgroundRunnerCore {
@@ -221,7 +222,12 @@ impl BackgroundRunnerCore {
 
         let write_cf_handle = skiplist_engine.cf_handle(CF_WRITE);
         let default_cf_handle = skiplist_engine.cf_handle(CF_DEFAULT);
-        let mut filter = Filter::new(safe_ts, default_cf_handle, write_cf_handle.clone());
+        let mut filter = Filter::new(
+            safe_ts,
+            default_cf_handle,
+            write_cf_handle.clone(),
+            self.memory_limiter.clone(),
+        );
 
         let mut iter = write_cf_handle.owned_iter();
         let guard = &epoch::pin();
@@ -280,7 +286,12 @@ impl BackgroundRunnerCore {
                 drop(core);
                 let guard = &epoch::pin();
                 for (seq, entry) in cache_batch {
-                    entry.write_to_memory(&skiplist_engine, seq, guard)?;
+                    entry.write_to_memory(
+                        seq,
+                        &skiplist_engine,
+                        self.memory_limiter.clone(),
+                        guard,
+                    )?;
                 }
                 fail::fail_point!("on_cached_write_batch_consumed");
             } else {
@@ -296,7 +307,6 @@ pub struct BackgroundRunner {
     core: BackgroundRunnerCore,
     range_load_remote: Remote<yatp::task::future::TaskCell>,
     range_load_worker: Worker,
-    memory_limiter: Arc<MemoryLimiter>,
 }
 
 impl Drop for BackgroundRunner {
@@ -308,15 +318,17 @@ impl Drop for BackgroundRunner {
 impl BackgroundRunner {
     pub fn new(
         engine: Arc<RwLock<RangeCacheMemoryEngineCore>>,
-        memory_limiter: Arc<MemoryLimiter>,
+        memory_limiter: Arc<MemoryController>,
     ) -> Self {
         let range_load_worker = Worker::new("background-range-load-worker");
         let range_load_remote = range_load_worker.remote();
         Self {
-            core: BackgroundRunnerCore { engine },
+            core: BackgroundRunnerCore {
+                engine,
+                memory_limiter,
+            },
             range_load_worker,
             range_load_remote,
-            memory_limiter,
         }
     }
 }
@@ -334,6 +346,17 @@ impl Runnable for BackgroundRunner {
                 self.core.gc_finished();
             }
             BackgroundTask::LoadTask => {
+                let mem_usage = self.core.memory_limiter.mem_usage();
+                if mem_usage
+                    > (self.core.memory_limiter.soft_limit_threshold()
+                        + self.core.memory_limiter.hard_limit_threshold())
+                        / 2
+                {
+                    // We are running out of memory, so not to load new range
+                    // todo: clear ranges in pending_ranges_loading_data
+                    return;
+                }
+
                 let mut core = self.core.clone();
                 let f = async move {
                     let skiplist_engine = {
@@ -377,17 +400,11 @@ impl Runnable for BackgroundRunner {
                 self.range_load_remote.spawn(f);
             }
             BackgroundTask::MemoryCheck => {
-                let mem_usage = self.memory_limiter.mem_usage();
-                match mem_usage {
-                    MemoryUsage::NormalUsage(..) => {}
-                    MemoryUsage::SoftLimitReached(n) => {
-                        // select ranges to evict
-                    }
-                    MemoryUsage::HardLimitReached(n) => {
-                        // select ranges to evict
-                    }
+                let mem_usage = self.core.memory_limiter.mem_usage();
+                if mem_usage > self.core.memory_limiter.soft_limit_threshold() {
+                    // todo: select ranges to evict
                 }
-                self.memory_limiter.set_memory_checking(false);
+                self.core.memory_limiter.set_memory_checking(false);
             }
         }
     }
@@ -412,6 +429,8 @@ struct Filter {
     filtered: usize,
     unique_key: usize,
     mvcc_rollback_and_locks: usize,
+
+    memory_limiter: Arc<MemoryController>,
 }
 
 impl Drop for Filter {
@@ -433,6 +452,7 @@ impl Filter {
         safe_point: u64,
         default_cf_handle: Arc<SkipList<InternalBytes, InternalBytes>>,
         write_cf_handle: Arc<SkipList<InternalBytes, InternalBytes>>,
+        memory_limiter: Arc<MemoryController>,
     ) -> Self {
         Self {
             safe_point,
@@ -448,6 +468,7 @@ impl Filter {
             cached_delete_key: None,
             mvcc_rollback_and_locks: 0,
             remove_older: false,
+            memory_limiter,
         }
     }
 
@@ -560,7 +581,7 @@ pub mod tests {
             construct_key, construct_value, encode_key, encode_seek_key, encoding_for_filter,
             InternalBytes, ValueType,
         },
-        memory_limiter::MemoryLimiter,
+        memory_limiter::MemoryController,
         EngineConfig, RangeCacheMemoryEngine,
     };
 
@@ -682,13 +703,22 @@ pub mod tests {
         sl: &Arc<SkipList<InternalBytes, InternalBytes>>,
         key: &InternalBytes,
         guard: &epoch::Guard,
-    ) -> Option<InternalBytes> {
+    ) -> Option<Vec<u8>> {
         let mut iter = sl.owned_iter();
         iter.seek(key, guard);
         if iter.valid() && iter.key().same_user_key_with(key) {
-            return Some(iter.value().clone());
+            return Some(iter.value().as_slice().to_vec());
         }
         None
+    }
+
+    fn dummy_controller(skip_engine: SkiplistEngine) -> Arc<MemoryController> {
+        Arc::new(MemoryController::new(
+            usize::MAX,
+            usize::MAX,
+            usize::MAX,
+            skip_engine,
+        ))
     }
 
     #[test]
@@ -709,7 +739,12 @@ pub mod tests {
         assert_eq!(7, element_count(&default));
         assert_eq!(8, element_count(&write));
 
-        let mut filter = Filter::new(50, default.clone(), write.clone());
+        let mut filter = Filter::new(
+            50,
+            default.clone(),
+            write.clone(),
+            dummy_controller(skiplist_engine.clone()),
+        );
         let mut count = 0;
         let mut iter = write.owned_iter();
         let guard = &epoch::pin();
@@ -756,13 +791,14 @@ pub mod tests {
         let engine = RangeCacheMemoryEngine::new(EngineConfig::config_for_test());
         let range = CacheRange::new(b"".to_vec(), b"z".to_vec());
         engine.new_range(range.clone());
-        let (write, default) = {
+        let (write, default, skiplist_engine) = {
             let mut core = engine.core().write();
             let skiplist_engine = core.engine();
             core.mut_range_manager().set_range_readable(&range, true);
             (
                 skiplist_engine.cf_handle(CF_WRITE),
                 skiplist_engine.cf_handle(CF_DEFAULT),
+                skiplist_engine,
             )
         };
 
@@ -777,7 +813,12 @@ pub mod tests {
         assert_eq!(3, element_count(&default));
         assert_eq!(3, element_count(&write));
 
-        let controller = Arc::new(MemoryLimiter::new(usize::MAX, usize::MAX));
+        let controller = Arc::new(MemoryController::new(
+            usize::MAX,
+            usize::MAX,
+            usize::MAX,
+            skiplist_engine,
+        ));
         let worker = BackgroundRunner::new(engine.core.clone(), controller);
 
         // gc will not remove the latest mvcc put below safe point
@@ -814,13 +855,14 @@ pub mod tests {
         let engine = RangeCacheMemoryEngine::new(EngineConfig::config_for_test());
         let range = CacheRange::new(b"".to_vec(), b"z".to_vec());
         engine.new_range(range.clone());
-        let (write, default) = {
+        let (write, default, skiplist_engine) = {
             let mut core = engine.core().write();
             let skiplist_engine = core.engine();
             core.mut_range_manager().set_range_readable(&range, true);
             (
                 skiplist_engine.cf_handle(CF_WRITE),
                 skiplist_engine.cf_handle(CF_DEFAULT),
+                skiplist_engine,
             )
         };
 
@@ -833,7 +875,12 @@ pub mod tests {
         assert_eq!(6, element_count(&default));
         assert_eq!(6, element_count(&write));
 
-        let controller = Arc::new(MemoryLimiter::new(usize::MAX, usize::MAX));
+        let controller = Arc::new(MemoryController::new(
+            usize::MAX,
+            usize::MAX,
+            usize::MAX,
+            skiplist_engine,
+        ));
         let worker = BackgroundRunner::new(engine.core.clone(), controller);
         let s1 = engine.snapshot(range.clone(), 10, u64::MAX);
         let s2 = engine.snapshot(range.clone(), 11, u64::MAX);
@@ -862,7 +909,9 @@ pub mod tests {
 
     #[test]
     fn test_gc_worker() {
-        let engine = RangeCacheMemoryEngine::new(EngineConfig::config_for_test());
+        let mut config = EngineConfig::config_for_test();
+        config.gc_interval = Duration::from_secs(1);
+        let engine = RangeCacheMemoryEngine::new(config);
         let (write, default) = {
             let mut core = engine.core.write();
             core.mut_range_manager()
