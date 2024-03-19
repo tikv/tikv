@@ -20,7 +20,7 @@ use engine_traits::{
 use parking_lot::{lock_api::RwLockUpgradableReadGuard, RwLock, RwLockWriteGuard};
 use skiplist_rs::{base::OwnedIter, SkipList};
 use slog_global::error;
-use tikv_util::{box_err, config::MIB};
+use tikv_util::box_err;
 
 use crate::{
     background::{BackgroundTask, BgWorkManager},
@@ -31,8 +31,6 @@ use crate::{
     range_manager::RangeManager,
     write_batch::{group_write_batch_entries, RangeCacheWriteBatchEntry},
 };
-
-pub(crate) const EVICTION_KEY_BUFFER_LIMIT: usize = 5 * MIB as usize;
 
 pub(crate) fn cf_to_id(cf: &str) -> usize {
     match cf {
@@ -121,10 +119,6 @@ impl SnapshotList {
 
     pub(crate) fn is_empty(&self) -> bool {
         self.0.is_empty()
-    }
-
-    pub(crate) fn len(&self) -> usize {
-        self.0.keys().len()
     }
 }
 
@@ -393,7 +387,6 @@ enum Direction {
 }
 
 pub struct RangeCacheIterator {
-    cf: String,
     valid: bool,
     iter: OwnedIter<Arc<SkipList<InternalBytes, InternalBytes>>, InternalBytes, InternalBytes>,
     // The lower bound is inclusive while the upper bound is exclusive if set
@@ -420,7 +413,8 @@ pub struct RangeCacheIterator {
 impl Iterable for RangeCacheMemoryEngine {
     type Iterator = RangeCacheIterator;
 
-    fn iterator_opt(&self, cf: &str, opts: IterOptions) -> Result<Self::Iterator> {
+    fn iterator_opt(&self, _: &str, _: IterOptions) -> Result<Self::Iterator> {
+        // This engine does not support creating iterator directly by the engine
         unimplemented!()
     }
 }
@@ -774,7 +768,6 @@ impl Iterable for RangeCacheSnapshot {
         }
 
         Ok(RangeCacheIterator {
-            cf: String::from(cf),
             valid: false,
             prefix: None,
             lower_bound,
@@ -803,7 +796,6 @@ impl Peekable for RangeCacheSnapshot {
         key: &[u8],
     ) -> Result<Option<Self::DbVector>> {
         fail::fail_point!("on_range_cache_get_value");
-        let seq = self.sequence_number();
         let mut iter = self.skiplist_engine.data[cf_to_id(cf)].owned_iter();
         let seek_key = encode_seek_key(key, self.sequence_number());
 
@@ -1445,7 +1437,6 @@ mod tests {
         let engine = RangeCacheMemoryEngine::new(Duration::from_secs(1));
         let range = CacheRange::new(b"".to_vec(), b"z".to_vec());
         engine.new_range(range.clone());
-        let step: i32 = 2;
 
         {
             let mut core = engine.core.write();
@@ -1978,7 +1969,7 @@ mod tests {
         let range_left = CacheRange::new(construct_user_key(0), construct_user_key(10));
         let s3 = engine.snapshot(range_left, 20, 20).unwrap();
         let range_right = CacheRange::new(construct_user_key(20), construct_user_key(30));
-        let s4 = engine.snapshot(range_right, 20, 20).unwrap();
+        let _s4 = engine.snapshot(range_right, 20, 20).unwrap();
 
         drop(s3);
         let range_left_eviction = CacheRange::new(construct_user_key(0), construct_user_key(5));

@@ -172,11 +172,6 @@ impl RangeCacheWriteBatchEntry {
     }
 
     #[inline]
-    pub fn should_write_to_memory(&self, range_manager: &RangeManager) -> bool {
-        range_manager.contains(&self.key)
-    }
-
-    #[inline]
     pub fn write_to_memory(
         &self,
         skiplist_engine: &SkiplistEngine,
