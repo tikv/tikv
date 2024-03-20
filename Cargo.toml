@@ -428,7 +428,7 @@ opt-level = 1
 
 [profile.dev]
 opt-level = 0
-debug = false
+debug = true
 codegen-units = 4
 lto = false
 incremental = true
@@ -439,7 +439,7 @@ rpath = false
 
 [profile.release]
 opt-level = 3
-debug = false
+debug = true
 codegen-units = 1
 lto = "thin"
 incremental = false
