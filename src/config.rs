@@ -1146,7 +1146,7 @@ impl Default for DbConfig {
             enable_pipelined_write: false,
             enable_multi_batch_write: true, // deprecated
             enable_unordered_write: false,
-            track_and_verify_wals_in_manifest: false,
+            track_and_verify_wals_in_manifest: true,
             defaultcf: DefaultCfConfig::default(),
             writecf: WriteCfConfig::default(),
             lockcf: LockCfConfig::default(),
