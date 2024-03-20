@@ -14,14 +14,13 @@ pub mod range_manager;
 mod write_batch;
 use tikv_util::config::ReadableSize;
 pub use write_batch::RangeCacheWriteBatch;
-mod memory_limiter;
+mod memory_controller;
 pub use background::{BackgroundRunner, GcTask};
 
 pub struct EngineConfig {
     gc_interval: Duration,
     soft_limit_threshold: usize,
     hard_limit_threshold: usize,
-    over_head_check_interval: usize,
 }
 
 impl EngineConfig {
@@ -29,13 +28,11 @@ impl EngineConfig {
         gc_interval: Duration,
         soft_limit_threshold: usize,
         hard_limit_threshold: usize,
-        over_head_check_interval: usize,
     ) -> Self {
         Self {
             gc_interval,
             soft_limit_threshold,
             hard_limit_threshold,
-            over_head_check_interval,
         }
     }
 
@@ -44,7 +41,6 @@ impl EngineConfig {
             Duration::from_secs(600),
             ReadableSize::gb(1).0 as usize,
             ReadableSize::gb(2).0 as usize,
-            1,
         )
     }
 }

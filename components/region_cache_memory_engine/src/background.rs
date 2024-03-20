@@ -21,7 +21,7 @@ use yatp::Remote;
 use crate::{
     engine::{RangeCacheMemoryEngineCore, SkiplistHandle},
     keys::{decode_key, encode_key, encoding_for_filter, InternalBytes, InternalKey, ValueType},
-    memory_limiter::MemoryController,
+    memory_controller::MemoryController,
 };
 
 /// Try to extract the key and `u64` timestamp from `encoded_key`.
@@ -547,7 +547,7 @@ pub mod tests {
             construct_key, construct_value, encode_key, encode_seek_key, encoding_for_filter,
             InternalBytes, ValueType,
         },
-        memory_limiter::MemoryController,
+        memory_controller::MemoryController,
         EngineConfig, RangeCacheMemoryEngine,
     };
 
@@ -670,12 +670,7 @@ pub mod tests {
     }
 
     fn dummy_controller(skip_engine: SkiplistEngine) -> Arc<MemoryController> {
-        Arc::new(MemoryController::new(
-            usize::MAX,
-            usize::MAX,
-            usize::MAX,
-            skip_engine,
-        ))
+        Arc::new(MemoryController::new(usize::MAX, usize::MAX, skip_engine))
     }
 
     #[test]

@@ -10,7 +10,7 @@ use bytes::{BufMut, Bytes};
 use engine_traits::CacheRange;
 use txn_types::{Key, TimeStamp};
 
-use crate::memory_limiter::MemoryController;
+use crate::memory_controller::MemoryController;
 
 /// The internal bytes used in the skiplist. See comments on
 /// `encode_internal_bytes`.

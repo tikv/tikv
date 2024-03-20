@@ -11,7 +11,7 @@ use crate::{
     background::BackgroundTask,
     engine::{cf_to_id, SkiplistEngine},
     keys::{encode_key, InternalBytes, ValueType, ENC_KEY_SEQ_LENGTH},
-    memory_limiter::{MemoryController, MemoryUsage},
+    memory_controller::{MemoryController, MemoryUsage},
     range_manager::RangeManager,
     RangeCacheMemoryEngine,
 };
@@ -109,14 +109,16 @@ impl RangeCacheWriteBatch {
             std::mem::take(&mut self.pending_range_in_loading_buffer),
         );
         let guard = &epoch::pin();
+        let entry_counts = entries_to_write.len() + self.buffer.len();
         // Some entries whose ranges may be marked as evicted above, but it does not
-        // matter, they will be deleted at later.
+        // matter, they will be deleted later.
         let res = entries_to_write
             .into_iter()
             .chain(std::mem::take(&mut self.buffer))
             .try_for_each(|e| {
                 e.write_to_memory(seq, &engine, self.memory_controller.clone(), guard)
             });
+        self.memory_controller.on_node_written(entry_counts);
 
         // todo: schedule it to background worker
         ranges_to_delete.iter().for_each(|r| engine.delete_range(r));
@@ -159,17 +161,13 @@ impl RangeCacheWriteBatch {
         F1: FnOnce() -> usize,
         F2: FnOnce() -> RangeCacheWriteBatchEntry,
     {
-        if self.memory_usage_reach_hard_limit {
-            self.ranges_to_evict
-                .insert(self.current_range.clone().unwrap());
+        if !(self.range_in_cache || self.pending_range_in_loading)
+            || self.memory_usage_reach_hard_limit
+        {
             return;
         }
 
-        if !(self.range_in_cache || self.pending_range_in_loading) {
-            return;
-        }
-
-        let memory_expect = NODE_OVERHEAD_SIZE_EXPECTATION + entry_size();
+        let memory_expect = entry_size();
         if !self.memory_acquire(memory_expect) {
             self.ranges_to_evict
                 .insert(self.current_range.clone().unwrap());
@@ -454,6 +452,7 @@ impl WriteBatch for RangeCacheWriteBatch {
         self.set_range_in_cache(range_in_cache);
         self.set_pending_range_in_loading(range_in_loading);
         self.current_range = Some(range);
+        self.memory_usage_reach_hard_limit = false;
     }
 }
 
@@ -499,6 +498,7 @@ mod tests {
     use engine_traits::{
         CacheRange, KvEngine, Peekable, RangeCacheEngine, WriteBatch, CF_WRITE, DATA_CFS,
     };
+    use keys::{DATA_MAX_KEY, DATA_MIN_KEY};
     use skiplist_rs::SkipList;
     use tempfile::Builder;
 
@@ -570,7 +570,7 @@ mod tests {
     #[test]
     fn test_put_write_clear_delete_put_write() {
         let engine = RangeCacheMemoryEngine::new(EngineConfig::config_for_test());
-        let r = CacheRange::new(b"".to_vec(), b"z".to_vec());
+        let r = CacheRange::new(DATA_MIN_KEY.to_vec(), DATA_MAX_KEY.to_vec());
         engine.new_range(r.clone());
         {
             let mut core = engine.core.write();
@@ -579,12 +579,12 @@ mod tests {
         }
         let mut wb = RangeCacheWriteBatch::from(&engine);
         wb.range_in_cache = true;
-        wb.put(b"aaa", b"bbb").unwrap();
+        wb.put(b"zaaa", b"bbb").unwrap();
         wb.set_sequence_number(1).unwrap();
         _ = wb.write();
         wb.clear();
-        wb.put(b"bbb", b"ccc").unwrap();
-        wb.delete(b"aaa").unwrap();
+        wb.put(b"zbbb", b"ccc").unwrap();
+        wb.delete(b"zaaa").unwrap();
         wb.set_sequence_number(2).unwrap();
         _ = wb.write();
         let snapshot = engine.snapshot(r, u64::MAX, 2).unwrap();
@@ -605,9 +605,9 @@ mod tests {
         let rocks_engine = new_engine(path_str, DATA_CFS).unwrap();
 
         let engine = RangeCacheMemoryEngine::new(EngineConfig::config_for_test());
-        let r1 = CacheRange::new(b"k01".to_vec(), b"k05".to_vec());
-        let r2 = CacheRange::new(b"k05".to_vec(), b"k10".to_vec());
-        let r3 = CacheRange::new(b"k10".to_vec(), b"k15".to_vec());
+        let r1 = CacheRange::new(b"zk01".to_vec(), b"zk05".to_vec());
+        let r2 = CacheRange::new(b"zk05".to_vec(), b"zk10".to_vec());
+        let r3 = CacheRange::new(b"zk10".to_vec(), b"zk15".to_vec());
         {
             engine.new_range(r1.clone());
             let mut core = engine.core.write();
@@ -621,11 +621,11 @@ mod tests {
         }
         let mut wb = RangeCacheWriteBatch::from(&engine);
         wb.prepare_for_range(r1.clone());
-        wb.put(b"k01", b"val1").unwrap();
+        wb.put(b"zk01", b"val1").unwrap();
         wb.prepare_for_range(r2.clone());
-        wb.put(b"k05", b"val5").unwrap();
+        wb.put(b"zk05", b"val5").unwrap();
         wb.prepare_for_range(r3);
-        wb.put(b"k10", b"val10").unwrap();
+        wb.put(b"zk10", b"val10").unwrap();
         wb.set_sequence_number(2).unwrap();
         let _ = wb.write();
         let snapshot = engine.snapshot(r1.clone(), u64::MAX, 2).unwrap();
@@ -640,7 +640,7 @@ mod tests {
 
         let mut wb = RangeCacheWriteBatch::from(&engine);
         wb.prepare_for_range(r1.clone());
-        wb.delete(b"k01").unwrap();
+        wb.delete(b"zk01").unwrap();
         wb.set_sequence_number(3).unwrap();
         let _ = wb.write();
         let snapshot = engine.snapshot(r1, u64::MAX, 3).unwrap();
@@ -700,34 +700,50 @@ mod tests {
         });
     }
 
+    // use to make cleanup opeartion in epoch-based memory management be performed
+    fn flush_epoch() {
+        {
+            let guard = &epoch::pin();
+            guard.flush();
+        }
+        for _ in 0..128 {
+            let _ = &epoch::pin();
+        }
+    }
+
     #[test]
     fn test_write_batch_with_memory_controller() {
-        let config = EngineConfig::new(Duration::from_secs(600), 500, 1000, 1);
+        let config = EngineConfig::new(Duration::from_secs(600), 500, 1000);
         let engine = RangeCacheMemoryEngine::new(config);
         let r1 = CacheRange::new(b"zk00".to_vec(), b"zk10".to_vec());
         let r2 = CacheRange::new(b"zk10".to_vec(), b"zk20".to_vec());
         let r3 = CacheRange::new(b"zk20".to_vec(), b"zk30".to_vec());
         let r4 = CacheRange::new(b"zk30".to_vec(), b"zk40".to_vec());
+        let r5 = CacheRange::new(b"zk40".to_vec(), b"zk50".to_vec());
         engine.new_range(r1.clone());
         engine.new_range(r2.clone());
         engine.new_range(r3.clone());
         engine.new_range(r4.clone());
+        engine.new_range(r5.clone());
         {
             let mut core = engine.core.write();
             core.mut_range_manager().set_range_readable(&r1, true);
             core.mut_range_manager().set_range_readable(&r2, true);
             core.mut_range_manager().set_range_readable(&r3, true);
             core.mut_range_manager().set_range_readable(&r4, true);
+            core.mut_range_manager().set_range_readable(&r5, true);
             core.mut_range_manager().set_safe_point(&r1, 10);
             core.mut_range_manager().set_safe_point(&r2, 10);
             core.mut_range_manager().set_safe_point(&r3, 10);
             core.mut_range_manager().set_safe_point(&r4, 10);
+            core.mut_range_manager().set_safe_point(&r5, 10);
         }
 
         let _ = engine.snapshot(r1.clone(), 1000, 1000).unwrap();
         let _ = engine.snapshot(r2.clone(), 1000, 1000).unwrap();
         let _ = engine.snapshot(r3.clone(), 1000, 1000).unwrap();
         let _ = engine.snapshot(r4.clone(), 1000, 1000).unwrap();
+        let _ = engine.snapshot(r5.clone(), 1000, 1000).unwrap();
 
         let val1: Vec<u8> = (0..100).map(|_| 0).collect();
         let mut wb = RangeCacheWriteBatch::from(&engine);
@@ -741,24 +757,44 @@ mod tests {
         wb.prepare_for_range(r3.clone());
         // Now, 624
         wb.put(b"zk21", &val1).unwrap();
-        let val2: Vec<u8> = (0..400).map(|_| 0).collect();
+        let val2: Vec<u8> = (0..400).map(|_| 2).collect();
         // The memory will fail to acquire
         wb.put(b"zk22", &val2).unwrap();
 
-        // Although the memory is enough for this key/value, it's still will not be
-        // buffered as the previous write want to acquire memory which reaches to the
-        // hard limit.
-        let val3: Vec<u8> = (0..100).map(|_| 0).collect();
+        // The memory capacity is enough the the following two inserts
+        let val3: Vec<u8> = (0..100).map(|_| 3).collect();
         wb.prepare_for_range(r4.clone());
+        // Now, 832
         wb.put(b"zk32", &val3).unwrap();
 
+        wb.prepare_for_range(r5.clone());
+        wb.put(b"zk41", &val3).unwrap();
+
+        let memory_controller = engine.memory_controller();
+        // We should have allocated 832 as calculated above
+        assert_eq!(832, memory_controller.mem_usage());
         wb.write_impl(1000).unwrap();
         let snap1 = engine.snapshot(r1.clone(), 1000, 1000).unwrap();
         assert_eq!(snap1.get_value(b"k01").unwrap().unwrap(), &val1);
         let snap2 = engine.snapshot(r2.clone(), 1000, 1000).unwrap();
-        // FIXME: snap1 will success
         assert_eq!(snap2.get_value(b"k11").unwrap().unwrap(), &val1);
+
         assert!(engine.snapshot(r3.clone(), 1000, 1000).is_none());
-        assert!(engine.snapshot(r4.clone(), 1000, 1000).is_none());
+
+        let snap4 = engine.snapshot(r4.clone(), 1000, 1000).unwrap();
+        assert_eq!(snap4.get_value(b"k32").unwrap().unwrap(), &val3);
+
+        assert!(engine.snapshot(r5.clone(), 1000, 1000).is_none());
+
+        // For range 3, one write is buffered but the other is rejected, so the range 3
+        // is evicted and the keys of it are deleted. After flush the epoch, we should
+        // get 832-208 = 624 memory usage.
+        flush_epoch();
+        assert_eq!(624, memory_controller.mem_usage());
+
+        drop(snap1);
+        engine.evict_range(&r1);
+        flush_epoch();
+        assert_eq!(416, memory_controller.mem_usage());
     }
 }

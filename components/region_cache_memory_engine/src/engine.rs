@@ -14,7 +14,7 @@ use engine_rocks::{raw::SliceTransform, util::FixedSuffixSliceTransform, RocksEn
 use engine_traits::{
     CacheRange, CfNamesExt, DbVector, Error, IterOptions, Iterable, Iterator, KvEngine, Peekable,
     RangeCacheEngine, ReadOptions, Result, Snapshot, SnapshotMiscExt, CF_DEFAULT, CF_LOCK,
-    CF_WRITE,
+    CF_WRITE, DATA_CFS,
 };
 use keys::data_key;
 use parking_lot::{lock_api::RwLockUpgradableReadGuard, RwLock, RwLockWriteGuard};
@@ -28,7 +28,7 @@ use crate::{
         decode_key, encode_key_for_eviction, encode_seek_for_prev_key, encode_seek_key,
         InternalBytes, InternalKey, ValueType,
     },
-    memory_limiter::MemoryController,
+    memory_controller::MemoryController,
     range_manager::RangeManager,
     write_batch::{group_write_batch_entries, RangeCacheWriteBatchEntry},
     EngineConfig,
@@ -101,15 +101,14 @@ impl SkiplistEngine {
     }
 
     pub(crate) fn delete_range(&self, range: &CacheRange) {
-        self.data.iter().for_each(|d| {
+        DATA_CFS.iter().for_each(|cf| {
             let (start, end) = encode_key_for_eviction(range);
-            let mut iter = d.owned_iter();
+            let handle = self.cf_handle(cf);
+            let mut iter = handle.iterator();
             let guard = &epoch::pin();
             iter.seek(&start, guard);
             while iter.valid() && iter.key() < &end {
-                if let Some(e) = d.remove(iter.key(), guard) {
-                    e.release(guard)
-                }
+                handle.remove(iter.key(), guard);
                 iter.next(guard);
             }
         });
@@ -250,7 +249,6 @@ impl RangeCacheMemoryEngine {
         let memory_controller = Arc::new(MemoryController::new(
             config.soft_limit_threshold,
             config.hard_limit_threshold,
-            config.over_head_check_interval,
             skiplist_engine,
         ));
 
@@ -273,7 +271,7 @@ impl RangeCacheMemoryEngine {
         core.range_manager.new_range(range);
     }
 
-    pub fn evict_range(&mut self, range: &CacheRange) {
+    pub fn evict_range(&self, range: &CacheRange) {
         let mut skiplist_engine = None;
         {
             let mut core = self.core.write();
@@ -1966,7 +1964,7 @@ mod tests {
 
     #[test]
     fn test_evict_range_without_snapshot() {
-        let mut engine = RangeCacheMemoryEngine::new(EngineConfig::config_for_test());
+        let engine = RangeCacheMemoryEngine::new(EngineConfig::config_for_test());
         let range = CacheRange::new(construct_user_key(0), construct_user_key(30));
         let evict_range = CacheRange::new(construct_user_key(10), construct_user_key(20));
         engine.new_range(range.clone());
@@ -2015,7 +2013,7 @@ mod tests {
 
     #[test]
     fn test_evict_range_with_snapshot() {
-        let mut engine = RangeCacheMemoryEngine::new(EngineConfig::config_for_test());
+        let engine = RangeCacheMemoryEngine::new(EngineConfig::config_for_test());
         let range = CacheRange::new(construct_user_key(0), construct_user_key(30));
         let evict_range = CacheRange::new(construct_user_key(10), construct_user_key(20));
         engine.new_range(range.clone());
