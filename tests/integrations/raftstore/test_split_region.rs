@@ -18,6 +18,10 @@ use raftstore::{
     Result,
 };
 use test_raftstore::*;
+<<<<<<< HEAD
+=======
+use test_raftstore_macro::test_case;
+>>>>>>> fac3d728d2 (raftstore,raftstore-v2: fix unsafe vote after start (#15085))
 use tikv::storage::{kv::SnapshotExt, Snapshot};
 use tikv_util::config::*;
 use txn_types::{Key, PessimisticLock};

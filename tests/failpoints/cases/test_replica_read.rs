@@ -13,7 +13,13 @@ use futures::executor::block_on;
 use kvproto::raft_serverpb::{PeerState, RaftMessage, RegionLocalState};
 use raft::eraftpb::MessageType;
 use test_raftstore::*;
+<<<<<<< HEAD
 use tikv_util::{config::ReadableDuration, HandyRwLock};
+=======
+use test_raftstore_macro::test_case;
+use tikv::storage::config::EngineType;
+use tikv_util::{config::ReadableDuration, future::block_on_timeout, HandyRwLock};
+>>>>>>> fac3d728d2 (raftstore,raftstore-v2: fix unsafe vote after start (#15085))
 use txn_types::{Key, Lock, LockType};
 
 #[test]

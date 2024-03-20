@@ -13,10 +13,15 @@ use pd_client::PdClient;
 use raft::eraftpb::{ConfChangeType, MessageType};
 use raftstore::store::{Callback, LocksStatus};
 use test_raftstore::*;
+<<<<<<< HEAD
 use tikv::storage::{
     kv::{SnapContext, SnapshotExt},
     Engine, Snapshot,
 };
+=======
+use test_raftstore_macro::test_case;
+use tikv::storage::{kv::SnapshotExt, Snapshot};
+>>>>>>> fac3d728d2 (raftstore,raftstore-v2: fix unsafe vote after start (#15085))
 use tikv_util::{config::*, HandyRwLock};
 use txn_types::{Key, PessimisticLock};
 
