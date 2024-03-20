@@ -283,12 +283,6 @@ impl RangeManager {
         self.evicted_ranges.remove(range);
     }
 
-    pub fn on_delete_ranges(&mut self, ranges: &[CacheRange]) {
-        for r in ranges {
-            self.evicted_ranges.remove(r);
-        }
-    }
-
     pub fn set_ranges_in_gc(&mut self, ranges_in_gc: BTreeSet<CacheRange>) {
         self.ranges_in_gc = ranges_in_gc;
     }

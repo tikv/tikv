@@ -10,7 +10,6 @@ use crossbeam::{
 use engine_rocks::RocksSnapshot;
 use engine_traits::{CacheRange, IterOptions, Iterable, Iterator, CF_DEFAULT, CF_WRITE, DATA_CFS};
 use parking_lot::RwLock;
-use skiplist_rs::SkipList;
 use slog_global::{error, info, warn};
 use tikv_util::{
     keybuilder::KeyBuilder,
@@ -20,7 +19,7 @@ use txn_types::{Key, TimeStamp, WriteRef, WriteType};
 use yatp::Remote;
 
 use crate::{
-    engine::RangeCacheMemoryEngineCore,
+    engine::{RangeCacheMemoryEngineCore, SkiplistHandle},
     keys::{decode_key, encode_key, encoding_for_filter, InternalBytes, InternalKey, ValueType},
     memory_limiter::MemoryController,
 };
@@ -218,14 +217,9 @@ impl BackgroundRunnerCore {
 
         let write_cf_handle = skiplist_engine.cf_handle(CF_WRITE);
         let default_cf_handle = skiplist_engine.cf_handle(CF_DEFAULT);
-        let mut filter = Filter::new(
-            safe_ts,
-            default_cf_handle,
-            write_cf_handle.clone(),
-            self.memory_controller.clone(),
-        );
+        let mut filter = Filter::new(safe_ts, default_cf_handle, write_cf_handle.clone());
 
-        let mut iter = write_cf_handle.owned_iter();
+        let mut iter = write_cf_handle.iterator();
         let guard = &epoch::pin();
         iter.seek_to_first(guard);
         let mut count = 0;
@@ -373,15 +367,14 @@ impl Runnable for BackgroundRunner {
                                     iter.seek_to_first().unwrap();
                                     while iter.valid().unwrap() {
                                         // use 0 sequence number here as the kv is clearly visible
-                                        let encoded_key =
+                                        let mut encoded_key =
                                             encode_key(iter.key(), 0, ValueType::Value);
-                                        handle
-                                            .insert(
-                                                encoded_key,
-                                                InternalBytes::from_vec(iter.value().to_vec()),
-                                                guard,
-                                            )
-                                            .release(guard);
+                                        let mut val =
+                                            InternalBytes::from_vec(iter.value().to_vec());
+                                        encoded_key
+                                            .set_memory_controller(core.memory_controller.clone());
+                                        val.set_memory_controller(core.memory_controller.clone());
+                                        handle.insert(encoded_key, val, guard);
                                         iter.next().unwrap();
                                     }
                                 }
@@ -411,8 +404,8 @@ struct Filter {
     mvcc_key_prefix: Vec<u8>,
     remove_older: bool,
 
-    default_cf_handle: Arc<SkipList<InternalBytes, InternalBytes>>,
-    write_cf_handle: Arc<SkipList<InternalBytes, InternalBytes>>,
+    default_cf_handle: SkiplistHandle,
+    write_cf_handle: SkiplistHandle,
 
     // When deleting some keys, the latest one should be deleted at last to avoid the older
     // version appears.
@@ -423,20 +416,14 @@ struct Filter {
     filtered: usize,
     unique_key: usize,
     mvcc_rollback_and_locks: usize,
-
-    memory_controller: Arc<MemoryController>,
 }
 
 impl Drop for Filter {
     fn drop(&mut self) {
         if let Some(cached_delete_key) = self.cached_delete_key.take() {
             let guard = &epoch::pin();
-            if let Some(e) = self
-                .write_cf_handle
-                .remove(&InternalBytes::from_vec(cached_delete_key), guard)
-            {
-                e.release(guard);
-            };
+            self.write_cf_handle
+                .remove(&InternalBytes::from_vec(cached_delete_key), guard);
         }
     }
 }
@@ -444,9 +431,8 @@ impl Drop for Filter {
 impl Filter {
     fn new(
         safe_point: u64,
-        default_cf_handle: Arc<SkipList<InternalBytes, InternalBytes>>,
-        write_cf_handle: Arc<SkipList<InternalBytes, InternalBytes>>,
-        memory_controller: Arc<MemoryController>,
+        default_cf_handle: SkiplistHandle,
+        write_cf_handle: SkiplistHandle,
     ) -> Self {
         Self {
             safe_point,
@@ -460,7 +446,6 @@ impl Filter {
             cached_delete_key: None,
             mvcc_rollback_and_locks: 0,
             remove_older: false,
-            memory_controller,
         }
     }
 
@@ -480,12 +465,8 @@ impl Filter {
             self.mvcc_key_prefix.extend_from_slice(mvcc_key_prefix);
             self.remove_older = false;
             if let Some(cached_delete_key) = self.cached_delete_key.take() {
-                if let Some(e) = self
-                    .write_cf_handle
-                    .remove(&InternalBytes::from_vec(cached_delete_key), guard)
-                {
-                    e.release(guard)
-                }
+                self.write_cf_handle
+                    .remove(&InternalBytes::from_vec(cached_delete_key), guard);
             }
         }
 
@@ -514,12 +495,8 @@ impl Filter {
             return Ok(());
         }
         self.filtered += 1;
-        if let Some(e) = self
-            .write_cf_handle
-            .remove(&InternalBytes::from_bytes(key.clone()), guard)
-        {
-            e.release(guard)
-        }
+        self.write_cf_handle
+            .remove(&InternalBytes::from_bytes(key.clone()), guard);
         self.handle_filtered_write(write, guard)?;
 
         Ok(())
@@ -538,12 +515,10 @@ impl Filter {
             // seek(both get and remove invovle seek). Maybe we can provide the API to
             // delete the mvcc keys with all sequence numbers.
             let default_key = encoding_for_filter(&self.mvcc_key_prefix, write.start_ts);
-            let mut iter = self.default_cf_handle.owned_iter();
+            let mut iter = self.default_cf_handle.iterator();
             iter.seek(&default_key, guard);
             while iter.valid() && iter.key().same_user_key_with(&default_key) {
-                if let Some(e) = self.default_cf_handle.remove(iter.key(), guard) {
-                    e.release(guard)
-                }
+                self.default_cf_handle.remove(iter.key(), guard);
                 iter.next(guard);
             }
         }
@@ -561,14 +536,13 @@ pub mod tests {
         CacheRange, RangeCacheEngine, SyncMutable, CF_DEFAULT, CF_WRITE, DATA_CFS,
     };
     use keys::{data_key, DATA_MAX_KEY, DATA_MIN_KEY};
-    use skiplist_rs::SkipList;
     use tempfile::Builder;
     use txn_types::{Key, TimeStamp, Write, WriteType};
 
     use super::Filter;
     use crate::{
         background::BackgroundRunner,
-        engine::SkiplistEngine,
+        engine::{SkiplistEngine, SkiplistHandle},
         keys::{
             construct_key, construct_value, encode_key, encode_seek_key, encoding_for_filter,
             InternalBytes, ValueType,
@@ -584,13 +558,15 @@ pub mod tests {
         commit_ts: u64,
         seq_num: u64,
         short_value: bool,
-        default_cf: &Arc<SkipList<InternalBytes, InternalBytes>>,
-        write_cf: &Arc<SkipList<InternalBytes, InternalBytes>>,
+        default_cf: &SkiplistHandle,
+        write_cf: &SkiplistHandle,
+        mem_controller: Arc<MemoryController>,
     ) {
         let write_k = Key::from_raw(key)
             .append_ts(TimeStamp::new(commit_ts))
             .into_encoded();
-        let write_k = encode_key(&write_k, seq_num, ValueType::Value);
+        let mut write_k = encode_key(&write_k, seq_num, ValueType::Value);
+        write_k.set_memory_controller(mem_controller.clone());
         let write_v = Write::new(
             WriteType::Put,
             TimeStamp::new(start_ts),
@@ -600,23 +576,20 @@ pub mod tests {
                 None
             },
         );
+        let mut val = InternalBytes::from_vec(write_v.as_ref().to_bytes());
+        val.set_memory_controller(mem_controller.clone());
         let guard = &epoch::pin();
-        write_cf
-            .insert(
-                write_k,
-                InternalBytes::from_vec(write_v.as_ref().to_bytes()),
-                guard,
-            )
-            .release(guard);
+        write_cf.insert(write_k, val, guard);
 
         if !short_value {
             let default_k = Key::from_raw(key)
                 .append_ts(TimeStamp::new(start_ts))
                 .into_encoded();
-            let default_k = encode_key(&default_k, seq_num + 1, ValueType::Value);
-            default_cf
-                .insert(default_k, InternalBytes::from_vec(value.to_vec()), guard)
-                .release(guard);
+            let mut default_k = encode_key(&default_k, seq_num + 1, ValueType::Value);
+            default_k.set_memory_controller(mem_controller.clone());
+            let mut val = InternalBytes::from_vec(value.to_vec());
+            val.set_memory_controller(mem_controller);
+            default_cf.insert(default_k, val, guard);
         }
     }
 
@@ -624,48 +597,44 @@ pub mod tests {
         key: &[u8],
         ts: u64,
         seq_num: u64,
-        write_cf: &Arc<SkipList<InternalBytes, InternalBytes>>,
+        write_cf: &SkiplistHandle,
+        mem_controller: Arc<MemoryController>,
     ) {
         let write_k = Key::from_raw(key)
             .append_ts(TimeStamp::new(ts))
             .into_encoded();
-        let write_k = encode_key(&write_k, seq_num, ValueType::Value);
+        let mut write_k = encode_key(&write_k, seq_num, ValueType::Value);
+        write_k.set_memory_controller(mem_controller.clone());
         let write_v = Write::new(WriteType::Delete, TimeStamp::new(ts), None);
+        let mut val = InternalBytes::from_vec(write_v.as_ref().to_bytes());
+        val.set_memory_controller(mem_controller);
         let guard = &epoch::pin();
-        write_cf
-            .insert(
-                write_k,
-                InternalBytes::from_vec(write_v.as_ref().to_bytes()),
-                guard,
-            )
-            .release(guard);
+        write_cf.insert(write_k, val, guard);
     }
 
     fn rollback_data(
         key: &[u8],
         ts: u64,
         seq_num: u64,
-        write_cf: &Arc<SkipList<InternalBytes, InternalBytes>>,
+        write_cf: &SkiplistHandle,
+        mem_controller: Arc<MemoryController>,
     ) {
         let write_k = Key::from_raw(key)
             .append_ts(TimeStamp::new(ts))
             .into_encoded();
-        let write_k = encode_key(&write_k, seq_num, ValueType::Value);
+        let mut write_k = encode_key(&write_k, seq_num, ValueType::Value);
+        write_k.set_memory_controller(mem_controller.clone());
         let write_v = Write::new(WriteType::Rollback, TimeStamp::new(ts), None);
+        let mut val = InternalBytes::from_vec(write_v.as_ref().to_bytes());
+        val.set_memory_controller(mem_controller);
         let guard = &epoch::pin();
-        write_cf
-            .insert(
-                write_k,
-                InternalBytes::from_vec(write_v.as_ref().to_bytes()),
-                guard,
-            )
-            .release(guard);
+        write_cf.insert(write_k, val, guard);
     }
 
-    fn element_count(sklist: &Arc<SkipList<InternalBytes, InternalBytes>>) -> u64 {
+    fn element_count(sklist: &SkiplistHandle) -> u64 {
         let guard = &epoch::pin();
         let mut count = 0;
-        let mut iter = sklist.owned_iter();
+        let mut iter = sklist.iterator();
         iter.seek_to_first(guard);
         while iter.valid() {
             count += 1;
@@ -676,12 +645,8 @@ pub mod tests {
 
     // We should not use skiplist.get directly as we only cares keys without
     // sequence number suffix
-    fn key_exist(
-        sl: &Arc<SkipList<InternalBytes, InternalBytes>>,
-        key: &InternalBytes,
-        guard: &epoch::Guard,
-    ) -> bool {
-        let mut iter = sl.owned_iter();
+    fn key_exist(sl: &SkiplistHandle, key: &InternalBytes, guard: &epoch::Guard) -> bool {
+        let mut iter = sl.iterator();
         iter.seek(key, guard);
         if iter.valid() && iter.key().same_user_key_with(key) {
             return true;
@@ -692,11 +657,11 @@ pub mod tests {
     // We should not use skiplist.get directly as we only cares keys without
     // sequence number suffix
     fn get_value(
-        sl: &Arc<SkipList<InternalBytes, InternalBytes>>,
+        sl: &SkiplistHandle,
         key: &InternalBytes,
         guard: &epoch::Guard,
     ) -> Option<Vec<u8>> {
-        let mut iter = sl.owned_iter();
+        let mut iter = sl.iterator();
         iter.seek(key, guard);
         if iter.valid() && iter.key().same_user_key_with(key) {
             return Some(iter.value().as_slice().to_vec());
@@ -719,26 +684,93 @@ pub mod tests {
         let write = skiplist_engine.cf_handle(CF_WRITE);
         let default = skiplist_engine.cf_handle(CF_DEFAULT);
 
-        put_data(b"key1", b"value1", 10, 15, 10, false, &default, &write);
-        put_data(b"key2", b"value21", 10, 15, 12, false, &default, &write);
-        put_data(b"key2", b"value22", 20, 25, 14, false, &default, &write);
+        let memory_controller = dummy_controller(skiplist_engine.clone());
+
+        put_data(
+            b"key1",
+            b"value1",
+            10,
+            15,
+            10,
+            false,
+            &default,
+            &write,
+            memory_controller.clone(),
+        );
+        put_data(
+            b"key2",
+            b"value21",
+            10,
+            15,
+            12,
+            false,
+            &default,
+            &write,
+            memory_controller.clone(),
+        );
+        put_data(
+            b"key2",
+            b"value22",
+            20,
+            25,
+            14,
+            false,
+            &default,
+            &write,
+            memory_controller.clone(),
+        );
         // mock repeate apply
-        put_data(b"key2", b"value22", 20, 25, 15, false, &default, &write);
-        put_data(b"key2", b"value23", 30, 35, 16, false, &default, &write);
-        put_data(b"key3", b"value31", 20, 25, 18, false, &default, &write);
-        put_data(b"key3", b"value32", 30, 35, 20, false, &default, &write);
-        delete_data(b"key3", 40, 22, &write);
+        put_data(
+            b"key2",
+            b"value22",
+            20,
+            25,
+            15,
+            false,
+            &default,
+            &write,
+            memory_controller.clone(),
+        );
+        put_data(
+            b"key2",
+            b"value23",
+            30,
+            35,
+            16,
+            false,
+            &default,
+            &write,
+            memory_controller.clone(),
+        );
+        put_data(
+            b"key3",
+            b"value31",
+            20,
+            25,
+            18,
+            false,
+            &default,
+            &write,
+            memory_controller.clone(),
+        );
+        put_data(
+            b"key3",
+            b"value32",
+            30,
+            35,
+            20,
+            false,
+            &default,
+            &write,
+            memory_controller.clone(),
+        );
+        delete_data(b"key3", 40, 22, &write, memory_controller.clone());
         assert_eq!(7, element_count(&default));
         assert_eq!(8, element_count(&write));
 
-        let mut filter = Filter::new(
-            50,
-            default.clone(),
-            write.clone(),
-            dummy_controller(skiplist_engine.clone()),
-        );
+        let mut filter = Filter::new(50, default.clone(), write.clone());
         let mut count = 0;
-        let mut iter = write.owned_iter();
+        let mut iter = write.iterator();
         let guard = &epoch::pin();
         iter.seek_to_first(guard);
         while iter.valid() {
@@ -781,16 +813,16 @@ pub mod tests {
     #[test]
     fn test_gc() {
         let engine = RangeCacheMemoryEngine::new(EngineConfig::config_for_test());
+        let memory_controller = engine.memory_controller();
         let range = CacheRange::new(b"".to_vec(), b"z".to_vec());
         engine.new_range(range.clone());
-        let (write, default, skiplist_engine) = {
+        let (write, default) = {
             let mut core = engine.core().write();
             let skiplist_engine = core.engine();
             core.mut_range_manager().set_range_readable(&range, true);
             (
                 skiplist_engine.cf_handle(CF_WRITE),
                 skiplist_engine.cf_handle(CF_DEFAULT),
-                skiplist_engine,
             )
         };
 
@@ -799,19 +831,43 @@ pub mod tests {
             encoding_for_filter(key.as_encoded(), ts)
         };
 
-        put_data(b"key1", b"value1", 10, 11, 10, false, &default, &write);
-        put_data(b"key1", b"value2", 12, 13, 12, false, &default, &write);
-        put_data(b"key1", b"value3", 14, 15, 14, false, &default, &write);
+        put_data(
+            b"key1",
+            b"value1",
+            10,
+            11,
+            10,
+            false,
+            &default,
+            &write,
+            memory_controller.clone(),
+        );
+        put_data(
+            b"key1",
+            b"value2",
+            12,
+            13,
+            12,
+            false,
+            &default,
+            &write,
+            memory_controller.clone(),
+        );
+        put_data(
+            b"key1",
+            b"value3",
+            14,
+            15,
+            14,
+            false,
+            &default,
+            &write,
+            memory_controller.clone(),
+        );
         assert_eq!(3, element_count(&default));
         assert_eq!(3, element_count(&write));
 
-        let controller = Arc::new(MemoryController::new(
-            usize::MAX,
-            usize::MAX,
-            usize::MAX,
-            skiplist_engine,
-        ));
-        let worker = BackgroundRunner::new(engine.core.clone(), controller);
+        let worker = BackgroundRunner::new(engine.core.clone(), memory_controller.clone());
 
         // gc will not remove the latest mvcc put below safe point
         worker.core.gc_range(&range, 14);
@@ -823,7 +879,7 @@ pub mod tests {
         assert_eq!(1, element_count(&write));
 
         // rollback will not make the first older version be filtered
-        rollback_data(b"key1", 17, 16, &write);
+        rollback_data(b"key1", 17, 16, &write, memory_controller.clone());
         worker.core.gc_range(&range, 17);
         assert_eq!(1, element_count(&default));
         assert_eq!(1, element_count(&write));
@@ -835,7 +891,7 @@ pub mod tests {
 
         // unlike in WriteCompactionFilter, the latest mvcc delete below safe point will
         // be filtered
-        delete_data(b"key1", 19, 18, &write);
+        delete_data(b"key1", 19, 18, &write, memory_controller.clone());
         worker.core.gc_range(&range, 19);
         assert_eq!(0, element_count(&write));
         assert_eq!(0, element_count(&default));
@@ -844,35 +900,89 @@ pub mod tests {
     #[test]
     fn test_snapshot_block_gc() {
         let engine = RangeCacheMemoryEngine::new(EngineConfig::config_for_test());
+        let memory_controller = engine.memory_controller();
         let range = CacheRange::new(b"".to_vec(), b"z".to_vec());
         engine.new_range(range.clone());
-        let (write, default, skiplist_engine) = {
+        let (write, default) = {
             let mut core = engine.core().write();
             let skiplist_engine = core.engine();
             core.mut_range_manager().set_range_readable(&range, true);
             (
                 skiplist_engine.cf_handle(CF_WRITE),
                 skiplist_engine.cf_handle(CF_DEFAULT),
-                skiplist_engine,
             )
         };
 
-        put_data(b"key1", b"value1", 10, 11, 10, false, &default, &write);
-        put_data(b"key2", b"value21", 10, 11, 12, false, &default, &write);
-        put_data(b"key2", b"value22", 15, 16, 14, false, &default, &write);
-        put_data(b"key2", b"value23", 20, 21, 16, false, &default, &write);
-        put_data(b"key3", b"value31", 5, 6, 18, false, &default, &write);
-        put_data(b"key3", b"value32", 10, 11, 20, false, &default, &write);
+        put_data(
+            b"key1",
+            b"value1",
+            10,
+            11,
+            10,
+            false,
+            &default,
+            &write,
+            memory_controller.clone(),
+        );
+        put_data(
+            b"key2",
+            b"value21",
+            10,
+            11,
+            12,
+            false,
+            &default,
+            &write,
+            memory_controller.clone(),
+        );
+        put_data(
+            b"key2",
+            b"value22",
+            15,
+            16,
+            14,
+            false,
+            &default,
+            &write,
+            memory_controller.clone(),
+        );
+        put_data(
+            b"key2",
+            b"value23",
+            20,
+            21,
+            16,
+            false,
+            &default,
+            &write,
+            memory_controller.clone(),
+        );
+        put_data(
+            b"key3",
+            b"value31",
+            5,
+            6,
+            18,
+            false,
+            &default,
+            &write,
+            memory_controller.clone(),
+        );
+        put_data(
+            b"key3",
+            b"value32",
+            10,
+            11,
+            20,
+            false,
+            &default,
+            &write,
+            memory_controller.clone(),
+        );
         assert_eq!(6, element_count(&default));
         assert_eq!(6, element_count(&write));
 
-        let controller = Arc::new(MemoryController::new(
-            usize::MAX,
-            usize::MAX,
-            usize::MAX,
-            skiplist_engine,
-        ));
-        let worker = BackgroundRunner::new(engine.core.clone(), controller);
+        let worker = BackgroundRunner::new(engine.core.clone(), memory_controller);
         let s1 = engine.snapshot(range.clone(), 10, u64::MAX);
         let s2 = engine.snapshot(range.clone(), 11, u64::MAX);
         let s3 = engine.snapshot(range.clone(), 20, u64::MAX);
@@ -903,6 +1013,7 @@ pub mod tests {
         let mut config = EngineConfig::config_for_test();
         config.gc_interval = Duration::from_secs(1);
         let engine = RangeCacheMemoryEngine::new(config);
+        let memory_controller = engine.memory_controller();
         let (write, default) = {
             let mut core = engine.core.write();
             core.mut_range_manager()
@@ -914,25 +1025,57 @@ pub mod tests {
         let start_ts = TimeStamp::physical_now() - Duration::from_secs(10).as_millis() as u64;
         let commit_ts1 = TimeStamp::physical_now() - Duration::from_secs(9).as_millis() as u64;
         put_data(
-            b"k", b"v1", start_ts, commit_ts1, 100, false, &default, &write,
+            b"k",
+            b"v1",
+            start_ts,
+            commit_ts1,
+            100,
+            false,
+            &default,
+            &write,
+            memory_controller.clone(),
         );
 
         let start_ts = TimeStamp::physical_now() - Duration::from_secs(8).as_millis() as u64;
         let commit_ts2 = TimeStamp::physical_now() - Duration::from_secs(7).as_millis() as u64;
         put_data(
-            b"k", b"v2", start_ts, commit_ts2, 110, false, &default, &write,
+            b"k",
+            b"v2",
+            start_ts,
+            commit_ts2,
+            110,
+            false,
+            &default,
+            &write,
+            memory_controller.clone(),
         );
 
         let start_ts = TimeStamp::physical_now() - Duration::from_secs(6).as_millis() as u64;
         let commit_ts3 = TimeStamp::physical_now() - Duration::from_secs(5).as_millis() as u64;
         put_data(
-            b"k", b"v3", start_ts, commit_ts3, 110, false, &default, &write,
+            b"k",
+            b"v3",
+            start_ts,
+            commit_ts3,
+            110,
+            false,
+            &default,
+            &write,
+            memory_controller.clone(),
         );
 
         let start_ts = TimeStamp::physical_now() - Duration::from_secs(4).as_millis() as u64;
         let commit_ts4 = TimeStamp::physical_now() - Duration::from_secs(3).as_millis() as u64;
         put_data(
-            b"k", b"v4", start_ts, commit_ts4, 110, false, &default, &write,
+            b"k",
+            b"v4",
+            start_ts,
+            commit_ts4,
+            110,
+            false,
+            &default,
+            &write,
+            memory_controller.clone(),
         );
 
         let guard = &epoch::pin();

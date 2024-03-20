@@ -17,35 +17,44 @@ use crate::memory_limiter::MemoryController;
 #[derive(Debug)]
 pub struct InternalBytes {
     bytes: Bytes,
-    // memory_limiter **must** be set when interted into skiplist as keys/values.
-    memory_limiter: Option<Arc<MemoryController>>,
+    // memory_limiter **must** be set when used as key/values being interted into skiplist as
+    // keys/values.
+    memory_controller: Option<Arc<MemoryController>>,
 }
 
-// impl Clone for InternalBytes {
-//     fn clone(&self) -> Self {
-//         let limiter = self.memory_limiter.clone();
-//         let bytes = Bytes::copy_from_slice(self.as_slice());
-//         InternalBytes::from_bytes(bytes)
-//     }
-// }
+impl Drop for InternalBytes {
+    fn drop(&mut self) {
+        let size = self.bytes.len();
+        let controller = self.memory_controller.take();
+        if let Some(controller) = controller {
+            // Reclaim the memory though the bytes have not been drop. This time gap should
+            // not matter.
+            controller.release(size);
+        }
+    }
+}
 
 impl InternalBytes {
     pub fn from_bytes(bytes: Bytes) -> Self {
         Self {
             bytes,
-            memory_limiter: None,
+            memory_controller: None,
         }
     }
 
     pub fn from_vec(vec: Vec<u8>) -> Self {
         Self {
             bytes: Bytes::from(vec),
-            memory_limiter: None,
+            memory_controller: None,
         }
     }
 
-    pub fn set_limiter(&mut self, limiter: Arc<MemoryController>) {
-        self.memory_limiter = Some(limiter);
+    pub fn memory_controller_set(&self) -> bool {
+        self.memory_controller.is_some()
+    }
+
+    pub fn set_memory_controller(&mut self, controller: Arc<MemoryController>) {
+        self.memory_controller = Some(controller);
     }
 
     pub fn clone_bytes(&self) -> Bytes {
@@ -249,12 +258,21 @@ pub fn encoding_for_filter(mvcc_prefix: &[u8], start_ts: TimeStamp) -> InternalB
 
 #[cfg(test)]
 pub fn construct_user_key(i: u64) -> Vec<u8> {
-    let k = format!("k{:08}", i);
+    let k = format!("zk{:08}", i);
     k.as_bytes().to_owned()
 }
 
 #[cfg(test)]
 pub fn construct_key(i: u64, mvcc: u64) -> Vec<u8> {
+    let k = format!("zk{:08}", i);
+    let mut key = k.as_bytes().to_vec();
+    // mvcc version should be make bit-wise reverse so that k-100 is less than k-99
+    key.put_u64(!mvcc);
+    key
+}
+
+#[cfg(test)]
+pub fn construct_key_without_prefix(i: u64, mvcc: u64) -> Vec<u8> {
     let k = format!("k{:08}", i);
     let mut key = k.as_bytes().to_vec();
     // mvcc version should be make bit-wise reverse so that k-100 is less than k-99
@@ -274,7 +292,7 @@ mod tests {
     use crate::keys::{encode_key, ValueType};
 
     fn construct_key(i: u64, mvcc: u64) -> Vec<u8> {
-        let k = format!("k{:08}", i);
+        let k = format!("zk{:08}", i);
         let mut key = k.as_bytes().to_vec();
         // mvcc version should be make bit-wise reverse so that k-100 is less than k-99
         key.put_u64(!mvcc);

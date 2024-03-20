@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use crate::{engine::SkiplistEngine, write_batch::NODE_OVERHEAD_SIZE_EXPECTATION};
 
-pub(crate) const OVER_HEAD_CHECK_INTERVAL: usize = 1_000_000;
+pub(crate) const _OVER_HEAD_CHECK_INTERVAL: usize = 1_000_000;
 
 #[derive(Debug, PartialEq)]
 pub(crate) enum MemoryUsage {

@@ -2,7 +2,7 @@
 
 use std::{cmp, fmt::Debug};
 
-use keys::{enc_end_key, enc_start_key};
+use keys::{enc_end_key, enc_start_key, DATA_PREFIX_KEY};
 use kvproto::metapb;
 
 use crate::{Iterable, KvEngine, Snapshot, WriteBatchExt};
@@ -82,6 +82,11 @@ impl CacheRange {
 
     pub fn contains_key(&self, key: &[u8]) -> bool {
         self.start.as_slice() <= key && key < self.end.as_slice()
+    }
+
+    pub fn contains_key_without_prefix(&self, key: &[u8]) -> bool {
+        &self.start[DATA_PREFIX_KEY.len()..] <= key
+            && (self.end.len() == 1 || key < &self.end[DATA_PREFIX_KEY.len()..])
     }
 
     pub fn overlaps(&self, other: &CacheRange) -> bool {
