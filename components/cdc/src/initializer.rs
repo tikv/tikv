@@ -258,10 +258,13 @@ impl<E: KvEngine> Initializer<E> {
             "end_key" => log_wrappers::Value::key(end_key.as_encoded()));
 
         if self.build_resolver.load(Ordering::Acquire) {
+            // Scan and collect locks if build_resolver is true. The range
+            // should be the whole region span instead of subscribed span,
+            // because those locks will be shared between multiple Downstreams.
+            let s = Some(&region.start_key);
+            let e = Some(&region.end_key);
             let mut reader = MvccReader::new(snap.clone(), Some(ScanMode::Forward), false);
-            let (key_locks, has_remain) =
-                // FIXME: the range.
-                reader.scan_locks_from_storage(Some(&start_key), Some(&end_key), |_, _| true, 0)?;
+            let (key_locks, has_remain) = reader.scan_locks_from_storage(s, e, |_, _| true, 0)?;
             assert!(!has_remain);
             let mut locks = BTreeMap::<Key, TimeStamp>::new();
             for (key, lock) in key_locks {

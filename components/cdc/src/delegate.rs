@@ -138,10 +138,10 @@ pub struct Downstream {
     sink: Option<Sink>,
     state: Arc<AtomicCell<DownstreamState>>,
 
-    // Fields to handle ResolvedTs advancing. If `locks` is none it means
+    // Fields to handle ResolvedTs advancing. If `lock_heap` is none it means
     // the downstream hasn't finished the incremental scanning.
-    advanced_to: TimeStamp,
     lock_heap: Option<BTreeMap<TimeStamp, isize>>,
+    advanced_to: TimeStamp,
 }
 
 impl fmt::Debug for Downstream {
@@ -182,8 +182,8 @@ impl Downstream {
             sink: None,
             state: Arc::new(AtomicCell::new(DownstreamState::default())),
 
-            advanced_to: TimeStamp::zero(),
             lock_heap: None,
+            advanced_to: TimeStamp::zero(),
         }
     }
 
