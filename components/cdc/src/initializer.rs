@@ -62,7 +62,7 @@ use crate::{
 };
 
 #[derive(Copy, Clone, Debug, Default)]
-pub(crate) struct ScanStat {
+struct ScanStat {
     // Fetched bytes to the scanner.
     emit: usize,
     // Bytes from the device, `None` if not possible to get it.
@@ -260,6 +260,7 @@ impl<E: KvEngine> Initializer<E> {
         if self.build_resolver.load(Ordering::Acquire) {
             let mut reader = MvccReader::new(snap.clone(), Some(ScanMode::Forward), false);
             let (key_locks, has_remain) =
+                // FIXME: the range.
                 reader.scan_locks_from_storage(Some(&start_key), Some(&end_key), |_, _| true, 0)?;
             assert!(!has_remain);
             let mut locks = BTreeMap::<Key, TimeStamp>::new();
