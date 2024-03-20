@@ -22,7 +22,7 @@ use fail::fail_point;
 use futures::{compat::Future01CompatExt, FutureExt};
 use grpcio_health::{HealthService, ServingStatus};
 use kvproto::{
-    kvrpcpb::{DiskFullOpt, KeyRange},
+    kvrpcpb::DiskFullOpt,
     metapb, pdpb,
     raft_cmdpb::{
         AdminCmdType, AdminRequest, BatchSwitchWitnessRequest, ChangePeerRequest,
@@ -53,6 +53,7 @@ use tikv_util::{
 use txn_types::TimeStamp;
 use yatp::Remote;
 
+use super::split_controller::AutoSplitControllerContext;
 use crate::{
     coprocessor::CoprocessorHost,
     router::RaftStoreRouter,
@@ -661,10 +662,11 @@ where
         let (timer_tx, timer_rx) = mpsc::channel();
         self.timer = Some(timer_tx);
 
-        let (read_stats_sender, read_stats_receiver) = mpsc::sync_channel(128);
+        let stats_limit = 128;
+        let (read_stats_sender, read_stats_receiver) = mpsc::sync_channel(stats_limit);
         self.read_stats_sender = Some(read_stats_sender);
 
-        let (cpu_stats_sender, cpu_stats_receiver) = mpsc::sync_channel(128);
+        let (cpu_stats_sender, cpu_stats_receiver) = mpsc::sync_channel(stats_limit);
         self.cpu_stats_sender = Some(cpu_stats_sender);
 
         let reporter = self.reporter.clone();
@@ -683,8 +685,7 @@ where
                 let mut collect_store_infos_thread_stats = ThreadInfoStatistics::new();
                 let mut load_base_split_thread_stats = ThreadInfoStatistics::new();
                 let mut region_cpu_records_collector = None;
-                let mut region_cpu_map = HashMap::default();
-                let mut hottest_key_range_cpu_time_map = HashMap::default();
+                let mut auto_split_controller_ctx = AutoSplitControllerContext::new(stats_limit);
                 // Register the region CPU records collector.
                 if auto_split_controller
                     .cfg
@@ -706,14 +707,13 @@ where
                     if is_enable_tick(timer_cnt, load_base_split_check_interval) {
                         StatsMonitor::load_base_split(
                             &mut auto_split_controller,
+                            &mut auto_split_controller_ctx,
                             &read_stats_receiver,
                             &cpu_stats_receiver,
                             &mut load_base_split_thread_stats,
                             &reporter,
                             &collector_reg_handle,
                             &mut region_cpu_records_collector,
-                            &mut region_cpu_map,
-                            &mut hottest_key_range_cpu_time_map,
                         );
                     }
                     if is_enable_tick(timer_cnt, report_min_resolved_ts_interval) {
@@ -744,14 +744,13 @@ where
 
     pub fn load_base_split(
         auto_split_controller: &mut AutoSplitController,
+        auto_split_controller_ctx: &mut AutoSplitControllerContext,
         read_stats_receiver: &Receiver<ReadStats>,
         cpu_stats_receiver: &Receiver<Arc<RawRecords>>,
         thread_stats: &mut ThreadInfoStatistics,
         reporter: &T,
         collector_reg_handle: &CollectorRegHandle,
         region_cpu_records_collector: &mut Option<CollectorGuard>,
-        region_cpu_map: &mut HashMap<u64, (f64, Option<KeyRange>)>,
-        hottest_key_range_cpu_time_map: &mut HashMap<u64, u32>,
     ) {
         let start_time = TiInstant::now();
         match auto_split_controller.refresh_and_check_cfg() {
@@ -767,29 +766,14 @@ where
             }
             SplitConfigChange::Noop => {}
         }
-        let mut read_stats_vec = vec![];
-        while let Ok(read_stats) = read_stats_receiver.try_recv() {
-            read_stats_vec.push(read_stats);
-            if read_stats_vec.len() == 128 {
-                break;
-            }
-        }
-        let mut cpu_stats_vec = vec![];
-        while let Ok(cpu_stats) = cpu_stats_receiver.try_recv() {
-            cpu_stats_vec.push(cpu_stats);
-            if cpu_stats_vec.len() == 128 {
-                break;
-            }
-        }
-        thread_stats.record();
         let (top_qps, split_infos) = auto_split_controller.flush(
-            read_stats_vec,
-            cpu_stats_vec,
+            auto_split_controller_ctx,
+            read_stats_receiver,
+            cpu_stats_receiver,
             thread_stats,
-            region_cpu_map,
-            hottest_key_range_cpu_time_map,
         );
         auto_split_controller.clear();
+        auto_split_controller_ctx.maybe_gc();
         reporter.auto_split(split_infos);
         for i in 0..TOP_N {
             if i < top_qps.len() {
