@@ -295,7 +295,7 @@ impl fmt::Debug for Task {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct ResolvedRegion {
+pub(crate) struct ResolvedRegion {
     region_id: u64,
     resolved_ts: TimeStamp,
 }
@@ -358,29 +358,19 @@ pub(crate) struct Advance {
     // in which case progresses are grouped by ConnId.
     pub(crate) exclusive: HashMap<ConnId, ResolvedRegionHeap>,
 
+    // To be compatible with old TiCDC client before v4.0.8.
+    // TODO(qupeng): we can deprecated supports for too old TiCDC clients.
+    // map[(ConnId, region_id)]->request_id.
+    pub(crate) no_batch_resolved_ts: HashMap<(ConnId, u64), u64>,
+
     pub(crate) unchanged: usize,
 }
 
 impl Advance {
     fn emit_resolved_ts(&mut self, connections: &HashMap<ConnId, Conn>) {
-        let multiplexing = std::mem::take(&mut self.multiplexing).into_iter();
-        let exclusive = std::mem::take(&mut self.exclusive).into_iter();
-        let unioned = multiplexing
-            .map(|((a, b), c)| (a, b, c))
-            .chain(exclusive.map(|(a, c)| (a, 0, c)));
-
-        let send_cdc_event = |ts: u64, conn: &Conn, request_id: u64, regions: Vec<u64>| {
-            let mut resolved_ts = ResolvedTs::default();
-            resolved_ts.ts = ts;
-            resolved_ts.request_id = request_id;
-            *resolved_ts.mut_regions() = regions;
-
-            let force_send = false;
-            match conn
-                .get_sink()
-                .unbounded_send(CdcEvent::ResolvedTs(resolved_ts), force_send)
-            {
-                Ok(_) => (),
+        let handle_send_result = |conn: &Conn, res: std::result::Result<(), SendError>| -> bool {
+            match res {
+                Ok(_) => return true,
                 Err(SendError::Disconnected) => {
                     debug!("cdc send event failed, disconnected";
                         "conn_id" => ?conn.get_id(), "downstream" => ?conn.get_peer());
@@ -390,21 +380,58 @@ impl Advance {
                         "conn_id" => ?conn.get_id(), "downstream" => ?conn.get_peer());
                 }
             }
+            false
         };
+
+        let send_cdc_events = |ts: u64, conn: &Conn, request_id: u64, regions: Vec<u64>| {
+            let mut resolved_ts = ResolvedTs::default();
+            resolved_ts.ts = ts;
+            resolved_ts.request_id = request_id;
+            *resolved_ts.mut_regions() = regions;
+
+            let res = conn
+                .get_sink()
+                .unbounded_send(CdcEvent::ResolvedTs(resolved_ts), false);
+            handle_send_result(conn, res);
+        };
+
+        let send_cdc_events_compact = |ts: u64, conn: &Conn, regions: HashSet<u64>| {
+            for region_id in regions {
+                let request_id = self
+                    .no_batch_resolved_ts
+                    .get(&(conn.get_id(), region_id))
+                    .unwrap();
+                let event = Event {
+                    region_id,
+                    request_id: *request_id,
+                    event: Some(Event_oneof_event::ResolvedTs(ts)),
+                    ..Default::default()
+                };
+                let res = conn
+                    .get_sink()
+                    .unbounded_send(CdcEvent::Event(event), false);
+                if handle_send_result(conn, res) {
+                    break;
+                }
+            }
+        };
+
+        let multiplexing = std::mem::take(&mut self.multiplexing).into_iter();
+        let exclusive = std::mem::take(&mut self.exclusive).into_iter();
+        let unioned = multiplexing
+            .map(|((a, b), c)| (a, b, c))
+            .chain(exclusive.map(|(a, c)| (a, 0, c)));
 
         for (conn_id, req_id, mut region_ts_heap) in unioned {
             let conn = connections.get(&conn_id).unwrap();
-
-            // Separate broadcasting outlier regions and normal regions,
-            // so 1) downstreams know where they should send resolve lock requests,
-            // and 2) resolved ts of normal regions does not fallback.
-            //
-            // Regions are separated exponentially to reduce resolved ts events and
-            // save CPU for both TiKV and TiCDC.
             let mut batch_count = 8;
             while !region_ts_heap.is_empty() {
                 let (ts, regions) = region_ts_heap.pop(batch_count);
-                send_cdc_event(ts.into_inner(), conn, req_id, Vec::from_iter(regions));
+                if conn.features().contains(FeatureGate::BATCH_RESOLVED_TS) {
+                    send_cdc_events(ts.into_inner(), conn, req_id, Vec::from_iter(regions));
+                } else {
+                    send_cdc_events_compact(ts.into_inner(), conn, regions);
+                }
                 batch_count *= 4;
             }
         }
@@ -1006,31 +1033,6 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
         }
 
         advance.emit_resolved_ts(&self.connections);
-    }
-
-    // FIXME: fix it.
-    #[allow(dead_code)]
-    fn broadcast_resolved_ts_compact(
-        &self,
-        conn: &Conn,
-        request_id: u64,
-        region_id: u64,
-        resolved_ts: u64,
-    ) {
-        let downstream_id = conn.get_downstream(request_id, region_id).unwrap();
-        let delegate = self.capture_regions.get(&region_id).unwrap();
-        let downstream = delegate.downstream(downstream_id).unwrap();
-        if !downstream.get_state().load().ready_for_advancing_ts() {
-            return;
-        }
-        let resolved_ts_event = Event {
-            region_id,
-            request_id,
-            event: Some(Event_oneof_event::ResolvedTs(resolved_ts)),
-            ..Default::default()
-        };
-        let force_send = false;
-        let _ = downstream.sink_event(resolved_ts_event, force_send);
     }
 
     fn register_min_ts_event(&self, mut leader_resolver: LeadershipResolver, event_time: Instant) {
@@ -2241,6 +2243,7 @@ mod tests {
                 other => panic!("unknown event {:?}", other),
             }
         } else {
+            println!("event: {:?}", cdc_event.0);
             panic!("unknown cdc event {:?}", cdc_event);
         }
     }

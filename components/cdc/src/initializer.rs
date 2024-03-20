@@ -62,7 +62,7 @@ use crate::{
 };
 
 #[derive(Copy, Clone, Debug, Default)]
-struct ScanStat {
+pub(crate) struct ScanStat {
     // Fetched bytes to the scanner.
     emit: usize,
     // Bytes from the device, `None` if not possible to get it.
@@ -261,8 +261,8 @@ impl<E: KvEngine> Initializer<E> {
             // Scan and collect locks if build_resolver is true. The range
             // should be the whole region span instead of subscribed span,
             // because those locks will be shared between multiple Downstreams.
-            let s = Some(&region.start_key);
-            let e = Some(&region.end_key);
+            let s = Some(Key::transumte_encoded(&region.start_key));
+            let e = Some(Key::transumte_encoded(&region.end_key));
             let mut reader = MvccReader::new(snap.clone(), Some(ScanMode::Forward), false);
             let (key_locks, has_remain) = reader.scan_locks_from_storage(s, e, |_, _| true, 0)?;
             assert!(!has_remain);

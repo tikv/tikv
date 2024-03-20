@@ -589,15 +589,27 @@ impl Delegate {
         for d in &mut self.downstreams {
             if let Some(ts) = handle_downstream(d) {
                 let features = connections.get(&d.conn_id).unwrap().features();
-                let v = if features.contains(FeatureGate::STREAM_MULTIPLEXING) {
+                if features.contains(FeatureGate::STREAM_MULTIPLEXING) {
                     advance
                         .multiplexing
                         .entry((d.conn_id, d.req_id))
                         .or_default()
+                        .push(self.region_id, ts);
                 } else {
-                    advance.exclusive.entry(d.conn_id).or_default()
+                    advance
+                        .exclusive
+                        .entry(d.conn_id)
+                        .or_default()
+                        .push(self.region_id, ts);
+                    if !features.contains(FeatureGate::BATCH_RESOLVED_TS) {
+                        assert!(
+                            advance
+                                .no_batch_resolved_ts
+                                .insert((d.conn_id, self.region_id), d.req_id)
+                                .is_none()
+                        );
+                    }
                 };
-                v.push(self.region_id, ts);
             } else {
                 advance.unchanged += 1;
             }

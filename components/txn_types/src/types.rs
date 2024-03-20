@@ -247,6 +247,11 @@ impl Key {
     pub fn len(&self) -> usize {
         self.0.len()
     }
+
+    #[inline]
+    pub fn transumte_encoded(encoded_key: &Vec<u8>) -> &Self {
+        unsafe { std::mem::transmute(encoded_key) }
+    }
 }
 
 impl Clone for Key {
