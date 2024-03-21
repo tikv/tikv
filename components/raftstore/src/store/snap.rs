@@ -717,21 +717,11 @@ impl Snapshot {
                     ));
                 }
                 if meta.get_size() != 0 {
-                    let file_path = self.cf_files[cf_idx].add_file_with_size_checksum(
+                    let _ = self.cf_files[cf_idx].add_file_with_size_checksum(
                         file_idx,
                         meta.get_size(),
                         meta.get_checksum(),
                     );
-                    if file_exists(&file_path) {
-                        let mgr = self.mgr.encryption_key_manager.as_ref();
-                        let file_path = Path::new(&file_path);
-                        let (_, size) = calc_checksum_and_size(file_path, mgr)?;
-                        check_file_size(
-                            size,
-                            *(self.cf_files[cf_idx].size.last().unwrap()),
-                            file_path,
-                        )?;
-                    }
                 }
                 file_idx += 1;
                 if file_idx >= cf_file_count_from_meta[cf_idx] {
