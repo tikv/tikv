@@ -140,9 +140,20 @@ impl RangeCacheWriteBatch {
         }
         let mut core = self.engine.core.write();
         let mut ranges = vec![];
+        let mut range_manager = core.mut_range_manager();
         for r in std::mem::take(&mut self.ranges_to_evict) {
-            if core.mut_range_manager().evict_range(&r) {
-                ranges.push(r);
+            if range_manager.contains_range(&r) {
+                if range_manager.evict_range(&r) {
+                    ranges.push(r);
+                }
+            }
+
+            if let Some((range, _, canceled)) = range_manager
+                .pending_ranges_loading_data
+                .iter_mut()
+                .find(|(range, ..)| range.contains_range(&r))
+            {
+                *canceled = true;
             }
         }
         ranges
@@ -319,6 +330,10 @@ impl RangeCacheWriteBatchEntry {
 // For 2, we group the entries according to the range. The method uses the
 // property that entries in the same range are neighbors. Though that the method
 // still handles corretly even they are randomly positioned.
+//
+// Note: Some entries may not found a range in both
+// `pending_ranges_loading_data` and `ranges`, it means the range has been
+// evicted.
 pub fn group_write_batch_entries(
     mut entries: Vec<RangeCacheWriteBatchEntry>,
     range_manager: &RangeManager,
@@ -359,15 +374,17 @@ pub fn group_write_batch_entries(
                     cache_range = Some(r.clone());
                 }
             }
-            let cache_range = cache_range.unwrap();
-            loop {
-                entries_to_write.push(e);
-                if let Some(next_e) = drain.peek()
-                    && cache_range.contains_key(&next_e.key)
-                {
-                    e = drain.next().unwrap();
-                } else {
-                    break;
+            // If the range is still not found, it means the range of the key is evicted.
+            if let Some(cache_range) = cache_range {
+                loop {
+                    entries_to_write.push(e);
+                    if let Some(next_e) = drain.peek()
+                        && cache_range.contains_key(&next_e.key)
+                    {
+                        e = drain.next().unwrap();
+                    } else {
+                        break;
+                    }
                 }
             }
         }
@@ -579,12 +596,12 @@ mod tests {
         }
         let mut wb = RangeCacheWriteBatch::from(&engine);
         wb.range_in_cache = true;
-        wb.put(b"zaaa", b"bbb").unwrap();
+        wb.put(b"aaa", b"bbb").unwrap();
         wb.set_sequence_number(1).unwrap();
         _ = wb.write();
         wb.clear();
-        wb.put(b"zbbb", b"ccc").unwrap();
-        wb.delete(b"zaaa").unwrap();
+        wb.put(b"bbb", b"ccc").unwrap();
+        wb.delete(b"aaa").unwrap();
         wb.set_sequence_number(2).unwrap();
         _ = wb.write();
         let snapshot = engine.snapshot(r, u64::MAX, 2).unwrap();
@@ -605,9 +622,9 @@ mod tests {
         let rocks_engine = new_engine(path_str, DATA_CFS).unwrap();
 
         let engine = RangeCacheMemoryEngine::new(EngineConfig::config_for_test());
-        let r1 = CacheRange::new(b"zk01".to_vec(), b"zk05".to_vec());
-        let r2 = CacheRange::new(b"zk05".to_vec(), b"zk10".to_vec());
-        let r3 = CacheRange::new(b"zk10".to_vec(), b"zk15".to_vec());
+        let r1 = CacheRange::new(b"k01".to_vec(), b"k05".to_vec());
+        let r2 = CacheRange::new(b"k05".to_vec(), b"k10".to_vec());
+        let r3 = CacheRange::new(b"k10".to_vec(), b"k15".to_vec());
         {
             engine.new_range(r1.clone());
             let mut core = engine.core.write();
@@ -621,11 +638,11 @@ mod tests {
         }
         let mut wb = RangeCacheWriteBatch::from(&engine);
         wb.prepare_for_range(r1.clone());
-        wb.put(b"zk01", b"val1").unwrap();
+        wb.put(b"k01", b"val1").unwrap();
         wb.prepare_for_range(r2.clone());
-        wb.put(b"zk05", b"val5").unwrap();
+        wb.put(b"k05", b"val5").unwrap();
         wb.prepare_for_range(r3);
-        wb.put(b"zk10", b"val10").unwrap();
+        wb.put(b"k10", b"val10").unwrap();
         wb.set_sequence_number(2).unwrap();
         let _ = wb.write();
         let snapshot = engine.snapshot(r1.clone(), u64::MAX, 2).unwrap();
@@ -677,6 +694,9 @@ mod tests {
             RangeCacheWriteBatchEntry::put_value(CF_WRITE, b"k09", b"val"),
             RangeCacheWriteBatchEntry::put_value(CF_WRITE, b"k10", b"val"),
             RangeCacheWriteBatchEntry::put_value(CF_WRITE, b"k19", b"val"),
+            // Mock the range is evicted
+            RangeCacheWriteBatchEntry::put_value(CF_WRITE, b"32", b"val"),
+            RangeCacheWriteBatchEntry::put_value(CF_WRITE, b"45", b"val"),
         ];
 
         let (group_entries_to_cache, entries_to_write) =
@@ -715,11 +735,11 @@ mod tests {
     fn test_write_batch_with_memory_controller() {
         let config = EngineConfig::new(Duration::from_secs(600), 500, 1000);
         let engine = RangeCacheMemoryEngine::new(config);
-        let r1 = CacheRange::new(b"zk00".to_vec(), b"zk10".to_vec());
-        let r2 = CacheRange::new(b"zk10".to_vec(), b"zk20".to_vec());
-        let r3 = CacheRange::new(b"zk20".to_vec(), b"zk30".to_vec());
-        let r4 = CacheRange::new(b"zk30".to_vec(), b"zk40".to_vec());
-        let r5 = CacheRange::new(b"zk40".to_vec(), b"zk50".to_vec());
+        let r1 = CacheRange::new(b"kk00".to_vec(), b"kk10".to_vec());
+        let r2 = CacheRange::new(b"kk10".to_vec(), b"kk20".to_vec());
+        let r3 = CacheRange::new(b"kk20".to_vec(), b"kk30".to_vec());
+        let r4 = CacheRange::new(b"kk30".to_vec(), b"kk40".to_vec());
+        let r5 = CacheRange::new(b"kk40".to_vec(), b"kk50".to_vec());
         engine.new_range(r1.clone());
         engine.new_range(r2.clone());
         engine.new_range(r3.clone());
@@ -750,39 +770,39 @@ mod tests {
         wb.prepare_for_range(r1.clone());
         // memory required:
         // 4(key) + 8(sequencen number) + 100(value) + 96(node overhead) = 208
-        wb.put(b"zk01", &val1).unwrap();
+        wb.put(b"kk01", &val1).unwrap();
         wb.prepare_for_range(r2.clone());
         // Now, 416
-        wb.put(b"zk11", &val1).unwrap();
+        wb.put(b"kk11", &val1).unwrap();
         wb.prepare_for_range(r3.clone());
         // Now, 624
-        wb.put(b"zk21", &val1).unwrap();
+        wb.put(b"kk21", &val1).unwrap();
         let val2: Vec<u8> = (0..400).map(|_| 2).collect();
         // The memory will fail to acquire
-        wb.put(b"zk22", &val2).unwrap();
+        wb.put(b"kk22", &val2).unwrap();
 
         // The memory capacity is enough the the following two inserts
         let val3: Vec<u8> = (0..100).map(|_| 3).collect();
         wb.prepare_for_range(r4.clone());
         // Now, 832
-        wb.put(b"zk32", &val3).unwrap();
+        wb.put(b"kk32", &val3).unwrap();
 
         wb.prepare_for_range(r5.clone());
-        wb.put(b"zk41", &val3).unwrap();
+        wb.put(b"kk41", &val3).unwrap();
 
         let memory_controller = engine.memory_controller();
         // We should have allocated 832 as calculated above
         assert_eq!(832, memory_controller.mem_usage());
         wb.write_impl(1000).unwrap();
         let snap1 = engine.snapshot(r1.clone(), 1000, 1000).unwrap();
-        assert_eq!(snap1.get_value(b"k01").unwrap().unwrap(), &val1);
+        assert_eq!(snap1.get_value(b"kk01").unwrap().unwrap(), &val1);
         let snap2 = engine.snapshot(r2.clone(), 1000, 1000).unwrap();
-        assert_eq!(snap2.get_value(b"k11").unwrap().unwrap(), &val1);
+        assert_eq!(snap2.get_value(b"kk11").unwrap().unwrap(), &val1);
 
         assert!(engine.snapshot(r3.clone(), 1000, 1000).is_none());
 
         let snap4 = engine.snapshot(r4.clone(), 1000, 1000).unwrap();
-        assert_eq!(snap4.get_value(b"k32").unwrap().unwrap(), &val3);
+        assert_eq!(snap4.get_value(b"kk32").unwrap().unwrap(), &val3);
 
         assert!(engine.snapshot(r5.clone(), 1000, 1000).is_none());
 

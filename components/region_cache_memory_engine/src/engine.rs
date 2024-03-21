@@ -205,12 +205,12 @@ impl RangeCacheMemoryEngineCore {
         fail::fail_point!("on_pending_range_completes_loading");
         assert!(!core.has_cached_write_batch(range));
         let range_manager = core.mut_range_manager();
-        let r = range_manager
+        let (r, canceled) = range_manager
             .pending_ranges_loading_data
             .pop_front()
-            .unwrap()
-            .0;
+            .unwrap();
         assert_eq!(&r, range);
+        assert!(!canceled);
         range_manager.new_range(r);
         range_manager.set_range_readable(range, true);
     }
@@ -927,8 +927,8 @@ mod tests {
     use super::{cf_to_id, RangeCacheIterator, SkiplistEngine};
     use crate::{
         keys::{
-            construct_key, construct_key_without_prefix, construct_user_key, construct_value,
-            decode_key, encode_key, InternalBytes, ValueType,
+            construct_key, construct_user_key, construct_value, decode_key, encode_key,
+            InternalBytes, ValueType,
         },
         EngineConfig, RangeCacheMemoryEngine,
     };
@@ -1050,13 +1050,6 @@ mod tests {
     }
 
     fn construct_mvcc_key(key: &str, mvcc: u64) -> Vec<u8> {
-        let mut k = vec![DATA_PREFIX];
-        k.extend_from_slice(key.as_bytes());
-        k.put_u64(!mvcc);
-        k
-    }
-
-    fn construct_mvcc_key_without_prefix(key: &str, mvcc: u64) -> Vec<u8> {
         let mut k = vec![];
         k.extend_from_slice(key.as_bytes());
         k.put_u64(!mvcc);
@@ -1092,11 +1085,6 @@ mod tests {
         let guard = &epoch::pin();
         sl.insert(key, InternalBytes::from_vec(b"".to_vec()), guard)
             .release(guard);
-    }
-
-    fn verify_value(v: &[u8], i: u64, mvcc: u64) {
-        let val = construct_value(i, mvcc);
-        assert_eq!(v, val.as_bytes());
     }
 
     fn verify_key_value(k: &[u8], v: &[u8], i: u64, mvcc: u64) {
@@ -1139,7 +1127,7 @@ mod tests {
     #[test]
     fn test_get_value() {
         let engine = RangeCacheMemoryEngine::new(EngineConfig::config_for_test());
-        let range = CacheRange::new(DATA_MIN_KEY.to_vec(), DATA_MAX_KEY.to_vec());
+        let range = CacheRange::new(b"".to_vec(), b"z".to_vec());
         engine.new_range(range.clone());
 
         {
@@ -1157,14 +1145,14 @@ mod tests {
             let snapshot = engine.snapshot(range.clone(), 10, 60).unwrap();
             for i in 1..10 {
                 for mvcc in 1..50 {
-                    let k = construct_key_without_prefix(i, mvcc);
+                    let k = construct_key(i, mvcc);
                     let v = snapshot
                         .get_value_cf_opt(&opts, "write", &k)
                         .unwrap()
                         .unwrap();
-                    verify_value(&v, i, mvcc);
+                    verify_key_value(&k, &v, i, mvcc);
                 }
-                let k = construct_key_without_prefix(i, 50);
+                let k = construct_key(i, 50);
                 assert!(
                     snapshot
                         .get_value_cf_opt(&opts, "write", &k)
@@ -1179,7 +1167,7 @@ mod tests {
             let snapshot = engine.snapshot(range.clone(), 10, u64::MAX).unwrap();
             for i in 1..10 {
                 for mvcc in 1..50 {
-                    let k = construct_key_without_prefix(i, mvcc);
+                    let k = construct_key(i, mvcc);
                     assert!(
                         snapshot
                             .get_value_cf_opt(&opts, "write", &k)
@@ -1195,7 +1183,7 @@ mod tests {
             let snapshot = engine.snapshot(range.clone(), 10, 105).unwrap();
             for mvcc in 1..50 {
                 for i in 1..7 {
-                    let k = construct_key_without_prefix(i, mvcc);
+                    let k = construct_key(i, mvcc);
                     assert!(
                         snapshot
                             .get_value_cf_opt(&opts, "write", &k)
@@ -1204,12 +1192,12 @@ mod tests {
                     );
                 }
                 for i in 7..10 {
-                    let k = construct_key_without_prefix(i, mvcc);
+                    let k = construct_key(i, mvcc);
                     let v = snapshot
                         .get_value_cf_opt(&opts, "write", &k)
                         .unwrap()
                         .unwrap();
-                    verify_value(&v, i, mvcc);
+                    verify_key_value(&k, &v, i, mvcc);
                 }
             }
         }
@@ -1218,7 +1206,7 @@ mod tests {
     #[test]
     fn test_iterator_forawrd() {
         let engine = RangeCacheMemoryEngine::new(EngineConfig::config_for_test());
-        let range = CacheRange::new(DATA_MIN_KEY.to_vec(), DATA_MAX_KEY.to_vec());
+        let range = CacheRange::new(b"".to_vec(), b"z".to_vec());
         engine.new_range(range.clone());
         let step: i32 = 2;
 
@@ -1404,7 +1392,7 @@ mod tests {
     #[test]
     fn test_iterator_backward() {
         let engine = RangeCacheMemoryEngine::new(EngineConfig::config_for_test());
-        let range = CacheRange::new(DATA_MIN_KEY.to_vec(), DATA_MAX_KEY.to_vec());
+        let range = CacheRange::new(b"".to_vec(), b"z".to_vec());
         engine.new_range(range.clone());
         let step: i32 = 2;
 
@@ -1507,7 +1495,7 @@ mod tests {
     #[test]
     fn test_seq_visibility() {
         let engine = RangeCacheMemoryEngine::new(EngineConfig::config_for_test());
-        let range = CacheRange::new(DATA_MIN_KEY.to_vec(), DATA_MAX_KEY.to_vec());
+        let range = CacheRange::new(b"".to_vec(), b"z".to_vec());
         engine.new_range(range.clone());
 
         {
@@ -1541,7 +1529,7 @@ mod tests {
             iter.seek_to_first().unwrap();
             assert_eq!(iter.value(), b"va1");
             assert!(!iter.next().unwrap());
-            let key = construct_mvcc_key_without_prefix("aaa", 10);
+            let key = construct_mvcc_key("aaa", 10);
             assert_eq!(
                 snapshot
                     .get_value_cf("write", &key)
@@ -1550,18 +1538,15 @@ mod tests {
                     .deref(),
                 "va1".as_bytes()
             );
-            let key = construct_mvcc_key("aaa", 10);
             assert!(iter.seek(&key).unwrap());
             assert_eq!(iter.value(), "va1".as_bytes());
 
-            let key = construct_mvcc_key_without_prefix("bbb", 10);
-            assert!(snapshot.get_value_cf("write", &key).unwrap().is_none());
             let key = construct_mvcc_key("bbb", 10);
+            assert!(snapshot.get_value_cf("write", &key).unwrap().is_none());
             assert!(!iter.seek(&key).unwrap());
 
-            let key = construct_mvcc_key_without_prefix("ccc", 10);
-            assert!(snapshot.get_value_cf("write", &key).unwrap().is_none());
             let key = construct_mvcc_key("ccc", 10);
+            assert!(snapshot.get_value_cf("write", &key).unwrap().is_none());
             assert!(!iter.seek(&key).unwrap());
         }
 
@@ -1599,7 +1584,7 @@ mod tests {
             assert_eq!(iter.value(), b"vb2");
             assert!(!iter.next().unwrap());
 
-            let key = construct_mvcc_key_without_prefix("aaa", 10);
+            let key = construct_mvcc_key("aaa", 10);
             assert_eq!(
                 snapshot
                     .get_value_cf("write", &key)
@@ -1608,11 +1593,10 @@ mod tests {
                     .deref(),
                 "va4".as_bytes()
             );
-            let key = construct_mvcc_key("aaa", 10);
             assert!(iter.seek(&key).unwrap());
             assert_eq!(iter.value(), "va4".as_bytes());
 
-            let key = construct_mvcc_key_without_prefix("bbb", 10);
+            let key = construct_mvcc_key("bbb", 10);
             assert_eq!(
                 snapshot
                     .get_value_cf("write", &key)
@@ -1621,13 +1605,11 @@ mod tests {
                     .deref(),
                 "vb2".as_bytes()
             );
-            let key = construct_mvcc_key("bbb", 10);
             assert!(iter.seek(&key).unwrap());
             assert_eq!(iter.value(), "vb2".as_bytes());
 
-            let key = construct_mvcc_key_without_prefix("ccc", 10);
-            assert!(snapshot.get_value_cf("write", &key).unwrap().is_none());
             let key = construct_mvcc_key("ccc", 10);
+            assert!(snapshot.get_value_cf("write", &key).unwrap().is_none());
             assert!(!iter.seek(&key).unwrap());
         }
     }
@@ -1635,7 +1617,7 @@ mod tests {
     #[test]
     fn test_seq_visibility_backward() {
         let engine = RangeCacheMemoryEngine::new(EngineConfig::config_for_test());
-        let range = CacheRange::new(DATA_MIN_KEY.to_vec(), DATA_MAX_KEY.to_vec());
+        let range = CacheRange::new(b"".to_vec(), b"z".to_vec());
         engine.new_range(range.clone());
 
         {
@@ -1730,7 +1712,7 @@ mod tests {
     #[test]
     fn test_iter_user_skip() {
         let mut iter_opt = IterOptions::default();
-        let range = CacheRange::new(DATA_MIN_KEY.to_vec(), DATA_MAX_KEY.to_vec());
+        let range = CacheRange::new(b"".to_vec(), b"z".to_vec());
         iter_opt.set_upper_bound(&range.end, 0);
         iter_opt.set_lower_bound(&range.start, 0);
 

@@ -253,7 +253,7 @@ impl BackgroundRunnerCore {
     }
 
     // return the first range to load with RocksDB snapshot
-    fn get_range_to_load(&self) -> Option<(CacheRange, Arc<RocksSnapshot>)> {
+    fn get_range_to_load(&self) -> Option<(CacheRange, Arc<RocksSnapshot>, bool)> {
         let core = self.engine.read();
         core.range_manager()
             .pending_ranges_loading_data
@@ -261,7 +261,7 @@ impl BackgroundRunnerCore {
             .cloned()
     }
 
-    fn on_snapshot_loaded(&mut self, range: CacheRange) -> engine_traits::Result<()> {
+    fn on_snapshot_load_finished(&mut self, range: CacheRange) {
         fail::fail_point!("on_snapshot_loaded");
         loop {
             // Consume the cached write batch after the snapshot is acquired.
@@ -290,6 +290,17 @@ impl BackgroundRunnerCore {
             }
         }
         Ok(())
+    }
+
+    fn on_snapshot_load_canceled(&mut self, range: CacheRange) {
+        let mut core = self.engine.write();
+        let (r, _, canceled) = core
+            .mut_range_manager()
+            .pending_ranges_loading_data
+            .pop_front()
+            .unwrap();
+        assert!(canceled);
+        // todo: r should be deleted
     }
 }
 
@@ -342,8 +353,7 @@ impl Runnable for BackgroundRunner {
                         + self.core.memory_controller.hard_limit_threshold())
                         / 2
                 {
-                    // We are running out of memory, so not to load new range
-                    // todo: clear ranges in pending_ranges_loading_data
+                    // We are running out of memory, so not to load new range.
                     return;
                 }
 
@@ -353,12 +363,16 @@ impl Runnable for BackgroundRunner {
                         let core = core.engine.read();
                         core.engine().clone()
                     };
-                    while let Some((range, snap)) = core.get_range_to_load() {
+                    while let Some((range, snap, canceled)) = core.get_range_to_load() {
                         let iter_opt = IterOptions::new(
                             Some(KeyBuilder::from_vec(range.start.clone(), 0, 0)),
                             Some(KeyBuilder::from_vec(range.end.clone(), 0, 0)),
                             false,
                         );
+                        if canceled {
+                            core.on_snapshot_load_canceled(range);
+                            continue;
+                        }
                         for &cf in DATA_CFS {
                             let guard = &epoch::pin();
                             let handle = skiplist_engine.cf_handle(cf);
@@ -366,7 +380,8 @@ impl Runnable for BackgroundRunner {
                                 Ok(mut iter) => {
                                     iter.seek_to_first().unwrap();
                                     while iter.valid().unwrap() {
-                                        // use 0 sequence number here as the kv is clearly visible
+                                        // use 0 sequence number here as the kv is clearly
+                                        // visible
                                         let mut encoded_key =
                                             encode_key(iter.key(), 0, ValueType::Value);
                                         let mut val =
@@ -383,7 +398,7 @@ impl Runnable for BackgroundRunner {
                                 }
                             }
                         }
-                        core.on_snapshot_loaded(range).unwrap();
+                        core.on_snapshot_load_finished(range);
                     }
                 };
                 self.range_load_remote.spawn(f);

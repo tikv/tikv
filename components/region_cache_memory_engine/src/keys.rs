@@ -258,21 +258,12 @@ pub fn encoding_for_filter(mvcc_prefix: &[u8], start_ts: TimeStamp) -> InternalB
 
 #[cfg(test)]
 pub fn construct_user_key(i: u64) -> Vec<u8> {
-    let k = format!("zk{:08}", i);
+    let k = format!("k{:08}", i);
     k.as_bytes().to_owned()
 }
 
 #[cfg(test)]
 pub fn construct_key(i: u64, mvcc: u64) -> Vec<u8> {
-    let k = format!("zk{:08}", i);
-    let mut key = k.as_bytes().to_vec();
-    // mvcc version should be make bit-wise reverse so that k-100 is less than k-99
-    key.put_u64(!mvcc);
-    key
-}
-
-#[cfg(test)]
-pub fn construct_key_without_prefix(i: u64, mvcc: u64) -> Vec<u8> {
     let k = format!("k{:08}", i);
     let mut key = k.as_bytes().to_vec();
     // mvcc version should be make bit-wise reverse so that k-100 is less than k-99

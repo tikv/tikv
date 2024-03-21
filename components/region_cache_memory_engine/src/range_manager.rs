@@ -104,7 +104,8 @@ pub struct RangeManager {
     // range equals to it. If split happened, the first noticed peer should first split the range
     // in the pending_range and then only handles its part.
     pub(crate) pending_ranges: Vec<CacheRange>,
-    pub(crate) pending_ranges_loading_data: VecDeque<(CacheRange, Arc<RocksSnapshot>)>,
+    // The bool indicates the loading is canceled due to memory capcity issue
+    pub(crate) pending_ranges_loading_data: VecDeque<(CacheRange, Arc<RocksSnapshot>, bool)>,
 
     ranges_in_gc: BTreeSet<CacheRange>,
 }
